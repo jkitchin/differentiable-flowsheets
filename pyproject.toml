@@ -21,11 +21,15 @@ examples = [
     "matplotlib>=3.5.0",
     "jupyter>=1.0.0",
 ]
+visualization = [
+    "plotly>=5.0.0",
+    "networkx>=3.0",
+]
 bio = [
     # Bio manufacturing operations are included in the main package
 ]
 all = [
-    "difflow[dev,examples,bio]",
+    "difflow[dev,examples,visualization,bio]",
 ]
 
 [project.entry-points."difflow.plugins"]

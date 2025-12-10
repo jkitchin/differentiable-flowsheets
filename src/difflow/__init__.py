@@ -55,6 +55,21 @@ from difflow.plugins import (
     OperationRegistry,
 )
 
+# Visualization (optional - requires plotly)
+try:
+    from difflow.visualization import (
+        FlowsheetGraph,
+        Node,
+        Edge,
+        render_flowsheet,
+        show_flowsheet,
+        UNIT_STYLES,
+        get_unit_style,
+    )
+    _HAS_VISUALIZATION = True
+except ImportError:
+    _HAS_VISUALIZATION = False
+
 __all__ = [
     # Streams
     "Stream",
@@ -105,4 +120,12 @@ __all__ = [
     "register_operation",
     "UnitOperation",
     "OperationRegistry",
+    # Visualization (when available)
+    "FlowsheetGraph",
+    "Node",
+    "Edge",
+    "render_flowsheet",
+    "show_flowsheet",
+    "UNIT_STYLES",
+    "get_unit_style",
 ]
