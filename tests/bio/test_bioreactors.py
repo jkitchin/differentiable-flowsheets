@@ -4,16 +4,15 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-from difflow import (
+from difflow_bio import (
     ContinuousBioreactor,
     FedBatchBioreactor,
     BioreactorParams,
     FedBatchParams,
     monod_kinetics,
     substrate_inhibition_kinetics,
-    make_stream,
-    get_flows,
 )
+from difflow import make_stream, get_flows
 
 
 # Enable 64-bit precision for tests

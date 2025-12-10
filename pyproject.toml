@@ -21,9 +21,15 @@ examples = [
     "matplotlib>=3.5.0",
     "jupyter>=1.0.0",
 ]
+bio = [
+    # Bio manufacturing operations are included in the main package
+]
 all = [
-    "difflow[dev,examples]",
+    "difflow[dev,examples,bio]",
 ]
 
+[project.entry-points."difflow.plugins"]
+bio = "difflow_bio:register"
+
 [tool.hatch.build.targets.wheel]
-packages = ["src/difflow"]
+packages = ["src/difflow", "src/difflow_bio"]

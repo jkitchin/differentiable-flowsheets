@@ -4,7 +4,7 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-from difflow import (
+from difflow_bio import (
     ProteinAChromatography,
     ProteinAParams,
     IonExchangeChromatography,
@@ -13,9 +13,8 @@ from difflow import (
     SECParams,
     langmuir_isotherm,
     linear_isotherm,
-    make_stream,
-    get_flows,
 )
+from difflow import make_stream, get_flows
 
 
 # Enable 64-bit precision for tests

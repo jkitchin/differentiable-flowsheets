@@ -4,7 +4,7 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-from difflow import (
+from difflow_bio import (
     Centrifuge,
     CentrifugeParams,
     DiscStackCentrifuge,
@@ -13,9 +13,8 @@ from difflow import (
     critical_particle_diameter,
     disc_stack_sigma,
     g_force,
-    make_stream,
-    get_flows,
 )
+from difflow import make_stream, get_flows
 
 
 # Enable 64-bit precision for tests

@@ -4,7 +4,7 @@ import jax
 import jax.numpy as jnp
 import pytest
 
-from difflow import (
+from difflow_bio import (
     Ultrafiltration,
     UltrafiltrationParams,
     Diafiltration,
@@ -12,9 +12,8 @@ from difflow import (
     TFF,
     diavolumes_required,
     rejection_from_mw,
-    make_stream,
-    get_flows,
 )
+from difflow import make_stream, get_flows
 
 
 # Enable 64-bit precision for tests

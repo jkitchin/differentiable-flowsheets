@@ -1,4 +1,17 @@
-"""Difflow: Differentiable flowsheet framework for chemical processes."""
+"""Difflow: Differentiable flowsheet framework for chemical processes.
+
+Core package providing:
+- Stream representation and utilities
+- Thermodynamic property calculations
+- Unit operations (CSTR, Flash, LLE)
+- Flowsheet management with recycle solving
+- Differentiable solvers
+
+For bio manufacturing operations, install the difflow_bio plugin:
+    pip install difflow[bio]
+    # or
+    from difflow_bio import ContinuousBioreactor, ProteinAChromatography
+"""
 
 from difflow.streams import (
     Stream,
@@ -29,63 +42,18 @@ from difflow.units.lle import (
     minimum_solvent_ratio,
     stages_for_recovery,
 )
-
-# Bio manufacturing operations
-from difflow.units.bioreactors import (
-    ContinuousBioreactor,
-    FedBatchBioreactor,
-    BioreactorParams,
-    FedBatchParams,
-    monod_kinetics,
-    substrate_inhibition_kinetics,
-    product_inhibition_kinetics,
-    contois_kinetics,
-    dilution_rate,
-    residence_time,
-    optimal_dilution_rate,
-)
-from difflow.units.centrifuge import (
-    Centrifuge,
-    CentrifugeParams,
-    DiscStackCentrifuge,
-    DiscStackParams,
-    stokes_velocity,
-    critical_particle_diameter,
-    disc_stack_sigma,
-    tubular_bowl_sigma,
-    centrifuge_scale_up,
-    g_force,
-)
-from difflow.units.filtration import (
-    Ultrafiltration,
-    UltrafiltrationParams,
-    Diafiltration,
-    DiafiltrationParams,
-    TFF,
-    concentration_polarization,
-    gel_layer_flux,
-    diavolumes_required,
-    rejection_from_mw,
-)
-from difflow.units.chromatography import (
-    ProteinAChromatography,
-    ProteinAParams,
-    IonExchangeChromatography,
-    IEXParams,
-    SizeExclusionChromatography,
-    SECParams,
-    langmuir_isotherm,
-    linear_isotherm,
-    langmuir_freundlich_isotherm,
-    dynamic_binding_capacity,
-    column_productivity,
-    resolution,
-    plate_count,
-    hetp,
-)
-
 from difflow.flowsheet import Flowsheet, Unit
 from difflow.solvers import fixed_point_solve, newton_solve, rachford_rice
+
+# Plugin infrastructure
+from difflow.plugins import (
+    registry,
+    load_plugins,
+    discover_plugins,
+    register_operation,
+    UnitOperation,
+    OperationRegistry,
+)
 
 __all__ = [
     # Streams
@@ -123,54 +91,6 @@ __all__ = [
     "separation_factor",
     "minimum_solvent_ratio",
     "stages_for_recovery",
-    # Unit operations - Bioreactors
-    "ContinuousBioreactor",
-    "FedBatchBioreactor",
-    "BioreactorParams",
-    "FedBatchParams",
-    "monod_kinetics",
-    "substrate_inhibition_kinetics",
-    "product_inhibition_kinetics",
-    "contois_kinetics",
-    "dilution_rate",
-    "residence_time",
-    "optimal_dilution_rate",
-    # Unit operations - Centrifuge
-    "Centrifuge",
-    "CentrifugeParams",
-    "DiscStackCentrifuge",
-    "DiscStackParams",
-    "stokes_velocity",
-    "critical_particle_diameter",
-    "disc_stack_sigma",
-    "tubular_bowl_sigma",
-    "centrifuge_scale_up",
-    "g_force",
-    # Unit operations - Filtration
-    "Ultrafiltration",
-    "UltrafiltrationParams",
-    "Diafiltration",
-    "DiafiltrationParams",
-    "TFF",
-    "concentration_polarization",
-    "gel_layer_flux",
-    "diavolumes_required",
-    "rejection_from_mw",
-    # Unit operations - Chromatography
-    "ProteinAChromatography",
-    "ProteinAParams",
-    "IonExchangeChromatography",
-    "IEXParams",
-    "SizeExclusionChromatography",
-    "SECParams",
-    "langmuir_isotherm",
-    "linear_isotherm",
-    "langmuir_freundlich_isotherm",
-    "dynamic_binding_capacity",
-    "column_productivity",
-    "resolution",
-    "plate_count",
-    "hetp",
     # Flowsheet
     "Flowsheet",
     "Unit",
@@ -178,4 +98,11 @@ __all__ = [
     "fixed_point_solve",
     "newton_solve",
     "rachford_rice",
+    # Plugin infrastructure
+    "registry",
+    "load_plugins",
+    "discover_plugins",
+    "register_operation",
+    "UnitOperation",
+    "OperationRegistry",
 ]
