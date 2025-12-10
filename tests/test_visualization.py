@@ -1,9 +1,11 @@
 """Tests for flowsheet visualization module."""
 
 import pytest
+import jax.numpy as jnp
 
 from difflow.visualization.graph import FlowsheetGraph, Node, Edge
 from difflow.visualization.styles import get_unit_style, UNIT_STYLES, get_stream_color
+from difflow import Flowsheet, Unit, make_stream
 
 
 class TestNode:
@@ -300,3 +302,131 @@ class TestRender:
 
         fig = render_flowsheet(simple_graph, title="My Process", layout="spring")
         assert fig.layout.title.text == "My Process"
+
+
+class TestFlowsheetIntegration:
+    """Tests for Flowsheet.to_graph() integration."""
+
+    def test_simple_flowsheet_to_graph(self):
+        """Test converting a simple flowsheet to graph."""
+        # Create a simple flowsheet
+        fs = Flowsheet(species_order=["A", "B"])
+
+        feed = make_stream({"A": 100.0, "B": 0.0}, T=300.0, P=101325.0)
+        fs.add_feed("feed", feed)
+
+        # Simple pass-through operation for testing
+        def passthrough(inlet):
+            return inlet
+
+        fs.add_unit(Unit("reactor", passthrough, ["feed"], ["product"]))
+
+        # Convert to graph
+        graph = fs.to_graph()
+
+        # Check structure
+        assert len(graph.nodes) == 3  # feed node, reactor, product node
+        assert len(graph.edges) == 2  # feed->reactor, reactor->product
+
+        # Check unit node exists
+        assert "reactor" in graph.nodes
+
+    def test_flowsheet_to_graph_with_streams(self):
+        """Test graph with solved stream data."""
+        fs = Flowsheet(species_order=["A", "B"])
+
+        feed = make_stream({"A": 100.0, "B": 0.0}, T=300.0, P=101325.0)
+        fs.add_feed("feed", feed)
+
+        def double_flow(inlet):
+            return {k: v * 2 if k.startswith("F_") else v for k, v in inlet.items()}
+
+        fs.add_unit(Unit("reactor", double_flow, ["feed"], ["product"]))
+
+        # Solve and convert to graph
+        streams = fs.solve()
+        graph = fs.to_graph(solved_streams=streams)
+
+        # Check that stream data is attached to edges
+        feed_edge = None
+        for edge in graph.edges.values():
+            if edge.id == "feed":
+                feed_edge = edge
+                break
+
+        assert feed_edge is not None
+        assert feed_edge.stream_data is not None
+
+    def test_flowsheet_to_graph_multi_unit(self):
+        """Test graph with multiple units."""
+        fs = Flowsheet(species_order=["A", "B"])
+
+        feed = make_stream({"A": 100.0, "B": 0.0}, T=300.0, P=101325.0)
+        fs.add_feed("feed", feed)
+
+        def passthrough(inlet):
+            return inlet
+
+        fs.add_unit(Unit("reactor", passthrough, ["feed"], ["reactor_out"]))
+        fs.add_unit(Unit("separator", passthrough, ["reactor_out"], ["product"]))
+
+        graph = fs.to_graph()
+
+        # Check nodes
+        assert "reactor" in graph.nodes
+        assert "separator" in graph.nodes
+
+        # Check edges
+        edge_ids = {e.id for e in graph.edges.values()}
+        assert "feed" in edge_ids
+        assert "reactor_out" in edge_ids
+
+    def test_flowsheet_visualize_method(self):
+        """Test the visualize() convenience method."""
+        pytest.importorskip("plotly")
+        pytest.importorskip("networkx")
+
+        fs = Flowsheet(species_order=["A", "B"])
+
+        feed = make_stream({"A": 100.0, "B": 0.0}, T=300.0, P=101325.0)
+        fs.add_feed("feed", feed)
+
+        def passthrough(inlet):
+            return inlet
+
+        fs.add_unit(Unit("reactor", passthrough, ["feed"], ["product"]))
+
+        streams = fs.solve()
+        fig = fs.visualize(streams, layout="spring")
+
+        assert fig is not None
+        assert len(fig.data) > 0
+
+    def test_flowsheet_to_graph_detects_unit_type(self):
+        """Test that unit type is correctly detected from operation class."""
+        from difflow import CSTR, CSTRParams
+
+        fs = Flowsheet(species_order=["A", "B"])
+
+        feed = make_stream({"A": 100.0, "B": 0.0}, T=300.0, P=101325.0)
+        fs.add_feed("feed", feed)
+
+        # Simple first-order rate law: r = k * C_A
+        def rate_fn(C, T, params):
+            return params["k"] * C["A"]
+
+        params = CSTRParams(
+            V=jnp.array(10.0),
+            rate_fn=rate_fn,
+            stoich={"A": jnp.array([-1.0]), "B": jnp.array([1.0])},
+            rate_params={"k": jnp.array(0.1)},
+            species_order=["A", "B"],
+        )
+        cstr = CSTR(params)
+        fs.add_unit(Unit("reactor", cstr, ["feed"], ["product"]))
+
+        graph = fs.to_graph()
+
+        # Check that unit type was detected
+        reactor_node = graph.nodes["reactor"]
+        assert reactor_node.unit_type == "CSTR"
