@@ -6,11 +6,14 @@ Core package providing:
 - Unit operations (CSTR, Flash, LLE)
 - Flowsheet management with recycle solving
 - Differentiable solvers
+- Technoeconomic analysis (TEA)
 
 For bio manufacturing operations, install the difflow_bio plugin:
     pip install difflow[bio]
     # or
     from difflow_bio import ContinuousBioreactor, ProteinAChromatography
+
+All models support automatic differentiation for gradient-based optimization.
 """
 
 from difflow.streams import (
@@ -70,6 +73,9 @@ try:
 except ImportError:
     _HAS_VISUALIZATION = False
 
+# Economics submodule (imported as submodule, not individual names)
+from difflow import economics
+
 __all__ = [
     # Streams
     "Stream",
@@ -128,4 +134,6 @@ __all__ = [
     "show_flowsheet",
     "UNIT_STYLES",
     "get_unit_style",
+    # Economics
+    "economics",
 ]
