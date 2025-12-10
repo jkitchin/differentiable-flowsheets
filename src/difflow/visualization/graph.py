@@ -322,22 +322,96 @@ class FlowsheetGraph:
 
         return G
 
+    def _hierarchical_layout(
+        self,
+        x_spacing: float = 150,
+        y_spacing: float = 100,
+    ) -> dict[str, tuple[float, float]]:
+        """Compute a hierarchical left-to-right layout for flowsheets.
+
+        Places nodes in layers based on topological order, with feeds on the
+        left and products on the right. This produces a clean process flow
+        diagram.
+
+        Args:
+            x_spacing: Horizontal spacing between layers
+            y_spacing: Vertical spacing between nodes in same layer
+
+        Returns:
+            Dictionary mapping node IDs to (x, y) positions
+        """
+        import networkx as nx
+
+        G = self.to_networkx()
+
+        # Assign layers based on longest path from any feed
+        # Find feed nodes (no predecessors or unit_type == 'feed')
+        feed_nodes = [n for n in G.nodes() if G.in_degree(n) == 0
+                      or self.nodes.get(n, Node(n, n)).unit_type == 'feed']
+
+        if not feed_nodes:
+            feed_nodes = list(G.nodes())[:1]  # Fallback
+
+        # Compute layer for each node (longest path from any feed)
+        layers: dict[str, int] = {}
+        for node in feed_nodes:
+            layers[node] = 0
+
+        # BFS to assign layers
+        changed = True
+        while changed:
+            changed = False
+            for edge in G.edges():
+                src, tgt = edge
+                if src in layers:
+                    new_layer = layers[src] + 1
+                    if tgt not in layers or layers[tgt] < new_layer:
+                        layers[tgt] = new_layer
+                        changed = True
+
+        # Handle any disconnected nodes
+        for node in G.nodes():
+            if node not in layers:
+                layers[node] = 0
+
+        # Group nodes by layer
+        layer_nodes: dict[int, list[str]] = {}
+        for node, layer in layers.items():
+            if layer not in layer_nodes:
+                layer_nodes[layer] = []
+            layer_nodes[layer].append(node)
+
+        # Sort nodes within each layer for consistent ordering
+        for layer in layer_nodes:
+            layer_nodes[layer].sort()
+
+        # Compute positions
+        positions = {}
+        for layer, nodes in layer_nodes.items():
+            x = layer * x_spacing
+            # Center nodes vertically
+            n_nodes = len(nodes)
+            y_start = -(n_nodes - 1) * y_spacing / 2
+            for i, node in enumerate(nodes):
+                y = y_start + i * y_spacing
+                positions[node] = (x, y)
+
+        return positions
+
     def compute_layout(
         self,
-        algorithm: str = "dot",
+        algorithm: str = "hierarchical",
         **kwargs
     ) -> dict[str, tuple[float, float]]:
         """Compute node positions using a layout algorithm.
 
         Args:
             algorithm: Layout algorithm to use:
-                - 'dot': Hierarchical left-to-right (best for flowsheets)
-                - 'neato': Spring model
-                - 'fdp': Force-directed
-                - 'sfdp': Scalable force-directed
-                - 'circo': Circular
-                - 'twopi': Radial
-                - 'spring': NetworkX spring layout (fallback)
+                - 'hierarchical': Left-to-right process flow (default, best for flowsheets)
+                - 'dot': Graphviz hierarchical (requires graphviz)
+                - 'neato': Spring model (requires graphviz)
+                - 'spring': NetworkX spring layout
+                - 'kamada_kawai': NetworkX Kamada-Kawai layout
             **kwargs: Additional arguments for the layout algorithm
 
         Returns:
@@ -347,27 +421,38 @@ class FlowsheetGraph:
 
         G = self.to_networkx()
 
-        # Try graphviz layouts first (best quality)
-        graphviz_layouts = {'dot', 'neato', 'fdp', 'sfdp', 'circo', 'twopi'}
+        # Use hierarchical layout by default (best for flowsheets)
+        if algorithm == 'hierarchical':
+            x_spacing = kwargs.pop('x_spacing', 150)
+            y_spacing = kwargs.pop('y_spacing', 100)
+            positions = self._hierarchical_layout(x_spacing, y_spacing)
 
-        if algorithm in graphviz_layouts:
+        # Try graphviz layouts
+        elif algorithm in {'dot', 'neato', 'fdp', 'sfdp', 'circo', 'twopi'}:
             try:
                 from networkx.drawing.nx_agraph import graphviz_layout
                 positions = graphviz_layout(G, prog=algorithm, **kwargs)
-            except ImportError:
+            except (ImportError, Exception):
                 try:
                     from networkx.drawing.nx_pydot import graphviz_layout
                     positions = graphviz_layout(G, prog=algorithm, **kwargs)
-                except ImportError:
-                    # Fall back to spring layout
-                    print(f"Warning: graphviz not available, using spring layout")
-                    positions = nx.spring_layout(G, **kwargs)
+                except (ImportError, Exception):
+                    # Fall back to hierarchical layout
+                    print(f"Warning: graphviz not available, using hierarchical layout")
+                    positions = self._hierarchical_layout()
+
         elif algorithm == 'spring':
-            positions = nx.spring_layout(G, **kwargs)
+            scale = kwargs.pop('scale', 200)
+            positions = nx.spring_layout(G, scale=scale, **kwargs)
+
         elif algorithm == 'kamada_kawai':
-            positions = nx.kamada_kawai_layout(G, **kwargs)
+            scale = kwargs.pop('scale', 200)
+            positions = nx.kamada_kawai_layout(G, scale=scale, **kwargs)
+
         elif algorithm == 'spectral':
-            positions = nx.spectral_layout(G, **kwargs)
+            scale = kwargs.pop('scale', 200)
+            positions = nx.spectral_layout(G, scale=scale, **kwargs)
+
         else:
             raise ValueError(f"Unknown layout algorithm: {algorithm}")
 

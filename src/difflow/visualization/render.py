@@ -198,15 +198,18 @@ def _add_edges(
             mid_x = (src_pos[0] + tgt_pos[0]) / 2
             mid_y = (src_pos[1] + tgt_pos[1]) / 2
 
-            # Offset label slightly
+            # Offset label slightly perpendicular to edge (proportional to length)
             dx = tgt_pos[0] - src_pos[0]
             dy = tgt_pos[1] - src_pos[1]
             length = math.sqrt(dx*dx + dy*dy) + 1e-6
-            offset = 10 / length
+            # Normalize and offset by 5% of edge length
+            offset = 0.05
+            nx_perp = -dy / length
+            ny_perp = dx / length
 
             fig.add_annotation(
-                x=mid_x - dy * offset,
-                y=mid_y + dx * offset,
+                x=mid_x + nx_perp * length * offset,
+                y=mid_y + ny_perp * length * offset,
                 text=edge.id,
                 showarrow=False,
                 font=dict(size=8, color='#666'),
@@ -229,19 +232,16 @@ def _add_arrow(fig, src: tuple, tgt: tuple, color: str, width: float) -> None:
     dx /= length
     dy /= length
 
-    # Position arrow slightly before target
-    arrow_back = 25  # pixels
-    arrow_x = tgt[0] - dx * arrow_back
-    arrow_y = tgt[1] - dy * arrow_back
-
-    # Arrow size
-    arrow_size = 8 + width
+    # Position arrow as fraction of edge length (not fixed pixels)
+    # Place arrow tip 15% back from target, arrow base 25% back
+    arrow_tip_back = 0.15 * length
+    arrow_base_back = 0.25 * length
 
     fig.add_annotation(
-        x=tgt[0] - dx * 20,
-        y=tgt[1] - dy * 20,
-        ax=arrow_x,
-        ay=arrow_y,
+        x=tgt[0] - dx * arrow_tip_back,
+        y=tgt[1] - dy * arrow_tip_back,
+        ax=tgt[0] - dx * arrow_base_back,
+        ay=tgt[1] - dy * arrow_base_back,
         xref='x',
         yref='y',
         axref='x',
