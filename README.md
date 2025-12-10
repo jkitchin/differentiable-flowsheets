@@ -19,6 +19,9 @@ git clone <repo-url>
 cd differentiable-flowsheets
 uv venv
 uv pip install -e ".[dev]"
+
+# For examples and tutorials (includes matplotlib, jupyter)
+uv pip install -e ".[all]"
 ```
 
 ## Quick Start
@@ -91,17 +94,61 @@ print(f"dF_B/dV = {dFB_dV:.4f} mol/s per m³")
 - Rachford-Rice equation for VLE
 - Ideal thermodynamics (Raoult's law)
 
+### Liquid-Liquid Extraction (LLE)
+- **MultistageCascade**: Counter-current or co-current mixer-settler cascade
+  - Kremser equation for stage calculations (differentiable in n_stages)
+  - Continuous stage relaxation for optimization
+- **DifferentialContactor**: Packed column extractor
+  - HETP-based equilibrium model
+  - Rate-based mass transfer model
+- **Equilibrium Models**:
+  - Distribution coefficients (K-values) with temperature dependence
+  - NRTL activity coefficient model
+  - UNIQUAC activity coefficient model
+
+```python
+from difflow import (
+    MultistageCascade, CascadeParams,
+    LLEEquilibrium, DistributionCoeffs,
+)
+
+# Define distribution coefficients for rare earth extraction
+K_coeffs = DistributionCoeffs(
+    species=("La", "Nd", "Dy"),
+    K0=(0.5, 2.0, 8.0),  # K at reference temperature
+)
+
+equilibrium = LLEEquilibrium(
+    solutes=["La", "Nd", "Dy"],
+    aqueous_carrier="H2O",
+    organic_carrier="Organic",
+    K_coeffs=K_coeffs,
+)
+
+cascade = MultistageCascade(CascadeParams(
+    n_stages=5,
+    equilibrium=equilibrium,
+    flow_config="counter_current",
+))
+
+raffinate, extract, info = cascade(feed_stream, solvent_stream)
+```
+
 ### Utilities
 - **Mixer**: Combine multiple streams
 - **Splitter**: Split stream by fraction
 
 ## Thermodynamics
 
-Currently supports ideal thermodynamics:
+### Ideal Thermodynamics (for VLE)
 - Ideal gas behavior
 - Antoine equation for vapor pressures
 - Polynomial Cp correlations
 - Watson correlation for heat of vaporization
+
+### Activity Coefficient Models (for LLE)
+- **NRTL**: Non-Random Two-Liquid model with temperature-dependent parameters
+- **UNIQUAC**: Universal Quasi-Chemical model
 
 User provides species data:
 ```python
@@ -139,33 +186,35 @@ recycle = fixed_point_solve(
 
 ## Examples
 
-### CSTR Sensitivity Analysis
-Compute gradients of outputs with respect to:
-- Inlet conditions (flow rates, temperature)
-- Kinetic parameters (A, Ea)
-- Operating conditions (V, T)
+Example scripts are in the `examples/` directory:
+
+| Script | Description |
+|--------|-------------|
+| `cstr_flash_recycle.py` | Complete flowsheet with CSTR, flash, and recycle |
+| `cstr_sensitivity.py` | Sensitivity analysis for CSTR parameters |
+| `optimization_examples.py` | Various optimization problems |
+| `rare_earth_extraction.py` | Rare earth recovery using LLE |
+
+Jupyter notebooks with detailed explanations are also available in `examples/`.
 
 ```bash
+# Run examples
 python examples/cstr_sensitivity.py
+python examples/rare_earth_extraction.py
 ```
 
-### Optimization
-- Single/multi-variable optimization
-- Constrained optimization (penalty method)
-- Economic optimization (profit maximization)
-- Parameter estimation from data
-- Multi-objective Pareto analysis
+## Tutorials
 
-```bash
-python examples/optimization_examples.py
-```
+The `tutorials/` directory contains comprehensive JAX tutorials for differentiable programming:
 
-### CSTR + Flash with Recycle
-Complete flowsheet with recycle convergence and sensitivity analysis:
-
-```bash
-python examples/cstr_flash_recycle.py
-```
+| Notebook | Topics |
+|----------|--------|
+| `01_jax_fundamentals.ipynb` | grad, jit, vmap, pytrees, lax.scan, lax.cond |
+| `02_optimization.ipynb` | Gradient descent, Newton, Adam, constrained optimization |
+| `03_differential_equations.ipynb` | ODE solvers, parameter estimation, neural ODEs |
+| `04_custom_derivatives.ipynb` | custom_vjp, custom_jvp, stop_gradient |
+| `05_machine_learning.ipynb` | Neural networks from scratch, training loops |
+| `06_gotchas.ipynb` | Common JAX pitfalls and how to avoid them |
 
 ## Key Design Decisions
 
@@ -177,19 +226,20 @@ python examples/cstr_flash_recycle.py
 
 4. **Unrolled Iteration**: Fixed-point solvers use `lax.scan` for automatic differentiability
 
+5. **Continuous Relaxation**: Discrete parameters (like n_stages) can be relaxed to continuous values for optimization
+
 ## Limitations
 
-- Currently only ideal thermodynamics (no activity coefficients or EOS)
+- VLE only supports ideal thermodynamics (Raoult's law)
 - Gradient explosion possible with many iterations (use damping)
 - No built-in species database
 
 ## Future Work
 
-- Activity coefficient models (NRTL, Wilson)
-- Equation of state (Peng-Robinson, SRK)
+- Equation of state (Peng-Robinson, SRK) for VLE
 - More unit operations (PFR, distillation, heat exchangers)
-- Implicit differentiation for better gradient accuracy
 - Integration with optimization libraries (scipy, optax)
+- GPU acceleration for large flowsheets
 
 ## License
 

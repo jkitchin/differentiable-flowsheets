@@ -17,6 +17,13 @@ dev = [
     "pytest>=7.0",
     "pytest-cov",
 ]
+examples = [
+    "matplotlib>=3.5.0",
+    "jupyter>=1.0.0",
+]
+all = [
+    "difflow[dev,examples]",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/difflow"]
