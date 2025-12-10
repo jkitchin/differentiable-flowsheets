@@ -10,6 +10,8 @@ A JAX-based framework for building and optimizing chemical process flowsheets wi
 - **Sensitivity Analysis**: Compute gradients of outputs with respect to any inputs, parameters, or operating conditions
 - **Optimization Ready**: Use gradient-based optimization for process design, parameter estimation, and economic optimization
 - **Modular Design**: Unit operations can be composed into complex flowsheets with recycle streams
+- **Bio Manufacturing**: Specialized unit operations for biopharmaceutical processes (bioreactors, chromatography, filtration)
+- **Interactive Visualization**: Generate flowsheet diagrams directly from your code with Plotly
 
 ## Installation
 
@@ -20,7 +22,13 @@ cd differentiable-flowsheets
 uv venv
 uv pip install -e ".[dev]"
 
+# For interactive visualization (includes plotly, networkx)
+uv pip install -e ".[visualization]"
+
 # For examples and tutorials (includes matplotlib, jupyter)
+uv pip install -e ".[examples]"
+
+# Install everything
 uv pip install -e ".[all]"
 ```
 
@@ -138,6 +146,98 @@ raffinate, extract, info = cascade(feed_stream, solvent_stream)
 - **Mixer**: Combine multiple streams
 - **Splitter**: Split stream by fraction
 
+## Bio Manufacturing Operations
+
+The `difflow_bio` plugin provides specialized unit operations for biopharmaceutical manufacturing:
+
+### Bioreactors
+- **ContinuousBioreactor**: Chemostat with Monod kinetics
+- **FedBatchBioreactor**: Fed-batch with substrate feeding strategy
+
+```python
+from difflow_bio import (
+    ContinuousBioreactor, ContinuousBioreactorParams,
+    FedBatchBioreactor, FedBatchBioreactorParams,
+    monod_kinetics,
+)
+
+# Create a continuous bioreactor (chemostat)
+params = ContinuousBioreactorParams(
+    V=jnp.array(1000.0),           # Volume (L)
+    mu_max=jnp.array(0.3),         # Maximum specific growth rate (1/h)
+    Ks=jnp.array(0.5),             # Monod constant (g/L)
+    Yxs=jnp.array(0.5),            # Biomass yield
+    Yps=jnp.array(0.1),            # Product yield
+    D=jnp.array(0.1),              # Dilution rate (1/h)
+)
+bioreactor = ContinuousBioreactor(params)
+outlet = bioreactor(feed_stream)
+```
+
+### Downstream Processing
+- **DiscStackCentrifuge**: Cell removal with Stokes' law separation
+- **Ultrafiltration**: Protein concentration via TFF
+- **Diafiltration**: Buffer exchange
+- **ProteinAChromatography**: Affinity capture for mAb purification
+- **IonExchangeChromatography**: Polishing step (bind-elute or flow-through)
+- **SizeExclusionChromatography**: Aggregate removal
+
+```python
+from difflow_bio import (
+    DiscStackCentrifuge, CentrifugeParams,
+    Ultrafiltration, UFParams,
+    ProteinAChromatography, ProAParams,
+)
+
+# Disc-stack centrifuge for cell removal
+centrifuge = DiscStackCentrifuge(CentrifugeParams(
+    sigma=jnp.array(5000.0),       # Sigma factor (m²)
+    cell_diameter=jnp.array(15e-6), # Cell diameter (m)
+))
+
+# Protein A capture
+proa = ProteinAChromatography(ProAParams(
+    column_volume=jnp.array(10.0),  # CV (L)
+    binding_capacity=jnp.array(40.0), # g mAb / L resin
+    yield_factor=jnp.array(0.95),
+))
+
+# Ultrafiltration for concentration
+uf = Ultrafiltration(UFParams(
+    membrane_area=jnp.array(1.0),   # m²
+    concentration_factor=jnp.array(10.0),
+))
+```
+
+## Visualization
+
+Generate interactive flowsheet diagrams directly from your code:
+
+```python
+from difflow import Flowsheet, Unit, make_stream
+
+# Build and solve flowsheet
+fs = Flowsheet(species_order=["A", "B", "C"])
+fs.add_feed("feed", feed_stream)
+fs.add_unit(Unit("reactor", cstr, ["feed"], ["reactor_out"]))
+fs.add_unit(Unit("separator", flash, ["reactor_out"], ["product", "recycle"]))
+fs.add_recycle("recycle", "recycle_in")
+
+streams = fs.solve()
+
+# Visualize - graph is generated from your code!
+fig = fs.visualize(streams, layout="spring", title="My Process")
+fig.show()
+
+# Or get the graph object for more control
+graph = fs.to_graph(streams)
+```
+
+Features:
+- **Automatic**: Graph topology extracted from your flowsheet code
+- **Interactive**: Zoom, pan, and hover tooltips with stream data
+- **Export**: Save to HTML or PNG for sharing
+
 ## Thermodynamics
 
 ### Ideal Thermodynamics (for VLE)
@@ -186,21 +286,20 @@ recycle = fixed_point_solve(
 
 ## Examples
 
-Example scripts are in the `examples/` directory:
+Jupyter notebooks are in the `examples/` directory:
 
-| Script | Description |
-|--------|-------------|
-| `cstr_flash_recycle.py` | Complete flowsheet with CSTR, flash, and recycle |
-| `cstr_sensitivity.py` | Sensitivity analysis for CSTR parameters |
-| `optimization_examples.py` | Various optimization problems |
-| `rare_earth_extraction.py` | Rare earth recovery using LLE |
-
-Jupyter notebooks with detailed explanations are also available in `examples/`.
+| Notebook | Description |
+|----------|-------------|
+| `01_cstr_flash_recycle.ipynb` | Complete flowsheet with CSTR, flash, and recycle |
+| `02_cstr_sensitivity.ipynb` | Sensitivity analysis for CSTR parameters |
+| `03_optimization.ipynb` | Gradient-based optimization problems |
+| `04_rare_earth_extraction.ipynb` | Rare earth recovery using LLE |
+| `05_mab_downstream.ipynb` | mAb purification process (bio manufacturing) |
+| `08_flowsheet_visualization.ipynb` | Interactive visualization tutorial |
 
 ```bash
-# Run examples
-python examples/cstr_sensitivity.py
-python examples/rare_earth_extraction.py
+# Launch Jupyter to explore examples
+jupyter notebook examples/
 ```
 
 ## Tutorials
@@ -238,7 +337,7 @@ The `tutorials/` directory contains comprehensive JAX tutorials for differentiab
 
 - Equation of state (Peng-Robinson, SRK) for VLE
 - More unit operations (PFR, distillation, heat exchangers)
-- Integration with optimization libraries (scipy, optax)
+- Extended bio operations (viral inactivation, sterile filtration)
 - GPU acceleration for large flowsheets
 
 ## License
