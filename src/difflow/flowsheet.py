@@ -313,6 +313,179 @@ class Flowsheet:
 
         return streams
 
+    def to_graph(
+        self,
+        solved_streams: dict[str, Stream] | None = None,
+        name: str | None = None,
+    ):
+        """Convert flowsheet to a visualization graph.
+
+        Creates a FlowsheetGraph from the flowsheet topology,
+        optionally populated with solved stream data.
+
+        Args:
+            solved_streams: Dictionary of solved streams from fs.solve().
+                           If None, graph shows topology only.
+            name: Name for the graph (defaults to "Flowsheet")
+
+        Returns:
+            FlowsheetGraph with nodes for units and edges for streams
+
+        Example:
+            >>> fs = Flowsheet(["A", "B"])
+            >>> fs.add_feed("feed", feed_stream)
+            >>> fs.add_unit(Unit("reactor", cstr, ["feed"], ["product"]))
+            >>> streams = fs.solve()
+            >>> graph = fs.to_graph(streams)
+            >>> render_flowsheet(graph)
+        """
+        from difflow.visualization import FlowsheetGraph
+
+        graph = FlowsheetGraph(name=name or "Flowsheet")
+
+        # Track which streams are unit outputs
+        stream_sources: dict[str, str] = {}  # stream_name -> unit_name
+
+        # Add feed nodes
+        for feed_name in self.feeds:
+            feed_node_id = f"_feed_{feed_name}"
+            graph.add_node(
+                feed_node_id,
+                name=feed_name,
+                unit_type="feed",
+            )
+            stream_sources[feed_name] = feed_node_id
+
+        # Add unit nodes
+        for unit in self.units:
+            unit_type = _get_unit_type(unit.operation)
+
+            # Extract params for tooltip
+            params = dict(unit.params) if unit.params else {}
+
+            graph.add_node(
+                unit.name,
+                name=unit.name,
+                unit_type=unit_type,
+                params=params,
+            )
+
+            # Record outlet streams
+            for outlet_name in unit.outlet_names:
+                stream_sources[outlet_name] = unit.name
+
+        # Build edges from connections
+        for unit in self.units:
+            for inlet_name in unit.inlet_names:
+                # Find source of this inlet
+                if inlet_name in stream_sources:
+                    source_unit = stream_sources[inlet_name]
+
+                    # Get stream data if available
+                    stream_data = None
+                    if solved_streams and inlet_name in solved_streams:
+                        stream_data = solved_streams[inlet_name]
+
+                    graph.add_edge(
+                        source_unit,
+                        unit.name,
+                        edge_id=inlet_name,
+                        stream_data=stream_data,
+                    )
+
+        # Add product nodes for streams that aren't consumed
+        consumed_streams = set()
+        for unit in self.units:
+            consumed_streams.update(unit.inlet_names)
+
+        # Recycle destinations are also "consumed"
+        consumed_streams.update(self.recycles.values())
+
+        for unit in self.units:
+            for outlet_name in unit.outlet_names:
+                if outlet_name not in consumed_streams:
+                    # This is a product stream
+                    product_node_id = f"_product_{outlet_name}"
+                    graph.add_node(
+                        product_node_id,
+                        name=outlet_name,
+                        unit_type="product",
+                    )
+
+                    stream_data = None
+                    if solved_streams and outlet_name in solved_streams:
+                        stream_data = solved_streams[outlet_name]
+
+                    graph.add_edge(
+                        unit.name,
+                        product_node_id,
+                        edge_id=outlet_name,
+                        stream_data=stream_data,
+                    )
+
+        # Add recycle edges
+        for source, dest in self.recycles.items():
+            # Find which unit produces the source stream
+            if source in stream_sources:
+                source_unit = stream_sources[source]
+
+                # Find which unit consumes the dest stream
+                for unit in self.units:
+                    if dest in unit.inlet_names:
+                        stream_data = None
+                        if solved_streams and source in solved_streams:
+                            stream_data = solved_streams[source]
+
+                        # Check if edge already exists
+                        edge_id = f"{source}_recycle"
+                        if edge_id not in graph.edges:
+                            graph.add_edge(
+                                source_unit,
+                                unit.name,
+                                edge_id=edge_id,
+                                stream_data=stream_data,
+                                type="recycle",
+                            )
+                        break
+
+        return graph
+
+    def visualize(
+        self,
+        solved_streams: dict[str, Stream] | None = None,
+        **kwargs,
+    ):
+        """Render and display the flowsheet interactively.
+
+        Convenience method that creates a graph and renders it.
+
+        Args:
+            solved_streams: Dictionary of solved streams from fs.solve()
+            **kwargs: Additional arguments passed to render_flowsheet
+
+        Returns:
+            Plotly Figure object
+        """
+        from difflow.visualization import render_flowsheet
+
+        graph = self.to_graph(solved_streams)
+        return render_flowsheet(graph, **kwargs)
+
+
+def _get_unit_type(operation: Callable) -> str:
+    """Extract unit type name from an operation callable."""
+    # Try to get class name
+    if hasattr(operation, '__class__'):
+        cls = operation.__class__
+        if cls.__name__ != 'function':
+            return cls.__name__
+
+    # Try to get function name
+    if hasattr(operation, '__name__'):
+        return operation.__name__
+
+    return "generic"
+
 
 def create_objective(
     flowsheet: Flowsheet,

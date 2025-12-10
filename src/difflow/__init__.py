@@ -1,4 +1,17 @@
-"""Difflow: Differentiable flowsheet framework for chemical processes."""
+"""Difflow: Differentiable flowsheet framework for chemical processes.
+
+Core package providing:
+- Stream representation and utilities
+- Thermodynamic property calculations
+- Unit operations (CSTR, Flash, LLE)
+- Flowsheet management with recycle solving
+- Differentiable solvers
+
+For bio manufacturing operations, install the difflow_bio plugin:
+    pip install difflow[bio]
+    # or
+    from difflow_bio import ContinuousBioreactor, ProteinAChromatography
+"""
 
 from difflow.streams import (
     Stream,
@@ -31,6 +44,31 @@ from difflow.units.lle import (
 )
 from difflow.flowsheet import Flowsheet, Unit
 from difflow.solvers import fixed_point_solve, newton_solve, rachford_rice
+
+# Plugin infrastructure
+from difflow.plugins import (
+    registry,
+    load_plugins,
+    discover_plugins,
+    register_operation,
+    UnitOperation,
+    OperationRegistry,
+)
+
+# Visualization (optional - requires plotly)
+try:
+    from difflow.visualization import (
+        FlowsheetGraph,
+        Node,
+        Edge,
+        render_flowsheet,
+        show_flowsheet,
+        UNIT_STYLES,
+        get_unit_style,
+    )
+    _HAS_VISUALIZATION = True
+except ImportError:
+    _HAS_VISUALIZATION = False
 
 __all__ = [
     # Streams
@@ -75,4 +113,19 @@ __all__ = [
     "fixed_point_solve",
     "newton_solve",
     "rachford_rice",
+    # Plugin infrastructure
+    "registry",
+    "load_plugins",
+    "discover_plugins",
+    "register_operation",
+    "UnitOperation",
+    "OperationRegistry",
+    # Visualization (when available)
+    "FlowsheetGraph",
+    "Node",
+    "Edge",
+    "render_flowsheet",
+    "show_flowsheet",
+    "UNIT_STYLES",
+    "get_unit_style",
 ]

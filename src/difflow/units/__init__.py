@@ -1,4 +1,15 @@
-"""Unit operations for difflow."""
+"""Unit operations for difflow.
+
+Core unit operations:
+- CSTR: Continuous stirred tank reactor
+- Flash: Vapor-liquid equilibrium flash
+- Mixer/Splitter: Stream combining and splitting
+- MultistageCascade: Liquid-liquid extraction
+
+For bio manufacturing operations (bioreactors, centrifuge, filtration,
+chromatography), use the difflow_bio plugin:
+    from difflow_bio import ContinuousBioreactor, ProteinAChromatography
+"""
 
 from difflow.units.cstr import CSTR, CSTRParams
 from difflow.units.flash import Flash, FlashParams, Mixer, Splitter

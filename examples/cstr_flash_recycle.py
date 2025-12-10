@@ -11,7 +11,7 @@ The flowsheet is fully differentiable, allowing:
 - Optimization (find optimal reactor volume, temperature, etc.)
 
 Flowsheet:
-                    ┌─────────┐
+                   ┌─────────┐
     Fresh A ──────►│         │      ┌─────────┐
                    │  CSTR   ├─────►│  Flash  ├───► Product B (vapor)
     Recycle ──────►│         │      │         │
