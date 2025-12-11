@@ -122,6 +122,17 @@ from difflow.plugins import (
 # Economics submodule
 from difflow import economics
 
+# Visualization submodule (optional - requires ipycytoscape)
+try:
+    from difflow import visualization
+    from difflow.visualization import visualize_flowsheet, FlowsheetVisualizer
+    _HAS_VISUALIZATION = True
+except ImportError:
+    _HAS_VISUALIZATION = False
+    visualization = None
+    visualize_flowsheet = None
+    FlowsheetVisualizer = None
+
 __all__ = [
     # Streams
     "Stream",
@@ -232,4 +243,8 @@ __all__ = [
     "OperationRegistry",
     # Economics
     "economics",
+    # Visualization (optional)
+    "visualization",
+    "visualize_flowsheet",
+    "FlowsheetVisualizer",
 ]
