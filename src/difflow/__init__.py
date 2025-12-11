@@ -50,6 +50,14 @@ from difflow.uncertainty import (
     sobol_indices,
     propagate_covariance,
 )
+from difflow.cantera_import import (
+    import_species_data,
+    import_critical_props,
+    import_reactions,
+    load_mechanism,
+    list_available_species,
+    list_available_reactions,
+)
 from difflow.units.cstr import CSTR, CSTRParams
 from difflow.units.pfr import PFR, PFRParams, GasPFR, GasPFRParams
 from difflow.units.fed_batch import (
@@ -147,6 +155,13 @@ __all__ = [
     "sensitivity_analysis",
     "sobol_indices",
     "propagate_covariance",
+    # Cantera Import
+    "import_species_data",
+    "import_critical_props",
+    "import_reactions",
+    "load_mechanism",
+    "list_available_species",
+    "list_available_reactions",
     # Unit operations - CSTR
     "CSTR",
     "CSTRParams",
