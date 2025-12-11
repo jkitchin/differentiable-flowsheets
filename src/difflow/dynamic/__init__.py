@@ -165,6 +165,33 @@ from difflow.dynamic.flowsheet import (
     FlowsheetState,
 )
 
+# Diffrax backend (optional)
+try:
+    from difflow.dynamic.diffrax_backend import (
+        integrate_diffrax,
+        integrate_diffrax_unit,
+        integrate_stiff,
+        integrate_dopri5,
+        integrate_tsit5,
+        integrate_kvaerno5,
+        list_diffrax_solvers,
+        check_diffrax_available,
+        HAS_DIFFRAX,
+        DIFFRAX_SOLVERS,
+    )
+except ImportError:
+    # diffrax not installed - provide stubs
+    HAS_DIFFRAX = False
+    DIFFRAX_SOLVERS = {}
+    integrate_diffrax = None
+    integrate_diffrax_unit = None
+    integrate_stiff = None
+    integrate_dopri5 = None
+    integrate_tsit5 = None
+    integrate_kvaerno5 = None
+    list_diffrax_solvers = lambda: []
+    check_diffrax_available = lambda: False
+
 # DAE support
 from difflow.dynamic.dae import (
     # Algebraic specification
@@ -250,4 +277,15 @@ __all__ = [
     "pressure_algebraic",
     "equilibrium_extent_algebraic",
     "DynamicFlashDrum",
+    # Diffrax (optional)
+    "HAS_DIFFRAX",
+    "DIFFRAX_SOLVERS",
+    "integrate_diffrax",
+    "integrate_diffrax_unit",
+    "integrate_stiff",
+    "integrate_dopri5",
+    "integrate_tsit5",
+    "integrate_kvaerno5",
+    "list_diffrax_solvers",
+    "check_diffrax_available",
 ]

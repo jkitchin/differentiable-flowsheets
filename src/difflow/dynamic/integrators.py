@@ -416,14 +416,14 @@ def integrate_euler(
 # Unified Interface
 # =============================================================================
 
-Method = Literal["RK4", "RK45", "Euler"]
+Method = Literal["RK4", "RK45", "Euler", "diffrax"]
 
 
 def integrate(
     f: DerivativesFn,
     y0: Array,
     t_span: tuple[float, float],
-    method: Method = "RK4",
+    method: Method | str = "RK4",
     **kwargs,
 ) -> IntegrationResult:
     """Unified interface for ODE integration.
@@ -434,7 +434,15 @@ def integrate(
         f: Derivative function f(t, y) -> dy/dt
         y0: Initial state array
         t_span: (t_start, t_end) time interval
-        method: Integration method ("RK4", "RK45", "Euler")
+        method: Integration method:
+            - "RK4": Fixed-step 4th order Runge-Kutta
+            - "RK45": Adaptive Runge-Kutta-Fehlberg
+            - "Euler": Simple forward Euler
+            - "diffrax": Default diffrax solver (Tsit5)
+            - "diffrax:<solver>": Specific diffrax solver, e.g.:
+              - "diffrax:dopri5" - Dormand-Prince 5(4)
+              - "diffrax:tsit5" - Tsitouras 5(4) (recommended)
+              - "diffrax:kvaerno5" - Implicit for stiff systems
         **kwargs: Method-specific arguments
 
     Returns:
@@ -445,7 +453,27 @@ def integrate(
         ...     return jnp.array([y[1], -y[0]])
         >>> result = integrate(harmonic, jnp.array([1.0, 0.0]), (0, 10), "RK4")
         >>> result.y_final
+
+        # Using diffrax with specific solver
+        >>> result = integrate(f, y0, t_span, "diffrax:dopri5", rtol=1e-6)
     """
+    # Handle diffrax methods
+    if isinstance(method, str) and (method == "diffrax" or method.startswith("diffrax:")):
+        from difflow.dynamic.diffrax_backend import integrate_diffrax, HAS_DIFFRAX
+
+        if not HAS_DIFFRAX:
+            raise ImportError(
+                "diffrax is required for this method. Install with: pip install diffrax"
+            )
+
+        # Parse solver name from method string
+        if ":" in method:
+            solver = method.split(":", 1)[1]
+        else:
+            solver = "tsit5"  # Default diffrax solver
+
+        return integrate_diffrax(f, y0, t_span, solver=solver, **kwargs)
+
     if method == "RK4":
         n_steps = kwargs.get("n_steps", 100)
         return integrate_rk4(f, y0, t_span, n_steps=n_steps)
