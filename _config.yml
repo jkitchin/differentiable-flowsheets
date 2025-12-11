@@ -1,0 +1,46 @@
+# Jupyter Book configuration
+title: Differentiable Flowsheets
+author: Differentiable Flowsheets Contributors
+copyright: "2024"
+logo: ""
+
+# Force re-execution of notebooks on each build.
+# See https://jupyterbook.org/content/execute.html
+execute:
+  execute_notebooks: "off"  # Don't execute notebooks during build (they may need special deps)
+  timeout: 600
+
+# Define the name of the latex output file for PDF builds
+latex:
+  latex_documents:
+    targetname: book.tex
+
+# Add a bibtex file for citations
+# bibtex_bibfiles:
+#   - references.bib
+
+# Information about where the book exists on the web
+repository:
+  url: https://github.com/jkitchin/differentiable-flowsheets
+  path_to_book: ""
+  branch: main
+
+# Add GitHub buttons to your book
+html:
+  use_issues_button: true
+  use_repository_button: true
+  use_edit_page_button: true
+  home_page_in_navbar: false
+  baseurl: "https://jkitchin.github.io/differentiable-flowsheets/"
+
+# Launch buttons
+launch_buttons:
+  notebook_interface: "classic"
+  binderhub_url: ""
+  colab_url: "https://colab.research.google.com"
+
+# Sphinx configuration
+sphinx:
+  config:
+    html_theme_options:
+      navigation_with_keys: false
