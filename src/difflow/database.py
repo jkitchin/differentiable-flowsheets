@@ -4,11 +4,11 @@ This module provides pre-defined thermodynamic properties for common
 gases and liquids, eliminating the need to manually specify properties.
 
 Usage:
-    from difflow.database import get_species, get_critical_props, SPECIES_DB
+    from difflow.database import get_species_data, get_critical_props
 
     # Get SpeciesData for ideal thermo
-    methanol = get_species("methanol")
-    thermo = IdealThermo({"methanol": methanol, "water": get_species("water")})
+    methanol = get_species_data("methanol")
+    thermo = IdealThermo({"methanol": methanol, "water": get_species_data("water")})
 
     # Get CriticalProperties for EOS
     methane = get_critical_props("methane")
@@ -401,7 +401,7 @@ _IDEAL_THERMO_DATA = {
 }
 
 
-def get_species(name: str) -> SpeciesData:
+def get_species_data(name: str) -> SpeciesData:
     """Get SpeciesData for ideal thermodynamics by name.
 
     Args:
@@ -414,7 +414,7 @@ def get_species(name: str) -> SpeciesData:
         KeyError: If species not found in database
 
     Example:
-        >>> data = get_species("methanol")
+        >>> data = get_species_data("methanol")
         >>> data.MW
         32.04
     """
@@ -527,7 +527,7 @@ def get_common_solvents() -> dict[str, SpeciesData]:
         "water", "methanol", "ethanol", "acetone",
         "diethyl_ether", "chloroform", "benzene", "toluene",
     ]
-    return {name: get_species(name) for name in names if name in _IDEAL_THERMO_DATA}
+    return {name: get_species_data(name) for name in names if name in _IDEAL_THERMO_DATA}
 
 
 # =============================================================================
@@ -575,7 +575,7 @@ def resolve_alias(name: str) -> str:
 
 # Make alias resolution automatic in get_* functions
 _original_get_critical_props = get_critical_props
-_original_get_species = get_species
+_original_get_species_data = get_species_data
 
 
 def get_critical_props(name: str) -> CriticalProperties:
@@ -583,6 +583,6 @@ def get_critical_props(name: str) -> CriticalProperties:
     return _original_get_critical_props(resolve_alias(name))
 
 
-def get_species(name: str) -> SpeciesData:
+def get_species_data(name: str) -> SpeciesData:
     """Get SpeciesData for ideal thermodynamics by name (with alias support)."""
-    return _original_get_species(resolve_alias(name))
+    return _original_get_species_data(resolve_alias(name))

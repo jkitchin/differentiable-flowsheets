@@ -35,13 +35,20 @@ from difflow.eos import (
     flash_TP_eos,
 )
 from difflow.database import (
-    get_species,
+    get_species_data,
     get_critical_props,
     get_species_info,
     list_species,
     get_alkanes,
     get_btex,
     get_common_solvents,
+)
+from difflow.uncertainty import (
+    linear_propagation,
+    monte_carlo_propagation,
+    sensitivity_analysis,
+    sobol_indices,
+    propagate_covariance,
 )
 from difflow.units.cstr import CSTR, CSTRParams
 from difflow.units.pfr import PFR, PFRParams, GasPFR, GasPFRParams
@@ -115,13 +122,19 @@ __all__ = [
     "EOSParams",
     "flash_TP_eos",
     # Property Database
-    "get_species",
+    "get_species_data",
     "get_critical_props",
     "get_species_info",
     "list_species",
     "get_alkanes",
     "get_btex",
     "get_common_solvents",
+    # Uncertainty Propagation
+    "linear_propagation",
+    "monte_carlo_propagation",
+    "sensitivity_analysis",
+    "sobol_indices",
+    "propagate_covariance",
     # Unit operations - CSTR
     "CSTR",
     "CSTRParams",

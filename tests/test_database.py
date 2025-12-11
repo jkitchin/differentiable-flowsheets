@@ -4,7 +4,7 @@ import pytest
 import jax.numpy as jnp
 
 from difflow.database import (
-    get_species,
+    get_species_data,
     get_critical_props,
     get_species_info,
     list_species,
@@ -47,25 +47,25 @@ class TestGetCriticalProps:
         assert "not in database" in str(exc_info.value)
 
 
-class TestGetSpecies:
+class TestGetSpeciesData:
     """Tests for SpeciesData retrieval."""
 
     def test_get_methanol(self):
         """Test retrieving methanol species data."""
-        data = get_species("methanol")
+        data = get_species_data("methanol")
         assert data.MW == pytest.approx(32.04, rel=0.01)
         assert data.name == "methanol"
 
     def test_get_water(self):
         """Test retrieving water species data."""
-        data = get_species("water")
+        data = get_species_data("water")
         assert data.MW == pytest.approx(18.015, rel=0.01)
         assert data.Hf == pytest.approx(-241826.0, rel=0.01)
 
     def test_species_not_found(self):
         """Test error for unknown species."""
         with pytest.raises(KeyError):
-            get_species("unobtainium")
+            get_species_data("unobtainium")
 
 
 class TestAliases:
@@ -85,12 +85,12 @@ class TestAliases:
 
     def test_isopropanol_alias(self):
         """Test isopropanol -> 2_propanol alias."""
-        data = get_species("isopropanol")
+        data = get_species_data("isopropanol")
         assert data.name == "2_propanol"
 
     def test_meoh_alias(self):
         """Test MeOH -> methanol alias."""
-        data = get_species("MeOH")
+        data = get_species_data("MeOH")
         assert data.name == "methanol"
 
 
@@ -175,8 +175,8 @@ class TestIntegration:
     def test_ideal_thermo_integration(self):
         """Test using database with IdealThermo."""
         thermo = IdealThermo({
-            "methanol": get_species("methanol"),
-            "water": get_species("water"),
+            "methanol": get_species_data("methanol"),
+            "water": get_species_data("water"),
         })
         assert thermo.n_species == 2
 
@@ -236,7 +236,7 @@ class TestDataConsistency:
         """Test that all molecular weights are positive."""
         for name in list_species():
             try:
-                data = get_species(name)
+                data = get_species_data(name)
                 assert data.MW > 0, f"MW should be positive for {name}"
             except KeyError:
                 pass  # Species might only have critical data
