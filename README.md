@@ -1,5 +1,7 @@
 # difflow
 
+[![Tests](https://github.com/jkitchin/differentiable-flowsheets/actions/workflows/test.yml/badge.svg)](https://github.com/jkitchin/differentiable-flowsheets/actions/workflows/test.yml)
+
 **Differentiable Flowsheet Framework for Chemical Processes**
 
 A JAX-based framework for building and optimizing chemical process flowsheets with automatic differentiation.
