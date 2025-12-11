@@ -23,6 +23,7 @@
 | [Thermodynamics](thermodynamics.md) | Property calculations, equations of state, databases |
 | [Technoeconomics](technoeconomics.md) | Capital costs, operating costs, profitability analysis |
 | [Streams and Flowsheets](streams-and-flowsheets.md) | Stream handling, flowsheet solver, recycle calculations |
+| [Dynamic Modeling](dynamic-modeling.md) | Transient simulation, ODE/DAE integration, diffrax backend |
 | [Solvers and Utilities](solvers-and-utilities.md) | Numerical methods, uncertainty propagation |
 
 ## Architecture Overview
@@ -45,6 +46,13 @@ difflow/
 │   ├── distillation.py # Distillation columns
 │   ├── heat_exchanger.py # Heat exchangers
 │   └── lle.py          # Liquid-liquid extraction
+├── dynamic/            # Dynamic (transient) simulation
+│   ├── state.py        # State variable specification
+│   ├── base.py         # DynamicUnit protocol
+│   ├── integrators.py  # ODE integration (RK4, RK45)
+│   ├── flowsheet.py    # Multi-unit dynamic flowsheets
+│   ├── dae.py          # DAE systems and Newton solver
+│   └── diffrax_backend.py # Advanced solvers via diffrax
 └── economics/          # Technoeconomic analysis
     ├── capital.py      # Equipment costs
     ├── utilities.py    # Utility costs
