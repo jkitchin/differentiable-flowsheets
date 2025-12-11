@@ -1,0 +1,1061 @@
+# Chemical Unit Operations
+
+This document provides comprehensive documentation for all chemical unit operations available in Difflow.
+
+## Table of Contents
+
+1. [Reactors](#reactors)
+   - [CSTR (Continuous Stirred-Tank Reactor)](#cstr-continuous-stirred-tank-reactor)
+   - [PFR (Plug Flow Reactor)](#pfr-plug-flow-reactor)
+   - [GasPFR (Gas-Phase PFR with Pressure Drop)](#gaspfr-gas-phase-pfr-with-pressure-drop)
+   - [FedBatchReactor](#fedbatchreactor)
+2. [Separators](#separators)
+   - [Flash Drum](#flash-drum)
+   - [Mixer](#mixer)
+   - [Splitter](#splitter)
+3. [Distillation](#distillation)
+   - [ShortcutColumn](#shortcutcolumn)
+   - [DistillationColumn (Rigorous)](#distillationcolumn-rigorous)
+4. [Heat Exchangers](#heat-exchangers)
+   - [Heater](#heater)
+   - [Cooler](#cooler)
+   - [CounterCurrentHX](#countercurrenthx)
+   - [CoCurrentHX](#cocurrenthx)
+5. [Liquid-Liquid Extraction](#liquid-liquid-extraction)
+   - [MultistageCascade](#multistagecascade)
+   - [DifferentialContactor](#differentialcontactor)
+
+---
+
+## Reactors
+
+### CSTR (Continuous Stirred-Tank Reactor)
+
+**Location**: `difflow/units/cstr.py`
+
+**Class**: `CSTR`
+
+**Description**: Models an ideal continuous stirred-tank reactor with perfect mixing. The reactor contents are assumed to be at uniform temperature and composition, equal to the outlet conditions.
+
+#### Process Role
+
+CSTRs are widely used in chemical processes for:
+- Liquid-phase reactions
+- Polymerization reactions
+- Fermentation (as idealized model)
+- Processes requiring uniform conditions
+
+#### Parameters
+
+```python
+@dataclass
+class CSTRParams:
+    volume: float          # Reactor volume (m³)
+    stoichiometry: Array   # Stoichiometric matrix [n_species × n_reactions]
+    k_ref: float           # Rate constant at reference temperature (1/s for 1st order)
+    E_a: float             # Activation energy (J/mol)
+    T_ref: float           # Reference temperature for k_ref (K)
+    dH_rxn: Array          # Heat of reaction for each reaction (J/mol)
+    order: int = 1         # Reaction order (default: 1)
+```
+
+#### Inputs
+
+| Parameter | Type | Units | Description |
+|-----------|------|-------|-------------|
+| `inlet` | Stream | - | Inlet stream with species flows, T, P |
+| `T_spec` | float | K | Target outlet temperature (isothermal mode) |
+| `Q_spec` | float | W | Specified heat duty (specified_duty mode) |
+| `volumetric_flow` | float | m³/s | Volumetric flow rate (optional) |
+
+#### Outputs
+
+| Parameter | Type | Units | Description |
+|-----------|------|-------|-------------|
+| `outlet` | Stream | - | Outlet stream |
+| `info['Q']` | float | W | Heat duty (positive = heating) |
+| `info['rates']` | Array | mol/m³/s | Reaction rates |
+| `info['conversion']` | float | - | Conversion of limiting reactant |
+
+#### Operating Modes
+
+1. **Isothermal** (`T_spec` provided): Outlet temperature is fixed, heat duty calculated
+2. **Adiabatic** (no `T_spec` or `Q_spec`): Q = 0, outlet temperature calculated
+3. **Specified Duty** (`Q_spec` provided): Heat duty fixed, outlet temperature calculated
+
+#### Governing Equations
+
+**Material Balance** (steady-state):
+
+$$F_{i,out} = F_{i,in} + V \sum_j \nu_{ij} r_j$$
+
+Where:
+- $F_{i,out}$: Outlet molar flow of species i (mol/s)
+- $F_{i,in}$: Inlet molar flow of species i (mol/s)
+- $V$: Reactor volume (m³)
+- $\nu_{ij}$: Stoichiometric coefficient of species i in reaction j
+- $r_j$: Rate of reaction j (mol/m³/s)
+
+**Reaction Rate** (Arrhenius kinetics):
+
+$$r_j = k_{ref} \exp\left[\frac{E_a}{R}\left(\frac{1}{T_{ref}} - \frac{1}{T}\right)\right] \prod_i C_i^{n_i}$$
+
+Where:
+- $k_{ref}$: Rate constant at reference temperature
+- $E_a$: Activation energy (J/mol)
+- $R$: Gas constant (8.314 J/mol/K)
+- $C_i$: Concentration of species i (mol/m³)
+- $n_i$: Reaction order with respect to species i
+
+**Energy Balance**:
+
+$$Q = \dot{H}_{out} - \dot{H}_{in} + V \sum_j r_j \Delta H_{rxn,j}$$
+
+Where:
+- $Q$: Heat duty (W)
+- $\dot{H}$: Enthalpy flow rate (W)
+- $\Delta H_{rxn,j}$: Heat of reaction j (J/mol)
+
+**Conversion**:
+
+$$X = \frac{F_{A,in} - F_{A,out}}{F_{A,in}}$$
+
+#### Example Usage
+
+```python
+from difflow.units.cstr import CSTR, CSTRParams
+from difflow.streams import make_stream
+from difflow.thermo import IdealThermo
+import jax.numpy as jnp
+
+# A -> B (first-order, exothermic)
+params = CSTRParams(
+    volume=2.0,  # m³
+    stoichiometry=jnp.array([[-1.0], [1.0]]),  # A -> B
+    k_ref=0.1,   # 1/s at 350 K
+    E_a=50000.0, # J/mol
+    T_ref=350.0, # K
+    dH_rxn=jnp.array([-80000.0])  # J/mol (exothermic)
+)
+
+cstr = CSTR(params, thermo, species_order=['A', 'B'])
+inlet = make_stream({'A': 1.0, 'B': 0.0}, T=350.0, P=101325.0)
+
+# Isothermal operation
+outlet, info = cstr(inlet, T_spec=350.0)
+print(f"Conversion: {info['conversion']:.2%}")
+print(f"Heat duty: {info['Q']:.2f} W")
+
+# Adiabatic operation
+outlet_adiab, info_adiab = cstr(inlet)
+print(f"Outlet temperature: {outlet_adiab['T']:.1f} K")
+```
+
+#### Design Considerations
+
+- **Residence Time**: $\tau = V/Q_{vol}$ determines conversion
+- **Heat Transfer**: Large exothermic reactions may require cooling coils or jackets
+- **Mixing**: Perfect mixing assumption requires adequate agitation
+- **Multiple CSTRs**: Series arrangement approaches PFR behavior
+
+---
+
+### PFR (Plug Flow Reactor)
+
+**Location**: `difflow/units/pfr.py`
+
+**Class**: `PFR`
+
+**Description**: Models an ideal plug flow reactor where all fluid elements have the same residence time. No axial mixing, but perfect radial mixing is assumed.
+
+#### Process Role
+
+PFRs are preferred for:
+- Gas-phase reactions
+- High conversion requirements
+- Reactions where selectivity depends on conversion
+- Fast reactions
+
+#### Parameters
+
+```python
+@dataclass
+class PFRParams:
+    volume: float          # Total reactor volume (m³)
+    stoichiometry: Array   # Stoichiometric matrix [n_species × n_reactions]
+    k_ref: float           # Rate constant at reference temperature
+    E_a: float             # Activation energy (J/mol)
+    T_ref: float           # Reference temperature (K)
+    dH_rxn: Array          # Heat of reaction (J/mol)
+    n_steps: int = 100     # Number of integration steps
+```
+
+#### Inputs
+
+| Parameter | Type | Units | Description |
+|-----------|------|-------|-------------|
+| `inlet` | Stream | - | Inlet stream |
+| `T_spec` | float | K | Outlet temperature (isothermal mode) |
+| `volumetric_flow` | float | m³/s | Volumetric flow rate |
+
+#### Outputs
+
+| Parameter | Type | Units | Description |
+|-----------|------|-------|-------------|
+| `outlet` | Stream | - | Outlet stream |
+| `info['conversion']` | float | - | Conversion of limiting reactant |
+| `info['V_profile']` | Array | m³ | Volume along reactor |
+| `info['F_profile']` | Array | mol/s | Molar flows along reactor |
+| `info['T_profile']` | Array | K | Temperature along reactor |
+
+#### Governing Equations
+
+**Material Balance** (differential):
+
+$$\frac{dF_i}{dV} = \sum_j \nu_{ij} r_j$$
+
+**Energy Balance** (adiabatic):
+
+$$\frac{dT}{dV} = \frac{-\sum_j r_j \Delta H_{rxn,j}}{F_{total} C_{p,mix}}$$
+
+**Integration Method**: 4th-order Runge-Kutta (RK4) implemented with `jax.lax.scan`
+
+#### Example Usage
+
+```python
+from difflow.units.pfr import PFR, PFRParams
+
+params = PFRParams(
+    volume=5.0,
+    stoichiometry=jnp.array([[-1.0], [1.0]]),
+    k_ref=0.5,
+    E_a=60000.0,
+    T_ref=400.0,
+    dH_rxn=jnp.array([-50000.0]),
+    n_steps=200
+)
+
+pfr = PFR(params, thermo, species_order=['A', 'B'])
+inlet = make_stream({'A': 2.0, 'B': 0.0}, T=400.0, P=200000.0)
+outlet, info = pfr(inlet, volumetric_flow=0.001)
+
+# Plot conversion profile
+import matplotlib.pyplot as plt
+plt.plot(info['V_profile'], 1 - info['F_profile'][:, 0] / inlet['F_A'])
+plt.xlabel('Volume (m³)')
+plt.ylabel('Conversion')
+```
+
+---
+
+### GasPFR (Gas-Phase PFR with Pressure Drop)
+
+**Location**: `difflow/units/pfr.py`
+
+**Class**: `GasPFR`
+
+**Description**: Extended PFR model for gas-phase reactions accounting for:
+- Pressure drop (Ergun equation)
+- Variable volumetric flow due to mole change and pressure/temperature effects
+
+#### Additional Parameters
+
+```python
+@dataclass
+class GasPFRParams(PFRParams):
+    alpha: float           # Pressure drop parameter (1/m³)
+    diameter: float        # Reactor diameter (m)
+    void_fraction: float   # Bed void fraction (for packed beds)
+    particle_diameter: float  # Catalyst particle diameter (m)
+```
+
+#### Additional Equations
+
+**Pressure Drop** (Ergun equation):
+
+$$\frac{dP}{dV} = -\alpha \frac{P_0}{P} \frac{T}{T_0} \frac{F_{total}}{F_{total,0}}$$
+
+Where $\alpha$ combines Ergun parameters:
+
+$$\alpha = \frac{G}{\rho_0 g_c D_p A_c} \left[\frac{150(1-\phi)\mu}{D_p} + 1.75 G\right] \frac{(1-\phi)}{\phi^3}$$
+
+**Variable Volumetric Flow**:
+
+$$Q = Q_0 \frac{F_{total}}{F_{total,0}} \frac{P_0}{P} \frac{T}{T_0}$$
+
+#### Outputs
+
+Additional outputs compared to PFR:
+
+| Parameter | Type | Units | Description |
+|-----------|------|-------|-------------|
+| `info['P_profile']` | Array | Pa | Pressure along reactor |
+| `info['pressure_drop']` | float | Pa | Total pressure drop |
+
+---
+
+### FedBatchReactor
+
+**Location**: `difflow/units/fed_batch.py`
+
+**Class**: `FedBatchReactor`, `SemiBatchReactor`
+
+**Description**: Models fed-batch (semi-batch) reactors with time-varying feed profiles. Commonly used when reactant addition rate affects selectivity or safety.
+
+#### Process Role
+
+Fed-batch reactors are used for:
+- Controlling exothermic reactions
+- Improving selectivity by maintaining low reactant concentration
+- Fermentation with substrate feeding
+- Polymerization with monomer addition
+
+#### Parameters
+
+```python
+@dataclass
+class FedBatchParams:
+    initial_volume: float   # Initial liquid volume (m³)
+    stoichiometry: Array    # Stoichiometric matrix
+    k_ref: float           # Rate constant
+    E_a: float             # Activation energy (J/mol)
+    T_ref: float           # Reference temperature (K)
+    dH_rxn: Array          # Heat of reaction (J/mol)
+    batch_time: float      # Total batch time (s)
+    n_steps: int = 100     # Integration steps
+```
+
+#### Inputs
+
+| Parameter | Type | Units | Description |
+|-----------|------|-------|-------------|
+| `inlet` | Stream | - | Feed stream composition |
+| `feed_flow` | Callable | mol/s | Feed rate as function of time: `F(t)` |
+| `T_profile` | Callable | K | Temperature as function of time: `T(t)` |
+
+#### Governing Equations
+
+**Volume Change**:
+
+$$\frac{dV}{dt} = Q_{feed}$$
+
+**Material Balance**:
+
+$$\frac{d(V C_i)}{dt} = F_{in} C_{in,i} + V \sum_j \nu_{ij} r_j$$
+
+Or equivalently:
+
+$$\frac{dN_i}{dt} = F_{in,i} + V \sum_j \nu_{ij} r_j$$
+
+**Energy Balance**:
+
+$$\frac{d(V \rho C_p T)}{dt} = F_{in} \rho_{in} C_{p,in} T_{in} + V \sum_j r_j (-\Delta H_{rxn,j}) + Q$$
+
+#### Utility Functions
+
+```python
+from difflow.units.fed_batch import batch_time_for_conversion, optimal_feed_profile
+
+# Calculate batch time for target conversion
+t_batch = batch_time_for_conversion(params, target_X=0.95)
+
+# Generate optimal feed profile (minimize batch time)
+feed_profile = optimal_feed_profile(params, constraints={'max_T': 400.0})
+```
+
+---
+
+## Separators
+
+### Flash Drum
+
+**Location**: `difflow/units/flash.py`
+
+**Class**: `Flash`
+
+**Description**: Performs vapor-liquid equilibrium (VLE) separation. The feed is separated into vapor and liquid phases at equilibrium conditions.
+
+#### Process Role
+
+Flash drums are used for:
+- Separating light and heavy components
+- Pressure reduction with phase separation
+- Overhead condensers
+- Feed preparation for distillation
+
+#### Parameters
+
+```python
+@dataclass
+class FlashParams:
+    # Usually no additional parameters needed;
+    # uses thermodynamic model for K-values
+    pass
+```
+
+#### Inputs
+
+| Parameter | Type | Units | Description |
+|-----------|------|-------|-------------|
+| `inlet` | Stream | - | Feed stream |
+| `T` | float | K | Flash temperature (optional override) |
+| `P` | float | Pa | Flash pressure (optional override) |
+
+#### Outputs
+
+| Parameter | Type | Units | Description |
+|-----------|------|-------|-------------|
+| `liquid` | Stream | - | Liquid product |
+| `vapor` | Stream | - | Vapor product |
+| `info['V_frac']` | float | - | Vapor fraction |
+| `info['K_values']` | Array | - | K-values for each species |
+| `info['x']` | Array | - | Liquid mole fractions |
+| `info['y']` | Array | - | Vapor mole fractions |
+
+#### Governing Equations
+
+**Rachford-Rice Equation**:
+
+$$f(V) = \sum_i \frac{z_i (K_i - 1)}{1 + V(K_i - 1)} = 0$$
+
+Where:
+- $z_i$: Feed mole fraction of species i
+- $K_i$: Equilibrium ratio (K-value) = $y_i / x_i$
+- $V$: Vapor fraction (moles vapor / moles feed)
+
+**Phase Compositions**:
+
+$$x_i = \frac{z_i}{1 + V(K_i - 1)}$$
+
+$$y_i = \frac{K_i z_i}{1 + V(K_i - 1)}$$
+
+**K-Value Calculation** (Raoult's Law):
+
+$$K_i = \frac{P_i^{sat}(T)}{P}$$
+
+For non-ideal systems with activity coefficients:
+
+$$K_i = \frac{\gamma_i P_i^{sat}(T)}{P}$$
+
+**Material Balance**:
+
+$$F = L + V$$
+
+$$F z_i = L x_i + V y_i$$
+
+#### Example Usage
+
+```python
+from difflow.units.flash import Flash, FlashParams
+
+flash = Flash(FlashParams(), thermo, species_order=['methane', 'ethane', 'propane'])
+feed = make_stream({'methane': 0.5, 'ethane': 0.3, 'propane': 0.2}, T=300.0, P=500000.0)
+
+liquid, vapor, info = flash(feed)
+print(f"Vapor fraction: {info['V_frac']:.3f}")
+print(f"Liquid composition: {info['x']}")
+print(f"Vapor composition: {info['y']}")
+```
+
+---
+
+### Mixer
+
+**Location**: `difflow/units/flash.py`
+
+**Class**: `Mixer`
+
+**Description**: Combines multiple inlet streams into a single outlet stream by summing molar flows.
+
+#### Governing Equations
+
+**Mass Balance**:
+
+$$F_{out,i} = \sum_k F_{k,i}$$
+
+**Energy Balance** (adiabatic mixing):
+
+$$T_{out} = \frac{\sum_k F_k C_{p,k} T_k}{\sum_k F_k C_{p,k}}$$
+
+(Simplified for ideal mixing with similar heat capacities)
+
+#### Example Usage
+
+```python
+from difflow.units.flash import Mixer
+
+mixer = Mixer(thermo, species_order=['A', 'B', 'C'])
+stream1 = make_stream({'A': 1.0, 'B': 0.5}, T=350.0, P=101325.0)
+stream2 = make_stream({'B': 0.3, 'C': 0.2}, T=360.0, P=101325.0)
+
+outlet, info = mixer([stream1, stream2])
+```
+
+---
+
+### Splitter
+
+**Location**: `difflow/units/flash.py`
+
+**Class**: `Splitter`
+
+**Description**: Divides a single inlet stream into multiple outlet streams based on split fractions.
+
+#### Governing Equations
+
+$$F_{out,k} = \alpha_k F_{in}$$
+
+Where $\sum_k \alpha_k = 1$
+
+All outlet streams have the same composition and temperature as the inlet.
+
+#### Example Usage
+
+```python
+from difflow.units.flash import Splitter
+
+splitter = Splitter()
+inlet = make_stream({'A': 1.0, 'B': 0.5}, T=350.0, P=101325.0)
+
+# Split into 3 streams: 50%, 30%, 20%
+outlets, info = splitter(inlet, fractions=[0.5, 0.3, 0.2])
+```
+
+---
+
+## Distillation
+
+### ShortcutColumn
+
+**Location**: `difflow/units/distillation.py`
+
+**Class**: `ShortcutColumn`
+
+**Description**: Uses shortcut methods (Fenske-Underwood-Gilliland) for rapid distillation column design and rating calculations.
+
+#### Process Role
+
+Shortcut methods are used for:
+- Initial column design estimates
+- Optimization studies
+- Screening alternatives
+- Quick sensitivity analysis
+
+#### Parameters
+
+```python
+@dataclass
+class ShortcutColumnParams:
+    light_key: int         # Index of light key component
+    heavy_key: int         # Index of heavy key component
+    x_D_lk: float         # Light key recovery in distillate
+    x_B_hk: float         # Heavy key recovery in bottoms
+    reflux_ratio: float   # Actual reflux ratio (R/R_min multiplier)
+```
+
+#### Governing Equations
+
+**Relative Volatility**:
+
+$$\alpha_{ij} = \frac{K_i}{K_j} = \frac{P_i^{sat}}{P_j^{sat}}$$
+
+**Average Relative Volatility** (geometric mean):
+
+$$\bar{\alpha} = (\alpha_{top} \cdot \alpha_{bottom})^{0.5}$$
+
+**Fenske Equation** (minimum stages):
+
+$$N_{min} = \frac{\ln\left[\frac{x_{D,LK}}{x_{B,LK}} \cdot \frac{x_{B,HK}}{x_{D,HK}}\right]}{\ln \bar{\alpha}_{LK/HK}}$$
+
+**Underwood Equations** (minimum reflux):
+
+For each component i:
+$$\sum_i \frac{\alpha_i x_{F,i}}{\alpha_i - \theta} = 1 - q$$
+
+$$R_{min} + 1 = \sum_i \frac{\alpha_i x_{D,i}}{\alpha_i - \theta}$$
+
+Where:
+- $\theta$: Root between $\alpha_{HK}$ and $\alpha_{LK}$
+- $q$: Feed quality (1 for saturated liquid, 0 for saturated vapor)
+
+**Gilliland Correlation** (actual stages):
+
+$$\frac{N - N_{min}}{N + 1} = 1 - \exp\left[\frac{(1 + 54.4X)(X - 1)}{(11 + 117.2X)(X^{0.5})}\right]$$
+
+Where:
+$$X = \frac{R - R_{min}}{R + 1}$$
+
+**Feed Stage Location** (Kirkbride correlation):
+
+$$\frac{N_R}{N_S} = \left[\frac{B}{D} \cdot \frac{x_{F,HK}}{x_{F,LK}} \cdot \left(\frac{x_{B,LK}}{x_{D,HK}}\right)^2\right]^{0.206}$$
+
+#### Outputs
+
+| Parameter | Type | Units | Description |
+|-----------|------|-------|-------------|
+| `distillate` | Stream | - | Overhead product |
+| `bottoms` | Stream | - | Bottom product |
+| `info['N_min']` | float | - | Minimum stages |
+| `info['N_actual']` | float | - | Actual stages |
+| `info['R_min']` | float | - | Minimum reflux ratio |
+| `info['feed_stage']` | int | - | Optimal feed stage |
+| `info['condenser_duty']` | float | W | Condenser heat duty |
+| `info['reboiler_duty']` | float | W | Reboiler heat duty |
+
+#### Example Usage
+
+```python
+from difflow.units.distillation import ShortcutColumn, ShortcutColumnParams
+
+params = ShortcutColumnParams(
+    light_key=0,    # benzene
+    heavy_key=1,    # toluene
+    x_D_lk=0.99,    # 99% benzene recovery in distillate
+    x_B_hk=0.99,    # 99% toluene recovery in bottoms
+    reflux_ratio=1.3  # 1.3 × R_min
+)
+
+column = ShortcutColumn(params, thermo, species_order=['benzene', 'toluene', 'xylene'])
+feed = make_stream({'benzene': 0.4, 'toluene': 0.35, 'xylene': 0.25}, T=370.0, P=101325.0)
+
+distillate, bottoms, info = column(feed)
+print(f"Minimum stages: {info['N_min']:.1f}")
+print(f"Actual stages: {info['N_actual']:.1f}")
+print(f"Condenser duty: {info['condenser_duty']/1e6:.2f} MW")
+```
+
+#### Utility Functions
+
+```python
+from difflow.units.distillation import (
+    relative_volatility,
+    fenske_stages,
+    minimum_reflux_ratio,
+    gilliland_stages,
+    column_diameter
+)
+
+# Calculate individual parameters
+alpha = relative_volatility(thermo, T=373.0, P=101325.0)
+N_min = fenske_stages(x_D, x_B, alpha)
+R_min = minimum_reflux_ratio(alpha, x_F, x_D, q=1.0)
+N = gilliland_stages(N_min, R, R_min)
+D = column_diameter(V_max, rho_V, rho_L, sigma)
+```
+
+---
+
+### DistillationColumn (Rigorous)
+
+**Location**: `difflow/units/distillation.py`
+
+**Class**: `DistillationColumn`
+
+**Description**: Stage-by-stage calculation using MESH equations (Material balance, Equilibrium, Summation, enthalpy balance).
+
+#### Parameters
+
+```python
+@dataclass
+class DistillationColumnParams:
+    n_stages: int          # Number of theoretical stages
+    feed_stage: int        # Feed stage number (from top)
+    reflux_ratio: float    # Reflux ratio (L/D)
+    condenser_type: str    # 'total' or 'partial'
+    P_top: float           # Top pressure (Pa)
+    P_bottom: float        # Bottom pressure (Pa)
+```
+
+#### Governing Equations (MESH)
+
+For each stage j:
+
+**Material Balance**:
+$$L_{j-1} x_{i,j-1} + V_{j+1} y_{i,j+1} + F_j z_{i,j} = L_j x_{i,j} + V_j y_{i,j}$$
+
+**Equilibrium**:
+$$y_{i,j} = K_{i,j} x_{i,j}$$
+
+**Summation**:
+$$\sum_i x_{i,j} = 1$$
+$$\sum_i y_{i,j} = 1$$
+
+**Enthalpy Balance**:
+$$L_{j-1} H^L_{j-1} + V_{j+1} H^V_{j+1} + F_j H^F_j = L_j H^L_j + V_j H^V_j + Q_j$$
+
+---
+
+## Heat Exchangers
+
+### Heater
+
+**Location**: `difflow/units/heat_exchanger.py`
+
+**Class**: `Heater`
+
+**Description**: Single-stream heater that increases stream temperature using an external heat source (steam, hot oil, electric).
+
+#### Parameters
+
+```python
+@dataclass
+class HeaterParams:
+    mode: str              # 'duty', 'outlet_T', or 'lmtd'
+    duty: float = None     # Heat duty (W) for 'duty' mode
+    T_out: float = None    # Outlet temperature (K) for 'outlet_T' mode
+    UA: float = None       # Overall HTC × Area (W/K) for 'lmtd' mode
+    T_utility: float = None  # Utility temperature (K) for 'lmtd' mode
+```
+
+#### Governing Equations
+
+**Energy Balance**:
+
+$$Q = \dot{m} C_p (T_{out} - T_{in})$$
+
+Or in molar terms:
+
+$$Q = F_{total} C_{p,mix} (T_{out} - T_{in})$$
+
+**LMTD Rating** (for utility heating):
+
+$$Q = UA \cdot LMTD$$
+
+$$LMTD = \frac{(T_U - T_{in}) - (T_U - T_{out})}{\ln\left(\frac{T_U - T_{in}}{T_U - T_{out}}\right)}$$
+
+Where $T_U$ is the utility (steam) temperature.
+
+#### Example Usage
+
+```python
+from difflow.units.heat_exchanger import Heater, HeaterParams
+
+# Specified duty mode
+heater = Heater(HeaterParams(mode='duty', duty=50000.0), thermo, species_order=['A', 'B'])
+outlet, info = heater(inlet)
+
+# Specified outlet temperature mode
+heater = Heater(HeaterParams(mode='outlet_T', T_out=400.0), thermo, species_order=['A', 'B'])
+outlet, info = heater(inlet)
+```
+
+---
+
+### Cooler
+
+**Location**: `difflow/units/heat_exchanger.py`
+
+**Class**: `Cooler`
+
+**Description**: Single-stream cooler that decreases stream temperature using cooling water or refrigeration.
+
+#### Parameters
+
+Same as Heater with appropriate utility temperatures.
+
+#### Governing Equations
+
+Same as Heater (Q is negative for cooling).
+
+---
+
+### CounterCurrentHX
+
+**Location**: `difflow/units/heat_exchanger.py`
+
+**Class**: `CounterCurrentHX`
+
+**Description**: Two-stream heat exchanger with counter-current flow arrangement. Provides maximum temperature driving force.
+
+#### Process Role
+
+Counter-current heat exchangers are preferred for:
+- Maximum heat recovery
+- Heating/cooling to approach inlet temperature of other stream
+- Most efficient use of heat transfer area
+
+#### Parameters
+
+```python
+@dataclass
+class HeatExchangerParams:
+    mode: str              # 'design' or 'rating'
+    UA: float = None       # Overall HTC × Area (W/K) for rating
+    approach: float = 10.0 # Minimum approach temperature (K) for design
+```
+
+#### Inputs
+
+| Parameter | Type | Units | Description |
+|-----------|------|-------|-------------|
+| `hot_stream` | Stream | - | Hot fluid inlet |
+| `cold_stream` | Stream | - | Cold fluid inlet |
+
+#### Outputs
+
+| Parameter | Type | Units | Description |
+|-----------|------|-------|-------------|
+| `hot_outlet` | Stream | - | Hot fluid outlet |
+| `cold_outlet` | Stream | - | Cold fluid outlet |
+| `info['Q']` | float | W | Heat duty transferred |
+| `info['LMTD']` | float | K | Log mean temperature difference |
+| `info['UA']` | float | W/K | Required UA (design mode) |
+
+#### Governing Equations
+
+**Energy Balance**:
+
+$$Q = \dot{m}_h C_{p,h} (T_{h,in} - T_{h,out}) = \dot{m}_c C_{p,c} (T_{c,out} - T_{c,in})$$
+
+**LMTD** (Counter-current):
+
+$$LMTD = \frac{\Delta T_1 - \Delta T_2}{\ln(\Delta T_1 / \Delta T_2)}$$
+
+Where:
+- $\Delta T_1 = T_{h,in} - T_{c,out}$
+- $\Delta T_2 = T_{h,out} - T_{c,in}$
+
+**Heat Transfer Rate**:
+
+$$Q = UA \cdot LMTD$$
+
+**Effectiveness-NTU Method**:
+
+$$\epsilon = \frac{Q}{Q_{max}} = \frac{Q}{C_{min}(T_{h,in} - T_{c,in})}$$
+
+$$\epsilon = \frac{1 - \exp[-NTU(1 - C_r)]}{1 - C_r \exp[-NTU(1 - C_r)]}$$
+
+Where:
+- $C_r = C_{min}/C_{max}$
+- $NTU = UA/C_{min}$
+- $C = \dot{m} C_p$ (heat capacity rate)
+
+#### Example Usage
+
+```python
+from difflow.units.heat_exchanger import CounterCurrentHX, HeatExchangerParams
+
+hx = CounterCurrentHX(
+    HeatExchangerParams(mode='rating', UA=5000.0),
+    thermo,
+    species_order=['A', 'B']
+)
+
+hot_in = make_stream({'A': 1.0}, T=450.0, P=101325.0)
+cold_in = make_stream({'B': 0.8}, T=300.0, P=101325.0)
+
+hot_out, cold_out, info = hx(hot_in, cold_in)
+print(f"Heat duty: {info['Q']/1000:.2f} kW")
+print(f"LMTD: {info['LMTD']:.2f} K")
+```
+
+---
+
+### CoCurrentHX
+
+**Location**: `difflow/units/heat_exchanger.py`
+
+**Class**: `CoCurrentHX`
+
+**Description**: Two-stream heat exchanger with co-current (parallel) flow arrangement.
+
+#### Governing Equations
+
+**LMTD** (Co-current):
+
+$$LMTD = \frac{\Delta T_1 - \Delta T_2}{\ln(\Delta T_1 / \Delta T_2)}$$
+
+Where:
+- $\Delta T_1 = T_{h,in} - T_{c,in}$
+- $\Delta T_2 = T_{h,out} - T_{c,out}$
+
+**Effectiveness** (Co-current):
+
+$$\epsilon = \frac{1 - \exp[-NTU(1 + C_r)]}{1 + C_r}$$
+
+Note: Co-current flow cannot achieve temperature cross ($T_{c,out} > T_{h,out}$).
+
+---
+
+### Heat Exchanger Utility Functions
+
+```python
+from difflow.units.heat_exchanger import (
+    log_mean_temperature_difference,
+    effectiveness_counter_current,
+    effectiveness_co_current,
+    heat_capacity_rate,
+    design_heat_exchanger,
+    size_heat_exchanger
+)
+
+# Calculate LMTD with numerical stability
+lmtd = log_mean_temperature_difference(dT1=50.0, dT2=30.0)
+
+# Calculate effectiveness
+eps = effectiveness_counter_current(NTU=2.0, Cr=0.5)
+
+# Design for specified duty
+UA, area = design_heat_exchanger(Q=100000, LMTD=30, U=500)
+```
+
+---
+
+## Liquid-Liquid Extraction
+
+### MultistageCascade
+
+**Location**: `difflow/units/lle.py`
+
+**Class**: `MultistageCascade`
+
+**Description**: Counter-current multistage extraction cascade for liquid-liquid separation.
+
+#### Process Role
+
+LLE is used for:
+- Separation of heat-sensitive compounds
+- Aromatics extraction (BTX)
+- Pharmaceutical purification
+- Metal extraction (hydrometallurgy)
+
+#### Parameters
+
+```python
+@dataclass
+class CascadeParams:
+    n_stages: int          # Number of equilibrium stages
+    K_values: Array        # Distribution coefficients
+    feed_stage: int = 1    # Feed entry stage
+    mode: str = 'counter_current'
+```
+
+#### Governing Equations
+
+**Distribution Coefficient**:
+
+$$K_i = \frac{C_{i,extract}}{C_{i,raffinate}} = \frac{y_i}{x_i}$$
+
+**Material Balance** (stage j):
+
+$$R_{j-1} x_{i,j-1} + E_{j+1} y_{i,j+1} = R_j x_{i,j} + E_j y_{i,j}$$
+
+**Equilibrium**:
+
+$$y_{i,j} = K_i(T) x_{i,j}$$
+
+**Kremser Equation** (for dilute systems):
+
+$$\frac{x_{in} - x_{out}}{x_{in} - x_{out}^*} = \frac{A^{N+1} - A}{A^{N+1} - 1}$$
+
+Where $A = KE/R$ is the extraction factor.
+
+#### Activity Coefficient Models
+
+**NRTL**:
+
+$$\ln \gamma_i = \frac{\sum_j x_j \tau_{ji} G_{ji}}{\sum_k x_k G_{ki}} + \sum_j \frac{x_j G_{ij}}{\sum_k x_k G_{kj}} \left(\tau_{ij} - \frac{\sum_m x_m \tau_{mj} G_{mj}}{\sum_k x_k G_{kj}}\right)$$
+
+Where:
+- $G_{ij} = \exp(-\alpha_{ij} \tau_{ij})$
+- $\tau_{ij} = (g_{ij} - g_{jj})/RT$
+
+**UNIQUAC**:
+
+$$\ln \gamma_i = \ln \gamma_i^C + \ln \gamma_i^R$$
+
+Combinatorial and residual contributions based on molecular size and interaction parameters.
+
+#### Example Usage
+
+```python
+from difflow.units.lle import MultistageCascade, CascadeParams
+import jax.numpy as jnp
+
+params = CascadeParams(
+    n_stages=5,
+    K_values=jnp.array([0.1, 2.5, 0.05]),  # solute favors extract phase
+    mode='counter_current'
+)
+
+cascade = MultistageCascade(params)
+feed = make_stream({'water': 100.0, 'acetic_acid': 10.0, 'butanol': 0.0}, T=298.0, P=101325.0)
+solvent = make_stream({'water': 0.0, 'acetic_acid': 0.0, 'butanol': 50.0}, T=298.0, P=101325.0)
+
+raffinate, extract, info = cascade(feed, solvent)
+print(f"Recovery: {info['recovery']:.2%}")
+```
+
+#### Utility Functions
+
+```python
+from difflow.units.lle import (
+    get_K_values,
+    nrtl_activity_coefficients,
+    uniquac_activity_coefficients,
+    separation_factor,
+    minimum_solvent_ratio,
+    stages_for_recovery
+)
+
+# Estimate K-values from activity coefficients
+K = get_K_values(gamma_extract, gamma_raffinate, x_eq)
+
+# Calculate minimum solvent for given recovery
+S_min = minimum_solvent_ratio(K, target_recovery=0.95)
+
+# Estimate stages needed
+N = stages_for_recovery(K, S/F, target_recovery=0.99)
+```
+
+---
+
+### DifferentialContactor
+
+**Location**: `difflow/units/lle.py`
+
+**Class**: `DifferentialContactor`
+
+**Description**: Continuous differential contact extraction column (spray, packed, or rotating disc).
+
+#### Governing Equations
+
+**Height of Transfer Unit (HTU)**:
+
+$$HTU = \frac{R}{K_{OC} a A}$$
+
+**Number of Transfer Units (NTU)**:
+
+$$NTU = \int_{x_{out}}^{x_{in}} \frac{dx}{x - x^*}$$
+
+**Column Height**:
+
+$$H = HTU \times NTU$$
+
+---
+
+## Summary Tables
+
+### Reactor Comparison
+
+| Reactor | Mixing | Residence Time | Best For |
+|---------|--------|----------------|----------|
+| CSTR | Perfect | Distribution | Liquid-phase, uniform T |
+| PFR | None (axial) | Uniform | Gas-phase, high X |
+| GasPFR | None | Variable | Gas with ΔP, mole change |
+| Fed-Batch | Perfect | Variable | Selectivity control |
+
+### Heat Exchanger Comparison
+
+| Type | Arrangement | ΔT Driving Force | Max T Approach |
+|------|-------------|------------------|----------------|
+| Counter-current | Opposite | Maximum | T_c,out → T_h,in |
+| Co-current | Same | Moderate | T_c,out ≤ T_h,out |
+
+### Separation Method Selection
+
+| Method | Basis | Typical Application |
+|--------|-------|---------------------|
+| Flash | VLE | Light/heavy split |
+| Distillation | Boiling point | High purity, sharp split |
+| LLE | Solubility | Heat-sensitive, azeotropes |
