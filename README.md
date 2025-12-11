@@ -387,6 +387,7 @@ Jupyter notebooks are in the `examples/` directory:
 
 | Notebook/Script | Description |
 |----------|-------------|
+| `00_cstr_pfr_basics.ipynb` | CSTR and PFR basics: conventional vs difflow |
 | `01_cstr_flash_recycle.ipynb` | Complete flowsheet with CSTR, flash, and recycle |
 | `02_cstr_sensitivity.ipynb` | Sensitivity analysis for CSTR parameters |
 | `03_optimization.ipynb` | Gradient-based optimization problems |

@@ -243,8 +243,8 @@ class CSTR:
             F_in,  # Initial guess
             args,
             tol=1e-10,
-            max_iter=50,  # Fewer iterations to prevent gradient explosion
-            damping=0.5,
+            max_iter=100,
+            damping=0.3,  # Lower damping for stability with stiff kinetics
         )
 
         # Calculate final rates
