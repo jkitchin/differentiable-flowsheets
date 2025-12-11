@@ -8,6 +8,8 @@ Core unit operations:
 - Mixer/Splitter: Stream combining and splitting
 - MultistageCascade: Liquid-liquid extraction
 - ShortcutColumn/DistillationColumn: Distillation
+- Heater/Cooler: Single-stream heat exchange with utility
+- CounterCurrentHX/CoCurrentHX: Two-stream heat exchangers
 
 For bio manufacturing operations (bioreactors, centrifuge, filtration,
 chromatography), use the difflow_bio plugin:
@@ -49,6 +51,20 @@ from difflow.units.distillation import (
     minimum_reflux_ratio,
     gilliland_stages,
     column_diameter,
+)
+from difflow.units.heat_exchanger import (
+    Heater,
+    HeaterParams,
+    Cooler,
+    CoolerParams,
+    CounterCurrentHX,
+    CoCurrentHX,
+    HeatExchangerParams,
+    log_mean_temperature_difference,
+    effectiveness_counter_current,
+    effectiveness_co_current,
+    design_heat_exchanger,
+    size_heat_exchanger,
 )
 
 __all__ = [
@@ -95,4 +111,17 @@ __all__ = [
     "minimum_reflux_ratio",
     "gilliland_stages",
     "column_diameter",
+    # Heat Exchangers
+    "Heater",
+    "HeaterParams",
+    "Cooler",
+    "CoolerParams",
+    "CounterCurrentHX",
+    "CoCurrentHX",
+    "HeatExchangerParams",
+    "log_mean_temperature_difference",
+    "effectiveness_counter_current",
+    "effectiveness_co_current",
+    "design_heat_exchanger",
+    "size_heat_exchanger",
 ]

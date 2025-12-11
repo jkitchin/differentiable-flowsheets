@@ -86,6 +86,18 @@ from difflow.units.distillation import (
     gilliland_stages,
     column_diameter,
 )
+from difflow.units.heat_exchanger import (
+    Heater,
+    HeaterParams,
+    Cooler,
+    CoolerParams,
+    CounterCurrentHX,
+    CoCurrentHX,
+    HeatExchangerParams,
+    log_mean_temperature_difference,
+    design_heat_exchanger,
+    size_heat_exchanger,
+)
 from difflow.flowsheet import Flowsheet, Unit
 from difflow.solvers import fixed_point_solve, newton_solve, rachford_rice
 
@@ -178,6 +190,17 @@ __all__ = [
     "minimum_reflux_ratio",
     "gilliland_stages",
     "column_diameter",
+    # Unit operations - Heat Exchangers
+    "Heater",
+    "HeaterParams",
+    "Cooler",
+    "CoolerParams",
+    "CounterCurrentHX",
+    "CoCurrentHX",
+    "HeatExchangerParams",
+    "log_mean_temperature_difference",
+    "design_heat_exchanger",
+    "size_heat_exchanger",
     # Flowsheet
     "Flowsheet",
     "Unit",
