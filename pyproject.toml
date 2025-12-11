@@ -29,12 +29,16 @@ visualization = [
 bio = [
     # Bio manufacturing operations are included in the main package
 ]
+ree = [
+    # Rare earth separation operations are included in the main package
+]
 all = [
-    "difflow[dev,examples,visualization,bio]",
+    "difflow[dev,examples,visualization,bio,ree]",
 ]
 
 [project.entry-points."difflow.plugins"]
 bio = "difflow_bio:register"
+ree = "difflow_ree:register"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/difflow", "src/difflow_bio"]
+packages = ["src/difflow", "src/difflow_bio", "src/difflow_ree"]

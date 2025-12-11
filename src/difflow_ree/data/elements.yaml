@@ -1,0 +1,159 @@
+# Rare Earth Element Properties
+# 10 Commercial REEs: La, Ce, Pr, Nd, Sm, Eu, Gd, Tb, Dy, Y
+#
+# Sources:
+# - Shannon (1976) ionic radii
+# - USGS mineral commodity summaries for prices
+# - CRC Handbook for physical properties
+
+elements:
+  La:
+    name: Lanthanum
+    atomic_number: 57
+    atomic_weight: 138.905  # g/mol
+    ionic_radius_pm: 103.2  # pm, CN=6, 3+ oxidation
+    density: 6.162  # g/cm³
+    melting_point: 1193  # K
+    oxidation_states: [3]
+    group: light
+    oxide_formula: La2O3
+    oxide_mw: 325.81  # g/mol
+    price_usd_kg: 5.0  # approximate, highly variable
+
+  Ce:
+    name: Cerium
+    atomic_number: 58
+    atomic_weight: 140.116
+    ionic_radius_pm: 101.0  # Ce³⁺
+    ionic_radius_4_pm: 87.0  # Ce⁴⁺ (unique among lanthanides)
+    density: 6.770
+    melting_point: 1068
+    oxidation_states: [3, 4]  # Ce⁴⁺ is stable, enables selective separation
+    group: light
+    oxide_formula: CeO2
+    oxide_mw: 172.12
+    price_usd_kg: 2.0
+
+  Pr:
+    name: Praseodymium
+    atomic_number: 59
+    atomic_weight: 140.908
+    ionic_radius_pm: 99.0
+    density: 6.773
+    melting_point: 1208
+    oxidation_states: [3]
+    group: light
+    oxide_formula: Pr6O11
+    oxide_mw: 1021.44
+    price_usd_kg: 85.0
+
+  Nd:
+    name: Neodymium
+    atomic_number: 60
+    atomic_weight: 144.242
+    ionic_radius_pm: 98.3
+    density: 7.007
+    melting_point: 1297
+    oxidation_states: [3]
+    group: light
+    oxide_formula: Nd2O3
+    oxide_mw: 336.48
+    price_usd_kg: 120.0  # High demand for NdFeB magnets
+
+  Sm:
+    name: Samarium
+    atomic_number: 62
+    atomic_weight: 150.36
+    ionic_radius_pm: 95.8
+    density: 7.520
+    melting_point: 1345
+    oxidation_states: [2, 3]  # Sm²⁺ possible but rare
+    group: middle
+    oxide_formula: Sm2O3
+    oxide_mw: 348.72
+    price_usd_kg: 15.0
+
+  Eu:
+    name: Europium
+    atomic_number: 63
+    atomic_weight: 151.964
+    ionic_radius_pm: 94.7
+    density: 5.243
+    melting_point: 1099
+    oxidation_states: [2, 3]  # Eu²⁺ is stable, enables selective separation
+    group: middle
+    oxide_formula: Eu2O3
+    oxide_mw: 351.93
+    price_usd_kg: 35.0
+
+  Gd:
+    name: Gadolinium
+    atomic_number: 64
+    atomic_weight: 157.25
+    ionic_radius_pm: 93.8
+    density: 7.895
+    melting_point: 1585
+    oxidation_states: [3]
+    group: middle
+    oxide_formula: Gd2O3
+    oxide_mw: 362.50
+    price_usd_kg: 55.0
+
+  Tb:
+    name: Terbium
+    atomic_number: 65
+    atomic_weight: 158.925
+    ionic_radius_pm: 92.3
+    density: 8.229
+    melting_point: 1629
+    oxidation_states: [3, 4]
+    group: heavy
+    oxide_formula: Tb4O7
+    oxide_mw: 747.70
+    price_usd_kg: 1500.0  # High value, low abundance
+
+  Dy:
+    name: Dysprosium
+    atomic_number: 66
+    atomic_weight: 162.500
+    ionic_radius_pm: 91.2
+    density: 8.550
+    melting_point: 1680
+    oxidation_states: [3]
+    group: heavy
+    oxide_formula: Dy2O3
+    oxide_mw: 373.00
+    price_usd_kg: 450.0  # Critical for high-temp magnets
+
+  Y:
+    name: Yttrium
+    atomic_number: 39
+    atomic_weight: 88.906
+    ionic_radius_pm: 90.0  # Similar to Ho, behaves as "heavy" REE
+    density: 4.469
+    melting_point: 1799
+    oxidation_states: [3]
+    group: heavy  # Chemically similar to heavy REE
+    oxide_formula: Y2O3
+    oxide_mw: 225.81
+    price_usd_kg: 35.0
+
+# Element groups for process design
+groups:
+  light:
+    elements: [La, Ce, Pr, Nd]
+    description: "Light rare earths - easier to extract, lower K values"
+
+  middle:
+    elements: [Sm, Eu, Gd]
+    description: "Middle rare earths - intermediate behavior"
+
+  heavy:
+    elements: [Tb, Dy, Y]
+    description: "Heavy rare earths + Y - higher K values, more valuable"
+
+# Lanthanide contraction factor
+# Ionic radius decreases ~0.5 pm per atomic number increase
+lanthanide_contraction:
+  description: "Systematic decrease in ionic radius across lanthanide series"
+  effect: "Heavier REE have higher charge density, stronger extraction"

@@ -1,0 +1,258 @@
+# Extractant Properties and pH-Dependent Distribution Correlations
+#
+# Distribution coefficient model:
+#   log10(D) = a + b*pH + c*pH^2 + d/T
+#
+# where:
+#   D = [REE]_org / [REE]_aq
+#   pH = -log10([H+])
+#   T = temperature (K)
+#
+# Sources:
+# - Gupta & Krishnamurthy (2005) Extractive Metallurgy of Rare Earths
+# - Xie et al. (2014) Hydrometallurgy reviews
+# - Various literature correlations
+
+extractants:
+  D2EHPA:
+    full_name: "Di-2-ethylhexyl phosphoric acid"
+    formula: "(C8H17O)2PO2H"
+    molecular_weight: 322.43  # g/mol
+    density: 0.975  # g/mL
+    pKa: 3.24  # in aqueous
+    type: acidic_phosphoric
+    diluents: [kerosene, n-heptane, Shellsol_D70]
+    typical_concentration: 0.5  # M in organic phase
+
+    # Extraction mechanism: REE³⁺ + 3(HA)₂ ⇌ REE(HA₂)₃ + 3H⁺
+    stoichiometry:
+      protons_released: 3
+      extractant_molecules: 3  # as dimers
+
+    # pH correlation coefficients: log10(D) = a + b*pH + c*pH²
+    # Valid range: pH 1-5, T = 298K, [D2EHPA] = 0.5M
+    ph_coefficients:
+      La: {a: -4.50, b: 2.80, c: 0.02, d: 0.0}
+      Ce: {a: -4.20, b: 2.85, c: 0.02, d: 0.0}
+      Pr: {a: -3.90, b: 2.90, c: 0.02, d: 0.0}
+      Nd: {a: -3.70, b: 2.90, c: 0.02, d: 0.0}
+      Sm: {a: -2.80, b: 2.95, c: 0.02, d: 0.0}
+      Eu: {a: -2.50, b: 2.95, c: 0.02, d: 0.0}
+      Gd: {a: -2.30, b: 3.00, c: 0.02, d: 0.0}
+      Tb: {a: -1.90, b: 3.00, c: 0.02, d: 0.0}
+      Dy: {a: -1.60, b: 3.05, c: 0.02, d: 0.0}
+      Y:  {a: -1.80, b: 3.00, c: 0.02, d: 0.0}
+
+    # Temperature correction: add d*(1/T - 1/298.15) to log(D)
+    # Extraction is exothermic, D decreases with T
+    temperature_coefficients:  # d values in K
+      La: -1500
+      Ce: -1600
+      Pr: -1700
+      Nd: -1800
+      Sm: -2000
+      Eu: -2100
+      Gd: -2200
+      Tb: -2300
+      Dy: -2400
+      Y:  -2200
+
+    valid_ph_range: [1.0, 5.0]
+    valid_temp_range: [283, 333]  # K
+    reference_concentration: 0.5  # M
+
+    # Concentration correction: D ∝ [HA]^n
+    concentration_exponent: 3.0
+
+    cost_usd_kg: 8.0
+
+  PC88A:
+    full_name: "2-ethylhexyl phosphonic acid mono-2-ethylhexyl ester"
+    alternative_names: [EHEHPA, P507, Ionquest_801]
+    formula: "C16H35O3P"
+    molecular_weight: 306.42
+    density: 0.955
+    pKa: 4.10
+    type: acidic_phosphonic
+    diluents: [kerosene, n-heptane, Shellsol_D70]
+    typical_concentration: 0.5
+
+    stoichiometry:
+      protons_released: 3
+      extractant_molecules: 3
+
+    # PC88A has better light REE selectivity than D2EHPA
+    # Particularly good for Nd/Pr separation (SF ~1.5)
+    ph_coefficients:
+      La: {a: -5.20, b: 2.90, c: 0.02, d: 0.0}
+      Ce: {a: -4.80, b: 2.95, c: 0.02, d: 0.0}
+      Pr: {a: -4.30, b: 3.00, c: 0.02, d: 0.0}
+      Nd: {a: -3.80, b: 3.00, c: 0.02, d: 0.0}
+      Sm: {a: -2.60, b: 3.05, c: 0.02, d: 0.0}
+      Eu: {a: -2.30, b: 3.05, c: 0.02, d: 0.0}
+      Gd: {a: -2.00, b: 3.10, c: 0.02, d: 0.0}
+      Tb: {a: -1.50, b: 3.10, c: 0.02, d: 0.0}
+      Dy: {a: -1.20, b: 3.15, c: 0.02, d: 0.0}
+      Y:  {a: -1.40, b: 3.10, c: 0.02, d: 0.0}
+
+    temperature_coefficients:
+      La: -1400
+      Ce: -1500
+      Pr: -1600
+      Nd: -1700
+      Sm: -1900
+      Eu: -2000
+      Gd: -2100
+      Tb: -2200
+      Dy: -2300
+      Y:  -2100
+
+    valid_ph_range: [1.5, 5.5]
+    valid_temp_range: [283, 333]
+    reference_concentration: 0.5
+    concentration_exponent: 3.0
+    cost_usd_kg: 12.0
+
+  Cyanex272:
+    full_name: "Bis(2,4,4-trimethylpentyl)phosphinic acid"
+    formula: "C16H35O2P"
+    molecular_weight: 290.43
+    density: 0.920
+    pKa: 6.37
+    type: acidic_phosphinic
+    diluents: [kerosene, Shellsol_D70]
+    typical_concentration: 0.3
+
+    stoichiometry:
+      protons_released: 3
+      extractant_molecules: 3
+
+    # Cyanex 272 has high pKa - operates at higher pH
+    # Excellent Co/Ni rejection, used for specialty REE separations
+    ph_coefficients:
+      La: {a: -7.50, b: 3.20, c: 0.01, d: 0.0}
+      Ce: {a: -7.00, b: 3.20, c: 0.01, d: 0.0}
+      Pr: {a: -6.50, b: 3.25, c: 0.01, d: 0.0}
+      Nd: {a: -6.00, b: 3.25, c: 0.01, d: 0.0}
+      Sm: {a: -4.80, b: 3.30, c: 0.01, d: 0.0}
+      Eu: {a: -4.40, b: 3.30, c: 0.01, d: 0.0}
+      Gd: {a: -4.00, b: 3.35, c: 0.01, d: 0.0}
+      Tb: {a: -3.40, b: 3.35, c: 0.01, d: 0.0}
+      Dy: {a: -3.00, b: 3.40, c: 0.01, d: 0.0}
+      Y:  {a: -3.20, b: 3.35, c: 0.01, d: 0.0}
+
+    temperature_coefficients:
+      La: -1300
+      Ce: -1400
+      Pr: -1500
+      Nd: -1600
+      Sm: -1800
+      Eu: -1900
+      Gd: -2000
+      Tb: -2100
+      Dy: -2200
+      Y:  -2000
+
+    valid_ph_range: [3.0, 7.0]
+    valid_temp_range: [283, 333]
+    reference_concentration: 0.3
+    concentration_exponent: 3.0
+    cost_usd_kg: 25.0
+
+  TBP:
+    full_name: "Tributyl phosphate"
+    formula: "(C4H9O)3PO"
+    molecular_weight: 266.31
+    density: 0.979
+    pKa: null  # Neutral extractant
+    type: solvating_neutral
+    diluents: [kerosene, n-dodecane]
+    typical_concentration: 1.0  # Often 30% v/v in diluent
+
+    # Solvating extraction from nitrate media
+    # REE(NO3)3 + 3TBP ⇌ REE(NO3)3·3TBP
+    stoichiometry:
+      protons_released: 0
+      extractant_molecules: 3
+      requires_nitrate: true
+
+    # TBP extraction depends on nitrate concentration, not pH
+    # Model: log10(D) = a + b*log10([NO3-]) + d/T
+    # Coefficients for [NO3-] = 3M reference
+    nitrate_coefficients:
+      La: {a: -1.50, b: 2.50, c: 0.0, d: 0.0}
+      Ce: {a: -1.30, b: 2.55, c: 0.0, d: 0.0}
+      Pr: {a: -1.10, b: 2.60, c: 0.0, d: 0.0}
+      Nd: {a: -0.90, b: 2.60, c: 0.0, d: 0.0}
+      Sm: {a: -0.40, b: 2.70, c: 0.0, d: 0.0}
+      Eu: {a: -0.20, b: 2.70, c: 0.0, d: 0.0}
+      Gd: {a: 0.00, b: 2.75, c: 0.0, d: 0.0}
+      Tb: {a: 0.30, b: 2.80, c: 0.0, d: 0.0}
+      Dy: {a: 0.50, b: 2.85, c: 0.0, d: 0.0}
+      Y:  {a: 0.20, b: 2.75, c: 0.0, d: 0.0}
+
+    # TBP also works with HNO3 - use ph_coefficients for acidic systems
+    ph_coefficients:
+      La: {a: -2.00, b: 0.50, c: 0.0, d: 0.0}
+      Ce: {a: -1.80, b: 0.55, c: 0.0, d: 0.0}
+      Pr: {a: -1.60, b: 0.60, c: 0.0, d: 0.0}
+      Nd: {a: -1.40, b: 0.60, c: 0.0, d: 0.0}
+      Sm: {a: -0.90, b: 0.70, c: 0.0, d: 0.0}
+      Eu: {a: -0.70, b: 0.70, c: 0.0, d: 0.0}
+      Gd: {a: -0.50, b: 0.75, c: 0.0, d: 0.0}
+      Tb: {a: -0.20, b: 0.80, c: 0.0, d: 0.0}
+      Dy: {a: 0.00, b: 0.85, c: 0.0, d: 0.0}
+      Y:  {a: -0.30, b: 0.75, c: 0.0, d: 0.0}
+
+    temperature_coefficients:
+      La: -800
+      Ce: -900
+      Pr: -1000
+      Nd: -1100
+      Sm: -1300
+      Eu: -1400
+      Gd: -1500
+      Tb: -1600
+      Dy: -1700
+      Y:  -1500
+
+    valid_ph_range: [0.5, 4.0]  # Works in highly acidic conditions
+    valid_temp_range: [283, 353]
+    reference_concentration: 1.0
+    reference_nitrate: 3.0  # M
+    concentration_exponent: 3.0
+    cost_usd_kg: 4.0
+
+# Diluent properties
+diluents:
+  kerosene:
+    density: 0.80  # g/mL
+    viscosity: 1.64  # cP at 25°C
+    cost_usd_L: 1.0
+
+  n-heptane:
+    density: 0.684
+    viscosity: 0.39
+    cost_usd_L: 2.5
+
+  Shellsol_D70:
+    density: 0.79
+    viscosity: 1.7
+    cost_usd_L: 1.5
+
+  n-dodecane:
+    density: 0.75
+    viscosity: 1.34
+    cost_usd_L: 2.0
+
+# Modifiers (phase transfer catalysts)
+modifiers:
+  TBP_modifier:
+    description: "TBP added to acidic extractants to improve phase separation"
+    typical_concentration: 0.05  # 5% v/v
+    effect: "Reduces third phase formation, improves kinetics"
+
+  isodecanol:
+    description: "Alcohol modifier for acidic extractants"
+    typical_concentration: 0.05
+    effect: "Prevents crud formation, improves phase disengagement"

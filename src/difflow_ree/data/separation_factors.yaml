@@ -1,0 +1,189 @@
+# Separation Factors for Adjacent REE Pairs
+#
+# Separation Factor SF(i/j) = D_i / D_j
+#   where D = distribution coefficient
+#
+# SF > 1 means element i extracts preferentially
+# SF close to 1 means difficult separation (many stages needed)
+#
+# Sources:
+# - Gupta & Krishnamurthy (2005)
+# - Xie et al. (2014)
+# - Industrial operating data
+#
+# Note: These are approximate values at typical operating conditions
+# Actual SF depends on pH, temperature, loading, and aqueous composition
+
+# Adjacent pair separation factors by extractant
+# Format: lighter/heavier element (SF > 1 means heavier extracts better)
+separation_factors:
+  D2EHPA:
+    # At pH 3.0, 25°C, 0.5M D2EHPA
+    conditions:
+      pH: 3.0
+      temperature_K: 298
+      concentration_M: 0.5
+
+    adjacent_pairs:
+      Ce_La: 1.8   # Ce/La
+      Pr_Ce: 1.6   # Pr/Ce
+      Nd_Pr: 1.2   # Nd/Pr - difficult separation
+      Sm_Nd: 2.5   # Sm/Nd - gap between light and middle
+      Eu_Sm: 1.4   # Eu/Sm
+      Gd_Eu: 1.3   # Gd/Eu
+      Tb_Gd: 1.8   # Tb/Gd - gap between middle and heavy
+      Dy_Tb: 1.5   # Dy/Tb
+      Y_Dy: 0.8    # Y/Dy - Y behaves between Dy and Ho
+
+    # Non-adjacent pairs (useful for group separations)
+    group_pairs:
+      Nd_La: 5.0   # Light REE spread
+      Sm_La: 12.5  # Light to middle
+      Dy_La: 40.0  # Light to heavy
+      Dy_Nd: 8.0   # Middle range
+      Gd_Nd: 3.5   # Nd to Gd
+
+  PC88A:
+    # At pH 3.5, 25°C, 0.5M PC88A
+    conditions:
+      pH: 3.5
+      temperature_K: 298
+      concentration_M: 0.5
+
+    adjacent_pairs:
+      Ce_La: 2.0
+      Pr_Ce: 1.8
+      Nd_Pr: 1.5   # Better Nd/Pr separation than D2EHPA
+      Sm_Nd: 2.8
+      Eu_Sm: 1.5
+      Gd_Eu: 1.4
+      Tb_Gd: 2.0
+      Dy_Tb: 1.6
+      Y_Dy: 0.85
+
+    group_pairs:
+      Nd_La: 6.5
+      Sm_La: 18.0
+      Dy_La: 60.0
+      Dy_Nd: 9.2
+      Gd_Nd: 4.2
+
+  Cyanex272:
+    # At pH 5.0, 25°C, 0.3M Cyanex 272
+    conditions:
+      pH: 5.0
+      temperature_K: 298
+      concentration_M: 0.3
+
+    adjacent_pairs:
+      Ce_La: 1.9
+      Pr_Ce: 1.7
+      Nd_Pr: 1.3
+      Sm_Nd: 2.6
+      Eu_Sm: 1.5
+      Gd_Eu: 1.4
+      Tb_Gd: 1.9
+      Dy_Tb: 1.6
+      Y_Dy: 0.82
+
+    group_pairs:
+      Nd_La: 5.8
+      Sm_La: 15.0
+      Dy_La: 50.0
+      Dy_Nd: 8.6
+      Gd_Nd: 3.8
+
+  TBP:
+    # At [NO3-] = 3M, 25°C, 30% TBP
+    conditions:
+      nitrate_M: 3.0
+      temperature_K: 298
+      concentration_vol_pct: 30
+
+    adjacent_pairs:
+      Ce_La: 1.5
+      Pr_Ce: 1.4
+      Nd_Pr: 1.2
+      Sm_Nd: 2.0
+      Eu_Sm: 1.3
+      Gd_Eu: 1.2
+      Tb_Gd: 1.5
+      Dy_Tb: 1.4
+      Y_Dy: 0.9
+
+    group_pairs:
+      Nd_La: 3.5
+      Sm_La: 7.0
+      Dy_La: 20.0
+      Dy_Nd: 5.7
+      Gd_Nd: 2.8
+
+# Stages required for 99% purity
+# Approximate stages needed for adjacent pair separation to 99% purity
+# Using counter-current extraction at S/F = 1.5x minimum
+stages_for_99_purity:
+  D2EHPA:
+    Ce_La: 15
+    Pr_Ce: 20
+    Nd_Pr: 60   # Very difficult
+    Sm_Nd: 10
+    Eu_Sm: 25
+    Gd_Eu: 30
+    Tb_Gd: 15
+    Dy_Tb: 20
+    Y_Dy: 40
+
+  PC88A:
+    Ce_La: 12
+    Pr_Ce: 15
+    Nd_Pr: 25   # Much better than D2EHPA
+    Sm_Nd: 8
+    Eu_Sm: 22
+    Gd_Eu: 25
+    Tb_Gd: 12
+    Dy_Tb: 18
+    Y_Dy: 35
+
+# Temperature effects on separation factor
+# SF generally decreases slightly with temperature
+temperature_sensitivity:
+  description: "d(ln SF)/dT is typically -0.005 to -0.01 K⁻¹"
+  typical_coefficient: -0.007  # K⁻¹
+
+# pH effects on separation factor
+# SF can vary significantly with pH
+ph_sensitivity:
+  description: "SF may increase or decrease with pH depending on speciation"
+  note: "Use pH-dependent D values from extractants.yaml for accurate calculation"
+
+# Loading effects
+# At high REE loading, SF tends to decrease
+loading_effects:
+  description: "SF decreases as extractant approaches saturation"
+  typical_decrease_pct: 20  # % decrease at 80% loading
+
+# Industrial separation sequences
+# Recommended order for full REE separation
+industrial_sequences:
+  bastnasite_concentrate:
+    description: "Typical processing of bastnasite (Ce-La-Nd rich)"
+    steps:
+      - "Remove Ce by oxidation (Ce4+ precipitation)"
+      - "D2EHPA: Separate heavy REE from light"
+      - "PC88A: Separate Nd from Pr"
+      - "Further splits as needed"
+
+  monazite_concentrate:
+    description: "Typical processing of monazite (Th-U bearing)"
+    steps:
+      - "Caustic crack or acid leach"
+      - "Remove radioactive elements"
+      - "Group separation: light / middle / heavy"
+      - "Individual element separation"
+
+  ion_adsorption_clay:
+    description: "South China ion-adsorption deposits (heavy REE rich)"
+    steps:
+      - "Ammonium sulfate leach"
+      - "Oxalate precipitation"
+      - "Solvent extraction separation"
