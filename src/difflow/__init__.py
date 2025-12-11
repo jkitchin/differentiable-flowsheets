@@ -133,6 +133,30 @@ except ImportError:
     visualize_flowsheet = None
     FlowsheetVisualizer = None
 
+# Dynamic modeling submodule
+from difflow import dynamic
+from difflow.dynamic import (
+    # State management
+    StateVar,
+    StateSpec,
+    StateVector,
+    molar_states,
+    thermal_state,
+    reactor_states,
+    # Base classes
+    DynamicUnit,
+    DynamicUnitBase,
+    DynamicCSTR,
+    DynamicTank,
+    # Integrators
+    integrate,
+    integrate_unit,
+    integrate_rk4,
+    integrate_rk45,
+    IntegrationResult,
+    Trajectory,
+)
+
 __all__ = [
     # Streams
     "Stream",
@@ -247,4 +271,22 @@ __all__ = [
     "visualization",
     "visualize_flowsheet",
     "FlowsheetVisualizer",
+    # Dynamic modeling
+    "dynamic",
+    "StateVar",
+    "StateSpec",
+    "StateVector",
+    "molar_states",
+    "thermal_state",
+    "reactor_states",
+    "DynamicUnit",
+    "DynamicUnitBase",
+    "DynamicCSTR",
+    "DynamicTank",
+    "integrate",
+    "integrate_unit",
+    "integrate_rk4",
+    "integrate_rk45",
+    "IntegrationResult",
+    "Trajectory",
 ]
