@@ -2,8 +2,8 @@
 
 Core package providing:
 - Stream representation and utilities
-- Thermodynamic property calculations
-- Unit operations (CSTR, PFR, Flash, LLE)
+- Thermodynamic property calculations (ideal + cubic EOS)
+- Unit operations (CSTR, PFR, Fed-batch, Flash, LLE, Distillation)
 - Flowsheet management with recycle solving
 - Differentiable solvers
 - Technoeconomic analysis (TEA)
@@ -27,8 +27,46 @@ from difflow.streams import (
     scale_stream,
 )
 from difflow.thermo import IdealThermo, SpeciesData
+from difflow.eos import (
+    PengRobinson,
+    SRK,
+    CriticalProperties,
+    EOSParams,
+    flash_TP_eos,
+)
+from difflow.database import (
+    get_species_data,
+    get_critical_props,
+    get_species_info,
+    list_species,
+    get_alkanes,
+    get_btex,
+    get_common_solvents,
+)
+from difflow.uncertainty import (
+    linear_propagation,
+    monte_carlo_propagation,
+    sensitivity_analysis,
+    sobol_indices,
+    propagate_covariance,
+)
+from difflow.cantera_import import (
+    import_species_data,
+    import_critical_props,
+    import_reactions,
+    load_mechanism,
+    list_available_species,
+    list_available_reactions,
+)
 from difflow.units.cstr import CSTR, CSTRParams
 from difflow.units.pfr import PFR, PFRParams, GasPFR, GasPFRParams
+from difflow.units.fed_batch import (
+    FedBatchReactor,
+    FedBatchParams,
+    SemiBatchReactor,
+    batch_time_for_conversion,
+    optimal_feed_profile,
+)
 from difflow.units.flash import Flash, FlashParams, Mixer, Splitter
 from difflow.units.lle import (
     MultistageCascade,
@@ -45,6 +83,28 @@ from difflow.units.lle import (
     separation_factor,
     minimum_solvent_ratio,
     stages_for_recovery,
+)
+from difflow.units.distillation import (
+    ShortcutColumn,
+    ShortcutColumnParams,
+    DistillationColumn,
+    DistillationColumnParams,
+    fenske_stages,
+    minimum_reflux_ratio,
+    gilliland_stages,
+    column_diameter,
+)
+from difflow.units.heat_exchanger import (
+    Heater,
+    HeaterParams,
+    Cooler,
+    CoolerParams,
+    CounterCurrentHX,
+    CoCurrentHX,
+    HeatExchangerParams,
+    log_mean_temperature_difference,
+    design_heat_exchanger,
+    size_heat_exchanger,
 )
 from difflow.flowsheet import Flowsheet, Unit
 from difflow.solvers import fixed_point_solve, newton_solve, rachford_rice
@@ -72,9 +132,36 @@ __all__ = [
     "total_flow",
     "mole_fractions",
     "scale_stream",
-    # Thermodynamics
+    # Thermodynamics - Ideal
     "IdealThermo",
     "SpeciesData",
+    # Thermodynamics - Equations of State
+    "PengRobinson",
+    "SRK",
+    "CriticalProperties",
+    "EOSParams",
+    "flash_TP_eos",
+    # Property Database
+    "get_species_data",
+    "get_critical_props",
+    "get_species_info",
+    "list_species",
+    "get_alkanes",
+    "get_btex",
+    "get_common_solvents",
+    # Uncertainty Propagation
+    "linear_propagation",
+    "monte_carlo_propagation",
+    "sensitivity_analysis",
+    "sobol_indices",
+    "propagate_covariance",
+    # Cantera Import
+    "import_species_data",
+    "import_critical_props",
+    "import_reactions",
+    "load_mechanism",
+    "list_available_species",
+    "list_available_reactions",
     # Unit operations - CSTR
     "CSTR",
     "CSTRParams",
@@ -83,6 +170,12 @@ __all__ = [
     "PFRParams",
     "GasPFR",
     "GasPFRParams",
+    # Unit operations - Fed-batch
+    "FedBatchReactor",
+    "FedBatchParams",
+    "SemiBatchReactor",
+    "batch_time_for_conversion",
+    "optimal_feed_profile",
     # Unit operations - Flash
     "Flash",
     "FlashParams",
@@ -103,6 +196,26 @@ __all__ = [
     "separation_factor",
     "minimum_solvent_ratio",
     "stages_for_recovery",
+    # Unit operations - Distillation
+    "ShortcutColumn",
+    "ShortcutColumnParams",
+    "DistillationColumn",
+    "DistillationColumnParams",
+    "fenske_stages",
+    "minimum_reflux_ratio",
+    "gilliland_stages",
+    "column_diameter",
+    # Unit operations - Heat Exchangers
+    "Heater",
+    "HeaterParams",
+    "Cooler",
+    "CoolerParams",
+    "CounterCurrentHX",
+    "CoCurrentHX",
+    "HeatExchangerParams",
+    "log_mean_temperature_difference",
+    "design_heat_exchanger",
+    "size_heat_exchanger",
     # Flowsheet
     "Flowsheet",
     "Unit",

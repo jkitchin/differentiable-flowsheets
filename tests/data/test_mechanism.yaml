@@ -1,0 +1,142 @@
+# Test mechanism file in Cantera YAML format
+# Contains a subset of species and reactions for testing
+
+description: Test mechanism for difflow Cantera import
+
+units:
+  length: m
+  quantity: mol
+  activation-energy: J/mol
+
+phases:
+  - name: gas
+    thermo: ideal-gas
+    species: [CH4, O2, CO2, H2O, N2, CO, H2]
+    kinetics: gas
+
+species:
+  - name: CH4
+    composition: {C: 1, H: 4}
+    thermo:
+      model: NASA7
+      temperature-ranges: [200.0, 1000.0, 6000.0]
+      data:
+        - [5.14911468, -0.0136622009, 4.91453921e-05, -4.84246767e-08,
+           1.66603441e-11, -10246.6476, -4.63848842]
+        - [1.65326226, 0.0100263099, -3.31661238e-06, 5.36483138e-10,
+           -3.14696758e-14, -10009.6071, 9.90506283]
+    critical-parameters:
+      critical-temperature: 190.6 K
+      critical-pressure: 4.60 MPa
+      acentric-factor: 0.011
+
+  - name: O2
+    composition: {O: 2}
+    thermo:
+      model: NASA7
+      temperature-ranges: [200.0, 1000.0, 6000.0]
+      data:
+        - [3.78245636, -0.00299673415, 9.847302e-06, -9.68129508e-09,
+           3.24372836e-12, -1063.94356, 3.65767573]
+        - [3.66096083, 0.000656365523, -1.41149485e-07, 2.05797658e-11,
+           -1.29913248e-15, -1215.97725, 3.41536184]
+    critical-parameters:
+      critical-temperature: 154.6 K
+      critical-pressure: 5.04 MPa
+      acentric-factor: 0.022
+
+  - name: CO2
+    composition: {C: 1, O: 2}
+    thermo:
+      model: NASA7
+      temperature-ranges: [200.0, 1000.0, 6000.0]
+      data:
+        - [2.35677352, 0.00898459677, -7.12356269e-06, 2.45919022e-09,
+           -1.43699548e-13, -48371.9697, 9.90105222]
+        - [4.63659493, 0.00274131991, -9.95828531e-07, 1.60373011e-10,
+           -9.16103468e-15, -49024.9341, -1.9348955]
+    critical-parameters:
+      critical-temperature: 304.2 K
+      critical-pressure: 7.38 MPa
+      acentric-factor: 0.228
+
+  - name: H2O
+    composition: {H: 2, O: 1}
+    thermo:
+      model: NASA7
+      temperature-ranges: [200.0, 1000.0, 6000.0]
+      data:
+        - [4.19864056, -0.0020364341, 6.52040211e-06, -5.48797062e-09,
+           1.77197817e-12, -30293.7267, -0.849032208]
+        - [2.67703787, 0.00297318329, -7.73769690e-07, 9.44336689e-11,
+           -4.26900959e-15, -29885.8940, 6.88255571]
+    critical-parameters:
+      critical-temperature: 647.3 K
+      critical-pressure: 22.12 MPa
+      acentric-factor: 0.344
+
+  - name: N2
+    composition: {N: 2}
+    thermo:
+      model: NASA7
+      temperature-ranges: [200.0, 1000.0, 6000.0]
+      data:
+        - [3.53100528, -0.000123660988, -5.02999433e-07, 2.43530612e-09,
+           -1.40881235e-12, -1046.97628, 2.96747038]
+        - [2.95257637, 0.0013969004, -4.92631603e-07, 7.86010195e-11,
+           -4.60755204e-15, -923.948688, 5.87188762]
+    critical-parameters:
+      critical-temperature: 126.2 K
+      critical-pressure: 3.39 MPa
+      acentric-factor: 0.039
+
+  - name: CO
+    composition: {C: 1, O: 1}
+    thermo:
+      model: NASA7
+      temperature-ranges: [200.0, 1000.0, 6000.0]
+      data:
+        - [3.57953347, -0.000610353680, 1.01681433e-06, 9.07005884e-10,
+           -9.04424499e-13, -14344.086, 3.50840928]
+        - [3.04848583, 0.00135172818, -4.85794075e-07, 7.88536486e-11,
+           -4.69807489e-15, -14266.1171, 6.0170977]
+
+  - name: H2
+    composition: {H: 2}
+    thermo:
+      model: NASA7
+      temperature-ranges: [200.0, 1000.0, 6000.0]
+      data:
+        - [2.34433112, 0.00798052075, -1.9478151e-05, 2.01572094e-08,
+           -7.37611761e-12, -917.935173, 0.683010238]
+        - [2.93286575, 0.000826608026, -1.46402364e-07, 1.54100414e-11,
+           -6.88804800e-16, -813.065581, -1.02432865]
+    critical-parameters:
+      critical-temperature: 33.2 K
+      critical-pressure: 1.30 MPa
+      acentric-factor: -0.220
+
+reactions:
+  - equation: CH4 + 2 O2 <=> CO2 + 2 H2O
+    rate-constant:
+      A: 1.0e+13
+      b: 0.0
+      Ea: 200000.0
+
+  - equation: 2 CO + O2 <=> 2 CO2
+    rate-constant:
+      A: 2.5e+12
+      b: 0.0
+      Ea: 167400.0
+
+  - equation: 2 H2 + O2 <=> 2 H2O
+    rate-constant:
+      A: 1.0e+14
+      b: 0.0
+      Ea: 150000.0
+
+  - equation: CH4 + H2O <=> CO + 3 H2
+    rate-constant:
+      A: 3.0e+11
+      b: 0.5
+      Ea: 125500.0
