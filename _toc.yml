@@ -6,29 +6,12 @@ root: README
 parts:
   - caption: Tutorials
     chapters:
-      - file: tutorials/01_jax_fundamentals
-      - file: tutorials/02_optimization
-      - file: tutorials/02_inverse_hessian_vector_products
-      - file: tutorials/03_differential_equations
-      - file: tutorials/04_custom_derivatives
-      - file: tutorials/05_machine_learning
-      - file: tutorials/06_gotchas
+      - glob: tutorials/*
 
   - caption: Examples
     chapters:
-      - file: examples/00_cstr_pfr_basics
-      - file: examples/01_cstr_flash_recycle
-      - file: examples/02_cstr_sensitivity
-      - file: examples/03_optimization
-      - file: examples/04_rare_earth_extraction
-      - file: examples/05_technoeconomic_analysis
-      - file: examples/06_uncertainty_propagation
-      - file: examples/07_heat_exchangers
-      - file: examples/08_cantera_integration
+      - glob: examples/[0-9]*
 
   - caption: Bio Manufacturing Examples
     chapters:
-      - file: examples/bio/01_bioreactors
-      - file: examples/bio/02_downstream_processing
-      - file: examples/bio/03_mab_process_optimization
-      - file: examples/bio/04_mab_downstream
+      - glob: examples/bio/*
