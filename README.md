@@ -12,7 +12,6 @@ A JAX-based framework for building and optimizing chemical process flowsheets wi
 - **Modular Design**: Unit operations can be composed into complex flowsheets with recycle streams
 - **Technoeconomic Analysis**: Comprehensive TEA module with equipment costs, operating costs, and profitability metrics (NPV, IRR, MSP)
 - **Bio Manufacturing**: Specialized unit operations for biopharmaceutical processes (bioreactors, chromatography, filtration)
-- **Interactive Visualization**: Generate flowsheet diagrams directly from your code with Plotly
 
 ## Installation
 
@@ -22,9 +21,6 @@ git clone <repo-url>
 cd differentiable-flowsheets
 uv venv
 uv pip install -e ".[dev]"
-
-# For interactive visualization (includes plotly, networkx)
-uv pip install -e ".[visualization]"
 
 # For examples and tutorials (includes matplotlib, jupyter)
 uv pip install -e ".[examples]"
@@ -97,6 +93,30 @@ print(f"dF_B/dV = {dFB_dV:.4f} mol/s per m³")
 - Multiple reactions with user-defined kinetics
 - Isothermal, adiabatic, or specified heat duty modes
 - Automatic material and energy balance solving
+
+### PFR (Plug Flow Reactor)
+- ODE-based design equation: dF/dV = stoich @ r
+- Isothermal or adiabatic operation
+- **GasPFR** variant for gas-phase reactions with:
+  - Pressure drop (Ergun equation)
+  - Variable volumetric flow from mole change
+- RK4 integration via `lax.scan` (fully differentiable)
+
+```python
+from difflow import PFR, PFRParams, GasPFR, GasPFRParams
+
+# Liquid-phase PFR
+pfr = PFR(PFRParams(V=2.0, rate_fn=rate_fn, stoich=stoich,
+                    rate_params=params, species_order=["A", "B"]))
+outlet, info = pfr(inlet, T_spec=350.0)
+
+# Gas-phase with pressure drop (A → 2B, mole increase)
+gas_pfr = GasPFR(GasPFRParams(V=1.0, rate_fn=rate_fn, stoich=stoich,
+                              rate_params=params, species_order=["A", "B"],
+                              alpha=50000.0))  # Pressure drop parameter
+outlet, info = gas_pfr(inlet, T_spec=500.0)
+# info contains: conversion, profiles (V, F, T, P, Q), pressure_drop
+```
 
 ### Flash Separator
 - TP flash (temperature and pressure specified)
@@ -209,35 +229,6 @@ uf = Ultrafiltration(UFParams(
     concentration_factor=jnp.array(10.0),
 ))
 ```
-
-## Visualization
-
-Generate interactive flowsheet diagrams directly from your code:
-
-```python
-from difflow import Flowsheet, Unit, make_stream
-
-# Build and solve flowsheet
-fs = Flowsheet(species_order=["A", "B", "C"])
-fs.add_feed("feed", feed_stream)
-fs.add_unit(Unit("reactor", cstr, ["feed"], ["reactor_out"]))
-fs.add_unit(Unit("separator", flash, ["reactor_out"], ["product", "recycle"]))
-fs.add_recycle("recycle", "recycle_in")
-
-streams = fs.solve()
-
-# Visualize - graph is generated from your code!
-fig = fs.visualize(streams, layout="spring", title="My Process")
-fig.show()
-
-# Or get the graph object for more control
-graph = fs.to_graph(streams)
-```
-
-Features:
-- **Automatic**: Graph topology extracted from your flowsheet code
-- **Interactive**: Zoom, pan, and hover tooltips with stream data
-- **Export**: Save to HTML or PNG for sharing
 
 ## Thermodynamics
 
@@ -400,8 +391,6 @@ Jupyter notebooks are in the `examples/` directory:
 | `02_cstr_sensitivity.ipynb` | Sensitivity analysis for CSTR parameters |
 | `03_optimization.ipynb` | Gradient-based optimization problems |
 | `04_rare_earth_extraction.ipynb` | Rare earth recovery using LLE |
-| `05_mab_downstream.ipynb` | mAb purification process (bio manufacturing) |
-| `08_flowsheet_visualization.ipynb` | Interactive visualization tutorial |
 | `technoeconomic_analysis.py` | Comprehensive TEA with profit optimization |
 
 ```bash
@@ -415,7 +404,8 @@ The `tutorials/` directory contains comprehensive JAX tutorials for differentiab
 
 | Notebook | Topics |
 |----------|--------|
-| `01_jax_fundamentals.ipynb` | grad, jit, vmap, pytrees, lax.scan, lax.cond |
+| `01_jax_fundamentals.ipynb` | grad, jit, vmap, pytrees, jacfwd/jacrev, VJP/JVP, HVP |
+| `02_inverse_hessian_vector_products.ipynb` | IHVP, conjugate gradient, Newton-CG optimization |
 | `02_optimization.ipynb` | Gradient descent, Newton, Adam, constrained optimization |
 | `03_differential_equations.ipynb` | ODE solvers, parameter estimation, neural ODEs |
 | `04_custom_derivatives.ipynb` | custom_vjp, custom_jvp, stop_gradient |
@@ -443,7 +433,7 @@ The `tutorials/` directory contains comprehensive JAX tutorials for differentiab
 ## Future Work
 
 - Equation of state (Peng-Robinson, SRK) for VLE
-- More unit operations (PFR, distillation, heat exchangers)
+- More unit operations (distillation columns, heat exchangers)
 - Extended bio operations (viral inactivation, sterile filtration)
 - GPU acceleration for large flowsheets
 
