@@ -17,13 +17,14 @@ where:
 All calculations are JAX-compatible for automatic differentiation.
 """
 
-from typing import Callable, Literal
+from typing import Callable, Literal, Any
 from dataclasses import dataclass
 import jax.numpy as jnp
 from jax import Array, lax
 
 from difflow.streams import Stream, get_flows, make_stream
 from difflow.thermo import IdealThermo
+from difflow.dynamic.state import StateSpec, StateVar
 
 
 # Type alias for rate function
@@ -31,6 +32,9 @@ RateFunction = Callable[[dict[str, Array], Array, dict], Array]
 
 # Type alias for feed profile function
 FeedProfile = Callable[[Array], Array]  # t -> F(t)
+
+# Type alias for parameters
+Params = dict[str, Any]
 
 
 @dataclass
@@ -378,6 +382,264 @@ class FedBatchReactor:
         _, Q_profile = lax.scan(calc_Q, None, (t_array, V_profile, C_profiles))
 
         return Q_profile
+
+    # =========================================================================
+    # DynamicUnit Interface Methods
+    # =========================================================================
+
+    def state_spec(self) -> StateSpec:
+        """Return specification of state variables for dynamic simulation.
+
+        State variables:
+        - V: Reactor volume (m³)
+        - n_<species>: Moles of each species (mol)
+        - T: Temperature (K) - only for non-isothermal modes
+
+        Returns:
+            StateSpec describing all state variables
+        """
+        p = self.params
+        variables = []
+
+        # Volume
+        variables.append(StateVar(
+            name="V",
+            category="volume",
+            units="m³",
+            description="Reactor volume",
+            bounds=(0.0, None),
+            scale=p.V0 if isinstance(p.V0, (int, float)) else 1.0,
+            initial_value=float(p.V0) if isinstance(p.V0, (int, float)) else 1.0,
+        ))
+
+        # Molar holdup for each species
+        for s in p.species_order:
+            variables.append(StateVar(
+                name=f"n_{s}",
+                category="moles",
+                units="mol",
+                description=f"Moles of {s} in reactor",
+                bounds=(0.0, None),
+                scale=1.0,
+            ))
+
+        # Temperature for non-isothermal
+        if self.mode != "isothermal":
+            variables.append(StateVar(
+                name="T",
+                category="temperature",
+                units="K",
+                description="Reactor temperature",
+                bounds=(200.0, 1000.0),
+                scale=300.0,
+                initial_value=300.0,
+            ))
+
+        return StateSpec(variables)
+
+    def initial_state(
+        self,
+        inputs: dict[str, Stream],
+        params: Params | None = None,
+    ) -> Array:
+        """Compute initial state from provided initial conditions.
+
+        Args:
+            inputs: Dictionary that may contain:
+                - "C0": Initial concentrations dict {species: mol/m³}
+                - "T0": Initial temperature (K)
+                - Or an "inlet" stream for composition reference
+            params: Optional parameters with C0, T0
+
+        Returns:
+            Initial state array [V, n_species..., T?]
+        """
+        p = self.params
+        V0 = jnp.asarray(p.V0)
+
+        # Get initial concentrations
+        if params and "C0" in params:
+            C0 = params["C0"]
+        elif "C0" in inputs:
+            C0 = inputs["C0"]
+        else:
+            # Default: use inlet stream composition or zeros
+            inlet = inputs.get("inlet")
+            if inlet is not None:
+                inlet_flows = get_flows(inlet)
+                F_total = sum(inlet_flows.values())
+                if F_total > 1e-10:
+                    C0 = {s: inlet_flows.get(s, 0.0) / F_total * 50.0
+                          for s in p.species_order}  # Assume 50 mol/m³ total
+                else:
+                    C0 = {s: 0.0 for s in p.species_order}
+            else:
+                C0 = {s: 0.0 for s in p.species_order}
+
+        # Initial moles
+        n0 = jnp.array([V0 * C0.get(s, 0.0) for s in p.species_order])
+
+        # Initial temperature
+        if params and "T0" in params:
+            T0 = jnp.asarray(params["T0"])
+        elif "T0" in inputs:
+            T0 = jnp.asarray(inputs["T0"])
+        else:
+            inlet = inputs.get("inlet")
+            T0 = inlet["T"] if inlet is not None else jnp.array(300.0)
+
+        state0 = jnp.concatenate([jnp.array([V0]), n0])
+
+        if self.mode != "isothermal":
+            state0 = jnp.concatenate([state0, jnp.array([T0])])
+
+        return state0
+
+    def derivatives(
+        self,
+        t: Array,
+        state: Array,
+        inputs: dict[str, Stream],
+        params: Params | None = None,
+    ) -> Array:
+        """Compute time derivatives for dynamic simulation.
+
+        Material balance:
+            dV/dt = F_in (volumetric)
+            dn_i/dt = F_in * C_in_i + V * sum_j(nu_ij * r_j)
+
+        Energy balance (non-isothermal):
+            d(n*Cp*T)/dt = F_in*Cp*(T_in - T) + V*sum_j(r_j*(-dH_j)) + Q
+
+        Args:
+            t: Current time
+            state: Current state [V, n_species..., T?]
+            inputs: Dictionary with feed info or inlet stream
+            params: Optional parameters (feed_rate_fn, feed_composition, etc.)
+
+        Returns:
+            Array of derivatives [dV/dt, dn/dt..., dT/dt?]
+        """
+        p = self.params
+        species = p.species_order
+        n_species = len(species)
+
+        # Extract state
+        V = state[0]
+        n = state[1:n_species + 1]
+        n_total = jnp.sum(n) + 1e-10
+
+        # Concentrations
+        C = n / jnp.maximum(V, 1e-10)
+        C_dict = {s: C[i] for i, s in enumerate(species)}
+
+        # Temperature
+        if self.mode == "isothermal":
+            T = params.get("T_spec", 300.0) if params else 300.0
+            T = jnp.asarray(T)
+        else:
+            T = state[n_species + 1]
+
+        # Feed rate and composition
+        if params and "feed_rate_fn" in params:
+            F_in = params["feed_rate_fn"](t)
+            C_feed = jnp.array([
+                params.get("feed_composition", {}).get(s, 0.0)
+                for s in species
+            ])
+            T_feed = params.get("feed_T", T)
+        else:
+            # Check inputs for feed info
+            F_in = jnp.array(0.0)  # Default: batch mode
+            C_feed = jnp.zeros(n_species)
+            T_feed = T
+
+        # Reaction rates
+        r = p.rate_fn(C_dict, T, p.rate_params)
+
+        # Volume balance
+        dV_dt = F_in
+
+        # Material balance: dn/dt = F_in * C_feed + V * stoich @ r
+        dn_dt = F_in * C_feed + V * (p.stoich @ r)
+
+        derivs = jnp.concatenate([jnp.array([dV_dt]), dn_dt])
+
+        if self.mode == "isothermal":
+            return derivs
+
+        # Energy balance
+        Cp = 75.0  # J/mol/K
+
+        # Heat from reaction
+        if p.dH_rxn is not None:
+            Q_rxn = -V * jnp.sum(r * p.dH_rxn)
+        else:
+            Q_rxn = 0.0
+
+        # Heat from feed
+        n_feed_rate = F_in * jnp.sum(C_feed)
+        Q_feed = n_feed_rate * Cp * (T_feed - T)
+
+        # External heat
+        if self.mode == "adiabatic":
+            Q_ext = 0.0
+        else:
+            Q_ext = params.get("Q_ext", 0.0) if params else 0.0
+
+        dT_dt = (Q_rxn + Q_feed + Q_ext) / (n_total * Cp + 1e-10)
+
+        return jnp.concatenate([derivs, jnp.array([dT_dt])])
+
+    def outputs(
+        self,
+        t: Array,
+        state: Array,
+        inputs: dict[str, Stream],
+        params: Params | None = None,
+    ) -> dict[str, Stream]:
+        """Compute output information from current state.
+
+        For fed-batch, there's typically no continuous outlet stream.
+        Returns reactor contents as a "batch" stream.
+
+        Args:
+            t: Current time
+            state: Current state
+            inputs: Input dictionary
+            params: Optional parameters
+
+        Returns:
+            Dictionary with "contents" stream representing reactor contents
+        """
+        p = self.params
+        species = p.species_order
+        n_species = len(species)
+
+        V = state[0]
+        n = state[1:n_species + 1]
+
+        # Express as "equivalent flow" (moles / some basis time)
+        # Using 1 hour basis for flow rate
+        basis_time = 3600.0
+        flows = {s: n[i] / basis_time for i, s in enumerate(species)}
+
+        # Temperature
+        if self.mode == "isothermal":
+            T = params.get("T_spec", 300.0) if params else 300.0
+        else:
+            T = state[n_species + 1]
+
+        # Pressure from inputs or default
+        inlet = inputs.get("inlet")
+        P = inlet["P"] if inlet is not None else 101325.0
+
+        return {
+            "contents": make_stream(flows, T, P),
+            "V": V,
+            "n": {s: n[i] for i, s in enumerate(species)},
+            "C": {s: n[i] / V for i, s in enumerate(species)},
+        }
 
 
 class SemiBatchReactor(FedBatchReactor):
