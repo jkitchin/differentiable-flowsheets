@@ -3,7 +3,7 @@
 Core package providing:
 - Stream representation and utilities
 - Thermodynamic property calculations
-- Unit operations (CSTR, Flash, LLE)
+- Unit operations (CSTR, PFR, Flash, LLE)
 - Flowsheet management with recycle solving
 - Differentiable solvers
 
@@ -25,6 +25,7 @@ from difflow.streams import (
 )
 from difflow.thermo import IdealThermo, SpeciesData
 from difflow.units.cstr import CSTR, CSTRParams
+from difflow.units.pfr import PFR, PFRParams, GasPFR, GasPFRParams
 from difflow.units.flash import Flash, FlashParams, Mixer, Splitter
 from difflow.units.lle import (
     MultistageCascade,
@@ -55,21 +56,6 @@ from difflow.plugins import (
     OperationRegistry,
 )
 
-# Visualization (optional - requires plotly)
-try:
-    from difflow.visualization import (
-        FlowsheetGraph,
-        Node,
-        Edge,
-        render_flowsheet,
-        show_flowsheet,
-        UNIT_STYLES,
-        get_unit_style,
-    )
-    _HAS_VISUALIZATION = True
-except ImportError:
-    _HAS_VISUALIZATION = False
-
 __all__ = [
     # Streams
     "Stream",
@@ -86,6 +72,11 @@ __all__ = [
     # Unit operations - CSTR
     "CSTR",
     "CSTRParams",
+    # Unit operations - PFR
+    "PFR",
+    "PFRParams",
+    "GasPFR",
+    "GasPFRParams",
     # Unit operations - Flash
     "Flash",
     "FlashParams",
@@ -120,12 +111,4 @@ __all__ = [
     "register_operation",
     "UnitOperation",
     "OperationRegistry",
-    # Visualization (when available)
-    "FlowsheetGraph",
-    "Node",
-    "Edge",
-    "render_flowsheet",
-    "show_flowsheet",
-    "UNIT_STYLES",
-    "get_unit_style",
 ]

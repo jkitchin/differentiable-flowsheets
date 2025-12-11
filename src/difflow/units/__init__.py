@@ -2,6 +2,7 @@
 
 Core unit operations:
 - CSTR: Continuous stirred tank reactor
+- PFR: Plug flow reactor
 - Flash: Vapor-liquid equilibrium flash
 - Mixer/Splitter: Stream combining and splitting
 - MultistageCascade: Liquid-liquid extraction
@@ -12,6 +13,7 @@ chromatography), use the difflow_bio plugin:
 """
 
 from difflow.units.cstr import CSTR, CSTRParams
+from difflow.units.pfr import PFR, PFRParams, GasPFR, GasPFRParams
 from difflow.units.flash import Flash, FlashParams, Mixer, Splitter
 from difflow.units.lle import (
     MultistageCascade,
@@ -34,6 +36,11 @@ __all__ = [
     # CSTR
     "CSTR",
     "CSTRParams",
+    # PFR
+    "PFR",
+    "PFRParams",
+    "GasPFR",
+    "GasPFRParams",
     # Flash
     "Flash",
     "FlashParams",
