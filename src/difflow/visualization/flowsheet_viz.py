@@ -714,6 +714,8 @@ class FlowsheetVisualizer:
 def visualize_flowsheet(
     flowsheet: "Flowsheet",
     streams: dict[str, "Stream"] | None = None,
+    width: str = "100%",
+    height: str = "500px",
     **kwargs,
 ) -> "ipycytoscape.CytoscapeWidget":
     """Convenience function to visualize a flowsheet.
@@ -721,6 +723,8 @@ def visualize_flowsheet(
     Args:
         flowsheet: The Flowsheet object to visualize
         streams: Solved stream data (from flowsheet.solve())
+        width: Widget width (CSS string)
+        height: Widget height (CSS string)
         **kwargs: Additional arguments passed to FlowsheetVisualizer
 
     Returns:
@@ -728,7 +732,7 @@ def visualize_flowsheet(
 
     Example:
         >>> results = flowsheet.solve()
-        >>> visualize_flowsheet(flowsheet, streams=results)
+        >>> visualize_flowsheet(flowsheet, streams=results, height="400px")
     """
     viz = FlowsheetVisualizer(flowsheet, **kwargs)
-    return viz.show(streams=streams)
+    return viz.show(streams=streams, width=width, height=height)

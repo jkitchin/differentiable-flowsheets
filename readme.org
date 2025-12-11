@@ -1,4 +1,18 @@
+:PROPERTIES:
+:ID:       2F8B46B0-5215-40AF-BB39-E38344BFA3E6
+:END:
 #+title: Differentiable flowsheets
 
 * TODO Review difflow
-DEADLINE: <2025-12-10 Wed>
+DEADLINE: <2025-12-17 Wed +1w>
+:PROPERTIES:
+:LOGGING: nil
+:END:
+
+** Visualization
+
+I had a vizualization tool but it wasn't very good. We probably need icons for the operations, and labels for streams, interactivity. It might be a big task.
+
+** Rare earth separations
+
+This might be something for James
