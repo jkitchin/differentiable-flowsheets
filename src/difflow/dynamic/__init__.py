@@ -24,6 +24,11 @@ Key Components
 - integrate_rk45(): Adaptive step RK45
 - integrate_unit(): Convenience wrapper for DynamicUnit
 
+**Flowsheet** (flowsheet.py):
+- DynamicFlowsheet: Connect multiple dynamic units
+- DynamicFlowsheetResult: Result container with unit access
+- DynamicUnitEntry: Unit registration in flowsheet
+
 Example Usage
 -------------
 
@@ -144,6 +149,15 @@ from difflow.dynamic.integrators import (
     DerivativesFn,
 )
 
+# Dynamic flowsheet
+from difflow.dynamic.flowsheet import (
+    DynamicFlowsheet,
+    DynamicFlowsheetResult,
+    DynamicUnitEntry,
+    Connection,
+    FlowsheetState,
+)
+
 __all__ = [
     # State
     "StateVar",
@@ -178,4 +192,10 @@ __all__ = [
     "sensitivity_analysis",
     "Method",
     "DerivativesFn",
+    # Flowsheet
+    "DynamicFlowsheet",
+    "DynamicFlowsheetResult",
+    "DynamicUnitEntry",
+    "Connection",
+    "FlowsheetState",
 ]

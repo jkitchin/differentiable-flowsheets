@@ -155,6 +155,9 @@ from difflow.dynamic import (
     integrate_rk45,
     IntegrationResult,
     Trajectory,
+    # Flowsheet
+    DynamicFlowsheet,
+    DynamicFlowsheetResult,
 )
 
 __all__ = [
@@ -289,4 +292,6 @@ __all__ = [
     "integrate_rk45",
     "IntegrationResult",
     "Trajectory",
+    "DynamicFlowsheet",
+    "DynamicFlowsheetResult",
 ]
