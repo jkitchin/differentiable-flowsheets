@@ -29,13 +29,11 @@ visualization = [
 bio = [
     # Bio manufacturing operations are included in the main package
 ]
-all = [
-    "difflow[dev,examples,visualization,bio]",
-]
-
-[project.optional-dependencies.ree]
 ree = [
-    # Rare earth separation operations
+    # Rare earth separation operations are included in the main package
+]
+all = [
+    "difflow[dev,examples,visualization,bio,ree]",
 ]
 
 [project.entry-points."difflow.plugins"]
