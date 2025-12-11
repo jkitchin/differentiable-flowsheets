@@ -1,0 +1,497 @@
+"""Fed-Batch Reactor unit operation.
+
+This module provides a general-purpose fed-batch reactor for chemical reactions,
+distinct from the bio-specific FedBatchBioreactor in difflow_bio.
+
+The fed-batch reactor solves dynamic material and energy balances:
+    d(V*C_i)/dt = F_in*C_in_i + V*sum_j(nu_ij*r_j)
+    d(V*rho*Cp*T)/dt = F_in*rho_in*Cp_in*T_in + V*sum_j(r_j*(-dH_rxn_j)) + Q
+
+where:
+    V = reactor volume (m³, time-varying)
+    C = concentrations (mol/m³)
+    r = reaction rates (mol/m³/s)
+    Q = heat duty (W)
+    F_in = inlet volumetric flow rate (m³/s)
+
+All calculations are JAX-compatible for automatic differentiation.
+"""
+
+from typing import Callable, Literal
+from dataclasses import dataclass
+import jax.numpy as jnp
+from jax import Array, lax
+
+from difflow.streams import Stream, get_flows, make_stream
+from difflow.thermo import IdealThermo
+
+
+# Type alias for rate function
+RateFunction = Callable[[dict[str, Array], Array, dict], Array]
+
+# Type alias for feed profile function
+FeedProfile = Callable[[Array], Array]  # t -> F(t)
+
+
+@dataclass
+class FedBatchParams:
+    """Parameters for a fed-batch reactor.
+
+    Attributes:
+        V0: Initial reactor volume (m³)
+        rate_fn: Function computing reaction rates.
+                 Signature: rate_fn(C, T, rate_params) -> r
+                 where C is dict of concentrations (mol/m³),
+                 T is temperature (K),
+                 rate_params is user-defined parameters,
+                 r is array of reaction rates (mol/m³/s)
+        stoich: Stoichiometry matrix, shape (n_species, n_reactions).
+                stoich[i, j] is the coefficient of species i in reaction j
+                (negative for reactants, positive for products)
+        rate_params: Parameters passed to rate_fn
+        species_order: List of species names in order matching stoich rows
+        dH_rxn: Heats of reaction (J/mol) for each reaction, shape (n_reactions,).
+                Negative for exothermic. If None, assumes isothermal.
+    """
+    V0: float | Array
+    rate_fn: RateFunction
+    stoich: Array
+    rate_params: dict
+    species_order: list[str]
+    dH_rxn: Array | None = None
+
+
+class FedBatchReactor:
+    """Fed-batch reactor with dynamic volume and composition.
+
+    Simulates semi-batch or fed-batch operation by integrating ODEs
+    for volume, concentrations, and temperature over time.
+
+    Supports three modes:
+    - isothermal: Temperature specified, Q calculated
+    - adiabatic: Q = 0, temperature calculated
+    - specified_duty: Q specified as function of time
+
+    Uses JAX-compatible ODE integration via lax.scan with RK4.
+
+    All calculations are JAX-compatible for automatic differentiation.
+    """
+
+    def __init__(
+        self,
+        params: FedBatchParams,
+        thermo: IdealThermo | None = None,
+        mode: Literal["isothermal", "adiabatic", "specified_duty"] = "isothermal",
+    ):
+        """Initialize fed-batch reactor.
+
+        Args:
+            params: Fed-batch reactor parameters
+            thermo: Thermodynamic property calculator (required for non-isothermal)
+            mode: Energy balance mode
+        """
+        self.params = params
+        self.thermo = thermo
+        self.mode = mode
+
+        if mode != "isothermal" and thermo is None:
+            raise ValueError("Thermo object required for non-isothermal operation")
+
+    def __call__(
+        self,
+        C0: dict[str, Array | float],
+        T0: Array | float,
+        P: Array | float,
+        t_final: Array | float,
+        feed_rate_fn: FeedProfile | None = None,
+        feed_composition: dict[str, Array | float] | None = None,
+        feed_T: Array | float | None = None,
+        Q_fn: Callable[[Array], Array] | None = None,
+        n_steps: int = 100,
+    ) -> tuple[Stream, dict[str, Array]]:
+        """Simulate fed-batch reactor operation.
+
+        Args:
+            C0: Initial concentrations by species (mol/m³)
+            T0: Initial temperature (K)
+            P: Pressure (Pa, assumed constant)
+            t_final: Final simulation time (s)
+            feed_rate_fn: Function F(t) returning volumetric feed rate (m³/s).
+                         If None, batch mode (no feed).
+            feed_composition: Feed concentrations by species (mol/m³).
+                             Required if feed_rate_fn is provided.
+            feed_T: Feed temperature (K). Default is T0.
+            Q_fn: Heat duty function Q(t) for specified_duty mode (W).
+            n_steps: Number of integration steps.
+
+        Returns:
+            final_stream: Stream representing final reactor contents
+            info: Dictionary with time profiles:
+                - 't': Time array (s)
+                - 'V': Volume profile (m³)
+                - 'C': Concentration profiles dict {species: array}
+                - 'T': Temperature profile (K)
+                - 'Q': Heat duty profile (W) for isothermal mode
+                - 'rates': Reaction rate profiles
+                - 'conversion': Final conversion of each species
+        """
+        p = self.params
+        n_species = len(p.species_order)
+
+        # Convert inputs to arrays
+        T0 = jnp.asarray(T0)
+        P = jnp.asarray(P)
+        t_final = jnp.asarray(t_final)
+        V0 = jnp.asarray(p.V0)
+
+        # Initial concentrations as array
+        C0_arr = jnp.array([jnp.asarray(C0[s]) for s in p.species_order])
+
+        # Initial moles
+        n0 = V0 * C0_arr
+
+        # Feed setup
+        if feed_rate_fn is None:
+            feed_rate_fn = lambda t: jnp.array(0.0)
+            C_feed = jnp.zeros(n_species)
+        else:
+            if feed_composition is None:
+                raise ValueError("feed_composition required when feed_rate_fn is provided")
+            C_feed = jnp.array([jnp.asarray(feed_composition[s]) for s in p.species_order])
+
+        feed_T = jnp.asarray(feed_T) if feed_T is not None else T0
+
+        # Heat duty function
+        if self.mode == "specified_duty":
+            if Q_fn is None:
+                raise ValueError("Q_fn required for specified_duty mode")
+        elif Q_fn is None:
+            Q_fn = lambda t: jnp.array(0.0)
+
+        # Time discretization
+        dt = t_final / n_steps
+        t_array = jnp.linspace(0, t_final, n_steps + 1)
+
+        # Initial state vector: [V, n_1, n_2, ..., n_ns, T]
+        # (using moles instead of concentrations for better numerics)
+        if self.mode == "isothermal":
+            y0 = jnp.concatenate([jnp.array([V0]), n0])
+        else:
+            y0 = jnp.concatenate([jnp.array([V0]), n0, jnp.array([T0])])
+
+        # Capture parameters for closure
+        rate_fn = p.rate_fn
+        species_order = p.species_order
+        stoich = p.stoich
+        rate_params = p.rate_params
+        dH_rxn = p.dH_rxn
+        thermo = self.thermo
+        mode = self.mode
+
+        def rhs(y, t, T_spec=None):
+            """Right-hand side of ODEs.
+
+            dy/dt = f(y, t)
+
+            For isothermal: y = [V, n_1, ..., n_ns]
+            For non-isothermal: y = [V, n_1, ..., n_ns, T]
+            """
+            V = y[0]
+            n = y[1:n_species+1]
+
+            # Concentrations
+            C = n / jnp.maximum(V, 1e-10)
+            C_dict = {s: C[i] for i, s in enumerate(species_order)}
+
+            # Temperature
+            if mode == "isothermal":
+                T = T_spec if T_spec is not None else T0
+            else:
+                T = y[n_species + 1]
+
+            # Feed rate at current time
+            F_in = feed_rate_fn(t)
+
+            # Reaction rates
+            r = rate_fn(C_dict, T, rate_params)
+
+            # Material balances: dn_i/dt = F_in*C_feed_i + V*sum_j(nu_ij*r_j)
+            dn_dt = F_in * C_feed + V * (stoich @ r)
+
+            # Volume balance: dV/dt = F_in (assuming incompressible)
+            dV_dt = F_in
+
+            if mode == "isothermal":
+                return jnp.concatenate([jnp.array([dV_dt]), dn_dt])
+
+            # Energy balance for non-isothermal
+            # d(n_total * Cp_mix * T)/dt = F_in*Cp_feed*(T_feed - T) + V*sum_j(r_j*(-dH_rxn_j)) + Q
+            # Simplified: rho*V*Cp * dT/dt = F_in*rho*Cp*(T_feed - T) + ...
+
+            n_total = jnp.sum(n)
+            x = n / jnp.maximum(n_total, 1e-10)
+            mole_fracs = {s: x[i] for i, s in enumerate(species_order)}
+            Cp_mix = thermo.Cp_mix(mole_fracs, T)
+
+            # Heat of reaction
+            if dH_rxn is not None:
+                Q_rxn = -V * jnp.sum(r * dH_rxn)  # Positive for exothermic
+            else:
+                Q_rxn = 0.0
+
+            # Feed enthalpy contribution
+            n_feed_rate = F_in * jnp.sum(C_feed)
+            Q_feed = n_feed_rate * Cp_mix * (feed_T - T)
+
+            # External heat
+            if mode == "specified_duty":
+                Q_ext = Q_fn(t)
+            else:  # adiabatic
+                Q_ext = 0.0
+
+            # dT/dt
+            dT_dt = (Q_rxn + Q_feed + Q_ext) / (n_total * Cp_mix + 1e-10)
+
+            return jnp.concatenate([jnp.array([dV_dt]), dn_dt, jnp.array([dT_dt])])
+
+        def rk4_step(y, t):
+            """Fourth-order Runge-Kutta step."""
+            k1 = rhs(y, t, T0)
+            k2 = rhs(y + 0.5*dt*k1, t + 0.5*dt, T0)
+            k3 = rhs(y + 0.5*dt*k2, t + 0.5*dt, T0)
+            k4 = rhs(y + dt*k3, t + dt, T0)
+            y_new = y + (dt/6) * (k1 + 2*k2 + 2*k3 + k4)
+            # Ensure positivity
+            y_new = jnp.maximum(y_new, 1e-20)
+            return y_new, y
+
+        # Integrate using lax.scan
+        y_final, y_history = lax.scan(rk4_step, y0, t_array[:-1])
+
+        # Append final state
+        y_all = jnp.vstack([y_history, y_final[None, :]])
+
+        # Extract profiles
+        V_profile = y_all[:, 0]
+        n_profiles = y_all[:, 1:n_species+1]
+        C_profiles = n_profiles / jnp.maximum(V_profile[:, None], 1e-10)
+
+        if mode == "isothermal":
+            T_profile = jnp.full(n_steps + 1, T0)
+        else:
+            T_profile = y_all[:, n_species + 1]
+
+        # Calculate Q profile for isothermal mode
+        if mode == "isothermal":
+            Q_profile = self._compute_Q_profile(
+                t_array, V_profile, C_profiles, T0, feed_rate_fn, C_feed, feed_T
+            )
+        else:
+            Q_profile = jnp.zeros(n_steps + 1)
+
+        # Calculate rates at final time
+        C_final = {s: C_profiles[-1, i] for i, s in enumerate(p.species_order)}
+        T_final = T_profile[-1]
+        rates_final = rate_fn(C_final, T_final, rate_params)
+
+        # Conversions (based on limiting reactant)
+        n_initial = n0
+        n_final = n_profiles[-1]
+        conversion = {}
+        for i, s in enumerate(p.species_order):
+            if n_initial[i] > 1e-10:
+                conversion[s] = (n_initial[i] - n_final[i]) / n_initial[i]
+            else:
+                conversion[s] = jnp.array(0.0)
+
+        # Create final stream (in moles, not concentrations)
+        V_final = V_profile[-1]
+        final_flows = {s: n_final[i] for i, s in enumerate(p.species_order)}
+
+        # Convert to molar flow rate (moles / batch time)
+        flow_rate_basis = {s: n_final[i] / t_final for i, s in enumerate(p.species_order)}
+
+        final_stream = make_stream(flow_rate_basis, T_final, P)
+
+        # Build info dict
+        C_dict_profiles = {s: C_profiles[:, i] for i, s in enumerate(p.species_order)}
+        n_dict_profiles = {s: n_profiles[:, i] for i, s in enumerate(p.species_order)}
+
+        info = {
+            "t": t_array,
+            "V": V_profile,
+            "C": C_dict_profiles,
+            "n": n_dict_profiles,
+            "T": T_profile,
+            "Q": Q_profile,
+            "rates_final": rates_final,
+            "conversion": conversion,
+            "V_final": V_final,
+            "n_final": {s: n_final[i] for i, s in enumerate(p.species_order)},
+            "C_final": C_final,
+            "T_final": T_final,
+        }
+
+        return final_stream, info
+
+    def _compute_Q_profile(
+        self,
+        t_array: Array,
+        V_profile: Array,
+        C_profiles: Array,
+        T: Array,
+        feed_rate_fn: FeedProfile,
+        C_feed: Array,
+        feed_T: Array,
+    ) -> Array:
+        """Compute heat duty profile for isothermal operation."""
+        p = self.params
+        n_species = len(p.species_order)
+
+        def calc_Q(state, inputs):
+            t, V, C = inputs
+            C_dict = {s: C[i] for i, s in enumerate(p.species_order)}
+            r = p.rate_fn(C_dict, T, p.rate_params)
+            F_in = feed_rate_fn(t)
+
+            # Heat from reaction
+            if p.dH_rxn is not None:
+                Q_rxn = V * jnp.sum(r * p.dH_rxn)  # Heat released
+            else:
+                Q_rxn = 0.0
+
+            # Heat from feed
+            if self.thermo is not None:
+                n_total = V * jnp.sum(C)
+                x = C / (jnp.sum(C) + 1e-10)
+                mole_fracs = {s: x[i] for i, s in enumerate(p.species_order)}
+                Cp_mix = self.thermo.Cp_mix(mole_fracs, T)
+                Q_feed = F_in * jnp.sum(C_feed) * Cp_mix * (feed_T - T)
+            else:
+                Q_feed = 0.0
+
+            # Q required to maintain isothermal = -(heat generated)
+            Q = -Q_rxn - Q_feed
+
+            return None, Q
+
+        _, Q_profile = lax.scan(calc_Q, None, (t_array, V_profile, C_profiles))
+
+        return Q_profile
+
+
+class SemiBatchReactor(FedBatchReactor):
+    """Semi-batch reactor (alias for FedBatchReactor).
+
+    A semi-batch reactor is a fed-batch reactor where one reactant is added
+    gradually to control the reaction rate, heat release, or selectivity.
+
+    This is identical to FedBatchReactor but with a more descriptive name
+    for certain applications.
+    """
+    pass
+
+
+# =============================================================================
+# Utility Functions
+# =============================================================================
+
+
+def batch_time_for_conversion(
+    params: FedBatchParams,
+    C0: dict[str, Array],
+    T: Array,
+    target_species: str,
+    target_conversion: float,
+    thermo: IdealThermo | None = None,
+) -> Array:
+    """Estimate batch time needed to achieve target conversion.
+
+    Uses simple numerical integration to find batch time.
+
+    Args:
+        params: Fed-batch parameters (with V0, rate_fn, etc.)
+        C0: Initial concentrations
+        T: Reaction temperature (isothermal)
+        target_species: Species to track for conversion
+        target_conversion: Desired conversion (0-1)
+        thermo: Thermodynamic calculator (optional)
+
+    Returns:
+        Estimated batch time (s)
+    """
+    # Create batch reactor (no feed)
+    reactor = FedBatchReactor(params, thermo, mode="isothermal")
+
+    # Try increasing batch times until target conversion is reached
+    # This is a simple bisection approach
+
+    t_min = 1.0
+    t_max = 100000.0  # 100000 seconds = ~28 hours
+
+    def get_conversion(t_batch):
+        _, info = reactor(
+            C0, T, 101325.0, t_batch,
+            n_steps=100,
+        )
+        return info["conversion"][target_species]
+
+    # Simple bisection
+    def bisection_step(state, _):
+        t_lo, t_hi = state
+        t_mid = (t_lo + t_hi) / 2
+        X_mid = get_conversion(t_mid)
+        t_lo_new = jnp.where(X_mid < target_conversion, t_mid, t_lo)
+        t_hi_new = jnp.where(X_mid < target_conversion, t_hi, t_mid)
+        return (t_lo_new, t_hi_new), None
+
+    (t_lo_final, t_hi_final), _ = lax.scan(
+        bisection_step,
+        (t_min, t_max),
+        None,
+        length=30,  # ~30 iterations for good precision
+    )
+
+    return (t_lo_final + t_hi_final) / 2
+
+
+def optimal_feed_profile(
+    objective: Literal["max_selectivity", "min_time", "max_yield"],
+    params: FedBatchParams,
+    C0: dict[str, Array],
+    T: Array,
+    target_species: str,
+    feed_composition: dict[str, Array],
+    V_max: float,
+    t_max: float,
+) -> tuple[Callable[[Array], Array], float]:
+    """Determine optimal feed profile for fed-batch reactor.
+
+    This is a placeholder for optimization-based feed profile design.
+    In practice, would use gradient-based optimization with difflow's
+    autodiff capabilities.
+
+    Args:
+        objective: Optimization objective
+        params: Reactor parameters
+        C0: Initial concentrations
+        T: Temperature
+        target_species: Product species
+        feed_composition: Feed concentrations
+        V_max: Maximum final volume
+        t_max: Maximum batch time
+
+    Returns:
+        (feed_fn, t_opt): Optimal feed function and batch time
+    """
+    # Placeholder: return constant feed rate
+    V0 = params.V0
+    V_add = V_max - V0
+    t_opt = t_max
+
+    F_const = V_add / t_opt
+
+    def constant_feed(t):
+        return jnp.where(t < t_opt, F_const, 0.0)
+
+    return constant_feed, t_opt

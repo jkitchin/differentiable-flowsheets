@@ -3,9 +3,11 @@
 Core unit operations:
 - CSTR: Continuous stirred tank reactor
 - PFR: Plug flow reactor
+- FedBatchReactor: Fed-batch/semi-batch reactor
 - Flash: Vapor-liquid equilibrium flash
 - Mixer/Splitter: Stream combining and splitting
 - MultistageCascade: Liquid-liquid extraction
+- ShortcutColumn/DistillationColumn: Distillation
 
 For bio manufacturing operations (bioreactors, centrifuge, filtration,
 chromatography), use the difflow_bio plugin:
@@ -14,6 +16,13 @@ chromatography), use the difflow_bio plugin:
 
 from difflow.units.cstr import CSTR, CSTRParams
 from difflow.units.pfr import PFR, PFRParams, GasPFR, GasPFRParams
+from difflow.units.fed_batch import (
+    FedBatchReactor,
+    FedBatchParams,
+    SemiBatchReactor,
+    batch_time_for_conversion,
+    optimal_feed_profile,
+)
 from difflow.units.flash import Flash, FlashParams, Mixer, Splitter
 from difflow.units.lle import (
     MultistageCascade,
@@ -31,6 +40,16 @@ from difflow.units.lle import (
     minimum_solvent_ratio,
     stages_for_recovery,
 )
+from difflow.units.distillation import (
+    ShortcutColumn,
+    ShortcutColumnParams,
+    DistillationColumn,
+    DistillationColumnParams,
+    fenske_stages,
+    minimum_reflux_ratio,
+    gilliland_stages,
+    column_diameter,
+)
 
 __all__ = [
     # CSTR
@@ -41,6 +60,12 @@ __all__ = [
     "PFRParams",
     "GasPFR",
     "GasPFRParams",
+    # Fed-batch
+    "FedBatchReactor",
+    "FedBatchParams",
+    "SemiBatchReactor",
+    "batch_time_for_conversion",
+    "optimal_feed_profile",
     # Flash
     "Flash",
     "FlashParams",
@@ -61,4 +86,13 @@ __all__ = [
     "separation_factor",
     "minimum_solvent_ratio",
     "stages_for_recovery",
+    # Distillation
+    "ShortcutColumn",
+    "ShortcutColumnParams",
+    "DistillationColumn",
+    "DistillationColumnParams",
+    "fenske_stages",
+    "minimum_reflux_ratio",
+    "gilliland_stages",
+    "column_diameter",
 ]
