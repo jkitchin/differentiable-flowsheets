@@ -1,0 +1,17 @@
+# Table of contents
+# Learn more at https://jupyterbook.org/customize/toc.html
+
+format: jb-book
+root: README
+parts:
+  - caption: Tutorials
+    chapters:
+      - glob: tutorials/*
+
+  - caption: Examples
+    chapters:
+      - glob: examples/[0-9]*
+
+  - caption: Bio Manufacturing Examples
+    chapters:
+      - glob: examples/bio/*
