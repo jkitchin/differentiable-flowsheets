@@ -392,7 +392,7 @@ Jupyter notebooks are in the `examples/` directory:
 | `02_cstr_sensitivity.ipynb` | Sensitivity analysis for CSTR parameters |
 | `03_optimization.ipynb` | Gradient-based optimization problems |
 | `04_rare_earth_extraction.ipynb` | Rare earth recovery using LLE |
-| `technoeconomic_analysis.py` | Comprehensive TEA with profit optimization |
+| `05_technoeconomic_analysis.ipynb` | Comprehensive TEA with profit optimization |
 
 ```bash
 # Launch Jupyter to explore examples
