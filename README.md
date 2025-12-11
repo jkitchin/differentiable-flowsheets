@@ -169,6 +169,104 @@ raffinate, extract, info = cascade(feed_stream, solvent_stream)
 - **Mixer**: Combine multiple streams
 - **Splitter**: Split stream by fraction
 
+### Fed-Batch Reactor
+- General-purpose fed-batch (semi-batch) reactor for chemical reactions
+- Time-varying feed addition with configurable feed profiles
+- RK4 integration for batch dynamics
+- Supports multiple reactions with user-defined kinetics
+
+```python
+from difflow import FedBatchReactor, FedBatchParams
+
+# Fed-batch reactor with continuous reagent addition
+def rate_fn(C, T, params):
+    k = params["k0"] * jnp.exp(-params["Ea"] / (8.314 * T))
+    return jnp.array([k * C["A"] * C["B"]])
+
+params = FedBatchParams(
+    V0=jnp.array(1.0),              # Initial volume (m³)
+    rate_fn=rate_fn,
+    stoich=jnp.array([[-1.0], [-1.0], [1.0]]),  # A + B → C
+    rate_params={"k0": jnp.array(1e6), "Ea": jnp.array(50000.0)},
+    species_order=["A", "B", "C"],
+    t_final=jnp.array(3600.0),      # Batch time (s)
+    n_steps=100,
+)
+reactor = FedBatchReactor(params)
+
+# Feed profile: constant feed rate
+feed = make_stream({"A": 0.0, "B": 1.0, "C": 0.0}, T=300.0, P=101325.0)
+def feed_rate(t): return jnp.array(0.001)  # m³/s
+
+final, info = reactor(initial_charge, feed, feed_rate, T_spec=350.0)
+# info contains: conversion, profiles (t, V, C, T), yield
+```
+
+### Distillation Columns
+- **ShortcutColumn**: Fenske-Underwood-Gilliland method for quick design estimates
+  - Minimum stages (Fenske equation)
+  - Minimum reflux ratio (Underwood equations)
+  - Actual stages for given reflux (Gilliland correlation)
+- **DistillationColumn**: Rigorous stage-by-stage calculation
+  - MESH equations (Material, Equilibrium, Summation, Heat balance)
+  - Supports partial/total condenser and reboiler
+
+```python
+from difflow import ShortcutColumn, ShortcutColumnParams
+
+params = ShortcutColumnParams(
+    species_order=["benzene", "toluene", "xylene"],
+    light_key="benzene",
+    heavy_key="toluene",
+    x_D_LK=0.99,    # 99% benzene recovery in distillate
+    x_B_HK=0.99,    # 99% toluene recovery in bottoms
+)
+column = ShortcutColumn(params, thermo=thermo)
+
+distillate, bottoms, info = column(feed, R_ratio=1.5, q=1.0)
+# info contains: N_min, R_min, N_actual, condenser_duty, reboiler_duty
+```
+
+### Heat Exchangers
+- **Heater/Cooler**: Single-stream with utility (steam, cooling water)
+  - Specified duty mode
+  - Specified outlet temperature mode
+  - Rating mode (given UA and utility temperature)
+- **CounterCurrentHX**: Two-stream counter-current (shell-and-tube style)
+- **CoCurrentHX**: Two-stream co-current (parallel flow)
+- All use effectiveness-NTU method, fully differentiable
+
+```python
+from difflow import (
+    Heater, HeaterParams,
+    CounterCurrentHX, HeatExchangerParams,
+    design_heat_exchanger,
+)
+
+# Single-stream heater with steam
+heater = Heater(HeaterParams(T_out=400.0, Cp=75.0))
+heated_feed, info = heater(cold_feed)
+# info: Q, T_in, T_out, LMTD (if utility temp specified)
+
+# Two-stream counter-current heat exchanger
+hx = CounterCurrentHX(HeatExchangerParams(
+    UA=2000.0,       # W/K
+    Cp_hot=75.0,     # J/(mol·K)
+    Cp_cold=80.0,
+))
+hot_out, cold_out, info = hx(hot_stream, cold_stream)
+# info: Q, effectiveness, NTU, LMTD, approach temperature
+
+# Design: calculate required area
+result = design_heat_exchanger(
+    Q=jnp.array(100000.0),  # 100 kW
+    T_hot_in=jnp.array(450.0), T_hot_out=jnp.array(380.0),
+    T_cold_in=jnp.array(300.0), T_cold_out=jnp.array(360.0),
+    U=jnp.array(500.0),     # W/(m²·K)
+)
+print(f"Required area: {result['A']:.1f} m²")
+```
+
 ## Bio Manufacturing Operations
 
 The `difflow_bio` plugin provides specialized unit operations for biopharmaceutical manufacturing:
@@ -240,11 +338,6 @@ uf = Ultrafiltration(UFParams(
 - Polynomial Cp correlations
 - Watson correlation for heat of vaporization
 
-### Activity Coefficient Models (for LLE)
-- **NRTL**: Non-Random Two-Liquid model with temperature-dependent parameters
-- **UNIQUAC**: Universal Quasi-Chemical model
-
-User provides species data:
 ```python
 SpeciesData(
     name="species_name",
@@ -255,6 +348,69 @@ SpeciesData(
     Hf=0.0,                            # Heat of formation (J/mol)
 )
 ```
+
+### Equations of State (for non-ideal VLE)
+- **Peng-Robinson**: Cubic EOS for hydrocarbon and gas systems
+- **Soave-Redlich-Kwong (SRK)**: Alternative cubic EOS
+- Fugacity coefficients for both vapor and liquid phases
+- Flash calculations with non-ideal K-values
+- Binary interaction parameters (kij) support
+
+```python
+from difflow import PengRobinson, SRK, CriticalProperties, flash_TP_eos
+
+# Define critical properties
+props = {
+    "methane": CriticalProperties(Tc=190.6, Pc=4.6e6, omega=0.011),
+    "ethane": CriticalProperties(Tc=305.3, Pc=4.87e6, omega=0.099),
+}
+
+# Create EOS
+eos = PengRobinson(props)
+# or: eos = SRK(props)
+
+# Compressibility factor
+z = eos.compressibility_factor(T=300.0, P=1e6, z=[0.7, 0.3], phase="vapor")
+
+# Fugacity coefficients
+phi = eos.fugacity_coefficient(T=300.0, P=1e6, z=[0.7, 0.3], phase="vapor")
+
+# Flash calculation
+V_frac, x, y, K = flash_TP_eos(eos, z=[0.5, 0.5], T=250.0, P=2e6)
+```
+
+### Property Database
+Built-in database with 55+ common species including critical properties and ideal thermo data:
+
+```python
+from difflow import (
+    get_species_data, get_critical_props, list_species,
+    get_alkanes, get_btex, get_common_solvents,
+)
+
+# Get species data for ideal thermodynamics
+methanol = get_species_data("methanol")
+thermo = IdealThermo({"methanol": methanol, "water": get_species_data("water")})
+
+# Get critical properties for EOS
+methane = get_critical_props("methane")
+eos = PengRobinson({"methane": methane, "ethane": get_critical_props("ethane")})
+
+# Convenience functions
+alkanes = get_alkanes()           # methane through n-decane
+btex = get_btex()                 # benzene, toluene, ethylbenzene, xylenes
+solvents = get_common_solvents()  # water, methanol, ethanol, acetone, etc.
+
+# Alias support: "CO2", "MeOH", "isopropanol", "IPA" all work
+co2 = get_critical_props("CO2")
+
+# List all available species
+print(list_species())
+```
+
+### Activity Coefficient Models (for LLE)
+- **NRTL**: Non-Random Two-Liquid model with temperature-dependent parameters
+- **UNIQUAC**: Universal Quasi-Chemical model
 
 ## Technoeconomic Analysis (TEA)
 
@@ -361,6 +517,45 @@ grad_profit = jax.grad(annual_profit)
 # Use gradient for optimization...
 ```
 
+## Uncertainty Propagation
+
+Leverage JAX's automatic differentiation for uncertainty quantification:
+
+```python
+from difflow import linear_propagation, monte_carlo_propagation, sensitivity_analysis
+
+# Define a process model
+def reactor_model(params):
+    k = params['k0'] * jnp.exp(-params['Ea'] / (8.314 * params['T']))
+    conversion = 1 - jnp.exp(-k * params['tau'])
+    return conversion
+
+nominal = {'k0': jnp.array(1e6), 'Ea': jnp.array(50000.0),
+           'T': jnp.array(350.0), 'tau': jnp.array(100.0)}
+uncertainties = {'k0': 1e5, 'Ea': 2000.0, 'T': 5.0, 'tau': 10.0}
+
+# Linear (Jacobian-based) propagation - fast, first-order approximation
+mean, std, info = linear_propagation(reactor_model, nominal, uncertainties)
+print(f"Conversion: {mean:.3f} ± {std:.3f}")
+print(f"Variance contributions: {info['variance_contributions']}")
+
+# Monte Carlo propagation - handles non-linear models
+mean_mc, std_mc, info_mc = monte_carlo_propagation(
+    reactor_model, nominal, uncertainties, n_samples=10000
+)
+
+# Sensitivity analysis with gradient information
+sens = sensitivity_analysis(reactor_model, nominal)
+# Returns: gradient, elasticity (normalized sensitivity), variance contribution
+```
+
+Available functions:
+- `linear_propagation()`: First-order Jacobian-based uncertainty propagation
+- `monte_carlo_propagation()`: Parallel sampling using JAX vmap
+- `sensitivity_analysis()`: Local gradient-based sensitivity with variance contributions
+- `sobol_indices()`: Global sensitivity via Sobol sampling
+- `propagate_covariance()`: Full covariance matrix propagation for correlated inputs
+
 ## Flowsheets with Recycles
 
 ```python
@@ -387,7 +582,7 @@ recycle = fixed_point_solve(
 
 Jupyter notebooks are in the `examples/` directory:
 
-| Notebook/Script | Description |
+| Notebook | Description |
 |----------|-------------|
 | `00_cstr_pfr_basics.ipynb` | CSTR and PFR basics: conventional vs difflow |
 | `01_cstr_flash_recycle.ipynb` | Complete flowsheet with CSTR, flash, and recycle |
@@ -395,6 +590,8 @@ Jupyter notebooks are in the `examples/` directory:
 | `03_optimization.ipynb` | Gradient-based optimization problems |
 | `04_rare_earth_extraction.ipynb` | Rare earth recovery using LLE |
 | `05_technoeconomic_analysis.ipynb` | Comprehensive TEA with profit optimization |
+| `06_uncertainty_propagation.ipynb` | Uncertainty propagation and sensitivity analysis |
+| `07_heat_exchangers.ipynb` | Heat exchanger design, rating, and optimization |
 
 ```bash
 # Launch Jupyter to explore examples
@@ -419,7 +616,7 @@ The `tutorials/` directory contains comprehensive JAX tutorials for differentiab
 
 1. **Streams as Dicts**: Simple `{"F_A": ..., "F_B": ..., "T": ..., "P": ...}` format that's a JAX pytree by default
 
-2. **User-Provided Properties**: No built-in database; you define species data for your system
+2. **Property Database Available**: Built-in database with 55+ species, or define custom species data
 
 3. **Function-Based Kinetics**: Maximum flexibility via `rate_fn(C, T, params) → rates`
 
@@ -429,16 +626,16 @@ The `tutorials/` directory contains comprehensive JAX tutorials for differentiab
 
 ## Limitations
 
-- VLE only supports ideal thermodynamics (Raoult's law)
+- Rigorous distillation column convergence can be sensitive to initial guesses
 - Gradient explosion possible with many iterations (use damping)
-- No built-in species database
+- EOS flash limited to two-phase VLE (no three-phase VLLE yet)
 
 ## Future Work
 
-- Equation of state (Peng-Robinson, SRK) for VLE
-- More unit operations (distillation columns, heat exchangers)
+- Three-phase (VLLE) flash calculations
 - Extended bio operations (viral inactivation, sterile filtration)
 - GPU acceleration for large flowsheets
+- Integration with experiment databases (e.g., Cantera)
 
 ## License
 
