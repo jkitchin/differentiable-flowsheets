@@ -34,6 +34,15 @@ from difflow.eos import (
     EOSParams,
     flash_TP_eos,
 )
+from difflow.database import (
+    get_species,
+    get_critical_props,
+    get_species_info,
+    list_species,
+    get_alkanes,
+    get_btex,
+    get_common_solvents,
+)
 from difflow.units.cstr import CSTR, CSTRParams
 from difflow.units.pfr import PFR, PFRParams, GasPFR, GasPFRParams
 from difflow.units.fed_batch import (
@@ -105,6 +114,14 @@ __all__ = [
     "CriticalProperties",
     "EOSParams",
     "flash_TP_eos",
+    # Property Database
+    "get_species",
+    "get_critical_props",
+    "get_species_info",
+    "list_species",
+    "get_alkanes",
+    "get_btex",
+    "get_common_solvents",
     # Unit operations - CSTR
     "CSTR",
     "CSTRParams",
