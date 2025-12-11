@@ -158,6 +158,14 @@ from difflow.dynamic import (
     # Flowsheet
     DynamicFlowsheet,
     DynamicFlowsheetResult,
+    # DAE
+    DAEUnit,
+    DAEUnitBase,
+    AlgebraicVar,
+    AlgebraicSpec,
+    integrate_dae,
+    DAEResult,
+    DynamicFlashDrum,
 )
 
 __all__ = [
@@ -294,4 +302,12 @@ __all__ = [
     "Trajectory",
     "DynamicFlowsheet",
     "DynamicFlowsheetResult",
+    # DAE
+    "DAEUnit",
+    "DAEUnitBase",
+    "AlgebraicVar",
+    "AlgebraicSpec",
+    "integrate_dae",
+    "DAEResult",
+    "DynamicFlashDrum",
 ]

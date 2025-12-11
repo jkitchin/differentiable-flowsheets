@@ -29,6 +29,13 @@ Key Components
 - DynamicFlowsheetResult: Result container with unit access
 - DynamicUnitEntry: Unit registration in flowsheet
 
+**DAE Support** (dae.py):
+- DAEUnit: Protocol for units with algebraic constraints
+- DAEUnitBase: Base class for DAE units
+- AlgebraicVar/AlgebraicSpec: Algebraic state specification
+- integrate_dae(): DAE integration with Newton solver
+- DynamicFlashDrum: Example DAE unit with VLE equilibrium
+
 Example Usage
 -------------
 
@@ -158,6 +165,33 @@ from difflow.dynamic.flowsheet import (
     FlowsheetState,
 )
 
+# DAE support
+from difflow.dynamic.dae import (
+    # Algebraic specification
+    AlgebraicVar,
+    AlgebraicSpec,
+    AlgebraicVector,
+    # DAE protocol and base
+    DAEUnit,
+    DAEUnitBase,
+    # DAE integration
+    integrate_dae,
+    dae_step_euler,
+    dae_step_rk4,
+    DAEResult,
+    DAEMethod,
+    # Newton solver
+    newton_solve,
+    solve_algebraic,
+    # Utility functions
+    vapor_fraction_algebraic,
+    k_value_algebraic,
+    pressure_algebraic,
+    equilibrium_extent_algebraic,
+    # Example units
+    DynamicFlashDrum,
+)
+
 __all__ = [
     # State
     "StateVar",
@@ -198,4 +232,22 @@ __all__ = [
     "DynamicUnitEntry",
     "Connection",
     "FlowsheetState",
+    # DAE
+    "AlgebraicVar",
+    "AlgebraicSpec",
+    "AlgebraicVector",
+    "DAEUnit",
+    "DAEUnitBase",
+    "integrate_dae",
+    "dae_step_euler",
+    "dae_step_rk4",
+    "DAEResult",
+    "DAEMethod",
+    "newton_solve",
+    "solve_algebraic",
+    "vapor_fraction_algebraic",
+    "k_value_algebraic",
+    "pressure_algebraic",
+    "equilibrium_extent_algebraic",
+    "DynamicFlashDrum",
 ]
