@@ -10,6 +10,7 @@ A JAX-based framework for building and optimizing chemical process flowsheets wi
 - **Sensitivity Analysis**: Compute gradients of outputs with respect to any inputs, parameters, or operating conditions
 - **Optimization Ready**: Use gradient-based optimization for process design, parameter estimation, and economic optimization
 - **Modular Design**: Unit operations can be composed into complex flowsheets with recycle streams
+- **Technoeconomic Analysis**: Comprehensive TEA module with equipment costs, operating costs, and profitability metrics (NPV, IRR, MSP)
 - **Bio Manufacturing**: Specialized unit operations for biopharmaceutical processes (bioreactors, chromatography, filtration)
 - **Interactive Visualization**: Generate flowsheet diagrams directly from your code with Plotly
 
@@ -262,6 +263,111 @@ SpeciesData(
 )
 ```
 
+## Technoeconomic Analysis (TEA)
+
+The `difflow.economics` module provides comprehensive technoeconomic analysis capabilities, all fully differentiable for gradient-based optimization.
+
+### Capital Costs
+
+Equipment cost correlations with CEPCI escalation and installation factors:
+
+```python
+import difflow.economics as econ
+import jax.numpy as jnp
+
+# Equipment costs (2024 dollars)
+reactor_cost = econ.reactor_cost(jnp.array(5.0), "cstr_jacketed")  # 5 m³
+hx_cost = econ.heat_exchanger_cost(jnp.array(100.0), "shell_tube_floating")  # 100 m²
+pump_cost = econ.pump_cost(jnp.array(10.0), "centrifugal_single")  # 10 kW
+
+# Installed cost with Lang factor
+installed = econ.installed_cost(reactor_cost, lang_factor=4.74)
+
+# Total capital investment
+tci = econ.total_capital_investment(
+    purchased_equipment_cost=reactor_cost + hx_cost + pump_cost,
+    lang_factor=4.74,
+    working_capital_fraction=0.15,
+)
+```
+
+Available equipment types:
+- **Reactors**: CSTR (jacketed, coil), PFR, batch
+- **Vessels**: Pressure vessels, storage tanks, flash drums
+- **Heat Exchangers**: Shell-tube, double-pipe, plate-frame, air coolers
+- **Columns**: Tray columns, packed columns
+- **Pumps**: Centrifugal, reciprocating, gear
+- **Compressors**: Centrifugal, reciprocating, screw
+- **Separators**: Mixer-settlers, centrifuges, filters, extraction columns
+
+### Utility Costs
+
+```python
+# Steam cost from heat duty
+heating_cost = econ.steam_cost_from_duty(jnp.array(1e6), "medium_pressure")  # 1 MW
+
+# Cooling water
+cooling_cost = econ.cooling_water_cost(jnp.array(500e3))  # 500 kW
+
+# Electricity
+electricity_cost = econ.electricity_cost(jnp.array(100.0))  # 100 kW → $/hour
+```
+
+### Profitability Metrics
+
+All metrics are JAX-differentiable:
+
+```python
+# Net Present Value
+cash_flows = jnp.ones(20) * 500000  # $500k/year for 20 years
+npv = econ.npv(cash_flows, jnp.array(0.10), jnp.array(2e6))  # 10% discount, $2M investment
+
+# Internal Rate of Return
+irr = econ.irr(cash_flows, jnp.array(2e6))
+
+# Minimum Selling Price
+msp = econ.minimum_selling_price(
+    total_annual_cost=jnp.array(1e6),
+    annual_production=jnp.array(50000.0),  # kg/year
+)
+
+# Annualized cost for optimization
+tac = econ.annualized_cost(
+    capital_cost=jnp.array(5e6),
+    annual_opex=jnp.array(1e6),
+    discount_rate=jnp.array(0.10),
+    plant_life=jnp.array(20.0),
+)
+```
+
+### Gradient-Based Economic Optimization
+
+```python
+import jax
+
+def annual_profit(params):
+    V, T = params[0], params[1]
+
+    # Simulate process
+    outlet, info = simulate_reactor(V, T)
+
+    # Economics
+    capex = econ.reactor_cost(V, "cstr_jacketed")
+    installed = econ.installed_cost(capex)
+
+    utility_cost = econ.cooling_water_cost(jnp.abs(info["Q"]))
+    annual_utility = utility_cost * 8000 * 3600  # $/year
+
+    revenue = outlet["F_product"] * product_price * 8000 * 3600
+
+    crf = econ.capital_recovery_factor(jnp.array(0.10), jnp.array(20.0))
+    return revenue - annual_utility - installed * crf
+
+# Optimize design for maximum profit
+grad_profit = jax.grad(annual_profit)
+# Use gradient for optimization...
+```
+
 ## Flowsheets with Recycles
 
 ```python
@@ -288,7 +394,7 @@ recycle = fixed_point_solve(
 
 Jupyter notebooks are in the `examples/` directory:
 
-| Notebook | Description |
+| Notebook/Script | Description |
 |----------|-------------|
 | `01_cstr_flash_recycle.ipynb` | Complete flowsheet with CSTR, flash, and recycle |
 | `02_cstr_sensitivity.ipynb` | Sensitivity analysis for CSTR parameters |
@@ -296,6 +402,7 @@ Jupyter notebooks are in the `examples/` directory:
 | `04_rare_earth_extraction.ipynb` | Rare earth recovery using LLE |
 | `05_mab_downstream.ipynb` | mAb purification process (bio manufacturing) |
 | `08_flowsheet_visualization.ipynb` | Interactive visualization tutorial |
+| `technoeconomic_analysis.py` | Comprehensive TEA with profit optimization |
 
 ```bash
 # Launch Jupyter to explore examples
