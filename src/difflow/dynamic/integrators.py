@@ -337,10 +337,10 @@ def integrate_rk45(
     t_end, y_final, dt_final, n_steps, t_history, y_history, n_evals = final_state
 
     # Trim history to actual steps taken
-    # Note: n_steps is the index of the last filled entry
-    n_steps_int = int(n_steps) + 1  # Convert to Python int for slicing
+    # n_steps is the number of accepted steps, so we have data at indices 0..n_steps
+    n_steps_int = int(n_steps)
     trajectory = Trajectory(
-        t=t_history[:n_steps_int + 1],
+        t=t_history[:n_steps_int + 1],  # indices 0 to n_steps inclusive
         y=y_history[:n_steps_int + 1],
     )
 
