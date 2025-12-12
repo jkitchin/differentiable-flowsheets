@@ -20,6 +20,7 @@
 | [Getting Started](getting-started.md) | Installation, quick start, and basic examples |
 | [Unit Operations - Chemical](unit-operations-chemical.md) | Reactors, separators, heat exchangers, distillation |
 | [Unit Operations - Bio](unit-operations-bio.md) | Bioreactors, centrifugation, filtration, chromatography |
+| [Unit Operations - REE](unit-operations-ree.md) | Rare earth element extraction, scrubbing, stripping, precipitation |
 | [Thermodynamics](thermodynamics.md) | Property calculations, equations of state, databases |
 | [Technoeconomics](technoeconomics.md) | Capital costs, operating costs, profitability analysis |
 | [Streams and Flowsheets](streams-and-flowsheets.md) | Stream handling, flowsheet solver, recycle calculations |

@@ -4,6 +4,18 @@
 format: jb-book
 root: README
 parts:
+  - caption: Documentation
+    chapters:
+      - file: docs/index
+      - file: docs/getting-started
+      - file: docs/unit-operations-chemical
+      - file: docs/unit-operations-bio
+      - file: docs/unit-operations-ree
+      - file: docs/thermodynamics
+      - file: docs/technoeconomics
+      - file: docs/streams-and-flowsheets
+      - file: docs/solvers-and-utilities
+
   - caption: Tutorials
     chapters:
       - glob: tutorials/*

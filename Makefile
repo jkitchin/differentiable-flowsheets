@@ -2,7 +2,7 @@
 
 NOTEBOOKS := $(wildcard examples/*.ipynb)
 
-.PHONY: all notebooks clean test
+.PHONY: all notebooks clean test book book-clean
 
 all: notebooks
 
@@ -28,3 +28,15 @@ clean:
 	rm -f test_flowsheet.html
 	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name ".pytest_cache" -exec rm -rf {} + 2>/dev/null || true
+
+# Build jupyter book
+book:
+	jupyter-book build .
+
+# Clean jupyter book build
+book-clean:
+	jupyter-book clean .
+
+# Build and serve jupyter book locally
+book-serve: book
+	python -m http.server 8000 --directory _build/html
