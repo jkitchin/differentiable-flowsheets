@@ -17,6 +17,7 @@ dependencies = [
 dev = [
     "pytest>=7.0",
     "pytest-cov",
+    "jupyter-book<2.0",
 ]
 examples = [
     "matplotlib>=3.5.0",
