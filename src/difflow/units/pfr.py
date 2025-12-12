@@ -32,7 +32,7 @@ The design equation is integrated from V=0 to V=V_total using a
 differentiable ODE solver (RK4).
 """
 
-from typing import Callable, Literal
+from typing import Callable, Literal, Any
 from dataclasses import dataclass
 import jax.numpy as jnp
 from jax import Array
@@ -40,10 +40,14 @@ import jax.lax as lax
 
 from difflow.streams import Stream, get_flows, make_stream
 from difflow.thermo import IdealThermo
+from difflow.dynamic.state import StateSpec, StateVar
 
 
 # Type alias for rate function
 RateFunction = Callable[[dict[str, Array], Array, dict], Array]
+
+# Type alias for parameters
+Params = dict[str, Any]
 
 
 @dataclass
@@ -306,6 +310,133 @@ class PFR:
         }
 
         return F_final, T_final, profiles
+
+    # =========================================================================
+    # DynamicUnit Interface Methods (Pseudo-Steady-State)
+    # =========================================================================
+    #
+    # The PFR is treated as always at spatial steady-state (fast dynamics).
+    # The state represents outlet conditions, and derivatives are zero.
+    # This is valid when reactor residence time << timescales of interest.
+
+    def state_spec(self) -> StateSpec:
+        """Return specification of state variables.
+
+        For pseudo-steady-state PFR, state = outlet flows (for tracking).
+        The spatial integration is done internally, not exposed as state.
+
+        Returns:
+            StateSpec with outlet flow states
+        """
+        p = self.params
+        variables = []
+
+        for s in p.species_order:
+            variables.append(StateVar(
+                name=f"F_out_{s}",
+                category="moles",
+                units="mol/s",
+                description=f"Outlet flow of {s}",
+                bounds=(0.0, None),
+                scale=1.0,
+            ))
+
+        if self.mode == "adiabatic":
+            variables.append(StateVar(
+                name="T_out",
+                category="temperature",
+                units="K",
+                description="Outlet temperature",
+                scale=300.0,
+            ))
+
+        return StateSpec(variables)
+
+    def initial_state(
+        self,
+        inputs: dict[str, Stream],
+        params: Params | None = None,
+    ) -> Array:
+        """Compute initial state by running the spatial integration.
+
+        Args:
+            inputs: Dictionary with "inlet" stream
+            params: Optional parameters (T_spec, volumetric_flow)
+
+        Returns:
+            Initial state array (outlet flows and T)
+        """
+        inlet = inputs.get("inlet") or list(inputs.values())[0]
+
+        # Run the PFR calculation
+        T_spec = params.get("T_spec") if params else None
+        Q_v = params.get("volumetric_flow") if params else None
+
+        outlet, info = self(inlet, T_spec=T_spec, volumetric_flow=Q_v)
+
+        # Extract outlet state
+        outlet_flows = get_flows(outlet)
+        F_out = jnp.array([outlet_flows[s] for s in self.params.species_order])
+
+        if self.mode == "adiabatic":
+            T_out = outlet["T"]
+            return jnp.concatenate([F_out, jnp.array([T_out])])
+
+        return F_out
+
+    def derivatives(
+        self,
+        t: Array,
+        state: Array,
+        inputs: dict[str, Stream],
+        params: Params | None = None,
+    ) -> Array:
+        """Compute time derivatives (zero for pseudo-steady-state).
+
+        The PFR is assumed to reach spatial steady-state instantaneously.
+        For true dynamic PFR simulation, use a discretized model.
+
+        Args:
+            t: Current time
+            state: Current state array
+            inputs: Dictionary of inlet streams
+            params: Optional parameters
+
+        Returns:
+            Array of zeros (steady state)
+        """
+        return jnp.zeros_like(state)
+
+    def outputs(
+        self,
+        t: Array,
+        state: Array,
+        inputs: dict[str, Stream],
+        params: Params | None = None,
+    ) -> dict[str, Stream]:
+        """Compute outlet stream by running spatial integration.
+
+        Note: For pseudo-steady-state, we re-run the spatial integration
+        from the current inlet. The 'state' is updated but not directly
+        used for output (the outlet depends on current inlet).
+
+        Args:
+            t: Current time
+            state: Current state (not used directly)
+            inputs: Dictionary of inlet streams
+            params: Optional parameters
+
+        Returns:
+            Dictionary with "outlet" stream
+        """
+        inlet = inputs.get("inlet") or list(inputs.values())[0]
+
+        T_spec = params.get("T_spec") if params else None
+        Q_v = params.get("volumetric_flow") if params else None
+
+        outlet, info = self(inlet, T_spec=T_spec, volumetric_flow=Q_v)
+
+        return {"outlet": outlet, "profiles": info.get("profiles")}
 
 
 @dataclass
@@ -650,6 +781,96 @@ class GasPFR:
         }
 
         return F_final, T_final, P_final, profiles
+
+    # =========================================================================
+    # DynamicUnit Interface Methods (Pseudo-Steady-State)
+    # =========================================================================
+
+    def state_spec(self) -> StateSpec:
+        """Return specification of state variables.
+
+        For pseudo-steady-state GasPFR, state = outlet flows, T, P.
+
+        Returns:
+            StateSpec with outlet flow states
+        """
+        p = self.params
+        variables = []
+
+        for s in p.species_order:
+            variables.append(StateVar(
+                name=f"F_out_{s}",
+                category="moles",
+                units="mol/s",
+                description=f"Outlet flow of {s}",
+                bounds=(0.0, None),
+                scale=1.0,
+            ))
+
+        variables.append(StateVar(
+            name="T_out",
+            category="temperature",
+            units="K",
+            description="Outlet temperature",
+            scale=300.0,
+        ))
+
+        variables.append(StateVar(
+            name="P_out",
+            category="pressure",
+            units="Pa",
+            description="Outlet pressure",
+            scale=101325.0,
+        ))
+
+        return StateSpec(variables)
+
+    def initial_state(
+        self,
+        inputs: dict[str, Stream],
+        params: Params | None = None,
+    ) -> Array:
+        """Compute initial state by running the spatial integration."""
+        inlet = inputs.get("inlet") or list(inputs.values())[0]
+
+        T_spec = params.get("T_spec") if params else None
+        Q_v = params.get("volumetric_flow") if params else None
+
+        outlet, info = self(inlet, T_spec=T_spec, volumetric_flow=Q_v)
+
+        outlet_flows = get_flows(outlet)
+        F_out = jnp.array([outlet_flows[s] for s in self.params.species_order])
+        T_out = outlet["T"]
+        P_out = outlet["P"]
+
+        return jnp.concatenate([F_out, jnp.array([T_out, P_out])])
+
+    def derivatives(
+        self,
+        t: Array,
+        state: Array,
+        inputs: dict[str, Stream],
+        params: Params | None = None,
+    ) -> Array:
+        """Compute time derivatives (zero for pseudo-steady-state)."""
+        return jnp.zeros_like(state)
+
+    def outputs(
+        self,
+        t: Array,
+        state: Array,
+        inputs: dict[str, Stream],
+        params: Params | None = None,
+    ) -> dict[str, Stream]:
+        """Compute outlet stream by running spatial integration."""
+        inlet = inputs.get("inlet") or list(inputs.values())[0]
+
+        T_spec = params.get("T_spec") if params else None
+        Q_v = params.get("volumetric_flow") if params else None
+
+        outlet, info = self(inlet, T_spec=T_spec, volumetric_flow=Q_v)
+
+        return {"outlet": outlet, "profiles": info.get("profiles")}
 
 
 def pfr_conversion_analytical(

@@ -11,19 +11,30 @@ where:
     Q = heat duty (W), positive = heat added
     H = enthalpy flow (W)
     dH_rxn = heat of reaction (J/mol)
+
+This module also supports dynamic simulation via the DynamicUnit interface:
+    dn_i/dt = F_in_i - F_out_i + V * sum_j(nu_ij * r_j)
+    d(n*Cp*T)/dt = F_in*Cp*(T_in - T) + V*sum_j(r_j*(-dH_j)) + Q
+
+The CSTR class implements both the original steady-state __call__ interface
+and the new DynamicUnit protocol for unified dynamic modeling.
 """
 
-from typing import Callable, Literal
+from typing import Callable, Literal, Any
 from dataclasses import dataclass
 import jax.numpy as jnp
 from jax import Array
 
 from difflow.streams import Stream, get_flows, get_species, make_stream
 from difflow.thermo import IdealThermo
+from difflow.dynamic.state import StateSpec, StateVar, StateVector
 
 
 # Type alias for rate function
 RateFunction = Callable[[dict[str, Array], Array, dict], Array]
+
+# Type alias for parameters dict
+Params = dict[str, Any]
 
 
 @dataclass
@@ -443,3 +454,245 @@ class CSTR:
         rates = p.rate_fn(C_out, T_out, p.rate_params)
 
         return outlet_flows, T_out, rates
+
+    # =========================================================================
+    # DynamicUnit Interface Methods
+    # =========================================================================
+
+    def state_spec(self) -> StateSpec:
+        """Return specification of state variables for dynamic simulation.
+
+        State variables:
+        - n_<species>: Moles of each species in the reactor (mol)
+        - T: Temperature (K) - only for non-isothermal modes
+
+        Returns:
+            StateSpec describing all state variables
+        """
+        p = self.params
+        variables = []
+
+        # Molar holdup for each species
+        for s in p.species_order:
+            variables.append(StateVar(
+                name=f"n_{s}",
+                category="moles",
+                units="mol",
+                description=f"Moles of {s} in reactor",
+                bounds=(0.0, None),
+                scale=1.0,
+            ))
+
+        # Temperature for non-isothermal
+        if self.mode != "isothermal":
+            variables.append(StateVar(
+                name="T",
+                category="temperature",
+                units="K",
+                description="Reactor temperature",
+                bounds=(200.0, 1000.0),
+                scale=300.0,
+                initial_value=300.0,
+            ))
+
+        return StateSpec(variables)
+
+    def initial_state(
+        self,
+        inputs: dict[str, Stream],
+        params: Params | None = None,
+    ) -> Array:
+        """Compute initial state from inlet streams.
+
+        Initializes molar holdup based on inlet composition and an assumed
+        residence time. For startup, the reactor is assumed to contain
+        material at inlet composition.
+
+        Args:
+            inputs: Dictionary of inlet streams (expects "inlet" key)
+            params: Optional parameter overrides
+
+        Returns:
+            Initial state array [n_species..., T?]
+        """
+        p = self.params
+        V = p.V
+
+        # Get inlet stream
+        inlet = inputs.get("inlet") or list(inputs.values())[0]
+        inlet_flows = get_flows(inlet)
+
+        # Total inlet flow and composition
+        F_total = sum(inlet_flows.values())
+        if F_total < 1e-10:
+            F_total = 1e-10
+
+        # Estimate residence time (or use provided)
+        tau = params.get("tau_init", 60.0) if params else 60.0  # Default 1 min
+
+        # Initial moles = F_in * tau (fills reactor to steady-state holdup)
+        n0 = jnp.array([inlet_flows.get(s, 0.0) * tau for s in p.species_order])
+
+        if self.mode != "isothermal":
+            T0 = inlet["T"]
+            return jnp.concatenate([n0, jnp.array([T0])])
+
+        return n0
+
+    def derivatives(
+        self,
+        t: Array,
+        state: Array,
+        inputs: dict[str, Stream],
+        params: Params | None = None,
+    ) -> Array:
+        """Compute time derivatives for dynamic simulation.
+
+        Material balance:
+            dn_i/dt = F_in_i - F_out_i + V * sum_j(nu_ij * r_j)
+
+        Energy balance (non-isothermal):
+            d(n*Cp*T)/dt = F_in*Cp*(T_in - T) + V*sum_j(r_j*(-dH_j)) + Q
+
+        Args:
+            t: Current time (not used, CSTR is autonomous)
+            state: Current state array [n_species..., T?]
+            inputs: Dictionary of inlet streams
+            params: Optional parameter overrides (can include "Q_ext", "T_spec")
+
+        Returns:
+            Array of derivatives [dn/dt..., dT/dt?]
+        """
+        p = self.params
+        species = p.species_order
+        n_species = len(species)
+        V = p.V
+
+        # Extract state variables
+        n = state[:n_species]
+        n_total = jnp.sum(n) + 1e-10
+
+        # Temperature
+        if self.mode == "isothermal":
+            # Use inlet T or specified T
+            inlet = inputs.get("inlet") or list(inputs.values())[0]
+            T = params.get("T_spec", inlet["T"]) if params else inlet["T"]
+        else:
+            T = state[n_species]
+
+        # Concentrations in reactor
+        C = {s: n[i] / V for i, s in enumerate(species)}
+
+        # Get inlet stream
+        inlet = inputs.get("inlet") or list(inputs.values())[0]
+        inlet_flows = get_flows(inlet)
+        F_in = jnp.array([inlet_flows.get(s, 0.0) for s in species])
+        F_in_total = jnp.sum(F_in)
+
+        # Outlet flow rate (constant volume assumption: F_out_total = F_in_total)
+        # Outlet composition is reactor composition
+        x_out = n / n_total
+        F_out = F_in_total * x_out
+
+        # Reaction rates
+        r = p.rate_fn(C, T, p.rate_params)
+
+        # Material balance: dn/dt = F_in - F_out + V * stoich @ r
+        dn_dt = F_in - F_out + V * (p.stoich @ r)
+
+        if self.mode == "isothermal":
+            return dn_dt
+
+        # Energy balance for non-isothermal
+        # Simplified model: constant Cp, perfect mixing
+        Cp = 75.0  # J/mol/K (approximate for liquid)
+
+        # Heat from reaction
+        if p.dH_rxn is not None:
+            Q_rxn = -V * jnp.sum(r * p.dH_rxn)  # Positive for exothermic
+        else:
+            Q_rxn = 0.0
+
+        # Heat from flow
+        T_in = inlet["T"]
+        Q_flow = F_in_total * Cp * (T_in - T)
+
+        # External heat
+        if self.mode == "adiabatic":
+            Q_ext = 0.0
+        else:  # specified_duty
+            Q_ext = params.get("Q_ext", 0.0) if params else 0.0
+
+        # dT/dt = (Q_flow + Q_rxn + Q_ext) / (n_total * Cp)
+        dT_dt = (Q_flow + Q_rxn + Q_ext) / (n_total * Cp + 1e-10)
+
+        return jnp.concatenate([dn_dt, jnp.array([dT_dt])])
+
+    def outputs(
+        self,
+        t: Array,
+        state: Array,
+        inputs: dict[str, Stream],
+        params: Params | None = None,
+    ) -> dict[str, Stream]:
+        """Compute outlet stream from current state.
+
+        Maps internal molar holdup to outlet molar flow rates based on
+        perfect mixing (outlet composition = reactor composition).
+
+        Args:
+            t: Current time
+            state: Current state array
+            inputs: Dictionary of inlet streams
+            params: Optional parameter overrides
+
+        Returns:
+            Dictionary with "outlet" stream
+        """
+        p = self.params
+        species = p.species_order
+        n_species = len(species)
+
+        # Extract state
+        n = state[:n_species]
+        n_total = jnp.sum(n) + 1e-10
+        x_out = n / n_total
+
+        # Get inlet for flow rate basis
+        inlet = inputs.get("inlet") or list(inputs.values())[0]
+        inlet_flows = get_flows(inlet)
+        F_in_total = sum(inlet_flows.values())
+
+        # Outlet flows (constant volume: F_out = F_in)
+        outlet_flows = {s: F_in_total * x_out[i] for i, s in enumerate(species)}
+
+        # Temperature
+        if self.mode == "isothermal":
+            T_out = params.get("T_spec", inlet["T"]) if params else inlet["T"]
+        else:
+            T_out = state[n_species]
+
+        # Pressure (constant)
+        P = inlet["P"]
+
+        return {"outlet": make_stream(outlet_flows, T_out, P)}
+
+    def residual(
+        self,
+        state: Array,
+        inputs: dict[str, Stream],
+        params: Params | None = None,
+    ) -> Array:
+        """Compute residual for steady-state (derivatives = 0).
+
+        This can be used to find steady-state by solving residual = 0.
+
+        Args:
+            state: State array
+            inputs: Inlet streams
+            params: Optional parameters
+
+        Returns:
+            Residual array (should be zero at steady state)
+        """
+        return self.derivatives(jnp.array(0.0), state, inputs, params)

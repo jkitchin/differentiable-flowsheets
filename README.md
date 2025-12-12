@@ -592,6 +592,7 @@ Jupyter notebooks are in the `examples/` directory:
 | `05_technoeconomic_analysis.ipynb` | Comprehensive TEA with profit optimization |
 | `06_uncertainty_propagation.ipynb` | Uncertainty propagation and sensitivity analysis |
 | `07_heat_exchangers.ipynb` | Heat exchanger design, rating, and optimization |
+| `10_dynamic_modeling.ipynb` | Dynamic simulation, DAE systems, diffrax backend |
 
 ```bash
 # Launch Jupyter to explore examples
@@ -623,6 +624,126 @@ The `tutorials/` directory contains comprehensive JAX tutorials for differentiab
 4. **Unrolled Iteration**: Fixed-point solvers use `lax.scan` for automatic differentiability
 
 5. **Continuous Relaxation**: Discrete parameters (like n_stages) can be relaxed to continuous values for optimization
+
+## Dynamic Modeling
+
+The `difflow.dynamic` module provides a unified framework for transient simulation of process units:
+
+### Basic ODE Integration
+
+```python
+from difflow.dynamic import integrate
+import jax.numpy as jnp
+
+# Define any ODE system
+def harmonic_oscillator(t, y):
+    x, v = y[0], y[1]
+    return jnp.array([v, -x])  # dx/dt = v, dv/dt = -x
+
+result = integrate(
+    harmonic_oscillator,
+    y0=jnp.array([1.0, 0.0]),
+    t_span=(0.0, 10.0),
+    method="RK4",  # or "RK45", "Euler"
+)
+print(f"Final state: {result.y_final}")
+print(f"Trajectory shape: {result.trajectory.y.shape}")
+```
+
+### Dynamic Unit Operations
+
+```python
+from difflow.dynamic import DynamicCSTR, integrate_unit
+from difflow.streams import make_stream
+
+# Define reaction kinetics
+def rate_fn(C, T, params):
+    k = params["k"] * jnp.exp(-params["Ea"] / (8.314 * T))
+    return jnp.array([k * C["A"]])
+
+# Create dynamic CSTR
+cstr = DynamicCSTR(
+    volume=1.0,
+    rate_fn=rate_fn,
+    stoich=jnp.array([[-1], [1]]),  # A -> B
+    species_order=["A", "B"],
+    rate_params={"k": 1e6, "Ea": 50000.0},
+)
+
+# Simulate startup from empty
+inlet = make_stream({"A": 1.0, "B": 0.0}, T=350.0, P=101325.0)
+result = integrate_unit(
+    cstr,
+    inputs={"inlet": inlet},
+    t_span=(0.0, 1000.0),
+    method="RK4",
+)
+```
+
+### Dynamic Flowsheets
+
+Connect multiple dynamic units for multi-unit transient simulation:
+
+```python
+from difflow.dynamic import DynamicFlowsheet, DynamicCSTR, DynamicTank
+
+# Build flowsheet
+fs = DynamicFlowsheet(species_order=["A", "B"])
+fs.add_feed("feed", inlet_stream)
+fs.add_unit(cstr, inlet_names=["feed"], outlet_names=["reactor_out"])
+fs.add_unit(tank, inlet_names=["reactor_out"], outlet_names=["product"])
+
+# Simulate entire flowsheet
+result = fs.simulate(t_span=(0.0, 1000.0), method="RK4")
+```
+
+### DAE (Differential-Algebraic Equations)
+
+For systems with algebraic constraints (e.g., VLE equilibrium):
+
+```python
+from difflow.dynamic import DynamicFlashDrum, integrate_dae
+
+# Flash drum with VLE equilibrium constraint
+flash = DynamicFlashDrum(
+    volume=1.0,
+    species_order=["A", "B"],
+    K_values={"A": 2.0, "B": 0.5},  # K = y/x
+)
+
+result = integrate_dae(
+    flash,
+    inputs={"inlet": feed},
+    t_span=(0.0, 100.0),
+    method="RK4",
+)
+# result.x_final: differential states (moles)
+# result.z_final: algebraic states (vapor fraction)
+```
+
+### Diffrax Backend (Advanced Solvers)
+
+For stiff systems or when adaptive step control is needed:
+
+```bash
+pip install diffrax  # Optional dependency
+```
+
+```python
+from difflow.dynamic import integrate
+
+# Use diffrax solvers via method string
+result = integrate(
+    stiff_ode, y0, t_span,
+    method="diffrax:kvaerno5",  # Implicit solver for stiff systems
+    rtol=1e-6, atol=1e-8,
+)
+
+# Available solvers: dopri5, tsit5, dopri8, kvaerno3/4/5, euler, heun
+# Default: tsit5 (recommended for most problems)
+```
+
+See `docs/dynamic-modeling.md` for complete documentation.
 
 ## Limitations
 
