@@ -39,4 +39,6 @@ book-clean:
 
 # Build and serve jupyter book locally
 book-serve: book
+	@echo "Opening browser and starting server at http://localhost:8000"
+	@open http://localhost:8000 || xdg-open http://localhost:8000 || echo "Open http://localhost:8000 in your browser"
 	python -m http.server 8000 --directory _build/html
