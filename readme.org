@@ -9,10 +9,12 @@ DEADLINE: <2025-12-17 Wed +1w>
 :LOGGING: nil
 :END:
 
-** Visualization
+** DONE Visualization
 
-I had a vizualization tool but it wasn't very good. We probably need icons for the operations, and labels for streams, interactivity. It might be a big task.
+I had a visualization tool but it wasn't very good. We probably need icons for the operations, and labels for streams, interactivity. It might be a big task.
 
-** Rare earth separations
+** DONE Rare earth separations
 
 This might be something for James
+
+** DONE dynamic
