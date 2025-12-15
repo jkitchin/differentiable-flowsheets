@@ -58,19 +58,43 @@ def newton_solve(
     tol: float = 1e-10,
     max_iter: int = 50,
 ) -> Array:
-    """Solve f(x, args) = 0 using Newton-Raphson with implicit differentiation.
+    """Solve f(x, args) = 0 using Newton-Raphson with unrolled iteration.
+
+    Uses unrolled iteration via lax.scan which is automatically differentiable
+    through JAX. This works correctly when the function f captures traced
+    values in its closure (e.g., during gradient computation).
 
     Args:
         f: Function to find roots of, f(x, args) = 0
         x0: Initial guess
         args: Additional arguments passed to f
-        tol: Convergence tolerance
-        max_iter: Maximum iterations
+        tol: Convergence tolerance (not used, kept for API compatibility)
+        max_iter: Number of Newton iterations
 
     Returns:
         Solution x* such that f(x*, args) ≈ 0
     """
-    return _newton_impl(f, x0, args, tol, max_iter)
+    # Check dimensionality at trace time (static)
+    is_scalar = (x0.ndim == 0)
+
+    if is_scalar:
+        def newton_step(x, _):
+            fx = f(x, args)
+            J = jax.grad(lambda z: f(z, args))(x)
+            dx = -fx / (J + 1e-12)
+            return x + dx, None
+    else:
+        n = x0.shape[0]
+        reg = 1e-12 * jnp.eye(n)
+
+        def newton_step(x, _):
+            fx = f(x, args)
+            J = jax.jacfwd(lambda z: f(z, args))(x)
+            dx = jnp.linalg.solve(J + reg, -fx)
+            return x + dx, None
+
+    x_final, _ = lax.scan(newton_step, x0, None, length=max_iter)
+    return x_final
 
 
 @partial(jax.custom_vjp, nondiff_argnums=(0, 3, 4))

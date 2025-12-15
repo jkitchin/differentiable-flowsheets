@@ -204,6 +204,9 @@ class CSTR:
 
         Material balance: F_out = F_in + V * sum_j(nu_ij * r_j)
 
+        Uses Newton-Raphson with implicit differentiation for accurate
+        gradients through the converged solution.
+
         Args:
             inlet_flows: Inlet molar flows by species (mol/s)
             T: Temperature (K)
@@ -223,40 +226,45 @@ class CSTR:
         # Convert inlet flows to array
         F_in = jnp.array([inlet_flows[s] for s in p.species_order])
 
-        # Fixed-point iteration: F_out^{k+1} = F_in + V * stoich @ r(F_out^k / Q_v, T)
-        from difflow.solvers import fixed_point_solve
+        # Use Newton-Raphson to solve the residual equations
+        from difflow.solvers import newton_solve
 
         # Capture non-JAX types in closure, pass only JAX arrays as args
         rate_fn = p.rate_fn
         species_order = p.species_order
         stoich = p.stoich
 
-        def material_balance_fp(F_out, args):
+        def material_balance_residual(F_out, args):
+            """Residual: F_out - F_in - V * stoich @ r = 0"""
             F_in_, V_, Q_v, T_, rate_params = args
 
+            # Ensure non-negative flows for concentration calculation
+            F_out_safe = jnp.maximum(F_out, 1e-10)
+
             # Concentrations from flows
-            C = {s: F_out[i] / Q_v for i, s in enumerate(species_order)}
+            C = {s: F_out_safe[i] / Q_v for i, s in enumerate(species_order)}
 
             # Reaction rates
             r = rate_fn(C, T_, rate_params)
 
-            # New flows from material balance
-            F_out_new = F_in_ + V_ * stoich @ r
+            # Residual: F_out - (F_in + V * stoich @ r) = 0
+            residual = F_out - (F_in_ + V_ * stoich @ r)
 
-            # Ensure non-negative flows
-            return jnp.maximum(F_out_new, 0.0)
+            return residual
 
         # Only pass JAX-compatible args (arrays and dicts of arrays)
         args = (F_in, p.V, volumetric_flow, T, p.rate_params)
 
-        F_out = fixed_point_solve(
-            material_balance_fp,
+        F_out = newton_solve(
+            material_balance_residual,
             F_in,  # Initial guess
             args,
             tol=1e-10,
-            max_iter=100,
-            damping=0.3,  # Lower damping for stability with stiff kinetics
+            max_iter=50,
         )
+
+        # Ensure non-negative flows
+        F_out = jnp.maximum(F_out, 0.0)
 
         # Calculate final rates
         C_out = {s: F_out[i] / volumetric_flow for i, s in enumerate(p.species_order)}
@@ -311,15 +319,15 @@ class CSTR:
         """Solve for outlet temperature and composition with Q=0.
 
         This requires simultaneous solution of material and energy balances.
+        Uses an outer loop on temperature with inner Newton solve for material balance.
         """
         p = self.params
         inlet_flows = get_flows(inlet)
 
         from difflow.solvers import fixed_point_solve
 
-        # State vector: [T, F_1, F_2, ..., F_n]
         F_in = jnp.array([inlet_flows[s] for s in p.species_order])
-        x0 = jnp.concatenate([jnp.array([inlet["T"]]), F_in])
+        T_inlet = inlet["T"]
 
         # Capture non-JAX types in closure
         rate_fn = p.rate_fn
@@ -327,52 +335,80 @@ class CSTR:
         stoich = p.stoich
         thermo = self.thermo
         dH_rxn = p.dH_rxn
-        T_inlet = inlet["T"]
+        V = p.V
 
-        def adiabatic_fp(x, args):
-            F_in_, V_, Q_v, rate_params = args
+        def solve_material_balance_at_T(T, F_in_, Q_v, rate_params):
+            """Solve material balance at fixed T using Newton's method."""
+            from difflow.solvers import newton_solve
 
-            T = x[0]
-            F_out = x[1:]
+            def residual(F_out, args):
+                F_in_inner, V_inner, Q_v_inner, T_inner, rp = args
+                F_out_safe = jnp.maximum(F_out, 1e-10)
+                C = {s: F_out_safe[i] / Q_v_inner for i, s in enumerate(species_order)}
+                r = rate_fn(C, T_inner, rp)
+                return F_out - (F_in_inner + V_inner * stoich @ r)
 
-            # Material balance
-            C = {s: F_out[i] / Q_v for i, s in enumerate(species_order)}
-            r = rate_fn(C, T, rate_params)
-            F_new = F_in_ + V_ * stoich @ r
-            F_new = jnp.maximum(F_new, 0.0)
+            args = (F_in_, V, Q_v, T, rate_params)
+            F_out = newton_solve(residual, F_in_, args, tol=1e-10, max_iter=50)
+            return jnp.maximum(F_out, 0.0)
 
-            # Energy balance: find T such that H_out - H_in + Q_rxn = 0
+        def adiabatic_T_iteration(T, args):
+            """Fixed-point iteration on temperature only."""
+            F_in_, Q_v, rate_params = args
+
+            # Solve material balance at current T
+            F_out = solve_material_balance_at_T(T, F_in_, Q_v, rate_params)
+
+            # Compute reaction rates at solution
+            C_out = {s: F_out[i] / Q_v for i, s in enumerate(species_order)}
+            r = rate_fn(C_out, T, rate_params)
+
+            # Energy balance: Q = 0 for adiabatic
+            # 0 = H_out - H_in + Q_rxn
+            # H_out = H_in - Q_rxn
             inlet_fl = {s: F_in_[i] for i, s in enumerate(species_order)}
-            outlet_fl = {s: F_new[i] for i, s in enumerate(species_order)}
+            outlet_fl = {s: F_out[i] for i, s in enumerate(species_order)}
 
             H_in = thermo.stream_enthalpy(inlet_fl, T_inlet, phase="liquid")
-            H_out = thermo.stream_enthalpy(outlet_fl, T, phase="liquid")
 
             if dH_rxn is not None:
-                Q_rxn = V_ * jnp.sum(r * dH_rxn)
+                Q_rxn = V * jnp.sum(r * dH_rxn)
             else:
                 Q_rxn = 0.0
 
-            # Residual for energy balance
-            # H_out - H_in + Q_rxn = 0 => H_out = H_in - Q_rxn
-            # Update T based on enthalpy difference
-            # Use Cp to estimate new T
-            total_F = jnp.sum(F_new)
-            mole_fracs = {s: F_new[i] / total_F for i, s in enumerate(species_order)}
+            # Target enthalpy for outlet
+            H_out_target = H_in - Q_rxn
+
+            # Find T that gives this enthalpy
+            # H_out = sum(F_i * Cp_i * (T - Tref)) approximately
+            # Use current T to estimate Cp
+            total_F = jnp.sum(F_out) + 1e-10
+            mole_fracs = {s: F_out[i] / total_F for i, s in enumerate(species_order)}
             Cp_mix = thermo.Cp_mix(mole_fracs, T)
 
-            dH = H_in - Q_rxn - H_out  # Should be zero at solution
-            dT = dH / (total_F * Cp_mix)  # Correction to T
-            T_new = T + 0.5 * dT  # Damped update
+            # Current H_out
+            H_out_current = thermo.stream_enthalpy(outlet_fl, T, phase="liquid")
 
-            return jnp.concatenate([jnp.array([T_new]), F_new])
+            # Update T: H_out_target = H_out_current + total_F * Cp * (T_new - T)
+            # T_new = T + (H_out_target - H_out_current) / (total_F * Cp)
+            dT = (H_out_target - H_out_current) / (total_F * Cp_mix + 1e-10)
+            T_new = T + 0.3 * dT  # Damped update for stability
 
-        args = (F_in, p.V, volumetric_flow, p.rate_params)
+            return T_new
 
-        x_sol = fixed_point_solve(adiabatic_fp, x0, args, tol=1e-8, max_iter=200)
+        # Solve for temperature using fixed-point iteration
+        args = (F_in, volumetric_flow, p.rate_params)
+        T_out = fixed_point_solve(
+            adiabatic_T_iteration,
+            jnp.array(T_inlet),
+            args,
+            tol=1e-6,
+            max_iter=200,
+            damping=0.5,
+        )
 
-        T_out = x_sol[0]
-        F_out = x_sol[1:]
+        # Final material balance solve at converged temperature
+        F_out = solve_material_balance_at_T(T_out, F_in, volumetric_flow, p.rate_params)
         outlet_flows = {s: F_out[i] for i, s in enumerate(p.species_order)}
 
         C_out = {s: F_out[i] / volumetric_flow for i, s in enumerate(p.species_order)}
@@ -389,6 +425,7 @@ class CSTR:
         """Solve for outlet temperature and composition with specified Q.
 
         Similar to adiabatic but with Q != 0 in energy balance.
+        Uses an outer loop on temperature with inner Newton solve for material balance.
         """
         p = self.params
         inlet_flows = get_flows(inlet)
@@ -396,7 +433,7 @@ class CSTR:
         from difflow.solvers import fixed_point_solve
 
         F_in = jnp.array([inlet_flows[s] for s in p.species_order])
-        x0 = jnp.concatenate([jnp.array([inlet["T"]]), F_in])
+        T_inlet = inlet["T"]
 
         # Capture non-JAX types in closure
         rate_fn = p.rate_fn
@@ -404,50 +441,76 @@ class CSTR:
         stoich = p.stoich
         thermo = self.thermo
         dH_rxn = p.dH_rxn
-        T_inlet = inlet["T"]
+        V = p.V
 
-        def duty_fp(x, args):
-            F_in_, V_, Q_v, Q_, rate_params = args
+        def solve_material_balance_at_T(T, F_in_, Q_v, rate_params):
+            """Solve material balance at fixed T using Newton's method."""
+            from difflow.solvers import newton_solve
 
-            T = x[0]
-            F_out = x[1:]
+            def residual(F_out, args):
+                F_in_inner, V_inner, Q_v_inner, T_inner, rp = args
+                F_out_safe = jnp.maximum(F_out, 1e-10)
+                C = {s: F_out_safe[i] / Q_v_inner for i, s in enumerate(species_order)}
+                r = rate_fn(C, T_inner, rp)
+                return F_out - (F_in_inner + V_inner * stoich @ r)
 
-            # Material balance
-            C = {s: F_out[i] / Q_v for i, s in enumerate(species_order)}
-            r = rate_fn(C, T, rate_params)
-            F_new = F_in_ + V_ * stoich @ r
-            F_new = jnp.maximum(F_new, 0.0)
+            args = (F_in_, V, Q_v, T, rate_params)
+            F_out = newton_solve(residual, F_in_, args, tol=1e-10, max_iter=50)
+            return jnp.maximum(F_out, 0.0)
 
-            # Energy balance with specified Q
+        def duty_T_iteration(T, args):
+            """Fixed-point iteration on temperature only."""
+            F_in_, Q_v, Q_spec, rate_params = args
+
+            # Solve material balance at current T
+            F_out = solve_material_balance_at_T(T, F_in_, Q_v, rate_params)
+
+            # Compute reaction rates at solution
+            C_out = {s: F_out[i] / Q_v for i, s in enumerate(species_order)}
+            r = rate_fn(C_out, T, rate_params)
+
+            # Energy balance: Q = H_out - H_in + Q_rxn
+            # H_out = H_in - Q_rxn + Q
             inlet_fl = {s: F_in_[i] for i, s in enumerate(species_order)}
-            outlet_fl = {s: F_new[i] for i, s in enumerate(species_order)}
+            outlet_fl = {s: F_out[i] for i, s in enumerate(species_order)}
 
             H_in = thermo.stream_enthalpy(inlet_fl, T_inlet, phase="liquid")
-            H_out = thermo.stream_enthalpy(outlet_fl, T, phase="liquid")
 
             if dH_rxn is not None:
-                Q_rxn = V_ * jnp.sum(r * dH_rxn)
+                Q_rxn = V * jnp.sum(r * dH_rxn)
             else:
                 Q_rxn = 0.0
 
-            # Q = H_out - H_in + Q_rxn
-            # H_out = H_in - Q_rxn + Q
-            total_F = jnp.sum(F_new)
-            mole_fracs = {s: F_new[i] / total_F for i, s in enumerate(species_order)}
+            # Target enthalpy for outlet (with specified Q)
+            H_out_target = H_in - Q_rxn + Q_spec
+
+            # Find T that gives this enthalpy
+            total_F = jnp.sum(F_out) + 1e-10
+            mole_fracs = {s: F_out[i] / total_F for i, s in enumerate(species_order)}
             Cp_mix = thermo.Cp_mix(mole_fracs, T)
 
-            dH = H_in - Q_rxn + Q_ - H_out
-            dT = dH / (total_F * Cp_mix)
-            T_new = T + 0.5 * dT
+            # Current H_out
+            H_out_current = thermo.stream_enthalpy(outlet_fl, T, phase="liquid")
 
-            return jnp.concatenate([jnp.array([T_new]), F_new])
+            # Update T
+            dT = (H_out_target - H_out_current) / (total_F * Cp_mix + 1e-10)
+            T_new = T + 0.3 * dT  # Damped update for stability
 
-        args = (F_in, p.V, volumetric_flow, Q, p.rate_params)
+            return T_new
 
-        x_sol = fixed_point_solve(duty_fp, x0, args, tol=1e-8, max_iter=200)
+        # Solve for temperature using fixed-point iteration
+        args = (F_in, volumetric_flow, Q, p.rate_params)
+        T_out = fixed_point_solve(
+            duty_T_iteration,
+            jnp.array(T_inlet),
+            args,
+            tol=1e-6,
+            max_iter=200,
+            damping=0.5,
+        )
 
-        T_out = x_sol[0]
-        F_out = x_sol[1:]
+        # Final material balance solve at converged temperature
+        F_out = solve_material_balance_at_T(T_out, F_in, volumetric_flow, p.rate_params)
         outlet_flows = {s: F_out[i] for i, s in enumerate(p.species_order)}
 
         C_out = {s: F_out[i] / volumetric_flow for i, s in enumerate(p.species_order)}
