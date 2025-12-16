@@ -16,14 +16,39 @@ where:
     μ = specific growth rate (1/h)
     D = dilution rate (1/h)
     Y_xs = yield coefficient (g cells / g substrate)
+
+Numerical Considerations:
+- Monod singularity: When K_s → 0 and S → 0, regularization prevents 0/0
+- Kinetic dispatch: Uses inspect.signature instead of try/except for JAX compatibility
+- Integration: Uses RK4 instead of Euler for better accuracy
+- Fixed-point: Adaptive relaxation for robust convergence
 """
 
 from typing import Callable, Literal
 from dataclasses import dataclass, field
+import inspect
+import jax
 import jax.numpy as jnp
 from jax import Array, lax
 
 from difflow.streams import Stream, make_stream, get_flows
+
+
+# =============================================================================
+# Numerical Constants
+# =============================================================================
+
+# Minimum concentration to prevent division by zero in Monod-type kinetics.
+# When S → 0 and K_s → 0 simultaneously, S/(K_s + S) → 0/0.
+# Adding MIN_CONC to denominator ensures numerical stability.
+MIN_CONC = 1e-10
+
+# Relaxation factor range for fixed-point iteration.
+# Smaller values → more stable but slower convergence.
+# Larger values → faster but may oscillate.
+MIN_RELAXATION = 0.1
+MAX_RELAXATION = 0.8
+DEFAULT_RELAXATION = 0.3
 
 
 # =============================================================================
@@ -35,6 +60,10 @@ def monod_kinetics(S: Array, params: dict) -> Array:
 
     μ = μ_max * S / (K_s + S)
 
+    Handles the singularity when K_s → 0 and S → 0:
+    - Adds MIN_CONC to denominator to prevent 0/0
+    - Physically: at very low S, growth rate is substrate-limited
+
     Args:
         S: Substrate concentration (g/L)
         params: Dict with 'mu_max' and 'K_s'
@@ -44,13 +73,19 @@ def monod_kinetics(S: Array, params: dict) -> Array:
     """
     mu_max = params["mu_max"]
     K_s = params["K_s"]
-    return mu_max * S / (K_s + S)
+    # Regularize denominator to prevent 0/0 when K_s = 0 and S = 0
+    denom = K_s + S + MIN_CONC
+    return mu_max * S / denom
 
 
 def substrate_inhibition_kinetics(S: Array, params: dict) -> Array:
     """Monod kinetics with substrate inhibition (Andrews model).
 
     μ = μ_max * S / (K_s + S + S²/K_i)
+
+    Handles singularities:
+    - K_s = S = 0: Regularized denominator
+    - K_i → 0: Would cause S²/K_i → ∞, but K_i should be positive
 
     Args:
         S: Substrate concentration (g/L)
@@ -61,14 +96,20 @@ def substrate_inhibition_kinetics(S: Array, params: dict) -> Array:
     """
     mu_max = params["mu_max"]
     K_s = params["K_s"]
-    K_i = params["K_i"]
-    return mu_max * S / (K_s + S + S**2 / K_i)
+    K_i = jnp.maximum(params["K_i"], MIN_CONC)  # Prevent division by zero
+    # Regularize denominator
+    denom = K_s + S + S**2 / K_i + MIN_CONC
+    return mu_max * S / denom
 
 
 def product_inhibition_kinetics(S: Array, P: Array, params: dict) -> Array:
     """Monod kinetics with product inhibition.
 
     μ = μ_max * S / (K_s + S) * (1 - P/P_max)^n
+
+    Handles singularities:
+    - K_s = S = 0: Regularized denominator
+    - P_max → 0: Would be unphysical (no product tolerance)
 
     Args:
         S: Substrate concentration (g/L)
@@ -80,10 +121,12 @@ def product_inhibition_kinetics(S: Array, P: Array, params: dict) -> Array:
     """
     mu_max = params["mu_max"]
     K_s = params["K_s"]
-    P_max = params["P_max"]
+    P_max = jnp.maximum(params["P_max"], MIN_CONC)  # Prevent division by zero
     n = params.get("n", 1.0)
 
-    monod_term = mu_max * S / (K_s + S)
+    # Regularize Monod term
+    denom = K_s + S + MIN_CONC
+    monod_term = mu_max * S / denom
     inhibition_term = jnp.maximum(1 - P / P_max, 0.0) ** n
     return monod_term * inhibition_term
 
@@ -92,6 +135,9 @@ def contois_kinetics(S: Array, X: Array, params: dict) -> Array:
     """Contois growth kinetics (cell-density dependent).
 
     μ = μ_max * S / (K_s*X + S)
+
+    Handles singularities:
+    - K_s*X + S → 0: Regularized denominator
 
     Args:
         S: Substrate concentration (g/L)
@@ -103,7 +149,63 @@ def contois_kinetics(S: Array, X: Array, params: dict) -> Array:
     """
     mu_max = params["mu_max"]
     K_s = params["K_s"]
-    return mu_max * S / (K_s * X + S)
+    # Regularize denominator
+    denom = K_s * X + S + MIN_CONC
+    return mu_max * S / denom
+
+
+# =============================================================================
+# Kinetic Function Dispatch
+# =============================================================================
+
+def get_kinetic_arity(kinetic_fn: Callable) -> int:
+    """Determine number of state arguments for kinetic function.
+
+    Inspects the function signature to determine if it takes:
+    - 2 args: μ(S, params) - substrate-only kinetics (Monod, Andrews)
+    - 3 args: μ(S, X, params) - cell-density dependent (Contois)
+    - 4 args: μ(S, P, params) or μ(S, X, P, params) - product inhibition
+
+    This is done at initialization time (not JIT time) to avoid
+    try/except dispatch which breaks JAX tracing.
+
+    Args:
+        kinetic_fn: Kinetic rate function
+
+    Returns:
+        Number of positional arguments (excluding params dict)
+    """
+    sig = inspect.signature(kinetic_fn)
+    params = list(sig.parameters.values())
+    # Count positional parameters (excluding 'params' dict which is last)
+    n_args = len([p for p in params if p.name != 'params'])
+    return n_args
+
+
+def call_kinetics(kinetic_fn: Callable, arity: int, S: Array, X: Array,
+                  P: Array, params: dict) -> Array:
+    """Call kinetic function with appropriate arguments based on arity.
+
+    This avoids try/except dispatch which breaks JAX JIT.
+
+    Args:
+        kinetic_fn: Kinetic rate function
+        arity: Number of state arguments (from get_kinetic_arity)
+        S: Substrate concentration
+        X: Cell concentration
+        P: Product concentration
+        params: Kinetic parameters dict
+
+    Returns:
+        Specific growth rate μ
+    """
+    if arity == 1:
+        return kinetic_fn(S, params)
+    elif arity == 2:
+        return kinetic_fn(S, X, params)
+    else:
+        # 3+ args: assume (S, P, params) or (S, X, P, params)
+        return kinetic_fn(S, P, params)
 
 
 # =============================================================================
@@ -124,6 +226,7 @@ class BioreactorParams:
         alpha: Growth-associated product formation (g product / g cells)
         beta: Non-growth-associated product formation (g product / g cells / h)
         species_order: List of species names for stream conversion
+        _kinetic_arity: Cached arity of kinetic function (auto-detected)
     """
     V: float | Array
     Y_xs: float | Array
@@ -134,6 +237,12 @@ class BioreactorParams:
     alpha: float | Array = 0.0
     beta: float | Array = 0.0
     species_order: list[str] = field(default_factory=lambda: ["cells", "substrate", "product"])
+    _kinetic_arity: int = field(default=-1, repr=False)
+
+    def __post_init__(self):
+        """Auto-detect kinetic function arity."""
+        if self._kinetic_arity < 0:
+            object.__setattr__(self, '_kinetic_arity', get_kinetic_arity(self.kinetic_fn))
 
 
 # =============================================================================
@@ -207,7 +316,7 @@ class ContinuousBioreactor:
         P_in = inlet_flows.get("product", jnp.array(0.0)) / F
 
         # Solve for steady state using fixed-point iteration
-        from difflow.solvers import fixed_point_solve
+        import optimistix as optx
 
         # Initial guess
         x0 = jnp.array([1.0, S_f * 0.1, 0.1])  # [X, S, P]
@@ -221,21 +330,21 @@ class ContinuousBioreactor:
         alpha = p.alpha
         beta = p.beta
 
+        # Get kinetic arity for proper dispatch (avoids try/except in JIT)
+        kinetic_arity = p._kinetic_arity
+
         def chemostat_fp(x, args):
             D_, X_in_, S_f_, P_in_ = args
 
             X, S, P = x[0], x[1], x[2]
 
             # Ensure positive concentrations
-            X = jnp.maximum(X, 1e-10)
-            S = jnp.maximum(S, 1e-10)
+            X = jnp.maximum(X, MIN_CONC)
+            S = jnp.maximum(S, MIN_CONC)
             P = jnp.maximum(P, 0.0)
 
-            # Growth rate (try both signatures)
-            try:
-                mu = kinetic_fn(S, kinetic_params)
-            except TypeError:
-                mu = kinetic_fn(S, X, kinetic_params)
+            # Growth rate using arity-based dispatch (JAX JIT compatible)
+            mu = call_kinetics(kinetic_fn, kinetic_arity, S, X, P, kinetic_params)
 
             # Steady-state balances rearranged for fixed-point
             # X: D*(X_in - X) + (μ - k_d)*X = 0
@@ -247,30 +356,35 @@ class ContinuousBioreactor:
             dS = D_ * (S_f_ - S) - mu * X / Y_xs - m_s * X
             dP = D_ * (P_in_ - P) + (alpha * mu + beta) * X
 
-            # Simple Euler-like update with small step
-            dt = 0.5  # pseudo time step for relaxation
+            # Adaptive relaxation factor based on residual magnitude
+            # Smaller steps when changes are large (more stable)
+            # Larger steps when near convergence (faster)
+            residual_norm = jnp.sqrt(dX**2 + dS**2 + dP**2)
+            # Scale relaxation: small residual → larger step, large residual → smaller step
+            dt = DEFAULT_RELAXATION / (1.0 + residual_norm)
+            dt = jnp.clip(dt, MIN_RELAXATION, MAX_RELAXATION)
+
             X_new = X + dt * dX
             S_new = S + dt * dS
             P_new = P + dt * dP
 
             # Enforce bounds
-            X_new = jnp.maximum(X_new, 1e-10)
-            S_new = jnp.maximum(S_new, 1e-10)
+            X_new = jnp.maximum(X_new, MIN_CONC)
+            S_new = jnp.maximum(S_new, MIN_CONC)
             S_new = jnp.minimum(S_new, S_f_)  # Can't exceed feed
             P_new = jnp.maximum(P_new, 0.0)
 
             return jnp.array([X_new, S_new, P_new])
 
         args = (D, X_in, S_f, P_in)
-        x_sol = fixed_point_solve(chemostat_fp, x0, args, max_iter=200, damping=0.8)
+        fp_solver = optx.FixedPointIteration(rtol=1e-6, atol=1e-6)
+        sol = optx.fixed_point(chemostat_fp, fp_solver, x0, args=args, max_steps=200, throw=False)
+        x_sol = sol.value
 
         X_out, S_out, P_out = x_sol[0], x_sol[1], x_sol[2]
 
-        # Calculate final growth rate
-        try:
-            mu = kinetic_fn(S_out, kinetic_params)
-        except TypeError:
-            mu = kinetic_fn(S_out, X_out, kinetic_params)
+        # Calculate final growth rate using arity-based dispatch
+        mu = call_kinetics(kinetic_fn, kinetic_arity, S_out, X_out, P_out, kinetic_params)
 
         # Convert back to mass flows (g/h)
         outlet_flows = {
@@ -324,6 +438,7 @@ class FedBatchParams:
         alpha: Growth-associated product formation (g/g)
         beta: Non-growth-associated product formation (g/g/h)
         species_order: Species names for stream output
+        _kinetic_arity: Cached arity of kinetic function (auto-detected)
     """
     V0: float | Array
     Y_xs: float | Array
@@ -334,6 +449,12 @@ class FedBatchParams:
     alpha: float | Array = 0.0
     beta: float | Array = 0.0
     species_order: list[str] = field(default_factory=lambda: ["cells", "substrate", "product"])
+    _kinetic_arity: int = field(default=-1, repr=False)
+
+    def __post_init__(self):
+        """Auto-detect kinetic function arity."""
+        if self._kinetic_arity < 0:
+            object.__setattr__(self, '_kinetic_arity', get_kinetic_arity(self.kinetic_fn))
 
 
 class FedBatchBioreactor:
@@ -345,7 +466,13 @@ class FedBatchBioreactor:
         d(VS)/dt = F*S_f - μ*V*X/Y_xs - m_s*V*X
         d(VP)/dt = (α*μ + β)*V*X
 
-    Uses JAX-compatible ODE integration via lax.scan.
+    Integration methods:
+    - "diffrax" (default): Adaptive step-size with Tsit5 solver
+    - "diffrax:dopri5", "diffrax:kvaerno5", etc.: Specific diffrax solvers
+    - "rk4": Fixed-step RK4 via lax.scan (fallback if diffrax unavailable)
+
+    For stiff kinetics (e.g., substrate inhibition with high K_i),
+    use "diffrax:kvaerno5" implicit solver.
     """
 
     def __init__(self, params: FedBatchParams):
@@ -367,6 +494,9 @@ class FedBatchBioreactor:
         n_steps: int = 100,
         T: float | Array = 310.0,
         P_pressure: float | Array = 101325.0,
+        solver: str = "diffrax",
+        rtol: float = 1e-5,
+        atol: float = 1e-7,
     ) -> tuple[Stream, dict[str, Array]]:
         """Simulate fed-batch cultivation.
 
@@ -378,9 +508,16 @@ class FedBatchBioreactor:
             feed_rate_fn: Function F(t) returning feed rate (L/h).
                          If None, batch mode (no feeding).
             S_feed: Substrate concentration in feed (g/L)
-            n_steps: Number of integration steps
+            n_steps: Number of output points (for diffrax) or steps (for rk4)
             T: Temperature (K) for output stream
             P_pressure: Pressure (Pa) for output stream
+            solver: Integration method:
+                - "diffrax" or "diffrax:tsit5" (default): Adaptive Tsit5
+                - "diffrax:dopri5": Dormand-Prince 5(4)
+                - "diffrax:kvaerno5": Implicit (for stiff systems)
+                - "rk4": Fixed-step RK4 (fallback)
+            rtol: Relative tolerance for adaptive solvers
+            atol: Absolute tolerance for adaptive solvers
 
         Returns:
             outlet: Final state as stream (total mass of each species)
@@ -391,6 +528,7 @@ class FedBatchBioreactor:
                 - 'P': Product concentration profile (g/L)
                 - 'V': Volume profile (L)
                 - 'mu': Growth rate profile (1/h)
+                - 'solver': Solver used
         """
         p = self.params
 
@@ -412,6 +550,7 @@ class FedBatchBioreactor:
         # Capture parameters
         kinetic_fn = p.kinetic_fn
         kinetic_params = p.kinetic_params
+        kinetic_arity = p._kinetic_arity  # Pre-computed arity for JAX JIT
         Y_xs = jnp.asarray(p.Y_xs)
         k_d = jnp.asarray(p.k_d)
         m_s = jnp.asarray(p.m_s)
@@ -424,19 +563,16 @@ class FedBatchBioreactor:
             V, VX, VS, VP = y[0], y[1], y[2], y[3]
 
             # Concentrations
-            X = VX / jnp.maximum(V, 1e-10)
-            S = VS / jnp.maximum(V, 1e-10)
-            P = VP / jnp.maximum(V, 1e-10)
+            X = VX / jnp.maximum(V, MIN_CONC)
+            S = VS / jnp.maximum(V, MIN_CONC)
+            P = VP / jnp.maximum(V, MIN_CONC)
 
             # Ensure positive
-            X = jnp.maximum(X, 1e-10)
-            S = jnp.maximum(S, 1e-10)
+            X = jnp.maximum(X, MIN_CONC)
+            S = jnp.maximum(S, MIN_CONC)
 
-            # Growth rate
-            try:
-                mu = kinetic_fn(S, kinetic_params)
-            except TypeError:
-                mu = kinetic_fn(S, X, kinetic_params)
+            # Growth rate using arity-based dispatch (JAX JIT compatible)
+            mu = call_kinetics(kinetic_fn, kinetic_arity, S, X, P, kinetic_params)
 
             # Feed rate
             F = feed_rate_fn(t)
@@ -449,19 +585,61 @@ class FedBatchBioreactor:
 
             return jnp.array([dV_dt, dVX_dt, dVS_dt, dVP_dt])
 
-        def euler_step(y, t):
-            """Simple Euler integration step."""
-            dy = rhs(y, t)
-            y_new = y + dt * dy
-            # Enforce positivity
-            y_new = jnp.maximum(y_new, 1e-10)
-            return y_new, y
+        # Choose integration method
+        use_diffrax = solver.startswith("diffrax")
 
-        # Integrate
-        y_final, y_history = lax.scan(euler_step, y0, t_array[:-1])
+        if use_diffrax:
+            # Use diffrax for adaptive integration
+            try:
+                from difflow.dynamic.diffrax_backend import integrate_diffrax
 
-        # Append final state to history
-        y_all = jnp.vstack([y_history, y_final[None, :]])
+                # Parse solver name (e.g., "diffrax:kvaerno5" -> "kvaerno5")
+                if ":" in solver:
+                    diffrax_solver = solver.split(":")[1]
+                else:
+                    diffrax_solver = "tsit5"  # Default
+
+                # Wrap rhs for diffrax (expects f(t, y))
+                def diffrax_rhs(t, y):
+                    return rhs(y, t)
+
+                result = integrate_diffrax(
+                    diffrax_rhs,
+                    y0,
+                    t_span=(0.0, float(t_final)),
+                    solver=diffrax_solver,
+                    rtol=rtol,
+                    atol=atol,
+                    saveat=t_array,
+                )
+
+                y_all = result.trajectory.y
+                y_final = result.y_final
+                solver_used = f"diffrax:{diffrax_solver}"
+
+            except ImportError:
+                # Fall back to RK4 if diffrax not available
+                use_diffrax = False
+                solver_used = "rk4 (diffrax unavailable)"
+
+        if not use_diffrax:
+            # Use fixed-step RK4 via lax.scan
+            def rk4_step(y, t):
+                """Fourth-order Runge-Kutta integration step."""
+                k1 = rhs(y, t)
+                k2 = rhs(y + 0.5 * dt * k1, t + 0.5 * dt)
+                k3 = rhs(y + 0.5 * dt * k2, t + 0.5 * dt)
+                k4 = rhs(y + dt * k3, t + dt)
+
+                y_new = y + (dt / 6.0) * (k1 + 2*k2 + 2*k3 + k4)
+
+                # Enforce positivity
+                y_new = jnp.maximum(y_new, MIN_CONC)
+                return y_new, y
+
+            y_final, y_history = lax.scan(rk4_step, y0, t_array[:-1])
+            y_all = jnp.vstack([y_history, y_final[None, :]])
+            solver_used = "rk4"
 
         # Extract profiles
         V_profile = y_all[:, 0]
@@ -469,14 +647,12 @@ class FedBatchBioreactor:
         S_profile = y_all[:, 2] / jnp.maximum(V_profile, 1e-10)
         P_profile = y_all[:, 3] / jnp.maximum(V_profile, 1e-10)
 
-        # Calculate mu profile
-        def calc_mu(S, X):
-            try:
-                return kinetic_fn(S, kinetic_params)
-            except TypeError:
-                return kinetic_fn(S, X, kinetic_params)
+        # Calculate mu profile using vectorized computation
+        # Use vmap for efficient batch evaluation
+        def calc_mu_single(S, X, P):
+            return call_kinetics(kinetic_fn, kinetic_arity, S, X, P, kinetic_params)
 
-        mu_profile = jax_vmap_safe(calc_mu, S_profile, X_profile)
+        mu_profile = jax.vmap(calc_mu_single)(S_profile, X_profile, P_profile)
 
         # Final state as stream (total mass)
         V_final = y_final[0]
@@ -499,25 +675,13 @@ class FedBatchBioreactor:
             "X_final": X_profile[-1],
             "S_final": S_profile[-1],
             "P_final": P_profile[-1],
+            "solver": solver_used,
         }
 
         return outlet, info
 
 
-def jax_vmap_safe(fn, S_arr, X_arr):
-    """Vectorized map that handles kinetic function signatures."""
-    import jax
-    # Just compute element-wise in a scan to avoid vmap issues
-    def step(_, args):
-        S, X = args
-        try:
-            mu = fn(S, X)
-        except:
-            mu = fn(S, None)
-        return None, mu
-
-    _, mu_arr = lax.scan(step, None, (S_arr, X_arr))
-    return mu_arr
+# Note: jax_vmap_safe removed - now using jax.vmap with call_kinetics directly
 
 
 # =============================================================================
