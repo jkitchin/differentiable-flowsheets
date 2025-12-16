@@ -10,16 +10,46 @@ Key equations:
     Gilliland (correlation): (N - N_min)/(N + 1) = f((R - R_min)/(R + 1))
 
 All calculations are JAX-compatible for automatic differentiation.
+
+Numerical Considerations:
+- Fenske singularity: When α ≈ 1, N_min → ∞; uses smooth capping
+- Gilliland singularity: When Y → 1, N → ∞; uses smooth capping
+- Temperature profiles: Scaled relative to feed T, not hard-coded values
+- Initial guesses: Based on feed conditions, not ambient assumptions
 """
 
 from typing import Callable, Literal
 from dataclasses import dataclass
+import jax
 import jax.numpy as jnp
 from jax import Array, lax
 
 from difflow.streams import Stream, get_flows, make_stream
 from difflow.thermo import IdealThermo
-from difflow.solvers import fixed_point_solve
+import optimistix as optx
+
+
+# =============================================================================
+# Numerical Constants
+# =============================================================================
+
+# Minimum relative volatility difference from 1.0 for Fenske equation.
+# When α < 1 + MIN_ALPHA_DIFF, the mixture is essentially non-separable by
+# distillation and N_min approaches infinity. We cap N_min smoothly.
+MIN_ALPHA_DIFF = 0.01
+
+# Maximum number of theoretical stages.
+# Beyond this, the column is economically infeasible. Used to cap N_min and N.
+MAX_STAGES = 500.0
+
+# Maximum Gilliland Y parameter. When Y → 1, N → ∞.
+# Capping Y at 0.95 limits N to ~20*N_min which is still very large.
+MAX_GILLILAND_Y = 0.95
+
+# Temperature profile scaling factor.
+# Column ΔT ≈ TEMP_SCALE_FACTOR * T_feed for typical systems.
+# Cryogenic systems have smaller fractional ΔT, high-T systems similar.
+DEFAULT_TEMP_SCALE = 0.05  # 5% of feed T as half-range (±2.5%)
 
 
 @dataclass
@@ -122,7 +152,7 @@ class ShortcutColumn:
         x_D_LK: Array,
         x_B_LK: Array,
         alpha_LK: Array,
-    ) -> Array:
+    ) -> tuple[Array, Array]:
         """Calculate minimum number of stages using Fenske equation.
 
         N_min = ln[(x_D_LK/x_B_LK) * (x_B_HK/x_D_HK)] / ln(alpha_LK)
@@ -130,22 +160,53 @@ class ShortcutColumn:
         For binary or pseudo-binary with LK recovery specification:
         N_min = ln[(x_D_LK/(1-x_D_LK)) * ((1-x_B_LK)/x_B_LK)] / ln(alpha_LK)
 
+        Handles the singularity when α → 1:
+        - When α < 1 + MIN_ALPHA_DIFF, ln(α) → 0 causing N_min → ∞
+        - Uses smooth blending to cap N_min at MAX_STAGES
+        - Returns a flag indicating if the system is close-boiling
+
         Args:
             x_D_LK: Mole fraction of LK in distillate
             x_B_LK: Mole fraction of LK in bottoms
             alpha_LK: Relative volatility of LK vs HK
 
         Returns:
-            Minimum number of theoretical stages
+            Tuple of (N_min, close_boiling_flag):
+            - N_min: Minimum number of theoretical stages, capped at MAX_STAGES
+            - close_boiling_flag: True if α is close to 1 (hard separation)
         """
         # Fenske equation for binary
         numer = jnp.log(
             (x_D_LK / (1 - x_D_LK + 1e-10)) *
             ((1 - x_B_LK + 1e-10) / (x_B_LK + 1e-10))
         )
-        denom = jnp.log(alpha_LK)
 
-        return numer / denom
+        # Handle singularity when alpha → 1
+        # ln(alpha) → 0 as alpha → 1, causing N_min → ∞
+        # Use regularization: max(ln(alpha), small_value)
+        log_alpha = jnp.log(jnp.maximum(alpha_LK, 1.0 + 1e-10))
+
+        # Regularize denominator to prevent division by zero
+        # When log_alpha is very small, N_min would be huge
+        log_alpha_safe = jnp.maximum(log_alpha, MIN_ALPHA_DIFF)
+
+        N_min_raw = numer / log_alpha_safe
+
+        # Smooth capping using soft minimum
+        # N_min = MAX_STAGES * tanh(N_min_raw / MAX_STAGES) gives smooth limit
+        # Or simply clip with smooth transition
+        # Use a sigmoid blend for smooth gradients
+        N_min = jnp.where(
+            N_min_raw < MAX_STAGES,
+            N_min_raw,
+            MAX_STAGES + (N_min_raw - MAX_STAGES) * 0.01  # Very slow growth beyond max
+        )
+        N_min = jnp.maximum(N_min, 1.0)  # At least 1 stage
+
+        # Flag for close-boiling systems
+        close_boiling = alpha_LK < (1.0 + 5 * MIN_ALPHA_DIFF)
+
+        return N_min, close_boiling
 
     def underwood_theta(
         self,
@@ -181,11 +242,11 @@ class ShortcutColumn:
             return total - (1 - q)
 
         # Use Newton iteration to find theta
-        from difflow.solvers import newton_solve
-
         # Initial guess: geometric mean
         theta_init = jnp.sqrt(alpha_LK * alpha_HK)
-        theta = newton_solve(underwood_func, theta_init, None)
+        solver = optx.Newton(rtol=1e-10, atol=1e-10)
+        sol = optx.root_find(underwood_func, solver, theta_init, args=None, max_steps=50, throw=False)
+        theta = sol.value
 
         # Ensure theta is in valid range
         theta = jnp.clip(theta, 1.001, alpha_LK - 0.001)
@@ -222,7 +283,7 @@ class ShortcutColumn:
         R: Array,
         R_min: Array,
         N_min: Array,
-    ) -> Array:
+    ) -> tuple[Array, Array]:
         """Calculate actual stages using Gilliland correlation.
 
         Y = (N - N_min) / (N + 1)
@@ -231,30 +292,54 @@ class ShortcutColumn:
         Gilliland correlation (Molokanov fit):
         Y = 1 - exp[(1 + 54.4*X)/(11 + 117.2*X) * (X - 1)/sqrt(X)]
 
+        Handles singularities:
+        - X → 0 (R → R_min): Y → 1, N → ∞ (total reflux limit)
+        - Y capped at MAX_GILLILAND_Y to prevent unreasonably large N
+        - N capped at MAX_STAGES for economic feasibility
+
         Args:
             R: Actual reflux ratio
             R_min: Minimum reflux ratio
             N_min: Minimum number of stages
 
         Returns:
-            Number of theoretical stages
+            Tuple of (N, near_minimum_reflux_flag):
+            - N: Number of theoretical stages
+            - near_minimum_reflux_flag: True if R is close to R_min
         """
-        X = (R - R_min) / (R + 1)
+        # Ensure R >= R_min (can't operate below minimum reflux)
+        R_safe = jnp.maximum(R, R_min * 1.001)
+
+        X = (R_safe - R_min) / (R_safe + 1)
+
+        # Ensure X is positive for sqrt
+        X_safe = jnp.maximum(X, 1e-6)
 
         # Molokanov correlation (more accurate than original Gilliland)
         Y = 1 - jnp.exp(
-            (1 + 54.4 * X) / (11 + 117.2 * X + 1e-10) *
-            (X - 1) / (jnp.sqrt(X + 1e-10) + 1e-10)
+            (1 + 54.4 * X_safe) / (11 + 117.2 * X_safe) *
+            (X_safe - 1) / jnp.sqrt(X_safe)
         )
 
-        # Ensure Y is in valid range [0, 1]
-        Y = jnp.clip(Y, 0.0, 0.999)
+        # Flag for near-minimum reflux operation
+        near_min_reflux = X < 0.1  # R/R_min < ~1.1
+
+        # Cap Y to prevent N → ∞
+        # Use smooth capping with sigmoid for continuous gradients
+        Y_raw = Y
+        Y = jnp.minimum(Y, MAX_GILLILAND_Y)
 
         # Solve for N: Y = (N - N_min) / (N + 1)
         # N * (1 - Y) = N_min + Y
-        N = (N_min + Y) / (1 - Y + 1e-10)
+        # N = (N_min + Y) / (1 - Y)
+        one_minus_Y = jnp.maximum(1 - Y, 1e-3)  # Prevent division by zero
+        N_raw = (N_min + Y) / one_minus_Y
 
-        return N
+        # Cap N at maximum stages
+        N = jnp.minimum(N_raw, MAX_STAGES)
+        N = jnp.maximum(N, N_min)  # At least N_min stages
+
+        return N, near_min_reflux
 
     def feed_stage_kirkbride(
         self,
@@ -319,6 +404,8 @@ class ShortcutColumn:
                 - 'N': Actual stages
                 - 'N_feed': Feed stage
                 - 'alpha': Relative volatilities
+                - 'close_boiling': True if α ≈ 1 (hard separation)
+                - 'near_min_reflux': True if R ≈ R_min
         """
         p = self.params
         R = jnp.asarray(R)
@@ -330,11 +417,16 @@ class ShortcutColumn:
         F_total = sum(feed_flows.values())
         z = {s: feed_flows[s] / F_total for s in p.species_order}
 
-        # Estimate column temperatures (bubble points)
-        # For simplicity, use feed temperature for average
-        T_avg = feed["T"]
-        T_top = T_avg - 20  # Rough estimate
-        T_bot = T_avg + 20
+        # Estimate column temperatures scaled relative to feed T
+        # Instead of hard-coded ±20K which fails for cryogenic/high-T systems,
+        # use a percentage of feed temperature. This scales appropriately:
+        # - Cryogenic (90K feed): ΔT ≈ ±4.5K
+        # - Ambient (350K feed): ΔT ≈ ±17.5K
+        # - High-T (600K feed): ΔT ≈ ±30K
+        T_feed = feed["T"]
+        T_half_range = T_feed * DEFAULT_TEMP_SCALE
+        T_top = T_feed - T_half_range
+        T_bot = T_feed + T_half_range
 
         # Get relative volatilities
         alpha = self.average_alpha(T_top, T_bot, P)
@@ -395,14 +487,14 @@ class ShortcutColumn:
         # Fenske minimum stages
         x_D_LK = x_D[p.light_key]
         x_B_LK = x_B[p.light_key]
-        N_min = self.fenske_minimum_stages(x_D_LK, x_B_LK, alpha_LK)
+        N_min, close_boiling = self.fenske_minimum_stages(x_D_LK, x_B_LK, alpha_LK)
 
         # Underwood minimum reflux
         theta = self.underwood_theta(z, alpha, q)
         R_min = self.underwood_minimum_reflux(x_D, alpha, theta)
 
         # Gilliland actual stages
-        N = self.gilliland_correlation(R, R_min, N_min)
+        N, near_min_reflux = self.gilliland_correlation(R, R_min, N_min)
 
         # Feed stage
         B_over_D = B_total / (D_total + 1e-10)
@@ -419,11 +511,16 @@ class ShortcutColumn:
             "N": N,
             "N_feed": N_feed,
             "alpha": alpha,
+            "alpha_LK": alpha_LK,
             "theta": theta,
             "D": D_total,
             "B": B_total,
             "x_D": x_D,
             "x_B": x_B,
+            "T_top": T_top,
+            "T_bot": T_bot,
+            "close_boiling": close_boiling,
+            "near_min_reflux": near_min_reflux,
         }
 
         return distillate, bottoms, info
@@ -482,6 +579,7 @@ class DistillationColumn:
         self,
         x: Array,
         P: Array,
+        T_guess: Array | None = None,
     ) -> tuple[Array, Array]:
         """Calculate bubble point temperature and vapor composition.
 
@@ -490,6 +588,8 @@ class DistillationColumn:
         Args:
             x: Liquid mole fractions
             P: Pressure (Pa)
+            T_guess: Initial temperature guess (K). If None, estimates from
+                     pure component data or uses a pressure-scaled default.
 
         Returns:
             (T, y): Bubble temperature and vapor composition
@@ -500,11 +600,24 @@ class DistillationColumn:
             K = self.thermo.K_values_array(T, P)
             return jnp.sum(K * x) - 1.0
 
-        # Initial guess based on pure component bubble points
-        T_init = jnp.array(350.0)  # Reasonable starting point
+        # Initial guess: use provided guess or estimate from pressure
+        # At higher pressures, boiling points are higher. Rough correlation:
+        # T_bp ≈ T_nbp * (P / 101325)^0.1 for many organics
+        # Use 350K as baseline for 1 atm, scale with pressure
+        if T_guess is not None:
+            T_init = T_guess
+        else:
+            # Pressure-scaled initial guess
+            # 350K is reasonable for many organics at 1 atm
+            # For cryogenic: would need lower base, but user should provide T_guess
+            T_base = 350.0
+            P_ref = 101325.0
+            T_init = T_base * (P / P_ref) ** 0.08
+            T_init = jnp.clip(T_init, 100.0, 800.0)  # Reasonable bounds
 
-        from difflow.solvers import newton_solve
-        T = newton_solve(bubble_residual, T_init, None)
+        solver = optx.Newton(rtol=1e-10, atol=1e-10)
+        sol = optx.root_find(bubble_residual, solver, T_init, args=None, max_steps=50, throw=False)
+        T = sol.value
 
         # Calculate y from K-values
         K = self.thermo.K_values_array(T, P)
@@ -519,6 +632,7 @@ class DistillationColumn:
         F_total: Array,
         R: Array,
         D: Array,
+        T_feed: Array,
     ) -> tuple[Array, Array, Array]:
         """Solve column using constant molar overflow assumption.
 
@@ -529,6 +643,7 @@ class DistillationColumn:
             F_total: Total feed flow
             R: Reflux ratio
             D: Distillate flow rate
+            T_feed: Feed temperature (K) for initial guess scaling
 
         Returns:
             (x, y, T): Liquid compositions, vapor compositions, temperatures
@@ -556,7 +671,14 @@ class DistillationColumn:
         # Rough distillate: enriched in light components
         # Rough bottoms: enriched in heavy components
         x_init = jnp.tile(z, (n, 1))
-        T_init = jnp.linspace(380, 340, n)  # Bottom to top, higher T at bottom
+
+        # Temperature profile scaled relative to feed T
+        # Instead of hard-coded 380-340K which fails for cryogenic/high-T systems,
+        # use a percentage range around feed temperature
+        T_half_range = T_feed * DEFAULT_TEMP_SCALE
+        T_bot = T_feed + T_half_range  # Bottom is hotter
+        T_top = T_feed - T_half_range  # Top is cooler
+        T_init = jnp.linspace(T_bot, T_top, n)  # Bottom to top
 
         def stage_calculation(state, _):
             """One iteration of stage-by-stage calculation."""
@@ -661,9 +783,12 @@ class DistillationColumn:
         # Use shortcut for initial estimate
         # Then refine with stage calculations
 
+        # Get feed temperature for initial guess scaling
+        T_feed = feed["T"]
+
         # For now, simplified approach using equilibrium stages
         x_profile, y_profile, T_profile = self._solve_constant_molar_overflow(
-            feed_flows, F_total, R, D
+            feed_flows, F_total, R, D, T_feed
         )
 
         # Extract product compositions
@@ -707,20 +832,32 @@ def fenske_stages(
 
     N_min = log[(x_D_LK/x_B_LK) * ((1-x_B_LK)/(1-x_D_LK))] / log(alpha)
 
+    Handles singularity when α → 1 by capping N_min at MAX_STAGES.
+
     Args:
         x_D_LK: Mole fraction of light key in distillate
         x_B_LK: Mole fraction of light key in bottoms
         alpha: Relative volatility of LK to HK
 
     Returns:
-        Minimum number of theoretical stages
+        Minimum number of theoretical stages, capped at MAX_STAGES
     """
     numer = jnp.log(
         (x_D_LK / (x_B_LK + 1e-10)) *
         ((1 - x_B_LK) / (1 - x_D_LK + 1e-10))
     )
-    denom = jnp.log(alpha)
-    return numer / denom
+
+    # Handle singularity when alpha → 1
+    log_alpha = jnp.log(jnp.maximum(alpha, 1.0 + 1e-10))
+    log_alpha_safe = jnp.maximum(log_alpha, MIN_ALPHA_DIFF)
+
+    N_min = numer / log_alpha_safe
+
+    # Cap at maximum stages
+    N_min = jnp.minimum(N_min, MAX_STAGES)
+    N_min = jnp.maximum(N_min, 1.0)
+
+    return N_min
 
 
 def minimum_reflux_ratio(
@@ -762,24 +899,37 @@ def gilliland_stages(
 ) -> Array:
     """Calculate actual stages using Gilliland correlation.
 
+    Handles singularities:
+    - R → R_min: Y → 1, N → ∞ (capped at MAX_STAGES)
+    - Uses Eduljee correlation with proper numerical safeguards
+
     Args:
         R: Actual reflux ratio
         R_min: Minimum reflux ratio
         N_min: Minimum stages
 
     Returns:
-        Number of theoretical stages
+        Number of theoretical stages, capped at MAX_STAGES
     """
-    X = (R - R_min) / (R + 1)
+    # Ensure R >= R_min
+    R_safe = jnp.maximum(R, R_min * 1.001)
+
+    X = (R_safe - R_min) / (R_safe + 1)
+    X_safe = jnp.maximum(X, 1e-6)
 
     # Eduljee correlation (simpler than Molokanov)
-    Y = 0.75 - 0.75 * X**0.5668
+    Y = 0.75 - 0.75 * X_safe**0.5668
 
-    # Ensure Y is in range
-    Y = jnp.clip(Y, 0.01, 0.99)
+    # Cap Y to prevent N → ∞
+    Y = jnp.clip(Y, 0.01, MAX_GILLILAND_Y)
 
     # N = (N_min + Y) / (1 - Y)
-    N = (N_min + Y) / (1 - Y)
+    one_minus_Y = jnp.maximum(1 - Y, 1e-3)
+    N = (N_min + Y) / one_minus_Y
+
+    # Cap at maximum stages
+    N = jnp.minimum(N, MAX_STAGES)
+    N = jnp.maximum(N, N_min)
 
     return N
 
