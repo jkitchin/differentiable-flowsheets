@@ -20,6 +20,31 @@ from difflow.streams import Stream, get_flows, make_stream
 
 
 # =============================================================================
+# Utility Functions
+# =============================================================================
+
+def soft_clip_positive(x: Array, sharpness: float = 10.0) -> Array:
+    """Soft clipping to ensure non-negative values with smooth gradients.
+
+    Uses softplus function shifted to pass through origin:
+        soft_clip(x) = softplus(x * sharpness) / sharpness
+
+    This is approximately:
+        - x when x >> 0
+        - 0 when x << 0
+        - smooth transition near x = 0
+
+    Args:
+        x: Input array
+        sharpness: Controls transition sharpness (higher = closer to hard clip)
+
+    Returns:
+        Soft-clipped array with values >= 0
+    """
+    return jax.nn.softplus(x * sharpness) / sharpness
+
+
+# =============================================================================
 # Distribution Coefficient Models
 # =============================================================================
 
@@ -102,6 +127,8 @@ def nrtl_activity_coefficients(
 ) -> Array:
     """Calculate activity coefficients using NRTL model.
 
+    Fully vectorized implementation for JAX compatibility.
+
     Args:
         x: Mole fractions (array, same order as params.species)
         T: Temperature (K)
@@ -110,35 +137,33 @@ def nrtl_activity_coefficients(
     Returns:
         Activity coefficients for each species
     """
-    n = len(params.species)
-
     # Temperature-dependent tau
     tau = params.a + params.b / T
 
     # G matrix
     G = jnp.exp(-params.alpha * tau)
 
-    # Compute activity coefficients
+    # Compute activity coefficients (vectorized)
     # ln(gamma_i) = (sum_j tau_ji * G_ji * x_j) / (sum_k G_ki * x_k)
     #             + sum_j (x_j * G_ij / sum_k G_kj * x_k) * (tau_ij - sum_m x_m * tau_mj * G_mj / sum_k G_kj * x_k)
 
-    def compute_ln_gamma(i):
-        # Numerator and denominator for first term
-        num1 = jnp.sum(tau[:, i] * G[:, i] * x)
-        den1 = jnp.sum(G[:, i] * x)
-        term1 = num1 / den1
+    # Term 1: (sum_j tau_ji * G_ji * x_j) / (sum_k G_ki * x_k)
+    # Denominator for all i: G.T @ x, shape (n,)
+    # Numerator for all i: (tau * G).T @ x, shape (n,)
+    denom = G.T @ x  # shape (n,)
+    numer_tau_G = (tau * G).T @ x  # shape (n,)
+    term1 = numer_tau_G / denom
 
-        # Second term
-        def inner_sum(j):
-            sum_Gkj_xk = jnp.sum(G[:, j] * x)
-            sum_tau_G_x = jnp.sum(x * tau[:, j] * G[:, j])
-            return (x[j] * G[i, j] / sum_Gkj_xk) * (tau[i, j] - sum_tau_G_x / sum_Gkj_xk)
+    # Term 2: sum_j (x_j * G_ij / sum_k G_kj * x_k) * (tau_ij - sum_m x_m * tau_mj * G_mj / sum_k G_kj * x_k)
+    # denom[j] = sum_k G_kj * x_k (already computed above)
+    # numer_tau_G[j] = sum_m x_m * tau_mj * G_mj (already computed above)
+    # weight[i,j] = x_j * G_ij / denom[j]
+    # inner[i,j] = tau_ij - numer_tau_G[j] / denom[j]
+    weight = G * (x / denom)  # broadcasts (n,) over columns of (n,n)
+    inner = tau - (numer_tau_G / denom)  # broadcasts (n,) over columns of (n,n)
+    term2 = jnp.sum(weight * inner, axis=1)  # sum over j
 
-        term2 = sum(inner_sum(j) for j in range(n))
-
-        return term1 + term2
-
-    ln_gamma = jnp.array([compute_ln_gamma(i) for i in range(n)])
+    ln_gamma = term1 + term2
     return jnp.exp(ln_gamma)
 
 
@@ -154,12 +179,14 @@ class UNIQUACParams(NamedTuple):
         q: Surface area parameters for each species
         a: Constant part of interaction parameters (n x n)
         b: Temperature-dependent part (n x n), in K
+        z: Coordination number (default 10, typical range 6-12)
     """
     species: tuple[str, ...]
     r: Array  # Volume parameters
     q: Array  # Surface parameters
     a: Array  # (n, n) interaction parameter matrix
     b: Array  # (n, n) temperature coefficients
+    z: float = 10.0  # Coordination number
 
 
 def uniquac_activity_coefficients(
@@ -168,6 +195,8 @@ def uniquac_activity_coefficients(
     params: UNIQUACParams,
 ) -> Array:
     """Calculate activity coefficients using UNIQUAC model.
+
+    Fully vectorized implementation for JAX compatibility.
 
     Args:
         x: Mole fractions (array, same order as params.species)
@@ -179,7 +208,7 @@ def uniquac_activity_coefficients(
     """
     r = params.r
     q = params.q
-    z = 10.0  # Coordination number
+    z = params.z
 
     # Segment and area fractions
     phi = x * r / jnp.sum(x * r)  # Segment fraction
@@ -191,22 +220,23 @@ def uniquac_activity_coefficients(
     # Temperature-dependent tau
     tau = jnp.exp(-(params.a + params.b / T))
 
-    # Combinatorial contribution
+    # Combinatorial contribution (already vectorized)
     ln_gamma_C = jnp.log(phi / x) + (z / 2) * q * jnp.log(theta / phi) + l - (phi / x) * jnp.sum(x * l)
 
-    # Residual contribution
-    def compute_residual(i):
-        sum_theta_tau_i = jnp.sum(theta * tau[:, i])
-        term1 = -q[i] * jnp.log(sum_theta_tau_i)
+    # Residual contribution (vectorized)
+    # sum_theta_tau[i] = sum_j theta[j] * tau[j,i] = (tau.T @ theta)[i]
+    sum_theta_tau = tau.T @ theta  # shape (n,)
 
-        def inner_sum(j):
-            sum_theta_tau_j = jnp.sum(theta * tau[:, j])
-            return theta[j] * tau[i, j] / sum_theta_tau_j
+    # Term 1: -q * log(sum_theta_tau)
+    term1 = -q * jnp.log(sum_theta_tau)
 
-        term2 = q[i] * (1 - jnp.sum(jnp.array([inner_sum(j) for j in range(len(params.species))])))
-        return term1 + term2
+    # Term 2: q * (1 - sum_j (theta[j] * tau[i,j] / sum_k theta[k] * tau[k,j]))
+    # sum_theta_tau_j[j] = sum_k theta[k] * tau[k,j] = (tau.T @ theta)[j] (same as above)
+    # inner[i,j] = theta[j] * tau[i,j] / sum_theta_tau[j]
+    inner = tau * (theta / sum_theta_tau)  # broadcasts (n,) over columns of (n,n)
+    term2 = q * (1 - jnp.sum(inner, axis=1))  # sum over j
 
-    ln_gamma_R = jnp.array([compute_residual(i) for i in range(len(params.species))])
+    ln_gamma_R = term1 + term2
 
     return jnp.exp(ln_gamma_C + ln_gamma_R)
 
@@ -314,10 +344,13 @@ class CascadeParams:
         n_stages: Number of equilibrium stages (can be continuous for optimization)
         equilibrium: LLE equilibrium calculator
         flow_config: 'counter_current' or 'co_current'
+        stage_efficiency: Murphree stage efficiency for co-current model (0-1).
+                         Fraction of equilibrium achieved per stage. Default 0.8.
     """
     n_stages: int | float | Array
     equilibrium: LLEEquilibrium
     flow_config: Literal["counter_current", "co_current"] = "counter_current"
+    stage_efficiency: float = 0.8
 
 
 class MultistageCascade:
@@ -412,54 +445,69 @@ class MultistageCascade:
 
         Uses the Kremser equation which is fully differentiable
         with respect to n_stages (continuous relaxation).
+
+        Fully vectorized over solutes for JAX compatibility.
         """
         eq = self.params.equilibrium
         solutes = eq.solutes
 
-        # Get distribution coefficients
-        K_dict = eq.get_distribution_coefficients({}, {}, T)
+        # Estimate phase compositions for activity coefficient models
+        # Use feed composition for aqueous, solvent composition for organic
+        F_in_arr = jnp.array([feed_flows.get(s, 0.0) for s in solutes])
+        F_solvent_arr = jnp.array([solvent_flows.get(s, 0.0) for s in solutes])
 
-        # Initial solute amounts in feed
-        F_solute_in = {s: feed_flows.get(s, 0.0) for s in solutes}
+        # Estimate mole fractions (including carriers)
+        total_aq = F_aq + jnp.sum(F_in_arr)
+        total_org = F_org + jnp.sum(F_solvent_arr)
 
-        profiles = {"x": {s: [] for s in solutes}, "y": {s: [] for s in solutes}}
+        x_aq_est = {eq.aqueous_carrier: F_aq / total_aq}
+        x_org_est = {eq.organic_carrier: F_org / total_org}
+        for i, s in enumerate(solutes):
+            x_aq_est[s] = F_in_arr[i] / total_aq
+            x_org_est[s] = (F_solvent_arr[i] + 1e-10) / total_org  # Avoid zero
 
+        # Get distribution coefficients with estimated compositions
+        K_dict = eq.get_distribution_coefficients(x_aq_est, x_org_est, T)
+
+        # Convert to arrays for vectorized computation
+        K_arr = jnp.array([K_dict[s] for s in solutes])
+
+        # Extraction factors for all solutes
+        E_arr = K_arr * F_org / F_aq
+
+        # Kremser equation with smooth handling of E ≈ 1 singularity
+        # For E != 1: fraction_remaining = (E - 1) / (E^(N+1) - 1)
+        # For E = 1: fraction_remaining = 1 / (N + 1)
+        #
+        # Use a fixed small offset to avoid the exact singularity.
+        # This introduces a tiny error (~1e-6) but gives smooth gradients everywhere.
+
+        # Add small fixed offset to ensure we're never exactly at E=1
+        E_safe = E_arr + 1e-7
+
+        E_Np1 = E_safe ** (n_stages + 1)
+        delta_E = E_safe - 1.0
+
+        # Now we can safely compute Kremser (no singularity)
+        frac_remaining = delta_E / (E_Np1 - 1.0)
+
+        # Clamp to physical bounds [0, 1]
+        frac_remaining = jnp.clip(frac_remaining, 0.0, 1.0)
+
+        frac_extracted = 1.0 - frac_remaining
+
+        F_raffinate_arr = F_in_arr * frac_remaining
+        F_extracted_arr = F_in_arr * frac_extracted
+
+        # Convert back to dicts
         raffinate_flows = {eq.aqueous_carrier: F_aq}
         extract_flows = {eq.organic_carrier: F_org}
+        for i, s in enumerate(solutes):
+            raffinate_flows[s] = F_raffinate_arr[i]
+            extract_flows[s] = F_extracted_arr[i]
 
-        for s in solutes:
-            K = K_dict[s]
-            E = K * F_org / F_aq  # Extraction factor
-
-            F_in = jnp.asarray(F_solute_in[s])
-
-            # Kremser equation for fraction remaining in raffinate
-            # For E != 1: fraction_remaining = (E - 1) / (E^(N+1) - 1)
-            # For E = 1: fraction_remaining = 1 / (N + 1)
-            # So fraction_extracted = 1 - fraction_remaining
-
-            E_Np1 = E ** (n_stages + 1)
-
-            # Use jnp.where for differentiable conditional
-            frac_remaining = jnp.where(
-                jnp.abs(E - 1.0) < 1e-6,
-                1.0 / (n_stages + 1),
-                (E - 1.0) / (E_Np1 - 1.0 + 1e-10)
-            )
-
-            # Clamp to physical bounds
-            frac_remaining = jnp.clip(frac_remaining, 0.0, 1.0)
-            frac_extracted = 1.0 - frac_remaining
-
-            F_extracted = F_in * frac_extracted
-            F_raffinate = F_in * frac_remaining
-
-            raffinate_flows[s] = F_raffinate
-            extract_flows[s] = F_extracted
-
-            # Stage profiles are approximate for continuous n_stages
-            profiles["x"][s] = []
-            profiles["y"][s] = []
+        # Stage profiles are approximate for continuous n_stages
+        profiles = {"x": {s: [] for s in solutes}, "y": {s: [] for s in solutes}}
 
         return raffinate_flows, extract_flows, profiles
 
@@ -480,49 +528,59 @@ class MultistageCascade:
         For co-current flow, equilibrium is approached asymptotically.
         The extraction efficiency increases with number of stages but
         is limited by single-stage equilibrium.
+
+        Fully vectorized over solutes for JAX compatibility.
         """
         eq = self.params.equilibrium
         solutes = eq.solutes
 
-        K_dict = eq.get_distribution_coefficients({}, {}, T)
+        # Convert to arrays for vectorized computation
+        F_in_arr = jnp.array([feed_flows.get(s, 0.0) for s in solutes])
+        F_solvent_arr = jnp.array([solvent_flows.get(s, 0.0) for s in solutes])
 
-        profiles = {"x": {s: [] for s in solutes}, "y": {s: [] for s in solutes}}
+        # Estimate phase compositions for activity coefficient models
+        total_aq = F_aq + jnp.sum(F_in_arr)
+        total_org = F_org + jnp.sum(F_solvent_arr)
 
+        x_aq_est = {eq.aqueous_carrier: F_aq / total_aq}
+        x_org_est = {eq.organic_carrier: F_org / total_org}
+        for i, s in enumerate(solutes):
+            x_aq_est[s] = F_in_arr[i] / total_aq
+            x_org_est[s] = (F_solvent_arr[i] + 1e-10) / total_org
+
+        # Get distribution coefficients with estimated compositions
+        K_dict = eq.get_distribution_coefficients(x_aq_est, x_org_est, T)
+        K_arr = jnp.array([K_dict[s] for s in solutes])
+
+        # Total solute amounts
+        F_total_arr = F_in_arr + F_solvent_arr
+
+        # Equilibrium concentrations
+        # At equilibrium: y = K * x and mass balance
+        # F_aq * x + F_org * y = F_total
+        # x = F_total / (F_aq + K * F_org)
+        x_eq_arr = F_total_arr / (F_aq + K_arr * F_org)
+
+        # Approach to equilibrium with multiple stages
+        # Each stage achieves stage_efficiency fraction of remaining driving force
+        # Total efficiency = 1 - (1 - eff)^N (differentiable in N)
+        eff_per_stage = self.params.stage_efficiency
+        total_eff = 1.0 - (1.0 - eff_per_stage) ** n_stages
+
+        x_feed_arr = F_in_arr / (F_aq + 1e-10)
+        x_final_arr = x_feed_arr + total_eff * (x_eq_arr - x_feed_arr)
+
+        F_raffinate_arr = x_final_arr * F_aq
+        F_extracted_arr = F_total_arr - F_raffinate_arr
+
+        # Convert back to dicts
         raffinate_flows = {eq.aqueous_carrier: F_aq}
         extract_flows = {eq.organic_carrier: F_org}
+        for i, s in enumerate(solutes):
+            raffinate_flows[s] = F_raffinate_arr[i]
+            extract_flows[s] = F_extracted_arr[i]
 
-        for s in solutes:
-            K = K_dict[s]
-
-            F_in = jnp.asarray(feed_flows.get(s, 0.0))
-            F_solvent_s = jnp.asarray(solvent_flows.get(s, 0.0))
-
-            # Total solute amount
-            F_total = F_in + F_solvent_s
-
-            # At equilibrium: y = K * x and mass balance
-            # F_aq * x + F_org * y = F_total
-            # x = F_total / (F_aq + K * F_org)
-
-            x_eq = F_total / (F_aq + K * F_org)
-
-            # Approach to equilibrium with multiple stages
-            # Model: each stage achieves 80% of remaining driving force
-            # Total efficiency = 1 - (1 - eff)^N (differentiable in N)
-            eff_per_stage = 0.8
-            total_eff = 1.0 - (1.0 - eff_per_stage) ** n_stages
-
-            x_feed = F_in / F_aq
-            x_final = x_feed + total_eff * (x_eq - x_feed)
-
-            F_raffinate = x_final * F_aq
-            F_extracted = F_total - F_raffinate
-
-            raffinate_flows[s] = F_raffinate
-            extract_flows[s] = F_extracted
-
-            profiles["x"][s] = []
-            profiles["y"][s] = []
+        profiles = {"x": {s: [] for s in solutes}, "y": {s: [] for s in solutes}}
 
         return raffinate_flows, extract_flows, profiles
 
@@ -711,89 +769,113 @@ class DifferentialContactor:
         """Integrate rate equations for counter-current flow.
 
         Aqueous enters at z=0, organic enters at z=L.
-        Requires iterative solution (shooting method).
+
+        For constant K (linear system), solves the two-point BVP exactly
+        using matrix exponential. Each solute is independent.
+
+        System for each solute:
+            dc_aq/dz = -Kla * (K*c_aq - c_org) * area / F_aq
+            dc_org/dz = +Kla * (K*c_aq - c_org) * area / F_org
+
+        Boundary conditions:
+            c_aq(0) = c_aq_init (known)
+            c_org(L) = c_org_init (known)
+
+        Fully vectorized over solutes for JAX compatibility.
         """
+        from jax.scipy.linalg import expm
+
         p = self.params
         eq = p.equilibrium
         solutes = eq.solutes
+        n_solutes = len(solutes)
+        L = p.length
 
-        # For counter-current, we need to iterate
-        # Use fixed-point iteration on organic inlet composition
-
-        # Get Kla values
+        # Convert to arrays
+        K_arr = jnp.array([K_dict[s] for s in solutes])
         if isinstance(p.Kla, dict):
-            Kla = p.Kla
+            Kla_arr = jnp.array([p.Kla[s] for s in solutes])
         else:
-            Kla = {s: p.Kla for s in solutes}
+            Kla_arr = jnp.full(n_solutes, p.Kla)
 
-        def forward_integrate(c_org_at_L: dict) -> dict:
-            """Integrate from z=0 to z=L, return c_org at z=0."""
-            c_aq = {s: jnp.asarray(c_aq_init[s]) for s in solutes}
-            c_org = {s: jnp.asarray(c_org_at_L[s]) for s in solutes}
+        c_aq_0 = jnp.array([c_aq_init[s] for s in solutes])
+        c_org_L = jnp.array([c_org_init[s] for s in solutes])
 
-            for _ in range(n_seg):
-                for s in solutes:
-                    K = K_dict[s]
-                    c_eq = c_aq[s] * K  # Equilibrium org concentration
+        area = p.area
 
-                    # Mass transfer rate: from aqueous to organic if c_eq > c_org
-                    rate = Kla[s] * (c_eq - c_org[s]) * p.area * dz
+        # Build system matrices for each solute
+        # For counter-current flow, organic flows in -z direction, so:
+        #   dc_aq/dz = -Kla*(K*c_aq - c_org)*area/F_aq  (aqueous loses to organic)
+        #   dc_org/dz = -Kla*(K*c_aq - c_org)*area/F_org  (organic gains, but flows backward)
+        # Note: both have NEGATIVE sign because dc_org/dz = -rate/F_org for backward flow
+        #
+        # A = [[-a,  b],    where a = Kla*K*area/F_aq, b = Kla*area/F_aq
+        #      [-c,  d]]          c = Kla*K*area/F_org, d = Kla*area/F_org
+        alpha = Kla_arr * area
+        a = alpha * K_arr / F_aq  # shape (n_solutes,)
+        b = alpha / F_aq
+        c = alpha * K_arr / F_org
+        d = alpha / F_org
 
-                    # Update concentrations
-                    # Aqueous loses solute (flows in +z direction)
-                    c_aq[s] = c_aq[s] - rate / F_aq
-                    # Organic gains solute (flows in -z direction, so add rate)
-                    c_org[s] = c_org[s] + rate / F_org
+        # Stack into matrices: shape (n_solutes, 2, 2)
+        A_matrices = jnp.stack([
+            jnp.stack([-a, b], axis=-1),
+            jnp.stack([-c, d], axis=-1)  # Note: [-c, d] for counter-current
+        ], axis=-2).transpose(2, 0, 1)  # (n_solutes, 2, 2)
 
-                    # Clip to non-negative
-                    c_aq[s] = jnp.maximum(c_aq[s], 0.0)
-                    c_org[s] = jnp.maximum(c_org[s], 0.0)
+        # Compute matrix exponential at z=L for each solute
+        # M = expm(A * L), shape (n_solutes, 2, 2)
+        def compute_expm(A):
+            return expm(A * L)
+        M = jax.vmap(compute_expm)(A_matrices)
 
-            return c_org, c_aq
+        # Extract matrix elements
+        M00 = M[:, 0, 0]
+        M01 = M[:, 0, 1]
+        M10 = M[:, 1, 0]
+        M11 = M[:, 1, 1]
 
-        # Initial guess: organic leaves with equilibrium amount
-        c_org_at_L = {s: jnp.asarray(c_org_init[s]) for s in solutes}
+        # Solve for c_org(0) using boundary conditions
+        # c_org(L) = M10 * c_aq(0) + M11 * c_org(0)
+        # c_org(0) = (c_org(L) - M10 * c_aq(0)) / M11
+        c_org_0 = (c_org_L - M10 * c_aq_0) / (M11 + 1e-10)
 
-        # Fixed-point iteration
-        for _ in range(20):  # Usually converges quickly
-            c_org_at_0, c_aq_at_L = forward_integrate(c_org_at_L)
+        # Compute c_aq(L)
+        c_aq_L = M00 * c_aq_0 + M01 * c_org_0
 
-            # The organic at z=L should match the inlet (c_org_init)
-            # But we computed what c_org is at z=0
-            # For shooting method, we'd adjust c_org_at_L
-            # Here we use a simpler approach: just use final values
+        # Compute profiles at each z position using lax.scan
+        z_positions = jnp.linspace(0, L, n_seg + 1)
 
-        # Final integration to get profiles
-        c_aq_profile = {s: [c_aq_init[s]] for s in solutes}
-        c_org_profile = {s: [] for s in solutes}
+        def compute_profile_at_z(z):
+            """Compute concentrations at position z for all solutes."""
+            def expm_at_z(A):
+                return expm(A * z)
+            M_z = jax.vmap(expm_at_z)(A_matrices)
+            c_aq_z = M_z[:, 0, 0] * c_aq_0 + M_z[:, 0, 1] * c_org_0
+            c_org_z = M_z[:, 1, 0] * c_aq_0 + M_z[:, 1, 1] * c_org_0
+            return c_aq_z, c_org_z
 
-        c_aq = {s: jnp.asarray(c_aq_init[s]) for s in solutes}
-        c_org = {s: jnp.asarray(c_org_at_0[s]) for s in solutes}
+        # Vectorize over z positions
+        c_aq_profile, c_org_profile = jax.vmap(compute_profile_at_z)(z_positions)
+        # Shapes: (n_seg+1, n_solutes)
 
-        for i in range(n_seg):
-            c_org_profile_step = {}
-            for s in solutes:
-                K = K_dict[s]
-                c_eq = c_aq[s] * K
-                rate = Kla[s] * (c_eq - c_org[s]) * p.area * dz
+        # Ensure non-negative with soft clipping for smooth gradients
+        # (should be automatic for physical systems, this is a safety net)
+        c_aq_profile = soft_clip_positive(c_aq_profile)
+        c_org_profile = soft_clip_positive(c_org_profile)
 
-                c_aq[s] = jnp.maximum(c_aq[s] - rate / F_aq, 0.0)
-                c_org[s] = jnp.maximum(c_org[s] + rate / F_org, 0.0)
+        # Final concentrations
+        c_aq_final = c_aq_profile[-1]
+        c_org_final = c_org_profile[0]  # Organic exits at z=0
 
-                c_aq_profile[s].append(c_aq[s])
-                c_org_profile_step[s] = c_org[s]
-
-            for s in solutes:
-                c_org_profile[s].append(c_org_profile_step[s])
-
-        # Output flows
-        raffinate_flows = {s: c_aq[s] * F_aq for s in solutes}
-        extract_flows = {s: c_org[s] * F_org for s in solutes}
+        # Convert back to dicts
+        raffinate_flows = {s: c_aq_final[i] * F_aq for i, s in enumerate(solutes)}
+        extract_flows = {s: c_org_final[i] * F_org for i, s in enumerate(solutes)}
 
         profiles = {
-            "z": jnp.linspace(0, p.length, n_seg + 1),
-            "c_aq": c_aq_profile,
-            "c_org": c_org_profile,
+            "z": z_positions,
+            "c_aq": {s: c_aq_profile[:, i] for i, s in enumerate(solutes)},
+            "c_org": {s: c_org_profile[:, i] for i, s in enumerate(solutes)},
         }
 
         return raffinate_flows, extract_flows, profiles
@@ -812,44 +894,61 @@ class DifferentialContactor:
         """Integrate rate equations for co-current flow.
 
         Both phases enter at z=0 and exit at z=L.
-        Straightforward forward integration.
+        Straightforward forward integration using lax.scan.
+
+        Fully vectorized over solutes for JAX compatibility.
         """
         p = self.params
         eq = p.equilibrium
         solutes = eq.solutes
 
+        # Convert to arrays for vectorized computation
+        K_arr = jnp.array([K_dict[s] for s in solutes])
         if isinstance(p.Kla, dict):
-            Kla = p.Kla
+            Kla_arr = jnp.array([p.Kla[s] for s in solutes])
         else:
-            Kla = {s: p.Kla for s in solutes}
+            Kla_arr = jnp.full(len(solutes), p.Kla)
 
-        c_aq_profile = {s: [c_aq_init[s]] for s in solutes}
-        c_org_profile = {s: [c_org_init[s]] for s in solutes}
+        c_aq_init_arr = jnp.array([c_aq_init[s] for s in solutes])
+        c_org_init_arr = jnp.array([c_org_init[s] for s in solutes])
 
-        c_aq = {s: jnp.asarray(c_aq_init[s]) for s in solutes}
-        c_org = {s: jnp.asarray(c_org_init[s]) for s in solutes}
+        area = p.area
 
-        for i in range(n_seg):
-            for s in solutes:
-                K = K_dict[s]
-                c_eq = c_aq[s] * K  # Equilibrium concentration in organic
+        def step(state, _):
+            """Single integration step (Euler method)."""
+            c_aq, c_org = state
 
-                # Mass transfer from aqueous to organic
-                rate = Kla[s] * (c_eq - c_org[s]) * p.area * dz
+            # Equilibrium concentration in organic phase
+            c_eq = c_aq * K_arr
 
-                c_aq[s] = jnp.maximum(c_aq[s] - rate / F_aq, 0.0)
-                c_org[s] = jnp.maximum(c_org[s] + rate / F_org, 0.0)
+            # Mass transfer rate (vectorized over solutes)
+            rate = Kla_arr * (c_eq - c_org) * area * dz
 
-                c_aq_profile[s].append(c_aq[s])
-                c_org_profile[s].append(c_org[s])
+            # Update concentrations with soft clipping for smooth gradients
+            c_aq_new = soft_clip_positive(c_aq - rate / F_aq)
+            c_org_new = soft_clip_positive(c_org + rate / F_org)
 
-        raffinate_flows = {s: c_aq[s] * F_aq for s in solutes}
-        extract_flows = {s: c_org[s] * F_org for s in solutes}
+            return (c_aq_new, c_org_new), (c_aq_new, c_org_new)
+
+        # Run integration with lax.scan
+        init_state = (c_aq_init_arr, c_org_init_arr)
+        (c_aq_final, c_org_final), (c_aq_history, c_org_history) = lax.scan(
+            step, init_state, None, length=n_seg
+        )
+
+        # Build profiles (prepend initial values)
+        # c_aq_history has shape (n_seg, n_solutes)
+        c_aq_full = jnp.concatenate([c_aq_init_arr[None, :], c_aq_history], axis=0)
+        c_org_full = jnp.concatenate([c_org_init_arr[None, :], c_org_history], axis=0)
+
+        # Convert back to dicts
+        raffinate_flows = {s: c_aq_final[i] * F_aq for i, s in enumerate(solutes)}
+        extract_flows = {s: c_org_final[i] * F_org for i, s in enumerate(solutes)}
 
         profiles = {
             "z": jnp.linspace(0, p.length, n_seg + 1),
-            "c_aq": c_aq_profile,
-            "c_org": c_org_profile,
+            "c_aq": {s: c_aq_full[:, i] for i, s in enumerate(solutes)},
+            "c_org": {s: c_org_full[:, i] for i, s in enumerate(solutes)},
         }
 
         return raffinate_flows, extract_flows, profiles
