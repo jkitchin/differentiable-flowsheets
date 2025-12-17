@@ -655,7 +655,12 @@ class FedBatchBioreactor:
         mu_profile = jax.vmap(calc_mu_single)(S_profile, X_profile, P_profile)
 
         # Final state as stream (total mass)
+        # Use y_final directly for proper gradient flow (not interpolated trajectory)
         V_final = y_final[0]
+        X_final = y_final[1] / jnp.maximum(V_final, MIN_CONC)
+        S_final = y_final[2] / jnp.maximum(V_final, MIN_CONC)
+        P_final = y_final[3] / jnp.maximum(V_final, MIN_CONC)
+
         outlet_flows = {
             "cells": y_final[1],      # Total cell mass (g)
             "substrate": y_final[2],  # Total substrate mass (g)
@@ -672,9 +677,9 @@ class FedBatchBioreactor:
             "V": V_profile,
             "mu": mu_profile,
             "V_final": V_final,
-            "X_final": X_profile[-1],
-            "S_final": S_profile[-1],
-            "P_final": P_profile[-1],
+            "X_final": X_final,
+            "S_final": S_final,
+            "P_final": P_final,
             "solver": solver_used,
         }
 

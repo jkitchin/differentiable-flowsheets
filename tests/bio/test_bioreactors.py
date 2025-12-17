@@ -216,7 +216,7 @@ class TestFedBatchBioreactor:
                 X0=X0,
                 S0=20.0,
                 P0=0.0,
-                t_final=10.0,
+                t_final=5.0,  # Shorter time so substrate doesn't deplete
                 n_steps=50,
             )
             return info["P_final"]
@@ -225,4 +225,5 @@ class TestFedBatchBioreactor:
         grad_X0 = jax.grad(final_product)(jnp.array(0.5))
 
         # Gradient should be positive (more initial cells = more product)
+        # Note: At t=10h substrate depletes, making gradient ~0. Use t=5h.
         assert float(grad_X0) > 0
