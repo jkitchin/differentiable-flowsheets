@@ -26,6 +26,12 @@ from difflow.streams import Stream, get_flows, make_stream
 from difflow.thermo import IdealThermo
 from difflow.dynamic.state import StateSpec, StateVar
 
+# Check for diffrax availability
+try:
+    from difflow.dynamic.diffrax_backend import integrate_diffrax, HAS_DIFFRAX
+except ImportError:
+    HAS_DIFFRAX = False
+
 
 # Type alias for rate function
 RateFunction = Callable[[dict[str, Array], Array, dict], Array]
@@ -112,6 +118,10 @@ class FedBatchReactor:
         feed_T: Array | float | None = None,
         Q_fn: Callable[[Array], Array] | None = None,
         n_steps: int = 100,
+        use_diffrax: bool = True,
+        diffrax_solver: str = "tsit5",
+        rtol: float = 1e-5,
+        atol: float = 1e-7,
     ) -> tuple[Stream, dict[str, Array]]:
         """Simulate fed-batch reactor operation.
 
@@ -127,6 +137,10 @@ class FedBatchReactor:
             feed_T: Feed temperature (K). Default is T0.
             Q_fn: Heat duty function Q(t) for specified_duty mode (W).
             n_steps: Number of integration steps.
+            use_diffrax: If True and diffrax available, use diffrax for integration.
+            diffrax_solver: Diffrax solver name (e.g., "tsit5", "dopri5", "kvaerno5").
+            rtol: Relative tolerance for diffrax solver.
+            atol: Absolute tolerance for diffrax solver.
 
         Returns:
             final_stream: Stream representing final reactor contents
@@ -258,22 +272,43 @@ class FedBatchReactor:
 
             return jnp.concatenate([jnp.array([dV_dt]), dn_dt, jnp.array([dT_dt])])
 
-        def rk4_step(y, t):
-            """Fourth-order Runge-Kutta step."""
-            k1 = rhs(y, t, T0)
-            k2 = rhs(y + 0.5*dt*k1, t + 0.5*dt, T0)
-            k3 = rhs(y + 0.5*dt*k2, t + 0.5*dt, T0)
-            k4 = rhs(y + dt*k3, t + dt, T0)
-            y_new = y + (dt/6) * (k1 + 2*k2 + 2*k3 + k4)
+        # Diffrax-compatible RHS wrapper (f(t, y) -> dy/dt)
+        def diffrax_rhs(t, y):
+            return rhs(y, t, T0)
+
+        # Choose integration method
+        if use_diffrax and HAS_DIFFRAX:
+            # Use diffrax for integration
+            result = integrate_diffrax(
+                diffrax_rhs,
+                y0,
+                t_span=(0.0, float(t_final)),
+                solver=diffrax_solver,
+                rtol=rtol,
+                atol=atol,
+                saveat=t_array,
+            )
+            y_all = result.trajectory.y
             # Ensure positivity
-            y_new = jnp.maximum(y_new, 1e-20)
-            return y_new, y
+            y_all = jnp.maximum(y_all, 1e-20)
+        else:
+            # Fallback to RK4 via lax.scan
+            def rk4_step(y, t):
+                """Fourth-order Runge-Kutta step."""
+                k1 = rhs(y, t, T0)
+                k2 = rhs(y + 0.5*dt*k1, t + 0.5*dt, T0)
+                k3 = rhs(y + 0.5*dt*k2, t + 0.5*dt, T0)
+                k4 = rhs(y + dt*k3, t + dt, T0)
+                y_new = y + (dt/6) * (k1 + 2*k2 + 2*k3 + k4)
+                # Ensure positivity
+                y_new = jnp.maximum(y_new, 1e-20)
+                return y_new, y
 
-        # Integrate using lax.scan
-        y_final, y_history = lax.scan(rk4_step, y0, t_array[:-1])
+            # Integrate using lax.scan
+            y_final_rk4, y_history = lax.scan(rk4_step, y0, t_array[:-1])
 
-        # Append final state
-        y_all = jnp.vstack([y_history, y_final[None, :]])
+            # Append final state
+            y_all = jnp.vstack([y_history, y_final_rk4[None, :]])
 
         # Extract profiles
         V_profile = y_all[:, 0]
