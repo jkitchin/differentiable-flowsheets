@@ -21,6 +21,7 @@ from typing import Callable, Literal, Any
 from dataclasses import dataclass
 import jax.numpy as jnp
 from jax import Array, lax
+import optimistix as optx
 
 from difflow.streams import Stream, get_flows, make_stream
 from difflow.thermo import IdealThermo
@@ -733,23 +734,23 @@ def batch_time_for_conversion(
         )
         return info["conversion"][target_species]
 
-    # Simple bisection
-    def bisection_step(state, _):
-        t_lo, t_hi = state
-        t_mid = (t_lo + t_hi) / 2
-        X_mid = get_conversion(t_mid)
-        t_lo_new = jnp.where(X_mid < target_conversion, t_mid, t_lo)
-        t_hi_new = jnp.where(X_mid < target_conversion, t_hi, t_mid)
-        return (t_lo_new, t_hi_new), None
+    # Use optimistix bisection for root finding
+    # Find t where conversion(t) - target = 0
+    def residual(t, args):
+        return get_conversion(t) - target_conversion
 
-    (t_lo_final, t_hi_final), _ = lax.scan(
-        bisection_step,
-        (t_min, t_max),
-        None,
-        length=30,  # ~30 iterations for good precision
+    solver = optx.Bisection(rtol=1e-4, atol=1e-4, expand_if_necessary=True)
+    sol = optx.root_find(
+        residual,
+        solver,
+        jnp.array((t_min + t_max) / 2),  # Initial guess (midpoint)
+        args=None,
+        options=dict(lower=t_min, upper=t_max),
+        max_steps=50,
+        throw=False,
     )
 
-    return (t_lo_final + t_hi_final) / 2
+    return sol.value
 
 
 def optimal_feed_profile(
