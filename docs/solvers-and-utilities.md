@@ -21,11 +21,11 @@ This document covers numerical solvers, uncertainty propagation, and utility fun
 
 ## Numerical Solvers
 
-**Location**: `difflow/solvers.py`
+**External Libraries**: Difflow uses [optimistix](https://docs.kidger.site/optimistix/) for fixed-point iteration and root-finding, and [diffrax](https://docs.kidger.site/diffrax/) for ODE integration.
 
 All solvers in Difflow are:
 - Implemented using JAX primitives for automatic differentiation
-- Support custom VJP rules for efficient backward passes
+- Support implicit differentiation for efficient backward passes
 - Fully JIT-compilable for performance
 
 ### Fixed-Point Iteration
@@ -33,19 +33,30 @@ All solvers in Difflow are:
 Solves equations of the form $x^* = f(x^*, \text{args})$.
 
 ```python
-from difflow.solvers import fixed_point_solve
+import optimistix as optx
 
-def solve_result(result):
-    """Fixed-point iteration with damping."""
-    x_final = fixed_point_solve(
-        f=update_function,      # x_new = f(x_old, args)
-        x0=initial_guess,       # Starting point
-        args=additional_args,   # Passed to f
-        tol=1e-8,               # Convergence tolerance
-        max_iter=100,           # Maximum iterations
-        damping=0.5             # Damping factor (0-1)
+def solve_recycle(fresh_feed):
+    """Fixed-point iteration for recycle streams."""
+
+    def flowsheet_iteration(recycle, args):
+        """Update function: recycle_out = f(recycle_in)"""
+        # Mix fresh feed with recycle, run process, return new recycle
+        ...
+        return new_recycle
+
+    # Create solver with tolerances
+    solver = optx.FixedPointIteration(rtol=1e-8, atol=1e-8)
+
+    # Solve for steady state
+    solution = optx.fixed_point(
+        fn=flowsheet_iteration,
+        solver=solver,
+        y0=initial_guess,
+        args=fresh_feed,
+        max_steps=100,
+        throw=False  # Return solution even if not fully converged
     )
-    return x_final
+    return solution.value
 ```
 
 **Algorithm**:
@@ -61,6 +72,8 @@ $$\|x^{(k+1)} - x^{(k)}\| < \epsilon$$
 **Example**: Solving recycle loop
 
 ```python
+import optimistix as optx
+
 def recycle_update(recycle_flow, args):
     feed, reactor_params = args
 
@@ -77,13 +90,15 @@ def recycle_update(recycle_flow, args):
     return liquid['F_A'] * 0.2  # 20% recycle
 
 # Solve for steady-state recycle flow
-recycle_ss = fixed_point_solve(
-    f=recycle_update,
-    x0=0.1,  # Initial guess
+solver = optx.FixedPointIteration(rtol=1e-6, atol=1e-6)
+solution = optx.fixed_point(
+    fn=recycle_update,
+    solver=solver,
+    y0=0.1,  # Initial guess
     args=(fresh_feed, reactor_params),
-    tol=1e-6,
-    damping=0.7
+    max_steps=100
 )
+recycle_ss = solution.value
 ```
 
 ### Newton-Raphson Solver
@@ -91,18 +106,28 @@ recycle_ss = fixed_point_solve(
 Solves equations of the form $g(x^*, \text{args}) = 0$.
 
 ```python
-from difflow.solvers import newton_solve
+import optimistix as optx
 
-def solve_equation(x_solution):
-    """Newton-Raphson solver."""
-    x_solution = newton_solve(
-        f=residual_function,    # g(x, args) = 0
-        x0=initial_guess,
-        args=additional_args,
-        tol=1e-10,
-        max_iter=50
+def solve_equation(args):
+    """Newton-Raphson root finding."""
+
+    def residual_function(x, args):
+        """Function whose root we seek: g(x, args) = 0"""
+        # Return residual that should equal zero
+        return ...
+
+    # Create Newton solver
+    solver = optx.Newton(rtol=1e-10, atol=1e-10)
+
+    # Find root
+    solution = optx.root_find(
+        fn=residual_function,
+        solver=solver,
+        y0=initial_guess,
+        args=args,
+        max_steps=50
     )
-    return x_solution
+    return solution.value
 ```
 
 **Algorithm**:
@@ -119,37 +144,60 @@ Where $J = \frac{\partial g}{\partial x}$ is the Jacobian, computed automaticall
 **Example**: Bubble point temperature
 
 ```python
+import optimistix as optx
+
 def bubble_residual(T, args):
     x, P, K_func = args
     K = K_func(T)
     # Bubble point: sum(x_i * K_i) = 1
     return jnp.sum(x * K) - 1.0
 
-T_bubble = newton_solve(
-    f=bubble_residual,
-    x0=350.0,
+solver = optx.Newton(rtol=1e-8, atol=1e-8)
+solution = optx.root_find(
+    fn=bubble_residual,
+    solver=solver,
+    y0=350.0,
     args=(liquid_composition, pressure, K_values_func),
-    tol=1e-8
+    max_steps=50
 )
+T_bubble = solution.value
 ```
 
 ### Rachford-Rice Solver
 
-Specialized solver for flash calculations.
+Specialized solver for flash calculations. Uses optimistix's bisection method with automatic bounds.
 
 ```python
-from difflow.solvers import rachford_rice, rachford_rice_compositions
+import optimistix as optx
 
-# Solve for vapor fraction
-V_frac = rachford_rice(
-    z=feed_composition,     # Feed mole fractions (array)
-    K=K_values,             # Equilibrium ratios (array)
-    tol=1e-10,
-    max_iter=50
-)
+def rachford_rice(psi, z, K):
+    """Rachford-Rice equation: should equal zero at solution."""
+    return jnp.sum(z * (K - 1) / (1 + psi * (K - 1)))
+
+def solve_flash(z, K):
+    """Solve for vapor fraction using bisection."""
+    # Bisection bounds for vapor fraction
+    psi_min = 1 / (1 - jnp.max(K)) + 1e-6
+    psi_max = 1 / (1 - jnp.min(K)) - 1e-6
+    psi_min = jnp.clip(psi_min, 0.0, None)
+    psi_max = jnp.clip(psi_max, None, 1.0)
+
+    solver = optx.Bisection(rtol=1e-10, atol=1e-10)
+    solution = optx.root_find(
+        fn=rachford_rice,
+        solver=solver,
+        y0=0.5,
+        args=(z, K),
+        options={"lower": psi_min, "upper": psi_max},
+        max_steps=50
+    )
+    return solution.value
 
 # Get phase compositions from vapor fraction
-x, y = rachford_rice_compositions(z, K, V_frac)
+def phase_compositions(z, K, psi):
+    x = z / (1 + psi * (K - 1))  # Liquid
+    y = K * x                    # Vapor
+    return x, y
 ```
 
 **Rachford-Rice Equation**:
@@ -171,36 +219,50 @@ $$y_i = K_i x_i = \frac{K_i z_i}{1 + V(K_i - 1)}$$
 
 ### ODE Integration
 
-Used internally by PFR, fed-batch reactor, and other dynamic models.
+Used internally by PFR, fed-batch reactor, and other dynamic models. Difflow uses [diffrax](https://docs.kidger.site/diffrax/) for ODE integration.
 
 ```python
-from jax import lax
+import diffrax
 
-def rk4_step(state, dt, derivative_fn, args):
-    """Single RK4 step."""
-    k1 = derivative_fn(state, args)
-    k2 = derivative_fn(state + 0.5 * dt * k1, args)
-    k3 = derivative_fn(state + 0.5 * dt * k2, args)
-    k4 = derivative_fn(state + dt * k3, args)
-    return state + (dt / 6.0) * (k1 + 2*k2 + 2*k3 + k4)
+def integrate_ode(y0, t_span, derivative_fn, args):
+    """Integrate ODE using diffrax."""
 
-def integrate_ode(y0, t_span, n_steps, derivative_fn, args):
-    """Integrate ODE using RK4 with lax.scan."""
-    dt = (t_span[1] - t_span[0]) / n_steps
+    def vector_field(t, y, args):
+        """dy/dt = f(t, y, args)"""
+        return derivative_fn(y, args)
 
-    def scan_fn(carry, _):
-        state, t = carry
-        new_state = rk4_step(state, dt, derivative_fn, args)
-        return (new_state, t + dt), new_state
+    # Define the ODE term
+    term = diffrax.ODETerm(vector_field)
 
-    _, trajectory = lax.scan(scan_fn, (y0, t_span[0]), None, length=n_steps)
-    return trajectory
+    # Choose a solver (adaptive)
+    solver = diffrax.Tsit5()  # 5th order adaptive method
+
+    # Configure step size controller
+    stepsize_controller = diffrax.PIDController(rtol=1e-6, atol=1e-8)
+
+    # Optionally save at specific points
+    saveat = diffrax.SaveAt(ts=jnp.linspace(t_span[0], t_span[1], 101))
+
+    # Solve
+    solution = diffrax.diffeqsolve(
+        term,
+        solver,
+        t0=t_span[0],
+        t1=t_span[1],
+        dt0=0.01,  # Initial step size
+        y0=y0,
+        args=args,
+        saveat=saveat,
+        stepsize_controller=stepsize_controller
+    )
+    return solution.ys  # Trajectory at saved points
 ```
 
-**Why `lax.scan`?**
-- Efficient memory usage (doesn't store intermediate Jacobians)
-- Fully differentiable through the integration
+**Why diffrax?**
+- Adaptive step size control for efficiency and accuracy
+- Fully differentiable through the integration (supports adjoint methods)
 - JIT-compilable
+- Multiple solvers available (Tsit5, Dopri5, Kvaerno5 for stiff problems)
 
 ---
 
@@ -419,35 +481,45 @@ $$\frac{dx^*}{d\theta} = \left(I - \frac{\partial f}{\partial x}\bigg|_{x^*}\rig
 **Root-finding**:
 $$\frac{dx^*}{d\theta} = -\left(\frac{\partial g}{\partial x}\bigg|_{x^*}\right)^{-1} \frac{\partial g}{\partial \theta}\bigg|_{x^*}$$
 
-### Implementation with Custom VJP
+### Implementation with Optimistix
+
+Optimistix handles implicit differentiation automatically. When you use `optx.fixed_point()` or `optx.root_find()`, gradients are computed using the implicit function theorem rather than by backpropagating through the solver iterations.
 
 ```python
-from jax import custom_vjp
+import optimistix as optx
+import jax
 
-@custom_vjp
-def fixed_point_solve(f, x0, args, tol, max_iter):
-    # Forward pass: just run the iteration
-    x = x0
-    for _ in range(max_iter):
-        x_new = f(x, args)
-        if jnp.max(jnp.abs(x_new - x)) < tol:
-            break
-        x = x_new
-    return x
+def optimize_with_gradients(params):
+    """Example showing automatic gradient computation through solver."""
 
-def fixed_point_solve_fwd(f, x0, args, tol, max_iter):
-    x_star = fixed_point_solve(f, x0, args, tol, max_iter)
-    return x_star, (x_star, args)
+    def my_fixed_point(x, args):
+        # Fixed-point function that depends on params
+        return some_function(x, args, params)
 
-def fixed_point_solve_bwd(res, g):
-    x_star, args = res
-    # Solve: (I - df/dx)^T v = g for v
-    # Then: gradient w.r.t. args = (df/d_args)^T v
-    ...
-    return (None, None, args_grad, None, None)
+    solver = optx.FixedPointIteration(rtol=1e-8, atol=1e-8)
+    solution = optx.fixed_point(
+        fn=my_fixed_point,
+        solver=solver,
+        y0=initial_guess,
+        args=args,
+        max_steps=100
+    )
 
-fixed_point_solve.defvjp(fixed_point_solve_fwd, fixed_point_solve_bwd)
+    # The solution is differentiable w.r.t. params
+    return loss_function(solution.value)
+
+# Gradients computed via implicit differentiation
+grad_fn = jax.grad(optimize_with_gradients)
+gradients = grad_fn(params)
 ```
+
+**Note on Numerical Challenges**: Implicit differentiation requires inverting a matrix $(I - \partial f/\partial x)$ at the solution. This can become singular or ill-conditioned when:
+- The system is near a bifurcation point
+- Reactions go to very high conversion (near 100%)
+- The system is at a phase boundary
+- Recycle ratios are extreme
+
+If gradient computation fails while the forward solve succeeds, consider using finite differences for gradients or reformulating the problem.
 
 ### Benefits
 
@@ -552,11 +624,11 @@ Nu = nusselt_correlation(Re=10000, Pr=7, correlation='dittus_boelter')
 
 | Problem Type | Recommended Solver |
 |-------------|-------------------|
-| Fixed-point (well-behaved) | `fixed_point_solve` with damping |
-| Fixed-point (difficult) | Wegstein or Broyden acceleration |
-| Root-finding | `newton_solve` |
-| Flash calculation | `rachford_rice` |
-| ODE integration | RK4 with `lax.scan` |
+| Fixed-point (well-behaved) | `optx.FixedPointIteration` |
+| Fixed-point (difficult) | Increase max_steps, adjust tolerances |
+| Root-finding | `optx.Newton` or `optx.Bisection` (bounded) |
+| Flash calculation | `optx.Bisection` with Rachford-Rice bounds |
+| ODE integration | `diffrax.Tsit5` (adaptive), `diffrax.Kvaerno5` (stiff) |
 
 ### Convergence Tips
 

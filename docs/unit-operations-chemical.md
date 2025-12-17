@@ -181,13 +181,15 @@ PFRs are preferred for:
 ```python
 @dataclass
 class PFRParams:
-    volume: float          # Total reactor volume (m³)
-    stoichiometry: Array   # Stoichiometric matrix [n_species × n_reactions]
-    k_ref: float           # Rate constant at reference temperature
-    E_a: float             # Activation energy (J/mol)
-    T_ref: float           # Reference temperature (K)
-    dH_rxn: Array          # Heat of reaction (J/mol)
-    n_steps: int = 100     # Number of integration steps
+    V: float               # Total reactor volume (m³)
+    rate_fn: Callable      # Rate function: rate_fn(C, T, rate_params) -> r
+    stoich: Array          # Stoichiometry matrix [n_species × n_reactions]
+    rate_params: dict      # Parameters passed to rate_fn
+    species_order: list    # List of species names
+    dH_rxn: Array = None   # Heat of reaction (J/mol), required for non-isothermal
+    rtol: float = 1e-6     # Relative tolerance for ODE solver
+    atol: float = 1e-8     # Absolute tolerance for ODE solver
+    n_save_points: int = 101  # Points to save in profile output
 ```
 
 #### Inputs
@@ -218,26 +220,35 @@ $$\frac{dF_i}{dV} = \sum_j \nu_{ij} r_j$$
 
 $$\frac{dT}{dV} = \frac{-\sum_j r_j \Delta H_{rxn,j}}{F_{total} C_{p,mix}}$$
 
-**Integration Method**: 4th-order Runge-Kutta (RK4) implemented with `jax.lax.scan`
+**Integration Method**: Adaptive ODE integration using diffrax (Tsit5 or Dopri5 solvers)
 
 #### Example Usage
 
 ```python
 from difflow.units.pfr import PFR, PFRParams
+import jax.numpy as jnp
+
+# Define rate function: A -> B (first-order)
+def rate_fn(C, T, params):
+    """Rate function: r = k * C_A with Arrhenius temperature dependence."""
+    k_ref, E_a, T_ref = params['k_ref'], params['E_a'], params['T_ref']
+    R = 8.314
+    k = k_ref * jnp.exp(E_a / R * (1/T_ref - 1/T))
+    return jnp.array([k * C['A']])
 
 params = PFRParams(
-    volume=5.0,
-    stoichiometry=jnp.array([[-1.0], [1.0]]),
-    k_ref=0.5,
-    E_a=60000.0,
-    T_ref=400.0,
+    V=5.0,
+    rate_fn=rate_fn,
+    stoich=jnp.array([[-1.0], [1.0]]),  # A -> B
+    rate_params={'k_ref': 0.5, 'E_a': 60000.0, 'T_ref': 400.0},
+    species_order=['A', 'B'],
     dH_rxn=jnp.array([-50000.0]),
-    n_steps=200
+    n_save_points=201
 )
 
-pfr = PFR(params, thermo, species_order=['A', 'B'])
+pfr = PFR(params, thermo)
 inlet = make_stream({'A': 2.0, 'B': 0.0}, T=400.0, P=200000.0)
-outlet, info = pfr(inlet, volumetric_flow=0.001)
+outlet, info = pfr(inlet, Q=0.001)  # Q = volumetric flow rate
 
 # Plot conversion profile
 import matplotlib.pyplot as plt
@@ -315,14 +326,12 @@ Fed-batch reactors are used for:
 ```python
 @dataclass
 class FedBatchParams:
-    initial_volume: float   # Initial liquid volume (m³)
-    stoichiometry: Array    # Stoichiometric matrix
-    k_ref: float           # Rate constant
-    E_a: float             # Activation energy (J/mol)
-    T_ref: float           # Reference temperature (K)
-    dH_rxn: Array          # Heat of reaction (J/mol)
-    batch_time: float      # Total batch time (s)
-    n_steps: int = 100     # Integration steps
+    V0: float              # Initial reactor volume (m³)
+    rate_fn: Callable      # Rate function: rate_fn(C, T, rate_params) -> r
+    stoich: Array          # Stoichiometry matrix [n_species × n_reactions]
+    rate_params: dict      # Parameters passed to rate_fn
+    species_order: list    # List of species names
+    dH_rxn: Array = None   # Heat of reaction (J/mol), None for isothermal
 ```
 
 #### Inputs

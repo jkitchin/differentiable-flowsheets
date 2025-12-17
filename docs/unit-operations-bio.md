@@ -175,12 +175,19 @@ Fed-batch bioreactors are used for:
 
 ```python
 @dataclass
-class FedBatchParams(BioreactorParams):
-    initial_volume: float   # Initial volume (m³)
-    max_volume: float       # Maximum vessel volume (m³)
-    batch_time: float       # Total batch duration (h)
-    n_steps: int = 500      # Integration steps
+class FedBatchParams:
+    V0: float              # Initial volume (L)
+    Y_xs: float            # Yield coefficient (g cells / g substrate)
+    kinetic_fn: Callable   # Growth kinetics function
+    kinetic_params: dict   # Parameters for kinetic function
+    k_d: float = 0.0       # Death rate constant (1/h)
+    m_s: float = 0.0       # Maintenance coefficient (g/g/h)
+    alpha: float = 0.0     # Growth-associated product formation (g/g)
+    beta: float = 0.0      # Non-growth-associated product formation (g/g/h)
+    species_order: list = ["cells", "substrate", "product"]
 ```
+
+**Integration**: Uses diffrax (adaptive Tsit5 by default) or RK4 fallback
 
 #### Inputs
 
@@ -220,18 +227,17 @@ $$\frac{d(VP)}{dt} = V(\alpha \mu + \beta)X$$
 #### Example Usage
 
 ```python
-from difflow_bio.units.bioreactors import FedBatchBioreactor, FedBatchParams
+from difflow_bio.units.bioreactors import FedBatchBioreactor, FedBatchParams, monod_kinetics
+import jax.numpy as jnp
 
 params = FedBatchParams(
-    volume=10.0,
-    initial_volume=5.0,
-    max_volume=10.0,
-    mu_max=0.4,
-    K_s=0.5,
-    Y_xs=0.5,
-    batch_time=72.0,  # hours
-    alpha=0.1,
-    beta=0.02
+    V0=5.0,            # Initial volume (L)
+    Y_xs=0.5,          # Yield coefficient
+    kinetic_fn=monod_kinetics,
+    kinetic_params={'mu_max': 0.4, 'K_s': 0.5},
+    k_d=0.01,          # Death rate
+    alpha=0.1,         # Growth-associated product formation
+    beta=0.02          # Non-growth-associated product formation
 )
 
 bioreactor = FedBatchBioreactor(params)
@@ -240,7 +246,14 @@ bioreactor = FedBatchBioreactor(params)
 def exponential_feed(t):
     return 0.1 * jnp.exp(0.1 * t)
 
-outlet, info = bioreactor(feed, feed_rate=exponential_feed, X_0=0.5, S_0=20.0)
+# Run simulation
+outlet, info = bioreactor(
+    t_span=(0.0, 72.0),  # hours
+    X0=0.5,              # Initial cell concentration (g/L)
+    S0=20.0,             # Initial substrate (g/L)
+    feed_profile=exponential_feed,
+    S_f=200.0            # Feed substrate concentration
+)
 print(f"Final cell concentration: {info['X_final']:.2f} g/L")
 print(f"Final product: {info['P_final']:.2f} g/L")
 ```
