@@ -16,7 +16,7 @@ from jax import Array
 import jax
 
 from difflow.streams import Stream, get_species, get_flows, make_stream
-from difflow.solvers import fixed_point_solve
+import optimistix as optx
 
 
 @dataclass
@@ -35,6 +35,15 @@ class Unit:
     inlet_names: list[str]
     outlet_names: list[str]
     params: dict = field(default_factory=dict)
+
+    def __hash__(self):
+        """Make Unit hashable for JIT compilation with optimistix."""
+        return hash((
+            self.name,
+            id(self.operation),
+            tuple(self.inlet_names),
+            tuple(self.outlet_names),
+        ))
 
 
 class Flowsheet:
@@ -242,14 +251,16 @@ class Flowsheet:
         args = (self.feeds, self.units, self.recycles, self.species_order)
 
         # Solve fixed-point problem
-        tear_converged = fixed_point_solve(
+        fp_solver = optx.FixedPointIteration(rtol=tol, atol=tol)
+        sol = optx.fixed_point(
             flowsheet_iteration,
+            fp_solver,
             tear_array,
-            args,
-            tol=tol,
-            max_iter=max_iter,
-            damping=damping,
+            args=args,
+            max_steps=max_iter,
+            throw=False,
         )
+        tear_converged = sol.value
 
         # Final solve with converged tear streams
         final_tear = self._array_to_streams(tear_converged, list(tear_initial.keys()))
