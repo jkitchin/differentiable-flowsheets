@@ -68,6 +68,7 @@ from abc import ABC, abstractmethod
 import jax
 import jax.numpy as jnp
 from jax import Array, lax
+import optimistix as optx
 
 from difflow.streams import Stream, get_flows, make_stream
 from difflow.dynamic.state import StateSpec, StateVar, StateVector
@@ -430,7 +431,7 @@ class DAEUnitBase(ABC):
 
 
 # =============================================================================
-# Newton Solver for Algebraic Constraints
+# Newton Solver for Algebraic Constraints (using optimistix)
 # =============================================================================
 
 def newton_solve(
@@ -440,9 +441,10 @@ def newton_solve(
     max_iter: int = 50,
     damping: float = 1.0,
 ) -> tuple[Array, dict]:
-    """Solve g(z) = 0 using Newton's method with JAX.
+    """Solve g(z) = 0 using Newton's method via optimistix.
 
-    Uses automatic differentiation to compute the Jacobian.
+    Uses optimistix.Newton solver for robust root finding with
+    automatic differentiation for the Jacobian.
 
     Args:
         residual_fn: Function z -> g(z) where we want g(z) = 0
@@ -450,47 +452,37 @@ def newton_solve(
         tol: Convergence tolerance
         max_iter: Maximum iterations
         damping: Step size damping factor (0 < damping <= 1)
+                 Note: optimistix handles line search internally
 
     Returns:
         (z_solution, info): Solution and convergence info
     """
-    def newton_step(carry, _):
-        z, converged = carry
+    # Wrap residual function for optimistix (expects (y, args) signature)
+    def optx_residual(z, args):
+        return residual_fn(z)
 
-        # Compute residual and Jacobian
-        g = residual_fn(z)
-        J = jax.jacobian(residual_fn)(z)
+    # Create Newton solver with specified tolerances
+    solver = optx.Newton(rtol=tol, atol=tol)
 
-        # Newton step: dz = -J^{-1} @ g
-        # Use solve instead of inverse for numerical stability
-        dz = jnp.linalg.solve(J + 1e-10 * jnp.eye(J.shape[0]), -g)
-
-        # Update with damping
-        z_new = z + damping * dz
-
-        # Check convergence
-        norm_g = jnp.max(jnp.abs(g))
-        is_converged = norm_g < tol
-
-        # Only update if not already converged
-        z_out = jnp.where(converged, z, z_new)
-        converged_out = converged | is_converged
-
-        return (z_out, converged_out), norm_g
-
-    # Run Newton iterations
-    init_carry = (z0, jnp.array(False))
-    (z_final, converged), residual_history = lax.scan(
-        newton_step, init_carry, None, length=max_iter
+    # Solve using optimistix root_find
+    sol = optx.root_find(
+        optx_residual,
+        solver,
+        z0,
+        args=None,
+        max_steps=max_iter,
+        throw=False,
     )
 
+    # Build info dict compatible with previous interface
     info = {
-        "converged": converged,
-        "residual_history": residual_history,
-        "n_iter": max_iter,  # Could track actual iterations
+        "converged": jnp.array(sol.result == optx.RESULTS.successful),
+        "residual_history": jnp.array([]),  # optimistix doesn't expose this
+        "n_iter": max_iter,  # Could use sol.stats if available
+        "result": sol.result,
     }
 
-    return z_final, info
+    return sol.value, info
 
 
 def solve_algebraic(

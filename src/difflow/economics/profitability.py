@@ -18,6 +18,7 @@ from jax import Array
 from jax import lax
 from dataclasses import dataclass
 from typing import Callable, NamedTuple
+import optimistix as optx
 
 
 # =============================================================================
@@ -263,7 +264,7 @@ def irr(
     max_iter: int = 100,
     tol: float = 1e-8,
 ) -> Array:
-    """Calculate Internal Rate of Return using Newton's method.
+    """Calculate Internal Rate of Return using optimistix Newton solver.
 
     IRR is the discount rate at which NPV = 0.
 
@@ -280,28 +281,27 @@ def irr(
     Returns:
         Internal Rate of Return (as decimal, e.g., 0.15 for 15%)
     """
-    rate = jnp.array(initial_guess)
+    rate0 = jnp.array(initial_guess)
 
-    # Newton's method with gradient
-    def newton_step(rate):
-        f = irr_residual(rate, cash_flows, initial_investment)
-        df = jax.grad(lambda r: irr_residual(r, cash_flows, initial_investment))(rate)
-        # Avoid division by very small derivatives
-        df_safe = jnp.where(jnp.abs(df) < 1e-10, 1e-10, df)
-        return rate - f / df_safe
+    # Wrap residual for optimistix (expects (y, args) signature)
+    def optx_residual(rate, args):
+        cf, inv = args
+        return irr_residual(rate, cf, inv)
 
-    def cond_fn(state):
-        rate, i = state
-        f = jnp.abs(irr_residual(rate, cash_flows, initial_investment))
-        return (f > tol) & (i < max_iter)
+    # Create Newton solver
+    solver = optx.Newton(rtol=tol, atol=tol)
 
-    def body_fn(state):
-        rate, i = state
-        return (newton_step(rate), i + 1)
+    # Solve using optimistix
+    sol = optx.root_find(
+        optx_residual,
+        solver,
+        rate0,
+        args=(cash_flows, initial_investment),
+        max_steps=max_iter,
+        throw=False,
+    )
 
-    final_rate, _ = lax.while_loop(cond_fn, body_fn, (rate, 0))
-
-    return final_rate
+    return sol.value
 
 
 def irr_approx(
