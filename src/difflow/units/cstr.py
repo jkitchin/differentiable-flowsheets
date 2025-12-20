@@ -57,6 +57,9 @@ class CSTRParams:
         dH_rxn: Heats of reaction (J/mol) for each reaction, shape (n_reactions,).
                 Negative for exothermic. If None, assumes isothermal or uses
                 thermo object for calculation.
+        T_damping: Damping factor for temperature updates in adiabatic/specified_duty
+                   modes (0 < T_damping <= 1). Smaller values = more stable but slower.
+                   Default 0.3.
     """
     V: float | Array
     rate_fn: RateFunction
@@ -64,6 +67,7 @@ class CSTRParams:
     rate_params: dict
     species_order: list[str]
     dH_rxn: Array | None = None
+    T_damping: float = 0.3
 
 
 class CSTR:
@@ -180,9 +184,13 @@ class CSTR:
         # Build outlet stream
         outlet = make_stream(outlet_flows, T_out, inlet["P"])
 
-        # Calculate conversions
+        # Calculate conversions (guard against zero inlet flow)
         conversion = {
-            species: (inlet_flows[species] - outlet_flows[species]) / inlet_flows[species]
+            species: jnp.where(
+                inlet_flows[species] > 0,
+                (inlet_flows[species] - outlet_flows[species]) / (inlet_flows[species] + 1e-30),
+                0.0
+            )
             for species in p.species_order
         }
 
@@ -226,8 +234,8 @@ class CSTR:
         # Convert inlet flows to array
         F_in = jnp.array([inlet_flows[s] for s in p.species_order])
 
-        # Use Newton-Raphson to solve the residual equations
-        from difflow.solvers import newton_solve
+        # Use optimistix Newton solver for root finding
+        import optimistix as optx
 
         # Capture non-JAX types in closure, pass only JAX arrays as args
         rate_fn = p.rate_fn
@@ -255,13 +263,16 @@ class CSTR:
         # Only pass JAX-compatible args (arrays and dicts of arrays)
         args = (F_in, p.V, volumetric_flow, T, p.rate_params)
 
-        F_out = newton_solve(
+        solver = optx.Newton(rtol=1e-10, atol=1e-10)
+        sol = optx.root_find(
             material_balance_residual,
+            solver,
             F_in,  # Initial guess
-            args,
-            tol=1e-10,
-            max_iter=50,
+            args=args,
+            max_steps=50,
+            throw=False,
         )
+        F_out = sol.value
 
         # Ensure non-negative flows
         F_out = jnp.maximum(F_out, 0.0)
@@ -324,7 +335,7 @@ class CSTR:
         p = self.params
         inlet_flows = get_flows(inlet)
 
-        from difflow.solvers import fixed_point_solve
+        import optimistix as optx
 
         F_in = jnp.array([inlet_flows[s] for s in p.species_order])
         T_inlet = inlet["T"]
@@ -336,11 +347,10 @@ class CSTR:
         thermo = self.thermo
         dH_rxn = p.dH_rxn
         V = p.V
+        T_damping = p.T_damping
 
         def solve_material_balance_at_T(T, F_in_, Q_v, rate_params):
             """Solve material balance at fixed T using Newton's method."""
-            from difflow.solvers import newton_solve
-
             def residual(F_out, args):
                 F_in_inner, V_inner, Q_v_inner, T_inner, rp = args
                 F_out_safe = jnp.maximum(F_out, 1e-10)
@@ -349,8 +359,9 @@ class CSTR:
                 return F_out - (F_in_inner + V_inner * stoich @ r)
 
             args = (F_in_, V, Q_v, T, rate_params)
-            F_out = newton_solve(residual, F_in_, args, tol=1e-10, max_iter=50)
-            return jnp.maximum(F_out, 0.0)
+            solver = optx.Newton(rtol=1e-10, atol=1e-10)
+            sol = optx.root_find(residual, solver, F_in_, args=args, max_steps=50, throw=False)
+            return jnp.maximum(sol.value, 0.0)
 
         def adiabatic_T_iteration(T, args):
             """Fixed-point iteration on temperature only."""
@@ -392,20 +403,22 @@ class CSTR:
             # Update T: H_out_target = H_out_current + total_F * Cp * (T_new - T)
             # T_new = T + (H_out_target - H_out_current) / (total_F * Cp)
             dT = (H_out_target - H_out_current) / (total_F * Cp_mix + 1e-10)
-            T_new = T + 0.3 * dT  # Damped update for stability
+            T_new = T + T_damping * dT  # Damped update for stability
 
             return T_new
 
         # Solve for temperature using fixed-point iteration
         args = (F_in, volumetric_flow, p.rate_params)
-        T_out = fixed_point_solve(
+        fp_solver = optx.FixedPointIteration(rtol=1e-6, atol=1e-6)
+        sol = optx.fixed_point(
             adiabatic_T_iteration,
+            fp_solver,
             jnp.array(T_inlet),
-            args,
-            tol=1e-6,
-            max_iter=200,
-            damping=0.5,
+            args=args,
+            max_steps=200,
+            throw=False,
         )
+        T_out = sol.value
 
         # Final material balance solve at converged temperature
         F_out = solve_material_balance_at_T(T_out, F_in, volumetric_flow, p.rate_params)
@@ -430,7 +443,7 @@ class CSTR:
         p = self.params
         inlet_flows = get_flows(inlet)
 
-        from difflow.solvers import fixed_point_solve
+        import optimistix as optx
 
         F_in = jnp.array([inlet_flows[s] for s in p.species_order])
         T_inlet = inlet["T"]
@@ -442,11 +455,10 @@ class CSTR:
         thermo = self.thermo
         dH_rxn = p.dH_rxn
         V = p.V
+        T_damping = p.T_damping
 
         def solve_material_balance_at_T(T, F_in_, Q_v, rate_params):
             """Solve material balance at fixed T using Newton's method."""
-            from difflow.solvers import newton_solve
-
             def residual(F_out, args):
                 F_in_inner, V_inner, Q_v_inner, T_inner, rp = args
                 F_out_safe = jnp.maximum(F_out, 1e-10)
@@ -455,8 +467,9 @@ class CSTR:
                 return F_out - (F_in_inner + V_inner * stoich @ r)
 
             args = (F_in_, V, Q_v, T, rate_params)
-            F_out = newton_solve(residual, F_in_, args, tol=1e-10, max_iter=50)
-            return jnp.maximum(F_out, 0.0)
+            solver = optx.Newton(rtol=1e-10, atol=1e-10)
+            sol = optx.root_find(residual, solver, F_in_, args=args, max_steps=50, throw=False)
+            return jnp.maximum(sol.value, 0.0)
 
         def duty_T_iteration(T, args):
             """Fixed-point iteration on temperature only."""
@@ -494,20 +507,22 @@ class CSTR:
 
             # Update T
             dT = (H_out_target - H_out_current) / (total_F * Cp_mix + 1e-10)
-            T_new = T + 0.3 * dT  # Damped update for stability
+            T_new = T + T_damping * dT  # Damped update for stability
 
             return T_new
 
         # Solve for temperature using fixed-point iteration
         args = (F_in, volumetric_flow, Q, p.rate_params)
-        T_out = fixed_point_solve(
+        fp_solver = optx.FixedPointIteration(rtol=1e-6, atol=1e-6)
+        sol = optx.fixed_point(
             duty_T_iteration,
+            fp_solver,
             jnp.array(T_inlet),
-            args,
-            tol=1e-6,
-            max_iter=200,
-            damping=0.5,
+            args=args,
+            max_steps=200,
+            throw=False,
         )
+        T_out = sol.value
 
         # Final material balance solve at converged temperature
         F_out = solve_material_balance_at_T(T_out, F_in, volumetric_flow, p.rate_params)

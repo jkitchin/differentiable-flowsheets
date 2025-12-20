@@ -107,7 +107,6 @@ from difflow.units.heat_exchanger import (
     size_heat_exchanger,
 )
 from difflow.flowsheet import Flowsheet, Unit
-from difflow.solvers import fixed_point_solve, newton_solve, rachford_rice
 
 # Plugin infrastructure
 from difflow.plugins import (
@@ -265,10 +264,6 @@ __all__ = [
     # Flowsheet
     "Flowsheet",
     "Unit",
-    # Solvers
-    "fixed_point_solve",
-    "newton_solve",
-    "rachford_rice",
     # Plugin infrastructure
     "registry",
     "load_plugins",

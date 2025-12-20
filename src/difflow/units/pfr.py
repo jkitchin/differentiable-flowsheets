@@ -28,15 +28,15 @@ Symbols:
     Q = volumetric flow rate (m^3/s)
     alpha = pressure drop parameter
 
-The design equation is integrated from V=0 to V=V_total using a
-differentiable ODE solver (RK4).
+The design equation is integrated from V=0 to V=V_total using diffrax,
+a JAX-native differentiable ODE solver library.
 """
 
 from typing import Callable, Literal, Any
 from dataclasses import dataclass
 import jax.numpy as jnp
 from jax import Array
-import jax.lax as lax
+import diffrax
 
 from difflow.streams import Stream, get_flows, make_stream
 from difflow.thermo import IdealThermo
@@ -69,7 +69,9 @@ class PFRParams:
         species_order: List of species names in order matching stoich rows
         dH_rxn: Heats of reaction (J/mol) for each reaction, shape (n_reactions,).
                 Negative for exothermic. Required for non-isothermal operation.
-        n_steps: Number of integration steps (default 100)
+        rtol: Relative tolerance for ODE solver (default 1e-6)
+        atol: Absolute tolerance for ODE solver (default 1e-8)
+        n_save_points: Number of points to save in profile output (default 101)
     """
     V: float | Array
     rate_fn: RateFunction
@@ -77,7 +79,9 @@ class PFRParams:
     rate_params: dict
     species_order: list[str]
     dH_rxn: Array | None = None
-    n_steps: int = 100
+    rtol: float = 1e-6
+    atol: float = 1e-8
+    n_save_points: int = 101
 
 
 class PFR:
@@ -87,7 +91,8 @@ class PFR:
     - isothermal: Temperature constant along reactor
     - adiabatic: No heat transfer, temperature varies with reaction
 
-    Uses RK4 integration which is fully JAX-differentiable.
+    Uses diffrax for ODE integration, providing adaptive stepping and
+    proper differentiability through the solver.
     """
 
     def __init__(
@@ -116,16 +121,15 @@ class PFR:
     def __call__(
         self,
         inlet: Stream,
+        volumetric_flow: Array | float,
         T_spec: Array | float | None = None,
-        volumetric_flow: Array | float | None = None,
     ) -> tuple[Stream, dict[str, Array]]:
         """Solve PFR material and energy balances.
 
         Args:
             inlet: Inlet stream
+            volumetric_flow: Volumetric flow rate (m^3/s)
             T_spec: Specified temperature (K) for isothermal mode
-            volumetric_flow: Volumetric flow rate (m^3/s). If None, assumes
-                            incompressible liquid and estimates from molar flow.
 
         Returns:
             outlet: Outlet stream
@@ -135,11 +139,6 @@ class PFR:
         """
         p = self.params
         inlet_flows = get_flows(inlet)
-
-        # Determine volumetric flow
-        if volumetric_flow is None:
-            total_molar = sum(inlet_flows.values())
-            volumetric_flow = total_molar / 50.0  # Rough estimate for liquid
         volumetric_flow = jnp.asarray(volumetric_flow)
 
         # Initial conditions
@@ -182,12 +181,10 @@ class PFR:
 
         dF/dV = stoich @ r(C, T)
 
-        Uses RK4 integration.
+        Uses diffrax ODE solver.
         """
         p = self.params
         V_total = jnp.asarray(p.V)
-        n_steps = p.n_steps
-        dV = V_total / n_steps
 
         # Capture closures
         rate_fn = p.rate_fn
@@ -195,34 +192,39 @@ class PFR:
         stoich = p.stoich
         rate_params = p.rate_params
 
-        def dF_dV(F, V_unused):
+        def vector_field(V, F, args):
             """Right-hand side of ODE: dF/dV = stoich @ r"""
             C = {s: F[i] / Q_v for i, s in enumerate(species_order)}
             r = rate_fn(C, T, rate_params)
             return stoich @ r
 
-        def rk4_step(F, _):
-            """Single RK4 step."""
-            k1 = dF_dV(F, None)
-            k2 = dF_dV(F + 0.5 * dV * k1, None)
-            k3 = dF_dV(F + 0.5 * dV * k2, None)
-            k4 = dF_dV(F + dV * k3, None)
-            F_new = F + (dV / 6.0) * (k1 + 2*k2 + 2*k3 + k4)
-            # Ensure non-negative
-            F_new = jnp.maximum(F_new, 0.0)
-            return F_new, F_new
+        # Set up diffrax solver
+        term = diffrax.ODETerm(vector_field)
+        solver = diffrax.Tsit5()
+        saveat = diffrax.SaveAt(ts=jnp.linspace(0, V_total, p.n_save_points))
+        stepsize_controller = diffrax.PIDController(rtol=p.rtol, atol=p.atol)
 
-        # Integrate using lax.scan
-        F_final, F_history = lax.scan(rk4_step, F0, None, length=n_steps)
+        # Solve the ODE
+        solution = diffrax.diffeqsolve(
+            term,
+            solver,
+            t0=0.0,
+            t1=V_total,
+            dt0=V_total / 100,
+            y0=F0,
+            saveat=saveat,
+            stepsize_controller=stepsize_controller,
+            max_steps=4096,
+        )
 
-        # Build profiles (use JAX-compatible operations)
-        V_profile = jnp.linspace(0, V_total, n_steps + 1)
-        F_profile = jnp.vstack([F0, F_history])
+        F_final = solution.ys[-1]
+        F_profile = solution.ys
+        V_profile = solution.ts
 
         profiles = {
             "V": V_profile,
             "F": F_profile,
-            "T": jnp.broadcast_to(T, (n_steps + 1,)),
+            "T": jnp.broadcast_to(T, (p.n_save_points,)),
         }
 
         return F_final, profiles
@@ -238,12 +240,10 @@ class PFR:
         dF/dV = stoich @ r(C, T)
         dT/dV = -sum(r * dH_rxn) / (F_total * Cp_mix)
 
-        Uses RK4 integration.
+        Uses diffrax ODE solver.
         """
         p = self.params
         V_total = jnp.asarray(p.V)
-        n_steps = p.n_steps
-        dV = V_total / n_steps
 
         # Capture closures
         rate_fn = p.rate_fn
@@ -253,7 +253,7 @@ class PFR:
         dH_rxn = p.dH_rxn
         thermo = self.thermo
 
-        def rhs(state, V_unused):
+        def vector_field(V, state, args):
             """Right-hand side: [dF/dV, dT/dV]"""
             F = state[:-1]
             T = state[-1]
@@ -275,33 +275,36 @@ class PFR:
 
             return jnp.concatenate([dF, jnp.array([dT])])
 
-        def rk4_step(state, _):
-            """Single RK4 step for coupled ODE."""
-            k1 = rhs(state, None)
-            k2 = rhs(state + 0.5 * dV * k1, None)
-            k3 = rhs(state + 0.5 * dV * k2, None)
-            k4 = rhs(state + dV * k3, None)
-            state_new = state + (dV / 6.0) * (k1 + 2*k2 + 2*k3 + k4)
-            # Ensure non-negative flows
-            F_new = jnp.maximum(state_new[:-1], 0.0)
-            T_new = state_new[-1]
-            state_new = jnp.concatenate([F_new, jnp.array([T_new])])
-            return state_new, state_new
-
         # Initial state: [F0, T0]
         state0 = jnp.concatenate([F0, jnp.array([T0])])
 
-        # Integrate
-        state_final, state_history = lax.scan(rk4_step, state0, None, length=n_steps)
+        # Set up diffrax solver
+        term = diffrax.ODETerm(vector_field)
+        solver = diffrax.Tsit5()
+        saveat = diffrax.SaveAt(ts=jnp.linspace(0, V_total, p.n_save_points))
+        stepsize_controller = diffrax.PIDController(rtol=p.rtol, atol=p.atol)
 
+        # Solve the ODE
+        solution = diffrax.diffeqsolve(
+            term,
+            solver,
+            t0=0.0,
+            t1=V_total,
+            dt0=V_total / 100,
+            y0=state0,
+            saveat=saveat,
+            stepsize_controller=stepsize_controller,
+            max_steps=4096,
+        )
+
+        state_final = solution.ys[-1]
         F_final = state_final[:-1]
         T_final = state_final[-1]
 
-        # Build profiles (use JAX-compatible operations)
-        V_profile = jnp.linspace(0, V_total, n_steps + 1)
-        all_states = jnp.vstack([state0, state_history])
-        F_profile = all_states[:, :-1]
-        T_profile = all_states[:, -1]
+        # Build profiles
+        V_profile = solution.ts
+        F_profile = solution.ys[:, :-1]
+        T_profile = solution.ys[:, -1]
 
         profiles = {
             "V": V_profile,
@@ -372,6 +375,12 @@ class PFR:
         T_spec = params.get("T_spec") if params else None
         Q_v = params.get("volumetric_flow") if params else None
 
+        # Calculate volumetric flow from total molar flow if not provided
+        if Q_v is None:
+            inlet_flows = get_flows(inlet)
+            total_molar = sum(inlet_flows.values())
+            Q_v = total_molar / 50.0  # Assume molar density ~50 mol/m³
+
         outlet, info = self(inlet, T_spec=T_spec, volumetric_flow=Q_v)
 
         # Extract outlet state
@@ -434,6 +443,12 @@ class PFR:
         T_spec = params.get("T_spec") if params else None
         Q_v = params.get("volumetric_flow") if params else None
 
+        # Calculate volumetric flow from total molar flow if not provided
+        if Q_v is None:
+            inlet_flows = get_flows(inlet)
+            total_molar = sum(inlet_flows.values())
+            Q_v = total_molar / 50.0  # Assume molar density ~50 mol/m³
+
         outlet, info = self(inlet, T_spec=T_spec, volumetric_flow=Q_v)
 
         return {"outlet": outlet, "profiles": info.get("profiles")}
@@ -459,7 +474,9 @@ class GasPFRParams:
         dH_rxn: Heats of reaction (J/mol) for each reaction, shape (n_reactions,).
                 Negative for exothermic. Required for non-isothermal operation.
         alpha: Pressure drop parameter (Pa/m^3). If None, no pressure drop.
-        n_steps: Number of integration steps (default 100)
+        rtol: Relative tolerance for ODE solver (default 1e-6)
+        atol: Absolute tolerance for ODE solver (default 1e-8)
+        n_save_points: Number of points to save in profile output (default 101)
     """
     V: float | Array
     rate_fn: RateFunction
@@ -468,7 +485,9 @@ class GasPFRParams:
     species_order: list[str]
     dH_rxn: Array | None = None
     alpha: float | Array | None = None
-    n_steps: int = 100
+    rtol: float = 1e-6
+    atol: float = 1e-8
+    n_save_points: int = 101
 
 
 class GasPFR:
@@ -483,7 +502,8 @@ class GasPFR:
     - isothermal: Temperature constant along reactor
     - adiabatic: No heat transfer, temperature varies with reaction
 
-    Uses RK4 integration which is fully JAX-differentiable.
+    Uses diffrax for ODE integration, providing adaptive stepping and
+    proper differentiability through the solver.
     """
 
     def __init__(
@@ -593,11 +613,11 @@ class GasPFR:
         dP/dV = -alpha * (P0/P) * (T/T0) * (F_tot/F_tot0)
 
         where C = F / Q, and Q = Q0 * (F_tot/F_tot0) * (P0/P) * (T/T0)
+
+        Uses diffrax ODE solver.
         """
         p = self.params
         V_total = jnp.asarray(p.V)
-        n_steps = p.n_steps
-        dV = V_total / n_steps
 
         # Capture closures
         rate_fn = p.rate_fn
@@ -607,7 +627,7 @@ class GasPFR:
         alpha = p.alpha if p.alpha is not None else 0.0
         T0 = T  # For isothermal, T = T0
 
-        def rhs(state):
+        def vector_field(V, state, args):
             """Right-hand side: [dF/dV, dP/dV]"""
             F = state[:-1]
             P = state[-1]
@@ -631,32 +651,36 @@ class GasPFR:
 
             return jnp.concatenate([dF, jnp.array([dP])])
 
-        def rk4_step(state, _):
-            """Single RK4 step."""
-            k1 = rhs(state)
-            k2 = rhs(state + 0.5 * dV * k1)
-            k3 = rhs(state + 0.5 * dV * k2)
-            k4 = rhs(state + dV * k3)
-            state_new = state + (dV / 6.0) * (k1 + 2*k2 + 2*k3 + k4)
-            # Ensure non-negative flows and pressure
-            F_new = jnp.maximum(state_new[:-1], 0.0)
-            P_new = jnp.maximum(state_new[-1], 1.0)  # Min 1 Pa to avoid division issues
-            return jnp.concatenate([F_new, jnp.array([P_new])]), jnp.concatenate([F_new, jnp.array([P_new])])
-
         # Initial state: [F0, P0]
         state0 = jnp.concatenate([F0, jnp.array([P0])])
 
-        # Integrate
-        state_final, state_history = lax.scan(rk4_step, state0, None, length=n_steps)
+        # Set up diffrax solver
+        term = diffrax.ODETerm(vector_field)
+        solver = diffrax.Tsit5()
+        saveat = diffrax.SaveAt(ts=jnp.linspace(0, V_total, p.n_save_points))
+        stepsize_controller = diffrax.PIDController(rtol=p.rtol, atol=p.atol)
 
+        # Solve the ODE
+        solution = diffrax.diffeqsolve(
+            term,
+            solver,
+            t0=0.0,
+            t1=V_total,
+            dt0=V_total / 100,
+            y0=state0,
+            saveat=saveat,
+            stepsize_controller=stepsize_controller,
+            max_steps=4096,
+        )
+
+        state_final = solution.ys[-1]
         F_final = state_final[:-1]
         P_final = state_final[-1]
 
         # Build profiles
-        V_profile = jnp.linspace(0, V_total, n_steps + 1)
-        all_states = jnp.vstack([state0, state_history])
-        F_profile = all_states[:, :-1]
-        P_profile = all_states[:, -1]
+        V_profile = solution.ts
+        F_profile = solution.ys[:, :-1]
+        P_profile = solution.ys[:, -1]
 
         # Compute Q profile
         F_total_profile = jnp.sum(F_profile, axis=1) + 1e-10
@@ -665,7 +689,7 @@ class GasPFR:
         profiles = {
             "V": V_profile,
             "F": F_profile,
-            "T": jnp.broadcast_to(T, (n_steps + 1,)),
+            "T": jnp.broadcast_to(T, (p.n_save_points,)),
             "P": P_profile,
             "Q": Q_profile,
         }
@@ -689,11 +713,11 @@ class GasPFR:
         dP/dV = -alpha * (P0/P) * (T/T0) * (F_tot/F_tot0)
 
         where C = F / Q, and Q = Q0 * (F_tot/F_tot0) * (P0/P) * (T/T0)
+
+        Uses diffrax ODE solver.
         """
         p = self.params
         V_total = jnp.asarray(p.V)
-        n_steps = p.n_steps
-        dV = V_total / n_steps
 
         # Capture closures
         rate_fn = p.rate_fn
@@ -703,10 +727,10 @@ class GasPFR:
         dH_rxn = p.dH_rxn
         alpha = p.alpha if p.alpha is not None else 0.0
         thermo = self.thermo
+        n_species = len(species_order)
 
-        def rhs(state):
+        def vector_field(V, state, args):
             """Right-hand side: [dF/dV, dT/dV, dP/dV]"""
-            n_species = len(species_order)
             F = state[:n_species]
             T = state[n_species]
             P = state[n_species + 1]
@@ -735,38 +759,38 @@ class GasPFR:
 
             return jnp.concatenate([dF, jnp.array([dT, dP])])
 
-        def rk4_step(state, _):
-            """Single RK4 step."""
-            k1 = rhs(state)
-            k2 = rhs(state + 0.5 * dV * k1)
-            k3 = rhs(state + 0.5 * dV * k2)
-            k4 = rhs(state + dV * k3)
-            state_new = state + (dV / 6.0) * (k1 + 2*k2 + 2*k3 + k4)
-
-            n_species = len(species_order)
-            F_new = jnp.maximum(state_new[:n_species], 0.0)
-            T_new = state_new[n_species]
-            P_new = jnp.maximum(state_new[n_species + 1], 1.0)
-            state_new = jnp.concatenate([F_new, jnp.array([T_new, P_new])])
-            return state_new, state_new
-
         # Initial state: [F0, T0, P0]
         state0 = jnp.concatenate([F0, jnp.array([T0, P0])])
 
-        # Integrate
-        state_final, state_history = lax.scan(rk4_step, state0, None, length=n_steps)
+        # Set up diffrax solver
+        term = diffrax.ODETerm(vector_field)
+        solver = diffrax.Tsit5()
+        saveat = diffrax.SaveAt(ts=jnp.linspace(0, V_total, p.n_save_points))
+        stepsize_controller = diffrax.PIDController(rtol=p.rtol, atol=p.atol)
 
-        n_species = len(p.species_order)
+        # Solve the ODE
+        solution = diffrax.diffeqsolve(
+            term,
+            solver,
+            t0=0.0,
+            t1=V_total,
+            dt0=V_total / 100,
+            y0=state0,
+            saveat=saveat,
+            stepsize_controller=stepsize_controller,
+            max_steps=4096,
+        )
+
+        state_final = solution.ys[-1]
         F_final = state_final[:n_species]
         T_final = state_final[n_species]
         P_final = state_final[n_species + 1]
 
         # Build profiles
-        V_profile = jnp.linspace(0, V_total, n_steps + 1)
-        all_states = jnp.vstack([state0, state_history])
-        F_profile = all_states[:, :n_species]
-        T_profile = all_states[:, n_species]
-        P_profile = all_states[:, n_species + 1]
+        V_profile = solution.ts
+        F_profile = solution.ys[:, :n_species]
+        T_profile = solution.ys[:, n_species]
+        P_profile = solution.ys[:, n_species + 1]
 
         # Compute Q profile
         F_total_profile = jnp.sum(F_profile, axis=1) + 1e-10
@@ -836,6 +860,15 @@ class GasPFR:
         T_spec = params.get("T_spec") if params else None
         Q_v = params.get("volumetric_flow") if params else None
 
+        # Calculate volumetric flow from ideal gas law if not provided
+        if Q_v is None:
+            inlet_flows = get_flows(inlet)
+            total_molar = sum(inlet_flows.values())
+            T = inlet["T"]
+            P = inlet["P"]
+            R = 8.314  # J/mol/K
+            Q_v = total_molar * R * T / P  # Ideal gas volumetric flow
+
         outlet, info = self(inlet, T_spec=T_spec, volumetric_flow=Q_v)
 
         outlet_flows = get_flows(outlet)
@@ -867,6 +900,15 @@ class GasPFR:
 
         T_spec = params.get("T_spec") if params else None
         Q_v = params.get("volumetric_flow") if params else None
+
+        # Calculate volumetric flow from ideal gas law if not provided
+        if Q_v is None:
+            inlet_flows = get_flows(inlet)
+            total_molar = sum(inlet_flows.values())
+            T = inlet["T"]
+            P = inlet["P"]
+            R = 8.314  # J/mol/K
+            Q_v = total_molar * R * T / P  # Ideal gas volumetric flow
 
         outlet, info = self(inlet, T_spec=T_spec, volumetric_flow=Q_v)
 

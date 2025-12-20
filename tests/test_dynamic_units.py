@@ -283,7 +283,7 @@ class TestPFRDynamicInterface:
             stoich=stoich_A_to_B,
             rate_params={"k": 0.1},
             species_order=["A", "B"],
-            n_steps=50,
+            n_save_points=50,
         ))
 
         y0 = pfr.initial_state({"inlet": inlet_stream})

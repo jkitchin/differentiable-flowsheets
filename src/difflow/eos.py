@@ -21,7 +21,7 @@ from dataclasses import dataclass
 import jax.numpy as jnp
 from jax import Array, lax
 
-from difflow.solvers import newton_solve
+import optimistix as optx
 
 
 # Universal gas constant (J/mol/K)
@@ -796,6 +796,30 @@ class SRK:
 # =============================================================================
 
 
+def _solve_rachford_rice(z: Array, K: Array) -> Array:
+    """Solve Rachford-Rice equation for vapor fraction.
+
+    The Rachford-Rice equation is:
+        sum_i z_i * (K_i - 1) / (1 + V * (K_i - 1)) = 0
+
+    Args:
+        z: Feed mole fractions
+        K: K-values
+
+    Returns:
+        Vapor fraction V in [0, 1]
+    """
+    def rr_func(V, args):
+        z_, K_ = args
+        return jnp.sum(z_ * (K_ - 1) / (1 + V * (K_ - 1)))
+
+    V0 = jnp.array(0.5)
+    args = (z, K)
+    solver = optx.Newton(rtol=1e-10, atol=1e-10)
+    sol = optx.root_find(rr_func, solver, V0, args=args, max_steps=50, throw=False)
+    return jnp.clip(sol.value, 0.0, 1.0)
+
+
 def flash_TP_eos(
     eos: PengRobinson | SRK,
     z: Array,
@@ -826,8 +850,6 @@ def flash_TP_eos(
     Returns:
         (V, x, y): Vapor fraction, liquid and vapor mole fractions
     """
-    from difflow.solvers import rachford_rice, rachford_rice_compositions
-
     # Initialize K from Wilson
     K = eos.K_values_wilson(T, P)
 
@@ -835,10 +857,11 @@ def flash_TP_eos(
         K_prev = state
 
         # Solve Rachford-Rice
-        V = rachford_rice(z, K_prev)
+        V = _solve_rachford_rice(z, K_prev)
 
-        # Get compositions
-        x, y = rachford_rice_compositions(z, K_prev, V)
+        # Get compositions (inlined)
+        x = z / (1 + V * (K_prev - 1))
+        y = K_prev * x
 
         # Ensure positive and normalized
         x = jnp.maximum(x, 1e-10)
@@ -858,8 +881,9 @@ def flash_TP_eos(
     K_final, _ = lax.scan(step, K, None, length=max_iter)
 
     # Final flash calculation
-    V = rachford_rice(z, K_final)
-    x, y = rachford_rice_compositions(z, K_final, V)
+    V = _solve_rachford_rice(z, K_final)
+    x = z / (1 + V * (K_final - 1))
+    y = K_final * x
 
     # Normalize
     x = jnp.maximum(x, 0.0)

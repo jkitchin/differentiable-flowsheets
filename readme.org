@@ -4,7 +4,7 @@
 #+title: Differentiable flowsheets
 
 * TODO Review difflow
-DEADLINE: <2025-12-17 Wed +1w>
+DEADLINE: <2025-12-29 Mon +1w>
 :PROPERTIES:
 :LOGGING: nil
 :END:
@@ -18,3 +18,128 @@ I had a visualization tool but it wasn't very good. We probably need icons for t
 This might be something for James
 
 ** DONE dynamic
+
+* Issues
+
+** DONE List of issues found
+CLOSED: [2025-12-16 Tue 18:38]
+
+- [X]  1. CSTR (src/difflow/units/cstr.py)
+
+  - Arbitrary molar density (line 145-149): Hard-coded total_molar / 50.0 assumes 50 mol/m³ - fails for gases (~40 mol/m³ at STP) or dense liquids
+  - Phase assumption: Always uses phase="liquid" for enthalpy - breaks if reaction produces gases
+  - Adiabatic damping: Hard-coded 0.3 damping factor may be too aggressive/conservative depending on problem scale
+  - Zero inlet flow: Conversion calculation divides by inlet flow with no guard
+
+- [X]  2. Flash Separator (src/difflow/units/flash.py)
+
+  - Phase boundary discontinuity: Sharp transitions at bubble/dew points cause discontinuous derivatives
+  - K-value extremes: No bounds checking - can become >100 near critical point, breaking Rachford-Rice
+  - Unused arguments: bubble_check and dew_check passed to solver but never used
+  - Composition normalization: May sum to 0.99 or 1.01 for multicomponent systems
+
+- [X]  3. Heat Exchangers (src/difflow/units/heat_exchanger.py)
+
+  - LMTD singularity: When ΔT₁ ≈ ΔT₂, log term ill-conditioned; no handling for ΔT = 0
+  - Temperature crossing: No check for T_hot_in ≤ T_cold_in (unphysical)
+  - Effectiveness Cr=1 edge case: Can divide by near-zero when heat capacity rates equal
+
+- [X]  4. Distillation (src/difflow/units/distillation.py)
+
+  - Arbitrary temperature profile: Hard-coded ±20K from feed - wrong for cryogenic/high-pressure systems
+  - Fenske singularity: When α_LK ≈ 1 (close-boiling), N_min → ∞ with no warning
+  - Hard-coded initial guess: T range 380-340K fails for non-ambient systems
+  - Gilliland singularity: Y → 0.999 causes N → huge values
+
+- [X]  5. PFR (src/difflow/units/pfr.py)
+
+  - Same molar density issue as CSTR
+  - RK4 flow clipping: Post-hoc jnp.maximum(F, 0) corrupts the ODE solution
+  - Ideal gas units: R in J/(mol·K) but no unit validation for pressure
+  - Hard-coded minimum pressure: 1 Pa minimum fails for vacuum systems
+
+- [X]  6. LLE (src/difflow/units/lle.py)
+
+  - Python for-loop: Activity coefficient computation uses Python loop instead of vmap - breaks autodiff
+  - Hard-coded z=10: Coordination number should vary by system
+  - Kremser E≈1 singularity: Arbitrary 1e-6 threshold
+  - No shooting method: Counter-current model doesn't properly satisfy boundary conditions
+
+- [X]  7. Bioreactors (src/difflow_bio/units/bioreactors.py)
+
+  - Monod 0/0: When K_s → 0 and S → 0 simultaneously
+  - Exception-based dispatch: Using try/except for kinetics signature - breaks JAX JIT
+  - Euler integration: O(dt) error accumulates over long fed-batch runs
+  - Hard-coded pseudo-time: dt=0.5 in fixed-point iteration may not converge
+
+- [X]  8. Numerical Solvers (src/difflow/solvers.py)
+
+  - No convergence check: Newton solver runs fixed iterations regardless of convergence
+  - Arbitrary regularization: 1e-12 regularization is problem-dependent
+  - Rachford-Rice bounds: Clipping to [0.001, 0.999] hides phase boundary failures
+
+  ---
+  Severity Summary
+
+  | Issue Type              | Severity | Examples                            |
+  |-------------------------|----------|-------------------------------------|
+  | Arbitrary constants     | Medium   | 50 mol/m³, ±20K, 0.8 efficiency     |
+  | Zero/near-zero division | High     | Inlet flow, substrate concentration |
+  | Phase boundaries        | High     | Discontinuous at bubble/dew points  |
+  | JAX incompatibility     | Medium   | Python loops, exception handling    |
+  | Integration errors      | Medium   | Euler method, flow clipping         |
+
+** DONE replace hard coded solvers / integrators with jax ecosystem versions
+CLOSED: [2025-12-16 Tue 19:26]
+
+Look for examples of hard coded solvers, e.g. Newton's method, fixed point solvers, or ODE  integrators that should be replaced with jax libraries like optax or diffrax. Note where all of these are.
+
+⏺ Here's a comprehensive summary of hard-coded solvers in the codebase:
+
+  ODE Integrators (could use diffrax)
+
+  | File                               | Line    | Function                      | Description                   |
+  |------------------------------------|---------|-------------------------------|-------------------------------|
+  | src/difflow/units/fed_batch.py     | 261-273 | rk4_step                      | Fed-batch reactor integration |
+  | src/difflow/dynamic/integrators.py | 85-146  | rk4_step, integrate_rk4       | Core RK4 integrator           |
+  | src/difflow/dynamic/integrators.py | 185-291 | rk45_step, integrate_rk45     | Adaptive RK45                 |
+  | src/difflow/dynamic/integrators.py | 363-396 | integrate_euler               | Euler integrator              |
+  | src/difflow/dynamic/dae.py         | 553-670 | dae_step_euler, dae_step_rk4  | DAE stepping                  |
+  | src/difflow/dynamic/dae.py         | 687-752 | integrate_dae                 | Main DAE integrator           |
+  | src/difflow/units/lle.py           | 917-935 | step in DifferentialContactor | LLE integration               |
+  | src/difflow/dynamic/flowsheet.py   | 630-631 | Uses rk4_step                 | Dynamic flowsheet             |
+
+  Newton/Root-finding (could use optimistix)
+
+  | File                                   | Line             | Function      | Description                                 |
+  |----------------------------------------|------------------|---------------|---------------------------------------------|
+  | src/difflow/dynamic/dae.py             | 436-526          | newton_solve  | Custom Newton for DAE algebraic constraints |
+  | src/difflow/units/cstr.py              | 353-367, 461-475 | Inline Newton | Material balance solve                      |
+  | src/difflow/economics/profitability.py | 266-300          | newton_step   | IRR calculation                             |
+  | src/difflow/eos.py                     | 856-881          | step          | K-value successive substitution             |
+
+  Fixed-point Iteration (could use optimistix.FixedPointIteration)
+
+  | File                      | Line     | Function            | Description                |
+  |---------------------------|----------|---------------------|----------------------------|
+  | src/difflow/flowsheet.py  | 194      | _solve_with_recycle | Flowsheet recycle solving  |
+  | src/difflow/units/cstr.py | 367, 475 | Fixed-point on T    | CSTR temperature iteration |
+
+  Bisection (could use optimistix.Bisection)
+
+  | File                           | Line    | Function       | Description               |
+  |--------------------------------|---------|----------------|---------------------------|
+  | src/difflow/units/fed_batch.py | 702-711 | bisection_step | batch_time_for_conversion |
+
+  Summary
+
+  Priority replacements:
+  1. fed_batch.py RK4 → diffrax (same pattern as bioreactors fix)
+  2. dae.py newton_solve → optimistix.Newton (already used elsewhere)
+  3. lle.py integration → diffrax
+  4. profitability.py Newton → optimistix.Newton
+
+  Lower priority (already work, just consistency):
+  - dynamic/integrators.py - These are intentionally provided as simple fallbacks
+  - flowsheet.py - Already uses optimistix for some parts
+  - cstr.py - Uses optimistix for main solve, inline Newton is minor
