@@ -10,6 +10,7 @@ The VLE is solved using the Rachford-Rice equation with implicit
 differentiation through the converged solution.
 """
 
+from typing import Any
 from dataclasses import dataclass
 import jax
 import jax.numpy as jnp
@@ -280,6 +281,107 @@ class Flash:
         y = {s: inlet_flows[s] / F_total for s in self.params.species_order}
 
         return self.thermo.dew_pressure(y, T)
+
+    # =========================================================================
+    # Initialization Interface
+    # =========================================================================
+
+    def initialize(
+        self,
+        inlet: Stream,
+        **kwargs,
+    ) -> dict[str, Any]:
+        """Generate initial guesses for flash outputs.
+
+        Uses simplified Rachford-Rice calculation for quick estimates.
+
+        Args:
+            inlet: Inlet stream
+            **kwargs: Additional parameters:
+                - T: Flash temperature (K)
+                - P: Flash pressure (Pa)
+                - expected_vapor_fraction: Optional hint for vapor fraction
+
+        Returns:
+            Dictionary containing:
+            - 'liquid': Initial guess for liquid outlet stream
+            - 'vapor': Initial guess for vapor outlet stream
+            - 'states': Dict with vapor fraction, compositions
+            - 'info': Additional initialization information
+        """
+        p = self.params
+
+        # Use inlet T, P if not specified
+        T = kwargs.get('T', inlet["T"])
+        P = kwargs.get('P', inlet["P"])
+        T = jnp.asarray(T)
+        P = jnp.asarray(P)
+
+        # Get feed flows and compute mole fractions
+        inlet_flows = get_flows(inlet)
+        F_feed = jnp.array([inlet_flows[s] for s in p.species_order])
+        F_total = jnp.sum(F_feed)
+        z = F_feed / (F_total + 1e-10)
+
+        # Get K-values from thermodynamics
+        K = self.thermo.K_values_array(T, P)
+        K = jnp.clip(K, K_MIN, K_MAX)
+
+        # Quick estimate of vapor fraction
+        expected_V = kwargs.get('expected_vapor_fraction')
+        if expected_V is not None:
+            V_frac = jnp.asarray(expected_V)
+        else:
+            # Use bubble/dew check for initial estimate
+            bubble_check = jnp.sum(z * K)
+            dew_check = jnp.sum(z / K)
+
+            # Simple heuristic
+            if bubble_check < 1:
+                V_frac = jnp.asarray(0.0)  # Subcooled liquid
+            elif dew_check < 1:
+                V_frac = jnp.asarray(1.0)  # Superheated vapor
+            else:
+                # Estimate based on relative volatility
+                V_frac = (bubble_check - 1.0) / (bubble_check + dew_check - 2.0 + 1e-10)
+                V_frac = jnp.clip(V_frac, 0.0, 1.0)
+
+        # Estimate compositions
+        x = z / (1 + V_frac * (K - 1) + 1e-10)
+        y = K * x
+        x = x / (jnp.sum(x) + 1e-10)
+        y = y / (jnp.sum(y) + 1e-10)
+
+        # Calculate outlet flows
+        L = F_total * (1 - V_frac)
+        V = F_total * V_frac
+
+        liquid_flows = {s: L * x[i] for i, s in enumerate(p.species_order)}
+        vapor_flows = {s: V * y[i] for i, s in enumerate(p.species_order)}
+
+        # Create outlet streams
+        liquid = make_stream(liquid_flows, T, P)
+        vapor = make_stream(vapor_flows, T, P)
+
+        states = {
+            'V_frac': float(V_frac),
+            'K': {s: float(K[i]) for i, s in enumerate(p.species_order)},
+            'x': {s: float(x[i]) for i, s in enumerate(p.species_order)},
+            'y': {s: float(y[i]) for i, s in enumerate(p.species_order)},
+        }
+
+        info = {
+            'method': 'simplified_rachford_rice',
+            'bubble_point_estimate': float(jnp.sum(z * K)),
+            'dew_point_estimate': float(jnp.sum(z / K)),
+        }
+
+        return {
+            'liquid': liquid,
+            'vapor': vapor,
+            'states': states,
+            'info': info,
+        }
 
 
 class Splitter:

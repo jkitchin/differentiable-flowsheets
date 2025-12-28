@@ -107,6 +107,19 @@ from difflow.units.heat_exchanger import (
     size_heat_exchanger,
 )
 from difflow.flowsheet import Flowsheet, Unit
+from difflow.initialization import (
+    AndersonAccelerator,
+    wegstein_acceleration,
+    anderson_acceleration_step,
+    Initializable,
+    InitializationResult,
+    estimate_cstr_conversion,
+    estimate_outlet_temperature,
+    estimate_flash_split,
+    FlowsheetGraph,
+    find_cycles,
+    select_tear_streams,
+)
 
 # Plugin infrastructure
 from difflow.plugins import (
@@ -264,6 +277,18 @@ __all__ = [
     # Flowsheet
     "Flowsheet",
     "Unit",
+    # Initialization & Acceleration
+    "AndersonAccelerator",
+    "wegstein_acceleration",
+    "anderson_acceleration_step",
+    "Initializable",
+    "InitializationResult",
+    "estimate_cstr_conversion",
+    "estimate_outlet_temperature",
+    "estimate_flash_split",
+    "FlowsheetGraph",
+    "find_cycles",
+    "select_tear_streams",
     # Plugin infrastructure
     "registry",
     "load_plugins",

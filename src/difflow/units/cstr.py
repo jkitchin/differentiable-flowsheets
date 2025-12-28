@@ -774,3 +774,133 @@ class CSTR:
             Residual array (should be zero at steady state)
         """
         return self.derivatives(jnp.array(0.0), state, inputs, params)
+
+    # =========================================================================
+    # Initialization Interface
+    # =========================================================================
+
+    def initialize(
+        self,
+        inlet: Stream,
+        **kwargs,
+    ) -> dict[str, Any]:
+        """Generate initial guesses for CSTR outputs and internal states.
+
+        Uses analytical estimates based on residence time and simple
+        kinetic approximations for faster convergence.
+
+        Args:
+            inlet: Inlet stream
+            **kwargs: Additional parameters:
+                - volumetric_flow: Volumetric flow rate (m^3/s)
+                - T_spec: Specified temperature for isothermal mode
+                - Q_spec: Specified heat duty for specified_duty mode
+                - expected_conversion: Optional hint for expected conversion
+
+        Returns:
+            Dictionary containing:
+            - 'outlet': Initial guess for outlet stream
+            - 'states': Dict with internal state guesses
+            - 'info': Additional initialization information
+        """
+        p = self.params
+        inlet_flows = get_flows(inlet)
+
+        # Get volumetric flow
+        volumetric_flow = kwargs.get('volumetric_flow')
+        if volumetric_flow is None:
+            total_molar = sum(inlet_flows.values())
+            volumetric_flow = total_molar / 50.0  # Assume ~50 mol/m^3
+
+        # Residence time
+        tau = p.V / volumetric_flow
+
+        # Estimate conversion using CSTR design equation
+        # For first-order reaction: X = k*tau / (1 + k*tau)
+        expected_conversion = kwargs.get('expected_conversion')
+        if expected_conversion is not None:
+            X_est = expected_conversion
+        else:
+            # Try to estimate k from rate_params
+            k_est = p.rate_params.get('k', 0.1)  # Default guess
+            X_est = k_est * tau / (1 + k_est * tau)
+            X_est = float(jnp.clip(X_est, 0.0, 0.95))
+
+        # Estimate outlet composition based on stoichiometry
+        # Assume first reactant in species_order is the limiting reactant
+        outlet_flows = {}
+        for i, species in enumerate(p.species_order):
+            F_in = inlet_flows.get(species, 0.0)
+            nu = p.stoich[i, 0] if p.stoich.shape[1] > 0 else 0  # First reaction
+
+            if nu < 0:  # Reactant
+                outlet_flows[species] = F_in * (1 - X_est)
+            elif nu > 0:  # Product
+                # Find the limiting reactant to calculate product formation
+                limiting_idx = jnp.argmin(
+                    jnp.array([inlet_flows.get(s, 0.0) / (-p.stoich[j, 0] + 1e-10)
+                               for j, s in enumerate(p.species_order)
+                               if p.stoich[j, 0] < 0])
+                )
+                reactant_species = [s for j, s in enumerate(p.species_order)
+                                    if p.stoich[j, 0] < 0]
+                if reactant_species:
+                    limiting_species = reactant_species[int(limiting_idx)]
+                    extent = inlet_flows.get(limiting_species, 0.0) * X_est / (-p.stoich[
+                        p.species_order.index(limiting_species), 0])
+                    outlet_flows[species] = F_in + nu * extent
+                else:
+                    outlet_flows[species] = F_in
+            else:  # Inert
+                outlet_flows[species] = F_in
+
+        # Estimate outlet temperature
+        T_spec = kwargs.get('T_spec')
+        if self.mode == "isothermal":
+            T_out = T_spec if T_spec is not None else inlet["T"]
+        else:
+            # Estimate temperature rise from heat of reaction
+            if p.dH_rxn is not None:
+                # Approximate heat generated
+                extent_est = inlet_flows.get(p.species_order[0], 1.0) * X_est
+                Q_rxn = -float(jnp.sum(p.dH_rxn)) * extent_est  # Positive for exothermic
+
+                # Estimate Cp
+                Cp_avg = 75.0  # J/mol/K for liquids
+                total_flow = sum(inlet_flows.values())
+                dT = Q_rxn / (total_flow * Cp_avg + 1e-10)
+
+                if self.mode == "adiabatic":
+                    T_out = inlet["T"] + dT
+                else:  # specified_duty
+                    Q_spec = kwargs.get('Q_spec', 0.0)
+                    T_out = inlet["T"] + (dT + Q_spec / (total_flow * Cp_avg + 1e-10))
+
+                T_out = float(jnp.clip(T_out, 250.0, 800.0))
+            else:
+                T_out = inlet["T"]
+
+        # Build outlet stream guess
+        outlet = make_stream(outlet_flows, T_out, inlet["P"])
+
+        # Build state guess for dynamic simulation
+        n_guess = jnp.array([outlet_flows[s] * tau for s in p.species_order])
+
+        states = {
+            'conversion': X_est,
+            'residence_time': tau,
+            'n': n_guess,
+        }
+        if self.mode != "isothermal":
+            states['T'] = T_out
+
+        info = {
+            'method': 'analytical_cstr_estimate',
+            'assumptions': ['first-order kinetics', 'single reaction dominant'],
+        }
+
+        return {
+            'outlet': outlet,
+            'states': states,
+            'info': info,
+        }
