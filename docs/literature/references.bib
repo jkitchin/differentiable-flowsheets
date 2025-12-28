@@ -1,0 +1,530 @@
+% Bibliography for Differentiable Flowsheets Literature Review
+% Compiled December 2025
+
+%% ============================================================================
+%% DIFFERENTIABLE SIMULATION FRAMEWORKS
+%% ============================================================================
+
+@article{yang2023novel,
+  title={A Novel Perspective Process Simulation Framework Based on Automatic Differentiation},
+  author={Yang, Shaoyi},
+  journal={arXiv preprint arXiv:2311.11129},
+  year={2023},
+  url={https://arxiv.org/abs/2311.11129},
+  note={Applies automatic differentiation to thermodynamic and flash equilibrium calculations}
+}
+
+@inproceedings{hu2019difftaichi,
+  title={DiffTaichi: Differentiable Programming for Physical Simulation},
+  author={Hu, Yuanming and Anderson, Luke and Li, Tzu-Mao and Sun, Qi and Carr, Nathan and Ragan-Kelley, Jonathan and Durand, Fr{\'e}d{\'o}},
+  booktitle={International Conference on Learning Representations},
+  year={2020},
+  url={https://arxiv.org/abs/1910.00935}
+}
+
+@article{bezgin2023jaxfluids,
+  title={JAX-Fluids: A fully-differentiable high-order computational fluid dynamics solver for compressible two-phase flows},
+  author={Bezgin, Deniz A and Buhendwa, Aaron B and Adams, Nikolaus A},
+  journal={Computer Physics Communications},
+  volume={282},
+  pages={108527},
+  year={2023},
+  publisher={Elsevier},
+  url={https://arxiv.org/abs/2203.13760}
+}
+
+@article{bezgin2024jaxfluids2,
+  title={JAX-Fluids 2.0: Towards HPC for Differentiable CFD of Compressible Two-phase Flows},
+  author={Bezgin, Deniz A and Buhendwa, Aaron B and Adams, Nikolaus A},
+  journal={arXiv preprint arXiv:2402.05193},
+  year={2024},
+  url={https://arxiv.org/abs/2402.05193}
+}
+
+%% ============================================================================
+%% JAX SCIENTIFIC COMPUTING ECOSYSTEM
+%% ============================================================================
+
+@software{kidger2021diffrax,
+  author={Kidger, Patrick},
+  title={Diffrax: Numerical differential equation solvers in JAX},
+  year={2021},
+  url={https://github.com/patrick-kidger/diffrax},
+  note={Autodifferentiable and GPU-capable ODE/SDE/CDE solvers}
+}
+
+@inproceedings{kidger2021equinox,
+  title={Equinox: neural networks in JAX via callable PyTrees and filtered transformations},
+  author={Kidger, Patrick and Garcia, Cristian},
+  booktitle={Differentiable Programming Workshop at Neural Information Processing Systems},
+  year={2021},
+  url={https://arxiv.org/abs/2111.00254}
+}
+
+@article{kidger2022neural,
+  title={On Neural Differential Equations},
+  author={Kidger, Patrick},
+  journal={arXiv preprint arXiv:2202.02435},
+  year={2022},
+  url={https://arxiv.org/abs/2202.02435},
+  note={PhD thesis on neural ODEs, SDEs, and CDEs}
+}
+
+@software{schoenholz2020jaxmd,
+  author={Schoenholz, Samuel S and Cubuk, Ekin D},
+  title={JAX MD: A Framework for Differentiable Physics},
+  year={2020},
+  publisher={Advances in Neural Information Processing Systems},
+  url={https://github.com/jax-md/jax-md}
+}
+
+%% ============================================================================
+%% JULIA ECOSYSTEM FOR CHEMICAL ENGINEERING
+%% ============================================================================
+
+@article{walker2022clapeyron,
+  title={Clapeyron.jl: An Extensible, Open-Source Fluid Thermodynamics Toolkit},
+  author={Walker, Pierre J and Yew, Hon-Wa and Riedemann, Andr{\'e}s},
+  journal={Industrial \& Engineering Chemistry Research},
+  volume={61},
+  number={20},
+  pages={7130--7153},
+  year={2022},
+  publisher={ACS Publications},
+  doi={10.1021/acs.iecr.2c00326},
+  url={https://arxiv.org/abs/2201.08927}
+}
+
+@inproceedings{riedemann2024processsimulator,
+  title={ProcessSimulator.jl: A Differentiable Chemical Process Simulator},
+  author={Riedemann, Andr{\'e}s and Subramanian, S and Viena, L},
+  booktitle={JuliaCon 2024},
+  year={2024},
+  url={https://pretalx.com/juliacon2024/talk/LP3XAL/}
+}
+
+@article{rackauckas2017differentialequations,
+  title={DifferentialEquations.jl -- A Performant and Feature-Rich Ecosystem for Solving Differential Equations in Julia},
+  author={Rackauckas, Christopher and Nie, Qing},
+  journal={Journal of Open Research Software},
+  volume={5},
+  number={1},
+  year={2017},
+  doi={10.5334/jors.151}
+}
+
+@software{scimlsensitivity,
+  author={Rackauckas, Christopher and others},
+  title={SciMLSensitivity.jl: Automatic Differentiation and Adjoints for (Differential) Equation Solvers},
+  year={2021},
+  url={https://docs.sciml.ai/SciMLSensitivity/stable/}
+}
+
+%% ============================================================================
+%% PROCESS SYSTEMS ENGINEERING TOOLS
+%% ============================================================================
+
+@article{lee2021idaes,
+  title={The IDAES process modeling framework and model library—Flexibility for process simulation and optimization},
+  author={Lee, Andrew and Ghouse, Jaffer H and Eslick, John C and Laird, Carl D and Siirola, John D and Zamarripa, Miguel A and Gunter, Dan and Shinn, John H and Dowling, Alexander W and Bhattacharyya, Debangsu and others},
+  journal={Journal of Advanced Manufacturing and Processing},
+  volume={3},
+  number={3},
+  pages={e10095},
+  year={2021},
+  publisher={Wiley},
+  doi={10.1002/amp2.10095},
+  url={https://github.com/IDAES/idaes-pse}
+}
+
+@article{cortes2020biosteam,
+  title={BioSTEAM: A Fast and Flexible Platform for the Design, Simulation, and Techno-Economic Analysis of Biorefineries under Uncertainty},
+  author={Cort{\'e}s-Pe{\~n}a, Yoel and Kumar, Deepak and Singh, Vijay and Guest, Jeremy S},
+  journal={ACS Sustainable Chemistry \& Engineering},
+  volume={8},
+  number={8},
+  pages={3302--3310},
+  year={2020},
+  publisher={ACS Publications},
+  doi={10.1021/acssuschemeng.9b07040},
+  url={https://github.com/BioSTEAMDevelopmentGroup/biosteam}
+}
+
+@software{dwsim,
+  author={Medeiros, Daniel Wagner Ribeiro},
+  title={DWSIM - Open Source Chemical Process Simulator},
+  year={2008},
+  url={https://dwsim.org/},
+  note={CAPE-OPEN compliant process simulator}
+}
+
+@article{nayak2019openmodelica,
+  title={Implementation of a Property Database and Thermodynamic Calculations in OpenModelica for Chemical Process Simulation},
+  author={Nayak, Priyam and Experiment, Spoken Tutorial and others},
+  journal={Industrial \& Engineering Chemistry Research},
+  volume={58},
+  number={22},
+  pages={9437--9449},
+  year={2019},
+  publisher={ACS Publications},
+  doi={10.1021/acs.iecr.8b05147}
+}
+
+@article{experiment2019openmodelica,
+  title={Chemical Process Simulation Using OpenModelica},
+  author={Experiment, Spoken Tutorial and Experiment, Spoken Tutorial},
+  journal={Industrial \& Engineering Chemistry Research},
+  volume={58},
+  number={26},
+  pages={11164--11174},
+  year={2019},
+  publisher={ACS Publications},
+  doi={10.1021/acs.iecr.9b00104}
+}
+
+%% ============================================================================
+%% AUTOMATIC DIFFERENTIATION IN CHEMICAL ENGINEERING
+%% ============================================================================
+
+@article{soares2003automatic,
+  title={Automatic differentiation tools in the dynamic simulation of chemical engineering processes},
+  author={Soares, Ricardo Pereira and Secchi, Argimiro Resende},
+  journal={Brazilian Journal of Chemical Engineering},
+  volume={20},
+  pages={405--414},
+  year={2003},
+  publisher={SciELO Brasil},
+  url={https://www.scielo.br/j/bjce/a/JYsfdfsH34LBxbgvyPkKrMP/}
+}
+
+@article{song2023automatic,
+  title={Automatic differentiation rules for Tsoukalas-Mitsos convex relaxations in global process optimization},
+  author={Song, Yingkai and others},
+  journal={Chemical Engineering Research and Design},
+  year={2023},
+  publisher={Elsevier},
+  url={https://www.sciencedirect.com/science/article/pii/S2772508123000157}
+}
+
+@article{perkins1986chain,
+  title={Application of the chain rule of differentiation to sequential modular flowsheet optimization},
+  author={Perkins, JD and Sargent, RWH},
+  journal={Computers \& Chemical Engineering},
+  volume={10},
+  number={6},
+  pages={507--517},
+  year={1986},
+  publisher={Elsevier},
+  doi={10.1016/0098-1354(86)85004-9}
+}
+
+@article{ma2021comparison,
+  title={A Comparison of Automatic Differentiation and Continuous Sensitivity Analysis for Derivatives of Differential Equation Solutions},
+  author={Ma, Yingbo and Dixit, Vaibhav and Innes, Michael and Guo, Xingjian and Rackauckas, Christopher},
+  journal={IEEE High Performance Extreme Computing Conference},
+  year={2021},
+  doi={10.1109/HPEC49654.2021.9622796},
+  url={https://arxiv.org/abs/1812.01892}
+}
+
+%% ============================================================================
+%% SENSITIVITY ANALYSIS AND ADJOINT METHODS
+%% ============================================================================
+
+@article{sandu2003direct,
+  title={Direct and adjoint sensitivity analysis of chemical kinetic systems with KPP: Part I—theory and software tools},
+  author={Sandu, Adrian and Daescu, Dacian N and Carmichael, Gregory R},
+  journal={Atmospheric Environment},
+  volume={37},
+  number={36},
+  pages={5083--5096},
+  year={2003},
+  publisher={Elsevier},
+  doi={10.1016/j.atmosenv.2003.08.019}
+}
+
+@article{cao2003adjoint,
+  title={Adjoint Sensitivity Analysis for Differential-Algebraic Equations: The Adjoint DAE System and Its Numerical Solution},
+  author={Cao, Yang and Li, Shengtai and Petzold, Linda and Serban, Radu},
+  journal={SIAM Journal on Scientific Computing},
+  volume={24},
+  number={3},
+  pages={1076--1089},
+  year={2003},
+  publisher={SIAM},
+  doi={10.1137/S1064827501380630}
+}
+
+@article{lemke2019adjoint,
+  title={Adjoint sensitivity analysis of kinetic, thermochemical, and transport data of nitrogen and ammonia chemistry},
+  author={Lemke, Oliver and Almansour, Bandar and Kanno, Naoki and others},
+  journal={Proceedings of the Combustion Institute},
+  volume={38},
+  number={1},
+  pages={777--785},
+  year={2021},
+  publisher={Elsevier},
+  doi={10.1016/j.proci.2020.07.020}
+}
+
+%% ============================================================================
+%% NEURAL NETWORKS AND MACHINE LEARNING FOR PROCESS ENGINEERING
+%% ============================================================================
+
+@article{owoyele2022chemnode,
+  title={ChemNODE: A neural ordinary differential equations framework for efficient chemical kinetic solvers},
+  author={Owoyele, Opeoluwa and Pal, Pinaki},
+  journal={Energy and AI},
+  volume={7},
+  pages={100118},
+  year={2022},
+  publisher={Elsevier},
+  doi={10.1016/j.egyai.2021.100118}
+}
+
+@article{douwes2025jaxkineticmodel,
+  title={Jaxkineticmodel: Neural ordinary differential equations inspired parameterization of kinetic models},
+  author={Douwes, Roel and others},
+  journal={PLOS Computational Biology},
+  year={2025},
+  doi={10.1371/journal.pcbi.1012733},
+  url={https://journals.plos.org/ploscompbiol/article?id=10.1371/journal.pcbi.1012733}
+}
+
+@article{hua2024grxnode,
+  title={Generalized reactor neural ODE for dynamic reaction process modeling with physical interpretability},
+  author={Hua, Chenxi and others},
+  journal={Chemical Engineering Journal},
+  volume={452},
+  pages={139353},
+  year={2023},
+  publisher={Elsevier},
+  doi={10.1016/j.cej.2022.139353}
+}
+
+@article{wu2024pinn,
+  title={Physics-informed learning of chemical reactor systems using decoupling-coupling training framework},
+  author={Wu, Lei and others},
+  journal={AIChE Journal},
+  year={2024},
+  doi={10.1002/aic.18436}
+}
+
+@article{sitapure2024pinn,
+  title={Physics-Informed Neural Networks for Dynamic Process Operations with Limited Physical Knowledge and Data},
+  author={Sitapure, Niranjan and Kwon, Joseph Sang-Il},
+  journal={Computers \& Chemical Engineering},
+  year={2024},
+  doi={10.1016/j.compchemeng.2024.108817},
+  url={https://arxiv.org/abs/2406.01528}
+}
+
+@article{wang2024pinn,
+  title={Physics-Informed Neural Networks for Process Systems: Handling Plant-Model Mismatch},
+  author={Wang, Zhaoyang and others},
+  journal={Industrial \& Engineering Chemistry Research},
+  year={2024},
+  doi={10.1021/acs.iecr.4c00690}
+}
+
+%% ============================================================================
+%% SURROGATE MODELING
+%% ============================================================================
+
+@article{mcbride2019surrogate,
+  title={A machine learning approach for the surrogate modeling of uncertain distributed process engineering models},
+  author={McBride, Kevin and Sundmacher, Kai},
+  journal={Chemical Engineering Research and Design},
+  volume={148},
+  pages={443--453},
+  year={2019},
+  publisher={Elsevier},
+  doi={10.1016/j.cherd.2022.08.019}
+}
+
+@article{kim2021datadriven,
+  title={Data-Driven Process Optimization Considering Surrogate Model Prediction Uncertainty: A Mixture Density Network-Based Approach},
+  author={Kim, Minsu and Lee, Jay H},
+  journal={Industrial \& Engineering Chemistry Research},
+  volume={60},
+  number={2},
+  pages={898--913},
+  year={2021},
+  publisher={ACS Publications},
+  doi={10.1021/acs.iecr.0c04214}
+}
+
+@article{huster2020sobolev,
+  title={Sobolev trained neural network surrogate models for optimization},
+  author={Huster, Wolfgang R and Schweidtmann, Artur M and Luki{\'c}, Janik T and Mitsos, Alexander},
+  journal={Computers \& Chemical Engineering},
+  volume={153},
+  pages={107438},
+  year={2021},
+  publisher={Elsevier},
+  doi={10.1016/j.compchemeng.2021.107438}
+}
+
+%% ============================================================================
+%% IMPLICIT DIFFERENTIATION AND DEEP EQUILIBRIUM NETWORKS
+%% ============================================================================
+
+@article{bolte2021nonsmooth,
+  title={Nonsmooth Implicit Differentiation for Machine Learning and Optimization},
+  author={Bolte, J{\'e}r{\^o}me and Le, Tam and Pauwels, Edouard and Silveti-Falls, Antonio},
+  journal={Advances in Neural Information Processing Systems},
+  volume={34},
+  pages={17413--17425},
+  year={2021},
+  url={https://arxiv.org/abs/2106.04350}
+}
+
+@article{zucchet2022beyond,
+  title={Beyond backpropagation: bilevel optimization through implicit differentiation and equilibrium propagation},
+  author={Zucchet, Nicolas and Baldi, Pierre},
+  journal={Neural Networks},
+  year={2022},
+  url={https://arxiv.org/abs/2205.03076}
+}
+
+@online{implicitlayers,
+  author={Kolter, Zico and Duvenaud, David and Johnson, Matt},
+  title={Deep Implicit Layers - Neural ODEs, Deep Equilibrium Models, and Beyond},
+  year={2020},
+  url={http://implicit-layers-tutorial.org/}
+}
+
+%% ============================================================================
+%% THERMODYNAMIC LIBRARIES
+%% ============================================================================
+
+@software{coolprop,
+  author={Bell, Ian H and Wronski, Jorrit and Quoilin, Sylvain and Lemort, Vincent},
+  title={CoolProp: Thermophysical properties for the masses},
+  year={2014},
+  url={https://github.com/CoolProp/CoolProp},
+  note={Open-source thermophysical property database}
+}
+
+@software{thermo,
+  author={Caleb Bell and Contributors},
+  title={Thermo: Chemical properties component of Chemical Engineering Design Library (ChEDL)},
+  year={2016},
+  url={https://github.com/CalebBell/thermo}
+}
+
+%% ============================================================================
+%% PROCESS OPTIMIZATION AND PSE
+%% ============================================================================
+
+@book{grossmann2021advanced,
+  title={Advanced Optimization for Process Systems Engineering},
+  author={Grossmann, Ignacio E},
+  year={2021},
+  publisher={Cambridge University Press},
+  isbn={9781108831659}
+}
+
+@article{biegler2004retrospective,
+  title={Retrospective on optimization},
+  author={Biegler, Lorenz T and Grossmann, Ignacio E},
+  journal={Computers \& Chemical Engineering},
+  volume={28},
+  number={8},
+  pages={1169--1192},
+  year={2004},
+  publisher={Elsevier},
+  doi={10.1016/j.compchemeng.2003.11.003}
+}
+
+@article{caballero2024pse,
+  title={Process Systems Engineering Tools for Optimization of Trained Machine Learning Models: Comparative and Perspective},
+  author={Caballero, Jos{\'e} A and Grossmann, Ignacio E},
+  journal={Industrial \& Engineering Chemistry Research},
+  year={2024},
+  doi={10.1021/acs.iecr.4c00632}
+}
+
+@article{schweidtmann2021datadriven,
+  title={Data-driven optimization for process systems engineering applications},
+  author={Schweidtmann, Artur M and Mitsos, Alexander},
+  journal={Chemical Engineering Science},
+  volume={248},
+  pages={117135},
+  year={2022},
+  publisher={Elsevier},
+  doi={10.1016/j.ces.2021.117135}
+}
+
+%% ============================================================================
+%% PHYSICS-BASED DEEP LEARNING
+%% ============================================================================
+
+@online{thuerey2021pbdl,
+  author={Thuerey, Nils and Holl, Philipp and Mueller, Maximilian and Schnell, Patrick and Trost, Felix and Um, Kiwon},
+  title={Physics-based Deep Learning},
+  year={2021},
+  url={https://physicsbaseddeeplearning.org/},
+  note={Online textbook on differentiable physics and ML}
+}
+
+@article{qiao2020scalable,
+  title={Scalable Differentiable Physics for Learning and Control},
+  author={Qiao, Yi-Ling and Liang, Junbang and Koltun, Vladlen and Lin, Ming C},
+  booktitle={International Conference on Machine Learning},
+  pages={7847--7856},
+  year={2020},
+  organization={PMLR},
+  url={http://proceedings.mlr.press/v119/qiao20a.html}
+}
+
+@article{sun2022piml,
+  title={Physics-informed machine learning with differentiable programming for heterogeneous underground reservoir pressure management},
+  author={Sun, Alexander Y and others},
+  journal={Scientific Reports},
+  volume={12},
+  number={1},
+  pages={18734},
+  year={2022},
+  publisher={Nature Publishing Group},
+  doi={10.1038/s41598-022-22832-7}
+}
+
+%% ============================================================================
+%% EQUATION-ORIENTED SIMULATION
+%% ============================================================================
+
+@article{mathew2016complete,
+  title={Complete Equation-Oriented Approach for Process Analysis and Optimization of a Cryogenic Air Separation Unit},
+  author={Mathew, Santhana and others},
+  journal={Industrial \& Engineering Chemistry Research},
+  volume={55},
+  number={51},
+  pages={13064--13075},
+  year={2016},
+  publisher={ACS Publications},
+  doi={10.1021/acs.iecr.5b02768}
+}
+
+@article{andersson2018modelica,
+  title={Automatic Sensitivity Analysis of DAE-systems Generated from Equation-Based Modeling Languages},
+  author={Andersson, Christian and {\AA}kesson, Johan and Fuhrer, Claus},
+  journal={Lecture Notes in Computer Science},
+  pages={235--246},
+  year={2008},
+  publisher={Springer},
+  doi={10.1007/978-3-540-68942-3_21}
+}
+
+%% ============================================================================
+%% DIFFERENTIABLE GILLESPIE AND STOCHASTIC SIMULATION
+%% ============================================================================
+
+@article{jeong2025differentiable,
+  title={A differentiable Gillespie algorithm for simulating chemical kinetics, parameter estimation, and designing synthetic biological circuits},
+  author={Jeong, Hyunwoo and others},
+  journal={eLife},
+  year={2025},
+  doi={10.7554/eLife.103877},
+  url={https://elifesciences.org/articles/103877}
+}

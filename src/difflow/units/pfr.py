@@ -38,7 +38,7 @@ import jax.numpy as jnp
 from jax import Array
 import diffrax
 
-from difflow.streams import Stream, get_flows, make_stream
+from difflow.streams import Stream, get_flows, get_species, make_stream
 from difflow.thermo import IdealThermo
 from difflow.dynamic.state import StateSpec, StateVar
 
@@ -452,6 +452,115 @@ class PFR:
         outlet, info = self(inlet, T_spec=T_spec, volumetric_flow=Q_v)
 
         return {"outlet": outlet, "profiles": info.get("profiles")}
+
+    # =========================================================================
+    # Initialization Interface
+    # =========================================================================
+
+    def initialize(
+        self,
+        inlet: Stream,
+        **kwargs,
+    ) -> dict[str, Any]:
+        """Generate initial guesses for PFR outputs and internal states.
+
+        Uses analytical PFR conversion estimates for faster convergence.
+
+        Args:
+            inlet: Inlet stream
+            **kwargs: Additional parameters:
+                - volumetric_flow: Volumetric flow rate (m^3/s)
+                - T_spec: Specified temperature for isothermal mode
+                - expected_conversion: Optional hint for expected conversion
+
+        Returns:
+            Dictionary containing:
+            - 'outlet': Initial guess for outlet stream
+            - 'states': Dict with internal state guesses
+            - 'info': Additional initialization information
+        """
+        p = self.params
+        inlet_flows = get_flows(inlet)
+
+        # Get volumetric flow
+        volumetric_flow = kwargs.get('volumetric_flow')
+        if volumetric_flow is None:
+            total_molar = sum(inlet_flows.values())
+            volumetric_flow = total_molar / 50.0  # Assume ~50 mol/m^3
+
+        # Residence time
+        tau = p.V / volumetric_flow
+
+        # Estimate conversion using PFR design equation
+        # For first-order reaction: X = 1 - exp(-k*tau)
+        expected_conversion = kwargs.get('expected_conversion')
+        if expected_conversion is not None:
+            X_est = expected_conversion
+        else:
+            # Try to estimate k from rate_params
+            k_est = p.rate_params.get('k', 0.1)  # Default guess
+            X_est = 1.0 - jnp.exp(-k_est * tau)
+            X_est = float(jnp.clip(X_est, 0.0, 0.99))
+
+        # Estimate outlet composition based on stoichiometry
+        outlet_flows = {}
+        for i, species in enumerate(p.species_order):
+            F_in = inlet_flows.get(species, 0.0)
+            nu = p.stoich[i, 0] if p.stoich.shape[1] > 0 else 0  # First reaction
+
+            if nu < 0:  # Reactant
+                outlet_flows[species] = F_in * (1 - X_est)
+            elif nu > 0:  # Product
+                # Find the limiting reactant
+                reactant_species = [s for j, s in enumerate(p.species_order)
+                                    if p.stoich[j, 0] < 0]
+                if reactant_species:
+                    limiting_species = reactant_species[0]
+                    extent = inlet_flows.get(limiting_species, 0.0) * X_est / (
+                        -p.stoich[p.species_order.index(limiting_species), 0])
+                    outlet_flows[species] = F_in + nu * extent
+                else:
+                    outlet_flows[species] = F_in
+            else:  # Inert
+                outlet_flows[species] = F_in
+
+        # Estimate outlet temperature
+        T_spec = kwargs.get('T_spec')
+        if self.mode == "isothermal":
+            T_out = T_spec if T_spec is not None else inlet["T"]
+        else:  # adiabatic
+            if p.dH_rxn is not None:
+                # Approximate adiabatic temperature rise
+                extent_est = inlet_flows.get(p.species_order[0], 1.0) * X_est
+                Q_rxn = -float(jnp.sum(p.dH_rxn)) * extent_est
+
+                Cp_avg = 75.0  # J/mol/K
+                total_flow = sum(inlet_flows.values())
+                dT = Q_rxn / (total_flow * Cp_avg + 1e-10)
+                T_out = float(jnp.clip(inlet["T"] + dT, 250.0, 800.0))
+            else:
+                T_out = inlet["T"]
+
+        # Build outlet stream guess
+        outlet = make_stream(outlet_flows, T_out, inlet["P"])
+
+        states = {
+            'conversion': X_est,
+            'residence_time': tau,
+        }
+        if self.mode == "adiabatic":
+            states['T_out'] = T_out
+
+        info = {
+            'method': 'analytical_pfr_estimate',
+            'assumptions': ['first-order kinetics', 'no pressure drop'],
+        }
+
+        return {
+            'outlet': outlet,
+            'states': states,
+            'info': info,
+        }
 
 
 @dataclass
