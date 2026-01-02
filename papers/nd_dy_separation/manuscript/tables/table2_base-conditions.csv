@@ -1,0 +1,8 @@
+Parameter,Value,Units
+Feed composition (Nd:Dy),50:50,mol%
+Total REE feed flow,0.02,mol/s
+pH,3.0,--
+O/A ratio,1.0,--
+Temperature,298.15,K
+D2EHPA concentration,0.5,M
+Stage efficiency,95,%

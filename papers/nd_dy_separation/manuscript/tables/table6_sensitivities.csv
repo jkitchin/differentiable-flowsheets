@@ -1,0 +1,5 @@
+Parameter,$\partial$(Purity)/$\partial p$,$\partial$(Recovery)/$\partial p$,Units
+pH,-0.155,+0.052,1/pH unit
+O/A ratio,-0.066,+0.021,1/(O/A)
+T,-0.0002,+0.0001,1/K
+[D2EHPA],-0.396,+0.128,1/M
