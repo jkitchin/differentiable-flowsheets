@@ -1,6 +1,13 @@
 # Makefile for differentiable-flowsheets
 
-NOTEBOOKS := $(wildcard examples/*.ipynb)
+NOTEBOOKS := $(wildcard examples/*.ipynb) $(wildcard examples/bio/*.ipynb) \
+             $(wildcard jax-tutorials/*.ipynb) $(wildcard about-flowsheets/*.ipynb)
+
+# Force CPU on macOS (no GPU support)
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+    JAX_ENV := JAX_PLATFORM_NAME=cpu
+endif
 
 .PHONY: all notebooks clean test book book-clean
 
@@ -10,13 +17,13 @@ all: notebooks
 notebooks: $(NOTEBOOKS)
 	@for nb in $(NOTEBOOKS); do \
 		echo "Executing $$nb..."; \
-		jupyter nbconvert --to notebook --execute --inplace "$$nb" || exit 1; \
+		$(JAX_ENV) jupyter nbconvert --to notebook --execute --inplace "$$nb" || exit 1; \
 	done
 	@echo "All notebooks executed successfully."
 
 # Execute a single notebook (usage: make run NB=examples/01_cstr_flash_recycle.ipynb)
 run:
-	jupyter nbconvert --to notebook --execute --inplace "$(NB)"
+	$(JAX_ENV) jupyter nbconvert --to notebook --execute --inplace "$(NB)"
 
 # Run tests
 test:
