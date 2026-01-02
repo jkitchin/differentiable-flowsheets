@@ -7,7 +7,9 @@ Modules:
     objectives: Purity, recovery, cost objective functions
     sensitivity: Gradient-based sensitivity analysis
     optimization: Single and multi-objective optimization
-    economics: Technoeconomic analysis
+    workflow: Computational workflow management
+    tables: Manuscript table generation
+    figures: Manuscript figure generation
 """
 
 from .single_stage import (
@@ -30,4 +32,13 @@ from .sensitivity import (
 from .optimization import (
     optimize_purity,
     pareto_front,
+)
+from .workflow import (
+    Workflow,
+    Task,
+    TaskResult,
+)
+from .tables import (
+    generate_all_tables,
+    TableSpec,
 )
