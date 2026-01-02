@@ -1,7 +1,14 @@
 # Makefile for differentiable-flowsheets
 
+# Source files that notebooks depend on
+SRC_FILES := $(shell find src -name '*.py' 2>/dev/null)
+
 NOTEBOOKS := $(wildcard examples/*.ipynb) $(wildcard examples/bio/*.ipynb) \
              $(wildcard jax-tutorials/*.ipynb) $(wildcard about-flowsheets/*.ipynb)
+
+# Stamp files to track notebook execution
+STAMP_DIR := .notebook-stamps
+STAMPS := $(patsubst %.ipynb,$(STAMP_DIR)/%.stamp,$(NOTEBOOKS))
 
 # Force CPU on macOS (no GPU support)
 UNAME_S := $(shell uname -s)
@@ -9,15 +16,34 @@ ifeq ($(UNAME_S),Darwin)
     JAX_ENV := JAX_PLATFORM_NAME=cpu
 endif
 
-.PHONY: all notebooks clean test book book-clean
+.PHONY: all notebooks notebooks-force clean test book book-clean
 
 all: notebooks
 
-# Execute all notebooks in place
-notebooks: $(NOTEBOOKS)
+# Create stamp directory
+$(STAMP_DIR):
+	@mkdir -p $(STAMP_DIR)/examples/bio $(STAMP_DIR)/jax-tutorials $(STAMP_DIR)/about-flowsheets
+
+# Pattern rule: run notebook only if it or source files changed
+$(STAMP_DIR)/%.stamp: %.ipynb $(SRC_FILES) | $(STAMP_DIR)
+	@mkdir -p $(dir $@)
+	@echo "Executing $<..."
+	@$(JAX_ENV) jupyter nbconvert --to notebook --execute --inplace "$<" || exit 1
+	@touch $@
+
+# Execute notebooks only if out of date
+notebooks: $(STAMPS)
+	@echo "All notebooks up to date."
+
+# Force execute all notebooks
+notebooks-force:
 	@for nb in $(NOTEBOOKS); do \
 		echo "Executing $$nb..."; \
 		$(JAX_ENV) jupyter nbconvert --to notebook --execute --inplace "$$nb" || exit 1; \
+	done
+	@mkdir -p $(STAMP_DIR)/examples/bio $(STAMP_DIR)/jax-tutorials $(STAMP_DIR)/about-flowsheets
+	@for nb in $(NOTEBOOKS); do \
+		touch "$(STAMP_DIR)/$${nb%.ipynb}.stamp"; \
 	done
 	@echo "All notebooks executed successfully."
 
@@ -31,6 +57,7 @@ test:
 
 # Clean generated files
 clean:
+	rm -rf $(STAMP_DIR)
 	rm -f examples/flowsheet.html
 	rm -f test_flowsheet.html
 	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true

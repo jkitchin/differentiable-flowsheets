@@ -48,3 +48,4 @@ Thumbs.db
 
 # Jupyter Book
 _build/
+.notebook-stamps/
