@@ -46,11 +46,64 @@ AD has been applied to:
 
 **Gap Identified:** No prior work applies automatic differentiation to rare earth solvent extraction or liquid-liquid equilibrium modeling.
 
-### 1.4 Uncertainty Quantification in REE Separation
+### 1.4 Equation-Oriented Frameworks: IDAES and Pyomo
+
+The [IDAES (Institute for Design of Advanced Energy Systems)](https://idaes.org/) framework, built on [Pyomo](https://www.pyomo.org/), represents the state-of-the-art in equation-oriented process modeling and optimization.
+
+**Key Capabilities:**
+- Algebraic modeling language with NLP/MINLP solver interfaces (IPOPT, etc.)
+- Extensive unit operation library (flash, distillation, reactors, heat exchangers)
+- Built-in support for steady-state and dynamic optimization
+- Uncertainty quantification via stochastic programming
+
+**Reference:** Lee, A., et al. "The IDAES process modeling framework and model library—Flexibility for process simulation and optimization." *J. Adv. Manuf. Process.* **2021**, 3, e10095. https://aiche.onlinelibrary.wiley.com/doi/10.1002/amp2.10095
+
+**How IDAES/Pyomo provides "automatic differentiation":**
+- Symbolic/algebraic differentiation of model equations
+- Solver (e.g., IPOPT) computes gradients via exact symbolic derivatives or finite differences
+- Gradient information used internally by NLP solver
+
+**Comparison: JAX vs. IDAES/Pyomo**
+
+| Aspect | JAX (This Work) | IDAES/Pyomo |
+|--------|-----------------|-------------|
+| **AD Paradigm** | Operator overloading + tracing | Equation-oriented / symbolic |
+| **Model Representation** | Python functions | Algebraic constraints |
+| **Gradient Access** | Direct via `jax.grad()` | Internal to solver |
+| **Hardware Acceleration** | GPU/TPU native | CPU only (solver-dependent) |
+| **Higher-Order Derivatives** | Hessian via `jax.hessian()` | Limited / expensive |
+| **UQ Approach** | Gradient propagation | Stochastic programming |
+| **Unit Operation Library** | Limited (build as needed) | Extensive |
+| **Solver Interface** | Custom (gradient descent) | IPOPT, CBC, Gurobi, etc. |
+
+**Why JAX for this study (not IDAES)?**
+
+1. **Direct gradient access:** JAX exposes gradients as first-class objects for sensitivity analysis and UQ. In IDAES, gradients are internal to the solver.
+
+2. **Hardware acceleration:** JAX vectorizes over parameter sweeps on GPU. IDAES is CPU-bound.
+
+3. **Composability with ML:** JAX integrates seamlessly with neural networks, surrogate models. IDAES has limited ML integration.
+
+4. **REE-specific models:** IDAES does not include REE solvent extraction units. We would need to build custom models anyway.
+
+5. **Educational clarity:** JAX's functional style makes gradient computation explicit and pedagogically clear.
+
+**When IDAES/Pyomo is better:**
+
+- Large-scale flowsheet optimization with integer decisions (MINLP)
+- Leveraging extensive thermodynamic libraries (IDAES-Experiment)
+- Problems requiring global optimization guarantees
+- Teams already using Pyomo/IDAES infrastructure
+
+**Manuscript Acknowledgment (suggested text):**
+> "We note that equation-oriented frameworks such as IDAES/Pyomo [Lee et al., 2021] provide automatic differentiation through algebraic modeling and NLP solvers. Our JAX-based approach differs in providing direct programmatic access to gradients, enabling explicit sensitivity analysis, GPU acceleration, and seamless integration with machine learning workflows. The approaches are complementary: IDAES excels at large-scale flowsheet optimization, while our framework prioritizes gradient-based analysis and uncertainty quantification."
+
+### 1.5 Uncertainty Quantification in REE Separation
 
 - Distribution coefficient measurements typically have ±15-20% uncertainty
 - Current practice: Monte Carlo simulation (10,000+ samples)
-- No analytical uncertainty propagation using gradients
+- IDAES supports stochastic programming but requires reformulation
+- No prior work on analytical gradient-based UQ for REE LLE
 
 ---
 
@@ -259,3 +312,7 @@ Compute Hessian at optimum to characterize:
 8. Turton, R.; Shaeiwitz, J. A.; Bhattacharyya, D.; Whiting, W. B. *Analysis, Synthesis, and Design of Chemical Processes*, 5th ed.; Prentice Hall: Boston, 2018.
 
 9. Bradbury, J.; et al. JAX: Composable Transformations of Python+NumPy Programs. 2018. http://github.com/google/jax
+
+10. Lee, A.; Ghouse, J. H.; Eslick, J. C.; et al. The IDAES process modeling framework and model library—Flexibility for process simulation and optimization. *J. Adv. Manuf. Process.* **2021**, 3, e10095. https://aiche.onlinelibrary.wiley.com/doi/10.1002/amp2.10095
+
+11. Hart, W. E.; Laird, C. D.; Watson, J.-P.; et al. *Pyomo—Optimization Modeling in Python*, 2nd ed.; Springer: Cham, 2017.
