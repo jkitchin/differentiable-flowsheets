@@ -201,6 +201,7 @@ class ProteinAChromatography:
         inlet: Stream,
         load_volume: float | Array,
         breakthrough_limit: float | Array = 0.01,
+        feed_volume: float | Array = None,
     ) -> tuple[tuple[Stream, Stream], dict[str, Array]]:
         """Run Protein A chromatography cycle.
 
@@ -208,6 +209,9 @@ class ProteinAChromatography:
             inlet: Feed stream (concentrated harvest)
             load_volume: Volume of feed to load (L)
             breakthrough_limit: Acceptable breakthrough fraction (0-1)
+            feed_volume: Total volume of feed stream (L). If provided, used to
+                calculate concentration. If None, assumes load_volume/total_flow
+                gives the mass fraction loaded.
 
         Returns:
             (product, waste): Product (elution) and waste (FT + wash) streams
@@ -220,14 +224,18 @@ class ProteinAChromatography:
         p = self.params
         inlet_flows = get_flows(inlet)
 
-        # Get target (mAb) concentration in feed
-        # Flows are mass/time, we need concentration = mass/(volume*time)
-        # Simplified: assume flows represent g/h and load_volume is total L loaded
         total_flow = sum(inlet_flows.values())
         target_flow = inlet_flows.get(p.target_species, jnp.array(0.0))
 
-        # Mass loaded
-        target_mass_loaded = target_flow * load_volume / total_flow
+        # Mass loaded calculation
+        if feed_volume is not None:
+            # Proper calculation: concentration = mass/volume, then mass = conc * load_vol
+            # load_fraction = load_volume / feed_volume
+            load_fraction = jnp.asarray(load_volume) / jnp.asarray(feed_volume)
+            target_mass_loaded = target_flow * load_fraction
+        else:
+            # Legacy: assume flows represent concentrations (g/L) and total_flow is volume
+            target_mass_loaded = target_flow * load_volume / total_flow
 
         # Dynamic binding capacity (simplified)
         # DBC = q_max at low breakthrough
@@ -252,7 +260,10 @@ class ProteinAChromatography:
                 waste_flows[species] = breakthrough_mass + target_bound * (1.0 - p.yield_factor)
             else:
                 # Impurity: apply clearance factor
-                mass_loaded = flow * load_volume / total_flow
+                if feed_volume is not None:
+                    mass_loaded = flow * load_fraction
+                else:
+                    mass_loaded = flow * load_volume / total_flow
                 clearance = p.impurity_clearance.get(species, 0.0)
                 reduction_factor = 10.0 ** (-clearance)
 

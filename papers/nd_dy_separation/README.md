@@ -4,6 +4,8 @@ Differentiable technoeconomic analysis of Nd/Dy separation by solvent extraction
 
 **Target Journal:** Industrial & Engineering Chemistry Research (IECR)
 
+> **Note:** This manuscript and codebase were largely developed with [Claude Code](https://claude.ai/claude-code), Anthropic's AI coding assistant. The differentiable model, analysis notebooks, figures, and manuscript were generated through collaborative human-AI development.
+
 ## Abstract
 
 This study presents a differentiable framework for analyzing single-stage liquid-liquid extraction of rare earth elements (Nd/Dy) using D2EHPA. The framework enables:
@@ -23,12 +25,25 @@ nd_dy_separation/
 │   ├── objectives.py         # Purity, recovery, cost functions
 │   ├── sensitivity.py        # Gradient-based sensitivity analysis
 │   ├── optimization.py       # Single/multi-objective optimization
-│   └── figures.py            # Figure generation scripts
+│   ├── figures.py            # Figure generation scripts
+│   ├── tables.py             # Table generation scripts
+│   └── workflow.py           # Automated workflow runner
 ├── manuscript/
 │   ├── outline.md            # Detailed manuscript outline
-│   └── figures/              # Generated figures (PNG, PDF)
+│   ├── literature_review.md  # Literature review and novelty statement
+│   ├── figures/              # Generated figures (PNG, PDF)
+│   └── tables/               # Generated tables (CSV, LaTeX)
 ├── notebooks/                # Jupyter notebooks for analysis
-├── data/                     # Literature data for comparison
+│   ├── 01_single_stage_model.ipynb     # Base case and model intro
+│   ├── 02_distribution_coefficients.ipynb  # D vs pH curves
+│   ├── 03_sensitivity_analysis.ipynb   # Gradient-based sensitivities
+│   ├── 04_optimization.ipynb           # Single-objective optimization
+│   ├── 05_pareto_front.ipynb           # Multi-objective Pareto analysis
+│   ├── 06_uncertainty_propagation.ipynb # Uncertainty quantification
+│   └── 07_technoeconomic_analysis.ipynb # Cost analysis and MSP
+├── results/                  # Cached computation results
+│   ├── all_results.json      # Complete results data
+│   └── workflow_summary.md   # Workflow execution summary
 └── README.md                 # This file
 ```
 

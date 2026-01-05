@@ -4,7 +4,7 @@
 #+title: Differentiable flowsheets
 
 * TODO Review difflow
-DEADLINE: <2025-12-29 Mon +1w>
+DEADLINE: <2026-01-05 Mon +1w>
 :PROPERTIES:
 :LOGGING: nil
 :END:
