@@ -49,3 +49,6 @@ Thumbs.db
 # Jupyter Book
 _build/
 .notebook-stamps/
+
+# Proposals
+proposals/
