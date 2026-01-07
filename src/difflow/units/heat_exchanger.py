@@ -5,6 +5,11 @@ This module provides differentiable heat exchanger models:
 - Cooler: Single stream cooling with utility
 - CounterCurrentHX: Two-stream counter-current heat exchanger
 - CoCurrentHX: Two-stream co-current (parallel flow) heat exchanger
+- CrossFlowHX: Two-stream cross-flow heat exchanger with configurable mixing
+  - both_unmixed: Both fluids unmixed (most common, e.g., car radiators)
+  - cmax_mixed: Cmax mixed, Cmin unmixed
+  - cmin_mixed: Cmin mixed, Cmax unmixed
+  - both_mixed: Both fluids mixed
 
 All models use either LMTD or effectiveness-NTU methods and are
 fully differentiable for gradient-based optimization.
@@ -13,6 +18,7 @@ Numerical Considerations:
 - LMTD singularity: When ΔT₁ ≈ ΔT₂, LMTD → arithmetic mean via smooth blending
 - Temperature crossing: Soft enforcement with warnings in info dict
 - Cr = 1 edge case: Smooth blending between balanced and general formulas
+- Cross-flow with Cr → 0: Smooth blending to limiting effectiveness
 """
 
 from dataclasses import dataclass, replace, fields, asdict as dc_asdict
@@ -202,6 +208,185 @@ def effectiveness_co_current(NTU: Array, Cr: Array) -> Array:
         Effectiveness in range (0, 1)
     """
     eps = (1.0 - jnp.exp(-NTU * (1.0 + Cr))) / (1.0 + Cr)
+    return jnp.clip(eps, 0.0, 1.0)
+
+
+def effectiveness_crossflow_both_unmixed(NTU: Array, Cr: Array) -> Array:
+    """Effectiveness for cross-flow heat exchanger with both fluids unmixed.
+
+    This is the most common cross-flow configuration (e.g., finned-tube HX,
+    car radiators). Both fluids flow through separate channels perpendicular
+    to each other with no mixing in the flow direction.
+
+    Formula: ε = 1 - exp[(NTU^0.22/Cr) * (exp(-Cr*NTU^0.78) - 1)]
+
+    This is an approximation that can sometimes overpredict at high NTU and Cr.
+    We cap the effectiveness at the counter-current value to maintain physical
+    consistency (cross-flow should never exceed counter-current effectiveness).
+
+    Numerical handling:
+    - For Cr → 0: Uses Taylor expansion to avoid division by zero
+    - Smooth blending ensures continuous gradients
+    - Capped at counter-current effectiveness
+
+    Args:
+        NTU: Number of transfer units (UA/Cmin)
+        Cr: Heat capacity ratio (Cmin/Cmax), in range [0, 1]
+
+    Returns:
+        Effectiveness in range (0, 1)
+    """
+    NTU_safe = jnp.maximum(NTU, 1e-10)
+    Cr_safe = jnp.maximum(Cr, 1e-10)
+
+    # Standard formula for Cr not too small
+    # ε = 1 - exp[(NTU^0.22/Cr) * (exp(-Cr*NTU^0.78) - 1)]
+    NTU_022 = NTU_safe**0.22
+    NTU_078 = NTU_safe**0.78
+    exp_term = jnp.exp(-Cr_safe * NTU_078)
+    exponent = (NTU_022 / Cr_safe) * (exp_term - 1.0)
+    eps_general = 1.0 - jnp.exp(exponent)
+
+    # For very small Cr (Cmin << Cmax), use limiting case
+    # As Cr → 0: ε → 1 - exp(-NTU)
+    eps_limit = 1.0 - jnp.exp(-NTU_safe)
+
+    # Smooth blend when Cr < 0.01
+    blend_threshold = 0.01
+    t = Cr / blend_threshold
+    blend = jnp.clip(3 * t**2 - 2 * t**3, 0.0, 1.0)
+
+    eps = blend * eps_general + (1.0 - blend) * eps_limit
+
+    # Physical constraint: cross-flow effectiveness cannot exceed counter-current
+    # The approximation formula can sometimes overshoot, so we cap it
+    eps_counter = effectiveness_counter_current(NTU, Cr)
+    eps = jnp.minimum(eps, eps_counter)
+
+    return jnp.clip(eps, 0.0, 1.0)
+
+
+def effectiveness_crossflow_cmax_mixed(NTU: Array, Cr: Array) -> Array:
+    """Effectiveness for cross-flow with Cmax mixed, Cmin unmixed.
+
+    One fluid (with larger heat capacity rate) flows through a single
+    channel and can mix. The other fluid (smaller heat capacity rate)
+    flows through separate tubes/channels without mixing.
+
+    Formula: ε = (1/Cr) * [1 - exp(-Cr*(1 - exp(-NTU)))]
+
+    When Cr = 1 (balanced flow), this reduces to ε = NTU/(1+NTU).
+
+    Args:
+        NTU: Number of transfer units (UA/Cmin)
+        Cr: Heat capacity ratio (Cmin/Cmax), in range [0, 1]
+
+    Returns:
+        Effectiveness in range (0, 1)
+    """
+    NTU_safe = jnp.maximum(NTU, 1e-10)
+    Cr_safe = jnp.maximum(Cr, 1e-10)
+
+    # General formula: ε = (1/Cr) * [1 - exp(-Cr*(1 - exp(-NTU)))]
+    inner_exp = jnp.exp(-NTU_safe)
+    outer_exp = jnp.exp(-Cr_safe * (1.0 - inner_exp))
+    eps_general = (1.0 / Cr_safe) * (1.0 - outer_exp)
+
+    # Balanced case (Cr = 1): ε = NTU / (1 + NTU)
+    eps_balanced = NTU_safe / (1.0 + NTU_safe)
+
+    # Smooth blending near Cr = 1
+    threshold = CR_BLEND_WIDTH
+    x = jnp.abs(1.0 - Cr)
+    t = x / threshold
+    blend = jnp.clip(3 * t**2 - 2 * t**3, 0.0, 1.0)
+    blend = jnp.where(t > 1, 1.0, blend)
+
+    eps = blend * eps_general + (1.0 - blend) * eps_balanced
+
+    return jnp.clip(eps, 0.0, 1.0)
+
+
+def effectiveness_crossflow_cmin_mixed(NTU: Array, Cr: Array) -> Array:
+    """Effectiveness for cross-flow with Cmin mixed, Cmax unmixed.
+
+    One fluid (with smaller heat capacity rate) flows through a single
+    channel and can mix. The other fluid (larger heat capacity rate)
+    flows through separate tubes/channels without mixing.
+
+    Formula: ε = 1 - exp[-(1/Cr)*(1 - exp(-Cr*NTU))]
+
+    When Cr = 1, this reduces to ε = NTU/(1+NTU).
+    When Cr → 0, this approaches ε → 1 - exp(-NTU).
+
+    Args:
+        NTU: Number of transfer units (UA/Cmin)
+        Cr: Heat capacity ratio (Cmin/Cmax), in range [0, 1]
+
+    Returns:
+        Effectiveness in range (0, 1)
+    """
+    NTU_safe = jnp.maximum(NTU, 1e-10)
+    Cr_safe = jnp.maximum(Cr, 1e-10)
+
+    # General formula: ε = 1 - exp[-(1/Cr)*(1 - exp(-Cr*NTU))]
+    inner_exp = jnp.exp(-Cr_safe * NTU_safe)
+    exponent = -(1.0 / Cr_safe) * (1.0 - inner_exp)
+    eps_general = 1.0 - jnp.exp(exponent)
+
+    # Balanced case (Cr = 1): ε = NTU / (1 + NTU)
+    eps_balanced = NTU_safe / (1.0 + NTU_safe)
+
+    # Smooth blending near Cr = 1
+    threshold = CR_BLEND_WIDTH
+    x = jnp.abs(1.0 - Cr)
+    t = x / threshold
+    blend = jnp.clip(3 * t**2 - 2 * t**3, 0.0, 1.0)
+    blend = jnp.where(t > 1, 1.0, blend)
+
+    eps = blend * eps_general + (1.0 - blend) * eps_balanced
+
+    return jnp.clip(eps, 0.0, 1.0)
+
+
+def effectiveness_crossflow_both_mixed(NTU: Array, Cr: Array) -> Array:
+    """Effectiveness for cross-flow heat exchanger with both fluids mixed.
+
+    Both fluids can mix freely in their flow direction while flowing
+    perpendicular to each other. This configuration is less common in
+    practice but can occur in some compact heat exchangers.
+
+    Formula (implicit): 1/ε = 1/(1-exp(-NTU)) + Cr/(1-exp(-Cr*NTU)) - 1/NTU
+
+    For numerical stability, we rearrange and use safe exponentials.
+
+    Args:
+        NTU: Number of transfer units (UA/Cmin)
+        Cr: Heat capacity ratio (Cmin/Cmax), in range [0, 1]
+
+    Returns:
+        Effectiveness in range (0, 1)
+    """
+    NTU_safe = jnp.maximum(NTU, 1e-10)
+    Cr_safe = jnp.maximum(Cr, 1e-10)
+
+    # Formula: 1/ε = 1/(1-exp(-NTU)) + Cr/(1-exp(-Cr*NTU)) - 1/NTU
+    # Rearrange for numerical stability
+    exp_NTU = jnp.exp(-NTU_safe)
+    exp_CrNTU = jnp.exp(-Cr_safe * NTU_safe)
+
+    # Add small epsilon to denominators to avoid division by zero
+    term1 = 1.0 / jnp.maximum(1.0 - exp_NTU, 1e-10)
+    term2 = Cr_safe / jnp.maximum(1.0 - exp_CrNTU, 1e-10)
+    term3 = 1.0 / NTU_safe
+
+    inv_eps = term1 + term2 - term3
+
+    # Ensure inv_eps is positive before taking reciprocal
+    inv_eps_safe = jnp.maximum(inv_eps, 1.001)  # ε < 0.999
+
+    eps = 1.0 / inv_eps_safe
+
     return jnp.clip(eps, 0.0, 1.0)
 
 
@@ -954,6 +1139,159 @@ class CoCurrentHX:
             "T_cold_in": T_cold_in,
             "T_cold_out": T_cold_out,
             "approach": jnp.abs(dT2),  # Co-current approach is at outlets
+            "driving_force": driving_force,
+            "temperature_crossing": temperature_crossing,
+        }
+
+        return hot_outlet, cold_outlet, info
+
+
+class CrossFlowHX:
+    """Cross-flow heat exchanger with configurable mixing.
+
+    In cross-flow heat exchangers, the two fluids flow perpendicular to
+    each other. The effectiveness depends on whether each fluid can mix
+    in its flow direction:
+
+    - both_unmixed: Both fluids flow through separate channels (most common)
+                    Examples: finned-tube HX, car radiators
+    - cmax_mixed: Larger heat capacity stream is mixed, smaller is unmixed
+                  Examples: one fluid in shell, other in tubes
+    - cmin_mixed: Smaller heat capacity stream is mixed, larger is unmixed
+    - both_mixed: Both fluids can mix (less common)
+                  Examples: some compact heat exchangers
+
+    Temperature Crossing:
+        Same soft handling as CounterCurrentHX - calculation proceeds
+        with a warning flag in the info dict.
+    """
+
+    def __init__(self, params: HeatExchangerParams, mixing: str = "both_unmixed"):
+        """Initialize cross-flow heat exchanger.
+
+        Args:
+            params: Heat exchanger parameters
+            mixing: Mixing configuration, one of:
+                    - "both_unmixed" (default, most common)
+                    - "cmax_mixed" (Cmax mixed, Cmin unmixed)
+                    - "cmin_mixed" (Cmin mixed, Cmax unmixed)
+                    - "both_mixed" (both streams mixed)
+        """
+        self.params = params
+        if mixing not in ["both_unmixed", "cmax_mixed", "cmin_mixed", "both_mixed"]:
+            raise ValueError(
+                f"Invalid mixing configuration: {mixing}. "
+                f"Must be one of: both_unmixed, cmax_mixed, cmin_mixed, both_mixed"
+            )
+        self.mixing = mixing
+
+    def __call__(
+        self,
+        hot_inlet: Stream,
+        cold_inlet: Stream,
+        UA: Array | float | None = None,
+    ) -> tuple[Stream, Stream, dict[str, Array]]:
+        """Perform heat exchanger calculation.
+
+        Args:
+            hot_inlet: Hot stream inlet
+            cold_inlet: Cold stream inlet
+            UA: Override UA value (W/K)
+
+        Returns:
+            hot_outlet: Hot stream outlet
+            cold_outlet: Cold stream outlet
+            info: Dictionary with:
+                - 'Q': Heat transferred (W), positive = hot to cold
+                - 'effectiveness': Heat exchanger effectiveness
+                - 'NTU': Number of transfer units
+                - 'LMTD': Log mean temperature difference (K)
+                - 'mixing': Mixing configuration used
+                - 'T_hot_out': Hot outlet temperature (K)
+                - 'T_cold_out': Cold outlet temperature (K)
+                - 'temperature_crossing': True if T_hot_in < T_cold_in
+                - 'driving_force': T_hot_in - T_cold_in (should be positive)
+        """
+        p = self.params
+
+        # Get inlet temperatures
+        T_hot_in = hot_inlet["T"]
+        T_cold_in = cold_inlet["T"]
+
+        # Temperature crossing check
+        driving_force = T_hot_in - T_cold_in
+        temperature_crossing = driving_force < 0
+
+        # Get flow rates
+        hot_flows = get_flows(hot_inlet)
+        cold_flows = get_flows(cold_inlet)
+        F_hot = sum(hot_flows.values())
+        F_cold = sum(cold_flows.values())
+
+        # Heat capacities
+        Cp_hot = p.Cp_hot if p.Cp_hot is not None else 75.0
+        Cp_cold = p.Cp_cold if p.Cp_cold is not None else 75.0
+
+        # Heat capacity rates (ensure positive)
+        C_hot = jnp.maximum(F_hot * Cp_hot, 1e-10)
+        C_cold = jnp.maximum(F_cold * Cp_cold, 1e-10)
+
+        C_min = jnp.minimum(C_hot, C_cold)
+        C_max = jnp.maximum(C_hot, C_cold)
+        Cr = C_min / C_max
+
+        # Get UA
+        UA_val = UA if UA is not None else p.UA
+        if UA_val is None:
+            raise ValueError("UA must be specified")
+        UA_val = jnp.asarray(UA_val)
+
+        # NTU and effectiveness based on mixing configuration
+        NTU = UA_val / C_min
+
+        if self.mixing == "both_unmixed":
+            eps = effectiveness_crossflow_both_unmixed(NTU, Cr)
+        elif self.mixing == "cmax_mixed":
+            eps = effectiveness_crossflow_cmax_mixed(NTU, Cr)
+        elif self.mixing == "cmin_mixed":
+            eps = effectiveness_crossflow_cmin_mixed(NTU, Cr)
+        else:  # both_mixed
+            eps = effectiveness_crossflow_both_mixed(NTU, Cr)
+
+        # Maximum possible heat transfer
+        Q_max = C_min * driving_force
+
+        # Actual heat transfer
+        Q = eps * Q_max
+
+        # Outlet temperatures
+        T_hot_out = T_hot_in - Q / C_hot
+        T_cold_out = T_cold_in + Q / C_cold
+
+        # Build outlet streams
+        hot_outlet = dict(hot_inlet)
+        hot_outlet["T"] = T_hot_out
+
+        cold_outlet = dict(cold_inlet)
+        cold_outlet["T"] = T_cold_out
+
+        # LMTD (use counter-current approximation for cross-flow)
+        dT1 = T_hot_in - T_cold_out
+        dT2 = T_hot_out - T_cold_in
+        LMTD = log_mean_temperature_difference(dT1, dT2)
+
+        info = {
+            "Q": Q,
+            "effectiveness": eps,
+            "NTU": NTU,
+            "Cr": Cr,
+            "LMTD": LMTD,
+            "mixing": self.mixing,
+            "T_hot_in": T_hot_in,
+            "T_hot_out": T_hot_out,
+            "T_cold_in": T_cold_in,
+            "T_cold_out": T_cold_out,
+            "approach": jnp.minimum(jnp.abs(dT1), jnp.abs(dT2)),
             "driving_force": driving_force,
             "temperature_crossing": temperature_crossing,
         }

@@ -21,6 +21,7 @@ This document provides comprehensive documentation for all chemical unit operati
    - [Cooler](#cooler)
    - [CounterCurrentHX](#countercurrenthx)
    - [CoCurrentHX](#cocurrenthx)
+   - [CrossFlowHX](#crossflowhx)
 5. [Liquid-Liquid Extraction](#liquid-liquid-extraction)
    - [MultistageCascade](#multistagecascade)
    - [DifferentialContactor](#differentialcontactor)
@@ -886,6 +887,134 @@ Note: Co-current flow cannot achieve temperature cross ($T_{c,out} > T_{h,out}$)
 
 ---
 
+### CrossFlowHX
+
+**Location**: `difflow/units/heat_exchanger.py`
+
+**Class**: `CrossFlowHX`
+
+**Description**: Two-stream heat exchanger with cross-flow arrangement where fluids flow perpendicular to each other. Effectiveness depends on mixing configuration.
+
+#### Process Role
+
+Cross-flow heat exchangers are used for:
+- Air-to-liquid heat transfer (HVAC systems)
+- Car radiators and automotive cooling
+- Finned-tube heat exchangers
+- Applications where cross-flow geometry is advantageous
+
+#### Parameters
+
+```python
+@dataclass
+class HeatExchangerParams:
+    UA: float = None       # Overall HTC × Area (W/K) for rating
+    Cp_hot: float = None   # Hot side heat capacity (J/mol·K)
+    Cp_cold: float = None  # Cold side heat capacity (J/mol·K)
+    min_approach: float = 10.0  # Minimum approach temperature (K)
+
+# CrossFlowHX constructor
+CrossFlowHX(params: HeatExchangerParams, mixing: str = "both_unmixed")
+```
+
+#### Mixing Configurations
+
+The `mixing` parameter specifies the flow arrangement:
+
+| Configuration | Description | Common Applications |
+|--------------|-------------|---------------------|
+| `both_unmixed` | Both fluids flow through separate channels (default) | Car radiators, finned-tube HX |
+| `cmax_mixed` | Larger heat capacity stream is mixed | Shell-and-tube with mixing in shell |
+| `cmin_mixed` | Smaller heat capacity stream is mixed | Special geometries |
+| `both_mixed` | Both fluids can mix in flow direction | Compact heat exchangers |
+
+#### Governing Equations
+
+**Energy Balance** (same as other HX types):
+
+$$Q = \dot{m}_h C_{p,h} (T_{h,in} - T_{h,out}) = \dot{m}_c C_{p,c} (T_{c,out} - T_{c,in})$$
+
+**Effectiveness** (both unmixed):
+
+$$\epsilon = 1 - \exp\left[\frac{NTU^{0.22}}{C_r}\left(\exp(-C_r \cdot NTU^{0.78}) - 1\right)\right]$$
+
+**Effectiveness** (Cmax mixed, Cmin unmixed):
+
+$$\epsilon = \frac{1}{C_r}\left[1 - \exp\left(-C_r(1 - \exp(-NTU))\right)\right]$$
+
+**Effectiveness** (Cmin mixed, Cmax unmixed):
+
+$$\epsilon = 1 - \exp\left[-\frac{1}{C_r}(1 - \exp(-C_r \cdot NTU))\right]$$
+
+**Effectiveness** (both mixed):
+
+$$\frac{1}{\epsilon} = \frac{1}{1-\exp(-NTU)} + \frac{C_r}{1-\exp(-C_r \cdot NTU)} - \frac{1}{NTU}$$
+
+Where:
+- $NTU = UA/C_{min}$ (Number of Transfer Units)
+- $C_r = C_{min}/C_{max}$ (Heat capacity ratio)
+
+**Physical Constraint**: Cross-flow effectiveness is capped at the counter-current value to maintain physical consistency, as cross-flow should never exceed counter-current performance.
+
+#### Inputs
+
+| Parameter | Type | Units | Description |
+|-----------|------|-------|-------------|
+| `hot_stream` | Stream | - | Hot fluid inlet |
+| `cold_stream` | Stream | - | Cold fluid inlet |
+| `UA` | float | W/K | Override UA value |
+
+#### Outputs
+
+| Parameter | Type | Units | Description |
+|-----------|------|-------|-------------|
+| `hot_outlet` | Stream | - | Hot fluid outlet |
+| `cold_outlet` | Stream | - | Cold fluid outlet |
+| `info['Q']` | float | W | Heat duty transferred |
+| `info['effectiveness']` | float | - | Heat exchanger effectiveness |
+| `info['NTU']` | float | - | Number of transfer units |
+| `info['LMTD']` | float | K | Log mean temperature difference |
+| `info['mixing']` | str | - | Mixing configuration used |
+| `info['approach']` | float | K | Minimum temperature approach |
+
+#### Example Usage
+
+```python
+from difflow import CrossFlowHX, HeatExchangerParams, make_stream
+
+# Car radiator example (both unmixed - most common)
+hx = CrossFlowHX(
+    HeatExchangerParams(UA=2000.0, Cp_hot=75.0, Cp_cold=30.0),
+    mixing="both_unmixed"  # Default
+)
+
+hot_coolant = make_stream({"ethylene_glycol": 10.0}, T=368.0, P=101325.0)  # 95°C
+cold_air = make_stream({"air": 50.0}, T=298.0, P=101325.0)  # 25°C
+
+hot_out, cold_out, info = hx(hot_coolant, cold_air)
+print(f"Heat rejected: {info['Q']/1000:.2f} kW")
+print(f"Effectiveness: {info['effectiveness']:.3f}")
+print(f"Air outlet temp: {cold_out['T']:.1f} K")
+
+# Compare mixing configurations
+for config in ["both_unmixed", "cmax_mixed", "cmin_mixed", "both_mixed"]:
+    hx = CrossFlowHX(HeatExchangerParams(UA=2000.0), mixing=config)
+    _, _, info = hx(hot_coolant, cold_air)
+    print(f"{config:15s}: ε = {info['effectiveness']:.4f}, Q = {info['Q']/1000:.2f} kW")
+```
+
+#### Performance Comparison
+
+For the same UA and inlet conditions, effectiveness ranking:
+1. Counter-current (highest)
+2. Cross-flow with mixed streams
+3. Cross-flow (both unmixed)
+4. Co-current (lowest)
+
+Cross-flow heat exchangers offer intermediate performance between counter-current (most efficient) and co-current (simplest), making them practical for applications where perpendicular flow geometry is advantageous.
+
+---
+
 ### Heat Exchanger Utility Functions
 
 ```python
@@ -893,6 +1022,10 @@ from difflow.units.heat_exchanger import (
     log_mean_temperature_difference,
     effectiveness_counter_current,
     effectiveness_co_current,
+    effectiveness_crossflow_both_unmixed,
+    effectiveness_crossflow_cmax_mixed,
+    effectiveness_crossflow_cmin_mixed,
+    effectiveness_crossflow_both_mixed,
     heat_capacity_rate,
     design_heat_exchanger,
     size_heat_exchanger
@@ -901,8 +1034,10 @@ from difflow.units.heat_exchanger import (
 # Calculate LMTD with numerical stability
 lmtd = log_mean_temperature_difference(dT1=50.0, dT2=30.0)
 
-# Calculate effectiveness
-eps = effectiveness_counter_current(NTU=2.0, Cr=0.5)
+# Calculate effectiveness for different flow configurations
+eps_counter = effectiveness_counter_current(NTU=2.0, Cr=0.5)
+eps_co = effectiveness_co_current(NTU=2.0, Cr=0.5)
+eps_cross = effectiveness_crossflow_both_unmixed(NTU=2.0, Cr=0.5)
 
 # Design for specified duty
 UA, area = design_heat_exchanger(Q=100000, LMTD=30, U=500)
@@ -1056,10 +1191,15 @@ $$H = HTU \times NTU$$
 
 ### Heat Exchanger Comparison
 
-| Type | Arrangement | ΔT Driving Force | Max T Approach |
-|------|-------------|------------------|----------------|
-| Counter-current | Opposite | Maximum | T_c,out → T_h,in |
-| Co-current | Same | Moderate | T_c,out ≤ T_h,out |
+| Type | Arrangement | ΔT Driving Force | Max T Approach | Typical Applications |
+|------|-------------|------------------|----------------|---------------------|
+| Counter-current | Opposite flow | Maximum | T_c,out → T_h,in | Max efficiency, heat recovery |
+| Cross-flow (unmixed) | Perpendicular | Good | Intermediate | Car radiators, HVAC, finned-tube HX |
+| Cross-flow (mixed) | Perpendicular | Better | Intermediate | Compact HX, special geometries |
+| Co-current | Parallel flow | Moderate | T_c,out ≤ T_h,out | Simple applications, temperature control |
+
+**Note**: For the same UA and inlet conditions, effectiveness ranking is:
+Counter-current > Cross-flow (mixed) > Cross-flow (unmixed) > Co-current
 
 ### Separation Method Selection
 
