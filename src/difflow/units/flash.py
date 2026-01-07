@@ -19,25 +19,8 @@ from jax import Array
 from difflow.streams import Stream, get_flows, get_species, make_stream
 from difflow.thermo import IdealThermo
 from difflow.params_mixin import ParamsMixin
+from difflow.constants import K_MIN, K_MAX, PHASE_TRANSITION_WIDTH
 import optimistix as optx
-
-
-# =============================================================================
-# Numerical Constants
-# =============================================================================
-
-# K-value bounds to prevent numerical issues in Rachford-Rice equation.
-# Near critical point, K → 1 making (K-1) → 0 which is ill-conditioned.
-# For very volatile components, K >> 100 can cause overflow.
-# For very heavy components, K << 0.01 causes issues when V → 1.
-# These bounds are physically reasonable for most VLE calculations.
-K_MIN = 1e-6
-K_MAX = 1e6
-
-# Phase boundary transition width for smooth blending.
-# Smaller values give sharper transitions (closer to discontinuous).
-# Larger values give smoother gradients but less accurate phase detection.
-PHASE_TRANSITION_WIDTH = 0.02
 
 
 @dataclass(repr=False)

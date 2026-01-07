@@ -27,30 +27,8 @@ from jax import Array, lax
 from difflow.streams import Stream, get_flows, make_stream
 from difflow.thermo import IdealThermo
 from difflow.params_mixin import ParamsMixin
+from difflow.constants import MIN_ALPHA_DIFF, MAX_STAGES, MAX_GILLILAND_Y, DEFAULT_TEMP_SCALE
 import optimistix as optx
-
-
-# =============================================================================
-# Numerical Constants
-# =============================================================================
-
-# Minimum relative volatility difference from 1.0 for Fenske equation.
-# When α < 1 + MIN_ALPHA_DIFF, the mixture is essentially non-separable by
-# distillation and N_min approaches infinity. We cap N_min smoothly.
-MIN_ALPHA_DIFF = 0.01
-
-# Maximum number of theoretical stages.
-# Beyond this, the column is economically infeasible. Used to cap N_min and N.
-MAX_STAGES = 500.0
-
-# Maximum Gilliland Y parameter. When Y → 1, N → ∞.
-# Capping Y at 0.95 limits N to ~20*N_min which is still very large.
-MAX_GILLILAND_Y = 0.95
-
-# Temperature profile scaling factor.
-# Column ΔT ≈ TEMP_SCALE_FACTOR * T_feed for typical systems.
-# Cryogenic systems have smaller fractional ΔT, high-T systems similar.
-DEFAULT_TEMP_SCALE = 0.05  # 5% of feed T as half-range (±2.5%)
 
 
 @dataclass(repr=False)

@@ -29,22 +29,7 @@ from jax import Array
 
 from difflow.streams import Stream, make_stream, get_flows, get_species
 from difflow.params_mixin import ParamsMixin
-
-
-# =============================================================================
-# Numerical Constants
-# =============================================================================
-
-# LMTD blending width: controls smooth transition when dT1 ≈ dT2
-# When |ln(dT1/dT2)| < this value, blend toward arithmetic mean
-LMTD_BLEND_WIDTH = 0.1
-
-# Cr blending width: controls smooth transition when Cr → 1
-# Larger values = smoother gradients, smaller = sharper transition
-CR_BLEND_WIDTH = 0.05
-
-# Minimum temperature difference to avoid numerical issues
-MIN_DELTA_T = 1e-6
+from difflow.constants import LMTD_BLEND_WIDTH, CR_BLEND_WIDTH, MIN_DELTA_T
 
 
 # =============================================================================

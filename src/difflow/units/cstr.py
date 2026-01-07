@@ -29,6 +29,13 @@ from difflow.streams import Stream, get_flows, get_species, make_stream
 from difflow.thermo import IdealThermo
 from difflow.dynamic.state import StateSpec, StateVar, StateVector
 from difflow.params_mixin import ParamsMixin
+from difflow.units.base import (
+    estimate_volumetric_flow,
+    estimate_residence_time,
+    estimate_cstr_conversion,
+    estimate_outlet_composition,
+    estimate_adiabatic_temperature,
+)
 
 
 # Type alias for rate function
@@ -69,6 +76,22 @@ class CSTRParams(ParamsMixin):
     species_order: list[str]
     dH_rxn: Array | None = None
     T_damping: float = 0.3
+
+    def __post_init__(self):
+        """Validate parameter consistency."""
+        n_species = len(self.species_order)
+        if self.stoich.shape[0] != n_species:
+            raise ValueError(
+                f"Stoichiometry matrix has {self.stoich.shape[0]} rows "
+                f"but species_order has {n_species} species"
+            )
+        if self.dH_rxn is not None:
+            n_reactions = self.stoich.shape[1]
+            if hasattr(self.dH_rxn, 'shape') and self.dH_rxn.shape[0] != n_reactions:
+                raise ValueError(
+                    f"dH_rxn has {self.dH_rxn.shape[0]} values "
+                    f"but stoich has {n_reactions} reactions"
+                )
 
 
 class CSTR:
@@ -807,79 +830,58 @@ class CSTR:
         p = self.params
         inlet_flows = get_flows(inlet)
 
-        # Get volumetric flow
+        # Get volumetric flow using helper
         volumetric_flow = kwargs.get('volumetric_flow')
         if volumetric_flow is None:
-            total_molar = sum(inlet_flows.values())
-            volumetric_flow = total_molar / 50.0  # Assume ~50 mol/m^3
+            volumetric_flow = estimate_volumetric_flow(inlet_flows)
 
-        # Residence time
-        tau = p.V / volumetric_flow
+        # Residence time using helper
+        tau = estimate_residence_time(p.V, volumetric_flow)
 
-        # Estimate conversion using CSTR design equation
-        # For first-order reaction: X = k*tau / (1 + k*tau)
+        # Estimate conversion using helper
         expected_conversion = kwargs.get('expected_conversion')
         if expected_conversion is not None:
             X_est = expected_conversion
         else:
-            # Try to estimate k from rate_params
-            k_est = p.rate_params.get('k', 0.1)  # Default guess
-            X_est = k_est * tau / (1 + k_est * tau)
-            X_est = float(jnp.clip(X_est, 0.0, 0.95))
+            k_est = p.rate_params.get('k', 0.1)
+            X_est = estimate_cstr_conversion(k_est, tau)
 
-        # Estimate outlet composition based on stoichiometry
-        # Assume first reactant in species_order is the limiting reactant
-        outlet_flows = {}
-        for i, species in enumerate(p.species_order):
-            F_in = inlet_flows.get(species, 0.0)
-            nu = p.stoich[i, 0] if p.stoich.shape[1] > 0 else 0  # First reaction
-
-            if nu < 0:  # Reactant
-                outlet_flows[species] = F_in * (1 - X_est)
-            elif nu > 0:  # Product
-                # Find the limiting reactant to calculate product formation
-                limiting_idx = jnp.argmin(
-                    jnp.array([inlet_flows.get(s, 0.0) / (-p.stoich[j, 0] + 1e-10)
-                               for j, s in enumerate(p.species_order)
-                               if p.stoich[j, 0] < 0])
-                )
-                reactant_species = [s for j, s in enumerate(p.species_order)
-                                    if p.stoich[j, 0] < 0]
-                if reactant_species:
-                    limiting_species = reactant_species[int(limiting_idx)]
-                    extent = inlet_flows.get(limiting_species, 0.0) * X_est / (-p.stoich[
-                        p.species_order.index(limiting_species), 0])
-                    outlet_flows[species] = F_in + nu * extent
-                else:
-                    outlet_flows[species] = F_in
-            else:  # Inert
-                outlet_flows[species] = F_in
+        # Estimate outlet composition using helper
+        outlet_flows = estimate_outlet_composition(
+            inlet_flows, p.stoich, p.species_order, X_est
+        )
 
         # Estimate outlet temperature
         T_spec = kwargs.get('T_spec')
         if self.mode == "isothermal":
-            T_out = T_spec if T_spec is not None else inlet["T"]
+            T_out = T_spec if T_spec is not None else float(inlet["T"])
         else:
-            # Estimate temperature rise from heat of reaction
+            # Estimate temperature using helper
             if p.dH_rxn is not None:
-                # Approximate heat generated
-                extent_est = inlet_flows.get(p.species_order[0], 1.0) * X_est
-                Q_rxn = -float(jnp.sum(p.dH_rxn)) * extent_est  # Positive for exothermic
+                # Find limiting reactant and estimate extent
+                reactant_species = [s for j, s in enumerate(p.species_order)
+                                    if p.stoich[j, 0] < 0]
+                if reactant_species:
+                    limiting_species = reactant_species[0]
+                    extent_est = inlet_flows.get(limiting_species, 1.0) * X_est / (
+                        -float(p.stoich[p.species_order.index(limiting_species), 0])
+                    )
+                else:
+                    extent_est = 0.0
 
-                # Estimate Cp
-                Cp_avg = 75.0  # J/mol/K for liquids
                 total_flow = sum(inlet_flows.values())
-                dT = Q_rxn / (total_flow * Cp_avg + 1e-10)
+                T_out = estimate_adiabatic_temperature(
+                    inlet["T"], p.dH_rxn, extent_est, total_flow
+                )
 
-                if self.mode == "adiabatic":
-                    T_out = inlet["T"] + dT
-                else:  # specified_duty
+                # Adjust for specified duty mode
+                if self.mode == "specified_duty":
                     Q_spec = kwargs.get('Q_spec', 0.0)
-                    T_out = inlet["T"] + (dT + Q_spec / (total_flow * Cp_avg + 1e-10))
-
-                T_out = float(jnp.clip(T_out, 250.0, 800.0))
+                    Cp_avg = 75.0
+                    T_out = T_out + Q_spec / (total_flow * Cp_avg + 1e-10)
+                    T_out = float(jnp.clip(T_out, 250.0, 800.0))
             else:
-                T_out = inlet["T"]
+                T_out = float(inlet["T"])
 
         # Build outlet stream guess
         outlet = make_stream(outlet_flows, T_out, inlet["P"])
