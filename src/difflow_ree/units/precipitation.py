@@ -13,7 +13,7 @@ Common precipitants:
 All operations are fully differentiable using JAX.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 import jax.numpy as jnp
@@ -69,6 +69,19 @@ class PrecipitatorParams:
     temperature: float = 298.15
     residence_time: float = 3600.0  # 1 hour typical
     target_conversion: float = 0.995
+
+    def update(self, **kwargs) -> "PrecipitatorParams":
+        """Return a new PrecipitatorParams with specified fields replaced.
+
+        This enables JAX-compatible parameter updates for differentiation.
+
+        Args:
+            **kwargs: Fields to update (e.g., precipitant_excess=2.0)
+
+        Returns:
+            New PrecipitatorParams with updated fields
+        """
+        return replace(self, **kwargs)
 
 
 # =============================================================================

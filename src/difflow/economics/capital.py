@@ -19,7 +19,7 @@ Reference: Turton et al., "Analysis, Synthesis, and Design of Chemical Processes
 import jax.numpy as jnp
 from jax import Array
 from typing import NamedTuple, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from .indices import escalate_cost, DEFAULT_BASE_YEAR, DEFAULT_CURRENT_YEAR
 
@@ -416,6 +416,19 @@ class InstallationFactors:
             self.buildings + self.yard_improvements + self.service_facilities +
             self.engineering + self.construction + self.contingency
         )
+
+    def update(self, **kwargs) -> "InstallationFactors":
+        """Return a new InstallationFactors with specified fields replaced.
+
+        This enables JAX-compatible parameter updates for differentiation.
+
+        Args:
+            **kwargs: Fields to update (e.g., piping=0.40, contingency=0.20)
+
+        Returns:
+            New InstallationFactors with updated fields
+        """
+        return replace(self, **kwargs)
 
 
 # Pre-defined installation factors by plant type

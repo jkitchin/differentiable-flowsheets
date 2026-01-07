@@ -17,7 +17,7 @@ All calculations are JAX-compatible for automatic differentiation.
 """
 
 from typing import NamedTuple, Literal
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import jax.numpy as jnp
 from jax import Array, lax
 
@@ -58,6 +58,19 @@ class EOSParams:
     Pc: Array   # Critical pressures
     omega: Array  # Acentric factors
     species_order: list[str]
+
+    def update(self, **kwargs) -> "EOSParams":
+        """Return a new EOSParams with specified fields replaced.
+
+        This enables JAX-compatible parameter updates for differentiation.
+
+        Args:
+            **kwargs: Fields to update
+
+        Returns:
+            New EOSParams with updated fields
+        """
+        return replace(self, **kwargs)
 
 
 class PengRobinson:

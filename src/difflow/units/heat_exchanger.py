@@ -15,7 +15,7 @@ Numerical Considerations:
 - Cr = 1 edge case: Smooth blending between balanced and general formulas
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Callable
 import jax
 import jax.numpy as jnp
@@ -256,6 +256,19 @@ class HeaterParams:
     T_utility: Array | float | None = None
     Cp: float | None = None
 
+    def update(self, **kwargs) -> "HeaterParams":
+        """Return a new HeaterParams with specified fields replaced.
+
+        This enables JAX-compatible parameter updates for differentiation.
+
+        Args:
+            **kwargs: Fields to update (e.g., duty=1000.0, T_out=350.0)
+
+        Returns:
+            New HeaterParams with updated fields
+        """
+        return replace(self, **kwargs)
+
 
 class Heater:
     """Single-stream heater with utility (steam, hot oil, etc).
@@ -386,6 +399,19 @@ class CoolerParams:
     T_utility: Array | float | None = None
     Cp: float | None = None
 
+    def update(self, **kwargs) -> "CoolerParams":
+        """Return a new CoolerParams with specified fields replaced.
+
+        This enables JAX-compatible parameter updates for differentiation.
+
+        Args:
+            **kwargs: Fields to update (e.g., duty=1000.0, T_out=300.0)
+
+        Returns:
+            New CoolerParams with updated fields
+        """
+        return replace(self, **kwargs)
+
 
 class Cooler:
     """Single-stream cooler with utility (cooling water, refrigerant, etc).
@@ -493,6 +519,19 @@ class HeatExchangerParams:
     Cp_hot: float | None = None
     Cp_cold: float | None = None
     min_approach: float = 10.0
+
+    def update(self, **kwargs) -> "HeatExchangerParams":
+        """Return a new HeatExchangerParams with specified fields replaced.
+
+        This enables JAX-compatible parameter updates for differentiation.
+
+        Args:
+            **kwargs: Fields to update (e.g., UA=500.0)
+
+        Returns:
+            New HeatExchangerParams with updated fields
+        """
+        return replace(self, **kwargs)
 
 
 class CounterCurrentHX:

@@ -25,7 +25,7 @@ Numerical Considerations:
 """
 
 from typing import Callable, Literal
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import inspect
 import jax
 import jax.numpy as jnp
@@ -244,6 +244,19 @@ class BioreactorParams:
         if self._kinetic_arity < 0:
             object.__setattr__(self, '_kinetic_arity', get_kinetic_arity(self.kinetic_fn))
 
+    def update(self, **kwargs) -> "BioreactorParams":
+        """Return a new BioreactorParams with specified fields replaced.
+
+        This enables JAX-compatible parameter updates for differentiation.
+
+        Args:
+            **kwargs: Fields to update (e.g., V=10.0, Y_xs=0.5)
+
+        Returns:
+            New BioreactorParams with updated fields
+        """
+        return replace(self, **kwargs)
+
 
 # =============================================================================
 # Continuous Bioreactor (Chemostat)
@@ -455,6 +468,19 @@ class FedBatchParams:
         """Auto-detect kinetic function arity."""
         if self._kinetic_arity < 0:
             object.__setattr__(self, '_kinetic_arity', get_kinetic_arity(self.kinetic_fn))
+
+    def update(self, **kwargs) -> "FedBatchParams":
+        """Return a new FedBatchParams with specified fields replaced.
+
+        This enables JAX-compatible parameter updates for differentiation.
+
+        Args:
+            **kwargs: Fields to update (e.g., V0=5.0, Y_xs=0.4)
+
+        Returns:
+            New FedBatchParams with updated fields
+        """
+        return replace(self, **kwargs)
 
 
 class FedBatchBioreactor:

@@ -33,7 +33,7 @@ a JAX-native differentiable ODE solver library.
 """
 
 from typing import Callable, Literal, Any
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import jax.numpy as jnp
 from jax import Array
 import diffrax
@@ -82,6 +82,19 @@ class PFRParams:
     rtol: float = 1e-6
     atol: float = 1e-8
     n_save_points: int = 101
+
+    def update(self, **kwargs) -> "PFRParams":
+        """Return a new PFRParams with specified fields replaced.
+
+        This enables JAX-compatible parameter updates for differentiation.
+
+        Args:
+            **kwargs: Fields to update (e.g., V=2.0, rate_params={...})
+
+        Returns:
+            New PFRParams with updated fields
+        """
+        return replace(self, **kwargs)
 
 
 class PFR:
@@ -597,6 +610,19 @@ class GasPFRParams:
     rtol: float = 1e-6
     atol: float = 1e-8
     n_save_points: int = 101
+
+    def update(self, **kwargs) -> "GasPFRParams":
+        """Return a new GasPFRParams with specified fields replaced.
+
+        This enables JAX-compatible parameter updates for differentiation.
+
+        Args:
+            **kwargs: Fields to update (e.g., V=2.0, alpha=0.1)
+
+        Returns:
+            New GasPFRParams with updated fields
+        """
+        return replace(self, **kwargs)
 
 
 class GasPFR:

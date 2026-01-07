@@ -22,7 +22,7 @@ Typical sequence:
     Individual separations...
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Literal
 
 import jax.numpy as jnp
@@ -60,6 +60,19 @@ class SeparationTrainParams:
         "Dy": 0.99,
         "Y": 0.95,
     })
+
+    def update(self, **kwargs) -> "SeparationTrainParams":
+        """Return a new SeparationTrainParams with specified fields replaced.
+
+        This enables JAX-compatible parameter updates for differentiation.
+
+        Args:
+            **kwargs: Fields to update (e.g., include_ce_removal=False)
+
+        Returns:
+            New SeparationTrainParams with updated fields
+        """
+        return replace(self, **kwargs)
 
 
 class GroupSeparator:

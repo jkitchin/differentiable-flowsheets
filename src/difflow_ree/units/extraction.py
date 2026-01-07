@@ -5,7 +5,7 @@ Multi-stage counter-current extraction cascades for REE separation.
 All operations are fully differentiable using JAX.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 import jax.numpy as jnp
@@ -45,6 +45,19 @@ class REEExtractorParams:
     include_speciation: bool = False
     speciation_medium: str = "sulfate"
     ligand_conc: float = 0.5
+
+    def update(self, **kwargs) -> "REEExtractorParams":
+        """Return a new REEExtractorParams with specified fields replaced.
+
+        This enables JAX-compatible parameter updates for differentiation.
+
+        Args:
+            **kwargs: Fields to update (e.g., n_stages=15, pH=3.5)
+
+        Returns:
+            New REEExtractorParams with updated fields
+        """
+        return replace(self, **kwargs)
 
 
 class REEExtractor:
@@ -217,6 +230,19 @@ class MixerSettlerParams:
     mixer_residence_time: float = 120.0  # 2 minutes typical
     settler_residence_time: float = 300.0  # 5 minutes typical
     stage_efficiency: float = 0.95
+
+    def update(self, **kwargs) -> "MixerSettlerParams":
+        """Return a new MixerSettlerParams with specified fields replaced.
+
+        This enables JAX-compatible parameter updates for differentiation.
+
+        Args:
+            **kwargs: Fields to update (e.g., pH=3.5, stage_efficiency=0.9)
+
+        Returns:
+            New MixerSettlerParams with updated fields
+        """
+        return replace(self, **kwargs)
 
 
 class REEMixerSettler:

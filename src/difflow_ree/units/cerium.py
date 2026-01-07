@@ -14,7 +14,7 @@ This is industrially important because:
 All operations are fully differentiable using JAX.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 import jax.numpy as jnp
@@ -45,6 +45,19 @@ class CeriumOxidizerParams:
     pH: float = 8.0  # Alkaline conditions favor Ce oxidation
     temperature: float = 353.15  # 80°C typical
     ce_conversion: float = 0.95
+
+    def update(self, **kwargs) -> "CeriumOxidizerParams":
+        """Return a new CeriumOxidizerParams with specified fields replaced.
+
+        This enables JAX-compatible parameter updates for differentiation.
+
+        Args:
+            **kwargs: Fields to update (e.g., pH=9.0, ce_conversion=0.98)
+
+        Returns:
+            New CeriumOxidizerParams with updated fields
+        """
+        return replace(self, **kwargs)
 
 
 class CeriumOxidizer:

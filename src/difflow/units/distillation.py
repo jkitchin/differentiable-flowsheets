@@ -19,7 +19,7 @@ Numerical Considerations:
 """
 
 from typing import Callable, Literal
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import jax
 import jax.numpy as jnp
 from jax import Array, lax
@@ -68,6 +68,19 @@ class ShortcutColumnParams:
     heavy_key: str
     x_D_LK: float = 0.99  # LK recovery in distillate
     x_B_HK: float = 0.99  # HK recovery in bottoms
+
+    def update(self, **kwargs) -> "ShortcutColumnParams":
+        """Return a new ShortcutColumnParams with specified fields replaced.
+
+        This enables JAX-compatible parameter updates for differentiation.
+
+        Args:
+            **kwargs: Fields to update (e.g., x_D_LK=0.995)
+
+        Returns:
+            New ShortcutColumnParams with updated fields
+        """
+        return replace(self, **kwargs)
 
 
 class ShortcutColumn:
@@ -542,6 +555,19 @@ class DistillationColumnParams:
     feed_stage: int
     condenser_type: Literal["total", "partial"] = "total"
     P: float = 101325.0
+
+    def update(self, **kwargs) -> "DistillationColumnParams":
+        """Return a new DistillationColumnParams with specified fields replaced.
+
+        This enables JAX-compatible parameter updates for differentiation.
+
+        Args:
+            **kwargs: Fields to update (e.g., n_stages=20, P=50000.0)
+
+        Returns:
+            New DistillationColumnParams with updated fields
+        """
+        return replace(self, **kwargs)
 
 
 class DistillationColumn:

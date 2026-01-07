@@ -16,7 +16,7 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 from jax import lax
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Callable, NamedTuple
 import optimistix as optx
 
@@ -36,6 +36,19 @@ class FinancialParams:
     salvage_fraction: float = 0.05  # Salvage value as fraction of FCI
     working_capital_fraction: float = 0.15  # Working capital as fraction of FCI
     inflation_rate: float = 0.02  # Annual inflation for revenues/costs
+
+    def update(self, **kwargs) -> "FinancialParams":
+        """Return a new FinancialParams with specified fields replaced.
+
+        This enables JAX-compatible parameter updates for differentiation.
+
+        Args:
+            **kwargs: Fields to update (e.g., discount_rate=0.12, tax_rate=0.25)
+
+        Returns:
+            New FinancialParams with updated fields
+        """
+        return replace(self, **kwargs)
 
 
 DEFAULT_FINANCIAL = FinancialParams()

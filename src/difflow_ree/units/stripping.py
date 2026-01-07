@@ -10,7 +10,7 @@ Strip solutions are typically:
 All operations are fully differentiable using JAX.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 import jax.numpy as jnp
@@ -40,6 +40,19 @@ class StripperParams:
     extractant_conc: float = 0.5
     acid_type: Literal["HCl", "H2SO4", "HNO3"] = "HCl"
     acid_conc: float = 4.0  # M
+
+    def update(self, **kwargs) -> "StripperParams":
+        """Return a new StripperParams with specified fields replaced.
+
+        This enables JAX-compatible parameter updates for differentiation.
+
+        Args:
+            **kwargs: Fields to update (e.g., n_stages=6, pH=0.3)
+
+        Returns:
+            New StripperParams with updated fields
+        """
+        return replace(self, **kwargs)
 
 
 class REEStripper:

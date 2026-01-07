@@ -17,7 +17,7 @@ where:
     N_dv = number of diavolumes
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import jax.numpy as jnp
 from jax import Array, lax
 
@@ -46,6 +46,19 @@ class UltrafiltrationParams:
     Lp: float | Array = 50.0  # L/m²/h/bar, typical for UF membrane
     species_order: list[str] = None
 
+    def update(self, **kwargs) -> "UltrafiltrationParams":
+        """Return a new UltrafiltrationParams with specified fields replaced.
+
+        This enables JAX-compatible parameter updates for differentiation.
+
+        Args:
+            **kwargs: Fields to update (e.g., membrane_area=10.0)
+
+        Returns:
+            New UltrafiltrationParams with updated fields
+        """
+        return replace(self, **kwargs)
+
 
 @dataclass
 class DiafiltrationParams:
@@ -63,6 +76,19 @@ class DiafiltrationParams:
     rejection: dict = field(default_factory=dict)
     Lp: float | Array = 50.0
     species_order: list[str] = None
+
+    def update(self, **kwargs) -> "DiafiltrationParams":
+        """Return a new DiafiltrationParams with specified fields replaced.
+
+        This enables JAX-compatible parameter updates for differentiation.
+
+        Args:
+            **kwargs: Fields to update (e.g., membrane_area=10.0)
+
+        Returns:
+            New DiafiltrationParams with updated fields
+        """
+        return replace(self, **kwargs)
 
 
 # =============================================================================

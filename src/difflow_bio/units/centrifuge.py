@@ -17,7 +17,7 @@ where:
     μ = fluid viscosity (Pa·s)
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import jax.numpy as jnp
 from jax import Array
 
@@ -52,6 +52,19 @@ class CentrifugeParams:
     species_order: list[str] = None
     cell_species: str = "cells"
 
+    def update(self, **kwargs) -> "CentrifugeParams":
+        """Return a new CentrifugeParams with specified fields replaced.
+
+        This enables JAX-compatible parameter updates for differentiation.
+
+        Args:
+            **kwargs: Fields to update (e.g., sigma=1000.0)
+
+        Returns:
+            New CentrifugeParams with updated fields
+        """
+        return replace(self, **kwargs)
+
 
 @dataclass
 class DiscStackParams:
@@ -77,6 +90,19 @@ class DiscStackParams:
     efficiency: float | Array = 0.7
     species_order: list[str] = None
     cell_species: str = "cells"
+
+    def update(self, **kwargs) -> "DiscStackParams":
+        """Return a new DiscStackParams with specified fields replaced.
+
+        This enables JAX-compatible parameter updates for differentiation.
+
+        Args:
+            **kwargs: Fields to update (e.g., n_discs=100, rpm=8000.0)
+
+        Returns:
+            New DiscStackParams with updated fields
+        """
+        return replace(self, **kwargs)
 
 
 # =============================================================================

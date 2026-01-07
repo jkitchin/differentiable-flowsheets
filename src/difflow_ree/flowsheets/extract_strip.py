@@ -17,7 +17,7 @@ Two-section flowsheet:
 All operations are fully differentiable using JAX.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 import jax.numpy as jnp
@@ -52,6 +52,19 @@ class ExtractStripParams:
     extractant_conc: float = 0.5
     solvent_to_feed_ratio: float = 1.0
     strip_to_solvent_ratio: float = 0.5
+
+    def update(self, **kwargs) -> "ExtractStripParams":
+        """Return a new ExtractStripParams with specified fields replaced.
+
+        This enables JAX-compatible parameter updates for differentiation.
+
+        Args:
+            **kwargs: Fields to update (e.g., n_extraction_stages=12)
+
+        Returns:
+            New ExtractStripParams with updated fields
+        """
+        return replace(self, **kwargs)
 
 
 class ExtractStripCircuit:

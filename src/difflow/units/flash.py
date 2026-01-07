@@ -11,7 +11,7 @@ differentiation through the converged solution.
 """
 
 from typing import Any
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import jax
 import jax.numpy as jnp
 from jax import Array
@@ -47,6 +47,19 @@ class FlashParams:
         species_order: List of species names for array ordering
     """
     species_order: list[str]
+
+    def update(self, **kwargs) -> "FlashParams":
+        """Return a new FlashParams with specified fields replaced.
+
+        This enables JAX-compatible parameter updates for differentiation.
+
+        Args:
+            **kwargs: Fields to update
+
+        Returns:
+            New FlashParams with updated fields
+        """
+        return replace(self, **kwargs)
 
 
 class Flash:

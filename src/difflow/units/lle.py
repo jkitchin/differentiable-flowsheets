@@ -10,7 +10,7 @@ coefficient models (NRTL, UNIQUAC) for computing equilibrium.
 All operations are fully differentiable using JAX.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Callable, NamedTuple, Literal
 import jax
 import jax.numpy as jnp
@@ -352,6 +352,19 @@ class CascadeParams:
     flow_config: Literal["counter_current", "co_current"] = "counter_current"
     stage_efficiency: float = 0.8
 
+    def update(self, **kwargs) -> "CascadeParams":
+        """Return a new CascadeParams with specified fields replaced.
+
+        This enables JAX-compatible parameter updates for differentiation.
+
+        Args:
+            **kwargs: Fields to update (e.g., n_stages=10)
+
+        Returns:
+            New CascadeParams with updated fields
+        """
+        return replace(self, **kwargs)
+
 
 class MultistageCascade:
     """Multi-stage liquid-liquid extraction cascade.
@@ -613,6 +626,19 @@ class ContactorParams:
     mass_transfer_model: Literal["equilibrium", "rate_based"] = "equilibrium"
     Kla: float | Array | dict[str, float] = 0.01  # 1/s, per solute or global
     HETP: float | Array = 0.5  # m
+
+    def update(self, **kwargs) -> "ContactorParams":
+        """Return a new ContactorParams with specified fields replaced.
+
+        This enables JAX-compatible parameter updates for differentiation.
+
+        Args:
+            **kwargs: Fields to update (e.g., length=5.0, HETP=0.3)
+
+        Returns:
+            New ContactorParams with updated fields
+        """
+        return replace(self, **kwargs)
 
 
 class DifferentialContactor:

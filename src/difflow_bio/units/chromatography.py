@@ -18,7 +18,7 @@ where:
 """
 
 from typing import Literal
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import jax.numpy as jnp
 from jax import Array
 
@@ -121,6 +121,19 @@ class ProteinAParams:
     })
     species_order: list[str] = None
 
+    def update(self, **kwargs) -> "ProteinAParams":
+        """Return a new ProteinAParams with specified fields replaced.
+
+        This enables JAX-compatible parameter updates for differentiation.
+
+        Args:
+            **kwargs: Fields to update (e.g., column_volume=5.0, q_max=40.0)
+
+        Returns:
+            New ProteinAParams with updated fields
+        """
+        return replace(self, **kwargs)
+
 
 @dataclass
 class IEXParams:
@@ -145,6 +158,19 @@ class IEXParams:
     yield_factor: float | Array = 0.90
     species_order: list[str] = None
 
+    def update(self, **kwargs) -> "IEXParams":
+        """Return a new IEXParams with specified fields replaced.
+
+        This enables JAX-compatible parameter updates for differentiation.
+
+        Args:
+            **kwargs: Fields to update (e.g., column_volume=10.0, q_max=60.0)
+
+        Returns:
+            New IEXParams with updated fields
+        """
+        return replace(self, **kwargs)
+
 
 @dataclass
 class SECParams:
@@ -167,6 +193,19 @@ class SECParams:
     yield_factor: float | Array = 0.95
     resolution: float | Array = 1.5  # Baseline resolution
     species_order: list[str] = None
+
+    def update(self, **kwargs) -> "SECParams":
+        """Return a new SECParams with specified fields replaced.
+
+        This enables JAX-compatible parameter updates for differentiation.
+
+        Args:
+            **kwargs: Fields to update (e.g., column_volume=2.0)
+
+        Returns:
+            New SECParams with updated fields
+        """
+        return replace(self, **kwargs)
 
 
 # =============================================================================

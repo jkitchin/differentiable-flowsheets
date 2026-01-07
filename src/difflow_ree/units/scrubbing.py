@@ -11,7 +11,7 @@ The scrub solution is typically:
 All operations are fully differentiable using JAX.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 import jax.numpy as jnp
@@ -41,6 +41,19 @@ class ScrubberParams:
     pH: float | Array = 2.0  # Lower pH than extraction to strip impurities
     extractant_conc: float = 0.5
     scrub_type: Literal["acid", "ree", "water"] = "acid"
+
+    def update(self, **kwargs) -> "ScrubberParams":
+        """Return a new ScrubberParams with specified fields replaced.
+
+        This enables JAX-compatible parameter updates for differentiation.
+
+        Args:
+            **kwargs: Fields to update (e.g., n_stages=6, pH=2.5)
+
+        Returns:
+            New ScrubberParams with updated fields
+        """
+        return replace(self, **kwargs)
 
 
 class REEScrubber:

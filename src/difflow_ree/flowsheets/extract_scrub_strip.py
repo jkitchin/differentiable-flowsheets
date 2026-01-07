@@ -22,7 +22,7 @@ recycled back to the feed or processed in a separate circuit.
 All operations are fully differentiable using JAX.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 import jax.numpy as jnp
@@ -66,6 +66,19 @@ class ExtractScrubStripParams:
     solvent_to_feed_ratio: float = 1.0
     scrub_to_solvent_ratio: float = 0.2
     strip_to_solvent_ratio: float = 0.5
+
+    def update(self, **kwargs) -> "ExtractScrubStripParams":
+        """Return a new ExtractScrubStripParams with specified fields replaced.
+
+        This enables JAX-compatible parameter updates for differentiation.
+
+        Args:
+            **kwargs: Fields to update (e.g., n_extraction_stages=12)
+
+        Returns:
+            New ExtractScrubStripParams with updated fields
+        """
+        return replace(self, **kwargs)
 
 
 class ExtractScrubStripCircuit:
