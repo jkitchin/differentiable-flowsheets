@@ -63,6 +63,7 @@ class ParamsMixin:
     This mixin adds the following methods to any dataclass:
     - update(**kwargs): Return new instance with fields replaced (JAX-compatible)
     - __getitem__(key): Dict-style access by field name
+    - get(key, default): Safe access with default value (like dict.get)
     - __contains__(key): Check if field exists
     - keys(): Iterator over field names
     - values(): Iterator over field values
@@ -111,6 +112,25 @@ class ParamsMixin:
             return getattr(self, key)
         except AttributeError:
             raise KeyError(key)
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """Get parameter value with optional default (like dict.get).
+
+        Args:
+            key: Field name to access
+            default: Value to return if field doesn't exist (default: None)
+
+        Returns:
+            Value of the field, or default if field doesn't exist
+
+        Example:
+            >>> params.get('optional_field', 0.0)
+            0.0
+        """
+        try:
+            return getattr(self, key)
+        except AttributeError:
+            return default
 
     def __contains__(self, key: str) -> bool:
         """Check if a field exists in the params.

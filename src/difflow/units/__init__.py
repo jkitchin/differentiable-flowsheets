@@ -16,6 +16,16 @@ chromatography), use the difflow_bio plugin:
     from difflow_bio import ContinuousBioreactor, ProteinAChromatography
 """
 
+from difflow.units.base import (
+    UnitBase,
+    ReactorBase,
+    estimate_volumetric_flow,
+    estimate_outlet_composition,
+    estimate_adiabatic_temperature,
+    estimate_residence_time,
+    estimate_cstr_conversion,
+    estimate_pfr_conversion,
+)
 from difflow.units.cstr import CSTR, CSTRParams
 from difflow.units.pfr import PFR, PFRParams, GasPFR, GasPFRParams
 from difflow.units.fed_batch import (
@@ -68,6 +78,15 @@ from difflow.units.heat_exchanger import (
 )
 
 __all__ = [
+    # Base classes and helpers
+    "UnitBase",
+    "ReactorBase",
+    "estimate_volumetric_flow",
+    "estimate_outlet_composition",
+    "estimate_adiabatic_temperature",
+    "estimate_residence_time",
+    "estimate_cstr_conversion",
+    "estimate_pfr_conversion",
     # CSTR
     "CSTR",
     "CSTRParams",

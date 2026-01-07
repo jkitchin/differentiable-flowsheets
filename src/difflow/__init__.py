@@ -59,6 +59,16 @@ from difflow.cantera_import import (
     list_available_reactions,
 )
 from difflow.params_mixin import ParamsMixin
+from difflow.units.base import (
+    UnitBase,
+    ReactorBase,
+    estimate_volumetric_flow,
+    estimate_outlet_composition,
+    estimate_adiabatic_temperature,
+    estimate_residence_time,
+    estimate_cstr_conversion,
+    estimate_pfr_conversion,
+)
 from difflow.units.cstr import CSTR, CSTRParams
 from difflow.units.pfr import PFR, PFRParams, GasPFR, GasPFRParams
 from difflow.units.fed_batch import (
@@ -185,6 +195,15 @@ from difflow.dynamic import (
 __all__ = [
     # Params Mixin
     "ParamsMixin",
+    # Unit Base Classes and Helpers
+    "UnitBase",
+    "ReactorBase",
+    "estimate_volumetric_flow",
+    "estimate_outlet_composition",
+    "estimate_adiabatic_temperature",
+    "estimate_residence_time",
+    "estimate_cstr_conversion",
+    "estimate_pfr_conversion",
     # Streams
     "Stream",
     "make_stream",
