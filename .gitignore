@@ -52,3 +52,10 @@ _build/
 
 # Proposals
 proposals/
+
+# Claude Code local settings
+.claude/
+**/.claude/
+
+# Word documents (generated from markdown)
+*.docx
