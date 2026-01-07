@@ -97,6 +97,30 @@ class ShortcutColumnParams:
         """Return field names for dict-like iteration."""
         return (f.name for f in fields(self))
 
+    def values(self):
+        """Return field values for dict-like iteration.
+
+        Returns:
+            Iterator over field values
+        """
+        return (getattr(self, f.name) for f in fields(self))
+
+    def items(self):
+        """Return (name, value) pairs for dict-like iteration.
+
+        Returns:
+            Iterator over (field_name, value) tuples
+        """
+        return ((f.name, getattr(self, f.name)) for f in fields(self))
+
+    def __iter__(self):
+        """Iterate over field names (like dict)."""
+        return (f.name for f in fields(self))
+
+    def __len__(self) -> int:
+        """Return number of fields."""
+        return len(fields(self))
+
     def asdict(self) -> dict:
         """Convert params to a dictionary."""
         return dc_asdict(self)
@@ -622,6 +646,30 @@ class DistillationColumnParams:
     def keys(self):
         """Return field names for dict-like iteration."""
         return (f.name for f in fields(self))
+
+    def values(self):
+        """Return field values for dict-like iteration.
+
+        Returns:
+            Iterator over field values
+        """
+        return (getattr(self, f.name) for f in fields(self))
+
+    def items(self):
+        """Return (name, value) pairs for dict-like iteration.
+
+        Returns:
+            Iterator over (field_name, value) tuples
+        """
+        return ((f.name, getattr(self, f.name)) for f in fields(self))
+
+    def __iter__(self):
+        """Iterate over field names (like dict)."""
+        return (f.name for f in fields(self))
+
+    def __len__(self) -> int:
+        """Return number of fields."""
+        return len(fields(self))
 
     def asdict(self) -> dict:
         """Convert params to a dictionary."""

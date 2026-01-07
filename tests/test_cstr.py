@@ -297,3 +297,91 @@ class TestCSTRParamsUpdate:
         assert float(d["V"]) == 1.0
         assert d["species_order"] == ["A", "B"]
         assert jnp.allclose(d["stoich"], stoich)
+
+    def test_values_returns_field_values(self, simple_rate_fn):
+        """Test that values() returns all field values."""
+        stoich = jnp.array([[-1.0], [+1.0]])
+        params = CSTRParams(
+            V=jnp.array(1.0),
+            rate_fn=simple_rate_fn,
+            stoich=stoich,
+            rate_params={"A": jnp.array(1e6), "Ea": jnp.array(50000.0)},
+            species_order=["A", "B"],
+        )
+
+        values = list(params.values())
+
+        # Should have same number of values as fields
+        assert len(values) == len(list(params.keys()))
+        # First value should be V
+        assert float(values[0]) == 1.0
+
+    def test_items_returns_key_value_pairs(self, simple_rate_fn):
+        """Test that items() returns (key, value) pairs."""
+        stoich = jnp.array([[-1.0], [+1.0]])
+        params = CSTRParams(
+            V=jnp.array(1.0),
+            rate_fn=simple_rate_fn,
+            stoich=stoich,
+            rate_params={"A": jnp.array(1e6), "Ea": jnp.array(50000.0)},
+            species_order=["A", "B"],
+        )
+
+        items = list(params.items())
+
+        # Should have same count as fields
+        assert len(items) == len(list(params.keys()))
+        # Each item should be a (key, value) tuple
+        for key, value in items:
+            assert isinstance(key, str)
+        # Check specific values
+        items_dict = dict(items)
+        assert float(items_dict["V"]) == 1.0
+        assert items_dict["species_order"] == ["A", "B"]
+
+    def test_iter_over_keys(self, simple_rate_fn):
+        """Test that iterating over params yields keys."""
+        stoich = jnp.array([[-1.0], [+1.0]])
+        params = CSTRParams(
+            V=jnp.array(1.0),
+            rate_fn=simple_rate_fn,
+            stoich=stoich,
+            rate_params={"A": jnp.array(1e6), "Ea": jnp.array(50000.0)},
+            species_order=["A", "B"],
+        )
+
+        # list(params) should give field names
+        field_names = list(params)
+        assert "V" in field_names
+        assert "rate_fn" in field_names
+        assert "stoich" in field_names
+
+    def test_len_returns_field_count(self, simple_rate_fn):
+        """Test that len() returns number of fields."""
+        stoich = jnp.array([[-1.0], [+1.0]])
+        params = CSTRParams(
+            V=jnp.array(1.0),
+            rate_fn=simple_rate_fn,
+            stoich=stoich,
+            rate_params={"A": jnp.array(1e6), "Ea": jnp.array(50000.0)},
+            species_order=["A", "B"],
+        )
+
+        # CSTRParams has 7 fields
+        assert len(params) == 7
+
+    def test_dict_conversion_roundtrip(self, simple_rate_fn):
+        """Test that dict(params) works like asdict()."""
+        stoich = jnp.array([[-1.0], [+1.0]])
+        params = CSTRParams(
+            V=jnp.array(1.0),
+            rate_fn=simple_rate_fn,
+            stoich=stoich,
+            rate_params={"A": jnp.array(1e6), "Ea": jnp.array(50000.0)},
+            species_order=["A", "B"],
+        )
+
+        # dict(params) should work due to __iter__ and __getitem__
+        d = dict(params.items())
+        assert float(d["V"]) == 1.0
+        assert d["species_order"] == ["A", "B"]
