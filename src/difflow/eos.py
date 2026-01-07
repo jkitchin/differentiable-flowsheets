@@ -91,6 +91,26 @@ class EOSParams:
         """Convert params to a dictionary."""
         return dc_asdict(self)
 
+    def __repr__(self) -> str:
+        """Concise string representation."""
+        def fmt(v):
+            if v is None:
+                return "None"
+            if callable(v) and hasattr(v, '__name__'):
+                return v.__name__
+            if hasattr(v, 'shape'):
+                if v.ndim == 0:
+                    return f"{float(v):.4g}"
+                return f"Array{list(v.shape)}"
+            if isinstance(v, dict):
+                items = ", ".join(f"{k}: {fmt(val)}" for k, val in v.items())
+                return "{" + items + "}"
+            if isinstance(v, (list, tuple)) and len(v) > 5:
+                return f"{type(v).__name__}[{len(v)}]"
+            return repr(v)
+        items = ", ".join(f"{f.name}={fmt(getattr(self, f.name))}" for f in fields(self))
+        return f"{self.__class__.__name__}({items})"
+
 
 class PengRobinson:
     """Peng-Robinson equation of state.
