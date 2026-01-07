@@ -115,3 +115,118 @@ class TestCSTR:
 
         # Gradient should be positive (more volume = more conversion = more B)
         assert float(grad_V) > 0
+
+
+class TestCSTRParamsUpdate:
+    """Test CSTRParams update() and __getitem__ methods."""
+
+    def test_update_returns_new_instance(self, simple_rate_fn):
+        """Test that update() returns a new instance."""
+        stoich = jnp.array([[-1.0], [+1.0]])
+        original = CSTRParams(
+            V=jnp.array(1.0),
+            rate_fn=simple_rate_fn,
+            stoich=stoich,
+            rate_params={"A": jnp.array(1e6), "Ea": jnp.array(50000.0)},
+            species_order=["A", "B"],
+        )
+
+        updated = original.update(V=jnp.array(2.0))
+
+        # Should be different instances
+        assert updated is not original
+        # Updated value should change
+        assert float(updated.V) == 2.0
+        # Original should be unchanged
+        assert float(original.V) == 1.0
+
+    def test_update_preserves_other_fields(self, simple_rate_fn):
+        """Test that update() preserves fields not being updated."""
+        stoich = jnp.array([[-1.0], [+1.0]])
+        original = CSTRParams(
+            V=jnp.array(1.0),
+            rate_fn=simple_rate_fn,
+            stoich=stoich,
+            rate_params={"A": jnp.array(1e6), "Ea": jnp.array(50000.0)},
+            species_order=["A", "B"],
+        )
+
+        updated = original.update(V=jnp.array(5.0))
+
+        # Other fields should be preserved
+        assert updated.rate_fn is original.rate_fn
+        assert jnp.allclose(updated.stoich, original.stoich)
+        assert updated.species_order == original.species_order
+
+    def test_update_multiple_fields(self, simple_rate_fn):
+        """Test that update() can update multiple fields at once."""
+        stoich = jnp.array([[-1.0], [+1.0]])
+        original = CSTRParams(
+            V=jnp.array(1.0),
+            rate_fn=simple_rate_fn,
+            stoich=stoich,
+            rate_params={"A": jnp.array(1e6), "Ea": jnp.array(50000.0)},
+            species_order=["A", "B"],
+        )
+
+        new_stoich = jnp.array([[-2.0], [+2.0]])
+        updated = original.update(V=jnp.array(3.0), stoich=new_stoich)
+
+        assert float(updated.V) == 3.0
+        assert jnp.allclose(updated.stoich, new_stoich)
+
+    def test_getitem_access(self, simple_rate_fn):
+        """Test that __getitem__ provides dict-like read access."""
+        stoich = jnp.array([[-1.0], [+1.0]])
+        params = CSTRParams(
+            V=jnp.array(1.0),
+            rate_fn=simple_rate_fn,
+            stoich=stoich,
+            rate_params={"A": jnp.array(1e6), "Ea": jnp.array(50000.0)},
+            species_order=["A", "B"],
+        )
+
+        # Dict-like access should work
+        assert float(params["V"]) == 1.0
+        assert params["species_order"] == ["A", "B"]
+        assert jnp.allclose(params["stoich"], stoich)
+
+    def test_getitem_invalid_key(self, simple_rate_fn):
+        """Test that __getitem__ raises KeyError for invalid keys."""
+        stoich = jnp.array([[-1.0], [+1.0]])
+        params = CSTRParams(
+            V=jnp.array(1.0),
+            rate_fn=simple_rate_fn,
+            stoich=stoich,
+            rate_params={"A": jnp.array(1e6), "Ea": jnp.array(50000.0)},
+            species_order=["A", "B"],
+        )
+
+        with pytest.raises(KeyError):
+            _ = params["nonexistent_field"]
+
+    def test_update_with_jax_grad(self, simple_thermo, simple_rate_fn):
+        """Test that update() works with JAX automatic differentiation."""
+        stoich = jnp.array([[-1.0], [+1.0]])
+        base_params = CSTRParams(
+            V=jnp.array(1.0),
+            rate_fn=simple_rate_fn,
+            stoich=stoich,
+            rate_params={"A": jnp.array(1e6), "Ea": jnp.array(50000.0)},
+            species_order=["A", "B"],
+        )
+
+        def outlet_B_with_update(V):
+            # Use update() to create new params - should be JAX compatible
+            params = base_params.update(V=V)
+            cstr = CSTR(params, thermo=simple_thermo, mode="isothermal")
+            inlet = make_stream({"A": 10.0, "B": 0.0}, T=300.0, P=101325.0)
+            outlet, _ = cstr(inlet, T_spec=350.0)
+            return outlet["F_B"]
+
+        # Compute gradient - should work without errors
+        grad_V = jax.grad(outlet_B_with_update)(jnp.array(1.0))
+
+        # Gradient should be positive and finite
+        assert jnp.isfinite(grad_V)
+        assert float(grad_V) > 0
