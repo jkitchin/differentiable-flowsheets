@@ -17,7 +17,7 @@ All calculations are JAX-compatible for automatic differentiation.
 """
 
 from typing import NamedTuple, Literal
-from dataclasses import dataclass
+from dataclasses import dataclass, replace, fields, asdict as dc_asdict
 import jax.numpy as jnp
 from jax import Array, lax
 
@@ -58,6 +58,82 @@ class EOSParams:
     Pc: Array   # Critical pressures
     omega: Array  # Acentric factors
     species_order: list[str]
+
+    def update(self, **kwargs) -> "EOSParams":
+        """Return a new EOSParams with specified fields replaced.
+
+        This enables JAX-compatible parameter updates for differentiation.
+
+        Args:
+            **kwargs: Fields to update
+
+        Returns:
+            New EOSParams with updated fields
+        """
+        return replace(self, **kwargs)
+
+    def __getitem__(self, key: str):
+        """Get parameter value by name for dict-like access."""
+        try:
+            return getattr(self, key)
+        except AttributeError:
+            raise KeyError(key)
+
+    def __contains__(self, key: str) -> bool:
+        """Check if a field exists in the params."""
+        return key in {f.name for f in fields(self)}
+
+    def keys(self):
+        """Return field names for dict-like iteration."""
+        return (f.name for f in fields(self))
+
+    def values(self):
+        """Return field values for dict-like iteration.
+
+        Returns:
+            Iterator over field values
+        """
+        return (getattr(self, f.name) for f in fields(self))
+
+    def items(self):
+        """Return (name, value) pairs for dict-like iteration.
+
+        Returns:
+            Iterator over (field_name, value) tuples
+        """
+        return ((f.name, getattr(self, f.name)) for f in fields(self))
+
+    def __iter__(self):
+        """Iterate over field names (like dict)."""
+        return (f.name for f in fields(self))
+
+    def __len__(self) -> int:
+        """Return number of fields."""
+        return len(fields(self))
+
+    def asdict(self) -> dict:
+        """Convert params to a dictionary."""
+        return dc_asdict(self)
+
+    def __repr__(self) -> str:
+        """Concise string representation."""
+        def fmt(v):
+            if v is None:
+                return "None"
+            if callable(v) and hasattr(v, '__name__'):
+                return v.__name__
+            if hasattr(v, 'shape'):
+                if v.ndim == 0:
+                    return f"{float(v):.4g}"
+                return f"Array{list(v.shape)}"
+            if isinstance(v, dict):
+                items = ", ".join(f"{k}: {fmt(val)}" for k, val in v.items())
+                return "{" + items + "}"
+            if isinstance(v, (list, tuple)) and len(v) > 5:
+                return f"{type(v).__name__}[{len(v)}]"
+            return repr(v)
+        items = ", ".join(f"{f.name}={fmt(getattr(self, f.name))}" for f in fields(self))
+        return f"{self.__class__.__name__}({items})"
 
 
 class PengRobinson:

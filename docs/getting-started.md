@@ -333,19 +333,22 @@ import jax
 import jax.numpy as jnp
 from jax import grad
 
-# Objective: Maximize conversion while minimizing heat duty
-def objective(params):
-    T_reactor, volume = params
+# Define base parameters once
+base_params = CSTRParams(
+    volume=1.0,  # Will be optimized
+    stoichiometry=jnp.array([[-1.0], [1.0]]),
+    k_ref=0.1,
+    E_a=50000.0,
+    T_ref=350.0,
+    dH_rxn=jnp.array([-50000.0])
+)
 
-    # Update reactor with new volume
-    reactor_params = CSTRParams(
-        volume=volume,
-        stoichiometry=jnp.array([[-1.0], [1.0]]),
-        k_ref=0.1,
-        E_a=50000.0,
-        T_ref=350.0,
-        dH_rxn=jnp.array([-50000.0])
-    )
+# Objective: Maximize conversion while minimizing heat duty
+def objective(opt_params):
+    T_reactor, volume = opt_params
+
+    # Use update() to create new params - JAX compatible!
+    reactor_params = base_params.update(volume=volume)
     reactor = CSTR(reactor_params, thermo, ['A', 'B'])
 
     inlet = make_stream({'A': 1.0, 'B': 0.0}, T=350.0, P=101325.0)
@@ -360,15 +363,18 @@ def objective(params):
 # Gradient-based optimization
 grad_obj = grad(objective)
 
-params = jnp.array([350.0, 1.0])  # Initial: T=350K, V=1m³
+opt_params = jnp.array([350.0, 1.0])  # Initial: T=350K, V=1m³
 learning_rate = 0.1
 
 for i in range(50):
-    gradient = grad_obj(params)
-    params = params + learning_rate * gradient
+    gradient = grad_obj(opt_params)
+    opt_params = opt_params + learning_rate * gradient
 
     if i % 10 == 0:
-        print(f"Iter {i}: T={params[0]:.1f}K, V={params[1]:.2f}m³, obj={objective(params):.4f}")
+        print(f"Iter {i}: T={opt_params[0]:.1f}K, V={opt_params[1]:.2f}m³, obj={objective(opt_params):.4f}")
+
+# Access parameters with dict-like syntax
+print(f"Base volume: {base_params['volume']}")  # Read access
 ```
 
 ---

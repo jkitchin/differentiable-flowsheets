@@ -16,7 +16,7 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 from jax import lax
-from dataclasses import dataclass
+from dataclasses import dataclass, replace, fields, asdict as dc_asdict
 from typing import Callable, NamedTuple
 import optimistix as optx
 
@@ -36,6 +36,82 @@ class FinancialParams:
     salvage_fraction: float = 0.05  # Salvage value as fraction of FCI
     working_capital_fraction: float = 0.15  # Working capital as fraction of FCI
     inflation_rate: float = 0.02  # Annual inflation for revenues/costs
+
+    def update(self, **kwargs) -> "FinancialParams":
+        """Return a new FinancialParams with specified fields replaced.
+
+        This enables JAX-compatible parameter updates for differentiation.
+
+        Args:
+            **kwargs: Fields to update (e.g., discount_rate=0.12, tax_rate=0.25)
+
+        Returns:
+            New FinancialParams with updated fields
+        """
+        return replace(self, **kwargs)
+
+    def __getitem__(self, key: str):
+        """Get parameter value by name for dict-like access."""
+        try:
+            return getattr(self, key)
+        except AttributeError:
+            raise KeyError(key)
+
+    def __contains__(self, key: str) -> bool:
+        """Check if a field exists in the params."""
+        return key in {f.name for f in fields(self)}
+
+    def keys(self):
+        """Return field names for dict-like iteration."""
+        return (f.name for f in fields(self))
+
+    def values(self):
+        """Return field values for dict-like iteration.
+
+        Returns:
+            Iterator over field values
+        """
+        return (getattr(self, f.name) for f in fields(self))
+
+    def items(self):
+        """Return (name, value) pairs for dict-like iteration.
+
+        Returns:
+            Iterator over (field_name, value) tuples
+        """
+        return ((f.name, getattr(self, f.name)) for f in fields(self))
+
+    def __iter__(self):
+        """Iterate over field names (like dict)."""
+        return (f.name for f in fields(self))
+
+    def __len__(self) -> int:
+        """Return number of fields."""
+        return len(fields(self))
+
+    def asdict(self) -> dict:
+        """Convert params to a dictionary."""
+        return dc_asdict(self)
+
+    def __repr__(self) -> str:
+        """Concise string representation."""
+        def fmt(v):
+            if v is None:
+                return "None"
+            if callable(v) and hasattr(v, '__name__'):
+                return v.__name__
+            if hasattr(v, 'shape'):
+                if v.ndim == 0:
+                    return f"{float(v):.4g}"
+                return f"Array{list(v.shape)}"
+            if isinstance(v, dict):
+                items = ", ".join(f"{k}: {fmt(val)}" for k, val in v.items())
+                return "{" + items + "}"
+            if isinstance(v, (list, tuple)) and len(v) > 5:
+                return f"{type(v).__name__}[{len(v)}]"
+            return repr(v)
+        items = ", ".join(f"{f.name}={fmt(getattr(self, f.name))}" for f in fields(self))
+        return f"{self.__class__.__name__}({items})"
 
 
 DEFAULT_FINANCIAL = FinancialParams()
