@@ -33,7 +33,7 @@ a JAX-native differentiable ODE solver library.
 """
 
 from typing import Callable, Literal, Any
-from dataclasses import dataclass, replace, fields, asdict as dc_asdict
+from dataclasses import dataclass
 import jax.numpy as jnp
 from jax import Array
 import diffrax
@@ -41,6 +41,14 @@ import diffrax
 from difflow.streams import Stream, get_flows, get_species, make_stream
 from difflow.thermo import IdealThermo
 from difflow.dynamic.state import StateSpec, StateVar
+from difflow.params_mixin import ParamsMixin
+from difflow.units.base import (
+    estimate_volumetric_flow,
+    estimate_residence_time,
+    estimate_pfr_conversion,
+    estimate_outlet_composition,
+    estimate_adiabatic_temperature,
+)
 
 
 # Type alias for rate function
@@ -50,8 +58,8 @@ RateFunction = Callable[[dict[str, Array], Array, dict], Array]
 Params = dict[str, Any]
 
 
-@dataclass
-class PFRParams:
+@dataclass(repr=False)
+class PFRParams(ParamsMixin):
     """Parameters for a Plug Flow Reactor.
 
     Attributes:
@@ -83,81 +91,21 @@ class PFRParams:
     atol: float = 1e-8
     n_save_points: int = 101
 
-    def update(self, **kwargs) -> "PFRParams":
-        """Return a new PFRParams with specified fields replaced.
-
-        This enables JAX-compatible parameter updates for differentiation.
-
-        Args:
-            **kwargs: Fields to update (e.g., V=2.0, rate_params={...})
-
-        Returns:
-            New PFRParams with updated fields
-        """
-        return replace(self, **kwargs)
-
-    def __getitem__(self, key: str):
-        """Get parameter value by name for dict-like access."""
-        try:
-            return getattr(self, key)
-        except AttributeError:
-            raise KeyError(key)
-
-    def __contains__(self, key: str) -> bool:
-        """Check if a field exists in the params."""
-        return key in {f.name for f in fields(self)}
-
-    def keys(self):
-        """Return field names for dict-like iteration."""
-        return (f.name for f in fields(self))
-
-    def values(self):
-        """Return field values for dict-like iteration.
-
-        Returns:
-            Iterator over field values
-        """
-        return (getattr(self, f.name) for f in fields(self))
-
-    def items(self):
-        """Return (name, value) pairs for dict-like iteration.
-
-        Returns:
-            Iterator over (field_name, value) tuples
-        """
-        return ((f.name, getattr(self, f.name)) for f in fields(self))
-
-    def __iter__(self):
-        """Iterate over field names (like dict)."""
-        return (f.name for f in fields(self))
-
-    def __len__(self) -> int:
-        """Return number of fields."""
-        return len(fields(self))
-
-    def asdict(self) -> dict:
-        """Convert params to a dictionary."""
-        return dc_asdict(self)
-
-    def __repr__(self) -> str:
-        """Concise string representation."""
-        def fmt(v):
-            if v is None:
-                return "None"
-            if callable(v) and hasattr(v, '__name__'):
-                return v.__name__
-            if hasattr(v, 'shape'):
-                if v.ndim == 0:
-                    return f"{float(v):.4g}"
-                return f"Array{list(v.shape)}"
-            if isinstance(v, dict):
-                items = ", ".join(f"{k}: {fmt(val)}" for k, val in v.items())
-                return "{" + items + "}"
-            if isinstance(v, (list, tuple)) and len(v) > 5:
-                return f"{type(v).__name__}[{len(v)}]"
-            return repr(v)
-        items = ", ".join(f"{f.name}={fmt(getattr(self, f.name))}" for f in fields(self))
-        return f"{self.__class__.__name__}({items})"
+    def __post_init__(self):
+        """Validate parameter consistency."""
+        n_species = len(self.species_order)
+        if self.stoich.shape[0] != n_species:
+            raise ValueError(
+                f"Stoichiometry matrix has {self.stoich.shape[0]} rows "
+                f"but species_order has {n_species} species"
+            )
+        if self.dH_rxn is not None:
+            n_reactions = self.stoich.shape[1]
+            if hasattr(self.dH_rxn, 'shape') and self.dH_rxn.shape[0] != n_reactions:
+                raise ValueError(
+                    f"dH_rxn has {self.dH_rxn.shape[0]} values "
+                    f"but stoich has {n_reactions} reactions"
+                )
 
 
 class PFR:
@@ -558,64 +506,50 @@ class PFR:
         p = self.params
         inlet_flows = get_flows(inlet)
 
-        # Get volumetric flow
+        # Get volumetric flow using helper
         volumetric_flow = kwargs.get('volumetric_flow')
         if volumetric_flow is None:
-            total_molar = sum(inlet_flows.values())
-            volumetric_flow = total_molar / 50.0  # Assume ~50 mol/m^3
+            volumetric_flow = estimate_volumetric_flow(inlet_flows)
 
-        # Residence time
-        tau = p.V / volumetric_flow
+        # Residence time using helper
+        tau = estimate_residence_time(p.V, volumetric_flow)
 
-        # Estimate conversion using PFR design equation
-        # For first-order reaction: X = 1 - exp(-k*tau)
+        # Estimate conversion using helper
         expected_conversion = kwargs.get('expected_conversion')
         if expected_conversion is not None:
             X_est = expected_conversion
         else:
-            # Try to estimate k from rate_params
-            k_est = p.rate_params.get('k', 0.1)  # Default guess
-            X_est = 1.0 - jnp.exp(-k_est * tau)
-            X_est = float(jnp.clip(X_est, 0.0, 0.99))
+            k_est = p.rate_params.get('k', 0.1)
+            X_est = estimate_pfr_conversion(k_est, tau)
 
-        # Estimate outlet composition based on stoichiometry
-        outlet_flows = {}
-        for i, species in enumerate(p.species_order):
-            F_in = inlet_flows.get(species, 0.0)
-            nu = p.stoich[i, 0] if p.stoich.shape[1] > 0 else 0  # First reaction
-
-            if nu < 0:  # Reactant
-                outlet_flows[species] = F_in * (1 - X_est)
-            elif nu > 0:  # Product
-                # Find the limiting reactant
-                reactant_species = [s for j, s in enumerate(p.species_order)
-                                    if p.stoich[j, 0] < 0]
-                if reactant_species:
-                    limiting_species = reactant_species[0]
-                    extent = inlet_flows.get(limiting_species, 0.0) * X_est / (
-                        -p.stoich[p.species_order.index(limiting_species), 0])
-                    outlet_flows[species] = F_in + nu * extent
-                else:
-                    outlet_flows[species] = F_in
-            else:  # Inert
-                outlet_flows[species] = F_in
+        # Estimate outlet composition using helper
+        outlet_flows = estimate_outlet_composition(
+            inlet_flows, p.stoich, p.species_order, X_est
+        )
 
         # Estimate outlet temperature
         T_spec = kwargs.get('T_spec')
         if self.mode == "isothermal":
-            T_out = T_spec if T_spec is not None else inlet["T"]
+            T_out = T_spec if T_spec is not None else float(inlet["T"])
         else:  # adiabatic
             if p.dH_rxn is not None:
-                # Approximate adiabatic temperature rise
-                extent_est = inlet_flows.get(p.species_order[0], 1.0) * X_est
-                Q_rxn = -float(jnp.sum(p.dH_rxn)) * extent_est
+                # Find limiting reactant and estimate extent
+                reactant_species = [s for j, s in enumerate(p.species_order)
+                                    if p.stoich[j, 0] < 0]
+                if reactant_species:
+                    limiting_species = reactant_species[0]
+                    extent_est = inlet_flows.get(limiting_species, 1.0) * X_est / (
+                        -float(p.stoich[p.species_order.index(limiting_species), 0])
+                    )
+                else:
+                    extent_est = 0.0
 
-                Cp_avg = 75.0  # J/mol/K
                 total_flow = sum(inlet_flows.values())
-                dT = Q_rxn / (total_flow * Cp_avg + 1e-10)
-                T_out = float(jnp.clip(inlet["T"] + dT, 250.0, 800.0))
+                T_out = estimate_adiabatic_temperature(
+                    inlet["T"], p.dH_rxn, extent_est, total_flow
+                )
             else:
-                T_out = inlet["T"]
+                T_out = float(inlet["T"])
 
         # Build outlet stream guess
         outlet = make_stream(outlet_flows, T_out, inlet["P"])
@@ -639,8 +573,8 @@ class PFR:
         }
 
 
-@dataclass
-class GasPFRParams:
+@dataclass(repr=False)
+class GasPFRParams(ParamsMixin):
     """Parameters for a gas-phase PFR with pressure drop.
 
     Attributes:
@@ -674,81 +608,21 @@ class GasPFRParams:
     atol: float = 1e-8
     n_save_points: int = 101
 
-    def update(self, **kwargs) -> "GasPFRParams":
-        """Return a new GasPFRParams with specified fields replaced.
-
-        This enables JAX-compatible parameter updates for differentiation.
-
-        Args:
-            **kwargs: Fields to update (e.g., V=2.0, alpha=0.1)
-
-        Returns:
-            New GasPFRParams with updated fields
-        """
-        return replace(self, **kwargs)
-
-    def __getitem__(self, key: str):
-        """Get parameter value by name for dict-like access."""
-        try:
-            return getattr(self, key)
-        except AttributeError:
-            raise KeyError(key)
-
-    def __contains__(self, key: str) -> bool:
-        """Check if a field exists in the params."""
-        return key in {f.name for f in fields(self)}
-
-    def keys(self):
-        """Return field names for dict-like iteration."""
-        return (f.name for f in fields(self))
-
-    def values(self):
-        """Return field values for dict-like iteration.
-
-        Returns:
-            Iterator over field values
-        """
-        return (getattr(self, f.name) for f in fields(self))
-
-    def items(self):
-        """Return (name, value) pairs for dict-like iteration.
-
-        Returns:
-            Iterator over (field_name, value) tuples
-        """
-        return ((f.name, getattr(self, f.name)) for f in fields(self))
-
-    def __iter__(self):
-        """Iterate over field names (like dict)."""
-        return (f.name for f in fields(self))
-
-    def __len__(self) -> int:
-        """Return number of fields."""
-        return len(fields(self))
-
-    def asdict(self) -> dict:
-        """Convert params to a dictionary."""
-        return dc_asdict(self)
-
-    def __repr__(self) -> str:
-        """Concise string representation."""
-        def fmt(v):
-            if v is None:
-                return "None"
-            if callable(v) and hasattr(v, '__name__'):
-                return v.__name__
-            if hasattr(v, 'shape'):
-                if v.ndim == 0:
-                    return f"{float(v):.4g}"
-                return f"Array{list(v.shape)}"
-            if isinstance(v, dict):
-                items = ", ".join(f"{k}: {fmt(val)}" for k, val in v.items())
-                return "{" + items + "}"
-            if isinstance(v, (list, tuple)) and len(v) > 5:
-                return f"{type(v).__name__}[{len(v)}]"
-            return repr(v)
-        items = ", ".join(f"{f.name}={fmt(getattr(self, f.name))}" for f in fields(self))
-        return f"{self.__class__.__name__}({items})"
+    def __post_init__(self):
+        """Validate parameter consistency."""
+        n_species = len(self.species_order)
+        if self.stoich.shape[0] != n_species:
+            raise ValueError(
+                f"Stoichiometry matrix has {self.stoich.shape[0]} rows "
+                f"but species_order has {n_species} species"
+            )
+        if self.dH_rxn is not None:
+            n_reactions = self.stoich.shape[1]
+            if hasattr(self.dH_rxn, 'shape') and self.dH_rxn.shape[0] != n_reactions:
+                raise ValueError(
+                    f"dH_rxn has {self.dH_rxn.shape[0]} values "
+                    f"but stoich has {n_reactions} reactions"
+                )
 
 
 class GasPFR:

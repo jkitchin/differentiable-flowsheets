@@ -19,41 +19,20 @@ Numerical Considerations:
 """
 
 from typing import Callable, Literal
-from dataclasses import dataclass, replace, fields, asdict as dc_asdict
+from dataclasses import dataclass
 import jax
 import jax.numpy as jnp
 from jax import Array, lax
 
 from difflow.streams import Stream, get_flows, make_stream
 from difflow.thermo import IdealThermo
+from difflow.params_mixin import ParamsMixin
+from difflow.constants import MIN_ALPHA_DIFF, MAX_STAGES, MAX_GILLILAND_Y, DEFAULT_TEMP_SCALE
 import optimistix as optx
 
 
-# =============================================================================
-# Numerical Constants
-# =============================================================================
-
-# Minimum relative volatility difference from 1.0 for Fenske equation.
-# When α < 1 + MIN_ALPHA_DIFF, the mixture is essentially non-separable by
-# distillation and N_min approaches infinity. We cap N_min smoothly.
-MIN_ALPHA_DIFF = 0.01
-
-# Maximum number of theoretical stages.
-# Beyond this, the column is economically infeasible. Used to cap N_min and N.
-MAX_STAGES = 500.0
-
-# Maximum Gilliland Y parameter. When Y → 1, N → ∞.
-# Capping Y at 0.95 limits N to ~20*N_min which is still very large.
-MAX_GILLILAND_Y = 0.95
-
-# Temperature profile scaling factor.
-# Column ΔT ≈ TEMP_SCALE_FACTOR * T_feed for typical systems.
-# Cryogenic systems have smaller fractional ΔT, high-T systems similar.
-DEFAULT_TEMP_SCALE = 0.05  # 5% of feed T as half-range (±2.5%)
-
-
-@dataclass
-class ShortcutColumnParams:
+@dataclass(repr=False)
+class ShortcutColumnParams(ParamsMixin):
     """Parameters for shortcut distillation column design.
 
     Attributes:
@@ -68,82 +47,6 @@ class ShortcutColumnParams:
     heavy_key: str
     x_D_LK: float = 0.99  # LK recovery in distillate
     x_B_HK: float = 0.99  # HK recovery in bottoms
-
-    def update(self, **kwargs) -> "ShortcutColumnParams":
-        """Return a new ShortcutColumnParams with specified fields replaced.
-
-        This enables JAX-compatible parameter updates for differentiation.
-
-        Args:
-            **kwargs: Fields to update (e.g., x_D_LK=0.995)
-
-        Returns:
-            New ShortcutColumnParams with updated fields
-        """
-        return replace(self, **kwargs)
-
-    def __getitem__(self, key: str):
-        """Get parameter value by name for dict-like access."""
-        try:
-            return getattr(self, key)
-        except AttributeError:
-            raise KeyError(key)
-
-    def __contains__(self, key: str) -> bool:
-        """Check if a field exists in the params."""
-        return key in {f.name for f in fields(self)}
-
-    def keys(self):
-        """Return field names for dict-like iteration."""
-        return (f.name for f in fields(self))
-
-    def values(self):
-        """Return field values for dict-like iteration.
-
-        Returns:
-            Iterator over field values
-        """
-        return (getattr(self, f.name) for f in fields(self))
-
-    def items(self):
-        """Return (name, value) pairs for dict-like iteration.
-
-        Returns:
-            Iterator over (field_name, value) tuples
-        """
-        return ((f.name, getattr(self, f.name)) for f in fields(self))
-
-    def __iter__(self):
-        """Iterate over field names (like dict)."""
-        return (f.name for f in fields(self))
-
-    def __len__(self) -> int:
-        """Return number of fields."""
-        return len(fields(self))
-
-    def asdict(self) -> dict:
-        """Convert params to a dictionary."""
-        return dc_asdict(self)
-
-    def __repr__(self) -> str:
-        """Concise string representation."""
-        def fmt(v):
-            if v is None:
-                return "None"
-            if callable(v) and hasattr(v, '__name__'):
-                return v.__name__
-            if hasattr(v, 'shape'):
-                if v.ndim == 0:
-                    return f"{float(v):.4g}"
-                return f"Array{list(v.shape)}"
-            if isinstance(v, dict):
-                items = ", ".join(f"{k}: {fmt(val)}" for k, val in v.items())
-                return "{" + items + "}"
-            if isinstance(v, (list, tuple)) and len(v) > 5:
-                return f"{type(v).__name__}[{len(v)}]"
-            return repr(v)
-        items = ", ".join(f"{f.name}={fmt(getattr(self, f.name))}" for f in fields(self))
-        return f"{self.__class__.__name__}({items})"
 
 
 class ShortcutColumn:
@@ -602,8 +505,8 @@ class ShortcutColumn:
         return distillate, bottoms, info
 
 
-@dataclass
-class DistillationColumnParams:
+@dataclass(repr=False)
+class DistillationColumnParams(ParamsMixin):
     """Parameters for rigorous distillation column.
 
     Attributes:
@@ -618,82 +521,6 @@ class DistillationColumnParams:
     feed_stage: int
     condenser_type: Literal["total", "partial"] = "total"
     P: float = 101325.0
-
-    def update(self, **kwargs) -> "DistillationColumnParams":
-        """Return a new DistillationColumnParams with specified fields replaced.
-
-        This enables JAX-compatible parameter updates for differentiation.
-
-        Args:
-            **kwargs: Fields to update (e.g., n_stages=20, P=50000.0)
-
-        Returns:
-            New DistillationColumnParams with updated fields
-        """
-        return replace(self, **kwargs)
-
-    def __getitem__(self, key: str):
-        """Get parameter value by name for dict-like access."""
-        try:
-            return getattr(self, key)
-        except AttributeError:
-            raise KeyError(key)
-
-    def __contains__(self, key: str) -> bool:
-        """Check if a field exists in the params."""
-        return key in {f.name for f in fields(self)}
-
-    def keys(self):
-        """Return field names for dict-like iteration."""
-        return (f.name for f in fields(self))
-
-    def values(self):
-        """Return field values for dict-like iteration.
-
-        Returns:
-            Iterator over field values
-        """
-        return (getattr(self, f.name) for f in fields(self))
-
-    def items(self):
-        """Return (name, value) pairs for dict-like iteration.
-
-        Returns:
-            Iterator over (field_name, value) tuples
-        """
-        return ((f.name, getattr(self, f.name)) for f in fields(self))
-
-    def __iter__(self):
-        """Iterate over field names (like dict)."""
-        return (f.name for f in fields(self))
-
-    def __len__(self) -> int:
-        """Return number of fields."""
-        return len(fields(self))
-
-    def asdict(self) -> dict:
-        """Convert params to a dictionary."""
-        return dc_asdict(self)
-
-    def __repr__(self) -> str:
-        """Concise string representation."""
-        def fmt(v):
-            if v is None:
-                return "None"
-            if callable(v) and hasattr(v, '__name__'):
-                return v.__name__
-            if hasattr(v, 'shape'):
-                if v.ndim == 0:
-                    return f"{float(v):.4g}"
-                return f"Array{list(v.shape)}"
-            if isinstance(v, dict):
-                items = ", ".join(f"{k}: {fmt(val)}" for k, val in v.items())
-                return "{" + items + "}"
-            if isinstance(v, (list, tuple)) and len(v) > 5:
-                return f"{type(v).__name__}[{len(v)}]"
-            return repr(v)
-        items = ", ".join(f"{f.name}={fmt(getattr(self, f.name))}" for f in fields(self))
-        return f"{self.__class__.__name__}({items})"
 
 
 class DistillationColumn:
