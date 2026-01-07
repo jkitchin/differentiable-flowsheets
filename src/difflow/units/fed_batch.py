@@ -19,6 +19,8 @@ All calculations are JAX-compatible for automatic differentiation.
 
 from typing import Callable, Literal, Any
 from dataclasses import dataclass
+
+from difflow.params_mixin import ParamsMixin
 import jax.numpy as jnp
 from jax import Array, lax
 import optimistix as optx
@@ -44,8 +46,8 @@ FeedProfile = Callable[[Array], Array]  # t -> F(t)
 Params = dict[str, Any]
 
 
-@dataclass
-class FedBatchParams:
+@dataclass(repr=False)
+class FedBatchParams(ParamsMixin):
     """Parameters for a fed-batch reactor.
 
     Attributes:

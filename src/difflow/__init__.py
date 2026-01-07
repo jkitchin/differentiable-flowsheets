@@ -58,6 +58,7 @@ from difflow.cantera_import import (
     list_available_species,
     list_available_reactions,
 )
+from difflow.params_mixin import ParamsMixin
 from difflow.units.cstr import CSTR, CSTRParams
 from difflow.units.pfr import PFR, PFRParams, GasPFR, GasPFRParams
 from difflow.units.fed_batch import (
@@ -182,6 +183,8 @@ from difflow.dynamic import (
 )
 
 __all__ = [
+    # Params Mixin
+    "ParamsMixin",
     # Streams
     "Stream",
     "make_stream",

@@ -21,13 +21,14 @@ and the new DynamicUnit protocol for unified dynamic modeling.
 """
 
 from typing import Callable, Literal, Any
-from dataclasses import dataclass, replace, fields, asdict as dc_asdict
+from dataclasses import dataclass
 import jax.numpy as jnp
 from jax import Array
 
 from difflow.streams import Stream, get_flows, get_species, make_stream
 from difflow.thermo import IdealThermo
 from difflow.dynamic.state import StateSpec, StateVar, StateVector
+from difflow.params_mixin import ParamsMixin
 
 
 # Type alias for rate function
@@ -37,8 +38,8 @@ RateFunction = Callable[[dict[str, Array], Array, dict], Array]
 Params = dict[str, Any]
 
 
-@dataclass
-class CSTRParams:
+@dataclass(repr=False)
+class CSTRParams(ParamsMixin):
     """Parameters for a CSTR.
 
     Attributes:
@@ -68,107 +69,6 @@ class CSTRParams:
     species_order: list[str]
     dH_rxn: Array | None = None
     T_damping: float = 0.3
-
-    def update(self, **kwargs) -> "CSTRParams":
-        """Return a new CSTRParams with specified fields replaced.
-
-        This enables JAX-compatible parameter updates for differentiation.
-
-        Args:
-            **kwargs: Fields to update (e.g., V=2.0, rate_params={...})
-
-        Returns:
-            New CSTRParams with updated fields
-        """
-        return replace(self, **kwargs)
-
-    def __getitem__(self, key: str):
-        """Get parameter value by name for dict-like access.
-
-        Args:
-            key: Field name to access
-
-        Returns:
-            Value of the field
-
-        Raises:
-            KeyError: If field doesn't exist
-        """
-        try:
-            return getattr(self, key)
-        except AttributeError:
-            raise KeyError(key)
-
-    def __contains__(self, key: str) -> bool:
-        """Check if a field exists in the params.
-
-        Args:
-            key: Field name to check
-
-        Returns:
-            True if field exists, False otherwise
-        """
-        return key in {f.name for f in fields(self)}
-
-    def keys(self):
-        """Return field names for dict-like iteration.
-
-        Returns:
-            Iterator over field names
-        """
-        return (f.name for f in fields(self))
-
-    def values(self):
-        """Return field values for dict-like iteration.
-
-        Returns:
-            Iterator over field values
-        """
-        return (getattr(self, f.name) for f in fields(self))
-
-    def items(self):
-        """Return (name, value) pairs for dict-like iteration.
-
-        Returns:
-            Iterator over (field_name, value) tuples
-        """
-        return ((f.name, getattr(self, f.name)) for f in fields(self))
-
-    def __iter__(self):
-        """Iterate over field names (like dict)."""
-        return (f.name for f in fields(self))
-
-    def __len__(self) -> int:
-        """Return number of fields."""
-        return len(fields(self))
-
-    def asdict(self) -> dict:
-        """Convert params to a dictionary.
-
-        Returns:
-            Dictionary with field names as keys and values
-        """
-        return dc_asdict(self)
-
-    def __repr__(self) -> str:
-        """Concise string representation."""
-        def fmt(v):
-            if v is None:
-                return "None"
-            if callable(v) and hasattr(v, '__name__'):
-                return v.__name__
-            if hasattr(v, 'shape'):  # JAX/numpy array
-                if v.ndim == 0:
-                    return f"{float(v):.4g}"
-                return f"Array{list(v.shape)}"
-            if isinstance(v, dict):
-                items = ", ".join(f"{k}: {fmt(val)}" for k, val in v.items())
-                return "{" + items + "}"
-            if isinstance(v, (list, tuple)) and len(v) > 5:
-                return f"{type(v).__name__}[{len(v)}]"
-            return repr(v)
-        items = ", ".join(f"{f.name}={fmt(getattr(self, f.name))}" for f in fields(self))
-        return f"{self.__class__.__name__}({items})"
 
 
 class CSTR:
