@@ -82,6 +82,23 @@ class CSTRParams:
         """
         return replace(self, **kwargs)
 
+    def __getitem__(self, key: str):
+        """Get parameter value by name for dict-like access.
+
+        Args:
+            key: Field name to access
+
+        Returns:
+            Value of the field
+
+        Raises:
+            KeyError: If field doesn't exist
+        """
+        try:
+            return getattr(self, key)
+        except AttributeError:
+            raise KeyError(key)
+
 
 class CSTR:
     """Continuous Stirred Tank Reactor with multiple reactions.

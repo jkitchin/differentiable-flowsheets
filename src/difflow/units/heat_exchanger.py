@@ -269,6 +269,13 @@ class HeaterParams:
         """
         return replace(self, **kwargs)
 
+    def __getitem__(self, key: str):
+        """Get parameter value by name for dict-like access."""
+        try:
+            return getattr(self, key)
+        except AttributeError:
+            raise KeyError(key)
+
 
 class Heater:
     """Single-stream heater with utility (steam, hot oil, etc).
@@ -412,6 +419,13 @@ class CoolerParams:
         """
         return replace(self, **kwargs)
 
+    def __getitem__(self, key: str):
+        """Get parameter value by name for dict-like access."""
+        try:
+            return getattr(self, key)
+        except AttributeError:
+            raise KeyError(key)
+
 
 class Cooler:
     """Single-stream cooler with utility (cooling water, refrigerant, etc).
@@ -532,6 +546,13 @@ class HeatExchangerParams:
             New HeatExchangerParams with updated fields
         """
         return replace(self, **kwargs)
+
+    def __getitem__(self, key: str):
+        """Get parameter value by name for dict-like access."""
+        try:
+            return getattr(self, key)
+        except AttributeError:
+            raise KeyError(key)
 
 
 class CounterCurrentHX:

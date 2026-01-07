@@ -82,6 +82,13 @@ class ShortcutColumnParams:
         """
         return replace(self, **kwargs)
 
+    def __getitem__(self, key: str):
+        """Get parameter value by name for dict-like access."""
+        try:
+            return getattr(self, key)
+        except AttributeError:
+            raise KeyError(key)
+
 
 class ShortcutColumn:
     """Shortcut distillation column using Fenske-Underwood-Gilliland.
@@ -568,6 +575,13 @@ class DistillationColumnParams:
             New DistillationColumnParams with updated fields
         """
         return replace(self, **kwargs)
+
+    def __getitem__(self, key: str):
+        """Get parameter value by name for dict-like access."""
+        try:
+            return getattr(self, key)
+        except AttributeError:
+            raise KeyError(key)
 
 
 class DistillationColumn:

@@ -72,6 +72,13 @@ class EOSParams:
         """
         return replace(self, **kwargs)
 
+    def __getitem__(self, key: str):
+        """Get parameter value by name for dict-like access."""
+        try:
+            return getattr(self, key)
+        except AttributeError:
+            raise KeyError(key)
+
 
 class PengRobinson:
     """Peng-Robinson equation of state.
