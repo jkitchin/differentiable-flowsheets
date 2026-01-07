@@ -21,7 +21,7 @@ and the new DynamicUnit protocol for unified dynamic modeling.
 """
 
 from typing import Callable, Literal, Any
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import jax.numpy as jnp
 from jax import Array
 
@@ -68,6 +68,19 @@ class CSTRParams:
     species_order: list[str]
     dH_rxn: Array | None = None
     T_damping: float = 0.3
+
+    def update(self, **kwargs) -> "CSTRParams":
+        """Return a new CSTRParams with specified fields replaced.
+
+        This enables JAX-compatible parameter updates for differentiation.
+
+        Args:
+            **kwargs: Fields to update (e.g., V=2.0, rate_params={...})
+
+        Returns:
+            New CSTRParams with updated fields
+        """
+        return replace(self, **kwargs)
 
 
 class CSTR:
