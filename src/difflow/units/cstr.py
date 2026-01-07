@@ -21,7 +21,7 @@ and the new DynamicUnit protocol for unified dynamic modeling.
 """
 
 from typing import Callable, Literal, Any
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, replace, fields, asdict as dc_asdict
 import jax.numpy as jnp
 from jax import Array
 
@@ -98,6 +98,33 @@ class CSTRParams:
             return getattr(self, key)
         except AttributeError:
             raise KeyError(key)
+
+    def __contains__(self, key: str) -> bool:
+        """Check if a field exists in the params.
+
+        Args:
+            key: Field name to check
+
+        Returns:
+            True if field exists, False otherwise
+        """
+        return key in {f.name for f in fields(self)}
+
+    def keys(self):
+        """Return field names for dict-like iteration.
+
+        Returns:
+            Iterator over field names
+        """
+        return (f.name for f in fields(self))
+
+    def asdict(self) -> dict:
+        """Convert params to a dictionary.
+
+        Returns:
+            Dictionary with field names as keys and values
+        """
+        return dc_asdict(self)
 
 
 class CSTR:

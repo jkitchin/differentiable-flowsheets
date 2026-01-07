@@ -19,7 +19,7 @@ Reference: Turton et al., "Analysis, Synthesis, and Design of Chemical Processes
 import jax.numpy as jnp
 from jax import Array
 from typing import NamedTuple, Optional
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, replace, fields, asdict as dc_asdict
 
 from .indices import escalate_cost, DEFAULT_BASE_YEAR, DEFAULT_CURRENT_YEAR
 
@@ -436,6 +436,18 @@ class InstallationFactors:
             return getattr(self, key)
         except AttributeError:
             raise KeyError(key)
+
+    def __contains__(self, key: str) -> bool:
+        """Check if a field exists in the params."""
+        return key in {f.name for f in fields(self)}
+
+    def keys(self):
+        """Return field names for dict-like iteration."""
+        return (f.name for f in fields(self))
+
+    def asdict(self) -> dict:
+        """Convert params to a dictionary."""
+        return dc_asdict(self)
 
 
 # Pre-defined installation factors by plant type

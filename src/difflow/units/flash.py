@@ -11,7 +11,7 @@ differentiation through the converged solution.
 """
 
 from typing import Any
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, replace, fields, asdict as dc_asdict
 import jax
 import jax.numpy as jnp
 from jax import Array
@@ -67,6 +67,18 @@ class FlashParams:
             return getattr(self, key)
         except AttributeError:
             raise KeyError(key)
+
+    def __contains__(self, key: str) -> bool:
+        """Check if a field exists in the params."""
+        return key in {f.name for f in fields(self)}
+
+    def keys(self):
+        """Return field names for dict-like iteration."""
+        return (f.name for f in fields(self))
+
+    def asdict(self) -> dict:
+        """Convert params to a dictionary."""
+        return dc_asdict(self)
 
 
 class Flash:

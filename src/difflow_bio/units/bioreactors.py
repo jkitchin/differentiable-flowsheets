@@ -25,7 +25,7 @@ Numerical Considerations:
 """
 
 from typing import Callable, Literal
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, replace, fields, asdict as dc_asdict
 import inspect
 import jax
 import jax.numpy as jnp
@@ -264,6 +264,18 @@ class BioreactorParams:
         except AttributeError:
             raise KeyError(key)
 
+    def __contains__(self, key: str) -> bool:
+        """Check if a field exists in the params."""
+        return key in {f.name for f in fields(self)}
+
+    def keys(self):
+        """Return field names for dict-like iteration."""
+        return (f.name for f in fields(self))
+
+    def asdict(self) -> dict:
+        """Convert params to a dictionary."""
+        return dc_asdict(self)
+
 
 # =============================================================================
 # Continuous Bioreactor (Chemostat)
@@ -495,6 +507,18 @@ class FedBatchParams:
             return getattr(self, key)
         except AttributeError:
             raise KeyError(key)
+
+    def __contains__(self, key: str) -> bool:
+        """Check if a field exists in the params."""
+        return key in {f.name for f in fields(self)}
+
+    def keys(self):
+        """Return field names for dict-like iteration."""
+        return (f.name for f in fields(self))
+
+    def asdict(self) -> dict:
+        """Convert params to a dictionary."""
+        return dc_asdict(self)
 
 
 class FedBatchBioreactor:

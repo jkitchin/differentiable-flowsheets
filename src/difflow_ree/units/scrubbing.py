@@ -11,7 +11,7 @@ The scrub solution is typically:
 All operations are fully differentiable using JAX.
 """
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, replace, fields, asdict as dc_asdict
 from typing import Literal
 
 import jax.numpy as jnp
@@ -61,6 +61,18 @@ class ScrubberParams:
             return getattr(self, key)
         except AttributeError:
             raise KeyError(key)
+
+    def __contains__(self, key: str) -> bool:
+        """Check if a field exists in the params."""
+        return key in {f.name for f in fields(self)}
+
+    def keys(self):
+        """Return field names for dict-like iteration."""
+        return (f.name for f in fields(self))
+
+    def asdict(self) -> dict:
+        """Convert params to a dictionary."""
+        return dc_asdict(self)
 
 
 class REEScrubber:

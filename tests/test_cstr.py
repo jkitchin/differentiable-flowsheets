@@ -230,3 +230,70 @@ class TestCSTRParamsUpdate:
         # Gradient should be positive and finite
         assert jnp.isfinite(grad_V)
         assert float(grad_V) > 0
+
+    def test_keys_returns_field_names(self, simple_rate_fn):
+        """Test that keys() returns all field names."""
+        stoich = jnp.array([[-1.0], [+1.0]])
+        params = CSTRParams(
+            V=jnp.array(1.0),
+            rate_fn=simple_rate_fn,
+            stoich=stoich,
+            rate_params={"A": jnp.array(1e6), "Ea": jnp.array(50000.0)},
+            species_order=["A", "B"],
+        )
+
+        keys = list(params.keys())
+
+        # Should contain all dataclass fields
+        assert "V" in keys
+        assert "rate_fn" in keys
+        assert "stoich" in keys
+        assert "rate_params" in keys
+        assert "species_order" in keys
+
+    def test_contains_existing_field(self, simple_rate_fn):
+        """Test that 'field in params' works for existing fields."""
+        stoich = jnp.array([[-1.0], [+1.0]])
+        params = CSTRParams(
+            V=jnp.array(1.0),
+            rate_fn=simple_rate_fn,
+            stoich=stoich,
+            rate_params={"A": jnp.array(1e6), "Ea": jnp.array(50000.0)},
+            species_order=["A", "B"],
+        )
+
+        assert "V" in params
+        assert "rate_fn" in params
+        assert "stoich" in params
+
+    def test_contains_nonexistent_field(self, simple_rate_fn):
+        """Test that 'field in params' returns False for nonexistent fields."""
+        stoich = jnp.array([[-1.0], [+1.0]])
+        params = CSTRParams(
+            V=jnp.array(1.0),
+            rate_fn=simple_rate_fn,
+            stoich=stoich,
+            rate_params={"A": jnp.array(1e6), "Ea": jnp.array(50000.0)},
+            species_order=["A", "B"],
+        )
+
+        assert "nonexistent" not in params
+        assert "volume" not in params  # V, not volume
+
+    def test_asdict_returns_dict(self, simple_rate_fn):
+        """Test that asdict() returns a dictionary with all fields."""
+        stoich = jnp.array([[-1.0], [+1.0]])
+        params = CSTRParams(
+            V=jnp.array(1.0),
+            rate_fn=simple_rate_fn,
+            stoich=stoich,
+            rate_params={"A": jnp.array(1e6), "Ea": jnp.array(50000.0)},
+            species_order=["A", "B"],
+        )
+
+        d = params.asdict()
+
+        assert isinstance(d, dict)
+        assert float(d["V"]) == 1.0
+        assert d["species_order"] == ["A", "B"]
+        assert jnp.allclose(d["stoich"], stoich)

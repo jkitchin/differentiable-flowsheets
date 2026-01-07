@@ -33,7 +33,7 @@ a JAX-native differentiable ODE solver library.
 """
 
 from typing import Callable, Literal, Any
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, replace, fields, asdict as dc_asdict
 import jax.numpy as jnp
 from jax import Array
 import diffrax
@@ -102,6 +102,18 @@ class PFRParams:
             return getattr(self, key)
         except AttributeError:
             raise KeyError(key)
+
+    def __contains__(self, key: str) -> bool:
+        """Check if a field exists in the params."""
+        return key in {f.name for f in fields(self)}
+
+    def keys(self):
+        """Return field names for dict-like iteration."""
+        return (f.name for f in fields(self))
+
+    def asdict(self) -> dict:
+        """Convert params to a dictionary."""
+        return dc_asdict(self)
 
 
 class PFR:
@@ -637,6 +649,18 @@ class GasPFRParams:
             return getattr(self, key)
         except AttributeError:
             raise KeyError(key)
+
+    def __contains__(self, key: str) -> bool:
+        """Check if a field exists in the params."""
+        return key in {f.name for f in fields(self)}
+
+    def keys(self):
+        """Return field names for dict-like iteration."""
+        return (f.name for f in fields(self))
+
+    def asdict(self) -> dict:
+        """Convert params to a dictionary."""
+        return dc_asdict(self)
 
 
 class GasPFR:

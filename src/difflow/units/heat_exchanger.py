@@ -15,7 +15,7 @@ Numerical Considerations:
 - Cr = 1 edge case: Smooth blending between balanced and general formulas
 """
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, replace, fields, asdict as dc_asdict
 from typing import Callable
 import jax
 import jax.numpy as jnp
@@ -276,6 +276,18 @@ class HeaterParams:
         except AttributeError:
             raise KeyError(key)
 
+    def __contains__(self, key: str) -> bool:
+        """Check if a field exists in the params."""
+        return key in {f.name for f in fields(self)}
+
+    def keys(self):
+        """Return field names for dict-like iteration."""
+        return (f.name for f in fields(self))
+
+    def asdict(self) -> dict:
+        """Convert params to a dictionary."""
+        return dc_asdict(self)
+
 
 class Heater:
     """Single-stream heater with utility (steam, hot oil, etc).
@@ -426,6 +438,18 @@ class CoolerParams:
         except AttributeError:
             raise KeyError(key)
 
+    def __contains__(self, key: str) -> bool:
+        """Check if a field exists in the params."""
+        return key in {f.name for f in fields(self)}
+
+    def keys(self):
+        """Return field names for dict-like iteration."""
+        return (f.name for f in fields(self))
+
+    def asdict(self) -> dict:
+        """Convert params to a dictionary."""
+        return dc_asdict(self)
+
 
 class Cooler:
     """Single-stream cooler with utility (cooling water, refrigerant, etc).
@@ -553,6 +577,18 @@ class HeatExchangerParams:
             return getattr(self, key)
         except AttributeError:
             raise KeyError(key)
+
+    def __contains__(self, key: str) -> bool:
+        """Check if a field exists in the params."""
+        return key in {f.name for f in fields(self)}
+
+    def keys(self):
+        """Return field names for dict-like iteration."""
+        return (f.name for f in fields(self))
+
+    def asdict(self) -> dict:
+        """Convert params to a dictionary."""
+        return dc_asdict(self)
 
 
 class CounterCurrentHX:
