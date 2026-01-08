@@ -151,7 +151,6 @@ class TestCompression:
         params = CompressionTrainParams(
             P_inlet=200000.0,
             P_outlet=15000000.0,
-            T_inlet=313.15,
         )
         train = CompressionTrain(params)
 

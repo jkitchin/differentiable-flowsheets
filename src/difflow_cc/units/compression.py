@@ -18,13 +18,14 @@ References:
         UCD-ITS-RR-06-14.
 """
 
-from dataclasses import dataclass, replace, fields, asdict
+from dataclasses import dataclass
 from typing import Literal
 
 import jax.numpy as jnp
 from jax import Array
 
 from difflow.streams import Stream, make_stream, get_flows, total_flow
+from difflow.params_mixin import ParamsMixin
 
 
 # Gas constant
@@ -41,7 +42,7 @@ P_CRIT_CO2 = 7.377e6  # Pa
 # =============================================================================
 
 @dataclass
-class CompressorParams:
+class CompressorParams(ParamsMixin):
     """Parameters for a single compressor stage.
 
     Attributes:
@@ -55,63 +56,49 @@ class CompressorParams:
     eta_mechanical: float | Array = 0.98
     eta_motor: float | Array = 0.95
 
-    def update(self, **kwargs) -> "CompressorParams":
-        return replace(self, **kwargs)
-
 
 @dataclass
-class IntercoolerParams:
+class IntercoolerParams(ParamsMixin):
     """Parameters for interstage cooler.
 
     Attributes:
         T_outlet: Target outlet temperature (K)
-        T_coolant: Cooling medium temperature (K)
-        approach: Minimum temperature approach (K)
-        pressure_drop: Pressure drop across cooler (Pa)
+        T_coolant: Cooling water temperature (K)
+        approach: Minimum approach temperature (K)
+        pressure_drop: Pressure drop (Pa)
     """
     T_outlet: float | Array = 313.15  # K (40°C)
     T_coolant: float | Array = 298.15  # K (25°C)
-    approach: float = 5.0  # K
+    approach: float | Array = 5.0  # K
     pressure_drop: float = 5000.0  # Pa
-
-    def update(self, **kwargs) -> "IntercoolerParams":
-        return replace(self, **kwargs)
 
 
 @dataclass
-class CompressionTrainParams:
+class CompressionTrainParams(ParamsMixin):
     """Parameters for multi-stage compression train.
 
     Attributes:
         P_inlet: Inlet pressure (Pa)
         P_outlet: Target outlet pressure (Pa)
-        T_inlet: Inlet temperature (K)
-        n_stages: Number of compression stages (if None, auto-calculated)
-        max_pressure_ratio: Maximum ratio per stage
-        eta_isentropic: Isentropic efficiency
+        n_stages: Number of compression stages (None = auto-calculate)
+        max_pressure_ratio: Maximum pressure ratio per stage
+        eta_isentropic: Isentropic efficiency per stage
         eta_mechanical: Mechanical efficiency
         eta_motor: Motor efficiency
         T_intercool: Intercooler outlet temperature (K)
-        use_pump: Use pump for final stage if supercritical
-        pump_efficiency: Pump efficiency for supercritical CO2
+        use_pump: Use pump for supercritical stage
+        pump_efficiency: Pump efficiency
     """
-    P_inlet: float | Array = 200000.0  # 2 bar (stripper overhead)
-    P_outlet: float | Array = 15000000.0  # 150 bar (pipeline)
-    T_inlet: float | Array = 313.15  # K
-    n_stages: int | None = None  # Auto-calculate if None
+    P_inlet: float | Array = 200000.0  # Pa (2 bar)
+    P_outlet: float | Array = 15000000.0  # Pa (150 bar)
+    n_stages: int | None = None
     max_pressure_ratio: float = 3.5
     eta_isentropic: float | Array = 0.80
     eta_mechanical: float | Array = 0.98
     eta_motor: float | Array = 0.95
-    T_intercool: float | Array = 313.15  # K
-    use_pump: bool = True  # Use pump above critical point
+    T_intercool: float | Array = 313.15  # K (40°C)
+    use_pump: bool = True
     pump_efficiency: float | Array = 0.75
-
-    def update(self, **kwargs) -> "CompressionTrainParams":
-        return replace(self, **kwargs)
-
-    def asdict(self) -> dict:
-        return asdict(self)
 
 
 # =============================================================================

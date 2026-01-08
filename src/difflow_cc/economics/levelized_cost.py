@@ -9,6 +9,7 @@ References:
 """
 
 from dataclasses import dataclass
+from difflow.params_mixin import ParamsMixin
 
 import jax.numpy as jnp
 from jax import Array
@@ -26,7 +27,7 @@ from difflow_cc.economics.opex import (
 
 
 @dataclass
-class EconomicParams:
+class EconomicParams(ParamsMixin):
     """Economic analysis parameters.
 
     Attributes:

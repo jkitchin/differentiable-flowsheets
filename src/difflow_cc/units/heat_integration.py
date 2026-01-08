@@ -16,13 +16,14 @@ References:
         Int J Greenh Gas Control 1:37-46.
 """
 
-from dataclasses import dataclass, replace, fields, asdict
+from dataclasses import dataclass
 from typing import Literal
 
 import jax.numpy as jnp
 from jax import Array
 
 from difflow.streams import Stream, make_stream, get_flows, total_flow
+from difflow.params_mixin import ParamsMixin
 
 
 # =============================================================================
@@ -30,7 +31,7 @@ from difflow.streams import Stream, make_stream, get_flows, total_flow
 # =============================================================================
 
 @dataclass
-class HeatExchangerParams:
+class HeatExchangerParams(ParamsMixin):
     """Parameters for shell-and-tube heat exchanger.
 
     Attributes:
@@ -48,66 +49,37 @@ class HeatExchangerParams:
     pressure_drop_hot: float = 5000.0  # Pa
     pressure_drop_cold: float = 5000.0  # Pa
 
-    def update(self, **kwargs) -> "HeatExchangerParams":
-        return replace(self, **kwargs)
-
-    def __getitem__(self, key: str):
-        return getattr(self, key)
-
-    def keys(self):
-        return (f.name for f in fields(self))
-
-    def items(self):
-        return ((f.name, getattr(self, f.name)) for f in fields(self))
-
-    def asdict(self) -> dict:
-        return asdict(self)
-
 
 @dataclass
-class LeanRichExchangerParams:
-    """Parameters for lean/rich solvent heat exchanger.
-
-    The lean/rich exchanger recovers heat from hot lean solvent
-    (from stripper) to preheat cold rich solvent (to stripper).
+class LeanRichExchangerParams(ParamsMixin):
+    """Parameters for lean/rich heat exchanger.
 
     Attributes:
+        effectiveness: Heat exchanger effectiveness (0-1)
         U: Overall heat transfer coefficient (W/m²/K)
         A: Heat transfer area (m²)
-        effectiveness: Heat exchanger effectiveness (0-1)
         min_approach: Minimum temperature approach (K)
         Cp_solvent: Solvent heat capacity (J/mol/K)
     """
-    U: float | Array = 800.0  # W/m²/K (liquid-liquid, high)
+    effectiveness: float | Array | None = 0.85
+    U: float | Array = 500.0  # W/m²/K
     A: float | Array = 200.0  # m²
-    effectiveness: float | Array | None = None  # If set, overrides U*A
     min_approach: float = 10.0  # K
-    Cp_solvent: float = 75.0  # J/mol/K (approximate for aqueous amine)
-
-    def update(self, **kwargs) -> "LeanRichExchangerParams":
-        return replace(self, **kwargs)
+    Cp_solvent: float = 75.0  # J/mol/K
 
 
 @dataclass
-class IntercoolerParams:
+class IntercoolerParams(ParamsMixin):
     """Parameters for absorber intercooler.
 
-    Intercooling removes heat of absorption to maintain
-    favorable equilibrium in the absorber column.
-
     Attributes:
-        T_coolant: Coolant temperature (K)
+        T_coolant: Cooling water temperature (K)
+        approach: Minimum approach temperature (K)
         duty: Fixed cooling duty (W), if None calculated from approach
-        approach: Temperature approach to coolant (K)
-        location: Fraction of column height from bottom (0-1)
     """
-    T_coolant: float | Array = 298.15  # K (25°C cooling water)
+    T_coolant: float | Array = 298.15  # K (25°C)
+    approach: float | Array = 5.0  # K
     duty: float | Array | None = None
-    approach: float = 5.0  # K
-    location: float = 0.5  # Middle of column
-
-    def update(self, **kwargs) -> "IntercoolerParams":
-        return replace(self, **kwargs)
 
 
 # =============================================================================
@@ -494,7 +466,7 @@ class TrimHeater:
 # =============================================================================
 
 @dataclass
-class HeatRecoverySystemParams:
+class HeatRecoverySystemParams(ParamsMixin):
     """Parameters for complete heat recovery system.
 
     Includes lean/rich exchanger, trim cooler, and optional intercooler.

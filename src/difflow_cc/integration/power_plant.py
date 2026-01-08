@@ -15,6 +15,7 @@ References:
 """
 
 from dataclasses import dataclass
+from difflow.params_mixin import ParamsMixin
 from typing import Literal
 
 import jax.numpy as jnp
@@ -22,7 +23,7 @@ from jax import Array
 
 
 @dataclass
-class PowerPlantParams:
+class PowerPlantParams(ParamsMixin):
     """Power plant parameters.
 
     Attributes:

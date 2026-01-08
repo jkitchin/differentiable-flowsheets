@@ -22,13 +22,14 @@ References:
         and capture: a perspective. Adsorption 20:225-231.
 """
 
-from dataclasses import dataclass, replace, fields, asdict
+from dataclasses import dataclass
 from typing import Literal
 
 import jax.numpy as jnp
 from jax import Array
 
 from difflow.streams import Stream, make_stream, get_flows, total_flow
+from difflow.params_mixin import ParamsMixin
 from difflow_cc.database import get_adsorbent, Adsorbent
 from difflow_cc.equilibrium.isotherms import (
     Isotherm,
@@ -47,7 +48,7 @@ R = 8.314  # J/(mol*K)
 # =============================================================================
 
 @dataclass
-class AdsorptionParams:
+class AdsorptionParams(ParamsMixin):
     """Parameters for adsorption-based CO2 capture.
 
     Attributes:
@@ -102,27 +103,9 @@ class AdsorptionParams:
     CO2_purity_target: float | Array = 0.95
     CO2_recovery_target: float | Array = 0.90
 
-    def update(self, **kwargs) -> "AdsorptionParams":
-        """Return new AdsorptionParams with fields replaced."""
-        return replace(self, **kwargs)
 
-    def __getitem__(self, key: str):
-        try:
-            return getattr(self, key)
-        except AttributeError:
-            raise KeyError(key)
 
-    def keys(self):
-        return (f.name for f in fields(self))
 
-    def values(self):
-        return (getattr(self, f.name) for f in fields(self))
-
-    def items(self):
-        return ((f.name, getattr(self, f.name)) for f in fields(self))
-
-    def asdict(self) -> dict:
-        return asdict(self)
 
 
 # =============================================================================

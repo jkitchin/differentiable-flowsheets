@@ -22,6 +22,7 @@ References:
 """
 
 from dataclasses import dataclass
+from difflow.params_mixin import ParamsMixin
 
 import jax.numpy as jnp
 from jax import Array
@@ -31,7 +32,7 @@ R = 8.314  # J/(mol·K)
 
 
 @dataclass
-class AmineDegradationParams:
+class AmineDegradationParams(ParamsMixin):
     """Parameters for amine degradation modeling.
 
     Attributes:

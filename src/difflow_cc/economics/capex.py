@@ -16,6 +16,7 @@ References:
 """
 
 from dataclasses import dataclass
+from difflow.params_mixin import ParamsMixin
 from typing import Literal
 
 import jax.numpy as jnp
@@ -29,7 +30,7 @@ CEPCI_2010 = 550.8
 
 
 @dataclass
-class CapexParams:
+class CapexParams(ParamsMixin):
     """Parameters for capital cost estimation.
 
     Attributes:

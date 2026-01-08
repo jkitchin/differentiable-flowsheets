@@ -15,13 +15,14 @@ References:
         J Chem Eng Japan 1:56-62.
 """
 
-from dataclasses import dataclass, replace, fields, asdict
+from dataclasses import dataclass
 from typing import Literal
 
 import jax.numpy as jnp
 from jax import Array
 
 from difflow.streams import Stream, make_stream, get_flows, total_flow
+from difflow.params_mixin import ParamsMixin
 from difflow_cc.database import get_solvent
 from difflow_cc.equilibrium.vle import AmineVLE
 
@@ -31,7 +32,7 @@ from difflow_cc.equilibrium.vle import AmineVLE
 # =============================================================================
 
 @dataclass
-class AbsorberParams:
+class AbsorberParams(ParamsMixin):
     """Parameters for amine absorber column.
 
     Attributes:
@@ -70,28 +71,6 @@ class AbsorberParams:
     column_diameter: float | None = None  # m
     packing_type: str | None = None
     packing_height: float | None = None  # m
-
-    def update(self, **kwargs) -> "AbsorberParams":
-        """Return new AbsorberParams with fields replaced."""
-        return replace(self, **kwargs)
-
-    def __getitem__(self, key: str):
-        try:
-            return getattr(self, key)
-        except AttributeError:
-            raise KeyError(key)
-
-    def keys(self):
-        return (f.name for f in fields(self))
-
-    def values(self):
-        return (getattr(self, f.name) for f in fields(self))
-
-    def items(self):
-        return ((f.name, getattr(self, f.name)) for f in fields(self))
-
-    def asdict(self) -> dict:
-        return asdict(self)
 
 
 # =============================================================================

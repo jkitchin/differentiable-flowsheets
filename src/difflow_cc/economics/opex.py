@@ -12,13 +12,14 @@ References:
 """
 
 from dataclasses import dataclass
+from difflow.params_mixin import ParamsMixin
 
 import jax.numpy as jnp
 from jax import Array
 
 
 @dataclass
-class OpexParams:
+class OpexParams(ParamsMixin):
     """Operating cost parameters.
 
     Attributes:

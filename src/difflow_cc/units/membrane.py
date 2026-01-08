@@ -20,13 +20,14 @@ References:
         J Membr Sci 359:126-139.
 """
 
-from dataclasses import dataclass, replace, fields, asdict
+from dataclasses import dataclass
 from typing import Literal
 
 import jax.numpy as jnp
 from jax import Array
 
 from difflow.streams import Stream, make_stream, get_flows, total_flow
+from difflow.params_mixin import ParamsMixin
 from difflow_cc.database import get_membrane, Membrane
 
 
@@ -47,7 +48,7 @@ R = 8.314  # J/(mol*K)
 # =============================================================================
 
 @dataclass
-class MembraneParams:
+class MembraneParams(ParamsMixin):
     """Parameters for membrane separator.
 
     Attributes:
@@ -80,27 +81,9 @@ class MembraneParams:
     # Stage cut control
     stage_cut_target: float | Array | None = None  # If set, adjusts area
 
-    def update(self, **kwargs) -> "MembraneParams":
-        """Return new MembraneParams with fields replaced."""
-        return replace(self, **kwargs)
 
-    def __getitem__(self, key: str):
-        try:
-            return getattr(self, key)
-        except AttributeError:
-            raise KeyError(key)
 
-    def keys(self):
-        return (f.name for f in fields(self))
 
-    def values(self):
-        return (getattr(self, f.name) for f in fields(self))
-
-    def items(self):
-        return ((f.name, getattr(self, f.name)) for f in fields(self))
-
-    def asdict(self) -> dict:
-        return asdict(self)
 
 
 # =============================================================================

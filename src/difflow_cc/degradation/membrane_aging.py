@@ -17,13 +17,14 @@ References:
 """
 
 from dataclasses import dataclass
+from difflow.params_mixin import ParamsMixin
 
 import jax.numpy as jnp
 from jax import Array
 
 
 @dataclass
-class MembraneAgingParams:
+class MembraneAgingParams(ParamsMixin):
     """Parameters for membrane aging modeling.
 
     Attributes:

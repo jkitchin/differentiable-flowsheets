@@ -10,13 +10,14 @@ References:
 """
 
 from dataclasses import dataclass
+from difflow.params_mixin import ParamsMixin
 
 import jax.numpy as jnp
 from jax import Array
 
 
 @dataclass
-class SteamCycleParams:
+class SteamCycleParams(ParamsMixin):
     """Steam cycle parameters.
 
     Attributes:

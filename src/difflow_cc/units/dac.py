@@ -21,13 +21,14 @@ References:
         the Atmosphere. Joule 2:1573-1594.
 """
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from typing import Literal
 
 import jax.numpy as jnp
 from jax import Array
 
 from difflow.streams import Stream, make_stream, get_flows, total_flow
+from difflow.params_mixin import ParamsMixin
 from difflow_cc.database import get_adsorbent
 
 
@@ -38,7 +39,7 @@ R = 8.314  # J/(mol·K)
 
 
 @dataclass
-class DACParams:
+class DACParams(ParamsMixin):
     """Parameters for DAC unit.
 
     Attributes:
@@ -70,39 +71,27 @@ class DACParams:
     cycle_time_des: float = 900.0  # 15 min
     ambient_humidity: float = 0.5
 
-    def update(self, **kwargs) -> "DACParams":
-        return replace(self, **kwargs)
-
 
 @dataclass
-class LiquidDACParams:
-    """Parameters for liquid solvent DAC (e.g., Carbon Engineering).
+class LiquidDACParams(ParamsMixin):
+    """Parameters for liquid solvent DAC.
 
     Attributes:
-        solvent: 'KOH', 'NaOH', or 'amine'
-        solvent_concentration: Mass fraction
-        contactor_type: 'spray_tower', 'packed_tower'
-        L_G_ratio: Liquid-to-gas mass ratio
-        air_velocity: Air velocity in contactor (m/s)
-        contactor_height: Contactor height (m)
+        solvent: Solvent type ('KOH', 'NaOH')
+        n_contactors: Number of air contactors
         contactor_diameter: Contactor diameter (m)
-        n_contactors: Number of parallel contactors
-        calciner_temperature: CaCO3 calcination temperature (K)
-        slaker_temperature: CaO slaking temperature (K)
+        contactor_height: Contactor height (m)
+        air_velocity: Air velocity in contactor (m/s)
+        L_G_ratio: Liquid to gas ratio (kg/kg)
+        calciner_temperature: Calciner temperature (K)
     """
     solvent: str = "KOH"
-    solvent_concentration: float = 0.20  # 20 wt%
-    contactor_type: str = "spray_tower"
-    L_G_ratio: float = 0.001  # Very low for air contactors
-    air_velocity: float | Array = 3.0  # m/s
-    contactor_height: float | Array = 8.0  # m
+    n_contactors: int = 100
     contactor_diameter: float | Array = 10.0  # m
-    n_contactors: int = 100  # Many parallel units
-    calciner_temperature: float = 1173.15  # 900°C
-    slaker_temperature: float = 573.15  # 300°C
-
-    def update(self, **kwargs) -> "LiquidDACParams":
-        return replace(self, **kwargs)
+    contactor_height: float | Array = 8.0  # m
+    air_velocity: float | Array = 1.5  # m/s
+    L_G_ratio: float = 2.0  # kg liquid/kg air
+    calciner_temperature: float | Array = 1173.15  # K (900°C)
 
 
 # =============================================================================

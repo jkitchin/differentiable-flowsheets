@@ -23,13 +23,14 @@ References:
 """
 
 from dataclasses import dataclass
+from difflow.params_mixin import ParamsMixin
 
 import jax.numpy as jnp
 from jax import Array
 
 
 @dataclass
-class AdsorbentDegradationParams:
+class AdsorbentDegradationParams(ParamsMixin):
     """Parameters for adsorbent degradation modeling.
 
     Attributes:
