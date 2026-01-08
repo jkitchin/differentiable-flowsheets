@@ -53,8 +53,9 @@ def reaction_rate_constant(
     s = get_solvent(solvent)
     kinetics = s.kinetics
 
-    A = kinetics["A"]  # Pre-exponential factor
-    Ea = kinetics["Ea"]  # Activation energy (J/mol)
+    # Convert to float to avoid JAX tracing issues with dict access
+    A = float(kinetics["A"])  # Pre-exponential factor
+    Ea = float(kinetics["Ea"])  # Activation energy (J/mol)
 
     k2 = A * jnp.exp(-Ea / (R * T))
     return k2
