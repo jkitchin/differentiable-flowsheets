@@ -151,8 +151,8 @@ class HeatExchanger:
         p = self.params
 
         # Get temperatures and flows
-        T_hot_in = jnp.asarray(hot_in.T)
-        T_cold_in = jnp.asarray(cold_in.T)
+        T_hot_in = jnp.asarray(hot_in["T"])
+        T_cold_in = jnp.asarray(cold_in["T"])
         F_hot = total_flow(hot_in)
         F_cold = total_flow(cold_in)
 
@@ -214,8 +214,8 @@ class HeatExchanger:
         hot_flows = get_flows(hot_in)
         cold_flows = get_flows(cold_in)
 
-        P_hot_out = jnp.asarray(hot_in.P) - p.pressure_drop_hot
-        P_cold_out = jnp.asarray(cold_in.P) - p.pressure_drop_cold
+        P_hot_out = jnp.asarray(hot_in["P"]) - p.pressure_drop_hot
+        P_cold_out = jnp.asarray(cold_in["P"]) - p.pressure_drop_cold
 
         hot_out = make_stream(hot_flows, T_hot_out, P_hot_out)
         cold_out = make_stream(cold_flows, T_cold_out, P_cold_out)
@@ -274,8 +274,8 @@ class LeanRichExchanger:
         """
         p = self.params
 
-        T_lean_in = jnp.asarray(lean_hot.T)
-        T_rich_in = jnp.asarray(rich_cold.T)
+        T_lean_in = jnp.asarray(lean_hot["T"])
+        T_rich_in = jnp.asarray(rich_cold["T"])
 
         F_lean = total_flow(lean_hot)
         F_rich = total_flow(rich_cold)
@@ -329,8 +329,8 @@ class LeanRichExchanger:
         lean_flows = get_flows(lean_hot)
         rich_flows = get_flows(rich_cold)
 
-        lean_cold = make_stream(lean_flows, T_lean_out, lean_hot.P)
-        rich_hot = make_stream(rich_flows, T_rich_out, rich_cold.P)
+        lean_cold = make_stream(lean_flows, T_lean_out, lean_hot["P"])
+        rich_hot = make_stream(rich_flows, T_rich_out, rich_cold["P"])
 
         info = {
             "Q": Q,
@@ -383,7 +383,7 @@ class Intercooler:
         """
         p = self.params
 
-        T_in = jnp.asarray(stream_in.T)
+        T_in = jnp.asarray(stream_in["T"])
         T_coolant = jnp.asarray(p.T_coolant)
         F = total_flow(stream_in)
 
@@ -405,7 +405,7 @@ class Intercooler:
             T_out = jnp.maximum(T_out, T_coolant + approach)
 
         # Create output stream
-        stream_out = make_stream(get_flows(stream_in), T_out, stream_in.P)
+        stream_out = make_stream(get_flows(stream_in), T_out, stream_in["P"])
 
         info = {
             "Q": Q,
@@ -435,7 +435,7 @@ class TrimCooler:
         Cp: float | Array = 75.0,
     ) -> tuple[Stream, dict]:
         """Cool stream to target temperature."""
-        T_in = jnp.asarray(stream_in.T)
+        T_in = jnp.asarray(stream_in["T"])
         T_target = jnp.asarray(self.T_target)
         F = total_flow(stream_in)
         Cp = jnp.asarray(Cp)
@@ -443,7 +443,7 @@ class TrimCooler:
         T_out = jnp.minimum(T_in, T_target)
         Q = F * Cp * (T_in - T_out)
 
-        stream_out = make_stream(get_flows(stream_in), T_out, stream_in.P)
+        stream_out = make_stream(get_flows(stream_in), T_out, stream_in["P"])
 
         info = {
             "Q": Q,
@@ -470,7 +470,7 @@ class TrimHeater:
         Cp: float | Array = 75.0,
     ) -> tuple[Stream, dict]:
         """Heat stream to target temperature."""
-        T_in = jnp.asarray(stream_in.T)
+        T_in = jnp.asarray(stream_in["T"])
         T_target = jnp.asarray(self.T_target)
         F = total_flow(stream_in)
         Cp = jnp.asarray(Cp)
@@ -478,7 +478,7 @@ class TrimHeater:
         T_out = jnp.maximum(T_in, T_target)
         Q = F * Cp * (T_out - T_in)
 
-        stream_out = make_stream(get_flows(stream_in), T_out, stream_in.P)
+        stream_out = make_stream(get_flows(stream_in), T_out, stream_in["P"])
 
         info = {
             "Q": Q,

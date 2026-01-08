@@ -251,8 +251,8 @@ class Compressor:
         """
         p = self.params
 
-        T_in = jnp.asarray(inlet.T)
-        P_in = jnp.asarray(inlet.P)
+        T_in = jnp.asarray(inlet["T"])
+        P_in = jnp.asarray(inlet["P"])
         F = total_flow(inlet)  # mol/s
 
         pr = jnp.asarray(p.pressure_ratio)
@@ -335,8 +335,8 @@ class Intercooler:
         """
         p = self.params
 
-        T_in = jnp.asarray(inlet.T)
-        P_in = jnp.asarray(inlet.P)
+        T_in = jnp.asarray(inlet["T"])
+        P_in = jnp.asarray(inlet["P"])
         F = total_flow(inlet)
 
         # Target temperature
@@ -391,8 +391,8 @@ class Pump:
             outlet: Pressurized stream
             info: Work and conditions
         """
-        T_in = jnp.asarray(inlet.T)
-        P_in = jnp.asarray(inlet.P)
+        T_in = jnp.asarray(inlet["T"])
+        P_in = jnp.asarray(inlet["P"])
         P_out = jnp.asarray(self.P_outlet)
         eta = jnp.asarray(self.eta)
         F = total_flow(inlet)
@@ -504,8 +504,8 @@ class CompressionTrain:
         # Compression stages
         for i in range(n_stages):
             # Check if we've reached supercritical and should switch to pump
-            T_current = jnp.asarray(stream.T)
-            P_current = jnp.asarray(stream.P)
+            T_current = jnp.asarray(stream["T"])
+            P_current = jnp.asarray(stream["P"])
 
             if p.use_pump and float(P_current) > float(P_CRIT_CO2) and \
                float(T_current) < float(T_CRIT_CO2 + 20):
@@ -561,9 +561,9 @@ class CompressionTrain:
             "specific_power": total_power / (m_dot_co2 * 1000 + 1e-10),  # kJ/kg
             "specific_power_kWh_tonne": specific_power,
             "P_inlet": P_in,
-            "P_outlet": stream.P,
-            "T_inlet": inlet.T,
-            "T_outlet": stream.T,
+            "P_outlet": stream["P"],
+            "T_inlet": inlet["T"],
+            "T_outlet": stream["T"],
             "stages": stage_info,
         }
 
