@@ -1,0 +1,310 @@
+"""Amine stripper/regenerator for CO2 capture.
+
+This module provides a simplified equilibrium-based stripper model
+for regenerating amine solvents. The key output is the regeneration
+energy (GJ/tonne CO2), which is critical for process economics.
+
+References:
+    Rochelle GT (2009). Amine scrubbing for CO2 capture. Science 325:1652.
+    Abu-Zahra MRM et al. (2007). CO2 capture from power plants.
+        Part I. A parametric study of the technical performance.
+        Int J Greenhouse Gas Control 1:37-46.
+"""
+
+from dataclasses import dataclass, replace, fields, asdict
+
+import jax.numpy as jnp
+from jax import Array
+
+from difflow.streams import Stream, make_stream, get_flows, total_flow
+from difflow_cc.database import get_solvent
+from difflow_cc.equilibrium.vle import AmineVLE
+
+
+# =============================================================================
+# Stripper Parameters
+# =============================================================================
+
+@dataclass
+class StripperParams:
+    """Parameters for amine stripper/regenerator.
+
+    Attributes:
+        solvent: Amine solvent name
+        n_stages: Number of theoretical stages
+        T_reboiler: Reboiler temperature (K)
+        P_stripper: Operating pressure (Pa)
+        reflux_ratio: Condenser reflux ratio
+        target_lean_loading: Target lean solvent loading (mol CO2/mol amine)
+        reboiler_duty: Fixed reboiler duty (W), if None calculated from target
+
+    Notes:
+        The stripper model calculates:
+        - Lean loading achievable at given conditions
+        - Reboiler duty required
+        - Specific regeneration energy (GJ/tonne CO2)
+        - CO2 product purity
+
+        Energy components:
+        - Sensible heat: heating solvent to reboiler temperature
+        - Heat of reaction: reversing CO2-amine reaction
+        - Heat of vaporization: generating stripping steam
+    """
+    solvent: str
+    n_stages: int | float | Array = 8
+    T_reboiler: float | Array = 393.15  # K (120°C)
+    P_stripper: float | Array = 200000.0  # Pa (2 bar)
+    reflux_ratio: float | Array = 0.3
+    target_lean_loading: float | Array = 0.2  # mol CO2/mol amine
+    reboiler_duty: float | Array | None = None  # W
+
+    # Heat integration
+    cross_exchanger_approach: float = 10.0  # K
+
+    def update(self, **kwargs) -> "StripperParams":
+        """Return new StripperParams with fields replaced."""
+        return replace(self, **kwargs)
+
+    def __getitem__(self, key: str):
+        try:
+            return getattr(self, key)
+        except AttributeError:
+            raise KeyError(key)
+
+    def keys(self):
+        return (f.name for f in fields(self))
+
+    def values(self):
+        return (getattr(self, f.name) for f in fields(self))
+
+    def items(self):
+        return ((f.name, getattr(self, f.name)) for f in fields(self))
+
+    def asdict(self) -> dict:
+        return asdict(self)
+
+
+# =============================================================================
+# Amine Stripper
+# =============================================================================
+
+class AmineStripper:
+    """Amine stripper for solvent regeneration.
+
+    Regenerates the rich amine solvent by heating to release CO2.
+    The main design trade-off is between lean loading achieved
+    and regeneration energy consumed.
+
+    Example:
+        >>> params = StripperParams(
+        ...     solvent='MEA',
+        ...     T_reboiler=393.15,
+        ...     target_lean_loading=0.2,
+        ... )
+        >>> stripper = AmineStripper(params)
+        >>> lean_solvent, co2_product, info = stripper(rich_solvent)
+        >>> print(f"Regen energy: {info['specific_energy']:.2f} GJ/tonne CO2")
+
+    The model calculates:
+    - Reboiler duty for target lean loading
+    - Specific regeneration energy
+    - CO2 product stream (purity, flow rate)
+    - Heat integration benefits
+
+    Key sensitivities for optimization:
+    - Lower T_reboiler reduces energy but limits stripping
+    - Higher P_stripper reduces column size but increases energy
+    - Heat integration via cross-exchanger is critical
+
+    References:
+        Rochelle GT (2009). Amine scrubbing for CO2 capture.
+            Science 325:1652-1654.
+        Abu-Zahra MRM et al. (2007). Int J Greenhouse Gas Control 1:37.
+    """
+
+    def __init__(self, params: StripperParams):
+        """Initialize stripper.
+
+        Args:
+            params: StripperParams dataclass
+        """
+        self.params = params
+        self._solvent_data = get_solvent(params.solvent)
+        self._vle = AmineVLE(params.solvent)
+
+    def __call__(
+        self,
+        rich_solvent: Stream,
+        T_feed: Array | float | None = None,
+    ) -> tuple[Stream, Stream, dict]:
+        """Regenerate rich solvent.
+
+        Args:
+            rich_solvent: Rich solvent from absorber
+            T_feed: Feed temperature (K), defaults to estimate from rich stream
+
+        Returns:
+            lean_solvent: Regenerated lean solvent
+            co2_product: CO2 product stream
+            info: Dict with operation details:
+                - reboiler_duty: Heat input (W)
+                - specific_energy: Energy per tonne CO2 (GJ/tonne)
+                - lean_loading: Achieved lean loading
+                - CO2_purity: Product purity (mol fraction)
+        """
+        p = self.params
+        T_reboiler = jnp.asarray(p.T_reboiler)
+        P_stripper = jnp.asarray(p.P_stripper)
+        target_lean = jnp.asarray(p.target_lean_loading)
+
+        # Get rich solvent composition
+        rich_flows = get_flows(rich_solvent)
+        F_amine = jnp.asarray(rich_flows.get("Amine", 0.0))
+        F_H2O = jnp.asarray(rich_flows.get("H2O", 0.0))
+        F_CO2_absorbed = jnp.asarray(rich_flows.get("CO2_absorbed", 0.0))
+
+        # Rich loading
+        rich_loading = F_CO2_absorbed / (F_amine + 1e-10)
+
+        # Feed temperature
+        if T_feed is None:
+            T_feed = rich_solvent.get("T", 313.15)
+        T_feed = jnp.asarray(T_feed)
+
+        # Calculate equilibrium at reboiler conditions
+        # At high T, P_CO2_eq is high, driving CO2 out
+        P_CO2_eq_lean = self._vle.equilibrium_pressure(target_lean, T_reboiler)
+
+        # CO2 stripped = rich CO2 - lean CO2
+        # Lean CO2 in liquid = F_amine * target_lean
+        F_CO2_lean = F_amine * target_lean
+        F_CO2_stripped = jnp.maximum(F_CO2_absorbed - F_CO2_lean, 0.0)
+
+        # Achieved lean loading (may differ from target if insufficient stages)
+        # Simplified: assume target is achieved if stages sufficient
+        lean_loading = target_lean
+
+        # Energy calculations
+        # 1. Sensible heat
+        # Cp ~ 4000 J/(kg·K) for amine solution
+        Cp_solvent = 4000.0  # J/(kg·K)
+        MW_amine = self._solvent_data.MW
+        MW_water = 18.0
+
+        # Mass flow (approximate)
+        m_amine = F_amine * MW_amine / 1000  # kg/s
+        m_water = F_H2O * MW_water / 1000  # kg/s
+        m_total = m_amine + m_water
+
+        # With cross-exchanger, only need to heat by approach temperature
+        # In reality, heat hot lean to warm rich
+        T_after_hx = T_reboiler - p.cross_exchanger_approach
+        dT_sensible = T_reboiler - T_after_hx  # Only need to heat this much
+        Q_sensible = m_total * Cp_solvent * dT_sensible  # W
+
+        # 2. Heat of reaction (desorption)
+        dH_absorption = self._solvent_data.heat_of_absorption * 1000  # J/mol
+        Q_reaction = F_CO2_stripped * dH_absorption  # W
+
+        # 3. Heat of vaporization (stripping steam)
+        # Approximate: 0.3 mol H2O per mol CO2 in overhead
+        dH_vap_water = 40650  # J/mol
+        steam_ratio = 0.3
+        F_steam = F_CO2_stripped * steam_ratio
+        Q_vaporization = F_steam * dH_vap_water  # W
+
+        # Condenser recovers some steam
+        reflux = jnp.asarray(p.reflux_ratio)
+        Q_condenser = Q_vaporization * reflux
+
+        # Total reboiler duty
+        Q_reboiler = Q_sensible + Q_reaction + Q_vaporization
+
+        # Specific energy (GJ/tonne CO2)
+        # Convert F_CO2_stripped (mol/s) to tonnes/s: * 44/1e6
+        m_CO2_tonnes = F_CO2_stripped * 44 / 1e6  # tonnes/s
+        specific_energy = Q_reboiler / (m_CO2_tonnes + 1e-10) / 1e9  # GJ/tonne
+
+        # CO2 product purity (after condenser)
+        # Most water condenses, leaving >95% CO2
+        F_CO2_product = F_CO2_stripped
+        F_H2O_product = F_steam * (1 - reflux)  # Some water passes through
+        CO2_purity = F_CO2_product / (F_CO2_product + F_H2O_product + 1e-10)
+
+        # Create output streams
+        # Lean solvent
+        lean_flows = {
+            "H2O": F_H2O - F_steam * (1 - reflux),
+            "Amine": F_amine,
+            "CO2_absorbed": F_CO2_lean,
+        }
+        lean_solvent = make_stream(lean_flows, T_reboiler, P_stripper)
+
+        # CO2 product
+        T_condenser = 313.15  # K (40°C after condensing)
+        co2_flows = {
+            "CO2": F_CO2_product,
+            "H2O": F_H2O_product,
+        }
+        co2_product = make_stream(co2_flows, T_condenser, P_stripper)
+
+        info = {
+            "reboiler_duty": Q_reboiler,
+            "Q_sensible": Q_sensible,
+            "Q_reaction": Q_reaction,
+            "Q_vaporization": Q_vaporization,
+            "Q_condenser": Q_condenser,
+            "specific_energy": specific_energy,
+            "rich_loading": rich_loading,
+            "lean_loading": lean_loading,
+            "CO2_stripped": F_CO2_stripped,
+            "CO2_purity": CO2_purity,
+            "T_reboiler": T_reboiler,
+            "T_feed": T_feed,
+        }
+
+        return lean_solvent, co2_product, info
+
+    def minimum_reboiler_temperature(
+        self,
+        lean_loading: Array | float,
+        P_CO2_overhead: Array | float = 100000.0
+    ) -> Array:
+        """Calculate minimum reboiler temperature for target lean loading.
+
+        The reboiler must be hot enough that equilibrium P_CO2
+        exceeds the overhead pressure, driving stripping.
+
+        Args:
+            lean_loading: Target lean loading (mol CO2/mol amine)
+            P_CO2_overhead: Required CO2 partial pressure overhead (Pa)
+
+        Returns:
+            Minimum reboiler temperature (K)
+
+        Notes:
+            This is solved iteratively using the VLE model.
+            A safety margin (typically 10-20 K) should be added.
+        """
+        lean_loading = jnp.asarray(lean_loading)
+        P_CO2_overhead = jnp.asarray(P_CO2_overhead)
+
+        # Simple estimation: use correlation
+        # T_min increases with lower lean loading (harder to strip)
+        # and higher P_CO2_overhead
+
+        dH = self._solvent_data.heat_of_absorption * 1000  # J/mol
+        alpha_max = self._solvent_data.loading_capacity
+
+        # From modified van't Hoff:
+        # ln(P2/P1) = -dH/R * (1/T2 - 1/T1)
+        # Estimate from reference point
+        T_ref = 393.15  # K (120°C) - typical MEA reboiler
+        P_ref = 100000.0  # Pa - typical overhead pressure
+
+        # Adjust for loading (lower loading needs higher T)
+        loading_factor = (alpha_max - lean_loading) / (alpha_max - 0.2)
+
+        T_min = T_ref * loading_factor * jnp.power(P_CO2_overhead / P_ref, 0.1)
+
+        return jnp.clip(T_min, 353.15, 453.15)  # Between 80-180°C

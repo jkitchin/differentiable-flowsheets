@@ -1,0 +1,314 @@
+# Membrane Material Database for CO2 Separation
+# All parameters from peer-reviewed literature
+#
+# References:
+#   [1] Robeson LM (2008). J Membr Sci 320:390 - Upper bound
+#   [2] Baker RW (2012). Membrane Technology and Applications
+#   [3] Dai Y et al. (2012). J Membr Sci 401:76 - Matrimid
+#   [4] Ordoñez MJC et al. (2010). J Membr Sci 361:28 - ZIF-8/polymer
+#   [5] Zhao S et al. (2016). J Membr Sci 511:180 - Facilitated transport
+#   [6] Steel KM, Koros WJ (2003). Carbon 41:253 - CMS
+#
+# Units:
+#   Permeability: Barrer (1 Barrer = 10^-10 cm3(STP)*cm / (cm2*s*cmHg))
+#   Permeance: GPU (1 GPU = 10^-6 cm3(STP) / (cm2*s*cmHg))
+#   Permeance = Permeability / thickness
+
+membranes:
+  # =========================================================================
+  # POLYMERIC MEMBRANES
+  # =========================================================================
+  Matrimid:
+    full_name: "Matrimid 5218 (polyimide)"
+    type: "polymeric"
+    polymer_class: "polyimide"
+    # Ref: Dai et al. (2012)
+    permeability:
+      CO2: 10.0  # Barrer
+      N2: 0.32
+      CH4: 0.28
+      O2: 2.1
+      H2: 28.0
+    selectivity:
+      CO2_N2: 31.0
+      CO2_CH4: 36.0
+      O2_N2: 6.5
+    # Temperature dependence: P = P0 * exp(-Ep/RT)
+    activation_energy:
+      CO2: 5500.0  # J/mol
+      N2: 9200.0
+      CH4: 10500.0
+    typical_thickness: 0.1  # micrometers (100 nm for TFC)
+    max_temperature: 523.15  # K (250°C)
+    max_pressure: 50.0  # bar
+    glass_transition: 588.15  # K (315°C)
+    plasticization_pressure_CO2: 10.0  # bar
+    cost_usd_m2: 50.0
+
+  PDMS:
+    full_name: "Polydimethylsiloxane"
+    type: "polymeric"
+    polymer_class: "rubbery"
+    permeability:
+      CO2: 3200.0  # High permeability
+      N2: 280.0
+      CH4: 800.0
+      O2: 600.0
+      H2: 650.0
+    selectivity:
+      CO2_N2: 11.4
+      CO2_CH4: 4.0
+      O2_N2: 2.1
+    activation_energy:
+      CO2: 1800.0
+      N2: 3500.0
+      CH4: 2800.0
+    typical_thickness: 1.0
+    max_temperature: 473.15
+    max_pressure: 20.0
+    glass_transition: 150.0  # Below room temp (rubbery)
+    plasticization_pressure_CO2: null  # Not applicable for rubbery
+    cost_usd_m2: 30.0
+
+  Cellulose_Acetate:
+    full_name: "Cellulose Acetate"
+    type: "polymeric"
+    polymer_class: "cellulosic"
+    # Commercial membrane for natural gas sweetening
+    permeability:
+      CO2: 6.0
+      N2: 0.21
+      CH4: 0.15
+      O2: 0.82
+      H2: 12.0
+    selectivity:
+      CO2_N2: 29.0
+      CO2_CH4: 40.0
+      O2_N2: 3.9
+    activation_energy:
+      CO2: 6200.0
+      N2: 10500.0
+      CH4: 12000.0
+    typical_thickness: 0.1
+    max_temperature: 373.15
+    max_pressure: 80.0  # Used commercially at high pressure
+    glass_transition: 458.15
+    plasticization_pressure_CO2: 8.0
+    cost_usd_m2: 25.0
+
+  PIM_1:
+    full_name: "Polymer of Intrinsic Microporosity-1"
+    type: "polymeric"
+    polymer_class: "microporous"
+    # High free volume polymer
+    permeability:
+      CO2: 2300.0
+      N2: 92.0
+      CH4: 125.0
+      O2: 370.0
+      H2: 1300.0
+    selectivity:
+      CO2_N2: 25.0
+      CO2_CH4: 18.4
+      O2_N2: 4.0
+    activation_energy:
+      CO2: 3000.0
+      N2: 5500.0
+      CH4: 5000.0
+    typical_thickness: 0.5
+    max_temperature: 523.15
+    max_pressure: 30.0
+    glass_transition: 713.15  # Very high Tg
+    plasticization_pressure_CO2: 15.0
+    cost_usd_m2: 200.0
+
+  # =========================================================================
+  # MIXED MATRIX MEMBRANES
+  # =========================================================================
+  ZIF8_Matrimid:
+    full_name: "ZIF-8/Matrimid Mixed Matrix Membrane"
+    type: "mixed_matrix"
+    polymer: "Matrimid"
+    filler: "ZIF-8"
+    filler_loading: 0.15  # Volume fraction
+    # Ref: Ordoñez et al. (2010)
+    permeability:
+      CO2: 25.0  # Enhanced vs pure polymer
+      N2: 0.65
+      CH4: 0.58
+    selectivity:
+      CO2_N2: 38.5
+      CO2_CH4: 43.0
+    # Maxwell model can predict intermediate loadings
+    maxwell_model:
+      enabled: true
+      polymer_ref: "Matrimid"
+      filler_permeability:
+        CO2: 500.0  # Effective in polymer
+        N2: 15.0
+        CH4: 40.0
+    activation_energy:
+      CO2: 4800.0
+      N2: 8500.0
+      CH4: 9800.0
+    typical_thickness: 0.2
+    max_temperature: 473.15
+    max_pressure: 40.0
+    cost_usd_m2: 150.0
+
+  MOF74_Polymer:
+    full_name: "Mg-MOF-74/6FDA-DAM Mixed Matrix"
+    type: "mixed_matrix"
+    polymer: "6FDA-DAM"
+    filler: "Mg-MOF-74"
+    filler_loading: 0.20
+    permeability:
+      CO2: 800.0
+      N2: 18.0
+      CH4: 22.0
+    selectivity:
+      CO2_N2: 44.0
+      CO2_CH4: 36.0
+    maxwell_model:
+      enabled: true
+      polymer_ref: null  # Would need 6FDA-DAM data
+      filler_permeability:
+        CO2: 10000.0
+        N2: 100.0
+        CH4: 150.0
+    activation_energy:
+      CO2: 4000.0
+      N2: 7000.0
+      CH4: 7500.0
+    typical_thickness: 0.5
+    max_temperature: 423.15  # Limited by MOF stability
+    max_pressure: 30.0
+    cost_usd_m2: 300.0
+
+  # =========================================================================
+  # FACILITATED TRANSPORT MEMBRANES
+  # =========================================================================
+  PVAm_Carrier:
+    full_name: "Polyvinylamine Fixed-Site Carrier Membrane"
+    type: "facilitated_transport"
+    carrier: "amino groups"
+    # Ref: Zhao et al. (2016), Kim et al. (2013)
+    # Performance varies strongly with humidity
+    permeability_dry:
+      CO2: 50.0
+      N2: 1.0
+    permeability_humid:  # 85% RH
+      CO2: 500.0
+      N2: 2.0
+    selectivity_dry:
+      CO2_N2: 50.0
+    selectivity_humid:
+      CO2_N2: 250.0
+    # Humidity dependence model
+    humidity_model:
+      type: "exponential"
+      # P_CO2 = P_dry * (1 + k*(RH)^n)
+      k: 8.0
+      n: 2.0
+    activation_energy:
+      CO2: -5000.0  # Negative - facilitated transport decreases with T
+      N2: 6000.0
+    typical_thickness: 0.5
+    max_temperature: 373.15  # Limited by carrier stability
+    max_pressure: 10.0  # Swelling at high pressure
+    min_humidity: 0.30  # Minimum RH for operation
+    cost_usd_m2: 100.0
+
+  IL_SIL_Membrane:
+    full_name: "Ionic Liquid Supported Membrane"
+    type: "facilitated_transport"
+    carrier: "ionic liquid"
+    ionic_liquid: "[emim][Tf2N]"
+    support: "PVDF"
+    permeability:
+      CO2: 1000.0
+      N2: 25.0
+      CH4: 50.0
+    selectivity:
+      CO2_N2: 40.0
+      CO2_CH4: 20.0
+    activation_energy:
+      CO2: 8000.0
+      N2: 12000.0
+      CH4: 11000.0
+    typical_thickness: 50.0  # Thicker due to liquid layer
+    max_temperature: 423.15
+    max_pressure: 5.0  # Liquid can be displaced
+    cost_usd_m2: 200.0
+
+  # =========================================================================
+  # CERAMIC / INORGANIC MEMBRANES
+  # =========================================================================
+  CMS:
+    full_name: "Carbon Molecular Sieve Membrane"
+    type: "ceramic"
+    material: "pyrolyzed polymer"
+    precursor: "Matrimid"
+    pyrolysis_temp: 823.15  # K (550°C)
+    # Ref: Steel & Koros (2003)
+    permeability:
+      CO2: 180.0
+      N2: 3.5
+      CH4: 2.0
+      O2: 25.0
+      H2: 800.0
+    selectivity:
+      CO2_N2: 51.0
+      CO2_CH4: 90.0
+      H2_N2: 230.0
+    activation_energy:
+      CO2: 8500.0
+      N2: 15000.0
+      CH4: 17000.0
+    typical_thickness: 1.0
+    max_temperature: 473.15  # Limited by sealing
+    max_pressure: 30.0
+    brittle: true
+    cost_usd_m2: 500.0
+
+  Zeolite_DDR:
+    full_name: "DDR-type Zeolite Membrane"
+    type: "ceramic"
+    material: "zeolite"
+    framework: "DDR"
+    pore_size: 3.6  # Angstrom
+    permeability:
+      CO2: 100.0
+      N2: 1.5
+      CH4: 0.5
+    selectivity:
+      CO2_N2: 67.0
+      CO2_CH4: 200.0
+    activation_energy:
+      CO2: 12000.0
+      N2: 20000.0
+      CH4: 25000.0
+    typical_thickness: 5.0
+    max_temperature: 673.15  # K (400°C)
+    max_pressure: 50.0
+    brittle: true
+    cost_usd_m2: 1000.0
+
+# Upper bound correlation (Robeson 2008)
+# For glassy polymers: log(P_CO2) = k - n*log(alpha_CO2/N2)
+# where k = 5.34, n = 1.77 (2008 upper bound)
+robeson_2008:
+  CO2_N2:
+    k: 5.34
+    n: 1.77
+  CO2_CH4:
+    k: 5.90
+    n: 1.95
+  O2_N2:
+    k: 4.23
+    n: 4.18
+
+# Solution-diffusion model:
+# P = D * S  (Permeability = Diffusivity * Solubility)
+# J = P * (p1 - p2) / l  (Flux through membrane)
+# where p1, p2 are partial pressures, l is thickness

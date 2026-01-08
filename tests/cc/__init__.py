@@ -1,0 +1,1 @@
+# Carbon capture plugin tests

@@ -41,6 +41,9 @@ bio = [
 ree = [
     # Rare earth separation operations are included in the main package
 ]
+cc = [
+    # Carbon capture operations are included in the main package
+]
 cuda12 = [
     "jax[cuda12]>=0.4.0",
 ]
@@ -48,12 +51,13 @@ cuda11 = [
     "jax[cuda11_local]>=0.4.0",
 ]
 all = [
-    "difflow[dev,examples,visualization,bio,ree]",
+    "difflow[dev,examples,visualization,bio,ree,cc]",
 ]
 
 [project.entry-points."difflow.plugins"]
 bio = "difflow_bio:register"
 ree = "difflow_ree:register"
+cc = "difflow_cc:register"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/difflow", "src/difflow_bio", "src/difflow_ree"]
+packages = ["src/difflow", "src/difflow_bio", "src/difflow_ree", "src/difflow_cc"]
