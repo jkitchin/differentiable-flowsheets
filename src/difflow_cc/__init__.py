@@ -136,6 +136,129 @@ from difflow_cc.units import (
     TVSAUnit,
 )
 
+# =============================================================================
+# Heat Integration
+# =============================================================================
+
+from difflow_cc.units.heat_integration import (
+    HeatExchangerParams,
+    HeatExchanger,
+    LeanRichExchangerParams,
+    LeanRichExchanger,
+    IntercoolerParams,
+    Intercooler,
+    TrimCooler,
+    TrimHeater,
+    HeatRecoverySystemParams,
+    HeatRecoverySystem,
+)
+
+# =============================================================================
+# CO2 Compression
+# =============================================================================
+
+from difflow_cc.units.compression import (
+    CompressorParams,
+    Compressor,
+    CompressionTrainParams,
+    CompressionTrain,
+    Pump,
+    compression_power_estimate,
+    co2_density,
+    is_supercritical,
+)
+
+# =============================================================================
+# Direct Air Capture
+# =============================================================================
+
+from difflow_cc.units.dac import (
+    DACParams,
+    LiquidDACParams,
+    SolidSorbentDAC,
+    LiquidSolventDAC,
+    dac_cost_estimate,
+)
+
+# =============================================================================
+# Economics
+# =============================================================================
+
+from difflow_cc.economics import (
+    # CAPEX
+    absorber_cost,
+    stripper_cost,
+    heat_exchanger_cost,
+    compressor_cost,
+    membrane_module_cost,
+    adsorber_vessel_cost,
+    total_equipment_cost,
+    installed_cost,
+    CapexParams,
+    # OPEX
+    steam_cost,
+    electricity_cost,
+    cooling_water_cost,
+    solvent_makeup_cost,
+    membrane_replacement_cost,
+    adsorbent_replacement_cost,
+    labor_cost,
+    maintenance_cost,
+    total_operating_cost,
+    OpexParams,
+    # Levelized cost
+    levelized_cost_capture,
+    cost_of_co2_avoided,
+    net_present_value,
+    EconomicParams,
+    CaptureSystemCost,
+)
+
+# =============================================================================
+# Process Integration
+# =============================================================================
+
+from difflow_cc.integration import (
+    PowerPlantParams,
+    PowerPlantIntegration,
+    steam_extraction_penalty,
+    compression_penalty,
+    auxiliary_power,
+    net_efficiency_with_capture,
+    flue_gas_composition,
+    flue_gas_flow_rate,
+    SteamCycleParams,
+    steam_properties,
+    extraction_pressure_options,
+    steam_flow_for_duty,
+)
+
+# =============================================================================
+# Degradation Models
+# =============================================================================
+
+from difflow_cc.degradation import (
+    # Amine
+    AmineDegradationParams,
+    oxidative_degradation_rate,
+    thermal_degradation_rate,
+    total_amine_loss,
+    solvent_lifetime,
+    reclaimer_requirements,
+    # Adsorbent
+    AdsorbentDegradationParams,
+    thermal_cycling_degradation,
+    hydrothermal_degradation,
+    capacity_fade,
+    adsorbent_lifetime,
+    # Membrane
+    MembraneAgingParams,
+    physical_aging,
+    plasticization,
+    fouling_rate,
+    membrane_lifetime,
+)
+
 
 # =============================================================================
 # Plugin Registration
@@ -303,6 +426,91 @@ __all__ = [
     "TSAUnit",
     "VSAUnit",
     "TVSAUnit",
+    # Heat Integration
+    "HeatExchangerParams",
+    "HeatExchanger",
+    "LeanRichExchangerParams",
+    "LeanRichExchanger",
+    "IntercoolerParams",
+    "Intercooler",
+    "TrimCooler",
+    "TrimHeater",
+    "HeatRecoverySystemParams",
+    "HeatRecoverySystem",
+    # Compression
+    "CompressorParams",
+    "Compressor",
+    "CompressionTrainParams",
+    "CompressionTrain",
+    "Pump",
+    "compression_power_estimate",
+    "co2_density",
+    "is_supercritical",
+    # Direct Air Capture
+    "DACParams",
+    "LiquidDACParams",
+    "SolidSorbentDAC",
+    "LiquidSolventDAC",
+    "dac_cost_estimate",
+    # Economics - CAPEX
+    "absorber_cost",
+    "stripper_cost",
+    "heat_exchanger_cost",
+    "compressor_cost",
+    "membrane_module_cost",
+    "adsorber_vessel_cost",
+    "total_equipment_cost",
+    "installed_cost",
+    "CapexParams",
+    # Economics - OPEX
+    "steam_cost",
+    "electricity_cost",
+    "cooling_water_cost",
+    "solvent_makeup_cost",
+    "membrane_replacement_cost",
+    "adsorbent_replacement_cost",
+    "labor_cost",
+    "maintenance_cost",
+    "total_operating_cost",
+    "OpexParams",
+    # Economics - Levelized
+    "levelized_cost_capture",
+    "cost_of_co2_avoided",
+    "net_present_value",
+    "EconomicParams",
+    "CaptureSystemCost",
+    # Process Integration
+    "PowerPlantParams",
+    "PowerPlantIntegration",
+    "steam_extraction_penalty",
+    "compression_penalty",
+    "auxiliary_power",
+    "net_efficiency_with_capture",
+    "flue_gas_composition",
+    "flue_gas_flow_rate",
+    "SteamCycleParams",
+    "steam_properties",
+    "extraction_pressure_options",
+    "steam_flow_for_duty",
+    # Degradation - Amine
+    "AmineDegradationParams",
+    "oxidative_degradation_rate",
+    "thermal_degradation_rate",
+    "total_amine_loss",
+    "solvent_lifetime",
+    "reclaimer_requirements",
+    # Degradation - Adsorbent
+    "AdsorbentDegradationParams",
+    "thermal_cycling_degradation",
+    "hydrothermal_degradation",
+    "capacity_fade",
+    "adsorbent_lifetime",
+    # Degradation - Membrane
+    "MembraneAgingParams",
+    "physical_aging",
+    "plasticization",
+    "fouling_rate",
+    "membrane_lifetime",
     # Registration
     "register",
 ]
