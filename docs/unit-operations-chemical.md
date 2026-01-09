@@ -2,34 +2,12 @@
 
 This document provides comprehensive documentation for all chemical unit operations available in Difflow.
 
-## Table of Contents
-
-1. [Reactors](#reactors)
-   - [CSTR (Continuous Stirred-Tank Reactor)](#cstr-continuous-stirred-tank-reactor)
-   - [PFR (Plug Flow Reactor)](#pfr-plug-flow-reactor)
-   - [GasPFR (Gas-Phase PFR with Pressure Drop)](#gaspfr-gas-phase-pfr-with-pressure-drop)
-   - [FedBatchReactor](#fedbatchreactor)
-2. [Separators](#separators)
-   - [Flash Drum](#flash-drum)
-   - [Mixer](#mixer)
-   - [Splitter](#splitter)
-3. [Distillation](#distillation)
-   - [ShortcutColumn](#shortcutcolumn)
-   - [DistillationColumn (Rigorous)](#distillationcolumn-rigorous)
-4. [Heat Exchangers](#heat-exchangers)
-   - [Heater](#heater)
-   - [Cooler](#cooler)
-   - [CounterCurrentHX](#countercurrenthx)
-   - [CoCurrentHX](#cocurrenthx)
-   - [CrossFlowHX](#crossflowhx)
-5. [Liquid-Liquid Extraction](#liquid-liquid-extraction)
-   - [MultistageCascade](#multistagecascade)
-   - [DifferentialContactor](#differentialcontactor)
-
 ---
 
+(reactors)=
 ## Reactors
 
+(cstr-continuous-stirred-tank-reactor)=
 ### CSTR (Continuous Stirred-Tank Reactor)
 
 **Location**: `difflow/units/cstr.py`
@@ -161,6 +139,7 @@ print(f"Outlet temperature: {outlet_adiab['T']:.1f} K")
 
 ---
 
+(pfr-plug-flow-reactor)=
 ### PFR (Plug Flow Reactor)
 
 **Location**: `difflow/units/pfr.py`
@@ -260,6 +239,7 @@ plt.ylabel('Conversion')
 
 ---
 
+(gaspfr-gas-phase-pfr-with-pressure-drop)=
 ### GasPFR (Gas-Phase PFR with Pressure Drop)
 
 **Location**: `difflow/units/pfr.py`
@@ -306,6 +286,7 @@ Additional outputs compared to PFR:
 
 ---
 
+(fedbatchreactor)=
 ### FedBatchReactor
 
 **Location**: `difflow/units/fed_batch.py`
@@ -375,8 +356,10 @@ feed_profile = optimal_feed_profile(params, constraints={'max_T': 400.0})
 
 ---
 
+(separators)=
 ## Separators
 
+(flash-drum)=
 ### Flash Drum
 
 **Location**: `difflow/units/flash.py`

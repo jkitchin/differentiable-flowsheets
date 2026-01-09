@@ -2,26 +2,9 @@
 
 This document provides comprehensive documentation for thermodynamic models, property calculations, and databases available in Difflow.
 
-## Table of Contents
-
-1. [Overview](#overview)
-2. [Ideal Thermodynamics](#ideal-thermodynamics)
-   - [SpeciesData](#speciesdata)
-   - [IdealThermo Class](#idealthermo-class)
-   - [Property Calculations](#property-calculations)
-3. [Cubic Equations of State](#cubic-equations-of-state)
-   - [Peng-Robinson EOS](#peng-robinson-eos)
-   - [Soave-Redlich-Kwong EOS](#soave-redlich-kwong-eos)
-   - [Flash Calculations](#flash-calculations)
-4. [Species Database](#species-database)
-   - [Available Species](#available-species)
-   - [Database Functions](#database-functions)
-5. [Cantera Import](#cantera-import)
-   - [Importing Mechanisms](#importing-mechanisms)
-   - [Data Conversion](#data-conversion)
-
 ---
 
+(overview)=
 ## Overview
 
 Difflow provides two levels of thermodynamic modeling:
@@ -35,10 +18,12 @@ All thermodynamic calculations are fully differentiable with JAX, enabling gradi
 
 ---
 
+(ideal-thermodynamics)=
 ## Ideal Thermodynamics
 
 **Location**: `difflow/thermo.py`
 
+(speciesdata)=
 ### SpeciesData
 
 The fundamental data structure for storing species properties.
@@ -112,6 +97,7 @@ ethanol = SpeciesData(
 
 ---
 
+(idealthermo-class)=
 ### IdealThermo Class
 
 The main class for ideal thermodynamic calculations.
@@ -143,6 +129,7 @@ thermo = IdealThermo(species_data)
 
 ---
 
+(property-calculations)=
 ### Property Calculations
 
 #### Heat Capacity
@@ -242,6 +229,7 @@ Dew point: $\frac{1}{P} = \sum_i \frac{y_i}{P_i^{sat}}$
 
 ---
 
+(cubic-equations-of-state)=
 ## Cubic Equations of State
 
 **Location**: `difflow/eos.py`
@@ -269,6 +257,7 @@ Measures deviation from simple fluid behavior:
 - $\omega \approx 0$: Spherical molecules (Ar, Kr)
 - $\omega > 0$: Non-spherical or polar molecules
 
+(peng-robinson-eos)=
 ### Peng-Robinson EOS
 
 The Peng-Robinson equation of state (1976) is widely used for hydrocarbon systems.
@@ -349,6 +338,7 @@ $$K_i = \frac{y_i}{x_i} = \frac{\phi_i^L}{\phi_i^V}$$
 
 ---
 
+(soave-redlich-kwong-eos)=
 ### Soave-Redlich-Kwong EOS
 
 The SRK equation (1972) is another popular cubic EOS.
@@ -388,6 +378,7 @@ $$m = 0.480 + 1.574\omega - 0.176\omega^2$$
 
 ---
 
+(flash-calculations)=
 ### Flash Calculations
 
 Flash calculations determine phase split at specified T and P.
@@ -424,10 +415,12 @@ print(f"Vapor composition: {y}")
 
 ---
 
+(species-database)=
 ## Species Database
 
 **Location**: `difflow/database.py`
 
+(available-species)=
 ### Available Species
 
 The database contains ~100+ species with complete thermodynamic data:
@@ -472,6 +465,7 @@ The database contains ~100+ species with complete thermodynamic data:
 #### Water
 - Water (H2O)
 
+(database-functions)=
 ### Database Functions
 
 ```python
@@ -524,12 +518,14 @@ solvents = get_common_solvents()
 
 ---
 
+(cantera-import)=
 ## Cantera Import
 
 **Location**: `difflow/cantera_import.py`
 
 Import thermodynamic data from Cantera YAML mechanism files without requiring Cantera installation.
 
+(importing-mechanisms)=
 ### Importing Mechanisms
 
 ```python
@@ -557,6 +553,7 @@ reactions = import_reactions('gri30.yaml')
 mechanism = load_mechanism('gri30.yaml')
 ```
 
+(data-conversion)=
 ### Data Conversion
 
 Cantera uses NASA polynomial format for thermodynamic properties:
