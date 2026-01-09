@@ -12,6 +12,18 @@ Downstream (Purification):
 - Ultrafiltration, Diafiltration, TFF
 - ProteinAChromatography, IonExchangeChromatography, SizeExclusionChromatography
 
+Database:
+- Cell line properties (CHO, HEK293, NS0)
+- Chromatography resin properties
+- Membrane properties
+
+Equilibrium:
+- Binding isotherm models (Langmuir, SMA, etc.)
+
+Economics:
+- CAPEX/OPEX estimation
+- Cost per gram analysis
+
 Usage:
     # Automatic loading via entry point
     from difflow.plugins import load_plugins
@@ -81,6 +93,59 @@ from difflow_bio.units.chromatography import (
     hetp,
 )
 
+# Database
+from difflow_bio.database import (
+    CellLine,
+    CellLineDatabase,
+    get_cell_line,
+    list_cell_lines,
+    Resin,
+    ResinDatabase,
+    get_resin,
+    list_resins,
+    BioMembrane,
+    BioMembraneDatabase,
+    get_bio_membrane,
+    list_bio_membranes,
+    get_kinetic_params_array,
+    get_resin_capacity_array,
+)
+
+# Equilibrium models
+from difflow_bio.equilibrium import (
+    langmuir_binding,
+    langmuir_competitive,
+    steric_mass_action,
+    linear_partition,
+    langmuir_ph_dependent,
+    breakthrough_curve,
+    column_efficiency,
+    van_deemter,
+    BindingIsotherm,
+    get_binding_isotherm,
+)
+
+# Economics
+from difflow_bio.economics import (
+    ConsumableCosts,
+    EquipmentCosts,
+    OperatingCosts,
+    estimate_bioreactor_capex,
+    estimate_chromatography_capex,
+    estimate_filtration_capex,
+    estimate_facility_capex,
+    estimate_total_capex,
+    estimate_resin_cost,
+    estimate_membrane_cost,
+    estimate_media_cost,
+    estimate_labor_cost,
+    estimate_utilities_cost,
+    estimate_total_opex,
+    calculate_cogs,
+    calculate_profit,
+    cost_per_gram,
+)
+
 __all__ = [
     # Bioreactors
     "ContinuousBioreactor",
@@ -130,6 +195,50 @@ __all__ = [
     "resolution",
     "plate_count",
     "hetp",
+    # Database
+    "CellLine",
+    "CellLineDatabase",
+    "get_cell_line",
+    "list_cell_lines",
+    "Resin",
+    "ResinDatabase",
+    "get_resin",
+    "list_resins",
+    "BioMembrane",
+    "BioMembraneDatabase",
+    "get_bio_membrane",
+    "list_bio_membranes",
+    "get_kinetic_params_array",
+    "get_resin_capacity_array",
+    # Equilibrium
+    "langmuir_binding",
+    "langmuir_competitive",
+    "steric_mass_action",
+    "linear_partition",
+    "langmuir_ph_dependent",
+    "breakthrough_curve",
+    "column_efficiency",
+    "van_deemter",
+    "BindingIsotherm",
+    "get_binding_isotherm",
+    # Economics
+    "ConsumableCosts",
+    "EquipmentCosts",
+    "OperatingCosts",
+    "estimate_bioreactor_capex",
+    "estimate_chromatography_capex",
+    "estimate_filtration_capex",
+    "estimate_facility_capex",
+    "estimate_total_capex",
+    "estimate_resin_cost",
+    "estimate_membrane_cost",
+    "estimate_media_cost",
+    "estimate_labor_cost",
+    "estimate_utilities_cost",
+    "estimate_total_opex",
+    "calculate_cogs",
+    "calculate_profit",
+    "cost_per_gram",
     # Registration
     "register",
 ]
