@@ -59,6 +59,17 @@ from difflow.cantera_import import (
     list_available_reactions,
 )
 from difflow.params_mixin import ParamsMixin
+from difflow.numerics import (
+    safe_divide,
+    safe_log,
+    safe_sqrt,
+    safe_power,
+    safe_exp,
+    smooth_max,
+    smooth_min,
+    smooth_clamp,
+    safe_arccos,
+)
 from difflow.units.base import (
     UnitBase,
     ReactorBase,
@@ -195,6 +206,16 @@ from difflow.dynamic import (
 __all__ = [
     # Params Mixin
     "ParamsMixin",
+    # Numerical utilities
+    "safe_divide",
+    "safe_log",
+    "safe_sqrt",
+    "safe_power",
+    "safe_exp",
+    "smooth_max",
+    "smooth_min",
+    "smooth_clamp",
+    "safe_arccos",
     # Unit Base Classes and Helpers
     "UnitBase",
     "ReactorBase",

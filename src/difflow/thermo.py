@@ -5,11 +5,53 @@ This module provides ideal thermodynamic models:
 - Ideal liquid mixtures
 - Antoine equation for vapor pressures
 - Polynomial Cp correlations
+
+All key functions are JIT-compiled for performance.
 """
 
 from typing import NamedTuple
+import jax
 import jax.numpy as jnp
 from jax import Array
+
+
+# =============================================================================
+# JIT-compiled helper functions for thermodynamic calculations
+# =============================================================================
+
+
+@jax.jit
+def _compute_cp_poly(T: Array, a: float, b: float, c: float, d: float) -> Array:
+    """JIT-compiled polynomial Cp calculation."""
+    return a + b * T + c * T**2 + d * T**3
+
+
+@jax.jit
+def _compute_enthalpy_integral(
+    T: Array, Tref: Array, a: float, b: float, c: float, d: float
+) -> Array:
+    """JIT-compiled enthalpy integral from Tref to T."""
+    return (
+        a * (T - Tref)
+        + b / 2 * (T**2 - Tref**2)
+        + c / 3 * (T**3 - Tref**3)
+        + d / 4 * (T**4 - Tref**4)
+    )
+
+
+@jax.jit
+def _compute_hvap_watson(T: Array, A: float, n: float, Tc: float) -> Array:
+    """JIT-compiled Watson correlation for heat of vaporization."""
+    Tc_arr = jnp.asarray(Tc)
+    Tr = jnp.clip(T / Tc_arr, 0.0, 0.999)
+    return A * (1 - Tr) ** n
+
+
+@jax.jit
+def _compute_psat_antoine(T: Array, A: float, B: float, C: float) -> Array:
+    """JIT-compiled Antoine equation for saturation pressure."""
+    log10_P = A - B / (T + C)
+    return jnp.power(10.0, log10_P)
 
 
 class SpeciesData(NamedTuple):
@@ -78,8 +120,7 @@ class IdealThermo:
             Heat capacity Cp (J/mol/K)
         """
         a, b, c, d = self.species[species].Cp_coeffs
-        T = jnp.asarray(T)
-        return a + b * T + c * T**2 + d * T**3
+        return _compute_cp_poly(jnp.asarray(T), a, b, c, d)
 
     def Cp_mix(
         self,
@@ -118,20 +159,15 @@ class IdealThermo:
         """
         data = self.species[species]
         a, b, c, d = data.Cp_coeffs
-        T = jnp.asarray(T)
+        T_arr = jnp.asarray(T)
         Tref = jnp.asarray(data.Tref)
 
         # Integral of Cp from Tref to T
-        H = (
-            a * (T - Tref)
-            + b / 2 * (T**2 - Tref**2)
-            + c / 3 * (T**3 - Tref**3)
-            + d / 4 * (T**4 - Tref**4)
-        )
+        H = _compute_enthalpy_integral(T_arr, Tref, a, b, c, d)
 
         if phase == "vapor":
             # Add heat of vaporization at T
-            H = H + self.Hvap(species, T)
+            H = H + self.Hvap(species, T_arr)
 
         return H
 
@@ -148,11 +184,7 @@ class IdealThermo:
             Heat of vaporization (J/mol)
         """
         A, n, Tc = self.species[species].Hvap_coeffs
-        T = jnp.asarray(T)
-        Tc = jnp.asarray(Tc)
-        # Avoid issues at T >= Tc
-        Tr = jnp.clip(T / Tc, 0.0, 0.999)
-        return A * (1 - Tr) ** n
+        return _compute_hvap_watson(jnp.asarray(T), A, n, Tc)
 
     def Psat(self, species: str, T: Array | float) -> Array:
         """Calculate saturation pressure using Antoine equation.
@@ -167,9 +199,7 @@ class IdealThermo:
             Saturation pressure (Pa)
         """
         A, B, C = self.species[species].antoine_coeffs
-        T = jnp.asarray(T)
-        log10_P = A - B / (T + C)
-        return 10.0 ** log10_P
+        return _compute_psat_antoine(jnp.asarray(T), A, B, C)
 
     def K_value(
         self,

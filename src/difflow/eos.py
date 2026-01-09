@@ -18,16 +18,210 @@ All calculations are JAX-compatible for automatic differentiation.
 
 from typing import NamedTuple, Literal
 from dataclasses import dataclass
+import jax
 import jax.numpy as jnp
 from jax import Array, lax
 
 import optimistix as optx
 
 from difflow.params_mixin import ParamsMixin
+from difflow.constants import EPS_FUGACITY, EPS_ARCCOS
 
 
 # Universal gas constant (J/mol/K)
 R = 8.314462618
+
+
+# =============================================================================
+# JIT-compiled helper functions for EOS calculations
+# =============================================================================
+
+
+@jax.jit
+def _compute_alpha_pr(T: Array, Tc: Array, kappa: Array) -> Array:
+    """JIT-compiled alpha function for Peng-Robinson."""
+    Tr = T / Tc
+    # Safe sqrt for numerical stability
+    Tr_safe = jnp.maximum(Tr, 1e-10)
+    return (1 + kappa * (1 - jnp.sqrt(Tr_safe)))**2
+
+
+@jax.jit
+def _compute_a_mix(a_i: Array, y: Array, k_ij: Array) -> Array:
+    """JIT-compiled mixture 'a' parameter calculation."""
+    a_ij = jnp.sqrt(jnp.outer(a_i, a_i)) * (1 - k_ij)
+    return jnp.sum(jnp.outer(y, y) * a_ij)
+
+
+@jax.jit
+def _compute_b_mix(b: Array, y: Array) -> Array:
+    """JIT-compiled mixture 'b' parameter calculation."""
+    return jnp.sum(y * b)
+
+
+@jax.jit
+def _compute_cubic_coeffs_pr(A: Array, B: Array) -> tuple[Array, Array, Array]:
+    """JIT-compiled cubic equation coefficients for Peng-Robinson."""
+    c2 = -(1 - B)
+    c1 = A - 3*B**2 - 2*B
+    c0 = -(A*B - B**2 - B**3)
+    return c2, c1, c0
+
+
+@jax.jit
+def _compute_cubic_coeffs_srk(A: Array, B: Array) -> tuple[Array, Array, Array]:
+    """JIT-compiled cubic equation coefficients for SRK."""
+    c2 = -1.0
+    c1 = A - B - B**2
+    c0 = -A * B
+    return c2, c1, c0
+
+
+@jax.jit
+def _solve_cubic_cardano(
+    c2: Array,
+    c1: Array,
+    c0: Array,
+    select_vapor: bool = True,
+) -> Array:
+    """JIT-compiled cubic equation solver using Cardano's formula.
+
+    Args:
+        c2, c1, c0: Cubic equation coefficients for x³ + c2*x² + c1*x + c0 = 0
+        select_vapor: If True, returns largest positive root; else smallest positive
+
+    Returns:
+        Selected root (compressibility factor Z)
+    """
+    # Reduce to depressed cubic: t³ + pt + q = 0 where x = t - c2/3
+    p = c1 - c2**2 / 3
+    q = c0 - c1 * c2 / 3 + 2 * c2**3 / 27
+
+    # Discriminant
+    disc = (q/2)**2 + (p/3)**3
+
+    def one_real_root(disc_p_q):
+        """Case: disc > 0, one real root."""
+        disc, p, q = disc_p_q
+        sqrt_disc = jnp.sqrt(jnp.maximum(disc, 0.0))
+        u = jnp.cbrt(-q/2 + sqrt_disc)
+        v = jnp.cbrt(-q/2 - sqrt_disc)
+        t = u + v
+        return t - c2/3
+
+    def three_real_roots(disc_p_q):
+        """Case: disc <= 0, three real roots."""
+        disc, p, q = disc_p_q
+        # Use trigonometric solution with safe operations
+        r = jnp.sqrt(jnp.maximum(-p**3 / 27, EPS_ARCCOS))
+        arg = jnp.clip(-q / (2 * r + EPS_ARCCOS), -1.0, 1.0)
+        theta = jnp.arccos(arg)
+
+        # Three roots
+        cbrt_r = jnp.cbrt(r)
+        t1 = 2 * cbrt_r * jnp.cos(theta / 3)
+        t2 = 2 * cbrt_r * jnp.cos((theta + 2*jnp.pi) / 3)
+        t3 = 2 * cbrt_r * jnp.cos((theta + 4*jnp.pi) / 3)
+
+        x1 = t1 - c2/3
+        x2 = t2 - c2/3
+        x3 = t3 - c2/3
+
+        roots = jnp.array([x1, x2, x3])
+        positive_mask = roots > 0
+
+        # Select appropriate root based on phase
+        vapor_roots = jnp.where(positive_mask, roots, -jnp.inf)
+        liquid_roots = jnp.where(positive_mask, roots, jnp.inf)
+
+        return lax.cond(
+            select_vapor,
+            lambda _: jnp.max(vapor_roots),
+            lambda _: jnp.min(liquid_roots),
+            None,
+        )
+
+    Z = lax.cond(
+        disc > 0,
+        one_real_root,
+        three_real_roots,
+        (disc, p, q),
+    )
+
+    return jnp.maximum(Z, 0.01)
+
+
+@jax.jit
+def _compute_fugacity_pr(
+    T: Array,
+    P: Array,
+    y: Array,
+    Z: Array,
+    a_i: Array,
+    b_i: Array,
+    a_m: Array,
+    b_m: Array,
+    k_ij: Array,
+) -> Array:
+    """JIT-compiled fugacity coefficient calculation for PR EOS."""
+    A = a_m * P / (R * T)**2
+    B = b_m * P / (R * T)
+
+    # Compute a_ij matrix
+    a_ij = jnp.sqrt(jnp.outer(a_i, a_i)) * (1 - k_ij)
+    sum_ya = jnp.sum(y * a_ij, axis=1)
+
+    # ln(phi_i) calculation
+    sqrt2 = jnp.sqrt(2.0)
+    term1 = (b_i / b_m) * (Z - 1)
+    term2 = -jnp.log(jnp.maximum(Z - B, EPS_FUGACITY))
+    term3_coeff = A / (2 * sqrt2 * B + EPS_FUGACITY)
+    term3_bracket = 2 * sum_ya / (a_m + EPS_FUGACITY) - b_i / b_m
+    term3_log = jnp.log(
+        jnp.maximum((Z + (1 + sqrt2) * B) / (Z + (1 - sqrt2) * B + EPS_FUGACITY), EPS_FUGACITY)
+    )
+    term3 = -term3_coeff * term3_bracket * term3_log
+
+    ln_phi = term1 + term2 + term3
+    return jnp.exp(ln_phi)
+
+
+@jax.jit
+def _compute_fugacity_srk(
+    T: Array,
+    P: Array,
+    y: Array,
+    Z: Array,
+    a_i: Array,
+    b_i: Array,
+    a_m: Array,
+    b_m: Array,
+    k_ij: Array,
+) -> Array:
+    """JIT-compiled fugacity coefficient calculation for SRK EOS."""
+    A = a_m * P / (R * T)**2
+    B = b_m * P / (R * T)
+
+    # Compute a_ij matrix
+    a_ij = jnp.sqrt(jnp.outer(a_i, a_i)) * (1 - k_ij)
+    sum_ya = jnp.sum(y * a_ij, axis=1)
+
+    # ln(phi_i) for SRK
+    term1 = (b_i / b_m) * (Z - 1)
+    term2 = -jnp.log(jnp.maximum(Z - B, EPS_FUGACITY))
+    term3_coeff = A / (B + EPS_FUGACITY)
+    term3_bracket = 2 * sum_ya / (a_m + EPS_FUGACITY) - b_i / b_m
+    term3_log = jnp.log(jnp.maximum(1 + B / Z, EPS_FUGACITY))
+    term3 = -term3_coeff * term3_bracket * term3_log
+
+    ln_phi = term1 + term2 + term3
+    return jnp.exp(ln_phi)
+
+
+@jax.jit
+def _wilson_k_values(T: Array, P: Array, Tc: Array, Pc: Array, omega: Array) -> Array:
+    """JIT-compiled Wilson K-value estimation."""
+    return (Pc / P) * jnp.exp(5.373 * (1 + omega) * (1 - Tc / T))
 
 
 class CriticalProperties(NamedTuple):
@@ -162,9 +356,7 @@ class PengRobinson:
         Returns:
             Alpha values for each species
         """
-        p = self.params
-        Tr = T / p.Tc
-        return (1 + p.kappa * (1 - jnp.sqrt(Tr)))**2
+        return _compute_alpha_pr(T, self.params.Tc, self.params.kappa)
 
     def a(self, T: Array) -> Array:
         """Calculate 'a' parameter at temperature T.
@@ -197,16 +389,9 @@ class PengRobinson:
             Mixture 'a' parameter
         """
         a_i = self.a(T)
-        n = self.n_species
-
         if k_ij is None:
-            k_ij = jnp.zeros((n, n))
-
-        # a_mix = sum_i sum_j y_i * y_j * sqrt(a_i * a_j) * (1 - k_ij)
-        a_ij = jnp.sqrt(jnp.outer(a_i, a_i)) * (1 - k_ij)
-        a_mix = jnp.sum(jnp.outer(y, y) * a_ij)
-
-        return a_mix
+            k_ij = jnp.zeros((self.n_species, self.n_species))
+        return _compute_a_mix(a_i, y, k_ij)
 
     def b_mix(self, y: Array) -> Array:
         """Calculate mixture 'b' parameter using linear mixing rule.
@@ -219,7 +404,7 @@ class PengRobinson:
         Returns:
             Mixture 'b' parameter
         """
-        return jnp.sum(y * self.params.b)
+        return _compute_b_mix(self.params.b, y)
 
     def compressibility_cubic(
         self,
@@ -462,7 +647,7 @@ class PengRobinson:
             Estimated K-values for each species
         """
         p = self.params
-        return (p.Pc / P) * jnp.exp(5.373 * (1 + p.omega) * (1 - p.Tc / T))
+        return _wilson_k_values(T, P, p.Tc, p.Pc, p.omega)
 
     def molar_volume(
         self,
@@ -789,7 +974,7 @@ class SRK:
     def K_values_wilson(self, T: Array, P: Array) -> Array:
         """Estimate K-values using Wilson correlation."""
         p = self.params
-        return (p.Pc / P) * jnp.exp(5.373 * (1 + p.omega) * (1 - p.Tc / T))
+        return _wilson_k_values(T, P, p.Tc, p.Pc, p.omega)
 
     def molar_volume(
         self,
