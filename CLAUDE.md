@@ -38,13 +38,15 @@ difflow/
 │   │   ├── database.py    # Species property database
 │   │   ├── flowsheet.py   # Flowsheet with recycle solving
 │   │   ├── uncertainty.py # Sensitivity & UQ
+│   │   ├── params_mixin.py # ParamsMixin base class for Params dataclasses
 │   │   ├── units/         # Steady-state unit operations
 │   │   ├── dynamic/       # Dynamic modeling (DAE)
 │   │   ├── economics/     # Technoeconomic analysis
 │   │   └── visualization/ # Flowsheet visualization
-│   ├── difflow_bio/       # Bio manufacturing plugin
-│   └── difflow_ree/       # Rare earth element plugin
-├── tests/                 # pytest test files
+│   ├── difflow_bio/       # Bio manufacturing plugin (bioreactors, filtration, chromatography)
+│   ├── difflow_ree/       # Rare earth element solvent extraction plugin
+│   └── difflow_cc/        # Carbon capture plugin (amine, membrane, adsorption)
+├── tests/                 # pytest test files (includes tests/bio/, tests/ree/, tests/cc/)
 ├── examples/              # Jupyter notebook examples
 ├── jax-tutorials/         # JAX/autodiff tutorials
 └── docs/                  # Documentation (Markdown)
@@ -55,59 +57,97 @@ difflow/
 ### 1. Streams
 Streams are JAX-compatible data structures representing material flows:
 ```python
-from difflow import Stream, experiment_stream
+from difflow import Stream, create_experiment_stream
 
 # Create a stream
-stream = experiment_stream(
-    experiment={'T': 350.0, 'P': 101325.0},
-    experiment_species=['A', 'B'],
-    experiment_molar_flows=[1.0, 0.5]
+stream = create_experiment_stream(
+    conditions={'T': 350.0, 'P': 101325.0},
+    species=['A', 'B'],
+    molar_flows=[1.0, 0.5]
 )
 ```
 
-### 2. Unit Operations
-All units are differentiable and follow a consistent pattern:
+### 2. Unit Operations and Params Classes
+All units are differentiable and use Params dataclasses that inherit from `ParamsMixin`:
 ```python
-from difflow import CSTR, experiment_reaction
+from difflow import CSTR, CSTRParams
+import jax.numpy as jnp
 
-# Define reaction: A -> B, r = k*C_A
-rxn = experiment_reaction(
-    experiment_species=['A', 'B'],
-    experiment_stoich=[-1, 1],
-    experiment_rate_law=lambda experiment, experiment_experiment: experiment['k'] * experiment_experiment['A']
+# Define rate function: A -> B, r = k*C_A
+def rate_fn(concentrations, T, params):
+    k = params['k'] * jnp.exp(-params['Ea'] / (8.314 * T))
+    return k * concentrations['A']
+
+# Create params with dict-like access via ParamsMixin
+params = CSTRParams(
+    V=1.0,  # Reactor volume (m^3)
+    rate_fn=rate_fn,
+    stoich={'A': -1, 'B': 1},
 )
 
 # Create and run CSTR
-cstr = CSTR(experiment_experiment, experiment_reactions=[rxn])
+cstr = CSTR(params)
 outlet = cstr(inlet_stream)
+
+# Params support dict-like access
+print(params['V'])        # -> 1.0
+print('V' in params)      # -> True
+new_params = params.update(V=2.0)  # Functional update (JAX-compatible)
 ```
 
-### 3. Automatic Differentiation
+### 3. ParamsMixin Pattern
+All `Params` dataclasses should inherit from `ParamsMixin` for consistent API:
+```python
+from dataclasses import dataclass
+from difflow.params_mixin import ParamsMixin
+
+@dataclass
+class MyUnitParams(ParamsMixin):
+    """Parameters for MyUnit.
+
+    Attributes:
+        temperature: Operating temperature (K)
+        pressure: Operating pressure (Pa)
+    """
+    temperature: float
+    pressure: float
+
+# ParamsMixin provides:
+# - params['key'] - dict-style access
+# - params.update(key=value) - JAX-compatible functional updates
+# - params.keys(), .values(), .items() - dict-like iteration
+# - 'key' in params - membership testing
+# - Concise __repr__ with JAX array formatting
+```
+
+### 4. Automatic Differentiation
 Use JAX's `grad`, `jacobian`, `jit` with any difflow function:
 ```python
 import jax
 from jax import grad, jit
 
-def experiment(experiment):
-    outlet = cstr(inlet, experiment={'experiment_experiment': experiment})
-    return outlet.experiment['experiment']  # Scalar output
+def conversion(volume):
+    params = CSTRParams(V=volume, rate_fn=rate_fn, stoich=stoich)
+    cstr = CSTR(params)
+    outlet = cstr(inlet)
+    return outlet.molar_flows['B'] / inlet.molar_flows['A']
 
-# Gradient of experiment w.r.t. experiment
-d_experiment_d_experiment = grad(experiment)(experiment_value)
+# Gradient of conversion w.r.t. volume
+d_conv_d_V = grad(conversion)(1.0)
 
 # JIT compile for speed
-fast_experiment = jit(experiment)
+fast_conversion = jit(conversion)
 ```
 
-### 4. Flowsheets with Recycles
+### 5. Flowsheets with Recycles
 ```python
 from difflow import Flowsheet
 
 fs = Flowsheet()
-fs.add_experiment('cstr', cstr)
-fs.add_experiment('flash', flash)
+fs.add_unit('cstr', cstr)
+fs.add_unit('flash', flash)
 fs.connect('cstr', 'flash')
-fs.set_experiment('flash', 'cstr', experiment_experiment=0.5)  # Recycle
+fs.set_recycle('flash', 'cstr', split_fraction=0.5)
 
 result = fs.solve(feed_stream)
 ```
@@ -146,12 +186,65 @@ result = fs.solve(feed_stream)
 5. Add tests in `tests/test_<unit>.py`
 6. Add example usage in `examples/`
 
-### Adding to a Plugin (bio, ree)
+### Adding to a Plugin (bio, ree, cc)
 
-1. Add to appropriate plugin directory (`src/difflow_bio/` or `src/difflow_ree/`)
-2. Export in plugin's `__init__.py`
-3. Add tests in `tests/bio/` or `tests/ree/`
-4. Register in `pyproject.toml` entry points if needed
+The project has three domain-specific plugins:
+- **difflow_bio**: Bio manufacturing (bioreactors, filtration, chromatography)
+- **difflow_ree**: Rare earth element solvent extraction
+- **difflow_cc**: Carbon capture (amine absorption, membrane, adsorption)
+
+1. Add to appropriate plugin directory (`src/difflow_bio/`, `src/difflow_ree/`, or `src/difflow_cc/`)
+2. Create a Params dataclass inheriting from `ParamsMixin`
+3. Export in plugin's `__init__.py` and add to `__all__`
+4. Add tests in `tests/bio/`, `tests/ree/`, or `tests/cc/`
+5. Register in the plugin's `register()` function for plugin discovery
+6. Add documentation in `docs/unit-operations-*.md`
+
+Example plugin unit:
+```python
+from dataclasses import dataclass
+from difflow.params_mixin import ParamsMixin
+
+@dataclass
+class MyUnitParams(ParamsMixin):
+    """Parameters for MyUnit."""
+    param1: float
+    param2: float = 1.0  # With default
+
+class MyUnit:
+    """Description of the unit operation."""
+
+    def __init__(self, params: MyUnitParams):
+        self.params = params
+
+    def __call__(self, inlet_stream):
+        # Process inlet stream
+        return outlet_stream
+```
+
+### Plugin Overview
+
+**difflow_bio** - Bio manufacturing:
+- Bioreactors: `ContinuousBioreactor`, `FedBatchBioreactor`
+- Separation: `Centrifuge`, `DiscStackCentrifuge`
+- Filtration: `Ultrafiltration`, `Diafiltration`, `TFF`
+- Chromatography: `ProteinAChromatography`, `IonExchangeChromatography`, `SizeExclusionChromatography`
+
+**difflow_ree** - Rare earth element extraction:
+- Unit operations: `REEExtractor`, `REEMixerSettler`, `REEScrubber`, `REEStripper`
+- Precipitation: `OxalatePrecipitator`, `CarbonatePrecipitator`, `HydroxidePrecipitator`
+- Flowsheets: `ExtractStripCircuit`, `ExtractScrubStripCircuit`, `SplitShellCascade`, `FullSeparationTrain`
+- Database: 10 REE elements, 4 extractant systems
+
+**difflow_cc** - Carbon capture:
+- Amine absorption: `AmineAbsorber`, `AmineStripper` (MEA, DEA, MDEA, PZ, AMP)
+- Membrane: `MembraneSeparator`, `MultistageMembrane` (9 membrane materials)
+- Adsorption: `PSAUnit`, `TSAUnit`, `VSAUnit`, `TVSAUnit` (8 adsorbent materials)
+- Direct air capture: `SolidSorbentDAC`, `LiquidSolventDAC`
+- Heat integration: `LeanRichExchanger`, `HeatRecoverySystem`
+- CO2 compression: `CompressionTrain`, `Pump`
+- Economics: CAPEX/OPEX estimation, levelized cost of capture
+- Degradation: Amine oxidation, adsorbent capacity fade, membrane aging
 
 ### Debugging Gradients
 
@@ -192,9 +285,14 @@ jax.debug.print("value: {x}", x=value)
 | `pyproject.toml` | Package configuration, dependencies |
 | `Makefile` | Build automation (test, book, notebooks) |
 | `src/difflow/__init__.py` | Main API exports |
-| `tests/` | All pytest tests |
+| `src/difflow/params_mixin.py` | ParamsMixin base class for all Params dataclasses |
+| `src/difflow_bio/__init__.py` | Bio manufacturing plugin exports |
+| `src/difflow_ree/__init__.py` | REE extraction plugin exports |
+| `src/difflow_cc/__init__.py` | Carbon capture plugin exports |
+| `tests/` | All pytest tests (includes `bio/`, `ree/`, `cc/` subdirs) |
 | `examples/` | Usage examples (Jupyter notebooks) |
 | `jax-tutorials/` | JAX autodiff tutorials |
+| `docs/` | Documentation source (Markdown, built with Jupyter Book) |
 
 ## Performance Tips
 
