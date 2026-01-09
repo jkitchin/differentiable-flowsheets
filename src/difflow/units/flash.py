@@ -20,6 +20,7 @@ from difflow.streams import Stream, get_flows, get_species, make_stream
 from difflow.thermo import IdealThermo
 from difflow.params_mixin import ParamsMixin
 from difflow.constants import K_MIN, K_MAX, PHASE_TRANSITION_WIDTH
+from difflow.numerics import safe_divide
 import optimistix as optx
 
 
@@ -188,7 +189,7 @@ class Flash:
         # A better starting point than 0.5 can reduce iterations.
         # Simple estimate: V ≈ (bubble_check - 1) / (bubble_check + dew_check - 2)
         # This interpolates between 0 (at bubble point) and 1 (at dew point).
-        V0_estimate = (bubble_check - 1.0) / (bubble_check + dew_check - 2.0 + 1e-10)
+        V0_estimate = safe_divide(bubble_check - 1.0, bubble_check + dew_check - 2.0)
         V0 = jnp.clip(V0_estimate, 0.1, 0.9)  # Keep away from boundaries for initial guess
         args = (z, K)
 
@@ -312,7 +313,7 @@ class Flash:
         inlet_flows = get_flows(inlet)
         F_feed = jnp.array([inlet_flows[s] for s in p.species_order])
         F_total = jnp.sum(F_feed)
-        z = F_feed / (F_total + 1e-10)
+        z = safe_divide(F_feed, F_total)
 
         # Get K-values from thermodynamics
         K = self.thermo.K_values_array(T, P)
@@ -334,14 +335,14 @@ class Flash:
                 V_frac = jnp.asarray(1.0)  # Superheated vapor
             else:
                 # Estimate based on relative volatility
-                V_frac = (bubble_check - 1.0) / (bubble_check + dew_check - 2.0 + 1e-10)
+                V_frac = safe_divide(bubble_check - 1.0, bubble_check + dew_check - 2.0)
                 V_frac = jnp.clip(V_frac, 0.0, 1.0)
 
         # Estimate compositions
-        x = z / (1 + V_frac * (K - 1) + 1e-10)
+        x = safe_divide(z, 1 + V_frac * (K - 1))
         y = K * x
-        x = x / (jnp.sum(x) + 1e-10)
-        y = y / (jnp.sum(y) + 1e-10)
+        x = safe_divide(x, jnp.sum(x))
+        y = safe_divide(y, jnp.sum(y))
 
         # Calculate outlet flows
         L = F_total * (1 - V_frac)

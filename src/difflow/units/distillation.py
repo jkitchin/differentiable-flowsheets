@@ -27,7 +27,8 @@ from jax import Array, lax
 from difflow.streams import Stream, get_flows, make_stream
 from difflow.thermo import IdealThermo
 from difflow.params_mixin import ParamsMixin
-from difflow.constants import MIN_ALPHA_DIFF, MAX_STAGES, MAX_GILLILAND_Y, DEFAULT_TEMP_SCALE
+from difflow.constants import MIN_ALPHA_DIFF, MAX_STAGES, MAX_GILLILAND_Y, DEFAULT_TEMP_SCALE, EPS_DIVISION
+from difflow.numerics import safe_divide, safe_log
 import optimistix as optx
 
 

@@ -18,6 +18,7 @@ from jax import Array, lax
 
 from difflow.streams import Stream, get_flows, make_stream
 from difflow.params_mixin import ParamsMixin
+from difflow.numerics import safe_divide
 
 
 # =============================================================================
@@ -568,7 +569,7 @@ class MultistageCascade:
         eff_per_stage = self.params.stage_efficiency
         total_eff = 1.0 - (1.0 - eff_per_stage) ** n_stages
 
-        x_feed_arr = F_in_arr / (F_aq + 1e-10)
+        x_feed_arr = safe_divide(F_in_arr, F_aq)
         x_final_arr = x_feed_arr + total_eff * (x_eq_arr - x_feed_arr)
 
         F_raffinate_arr = x_final_arr * F_aq
@@ -839,7 +840,7 @@ class DifferentialContactor:
         # Solve for c_org(0) using boundary conditions
         # c_org(L) = M10 * c_aq(0) + M11 * c_org(0)
         # c_org(0) = (c_org(L) - M10 * c_aq(0)) / M11
-        c_org_0 = (c_org_L - M10 * c_aq_0) / (M11 + 1e-10)
+        c_org_0 = safe_divide(c_org_L - M10 * c_aq_0, M11)
 
         # Compute c_aq(L)
         c_aq_L = M00 * c_aq_0 + M01 * c_org_0

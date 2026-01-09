@@ -25,7 +25,8 @@ from jax import Array, lax
 import optimistix as optx
 
 from difflow.params_mixin import ParamsMixin
-from difflow.constants import EPS_FUGACITY, EPS_ARCCOS
+from difflow.constants import EPS_FUGACITY, EPS_ARCCOS, EPS_DIVISION
+from difflow.numerics import safe_divide, safe_log
 
 
 # Universal gas constant (J/mol/K)
@@ -511,7 +512,7 @@ class PengRobinson:
             disc, p, q = disc_p_q
             # Use trigonometric solution
             r = jnp.sqrt(-p**3 / 27)
-            theta = jnp.arccos(jnp.clip(-q / (2 * r + 1e-30), -1, 1))
+            theta = jnp.arccos(jnp.clip(safe_divide(-q, 2 * r, EPS_ARCCOS), -1, 1))
 
             # Three roots
             t1 = 2 * jnp.cbrt(r) * jnp.cos(theta / 3)
@@ -597,11 +598,11 @@ class PengRobinson:
         # ln(phi_i) calculation
         sqrt2 = jnp.sqrt(2.0)
         term1 = (b_i / b_m) * (Z - 1)
-        term2 = -jnp.log(jnp.maximum(Z - B, 1e-10))
-        term3_coeff = A / (2 * sqrt2 * B + 1e-10)
-        term3_bracket = 2 * sum_ya / (a_m + 1e-30) - b_i / b_m
-        term3_log = jnp.log(
-            jnp.maximum((Z + (1 + sqrt2) * B) / (Z + (1 - sqrt2) * B + 1e-10), 1e-10)
+        term2 = -safe_log(jnp.maximum(Z - B, EPS_DIVISION))
+        term3_coeff = safe_divide(A, 2 * sqrt2 * B)
+        term3_bracket = safe_divide(2 * sum_ya, a_m, EPS_FUGACITY) - b_i / b_m
+        term3_log = safe_log(
+            jnp.maximum(safe_divide(Z + (1 + sqrt2) * B, Z + (1 - sqrt2) * B), EPS_DIVISION)
         )
         term3 = -term3_coeff * term3_bracket * term3_log
 
@@ -632,7 +633,7 @@ class PengRobinson:
         phi_L = self.fugacity_coefficient(T, P, x, "liquid", k_ij)
         phi_V = self.fugacity_coefficient(T, P, y, "vapor", k_ij)
 
-        return phi_L / (phi_V + 1e-30)
+        return safe_divide(phi_L, phi_V, EPS_FUGACITY)
 
     def K_values_wilson(self, T: Array, P: Array) -> Array:
         """Estimate K-values using Wilson correlation (for initialization).
@@ -873,7 +874,7 @@ class SRK:
         def three_real_roots(disc_p_q):
             disc, p, q = disc_p_q
             r = jnp.sqrt(-p**3 / 27)
-            theta = jnp.arccos(jnp.clip(-q / (2 * r + 1e-30), -1, 1))
+            theta = jnp.arccos(jnp.clip(safe_divide(-q, 2 * r, EPS_ARCCOS), -1, 1))
 
             t1 = 2 * jnp.cbrt(r) * jnp.cos(theta / 3)
             t2 = 2 * jnp.cbrt(r) * jnp.cos((theta + 2*jnp.pi) / 3)
@@ -947,10 +948,10 @@ class SRK:
 
         # ln(phi_i) for SRK
         term1 = (b_i / b_m) * (Z - 1)
-        term2 = -jnp.log(jnp.maximum(Z - B, 1e-10))
-        term3_coeff = A / (B + 1e-10)
-        term3_bracket = 2 * sum_ya / (a_m + 1e-30) - b_i / b_m
-        term3_log = jnp.log(jnp.maximum(1 + B / Z, 1e-10))
+        term2 = -safe_log(jnp.maximum(Z - B, EPS_DIVISION))
+        term3_coeff = safe_divide(A, B)
+        term3_bracket = safe_divide(2 * sum_ya, a_m, EPS_FUGACITY) - b_i / b_m
+        term3_log = safe_log(jnp.maximum(1 + safe_divide(B, Z), EPS_DIVISION))
         term3 = -term3_coeff * term3_bracket * term3_log
 
         ln_phi = term1 + term2 + term3
@@ -969,7 +970,7 @@ class SRK:
         phi_L = self.fugacity_coefficient(T, P, x, "liquid", k_ij)
         phi_V = self.fugacity_coefficient(T, P, y, "vapor", k_ij)
 
-        return phi_L / (phi_V + 1e-30)
+        return safe_divide(phi_L, phi_V, EPS_FUGACITY)
 
     def K_values_wilson(self, T: Array, P: Array) -> Array:
         """Estimate K-values using Wilson correlation."""

@@ -29,7 +29,8 @@ from jax import Array
 
 from difflow.streams import Stream, make_stream, get_flows, get_species
 from difflow.params_mixin import ParamsMixin
-from difflow.constants import LMTD_BLEND_WIDTH, CR_BLEND_WIDTH, MIN_DELTA_T
+from difflow.constants import LMTD_BLEND_WIDTH, CR_BLEND_WIDTH, MIN_DELTA_T, EPS_DIVISION
+from difflow.numerics import safe_divide, safe_log
 
 
 # =============================================================================
@@ -91,8 +92,8 @@ def log_mean_temperature_difference(
     # Direct formula: (r-1)/ln(r)
     # Need to handle r = 1 case where ln(r) = 0
     log_ratio = jnp.log(ratio)
-    # Add tiny value to prevent 0/0, but only affects very small |log_ratio|
-    direct_factor = r_minus_1 / (log_ratio + 1e-30)
+    # Use safe_divide to prevent 0/0
+    direct_factor = safe_divide(r_minus_1, log_ratio)
 
     # Smooth blending using a polynomial weight
     # When |r-1| < threshold, use Taylor; otherwise use direct
@@ -163,7 +164,7 @@ def effectiveness_counter_current(NTU: Array, Cr: Array) -> Array:
     # ε = (1 - exp(-NTU*x)) / (1 - (1-x)*exp(-NTU*x))
     numerator = 1.0 - exp_term
     denominator = 1.0 - (1.0 - x) * exp_term
-    eps_general = numerator / (denominator + 1e-10)
+    eps_general = safe_divide(numerator, denominator)
 
     # Smooth polynomial blending
     # When |1-Cr| < threshold, use Taylor; otherwise use direct
@@ -1150,17 +1151,17 @@ def size_heat_exchanger(
 
     Q_max = C_min * driving_force
     # Clip effectiveness to valid range [0, 1) to avoid log of negative numbers
-    eps = jnp.clip(Q / (Q_max + 1e-10 * jnp.sign(Q_max + 1e-20)), 0.0, 0.9999)
+    eps = jnp.clip(safe_divide(Q, Q_max), 0.0, 0.9999)
 
     # Invert effectiveness-NTU relationship with smooth blending for Cr → 1
     if flow_config == "counter_current":
         # Balanced case (Cr = 1): NTU = eps / (1 - eps)
-        NTU_balanced = eps / (1.0 - eps + 1e-10)
+        NTU_balanced = safe_divide(eps, 1.0 - eps)
 
         # General case: NTU = ln((1 - eps*Cr) / (1 - eps)) / (1 - Cr)
-        one_minus_Cr = jnp.maximum(1.0 - Cr, 1e-10)
+        one_minus_Cr = jnp.maximum(1.0 - Cr, EPS_DIVISION)
         # Ensure arguments to log are positive
-        log_arg = jnp.maximum((1.0 - eps * Cr) / (1.0 - eps + 1e-10), 1e-10)
+        log_arg = jnp.maximum(safe_divide(1.0 - eps * Cr, 1.0 - eps), EPS_DIVISION)
         NTU_general = jnp.log(log_arg) / one_minus_Cr
 
         # Smooth blending

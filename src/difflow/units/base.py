@@ -15,6 +15,7 @@ from jax import Array
 
 from difflow.streams import Stream, get_flows, make_stream
 from difflow.thermo import IdealThermo
+from difflow.numerics import safe_divide
 
 
 # =============================================================================
@@ -72,7 +73,7 @@ def estimate_outlet_composition(
 
     # Find limiting reactant (minimum F/nu)
     if reactant_info:
-        limiting = min(reactant_info, key=lambda x: x[2] / (x[3] + 1e-10))
+        limiting = min(reactant_info, key=lambda x: safe_divide(x[2], x[3]))
         limiting_species, limiting_idx, F_limiting, nu_limiting = limiting
         extent = F_limiting * conversion / nu_limiting
     else:
@@ -114,7 +115,7 @@ def estimate_adiabatic_temperature(
     Q_rxn = -float(jnp.sum(dH_rxn)) * extent
 
     # Temperature change
-    dT = Q_rxn / (total_flow * Cp_avg + 1e-10)
+    dT = safe_divide(Q_rxn, total_flow * Cp_avg)
 
     # Apply bounds
     T_out = float(inlet_T) + dT
@@ -134,7 +135,7 @@ def estimate_residence_time(
     Returns:
         Residence time (s)
     """
-    return float(volume) / (float(volumetric_flow) + 1e-10)
+    return float(safe_divide(volume, volumetric_flow))
 
 
 def estimate_cstr_conversion(

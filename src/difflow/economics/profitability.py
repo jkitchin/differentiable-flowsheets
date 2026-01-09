@@ -20,6 +20,8 @@ from dataclasses import dataclass, replace, fields, asdict as dc_asdict
 from typing import Callable, NamedTuple
 import optimistix as optx
 
+from difflow.numerics import safe_divide
+
 
 # =============================================================================
 # Financial Parameters
@@ -403,7 +405,7 @@ def irr_approx(
     npv2 = npv(cash_flows, r2, initial_investment)
 
     # Linear interpolation to find where NPV = 0
-    irr_approx = r1 - npv1 * (r2 - r1) / (npv2 - npv1 + 1e-10)
+    irr_approx = r1 - safe_divide(npv1 * (r2 - r1), npv2 - npv1)
 
     # Clamp to reasonable range
     return jnp.clip(irr_approx, 0.0, 1.0)
@@ -456,7 +458,7 @@ def discounted_payback(
     # Use softmax-weighted average of years where cumulative > investment
     weights = jax.nn.sigmoid(10.0 * (cumulative - initial_investment))
     # Approximate payback as weighted average
-    payback = jnp.sum(years * weights) / jnp.sum(weights + 1e-10)
+    payback = safe_divide(jnp.sum(years * weights), jnp.sum(weights))
 
     return jnp.minimum(payback, float(len(cash_flows)))
 
