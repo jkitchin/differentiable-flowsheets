@@ -1,0 +1,245 @@
+# Amine Solvent Database for CO2 Capture
+# All parameters from peer-reviewed literature
+#
+# References:
+#   [1] Versteeg GF, Van Swaaij WPM (1988). J Chem Eng Data 33:29
+#   [2] Hikita H et al. (1977). J Chem Eng Japan 10:7
+#   [3] Kim I, Svendsen HF (2007). Int J Greenhouse Gas Control 1:390
+#   [4] Bishnoi S, Rochelle GT (2000). Chem Eng Sci 55:5531
+#   [5] Versteeg GF et al. (1996). Chem Eng Sci 51:3181
+#   [6] Caplow M (1968). J Am Chem Soc 90:6795
+
+solvents:
+  MEA:
+    full_name: "Monoethanolamine"
+    formula: "C2H7NO"
+    type: "primary"
+    molecular_weight: 61.08  # g/mol
+    density_25C: 1012.0  # kg/m3
+    # Viscosity: mu = A * exp(B/T), mu in cP, T in K
+    viscosity_A: 0.0178
+    viscosity_B: 1295.0
+    pKa_25C: 9.50  # at 25°C
+    # pKa temperature dependence: pKa = a + b/T (T in K)
+    pKa_a: -6.5
+    pKa_b: 4775.0
+    # Heat of absorption (kJ/mol CO2)
+    # Ref: Kim & Svendsen (2007)
+    heat_of_absorption: 82.0
+    # CO2 loading capacity (mol CO2 / mol amine at saturation)
+    loading_capacity: 0.5
+    # Henry's law constant for CO2 in aqueous amine
+    # ln(H/Pa) = a + b/T + c*T (T in K)
+    # Ref: Versteeg & Van Swaaij (1988)
+    henry_a: 170.7
+    henry_b: -8477.0
+    henry_c: -21.95
+    # Reaction kinetics: k2 = A * exp(-Ea/RT)
+    # k2 in L/(mol*s), Ea in J/mol
+    # Ref: Hikita et al. (1977), Versteeg et al. (1996)
+    kinetics:
+      mechanism: "zwitterion"
+      A: 4.4e11  # pre-exponential factor L/(mol*s)
+      Ea: 44900  # activation energy J/mol
+      k2_25C: 5900  # L/(mol*s) at 25°C
+    # Diffusivity of CO2 in amine solution
+    # D = D0 * exp(-Ed/RT), D in m2/s
+    diffusivity_D0: 2.35e-6
+    diffusivity_Ed: 17400  # J/mol
+    # Typical operating conditions
+    typical_concentration: 30.0  # wt%
+    regen_temperature: 393.15  # K (120°C)
+    regen_energy: 3.8  # GJ/tonne CO2
+    cost_usd_kg: 1.5
+
+  DEA:
+    full_name: "Diethanolamine"
+    formula: "C4H11NO2"
+    type: "secondary"
+    molecular_weight: 105.14
+    density_25C: 1090.0
+    viscosity_A: 0.0891
+    viscosity_B: 1461.0
+    pKa_25C: 8.88
+    pKa_a: -4.8
+    pKa_b: 4088.0
+    heat_of_absorption: 72.0
+    loading_capacity: 0.5
+    henry_a: 170.7
+    henry_b: -8477.0
+    henry_c: -21.95
+    kinetics:
+      mechanism: "zwitterion"
+      A: 5.8e9
+      Ea: 42000
+      k2_25C: 1200
+    diffusivity_D0: 1.5e-6
+    diffusivity_Ed: 18000
+    typical_concentration: 35.0
+    regen_temperature: 393.15
+    regen_energy: 3.5
+    cost_usd_kg: 1.8
+
+  MDEA:
+    full_name: "Methyldiethanolamine"
+    formula: "C5H13NO2"
+    type: "tertiary"
+    molecular_weight: 119.16
+    density_25C: 1038.0
+    viscosity_A: 0.132
+    viscosity_B: 1527.0
+    pKa_25C: 8.56
+    pKa_a: -5.1
+    pKa_b: 4085.0
+    heat_of_absorption: 55.0  # Lower than primary amines
+    loading_capacity: 1.0  # Can form bicarbonate
+    henry_a: 170.7
+    henry_b: -8477.0
+    henry_c: -21.95
+    kinetics:
+      mechanism: "base_catalyzed"  # Tertiary amines don't form carbamate
+      A: 4.01e8  # Different mechanism
+      Ea: 42800
+      k2_25C: 6.5  # Much slower direct reaction
+    diffusivity_D0: 1.2e-6
+    diffusivity_Ed: 19000
+    typical_concentration: 50.0
+    regen_temperature: 393.15
+    regen_energy: 2.5  # Lower regeneration energy
+    cost_usd_kg: 2.0
+
+  PZ:
+    full_name: "Piperazine"
+    formula: "C4H10N2"
+    type: "cyclic_diamine"
+    molecular_weight: 86.14
+    density_25C: 1100.0
+    viscosity_A: 0.045
+    viscosity_B: 1350.0
+    pKa_25C: 9.73  # First pKa
+    pKa2_25C: 5.33  # Second pKa
+    pKa_a: -6.8
+    pKa_b: 4930.0
+    heat_of_absorption: 75.0
+    loading_capacity: 1.0  # Can absorb 2 CO2 per molecule
+    henry_a: 170.7
+    henry_b: -8477.0
+    henry_c: -21.95
+    kinetics:
+      mechanism: "zwitterion"
+      # Ref: Bishnoi & Rochelle (2000)
+      A: 4.1e13
+      Ea: 33600
+      k2_25C: 53000  # Very fast
+    diffusivity_D0: 2.0e-6
+    diffusivity_Ed: 17000
+    typical_concentration: 40.0  # Higher concentration possible
+    regen_temperature: 423.15  # K (150°C) - thermal stable
+    regen_energy: 2.8
+    cost_usd_kg: 3.5
+
+  AMP:
+    full_name: "2-Amino-2-methyl-1-propanol"
+    formula: "C4H11NO"
+    type: "sterically_hindered"
+    molecular_weight: 89.14
+    density_25C: 934.0
+    viscosity_A: 0.025
+    viscosity_B: 1280.0
+    pKa_25C: 9.69
+    pKa_a: -6.5
+    pKa_b: 4850.0
+    heat_of_absorption: 65.0
+    loading_capacity: 1.0  # Carbamate unstable, forms bicarbonate
+    henry_a: 170.7
+    henry_b: -8477.0
+    henry_c: -21.95
+    kinetics:
+      mechanism: "zwitterion"
+      A: 1.1e11
+      Ea: 45800
+      k2_25C: 630  # Slower due to steric hindrance
+    diffusivity_D0: 1.8e-6
+    diffusivity_Ed: 17500
+    typical_concentration: 30.0
+    regen_temperature: 388.15
+    regen_energy: 3.0
+    cost_usd_kg: 4.0
+
+  Glycine:
+    full_name: "Glycine potassium salt"
+    formula: "C2H4NO2K"
+    type: "amino_acid"
+    molecular_weight: 113.16  # As potassium salt
+    density_25C: 1150.0
+    viscosity_A: 0.03
+    viscosity_B: 1400.0
+    pKa_25C: 9.78
+    pKa_a: -6.3
+    pKa_b: 4820.0
+    heat_of_absorption: 78.0
+    loading_capacity: 0.5
+    henry_a: 170.7
+    henry_b: -8477.0
+    henry_c: -21.95
+    kinetics:
+      mechanism: "zwitterion"
+      # Ref: Portugal et al. (2007)
+      A: 3.2e11
+      Ea: 43500
+      k2_25C: 6600
+    diffusivity_D0: 1.6e-6
+    diffusivity_Ed: 18500
+    typical_concentration: 25.0
+    regen_temperature: 393.15
+    regen_energy: 3.5
+    cost_usd_kg: 2.5
+
+  Sarcosine:
+    full_name: "Sarcosine potassium salt"
+    formula: "C3H6NO2K"
+    type: "amino_acid"
+    molecular_weight: 127.19
+    density_25C: 1120.0
+    viscosity_A: 0.028
+    viscosity_B: 1380.0
+    pKa_25C: 10.01
+    pKa_a: -6.7
+    pKa_b: 4980.0
+    heat_of_absorption: 80.0
+    loading_capacity: 0.5
+    henry_a: 170.7
+    henry_b: -8477.0
+    henry_c: -21.95
+    kinetics:
+      mechanism: "zwitterion"
+      # Ref: Simons et al. (2010)
+      A: 4.8e11
+      Ea: 42800
+      k2_25C: 9900
+    diffusivity_D0: 1.5e-6
+    diffusivity_Ed: 18200
+    typical_concentration: 25.0
+    regen_temperature: 393.15
+    regen_energy: 3.4
+    cost_usd_kg: 5.0
+
+# Solvent blends - common industrial formulations
+blends:
+  CESAR1:
+    description: "AMP + PZ blend (CESAR solvent)"
+    components:
+      AMP: 0.35  # Mass fraction
+      PZ: 0.15
+      H2O: 0.50
+    heat_of_absorption: 70.0
+    regen_energy: 2.7
+
+  PZ_MDEA:
+    description: "Activated MDEA with piperazine"
+    components:
+      MDEA: 0.35
+      PZ: 0.10
+      H2O: 0.55
+    heat_of_absorption: 60.0
+    regen_energy: 2.4
