@@ -43,6 +43,7 @@ from difflow.database import (
     get_btex,
     get_common_solvents,
 )
+from difflow.base_database import BaseDatabase
 from difflow.uncertainty import (
     linear_propagation,
     monte_carlo_propagation,
@@ -251,6 +252,7 @@ __all__ = [
     "get_alkanes",
     "get_btex",
     "get_common_solvents",
+    "BaseDatabase",
     # Uncertainty Propagation
     "linear_propagation",
     "monte_carlo_propagation",

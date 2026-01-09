@@ -16,6 +16,7 @@ from jax import Array
 import jax
 
 from difflow.streams import Stream, get_flows, make_stream
+from difflow.numerics import safe_divide
 
 
 # =============================================================================
@@ -98,7 +99,7 @@ def wegstein_acceleration(
     # Acceleration factor: q = s / (s - 1)
     # For s < 1: q < 0 (under-relaxation)
     # For s > 1: q > 1 (over-relaxation, can be unstable)
-    q = s / (s - 1 + 1e-10)
+    q = safe_divide(s, s - 1)
 
     # Clip to bounds for stability
     q_min, q_max = bounds
@@ -332,7 +333,7 @@ def select_tear_streams(
         raise ValueError(f"Unknown tear selection method: {method}")
 
 
-def _select_tears_heuristic(flowsheet, graph, cycles) -> list[str]:
+def _select_tears_heuristic(flowsheet: Any, graph: FlowsheetGraph, cycles: list[list[str]]) -> list[str]:
     """Heuristic tear selection: prefer streams after mixers."""
     tear_streams = set()
 
@@ -373,7 +374,7 @@ def _select_tears_heuristic(flowsheet, graph, cycles) -> list[str]:
     return list(tear_streams)
 
 
-def _select_tears_minimum(flowsheet, graph, cycles) -> list[str]:
+def _select_tears_minimum(flowsheet: Any, graph: FlowsheetGraph, cycles: list[list[str]]) -> list[str]:
     """Find minimum number of tear streams (greedy approximation)."""
     # Greedy: pick stream that appears in most cycles
     stream_counts = {}
@@ -405,7 +406,7 @@ def _select_tears_minimum(flowsheet, graph, cycles) -> list[str]:
     return tear_streams
 
 
-def _cycle_streams(flowsheet, graph, cycle) -> set[str]:
+def _cycle_streams(flowsheet: Any, graph: FlowsheetGraph, cycle: list[str]) -> set[str]:
     """Get all streams in a cycle."""
     streams = set()
     for i, unit_name in enumerate(cycle[:-1]):
@@ -443,7 +444,7 @@ def estimate_outlet_temperature(
 
     # Q = F * Cp * dT
     # dT = (heat_duty + heat_of_reaction) / (F * Cp)
-    dT = (heat_duty + heat_of_reaction) / (F_total * Cp_avg + 1e-10)
+    dT = safe_divide(heat_duty + heat_of_reaction, F_total * Cp_avg)
     T_out = inlet["T"] + dT
 
     # Clip to reasonable range
@@ -474,7 +475,7 @@ def estimate_cstr_conversion(
         X = k * tau / (1 + k * tau)
     elif order == 2:
         # Assuming C0 = 1 for estimation
-        X = (jnp.sqrt(1 + 4*k*tau) - 1) / (2*k*tau + 1e-10)
+        X = safe_divide(jnp.sqrt(1 + 4*k*tau) - 1, 2*k*tau)
     else:
         # General approximation
         X = 1 - 1 / (1 + k * tau)
@@ -533,7 +534,7 @@ def estimate_flash_split(
     y = {}
     for s in flows.keys():
         K = K_values.get(s, 1.0)
-        y[s] = z[s] * K / (1 + V * (K - 1) + 1e-10)
+        y[s] = safe_divide(z[s] * K, 1 + V * (K - 1))
 
     return V, y
 
