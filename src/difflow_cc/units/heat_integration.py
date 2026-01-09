@@ -37,6 +37,7 @@ from jax import Array
 
 from difflow.streams import Stream, make_stream, get_flows, total_flow
 from difflow.params_mixin import ParamsMixin
+from difflow.numerics import safe_divide, safe_log
 
 
 # =============================================================================
@@ -146,12 +147,12 @@ class HeatExchanger:
         C_cold = F_cold * Cp_cold
         C_min = jnp.minimum(C_hot, C_cold)
         C_max = jnp.maximum(C_hot, C_cold)
-        C_r = C_min / (C_max + 1e-10)
+        C_r = safe_divide(C_min, C_max)
 
         # NTU
         U = jnp.asarray(p.U)
         A = jnp.asarray(p.A)
-        NTU = U * A / (C_min + 1e-10)
+        NTU = safe_divide(U * A, C_min)
 
         # Effectiveness (counter-current)
         if p.arrangement == "counter":
@@ -159,12 +160,12 @@ class HeatExchanger:
             effectiveness = jnp.where(
                 jnp.abs(C_r - 1.0) < 1e-6,
                 NTU / (1 + NTU),  # C_r = 1 case
-                (1 - jnp.exp(-NTU * (1 - C_r))) /
-                (1 - C_r * jnp.exp(-NTU * (1 - C_r)) + 1e-10)
+                safe_divide(1 - jnp.exp(-NTU * (1 - C_r)),
+                           1 - C_r * jnp.exp(-NTU * (1 - C_r)))
             )
         else:
             # Parallel flow
-            effectiveness = (1 - jnp.exp(-NTU * (1 + C_r))) / (1 + C_r + 1e-10)
+            effectiveness = safe_divide(1 - jnp.exp(-NTU * (1 + C_r)), 1 + C_r)
 
         effectiveness = jnp.clip(effectiveness, 0.0, 0.99)
 
@@ -175,8 +176,8 @@ class HeatExchanger:
         Q = effectiveness * Q_max
 
         # Outlet temperatures
-        T_hot_out = T_hot_in - Q / (C_hot + 1e-10)
-        T_cold_out = T_cold_in + Q / (C_cold + 1e-10)
+        T_hot_out = T_hot_in - safe_divide(Q, C_hot)
+        T_cold_out = T_cold_in + safe_divide(Q, C_cold)
 
         # Enforce minimum approach
         min_approach = jnp.asarray(p.min_approach)
@@ -192,7 +193,7 @@ class HeatExchanger:
         LMTD = jnp.where(
             jnp.abs(dT1 - dT2) < 0.1,
             (dT1 + dT2) / 2,
-            (dT1 - dT2) / (jnp.log(dT1 / (dT2 + 1e-10)) + 1e-10)
+            safe_divide(dT1 - dT2, safe_log(safe_divide(dT1, dT2)))
         )
 
         # Create outlet streams
@@ -280,10 +281,10 @@ class LeanRichExchanger:
             # Calculate from U*A
             U = jnp.asarray(p.U)
             A = jnp.asarray(p.A)
-            NTU = U * A / (C_min + 1e-10)
-            C_r = C_min / (C_max + 1e-10)
-            effectiveness = (1 - jnp.exp(-NTU * (1 - C_r))) / \
-                           (1 - C_r * jnp.exp(-NTU * (1 - C_r)) + 1e-10)
+            NTU = safe_divide(U * A, C_min)
+            C_r = safe_divide(C_min, C_max)
+            effectiveness = safe_divide(1 - jnp.exp(-NTU * (1 - C_r)),
+                                        1 - C_r * jnp.exp(-NTU * (1 - C_r)))
             effectiveness = jnp.clip(effectiveness, 0.0, 0.95)
 
         # Maximum heat transfer
@@ -291,8 +292,8 @@ class LeanRichExchanger:
         Q = effectiveness * Q_max
 
         # Outlet temperatures
-        T_lean_out = T_lean_in - Q / (C_lean + 1e-10)
-        T_rich_out = T_rich_in + Q / (C_rich + 1e-10)
+        T_lean_out = T_lean_in - safe_divide(Q, C_lean)
+        T_rich_out = T_rich_in + safe_divide(Q, C_rich)
 
         # Enforce minimum approach
         min_approach = jnp.asarray(p.min_approach)
@@ -307,8 +308,8 @@ class LeanRichExchanger:
         T_reboiler_est = 393.15  # K
         Q_reboiler_no_hx = C_rich * (T_reboiler_est - T_rich_in)
         Q_reboiler_with_hx = C_rich * (T_reboiler_est - T_rich_out)
-        heat_recovery_fraction = (Q_reboiler_no_hx - Q_reboiler_with_hx) / \
-                                  (Q_reboiler_no_hx + 1e-10)
+        heat_recovery_fraction = safe_divide(Q_reboiler_no_hx - Q_reboiler_with_hx,
+                                             Q_reboiler_no_hx)
 
         # Create output streams
         lean_flows = get_flows(lean_hot)
@@ -386,7 +387,7 @@ class Intercooler:
         # Override with fixed duty if specified
         if p.duty is not None:
             Q = jnp.asarray(p.duty)
-            T_out = T_in - Q / (F * Cp + 1e-10)
+            T_out = T_in - safe_divide(Q, F * Cp)
             T_out = jnp.maximum(T_out, T_coolant + approach)
 
         # Create output stream
