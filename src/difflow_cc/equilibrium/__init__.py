@@ -34,6 +34,7 @@ from difflow_cc.equilibrium.vle import (
     co2_loading,
     # VLE model class
     AmineVLE,
+    AmineVLEParams,
 )
 
 from difflow_cc.equilibrium.solubility import (
@@ -60,6 +61,7 @@ __all__ = [
     "co2_equilibrium_pressure",
     "co2_loading",
     "AmineVLE",
+    "AmineVLEParams",
     # Solubility
     "co2_physical_solubility",
     "diffusivity_co2_amine",
