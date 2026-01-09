@@ -77,6 +77,37 @@ class AbsorberParams(ParamsMixin):
     packing_type: str | None = None
     packing_height: float | None = None  # m
 
+    def __post_init__(self):
+        """Validate absorber parameters."""
+        # Validate solvent exists in database
+        try:
+            get_solvent(self.solvent)
+        except KeyError:
+            from difflow_cc.database import list_solvents
+            available = list_solvents()
+            raise ValueError(
+                f"Unknown solvent: '{self.solvent}'. "
+                f"Available solvents: {available}"
+            )
+        # Validate bounds (only for concrete values, skip JAX tracers)
+        # JAX tracers have a .shape attribute; regular Python numbers don't
+        n_stages = self.n_stages
+        if not hasattr(n_stages, 'shape') and not hasattr(n_stages, '_trace'):
+            if float(n_stages) < 1:
+                raise ValueError(f"n_stages must be >= 1, got {n_stages}")
+        eff = self.stage_efficiency
+        if not hasattr(eff, 'shape') and not hasattr(eff, '_trace'):
+            if eff < 0 or eff > 1:
+                raise ValueError(
+                    f"stage_efficiency must be in [0, 1], got {eff}"
+                )
+        lean = self.lean_loading
+        if not hasattr(lean, 'shape') and not hasattr(lean, '_trace'):
+            if lean < 0:
+                raise ValueError(
+                    f"lean_loading must be >= 0, got {lean}"
+                )
+
 
 # =============================================================================
 # Amine Absorber

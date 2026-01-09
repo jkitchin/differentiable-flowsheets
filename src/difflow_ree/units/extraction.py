@@ -29,7 +29,7 @@ class REEExtractorParams(ParamsMixin):
         n_stages: Number of extraction stages
         extractant: Extractant name (D2EHPA, PC88A, etc.)
         elements: REE elements to track
-        pH: Operating pH
+        pH: Operating pH (typically 1-5 for REE extraction)
         extractant_conc: Extractant concentration (M)
         include_loading: Whether to account for extractant loading
         include_speciation: Whether to account for aqueous speciation
@@ -45,6 +45,38 @@ class REEExtractorParams(ParamsMixin):
     include_speciation: bool = False
     speciation_medium: str = "sulfate"
     ligand_conc: float = 0.5
+
+    def __post_init__(self):
+        """Validate extractor parameters."""
+        from difflow_ree.database import get_extractant_database, get_ree_database
+
+        # Validate extractant exists
+        extractant_db = get_extractant_database()
+        valid_extractants = extractant_db.list_extractants()
+        if self.extractant not in valid_extractants:
+            raise ValueError(
+                f"Unknown extractant: '{self.extractant}'. "
+                f"Available: {valid_extractants}"
+            )
+
+        # Validate elements are valid REE
+        ree_db = get_ree_database()
+        valid_elements = ree_db.list_elements()
+        for elem in self.elements:
+            if elem not in valid_elements:
+                raise ValueError(
+                    f"Unknown REE element: '{elem}'. "
+                    f"Valid elements: {valid_elements}"
+                )
+
+        # Validate bounds
+        if hasattr(self.n_stages, '__float__'):
+            if float(self.n_stages) < 1:
+                raise ValueError(f"n_stages must be >= 1, got {self.n_stages}")
+        if self.extractant_conc <= 0:
+            raise ValueError(
+                f"extractant_conc must be > 0, got {self.extractant_conc}"
+            )
 
 
 class REEExtractor:

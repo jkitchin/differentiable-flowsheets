@@ -107,7 +107,7 @@ class OxalatePrecipitator:
         feed: Stream,
         precipitant: Stream,
         T: Array | float | None = None,
-    ) -> tuple[Stream, dict, dict]:
+    ) -> tuple[Stream, Stream, dict]:
         """Perform oxalate precipitation.
 
         Args:
@@ -117,7 +117,7 @@ class OxalatePrecipitator:
 
         Returns:
             filtrate: Aqueous filtrate (depleted in REE)
-            solid: Dictionary of precipitated REE (mol/s)
+            solid: Solid product stream (precipitated REE as oxalate)
             info: Precipitation diagnostics
         """
         p = self.params
@@ -173,6 +173,9 @@ class OxalatePrecipitator:
         P = feed["P"]
         filtrate = make_stream(filtrate_flows, T, P)
 
+        # Create solid stream (precipitate at same T, P as filtrate)
+        solid = make_stream(solid_flows, T, P)
+
         # Calculate solid composition
         total_solid = sum(float(solid_flows[e]) for e in p.elements)
         solid_composition = {
@@ -189,7 +192,7 @@ class OxalatePrecipitator:
             "product_formula": "REE2(C2O4)3",
         }
 
-        return filtrate, solid_flows, info
+        return filtrate, solid, info
 
 
 # =============================================================================
@@ -228,7 +231,7 @@ class CarbonatePrecipitator:
         feed: Stream,
         precipitant: Stream,
         T: Array | float | None = None,
-    ) -> tuple[Stream, dict, dict]:
+    ) -> tuple[Stream, Stream, dict]:
         """Perform carbonate precipitation.
 
         Args:
@@ -238,7 +241,7 @@ class CarbonatePrecipitator:
 
         Returns:
             filtrate: Aqueous filtrate
-            solid: Precipitated REE (mol/s)
+            solid: Solid product stream (precipitated REE as carbonate)
             info: Precipitation diagnostics
         """
         p = self.params
@@ -283,6 +286,9 @@ class CarbonatePrecipitator:
         P = feed["P"]
         filtrate = make_stream(filtrate_flows, T, P)
 
+        # Create solid stream (precipitate at same T, P as filtrate)
+        solid = make_stream(solid_flows, T, P)
+
         total_solid = sum(float(solid_flows[e]) for e in p.elements)
 
         info = {
@@ -293,7 +299,7 @@ class CarbonatePrecipitator:
             "product_formula": "REE2(CO3)3",
         }
 
-        return filtrate, solid_flows, info
+        return filtrate, solid, info
 
 
 # =============================================================================
@@ -332,7 +338,7 @@ class HydroxidePrecipitator:
         precipitant: Stream,
         pH: Array | float = 9.0,
         T: Array | float | None = None,
-    ) -> tuple[Stream, dict, dict]:
+    ) -> tuple[Stream, Stream, dict]:
         """Perform hydroxide precipitation.
 
         Args:
@@ -343,7 +349,7 @@ class HydroxidePrecipitator:
 
         Returns:
             filtrate: Aqueous filtrate
-            solid: Precipitated REE (mol/s)
+            solid: Solid product stream (precipitated REE as hydroxide)
             info: Precipitation diagnostics
         """
         p = self.params
@@ -405,6 +411,9 @@ class HydroxidePrecipitator:
         P = feed["P"]
         filtrate = make_stream(filtrate_flows, T, P)
 
+        # Create solid stream (precipitate at same T, P as filtrate)
+        solid = make_stream(solid_flows, T, P)
+
         total_solid = sum(float(solid_flows[e]) for e in p.elements)
 
         info = {
@@ -415,7 +424,7 @@ class HydroxidePrecipitator:
             "product_formula": "REE(OH)3",
         }
 
-        return filtrate, solid_flows, info
+        return filtrate, solid, info
 
     def selective_precipitation_pH(
         self,

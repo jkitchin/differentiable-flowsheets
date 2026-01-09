@@ -17,11 +17,13 @@ All calculations are JAX-compatible for automatic differentiation.
 """
 
 from typing import NamedTuple, Literal
-from dataclasses import dataclass, replace, fields, asdict as dc_asdict
+from dataclasses import dataclass
 import jax.numpy as jnp
 from jax import Array, lax
 
 import optimistix as optx
+
+from difflow.params_mixin import ParamsMixin
 
 
 # Universal gas constant (J/mol/K)
@@ -45,95 +47,42 @@ class CriticalProperties(NamedTuple):
     MW: float = 0.0
 
 
-@dataclass
-class EOSParams:
+@dataclass(repr=False)
+class EOSParams(ParamsMixin):
     """Parameters for equation of state calculations.
 
     Precomputed from critical properties for efficiency.
+
+    Attributes:
+        a_c: Critical 'a' parameter for each species
+        b: 'b' parameter for each species
+        kappa: Temperature dependence parameter
+        Tc: Critical temperatures (K)
+        Pc: Critical pressures (Pa)
+        omega: Acentric factors (dimensionless)
+        species_order: List of species names for array ordering
     """
-    a_c: Array  # Critical 'a' parameter for each species
-    b: Array    # 'b' parameter for each species
-    kappa: Array  # Temperature dependence parameter
-    Tc: Array   # Critical temperatures
-    Pc: Array   # Critical pressures
-    omega: Array  # Acentric factors
+    a_c: Array
+    b: Array
+    kappa: Array
+    Tc: Array
+    Pc: Array
+    omega: Array
     species_order: list[str]
 
-    def update(self, **kwargs) -> "EOSParams":
-        """Return a new EOSParams with specified fields replaced.
-
-        This enables JAX-compatible parameter updates for differentiation.
-
-        Args:
-            **kwargs: Fields to update
-
-        Returns:
-            New EOSParams with updated fields
-        """
-        return replace(self, **kwargs)
-
-    def __getitem__(self, key: str):
-        """Get parameter value by name for dict-like access."""
-        try:
-            return getattr(self, key)
-        except AttributeError:
-            raise KeyError(key)
-
-    def __contains__(self, key: str) -> bool:
-        """Check if a field exists in the params."""
-        return key in {f.name for f in fields(self)}
-
-    def keys(self):
-        """Return field names for dict-like iteration."""
-        return (f.name for f in fields(self))
-
-    def values(self):
-        """Return field values for dict-like iteration.
-
-        Returns:
-            Iterator over field values
-        """
-        return (getattr(self, f.name) for f in fields(self))
-
-    def items(self):
-        """Return (name, value) pairs for dict-like iteration.
-
-        Returns:
-            Iterator over (field_name, value) tuples
-        """
-        return ((f.name, getattr(self, f.name)) for f in fields(self))
-
-    def __iter__(self):
-        """Iterate over field names (like dict)."""
-        return (f.name for f in fields(self))
-
-    def __len__(self) -> int:
-        """Return number of fields."""
-        return len(fields(self))
-
-    def asdict(self) -> dict:
-        """Convert params to a dictionary."""
-        return dc_asdict(self)
-
-    def __repr__(self) -> str:
-        """Concise string representation."""
-        def fmt(v):
-            if v is None:
-                return "None"
-            if callable(v) and hasattr(v, '__name__'):
-                return v.__name__
-            if hasattr(v, 'shape'):
-                if v.ndim == 0:
-                    return f"{float(v):.4g}"
-                return f"Array{list(v.shape)}"
-            if isinstance(v, dict):
-                items = ", ".join(f"{k}: {fmt(val)}" for k, val in v.items())
-                return "{" + items + "}"
-            if isinstance(v, (list, tuple)) and len(v) > 5:
-                return f"{type(v).__name__}[{len(v)}]"
-            return repr(v)
-        items = ", ".join(f"{f.name}={fmt(getattr(self, f.name))}" for f in fields(self))
-        return f"{self.__class__.__name__}({items})"
+    def __post_init__(self):
+        """Validate EOS parameters."""
+        if not self.species_order:
+            raise ValueError("species_order cannot be empty")
+        n = len(self.species_order)
+        # Check array dimensions match species count
+        for name in ['a_c', 'b', 'kappa', 'Tc', 'Pc', 'omega']:
+            arr = getattr(self, name)
+            if hasattr(arr, 'shape') and arr.shape[0] != n:
+                raise ValueError(
+                    f"{name} has shape {arr.shape}, expected ({n},) for "
+                    f"{n} species"
+                )
 
 
 class PengRobinson:

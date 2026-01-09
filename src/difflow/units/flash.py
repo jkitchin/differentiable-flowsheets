@@ -32,6 +32,13 @@ class FlashParams(ParamsMixin):
     """
     species_order: list[str]
 
+    def __post_init__(self):
+        """Validate flash parameters."""
+        if not self.species_order:
+            raise ValueError("species_order cannot be empty")
+        if len(self.species_order) != len(set(self.species_order)):
+            raise ValueError("species_order contains duplicate species names")
+
 
 class Flash:
     """Flash separator with TP specification.
@@ -386,7 +393,7 @@ class Splitter:
         self,
         inlet: Stream,
         split_frac: Array | float,
-    ) -> tuple[Stream, Stream]:
+    ) -> tuple[Stream, Stream, dict[str, Array]]:
         """Split a stream.
 
         Args:
@@ -396,6 +403,7 @@ class Splitter:
         Returns:
             outlet1: First outlet stream (split_frac of feed)
             outlet2: Second outlet stream (1 - split_frac of feed)
+            info: Dictionary with split information
         """
         split_frac = jnp.asarray(split_frac)
         inlet_flows = get_flows(inlet)
@@ -406,7 +414,14 @@ class Splitter:
         outlet1 = make_stream(flows1, inlet["T"], inlet["P"])
         outlet2 = make_stream(flows2, inlet["T"], inlet["P"])
 
-        return outlet1, outlet2
+        total_flow = sum(inlet_flows.values())
+        info = {
+            "split_fraction": split_frac,
+            "flow_to_outlet1": total_flow * split_frac,
+            "flow_to_outlet2": total_flow * (1 - split_frac),
+        }
+
+        return outlet1, outlet2, info
 
 
 class Mixer:
@@ -431,14 +446,15 @@ class Mixer:
         self.species_order = species_order
         self.thermo = thermo
 
-    def __call__(self, *inlets: Stream) -> Stream:
+    def __call__(self, *inlets: Stream) -> tuple[Stream, dict[str, Array]]:
         """Mix multiple streams.
 
         Args:
             *inlets: Input streams to mix
 
         Returns:
-            Mixed outlet stream
+            outlet: Mixed outlet stream
+            info: Dictionary with mixing information
         """
         if not inlets:
             raise ValueError("At least one inlet required")
@@ -483,4 +499,13 @@ class Mixer:
         # Use pressure from first inlet
         P_out = inlets[0]["P"]
 
-        return make_stream(outlet_flows, T_out, P_out)
+        outlet = make_stream(outlet_flows, T_out, P_out)
+
+        info = {
+            "n_inlets": len(inlets),
+            "total_flow": total_flow,
+            "T_out": T_out,
+            "P_out": P_out,
+        }
+
+        return outlet, info

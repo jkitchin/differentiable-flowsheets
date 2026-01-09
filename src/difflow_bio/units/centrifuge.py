@@ -113,7 +113,7 @@ class Centrifuge:
         rho_fluid: float | Array = 1000.0,
         viscosity: float | Array = 0.001,
         concentrate_fraction: float | Array = 0.1,
-    ) -> tuple[tuple[Stream, Stream], dict[str, Array]]:
+    ) -> tuple[Stream, Stream, dict[str, Array]]:
         """Perform centrifugal separation.
 
         Args:
@@ -126,7 +126,8 @@ class Centrifuge:
             concentrate_fraction: Fraction of flow going to concentrate (0-1)
 
         Returns:
-            (concentrate, clarified): Tuple of outlet streams
+            concentrate: Concentrate stream (enriched in cells)
+            clarified: Clarified stream (depleted in cells)
             info: Dictionary with:
                 - 'separation_efficiency': Actual separation efficiency
                 - 'stokes_velocity': Particle settling velocity (m/s)
@@ -190,7 +191,7 @@ class Centrifuge:
             "concentration_factor": cell_recovery / concentrate_fraction,
         }
 
-        return (concentrate, clarified), info
+        return concentrate, clarified, info
 
 
 class DiscStackCentrifuge:
@@ -235,7 +236,7 @@ class DiscStackCentrifuge:
         rho_fluid: float | Array = 1000.0,
         viscosity: float | Array = 0.001,
         concentrate_fraction: float | Array = 0.1,
-    ) -> tuple[tuple[Stream, Stream], dict[str, Array]]:
+    ) -> tuple[Stream, Stream, dict[str, Array]]:
         """Perform centrifugal separation.
 
         See Centrifuge.__call__ for details.
