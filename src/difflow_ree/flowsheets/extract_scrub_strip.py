@@ -27,6 +27,7 @@ from dataclasses import dataclass
 import jax.numpy as jnp
 from jax import Array
 
+from difflow.numerics import safe_divide
 from difflow.params_mixin import ParamsMixin
 from difflow.streams import Stream, make_stream, get_flows
 from difflow_ree.units.extraction import REEExtractor, REEExtractorParams
@@ -199,13 +200,13 @@ class ExtractScrubStripCircuit:
         for elem in p.target_elements:
             f_in = float(feed_flows.get(elem, 0.0))
             f_out = float(product_flows.get(elem, 0.0))
-            target_recovery[elem] = f_out / (f_in + 1e-10)
+            target_recovery[elem] = safe_divide(f_out, f_in)
 
         # Product purity (mole fraction)
         total_product_ree = sum(float(product_flows.get(e, 0.0)) for e in p.elements)
         product_purity = {}
         for elem in p.elements:
-            product_purity[elem] = float(product_flows.get(elem, 0.0)) / (total_product_ree + 1e-10)
+            product_purity[elem] = safe_divide(float(product_flows.get(elem, 0.0)), total_product_ree)
 
         # Target purity (sum of target elements)
         target_purity = sum(product_purity.get(e, 0.0) for e in p.target_elements)
@@ -216,7 +217,7 @@ class ExtractScrubStripCircuit:
         for elem in impurity_elements:
             f_in = float(feed_flows.get(elem, 0.0))
             f_product = float(product_flows.get(elem, 0.0))
-            impurity_rejection[elem] = 1 - f_product / (f_in + 1e-10)
+            impurity_rejection[elem] = 1 - safe_divide(f_product, f_in)
 
         return {
             "raffinate": raffinate,
@@ -255,7 +256,7 @@ class ExtractScrubStripCircuit:
                 float(scrub_flows.get(elem, 0.0)) +
                 float(product_flows.get(elem, 0.0))
             )
-            closure = f_out / (f_in + 1e-10)
+            closure = safe_divide(f_out, f_in)
             balance[elem] = {
                 "in": f_in,
                 "out": f_out,

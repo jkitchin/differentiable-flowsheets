@@ -26,6 +26,7 @@ __all__ = [
 
 from dataclasses import dataclass
 from difflow.params_mixin import ParamsMixin
+from difflow.numerics import safe_divide
 
 import jax.numpy as jnp
 from jax import Array
@@ -420,5 +421,5 @@ def specific_operating_cost(
     # CO2 captured annually (tonne/yr)
     CO2_tonne_yr = CO2_captured * 44.0 * 3600 * params.hours_per_year / 1e6
 
-    specific = total_opex / (CO2_tonne_yr + 1e-10)
+    specific = safe_divide(total_opex, CO2_tonne_yr)
     return specific

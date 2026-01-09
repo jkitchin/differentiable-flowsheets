@@ -28,6 +28,7 @@ from jax import Array
 
 from difflow.streams import Stream, make_stream, get_flows, total_flow
 from difflow.params_mixin import ParamsMixin
+from difflow.numerics import safe_divide, safe_log
 from difflow_cc.database import get_solvent
 from difflow_cc.equilibrium.vle import AmineVLE
 
@@ -225,7 +226,7 @@ class AmineAbsorber:
 
         # Absorption factor A = L / (m * G) where L, G are molar flows
         # In our units: A = F_amine / (m_prime * F_total_gas)
-        A = L_G / (m_prime + 1e-10)
+        A = safe_divide(L_G, m_prime)
 
         # Kremser equation for absorption
         n_stages = jnp.asarray(p.n_stages)
@@ -242,7 +243,7 @@ class AmineAbsorber:
         phi = jnp.where(
             jnp.abs(A - 1.0) < 1e-6,
             1.0 / (N_eff + 1),
-            (A - 1.0) / (A_Np1 - 1.0 + 1e-10)
+            safe_divide(A - 1.0, A_Np1 - 1.0)
         )
         phi = jnp.clip(phi, 0.001, 0.999)
 
@@ -254,7 +255,7 @@ class AmineAbsorber:
         F_CO2_absorbed = F_CO2_in - F_CO2_out
 
         # Rich loading
-        rich_loading = lean_loading + F_CO2_absorbed / (F_amine + 1e-10)
+        rich_loading = lean_loading + safe_divide(F_CO2_absorbed, F_amine)
         rich_loading = jnp.clip(rich_loading, 0.0, self._solvent_data.loading_capacity)
 
         # Create output streams
@@ -333,7 +334,7 @@ class AmineAbsorber:
 
         P_total = jnp.asarray(p.P_absorber)
         m_prime = m * F_amine / (P_total * F_total_gas)
-        A = L_G / (m_prime + 1e-10)
+        A = safe_divide(L_G, m_prime)
 
         # Solve Kremser for N:
         # phi = (A-1)/(A^(N+1)-1)
@@ -341,8 +342,8 @@ class AmineAbsorber:
         # N+1 = log((A-1)/phi + 1) / log(A)
         eta = jnp.asarray(p.stage_efficiency)
 
-        numerator = (A - 1) / (phi + 1e-10) + 1
-        N_eff = jnp.log(numerator) / jnp.log(A + 1e-10) - 1
+        numerator = safe_divide(A - 1, phi) + 1
+        N_eff = safe_divide(safe_log(numerator), safe_log(A)) - 1
         N = N_eff / eta
 
         return jnp.maximum(N, 1.0)

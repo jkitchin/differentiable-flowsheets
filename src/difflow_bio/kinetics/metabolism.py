@@ -35,6 +35,8 @@ from difflow.params_mixin import ParamsMixin
 import jax.numpy as jnp
 from jax import Array
 
+from difflow.numerics import safe_divide
+
 
 # =============================================================================
 # Substrate Uptake
@@ -209,7 +211,7 @@ def metabolic_quotient(
     rate = jnp.asarray(rate)
     X = jnp.asarray(X)
 
-    return rate / (X + 1e-10)
+    return safe_divide(rate, X)
 
 
 # =============================================================================

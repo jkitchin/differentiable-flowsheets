@@ -20,6 +20,7 @@ from typing import Literal
 import jax.numpy as jnp
 from jax import Array
 
+from difflow.numerics import safe_divide
 from difflow.params_mixin import ParamsMixin
 from difflow.streams import Stream, make_stream, get_flows
 
@@ -158,8 +159,8 @@ class CeriumOxidizer:
         # Calculate Ce removal efficiency
         total_ree_in = sum(float(feed_flows.get(e, 0.0)) for e in p.elements)
         total_ree_out = sum(float(filtrate_flows.get(e, 0.0)) for e in p.elements)
-        ce_fraction_in = float(F_Ce_in) / (total_ree_in + 1e-10)
-        ce_fraction_out = float(F_Ce_remaining) / (total_ree_out + 1e-10)
+        ce_fraction_in = safe_divide(float(F_Ce_in), total_ree_in)
+        ce_fraction_out = safe_divide(float(F_Ce_remaining), total_ree_out)
 
         info = {
             "oxidant": p.oxidant,

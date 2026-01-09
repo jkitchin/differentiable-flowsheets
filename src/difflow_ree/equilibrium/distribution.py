@@ -13,6 +13,7 @@ from typing import Literal
 import jax.numpy as jnp
 from jax import Array
 
+from difflow.numerics import safe_divide
 from difflow_ree.database import (
     get_extractant_database,
     get_extractant,
@@ -341,7 +342,7 @@ def minimum_solvent_ratio(
     y_max = D * x_in
     # Material balance: F*(x_in - x_out) = S*(y_max - y_in)
     # S/F = (x_in - x_out) / (y_max - y_in)
-    return (x_in - x_out) / (y_max - y_in + 1e-10)
+    return safe_divide(x_in - x_out, y_max - y_in)
 
 
 def stages_kremser(

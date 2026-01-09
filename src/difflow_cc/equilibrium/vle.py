@@ -33,6 +33,7 @@ from jax import Array
 import optimistix as optx
 
 from difflow.params_mixin import ParamsMixin
+from difflow.numerics import safe_divide
 from difflow_cc.database import get_solvent, AmineSolvent
 
 # Gas constant
@@ -375,7 +376,7 @@ class AmineVLE:
 
         # Total energy per mol CO2
         Q_per_mol = (
-            Q_sensible / (mol_CO2_per_kg + 1e-10) +
+            safe_divide(Q_sensible, mol_CO2_per_kg) +
             dH_abs +
             steam_ratio * dH_vap
         )

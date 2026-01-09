@@ -18,6 +18,7 @@ from dataclasses import dataclass
 import jax.numpy as jnp
 from jax import Array
 
+from difflow.numerics import safe_divide, safe_log
 from difflow.params_mixin import ParamsMixin
 from difflow.streams import Stream, make_stream, get_flows
 from difflow_ree.database import get_ree_database
@@ -140,7 +141,7 @@ class OxalatePrecipitator:
         # Stoichiometry: 2 REE + 3 C2O4 → REE2(C2O4)3
         # Required oxalate = 1.5 × REE (mol basis)
         required_oxalate = 1.5 * total_ree
-        actual_excess = F_oxalate / (required_oxalate + 1e-10)
+        actual_excess = safe_divide(F_oxalate, required_oxalate)
 
         for elem in p.elements:
             F_in = jnp.asarray(feed_flows.get(elem, 0.0))
@@ -179,7 +180,7 @@ class OxalatePrecipitator:
         # Calculate solid composition
         total_solid = sum(float(solid_flows[e]) for e in p.elements)
         solid_composition = {
-            e: float(solid_flows[e]) / (total_solid + 1e-10)
+            e: safe_divide(float(solid_flows[e]), total_solid)
             for e in p.elements
         }
 
@@ -259,7 +260,7 @@ class CarbonatePrecipitator:
 
         total_ree = sum(feed_flows.get(e, 0.0) for e in p.elements)
         required_carbonate = 1.5 * total_ree
-        actual_excess = F_carbonate / (required_carbonate + 1e-10)
+        actual_excess = safe_divide(F_carbonate, required_carbonate)
 
         for elem in p.elements:
             F_in = jnp.asarray(feed_flows.get(elem, 0.0))
@@ -381,10 +382,10 @@ class HydroxidePrecipitator:
             c_sat = Ksp / jnp.power(OH_conc, 3)
 
             # Assume feed concentration (rough estimate)
-            c_feed = F_in / (feed_flows.get("H2O", 1.0) + 1e-10)
+            c_feed = safe_divide(F_in, feed_flows.get("H2O", 1.0))
 
             # Supersaturation ratio
-            S = c_feed / (c_sat + 1e-20)
+            S = safe_divide(c_feed, c_sat)
 
             # Conversion based on supersaturation
             # If S > 1, precipitation occurs
@@ -405,7 +406,7 @@ class HydroxidePrecipitator:
                 "pKsp": pKsp,
                 "supersaturation": float(S),
                 "conversion": float(conversion),
-                "precipitation_pH": float(14 + jnp.log10(jnp.power(Ksp/c_feed, 1/3) + 1e-20)),
+                "precipitation_pH": float(14 + safe_log(jnp.power(safe_divide(Ksp, c_feed), 1/3), base=10)),
             }
 
         P = feed["P"]

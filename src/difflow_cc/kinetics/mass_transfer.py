@@ -25,6 +25,7 @@ __all__ = [
 import jax.numpy as jnp
 from jax import Array
 
+from difflow.numerics import safe_divide
 
 # Constants
 g = 9.81  # m/s²
@@ -229,10 +230,10 @@ def overall_mass_transfer(
     P = jnp.asarray(P)
 
     # Resistances in series
-    R_G = 1 / (k_G + 1e-10)
-    R_L = H / (E * k_L * P + 1e-10)
+    R_G = safe_divide(1.0, k_G)
+    R_L = safe_divide(H, E * k_L * P)
 
-    K_G = 1 / (R_G + R_L)
+    K_G = safe_divide(1.0, R_G + R_L)
 
     return K_G
 
@@ -262,7 +263,7 @@ def height_of_transfer_unit(
     K_G = jnp.asarray(K_G)
     a_w = jnp.asarray(a_w)
 
-    HTU = u_G / (K_G * a_w + 1e-10)
+    HTU = safe_divide(u_G, K_G * a_w)
 
     return HTU
 

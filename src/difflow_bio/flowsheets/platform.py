@@ -30,6 +30,7 @@ from difflow_bio.units.filtration import (
 from difflow_bio.units.centrifuge import (
     DiscStackCentrifuge, DiscStackParams,
 )
+from difflow.numerics import safe_divide
 
 
 @dataclass(repr=False)
@@ -181,7 +182,7 @@ class PlatformDSP:
             prev_flows = get_flows(intermediates.get(list(intermediates.keys())[-1], feed))
             prev_product = float(prev_flows.get(target, 0.0))
 
-            step_yields[step_name] = current_product / (prev_product + 1e-10)
+            step_yields[step_name] = safe_divide(current_product, prev_product)
             intermediates[step_name] = current_stream
 
         # Final UF concentration
@@ -190,7 +191,7 @@ class PlatformDSP:
 
         # Calculate overall metrics
         product_out = float(final_flows.get(target, 0.0))
-        overall_yield = product_out / (product_in + 1e-10)
+        overall_yield = safe_divide(product_out, product_in)
 
         result = {
             "product": final_product,

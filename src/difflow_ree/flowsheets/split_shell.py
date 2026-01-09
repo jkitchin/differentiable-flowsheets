@@ -25,6 +25,7 @@ from dataclasses import dataclass
 import jax.numpy as jnp
 from jax import Array
 
+from difflow.numerics import safe_divide
 from difflow.params_mixin import ParamsMixin
 from difflow.streams import Stream, make_stream, get_flows
 from difflow_ree.equilibrium.distribution import REEDistribution
@@ -140,7 +141,7 @@ class SplitShellCascade:
                 frac_extracted = jnp.where(
                     jnp.abs(E - 1.0) < 1e-6,
                     n_section / (n_section + 1),
-                    (E_Np1 - E) / (E_Np1 - 1.0 + 1e-10)
+                    safe_divide(E_Np1 - E, E_Np1 - 1.0)
                 )
                 frac_extracted = jnp.clip(frac_extracted, 0.0, 1.0)
 
@@ -164,7 +165,7 @@ class SplitShellCascade:
         for name, prod in products.items():
             total = sum(prod["flows"].values())
             prod["composition"] = {
-                elem: flow / (total + 1e-10)
+                elem: safe_divide(flow, total)
                 for elem, flow in prod["flows"].items()
             }
 

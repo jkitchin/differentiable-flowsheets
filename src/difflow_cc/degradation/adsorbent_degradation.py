@@ -33,6 +33,7 @@ __all__ = [
 
 from dataclasses import dataclass
 from difflow.params_mixin import ParamsMixin
+from difflow.numerics import safe_divide, safe_log
 
 import jax.numpy as jnp
 from jax import Array
@@ -277,10 +278,10 @@ def adsorbent_lifetime(
     f_test = float(fade["capacity_fraction"])
 
     # Effective decay constant
-    k_eff = -jnp.log(f_test + 1e-10) / test_hours
+    k_eff = safe_divide(-safe_log(f_test), test_hours)
 
     # Time to reach minimum
-    lifetime = -jnp.log(min_capacity_fraction) / (k_eff + 1e-10)
+    lifetime = safe_divide(-safe_log(min_capacity_fraction), k_eff)
     lifetime = jnp.clip(lifetime, 1000, 50000)  # 1000 hr to 50000 hr
 
     return lifetime

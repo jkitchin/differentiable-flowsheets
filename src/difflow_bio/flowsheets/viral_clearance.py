@@ -17,6 +17,7 @@ import jax.numpy as jnp
 from jax import Array
 
 from difflow.streams import Stream, make_stream, get_flows
+from difflow.numerics import safe_divide
 
 
 @dataclass(repr=False)
@@ -224,7 +225,7 @@ class ViralClearanceTrain:
         # Calculate totals
         final_flows = get_flows(post_vf)
         product_out = float(final_flows.get(target, 0.0))
-        overall_recovery = product_out / (product_in + 1e-10)
+        overall_recovery = safe_divide(product_out, product_in)
 
         total_lrv = low_ph_info["lrv"] + vf_info["lrv"]
 

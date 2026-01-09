@@ -33,6 +33,8 @@ from difflow.params_mixin import ParamsMixin
 import jax.numpy as jnp
 from jax import Array
 
+from difflow.numerics import safe_divide
+
 
 # =============================================================================
 # Basic Production Models
@@ -160,7 +162,7 @@ def overflow_production(
     q_p_max = jnp.asarray(q_p_max)
     S_crit = jnp.asarray(S_crit)
 
-    overflow_fraction = jnp.maximum(0.0, (S - S_crit) / (S + 1e-10))
+    overflow_fraction = jnp.maximum(0.0, safe_divide(S - S_crit, S))
     return q_p_max * X * overflow_fraction
 
 

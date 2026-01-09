@@ -23,6 +23,7 @@ from jax import Array
 
 from difflow.streams import Stream, make_stream, get_flows, total_flow
 from difflow.params_mixin import ParamsMixin
+from difflow.numerics import safe_divide
 from difflow_cc.database import get_solvent
 from difflow_cc.equilibrium.vle import AmineVLE
 
@@ -152,7 +153,7 @@ class AmineStripper:
         F_CO2_absorbed = jnp.asarray(rich_flows.get("CO2_absorbed", 0.0))
 
         # Rich loading
-        rich_loading = F_CO2_absorbed / (F_amine + 1e-10)
+        rich_loading = safe_divide(F_CO2_absorbed, F_amine)
 
         # Feed temperature
         if T_feed is None:
@@ -211,13 +212,13 @@ class AmineStripper:
         # Specific energy (GJ/tonne CO2)
         # Convert F_CO2_stripped (mol/s) to tonnes/s: * 44/1e6
         m_CO2_tonnes = F_CO2_stripped * 44 / 1e6  # tonnes/s
-        specific_energy = Q_reboiler / (m_CO2_tonnes + 1e-10) / 1e9  # GJ/tonne
+        specific_energy = safe_divide(Q_reboiler, m_CO2_tonnes) / 1e9  # GJ/tonne
 
         # CO2 product purity (after condenser)
         # Most water condenses, leaving >95% CO2
         F_CO2_product = F_CO2_stripped
         F_H2O_product = F_steam * (1 - reflux)  # Some water passes through
-        CO2_purity = F_CO2_product / (F_CO2_product + F_H2O_product + 1e-10)
+        CO2_purity = safe_divide(F_CO2_product, F_CO2_product + F_H2O_product)
 
         # Create output streams
         # Lean solvent

@@ -49,6 +49,7 @@ from difflow_bio.units.chromatography import (
 from difflow_bio.units.filtration import (
     TFF, UltrafiltrationParams, DiafiltrationParams,
 )
+from difflow.numerics import safe_divide
 
 
 @dataclass(repr=False)
@@ -188,7 +189,7 @@ class mAbDSPTrain:
         # Step 1: Protein A capture
         proa_eluate, proa_waste = self._proa(harvest)
         proa_flows = get_flows(proa_eluate)
-        proa_yield = proa_flows.get(target, 0.0) / (mab_in + 1e-10)
+        proa_yield = safe_divide(proa_flows.get(target, 0.0), mab_in)
         intermediates["proa_eluate"] = proa_eluate
 
         # Step 2: TFF concentration (post-ProA)
@@ -201,26 +202,26 @@ class mAbDSPTrain:
         # Step 3: CEX polish
         cex_eluate, cex_waste = self._cex(tff1_out)
         cex_flows = get_flows(cex_eluate)
-        cex_yield = cex_flows.get(target, 0.0) / (proa_flows.get(target, 0.0) + 1e-10)
+        cex_yield = safe_divide(cex_flows.get(target, 0.0), proa_flows.get(target, 0.0))
         intermediates["cex_eluate"] = cex_eluate
 
         # Step 4: AEX flow-through polish
         aex_product, aex_bound = self._aex(cex_eluate)
         aex_flows = get_flows(aex_product)
-        aex_yield = aex_flows.get(target, 0.0) / (cex_flows.get(target, 0.0) + 1e-10)
+        aex_yield = safe_divide(aex_flows.get(target, 0.0), cex_flows.get(target, 0.0))
         intermediates["aex_product"] = aex_product
 
         # Step 5: Final TFF formulation
         final_product = self._tff.uf_concentrate(
             aex_product,
-            target_factor=p.final_concentration_g_L / (aex_flows.get(target, 1.0) + 1e-10),
+            target_factor=safe_divide(p.final_concentration_g_L, aex_flows.get(target, 1.0)),
         )
         intermediates["final_product"] = final_product
 
         # Calculate overall metrics
         final_flows = get_flows(final_product)
         mab_out = final_flows.get(target, 0.0)
-        overall_yield = mab_out / (mab_in + 1e-10)
+        overall_yield = safe_divide(mab_out, mab_in)
 
         # Purity (mAb as fraction of total protein)
         total_protein = sum(
@@ -228,7 +229,7 @@ class mAbDSPTrain:
             for s in [target, "HCP", "aggregates"]
             if s in final_flows or s == target
         )
-        purity = float(mab_out) / (total_protein + 1e-10)
+        purity = safe_divide(float(mab_out), total_protein)
 
         result = {
             "product": final_product,

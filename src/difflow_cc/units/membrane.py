@@ -34,6 +34,7 @@ from jax import Array
 
 from difflow.streams import Stream, make_stream, get_flows, total_flow
 from difflow.params_mixin import ParamsMixin
+from difflow.numerics import safe_divide
 from difflow_cc.database import get_membrane, Membrane
 
 
@@ -253,7 +254,7 @@ class MembraneSeparator:
         F_permeate_total = J_total * area
 
         # Stage cut
-        stage_cut = F_permeate_total / (F_total + 1e-10)
+        stage_cut = safe_divide(F_permeate_total, F_total)
         stage_cut = jnp.clip(stage_cut, 0.0, 0.95)  # Physical limit
 
         # Permeate composition (from flux ratios)
@@ -262,7 +263,7 @@ class MembraneSeparator:
 
         for species, flow in feed_flows.items():
             # Permeate flow proportional to flux
-            y_perm = fluxes[species] / (J_total + 1e-10)
+            y_perm = safe_divide(fluxes[species], J_total)
             F_perm = F_permeate_total * y_perm
             F_perm = jnp.minimum(F_perm, flow * 0.99)  # Can't permeate more than feed
 
@@ -274,8 +275,8 @@ class MembraneSeparator:
         F_CO2_perm = permeate_flows.get("CO2", jnp.array(0.0))
         F_perm_total = sum(permeate_flows.values())
 
-        CO2_recovery = F_CO2_perm / (F_CO2_feed + 1e-10)
-        CO2_purity = F_CO2_perm / (F_perm_total + 1e-10)
+        CO2_recovery = safe_divide(F_CO2_perm, F_CO2_feed)
+        CO2_purity = safe_divide(F_CO2_perm, F_perm_total)
 
         # Create output streams
         retentate = make_stream(retentate_flows, T, P_feed)
@@ -332,7 +333,7 @@ class MembraneSeparator:
         driving_force = p_CO2_feed * 0.8  # Approximate average
 
         # Area = F / (Q * ΔP)
-        area = F_CO2_perm / (Q_CO2 * driving_force + 1e-10)
+        area = safe_divide(F_CO2_perm, Q_CO2 * driving_force)
 
         return area
 
@@ -440,8 +441,8 @@ class MultistageMembrane:
         overall_info = {
             "n_stages": self.n_stages,
             "configuration": self.configuration,
-            "overall_CO2_recovery": F_CO2_perm / (F_CO2_feed + 1e-10),
-            "overall_CO2_purity": F_CO2_perm / (F_perm_total + 1e-10),
+            "overall_CO2_recovery": safe_divide(F_CO2_perm, F_CO2_feed),
+            "overall_CO2_purity": safe_divide(F_CO2_perm, F_perm_total),
             "stage_info": stage_infos,
         }
 
@@ -481,8 +482,8 @@ class MultistageMembrane:
         overall_info = {
             "n_stages": self.n_stages,
             "configuration": self.configuration,
-            "overall_CO2_recovery": F_CO2_perm / (F_CO2_feed + 1e-10),
-            "overall_CO2_purity": F_CO2_perm / (F_perm_total + 1e-10),
+            "overall_CO2_recovery": safe_divide(F_CO2_perm, F_CO2_feed),
+            "overall_CO2_purity": safe_divide(F_CO2_perm, F_perm_total),
             "stage_info": [info_1, info_2],
         }
 

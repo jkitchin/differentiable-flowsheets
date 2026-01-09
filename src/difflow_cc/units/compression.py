@@ -37,6 +37,7 @@ from jax import Array
 
 from difflow.streams import Stream, make_stream, get_flows, total_flow
 from difflow.params_mixin import ParamsMixin
+from difflow.numerics import safe_divide
 
 
 # Gas constant
@@ -548,7 +549,7 @@ class CompressionTrain:
         m_dot_co2 = F * MW_CO2 / 1000  # kg/s
 
         # Specific power (kWh/tonne CO2)
-        specific_power = total_power / (m_dot_co2 + 1e-10) / 1000 * 3600 / 1000
+        specific_power = safe_divide(total_power, m_dot_co2) / 1000 * 3600 / 1000
         # Simplify: W / (kg/s) = J/kg, * 3600/1e6 = kWh/tonne
 
         info = {
@@ -556,7 +557,7 @@ class CompressionTrain:
             "pressure_ratio_per_stage": pr_per_stage,
             "total_power": total_power,  # W
             "total_cooling": total_cooling,  # W
-            "specific_power": total_power / (m_dot_co2 * 1000 + 1e-10),  # kJ/kg
+            "specific_power": safe_divide(total_power, m_dot_co2 * 1000),  # kJ/kg
             "specific_power_kWh_tonne": specific_power,
             "P_inlet": P_in,
             "P_outlet": stream["P"],

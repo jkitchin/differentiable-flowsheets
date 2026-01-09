@@ -27,6 +27,7 @@ __all__ = [
 
 from dataclasses import dataclass
 from difflow.params_mixin import ParamsMixin
+from difflow.numerics import safe_divide
 from typing import Literal
 
 import jax.numpy as jnp
@@ -460,6 +461,6 @@ class PowerPlantIntegration:
         total_energy = steam_duty + compression_power * 2.5  # W
 
         # Specific (GJ/tonne)
-        specific = total_energy / (CO2_captured * 1000 + 1e-10)  # J/kg = GJ/tonne
+        specific = safe_divide(total_energy, CO2_captured * 1000)  # J/kg = GJ/tonne
 
         return specific

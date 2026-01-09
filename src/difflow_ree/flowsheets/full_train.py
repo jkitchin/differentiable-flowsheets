@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 import jax.numpy as jnp
 from jax import Array
 
+from difflow.numerics import safe_divide
 from difflow.params_mixin import ParamsMixin
 from difflow.streams import Stream, make_stream, get_flows
 from difflow_ree.units.cerium import CeriumOxidizer, CeriumOxidizerParams
@@ -170,7 +171,7 @@ class GroupSeparator:
         flows = get_flows(stream)
         total = sum(flows.get(e, 0.0) for e in self.elements)
         return {
-            e: float(flows.get(e, 0.0)) / (float(total) + 1e-10)
+            e: safe_divide(float(flows.get(e, 0.0)), float(total))
             for e in self.elements
         }
 
@@ -282,7 +283,7 @@ class FullSeparationTrain:
         results["mass_balance"] = {
             "total_in": total_in,
             "total_out": total_out,
-            "closure": total_out / (total_in + 1e-10),
+            "closure": safe_divide(total_out, total_in),
         }
 
         return results

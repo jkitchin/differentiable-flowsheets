@@ -25,6 +25,7 @@ import jax.numpy as jnp
 from jax import Array
 
 from difflow.streams import Stream, make_stream, get_flows
+from difflow.numerics import safe_divide
 
 
 # =============================================================================
@@ -478,7 +479,7 @@ class SizeExclusionChromatography:
         product_total = sum(product_flows.values())
 
         aggregate_in = inlet_flows.get(p.aggregate_species, jnp.array(0.0)) * load_volume / total_flow
-        aggregate_removed = 1.0 - product_flows.get(p.aggregate_species, jnp.array(0.0)) / (aggregate_in + 1e-10)
+        aggregate_removed = 1.0 - safe_divide(product_flows.get(p.aggregate_species, jnp.array(0.0)), aggregate_in)
 
         info = {
             "yield": jnp.where(target_in > 0, target_out / target_in, jnp.array(0.0)),

@@ -16,6 +16,7 @@ from typing import Literal
 import jax.numpy as jnp
 from jax import Array
 
+from difflow.numerics import safe_divide, safe_log
 from difflow.params_mixin import ParamsMixin
 from difflow.streams import Stream, make_stream, get_flows
 from difflow_ree.equilibrium.distribution import REEDistribution
@@ -136,7 +137,7 @@ class REEStripper:
             frac_in_org = jnp.where(
                 jnp.abs(E - 1.0) < 1e-6,
                 n_stages / (n_stages + 1),
-                (E_Np1 - E) / (E_Np1 - 1.0 + 1e-10)
+                safe_divide(E_Np1 - E, E_Np1 - 1.0)
             )
 
             # At very low pH with many stages, almost complete stripping
@@ -152,7 +153,7 @@ class REEStripper:
 
             strip_efficiency[elem] = {
                 "D": D,
-                "stripping_factor": 1.0 / (E + 1e-10),
+                "stripping_factor": safe_divide(1.0, E),
                 "recovery": 1 - frac_in_org,
             }
 
@@ -163,7 +164,7 @@ class REEStripper:
         # Calculate overall strip performance
         total_in = sum(float(org_flows.get(e, 0.0)) for e in p.elements)
         total_product = sum(float(product_flows.get(e, 0.0)) for e in p.elements)
-        overall_recovery = total_product / (total_in + 1e-10)
+        overall_recovery = safe_divide(total_product, total_in)
 
         info = {
             "n_stages": n_stages,
@@ -206,7 +207,7 @@ def minimum_strip_stages(
 
     # Simplified approximation for E << 1:
     # N ≈ log(1 - recovery) / log(E)
-    N = jnp.log(1 - target_recovery) / jnp.log(E + 1e-10)
+    N = safe_divide(jnp.log(1 - target_recovery), safe_log(E))
 
     return float(jnp.maximum(N, 1.0))
 
@@ -253,5 +254,5 @@ def strip_solution_concentration(
     """
     conc = {}
     for elem in elements:
-        conc[elem] = element_flows.get(elem, 0.0) / (strip_flow + 1e-10)
+        conc[elem] = safe_divide(element_flows.get(elem, 0.0), strip_flow)
     return conc

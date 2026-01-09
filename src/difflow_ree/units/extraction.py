@@ -10,6 +10,7 @@ from dataclasses import dataclass
 import jax.numpy as jnp
 from jax import Array, lax
 
+from difflow.numerics import safe_divide
 from difflow.params_mixin import ParamsMixin
 from difflow.streams import Stream, make_stream, get_flows, total_flow
 from difflow_ree.equilibrium.distribution import REEDistribution
@@ -193,7 +194,7 @@ class REEExtractor:
             frac_remaining = jnp.where(
                 jnp.abs(E - 1.0) < 1e-6,
                 1.0 / (n_stages + 1),
-                (E - 1.0) / (E_Np1 - 1.0 + 1e-10)
+                safe_divide(E - 1.0, E_Np1 - 1.0)
             )
             frac_remaining = jnp.clip(frac_remaining, 0.0, 1.0)
 

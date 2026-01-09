@@ -37,6 +37,7 @@ from jax import Array
 
 from difflow.streams import Stream, make_stream, get_flows, total_flow
 from difflow.params_mixin import ParamsMixin
+from difflow.numerics import safe_divide
 from difflow_cc.database import get_adsorbent
 
 
@@ -215,7 +216,7 @@ class SolidSorbentDAC:
         # Capture efficiency (fraction of CO2 in processed air)
         air_processed = p.n_units * n_air * duty_fraction
         CO2_available = air_processed * CO2_AMBIENT
-        capture_efficiency = total_capture / (CO2_available + 1e-10)
+        capture_efficiency = safe_divide(total_capture, CO2_available)
         capture_efficiency = jnp.clip(capture_efficiency, 0.0, 0.95)
 
         # Energy requirements
@@ -254,8 +255,8 @@ class SolidSorbentDAC:
 
         # Specific energy (GJ/tonne CO2)
         CO2_mass_rate = total_capture * MW_CO2 / 1000  # kg/s
-        specific_thermal = Q_thermal_total / (CO2_mass_rate * 1e9 + 1e-10)  # GJ/tonne
-        specific_electrical = electrical_total / (CO2_mass_rate * 1e9 + 1e-10)  # GJ/tonne
+        specific_thermal = safe_divide(Q_thermal_total, CO2_mass_rate * 1e9)  # GJ/tonne
+        specific_electrical = safe_divide(electrical_total, CO2_mass_rate * 1e9)  # GJ/tonne
 
         # Create CO2 product stream
         co2_flows = {"CO2": total_capture}
@@ -392,8 +393,8 @@ class LiquidSolventDAC:
         # Specific energy
         CO2_mass_rate = n_CO2_captured * MW_CO2 / 1000  # kg/s
 
-        specific_thermal = Q_thermal_net / (CO2_mass_rate * 1e9 + 1e-10)  # GJ/tonne
-        specific_electrical = (P_electrical_total + asu_power) / (CO2_mass_rate * 1e9 + 1e-10)
+        specific_thermal = safe_divide(Q_thermal_net, CO2_mass_rate * 1e9)  # GJ/tonne
+        specific_electrical = safe_divide(P_electrical_total + asu_power, CO2_mass_rate * 1e9)
 
         # CO2 product (from calciner, high purity)
         T_calciner = jnp.asarray(p.calciner_temperature)
@@ -474,7 +475,7 @@ def dac_cost_estimate(
     crf = 0.08 * (1.08) ** 25 / ((1.08) ** 25 - 1)
     annual_capex = total_capex * crf
 
-    levelized_cost = (annual_capex + annual_opex) / (capacity + 1e-10)
+    levelized_cost = safe_divide(annual_capex + annual_opex, capacity)
 
     return {
         "total_capex_USD": total_capex,

@@ -34,6 +34,7 @@ from difflow_cc.economics.opex import (
     specific_operating_cost,
     OpexParams,
 )
+from difflow.numerics import safe_divide
 
 
 @dataclass(repr=False)
@@ -130,8 +131,8 @@ def levelized_cost_capture(
     CO2_tonne_yr = CO2_captured * 44.0 * 3600 * hours_per_year / 1e6
 
     # Specific costs
-    capex_per_tonne = ann_capex / (CO2_tonne_yr + 1e-10)
-    opex_per_tonne = annual_opex / (CO2_tonne_yr + 1e-10)
+    capex_per_tonne = safe_divide(ann_capex, CO2_tonne_yr)
+    opex_per_tonne = safe_divide(annual_opex, CO2_tonne_yr)
     total_per_tonne = capex_per_tonne + opex_per_tonne
 
     return {
@@ -179,7 +180,7 @@ def cost_of_co2_avoided(
     emissions_avoided = reference_emissions - capture_emissions
 
     # Cost of avoided (simplified)
-    cost_avoided = capture_cost_per_tonne / (emissions_avoided / reference_emissions + 1e-10)
+    cost_avoided = safe_divide(capture_cost_per_tonne, safe_divide(emissions_avoided, reference_emissions))
 
     return cost_avoided
 
@@ -267,11 +268,11 @@ def internal_rate_return(
     annual_cash_flow = jnp.asarray(annual_cash_flow)
 
     # Simple payback ratio
-    payback_factor = capital_cost / (annual_cash_flow + 1e-10)
+    payback_factor = safe_divide(capital_cost, annual_cash_flow)
 
     # Approximate IRR using annuity formula inversion
     # For n=25, IRR ≈ 1/payback - 0.02 (rough approximation)
-    irr_approx = 1 / (payback_factor + 1e-10) - 0.02
+    irr_approx = safe_divide(1.0, payback_factor) - 0.02
     irr = jnp.clip(irr_approx, -0.5, 1.0)
 
     return irr
@@ -293,7 +294,7 @@ def payback_period(
     capital_cost = jnp.asarray(capital_cost)
     annual_cash_flow = jnp.asarray(annual_cash_flow)
 
-    payback = capital_cost / (annual_cash_flow + 1e-10)
+    payback = safe_divide(capital_cost, annual_cash_flow)
     return payback
 
 
@@ -374,8 +375,8 @@ def complete_cost_analysis(
     CO2_tonne_yr = float(CO2_captured_mol_s) * 44.0 * 3600 * hours_per_year / 1e6
 
     # Specific costs
-    capex_per_tonne = ann_capex / (CO2_tonne_yr + 1e-10)
-    opex_per_tonne = opex["total_opex"] / (CO2_tonne_yr + 1e-10)
+    capex_per_tonne = safe_divide(ann_capex, CO2_tonne_yr)
+    opex_per_tonne = safe_divide(opex["total_opex"], CO2_tonne_yr)
     total_per_tonne = capex_per_tonne + opex_per_tonne
 
     return CaptureSystemCost(

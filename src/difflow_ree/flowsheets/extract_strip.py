@@ -22,6 +22,7 @@ from dataclasses import dataclass
 import jax.numpy as jnp
 from jax import Array
 
+from difflow.numerics import safe_divide
 from difflow.params_mixin import ParamsMixin
 from difflow.streams import Stream, make_stream, get_flows
 from difflow_ree.units.extraction import REEExtractor, REEExtractorParams
@@ -152,14 +153,14 @@ class ExtractStripCircuit:
         product_flows = get_flows(product)
         total_feed = sum(float(feed_flows.get(e, 0.0)) for e in p.elements)
         total_product = sum(float(product_flows.get(e, 0.0)) for e in p.elements)
-        overall_recovery = total_product / (total_feed + 1e-10)
+        overall_recovery = safe_divide(total_product, total_feed)
 
         # Element-wise recovery
         element_recovery = {}
         for elem in p.elements:
             f_in = float(feed_flows.get(elem, 0.0))
             f_out = float(product_flows.get(elem, 0.0))
-            element_recovery[elem] = f_out / (f_in + 1e-10)
+            element_recovery[elem] = safe_divide(f_out, f_in)
 
         return {
             "raffinate": raffinate,

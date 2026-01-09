@@ -24,6 +24,7 @@ import jax.numpy as jnp
 from jax import Array, lax
 
 from difflow.streams import Stream, make_stream, get_flows
+from difflow.numerics import safe_divide
 
 
 # =============================================================================
@@ -247,7 +248,7 @@ class Diafiltration:
             buffer_conc = buffer_flows.get(species, jnp.array(0.0)) / sum(buffer_flows.values())
             buffer_added = buffer_conc * n_dv * V_initial
             # Buffer that's retained follows same wash-in kinetics
-            from_buffer = buffer_added * (1.0 - remaining_frac) / (1.0 - R + 1e-10)
+            from_buffer = buffer_added * safe_divide(1.0 - remaining_frac, 1.0 - R)
             from_buffer = jnp.where(R < 0.99, from_buffer, buffer_added)
 
             retentate_flows[species] = from_initial + from_buffer
@@ -265,7 +266,7 @@ class Diafiltration:
 
                 buffer_conc = buffer_flow / sum(buffer_flows.values())
                 buffer_added = buffer_conc * n_dv * V_initial
-                from_buffer = buffer_added * (1.0 - remaining_frac) / (1.0 - R + 1e-10)
+                from_buffer = buffer_added * safe_divide(1.0 - remaining_frac, 1.0 - R)
                 from_buffer = jnp.where(R < 0.99, from_buffer, buffer_added)
 
                 retentate_flows[species] = from_buffer
@@ -488,7 +489,7 @@ def diavolumes_required(
         Required number of diavolumes
     """
     ratio = target_conc / initial_conc
-    return -jnp.log(ratio) / (1.0 - rejection + 1e-10)
+    return safe_divide(-jnp.log(ratio), 1.0 - rejection)
 
 
 def rejection_from_mw(

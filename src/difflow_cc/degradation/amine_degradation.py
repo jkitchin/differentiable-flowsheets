@@ -34,6 +34,7 @@ __all__ = [
 
 from dataclasses import dataclass
 from difflow.params_mixin import ParamsMixin
+from difflow.numerics import safe_divide
 
 import jax.numpy as jnp
 from jax import Array
@@ -334,7 +335,7 @@ def solvent_lifetime(
     loss = total_amine_loss(params)
     annual_fraction = loss["total_fraction_yr"]
 
-    lifetime = max_degradation / (annual_fraction + 1e-10)
+    lifetime = safe_divide(max_degradation, annual_fraction)
     lifetime = jnp.clip(lifetime, 0.5, 10.0)
 
     return jnp.asarray(lifetime)
