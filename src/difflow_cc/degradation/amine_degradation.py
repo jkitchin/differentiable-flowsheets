@@ -31,7 +31,7 @@ from jax import Array
 R = 8.314  # J/(mol·K)
 
 
-@dataclass
+@dataclass(repr=False)
 class AmineDegradationParams(ParamsMixin):
     """Parameters for amine degradation modeling.
 

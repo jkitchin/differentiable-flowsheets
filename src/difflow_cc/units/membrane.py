@@ -47,7 +47,7 @@ R = 8.314  # J/(mol*K)
 # Membrane Parameters
 # =============================================================================
 
-@dataclass
+@dataclass(repr=False)
 class MembraneParams(ParamsMixin):
     """Parameters for membrane separator.
 

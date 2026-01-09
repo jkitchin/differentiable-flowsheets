@@ -18,7 +18,7 @@ import jax.numpy as jnp
 from jax import Array
 
 
-@dataclass
+@dataclass(repr=False)
 class OpexParams(ParamsMixin):
     """Operating cost parameters.
 

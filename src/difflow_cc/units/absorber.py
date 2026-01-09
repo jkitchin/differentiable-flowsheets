@@ -31,7 +31,7 @@ from difflow_cc.equilibrium.vle import AmineVLE
 # Absorber Parameters
 # =============================================================================
 
-@dataclass
+@dataclass(repr=False)
 class AbsorberParams(ParamsMixin):
     """Parameters for amine absorber column.
 

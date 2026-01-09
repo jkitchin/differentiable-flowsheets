@@ -26,7 +26,7 @@ from difflow_cc.equilibrium.vle import AmineVLE
 # Stripper Parameters
 # =============================================================================
 
-@dataclass
+@dataclass(repr=False)
 class StripperParams(ParamsMixin):
     """Parameters for amine stripper/regenerator.
 

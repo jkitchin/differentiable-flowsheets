@@ -29,7 +29,7 @@ CEPCI_2015 = 556.8
 CEPCI_2010 = 550.8
 
 
-@dataclass
+@dataclass(repr=False)
 class CapexParams(ParamsMixin):
     """Parameters for capital cost estimation.
 

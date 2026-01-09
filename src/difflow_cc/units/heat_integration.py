@@ -30,7 +30,7 @@ from difflow.params_mixin import ParamsMixin
 # Heat Exchanger Parameters
 # =============================================================================
 
-@dataclass
+@dataclass(repr=False)
 class HeatExchangerParams(ParamsMixin):
     """Parameters for shell-and-tube heat exchanger.
 
@@ -50,7 +50,7 @@ class HeatExchangerParams(ParamsMixin):
     pressure_drop_cold: float = 5000.0  # Pa
 
 
-@dataclass
+@dataclass(repr=False)
 class LeanRichExchangerParams(ParamsMixin):
     """Parameters for lean/rich heat exchanger.
 
@@ -68,7 +68,7 @@ class LeanRichExchangerParams(ParamsMixin):
     Cp_solvent: float = 75.0  # J/mol/K
 
 
-@dataclass
+@dataclass(repr=False)
 class IntercoolerParams(ParamsMixin):
     """Parameters for absorber intercooler.
 
@@ -465,7 +465,7 @@ class TrimHeater:
 # Integrated Heat Recovery System
 # =============================================================================
 
-@dataclass
+@dataclass(repr=False)
 class HeatRecoverySystemParams(ParamsMixin):
     """Parameters for complete heat recovery system.
 

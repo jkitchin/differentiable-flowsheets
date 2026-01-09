@@ -210,6 +210,8 @@ from difflow_cc.economics import (
     levelized_cost_capture,
     cost_of_co2_avoided,
     net_present_value,
+    internal_rate_return,
+    payback_period,
     EconomicParams,
     CaptureSystemCost,
 )
@@ -231,6 +233,8 @@ from difflow_cc.integration import (
     steam_properties,
     extraction_pressure_options,
     steam_flow_for_duty,
+    crossover_extraction,
+    letdown_valve,
 )
 
 # =============================================================================
@@ -242,15 +246,18 @@ from difflow_cc.degradation import (
     AmineDegradationParams,
     oxidative_degradation_rate,
     thermal_degradation_rate,
+    co2_induced_degradation_rate,
     total_amine_loss,
     solvent_lifetime,
     reclaimer_requirements,
+    degradation_products,
     # Adsorbent
     AdsorbentDegradationParams,
     thermal_cycling_degradation,
     hydrothermal_degradation,
     capacity_fade,
     adsorbent_lifetime,
+    regeneration_optimization,
     # Membrane
     MembraneAgingParams,
     physical_aging,
@@ -477,6 +484,8 @@ __all__ = [
     "levelized_cost_capture",
     "cost_of_co2_avoided",
     "net_present_value",
+    "internal_rate_return",
+    "payback_period",
     "EconomicParams",
     "CaptureSystemCost",
     # Process Integration
@@ -492,19 +501,24 @@ __all__ = [
     "steam_properties",
     "extraction_pressure_options",
     "steam_flow_for_duty",
+    "crossover_extraction",
+    "letdown_valve",
     # Degradation - Amine
     "AmineDegradationParams",
     "oxidative_degradation_rate",
     "thermal_degradation_rate",
+    "co2_induced_degradation_rate",
     "total_amine_loss",
     "solvent_lifetime",
     "reclaimer_requirements",
+    "degradation_products",
     # Degradation - Adsorbent
     "AdsorbentDegradationParams",
     "thermal_cycling_degradation",
     "hydrothermal_degradation",
     "capacity_fade",
     "adsorbent_lifetime",
+    "regeneration_optimization",
     # Degradation - Membrane
     "MembraneAgingParams",
     "physical_aging",

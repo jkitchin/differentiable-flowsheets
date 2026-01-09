@@ -38,7 +38,7 @@ MW_CO2 = 44.01  # g/mol
 R = 8.314  # J/(mol·K)
 
 
-@dataclass
+@dataclass(repr=False)
 class DACParams(ParamsMixin):
     """Parameters for DAC unit.
 
@@ -72,7 +72,7 @@ class DACParams(ParamsMixin):
     ambient_humidity: float = 0.5
 
 
-@dataclass
+@dataclass(repr=False)
 class LiquidDACParams(ParamsMixin):
     """Parameters for liquid solvent DAC.
 

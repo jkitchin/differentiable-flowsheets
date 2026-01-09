@@ -23,7 +23,7 @@ import jax.numpy as jnp
 from jax import Array
 
 
-@dataclass
+@dataclass(repr=False)
 class MembraneAgingParams(ParamsMixin):
     """Parameters for membrane aging modeling.
 

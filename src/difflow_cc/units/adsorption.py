@@ -47,7 +47,7 @@ R = 8.314  # J/(mol*K)
 # Adsorption Parameters
 # =============================================================================
 
-@dataclass
+@dataclass(repr=False)
 class AdsorptionParams(ParamsMixin):
     """Parameters for adsorption-based CO2 capture.
 

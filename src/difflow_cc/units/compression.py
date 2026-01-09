@@ -41,7 +41,7 @@ P_CRIT_CO2 = 7.377e6  # Pa
 # Compression Parameters
 # =============================================================================
 
-@dataclass
+@dataclass(repr=False)
 class CompressorParams(ParamsMixin):
     """Parameters for a single compressor stage.
 
@@ -57,9 +57,9 @@ class CompressorParams(ParamsMixin):
     eta_motor: float | Array = 0.95
 
 
-@dataclass
-class IntercoolerParams(ParamsMixin):
-    """Parameters for interstage cooler.
+@dataclass(repr=False)
+class CompressionIntercoolerParams(ParamsMixin):
+    """Parameters for interstage cooler in compression train.
 
     Attributes:
         T_outlet: Target outlet temperature (K)
@@ -73,7 +73,7 @@ class IntercoolerParams(ParamsMixin):
     pressure_drop: float = 5000.0  # Pa
 
 
-@dataclass
+@dataclass(repr=False)
 class CompressionTrainParams(ParamsMixin):
     """Parameters for multi-stage compression train.
 
@@ -304,7 +304,7 @@ class Intercooler:
     Cools compressed gas to reduce work in subsequent stages.
     """
 
-    def __init__(self, params: IntercoolerParams):
+    def __init__(self, params: CompressionIntercoolerParams):
         self.params = params
 
     def __call__(
@@ -482,7 +482,7 @@ class CompressionTrain:
         )
         compressor = Compressor(comp_params)
 
-        cool_params = IntercoolerParams(
+        cool_params = CompressionIntercoolerParams(
             T_outlet=p.T_intercool,
             T_coolant=p.T_intercool - 15,  # Assume 15K approach
         )

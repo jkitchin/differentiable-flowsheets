@@ -26,7 +26,7 @@ from difflow_cc.economics.opex import (
 )
 
 
-@dataclass
+@dataclass(repr=False)
 class EconomicParams(ParamsMixin):
     """Economic analysis parameters.
 

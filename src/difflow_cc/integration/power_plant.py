@@ -22,7 +22,7 @@ import jax.numpy as jnp
 from jax import Array
 
 
-@dataclass
+@dataclass(repr=False)
 class PowerPlantParams(ParamsMixin):
     """Power plant parameters.
 

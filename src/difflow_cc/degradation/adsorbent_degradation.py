@@ -29,7 +29,7 @@ import jax.numpy as jnp
 from jax import Array
 
 
-@dataclass
+@dataclass(repr=False)
 class AdsorbentDegradationParams(ParamsMixin):
     """Parameters for adsorbent degradation modeling.
 
