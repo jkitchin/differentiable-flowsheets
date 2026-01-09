@@ -12,6 +12,21 @@ Downstream (Purification):
 - Ultrafiltration, Diafiltration, TFF
 - ProteinAChromatography, IonExchangeChromatography, SizeExclusionChromatography
 
+Flowsheets:
+- mAbDSPTrain: Standard 3-column mAb purification
+- PlatformDSP: Configurable multi-step DSP
+- ViralClearanceTrain: Viral safety focused purification
+
+Kinetics:
+- Growth models (Monod, Contois, logistic, Andrews, etc.)
+- Production models (Luedeking-Piret, growth/non-growth associated)
+- Metabolism models (substrate uptake, OUR, CER)
+
+Degradation:
+- Aggregation kinetics
+- Deamidation and oxidation
+- Shelf life prediction
+
 Database:
 - Cell line properties (CHO, HEK293, NS0)
 - Chromatography resin properties
@@ -146,6 +161,74 @@ from difflow_bio.economics import (
     cost_per_gram,
 )
 
+# Flowsheets
+from difflow_bio.flowsheets import (
+    mAbDSPTrain,
+    mAbDSPParams,
+    PlatformDSP,
+    PlatformDSPParams,
+    ViralClearanceTrain,
+    ViralClearanceParams,
+)
+
+# Kinetics
+from difflow_bio.kinetics import (
+    # Growth
+    monod,
+    monod_inhibition,
+    contois,
+    logistic,
+    tessier,
+    moser,
+    andrews,
+    death_rate,
+    net_growth_rate,
+    GrowthModel,
+    GrowthModelParams,
+    get_growth_model,
+    # Production
+    luedeking_piret,
+    growth_associated,
+    non_growth_associated,
+    overflow_production,
+    product_inhibited_production,
+    substrate_limited_production,
+    ProductionModel,
+    ProductionModelParams,
+    get_production_model,
+    # Metabolism
+    substrate_uptake_rate,
+    oxygen_uptake_rate,
+    co2_evolution_rate,
+    maintenance_energy,
+    specific_substrate_uptake,
+    yield_coefficient,
+    metabolic_quotient,
+    MetabolismModel,
+    MetabolismParams,
+    get_metabolism_model,
+)
+
+# Degradation
+from difflow_bio.degradation import (
+    aggregation_rate,
+    aggregation_arrhenius,
+    aggregate_fraction,
+    deamidation_rate,
+    deamidation_ph_dependent,
+    deamidation_fraction,
+    oxidation_rate,
+    oxidation_peroxide,
+    oxidation_fraction,
+    fragmentation_rate,
+    fragmentation_fraction,
+    total_degradation,
+    shelf_life,
+    DegradationModel,
+    DegradationParams,
+    get_degradation_model,
+)
+
 __all__ = [
     # Bioreactors
     "ContinuousBioreactor",
@@ -239,6 +322,64 @@ __all__ = [
     "calculate_cogs",
     "calculate_profit",
     "cost_per_gram",
+    # Flowsheets
+    "mAbDSPTrain",
+    "mAbDSPParams",
+    "PlatformDSP",
+    "PlatformDSPParams",
+    "ViralClearanceTrain",
+    "ViralClearanceParams",
+    # Kinetics - Growth
+    "monod",
+    "monod_inhibition",
+    "contois",
+    "logistic",
+    "tessier",
+    "moser",
+    "andrews",
+    "death_rate",
+    "net_growth_rate",
+    "GrowthModel",
+    "GrowthModelParams",
+    "get_growth_model",
+    # Kinetics - Production
+    "luedeking_piret",
+    "growth_associated",
+    "non_growth_associated",
+    "overflow_production",
+    "product_inhibited_production",
+    "substrate_limited_production",
+    "ProductionModel",
+    "ProductionModelParams",
+    "get_production_model",
+    # Kinetics - Metabolism
+    "substrate_uptake_rate",
+    "oxygen_uptake_rate",
+    "co2_evolution_rate",
+    "maintenance_energy",
+    "specific_substrate_uptake",
+    "yield_coefficient",
+    "metabolic_quotient",
+    "MetabolismModel",
+    "MetabolismParams",
+    "get_metabolism_model",
+    # Degradation
+    "aggregation_rate",
+    "aggregation_arrhenius",
+    "aggregate_fraction",
+    "deamidation_rate",
+    "deamidation_ph_dependent",
+    "deamidation_fraction",
+    "oxidation_rate",
+    "oxidation_peroxide",
+    "oxidation_fraction",
+    "fragmentation_rate",
+    "fragmentation_fraction",
+    "total_degradation",
+    "shelf_life",
+    "DegradationModel",
+    "DegradationParams",
+    "get_degradation_model",
     # Registration
     "register",
 ]
