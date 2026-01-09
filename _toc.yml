@@ -18,9 +18,9 @@ parts:
       - file: docs/dynamic-modeling
       - file: docs/solvers-and-utilities
 
-  - caption: Tutorials
+  - caption: JAX Tutorials
     chapters:
-      - glob: tutorials/*
+      - glob: jax-tutorials/*
 
   - caption: Examples
     chapters:
