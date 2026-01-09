@@ -18,9 +18,17 @@ parts:
       - file: docs/dynamic-modeling
       - file: docs/solvers-and-utilities
 
+  - caption: About Flowsheets
+    chapters:
+      - glob: about-flowsheets/*
+
   - caption: JAX Tutorials
     chapters:
       - glob: jax-tutorials/*
+
+  - caption: Literature
+    chapters:
+      - file: docs/literature/literature_review
 
   - caption: Examples
     chapters:

@@ -4,6 +4,23 @@ author: Differentiable Flowsheets Contributors
 copyright: "2024"
 logo: ""
 
+# Exclude patterns - files/directories to ignore during build
+exclude_patterns:
+  - .venv
+  - .venv/**
+  - .claude
+  - .claude/**
+  - .pytest_cache
+  - .pytest_cache/**
+  - papers
+  - papers/**
+  - src/difflow_cc/docs
+  - src/difflow_cc/docs/**
+  - src/difflow_cc/DESIGN.md
+  - CLAUDE.md
+  - "**/.ipynb_checkpoints"
+  - "**/.ipynb_checkpoints/**"
+
 # Force re-execution of notebooks on each build.
 # See https://jupyterbook.org/content/execute.html
 execute:
