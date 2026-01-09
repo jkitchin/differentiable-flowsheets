@@ -15,6 +15,13 @@ References:
         with dumped and arranged packings. Trans IChemE 77:498-504.
 """
 
+__all__ = [
+    "gas_film_coefficient",
+    "liquid_film_coefficient",
+    "overall_mass_transfer",
+    "interfacial_area",
+]
+
 import jax.numpy as jnp
 from jax import Array
 

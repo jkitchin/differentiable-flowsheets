@@ -19,6 +19,13 @@ References:
         (AEEA) solutions. Ind Eng Chem Res 46:5803-5809.
 """
 
+__all__ = [
+    "henry_constant",
+    "co2_equilibrium_pressure",
+    "co2_loading",
+    "AmineVLE",
+]
+
 from dataclasses import dataclass
 import jax.numpy as jnp
 from jax import Array

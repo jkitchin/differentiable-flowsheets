@@ -11,6 +11,11 @@ References:
         Int J Greenhouse Gas Control 1:37-46.
 """
 
+__all__ = [
+    "StripperParams",
+    "AmineStripper",
+]
+
 from dataclasses import dataclass
 
 import jax.numpy as jnp

@@ -14,6 +14,17 @@ References:
         capture with coal-fired power plants. Chem Eng Res Des.
 """
 
+__all__ = [
+    "PowerPlantParams",
+    "PowerPlantIntegration",
+    "steam_extraction_penalty",
+    "compression_penalty",
+    "auxiliary_power",
+    "net_efficiency_with_capture",
+    "flue_gas_composition",
+    "flue_gas_flow_rate",
+]
+
 from dataclasses import dataclass
 from difflow.params_mixin import ParamsMixin
 from typing import Literal

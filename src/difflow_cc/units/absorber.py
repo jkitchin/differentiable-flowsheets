@@ -15,6 +15,11 @@ References:
         J Chem Eng Japan 1:56-62.
 """
 
+__all__ = [
+    "AbsorberParams",
+    "AmineAbsorber",
+]
+
 from dataclasses import dataclass
 from typing import Literal
 

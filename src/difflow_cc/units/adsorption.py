@@ -22,6 +22,14 @@ References:
         and capture: a perspective. Adsorption 20:225-231.
 """
 
+__all__ = [
+    "AdsorptionParams",
+    "PSAUnit",
+    "TSAUnit",
+    "VSAUnit",
+    "TVSAUnit",
+]
+
 from dataclasses import dataclass
 from typing import Literal
 

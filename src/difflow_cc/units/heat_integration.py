@@ -16,6 +16,19 @@ References:
         Int J Greenh Gas Control 1:37-46.
 """
 
+__all__ = [
+    "HeatExchangerParams",
+    "HeatExchanger",
+    "LeanRichExchangerParams",
+    "LeanRichExchanger",
+    "IntercoolerParams",
+    "Intercooler",
+    "TrimCooler",
+    "TrimHeater",
+    "HeatRecoverySystemParams",
+    "HeatRecoverySystem",
+]
+
 from dataclasses import dataclass
 from typing import Literal
 

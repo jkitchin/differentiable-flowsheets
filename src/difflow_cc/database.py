@@ -19,6 +19,25 @@ References:
         - Baker RW (2012). Membrane Technology and Applications
 """
 
+__all__ = [
+    "SolventDatabase",
+    "AdsorbentDatabase",
+    "MembraneDatabase",
+    "AmineSolvent",
+    "SolventBlend",
+    "Adsorbent",
+    "IsothermParams",
+    "Membrane",
+    "get_solvent",
+    "get_adsorbent",
+    "get_membrane",
+    "list_solvents",
+    "list_adsorbents",
+    "list_membranes",
+    "get_solvent_kinetic_params",
+    "get_isotherm_params_array",
+]
+
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any

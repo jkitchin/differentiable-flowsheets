@@ -15,6 +15,11 @@ References:
         aqueous methyldiethanolamine. Chem Eng Sci 39:1791-1796.
 """
 
+__all__ = [
+    "co2_physical_solubility",
+    "diffusivity_co2_amine",
+]
+
 import jax.numpy as jnp
 from jax import Array
 

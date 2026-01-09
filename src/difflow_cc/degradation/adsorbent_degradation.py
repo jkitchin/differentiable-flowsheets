@@ -22,6 +22,15 @@ References:
         swing adsorption. Appl Energy 87:1977-1982.
 """
 
+__all__ = [
+    "AdsorbentDegradationParams",
+    "thermal_cycling_degradation",
+    "hydrothermal_degradation",
+    "capacity_fade",
+    "adsorbent_lifetime",
+    "regeneration_optimization",
+]
+
 from dataclasses import dataclass
 from difflow.params_mixin import ParamsMixin
 

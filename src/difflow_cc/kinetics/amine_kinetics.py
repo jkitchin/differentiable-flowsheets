@@ -18,6 +18,14 @@ References:
         Chem Eng Sci 55:5531-5543.
 """
 
+__all__ = [
+    "reaction_rate_constant",
+    "pseudo_first_order_rate",
+    "hatta_number",
+    "enhancement_factor",
+    "overall_reaction_rate",
+]
+
 import jax.numpy as jnp
 from jax import Array
 

@@ -20,6 +20,12 @@ References:
         J Membr Sci 359:126-139.
 """
 
+__all__ = [
+    "MembraneParams",
+    "MembraneSeparator",
+    "MultistageMembrane",
+]
+
 from dataclasses import dataclass
 from typing import Literal
 

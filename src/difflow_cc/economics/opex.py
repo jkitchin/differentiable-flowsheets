@@ -11,6 +11,19 @@ References:
         Plants Using Higher Capture Rates or Biomass.
 """
 
+__all__ = [
+    "steam_cost",
+    "electricity_cost",
+    "cooling_water_cost",
+    "solvent_makeup_cost",
+    "membrane_replacement_cost",
+    "adsorbent_replacement_cost",
+    "labor_cost",
+    "maintenance_cost",
+    "total_operating_cost",
+    "OpexParams",
+]
+
 from dataclasses import dataclass
 from difflow.params_mixin import ParamsMixin
 
@@ -45,6 +58,11 @@ class OpexParams(ParamsMixin):
 
     @property
     def hours_per_year(self) -> float:
+        """Annual operating hours.
+
+        Returns operating_hours if specified, otherwise
+        calculates from capacity_factor * 8760 hours/year.
+        """
         if self.operating_hours is not None:
             return self.operating_hours
         return 8760 * self.capacity_factor

@@ -15,6 +15,18 @@ References:
         2nd ed. Butterworth-Heinemann.
 """
 
+__all__ = [
+    "absorber_cost",
+    "stripper_cost",
+    "heat_exchanger_cost",
+    "compressor_cost",
+    "membrane_module_cost",
+    "adsorber_vessel_cost",
+    "total_equipment_cost",
+    "installed_cost",
+    "CapexParams",
+]
+
 from dataclasses import dataclass
 from difflow.params_mixin import ParamsMixin
 from typing import Literal

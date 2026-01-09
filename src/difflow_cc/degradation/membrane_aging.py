@@ -16,6 +16,14 @@ References:
         membranes. Gas Sep Purif 5:222-228.
 """
 
+__all__ = [
+    "MembraneAgingParams",
+    "physical_aging",
+    "plasticization",
+    "fouling_rate",
+    "membrane_lifetime",
+]
+
 from dataclasses import dataclass
 from difflow.params_mixin import ParamsMixin
 

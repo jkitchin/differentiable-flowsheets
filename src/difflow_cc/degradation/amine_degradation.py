@@ -21,6 +21,17 @@ References:
         Energy Procedia 1:327-333.
 """
 
+__all__ = [
+    "AmineDegradationParams",
+    "oxidative_degradation_rate",
+    "thermal_degradation_rate",
+    "co2_induced_degradation_rate",
+    "total_amine_loss",
+    "degradation_products",
+    "solvent_lifetime",
+    "reclaimer_requirements",
+]
+
 from dataclasses import dataclass
 from difflow.params_mixin import ParamsMixin
 
