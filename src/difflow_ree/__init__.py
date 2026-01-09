@@ -10,6 +10,8 @@ Features:
 - Loading and speciation corrections
 - Unit operations: extraction, scrubbing, stripping, precipitation
 - Pre-built flowsheet templates
+- Kinetics: mass transfer and extraction kinetics
+- Degradation: extractant degradation models
 - Economic analysis tools
 
 Quick Start:
@@ -128,6 +130,48 @@ from difflow_ree.economics import (
     calculate_revenue,
     calculate_profit,
     minimum_selling_price,
+)
+
+# =============================================================================
+# Kinetics
+# =============================================================================
+
+from difflow_ree.kinetics import (
+    # Mass transfer
+    film_mass_transfer,
+    overall_mass_transfer,
+    diffusion_coefficient,
+    sherwood_correlation,
+    mass_transfer_rate,
+    enhancement_factor,
+    MassTransferModel,
+    MassTransferParams,
+    get_mass_transfer_model,
+    # Extraction kinetics
+    forward_extraction_rate,
+    reverse_extraction_rate,
+    net_extraction_rate,
+    approach_to_equilibrium,
+    stage_residence_time,
+    ExtractionKineticsModel,
+    ExtractionKineticsParams,
+    get_extraction_kinetics_model,
+)
+
+# =============================================================================
+# Degradation
+# =============================================================================
+
+from difflow_ree.degradation import (
+    oxidative_degradation_rate,
+    hydrolytic_degradation_rate,
+    solubility_loss_rate,
+    total_degradation_rate,
+    extractant_lifetime,
+    makeup_rate,
+    ExtractantDegradationModel,
+    ExtractantDegradationParams,
+    get_degradation_model,
 )
 
 
@@ -338,6 +382,35 @@ __all__ = [
     "calculate_revenue",
     "calculate_profit",
     "minimum_selling_price",
+    # Kinetics - Mass transfer
+    "film_mass_transfer",
+    "overall_mass_transfer",
+    "diffusion_coefficient",
+    "sherwood_correlation",
+    "mass_transfer_rate",
+    "enhancement_factor",
+    "MassTransferModel",
+    "MassTransferParams",
+    "get_mass_transfer_model",
+    # Kinetics - Extraction
+    "forward_extraction_rate",
+    "reverse_extraction_rate",
+    "net_extraction_rate",
+    "approach_to_equilibrium",
+    "stage_residence_time",
+    "ExtractionKineticsModel",
+    "ExtractionKineticsParams",
+    "get_extraction_kinetics_model",
+    # Degradation
+    "oxidative_degradation_rate",
+    "hydrolytic_degradation_rate",
+    "solubility_loss_rate",
+    "total_degradation_rate",
+    "extractant_lifetime",
+    "makeup_rate",
+    "ExtractantDegradationModel",
+    "ExtractantDegradationParams",
+    "get_degradation_model",
     # Registration
     "register",
 ]

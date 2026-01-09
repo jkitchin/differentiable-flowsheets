@@ -21,17 +21,17 @@ This allows simultaneous separation of multiple groups.
 """
 
 from dataclasses import dataclass
-from typing import Literal
 
 import jax.numpy as jnp
 from jax import Array
 
+from difflow.params_mixin import ParamsMixin
 from difflow.streams import Stream, make_stream, get_flows
 from difflow_ree.equilibrium.distribution import REEDistribution
 
 
-@dataclass
-class SplitShellParams:
+@dataclass(repr=False)
+class SplitShellParams(ParamsMixin):
     """Parameters for split-shell cascade.
 
     Attributes:
