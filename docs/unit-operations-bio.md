@@ -2,29 +2,12 @@
 
 This document provides comprehensive documentation for all bio-manufacturing unit operations available in the `difflow_bio` module.
 
-## Table of Contents
-
-1. [Bioreactors](#bioreactors)
-   - [ContinuousBioreactor (Chemostat)](#continuousbioreactor-chemostat)
-   - [FedBatchBioreactor](#fedbatchbioreactor)
-   - [Kinetic Models](#kinetic-models)
-2. [Centrifugation](#centrifugation)
-   - [Centrifuge](#centrifuge)
-   - [DiscStackCentrifuge](#discstackcentrifuge)
-3. [Membrane Filtration](#membrane-filtration)
-   - [Ultrafiltration](#ultrafiltration)
-   - [Diafiltration](#diafiltration)
-   - [TFF (Tangential Flow Filtration)](#tff-tangential-flow-filtration)
-4. [Chromatography](#chromatography)
-   - [ProteinAChromatography](#proteinachromatography)
-   - [IonExchangeChromatography](#ionexchangechromatography)
-   - [SizeExclusionChromatography](#sizeexclusionchromatography)
-   - [Adsorption Isotherms](#adsorption-isotherms)
-
 ---
 
+(bioreactors)=
 ## Bioreactors
 
+(continuousbioreactor-chemostat)=
 ### ContinuousBioreactor (Chemostat)
 
 **Location**: `difflow_bio/units/bioreactors.py`
@@ -155,6 +138,7 @@ print(f"Productivity: {info['productivity']:.3f} g/L/h")
 
 ---
 
+(fedbatchbioreactor)=
 ### FedBatchBioreactor
 
 **Location**: `difflow_bio/units/bioreactors.py`
@@ -260,6 +244,7 @@ print(f"Final product: {info['P_final']:.2f} g/L")
 
 ---
 
+(kinetic-models)=
 ### Kinetic Models
 
 **Location**: `difflow_bio/units/bioreactors.py`
@@ -322,8 +307,10 @@ D_opt = optimal_dilution_rate(mu_max=0.4, K_s=0.5, S_f=50.0)
 
 ---
 
+(centrifugation)=
 ## Centrifugation
 
+(centrifuge)=
 ### Centrifuge
 
 **Location**: `difflow_bio/units/centrifuge.py`
@@ -433,6 +420,7 @@ print(f"Cell recovery: {info['recovery']:.2%}")
 
 ---
 
+(discstackcentrifuge)=
 ### DiscStackCentrifuge
 
 **Location**: `difflow_bio/units/centrifuge.py`
@@ -507,8 +495,10 @@ G = g_force(rpm=7000, r=0.15)  # ~7900 G
 
 ---
 
+(membrane-filtration)=
 ## Membrane Filtration
 
+(ultrafiltration)=
 ### Ultrafiltration
 
 **Location**: `difflow_bio/units/filtration.py`
@@ -623,6 +613,7 @@ print(f"Flux: {info['flux']:.1f} LMH")
 
 ---
 
+(diafiltration)=
 ### Diafiltration
 
 **Location**: `difflow_bio/units/filtration.py`
@@ -697,6 +688,7 @@ print(f"Salt removal: {1 - retentate['salt']/feed['salt']:.1%}")
 
 ---
 
+(tff-tangential-flow-filtration)=
 ### TFF (Tangential Flow Filtration)
 
 **Location**: `difflow_bio/units/filtration.py`
@@ -719,8 +711,10 @@ print(f"Salt removal: {1 - retentate['salt']/feed['salt']:.1%}")
 
 ---
 
+(chromatography)=
 ## Chromatography
 
+(proteinachromatography)=
 ### ProteinAChromatography
 
 **Location**: `difflow_bio/units/chromatography.py`
@@ -826,6 +820,7 @@ print(f"HCP clearance: {info['HCP_LRV']:.1f} LRV")
 
 ---
 
+(ionexchangechromatography)=
 ### IonExchangeChromatography
 
 **Location**: `difflow_bio/units/chromatography.py`
@@ -888,6 +883,7 @@ Where:
 
 ---
 
+(sizeexclusionchromatography)=
 ### SizeExclusionChromatography
 
 **Location**: `difflow_bio/units/chromatography.py`
@@ -939,6 +935,7 @@ Or: $K_d = a' - b' \cdot \log(MW)$
 
 ---
 
+(adsorption-isotherms)=
 ### Adsorption Isotherms
 
 **Location**: `difflow_bio/units/chromatography.py`

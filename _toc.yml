@@ -11,9 +11,11 @@ parts:
       - file: docs/unit-operations-chemical
       - file: docs/unit-operations-bio
       - file: docs/unit-operations-ree
+      - file: docs/unit-operations-carbon-capture
       - file: docs/thermodynamics
       - file: docs/technoeconomics
       - file: docs/streams-and-flowsheets
+      - file: docs/dynamic-modeling
       - file: docs/solvers-and-utilities
 
   - caption: Tutorials
@@ -27,3 +29,7 @@ parts:
   - caption: Bio Manufacturing Examples
     chapters:
       - glob: examples/bio/*
+
+  - caption: Carbon Capture Examples
+    chapters:
+      - glob: src/difflow_cc/examples/*

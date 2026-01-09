@@ -2,35 +2,9 @@
 
 This document provides comprehensive documentation for the `difflow_ree` plugin, which provides specialized tools for modeling and optimizing rare earth element solvent extraction processes.
 
-## Table of Contents
-
-1. [Overview](#overview)
-2. [Installation](#installation)
-3. [Database and Properties](#database-and-properties)
-   - [REE Element Database](#ree-element-database)
-   - [Extractant Database](#extractant-database)
-4. [Equilibrium Models](#equilibrium-models)
-   - [Distribution Coefficients](#distribution-coefficients)
-   - [Separation Factors](#separation-factors)
-5. [Unit Operations](#unit-operations)
-   - [REEExtractor](#reeextractor)
-   - [REEMixerSettler](#reemixersettler)
-   - [REEScrubber](#reescrubber)
-   - [REEStripper](#reestripper)
-   - [CeriumOxidizer](#ceriumoxidizer)
-6. [Precipitation Operations](#precipitation-operations)
-   - [OxalatePrecipitator](#oxalateprecipitator)
-   - [CarbonatePrecipitator](#carbonateprecipitator)
-   - [HydroxidePrecipitator](#hydroxideprecipitator)
-7. [Flowsheet Templates](#flowsheet-templates)
-   - [ExtractStripCircuit](#extractstripcircuit)
-   - [ExtractScrubStripCircuit](#extractscrubstripcircuit)
-   - [SplitShellCascade](#splitshellcascade)
-8. [Economics](#economics)
-9. [Examples](#examples)
-
 ---
 
+(overview)=
 ## Overview
 
 The `difflow_ree` plugin provides:
@@ -47,6 +21,7 @@ All operations are fully differentiable using JAX, enabling gradient-based optim
 
 ---
 
+(installation)=
 ## Installation
 
 The REE plugin is included as an optional dependency:
@@ -63,8 +38,10 @@ pip install difflow[all]
 
 ---
 
+(database-and-properties)=
 ## Database and Properties
 
+(ree-element-database)=
 ### REE Element Database
 
 Access REE properties using the database functions:
@@ -93,6 +70,7 @@ print(f"Price: ${nd.price_usd_kg}/kg")
 | `oxide_mw` | Oxide molecular weight | g/mol |
 | `oxide_formula` | Oxide formula | - |
 
+(extractant-database)=
 ### Extractant Database
 
 Four industrial extractants are supported:
@@ -117,8 +95,10 @@ print(f"Reference concentration: {d2ehpa.reference_concentration} M")
 
 ---
 
+(equilibrium-models)=
 ## Equilibrium Models
 
+(distribution-coefficients)=
 ### Distribution Coefficients
 
 The distribution coefficient D = [REE]_org / [REE]_aq is modeled as a function of pH, temperature, and extractant concentration:
@@ -166,6 +146,7 @@ plt.legend()
 plt.grid(True)
 ```
 
+(separation-factors)=
 ### Separation Factors
 
 The separation factor SF = D1/D2 determines separation feasibility:
@@ -186,8 +167,10 @@ print(f"Optimal pH: {opt_pH:.2f}, Max SF: {max_SF:.2f}")
 
 ---
 
+(unit-operations)=
 ## Unit Operations
 
+(reeextractor)=
 ### REEExtractor
 
 **Location**: `difflow_ree/units/extraction.py`
@@ -249,6 +232,7 @@ Where:
 - $S/F$ is the solvent-to-feed ratio
 - $N$ is the number of stages
 
+(reemixersettler)=
 ### REEMixerSettler
 
 **Description**: Single mixer-settler stage for REE extraction with efficiency factor.
@@ -265,6 +249,7 @@ class MixerSettlerParams:
     stage_efficiency: float = 0.95
 ```
 
+(reescrubber)=
 ### REEScrubber
 
 **Description**: Multi-stage scrubbing section for removing impurities from loaded organic.
@@ -284,6 +269,7 @@ params = ScrubberParams(
 scrubber = REEScrubber(params)
 ```
 
+(reestripper)=
 ### REEStripper
 
 **Description**: Multi-stage stripping section for product recovery.
@@ -302,6 +288,7 @@ params = StripperParams(
 stripper = REEStripper(params)
 ```
 
+(ceriumoxidizer)=
 ### CeriumOxidizer
 
 **Location**: `difflow_ree/units/cerium.py`
@@ -345,8 +332,10 @@ print(f"CeO2 produced: {info['ceo2_mass_kg_s']:.4f} kg/s")
 
 ---
 
+(precipitation-operations)=
 ## Precipitation Operations
 
+(oxalateprecipitator)=
 ### OxalatePrecipitator
 
 **Description**: Precipitates REE as oxalate, which can be calcined to oxide.
@@ -370,12 +359,14 @@ print(f"Total precipitated: {info['total_precipitated']:.4f} mol/s")
 print(f"Solid composition: {info['solid_composition']}")
 ```
 
+(carbonateprecipitator)=
 ### CarbonatePrecipitator
 
 **Reaction**: 2REE³⁺ + 3CO₃²⁻ → REE₂(CO₃)₃↓
 
 Used for group precipitation from leach solutions.
 
+(hydroxideprecipitator)=
 ### HydroxidePrecipitator
 
 **Reaction**: REE³⁺ + 3OH⁻ → REE(OH)₃↓
@@ -398,8 +389,10 @@ print(f"pH range for Dy/La separation: {min_pH:.1f} - {max_pH:.1f}")
 
 ---
 
+(flowsheet-templates)=
 ## Flowsheet Templates
 
+(extractstripcircuit)=
 ### ExtractStripCircuit
 
 **Description**: Basic 2-section circuit for simple separations.
@@ -416,6 +409,7 @@ print(f"pH range for Dy/La separation: {min_pH:.1f} - {max_pH:.1f}")
   Raffinate            Strip Acid
 ```
 
+(extractscrubstripcircuit)=
 ### ExtractScrubStripCircuit
 
 **Description**: Industrial 3-section circuit for high-purity separations.
@@ -487,12 +481,14 @@ for elem, recovery in results['target_recovery'].items():
     print(f"{elem} recovery: {recovery:.1%}")
 ```
 
+(splitshellcascade)=
 ### SplitShellCascade
 
 **Description**: Multi-product split-shell cascade for producing multiple pure REE streams.
 
 ---
 
+(economics)=
 ## Economics
 
 The plugin includes economic analysis tools:
@@ -534,6 +530,7 @@ profit = calculate_profit(revenue, opex, capex, years=10)
 
 ---
 
+(examples)=
 ## Examples
 
 ### Example 1: Simple Nd/Pr Separation
