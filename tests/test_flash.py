@@ -842,7 +842,24 @@ class TestPHFlash:
         assert "T_flash" in info
         assert "H_inlet" in info
         assert "T_inlet" in info
+        assert "converged" in info
         assert jnp.isfinite(info["T_flash"])
+
+    def test_ph_flash_convergence_status(self, binary_thermo, flash_params):
+        """Test that PH flash reports convergence status."""
+        # Use conditions that produce a clear two-phase region
+        feed = make_stream(
+            {"Light": 50.0, "Heavy": 50.0},
+            T=380.0,  # Hot liquid feed
+            P=101325.0,
+        )
+
+        ph_flash = PHFlash(flash_params, binary_thermo)
+        _, _, info = ph_flash(feed, P=30000.0)
+
+        # Check convergence status is reported (may or may not converge
+        # depending on conditions, but status should be present)
+        assert "converged" in info
 
 
 if __name__ == "__main__":

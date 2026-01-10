@@ -314,7 +314,7 @@ class Flash:
         T0 = jnp.array(T_guess)
         sol = optx.root_find(residual, solver, T0, args=P, max_steps=50, throw=False)
 
-        return jnp.clip(sol.value, 200.0, 600.0)
+        return jnp.clip(sol.value, 150.0, 700.0)
 
     def dew_point_temperature(
         self,
@@ -350,7 +350,7 @@ class Flash:
         T0 = jnp.array(T_guess)
         sol = optx.root_find(residual, solver, T0, args=P, max_steps=50, throw=False)
 
-        return jnp.clip(sol.value, 200.0, 600.0)
+        return jnp.clip(sol.value, 150.0, 700.0)
 
     # =========================================================================
     # Initialization Interface
@@ -797,8 +797,7 @@ class PHFlash:
             P_op, H_target = args
 
             # Perform TP flash at trial temperature
-            liquid, vapor, info = self._tp_flash(inlet, T=T, P=P_op)
-            V_frac = info["V_frac"]
+            liquid, vapor, _ = self._tp_flash(inlet, T=T, P=P_op)
 
             # Get outlet flows
             liquid_flows = get_flows(liquid)
@@ -820,11 +819,14 @@ class PHFlash:
             return H_outlet - H_target
 
         # Solve for flash temperature
+        # Use inlet T as initial guess if T_guess not specified sensibly
+        T0 = jnp.where(T_guess > 0, jnp.array(T_guess), T_in)
         solver = optx.Newton(rtol=1e-6, atol=1e-6)
-        T0 = jnp.array(T_guess)
         args = (P_flash, H_inlet)
-        sol = optx.root_find(H_residual, solver, T0, args=args, max_steps=50, throw=False)
-        T_flash = jnp.clip(sol.value, 200.0, 600.0)
+        sol = optx.root_find(H_residual, solver, T0, args=args, max_steps=100, throw=False)
+
+        # Clip to reasonable temperature bounds
+        T_flash = jnp.clip(sol.value, 150.0, 700.0)
 
         # Final flash at converged temperature
         liquid, vapor, flash_info = self._tp_flash(inlet, T=T_flash, P=P_flash)
@@ -834,5 +836,6 @@ class PHFlash:
         flash_info["H_inlet"] = H_inlet
         flash_info["T_inlet"] = T_in
         flash_info["P_flash"] = P_flash
+        flash_info["converged"] = sol.result == optx.RESULTS.successful
 
         return liquid, vapor, flash_info
