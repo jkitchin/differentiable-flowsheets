@@ -18,9 +18,13 @@ import numpy.testing as npt
 # Enable 64-bit precision
 jax.config.update("jax_enable_x64", True)
 
-from difflow.units.flash import Flash, FlashParams, Splitter, Mixer
+from difflow.units.flash import (
+    Flash, FlashParams, Splitter, Mixer,
+    EOSFlash, EOSFlashParams, PHFlash,
+)
 from difflow.streams import make_stream, get_flows, total_flow
 from difflow.thermo import IdealThermo, SpeciesData
+from difflow.eos import PengRobinson, CriticalProperties
 
 
 @pytest.fixture
@@ -510,6 +514,335 @@ class TestMixerGradient:
 
         # d(F_in + 50)/d(F_in) = 1
         npt.assert_allclose(float(grad), 1.0, rtol=1e-10)
+
+
+class TestBubbleDewTemperature:
+    """Tests for bubble and dew point temperature calculations."""
+
+    def test_bubble_point_temperature(self, binary_thermo, flash_params):
+        """Test bubble point temperature calculation."""
+        # Create a feed at known conditions
+        feed = make_stream({"Light": 50.0, "Heavy": 50.0}, T=350.0, P=50000.0)
+        flash = Flash(flash_params, binary_thermo)
+
+        T_bubble = flash.bubble_point_temperature(feed)
+
+        # Should be finite and positive
+        assert float(T_bubble) > 200.0
+        assert float(T_bubble) < 600.0
+        assert jnp.isfinite(T_bubble)
+
+        # Verify: at T_bubble, P_bubble should equal P
+        P_bubble = flash.bubble_point_pressure(feed, T=T_bubble)
+        npt.assert_allclose(float(P_bubble), 50000.0, rtol=0.01)
+
+    def test_dew_point_temperature(self, binary_thermo, flash_params):
+        """Test dew point temperature calculation."""
+        feed = make_stream({"Light": 50.0, "Heavy": 50.0}, T=350.0, P=10000.0)
+        flash = Flash(flash_params, binary_thermo)
+
+        T_dew = flash.dew_point_temperature(feed)
+
+        # Should be finite and positive
+        assert float(T_dew) > 200.0
+        assert float(T_dew) < 600.0
+        assert jnp.isfinite(T_dew)
+
+        # Verify: at T_dew, P_dew should equal P
+        P_dew = flash.dew_point_pressure(feed, T=T_dew)
+        npt.assert_allclose(float(P_dew), 10000.0, rtol=0.01)
+
+    def test_bubble_above_dew_temperature(self, binary_thermo, flash_params):
+        """Test that dew point temperature is above bubble point at same P."""
+        feed = make_stream({"Light": 50.0, "Heavy": 50.0}, T=350.0, P=30000.0)
+        flash = Flash(flash_params, binary_thermo)
+
+        T_bubble = flash.bubble_point_temperature(feed)
+        T_dew = flash.dew_point_temperature(feed)
+
+        # At same P: T_dew > T_bubble for VLE
+        # (dew point is last drop, bubble point is first bubble)
+        assert float(T_dew) > float(T_bubble)
+
+
+# =============================================================================
+# Multi-component (ternary) tests
+# =============================================================================
+
+@pytest.fixture
+def ternary_thermo():
+    """Create a ternary system (light/medium/heavy) for testing."""
+    species_data = {
+        "Light": SpeciesData(
+            name="Light",
+            MW=58.0,  # Similar to butane
+            Cp_coeffs=(100.0, 0.0, 0.0, 0.0),
+            Hvap_coeffs=(22000.0, 0.38, 425.0),
+            # Antoine coeffs for ~butane (very volatile)
+            antoine_coeffs=(10.523, 1554.3, -45.6),
+            Hf=0.0,
+        ),
+        "Medium": SpeciesData(
+            name="Medium",
+            MW=72.0,  # Similar to pentane
+            Cp_coeffs=(120.0, 0.0, 0.0, 0.0),
+            Hvap_coeffs=(26000.0, 0.38, 470.0),
+            # Antoine coeffs for ~pentane
+            antoine_coeffs=(10.422, 1687.537, -38.44),
+            Hf=0.0,
+        ),
+        "Heavy": SpeciesData(
+            name="Heavy",
+            MW=114.0,  # Similar to octane
+            Cp_coeffs=(190.0, 0.0, 0.0, 0.0),
+            Hvap_coeffs=(35000.0, 0.38, 570.0),
+            # Antoine coeffs for ~octane (low volatility)
+            antoine_coeffs=(10.186, 2004.68, -60.53),
+            Hf=0.0,
+        ),
+    }
+    return IdealThermo(species_data)
+
+
+@pytest.fixture
+def ternary_params():
+    """Flash parameters for ternary system."""
+    return FlashParams(species_order=["Light", "Medium", "Heavy"])
+
+
+class TestTernaryFlash:
+    """Tests for three-component flash calculations."""
+
+    def test_ternary_two_phase_flash(self, ternary_thermo, ternary_params):
+        """Test flash in two-phase region with 3 components."""
+        # Ternary feed at conditions that give partial vaporization
+        feed = make_stream(
+            {"Light": 30.0, "Medium": 40.0, "Heavy": 30.0},
+            T=350.0,
+            P=50000.0,
+        )
+        flash = Flash(ternary_params, ternary_thermo)
+
+        liquid, vapor, info = flash(feed)
+
+        # Check we have two-phase output
+        V_frac = float(info["V_frac"])
+        assert 0.0 < V_frac < 1.0, f"Expected two-phase, got V_frac={V_frac}"
+
+        # Check mass balance for all 3 components
+        feed_flows = get_flows(feed)
+        liquid_flows = get_flows(liquid)
+        vapor_flows = get_flows(vapor)
+
+        for s in ["Light", "Medium", "Heavy"]:
+            npt.assert_allclose(
+                liquid_flows[s] + vapor_flows[s],
+                feed_flows[s],
+                rtol=1e-8,
+                err_msg=f"Mass balance failed for {s}"
+            )
+
+        # Check volatility ordering: Light > Medium > Heavy in vapor
+        vapor_total = total_flow(vapor)
+        y_light = vapor_flows["Light"] / vapor_total
+        y_medium = vapor_flows["Medium"] / vapor_total
+        y_heavy = vapor_flows["Heavy"] / vapor_total
+
+        liquid_total = total_flow(liquid)
+        x_light = liquid_flows["Light"] / liquid_total
+        x_medium = liquid_flows["Medium"] / liquid_total
+        x_heavy = liquid_flows["Heavy"] / liquid_total
+
+        # K_light > K_medium > K_heavy
+        K_light = float(y_light / x_light)
+        K_medium = float(y_medium / x_medium)
+        K_heavy = float(y_heavy / x_heavy)
+
+        assert K_light > K_medium > K_heavy, \
+            f"K-value ordering wrong: K_light={K_light}, K_medium={K_medium}, K_heavy={K_heavy}"
+
+    def test_ternary_compositions_sum_to_one(self, ternary_thermo, ternary_params):
+        """Test that liquid and vapor compositions sum to 1 for ternary."""
+        feed = make_stream(
+            {"Light": 20.0, "Medium": 50.0, "Heavy": 30.0},
+            T=360.0,
+            P=60000.0,
+        )
+        flash = Flash(ternary_params, ternary_thermo)
+
+        _, _, info = flash(feed)
+
+        x_sum = sum(info["x"].values())
+        y_sum = sum(info["y"].values())
+
+        npt.assert_allclose(float(x_sum), 1.0, rtol=1e-8)
+        npt.assert_allclose(float(y_sum), 1.0, rtol=1e-8)
+
+    def test_ternary_gradient(self, ternary_thermo, ternary_params):
+        """Test gradient compatibility for ternary system."""
+        flash = Flash(ternary_params, ternary_thermo)
+        feed = make_stream(
+            {"Light": 30.0, "Medium": 40.0, "Heavy": 30.0},
+            T=350.0,
+            P=80000.0,
+        )
+
+        def vapor_fraction(T):
+            _, _, info = flash(feed, T=T)
+            return info["V_frac"]
+
+        grad_fn = jax.grad(vapor_fraction)
+        grad = grad_fn(350.0)
+
+        assert jnp.isfinite(grad), "Gradient should be finite"
+
+
+# =============================================================================
+# EOS-based flash tests
+# =============================================================================
+
+@pytest.fixture
+def hydrocarbon_eos():
+    """Create Peng-Robinson EOS for light hydrocarbons."""
+    species_data = {
+        "methane": CriticalProperties("methane", 190.6, 4.6e6, 0.011, 16.04),
+        "ethane": CriticalProperties("ethane", 305.4, 4.9e6, 0.099, 30.07),
+        "propane": CriticalProperties("propane", 369.8, 4.2e6, 0.152, 44.10),
+    }
+    return PengRobinson(species_data)
+
+
+@pytest.fixture
+def eos_flash_params():
+    """EOS flash parameters for hydrocarbon system."""
+    return EOSFlashParams(species_order=["methane", "ethane", "propane"])
+
+
+class TestEOSFlash:
+    """Tests for EOS-based flash calculations."""
+
+    def test_eos_flash_basic(self, hydrocarbon_eos, eos_flash_params):
+        """Test basic EOS flash calculation."""
+        feed = make_stream(
+            {"methane": 40.0, "ethane": 30.0, "propane": 30.0},
+            T=250.0,
+            P=2.0e6,  # 20 bar
+        )
+        flash = EOSFlash(eos_flash_params, hydrocarbon_eos)
+
+        liquid, vapor, info = flash(feed)
+
+        # Check we get two-phase output
+        V_frac = float(info["V_frac"])
+        assert 0.0 <= V_frac <= 1.0
+
+        # Check mass balance
+        feed_total = total_flow(feed)
+        liquid_total = total_flow(liquid)
+        vapor_total = total_flow(vapor)
+
+        npt.assert_allclose(
+            liquid_total + vapor_total,
+            feed_total,
+            rtol=1e-6,
+        )
+
+    def test_eos_flash_mass_balance(self, hydrocarbon_eos, eos_flash_params):
+        """Test component mass balance for EOS flash."""
+        feed = make_stream(
+            {"methane": 50.0, "ethane": 30.0, "propane": 20.0},
+            T=240.0,
+            P=1.5e6,
+        )
+        flash = EOSFlash(eos_flash_params, hydrocarbon_eos)
+
+        liquid, vapor, info = flash(feed)
+
+        feed_flows = get_flows(feed)
+        liquid_flows = get_flows(liquid)
+        vapor_flows = get_flows(vapor)
+
+        for s in ["methane", "ethane", "propane"]:
+            npt.assert_allclose(
+                liquid_flows[s] + vapor_flows[s],
+                feed_flows[s],
+                rtol=1e-5,
+                err_msg=f"Mass balance failed for {s}"
+            )
+
+    def test_eos_flash_params_validation(self):
+        """Test EOSFlashParams validation."""
+        # Test invalid EOS type
+        with pytest.raises(ValueError, match="eos_type must be"):
+            EOSFlashParams(species_order=["A"], eos_type="INVALID")
+
+
+# =============================================================================
+# PH (isenthalpic) flash tests
+# =============================================================================
+
+class TestPHFlash:
+    """Tests for PH (isenthalpic) flash calculations."""
+
+    def test_ph_flash_basic(self, binary_thermo, flash_params):
+        """Test basic PH flash calculation."""
+        feed = make_stream(
+            {"Light": 50.0, "Heavy": 50.0},
+            T=380.0,  # Hot liquid feed
+            P=101325.0,
+        )
+
+        ph_flash = PHFlash(flash_params, binary_thermo)
+
+        # Flash to lower pressure (adiabatic)
+        liquid, vapor, info = ph_flash(feed, P=30000.0)
+
+        # Should get two-phase output
+        V_frac = float(info["V_frac"])
+        assert 0.0 <= V_frac <= 1.0
+
+        # Temperature should have changed (cooling from vaporization)
+        T_flash = float(info["T_flash"])
+        assert T_flash < 380.0  # Should cool due to flashing
+
+    def test_ph_flash_mass_balance(self, binary_thermo, flash_params):
+        """Test mass balance for PH flash."""
+        feed = make_stream(
+            {"Light": 60.0, "Heavy": 40.0},
+            T=370.0,
+            P=80000.0,
+        )
+
+        ph_flash = PHFlash(flash_params, binary_thermo)
+        liquid, vapor, info = ph_flash(feed, P=40000.0)
+
+        # Check mass balance
+        feed_total = total_flow(feed)
+        liquid_total = total_flow(liquid)
+        vapor_total = total_flow(vapor)
+
+        npt.assert_allclose(
+            liquid_total + vapor_total,
+            feed_total,
+            rtol=1e-6,
+        )
+
+    def test_ph_flash_returns_temperature(self, binary_thermo, flash_params):
+        """Test that PH flash returns flash temperature."""
+        feed = make_stream(
+            {"Light": 50.0, "Heavy": 50.0},
+            T=360.0,
+            P=60000.0,
+        )
+
+        ph_flash = PHFlash(flash_params, binary_thermo)
+        _, _, info = ph_flash(feed, P=30000.0)
+
+        # Check required info keys
+        assert "T_flash" in info
+        assert "H_inlet" in info
+        assert "T_inlet" in info
+        assert jnp.isfinite(info["T_flash"])
 
 
 if __name__ == "__main__":

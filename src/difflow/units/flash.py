@@ -3,11 +3,15 @@
 The flash separator performs vapor-liquid equilibrium calculations
 to split a feed stream into vapor and liquid products.
 
-Currently supports:
-- TP flash: Temperature and pressure specified
+Supports:
+- TP flash: Temperature and pressure specified (ideal and non-ideal)
+- PH flash: Pressure and enthalpy specified (isenthalpic)
+- Bubble/dew point calculations (temperature and pressure)
 
 The VLE is solved using the Rachford-Rice equation with implicit
 differentiation through the converged solution.
+
+For non-ideal systems, use EOSFlash with Peng-Robinson or SRK EOS.
 """
 
 from typing import Any
@@ -21,7 +25,9 @@ from difflow.thermo import IdealThermo
 from difflow.params_mixin import ParamsMixin
 from difflow.constants import K_MIN, K_MAX, PHASE_TRANSITION_WIDTH
 from difflow.numerics import safe_divide
+from difflow.eos import PengRobinson, SRK, flash_TP_eos
 import optimistix as optx
+from typing import Literal
 
 
 @dataclass(repr=False)
@@ -274,6 +280,78 @@ class Flash:
 
         return self.thermo.dew_pressure(y, T)
 
+    def bubble_point_temperature(
+        self,
+        inlet: Stream,
+        P: Array | float | None = None,
+        T_guess: float = 350.0,
+    ) -> Array:
+        """Calculate bubble point temperature at given pressure.
+
+        Solves: sum(x_i * Psat_i(T)) = P
+
+        Args:
+            inlet: Stream defining composition
+            P: Pressure (Pa). If None, uses inlet P.
+            T_guess: Initial temperature guess (K)
+
+        Returns:
+            Bubble point temperature (K)
+        """
+        P = jnp.asarray(P) if P is not None else inlet["P"]
+
+        inlet_flows = get_flows(inlet)
+        F_total = sum(inlet_flows.values())
+        x = {s: inlet_flows[s] / F_total for s in self.params.species_order}
+
+        # Solve: P_bubble(T) - P = 0
+        def residual(T, args):
+            P_target = args
+            P_bubble = self.thermo.bubble_pressure(x, T)
+            return P_bubble - P_target
+
+        solver = optx.Newton(rtol=1e-8, atol=1e-8)
+        T0 = jnp.array(T_guess)
+        sol = optx.root_find(residual, solver, T0, args=P, max_steps=50, throw=False)
+
+        return jnp.clip(sol.value, 200.0, 600.0)
+
+    def dew_point_temperature(
+        self,
+        inlet: Stream,
+        P: Array | float | None = None,
+        T_guess: float = 350.0,
+    ) -> Array:
+        """Calculate dew point temperature at given pressure.
+
+        Solves: 1/sum(y_i / Psat_i(T)) = P
+
+        Args:
+            inlet: Stream defining composition
+            P: Pressure (Pa). If None, uses inlet P.
+            T_guess: Initial temperature guess (K)
+
+        Returns:
+            Dew point temperature (K)
+        """
+        P = jnp.asarray(P) if P is not None else inlet["P"]
+
+        inlet_flows = get_flows(inlet)
+        F_total = sum(inlet_flows.values())
+        y = {s: inlet_flows[s] / F_total for s in self.params.species_order}
+
+        # Solve: P_dew(T) - P = 0
+        def residual(T, args):
+            P_target = args
+            P_dew = self.thermo.dew_pressure(y, T)
+            return P_dew - P_target
+
+        solver = optx.Newton(rtol=1e-8, atol=1e-8)
+        T0 = jnp.array(T_guess)
+        sol = optx.root_find(residual, solver, T0, args=P, max_steps=50, throw=False)
+
+        return jnp.clip(sol.value, 200.0, 600.0)
+
     # =========================================================================
     # Initialization Interface
     # =========================================================================
@@ -510,3 +588,251 @@ class Mixer:
         }
 
         return outlet, info
+
+
+# =============================================================================
+# EOSFlash - Non-ideal VLE using Cubic Equations of State
+# =============================================================================
+
+
+@dataclass(repr=False)
+class EOSFlashParams(ParamsMixin):
+    """Parameters for EOS-based flash separator.
+
+    Attributes:
+        species_order: List of species names for array ordering
+        eos_type: Type of EOS ('PR' for Peng-Robinson, 'SRK' for Soave-Redlich-Kwong)
+    """
+    species_order: list[str]
+    eos_type: Literal["PR", "SRK"] = "PR"
+
+    def __post_init__(self):
+        """Validate EOS flash parameters."""
+        if not self.species_order:
+            raise ValueError("species_order cannot be empty")
+        if len(self.species_order) != len(set(self.species_order)):
+            raise ValueError("species_order contains duplicate species names")
+        if self.eos_type not in ("PR", "SRK"):
+            raise ValueError(f"eos_type must be 'PR' or 'SRK', got '{self.eos_type}'")
+
+
+class EOSFlash:
+    """Flash separator using cubic equation of state for non-ideal VLE.
+
+    For systems where ideal behavior (Raoult's law) is insufficient,
+    this class uses Peng-Robinson or SRK equations of state to compute
+    K-values from fugacity coefficients.
+
+    Uses successive substitution to converge K-values:
+    1. Initialize K from Wilson correlation
+    2. Solve Rachford-Rice for vapor fraction V
+    3. Calculate x, y from V
+    4. Update K from fugacity coefficients
+    5. Repeat until converged
+
+    All calculations are JAX-compatible for automatic differentiation.
+
+    Example:
+        >>> from difflow.eos import CriticalProperties
+        >>> species_data = {
+        ...     "methane": CriticalProperties("methane", 190.6, 4.6e6, 0.011),
+        ...     "ethane": CriticalProperties("ethane", 305.4, 4.9e6, 0.099),
+        ... }
+        >>> from difflow.eos import PengRobinson
+        >>> eos = PengRobinson(species_data)
+        >>> params = EOSFlashParams(species_order=["methane", "ethane"])
+        >>> flash = EOSFlash(params, eos)
+        >>> liquid, vapor, info = flash(inlet, T=250.0, P=2e6)
+    """
+
+    def __init__(
+        self,
+        params: EOSFlashParams,
+        eos: PengRobinson | SRK,
+        k_ij: Array | None = None,
+    ):
+        """Initialize EOS flash separator.
+
+        Args:
+            params: Flash parameters
+            eos: Equation of state object (PengRobinson or SRK)
+            k_ij: Binary interaction parameters (n x n matrix).
+                  If None, assumes k_ij = 0 for all pairs.
+        """
+        self.params = params
+        self.eos = eos
+        self.k_ij = k_ij
+
+    def __call__(
+        self,
+        inlet: Stream,
+        T: Array | float | None = None,
+        P: Array | float | None = None,
+    ) -> tuple[Stream, Stream, dict[str, Array]]:
+        """Perform TP flash calculation using EOS.
+
+        Args:
+            inlet: Feed stream
+            T: Flash temperature (K). If None, uses inlet T.
+            P: Flash pressure (Pa). If None, uses inlet P.
+
+        Returns:
+            liquid: Liquid outlet stream
+            vapor: Vapor outlet stream
+            info: Dictionary with additional information
+        """
+        p = self.params
+
+        # Use inlet T, P if not specified
+        T = jnp.asarray(T) if T is not None else inlet["T"]
+        P = jnp.asarray(P) if P is not None else inlet["P"]
+
+        # Get feed flows and compute mole fractions
+        inlet_flows = get_flows(inlet)
+        F_feed = jnp.array([inlet_flows[s] for s in p.species_order])
+        F_total = jnp.sum(F_feed)
+        z = safe_divide(F_feed, F_total)
+
+        # Perform flash using EOS
+        V_frac, x, y = flash_TP_eos(self.eos, z, T, P, self.k_ij)
+
+        # Calculate outlet flows
+        L = F_total * (1 - V_frac)  # Liquid molar flow
+        V = F_total * V_frac  # Vapor molar flow
+
+        liquid_flows = {s: L * x[i] for i, s in enumerate(p.species_order)}
+        vapor_flows = {s: V * y[i] for i, s in enumerate(p.species_order)}
+
+        # Create outlet streams
+        liquid = make_stream(liquid_flows, T, P)
+        vapor = make_stream(vapor_flows, T, P)
+
+        # Compute K-values from final compositions
+        K = self.eos.K_values(T, P, x, y, self.k_ij)
+
+        # Build info dict
+        info = {
+            "V_frac": V_frac,
+            "K": {s: K[i] for i, s in enumerate(p.species_order)},
+            "x": {s: x[i] for i, s in enumerate(p.species_order)},
+            "y": {s: y[i] for i, s in enumerate(p.species_order)},
+            "L": L,
+            "V": V,
+            "eos_type": p.eos_type,
+        }
+
+        return liquid, vapor, info
+
+
+# =============================================================================
+# PHFlash - Isenthalpic Flash (Constant P and H)
+# =============================================================================
+
+
+class PHFlash:
+    """Isenthalpic flash separator (constant pressure and enthalpy).
+
+    The PH flash finds the equilibrium temperature such that the
+    outlet enthalpy equals the inlet enthalpy at specified pressure.
+
+    Common applications:
+    - Adiabatic flash drums
+    - Valve expansion
+    - Pressure reduction
+
+    All calculations are JAX-compatible for automatic differentiation.
+    """
+
+    def __init__(
+        self,
+        params: FlashParams,
+        thermo: IdealThermo,
+    ):
+        """Initialize PH flash separator.
+
+        Args:
+            params: Flash parameters
+            thermo: Thermodynamic property calculator
+        """
+        self.params = params
+        self.thermo = thermo
+        self._tp_flash = Flash(params, thermo)
+
+    def __call__(
+        self,
+        inlet: Stream,
+        P: Array | float | None = None,
+        T_guess: float = 300.0,
+    ) -> tuple[Stream, Stream, dict[str, Array]]:
+        """Perform PH (isenthalpic) flash calculation.
+
+        Args:
+            inlet: Feed stream
+            P: Flash pressure (Pa). If None, uses inlet P.
+            T_guess: Initial temperature guess (K)
+
+        Returns:
+            liquid: Liquid outlet stream
+            vapor: Vapor outlet stream
+            info: Dictionary with additional information including T_flash
+        """
+        p = self.params
+
+        # Use inlet P if not specified
+        P_flash = jnp.asarray(P) if P is not None else inlet["P"]
+
+        # Get feed flows and compute inlet enthalpy
+        inlet_flows = get_flows(inlet)
+        T_in = inlet["T"]
+
+        # Inlet enthalpy (assume liquid feed for simplicity)
+        H_inlet = self.thermo.stream_enthalpy(
+            {s: inlet_flows[s] for s in p.species_order},
+            T_in,
+            phase="liquid"
+        )
+
+        # Define enthalpy residual function
+        def H_residual(T, args):
+            P_op, H_target = args
+
+            # Perform TP flash at trial temperature
+            liquid, vapor, info = self._tp_flash(inlet, T=T, P=P_op)
+            V_frac = info["V_frac"]
+
+            # Get outlet flows
+            liquid_flows = get_flows(liquid)
+            vapor_flows = get_flows(vapor)
+
+            # Calculate outlet enthalpy
+            H_liquid = self.thermo.stream_enthalpy(
+                {s: liquid_flows[s] for s in p.species_order},
+                T,
+                phase="liquid"
+            )
+            H_vapor = self.thermo.stream_enthalpy(
+                {s: vapor_flows[s] for s in p.species_order},
+                T,
+                phase="vapor"
+            )
+            H_outlet = H_liquid + H_vapor
+
+            return H_outlet - H_target
+
+        # Solve for flash temperature
+        solver = optx.Newton(rtol=1e-6, atol=1e-6)
+        T0 = jnp.array(T_guess)
+        args = (P_flash, H_inlet)
+        sol = optx.root_find(H_residual, solver, T0, args=args, max_steps=50, throw=False)
+        T_flash = jnp.clip(sol.value, 200.0, 600.0)
+
+        # Final flash at converged temperature
+        liquid, vapor, flash_info = self._tp_flash(inlet, T=T_flash, P=P_flash)
+
+        # Add PH-specific info
+        flash_info["T_flash"] = T_flash
+        flash_info["H_inlet"] = H_inlet
+        flash_info["T_inlet"] = T_in
+        flash_info["P_flash"] = P_flash
+
+        return liquid, vapor, flash_info
