@@ -33,6 +33,8 @@ import jax
 import jax.numpy as jnp
 from jax import Array, lax
 
+from difflow.numerics import safe_divide
+
 
 # Type for derivative function: f(t, y, *args) -> dy/dt
 DerivativesFn = Callable[[Array, Array], Array]
@@ -307,7 +309,7 @@ def integrate_rk45(
         factor_min = 0.2
         factor_max = 5.0
 
-        factor = safety * jnp.power(1.0 / (error_ratio + 1e-10), 0.2)
+        factor = safety * jnp.power(safe_divide(1.0, error_ratio), 0.2)
         factor = jnp.clip(factor, factor_min, factor_max)
         dt_new = dt * factor
         dt_new = jnp.clip(dt_new, min_step, max_step)

@@ -462,11 +462,11 @@ class MultistageCascade:
         total_aq = F_aq + jnp.sum(F_in_arr)
         total_org = F_org + jnp.sum(F_solvent_arr)
 
-        x_aq_est = {eq.aqueous_carrier: F_aq / total_aq}
-        x_org_est = {eq.organic_carrier: F_org / total_org}
+        x_aq_est = {eq.aqueous_carrier: safe_divide(F_aq, total_aq)}
+        x_org_est = {eq.organic_carrier: safe_divide(F_org, total_org)}
         for i, s in enumerate(solutes):
-            x_aq_est[s] = F_in_arr[i] / total_aq
-            x_org_est[s] = (F_solvent_arr[i] + 1e-10) / total_org  # Avoid zero
+            x_aq_est[s] = safe_divide(F_in_arr[i], total_aq)
+            x_org_est[s] = safe_divide(F_solvent_arr[i], total_org)
 
         # Get distribution coefficients with estimated compositions
         K_dict = eq.get_distribution_coefficients(x_aq_est, x_org_est, T)
@@ -544,11 +544,11 @@ class MultistageCascade:
         total_aq = F_aq + jnp.sum(F_in_arr)
         total_org = F_org + jnp.sum(F_solvent_arr)
 
-        x_aq_est = {eq.aqueous_carrier: F_aq / total_aq}
-        x_org_est = {eq.organic_carrier: F_org / total_org}
+        x_aq_est = {eq.aqueous_carrier: safe_divide(F_aq, total_aq)}
+        x_org_est = {eq.organic_carrier: safe_divide(F_org, total_org)}
         for i, s in enumerate(solutes):
-            x_aq_est[s] = F_in_arr[i] / total_aq
-            x_org_est[s] = (F_solvent_arr[i] + 1e-10) / total_org
+            x_aq_est[s] = safe_divide(F_in_arr[i], total_aq)
+            x_org_est[s] = safe_divide(F_solvent_arr[i], total_org)
 
         # Get distribution coefficients with estimated compositions
         K_dict = eq.get_distribution_coefficients(x_aq_est, x_org_est, T)
