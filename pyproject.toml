@@ -17,6 +17,7 @@ dependencies = [
     "flax>=0.10.7",
     "gpjax>=0.12.2",
     "blackjax>=1.3",
+    "matplotlib>=3.10.8",
 ]
 
 [project.optional-dependencies]
@@ -61,3 +62,10 @@ cc = "difflow_cc:register"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/difflow", "src/difflow_bio", "src/difflow_ree", "src/difflow_cc"]
+
+[dependency-groups]
+dev = [
+    "ipycytoscape>=1.3.3",
+    "ipykernel>=7.1.0",
+    "nbconvert>=7.16.6",
+]

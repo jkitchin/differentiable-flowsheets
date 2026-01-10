@@ -15,6 +15,18 @@ A JAX-based framework for building and optimizing chemical process flowsheets wi
 - **Technoeconomic Analysis**: Comprehensive TEA module with equipment costs, operating costs, and profitability metrics (NPV, IRR, MSP)
 - **Bio Manufacturing**: Specialized unit operations for biopharmaceutical processes (bioreactors, chromatography, filtration)
 
+## ⚠️ ALPHA SOFTWARE
+
+This project is under active development and not ready for production use. APIs may change without notice.  This notice will be removed when the project reaches stable release.
+
+## LLM usage
+
+Claude Code is heavily used to generate the code, examples and tests. This has allowed the project to develop faster than it can be used, and to develop more features than are immediately needed. This may mean there are modules that do not match the performance or output of other projects. You should perform your own diligence when using the code to ensure the library does what you expect it to. Ultimately this is a proof of concept in differentiable flowsheets that wouldn't be possible without Claude Code.
+
+We regularly run all of the notebooks to ensure they run without errors, and review them to make sure the results make sense. We are happy to take issues and / or pull requests to fix problems. We also use Claude to review the code to look for issues.
+
+We actually anticipate that Claude Code is used when using this library (See [CLAUDE.md](./CLAUDE.md)). The library is large enough that it would take a long time to learn all the capabilities in addition to learning the nuances of differentiable programming. This repo provides all the information Claude needs to help you translate your flowsheet ideas into differentiable programs.
+
 ## Installation
 
 ```bash
