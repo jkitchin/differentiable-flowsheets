@@ -20,6 +20,7 @@ from jax import Array
 
 from difflow.streams import Stream, get_flows, make_stream
 from difflow.dynamic.state import StateSpec, StateVector, StateVar
+from difflow.numerics import safe_divide
 
 
 # Type aliases
@@ -381,7 +382,7 @@ class DynamicCSTR(DynamicUnitBase):
         Q_ext = 0.0 if p["mode"] == "adiabatic" else p.get("Q_spec", 0.0)
 
         # dT/dt = (Q_flow + Q_rxn + Q_ext) / (n_total * Cp)
-        dT_dt = (Q_flow + Q_rxn + Q_ext) / (n_total * Cp + 1e-10)
+        dT_dt = safe_divide(Q_flow + Q_rxn + Q_ext, n_total * Cp)
 
         return jnp.concatenate([dn_dt, jnp.array([dT_dt])])
 
@@ -547,7 +548,7 @@ class DynamicTank(DynamicUnitBase):
             T_in = inlet["T"]
             Cp = 75.0
             n_total = jnp.sum(n) + 1e-10
-            dT_dt = jnp.sum(F_in_mol) * Cp * (T_in - T) / (n_total * Cp + 1e-10)
+            dT_dt = safe_divide(jnp.sum(F_in_mol) * Cp * (T_in - T), n_total * Cp)
             derivs = jnp.concatenate([derivs, jnp.array([dT_dt])])
 
         return derivs

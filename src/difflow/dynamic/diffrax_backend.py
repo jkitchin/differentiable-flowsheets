@@ -111,7 +111,7 @@ DEFAULT_SOLVER = "tsit5"
 DEFAULT_STIFF_SOLVER = "kvaerno5"
 
 
-def _get_solver(name: str):
+def _get_solver(name: str) -> Any:
     """Get diffrax solver class by name."""
     if not HAS_DIFFRAX:
         raise ImportError(

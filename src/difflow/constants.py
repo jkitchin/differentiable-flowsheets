@@ -81,3 +81,26 @@ DEFAULT_CP = 75.0
 
 # Default rate constant for initialization (1/s)
 DEFAULT_RATE_CONSTANT = 0.1
+
+
+# =============================================================================
+# Numerical Stability Constants
+# =============================================================================
+
+# Epsilon for division denominators (prevents division by zero)
+EPS_DIVISION = 1e-10
+
+# Epsilon for logarithm arguments (prevents log(0))
+EPS_LOG = 1e-15
+
+# Epsilon for square root arguments (prevents sqrt(negative))
+EPS_SQRT = 1e-20
+
+# Epsilon for molar flow regularization
+EPS_MOLAR = 1e-6
+
+# Epsilon for fugacity coefficient calculations
+EPS_FUGACITY = 1e-30
+
+# Epsilon for cubic equation solver (arccos argument clipping)
+EPS_ARCCOS = 1e-30

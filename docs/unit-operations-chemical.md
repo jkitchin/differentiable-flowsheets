@@ -364,7 +364,7 @@ feed_profile = optimal_feed_profile(params, constraints={'max_T': 400.0})
 
 **Location**: `difflow/units/flash.py`
 
-**Class**: `Flash`
+**Classes**: `Flash`, `EOSFlash`, `PHFlash`
 
 **Description**: Performs vapor-liquid equilibrium (VLE) separation. The feed is separated into vapor and liquid phases at equilibrium conditions.
 
@@ -381,9 +381,12 @@ Flash drums are used for:
 ```python
 @dataclass
 class FlashParams:
-    # Usually no additional parameters needed;
-    # uses thermodynamic model for K-values
-    pass
+    species_order: list[str]  # List of species names for array ordering
+
+@dataclass
+class EOSFlashParams:
+    species_order: list[str]  # List of species names for array ordering
+    eos_type: str = "PR"      # "PR" (Peng-Robinson) or "SRK"
 ```
 
 #### Inputs
@@ -401,9 +404,9 @@ class FlashParams:
 | `liquid` | Stream | - | Liquid product |
 | `vapor` | Stream | - | Vapor product |
 | `info['V_frac']` | float | - | Vapor fraction |
-| `info['K_values']` | Array | - | K-values for each species |
-| `info['x']` | Array | - | Liquid mole fractions |
-| `info['y']` | Array | - | Vapor mole fractions |
+| `info['K']` | dict | - | K-values for each species |
+| `info['x']` | dict | - | Liquid mole fractions |
+| `info['y']` | dict | - | Vapor mole fractions |
 
 #### Governing Equations
 
@@ -422,13 +425,15 @@ $$x_i = \frac{z_i}{1 + V(K_i - 1)}$$
 
 $$y_i = \frac{K_i z_i}{1 + V(K_i - 1)}$$
 
-**K-Value Calculation** (Raoult's Law):
+**K-Value Calculation** (Raoult's Law for `Flash`):
 
 $$K_i = \frac{P_i^{sat}(T)}{P}$$
 
-For non-ideal systems with activity coefficients:
+**K-Value Calculation** (Fugacity-based for `EOSFlash`):
 
-$$K_i = \frac{\gamma_i P_i^{sat}(T)}{P}$$
+$$K_i = \frac{\phi_i^L}{\phi_i^V}$$
+
+Where $\phi_i$ are fugacity coefficients from Peng-Robinson or SRK equation of state.
 
 **Material Balance**:
 
@@ -436,18 +441,80 @@ $$F = L + V$$
 
 $$F z_i = L x_i + V y_i$$
 
-#### Example Usage
+#### Flash Classes
+
+##### Flash (Ideal)
+
+Uses Raoult's law K-values from IdealThermo. Suitable for ideal or near-ideal mixtures.
 
 ```python
 from difflow.units.flash import Flash, FlashParams
 
-flash = Flash(FlashParams(), thermo, species_order=['methane', 'ethane', 'propane'])
+flash = Flash(FlashParams(species_order=['methane', 'ethane', 'propane']), thermo)
 feed = make_stream({'methane': 0.5, 'ethane': 0.3, 'propane': 0.2}, T=300.0, P=500000.0)
 
 liquid, vapor, info = flash(feed)
 print(f"Vapor fraction: {info['V_frac']:.3f}")
-print(f"Liquid composition: {info['x']}")
-print(f"Vapor composition: {info['y']}")
+```
+
+##### EOSFlash (Non-Ideal)
+
+Uses fugacity coefficients from cubic equations of state (Peng-Robinson or SRK) for non-ideal VLE.
+
+```python
+from difflow.units.flash import EOSFlash, EOSFlashParams
+from difflow.eos import PengRobinson, CriticalProperties
+
+# Define species with critical properties
+species_data = {
+    "methane": CriticalProperties("methane", 190.6, 4.6e6, 0.011),
+    "ethane": CriticalProperties("ethane", 305.4, 4.9e6, 0.099),
+    "propane": CriticalProperties("propane", 369.8, 4.2e6, 0.152),
+}
+eos = PengRobinson(species_data)
+
+params = EOSFlashParams(species_order=["methane", "ethane", "propane"], eos_type="PR")
+flash = EOSFlash(params, eos)
+
+feed = make_stream({'methane': 40.0, 'ethane': 30.0, 'propane': 30.0}, T=250.0, P=2e6)
+liquid, vapor, info = flash(feed)
+```
+
+##### PHFlash (Isenthalpic)
+
+Performs adiabatic flash at constant pressure and enthalpy. Solves for flash temperature.
+
+```python
+from difflow.units.flash import PHFlash, FlashParams
+
+ph_flash = PHFlash(FlashParams(species_order=['Light', 'Heavy']), thermo)
+
+# Hot liquid feed, flash to lower pressure
+feed = make_stream({'Light': 50.0, 'Heavy': 50.0}, T=380.0, P=101325.0)
+liquid, vapor, info = ph_flash(feed, P=30000.0)
+
+print(f"Flash temperature: {info['T_flash']:.1f} K")
+print(f"Vapor fraction: {info['V_frac']:.3f}")
+```
+
+#### Bubble and Dew Point Methods
+
+The `Flash` class provides methods for calculating phase boundaries:
+
+```python
+flash = Flash(FlashParams(species_order=['Light', 'Heavy']), thermo)
+feed = make_stream({'Light': 50.0, 'Heavy': 50.0}, T=350.0, P=50000.0)
+
+# Pressure calculations (at specified T)
+P_bubble = flash.bubble_point_pressure(feed, T=350.0)  # First bubble forms
+P_dew = flash.dew_point_pressure(feed, T=350.0)        # Last drop condenses
+
+# Temperature calculations (at specified P)
+T_bubble = flash.bubble_point_temperature(feed, P=50000.0)
+T_dew = flash.dew_point_temperature(feed, P=50000.0)
+
+print(f"Bubble point: T={T_bubble:.1f} K, P={P_bubble:.0f} Pa")
+print(f"Dew point: T={T_dew:.1f} K, P={P_dew:.0f} Pa")
 ```
 
 ---

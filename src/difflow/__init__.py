@@ -43,6 +43,7 @@ from difflow.database import (
     get_btex,
     get_common_solvents,
 )
+from difflow.base_database import BaseDatabase
 from difflow.uncertainty import (
     linear_propagation,
     monte_carlo_propagation,
@@ -59,6 +60,17 @@ from difflow.cantera_import import (
     list_available_reactions,
 )
 from difflow.params_mixin import ParamsMixin
+from difflow.numerics import (
+    safe_divide,
+    safe_log,
+    safe_sqrt,
+    safe_power,
+    safe_exp,
+    smooth_max,
+    smooth_min,
+    smooth_clamp,
+    safe_arccos,
+)
 from difflow.units.base import (
     UnitBase,
     ReactorBase,
@@ -78,7 +90,15 @@ from difflow.units.fed_batch import (
     batch_time_for_conversion,
     optimal_feed_profile,
 )
-from difflow.units.flash import Flash, FlashParams, Mixer, Splitter
+from difflow.units.flash import (
+    Flash,
+    FlashParams,
+    EOSFlash,
+    EOSFlashParams,
+    PHFlash,
+    Mixer,
+    Splitter,
+)
 from difflow.units.lle import (
     MultistageCascade,
     CascadeParams,
@@ -195,6 +215,16 @@ from difflow.dynamic import (
 __all__ = [
     # Params Mixin
     "ParamsMixin",
+    # Numerical utilities
+    "safe_divide",
+    "safe_log",
+    "safe_sqrt",
+    "safe_power",
+    "safe_exp",
+    "smooth_max",
+    "smooth_min",
+    "smooth_clamp",
+    "safe_arccos",
     # Unit Base Classes and Helpers
     "UnitBase",
     "ReactorBase",
@@ -230,6 +260,7 @@ __all__ = [
     "get_alkanes",
     "get_btex",
     "get_common_solvents",
+    "BaseDatabase",
     # Uncertainty Propagation
     "linear_propagation",
     "monte_carlo_propagation",
@@ -260,6 +291,9 @@ __all__ = [
     # Unit operations - Flash
     "Flash",
     "FlashParams",
+    "EOSFlash",
+    "EOSFlashParams",
+    "PHFlash",
     "Mixer",
     "Splitter",
     # Unit operations - LLE

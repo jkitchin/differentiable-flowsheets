@@ -22,20 +22,21 @@ recycled back to the feed or processed in a separate circuit.
 All operations are fully differentiable using JAX.
 """
 
-from dataclasses import dataclass, replace, fields, asdict as dc_asdict
-from typing import Literal
+from dataclasses import dataclass
 
 import jax.numpy as jnp
 from jax import Array
 
+from difflow.numerics import safe_divide
+from difflow.params_mixin import ParamsMixin
 from difflow.streams import Stream, make_stream, get_flows
 from difflow_ree.units.extraction import REEExtractor, REEExtractorParams
 from difflow_ree.units.scrubbing import REEScrubber, ScrubberParams
 from difflow_ree.units.stripping import REEStripper, StripperParams
 
 
-@dataclass
-class ExtractScrubStripParams:
+@dataclass(repr=False)
+class ExtractScrubStripParams(ParamsMixin):
     """Parameters for 3-section circuit.
 
     Attributes:
@@ -66,82 +67,6 @@ class ExtractScrubStripParams:
     solvent_to_feed_ratio: float = 1.0
     scrub_to_solvent_ratio: float = 0.2
     strip_to_solvent_ratio: float = 0.5
-
-    def update(self, **kwargs) -> "ExtractScrubStripParams":
-        """Return a new ExtractScrubStripParams with specified fields replaced.
-
-        This enables JAX-compatible parameter updates for differentiation.
-
-        Args:
-            **kwargs: Fields to update (e.g., n_extraction_stages=12)
-
-        Returns:
-            New ExtractScrubStripParams with updated fields
-        """
-        return replace(self, **kwargs)
-
-    def __getitem__(self, key: str):
-        """Get parameter value by name for dict-like access."""
-        try:
-            return getattr(self, key)
-        except AttributeError:
-            raise KeyError(key)
-
-    def __contains__(self, key: str) -> bool:
-        """Check if a field exists in the params."""
-        return key in {f.name for f in fields(self)}
-
-    def keys(self):
-        """Return field names for dict-like iteration."""
-        return (f.name for f in fields(self))
-
-    def values(self):
-        """Return field values for dict-like iteration.
-
-        Returns:
-            Iterator over field values
-        """
-        return (getattr(self, f.name) for f in fields(self))
-
-    def items(self):
-        """Return (name, value) pairs for dict-like iteration.
-
-        Returns:
-            Iterator over (field_name, value) tuples
-        """
-        return ((f.name, getattr(self, f.name)) for f in fields(self))
-
-    def __iter__(self):
-        """Iterate over field names (like dict)."""
-        return (f.name for f in fields(self))
-
-    def __len__(self) -> int:
-        """Return number of fields."""
-        return len(fields(self))
-
-    def asdict(self) -> dict:
-        """Convert params to a dictionary."""
-        return dc_asdict(self)
-
-    def __repr__(self) -> str:
-        """Concise string representation."""
-        def fmt(v):
-            if v is None:
-                return "None"
-            if callable(v) and hasattr(v, '__name__'):
-                return v.__name__
-            if hasattr(v, 'shape'):
-                if v.ndim == 0:
-                    return f"{float(v):.4g}"
-                return f"Array{list(v.shape)}"
-            if isinstance(v, dict):
-                items = ", ".join(f"{k}: {fmt(val)}" for k, val in v.items())
-                return "{" + items + "}"
-            if isinstance(v, (list, tuple)) and len(v) > 5:
-                return f"{type(v).__name__}[{len(v)}]"
-            return repr(v)
-        items = ", ".join(f"{f.name}={fmt(getattr(self, f.name))}" for f in fields(self))
-        return f"{self.__class__.__name__}({items})"
 
 
 class ExtractScrubStripCircuit:
@@ -275,13 +200,13 @@ class ExtractScrubStripCircuit:
         for elem in p.target_elements:
             f_in = float(feed_flows.get(elem, 0.0))
             f_out = float(product_flows.get(elem, 0.0))
-            target_recovery[elem] = f_out / (f_in + 1e-10)
+            target_recovery[elem] = safe_divide(f_out, f_in)
 
         # Product purity (mole fraction)
         total_product_ree = sum(float(product_flows.get(e, 0.0)) for e in p.elements)
         product_purity = {}
         for elem in p.elements:
-            product_purity[elem] = float(product_flows.get(elem, 0.0)) / (total_product_ree + 1e-10)
+            product_purity[elem] = safe_divide(float(product_flows.get(elem, 0.0)), total_product_ree)
 
         # Target purity (sum of target elements)
         target_purity = sum(product_purity.get(e, 0.0) for e in p.target_elements)
@@ -292,7 +217,7 @@ class ExtractScrubStripCircuit:
         for elem in impurity_elements:
             f_in = float(feed_flows.get(elem, 0.0))
             f_product = float(product_flows.get(elem, 0.0))
-            impurity_rejection[elem] = 1 - f_product / (f_in + 1e-10)
+            impurity_rejection[elem] = 1 - safe_divide(f_product, f_in)
 
         return {
             "raffinate": raffinate,
@@ -331,7 +256,7 @@ class ExtractScrubStripCircuit:
                 float(scrub_flows.get(elem, 0.0)) +
                 float(product_flows.get(elem, 0.0))
             )
-            closure = f_out / (f_in + 1e-10)
+            closure = safe_divide(f_out, f_in)
             balance[elem] = {
                 "in": f_in,
                 "out": f_out,

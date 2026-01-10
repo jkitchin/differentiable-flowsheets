@@ -35,7 +35,15 @@ from difflow.units.fed_batch import (
     batch_time_for_conversion,
     optimal_feed_profile,
 )
-from difflow.units.flash import Flash, FlashParams, Mixer, Splitter
+from difflow.units.flash import (
+    Flash,
+    FlashParams,
+    EOSFlash,
+    EOSFlashParams,
+    PHFlash,
+    Mixer,
+    Splitter,
+)
 from difflow.units.lle import (
     MultistageCascade,
     CascadeParams,
@@ -104,6 +112,9 @@ __all__ = [
     # Flash
     "Flash",
     "FlashParams",
+    "EOSFlash",
+    "EOSFlashParams",
+    "PHFlash",
     "Mixer",
     "Splitter",
     # LLE

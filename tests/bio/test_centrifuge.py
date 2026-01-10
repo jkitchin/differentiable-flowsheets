@@ -115,7 +115,7 @@ class TestCentrifuge:
             T=300.0, P=101325.0
         )
 
-        (concentrate, clarified), info = centrifuge(
+        concentrate, clarified, info = centrifuge(
             feed,
             Q=1e-4,  # m³/s
             d_particle=5e-6,
@@ -140,7 +140,7 @@ class TestCentrifuge:
             T=300.0, P=101325.0
         )
 
-        (concentrate, clarified), info = centrifuge(
+        concentrate, clarified, info = centrifuge(
             feed, Q=1e-4, concentrate_fraction=0.1
         )
 
@@ -161,8 +161,8 @@ class TestCentrifuge:
             T=300.0, P=101325.0
         )
 
-        _, info_low_Q = centrifuge(feed, Q=1e-5, concentrate_fraction=0.1)
-        _, info_high_Q = centrifuge(feed, Q=1e-3, concentrate_fraction=0.1)
+        _, _, info_low_Q = centrifuge(feed, Q=1e-5, concentrate_fraction=0.1)
+        _, _, info_high_Q = centrifuge(feed, Q=1e-3, concentrate_fraction=0.1)
 
         # Higher flow = larger minimum separable particle
         assert float(info_high_Q["critical_diameter"]) > float(info_low_Q["critical_diameter"])
@@ -174,7 +174,7 @@ class TestCentrifuge:
             centrifuge = Centrifuge(params)
             feed = make_stream({"cells": 100.0, "product": 50.0}, T=300.0, P=101325.0)
             # Use higher Q to be in non-saturated regime
-            (concentrate, _), info = centrifuge(feed, Q=1e-3, concentrate_fraction=0.1)
+            concentrate, _, info = centrifuge(feed, Q=1e-3, concentrate_fraction=0.1)
             return concentrate["F_cells"]
 
         grad_sigma = jax.grad(cell_recovery)(jnp.array(100.0))
@@ -211,7 +211,7 @@ class TestDiscStackCentrifuge:
             T=300.0, P=101325.0
         )
 
-        (concentrate, clarified), info = centrifuge(
+        concentrate, clarified, info = centrifuge(
             feed, Q=1e-4, concentrate_fraction=0.1
         )
 

@@ -29,6 +29,7 @@ __all__ = [
 import jax.numpy as jnp
 from jax import Array
 
+from difflow.numerics import safe_divide
 from difflow_cc.database import get_solvent
 from difflow_cc.equilibrium.solubility import diffusivity_co2_amine
 
@@ -136,7 +137,7 @@ def hatta_number(
     k1 = pseudo_first_order_rate(T, solvent, C_amine)
     D_CO2 = diffusivity_co2_amine(T, solvent, C_amine)
 
-    Ha = jnp.sqrt(k1 * D_CO2) / (kL + 1e-10)
+    Ha = safe_divide(jnp.sqrt(k1 * D_CO2), kL)
     return Ha
 
 
@@ -182,7 +183,7 @@ def enhancement_factor(
         # For large Ha, E ≈ Ha
         E = jnp.where(
             Ha > 0.1,
-            Ha / jnp.tanh(Ha + 1e-10),
+            safe_divide(Ha, jnp.tanh(Ha + 1e-10)),
             1.0 + Ha**2 / 3  # Taylor expansion for small Ha
         )
     else:

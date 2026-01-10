@@ -28,6 +28,7 @@ import optimistix as optx
 from difflow.streams import Stream, get_flows, make_stream
 from difflow.thermo import IdealThermo
 from difflow.dynamic.state import StateSpec, StateVar
+from difflow.numerics import safe_divide
 
 # Check for diffrax availability
 try:
@@ -271,7 +272,7 @@ class FedBatchReactor:
                 Q_ext = 0.0
 
             # dT/dt
-            dT_dt = (Q_rxn + Q_feed + Q_ext) / (n_total * Cp_mix + 1e-10)
+            dT_dt = safe_divide(Q_rxn + Q_feed + Q_ext, n_total * Cp_mix)
 
             return jnp.concatenate([jnp.array([dV_dt]), dn_dt, jnp.array([dT_dt])])
 
@@ -405,7 +406,7 @@ class FedBatchReactor:
             # Heat from feed
             if self.thermo is not None:
                 n_total = V * jnp.sum(C)
-                x = C / (jnp.sum(C) + 1e-10)
+                x = safe_divide(C, jnp.sum(C))
                 mole_fracs = {s: x[i] for i, s in enumerate(p.species_order)}
                 Cp_mix = self.thermo.Cp_mix(mole_fracs, T)
                 Q_feed = F_in * jnp.sum(C_feed) * Cp_mix * (feed_T - T)
@@ -625,7 +626,7 @@ class FedBatchReactor:
         else:
             Q_ext = params.get("Q_ext", 0.0) if params else 0.0
 
-        dT_dt = (Q_rxn + Q_feed + Q_ext) / (n_total * Cp + 1e-10)
+        dT_dt = safe_divide(Q_rxn + Q_feed + Q_ext, n_total * Cp)
 
         return jnp.concatenate([derivs, jnp.array([dT_dt])])
 

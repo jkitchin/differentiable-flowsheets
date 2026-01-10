@@ -29,6 +29,7 @@ from difflow.streams import Stream, get_flows, get_species, make_stream
 from difflow.thermo import IdealThermo
 from difflow.dynamic.state import StateSpec, StateVar, StateVector
 from difflow.params_mixin import ParamsMixin
+from difflow.numerics import safe_divide
 from difflow.units.base import (
     estimate_volumetric_flow,
     estimate_residence_time,
@@ -212,7 +213,7 @@ class CSTR:
         conversion = {
             species: jnp.where(
                 inlet_flows[species] > 0,
-                (inlet_flows[species] - outlet_flows[species]) / (inlet_flows[species] + 1e-30),
+                safe_divide(inlet_flows[species] - outlet_flows[species], inlet_flows[species]),
                 0.0
             )
             for species in p.species_order
@@ -426,7 +427,7 @@ class CSTR:
 
             # Update T: H_out_target = H_out_current + total_F * Cp * (T_new - T)
             # T_new = T + (H_out_target - H_out_current) / (total_F * Cp)
-            dT = (H_out_target - H_out_current) / (total_F * Cp_mix + 1e-10)
+            dT = safe_divide(H_out_target - H_out_current, total_F * Cp_mix)
             T_new = T + T_damping * dT  # Damped update for stability
 
             return T_new
@@ -530,7 +531,7 @@ class CSTR:
             H_out_current = thermo.stream_enthalpy(outlet_fl, T, phase="liquid")
 
             # Update T
-            dT = (H_out_target - H_out_current) / (total_F * Cp_mix + 1e-10)
+            dT = safe_divide(H_out_target - H_out_current, total_F * Cp_mix)
             T_new = T + T_damping * dT  # Damped update for stability
 
             return T_new
@@ -726,7 +727,7 @@ class CSTR:
             Q_ext = params.get("Q_ext", 0.0) if params else 0.0
 
         # dT/dt = (Q_flow + Q_rxn + Q_ext) / (n_total * Cp)
-        dT_dt = (Q_flow + Q_rxn + Q_ext) / (n_total * Cp + 1e-10)
+        dT_dt = safe_divide(Q_flow + Q_rxn + Q_ext, n_total * Cp)
 
         return jnp.concatenate([dn_dt, jnp.array([dT_dt])])
 
@@ -878,7 +879,7 @@ class CSTR:
                 if self.mode == "specified_duty":
                     Q_spec = kwargs.get('Q_spec', 0.0)
                     Cp_avg = 75.0
-                    T_out = T_out + Q_spec / (total_flow * Cp_avg + 1e-10)
+                    T_out = T_out + safe_divide(Q_spec, total_flow * Cp_avg)
                     T_out = float(jnp.clip(T_out, 250.0, 800.0))
             else:
                 T_out = float(inlet["T"])

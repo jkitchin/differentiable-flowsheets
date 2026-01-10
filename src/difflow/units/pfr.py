@@ -42,6 +42,7 @@ from difflow.streams import Stream, get_flows, get_species, make_stream
 from difflow.thermo import IdealThermo
 from difflow.dynamic.state import StateSpec, StateVar
 from difflow.params_mixin import ParamsMixin
+from difflow.numerics import safe_divide
 from difflow.units.base import (
     estimate_volumetric_flow,
     estimate_residence_time,
@@ -184,7 +185,7 @@ class PFR:
 
         # Calculate conversions
         conversion = {
-            s: (inlet_flows[s] - outlet_flows[s]) / (inlet_flows[s] + 1e-10)
+            s: safe_divide(inlet_flows[s] - outlet_flows[s], inlet_flows[s])
             for s in p.species_order
         }
 
@@ -720,7 +721,7 @@ class GasPFR:
 
         # Calculate conversions
         conversion = {
-            s: (inlet_flows[s] - outlet_flows[s]) / (inlet_flows[s] + 1e-10)
+            s: safe_divide(inlet_flows[s] - outlet_flows[s], inlet_flows[s])
             for s in p.species_order
         }
 
@@ -772,7 +773,7 @@ class GasPFR:
 
             # Volumetric flow accounting for mole change and pressure
             # Q = Q0 * (F_tot/F_tot0) * (P0/P) * (T/T0)
-            Q = Q0 * (F_total / F_total_0) * (P0 / (P + 1e-10)) * (T / T0)
+            Q = Q0 * (F_total / F_total_0) * safe_divide(P0, P) * (T / T0)
 
             # Concentrations and rates
             C = {s: F[i] / Q for i, s in enumerate(species_order)}
@@ -782,7 +783,7 @@ class GasPFR:
             dF = stoich @ r
 
             # Pressure drop: dP/dV = -alpha * (P0/P) * (T/T0) * (F_tot/F_tot0)
-            dP = -alpha * (P0 / (P + 1e-10)) * (T / T0) * (F_total / F_total_0)
+            dP = -alpha * safe_divide(P0, P) * (T / T0) * (F_total / F_total_0)
 
             return jnp.concatenate([dF, jnp.array([dP])])
 
@@ -819,7 +820,7 @@ class GasPFR:
 
         # Compute Q profile
         F_total_profile = jnp.sum(F_profile, axis=1) + 1e-10
-        Q_profile = Q0 * (F_total_profile / F_total_0) * (P0 / (P_profile + 1e-10)) * (T / T0)
+        Q_profile = Q0 * (F_total_profile / F_total_0) * safe_divide(P0, P_profile) * (T / T0)
 
         profiles = {
             "V": V_profile,
@@ -874,7 +875,7 @@ class GasPFR:
             F_total = jnp.sum(F) + 1e-10
 
             # Volumetric flow accounting for mole change, pressure, and temperature
-            Q = Q0 * (F_total / F_total_0) * (P0 / (P + 1e-10)) * (T / T0)
+            Q = Q0 * (F_total / F_total_0) * safe_divide(P0, P) * (T / T0)
 
             # Concentrations and rates
             C = {s: F[i] / Q for i, s in enumerate(species_order)}
@@ -890,7 +891,7 @@ class GasPFR:
             dT = -Q_rxn / (F_total * Cp_mix / Q)
 
             # Pressure drop
-            dP = -alpha * (P0 / (P + 1e-10)) * (T / T0) * (F_total / F_total_0)
+            dP = -alpha * safe_divide(P0, P) * (T / T0) * (F_total / F_total_0)
 
             return jnp.concatenate([dF, jnp.array([dT, dP])])
 
@@ -929,7 +930,7 @@ class GasPFR:
 
         # Compute Q profile
         F_total_profile = jnp.sum(F_profile, axis=1) + 1e-10
-        Q_profile = Q0 * (F_total_profile / F_total_0) * (P0 / (P_profile + 1e-10)) * (T_profile / T0)
+        Q_profile = Q0 * (F_total_profile / F_total_0) * safe_divide(P0, P_profile) * (T_profile / T0)
 
         profiles = {
             "V": V_profile,

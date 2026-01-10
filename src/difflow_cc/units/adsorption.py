@@ -38,6 +38,7 @@ from jax import Array
 
 from difflow.streams import Stream, make_stream, get_flows, total_flow
 from difflow.params_mixin import ParamsMixin
+from difflow.numerics import safe_divide
 from difflow_cc.database import get_adsorbent, Adsorbent
 from difflow_cc.equilibrium.isotherms import (
     Isotherm,
@@ -263,7 +264,7 @@ class PSAUnit(_AdsorptionBase):
         if y_CO2_feed is not None:
             y_CO2 = jnp.asarray(y_CO2_feed)
         else:
-            y_CO2 = F_CO2_in / (F_total + 1e-10)
+            y_CO2 = safe_divide(F_CO2_in, F_total)
 
         # Partial pressure of CO2
         P_CO2_ads = y_CO2 * P_ads
@@ -286,7 +287,7 @@ class PSAUnit(_AdsorptionBase):
         F_CO2_captured = jnp.minimum(F_CO2_captured, F_CO2_in * 0.95)
 
         # Recovery
-        recovery = F_CO2_captured / (F_CO2_in + 1e-10)
+        recovery = safe_divide(F_CO2_captured, F_CO2_in)
 
         # Purity estimation (simplified)
         # Selectivity from database or calculated
@@ -302,7 +303,7 @@ class PSAUnit(_AdsorptionBase):
 
         # Per tonne CO2
         m_CO2_per_s = F_CO2_captured * 44 / 1e6  # tonnes/s
-        energy_per_tonne = W_compression / (m_CO2_per_s + 1e-10) / 1e6  # MWh/tonne
+        energy_per_tonne = safe_divide(W_compression, m_CO2_per_s) / 1e6  # MWh/tonne
         energy_GJ_per_tonne = energy_per_tonne * 3.6  # GJ/tonne
 
         # Productivity
@@ -394,7 +395,7 @@ class VSAUnit(_AdsorptionBase):
         if y_CO2_feed is not None:
             y_CO2 = jnp.asarray(y_CO2_feed)
         else:
-            y_CO2 = F_CO2_in / (F_total + 1e-10)
+            y_CO2 = safe_divide(F_CO2_in, F_total)
 
         P_CO2_ads = y_CO2 * P_ads
         P_CO2_des = P_des * 0.3  # CO2 desorbs first
@@ -406,7 +407,7 @@ class VSAUnit(_AdsorptionBase):
         F_CO2_captured = CO2_per_cycle * p.n_beds / t_cycle
         F_CO2_captured = jnp.minimum(F_CO2_captured, F_CO2_in * 0.95)
 
-        recovery = F_CO2_captured / (F_CO2_in + 1e-10)
+        recovery = safe_divide(F_CO2_captured, F_CO2_in)
         selectivity = self._adsorbent_data.CO2_selectivity
         purity = selectivity / (selectivity + 1.0) * 0.99
 
@@ -416,7 +417,7 @@ class VSAUnit(_AdsorptionBase):
         W_vacuum = CO2_per_cycle * p.n_beds / t_cycle * R * T * jnp.log(ratio) / 0.6
 
         m_CO2_per_s = F_CO2_captured * 44 / 1e6
-        energy_GJ_per_tonne = W_vacuum / (m_CO2_per_s + 1e-10) / 1e9 * 3.6
+        energy_GJ_per_tonne = safe_divide(W_vacuum, m_CO2_per_s) / 1e9 * 3.6
 
         productivity = self._productivity(working_cap, bed_mass, t_cycle)
 
@@ -500,7 +501,7 @@ class TSAUnit(_AdsorptionBase):
         if y_CO2_feed is not None:
             y_CO2 = jnp.asarray(y_CO2_feed)
         else:
-            y_CO2 = F_CO2_in / (F_total + 1e-10)
+            y_CO2 = safe_divide(F_CO2_in, F_total)
 
         P_CO2 = y_CO2 * P
 
@@ -512,7 +513,7 @@ class TSAUnit(_AdsorptionBase):
         F_CO2_captured = CO2_per_cycle * p.n_beds / t_cycle
         F_CO2_captured = jnp.minimum(F_CO2_captured, F_CO2_in * 0.95)
 
-        recovery = F_CO2_captured / (F_CO2_in + 1e-10)
+        recovery = safe_divide(F_CO2_captured, F_CO2_in)
         selectivity = self._adsorbent_data.CO2_selectivity
         purity = selectivity / (selectivity + 1.0) * 0.99
 
@@ -528,7 +529,7 @@ class TSAUnit(_AdsorptionBase):
         Q_rate = Q_total * p.n_beds / t_cycle  # W
 
         m_CO2_per_s = F_CO2_captured * 44 / 1e6
-        energy_GJ_per_tonne = Q_rate / (m_CO2_per_s + 1e-10) / 1e9 * 1.0  # Thermal
+        energy_GJ_per_tonne = safe_divide(Q_rate, m_CO2_per_s) / 1e9 * 1.0  # Thermal
 
         productivity = self._productivity(working_cap, bed_mass, t_cycle)
 
@@ -613,7 +614,7 @@ class TVSAUnit(_AdsorptionBase):
         if y_CO2_feed is not None:
             y_CO2 = jnp.asarray(y_CO2_feed)
         else:
-            y_CO2 = F_CO2_in / (F_total + 1e-10)
+            y_CO2 = safe_divide(F_CO2_in, F_total)
 
         P_CO2_ads = y_CO2 * P_ads
         P_CO2_des = P_des * 0.3
@@ -626,7 +627,7 @@ class TVSAUnit(_AdsorptionBase):
         F_CO2_captured = CO2_per_cycle * p.n_beds / t_cycle
         F_CO2_captured = jnp.minimum(F_CO2_captured, F_CO2_in * 0.95)
 
-        recovery = F_CO2_captured / (F_CO2_in + 1e-10)
+        recovery = safe_divide(F_CO2_captured, F_CO2_in)
         selectivity = self._adsorbent_data.CO2_selectivity
         purity = selectivity / (selectivity + 1.0) * 0.99
 
@@ -645,7 +646,7 @@ class TVSAUnit(_AdsorptionBase):
         total_energy = Q_thermal + W_vacuum * 3
 
         m_CO2_per_s = F_CO2_captured * 44 / 1e6
-        energy_GJ_per_tonne = total_energy / (m_CO2_per_s + 1e-10) / 1e9
+        energy_GJ_per_tonne = safe_divide(total_energy, m_CO2_per_s) / 1e9
 
         productivity = self._productivity(working_cap, bed_mass, t_cycle)
 

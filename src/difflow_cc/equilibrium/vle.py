@@ -24,6 +24,7 @@ __all__ = [
     "co2_equilibrium_pressure",
     "co2_loading",
     "AmineVLE",
+    "AmineVLEParams",
 ]
 
 from dataclasses import dataclass
@@ -31,6 +32,8 @@ import jax.numpy as jnp
 from jax import Array
 import optimistix as optx
 
+from difflow.params_mixin import ParamsMixin
+from difflow.numerics import safe_divide
 from difflow_cc.database import get_solvent, AmineSolvent
 
 # Gas constant
@@ -200,8 +203,8 @@ def co2_loading(
 # VLE Model Class
 # =============================================================================
 
-@dataclass
-class AmineVLEParams:
+@dataclass(repr=False)
+class AmineVLEParams(ParamsMixin):
     """Parameters for amine VLE model.
 
     Attributes:
@@ -373,7 +376,7 @@ class AmineVLE:
 
         # Total energy per mol CO2
         Q_per_mol = (
-            Q_sensible / (mol_CO2_per_kg + 1e-10) +
+            safe_divide(Q_sensible, mol_CO2_per_kg) +
             dH_abs +
             steam_ratio * dH_vap
         )

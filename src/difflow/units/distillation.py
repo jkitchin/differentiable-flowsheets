@@ -27,7 +27,8 @@ from jax import Array, lax
 from difflow.streams import Stream, get_flows, make_stream
 from difflow.thermo import IdealThermo
 from difflow.params_mixin import ParamsMixin
-from difflow.constants import MIN_ALPHA_DIFF, MAX_STAGES, MAX_GILLILAND_Y, DEFAULT_TEMP_SCALE
+from difflow.constants import MIN_ALPHA_DIFF, MAX_STAGES, MAX_GILLILAND_Y, DEFAULT_TEMP_SCALE, EPS_DIVISION
+from difflow.numerics import safe_divide, safe_log
 import optimistix as optx
 
 
@@ -155,15 +156,15 @@ class ShortcutColumn:
             - close_boiling_flag: True if α is close to 1 (hard separation)
         """
         # Fenske equation for binary
-        numer = jnp.log(
-            (x_D_LK / (1 - x_D_LK + 1e-10)) *
-            ((1 - x_B_LK + 1e-10) / (x_B_LK + 1e-10))
+        numer = safe_log(
+            safe_divide(x_D_LK, 1 - x_D_LK) *
+            safe_divide(1 - x_B_LK, x_B_LK)
         )
 
         # Handle singularity when alpha → 1
         # ln(alpha) → 0 as alpha → 1, causing N_min → ∞
         # Use regularization: max(ln(alpha), small_value)
-        log_alpha = jnp.log(jnp.maximum(alpha_LK, 1.0 + 1e-10))
+        log_alpha = safe_log(jnp.maximum(alpha_LK, 1.0 + EPS_DIVISION))
 
         # Regularize denominator to prevent division by zero
         # When log_alpha is very small, N_min would be huge
@@ -217,7 +218,7 @@ class ShortcutColumn:
         def underwood_func(theta, args):
             total = jnp.zeros(())
             for s in p.species_order:
-                total = total + alpha[s] * z[s] / (alpha[s] - theta + 1e-10)
+                total = total + safe_divide(alpha[s] * z[s], alpha[s] - theta)
             return total - (1 - q)
 
         # Use Newton iteration to find theta
@@ -252,7 +253,7 @@ class ShortcutColumn:
         """
         total = jnp.zeros(())
         for s in self.params.species_order:
-            total = total + alpha[s] * x_D[s] / (alpha[s] - theta + 1e-10)
+            total = total + safe_divide(alpha[s] * x_D[s], alpha[s] - theta)
 
         R_min = total - 1
         return jnp.maximum(R_min, 0.1)  # Ensure positive
@@ -346,11 +347,11 @@ class ShortcutColumn:
         Returns:
             Feed stage number (from bottom)
         """
-        ratio_arg = (z_HK / (z_LK + 1e-10)) * \
-                    ((x_B_LK + 1e-10) / (x_D_HK + 1e-10))**2 * \
+        ratio_arg = safe_divide(z_HK, z_LK) * \
+                    safe_divide(x_B_LK, x_D_HK)**2 * \
                     B_over_D
 
-        log_ratio = 0.206 * jnp.log(ratio_arg + 1e-10)
+        log_ratio = 0.206 * safe_log(ratio_arg)
         NR_over_NS = jnp.exp(log_ratio)
 
         # N = N_R + N_S, NR/NS = ratio
@@ -446,10 +447,10 @@ class ShortcutColumn:
                 # Use Hengstebeck-Geddes equation for distribution
                 # log(d_i/b_i) = A + C * log(alpha_i)
                 # where A and C are determined from key components
-                A = jnp.log((D_LK / (B_LK + 1e-10)) * (B_HK / (D_HK + 1e-10)))
-                C = jnp.log(D_LK / (B_LK + 1e-10)) / (jnp.log(alpha_LK) + 1e-10)
+                A = safe_log(safe_divide(D_LK, B_LK) * safe_divide(B_HK, D_HK))
+                C = safe_divide(safe_log(safe_divide(D_LK, B_LK)), safe_log(alpha_LK))
 
-                d_over_b = jnp.exp(A + C * jnp.log(alpha[s] + 1e-10))
+                d_over_b = jnp.exp(A + C * safe_log(alpha[s]))
                 F_i = feed_flows[s]
                 d_i = F_i * d_over_b / (1 + d_over_b)
                 b_i = F_i - d_i
@@ -460,8 +461,8 @@ class ShortcutColumn:
                 B_total = B_total + bottoms_flows[s]
 
         # Product compositions
-        x_D = {s: distillate_flows[s] / (D_total + 1e-10) for s in p.species_order}
-        x_B = {s: bottoms_flows[s] / (B_total + 1e-10) for s in p.species_order}
+        x_D = {s: safe_divide(distillate_flows[s], D_total) for s in p.species_order}
+        x_B = {s: safe_divide(bottoms_flows[s], B_total) for s in p.species_order}
 
         # Fenske minimum stages
         x_D_LK = x_D[p.light_key]
@@ -476,7 +477,7 @@ class ShortcutColumn:
         N, near_min_reflux = self.gilliland_correlation(R, R_min, N_min)
 
         # Feed stage
-        B_over_D = B_total / (D_total + 1e-10)
+        B_over_D = safe_divide(B_total, D_total)
         x_D_HK = x_D[p.heavy_key]
         N_feed = self.feed_stage_kirkbride(N, z_LK, z_HK, x_B_LK, x_D_HK, B_over_D)
 
@@ -821,13 +822,13 @@ def fenske_stages(
     Returns:
         Minimum number of theoretical stages, capped at MAX_STAGES
     """
-    numer = jnp.log(
-        (x_D_LK / (x_B_LK + 1e-10)) *
-        ((1 - x_B_LK) / (1 - x_D_LK + 1e-10))
+    numer = safe_log(
+        safe_divide(x_D_LK, x_B_LK) *
+        safe_divide(1 - x_B_LK, 1 - x_D_LK)
     )
 
     # Handle singularity when alpha → 1
-    log_alpha = jnp.log(jnp.maximum(alpha, 1.0 + 1e-10))
+    log_alpha = safe_log(jnp.maximum(alpha, 1.0 + EPS_DIVISION))
     log_alpha_safe = jnp.maximum(log_alpha, MIN_ALPHA_DIFF)
 
     N_min = numer / log_alpha_safe
@@ -864,9 +865,9 @@ def minimum_reflux_ratio(
     q = jnp.asarray(q)
 
     # Simplified for pseudo-binary
-    term1 = x_D_LK / (z_LK + 1e-10)
-    term2 = alpha * (1 - x_D_LK) / (1 - z_LK + 1e-10)
-    R_min = (term1 - term2) / (alpha - 1)
+    term1 = safe_divide(x_D_LK, z_LK)
+    term2 = safe_divide(alpha * (1 - x_D_LK), 1 - z_LK)
+    R_min = safe_divide(term1 - term2, alpha - 1)
 
     return jnp.maximum(R_min, 0.1)
 
@@ -943,16 +944,16 @@ def column_diameter(
     C_sb = 0.1  # Souders-Brown coefficient (m/s)
 
     # Flooding velocity
-    u_flood = C_sb * jnp.sqrt((rho_L - rho_V) / (rho_V + 1e-10))
+    u_flood = C_sb * jnp.sqrt(safe_divide(rho_L - rho_V, rho_V))
 
     # Operating velocity (80% of flood)
     u_op = 0.8 * u_flood
 
     # Volumetric flow
-    Q_V = V_mass / (rho_V + 1e-10)  # m³/s
+    Q_V = safe_divide(V_mass, rho_V)  # m³/s
 
     # Column area
-    A = Q_V / (u_op + 1e-10)
+    A = safe_divide(Q_V, u_op)
 
     # Diameter
     D = jnp.sqrt(4 * A / jnp.pi)

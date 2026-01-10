@@ -91,6 +91,7 @@ from difflow_cc.equilibrium import (
     co2_equilibrium_pressure,
     co2_loading,
     AmineVLE,
+    AmineVLEParams,
     # Solubility
     co2_physical_solubility,
     diffusivity_co2_amine,
@@ -406,6 +407,7 @@ __all__ = [
     "co2_equilibrium_pressure",
     "co2_loading",
     "AmineVLE",
+    "AmineVLEParams",
     # Solubility
     "co2_physical_solubility",
     "diffusivity_co2_amine",

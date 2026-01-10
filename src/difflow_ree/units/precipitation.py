@@ -13,12 +13,13 @@ Common precipitants:
 All operations are fully differentiable using JAX.
 """
 
-from dataclasses import dataclass, replace, fields, asdict as dc_asdict
-from typing import Literal
+from dataclasses import dataclass
 
 import jax.numpy as jnp
 from jax import Array
 
+from difflow.numerics import safe_divide, safe_log
+from difflow.params_mixin import ParamsMixin
 from difflow.streams import Stream, make_stream, get_flows
 from difflow_ree.database import get_ree_database
 
@@ -53,8 +54,8 @@ PKsp_HYDROXIDE = {
 # Precipitator Parameters
 # =============================================================================
 
-@dataclass
-class PrecipitatorParams:
+@dataclass(repr=False)
+class PrecipitatorParams(ParamsMixin):
     """Parameters for REE precipitation.
 
     Attributes:
@@ -69,82 +70,6 @@ class PrecipitatorParams:
     temperature: float = 298.15
     residence_time: float = 3600.0  # 1 hour typical
     target_conversion: float = 0.995
-
-    def update(self, **kwargs) -> "PrecipitatorParams":
-        """Return a new PrecipitatorParams with specified fields replaced.
-
-        This enables JAX-compatible parameter updates for differentiation.
-
-        Args:
-            **kwargs: Fields to update (e.g., precipitant_excess=2.0)
-
-        Returns:
-            New PrecipitatorParams with updated fields
-        """
-        return replace(self, **kwargs)
-
-    def __getitem__(self, key: str):
-        """Get parameter value by name for dict-like access."""
-        try:
-            return getattr(self, key)
-        except AttributeError:
-            raise KeyError(key)
-
-    def __contains__(self, key: str) -> bool:
-        """Check if a field exists in the params."""
-        return key in {f.name for f in fields(self)}
-
-    def keys(self):
-        """Return field names for dict-like iteration."""
-        return (f.name for f in fields(self))
-
-    def values(self):
-        """Return field values for dict-like iteration.
-
-        Returns:
-            Iterator over field values
-        """
-        return (getattr(self, f.name) for f in fields(self))
-
-    def items(self):
-        """Return (name, value) pairs for dict-like iteration.
-
-        Returns:
-            Iterator over (field_name, value) tuples
-        """
-        return ((f.name, getattr(self, f.name)) for f in fields(self))
-
-    def __iter__(self):
-        """Iterate over field names (like dict)."""
-        return (f.name for f in fields(self))
-
-    def __len__(self) -> int:
-        """Return number of fields."""
-        return len(fields(self))
-
-    def asdict(self) -> dict:
-        """Convert params to a dictionary."""
-        return dc_asdict(self)
-
-    def __repr__(self) -> str:
-        """Concise string representation."""
-        def fmt(v):
-            if v is None:
-                return "None"
-            if callable(v) and hasattr(v, '__name__'):
-                return v.__name__
-            if hasattr(v, 'shape'):
-                if v.ndim == 0:
-                    return f"{float(v):.4g}"
-                return f"Array{list(v.shape)}"
-            if isinstance(v, dict):
-                items = ", ".join(f"{k}: {fmt(val)}" for k, val in v.items())
-                return "{" + items + "}"
-            if isinstance(v, (list, tuple)) and len(v) > 5:
-                return f"{type(v).__name__}[{len(v)}]"
-            return repr(v)
-        items = ", ".join(f"{f.name}={fmt(getattr(self, f.name))}" for f in fields(self))
-        return f"{self.__class__.__name__}({items})"
 
 
 # =============================================================================
@@ -183,7 +108,7 @@ class OxalatePrecipitator:
         feed: Stream,
         precipitant: Stream,
         T: Array | float | None = None,
-    ) -> tuple[Stream, dict, dict]:
+    ) -> tuple[Stream, Stream, dict]:
         """Perform oxalate precipitation.
 
         Args:
@@ -193,7 +118,7 @@ class OxalatePrecipitator:
 
         Returns:
             filtrate: Aqueous filtrate (depleted in REE)
-            solid: Dictionary of precipitated REE (mol/s)
+            solid: Solid product stream (precipitated REE as oxalate)
             info: Precipitation diagnostics
         """
         p = self.params
@@ -216,7 +141,7 @@ class OxalatePrecipitator:
         # Stoichiometry: 2 REE + 3 C2O4 → REE2(C2O4)3
         # Required oxalate = 1.5 × REE (mol basis)
         required_oxalate = 1.5 * total_ree
-        actual_excess = F_oxalate / (required_oxalate + 1e-10)
+        actual_excess = safe_divide(F_oxalate, required_oxalate)
 
         for elem in p.elements:
             F_in = jnp.asarray(feed_flows.get(elem, 0.0))
@@ -249,10 +174,13 @@ class OxalatePrecipitator:
         P = feed["P"]
         filtrate = make_stream(filtrate_flows, T, P)
 
+        # Create solid stream (precipitate at same T, P as filtrate)
+        solid = make_stream(solid_flows, T, P)
+
         # Calculate solid composition
         total_solid = sum(float(solid_flows[e]) for e in p.elements)
         solid_composition = {
-            e: float(solid_flows[e]) / (total_solid + 1e-10)
+            e: safe_divide(float(solid_flows[e]), total_solid)
             for e in p.elements
         }
 
@@ -265,7 +193,7 @@ class OxalatePrecipitator:
             "product_formula": "REE2(C2O4)3",
         }
 
-        return filtrate, solid_flows, info
+        return filtrate, solid, info
 
 
 # =============================================================================
@@ -304,7 +232,7 @@ class CarbonatePrecipitator:
         feed: Stream,
         precipitant: Stream,
         T: Array | float | None = None,
-    ) -> tuple[Stream, dict, dict]:
+    ) -> tuple[Stream, Stream, dict]:
         """Perform carbonate precipitation.
 
         Args:
@@ -314,7 +242,7 @@ class CarbonatePrecipitator:
 
         Returns:
             filtrate: Aqueous filtrate
-            solid: Precipitated REE (mol/s)
+            solid: Solid product stream (precipitated REE as carbonate)
             info: Precipitation diagnostics
         """
         p = self.params
@@ -332,7 +260,7 @@ class CarbonatePrecipitator:
 
         total_ree = sum(feed_flows.get(e, 0.0) for e in p.elements)
         required_carbonate = 1.5 * total_ree
-        actual_excess = F_carbonate / (required_carbonate + 1e-10)
+        actual_excess = safe_divide(F_carbonate, required_carbonate)
 
         for elem in p.elements:
             F_in = jnp.asarray(feed_flows.get(elem, 0.0))
@@ -359,6 +287,9 @@ class CarbonatePrecipitator:
         P = feed["P"]
         filtrate = make_stream(filtrate_flows, T, P)
 
+        # Create solid stream (precipitate at same T, P as filtrate)
+        solid = make_stream(solid_flows, T, P)
+
         total_solid = sum(float(solid_flows[e]) for e in p.elements)
 
         info = {
@@ -369,7 +300,7 @@ class CarbonatePrecipitator:
             "product_formula": "REE2(CO3)3",
         }
 
-        return filtrate, solid_flows, info
+        return filtrate, solid, info
 
 
 # =============================================================================
@@ -408,7 +339,7 @@ class HydroxidePrecipitator:
         precipitant: Stream,
         pH: Array | float = 9.0,
         T: Array | float | None = None,
-    ) -> tuple[Stream, dict, dict]:
+    ) -> tuple[Stream, Stream, dict]:
         """Perform hydroxide precipitation.
 
         Args:
@@ -419,7 +350,7 @@ class HydroxidePrecipitator:
 
         Returns:
             filtrate: Aqueous filtrate
-            solid: Precipitated REE (mol/s)
+            solid: Solid product stream (precipitated REE as hydroxide)
             info: Precipitation diagnostics
         """
         p = self.params
@@ -451,10 +382,10 @@ class HydroxidePrecipitator:
             c_sat = Ksp / jnp.power(OH_conc, 3)
 
             # Assume feed concentration (rough estimate)
-            c_feed = F_in / (feed_flows.get("H2O", 1.0) + 1e-10)
+            c_feed = safe_divide(F_in, feed_flows.get("H2O", 1.0))
 
             # Supersaturation ratio
-            S = c_feed / (c_sat + 1e-20)
+            S = safe_divide(c_feed, c_sat)
 
             # Conversion based on supersaturation
             # If S > 1, precipitation occurs
@@ -475,11 +406,14 @@ class HydroxidePrecipitator:
                 "pKsp": pKsp,
                 "supersaturation": float(S),
                 "conversion": float(conversion),
-                "precipitation_pH": float(14 + jnp.log10(jnp.power(Ksp/c_feed, 1/3) + 1e-20)),
+                "precipitation_pH": float(14 + safe_log(jnp.power(safe_divide(Ksp, c_feed), 1/3), base=10)),
             }
 
         P = feed["P"]
         filtrate = make_stream(filtrate_flows, T, P)
+
+        # Create solid stream (precipitate at same T, P as filtrate)
+        solid = make_stream(solid_flows, T, P)
 
         total_solid = sum(float(solid_flows[e]) for e in p.elements)
 
@@ -491,7 +425,7 @@ class HydroxidePrecipitator:
             "product_formula": "REE(OH)3",
         }
 
-        return filtrate, solid_flows, info
+        return filtrate, solid, info
 
     def selective_precipitation_pH(
         self,

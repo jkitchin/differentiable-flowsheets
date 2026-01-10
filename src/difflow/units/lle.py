@@ -18,6 +18,7 @@ from jax import Array, lax
 
 from difflow.streams import Stream, get_flows, make_stream
 from difflow.params_mixin import ParamsMixin
+from difflow.numerics import safe_divide
 
 
 # =============================================================================
@@ -461,11 +462,11 @@ class MultistageCascade:
         total_aq = F_aq + jnp.sum(F_in_arr)
         total_org = F_org + jnp.sum(F_solvent_arr)
 
-        x_aq_est = {eq.aqueous_carrier: F_aq / total_aq}
-        x_org_est = {eq.organic_carrier: F_org / total_org}
+        x_aq_est = {eq.aqueous_carrier: safe_divide(F_aq, total_aq)}
+        x_org_est = {eq.organic_carrier: safe_divide(F_org, total_org)}
         for i, s in enumerate(solutes):
-            x_aq_est[s] = F_in_arr[i] / total_aq
-            x_org_est[s] = (F_solvent_arr[i] + 1e-10) / total_org  # Avoid zero
+            x_aq_est[s] = safe_divide(F_in_arr[i], total_aq)
+            x_org_est[s] = safe_divide(F_solvent_arr[i], total_org)
 
         # Get distribution coefficients with estimated compositions
         K_dict = eq.get_distribution_coefficients(x_aq_est, x_org_est, T)
@@ -543,11 +544,11 @@ class MultistageCascade:
         total_aq = F_aq + jnp.sum(F_in_arr)
         total_org = F_org + jnp.sum(F_solvent_arr)
 
-        x_aq_est = {eq.aqueous_carrier: F_aq / total_aq}
-        x_org_est = {eq.organic_carrier: F_org / total_org}
+        x_aq_est = {eq.aqueous_carrier: safe_divide(F_aq, total_aq)}
+        x_org_est = {eq.organic_carrier: safe_divide(F_org, total_org)}
         for i, s in enumerate(solutes):
-            x_aq_est[s] = F_in_arr[i] / total_aq
-            x_org_est[s] = (F_solvent_arr[i] + 1e-10) / total_org
+            x_aq_est[s] = safe_divide(F_in_arr[i], total_aq)
+            x_org_est[s] = safe_divide(F_solvent_arr[i], total_org)
 
         # Get distribution coefficients with estimated compositions
         K_dict = eq.get_distribution_coefficients(x_aq_est, x_org_est, T)
@@ -568,7 +569,7 @@ class MultistageCascade:
         eff_per_stage = self.params.stage_efficiency
         total_eff = 1.0 - (1.0 - eff_per_stage) ** n_stages
 
-        x_feed_arr = F_in_arr / (F_aq + 1e-10)
+        x_feed_arr = safe_divide(F_in_arr, F_aq)
         x_final_arr = x_feed_arr + total_eff * (x_eq_arr - x_feed_arr)
 
         F_raffinate_arr = x_final_arr * F_aq
@@ -839,7 +840,7 @@ class DifferentialContactor:
         # Solve for c_org(0) using boundary conditions
         # c_org(L) = M10 * c_aq(0) + M11 * c_org(0)
         # c_org(0) = (c_org(L) - M10 * c_aq(0)) / M11
-        c_org_0 = (c_org_L - M10 * c_aq_0) / (M11 + 1e-10)
+        c_org_0 = safe_divide(c_org_L - M10 * c_aq_0, M11)
 
         # Compute c_aq(L)
         c_aq_L = M00 * c_aq_0 + M01 * c_org_0

@@ -10,18 +10,20 @@ Strip solutions are typically:
 All operations are fully differentiable using JAX.
 """
 
-from dataclasses import dataclass, replace, fields, asdict as dc_asdict
+from dataclasses import dataclass
 from typing import Literal
 
 import jax.numpy as jnp
 from jax import Array
 
+from difflow.numerics import safe_divide, safe_log
+from difflow.params_mixin import ParamsMixin
 from difflow.streams import Stream, make_stream, get_flows
 from difflow_ree.equilibrium.distribution import REEDistribution
 
 
-@dataclass
-class StripperParams:
+@dataclass(repr=False)
+class StripperParams(ParamsMixin):
     """Parameters for REE stripping section.
 
     Attributes:
@@ -40,82 +42,6 @@ class StripperParams:
     extractant_conc: float = 0.5
     acid_type: Literal["HCl", "H2SO4", "HNO3"] = "HCl"
     acid_conc: float = 4.0  # M
-
-    def update(self, **kwargs) -> "StripperParams":
-        """Return a new StripperParams with specified fields replaced.
-
-        This enables JAX-compatible parameter updates for differentiation.
-
-        Args:
-            **kwargs: Fields to update (e.g., n_stages=6, pH=0.3)
-
-        Returns:
-            New StripperParams with updated fields
-        """
-        return replace(self, **kwargs)
-
-    def __getitem__(self, key: str):
-        """Get parameter value by name for dict-like access."""
-        try:
-            return getattr(self, key)
-        except AttributeError:
-            raise KeyError(key)
-
-    def __contains__(self, key: str) -> bool:
-        """Check if a field exists in the params."""
-        return key in {f.name for f in fields(self)}
-
-    def keys(self):
-        """Return field names for dict-like iteration."""
-        return (f.name for f in fields(self))
-
-    def values(self):
-        """Return field values for dict-like iteration.
-
-        Returns:
-            Iterator over field values
-        """
-        return (getattr(self, f.name) for f in fields(self))
-
-    def items(self):
-        """Return (name, value) pairs for dict-like iteration.
-
-        Returns:
-            Iterator over (field_name, value) tuples
-        """
-        return ((f.name, getattr(self, f.name)) for f in fields(self))
-
-    def __iter__(self):
-        """Iterate over field names (like dict)."""
-        return (f.name for f in fields(self))
-
-    def __len__(self) -> int:
-        """Return number of fields."""
-        return len(fields(self))
-
-    def asdict(self) -> dict:
-        """Convert params to a dictionary."""
-        return dc_asdict(self)
-
-    def __repr__(self) -> str:
-        """Concise string representation."""
-        def fmt(v):
-            if v is None:
-                return "None"
-            if callable(v) and hasattr(v, '__name__'):
-                return v.__name__
-            if hasattr(v, 'shape'):
-                if v.ndim == 0:
-                    return f"{float(v):.4g}"
-                return f"Array{list(v.shape)}"
-            if isinstance(v, dict):
-                items = ", ".join(f"{k}: {fmt(val)}" for k, val in v.items())
-                return "{" + items + "}"
-            if isinstance(v, (list, tuple)) and len(v) > 5:
-                return f"{type(v).__name__}[{len(v)}]"
-            return repr(v)
-        items = ", ".join(f"{f.name}={fmt(getattr(self, f.name))}" for f in fields(self))
-        return f"{self.__class__.__name__}({items})"
 
 
 class REEStripper:
@@ -211,7 +137,7 @@ class REEStripper:
             frac_in_org = jnp.where(
                 jnp.abs(E - 1.0) < 1e-6,
                 n_stages / (n_stages + 1),
-                (E_Np1 - E) / (E_Np1 - 1.0 + 1e-10)
+                safe_divide(E_Np1 - E, E_Np1 - 1.0)
             )
 
             # At very low pH with many stages, almost complete stripping
@@ -227,7 +153,7 @@ class REEStripper:
 
             strip_efficiency[elem] = {
                 "D": D,
-                "stripping_factor": 1.0 / (E + 1e-10),
+                "stripping_factor": safe_divide(1.0, E),
                 "recovery": 1 - frac_in_org,
             }
 
@@ -238,7 +164,7 @@ class REEStripper:
         # Calculate overall strip performance
         total_in = sum(float(org_flows.get(e, 0.0)) for e in p.elements)
         total_product = sum(float(product_flows.get(e, 0.0)) for e in p.elements)
-        overall_recovery = total_product / (total_in + 1e-10)
+        overall_recovery = safe_divide(total_product, total_in)
 
         info = {
             "n_stages": n_stages,
@@ -281,7 +207,7 @@ def minimum_strip_stages(
 
     # Simplified approximation for E << 1:
     # N ≈ log(1 - recovery) / log(E)
-    N = jnp.log(1 - target_recovery) / jnp.log(E + 1e-10)
+    N = safe_divide(jnp.log(1 - target_recovery), safe_log(E))
 
     return float(jnp.maximum(N, 1.0))
 
@@ -328,5 +254,5 @@ def strip_solution_concentration(
     """
     conc = {}
     for elem in elements:
-        conc[elem] = element_flows.get(elem, 0.0) / (strip_flow + 1e-10)
+        conc[elem] = safe_divide(element_flows.get(elem, 0.0), strip_flow)
     return conc

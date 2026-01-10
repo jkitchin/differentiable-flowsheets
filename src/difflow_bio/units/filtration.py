@@ -17,19 +17,22 @@ where:
     N_dv = number of diavolumes
 """
 
-from dataclasses import dataclass, field, replace, fields, asdict as dc_asdict
+from dataclasses import dataclass, field
+
+from difflow.params_mixin import ParamsMixin
 import jax.numpy as jnp
 from jax import Array, lax
 
 from difflow.streams import Stream, make_stream, get_flows
+from difflow.numerics import safe_divide
 
 
 # =============================================================================
 # Filtration Parameters
 # =============================================================================
 
-@dataclass
-class UltrafiltrationParams:
+@dataclass(repr=False)
+class UltrafiltrationParams(ParamsMixin):
     """Parameters for ultrafiltration.
 
     Attributes:
@@ -46,85 +49,9 @@ class UltrafiltrationParams:
     Lp: float | Array = 50.0  # L/m²/h/bar, typical for UF membrane
     species_order: list[str] = None
 
-    def update(self, **kwargs) -> "UltrafiltrationParams":
-        """Return a new UltrafiltrationParams with specified fields replaced.
 
-        This enables JAX-compatible parameter updates for differentiation.
-
-        Args:
-            **kwargs: Fields to update (e.g., membrane_area=10.0)
-
-        Returns:
-            New UltrafiltrationParams with updated fields
-        """
-        return replace(self, **kwargs)
-
-    def __getitem__(self, key: str):
-        """Get parameter value by name for dict-like access."""
-        try:
-            return getattr(self, key)
-        except AttributeError:
-            raise KeyError(key)
-
-    def __contains__(self, key: str) -> bool:
-        """Check if a field exists in the params."""
-        return key in {f.name for f in fields(self)}
-
-    def keys(self):
-        """Return field names for dict-like iteration."""
-        return (f.name for f in fields(self))
-
-    def values(self):
-        """Return field values for dict-like iteration.
-
-        Returns:
-            Iterator over field values
-        """
-        return (getattr(self, f.name) for f in fields(self))
-
-    def items(self):
-        """Return (name, value) pairs for dict-like iteration.
-
-        Returns:
-            Iterator over (field_name, value) tuples
-        """
-        return ((f.name, getattr(self, f.name)) for f in fields(self))
-
-    def __iter__(self):
-        """Iterate over field names (like dict)."""
-        return (f.name for f in fields(self))
-
-    def __len__(self) -> int:
-        """Return number of fields."""
-        return len(fields(self))
-
-    def asdict(self) -> dict:
-        """Convert params to a dictionary."""
-        return dc_asdict(self)
-
-    def __repr__(self) -> str:
-        """Concise string representation."""
-        def fmt(v):
-            if v is None:
-                return "None"
-            if callable(v) and hasattr(v, '__name__'):
-                return v.__name__
-            if hasattr(v, 'shape'):
-                if v.ndim == 0:
-                    return f"{float(v):.4g}"
-                return f"Array{list(v.shape)}"
-            if isinstance(v, dict):
-                items = ", ".join(f"{k}: {fmt(val)}" for k, val in v.items())
-                return "{" + items + "}"
-            if isinstance(v, (list, tuple)) and len(v) > 5:
-                return f"{type(v).__name__}[{len(v)}]"
-            return repr(v)
-        items = ", ".join(f"{f.name}={fmt(getattr(self, f.name))}" for f in fields(self))
-        return f"{self.__class__.__name__}({items})"
-
-
-@dataclass
-class DiafiltrationParams:
+@dataclass(repr=False)
+class DiafiltrationParams(ParamsMixin):
     """Parameters for diafiltration (buffer exchange).
 
     Attributes:
@@ -139,82 +66,6 @@ class DiafiltrationParams:
     rejection: dict = field(default_factory=dict)
     Lp: float | Array = 50.0
     species_order: list[str] = None
-
-    def update(self, **kwargs) -> "DiafiltrationParams":
-        """Return a new DiafiltrationParams with specified fields replaced.
-
-        This enables JAX-compatible parameter updates for differentiation.
-
-        Args:
-            **kwargs: Fields to update (e.g., membrane_area=10.0)
-
-        Returns:
-            New DiafiltrationParams with updated fields
-        """
-        return replace(self, **kwargs)
-
-    def __getitem__(self, key: str):
-        """Get parameter value by name for dict-like access."""
-        try:
-            return getattr(self, key)
-        except AttributeError:
-            raise KeyError(key)
-
-    def __contains__(self, key: str) -> bool:
-        """Check if a field exists in the params."""
-        return key in {f.name for f in fields(self)}
-
-    def keys(self):
-        """Return field names for dict-like iteration."""
-        return (f.name for f in fields(self))
-
-    def values(self):
-        """Return field values for dict-like iteration.
-
-        Returns:
-            Iterator over field values
-        """
-        return (getattr(self, f.name) for f in fields(self))
-
-    def items(self):
-        """Return (name, value) pairs for dict-like iteration.
-
-        Returns:
-            Iterator over (field_name, value) tuples
-        """
-        return ((f.name, getattr(self, f.name)) for f in fields(self))
-
-    def __iter__(self):
-        """Iterate over field names (like dict)."""
-        return (f.name for f in fields(self))
-
-    def __len__(self) -> int:
-        """Return number of fields."""
-        return len(fields(self))
-
-    def asdict(self) -> dict:
-        """Convert params to a dictionary."""
-        return dc_asdict(self)
-
-    def __repr__(self) -> str:
-        """Concise string representation."""
-        def fmt(v):
-            if v is None:
-                return "None"
-            if callable(v) and hasattr(v, '__name__'):
-                return v.__name__
-            if hasattr(v, 'shape'):
-                if v.ndim == 0:
-                    return f"{float(v):.4g}"
-                return f"Array{list(v.shape)}"
-            if isinstance(v, dict):
-                items = ", ".join(f"{k}: {fmt(val)}" for k, val in v.items())
-                return "{" + items + "}"
-            if isinstance(v, (list, tuple)) and len(v) > 5:
-                return f"{type(v).__name__}[{len(v)}]"
-            return repr(v)
-        items = ", ".join(f"{f.name}={fmt(getattr(self, f.name))}" for f in fields(self))
-        return f"{self.__class__.__name__}({items})"
 
 
 # =============================================================================
@@ -397,7 +248,7 @@ class Diafiltration:
             buffer_conc = buffer_flows.get(species, jnp.array(0.0)) / sum(buffer_flows.values())
             buffer_added = buffer_conc * n_dv * V_initial
             # Buffer that's retained follows same wash-in kinetics
-            from_buffer = buffer_added * (1.0 - remaining_frac) / (1.0 - R + 1e-10)
+            from_buffer = buffer_added * safe_divide(1.0 - remaining_frac, 1.0 - R)
             from_buffer = jnp.where(R < 0.99, from_buffer, buffer_added)
 
             retentate_flows[species] = from_initial + from_buffer
@@ -415,7 +266,7 @@ class Diafiltration:
 
                 buffer_conc = buffer_flow / sum(buffer_flows.values())
                 buffer_added = buffer_conc * n_dv * V_initial
-                from_buffer = buffer_added * (1.0 - remaining_frac) / (1.0 - R + 1e-10)
+                from_buffer = buffer_added * safe_divide(1.0 - remaining_frac, 1.0 - R)
                 from_buffer = jnp.where(R < 0.99, from_buffer, buffer_added)
 
                 retentate_flows[species] = from_buffer
@@ -638,7 +489,7 @@ def diavolumes_required(
         Required number of diavolumes
     """
     ratio = target_conc / initial_conc
-    return -jnp.log(ratio) / (1.0 - rejection + 1e-10)
+    return safe_divide(-jnp.log(ratio), 1.0 - rejection)
 
 
 def rejection_from_mw(

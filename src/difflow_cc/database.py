@@ -46,6 +46,8 @@ import yaml
 import jax.numpy as jnp
 from jax import Array
 
+from difflow.params_mixin import ParamsMixin
+
 
 # =============================================================================
 # Data Directory
@@ -225,8 +227,8 @@ class SolventDatabase:
 # Adsorbent Data Structures
 # =============================================================================
 
-@dataclass(frozen=True)
-class IsothermParams:
+@dataclass(frozen=True, repr=False)
+class IsothermParams(ParamsMixin):
     """Parameters for an adsorption isotherm model.
 
     Attributes:

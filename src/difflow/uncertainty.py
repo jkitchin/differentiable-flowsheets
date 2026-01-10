@@ -38,6 +38,9 @@ import jax
 import jax.numpy as jnp
 from jax import Array, vmap
 
+from difflow.numerics import safe_divide
+from difflow.constants import EPS_DIVISION
+
 
 def linear_propagation(
     model: Callable[[dict], Array],
@@ -102,12 +105,12 @@ def linear_propagation(
         # Absolute sensitivity
         sensitivities[name] = {
             "gradient": jacobian[:, j] if jacobian.ndim > 1 else jacobian[j],
-            "elasticity": jacobian[:, j] * x_nominal[j] / (y_nominal + 1e-30)
+            "elasticity": safe_divide(jacobian[:, j] * x_nominal[j], y_nominal)
                 if jacobian.ndim > 1
-                else jacobian[j] * x_nominal[j] / (y_nominal[0] + 1e-30),
-            "variance_contribution": (jacobian[:, j]**2 * x_sigma[j]**2) / (variance + 1e-30)
+                else safe_divide(jacobian[j] * x_nominal[j], y_nominal[0]),
+            "variance_contribution": safe_divide(jacobian[:, j]**2 * x_sigma[j]**2, variance)
                 if jacobian.ndim > 1
-                else (jacobian[j]**2 * x_sigma[j]**2) / (variance + 1e-30),
+                else safe_divide(jacobian[j]**2 * x_sigma[j]**2, variance),
         }
 
     info = {
@@ -269,7 +272,7 @@ def sensitivity_analysis(
         local_sens = grad[i]
 
         # Elasticity (normalized sensitivity)
-        elasticity = local_sens * x_nominal[i] / (y_nominal[0] + 1e-30)
+        elasticity = safe_divide(local_sens * x_nominal[i], y_nominal[0])
 
         # One-at-a-time curve
         if param_ranges and name in param_ranges:
@@ -363,7 +366,7 @@ def sobol_indices(
 
         # First-order index: S_i = V[E[Y|X_i]] / V[Y]
         # Estimated as: S_i ≈ (1/N) * sum(y_B * (y_AB_i - y_A)) / V[Y]
-        S_i = jnp.mean(y_B * (y_AB_i - y_A)) / (var_total + 1e-30)
+        S_i = safe_divide(jnp.mean(y_B * (y_AB_i - y_A)), var_total)
 
         results[name] = {
             "S1": float(jnp.clip(S_i, 0, 1)),  # First-order index
@@ -373,7 +376,7 @@ def sobol_indices(
     # Normalize so indices sum to approximately 1 (for additive models)
     total_S1 = sum(r["S1"] for r in results.values())
     for name in results:
-        results[name]["S1_normalized"] = results[name]["S1"] / (total_S1 + 1e-30)
+        results[name]["S1_normalized"] = float(safe_divide(results[name]["S1"], total_S1))
 
     return results
 
