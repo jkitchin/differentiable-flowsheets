@@ -187,7 +187,7 @@ class TestMixerResiduals:
 
         inlet1 = make_stream({"A": 5.0, "B": 3.0}, T=300.0, P=101325.0)
         inlet2 = make_stream({"A": 2.0, "B": 4.0}, T=350.0, P=101325.0)
-        outlet = mixer(inlet1, inlet2)
+        outlet, _info = mixer(inlet1, inlet2)
 
         residuals = mixer.eo_residuals([inlet1, inlet2], [outlet])
         assert jnp.max(jnp.abs(residuals)) < 1e-6
@@ -199,7 +199,7 @@ class TestSplitterResiduals:
         splitter = Splitter(species_order=["A", "B"])
 
         inlet = make_stream({"A": 10.0, "B": 5.0}, T=300.0, P=101325.0)
-        out1, out2 = splitter(inlet, split_frac=0.6)
+        out1, out2, _info = splitter(inlet, split_frac=0.6)
 
         residuals = splitter.eo_residuals(
             [inlet], [out1, out2], split_frac=0.6
