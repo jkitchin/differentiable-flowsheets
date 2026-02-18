@@ -9,6 +9,7 @@ This document covers numerical solvers, uncertainty propagation, and utility fun
    - [Newton-Raphson Solver](#newton-raphson-solver)
    - [Rachford-Rice Solver](#rachford-rice-solver)
    - [ODE Integration](#ode-integration)
+   - [Equation-Oriented Solver](eo-solver.md) — simultaneous solution of all unit equations
 2. [Uncertainty Propagation](#uncertainty-propagation)
    - [Linear Propagation](#linear-propagation)
    - [Monte Carlo Propagation](#monte-carlo-propagation)

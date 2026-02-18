@@ -540,6 +540,67 @@ class Heater:
 
         return outlet, info
 
+    def eo_residuals(
+        self,
+        inlets: list[Stream],
+        outlets: list[Stream],
+        **kwargs,
+    ) -> Array:
+        """Compute residuals for the EO solver.
+
+        Residuals:
+            F_out_i - F_in_i = 0        (n_species)
+            T_out - T_expected = 0       (1)
+            P_out - P_in = 0             (1)
+
+        Args:
+            inlets: [inlet_stream]
+            outlets: [outlet_stream]
+            **kwargs: Optional duty, T_out overrides
+
+        Returns:
+            Flat residual array, length n_species + 2
+        """
+        p = self.params
+        inlet = inlets[0]
+        outlet = outlets[0]
+
+        inlet_flows = get_flows(inlet)
+        outlet_flows = get_flows(outlet)
+        species = get_species(inlet)
+
+        # Material balance: flows pass through unchanged
+        mat_resid = []
+        for s in species:
+            mat_resid.append(jnp.atleast_1d(outlet_flows[s] - inlet_flows[s]))
+
+        # Temperature: compute expected outlet T
+        duty = kwargs.get('duty', p.duty)
+        T_out_spec = kwargs.get('T_out', p.T_out)
+
+        Cp = p.Cp if p.Cp is not None else 75.0
+        F_total = sum(inlet_flows.values())
+        C = F_total * Cp
+
+        if T_out_spec is not None:
+            T_expected = jnp.asarray(T_out_spec)
+        elif duty is not None:
+            T_expected = inlet["T"] + jnp.asarray(duty) / C
+        elif p.UA is not None and p.T_utility is not None:
+            UA = jnp.asarray(p.UA)
+            T_util = jnp.asarray(p.T_utility)
+            NTU = UA / C
+            effectiveness = 1.0 - jnp.exp(-NTU)
+            Q = effectiveness * C * (T_util - inlet["T"])
+            T_expected = inlet["T"] + Q / C
+        else:
+            T_expected = inlet["T"]
+
+        T_resid = jnp.atleast_1d(outlet["T"] - T_expected)
+        P_resid = jnp.atleast_1d(outlet["P"] - inlet["P"])
+
+        return jnp.concatenate(mat_resid + [T_resid, P_resid])
+
 
 @dataclass(repr=False)
 class CoolerParams(ParamsMixin):
@@ -644,6 +705,68 @@ class Cooler:
             info["UA_required"] = Q / info["LMTD"]
 
         return outlet, info
+
+    def eo_residuals(
+        self,
+        inlets: list[Stream],
+        outlets: list[Stream],
+        **kwargs,
+    ) -> Array:
+        """Compute residuals for the EO solver.
+
+        Residuals:
+            F_out_i - F_in_i = 0        (n_species)
+            T_out - T_expected = 0       (1)
+            P_out - P_in = 0             (1)
+
+        Args:
+            inlets: [inlet_stream]
+            outlets: [outlet_stream]
+            **kwargs: Optional duty, T_out overrides
+
+        Returns:
+            Flat residual array, length n_species + 2
+        """
+        p = self.params
+        inlet = inlets[0]
+        outlet = outlets[0]
+
+        inlet_flows = get_flows(inlet)
+        outlet_flows = get_flows(outlet)
+        species = get_species(inlet)
+
+        # Material balance: flows pass through unchanged
+        mat_resid = []
+        for s in species:
+            mat_resid.append(jnp.atleast_1d(outlet_flows[s] - inlet_flows[s]))
+
+        # Temperature: compute expected outlet T
+        duty = kwargs.get('duty', p.duty)
+        T_out_spec = kwargs.get('T_out', p.T_out)
+
+        Cp = p.Cp if p.Cp is not None else 75.0
+        F_total = sum(inlet_flows.values())
+        C = F_total * Cp
+
+        if T_out_spec is not None:
+            T_expected = jnp.asarray(T_out_spec)
+        elif duty is not None:
+            # Cooler: duty is positive = heat removed
+            T_expected = inlet["T"] - jnp.asarray(duty) / C
+        elif p.UA is not None and p.T_utility is not None:
+            UA = jnp.asarray(p.UA)
+            T_util = jnp.asarray(p.T_utility)
+            NTU = UA / C
+            effectiveness = 1.0 - jnp.exp(-NTU)
+            Q = effectiveness * C * (inlet["T"] - T_util)
+            T_expected = inlet["T"] - Q / C
+        else:
+            T_expected = inlet["T"]
+
+        T_resid = jnp.atleast_1d(outlet["T"] - T_expected)
+        P_resid = jnp.atleast_1d(outlet["P"] - inlet["P"])
+
+        return jnp.concatenate(mat_resid + [T_resid, P_resid])
 
 
 # =============================================================================

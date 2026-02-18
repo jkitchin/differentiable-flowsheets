@@ -470,6 +470,40 @@ class Flowsheet:
         streams.update(final_tear)
         return self._run_units(streams)
 
+    def solve_eo(
+        self,
+        initial_guess: dict[str, Stream] | None = None,
+        use_sm_init: bool = True,
+        tol: float = 1e-8,
+        max_steps: int = 100,
+    ) -> dict[str, Stream]:
+        """Solve the flowsheet using the equation-oriented approach.
+
+        Assembles all unit equations into a single system F(x) = 0
+        and solves simultaneously with Newton's method. Provides
+        implicit differentiation through the solution.
+
+        Args:
+            initial_guess: Initial values for unknown streams.
+                          If None, uses SM initialization or feed propagation.
+            use_sm_init: If True and no initial_guess, run SM solver first
+                        to get a good starting point.
+            tol: Convergence tolerance
+            max_steps: Maximum Newton iterations
+
+        Returns:
+            Dictionary of all streams in the flowsheet
+        """
+        from difflow.eo_solver import EOSolver
+
+        solver = EOSolver(self)
+        return solver.solve_streams(
+            initial_guess=initial_guess,
+            use_sm_init=use_sm_init,
+            tol=tol,
+            max_steps=max_steps,
+        )
+
     def _run_units(self, streams: dict[str, Stream]) -> dict[str, Stream]:
         """Run all units in sequence.
 

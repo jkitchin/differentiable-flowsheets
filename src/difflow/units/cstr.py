@@ -559,6 +559,77 @@ class CSTR:
         return outlet_flows, T_out, rates
 
     # =========================================================================
+    # Equation-Oriented Interface
+    # =========================================================================
+
+    def eo_residuals(
+        self,
+        inlets: list[Stream],
+        outlets: list[Stream],
+        **kwargs,
+    ) -> Array:
+        """Compute residuals for the EO solver.
+
+        Residuals for isothermal CSTR:
+            F_out_i - F_in_i - V * sum_j(stoich_ij * r_j) = 0  (n_species)
+            T_out - T_spec = 0                                   (1)
+            P_out - P_in = 0                                     (1)
+
+        Args:
+            inlets: List of inlet streams (expects 1 inlet)
+            outlets: List of outlet streams (expects 1 outlet)
+            **kwargs: Optional T_spec, volumetric_flow overrides
+
+        Returns:
+            Flat array of residuals, length n_species + 2
+        """
+        p = self.params
+        inlet = inlets[0]
+        outlet = outlets[0]
+
+        inlet_flows = get_flows(inlet)
+        outlet_flows = get_flows(outlet)
+
+        # Volumetric flow
+        volumetric_flow = kwargs.get('volumetric_flow')
+        if volumetric_flow is None:
+            total_molar = sum(inlet_flows.values())
+            volumetric_flow = total_molar / 50.0
+        volumetric_flow = jnp.asarray(volumetric_flow)
+
+        # Temperature for rate computation
+        T_spec = kwargs.get('T_spec')
+        if self.mode == "isothermal":
+            T_out = outlet["T"]
+            T_target = jnp.asarray(T_spec) if T_spec is not None else inlet["T"]
+        else:
+            T_out = outlet["T"]
+            T_target = T_out  # Non-isothermal: T is solved for
+
+        # Outlet concentrations from outlet flows
+        F_out = jnp.array([outlet_flows[s] for s in p.species_order])
+        F_out_safe = jnp.maximum(F_out, 1e-10)
+        C_out = {
+            s: F_out_safe[i] / volumetric_flow
+            for i, s in enumerate(p.species_order)
+        }
+
+        # Reaction rates at outlet conditions
+        rates = p.rate_fn(C_out, T_out, p.rate_params)
+
+        # Material balance residuals
+        F_in = jnp.array([inlet_flows[s] for s in p.species_order])
+        mat_resid = F_out - (F_in + p.V * p.stoich @ rates)
+
+        # Temperature residual
+        T_resid = jnp.atleast_1d(outlet["T"] - T_target)
+
+        # Pressure residual
+        P_resid = jnp.atleast_1d(outlet["P"] - inlet["P"])
+
+        return jnp.concatenate([mat_resid, T_resid, P_resid])
+
+    # =========================================================================
     # DynamicUnit Interface Methods
     # =========================================================================
 

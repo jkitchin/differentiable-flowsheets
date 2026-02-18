@@ -139,6 +139,7 @@ from difflow.units.heat_exchanger import (
     size_heat_exchanger,
 )
 from difflow.flowsheet import Flowsheet, Unit
+from difflow.eo_solver import EOSolver, EOSolveResult, EOStateLayout
 from difflow.initialization import (
     AndersonAccelerator,
     wegstein_acceleration,
@@ -335,6 +336,10 @@ __all__ = [
     # Flowsheet
     "Flowsheet",
     "Unit",
+    # EO Solver
+    "EOSolver",
+    "EOSolveResult",
+    "EOStateLayout",
     # Initialization & Acceleration
     "AndersonAccelerator",
     "wegstein_acceleration",

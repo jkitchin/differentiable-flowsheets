@@ -236,6 +236,85 @@ class Flash:
 
         return V_frac
 
+    # =========================================================================
+    # Equation-Oriented Interface
+    # =========================================================================
+
+    def eo_residuals(
+        self,
+        inlets: list[Stream],
+        outlets: list[Stream],
+        **kwargs,
+    ) -> Array:
+        """Compute residuals for the EO solver.
+
+        For a TP flash with 1 inlet and 2 outlets (liquid, vapor):
+            Material balance: F_in_i - F_liq_i - F_vap_i = 0   (n_species)
+            Equilibrium: F_vap_i * L_total - K_i * F_liq_i * V_total = 0  (n_species)
+            T_liq - T_flash = 0                                  (1)
+            T_vap - T_flash = 0                                  (1)
+            P_liq - P_in = 0                                     (1)
+            P_vap - P_in = 0                                     (1)
+
+        Total: 2*n_species + 4 residuals for 2*(n_species + 2) unknowns.
+
+        Args:
+            inlets: List of inlet streams (expects 1 inlet)
+            outlets: List of outlet streams (expects 2: [liquid, vapor])
+            **kwargs: Optional T, P overrides for flash conditions
+
+        Returns:
+            Flat array of residuals, length 2*n_species + 4
+        """
+        p = self.params
+        inlet = inlets[0]
+        liquid = outlets[0]
+        vapor = outlets[1]
+
+        # Flash conditions
+        T_flash = kwargs.get('T')
+        T_flash = jnp.asarray(T_flash) if T_flash is not None else inlet["T"]
+        P_flash = kwargs.get('P')
+        P_flash = jnp.asarray(P_flash) if P_flash is not None else inlet["P"]
+
+        # Get flows
+        inlet_flows = get_flows(inlet)
+        liquid_flows = get_flows(liquid)
+        vapor_flows = get_flows(vapor)
+
+        F_in = jnp.array([inlet_flows[s] for s in p.species_order])
+        F_liq = jnp.array([liquid_flows[s] for s in p.species_order])
+        F_vap = jnp.array([vapor_flows[s] for s in p.species_order])
+
+        # Material balance: F_in - F_liq - F_vap = 0
+        mat_resid = F_in - F_liq - F_vap
+
+        # K-values at flash conditions
+        from difflow.constants import K_MIN, K_MAX
+        K = self.thermo.K_values_array(T_flash, P_flash)
+        K = jnp.clip(K, K_MIN, K_MAX)
+
+        # Phase equilibrium: y_i = K_i * x_i
+        # In terms of flows: F_vap_i / V_total = K_i * F_liq_i / L_total
+        # Rearranged: F_vap_i * L_total - K_i * F_liq_i * V_total = 0
+        L_total = jnp.sum(F_liq) + 1e-10
+        V_total = jnp.sum(F_vap) + 1e-10
+        equil_resid = F_vap * L_total - K * F_liq * V_total
+
+        # Temperature residuals
+        T_liq_resid = jnp.atleast_1d(liquid["T"] - T_flash)
+        T_vap_resid = jnp.atleast_1d(vapor["T"] - T_flash)
+
+        # Pressure residuals
+        P_liq_resid = jnp.atleast_1d(liquid["P"] - P_flash)
+        P_vap_resid = jnp.atleast_1d(vapor["P"] - P_flash)
+
+        return jnp.concatenate([
+            mat_resid, equil_resid,
+            T_liq_resid, T_vap_resid,
+            P_liq_resid, P_vap_resid,
+        ])
+
     def bubble_point_pressure(
         self,
         inlet: Stream,
@@ -502,6 +581,62 @@ class Splitter:
 
         return outlet1, outlet2, info
 
+    def eo_residuals(
+        self,
+        inlets: list[Stream],
+        outlets: list[Stream],
+        split_frac: Array | float = 0.5,
+        **kwargs,
+    ) -> Array:
+        """Compute residuals for the EO solver.
+
+        Residuals:
+            F_out1_i - split * F_in_i = 0      (n_species)
+            F_out2_i - (1-split) * F_in_i = 0   (n_species)
+            T_out1 - T_in = 0                    (1)
+            T_out2 - T_in = 0                    (1)
+            P_out1 - P_in = 0                    (1)
+            P_out2 - P_in = 0                    (1)
+
+        Total: 2*(n_species + 2) residuals
+
+        Args:
+            inlets: [inlet_stream]
+            outlets: [outlet1, outlet2]
+            split_frac: Split fraction for first outlet
+
+        Returns:
+            Flat residual array
+        """
+        split_frac = jnp.asarray(split_frac)
+        inlet = inlets[0]
+        out1 = outlets[0]
+        out2 = outlets[1]
+
+        inlet_flows = get_flows(inlet)
+        out1_flows = get_flows(out1)
+        out2_flows = get_flows(out2)
+
+        resid_out1 = []
+        resid_out2 = []
+        for s in self.species_order:
+            resid_out1.append(jnp.atleast_1d(
+                out1_flows[s] - split_frac * inlet_flows[s]
+            ))
+            resid_out2.append(jnp.atleast_1d(
+                out2_flows[s] - (1 - split_frac) * inlet_flows[s]
+            ))
+
+        T_resid1 = jnp.atleast_1d(out1["T"] - inlet["T"])
+        P_resid1 = jnp.atleast_1d(out1["P"] - inlet["P"])
+        T_resid2 = jnp.atleast_1d(out2["T"] - inlet["T"])
+        P_resid2 = jnp.atleast_1d(out2["P"] - inlet["P"])
+
+        return jnp.concatenate(
+            resid_out1 + [T_resid1, P_resid1]
+            + resid_out2 + [T_resid2, P_resid2]
+        )
+
 
 class Mixer:
     """Stream mixer.
@@ -588,6 +723,56 @@ class Mixer:
         }
 
         return outlet, info
+
+    def eo_residuals(
+        self,
+        inlets: list[Stream],
+        outlets: list[Stream],
+        **kwargs,
+    ) -> Array:
+        """Compute residuals for the EO solver.
+
+        Residuals:
+            F_out_i - sum(F_in_j_i) = 0  (n_species)
+            T_out - T_mixed = 0           (1)
+            P_out - P_in = 0              (1)
+
+        Total: n_species + 2 residuals
+
+        Args:
+            inlets: List of inlet streams
+            outlets: [outlet_stream]
+
+        Returns:
+            Flat residual array
+        """
+        outlet = outlets[0]
+        outlet_flows = get_flows(outlet)
+
+        # Material balance: F_out_i = sum of all inlet F_i
+        mat_resid = []
+        for s in self.species_order:
+            F_in_total = sum(inlet[f"F_{s}"] for inlet in inlets)
+            mat_resid.append(jnp.atleast_1d(outlet_flows[s] - F_in_total))
+
+        # Temperature: flow-weighted average (or energy balance with thermo)
+        if self.thermo is not None:
+            # Compute expected mixed temperature
+            mixed_stream, _ = self(*inlets)
+            T_expected = mixed_stream["T"]
+        else:
+            total_flow = sum(outlet_flows.values())
+            T_expected = sum(
+                sum(get_flows(inlet).values()) * inlet["T"]
+                for inlet in inlets
+            ) / (total_flow + 1e-10)
+
+        T_resid = jnp.atleast_1d(outlet["T"] - T_expected)
+
+        # Pressure: use first inlet
+        P_resid = jnp.atleast_1d(outlet["P"] - inlets[0]["P"])
+
+        return jnp.concatenate(mat_resid + [T_resid, P_resid])
 
 
 # =============================================================================
