@@ -50,6 +50,9 @@ from difflow_ree.database import (
     list_ree_elements,
     list_extractants,
     get_separation_factor,
+    # Custom extractant creation
+    create_custom_extractant,
+    get_extractant_database,
     # JAX-compatible accessors
     get_atomic_weight_array,
     get_price_array,
@@ -335,6 +338,8 @@ __all__ = [
     "list_ree_elements",
     "list_extractants",
     "get_separation_factor",
+    "create_custom_extractant",
+    "get_extractant_database",
     "get_atomic_weight_array",
     "get_price_array",
     "get_ionic_radius_array",

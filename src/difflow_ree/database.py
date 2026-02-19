@@ -220,6 +220,62 @@ class ExtractantDatabase:
         """List available diluents."""
         return list(self._diluents.keys())
 
+    def add_extractant(self, name: str, extractant: Extractant) -> None:
+        """Add a custom extractant to the database at runtime.
+
+        Args:
+            name: Extractant name/identifier (e.g., "MyExtractant")
+            extractant: Extractant object with all required properties
+
+        Raises:
+            ValueError: If extractant with this name already exists
+            TypeError: If extractant is not an Extractant instance
+        """
+        if not isinstance(extractant, Extractant):
+            raise TypeError(f"extractant must be an Extractant instance, got {type(extractant)}")
+
+        if name in self._extractants:
+            raise ValueError(
+                f"Extractant '{name}' already exists. Use a different name or "
+                "remove the existing one first."
+            )
+
+        self._extractants[name] = extractant
+
+    def remove_extractant(self, name: str) -> None:
+        """Remove an extractant from the database.
+
+        Args:
+            name: Extractant name to remove
+
+        Raises:
+            KeyError: If extractant doesn't exist
+        """
+        if name not in self._extractants:
+            raise KeyError(f"Extractant '{name}' not found in database")
+        del self._extractants[name]
+
+    def update_extractant(self, name: str, extractant: Extractant) -> None:
+        """Update an existing extractant in the database.
+
+        Args:
+            name: Extractant name to update
+            extractant: New Extractant object
+
+        Raises:
+            KeyError: If extractant doesn't exist
+            TypeError: If extractant is not an Extractant instance
+        """
+        if not isinstance(extractant, Extractant):
+            raise TypeError(f"extractant must be an Extractant instance, got {type(extractant)}")
+
+        if name not in self._extractants:
+            raise KeyError(
+                f"Extractant '{name}' not found. Use add_extractant() to create new extractants."
+            )
+
+        self._extractants[name] = extractant
+
 
 # =============================================================================
 # Separation Factor Data
@@ -296,6 +352,153 @@ class SeparationFactorDatabase:
     def list_extractants(self) -> list[str]:
         """List extractants with SF data."""
         return list(self._data.keys())
+
+
+# =============================================================================
+# Custom Extractant Creation
+# =============================================================================
+
+def create_custom_extractant(
+    name: str,
+    full_name: str,
+    formula: str,
+    molecular_weight: float,
+    ph_coefficients: dict[str, dict[str, float]],
+    temperature_coefficients: dict[str, float],
+    density: float = 1.0,
+    pKa: float | None = None,
+    extractant_type: str = "custom",
+    typical_concentration: float = 0.5,
+    stoichiometry_protons: int = 3,
+    stoichiometry_extractant: int = 3,
+    valid_ph_range: tuple[float, float] = (1.0, 5.0),
+    valid_temp_range: tuple[float, float] = (283.0, 333.0),
+    reference_concentration: float = 0.5,
+    concentration_exponent: float = 3.0,
+    cost_usd_kg: float = 10.0,
+) -> Extractant:
+    """Create a custom extractant with user-defined properties.
+
+    This function validates inputs and creates an Extractant object that can be
+    registered with the extractant database for use in simulations.
+
+    Args:
+        name: Short name/identifier (e.g., "MyExtractant")
+        full_name: Full chemical name
+        formula: Chemical formula
+        molecular_weight: Molecular weight (g/mol)
+        ph_coefficients: pH-dependent distribution coefficients for each REE element.
+            Format: {"La": {"a": -8.0, "b": 2.2, "c": 0.01, "d": 0.0}, ...}
+            Model: log10(D) = a + b*pH + c*pH^2 + d/T
+        temperature_coefficients: Temperature correction for each element (K).
+            Format: {"La": -1500, "Nd": -1700, ...}
+        density: Density (g/mL), default 1.0
+        pKa: Acid dissociation constant (None for neutral extractants)
+        extractant_type: Type classification (e.g., "acidic_phosphoric", "custom")
+        typical_concentration: Typical operating concentration (M), default 0.5
+        stoichiometry_protons: Number of protons released per extraction, default 3
+        stoichiometry_extractant: Number of extractant molecules, default 3
+        valid_ph_range: Valid pH range as (min, max), default (1.0, 5.0)
+        valid_temp_range: Valid temperature range in K as (min, max), default (283, 333)
+        reference_concentration: Reference concentration for correlations (M), default 0.5
+        concentration_exponent: Exponent n in D ∝ [HA]^n, default 3.0
+        cost_usd_kg: Cost in USD per kg, default 10.0
+
+    Returns:
+        Extractant object ready for registration
+
+    Raises:
+        ValueError: If required parameters are missing or invalid
+        TypeError: If parameter types are incorrect
+
+    Example:
+        >>> # Create custom extractant with properties for La and Nd
+        >>> my_ext = create_custom_extractant(
+        ...     name="MyExtractant",
+        ...     full_name="My Novel Phosphoric Acid",
+        ...     formula="C10H20O4P",
+        ...     molecular_weight=250.0,
+        ...     ph_coefficients={
+        ...         "La": {"a": -8.0, "b": 2.2, "c": 0.01, "d": 0.0},
+        ...         "Nd": {"a": -7.5, "b": 2.4, "c": 0.01, "d": 0.0},
+        ...     },
+        ...     temperature_coefficients={"La": -1500, "Nd": -1700},
+        ...     pKa=3.5,
+        ... )
+        >>>
+        >>> # Register it
+        >>> from difflow_ree import get_extractant_database
+        >>> db = get_extractant_database()
+        >>> db.add_extractant("MyExtractant", my_ext)
+        >>>
+        >>> # Use it
+        >>> from difflow_ree import REEDistribution
+        >>> dist = REEDistribution(
+        ...     extractant="MyExtractant",
+        ...     elements=("La", "Nd"),
+        ... )
+    """
+    # Validate required parameters
+    if not name:
+        raise ValueError("name cannot be empty")
+    if not ph_coefficients:
+        raise ValueError("ph_coefficients is required and cannot be empty")
+    if not temperature_coefficients:
+        raise ValueError("temperature_coefficients is required and cannot be empty")
+
+    # Validate pH coefficients structure
+    required_coeff_keys = {"a", "b", "c"}
+    for element, coeffs in ph_coefficients.items():
+        if not isinstance(coeffs, dict):
+            raise TypeError(
+                f"pH coefficients for {element} must be a dict, got {type(coeffs)}"
+            )
+        missing = required_coeff_keys - set(coeffs.keys())
+        if missing:
+            raise ValueError(
+                f"pH coefficients for {element} missing required keys: {missing}. "
+                "Required: a, b, c (d is optional)"
+            )
+
+    # Validate that elements match between pH and temperature coefficients
+    ph_elements = set(ph_coefficients.keys())
+    temp_elements = set(temperature_coefficients.keys())
+    if ph_elements != temp_elements:
+        raise ValueError(
+            f"Element mismatch between pH coefficients and temperature coefficients. "
+            f"pH elements: {ph_elements}, Temperature elements: {temp_elements}"
+        )
+
+    # Convert pH coefficient dicts to PHCoefficients objects
+    ph_coeffs_objects = {}
+    for element, coeffs in ph_coefficients.items():
+        ph_coeffs_objects[element] = PHCoefficients(
+            a=float(coeffs["a"]),
+            b=float(coeffs["b"]),
+            c=float(coeffs["c"]),
+            d=float(coeffs.get("d", 0.0)),
+        )
+
+    # Create and return Extractant object
+    return Extractant(
+        name=name,
+        full_name=full_name,
+        formula=formula,
+        molecular_weight=float(molecular_weight),
+        density=float(density),
+        pKa=float(pKa) if pKa is not None else None,
+        extractant_type=extractant_type,
+        typical_concentration=float(typical_concentration),
+        stoichiometry_protons=int(stoichiometry_protons),
+        stoichiometry_extractant=int(stoichiometry_extractant),
+        ph_coefficients=ph_coeffs_objects,
+        temperature_coefficients=temperature_coefficients,
+        valid_ph_range=tuple(valid_ph_range),
+        valid_temp_range=tuple(valid_temp_range),
+        reference_concentration=float(reference_concentration),
+        concentration_exponent=float(concentration_exponent),
+        cost_usd_kg=float(cost_usd_kg),
+    )
 
 
 # =============================================================================

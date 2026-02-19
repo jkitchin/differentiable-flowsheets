@@ -248,5 +248,246 @@ class TestJAXCompatibility:
         assert dD_dpH > 0  # D increases with pH
 
 
+class TestCustomExtractants:
+    """Test custom extractant creation and registration."""
+
+    def test_create_custom_extractant(self):
+        """Test creating a custom extractant."""
+        from difflow_ree import create_custom_extractant
+
+        # Create custom extractant with minimal required data
+        custom_ext = create_custom_extractant(
+            name="TestExtractant",
+            full_name="Test Phosphoric Acid",
+            formula="C8H17O4P",
+            molecular_weight=220.0,
+            ph_coefficients={
+                "La": {"a": -8.0, "b": 2.2, "c": 0.01},
+                "Nd": {"a": -7.5, "b": 2.4, "c": 0.01},
+                "Dy": {"a": -7.0, "b": 2.6, "c": 0.01},
+            },
+            temperature_coefficients={
+                "La": -1500.0,
+                "Nd": -1700.0,
+                "Dy": -1900.0,
+            },
+            pKa=3.5,
+        )
+
+        assert custom_ext.name == "TestExtractant"
+        assert custom_ext.molecular_weight == 220.0
+        assert "La" in custom_ext.ph_coefficients
+        assert custom_ext.ph_coefficients["La"].a == -8.0
+        assert custom_ext.ph_coefficients["La"].b == 2.2
+
+    def test_register_custom_extractant(self):
+        """Test registering a custom extractant with the database."""
+        from difflow_ree import create_custom_extractant, get_extractant_database
+
+        # Create custom extractant
+        custom_ext = create_custom_extractant(
+            name="MyExtractant",
+            full_name="My Custom Extractant",
+            formula="C10H20O4P",
+            molecular_weight=250.0,
+            ph_coefficients={
+                "La": {"a": -8.5, "b": 2.3, "c": 0.01, "d": 0.0},
+                "Nd": {"a": -8.0, "b": 2.5, "c": 0.01, "d": 0.0},
+            },
+            temperature_coefficients={
+                "La": -1600.0,
+                "Nd": -1800.0,
+            },
+        )
+
+        # Register it
+        db = get_extractant_database()
+        db.add_extractant("MyExtractant", custom_ext)
+
+        # Verify it's registered
+        assert "MyExtractant" in db.list_extractants()
+
+        # Retrieve it
+        retrieved = db.get("MyExtractant")
+        assert retrieved.name == "MyExtractant"
+        assert retrieved.molecular_weight == 250.0
+
+        # Clean up
+        db.remove_extractant("MyExtractant")
+        assert "MyExtractant" not in db.list_extractants()
+
+    def test_custom_extractant_in_distribution(self):
+        """Test using custom extractant in distribution calculations."""
+        from difflow_ree import create_custom_extractant, get_extractant_database, REEDistribution
+
+        # Create and register custom extractant
+        custom_ext = create_custom_extractant(
+            name="CustomD2EHPA",
+            full_name="Custom D2EHPA variant",
+            formula="C8H17O4P",
+            molecular_weight=322.43,
+            ph_coefficients={
+                "La": {"a": -8.5, "b": 2.3, "c": 0.01},
+                "Nd": {"a": -7.7, "b": 2.45, "c": 0.01},
+                "Dy": {"a": -6.8, "b": 2.8, "c": 0.01},
+            },
+            temperature_coefficients={
+                "La": -1500.0,
+                "Nd": -1800.0,
+                "Dy": -2400.0,
+            },
+            pKa=3.24,
+            typical_concentration=0.5,
+        )
+
+        db = get_extractant_database()
+        db.add_extractant("CustomD2EHPA", custom_ext)
+
+        try:
+            # Use in distribution model
+            dist = REEDistribution(
+                extractant="CustomD2EHPA",
+                elements=("La", "Nd", "Dy"),
+                concentration=0.5,
+            )
+
+            D_values = dist.get_D_all(pH=3.0, T=298.15)
+
+            # Verify heavy REE have higher D
+            assert D_values["Dy"] > D_values["Nd"]
+            assert D_values["Nd"] > D_values["La"]
+            assert D_values["La"] > 0
+
+        finally:
+            # Clean up
+            db.remove_extractant("CustomD2EHPA")
+
+    def test_validation_missing_ph_coefficients(self):
+        """Test validation for missing pH coefficients."""
+        from difflow_ree import create_custom_extractant
+
+        with pytest.raises(ValueError, match="ph_coefficients is required"):
+            create_custom_extractant(
+                name="BadExtractant",
+                full_name="Bad Extractant",
+                formula="C8H17O4P",
+                molecular_weight=220.0,
+                ph_coefficients={},  # Empty!
+                temperature_coefficients={"La": -1500.0},
+            )
+
+    def test_validation_mismatched_elements(self):
+        """Test validation for mismatched elements between pH and temperature."""
+        from difflow_ree import create_custom_extractant
+
+        with pytest.raises(ValueError, match="Element mismatch"):
+            create_custom_extractant(
+                name="BadExtractant",
+                full_name="Bad Extractant",
+                formula="C8H17O4P",
+                molecular_weight=220.0,
+                ph_coefficients={
+                    "La": {"a": -8.0, "b": 2.2, "c": 0.01},
+                    "Nd": {"a": -7.5, "b": 2.4, "c": 0.01},
+                },
+                temperature_coefficients={
+                    "La": -1500.0,
+                    # Missing Nd!
+                },
+            )
+
+    def test_validation_missing_required_coeff(self):
+        """Test validation for missing required coefficient keys."""
+        from difflow_ree import create_custom_extractant
+
+        with pytest.raises(ValueError, match="missing required keys"):
+            create_custom_extractant(
+                name="BadExtractant",
+                full_name="Bad Extractant",
+                formula="C8H17O4P",
+                molecular_weight=220.0,
+                ph_coefficients={
+                    "La": {"a": -8.0, "b": 2.2},  # Missing 'c'!
+                },
+                temperature_coefficients={
+                    "La": -1500.0,
+                },
+            )
+
+    def test_duplicate_extractant_error(self):
+        """Test error when trying to add duplicate extractant."""
+        from difflow_ree import create_custom_extractant, get_extractant_database
+
+        custom_ext = create_custom_extractant(
+            name="DuplicateTest",
+            full_name="Duplicate Test",
+            formula="C8H17O4P",
+            molecular_weight=220.0,
+            ph_coefficients={
+                "La": {"a": -8.0, "b": 2.2, "c": 0.01},
+            },
+            temperature_coefficients={
+                "La": -1500.0,
+            },
+        )
+
+        db = get_extractant_database()
+        db.add_extractant("DuplicateTest", custom_ext)
+
+        try:
+            # Try to add again - should fail
+            with pytest.raises(ValueError, match="already exists"):
+                db.add_extractant("DuplicateTest", custom_ext)
+        finally:
+            db.remove_extractant("DuplicateTest")
+
+    def test_update_extractant(self):
+        """Test updating an existing extractant."""
+        from difflow_ree import create_custom_extractant, get_extractant_database
+
+        # Create and add original
+        original = create_custom_extractant(
+            name="UpdateTest",
+            full_name="Update Test Original",
+            formula="C8H17O4P",
+            molecular_weight=220.0,
+            ph_coefficients={
+                "La": {"a": -8.0, "b": 2.2, "c": 0.01},
+            },
+            temperature_coefficients={
+                "La": -1500.0,
+            },
+        )
+
+        db = get_extractant_database()
+        db.add_extractant("UpdateTest", original)
+
+        try:
+            # Create updated version
+            updated = create_custom_extractant(
+                name="UpdateTest",
+                full_name="Update Test Modified",
+                formula="C10H20O4P",
+                molecular_weight=250.0,
+                ph_coefficients={
+                    "La": {"a": -7.5, "b": 2.5, "c": 0.02},
+                },
+                temperature_coefficients={
+                    "La": -1600.0,
+                },
+            )
+
+            # Update it
+            db.update_extractant("UpdateTest", updated)
+
+            # Verify update
+            retrieved = db.get("UpdateTest")
+            assert retrieved.molecular_weight == 250.0
+            assert retrieved.full_name == "Update Test Modified"
+
+        finally:
+            db.remove_extractant("UpdateTest")
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
