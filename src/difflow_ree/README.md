@@ -54,9 +54,9 @@ YAML data files with element properties, extractant parameters, and separation f
 ```python
 from difflow_ree import (
     get_element, get_extractant,
-    REEExtractor, REEExtractorParams,
     ExtractStripCircuit, ExtractStripParams,
 )
+from difflow.streams import make_stream
 
 # Get neodymium properties
 nd = get_element('Nd')
@@ -71,15 +71,22 @@ print(f"pKa: {d2ehpa.pKa}")
 params = ExtractStripParams(
     extractant='D2EHPA',
     elements=('La', 'Ce', 'Nd', 'Dy'),
-    n_extract_stages=10,
-    n_strip_stages=5,
+    n_extraction_stages=10,
+    n_stripping_stages=5,
 )
 circuit = ExtractStripCircuit(params)
-products = circuit(aqueous_feed, organic_feed, strip_acid)
 
-# Differentiate through the entire circuit
-from jax import grad
-d_recovery_d_pH = grad(lambda pH: nd_recovery(pH))(2.5)
+# Create aqueous feed stream with REE
+feed = make_stream(
+    flows={"H2O": 10.0, "La": 0.01, "Ce": 0.02, "Nd": 0.02, "Dy": 0.01},
+    T=298.15,
+    P=101325.0,
+)
+
+# Run the circuit (solvent and strip acid are created internally)
+results = circuit(feed)
+print(f"Overall recovery: {results['recovery']:.3f}")
+print(f"Element recoveries: {results['element_recovery']}")
 ```
 
 ## Key Features

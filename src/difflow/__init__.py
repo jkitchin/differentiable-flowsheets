@@ -16,6 +16,9 @@ For bio manufacturing operations, install the difflow_bio plugin:
 All models support automatic differentiation for gradient-based optimization.
 """
 
+import jax
+jax.config.update("jax_enable_x64", True)
+
 from difflow.streams import (
     Stream,
     make_stream,
