@@ -95,6 +95,7 @@ print(f"Element recoveries: {results['element_recovery']}")
 - **Multi-element**: Handles mixtures of any REE combination
 - **pH-dependent**: Realistic extraction chemistry with pH effects
 - **Loading corrections**: Accounts for organic phase saturation
+- **Explicit organic phase**: Extractant + diluent species keys (e.g., `"D2EHPA"` + `"kerosene"`) enable multi-organic flowsheets
 - **Pre-built flowsheets**: Common industrial configurations ready to use
 - **Economic analysis**: Revenue, profit, and minimum selling price calculations
 

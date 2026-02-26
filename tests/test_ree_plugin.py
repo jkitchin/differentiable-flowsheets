@@ -108,7 +108,7 @@ class TestUnitOperations:
             P=101325.0,
         )
         solvent = make_stream(
-            flows={"Organic": 5.0, "La": 0.0, "Nd": 0.0, "Dy": 0.0},  # Lower S/F
+            flows={"kerosene": 5.0, "D2EHPA": 0.5 * 5.0, "La": 0.0, "Nd": 0.0, "Dy": 0.0},
             T=298.15,
             P=101325.0,
         )
@@ -135,6 +135,7 @@ class TestUnitOperations:
             n_stages=1,
             extractant="D2EHPA",
             elements=("Dy", "Nd"),
+            diluent="n-Heptane",
             pH=1.6,
         )
         extractor = REEExtractor(params)
@@ -145,7 +146,7 @@ class TestUnitOperations:
             P=101325.0,
         )
         solvent = make_stream(
-            flows={"Organic": 10.0, "n-Heptane": 20.0, "Nd": 0.0, "Dy": 0.0, "Fe": 0.0},
+            flows={"D2EHPA": 10.0, "n-Heptane": 20.0, "Nd": 0.0, "Dy": 0.0, "Fe": 0.0},
             T=298.15,
             P=101325.0,
         )

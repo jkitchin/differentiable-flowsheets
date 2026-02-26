@@ -36,6 +36,7 @@ class ExtractStripParams(ParamsMixin):
     Attributes:
         extractant: Extractant name
         elements: REE elements to track
+        diluent: Organic diluent name (e.g., "kerosene", "n-dodecane")
         n_extraction_stages: Number of extraction stages
         n_stripping_stages: Number of stripping stages
         extraction_pH: pH in extraction section
@@ -46,6 +47,7 @@ class ExtractStripParams(ParamsMixin):
     """
     extractant: str
     elements: tuple[str, ...]
+    diluent: str = "kerosene"
     n_extraction_stages: int = 10
     n_stripping_stages: int = 5
     extraction_pH: float = 3.5
@@ -86,6 +88,7 @@ class ExtractStripCircuit:
             n_stages=params.n_extraction_stages,
             extractant=params.extractant,
             elements=params.elements,
+            diluent=params.diluent,
             pH=params.extraction_pH,
             extractant_conc=params.extractant_conc,
         ))
@@ -95,6 +98,7 @@ class ExtractStripCircuit:
             n_stages=params.n_stripping_stages,
             extractant=params.extractant,
             elements=params.elements,
+            diluent=params.diluent,
             pH=params.stripping_pH,
             extractant_conc=params.extractant_conc,
         ))
@@ -127,7 +131,10 @@ class ExtractStripCircuit:
 
         # Create solvent stream
         F_org = F_aq * p.solvent_to_feed_ratio
-        solvent_flows = {"Organic": F_org}
+        solvent_flows = {
+            p.diluent: F_org,
+            p.extractant: p.extractant_conc * F_org,
+        }
         for elem in p.elements:
             solvent_flows[elem] = 0.0
         solvent = make_stream(solvent_flows, T, feed["P"])

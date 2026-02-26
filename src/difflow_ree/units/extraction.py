@@ -30,6 +30,7 @@ class REEExtractorParams(ParamsMixin):
         n_stages: Number of extraction stages
         extractant: Extractant name (D2EHPA, PC88A, etc.)
         elements: REE elements to track
+        diluent: Organic diluent name (e.g., "kerosene", "n-dodecane")
         pH: Operating pH (typically 1-5 for REE extraction)
         extractant_conc: Extractant concentration (M)
         include_loading: Whether to account for extractant loading
@@ -40,6 +41,7 @@ class REEExtractorParams(ParamsMixin):
     n_stages: int | float | Array
     extractant: str
     elements: tuple[str, ...]
+    diluent: str = "kerosene"
     pH: float | Array = 3.0
     extractant_conc: float = 0.5
     include_loading: bool = True
@@ -154,9 +156,10 @@ class REEExtractor:
         solvent_flows = get_flows(solvent)
 
         # Get aqueous and organic carrier flows
-        # Assume "H2O" is aqueous carrier, "Organic" is organic carrier
         F_aq = feed_flows.get("H2O", 1.0)
-        F_org = solvent_flows.get("Organic", 1.0)
+        F_extractant = solvent_flows.get(p.extractant, 0.0)
+        F_diluent = solvent_flows.get(p.diluent, 1.0)
+        F_org = F_extractant + F_diluent
 
         # Get distribution coefficients
         D_values = self._distribution.get_D_all(pH, T)
@@ -237,6 +240,7 @@ class MixerSettlerParams(ParamsMixin):
     Attributes:
         extractant: Extractant name
         elements: REE elements to track
+        diluent: Organic diluent name (e.g., "kerosene", "n-dodecane")
         pH: Operating pH
         extractant_conc: Extractant concentration (M)
         mixer_residence_time: Mixer residence time (s)
@@ -245,6 +249,7 @@ class MixerSettlerParams(ParamsMixin):
     """
     extractant: str
     elements: tuple[str, ...]
+    diluent: str = "kerosene"
     pH: float = 3.0
     extractant_conc: float = 0.5
     mixer_residence_time: float = 120.0  # 2 minutes typical
@@ -309,12 +314,14 @@ class REEMixerSettler:
         org_flows = get_flows(organic_in)
 
         F_aq = aq_flows.get("H2O", 1.0)
-        F_org = org_flows.get("Organic", 1.0)
+        F_extractant = org_flows.get(p.extractant, 0.0)
+        F_diluent = org_flows.get(p.diluent, 1.0)
+        F_org = F_extractant + F_diluent
 
         D_values = self._distribution.get_D_all(pH, T)
 
         aq_out_flows = {"H2O": F_aq}
-        org_out_flows = {"Organic": F_org}
+        org_out_flows = {p.extractant: F_extractant, p.diluent: F_diluent}
 
         for elem in p.elements:
             D = D_values[elem]

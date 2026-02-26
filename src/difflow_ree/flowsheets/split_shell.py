@@ -38,6 +38,7 @@ class SplitShellParams(ParamsMixin):
     Attributes:
         extractant: Extractant name
         elements: All REE elements
+        diluent: Organic diluent name (e.g., "kerosene", "n-dodecane")
         n_stages: Total number of stages
         split_points: Stage numbers where products are withdrawn
         product_groups: Element groups for each product
@@ -46,6 +47,7 @@ class SplitShellParams(ParamsMixin):
     """
     extractant: str
     elements: tuple[str, ...]
+    diluent: str = "kerosene"
     n_stages: int = 20
     split_points: tuple[int, ...] = (5, 10, 15)  # Withdraw at these stages
     product_groups: dict = None  # Maps product name to elements
@@ -113,7 +115,9 @@ class SplitShellCascade:
         solvent_flows = get_flows(solvent)
 
         F_aq = feed_flows.get("H2O", 1.0)
-        F_org = solvent_flows.get("Organic", 1.0)
+        F_extractant = solvent_flows.get(p.extractant, 0.0)
+        F_diluent = solvent_flows.get(p.diluent, 1.0)
+        F_org = F_extractant + F_diluent
 
         # Get D values
         D_values = self._distribution.get_D_all(pH, T)

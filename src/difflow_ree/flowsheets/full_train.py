@@ -45,6 +45,7 @@ class SeparationTrainParams(ParamsMixin):
     Attributes:
         elements: All REE elements in feed
         extractant: Primary extractant
+        diluent: Organic diluent name (e.g., "kerosene", "n-dodecane")
         include_ce_removal: Whether to include Ce oxidation step
         group_separation: Whether to separate into light/middle/heavy
         individual_separation: Whether to separate individual elements
@@ -53,6 +54,7 @@ class SeparationTrainParams(ParamsMixin):
     elements: tuple[str, ...] = ("La", "Ce", "Pr", "Nd", "Sm", "Eu", "Gd", "Tb", "Dy", "Y")
     extractant: str = "D2EHPA"
     secondary_extractant: str = "PC88A"  # For Nd/Pr separation
+    diluent: str = "kerosene"
     include_ce_removal: bool = True
     group_separation: bool = True
     individual_separation: bool = False  # Full individual sep is complex
@@ -83,6 +85,7 @@ class GroupSeparator:
         self,
         elements: tuple[str, ...],
         extractant: str = "D2EHPA",
+        diluent: str = "kerosene",
         light_elements: tuple[str, ...] = ("La", "Ce", "Pr", "Nd"),
         middle_elements: tuple[str, ...] = ("Sm", "Eu"),
         heavy_elements: tuple[str, ...] = ("Gd", "Tb", "Dy", "Y"),
@@ -92,12 +95,14 @@ class GroupSeparator:
         Args:
             elements: All elements to process
             extractant: Extractant to use
+            diluent: Organic diluent name
             light_elements: Elements for light group
             middle_elements: Elements for middle group
             heavy_elements: Elements for heavy group
         """
         self.elements = elements
         self.extractant = extractant
+        self.diluent = diluent
         self.light_elements = light_elements
         self.middle_elements = middle_elements
         self.heavy_elements = heavy_elements
@@ -107,6 +112,7 @@ class GroupSeparator:
             extractant=extractant,
             elements=elements,
             target_elements=heavy_elements,
+            diluent=diluent,
             n_extraction_stages=10,
             n_scrubbing_stages=8,
             n_stripping_stages=5,
@@ -120,6 +126,7 @@ class GroupSeparator:
             extractant=extractant,
             elements=light_middle,
             target_elements=middle_elements,
+            diluent=diluent,
             n_extraction_stages=10,
             n_scrubbing_stages=6,
             n_stripping_stages=5,
@@ -222,6 +229,7 @@ class FullSeparationTrain:
             self._group_separator = GroupSeparator(
                 elements=params.elements,
                 extractant=params.extractant,
+                diluent=params.diluent,
                 light_elements=light,
                 middle_elements=middle,
                 heavy_elements=heavy,

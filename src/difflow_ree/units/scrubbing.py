@@ -32,6 +32,7 @@ class ScrubberParams(ParamsMixin):
         extractant: Extractant name
         elements: REE elements to track
         target_elements: Elements to retain in organic (others scrubbed)
+        diluent: Organic diluent name (e.g., "kerosene", "n-dodecane")
         pH: Scrub solution pH (lower pH strips more)
         extractant_conc: Extractant concentration (M)
         scrub_type: Type of scrubbing (acid, REE, water)
@@ -40,6 +41,7 @@ class ScrubberParams(ParamsMixin):
     extractant: str
     elements: tuple[str, ...]
     target_elements: tuple[str, ...]  # Elements to KEEP in organic
+    diluent: str = "kerosene"
     pH: float | Array = 2.0  # Lower pH than extraction to strip impurities
     extractant_conc: float = 0.5
     scrub_type: Literal["acid", "ree", "water"] = "acid"
@@ -111,7 +113,9 @@ class REEScrubber:
         org_flows = get_flows(loaded_organic)
         scrub_flows = get_flows(scrub_solution)
 
-        F_org = org_flows.get("Organic", 1.0)
+        F_extractant = org_flows.get(p.extractant, 0.0)
+        F_diluent = org_flows.get(p.diluent, 1.0)
+        F_org = F_extractant + F_diluent
         F_scrub = scrub_flows.get("H2O", 1.0)
 
         # Get D values at scrub pH (lower than extraction)
@@ -120,7 +124,7 @@ class REEScrubber:
         n_stages = jnp.asarray(p.n_stages, dtype=jnp.float64)
 
         scrub_liquor_flows = {"H2O": F_scrub}
-        scrubbed_org_flows = {"Organic": F_org}
+        scrubbed_org_flows = {p.extractant: F_extractant, p.diluent: F_diluent}
         scrub_efficiency = {}
 
         for elem in p.elements:

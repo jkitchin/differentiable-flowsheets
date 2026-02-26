@@ -30,6 +30,7 @@ class StripperParams(ParamsMixin):
         n_stages: Number of stripping stages
         extractant: Extractant name
         elements: REE elements to track
+        diluent: Organic diluent name (e.g., "kerosene", "n-dodecane")
         pH: Strip solution pH (very low, typically < 1)
         extractant_conc: Extractant concentration (M)
         acid_type: Type of strip acid
@@ -38,6 +39,7 @@ class StripperParams(ParamsMixin):
     n_stages: int | float | Array
     extractant: str
     elements: tuple[str, ...]
+    diluent: str = "kerosene"
     pH: float | Array = 0.5  # Very low pH for complete stripping
     extractant_conc: float = 0.5
     acid_type: Literal["HCl", "H2SO4", "HNO3"] = "HCl"
@@ -109,7 +111,9 @@ class REEStripper:
         org_flows = get_flows(loaded_organic)
         strip_flows = get_flows(strip_solution)
 
-        F_org = org_flows.get("Organic", 1.0)
+        F_extractant = org_flows.get(p.extractant, 0.0)
+        F_diluent = org_flows.get(p.diluent, 1.0)
+        F_org = F_extractant + F_diluent
         F_strip = strip_flows.get("H2O", 1.0)
 
         # Get D values at strip pH (very low - D << 1)
@@ -118,7 +122,7 @@ class REEStripper:
         n_stages = jnp.asarray(p.n_stages, dtype=jnp.float64)
 
         product_flows = {"H2O": F_strip}
-        barren_org_flows = {"Organic": F_org}
+        barren_org_flows = {p.extractant: F_extractant, p.diluent: F_diluent}
         strip_efficiency = {}
 
         for elem in p.elements:

@@ -43,6 +43,7 @@ class ExtractScrubStripParams(ParamsMixin):
         extractant: Extractant name
         elements: All REE elements to track
         target_elements: Elements to recover in product
+        diluent: Organic diluent name (e.g., "kerosene", "n-dodecane")
         n_extraction_stages: Number of extraction stages
         n_scrubbing_stages: Number of scrubbing stages
         n_stripping_stages: Number of stripping stages
@@ -57,6 +58,7 @@ class ExtractScrubStripParams(ParamsMixin):
     extractant: str
     elements: tuple[str, ...]
     target_elements: tuple[str, ...]  # Elements to keep
+    diluent: str = "kerosene"
     n_extraction_stages: int = 10
     n_scrubbing_stages: int = 5
     n_stripping_stages: int = 5
@@ -104,6 +106,7 @@ class ExtractScrubStripCircuit:
             n_stages=params.n_extraction_stages,
             extractant=params.extractant,
             elements=params.elements,
+            diluent=params.diluent,
             pH=params.extraction_pH,
             extractant_conc=params.extractant_conc,
         ))
@@ -114,6 +117,7 @@ class ExtractScrubStripCircuit:
             extractant=params.extractant,
             elements=params.elements,
             target_elements=params.target_elements,
+            diluent=params.diluent,
             pH=params.scrubbing_pH,
             extractant_conc=params.extractant_conc,
         ))
@@ -123,6 +127,7 @@ class ExtractScrubStripCircuit:
             n_stages=params.n_stripping_stages,
             extractant=params.extractant,
             elements=params.elements,
+            diluent=params.diluent,
             pH=params.stripping_pH,
             extractant_conc=params.extractant_conc,
         ))
@@ -156,7 +161,10 @@ class ExtractScrubStripCircuit:
 
         # Create fresh solvent
         F_org = F_aq * p.solvent_to_feed_ratio
-        solvent_flows = {"Organic": F_org}
+        solvent_flows = {
+            p.diluent: F_org,
+            p.extractant: p.extractant_conc * F_org,
+        }
         for elem in p.elements:
             solvent_flows[elem] = 0.0
         solvent = make_stream(solvent_flows, T, feed["P"])
