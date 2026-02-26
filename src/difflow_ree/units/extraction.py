@@ -170,8 +170,8 @@ class REEExtractor:
         # Solve extraction using Kremser equation
         n_stages = jnp.asarray(p.n_stages, dtype=jnp.float64)
 
-        raffinate_flows = {"H2O": F_aq}
-        extract_flows = {"Organic": F_org}
+        raffinate_flows = dict(feed_flows)
+        extract_flows = dict(solvent_flows)
         stage_profiles = {}
 
         for elem in p.elements:

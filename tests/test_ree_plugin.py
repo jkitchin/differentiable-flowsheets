@@ -126,6 +126,46 @@ class TestUnitOperations:
         assert dy_recovery > la_recovery, f"Dy recovery {dy_recovery:.3f} should be > La recovery {la_recovery:.3f}"
         assert dy_recovery > 0.3  # Should have significant Dy extraction
 
+    def test_extractor_mass_conservation(self):
+        """Test that REEExtractor conserves mass for all species (issue #53)."""
+        from difflow_ree import REEExtractor, REEExtractorParams
+        from difflow.streams import make_stream, get_flows
+
+        params = REEExtractorParams(
+            n_stages=1,
+            extractant="D2EHPA",
+            elements=("Dy", "Nd"),
+            pH=1.6,
+        )
+        extractor = REEExtractor(params)
+
+        feed = make_stream(
+            flows={"H2O": 10.0, "Nd": 0.2, "Dy": 0.143827799, "Fe": 0.553},
+            T=298.15,
+            P=101325.0,
+        )
+        solvent = make_stream(
+            flows={"Organic": 10.0, "n-Heptane": 20.0, "Nd": 0.0, "Dy": 0.0, "Fe": 0.0},
+            T=298.15,
+            P=101325.0,
+        )
+
+        raffinate, extract, info = extractor(feed, solvent)
+        raff_flows = get_flows(raffinate)
+        ext_flows = get_flows(extract)
+
+        feed_flows = get_flows(feed)
+        solvent_flows = get_flows(solvent)
+
+        # Check mass conservation for every species in feed + solvent
+        all_species = set(feed_flows.keys()) | set(solvent_flows.keys())
+        for species in all_species:
+            total_in = float(feed_flows.get(species, 0.0)) + float(solvent_flows.get(species, 0.0))
+            total_out = float(raff_flows.get(species, 0.0)) + float(ext_flows.get(species, 0.0))
+            assert abs(total_in - total_out) < 1e-10, (
+                f"Mass not conserved for {species}: in={total_in:.6f}, out={total_out:.6f}"
+            )
+
     def test_oxalate_precipitator(self):
         """Test oxalate precipitation."""
         from difflow_ree import OxalatePrecipitator, PrecipitatorParams
