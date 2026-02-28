@@ -289,11 +289,12 @@ class PSAUnit(_AdsorptionBase):
         # Recovery
         recovery = safe_divide(F_CO2_captured, F_CO2_in)
 
-        # Purity estimation (simplified)
-        # Selectivity from database or calculated
+        # Purity estimation (simplified equilibrium model).
+        # Based on ideal selectivity: purity = S / (S + 1), where S = CO2/N2
+        # selectivity. This is a theoretical upper bound from equilibrium
+        # partitioning; real purity requires full breakthrough curve simulation.
         selectivity = self._adsorbent_data.CO2_selectivity
-        # Purity ~ selectivity / (selectivity + co-adsorbed)
-        purity = selectivity / (selectivity + 1.0) * 0.99
+        purity = selectivity / (selectivity + 1.0)
 
         # Energy consumption
         # Compression work for repressurization
@@ -408,8 +409,12 @@ class VSAUnit(_AdsorptionBase):
         F_CO2_captured = jnp.minimum(F_CO2_captured, F_CO2_in * 0.95)
 
         recovery = safe_divide(F_CO2_captured, F_CO2_in)
+        # Purity estimation (simplified equilibrium model).
+        # Based on ideal selectivity: purity = S / (S + 1), where S = CO2/N2
+        # selectivity. This is a theoretical upper bound from equilibrium
+        # partitioning; real purity requires full breakthrough curve simulation.
         selectivity = self._adsorbent_data.CO2_selectivity
-        purity = selectivity / (selectivity + 1.0) * 0.99
+        purity = selectivity / (selectivity + 1.0)
 
         # Vacuum pump work (more significant than PSA compression)
         # W_vacuum ~ n * R * T * ln(P_atm/P_vac) / efficiency
@@ -514,8 +519,12 @@ class TSAUnit(_AdsorptionBase):
         F_CO2_captured = jnp.minimum(F_CO2_captured, F_CO2_in * 0.95)
 
         recovery = safe_divide(F_CO2_captured, F_CO2_in)
+        # Purity estimation (simplified equilibrium model).
+        # Based on ideal selectivity: purity = S / (S + 1), where S = CO2/N2
+        # selectivity. This is a theoretical upper bound from equilibrium
+        # partitioning; real purity requires full breakthrough curve simulation.
         selectivity = self._adsorbent_data.CO2_selectivity
-        purity = selectivity / (selectivity + 1.0) * 0.99
+        purity = selectivity / (selectivity + 1.0)
 
         # Heating energy
         Cp_ads = self._adsorbent_data.heat_capacity  # J/(kg*K)
@@ -628,8 +637,12 @@ class TVSAUnit(_AdsorptionBase):
         F_CO2_captured = jnp.minimum(F_CO2_captured, F_CO2_in * 0.95)
 
         recovery = safe_divide(F_CO2_captured, F_CO2_in)
+        # Purity estimation (simplified equilibrium model).
+        # Based on ideal selectivity: purity = S / (S + 1), where S = CO2/N2
+        # selectivity. This is a theoretical upper bound from equilibrium
+        # partitioning; real purity requires full breakthrough curve simulation.
         selectivity = self._adsorbent_data.CO2_selectivity
-        purity = selectivity / (selectivity + 1.0) * 0.99
+        purity = selectivity / (selectivity + 1.0)
 
         # Energy: heating + vacuum
         Cp_ads = self._adsorbent_data.heat_capacity
