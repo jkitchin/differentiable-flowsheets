@@ -231,3 +231,104 @@ class TestDifferentialContactor:
             total_in = float(feed_flows.get(species, 0.0))
             total_out = float(raff_flows.get(species, 0.0)) + float(ext_flows.get(species, 0.0))
             assert total_out == pytest.approx(total_in, rel=1e-4)
+
+
+class TestCounterCurrentProfiles:
+    """Tests for profile population in _solve_counter_current (GitHub issue #61)."""
+
+    def test_counter_current_profiles_populated(self, simple_equilibrium):
+        """Profiles dicts must not be empty after calling counter-current cascade."""
+        n_stages = 5
+        params = CascadeParams(
+            n_stages=n_stages,
+            equilibrium=simple_equilibrium,
+            flow_config="counter_current",
+        )
+        cascade = MultistageCascade(params)
+
+        feed = make_stream(
+            {"H2O": 100.0, "A": 1.0, "B": 1.0, "Solvent": 0.0},
+            T=298.15,
+            P=101325.0,
+        )
+        solvent = make_stream(
+            {"H2O": 0.0, "A": 0.0, "B": 0.0, "Solvent": 50.0},
+            T=298.15,
+            P=101325.0,
+        )
+
+        _, _, info = cascade(feed, solvent)
+        profiles = info["profiles"]
+
+        # Profiles must contain "x" and "y" keys
+        assert "x" in profiles
+        assert "y" in profiles
+
+        # Each solute must appear in the profiles
+        for species in ["A", "B"]:
+            assert species in profiles["x"]
+            assert species in profiles["y"]
+            # Stage 0 (feed boundary) + n_stages values = n_stages + 1 entries
+            assert len(profiles["x"][species]) == n_stages + 1
+            assert len(profiles["y"][species]) == n_stages + 1
+
+    def test_counter_current_profiles_monotone(self, simple_equilibrium):
+        """Aqueous concentration (x) should decrease monotonically from stage 0 to N."""
+        n_stages = 5
+        params = CascadeParams(
+            n_stages=n_stages,
+            equilibrium=simple_equilibrium,
+            flow_config="counter_current",
+        )
+        cascade = MultistageCascade(params)
+
+        feed = make_stream(
+            {"H2O": 100.0, "A": 1.0, "B": 0.0, "Solvent": 0.0},
+            T=298.15,
+            P=101325.0,
+        )
+        solvent = make_stream(
+            {"H2O": 0.0, "A": 0.0, "B": 0.0, "Solvent": 50.0},
+            T=298.15,
+            P=101325.0,
+        )
+
+        _, _, info = cascade(feed, solvent)
+        x_A = [float(v) for v in info["profiles"]["x"]["A"]]
+
+        # x should decrease: feed-end value > value after N stages
+        assert x_A[0] > x_A[-1]
+
+    def test_co_current_profiles_populated(self, simple_equilibrium):
+        """Profiles dicts must not be empty after calling co-current cascade."""
+        n_stages = 4
+        params = CascadeParams(
+            n_stages=n_stages,
+            equilibrium=simple_equilibrium,
+            flow_config="co_current",
+        )
+        cascade = MultistageCascade(params)
+
+        feed = make_stream(
+            {"H2O": 100.0, "A": 1.0, "B": 1.0, "Solvent": 0.0},
+            T=298.15,
+            P=101325.0,
+        )
+        solvent = make_stream(
+            {"H2O": 0.0, "A": 0.0, "B": 0.0, "Solvent": 50.0},
+            T=298.15,
+            P=101325.0,
+        )
+
+        _, _, info = cascade(feed, solvent)
+        profiles = info["profiles"]
+
+        assert "x" in profiles
+        assert "y" in profiles
+
+        for species in ["A", "B"]:
+            assert species in profiles["x"]
+            assert species in profiles["y"]
+            # Stage 0 (feed boundary) + n_stages values = n_stages + 1 entries
+            assert len(profiles["x"][species]) == n_stages + 1
+            assert len(profiles["y"][species]) == n_stages + 1

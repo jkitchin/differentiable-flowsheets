@@ -508,8 +508,37 @@ class MultistageCascade:
             raffinate_flows[s] = F_raffinate_arr[i]
             extract_flows[s] = F_extracted_arr[i]
 
-        # Stage profiles are approximate for continuous n_stages
-        profiles = {"x": {s: [] for s in solutes}, "y": {s: [] for s in solutes}}
+        # Stage profiles: compute aqueous (x) and organic (y) mole fractions
+        # at each integer stage using the Kremser formula with n = 1, 2, ..., N_int.
+        # x_n = (F_in * frac_remaining_n) / F_aq  (aqueous concentration leaving stage n)
+        # y_n = K * x_n                             (equilibrium in organic leaving stage n)
+        # Feed-end mole fractions (stage 0, before any extraction):
+        x_feed_arr = safe_divide(F_in_arr, F_aq)
+        y_solvent_arr = safe_divide(
+            jnp.array([solvent_flows.get(s, 0.0) for s in solutes]), F_org
+        )
+
+        profiles_x = {s: [] for s in solutes}
+        profiles_y = {s: [] for s in solutes}
+
+        # Append the feed-end boundary (stage 0)
+        for i, s in enumerate(solutes):
+            profiles_x[s].append(x_feed_arr[i])
+            profiles_y[s].append(y_solvent_arr[i])
+
+        # Append per-stage values for stages 1 .. N_int
+        N_int = int(jnp.round(n_stages))
+        for n in range(1, N_int + 1):
+            n_arr = jnp.asarray(float(n), dtype=jnp.float64)
+            E_n1 = E_safe ** (n_arr + 1.0)
+            frac_n = jnp.clip(delta_E / (E_n1 - 1.0), 0.0, 1.0)
+            x_n = safe_divide(F_in_arr * frac_n, F_aq)   # aqueous leaving stage n
+            y_n = K_arr * x_n                              # organic in equilibrium
+            for i, s in enumerate(solutes):
+                profiles_x[s].append(x_n[i])
+                profiles_y[s].append(y_n[i])
+
+        profiles = {"x": profiles_x, "y": profiles_y}
 
         return raffinate_flows, extract_flows, profiles
 
@@ -582,7 +611,32 @@ class MultistageCascade:
             raffinate_flows[s] = F_raffinate_arr[i]
             extract_flows[s] = F_extracted_arr[i]
 
-        profiles = {"x": {s: [] for s in solutes}, "y": {s: [] for s in solutes}}
+        # Stage profiles: compute aqueous (x) and organic (y) mole fractions
+        # at each integer stage 1 .. N_int using the approach-to-equilibrium formula.
+        # x_n = x_feed + total_eff_n * (x_eq - x_feed)
+        # y_n = K * x_n  (organic in equilibrium with aqueous at stage n)
+        # Initial feed-end compositions (stage 0, before any extraction):
+        y_solvent_arr = safe_divide(F_solvent_arr, F_org)
+
+        profiles_x = {s: [] for s in solutes}
+        profiles_y = {s: [] for s in solutes}
+
+        # Append stage-0 feed-end boundary
+        for i, s in enumerate(solutes):
+            profiles_x[s].append(x_feed_arr[i])
+            profiles_y[s].append(y_solvent_arr[i])
+
+        N_int = int(jnp.round(n_stages))
+        for n in range(1, N_int + 1):
+            n_arr = jnp.asarray(float(n), dtype=jnp.float64)
+            eff_n = 1.0 - (1.0 - eff_per_stage) ** n_arr
+            x_n = x_feed_arr + eff_n * (x_eq_arr - x_feed_arr)
+            y_n = K_arr * x_n
+            for i, s in enumerate(solutes):
+                profiles_x[s].append(x_n[i])
+                profiles_y[s].append(y_n[i])
+
+        profiles = {"x": profiles_x, "y": profiles_y}
 
         return raffinate_flows, extract_flows, profiles
 
