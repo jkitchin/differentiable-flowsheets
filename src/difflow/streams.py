@@ -88,14 +88,18 @@ def mole_fractions(stream: Stream) -> dict[str, Array]:
 def combine_streams(*streams: Stream) -> Stream:
     """Combine multiple streams by adding flows.
 
-    All streams must have the same species. Temperature and pressure
-    are taken from the first stream (user should ensure compatibility).
+    All streams must have the same species. Temperature is computed as a
+    flow-weighted average (equivalent to assuming equal Cp for all species,
+    which is a standard first approximation for adiabatic mixing when no
+    thermodynamic model is available). Pressure is taken as the minimum of
+    the inlet pressures.
 
     Args:
         *streams: Variable number of streams to combine
 
     Returns:
-        Combined stream
+        Combined stream with summed flows, flow-weighted average T, and
+        minimum P.
     """
     if not streams:
         raise ValueError("At least one stream required")
@@ -108,9 +112,17 @@ def combine_streams(*streams: Stream) -> Stream:
         key = f"F_{s}"
         result[key] = sum(stream[key] for stream in streams)
 
-    # Use T, P from first stream (mixing calculation could be added)
-    result["T"] = streams[0]["T"]
-    result["P"] = streams[0]["P"]
+    # Adiabatic mixing: approximate by flow-weighted average T
+    # (assumes equal Cp; for accurate results use IdealThermo)
+    F_total = sum(v for k, v in result.items() if k.startswith("F_"))
+    T_mix = sum(
+        streams[i]["T"] * sum(v for k, v in streams[i].items() if k.startswith("F_")) / F_total
+        for i in range(len(streams))
+    )
+    result["T"] = T_mix
+
+    # Use minimum pressure (most conservative for downstream units)
+    result["P"] = min(s["P"] for s in streams)
 
     return result
 

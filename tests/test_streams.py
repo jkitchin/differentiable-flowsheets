@@ -83,8 +83,37 @@ class TestCombineStreams:
 
         assert float(combined["F_A"]) == pytest.approx(12.0)
         assert float(combined["F_B"]) == pytest.approx(8.0)
-        # Takes T, P from first stream
-        assert float(combined["T"]) == pytest.approx(300.0)
+        # T is flow-weighted average: (15/20)*300 + (5/20)*310 = 302.5
+        assert float(combined["T"]) == pytest.approx(302.5)
+        # P is minimum of inlet pressures
+        assert float(combined["P"]) == pytest.approx(101325.0)
+
+    def test_combine_streams_different_pressures(self):
+        """Outlet pressure should be the minimum of inlet pressures."""
+        s1 = make_stream({"A": 1.0}, T=300.0, P=200000.0)
+        s2 = make_stream({"A": 1.0}, T=300.0, P=101325.0)
+
+        combined = combine_streams(s1, s2)
+
+        assert float(combined["P"]) == pytest.approx(101325.0)
+
+    def test_combine_streams_equal_flows_average_T(self):
+        """Equal total flows give equal-weight average temperature."""
+        s1 = make_stream({"A": 1.0}, T=300.0, P=101325.0)
+        s2 = make_stream({"A": 1.0}, T=400.0, P=101325.0)
+
+        combined = combine_streams(s1, s2)
+
+        assert float(combined["T"]) == pytest.approx(350.0)
+
+    def test_combine_streams_same_T(self):
+        """Streams at the same temperature should produce that temperature."""
+        s1 = make_stream({"A": 3.0, "B": 2.0}, T=350.0, P=101325.0)
+        s2 = make_stream({"A": 1.0, "B": 4.0}, T=350.0, P=101325.0)
+
+        combined = combine_streams(s1, s2)
+
+        assert float(combined["T"]) == pytest.approx(350.0)
 
 
 class TestScaleStream:
