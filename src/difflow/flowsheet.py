@@ -12,7 +12,8 @@ acceleration methods.
 """
 
 from typing import Callable, Any, Literal
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+import copy
 import jax.numpy as jnp
 from jax import Array
 import jax
@@ -470,6 +471,118 @@ class Flowsheet:
         streams.update(final_tear)
         return self._run_units(streams)
 
+    def _apply_params(self, params: dict) -> "Flowsheet":
+        """Return a copy of this flowsheet with unit params updated from a dict.
+
+        Keys use dot notation to target specific unit parameters:
+        ``"<unit_name>.<param_name>"`` updates ``param_name`` on the unit
+        operation whose :attr:`Unit.name` matches ``unit_name``.  For example,
+        ``{"reactor.V": 2.0}`` will call
+        ``unit.operation.params.update(V=2.0)`` on the unit named
+        ``"reactor"``.
+
+        Feed-stream updates are not yet supported; pass a modified
+        :attr:`feeds` dict directly if that is needed.
+
+        Args:
+            params: Flat dict of ``"unit.field"`` -> value entries.
+
+        Returns:
+            New :class:`Flowsheet` instance with the requested parameters
+            applied.  The original flowsheet is not modified.
+
+        Raises:
+            KeyError: If the unit name in a dotted key does not exist.
+            AttributeError: If the unit's operation has no ``.params``
+                attribute or the field name is not present in params.
+            ValueError: If a key does not contain exactly one dot.
+        """
+        # Build a name -> Unit index map
+        unit_index = {unit.name: i for i, unit in enumerate(self.units)}
+
+        # Collect per-unit updates: {unit_name: {field: value}}
+        unit_updates: dict[str, dict[str, Any]] = {}
+        for key, value in params.items():
+            parts = key.split(".", 1)
+            if len(parts) != 2:
+                raise ValueError(
+                    f"Parameter key {key!r} must use dot notation "
+                    f"'<unit_name>.<param_name>'"
+                )
+            unit_name, field_name = parts
+            if unit_name not in unit_index:
+                raise KeyError(
+                    f"No unit named {unit_name!r} in flowsheet. "
+                    f"Available units: {list(unit_index.keys())}"
+                )
+            unit_updates.setdefault(unit_name, {})[field_name] = value
+
+        # Clone the units list, applying updates where needed
+        new_units = list(self.units)
+        for unit_name, updates in unit_updates.items():
+            idx = unit_index[unit_name]
+            unit = self.units[idx]
+            operation = unit.operation
+            if not hasattr(operation, "params"):
+                raise AttributeError(
+                    f"Unit {unit_name!r} operation has no .params attribute; "
+                    f"cannot apply parameter updates {list(updates.keys())}"
+                )
+            new_op_params = operation.params.update(**updates)
+            # Shallow-copy the operation object and replace its .params so that
+            # all other attributes (e.g. thermo, mode) are preserved without
+            # having to know the constructor signature of each unit type.
+            new_operation = copy.copy(operation)
+            new_operation.params = new_op_params
+            new_unit = replace(unit, operation=new_operation)
+            new_units[idx] = new_unit
+
+        # Build a shallow copy of the flowsheet with the new units
+        new_fs = Flowsheet(self.species_order)
+        new_fs.feeds = dict(self.feeds)
+        new_fs.recycles = dict(self.recycles)
+        new_fs.units = new_units
+        return new_fs
+
+    def make_objective_fn(
+        self,
+        objective_fn: Callable[[dict[str, Stream]], Array],
+    ) -> Callable[[dict], Array]:
+        """Create a differentiable objective function from this flowsheet.
+
+        The returned function accepts a flat parameter dict whose keys use
+        dot notation (``"<unit_name>.<param_name>"``) to identify which unit
+        and field to update before solving.  For example::
+
+            obj = fs.make_objective_fn(lambda s: s["product"]["F_B"])
+            value = obj({"reactor.V": 2.0})
+            grad  = jax.grad(obj)({"reactor.V": 2.0})
+
+        The convention for parameter keys is:
+        ``"<unit_name>.<param_name>"`` where ``unit_name`` is the
+        :attr:`Unit.name` as registered with :meth:`add_unit`, and
+        ``param_name`` is a field on that unit's ``operation.params``
+        :class:`~difflow.params_mixin.ParamsMixin` dataclass.
+
+        Args:
+            objective_fn: Callable that maps the solved stream dict returned
+                by :meth:`solve` to a scalar :class:`jax.Array`.
+
+        Returns:
+            Callable ``objective(params_dict) -> Array`` that updates unit
+            parameters, solves the flowsheet, then evaluates
+            ``objective_fn``.
+        """
+
+        def objective(params: dict) -> Array:
+            # Apply parameter updates to a temporary copy of the flowsheet
+            # using dot-notation keys of the form "<unit_name>.<param_name>".
+            updated_fs = self._apply_params(params)
+            streams = updated_fs.solve()
+            return objective_fn(streams)
+
+        return objective
+
     def solve_eo(
         self,
         initial_guess: dict[str, Stream] | None = None,
@@ -581,6 +694,10 @@ def create_objective(
     This wraps the flowsheet solve to create a function that maps
     parameters to an objective value, suitable for optimization.
 
+    Parameter keys use dot notation ``"<unit_name>.<param_name>"`` to
+    identify which unit operation parameter to update before solving.
+    See :meth:`Flowsheet.make_objective_fn` for full documentation.
+
     Args:
         flowsheet: The flowsheet to solve
         objective_fn: Function that computes objective from solved streams
@@ -588,15 +705,4 @@ def create_objective(
     Returns:
         Function mapping parameter dict to objective value
     """
-
-    def objective(params: dict) -> Array:
-        # Update flowsheet feeds/unit params from params dict
-        # (This is a simplified version - could be more sophisticated)
-
-        # Solve flowsheet
-        streams = flowsheet.solve()
-
-        # Compute objective
-        return objective_fn(streams)
-
-    return objective
+    return flowsheet.make_objective_fn(objective_fn)

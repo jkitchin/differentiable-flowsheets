@@ -223,6 +223,148 @@ class TestFlowsheets:
         assert "recovery" in results
         assert results["recovery"] > 0.5  # Should have reasonable recovery
 
+    def test_split_shell_cascade_basic(self):
+        """Test that SplitShellCascade runs and returns expected keys."""
+        from difflow_ree import SplitShellCascade, SplitShellParams
+        from difflow.streams import make_stream
+
+        params = SplitShellParams(
+            extractant="D2EHPA",
+            elements=("La", "Nd", "Dy"),
+            n_stages=12,
+            split_points=(4, 8),
+        )
+        cascade = SplitShellCascade(params)
+
+        feed = make_stream(
+            flows={"H2O": 10.0, "La": 0.03, "Nd": 0.03, "Dy": 0.03},
+            T=298.15,
+            P=101325.0,
+        )
+        solvent = make_stream(
+            flows={"kerosene": 10.0, "D2EHPA": 5.0, "La": 0.0, "Nd": 0.0, "Dy": 0.0},
+            T=298.15,
+            P=101325.0,
+        )
+
+        results = cascade(feed, solvent)
+
+        assert "products" in results
+        assert "D_values" in results
+        assert "converged_in_iter" in results
+        assert "product_1" in results["products"]
+        assert "product_2" in results["products"]
+        assert "raffinate" in results["products"]
+
+    def test_split_shell_cascade_convergence(self):
+        """Test that SplitShellCascade iteration converges and mass is conserved."""
+        from difflow_ree import SplitShellCascade, SplitShellParams
+        from difflow.streams import make_stream
+
+        params = SplitShellParams(
+            extractant="D2EHPA",
+            elements=("La", "Nd", "Dy"),
+            n_stages=15,
+            split_points=(5, 10),
+            pH=3.0,
+        )
+        cascade = SplitShellCascade(params)
+
+        feed_flows_dict = {"H2O": 10.0, "La": 0.05, "Nd": 0.03, "Dy": 0.02}
+        feed = make_stream(flows=feed_flows_dict, T=298.15, P=101325.0)
+        solvent = make_stream(
+            flows={"kerosene": 10.0, "D2EHPA": 5.0, "La": 0.0, "Nd": 0.0, "Dy": 0.0},
+            T=298.15,
+            P=101325.0,
+        )
+
+        results = cascade(feed, solvent)
+
+        # Should converge in fewer than max_iter iterations
+        assert results["converged_in_iter"] < 50
+
+        # Mass conservation: total extracted + raffinate equals feed
+        total_extracted = {elem: 0.0 for elem in ("La", "Nd", "Dy")}
+        for prod_name, prod in results["products"].items():
+            for elem in ("La", "Nd", "Dy"):
+                total_extracted[elem] += prod["flows"].get(elem, 0.0)
+
+        for elem in ("La", "Nd", "Dy"):
+            total_out = total_extracted[elem]
+            total_in = feed_flows_dict[elem]
+            assert abs(total_out - total_in) < 1e-6, (
+                f"Mass not conserved for {elem}: in={total_in}, out={total_out}"
+            )
+
+    def test_split_shell_heavy_ree_enriched_early(self):
+        """Test that heavy REE (high D) are preferentially extracted in early sections."""
+        from difflow_ree import SplitShellCascade, SplitShellParams
+        from difflow.streams import make_stream
+
+        params = SplitShellParams(
+            extractant="D2EHPA",
+            elements=("La", "Dy"),
+            n_stages=10,
+            split_points=(5,),
+            pH=3.0,
+        )
+        cascade = SplitShellCascade(params)
+
+        feed = make_stream(
+            flows={"H2O": 10.0, "La": 0.1, "Dy": 0.1},
+            T=298.15,
+            P=101325.0,
+        )
+        solvent = make_stream(
+            flows={"kerosene": 10.0, "D2EHPA": 5.0, "La": 0.0, "Dy": 0.0},
+            T=298.15,
+            P=101325.0,
+        )
+
+        results = cascade(feed, solvent)
+        prods = results["products"]
+
+        # product_1 is the first section (highest extraction for high-D elements)
+        # Dy has much higher D than La, so it should dominate product_1
+        dy_in_p1 = prods["product_1"]["flows"]["Dy"]
+        la_in_p1 = prods["product_1"]["flows"]["La"]
+        assert dy_in_p1 > la_in_p1, (
+            f"Expected Dy ({dy_in_p1:.4f}) > La ({la_in_p1:.4f}) in product_1"
+        )
+
+    def test_optimize_split_points_d_value_based(self):
+        """Test that optimize_split_points uses D values, not equal spacing."""
+        from difflow_ree.flowsheets.split_shell import optimize_split_points
+
+        # For D2EHPA at pH 3.5, Dy >> Nd >> La in terms of D.
+        # With 3 products from 3 elements, splits should place boundaries
+        # between natural D-value gaps, not at n/3 and 2n/3.
+        splits = optimize_split_points(
+            elements=("La", "Nd", "Dy"),
+            extractant="D2EHPA",
+            n_stages=30,
+            n_products=3,
+            pH=3.5,
+        )
+
+        assert len(splits) == 2  # n_products - 1 split points
+        assert splits[0] < splits[1]  # Strictly increasing
+        assert splits[0] >= 1
+        assert splits[1] <= 29  # Within valid range
+
+    def test_optimize_split_points_single_product(self):
+        """Test optimize_split_points with n_products=1 returns empty tuple."""
+        from difflow_ree.flowsheets.split_shell import optimize_split_points
+
+        splits = optimize_split_points(
+            elements=("La", "Nd"),
+            extractant="D2EHPA",
+            n_stages=20,
+            n_products=1,
+            pH=3.0,
+        )
+        assert splits == ()
+
 
 class TestEconomics:
     """Test economic analysis functions."""

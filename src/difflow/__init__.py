@@ -141,7 +141,7 @@ from difflow.units.heat_exchanger import (
     design_heat_exchanger,
     size_heat_exchanger,
 )
-from difflow.flowsheet import Flowsheet, Unit
+from difflow.flowsheet import Flowsheet, Unit, create_objective
 from difflow.eo_solver import EOSolver, EOSolveResult, EOStateLayout
 from difflow.initialization import (
     AndersonAccelerator,
@@ -342,6 +342,7 @@ __all__ = [
     # Flowsheet
     "Flowsheet",
     "Unit",
+    "create_objective",
     # EO Solver
     "EOSolver",
     "EOSolveResult",

@@ -639,10 +639,25 @@ class TestPFRAnalytical:
         X_high = pfr_conversion_analytical(0.1, 100.0)
         assert float(X_high) > 0.99
 
-    def test_pfr_conversion_second_order_not_implemented(self):
-        """Test that second-order raises NotImplementedError."""
-        with pytest.raises(NotImplementedError):
-            pfr_conversion_analytical(0.1, 10.0, order=2)
+    def test_pfr_conversion_second_order(self):
+        """Test second-order analytical conversion."""
+        k = jnp.array(0.1)    # m^3/mol/s
+        tau = jnp.array(10.0)  # s
+        C_A0 = jnp.array(2.0)  # mol/m^3
+
+        X = pfr_conversion_analytical(k, tau, order=2, C_A0=C_A0)
+
+        # X = k*tau*C_A0 / (1 + k*tau*C_A0) = 2 / 3
+        expected = k * tau * C_A0 / (1.0 + k * tau * C_A0)
+        npt.assert_allclose(X, expected, rtol=1e-6)
+
+    def test_pfr_conversion_second_order_gradient(self):
+        """Test that second-order conversion is differentiable."""
+        def conv(k, tau, C_A0):
+            return pfr_conversion_analytical(k, tau, order=2, C_A0=C_A0)
+
+        dX_dk = jax.grad(conv)(jnp.array(0.1), jnp.array(10.0), jnp.array(2.0))
+        assert jnp.isfinite(dX_dk)
 
     def test_pfr_conversion_invalid_order(self):
         """Test that invalid order raises ValueError."""
