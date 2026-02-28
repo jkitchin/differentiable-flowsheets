@@ -38,6 +38,7 @@ from jax import Array
 from difflow.streams import Stream, make_stream, get_flows, total_flow
 from difflow.params_mixin import ParamsMixin
 from difflow.numerics import safe_divide
+from difflow.eos import PengRobinson, CriticalProperties
 
 
 # Gas constant
@@ -47,6 +48,20 @@ R = 8.314  # J/(mol*K)
 MW_CO2 = 44.01  # g/mol
 T_CRIT_CO2 = 304.13  # K
 P_CRIT_CO2 = 7.377e6  # Pa
+OMEGA_CO2 = 0.225  # Acentric factor for CO2
+
+# Peng-Robinson EOS instance for pure CO2
+_CO2_EOS = PengRobinson({
+    "CO2": CriticalProperties(
+        name="CO2",
+        Tc=T_CRIT_CO2,
+        Pc=P_CRIT_CO2,
+        omega=OMEGA_CO2,
+        MW=MW_CO2,
+    )
+})
+# Mole fraction array for pure CO2
+_Y_CO2 = jnp.array([1.0])
 
 
 # =============================================================================
@@ -151,7 +166,19 @@ def co2_gamma(T: Array | float, P: Array | float) -> Array:
 def co2_compressibility(T: Array | float, P: Array | float) -> Array:
     """Compressibility factor Z for CO2.
 
-    Uses Peng-Robinson EOS (simplified implementation).
+    Uses the Peng-Robinson equation of state via difflow.eos.PengRobinson.
+
+    The PR cubic equation solved is:
+        Z^3 - (1-B)*Z^2 + (A - 3B^2 - 2B)*Z - (AB - B^2 - B^3) = 0
+    where:
+        A = a(T)*P / (R*T)^2
+        B = b*P / (R*T)
+        a(T) = a_c * [1 + kappa*(1 - sqrt(T/Tc))]^2
+        kappa = 0.37464 + 1.54226*omega - 0.26992*omega^2
+        a_c = 0.45724 * R^2 * Tc^2 / Pc
+        b   = 0.07780 * R * Tc / Pc
+
+    CO2 critical properties: Tc=304.13 K, Pc=7.377e6 Pa, omega=0.225.
 
     Args:
         T: Temperature (K)
@@ -160,24 +187,21 @@ def co2_compressibility(T: Array | float, P: Array | float) -> Array:
     Returns:
         Compressibility factor Z
     """
-    T = jnp.asarray(T)
-    P = jnp.asarray(P)
+    T = jnp.asarray(T, dtype=float)
+    P = jnp.asarray(P, dtype=float)
 
+    # Determine phase: use vapor root above critical temperature or at low
+    # reduced pressure; use liquid root otherwise.
     T_r = T / T_CRIT_CO2
     P_r = P / P_CRIT_CO2
+    is_vapor = (T_r >= 1.0) | (P_r < 1.0)
 
-    # Simplified correlation for CO2
-    # Valid for T > 280 K, P < 200 bar
-    omega = 0.225  # Acentric factor for CO2
+    # solve_Z requires string literals for phase, so compute both roots and
+    # select the appropriate one with jnp.where (JAX-compatible).
+    Z_vap = _CO2_EOS.solve_Z(T, P, _Y_CO2, phase="vapor")
+    Z_liq = _CO2_EOS.solve_Z(T, P, _Y_CO2, phase="liquid")
 
-    # Pitzer correlation (simplified)
-    B0 = 0.083 - 0.422 / T_r**1.6
-    B1 = 0.139 - 0.172 / T_r**4.2
-
-    Z = 1.0 + (B0 + omega * B1) * P_r / T_r
-
-    # Ensure physical bounds
-    Z = jnp.clip(Z, 0.2, 1.2)
+    Z = jnp.where(is_vapor, Z_vap, Z_liq)
 
     return Z
 
