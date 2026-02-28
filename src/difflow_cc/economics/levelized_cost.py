@@ -35,6 +35,7 @@ from difflow_cc.economics.opex import (
     OpexParams,
 )
 from difflow.numerics import safe_divide
+import optimistix as optx
 
 
 @dataclass(repr=False)
@@ -250,32 +251,47 @@ def internal_rate_return(
     capital_cost: Array | float,
     annual_cash_flow: Array | float,
     lifetime: int = 25,
+    initial_guess: float = 0.1,
 ) -> Array:
-    """Estimate internal rate of return.
+    """Calculate internal rate of return (IRR).
 
-    For constant annual cash flow, solves:
-    C0 = CF * (1 - (1+IRR)^-n) / IRR
+    Solves for the discount rate r where NPV = 0:
+
+        NPV(r) = -C0 + sum_{t=1}^{n} CF / (1 + r)^t = 0
+
+    Uses a Newton root-finding solver via optimistix.  If the cashflows
+    are non-positive (i.e. no solution exists), the solver will still
+    return a value but it may not be meaningful; callers should sanity-
+    check the sign of annual_cash_flow before interpreting the result.
 
     Args:
-        capital_cost: Initial investment (USD)
-        annual_cash_flow: Constant annual cash flow (USD/yr)
-        lifetime: Project lifetime (years)
+        capital_cost: Initial investment at t=0 (USD)
+        annual_cash_flow: Constant annual net cash flow (USD/yr)
+        lifetime: Project lifetime in years (n)
+        initial_guess: Starting guess for IRR (fraction, default 0.1)
 
     Returns:
-        IRR estimate (fraction)
+        IRR as a fraction (e.g. 0.15 for 15%)
     """
-    capital_cost = jnp.asarray(capital_cost)
-    annual_cash_flow = jnp.asarray(annual_cash_flow)
+    capital_cost = jnp.asarray(capital_cost, dtype=jnp.float64)
+    annual_cash_flow = jnp.asarray(annual_cash_flow, dtype=jnp.float64)
 
-    # Simple payback ratio
-    payback_factor = safe_divide(capital_cost, annual_cash_flow)
+    # Build cashflow array: t=0 is the capital outlay, t=1..n are revenues.
+    n = lifetime
+    cashflows = jnp.concatenate([
+        jnp.array([-capital_cost]),
+        jnp.full(n, annual_cash_flow),
+    ])
 
-    # Approximate IRR using annuity formula inversion
-    # For n=25, IRR ≈ 1/payback - 0.02 (rough approximation)
-    irr_approx = safe_divide(1.0, payback_factor) - 0.02
-    irr = jnp.clip(irr_approx, -0.5, 1.0)
+    def npv_fn(r, args):
+        cf = args
+        t = jnp.arange(cf.shape[0], dtype=jnp.float64)
+        return jnp.sum(cf / (1.0 + r) ** t)
 
-    return irr
+    r0 = jnp.array(initial_guess, dtype=jnp.float64)
+    solver = optx.Newton(rtol=1e-6, atol=1e-8)
+    sol = optx.root_find(npv_fn, solver, r0, args=cashflows, max_steps=100, throw=False)
+    return sol.value
 
 
 def payback_period(
