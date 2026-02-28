@@ -121,8 +121,12 @@ def combine_streams(*streams: Stream) -> Stream:
     )
     result["T"] = T_mix
 
-    # Use minimum pressure (most conservative for downstream units)
-    result["P"] = min(s["P"] for s in streams)
+    # Use minimum pressure (most conservative for downstream units).
+    # Use jnp.minimum reduce to stay JAX-compatible inside jit/vmap.
+    P = streams[0]["P"]
+    for s in streams[1:]:
+        P = jnp.minimum(P, s["P"])
+    result["P"] = P
 
     return result
 

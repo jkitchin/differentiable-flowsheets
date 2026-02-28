@@ -158,16 +158,13 @@ class Ultrafiltration:
         # Linearised (first-order in J) for JAX-compatible closed-form solution:
         #   J_eff = Lp * TMP / (1 + Lp * sigma * C_bulk / k_mass)
         #
-        # C_bulk is estimated as the mean concentration: total flow / total volume.
-        # We use total_flow_in as a proxy for the total amount of solute and
-        # total_flow_in itself as the volume proxy (unit density assumption), so
-        # C_bulk = 1 (dimensionless) and the correction reduces to the ratio
-        # Lp * sigma / k_mass.  For dimensional correctness the user should
-        # supply k_mass (m/s) and sigma (Pa·m³/kg) consistent with Lp units.
-        C_bulk = jnp.where(total_flow_in > 0.0, total_flow_in / total_flow_in, 1.0)
-        # Linearized flux accounting for concentration polarization:
-        #   J = Lp * TMP / (1 + Lp * sigma * C_bulk / k_mass)
-        polarization_factor = 1.0 + p.Lp * p.sigma * C_bulk / p.k_mass
+        # Convert Lp from L/(m²·h·bar) to SI (m/(Pa·s)) for the polarization
+        # factor, which uses sigma [Pa·m³/kg] and k_mass [m/s]:
+        #   1 L/(m²·h·bar) = 1e-3 m³ / (m² · 3600 s · 1e5 Pa) = 2.778e-12 m/(Pa·s)
+        # With Lp_SI, sigma, and k_mass all in SI the factor is dimensionless:
+        #   polarization_factor = 1 + Lp_SI * sigma / k_mass
+        Lp_SI = p.Lp * 2.778e-12  # m/(Pa·s)
+        polarization_factor = 1.0 + Lp_SI * p.sigma / p.k_mass
         J = p.Lp * TMP / polarization_factor  # L/m²/h (effective flux)
 
         # Split species based on rejection
@@ -267,10 +264,10 @@ class Diafiltration:
         # Permeate flux with concentration polarization correction (film model).
         #
         # Linearised film-model approximation (same as Ultrafiltration):
-        #   J = Lp * TMP / (1 + Lp * sigma * C_bulk / k_mass)
-        # C_bulk proxy: unit concentration relative to total volume.
-        C_bulk = jnp.where(V_initial > 0.0, V_initial / V_initial, 1.0)
-        polarization_factor = 1.0 + p.Lp * p.sigma * C_bulk / p.k_mass
+        #   J = Lp * TMP / (1 + Lp_SI * sigma / k_mass)
+        # Lp converted to SI (m/(Pa·s)) so the factor is dimensionless.
+        Lp_SI = p.Lp * 2.778e-12  # L/(m²·h·bar) → m/(Pa·s)
+        polarization_factor = 1.0 + Lp_SI * p.sigma / p.k_mass
         J = p.Lp * TMP / polarization_factor  # L/m²/h (effective flux)
 
         # For CVD: C/C_0 = exp(-n_dv * (1-R)) for species being washed out
