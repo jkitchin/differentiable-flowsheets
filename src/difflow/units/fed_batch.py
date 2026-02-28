@@ -21,8 +21,10 @@ from typing import Callable, Literal, Any
 from dataclasses import dataclass
 
 from difflow.params_mixin import ParamsMixin
+import jax
 import jax.numpy as jnp
 from jax import Array, lax
+import numpy as np
 import optimistix as optx
 
 from difflow.streams import Stream, get_flows, make_stream
@@ -342,10 +344,11 @@ class FedBatchReactor:
         n_final = n_profiles[-1]
         conversion = {}
         for i, s in enumerate(p.species_order):
-            if n_initial[i] > 1e-10:
-                conversion[s] = (n_initial[i] - n_final[i]) / n_initial[i]
-            else:
-                conversion[s] = jnp.array(0.0)
+            conversion[s] = jnp.where(
+                n_initial[i] > 1e-10,
+                (n_initial[i] - n_final[i]) / jnp.maximum(n_initial[i], 1e-10),
+                jnp.array(0.0),
+            )
 
         # Create final stream (in moles, not concentrations)
         V_final = V_profile[-1]
@@ -765,34 +768,126 @@ def optimal_feed_profile(
     feed_composition: dict[str, Array],
     V_max: float,
     t_max: float,
+    n_intervals: int = 10,
+    n_sim_steps: int = 100,
 ) -> tuple[Callable[[Array], Array], float]:
-    """Determine optimal feed profile for fed-batch reactor.
+    """Determine optimal feed profile for fed-batch reactor via gradient-based optimization.
 
-    This is a placeholder for optimization-based feed profile design.
-    In practice, would use gradient-based optimization with difflow's
-    autodiff capabilities.
+    Parameterizes the feed as a piecewise-constant profile over ``n_intervals``
+    control intervals and uses JAX automatic differentiation with BFGS to
+    optimize the feed rates.
 
     Args:
-        objective: Optimization objective
-        params: Reactor parameters
-        C0: Initial concentrations
-        T: Temperature
-        target_species: Product species
-        feed_composition: Feed concentrations
-        V_max: Maximum final volume
-        t_max: Maximum batch time
+        objective: Optimization objective:
+
+            - ``"max_yield"``: maximize total moles of *target_species* at end of batch.
+            - ``"max_selectivity"``: maximize ``C_target / C_total`` at end of batch.
+            - ``"min_time"``: maximize time-weighted average yield of *target_species*,
+              rewarding early production (proxy for minimizing time-to-target).
+
+        params: Reactor parameters (must include ``V0``, ``rate_fn``, ``stoich``,
+            ``rate_params``, ``species_order``).
+        C0: Initial concentrations by species (mol/m³).
+        T: Isothermal reaction temperature (K).
+        target_species: Product species to optimize.
+        feed_composition: Feed concentrations by species (mol/m³).
+        V_max: Maximum final reactor volume (m³).
+        t_max: Batch duration (s).
+        n_intervals: Number of piecewise-constant feed intervals (control horizon).
+        n_sim_steps: ODE integration steps per simulation call.
 
     Returns:
-        (feed_fn, t_opt): Optimal feed function and batch time
+        ``(feed_fn, t_opt)``: Optimized piecewise-constant feed-rate function
+        ``F(t) -> m³/s`` and the batch time ``t_opt`` (equal to ``t_max``).
     """
-    # Placeholder: return constant feed rate
-    V0 = params.V0
-    V_add = V_max - V0
-    t_opt = t_max
+    V0 = float(params.V0)
 
-    F_const = V_add / t_opt
+    # Trivial case: no headroom to add feed
+    if V_max <= V0 + 1e-10:
+        def _no_feed(t):
+            return jnp.array(0.0)
+        return _no_feed, t_max
 
-    def constant_feed(t):
-        return jnp.where(t < t_opt, F_const, 0.0)
+    dt_interval = t_max / n_intervals
 
-    return constant_feed, t_opt
+    def make_feed_fn(feed_rates_arr: Array) -> Callable[[Array], Array]:
+        """Build piecewise-constant feed-rate function from an array of rates."""
+        def feed_fn(t: Array) -> Array:
+            idx = jnp.clip(
+                jnp.floor(t / dt_interval).astype(jnp.int32),
+                0, n_intervals - 1,
+            )
+            return feed_rates_arr[idx]
+        return feed_fn
+
+    reactor = FedBatchReactor(params, mode="isothermal")
+
+    V_budget = V_max - V0   # maximum volume that can be added
+
+    def _constrained_rates(log_rates: Array) -> Array:
+        """Convert unconstrained variables to volume-constraint-satisfying rates.
+
+        Softplus maps to non-negative rates, then a differentiable rescaling
+        ensures the total volume added never exceeds V_budget.
+        """
+        rates_raw = jax.nn.softplus(log_rates)
+        V_added = jnp.sum(rates_raw) * dt_interval
+        scale = jnp.minimum(1.0, V_budget / (V_added + 1e-10))
+        return rates_raw * scale
+
+    def loss(log_rates: Array) -> Array:
+        """Loss function: negative objective. Volume constraint is exact."""
+        feed_rates = _constrained_rates(log_rates)
+        feed_fn = make_feed_fn(feed_rates)
+
+        _, info = reactor(
+            C0=C0,
+            T0=T,
+            P=101325.0,
+            t_final=jnp.array(t_max),
+            feed_rate_fn=feed_fn,
+            feed_composition=feed_composition,
+            n_steps=n_sim_steps,
+            use_diffrax=False,  # lax.scan gives a fixed computational graph
+        )
+
+        if objective == "max_yield":
+            obj = -info["n_final"][target_species]
+        elif objective == "max_selectivity":
+            C_total = sum(info["C_final"].values()) + 1e-10
+            obj = -info["C_final"][target_species] / C_total
+        else:  # "min_time"
+            # Maximize time-weighted average of target moles;
+            # earlier time steps get higher weight, rewarding fast production.
+            n_tgt = info["n"][target_species]
+            t_arr = info["t"]
+            weights = (t_max - t_arr) + 1.0   # positive, decreasing
+            weights = weights / jnp.sum(weights)
+            obj = -jnp.dot(n_tgt, weights)
+
+        return obj
+
+    # Initial guess: inverse-softplus of the constant feed that
+    # would exactly fill the remaining volume over t_max.
+    F_avg = (V_max - V0) / t_max
+    # softplus⁻¹(y) = log(expm1(y));  numerically safe for y > 0
+    log_F_init = float(np.log(np.expm1(min(F_avg, 50.0)) + 1e-30))
+    x0 = jnp.full(n_intervals, log_F_init)
+
+    def _loss_for_optx(log_rates, _args):
+        return loss(log_rates)
+
+    solver = optx.BFGS(rtol=1e-5, atol=1e-5)
+    result = optx.minimise(
+        _loss_for_optx,
+        solver,
+        x0,
+        args=None,
+        max_steps=200,
+        throw=False,
+    )
+
+    opt_rates = _constrained_rates(result.value)
+    opt_feed_fn = make_feed_fn(opt_rates)
+
+    return opt_feed_fn, t_max

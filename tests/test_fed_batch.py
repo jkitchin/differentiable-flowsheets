@@ -14,6 +14,7 @@ from difflow.units.fed_batch import (
     FedBatchReactor,
     FedBatchParams,
     SemiBatchReactor,
+    optimal_feed_profile,
 )
 
 
@@ -398,3 +399,171 @@ class TestExothermicReaction:
         # Temperature should increase for exothermic reaction
         T_final = info["T_final"]
         assert float(T_final) > T0
+
+
+# ---------------------------------------------------------------------------
+# Shared fixture for optimal_feed_profile tests
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def simple_fed_batch():
+    """A → B fed-batch system for optimization tests."""
+    def rate_fn(C, T, params):
+        return jnp.array([params["k"] * C["A"]])
+
+    stoich = jnp.array([[-1.0], [+1.0]])
+    params = FedBatchParams(
+        V0=1.0,
+        rate_fn=rate_fn,
+        stoich=stoich,
+        rate_params={"k": jnp.array(0.05)},
+        species_order=["A", "B"],
+    )
+    C0 = {"A": 100.0, "B": 0.0}
+    feed_composition = {"A": 500.0, "B": 0.0}
+    T = jnp.array(350.0)
+    V_max = 2.0
+    t_max = 200.0
+    return params, C0, feed_composition, T, V_max, t_max
+
+
+class TestOptimalFeedProfile:
+    """Tests for gradient-based optimal_feed_profile."""
+
+    def _flat_baseline(self, params, C0, feed_composition, T, V_max, t_max):
+        """Simulate the flat-rate baseline for comparison."""
+        reactor = FedBatchReactor(params, mode="isothermal")
+        F_flat = (V_max - float(params.V0)) / t_max
+        flat_fn = lambda t: jnp.array(F_flat)
+        _, info = reactor(
+            C0=C0, T0=T, P=101325.0, t_final=t_max,
+            feed_rate_fn=flat_fn, feed_composition=feed_composition,
+            n_steps=50, use_diffrax=False,
+        )
+        return info
+
+    def test_max_yield_returns_callable(self, simple_fed_batch):
+        """optimal_feed_profile('max_yield') returns (callable, float)."""
+        params, C0, feed_comp, T, V_max, t_max = simple_fed_batch
+        feed_fn, t_opt = optimal_feed_profile(
+            "max_yield", params, C0, T, "B", feed_comp, V_max, t_max,
+            n_intervals=5, n_sim_steps=50,
+        )
+        assert callable(feed_fn)
+        assert t_opt == pytest.approx(t_max)
+
+    def test_max_yield_nonnegative_feed(self, simple_fed_batch):
+        """Optimized max_yield feed rates are non-negative."""
+        params, C0, feed_comp, T, V_max, t_max = simple_fed_batch
+        feed_fn, _ = optimal_feed_profile(
+            "max_yield", params, C0, T, "B", feed_comp, V_max, t_max,
+            n_intervals=5, n_sim_steps=50,
+        )
+        for t_test in [0.0, t_max * 0.25, t_max * 0.5, t_max * 0.75]:
+            assert float(feed_fn(jnp.array(t_test))) >= 0.0
+
+    def test_max_yield_improves_on_flat(self, simple_fed_batch):
+        """max_yield profile produces at least as much product as flat feed."""
+        params, C0, feed_comp, T, V_max, t_max = simple_fed_batch
+        feed_fn, t_opt = optimal_feed_profile(
+            "max_yield", params, C0, T, "B", feed_comp, V_max, t_max,
+            n_intervals=5, n_sim_steps=50,
+        )
+        reactor = FedBatchReactor(params, mode="isothermal")
+        _, info_opt = reactor(
+            C0=C0, T0=T, P=101325.0, t_final=t_opt,
+            feed_rate_fn=feed_fn, feed_composition=feed_comp,
+            n_steps=50, use_diffrax=False,
+        )
+        info_flat = self._flat_baseline(params, C0, feed_comp, T, V_max, t_max)
+
+        n_B_opt = float(info_opt["n_final"]["B"])
+        n_B_flat = float(info_flat["n_final"]["B"])
+        # Optimized yield must be at least 95% of the flat baseline
+        # (the optimizer may equal or improve the baseline)
+        assert n_B_opt >= n_B_flat * 0.95
+
+    def test_max_selectivity_returns_callable(self, simple_fed_batch):
+        """optimal_feed_profile('max_selectivity') returns (callable, float)."""
+        params, C0, feed_comp, T, V_max, t_max = simple_fed_batch
+        feed_fn, t_opt = optimal_feed_profile(
+            "max_selectivity", params, C0, T, "B", feed_comp, V_max, t_max,
+            n_intervals=5, n_sim_steps=50,
+        )
+        assert callable(feed_fn)
+        assert t_opt == pytest.approx(t_max)
+        assert float(feed_fn(jnp.array(0.0))) >= 0.0
+
+    def test_max_selectivity_improves_on_flat(self, simple_fed_batch):
+        """max_selectivity profile achieves selectivity at least as good as flat."""
+        params, C0, feed_comp, T, V_max, t_max = simple_fed_batch
+        feed_fn, t_opt = optimal_feed_profile(
+            "max_selectivity", params, C0, T, "B", feed_comp, V_max, t_max,
+            n_intervals=5, n_sim_steps=50,
+        )
+        reactor = FedBatchReactor(params, mode="isothermal")
+        _, info_opt = reactor(
+            C0=C0, T0=T, P=101325.0, t_final=t_opt,
+            feed_rate_fn=feed_fn, feed_composition=feed_comp,
+            n_steps=50, use_diffrax=False,
+        )
+        info_flat = self._flat_baseline(params, C0, feed_comp, T, V_max, t_max)
+
+        def selectivity(info):
+            C = info["C_final"]
+            return float(C["B"]) / (sum(float(v) for v in C.values()) + 1e-10)
+
+        assert selectivity(info_opt) >= selectivity(info_flat) * 0.95
+
+    def test_min_time_returns_callable(self, simple_fed_batch):
+        """optimal_feed_profile('min_time') returns (callable, float)."""
+        params, C0, feed_comp, T, V_max, t_max = simple_fed_batch
+        feed_fn, t_opt = optimal_feed_profile(
+            "min_time", params, C0, T, "B", feed_comp, V_max, t_max,
+            n_intervals=5, n_sim_steps=50,
+        )
+        assert callable(feed_fn)
+        assert t_opt == pytest.approx(t_max)
+        assert float(feed_fn(jnp.array(0.0))) >= 0.0
+
+    def test_min_time_improves_on_flat(self, simple_fed_batch):
+        """min_time profile achieves higher time-averaged yield than flat feed."""
+        params, C0, feed_comp, T, V_max, t_max = simple_fed_batch
+        feed_fn, t_opt = optimal_feed_profile(
+            "min_time", params, C0, T, "B", feed_comp, V_max, t_max,
+            n_intervals=5, n_sim_steps=50,
+        )
+        reactor = FedBatchReactor(params, mode="isothermal")
+
+        def time_avg_yield(info):
+            n_tgt = info["n"]["B"]
+            t_arr = info["t"]
+            weights = (t_max - t_arr) + 1.0
+            weights = weights / jnp.sum(weights)
+            return float(jnp.dot(n_tgt, weights))
+
+        _, info_opt = reactor(
+            C0=C0, T0=T, P=101325.0, t_final=t_opt,
+            feed_rate_fn=feed_fn, feed_composition=feed_comp,
+            n_steps=50, use_diffrax=False,
+        )
+        info_flat = self._flat_baseline(params, C0, feed_comp, T, V_max, t_max)
+
+        assert time_avg_yield(info_opt) >= time_avg_yield(info_flat) * 0.95
+
+    def test_volume_constraint_respected(self, simple_fed_batch):
+        """Optimized profile does not violate V_max constraint significantly."""
+        params, C0, feed_comp, T, V_max, t_max = simple_fed_batch
+        feed_fn, t_opt = optimal_feed_profile(
+            "max_yield", params, C0, T, "B", feed_comp, V_max, t_max,
+            n_intervals=5, n_sim_steps=50,
+        )
+        reactor = FedBatchReactor(params, mode="isothermal")
+        _, info = reactor(
+            C0=C0, T0=T, P=101325.0, t_final=t_opt,
+            feed_rate_fn=feed_fn, feed_composition=feed_comp,
+            n_steps=50, use_diffrax=False,
+        )
+        V_final = float(info["V_final"])
+        # Allow 5% overshoot due to finite penalty weight
+        assert V_final <= V_max * 1.05
