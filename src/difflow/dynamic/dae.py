@@ -72,6 +72,7 @@ import optimistix as optx
 
 from difflow.streams import Stream, get_flows, make_stream
 from difflow.dynamic.state import StateSpec, StateVar, StateVector
+from difflow.thermo import IdealThermo
 
 
 # Type aliases
@@ -854,6 +855,8 @@ class DynamicFlashDrum(DAEUnitBase):
         self,
         volume: float,
         species_order: list[str],
+        thermo: IdealThermo | None = None,
+        P: float = 101325.0,
         K_func: Callable[[Array], Array] | None = None,
         name: str | None = None,
     ):
@@ -862,15 +865,83 @@ class DynamicFlashDrum(DAEUnitBase):
         Args:
             volume: Drum volume (m³)
             species_order: List of species names
-            K_func: Function T -> K-values (default: constant K=1)
+            thermo: Thermodynamic property calculator.  When provided, the
+                energy balance is computed from actual inlet/outlet enthalpy
+                flows and K-values are evaluated at the current drum
+                temperature.  When None, dH/dt = 0 (isothermal) and K=2.
+            P: Operating pressure (Pa).  Used for K-value calculation when
+                thermo is provided.
+            K_func: Deprecated — use thermo instead.  Function T -> K-values
+                array used when thermo is None (default: constant K=2).
             name: Unit name
         """
         params = {
             "V": jnp.asarray(volume),
             "species_order": species_order,
             "K_func": K_func,
+            "P": jnp.asarray(P),
         }
+        self.thermo = thermo
         super().__init__(params, name)
+
+    def _drum_temperature(
+        self,
+        H_total: Array,
+        x_comp: Array,
+        n_total: Array,
+        T_guess: Array,
+    ) -> Array:
+        """Solve for drum temperature from total enthalpy and composition.
+
+        Inverts h_mix(T) = H_total / n_total where h_mix is the mole-fraction-
+        weighted liquid-phase enthalpy.  Uses a Newton solve via optimistix.
+
+        Args:
+            H_total: Total enthalpy in drum (J)
+            x_comp: Mole fractions array (nc,)
+            n_total: Total moles in drum (mol)
+            T_guess: Initial temperature guess (K)
+
+        Returns:
+            Drum temperature (K)
+        """
+        species = self.params["species_order"]
+        h_target = H_total / jnp.maximum(n_total, 1e-10)
+
+        def residual(T, args):
+            h_mix = sum(
+                x_comp[i] * self.thermo.H_pure(s, T, "liquid")
+                for i, s in enumerate(species)
+            )
+            return h_mix - h_target
+
+        solver = optx.Newton(rtol=1e-6, atol=1e-6)
+        sol = optx.root_find(
+            residual, solver, T_guess, args=None, max_steps=50, throw=False
+        )
+        return sol.value
+
+    def _k_values(self, x_comp: Array, T: Array) -> Array:
+        """Return K-values at current drum conditions.
+
+        Uses thermo.K_values_array when a thermo object is available,
+        otherwise falls back to K_func(T) or constant K=2.
+
+        Args:
+            x_comp: Liquid mole fractions (unused, kept for API symmetry)
+            T: Drum temperature (K)
+
+        Returns:
+            K-values array (nc,)
+        """
+        p = self.params
+        species = p["species_order"]
+        if self.thermo is not None:
+            return self.thermo.K_values_array(T, p["P"])
+        elif p["K_func"] is not None:
+            return p["K_func"](T)
+        else:
+            return jnp.ones(len(species)) * 2.0
 
     def _build_state_spec(self) -> StateSpec:
         """Differential: moles + enthalpy."""
@@ -934,8 +1005,32 @@ class DynamicFlashDrum(DAEUnitBase):
         # Material balance: dn/dt = F_in - F_out
         dn_dt = F_in - F_out
 
-        # Energy balance (simplified)
-        dH_dt = jnp.array([0.0])  # Placeholder
+        # Energy balance: dH/dt = H_dot_in - H_dot_out
+        # H_dot = sum_i F_i * h_i(T)  (enthalpy flow rate, J/s)
+        if self.thermo is not None:
+            species = p["species_order"]
+            T_in = inlet["T"]
+
+            # Inlet enthalpy flow rate (liquid-phase)
+            H_dot_in = sum(
+                float_flow * self.thermo.H_pure(s, T_in, "liquid")
+                for float_flow, s in zip(F_in, species)
+            )
+
+            # Drum temperature: solve h_mix(T) = H_state / n_total
+            H_state = x["H"]
+            T_drum = self._drum_temperature(H_state, x_comp, n_total, T_in)
+
+            # Outlet enthalpy flow rate at drum conditions (liquid approximation)
+            H_dot_out = sum(
+                F_out[i] * self.thermo.H_pure(s, T_drum, "liquid")
+                for i, s in enumerate(species)
+            )
+
+            dH_dt = jnp.array([H_dot_in - H_dot_out])
+        else:
+            # No thermo available: isothermal assumption (dH/dt = 0)
+            dH_dt = jnp.array([0.0])
 
         return jnp.concatenate([dn_dt, dH_dt])
 
@@ -957,12 +1052,17 @@ class DynamicFlashDrum(DAEUnitBase):
 
         beta = z["beta"]
 
-        # K-values (simplified: constant or from function)
-        if p["K_func"] is not None:
-            # Would need temperature...
-            K = p["K_func"](jnp.array(300.0))
+        # K-values at current drum temperature.
+        # Derive drum T from the enthalpy state so K-values respond to
+        # the energy balance rather than being stuck at a hardcoded 300 K.
+        inlet = inputs.get("inlet") or list(inputs.values())[0]
+        T_guess = inlet["T"]
+        if self.thermo is not None:
+            H_state = x["H"]
+            T_drum = self._drum_temperature(H_state, z_comp, n_total, T_guess)
         else:
-            K = jnp.ones(len(species)) * 2.0  # Default: all K=2
+            T_drum = T_guess
+        K = self._k_values(z_comp, T_drum)
 
         # Rachford-Rice: sum_i[ z_i(K_i - 1) / (1 + beta(K_i - 1)) ] = 0
         num = z_comp * (K - 1.0)
@@ -989,11 +1089,18 @@ class DynamicFlashDrum(DAEUnitBase):
 
         beta = z["beta"]
 
-        # K-values
-        if p["K_func"] is not None:
-            K = p["K_func"](jnp.array(300.0))
+        # K-values at current drum temperature
+        inlet = inputs.get("inlet") or list(inputs.values())[0]
+        T_guess = inlet["T"]
+        if self.thermo is not None:
+            H_state = x["H"]
+            n = jnp.array([x[f"n_{s}"] for s in species])
+            n_total = jnp.sum(n) + 1e-10
+            z_comp = n / n_total
+            T_drum = self._drum_temperature(H_state, z_comp, n_total, T_guess)
         else:
-            K = jnp.ones(len(species)) * 2.0
+            T_drum = T_guess
+        K = self._k_values(z_comp, T_drum)
 
         # Liquid and vapor compositions
         x_L = z_comp / (1.0 + beta * (K - 1.0))
@@ -1040,7 +1147,17 @@ class DynamicFlashDrum(DAEUnitBase):
         tau = 60.0
         n0 = jnp.array([inlet_flows.get(s, 0.0) * tau for s in species])
 
-        # Initial enthalpy
-        H0 = jnp.array([0.0])
+        # Initial enthalpy: compute from inlet conditions if thermo available
+        if self.thermo is not None:
+            T_in = inlet["T"]
+            n_total = jnp.sum(n0) + 1e-10
+            x_comp0 = n0 / n_total
+            H0_val = n_total * sum(
+                x_comp0[i] * self.thermo.H_pure(s, T_in, "liquid")
+                for i, s in enumerate(species)
+            )
+            H0 = jnp.array([H0_val])
+        else:
+            H0 = jnp.array([0.0])
 
         return jnp.concatenate([n0, H0])
