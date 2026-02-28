@@ -1055,6 +1055,7 @@ def pfr_conversion_analytical(
     k: Array,
     tau: Array,
     order: int = 1,
+    C_A0: Array = 1.0,
 ) -> Array:
     """Analytical PFR conversion for simple kinetics (no pressure drop).
 
@@ -1068,6 +1069,7 @@ def pfr_conversion_analytical(
         k: Rate constant (1/s for first-order, m^3/mol/s for second-order)
         tau: Residence time V/Q (s)
         order: Reaction order (1 or 2)
+        C_A0: Initial concentration of A (mol/m^3), required for second-order
 
     Returns:
         Conversion X
@@ -1075,8 +1077,6 @@ def pfr_conversion_analytical(
     if order == 1:
         return 1.0 - jnp.exp(-k * tau)
     elif order == 2:
-        # For second order, need initial concentration
-        # This is a simplified version assuming k*tau*C0 >> 1
-        raise NotImplementedError("Second-order analytical solution not implemented")
+        return k * tau * C_A0 / (1.0 + k * tau * C_A0)
     else:
         raise ValueError(f"Unsupported reaction order: {order}")
