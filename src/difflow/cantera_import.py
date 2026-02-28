@@ -236,6 +236,52 @@ def nasa9_to_cp_coeffs(
     return (a, b, c, d)
 
 
+def nasa9_to_enthalpy_coeffs(
+    data: list[list[float]],
+    T_ref: float = 298.15,
+) -> float:
+    """Extract heat of formation from NASA9 coefficients.
+
+    NASA9 enthalpy integral:
+        H(T)/RT = -a1/(2T^2) + a2*ln(T)/T + a3 + a4*T/2 + a5*T^2/3
+                  + a6*T^3/4 + a7*T^4/5 + a8/T
+
+    where a8 (coeffs[7]) is the integration constant encoding Hf.
+    Evaluating at T=298.15 K gives the heat of formation.
+
+    Args:
+        data: List of [T_low, T_high, a1, a2, ..., a9] for each range
+        T_ref: Reference temperature (K), default 298.15 K
+
+    Returns:
+        Heat of formation at T_ref (J/mol)
+    """
+    import math
+
+    # Find the temperature range containing T_ref (use lowest range as fallback)
+    for region in data:
+        T_low, T_high = region[0], region[1]
+        if T_low <= T_ref <= T_high:
+            coeffs = region[2:]
+            break
+    else:
+        coeffs = data[0][2:]
+
+    T = T_ref
+    H_RT = (
+        -coeffs[0] / (2 * T**2)
+        + coeffs[1] * math.log(T) / T
+        + coeffs[2]
+        + coeffs[3] * T / 2
+        + coeffs[4] * T**2 / 3
+        + coeffs[5] * T**3 / 4
+        + coeffs[6] * T**4 / 5
+        + coeffs[7] / T
+    )
+
+    return H_RT * R * T
+
+
 # =============================================================================
 # Species Data Import
 # =============================================================================
@@ -291,7 +337,7 @@ def _parse_species_thermo(species_entry: dict) -> dict:
     elif model.upper() == 'NASA9':
         data = thermo.get('data', [])
         result['Cp_coeffs'] = nasa9_to_cp_coeffs(data)
-        result['Hf'] = 0.0  # Would need more complex extraction
+        result['Hf'] = nasa9_to_enthalpy_coeffs(data)
 
     else:
         warnings.warn(f"Unsupported thermo model '{model}' for {result['name']}")
