@@ -229,22 +229,60 @@ class MembraneSeparator:
         # Calculate mole fractions
         x_feed = {sp: flow / F_total for sp, flow in feed_flows.items()}
 
-        # Calculate fluxes for each species
+        # Get CO2/N2 selectivity for the perfect-mixing permeate composition model.
+        # For CO2, use the Baker (2004) perfect-mixing formula:
+        #   y_p,CO2 = alpha * y_f,CO2 / (1 + (alpha - 1) * y_f,CO2)
+        # For all other species the permeate mole fractions are determined by
+        # flux ratios: J_i / sum(J_j), where
+        #   J_i = Q_i * (p_i,feed - p_i,permeate)
+        # We solve this via the two-step approach:
+        #   1. Compute the CO2 permeate mole fraction analytically from
+        #      the perfect-mixing selectivity equation.
+        #   2. For every other species, compute its flux using
+        #      J_i = Q_i * (x_i*P_feed - y_i,perm*P_permeate) where
+        #      y_i,perm is estimated from flux ratios, starting with the
+        #      feed-pressure-only driving force as a first estimate.
+
+        mem = self._membrane_data
+        alpha = mem.selectivity.get("CO2_N2", 1.0)
+        alpha = jnp.asarray(alpha)
+
+        # Permeate CO2 mole fraction from the perfect-mixing equation
+        y_CO2_feed = x_feed.get("CO2", jnp.array(0.0))
+        y_CO2_perm = alpha * y_CO2_feed / (1.0 + (alpha - 1.0) * y_CO2_feed)
+
+        # Build permeate mole fractions for all species.
+        # For CO2 use the analytic result; for others scale the remaining
+        # permeate fraction by their feed mole fraction (first-order estimate).
+        y_CO2_non = 1.0 - y_CO2_perm  # permeate fraction available for non-CO2
+        y_feed_non_total = 1.0 - y_CO2_feed  # feed fraction that is not CO2
+
+        y_perm = {}
+        for species in x_feed:
+            if species == "CO2":
+                y_perm[species] = y_CO2_perm
+            else:
+                # Distribute remaining permeate mole fraction in proportion
+                # to the non-CO2 feed mole fractions.
+                y_perm[species] = safe_divide(
+                    x_feed[species] * y_CO2_non, y_feed_non_total
+                )
+
+        # Calculate fluxes using the solution-diffusion driving force:
+        #   J_i = Q_i * (p_i,feed - p_i,permeate)
         fluxes = {}
         permeances = {}
         for species, x_i in x_feed.items():
             Q_i = self._permeance(species, T)  # mol/(m²·s·Pa)
             permeances[species] = Q_i
 
-            # Partial pressure driving force
-            # Simplified: assume permeate composition ~ selectivity-weighted
-            # For more accurate: iterate to find permeate composition
             p_i_feed = x_i * P_feed
+            p_i_perm = y_perm[species] * P_permeate
 
-            # First estimate permeate composition (assume perfect mixing)
-            # This is iteratively refined in practice
-            # For simplified model, assume permeate is enriched by selectivity
-            J_i = Q_i * p_i_feed * 0.9  # Approximate (90% of max)
+            # Driving force must be non-negative; clip protects against
+            # numerical noise that could briefly invert sign.
+            driving_force = jnp.maximum(p_i_feed - p_i_perm, 0.0)
+            J_i = Q_i * driving_force
             fluxes[species] = J_i
 
         # Total flux
@@ -263,8 +301,8 @@ class MembraneSeparator:
 
         for species, flow in feed_flows.items():
             # Permeate flow proportional to flux
-            y_perm = safe_divide(fluxes[species], J_total)
-            F_perm = F_permeate_total * y_perm
+            y_perm_i = safe_divide(fluxes[species], J_total)
+            F_perm = F_permeate_total * y_perm_i
             F_perm = jnp.minimum(F_perm, flow * 0.99)  # Can't permeate more than feed
 
             permeate_flows[species] = F_perm
