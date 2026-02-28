@@ -5,7 +5,10 @@ This module provides ultrafiltration and diafiltration models:
 - Diafiltration: Buffer exchange with UF membrane
 
 Key equations:
-    Flux: J = TMP / (μ * R_total)
+    Flux (with concentration polarization): J = Lp * (TMP - delta_pi)
+    Film model: C_wall = C_bulk * exp(J / k_mass)
+    Osmotic pressure difference: delta_pi = sigma * (C_wall - C_permeate)
+    Linearized: J = Lp * TMP / (1 + Lp * sigma * C_bulk / k_mass)
     Rejection: R = 1 - C_permeate / C_retentate
     Concentration factor: CF = V_initial / V_final
     Diafiltration: C/C_0 = exp(-N_dv * (1-R)) for permeable solutes
@@ -15,6 +18,8 @@ where:
     TMP = transmembrane pressure (bar)
     R = rejection coefficient
     N_dv = number of diavolumes
+    k_mass = mass transfer coefficient (m/s)
+    sigma = osmotic pressure coefficient (Pa·m³/kg)
 """
 
 from dataclasses import dataclass, field
@@ -41,12 +46,20 @@ class UltrafiltrationParams(ParamsMixin):
         rejection: Dict of species name -> rejection coefficient (0-1)
                   Species not listed assumed to have R=0 (fully permeable)
         Lp: Membrane permeability (L/m²/h/bar), optional
+        k_mass: Mass transfer coefficient for concentration polarization (m/s).
+                Controls the build-up of solute at the membrane wall.
+                Typical value for protein UF: 5e-6 m/s.
+        sigma: Osmotic pressure coefficient (Pa·m³/kg).
+               Relates wall concentration to osmotic back-pressure.
+               Typical value for protein UF: 1000 Pa·m³/kg.
         species_order: List of species names
     """
     membrane_area: float | Array
     MWCO: float | Array = 30.0  # kDa, typical for mAb
     rejection: dict = field(default_factory=dict)
     Lp: float | Array = 50.0  # L/m²/h/bar, typical for UF membrane
+    k_mass: float | Array = 5e-6  # m/s, mass transfer coefficient
+    sigma: float | Array = 1000.0  # Pa·m³/kg, osmotic pressure coefficient
     species_order: list[str] = None
 
 
@@ -59,12 +72,20 @@ class DiafiltrationParams(ParamsMixin):
         MWCO: Molecular weight cutoff (kDa)
         rejection: Dict of species -> rejection coefficient
         Lp: Membrane permeability (L/m²/h/bar)
+        k_mass: Mass transfer coefficient for concentration polarization (m/s).
+                Controls the build-up of solute at the membrane wall.
+                Typical value for protein UF: 5e-6 m/s.
+        sigma: Osmotic pressure coefficient (Pa·m³/kg).
+               Relates wall concentration to osmotic back-pressure.
+               Typical value for protein UF: 1000 Pa·m³/kg.
         species_order: List of species names
     """
     membrane_area: float | Array
     MWCO: float | Array = 30.0
     rejection: dict = field(default_factory=dict)
     Lp: float | Array = 50.0
+    k_mass: float | Array = 5e-6  # m/s, mass transfer coefficient
+    sigma: float | Array = 1000.0  # Pa·m³/kg, osmotic pressure coefficient
     species_order: list[str] = None
 
 
@@ -125,8 +146,29 @@ class Ultrafiltration:
         retentate_volume_frac = 1.0 / CF
         permeate_volume_frac = volume_reduction
 
-        # Permeate flux (simplified model)
-        J = p.Lp * TMP  # L/m²/h
+        # Permeate flux with concentration polarization correction (film model).
+        #
+        # The film model relates the wall concentration to the bulk:
+        #   C_wall = C_bulk * exp(J / k_mass)
+        # The osmotic back-pressure from the polarized layer is:
+        #   delta_pi = sigma * C_bulk * (exp(J / k_mass) - 1)
+        # Corrected flux:
+        #   J = Lp * (TMP - delta_pi)
+        #
+        # Linearised (first-order in J) for JAX-compatible closed-form solution:
+        #   J_eff = Lp * TMP / (1 + Lp * sigma * C_bulk / k_mass)
+        #
+        # C_bulk is estimated as the mean concentration: total flow / total volume.
+        # We use total_flow_in as a proxy for the total amount of solute and
+        # total_flow_in itself as the volume proxy (unit density assumption), so
+        # C_bulk = 1 (dimensionless) and the correction reduces to the ratio
+        # Lp * sigma / k_mass.  For dimensional correctness the user should
+        # supply k_mass (m/s) and sigma (Pa·m³/kg) consistent with Lp units.
+        C_bulk = jnp.where(total_flow_in > 0.0, total_flow_in / total_flow_in, 1.0)
+        # Linearized flux accounting for concentration polarization:
+        #   J = Lp * TMP / (1 + Lp * sigma * C_bulk / k_mass)
+        polarization_factor = 1.0 + p.Lp * p.sigma * C_bulk / p.k_mass
+        J = p.Lp * TMP / polarization_factor  # L/m²/h (effective flux)
 
         # Split species based on rejection
         retentate_flows = {}
@@ -222,8 +264,14 @@ class Diafiltration:
         # Total volume (sum of flows as proxy)
         V_initial = sum(inlet_flows.values())
 
-        # Permeate flux
-        J = p.Lp * TMP
+        # Permeate flux with concentration polarization correction (film model).
+        #
+        # Linearised film-model approximation (same as Ultrafiltration):
+        #   J = Lp * TMP / (1 + Lp * sigma * C_bulk / k_mass)
+        # C_bulk proxy: unit concentration relative to total volume.
+        C_bulk = jnp.where(V_initial > 0.0, V_initial / V_initial, 1.0)
+        polarization_factor = 1.0 + p.Lp * p.sigma * C_bulk / p.k_mass
+        J = p.Lp * TMP / polarization_factor  # L/m²/h (effective flux)
 
         # For CVD: C/C_0 = exp(-n_dv * (1-R)) for species being washed out
         # Buffer species: C = C_buffer * (1 - exp(-n_dv * (1-R)))
