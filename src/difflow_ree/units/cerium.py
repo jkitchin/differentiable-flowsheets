@@ -162,6 +162,23 @@ class CeriumOxidizer:
         ce_fraction_in = safe_divide(float(F_Ce_in), total_ree_in)
         ce_fraction_out = safe_divide(float(F_Ce_remaining), total_ree_out)
 
+        # Calculate oxidant consumption based on stoichiometry
+        # 4Ce3+ + O2 + 4OH- -> 4CeO2 + 2H2O (for air/O2)
+        # 2Ce3+ + H2O2 + 2OH- -> 2CeO2 + 2H2O (for H2O2)
+        # 2Ce3+ + NaOCl + 2OH- -> 2CeO2 + NaCl + H2O (for NaOCl)
+        # Ce3+ -> Ce4+ + e- (electrolytic: 1 Faraday per mol Ce)
+        oxidant_stoich = {
+            "air": 0.25,        # 0.25 mol O2 per mol Ce (O2 is 4-electron oxidant)
+            "H2O2": 0.5,        # 0.5 mol H2O2 per mol Ce (2-electron oxidant)
+            "NaOCl": 0.5,       # 0.5 mol NaOCl per mol Ce
+            "electrolytic": 1.0, # 1 Faraday per mol Ce
+        }
+        stoich_ratio = oxidant_stoich.get(p.oxidant, 0.5)
+        oxidant_consumed = F_Ce_oxidized * stoich_ratio * p.oxidant_excess
+
+        # Electrons transferred (Ce3+ -> Ce4+ is 1-electron oxidation)
+        electrons_transferred = F_Ce_oxidized  # mol e-/s
+
         info = {
             "oxidant": p.oxidant,
             "pH": float(pH),
@@ -172,6 +189,10 @@ class CeriumOxidizer:
             "ce_fraction_out": ce_fraction_out,
             "ceo2_mass_kg_s": float(F_Ce_oxidized) * 172.12 / 1000,  # CeO2 MW
             "other_ree_recovery": 1.0,  # Other REE unaffected
+            "oxidant_consumed_mol_s": float(oxidant_consumed),
+            "oxidant_stoich_ratio": stoich_ratio,
+            "electrons_transferred_mol_s": float(electrons_transferred),
+            "oxidant_excess": p.oxidant_excess,
         }
 
         return filtrate, solid_flows, info

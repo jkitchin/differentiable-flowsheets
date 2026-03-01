@@ -156,7 +156,14 @@ class REEExtractor:
         solvent_flows = get_flows(solvent)
 
         # Get aqueous and organic carrier flows
-        F_aq = feed_flows.get("H2O", 1.0)
+        # Use total aqueous flow (all species not in organic phase)
+        # For concentrated solutions, using only H2O underestimates F_aq
+        organic_species = {p.extractant, p.diluent}
+        F_aq = sum(
+            jnp.asarray(v) for k, v in feed_flows.items()
+            if k not in organic_species
+        )
+        F_aq = jnp.maximum(F_aq, 1e-10)  # Prevent division by zero
         F_extractant = solvent_flows.get(p.extractant, 0.0)
         F_diluent = solvent_flows.get(p.diluent, 1.0)
         F_org = F_extractant + F_diluent
@@ -191,6 +198,12 @@ class REEExtractor:
             # Extraction factor E = D * (F_org / F_aq)
             E = D * F_org / F_aq
 
+            # Adjust for initial organic loading (loaded solvent reduces capacity)
+            if self._isotherm is not None:
+                initial_loading = F_solvent / jnp.maximum(F_org, 1e-10)
+                capacity = self._isotherm.max_ree_conc
+                E = E * jnp.maximum(1.0 - initial_loading / capacity, 0.0)
+
             # Kremser equation for counter-current extraction
             E_Np1 = jnp.power(E, n_stages + 1)
 
@@ -212,6 +225,30 @@ class REEExtractor:
                 "E": E,
                 "recovery": 1.0 - frac_remaining,
             }
+
+        # Enforce total extractant loading capacity (Bug #112)
+        # The Kremser equation can predict extraction beyond physical capacity
+        # when multiple REE are extracted simultaneously
+        if self._isotherm is not None:
+            total_newly_extracted = sum(
+                extract_flows[elem] - jnp.asarray(solvent_flows.get(elem, 0.0))
+                for elem in p.elements
+            )
+            max_capacity = self._isotherm.max_ree_conc * F_org
+            scale = jnp.where(
+                total_newly_extracted > max_capacity,
+                max_capacity / jnp.maximum(total_newly_extracted, 1e-10),
+                1.0,
+            )
+            for elem in p.elements:
+                F_solvent_elem = jnp.asarray(solvent_flows.get(elem, 0.0))
+                newly_extracted = extract_flows[elem] - F_solvent_elem
+                extract_flows[elem] = F_solvent_elem + newly_extracted * scale
+                raffinate_flows[elem] = (
+                    jnp.asarray(feed_flows.get(elem, 0.0))
+                    + F_solvent_elem
+                    - extract_flows[elem]
+                )
 
         # Create output streams
         P = feed["P"]
@@ -320,8 +357,9 @@ class REEMixerSettler:
 
         D_values = self._distribution.get_D_all(pH, T)
 
-        aq_out_flows = {"H2O": F_aq}
-        org_out_flows = {p.extractant: F_extractant, p.diluent: F_diluent}
+        # Start with full copies to preserve non-extracted species (Bug #53)
+        aq_out_flows = dict(aq_flows)
+        org_out_flows = dict(org_flows)
 
         for elem in p.elements:
             D = D_values[elem]

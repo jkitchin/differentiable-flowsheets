@@ -252,6 +252,13 @@ class ProteinAChromatography:
         # Elution recovery
         target_eluted = target_bound * p.yield_factor
 
+        # Calculate load fraction for mass balance
+        if feed_volume is not None:
+            _load_frac = jnp.asarray(load_volume) / jnp.asarray(feed_volume)
+        else:
+            _load_frac = jnp.asarray(load_volume) / total_flow
+        _load_frac = jnp.clip(_load_frac, 0.0, 1.0)
+
         # Calculate product stream (elution pool)
         product_flows = {p.target_species: target_eluted}
 
@@ -259,14 +266,13 @@ class ProteinAChromatography:
         waste_flows = {}
         for species, flow in inlet_flows.items():
             if species == p.target_species:
-                # Target: breakthrough + column losses to waste
-                waste_flows[species] = breakthrough_mass + target_bound * (1.0 - p.yield_factor)
+                # Target: unloaded feed + breakthrough + column losses to waste
+                unloaded_target = flow * (1.0 - _load_frac)
+                waste_flows[species] = unloaded_target + breakthrough_mass + target_bound * (1.0 - p.yield_factor)
             else:
-                # Impurity: apply clearance factor
-                if feed_volume is not None:
-                    mass_loaded = flow * load_fraction
-                else:
-                    mass_loaded = flow * load_volume / total_flow
+                # Impurity: apply clearance factor to loaded portion
+                mass_loaded = flow * _load_frac
+                mass_unloaded = flow - mass_loaded
                 clearance = p.impurity_clearance.get(species, 0.0)
                 reduction_factor = 10.0 ** (-clearance)
 
@@ -274,8 +280,8 @@ class ProteinAChromatography:
                 impurity_in_product = mass_loaded * reduction_factor
                 product_flows[species] = impurity_in_product
 
-                # Rest goes to waste
-                waste_flows[species] = mass_loaded * (1.0 - reduction_factor)
+                # Rest goes to waste (unloaded + loaded-but-cleared)
+                waste_flows[species] = mass_unloaded + mass_loaded * (1.0 - reduction_factor)
 
         product = make_stream(product_flows, inlet["T"], inlet["P"])
         waste = make_stream(waste_flows, inlet["T"], inlet["P"])
@@ -355,43 +361,47 @@ class IonExchangeChromatography:
         inlet_flows = get_flows(inlet)
         total_flow = sum(inlet_flows.values())
 
+        # Load fraction (clip to [0,1] for mass balance safety)
+        load_frac = jnp.clip(jnp.asarray(load_volume) / total_flow, 0.0, 1.0)
+
         product_flows = {}
         waste_flows = {}
 
         for species, flow in inlet_flows.items():
-            mass = flow * load_volume / total_flow
+            mass_loaded = flow * load_frac
+            mass_unloaded = flow - mass_loaded
             selectivity = p.selectivity.get(species, 0.5)  # Default moderate binding
             selectivity = jnp.asarray(selectivity)
 
             if p.mode == "bind_elute":
                 # High selectivity = binds = goes to product
                 if species == p.target_species:
-                    product_flows[species] = mass * p.yield_factor
-                    waste_flows[species] = mass * (1.0 - p.yield_factor)
+                    product_flows[species] = mass_loaded * p.yield_factor
+                    waste_flows[species] = mass_unloaded + mass_loaded * (1.0 - p.yield_factor)
                 else:
                     # Impurities: high selectivity = retained = waste
                     # low selectivity = flow through = waste
                     # Intermediate = some in product
-                    to_product = mass * (1.0 - selectivity) * 0.1  # Leakage
+                    to_product = mass_loaded * (1.0 - selectivity) * 0.1  # Leakage
                     product_flows[species] = to_product
-                    waste_flows[species] = mass - to_product
+                    waste_flows[species] = mass_unloaded + mass_loaded - to_product
 
             else:  # flow_through
                 # Target flows through (product), impurities bind (waste)
                 if species == p.target_species:
-                    product_flows[species] = mass * p.yield_factor
-                    waste_flows[species] = mass * (1.0 - p.yield_factor)
+                    product_flows[species] = mass_loaded * p.yield_factor
+                    waste_flows[species] = mass_unloaded + mass_loaded * (1.0 - p.yield_factor)
                 else:
                     # High selectivity = binds = waste
-                    to_waste = mass * selectivity
-                    product_flows[species] = mass - to_waste
-                    waste_flows[species] = to_waste
+                    to_waste = mass_loaded * selectivity
+                    product_flows[species] = mass_loaded - to_waste
+                    waste_flows[species] = mass_unloaded + to_waste
 
         product = make_stream(product_flows, inlet["T"], inlet["P"])
         waste = make_stream(waste_flows, inlet["T"], inlet["P"])
 
         # Calculate metrics
-        target_in = inlet_flows.get(p.target_species, jnp.array(1.0)) * load_volume / total_flow
+        target_in = inlet_flows.get(p.target_species, jnp.array(1.0)) * load_frac
         target_out = product_flows.get(p.target_species, jnp.array(0.0))
         product_total = sum(product_flows.values())
 
@@ -440,45 +450,49 @@ class SizeExclusionChromatography:
         inlet_flows = get_flows(inlet)
         total_flow = sum(inlet_flows.values())
 
+        # Load fraction (clip to [0,1] for mass balance safety)
+        load_frac = jnp.clip(jnp.asarray(load_volume) / total_flow, 0.0, 1.0)
+
         product_flows = {}
         aggregate_flows = {}
         fragment_flows = {}
 
         for species, flow in inlet_flows.items():
-            mass = flow * load_volume / total_flow
+            mass_loaded = flow * load_frac
+            mass_unloaded = flow - mass_loaded
 
             if species == p.target_species:
-                # Main product - some loss to side fractions
-                product_flows[species] = mass * p.yield_factor
-                aggregate_flows[species] = mass * (1.0 - p.yield_factor) * 0.3
-                fragment_flows[species] = mass * (1.0 - p.yield_factor) * 0.7
+                # Main product - some loss to side fractions; unloaded goes to product
+                product_flows[species] = mass_unloaded + mass_loaded * p.yield_factor
+                aggregate_flows[species] = mass_loaded * (1.0 - p.yield_factor) * 0.3
+                fragment_flows[species] = mass_loaded * (1.0 - p.yield_factor) * 0.7
 
             elif species == p.aggregate_species:
-                # Aggregates - mostly to aggregate fraction
-                aggregate_flows[species] = mass * 0.95
-                product_flows[species] = mass * 0.05  # Some overlap
+                # Aggregates - mostly to aggregate fraction; unloaded to aggregate
+                aggregate_flows[species] = mass_unloaded + mass_loaded * 0.95
+                product_flows[species] = mass_loaded * 0.05  # Some overlap
 
             elif species == p.fragment_species:
-                # Fragments - mostly to fragment fraction
-                fragment_flows[species] = mass * 0.95
-                product_flows[species] = mass * 0.05
+                # Fragments - mostly to fragment fraction; unloaded to fragment
+                fragment_flows[species] = mass_unloaded + mass_loaded * 0.95
+                product_flows[species] = mass_loaded * 0.05
 
             else:
-                # Other species - distribute based on assumed size
-                product_flows[species] = mass * 0.1
-                aggregate_flows[species] = mass * 0.1
-                fragment_flows[species] = mass * 0.8  # Small molecules
+                # Other species - distribute based on assumed size; unloaded to product
+                product_flows[species] = mass_unloaded + mass_loaded * 0.1
+                aggregate_flows[species] = mass_loaded * 0.1
+                fragment_flows[species] = mass_loaded * 0.8  # Small molecules
 
         product = make_stream(product_flows, inlet["T"], inlet["P"])
         aggregates = make_stream(aggregate_flows, inlet["T"], inlet["P"])
         fragments = make_stream(fragment_flows, inlet["T"], inlet["P"])
 
         # Metrics
-        target_in = inlet_flows.get(p.target_species, jnp.array(1.0)) * load_volume / total_flow
+        target_in = inlet_flows.get(p.target_species, jnp.array(1.0)) * load_frac
         target_out = product_flows.get(p.target_species, jnp.array(0.0))
         product_total = sum(product_flows.values())
 
-        aggregate_in = inlet_flows.get(p.aggregate_species, jnp.array(0.0)) * load_volume / total_flow
+        aggregate_in = inlet_flows.get(p.aggregate_species, jnp.array(0.0)) * load_frac
         aggregate_removed = 1.0 - safe_divide(product_flows.get(p.aggregate_species, jnp.array(0.0)), aggregate_in)
 
         info = {

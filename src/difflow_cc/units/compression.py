@@ -573,8 +573,8 @@ class CompressionTrain:
         m_dot_co2 = F * MW_CO2 / 1000  # kg/s
 
         # Specific power (kWh/tonne CO2)
-        specific_power = safe_divide(total_power, m_dot_co2) / 1000 * 3600 / 1000
-        # Simplify: W / (kg/s) = J/kg, * 3600/1e6 = kWh/tonne
+        # W / (kg/s) = J/kg; J/kg * (1 kWh / 3.6e6 J) * (1000 kg/tonne) = J/kg / 3600
+        specific_power = safe_divide(total_power, m_dot_co2) / 3600  # J/kg → kWh/tonne
 
         info = {
             "n_stages": n_stages,
@@ -625,13 +625,14 @@ def compression_power_estimate(
     ratio = P_out / P_in
     n_stages = jnp.ceil(jnp.log(ratio) / jnp.log(3.0))
 
-    # Polytropic work (simplified)
+    # Multi-stage compression with intercooling back to T_in
     gamma = 1.3
     k = (gamma - 1) / gamma
-    W_poly = R * T_in / k * (jnp.power(ratio, k) - 1)
 
-    # Account for intercooling benefit (~20% reduction)
-    W_actual = W_poly * 0.8 * n_stages / jnp.log(ratio) * jnp.log(3.0)
+    # Per-stage work with intercooling (equal pressure ratios)
+    pr_per_stage = jnp.power(ratio, 1.0 / n_stages)
+    W_per_stage = R * T_in / k * (jnp.power(pr_per_stage, k) - 1)
+    W_actual = n_stages * W_per_stage
 
     # Power with efficiency
     P_elec = F_CO2 * W_actual / eta

@@ -268,7 +268,10 @@ class PSAUnit(_AdsorptionBase):
 
         # Partial pressure of CO2
         P_CO2_ads = y_CO2 * P_ads
-        P_CO2_des = y_CO2 * P_des * 0.5  # Lower at blowdown (CO2 depleted)
+        # During desorption, CO2 is enriched relative to feed
+        selectivity = self._adsorbent_data.CO2_selectivity
+        y_CO2_enriched = jnp.minimum(y_CO2 * selectivity / (1.0 + y_CO2 * (selectivity - 1.0)), 0.95)
+        P_CO2_des = y_CO2_enriched * P_des * 0.5
 
         # Working capacity (isothermal PSA)
         working_cap = self._working_capacity(P_CO2_ads, P_CO2_des, T, T)
@@ -300,12 +303,11 @@ class PSAUnit(_AdsorptionBase):
         # Compression work for repressurization
         # W = n * R * T * ln(P_high/P_low) / efficiency
         ratio = P_ads / P_des
-        W_compression = F_total * R * T * jnp.log(ratio) / 0.7  # W (assume 70% eff)
+        W_compression = F_CO2_captured * R * T * jnp.log(ratio) / 0.7  # W (assume 70% eff)
 
         # Per tonne CO2
         m_CO2_per_s = F_CO2_captured * 44 / 1e6  # tonnes/s
-        energy_per_tonne = safe_divide(W_compression, m_CO2_per_s) / 1e6  # MWh/tonne
-        energy_GJ_per_tonne = energy_per_tonne * 3.6  # GJ/tonne
+        energy_GJ_per_tonne = safe_divide(W_compression, m_CO2_per_s) / 1e9  # GJ/tonne
 
         # Productivity
         productivity = self._productivity(working_cap, bed_mass, t_cycle)
@@ -323,8 +325,11 @@ class PSAUnit(_AdsorptionBase):
         for species, flow in feed_flows.items():
             if species == "CO2":
                 offgas_flows[species] = flow - F_CO2_captured
+            elif species == "N2":
+                N2_in_product = product_flows.get("N2", 0.0)
+                offgas_flows[species] = flow - N2_in_product
             else:
-                offgas_flows[species] = flow * (1 - 0.01)  # Small loss to product
+                offgas_flows[species] = flow * (1 - 0.01)
 
         offgas = make_stream(offgas_flows, T, P_ads)
 
@@ -422,7 +427,7 @@ class VSAUnit(_AdsorptionBase):
         W_vacuum = CO2_per_cycle * p.n_beds / t_cycle * R * T * jnp.log(ratio) / 0.6
 
         m_CO2_per_s = F_CO2_captured * 44 / 1e6
-        energy_GJ_per_tonne = safe_divide(W_vacuum, m_CO2_per_s) / 1e9 * 3.6
+        energy_GJ_per_tonne = safe_divide(W_vacuum, m_CO2_per_s) / 1e9
 
         productivity = self._productivity(working_cap, bed_mass, t_cycle)
 
@@ -436,6 +441,9 @@ class VSAUnit(_AdsorptionBase):
         for species, flow in feed_flows.items():
             if species == "CO2":
                 offgas_flows[species] = flow - F_CO2_captured
+            elif species == "N2":
+                N2_in_product = product_flows.get("N2", 0.0)
+                offgas_flows[species] = flow - N2_in_product
             else:
                 offgas_flows[species] = flow * (1 - 0.01)
 
@@ -552,6 +560,9 @@ class TSAUnit(_AdsorptionBase):
         for species, flow in feed_flows.items():
             if species == "CO2":
                 offgas_flows[species] = flow - F_CO2_captured
+            elif species == "N2":
+                N2_in_product = product_flows.get("N2", 0.0)
+                offgas_flows[species] = flow - N2_in_product
             else:
                 offgas_flows[species] = flow * (1 - 0.01)
 

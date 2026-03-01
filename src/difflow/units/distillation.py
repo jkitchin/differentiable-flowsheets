@@ -485,6 +485,42 @@ class ShortcutColumn:
         distillate = make_stream(distillate_flows, T_top, P)
         bottoms = make_stream(bottoms_flows, T_bot, P)
 
+        # Compute condenser and reboiler duties including latent heat
+        # Condenser: condense all vapor from top stage
+        V_top = (R + 1) * D_total  # Vapor flow at top stage
+
+        # Compute mixture enthalpies at top and bottom using full model
+        # (sensible + latent heat via Hvap)
+        x_D_arr = jnp.array([x_D[s] for s in p.species_order])
+        x_B_arr = jnp.array([x_B[s] for s in p.species_order])
+
+        # Vapor enthalpy at top (includes latent heat)
+        H_vapor_top = jnp.zeros(())
+        h_liquid_top = jnp.zeros(())
+        for i, s in enumerate(p.species_order):
+            H_vapor_top = H_vapor_top + x_D_arr[i] * self.thermo.H_pure(s, T_top, 'vapor')
+            h_liquid_top = h_liquid_top + x_D_arr[i] * self.thermo.H_pure(s, T_top, 'liquid')
+
+        # Feed enthalpy
+        h_F = jnp.zeros(())
+        for i, s in enumerate(p.species_order):
+            z_arr_i = jnp.asarray(z[s])
+            h_F = h_F + z_arr_i * self.thermo.H_pure(s, T_feed, 'liquid')
+
+        # Bottoms liquid enthalpy
+        h_B = jnp.zeros(())
+        for i, s in enumerate(p.species_order):
+            h_B = h_B + x_B_arr[i] * self.thermo.H_pure(s, T_bot, 'liquid')
+
+        # Condenser duty (heat removed, negative)
+        Q_condenser = V_top * (h_liquid_top - H_vapor_top)
+
+        # Reboiler duty from overall energy balance
+        # F*h_F + Q_reb = D*h_D + B*h_B + |Q_cond|
+        # Q_reb = D*h_D + B*h_B - Q_cond - F*h_F  (Q_cond < 0)
+        h_D = h_liquid_top  # total condenser: distillate is liquid at T_top
+        Q_reboiler = D_total * h_D + B_total * h_B - Q_condenser - F_total * h_F
+
         info = {
             "N_min": N_min,
             "R_min": R_min,
@@ -501,6 +537,8 @@ class ShortcutColumn:
             "T_bot": T_bot,
             "close_boiling": close_boiling,
             "near_min_reflux": near_min_reflux,
+            "Q_condenser": Q_condenser,
+            "Q_reboiler": Q_reboiler,
         }
 
         return distillate, bottoms, info
@@ -783,6 +821,95 @@ class DistillationColumn:
 
         _, (h_all, H_all) = lax.scan(stage_enthalpies, None, (x, y, T))
         return h_all, H_all
+
+    def _compute_duties(
+        self,
+        x_profile: Array,
+        y_profile: Array,
+        T_profile: Array,
+        F_total: Array,
+        z: dict[str, Array],
+        T_feed: Array,
+        R: Array,
+        D: Array,
+        B: Array,
+        V_top: Array | None = None,
+        V_bot: Array | None = None,
+    ) -> tuple[Array, Array]:
+        """Compute condenser and reboiler duties including latent heat.
+
+        The dominant energy term in distillation is the latent heat of
+        vaporization/condensation. This method uses the full enthalpy
+        model (sensible + latent heat via Hvap) for accurate duty
+        calculations.
+
+        For total condenser:
+            Q_cond = V_top * (H_vapor_top - h_liquid_top)
+            where H_vapor includes latent heat of vaporization.
+
+        For reboiler (from overall energy balance):
+            Q_reb = D * h_D + B * h_B - F * h_F + Q_cond
+
+        Args:
+            x_profile: (n, nc) liquid mole fractions
+            y_profile: (n, nc) vapor mole fractions
+            T_profile: (n,) stage temperatures
+            F_total: Total feed flow rate (mol/s)
+            z: Feed mole fractions dict
+            T_feed: Feed temperature (K)
+            R: Reflux ratio
+            D: Distillate flow rate (mol/s)
+            B: Bottoms flow rate (mol/s)
+            V_top: Vapor flow leaving top stage (mol/s).
+                   If None, uses (R+1)*D (CMO assumption).
+            V_bot: Vapor flow leaving bottom stage (mol/s).
+                   If None, uses (R+1)*D (CMO assumption).
+
+        Returns:
+            Q_condenser: Condenser duty (J/s, negative = heat removed)
+            Q_reboiler: Reboiler duty (J/s, positive = heat added)
+        """
+        p = self.params
+
+        # Compute stage enthalpies (includes latent heat for vapor)
+        h_all, H_all = self._compute_stage_enthalpies(
+            x_profile, y_profile, T_profile
+        )
+
+        # Top stage enthalpies
+        H_vapor_top = H_all[-1]   # Vapor enthalpy at top (includes Hvap)
+        h_liquid_top = h_all[-1]  # Liquid enthalpy at top
+
+        # Bottom stage enthalpies
+        H_vapor_bot = H_all[0]    # Vapor enthalpy at bottom (includes Hvap)
+        h_liquid_bot = h_all[0]   # Liquid enthalpy at bottom
+
+        # Vapor flows (use provided or CMO estimates)
+        V_top_flow = V_top if V_top is not None else (R + 1) * D
+        V_bot_flow = V_bot if V_bot is not None else (R + 1) * D
+
+        # Condenser duty: condense all vapor from top stage to liquid
+        # Q_cond = V_top * (h_liquid_top - H_vapor_top) < 0 (heat removed)
+        Q_condenser = V_top_flow * (h_liquid_top - H_vapor_top)
+
+        # Feed enthalpy (saturated liquid, q=1)
+        z_arr = jnp.array([z[s] for s in p.species_order])
+        h_F = jnp.zeros(())
+        for i, s in enumerate(p.species_order):
+            h_F = h_F + z_arr[i] * self.thermo.H_pure(s, T_feed, 'liquid')
+
+        # Distillate enthalpy (liquid at top T for total condenser)
+        h_D = h_liquid_top
+
+        # Bottoms enthalpy (liquid at bottom T)
+        h_B = h_liquid_bot
+
+        # Overall energy balance: F*h_F + Q_reb = D*h_D + B*h_B + Q_cond
+        # Q_reb = D*h_D + B*h_B + |Q_cond| - F*h_F
+        #       = D*h_D + B*h_B - Q_cond - F*h_F  (since Q_cond < 0)
+        Q_reboiler = D * h_D + B * h_B - Q_condenser - F_total * h_F
+
+        return Q_condenser, Q_reboiler
 
     def _solve_mesh(
         self,
@@ -1088,6 +1215,9 @@ class DistillationColumn:
         # Get feed temperature for initial guess scaling
         T_feed = feed["T"]
 
+        # Feed mole fractions for duty calculation
+        z = {s: feed_flows[s] / F_total for s in p.species_order}
+
         if use_mesh:
             # Rigorous MESH solver (Wang-Henke bubble-point method)
             x_profile, y_profile, T_profile, L_profile, V_profile = self._solve_mesh(
@@ -1104,6 +1234,13 @@ class DistillationColumn:
             distillate = make_stream(distillate_flows, T_profile[-1], p.P)
             bottoms = make_stream(bottoms_flows, T_profile[0], p.P)
 
+            # Compute duties with actual V profile from MESH
+            Q_condenser, Q_reboiler = self._compute_duties(
+                x_profile, y_profile, T_profile,
+                F_total, z, T_feed, R, D, B,
+                V_top=V_profile[-1], V_bot=V_profile[0],
+            )
+
             info = {
                 "T_profile": T_profile,
                 "x_profile": x_profile,
@@ -1112,6 +1249,8 @@ class DistillationColumn:
                 "V_profile": V_profile,
                 "D": D,
                 "B": B,
+                "Q_condenser": Q_condenser,
+                "Q_reboiler": Q_reboiler,
             }
         else:
             # Constant molar overflow (CMO / Lewis-Matheson) solver
@@ -1131,6 +1270,12 @@ class DistillationColumn:
             distillate = make_stream(distillate_flows, T_profile[-1], p.P)
             bottoms = make_stream(bottoms_flows, T_profile[0], p.P)
 
+            # Compute duties with CMO vapor flow estimates
+            Q_condenser, Q_reboiler = self._compute_duties(
+                x_profile, y_profile, T_profile,
+                F_total, z, T_feed, R, D, B,
+            )
+
             info = {
                 "T_profile": T_profile,
                 "x_profile": x_profile,
@@ -1139,6 +1284,8 @@ class DistillationColumn:
                 "V_rect": (R + 1) * D,
                 "D": D,
                 "B": B,
+                "Q_condenser": Q_condenser,
+                "Q_reboiler": Q_reboiler,
             }
 
         return distillate, bottoms, info

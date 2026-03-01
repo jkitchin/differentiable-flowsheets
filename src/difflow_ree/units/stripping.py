@@ -130,22 +130,20 @@ class REEStripper:
             F_org_in = jnp.asarray(org_flows.get(elem, 0.0))
             F_strip_in = jnp.asarray(strip_flows.get(elem, 0.0))
 
-            # At low pH, D << 1, so REE prefers aqueous
-            # Stripping factor S = F_strip / (D * F_org)
-            # Want S > 1 for effective stripping
-            E = D * F_org / F_strip  # Extraction factor
+            # Stripping factor S = F_strip / (D * F_org): S > 1 favors stripping
+            S = safe_divide(F_strip, D * F_org)  # Stripping factor
 
             # Kremser equation - fraction remaining in organic
-            E_Np1 = jnp.power(E, n_stages + 1)
+            S_Np1 = jnp.power(S, n_stages + 1)
 
             frac_in_org = jnp.where(
-                jnp.abs(E - 1.0) < 1e-6,
-                n_stages / (n_stages + 1),
-                safe_divide(E_Np1 - E, E_Np1 - 1.0)
+                jnp.abs(S - 1.0) < 1e-6,
+                1.0 / (n_stages + 1),
+                safe_divide(S - 1.0, S_Np1 - 1.0)
             )
 
             # At very low pH with many stages, almost complete stripping
-            # E << 1 means frac_in_org → 0
+            # S >> 1 means frac_in_org → 0
             frac_in_org = jnp.clip(frac_in_org, 0.0, 1.0)
 
             F_total = F_org_in + F_strip_in
@@ -157,7 +155,7 @@ class REEStripper:
 
             strip_efficiency[elem] = {
                 "D": D,
-                "stripping_factor": safe_divide(1.0, E),
+                "stripping_factor": S,
                 "recovery": 1 - frac_in_org,
             }
 

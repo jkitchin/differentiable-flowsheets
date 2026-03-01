@@ -185,10 +185,12 @@ class AmineStripper:
         m_water = F_H2O * MW_water / 1000  # kg/s
         m_total = m_amine + m_water
 
-        # With cross-exchanger, only need to heat by approach temperature
-        # In reality, heat hot lean to warm rich
-        T_after_hx = T_reboiler - p.cross_exchanger_approach
-        dT_sensible = T_reboiler - T_after_hx  # Only need to heat this much
+        # Rich solvent enters at absorber temperature, is preheated by cross-exchanger
+        T_rich_in = jnp.asarray(rich_solvent.get("T", 313.15))
+        # Cross-exchanger heats rich solvent to within approach of reboiler temp
+        # But cannot heat above what the lean solvent can provide
+        T_after_hx = jnp.maximum(T_rich_in, T_reboiler - p.cross_exchanger_approach)
+        dT_sensible = T_reboiler - T_after_hx
         Q_sensible = m_total * Cp_solvent * dT_sensible  # W
 
         # 2. Heat of reaction (desorption)
@@ -196,9 +198,9 @@ class AmineStripper:
         Q_reaction = F_CO2_stripped * dH_absorption  # W
 
         # 3. Heat of vaporization (stripping steam)
-        # Approximate: 0.3 mol H2O per mol CO2 in overhead
+        # Typical steam ratio for MEA at 120°C is 1.5-3.0 mol H2O/mol CO2
         dH_vap_water = 40650  # J/mol
-        steam_ratio = 0.3
+        steam_ratio = 2.0  # mol H2O per mol CO2
         F_steam = F_CO2_stripped * steam_ratio
         Q_vaporization = F_steam * dH_vap_water  # W
 

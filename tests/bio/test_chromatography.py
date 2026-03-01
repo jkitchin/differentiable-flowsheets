@@ -124,7 +124,7 @@ class TestProteinAChromatography:
         assert dna_reduction > 500  # At least 500-fold
 
     def test_proa_mass_balance(self, proa_params):
-        """Test mass balance is preserved."""
+        """Test mass balance is preserved: product + waste = total feed."""
         proa = ProteinAChromatography(proa_params)
 
         feed = make_stream(
@@ -138,11 +138,9 @@ class TestProteinAChromatography:
         waste_flows = get_flows(waste)
         feed_flows = get_flows(feed)
 
-        # Total mass loaded (normalized by total flow)
-        total_flow = sum(feed_flows.values())
-
+        # Total mass out must equal total feed (including unloaded portion)
         for species in feed_flows:
-            mass_in = float(feed_flows[species]) * 10.0 / float(total_flow)
+            mass_in = float(feed_flows[species])
             mass_out = float(prod_flows[species]) + float(waste_flows[species])
             assert mass_out == pytest.approx(mass_in, rel=0.01)
 
@@ -296,7 +294,7 @@ class TestSizeExclusionChromatography:
         assert float(info["aggregate_removal"]) > 0.9
 
     def test_sec_mass_balance(self, sec_params):
-        """Test SEC mass balance."""
+        """Test SEC mass balance: all output streams = total feed."""
         sec = SizeExclusionChromatography(sec_params)
 
         feed = make_stream(
@@ -304,13 +302,13 @@ class TestSizeExclusionChromatography:
             T=300.0, P=101325.0
         )
 
-        (product, aggregates, fragments), info = sec(feed, load_volume=10.0)
+        total_flow = sum(get_flows(feed).values())
+        (product, aggregates, fragments), info = sec(feed, load_volume=total_flow)
 
         feed_flows = get_flows(feed)
-        total_flow = sum(feed_flows.values())
 
         for species in feed_flows:
-            mass_in = float(feed_flows[species]) * 10.0 / float(total_flow)
+            mass_in = float(feed_flows[species])
             mass_out = (
                 float(get_flows(product).get(species, 0.0)) +
                 float(get_flows(aggregates).get(species, 0.0)) +

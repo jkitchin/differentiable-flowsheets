@@ -73,7 +73,8 @@ DEFAULT_TEMP_SCALE = 0.05
 
 # Default molar concentration for liquid streams (mol/m³)
 # Used when estimating volumetric flow from molar flow
-DEFAULT_CONCENTRATION = 50.0
+# 55500 mol/m³ ≈ pure water at 25°C; previous value of 50 was ~1000x too low
+DEFAULT_CONCENTRATION = 55500.0
 
 # Default heat capacity for liquids (J/mol/K)
 # Approximate value for organic liquids and water

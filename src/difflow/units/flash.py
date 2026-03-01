@@ -122,15 +122,21 @@ class Flash:
         # Solve Rachford-Rice for vapor fraction
         V_frac = self._solve_flash(z, K, bubble_check, dew_check)
 
-        # Get compositions (inlined from rachford_rice_compositions)
+        # Get compositions from Rachford-Rice solution.
+        # Normalize x first, then derive y from the component mass balance
+        # z_i = x_i * (1 - V) + y_i * V  =>  y_i = (z_i - x_i * (1 - V)) / V
+        # This ensures the overall component balance is satisfied exactly,
+        # unlike independent normalization of x and y which can violate it.
         x = z / (1 + V_frac * (K - 1))
-        y = K * x
-
-        # Normalize compositions to ensure they sum to 1.0.
-        # Numerical errors in the Rachford-Rice solution can cause sum(x) and sum(y)
-        # to deviate slightly from unity (e.g., 0.9999 or 1.0001). This normalization
-        # ensures mass balance closure and prevents downstream numerical issues.
         x = x / jnp.sum(x)
+        # Derive y from mass balance to maintain closure
+        # For edge cases (V_frac near 0 or 1), fall back to K*x
+        y = jnp.where(
+            V_frac > 1e-10,
+            (z - x * (1 - V_frac)) / jnp.maximum(V_frac, 1e-10),
+            K * x,
+        )
+        y = jnp.maximum(y, 0.0)
         y = y / jnp.sum(y)
 
         # Calculate outlet flows

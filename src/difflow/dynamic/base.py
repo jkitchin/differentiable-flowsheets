@@ -381,8 +381,10 @@ class DynamicCSTR(DynamicUnitBase):
         # External heat (for adiabatic: Q_ext = 0)
         Q_ext = 0.0 if p["mode"] == "adiabatic" else p.get("Q_spec", 0.0)
 
-        # dT/dt = (Q_flow + Q_rxn + Q_ext) / (n_total * Cp)
-        dT_dt = safe_divide(Q_flow + Q_rxn + Q_ext, n_total * Cp)
+        # dT/dt = (Q_flow + Q_rxn + Q_ext) / (n_total * Cp) - T * dn_total/dt / n_total
+        # The second term accounts for changing total moles (non-equimolar reactions)
+        dn_total_dt = jnp.sum(dn_dt)
+        dT_dt = safe_divide(Q_flow + Q_rxn + Q_ext, n_total * Cp) - T * safe_divide(dn_total_dt, n_total)
 
         return jnp.concatenate([dn_dt, jnp.array([dT_dt])])
 
@@ -525,7 +527,7 @@ class DynamicTank(DynamicUnitBase):
         F_in_mol = jnp.array([inlet_flows.get(s, 0.0) for s in species])
 
         # Assume molar density for volumetric conversion
-        rho_mol = 50.0  # mol/m³ (rough liquid estimate)
+        rho_mol = 55500.0  # mol/m³ (water at ~25°C)
         Q_in = jnp.sum(F_in_mol) / rho_mol
 
         # Outlet flow
@@ -573,7 +575,7 @@ class DynamicTank(DynamicUnitBase):
         else:
             inlet = inputs.get("inlet") or list(inputs.values())[0]
             inlet_flows = get_flows(inlet)
-            Q_out = sum(inlet_flows.values()) / 50.0  # Assume same as inlet
+            Q_out = sum(inlet_flows.values()) / 55500.0  # Assume liquid molar density
 
         F_out = {s: Q_out * C_out[i] for i, s in enumerate(species)}
 
@@ -603,7 +605,7 @@ class DynamicTank(DynamicUnitBase):
         x_in = {s: inlet_flows.get(s, 0.0) / F_total for s in species}
 
         # Initial moles based on inlet composition
-        rho_mol = 50.0
+        rho_mol = 55500.0  # mol/m³ (water at ~25°C)
         n0 = jnp.array([V0 * rho_mol * x_in[s] for s in species])
 
         state0 = jnp.concatenate([jnp.array([V0]), n0])

@@ -325,9 +325,14 @@ class TestPFRAdiabatic:
     def test_pfr_adiabatic_exothermic(
         self, simple_thermo, first_order_rate_fn, rate_params, simple_stoich, feed_stream
     ):
-        """Test adiabatic PFR with exothermic reaction (T increases)."""
+        """Test adiabatic PFR with exothermic reaction (T increases).
+
+        Uses a small reactor volume (V=0.001) to avoid thermal runaway with
+        the corrected dT/dV energy balance (issue #70 fix removed spurious
+        Q_v division).
+        """
         params = PFRParams(
-            V=1.0,
+            V=0.001,
             rate_fn=first_order_rate_fn,
             stoich=simple_stoich,
             rate_params=rate_params,
@@ -351,9 +356,13 @@ class TestPFRAdiabatic:
     def test_pfr_adiabatic_endothermic(
         self, simple_thermo, first_order_rate_fn, rate_params, simple_stoich, feed_stream
     ):
-        """Test adiabatic PFR with endothermic reaction (T decreases)."""
+        """Test adiabatic PFR with endothermic reaction (T decreases).
+
+        Uses a small reactor volume (V=0.001) to keep temperature changes
+        moderate after issue #70 fix.
+        """
         params = PFRParams(
-            V=1.0,
+            V=0.001,
             rate_fn=first_order_rate_fn,
             stoich=simple_stoich,
             rate_params=rate_params,
@@ -494,9 +503,13 @@ class TestGasPFRAdiabatic:
     def test_gas_pfr_adiabatic_operation(
         self, simple_thermo, first_order_rate_fn, rate_params, simple_stoich
     ):
-        """Test adiabatic gas PFR with pressure drop."""
+        """Test adiabatic gas PFR with pressure drop.
+
+        Uses a small reactor volume (V=0.001) to avoid thermal runaway
+        after issue #70 fix removed spurious Q_v division in dT/dV.
+        """
         params = GasPFRParams(
-            V=1.0,
+            V=0.001,
             rate_fn=first_order_rate_fn,
             stoich=simple_stoich,
             rate_params=rate_params,

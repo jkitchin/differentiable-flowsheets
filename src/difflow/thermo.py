@@ -60,7 +60,7 @@ class SpeciesData(NamedTuple):
     Attributes:
         name: Species identifier
         MW: Molecular weight (g/mol)
-        Cp_coeffs: Heat capacity coefficients [a, b, c, d] for
+        Cp_coeffs: Liquid heat capacity coefficients [a, b, c, d] for
                    Cp = a + b*T + c*T^2 + d*T^3 (J/mol/K)
         Hvap_coeffs: Heat of vaporization coefficients [A, n, Tc] for
                      Hvap = A * (1 - T/Tc)^n (J/mol)
@@ -68,6 +68,9 @@ class SpeciesData(NamedTuple):
                         log10(Psat/Pa) = A - B/(T + C) where T in K
         Hf: Standard heat of formation (J/mol) at 298.15 K
         Tref: Reference temperature for Hf (K), default 298.15
+        Cp_vapor_coeffs: Vapor heat capacity coefficients [a, b, c, d] for
+                         Cp = a + b*T + c*T^2 + d*T^3 (J/mol/K).
+                         If None, falls back to Cp_coeffs (liquid).
     """
     name: str
     MW: float
@@ -76,6 +79,7 @@ class SpeciesData(NamedTuple):
     antoine_coeffs: tuple[float, float, float]  # A, B, C
     Hf: float = 0.0
     Tref: float = 298.15
+    Cp_vapor_coeffs: tuple[float, float, float, float] | None = None
 
 
 class IdealThermo:
@@ -109,17 +113,23 @@ class IdealThermo:
         """Number of species."""
         return len(self._species_order)
 
-    def Cp(self, species: str, T: Array | float) -> Array:
+    def Cp(self, species: str, T: Array | float, phase: str = "liquid") -> Array:
         """Calculate heat capacity of a pure species.
 
         Args:
             species: Species name
             T: Temperature (K)
+            phase: 'liquid' or 'vapor'. If vapor coefficients are not available,
+                   falls back to liquid coefficients.
 
         Returns:
             Heat capacity Cp (J/mol/K)
         """
-        a, b, c, d = self.species[species].Cp_coeffs
+        data = self.species[species]
+        if phase == "vapor" and data.Cp_vapor_coeffs is not None:
+            a, b, c, d = data.Cp_vapor_coeffs
+        else:
+            a, b, c, d = data.Cp_coeffs
         return _compute_cp_poly(jnp.asarray(T), a, b, c, d)
 
     def Cp_mix(
@@ -149,6 +159,11 @@ class IdealThermo:
     ) -> Array:
         """Calculate enthalpy of a pure species relative to reference.
 
+        For liquid: H = integral(Cp_liq, Tref, T)
+        For vapor:  H = integral(Cp_vap, Tref, T) + Hvap(T)
+
+        When Cp_vapor_coeffs is not available, falls back to Cp_coeffs.
+
         Args:
             species: Species name
             T: Temperature (K)
@@ -158,9 +173,13 @@ class IdealThermo:
             Specific enthalpy (J/mol) relative to liquid at Tref
         """
         data = self.species[species]
-        a, b, c, d = data.Cp_coeffs
         T_arr = jnp.asarray(T)
         Tref = jnp.asarray(data.Tref)
+
+        if phase == "vapor" and data.Cp_vapor_coeffs is not None:
+            a, b, c, d = data.Cp_vapor_coeffs
+        else:
+            a, b, c, d = data.Cp_coeffs
 
         # Integral of Cp from Tref to T
         H = _compute_enthalpy_integral(T_arr, Tref, a, b, c, d)

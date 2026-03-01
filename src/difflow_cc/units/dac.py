@@ -254,9 +254,10 @@ class SolidSorbentDAC:
         electrical_total = fan_power_total + vacuum_power
 
         # Specific energy (GJ/tonne CO2)
+        # W/(kg/s) = J/kg; GJ/tonne = J/kg * (1 GJ/1e9 J) * (1000 kg/tonne) = J/kg / 1e6
         CO2_mass_rate = total_capture * MW_CO2 / 1000  # kg/s
-        specific_thermal = safe_divide(Q_thermal_total, CO2_mass_rate * 1e9)  # GJ/tonne
-        specific_electrical = safe_divide(electrical_total, CO2_mass_rate * 1e9)  # GJ/tonne
+        specific_thermal = safe_divide(Q_thermal_total, CO2_mass_rate) / 1e6  # GJ/tonne
+        specific_electrical = safe_divide(electrical_total, CO2_mass_rate) / 1e6  # GJ/tonne
 
         # Create CO2 product stream
         co2_flows = {"CO2": total_capture}
@@ -393,8 +394,9 @@ class LiquidSolventDAC:
         # Specific energy
         CO2_mass_rate = n_CO2_captured * MW_CO2 / 1000  # kg/s
 
-        specific_thermal = safe_divide(Q_thermal_net, CO2_mass_rate * 1e9)  # GJ/tonne
-        specific_electrical = safe_divide(P_electrical_total + asu_power, CO2_mass_rate * 1e9)
+        # GJ/tonne = J/kg / 1e6
+        specific_thermal = safe_divide(Q_thermal_net, CO2_mass_rate) / 1e6  # GJ/tonne
+        specific_electrical = safe_divide(P_electrical_total + asu_power, CO2_mass_rate) / 1e6
 
         # CO2 product (from calciner, high purity)
         T_calciner = jnp.asarray(p.calciner_temperature)

@@ -250,6 +250,10 @@ class MembraneSeparator:
         # Permeate CO2 mole fraction from the perfect-mixing equation
         y_CO2_feed = x_feed.get("CO2", jnp.array(0.0))
         y_CO2_perm = alpha * y_CO2_feed / (1.0 + (alpha - 1.0) * y_CO2_feed)
+        # Pressure ratio limits maximum permeate enrichment
+        pressure_ratio_val = P_feed / P_permeate
+        y_CO2_perm = jnp.minimum(y_CO2_perm, y_CO2_feed * pressure_ratio_val)
+        y_CO2_perm = jnp.clip(y_CO2_perm, 0.0, 0.999)
 
         # Build permeate mole fractions for all species.
         # For CO2 use the analytic result; for others scale the remaining
@@ -295,18 +299,24 @@ class MembraneSeparator:
         stage_cut = safe_divide(F_permeate_total, F_total)
         stage_cut = jnp.clip(stage_cut, 0.0, 0.95)  # Physical limit
 
-        # Permeate composition (from flux ratios)
+        # Permeate composition (from perfect-mixing model)
         permeate_flows = {}
         retentate_flows = {}
 
         for species, flow in feed_flows.items():
-            # Permeate flow proportional to flux
-            y_perm_i = safe_divide(fluxes[species], J_total)
-            F_perm = F_permeate_total * y_perm_i
+            # Use perfect-mixing model compositions for consistency
+            F_perm = F_permeate_total * y_perm[species]
             F_perm = jnp.minimum(F_perm, flow * 0.99)  # Can't permeate more than feed
 
             permeate_flows[species] = F_perm
             retentate_flows[species] = flow - F_perm
+
+        # Recalculate total permeate after per-species capping
+        F_perm_total_actual = sum(permeate_flows.values())
+
+        # Update stage cut to reflect actual permeate flow
+        stage_cut = safe_divide(F_perm_total_actual, F_total)
+        stage_cut = jnp.clip(stage_cut, 0.0, 0.95)
 
         # Calculate performance metrics
         F_CO2_feed = feed_flows.get("CO2", jnp.array(0.0))
@@ -507,8 +517,13 @@ class MultistageMembrane:
         # Final permeate is stage 2 permeate (highest purity)
         final_permeate = perm_2
 
-        # Final retentate is stage 1 retentate
-        final_retentate = ret_1
+        # Combine retentates - ret_2 is the unpermeated gas from stage 2
+        ret_1_flows = get_flows(ret_1)
+        ret_2_flows = get_flows(ret_2)
+        combined_ret_flows = {}
+        for species in set(list(ret_1_flows.keys()) + list(ret_2_flows.keys())):
+            combined_ret_flows[species] = ret_1_flows.get(species, 0.0) + ret_2_flows.get(species, 0.0)
+        final_retentate = make_stream(combined_ret_flows, ret_1["T"], ret_1["P"])
 
         # Metrics
         feed_flows = get_flows(feed)

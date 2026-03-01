@@ -751,6 +751,10 @@ def integrate_dae(
     x_history = jnp.vstack([x0, x_hist])
     z_history = jnp.vstack([z0, z_hist])
 
+    # Compute final algebraic residual for validation
+    final_residual = unit.algebraic_residual(t_end, x_final, z_final, inputs, params)
+    max_residual = jnp.max(jnp.abs(final_residual))
+
     return DAEResult(
         x_final=x_final,
         z_final=z_final,
@@ -760,7 +764,9 @@ def integrate_dae(
         info={
             "method": method,
             "n_steps": n_steps,
-            "dt": float(dt),
+            "dt": dt,
+            "max_algebraic_residual": max_residual,
+            "algebraic_converged": max_residual < newton_tol * 100,
         },
     )
 

@@ -173,9 +173,9 @@ class CSTR:
 
         # Determine volumetric flow
         if volumetric_flow is None:
-            # Approximate as total molar flow / 50 for liquid (rough estimate)
+            # Approximate as total molar flow / 55500 for liquid (water-like density)
             total_molar = sum(inlet_flows.values())
-            volumetric_flow = total_molar / 50.0  # mol/s / (mol/m^3) = m^3/s
+            volumetric_flow = total_molar / 55500.0  # mol/s / (mol/m^3) = m^3/s
 
         volumetric_flow = jnp.asarray(volumetric_flow)
 
@@ -330,8 +330,10 @@ class CSTR:
                 return jnp.asarray(0.0)
 
             # Heat from reactions only
+            # Convention: Q > 0 = heat added to reactor, Q < 0 = heat removed
+            # For exothermic reactions (dH_rxn < 0), Q_rxn < 0, so Q < 0 (heat removed)
             Q_rxn = p.V * jnp.sum(rates * p.dH_rxn)
-            return -Q_rxn  # Convention: Q positive = heat added
+            return Q_rxn
 
         # Full energy balance with enthalpy
         H_in = self.thermo.stream_enthalpy(inlet_flows, inlet["T"], phase="liquid")
@@ -594,7 +596,7 @@ class CSTR:
         volumetric_flow = kwargs.get('volumetric_flow')
         if volumetric_flow is None:
             total_molar = sum(inlet_flows.values())
-            volumetric_flow = total_molar / 50.0
+            volumetric_flow = total_molar / 55500.0
         volumetric_flow = jnp.asarray(volumetric_flow)
 
         # Temperature for rate computation

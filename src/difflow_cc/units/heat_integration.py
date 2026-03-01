@@ -184,8 +184,12 @@ class HeatExchanger:
         T_cold_out = jnp.minimum(T_cold_out, T_hot_in - min_approach)
         T_hot_out = jnp.maximum(T_hot_out, T_cold_in + min_approach)
 
-        # Recalculate Q with constrained temperatures
-        Q = C_hot * (T_hot_in - T_hot_out)
+        # Recalculate Q as minimum of both sides to ensure energy balance
+        Q_hot = C_hot * (T_hot_in - T_hot_out)
+        Q_cold = C_cold * (T_cold_out - T_cold_in)
+        Q = jnp.minimum(Q_hot, Q_cold)
+        T_hot_out = T_hot_in - safe_divide(Q, C_hot)
+        T_cold_out = T_cold_in + safe_divide(Q, C_cold)
 
         # LMTD
         dT1 = T_hot_in - T_cold_out

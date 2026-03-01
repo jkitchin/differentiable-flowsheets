@@ -173,11 +173,13 @@ class Centrifuge:
         for species, flow in inlet_flows.items():
             if species == cell_species:
                 concentrate_flows[species] = cells_to_concentrate
-                clarified_flows[species] = cells_to_clarified
+                # Derive clarified from feed - concentrate to guarantee mass balance
+                clarified_flows[species] = flow - cells_to_concentrate
             else:
                 # Non-cell species split by volumetric ratio
                 concentrate_flows[species] = flow * concentrate_fraction
-                clarified_flows[species] = flow * (1 - concentrate_fraction)
+                # Derive clarified from feed - concentrate to guarantee mass balance
+                clarified_flows[species] = flow - flow * concentrate_fraction
 
         concentrate = make_stream(concentrate_flows, inlet["T"], inlet["P"])
         clarified = make_stream(clarified_flows, inlet["T"], inlet["P"])

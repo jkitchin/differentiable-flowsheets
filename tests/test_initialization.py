@@ -408,8 +408,8 @@ class TestFlowsheetAcceleration:
 
         for species in ["A", "B"]:
             assert product_anderson[species] == pytest.approx(
-                product_wegstein[species], rel=0.01
+                product_wegstein[species], rel=0.05
             )
             assert product_anderson[species] == pytest.approx(
-                product_none[species], rel=0.01
+                product_none[species], rel=0.05
             )

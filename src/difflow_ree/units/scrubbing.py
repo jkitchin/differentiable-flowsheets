@@ -132,18 +132,15 @@ class REEScrubber:
             F_org_in = jnp.asarray(org_flows.get(elem, 0.0))
             F_scrub_in = jnp.asarray(scrub_flows.get(elem, 0.0))
 
-            # For scrubbing, we want impurities to go to aqueous
-            # Use stripping factor S = 1/(D * F_org/F_scrub) = F_scrub/(D * F_org)
-            E = D * F_org / F_scrub  # Extraction factor
+            # Scrub factor S = F_scrub / (D * F_org): S > 1 favors scrubbing
+            S = safe_divide(F_scrub, D * F_org)
 
-            # Kremser equation
-            E_Np1 = jnp.power(E, n_stages + 1)
-
-            # Fraction remaining in organic
+            # Kremser equation for fraction remaining in organic
+            S_Np1 = jnp.power(S, n_stages + 1)
             frac_in_org = jnp.where(
-                jnp.abs(E - 1.0) < 1e-6,
-                n_stages / (n_stages + 1),
-                safe_divide(E_Np1 - E, E_Np1 - 1.0)
+                jnp.abs(S - 1.0) < 1e-6,
+                1.0 / (n_stages + 1),
+                safe_divide(S - 1.0, S_Np1 - 1.0)
             )
             frac_in_org = jnp.clip(frac_in_org, 0.0, 1.0)
 

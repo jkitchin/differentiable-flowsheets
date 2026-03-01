@@ -176,13 +176,11 @@ class Ultrafiltration:
             R = jnp.asarray(R)
 
             if mode == "batch":
-                # Batch concentration: apply rejection with concentration
-                # For batch: C_ret/C_0 = CF^R (for R=1, fully retained)
-                # Mass balance: M_ret = M_0 - M_perm
-                # Permeate gets (1-R) fraction of what passes through
-
-                # Simplified: retained fraction = 1 - (1-R)*volume_reduction
-                retained_frac = 1.0 - (1.0 - R) * volume_reduction
+                # Batch concentration with constant rejection R:
+                # C_ret = C_0 * CF^R  (concentration increases for retained species)
+                # M_ret = C_ret * V_ret = C_0 * CF^R * V_0/CF = M_0 * CF^(R-1)
+                # retained_frac = CF^(R-1)
+                retained_frac = CF ** (R - 1.0)
                 retained_frac = jnp.clip(retained_frac, 0.0, 1.0)
 
                 retentate_flows[species] = flow * retained_frac
@@ -290,11 +288,21 @@ class Diafiltration:
             from_initial = flow * remaining_frac
 
             # Buffer contribution (if species is in buffer)
+            # Buffer is added at constant concentration C_buffer over N diavolumes.
+            # At constant volume V, the steady-state wash-in gives:
+            #   C_from_buffer = C_buffer * (1 - exp(-N*(1-R)))
+            # So the mass from buffer retained in the retentate is:
+            #   from_buffer = C_buffer * V * (1 - exp(-N*(1-R)))
+            #               = (buffer_added / n_dv) * (1 - remaining_frac)
             buffer_conc = buffer_flows.get(species, jnp.array(0.0)) / sum(buffer_flows.values())
             buffer_added = buffer_conc * n_dv * V_initial
-            # Buffer that's retained follows same wash-in kinetics
-            from_buffer = buffer_added * safe_divide(1.0 - remaining_frac, 1.0 - R)
-            from_buffer = jnp.where(R < 0.99, from_buffer, buffer_added)
+            # For R < 1: from_buffer = (buffer_added / n_dv) * (1 - remaining_frac)
+            # For R ~ 1 (fully retained): all added buffer stays, from_buffer = buffer_added
+            from_buffer = jnp.where(
+                R < 0.99,
+                (buffer_added / jnp.maximum(n_dv, 1e-10)) * (1.0 - remaining_frac),
+                buffer_added,
+            )
 
             retentate_flows[species] = from_initial + from_buffer
 
@@ -311,8 +319,11 @@ class Diafiltration:
 
                 buffer_conc = buffer_flow / sum(buffer_flows.values())
                 buffer_added = buffer_conc * n_dv * V_initial
-                from_buffer = buffer_added * safe_divide(1.0 - remaining_frac, 1.0 - R)
-                from_buffer = jnp.where(R < 0.99, from_buffer, buffer_added)
+                from_buffer = jnp.where(
+                    R < 0.99,
+                    (buffer_added / jnp.maximum(n_dv, 1e-10)) * (1.0 - remaining_frac),
+                    buffer_added,
+                )
 
                 retentate_flows[species] = from_buffer
                 permeate_flows[species] = buffer_added - from_buffer

@@ -71,9 +71,8 @@ class REEDistribution:
 
         # Temperature correction
         T_ref = 298.15
-        dH = self._ext_data.temperature_coefficients[element]
-        R = 8.314  # J/(mol·K)
-        log_D = log_D + (dH / (R * jnp.log(10))) * (1/T - 1/T_ref)
+        d_T = self._ext_data.temperature_coefficients[element]
+        log_D = log_D + d_T * (1/T - 1/T_ref)
 
         # Concentration correction: D ∝ [HA]^n
         n = self._ext_data.concentration_exponent

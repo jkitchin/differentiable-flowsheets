@@ -205,10 +205,11 @@ class AmineAbsorber:
         F_liquid = L_G * F_total_gas  # mol/s total liquid
 
         # Moles of amine in liquid
-        # Assume liquid is ~solvent_conc% amine by mass
-        # mol amine = F_liquid * (solvent_conc/100) * MW_water / MW_amine
-        # Simplified: F_amine ~ F_liquid * solvent_conc / 100 (approximate)
-        F_amine = F_liquid * p.solvent_conc / 100
+        # Convert wt% to mole fraction, then apply to total liquid flow
+        MW_water = 18.0
+        w = p.solvent_conc / 100  # weight fraction
+        x_amine = (w / MW_amine) / (w / MW_amine + (1 - w) / MW_water)
+        F_amine = F_liquid * x_amine
 
         # VLE slope (m = dP_CO2/d_loading at operating conditions)
         # For simplified model, linearize around lean loading
@@ -220,13 +221,13 @@ class AmineAbsorber:
         P_eq_plus = self._vle.equilibrium_pressure(lean_loading + d_alpha, T_op)
         m = (P_eq_plus - P_eq_lean) / d_alpha  # Pa / (mol/mol)
 
-        # Convert to molar basis: m' = m * C_amine / P_total
+        # Dimensionless VLE slope: m = (dP_eq/d_loading) / P_total
         P_total = jnp.asarray(p.P_absorber)
-        m_prime = m * F_amine / (P_total * F_total_gas)
+        m_dimless = m / P_total
 
-        # Absorption factor A = L / (m * G) where L, G are molar flows
-        # In our units: A = F_amine / (m_prime * F_total_gas)
-        A = safe_divide(L_G, m_prime)
+        # Absorption factor A = F_amine / (m_dimless * F_gas_inert)
+        F_gas_inert = F_total_gas - F_CO2_in  # Inert gas flow
+        A = safe_divide(F_amine, m_dimless * F_gas_inert)
 
         # Kremser equation for absorption
         n_stages = jnp.asarray(p.n_stages)
@@ -257,6 +258,10 @@ class AmineAbsorber:
         # Rich loading
         rich_loading = lean_loading + safe_divide(F_CO2_absorbed, F_amine)
         rich_loading = jnp.clip(rich_loading, 0.0, self._solvent_data.loading_capacity)
+        # Back-correct absorbed CO2 to match clipped loading
+        F_CO2_absorbed = (rich_loading - lean_loading) * F_amine
+        F_CO2_out = F_CO2_in - F_CO2_absorbed
+        capture_efficiency = safe_divide(F_CO2_absorbed, F_CO2_in)
 
         # Create output streams
         # Treated gas
@@ -324,7 +329,10 @@ class AmineAbsorber:
 
         L_G = jnp.asarray(p.L_G_ratio)
         F_liquid = L_G * F_total_gas
-        F_amine = F_liquid * p.solvent_conc / 100
+        MW_water = 18.0
+        w = p.solvent_conc / 100
+        x_amine = (w / MW_amine) / (w / MW_amine + (1 - w) / MW_water)
+        F_amine = F_liquid * x_amine
 
         lean_loading = jnp.asarray(p.lean_loading)
         P_eq_lean = self._vle.equilibrium_pressure(lean_loading, T_op)
@@ -333,8 +341,11 @@ class AmineAbsorber:
         m = (P_eq_plus - P_eq_lean) / d_alpha
 
         P_total = jnp.asarray(p.P_absorber)
-        m_prime = m * F_amine / (P_total * F_total_gas)
-        A = safe_divide(L_G, m_prime)
+        m_dimless = m / P_total
+        gas_flows = get_flows(gas_in)
+        F_CO2_in = jnp.asarray(gas_flows.get("CO2", 0.0))
+        F_gas_inert = F_total_gas - F_CO2_in
+        A = safe_divide(F_amine, m_dimless * F_gas_inert)
 
         # Solve Kremser for N:
         # phi = (A-1)/(A^(N+1)-1)

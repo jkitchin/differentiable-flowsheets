@@ -375,6 +375,7 @@ class Flowsheet:
 
         # Initial arrays
         x_prev = self._streams_to_array(tear_initial)
+        x_old = None
         g_prev = None
 
         # First iteration
@@ -396,11 +397,12 @@ class Flowsheet:
                 x_curr = g_curr
             else:
                 # Apply Wegstein acceleration
-                x_curr = wegstein_acceleration(x_prev, x_prev, g_prev, g_curr)
+                x_curr = wegstein_acceleration(x_old, x_prev, g_prev, g_curr)
                 x_curr = jnp.clip(x_curr, 0.0, None)  # Ensure non-negative flows
 
             # Update history
             g_prev = g_curr
+            x_old = x_prev
             x_prev = x_curr
 
             # Run iteration with accelerated estimate

@@ -204,10 +204,17 @@ def call_kinetics(kinetic_fn: Callable, arity: int, S: Array, X: Array,
     if arity == 1:
         return kinetic_fn(S, params)
     elif arity == 2:
-        return kinetic_fn(S, X, params)
+        # 2 state args: could be (S, P) for product inhibition
+        # or (S, X) for Contois.  Inspect parameter names to decide.
+        sig = inspect.signature(kinetic_fn)
+        param_names = [p.name for p in sig.parameters.values() if p.name != 'params']
+        if 'P' in param_names:
+            return kinetic_fn(S, P, params)
+        else:
+            return kinetic_fn(S, X, params)
     else:
-        # 3+ args: assume (S, P, params) or (S, X, P, params)
-        return kinetic_fn(S, P, params)
+        # 3+ args: assume (S, X, P, params)
+        return kinetic_fn(S, X, P, params)
 
 
 # =============================================================================
@@ -323,14 +330,14 @@ class ContinuousBioreactor:
         # Initial guess
         x0 = jnp.array([1.0, S_f * 0.1, 0.1])  # [X, S, P]
 
-        # Capture parameters for closure
+        # Capture parameters for closure (ensure JAX arrays for consistent AD)
         kinetic_fn = p.kinetic_fn
         kinetic_params = p.kinetic_params
-        Y_xs = p.Y_xs
-        k_d = p.k_d
-        m_s = p.m_s
-        alpha = p.alpha
-        beta = p.beta
+        Y_xs = jnp.asarray(p.Y_xs)
+        k_d = jnp.asarray(p.k_d)
+        m_s = jnp.asarray(p.m_s)
+        alpha = jnp.asarray(p.alpha)
+        beta = jnp.asarray(p.beta)
 
         # Get kinetic arity for proper dispatch (avoids try/except in JIT)
         kinetic_arity = p._kinetic_arity

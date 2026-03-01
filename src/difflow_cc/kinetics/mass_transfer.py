@@ -208,7 +208,7 @@ def overall_mass_transfer(
     """Calculate overall mass transfer coefficient.
 
     Two-film model with enhancement:
-        1/K_G = 1/k_G + H/(E * k_L * P)
+        1/K_G = 1/k_G + 1/(H * E * k_L)
 
     Args:
         k_G: Gas-side coefficient (m/s)
@@ -230,8 +230,9 @@ def overall_mass_transfer(
     P = jnp.asarray(P)
 
     # Resistances in series
+    # Two-film model: 1/K_G = 1/k_G + 1/(H * E * k_L)
     R_G = safe_divide(1.0, k_G)
-    R_L = safe_divide(H, E * k_L * P)
+    R_L = safe_divide(1.0, H * E * k_L)
 
     K_G = safe_divide(1.0, R_G + R_L)
 

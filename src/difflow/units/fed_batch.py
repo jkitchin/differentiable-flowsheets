@@ -339,14 +339,21 @@ class FedBatchReactor:
         T_final = T_profile[-1]
         rates_final = rate_fn(C_final, T_final, rate_params)
 
-        # Conversions (based on limiting reactant)
+        # Conversions: account for cumulative fed moles
+        # Total A that entered = initial moles + integral of feed molar flow
+        # For constant feed: n_fed = F_in(t) * C_feed * dt summed over time
+        # We compute cumulative fed moles from the volume change and feed composition
         n_initial = n0
         n_final = n_profiles[-1]
+        V_final_val = V_profile[-1]
+        # Volume added = V_final - V0, so moles fed of species i = (V_final - V0) * C_feed_i
+        n_fed = (V_final_val - V0) * C_feed
         conversion = {}
         for i, s in enumerate(p.species_order):
+            n_total_in = n_initial[i] + n_fed[i]
             conversion[s] = jnp.where(
-                n_initial[i] > 1e-10,
-                (n_initial[i] - n_final[i]) / jnp.maximum(n_initial[i], 1e-10),
+                n_total_in > 1e-10,
+                (n_total_in - n_final[i]) / jnp.maximum(n_total_in, 1e-10),
                 jnp.array(0.0),
             )
 
@@ -416,8 +423,9 @@ class FedBatchReactor:
             else:
                 Q_feed = 0.0
 
-            # Q required to maintain isothermal = -(heat generated)
-            Q = -Q_rxn - Q_feed
+            # Q required to maintain isothermal: positive = heat added, negative = heat removed
+            # For exothermic (Q_rxn < 0), heat is released, so Q must be negative (remove heat)
+            Q = Q_rxn + Q_feed
 
             return None, Q
 
@@ -511,8 +519,8 @@ class FedBatchReactor:
                 inlet_flows = get_flows(inlet)
                 F_total = sum(inlet_flows.values())
                 if F_total > 1e-10:
-                    C0 = {s: inlet_flows.get(s, 0.0) / F_total * 50.0
-                          for s in p.species_order}  # Assume 50 mol/m³ total
+                    C0 = {s: inlet_flows.get(s, 0.0) / F_total * 55500.0
+                          for s in p.species_order}  # Assume 55500 mol/m³ total (liquid)
                 else:
                     C0 = {s: 0.0 for s in p.species_order}
             else:

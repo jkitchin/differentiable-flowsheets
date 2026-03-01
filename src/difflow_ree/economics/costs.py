@@ -225,14 +225,15 @@ class OperatingCosts:
         """Calculate annual labor cost.
 
         Args:
-            n_operators: Number of operators per shift
+            n_operators: Total number of operators (all shifts combined)
             hours_per_year: Operating hours per year
 
         Returns:
             Annual labor cost (USD/year)
         """
-        # Assume 4 shifts for 24/7 operation
-        return self.labor_rate * n_operators * 4 * hours_per_year
+        # n_operators is total headcount across all shifts
+        # (e.g., 6 total for a small REE plant with ~2 per shift)
+        return self.labor_rate * n_operators * hours_per_year
 
     def utility_cost(
         self,

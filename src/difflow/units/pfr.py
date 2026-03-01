@@ -296,7 +296,7 @@ class PFR:
             Cp_mix = thermo.Cp_mix(mole_fracs, T)
 
             Q_rxn = jnp.sum(r * dH_rxn)  # Heat generated per unit volume
-            dT = -Q_rxn / (F_total * Cp_mix / Q_v)  # Divide by molar flow density
+            dT = -Q_rxn / (F_total * Cp_mix)  # dT/dV in K/m³
 
             return jnp.concatenate([dF, jnp.array([dT])])
 
@@ -404,7 +404,7 @@ class PFR:
         if Q_v is None:
             inlet_flows = get_flows(inlet)
             total_molar = sum(inlet_flows.values())
-            Q_v = total_molar / 50.0  # Assume molar density ~50 mol/m³
+            Q_v = total_molar / 55500.0  # Assume molar density ~55500 mol/m³
 
         outlet, info = self(inlet, T_spec=T_spec, volumetric_flow=Q_v)
 
@@ -472,7 +472,7 @@ class PFR:
         if Q_v is None:
             inlet_flows = get_flows(inlet)
             total_molar = sum(inlet_flows.values())
-            Q_v = total_molar / 50.0  # Assume molar density ~50 mol/m³
+            Q_v = total_molar / 55500.0  # Assume molar density ~55500 mol/m³
 
         outlet, info = self(inlet, T_spec=T_spec, volumetric_flow=Q_v)
 
@@ -884,11 +884,11 @@ class GasPFR:
             # Material balance
             dF = stoich @ r
 
-            # Energy balance: dT/dV = -sum(r * dH) / (F_tot * Cp_mix / Q)
+            # Energy balance: dT/dV = -sum(r * dH) / (F_tot * Cp_mix)
             mole_fracs = {s: F[i] / F_total for i, s in enumerate(species_order)}
             Cp_mix = thermo.Cp_mix(mole_fracs, T)
             Q_rxn = jnp.sum(r * dH_rxn)
-            dT = -Q_rxn / (F_total * Cp_mix / Q)
+            dT = -Q_rxn / (F_total * Cp_mix)
 
             # Pressure drop
             dP = -alpha * safe_divide(P0, P) * (T / T0) * (F_total / F_total_0)

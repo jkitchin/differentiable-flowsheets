@@ -24,7 +24,7 @@ from difflow.numerics import safe_divide
 
 def estimate_volumetric_flow(
     inlet_flows: dict[str, float | Array],
-    default_concentration: float = 50.0,
+    default_concentration: float = 55500.0,
 ) -> float:
     """Estimate volumetric flow from molar flows.
 
@@ -32,7 +32,7 @@ def estimate_volumetric_flow(
 
     Args:
         inlet_flows: Dict of species molar flow rates (mol/s)
-        default_concentration: Assumed molar concentration (mol/m³), default 50
+        default_concentration: Assumed molar concentration (mol/m³), default 55500
 
     Returns:
         Estimated volumetric flow rate (m³/s)

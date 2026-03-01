@@ -53,14 +53,16 @@ def soft_clip_positive(x: Array, sharpness: float = 10.0) -> Array:
 class DistributionCoeffs(NamedTuple):
     """Simple distribution coefficient model.
 
-    K = concentration in extract / concentration in raffinate
+    K = concentration in extract (organic) / concentration in raffinate (aqueous)
+
+    Convention: K > 1 means solute favors the organic/extract phase.
 
     For temperature-dependent K:
         K(T) = K0 * exp(-dH / R * (1/T - 1/Tref))
 
     Attributes:
         species: List of species that transfer between phases
-        K0: Distribution coefficients at reference temperature
+        K0: Distribution coefficients at reference temperature (C_org / C_aq)
         dH: Heat of extraction (J/mol), for temperature dependence
         Tref: Reference temperature (K)
     """
@@ -278,8 +280,9 @@ class LLEEquilibrium:
     ) -> dict[str, Array]:
         """Calculate distribution coefficients at equilibrium.
 
+        Convention: K = C_extract / C_raffinate = C_org / C_aq
         For K-value model: Returns constant (or T-dependent) K values
-        For activity models: K = gamma_aq / gamma_org
+        For activity models: K = gamma_aq / gamma_org (from LLE equilibrium x*gamma equality)
 
         Args:
             x_aq: Mole fractions in aqueous phase
@@ -862,11 +865,12 @@ class DifferentialContactor:
         # Build system matrices for each solute
         # For counter-current flow, organic flows in -z direction, so:
         #   dc_aq/dz = -Kla*(K*c_aq - c_org)*area/F_aq  (aqueous loses to organic)
-        #   dc_org/dz = -Kla*(K*c_aq - c_org)*area/F_org  (organic gains, but flows backward)
-        # Note: both have NEGATIVE sign because dc_org/dz = -rate/F_org for backward flow
+        #   dc_org/dz = +Kla*(K*c_aq - c_org)*area/F_org  (organic: positive sign
+        #       because organic flows in -z direction; in a differential element,
+        #       c_org increases at lower z where the organic exits enriched)
         #
         # A = [[-a,  b],    where a = Kla*K*area/F_aq, b = Kla*area/F_aq
-        #      [-c,  d]]          c = Kla*K*area/F_org, d = Kla*area/F_org
+        #      [ c, -d]]          c = Kla*K*area/F_org, d = Kla*area/F_org
         alpha = Kla_arr * area
         a = alpha * K_arr / F_aq  # shape (n_solutes,)
         b = alpha / F_aq
@@ -874,10 +878,11 @@ class DifferentialContactor:
         d = alpha / F_org
 
         # Stack into matrices: shape (n_solutes, 2, 2)
-        A_matrices = jnp.stack([
-            jnp.stack([-a, b], axis=-1),
-            jnp.stack([-c, d], axis=-1)  # Note: [-c, d] for counter-current
-        ], axis=-2).transpose(2, 0, 1)  # (n_solutes, 2, 2)
+        # Build explicitly per-solute: A[i] = [[-a[i], b[i]], [c[i], -d[i]]]
+        # Use column_stack for each row, then stack rows along axis=1
+        row0 = jnp.stack([-a, b], axis=-1)   # (n_solutes, 2)
+        row1 = jnp.stack([c, -d], axis=-1)   # (n_solutes, 2)  [c, -d] for counter-current
+        A_matrices = jnp.stack([row0, row1], axis=1)  # (n_solutes, 2, 2)
 
         # Compute matrix exponential at z=L for each solute
         # M = expm(A * L), shape (n_solutes, 2, 2)
@@ -1049,18 +1054,27 @@ def stages_for_recovery(
 
     Using Kremser equation for counter-current extraction.
 
+    Convention: K = C_extract / C_raffinate (K > 1 favors organic phase).
+    Extraction factor E = K * (S/F) where S/F is the solvent-to-feed
+    molar flow ratio.
+
     Args:
-        K: Distribution coefficient
-        SF_ratio: Actual solvent-to-feed ratio / minimum ratio
+        K: Distribution coefficient (C_org / C_aq)
+        SF_ratio: Actual solvent-to-feed molar flow ratio (F_org / F_aq).
+                  Must be greater than minimum_solvent_ratio(K, recovery).
         recovery: Desired solute recovery
 
     Returns:
         Number of theoretical stages needed
     """
-    E = K * SF_ratio  # Extraction factor
+    E = K * SF_ratio  # Extraction factor = K * (S/F)
 
-    # From Kremser: N = log((1-1/E) * (1-recovery) + 1/E) / log(1/E)
-    # Simplified for E != 1
-    N = jnp.log((recovery * (E - 1) + 1) / E) / jnp.log(E)
+    # From Kremser equation for counter-current extraction:
+    #   fraction_remaining = (E - 1) / (E^(N+1) - 1)
+    #   recovery = 1 - fraction_remaining
+    # Solving for N:
+    #   E^(N+1) = (E - recovery) / (1 - recovery)
+    #   N = ln((E - recovery) / (1 - recovery)) / ln(E) - 1
+    N = jnp.log((E - recovery) / (1.0 - recovery)) / jnp.log(E) - 1.0
 
     return jnp.maximum(N, 1.0)
