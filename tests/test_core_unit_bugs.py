@@ -312,12 +312,13 @@ def test_issue_73_enthalpy_uses_phase_specific_cp():
     # They should differ because of different Cp AND Hvap
     assert H_vap > H_liq, "Vapor enthalpy should exceed liquid enthalpy"
 
-    # Verify that the Cp integral portion differs
+    # Verify thermodynamic path: H_vap = Cp_liq*(T-Tref) + Hvap(T)
+    # (liquid Cp is used for integration since reference state is liquid at Tref)
     Hvap = float(thermo.Hvap("water", T))
     H_vap_no_hvap = H_vap - Hvap
-    assert abs(H_vap_no_hvap - 33.6 * (T - Tref)) < 1.0, (
-        f"Vapor enthalpy integral should use vapor Cp, got {H_vap_no_hvap:.1f} "
-        f"vs expected {33.6 * (T - Tref):.1f}"
+    assert abs(H_vap_no_hvap - 75.3 * (T - Tref)) < 1.0, (
+        f"Vapor enthalpy integral should use liquid Cp (correct thermo path), "
+        f"got {H_vap_no_hvap:.1f} vs expected {75.3 * (T - Tref):.1f}"
     )
 
 

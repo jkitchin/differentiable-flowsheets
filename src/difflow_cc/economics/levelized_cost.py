@@ -388,7 +388,7 @@ def complete_cost_analysis(
 
     # CO2 captured annually
     hours_per_year = 8760 * econ_params.capacity_factor
-    CO2_tonne_yr = float(CO2_captured_mol_s) * 44.0 * 3600 * hours_per_year / 1e6
+    CO2_tonne_yr = jnp.asarray(CO2_captured_mol_s) * 44.0 * 3600 * hours_per_year / 1e6
 
     # Specific costs
     capex_per_tonne = safe_divide(ann_capex, CO2_tonne_yr)

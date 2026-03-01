@@ -278,7 +278,7 @@ def adsorbent_lifetime(
     # Get approximate decay rate
     test_hours = 1000.0
     fade = capacity_fade(test_hours, params)
-    f_test = float(fade["capacity_fraction"])
+    f_test = fade["capacity_fraction"]
 
     # Effective decay constant
     k_eff = safe_divide(-safe_log(f_test), test_hours)

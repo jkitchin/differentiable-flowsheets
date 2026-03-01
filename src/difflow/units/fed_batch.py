@@ -407,9 +407,9 @@ class FedBatchReactor:
             r = p.rate_fn(C_dict, T, p.rate_params)
             F_in = feed_rate_fn(t)
 
-            # Heat from reaction
+            # Heat from reaction (positive for exothermic, consistent with derivatives())
             if p.dH_rxn is not None:
-                Q_rxn = V * jnp.sum(r * p.dH_rxn)  # Heat released
+                Q_rxn = -V * jnp.sum(r * p.dH_rxn)
             else:
                 Q_rxn = 0.0
 
@@ -423,9 +423,10 @@ class FedBatchReactor:
             else:
                 Q_feed = 0.0
 
-            # Q required to maintain isothermal: positive = heat added, negative = heat removed
-            # For exothermic (Q_rxn < 0), heat is released, so Q must be negative (remove heat)
-            Q = Q_rxn + Q_feed
+            # External duty to maintain isothermal: Q_ext = -(Q_rxn + Q_feed)
+            # Positive = heat added, negative = heat removed
+            # For exothermic (Q_rxn > 0), reaction generates heat, so Q_ext < 0 (remove heat)
+            Q = -(Q_rxn + Q_feed)
 
             return None, Q
 

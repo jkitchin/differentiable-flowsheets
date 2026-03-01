@@ -455,8 +455,9 @@ class ShortcutColumn:
                 d_i = F_i * d_over_b / (1 + d_over_b)
                 b_i = F_i - d_i
 
-                distillate_flows[s] = jnp.maximum(d_i, 0.0)
-                bottoms_flows[s] = jnp.maximum(b_i, 0.0)
+                d_i_clipped = jnp.clip(d_i, 0.0, F_i)
+                distillate_flows[s] = d_i_clipped
+                bottoms_flows[s] = F_i - d_i_clipped  # Preserves mass balance
                 D_total = D_total + distillate_flows[s]
                 B_total = B_total + bottoms_flows[s]
 
@@ -560,6 +561,7 @@ class DistillationColumnParams(ParamsMixin):
     feed_stage: int
     condenser_type: Literal["total", "partial"] = "total"
     P: float = 101325.0
+    q: float = 1.0  # Feed thermal condition (1.0 = saturated liquid, 0.0 = saturated vapor)
 
 
 class DistillationColumn:
@@ -687,8 +689,9 @@ class DistillationColumn:
         B = F_total - D
         L_rect = R * D
         V_rect = (R + 1) * D
-        L_strip = L_rect + F_total  # q=1: saturated liquid feed
-        V_strip = V_rect
+        q = jnp.asarray(p.q)
+        L_strip = L_rect + q * F_total
+        V_strip = V_rect - (1 - q) * F_total
 
         z = jnp.array([feed_flows[s] / F_total for s in p.species_order])
 

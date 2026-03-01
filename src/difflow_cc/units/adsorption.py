@@ -318,9 +318,13 @@ class PSAUnit(_AdsorptionBase):
 
         # Create output streams
         # Product (CO2 rich, at desorption pressure)
+        # Derive N2 in product from feed N2 via selectivity (not from purity spec)
+        F_N2_in = jnp.asarray(feed_flows.get("N2", 0.0))
+        N2_in_product = safe_divide(F_CO2_captured, selectivity)
+        N2_in_product = jnp.minimum(N2_in_product, F_N2_in)  # Can't exceed feed N2
         product_flows = {
             "CO2": F_CO2_captured,
-            "N2": F_CO2_captured * (1 - purity) / purity,  # Impurity
+            "N2": N2_in_product,
         }
         product = make_stream(product_flows, T, P_des)
 
@@ -328,10 +332,9 @@ class PSAUnit(_AdsorptionBase):
         offgas_flows = {}
         for species, flow in feed_flows.items():
             if species == "CO2":
-                offgas_flows[species] = flow - F_CO2_captured
+                offgas_flows[species] = jnp.maximum(0.0, flow - F_CO2_captured)
             elif species == "N2":
-                N2_in_product = product_flows.get("N2", 0.0)
-                offgas_flows[species] = flow - N2_in_product
+                offgas_flows[species] = jnp.maximum(0.0, flow - N2_in_product)
             else:
                 offgas_flows[species] = flow * (1 - 0.01)
 

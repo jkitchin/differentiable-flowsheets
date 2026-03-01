@@ -231,7 +231,7 @@ class AmineStripper:
         # Create output streams
         # Lean solvent
         lean_flows = {
-            "H2O": F_H2O - F_steam * (1 - reflux),
+            "H2O": jnp.maximum(0.0, F_H2O - F_steam * (1 - reflux)),
             "Amine": F_amine,
             "CO2_absorbed": F_CO2_lean,
         }

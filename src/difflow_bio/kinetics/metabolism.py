@@ -238,7 +238,7 @@ def yield_coefficient(
     delta_product = jnp.asarray(delta_product)
     delta_substrate = jnp.asarray(delta_substrate)
 
-    return -delta_product / (delta_substrate - 1e-10)
+    return safe_divide(-delta_product, delta_substrate)
 
 
 # =============================================================================

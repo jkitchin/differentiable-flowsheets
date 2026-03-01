@@ -275,8 +275,9 @@ class AmineAbsorber:
         gas_out = make_stream(gas_out_flows, T_op, P_total)
 
         # Rich solvent
+        # x_amine is the mole fraction of amine in solvent (computed above)
         solvent_out_flows = {
-            "H2O": F_liquid * (1 - p.solvent_conc / 100),
+            "H2O": F_liquid * (1 - x_amine),
             "Amine": F_amine,
             "CO2_absorbed": F_CO2_absorbed,
         }
@@ -355,6 +356,10 @@ class AmineAbsorber:
 
         numerator = safe_divide(A - 1, phi) + 1
         N_eff = safe_divide(safe_log(numerator), safe_log(A)) - 1
-        N = N_eff / eta
+        # Invert the O'Connell correlation: N_eff = N * ln(1 + eta*(A-1)) / ln(A)
+        # Solving for N: N = N_eff * ln(A) / ln(1 + eta*(A-1))
+        N = N_eff * safe_divide(
+            safe_log(A), safe_log(1.0 + eta * (A - 1.0))
+        )
 
         return jnp.maximum(N, 1.0)

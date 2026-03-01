@@ -367,7 +367,7 @@ class HydroxidePrecipitator:
         # [OH-] from pH with temperature-dependent pKw
         # pKw ~ 14.0 at 25C, varies with T (Harned & Hamer correlation)
         T_C = T - 273.15
-        pKw = 14.0 + 0.03 * (T_C - 25.0) / 25.0  # Approximate correction
+        pKw = 14.0 - 0.03 * (T_C - 25.0) / 25.0  # pKw decreases with T (more ionization)
         pKw = jnp.clip(pKw, 12.0, 15.0)  # Guard for extreme temperatures
         pOH = pKw - pH
         OH_conc = jnp.power(10.0, -pOH)

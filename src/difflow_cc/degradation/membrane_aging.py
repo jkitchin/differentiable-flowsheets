@@ -259,7 +259,7 @@ def membrane_lifetime(
     """
     # Get approximate decay rate at 1 year
     deg_1yr = total_degradation(1.0, params)
-    f_1yr = float(deg_1yr["permeance_fraction"])
+    f_1yr = deg_1yr["permeance_fraction"]
 
     # Effective decay constant (assuming exponential)
     k_eff = -safe_log(f_1yr)
@@ -331,12 +331,12 @@ def replacement_schedule(
         replacement_interval = lifetime
 
     # Annual cost
-    annual_cost = module_cost / float(replacement_interval)
+    annual_cost = module_cost / replacement_interval
 
     return {
         "replacement_interval_years": replacement_interval,
         "membrane_lifetime_years": lifetime,
         "average_performance": avg_performance,
         "annual_replacement_cost_per_m2": annual_cost,
-        "n_replacements_over_25yr": 25 / float(replacement_interval),
+        "n_replacements_over_25yr": 25 / replacement_interval,
     }

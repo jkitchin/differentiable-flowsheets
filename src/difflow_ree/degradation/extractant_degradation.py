@@ -293,9 +293,9 @@ class ExtractantDegradationModel:
         if params.extractant in EXTRACTANT_DEGRADATION_DATA:
             data = EXTRACTANT_DEGRADATION_DATA[params.extractant]
             # Use data as defaults if params not explicitly set
-            self._k_ox = params.k_ox or data["k_ox"]
-            self._k_hyd = params.k_hyd or data["k_hyd"]
-            self._S_aq = params.S_aq or data["S_aq"]
+            self._k_ox = data["k_ox"] if params.k_ox is None else params.k_ox
+            self._k_hyd = data["k_hyd"] if params.k_hyd is None else params.k_hyd
+            self._S_aq = data["S_aq"] if params.S_aq is None else params.S_aq
         else:
             self._k_ox = params.k_ox
             self._k_hyd = params.k_hyd

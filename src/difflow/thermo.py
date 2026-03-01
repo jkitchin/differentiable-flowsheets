@@ -176,12 +176,13 @@ class IdealThermo:
         T_arr = jnp.asarray(T)
         Tref = jnp.asarray(data.Tref)
 
-        if phase == "vapor" and data.Cp_vapor_coeffs is not None:
-            a, b, c, d = data.Cp_vapor_coeffs
-        else:
-            a, b, c, d = data.Cp_coeffs
+        # Always use liquid Cp for the base enthalpy integral (reference state
+        # is liquid at Tref). For vapor phase, we add Hvap(T) to account for
+        # the phase change, giving the correct thermodynamic path:
+        # H_vap(T) = integral(Cp_liq, Tref→T) + Hvap(T)
+        a, b, c, d = data.Cp_coeffs
 
-        # Integral of Cp from Tref to T
+        # Integral of Cp_liquid from Tref to T
         H = _compute_enthalpy_integral(T_arr, Tref, a, b, c, d)
 
         if phase == "vapor":

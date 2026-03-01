@@ -247,9 +247,9 @@ def total_amine_loss(
     t_abs = 0.7 * params.operating_hours * 3600  # seconds
     t_str = 0.3 * params.operating_hours * 3600
 
-    loss_ox = float(r_ox) * 1000 * t_abs * mw / 1000  # kg per m³ inventory
-    loss_th = float(r_th) * 1000 * t_str * mw / 1000
-    loss_co2 = float(r_co2) * 1000 * t_str * mw / 1000
+    loss_ox = r_ox * 1000 * t_abs * mw / 1000  # kg per m³ inventory
+    loss_th = r_th * 1000 * t_str * mw / 1000
+    loss_co2 = r_co2 * 1000 * t_str * mw / 1000
 
     total = loss_ox + loss_th + loss_co2
 

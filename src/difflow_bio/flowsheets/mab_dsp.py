@@ -46,9 +46,7 @@ from difflow_bio.units.chromatography import (
     ProteinAChromatography, ProteinAParams,
     IonExchangeChromatography, IEXParams,
 )
-from difflow_bio.units.filtration import (
-    TFF, UltrafiltrationParams, DiafiltrationParams,
-)
+from difflow_bio.units.filtration import TFF
 from difflow.numerics import safe_divide
 
 
@@ -145,18 +143,9 @@ class mAbDSPTrain:
 
         # TFF for concentration
         self._tff = TFF(
-            uf_params=UltrafiltrationParams(
-                membrane_area=params.tff_area,
-                MWCO=30.0,
-                rejection={params.target_species: 0.995},
-                species_order=params.species_order,
-            ),
-            df_params=DiafiltrationParams(
-                membrane_area=params.tff_area,
-                MWCO=30.0,
-                rejection={params.target_species: 0.995},
-                species_order=params.species_order,
-            ),
+            membrane_area=params.tff_area,
+            MWCO=30.0,
+            rejection={params.target_species: 0.995},
         )
 
     def __call__(
@@ -187,34 +176,34 @@ class mAbDSPTrain:
         intermediates = {"harvest": harvest}
 
         # Step 1: Protein A capture
-        proa_eluate, proa_waste = self._proa(harvest)
+        (proa_eluate, proa_waste), proa_info = self._proa(harvest, load_volume=p.proa_column_volume)
         proa_flows = get_flows(proa_eluate)
         proa_yield = safe_divide(proa_flows.get(target, 0.0), mab_in)
         intermediates["proa_eluate"] = proa_eluate
 
         # Step 2: TFF concentration (post-ProA)
-        tff1_out = self._tff.uf_concentrate(
+        (tff1_out, _tff1_perm), tff1_info = self._tff.concentrate(
             proa_eluate,
-            target_factor=p.concentration_factor,
+            concentration_factor=p.concentration_factor,
         )
         intermediates["tff1_concentrate"] = tff1_out
 
         # Step 3: CEX polish
-        cex_eluate, cex_waste = self._cex(tff1_out)
+        (cex_eluate, cex_waste), cex_info = self._cex(tff1_out, load_volume=p.cex_column_volume)
         cex_flows = get_flows(cex_eluate)
         cex_yield = safe_divide(cex_flows.get(target, 0.0), proa_flows.get(target, 0.0))
         intermediates["cex_eluate"] = cex_eluate
 
         # Step 4: AEX flow-through polish
-        aex_product, aex_bound = self._aex(cex_eluate)
+        (aex_product, aex_bound), aex_info = self._aex(cex_eluate, load_volume=p.aex_column_volume)
         aex_flows = get_flows(aex_product)
         aex_yield = safe_divide(aex_flows.get(target, 0.0), cex_flows.get(target, 0.0))
         intermediates["aex_product"] = aex_product
 
         # Step 5: Final TFF formulation
-        final_product = self._tff.uf_concentrate(
+        (final_product, _tff2_perm), tff2_info = self._tff.concentrate(
             aex_product,
-            target_factor=safe_divide(p.final_concentration_g_L, aex_flows.get(target, 1.0)),
+            concentration_factor=safe_divide(p.final_concentration_g_L, aex_flows.get(target, 1.0)),
         )
         intermediates["final_product"] = final_product
 

@@ -149,8 +149,8 @@ class Centrifuge:
         Q_ratio = Q / Q_crit
         theoretical_sep = jnp.clip(1.0 / Q_ratio, 0.0, 1.0)
 
-        # Apply efficiency factor
-        actual_sep = theoretical_sep * p.efficiency
+        # Apply efficiency factor (clamp to prevent mass creation)
+        actual_sep = jnp.clip(theoretical_sep * p.efficiency, 0.0, 1.0)
 
         # Critical particle diameter (smallest captured at 50% efficiency)
         d_crit = critical_particle_diameter(

@@ -171,9 +171,12 @@ class PlatformDSP:
         # Run each step
         for step_name, step_unit in self._steps:
             if hasattr(step_unit, '__call__'):
-                result = step_unit(current_stream)
+                # Chromatography units require load_volume; use column volume
+                load_vol = p.column_volumes.get(step_name, 10.0)
+                result = step_unit(current_stream, load_volume=load_vol)
                 if isinstance(result, tuple):
-                    current_stream = result[0]  # Product stream
+                    # Chromatography returns ((product, waste), info)
+                    (current_stream, _waste), _info = result
                 else:
                     current_stream = result
 
@@ -186,7 +189,7 @@ class PlatformDSP:
             intermediates[step_name] = current_stream
 
         # Final UF concentration
-        final_product, permeate = self._uf(current_stream, concentration_factor=10.0)
+        (final_product, permeate), uf_info = self._uf(current_stream, concentration_factor=10.0)
         final_flows = get_flows(final_product)
 
         # Calculate overall metrics

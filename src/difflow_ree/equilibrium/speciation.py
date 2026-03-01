@@ -216,7 +216,7 @@ class REESpeciation:
             return {
                 "REE3+": 1.0 / denom,
                 "REECl2+": K1 * ligand_conc / denom,
-                "REECl2+": K1 * K2 * ligand_conc**2 / denom,
+                "REECl2": K1 * K2 * ligand_conc**2 / denom,
             }
 
         elif self.medium == "nitrate":

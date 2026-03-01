@@ -766,6 +766,8 @@ class CSTR:
         F_in_total = jnp.sum(F_in)
 
         # Outlet flow rate (constant volume assumption: F_out_total = F_in_total)
+        # Valid for liquid-phase reactions with incompressible flow.
+        # For gas-phase, outlet flow should account for mole change from reaction.
         # Outlet composition is reactor composition
         x_out = n / n_total
         F_out = F_in_total * x_out

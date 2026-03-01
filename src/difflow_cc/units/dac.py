@@ -202,13 +202,15 @@ class SolidSorbentDAC:
         # Cycle time
         cycle_time = p.cycle_time_ads + p.cycle_time_des  # s
 
-        # Capture rate per unit (time-averaged)
-        capture_rate_unit = CO2_per_cycle / cycle_time  # mol/s per unit
+        # Duty fraction: fraction of cycle spent adsorbing
+        duty_fraction = p.cycle_time_ads / cycle_time
 
         # Total capture with multiple units
-        # With n units cycling, average capture ≈ n * rate * (t_ads / cycle_time)
-        duty_fraction = p.cycle_time_ads / cycle_time
-        total_capture = p.n_units * capture_rate_unit * duty_fraction  # mol/s
+        # CO2_per_cycle (mol) is captured during one full adsorption phase.
+        # Time-averaged rate per unit = CO2_per_cycle / cycle_time (already
+        # accounts for idle desorption time). No extra duty_fraction needed.
+        capture_rate_unit = CO2_per_cycle / cycle_time  # mol/s per unit
+        total_capture = p.n_units * capture_rate_unit  # mol/s
 
         # Capture efficiency (fraction of CO2 in processed air)
         air_processed = p.n_units * n_air * duty_fraction

@@ -655,6 +655,7 @@ class Mixer:
         self,
         species_order: list[str],
         thermo: IdealThermo | None = None,
+        phase: str = "liquid",
     ):
         """Initialize mixer.
 
@@ -662,9 +663,11 @@ class Mixer:
             species_order: List of species names
             thermo: Optional thermo for enthalpy-based T calculation.
                    If None, uses flow-weighted average temperature.
+            phase: Phase for enthalpy calculations ("liquid" or "vapor")
         """
         self.species_order = species_order
         self.thermo = thermo
+        self.phase = phase
 
     def __call__(self, *inlets: Stream) -> tuple[Stream, dict[str, Array]]:
         """Mix multiple streams.
@@ -693,7 +696,7 @@ class Mixer:
                 H_total = H_total + self.thermo.stream_enthalpy(
                     {s: flows[s] for s in self.species_order},
                     inlet["T"],
-                    phase="liquid"
+                    phase=self.phase
                 )
 
             # Estimate T from enthalpy (simplified - assume Cp is constant)
@@ -706,7 +709,7 @@ class Mixer:
 
             # H = n * Cp * (T - Tref), solve for T
             # This is approximate; could use Newton iteration for accuracy
-            H_ref = self.thermo.stream_enthalpy(outlet_flows, 298.15, phase="liquid")
+            H_ref = self.thermo.stream_enthalpy(outlet_flows, 298.15, phase=self.phase)
             T_out = 298.15 + (H_total - H_ref) / (total_flow * Cp_mix)
         else:
             # Flow-weighted average temperature
@@ -716,8 +719,10 @@ class Mixer:
                 for inlet in inlets
             ) / total_flow
 
-        # Use pressure from first inlet
+        # Use minimum pressure across all inlets (consistent with combine_streams)
         P_out = inlets[0]["P"]
+        for inlet in inlets[1:]:
+            P_out = jnp.minimum(P_out, inlet["P"])
 
         outlet = make_stream(outlet_flows, T_out, P_out)
 
