@@ -72,13 +72,27 @@ class Flowsheet:
         results = fs.solve()
     """
 
-    def __init__(self, species_order: list[str]):
+    def __init__(
+        self,
+        species_order: list[str],
+        default_flow: float = 0.01,
+        default_T: float = 300.0,
+        default_P: float = 101325.0,
+    ):
         """Initialize empty flowsheet.
 
         Args:
             species_order: List of species names for stream arrays
+            default_flow: Default molar flow (mol/s) for tear stream
+                initialization when no explicit initial guess is provided.
+                Use a smaller value (e.g. 1e-6) for trace species.
+            default_T: Default temperature (K) for tear stream initialization
+            default_P: Default pressure (Pa) for tear stream initialization
         """
         self.species_order = species_order
+        self.default_flow = default_flow
+        self.default_T = default_T
+        self.default_P = default_P
         self.units: list[Unit] = []
         self.feeds: dict[str, Stream] = {}
         self.recycles: dict[str, str] = {}  # {source_name: dest_name}
@@ -135,7 +149,14 @@ class Flowsheet:
 
         Args:
             tear_initial: Initial guesses for tear streams (recycle destinations).
-                         If None, uses initialization from units or zero flows.
+                If None, uses initialization from units or the default stream
+                created by ``_make_zero_stream()`` (controlled by
+                ``default_flow``, ``default_T``, ``default_P`` on the
+                Flowsheet). Pass a dict mapping destination stream names to
+                Stream objects to provide explicit guesses::
+
+                    fs.solve(tear_initial={"recycle": my_guess_stream})
+
             tol: Convergence tolerance
             max_iter: Maximum iterations
             damping: Damping factor for tear stream updates (used with acceleration="none")
@@ -208,9 +229,9 @@ class Flowsheet:
         return self._make_zero_stream()
 
     def _make_zero_stream(self) -> Stream:
-        """Create a stream with zero flows."""
-        flows = {s: jnp.asarray(0.01) for s in self.species_order}  # Small non-zero
-        return make_stream(flows, 300.0, 101325.0)
+        """Create a stream with small default flows for tear initialization."""
+        flows = {s: jnp.asarray(self.default_flow) for s in self.species_order}
+        return make_stream(flows, self.default_T, self.default_P)
 
     def _solve_sequential(self) -> dict[str, Stream]:
         """Solve flowsheet without recycles."""
@@ -540,7 +561,12 @@ class Flowsheet:
             new_units[idx] = new_unit
 
         # Build a shallow copy of the flowsheet with the new units
-        new_fs = Flowsheet(self.species_order)
+        new_fs = Flowsheet(
+            self.species_order,
+            default_flow=self.default_flow,
+            default_T=self.default_T,
+            default_P=self.default_P,
+        )
         new_fs.feeds = dict(self.feeds)
         new_fs.recycles = dict(self.recycles)
         new_fs.units = new_units

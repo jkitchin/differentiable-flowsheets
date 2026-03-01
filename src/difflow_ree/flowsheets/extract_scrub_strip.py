@@ -227,6 +227,24 @@ class ExtractScrubStripCircuit:
             f_product = float(product_flows.get(elem, 0.0))
             impurity_rejection[elem] = 1 - safe_divide(f_product, f_in)
 
+        # Mass balance verification
+        feed_total = {
+            elem: jnp.asarray(float(feed_flows.get(elem, 0.0)))
+            for elem in p.elements
+        }
+        output_total = {
+            elem: (
+                float(raff_flows.get(elem, 0.0))
+                + float(scrub_flows.get(elem, 0.0))
+                + float(product_flows.get(elem, 0.0))
+            )
+            for elem in p.elements
+        }
+        mass_closure = {
+            elem: safe_divide(output_total[elem], feed_total[elem])
+            for elem in p.elements
+        }
+
         return {
             "raffinate": raffinate,
             "scrub_liquor": scrub_liquor,
@@ -239,6 +257,11 @@ class ExtractScrubStripCircuit:
             "extraction_info": ext_info,
             "scrubbing_info": scrub_info,
             "stripping_info": strip_info,
+            "mass_balance": {
+                "feed": feed_total,
+                "output": output_total,
+                "closure": mass_closure,
+            },
         }
 
     def material_balance(self, feed: Stream, results: dict) -> dict:

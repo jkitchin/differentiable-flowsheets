@@ -115,6 +115,7 @@ def integrate_rk4(
     t_span: tuple[float, float],
     n_steps: int = 100,
     save_trajectory: bool = True,
+    bounds: tuple[Array, Array] | None = None,
 ) -> IntegrationResult:
     """Integrate ODE using fixed-step RK4.
 
@@ -124,6 +125,9 @@ def integrate_rk4(
         t_span: (t_start, t_end)
         n_steps: Number of integration steps
         save_trajectory: Whether to save intermediate states
+        bounds: Optional (lower, upper) arrays for state clipping after each
+            step. Use ``StateSpec.get_bounds()`` to obtain these from a unit's
+            state specification.
 
     Returns:
         IntegrationResult with final state and trajectory
@@ -138,6 +142,8 @@ def integrate_rk4(
     def step_fn(carry, _):
         t, y = carry
         y_new = rk4_step(f, t, y, dt)
+        if bounds is not None:
+            y_new = jnp.clip(y_new, bounds[0], bounds[1])
         t_new = t + dt
         return (t_new, y_new), (t_new, y_new)
 
@@ -232,6 +238,7 @@ def integrate_rk45(
     initial_step: float | None = None,
     min_step: float = 1e-12,
     max_step: float | None = None,
+    bounds: tuple[Array, Array] | None = None,
 ) -> IntegrationResult:
     """Integrate ODE using adaptive RK45.
 
@@ -247,6 +254,8 @@ def integrate_rk45(
         initial_step: Initial step size (auto if None)
         min_step: Minimum step size
         max_step: Maximum step size (defaults to span/10)
+        bounds: Optional (lower, upper) arrays for state clipping after each
+            accepted step.
 
     Returns:
         IntegrationResult with final state and trajectory
@@ -300,8 +309,11 @@ def integrate_rk45(
         accept = error_ratio <= 1.0
 
         # New state (use y5 - the 5th order solution - if accepted)
+        y5_clipped = jnp.where(
+            bounds is not None, jnp.clip(y5, bounds[0], bounds[1]), y5
+        ) if bounds is not None else y5
         t_new = jnp.where(accept, t + dt, t)
-        y_new = jnp.where(accept, y5, y)
+        y_new = jnp.where(accept, y5_clipped, y)
 
         # Compute new step size using standard formula
         # dt_new = dt * (tol / error)^(1/5) with safety factor
@@ -367,6 +379,7 @@ def integrate_euler(
     y0: Array,
     t_span: tuple[float, float],
     n_steps: int = 1000,
+    bounds: tuple[Array, Array] | None = None,
 ) -> IntegrationResult:
     """Integrate ODE using explicit Euler method.
 
@@ -377,6 +390,7 @@ def integrate_euler(
         y0: Initial state
         t_span: (t_start, t_end)
         n_steps: Number of steps
+        bounds: Optional (lower, upper) arrays for state clipping.
 
     Returns:
         IntegrationResult
@@ -392,6 +406,8 @@ def integrate_euler(
         t, y = carry
         dy = f(t, y)
         y_new = y + dt * dy
+        if bounds is not None:
+            y_new = jnp.clip(y_new, bounds[0], bounds[1])
         t_new = t + dt
         return (t_new, y_new), (t_new, y_new)
 
@@ -476,9 +492,11 @@ def integrate(
 
         return integrate_diffrax(f, y0, t_span, solver=solver, **kwargs)
 
+    bounds = kwargs.pop("bounds", None)
+
     if method == "RK4":
         n_steps = kwargs.get("n_steps", 100)
-        return integrate_rk4(f, y0, t_span, n_steps=n_steps)
+        return integrate_rk4(f, y0, t_span, n_steps=n_steps, bounds=bounds)
 
     elif method == "RK45":
         return integrate_rk45(
@@ -489,11 +507,12 @@ def integrate(
             initial_step=kwargs.get("initial_step"),
             min_step=kwargs.get("min_step", 1e-12),
             max_step=kwargs.get("max_step"),
+            bounds=bounds,
         )
 
     elif method == "Euler":
         n_steps = kwargs.get("n_steps", 1000)
-        return integrate_euler(f, y0, t_span, n_steps=n_steps)
+        return integrate_euler(f, y0, t_span, n_steps=n_steps, bounds=bounds)
 
     else:
         raise ValueError(f"Unknown integration method: {method}")

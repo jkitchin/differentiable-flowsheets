@@ -171,6 +171,7 @@ def integrate_diffrax(
     max_steps: int = 16**4,
     saveat: Array | None = None,
     dense: bool = False,
+    bounds: tuple[Array, Array] | None = None,
     **kwargs,
 ) -> IntegrationResult:
     """Integrate ODE using diffrax.
@@ -186,6 +187,8 @@ def integrate_diffrax(
         max_steps: Maximum number of steps
         saveat: Time points to save solution (default: just endpoints)
         dense: Whether to use dense output interpolation
+        bounds: Optional (lower, upper) arrays for post-integration state
+            clipping. Applied to the trajectory and final state.
         **kwargs: Additional arguments passed to diffeqsolve
 
     Returns:
@@ -242,11 +245,17 @@ def integrate_diffrax(
 
     # Extract results
     y_final = solution.ys[-1]
+    ys = solution.ys
+
+    # Apply bounds clipping if requested
+    if bounds is not None:
+        ys = jnp.clip(ys, bounds[0], bounds[1])
+        y_final = ys[-1]
 
     # Build trajectory
     trajectory = Trajectory(
         t=solution.ts,
-        y=solution.ys,
+        y=ys,
     )
 
     # Build info

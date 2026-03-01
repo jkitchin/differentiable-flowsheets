@@ -169,6 +169,24 @@ class ExtractStripCircuit:
             f_out = float(product_flows.get(elem, 0.0))
             element_recovery[elem] = safe_divide(f_out, f_in)
 
+        # Mass balance verification
+        raff_flows = get_flows(raffinate)
+        feed_total = {
+            elem: jnp.asarray(float(feed_flows.get(elem, 0.0)))
+            for elem in p.elements
+        }
+        product_total = {
+            elem: (
+                float(product_flows.get(elem, 0.0))
+                + float(raff_flows.get(elem, 0.0))
+            )
+            for elem in p.elements
+        }
+        mass_closure = {
+            elem: safe_divide(product_total[elem], feed_total[elem])
+            for elem in p.elements
+        }
+
         return {
             "raffinate": raffinate,
             "product": product,
@@ -177,6 +195,11 @@ class ExtractStripCircuit:
             "element_recovery": element_recovery,
             "extraction_info": ext_info,
             "stripping_info": strip_info,
+            "mass_balance": {
+                "feed": feed_total,
+                "output": product_total,
+                "closure": mass_closure,
+            },
         }
 
     def optimize_stages(

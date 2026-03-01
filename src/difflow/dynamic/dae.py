@@ -553,6 +553,7 @@ def dae_step_euler(
     params: Params | None = None,
     newton_tol: float = 1e-8,
     newton_max_iter: int = 50,
+    bounds: tuple[Array, Array] | None = None,
 ) -> tuple[Array, Array]:
     """Single implicit Euler step for DAE.
 
@@ -574,6 +575,7 @@ def dae_step_euler(
         params: Optional parameters
         newton_tol: Tolerance for Newton solver
         newton_max_iter: Max Newton iterations
+        bounds: Optional (lower, upper) for differential state clipping
 
     Returns:
         (x_new, z_new): States at t + dt
@@ -594,6 +596,9 @@ def dae_step_euler(
     dx_new = unit.derivatives(t_new, x_pred, z_new, inputs, params)
     x_new = x + dt * dx_new
 
+    if bounds is not None:
+        x_new = jnp.clip(x_new, bounds[0], bounds[1])
+
     return x_new, z_new
 
 
@@ -607,6 +612,7 @@ def dae_step_rk4(
     params: Params | None = None,
     newton_tol: float = 1e-8,
     newton_max_iter: int = 50,
+    bounds: tuple[Array, Array] | None = None,
 ) -> tuple[Array, Array]:
     """RK4 step for DAE with algebraic solve at each stage.
 
@@ -621,6 +627,7 @@ def dae_step_rk4(
         dt: Time step
         inputs: Input streams
         params: Optional parameters
+        bounds: Optional (lower, upper) for differential state clipping
 
     Returns:
         (x_new, z_new): States at t + dt
@@ -656,6 +663,9 @@ def dae_step_rk4(
     # Combine
     x_new = x + (dt / 6.0) * (k1 + 2*k2 + 2*k3 + k4)
 
+    if bounds is not None:
+        x_new = jnp.clip(x_new, bounds[0], bounds[1])
+
     # Final algebraic solve at new state
     z_new, _ = solve_algebraic(
         unit, t + dt, x_new, z4, inputs, params,
@@ -679,6 +689,7 @@ def integrate_dae(
     params: Params | None = None,
     newton_tol: float = 1e-8,
     newton_max_iter: int = 50,
+    bounds: tuple[Array, Array] | None = None,
 ) -> DAEResult:
     """Integrate a DAE unit over time.
 
@@ -696,6 +707,9 @@ def integrate_dae(
         params: Optional parameters
         newton_tol: Tolerance for algebraic solver
         newton_max_iter: Max iterations for algebraic solver
+        bounds: Optional (lower, upper) arrays for differential state
+            clipping after each step. Use ``unit.state_spec().get_bounds()``
+            to obtain these from the unit's state specification.
 
     Returns:
         DAEResult with trajectories and final states
@@ -724,6 +738,7 @@ def integrate_dae(
             params=params,
             newton_tol=newton_tol,
             newton_max_iter=newton_max_iter,
+            bounds=bounds,
         )
     else:  # RK4
         step_fn = partial(
@@ -733,6 +748,7 @@ def integrate_dae(
             params=params,
             newton_tol=newton_tol,
             newton_max_iter=newton_max_iter,
+            bounds=bounds,
         )
 
     def scan_step(carry, _):

@@ -61,15 +61,25 @@ class Flash:
         self,
         params: FlashParams,
         thermo: IdealThermo,
+        eos: PengRobinson | SRK | None = None,
+        k_ij: Array | None = None,
     ):
         """Initialize flash separator.
 
         Args:
             params: Flash parameters
-            thermo: Thermodynamic property calculator for K-values
+            thermo: Thermodynamic property calculator for K-values (used
+                when ``eos`` is None)
+            eos: Optional equation of state (PengRobinson or SRK). When
+                provided, K-values are computed from fugacity coefficients
+                via ``flash_TP_eos()`` instead of Raoult's law.
+            k_ij: Binary interaction parameters for EOS (n x n matrix).
+                Ignored when ``eos`` is None.
         """
         self.params = params
         self.thermo = thermo
+        self.eos = eos
+        self.k_ij = k_ij
 
     def __call__(
         self,
@@ -105,39 +115,33 @@ class Flash:
         F_total = jnp.sum(F_feed)
         z = F_feed / F_total  # Feed mole fractions
 
-        # Get K-values from thermodynamics and clamp to avoid numerical issues.
-        # Without clamping, extreme K-values cause problems:
-        # - K → 0 for very heavy components causes division issues when V → 1
-        # - K → ∞ for very volatile components causes overflow
-        # - K → 1 near critical point makes (K-1) → 0, ill-conditioning Rachford-Rice
-        K_raw = self.thermo.K_values_array(T, P)
-        K = jnp.clip(K_raw, K_MIN, K_MAX)
+        if self.eos is not None:
+            # --- EOS path: K-values from fugacity coefficients ---
+            V_frac, x, y = flash_TP_eos(self.eos, z, T, P, self.k_ij)
+            K = jnp.where(x > 1e-15, y / x, jnp.ones_like(x))
+        else:
+            # --- Ideal (Raoult's law) path ---
+            # Get K-values from thermodynamics and clamp to avoid numerical issues.
+            K_raw = self.thermo.K_values_array(T, P)
+            K = jnp.clip(K_raw, K_MIN, K_MAX)
 
-        # Check for subcooled liquid or superheated vapor
-        # sum(z*K) < 1 => subcooled liquid (all liquid)
-        # sum(z/K) < 1 => superheated vapor (all vapor)
-        bubble_check = jnp.sum(z * K)
-        dew_check = jnp.sum(z / K)
+            # Check for subcooled liquid or superheated vapor
+            bubble_check = jnp.sum(z * K)
+            dew_check = jnp.sum(z / K)
 
-        # Solve Rachford-Rice for vapor fraction
-        V_frac = self._solve_flash(z, K, bubble_check, dew_check)
+            # Solve Rachford-Rice for vapor fraction
+            V_frac = self._solve_flash(z, K, bubble_check, dew_check)
 
-        # Get compositions from Rachford-Rice solution.
-        # Normalize x first, then derive y from the component mass balance
-        # z_i = x_i * (1 - V) + y_i * V  =>  y_i = (z_i - x_i * (1 - V)) / V
-        # This ensures the overall component balance is satisfied exactly,
-        # unlike independent normalization of x and y which can violate it.
-        x = z / (1 + V_frac * (K - 1))
-        x = x / jnp.sum(x)
-        # Derive y from mass balance to maintain closure
-        # For edge cases (V_frac near 0 or 1), fall back to K*x
-        y = jnp.where(
-            V_frac > 1e-10,
-            (z - x * (1 - V_frac)) / jnp.maximum(V_frac, 1e-10),
-            K * x,
-        )
-        y = jnp.maximum(y, 0.0)
-        y = y / jnp.sum(y)
+            # Compositions from Rachford-Rice
+            x = z / (1 + V_frac * (K - 1))
+            x = x / jnp.sum(x)
+            y = jnp.where(
+                V_frac > 1e-10,
+                (z - x * (1 - V_frac)) / jnp.maximum(V_frac, 1e-10),
+                K * x,
+            )
+            y = jnp.maximum(y, 0.0)
+            y = y / jnp.sum(y)
 
         # Calculate outlet flows
         L = F_total * (1 - V_frac)  # Liquid molar flow
@@ -150,6 +154,16 @@ class Flash:
         liquid = make_stream(liquid_flows, T, P)
         vapor = make_stream(vapor_flows, T, P)
 
+        # Phase detection flags
+        # Recompute bubble/dew checks for the info dict (needed for both paths)
+        bubble_check = jnp.sum(z * K)
+        dew_check = jnp.sum(z / K)
+        # 0 = two-phase, 1 = subcooled liquid, 2 = superheated vapor
+        phase_flag = jnp.where(
+            bubble_check < 1.0, 1,
+            jnp.where(dew_check < 1.0, 2, 0),
+        )
+
         # Build info dict
         info = {
             "V_frac": V_frac,
@@ -158,6 +172,9 @@ class Flash:
             "y": {s: y[i] for i, s in enumerate(p.species_order)},
             "L": L,
             "V": V,
+            "phase_flag": phase_flag,
+            "bubble_check": bubble_check,
+            "dew_check": dew_check,
         }
 
         return liquid, vapor, info

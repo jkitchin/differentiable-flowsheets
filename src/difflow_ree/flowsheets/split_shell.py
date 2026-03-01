@@ -281,12 +281,33 @@ class SplitShellCascade:
                 for elem, flow in prod["flows"].items()
             }
 
+        # Mass balance verification
+        feed_total = {
+            elem: jnp.asarray(float(feed_flows.get(elem, 0.0)))
+            for elem in p.elements
+        }
+        product_total = {
+            elem: sum(
+                prod["flows"].get(elem, 0.0) for prod in products.values()
+            )
+            for elem in p.elements
+        }
+        closure = {
+            elem: safe_divide(product_total[elem], feed_total[elem])
+            for elem in p.elements
+        }
+
         return {
             "products": products,
             "D_values": D_values,
             "n_stages": n_total,
             "split_points": list(p.split_points),
             "converged_in_iter": _iter + 1,
+            "mass_balance": {
+                "feed": feed_total,
+                "product": product_total,
+                "closure": closure,
+            },
         }
 
 

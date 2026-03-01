@@ -155,6 +155,21 @@ class StateSpec:
         """Get all variables of a given category."""
         return [v for v in self.variables if v.category == category]
 
+    def enforce_bounds(self, state: Array) -> Array:
+        """Clip state vector to declared bounds.
+
+        Uses ``jnp.clip`` which is differentiable (gradient passes through
+        in the interior and is zero at active bounds).
+
+        Args:
+            state: State array to clip
+
+        Returns:
+            Clipped state array
+        """
+        lower, upper = self.get_bounds()
+        return jnp.clip(state, lower, upper)
+
 
 @dataclass
 class StateVector:
