@@ -192,6 +192,32 @@ SEPARATOR_COSTS = {
 # Core Cost Functions (JAX-differentiable)
 # =============================================================================
 
+VALID_EXPONENT_RANGE = (0.3, 1.2)
+
+
+def validate_cost_params(params: CostParams, size: float | Array) -> dict:
+    """Validate cost correlation parameters and sizing.
+
+    Args:
+        params: Cost correlation parameters
+        size: Equipment size/capacity
+
+    Returns:
+        Dictionary with validation flags:
+        - 'exponent_valid': Whether n is in typical [0.3, 1.2] range
+        - 'size_in_range': Whether size is within S_min to S_max
+        - 'exponent': The scaling exponent
+        - 'size_range': (S_min, S_max)
+    """
+    size_val = float(size) if hasattr(size, '__float__') else size
+    return {
+        'exponent_valid': VALID_EXPONENT_RANGE[0] <= params.n <= VALID_EXPONENT_RANGE[1],
+        'size_in_range': params.S_min <= size_val <= params.S_max,
+        'exponent': params.n,
+        'size_range': (params.S_min, params.S_max),
+    }
+
+
 def equipment_cost(
     size: Array,
     params: CostParams,

@@ -148,6 +148,12 @@ from difflow.dynamic.integrators import (
     IntegrationResult,
     Trajectory,
     IntegrationInfo,
+    # Events
+    EventSpec,
+    EventResult,
+    detect_events,
+    # Stiffness detection
+    estimate_stiffness,
     # Gradient utilities
     integrate_with_grad,
     sensitivity_analysis,
@@ -249,6 +255,10 @@ __all__ = [
     "IntegrationResult",
     "Trajectory",
     "IntegrationInfo",
+    "EventSpec",
+    "EventResult",
+    "detect_events",
+    "estimate_stiffness",
     "integrate_with_grad",
     "sensitivity_analysis",
     "Method",

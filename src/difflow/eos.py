@@ -264,6 +264,7 @@ class EOSParams(ParamsMixin):
     Pc: Array
     omega: Array
     species_order: list[str]
+    k_ij: Array | None = None
 
     def __post_init__(self):
         """Validate EOS parameters."""
@@ -278,6 +279,33 @@ class EOSParams(ParamsMixin):
                     f"{name} has shape {arr.shape}, expected ({n},) for "
                     f"{n} species"
                 )
+
+
+def build_kij_matrix(
+    species_order: list[str],
+    kij_dict: dict[tuple[str, str], float],
+) -> Array:
+    """Build symmetric binary interaction parameter matrix from a dict.
+
+    Args:
+        species_order: Ordered list of species names
+        kij_dict: Dictionary mapping species pairs to k_ij values,
+                  e.g. {("methane", "ethane"): 0.02}. Order of the pair
+                  does not matter (matrix is symmetric).
+
+    Returns:
+        n x n JAX array of binary interaction parameters
+    """
+    n = len(species_order)
+    k = jnp.zeros((n, n))
+    name_to_idx = {name: i for i, name in enumerate(species_order)}
+    for (s1, s2), val in kij_dict.items():
+        i = name_to_idx.get(s1)
+        j = name_to_idx.get(s2)
+        if i is not None and j is not None:
+            k = k.at[i, j].set(val)
+            k = k.at[j, i].set(val)
+    return k
 
 
 class PengRobinson:
@@ -306,15 +334,24 @@ class PengRobinson:
     OMEGA_A = 0.45724
     OMEGA_B = 0.07780
 
-    def __init__(self, species_data: dict[str, CriticalProperties]):
+    def __init__(
+        self,
+        species_data: dict[str, CriticalProperties],
+        k_ij: dict[tuple[str, str], float] | Array | None = None,
+    ):
         """Initialize with species critical properties.
 
         Args:
             species_data: Dictionary mapping species names to CriticalProperties
+            k_ij: Binary interaction parameters. Can be:
+                  - None: all k_ij = 0 (default)
+                  - dict: {("species1", "species2"): value} pairs
+                  - Array: n x n matrix directly
         """
         self.species = species_data
         self._species_order = list(species_data.keys())
         self.n_species = len(self._species_order)
+        self._kij_input = k_ij
         self.params = self._compute_params()
 
     @property
@@ -336,6 +373,14 @@ class PengRobinson:
         # Temperature dependence (kappa for alpha function)
         kappa = 0.37464 + 1.54226 * omega - 0.26992 * omega**2
 
+        # Binary interaction parameters
+        k_ij_arr = None
+        if self._kij_input is not None:
+            if isinstance(self._kij_input, dict):
+                k_ij_arr = build_kij_matrix(self._species_order, self._kij_input)
+            else:
+                k_ij_arr = jnp.asarray(self._kij_input)
+
         return EOSParams(
             a_c=a_c,
             b=b,
@@ -344,6 +389,7 @@ class PengRobinson:
             Pc=Pc,
             omega=omega,
             species_order=self._species_order,
+            k_ij=k_ij_arr,
         )
 
     def alpha(self, T: Array) -> Array:
@@ -384,14 +430,14 @@ class PengRobinson:
             T: Temperature (K)
             y: Mole fractions (array in species_order)
             k_ij: Binary interaction parameters (n x n matrix).
-                  If None, assumes k_ij = 0 for all pairs.
+                  If None, uses stored params.k_ij or zeros.
 
         Returns:
             Mixture 'a' parameter
         """
         a_i = self.a(T)
         if k_ij is None:
-            k_ij = jnp.zeros((self.n_species, self.n_species))
+            k_ij = self.params.k_ij if self.params.k_ij is not None else jnp.zeros((self.n_species, self.n_species))
         return _compute_a_mix(a_i, y, k_ij)
 
     def b_mix(self, y: Array) -> Array:
@@ -578,7 +624,7 @@ class PengRobinson:
         n = self.n_species
 
         if k_ij is None:
-            k_ij = jnp.zeros((n, n))
+            k_ij = self.params.k_ij if self.params.k_ij is not None else jnp.zeros((n, n))
 
         # Mixture parameters
         a_m = self.a_mix(T, y, k_ij)
@@ -625,7 +671,7 @@ class PengRobinson:
             P: Pressure (Pa)
             x: Liquid mole fractions
             y: Vapor mole fractions
-            k_ij: Binary interaction parameters
+            k_ij: Binary interaction parameters (uses stored if None)
 
         Returns:
             K-values for each species
@@ -722,15 +768,24 @@ class SRK:
     OMEGA_A = 0.42748
     OMEGA_B = 0.08664
 
-    def __init__(self, species_data: dict[str, CriticalProperties]):
+    def __init__(
+        self,
+        species_data: dict[str, CriticalProperties],
+        k_ij: dict[tuple[str, str], float] | Array | None = None,
+    ):
         """Initialize with species critical properties.
 
         Args:
             species_data: Dictionary mapping species names to CriticalProperties
+            k_ij: Binary interaction parameters. Can be:
+                  - None: all k_ij = 0 (default)
+                  - dict: {("species1", "species2"): value} pairs
+                  - Array: n x n matrix directly
         """
         self.species = species_data
         self._species_order = list(species_data.keys())
         self.n_species = len(self._species_order)
+        self._kij_input = k_ij
         self.params = self._compute_params()
 
     @property
@@ -751,6 +806,14 @@ class SRK:
         # Temperature dependence (m for alpha function in SRK)
         kappa = 0.480 + 1.574 * omega - 0.176 * omega**2
 
+        # Binary interaction parameters
+        k_ij_arr = None
+        if self._kij_input is not None:
+            if isinstance(self._kij_input, dict):
+                k_ij_arr = build_kij_matrix(self._species_order, self._kij_input)
+            else:
+                k_ij_arr = jnp.asarray(self._kij_input)
+
         return EOSParams(
             a_c=a_c,
             b=b,
@@ -759,6 +822,7 @@ class SRK:
             Pc=Pc,
             omega=omega,
             species_order=self._species_order,
+            k_ij=k_ij_arr,
         )
 
     def alpha(self, T: Array) -> Array:
@@ -791,7 +855,7 @@ class SRK:
         n = self.n_species
 
         if k_ij is None:
-            k_ij = jnp.zeros((n, n))
+            k_ij = self.params.k_ij if self.params.k_ij is not None else jnp.zeros((n, n))
 
         a_ij = jnp.sqrt(jnp.outer(a_i, a_i)) * (1 - k_ij)
         a_mix = jnp.sum(jnp.outer(y, y) * a_ij)
@@ -932,7 +996,7 @@ class SRK:
         n = self.n_species
 
         if k_ij is None:
-            k_ij = jnp.zeros((n, n))
+            k_ij = self.params.k_ij if self.params.k_ij is not None else jnp.zeros((n, n))
 
         a_m = self.a_mix(T, y, k_ij)
         b_m = self.b_mix(y)

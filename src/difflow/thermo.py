@@ -71,6 +71,8 @@ class SpeciesData(NamedTuple):
         Cp_vapor_coeffs: Vapor heat capacity coefficients [a, b, c, d] for
                          Cp = a + b*T + c*T^2 + d*T^3 (J/mol/K).
                          If None, falls back to Cp_coeffs (liquid).
+        T_antoine_min: Minimum valid temperature for Antoine equation (K)
+        T_antoine_max: Maximum valid temperature for Antoine equation (K)
     """
     name: str
     MW: float
@@ -80,6 +82,8 @@ class SpeciesData(NamedTuple):
     Hf: float = 0.0
     Tref: float = 298.15
     Cp_vapor_coeffs: tuple[float, float, float, float] | None = None
+    T_antoine_min: float = 0.0
+    T_antoine_max: float = 1e6
 
 
 class IdealThermo:
@@ -220,6 +224,45 @@ class IdealThermo:
         """
         A, B, C = self.species[species].antoine_coeffs
         return _compute_psat_antoine(jnp.asarray(T), A, B, C)
+
+    def validate_antoine(self, species: str, T: float) -> dict:
+        """Check whether temperature is in valid range for Antoine equation.
+
+        Args:
+            species: Species name
+            T: Temperature (K)
+
+        Returns:
+            Dict with 'in_range', 'T_min', and 'T_max' keys
+        """
+        data = self.species[species]
+        return {
+            'in_range': data.T_antoine_min <= T <= data.T_antoine_max,
+            'T_min': data.T_antoine_min,
+            'T_max': data.T_antoine_max,
+        }
+
+    def Psat_with_info(
+        self, species: str, T: Array | float
+    ) -> tuple[Array, dict]:
+        """Calculate saturation pressure with Antoine range validation info.
+
+        Args:
+            species: Species name
+            T: Temperature (K)
+
+        Returns:
+            (Psat, info_dict) where info_dict contains 'antoine_in_range' flag
+        """
+        Psat = self.Psat(species, T)
+        data = self.species[species]
+        T_val = float(T)
+        info = {
+            'antoine_in_range': data.T_antoine_min <= T_val <= data.T_antoine_max,
+            'T_antoine_min': data.T_antoine_min,
+            'T_antoine_max': data.T_antoine_max,
+        }
+        return Psat, info
 
     def K_value(
         self,

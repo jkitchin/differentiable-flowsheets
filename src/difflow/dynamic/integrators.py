@@ -27,7 +27,7 @@ Example:
 """
 
 from typing import Callable, NamedTuple, Literal, Any
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import partial
 import jax
 import jax.numpy as jnp
@@ -38,6 +38,34 @@ from difflow.numerics import safe_divide
 
 # Type for derivative function: f(t, y, *args) -> dy/dt
 DerivativesFn = Callable[[Array, Array], Array]
+
+
+@dataclass
+class EventSpec:
+    """Specification for an event to detect during integration.
+
+    Attributes:
+        name: Name of the event
+        condition_fn: Function (t, y) -> scalar. Event triggers at zero crossings.
+        direction: +1 for crossing up, -1 for crossing down, 0 for both
+    """
+    name: str
+    condition_fn: Callable[[Array, Array], Array]
+    direction: int = 0
+
+
+@dataclass
+class EventResult:
+    """Record of a detected event during integration.
+
+    Attributes:
+        name: Event name
+        t_event: Time of the event
+        y_event: State at the event time
+    """
+    name: str
+    t_event: float
+    y_event: Array
 
 
 class Trajectory(NamedTuple):
@@ -74,10 +102,12 @@ class IntegrationResult:
         y_final: Final state array
         trajectory: Time and state history
         info: Integration statistics
+        events: List of detected events (empty if no events specified)
     """
     y_final: Array
     trajectory: Trajectory
     info: IntegrationInfo
+    events: list[EventResult] = field(default_factory=list)
 
 
 # =============================================================================
@@ -434,7 +464,53 @@ def integrate_euler(
 # Unified Interface
 # =============================================================================
 
-Method = Literal["RK4", "RK45", "Euler", "diffrax"]
+def estimate_stiffness(
+    f: DerivativesFn,
+    y0: Array,
+    t0: float = 0.0,
+    eps: float = 1e-6,
+) -> dict:
+    """Estimate stiffness ratio of an ODE system.
+
+    Evaluates the Jacobian via finite differences and computes
+    the ratio of max to min absolute eigenvalue magnitudes.
+
+    Args:
+        f: Derivative function f(t, y) -> dy/dt
+        y0: Initial state
+        t0: Initial time
+        eps: Finite difference step
+
+    Returns:
+        Dict with 'stiffness_ratio' and 'is_stiff' flag
+    """
+    t0_arr = jnp.asarray(t0)
+    y0_arr = jnp.asarray(y0)
+    n = y0_arr.shape[0]
+
+    f0 = f(t0_arr, y0_arr)
+
+    # Build approximate Jacobian via finite differences
+    J = jnp.zeros((n, n))
+    for i in range(n):
+        e_i = jnp.zeros(n).at[i].set(eps * jnp.maximum(jnp.abs(y0_arr[i]), 1.0))
+        fi = f(t0_arr, y0_arr + e_i)
+        col = (fi - f0) / (eps * jnp.maximum(jnp.abs(y0_arr[i]), 1.0))
+        J = J.at[:, i].set(col)
+
+    # Estimate stiffness from eigenvalue spread
+    eigs = jnp.abs(jnp.linalg.eigvals(J))
+    eig_max = jnp.max(eigs)
+    eig_min = jnp.max(jnp.array([jnp.min(eigs), 1e-30]))
+    ratio = float(eig_max / eig_min)
+
+    return {
+        'stiffness_ratio': ratio,
+        'is_stiff': ratio > 1000.0,
+    }
+
+
+Method = Literal["RK4", "RK45", "Euler", "diffrax", "auto"]
 
 
 def integrate(
@@ -475,6 +551,34 @@ def integrate(
         # Using diffrax with specific solver
         >>> result = integrate(f, y0, t_span, "diffrax:dopri5", rtol=1e-6)
     """
+    # Handle auto method selection
+    if method == "auto":
+        stiffness = estimate_stiffness(f, jnp.asarray(y0), t_span[0])
+        if stiffness['is_stiff']:
+            try:
+                from difflow.dynamic.diffrax_backend import HAS_DIFFRAX
+                if HAS_DIFFRAX:
+                    method = "diffrax:kvaerno5"
+                else:
+                    method = "RK45"
+                    kwargs.setdefault("rtol", 1e-8)
+                    kwargs.setdefault("atol", 1e-10)
+            except ImportError:
+                method = "RK45"
+                kwargs.setdefault("rtol", 1e-8)
+                kwargs.setdefault("atol", 1e-10)
+        else:
+            method = "RK45"
+        # Store stiffness info for the caller to inspect
+        result = integrate(f, y0, t_span, method, **kwargs)
+        result.info = IntegrationInfo(
+            n_steps=result.info.n_steps,
+            n_eval=result.info.n_eval,
+            success=result.info.success,
+            message=f"auto -> {method} (stiffness_ratio={stiffness['stiffness_ratio']:.1f})",
+        )
+        return result
+
     # Handle diffrax methods
     if isinstance(method, str) and (method == "diffrax" or method.startswith("diffrax:")):
         from difflow.dynamic.diffrax_backend import integrate_diffrax, HAS_DIFFRAX
@@ -516,6 +620,61 @@ def integrate(
 
     else:
         raise ValueError(f"Unknown integration method: {method}")
+
+
+def detect_events(
+    result: IntegrationResult,
+    events: list[EventSpec],
+) -> list[EventResult]:
+    """Detect zero-crossing events in an integration trajectory.
+
+    After integration, scan the trajectory for sign changes in
+    event condition functions and record crossings.
+
+    Args:
+        result: IntegrationResult from integration
+        events: List of EventSpec to check
+
+    Returns:
+        List of EventResult for each detected crossing
+    """
+    detected = []
+    t_arr = result.trajectory.t
+    y_arr = result.trajectory.y
+    n = len(t_arr)
+
+    for event in events:
+        for i in range(n - 1):
+            t0, t1 = t_arr[i], t_arr[i + 1]
+            y0, y1 = y_arr[i], y_arr[i + 1]
+            g0 = float(event.condition_fn(t0, y0))
+            g1 = float(event.condition_fn(t1, y1))
+
+            # Check sign change
+            if g0 * g1 > 0:
+                continue
+
+            # Direction filtering
+            if event.direction == 1 and g1 <= g0:
+                continue
+            if event.direction == -1 and g1 >= g0:
+                continue
+
+            # Linear interpolation for crossing time
+            if abs(g1 - g0) > 1e-30:
+                alpha = g0 / (g0 - g1)
+            else:
+                alpha = 0.5
+            t_event = float(t0 + alpha * (t1 - t0))
+            y_event = y0 + alpha * (y1 - y0)
+
+            detected.append(EventResult(
+                name=event.name,
+                t_event=t_event,
+                y_event=y_event,
+            ))
+
+    return detected
 
 
 # =============================================================================

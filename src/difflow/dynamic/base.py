@@ -281,18 +281,21 @@ class DynamicCSTR(DynamicUnitBase):
         rate_params: Params | None = None,
         dH_rxn: Array | None = None,
         mode: Literal["isothermal", "adiabatic", "specified_duty"] = "isothermal",
+        variable_volume: bool = False,
         name: str | None = None,
     ):
         """Initialize dynamic CSTR.
 
         Args:
-            volume: Reactor volume (m³)
+            volume: Reactor volume (m³) — initial volume if variable_volume=True
             rate_fn: Reaction rate function: rate_fn(C, T, params) -> r
             stoich: Stoichiometry matrix (n_species, n_reactions)
             species_order: List of species names
             rate_params: Parameters for rate function
             dH_rxn: Heats of reaction (J/mol), negative for exothermic
             mode: Energy balance mode
+            variable_volume: If True, volume is a dynamic state variable
+                            (dV/dt = Q_in - Q_out)
             name: Unit name
         """
         params = {
@@ -303,18 +306,28 @@ class DynamicCSTR(DynamicUnitBase):
             "rate_params": rate_params or {},
             "dH_rxn": jnp.asarray(dH_rxn) if dH_rxn is not None else None,
             "mode": mode,
+            "variable_volume": variable_volume,
         }
         super().__init__(params, name)
 
     def _build_state_spec(self) -> StateSpec:
-        """Build state spec for moles and optionally temperature."""
-        from difflow.dynamic.state import molar_states, thermal_state
+        """Build state spec for moles, optionally volume and temperature."""
+        from difflow.dynamic.state import molar_states, thermal_state, volume_state
+
+        spec_parts = []
+
+        if self.params.get("variable_volume", False):
+            spec_parts.append(volume_state())
 
         species = self.params["species_order"]
-        spec = molar_states(species)
+        spec_parts.append(molar_states(species))
 
         if self.params["mode"] != "isothermal":
-            spec = spec + thermal_state()
+            spec_parts.append(thermal_state())
+
+        spec = spec_parts[0]
+        for part in spec_parts[1:]:
+            spec = spec + part
 
         return spec
 
@@ -324,10 +337,16 @@ class DynamicCSTR(DynamicUnitBase):
         state: StateVector,
         inputs: dict[str, Stream],
     ) -> Array:
-        """Compute dn/dt and optionally dT/dt."""
+        """Compute dn/dt and optionally dV/dt and dT/dt."""
         p = self.params
         species = p["species_order"]
-        V = p["V"]
+        variable_volume = p.get("variable_volume", False)
+
+        # Get volume — from state if variable, from params if fixed
+        if variable_volume:
+            V = state["V"]
+        else:
+            V = p["V"]
 
         # Get moles from state
         n = jnp.array([state[f"n_{s}"] for s in species])
@@ -342,8 +361,7 @@ class DynamicCSTR(DynamicUnitBase):
         F_in = jnp.array([inlet_flows.get(s, 0.0) for s in species])
         F_in_total = jnp.sum(F_in)
 
-        # Outlet flow (assume constant density, F_out = F_in)
-        # For more accurate: compute from pressure/level controller
+        # Outlet flow (assume constant density, F_out = F_in for fixed volume)
         F_out_total = F_in_total
         x_out = n / n_total
         F_out = F_out_total * x_out
@@ -360,12 +378,24 @@ class DynamicCSTR(DynamicUnitBase):
         # Material balance: dn/dt = F_in - F_out + V * stoich @ r
         dn_dt = F_in - F_out + V * (p["stoich"] @ r)
 
+        # Build derivative vector
+        derivs_parts = []
+
+        if variable_volume:
+            # Volume balance: dV/dt = Q_in - Q_out
+            # Estimate volumetric flows from molar flows using liquid molar density
+            rho_mol = 55500.0  # mol/m³ (water-like liquid density)
+            Q_in = F_in_total / rho_mol
+            Q_out = F_out_total / rho_mol
+            dV_dt = Q_in - Q_out
+            derivs_parts.append(jnp.array([dV_dt]))
+
+        derivs_parts.append(dn_dt)
+
         if p["mode"] == "isothermal":
-            return dn_dt
+            return jnp.concatenate(derivs_parts)
 
         # Energy balance for non-isothermal
-        # Simplified: d(n*Cp*T)/dt = F_in*Cp*(T_in - T) + Q_rxn + Q_ext
-        # Assume constant Cp for simplicity
         Cp = 75.0  # J/mol/K (typical liquid)
 
         # Heat of reaction
@@ -381,12 +411,11 @@ class DynamicCSTR(DynamicUnitBase):
         # External heat (for adiabatic: Q_ext = 0)
         Q_ext = 0.0 if p["mode"] == "adiabatic" else p.get("Q_spec", 0.0)
 
-        # dT/dt = (Q_flow + Q_rxn + Q_ext) / (n_total * Cp) - T * dn_total/dt / n_total
-        # The second term accounts for changing total moles (non-equimolar reactions)
         dn_total_dt = jnp.sum(dn_dt)
         dT_dt = safe_divide(Q_flow + Q_rxn + Q_ext, n_total * Cp) - T * safe_divide(dn_total_dt, n_total)
 
-        return jnp.concatenate([dn_dt, jnp.array([dT_dt])])
+        derivs_parts.append(jnp.array([dT_dt]))
+        return jnp.concatenate(derivs_parts)
 
     def _outputs(
         self,
@@ -431,6 +460,7 @@ class DynamicCSTR(DynamicUnitBase):
         p = self.params
         species = p["species_order"]
         V = p["V"]
+        variable_volume = p.get("variable_volume", False)
 
         # Get inlet
         inlet = inputs.get("inlet") or list(inputs.values())[0]
@@ -444,11 +474,16 @@ class DynamicCSTR(DynamicUnitBase):
         tau = 60.0  # seconds
         n0 = jnp.array([F_total * x_in[s] * tau for s in species])
 
+        parts = []
+        if variable_volume:
+            parts.append(jnp.array([V]))
+        parts.append(n0)
+
         if p["mode"] != "isothermal":
             T0 = inlet["T"]
-            return jnp.concatenate([n0, jnp.array([T0])])
+            parts.append(jnp.array([T0]))
 
-        return n0
+        return jnp.concatenate(parts)
 
 
 class DynamicTank(DynamicUnitBase):

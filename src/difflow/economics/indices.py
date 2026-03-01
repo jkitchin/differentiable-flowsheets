@@ -49,18 +49,57 @@ CEPCI_HISTORICAL = {
     2022: CEPCIData(2022, 816.0, 802.5, 712.3, 578.4, 574.5),
     2023: CEPCIData(2023, 797.9, 782.1, 728.5, 598.2, 594.1),
     2024: CEPCIData(2024, 800.0, 784.0, 735.0, 605.0, 601.0),  # Estimated
+    2025: CEPCIData(2025, 810.0, 794.0, 742.0, 612.0, 608.0),  # Estimated
+    2026: CEPCIData(2026, 820.0, 804.0, 749.0, 619.0, 615.0),  # Estimated
 }
 
 # Default base year for cost correlations (common in literature)
 DEFAULT_BASE_YEAR = 2019
-DEFAULT_CURRENT_YEAR = 2024
+DEFAULT_CURRENT_YEAR = 2026
+
+
+def cepci_available_years() -> list[int]:
+    """Return list of years with CEPCI data.
+
+    Returns:
+        Sorted list of available years
+    """
+    return sorted(CEPCI_HISTORICAL.keys())
+
+
+def estimate_cepci(year: int) -> float:
+    """Estimate CEPCI for a year beyond available data.
+
+    Uses linear extrapolation from the last 3 data points.
+
+    Args:
+        year: Target year
+
+    Returns:
+        Estimated CEPCI index value
+    """
+    if year in CEPCI_HISTORICAL:
+        return CEPCI_HISTORICAL[year].index
+    available = sorted(CEPCI_HISTORICAL.keys())
+    # Use last 3 years for linear extrapolation
+    last_years = available[-3:]
+    last_values = [CEPCI_HISTORICAL[y].index for y in last_years]
+    # Simple linear fit: slope from last 3 points
+    n = len(last_years)
+    mean_y = sum(last_years) / n
+    mean_v = sum(last_values) / n
+    num = sum((last_years[i] - mean_y) * (last_values[i] - mean_v) for i in range(n))
+    den = sum((last_years[i] - mean_y) ** 2 for i in range(n))
+    slope = num / den if den != 0 else 0.0
+    intercept = mean_v - slope * mean_y
+    return slope * year + intercept
 
 
 def get_cepci(year: int) -> float:
     """Get CEPCI index for a given year.
 
     Args:
-        year: Calendar year (2000-2024 available)
+        year: Calendar year (2000-2026 available)
 
     Returns:
         CEPCI index value
@@ -156,9 +195,14 @@ def inflation_factor_continuous(
 
 # Common cost index ratios (pre-computed for efficiency)
 CEPCI_RATIOS = {
+    (2019, 2026): get_cepci(2026) / get_cepci(2019),
     (2019, 2024): get_cepci(2024) / get_cepci(2019),
+    (2018, 2026): get_cepci(2026) / get_cepci(2018),
     (2018, 2024): get_cepci(2024) / get_cepci(2018),
+    (2015, 2026): get_cepci(2026) / get_cepci(2015),
     (2015, 2024): get_cepci(2024) / get_cepci(2015),
+    (2010, 2026): get_cepci(2026) / get_cepci(2010),
     (2010, 2024): get_cepci(2024) / get_cepci(2010),
+    (2000, 2026): get_cepci(2026) / get_cepci(2000),
     (2000, 2024): get_cepci(2024) / get_cepci(2000),
 }

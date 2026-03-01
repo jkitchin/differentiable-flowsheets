@@ -273,6 +273,8 @@ _IDEAL_THERMO_DATA = {
         "Hvap": (30720.0, 0.38, 562.0),
         "antoine": (9.11, 1211.03, -52.36),
         "Hf": 82880.0,
+        "T_antoine_min": 280.0,
+        "T_antoine_max": 377.0,
     },
     "toluene": {
         "MW": 92.14,
@@ -303,6 +305,8 @@ _IDEAL_THERMO_DATA = {
         "Hvap": (35210.0, 0.38, 512.6),
         "antoine": (10.20, 1582.27, -33.45),
         "Hf": -201200.0,
+        "T_antoine_min": 257.0,
+        "T_antoine_max": 364.0,
     },
     "ethanol": {
         "MW": 46.07,
@@ -310,6 +314,8 @@ _IDEAL_THERMO_DATA = {
         "Hvap": (38560.0, 0.38, 513.9),
         "antoine": (10.32, 1718.10, -39.73),
         "Hf": -234800.0,
+        "T_antoine_min": 270.0,
+        "T_antoine_max": 369.0,
     },
     "1_propanol": {
         "MW": 60.10,
@@ -340,6 +346,8 @@ _IDEAL_THERMO_DATA = {
         "Hvap": (29100.0, 0.38, 508.2),
         "antoine": (9.39, 1312.25, -32.52),
         "Hf": -217100.0,
+        "T_antoine_min": 259.0,
+        "T_antoine_max": 329.0,
     },
 
     # Ethers
@@ -381,6 +389,8 @@ _IDEAL_THERMO_DATA = {
         "Hvap": (40660.0, 0.38, 647.1),
         "antoine": (10.20, 1730.63, -39.72),
         "Hf": -285830.0,  # Liquid-phase formation enthalpy (consistent with liquid Cp)
+        "T_antoine_min": 273.0,
+        "T_antoine_max": 473.0,
     },
 
     # Halogenated
@@ -434,6 +444,8 @@ def get_species_data(name: str) -> SpeciesData:
         Hvap_coeffs=d["Hvap"],
         antoine_coeffs=d["antoine"],
         Hf=d.get("Hf", 0.0),
+        T_antoine_min=d.get("T_antoine_min", 0.0),
+        T_antoine_max=d.get("T_antoine_max", 1e6),
     )
 
 

@@ -53,6 +53,85 @@ class UtilityPrices:
     oxygen: float = 0.12  # $/Nm³
 
 
+# Regional price multipliers relative to US Gulf Coast baseline
+REGIONAL_MULTIPLIERS = {
+    'us_gulf_coast': {
+        'steam': 1.0, 'cooling': 1.0, 'electricity': 1.0,
+        'fuel': 1.0, 'water': 1.0, 'gas': 1.0,
+    },
+    'us_midwest': {
+        'steam': 1.05, 'cooling': 0.95, 'electricity': 0.90,
+        'fuel': 1.0, 'water': 0.90, 'gas': 1.0,
+    },
+    'europe_west': {
+        'steam': 1.40, 'cooling': 1.20, 'electricity': 2.0,
+        'fuel': 1.50, 'water': 1.50, 'gas': 1.30,
+    },
+    'asia_pacific': {
+        'steam': 0.80, 'cooling': 0.85, 'electricity': 1.10,
+        'fuel': 1.10, 'water': 0.70, 'gas': 0.90,
+    },
+    'china': {
+        'steam': 0.70, 'cooling': 0.75, 'electricity': 0.85,
+        'fuel': 0.90, 'water': 0.50, 'gas': 0.80,
+    },
+}
+
+
+def _apply_regional_multipliers(region: str) -> "UtilityPrices":
+    """Create UtilityPrices adjusted by regional multipliers."""
+    m = REGIONAL_MULTIPLIERS[region]
+    base = UtilityPrices()
+    return UtilityPrices(
+        steam_high_pressure=base.steam_high_pressure * m['steam'],
+        steam_medium_pressure=base.steam_medium_pressure * m['steam'],
+        steam_low_pressure=base.steam_low_pressure * m['steam'],
+        cooling_water=base.cooling_water * m['cooling'],
+        chilled_water=base.chilled_water * m['cooling'],
+        refrigeration_moderate=base.refrigeration_moderate * m['cooling'],
+        refrigeration_low=base.refrigeration_low * m['cooling'],
+        cryogenic=base.cryogenic * m['cooling'],
+        electricity=base.electricity * m['electricity'],
+        natural_gas=base.natural_gas * m['fuel'],
+        fuel_oil=base.fuel_oil * m['fuel'],
+        coal=base.coal * m['fuel'],
+        process_water=base.process_water * m['water'],
+        boiler_feed_water=base.boiler_feed_water * m['water'],
+        wastewater_treatment=base.wastewater_treatment * m['water'],
+        compressed_air=base.compressed_air * m['gas'],
+        nitrogen=base.nitrogen * m['gas'],
+        oxygen=base.oxygen * m['gas'],
+    )
+
+
+# Pre-built regional prices
+REGIONAL_PRICES = {
+    region: _apply_regional_multipliers(region)
+    for region in REGIONAL_MULTIPLIERS
+}
+
+
+@classmethod  # type: ignore[misc]
+def _from_region(cls, region: str) -> "UtilityPrices":
+    """Create UtilityPrices from a regional preset.
+
+    Args:
+        region: Region name. Available: 'us_gulf_coast', 'us_midwest',
+                'europe_west', 'asia_pacific', 'china'
+
+    Returns:
+        UtilityPrices with regional adjustments
+    """
+    if region not in REGIONAL_PRICES:
+        available = list(REGIONAL_PRICES.keys())
+        raise ValueError(f"Unknown region '{region}'. Available: {available}")
+    return REGIONAL_PRICES[region]
+
+
+# Attach from_region as a class method
+UtilityPrices.from_region = _from_region
+
+
 # Default prices instance
 DEFAULT_PRICES = UtilityPrices()
 

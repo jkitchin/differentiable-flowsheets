@@ -134,8 +134,19 @@ def _get_stepsize_controller(
     atol: float = 1e-7,
     solver_name: str = "tsit5",
     dt0: float | None = None,
+    dtmin: float | None = None,
+    dtmax: float | None = None,
 ) -> Any:
-    """Get appropriate stepsize controller for solver."""
+    """Get appropriate stepsize controller for solver.
+
+    Args:
+        rtol: Relative tolerance
+        atol: Absolute tolerance
+        solver_name: Name of the solver
+        dt0: Initial step size (unused here, for caller)
+        dtmin: Minimum step size (passed to PIDController)
+        dtmax: Maximum step size (passed to PIDController)
+    """
     if not HAS_DIFFRAX:
         raise ImportError("diffrax is required")
 
@@ -144,6 +155,13 @@ def _get_stepsize_controller(
 
     # Implicit solvers need different controller settings
     implicit_solvers = {"kvaerno3", "kvaerno4", "kvaerno5", "implicit_euler"}
+
+    # Build extra kwargs for PIDController
+    pid_kwargs = {}
+    if dtmin is not None:
+        pid_kwargs["dtmin"] = dtmin
+    if dtmax is not None:
+        pid_kwargs["dtmax"] = dtmax
 
     if solver_name.lower() in fixed_step_solvers:
         # Use constant step size for non-adaptive solvers
@@ -155,9 +173,10 @@ def _get_stepsize_controller(
             pcoeff=0.4,
             icoeff=0.3,
             dcoeff=0.0,
+            **pid_kwargs,
         )
     else:
-        return diffrax.PIDController(rtol=rtol, atol=atol)
+        return diffrax.PIDController(rtol=rtol, atol=atol, **pid_kwargs)
 
 
 def integrate_diffrax(
@@ -172,6 +191,8 @@ def integrate_diffrax(
     saveat: Array | None = None,
     dense: bool = False,
     bounds: tuple[Array, Array] | None = None,
+    dtmin: float | None = None,
+    dtmax: float | None = None,
     **kwargs,
 ) -> IntegrationResult:
     """Integrate ODE using diffrax.
@@ -212,7 +233,9 @@ def integrate_diffrax(
     solver_obj = _get_solver(solver)
 
     # Stepsize controller
-    stepsize_controller = _get_stepsize_controller(rtol, atol, solver)
+    stepsize_controller = _get_stepsize_controller(
+        rtol, atol, solver, dtmin=dtmin, dtmax=dtmax
+    )
 
     # Initial step size
     if dt0 is None:

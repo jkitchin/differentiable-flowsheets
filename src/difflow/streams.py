@@ -21,6 +21,7 @@ def make_stream(
     flows: dict[str, float | Array],
     T: float | Array,
     P: float | Array,
+    phase: str | None = None,
 ) -> Stream:
     """Create a stream dictionary.
 
@@ -29,9 +30,11 @@ def make_stream(
                Flow rates in mol/s.
         T: Temperature in K
         P: Pressure in Pa
+        phase: Optional phase label: 'liquid', 'vapor', 'two_phase', or None
 
     Returns:
         Stream dictionary with 'F_<species>', 'T', and 'P' keys.
+        If phase is provided, includes 'phase' key.
     """
     stream = {}
     for species, flow in flows.items():
@@ -39,6 +42,8 @@ def make_stream(
         stream[key] = jnp.asarray(flow, dtype=jnp.float64)
     stream["T"] = jnp.asarray(T, dtype=jnp.float64)
     stream["P"] = jnp.asarray(P, dtype=jnp.float64)
+    if phase is not None:
+        stream["phase"] = phase
     return stream
 
 
@@ -127,6 +132,17 @@ def combine_streams(*streams: Stream) -> Stream:
     for s in streams[1:]:
         P = jnp.minimum(P, s["P"])
     result["P"] = P
+
+    # Phase compatibility check
+    phases = [s.get("phase") for s in streams]
+    labeled_phases = [p for p in phases if p is not None]
+    if labeled_phases:
+        unique = set(labeled_phases)
+        if len(unique) == 1:
+            result["phase"] = labeled_phases[0]
+        else:
+            result["phase"] = "two_phase"
+            result["phase_mismatch"] = True
 
     return result
 
