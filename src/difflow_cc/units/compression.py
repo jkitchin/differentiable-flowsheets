@@ -299,8 +299,8 @@ class Compressor:
         Z_out = co2_compressibility(T_out, P_out)
         Z_avg = (Z_in + Z_out) / 2
 
-        # Isentropic work (J/mol)
-        W_is = Z_avg * R * T_in * gamma / (gamma - 1) * \
+        # Isentropic work (J/mol) - use inlet Z per standard formula
+        W_is = Z_in * R * T_in * gamma / (gamma - 1) * \
                (jnp.power(pr, (gamma - 1) / gamma) - 1)
 
         # Actual work per mol (J/mol)
@@ -498,8 +498,7 @@ class CompressionTrain:
             n_stages = p.n_stages
         else:
             # Calculate minimum stages needed
-            n_stages = int(jnp.ceil(jnp.log(total_ratio) / jnp.log(max_pr)))
-            n_stages = max(1, n_stages)
+            n_stages = max(1, int(float(jnp.ceil(jnp.log(total_ratio) / jnp.log(max_pr)))))
 
         # Equal pressure ratio per stage
         pr_per_stage = jnp.power(total_ratio, 1.0 / n_stages)

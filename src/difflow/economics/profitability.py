@@ -920,7 +920,7 @@ def npv_objective(
     depreciation = capex / plant_life
     taxable = revenue - opex - depreciation
     tax = jnp.maximum(taxable, 0.0) * tax_rate
-    cash_flow = revenue - opex - tax
+    cash_flow = revenue - opex - tax + depreciation  # Add back non-cash depreciation
 
     # Create cash flow array
     cash_flows = jnp.ones(plant_life) * cash_flow

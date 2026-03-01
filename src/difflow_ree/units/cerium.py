@@ -365,11 +365,8 @@ def ceo2_product_value(
     base_price = prices.get(grade, 3.0)
 
     # Purity premium
-    if purity > 0.999:
-        price = base_price * 1.5
-    elif purity > 0.99:
-        price = base_price * 1.2
-    else:
-        price = base_price
+    base_price = jnp.asarray(base_price, dtype=jnp.float64)
+    price = jnp.where(purity > 0.999, base_price * 1.5,
+            jnp.where(purity > 0.99, base_price * 1.2, base_price))
 
     return ceo2_kg * price

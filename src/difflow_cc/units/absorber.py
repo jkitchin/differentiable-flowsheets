@@ -233,10 +233,10 @@ class AmineAbsorber:
         n_stages = jnp.asarray(p.n_stages)
         eta = jnp.asarray(p.stage_efficiency)
 
-        # Effective stages accounting for efficiency
-        # N_eff = N * eta (simplified approach)
-        # More rigorous: use Murphree efficiency in stage-by-stage calc
-        N_eff = n_stages * eta
+        # Convert Murphree efficiency to effective stages via O'Connell correlation
+        # N_eff = ln(1 + eta*(A-1)) / ln(A) * N  (for each stage)
+        # Simplified: effective stages account for incomplete mixing per stage
+        N_eff = n_stages * jnp.log(1.0 + eta * (A - 1.0)) / jnp.maximum(jnp.log(A), 1e-10)
 
         # Fraction of CO2 remaining in gas
         # phi = (A - 1) / (A^(N+1) - 1) for counter-current

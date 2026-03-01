@@ -369,7 +369,7 @@ _IDEAL_THERMO_DATA = {
     "acetic_acid": {
         "MW": 60.05,
         "Cp": (124.0, 0.0, 0.0, 0.0),
-        "Hvap": (23700.0, 0.38, 592.0),
+        "Hvap": (52100.0, 0.38, 592.0),  # Watson A calibrated to ~52 kJ/mol at 25C
         "antoine": (9.68, 1642.54, -39.76),
         "Hf": -432800.0,
     },
@@ -380,7 +380,7 @@ _IDEAL_THERMO_DATA = {
         "Cp": (75.3, 0.0, 0.0, 0.0),  # Liquid at 25°C
         "Hvap": (40660.0, 0.38, 647.1),
         "antoine": (10.20, 1730.63, -39.72),
-        "Hf": -241826.0,
+        "Hf": -285830.0,  # Liquid-phase formation enthalpy (consistent with liquid Cp)
     },
 
     # Halogenated

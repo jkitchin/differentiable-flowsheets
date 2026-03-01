@@ -561,24 +561,26 @@ def bare_module_cost(
     purchased_cost: Array,
     material_factor: float = 1.0,
     pressure_factor: float = 1.0,
-    bare_module_factor: float = 3.18,
+    B1: float = 1.89,
+    B2: float = 1.35,
 ) -> Array:
     """Calculate bare module cost (Guthrie method).
 
     C_BM = C_p * (B_1 + B_2 * F_M * F_P)
 
-    For simplicity, using: C_BM = C_p * F_BM * F_M * F_P
+    Default B1, B2 values are for heat exchangers (Turton et al.)
 
     Args:
         purchased_cost: Purchased equipment cost ($)
-        material_factor: Material of construction factor
-        pressure_factor: Pressure factor
-        bare_module_factor: Base bare module factor
+        material_factor: Material of construction factor (F_M)
+        pressure_factor: Pressure factor (F_P)
+        B1: Bare module factor constant 1 (default 1.89)
+        B2: Bare module factor constant 2 (default 1.35)
 
     Returns:
         Bare module cost ($)
     """
-    return purchased_cost * bare_module_factor * material_factor * pressure_factor
+    return purchased_cost * (B1 + B2 * material_factor * pressure_factor)
 
 
 # =============================================================================
@@ -637,13 +639,12 @@ def pressure_factor_hx(pressure: Array) -> Array:
     Returns:
         Pressure factor (multiplicative)
     """
-    # Correlation from Turton
+    # Correlation from Turton with smooth transition at 5 barg
     log_P = jnp.log10(jnp.maximum(pressure, 0.1))
-    return jnp.where(
-        pressure < 5.0,
-        1.0,
-        0.9803 + 0.018 * log_P + 0.0017 * log_P**2
-    )
+    F_P_high = 0.9803 + 0.018 * log_P + 0.0017 * log_P**2
+    # Smooth transition at 5 barg using sigmoid blend
+    blend = 1.0 / (1.0 + jnp.exp(-2.0 * (pressure - 5.0)))
+    return 1.0 * (1.0 - blend) + F_P_high * blend
 
 
 # =============================================================================
@@ -722,7 +723,7 @@ def total_capital_investment_detailed(
 
     return CapitalInvestment(
         purchased_equipment=total_purchased,
-        installed_equipment=total_purchased * LANG_FACTORS["fluid_processing"],
+        installed_equipment=total_purchased * factors.total_factor,
         total_direct_costs=total_direct,
         total_indirect_costs=total_indirect,
         fixed_capital_investment=fci,

@@ -164,14 +164,20 @@ class AmineStripper:
         # At high T, P_CO2_eq is high, driving CO2 out
         P_CO2_eq_lean = self._vle.equilibrium_pressure(target_lean, T_reboiler)
 
-        # CO2 stripped = rich CO2 - lean CO2
-        # Lean CO2 in liquid = F_amine * target_lean
-        F_CO2_lean = F_amine * target_lean
-        F_CO2_stripped = jnp.maximum(F_CO2_absorbed - F_CO2_lean, 0.0)
+        # Simplified stripping model: lean loading depends on stages and energy
+        # More stages and higher reboiler duty -> lower (better) lean loading
+        # At minimum stages/energy, lean loading approaches rich loading
+        n_stages = jnp.asarray(p.n_stages)
+        # Stripping efficiency: fraction of possible stripping achieved
+        # Approaches 1.0 with many stages, 0.0 with few
+        strip_efficiency = 1.0 - jnp.exp(-0.3 * n_stages)
+        lean_loading = rich_loading - strip_efficiency * (rich_loading - target_lean)
+        lean_loading = jnp.clip(lean_loading, target_lean, rich_loading)
 
-        # Achieved lean loading (may differ from target if insufficient stages)
-        # Simplified: assume target is achieved if stages sufficient
-        lean_loading = target_lean
+        # CO2 stripped = rich CO2 - lean CO2
+        # Lean CO2 in liquid = F_amine * lean_loading
+        F_CO2_lean = F_amine * lean_loading
+        F_CO2_stripped = jnp.maximum(F_CO2_absorbed - F_CO2_lean, 0.0)
 
         # Energy calculations
         # 1. Sensible heat

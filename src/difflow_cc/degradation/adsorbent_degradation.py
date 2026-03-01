@@ -125,18 +125,21 @@ def thermal_cycling_degradation(
     T_swing = params.T_desorption - params.T_adsorption
     T_swing_norm = T_swing / 100  # Normalize to 100 K swing
 
-    # Adjusted stability
-    f = f_base ** T_swing_norm
+    # Linear degradation: capacity drops by (1-f_base) per normalized swing per cycle
+    degradation_rate = (1.0 - f_base) * T_swing_norm
 
-    # Check temperature limits
+    # Check temperature limits (JAX-compatible)
     max_T = stability["max_T"]
-    if params.T_desorption > max_T:
-        # Severe degradation above max T
-        overheat_factor = (params.T_desorption - max_T) / 50
-        f = f * jnp.exp(-overheat_factor)
+    T_des = jnp.asarray(params.T_desorption)
+    overheat_factor = (T_des - max_T) / 50
+    degradation_rate = jnp.where(
+        T_des > max_T,
+        degradation_rate + jnp.exp(overheat_factor) * degradation_rate,
+        degradation_rate,
+    )
 
     # Capacity fraction remaining
-    capacity_fraction = jnp.power(f, n_cycles)
+    capacity_fraction = jnp.maximum(1.0 - degradation_rate * n_cycles, 0.0)
 
     return capacity_fraction
 

@@ -416,6 +416,7 @@ class TestJAXCompatibility:
 
         dwc_dT = grad(wc_fn)(298.15)
         assert jnp.isfinite(dwc_dT)
+        assert float(dwc_dT) != 0.0
 
 
 # =============================================================================
@@ -1063,10 +1064,13 @@ class TestUnitOperationGradients:
             _, _, info = absorber(feed)
             return info["capture_efficiency"]
 
-        d_eff_d_LG = grad(capture_efficiency)(3.0)
-        # Gradient may be 0 or very small due to model saturation or
-        # non-traced Python control flow in current implementation
+        # Use L/G=1.0 to avoid saturation of the rich loading capacity
+        # (at L/G=3.0 the model hits the loading_capacity cap, zeroing the gradient)
+        d_eff_d_LG = grad(capture_efficiency)(1.0)
         assert jnp.isfinite(d_eff_d_LG)
+        assert float(d_eff_d_LG) != 0.0
+        # More amine flow (higher L/G) should increase capture efficiency
+        assert float(d_eff_d_LG) > 0
 
     def test_absorber_gradient_wrt_stages(self):
         """Test absorber gradient with respect to number of stages."""
@@ -1090,7 +1094,10 @@ class TestUnitOperationGradients:
             return info["capture_efficiency"]
 
         d_eff_d_N = grad(capture_efficiency)(10.0)
-        # Gradient may be 0 due to non-traced operations
+        # Gradient is 0 because the binding constraint is the rich solvent
+        # loading capacity, not the number of stages. The Kremser equation
+        # gives near-complete absorption, but the rich_loading clip caps
+        # the actual CO2 absorbed. This is a model limitation, not a bug.
         assert jnp.isfinite(d_eff_d_N)
 
     def test_membrane_gradient_wrt_area(self):
@@ -1115,9 +1122,13 @@ class TestUnitOperationGradients:
             _, _, info = membrane(feed)
             return info["CO2_recovery"]
 
-        d_rec_d_area = grad(recovery)(1000.0)
-        # Gradient may be 0 due to non-traced dict operations
+        # Use area=100 to avoid saturation (at area=1000 recovery hits the
+        # 0.99 cap from jnp.minimum, zeroing the gradient)
+        d_rec_d_area = grad(recovery)(100.0)
         assert jnp.isfinite(d_rec_d_area)
+        assert float(d_rec_d_area) != 0.0
+        # Increasing membrane area should increase CO2 recovery
+        assert float(d_rec_d_area) > 0
 
     def test_membrane_gradient_wrt_pressure_ratio(self):
         """Test membrane gradient with respect to pressure ratio."""
@@ -1133,7 +1144,8 @@ class TestUnitOperationGradients:
         def recovery(pr):
             params = MembraneParams(
                 membrane_type="Matrimid",
-                area=1000.0,
+                # Use area=100 to stay below recovery saturation
+                area=100.0,
                 pressure_ratio=pr,
                 feed_pressure=1000000.0,
             )
@@ -1143,6 +1155,9 @@ class TestUnitOperationGradients:
 
         d_rec_d_pr = grad(recovery)(10.0)
         assert jnp.isfinite(d_rec_d_pr)
+        assert float(d_rec_d_pr) != 0.0
+        # Higher pressure ratio increases driving force, improving CO2 recovery
+        assert float(d_rec_d_pr) > 0
 
     def test_psa_gradient_wrt_pressure(self):
         """Test PSA gradient with respect to adsorption pressure."""
@@ -1168,6 +1183,7 @@ class TestUnitOperationGradients:
 
         d_wc_d_P = grad(working_cap)(500000.0)
         assert jnp.isfinite(d_wc_d_P)
+        assert float(d_wc_d_P) != 0.0
         assert float(d_wc_d_P) > 0  # Higher pressure should give higher capacity
 
     def test_tsa_gradient_wrt_temperature(self):
@@ -1195,7 +1211,93 @@ class TestUnitOperationGradients:
 
         d_wc_d_T = grad(working_cap)(373.15)
         assert jnp.isfinite(d_wc_d_T)
+        assert float(d_wc_d_T) != 0.0
         assert float(d_wc_d_T) > 0  # Higher desorption T should give higher working cap
+
+    def test_absorber_gradient_capture_eff_wrt_amine_flow(self):
+        """Test that increasing amine flow (L/G) increases CO2 captured."""
+        from difflow_cc import AbsorberParams, AmineAbsorber
+        from difflow.streams import make_stream
+
+        feed = make_stream(
+            flows={"CO2": 1.0, "N2": 9.0},
+            T=313.15,
+            P=101325.0,
+        )
+
+        def co2_captured(L_G):
+            params = AbsorberParams(
+                solvent="MEA",
+                n_stages=10,
+                L_G_ratio=L_G,
+            )
+            absorber = AmineAbsorber(params)
+            _, _, info = absorber(feed)
+            return info["CO2_captured"]
+
+        # Use L/G=1.0 to avoid saturation of the rich loading capacity
+        d_captured_d_LG = grad(co2_captured)(1.0)
+        assert jnp.isfinite(d_captured_d_LG)
+        assert float(d_captured_d_LG) != 0.0
+        # More amine flow should capture more CO2
+        assert float(d_captured_d_LG) > 0
+
+    def test_membrane_gradient_co2_recovery_wrt_area(self):
+        """Test that increasing membrane area increases CO2 recovery."""
+        from difflow_cc import MembraneParams, MembraneSeparator
+        from difflow.streams import make_stream
+
+        feed = make_stream(
+            flows={"CO2": 1.0, "N2": 9.0},
+            T=298.15,
+            P=1000000.0,
+        )
+
+        def co2_recovery(area):
+            params = MembraneParams(
+                membrane_type="Matrimid",
+                area=area,
+                pressure_ratio=10.0,
+                feed_pressure=1000000.0,
+            )
+            membrane = MembraneSeparator(params)
+            _, _, info = membrane(feed)
+            return info["CO2_recovery"]
+
+        # Use area=50 to stay well below the 0.99 recovery cap
+        d_rec_d_area = grad(co2_recovery)(50.0)
+        assert jnp.isfinite(d_rec_d_area)
+        assert float(d_rec_d_area) != 0.0
+        # More membrane area should give higher CO2 recovery
+        assert float(d_rec_d_area) > 0
+
+    def test_psa_gradient_co2_captured_wrt_pressure(self):
+        """Test that increasing adsorption pressure increases CO2 captured."""
+        from difflow_cc import AdsorptionParams, PSAUnit
+        from difflow.streams import make_stream
+
+        feed = make_stream(
+            flows={"CO2": 1.0, "N2": 4.0},
+            T=298.15,
+            P=500000.0,
+        )
+
+        def co2_captured(P_ads):
+            params = AdsorptionParams(
+                adsorbent="Zeolite_13X",
+                P_adsorption=P_ads,
+                P_desorption=100000.0,
+                bed_mass=100.0,
+            )
+            psa = PSAUnit(params)
+            _, _, info = psa(feed)
+            return info["CO2_captured"]
+
+        d_cap_d_P = grad(co2_captured)(500000.0)
+        assert jnp.isfinite(d_cap_d_P)
+        assert float(d_cap_d_P) != 0.0
+        # Higher adsorption pressure increases isotherm loading, capturing more CO2
+        assert float(d_cap_d_P) > 0
 
 
 # =============================================================================

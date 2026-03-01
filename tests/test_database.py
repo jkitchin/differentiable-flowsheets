@@ -60,7 +60,7 @@ class TestGetSpeciesData:
         """Test retrieving water species data."""
         data = get_species_data("water")
         assert data.MW == pytest.approx(18.015, rel=0.01)
-        assert data.Hf == pytest.approx(-241826.0, rel=0.01)
+        assert data.Hf == pytest.approx(-285830.0, rel=0.01)  # Liquid-phase value
 
     def test_species_not_found(self):
         """Test error for unknown species."""

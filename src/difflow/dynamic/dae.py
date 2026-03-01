@@ -1000,12 +1000,18 @@ class DynamicFlashDrum(DAEUnitBase):
 
         # Outlet flows (assume vapor and liquid both exit)
         # Simplified: total outlet = total inlet (steady level)
+        # TODO: Implement K-value based phase split using VLE (e.g., Raoult's law
+        # or equation of state). Currently beta (vapor fraction) is an algebraic
+        # variable but the outlet composition does not use it for phase-specific
+        # enrichment. A proper implementation would compute Ki = P_sat_i / P,
+        # then yi = Ki * xi, and split F_out into vapor (enriched in lights) and
+        # liquid (enriched in heavies) streams.
         F_out_total = jnp.sum(F_in)
 
         # Composition in drum
         x_comp = n / n_total
 
-        # Outlet composition (simplified: mixed)
+        # Outlet composition (simplified: mixed, no phase-specific enrichment)
         F_out = F_out_total * x_comp
 
         # Material balance: dn/dt = F_in - F_out

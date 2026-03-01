@@ -781,11 +781,16 @@ class CSTR:
 
         # Energy balance for non-isothermal
         # Simplified model: constant Cp, perfect mixing
-        Cp = 75.0  # J/mol/K (approximate for liquid)
+        # Use thermo Cp if available, otherwise fall back to water approximation
+        if self.thermo is not None:
+            mole_fracs = {s: x_out[i] for i, s in enumerate(species)}
+            Cp = self.thermo.Cp_mix(mole_fracs, T)
+        else:
+            Cp = 75.0  # J/mol/K (approximate for liquid water)
 
         # Heat from reaction
         if p.dH_rxn is not None:
-            Q_rxn = -V * jnp.sum(r * p.dH_rxn)  # Positive for exothermic
+            Q_rxn = V * jnp.sum(r * p.dH_rxn)  # Consistent with steady-state sign convention
         else:
             Q_rxn = 0.0
 

@@ -322,7 +322,7 @@ def replacement_schedule(
 
     # Average performance over lifetime
     # Integral of degradation / time
-    avg_performance = 0.85  # Approximate
+    avg_performance = 0.85  # (1.0 + 0.70) / 2, assuming linear degradation to 70% threshold
 
     # If target > avg, need more frequent replacement
     if target_availability > avg_performance:

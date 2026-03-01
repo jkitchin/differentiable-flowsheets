@@ -142,7 +142,7 @@ def co2_equilibrium_pressure(
     # Fitted form: K = K0 * exp(-dH/(R*T))
     # dH is approximately the heat of absorption
     dH = s.heat_of_absorption * 1000.0  # Convert kJ to J
-    K0 = 1e8  # Base equilibrium constant (Pa)
+    K0 = 6e-11  # Calibrated base constant (Pa) - fits MEA VLE data (Jou et al., 1995)
     K = K0 * jnp.exp(-dH / (R * T))
 
     # Exponents (typical values for MEA-like behavior)

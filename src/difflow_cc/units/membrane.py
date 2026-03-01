@@ -517,7 +517,8 @@ class MultistageMembrane:
         # Final permeate is stage 2 permeate (highest purity)
         final_permeate = perm_2
 
-        # Combine retentates - ret_2 is the unpermeated gas from stage 2
+        # Combine retentates: ret_1 from feed, ret_2 from perm_1 processing
+        # Mass balance: feed = ret_1 + perm_1 = ret_1 + (ret_2 + perm_2)
         ret_1_flows = get_flows(ret_1)
         ret_2_flows = get_flows(ret_2)
         combined_ret_flows = {}

@@ -169,27 +169,24 @@ class SolidSorbentDAC:
         sorbent = self._sorbent
 
         # Get isotherm if available
-        try:
-            isotherm = sorbent.isotherms.get("CO2")
-            if isotherm:
-                # Calculate loadings
-                P_CO2_ads = CO2_AMBIENT * P_ambient
-                P_CO2_des = CO2_AMBIENT * jnp.asarray(p.P_desorption) * 0.1  # Lower in desorption
+        isotherm = sorbent.isotherms.get("CO2")
+        if isotherm:
+            # Calculate loadings
+            P_CO2_ads = CO2_AMBIENT * P_ambient
+            P_CO2_des = CO2_AMBIENT * jnp.asarray(p.P_desorption) * 0.1  # Lower in desorption
 
-                # Simplified working capacity
-                T_ads = jnp.asarray(p.T_adsorption)
-                T_des = jnp.asarray(p.T_desorption)
+            # Simplified working capacity
+            T_ads = jnp.asarray(p.T_adsorption)
+            T_des = jnp.asarray(p.T_desorption)
 
-                # Temperature effect on capacity (simplified)
-                q_ads = sorbent.CO2_capacity * jnp.exp(-0.02 * (T_ads - 298.15))
-                q_des = sorbent.CO2_capacity * jnp.exp(-0.02 * (T_des - 298.15)) * 0.2
+            # Temperature effect on capacity (simplified)
+            q_ads = sorbent.CO2_capacity * jnp.exp(-0.02 * (T_ads - 298.15))
+            q_des = sorbent.CO2_capacity * jnp.exp(-0.02 * (T_des - 298.15)) * 0.2
 
-                working_capacity = q_ads - q_des
-            else:
-                # Use nominal capacity
-                working_capacity = sorbent.CO2_capacity * 0.3  # 30% working capacity
-        except Exception:
-            working_capacity = 1.0  # mol/kg fallback
+            working_capacity = q_ads - q_des
+        else:
+            # Use nominal capacity
+            working_capacity = sorbent.CO2_capacity * 0.3  # 30% working capacity
 
         working_capacity = jnp.asarray(working_capacity)
 

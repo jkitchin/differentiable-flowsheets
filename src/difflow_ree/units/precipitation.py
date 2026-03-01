@@ -178,15 +178,15 @@ class OxalatePrecipitator:
         solid = make_stream(solid_flows, T, P)
 
         # Calculate solid composition
-        total_solid = sum(float(solid_flows[e]) for e in p.elements)
+        total_solid = sum(solid_flows[e] for e in p.elements)
         solid_composition = {
-            e: safe_divide(float(solid_flows[e]), total_solid)
+            e: safe_divide(solid_flows[e], total_solid)
             for e in p.elements
         }
 
         info = {
             "precipitant": "oxalate",
-            "excess_ratio": float(actual_excess),
+            "excess_ratio": actual_excess,
             "precipitation_data": precipitation_data,
             "total_precipitated": total_solid,
             "solid_composition": solid_composition,
@@ -290,11 +290,11 @@ class CarbonatePrecipitator:
         # Create solid stream (precipitate at same T, P as filtrate)
         solid = make_stream(solid_flows, T, P)
 
-        total_solid = sum(float(solid_flows[e]) for e in p.elements)
+        total_solid = sum(solid_flows[e] for e in p.elements)
 
         info = {
             "precipitant": "carbonate",
-            "excess_ratio": float(actual_excess),
+            "excess_ratio": actual_excess,
             "precipitation_data": precipitation_data,
             "total_precipitated": total_solid,
             "product_formula": "REE2(CO3)3",
@@ -364,8 +364,12 @@ class HydroxidePrecipitator:
         solid_flows = {}
         precipitation_data = {}
 
-        # [OH-] from pH
-        pOH = 14 - pH
+        # [OH-] from pH with temperature-dependent pKw
+        # pKw ~ 14.0 at 25C, varies with T (Harned & Hamer correlation)
+        T_C = T - 273.15
+        pKw = 14.0 + 0.03 * (T_C - 25.0) / 25.0  # Approximate correction
+        pKw = jnp.clip(pKw, 12.0, 15.0)  # Guard for extreme temperatures
+        pOH = pKw - pH
         OH_conc = jnp.power(10.0, -pOH)
 
         for elem in p.elements:
@@ -404,9 +408,9 @@ class HydroxidePrecipitator:
 
             precipitation_data[elem] = {
                 "pKsp": pKsp,
-                "supersaturation": float(S),
-                "conversion": float(conversion),
-                "precipitation_pH": float(14 + safe_log(jnp.power(safe_divide(Ksp, c_feed), 1/3), base=10)),
+                "supersaturation": S,
+                "conversion": conversion,
+                "precipitation_pH": 14 + safe_log(jnp.power(safe_divide(Ksp, c_feed), 1/3)) / jnp.log(10.0),
             }
 
         P = feed["P"]
@@ -415,11 +419,11 @@ class HydroxidePrecipitator:
         # Create solid stream (precipitate at same T, P as filtrate)
         solid = make_stream(solid_flows, T, P)
 
-        total_solid = sum(float(solid_flows[e]) for e in p.elements)
+        total_solid = sum(solid_flows[e] for e in p.elements)
 
         info = {
             "precipitant": "hydroxide",
-            "pH": float(pH),
+            "pH": pH,
             "precipitation_data": precipitation_data,
             "total_precipitated": total_solid,
             "product_formula": "REE(OH)3",

@@ -530,7 +530,7 @@ class MultistageCascade:
             profiles_y[s].append(y_solvent_arr[i])
 
         # Append per-stage values for stages 1 .. N_int
-        N_int = int(jnp.round(n_stages))
+        N_int = int(n_stages)  # n_stages should be a static integer parameter
         for n in range(1, N_int + 1):
             n_arr = jnp.asarray(float(n), dtype=jnp.float64)
             E_n1 = E_safe ** (n_arr + 1.0)
@@ -629,7 +629,7 @@ class MultistageCascade:
             profiles_x[s].append(x_feed_arr[i])
             profiles_y[s].append(y_solvent_arr[i])
 
-        N_int = int(jnp.round(n_stages))
+        N_int = int(n_stages)  # n_stages should be a static integer parameter
         for n in range(1, N_int + 1):
             n_arr = jnp.asarray(float(n), dtype=jnp.float64)
             eff_n = 1.0 - (1.0 - eff_per_stage) ** n_arr

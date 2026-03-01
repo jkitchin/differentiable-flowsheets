@@ -382,7 +382,10 @@ class IonExchangeChromatography:
                     # Impurities: high selectivity = retained = waste
                     # low selectivity = flow through = waste
                     # Intermediate = some in product
-                    to_product = mass_loaded * (1.0 - selectivity) * 0.1  # Leakage
+                    # Impurity leakage into product: low selectivity = flows through (waste)
+                    # high selectivity = co-elutes with target (product contamination)
+                    # Use sigmoid transition: leakage ~ selectivity^2 (binds = co-elutes)
+                    to_product = mass_loaded * jnp.power(selectivity, 2) * (1.0 - p.yield_factor)
                     product_flows[species] = to_product
                     waste_flows[species] = mass_unloaded + mass_loaded - to_product
 

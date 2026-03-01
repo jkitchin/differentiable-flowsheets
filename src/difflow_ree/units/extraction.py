@@ -203,6 +203,11 @@ class REEExtractor:
                 initial_loading = F_solvent / jnp.maximum(F_org, 1e-10)
                 capacity = self._isotherm.max_ree_conc
                 E = E * jnp.maximum(1.0 - initial_loading / capacity, 0.0)
+            else:
+                # Simple loading correction without isotherm:
+                # Reduce E based on ratio of existing loading to feed
+                loading_ratio = F_solvent / jnp.maximum(F_in + F_solvent, 1e-10)
+                E = E * (1.0 - loading_ratio)
 
             # Kremser equation for counter-current extraction
             E_Np1 = jnp.power(E, n_stages + 1)
@@ -214,8 +219,8 @@ class REEExtractor:
             )
             frac_remaining = jnp.clip(frac_remaining, 0.0, 1.0)
 
-            F_raffinate = F_in * frac_remaining + F_solvent * frac_remaining
-            F_extract = F_in + F_solvent - F_raffinate
+            F_raffinate = F_in * frac_remaining
+            F_extract = F_solvent + F_in * (1.0 - frac_remaining)
 
             raffinate_flows[elem] = jnp.maximum(F_raffinate, 0.0)
             extract_flows[elem] = jnp.maximum(F_extract, 0.0)
@@ -384,7 +389,10 @@ class REEMixerSettler:
             F_aq_out = F_aq_in + eta * (F_aq_eq - F_aq_in)
             F_org_out = F_org_in + eta * (F_org_eq - F_org_in)
 
-            aq_out_flows[elem] = jnp.maximum(F_aq_out, 0.0)
+            # Clip aqueous and derive organic to preserve mass balance
+            F_aq_out = jnp.maximum(F_aq_out, 0.0)
+            F_org_out = F_total - F_aq_out
+            aq_out_flows[elem] = F_aq_out
             org_out_flows[elem] = jnp.maximum(F_org_out, 0.0)
 
         P = aqueous_in["P"]

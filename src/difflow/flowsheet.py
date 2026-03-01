@@ -389,7 +389,7 @@ class Flowsheet:
         for iteration in range(max_iter):
             # Check convergence
             residual = jnp.max(jnp.abs(g_curr - x_prev))
-            if residual < tol:
+            if float(residual) < tol:
                 break
 
             if g_prev is None:
@@ -459,7 +459,7 @@ class Flowsheet:
 
             # Check convergence
             residual = jnp.max(jnp.abs(g_curr - x_curr))
-            if residual < tol:
+            if float(residual) < tol:
                 break
 
             # Apply Anderson acceleration

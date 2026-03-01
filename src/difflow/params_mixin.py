@@ -23,6 +23,8 @@ Example usage:
 from dataclasses import replace, fields, asdict as dc_asdict
 from typing import Any, Iterator
 
+import jax.numpy as jnp
+
 
 def _fmt_value(v: Any) -> str:
     """Format a value for concise repr.
@@ -190,6 +192,46 @@ class ParamsMixin:
             Dictionary with field names as keys and values
         """
         return dc_asdict(self)
+
+    @classmethod
+    def register_as_pytree(cls):
+        """Register this dataclass as a JAX PyTree.
+
+        Call this after defining the dataclass to enable differentiation
+        through its fields. Only numeric fields will be treated as leaves.
+
+        Example:
+            @dataclass
+            class MyParams(ParamsMixin):
+                x: float
+                y: float
+            MyParams.register_as_pytree()
+        """
+        import jax
+        from dataclasses import fields as dc_fields
+
+        def tree_flatten(obj):
+            children = []
+            aux_data = {}
+            for f in dc_fields(obj):
+                val = getattr(obj, f.name)
+                if isinstance(val, (int, float, jnp.ndarray)) or hasattr(val, 'shape'):
+                    children.append(val)
+                else:
+                    aux_data[f.name] = val
+            child_names = [f.name for f in dc_fields(obj)
+                          if isinstance(getattr(obj, f.name), (int, float, jnp.ndarray))
+                          or hasattr(getattr(obj, f.name), 'shape')]
+            aux_data['_child_names'] = tuple(child_names)
+            return children, aux_data
+
+        def tree_unflatten(aux_data, children):
+            child_names = aux_data.pop('_child_names')
+            kwargs = dict(zip(child_names, children))
+            kwargs.update(aux_data)
+            return cls(**kwargs)
+
+        jax.tree_util.register_pytree_node(cls, tree_flatten, tree_unflatten)
 
     def __repr__(self) -> str:
         """Concise string representation.

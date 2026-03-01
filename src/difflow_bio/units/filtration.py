@@ -163,6 +163,9 @@ class Ultrafiltration:
         #   1 L/(m²·h·bar) = 1e-3 m³ / (m² · 3600 s · 1e5 Pa) = 2.778e-12 m/(Pa·s)
         # With Lp_SI, sigma, and k_mass all in SI the factor is dimensionless:
         #   polarization_factor = 1 + Lp_SI * sigma / k_mass
+        # Note: sigma (Pa·m³/kg) already incorporates the bulk concentration
+        # effect (sigma = osmotic_coeff * C_bulk effectively), so C_bulk does
+        # not appear separately in the polarization factor expression.
         Lp_SI = p.Lp * 2.778e-12  # m/(Pa·s)
         polarization_factor = 1.0 + Lp_SI * p.sigma / p.k_mass
         J = p.Lp * TMP / polarization_factor  # L/m²/h (effective flux)
@@ -294,8 +297,9 @@ class Diafiltration:
             # So the mass from buffer retained in the retentate is:
             #   from_buffer = C_buffer * V * (1 - exp(-N*(1-R)))
             #               = (buffer_added / n_dv) * (1 - remaining_frac)
-            buffer_conc = buffer_flows.get(species, jnp.array(0.0)) / sum(buffer_flows.values())
-            buffer_added = buffer_conc * n_dv * V_initial
+            total_buffer_flow = sum(buffer_flows.values())
+            buffer_species_frac = buffer_flows.get(species, jnp.array(0.0)) / jnp.maximum(total_buffer_flow, 1e-10)
+            buffer_added = buffer_species_frac * n_dv * V_initial
             # For R < 1: from_buffer = (buffer_added / n_dv) * (1 - remaining_frac)
             # For R ~ 1 (fully retained): all added buffer stays, from_buffer = buffer_added
             from_buffer = jnp.where(
@@ -317,8 +321,9 @@ class Diafiltration:
                 R = jnp.asarray(R)
                 remaining_frac = jnp.exp(-n_dv * (1.0 - R))
 
-                buffer_conc = buffer_flow / sum(buffer_flows.values())
-                buffer_added = buffer_conc * n_dv * V_initial
+                total_buffer_flow = sum(buffer_flows.values())
+                buffer_species_frac = buffer_flow / jnp.maximum(total_buffer_flow, 1e-10)
+                buffer_added = buffer_species_frac * n_dv * V_initial
                 from_buffer = jnp.where(
                     R < 0.99,
                     (buffer_added / jnp.maximum(n_dv, 1e-10)) * (1.0 - remaining_frac),
