@@ -77,6 +77,9 @@ class CSTRParams(ParamsMixin):
     species_order: list[str]
     dH_rxn: Array | None = None
     T_damping: float = 0.3
+    molar_density: float | None = None
+    H_mix_fn: Callable | None = None
+    K_eq_fn: Callable | None = None
 
     def __post_init__(self):
         """Validate parameter consistency."""
@@ -172,10 +175,11 @@ class CSTR:
         inlet_flows = get_flows(inlet)
 
         # Determine volumetric flow
+        density = p.molar_density if p.molar_density is not None else 55500.0
         if volumetric_flow is None:
-            # Approximate as total molar flow / 55500 for liquid (water-like density)
+            # Approximate as total molar flow / molar_density for liquid
             total_molar = sum(inlet_flows.values())
-            volumetric_flow = total_molar / 55500.0  # mol/s / (mol/m^3) = m^3/s
+            volumetric_flow = total_molar / density  # mol/s / (mol/m^3) = m^3/s
 
         volumetric_flow = jnp.asarray(volumetric_flow)
 
@@ -223,7 +227,34 @@ class CSTR:
             "Q": Q,
             "rates": rates,
             "conversion": conversion,
+            "molar_density": jnp.asarray(density),
         }
+
+        # Heat of mixing diagnostic (#77)
+        if p.H_mix_fn is not None:
+            H_mix = p.H_mix_fn(outlet_flows, T_out)
+            info["H_mix"] = H_mix
+        else:
+            info["H_mix"] = jnp.asarray(0.0)
+
+        # Equilibrium check (#79)
+        if p.K_eq_fn is not None:
+            K_eq = p.K_eq_fn(T_out)
+            X_eq_est = K_eq / (1.0 + K_eq)
+            # Use first reactant's conversion as reference
+            first_reactant = None
+            for j, s in enumerate(p.species_order):
+                if p.stoich[j, 0] < 0:
+                    first_reactant = s
+                    break
+            if first_reactant is not None:
+                X_actual = conversion[first_reactant]
+                equilibrium_exceeded = X_actual > X_eq_est
+            else:
+                equilibrium_exceeded = jnp.asarray(False)
+            info["K_eq"] = K_eq
+            info["X_eq_est"] = X_eq_est
+            info["equilibrium_exceeded"] = equilibrium_exceeded
 
         return outlet, info
 
@@ -344,8 +375,14 @@ class CSTR:
         else:
             Q_rxn = jnp.asarray(0.0)
 
-        # Q = H_out - H_in + Q_rxn (heat of reaction, exothermic negative)
-        Q = H_out - H_in + Q_rxn
+        # Heat of mixing contribution (#77)
+        if p.H_mix_fn is not None:
+            H_mix = p.H_mix_fn(outlet_flows, T_out)
+        else:
+            H_mix = jnp.asarray(0.0)
+
+        # Q = H_out - H_in + Q_rxn + H_mix
+        Q = H_out - H_in + Q_rxn + H_mix
 
         return Q
 
@@ -375,6 +412,7 @@ class CSTR:
         dH_rxn = p.dH_rxn
         V = p.V
         T_damping = p.T_damping
+        H_mix_fn = p.H_mix_fn
 
         def solve_material_balance_at_T(T, F_in_, Q_v, rate_params):
             """Solve material balance at fixed T using Newton's method."""
@@ -402,8 +440,8 @@ class CSTR:
             r = rate_fn(C_out, T, rate_params)
 
             # Energy balance: Q = 0 for adiabatic
-            # 0 = H_out - H_in + Q_rxn
-            # H_out = H_in - Q_rxn
+            # 0 = H_out - H_in + Q_rxn + H_mix
+            # H_out = H_in - Q_rxn - H_mix
             inlet_fl = {s: F_in_[i] for i, s in enumerate(species_order)}
             outlet_fl = {s: F_out[i] for i, s in enumerate(species_order)}
 
@@ -414,8 +452,14 @@ class CSTR:
             else:
                 Q_rxn = 0.0
 
+            # Heat of mixing contribution
+            if H_mix_fn is not None:
+                H_mix = H_mix_fn(outlet_fl, T)
+            else:
+                H_mix = 0.0
+
             # Target enthalpy for outlet
-            H_out_target = H_in - Q_rxn
+            H_out_target = H_in - Q_rxn - H_mix
 
             # Find T that gives this enthalpy
             # H_out = sum(F_i * Cp_i * (T - Tref)) approximately
@@ -596,7 +640,8 @@ class CSTR:
         volumetric_flow = kwargs.get('volumetric_flow')
         if volumetric_flow is None:
             total_molar = sum(inlet_flows.values())
-            volumetric_flow = total_molar / 55500.0
+            eo_density = p.molar_density if p.molar_density is not None else 55500.0
+            volumetric_flow = total_molar / eo_density
         volumetric_flow = jnp.asarray(volumetric_flow)
 
         # Temperature for rate computation

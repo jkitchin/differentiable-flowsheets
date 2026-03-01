@@ -408,8 +408,13 @@ class ShortcutColumn:
         T_top = T_feed - T_half_range
         T_bot = T_feed + T_half_range
 
-        # Get relative volatilities
-        alpha = self.average_alpha(T_top, T_bot, P)
+        # Get relative volatilities (average and per-end for variation diagnostics)
+        alpha_top = self.relative_volatility(T_top, P)
+        alpha_bot = self.relative_volatility(T_bot, P)
+        alpha = {
+            s: jnp.sqrt(alpha_top[s] * alpha_bot[s])
+            for s in p.species_order
+        }
         alpha_LK = alpha[p.light_key]
 
         # Recovery calculations
@@ -522,6 +527,24 @@ class ShortcutColumn:
         h_D = h_liquid_top  # total condenser: distillate is liquid at T_top
         Q_reboiler = D_total * h_D + B_total * h_B - Q_condenser - F_total * h_F
 
+        # Alpha variation diagnostics (#87)
+        alpha_variation = {
+            s: jnp.abs(alpha_top[s] - alpha_bot[s]) / jnp.maximum(alpha[s], 1e-10)
+            for s in p.species_order
+        }
+        max_alpha_variation = jnp.max(jnp.array([alpha_variation[s] for s in p.species_order]))
+
+        # Feasibility checks (#158)
+        alpha_insufficient = alpha_LK < (1.0 + MIN_ALPHA_DIFF)
+        negative_flows_detected = jnp.any(jnp.array([
+            jnp.any(jnp.array([distillate_flows[s] for s in p.species_order]) < 0),
+            jnp.any(jnp.array([bottoms_flows[s] for s in p.species_order]) < 0),
+        ]))
+        reflux_ok = ~near_min_reflux
+        alpha_ok = ~alpha_insufficient
+        flows_ok = ~negative_flows_detected
+        feasible = alpha_ok & reflux_ok & flows_ok
+
         info = {
             "N_min": N_min,
             "R_min": R_min,
@@ -540,6 +563,15 @@ class ShortcutColumn:
             "near_min_reflux": near_min_reflux,
             "Q_condenser": Q_condenser,
             "Q_reboiler": Q_reboiler,
+            # Alpha variation (#87)
+            "alpha_top": alpha_top,
+            "alpha_bot": alpha_bot,
+            "alpha_variation": alpha_variation,
+            "alpha_varies_significantly": max_alpha_variation > 0.3,
+            # Feasibility (#158)
+            "feasible": feasible,
+            "alpha_insufficient": alpha_insufficient,
+            "negative_flows_detected": negative_flows_detected,
         }
 
         return distillate, bottoms, info

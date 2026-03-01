@@ -271,6 +271,7 @@ class LLEEquilibrium:
     nrtl_params: NRTLParams | None = None
     uniquac_params: UNIQUACParams | None = None
     activity_model: Literal["K", "NRTL", "UNIQUAC"] = "K"
+    mutual_solubility: dict[str, float] | None = None
 
     def get_distribution_coefficients(
         self,
@@ -511,6 +512,25 @@ class MultistageCascade:
             raffinate_flows[s] = F_raffinate_arr[i]
             extract_flows[s] = F_extracted_arr[i]
 
+        # Mutual solubility: transfer carrier amounts between phases (#157)
+        # aq_in_org: mole fraction of aqueous carrier that dissolves in organic
+        # org_in_aq: mole fraction of organic carrier that dissolves in aqueous
+        carrier_transfer = {}
+        if eq.mutual_solubility is not None:
+            ms = eq.mutual_solubility
+            aq_in_org = ms.get('aqueous_in_organic', 0.0)
+            org_in_aq = ms.get('organic_in_aqueous', 0.0)
+            aq_transferred = F_aq * aq_in_org
+            org_transferred = F_org * org_in_aq
+            raffinate_flows[eq.aqueous_carrier] = F_aq - aq_transferred
+            raffinate_flows[eq.organic_carrier] = org_transferred
+            extract_flows[eq.organic_carrier] = F_org - org_transferred
+            extract_flows[eq.aqueous_carrier] = aq_transferred
+            carrier_transfer = {
+                'aqueous_to_organic': aq_transferred,
+                'organic_to_aqueous': org_transferred,
+            }
+
         # Stage profiles: compute aqueous (x) and organic (y) mole fractions
         # at each integer stage using the Kremser formula with n = 1, 2, ..., N_int.
         # x_n = (F_in * frac_remaining_n) / F_aq  (aqueous concentration leaving stage n)
@@ -541,7 +561,12 @@ class MultistageCascade:
                 profiles_x[s].append(x_n[i])
                 profiles_y[s].append(y_n[i])
 
-        profiles = {"x": profiles_x, "y": profiles_y}
+        profiles = {
+            "x": profiles_x,
+            "y": profiles_y,
+            "carrier_transfer": carrier_transfer,
+            "mutual_solubility_active": eq.mutual_solubility is not None,
+        }
 
         return raffinate_flows, extract_flows, profiles
 
@@ -614,6 +639,23 @@ class MultistageCascade:
             raffinate_flows[s] = F_raffinate_arr[i]
             extract_flows[s] = F_extracted_arr[i]
 
+        # Mutual solubility: transfer carrier amounts between phases (#157)
+        carrier_transfer = {}
+        if eq.mutual_solubility is not None:
+            ms = eq.mutual_solubility
+            aq_in_org = ms.get('aqueous_in_organic', 0.0)
+            org_in_aq = ms.get('organic_in_aqueous', 0.0)
+            aq_transferred = F_aq * aq_in_org
+            org_transferred = F_org * org_in_aq
+            raffinate_flows[eq.aqueous_carrier] = F_aq - aq_transferred
+            raffinate_flows[eq.organic_carrier] = org_transferred
+            extract_flows[eq.organic_carrier] = F_org - org_transferred
+            extract_flows[eq.aqueous_carrier] = aq_transferred
+            carrier_transfer = {
+                'aqueous_to_organic': aq_transferred,
+                'organic_to_aqueous': org_transferred,
+            }
+
         # Stage profiles: compute aqueous (x) and organic (y) mole fractions
         # at each integer stage 1 .. N_int using the approach-to-equilibrium formula.
         # x_n = x_feed + total_eff_n * (x_eq - x_feed)
@@ -639,7 +681,12 @@ class MultistageCascade:
                 profiles_x[s].append(x_n[i])
                 profiles_y[s].append(y_n[i])
 
-        profiles = {"x": profiles_x, "y": profiles_y}
+        profiles = {
+            "x": profiles_x,
+            "y": profiles_y,
+            "carrier_transfer": carrier_transfer,
+            "mutual_solubility_active": eq.mutual_solubility is not None,
+        }
 
         return raffinate_flows, extract_flows, profiles
 

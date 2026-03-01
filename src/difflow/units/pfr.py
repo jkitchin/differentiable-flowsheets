@@ -88,6 +88,7 @@ class PFRParams(ParamsMixin):
     rate_params: dict
     species_order: list[str]
     dH_rxn: Array | None = None
+    dP_dV: float | Array | None = None
     rtol: float = 1e-6
     atol: float = 1e-8
     n_save_points: int = 101
@@ -181,7 +182,13 @@ class PFR:
 
         # Build outlet stream
         outlet_flows = {s: F_out[i] for i, s in enumerate(p.species_order)}
-        outlet = make_stream(outlet_flows, T_out, inlet["P"])
+
+        # Apply pressure drop if configured
+        P_out = inlet["P"]
+        if p.dP_dV is not None:
+            pressure_drop = jnp.asarray(p.dP_dV) * jnp.asarray(p.V)
+            P_out = inlet["P"] - pressure_drop
+        outlet = make_stream(outlet_flows, T_out, P_out)
 
         # Calculate conversions
         conversion = {
@@ -192,7 +199,13 @@ class PFR:
         info = {
             "conversion": conversion,
             "profiles": profiles,
+            "solution_method": "numerical",
         }
+
+        # Add pressure drop info if applicable
+        if p.dP_dV is not None:
+            info["pressure_drop"] = pressure_drop
+            info["P_out"] = P_out
 
         return outlet, info
 
@@ -205,29 +218,47 @@ class PFR:
         """Integrate material balance for isothermal operation.
 
         dF/dV = stoich @ r(C, T)
+        Optionally: dP/dV = -dP_dV (liquid pressure drop)
 
         Uses diffrax ODE solver.
         """
         p = self.params
         V_total = jnp.asarray(p.V)
+        has_pressure_drop = p.dP_dV is not None
 
         # Capture closures
         rate_fn = p.rate_fn
         species_order = p.species_order
         stoich = p.stoich
         rate_params = p.rate_params
+        dP_dV_val = jnp.asarray(p.dP_dV) if has_pressure_drop else None
 
-        def vector_field(V, F, args):
-            """Right-hand side of ODE: dF/dV = stoich @ r"""
-            C = {s: F[i] / Q_v for i, s in enumerate(species_order)}
-            r = rate_fn(C, T, rate_params)
-            return stoich @ r
+        if has_pressure_drop:
+            def vector_field(V, state, args):
+                """Right-hand side of ODE: dF/dV = stoich @ r, dP/dV = -dP_dV"""
+                F = state[:-1]
+                C = {s: F[i] / Q_v for i, s in enumerate(species_order)}
+                r = rate_fn(C, T, rate_params)
+                dF = stoich @ r
+                return jnp.concatenate([dF, jnp.array([-dP_dV_val])])
+        else:
+            def vector_field(V, state, args):
+                """Right-hand side of ODE: dF/dV = stoich @ r"""
+                C = {s: state[i] / Q_v for i, s in enumerate(species_order)}
+                r = rate_fn(C, T, rate_params)
+                return stoich @ r
 
         # Set up diffrax solver
         term = diffrax.ODETerm(vector_field)
         solver = diffrax.Tsit5()
         saveat = diffrax.SaveAt(ts=jnp.linspace(0, V_total, p.n_save_points))
         stepsize_controller = diffrax.PIDController(rtol=p.rtol, atol=p.atol)
+
+        # Initial state
+        if has_pressure_drop:
+            y0 = jnp.concatenate([F0, jnp.array([0.0])])  # P_drop starts at 0
+        else:
+            y0 = F0
 
         # Solve the ODE
         solution = diffrax.diffeqsolve(
@@ -236,14 +267,20 @@ class PFR:
             t0=0.0,
             t1=V_total,
             dt0=V_total / 100,
-            y0=F0,
+            y0=y0,
             saveat=saveat,
             stepsize_controller=stepsize_controller,
             max_steps=4096,
         )
 
-        F_final = solution.ys[-1]
-        F_profile = solution.ys
+        if has_pressure_drop:
+            F_final = solution.ys[-1, :-1]
+            F_profile = solution.ys[:, :-1]
+            P_drop_profile = solution.ys[:, -1]  # cumulative drop (negative)
+        else:
+            F_final = solution.ys[-1]
+            F_profile = solution.ys
+
         V_profile = solution.ts
 
         profiles = {
@@ -251,6 +288,9 @@ class PFR:
             "F": F_profile,
             "T": jnp.broadcast_to(T, (p.n_save_points,)),
         }
+
+        if has_pressure_drop:
+            profiles["P_drop"] = P_drop_profile
 
         return F_final, profiles
 

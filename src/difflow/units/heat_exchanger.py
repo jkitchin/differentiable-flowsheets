@@ -917,6 +917,9 @@ class CounterCurrentHX:
             "approach": jnp.minimum(jnp.abs(dT1), jnp.abs(dT2)),
             "driving_force": driving_force,
             "temperature_crossing": temperature_crossing,
+            "flow_arrangement": "counter_current",
+            "NTU_very_high": NTU > 10.0,
+            "Cr_near_one": Cr > 0.95,
         }
 
         return hot_outlet, cold_outlet, info
@@ -1023,6 +1026,9 @@ class CoCurrentHX:
             "approach": jnp.abs(dT2),  # Co-current approach is at outlets
             "driving_force": driving_force,
             "temperature_crossing": temperature_crossing,
+            "flow_arrangement": "co_current",
+            "NTU_very_high": NTU > 10.0,
+            "Cr_near_one": Cr > 0.95,
         }
 
         return hot_outlet, cold_outlet, info
@@ -1176,6 +1182,227 @@ class CrossFlowHX:
             "approach": jnp.minimum(jnp.abs(dT1), jnp.abs(dT2)),
             "driving_force": driving_force,
             "temperature_crossing": temperature_crossing,
+            "flow_arrangement": "crossflow",
+            "NTU_very_high": NTU > 10.0,
+            "Cr_near_one": Cr > 0.95,
+        }
+
+        return hot_outlet, cold_outlet, info
+
+
+# =============================================================================
+# Shell-and-Tube Heat Exchanger with LMTD F-correction
+# =============================================================================
+
+
+def lmtd_correction_factor(
+    R: Array,
+    P: Array,
+    n_shell_passes: int = 1,
+) -> Array:
+    """LMTD correction factor for multi-pass shell-and-tube heat exchangers.
+
+    Computes the F-factor for 1-2N TEMA shell-and-tube configurations.
+
+    F = sqrt(R^2 + 1) * ln((1-P)/(1-R*P)) / ((R-1) * ln((2-P*(R+1-sqrt(R^2+1))) / (2-P*(R+1+sqrt(R^2+1)))))
+
+    For R = 1 (balanced flow), uses L'Hôpital's limit:
+    F = (P * sqrt(2)) / ((1-P) * ln((2-P*(2-sqrt(2))) / (2-P*(2+sqrt(2)))))
+
+    Args:
+        R: Heat capacity ratio (Th_in - Th_out) / (Tc_out - Tc_in)
+        P: Temperature effectiveness (Tc_out - Tc_in) / (Th_in - Tc_in)
+        n_shell_passes: Number of shell passes (default 1)
+
+    Returns:
+        F-correction factor (0 < F <= 1)
+    """
+    R = jnp.asarray(R, dtype=jnp.float64)
+    P = jnp.asarray(P, dtype=jnp.float64)
+
+    # For multi-shell-pass, adjust P
+    # P_eff for n shell passes: P_1 = ((1 - (R*P - 1)/(P - 1))^(1/n) - 1) / ...
+    # Simplified: use single-shell formula with adjusted P for n > 1
+    if n_shell_passes > 1:
+        # Adjust P for multiple shell passes
+        # P_n to P_1 conversion
+        ratio = safe_divide(1.0 - R * P, 1.0 - P)
+        ratio_n = ratio ** (1.0 / n_shell_passes)
+        P = safe_divide(1.0 - ratio_n, R - ratio_n)
+
+    # Clamp P to avoid singularities at boundaries
+    P = jnp.clip(P, 1e-6, 1.0 - 1e-6)
+
+    sqrt_R2_1 = jnp.sqrt(R**2 + 1.0)
+
+    # R = 1 singularity: use smooth blending
+    # General formula numerator: sqrt(R^2+1) * ln((1-P)/(1-R*P))
+    # General formula denominator: (R-1) * ln(A_minus / A_plus)
+    A_minus = 2.0 - P * (R + 1.0 - sqrt_R2_1)
+    A_plus = 2.0 - P * (R + 1.0 + sqrt_R2_1)
+
+    # Ensure positive log arguments
+    A_minus_safe = jnp.maximum(A_minus, 1e-10)
+    A_plus_safe = jnp.maximum(A_plus, 1e-10)
+
+    numer = sqrt_R2_1 * jnp.log(jnp.maximum(safe_divide(1.0 - P, 1.0 - R * P), 1e-10))
+    denom = (R - 1.0) * jnp.log(safe_divide(A_minus_safe, A_plus_safe))
+
+    # General case
+    F_general = safe_divide(numer, denom)
+
+    # R = 1 case: use limit formula
+    # F = P*sqrt(2) / ((1-P) * ln((2-P*(2-sqrt(2)))/(2-P*(2+sqrt(2)))))
+    sqrt2 = jnp.sqrt(2.0)
+    A1 = 2.0 - P * (2.0 - sqrt2)
+    A2 = 2.0 - P * (2.0 + sqrt2)
+    A1_safe = jnp.maximum(A1, 1e-10)
+    A2_safe = jnp.maximum(A2, 1e-10)
+    F_balanced = safe_divide(
+        P * sqrt2,
+        (1.0 - P) * jnp.log(safe_divide(A1_safe, A2_safe))
+    )
+
+    # Smooth blend near R = 1
+    blend_width = 0.05
+    t = jnp.abs(R - 1.0) / blend_width
+    blend = jnp.clip(3 * t**2 - 2 * t**3, 0.0, 1.0)
+
+    F = blend * F_general + (1.0 - blend) * F_balanced
+
+    return jnp.clip(F, 0.0, 1.0)
+
+
+@dataclass(repr=False)
+class ShellAndTubeHXParams(ParamsMixin):
+    """Parameters for shell-and-tube heat exchanger with F-correction.
+
+    Attributes:
+        UA: Overall heat transfer coefficient × area (W/K)
+        Cp_hot: Hot side heat capacity (J/mol·K). If None, uses default.
+        Cp_cold: Cold side heat capacity (J/mol·K). If None, uses default.
+        min_approach: Minimum temperature approach (K).
+        n_shell_passes: Number of shell passes (default 1)
+    """
+    UA: Array | float
+    Cp_hot: float | None = None
+    Cp_cold: float | None = None
+    min_approach: float = 10.0
+    n_shell_passes: int = 1
+
+
+class ShellAndTubeHX:
+    """Shell-and-tube heat exchanger with LMTD F-correction.
+
+    Models a 1-2N TEMA shell-and-tube heat exchanger where the
+    effective LMTD is reduced by the F-correction factor.
+
+    Q = UA * F * LMTD_counter_current
+
+    The F-factor accounts for the reduced effectiveness of multi-pass
+    arrangements compared to pure counter-current flow.
+
+    All calculations are fully differentiable.
+    """
+
+    def __init__(self, params: ShellAndTubeHXParams):
+        self.params = params
+
+    def __call__(
+        self,
+        hot_inlet: Stream,
+        cold_inlet: Stream,
+        UA: Array | float | None = None,
+    ) -> tuple[Stream, Stream, dict[str, Array]]:
+        """Perform shell-and-tube heat exchanger calculation.
+
+        Args:
+            hot_inlet: Hot stream inlet
+            cold_inlet: Cold stream inlet
+            UA: Override UA value (W/K)
+
+        Returns:
+            hot_outlet: Hot stream outlet
+            cold_outlet: Cold stream outlet
+            info: Dictionary with Q, F_correction, R, P_param, etc.
+        """
+        p = self.params
+
+        T_hot_in = hot_inlet["T"]
+        T_cold_in = cold_inlet["T"]
+
+        hot_flows = get_flows(hot_inlet)
+        cold_flows = get_flows(cold_inlet)
+        F_hot = sum(hot_flows.values())
+        F_cold = sum(cold_flows.values())
+
+        Cp_hot = p.Cp_hot if p.Cp_hot is not None else 75.0
+        Cp_cold = p.Cp_cold if p.Cp_cold is not None else 75.0
+
+        C_hot = jnp.maximum(F_hot * Cp_hot, 1e-10)
+        C_cold = jnp.maximum(F_cold * Cp_cold, 1e-10)
+
+        C_min = jnp.minimum(C_hot, C_cold)
+        C_max = jnp.maximum(C_hot, C_cold)
+        Cr = C_min / C_max
+
+        UA_val = UA if UA is not None else p.UA
+        UA_val = jnp.asarray(UA_val)
+
+        # Use effectiveness-NTU for counter-current to get Q
+        NTU = UA_val / C_min
+        eps_cc = effectiveness_counter_current(NTU, Cr)
+
+        driving_force = T_hot_in - T_cold_in
+        Q_max = C_min * driving_force
+
+        # Compute outlet temperatures from counter-current effectiveness
+        T_hot_out_cc = T_hot_in - eps_cc * Q_max / C_hot
+        T_cold_out_cc = T_cold_in + eps_cc * Q_max / C_cold
+
+        # Compute R and P for F-correction
+        dT_hot = T_hot_in - T_hot_out_cc
+        dT_cold = T_cold_out_cc - T_cold_in
+        R_param = safe_divide(dT_hot, jnp.maximum(dT_cold, 1e-10))
+        P_param = safe_divide(dT_cold, jnp.maximum(T_hot_in - T_cold_in, 1e-10))
+
+        # Compute F-correction factor
+        F_corr = lmtd_correction_factor(R_param, P_param, p.n_shell_passes)
+
+        # Apply F-correction: effective Q = F * Q_counter_current
+        Q = F_corr * eps_cc * Q_max
+
+        # Outlet temperatures
+        T_hot_out = T_hot_in - Q / C_hot
+        T_cold_out = T_cold_in + Q / C_cold
+
+        hot_outlet = dict(hot_inlet)
+        hot_outlet["T"] = T_hot_out
+
+        cold_outlet = dict(cold_inlet)
+        cold_outlet["T"] = T_cold_out
+
+        # LMTD (counter-current basis)
+        dT1 = T_hot_in - T_cold_out
+        dT2 = T_hot_out - T_cold_in
+        LMTD = log_mean_temperature_difference(dT1, dT2)
+
+        info = {
+            "Q": Q,
+            "F_correction": F_corr,
+            "R": R_param,
+            "P_param": P_param,
+            "LMTD": LMTD,
+            "effectiveness": eps_cc * F_corr,
+            "NTU": NTU,
+            "Cr": Cr,
+            "T_hot_in": T_hot_in,
+            "T_hot_out": T_hot_out,
+            "T_cold_in": T_cold_in,
+            "T_cold_out": T_cold_out,
+            "flow_arrangement": "shell_and_tube",
+            "F_too_low": F_corr < 0.75,
+            "n_shell_passes": p.n_shell_passes,
         }
 
         return hot_outlet, cold_outlet, info
