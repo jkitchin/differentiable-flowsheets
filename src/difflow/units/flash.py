@@ -559,7 +559,8 @@ class Flash:
 class Splitter:
     """Simple stream splitter (no phase equilibrium).
 
-    Splits a stream into two streams with specified split fraction.
+    Splits a stream into n streams with specified split fractions.
+    Default is n=2 (two outlet streams).
     """
 
     def __init__(self, species_order: list[str]):
@@ -570,95 +571,105 @@ class Splitter:
         """
         self.species_order = species_order
 
+    @staticmethod
+    def _normalize_split_fracs(split_frac) -> list:
+        """Convert split_frac input to a list of JAX arrays.
+
+        A scalar value is treated as a 2-way split: [split_frac, 1 - split_frac].
+        A sequence of n values defines an n-way split; the last fraction is
+        recomputed as 1 - sum(others) to guarantee mass balance.
+
+        Args:
+            split_frac: Scalar or sequence of split fractions.
+
+        Returns:
+            List of JAX scalar arrays, one per outlet.
+        """
+        frac = jnp.asarray(split_frac)
+        if frac.ndim == 0:
+            # Scalar -> 2-way split (backward compatible)
+            return [frac, 1 - frac]
+        # Sequence -> n-way split; recompute last for exact mass balance
+        fracs = [frac[i] for i in range(frac.shape[0] - 1)]
+        fracs.append(1 - jnp.sum(jnp.stack(fracs)))
+        return fracs
+
     def __call__(
         self,
         inlet: Stream,
-        split_frac: Array | float,
-    ) -> tuple[Stream, Stream, dict[str, Array]]:
-        """Split a stream.
+        split_frac: Array | float | list | tuple,
+    ) -> tuple:
+        """Split a stream into n outlets.
 
         Args:
             inlet: Feed stream
-            split_frac: Fraction of feed going to first outlet (0 to 1)
+            split_frac: Split fractions. A scalar gives a 2-way split
+                (fraction to first outlet; second gets the remainder).
+                A sequence of n values gives an n-way split (should sum to 1;
+                the last fraction is recomputed as 1 - sum(others)).
 
         Returns:
-            outlet1: First outlet stream (split_frac of feed)
-            outlet2: Second outlet stream (1 - split_frac of feed)
+            *outlets: n outlet streams
             info: Dictionary with split information
         """
-        split_frac = jnp.asarray(split_frac)
+        fracs = self._normalize_split_fracs(split_frac)
         inlet_flows = get_flows(inlet)
 
-        flows1 = {s: inlet_flows[s] * split_frac for s in self.species_order}
-        flows2 = {s: inlet_flows[s] * (1 - split_frac) for s in self.species_order}
-
-        outlet1 = make_stream(flows1, inlet["T"], inlet["P"])
-        outlet2 = make_stream(flows2, inlet["T"], inlet["P"])
-
+        outlets = []
         total_flow = sum(inlet_flows.values())
+        flow_info = {}
+        for k, f in enumerate(fracs):
+            flows = {s: inlet_flows[s] * f for s in self.species_order}
+            outlets.append(make_stream(flows, inlet["T"], inlet["P"]))
+            flow_info[f"flow_to_outlet{k + 1}"] = total_flow * f
+
         info = {
-            "split_fraction": split_frac,
-            "flow_to_outlet1": total_flow * split_frac,
-            "flow_to_outlet2": total_flow * (1 - split_frac),
+            "split_fractions": jnp.stack(fracs),
+            "n_outlets": len(fracs),
+            **flow_info,
         }
 
-        return outlet1, outlet2, info
+        return (*outlets, info)
 
     def eo_residuals(
         self,
         inlets: list[Stream],
         outlets: list[Stream],
-        split_frac: Array | float = 0.5,
+        split_frac: Array | float | list | tuple = 0.5,
         **kwargs,
     ) -> Array:
         """Compute residuals for the EO solver.
 
-        Residuals:
-            F_out1_i - split * F_in_i = 0      (n_species)
-            F_out2_i - (1-split) * F_in_i = 0   (n_species)
-            T_out1 - T_in = 0                    (1)
-            T_out2 - T_in = 0                    (1)
-            P_out1 - P_in = 0                    (1)
-            P_out2 - P_in = 0                    (1)
+        For each outlet k (n total):
+            F_out_k_i - frac_k * F_in_i = 0   (n_species per outlet)
+            T_out_k - T_in = 0                 (1 per outlet)
+            P_out_k - P_in = 0                 (1 per outlet)
 
-        Total: 2*(n_species + 2) residuals
+        Total: n * (n_species + 2) residuals
 
         Args:
             inlets: [inlet_stream]
-            outlets: [outlet1, outlet2]
-            split_frac: Split fraction for first outlet
+            outlets: List of n outlet streams
+            split_frac: Split fractions (scalar or sequence)
 
         Returns:
             Flat residual array
         """
-        split_frac = jnp.asarray(split_frac)
+        fracs = self._normalize_split_fracs(split_frac)
         inlet = inlets[0]
-        out1 = outlets[0]
-        out2 = outlets[1]
-
         inlet_flows = get_flows(inlet)
-        out1_flows = get_flows(out1)
-        out2_flows = get_flows(out2)
 
-        resid_out1 = []
-        resid_out2 = []
-        for s in self.species_order:
-            resid_out1.append(jnp.atleast_1d(
-                out1_flows[s] - split_frac * inlet_flows[s]
-            ))
-            resid_out2.append(jnp.atleast_1d(
-                out2_flows[s] - (1 - split_frac) * inlet_flows[s]
-            ))
+        all_resid = []
+        for k, f in enumerate(fracs):
+            out_flows = get_flows(outlets[k])
+            for s in self.species_order:
+                all_resid.append(jnp.atleast_1d(
+                    out_flows[s] - f * inlet_flows[s]
+                ))
+            all_resid.append(jnp.atleast_1d(outlets[k]["T"] - inlet["T"]))
+            all_resid.append(jnp.atleast_1d(outlets[k]["P"] - inlet["P"]))
 
-        T_resid1 = jnp.atleast_1d(out1["T"] - inlet["T"])
-        P_resid1 = jnp.atleast_1d(out1["P"] - inlet["P"])
-        T_resid2 = jnp.atleast_1d(out2["T"] - inlet["T"])
-        P_resid2 = jnp.atleast_1d(out2["P"] - inlet["P"])
-
-        return jnp.concatenate(
-            resid_out1 + [T_resid1, P_resid1]
-            + resid_out2 + [T_resid2, P_resid2]
-        )
+        return jnp.concatenate(all_resid)
 
 
 class Mixer:

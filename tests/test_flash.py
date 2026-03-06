@@ -396,7 +396,7 @@ class TestSplitter:
 
         _, _, info = splitter(feed, split_frac=0.4)
 
-        npt.assert_allclose(float(info["split_fraction"]), 0.4, rtol=1e-10)
+        npt.assert_allclose(info["split_fractions"], [0.4, 0.6], rtol=1e-10)
         npt.assert_allclose(float(info["flow_to_outlet1"]), 80.0, rtol=1e-10)
         npt.assert_allclose(float(info["flow_to_outlet2"]), 120.0, rtol=1e-10)
 
@@ -413,6 +413,79 @@ class TestSplitter:
 
         # d(100*s)/ds = 100
         npt.assert_allclose(float(grad), 100.0, rtol=1e-10)
+
+    def test_three_way_split(self):
+        """Test splitting into three streams."""
+        feed = make_stream({"A": 100.0, "B": 50.0}, T=300.0, P=101325.0)
+        splitter = Splitter(species_order=["A", "B"])
+
+        out1, out2, out3, info = splitter(feed, split_frac=[0.5, 0.3, 0.2])
+
+        npt.assert_allclose(get_flows(out1)["A"], 50.0, rtol=1e-10)
+        npt.assert_allclose(get_flows(out2)["A"], 30.0, rtol=1e-10)
+        npt.assert_allclose(get_flows(out3)["A"], 20.0, rtol=1e-10)
+        npt.assert_allclose(get_flows(out1)["B"], 25.0, rtol=1e-10)
+        npt.assert_allclose(get_flows(out2)["B"], 15.0, rtol=1e-10)
+        npt.assert_allclose(get_flows(out3)["B"], 10.0, rtol=1e-10)
+        assert info["n_outlets"] == 3
+
+    def test_four_way_split(self):
+        """Test splitting into four streams."""
+        feed = make_stream({"X": 200.0}, T=350.0, P=200000.0)
+        splitter = Splitter(species_order=["X"])
+
+        out1, out2, out3, out4, info = splitter(
+            feed, split_frac=[0.4, 0.3, 0.2, 0.1]
+        )
+
+        npt.assert_allclose(get_flows(out1)["X"], 80.0, rtol=1e-10)
+        npt.assert_allclose(get_flows(out2)["X"], 60.0, rtol=1e-10)
+        npt.assert_allclose(get_flows(out3)["X"], 40.0, rtol=1e-10)
+        npt.assert_allclose(get_flows(out4)["X"], 20.0, rtol=1e-10)
+        assert info["n_outlets"] == 4
+
+    def test_n_way_preserves_T_P(self):
+        """Test that n-way splitter preserves temperature and pressure."""
+        feed = make_stream({"A": 100.0}, T=400.0, P=300000.0)
+        splitter = Splitter(species_order=["A"])
+
+        out1, out2, out3, _ = splitter(feed, split_frac=[0.5, 0.3, 0.2])
+
+        for out in [out1, out2, out3]:
+            npt.assert_allclose(float(out["T"]), 400.0, rtol=1e-10)
+            npt.assert_allclose(float(out["P"]), 300000.0, rtol=1e-10)
+
+    def test_n_way_mass_balance(self):
+        """Test that n-way split conserves mass exactly."""
+        feed = make_stream({"A": 100.0, "B": 50.0}, T=300.0, P=101325.0)
+        splitter = Splitter(species_order=["A", "B"])
+
+        out1, out2, out3, _ = splitter(feed, split_frac=[0.5, 0.3, 0.2])
+
+        for s in ["A", "B"]:
+            total_out = sum(get_flows(o)[s] for o in [out1, out2, out3])
+            npt.assert_allclose(float(total_out), float(feed[f"F_{s}"]), rtol=1e-12)
+
+    def test_n_way_gradient(self):
+        """Test gradient through n-way splitter."""
+        feed = make_stream({"A": 100.0}, T=300.0, P=101325.0)
+        splitter = Splitter(species_order=["A"])
+
+        def second_outlet_flow(fracs):
+            out1, out2, out3, _ = splitter(feed, split_frac=fracs)
+            return total_flow(out2)
+
+        fracs = jnp.array([0.5, 0.3, 0.2])
+        grads = jax.grad(second_outlet_flow)(fracs)
+
+        # d(100 * f2) / d(f1) = 0, d/d(f2) = 100
+        # But last frac = 1 - f1 - f2, so d(100*f2)/d(f1) = 0, d/d(f2) = 100
+        # Actually: grads are w.r.t. the input array elements
+        # f2 is fracs[1], last = 1 - fracs[0] - fracs[1]
+        # out2 flow = 100 * fracs[1], so grad = [0, 100, 0] but fracs[2] doesn't
+        # affect out2 since last frac is recomputed, so grad w.r.t. fracs[2] = 0
+        npt.assert_allclose(float(grads[0]), 0.0, atol=1e-10)
+        npt.assert_allclose(float(grads[1]), 100.0, rtol=1e-10)
 
 
 class TestMixer:
