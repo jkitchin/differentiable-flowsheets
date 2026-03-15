@@ -158,8 +158,14 @@ def get_critical_props(name: str) -> CriticalProperties:
 #     "Cp": (a, b, c, d) for Cp = a + bT + cT² + dT³ (J/mol/K),
 #     "Hvap": (A, n, Tc) for Hvap = A*(1-T/Tc)^n (J/mol),
 #     "antoine": (A, B, C) for log10(P/Pa) = A - B/(T+C),
+#         Note: A = A_NIST + 5 because NIST uses bar and we use Pa (1 bar = 1e5 Pa).
 #     "Hf": standard heat of formation (J/mol) at 298.15 K,
 # }
+# Antoine sources: NIST Chemistry WebBook (https://webbook.nist.gov)
+#   Hydrocarbons: Williamham, Taylor, et al., 1945
+#   Alcohols: Ambrose and Sprake, 1970
+#   Acetone: Ambrose, Sprake, et al., 1974
+#   Water: Bridgeman and Aldrich, 1964 (304-333 K range)
 
 _IDEAL_THERMO_DATA = {
     # Light gases
@@ -232,21 +238,21 @@ _IDEAL_THERMO_DATA = {
         "MW": 86.18,
         "Cp": (143.0, 0.0, 0.0, 0.0),
         "Hvap": (28850.0, 0.38, 507.6),
-        "antoine": (9.00, 1171.17, -48.78),
+        "antoine": (9.00266, 1171.530, -48.784),
         "Hf": -167200.0,
     },
     "n_heptane": {
         "MW": 100.20,
         "Cp": (166.0, 0.0, 0.0, 0.0),
         "Hvap": (31770.0, 0.38, 540.2),
-        "antoine": (9.02, 1264.90, -56.25),
+        "antoine": (9.02832, 1268.636, -56.199),
         "Hf": -187800.0,
     },
     "n_octane": {
         "MW": 114.23,
         "Cp": (189.0, 0.0, 0.0, 0.0),
         "Hvap": (34410.0, 0.38, 568.7),
-        "antoine": (9.02, 1351.99, -63.63),
+        "antoine": (9.04867, 1355.126, -63.633),
         "Hf": -208600.0,
     },
 
@@ -271,23 +277,23 @@ _IDEAL_THERMO_DATA = {
         "MW": 78.11,
         "Cp": (136.0, 0.0, 0.0, 0.0),
         "Hvap": (30720.0, 0.38, 562.0),
-        "antoine": (9.11, 1211.03, -52.36),
+        "antoine": (9.01814, 1203.835, -53.226),
         "Hf": 82880.0,
-        "T_antoine_min": 280.0,
-        "T_antoine_max": 377.0,
+        "T_antoine_min": 287.7,
+        "T_antoine_max": 354.07,
     },
     "toluene": {
         "MW": 92.14,
         "Cp": (157.0, 0.0, 0.0, 0.0),
         "Hvap": (33180.0, 0.38, 591.8),
-        "antoine": (9.08, 1342.31, -53.67),
+        "antoine": (9.07827, 1343.943, -53.773),
         "Hf": 50170.0,
     },
     "ethylbenzene": {
         "MW": 106.17,
         "Cp": (183.0, 0.0, 0.0, 0.0),
         "Hvap": (35570.0, 0.38, 617.2),
-        "antoine": (9.08, 1421.91, -59.95),
+        "antoine": (9.07488, 1419.315, -60.539),
         "Hf": 29790.0,
     },
     "styrene": {
@@ -303,19 +309,19 @@ _IDEAL_THERMO_DATA = {
         "MW": 32.04,
         "Cp": (81.0, 0.0, 0.0, 0.0),
         "Hvap": (35210.0, 0.38, 512.6),
-        "antoine": (10.20, 1582.27, -33.45),
+        "antoine": (10.20409, 1581.341, -33.500),
         "Hf": -201200.0,
-        "T_antoine_min": 257.0,
-        "T_antoine_max": 364.0,
+        "T_antoine_min": 288.1,
+        "T_antoine_max": 356.83,
     },
     "ethanol": {
         "MW": 46.07,
         "Cp": (112.0, 0.0, 0.0, 0.0),
         "Hvap": (38560.0, 0.38, 513.9),
-        "antoine": (10.32, 1718.10, -39.73),
+        "antoine": (10.24677, 1598.673, -46.424),
         "Hf": -234800.0,
-        "T_antoine_min": 270.0,
-        "T_antoine_max": 369.0,
+        "T_antoine_min": 292.77,
+        "T_antoine_max": 366.63,
     },
     "1_propanol": {
         "MW": 60.10,
@@ -344,10 +350,10 @@ _IDEAL_THERMO_DATA = {
         "MW": 58.08,
         "Cp": (125.0, 0.0, 0.0, 0.0),
         "Hvap": (29100.0, 0.38, 508.2),
-        "antoine": (9.39, 1312.25, -32.52),
+        "antoine": (9.42448, 1312.253, -32.445),
         "Hf": -217100.0,
-        "T_antoine_min": 259.0,
-        "T_antoine_max": 329.0,
+        "T_antoine_min": 259.16,
+        "T_antoine_max": 507.60,
     },
 
     # Ethers
@@ -387,7 +393,7 @@ _IDEAL_THERMO_DATA = {
         "MW": 18.015,
         "Cp": (75.3, 0.0, 0.0, 0.0),  # Liquid at 25°C
         "Hvap": (40660.0, 0.38, 647.1),
-        "antoine": (10.20, 1730.63, -39.72),
+        "antoine": (10.20389, 1733.926, -39.485),
         "Hf": -285830.0,  # Liquid-phase formation enthalpy (consistent with liquid Cp)
         "T_antoine_min": 273.0,
         "T_antoine_max": 473.0,

@@ -1197,7 +1197,7 @@ class DistillationColumn:
         R: Array | float,
         D_spec: Array | float | None = None,
         B_spec: Array | float | None = None,
-        use_mesh: bool = False,
+        use_mesh: bool = True,
         mesh_iter: int = 20,
     ) -> tuple[Stream, Stream, dict[str, Array]]:
         """Solve distillation column.
@@ -1208,9 +1208,13 @@ class DistillationColumn:
             D_spec: Distillate flow rate specification (mol/s)
             B_spec: Bottoms flow rate specification (mol/s)
                     Exactly one of D_spec or B_spec must be given.
-            use_mesh: If True, run the rigorous MESH solver (Wang-Henke
-                      bubble-point method) after the CMO warm start.
-                      If False (default), return the CMO solution.
+            use_mesh: If True (default), run the rigorous MESH solver
+                      (Wang-Henke bubble-point method) after the CMO warm
+                      start.  The MESH solver corrects L/V flows via energy
+                      balance and gives much more accurate compositions for
+                      systems with unequal latent heats.
+                      If False, return the faster but less accurate CMO
+                      solution.
             mesh_iter: Number of MESH iterations when use_mesh=True.
 
         Returns:
