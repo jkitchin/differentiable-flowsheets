@@ -488,6 +488,172 @@ for elem, recovery in results['target_recovery'].items():
 
 ---
 
+(custom-elements-and-data)=
+## Custom Elements and Data
+
+The built-in database covers 10 commercial REEs and 4 extractant systems, but many applications require elements or extractant data not included by default. The `difflow_ree` plugin provides a runtime API for adding your own literature data, following the same pattern as the existing `create_custom_extractant` / `add_extractant` workflow.
+
+(adding-a-custom-element)=
+### Adding a Custom Element
+
+Use `create_custom_element` to build an `REEElement` from known physical properties, then register it with the element database. All physical constants (atomic weight, ionic radius, density, melting point) should come from standard references such as the CRC Handbook or Shannon (1976) ionic radii tables.
+
+```python
+from difflow_ree import create_custom_element, get_ree_database
+
+# Create Holmium from literature data
+ho = create_custom_element(
+    symbol="Ho",
+    name="Holmium",
+    atomic_number=67,
+    atomic_weight=164.930,   # g/mol, CRC Handbook
+    ionic_radius_pm=90.1,    # pm, Shannon (1976), CN=6, 3+
+    density=8.795,           # g/cm³
+    melting_point=1734,      # K
+    group="heavy",
+    oxide_formula="Ho2O3",
+    oxide_mw=377.86,         # g/mol
+    price_usd_kg=60.0,      # approximate market price
+)
+
+# Register with the database
+db = get_ree_database()
+db.add_element("Ho", ho)
+
+# Now Ho is available alongside built-in elements
+print(db.get("Ho").ionic_radius_pm)  # 90.1
+print(db.list_by_group("heavy"))     # [..., 'Ho']
+```
+
+Elements can also be updated or removed:
+
+```python
+db.update_element("Ho", updated_ho)  # replace with corrected data
+db.remove_element("Ho")              # remove entirely
+```
+
+(adding-extractant-coefficients-for-a-new-element)=
+### Adding Extractant Coefficients for a New Element
+
+After registering an element, you need to provide its pH and temperature coefficients for at least one extractant before it can be used in extraction simulations. These coefficients are empirical and should come from published experimental correlations (e.g., Gupta & Krishnamurthy, 2005; Xie et al., 2014).
+
+You only need to add data for the extractants you plan to use. For example, to add Ho data for PC88A only:
+
+```python
+from difflow_ree import get_extractant_database
+
+ext_db = get_extractant_database()
+
+# Add Ho coefficients to PC88A
+# Model: log10(D) = a + b*pH + c*pH^2 + d/T
+ext_db.add_element_to_extractant(
+    "PC88A",
+    "Ho",
+    ph_coefficients={
+        "a": -6.15,   # from your literature source
+        "b": 2.95,
+        "c": 0.010,
+    },
+    temperature_coefficient=-2350,  # K, for d*(1/T - 1/T_ref) correction
+)
+
+# Verify
+extractant = ext_db.get("PC88A")
+print("Ho" in extractant.ph_coefficients)  # True
+
+# Other extractants are unaffected
+print("Ho" in ext_db.get("D2EHPA").ph_coefficients)  # False
+```
+
+If you need to correct values, remove and re-add:
+
+```python
+ext_db.remove_element_from_extractant("PC88A", "Ho")
+ext_db.add_element_to_extractant("PC88A", "Ho", ...)
+```
+
+(adding-separation-factors)=
+### Adding Separation Factors
+
+Separation factor data can be added incrementally. You can add individual pairs to existing extractants or create complete entries for new ones.
+
+Adding pairs to an existing extractant:
+
+```python
+from difflow_ree import get_sf_database
+
+sf_db = get_sf_database()
+
+# Add Ho separation factors to PC88A (from literature)
+sf_db.add_pair("PC88A", "Ho_Dy", 1.4, adjacent=True, stages_99=20)
+sf_db.add_pair("PC88A", "Y_Ho", 0.9, adjacent=True)
+
+# Add a non-adjacent group pair
+sf_db.add_pair("PC88A", "Ho_Nd", 10.5, adjacent=False)
+
+# Query the new data
+print(sf_db.get_sf("PC88A", "Ho_Dy"))           # 1.4
+print(sf_db.get_stages_needed("PC88A", "Ho_Dy"))  # 20
+```
+
+Creating a complete entry for a new or custom extractant:
+
+```python
+sf_db.add_separation_factors(
+    extractant="MyExtractant",
+    conditions={"pH": 3.0, "temperature_K": 298, "concentration_M": 0.5},
+    adjacent_pairs={"Ho_Dy": 1.4, "Y_Ho": 0.9},
+    group_pairs={"Ho_La": 50.0},
+    stages_for_99_purity={"Ho_Dy": 20},
+)
+```
+
+(custom-data-complete-workflow)=
+### Complete Workflow
+
+Here is a full example of adding Holmium and using it in a separation simulation. In a real application, the pH coefficients and separation factors should come from published experimental data for your specific extractant system.
+
+```python
+from difflow_ree import (
+    create_custom_element,
+    get_ree_database,
+    get_extractant_database,
+    get_sf_database,
+    REEDistribution,
+)
+
+# 1. Register the element
+ho = create_custom_element(
+    symbol="Ho", name="Holmium", atomic_number=67,
+    atomic_weight=164.930, ionic_radius_pm=90.1, density=8.795,
+    melting_point=1734, group="heavy", oxide_formula="Ho2O3",
+    oxide_mw=377.86, price_usd_kg=60.0,
+)
+get_ree_database().add_element("Ho", ho)
+
+# 2. Add extraction coefficients (from your literature source)
+get_extractant_database().add_element_to_extractant(
+    "PC88A", "Ho",
+    ph_coefficients={"a": -6.15, "b": 2.95, "c": 0.010},
+    temperature_coefficient=-2350,
+)
+
+# 3. Add separation factor data
+sf_db = get_sf_database()
+sf_db.add_pair("PC88A", "Ho_Dy", 1.4, stages_99=20)
+sf_db.add_pair("PC88A", "Ho_Gd", 2.5, adjacent=False)
+
+# 4. Use in distribution calculations
+dist = REEDistribution(
+    extractant="PC88A",
+    elements=("Gd", "Dy", "Ho", "Y"),
+)
+D_ho = dist.get_D("Ho", pH=3.5, T=298.15)
+print(f"D(Ho) at pH 3.5: {D_ho:.2f}")
+```
+
+---
+
 (economics)=
 ## Economics
 

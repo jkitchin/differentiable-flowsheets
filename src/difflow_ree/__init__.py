@@ -40,19 +40,28 @@ __version__ = "0.1.0"
 # =============================================================================
 
 from difflow_ree.database import (
+    # Data classes
+    REEElement,
+    PHCoefficients,
+    Extractant,
+    SeparationFactorData,
     # Database classes
     REEDatabase,
     ExtractantDatabase,
     SeparationFactorDatabase,
+    # Database singletons
+    get_ree_database,
+    get_extractant_database,
+    get_sf_database,
     # Convenience functions
     get_element,
     get_extractant,
     list_ree_elements,
     list_extractants,
     get_separation_factor,
-    # Custom extractant creation
+    # Custom creation helpers
+    create_custom_element,
     create_custom_extractant,
-    get_extractant_database,
     # JAX-compatible accessors
     get_atomic_weight_array,
     get_price_array,
@@ -329,17 +338,29 @@ def register(registry):
 __all__ = [
     # Version
     "__version__",
-    # Database
+    # Data classes
+    "REEElement",
+    "PHCoefficients",
+    "Extractant",
+    "SeparationFactorData",
+    # Database classes
     "REEDatabase",
     "ExtractantDatabase",
     "SeparationFactorDatabase",
+    # Database singletons
+    "get_ree_database",
+    "get_extractant_database",
+    "get_sf_database",
+    # Convenience functions
     "get_element",
     "get_extractant",
     "list_ree_elements",
     "list_extractants",
     "get_separation_factor",
+    # Custom creation helpers
+    "create_custom_element",
     "create_custom_extractant",
-    "get_extractant_database",
+    # JAX-compatible accessors
     "get_atomic_weight_array",
     "get_price_array",
     "get_ionic_radius_array",

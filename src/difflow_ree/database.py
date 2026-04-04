@@ -109,6 +109,81 @@ class REEDatabase:
         """Get ionic radii (pm) for multiple elements."""
         return {s: self._elements[s].ionic_radius_pm for s in symbols}
 
+    def add_element(self, symbol: str, element: REEElement) -> None:
+        """Add a custom element to the database at runtime.
+
+        Args:
+            symbol: Element symbol (e.g., "Ho")
+            element: REEElement object with all required properties
+
+        Raises:
+            ValueError: If element with this symbol already exists
+            TypeError: If element is not an REEElement instance
+        """
+        if not isinstance(element, REEElement):
+            raise TypeError(f"element must be an REEElement instance, got {type(element)}")
+        if symbol in self._elements:
+            raise ValueError(
+                f"Element '{symbol}' already exists. Use update_element() to modify "
+                "or remove_element() first."
+            )
+        self._elements[symbol] = element
+
+        # Add to appropriate group if it exists
+        group = element.group
+        if group in self._groups:
+            if symbol not in self._groups[group]:
+                self._groups[group].append(symbol)
+        else:
+            self._groups[group] = [symbol]
+
+    def remove_element(self, symbol: str) -> None:
+        """Remove an element from the database.
+
+        Args:
+            symbol: Element symbol to remove
+
+        Raises:
+            KeyError: If element doesn't exist
+        """
+        if symbol not in self._elements:
+            raise KeyError(f"Element '{symbol}' not found in database")
+        group = self._elements[symbol].group
+        del self._elements[symbol]
+        if group in self._groups and symbol in self._groups[group]:
+            self._groups[group].remove(symbol)
+
+    def update_element(self, symbol: str, element: REEElement) -> None:
+        """Update an existing element in the database.
+
+        Args:
+            symbol: Element symbol to update
+            element: New REEElement object
+
+        Raises:
+            KeyError: If element doesn't exist
+            TypeError: If element is not an REEElement instance
+        """
+        if not isinstance(element, REEElement):
+            raise TypeError(f"element must be an REEElement instance, got {type(element)}")
+        if symbol not in self._elements:
+            raise KeyError(
+                f"Element '{symbol}' not found. Use add_element() to create new elements."
+            )
+        old_group = self._elements[symbol].group
+        new_group = element.group
+        self._elements[symbol] = element
+
+        # Update group membership if group changed
+        if old_group != new_group:
+            if old_group in self._groups and symbol in self._groups[old_group]:
+                self._groups[old_group].remove(symbol)
+            if new_group in self._groups:
+                if symbol not in self._groups[new_group]:
+                    self._groups[new_group].append(symbol)
+            else:
+                self._groups[new_group] = [symbol]
+
 
 # =============================================================================
 # Extractant Data Structures
@@ -255,6 +330,87 @@ class ExtractantDatabase:
             raise KeyError(f"Extractant '{name}' not found in database")
         del self._extractants[name]
 
+    def add_element_to_extractant(
+        self,
+        extractant_name: str,
+        element: str,
+        ph_coefficients: dict[str, float],
+        temperature_coefficient: float,
+    ) -> None:
+        """Add pH and temperature coefficients for a new element to an existing extractant.
+
+        This allows using a new element (e.g., Ho) with an extractant without
+        needing data for every element in the database.
+
+        Args:
+            extractant_name: Name of an existing extractant (e.g., "PC88A")
+            element: Element symbol (e.g., "Ho")
+            ph_coefficients: Dict with keys "a", "b", "c" and optional "d".
+                Model: log10(D) = a + b*pH + c*pH^2 + d/T
+            temperature_coefficient: Temperature correction coefficient (K).
+                Used as: d*(1/T - 1/T_ref)
+
+        Raises:
+            KeyError: If extractant doesn't exist
+            ValueError: If element already has data for this extractant, or
+                if required coefficient keys are missing
+        """
+        if extractant_name not in self._extractants:
+            raise KeyError(
+                f"Extractant '{extractant_name}' not found. "
+                f"Available: {list(self._extractants.keys())}"
+            )
+
+        extractant = self._extractants[extractant_name]
+
+        if element in extractant.ph_coefficients:
+            raise ValueError(
+                f"Element '{element}' already has coefficients for '{extractant_name}'. "
+                "Remove and re-add to update."
+            )
+
+        required_keys = {"a", "b", "c"}
+        missing = required_keys - set(ph_coefficients.keys())
+        if missing:
+            raise ValueError(
+                f"pH coefficients missing required keys: {missing}. "
+                "Required: a, b, c (d is optional)"
+            )
+
+        extractant.ph_coefficients[element] = PHCoefficients(
+            a=float(ph_coefficients["a"]),
+            b=float(ph_coefficients["b"]),
+            c=float(ph_coefficients["c"]),
+            d=float(ph_coefficients.get("d", 0.0)),
+        )
+        extractant.temperature_coefficients[element] = float(temperature_coefficient)
+
+    def remove_element_from_extractant(
+        self,
+        extractant_name: str,
+        element: str,
+    ) -> None:
+        """Remove an element's coefficients from an extractant.
+
+        Args:
+            extractant_name: Name of the extractant
+            element: Element symbol to remove
+
+        Raises:
+            KeyError: If extractant or element not found
+        """
+        if extractant_name not in self._extractants:
+            raise KeyError(f"Extractant '{extractant_name}' not found")
+
+        extractant = self._extractants[extractant_name]
+        if element not in extractant.ph_coefficients:
+            raise KeyError(
+                f"Element '{element}' not found in extractant '{extractant_name}'"
+            )
+
+        del extractant.ph_coefficients[element]
+        extractant.temperature_coefficients.pop(element, None)
+
     def update_extractant(self, name: str, extractant: Extractant) -> None:
         """Update an existing extractant in the database.
 
@@ -352,6 +508,126 @@ class SeparationFactorDatabase:
     def list_extractants(self) -> list[str]:
         """List extractants with SF data."""
         return list(self._data.keys())
+
+    def add_pair(
+        self,
+        extractant: str,
+        pair: str,
+        sf: float,
+        adjacent: bool = True,
+        stages_99: int | None = None,
+    ) -> None:
+        """Add a separation factor for an element pair.
+
+        Args:
+            extractant: Extractant name (e.g., "PC88A"). Must already exist
+                in the database (either from YAML or via add_separation_factors).
+            pair: Element pair string (e.g., "Ho_Dy"). Convention: heavier_lighter.
+            sf: Separation factor value (D_heavier / D_lighter, typically > 1)
+            adjacent: If True, store as adjacent pair; if False, as group pair
+            stages_99: Estimated stages for 99% purity separation (optional)
+
+        Raises:
+            KeyError: If extractant not found. Use add_separation_factors() to
+                create a new extractant entry first.
+            ValueError: If pair already exists for this extractant
+        """
+        if extractant not in self._data:
+            raise KeyError(
+                f"No SF data for extractant '{extractant}'. "
+                "Use add_separation_factors() to create a new entry first."
+            )
+
+        data = self._data[extractant]
+        if pair in data.adjacent_pairs or pair in data.group_pairs:
+            raise ValueError(
+                f"Pair '{pair}' already exists for '{extractant}'. "
+                "Use remove_pair() first to update."
+            )
+
+        if adjacent:
+            data.adjacent_pairs[pair] = float(sf)
+        else:
+            data.group_pairs[pair] = float(sf)
+
+        if stages_99 is not None:
+            if data.stages_for_99_purity is None:
+                data.stages_for_99_purity = {}
+            data.stages_for_99_purity[pair] = int(stages_99)
+
+    def remove_pair(self, extractant: str, pair: str) -> None:
+        """Remove a separation factor pair.
+
+        Args:
+            extractant: Extractant name
+            pair: Element pair string
+
+        Raises:
+            KeyError: If extractant or pair not found
+        """
+        if extractant not in self._data:
+            raise KeyError(f"No SF data for extractant '{extractant}'")
+
+        data = self._data[extractant]
+        if pair in data.adjacent_pairs:
+            del data.adjacent_pairs[pair]
+        elif pair in data.group_pairs:
+            del data.group_pairs[pair]
+        else:
+            raise KeyError(f"Pair '{pair}' not found for '{extractant}'")
+
+        if data.stages_for_99_purity and pair in data.stages_for_99_purity:
+            del data.stages_for_99_purity[pair]
+
+    def add_separation_factors(
+        self,
+        extractant: str,
+        conditions: dict,
+        adjacent_pairs: dict[str, float] | None = None,
+        group_pairs: dict[str, float] | None = None,
+        stages_for_99_purity: dict[str, int] | None = None,
+    ) -> None:
+        """Add separation factor data for a new extractant.
+
+        Use this to create SF data for extractants not in the YAML database,
+        or for custom extractants added via ExtractantDatabase.add_extractant().
+
+        Args:
+            extractant: Extractant name (e.g., "MyExtractant")
+            conditions: Operating conditions dict (e.g., {"pH": 3.0, "temperature_K": 298})
+            adjacent_pairs: Adjacent pair separation factors (e.g., {"Ho_Dy": 1.4})
+            group_pairs: Non-adjacent group pair separation factors
+            stages_for_99_purity: Estimated stages for 99% purity
+
+        Raises:
+            ValueError: If extractant already has SF data
+        """
+        if extractant in self._data:
+            raise ValueError(
+                f"SF data for '{extractant}' already exists. "
+                "Use add_pair() to add individual pairs, or remove and re-add."
+            )
+
+        self._data[extractant] = SeparationFactorData(
+            extractant=extractant,
+            conditions=conditions,
+            adjacent_pairs=dict(adjacent_pairs) if adjacent_pairs else {},
+            group_pairs=dict(group_pairs) if group_pairs else {},
+            stages_for_99_purity=dict(stages_for_99_purity) if stages_for_99_purity else None,
+        )
+
+    def remove_separation_factors(self, extractant: str) -> None:
+        """Remove all separation factor data for an extractant.
+
+        Args:
+            extractant: Extractant name to remove
+
+        Raises:
+            KeyError: If extractant not found
+        """
+        if extractant not in self._data:
+            raise KeyError(f"No SF data for extractant '{extractant}'")
+        del self._data[extractant]
 
 
 # =============================================================================
@@ -498,6 +774,91 @@ def create_custom_extractant(
         reference_concentration=float(reference_concentration),
         concentration_exponent=float(concentration_exponent),
         cost_usd_kg=float(cost_usd_kg),
+    )
+
+
+def create_custom_element(
+    symbol: str,
+    name: str,
+    atomic_number: int,
+    atomic_weight: float,
+    ionic_radius_pm: float,
+    density: float,
+    melting_point: float,
+    group: str,
+    oxide_formula: str,
+    oxide_mw: float,
+    oxidation_states: tuple[int, ...] = (3,),
+    price_usd_kg: float = 0.0,
+) -> REEElement:
+    """Create a custom REE element for registration with the database.
+
+    This function validates inputs and creates an REEElement that can be
+    registered with the element database via REEDatabase.add_element().
+
+    Args:
+        symbol: Element symbol (e.g., "Ho")
+        name: Full element name (e.g., "Holmium")
+        atomic_number: Atomic number
+        atomic_weight: Atomic weight (g/mol)
+        ionic_radius_pm: Ionic radius in picometers (CN=6, 3+ oxidation)
+        density: Density (g/cm3)
+        melting_point: Melting point (K)
+        group: Group classification ("light", "middle", or "heavy")
+        oxide_formula: Chemical formula of the oxide (e.g., "Ho2O3")
+        oxide_mw: Molecular weight of the oxide (g/mol)
+        oxidation_states: Tuple of possible oxidation states, default (3,)
+        price_usd_kg: Market price in USD/kg, default 0.0
+
+    Returns:
+        REEElement object ready for registration
+
+    Raises:
+        ValueError: If required parameters are missing or invalid
+
+    Example:
+        >>> ho = create_custom_element(
+        ...     symbol="Ho",
+        ...     name="Holmium",
+        ...     atomic_number=67,
+        ...     atomic_weight=164.930,
+        ...     ionic_radius_pm=90.1,
+        ...     density=8.795,
+        ...     melting_point=1734,
+        ...     group="heavy",
+        ...     oxide_formula="Ho2O3",
+        ...     oxide_mw=377.86,
+        ...     price_usd_kg=60.0,
+        ... )
+        >>>
+        >>> from difflow_ree import get_ree_database
+        >>> db = get_ree_database()
+        >>> db.add_element("Ho", ho)
+    """
+    if not symbol:
+        raise ValueError("symbol cannot be empty")
+    if not name:
+        raise ValueError("name cannot be empty")
+    if group not in ("light", "middle", "heavy"):
+        raise ValueError(f"group must be 'light', 'middle', or 'heavy', got '{group}'")
+    if atomic_weight <= 0:
+        raise ValueError(f"atomic_weight must be positive, got {atomic_weight}")
+    if ionic_radius_pm <= 0:
+        raise ValueError(f"ionic_radius_pm must be positive, got {ionic_radius_pm}")
+
+    return REEElement(
+        symbol=symbol,
+        name=name,
+        atomic_number=int(atomic_number),
+        atomic_weight=float(atomic_weight),
+        ionic_radius_pm=float(ionic_radius_pm),
+        density=float(density),
+        melting_point=float(melting_point),
+        oxidation_states=tuple(oxidation_states),
+        group=group,
+        oxide_formula=oxide_formula,
+        oxide_mw=float(oxide_mw),
+        price_usd_kg=float(price_usd_kg),
     )
 
 
