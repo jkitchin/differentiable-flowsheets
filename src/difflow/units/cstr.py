@@ -109,6 +109,41 @@ class CSTR:
     All calculations are JAX-compatible for automatic differentiation.
     """
 
+    symbol = "CSTR"
+    equations = [
+        r"0 = F_{i,\mathrm{in}} - F_{i,\mathrm{out}} + V \sum_j \nu_{ij}\, r_j \qquad \forall\, i",
+        r"0 = Q + \sum_i F_{i,\mathrm{in}}\, h_i(T_\mathrm{in}) - \sum_i F_{i,\mathrm{out}}\, h_i(T_\mathrm{out}) + V \sum_j r_j\,(-\Delta H_{r,j})",
+        r"r_j = r_j\!\left(\{C_i\},\,T;\,\theta\right),\qquad C_i = F_i/\dot{V}",
+    ]
+    assumptions = [
+        "Perfectly mixed: outlet composition equals reactor composition.",
+        "Steady-state operation.",
+        "Uniform temperature throughout the vessel.",
+        "Liquid-phase default: volumetric flow from molar_density when not supplied.",
+    ]
+    references = [
+        "Fogler, Elements of Chemical Reaction Engineering, 5e, Ch. 8.",
+        "Levenspiel, Chemical Reaction Engineering, 3e, Ch. 5.",
+    ]
+    parameter_symbols = {
+        "V": "V",
+        "stoich": r"\nu_{ij}",
+        "dH_rxn": r"\Delta H_{r,j}",
+        "T_damping": r"\alpha_T",
+        "molar_density": r"\rho_m",
+    }
+    parameter_units = {
+        "V": "m^3",
+        "stoich": "-",
+        "dH_rxn": "J/mol",
+        "T_damping": "-",
+        "molar_density": "mol/m^3",
+    }
+    numerical_method = (
+        "Material balance: closed-form inversion via linear solve. "
+        "Energy balance: damped fixed-point outer loop on T (adiabatic/specified_duty)."
+    )
+
     def __init__(
         self,
         params: CSTRParams,

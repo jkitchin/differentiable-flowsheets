@@ -81,6 +81,19 @@ class GroupSeparator:
         >>> light, middle, heavy = separator(feed)
     """
 
+    symbol = "Group Separator"
+    equations = [
+        r"\text{Two circuits in series: (i) heavy vs.\ light+middle, (ii) middle vs.\ light}",
+        r"D_\mathrm{heavy} \gg D_\mathrm{middle} \gg D_\mathrm{light}\qquad \text{(typical D2EHPA selectivity)}",
+    ]
+    assumptions = [
+        "Two extract-scrub-strip circuits partition the feed into L / M / H groups.",
+        "Group boundaries selected by pH/extractant-concentration tuning.",
+    ]
+    references = ["Habashi, F. Handbook of Extractive Metallurgy, Vol. 3, Wiley-VCH, 1997."]
+    parameter_symbols = {}
+    parameter_units = {}
+
     def __init__(
         self,
         elements: tuple[str, ...],
@@ -200,6 +213,17 @@ class FullSeparationTrain:
         >>> train = FullSeparationTrain(params)
         >>> results = train(feed)
     """
+
+    symbol = "Full Separation Train"
+    equations = [
+        r"\text{feed} \rightarrow \text{Ce removal (opt.)} \rightarrow \text{group separation} \rightarrow \text{individual elements (opt.)}",
+    ]
+    assumptions = [
+        "Pre-defined network of REE unit operations with optional Ce-removal and individual separation.",
+    ]
+    references = ["Xie, F., Zhang, T.A., Dreisinger, D., Doyle, F. Miner. Eng., 56, 10 (2014)."]
+    parameter_symbols = {}
+    parameter_units = {}
 
     def __init__(self, params: SeparationTrainParams):
         """Initialize separation train.

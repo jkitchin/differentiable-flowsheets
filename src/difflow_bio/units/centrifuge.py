@@ -96,6 +96,25 @@ class Centrifuge:
     - Clarified (light phase): depleted in cells
     """
 
+    symbol = "Centrifuge"
+    equations = [
+        r"v_s = \frac{(\rho_p - \rho_f)\,g\,d_p^2}{18\,\mu}\qquad \text{(Stokes settling)}",
+        r"Q/\Sigma = 2\,v_s\qquad \text{(Ambler's sigma scale-up)}",
+        r"\eta = \tanh\!\left(\frac{v_s\,\Sigma}{Q}\right)\qquad \text{(smooth separation efficiency)}",
+    ]
+    assumptions = [
+        "Stokes flow regime (dilute suspension, low Re).",
+        "Uniform particle size and density.",
+        "Negligible particle-particle interactions.",
+    ]
+    references = [
+        "Ambler, C.M. J. Biochem. Microbiol. Tech. Eng., 1, 185 (1959).",
+        "Doran, P.M. Bioprocess Engineering Principles, 2e, Academic Press, 2013.",
+    ]
+    parameter_symbols = {}
+    parameter_units = {}
+    numerical_method = "Closed-form Stokes / sigma-factor relations with smooth efficiency."
+
     def __init__(self, params: CentrifugeParams):
         """Initialize centrifuge.
 
@@ -201,6 +220,23 @@ class DiscStackCentrifuge:
 
     Common in bioprocessing for continuous cell separation.
     """
+
+    symbol = "Disc-Stack Centrifuge"
+    equations = [
+        r"\Sigma = \frac{2\pi\,n\,\omega^2}{3\,g\tan\theta}\,(r_o^3 - r_i^3)",
+        r"Q/\Sigma = 2\,v_s",
+    ]
+    assumptions = [
+        "Ideal disc-stack geometry; no short-circuiting.",
+        "Stokes settling between discs.",
+    ]
+    references = [
+        "Ambler, C.M. J. Biochem. Microbiol. Tech. Eng., 1, 185 (1959).",
+        "Perry's Chemical Engineers' Handbook, 9e, Sec. 18.",
+    ]
+    parameter_symbols = {"n_discs": "n", "r_outer": "r_o", "r_inner": "r_i", "rpm": "RPM"}
+    parameter_units = {"r_outer": "m", "r_inner": "m", "half_angle": "rad", "rpm": "rev/min"}
+    numerical_method = "Sigma-factor from disc-stack geometry fed to Stokes settling model."
 
     def __init__(self, params: DiscStackParams):
         """Initialize disc-stack centrifuge.

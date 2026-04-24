@@ -93,6 +93,27 @@ class ExtractScrubStripCircuit:
         >>> print(f"Nd purity: {results['product_purity']['Nd']:.1%}")
     """
 
+    symbol = "Extract-Scrub-Strip"
+    equations = [
+        r"\text{feed} \xrightarrow{\text{Extract}} \text{loaded org.} \xrightarrow{\text{Scrub}} \text{purified org.} \xrightarrow{\text{Strip}} \text{product}",
+        r"\mathrm{purity}_i = \frac{F_i^\mathrm{product}}{\sum_j F_j^\mathrm{product}}",
+    ]
+    assumptions = [
+        "Three counter-current sections (extract, scrub, strip) in series.",
+        "Target vs. non-target selectivity driven by pH difference between sections.",
+    ]
+    references = ["Xie, F., Zhang, T.A., Dreisinger, D., Doyle, F. Miner. Eng., 56, 10 (2014)."]
+    parameter_symbols = {
+        "n_extraction_stages": "N_E",
+        "n_scrubbing_stages": "N_Sc",
+        "n_stripping_stages": "N_S",
+    }
+    parameter_units = {
+        "n_extraction_stages": "-",
+        "n_scrubbing_stages": "-",
+        "n_stripping_stages": "-",
+    }
+
     def __init__(self, params: ExtractScrubStripParams):
         """Initialize circuit.
 

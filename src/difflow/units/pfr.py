@@ -121,6 +121,38 @@ class PFR:
     proper differentiability through the solver.
     """
 
+    symbol = "PFR"
+    equations = [
+        r"\frac{dF_i}{dV} = \sum_j \nu_{ij}\, r_j \qquad \forall\, i",
+        r"\frac{dT}{dV} = \frac{\sum_j r_j(-\Delta H_{r,j})}{F_\mathrm{tot}\, C_{p,\mathrm{mix}}} \quad (\text{adiabatic})",
+        r"C_i = F_i / \dot{V},\qquad \dot{V} = \dot{V}_0\,(F_\mathrm{tot}/F_\mathrm{tot,0})\,(P_0/P)\,(T/T_0)",
+    ]
+    assumptions = [
+        "Plug flow: no axial mixing; concentration and temperature depend only on axial position.",
+        "Steady-state operation.",
+        "Constant cross-sectional area along the reactor.",
+        "Ideal gas / incompressible liquid depending on volumetric-flow specification.",
+    ]
+    references = [
+        "Fogler, Elements of Chemical Reaction Engineering, 5e, Ch. 1 and Ch. 8.",
+        "Levenspiel, Chemical Reaction Engineering, 3e, Ch. 5.",
+    ]
+    parameter_symbols = {
+        "V": "V",
+        "dH_rxn": r"\Delta H_{r,j}",
+        "dP_dV": r"dP/dV",
+    }
+    parameter_units = {
+        "V": "m^3",
+        "dH_rxn": "J/mol",
+        "dP_dV": "Pa/m^3",
+        "rtol": "-",
+        "atol": "-",
+    }
+    numerical_method = (
+        "Adaptive ODE integration via diffrax (Tsit5/Kvaerno5) over the volume domain."
+    )
+
     def __init__(
         self,
         params: PFRParams,
@@ -681,6 +713,34 @@ class GasPFR:
     Uses diffrax for ODE integration, providing adaptive stepping and
     proper differentiability through the solver.
     """
+
+    symbol = "Gas PFR"
+    equations = [
+        r"\frac{dF_i}{dV} = \sum_j \nu_{ij}\, r_j",
+        r"\dot{V} = \dot{V}_0\,\frac{F_\mathrm{tot}}{F_\mathrm{tot,0}}\,\frac{P_0}{P}\,\frac{T}{T_0}",
+        r"\frac{dP}{dV} = -\alpha\,\frac{P_0}{P}\,\frac{T}{T_0}\,\frac{F_\mathrm{tot}}{F_\mathrm{tot,0}}\qquad (\text{Ergun form})",
+        r"\frac{dT}{dV} = \frac{\sum_j r_j(-\Delta H_{r,j})}{F_\mathrm{tot}\, C_{p,\mathrm{mix}}}\qquad (\text{adiabatic})",
+    ]
+    assumptions = [
+        "Ideal gas along the reactor.",
+        "Plug flow; no axial dispersion.",
+        "Pressure drop follows an Ergun-style linear coefficient alpha (Pa per m^3 of catalyst volume).",
+    ]
+    references = [
+        "Fogler, Elements of Chemical Reaction Engineering, 5e, Ch. 5 and Ch. 8.",
+        "Ergun, S., Chem. Eng. Prog., 48, 89 (1952).",
+    ]
+    parameter_symbols = {
+        "V": "V",
+        "alpha": r"\alpha",
+        "dH_rxn": r"\Delta H_{r,j}",
+    }
+    parameter_units = {
+        "V": "m^3",
+        "alpha": "Pa/m^3",
+        "dH_rxn": "J/mol",
+    }
+    numerical_method = "Adaptive diffrax ODE integration over V with coupled (F, T, P) state."
 
     def __init__(
         self,

@@ -102,6 +102,29 @@ class Ultrafiltration:
     Operates in batch concentration mode or continuous mode.
     """
 
+    symbol = "UF"
+    equations = [
+        r"J = L_p\,(\Delta P - \sigma\,\Delta\Pi)\qquad \text{(Kedem-Katchalsky)}",
+        r"R = 1 - \frac{C_p}{C_r}\qquad \text{(rejection coefficient)}",
+        r"\mathrm{CF} = \frac{V_\mathrm{in}}{V_\mathrm{retentate}}\qquad \text{(concentration factor)}",
+    ]
+    assumptions = [
+        "Steady-state local permeation; uniform TMP across the module.",
+        "Constant sieving (rejection) coefficients per species.",
+        "Negligible fouling within the run (resistance-in-series optional).",
+    ]
+    references = [
+        "Kedem, O., Katchalsky, A. Biochim. Biophys. Acta, 27, 229 (1958).",
+        "Cheryan, M. Ultrafiltration and Microfiltration Handbook, CRC Press, 1998.",
+    ]
+    parameter_symbols = {
+        "MWCO": r"\mathrm{MWCO}",
+        "area": "A",
+        "Lp": "L_p",
+    }
+    parameter_units = {"MWCO": "Da", "area": "m^2", "Lp": "L/m^2/h/bar"}
+    numerical_method = "Closed-form sieving + resistance-in-series flux model."
+
     def __init__(self, params: UltrafiltrationParams):
         """Initialize ultrafiltration unit.
 
@@ -225,6 +248,22 @@ class Diafiltration:
     - Constant volume diafiltration (CVD): Add buffer = Remove permeate
     - Discontinuous diafiltration: Batch dilution then concentration
     """
+
+    symbol = "Diafiltration"
+    equations = [
+        r"\frac{C_\mathrm{final}}{C_0} = \exp\!\bigl(-(1-R)\,N\bigr)\qquad \text{(CVD, }N\text{ diavolumes)}",
+        r"C_\mathrm{buffer,final} = C_\mathrm{buffer,in}\,(1 - e^{-N})",
+    ]
+    assumptions = [
+        "Constant-volume diafiltration (buffer addition rate equals permeate removal).",
+        "Constant sieving coefficients and TMP.",
+    ]
+    references = [
+        "Cheryan, M. Ultrafiltration and Microfiltration Handbook, CRC Press, 1998.",
+    ]
+    parameter_symbols = {"MWCO": r"\mathrm{MWCO}", "area": "A"}
+    parameter_units = {"MWCO": "Da", "area": "m^2"}
+    numerical_method = "Analytical buffer-exchange kinetics (CVD)."
 
     def __init__(self, params: DiafiltrationParams):
         """Initialize diafiltration unit.
@@ -365,6 +404,20 @@ class TFF:
     2. Diafiltration (buffer exchange)
     3. Final concentration
     """
+
+    symbol = "TFF"
+    equations = [
+        r"J = L_p\,(\Delta P - \sigma\,\Delta\Pi)\qquad \text{(UF step)}",
+        r"\frac{C_\mathrm{final}}{C_0} = \mathrm{CF}^{R} \exp\!\bigl(-(1-R)\,N\bigr)\qquad \text{(combined concentration + DF)}",
+    ]
+    assumptions = [
+        "Tangential (cross-flow) operation; cake layer suppressed by shear.",
+        "Constant membrane properties across the three stages.",
+    ]
+    references = ["Zeman, L.J., Zydney, A.L. Microfiltration and Ultrafiltration, Marcel Dekker, 1996."]
+    parameter_symbols = {"MWCO": r"\mathrm{MWCO}", "Lp": "L_p"}
+    parameter_units = {"MWCO": "Da", "Lp": "L/m^2/h/bar"}
+    numerical_method = "Sequential composition of UF + CVD + UF models."
 
     def __init__(
         self,

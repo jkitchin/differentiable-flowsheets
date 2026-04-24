@@ -440,6 +440,20 @@ class Heater:
     All modes are fully differentiable.
     """
 
+    symbol = "Heater"
+    equations = [
+        r"Q = \dot{m}\, C_p\,(T_\mathrm{out} - T_\mathrm{in})",
+        r"Q = UA\,(T_\mathrm{utility} - \bar{T})\qquad \text{(rating mode)}",
+    ]
+    assumptions = [
+        "Single-phase sensible heating; no phase change.",
+        "Constant Cp over the process-side temperature range.",
+        "Utility temperature is constant along the exchanger.",
+    ]
+    references = ["Perry's Chemical Engineers' Handbook, 9e, Sec. 11."]
+    parameter_symbols = {"duty": "Q", "T_out": "T_\\mathrm{out}", "UA": "UA", "T_utility": "T_\\mathrm{util}"}
+    parameter_units = {"duty": "W", "T_out": "K", "UA": "W/K", "T_utility": "K", "Cp": "J/mol/K"}
+
     def __init__(self, params: HeaterParams):
         """Initialize heater.
 
@@ -626,6 +640,19 @@ class Cooler:
     Same operating modes as Heater but for cooling.
     """
 
+    symbol = "Cooler"
+    equations = [
+        r"Q = \dot{m}\, C_p\,(T_\mathrm{in} - T_\mathrm{out})",
+        r"Q = UA\,(\bar{T} - T_\mathrm{utility})\qquad \text{(rating mode)}",
+    ]
+    assumptions = [
+        "Single-phase sensible cooling; no phase change.",
+        "Constant Cp over the process-side temperature range.",
+    ]
+    references = ["Perry's Chemical Engineers' Handbook, 9e, Sec. 11."]
+    parameter_symbols = {"duty": "Q", "T_out": "T_\\mathrm{out}", "UA": "UA", "T_utility": "T_\\mathrm{util}"}
+    parameter_units = {"duty": "W", "T_out": "K", "UA": "W/K", "T_utility": "K", "Cp": "J/mol/K"}
+
     def __init__(self, params: CoolerParams):
         """Initialize cooler.
 
@@ -806,6 +833,22 @@ class CounterCurrentHX:
         intermediate states without causing NaN values.
     """
 
+    symbol = "Counter-current HX"
+    equations = [
+        r"\mathrm{NTU} = \frac{UA}{C_\mathrm{min}},\qquad C_r = \frac{C_\mathrm{min}}{C_\mathrm{max}}",
+        r"\varepsilon = \frac{1 - e^{-\mathrm{NTU}(1-C_r)}}{1 - C_r\,e^{-\mathrm{NTU}(1-C_r)}}\qquad (C_r < 1)",
+        r"Q = \varepsilon\, C_\mathrm{min}\,(T_{h,\mathrm{in}} - T_{c,\mathrm{in}})",
+    ]
+    assumptions = [
+        "Steady-state operation with constant UA.",
+        "Single phase on each side (no boiling/condensing).",
+        "Constant Cp on each side over its temperature span.",
+    ]
+    references = ["Incropera, DeWitt, Bergman. Fundamentals of Heat and Mass Transfer, 7e, Ch. 11."]
+    parameter_symbols = {"UA": "UA", "min_approach": r"\Delta T_\mathrm{min}"}
+    parameter_units = {"UA": "W/K", "min_approach": "K", "Cp_hot": "J/mol/K", "Cp_cold": "J/mol/K"}
+    numerical_method = "Effectiveness-NTU closed form."
+
     def __init__(self, params: HeatExchangerParams):
         """Initialize counter-current heat exchanger.
 
@@ -936,6 +979,22 @@ class CoCurrentHX:
         with a warning flag in the info dict.
     """
 
+    symbol = "Co-current HX"
+    equations = [
+        r"\mathrm{NTU} = \frac{UA}{C_\mathrm{min}},\qquad C_r = \frac{C_\mathrm{min}}{C_\mathrm{max}}",
+        r"\varepsilon = \frac{1 - e^{-\mathrm{NTU}(1+C_r)}}{1 + C_r}",
+        r"Q = \varepsilon\, C_\mathrm{min}\,(T_{h,\mathrm{in}} - T_{c,\mathrm{in}})",
+    ]
+    assumptions = [
+        "Steady-state operation with constant UA.",
+        "Single phase each side.",
+        "Both streams in parallel flow arrangement.",
+    ]
+    references = ["Incropera, DeWitt, Bergman. Fundamentals of Heat and Mass Transfer, 7e, Ch. 11."]
+    parameter_symbols = {"UA": "UA", "min_approach": r"\Delta T_\mathrm{min}"}
+    parameter_units = {"UA": "W/K", "min_approach": "K", "Cp_hot": "J/mol/K", "Cp_cold": "J/mol/K"}
+    numerical_method = "Effectiveness-NTU closed form for co-current flow."
+
     def __init__(self, params: HeatExchangerParams):
         """Initialize co-current heat exchanger.
 
@@ -1053,6 +1112,22 @@ class CrossFlowHX:
         Same soft handling as CounterCurrentHX - calculation proceeds
         with a warning flag in the info dict.
     """
+
+    symbol = "Crossflow HX"
+    equations = [
+        r"\varepsilon = 1 - \exp\!\left\{\frac{\mathrm{NTU}^{0.22}}{C_r}\,\left[\exp(-C_r\,\mathrm{NTU}^{0.78}) - 1\right]\right\}\qquad \text{(both unmixed)}",
+        r"\varepsilon = \frac{1}{C_r}\,\left[1 - \exp\!\bigl(-C_r\,(1 - e^{-\mathrm{NTU}})\bigr)\right]\qquad (C_\mathrm{max}\,\text{mixed})",
+        r"Q = \varepsilon\, C_\mathrm{min}\,(T_{h,\mathrm{in}} - T_{c,\mathrm{in}})",
+    ]
+    assumptions = [
+        "Steady-state operation.",
+        "Correct mixing regime selected via the ``mixing`` constructor arg.",
+        "Single phase each side.",
+    ]
+    references = ["Kays, W.M., London, A.L. Compact Heat Exchangers, 3e, McGraw-Hill, 1984."]
+    parameter_symbols = {"UA": "UA"}
+    parameter_units = {"UA": "W/K", "Cp_hot": "J/mol/K", "Cp_cold": "J/mol/K"}
+    numerical_method = "Effectiveness-NTU correlation for chosen mixing configuration."
 
     def __init__(self, params: HeatExchangerParams, mixing: str = "both_unmixed"):
         """Initialize cross-flow heat exchanger.
@@ -1304,6 +1379,25 @@ class ShellAndTubeHX:
 
     All calculations are fully differentiable.
     """
+
+    symbol = "S&T HX"
+    equations = [
+        r"Q = UA\,F(P,R)\,\mathrm{LMTD}_\mathrm{CC}",
+        r"\mathrm{LMTD} = \frac{\Delta T_1 - \Delta T_2}{\ln(\Delta T_1/\Delta T_2)}",
+        r"P = \frac{T_{c,\mathrm{out}} - T_{c,\mathrm{in}}}{T_{h,\mathrm{in}} - T_{c,\mathrm{in}}},\qquad R = \frac{T_{h,\mathrm{in}} - T_{h,\mathrm{out}}}{T_{c,\mathrm{out}} - T_{c,\mathrm{in}}}",
+    ]
+    assumptions = [
+        "1-2N TEMA shell-and-tube arrangement.",
+        "Constant UA and Cp on each side.",
+        "Steady-state, single-phase each side.",
+    ]
+    references = [
+        "Bowman, Mueller, Nagle. Trans. ASME, 62, 283 (1940).",
+        "Perry's Chemical Engineers' Handbook, 9e, Sec. 11.",
+    ]
+    parameter_symbols = {"UA": "UA", "n_shells": "N_s", "n_tube_passes": "N_t"}
+    parameter_units = {"UA": "W/K"}
+    numerical_method = "Counter-current LMTD with closed-form F-correction factor."
 
     def __init__(self, params: ShellAndTubeHXParams):
         self.params = params

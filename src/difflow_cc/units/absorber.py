@@ -153,6 +153,39 @@ class AmineAbsorber:
             McGraw-Hill. Kremser equation derivation.
     """
 
+    symbol = "Amine Absorber"
+    equations = [
+        r"\mathrm{CO}_2 + 2\,\mathrm{RNH}_2 \rightleftharpoons \mathrm{RNHCOO}^- + \mathrm{RNH}_3^+ \qquad (\text{1° and 2° amines})",
+        r"\mathrm{CO}_2 + \mathrm{R}_3\mathrm{N} + \mathrm{H}_2\mathrm{O} \rightleftharpoons \mathrm{HCO}_3^- + \mathrm{R}_3\mathrm{NH}^+ \qquad (\text{3° amines, MDEA})",
+        r"\alpha = \frac{n_{\mathrm{CO}_2}}{n_\mathrm{amine}},\qquad E = \frac{m\,V}{L} \quad \text{(Kremser absorption factor)}",
+        r"\eta_\mathrm{capture} = \frac{E^{N+1}-E}{E^{N+1}-1}",
+    ]
+    assumptions = [
+        "Equilibrium stages with user-specified Murphree efficiency.",
+        "Reactive absorption lumped into a VLE correlation (loading-dependent).",
+        "Constant column pressure; isothermal or supplied temperature profile.",
+    ]
+    references = [
+        "Kohl, A.L., Nielsen, R.B. Gas Purification, 5e, Gulf Publishing, 1997.",
+        "Treybal, R.E. Mass Transfer Operations, 3e, McGraw-Hill, 1980.",
+        "Rochelle, G.T. Science, 325(5948), 1652 (2009).",
+    ]
+    parameter_symbols = {
+        "n_stages": "N",
+        "solvent_conc": "[\\text{amine}]",
+        "L_G_ratio": "L/G",
+        "stage_efficiency": r"E_M",
+        "T_top": "T_\\mathrm{top}",
+        "T_bot": "T_\\mathrm{bot}",
+    }
+    parameter_units = {
+        "solvent_conc": "wt%",
+        "L_G_ratio": "-",
+        "T_top": "K",
+        "T_bot": "K",
+    }
+    numerical_method = "Kremser with amine VLE correlation; stage-wise loading accounting."
+
     def __init__(self, params: AbsorberParams):
         """Initialize absorber.
 

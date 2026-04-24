@@ -128,6 +128,29 @@ class SolidSorbentDAC:
         >>> co2_out, info = dac(ambient_air)
     """
 
+    symbol = "Solid DAC"
+    equations = [
+        r"q = \frac{q_\mathrm{max}\,b(T)\,P_{\mathrm{CO}_2}}{1 + b(T)\,P_{\mathrm{CO}_2}}\qquad \text{(low-P Langmuir)}",
+        r"Q_\mathrm{thermal} = m_\mathrm{bed} C_p (T_\mathrm{des} - T_\mathrm{ads}) + n_{\mathrm{CO}_2}\,\Delta H_\mathrm{ads}",
+        r"\eta_\mathrm{fan} = W_\mathrm{fan}/\dot{n}_{\mathrm{CO}_2,\mathrm{captured}}",
+    ]
+    assumptions = [
+        "Low partial pressure (~400 ppm) Langmuir branch adequate.",
+        "Temperature-vacuum swing regeneration with fan power for air handling.",
+        "Uniform bed exposure; no channeling.",
+    ]
+    references = [
+        "Keith, D.W. et al. Joule, 2(8), 1573 (2018).",
+        "Sanz-Pérez, E.S. et al. Chem. Rev., 116, 11840 (2016).",
+    ]
+    parameter_symbols = {
+        "T_desorption": "T_\\mathrm{des}",
+        "n_units": "N_\\mathrm{unit}",
+        "contactor_volume": "V_\\mathrm{bed}",
+    }
+    parameter_units = {"T_desorption": "K", "contactor_volume": "m^3"}
+    numerical_method = "Low-P Langmuir + sensible + reaction heat duty; fan power from pressure drop."
+
     def __init__(self, params: DACParams):
         self.params = params
         self._sorbent = get_adsorbent(params.sorbent)
@@ -309,6 +332,31 @@ class LiquidSolventDAC:
         >>> dac = LiquidSolventDAC(params)
         >>> co2_out, info = dac()
     """
+
+    symbol = "Liquid DAC"
+    equations = [
+        r"\mathrm{CO}_2 + 2\,\mathrm{KOH} \rightarrow \mathrm{K}_2\mathrm{CO}_3 + \mathrm{H}_2\mathrm{O}\qquad \text{(absorber)}",
+        r"\mathrm{K}_2\mathrm{CO}_3 + \mathrm{Ca}(\mathrm{OH})_2 \rightarrow 2\,\mathrm{KOH} + \mathrm{CaCO}_3\qquad \text{(pellet reactor)}",
+        r"\mathrm{CaCO}_3 \xrightarrow{\Delta,\,T>1100\,\mathrm{K}} \mathrm{CaO} + \mathrm{CO}_2\qquad \text{(calciner)}",
+        r"\mathrm{CaO} + \mathrm{H}_2\mathrm{O} \rightarrow \mathrm{Ca}(\mathrm{OH})_2\qquad \text{(slaker)}",
+    ]
+    assumptions = [
+        "Carbon Engineering-style caustic + calcium recovery loop.",
+        "Natural-gas or renewable thermal source for calcination at ~900 C.",
+    ]
+    references = ["Keith, D.W. et al. Joule, 2(8), 1573 (2018)."]
+    parameter_symbols = {
+        "n_contactors": "N_\\mathrm{contact}",
+        "contactor_height": "h",
+        "L_G_ratio": "L/G",
+        "calciner_temperature": "T_\\mathrm{calc}",
+    }
+    parameter_units = {
+        "contactor_height": "m",
+        "L_G_ratio": "-",
+        "calciner_temperature": "K",
+    }
+    numerical_method = "Sequential absorber + pellet reactor + calciner duty calculation."
 
     def __init__(self, params: LiquidDACParams):
         self.params = params

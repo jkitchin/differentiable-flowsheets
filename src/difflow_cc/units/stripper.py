@@ -111,6 +111,30 @@ class AmineStripper:
         Abu-Zahra MRM et al. (2007). Int J Greenhouse Gas Control 1:37.
     """
 
+    symbol = "Amine Stripper"
+    equations = [
+        r"Q_\mathrm{reb} = L\,C_p\,(T_\mathrm{reb} - T_\mathrm{in}) + \dot{n}_{\mathrm{CO}_2,\mathrm{released}}\,\Delta H_\mathrm{abs} + Q_\mathrm{strip}",
+        r"\alpha_\mathrm{lean} = \alpha_\mathrm{rich} - \frac{\dot{n}_{\mathrm{CO}_2}}{L\,c_\mathrm{amine}}",
+        r"E_\mathrm{specific} = \frac{Q_\mathrm{reb}}{\dot{m}_{\mathrm{CO}_2}}\qquad [\mathrm{GJ/t\,CO_2}]",
+    ]
+    assumptions = [
+        "Reboiler duty covers sensible, reaction and stripping steam contributions.",
+        "Column pressure is specified; steam is released at the reboiler.",
+        "Amine loading-enthalpy correlation from the selected solvent database entry.",
+    ]
+    references = [
+        "Rochelle, G.T. Science, 325(5948), 1652 (2009).",
+        "Abu-Zahra, M.R.M. et al. Int. J. Greenhouse Gas Control, 1, 37 (2007).",
+        "Kohl, A.L., Nielsen, R.B. Gas Purification, 5e, Gulf Publishing, 1997.",
+    ]
+    parameter_symbols = {
+        "T_reboiler": "T_\\mathrm{reb}",
+        "P_stripper": "P",
+        "target_lean_loading": r"\alpha_\mathrm{lean}",
+    }
+    parameter_units = {"T_reboiler": "K", "P_stripper": "Pa", "target_lean_loading": "mol CO2 / mol amine"}
+    numerical_method = "Energy balance + VLE-closure loop; specific energy computed post-hoc."
+
     def __init__(self, params: StripperParams):
         """Initialize stripper.
 

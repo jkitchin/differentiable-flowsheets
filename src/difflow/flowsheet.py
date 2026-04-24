@@ -611,6 +611,31 @@ class Flowsheet:
 
         return objective
 
+    def report(
+        self,
+        streams: dict[str, Stream] | None = None,
+        include_git: bool = True,
+        notes: list[str] | None = None,
+    ):
+        """Build a self-documenting :class:`~difflow.report.ir.Report` for this flowsheet.
+
+        Args:
+            streams: Optional solved streams from :meth:`solve`. When omitted,
+                only the configuration sections (topology, units, species,
+                feeds) are populated and the ``results`` /
+                ``balance_checks`` fields are ``None``.
+            include_git: Whether to capture git commit + dirty flag in the
+                provenance section.
+            notes: Optional free-form notes to attach to the report.
+
+        Returns:
+            :class:`difflow.report.Report` with ``to_markdown()``,
+            ``to_json()``, ``to_html()``, and ``to_latex()`` methods.
+        """
+        from difflow.report.builder import build_report
+
+        return build_report(self, streams=streams, include_git=include_git, notes=notes)
+
     def solve_eo(
         self,
         initial_guess: dict[str, Stream] | None = None,

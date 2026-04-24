@@ -271,6 +271,41 @@ class ContinuousBioreactor:
     All calculations are JAX-compatible for automatic differentiation.
     """
 
+    symbol = "Chemostat"
+    equations = [
+        r"0 = D\,(X_\mathrm{in} - X) + (\mu - k_d)\,X",
+        r"0 = D\,(S_f - S) - \mu\,X/Y_{xs} - m_s\,X",
+        r"0 = D\,(P_\mathrm{in} - P) + (\alpha\,\mu + \beta)\,X",
+        r"\mu = \mu_\mathrm{max}\,\frac{S}{K_S + S}\qquad \text{(Monod; kinetic\_fn override allowed)}",
+    ]
+    assumptions = [
+        "Perfectly mixed liquid phase.",
+        "Steady-state continuous operation.",
+        "Constant Y_xs, alpha, beta over the operating window.",
+        "Single growth-limiting substrate.",
+    ]
+    references = [
+        "Monod, J. Ann. Rev. Microbiology, 3, 371 (1949).",
+        "Bailey, J.E., Ollis, D.F. Biochemical Engineering Fundamentals, 2e, McGraw-Hill, 1986.",
+    ]
+    parameter_symbols = {
+        "V": "V",
+        "Y_xs": "Y_{xs}",
+        "k_d": "k_d",
+        "m_s": "m_s",
+        "alpha": r"\alpha",
+        "beta": r"\beta",
+    }
+    parameter_units = {
+        "V": "L",
+        "Y_xs": "g/g",
+        "k_d": "1/h",
+        "m_s": "g/g/h",
+        "alpha": "g/g",
+        "beta": "g/g/h",
+    }
+    numerical_method = "Fixed-point / Newton on the steady-state mass balances."
+
     def __init__(self, params: BioreactorParams):
         """Initialize continuous bioreactor.
 
@@ -483,6 +518,33 @@ class FedBatchBioreactor:
     For stiff kinetics (e.g., substrate inhibition with high K_i),
     use "diffrax:kvaerno5" implicit solver.
     """
+
+    symbol = "Fed-Batch Bioreactor"
+    equations = [
+        r"\frac{dV}{dt} = F(t)",
+        r"\frac{d(VX)}{dt} = (\mu - k_d)\,V X",
+        r"\frac{d(VS)}{dt} = F(t)\,S_f - \mu V X / Y_{xs} - m_s V X",
+        r"\frac{d(VP)}{dt} = (\alpha\,\mu + \beta)\,V X",
+    ]
+    assumptions = [
+        "Perfectly mixed liquid phase with time-varying volume.",
+        "Single growth-limiting substrate and one lumped product.",
+        "Isothermal, constant-pH operation.",
+    ]
+    references = [
+        "Bailey, J.E., Ollis, D.F. Biochemical Engineering Fundamentals, 2e, McGraw-Hill, 1986.",
+        "Shuler, M.L., Kargi, F. Bioprocess Engineering: Basic Concepts, 2e, Prentice Hall, 2002.",
+    ]
+    parameter_symbols = {
+        "V0": "V_0",
+        "Y_xs": "Y_{xs}",
+        "k_d": "k_d",
+        "m_s": "m_s",
+        "alpha": r"\alpha",
+        "beta": r"\beta",
+    }
+    parameter_units = {"V0": "L", "Y_xs": "g/g", "k_d": "1/h", "m_s": "g/g/h"}
+    numerical_method = "Adaptive diffrax (Tsit5 / Kvaerno5) integration of (V, VX, VS, VP)."
 
     def __init__(self, params: FedBatchParams):
         """Initialize fed-batch bioreactor.

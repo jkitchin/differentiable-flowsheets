@@ -93,6 +93,24 @@ class FedBatchReactor:
     All calculations are JAX-compatible for automatic differentiation.
     """
 
+    symbol = "FedBatch"
+    equations = [
+        r"\frac{d(V\,C_i)}{dt} = F_\mathrm{in}\,C_{i,\mathrm{in}} + V\sum_j \nu_{ij}\, r_j",
+        r"\frac{dV}{dt} = F_\mathrm{in}",
+        r"\frac{d(V\rho C_p T)}{dt} = F_\mathrm{in}\rho_\mathrm{in} C_{p,\mathrm{in}} T_\mathrm{in} + V\sum_j r_j(-\Delta H_{r,j}) + Q",
+    ]
+    assumptions = [
+        "Perfectly mixed liquid phase with time-varying volume.",
+        "No outlet flow (semi-batch); feed flow is user-specified via F_in(t).",
+        "Constant density unless user supplies a model.",
+    ]
+    references = [
+        "Fogler, Elements of Chemical Reaction Engineering, 5e, Ch. 14.",
+    ]
+    parameter_symbols = {"V0": "V_0", "dH_rxn": r"\Delta H_{r,j}"}
+    parameter_units = {"V0": "m^3", "dH_rxn": "J/mol"}
+    numerical_method = "Adaptive ODE integration (diffrax) or lax.scan/RK4 of (V, n_i, T) over time."
+
     def __init__(
         self,
         params: FedBatchParams,
@@ -702,7 +720,8 @@ class SemiBatchReactor(FedBatchReactor):
     This is identical to FedBatchReactor but with a more descriptive name
     for certain applications.
     """
-    pass
+
+    symbol = "SemiBatch"
 
 
 # =============================================================================

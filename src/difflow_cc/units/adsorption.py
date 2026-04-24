@@ -234,6 +234,35 @@ class PSAUnit(_AdsorptionBase):
             Ind Eng Chem Res 41:1389-1392.
     """
 
+    symbol = "PSA"
+    equations = [
+        r"q(P,T) = \frac{q_\mathrm{max}\,b(T)\,P}{1 + b(T)\,P}\qquad \text{(Langmuir isotherm)}",
+        r"\Delta q_\mathrm{working} = q(P_\mathrm{ads},T) - q(P_\mathrm{des},T)",
+        r"\mathrm{recovery} = \frac{\Delta q_\mathrm{working}\,m_\mathrm{bed}}{\dot{n}_{\mathrm{CO}_2,\mathrm{feed}}\,t_\mathrm{cycle}}",
+    ]
+    assumptions = [
+        "Langmuir-type equilibrium isotherm for the target CO2 component.",
+        "Cyclic steady state at the specified P_ads / P_des.",
+        "Lumped working capacity per cycle; no intra-particle diffusion modelling.",
+    ]
+    references = [
+        "Ruthven, D.M., Farooq, S., Knaebel, K.S. Pressure Swing Adsorption, VCH, 1994.",
+        "Sircar, S. Ind. Eng. Chem. Res., 41, 1389 (2002).",
+    ]
+    parameter_symbols = {
+        "P_adsorption": "P_\\mathrm{ads}",
+        "P_desorption": "P_\\mathrm{des}",
+        "cycle_time": "t_\\mathrm{cyc}",
+        "bed_mass": "m_\\mathrm{bed}",
+    }
+    parameter_units = {
+        "P_adsorption": "Pa",
+        "P_desorption": "Pa",
+        "cycle_time": "s",
+        "bed_mass": "kg",
+    }
+    numerical_method = "Langmuir working-capacity evaluation per cycle; recovery from mass balance."
+
     def __call__(
         self,
         feed: Stream,
@@ -386,6 +415,21 @@ class VSAUnit(_AdsorptionBase):
             process for CO2 capture. Chem Eng Sci 63:1827-1837.
     """
 
+    symbol = "VSA"
+    equations = [
+        r"q(P,T) = \frac{q_\mathrm{max}\,b(T)\,P}{1 + b(T)\,P}\qquad \text{(Langmuir)}",
+        r"\Delta q_\mathrm{working} = q(P_\mathrm{ads},T) - q(P_\mathrm{vac},T)",
+        r"P_\mathrm{vac} \ll P_\mathrm{atm}\qquad \Rightarrow \quad \text{large working capacity at modest }T",
+    ]
+    assumptions = [
+        "Vacuum regeneration; feed near-atmospheric pressure.",
+        "Langmuir isotherm with CO2 as the preferred adsorbate.",
+    ]
+    references = ["Zhang, J. et al. Chem. Eng. Sci., 63, 1827 (2008)."]
+    parameter_symbols = {"P_adsorption": "P_\\mathrm{ads}", "P_desorption": "P_\\mathrm{vac}"}
+    parameter_units = {"P_adsorption": "Pa", "P_desorption": "Pa", "cycle_time": "s", "bed_mass": "kg"}
+    numerical_method = "Langmuir working-capacity evaluation under vacuum regeneration."
+
     def __call__(
         self,
         feed: Stream,
@@ -504,6 +548,21 @@ class TSAUnit(_AdsorptionBase):
         Webley PA (2014). Adsorption technology for CO2 separation.
             Adsorption 20:225-231.
     """
+
+    symbol = "TSA"
+    equations = [
+        r"b(T) = b_0 \exp\!\left(-\Delta H_\mathrm{ads}/(R T)\right)",
+        r"\Delta q_\mathrm{working} = q(P, T_\mathrm{ads}) - q(P, T_\mathrm{des})",
+        r"Q_\mathrm{regen} = (m_\mathrm{bed} C_p + m_\mathrm{CO_2}\,\Delta H_\mathrm{ads})\,(T_\mathrm{des} - T_\mathrm{ads})",
+    ]
+    assumptions = [
+        "Temperature-dependent Langmuir b(T) via van't Hoff equation.",
+        "Thermal regeneration via an external heat source; no direct steam stripping here.",
+    ]
+    references = ["Webley, P.A. Adsorption, 20, 225 (2014)."]
+    parameter_symbols = {"T_adsorption": "T_\\mathrm{ads}", "T_desorption": "T_\\mathrm{des}"}
+    parameter_units = {"T_adsorption": "K", "T_desorption": "K"}
+    numerical_method = "Van't Hoff-scaled Langmuir with analytical working capacity; sensible-heat duty."
 
     def __call__(
         self,
@@ -627,6 +686,30 @@ class TVSAUnit(_AdsorptionBase):
             capacity of PSA, TSA and TVSA processes.
             J CO2 Util 22:270-277.
     """
+
+    symbol = "TVSA"
+    equations = [
+        r"\Delta q_\mathrm{working} = q(P_\mathrm{ads}, T_\mathrm{ads}) - q(P_\mathrm{vac}, T_\mathrm{des})",
+        r"b(T) = b_0 \exp\!\left(-\Delta H_\mathrm{ads}/(RT)\right)",
+    ]
+    assumptions = [
+        "Combined vacuum + moderate temperature swing regeneration.",
+        "Langmuir isotherm with van't Hoff temperature dependence.",
+    ]
+    references = ["Elfving, J. et al. J. CO2 Utilization, 22, 270 (2017)."]
+    parameter_symbols = {
+        "T_adsorption": "T_\\mathrm{ads}",
+        "T_desorption": "T_\\mathrm{des}",
+        "P_adsorption": "P_\\mathrm{ads}",
+        "P_desorption": "P_\\mathrm{vac}",
+    }
+    parameter_units = {
+        "T_adsorption": "K",
+        "T_desorption": "K",
+        "P_adsorption": "Pa",
+        "P_desorption": "Pa",
+    }
+    numerical_method = "Working-capacity difference with van't Hoff-scaled Langmuir."
 
     def __call__(
         self,

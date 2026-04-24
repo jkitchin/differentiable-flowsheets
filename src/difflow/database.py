@@ -114,6 +114,15 @@ _CRITICAL_DATA = {
 }
 
 
+# Per-species provenance for the report layer.  Any species without an
+# explicit override inherits the default source string below — all built-in
+# data is drawn from the sources listed in the module docstring.
+_DEFAULT_SOURCE = "NIST Chemistry WebBook; Perry's 9e; Yaws; DIPPR 801"
+SOURCE_CITATIONS: dict[str, str] = {
+    name: _DEFAULT_SOURCE for name in _CRITICAL_DATA
+}
+
+
 def get_critical_props(name: str) -> CriticalProperties:
     """Get critical properties for a species by name.
 

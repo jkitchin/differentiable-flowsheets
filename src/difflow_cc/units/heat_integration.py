@@ -111,6 +111,16 @@ class HeatExchanger:
         >>> hot_out, cold_out, info = hx(hot_in, cold_in)
     """
 
+    symbol = "CC HX"
+    equations = [
+        r"Q = \varepsilon\, C_\mathrm{min}\,(T_h - T_c)",
+        r"\mathrm{NTU} = UA/C_\mathrm{min},\qquad \varepsilon = \varepsilon_\mathrm{CC}(\mathrm{NTU},C_r)",
+    ]
+    assumptions = ["Counter-current shell-and-tube; effectiveness-NTU closed form."]
+    references = ["Incropera, DeWitt, Bergman. Fundamentals of Heat and Mass Transfer, 7e."]
+    parameter_symbols = {"U": "U", "A": "A"}
+    parameter_units = {"U": "W/m^2/K", "A": "m^2"}
+
     def __init__(self, params: HeatExchangerParams):
         self.params = params
 
@@ -243,6 +253,20 @@ class LeanRichExchanger:
         >>> lean_out, rich_out, info = lrhx(lean_hot, rich_cold)
     """
 
+    symbol = "Lean-Rich HX"
+    equations = [
+        r"\varepsilon = \frac{T_{h,\mathrm{in}} - T_{h,\mathrm{out}}}{T_{h,\mathrm{in}} - T_{c,\mathrm{in}}}",
+        r"Q = \varepsilon\, C_\mathrm{min}\,(T_{h,\mathrm{in}} - T_{c,\mathrm{in}})",
+        r"\Delta T_\mathrm{approach} = T_{h,\mathrm{out}} - T_{c,\mathrm{in}}",
+    ]
+    assumptions = [
+        "Counter-current exchange with user-specified effectiveness (typ. 0.7-0.85).",
+        "Single-phase sensible heating/cooling only.",
+    ]
+    references = ["Kohl, A.L., Nielsen, R.B. Gas Purification, 5e, Gulf Publishing, 1997."]
+    parameter_symbols = {"effectiveness": r"\varepsilon", "min_approach": r"\Delta T_\mathrm{min}"}
+    parameter_units = {"effectiveness": "-", "min_approach": "K"}
+
     def __init__(self, params: LeanRichExchangerParams):
         self.params = params
 
@@ -353,6 +377,16 @@ class Intercooler:
         >>> stream_out, info = cooler(stream_in)
     """
 
+    symbol = "CC Intercooler"
+    equations = [
+        r"T_\mathrm{out} = \min(T_\mathrm{in},\, T_\mathrm{coolant} + \Delta T_\mathrm{approach})",
+        r"Q = \dot{n}\,C_p\,(T_\mathrm{in} - T_\mathrm{out})",
+    ]
+    assumptions = ["Water or air coolant with a user-specified approach temperature."]
+    references = ["Kohl, A.L., Nielsen, R.B. Gas Purification, 5e, Gulf Publishing, 1997."]
+    parameter_symbols = {"T_coolant": "T_\\mathrm{cool}", "approach": r"\Delta T_\mathrm{app}"}
+    parameter_units = {"T_coolant": "K", "approach": "K", "duty": "W"}
+
     def __init__(self, params: IntercoolerParams):
         self.params = params
 
@@ -415,6 +449,16 @@ class TrimCooler:
     after the lean/rich exchanger.
     """
 
+    symbol = "Trim Cooler"
+    equations = [
+        r"T_\mathrm{out} = \min(T_\mathrm{in},\, T_\mathrm{target})",
+        r"Q = \dot{n}\,C_p\,(T_\mathrm{in} - T_\mathrm{out})",
+    ]
+    assumptions = ["Utility coolant available at the required temperature."]
+    references = []
+    parameter_symbols = {"T_target": "T_\\mathrm{target}", "T_coolant": "T_\\mathrm{cool}"}
+    parameter_units = {"T_target": "K", "T_coolant": "K"}
+
     def __init__(self, T_target: float | Array, T_coolant: float | Array = 298.15):
         self.T_target = T_target
         self.T_coolant = T_coolant
@@ -450,6 +494,16 @@ class TrimHeater:
     Heats rich solvent to stripper inlet temperature
     if lean/rich exchanger doesn't achieve target.
     """
+
+    symbol = "Trim Heater"
+    equations = [
+        r"T_\mathrm{out} = \max(T_\mathrm{in},\, T_\mathrm{target})",
+        r"Q = \dot{n}\,C_p\,(T_\mathrm{out} - T_\mathrm{in})",
+    ]
+    assumptions = ["Utility heat source available at or above the target temperature."]
+    references = []
+    parameter_symbols = {"T_target": "T_\\mathrm{target}"}
+    parameter_units = {"T_target": "K"}
 
     def __init__(self, T_target: float | Array):
         self.T_target = T_target
@@ -516,6 +570,29 @@ class HeatRecoverySystem:
         >>> hrs = HeatRecoverySystem(params)
         >>> lean_to_abs, rich_to_strip, info = hrs(lean_from_strip, rich_from_abs)
     """
+
+    symbol = "Heat Recovery"
+    equations = [
+        r"Q_\mathrm{LRHX} = \varepsilon\, C_\mathrm{min}\,(T_\mathrm{lean,in} - T_\mathrm{rich,in})",
+        r"Q_\mathrm{trim} = \dot{n}_\mathrm{lean}\,C_p\,(T_\mathrm{lean,out}^\mathrm{LRHX} - T_\mathrm{target})",
+    ]
+    assumptions = [
+        "LRHX effectiveness and trim-cooler target independently specified.",
+        "Optional intercooler bypass inside absorber (``use_intercooler``).",
+    ]
+    references = ["Kohl, A.L., Nielsen, R.B. Gas Purification, 5e, Gulf Publishing, 1997."]
+    parameter_symbols = {
+        "lrhx_effectiveness": r"\varepsilon",
+        "T_lean_target": "T_\\mathrm{lean,target}",
+        "T_coolant": "T_\\mathrm{cool}",
+    }
+    parameter_units = {
+        "lrhx_effectiveness": "-",
+        "T_lean_target": "K",
+        "T_coolant": "K",
+        "Cp_solvent": "J/mol/K",
+    }
+    numerical_method = "Composition of LRHX + trim cooler sub-units."
 
     def __init__(self, params: HeatRecoverySystemParams):
         self.params = params

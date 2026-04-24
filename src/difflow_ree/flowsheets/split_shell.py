@@ -101,6 +101,19 @@ class SplitShellCascade:
         >>> results = cascade(feed, solvent)
     """
 
+    symbol = "Split-Shell Cascade"
+    equations = [
+        r"\text{section }k:\quad N_k\text{ stages with side-draw into product group }k",
+        r"\mathrm{recovery}_{i,k} = \sum_{\text{stages } \in k} (\text{extracted}_{i})",
+    ]
+    assumptions = [
+        "Cascade segmented at user-specified split points.",
+        "Equilibrium stages with adjusted distribution ratios per section.",
+    ]
+    references = ["Perry's Chemical Engineers' Handbook, 9e, Sec. 15."]
+    parameter_symbols = {"n_stages": "N", "split_points": r"\{N_k\}"}
+    parameter_units = {"n_stages": "-"}
+
     def __init__(self, params: SplitShellParams):
         """Initialize cascade.
 

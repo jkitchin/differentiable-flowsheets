@@ -19,6 +19,13 @@ All models support automatic differentiation for gradient-based optimization.
 import jax
 jax.config.update("jax_enable_x64", True)
 
+from importlib import metadata as _md
+
+try:
+    __version__ = _md.version("difflow")
+except _md.PackageNotFoundError:  # pragma: no cover - not installed
+    __version__ = "0.0.0+unknown"
+
 from difflow.streams import (
     Stream,
     make_stream,
@@ -145,6 +152,15 @@ from difflow.units.heat_exchanger import (
     size_heat_exchanger,
 )
 from difflow.flowsheet import Flowsheet, Unit, create_objective
+from difflow.report import (
+    Report,
+    build_report,
+    report,
+    to_html,
+    to_json,
+    to_latex,
+    to_markdown,
+)
 from difflow.eo_solver import EOSolver, EOSolveResult, EOStateLayout
 from difflow.initialization import (
     AndersonAccelerator,
@@ -349,6 +365,15 @@ __all__ = [
     "Flowsheet",
     "Unit",
     "create_objective",
+    # Reporting
+    "Report",
+    "build_report",
+    "report",
+    "to_markdown",
+    "to_json",
+    "to_html",
+    "to_latex",
+    "__version__",
     # EO Solver
     "EOSolver",
     "EOSolveResult",
