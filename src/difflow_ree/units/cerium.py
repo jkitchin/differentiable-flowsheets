@@ -70,6 +70,28 @@ class CeriumOxidizer:
         >>> filtrate, ceo2_solid, info = oxidizer(feed)
     """
 
+    symbol = "Ce Oxidizer"
+    equations = [
+        r"2\,\mathrm{Ce}^{3+} + \tfrac{1}{2}\mathrm{O}_2 + 2\,\mathrm{OH}^- \rightarrow 2\,\mathrm{CeO}_2\,\downarrow + \mathrm{H}_2\mathrm{O}",
+        r"E^0(\mathrm{Ce}^{4+}/\mathrm{Ce}^{3+}) = +1.72\,\mathrm{V}\quad\text{(acidic)},\quad +0.60\,\mathrm{V}\quad\text{(alkaline)}",
+    ]
+    assumptions = [
+        "Alkaline conditions (pH ~ 8) favor Ce(III) -> Ce(IV) transition.",
+        "Oxidant excess and conversion are user-specified.",
+        "Other REE(III) remain in solution (selective oxidation).",
+    ]
+    references = [
+        "Morais, C.A., Ciminelli, V.S.T. Hydrometallurgy, 73, 237 (2004).",
+        "Habashi, F. Handbook of Extractive Metallurgy, Vol. 3, Wiley-VCH, 1997.",
+    ]
+    parameter_symbols = {
+        "oxidant_excess": r"\phi_\mathrm{exc}",
+        "pH": r"\mathrm{pH}",
+        "temperature": "T",
+        "ce_conversion": r"X_\mathrm{Ce}",
+    }
+    parameter_units = {"pH": "-", "temperature": "K", "ce_conversion": "-"}
+
     def __init__(self, params: CeriumOxidizerParams):
         """Initialize oxidizer.
 
@@ -212,6 +234,19 @@ class CeriumSolventExtraction:
     This enables selective rejection of Ce during extraction.
     """
 
+    symbol = "Ce SX"
+    equations = [
+        r"\mathrm{Ce}^{4+} + 2\,\mathrm{TBP} + 4\,\mathrm{NO}_3^- \rightleftharpoons \mathrm{Ce}(\mathrm{NO}_3)_4\cdot 2\mathrm{TBP}\qquad \text{(TBP route)}",
+        r"D_{\mathrm{Ce}^{4+}}^{\mathrm{D2EHPA}} \approx 0 \qquad \Rightarrow \text{rejection in acidic organophosphorus systems}",
+    ]
+    assumptions = [
+        "Ce is fully oxidized to Ce(IV) prior to contact when ``oxidize_first=True``.",
+        "Non-Ce REE(III) extract normally in the chosen extractant.",
+    ]
+    references = ["Gupta, C.K., Krishnamurthy, N. Extractive Metallurgy of Rare Earths, 2e, CRC Press, 2016."]
+    parameter_symbols = {}
+    parameter_units = {}
+
     def __init__(
         self,
         elements: tuple[str, ...],
@@ -256,6 +291,18 @@ class CeriumIonExchange:
 
     Used in some specialty separation processes.
     """
+
+    symbol = "Ce IX"
+    equations = [
+        r"n\,\overline{\mathrm{R}-\mathrm{H}} + \mathrm{Ce}^{n+} \rightleftharpoons \overline{\mathrm{R}_n\mathrm{Ce}} + n\,\mathrm{H}^+\qquad (n=3\text{ or }4)",
+    ]
+    assumptions = [
+        "Strong-acid cation-exchange resin (e.g., sulfonated polystyrene) unless overridden.",
+        "Selectivity of Ce(IV) over Ce(III) handled via configured resin parameters.",
+    ]
+    references = ["Helfferich, F.G. Ion Exchange, McGraw-Hill, 1962."]
+    parameter_symbols = {"resin_type": r"\text{resin}"}
+    parameter_units = {}
 
     def __init__(
         self,

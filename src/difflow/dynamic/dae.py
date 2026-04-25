@@ -873,6 +873,25 @@ class DynamicFlashDrum(DAEUnitBase):
     - K-value relations (e.g., Raoult's law)
     """
 
+    symbol = "Dynamic Flash"
+    equations = [
+        r"\frac{dn_i}{dt} = F_\mathrm{in} z_{i,\mathrm{in}} - L x_i - V y_i",
+        r"\frac{dH}{dt} = F_\mathrm{in} h_\mathrm{in} - L h_L - V H_V + Q",
+        r"\sum_i \frac{z_i(K_i - 1)}{1+\beta(K_i-1)} = 0 \qquad \text{(algebraic)}",
+        r"y_i - K_i(T,P)\,x_i = 0 \qquad \text{(algebraic)}",
+    ]
+    assumptions = [
+        "Instantaneous VLE (algebraic constraint) with dynamic holdup.",
+        "Constant drum volume; well-mixed liquid and vapor phases.",
+    ]
+    references = [
+        "Biegler, Grossmann, Westerberg. Systematic Methods of Chemical Process Design, 1997.",
+        "Cao, Y., Pantelides, C.C. Int. J. Numer. Meth. Eng., 83(10), 1379 (2010).",
+    ]
+    parameter_symbols = {"V": "V", "P": "P"}
+    parameter_units = {"V": "m^3", "P": "Pa"}
+    numerical_method = "Semi-explicit index-1 DAE via diffrax/Kvaerno5 with Newton solve on the algebraic block."
+
     def __init__(
         self,
         volume: float,

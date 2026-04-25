@@ -60,6 +60,9 @@ bio = "difflow_bio:register"
 ree = "difflow_ree:register"
 cc = "difflow_cc:register"
 
+[project.scripts]
+difflow = "difflow.report.cli:main"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/difflow", "src/difflow_bio", "src/difflow_ree", "src/difflow_cc"]
 

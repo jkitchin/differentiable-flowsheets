@@ -94,6 +94,28 @@ class OxalatePrecipitator:
         >>> filtrate, solid, info = precip(feed, oxalic_acid)
     """
 
+    symbol = "Oxalate Precip."
+    equations = [
+        r"2\,\mathrm{RE}^{3+} + 3\,\mathrm{C}_2\mathrm{O}_4^{2-} \rightarrow \mathrm{RE}_2(\mathrm{C}_2\mathrm{O}_4)_3\,\downarrow",
+        r"\mathrm{RE}_2(\mathrm{C}_2\mathrm{O}_4)_3 \xrightarrow{\Delta} \mathrm{RE}_2\mathrm{O}_3 + 3\,\mathrm{CO} + 3\,\mathrm{CO}_2",
+        r"K_\mathrm{sp} = [\mathrm{RE}^{3+}]^2\,[\mathrm{C}_2\mathrm{O}_4^{2-}]^3",
+    ]
+    assumptions = [
+        "Stoichiometric precipitation with user-controlled excess precipitant.",
+        "High precipitation yield typical of oxalate (>99%) captured via efficiency parameter.",
+        "Solid is filtered cleanly; no co-precipitation tracking.",
+    ]
+    references = [
+        "Moldoveanu, G.A., Papangelakis, V.G. Hydrometallurgy, 117-118, 71 (2012).",
+        "Habashi, F. Handbook of Extractive Metallurgy, Vol. 3, Wiley-VCH, 1997.",
+    ]
+    parameter_symbols = {
+        "precipitant_excess": r"\phi_\mathrm{exc}",
+        "efficiency": r"\eta",
+        "temperature": "T",
+    }
+    parameter_units = {"efficiency": "-", "temperature": "K"}
+
     def __init__(self, params: PrecipitatorParams):
         """Initialize precipitator.
 
@@ -218,6 +240,19 @@ class CarbonatePrecipitator:
         >>> filtrate, solid, info = precip(feed, na2co3_solution)
     """
 
+    symbol = "Carbonate Precip."
+    equations = [
+        r"2\,\mathrm{RE}^{3+} + 3\,\mathrm{CO}_3^{2-} \rightarrow \mathrm{RE}_2(\mathrm{CO}_3)_3\,\downarrow",
+        r"\mathrm{RE}_2(\mathrm{CO}_3)_3 \xrightarrow{\Delta} \mathrm{RE}_2\mathrm{O}_3 + 3\,\mathrm{CO}_2",
+    ]
+    assumptions = [
+        "Stoichiometric reaction with a sodium/ammonium carbonate solution.",
+        "Bulk group-precipitation; composition-selective separation is handled upstream.",
+    ]
+    references = ["Habashi, F. Handbook of Extractive Metallurgy, Vol. 3, Wiley-VCH, 1997."]
+    parameter_symbols = {"precipitant_excess": r"\phi_\mathrm{exc}", "efficiency": r"\eta"}
+    parameter_units = {"efficiency": "-", "temperature": "K"}
+
     def __init__(self, params: PrecipitatorParams):
         """Initialize precipitator.
 
@@ -323,6 +358,23 @@ class HydroxidePrecipitator:
         >>> precip = HydroxidePrecipitator(params)
         >>> filtrate, solid, info = precip(feed, naoh_solution, pH=8.5)
     """
+
+    symbol = "Hydroxide Precip."
+    equations = [
+        r"\mathrm{RE}^{3+} + 3\,\mathrm{OH}^- \rightarrow \mathrm{RE}(\mathrm{OH})_3\,\downarrow",
+        r"K_\mathrm{sp} = [\mathrm{RE}^{3+}]\,[\mathrm{OH}^-]^3",
+        r"\mathrm{pH}_\mathrm{ppt} = 14 - \tfrac{1}{3}\log_{10}\!\left(K_\mathrm{sp}/[\mathrm{RE}^{3+}]\right)",
+    ]
+    assumptions = [
+        "Selectivity governed by per-element solubility products at the chosen pH.",
+        "Base (NaOH) addition as the precipitant with user-controlled excess.",
+    ]
+    references = [
+        "Baes, C.F., Mesmer, R.E. The Hydrolysis of Cations, Krieger, 1986.",
+        "Xie, F., Zhang, T.A., Dreisinger, D., Doyle, F. Miner. Eng., 56, 10 (2014).",
+    ]
+    parameter_symbols = {"precipitant_excess": r"\phi_\mathrm{exc}", "efficiency": r"\eta"}
+    parameter_units = {"efficiency": "-", "temperature": "K"}
 
     def __init__(self, params: PrecipitatorParams):
         """Initialize precipitator.

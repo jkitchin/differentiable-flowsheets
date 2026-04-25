@@ -191,6 +191,29 @@ class ProteinAChromatography:
     - Specified elution yield
     """
 
+    symbol = "Protein A"
+    equations = [
+        r"q = \frac{q_\mathrm{max}\,K_d\,C}{1 + K_d\,C}\qquad \text{(Langmuir binding)}",
+        r"\mathrm{DBC}_{10\%} = \frac{q_\mathrm{max}\,\rho_\mathrm{bed}\,t_r}{1 + k'}\qquad \text{(dynamic binding capacity)}",
+        r"Y_\mathrm{load} = 1 - C_\mathrm{breakthrough}/C_0",
+    ]
+    assumptions = [
+        "Instantaneous binding equilibrium within the column.",
+        "Complete wash of unbound species.",
+        "User-specified elution yield; residual on column neglected.",
+    ]
+    references = [
+        "Hahn, R., Jungbauer, A. J. Chromatogr. A, 1039, 189 (2004).",
+        "Harrison, R.G., et al. Bioseparations Science and Engineering, 2e, Oxford, 2015.",
+    ]
+    parameter_symbols = {
+        "qmax": "q_\\mathrm{max}",
+        "Kd": "K_d",
+        "bed_volume": "V_\\mathrm{bed}",
+    }
+    parameter_units = {"qmax": "g/L", "Kd": "M", "bed_volume": "L"}
+    numerical_method = "Closed-form Langmuir loading + mass-balance accounting across load/wash/elute."
+
     def __init__(self, params: ProteinAParams):
         """Initialize Protein A column.
 
@@ -334,6 +357,24 @@ class IonExchangeChromatography:
     - Flow-through: Impurities bind, product flows through
     """
 
+    symbol = "IEX"
+    equations = [
+        r"q = \frac{q_\mathrm{max}\,(K_b\,C)^n}{1 + (K_b\,C)^n}\qquad \text{(Langmuir-Freundlich)}",
+        r"\log K = \log K_0 - Z\,\log [\mathrm{salt}]\qquad \text{(steric mass action)}",
+    ]
+    assumptions = [
+        "Local equilibrium within the column.",
+        "Gradient elution modelled as a linear salt ramp.",
+        "Bind-elute or flow-through operating mode is user-selected.",
+    ]
+    references = [
+        "Brooks, C.A., Cramer, S.M. AIChE J., 38, 1969 (1992).",
+        "Jungbauer, A. J. Chromatogr. A, 1065, 3 (2005).",
+    ]
+    parameter_symbols = {"qmax": "q_\\mathrm{max}", "Kb": "K_b"}
+    parameter_units = {"qmax": "g/L", "Kb": "1/M"}
+    numerical_method = "Isotherm-based mass balance; bind/flow-through selection at __call__."
+
     def __init__(self, params: IEXParams):
         """Initialize IEX column.
 
@@ -425,6 +466,21 @@ class SizeExclusionChromatography:
     - Target protein elutes at intermediate time
     - Small molecules (fragments) elute last
     """
+
+    symbol = "SEC"
+    equations = [
+        r"V_e = V_0 + K_\mathrm{av}\,V_p,\qquad K_\mathrm{av} = \frac{V_e - V_0}{V_t - V_0}",
+        r"R_s = \frac{1}{4}\,\frac{V_{e,1}-V_{e,2}}{\sigma_{1,2}}\qquad \text{(resolution)}",
+    ]
+    assumptions = [
+        "No adsorption to the stationary phase.",
+        "Gaussian peak approximation for resolution.",
+        "Isocratic elution.",
+    ]
+    references = ["Hagel, L. Size Exclusion Chromatography, in Protein Purification, 2e, Wiley, 2011."]
+    parameter_symbols = {"column_volume": "V_t", "void_fraction": r"\varepsilon_0"}
+    parameter_units = {"column_volume": "L", "void_fraction": "-"}
+    numerical_method = "Kav-based elution ordering + Gaussian peak overlap."
 
     def __init__(self, params: SECParams):
         """Initialize SEC column.

@@ -57,6 +57,25 @@ class Flash:
     All calculations are JAX-compatible for automatic differentiation.
     """
 
+    symbol = "Flash"
+    equations = [
+        r"\sum_i \frac{z_i (K_i - 1)}{1 + \beta(K_i - 1)} = 0 \qquad \text{(Rachford-Rice)}",
+        r"x_i = \frac{z_i}{1 + \beta(K_i - 1)},\qquad y_i = K_i\, x_i",
+        r"K_i = \frac{P_i^{\mathrm{sat}}(T)}{P}\qquad \text{(ideal, Raoult's law)}",
+    ]
+    assumptions = [
+        "Vapor-liquid equilibrium at specified T and P.",
+        "Ideal thermodynamics via Raoult's law (or supplied EOS for the non-ideal variant).",
+        "Single equilibrium stage with complete phase separation.",
+    ]
+    references = [
+        "Smith, Van Ness, Abbott. Introduction to Chemical Engineering Thermodynamics, 7e, Ch. 10-14.",
+        "Rachford, H.H., Rice, J.D. J. Petroleum Tech., 4(10), 1952.",
+    ]
+    parameter_symbols = {}
+    parameter_units = {}
+    numerical_method = "Rachford-Rice root-finding via optimistix; implicit differentiation through the converged root."
+
     def __init__(
         self,
         params: FlashParams,
@@ -563,6 +582,19 @@ class Splitter:
     Default is n=2 (two outlet streams).
     """
 
+    symbol = "Splitter"
+    equations = [
+        r"F_{i,k}^{\mathrm{out}} = \phi_k\, F_{i}^{\mathrm{in}}\qquad \sum_k \phi_k = 1",
+        r"T^{\mathrm{out}} = T^{\mathrm{in}},\quad P^{\mathrm{out}} = P^{\mathrm{in}}",
+    ]
+    assumptions = [
+        "No phase change; each outlet has the same composition as the inlet.",
+        "Isothermal, isobaric split.",
+    ]
+    references = ["Seider, Seader, Lewin, Widagdo. Product & Process Design Principles, 4e."]
+    parameter_symbols = {}
+    parameter_units = {}
+
     def __init__(self, species_order: list[str]):
         """Initialize splitter.
 
@@ -678,6 +710,21 @@ class Mixer:
     Combines multiple streams. For ideal mixing, outlet enthalpy
     equals sum of inlet enthalpies.
     """
+
+    symbol = "Mixer"
+    equations = [
+        r"F_i^{\mathrm{out}} = \sum_k F_i^{(k)}",
+        r"\sum_k \sum_i F_i^{(k)}\, h_i(T^{(k)}) = \sum_i F_i^{\mathrm{out}}\, h_i(T^{\mathrm{out}})\qquad \text{(enthalpy balance)}",
+        r"P^{\mathrm{out}} = \min_k P^{(k)}",
+    ]
+    assumptions = [
+        "Adiabatic mixing (no external heat duty).",
+        "Negligible heat of mixing (ideal).",
+        "Outlet pressure set by the lowest inlet pressure unless thermo is None (flow-weighted T).",
+    ]
+    references = ["Smith, Van Ness, Abbott. Introduction to Chemical Engineering Thermodynamics, 7e, Ch. 12."]
+    parameter_symbols = {}
+    parameter_units = {}
 
     def __init__(
         self,
@@ -869,6 +916,25 @@ class EOSFlash:
         >>> liquid, vapor, info = flash(inlet, T=250.0, P=2e6)
     """
 
+    symbol = "EOS Flash"
+    equations = [
+        r"K_i = \frac{\hat{\varphi}_i^L(T,P,\mathbf{x})}{\hat{\varphi}_i^V(T,P,\mathbf{y})}\qquad \text{(EOS K-values)}",
+        r"\sum_i \frac{z_i(K_i-1)}{1+\beta(K_i-1)} = 0 \qquad \text{(Rachford-Rice)}",
+        r"P = \frac{RT}{v-b} - \frac{a(T)}{v^2 + u\,b\,v + w\,b^2} \qquad \text{(cubic EOS: PR / SRK)}",
+    ]
+    assumptions = [
+        "Vapor-liquid equilibrium at specified T and P.",
+        "Cubic equation of state (Peng-Robinson or SRK) with optional binary interaction parameters k_ij.",
+        "Successive substitution until K-values converge.",
+    ]
+    references = [
+        "Peng, D.-Y., Robinson, D.B. Ind. Eng. Chem. Fundam., 15, 59 (1976).",
+        "Soave, G. Chem. Eng. Sci., 27, 1197 (1972).",
+    ]
+    parameter_symbols = {"eos_type": "EOS"}
+    parameter_units = {}
+    numerical_method = "Successive substitution on K-values, Rachford-Rice root inside the outer loop."
+
     def __init__(
         self,
         params: EOSFlashParams,
@@ -966,6 +1032,21 @@ class PHFlash:
 
     All calculations are JAX-compatible for automatic differentiation.
     """
+
+    symbol = "PH Flash"
+    equations = [
+        r"H^{\mathrm{out}}(T,P) = H^{\mathrm{in}} \qquad \text{(isenthalpic constraint)}",
+        r"\sum_i \frac{z_i(K_i-1)}{1+\beta(K_i-1)} = 0 \qquad \text{(Rachford-Rice at trial } T)",
+    ]
+    assumptions = [
+        "Adiabatic operation (constant enthalpy).",
+        "Constant outlet pressure P.",
+        "Vapor-liquid equilibrium at the converged temperature.",
+    ]
+    references = ["Smith, Van Ness, Abbott. Introduction to Chemical Engineering Thermodynamics, 7e."]
+    parameter_symbols = {}
+    parameter_units = {}
+    numerical_method = "Outer 1D Newton on T enforcing H(T,P) = H_in, inner TP flash at each trial T."
 
     def __init__(
         self,

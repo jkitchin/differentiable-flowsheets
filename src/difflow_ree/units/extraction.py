@@ -99,6 +99,35 @@ class REEExtractor:
         >>> raffinate, extract, info = extractor(feed, solvent)
     """
 
+    symbol = "REE Extraction"
+    equations = [
+        r"\mathrm{RE}^{3+}_{(aq)} + 3\,\overline{\mathrm{HA}} \rightleftharpoons \overline{\mathrm{REA}_3} + 3\,\mathrm{H}^+\qquad \text{(cation-exchange extractant)}",
+        r"K_{\mathrm{ex},i} = \frac{[\overline{\mathrm{REA}_3}]\,[\mathrm{H}^+]^3}{[\mathrm{RE}^{3+}]\,[\overline{\mathrm{HA}}]^3}",
+        r"D_i = K_{\mathrm{ex},i}\,\frac{[\overline{\mathrm{HA}}]^3}{[\mathrm{H}^+]^3}",
+        r"\frac{x_{N+1}}{x_1} = \frac{E-1}{E^{N+1}-1}\qquad \text{(Kremser, counter-current)}",
+    ]
+    assumptions = [
+        "Counter-current equilibrium stages with constant phase flows.",
+        "Distribution coefficients depend on pH and optional extractant loading (Langmuir).",
+        "Aqueous and organic phases immiscible; no third phase.",
+    ]
+    references = [
+        "Rydberg, J., Musikas, C., Choppin, G.R. Principles and Practices of Solvent Extraction, Marcel Dekker, 1992.",
+        "Xie, F., Zhang, T.A., Dreisinger, D., Doyle, F. Miner. Eng., 56, 10 (2014).",
+    ]
+    parameter_symbols = {
+        "n_stages": "N",
+        "extractant_conc": "[HA]",
+        "pH": r"\mathrm{pH}",
+        "O_A_ratio": "O/A",
+    }
+    parameter_units = {
+        "extractant_conc": "mol/L",
+        "pH": "-",
+        "O_A_ratio": "-",
+    }
+    numerical_method = "Kremser closed form with pH-dependent distribution ratios; optional loading via Langmuir isotherm."
+
     def __init__(self, params: REEExtractorParams):
         """Initialize extractor.
 
@@ -313,6 +342,28 @@ class REEMixerSettler:
         >>> stage = REEMixerSettler(params)
         >>> aq_out, org_out, info = stage(aq_in, org_in)
     """
+
+    symbol = "Mixer-Settler"
+    equations = [
+        r"E_M = \frac{y_\mathrm{out} - y_\mathrm{in}}{y^\ast - y_\mathrm{in}}\qquad \text{(Murphree stage efficiency)}",
+        r"y^\ast_i = D_i\,x_i\qquad (D_i = D_i(\mathrm{pH}, [\mathrm{HA}]))",
+    ]
+    assumptions = [
+        "Single stage with configurable Murphree efficiency.",
+        "Mixer reaches near-equilibrium; settler provides phase separation only.",
+    ]
+    references = [
+        "Perry's Chemical Engineers' Handbook, 9e, Sec. 15.",
+    ]
+    parameter_symbols = {
+        "stage_efficiency": r"E_M",
+        "mixer_residence_time": r"\tau_\mathrm{mix}",
+        "settler_residence_time": r"\tau_\mathrm{set}",
+    }
+    parameter_units = {
+        "mixer_residence_time": "s",
+        "settler_residence_time": "s",
+    }
 
     def __init__(self, params: MixerSettlerParams):
         """Initialize mixer-settler.

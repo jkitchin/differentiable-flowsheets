@@ -133,6 +133,29 @@ class MembraneSeparator:
             a review. J Membr Sci 107:1-21.
     """
 
+    symbol = "Membrane"
+    equations = [
+        r"J_i = \frac{P_i}{\delta}\,(p_{i,\mathrm{feed}} - p_{i,\mathrm{permeate}})\qquad \text{(solution-diffusion)}",
+        r"\alpha_{i/j} = \frac{P_i}{P_j}\qquad \text{(selectivity)}",
+        r"\theta = \frac{\dot{n}_\mathrm{permeate}}{\dot{n}_\mathrm{feed}}\qquad \text{(stage cut)}",
+    ]
+    assumptions = [
+        "Solution-diffusion transport with constant permeabilities.",
+        "Perfect-mixing (CSTR) on each side unless otherwise specified.",
+        "Isothermal, isobaric operation (feed-side pressure drop neglected).",
+    ]
+    references = [
+        "Baker, R.W. Membrane Technology and Applications, 3e, Wiley, 2012.",
+        "Wijmans, J.G., Baker, R.W. J. Membr. Sci., 107, 1 (1995).",
+    ]
+    parameter_symbols = {
+        "area": "A",
+        "thickness": r"\delta",
+        "pressure_ratio": r"P_F/P_P",
+    }
+    parameter_units = {"area": "m^2", "thickness": "m", "pressure_ratio": "-"}
+    numerical_method = "Per-component flux integration with closed-form perfect-mixing solution."
+
     def __init__(self, params: MembraneParams):
         """Initialize membrane separator.
 
@@ -411,6 +434,20 @@ class MultistageMembrane:
             capture: An opportunity for membranes.
             J Membr Sci 359:126-139.
     """
+
+    symbol = "Membrane Cascade"
+    equations = [
+        r"\theta_\mathrm{overall} = 1 - \prod_k (1 - \theta_k)\qquad \text{(series stage cuts)}",
+        r"\mathrm{purity} = \frac{\sum_k \dot{n}_{\mathrm{CO}_2,k}^\mathrm{permeate}}{\sum_k \dot{n}_k^\mathrm{permeate}}",
+    ]
+    assumptions = [
+        "Identical membrane properties across stages unless parameters are overridden per stage.",
+        "Series or permeate-recycle configuration selected via constructor argument.",
+    ]
+    references = ["Merkel, T.C. et al. J. Membr. Sci., 359, 126 (2010)."]
+    parameter_symbols = {"area": "A", "pressure_ratio": r"P_F/P_P"}
+    parameter_units = {"area": "m^2", "pressure_ratio": "-"}
+    numerical_method = "Sequential stage evaluation; optional fixed-point recycle convergence."
 
     def __init__(
         self,

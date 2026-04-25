@@ -68,6 +68,30 @@ class REEStripper:
         >>> product, barren_org, info = stripper(scrubbed_org, strip_acid)
     """
 
+    symbol = "REE Stripping"
+    equations = [
+        r"\overline{\mathrm{REA}_3} + 3\,\mathrm{H}^+ \rightleftharpoons \mathrm{RE}^{3+}_{(aq)} + 3\,\overline{\mathrm{HA}}",
+        r"D_i = K_{\mathrm{ex},i}\,\frac{[\overline{\mathrm{HA}}]^3}{[\mathrm{H}^+]^3}\quad\Rightarrow\quad D_i \downarrow \text{ as pH} \downarrow",
+        r"\frac{y_{N+1}}{y_1} = \frac{S-1}{S^{N+1}-1},\qquad S = 1/E\qquad \text{(Kremser, stripping form)}",
+    ]
+    assumptions = [
+        "Counter-current operation with strong acid stripping solution.",
+        "Constant phase flows and extractant concentration.",
+    ]
+    references = [
+        "Rydberg, J., Musikas, C., Choppin, G.R. Principles and Practices of Solvent Extraction, Marcel Dekker, 1992.",
+    ]
+    parameter_symbols = {
+        "n_stages": "N",
+        "pH": r"\mathrm{pH}",
+        "acid_conc": "[H^+]",
+    }
+    parameter_units = {
+        "pH": "-",
+        "acid_conc": "mol/L",
+    }
+    numerical_method = "Kremser applied in the stripping direction with acid-loading boundary."
+
     def __init__(self, params: StripperParams):
         """Initialize stripper.
 

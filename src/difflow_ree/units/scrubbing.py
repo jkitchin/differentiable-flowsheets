@@ -69,6 +69,23 @@ class REEScrubber:
         >>> scrub_liquor, scrubbed_org, info = scrubber(loaded_org, scrub_soln)
     """
 
+    symbol = "REE Scrubbing"
+    equations = [
+        r"\overline{\mathrm{REA}_3} + 3\,\mathrm{H}^+ \rightleftharpoons \mathrm{RE}^{3+}_{(aq)} + 3\,\overline{\mathrm{HA}}\qquad \text{(reverse extraction at low pH)}",
+        r"\frac{x_{N+1}}{x_1} = \frac{E^{-1}-1}{E^{-(N+1)}-1}\qquad \text{(Kremser, counter-current, reversed)}",
+    ]
+    assumptions = [
+        "Counter-current equilibrium stages with constant phase flows.",
+        "Scrub aqueous is an acid / REE / water solution with user-selected type.",
+        "Separation factor between target and non-target REE is pH-dominated.",
+    ]
+    references = [
+        "Xie, F., Zhang, T.A., Dreisinger, D., Doyle, F. Miner. Eng., 56, 10 (2014).",
+    ]
+    parameter_symbols = {"n_stages": "N", "pH": r"\mathrm{pH}", "extractant_conc": "[HA]"}
+    parameter_units = {"pH": "-", "extractant_conc": "mol/L"}
+    numerical_method = "Kremser applied to reverse extraction with scrub-type-dependent boundary condition."
+
     def __init__(self, params: ScrubberParams):
         """Initialize scrubber.
 

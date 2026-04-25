@@ -66,6 +66,33 @@ class ShortcutColumn:
     All calculations are JAX-compatible for automatic differentiation.
     """
 
+    symbol = "Shortcut Column"
+    equations = [
+        r"N_\mathrm{min} = \frac{\ln\!\bigl[(x_{LK}/x_{HK})_D\,(x_{HK}/x_{LK})_B\bigr]}{\ln \alpha_{LK,HK}} \qquad \text{(Fenske)}",
+        r"\sum_i \frac{\alpha_i\, z_i}{\alpha_i - \theta} = 1 - q \qquad \text{(Underwood 1st)}",
+        r"R_\mathrm{min} + 1 = \sum_i \frac{\alpha_i\, x_{i,D}}{\alpha_i - \theta} \qquad \text{(Underwood 2nd)}",
+        r"\frac{N - N_\mathrm{min}}{N+1} = f\!\left(\frac{R - R_\mathrm{min}}{R+1}\right) \qquad \text{(Gilliland)}",
+    ]
+    assumptions = [
+        "Constant relative volatility between top and bottom.",
+        "Constant molar overflow (CMO).",
+        "Feed thermal condition q supplied or assumed saturated liquid (q=1).",
+        "Key components define recovery specifications.",
+    ]
+    references = [
+        "Fenske, M.R. Ind. Eng. Chem., 24, 482 (1932).",
+        "Underwood, A.J.V. J. Inst. Petroleum, 32, 614 (1946).",
+        "Gilliland, E.R. Ind. Eng. Chem., 32, 1220 (1940).",
+    ]
+    parameter_symbols = {
+        "light_key": "LK",
+        "heavy_key": "HK",
+        "x_D_LK": "x_{D,LK}",
+        "x_B_HK": "x_{B,HK}",
+    }
+    parameter_units = {"x_D_LK": "-", "x_B_HK": "-"}
+    numerical_method = "Closed-form Fenske + Underwood + Gilliland correlation with smooth capping for singular cases."
+
     def __init__(
         self,
         params: ShortcutColumnParams,
@@ -611,6 +638,37 @@ class DistillationColumn:
 
     All calculations are JAX-compatible for automatic differentiation.
     """
+
+    symbol = "MESH Column"
+    equations = [
+        r"\text{M: } L_{n+1} x_{i,n+1} + V_{n-1} y_{i,n-1} + F_n z_{i,n} - (L_n + U_n) x_{i,n} - (V_n + W_n) y_{i,n} = 0",
+        r"\text{E: } y_{i,n} = K_i(T_n, P)\, x_{i,n}",
+        r"\text{S: } \sum_i x_{i,n} = 1,\quad \sum_i y_{i,n} = 1",
+        r"\text{H: } L_{n+1} h_{n+1} + V_{n-1} H_{n-1} + F_n h_{F,n} - (L_n + U_n) h_n - (V_n + W_n) H_n \pm Q_n = 0",
+    ]
+    assumptions = [
+        "Equilibrium stages (Murphree efficiency implicitly 1; can be modified).",
+        "Constant molar overflow for initialization.",
+        "No pressure drop between stages.",
+    ]
+    references = [
+        "King, C.J. Separation Processes, 2e, McGraw-Hill, 1980.",
+        "Kister, H.Z. Distillation Design, McGraw-Hill, 1992.",
+        "Seader, Henley, Roper. Separation Process Principles, 3e.",
+    ]
+    parameter_symbols = {
+        "n_stages": "N",
+        "feed_stage": "n_F",
+        "P": "P",
+        "q": "q",
+    }
+    parameter_units = {
+        "n_stages": "-",
+        "feed_stage": "-",
+        "P": "Pa",
+        "q": "-",
+    }
+    numerical_method = "MESH stage-by-stage with bubble-point method and simultaneous Newton update on T profile."
 
     def __init__(
         self,

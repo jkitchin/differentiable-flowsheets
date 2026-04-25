@@ -256,6 +256,30 @@ class Compressor:
         >>> outlet, info = comp(inlet)
     """
 
+    symbol = "Compressor"
+    equations = [
+        r"T_\mathrm{out,is} = T_\mathrm{in}\,\left(\frac{P_\mathrm{out}}{P_\mathrm{in}}\right)^{(\gamma-1)/\gamma}",
+        r"T_\mathrm{out} = T_\mathrm{in} + \frac{T_\mathrm{out,is} - T_\mathrm{in}}{\eta_\mathrm{is}}",
+        r"W_\mathrm{is} = Z\,R T_\mathrm{in}\,\frac{\gamma}{\gamma-1}\,\left[\left(\frac{P_\mathrm{out}}{P_\mathrm{in}}\right)^{(\gamma-1)/\gamma}-1\right]",
+        r"P_\mathrm{elec} = \frac{\dot{n}\,W_\mathrm{is}/\eta_\mathrm{is}}{\eta_\mathrm{mech}\,\eta_\mathrm{motor}}",
+    ]
+    assumptions = [
+        "Ideal-gas / compressibility-corrected behaviour via Z(T, P).",
+        "Specified isentropic, mechanical, and motor efficiencies.",
+    ]
+    references = [
+        "Perry's Chemical Engineers' Handbook, 9e, Sec. 10.",
+        "Aspen Tech, CO2 compression trains for CCS, 2013 white paper.",
+    ]
+    parameter_symbols = {
+        "pressure_ratio": r"P_\mathrm{out}/P_\mathrm{in}",
+        "eta_isentropic": r"\eta_\mathrm{is}",
+        "eta_mechanical": r"\eta_\mathrm{mech}",
+        "eta_motor": r"\eta_\mathrm{motor}",
+    }
+    parameter_units = {"pressure_ratio": "-", "eta_isentropic": "-"}
+    numerical_method = "Closed-form isentropic + efficiency correction; Z from PR EOS."
+
     def __init__(self, params: CompressorParams):
         self.params = params
 
@@ -340,6 +364,17 @@ class Intercooler:
     Cools compressed gas to reduce work in subsequent stages.
     """
 
+    symbol = "Intercooler"
+    equations = [
+        r"T_\mathrm{out} = \max(T_\mathrm{coolant} + \Delta T_\mathrm{app},\, T_\mathrm{target})",
+        r"Q = \dot{n}\,C_p\,(T_\mathrm{in} - T_\mathrm{out})",
+        r"P_\mathrm{out} = P_\mathrm{in} - \Delta P",
+    ]
+    assumptions = ["Water or air coolant with a user-specified approach."]
+    references = ["Perry's Chemical Engineers' Handbook, 9e, Sec. 10."]
+    parameter_symbols = {"T_outlet": "T_\\mathrm{target}", "T_coolant": "T_\\mathrm{cool}"}
+    parameter_units = {"T_outlet": "K", "T_coolant": "K", "approach": "K", "pressure_drop": "Pa"}
+
     def __init__(self, params: CompressionIntercoolerParams):
         self.params = params
 
@@ -396,6 +431,19 @@ class Pump:
 
     More efficient than compression for dense-phase CO2.
     """
+
+    symbol = "CO2 Pump"
+    equations = [
+        r"W_\mathrm{hydraulic} = \dot{V}\,(P_\mathrm{out} - P_\mathrm{in}) = \dot{m}\,(P_\mathrm{out} - P_\mathrm{in})/\rho",
+        r"W_\mathrm{actual} = W_\mathrm{hydraulic}/\eta",
+    ]
+    assumptions = [
+        "Incompressible-liquid / dense-phase approximation; density from CO2 EOS.",
+        "Small outlet temperature rise from hydraulic losses only.",
+    ]
+    references = ["Perry's Chemical Engineers' Handbook, 9e, Sec. 10."]
+    parameter_symbols = {"P_outlet": "P_\\mathrm{out}", "eta": r"\eta"}
+    parameter_units = {"P_outlet": "Pa", "eta": "-"}
 
     def __init__(self, P_outlet: float | Array, eta: float | Array = 0.75):
         self.P_outlet = P_outlet
@@ -468,6 +516,34 @@ class CompressionTrain:
         >>> train = CompressionTrain(params)
         >>> outlet, info = train(co2_stream)
     """
+
+    symbol = "Compression Train"
+    equations = [
+        r"N_\mathrm{stages} = \left\lceil \frac{\ln(P_\mathrm{out}/P_\mathrm{in})}{\ln\,r_\mathrm{pr}^{\max}} \right\rceil",
+        r"W_\mathrm{total} = \sum_{k=1}^{N} \dot{n}\,W_{\mathrm{is},k}/\eta_{\mathrm{is},k}",
+        r"\text{Switch to pump when } T>T_c,\,P>P_c\qquad (T_c=304.1\,\mathrm{K},\,P_c=73.8\,\mathrm{bar})",
+    ]
+    assumptions = [
+        "Equal-ratio stages up to a user-specified max; interstage cooling to T_interstage.",
+        "Dense-phase pumping replaces the final compression stage when CO2 is supercritical.",
+    ]
+    references = [
+        "Aspelund, A., Jordal, K. Int. J. Greenhouse Gas Control, 1, 343 (2007).",
+        "Perry's Chemical Engineers' Handbook, 9e, Sec. 10.",
+    ]
+    parameter_symbols = {
+        "P_inlet": "P_\\mathrm{in}",
+        "P_outlet": "P_\\mathrm{out}",
+        "stage_pressure_ratio": r"r_\mathrm{pr}",
+        "T_interstage": "T_\\mathrm{inter}",
+    }
+    parameter_units = {
+        "P_inlet": "Pa",
+        "P_outlet": "Pa",
+        "stage_pressure_ratio": "-",
+        "T_interstage": "K",
+    }
+    numerical_method = "Sequential compressor + intercooler stages; switch to pump at supercritical conditions."
 
     def __init__(self, params: CompressionTrainParams):
         self.params = params

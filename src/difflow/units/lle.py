@@ -369,6 +369,25 @@ class MultistageCascade:
     using stage efficiency interpolation.
     """
 
+    symbol = "LLE Cascade"
+    equations = [
+        r"x_{i,n} = \frac{x_{i,0} - y_{i,N+1}/K_i}{1 + E\,S + \ldots} \qquad \text{(Kremser equation, analytical)}",
+        r"E_i = \frac{y_i^\ast}{K_i\, x_i}\qquad \text{(extraction factor)}",
+        r"\text{MB at stage } n:\ L x_{i,n-1} + S y_{i,n+1} = L x_{i,n} + S y_{i,n}",
+    ]
+    assumptions = [
+        "Each stage reaches equilibrium (optionally scaled by stage_efficiency for co-current).",
+        "Immiscible solvents; constant phase flows along the cascade.",
+        "Constant distribution coefficients K_i with respect to temperature within a stage.",
+    ]
+    references = [
+        "Kremser, A. National Petroleum News, 22(21), 43 (1930).",
+        "Seader, Henley, Roper. Separation Process Principles, 3e, Ch. 8.",
+    ]
+    parameter_symbols = {"n_stages": "N", "stage_efficiency": r"\eta_M"}
+    parameter_units = {"n_stages": "-", "stage_efficiency": "-"}
+    numerical_method = "Analytical Kremser for counter-current; stage-by-stage propagation for co-current."
+
     def __init__(self, params: CascadeParams):
         """Initialize cascade.
 
@@ -728,6 +747,35 @@ class DifferentialContactor:
     Supports both equilibrium stage equivalent (HETP) and rate-based
     mass transfer models.
     """
+
+    symbol = "LLE Contactor"
+    equations = [
+        r"\frac{dx_i}{dz} = -\frac{K_L a_i}{L/A}\,(x_i - x_i^\ast)\qquad \text{(rate-based)}",
+        r"\frac{dy_i}{dz} = +\frac{K_L a_i}{S/A}\,(x_i - x_i^\ast)",
+        r"N_\mathrm{stages} = \frac{\ell}{\mathrm{HETP}}\qquad \text{(equilibrium model)}",
+    ]
+    assumptions = [
+        "Plug flow of both phases along the contactor.",
+        "Rate-based model uses a lumped overall K_L a per solute.",
+        "Equilibrium model approximates the contactor as length/HETP stages.",
+    ]
+    references = [
+        "Treybal, R.E. Mass Transfer Operations, 3e, McGraw-Hill, 1980.",
+        "Seader, Henley, Roper. Separation Process Principles, 3e, Ch. 8.",
+    ]
+    parameter_symbols = {
+        "length": r"\ell",
+        "area": "A",
+        "Kla": r"K_L a",
+        "HETP": r"\mathrm{HETP}",
+    }
+    parameter_units = {
+        "length": "m",
+        "area": "m^2",
+        "Kla": "1/s",
+        "HETP": "m",
+    }
+    numerical_method = "Axial discretization into n_segments with stage propagation."
 
     def __init__(self, params: ContactorParams):
         """Initialize contactor.

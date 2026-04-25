@@ -272,6 +272,22 @@ class DynamicCSTR(DynamicUnitBase):
     For perfectly mixed: x_out = n / sum(n)
     """
 
+    symbol = "Dynamic CSTR"
+    equations = [
+        r"\frac{dn_i}{dt} = F_\mathrm{in}\,x_{i,\mathrm{in}} - F_\mathrm{out}\,x_i + V\sum_j \nu_{ij}\, r_j",
+        r"\frac{d(n_\mathrm{tot}\,C_p\,T)}{dt} = F_\mathrm{in} h_\mathrm{in} - F_\mathrm{out} h + Q + V\sum_j r_j(-\Delta H_{r,j})",
+        r"x_i = n_i / n_\mathrm{tot}",
+    ]
+    assumptions = [
+        "Perfectly mixed (outlet = reactor contents).",
+        "Constant volume unless ``variable_volume=True``.",
+        "Integrated as an ODE in the reactor moles and (optional) temperature.",
+    ]
+    references = ["Fogler, Elements of Chemical Reaction Engineering, 5e, Ch. 13."]
+    parameter_symbols = {"V": "V", "dH_rxn": r"\Delta H_{r,j}"}
+    parameter_units = {"V": "m^3", "dH_rxn": "J/mol"}
+    numerical_method = "ODE integration via diffrax (Tsit5/Kvaerno5 depending on stiffness)."
+
     def __init__(
         self,
         volume: float | Array,
@@ -500,6 +516,21 @@ class DynamicTank(DynamicUnitBase):
 
     Assumes perfectly mixed (C_out = n / V).
     """
+
+    symbol = "Dynamic Tank"
+    equations = [
+        r"\frac{dV}{dt} = \dot{V}_\mathrm{in} - \dot{V}_\mathrm{out}",
+        r"\frac{dn_i}{dt} = \dot{V}_\mathrm{in}\,C_{i,\mathrm{in}} - \dot{V}_\mathrm{out}\,C_i",
+        r"C_i = n_i / V",
+    ]
+    assumptions = [
+        "Perfectly mixed liquid; outlet composition = bulk composition.",
+        "Outlet volumetric flow from user-supplied ``outlet_flow_fn(V, t)`` (default constant).",
+    ]
+    references = ["Luyben, W.L. Process Modeling, Simulation, and Control for Chemical Engineers, 2e."]
+    parameter_symbols = {}
+    parameter_units = {}
+    numerical_method = "ODE integration via diffrax with (V, n_i, T) state."
 
     def __init__(
         self,
