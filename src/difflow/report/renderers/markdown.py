@@ -160,6 +160,61 @@ def to_markdown(report: Report) -> str:
         w(_table(["species", "feed total", "outlet total", "residual"], rows))
         w("\n\n")
 
+    # --- Optimization / sensitivity (section G)
+    if report.optimization is not None:
+        o = report.optimization
+        w("## Optimization and Sensitivity\n\n")
+        units = f" {o.objective_units}" if o.objective_units else ""
+        w(f"- Objective: {o.objective_name} ({o.sense})\n")
+        w(f"- Value at design point: {o.objective_value:.6g}{units}\n")
+        if o.objective_source:
+            w(f"- Source: `{o.objective_source}`\n")
+        w("\n")
+
+        w("**Decision variables**\n\n")
+        rows = []
+        for v in o.variables:
+            bounds = (
+                f"[{v.lower:.4g}, {v.upper:.4g}]"
+                if v.lower is not None and v.upper is not None
+                else "-"
+            )
+            rows.append([
+                v.name,
+                f"{v.value:.6g}",
+                bounds,
+                "-" if v.gradient is None else f"{v.gradient:.4g}",
+                "-" if v.elasticity is None else f"{v.elasticity:.4g}",
+            ])
+        w(_table(
+            ["variable", "value", "bounds", "dJ/dx", "elasticity"], rows
+        ))
+        w("\n\n")
+
+        if o.tornado:
+            w("**Sensitivity tornado** (objective swing over each bound)\n\n")
+            trows = [
+                [
+                    t.variable,
+                    f"{t.low_value:.4g}",
+                    f"{t.high_value:.4g}",
+                    f"{t.low_output:.6g}",
+                    f"{t.high_output:.6g}",
+                    f"{t.swing:.4g}",
+                ]
+                for t in o.tornado
+            ]
+            w(_table(
+                ["variable", "low", "high", "J(low)", "J(high)", "swing"],
+                trows,
+            ))
+            w("\n\n")
+
+        if o.notes:
+            for n in o.notes:
+                w(f"- {n}\n")
+            w("\n")
+
     if report.notes:
         w("## Notes\n\n")
         for n in report.notes:

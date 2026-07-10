@@ -153,7 +153,9 @@ from difflow.units.heat_exchanger import (
 )
 from difflow.flowsheet import Flowsheet, Unit, create_objective
 from difflow.report import (
+    OptimizationReport,
     Report,
+    build_optimization_report,
     build_report,
     report,
     to_html,
@@ -367,7 +369,9 @@ __all__ = [
     "create_objective",
     # Reporting
     "Report",
+    "OptimizationReport",
     "build_report",
+    "build_optimization_report",
     "report",
     "to_markdown",
     "to_json",

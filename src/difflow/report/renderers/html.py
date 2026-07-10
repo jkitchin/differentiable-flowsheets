@@ -178,5 +178,50 @@ def to_html(report: Report, embed_diagram: bool = True) -> str:
         ]
         w(_table(["species", "feed total", "outlet total", "residual"], rows))
 
+    if report.optimization is not None:
+        o = report.optimization
+        w("<h2>Optimization and Sensitivity</h2>\n")
+        units = f" {o.objective_units}" if o.objective_units else ""
+        w(
+            f"<p><b>Objective:</b> {escape(o.objective_name)} ({escape(o.sense)}); "
+            f"value = {o.objective_value:.6g}{escape(units)}</p>\n"
+        )
+        if o.objective_source:
+            w(f"<p><b>Source:</b> <code>{escape(o.objective_source)}</code></p>\n")
+
+        rows = []
+        for v in o.variables:
+            bounds = (
+                f"[{v.lower:.4g}, {v.upper:.4g}]"
+                if v.lower is not None and v.upper is not None
+                else "-"
+            )
+            rows.append([
+                v.name,
+                f"{v.value:.6g}",
+                bounds,
+                "-" if v.gradient is None else f"{v.gradient:.4g}",
+                "-" if v.elasticity is None else f"{v.elasticity:.4g}",
+            ])
+        w("<h3>Decision variables</h3>\n")
+        w(_table(["variable", "value", "bounds", "dJ/dx", "elasticity"], rows))
+
+        if o.tornado:
+            trows = [
+                [
+                    t.variable,
+                    f"{t.low_value:.4g}",
+                    f"{t.high_value:.4g}",
+                    f"{t.low_output:.6g}",
+                    f"{t.high_output:.6g}",
+                    f"{t.swing:.4g}",
+                ]
+                for t in o.tornado
+            ]
+            w("<h3>Sensitivity tornado</h3>\n")
+            w(_table(
+                ["variable", "low", "high", "J(low)", "J(high)", "swing"], trows
+            ))
+
     w("</body></html>\n")
     return out.getvalue()

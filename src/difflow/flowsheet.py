@@ -662,6 +662,7 @@ class Flowsheet:
         self,
         streams: dict[str, Stream] | None = None,
         include_git: bool = True,
+        optimization=None,
         notes: list[str] | None = None,
     ):
         """Build a self-documenting :class:`~difflow.report.ir.Report` for this flowsheet.
@@ -673,6 +674,10 @@ class Flowsheet:
                 ``balance_checks`` fields are ``None``.
             include_git: Whether to capture git commit + dirty flag in the
                 provenance section.
+            optimization: Optional
+                :class:`~difflow.report.ir.OptimizationReport` (build one with
+                :func:`difflow.report.build_optimization_report`) to include the
+                optimization / sensitivity section.
             notes: Optional free-form notes to attach to the report.
 
         Returns:
@@ -681,7 +686,13 @@ class Flowsheet:
         """
         from difflow.report.builder import build_report
 
-        return build_report(self, streams=streams, include_git=include_git, notes=notes)
+        return build_report(
+            self,
+            streams=streams,
+            include_git=include_git,
+            optimization=optimization,
+            notes=notes,
+        )
 
     def solve_eo(
         self,
