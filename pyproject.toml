@@ -45,6 +45,9 @@ ree = [
 cc = [
     # Carbon capture operations are included in the main package
 ]
+gas = [
+    # Gas transmission network operations are included in the main package
+]
 cuda12 = [
     "jax[cuda12]>=0.4.0",
 ]
@@ -52,19 +55,20 @@ cuda11 = [
     "jax[cuda11_local]>=0.4.0",
 ]
 all = [
-    "difflow[dev,examples,visualization,bio,ree,cc]",
+    "difflow[dev,examples,visualization,bio,ree,cc,gas]",
 ]
 
 [project.entry-points."difflow.plugins"]
 bio = "difflow_bio:register"
 ree = "difflow_ree:register"
 cc = "difflow_cc:register"
+gas = "difflow_gas:register"
 
 [project.scripts]
 difflow = "difflow.report.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/difflow", "src/difflow_bio", "src/difflow_ree", "src/difflow_cc"]
+packages = ["src/difflow", "src/difflow_bio", "src/difflow_ree", "src/difflow_cc", "src/difflow_gas"]
 
 [dependency-groups]
 dev = [

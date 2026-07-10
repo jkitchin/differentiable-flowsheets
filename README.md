@@ -14,6 +14,7 @@ A JAX-based framework for building and optimizing chemical process flowsheets wi
 - **Modular Design**: Unit operations can be composed into complex flowsheets with recycle streams
 - **Technoeconomic Analysis**: Comprehensive TEA module with equipment costs, operating costs, and profitability metrics (NPV, IRR, MSP)
 - **Bio Manufacturing**: Specialized unit operations for biopharmaceutical processes (bioreactors, chromatography, filtration)
+- **Gas Networks**: Steady-state gas transmission networks with a topology-computed sequential decomposition and differentiable tear solving
 
 ## ⚠️ ALPHA SOFTWARE
 
@@ -341,6 +342,46 @@ uf = Ultrafiltration(UFParams(
     concentration_factor=jnp.array(10.0),
 ))
 ```
+
+## Gas Transmission Networks
+
+The `difflow_gas` plugin models steady-state gas transmission networks
+as sequential-modular differentiable flowsheets. The sequential
+decomposition of a meshed network (spanning tree, tear set, balance
+schedule) is computed from the topology, so multi-loop networks need
+no hand derivation:
+
+```python
+import difflow_gas as dg
+
+net = dg.GasNetwork(
+    arcs={
+        "p1":  ("src", "a", "pipe"),
+        "cs1": ("a", "b", "compressor"),
+        "p2":  ("b", "c", "pipe"),
+        "p3":  ("b", "d", "pipe"),
+        "p4":  ("c", "d", "pipe"),          # closes a loop: the tear
+    },
+    beta={aid: dg.weymouth_beta(L, 0.6, 1e-4)
+          for aid, L in [("p1", 20e3), ("p2", 40e3),
+                         ("p3", 60e3), ("p4", 80e3)]},
+    supply_kg_s={"src": 120.0, "c": -50.0, "d": -70.0},
+)
+
+fs, dec = dg.build_network_flowsheet(net, root="src",
+                                     p_slack_pa=60e5,
+                                     ratios={"cs1": 1.3})
+streams = fs.solve(tol=1e-8)          # signed flows, Anderson tears
+assert dg.residual_report(streams, net, dec).ok
+
+# exact gradients through the converged tear iteration
+obj = fs.make_objective_fn(
+    lambda s: dg.total_compressor_power_w(s, dec, net.gas_temp_k))
+dW_dr = jax.grad(obj)({"cs_cs1.ratio": 1.3})
+```
+
+Pipes, resistors, compressor stations, open valves, control valves and
+short pipes are supported; see `docs/unit-operations-gas.md`.
 
 ## Thermodynamics
 

@@ -12,6 +12,7 @@ parts:
       - file: docs/unit-operations-bio
       - file: docs/unit-operations-ree
       - file: docs/unit-operations-carbon-capture
+      - file: docs/unit-operations-gas
       - file: docs/thermodynamics
       - file: docs/technoeconomics
       - file: docs/streams-and-flowsheets

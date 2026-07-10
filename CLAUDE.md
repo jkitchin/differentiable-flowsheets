@@ -45,8 +45,9 @@ difflow/
 │   │   └── visualization/ # Flowsheet visualization
 │   ├── difflow_bio/       # Bio manufacturing plugin (bioreactors, filtration, chromatography)
 │   ├── difflow_ree/       # Rare earth element solvent extraction plugin
-│   └── difflow_cc/        # Carbon capture plugin (amine, membrane, adsorption)
-├── tests/                 # pytest test files (includes tests/bio/, tests/ree/, tests/cc/)
+│   ├── difflow_cc/        # Carbon capture plugin (amine, membrane, adsorption)
+│   └── difflow_gas/       # Gas transmission network plugin (pipes, compressors, computed decomposition)
+├── tests/                 # pytest test files (includes tests/bio/, tests/ree/, tests/cc/, tests/gas/)
 ├── examples/              # Jupyter notebook examples
 ├── jax-tutorials/         # JAX/autodiff tutorials
 └── docs/                  # Documentation (Markdown)
@@ -186,17 +187,18 @@ result = fs.solve(feed_stream)
 5. Add tests in `tests/test_<unit>.py`
 6. Add example usage in `examples/`
 
-### Adding to a Plugin (bio, ree, cc)
+### Adding to a Plugin (bio, ree, cc, gas)
 
-The project has three domain-specific plugins:
+The project has four domain-specific plugins:
 - **difflow_bio**: Bio manufacturing (bioreactors, filtration, chromatography)
 - **difflow_ree**: Rare earth element solvent extraction
 - **difflow_cc**: Carbon capture (amine absorption, membrane, adsorption)
+- **difflow_gas**: Gas transmission networks (pipes, compressors, valves, topology-driven sequential decomposition)
 
-1. Add to appropriate plugin directory (`src/difflow_bio/`, `src/difflow_ree/`, or `src/difflow_cc/`)
+1. Add to appropriate plugin directory (`src/difflow_bio/`, `src/difflow_ree/`, `src/difflow_cc/`, or `src/difflow_gas/`)
 2. Create a Params dataclass inheriting from `ParamsMixin`
 3. Export in plugin's `__init__.py` and add to `__all__`
-4. Add tests in `tests/bio/`, `tests/ree/`, or `tests/cc/`
+4. Add tests in `tests/bio/`, `tests/ree/`, `tests/cc/`, or `tests/gas/`
 5. Register in the plugin's `register()` function for plugin discovery
 6. Add documentation in `docs/unit-operations-*.md`
 
@@ -245,6 +247,15 @@ class MyUnit:
 - CO2 compression: `CompressionTrain`, `Pump`
 - Economics: CAPEX/OPEX estimation, levelized cost of capture
 - Degradation: Amine oxidation, adsorbent capacity fade, membrane aging
+
+**difflow_gas** - Gas transmission networks:
+- Network model: `GasNetwork` (pipes, compressor stations, valves, control valves, resistors, short pipes; signed flows)
+- Decomposition: `decompose` computes the spanning tree, tear set and balance schedule from the topology
+- Units: `GasPipe`, `BackPipe`, `PipePressure`, `PressureDrivenPipe`, `Compressor`, `CompressorBoost`, `OpenValve`, `PressureEqual`, `ControlValveDrop`, `SourceHead`, `AffineFlow`, `Junction`, splits
+- Flowsheets: `GasNetworkFlowsheet` (signed-flow Anderson + damped differentiable tear solve), `build_network_flowsheet`
+- Physics: `weymouth_beta`, `resistor_xi`, `compressor_power`, `smoothed_power_w`, GasLib unit conversions
+- Verification: full equation-oriented residual checks (`difflow_gas.verify`)
+- Gotchas encoded in docs: solve with `clip_negative_flows=False` (signed flows), damp the tear map (alpha ~ 0.3), pose optimization pressure constraints in squared pressure
 
 ### Debugging Gradients
 
