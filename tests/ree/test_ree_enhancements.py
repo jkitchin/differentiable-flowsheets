@@ -214,3 +214,38 @@ class TestThirdPhaseFormation:
         _, _, info = self._run(extractant_flow=0.5)  # little extractant -> high loading
         assert bool(info["third_phase_formed"])
         assert float(info["organic_loading"]) > 0.5
+
+
+class TestDistributionIonicStrength:
+    """Issue #111: Davies ionic-strength correction of D."""
+
+    def _dist(self):
+        from difflow_ree.equilibrium.distribution import REEDistribution
+        return REEDistribution(extractant="D2EHPA", elements=("Nd", "Dy"))
+
+    def test_backward_compat_no_correction(self):
+        d = self._dist()
+        D0 = float(d.get_D("Nd", pH=3.0))
+        D_none = float(d.get_D("Nd", pH=3.0, ionic_strength=None))
+        assert D0 == pytest.approx(D_none, rel=1e-9)
+
+    def test_higher_ionic_strength_lowers_D(self):
+        d = self._dist()
+        D_lo = float(d.get_D("Nd", pH=3.0, ionic_strength=0.01))
+        D_hi = float(d.get_D("Nd", pH=3.0, ionic_strength=0.4))
+        D_ideal = float(d.get_D("Nd", pH=3.0))
+        # Davies gamma < 1 for I>0, decreasing with I
+        assert D_lo < D_ideal
+        assert D_hi < D_lo
+
+    def test_get_D_all_threads_ionic_strength(self):
+        d = self._dist()
+        D_ideal = d.get_D_all(pH=3.0)
+        D_corr = d.get_D_all(pH=3.0, ionic_strength=0.3)
+        for e in ("Nd", "Dy"):
+            assert float(D_corr[e]) < float(D_ideal[e])
+
+    def test_differentiable_through_ionic_strength(self):
+        d = self._dist()
+        g = jax.grad(lambda I: d.get_D("Nd", pH=3.0, ionic_strength=I))(0.1)
+        assert jnp.isfinite(g) and float(g) < 0.0

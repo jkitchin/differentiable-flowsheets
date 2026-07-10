@@ -49,6 +49,7 @@ class REEDistribution:
         element: str,
         pH: Array | float,
         T: Array | float = 298.15,
+        ionic_strength: Array | float | None = None,
     ) -> Array:
         """Calculate distribution coefficient for single element.
 
@@ -56,6 +57,13 @@ class REEDistribution:
             element: REE symbol (e.g., "Nd")
             pH: Solution pH
             T: Temperature (K)
+            ionic_strength: Aqueous ionic strength (M). When provided, the pH
+                correlation (fit at near-ideal dilute conditions) is corrected
+                for non-ideality by the aqueous RE3+ activity coefficient via
+                the Davies equation (#111): D_eff = D * gamma_RE3+(I). Higher
+                ionic strength lowers the RE3+ activity coefficient and thus the
+                effective distribution coefficient. None leaves D uncorrected
+                (constant-ionic-strength assumption, backward compatible).
 
         Returns:
             Distribution coefficient D
@@ -79,23 +87,33 @@ class REEDistribution:
         C_ref = self._ext_data.reference_concentration
         log_D = log_D + n * jnp.log10(self.concentration / C_ref)
 
-        return jnp.power(10.0, log_D)
+        D = jnp.power(10.0, log_D)
+
+        # Ionic-strength (activity) correction via the Davies equation (#111)
+        if ionic_strength is not None:
+            from difflow_ree.equilibrium.speciation import activity_coefficient_davies
+            gamma_RE = activity_coefficient_davies(3, ionic_strength)
+            D = D * gamma_RE
+
+        return D
 
     def get_D_all(
         self,
         pH: Array | float,
         T: Array | float = 298.15,
+        ionic_strength: Array | float | None = None,
     ) -> dict[str, Array]:
         """Calculate distribution coefficients for all elements.
 
         Args:
             pH: Solution pH
             T: Temperature (K)
+            ionic_strength: Aqueous ionic strength (M); see :meth:`get_D`.
 
         Returns:
             Dictionary mapping element symbols to D values
         """
-        return {elem: self.get_D(elem, pH, T) for elem in self.elements}
+        return {elem: self.get_D(elem, pH, T, ionic_strength) for elem in self.elements}
 
     def get_D_array(
         self,
