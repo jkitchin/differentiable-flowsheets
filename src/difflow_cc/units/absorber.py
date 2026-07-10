@@ -72,6 +72,11 @@ class AbsorberParams(ParamsMixin):
     P_absorber: float | Array = 101325.0  # Pa (1 atm)
     stage_efficiency: float | Array = 0.25  # Murphree efficiency
     lean_loading: float | Array = 0.2  # mol CO2/mol amine
+    # Water transfer between phases (#151). When True, the treated gas leaves
+    # saturated with water vapor at the operating temperature (Antoine Psat)
+    # and the evaporated water is removed from the rich solvent, closing the
+    # water balance. Default False keeps the CO2-only model (backward compat).
+    model_water_transfer: bool = False
 
     # Extensibility for rate-based (not used in simplified model)
     column_diameter: float | None = None  # m
@@ -305,12 +310,31 @@ class AmineAbsorber:
             else:
                 gas_out_flows[species] = flow
 
+        # Water evaporation into the treated gas (#151). The treated gas leaves
+        # saturated with water at the operating temperature; the evaporated
+        # water is drawn from the rich solvent so the water balance closes.
+        solvent_H2O = F_liquid * (1 - x_amine)
+        net_water_evaporated = jnp.asarray(0.0)
+        if p.model_water_transfer:
+            # Water saturation pressure via the Antoine equation
+            # (log10 P[mmHg] = 8.07131 - 1730.63/(233.426 + T[C]); NIST/Dean's
+            # Handbook, valid ~1-100 C).
+            T_C = T_op - 273.15
+            P_sat = jnp.power(10.0, 8.07131 - 1730.63 / (233.426 + T_C)) * 133.322  # Pa
+            y_H2O = jnp.clip(P_sat / P_total, 0.0, 0.99)
+            F_dry_out = F_gas_inert + F_CO2_out  # inert + residual CO2
+            F_H2O_gas_out = y_H2O / (1.0 - y_H2O) * F_dry_out
+            F_H2O_gas_in = jnp.asarray(gas_flows.get("H2O", 0.0))
+            net_water_evaporated = F_H2O_gas_out - F_H2O_gas_in
+            gas_out_flows["H2O"] = F_H2O_gas_out
+            solvent_H2O = jnp.maximum(solvent_H2O - net_water_evaporated, 0.0)
+
         gas_out = make_stream(gas_out_flows, T_op, P_total)
 
         # Rich solvent
         # x_amine is the mole fraction of amine in solvent (computed above)
         solvent_out_flows = {
-            "H2O": F_liquid * (1 - x_amine),
+            "H2O": solvent_H2O,
             "Amine": F_amine,
             "CO2_absorbed": F_CO2_absorbed,
         }
@@ -326,6 +350,7 @@ class AmineAbsorber:
             "absorption_factor": A,
             "L_G_ratio": L_G,
             "T_operating": T_op,
+            "net_water_evaporated": net_water_evaporated,
             "C_amine": C_amine,
         }
 
