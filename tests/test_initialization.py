@@ -96,9 +96,31 @@ class TestWegsteinAcceleration:
 
         x_new = wegstein_acceleration(x_prev, x_curr, g_prev, g_curr)
 
-        # Should be closer to 0.5 than direct iteration
         assert x_new.shape == (1,)
         assert jnp.isfinite(x_new).all()
+        # Wegstein is exact for a linear map: one step lands on the root (0.5),
+        # and must be at least as close as plain substitution (g_curr = 0.375).
+        assert float(x_new[0]) == pytest.approx(0.5, abs=1e-6)
+        assert abs(float(x_new[0]) - 0.5) <= abs(float(g_curr[0]) - 0.5)
+
+    def test_wegstein_converges_positive_slope_contraction(self):
+        """Iterating Wegstein converges for a 0 < s < 1 contraction (#164).
+
+        Regression guard: the update previously swapped its weights, giving an
+        effective slope of 1 + s that diverged for exactly this common case.
+        """
+        # g(x) = 0.5 * x + 1  ->  fixed point x* = 2.0
+        def g(x):
+            return 0.5 * x + 1.0
+
+        x_prev = jnp.array([0.0])
+        g_prev = g(x_prev)
+        x_curr = g_prev
+        for _ in range(20):
+            g_curr = g(x_curr)
+            x_next = wegstein_acceleration(x_prev, x_curr, g_prev, g_curr)
+            x_prev, g_prev, x_curr = x_curr, g_curr, x_next
+        assert float(x_curr[0]) == pytest.approx(2.0, abs=1e-6)
 
     def test_wegstein_bounds(self):
         """Test that Wegstein respects acceleration bounds."""
@@ -451,15 +473,10 @@ class TestSignedFlowTears:
         assert get_flows(streams["source"])["X"] == pytest.approx(-2.0, abs=1e-6)
 
     def test_wegstein_reaches_negative_tear_when_signed(self):
-        """signed_flows=True lets Wegstein move into the negative flow region.
-
-        (This Wegstein implementation under-relaxes conservatively, so it lands
-        near -2 rather than exactly on it; the point is that the clip no longer
-        traps the iterate at zero.)
-        """
+        """signed_flows=True lets Wegstein converge to the negative fixed point."""
         fs = self._signed_flowsheet(signed_flows=True)
-        streams = fs.solve(acceleration="wegstein", max_iter=100, tol=1e-8)
-        assert get_flows(streams["source"])["X"] == pytest.approx(-2.0, abs=0.5)
+        streams = fs.solve(acceleration="wegstein", max_iter=100, tol=1e-10)
+        assert get_flows(streams["source"])["X"] == pytest.approx(-2.0, abs=1e-6)
 
     def test_none_path_reaches_negative_tear(self):
         """The un-accelerated path never clipped and reaches the true root."""

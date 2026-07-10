@@ -73,8 +73,15 @@ def wegstein_acceleration(
     Wegstein's method accelerates convergence by estimating the optimal
     relaxation factor from the previous two iterations.
 
-    The update is: x_new = x_curr + q * (g_curr - x_curr)
-    where q = s / (s - 1) and s = (g_curr - g_prev) / (x_curr - x_prev)
+    The update is: x_new = q * x_curr + (1 - q) * g_curr
+    where q = s / (s - 1) and s = (g_curr - g_prev) / (x_curr - x_prev).
+
+    ``q`` is the weight on the *old* iterate ``x_curr``; ``(1 - q)`` weights
+    the direct-substitution value ``g_curr``. For a linear ``g`` this cancels
+    the fixed-point map's slope exactly, so the update lands on the solution in
+    a single step. (Writing it as ``x_curr + q * (g_curr - x_curr)`` instead
+    swaps the two weights and makes the effective slope ``1 + s``, which
+    diverges for the common ``0 < s < 1`` contraction.)
 
     Args:
         x_prev: Previous iterate
@@ -96,17 +103,17 @@ def wegstein_acceleration(
     # Wegstein parameter: s = dg/dx
     s = dg / dx_safe
 
-    # Acceleration factor: q = s / (s - 1)
-    # For s < 1: q < 0 (under-relaxation)
-    # For s > 1: q > 1 (over-relaxation, can be unstable)
+    # Acceleration factor: q = s / (s - 1), the weight on the old iterate.
+    # For 0 < s < 1: q < 0 (extrapolation past g_curr)
+    # For s < 0: q in (0, 1) (damped toward x_curr)
     q = safe_divide(s, s - 1)
 
     # Clip to bounds for stability
     q_min, q_max = bounds
     q = jnp.clip(q, q_min, q_max)
 
-    # Accelerated update
-    x_new = x_curr + q * (g_curr - x_curr)
+    # Accelerated update: weight q on x_curr, (1 - q) on g_curr.
+    x_new = q * x_curr + (1 - q) * g_curr
 
     return x_new
 
