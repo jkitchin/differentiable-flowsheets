@@ -25,6 +25,12 @@ from difflow_gas.physics import (
 )
 from difflow_gas.streams import FLOW_KEY, gas_stream
 
+#: shared literature references for the compressor units
+_COMPRESSOR_REFS = [
+    "Koch, T. et al., Evaluating Gas Network Capacities, MOS-SIAM Series on Optimization (2015).",
+    "Menon, E.S., Gas Pipeline Hydraulics, CRC Press (2005).",
+]
+
 
 @dataclass
 class CompressorParams(ParamsMixin):
@@ -50,6 +56,13 @@ class Compressor:
     is boosted by the ratio.
     """
 
+    symbol = "Compressor"
+    equations = [
+        r"p_\mathrm{out} = r\,p_\mathrm{in}",
+        r"P = q\,c_p\,T_\mathrm{in}\,(r^{(\kappa-1)/\kappa} - 1)/\eta_\mathrm{ad}",
+    ]
+    references = _COMPRESSOR_REFS
+
     def __init__(self, ratio: float, **kwargs):
         self.params = CompressorParams(ratio=ratio, **kwargs)
 
@@ -67,6 +80,10 @@ class CompressorBoost:
     station inlet, ``P_child = P_parent / ratio``. The output stream
     carries the arc flow at the child node pressure.
     """
+
+    symbol = "Compressor (tree)"
+    equations = [r"p_\mathrm{child} = r^{\pm 1}\,p_\mathrm{parent}"]
+    references = _COMPRESSOR_REFS
 
     def __init__(self, ratio: float, direction: int, **kwargs):
         if direction not in (+1, -1):

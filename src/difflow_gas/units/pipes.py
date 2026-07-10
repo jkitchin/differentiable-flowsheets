@@ -42,6 +42,12 @@ from difflow_gas.streams import FLOW_KEY, gas_stream
 #: floor for squared pressure during tear iteration, (0.5 bar)^2 in Pa^2
 MIN_P_SQUARED = (0.5e5) ** 2
 
+#: shared literature references for the Weymouth pipe units
+_PIPE_REFS = [
+    "Koch, T. et al., Evaluating Gas Network Capacities, MOS-SIAM Series on Optimization (2015).",
+    "Weymouth, T.R., Trans. ASME 34, 185 (1912).",
+]
+
 
 @dataclass
 class PipeParams(ParamsMixin):
@@ -63,6 +69,10 @@ class GasPipe:
     stream's (signed) flow is carried through unchanged.
     """
 
+    symbol = "Pipe →"
+    equations = [r"p_\mathrm{out} = \sqrt{p_\mathrm{in}^2 - \beta\,q\,|q|}"]
+    references = _PIPE_REFS
+
     def __init__(self, beta: float, min_p_squared: float = MIN_P_SQUARED):
         self.params = PipeParams(beta=beta)
         self.min_p_squared = min_p_squared
@@ -83,6 +93,10 @@ class BackPipe:
     ``p_src = sqrt(p_node^2 + beta q |q|)``.
     """
 
+    symbol = "Pipe ←"
+    equations = [r"p_\mathrm{src} = \sqrt{p_\mathrm{node}^2 + \beta\,q\,|q|}"]
+    references = _PIPE_REFS
+
     def __init__(self, beta: float):
         self.params = PipeParams(beta=beta)
 
@@ -101,6 +115,10 @@ class PipePressure:
     the arc: ``p_child^2 = p_parent^2 + beta q |q|``. The output
     stream carries the arc flow at the child node pressure.
     """
+
+    symbol = "Pipe (tree)"
+    equations = [r"p_\mathrm{child}^2 = p_\mathrm{parent}^2 \mp \beta\,q\,|q|"]
+    references = _PIPE_REFS
 
     def __init__(self, beta: float, direction: int,
                  min_p_squared: float = MIN_P_SQUARED):
@@ -127,6 +145,13 @@ class PressureDrivenPipe:
     updates. The outlet stream carries the computed signed flow at the
     downstream node pressure.
     """
+
+    symbol = "Pipe (chord)"
+    equations = [
+        r"q = \operatorname{sign}(\Delta p^2)\,\sqrt{|\Delta p^2|/\beta},"
+        r"\quad \Delta p^2 = p_\mathrm{from}^2 - p_\mathrm{to}^2"
+    ]
+    references = _PIPE_REFS
 
     def __init__(self, beta: float):
         self.params = PipeParams(beta=beta)

@@ -28,9 +28,18 @@ from difflow_gas.streams import FLOW_KEY, gas_stream
 #: units' MIN_P_SQUARED floor of (0.5 bar)^2
 MIN_P = 0.5e5
 
+#: shared literature reference for the valve units
+_VALVE_REFS = [
+    "Koch, T. et al., Evaluating Gas Network Capacities, MOS-SIAM Series on Optimization (2015).",
+]
+
 
 class OpenValve:
     """Open valve in forward mode: no pressure loss (p_out = p_in)."""
+
+    symbol = "Valve (open)"
+    equations = [r"p_\mathrm{out} = p_\mathrm{in}"]
+    references = _VALVE_REFS
 
     def __call__(self, inlet: Stream) -> Stream:
         return gas_stream(inlet[FLOW_KEY], inlet["T"], inlet["P"])
@@ -42,6 +51,10 @@ class PressureEqual:
     The child node sees the parent pressure unchanged (in either
     traversal direction); the output stream carries the arc flow.
     """
+
+    symbol = "Valve (tree)"
+    equations = [r"p_\mathrm{child} = p_\mathrm{parent}"]
+    references = _VALVE_REFS
 
     def __call__(self, parent: Stream, flow: Stream) -> Stream:
         return gas_stream(flow[FLOW_KEY], parent["T"], parent["P"])
@@ -69,6 +82,10 @@ class ControlValveDrop:
     at :data:`MIN_P` so unphysical parameter/state combinations during
     iteration cannot produce nonpositive pressures.
     """
+
+    symbol = "Control valve"
+    equations = [r"p_\mathrm{child} = p_\mathrm{parent} \mp \Delta p"]
+    references = _VALVE_REFS
 
     def __init__(self, dp_pa: float = 0.0, direction: int = +1):
         if direction not in (+1, -1):

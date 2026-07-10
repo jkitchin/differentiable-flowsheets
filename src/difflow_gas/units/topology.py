@@ -16,6 +16,11 @@ from difflow.streams import Stream
 
 from difflow_gas.streams import FLOW_KEY, gas_stream
 
+#: shared literature reference for the topology / balance units
+_TOPOLOGY_REFS = [
+    "Koch, T. et al., Evaluating Gas Network Capacities, MOS-SIAM Series on Optimization (2015).",
+]
+
 
 @dataclass
 class SourceHeadParams(ParamsMixin):
@@ -36,6 +41,10 @@ class SourceHead:
     than baking it into the feed) keeps it differentiable through
     ``Flowsheet._apply_params``.
     """
+
+    symbol = "Source"
+    equations = [r"p = p_\mathrm{set}"]
+    references = _TOPOLOGY_REFS
 
     def __init__(self, P_set: float):
         self.params = SourceHeadParams(P_set=P_set)
@@ -63,6 +72,10 @@ class AffineFlow:
     :class:`difflow_gas.network.BalanceSpec`). T and P on the output
     are placeholders: flow streams only carry flow.
     """
+
+    symbol = "Flow balance"
+    equations = [r"q = c + \textstyle\sum_i s_i\,q_i"]
+    references = _TOPOLOGY_REFS
 
     def __init__(self, const: float, signs: tuple[float, ...],
                  T_k: float, P_pa: float):
@@ -102,6 +115,10 @@ class FlowSplit:
     split is explicit.
     """
 
+    symbol = "Split (fixed)"
+    equations = [r"q_1 = w,\quad q_2 = q_\mathrm{in} - w"]
+    references = _TOPOLOGY_REFS
+
     def __init__(self, w: float):
         self.params = FlowSplitParams(w=w)
 
@@ -119,6 +136,10 @@ class TearSplit:
     both leave at the node's T and P. This is the entry point of a
     hand-built recycle that resolves a network loop.
     """
+
+    symbol = "Split (tear)"
+    equations = [r"q_1 = q_\mathrm{tear},\quad q_2 = q_\mathrm{in} - q_\mathrm{tear}"]
+    references = _TOPOLOGY_REFS
 
     def __call__(self, inlet: Stream, spec: Stream) -> tuple[Stream, Stream]:
         w = spec[FLOW_KEY]
@@ -138,6 +159,10 @@ class Junction:
     is the flow-weighted mean.
     """
 
+    symbol = "Junction"
+    equations = [r"q = \textstyle\sum_i q_i,\quad p = p_\mathrm{ref}"]
+    references = _TOPOLOGY_REFS
+
     def __call__(self, *inlets: Stream) -> Stream:
         q_tot = sum(s[FLOW_KEY] for s in inlets)
         T = sum(s[FLOW_KEY] * s["T"] for s in inlets) / (q_tot + 1e-30)
@@ -149,6 +174,10 @@ class FlowMinus:
 
     Tear-update bookkeeping for hand-built decompositions.
     """
+
+    symbol = "Flow −"
+    equations = [r"q = q_a - q_b"]
+    references = _TOPOLOGY_REFS
 
     def __call__(self, a: Stream, b: Stream) -> Stream:
         return gas_stream(a[FLOW_KEY] - b[FLOW_KEY], a["T"], a["P"])
