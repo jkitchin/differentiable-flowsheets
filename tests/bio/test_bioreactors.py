@@ -227,3 +227,52 @@ class TestFedBatchBioreactor:
         # Gradient should be positive (more initial cells = more product)
         # Note: At t=10h substrate depletes, making gradient ~0. Use t=5h.
         assert float(grad_X0) > 0
+
+
+class TestFedBatchOxygenCoupling:
+    """Issue #101: fed-batch growth coupled to oxygen transfer (OTR)."""
+
+    def _params(self, kLa=None):
+        return FedBatchParams(
+            V0=jnp.array(5.0),
+            Y_xs=jnp.array(0.5),
+            kinetic_fn=monod_kinetics,
+            kinetic_params={"mu_max": jnp.array(0.4), "K_s": jnp.array(0.5)},
+            kLa=kLa,
+            Y_xo=jnp.array(1.0),
+        )
+
+    def test_backward_compat_no_oxygen(self):
+        """Without kLa, no O2 state or diagnostics (4-state model)."""
+        fb = FedBatchBioreactor(self._params(kLa=None))
+        _, info = fb(X0=0.5, S0=20.0, P0=0.0, t_final=10.0, n_steps=50)
+        assert "C_O2" not in info
+        assert float(info["X_final"]) > 0.5
+
+    def test_oxygen_tracked_and_reported(self):
+        fb = FedBatchBioreactor(self._params(kLa=200.0))
+        _, info = fb(X0=0.5, S0=20.0, P0=0.0, t_final=10.0, n_steps=50)
+        assert "C_O2" in info and "OTR" in info
+        # DO stays between 0 and saturation
+        assert float(jnp.min(info["C_O2"])) >= 0.0
+        assert float(info["C_O2"][0]) == pytest.approx(7.0e-3, rel=1e-3)
+
+    def test_low_kla_limits_growth(self):
+        """Poor oxygen transfer (low kLa) should reduce biomass vs high kLa."""
+        fb_high = FedBatchBioreactor(self._params(kLa=500.0))
+        fb_low = FedBatchBioreactor(self._params(kLa=5.0))
+        _, hi = fb_high(X0=0.5, S0=50.0, P0=0.0, t_final=15.0, n_steps=100)
+        _, lo = fb_low(X0=0.5, S0=50.0, P0=0.0, t_final=15.0, n_steps=100)
+        # Oxygen-limited culture accumulates less biomass
+        assert float(lo["X_final"]) < float(hi["X_final"])
+        # And runs at a lower dissolved-O2 / limitation factor
+        assert float(jnp.min(lo["o2_limitation"])) < float(jnp.min(hi["o2_limitation"]))
+
+    def test_oxygen_differentiable_through_kla(self):
+        def final_cells(kla):
+            fb = FedBatchBioreactor(self._params(kLa=kla))
+            _, info = fb(X0=0.5, S0=50.0, P0=0.0, t_final=8.0, n_steps=50, solver="rk4")
+            return info["X_final"]
+        g = jax.grad(final_cells)(20.0)
+        assert jnp.isfinite(g)
+        assert float(g) > 0.0  # more O2 transfer -> more growth

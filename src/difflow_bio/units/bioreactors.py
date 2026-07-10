@@ -493,6 +493,21 @@ class FedBatchParams(ParamsMixin):
     alpha: float | Array = 0.0
     beta: float | Array = 0.0
     species_order: list[str] = field(default_factory=lambda: ["cells", "substrate", "product"])
+    # Oxygen transfer coupling (#101). When kLa is set, a dissolved-O2 balance
+    # dC_O2/dt = kLa*(C* - C_O2) - OUR is added and growth is limited by O2
+    # through a Monod factor C_O2/(K_O2 + C_O2), so a feed rate that outstrips
+    # the oxygen transfer capacity drives the culture O2-limited. Defaults
+    # (kLa=None) disable the balance (backward compatible).
+    kLa: float | Array | None = None  # Volumetric O2 mass-transfer coeff (1/h)
+    Y_xo: float | Array = 1.0  # Biomass yield on O2 (g cells/g O2); Doran 2013, Ch. 11
+    m_o: float | Array = 0.0  # Maintenance O2 coeff (g O2/g cells/h)
+    # Saturation dissolved O2 for air-water ~7 mg/L at 35 C
+    # (Doran, Bioprocess Engineering Principles, 2e, 2013, Table 9.2).
+    C_O2_star: float | Array = 7.0e-3  # g/L
+    # Critical/half-saturation DO for aerobic growth ~0.1 mg/L
+    # (Bailey & Ollis, Biochemical Engineering Fundamentals, 2e, 1986, Ch. 8).
+    K_O2: float | Array = 1.0e-4  # g/L
+    C_O2_0: float | Array | None = None  # Initial DO (g/L); default = C_O2_star
     _kinetic_arity: int = field(default=-1, repr=False)
 
     def __post_init__(self):
@@ -611,12 +626,20 @@ class FedBatchBioreactor:
         dt = t_final / n_steps
         t_array = jnp.linspace(0, t_final, n_steps + 1)
 
-        # Initial state: [V, VX, VS, VP]
+        # Oxygen transfer coupling (#101): add a dissolved-O2 state when kLa set
+        oxygen_active = p.kLa is not None
+
+        # Initial state: [V, VX, VS, VP] (+ VO2 when oxygen tracking is on)
         V0 = jnp.asarray(p.V0)
         VX0 = V0 * jnp.asarray(X0)
         VS0 = V0 * jnp.asarray(S0)
         VP0 = V0 * jnp.asarray(P0)
-        y0 = jnp.array([V0, VX0, VS0, VP0])
+        if oxygen_active:
+            C_O2_0 = p.C_O2_star if p.C_O2_0 is None else p.C_O2_0
+            VO2_0 = V0 * jnp.asarray(C_O2_0)
+            y0 = jnp.array([V0, VX0, VS0, VP0, VO2_0])
+        else:
+            y0 = jnp.array([V0, VX0, VS0, VP0])
 
         # Capture parameters
         kinetic_fn = p.kinetic_fn
@@ -628,6 +651,11 @@ class FedBatchBioreactor:
         alpha = jnp.asarray(p.alpha)
         beta = jnp.asarray(p.beta)
         S_f = jnp.asarray(S_feed)
+        kLa = jnp.asarray(p.kLa) if oxygen_active else None
+        Y_xo = jnp.asarray(p.Y_xo)
+        m_o = jnp.asarray(p.m_o)
+        C_O2_star = jnp.asarray(p.C_O2_star)
+        K_O2 = jnp.asarray(p.K_O2)
 
         def rhs(y, t):
             """Right-hand side of ODEs."""
@@ -648,12 +676,23 @@ class FedBatchBioreactor:
             # Feed rate
             F = feed_rate_fn(t)
 
-            # ODEs in extensive form
+            if oxygen_active:
+                # Dissolved O2 concentration and O2-limitation of growth
+                C_O2 = jnp.maximum(y[4] / jnp.maximum(V, MIN_CONC), 0.0)
+                o2_factor = C_O2 / (K_O2 + C_O2)
+                mu = mu * o2_factor
+                # Oxygen uptake (growth + maintenance) and transfer
+                OUR = (mu / Y_xo + m_o) * X            # g O2/L/h
+                OTR = kLa * (C_O2_star - C_O2)          # g O2/L/h
+                dVO2_dt = V * (OTR - OUR)               # feed O2 ~ 0
+
             dV_dt = F
             dVX_dt = mu * V * X - k_d * V * X
             dVS_dt = F * S_f - mu * V * X / Y_xs - m_s * V * X
             dVP_dt = (alpha * mu + beta) * V * X
 
+            if oxygen_active:
+                return jnp.array([dV_dt, dVX_dt, dVS_dt, dVP_dt, dVO2_dt])
             return jnp.array([dV_dt, dVX_dt, dVS_dt, dVP_dt])
 
         # Choose integration method
@@ -753,6 +792,15 @@ class FedBatchBioreactor:
             "P_final": P_final,
             "solver": solver_used,
         }
+
+        # Dissolved-O2 diagnostics (#101)
+        if oxygen_active:
+            C_O2_profile = y_all[:, 4] / jnp.maximum(V_profile, 1e-10)
+            info["C_O2"] = C_O2_profile
+            info["C_O2_final"] = y_final[4] / jnp.maximum(V_final, MIN_CONC)
+            # O2 limitation factor along the trajectory
+            info["o2_limitation"] = C_O2_profile / (K_O2 + C_O2_profile)
+            info["OTR"] = kLa * (C_O2_star - C_O2_profile)
 
         return outlet, info
 
