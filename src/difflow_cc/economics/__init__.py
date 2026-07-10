@@ -19,6 +19,9 @@ from difflow_cc.economics.capex import (
     total_equipment_cost,
     installed_cost,
     CapexParams,
+    SCALING_EXPONENTS,
+    VALID_EXPONENT_RANGE,
+    validate_scaling_exponent,
 )
 
 from difflow_cc.economics.opex import (
@@ -55,6 +58,9 @@ __all__ = [
     "total_equipment_cost",
     "installed_cost",
     "CapexParams",
+    "SCALING_EXPONENTS",
+    "VALID_EXPONENT_RANGE",
+    "validate_scaling_exponent",
     # OPEX
     "steam_cost",
     "electricity_cost",

@@ -25,6 +25,9 @@ __all__ = [
     "total_equipment_cost",
     "installed_cost",
     "CapexParams",
+    "SCALING_EXPONENTS",
+    "VALID_EXPONENT_RANGE",
+    "validate_scaling_exponent",
 ]
 
 from dataclasses import dataclass
@@ -39,6 +42,61 @@ from jax import Array
 CEPCI_2020 = 596.2
 CEPCI_2015 = 556.8
 CEPCI_2010 = 550.8
+
+
+# Type-specific power-law scaling exponents used by the correlations below.
+# These are equipment-specific (not a single six-tenths default) and follow
+# Towler & Sinnott, Chemical Engineering Design, 2e, 2013 (Table 7.2) and
+# Rubin et al., Int. J. Greenh. Gas Control 40, 378 (2015). Exposed so callers
+# can validate them, mirroring difflow.economics.capital.validate_cost_params.
+SCALING_EXPONENTS = {
+    "absorber": 0.85,            # column shell vs. surface area
+    "stripper_reboiler": 0.65,   # kettle reboiler vs. area
+    "stripper_condenser": 0.65,  # shell-and-tube condenser vs. area
+    "heat_exchanger_shell_tube": 0.68,
+    "heat_exchanger_plate": 0.60,
+    "compressor": 0.82,          # centrifugal compressor vs. power
+    "membrane_module": 1.0,      # linear in area (modular)
+    "adsorber_vessel": 0.62,
+    "blower": 0.6,
+}
+
+# Typical valid range for equipment cost-scaling exponents (matches the core
+# economics module, difflow.economics.capital.VALID_EXPONENT_RANGE).
+VALID_EXPONENT_RANGE = (0.3, 1.2)
+
+
+def validate_scaling_exponent(equipment_type: str) -> dict:
+    """Validate the power-law scaling exponent for an equipment type.
+
+    Analogue of ``difflow.economics.capital.validate_cost_params`` for the
+    carbon-capture CAPEX correlations, which embed type-specific exponents
+    rather than a single six-tenths default.
+
+    Args:
+        equipment_type: Key into :data:`SCALING_EXPONENTS` (e.g. ``"compressor"``,
+            ``"heat_exchanger_shell_tube"``).
+
+    Returns:
+        Dict with ``equipment_type``, ``exponent``, ``exponent_valid`` (whether
+        the exponent is within :data:`VALID_EXPONENT_RANGE`), and
+        ``valid_range``.
+
+    Raises:
+        KeyError: If ``equipment_type`` is not a known correlation.
+    """
+    if equipment_type not in SCALING_EXPONENTS:
+        raise KeyError(
+            f"Unknown equipment_type {equipment_type!r}. "
+            f"Available: {sorted(SCALING_EXPONENTS)}"
+        )
+    n = SCALING_EXPONENTS[equipment_type]
+    return {
+        "equipment_type": equipment_type,
+        "exponent": n,
+        "exponent_valid": VALID_EXPONENT_RANGE[0] <= n <= VALID_EXPONENT_RANGE[1],
+        "valid_range": VALID_EXPONENT_RANGE,
+    }
 
 
 @dataclass(repr=False)
