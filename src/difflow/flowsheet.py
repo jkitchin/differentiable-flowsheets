@@ -97,6 +97,9 @@ class Flowsheet:
         self.feeds: dict[str, Stream] = {}
         self.recycles: dict[str, str] = {}  # {source_name: dest_name}
         self._stream_cache: dict[str, Stream] = {}
+        #: tear iterations used by the last accelerated solve (Wegstein
+        #: or Anderson); equals max_iter if it did not converge
+        self.last_solve_iterations: int | None = None
 
     def add_feed(self, name: str, stream: Stream) -> None:
         """Add a feed stream to the flowsheet.
@@ -140,6 +143,7 @@ class Flowsheet:
         acceleration: Literal["none", "wegstein", "anderson"] = "anderson",
         anderson_depth: int = 5,
         use_initialization: bool = True,
+        clip_negative_flows: bool = True,
     ) -> dict[str, Stream]:
         """Solve the flowsheet.
 
@@ -167,6 +171,15 @@ class Flowsheet:
             anderson_depth: History depth for Anderson acceleration (default 5)
             use_initialization: If True and units support it, use their
                                initialize() methods for better initial guesses
+            clip_negative_flows: If True (default), the accelerated
+                iterations (Wegstein, Anderson) project the tear-stream
+                flows onto [0, inf) after each step. This is a safeguard
+                for molar flows in chemical flowsheets, but it must be
+                disabled for flowsheets whose tear flows are signed
+                (e.g. bidirectional flows in gas transmission networks),
+                where a negative fixed point is legitimate and clipping
+                prevents convergence. Only flow entries are clipped;
+                temperature and pressure are never touched.
 
         Returns:
             Dictionary of all streams in the flowsheet
@@ -192,11 +205,31 @@ class Flowsheet:
         if acceleration == "none":
             return self._solve_with_recycle_damped(tear_streams, tol, max_iter, damping)
         elif acceleration == "wegstein":
-            return self._solve_with_wegstein(tear_streams, tol, max_iter)
+            return self._solve_with_wegstein(
+                tear_streams, tol, max_iter,
+                clip_negative_flows=clip_negative_flows,
+            )
         elif acceleration == "anderson":
-            return self._solve_with_anderson(tear_streams, tol, max_iter, anderson_depth)
+            return self._solve_with_anderson(
+                tear_streams, tol, max_iter, anderson_depth,
+                clip_negative_flows=clip_negative_flows,
+            )
         else:
             raise ValueError(f"Unknown acceleration method: {acceleration}")
+
+    def _tear_flow_mask(self, n_streams: int) -> Array:
+        """Boolean mask marking the flow entries of a packed tear array.
+
+        The packed layout (see ``_streams_to_array``) is, per stream,
+        ``[F_species..., T, P]``. Flow clipping must only ever touch the
+        flow entries, so the accelerated solvers use this mask.
+        """
+        per_stream = [True] * len(self.species_order) + [False, False]
+        return jnp.array(per_stream * n_streams)
+
+    def _clip_flows(self, x: Array, mask: Array) -> Array:
+        """Project the flow entries of a packed tear array onto [0, inf)."""
+        return jnp.where(mask, jnp.clip(x, 0.0, None), x)
 
     def _initialize_tear_stream(self, stream_name: str) -> Stream:
         """Get initial guess for a tear stream from unit initialization.
@@ -378,6 +411,7 @@ class Flowsheet:
         tear_initial: dict[str, Stream],
         tol: float,
         max_iter: int,
+        clip_negative_flows: bool = True,
     ) -> dict[str, Stream]:
         """Solve flowsheet with Wegstein acceleration.
 
@@ -388,14 +422,18 @@ class Flowsheet:
             tear_initial: Initial tear stream values
             tol: Convergence tolerance
             max_iter: Maximum iterations
+            clip_negative_flows: Project tear flows onto [0, inf) after
+                each accelerated step; disable for signed flows.
 
         Returns:
             Dictionary of all streams in the flowsheet
         """
         tear_names = list(tear_initial.keys())
+        flow_mask = self._tear_flow_mask(len(tear_names))
 
         # Initial arrays
         x_prev = self._streams_to_array(tear_initial)
+        self.last_solve_iterations = max_iter
         x_old = None
         g_prev = None
 
@@ -411,6 +449,7 @@ class Flowsheet:
             # Check convergence
             residual = jnp.max(jnp.abs(g_curr - x_prev))
             if float(residual) < tol:
+                self.last_solve_iterations = iteration
                 break
 
             if g_prev is None:
@@ -419,7 +458,8 @@ class Flowsheet:
             else:
                 # Apply Wegstein acceleration
                 x_curr = wegstein_acceleration(x_old, x_prev, g_prev, g_curr)
-                x_curr = jnp.clip(x_curr, 0.0, None)  # Ensure non-negative flows
+                if clip_negative_flows:
+                    x_curr = self._clip_flows(x_curr, flow_mask)
 
             # Update history
             g_prev = g_curr
@@ -447,6 +487,7 @@ class Flowsheet:
         tol: float,
         max_iter: int,
         depth: int = 5,
+        clip_negative_flows: bool = True,
     ) -> dict[str, Stream]:
         """Solve flowsheet with Anderson acceleration.
 
@@ -459,15 +500,19 @@ class Flowsheet:
             tol: Convergence tolerance
             max_iter: Maximum iterations
             depth: History depth for Anderson acceleration
+            clip_negative_flows: Project tear flows onto [0, inf) after
+                each accelerated step; disable for signed flows.
 
         Returns:
             Dictionary of all streams in the flowsheet
         """
         tear_names = list(tear_initial.keys())
+        flow_mask = self._tear_flow_mask(len(tear_names))
         accelerator = AndersonAccelerator(m=depth)
 
         x_curr = self._streams_to_array(tear_initial)
 
+        self.last_solve_iterations = max_iter
         for iteration in range(max_iter):
             # Run iteration
             tear_streams = self._array_to_streams(x_curr, tear_names)
@@ -481,11 +526,13 @@ class Flowsheet:
             # Check convergence
             residual = jnp.max(jnp.abs(g_curr - x_curr))
             if float(residual) < tol:
+                self.last_solve_iterations = iteration
                 break
 
             # Apply Anderson acceleration
             x_next = accelerator.step(x_curr, g_curr)
-            x_next = jnp.clip(x_next, 0.0, None)  # Ensure non-negative flows
+            if clip_negative_flows:
+                x_next = self._clip_flows(x_next, flow_mask)
             x_curr = x_next
 
         # Final solve with converged tear streams
