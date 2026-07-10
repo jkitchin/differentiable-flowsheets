@@ -1,0 +1,9 @@
+#+title: Differentiable flowsheets
+
+* TODO Review difflow
+DEADLINE: <2026-07-20 Mon +1w>
+
+https://github.com/jkitchin/differentiable-flowsheets
+
+* Issues
+
