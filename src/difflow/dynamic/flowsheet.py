@@ -75,6 +75,9 @@ from difflow.dynamic.integrators import (
     Trajectory,
     IntegrationInfo,
     Method,
+    EventSpec,
+    EventResult,
+    detect_events,
 )
 
 
@@ -142,6 +145,7 @@ class DynamicFlowsheetResult:
     trajectory: Trajectory
     info: IntegrationInfo
     flowsheet: "DynamicFlowsheet"
+    events: list = field(default_factory=list)
 
     def unit_trajectory(self, unit_name: str) -> Trajectory:
         """Get trajectory for a specific unit.
@@ -552,6 +556,7 @@ class DynamicFlowsheet:
         y0: Array | None = None,
         method: Method = "RK4",
         params: Params | None = None,
+        events: list[EventSpec] | None = None,
         **kwargs,
     ) -> DynamicFlowsheetResult:
         """Simulate the flowsheet over time.
@@ -563,6 +568,12 @@ class DynamicFlowsheet:
             y0: Initial state (uses automatic initialization if None)
             method: Integration method ("RK4", "RK45", "Euler")
             params: Optional parameters to pass to units
+            events: Optional list of :class:`EventSpec` describing state
+                events to detect (e.g. tank overflow, phase change, a
+                threshold crossing). After integration the trajectory is
+                scanned for zero crossings of each event's condition and the
+                detected crossings are returned on
+                ``DynamicFlowsheetResult.events`` (#130).
             **kwargs: Additional arguments for the integrator
 
         Returns:
@@ -580,11 +591,15 @@ class DynamicFlowsheet:
         # Integrate
         result = integrate(f, y0, t_span, method, **kwargs)
 
+        # Post-hoc event detection over the trajectory (#130)
+        detected_events = detect_events(result, events) if events else []
+
         return DynamicFlowsheetResult(
             y_final=result.y_final,
             trajectory=result.trajectory,
             info=result.info,
             flowsheet=self,
+            events=detected_events,
         )
 
     def steady_state(
