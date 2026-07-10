@@ -28,6 +28,8 @@ from difflow_bio.degradation.stability import (
     aggregation_rate,
     aggregation_arrhenius,
     aggregate_fraction,
+    stretched_exponential_fraction,
+    lumry_eyring_fraction,
     # Deamidation
     deamidation_rate,
     deamidation_ph_dependent,
