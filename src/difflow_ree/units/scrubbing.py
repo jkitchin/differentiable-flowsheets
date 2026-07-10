@@ -21,6 +21,7 @@ from difflow.numerics import safe_divide
 from difflow.params_mixin import ParamsMixin
 from difflow.streams import Stream, make_stream, get_flows
 from difflow_ree.equilibrium.distribution import REEDistribution
+from difflow_ree.units.stripping import acid_consumption
 
 
 @dataclass(repr=False)
@@ -175,6 +176,24 @@ class REEScrubber:
                 "is_target": elem in p.target_elements,
             }
 
+        # Acid (H+) consumption (#115). The reverse extraction that moves REE
+        # from organic to the scrub liquor consumes 3 H+ per mole REE:
+        #   RE(A)3(org) + 3 H+ -> RE3+(aq) + 3 HA(org)
+        # Track the H+ balance and the resulting scrub-liquor pH so acid make-up
+        # / recycle can be sized.
+        ree_scrubbed_total = jnp.asarray(0.0)
+        for elem in p.elements:
+            moved = jnp.asarray(org_flows.get(elem, 0.0)) - scrubbed_org_flows[elem]
+            ree_scrubbed_total = ree_scrubbed_total + jnp.maximum(moved, 0.0)
+        acid_consumed = acid_consumption(ree_scrubbed_total, stoichiometry=3)
+        # H+ supplied by the scrub solution at its pH ([H+] = 10^-pH), over the
+        # scrub volumetric flow (F_scrub used as the aqueous flow basis).
+        h_plus_supplied = jnp.power(10.0, -pH) * F_scrub
+        h_plus_remaining = jnp.maximum(h_plus_supplied - acid_consumed, 0.0)
+        pH_final = -jnp.log10(
+            jnp.maximum(h_plus_remaining, 1e-30) / jnp.maximum(F_scrub, 1e-30)
+        )
+
         P = loaded_organic["P"]
         scrub_liquor = make_stream(scrub_liquor_flows, T, P)
         scrubbed_organic = make_stream(scrubbed_org_flows, T, P)
@@ -196,6 +215,12 @@ class REEScrubber:
             "scrub_efficiency": scrub_efficiency,
             "target_retained": target_retained,
             "impurity_removed": impurity_removed,
+            # Acid balance (#115)
+            "ree_scrubbed_total": ree_scrubbed_total,
+            "acid_consumed": acid_consumed,
+            "h_plus_supplied": h_plus_supplied,
+            "h_plus_remaining": h_plus_remaining,
+            "pH_final": pH_final,
         }
 
         return scrub_liquor, scrubbed_organic, info
