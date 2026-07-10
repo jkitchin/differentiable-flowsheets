@@ -83,3 +83,32 @@ class TestAbsorberWaterTransfer:
         gas_h2o_in = 0.05
         # net evaporated = gas H2O out - gas H2O in
         assert net_evap == pytest.approx(gas_h2o_out - gas_h2o_in, rel=1e-6)
+
+
+class TestCapexExponentValidation:
+    """Follow-up to #127: CC CAPEX exponents should be validatable like core."""
+
+    def test_all_exponents_in_valid_range(self):
+        from difflow_cc.economics import SCALING_EXPONENTS, validate_scaling_exponent
+        for eq in SCALING_EXPONENTS:
+            v = validate_scaling_exponent(eq)
+            assert v["exponent_valid"], f"{eq} exponent {v['exponent']} out of range"
+
+    def test_exponents_are_type_specific(self):
+        from difflow_cc.economics import SCALING_EXPONENTS
+        # Not a single six-tenths default: compressor and HX differ
+        assert SCALING_EXPONENTS["compressor"] == pytest.approx(0.82)
+        assert SCALING_EXPONENTS["heat_exchanger_shell_tube"] == pytest.approx(0.68)
+        assert len(set(SCALING_EXPONENTS.values())) > 1
+
+    def test_validate_reports_fields(self):
+        from difflow_cc.economics import validate_scaling_exponent, VALID_EXPONENT_RANGE
+        v = validate_scaling_exponent("adsorber_vessel")
+        assert v["equipment_type"] == "adsorber_vessel"
+        assert v["exponent"] == pytest.approx(0.62)
+        assert v["valid_range"] == VALID_EXPONENT_RANGE
+
+    def test_unknown_equipment_raises(self):
+        from difflow_cc.economics import validate_scaling_exponent
+        with pytest.raises(KeyError):
+            validate_scaling_exponent("nonexistent_unit")
