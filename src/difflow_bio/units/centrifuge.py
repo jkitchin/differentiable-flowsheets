@@ -53,6 +53,16 @@ class CentrifugeParams(ParamsMixin):
     efficiency: float | Array = 0.7
     species_order: list[str] = None
     cell_species: str = "cells"
+    # Cell lysis at high g-force (#103). Phenomenological, fully
+    # user-parameterized model (no built-in constants): above
+    # lysis_threshold_g (RCF), a fraction lysis_coefficient*(RCF - threshold)
+    # of cells is disrupted and released as `lysate_species` into the
+    # clarified (supernatant) stream, degrading its purity. Defaults leave
+    # lysis disabled (backward compatible). See Doran, Bioprocess Engineering
+    # Principles, 2e, 2013, Ch. 10 for the shear-damage phenomenon.
+    lysis_threshold_g: float | Array | None = None  # RCF onset (x g)
+    lysis_coefficient: float | Array = 0.0  # lysed fraction per unit RCF above threshold
+    lysate_species: str = "lysate"
 
 
 @dataclass(repr=False)
@@ -79,6 +89,10 @@ class DiscStackParams(ParamsMixin):
     efficiency: float | Array = 0.7
     species_order: list[str] = None
     cell_species: str = "cells"
+    # Cell lysis at high g-force (#103); forwarded to the internal Centrifuge.
+    lysis_threshold_g: float | Array | None = None
+    lysis_coefficient: float | Array = 0.0
+    lysate_species: str = "lysate"
 
 
 # =============================================================================
@@ -132,6 +146,7 @@ class Centrifuge:
         rho_fluid: float | Array = 1000.0,
         viscosity: float | Array = 0.001,
         concentrate_fraction: float | Array = 0.1,
+        rcf: float | Array = None,
     ) -> tuple[Stream, Stream, dict[str, Array]]:
         """Perform centrifugal separation.
 
@@ -143,6 +158,9 @@ class Centrifuge:
             rho_fluid: Fluid density (kg/m³), default 1000 (water)
             viscosity: Dynamic viscosity (Pa·s), default 0.001 (water)
             concentrate_fraction: Fraction of flow going to concentrate (0-1)
+            rcf: Relative centrifugal force (x g) at the separation zone. Used
+                only when ``params.lysis_threshold_g`` is set, to compute the
+                g-force-dependent cell lysis fraction (#103).
 
         Returns:
             concentrate: Concentrate stream (enriched in cells)
@@ -180,10 +198,22 @@ class Centrifuge:
         cell_species = p.cell_species
         cell_flow_in = inlet_flows.get(cell_species, jnp.array(0.0))
 
-        # Cells going to concentrate
+        # Cell lysis at high g-force (#103): a fraction of cells is disrupted
+        # and released as lysate into the supernatant. Intact cells then
+        # separate as usual; lysate reports to the clarified stream.
+        lysis_active = p.lysis_threshold_g is not None and rcf is not None
+        if lysis_active:
+            excess_g = jnp.maximum(jnp.asarray(rcf) - p.lysis_threshold_g, 0.0)
+            lysis_fraction = jnp.clip(p.lysis_coefficient * excess_g, 0.0, 1.0)
+        else:
+            lysis_fraction = jnp.asarray(0.0)
+
+        intact_cells_in = cell_flow_in * (1.0 - lysis_fraction)
+        lysate_mass = cell_flow_in * lysis_fraction
+
+        # Intact cells going to concentrate
         cell_recovery = actual_sep
-        cells_to_concentrate = cell_flow_in * cell_recovery
-        cells_to_clarified = cell_flow_in * (1 - cell_recovery)
+        cells_to_concentrate = intact_cells_in * cell_recovery
 
         # Other species split by volume fraction (assumed no separation)
         concentrate_flows = {}
@@ -192,13 +222,22 @@ class Centrifuge:
         for species, flow in inlet_flows.items():
             if species == cell_species:
                 concentrate_flows[species] = cells_to_concentrate
-                # Derive clarified from feed - concentrate to guarantee mass balance
-                clarified_flows[species] = flow - cells_to_concentrate
+                # Only intact cells remain; lysed mass leaves as lysate below.
+                clarified_flows[species] = intact_cells_in - cells_to_concentrate
             else:
                 # Non-cell species split by volumetric ratio
                 concentrate_flows[species] = flow * concentrate_fraction
                 # Derive clarified from feed - concentrate to guarantee mass balance
                 clarified_flows[species] = flow - flow * concentrate_fraction
+
+        # Released intracellular content reports to the clarified (supernatant).
+        # Only injected when lysis is active, so default outputs are unchanged.
+        if lysis_active:
+            if p.lysate_species in clarified_flows:
+                clarified_flows[p.lysate_species] = clarified_flows[p.lysate_species] + lysate_mass
+            else:
+                clarified_flows[p.lysate_species] = lysate_mass
+                concentrate_flows.setdefault(p.lysate_species, jnp.asarray(0.0))
 
         concentrate = make_stream(concentrate_flows, inlet["T"], inlet["P"])
         clarified = make_stream(clarified_flows, inlet["T"], inlet["P"])
@@ -210,6 +249,8 @@ class Centrifuge:
             "cell_recovery": cell_recovery,
             "Q_critical": Q_crit,
             "concentration_factor": cell_recovery / concentrate_fraction,
+            "lysis_fraction": lysis_fraction,
+            "lysate_released": lysate_mass,
         }
 
         return concentrate, clarified, info
@@ -255,6 +296,9 @@ class DiscStackCentrifuge:
             params.rpm,
         )
 
+        # Relative centrifugal force at the outer radius (for lysis, #103)
+        self.rcf = g_force(params.r_outer, params.rpm)
+
         # Create internal Centrifuge with calculated Sigma
         self._centrifuge = Centrifuge(
             CentrifugeParams(
@@ -262,6 +306,9 @@ class DiscStackCentrifuge:
                 efficiency=params.efficiency,
                 species_order=params.species_order,
                 cell_species=params.cell_species,
+                lysis_threshold_g=params.lysis_threshold_g,
+                lysis_coefficient=params.lysis_coefficient,
+                lysate_species=params.lysate_species,
             )
         )
 
@@ -274,13 +321,18 @@ class DiscStackCentrifuge:
         rho_fluid: float | Array = 1000.0,
         viscosity: float | Array = 0.001,
         concentrate_fraction: float | Array = 0.1,
+        rcf: float | Array = None,
     ) -> tuple[Stream, Stream, dict[str, Array]]:
         """Perform centrifugal separation.
 
-        See Centrifuge.__call__ for details.
+        See Centrifuge.__call__ for details. The relative centrifugal force
+        defaults to the value computed from the disc-stack geometry
+        (``g_force(r_outer, rpm)``) so the g-force-dependent lysis model (#103)
+        works without a separately supplied ``rcf``.
         """
         return self._centrifuge(
-            inlet, Q, d_particle, rho_particle, rho_fluid, viscosity, concentrate_fraction
+            inlet, Q, d_particle, rho_particle, rho_fluid, viscosity,
+            concentrate_fraction, rcf=self.rcf if rcf is None else rcf,
         )
 
 

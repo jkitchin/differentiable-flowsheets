@@ -123,6 +123,17 @@ class ProteinAParams(ParamsMixin):
         "cells": 4.0,  # 4 log reduction for cells
     })
     species_order: list[str] = None
+    # Kinetic dynamic binding capacity (#100). When k_ads is set and a load
+    # flow rate is supplied to __call__, DBC is computed from residence time
+    # via dynamic_binding_capacity() instead of the static q_max fraction, so
+    # DBC falls at high flow rate (short residence time).
+    k_ads: float | Array | None = None  # Adsorption rate constant (1/min)
+    # Elution pool sizing (#102). When n_plates is set, the elution pool
+    # volume is estimated from the peak base width w = 4 V_R / sqrt(N)
+    # (N = 16 (t_R/w)^2; Fritz & Gjerde, Ion Chromatography, 4e, Wiley, 2009),
+    # and product concentration = mass_eluted / pool_volume is reported.
+    n_plates: float | Array | None = None  # Theoretical plate count (-)
+    elution_cv: float | Array = 2.0  # Elution retention volume (column volumes)
 
 
 @dataclass(repr=False)
@@ -170,6 +181,14 @@ class SECParams(ParamsMixin):
     yield_factor: float | Array = 0.95
     resolution: float | Array = 1.5  # Baseline resolution
     species_order: list[str] = None
+    # Axial-dispersion / peak-broadening coupling (#156). When True, the
+    # cross-fraction carryover between neighbouring size peaks is derived from
+    # the resolution using the equal-area Gaussian overlap relation
+    # f_overlap = 0.5 * erfc(R_s * sqrt(2)) (Snyder, Kirkland & Dolan,
+    # Introduction to Modern Liquid Chromatography, 3e, Wiley, 2010, Ch. 2),
+    # so lower resolution (more band broadening) gives poorer separation.
+    # When False, the legacy fixed 5% overlap is used (backward compatible).
+    use_resolution_overlap: bool = False
 
 
 # =============================================================================
@@ -228,6 +247,8 @@ class ProteinAChromatography:
         load_volume: float | Array,
         breakthrough_limit: float | Array = 0.01,
         feed_volume: float | Array = None,
+        load_flow_rate: float | Array = None,
+        feed_concentration: float | Array = None,
     ) -> tuple[tuple[Stream, Stream], dict[str, Array]]:
         """Run Protein A chromatography cycle.
 
@@ -238,6 +259,14 @@ class ProteinAChromatography:
             feed_volume: Total volume of feed stream (L). If provided, used to
                 calculate concentration. If None, assumes load_volume/total_flow
                 gives the mass fraction loaded.
+            load_flow_rate: Volumetric load flow rate (L/min). When provided
+                together with ``params.k_ads``, the dynamic binding capacity is
+                computed from the column residence time (t_r = CV / Q) so DBC
+                decreases at high flow rate (#100). If None, the static
+                q_max-based DBC is used (backward compatible).
+            feed_concentration: Target concentration in the feed (g/L), used by
+                the kinetic DBC isotherm term. If None, a saturating feed is
+                assumed (q_eq -> q_max).
 
         Returns:
             (product, waste): Product (elution) and waste (FT + wash) streams
@@ -263,9 +292,24 @@ class ProteinAChromatography:
             # Legacy: assume flows represent concentrations (g/L) and total_flow is volume
             target_mass_loaded = target_flow * load_volume / total_flow
 
-        # Dynamic binding capacity (simplified)
-        # DBC = q_max at low breakthrough
-        DBC = p.q_max * (1.0 - breakthrough_limit)
+        # Dynamic binding capacity.
+        # Kinetic model (#100): when an adsorption rate constant and a load
+        # flow rate are given, DBC follows from the residence time so that it
+        # drops at high flow rate. Otherwise fall back to the static estimate.
+        if p.k_ads is not None and load_flow_rate is not None:
+            residence_time = jnp.asarray(p.column_volume) / jnp.asarray(load_flow_rate)
+            C_feed = (
+                jnp.asarray(feed_concentration)
+                if feed_concentration is not None
+                else jnp.asarray(p.q_max)  # saturating proxy: q_eq -> q_max
+            )
+            DBC = dynamic_binding_capacity(
+                p.q_max, C_feed, p.K_d, residence_time, p.k_ads
+            )
+        else:
+            residence_time = None
+            # DBC = q_max at low breakthrough
+            DBC = p.q_max * (1.0 - breakthrough_limit)
         max_binding = DBC * p.column_volume
 
         # Actual bound mass (limited by capacity)
@@ -326,6 +370,19 @@ class ProteinAChromatography:
             "impurity_clearance": p.impurity_clearance,
             "capacity_utilization": target_bound / max_binding,
         }
+        if residence_time is not None:
+            info["residence_time"] = residence_time
+
+        # Elution pool volume from column dimensions (#102). The peak base
+        # width in volume units follows from the plate count,
+        # N = 16 (V_R / w)^2  =>  w = 4 V_R / sqrt(N), with the retention
+        # volume V_R = elution_cv * CV. The pool volume is taken as this base
+        # width and sets the eluted product concentration.
+        if p.n_plates is not None:
+            V_R = jnp.asarray(p.elution_cv) * jnp.asarray(p.column_volume)
+            pool_volume = 4.0 * V_R / jnp.sqrt(jnp.asarray(p.n_plates))
+            info["elution_pool_volume"] = pool_volume
+            info["product_concentration"] = safe_divide(target_eluted, pool_volume)
 
         return (product, waste), info
 
@@ -516,6 +573,15 @@ class SizeExclusionChromatography:
         aggregate_flows = {}
         fragment_flows = {}
 
+        # Overlap (carryover into the product pool) between adjacent size
+        # peaks. With the dispersion coupling on (#156), it is set by the
+        # resolution; otherwise it is the legacy fixed 5%.
+        if p.use_resolution_overlap:
+            from jax.scipy.special import erfc
+            overlap = 0.5 * erfc(jnp.asarray(p.resolution) * jnp.sqrt(2.0))
+        else:
+            overlap = jnp.asarray(0.05)
+
         for species, flow in inlet_flows.items():
             mass_loaded = flow * load_frac
             mass_unloaded = flow - mass_loaded
@@ -527,14 +593,14 @@ class SizeExclusionChromatography:
                 fragment_flows[species] = mass_loaded * (1.0 - p.yield_factor) * 0.7
 
             elif species == p.aggregate_species:
-                # Aggregates - mostly to aggregate fraction; unloaded to aggregate
-                aggregate_flows[species] = mass_unloaded + mass_loaded * 0.95
-                product_flows[species] = mass_loaded * 0.05  # Some overlap
+                # Aggregates - mostly to aggregate fraction; overlap into product
+                aggregate_flows[species] = mass_unloaded + mass_loaded * (1.0 - overlap)
+                product_flows[species] = mass_loaded * overlap
 
             elif species == p.fragment_species:
-                # Fragments - mostly to fragment fraction; unloaded to fragment
-                fragment_flows[species] = mass_unloaded + mass_loaded * 0.95
-                product_flows[species] = mass_loaded * 0.05
+                # Fragments - mostly to fragment fraction; overlap into product
+                fragment_flows[species] = mass_unloaded + mass_loaded * (1.0 - overlap)
+                product_flows[species] = mass_loaded * overlap
 
             else:
                 # Other species - distribute based on assumed size; unloaded to product
@@ -558,6 +624,8 @@ class SizeExclusionChromatography:
             "yield": jnp.where(target_in > 0, target_out / target_in, jnp.array(0.0)),
             "purity": jnp.where(product_total > 0, target_out / product_total, jnp.array(1.0)),
             "aggregate_removal": aggregate_removed,
+            "resolution": jnp.asarray(p.resolution),
+            "peak_overlap": overlap,
         }
 
         return (product, aggregates, fragments), info

@@ -82,6 +82,7 @@ class Flash:
         thermo: IdealThermo,
         eos: PengRobinson | SRK | None = None,
         k_ij: Array | None = None,
+        activity_model=None,
     ):
         """Initialize flash separator.
 
@@ -94,11 +95,18 @@ class Flash:
                 via ``flash_TP_eos()`` instead of Raoult's law.
             k_ij: Binary interaction parameters for EOS (n x n matrix).
                 Ignored when ``eos`` is None.
+            activity_model: Optional liquid-phase activity-coefficient model
+                (an :class:`~difflow.units.lle.NRTLParams` whose ``species``
+                match ``params.species_order``). When provided (and no EOS),
+                K-values follow the modified Raoult's law
+                ``K_i = gamma_i(x, T) * Psat_i / P`` so non-ideal liquid
+                behavior — including azeotropes — is captured (#90).
         """
         self.params = params
         self.thermo = thermo
         self.eos = eos
         self.k_ij = k_ij
+        self.activity_model = activity_model
 
     def __call__(
         self,
@@ -138,6 +146,36 @@ class Flash:
             # --- EOS path: K-values from fugacity coefficients ---
             V_frac, x, y = flash_TP_eos(self.eos, z, T, P, self.k_ij)
             K = jnp.where(x > 1e-15, y / x, jnp.ones_like(x))
+        elif self.activity_model is not None:
+            # --- Activity-coefficient (gamma-phi) path: modified Raoult's law
+            # K_i = gamma_i(x, T) * Psat_i / P, capturing azeotropes (#90). ---
+            from difflow.units.lle import nrtl_activity_coefficients
+            # Ideal K = Psat/P; gamma multiplies it.
+            K_ideal = jnp.clip(self.thermo.K_values_array(T, P), K_MIN, K_MAX)
+
+            # gamma depends on the liquid composition, so iterate a fixed
+            # number of times (unrolled -> JAX/JIT compatible).
+            x_iter = z
+            V_frac = jnp.asarray(0.5)
+            for _ in range(30):
+                gamma = nrtl_activity_coefficients(x_iter, T, self.activity_model)
+                K = jnp.clip(gamma * K_ideal, K_MIN, K_MAX)
+                bubble_check = jnp.sum(z * K)
+                dew_check = jnp.sum(z / K)
+                V_frac = self._solve_flash(z, K, bubble_check, dew_check)
+                x_new = z / (1 + V_frac * (K - 1))
+                x_iter = x_new / jnp.sum(x_new)
+
+            x = x_iter
+            gamma = nrtl_activity_coefficients(x, T, self.activity_model)
+            K = jnp.clip(gamma * K_ideal, K_MIN, K_MAX)
+            y = jnp.where(
+                V_frac > 1e-10,
+                (z - x * (1 - V_frac)) / jnp.maximum(V_frac, 1e-10),
+                K * x,
+            )
+            y = jnp.maximum(y, 0.0)
+            y = y / jnp.sum(y)
         else:
             # --- Ideal (Raoult's law) path ---
             # Get K-values from thermodynamics and clamp to avoid numerical issues.

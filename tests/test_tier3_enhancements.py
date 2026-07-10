@@ -571,3 +571,58 @@ class TestEventHandling:
         result = integrate(f, y0, (0.0, 10.0), "RK4", n_steps=50)
         detected = detect_events(result, [])
         assert detected == []
+
+
+class TestDynamicCSTROutletFlowLaw:
+    """Follow-up to #152: variable-volume level responds to feed/draw imbalance."""
+
+    def _cstr(self, outlet_flow_fn):
+        from difflow.dynamic.base import DynamicCSTR
+        from difflow.streams import make_stream
+
+        def rate_fn(C, T, params):
+            return jnp.array([params["k"] * C["A"]])
+
+        cstr = DynamicCSTR(
+            volume=1.0, rate_fn=rate_fn, stoich=jnp.array([[-1], [1]]),
+            species_order=["A", "B"], rate_params={"k": 0.1},
+            variable_volume=True, outlet_flow_fn=outlet_flow_fn,
+        )
+        return cstr, {"inlet": make_stream({"A": 1.0, "B": 0.0}, T=350.0, P=101325.0)}
+
+    def test_no_draw_fills_up(self):
+        from difflow.dynamic.integrators import integrate_unit
+        cstr, inputs = self._cstr(lambda V: 0.0)  # inflow only
+        result = integrate_unit(cstr, inputs, (0.0, 100.0), method="RK4", n_steps=50)
+        assert float(result.y_final[0]) > 1.0  # level rose
+
+    def test_high_draw_drains_down(self):
+        from difflow.dynamic.integrators import integrate_unit
+        # Q_out corresponds to 3 mol/s > 1 mol/s inlet -> level falls
+        cstr, inputs = self._cstr(lambda V: 3.0 / 55500.0)
+        result = integrate_unit(cstr, inputs, (0.0, 100.0), method="RK4", n_steps=50)
+        assert float(result.y_final[0]) < 1.0  # level dropped
+
+    def test_matched_draw_holds_level(self):
+        from difflow.dynamic.integrators import integrate_unit
+        # Q_out matches inlet (1 mol/s) -> constant volume
+        cstr, inputs = self._cstr(lambda V: 1.0 / 55500.0)
+        result = integrate_unit(cstr, inputs, (0.0, 100.0), method="RK4", n_steps=50)
+        assert float(result.y_final[0]) == pytest.approx(1.0, abs=1e-6)
+
+    def test_backward_compat_no_flow_fn_constant_volume(self):
+        from difflow.dynamic.base import DynamicCSTR
+        from difflow.dynamic.integrators import integrate_unit
+        from difflow.streams import make_stream
+
+        def rate_fn(C, T, params):
+            return jnp.array([params["k"] * C["A"]])
+
+        cstr = DynamicCSTR(
+            volume=1.0, rate_fn=rate_fn, stoich=jnp.array([[-1], [1]]),
+            species_order=["A", "B"], rate_params={"k": 0.1},
+            variable_volume=True,  # no outlet_flow_fn
+        )
+        inputs = {"inlet": make_stream({"A": 1.0, "B": 0.0}, T=350.0, P=101325.0)}
+        result = integrate_unit(cstr, inputs, (0.0, 100.0), method="RK4", n_steps=50)
+        assert float(result.y_final[0]) == pytest.approx(1.0, abs=1e-9)

@@ -60,6 +60,11 @@ class UltrafiltrationParams(ParamsMixin):
     Lp: float | Array = 50.0  # L/m²/h/bar, typical for UF membrane
     k_mass: float | Array = 5e-6  # m/s, mass transfer coefficient
     sigma: float | Array = 1000.0  # Pa·m³/kg, osmotic pressure coefficient
+    # Fouling coupling (#155). Resistance-in-series flux decline with
+    # cumulative permeate throughput: Lp_eff = Lp / (1 + fouling_coefficient *
+    # V_permeate) (Cheryan, Ultrafiltration and Microfiltration Handbook, 2e,
+    # CRC Press, 1998, Ch. 4). Default 0 disables it (backward compatible).
+    fouling_coefficient: float | Array = 0.0  # per unit permeate volume (1/L)
     species_order: list[str] = None
 
 
@@ -86,6 +91,7 @@ class DiafiltrationParams(ParamsMixin):
     Lp: float | Array = 50.0
     k_mass: float | Array = 5e-6  # m/s, mass transfer coefficient
     sigma: float | Array = 1000.0  # Pa·m³/kg, osmotic pressure coefficient
+    fouling_coefficient: float | Array = 0.0  # per unit permeate volume (1/L)
     species_order: list[str] = None
 
 
@@ -139,6 +145,7 @@ class Ultrafiltration:
         concentration_factor: float | Array,
         TMP: float | Array = 1.0,
         mode: str = "batch",
+        feed_concentration: float | Array = None,
     ) -> tuple[tuple[Stream, Stream], dict[str, Array]]:
         """Perform ultrafiltration.
 
@@ -147,6 +154,13 @@ class Ultrafiltration:
             concentration_factor: Target CF = V_in / V_retentate
             TMP: Transmembrane pressure (bar)
             mode: "batch" for batch concentration, "continuous" for steady-state
+            feed_concentration: Retained-solute concentration in the feed
+                (kg/m³). When provided, the flux uses the Kedem-Katchalsky
+                osmotic form J = Lp_eff·(TMP − σ·C_ret/1e5) with the retentate
+                concentration C_ret = feed_concentration·CF, so flux falls as
+                the solution concentrates (concentration-polarization feedback,
+                #99). When None, the linearized polarization factor is used
+                (backward compatible).
 
         Returns:
             (retentate, permeate): Tuple of outlet streams
@@ -189,9 +203,24 @@ class Ultrafiltration:
         # Note: sigma (Pa·m³/kg) already incorporates the bulk concentration
         # effect (sigma = osmotic_coeff * C_bulk effectively), so C_bulk does
         # not appear separately in the polarization factor expression.
-        Lp_SI = p.Lp * 2.778e-12  # m/(Pa·s)
-        polarization_factor = 1.0 + Lp_SI * p.sigma / p.k_mass
-        J = p.Lp * TMP / polarization_factor  # L/m²/h (effective flux)
+        # Fouling (#155): effective permeability declines with cumulative
+        # permeate throughput via a resistance-in-series factor.
+        V_permeate = total_flow_in * permeate_volume_frac
+        fouling_factor = 1.0 + p.fouling_coefficient * V_permeate
+        Lp_eff = p.Lp / fouling_factor
+
+        if feed_concentration is not None:
+            # Concentration-polarization feedback (#99): the osmotic back-
+            # pressure grows with the retentate concentration, which rises
+            # with CF, so flux declines as the batch concentrates.
+            C_ret = jnp.asarray(feed_concentration) * CF  # kg/m³
+            delta_pi_bar = p.sigma * C_ret / 1e5          # Pa -> bar
+            J = Lp_eff * jnp.maximum(TMP - delta_pi_bar, 0.0)  # L/m²/h
+        else:
+            Lp_SI = Lp_eff * 2.778e-12  # m/(Pa·s)
+            polarization_factor = 1.0 + Lp_SI * p.sigma / p.k_mass
+            delta_pi_bar = None
+            J = Lp_eff * TMP / polarization_factor  # L/m²/h (effective flux)
 
         # Split species based on rejection
         retentate_flows = {}
@@ -233,7 +262,10 @@ class Ultrafiltration:
             "volume_reduction": volume_reduction,
             "recovery": recovery,
             "retentate_volume_fraction": retentate_volume_frac,
+            "fouling_factor": fouling_factor,
         }
+        if delta_pi_bar is not None:
+            info["osmotic_pressure_bar"] = delta_pi_bar
 
         return (retentate, permeate), info
 
@@ -306,9 +338,13 @@ class Diafiltration:
         # Linearised film-model approximation (same as Ultrafiltration):
         #   J = Lp * TMP / (1 + Lp_SI * sigma / k_mass)
         # Lp converted to SI (m/(Pa·s)) so the factor is dimensionless.
-        Lp_SI = p.Lp * 2.778e-12  # L/(m²·h·bar) → m/(Pa·s)
+        # Fouling (#155): permeability declines with cumulative permeate
+        # (= n_dv diavolumes of the initial volume).
+        fouling_factor = 1.0 + p.fouling_coefficient * (n_dv * V_initial)
+        Lp_eff = p.Lp / fouling_factor
+        Lp_SI = Lp_eff * 2.778e-12  # L/(m²·h·bar) → m/(Pa·s)
         polarization_factor = 1.0 + Lp_SI * p.sigma / p.k_mass
-        J = p.Lp * TMP / polarization_factor  # L/m²/h (effective flux)
+        J = Lp_eff * TMP / polarization_factor  # L/m²/h (effective flux)
 
         # For CVD: C/C_0 = exp(-n_dv * (1-R)) for species being washed out
         # Buffer species: C = C_buffer * (1 - exp(-n_dv * (1-R)))
@@ -386,6 +422,7 @@ class Diafiltration:
             "n_diavolumes": n_dv,
             "exchange_efficiency": exchange_efficiency,
             "buffer_volume_added": n_dv * V_initial,
+            "fouling_factor": fouling_factor,
         }
 
         return (retentate, permeate), info
@@ -425,6 +462,9 @@ class TFF:
         MWCO: float | Array = 30.0,
         rejection: dict = None,
         Lp: float | Array = 50.0,
+        k_mass: float | Array = 5e-6,
+        sigma: float | Array = 1000.0,
+        fouling_coefficient: float | Array = 0.0,
     ):
         """Initialize TFF system.
 
@@ -433,6 +473,13 @@ class TFF:
             MWCO: Molecular weight cutoff (kDa)
             rejection: Dict of species -> rejection coefficient
             Lp: Membrane permeability (L/m²/h/bar)
+            k_mass: Mass transfer coefficient (m/s) for concentration
+                polarization. Forwarded to the UF and DF stages (#99).
+            sigma: Osmotic pressure coefficient (Pa·m³/kg), forwarded to the
+                UF and DF stages (#99).
+            fouling_coefficient: Fouling coefficient (1/L permeate) for the
+                resistance-in-series flux decline (#155), forwarded to both
+                stages.
         """
         rejection = rejection or {}
 
@@ -441,6 +488,9 @@ class TFF:
             MWCO=MWCO,
             rejection=rejection,
             Lp=Lp,
+            k_mass=k_mass,
+            sigma=sigma,
+            fouling_coefficient=fouling_coefficient,
         ))
 
         self.df = Diafiltration(DiafiltrationParams(
@@ -448,6 +498,9 @@ class TFF:
             MWCO=MWCO,
             rejection=rejection,
             Lp=Lp,
+            k_mass=k_mass,
+            sigma=sigma,
+            fouling_coefficient=fouling_coefficient,
         ))
 
     def concentrate(

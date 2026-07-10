@@ -47,20 +47,14 @@ def _recycle_flowsheet(offset: float, slope: float = 0.5) -> Flowsheet:
 
 GUESS = {"tear": make_stream({"A": 1.0}, 300.0, 1e5)}
 
-# Wegstein's accelerated step cannot converge these contractive maps at
-# all (its update formula is inconsistent with its q = s/(s-1) factor,
-# https://github.com/jkitchin/differentiable-flowsheets/issues/166);
-# the clip option is still threaded through it, so the cases flip to
-# passing once #166 is fixed.
-WEGSTEIN_XFAIL = pytest.param(
-    "wegstein",
-    marks=pytest.mark.xfail(
-        reason="wegstein acceleration formula, see issue #166", strict=False
-    ),
-)
+# Wegstein's accelerated step previously could not converge these
+# contractive maps because its update formula was inconsistent with its
+# q = s/(s-1) factor (issue #166). That formula is now fixed
+# (wegstein_acceleration uses x_new = q*x + (1-q)*g), so the Wegstein
+# cases converge and are no longer expected failures.
 
 
-@pytest.mark.parametrize("acceleration", [WEGSTEIN_XFAIL, "anderson"])
+@pytest.mark.parametrize("acceleration", ["wegstein", "anderson"])
 def test_negative_fixed_point_reachable_without_clip(acceleration):
     """clip_negative_flows=False converges to a negative tear flow."""
     fs = _recycle_flowsheet(offset=-2.0)  # fixed point: -4.0
@@ -90,7 +84,7 @@ def test_default_clip_blocks_negative_fixed_point(acceleration):
     assert float(streams["loop_out"]["F_A"]) != pytest.approx(-4.0, abs=1e-3)
 
 
-@pytest.mark.parametrize("acceleration", [WEGSTEIN_XFAIL, "anderson"])
+@pytest.mark.parametrize("acceleration", ["wegstein", "anderson"])
 @pytest.mark.parametrize("clip", [True, False])
 def test_positive_fixed_point_unaffected_by_option(acceleration, clip):
     """For ordinary non-negative flows the option changes nothing."""

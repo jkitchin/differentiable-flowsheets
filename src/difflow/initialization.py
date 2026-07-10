@@ -73,8 +73,15 @@ def wegstein_acceleration(
     Wegstein's method accelerates convergence by estimating the optimal
     relaxation factor from the previous two iterations.
 
-    The update is: x_new = x_curr + q * (g_curr - x_curr)
-    where q = s / (s - 1) and s = (g_curr - g_prev) / (x_curr - x_prev)
+    The update is: x_new = q * x_curr + (1 - q) * g_curr
+    where q = s / (s - 1) and s = (g_curr - g_prev) / (x_curr - x_prev).
+
+    ``q`` is the weight on the *old* iterate ``x_curr``; ``(1 - q)`` weights
+    the direct-substitution value ``g_curr``. For a linear ``g`` this cancels
+    the fixed-point map's slope exactly, so the update lands on the solution in
+    a single step. (Writing it as ``x_curr + q * (g_curr - x_curr)`` instead
+    swaps the two weights and makes the effective slope ``1 + s``, which
+    diverges for the common ``0 < s < 1`` contraction.)
 
     Args:
         x_prev: Previous iterate
@@ -96,17 +103,17 @@ def wegstein_acceleration(
     # Wegstein parameter: s = dg/dx
     s = dg / dx_safe
 
-    # Acceleration factor: q = s / (s - 1)
-    # For s < 1: q < 0 (under-relaxation)
-    # For s > 1: q > 1 (over-relaxation, can be unstable)
+    # Acceleration factor: q = s / (s - 1), the weight on the old iterate.
+    # For 0 < s < 1: q < 0 (extrapolation past g_curr)
+    # For s < 0: q in (0, 1) (damped toward x_curr)
     q = safe_divide(s, s - 1)
 
     # Clip to bounds for stability
     q_min, q_max = bounds
     q = jnp.clip(q, q_min, q_max)
 
-    # Accelerated update
-    x_new = x_curr + q * (g_curr - x_curr)
+    # Accelerated update: weight q on x_curr, (1 - q) on g_curr.
+    x_new = q * x_curr + (1 - q) * g_curr
 
     return x_new
 
@@ -150,18 +157,16 @@ def anderson_acceleration_step(
     # Current residual
     f_curr = F[-1]  # (n_vars,)
 
-    # Solve least squares: min ||dF @ alpha - f_curr||^2
-    # Normal equations: (dF @ dF.T + reg*I) @ alpha = dF @ f_curr
-    dF_T = dF.T  # (n_vars, m_use)
-
-    # Gram matrix with regularization
-    G = dF @ dF_T + regularization * jnp.eye(m_use)
-
-    # Right-hand side
-    rhs = dF @ f_curr
-
-    # Solve for coefficients
-    alpha = jnp.linalg.solve(G, rhs)
+    # Solve the least squares  min_alpha || dF.T @ alpha - f_curr ||^2
+    # via an SVD-based solver rather than the normal equations
+    # (dF @ dF.T + reg*I) alpha = dF @ f_curr. The normal equations square
+    # the condition number, which overflows to NaN for a badly-scaled packed
+    # tear vector — e.g. gas transmission networks whose [F, T, P] entries
+    # span ~1e1 (kg/s) to ~1e6 (Pa), so dF @ dF.T has a condition number of
+    # order (P/F)^4. lstsq works on dF.T directly (condition number, not its
+    # square) and drops singular values below rcond, giving a Tikhonov-like
+    # regularization that is invariant to the overall problem scale.
+    alpha, _, _, _ = jnp.linalg.lstsq(dF.T, f_curr, rcond=regularization)
 
     # Compute accelerated iterate
     # x_new = g_curr - sum(alpha_k * (g_{k+1} - g_k))
@@ -170,7 +175,9 @@ def anderson_acceleration_step(
 
     x_new = g_hist[-1] - dG.T @ alpha
 
-    return x_new
+    # Safety: if the accelerated step is not finite (degenerate history), fall
+    # back to plain substitution so the iteration cannot propagate NaN/Inf.
+    return jnp.where(jnp.all(jnp.isfinite(x_new)), x_new, g_hist[-1])
 
 
 class AndersonAccelerator:
