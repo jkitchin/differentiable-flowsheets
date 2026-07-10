@@ -413,3 +413,112 @@ class TestFlowsheetAcceleration:
             assert product_anderson[species] == pytest.approx(
                 product_none[species], rel=0.05
             )
+
+
+class TestSignedFlowTears:
+    """Regression tests for issue #164.
+
+    Accelerated tear solvers clipped the packed tear vector at zero every
+    iteration, which makes convergence impossible for flowsheets with signed
+    (bidirectional) flows whose tear streams settle at negative flows. The
+    plain damped path never clipped, so the three acceleration paths disagreed
+    about the feasible tear space.
+    """
+
+    @staticmethod
+    def _signed_flowsheet(signed_flows):
+        """A one-species recycle whose tear converges to a negative flow.
+
+        The single unit maps the recycle stream ``r`` to ``-0.5 * r - 3.0``,
+        an affine contraction with fixed point ``F_X = -2.0``. T and P pass
+        through, so they are already at their fixed point and only the
+        (signed) flow moves.
+        """
+
+        def affine(inlet):
+            f = get_flows(inlet)["X"]
+            return make_stream({"X": -0.5 * f - 3.0}, inlet["T"], inlet["P"])
+
+        fs = Flowsheet(["X"], signed_flows=signed_flows)
+        fs.add_unit(Unit("node", affine, ["recycle"], ["source"]))
+        fs.add_recycle("source", "recycle")
+        return fs
+
+    def test_anderson_converges_negative_tear_when_signed(self):
+        """signed_flows=True lets Anderson reach the negative fixed point."""
+        fs = self._signed_flowsheet(signed_flows=True)
+        streams = fs.solve(acceleration="anderson", max_iter=100, tol=1e-10)
+        assert get_flows(streams["source"])["X"] == pytest.approx(-2.0, abs=1e-6)
+
+    def test_wegstein_reaches_negative_tear_when_signed(self):
+        """signed_flows=True lets Wegstein move into the negative flow region.
+
+        (This Wegstein implementation under-relaxes conservatively, so it lands
+        near -2 rather than exactly on it; the point is that the clip no longer
+        traps the iterate at zero.)
+        """
+        fs = self._signed_flowsheet(signed_flows=True)
+        streams = fs.solve(acceleration="wegstein", max_iter=100, tol=1e-8)
+        assert get_flows(streams["source"])["X"] == pytest.approx(-2.0, abs=0.5)
+
+    def test_none_path_reaches_negative_tear(self):
+        """The un-accelerated path never clipped and reaches the true root."""
+        fs = self._signed_flowsheet(signed_flows=True)
+        streams = fs.solve(acceleration="none", max_iter=200, tol=1e-10)
+        assert get_flows(streams["source"])["X"] == pytest.approx(-2.0, abs=1e-6)
+
+    def test_signed_anderson_matches_unaccelerated(self):
+        """With signed flows, Anderson and the un-clipped 'none' path agree."""
+        fs = self._signed_flowsheet(signed_flows=True)
+        f_anderson = get_flows(
+            fs.solve(acceleration="anderson", max_iter=200, tol=1e-10)["source"]
+        )["X"]
+        f_none = get_flows(
+            fs.solve(acceleration="none", max_iter=200, tol=1e-10)["source"]
+        )["X"]
+        assert f_anderson == pytest.approx(f_none, abs=1e-6)
+
+    def test_clip_default_prevents_signed_convergence(self):
+        """The default (clipping) flowsheet cannot converge to a negative tear.
+
+        This is the bug guarded against: with the clip on, the accelerated
+        tear is projected back to zero every pass, so the iteration stalls
+        away from the true -2.0 root instead of contracting to it.
+        """
+        fs = self._signed_flowsheet(signed_flows=False)
+        streams = fs.solve(acceleration="anderson", max_iter=100, tol=1e-10)
+        assert abs(get_flows(streams["source"])["X"] - (-2.0)) > 0.5
+
+    def test_clip_negative_flows_override_on_unsigned_flowsheet(self):
+        """Per-call clip_negative_flows=False overrides an unsigned flowsheet."""
+        fs = self._signed_flowsheet(signed_flows=False)
+        streams = fs.solve(
+            acceleration="anderson",
+            max_iter=100,
+            tol=1e-10,
+            clip_negative_flows=False,
+        )
+        assert get_flows(streams["source"])["X"] == pytest.approx(-2.0, abs=1e-6)
+
+    def test_clip_negative_flows_override_true_on_signed_flowsheet(self):
+        """Per-call clip_negative_flows=True re-enables clipping on a signed fs."""
+        fs = self._signed_flowsheet(signed_flows=True)
+        streams = fs.solve(
+            acceleration="anderson",
+            max_iter=100,
+            tol=1e-10,
+            clip_negative_flows=True,
+        )
+        assert abs(get_flows(streams["source"])["X"] - (-2.0)) > 0.5
+
+    def test_project_tear_leaves_temperature_and_pressure_untouched(self):
+        """Clipping targets only flow entries, never the T/P slots."""
+        fs = Flowsheet(["A", "B"])
+        # Packed layout per stream is [F_A, F_B, T, P]; use a negative T/P to
+        # prove they survive the projection (only the negative flow is clipped).
+        x = jnp.array([-1.0, 2.0, -300.0, -101325.0])
+        projected = fs._project_tear(x)
+        assert projected[0] == pytest.approx(0.0)   # F_A clipped
+        assert projected[1] == pytest.approx(2.0)   # F_B unchanged
+        assert projected[2] == pytest.approx(-300.0)     # T untouched
+        assert projected[3] == pytest.approx(-101325.0)  # P untouched

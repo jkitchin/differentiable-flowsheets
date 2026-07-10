@@ -78,6 +78,7 @@ class Flowsheet:
         default_flow: float = 0.01,
         default_T: float = 300.0,
         default_P: float = 101325.0,
+        signed_flows: bool = False,
     ):
         """Initialize empty flowsheet.
 
@@ -88,11 +89,18 @@ class Flowsheet:
                 Use a smaller value (e.g. 1e-6) for trace species.
             default_T: Default temperature (K) for tear stream initialization
             default_P: Default pressure (Pa) for tear stream initialization
+            signed_flows: If True, stream flows may be negative (e.g. signed
+                mass flow in a bidirectional transmission network). This
+                disables the non-negative clipping applied to accelerated
+                tear iterates by default, so signed tear streams can converge.
+                Individual :meth:`solve` calls can still override this via the
+                ``clip_negative_flows`` argument.
         """
         self.species_order = species_order
         self.default_flow = default_flow
         self.default_T = default_T
         self.default_P = default_P
+        self.signed_flows = signed_flows
         self.units: list[Unit] = []
         self.feeds: dict[str, Stream] = {}
         self.recycles: dict[str, str] = {}  # {source_name: dest_name}
@@ -140,6 +148,7 @@ class Flowsheet:
         acceleration: Literal["none", "wegstein", "anderson"] = "anderson",
         anderson_depth: int = 5,
         use_initialization: bool = True,
+        clip_negative_flows: bool | None = None,
     ) -> dict[str, Stream]:
         """Solve the flowsheet.
 
@@ -167,10 +176,21 @@ class Flowsheet:
             anderson_depth: History depth for Anderson acceleration (default 5)
             use_initialization: If True and units support it, use their
                                initialize() methods for better initial guesses
+            clip_negative_flows: Whether the accelerated tear solvers
+                (``"wegstein"``, ``"anderson"``) clip negative flow entries of
+                the tear vector to zero on each iteration. If ``None`` (the
+                default), this is derived from the flowsheet's ``signed_flows``
+                attribute (clip when flows are non-negative, do not clip when
+                they are signed). Pass ``True``/``False`` to force the behavior
+                for this call. Has no effect on ``acceleration="none"``, which
+                never clips. Only flow entries are ever clipped; the T and P
+                entries of the packed tear vector are left untouched.
 
         Returns:
             Dictionary of all streams in the flowsheet
         """
+        if clip_negative_flows is None:
+            clip_negative_flows = not self.signed_flows
         if not self.recycles:
             # No recycles - simple sequential solution
             return self._solve_sequential()
@@ -192,9 +212,13 @@ class Flowsheet:
         if acceleration == "none":
             return self._solve_with_recycle_damped(tear_streams, tol, max_iter, damping)
         elif acceleration == "wegstein":
-            return self._solve_with_wegstein(tear_streams, tol, max_iter)
+            return self._solve_with_wegstein(
+                tear_streams, tol, max_iter, clip_negative_flows
+            )
         elif acceleration == "anderson":
-            return self._solve_with_anderson(tear_streams, tol, max_iter, anderson_depth)
+            return self._solve_with_anderson(
+                tear_streams, tol, max_iter, anderson_depth, clip_negative_flows
+            )
         else:
             raise ValueError(f"Unknown acceleration method: {acceleration}")
 
@@ -373,11 +397,31 @@ class Flowsheet:
 
         return streams
 
+    def _project_tear(self, x: Array) -> Array:
+        """Clip the flow entries of a packed tear vector to be non-negative.
+
+        The packed layout is ``[F_species..., T, P]`` per stream. Only the
+        per-stream flow entries are clipped; the T and P entries are left
+        untouched so the projection never distorts them (clipping T/P at zero
+        would be unintended even for non-negative-flow flowsheets).
+
+        Args:
+            x: Packed tear vector.
+
+        Returns:
+            Tear vector with flow entries clipped to ``[0, inf)``.
+        """
+        n_per_stream = len(self.species_order) + 2
+        n_species = len(self.species_order)
+        is_flow = (jnp.arange(x.shape[0]) % n_per_stream) < n_species
+        return jnp.where(is_flow, jnp.clip(x, 0.0, None), x)
+
     def _solve_with_wegstein(
         self,
         tear_initial: dict[str, Stream],
         tol: float,
         max_iter: int,
+        clip_negative_flows: bool = True,
     ) -> dict[str, Stream]:
         """Solve flowsheet with Wegstein acceleration.
 
@@ -388,6 +432,10 @@ class Flowsheet:
             tear_initial: Initial tear stream values
             tol: Convergence tolerance
             max_iter: Maximum iterations
+            clip_negative_flows: If True, clip negative flow entries of the
+                accelerated iterate to zero each pass. Must be False for
+                flowsheets with signed (bidirectional) flows, whose tear
+                streams may converge to negative flows.
 
         Returns:
             Dictionary of all streams in the flowsheet
@@ -419,7 +467,8 @@ class Flowsheet:
             else:
                 # Apply Wegstein acceleration
                 x_curr = wegstein_acceleration(x_old, x_prev, g_prev, g_curr)
-                x_curr = jnp.clip(x_curr, 0.0, None)  # Ensure non-negative flows
+                if clip_negative_flows:
+                    x_curr = self._project_tear(x_curr)  # Ensure non-negative flows
 
             # Update history
             g_prev = g_curr
@@ -447,6 +496,7 @@ class Flowsheet:
         tol: float,
         max_iter: int,
         depth: int = 5,
+        clip_negative_flows: bool = True,
     ) -> dict[str, Stream]:
         """Solve flowsheet with Anderson acceleration.
 
@@ -459,6 +509,10 @@ class Flowsheet:
             tol: Convergence tolerance
             max_iter: Maximum iterations
             depth: History depth for Anderson acceleration
+            clip_negative_flows: If True, clip negative flow entries of the
+                accelerated iterate to zero each pass. Must be False for
+                flowsheets with signed (bidirectional) flows, whose tear
+                streams may converge to negative flows.
 
         Returns:
             Dictionary of all streams in the flowsheet
@@ -485,7 +539,8 @@ class Flowsheet:
 
             # Apply Anderson acceleration
             x_next = accelerator.step(x_curr, g_curr)
-            x_next = jnp.clip(x_next, 0.0, None)  # Ensure non-negative flows
+            if clip_negative_flows:
+                x_next = self._project_tear(x_next)  # Ensure non-negative flows
             x_curr = x_next
 
         # Final solve with converged tear streams
