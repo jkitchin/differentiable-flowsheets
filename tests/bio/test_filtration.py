@@ -234,3 +234,56 @@ class TestTFF:
         assert "step1_uf" in info
         assert "step2_df" in info
         assert "step3_uf" in info
+
+
+class TestConcentrationPolarizationFeedback:
+    """Issue #99: flux should fall as the batch concentrates (feedback)."""
+
+    def test_flux_decreases_with_cf(self):
+        uf = Ultrafiltration(UltrafiltrationParams(
+            membrane_area=1.0, Lp=50.0, sigma=1000.0,
+            rejection={"mAb": 1.0},
+        ))
+        feed = make_stream({"mAb": 10.0, "buffer": 90.0}, T=300.0, P=101325.0)
+        (_, _), lo = uf(feed, concentration_factor=2.0, TMP=1.0, feed_concentration=10.0)
+        (_, _), hi = uf(feed, concentration_factor=5.0, TMP=1.0, feed_concentration=10.0)
+        # Higher CF -> higher osmotic back-pressure -> lower flux
+        assert float(hi["flux"]) < float(lo["flux"])
+        assert float(hi["osmotic_pressure_bar"]) > float(lo["osmotic_pressure_bar"])
+
+    def test_backward_compat_no_feed_concentration(self):
+        uf = Ultrafiltration(UltrafiltrationParams(membrane_area=1.0))
+        feed = make_stream({"mAb": 10.0}, T=300.0, P=101325.0)
+        (_, _), info = uf(feed, concentration_factor=2.0, TMP=1.0)
+        assert "osmotic_pressure_bar" not in info
+        assert float(info["flux"]) > 0.0
+
+    def test_tff_forwards_k_mass_and_sigma(self):
+        """TFF must forward k_mass/sigma to its UF and DF stages (#99)."""
+        tff = TFF(membrane_area=1.0, k_mass=2e-6, sigma=3000.0, fouling_coefficient=0.01)
+        assert float(tff.uf.params.k_mass) == pytest.approx(2e-6)
+        assert float(tff.uf.params.sigma) == pytest.approx(3000.0)
+        assert float(tff.df.params.sigma) == pytest.approx(3000.0)
+        assert float(tff.uf.params.fouling_coefficient) == pytest.approx(0.01)
+
+
+class TestMembraneFoulingFluxDecline:
+    """Issue #155: fouling should reduce flux with permeate throughput."""
+
+    def test_flux_declines_with_fouling(self):
+        clean = Ultrafiltration(UltrafiltrationParams(membrane_area=1.0, fouling_coefficient=0.0))
+        fouled = Ultrafiltration(UltrafiltrationParams(membrane_area=1.0, fouling_coefficient=0.05))
+        feed = make_stream({"mAb": 10.0, "buffer": 90.0}, T=300.0, P=101325.0)
+        (_, _), c = clean(feed, concentration_factor=5.0, TMP=1.0)
+        (_, _), f = fouled(feed, concentration_factor=5.0, TMP=1.0)
+        assert float(f["flux"]) < float(c["flux"])
+        assert float(f["fouling_factor"]) > 1.0
+        assert float(c["fouling_factor"]) == pytest.approx(1.0)
+
+    def test_more_permeate_more_fouling(self):
+        uf = Ultrafiltration(UltrafiltrationParams(membrane_area=1.0, fouling_coefficient=0.02))
+        feed = make_stream({"mAb": 10.0, "buffer": 90.0}, T=300.0, P=101325.0)
+        (_, _), lo = uf(feed, concentration_factor=2.0, TMP=1.0)   # less permeate
+        (_, _), hi = uf(feed, concentration_factor=10.0, TMP=1.0)  # more permeate
+        assert float(hi["fouling_factor"]) > float(lo["fouling_factor"])
+        assert float(hi["flux"]) < float(lo["flux"])
