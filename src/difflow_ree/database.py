@@ -26,7 +26,13 @@ DATA_DIR = Path(__file__).parent / "data"
 
 @dataclass(frozen=True)
 class REEElement:
-    """Properties of a rare earth element."""
+    """Properties of a rare earth element.
+
+    The heat-of-reaction fields (#119) are optional and default to ``None``;
+    they are not fabricated. Supply them (with a literature citation) via
+    ``elements.yaml`` or the add/update-element API when energy-balance or
+    long-term economics modeling requires them.
+    """
     symbol: str
     name: str
     atomic_number: int
@@ -39,6 +45,10 @@ class REEElement:
     oxide_formula: str
     oxide_mw: float  # g/mol
     price_usd_kg: float
+    # Optional thermodynamic properties (kJ/mol), user-supplied with citation.
+    heat_of_extraction: float | None = None
+    heat_of_scrubbing: float | None = None
+    heat_of_stripping: float | None = None
 
 
 class REEDatabase:
@@ -73,6 +83,9 @@ class REEDatabase:
                 oxide_formula=props["oxide_formula"],
                 oxide_mw=props["oxide_mw"],
                 price_usd_kg=props["price_usd_kg"],
+                heat_of_extraction=props.get("heat_of_extraction"),
+                heat_of_scrubbing=props.get("heat_of_scrubbing"),
+                heat_of_stripping=props.get("heat_of_stripping"),
             )
 
         for group_name, group_data in data["groups"].items():
@@ -221,6 +234,13 @@ class Extractant:
     reference_concentration: float
     concentration_exponent: float
     cost_usd_kg: float
+    # Optional degradation / thermo properties (#119), user-supplied with
+    # citation; default None (no fabricated values). Solvent degradation rate
+    # in 1/h; heats of extraction/scrubbing/stripping in kJ/mol.
+    degradation_rate: float | None = None
+    heat_of_extraction: float | None = None
+    heat_of_scrubbing: float | None = None
+    heat_of_stripping: float | None = None
 
 
 class ExtractantDatabase:
@@ -270,6 +290,10 @@ class ExtractantDatabase:
                 reference_concentration=props["reference_concentration"],
                 concentration_exponent=props["concentration_exponent"],
                 cost_usd_kg=props["cost_usd_kg"],
+                degradation_rate=props.get("degradation_rate"),
+                heat_of_extraction=props.get("heat_of_extraction"),
+                heat_of_scrubbing=props.get("heat_of_scrubbing"),
+                heat_of_stripping=props.get("heat_of_stripping"),
             )
 
     def get(self, name: str) -> Extractant:

@@ -249,3 +249,31 @@ class TestDistributionIonicStrength:
         d = self._dist()
         g = jax.grad(lambda I: d.get_D("Nd", pH=3.0, ionic_strength=I))(0.1)
         assert jnp.isfinite(g) and float(g) < 0.0
+
+
+class TestDatabaseThermoProperties:
+    """Issue #119: DB can carry optional heats / degradation rate."""
+
+    def test_defaults_are_none(self):
+        from difflow_ree.database import get_ree_database, get_extractant_database
+        nd = get_ree_database().get("Nd")
+        assert nd.heat_of_extraction is None
+        assert nd.heat_of_scrubbing is None
+        assert nd.heat_of_stripping is None
+        d2ehpa = get_extractant_database().get("D2EHPA")
+        assert d2ehpa.degradation_rate is None
+        assert d2ehpa.heat_of_extraction is None
+
+    def test_element_can_carry_heats(self):
+        from difflow_ree.database import REEElement
+        # User-supplied values (with citation in real use)
+        el = REEElement(
+            symbol="Ho", name="Holmium", atomic_number=67, atomic_weight=164.93,
+            ionic_radius_pm=90.1, density=8.79, melting_point=1734.0,
+            oxidation_states=(3,), group="heavy", oxide_formula="Ho2O3",
+            oxide_mw=377.86, price_usd_kg=1400.0,
+            heat_of_extraction=-25.0, heat_of_stripping=25.0,
+        )
+        assert el.heat_of_extraction == -25.0
+        assert el.heat_of_stripping == 25.0
+        assert el.heat_of_scrubbing is None
