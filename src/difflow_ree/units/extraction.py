@@ -16,6 +16,7 @@ from difflow.streams import Stream, make_stream, get_flows, total_flow
 from difflow_ree.equilibrium.distribution import REEDistribution
 from difflow_ree.equilibrium.loading import LoadingIsotherm, get_loading_isotherm
 from difflow_ree.equilibrium.speciation import REESpeciation
+from difflow_ree.kinetics.extraction_kinetics import approach_to_equilibrium
 
 
 # =============================================================================
@@ -326,6 +327,22 @@ class MixerSettlerParams(ParamsMixin):
     mixer_residence_time: float = 120.0  # 2 minutes typical
     settler_residence_time: float = 300.0  # 5 minutes typical
     stage_efficiency: float = 0.95
+    # Extraction kinetics (#118). When k_extraction (overall rate constant,
+    # 1/s) is set, the effective stage efficiency is the kinetic approach to
+    # equilibrium 1 - exp(-k * mixer_residence_time) rather than the fixed
+    # Murphree stage_efficiency, so slow kinetics / short mixing under-shoot
+    # equilibrium. None keeps the constant efficiency (backward compatible).
+    k_extraction: float | None = None
+    # Phase entrainment (#110). Fractions of one phase physically carried into
+    # the opposite outlet (organic droplets in aqueous, aqueous droplets in
+    # organic), carrying their dissolved REE across and reducing separation.
+    # Typical values 0.001-0.01; 0 disables (backward compatible).
+    entrainment_org_in_aq: float = 0.0
+    entrainment_aq_in_org: float = 0.0
+    # Third-phase formation (#117). If set, an organic loading (mol REE per mol
+    # extractant) above this limit flags third-phase onset in info. None
+    # disables the check (backward compatible).
+    third_phase_loading_limit: float | None = None
 
 
 class REEMixerSettler:
@@ -413,6 +430,13 @@ class REEMixerSettler:
 
         D_values = self._distribution.get_D_all(pH, T)
 
+        # Effective stage efficiency: kinetic approach to equilibrium when a
+        # rate constant is supplied (#118), else the fixed Murphree value.
+        if p.k_extraction is not None:
+            eta = approach_to_equilibrium(p.mixer_residence_time, p.k_extraction)
+        else:
+            eta = jnp.asarray(p.stage_efficiency)
+
         # Start with full copies to preserve non-extracted species (Bug #53)
         aq_out_flows = dict(aq_flows)
         org_out_flows = dict(org_flows)
@@ -436,7 +460,6 @@ class REEMixerSettler:
             F_org_eq = c_org_eq * F_org
 
             # Apply stage efficiency
-            eta = p.stage_efficiency
             F_aq_out = F_aq_in + eta * (F_aq_eq - F_aq_in)
             F_org_out = F_org_in + eta * (F_org_eq - F_org_in)
 
@@ -446,14 +469,42 @@ class REEMixerSettler:
             aq_out_flows[elem] = F_aq_out
             org_out_flows[elem] = jnp.maximum(F_org_out, 0.0)
 
+        # Phase entrainment (#110): a fraction of each phase (and every species
+        # it carries) is entrained into the opposite outlet, so dissolved REE
+        # crosses back and separation degrades. Mass is conserved species-wise.
+        f_oa = jnp.asarray(p.entrainment_org_in_aq)
+        f_ao = jnp.asarray(p.entrainment_aq_in_org)
+        if p.entrainment_org_in_aq or p.entrainment_aq_in_org:
+            all_species = set(aq_out_flows) | set(org_out_flows)
+            entrained_aq = {}
+            entrained_org = {}
+            for s in all_species:
+                a = jnp.asarray(aq_out_flows.get(s, 0.0))
+                o = jnp.asarray(org_out_flows.get(s, 0.0))
+                entrained_aq[s] = a * (1.0 - f_ao) + o * f_oa
+                entrained_org[s] = o * (1.0 - f_oa) + a * f_ao
+            aq_out_flows = entrained_aq
+            org_out_flows = entrained_org
+
         P = aqueous_in["P"]
         aqueous_out = make_stream(aq_out_flows, T, P)
         organic_out = make_stream(org_out_flows, T, P)
 
         info = {
             "D_values": D_values,
-            "efficiency": p.stage_efficiency,
+            "efficiency": eta,
         }
+        if p.k_extraction is not None:
+            info["kinetic_efficiency"] = eta
+            info["mixer_residence_time"] = jnp.asarray(p.mixer_residence_time)
+
+        # Third-phase formation check (#117): organic loading vs the limit.
+        if p.third_phase_loading_limit is not None:
+            total_org_ree = sum(jnp.asarray(org_out_flows.get(e, 0.0)) for e in p.elements)
+            F_extractant = org_flows.get(p.extractant, 1.0)
+            loading = total_org_ree / jnp.maximum(jnp.asarray(F_extractant), 1e-30)
+            info["organic_loading"] = loading
+            info["third_phase_formed"] = loading > p.third_phase_loading_limit
 
         return aqueous_out, organic_out, info
 

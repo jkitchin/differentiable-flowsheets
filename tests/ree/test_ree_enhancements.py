@@ -134,3 +134,83 @@ class TestCoprecipitation:
 
         g = jax.grad(recovered)(0.5)
         assert jnp.isfinite(g) and float(g) > 0.0
+
+
+class TestMixerSettlerKinetics:
+    """Issue #118: kinetic stage efficiency from residence time."""
+
+    def _stage(self, **kw):
+        from difflow_ree.units.extraction import REEMixerSettler, MixerSettlerParams
+        return REEMixerSettler(MixerSettlerParams(
+            extractant="D2EHPA", elements=("Nd",), pH=3.0, **kw))
+
+    def _streams(self):
+        aq = make_stream({"H2O": 10.0, "Nd": 1.0}, T=298.15, P=101325.0)
+        org = make_stream({"D2EHPA": 1.0, "kerosene": 5.0}, T=298.15, P=101325.0)
+        return aq, org
+
+    def test_slow_kinetics_undershoots_equilibrium(self):
+        aq, org = self._streams()
+        # Slow rate + short mixing -> efficiency well below 1
+        _, _, info = self._stage(k_extraction=0.001, mixer_residence_time=60.0)(aq, org)
+        assert float(info["kinetic_efficiency"]) < 0.1
+        assert float(info["efficiency"]) == pytest.approx(1 - jnp.exp(-0.001 * 60.0), rel=1e-6)
+
+    def test_fast_kinetics_reaches_equilibrium(self):
+        aq, org = self._streams()
+        _, _, fast = self._stage(k_extraction=1.0, mixer_residence_time=120.0)(aq, org)
+        assert float(fast["efficiency"]) > 0.99
+
+    def test_backward_compat_murphree(self):
+        aq, org = self._streams()
+        _, _, info = self._stage(stage_efficiency=0.9)(aq, org)  # no k_extraction
+        assert float(info["efficiency"]) == pytest.approx(0.9, rel=1e-6)
+        assert "kinetic_efficiency" not in info
+
+
+class TestMixerSettlerEntrainment:
+    """Issue #110: phase entrainment carries REE across, degrading separation."""
+
+    def _run(self, f_oa=0.0, f_ao=0.0):
+        from difflow_ree.units.extraction import REEMixerSettler, MixerSettlerParams
+        stage = REEMixerSettler(MixerSettlerParams(
+            extractant="D2EHPA", elements=("Nd",), pH=3.0,
+            entrainment_org_in_aq=f_oa, entrainment_aq_in_org=f_ao,
+        ))
+        aq = make_stream({"H2O": 10.0, "Nd": 1.0}, T=298.15, P=101325.0)
+        org = make_stream({"D2EHPA": 1.0, "kerosene": 5.0}, T=298.15, P=101325.0)
+        return stage(aq, org)
+
+    def test_entrainment_conserves_mass(self):
+        aq_out, org_out, _ = self._run(f_oa=0.02, f_ao=0.01)
+        nd = float(get_flows(aq_out).get("Nd", 0.0)) + float(get_flows(org_out).get("Nd", 0.0))
+        assert nd == pytest.approx(1.0, rel=1e-6)
+
+    def test_entrainment_moves_ree_back_to_aqueous(self):
+        aq0, org0, _ = self._run(0.0, 0.0)
+        aqE, orgE, _ = self._run(f_oa=0.05, f_ao=0.0)
+        # Organic-in-aqueous entrainment carries extracted Nd back to raffinate
+        assert float(get_flows(aqE)["Nd"]) > float(get_flows(aq0)["Nd"])
+
+
+class TestThirdPhaseFormation:
+    """Issue #117: high organic loading flags third-phase onset."""
+
+    def _run(self, extractant_flow, limit=0.5):
+        from difflow_ree.units.extraction import REEMixerSettler, MixerSettlerParams
+        stage = REEMixerSettler(MixerSettlerParams(
+            extractant="D2EHPA", elements=("Nd", "Dy"), pH=3.5,
+            third_phase_loading_limit=limit,
+        ))
+        aq = make_stream({"H2O": 10.0, "Nd": 1.0, "Dy": 1.0}, T=298.15, P=101325.0)
+        org = make_stream({"D2EHPA": extractant_flow, "kerosene": 5.0}, T=298.15, P=101325.0)
+        return stage(aq, org)
+
+    def test_low_loading_no_third_phase(self):
+        _, _, info = self._run(extractant_flow=100.0)  # lots of extractant -> low loading
+        assert not bool(info["third_phase_formed"])
+
+    def test_high_loading_flags_third_phase(self):
+        _, _, info = self._run(extractant_flow=0.5)  # little extractant -> high loading
+        assert bool(info["third_phase_formed"])
+        assert float(info["organic_loading"]) > 0.5
