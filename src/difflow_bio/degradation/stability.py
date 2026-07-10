@@ -21,6 +21,8 @@ __all__ = [
     "aggregation_rate",
     "aggregation_arrhenius",
     "aggregate_fraction",
+    "stretched_exponential_fraction",
+    "lumry_eyring_fraction",
     "deamidation_rate",
     "deamidation_ph_dependent",
     "deamidation_fraction",
@@ -135,6 +137,79 @@ def aggregate_fraction(
     k_agg = jnp.asarray(k_agg)
 
     return 1.0 - jnp.exp(-k_agg * t)
+
+
+def stretched_exponential_fraction(
+    t: Array | float,
+    k: Array | float,
+    beta: Array | float = 1.0,
+) -> Array:
+    """Degraded fraction with stretched-exponential (KWW/Weibull) kinetics.
+
+    f = 1 - exp(-(k*t)^beta)
+
+    Generalizes the first-order integrated form (beta = 1) to the
+    Kohlrausch-Williams-Watts / Weibull kinetics often observed for protein
+    degradation in heterogeneous environments, where a distribution of rate
+    constants gives non-first-order time dependence:
+      - beta < 1: dispersive / broad rate distribution (fast then tailing)
+      - beta > 1: sigmoidal with an induction lag
+
+    Args:
+        t: Time (h)
+        k: Characteristic rate constant (1/h)
+        beta: Stretch exponent (dimensionless, > 0). beta = 1 -> first order.
+
+    Returns:
+        Degraded fraction (0-1)
+
+    References:
+        Manning MC et al. (2010). Pharm Res 27:544 (non-first-order protein
+        degradation kinetics).
+    """
+    t = jnp.asarray(t)
+    k = jnp.asarray(k)
+    beta = jnp.asarray(beta)
+    # Guard the power for t=0 (0^beta is 0 for beta>0; keep it well-defined).
+    return 1.0 - jnp.exp(-jnp.power(jnp.maximum(k * t, 0.0), beta))
+
+
+def lumry_eyring_fraction(
+    t: Array | float,
+    k_unfold: Array | float,
+    k_agg: Array | float,
+) -> Array:
+    """Aggregated fraction from the Lumry-Eyring two-step model.
+
+    Native -> Unfolded (k_unfold) -> Aggregate (k_agg), treated as consecutive
+    irreversible first-order steps. The integrated aggregate fraction is the
+    classic consecutive-reaction product:
+
+        f_A = 1 - (k_agg e^{-k_unfold t} - k_unfold e^{-k_agg t})/(k_agg - k_unfold)
+
+    with the degenerate limit f_A = 1 - (1 + k t) e^{-k t} when the two rate
+    constants coincide. Unlike a single first-order decay, this reproduces the
+    lag phase set by the unfolding step before aggregation accelerates.
+
+    Args:
+        t: Time (h)
+        k_unfold: Unfolding rate constant N -> U (1/h)
+        k_agg: Aggregation rate constant U -> A (1/h)
+
+    Returns:
+        Aggregated fraction (0-1)
+
+    References:
+        Roberts CJ (2007). J Phys Chem B 111:13447 (Lumry-Eyring aggregation).
+    """
+    t = jnp.asarray(t)
+    k1 = jnp.asarray(k_unfold)
+    k2 = jnp.asarray(k_agg)
+    denom = k2 - k1
+    safe_denom = jnp.where(jnp.abs(denom) < 1e-12, 1.0, denom)
+    f_general = 1.0 - (k2 * jnp.exp(-k1 * t) - k1 * jnp.exp(-k2 * t)) / safe_denom
+    f_equal = 1.0 - (1.0 + k1 * t) * jnp.exp(-k1 * t)
+    return jnp.where(jnp.abs(denom) < 1e-12, f_equal, f_general)
 
 
 # =============================================================================
