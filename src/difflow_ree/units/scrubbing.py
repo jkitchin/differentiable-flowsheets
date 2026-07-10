@@ -184,9 +184,9 @@ class REEScrubber:
         impurity_removed = {}
         for elem, eff in scrub_efficiency.items():
             if eff["is_target"]:
-                target_retained[elem] = 1 - float(eff["fraction_scrubbed"])
+                target_retained[elem] = 1.0 - jnp.asarray(eff["fraction_scrubbed"])
             else:
-                impurity_removed[elem] = float(eff["fraction_scrubbed"])
+                impurity_removed[elem] = jnp.asarray(eff["fraction_scrubbed"])
 
         info = {
             "n_stages": n_stages,
