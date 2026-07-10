@@ -26,6 +26,7 @@ from difflow.dynamic import (
     StateVector,
     molar_states,
     thermal_state,
+    EventSpec,
 )
 from difflow.streams import make_stream, get_flows
 
@@ -355,6 +356,56 @@ class TestSimulation:
 
         # Product B should increase (state index 1)
         assert yf[1] > y0[1]
+
+
+class TestSimulationEvents:
+    """Issue #130: event detection wired through DynamicFlowsheet.simulate."""
+
+    def test_no_events_by_default(self, species_order, simple_cstr, feed_stream):
+        fs = DynamicFlowsheet(species_order=species_order)
+        fs.add_feed("feed", feed_stream)
+        fs.add_unit(simple_cstr, inlet_names=["feed"], outlet_names=["reactor_out"])
+        result = fs.simulate(t_span=(0.0, 100.0), method="RK4", n_steps=50)
+        assert result.events == []
+
+    def test_threshold_event_detected(self, species_order, simple_cstr, feed_stream):
+        fs = DynamicFlowsheet(species_order=species_order)
+        fs.add_feed("feed", feed_stream)
+        fs.add_unit(simple_cstr, inlet_names=["feed"], outlet_names=["reactor_out"])
+
+        # First run to find the range of product B (state index 1)
+        base = fs.simulate(t_span=(0.0, 500.0), method="RK4", n_steps=500)
+        b0 = float(base.trajectory.y[0][1])
+        bf = float(base.trajectory.y[-1][1])
+        threshold = 0.5 * (b0 + bf)
+
+        event = EventSpec(
+            name="B_threshold",
+            condition_fn=lambda t, y: y[1] - threshold,
+            direction=1,  # B increasing through the threshold
+        )
+        result = fs.simulate(
+            t_span=(0.0, 500.0), method="RK4", n_steps=500, events=[event]
+        )
+        assert len(result.events) >= 1
+        ev = result.events[0]
+        assert ev.name == "B_threshold"
+        assert 0.0 < ev.t_event < 500.0
+
+    def test_event_not_triggered_when_condition_never_crosses(
+        self, species_order, simple_cstr, feed_stream
+    ):
+        fs = DynamicFlowsheet(species_order=species_order)
+        fs.add_feed("feed", feed_stream)
+        fs.add_unit(simple_cstr, inlet_names=["feed"], outlet_names=["reactor_out"])
+        # Threshold far above any reachable state
+        event = EventSpec(
+            name="never", condition_fn=lambda t, y: y[1] - 1e9, direction=1
+        )
+        result = fs.simulate(
+            t_span=(0.0, 100.0), method="RK4", n_steps=50, events=[event]
+        )
+        assert result.events == []
 
 
 # =============================================================================
