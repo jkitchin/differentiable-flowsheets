@@ -234,7 +234,9 @@ class AmineStripper:
         F_steam = F_CO2_stripped * steam_ratio
         Q_vaporization = F_steam * dH_vap_water  # W
 
-        # Condenser recovers some steam
+        # Condenser recovers some steam. This is a cooling-utility requirement
+        # at the top of the stripper: the reflux fraction of the stripping
+        # steam is condensed and returned (#149).
         reflux = jnp.asarray(p.reflux_ratio)
         Q_condenser = Q_vaporization * reflux
 
@@ -275,6 +277,9 @@ class AmineStripper:
             "Q_reaction": Q_reaction,
             "Q_vaporization": Q_vaporization,
             "Q_condenser": Q_condenser,
+            # Cooling-utility requirement for the overhead condenser (#149),
+            # exposed explicitly for utility sizing / techno-economics.
+            "condenser_cooling_duty": Q_condenser,
             "specific_energy": specific_energy,
             "rich_loading": rich_loading,
             "lean_loading": lean_loading,
