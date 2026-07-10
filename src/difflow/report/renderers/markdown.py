@@ -109,9 +109,13 @@ def to_markdown(report: Report) -> str:
     # --- Species table
     if report.species:
         w("## Species and Thermophysical Data\n\n")
+        tracked = any(s.accessed is not None for s in report.species)
+        header = ["species", "MW (g/mol)", "Tc (K)", "Pc (Pa)", "ω", "Hf (J/mol)", "source"]
+        if tracked:
+            header.append("accessed")
         rows = []
         for s in report.species:
-            rows.append([
+            row = [
                 s.name,
                 "-" if s.MW is None else f"{s.MW:.4g}",
                 "-" if s.Tc is None else f"{s.Tc:.4g}",
@@ -119,11 +123,11 @@ def to_markdown(report: Report) -> str:
                 "-" if s.omega is None else f"{s.omega:.4g}",
                 "-" if s.Hf is None else f"{s.Hf:.4g}",
                 s.source or "-",
-            ])
-        w(_table(
-            ["species", "MW (g/mol)", "Tc (K)", "Pc (Pa)", "ω", "Hf (J/mol)", "source"],
-            rows,
-        ))
+            ]
+            if tracked:
+                row.append("yes" if s.accessed else "no")
+            rows.append(row)
+        w(_table(header, rows))
         w("\n\n")
 
     # --- Feeds
@@ -159,6 +163,77 @@ def to_markdown(report: Report) -> str:
         ]
         w(_table(["species", "feed total", "outlet total", "residual"], rows))
         w("\n\n")
+
+    # --- Recycle convergence (section F)
+    if report.convergence is not None:
+        c = report.convergence
+        w("## Recycle Convergence\n\n")
+        w(f"- Method: {c.method}\n")
+        w(f"- Tear streams: {', '.join(c.tear_streams) or '(none)'}\n")
+        if c.iterations is not None:
+            w(f"- Iterations: {c.iterations}\n")
+        if c.residual is not None:
+            w(f"- Final residual: {c.residual:.3g}\n")
+        if c.tolerance is not None:
+            w(f"- Tolerance: {c.tolerance:.3g}\n")
+        if c.converged is not None:
+            w(f"- Converged: {'yes' if c.converged else 'no'}\n")
+        w("\n")
+
+    # --- Optimization / sensitivity (section G)
+    if report.optimization is not None:
+        o = report.optimization
+        w("## Optimization and Sensitivity\n\n")
+        units = f" {o.objective_units}" if o.objective_units else ""
+        w(f"- Objective: {o.objective_name} ({o.sense})\n")
+        w(f"- Value at design point: {o.objective_value:.6g}{units}\n")
+        if o.objective_source:
+            w(f"- Source: `{o.objective_source}`\n")
+        w("\n")
+
+        w("**Decision variables**\n\n")
+        rows = []
+        for v in o.variables:
+            bounds = (
+                f"[{v.lower:.4g}, {v.upper:.4g}]"
+                if v.lower is not None and v.upper is not None
+                else "-"
+            )
+            rows.append([
+                v.name,
+                f"{v.value:.6g}",
+                bounds,
+                "-" if v.gradient is None else f"{v.gradient:.4g}",
+                "-" if v.elasticity is None else f"{v.elasticity:.4g}",
+            ])
+        w(_table(
+            ["variable", "value", "bounds", "dJ/dx", "elasticity"], rows
+        ))
+        w("\n\n")
+
+        if o.tornado:
+            w("**Sensitivity tornado** (objective swing over each bound)\n\n")
+            trows = [
+                [
+                    t.variable,
+                    f"{t.low_value:.4g}",
+                    f"{t.high_value:.4g}",
+                    f"{t.low_output:.6g}",
+                    f"{t.high_output:.6g}",
+                    f"{t.swing:.4g}",
+                ]
+                for t in o.tornado
+            ]
+            w(_table(
+                ["variable", "low", "high", "J(low)", "J(high)", "swing"],
+                trows,
+            ))
+            w("\n\n")
+
+        if o.notes:
+            for n in o.notes:
+                w(f"- {n}\n")
+            w("\n")
 
     if report.notes:
         w("## Notes\n\n")

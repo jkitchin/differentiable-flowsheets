@@ -96,6 +96,10 @@ class SpeciesRow:
     antoine_coeffs: tuple | None = None
     Hf: float | None = None
     source: str = ""
+    #: True/False when database access was instrumented during the solve
+    #: (see :func:`difflow.database.track_database_access`); ``None`` when
+    #: access was not tracked.
+    accessed: bool | None = None
 
 
 @dataclass
@@ -129,6 +133,102 @@ class BalanceCheck:
 
 
 @dataclass
+class ConvergenceInfo:
+    """Recycle-loop convergence diagnostics for a solved flowsheet.
+
+    Attributes:
+        method: the acceleration method of the solve ("anderson",
+            "wegstein", "damped", or "direct" for a recycle-free
+            sequential solve).
+        iterations: tear iterations taken (0 for a direct solve).
+        residual: final tear residual (max abs change between iterates).
+        tolerance: convergence tolerance requested of the solve.
+        converged: whether the solve met its tolerance.
+        tear_streams: recycle-destination (tear) stream names.
+    """
+
+    method: str
+    iterations: int | None = None
+    residual: float | None = None
+    tolerance: float | None = None
+    converged: bool | None = None
+    tear_streams: list[str] = field(default_factory=list)
+
+
+@dataclass
+class DecisionVariable:
+    """A decision variable of an optimization study (report section G).
+
+    Attributes:
+        name: variable name (matches a key of the design point dict).
+        value: value at the reported design point (typically the optimum).
+        lower: lower bound, if one was supplied.
+        upper: upper bound, if one was supplied.
+        gradient: objective gradient ``dJ/dx`` at the design point, if it
+            could be computed by automatic differentiation.
+        elasticity: normalized sensitivity ``(dJ/dx)(x/J)`` at the design
+            point, if both the gradient and a non-zero objective are known.
+    """
+
+    name: str
+    value: float
+    lower: float | None = None
+    upper: float | None = None
+    gradient: float | None = None
+    elasticity: float | None = None
+
+
+@dataclass
+class TornadoRow:
+    """One-at-a-time swing of the objective over a variable's bounds.
+
+    Attributes:
+        variable: decision-variable name.
+        low_value: variable value at the low end (its lower bound).
+        high_value: variable value at the high end (its upper bound).
+        low_output: objective with the variable at ``low_value`` and all
+            others held at the design point.
+        high_output: objective with the variable at ``high_value``.
+        swing: ``abs(high_output - low_output)`` — the tornado bar length.
+    """
+
+    variable: str
+    low_value: float
+    high_value: float
+    low_output: float
+    high_output: float
+    swing: float
+
+
+@dataclass
+class OptimizationReport:
+    """Optimization / sensitivity summary for a flowsheet (report section G).
+
+    Attributes:
+        objective_name: human-readable name of the objective (e.g.
+            "Levelized cost of capture").
+        objective_value: objective value at the design point.
+        objective_units: units of the objective, if any.
+        objective_source: where the objective is defined (function name,
+            module path, or a free-text description).
+        sense: "minimize" or "maximize".
+        variables: per-decision-variable rows (value, bounds, gradient).
+        tornado: one-at-a-time swings sorted by decreasing magnitude, or
+            ``None`` when no bounds were supplied.
+        notes: free-form notes attached to the study.
+    """
+
+    objective_name: str
+    objective_value: float
+    objective_units: str = ""
+    objective_source: str = ""
+    sense: str = "minimize"
+    variables: list[DecisionVariable] = field(default_factory=list)
+    tornado: list[TornadoRow] | None = None
+    notes: list[str] = field(default_factory=list)
+
+
+@dataclass
 class Report:
     """Full self-documenting report for a flowsheet."""
 
@@ -139,7 +239,19 @@ class Report:
     feeds: list[FeedSummary]
     results: list[ResultSummary] | None = None
     balance_checks: list[BalanceCheck] | None = None
+    convergence: ConvergenceInfo | None = None
+    optimization: OptimizationReport | None = None
     notes: list[str] = field(default_factory=list)
+
+    def diff(self, other: "Report") -> "ReportDiff":
+        """Return a structured diff of this report against ``other``.
+
+        Thin wrapper around :func:`difflow.report.diff.diff_reports`; the
+        receiver is the "before" report and ``other`` the "after".
+        """
+        from difflow.report.diff import diff_reports
+
+        return diff_reports(self, other)
 
     def to_markdown(self) -> str:
         from difflow.report.renderers.markdown import to_markdown

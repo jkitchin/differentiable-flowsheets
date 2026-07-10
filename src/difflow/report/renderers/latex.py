@@ -98,9 +98,13 @@ def to_latex(report: Report) -> str:
 
     if report.species:
         w(r"\subsection*{Species and Thermophysical Data}" + "\n")
+        tracked = any(s.accessed is not None for s in report.species)
+        header = ["species", "MW (g/mol)", "Tc (K)", "Pc (Pa)", "omega", "Hf (J/mol)", "source"]
+        if tracked:
+            header.append("accessed")
         rows = []
         for s in report.species:
-            rows.append([
+            row = [
                 s.name,
                 "-" if s.MW is None else f"{s.MW:.4g}",
                 "-" if s.Tc is None else f"{s.Tc:.4g}",
@@ -108,11 +112,11 @@ def to_latex(report: Report) -> str:
                 "-" if s.omega is None else f"{s.omega:.4g}",
                 "-" if s.Hf is None else f"{s.Hf:.4g}",
                 s.source or "-",
-            ])
-        w(_tabular(
-            ["species", "MW (g/mol)", "Tc (K)", "Pc (Pa)", "omega", "Hf (J/mol)", "source"],
-            rows,
-        ))
+            ]
+            if tracked:
+                row.append("yes" if s.accessed else "no")
+            rows.append(row)
+        w(_tabular(header, rows))
         w("\n\n")
 
     if report.feeds:
@@ -141,5 +145,68 @@ def to_latex(report: Report) -> str:
         ]
         w(_tabular(["species", "feed total", "outlet total", "residual"], rows))
         w("\n\n")
+
+    if report.convergence is not None:
+        c = report.convergence
+        w(r"\subsection*{Recycle Convergence}" + "\n")
+        conv_rows = [
+            ["method", c.method],
+            ["tear streams", ", ".join(c.tear_streams) or "(none)"],
+            ["iterations", "-" if c.iterations is None else str(c.iterations)],
+            ["residual", "-" if c.residual is None else f"{c.residual:.3g}"],
+            ["tolerance", "-" if c.tolerance is None else f"{c.tolerance:.3g}"],
+            ["converged", {True: "yes", False: "no", None: "-"}[c.converged]],
+        ]
+        w(_tabular(["field", "value"], conv_rows))
+        w("\n\n")
+
+    if report.optimization is not None:
+        o = report.optimization
+        w(r"\subsection*{Optimization and Sensitivity}" + "\n")
+        units = f" {o.objective_units}" if o.objective_units else ""
+        w(
+            _esc(f"Objective: {o.objective_name} ({o.sense}); ")
+            + f"value $= {o.objective_value:.6g}$"
+            + _esc(units)
+            + ".\n\n"
+        )
+        if o.objective_source:
+            w(r"\textbf{Source.} \texttt{" + _esc(o.objective_source) + "}\n\n")
+
+        w(r"\textbf{Decision variables.}" + "\n\n")
+        rows = []
+        for v in o.variables:
+            bounds = (
+                f"[{v.lower:.4g}, {v.upper:.4g}]"
+                if v.lower is not None and v.upper is not None
+                else "-"
+            )
+            rows.append([
+                v.name,
+                f"{v.value:.6g}",
+                bounds,
+                "-" if v.gradient is None else f"{v.gradient:.4g}",
+                "-" if v.elasticity is None else f"{v.elasticity:.4g}",
+            ])
+        w(_tabular(["variable", "value", "bounds", "dJ/dx", "elasticity"], rows))
+        w("\n\n")
+
+        if o.tornado:
+            w(r"\textbf{Sensitivity tornado.}" + "\n\n")
+            trows = [
+                [
+                    t.variable,
+                    f"{t.low_value:.4g}",
+                    f"{t.high_value:.4g}",
+                    f"{t.low_output:.6g}",
+                    f"{t.high_output:.6g}",
+                    f"{t.swing:.4g}",
+                ]
+                for t in o.tornado
+            ]
+            w(_tabular(
+                ["variable", "low", "high", "J(low)", "J(high)", "swing"], trows
+            ))
+            w("\n\n")
 
     return out.getvalue()

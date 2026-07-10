@@ -23,19 +23,25 @@ from typing import Any
 
 from difflow.report.ir import (
     BalanceCheck,
+    ConvergenceInfo,
+    DecisionVariable,
     Edge,
     FeedSummary,
+    OptimizationReport,
     ParamRow,
     Provenance,
     RecycleInfo,
     Report,
     ResultSummary,
     SpeciesRow,
+    TornadoRow,
     Topology,
     UnitReport,
 )
 from difflow.report.metadata import UnitMetadata, get_metadata, has_structured_metadata
-from difflow.report.builder import build_report
+from difflow.report.builder import build_optimization_report, build_report
+from difflow.report.diff import ReportDiff, diff_reports
+from difflow.report.diagram import flowsheet_svg
 from difflow.report.renderers.markdown import to_markdown
 from difflow.report.renderers.json_renderer import to_json
 from difflow.report.renderers.latex import to_latex
@@ -70,10 +76,18 @@ __all__ = [
     "RecycleInfo",
     "Edge",
     "BalanceCheck",
+    "ConvergenceInfo",
+    "DecisionVariable",
+    "TornadoRow",
+    "OptimizationReport",
+    "ReportDiff",
+    "diff_reports",
+    "flowsheet_svg",
     "UnitMetadata",
     "get_metadata",
     "has_structured_metadata",
     "build_report",
+    "build_optimization_report",
     "report",
     "to_markdown",
     "to_json",

@@ -488,6 +488,7 @@ def get_species_info(name: str) -> dict:
     Returns:
         Dictionary with all available properties
     """
+    _record_access(name, "info")
     key = name.lower().replace(" ", "_").replace("-", "_")
     info = {"name": key}
 
@@ -600,6 +601,87 @@ def resolve_alias(name: str) -> str:
     return _ALIASES.get(key, key)
 
 
+# =============================================================================
+# Instrumented database-access tracking (report provenance)
+# =============================================================================
+
+import contextlib as _contextlib
+
+#: stack of active access recorders; each is a list of (species, kind) tuples.
+#: Using a stack rather than a single log makes ``track_database_access``
+#: re-entrant (nested contexts each get their own record).
+_active_recorders: list[list[tuple[str, str]]] = []
+
+
+def _record_access(name: str, kind: str) -> None:
+    """Note a database lookup for any active :func:`track_database_access`."""
+    if not _active_recorders:
+        return
+    canonical = resolve_alias(name)
+    for recorder in _active_recorders:
+        recorder.append((canonical, kind))
+
+
+class DatabaseAccessTracker:
+    """Records which species/properties the database served during a solve.
+
+    Obtain one from :func:`track_database_access`.  After the ``with`` block
+    it exposes the set of species whose entries were read, which lets a
+    :class:`~difflow.report.ir.Report` distinguish species the calculation
+    actually depended on from species merely present in a stream.
+    """
+
+    def __init__(self, records: list[tuple[str, str]]):
+        self._records = records
+
+    @property
+    def records(self) -> list[tuple[str, str]]:
+        """All ``(species, kind)`` lookups in call order (with duplicates)."""
+        return list(self._records)
+
+    @property
+    def species(self) -> list[str]:
+        """Canonical species names accessed, in first-seen order."""
+        seen: dict[str, None] = {}
+        for name, _ in self._records:
+            seen.setdefault(name, None)
+        return list(seen)
+
+    def was_accessed(self, name: str) -> bool:
+        """True if ``name`` (any alias) was looked up during tracking."""
+        return resolve_alias(name) in set(n for n, _ in self._records)
+
+    def kinds(self, name: str) -> set[str]:
+        """The kinds of lookup ("critical", "ideal", "info") for ``name``."""
+        canonical = resolve_alias(name)
+        return {k for n, k in self._records if n == canonical}
+
+
+@_contextlib.contextmanager
+def track_database_access():
+    """Context manager that records database lookups made inside it.
+
+    Wrap a solve to capture precise data provenance for a report::
+
+        from difflow.database import track_database_access
+
+        with track_database_access() as tracker:
+            streams = fs.solve()
+
+        rep = fs.report(streams, db_access=tracker)
+
+    Yields:
+        A :class:`DatabaseAccessTracker`; the records are complete once the
+        ``with`` block exits (and remain readable afterward).
+    """
+    records: list[tuple[str, str]] = []
+    _active_recorders.append(records)
+    try:
+        yield DatabaseAccessTracker(records)
+    finally:
+        _active_recorders.remove(records)
+
+
 # Make alias resolution automatic in get_* functions
 _original_get_critical_props = get_critical_props
 _original_get_species_data = get_species_data
@@ -607,9 +689,11 @@ _original_get_species_data = get_species_data
 
 def get_critical_props(name: str) -> CriticalProperties:
     """Get critical properties for a species by name (with alias support)."""
+    _record_access(name, "critical")
     return _original_get_critical_props(resolve_alias(name))
 
 
 def get_species_data(name: str) -> SpeciesData:
     """Get SpeciesData for ideal thermodynamics by name (with alias support)."""
+    _record_access(name, "ideal")
     return _original_get_species_data(resolve_alias(name))
