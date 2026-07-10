@@ -42,6 +42,7 @@ table { border-collapse: collapse; margin: 1em 0; }
 th, td { border: 1px solid #ddd; padding: 4px 10px; text-align: left; }
 th { background: #f5f5f5; }
 .eq { margin: 0.25em 0; }
+.diagram { overflow-x: auto; margin: 1em 0; }
 """
 
 
@@ -103,6 +104,15 @@ def to_html(report: Report, embed_diagram: bool = True) -> str:
         rows = [[r.source_stream, r.dest_stream] for r in report.topology.recycles]
         w(_table(["source", "dest"], rows))
 
+    # Diagram (self-contained inline SVG built from the IR).
+    if embed_diagram:
+        from difflow.report.diagram import flowsheet_svg
+
+        svg = flowsheet_svg(report)
+        if svg:
+            w("<h3>Diagram</h3>\n")
+            w(f"<div class='diagram'>{svg}</div>\n")
+
     # Units
     w("<h2>Unit Operations</h2>\n")
     for u in report.units:
@@ -138,9 +148,13 @@ def to_html(report: Report, embed_diagram: bool = True) -> str:
 
     if report.species:
         w("<h2>Species and Thermophysical Data</h2>\n")
+        tracked = any(s.accessed is not None for s in report.species)
+        header = ["species", "MW (g/mol)", "Tc (K)", "Pc (Pa)", "omega", "Hf (J/mol)", "source"]
+        if tracked:
+            header.append("accessed")
         rows = []
         for s in report.species:
-            rows.append([
+            row = [
                 s.name,
                 "-" if s.MW is None else f"{s.MW:.4g}",
                 "-" if s.Tc is None else f"{s.Tc:.4g}",
@@ -148,11 +162,11 @@ def to_html(report: Report, embed_diagram: bool = True) -> str:
                 "-" if s.omega is None else f"{s.omega:.4g}",
                 "-" if s.Hf is None else f"{s.Hf:.4g}",
                 s.source or "-",
-            ])
-        w(_table(
-            ["species", "MW (g/mol)", "Tc (K)", "Pc (Pa)", "omega", "Hf (J/mol)", "source"],
-            rows,
-        ))
+            ]
+            if tracked:
+                row.append("yes" if s.accessed else "no")
+            rows.append(row)
+        w(_table(header, rows))
 
     if report.feeds:
         w("<h2>Feed Streams</h2>\n")
@@ -177,6 +191,19 @@ def to_html(report: Report, embed_diagram: bool = True) -> str:
             for b in report.balance_checks
         ]
         w(_table(["species", "feed total", "outlet total", "residual"], rows))
+
+    if report.convergence is not None:
+        c = report.convergence
+        w("<h2>Recycle Convergence</h2>\n")
+        conv_rows = [
+            ["method", c.method],
+            ["tear streams", ", ".join(c.tear_streams) or "(none)"],
+            ["iterations", "-" if c.iterations is None else str(c.iterations)],
+            ["residual", "-" if c.residual is None else f"{c.residual:.3g}"],
+            ["tolerance", "-" if c.tolerance is None else f"{c.tolerance:.3g}"],
+            ["converged", {True: "yes", False: "no", None: "-"}[c.converged]],
+        ]
+        w(_table(["field", "value"], conv_rows))
 
     if report.optimization is not None:
         o = report.optimization

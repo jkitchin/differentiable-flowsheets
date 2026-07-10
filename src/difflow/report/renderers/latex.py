@@ -98,9 +98,13 @@ def to_latex(report: Report) -> str:
 
     if report.species:
         w(r"\subsection*{Species and Thermophysical Data}" + "\n")
+        tracked = any(s.accessed is not None for s in report.species)
+        header = ["species", "MW (g/mol)", "Tc (K)", "Pc (Pa)", "omega", "Hf (J/mol)", "source"]
+        if tracked:
+            header.append("accessed")
         rows = []
         for s in report.species:
-            rows.append([
+            row = [
                 s.name,
                 "-" if s.MW is None else f"{s.MW:.4g}",
                 "-" if s.Tc is None else f"{s.Tc:.4g}",
@@ -108,11 +112,11 @@ def to_latex(report: Report) -> str:
                 "-" if s.omega is None else f"{s.omega:.4g}",
                 "-" if s.Hf is None else f"{s.Hf:.4g}",
                 s.source or "-",
-            ])
-        w(_tabular(
-            ["species", "MW (g/mol)", "Tc (K)", "Pc (Pa)", "omega", "Hf (J/mol)", "source"],
-            rows,
-        ))
+            ]
+            if tracked:
+                row.append("yes" if s.accessed else "no")
+            rows.append(row)
+        w(_tabular(header, rows))
         w("\n\n")
 
     if report.feeds:
@@ -140,6 +144,20 @@ def to_latex(report: Report) -> str:
             for b in report.balance_checks
         ]
         w(_tabular(["species", "feed total", "outlet total", "residual"], rows))
+        w("\n\n")
+
+    if report.convergence is not None:
+        c = report.convergence
+        w(r"\subsection*{Recycle Convergence}" + "\n")
+        conv_rows = [
+            ["method", c.method],
+            ["tear streams", ", ".join(c.tear_streams) or "(none)"],
+            ["iterations", "-" if c.iterations is None else str(c.iterations)],
+            ["residual", "-" if c.residual is None else f"{c.residual:.3g}"],
+            ["tolerance", "-" if c.tolerance is None else f"{c.tolerance:.3g}"],
+            ["converged", {True: "yes", False: "no", None: "-"}[c.converged]],
+        ]
+        w(_tabular(["field", "value"], conv_rows))
         w("\n\n")
 
     if report.optimization is not None:

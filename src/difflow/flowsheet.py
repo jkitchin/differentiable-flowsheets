@@ -100,6 +100,17 @@ class Flowsheet:
         #: tear iterations used by the last accelerated solve (Wegstein
         #: or Anderson); equals max_iter if it did not converge
         self.last_solve_iterations: int | None = None
+        #: final tear residual (max abs change) of the last recycle solve
+        self.last_solve_residual: float | None = None
+        #: whether the last recycle solve met its tolerance
+        self.last_solve_converged: bool | None = None
+        #: acceleration method of the last solve ("anderson", "wegstein",
+        #: "damped", or "direct" for a recycle-free sequential solve)
+        self.last_solve_method: str | None = None
+        #: tolerance requested of the last recycle solve
+        self.last_solve_tol: float | None = None
+        #: tear-stream (recycle destination) names of the last recycle solve
+        self.last_solve_tear_streams: list[str] = []
 
     def add_feed(self, name: str, stream: Stream) -> None:
         """Add a feed stream to the flowsheet.
@@ -186,7 +197,17 @@ class Flowsheet:
         """
         if not self.recycles:
             # No recycles - simple sequential solution
+            self.last_solve_method = "direct"
+            self.last_solve_iterations = 0
+            self.last_solve_residual = 0.0
+            self.last_solve_converged = True
+            self.last_solve_tol = tol
+            self.last_solve_tear_streams = []
             return self._solve_sequential()
+
+        self.last_solve_method = acceleration
+        self.last_solve_tol = tol
+        self.last_solve_tear_streams = [dest for dest in self.recycles.values()]
 
         # Initialize tear streams
         tear_streams = {}
@@ -376,6 +397,17 @@ class Flowsheet:
         )
         tear_converged = sol.value
 
+        # Record convergence diagnostics for the report layer.
+        final_residual = float(
+            jnp.max(jnp.abs(flowsheet_iteration(tear_converged, args) - tear_converged))
+        )
+        self.last_solve_residual = final_residual
+        self.last_solve_converged = bool(final_residual < tol)
+        try:
+            self.last_solve_iterations = int(sol.stats.get("num_steps", max_iter))
+        except Exception:
+            self.last_solve_iterations = max_iter
+
         # Final solve with converged tear streams
         final_tear = self._array_to_streams(tear_converged, list(tear_initial.keys()))
         streams = dict(self.feeds)
@@ -448,9 +480,12 @@ class Flowsheet:
         for iteration in range(max_iter):
             # Check convergence
             residual = jnp.max(jnp.abs(g_curr - x_prev))
+            self.last_solve_residual = float(residual)
             if float(residual) < tol:
                 self.last_solve_iterations = iteration
+                self.last_solve_converged = True
                 break
+            self.last_solve_converged = False
 
             if g_prev is None:
                 # Second iteration: can't use Wegstein yet
@@ -525,9 +560,12 @@ class Flowsheet:
 
             # Check convergence
             residual = jnp.max(jnp.abs(g_curr - x_curr))
+            self.last_solve_residual = float(residual)
             if float(residual) < tol:
                 self.last_solve_iterations = iteration
+                self.last_solve_converged = True
                 break
+            self.last_solve_converged = False
 
             # Apply Anderson acceleration
             x_next = accelerator.step(x_curr, g_curr)
@@ -663,6 +701,7 @@ class Flowsheet:
         streams: dict[str, Stream] | None = None,
         include_git: bool = True,
         optimization=None,
+        db_access=None,
         notes: list[str] | None = None,
     ):
         """Build a self-documenting :class:`~difflow.report.ir.Report` for this flowsheet.
@@ -691,6 +730,7 @@ class Flowsheet:
             streams=streams,
             include_git=include_git,
             optimization=optimization,
+            db_access=db_access,
             notes=notes,
         )
 

@@ -96,6 +96,10 @@ class SpeciesRow:
     antoine_coeffs: tuple | None = None
     Hf: float | None = None
     source: str = ""
+    #: True/False when database access was instrumented during the solve
+    #: (see :func:`difflow.database.track_database_access`); ``None`` when
+    #: access was not tracked.
+    accessed: bool | None = None
 
 
 @dataclass
@@ -126,6 +130,29 @@ class BalanceCheck:
     feed_total: float
     outlet_total: float
     residual: float
+
+
+@dataclass
+class ConvergenceInfo:
+    """Recycle-loop convergence diagnostics for a solved flowsheet.
+
+    Attributes:
+        method: the acceleration method of the solve ("anderson",
+            "wegstein", "damped", or "direct" for a recycle-free
+            sequential solve).
+        iterations: tear iterations taken (0 for a direct solve).
+        residual: final tear residual (max abs change between iterates).
+        tolerance: convergence tolerance requested of the solve.
+        converged: whether the solve met its tolerance.
+        tear_streams: recycle-destination (tear) stream names.
+    """
+
+    method: str
+    iterations: int | None = None
+    residual: float | None = None
+    tolerance: float | None = None
+    converged: bool | None = None
+    tear_streams: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -212,8 +239,19 @@ class Report:
     feeds: list[FeedSummary]
     results: list[ResultSummary] | None = None
     balance_checks: list[BalanceCheck] | None = None
+    convergence: ConvergenceInfo | None = None
     optimization: OptimizationReport | None = None
     notes: list[str] = field(default_factory=list)
+
+    def diff(self, other: "Report") -> "ReportDiff":
+        """Return a structured diff of this report against ``other``.
+
+        Thin wrapper around :func:`difflow.report.diff.diff_reports`; the
+        receiver is the "before" report and ``other`` the "after".
+        """
+        from difflow.report.diff import diff_reports
+
+        return diff_reports(self, other)
 
     def to_markdown(self) -> str:
         from difflow.report.renderers.markdown import to_markdown

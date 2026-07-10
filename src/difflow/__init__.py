@@ -52,6 +52,8 @@ from difflow.database import (
     get_alkanes,
     get_btex,
     get_common_solvents,
+    track_database_access,
+    DatabaseAccessTracker,
 )
 from difflow.base_database import BaseDatabase
 from difflow.uncertainty import (
@@ -153,10 +155,13 @@ from difflow.units.heat_exchanger import (
 )
 from difflow.flowsheet import Flowsheet, Unit, create_objective
 from difflow.report import (
+    ConvergenceInfo,
     OptimizationReport,
     Report,
+    ReportDiff,
     build_optimization_report,
     build_report,
+    diff_reports,
     report,
     to_html,
     to_json,
@@ -288,6 +293,8 @@ __all__ = [
     "get_alkanes",
     "get_btex",
     "get_common_solvents",
+    "track_database_access",
+    "DatabaseAccessTracker",
     "BaseDatabase",
     # Uncertainty Propagation
     "linear_propagation",
@@ -370,8 +377,11 @@ __all__ = [
     # Reporting
     "Report",
     "OptimizationReport",
+    "ConvergenceInfo",
+    "ReportDiff",
     "build_report",
     "build_optimization_report",
+    "diff_reports",
     "report",
     "to_markdown",
     "to_json",

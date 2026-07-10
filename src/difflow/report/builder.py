@@ -14,6 +14,7 @@ from typing import Any, Iterable
 
 from difflow.report.ir import (
     BalanceCheck,
+    ConvergenceInfo,
     DecisionVariable,
     Edge,
     FeedSummary,
@@ -119,9 +120,15 @@ def _feed_summary(name: str, stream: dict[str, Any]) -> FeedSummary:
 
 
 def _collect_species(
-    flowsheet, streams: dict[str, Any] | None
+    flowsheet, streams: dict[str, Any] | None, db_access: Any | None = None
 ) -> list[SpeciesRow]:
-    """Gather thermo + critical properties for every species in any stream."""
+    """Gather thermo + critical properties for every species in any stream.
+
+    When ``db_access`` is a tracker from
+    :func:`difflow.database.track_database_access`, each row's ``accessed``
+    flag reports whether the solve actually touched that species' database
+    entry (precise provenance); otherwise ``accessed`` stays ``None``.
+    """
     from difflow import database as _db
 
     names: list[str] = list(getattr(flowsheet, "species_order", []) or [])
@@ -165,6 +172,11 @@ def _collect_species(
             row.Hf = float(getattr(sp, "Hf", 0.0))
         except Exception:
             pass
+        if db_access is not None:
+            try:
+                row.accessed = db_access.was_accessed(name)
+            except Exception:
+                row.accessed = None
         rows.append(row)
     return rows
 
@@ -235,6 +247,28 @@ def _balance_checks(
         )
         for s in flowsheet.species_order
     ]
+
+
+def _convergence_info(flowsheet, streams: dict[str, Any] | None) -> ConvergenceInfo | None:
+    """Capture recycle-loop convergence diagnostics from the last solve.
+
+    Reads the ``last_solve_*`` attributes the flowsheet records during
+    :meth:`~difflow.flowsheet.Flowsheet.solve`.  Returns ``None`` when no
+    streams are supplied or the flowsheet has not been solved.
+    """
+    if streams is None:
+        return None
+    method = getattr(flowsheet, "last_solve_method", None)
+    if method is None:
+        return None
+    return ConvergenceInfo(
+        method=method,
+        iterations=getattr(flowsheet, "last_solve_iterations", None),
+        residual=getattr(flowsheet, "last_solve_residual", None),
+        tolerance=getattr(flowsheet, "last_solve_tol", None),
+        converged=getattr(flowsheet, "last_solve_converged", None),
+        tear_streams=list(getattr(flowsheet, "last_solve_tear_streams", []) or []),
+    )
 
 
 def _objective_source(objective: Any, explicit: str | None) -> str:
@@ -377,6 +411,7 @@ def build_report(
     streams: dict[str, Any] | None = None,
     include_git: bool = True,
     optimization: OptimizationReport | None = None,
+    db_access: Any | None = None,
     notes: Iterable[str] | None = None,
 ) -> Report:
     """Build a :class:`Report` from a flowsheet and (optionally) solved streams.
@@ -391,6 +426,10 @@ def build_report(
         optimization: Optional :class:`~difflow.report.ir.OptimizationReport`
             (build one with :func:`build_optimization_report`) to include the
             optimization / sensitivity section (report section G).
+        db_access: Optional tracker from
+            :func:`difflow.database.track_database_access` used around the
+            solve.  When given, each species row is annotated with whether
+            its database entry was actually accessed (precise provenance).
         notes: Optional free-form notes to attach to the report.
 
     Returns:
@@ -441,8 +480,9 @@ def build_report(
             if summary is not None:
                 results.append(summary)
 
-    species = _collect_species(flowsheet, streams)
+    species = _collect_species(flowsheet, streams, db_access=db_access)
     balance_checks = _balance_checks(flowsheet, streams)
+    convergence = _convergence_info(flowsheet, streams)
 
     return Report(
         provenance=collect_provenance(include_git=include_git),
@@ -452,6 +492,7 @@ def build_report(
         feeds=feeds,
         results=results,
         balance_checks=balance_checks,
+        convergence=convergence,
         optimization=optimization,
         notes=list(notes) if notes else [],
     )
