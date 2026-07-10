@@ -298,6 +298,7 @@ class DynamicCSTR(DynamicUnitBase):
         dH_rxn: Array | None = None,
         mode: Literal["isothermal", "adiabatic", "specified_duty"] = "isothermal",
         variable_volume: bool = False,
+        outlet_flow_fn: Callable[[Array], Array] | None = None,
         name: str | None = None,
     ):
         """Initialize dynamic CSTR.
@@ -312,6 +313,14 @@ class DynamicCSTR(DynamicUnitBase):
             mode: Energy balance mode
             variable_volume: If True, volume is a dynamic state variable
                             (dV/dt = Q_in - Q_out)
+            outlet_flow_fn: Optional outlet volumetric-flow law ``Q_out(V)``
+                (m³/s) as a function of the current liquid volume. When given
+                (with ``variable_volume=True``) the outlet draw is set
+                independently of the inlet, so the level actually rises or
+                falls under feed/draw imbalance (overflow or dry-down) — e.g.
+                a constant draw ``lambda V: 1e-4`` or gravity drain
+                ``lambda V: k*jnp.sqrt(V)``. When None, the outlet volumetric
+                flow matches the inlet (constant volume; backward compatible).
             name: Unit name
         """
         params = {
@@ -323,6 +332,7 @@ class DynamicCSTR(DynamicUnitBase):
             "dH_rxn": jnp.asarray(dH_rxn) if dH_rxn is not None else None,
             "mode": mode,
             "variable_volume": variable_volume,
+            "outlet_flow_fn": outlet_flow_fn,
         }
         super().__init__(params, name)
 
@@ -377,8 +387,16 @@ class DynamicCSTR(DynamicUnitBase):
         F_in = jnp.array([inlet_flows.get(s, 0.0) for s in species])
         F_in_total = jnp.sum(F_in)
 
-        # Outlet flow (assume constant density, F_out = F_in for fixed volume)
-        F_out_total = F_in_total
+        # Outlet flow. By default constant density gives F_out = F_in
+        # (constant volume). With an outlet_flow_fn the draw is set
+        # independently of the inlet so the level can change under imbalance.
+        rho_mol = 55500.0  # mol/m³ (water-like liquid molar density)
+        outlet_flow_fn = p.get("outlet_flow_fn")
+        if outlet_flow_fn is not None:
+            Q_out = outlet_flow_fn(V)               # m³/s
+            F_out_total = Q_out * rho_mol           # mol/s
+        else:
+            F_out_total = F_in_total
         x_out = n / n_total
         F_out = F_out_total * x_out
 
@@ -398,9 +416,8 @@ class DynamicCSTR(DynamicUnitBase):
         derivs_parts = []
 
         if variable_volume:
-            # Volume balance: dV/dt = Q_in - Q_out
-            # Estimate volumetric flows from molar flows using liquid molar density
-            rho_mol = 55500.0  # mol/m³ (water-like liquid density)
+            # Volume balance: dV/dt = Q_in - Q_out. With an independent
+            # outlet_flow_fn, Q_out != Q_in, so the level rises/falls.
             Q_in = F_in_total / rho_mol
             Q_out = F_out_total / rho_mol
             dV_dt = Q_in - Q_out
@@ -453,8 +470,14 @@ class DynamicCSTR(DynamicUnitBase):
         inlet_flows = get_flows(inlet)
         F_in_total = sum(inlet_flows.values())
 
-        # Outlet flows (assume F_out = F_in for constant volume)
-        outlet_flows = {s: F_in_total * x_out[i] for i, s in enumerate(species)}
+        # Outlet total flow: independent draw law when given, else = inlet.
+        outlet_flow_fn = p.get("outlet_flow_fn")
+        if outlet_flow_fn is not None:
+            V = state["V"] if p.get("variable_volume", False) else p["V"]
+            F_out_total = outlet_flow_fn(V) * 55500.0  # Q_out * rho_mol
+        else:
+            F_out_total = F_in_total
+        outlet_flows = {s: F_out_total * x_out[i] for i, s in enumerate(species)}
 
         # Temperature
         if p["mode"] == "isothermal":
