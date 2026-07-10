@@ -70,6 +70,14 @@ class PrecipitatorParams(ParamsMixin):
     temperature: float = 298.15
     residence_time: float = 3600.0  # 1 hour typical
     target_conversion: float = 0.995
+    # Co-precipitation / common-ion coupling (#109). When > 0, an element's
+    # conversion is boosted toward 1 in proportion to the bulk precipitation
+    # extent of the other REE, capturing common-ion depression of solubility
+    # and solid-solution co-precipitation (trace REE recovered above their
+    # individual-Ksp prediction). 0 disables it (independent precipitation,
+    # backward compatible). See Byrne & Kim, Geochim. Cosmochim. Acta 54, 2645
+    # (1990) for REE co-precipitation.
+    coprecipitation_factor: float = 0.0
 
 
 # =============================================================================
@@ -130,6 +138,7 @@ class OxalatePrecipitator:
         feed: Stream,
         precipitant: Stream,
         T: Array | float | None = None,
+        feed_pH: Array | float | None = None,
     ) -> tuple[Stream, Stream, dict]:
         """Perform oxalate precipitation.
 
@@ -137,6 +146,10 @@ class OxalatePrecipitator:
             feed: Aqueous REE solution
             precipitant: Oxalic acid solution
             T: Temperature (K)
+            feed_pH: Feed pH. When provided, the filtrate pH after
+                precipitation is reported (#116): oxalic-acid precipitation
+                releases 3 H+ per mole REE (6 H+ per RE2(C2O4)3), acidifying
+                the filtrate.
 
         Returns:
             filtrate: Aqueous filtrate (depleted in REE)
@@ -165,20 +178,32 @@ class OxalatePrecipitator:
         required_oxalate = 1.5 * total_ree
         actual_excess = safe_divide(F_oxalate, required_oxalate)
 
+        # First pass: independent (individual-Ksp) conversions per element.
+        base_conversions = {}
         for elem in p.elements:
-            F_in = jnp.asarray(feed_flows.get(elem, 0.0))
-
-            # Precipitation efficiency based on Ksp and excess
-            # Higher pKsp = lower solubility = better precipitation
             pKsp = PKsp_OXALATE[elem]
-
-            # Simple model: conversion increases with excess and pKsp
-            # At stoichiometric (excess=1), conversion ~ 0.99 for typical pKsp
             base_conversion = 1 - jnp.power(10.0, -pKsp/10)
             conversion = jnp.minimum(
                 base_conversion * jnp.sqrt(actual_excess),
                 p.target_conversion
             )
+            base_conversions[elem] = jnp.clip(conversion, 0.0, 0.9999)
+
+        # Bulk precipitation extent (flow-weighted mean independent conversion),
+        # used to drive co-precipitation of the remaining REE (#109).
+        bulk_extent = safe_divide(
+            sum(jnp.asarray(feed_flows.get(e, 0.0)) * base_conversions[e]
+                for e in p.elements),
+            jnp.maximum(total_ree, 1e-30),
+        )
+
+        for elem in p.elements:
+            F_in = jnp.asarray(feed_flows.get(elem, 0.0))
+            pKsp = PKsp_OXALATE[elem]
+            conversion = base_conversions[elem]
+
+            # Co-precipitation / common-ion boost toward complete capture.
+            conversion = conversion + p.coprecipitation_factor * (1.0 - conversion) * bulk_extent
             conversion = jnp.clip(conversion, 0.0, 0.9999)
 
             F_precipitated = F_in * conversion
@@ -213,7 +238,20 @@ class OxalatePrecipitator:
             "total_precipitated": total_solid,
             "solid_composition": solid_composition,
             "product_formula": "REE2(C2O4)3",
+            "coprecipitation_factor": jnp.asarray(p.coprecipitation_factor),
         }
+
+        # Filtrate pH after precipitation (#116). Oxalic-acid precipitation
+        # releases 3 H+ per mole REE precipitated, acidifying the filtrate.
+        if feed_pH is not None:
+            V = jnp.asarray(feed_flows.get("H2O", 1.0))
+            H_initial = jnp.power(10.0, -jnp.asarray(feed_pH)) * V
+            H_released = 3.0 * total_solid
+            H_final = H_initial + H_released
+            info["h_plus_released"] = H_released
+            info["pH_final"] = -jnp.log10(
+                jnp.maximum(safe_divide(H_final, V), 1e-30)
+            )
 
         return filtrate, solid, info
 
@@ -473,12 +511,24 @@ class HydroxidePrecipitator:
 
         total_solid = sum(solid_flows[e] for e in p.elements)
 
+        # Filtrate pH after precipitation (#116). Each RE(OH)3 formed consumes
+        # 3 OH-; depleting hydroxide lowers the filtrate pH below the target.
+        V = jnp.asarray(feed_flows.get("H2O", 1.0))  # volume/flow basis
+        OH_consumed = 3.0 * total_solid
+        OH_final = jnp.maximum(OH_conc * V - OH_consumed, 0.0)
+        OH_conc_final = safe_divide(OH_final, V)
+        pOH_final = -jnp.log10(jnp.maximum(OH_conc_final, 1e-30))
+        pH_final = pKw - pOH_final
+
         info = {
             "precipitant": "hydroxide",
             "pH": pH,
             "precipitation_data": precipitation_data,
             "total_precipitated": total_solid,
             "product_formula": "REE(OH)3",
+            # Post-precipitation filtrate chemistry (#116)
+            "OH_consumed": OH_consumed,
+            "pH_final": pH_final,
         }
 
         return filtrate, solid, info
