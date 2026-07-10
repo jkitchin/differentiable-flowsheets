@@ -219,3 +219,54 @@ class TestDiscStackCentrifuge:
         conc_flows = get_flows(concentrate)
         clar_flows = get_flows(clarified)
         assert float(conc_flows["cells"]) > float(clar_flows["cells"])
+
+
+class TestCentrifugeCellLysis:
+    """Issue #103: high g-force should lyse cells, releasing lysate."""
+
+    def _feed(self):
+        return make_stream({"cells": 100.0, "protein": 10.0, "water": 890.0},
+                           T=300.0, P=101325.0)
+
+    def test_no_lysis_backward_compat(self):
+        cf = Centrifuge(CentrifugeParams(sigma=1000.0))  # lysis disabled
+        conc, clar, info = cf(self._feed(), Q=0.001, rcf=20000.0)
+        # Cells conserved, no lysate species introduced
+        total_cells = float(get_flows(conc)["cells"]) + float(get_flows(clar)["cells"])
+        assert total_cells == pytest.approx(100.0, rel=1e-6)
+        assert "lysate" not in get_flows(clar)
+        assert float(info["lysis_fraction"]) == 0.0
+
+    def test_lysis_above_threshold(self):
+        cf = Centrifuge(CentrifugeParams(
+            sigma=1000.0, lysis_threshold_g=10000.0,
+            lysis_coefficient=1e-5, lysate_species="lysate",
+        ))
+        conc, clar, info = cf(self._feed(), Q=0.001, rcf=30000.0)
+        # excess = 20000, fraction = 1e-5*20000 = 0.2
+        assert float(info["lysis_fraction"]) == pytest.approx(0.2, rel=1e-6)
+        assert float(info["lysate_released"]) == pytest.approx(20.0, rel=1e-6)
+        # lysate reports to the supernatant
+        assert float(get_flows(clar)["lysate"]) == pytest.approx(20.0, rel=1e-6)
+        # cells + lysate conserved
+        total = (float(get_flows(conc)["cells"]) + float(get_flows(clar)["cells"])
+                 + float(get_flows(clar)["lysate"]))
+        assert total == pytest.approx(100.0, rel=1e-6)
+
+    def test_no_lysis_below_threshold(self):
+        cf = Centrifuge(CentrifugeParams(
+            sigma=1000.0, lysis_threshold_g=10000.0, lysis_coefficient=1e-5,
+        ))
+        _, _, info = cf(self._feed(), Q=0.001, rcf=5000.0)  # below threshold
+        assert float(info["lysis_fraction"]) == 0.0
+
+    def test_disc_stack_uses_geometry_rcf(self):
+        params = DiscStackParams(
+            n_discs=100, r_outer=0.15, r_inner=0.05, rpm=10000.0,
+            lysis_threshold_g=1000.0, lysis_coefficient=1e-5,
+        )
+        dsc = DiscStackCentrifuge(params)
+        # RCF from geometry should be well above threshold -> some lysis
+        _, clar, info = dsc(self._feed(), Q=0.001)
+        assert float(info["lysis_fraction"]) > 0.0
+        assert "lysate" in get_flows(clar)
