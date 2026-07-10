@@ -80,6 +80,13 @@ class CSTRParams(ParamsMixin):
     molar_density: float | None = None
     H_mix_fn: Callable | None = None
     K_eq_fn: Callable | None = None
+    # Volumetric-flow basis for concentrations (#75). By default the reactor
+    # volumetric flow is taken from the inlet total molar flow. With
+    # outlet_volumetric_basis=True the flow is evaluated at reactor (outlet)
+    # conditions, Q_v = F_total_out / molar_density, self-consistently inside
+    # the material-balance solve, which matters when the reaction changes the
+    # total moles (e.g. varying-density liquid systems).
+    outlet_volumetric_basis: bool = False
 
     def __post_init__(self):
         """Validate parameter consistency."""
@@ -332,6 +339,14 @@ class CSTR:
         rate_fn = p.rate_fn
         species_order = p.species_order
         stoich = p.stoich
+        # Outlet-conditions volumetric flow (#75): Q_v = F_total_out / density
+        outlet_basis = p.outlet_volumetric_basis
+        density = p.molar_density if p.molar_density is not None else 55500.0
+
+        def _effective_Qv(F_out_safe, Q_v):
+            if outlet_basis:
+                return jnp.sum(F_out_safe) / density
+            return Q_v
 
         def material_balance_residual(F_out, args):
             """Residual: F_out - F_in - V * stoich @ r = 0"""
@@ -340,8 +355,9 @@ class CSTR:
             # Ensure non-negative flows for concentration calculation
             F_out_safe = jnp.maximum(F_out, 1e-10)
 
-            # Concentrations from flows
-            C = {s: F_out_safe[i] / Q_v for i, s in enumerate(species_order)}
+            # Concentrations from flows, at inlet- or outlet-conditions flow
+            Q_v_eff = _effective_Qv(F_out_safe, Q_v)
+            C = {s: F_out_safe[i] / Q_v_eff for i, s in enumerate(species_order)}
 
             # Reaction rates
             r = rate_fn(C, T_, rate_params)
@@ -368,8 +384,9 @@ class CSTR:
         # Ensure non-negative flows
         F_out = jnp.maximum(F_out, 0.0)
 
-        # Calculate final rates
-        C_out = {s: F_out[i] / volumetric_flow for i, s in enumerate(p.species_order)}
+        # Calculate final rates (same volumetric-flow basis as the solve)
+        Q_v_final = _effective_Qv(jnp.maximum(F_out, 1e-10), volumetric_flow)
+        C_out = {s: F_out[i] / Q_v_final for i, s in enumerate(p.species_order)}
         rates = p.rate_fn(C_out, T, p.rate_params)
 
         outlet_flows = {s: F_out[i] for i, s in enumerate(p.species_order)}

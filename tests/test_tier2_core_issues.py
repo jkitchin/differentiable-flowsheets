@@ -605,3 +605,85 @@ class TestLMTDFCorrection:
         g = grad(q_fn)(500.0)
         assert jnp.isfinite(g)
         assert float(g) > 0  # More UA → more heat transfer
+
+
+# =============================================================================
+# #75 — CSTR outlet-conditions volumetric flow
+# =============================================================================
+
+class TestCSTROutletVolumetricBasis:
+    """Issue #75: concentrations at reactor (outlet) volumetric flow."""
+
+    def test_backward_compat_inlet_basis(self):
+        from difflow.units.cstr import CSTR, CSTRParams
+        params = CSTRParams(
+            V=1.0, rate_fn=_simple_rate_fn, stoich=jnp.array([[-1.0], [2.0]]),
+            rate_params={'k': 0.5}, species_order=['A', 'B'], molar_density=1000.0,
+        )
+        cstr = CSTR(params)  # default: inlet basis
+        outlet, info = cstr(_make_ab_stream())
+        assert not params.outlet_volumetric_basis
+
+    def test_outlet_basis_changes_conversion_for_mole_change(self):
+        from difflow.units.cstr import CSTR, CSTRParams
+        # A -> 2B increases total moles, so outlet volumetric flow > inlet
+        common = dict(
+            V=1.0, rate_fn=_simple_rate_fn, stoich=jnp.array([[-1.0], [2.0]]),
+            rate_params={'k': 0.5}, species_order=['A', 'B'], molar_density=1000.0,
+        )
+        cstr_in = CSTR(CSTRParams(outlet_volumetric_basis=False, **common))
+        cstr_out = CSTR(CSTRParams(outlet_volumetric_basis=True, **common))
+        inlet = _make_ab_stream(F_A=1.0)
+        _, info_in = cstr_in(inlet)
+        _, info_out = cstr_out(inlet)
+        X_in = float(info_in['conversion']['A'])
+        X_out = float(info_out['conversion']['A'])
+        # Different volumetric-flow basis -> different concentration -> different X
+        assert abs(X_in - X_out) > 1e-4
+
+    def test_outlet_basis_differentiable(self):
+        from difflow.units.cstr import CSTR, CSTRParams
+
+        def conv(k):
+            params = CSTRParams(
+                V=1.0, rate_fn=_simple_rate_fn, stoich=jnp.array([[-1.0], [2.0]]),
+                rate_params={'k': k}, species_order=['A', 'B'],
+                molar_density=1000.0, outlet_volumetric_basis=True,
+            )
+            _, info = CSTR(params)(_make_ab_stream())
+            return info['conversion']['A']
+
+        g = grad(conv)(0.5)
+        assert jnp.isfinite(g)
+
+
+# =============================================================================
+# #77 — CSTR heat of mixing enters the energy balance
+# =============================================================================
+
+class TestCSTRHeatOfMixingEnergyBalance:
+    """Issue #77: H_mix must actually contribute to the heat duty Q."""
+
+    def _thermo(self):
+        return IdealThermo({
+            'A': SpeciesData(name='A', MW=50.0, Cp_coeffs=(75.0, 0, 0, 0),
+                             Hvap_coeffs=(1.0, 0.38, 600.0), antoine_coeffs=(8.07, 1730.0, -39.0)),
+            'B': SpeciesData(name='B', MW=50.0, Cp_coeffs=(75.0, 0, 0, 0),
+                             Hvap_coeffs=(1.0, 0.38, 600.0), antoine_coeffs=(8.07, 1830.0, -39.0)),
+        })
+
+    def test_h_mix_shifts_heat_duty(self):
+        from difflow.units.cstr import CSTR, CSTRParams
+        thermo = self._thermo()
+        common = dict(
+            V=1.0, rate_fn=_simple_rate_fn, stoich=jnp.array([[-1.0], [1.0]]),
+            rate_params={'k': 0.1}, species_order=['A', 'B'],
+        )
+        cstr_no = CSTR(CSTRParams(**common), thermo=thermo, mode="isothermal")
+        cstr_hm = CSTR(CSTRParams(H_mix_fn=lambda flows, T: jnp.asarray(500.0), **common),
+                       thermo=thermo, mode="isothermal")
+        inlet = _make_ab_stream()
+        _, info_no = cstr_no(inlet)
+        _, info_hm = cstr_hm(inlet)
+        # Q includes +H_mix (500 W) when thermo is present
+        assert float(info_hm['Q']) - float(info_no['Q']) == pytest.approx(500.0, rel=1e-6)
