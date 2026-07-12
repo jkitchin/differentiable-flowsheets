@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="difflow">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6366f1"/>
+      <stop offset="0.55" stop-color="#3b82f6"/>
+      <stop offset="1" stop-color="#22d3ee"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="0" y="0" width="64" height="64" rx="15" fill="url(#bg)"/>
+
+  <g fill="none" stroke="#ffffff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <!-- rising slope through the units (the "differentiable" gradient) -->
+    <polyline points="16,45 32,33 48,21"/>
+    <!-- recycle loop back to the first unit -->
+    <path d="M48 23 C 58 39, 47 52, 32 51 C 25 50.5, 19 49, 16 45"/>
+  </g>
+
+  <!-- unit-operation nodes -->
+  <g fill="#ffffff">
+    <circle cx="16" cy="45" r="6"/>
+    <circle cx="32" cy="33" r="6"/>
+    <circle cx="48" cy="21" r="6"/>
+  </g>
+</svg>

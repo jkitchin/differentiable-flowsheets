@@ -31,7 +31,9 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install jupyter-book
+          # Pin to v1.x: the docs use the classic (Sphinx-based) config in
+          # _config.yml / _toc.yml, which jupyter-book 2.x does not read.
+          pip install "jupyter-book<2.0"
 
       - name: Build the book
         run: |

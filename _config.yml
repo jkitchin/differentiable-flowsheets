@@ -2,7 +2,7 @@
 title: Differentiable Flowsheets
 author: Differentiable Flowsheets Contributors
 copyright: "2024"
-logo: ""
+logo: images/difflow-icon.png
 
 # Exclude patterns - files/directories to ignore during build
 exclude_patterns:
@@ -18,6 +18,17 @@ exclude_patterns:
   - src/difflow_cc/docs/**
   - src/difflow_cc/DESIGN.md
   - CLAUDE.md
+  - RELEASING.md
+  - README.org
+  - readme.org
+  - readme_archive.org
+  - tests
+  - tests/**
+  - papers
+  - papers/**
+  - "src/difflow_*/README.md"
+  - differentiable-flowsheets-ree.md
+  - docs/estimation-deliverables.md
   - "**/.ipynb_checkpoints"
   - "**/.ipynb_checkpoints/**"
 
@@ -59,5 +70,8 @@ launch_buttons:
 # Sphinx configuration
 sphinx:
   config:
+    html_favicon: images/favicon.png
+    # Generate anchors for h1-h3 so in-page "[Text](#slug)" TOC links resolve.
+    myst_heading_anchors: 3
     html_theme_options:
       navigation_with_keys: false

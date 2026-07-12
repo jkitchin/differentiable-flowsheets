@@ -4,7 +4,6 @@ This document provides comprehensive documentation for the `difflow_cc` plugin, 
 
 ---
 
-(overview)=
 ## Overview
 
 The `difflow_cc` plugin provides:
@@ -20,7 +19,6 @@ All models are fully differentiable using JAX, enabling gradient-based optimizat
 
 ---
 
-(installation)=
 ## Installation
 
 The carbon capture plugin is included as an optional dependency:
@@ -37,7 +35,6 @@ pip install difflow[all]
 
 ---
 
-(database-and-properties)=
 ## Database and Properties
 
 (amine-solvents)=
@@ -131,7 +128,6 @@ print(f"CO2/N2 selectivity: {pim1.selectivity_co2_n2}")
 
 ---
 
-(equilibrium-models)=
 ## Equilibrium Models
 
 (vapor-liquid-equilibrium)=
@@ -166,7 +162,6 @@ Where:
 - $\Delta H_{abs}$: Heat of absorption
 - $f(\alpha)$: Loading correction function
 
-(adsorption-isotherms)=
 ### Adsorption Isotherms
 
 Multiple isotherm models are available:
@@ -311,7 +306,6 @@ K_G = overall_mass_transfer(k_G=k_G, k_L=k_L, E=E, H=H)
 
 ---
 
-(unit-operations)=
 ## Unit Operations
 
 (amineabsorber)=
@@ -643,7 +637,6 @@ print(f"Energy: {info['energy_per_tonne']:.0f} GJ/tonne CO2")
 
 ---
 
-(economics)=
 ## Economics
 
 **Location**: `difflow_cc/economics/`
@@ -789,7 +782,6 @@ print(f"Membrane lifetime: {lifetime:.1f} years")
 
 ---
 
-(examples)=
 ## Examples
 
 ### Example 1: Complete Amine Capture Plant

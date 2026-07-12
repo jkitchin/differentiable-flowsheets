@@ -53,6 +53,14 @@ _build/
 # Proposals
 proposals/
 
+# Research manuscript (kept locally, not in the public repo)
+papers/nd_dy_separation/
+
+# Generated notebook/report exports
+examples/*.html
+differentiable-flowsheets-ree.html
+differentiable-flowsheets-ree.pdf
+
 # Claude Code local settings
 .claude/
 **/.claude/

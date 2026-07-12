@@ -4,7 +4,6 @@ This document provides comprehensive documentation for the `difflow_ree` plugin,
 
 ---
 
-(overview)=
 ## Overview
 
 The `difflow_ree` plugin provides:
@@ -21,7 +20,6 @@ All operations are fully differentiable using JAX, enabling gradient-based optim
 
 ---
 
-(installation)=
 ## Installation
 
 The REE plugin is included as an optional dependency:
@@ -38,7 +36,6 @@ pip install difflow[all]
 
 ---
 
-(database-and-properties)=
 ## Database and Properties
 
 (ree-element-database)=
@@ -95,7 +92,6 @@ print(f"Reference concentration: {d2ehpa.reference_concentration} M")
 
 ---
 
-(equilibrium-models)=
 ## Equilibrium Models
 
 (distribution-coefficients)=
@@ -167,7 +163,6 @@ print(f"Optimal pH: {opt_pH:.2f}, Max SF: {max_SF:.2f}")
 
 ---
 
-(unit-operations)=
 ## Unit Operations
 
 (reeextractor)=
@@ -654,7 +649,6 @@ print(f"D(Ho) at pH 3.5: {D_ho:.2f}")
 
 ---
 
-(economics)=
 ## Economics
 
 The plugin includes economic analysis tools:
@@ -696,7 +690,6 @@ profit = calculate_profit(revenue, opex, capex, years=10)
 
 ---
 
-(examples)=
 ## Examples
 
 ### Example 1: Simple Nd/Pr Separation

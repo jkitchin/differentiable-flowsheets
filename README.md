@@ -26,7 +26,7 @@ Claude Code is heavily used to generate the code, examples and tests. This has a
 
 We regularly run all of the notebooks to ensure they run without errors, and review them to make sure the results make sense. We are happy to take issues and / or pull requests to fix problems. We also use Claude to review the code to look for issues.
 
-We actually anticipate that Claude Code is used when using this library (See [CLAUDE.md](./CLAUDE.md)). The library is large enough that it would take a long time to learn all the capabilities in addition to learning the nuances of differentiable programming. This repo provides all the information Claude needs to help you translate your flowsheet ideas into differentiable programs.
+We actually anticipate that Claude Code is used when using this library (See [CLAUDE.md](https://github.com/jkitchin/differentiable-flowsheets/blob/main/CLAUDE.md)). The library is large enough that it would take a long time to learn all the capabilities in addition to learning the nuances of differentiable programming. This repo provides all the information Claude needs to help you translate your flowsheet ideas into differentiable programs.
 
 ## Installation
 

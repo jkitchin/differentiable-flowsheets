@@ -935,7 +935,6 @@ Or: $K_d = a' - b' \cdot \log(MW)$
 
 ---
 
-(adsorption-isotherms)=
 ### Adsorption Isotherms
 
 **Location**: `difflow_bio/units/chromatography.py`

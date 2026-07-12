@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 96" width="360" height="96" role="img" aria-label="difflow — Differentiable Flowsheets">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6366f1"/>
+      <stop offset="0.55" stop-color="#3b82f6"/>
+      <stop offset="1" stop-color="#22d3ee"/>
+    </linearGradient>
+    <linearGradient id="ink" x1="96" y1="0" x2="360" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#4f46e5"/>
+      <stop offset="1" stop-color="#0ea5e9"/>
+    </linearGradient>
+  </defs>
+
+  <!-- badge mark -->
+  <g transform="translate(16,16)">
+    <rect x="0" y="0" width="64" height="64" rx="15" fill="url(#bg)"/>
+    <g fill="none" stroke="#ffffff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+      <line x1="19.5" y1="42.5" x2="28.5" y2="35.5"/>
+      <line x1="35.5" y1="30.5" x2="44.5" y2="23.5"/>
+      <path d="M47 25.5 C 57 40, 46 52, 32 51 C 24 50.5, 18 49, 15 45"/>
+    </g>
+    <g fill="#ffffff">
+      <path d="M45.4 22.6 l -1.2 4 l 3.8 -1.4 z"/>
+      <path d="M29.4 34.6 l -1.2 4 l 3.8 -1.4 z"/>
+      <path d="M15.5 44.5 l 4.6 0.4 l -2.6 3.8 z"/>
+    </g>
+    <g fill="#ffffff">
+      <circle cx="16" cy="45" r="5.2"/>
+      <circle cx="32" cy="33" r="5.2"/>
+      <circle cx="48" cy="21" r="5.2"/>
+    </g>
+    <g fill="#3b82f6">
+      <circle cx="16" cy="45" r="2.1"/>
+      <circle cx="32" cy="33" r="2.1"/>
+      <circle cx="48" cy="21" r="2.1"/>
+    </g>
+  </g>
+
+  <!-- wordmark -->
+  <text x="98" y="52" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="40" font-weight="700" letter-spacing="-1" fill="url(#ink)">difflow</text>
+  <text x="100" y="74" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="12.5" font-weight="600" letter-spacing="2.4" fill="#64748b">DIFFERENTIABLE FLOWSHEETS</text>
+</svg>

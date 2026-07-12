@@ -4,7 +4,6 @@ This document provides comprehensive documentation for thermodynamic models, pro
 
 ---
 
-(overview)=
 ## Overview
 
 Difflow provides two levels of thermodynamic modeling:

@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="difflow icon">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6366f1"/>
+      <stop offset="0.55" stop-color="#3b82f6"/>
+      <stop offset="1" stop-color="#22d3ee"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="0" y="0" width="64" height="64" rx="15" fill="url(#bg)"/>
+
+  <g fill="none" stroke="#ffffff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+    <!-- rising forward streams (a slope / derivative through the flowsheet) -->
+    <line x1="19.5" y1="42.5" x2="28.5" y2="35.5"/>
+    <line x1="35.5" y1="30.5" x2="44.5" y2="23.5"/>
+    <!-- recycle arc from the last unit back to the first -->
+    <path d="M47 25.5 C 57 40, 46 52, 32 51 C 24 50.5, 18 49, 15 45"/>
+  </g>
+
+  <g fill="#ffffff">
+    <!-- forward arrowheads (pointing up-right along the slope) -->
+    <path d="M45.4 22.6 l -1.2 4 l 3.8 -1.4 z"/>
+    <path d="M29.4 34.6 l -1.2 4 l 3.8 -1.4 z"/>
+    <!-- recycle arrowhead into first unit -->
+    <path d="M15.5 44.5 l 4.6 0.4 l -2.6 3.8 z"/>
+  </g>
+
+  <!-- unit-operation nodes along the slope -->
+  <g fill="#ffffff">
+    <circle cx="16" cy="45" r="5.2"/>
+    <circle cx="32" cy="33" r="5.2"/>
+    <circle cx="48" cy="21" r="5.2"/>
+  </g>
+  <g fill="#3b82f6">
+    <circle cx="16" cy="45" r="2.1"/>
+    <circle cx="32" cy="33" r="2.1"/>
+    <circle cx="48" cy="21" r="2.1"/>
+  </g>
+</svg>
