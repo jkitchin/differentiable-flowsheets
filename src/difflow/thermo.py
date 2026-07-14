@@ -369,6 +369,7 @@ class IdealThermo:
         flows: dict[str, Array | float],
         T: Array | float,
         phase: str = "liquid",
+        P: Array | float | None = None,
     ) -> Array:
         """Calculate total enthalpy of a stream.
 
@@ -376,6 +377,10 @@ class IdealThermo:
             flows: Molar flows by species (mol/s)
             T: Temperature (K)
             phase: 'liquid' or 'vapor'
+            P: Pressure (Pa). Ignored -- ideal-gas enthalpy is pressure
+               independent. Accepted only so IdealThermo is call-compatible
+               with CubicThermo (which does use P for its departure term),
+               letting callers pass P unconditionally.
 
         Returns:
             Total enthalpy flow (J/s = W)
@@ -384,3 +389,132 @@ class IdealThermo:
         for species, F in flows.items():
             H_total = H_total + F * self.H_pure(species, T, phase)
         return H_total
+
+
+class CubicThermo:
+    """Peng-Robinson-consistent enthalpy: ideal-gas sensible + EOS departure.
+
+    Wraps an :class:`IdealThermo` (for the ideal-gas sensible enthalpy, using
+    the constant ideal-gas Cp already in the species data) and a cubic EOS
+    (for the enthalpy departure ``H - H_ideal_gas``). This mirrors the way a
+    cubic-EOS property package (e.g. IDAES's Generic framework) builds every
+    unit's enthalpy as ideal-gas + departure, so difflow's reactor and
+    heat-exchanger energy balances become consistent with such a tool rather
+    than relying on difflow's Watson-Hvap liquid/vapor enthalpy split.
+
+    The ideal-gas sensible part is taken from ``IdealThermo`` via its
+    ``phase="liquid"`` path, which is the bare ``integral(Cp, Tref -> T)`` with
+    no heat-of-vaporization term. That is exactly the ideal-gas sensible
+    enthalpy when ``Cp_coeffs`` holds the ideal-gas Cp (as difflow's database
+    does for these components); the EOS departure then supplies the entire
+    real-gas / phase-change correction, so both phases share one reference.
+
+    ``stream_enthalpy`` keeps ``IdealThermo``'s calling convention but adds an
+    optional ``P``: the departure is pressure-dependent, so a caller must pass
+    the stream pressure for it to be included. With ``P=None`` the result
+    degrades to the pure ideal-gas sensible enthalpy (no departure), which lets
+    it stand in for an ``IdealThermo`` wherever pressure is not threaded
+    through.
+    """
+
+    def __init__(self, ideal: "IdealThermo", eos):
+        self.ideal = ideal
+        self.eos = eos
+
+    @property
+    def species_order(self) -> list[str]:
+        return self.ideal.species_order
+
+    def Cp_mix(
+        self,
+        mole_fracs: dict[str, Array | float],
+        T: Array | float,
+    ) -> Array:
+        """Ideal-gas mixture heat capacity (J/mol/K).
+
+        Delegates to the wrapped IdealThermo. Used only as the Jacobian
+        estimate for solvers' temperature updates (e.g. the CSTR's adiabatic
+        fixed point), where the converged answer is set by the enthalpy
+        balance, not by this Cp; the EOS departure's contribution to the true
+        Cp therefore does not need to appear here.
+        """
+        return self.ideal.Cp_mix(mole_fracs, T)
+
+    def stream_enthalpy(
+        self,
+        flows: dict[str, Array | float],
+        T: Array | float,
+        phase: str = "vapor",
+        P: Array | float | None = None,
+    ) -> Array:
+        """Total stream enthalpy (W) = ideal-gas sensible + PR departure.
+
+        Args:
+            flows: Molar flows by species (mol/s).
+            T: Temperature (K).
+            P: Pressure (Pa). If None, the departure term is omitted and only
+               the ideal-gas sensible enthalpy is returned.
+            phase: 'vapor' or 'liquid'; selects the EOS Z root for the
+               departure.
+
+        Returns:
+            Total enthalpy flow (J/s = W).
+        """
+        # Ideal-gas sensible part (constant-Cp integral, no Hvap): IdealThermo's
+        # "liquid" path is exactly integral(Cp, Tref -> T) for this data.
+        H_ideal = self.ideal.stream_enthalpy(flows, T, phase="liquid")
+        if P is None:
+            return H_ideal
+
+        order = self.eos.species_order
+        F = jnp.array([flows[s] for s in order])
+        F_total = jnp.sum(F)
+        y = F / jnp.maximum(F_total, 1e-30)
+        h_dep = self.eos.enthalpy_departure(T, P, y, phase)
+        return H_ideal + F_total * h_dep
+
+    def stream_enthalpy_flash(
+        self,
+        flows: dict[str, Array | float],
+        T: Array | float,
+        P: Array | float,
+    ) -> Array:
+        """Two-phase-aware total stream enthalpy (W): flash at (T, P), then sum
+        the phase enthalpies.
+
+        Unlike :meth:`stream_enthalpy` (which assumes a single named phase),
+        this determines the vapor/liquid split from the EOS and weights each
+        phase's departure by its flow, so the result captures latent heat as the
+        stream partially vaporizes or condenses with temperature. That makes a
+        heat-exchanger energy balance built on this enthalpy consistent with a
+        rigorous VLE tool through phase change (e.g. the cold naphtha+H2 feed
+        boiling as it preheats).
+
+        The ideal-gas enthalpy is composition-invariant across the split
+        (sum_i z_i h_i = V sum_i y_i h_i + (1-V) sum_i x_i h_i), so only the
+        departure is phase-weighted::
+
+            H = H_ideal(flows, T)
+                + F_total * [V * h_dep_vap(T, P, y) + (1-V) * h_dep_liq(T, P, x)]
+
+        Args:
+            flows: Molar flows by species (mol/s).
+            T: Temperature (K).
+            P: Pressure (Pa).
+
+        Returns:
+            Total enthalpy flow (J/s = W).
+        """
+        from difflow.eos import flash_TP_eos
+
+        H_ideal = self.ideal.stream_enthalpy(flows, T, phase="liquid")
+        order = self.eos.species_order
+        F = jnp.array([flows[s] for s in order])
+        F_total = jnp.sum(F)
+        z = F / jnp.maximum(F_total, 1e-30)
+
+        V, x, y = flash_TP_eos(self.eos, z, T, P)
+        V = jnp.clip(V, 0.0, 1.0)
+        h_dep_vap = self.eos.enthalpy_departure(T, P, y, "vapor")
+        h_dep_liq = self.eos.enthalpy_departure(T, P, x, "liquid")
+        return H_ideal + F_total * (V * h_dep_vap + (1.0 - V) * h_dep_liq)

@@ -10,6 +10,7 @@ from difflow.eos import (
     CriticalProperties,
     flash_TP_eos,
 )
+from difflow.thermo import IdealThermo, CubicThermo, SpeciesData
 
 
 # Enable 64-bit precision for tests
@@ -319,3 +320,129 @@ class TestBinaryInteractionParameters:
 
         # Results should differ
         assert not jnp.isclose(Z_no_kij, Z_with_kij, rtol=1e-6)
+
+
+class TestEnthalpyDeparture:
+    """Enthalpy departure H(T,P) - H_ideal_gas(T) from the cubic EOS.
+
+    Covers both PengRobinson and SRK (SRK.enthalpy_departure is the
+    epsilon=0/sigma=1 specialization of the generic-cubic departure).
+    """
+
+    @pytest.mark.parametrize("EOS", [PengRobinson, SRK])
+    def test_departure_vanishes_at_low_pressure(self, propane_butane_system, EOS):
+        """As P -> 0 the gas is ideal, so the departure -> 0."""
+        eos = EOS(propane_butane_system)
+        y = jnp.array([0.5, 0.5])
+        T = jnp.array(320.0)
+        h_dep = eos.enthalpy_departure(T, jnp.array(1.0e2), y, "vapor")
+        assert abs(float(h_dep)) < 1.0  # J/mol
+
+    @pytest.mark.parametrize("EOS", [PengRobinson, SRK])
+    def test_departure_negative_and_grows_for_vapor(self, propane_butane_system, EOS):
+        """A real vapor sits below the ideal-gas enthalpy, more so at higher P."""
+        eos = EOS(propane_butane_system)
+        y = jnp.array([0.5, 0.5])
+        T = jnp.array(320.0)
+        h_low = eos.enthalpy_departure(T, jnp.array(1e5), y, "vapor")
+        h_high = eos.enthalpy_departure(T, jnp.array(8e5), y, "vapor")
+        assert float(h_low) < 0.0
+        assert float(h_high) < float(h_low)
+
+    @pytest.mark.parametrize("EOS", [PengRobinson, SRK])
+    def test_departure_differentiable(self, propane_butane_system, EOS):
+        """d(H_dep)/dT is finite (jax.jvp path stays differentiable)."""
+        eos = EOS(propane_butane_system)
+        y = jnp.array([0.5, 0.5])
+        g = jax.grad(
+            lambda T: eos.enthalpy_departure(T, jnp.array(8e5), y, "vapor")
+        )(jnp.array(320.0))
+        assert jnp.isfinite(g)
+
+    def test_pr_and_srk_departure_agree_within_ten_percent(self, propane_butane_system):
+        """PR and SRK departures track each other for this near-ideal vapor."""
+        pr = PengRobinson(propane_butane_system)
+        srk = SRK(propane_butane_system)
+        y = jnp.array([0.5, 0.5])
+        T = jnp.array(320.0)
+        P = jnp.array(8e5)
+        hp = float(pr.enthalpy_departure(T, P, y, "vapor"))
+        hs = float(srk.enthalpy_departure(T, P, y, "vapor"))
+        assert abs(hp - hs) / abs(hp) < 0.1
+
+
+def _propane_butane_ideal():
+    """IdealThermo with ideal-gas Cp for the same species/order as the EOS."""
+    species_data = {
+        "propane": SpeciesData(
+            name="propane",
+            MW=44.10,
+            Cp_coeffs=(73.0, 0.0, 0.0, 0.0),
+            Hvap_coeffs=(18000.0, 0.38, 369.8),
+            antoine_coeffs=(13.72, 1872.5, -25.16),
+        ),
+        "butane": SpeciesData(
+            name="butane",
+            MW=58.12,
+            Cp_coeffs=(98.0, 0.0, 0.0, 0.0),
+            Hvap_coeffs=(22000.0, 0.38, 425.1),
+            antoine_coeffs=(13.98, 2292.4, -27.86),
+        ),
+    }
+    return IdealThermo(species_data)
+
+
+class TestCubicThermo:
+    """CubicThermo enthalpy = ideal-gas sensible + EOS departure."""
+
+    def test_no_pressure_reduces_to_ideal(self, propane_butane_system):
+        """With P=None the departure is omitted -> pure ideal-gas sensible H."""
+        ideal = _propane_butane_ideal()
+        cubic = CubicThermo(ideal, PengRobinson(propane_butane_system))
+        flows = {"propane": 1.0, "butane": 0.5}
+        T = jnp.array(320.0)
+        H_ideal = ideal.stream_enthalpy(flows, T, phase="liquid")
+        H_cubic = cubic.stream_enthalpy(flows, T, P=None)
+        assert float(H_cubic) == pytest.approx(float(H_ideal), rel=1e-9)
+
+    def test_departure_lowers_vapor_enthalpy(self, propane_butane_system):
+        """Adding the (negative) vapor departure lowers the stream enthalpy."""
+        ideal = _propane_butane_ideal()
+        cubic = CubicThermo(ideal, PengRobinson(propane_butane_system))
+        flows = {"propane": 1.0, "butane": 0.5}
+        T = jnp.array(320.0)
+        H_ideal = cubic.stream_enthalpy(flows, T, P=None)
+        H_real = cubic.stream_enthalpy(flows, T, phase="vapor", P=jnp.array(8e5))
+        assert float(H_real) < float(H_ideal)
+
+    @pytest.mark.parametrize("EOS", [PengRobinson, SRK])
+    def test_works_with_pr_and_srk(self, propane_butane_system, EOS):
+        """Regression: SRK gained enthalpy_departure, so CubicThermo(., SRK) works."""
+        ideal = _propane_butane_ideal()
+        cubic = CubicThermo(ideal, EOS(propane_butane_system))
+        flows = {"propane": 1.0, "butane": 0.5}
+        H = cubic.stream_enthalpy(
+            flows, jnp.array(320.0), phase="vapor", P=jnp.array(8e5)
+        )
+        assert jnp.isfinite(H)
+
+    def test_flash_enthalpy_single_phase_matches_named_phase(self, propane_butane_system):
+        """For a single-phase vapor feed the flash enthalpy equals the vapor path."""
+        ideal = _propane_butane_ideal()
+        cubic = CubicThermo(ideal, PengRobinson(propane_butane_system))
+        flows = {"propane": 1.0, "butane": 1.0}
+        T = jnp.array(320.0)
+        P = jnp.array(3e5)  # below the ~7.3 bar dew -> single-phase vapor
+        H_flash = cubic.stream_enthalpy_flash(flows, T, P)
+        H_vapor = cubic.stream_enthalpy(flows, T, phase="vapor", P=P)
+        assert float(H_flash) == pytest.approx(float(H_vapor), rel=1e-6)
+
+    def test_flash_enthalpy_differentiable(self, propane_butane_system):
+        """stream_enthalpy_flash stays differentiable through the flash."""
+        ideal = _propane_butane_ideal()
+        cubic = CubicThermo(ideal, PengRobinson(propane_butane_system))
+        flows = {"propane": 1.0, "butane": 1.0}
+        g = jax.grad(
+            lambda T: cubic.stream_enthalpy_flash(flows, T, jnp.array(8e5))
+        )(jnp.array(320.0))
+        assert jnp.isfinite(g)

@@ -746,6 +746,57 @@ class PengRobinson:
         V = self.molar_volume(T, P, y, phase, k_ij)
         return 1.0 / V
 
+    def enthalpy_departure(
+        self,
+        T: Array,
+        P: Array,
+        y: Array,
+        phase: Literal["vapor", "liquid"] = "vapor",
+        k_ij: Array | None = None,
+    ) -> Array:
+        """Molar enthalpy departure H(T,P) - H_ideal_gas(T) from Peng-Robinson.
+
+        H_dep = R*T*(Z - 1)
+                + (T*da_m/dT - a_m) / (2*sqrt(2)*b_m)
+                  * ln[(Z + (1 + sqrt(2))*B) / (Z + (1 - sqrt(2))*B)]
+
+        Added to an ideal-gas enthalpy this gives the true PR enthalpy -- the
+        same ideal-gas-plus-departure decomposition a cubic-EOS property
+        package (e.g. IDAES's) uses. Near the critical region this term and
+        its temperature derivative are large, so for a near-critical vapor the
+        real-gas effective heat capacity differs substantially from the
+        ideal-gas value; that correction is what a departure-free model misses.
+
+        The mixture-a temperature derivative da_m/dT is taken with forward-mode
+        autodiff (jax.jvp), so the result stays exact and differentiable under
+        an outer jax.grad of the flowsheet.
+
+        Args:
+            T: Temperature (K)
+            P: Pressure (Pa)
+            y: Mole fractions (array in species_order)
+            phase: 'vapor' or 'liquid' (selects the Z root)
+            k_ij: Binary interaction parameters
+
+        Returns:
+            Molar enthalpy departure (J/mol). Negative for typical vapors.
+        """
+        T = jnp.asarray(T)
+        b_m = self.b_mix(y)
+        Z = self.solve_Z(T, P, y, phase, k_ij)
+        B = b_m * P / (R * T)
+
+        # a_m and its temperature derivative in one forward-mode pass.
+        a_m, da_m_dT = jax.jvp(
+            lambda t: self.a_mix(t, y, k_ij), (T,), (jnp.ones_like(T),)
+        )
+
+        sqrt2 = jnp.sqrt(2.0)
+        log_arg = (Z + (1.0 + sqrt2) * B) / (Z + (1.0 - sqrt2) * B)
+        return R * T * (Z - 1.0) + (T * da_m_dT - a_m) / (
+            2.0 * sqrt2 * b_m
+        ) * safe_log(log_arg)
+
 
 class SRK:
     """Soave-Redlich-Kwong equation of state.
@@ -1064,6 +1115,54 @@ class SRK:
         """Calculate molar density."""
         V = self.molar_volume(T, P, y, phase, k_ij)
         return 1.0 / V
+
+    def enthalpy_departure(
+        self,
+        T: Array,
+        P: Array,
+        y: Array,
+        phase: Literal["vapor", "liquid"] = "vapor",
+        k_ij: Array | None = None,
+    ) -> Array:
+        """Molar enthalpy departure H(T,P) - H_ideal_gas(T) from SRK.
+
+        H_dep = R*T*(Z - 1)
+                + (T*da_m/dT - a_m) / b_m * ln[(Z + B) / Z]
+
+        This is the SRK (epsilon=0, sigma=1) form of the same generic-cubic
+        departure ``PengRobinson.enthalpy_departure`` gives; the log term
+        collapses from PR's ``ln[(Z+(1+sqrt2)B)/(Z+(1-sqrt2)B)]/(2 sqrt2 b)`` to
+        ``ln[(Z+B)/Z]/b`` because SRK's second EOS constant is zero. Providing it
+        here lets :class:`~difflow.thermo.CubicThermo` (and every consumer of it:
+        the enthalpy-based CSTR and heat exchanger) work with an SRK EOS as well
+        as a Peng-Robinson one.
+
+        The mixture-a temperature derivative da_m/dT is taken with forward-mode
+        autodiff (jax.jvp), so the result stays exact and differentiable under
+        an outer jax.grad of the flowsheet.
+
+        Args:
+            T: Temperature (K)
+            P: Pressure (Pa)
+            y: Mole fractions (array in species_order)
+            phase: 'vapor' or 'liquid' (selects the Z root)
+            k_ij: Binary interaction parameters
+
+        Returns:
+            Molar enthalpy departure (J/mol). Negative for typical vapors.
+        """
+        T = jnp.asarray(T)
+        b_m = self.b_mix(y)
+        Z = self.solve_Z(T, P, y, phase, k_ij)
+        B = b_m * P / (R * T)
+
+        # a_m and its temperature derivative in one forward-mode pass.
+        a_m, da_m_dT = jax.jvp(
+            lambda t: self.a_mix(t, y, k_ij), (T,), (jnp.ones_like(T),)
+        )
+
+        log_arg = (Z + B) / Z
+        return R * T * (Z - 1.0) + (T * da_m_dT - a_m) / b_m * safe_log(log_arg)
 
 
 # =============================================================================
