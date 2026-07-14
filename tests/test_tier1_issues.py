@@ -290,10 +290,17 @@ class TestFlashPhaseDetection:
         params = FlashParams(species_order=["methane", "ethane"])
         flash = Flash(params, thermo, eos=eos)
 
-        feed = make_stream({"methane": 0.6, "ethane": 0.4}, 250.0, 2e6)
+        # 250 K / 50 bar is genuinely two-phase for this 60/40 mixture (the PR
+        # two-phase window here is ~40-60 bar; methane is supercritical, so the
+        # split occurs at high pressure). At the earlier 20 bar the mixture is a
+        # single vapor phase -- the ungated flash used to leave x as an
+        # incipient-liquid composition there, but flash_TP_eos now runs a
+        # phase-stability test and correctly reports V=1 with x = feed.
+        feed = make_stream({"methane": 0.6, "ethane": 0.4}, 250.0, 5e6)
         liquid, vapor, info = flash(feed)
 
-        # Methane should be enriched in vapor
+        # Genuinely two-phase, and methane enriched in the vapor.
+        assert 0.0 < float(info["V_frac"]) < 1.0
         assert float(info["y"]["methane"]) > float(info["x"]["methane"])
 
         # Mass balance

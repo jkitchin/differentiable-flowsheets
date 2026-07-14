@@ -1095,6 +1095,72 @@ def _solve_rachford_rice(z: Array, K: Array) -> Array:
     return jnp.clip(sol.value, 0.0, 1.0)
 
 
+def _phase_stability(
+    eos: "PengRobinson | SRK",
+    z: Array,
+    T: Array,
+    P: Array,
+    k_ij: Array | None = None,
+    n_iter: int = 30,
+) -> tuple[Array, Array]:
+    """Michelsen two-sided tangent-plane phase-stability test.
+
+    Decides whether a feed z at (T, P) is single-phase or splits into two
+    phases, without relying on a TP-flash that can drift to the spurious
+    trivial root (all K_i -> 1) near the critical region. From a vapor-like
+    and a liquid-like trial phase it minimizes the tangent-plane distance; if
+    either trial finds a distinct phase with sum(W) > 1, a second phase lowers
+    the Gibbs energy and the feed is two-phase.
+
+    Returns (two_phase, feed_is_vapor):
+      - two_phase: boolean array, True if the feed splits.
+      - feed_is_vapor: boolean array, which single phase the feed is (used only
+        when single-phase, to return V = 1 vs 0), chosen as the lower-Gibbs
+        cubic root at the feed composition.
+
+    Fixed-length ``lax.scan`` trial iterations keep this differentiable.
+    """
+    z = z / jnp.sum(z)
+    lnz = safe_log(jnp.maximum(z, EPS_DIVISION))
+
+    # Feed fugacity from the lower-Gibbs (stable) single-phase root.
+    lnphi_zv = safe_log(eos.fugacity_coefficient(T, P, z, "vapor", k_ij))
+    lnphi_zl = safe_log(eos.fugacity_coefficient(T, P, z, "liquid", k_ij))
+    g_v = jnp.sum(z * (lnz + lnphi_zv))
+    g_l = jnp.sum(z * (lnz + lnphi_zl))
+    feed_is_vapor = g_v <= g_l
+    lnphi_feed = jnp.where(feed_is_vapor, lnphi_zv, lnphi_zl)
+    d = lnz + lnphi_feed  # tangent-plane reference
+
+    K = eos.K_values_wilson(T, P)
+    lnK = safe_log(jnp.maximum(K, EPS_DIVISION))
+
+    def run_trial(lnW0, trial_phase):
+        def step(lnW, _):
+            w = jnp.exp(lnW)
+            w = jnp.maximum(w, EPS_DIVISION)
+            w = w / jnp.sum(w)
+            lnphi_w = safe_log(eos.fugacity_coefficient(T, P, w, trial_phase, k_ij))
+            return d - lnphi_w, None
+
+        lnW, _ = lax.scan(step, lnW0, None, length=n_iter)
+        W = jnp.exp(lnW)
+        S = jnp.sum(W)
+        w = W / S
+        trivial = jnp.sum((w - z) ** 2) < 1e-8
+        return S, trivial
+
+    # Vapor-like trial (search for a lighter phase); liquid-like trial (heavier).
+    Sv, triv_v = run_trial(lnz + lnK, "vapor")
+    Sl, triv_l = run_trial(lnz - lnK, "liquid")
+
+    tol = 1e-4
+    unstable_v = (Sv > 1.0 + tol) & (~triv_v)
+    unstable_l = (Sl > 1.0 + tol) & (~triv_l)
+    two_phase = unstable_v | unstable_l
+    return two_phase, feed_is_vapor
+
+
 def flash_TP_eos(
     eos: PengRobinson | SRK,
     z: Array,
@@ -1123,8 +1189,20 @@ def flash_TP_eos(
         max_iter: Maximum iterations
 
     Returns:
-        (V, x, y): Vapor fraction, liquid and vapor mole fractions
+        (V, x, y): Vapor fraction, liquid and vapor mole fractions.
+
+    A Michelsen phase-stability test (:func:`_phase_stability`) first decides
+    whether the feed is single- or two-phase. This guards against the classic
+    trivial-root failure of successive substitution near the critical region,
+    where the K-value iteration can drift to the spurious all-vapor/all-liquid
+    (K_i -> 1) solution and report a wrong split. When the feed is single-phase,
+    V is returned as exactly 1 (vapor) or 0 (liquid); the two-phase iteration
+    below is used only when a distinct second phase genuinely lowers the Gibbs
+    energy.
     """
+    z = z / jnp.sum(z)
+    two_phase, feed_is_vapor = _phase_stability(eos, z, T, P, k_ij)
+
     # Initialize K from Wilson
     K = eos.K_values_wilson(T, P)
 
@@ -1155,15 +1233,20 @@ def flash_TP_eos(
     # Run iterations
     K_final, _ = lax.scan(step, K, None, length=max_iter)
 
-    # Final flash calculation
-    V = _solve_rachford_rice(z, K_final)
-    x = z / (1 + V * (K_final - 1))
-    y = K_final * x
+    # Two-phase flash result
+    V_tp = _solve_rachford_rice(z, K_final)
+    x_tp = z / (1 + V_tp * (K_final - 1))
+    y_tp = K_final * x_tp
+    x_tp = jnp.maximum(x_tp, 0.0)
+    y_tp = jnp.maximum(y_tp, 0.0)
+    x_tp = x_tp / jnp.sum(x_tp)
+    y_tp = y_tp / jnp.sum(y_tp)
 
-    # Normalize
-    x = jnp.maximum(x, 0.0)
-    y = jnp.maximum(y, 0.0)
-    x = x / jnp.sum(x)
-    y = y / jnp.sum(y)
+    # Select two-phase split vs. single-phase (V = 1 vapor, 0 liquid). When
+    # single-phase, x and y both collapse to the feed composition.
+    V_single = jnp.where(feed_is_vapor, 1.0, 0.0)
+    V = jnp.where(two_phase, V_tp, V_single)
+    x = jnp.where(two_phase, x_tp, z)
+    y = jnp.where(two_phase, y_tp, z)
 
     return V, x, y

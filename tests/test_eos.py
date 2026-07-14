@@ -214,14 +214,23 @@ class TestFlashTPEOS:
     """Tests for flash calculation with EOS."""
 
     def test_flash_two_phase(self, propane_butane_system):
-        """Test flash calculation in two-phase region."""
+        """Test flash calculation in the two-phase region."""
         pr = PengRobinson(propane_butane_system)
 
+        # 320 K / 8.5 bar is genuinely two-phase for this 50/50 mixture (the PR
+        # dew pressure is ~7.3 bar and the bubble ~10 bar). The earlier 5 bar
+        # here is actually single-phase vapor (below the dew), and only appeared
+        # two-phase because the pre-stability-test flash could return a spurious
+        # split near the boundary; flash_TP_eos now runs a phase-stability test
+        # first and correctly reports V = 1 there.
         z = jnp.array([0.5, 0.5])
         T = jnp.array(320.0)
-        P = jnp.array(5e5)
+        P = jnp.array(8.5e5)
 
         V, x, y = flash_TP_eos(pr, z, T, P)
+
+        # Genuinely two-phase: 0 < V < 1
+        assert 0.0 < float(V) < 1.0
 
         # Vapor fraction should be between 0 and 1
         assert float(V) >= 0.0
@@ -249,6 +258,45 @@ class TestFlashTPEOS:
 
         # Gradient should be finite (may be zero at certain conditions)
         assert jnp.isfinite(grad_T)
+
+    def test_flash_single_phase_no_trivial_root(self, propane_butane_system):
+        """Single-phase feeds return V=1 (vapor) or V=0 (liquid) robustly.
+
+        Regression test for the trivial-root failure of successive
+        substitution near the critical region: without the phase-stability
+        gate, the K-value iteration could drift to the spurious (all K_i -> 1)
+        solution and report the wrong vapor fraction (e.g. V=0 for a
+        single-phase vapor) once given more iterations. With the gate, the
+        result is exact and stable across iteration counts.
+        """
+        pr = PengRobinson(propane_butane_system)
+        z = jnp.array([0.5, 0.5])
+        T = jnp.array(320.0)
+
+        # Well below the ~7.3 bar dew pressure -> single-phase vapor.
+        for n in (30, 100, 400):
+            V, _, _ = flash_TP_eos(pr, z, T, jnp.array(3e5), max_iter=n)
+            assert float(V) == pytest.approx(1.0, abs=1e-6)
+
+        # Well above the ~10 bar bubble pressure -> single-phase liquid.
+        for n in (30, 100, 400):
+            V, _, _ = flash_TP_eos(pr, z, T, jnp.array(15e5), max_iter=n)
+            assert float(V) == pytest.approx(0.0, abs=1e-6)
+
+    def test_flash_vapor_fraction_monotonic_and_continuous(self, propane_butane_system):
+        """V(P) at fixed T is monotone non-increasing and free of the spurious
+        jumps the trivial-root drift used to produce near the phase boundary."""
+        pr = PengRobinson(propane_butane_system)
+        z = jnp.array([0.5, 0.5])
+        T = jnp.array(320.0)
+
+        pressures = jnp.linspace(3e5, 12e5, 40)
+        Vs = [float(flash_TP_eos(pr, z, T, P)[0]) for P in pressures]
+
+        # Monotone non-increasing (more pressure -> less vapor), no jump > 0.2
+        for lo, hi in zip(Vs[1:], Vs[:-1]):
+            assert lo <= hi + 1e-6
+        assert max(abs(a - b) for a, b in zip(Vs[1:], Vs[:-1])) < 0.2
 
 
 class TestBinaryInteractionParameters:
