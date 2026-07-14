@@ -5,12 +5,17 @@ import jax
 import jax.numpy as jnp
 
 from difflow import make_stream
+from difflow.streams import get_flows
+from difflow.eos import PengRobinson, CriticalProperties
+from difflow.thermo import IdealThermo, CubicThermo, SpeciesData
 from difflow.units.heat_exchanger import (
     Heater,
     HeaterParams,
     Cooler,
     CoolerParams,
     CounterCurrentHX,
+    EnthalpyCounterCurrentHX,
+    EnthalpyHXParams,
     CoCurrentHX,
     CrossFlowHX,
     HeatExchangerParams,
@@ -602,3 +607,81 @@ class TestIntegration:
         utility_without_recovery = 5.0 * 80.0 * (450.0 - 300.0)
         utility_with_recovery = 5.0 * 80.0 * (450.0 - float(cold_out["T"]))
         assert utility_with_recovery < utility_without_recovery
+
+
+def _propane_butane_cubic_thermo():
+    """CubicThermo (ideal-gas Cp + PR departure) for propane/butane."""
+    species = {
+        "propane": SpeciesData(
+            name="propane",
+            MW=44.10,
+            Cp_coeffs=(73.0, 0.0, 0.0, 0.0),
+            Hvap_coeffs=(18000.0, 0.38, 369.8),
+            antoine_coeffs=(13.72, 1872.5, -25.16),
+        ),
+        "butane": SpeciesData(
+            name="butane",
+            MW=58.12,
+            Cp_coeffs=(98.0, 0.0, 0.0, 0.0),
+            Hvap_coeffs=(22000.0, 0.38, 425.1),
+            antoine_coeffs=(13.98, 2292.4, -27.86),
+        ),
+    }
+    crit = {
+        "propane": CriticalProperties(name="propane", Tc=369.8, Pc=4.25e6, omega=0.152, MW=44.10),
+        "butane": CriticalProperties(name="butane", Tc=425.1, Pc=3.80e6, omega=0.200, MW=58.12),
+    }
+    return CubicThermo(IdealThermo(species), PengRobinson(crit))
+
+
+class TestEnthalpyCounterCurrentHX:
+    """Counter-current HX closed on real EOS-based stream enthalpies."""
+
+    def _streams(self):
+        # Single-phase vapor both sides (3 bar is below the mixture dew here),
+        # so the enthalpy path is smooth and the energy balance is easy to check.
+        hot = make_stream({"propane": 1.0, "butane": 1.0}, T=400.0, P=3e5)
+        cold = make_stream({"propane": 1.0, "butane": 1.0}, T=300.0, P=3e5)
+        return hot, cold
+
+    def test_energy_balance_closes(self):
+        """Q from the solve equals the enthalpy change on each side."""
+        thermo = _propane_butane_cubic_thermo()
+        hot, cold = self._streams()
+        hx = EnthalpyCounterCurrentHX(EnthalpyHXParams(UA=200.0), thermo)
+        hot_out, cold_out, info = hx(hot, cold)
+
+        Q = info["Q"]
+        H_hot_in = thermo.stream_enthalpy_flash(get_flows(hot), hot["T"], hot["P"])
+        H_hot_out = thermo.stream_enthalpy_flash(get_flows(hot), hot_out["T"], hot["P"])
+        H_cold_in = thermo.stream_enthalpy_flash(get_flows(cold), cold["T"], cold["P"])
+        H_cold_out = thermo.stream_enthalpy_flash(get_flows(cold), cold_out["T"], cold["P"])
+
+        assert float(H_hot_in - H_hot_out) == pytest.approx(float(Q), rel=1e-3)
+        assert float(H_cold_out - H_cold_in) == pytest.approx(float(Q), rel=1e-3)
+
+    def test_directions_and_second_law(self):
+        """Hot side cools, cold side heats, and terminal temperatures don't cross."""
+        thermo = _propane_butane_cubic_thermo()
+        hot, cold = self._streams()
+        hx = EnthalpyCounterCurrentHX(EnthalpyHXParams(UA=200.0), thermo)
+        hot_out, cold_out, _ = hx(hot, cold)
+
+        assert float(hot_out["T"]) < float(hot["T"])
+        assert float(cold_out["T"]) > float(cold["T"])
+        assert float(hot_out["T"]) > float(cold["T"])
+        assert float(cold_out["T"]) < float(hot["T"])
+
+    def test_differentiable_wrt_UA(self):
+        """Duty is differentiable through the coupled solve; more UA -> more duty."""
+        thermo = _propane_butane_cubic_thermo()
+        hot, cold = self._streams()
+
+        def duty(UA):
+            hx = EnthalpyCounterCurrentHX(EnthalpyHXParams(UA=UA), thermo)
+            _, _, info = hx(hot, cold)
+            return info["Q"]
+
+        g = jax.grad(duty)(jnp.array(200.0))
+        assert jnp.isfinite(g)
+        assert float(g) > 0.0

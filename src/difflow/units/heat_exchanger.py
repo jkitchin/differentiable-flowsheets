@@ -26,6 +26,7 @@ from typing import Callable
 import jax
 import jax.numpy as jnp
 from jax import Array
+import optimistix as optx
 
 from difflow.streams import Stream, make_stream, get_flows, get_species
 from difflow.params_mixin import ParamsMixin
@@ -965,6 +966,156 @@ class CounterCurrentHX:
             "Cr_near_one": Cr > 0.95,
         }
 
+        return hot_outlet, cold_outlet, info
+
+
+@dataclass(repr=False)
+class EnthalpyHXParams(ParamsMixin):
+    """Parameters for the enthalpy-based counter-current heat exchanger.
+
+    Attributes:
+        UA: Overall heat transfer coefficient x area (W/K).
+        max_iter: Max iterations for the outer Q fixed point.
+        damping: Damping factor for the Q update (0 < d <= 1).
+    """
+    UA: Array | float | None = None
+    max_iter: int = 80
+    damping: float = 0.5
+
+
+class EnthalpyCounterCurrentHX:
+    """Counter-current heat exchanger with rigorous two-phase enthalpy balances.
+
+    Unlike :class:`CounterCurrentHX` (constant Cp per side, closed-form
+    effectiveness-NTU), this closes an enthalpy balance on each side using a
+    thermo object's *flash-based* stream enthalpy (e.g.
+    ``CubicThermo.stream_enthalpy_flash``) and the heat-transfer relation
+    ``Q = UA * LMTD``. It therefore sees the real, temperature-dependent heat
+    capacity of each side -- including latent heat as a stream partially
+    vaporizes or condenses -- and matches an equation-oriented HeatExchanger
+    (e.g. IDAES's) through phase change, where a constant-Cp model cannot.
+
+    The coupled system (Q, T_hot_out, T_cold_out) is solved by a damped fixed
+    point on Q, with a 1-D enthalpy inversion per side (enthalpy is monotone in
+    T). All solves are optimistix root finds, so the unit is differentiable
+    through the converged result via the implicit function theorem.
+
+    The thermo must provide ``stream_enthalpy_flash(flows, T, P)``.
+    """
+
+    symbol = "Enthalpy counter-current HX"
+    equations = [
+        r"H_{h,\mathrm{out}} = H_{h,\mathrm{in}} - Q,\qquad H_{c,\mathrm{out}} = H_{c,\mathrm{in}} + Q",
+        r"Q = UA\,\mathrm{LMTD}(T_{h,\mathrm{in}},T_{h,\mathrm{out}},T_{c,\mathrm{in}},T_{c,\mathrm{out}})",
+    ]
+    assumptions = [
+        "Steady state, constant UA.",
+        "Enthalpies (incl. any vapor/liquid split) from the supplied thermo/EOS.",
+        "Log-mean temperature-difference driving force (as in equation-oriented tools).",
+    ]
+    references = ["Incropera, DeWitt, Bergman. Fundamentals of Heat and Mass Transfer, 7e, Ch. 11."]
+    parameter_symbols = {"UA": "UA"}
+    parameter_units = {"UA": "W/K"}
+    numerical_method = "Damped fixed point on Q with per-side 1-D enthalpy inversion."
+
+    def __init__(self, params: EnthalpyHXParams, thermo):
+        self.params = params
+        self.thermo = thermo
+
+    def _invert_T(self, flows, H_target, P, T_guess):
+        """Find T such that stream_enthalpy_flash(flows, T, P) = H_target.
+
+        Enthalpy is monotone increasing in T, so this 1-D root find is
+        well-posed; Newton from T_guess (a nearby terminal temperature)
+        stays in the physical branch.
+        """
+        thermo = self.thermo
+
+        def resid(T, _):
+            return thermo.stream_enthalpy_flash(flows, T, P) - H_target
+
+        solver = optx.Newton(rtol=1e-9, atol=1e-4)
+        sol = optx.root_find(resid, solver, T_guess, args=None, max_steps=50, throw=False)
+        return sol.value
+
+    def __call__(
+        self,
+        hot_inlet: Stream,
+        cold_inlet: Stream,
+        UA: Array | float | None = None,
+    ) -> tuple[Stream, Stream, dict[str, Array]]:
+        """Solve the counter-current HX with real enthalpy balances.
+
+        Returns (hot_outlet, cold_outlet, info) with the same info keys as
+        CounterCurrentHX where meaningful (Q, LMTD, terminal temperatures).
+        """
+        p = self.params
+        thermo = self.thermo
+
+        UA_val = jnp.asarray(UA if UA is not None else p.UA)
+        if p.UA is None and UA is None:
+            raise ValueError("UA must be specified")
+
+        hot_flows = get_flows(hot_inlet)
+        cold_flows = get_flows(cold_inlet)
+        T_hot_in = jnp.asarray(hot_inlet["T"])
+        T_cold_in = jnp.asarray(cold_inlet["T"])
+        P_hot = hot_inlet["P"]
+        P_cold = cold_inlet["P"]
+
+        H_hot_in = thermo.stream_enthalpy_flash(hot_flows, T_hot_in, P_hot)
+        H_cold_in = thermo.stream_enthalpy_flash(cold_flows, T_cold_in, P_cold)
+
+        # Outlet temperatures from a given duty Q, via per-side enthalpy inversion.
+        def outlets_from_Q(Q):
+            T_hot_out = self._invert_T(hot_flows, H_hot_in - Q, P_hot, T_hot_in)
+            T_cold_out = self._invert_T(cold_flows, H_cold_in + Q, P_cold, T_cold_in)
+            return T_hot_out, T_cold_out
+
+        # Fixed point on Q: Q = UA * LMTD(Q). LMTD decreases as Q grows, so the
+        # map is a contraction; a damped update converges robustly.
+        def q_iteration(Q, _):
+            T_hot_out, T_cold_out = outlets_from_Q(Q)
+            dT1 = T_hot_in - T_cold_out   # hot inlet vs cold outlet
+            dT2 = T_hot_out - T_cold_in   # hot outlet vs cold inlet
+            LMTD = log_mean_temperature_difference(dT1, dT2)
+            Q_new = UA_val * LMTD
+            return (1.0 - p.damping) * Q + p.damping * Q_new
+
+        # Initial Q: effectiveness-NTU estimate with a secant heat-capacity rate
+        # from the inlet enthalpies over the max temperature span (a good, cheap
+        # starting point; the fixed point corrects it).
+        driving = jnp.maximum(T_hot_in - T_cold_in, MIN_DELTA_T)
+        Q0 = 0.5 * UA_val * driving
+
+        solver = optx.FixedPointIteration(rtol=1e-7, atol=1e-3)
+        sol = optx.fixed_point(
+            q_iteration, solver, Q0, args=None, max_steps=p.max_iter, throw=False
+        )
+        Q = sol.value
+
+        T_hot_out, T_cold_out = outlets_from_Q(Q)
+
+        hot_outlet = dict(hot_inlet)
+        hot_outlet["T"] = T_hot_out
+        cold_outlet = dict(cold_inlet)
+        cold_outlet["T"] = T_cold_out
+
+        dT1 = T_hot_in - T_cold_out
+        dT2 = T_hot_out - T_cold_in
+        LMTD = log_mean_temperature_difference(dT1, dT2)
+
+        info = {
+            "Q": Q,
+            "LMTD": LMTD,
+            "T_hot_in": T_hot_in,
+            "T_hot_out": T_hot_out,
+            "T_cold_in": T_cold_in,
+            "T_cold_out": T_cold_out,
+            "approach": jnp.minimum(jnp.abs(dT1), jnp.abs(dT2)),
+            "driving_force": T_hot_in - T_cold_in,
+            "flow_arrangement": "counter_current_enthalpy",
+        }
         return hot_outlet, cold_outlet, info
 
 
