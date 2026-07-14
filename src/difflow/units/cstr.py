@@ -46,6 +46,31 @@ RateFunction = Callable[[dict[str, Array], Array, dict], Array]
 Params = dict[str, Any]
 
 
+def _rate_concentrations(F_array, species_order, eos, reaction_phase, T, P, Qv_fallback):
+    """Species concentrations (mol/m^3) for the rate law.
+
+    With ``eos`` provided, concentration is molarity from the real cubic-EOS
+    molar density at reactor (T, P, composition) in ``reaction_phase``::
+
+        C_i = F_i / Q_v = y_i * rho_EOS(T, P, y)
+
+    so a gas-phase reactor sees the true (low) vapor molar density rather than
+    the assumed constant ``Qv_fallback`` basis, and the reactor shares the same
+    EOS as the flash. With ``eos=None`` this reproduces the legacy
+    assumed-density basis exactly (``C_i = F_i / Qv_fallback``).
+
+    ``eos``/``reaction_phase``/``species_order`` are static (captured in the
+    caller's closure); ``F_array``/``T``/``P``/``Qv_fallback`` are JAX arrays,
+    keeping this differentiable under the reactor's implicit solves.
+    """
+    if eos is not None:
+        F_total = jnp.sum(F_array)
+        y = F_array / jnp.maximum(F_total, 1e-30)
+        rho = eos.density(T, P, y, phase=reaction_phase)
+        return {s: y[i] * rho for i, s in enumerate(species_order)}
+    return {s: F_array[i] / Qv_fallback for i, s in enumerate(species_order)}
+
+
 @dataclass(repr=False)
 class CSTRParams(ParamsMixin):
     """Parameters for a CSTR.
@@ -78,6 +103,26 @@ class CSTRParams(ParamsMixin):
     dH_rxn: Array | None = None
     T_damping: float = 0.3
     molar_density: float | None = None
+    # Optional cubic EOS (e.g. difflow.eos.PengRobinson) for a phase-consistent
+    # concentration basis. When provided, the rate-law concentration is molarity
+    # from the real EOS molar density at reactor (T, P, composition) in
+    # reaction_phase (C_i = y_i * rho_EOS(T, P, y)) instead of the assumed
+    # constant molar_density -- so a gas-phase reactor sees the true vapor molar
+    # density, not an assumed liquid one, and the reactor shares the flash's EOS.
+    # The EOS must expose density(T, P, y, phase) and species_order
+    # (see difflow.eos.PengRobinson). When None, behavior is unchanged.
+    #
+    # NOTE: eos sets only the *concentration* basis. For the *enthalpy* in the
+    # non-isothermal energy balance to also carry the real-gas EOS departure,
+    # pass a difflow.thermo.CubicThermo (wrapping this same eos) as the CSTR's
+    # thermo. With a plain IdealThermo the enthalpy stays ideal-gas even when eos
+    # is set -- real-gas concentrations but ideal-gas enthalpy -- so pair the two
+    # to keep the reactor thermodynamically consistent.
+    eos: Any = None
+    # Phase whose EOS molar density sets the concentration basis when eos is
+    # provided; also the enthalpy phase when the thermo is a CubicThermo. Ignored
+    # when eos is None.
+    reaction_phase: str = "vapor"
     H_mix_fn: Callable | None = None
     K_eq_fn: Callable | None = None
     # Volumetric-flow basis for concentrations (#75). By default the reactor
@@ -216,10 +261,19 @@ class CSTR:
         p = self.params
         inlet_flows = get_flows(inlet)
 
-        # Determine volumetric flow
-        density = p.molar_density if p.molar_density is not None else 55500.0
+        # Determine volumetric flow (concentration basis). With an EOS, use the
+        # real EOS molar density at inlet conditions in reaction_phase (the
+        # per-iteration basis is recomputed from the EOS at reactor/outlet
+        # conditions inside the solve); without an EOS, use the assumed constant
+        # molar_density (legacy single-liquid-phase behavior).
+        if p.eos is not None:
+            F_in_arr = jnp.array([inlet_flows[s] for s in p.species_order])
+            y_in = F_in_arr / jnp.maximum(jnp.sum(F_in_arr), 1e-30)
+            density = p.eos.density(inlet["T"], inlet["P"], y_in, phase=p.reaction_phase)
+        else:
+            density = p.molar_density if p.molar_density is not None else 55500.0
         if volumetric_flow is None:
-            # Approximate as total molar flow / molar_density for liquid
+            # Approximate as total molar flow / molar_density
             total_molar = sum(inlet_flows.values())
             volumetric_flow = total_molar / density  # mol/s / (mol/m^3) = m^3/s
 
@@ -231,7 +285,7 @@ class CSTR:
                 T_spec = inlet["T"]
             T_out = jnp.asarray(T_spec)
             outlet_flows, rates = self._solve_material_balance(
-                inlet_flows, T_out, volumetric_flow
+                inlet_flows, T_out, volumetric_flow, inlet["P"]
             )
             Q = self._compute_heat_duty(inlet, outlet_flows, T_out, rates)
 
@@ -305,6 +359,7 @@ class CSTR:
         inlet_flows: dict[str, Array],
         T: Array,
         volumetric_flow: Array,
+        P: Array | float | None = None,
     ) -> tuple[dict[str, Array], Array]:
         """Solve material balance for given temperature.
 
@@ -339,6 +394,8 @@ class CSTR:
         rate_fn = p.rate_fn
         species_order = p.species_order
         stoich = p.stoich
+        eos = p.eos
+        reaction_phase = p.reaction_phase
         # Outlet-conditions volumetric flow (#75): Q_v = F_total_out / density
         outlet_basis = p.outlet_volumetric_basis
         density = p.molar_density if p.molar_density is not None else 55500.0
@@ -355,9 +412,12 @@ class CSTR:
             # Ensure non-negative flows for concentration calculation
             F_out_safe = jnp.maximum(F_out, 1e-10)
 
-            # Concentrations from flows, at inlet- or outlet-conditions flow
+            # Concentrations: EOS molarity at reactor conditions when eos is set,
+            # else the inlet- or outlet-conditions constant-density basis.
             Q_v_eff = _effective_Qv(F_out_safe, Q_v)
-            C = {s: F_out_safe[i] / Q_v_eff for i, s in enumerate(species_order)}
+            C = _rate_concentrations(
+                F_out_safe, species_order, eos, reaction_phase, T_, P, Q_v_eff
+            )
 
             # Reaction rates
             r = rate_fn(C, T_, rate_params)
@@ -384,9 +444,11 @@ class CSTR:
         # Ensure non-negative flows
         F_out = jnp.maximum(F_out, 0.0)
 
-        # Calculate final rates (same volumetric-flow basis as the solve)
+        # Calculate final rates (same concentration basis as the solve)
         Q_v_final = _effective_Qv(jnp.maximum(F_out, 1e-10), volumetric_flow)
-        C_out = {s: F_out[i] / Q_v_final for i, s in enumerate(p.species_order)}
+        C_out = _rate_concentrations(
+            jnp.maximum(F_out, 1e-10), p.species_order, eos, reaction_phase, T, P, Q_v_final
+        )
         rates = p.rate_fn(C_out, T, p.rate_params)
 
         outlet_flows = {s: F_out[i] for i, s in enumerate(p.species_order)}
@@ -418,9 +480,13 @@ class CSTR:
             Q_rxn = p.V * jnp.sum(rates * p.dH_rxn)
             return Q_rxn
 
-        # Full energy balance with enthalpy
-        H_in = self.thermo.stream_enthalpy(inlet_flows, inlet["T"], phase="liquid")
-        H_out = self.thermo.stream_enthalpy(outlet_flows, T_out, phase="liquid")
+        # Full energy balance with enthalpy. With an EOS the enthalpy is
+        # evaluated in the reaction phase and at reactor pressure (so a
+        # CubicThermo adds the PR departure); otherwise the legacy liquid basis.
+        enth_phase = p.reaction_phase if p.eos is not None else "liquid"
+        enth_P = inlet["P"] if p.eos is not None else None
+        H_in = self.thermo.stream_enthalpy(inlet_flows, inlet["T"], phase=enth_phase, P=enth_P)
+        H_out = self.thermo.stream_enthalpy(outlet_flows, T_out, phase=enth_phase, P=enth_P)
 
         if p.dH_rxn is not None:
             Q_rxn = p.V * jnp.sum(rates * p.dH_rxn)
@@ -465,13 +531,22 @@ class CSTR:
         V = p.V
         T_damping = p.T_damping
         H_mix_fn = p.H_mix_fn
+        eos = p.eos
+        reaction_phase = p.reaction_phase
+        P = inlet["P"]
+        # Enthalpy phase/pressure: reaction phase at reactor P when eos is set
+        # (so a CubicThermo adds the PR departure), else the legacy liquid basis.
+        enth_phase = reaction_phase if eos is not None else "liquid"
+        enth_P = P if eos is not None else None
 
         def solve_material_balance_at_T(T, F_in_, Q_v, rate_params):
             """Solve material balance at fixed T using Newton's method."""
             def residual(F_out, args):
                 F_in_inner, V_inner, Q_v_inner, T_inner, rp = args
                 F_out_safe = jnp.maximum(F_out, 1e-10)
-                C = {s: F_out_safe[i] / Q_v_inner for i, s in enumerate(species_order)}
+                C = _rate_concentrations(
+                    F_out_safe, species_order, eos, reaction_phase, T_inner, P, Q_v_inner
+                )
                 r = rate_fn(C, T_inner, rp)
                 return F_out - (F_in_inner + V_inner * stoich @ r)
 
@@ -488,7 +563,9 @@ class CSTR:
             F_out = solve_material_balance_at_T(T, F_in_, Q_v, rate_params)
 
             # Compute reaction rates at solution
-            C_out = {s: F_out[i] / Q_v for i, s in enumerate(species_order)}
+            C_out = _rate_concentrations(
+                F_out, species_order, eos, reaction_phase, T, P, Q_v
+            )
             r = rate_fn(C_out, T, rate_params)
 
             # Energy balance: Q = 0 for adiabatic
@@ -497,7 +574,7 @@ class CSTR:
             inlet_fl = {s: F_in_[i] for i, s in enumerate(species_order)}
             outlet_fl = {s: F_out[i] for i, s in enumerate(species_order)}
 
-            H_in = thermo.stream_enthalpy(inlet_fl, T_inlet, phase="liquid")
+            H_in = thermo.stream_enthalpy(inlet_fl, T_inlet, phase=enth_phase, P=enth_P)
 
             if dH_rxn is not None:
                 Q_rxn = V * jnp.sum(r * dH_rxn)
@@ -521,7 +598,7 @@ class CSTR:
             Cp_mix = thermo.Cp_mix(mole_fracs, T)
 
             # Current H_out
-            H_out_current = thermo.stream_enthalpy(outlet_fl, T, phase="liquid")
+            H_out_current = thermo.stream_enthalpy(outlet_fl, T, phase=enth_phase, P=enth_P)
 
             # Update T: H_out_target = H_out_current + total_F * Cp * (T_new - T)
             # T_new = T + (H_out_target - H_out_current) / (total_F * Cp)
@@ -547,7 +624,9 @@ class CSTR:
         F_out = solve_material_balance_at_T(T_out, F_in, volumetric_flow, p.rate_params)
         outlet_flows = {s: F_out[i] for i, s in enumerate(p.species_order)}
 
-        C_out = {s: F_out[i] / volumetric_flow for i, s in enumerate(p.species_order)}
+        C_out = _rate_concentrations(
+            F_out, p.species_order, eos, reaction_phase, T_out, P, volumetric_flow
+        )
         rates = p.rate_fn(C_out, T_out, p.rate_params)
 
         return outlet_flows, T_out, rates
@@ -579,13 +658,20 @@ class CSTR:
         dH_rxn = p.dH_rxn
         V = p.V
         T_damping = p.T_damping
+        eos = p.eos
+        reaction_phase = p.reaction_phase
+        P = inlet["P"]
+        enth_phase = reaction_phase if eos is not None else "liquid"
+        enth_P = P if eos is not None else None
 
         def solve_material_balance_at_T(T, F_in_, Q_v, rate_params):
             """Solve material balance at fixed T using Newton's method."""
             def residual(F_out, args):
                 F_in_inner, V_inner, Q_v_inner, T_inner, rp = args
                 F_out_safe = jnp.maximum(F_out, 1e-10)
-                C = {s: F_out_safe[i] / Q_v_inner for i, s in enumerate(species_order)}
+                C = _rate_concentrations(
+                    F_out_safe, species_order, eos, reaction_phase, T_inner, P, Q_v_inner
+                )
                 r = rate_fn(C, T_inner, rp)
                 return F_out - (F_in_inner + V_inner * stoich @ r)
 
@@ -602,7 +688,9 @@ class CSTR:
             F_out = solve_material_balance_at_T(T, F_in_, Q_v, rate_params)
 
             # Compute reaction rates at solution
-            C_out = {s: F_out[i] / Q_v for i, s in enumerate(species_order)}
+            C_out = _rate_concentrations(
+                F_out, species_order, eos, reaction_phase, T, P, Q_v
+            )
             r = rate_fn(C_out, T, rate_params)
 
             # Energy balance: Q = H_out - H_in + Q_rxn
@@ -610,7 +698,7 @@ class CSTR:
             inlet_fl = {s: F_in_[i] for i, s in enumerate(species_order)}
             outlet_fl = {s: F_out[i] for i, s in enumerate(species_order)}
 
-            H_in = thermo.stream_enthalpy(inlet_fl, T_inlet, phase="liquid")
+            H_in = thermo.stream_enthalpy(inlet_fl, T_inlet, phase=enth_phase, P=enth_P)
 
             if dH_rxn is not None:
                 Q_rxn = V * jnp.sum(r * dH_rxn)
@@ -626,7 +714,7 @@ class CSTR:
             Cp_mix = thermo.Cp_mix(mole_fracs, T)
 
             # Current H_out
-            H_out_current = thermo.stream_enthalpy(outlet_fl, T, phase="liquid")
+            H_out_current = thermo.stream_enthalpy(outlet_fl, T, phase=enth_phase, P=enth_P)
 
             # Update T
             dT = safe_divide(H_out_target - H_out_current, total_F * Cp_mix)
@@ -651,7 +739,9 @@ class CSTR:
         F_out = solve_material_balance_at_T(T_out, F_in, volumetric_flow, p.rate_params)
         outlet_flows = {s: F_out[i] for i, s in enumerate(p.species_order)}
 
-        C_out = {s: F_out[i] / volumetric_flow for i, s in enumerate(p.species_order)}
+        C_out = _rate_concentrations(
+            F_out, p.species_order, eos, reaction_phase, T_out, P, volumetric_flow
+        )
         rates = p.rate_fn(C_out, T_out, p.rate_params)
 
         return outlet_flows, T_out, rates

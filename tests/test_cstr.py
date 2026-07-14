@@ -367,9 +367,9 @@ class TestCSTRParamsUpdate:
             species_order=["A", "B"],
         )
 
-        # CSTRParams fields: 7 original + molar_density, H_mix_fn, K_eq_fn,
-        # outlet_volumetric_basis
-        assert len(params) == 11
+        # CSTRParams fields: 7 original + molar_density, eos, reaction_phase,
+        # H_mix_fn, K_eq_fn, outlet_volumetric_basis
+        assert len(params) == 13
 
     def test_dict_conversion_roundtrip(self, simple_rate_fn):
         """Test that dict(params) works like asdict()."""
