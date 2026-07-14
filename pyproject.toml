@@ -36,6 +36,15 @@ visualization = [
     "ipycytoscape>=1.3.0",
     "networkx>=2.6.0",
 ]
+pyglenn = [
+    # NASA Glenn (CEA) thermodynamic database access for difflow.pyglenn_import
+    "pyglenn",
+]
+dwsim = [
+    # DWSIM standalone thermodynamics via pythonnet for difflow.dwsim_import
+    # (also requires a local DWSIM/DTL install providing the thermo DLL)
+    "pythonnet",
+]
 bio = [
     # Bio manufacturing operations are included in the main package
 ]

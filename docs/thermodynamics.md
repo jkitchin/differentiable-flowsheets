@@ -579,6 +579,140 @@ The import function converts NASA coefficients to the simpler polynomial form us
 
 ---
 
+(pyglenn-import)=
+## NASA Glenn (pyglenn) Import
+
+**Location**: `difflow/pyglenn_import.py`
+
+Import ideal-gas thermodynamic data from the NASA Glenn (CEA) thermodynamic
+database, as exposed by the [`pyglenn`](https://github.com/ProfLeao/pyglenn)
+package (~2030 species, NASA-9 polynomials). `pyglenn` is an **optional**
+dependency:
+
+```bash
+pip install pyglenn          # or:  pip install "difflow[pyglenn]"
+```
+
+Unlike the Cantera importer (which parses a YAML file), this adapter talks to
+pyglenn's `ThermochemicalCalculator` at runtime. Because its
+`import_species_data` / `list_available_species` names mirror the Cantera ones,
+it is exposed as a **namespace** rather than flattened into `difflow`:
+
+```python
+from difflow.pyglenn_import import import_species_data, list_available_species
+from difflow.thermo import IdealThermo
+
+# Find species records (id, name, phase, molecular_weight, ...)
+list_available_species("CO2")
+
+# Import ideal-gas SpeciesData for a set of species
+species_data = import_species_data(["O2", "CO2", "H2O"])
+thermo = IdealThermo(species_data)
+```
+
+### What is (and is not) imported
+
+| difflow `SpeciesData` field | Source in pyglenn |
+|-----------------------------|-------------------|
+| `Cp_coeffs` | Cubic **least-squares fit** of pyglenn's `Cp(T)` over `T_fit_range` (default 300–1000 K) |
+| `MW` | `molecular_weight` |
+| `Hf` | `heat_of_formation_298K` |
+| `Hvap_coeffs`, `antoine_coeffs` | **Not in NASA Glenn data** — filled with neutral placeholders, or estimated from an optional `boiling_points` / `critical_temps` you pass |
+
+The NASA-9 form carries $1/T^2$ and $1/T$ terms that difflow's cubic
+$C_p = a + bT + cT^2 + dT^3$ cannot represent exactly, so `Cp_coeffs` come from
+a fit over the window you care about — set `T_fit_range` to your operating
+range. Samples outside a species' valid interval (where pyglenn raises) are
+dropped automatically.
+
+```{note}
+pyglenn supplies **no critical properties** (Tc, Pc, ω), so there is no
+`import_critical_props` here. To build a `PengRobinson`/`SRK` or a
+`CubicThermo`, pair the ideal-gas `SpeciesData` from pyglenn with
+`CriticalProperties` from `difflow.database` or `difflow.cantera_import`:
+
+    from difflow.eos import PengRobinson
+    from difflow.thermo import IdealThermo, CubicThermo
+    from difflow.cantera_import import import_critical_props
+
+    sp   = import_species_data(["CH4", "CO2", "H2O"])            # ideal-gas Cp (pyglenn)
+    crit = import_critical_props("gri30.yaml", ["CH4", "CO2", "H2O"])  # Tc/Pc/ω (Cantera)
+    thermo = CubicThermo(IdealThermo(sp), PengRobinson(crit))    # real-gas enthalpy
+```
+
+### Supported NASA Glenn Data
+
+| Data Type | Support |
+|-----------|---------|
+| Ideal-gas Cp (NASA 9) | Full (cubic fit) |
+| Molecular weight | Full |
+| Enthalpy of formation (298 K) | Full |
+| Critical properties | Not provided by pyglenn |
+| Liquid Hvap / vapor pressure | Placeholder/estimated only |
+
+---
+
+(dwsim-import)=
+## DWSIM Import (prototype)
+
+**Location**: `difflow/dwsim_import.py`
+
+Import compound constants and ideal-gas heat capacities from
+[DWSIM](https://dwsim.org)'s thermodynamics library. DWSIM is a .NET
+application, so it is reached from Python through
+[`pythonnet`](https://github.com/pythonnet/pythonnet) against
+`DWSIM.Thermodynamics.StandaloneLibrary.dll`:
+
+```bash
+pip install pythonnet          # or:  pip install "difflow[dwsim]"
+# plus a local DWSIM / DTL install providing the standalone thermo DLL
+```
+
+```{important}
+Calls into DWSIM return concrete numbers through the CLR and are **not
+differentiable** — JAX cannot trace through them. So, exactly like the Cantera
+and pyglenn importers, this adapter uses DWSIM only as a **one-time data
+source**: it reads each compound's constants and samples its ideal-gas Cp(T),
+then builds difflow's own JAX-native `SpeciesData` / `CriticalProperties`.
+difflow stays differentiable end to end; DWSIM is never in the gradient path.
+```
+
+Because DWSIM has critical constants (unlike pyglenn), it feeds **both**
+`SpeciesData` and `CriticalProperties`, so it can build a full EOS/`CubicThermo`
+on its own:
+
+```python
+from difflow.dwsim_import import import_species_data, import_critical_props
+from difflow.thermo import IdealThermo, CubicThermo
+from difflow.eos import PengRobinson
+
+names = ["Methane", "Carbon dioxide", "Water"]
+sp   = import_species_data(names, dtl_path=r"C:\DWSIM\DTL")   # or set DWSIM_DTL_PATH
+crit = import_critical_props(names, dtl_path=r"C:\DWSIM\DTL")
+thermo = CubicThermo(IdealThermo(sp), PengRobinson(crit))
+```
+
+### What is imported (and DWSIM units)
+
+| difflow field | DWSIM source (`ICompoundConstantProperties`) | Unit conversion |
+|---------------|-----------------------------------------------|-----------------|
+| `MW` | `Molar_Weight` | kg/kmol ≡ g/mol |
+| `CriticalProperties.Tc/Pc/omega` | `Critical_Temperature`, `Critical_Pressure`, `Acentric_Factor` | K, Pa, — |
+| `Hf` | `IG_Enthalpy_of_Formation_25C` | kJ/kg × MW → J/mol |
+| `Cp_coeffs` | ideal-gas Cp via `AUX_CPi(name, T)` | kJ/kg/K × MW → J/mol/K, then cubic fit |
+| `Hvap_coeffs`, `antoine_coeffs` | estimated from Tb/Tc | — |
+
+```{note}
+**Prototype.** DWSIM cannot run in difflow's own CI (no .NET runtime), so the
+exact object graph used to read a compound's `ConstantProperties` may need
+adjusting for a given DWSIM version. All DWSIM contact is isolated in
+`DWSIMBackend`; the import logic is backend-agnostic and unit-tested against a
+fake backend. To adapt to your DWSIM build, replace `DWSIMBackend` and pass it
+via `backend=`.
+```
+
+---
+
 ## Usage Examples
 
 ### Complete VLE Flash with Ideal Thermo

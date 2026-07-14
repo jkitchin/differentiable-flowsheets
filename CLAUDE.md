@@ -287,6 +287,8 @@ jax.debug.print("value: {x}", x=value)
 **Optional:**
 - matplotlib, jupyter - Examples
 - cantera - Complex chemistry
+- pyglenn - NASA Glenn (CEA) thermo data import (`difflow.pyglenn_import`)
+- pythonnet - DWSIM thermo data import (`difflow.dwsim_import`, prototype)
 - ipycytoscape, networkx - Visualization
 
 ## Important Files

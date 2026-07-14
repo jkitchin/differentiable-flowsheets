@@ -39,6 +39,8 @@ difflow/
 ├── flowsheet.py        # Flowsheet management
 ├── uncertainty.py      # Uncertainty propagation
 ├── cantera_import.py   # Cantera data import
+├── pyglenn_import.py   # NASA Glenn (pyglenn) thermo import
+├── dwsim_import.py     # DWSIM thermo import (pythonnet, prototype)
 ├── units/              # Unit operations
 │   ├── cstr.py         # CSTR reactors
 │   ├── pfr.py          # PFR reactors
@@ -146,6 +148,7 @@ Streams are JAX pytrees, allowing seamless use with `jax.vmap`, `jax.jit`, and o
 - JAX >= 0.4.0
 - NumPy
 - PyYAML (for Cantera import)
+- pyglenn (optional, for NASA Glenn thermo import)
 
 ## License
 

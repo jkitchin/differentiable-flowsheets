@@ -71,6 +71,13 @@ from difflow.cantera_import import (
     list_available_species,
     list_available_reactions,
 )
+# NASA Glenn (pyglenn) and DWSIM imports are exposed as namespaces, not
+# flattened, because their import_species_data / import_critical_props mirror
+# the Cantera names. Usage: difflow.pyglenn_import.import_species_data([...]),
+# difflow.dwsim_import.import_critical_props([...]). Both underlying tools are
+# optional dependencies, imported lazily inside the adapters' functions.
+from difflow import pyglenn_import
+from difflow import dwsim_import
 from difflow.params_mixin import ParamsMixin
 from difflow.numerics import (
     safe_divide,
@@ -312,6 +319,10 @@ __all__ = [
     "load_mechanism",
     "list_available_species",
     "list_available_reactions",
+    # NASA Glenn (pyglenn) Import (namespace: difflow.pyglenn_import)
+    "pyglenn_import",
+    # DWSIM Import (namespace: difflow.dwsim_import)
+    "dwsim_import",
     # Unit operations - CSTR
     "CSTR",
     "CSTRParams",
