@@ -36,7 +36,7 @@ from difflow.streams import (
     mole_fractions,
     scale_stream,
 )
-from difflow.thermo import IdealThermo, SpeciesData
+from difflow.thermo import IdealThermo, CubicThermo, SpeciesData
 from difflow.eos import (
     PengRobinson,
     SRK,
@@ -143,6 +143,8 @@ from difflow.units.heat_exchanger import (
     Cooler,
     CoolerParams,
     CounterCurrentHX,
+    EnthalpyCounterCurrentHX,
+    EnthalpyHXParams,
     CoCurrentHX,
     CrossFlowHX,
     HeatExchangerParams,
@@ -278,6 +280,7 @@ __all__ = [
     "scale_stream",
     # Thermodynamics - Ideal
     "IdealThermo",
+    "CubicThermo",
     "SpeciesData",
     # Thermodynamics - Equations of State
     "PengRobinson",
@@ -361,6 +364,8 @@ __all__ = [
     "Cooler",
     "CoolerParams",
     "CounterCurrentHX",
+    "EnthalpyCounterCurrentHX",
+    "EnthalpyHXParams",
     "CoCurrentHX",
     "CrossFlowHX",
     "HeatExchangerParams",
