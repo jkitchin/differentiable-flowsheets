@@ -162,6 +162,16 @@ from difflow.units.heat_exchanger import (
     design_heat_exchanger,
     size_heat_exchanger,
 )
+from difflow.units.eos_units import (
+    Turboexpander,
+    TurboexpanderParams,
+    Compressor,
+    CompressorParams,
+    JTValve,
+    JTValveParams,
+    ComponentSeparator,
+    ComponentSeparatorParams,
+)
 from difflow.flowsheet import Flowsheet, Unit, create_objective
 from difflow.report import (
     ConvergenceInfo,
@@ -386,6 +396,15 @@ __all__ = [
     "log_mean_temperature_difference",
     "design_heat_exchanger",
     "size_heat_exchanger",
+    # EOS-consistent process units
+    "Turboexpander",
+    "TurboexpanderParams",
+    "Compressor",
+    "CompressorParams",
+    "JTValve",
+    "JTValveParams",
+    "ComponentSeparator",
+    "ComponentSeparatorParams",
     # Flowsheet
     "Flowsheet",
     "Unit",

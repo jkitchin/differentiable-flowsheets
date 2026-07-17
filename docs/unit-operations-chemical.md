@@ -1228,6 +1228,105 @@ $$H = HTU \times NTU$$
 
 ---
 
+## Pressure-Change & EOS-Consistent Units
+
+These units close energy balances on the **cubic-EOS enthalpy and entropy**
+(ideal-gas Cp + Peng-Robinson/SRK departures) rather than on ideal-K or
+constant-Cp models, so they are correct for real gases and near-cryogenic /
+gas-processing service (expander plants, NGL recovery, refrigeration). Each
+takes a [`CubicThermo`](thermodynamics.md) built from an `IdealThermo` (for the
+ideal-gas Cp) and a `PengRobinson`/`SRK` EOS. All internal temperature solves
+use `optimistix` root finds on the two-phase enthalpy/entropy, so every outlet
+temperature, duty and shaft work is differentiable with respect to feed
+conditions, discharge pressures and efficiencies.
+
+```python
+from difflow import (
+    IdealThermo, CubicThermo, PengRobinson,
+    Turboexpander, TurboexpanderParams,
+    Compressor, CompressorParams,
+    JTValve, JTValveParams,
+    ComponentSeparator, ComponentSeparatorParams,
+)
+from difflow.database import get_critical_props, get_species_data
+from difflow.streams import make_stream
+
+names = ["nitrogen", "methane", "ethane", "propane", "n_butane"]
+ideal = IdealThermo({c: get_species_data(c) for c in names})
+eos = PengRobinson({c: get_critical_props(c) for c in names})
+thermo = CubicThermo(ideal, eos)
+
+feed = make_stream({"nitrogen": 0.5, "methane": 86.0, "ethane": 7.0,
+                    "propane": 3.0, "n_butane": 1.0}, T=305.0, P=60e5)
+```
+
+### Turboexpander
+
+Adiabatic expansion to `P_out` with an isentropic efficiency. The reversible
+outlet is found by matching entropy, then the efficiency is applied to the
+enthalpy drop:
+
+$$S(T_\text{isen}, P_\text{out}) = S(T_\text{in}, P_\text{in}), \qquad
+H_\text{out} = H_\text{in} + \eta\,(H_\text{isen} - H_\text{in})$$
+
+The extracted shaft work is $W = H_\text{in} - H_\text{out} > 0$. Both enthalpy
+and entropy are two-phase aware, so an expander whose outlet partly condenses
+(common in cryogenic service) is handled correctly.
+
+```python
+exp = Turboexpander(TurboexpanderParams(P_out=20e5, eta_isentropic=0.80), thermo)
+outlet, info = exp(feed)
+# info: {"W", "T_isen", "T_out", "H_in", "H_out"}
+```
+
+### Compressor
+
+Adiabatic compression to `P_out` with an isentropic efficiency. Same entropy
+match, but the efficiency **inflates** the enthalpy rise (an inefficient machine
+needs more work than the reversible one):
+
+$$H_\text{out} = H_\text{in} + \frac{H_\text{isen} - H_\text{in}}{\eta}$$
+
+The required shaft work is $W = H_\text{out} - H_\text{in} > 0$.
+
+```python
+comp = Compressor(CompressorParams(P_out=90e5, eta_isentropic=0.75), thermo)
+outlet, info = comp(feed)
+```
+
+### JTValve (Joule-Thomson valve)
+
+Adiabatic, **isenthalpic** pressure letdown. Holds the two-phase EOS enthalpy
+constant across the pressure drop and solves for the outlet temperature,
+$H(T_\text{out}, P_\text{out}) = H(T_\text{in}, P_\text{in})$. On a real gas this
+produces the Joule-Thomson temperature change that an ideal-gas or ideal-K valve
+misses. Because no work is extracted, the same pressure drop cools **less** than
+a turboexpander.
+
+```python
+valve = JTValve(JTValveParams(P_out=20e5), thermo)
+outlet, info = valve(feed)   # info: {"T_out", "H"}
+```
+
+### ComponentSeparator
+
+A black-box separator surrogate: each component is split to the product stream
+by a fixed recovery, the complement going to the residue. Both products inherit
+the inlet T and P, and the reported duty `Q` is the enthalpy imbalance needed to
+hold both at the inlet temperature. Useful as a column stand-in when only the
+recovery specification is known.
+
+```python
+rec = {"propane": 0.95, "n_butane": 0.99}   # heavies to product
+sep = ComponentSeparator(
+    ComponentSeparatorParams(recovery_to_product=rec, default_recovery=0.0),
+    thermo,
+)
+residue, product, info = sep(feed)   # info: {"Q", "H_in", "H_out"}
+```
+
+---
+
 ## Summary Tables
 
 ### Reactor Comparison

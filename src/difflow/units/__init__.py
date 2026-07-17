@@ -89,6 +89,16 @@ from difflow.units.heat_exchanger import (
     design_heat_exchanger,
     size_heat_exchanger,
 )
+from difflow.units.eos_units import (
+    Turboexpander,
+    TurboexpanderParams,
+    Compressor,
+    CompressorParams,
+    JTValve,
+    JTValveParams,
+    ComponentSeparator,
+    ComponentSeparatorParams,
+)
 
 __all__ = [
     # Base classes and helpers
@@ -164,4 +174,13 @@ __all__ = [
     "effectiveness_co_current",
     "design_heat_exchanger",
     "size_heat_exchanger",
+    # EOS-consistent process units
+    "Turboexpander",
+    "TurboexpanderParams",
+    "Compressor",
+    "CompressorParams",
+    "JTValve",
+    "JTValveParams",
+    "ComponentSeparator",
+    "ComponentSeparatorParams",
 ]
