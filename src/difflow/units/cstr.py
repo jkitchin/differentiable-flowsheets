@@ -22,6 +22,7 @@ and the new DynamicUnit protocol for unified dynamic modeling.
 
 from typing import Callable, Literal, Any
 from dataclasses import dataclass
+import jax
 import jax.numpy as jnp
 from jax import Array
 
@@ -885,6 +886,20 @@ class CSTR:
         inlet = inputs.get("inlet") or list(inputs.values())[0]
         inlet_flows = get_flows(inlet)
 
+        # EOS-consistent branch: fill the reactor volume with feed-composition
+        # vapor at inlet (T, P), so the initial molar holdup is the real
+        # n_total = rho_EOS(T0, P, y0) * V (not F_in * assumed-tau). The
+        # reaction-adjusted outlet flow keeps this holdup constant thereafter.
+        if p.eos is not None:
+            species = p.species_order
+            F_in = jnp.array([inlet_flows.get(s, 0.0) for s in species])
+            y0 = F_in / jnp.maximum(jnp.sum(F_in), 1e-30)
+            rho0 = p.eos.density(inlet["T"], inlet["P"], y0, phase=p.reaction_phase)
+            n0 = rho0 * V * y0
+            if self.mode != "isothermal":
+                return jnp.concatenate([n0, jnp.reshape(jnp.asarray(inlet["T"]), (1,))])
+            return n0
+
         # Total inlet flow and composition
         F_total = sum(inlet_flows.values())
         if F_total < 1e-10:
@@ -902,6 +917,69 @@ class CSTR:
 
         return n0
 
+    def _eos_dynamic_common(
+        self,
+        state: Array,
+        inputs: dict[str, Stream],
+        params: Params | None,
+    ) -> dict[str, Any]:
+        """Shared EOS-consistent dynamic quantities for derivatives/outputs.
+
+        Used when ``params.eos`` is set, so the dynamic (transient) path uses
+        the *same* phase-consistent basis as the steady-state ``__call__``:
+
+        - concentration is EOS molarity at reactor (T, P, composition) in
+          ``reaction_phase`` (``C_i = y_i * rho_EOS(T, P, y)``), not ``n_i/V``
+          with an assumed liquid density, so a gas-phase reactor sees the real
+          vapor molar density;
+        - the outlet *total* molar flow is reaction-adjusted,
+          ``F_out_total = F_in_total + V * sum_j (sum_i nu_ij) r_j``, which
+          both keeps the molar holdup constant (``dn_total/dt = 0``) and makes
+          the fixed point identical to the steady-state material balance
+          ``F_out_i = F_in_i + V (nu @ r)_i`` even when the reaction changes
+          the total moles (Δn ≠ 0, as in HDS where Δn = -3).
+
+        Returns a dict of the pieces both ``derivatives`` and ``outputs`` need.
+        """
+        p = self.params
+        species = p.species_order
+        n_species = len(species)
+        V = p.V
+
+        n = jnp.maximum(state[:n_species], 1e-30)
+        n_total = jnp.sum(n)
+        y = n / n_total
+
+        inlet = inputs.get("inlet") or list(inputs.values())[0]
+        P = inlet["P"]
+        T_in = inlet["T"]
+        inlet_flows = get_flows(inlet)
+        F_in = jnp.array([inlet_flows.get(s, 0.0) for s in species])
+        F_in_total = jnp.sum(F_in)
+
+        if self.mode == "isothermal":
+            T = params.get("T_spec", T_in) if params else T_in
+            T = jnp.asarray(T)
+        else:
+            T = state[n_species]
+
+        # EOS-consistent reactor concentration (mol/m^3): C_i = y_i * rho(T, P, y).
+        rho = p.eos.density(T, P, y, phase=p.reaction_phase)
+        C = {s: y[i] * rho for i, s in enumerate(species)}
+        r = p.rate_fn(C, T, p.rate_params)          # (n_rxn,), mol/m^3/s
+        gen = p.stoich @ r                           # (n_species,), mol/m^3/s
+
+        # Reaction-adjusted outlet molar flow (see docstring).
+        F_out_total = F_in_total + V * jnp.sum(gen)
+        F_out = F_out_total * y                       # mol/s
+        dn_dt = F_in - F_out + V * gen                # mol/s
+
+        return {
+            "species": species, "n_species": n_species, "V": V,
+            "n": n, "n_total": n_total, "y": y, "T": T, "T_in": T_in, "P": P,
+            "F_in": F_in, "F_out": F_out, "r": r, "gen": gen, "dn_dt": dn_dt,
+        }
+
     def derivatives(
         self,
         t: Array,
@@ -917,6 +995,13 @@ class CSTR:
         Energy balance (non-isothermal):
             d(n*Cp*T)/dt = F_in*Cp*(T_in - T) + V*sum_j(r_j*(-dH_j)) + Q
 
+        With ``params.eos`` set (paired with a ``CubicThermo``), both balances
+        use the phase-consistent EOS basis of the steady-state ``__call__``
+        (real vapor molar density for the rate, ideal-gas + PR-departure
+        enthalpy for the energy balance) rather than the ``C_i=n_i/V`` /
+        constant-Cp legacy path, so the transient fixed point reproduces the
+        steady-state CSTR solution. See :meth:`_eos_dynamic_common`.
+
         Args:
             t: Current time (not used, CSTR is autonomous)
             state: Current state array [n_species..., T?]
@@ -927,6 +1012,47 @@ class CSTR:
             Array of derivatives [dn/dt..., dT/dt?]
         """
         p = self.params
+
+        # EOS-consistent branch (phase-aware; matches steady-state basis).
+        if p.eos is not None:
+            c = self._eos_dynamic_common(state, inputs, params)
+            dn_dt = c["dn_dt"]
+            if self.mode == "isothermal":
+                return dn_dt
+
+            species, V = c["species"], c["V"]
+            n, T, T_in, P = c["n"], c["T"], c["T_in"], c["P"]
+            F_in, F_out, r = c["F_in"], c["F_out"], c["r"]
+            thermo = self.thermo
+            if thermo is None:
+                raise ValueError("Thermo object required for non-isothermal EOS dynamics")
+
+            phase = p.reaction_phase
+            F_in_dict = {s: F_in[i] for i, s in enumerate(species)}
+            F_out_dict = {s: F_out[i] for i, s in enumerate(species)}
+            H_in_flow = thermo.stream_enthalpy(F_in_dict, T_in, phase=phase, P=P)   # W
+            H_out_flow = thermo.stream_enthalpy(F_out_dict, T, phase=phase, P=P)     # W
+            Q_rxn = V * jnp.sum(r * p.dH_rxn) if p.dH_rxn is not None else jnp.asarray(0.0)
+            if self.mode == "adiabatic":
+                Q_ext = jnp.asarray(0.0)
+            else:  # specified_duty
+                Q_ext = jnp.asarray(params.get("Q_ext", 0.0) if params else 0.0)
+
+            # Enthalpy-holdup energy balance, differentiated for the real total
+            # heat capacity and partial molar enthalpies (so both the reaction
+            # heat and the enthalpy carried by composition change are exact):
+            #   d/dt (sum_i n_i h_i) = H_in - H_out - Q_rxn + Q_ext
+            #   => C_hold dT/dt = (H_in - H_out - Q_rxn + Q_ext) - sum_i h_i dn_i/dt
+            def H_hold(n_arr, TT):
+                nd = {s: n_arr[i] for i, s in enumerate(species)}
+                return thermo.stream_enthalpy(nd, TT, phase=phase, P=P)
+
+            partial_h = jax.grad(H_hold, argnums=0)(n, T)   # J/mol
+            C_hold = jax.grad(H_hold, argnums=1)(n, T)      # J/K (total heat capacity)
+            rhs = H_in_flow - H_out_flow - Q_rxn + Q_ext    # W
+            dT_dt = (rhs - jnp.dot(partial_h, dn_dt)) / C_hold
+            return jnp.concatenate([dn_dt, jnp.reshape(dT_dt, (1,))])
+
         species = p.species_order
         n_species = len(species)
         V = p.V
@@ -1020,6 +1146,14 @@ class CSTR:
             Dictionary with "outlet" stream
         """
         p = self.params
+
+        # EOS-consistent branch: reaction-adjusted outlet flow and phase-aware
+        # composition, matching the steady-state and dynamic-derivatives basis.
+        if p.eos is not None:
+            c = self._eos_dynamic_common(state, inputs, params)
+            outlet_flows = {s: c["F_out"][i] for i, s in enumerate(c["species"])}
+            return {"outlet": make_stream(outlet_flows, c["T"], c["P"])}
+
         species = p.species_order
         n_species = len(species)
 
