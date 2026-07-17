@@ -1170,28 +1170,53 @@ class SRK:
 # =============================================================================
 
 
-def _solve_rachford_rice(z: Array, K: Array) -> Array:
+def _solve_rachford_rice(z: Array, K: Array, n_bisect: int = 60) -> Array:
     """Solve Rachford-Rice equation for vapor fraction.
 
     The Rachford-Rice equation is:
         sum_i z_i * (K_i - 1) / (1 + V * (K_i - 1)) = 0
 
+    The function has poles at ``V = 1 / (1 - K_i)`` which always lie *outside*
+    ``[0, 1]`` (negative for ``K_i > 1``, greater than 1 for ``K_i < 1``). On
+    ``[0, 1]`` the function is therefore smooth and strictly decreasing, so a
+    bracketed bisection converges robustly to the unique two-phase root. An
+    unbracketed Newton iteration (the previous approach) could instead overshoot
+    a pole just outside the interval and diverge, clipping to a spurious
+    ``V = 1`` for wide-K-spread mixtures (see issue #169).
+
+    Bisection runs under ``stop_gradient``; a single analytic Newton step then
+    restores exact implicit-function-theorem gradients ``dV/dK`` without changing
+    the (already-converged) value.
+
     Args:
         z: Feed mole fractions
         K: K-values
+        n_bisect: Number of bisection iterations (2**-n resolution)
 
     Returns:
         Vapor fraction V in [0, 1]
     """
-    def rr_func(V, args):
-        z_, K_ = args
-        return jnp.sum(z_ * (K_ - 1) / (1 + V * (K_ - 1)))
+    def rr_func(V: Array) -> Array:
+        return jnp.sum(z * (K - 1.0) / (1.0 + V * (K - 1.0)))
 
-    V0 = jnp.array(0.5)
-    args = (z, K)
-    solver = optx.Newton(rtol=1e-10, atol=1e-10)
-    sol = optx.root_find(rr_func, solver, V0, args=args, max_steps=50, throw=False)
-    return jnp.clip(sol.value, 0.0, 1.0)
+    def body(carry, _):
+        lo, hi = carry
+        mid = 0.5 * (lo + hi)
+        # rr_func is decreasing: where it is positive the root lies to the right.
+        go_right = rr_func(mid) > 0.0
+        lo = jnp.where(go_right, mid, lo)
+        hi = jnp.where(go_right, hi, mid)
+        return (lo, hi), None
+
+    (lo, hi), _ = lax.scan(body, (jnp.array(0.0), jnp.array(1.0)), None, length=n_bisect)
+    V_star = jax.lax.stop_gradient(0.5 * (lo + hi))
+
+    # One analytic Newton step for exact implicit gradients. At convergence
+    # rr_func(V_star) ~ 0 so the value is unchanged, but the expression carries
+    # dV/dK = -f_K / f_V through autodiff.
+    fp = jax.grad(rr_func)(V_star)
+    V = V_star - rr_func(V_star) / jnp.where(fp == 0.0, -1.0, fp)
+    return jnp.clip(V, 0.0, 1.0)
 
 
 def _phase_stability(

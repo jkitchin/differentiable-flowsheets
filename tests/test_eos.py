@@ -299,6 +299,35 @@ class TestFlashTPEOS:
             assert lo <= hi + 1e-6
         assert max(abs(a - b) for a, b in zip(Vs[1:], Vs[:-1])) < 0.2
 
+    def test_flash_wide_k_spread_ngl(self):
+        """Regression test for issue #169.
+
+        A cryogenic NGL feed with a wide K-value spread (methane K~3,
+        hexane K~0.003) makes the Rachford-Rice function stiff, with poles
+        just outside [0, 1]. The old unbracketed Newton solver overshot a pole,
+        diverged, and clipped to a spurious single-phase V=1. The bracketed
+        bisection solver stays inside [0, 1] and finds the genuine two-phase
+        root (VF ~ 0.89, reference `thermo`: 0.890).
+        """
+        from difflow.database import get_critical_props
+
+        names = [
+            "nitrogen", "carbon_dioxide", "methane", "ethane", "propane",
+            "isobutane", "n_butane", "isopentane", "n_pentane", "n_hexane",
+        ]
+        eos = PengRobinson({c: get_critical_props(c) for c in names})
+        z = jnp.array(
+            [0.005, 0.007, 0.860, 0.070, 0.030, 0.005, 0.010, 0.003, 0.005, 0.005]
+        )
+        z = z / z.sum()
+
+        V, x, y = flash_TP_eos(eos, z, jnp.array(233.15), jnp.array(50e5))
+
+        # Genuinely two-phase near VF=0.89 -- NOT a spurious single-phase V=1.
+        assert float(V) == pytest.approx(0.89, abs=0.02)
+        assert jnp.isclose(jnp.sum(x), 1.0, rtol=1e-3)
+        assert jnp.isclose(jnp.sum(y), 1.0, rtol=1e-3)
+
 
 class TestBinaryInteractionParameters:
     """Tests for binary interaction parameter support."""
