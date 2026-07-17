@@ -1327,6 +1327,89 @@ residue, product, info = sep(feed)   # info: {"Q", "H_in", "H_out"}
 
 ---
 
+## Combustion & Gas-Turbine Units
+
+These units model a **Brayton cycle** working fluid — air and combustion gas at
+high temperature and moderate pressure, where the cubic-EOS departure is
+negligible. They therefore use **ideal-gas** properties with temperature-dependent
+Cp (`difflow.combustion.IdealGasThermo`), the standard model for gas-turbine
+cycle analysis, and are named distinctly from the real-gas `Compressor` /
+`Turboexpander` above (a different thermodynamic model for a different service).
+All internal temperature and air/fuel-ratio solves are `optimistix` root finds,
+so shaft work, firing temperature, air/fuel ratio and efficiency are
+differentiable with respect to feed conditions, pressures, efficiencies and fuel
+composition.
+
+The fuel-hydrocarbon (and N₂/CO₂) ideal-gas Cp come from the database (the same
+cubics used by the NGL work); the module adds O₂, H₂O-vapor and Ar Cp, air
+composition, and per-fuel lower heating values and combustion stoichiometry.
+
+```python
+from difflow import (
+    Combustor, CombustorParams,
+    GasCompressor, GasCompressorParams,
+    GasTurbine, GasTurbineParams,
+    brayton_cycle, BraytonCycleParams, make_cycle_thermo,
+)
+from difflow.combustion import AIR_COMPOSITION
+from difflow.streams import make_stream
+
+thermo = make_cycle_thermo()          # ideal-gas thermo over cycle + fuel species
+```
+
+### GasCompressor
+
+Adiabatic ideal-gas compression to `pressure_ratio × P_in` with an isentropic
+efficiency (the efficiency inflates the enthalpy rise). Work consumed is
+$W = H_\text{out} - H_\text{in} > 0$.
+
+```python
+air = make_stream(dict(AIR_COMPOSITION), T=288.15, P=101325.0)
+comp = GasCompressor(GasCompressorParams(pressure_ratio=18.0, eta_isentropic=0.89), thermo)
+compressed, info = comp(air)          # info: {"W", "T_isen", "T_out", ...}
+```
+
+### Combustor
+
+Complete-combustion reactor, $C_xH_y + (x + y/4)\,O_2 \to x\,CO_2 + (y/2)\,H_2O$,
+with two modes:
+
+- **`"adiabatic"`** — both feeds fixed; solves the adiabatic flame temperature.
+- **`"fixed_T"`** — scales the air stream to the air/fuel ratio that hits a
+  target firing temperature `T_out` (closed-form, affine in the air amount).
+
+```python
+fuel = make_stream({"methane": 1.0}, T=298.15, P=18 * 101325.0)
+comb = Combustor(CombustorParams(mode="fixed_T", T_out=1673.15, dp_frac=0.04), thermo)
+products, info = comb(fuel, compressed)   # info: {"T_out", "air_scale", "o2_demand", "Q"}
+```
+
+### GasTurbine
+
+Adiabatic ideal-gas expansion to a back-pressure `P_out` with an isentropic
+efficiency. Work extracted is $W = H_\text{in} - H_\text{out} > 0$.
+
+```python
+turb = GasTurbine(GasTurbineParams(P_out=101325.0, eta_isentropic=0.90), thermo)
+exhaust, info = turb(products)
+```
+
+### brayton_cycle
+
+Assembles compressor → combustor → turbine into an intensive (per mole of fuel)
+simple- or combined-cycle solve. Defaults are a modern F-class machine at ISO
+conditions and reproduce published performance: simple-cycle η ≈ 0.40
+(8470 Btu/kWh), combined-cycle η ≈ 0.568 (6009 Btu/kWh).
+
+```python
+fuel_comp = {"methane": 0.95, "ethane": 0.03, "propane": 0.01,
+             "nitrogen": 0.005, "carbon_dioxide": 0.005}
+result = brayton_cycle(fuel_comp, BraytonCycleParams(combined_cycle=True))
+# result: {"eta_thermal", "eta_gt_only", "work_net", "air_fuel_molar", ...}
+```
+
+---
+
 ## Summary Tables
 
 ### Reactor Comparison

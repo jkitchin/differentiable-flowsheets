@@ -172,6 +172,18 @@ from difflow.units.eos_units import (
     ComponentSeparator,
     ComponentSeparatorParams,
 )
+from difflow.units.gas_turbine import (
+    Combustor,
+    CombustorParams,
+    GasCompressor,
+    GasCompressorParams,
+    GasTurbine,
+    GasTurbineParams,
+    BraytonCycleParams,
+    brayton_cycle,
+    make_cycle_thermo,
+)
+from difflow.combustion import IdealGasThermo
 from difflow.flowsheet import Flowsheet, Unit, create_objective
 from difflow.report import (
     ConvergenceInfo,
@@ -405,6 +417,17 @@ __all__ = [
     "JTValveParams",
     "ComponentSeparator",
     "ComponentSeparatorParams",
+    # Combustion / gas-turbine units
+    "Combustor",
+    "CombustorParams",
+    "GasCompressor",
+    "GasCompressorParams",
+    "GasTurbine",
+    "GasTurbineParams",
+    "BraytonCycleParams",
+    "brayton_cycle",
+    "make_cycle_thermo",
+    "IdealGasThermo",
     # Flowsheet
     "Flowsheet",
     "Unit",
