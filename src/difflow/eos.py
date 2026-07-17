@@ -797,6 +797,56 @@ class PengRobinson:
             2.0 * sqrt2 * b_m
         ) * safe_log(log_arg)
 
+    def entropy_departure(
+        self,
+        T: Array,
+        P: Array,
+        y: Array,
+        phase: Literal["vapor", "liquid"] = "vapor",
+        k_ij: Array | None = None,
+    ) -> Array:
+        """Molar entropy departure S(T,P) - S_ideal_gas(T,P) from Peng-Robinson.
+
+        S_dep = R*ln(Z - B)
+                + (da_m/dT) / (2*sqrt(2)*b_m)
+                  * ln[(Z + (1 + sqrt(2))*B) / (Z + (1 - sqrt(2))*B)]
+
+        This is the entropy analogue of :meth:`enthalpy_departure`, sharing its
+        Z, B and the same forward-mode ``da_m/dT``; the ``R*ln(Z - B)`` term
+        replaces enthalpy's ``R*T*(Z - 1)`` and the bracket coefficient drops the
+        ``T*da/dT - a`` combination for a bare ``da/dT``. Added to a
+        temperature-dependent ideal-gas entropy it gives the true PR entropy, so
+        an isentropic unit (turboexpander, compressor, pump) can match entropy
+        across a pressure change. Negative for a typical compressed vapor.
+
+        The mixture-a temperature derivative da_m/dT is taken with forward-mode
+        autodiff (jax.jvp), so the result stays exact and differentiable under
+        an outer jax.grad of the flowsheet.
+
+        Args:
+            T: Temperature (K)
+            P: Pressure (Pa)
+            y: Mole fractions (array in species_order)
+            phase: 'vapor' or 'liquid' (selects the Z root)
+            k_ij: Binary interaction parameters
+
+        Returns:
+            Molar entropy departure (J/mol/K). Negative for typical vapors.
+        """
+        T = jnp.asarray(T)
+        b_m = self.b_mix(y)
+        Z = self.solve_Z(T, P, y, phase, k_ij)
+        B = b_m * P / (R * T)
+
+        _, da_m_dT = jax.jvp(
+            lambda t: self.a_mix(t, y, k_ij), (T,), (jnp.ones_like(T),)
+        )
+
+        sqrt2 = jnp.sqrt(2.0)
+        log_arg = (Z + (1.0 + sqrt2) * B) / (Z + (1.0 - sqrt2) * B)
+        # Z - B > 0 for a physical root; safe_log guards the cryogenic liquid root.
+        return R * safe_log(Z - B) + da_m_dT / (2.0 * sqrt2 * b_m) * safe_log(log_arg)
+
 
 class SRK:
     """Soave-Redlich-Kwong equation of state.
@@ -1163,6 +1213,51 @@ class SRK:
 
         log_arg = (Z + B) / Z
         return R * T * (Z - 1.0) + (T * da_m_dT - a_m) / b_m * safe_log(log_arg)
+
+    def entropy_departure(
+        self,
+        T: Array,
+        P: Array,
+        y: Array,
+        phase: Literal["vapor", "liquid"] = "vapor",
+        k_ij: Array | None = None,
+    ) -> Array:
+        """Molar entropy departure S(T,P) - S_ideal_gas(T,P) from SRK.
+
+        S_dep = R*ln(Z - B) + (da_m/dT) / b_m * ln[(Z + B) / Z]
+
+        This is the SRK (epsilon=0, sigma=1) form of the generic-cubic entropy
+        departure that :meth:`PengRobinson.entropy_departure` gives; the log term
+        collapses from PR's ``ln[(Z+(1+sqrt2)B)/(Z+(1-sqrt2)B)]/(2 sqrt2 b)`` to
+        ``ln[(Z+B)/Z]/b`` because SRK's second EOS constant is zero. Providing it
+        here lets an SRK EOS drive the same isentropic units (turboexpander,
+        compressor) as a Peng-Robinson one.
+
+        The mixture-a temperature derivative da_m/dT is taken with forward-mode
+        autodiff (jax.jvp), so the result stays exact and differentiable under
+        an outer jax.grad of the flowsheet.
+
+        Args:
+            T: Temperature (K)
+            P: Pressure (Pa)
+            y: Mole fractions (array in species_order)
+            phase: 'vapor' or 'liquid' (selects the Z root)
+            k_ij: Binary interaction parameters
+
+        Returns:
+            Molar entropy departure (J/mol/K). Negative for typical vapors.
+        """
+        T = jnp.asarray(T)
+        b_m = self.b_mix(y)
+        Z = self.solve_Z(T, P, y, phase, k_ij)
+        B = b_m * P / (R * T)
+
+        _, da_m_dT = jax.jvp(
+            lambda t: self.a_mix(t, y, k_ij), (T,), (jnp.ones_like(T),)
+        )
+
+        log_arg = (Z + B) / Z
+        return R * safe_log(Z - B) + da_m_dT / b_m * safe_log(log_arg)
 
 
 # =============================================================================

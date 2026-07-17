@@ -180,7 +180,10 @@ _IDEAL_THERMO_DATA = {
     # Light gases
     "nitrogen": {
         "MW": 28.01,
-        "Cp": (29.0, 0.0, 0.0, 0.0),  # Nearly constant
+        # Ideal-gas Cp cubic (Reid, Prausnitz & Poling 4th ed., App. A);
+        # reproduces the former room-T constant (29.0) to ~1% at 298 K but is
+        # accurate over the 50-1000 K span needed for cryogenic duties.
+        "Cp": (31.15, -1.357e-2, 2.680e-5, -1.168e-8),
         "Hvap": (5577.0, 0.38, 126.2),
         "antoine": (8.61, 255.68, -6.6),
         "Hf": 0.0,
@@ -194,7 +197,8 @@ _IDEAL_THERMO_DATA = {
     },
     "carbon_dioxide": {
         "MW": 44.01,
-        "Cp": (27.0, 0.042, -1.5e-5, 0.0),
+        # Ideal-gas Cp cubic (Reid, Prausnitz & Poling 4th ed., App. A).
+        "Cp": (19.80, 7.344e-2, -5.602e-5, 1.715e-8),
         "Hvap": (16700.0, 0.38, 304.2),  # Sublimes at 1 atm
         "antoine": (9.81, 1347.79, -35.52),
         "Hf": -393510.0,
@@ -210,42 +214,48 @@ _IDEAL_THERMO_DATA = {
     # Alkanes
     "methane": {
         "MW": 16.04,
-        "Cp": (35.3, 0.0, 0.0, 0.0),
+        # Ideal-gas Cp cubic (Reid, Prausnitz & Poling 4th ed., App. A).
+        "Cp": (19.25, 5.213e-2, 1.197e-5, -1.132e-8),
         "Hvap": (8180.0, 0.38, 190.6),
         "antoine": (8.68, 405.42, -26.09),
         "Hf": -74870.0,
     },
     "ethane": {
         "MW": 30.07,
-        "Cp": (52.5, 0.0, 0.0, 0.0),
+        # Ideal-gas Cp cubic (Reid, Prausnitz & Poling 4th ed., App. A).
+        "Cp": (5.409, 1.781e-1, -6.938e-5, 8.713e-9),
         "Hvap": (14690.0, 0.38, 305.3),
         "antoine": (9.04, 663.70, -16.47),
         "Hf": -84000.0,
     },
     "propane": {
         "MW": 44.10,
-        "Cp": (73.5, 0.0, 0.0, 0.0),
+        # Ideal-gas Cp cubic (Reid, Prausnitz & Poling 4th ed., App. A).
+        "Cp": (-4.224, 3.063e-1, -1.586e-4, 3.215e-8),
         "Hvap": (19040.0, 0.38, 369.8),
         "antoine": (9.10, 803.81, -26.11),
         "Hf": -104700.0,
     },
     "n_butane": {
         "MW": 58.12,
-        "Cp": (97.5, 0.0, 0.0, 0.0),
+        # Ideal-gas Cp cubic (Reid, Prausnitz & Poling 4th ed., App. A).
+        "Cp": (9.487, 3.313e-1, -1.108e-4, -2.822e-9),
         "Hvap": (22390.0, 0.38, 425.1),
         "antoine": (9.05, 935.86, -34.42),
         "Hf": -125600.0,
     },
     "n_pentane": {
         "MW": 72.15,
-        "Cp": (120.0, 0.0, 0.0, 0.0),
+        # Ideal-gas Cp cubic (Reid, Prausnitz & Poling 4th ed., App. A).
+        "Cp": (-3.626, 4.873e-1, -2.580e-4, 5.305e-8),
         "Hvap": (25790.0, 0.38, 469.7),
         "antoine": (9.02, 1075.78, -40.45),
         "Hf": -146800.0,
     },
     "n_hexane": {
         "MW": 86.18,
-        "Cp": (143.0, 0.0, 0.0, 0.0),
+        # Ideal-gas Cp cubic (Reid, Prausnitz & Poling 4th ed., App. A).
+        "Cp": (-4.413, 5.820e-1, -3.119e-4, 6.494e-8),
         "Hvap": (28850.0, 0.38, 507.6),
         "antoine": (9.00266, 1171.530, -48.784),
         "Hf": -167200.0,
@@ -263,6 +273,32 @@ _IDEAL_THERMO_DATA = {
         "Hvap": (34410.0, 0.38, 568.7),
         "antoine": (9.04867, 1355.126, -63.633),
         "Hf": -208600.0,
+    },
+
+    # Branched alkanes (NGL isomers). These have critical properties above but
+    # previously had no ideal-thermo record, so get_species_data raised
+    # KeyError, blocking a full NGL mixture on the ideal-thermo/CubicThermo path.
+    "isobutane": {
+        "MW": 58.12,
+        # Ideal-gas Cp cubic (Reid, Prausnitz & Poling 4th ed., App. A).
+        "Cp": (-1.390, 3.847e-1, -1.846e-4, 2.895e-8),
+        # Watson Hvap interpolated between propane and n-butane (approximate).
+        "Hvap": (21300.0, 0.38, 407.8),
+        # Antoine: NIST WebBook, Das, Reed et al. 1973 (261-408 K); the NIST
+        # log10(P/bar) A is shifted +5 for difflow's Pa convention.
+        "antoine": (9.3281, 1132.108, 0.918),
+        "Hf": -134200.0,
+    },
+    "isopentane": {
+        "MW": 72.15,
+        # Ideal-gas Cp cubic (Reid, Prausnitz & Poling 4th ed., App. A).
+        "Cp": (-9.525, 5.066e-1, -2.729e-4, 5.723e-8),
+        # Watson Hvap interpolated between n-butane and n-pentane (approximate).
+        "Hvap": (24700.0, 0.38, 460.4),
+        # Antoine: NIST WebBook, Stull 1947 (190-301 K); NIST log10(P/bar) A
+        # shifted +5 for difflow's Pa convention.
+        "antoine": (8.90935, 1018.516, -40.081),
+        "Hf": -153700.0,
     },
 
     # Alkenes

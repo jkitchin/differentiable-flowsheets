@@ -14,6 +14,14 @@ import jax
 import jax.numpy as jnp
 from jax import Array
 
+from difflow.numerics import safe_log
+
+# Universal gas constant (J/mol/K) and the reference pressure for the ideal-gas
+# entropy's -R ln(P/P_ref) term (1 atm). Kept local to this module so the
+# entropy uses the same convention as difflow.eos (R = 8.314462618).
+R_GAS = 8.314462618
+P_REF_ENTROPY = 101325.0
+
 
 # =============================================================================
 # JIT-compiled helper functions for thermodynamic calculations
@@ -194,6 +202,39 @@ class IdealThermo:
             H = H + self.Hvap(species, T_arr)
 
         return H
+
+    def S_ig_T(self, species: str, T: Array | float) -> Array:
+        """Ideal-gas entropy temperature integral integral(Cp/T dT, Tref -> T).
+
+        This is the T-dependent part of the ideal-gas molar entropy [J/mol/K]::
+
+            integral(Cp/T dT) = a ln(T/Tref) + b (T - Tref)
+                                + c/2 (T^2 - Tref^2) + d/3 (T^3 - Tref^3)
+
+        for Cp = a + bT + cT^2 + dT^3 (the same ``Cp_coeffs`` used for the
+        ideal-gas sensible enthalpy). The per-species reference entropy s_i^0 is
+        not included; it cancels in any constant-composition process change (an
+        expander, valve, cooler or compressor), which is what the entropy is used
+        for here. The pressure (-R ln(P/Pref)) and mixing (-R sum y ln y) terms
+        are added at the mixture level in :class:`CubicThermo`.
+
+        Args:
+            species: Species name
+            T: Temperature (K)
+
+        Returns:
+            Ideal-gas entropy T-integral relative to Tref (J/mol/K).
+        """
+        data = self.species[species]
+        T_arr = jnp.asarray(T)
+        Tref = jnp.asarray(data.Tref)
+        a, b, c, d = data.Cp_coeffs
+        return (
+            a * safe_log(T_arr / Tref)
+            + b * (T_arr - Tref)
+            + c / 2 * (T_arr**2 - Tref**2)
+            + d / 3 * (T_arr**3 - Tref**3)
+        )
 
     def Hvap(self, species: str, T: Array | float) -> Array:
         """Calculate heat of vaporization at temperature T.
@@ -518,3 +559,107 @@ class CubicThermo:
         h_dep_vap = self.eos.enthalpy_departure(T, P, y, "vapor")
         h_dep_liq = self.eos.enthalpy_departure(T, P, x, "liquid")
         return H_ideal + F_total * (V * h_dep_vap + (1.0 - V) * h_dep_liq)
+
+    def _ideal_gas_entropy(
+        self,
+        flows: dict[str, Array | float],
+        T: Array | float,
+        P: Array | float,
+    ) -> tuple[Array, Array, Array]:
+        """Molar ideal-gas entropy of the mixture, relative to (Tref, P_ref).
+
+        Returns ``(F_total, z, s_ig)`` where::
+
+            s_ig = sum_i z_i integral(Cp_i/T dT)   (temperature integral)
+                   - R ln(P / P_ref)               (pressure term)
+                   - R sum_i z_i ln z_i            (entropy of mixing)
+
+        The per-species reference entropy s_i^0 is omitted (it cancels in the
+        constant-composition changes the isentropic units use). Shared by
+        :meth:`stream_entropy` and :meth:`stream_entropy_flash`.
+        """
+        order = self.eos.species_order
+        F = jnp.array([flows[s] for s in order])
+        F_total = jnp.sum(F)
+        z = F / jnp.maximum(F_total, 1e-30)
+
+        s_T = jnp.sum(jnp.array([z[i] * self.ideal.S_ig_T(s, T)
+                                 for i, s in enumerate(order)]))
+        s_pressure = -R_GAS * safe_log(jnp.asarray(P) / P_REF_ENTROPY)
+        s_mix = -R_GAS * jnp.sum(z * safe_log(jnp.maximum(z, 1e-30)))
+        return F_total, z, s_T + s_pressure + s_mix
+
+    def stream_entropy(
+        self,
+        flows: dict[str, Array | float],
+        T: Array | float,
+        phase: str = "vapor",
+        P: Array | float | None = None,
+    ) -> Array:
+        """Total stream entropy (W/K) = ideal-gas entropy + PR entropy departure.
+
+        The entropy analogue of :meth:`stream_enthalpy`: an ideal-gas part (the
+        Cp/T temperature integral plus the -R ln(P/P_ref) pressure and
+        -R sum y ln y mixing terms) plus the EOS entropy departure for a single
+        named phase. With ``P=None`` no pressure or departure term can be formed,
+        so only the temperature integral and mixing entropy are returned.
+
+        Args:
+            flows: Molar flows by species (mol/s).
+            T: Temperature (K).
+            phase: 'vapor' or 'liquid'; selects the EOS Z root for the departure.
+            P: Pressure (Pa). If None, the pressure and departure terms are
+               omitted.
+
+        Returns:
+            Total entropy flow (W/K = J/s/K).
+        """
+        if P is None:
+            order = self.eos.species_order
+            F = jnp.array([flows[s] for s in order])
+            F_total = jnp.sum(F)
+            z = F / jnp.maximum(F_total, 1e-30)
+            s_T = jnp.sum(jnp.array([z[i] * self.ideal.S_ig_T(s, T)
+                                     for i, s in enumerate(order)]))
+            s_mix = -R_GAS * jnp.sum(z * safe_log(jnp.maximum(z, 1e-30)))
+            return F_total * (s_T + s_mix)
+
+        F_total, z, s_ig = self._ideal_gas_entropy(flows, T, P)
+        s_dep = self.eos.entropy_departure(T, P, z, phase)
+        return F_total * (s_ig + s_dep)
+
+    def stream_entropy_flash(
+        self,
+        flows: dict[str, Array | float],
+        T: Array | float,
+        P: Array | float,
+    ) -> Array:
+        """Two-phase-aware total stream entropy (W/K): flash at (T, P), then sum
+        the phase entropies.
+
+        The entropy counterpart of :meth:`stream_enthalpy_flash`. The ideal-gas
+        entropy is composition-invariant across the split (the mixing term uses
+        the feed composition z), so only the departure is phase-weighted::
+
+            S = S_ideal(flows, T, P)
+                + F_total * [V * s_dep_vap(T, P, y) + (1-V) * s_dep_liq(T, P, x)]
+
+        This makes an isentropic turboexpander or compressor built on this
+        entropy consistent with a rigorous VLE tool through phase change.
+
+        Args:
+            flows: Molar flows by species (mol/s).
+            T: Temperature (K).
+            P: Pressure (Pa).
+
+        Returns:
+            Total entropy flow (W/K = J/s/K).
+        """
+        from difflow.eos import flash_TP_eos
+
+        F_total, z, s_ig = self._ideal_gas_entropy(flows, T, P)
+        V, x, y = flash_TP_eos(self.eos, z, T, P)
+        V = jnp.clip(V, 0.0, 1.0)
+        s_dep_vap = self.eos.entropy_departure(T, P, y, "vapor")
+        s_dep_liq = self.eos.entropy_departure(T, P, x, "liquid")
+        return F_total * (s_ig + V * s_dep_vap + (1.0 - V) * s_dep_liq)

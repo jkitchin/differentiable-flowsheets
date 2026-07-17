@@ -400,6 +400,66 @@ class TestEnthalpyDeparture:
         assert abs(hp - hs) / abs(hp) < 0.1
 
 
+class TestEntropyDeparture:
+    """Entropy departure S(T,P) - S_ideal_gas(T,P) from the cubic EOS (issue #170).
+
+    Covers both PengRobinson and SRK (SRK.entropy_departure is the
+    epsilon=0/sigma=1 specialization of the generic-cubic departure).
+    """
+
+    @pytest.mark.parametrize("EOS", [PengRobinson, SRK])
+    def test_thermodynamic_identity(self, EOS):
+        """S_dep must equal (H_dep - G_dep)/T with G_dep = R*T*sum(y_i ln phi_i).
+
+        This ties the new entropy departure to the already-tested enthalpy
+        departure and fugacity coefficients, so an error in the closed form
+        cannot pass unnoticed.
+        """
+        from difflow.eos import R
+        from difflow.database import get_critical_props
+        names = ["nitrogen", "carbon_dioxide", "methane", "ethane", "propane",
+                 "n_butane"]
+        eos = EOS({c: get_critical_props(c) for c in names})
+        y = jnp.array([0.02, 0.03, 0.75, 0.12, 0.05, 0.03]); y = y / y.sum()
+        T = jnp.array(250.0)
+        P = jnp.array(40e5)
+        for phase in ("vapor", "liquid"):
+            h_dep = eos.enthalpy_departure(T, P, y, phase)
+            s_dep = eos.entropy_departure(T, P, y, phase)
+            g_dep = R * T * jnp.sum(y * jnp.log(eos.fugacity_coefficient(T, P, y, phase)))
+            assert float(s_dep) == pytest.approx(float((h_dep - g_dep) / T), abs=1e-8)
+
+    @pytest.mark.parametrize("EOS", [PengRobinson, SRK])
+    def test_departure_vanishes_at_low_pressure(self, propane_butane_system, EOS):
+        """As P -> 0 the gas is ideal, so the entropy departure -> 0."""
+        eos = EOS(propane_butane_system)
+        y = jnp.array([0.5, 0.5])
+        s_dep = eos.entropy_departure(jnp.array(320.0), jnp.array(1.0e2), y, "vapor")
+        assert abs(float(s_dep)) < 1e-2  # J/mol/K
+
+    @pytest.mark.parametrize("EOS", [PengRobinson, SRK])
+    def test_departure_negative_and_grows_for_vapor(self, propane_butane_system, EOS):
+        """A compressed real vapor has lower entropy than the ideal gas, more so
+        at higher pressure (departure becomes more negative)."""
+        eos = EOS(propane_butane_system)
+        y = jnp.array([0.5, 0.5])
+        T = jnp.array(320.0)
+        s_low = eos.entropy_departure(T, jnp.array(1e5), y, "vapor")
+        s_high = eos.entropy_departure(T, jnp.array(8e5), y, "vapor")
+        assert float(s_low) < 0.0
+        assert float(s_high) < float(s_low)
+
+    @pytest.mark.parametrize("EOS", [PengRobinson, SRK])
+    def test_departure_differentiable(self, propane_butane_system, EOS):
+        """d(S_dep)/dT is finite (jax.jvp path stays differentiable)."""
+        eos = EOS(propane_butane_system)
+        y = jnp.array([0.5, 0.5])
+        g = jax.grad(
+            lambda T: eos.entropy_departure(T, jnp.array(8e5), y, "vapor")
+        )(jnp.array(320.0))
+        assert jnp.isfinite(g)
+
+
 def _propane_butane_ideal():
     """IdealThermo with ideal-gas Cp for the same species/order as the EOS."""
     species_data = {
@@ -473,5 +533,53 @@ class TestCubicThermo:
         flows = {"propane": 1.0, "butane": 1.0}
         g = jax.grad(
             lambda T: cubic.stream_enthalpy_flash(flows, T, jnp.array(8e5))
+        )(jnp.array(320.0))
+        assert jnp.isfinite(g)
+
+    def test_entropy_increases_with_temperature(self, propane_butane_system):
+        """Stream entropy rises with temperature at fixed P and composition."""
+        ideal = _propane_butane_ideal()
+        cubic = CubicThermo(ideal, PengRobinson(propane_butane_system))
+        flows = {"propane": 1.0, "butane": 0.5}
+        P = jnp.array(3e5)
+        S_lo = cubic.stream_entropy(flows, jnp.array(300.0), "vapor", P)
+        S_hi = cubic.stream_entropy(flows, jnp.array(340.0), "vapor", P)
+        assert float(S_hi) > float(S_lo)
+
+    def test_entropy_decreases_with_pressure(self, propane_butane_system):
+        """At fixed T, entropy falls as pressure rises (-R ln(P/Pref) term)."""
+        ideal = _propane_butane_ideal()
+        cubic = CubicThermo(ideal, PengRobinson(propane_butane_system))
+        flows = {"propane": 1.0, "butane": 0.5}
+        T = jnp.array(340.0)
+        S_lo = cubic.stream_entropy(flows, T, "vapor", jnp.array(1e5))
+        S_hi = cubic.stream_entropy(flows, T, "vapor", jnp.array(5e5))
+        assert float(S_hi) < float(S_lo)
+
+    def test_isentropic_expansion_cools(self, propane_butane_system):
+        """Matching entropy across a pressure drop yields a lower temperature --
+        the physical basis of a turboexpander."""
+        import optimistix as optx
+        ideal = _propane_butane_ideal()
+        cubic = CubicThermo(ideal, PengRobinson(propane_butane_system))
+        flows = {"propane": 1.0, "butane": 0.5}
+        T_in, P_in, P_out = jnp.array(340.0), jnp.array(8e5), jnp.array(2e5)
+        S_in = cubic.stream_entropy_flash(flows, T_in, P_in)
+
+        def resid(T, args):
+            return cubic.stream_entropy_flash(flows, jnp.clip(T, 200.0, 400.0), P_out) - S_in
+
+        sol = optx.root_find(resid, optx.Newton(rtol=1e-8, atol=1e-4),
+                             jnp.array(320.0), max_steps=100, throw=False)
+        T_out = float(jnp.clip(sol.value, 200.0, 400.0))
+        assert T_out < float(T_in)
+
+    def test_stream_entropy_flash_differentiable(self, propane_butane_system):
+        """stream_entropy_flash stays differentiable through the flash."""
+        ideal = _propane_butane_ideal()
+        cubic = CubicThermo(ideal, PengRobinson(propane_butane_system))
+        flows = {"propane": 1.0, "butane": 1.0}
+        g = jax.grad(
+            lambda T: cubic.stream_entropy_flash(flows, T, jnp.array(8e5))
         )(jnp.array(320.0))
         assert jnp.isfinite(g)
