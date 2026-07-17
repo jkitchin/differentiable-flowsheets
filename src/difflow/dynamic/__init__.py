@@ -171,6 +171,12 @@ from difflow.dynamic.flowsheet import (
     FlowsheetState,
 )
 
+# Dynamic heat exchanger
+from difflow.dynamic.heat_exchanger import DynamicCounterCurrentHX
+
+# Dynamic EOS flash
+from difflow.dynamic.flash import DynamicEOSFlash
+
 # Diffrax backend (optional)
 try:
     from difflow.dynamic.diffrax_backend import (
@@ -269,6 +275,10 @@ __all__ = [
     "DynamicUnitEntry",
     "Connection",
     "FlowsheetState",
+    # Dynamic heat exchanger
+    "DynamicCounterCurrentHX",
+    # Dynamic EOS flash
+    "DynamicEOSFlash",
     # DAE
     "AlgebraicVar",
     "AlgebraicSpec",
