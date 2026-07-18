@@ -29,11 +29,11 @@ jobs:
 
       - name: Run core tests
         run: |
-          python -m pytest tests/ --tb=short --ignore=tests/bio -n auto --dist loadscope
+          python -m pytest tests/ -v --tb=short --ignore=tests/bio
 
       - name: Run bio module tests
         run: |
-          python -m pytest tests/bio/ --tb=short -n auto --dist loadscope
+          python -m pytest tests/bio/ -v --tb=short
 
   test-minimal:
     name: Test minimal install
@@ -54,8 +54,8 @@ jobs:
 
       - name: Run core tests
         run: |
-          python -m pytest tests/ --tb=short --ignore=tests/bio -n auto --dist loadscope
+          python -m pytest tests/ -v --tb=short --ignore=tests/bio
 
       - name: Run bio module tests
         run: |
-          python -m pytest tests/bio/ --tb=short -n auto --dist loadscope
+          python -m pytest tests/bio/ -v --tb=short

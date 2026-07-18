@@ -24,8 +24,6 @@ dependencies = [
 dev = [
     "pytest>=7.0",
     "pytest-cov",
-    "pytest-xdist>=3.0",   # parallel test execution (-n auto)
-    "pytest-timeout>=2.0",  # per-test timeout so hangs fail cleanly
     "jupyter-book<2.0",
 ]
 examples = [
@@ -80,13 +78,6 @@ difflow = "difflow.report.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/difflow", "src/difflow_bio", "src/difflow_ree", "src/difflow_cc", "src/difflow_gas"]
-
-[tool.pytest.ini_options]
-# Per-test timeout so a hung solve fails loudly (with a traceback) instead of
-# silently stalling until the CI runner is SIGTERM'd. Slowest legitimate test
-# is ~20s, so 180s is generous headroom. Parallelism (-n auto) is opt-in via
-# the CI command / local flag, not forced here, to keep single-test runs clean.
-timeout = 180
 
 [dependency-groups]
 dev = [

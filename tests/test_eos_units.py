@@ -26,13 +26,12 @@ from difflow.streams import make_stream, get_flows
 
 jax.config.update("jax_enable_x64", True)
 
-# A representative NGL feed (methane-rich, with a light/heavy spread). Kept to
-# four components on purpose: these unit tests only check thermodynamic signs,
-# monotonicity, mass balance and differentiability -- none of which need the
-# full demethanizer slate, so the smaller mixture keeps the fixtures simple and
-# free of extra property-database lookups.
-NGL = ["methane", "ethane", "propane", "n_butane"]
-FEED_FLOWS = [86.0, 7.0, 3.0, 1.0]  # propane flow == 3.0 is asserted below
+# A cryogenic NGL feed (matches the demethanizer base case components).
+NGL = [
+    "nitrogen", "carbon_dioxide", "methane", "ethane", "propane",
+    "isobutane", "n_butane", "isopentane", "n_pentane", "n_hexane",
+]
+FEED_FLOWS = [0.5, 0.7, 86.0, 7.0, 3.0, 0.5, 1.0, 0.3, 0.5, 0.5]
 
 
 @pytest.fixture
@@ -147,7 +146,8 @@ class TestJTValve:
 class TestComponentSeparator:
     def test_recoveries_and_mass_balance(self, thermo, feed):
         rec = {"methane": 0.01, "ethane": 0.30, "propane": 0.95,
-               "n_butane": 0.99}
+               "isobutane": 0.99, "n_butane": 0.99, "isopentane": 1.0,
+               "n_pentane": 1.0, "n_hexane": 1.0}
         sep = ComponentSeparator(ComponentSeparatorParams(recovery_to_product=rec), thermo)
         residue, product, _ = sep(feed)
         fin, fres, fprod = get_flows(feed), get_flows(residue), get_flows(product)
