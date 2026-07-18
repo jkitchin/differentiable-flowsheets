@@ -22,6 +22,7 @@ Numerical Considerations:
 """
 
 from dataclasses import dataclass
+from functools import partial
 from typing import Callable
 import jax
 import jax.numpy as jnp
@@ -983,6 +984,61 @@ class EnthalpyHXParams(ParamsMixin):
     damping: float = 0.5
 
 
+@partial(jax.jit, static_argnames=("thermo", "damping", "max_iter"))
+def _enthalpy_hx_core(
+    thermo, hot_flows, cold_flows, T_hot_in, T_cold_in, P_hot, P_cold, UA_val,
+    damping, max_iter,
+):
+    """Coupled enthalpy-HX solve, JIT-compiled and reused across calls.
+
+    Un-jitted, the nested fixed-point-over-Newton solve is re-traced and
+    re-compiled on every call (~10-20 s); wrapping it here compiles it once per
+    (thermo, shapes) and reuses the executable. ``thermo``/``damping``/
+    ``max_iter`` are static (identity/value hashed), so a shared thermo object
+    hits the cache. Returns the arrays the caller needs to build its info dict.
+    """
+    H_hot_in = thermo.stream_enthalpy_flash(hot_flows, T_hot_in, P_hot)
+    H_cold_in = thermo.stream_enthalpy_flash(cold_flows, T_cold_in, P_cold)
+
+    def invert_T(flows, H_target, P, T_guess):
+        def resid(T, _):
+            return thermo.stream_enthalpy_flash(flows, T, P) - H_target
+
+        solver = optx.Newton(rtol=1e-9, atol=1e-4)
+        sol = optx.root_find(
+            resid, solver, T_guess, args=None, max_steps=50, throw=False
+        )
+        return sol.value
+
+    def outlets_from_Q(Q):
+        T_hot_out = invert_T(hot_flows, H_hot_in - Q, P_hot, T_hot_in)
+        T_cold_out = invert_T(cold_flows, H_cold_in + Q, P_cold, T_cold_in)
+        return T_hot_out, T_cold_out
+
+    def q_iteration(Q, _):
+        T_hot_out, T_cold_out = outlets_from_Q(Q)
+        dT1 = T_hot_in - T_cold_out
+        dT2 = T_hot_out - T_cold_in
+        LMTD = log_mean_temperature_difference(dT1, dT2)
+        Q_new = UA_val * LMTD
+        return (1.0 - damping) * Q + damping * Q_new
+
+    driving = jnp.maximum(T_hot_in - T_cold_in, MIN_DELTA_T)
+    Q0 = 0.5 * UA_val * driving
+
+    solver = optx.FixedPointIteration(rtol=1e-7, atol=1e-3)
+    sol = optx.fixed_point(
+        q_iteration, solver, Q0, args=None, max_steps=max_iter, throw=False
+    )
+    Q = sol.value
+
+    T_hot_out, T_cold_out = outlets_from_Q(Q)
+    dT1 = T_hot_in - T_cold_out
+    dT2 = T_hot_out - T_cold_in
+    LMTD = log_mean_temperature_difference(dT1, dT2)
+    return Q, T_hot_out, T_cold_out, LMTD, dT1, dT2
+
+
 class EnthalpyCounterCurrentHX:
     """Counter-current heat exchanger with rigorous two-phase enthalpy balances.
 
@@ -1022,22 +1078,6 @@ class EnthalpyCounterCurrentHX:
         self.params = params
         self.thermo = thermo
 
-    def _invert_T(self, flows, H_target, P, T_guess):
-        """Find T such that stream_enthalpy_flash(flows, T, P) = H_target.
-
-        Enthalpy is monotone increasing in T, so this 1-D root find is
-        well-posed; Newton from T_guess (a nearby terminal temperature)
-        stays in the physical branch.
-        """
-        thermo = self.thermo
-
-        def resid(T, _):
-            return thermo.stream_enthalpy_flash(flows, T, P) - H_target
-
-        solver = optx.Newton(rtol=1e-9, atol=1e-4)
-        sol = optx.root_find(resid, solver, T_guess, args=None, max_steps=50, throw=False)
-        return sol.value
-
     def __call__(
         self,
         hot_inlet: Stream,
@@ -1050,11 +1090,10 @@ class EnthalpyCounterCurrentHX:
         CounterCurrentHX where meaningful (Q, LMTD, terminal temperatures).
         """
         p = self.params
-        thermo = self.thermo
 
-        UA_val = jnp.asarray(UA if UA is not None else p.UA)
         if p.UA is None and UA is None:
             raise ValueError("UA must be specified")
+        UA_val = jnp.asarray(UA if UA is not None else p.UA)
 
         hot_flows = get_flows(hot_inlet)
         cold_flows = get_flows(cold_inlet)
@@ -1063,47 +1102,15 @@ class EnthalpyCounterCurrentHX:
         P_hot = hot_inlet["P"]
         P_cold = cold_inlet["P"]
 
-        H_hot_in = thermo.stream_enthalpy_flash(hot_flows, T_hot_in, P_hot)
-        H_cold_in = thermo.stream_enthalpy_flash(cold_flows, T_cold_in, P_cold)
-
-        # Outlet temperatures from a given duty Q, via per-side enthalpy inversion.
-        def outlets_from_Q(Q):
-            T_hot_out = self._invert_T(hot_flows, H_hot_in - Q, P_hot, T_hot_in)
-            T_cold_out = self._invert_T(cold_flows, H_cold_in + Q, P_cold, T_cold_in)
-            return T_hot_out, T_cold_out
-
-        # Fixed point on Q: Q = UA * LMTD(Q). LMTD decreases as Q grows, so the
-        # map is a contraction; a damped update converges robustly.
-        def q_iteration(Q, _):
-            T_hot_out, T_cold_out = outlets_from_Q(Q)
-            dT1 = T_hot_in - T_cold_out   # hot inlet vs cold outlet
-            dT2 = T_hot_out - T_cold_in   # hot outlet vs cold inlet
-            LMTD = log_mean_temperature_difference(dT1, dT2)
-            Q_new = UA_val * LMTD
-            return (1.0 - p.damping) * Q + p.damping * Q_new
-
-        # Initial Q: effectiveness-NTU estimate with a secant heat-capacity rate
-        # from the inlet enthalpies over the max temperature span (a good, cheap
-        # starting point; the fixed point corrects it).
-        driving = jnp.maximum(T_hot_in - T_cold_in, MIN_DELTA_T)
-        Q0 = 0.5 * UA_val * driving
-
-        solver = optx.FixedPointIteration(rtol=1e-7, atol=1e-3)
-        sol = optx.fixed_point(
-            q_iteration, solver, Q0, args=None, max_steps=p.max_iter, throw=False
+        Q, T_hot_out, T_cold_out, LMTD, dT1, dT2 = _enthalpy_hx_core(
+            self.thermo, hot_flows, cold_flows, T_hot_in, T_cold_in,
+            P_hot, P_cold, UA_val, p.damping, p.max_iter,
         )
-        Q = sol.value
-
-        T_hot_out, T_cold_out = outlets_from_Q(Q)
 
         hot_outlet = dict(hot_inlet)
         hot_outlet["T"] = T_hot_out
         cold_outlet = dict(cold_inlet)
         cold_outlet["T"] = T_cold_out
-
-        dT1 = T_hot_in - T_cold_out
-        dT2 = T_hot_out - T_cold_in
-        LMTD = log_mean_temperature_difference(dT1, dT2)
 
         info = {
             "Q": Q,

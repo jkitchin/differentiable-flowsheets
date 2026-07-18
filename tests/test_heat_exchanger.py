@@ -1,5 +1,7 @@
 """Tests for heat exchanger unit operations."""
 
+from functools import lru_cache
+
 import pytest
 import jax
 import jax.numpy as jnp
@@ -609,8 +611,14 @@ class TestIntegration:
         assert utility_with_recovery < utility_without_recovery
 
 
+@lru_cache(maxsize=None)
 def _propane_butane_cubic_thermo():
-    """CubicThermo (ideal-gas Cp + PR departure) for propane/butane."""
+    """CubicThermo (ideal-gas Cp + PR departure) for propane/butane.
+
+    Memoized so every EnthalpyCounterCurrentHX test shares one thermo object:
+    the unit's JIT core caches its compiled solve on the thermo identity, so a
+    shared object compiles once and is reused instead of recompiling per test.
+    """
     species = {
         "propane": SpeciesData(
             name="propane",

@@ -33,7 +33,9 @@ issue #170 (:meth:`difflow.eos.PengRobinson.entropy_departure`).
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import partial
 
+import jax
 import jax.numpy as jnp
 from jax import Array
 import optimistix as optx
@@ -81,6 +83,67 @@ def _solve_stream_T(
     return jnp.clip(sol.value, lo, hi)
 
 
+# ---------------------------------------------------------------------------
+# JIT-compiled numeric cores.
+#
+# Each temperature solve builds a large jaxpr (a Newton root find over the
+# two-phase EOS enthalpy/entropy). Called un-jitted, that graph is re-traced,
+# re-lowered and re-compiled on *every* invocation (~10-20 s each). Wrapping the
+# core in ``jax.jit`` compiles it once and reuses the executable on subsequent
+# calls with the same thermo and array shapes. ``thermo`` and ``bounds`` are
+# static arguments (hashed by object identity / value), so reusing a single
+# thermo object -- as a flowsheet or a session-scoped test fixture does -- hits
+# the compilation cache instead of paying the trace/compile cost again.
+# ---------------------------------------------------------------------------
+@partial(jax.jit, static_argnames=("thermo", "bounds"))
+def _turboexpander_core(thermo, flows, T_in, P_in, P_out, eta, bounds):
+    S_in = thermo.stream_entropy_flash(flows, T_in, P_in)
+    H_in = thermo.stream_enthalpy_flash(flows, T_in, P_in)
+    T_isen = _solve_stream_T(
+        lambda T: thermo.stream_entropy_flash(flows, T, P_out) - S_in,
+        T_guess=T_in - 20.0,
+        bounds=bounds,
+    )
+    H_isen = thermo.stream_enthalpy_flash(flows, T_isen, P_out)
+    H_out = H_in + eta * (H_isen - H_in)
+    T_out = _solve_stream_T(
+        lambda T: thermo.stream_enthalpy_flash(flows, T, P_out) - H_out,
+        T_guess=T_isen,
+        bounds=bounds,
+    )
+    return T_out, H_in - H_out, T_isen, H_in, H_out
+
+
+@partial(jax.jit, static_argnames=("thermo", "bounds"))
+def _compressor_core(thermo, flows, T_in, P_in, P_out, eta, bounds):
+    S_in = thermo.stream_entropy_flash(flows, T_in, P_in)
+    H_in = thermo.stream_enthalpy_flash(flows, T_in, P_in)
+    T_isen = _solve_stream_T(
+        lambda T: thermo.stream_entropy_flash(flows, T, P_out) - S_in,
+        T_guess=T_in + 20.0,
+        bounds=bounds,
+    )
+    H_isen = thermo.stream_enthalpy_flash(flows, T_isen, P_out)
+    H_out = H_in + (H_isen - H_in) / eta
+    T_out = _solve_stream_T(
+        lambda T: thermo.stream_enthalpy_flash(flows, T, P_out) - H_out,
+        T_guess=T_isen,
+        bounds=bounds,
+    )
+    return T_out, H_out - H_in, T_isen, H_in, H_out
+
+
+@partial(jax.jit, static_argnames=("thermo", "bounds"))
+def _jtvalve_core(thermo, flows, T_in, P_in, P_out, bounds):
+    H_in = thermo.stream_enthalpy_flash(flows, T_in, P_in)
+    T_out = _solve_stream_T(
+        lambda T: thermo.stream_enthalpy_flash(flows, T, P_out) - H_in,
+        T_guess=T_in - 10.0,
+        bounds=bounds,
+    )
+    return T_out, H_in
+
+
 # =============================================================================
 # Turboexpander (isentropic expansion with efficiency)
 # =============================================================================
@@ -119,28 +182,13 @@ class Turboexpander:
 
     def __call__(self, inlet: Stream) -> tuple[Stream, dict]:
         flows = _flow_dict(inlet, self.thermo.species_order)
-        T_in, P_in = inlet["T"], inlet["P"]
         P_out = jnp.asarray(self.params.P_out)
         eta = jnp.asarray(self.params.eta_isentropic)
-        bounds = self.params.T_bounds
 
-        S_in = self.thermo.stream_entropy_flash(flows, T_in, P_in)
-        H_in = self.thermo.stream_enthalpy_flash(flows, T_in, P_in)
-
-        T_isen = _solve_stream_T(
-            lambda T: self.thermo.stream_entropy_flash(flows, T, P_out) - S_in,
-            T_guess=T_in - 20.0,
-            bounds=bounds,
+        T_out, W, T_isen, H_in, H_out = _turboexpander_core(
+            self.thermo, flows, inlet["T"], inlet["P"], P_out, eta,
+            self.params.T_bounds,
         )
-        H_isen = self.thermo.stream_enthalpy_flash(flows, T_isen, P_out)
-        H_out = H_in + eta * (H_isen - H_in)
-
-        T_out = _solve_stream_T(
-            lambda T: self.thermo.stream_enthalpy_flash(flows, T, P_out) - H_out,
-            T_guess=T_isen,
-            bounds=bounds,
-        )
-        W = H_in - H_out
         return make_stream(flows, T_out, P_out), {
             "W": W,
             "T_isen": T_isen,
@@ -187,28 +235,13 @@ class Compressor:
 
     def __call__(self, inlet: Stream) -> tuple[Stream, dict]:
         flows = _flow_dict(inlet, self.thermo.species_order)
-        T_in, P_in = inlet["T"], inlet["P"]
         P_out = jnp.asarray(self.params.P_out)
         eta = jnp.asarray(self.params.eta_isentropic)
-        bounds = self.params.T_bounds
 
-        S_in = self.thermo.stream_entropy_flash(flows, T_in, P_in)
-        H_in = self.thermo.stream_enthalpy_flash(flows, T_in, P_in)
-
-        T_isen = _solve_stream_T(
-            lambda T: self.thermo.stream_entropy_flash(flows, T, P_out) - S_in,
-            T_guess=T_in + 20.0,
-            bounds=bounds,
+        T_out, W, T_isen, H_in, H_out = _compressor_core(
+            self.thermo, flows, inlet["T"], inlet["P"], P_out, eta,
+            self.params.T_bounds,
         )
-        H_isen = self.thermo.stream_enthalpy_flash(flows, T_isen, P_out)
-        H_out = H_in + (H_isen - H_in) / eta
-
-        T_out = _solve_stream_T(
-            lambda T: self.thermo.stream_enthalpy_flash(flows, T, P_out) - H_out,
-            T_guess=T_isen,
-            bounds=bounds,
-        )
-        W = H_out - H_in
         return make_stream(flows, T_out, P_out), {
             "W": W,
             "T_isen": T_isen,
@@ -250,14 +283,11 @@ class JTValve:
 
     def __call__(self, inlet: Stream) -> tuple[Stream, dict]:
         flows = _flow_dict(inlet, self.thermo.species_order)
-        T_in, P_in = inlet["T"], inlet["P"]
         P_out = jnp.asarray(self.params.P_out)
 
-        H_in = self.thermo.stream_enthalpy_flash(flows, T_in, P_in)
-        T_out = _solve_stream_T(
-            lambda T: self.thermo.stream_enthalpy_flash(flows, T, P_out) - H_in,
-            T_guess=T_in - 10.0,
-            bounds=self.params.T_bounds,
+        T_out, H_in = _jtvalve_core(
+            self.thermo, flows, inlet["T"], inlet["P"], P_out,
+            self.params.T_bounds,
         )
         return make_stream(flows, T_out, P_out), {"T_out": T_out, "H": H_in}
 

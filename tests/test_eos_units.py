@@ -34,14 +34,19 @@ NGL = [
 FEED_FLOWS = [0.5, 0.7, 86.0, 7.0, 3.0, 0.5, 1.0, 0.3, 0.5, 0.5]
 
 
-@pytest.fixture
+# Session-scoped: the units' JIT-compiled cores key their compilation cache on
+# the thermo object's identity, so reusing one thermo across every test in the
+# file lets each unit compile once and then hit the cache -- turning ~16 cold
+# compiles into ~4. The fixtures are read-only (units build new streams), so
+# sharing them is safe.
+@pytest.fixture(scope="session")
 def thermo():
     ideal = IdealThermo({c: get_species_data(c) for c in NGL})
     eos = PengRobinson({c: get_critical_props(c) for c in NGL})
     return CubicThermo(ideal, eos)
 
 
-@pytest.fixture
+@pytest.fixture(scope="session")
 def feed():
     return make_stream({c: f for c, f in zip(NGL, FEED_FLOWS)}, 305.0, 60e5)
 
