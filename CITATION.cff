@@ -17,6 +17,13 @@ authors:
     affiliation: "Department of Chemical Engineering, Carnegie Mellon University"
 version: 0.1.0
 date-released: "2026-08-10"
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.21881034
+    description: Concept DOI resolving to the latest version of difflow
+  - type: doi
+    value: 10.5281/zenodo.21881035
+    description: Version DOI for difflow v0.1.0
 license: MIT
 repository-code: "https://github.com/jkitchin/differentiable-flowsheets"
 url: "https://github.com/jkitchin/differentiable-flowsheets"

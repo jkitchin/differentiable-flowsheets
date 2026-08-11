@@ -4,6 +4,7 @@
 [![PyPI](https://img.shields.io/pypi/v/difflow.svg)](https://pypi.org/project/difflow/)
 [![Python](https://img.shields.io/pypi/pyversions/difflow.svg)](https://pypi.org/project/difflow/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/jkitchin/differentiable-flowsheets/blob/main/LICENSE)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21881034.svg)](https://doi.org/10.5281/zenodo.21881034)
 
 **Differentiable Flowsheet Framework for Chemical Processes**
 
