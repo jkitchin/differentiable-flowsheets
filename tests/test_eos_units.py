@@ -26,6 +26,12 @@ from difflow.streams import make_stream, get_flows
 
 jax.config.update("jax_enable_x64", True)
 
+# Whole module is compile-bound: each unit's nested optimistix solve (and its
+# implicit-diff backward pass) is a large one-off JAX compile. Marking is
+# all-or-nothing per unit -- even the cheap assertions here force that unit's
+# compile -- so the module is marked rather than individual tests.
+pytestmark = pytest.mark.slow
+
 # A representative NGL feed (methane-rich, with a light/heavy spread). Kept to
 # four components on purpose: these unit tests only check thermodynamic signs,
 # monotonicity, mass balance and differentiability -- none of which need the

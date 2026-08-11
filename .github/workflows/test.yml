@@ -7,6 +7,9 @@ on:
     branches: [main, master]
 
 jobs:
+  # Fast suite: everything except the `slow` (compile-bound) tests. Those run
+  # in the `slow-tests` job below, concurrently, so total coverage is unchanged
+  # and wall-clock is max(fast, slow) rather than the sum.
   test:
     runs-on: ubuntu-latest
     strategy:
@@ -27,14 +30,42 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
 
-      - name: Run core tests
+      # One invocation, not two. Splitting core and bio into separate pytest
+      # processes meant the second one re-paid JAX/XLA startup and could not
+      # reuse anything the first compiled. `tests/` already includes tests/bio.
+      - name: Run tests
         run: |
-          python -m pytest tests/ -v --tb=short --ignore=tests/bio
+          python -m pytest tests/ -v --tb=short -m "not slow"
 
-      - name: Run bio module tests
+  # The compile-bound tests. Their cost is one-off JAX trace/compile of nested
+  # solver graphs, so they do NOT benefit from xdist -- separate worker
+  # processes have separate compilation caches and just recompile the same
+  # graphs (measured: run 29622893782 went 17-33 min with `-n auto`, vs ~11
+  # without). One job, one process, one compile each.
+  slow-tests:
+    name: Slow (compile-bound) tests
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
         run: |
-          python -m pytest tests/bio/ -v --tb=short
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
 
+      - name: Run slow tests
+        run: |
+          python -m pytest tests/ -v --tb=short -m slow
+
+  # Verify the package imports with NO optional dependencies installed. The job
+  # this replaces installed ".[dev]" and re-ran the full suite, making it an
+  # exact duplicate of test (3.11) rather than a minimal-install check.
   test-minimal:
     name: Test minimal install
     runs-on: ubuntu-latest
@@ -47,15 +78,19 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install minimal dependencies
+      - name: Install with no extras
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          pip install -e .
 
-      - name: Run core tests
+      - name: Import every shipped package and resolve the plugins
         run: |
-          python -m pytest tests/ -v --tb=short --ignore=tests/bio
-
-      - name: Run bio module tests
-        run: |
-          python -m pytest tests/bio/ -v --tb=short
+          python -c "
+          import difflow, difflow_bio, difflow_ree, difflow_cc, difflow_gas
+          from importlib.metadata import entry_points
+          eps = entry_points(group='difflow.plugins')
+          assert {e.name for e in eps} == {'bio', 'ree', 'cc', 'gas'}, sorted(e.name for e in eps)
+          for e in eps:
+              e.load()
+          print('difflow', difflow.__version__, '- all packages import, plugins resolve')
+          "

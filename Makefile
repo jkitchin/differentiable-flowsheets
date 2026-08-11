@@ -118,8 +118,18 @@ notebooks-cc-force:
 run:
 	$(JAX_ENV) $(UV_RUN) $(NBCONVERT) "$(NB)"
 
-# Run tests
+# Run tests (default: skip the compile-bound `slow` tests -- see the marker
+# description in pyproject.toml. CI runs those in a parallel job, so nothing
+# goes untested; use `make test-all` to run everything locally.)
 test:
+	$(UV_RUN_DEV) pytest tests/ -v -m "not slow"
+
+# Only the compile-bound tests
+test-slow:
+	$(UV_RUN_DEV) pytest tests/ -v -m slow
+
+# Everything, slow tests included
+test-all:
 	$(UV_RUN_DEV) pytest tests/ -v
 
 # Clean generated files

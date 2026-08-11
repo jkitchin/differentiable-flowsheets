@@ -642,8 +642,15 @@ def _propane_butane_cubic_thermo():
     return CubicThermo(IdealThermo(species), PengRobinson(crit))
 
 
+@pytest.mark.slow
 class TestEnthalpyCounterCurrentHX:
-    """Counter-current HX closed on real EOS-based stream enthalpies."""
+    """Counter-current HX closed on real EOS-based stream enthalpies.
+
+    Marked slow: the thermo is already shared and the solve already jitted, so
+    what remains is two irreducible one-off compiles -- the forward coupled
+    fixed-point-over-Newton-over-flash graph (~13 s) and its implicit-diff
+    backward pass (~34 s). Nothing here is cacheable away.
+    """
 
     def _streams(self):
         # Single-phase vapor both sides (3 bar is below the mixture dew here),

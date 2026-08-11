@@ -134,6 +134,11 @@ include = [
     "/CITATION.cff",
 ]
 
+[tool.pytest.ini_options]
+markers = [
+    "slow: compile-bound test whose cost is a large one-off JAX trace/compile (nested solver graphs, implicit-diff backward passes) rather than the assertion itself. Deselected from the default suite via `-m 'not slow'`; CI still runs them, in a separate parallel job, so coverage is unchanged.",
+]
+
 [dependency-groups]
 dev = [
     "ipycytoscape>=1.3.3",

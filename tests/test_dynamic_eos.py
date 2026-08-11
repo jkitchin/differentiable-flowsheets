@@ -152,6 +152,7 @@ class TestDynamicEOSFlash:
 # ---------------------------------------------------------------------------
 # DynamicCounterCurrentHX
 # ---------------------------------------------------------------------------
+@pytest.mark.slow
 class TestDynamicCounterCurrentHX:
     def _setup(self, ct, UA):
         hot = make_stream({"propane": 5.0, "n_butane": 3.0, "n_pentane": 2.0}, 400.0, 10e5)
