@@ -486,6 +486,7 @@ def _propane_butane_ideal():
     return IdealThermo(species_data)
 
 
+@pytest.mark.slow
 class TestCubicThermo:
     """CubicThermo enthalpy = ideal-gas sensible + EOS departure."""
 
