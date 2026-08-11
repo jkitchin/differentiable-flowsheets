@@ -136,7 +136,7 @@ include = [
 
 [tool.pytest.ini_options]
 markers = [
-    "slow: compile-bound test whose cost is a large one-off JAX trace/compile (nested solver graphs, implicit-diff backward passes) rather than the assertion itself. Deselected from the default suite via `-m 'not slow'`; CI still runs them, in a separate parallel job, so coverage is unchanged.",
+    "slow: test whose cost is the computation rather than the assertion -- usually a large one-off JAX trace/compile (nested solver graphs, implicit-diff backward passes), sometimes many repeated solves. Deselected from the default suite via `-m 'not slow'`; CI still runs them, in a separate concurrent job, so coverage is unchanged. Keep the two jobs roughly balanced: CI wall-clock is max(fast, slow), so moving work past the halfway point stops helping.",
 ]
 
 [dependency-groups]

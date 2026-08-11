@@ -96,6 +96,7 @@ class TestCSTREOSDynamic:
 # ---------------------------------------------------------------------------
 # DynamicEOSFlash
 # ---------------------------------------------------------------------------
+@pytest.mark.slow
 class TestDynamicEOSFlash:
     def _steady_state(self, eos, names, feed, P):
         flash = DynamicEOSFlash(eos=eos, species_order=names, P=P,

@@ -248,6 +248,7 @@ class TestDiagnostics:
 # Bootstrap tests
 # ---------------------------------------------------------------------------
 
+@pytest.mark.slow
 class TestBootstrap:
     def test_nonparametric_bootstrap(self):
         exps = make_linear_experiments(a_true=2.0, b_true=1.0, n=15, noise_std=0.1)

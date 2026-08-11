@@ -65,6 +65,7 @@ class TestNRTLRelativeVolatility:
         assert ideal_alpha > 1.0
 
 
+@pytest.mark.slow
 class TestGammaPhiFlash:
     """Flash with an NRTL activity model (#90)."""
 

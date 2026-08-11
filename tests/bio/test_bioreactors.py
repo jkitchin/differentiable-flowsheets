@@ -139,6 +139,7 @@ class TestContinuousBioreactor:
         assert jnp.isfinite(grad_D)
 
 
+@pytest.mark.slow
 class TestFedBatchBioreactor:
     @pytest.fixture
     def fedbatch_params(self):
