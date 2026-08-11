@@ -1,0 +1,32 @@
+{
+  "upload_type": "software",
+  "title": "difflow: a JAX-based differentiable flowsheet framework for chemical processes",
+  "description": "<p><strong>difflow</strong> is a Python framework for fully differentiable simulation of chemical processes using JAX. It provides exact gradients through unit operations, thermodynamics, flowsheet recycle convergence, and technoeconomic models, enabling gradient-based optimization, sensitivity analysis, and uncertainty quantification.</p><p>The core package implements reactors (CSTR, PFR, fed-batch), separators (flash, distillation, liquid-liquid extraction), heat exchangers, and thermodynamic models ranging from ideal mixtures to cubic equations of state (Peng-Robinson, SRK). Flowsheets with recycle streams are solved with acceleration methods (Anderson, Wegstein), and gradients are obtained by implicit differentiation of the converged solution. Domain plugins cover bio manufacturing, rare-earth-element solvent extraction, carbon capture, and gas transmission networks.</p><p><em>Note: this is alpha research software under active development. Users should independently confirm the equations and physical property models used in any flowsheet they build.</em></p>",
+  "creators": [
+    {
+      "name": "Kitchin, John R.",
+      "affiliation": "Department of Chemical Engineering, Carnegie Mellon University",
+      "orcid": "0000-0003-2625-9232"
+    }
+  ],
+  "access_right": "open",
+  "license": "mit",
+  "keywords": [
+    "chemical engineering",
+    "process simulation",
+    "automatic differentiation",
+    "JAX",
+    "optimization",
+    "process systems engineering",
+    "technoeconomic analysis",
+    "Python"
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "https://github.com/jkitchin/differentiable-flowsheets",
+      "relation": "isSupplementTo",
+      "resource_type": "software",
+      "scheme": "url"
+    }
+  ]
+}

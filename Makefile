@@ -4,6 +4,13 @@
 # Unset VIRTUAL_ENV to prevent conflicts with other activated environments
 UV_RUN := VIRTUAL_ENV= uv run
 
+# The dev tooling (pytest, jupyter-book) lives in the `dev` *extra*, which plain
+# `uv run` does not install -- it would silently fall through to whatever is on
+# PATH. That matters for jupyter-book: the docs use the classic (Sphinx) config
+# in _config.yml / _toc.yml, and a stray jupyter-book 2.x on PATH cannot read it.
+# `--extra dev` pins both to the versions in uv.lock (jupyter-book <2.0).
+UV_RUN_DEV := VIRTUAL_ENV= uv run --extra dev
+
 # Notebook execution command - use python -m to ensure correct kernel
 NBCONVERT := python -m jupyter nbconvert --to notebook --execute --inplace
 
@@ -113,7 +120,7 @@ run:
 
 # Run tests
 test:
-	$(UV_RUN) pytest tests/ -v
+	$(UV_RUN_DEV) pytest tests/ -v
 
 # Clean generated files
 clean:
@@ -125,11 +132,11 @@ clean:
 
 # Build jupyter book
 book:
-	$(UV_RUN) jupyter-book build .
+	$(UV_RUN_DEV) jupyter-book build .
 
 # Clean jupyter book build
 book-clean:
-	$(UV_RUN) jupyter-book clean .
+	$(UV_RUN_DEV) jupyter-book clean .
 
 # Build and serve jupyter book locally
 book-serve: book

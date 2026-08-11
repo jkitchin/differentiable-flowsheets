@@ -6,7 +6,35 @@ build-backend = "hatchling.build"
 name = "difflow"
 version = "0.1.0"
 description = "Differentiable flowsheet framework for chemical processes"
+readme = "README.md"
 requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "John R. Kitchin", email = "jkitchin@andrew.cmu.edu" },
+]
+maintainers = [
+    { name = "John R. Kitchin", email = "jkitchin@andrew.cmu.edu" },
+]
+keywords = [
+    "chemical engineering",
+    "process simulation",
+    "automatic differentiation",
+    "jax",
+    "optimization",
+    "technoeconomic analysis",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Chemistry",
+]
 dependencies = [
     "jax>=0.4.0",
     "jaxlib>=0.4.0",
@@ -67,6 +95,12 @@ all = [
     "difflow[dev,examples,visualization,bio,ree,cc,gas]",
 ]
 
+[project.urls]
+Homepage = "https://github.com/jkitchin/differentiable-flowsheets"
+Documentation = "https://kitchingroup.cheme.cmu.edu/differentiable-flowsheets/"
+Repository = "https://github.com/jkitchin/differentiable-flowsheets"
+Issues = "https://github.com/jkitchin/differentiable-flowsheets/issues"
+
 [project.entry-points."difflow.plugins"]
 bio = "difflow_bio:register"
 ree = "difflow_ree:register"
@@ -76,8 +110,29 @@ gas = "difflow_gas:register"
 [project.scripts]
 difflow = "difflow.report.cli:main"
 
+[tool.hatch.build]
+# No notebooks in either artifact. They are committed pre-executed with plot
+# output embedded as base64 images, and nothing imports them at runtime. Some
+# live inside the package tree (src/difflow_cc/examples/), so this has to be a
+# global exclude rather than an sdist-only one. They stay on GitHub.
+exclude = ["**/*.ipynb"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/difflow", "src/difflow_bio", "src/difflow_ree", "src/difflow_cc", "src/difflow_gas"]
+
+[tool.hatch.build.targets.sdist]
+# Keep the sdist to what is needed to build and test the package. The notebook
+# directories (jax-tutorials/, examples/, about-flowsheets/) are committed
+# pre-executed, with plot output embedded as base64 images; including them adds
+# ~15 MB to every download. They stay on GitHub instead.
+include = [
+    "/src",
+    "/tests",
+    "/docs",
+    "/README.md",
+    "/LICENSE",
+    "/CITATION.cff",
+]
 
 [dependency-groups]
 dev = [

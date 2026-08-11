@@ -59,7 +59,7 @@ html:
   use_repository_button: true
   use_edit_page_button: true
   home_page_in_navbar: false
-  baseurl: "https://jkitchin.github.io/differentiable-flowsheets/"
+  baseurl: "https://kitchingroup.cheme.cmu.edu/differentiable-flowsheets/"
 
 # Launch buttons
 launch_buttons:

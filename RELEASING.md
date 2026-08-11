@@ -14,10 +14,12 @@ from one wheel:
 
 The plugins register via the `difflow.plugins` entry points in `pyproject.toml`.
 
-> **Release target.** difflow is **not yet on PyPI** and has **no `publish.yml`
-> workflow**. Sections marked **[PyPI — optional]** only apply once you decide to
-> publish to PyPI; skip them for a GitHub-tag-only release. See
-> [PyPI publishing setup](#pypi-publishing-setup-one-time-optional) for the one-time work.
+> **Release target.** A release publishes to three places from one GitHub release:
+> the **git tag**, **PyPI** (via `.github/workflows/publish.yml`, OIDC trusted
+> publishing), and **Zenodo** (a DOI, via the GitHub-Zenodo integration).
+> Both PyPI and Zenodo need a **one-time setup** before the first release works:
+> see [PyPI publishing setup](#pypi-publishing-setup-one-time) and
+> [Zenodo DOI setup](#zenodo-doi-setup-one-time).
 
 ## Development
 
@@ -52,13 +54,15 @@ Notes:
 
 Work top to bottom.
 
-> **⚠️ Version is duplicated in 4 places — not a single source of truth.** Unlike a
+> **⚠️ Version is duplicated in 5 places — not a single source of truth.** Unlike a
 > single-`version` project, difflow bundles plugins that hard-code their own
-> `__version__`. You **must** bump all of them together (see step 2). `difflow` itself
-> reads its version from installed metadata (`importlib.metadata.version("difflow")` in
-> `src/difflow/__init__.py`), so it needs no manual edit.
+> `__version__`, and `CITATION.cff` carries its own `version`. You **must** bump all of
+> them together (see step 2). `difflow` itself reads its version from installed metadata
+> (`importlib.metadata.version("difflow")` in `src/difflow/__init__.py`), so it needs no
+> manual edit. `.zenodo.json` deliberately has **no** `version` field: Zenodo takes the
+> version from the git tag, so there is nothing to sync there.
 
-### 0. [PyPI — optional] Prerequisite gate — dependencies must be PyPI-resolvable ⛔
+### 0. Prerequisite gate — dependencies must be PyPI-resolvable ⛔
 
 PyPI rejects any distribution that depends on a git/URL source, so every runtime
 dependency must resolve from a package index.
@@ -67,8 +71,8 @@ dependency must resolve from a package index.
       on PyPI at the required versions.
 - [ ] No `[tool.uv.sources]` git/URL overrides for runtime deps remain in `pyproject.toml`.
 - [ ] `grep -rn "git+" pyproject.toml uv.lock` returns nothing for runtime dependencies.
-- [ ] The distribution name `difflow` is available / owned by you on PyPI (currently
-      **unclaimed** — first upload will register it).
+- [ ] The distribution name `difflow` is available / owned by you on PyPI (verified
+      **unclaimed** as of 2026-08-10 — the first upload registers it).
 
 ### 1. Pre-flight — code health
 
@@ -86,10 +90,12 @@ dependency must resolve from a package index.
 
 Bump the version per [semver](https://semver.org) in **all four** locations:
 
-- [ ] `pyproject.toml` line 7: `version = "X.Y.Z"`
+- [ ] `pyproject.toml`: `version = "X.Y.Z"`
 - [ ] `src/difflow_gas/__init__.py` line 48: `__version__ = "X.Y.Z"`
 - [ ] `src/difflow_ree/__init__.py` line 36: `__version__ = "X.Y.Z"`
 - [ ] `src/difflow_cc/__init__.py` line 42: `__version__ = "X.Y.Z"`
+- [ ] `CITATION.cff`: `version: X.Y.Z` **and** `date-released: "YYYY-MM-DD"` (the release
+      date). This is what GitHub's "Cite this repository" button renders.
 - [ ] Sanity-check they all match:
       `grep -rn "0\.0\.0\|version" pyproject.toml src/difflow_*/__init__.py | grep -i version`
       (no stray old versions remain).
@@ -97,9 +103,11 @@ Bump the version per [semver](https://semver.org) in **all four** locations:
       new version + today's date.
 - [ ] Re-check `README.md` install instructions and extras (`[all]`, `[dev]`, `[examples]`,
       `[visualization]`, `cuda11`/`cuda12`).
-- [ ] Re-check `pyproject.toml` metadata: `description`, `requires-python`, and consider
-      adding a `license` field and `[project.urls]` (Homepage/Docs/Issues) and `authors` —
-      they surface on the PyPI project page. (LICENSE is MIT.)
+- [ ] Re-check `pyproject.toml` metadata: `description`, `requires-python`, `readme`,
+      `license` (`MIT`, PEP 639 style), `authors`, `keywords`, `classifiers`, and
+      `[project.urls]`. These all surface on the PyPI project page.
+- [ ] If authorship or the abstract changed, update `CITATION.cff` and `.zenodo.json`
+      together so the DOI record and the citation metadata agree.
 
 ### 3. Build & verify artifacts
 
@@ -124,57 +132,38 @@ Bump the version per [semver](https://semver.org) in **all four** locations:
 - [ ] Annotated tag: `git tag -a vX.Y.Z -m "vX.Y.Z"` then `git push origin vX.Y.Z`.
 - [ ] Create the GitHub release (always use `--notes-file`, never inline `--notes`):
       `gh release create vX.Y.Z --title vX.Y.Z --notes-file <notes.md>`.
-      **[PyPI — optional]** Once `publish.yml` exists, publishing a release triggers the
-      upload to PyPI.
+      Publishing the release triggers **both** downstream steps: `publish.yml` uploads to
+      PyPI, and Zenodo archives the tarball and mints a DOI.
+
+> ⚠️ Zenodo only archives releases created **after** the repo was switched on in the
+> Zenodo GitHub settings. If you tag first and enable Zenodo second, that release gets no
+> DOI and you have to cut another one.
 
 ### 5. Post-release verification
 
 - [ ] The git tag and GitHub release are visible.
-- [ ] **[PyPI — optional]** The **publish** workflow succeeded (Actions tab) and PyPI shows
-      the new version; `pip install "difflow==X.Y.Z"` works in a fresh venv.
-- [ ] **Docs:** the GitHub Pages deploy workflow is currently **disabled**
-      (`.github/workflows/deploy-book.yml.disabled`). To publish docs, rename it to
-      `deploy-book.yml` and enable Pages; otherwise deploy docs manually.
+- [ ] The **Publish** workflow succeeded (Actions tab) and PyPI shows the new version;
+      `pip install "difflow==X.Y.Z"` works in a fresh venv.
+- [ ] **Zenodo:** the new version appears at the concept DOI and the record metadata
+      (title, author, ORCID, license) looks right. Fix anything wrong by editing the
+      record on Zenodo directly, then correct `.zenodo.json` so the next release is right.
+- [ ] On the **first** release only: add the concept-DOI badge to `README.md` (see
+      [Zenodo DOI setup](#zenodo-doi-setup-one-time)).
+- [ ] **Docs:** the Pages deploy (`.github/workflows/deploy-book.yml`) succeeded and
+      <https://kitchingroup.cheme.cmu.edu/differentiable-flowsheets/> shows the new build.
 - [ ] (Optional) announce the release; open a follow-up to bump to the next dev version.
 
 ---
 
-## PyPI publishing setup (one-time) [optional]
+## PyPI publishing setup (one-time)
 
-difflow has **no `publish.yml` yet**. To publish to PyPI with **OIDC trusted publishing**
-(no stored API tokens), do the following once.
+`.github/workflows/publish.yml` **already exists**. It builds an sdist + wheel on every
+published GitHub release, runs `twine check`, verifies all five packages made it into the
+wheel, and uploads via **OIDC trusted publishing** (no API token is stored in this repo).
 
-### 1. Add the workflow
+Two things still have to be done by hand, in a browser, before the first release.
 
-Create `.github/workflows/publish.yml` (adapted from discopt-doe):
-
-```yaml
-name: publish
-on:
-  release:
-    types: [published]
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - run: uv build
-      - run: uvx twine check dist/*
-      - uses: actions/upload-artifact@v4
-        with: { name: dist, path: dist/ }
-  publish:
-    needs: build
-    runs-on: ubuntu-latest
-    environment: pypi
-    permissions: { id-token: write }
-    steps:
-      - uses: actions/download-artifact@v4
-        with: { name: dist, path: dist/ }
-      - uses: pypa/gh-action-pypi-publish@release/v1
-```
-
-### 2. Register the trusted publisher on PyPI
+### 1. Register the trusted publisher on PyPI
 
 At https://pypi.org/manage/account/publishing/ add a **pending publisher** with exactly:
 
@@ -187,8 +176,64 @@ At https://pypi.org/manage/account/publishing/ add a **pending publisher** with 
 These must match `publish.yml` exactly or PyPI refuses the upload ("no corresponding
 publisher").
 
-### 3. Create the GitHub environment
+### 2. Create the GitHub environment
 
 Repo → **Settings → Environments → New environment** → name it `pypi`. Optionally add
 yourself under **Required reviewers** so a publish pauses for one-click approval. No secrets
-needed — OIDC handles auth.
+are needed, since OIDC handles auth.
+
+---
+
+## Zenodo DOI setup (one-time)
+
+Zenodo mints a DOI for each GitHub release, plus a **concept DOI** that always resolves to
+the newest version. Cite the concept DOI in papers; cite a version DOI to pin an exact
+release.
+
+Metadata for the record comes from **`.zenodo.json`** in the repo root (already written:
+title, abstract, creator + ORCID, `"license": "mit"`, keywords). Zenodo prefers
+`.zenodo.json` over `CITATION.cff` when both are present, so `.zenodo.json` is the file to
+edit if a record looks wrong. Note the Zenodo license id is lowercase (`mit`), not the
+SPDX-cased `MIT` used in `pyproject.toml` and `CITATION.cff`.
+
+### 1. Switch the repo on in Zenodo
+
+1. Sign in at <https://zenodo.org> with **Log in with GitHub** and authorize the app.
+2. Go to <https://zenodo.org/account/settings/github/>.
+3. Find **jkitchin/differentiable-flowsheets** and flip its toggle **On**. Hit **Sync now**
+   if it is not listed (the repo must be public, which it is).
+
+This installs a release webhook. It is not retroactive: only releases published *after*
+the toggle get archived.
+
+### 2. Cut a release
+
+Follow the release checklist above. When the release publishes, Zenodo receives the
+webhook, downloads the source tarball, and mints the DOI within a minute or two.
+
+### 3. Add the concept-DOI badge (first release only)
+
+On the Zenodo record, take the **"Cite all versions"** DOI (the concept DOI, ending in a
+lower number than the version DOI) and add its badge under the other badges in `README.md`:
+
+```markdown
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.XXXXXXX.svg)](https://doi.org/10.5281/zenodo.XXXXXXX)
+```
+
+Zenodo's GitHub settings page also offers a ready-made Markdown badge snippet, but that one
+uses the *repo* badge URL, which resolves to the latest version rather than the concept
+record. Prefer the explicit concept DOI above.
+
+### 4. Backfill the DOI into the citation metadata
+
+Once the concept DOI exists, add it to `CITATION.cff` so the "Cite this repository" output
+carries it:
+
+```yaml
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.XXXXXXX
+    description: Concept DOI for all versions of difflow
+```
+
+Also add a `doi` entry to `papers/joss/paper.md` if the JOSS submission proceeds.

@@ -1,10 +1,17 @@
 # difflow
 
 [![Tests](https://github.com/jkitchin/differentiable-flowsheets/actions/workflows/test.yml/badge.svg)](https://github.com/jkitchin/differentiable-flowsheets/actions/workflows/test.yml)
+[![PyPI](https://img.shields.io/pypi/v/difflow.svg)](https://pypi.org/project/difflow/)
+[![Python](https://img.shields.io/pypi/pyversions/difflow.svg)](https://pypi.org/project/difflow/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/jkitchin/differentiable-flowsheets/blob/main/LICENSE)
 
 **Differentiable Flowsheet Framework for Chemical Processes**
 
 A JAX-based framework for building and optimizing chemical process flowsheets with automatic differentiation.
+
+- **Source code:** <https://github.com/jkitchin/differentiable-flowsheets>
+- **Documentation:** <https://kitchingroup.cheme.cmu.edu/differentiable-flowsheets/>
+- **Issue tracker:** <https://github.com/jkitchin/differentiable-flowsheets/issues>
 
 ## Features
 
@@ -35,14 +42,23 @@ We actually anticipate that Claude Code is used when using this library (See [CL
 ## Installation
 
 ```bash
-# Clone and install
-git clone <repo-url>
+# From PyPI
+pip install difflow
+
+# With examples and tutorials (includes matplotlib, jupyter)
+pip install "difflow[examples]"
+
+# Everything
+pip install "difflow[all]"
+```
+
+For development, install from source:
+
+```bash
+git clone https://github.com/jkitchin/differentiable-flowsheets.git
 cd differentiable-flowsheets
 uv venv
 uv pip install -e ".[dev]"
-
-# For examples and tutorials (includes matplotlib, jupyter)
-uv pip install -e ".[examples]"
 
 # Install everything
 uv pip install -e ".[all]"
@@ -814,6 +830,12 @@ See `docs/dynamic-modeling.md` for complete documentation.
 - Extended bio operations (viral inactivation, sterile filtration)
 - GPU acceleration for large flowsheets
 - Integration with experiment databases (e.g., Cantera)
+
+## Citation
+
+If you use difflow in your work, please cite it. Machine-readable metadata is in
+[`CITATION.cff`](https://github.com/jkitchin/differentiable-flowsheets/blob/main/CITATION.cff),
+and GitHub's "Cite this repository" button will render BibTeX or APA from it.
 
 ## License
 
