@@ -29,6 +29,9 @@ LMTD steady state as N grows and is the natural refinement if that detail
 matters.
 """
 
+from functools import partial
+
+import jax
 import jax.numpy as jnp
 from jax import Array
 import optimistix as optx
@@ -36,6 +39,49 @@ import optimistix as optx
 from difflow.streams import Stream, get_flows
 from difflow.dynamic.state import StateSpec, StateVar
 from difflow.units.heat_exchanger import log_mean_temperature_difference
+
+
+# ---------------------------------------------------------------------------
+# JIT-compiled numeric cores.
+#
+# Un-jitted, the per-side Newton inversion over ``stream_enthalpy_flash`` is
+# re-traced, re-lowered and re-compiled on *every* call -- and an ODE solve
+# calls ``derivatives`` repeatedly, so the cost multiplies. Wrapping the cores
+# here compiles once per (thermo, shapes) and reuses the executable, matching
+# what the steady-state units do (see units/eos_units.py, units/heat_exchanger.py).
+# ``thermo`` is static (identity-hashed), so a shared thermo object -- as a
+# flowsheet or a session-scoped test fixture provides -- hits the cache.
+# ---------------------------------------------------------------------------
+def _invert_T(thermo, flows, H_target, P, T_guess):
+    """Find T with stream_enthalpy_flash(flows, T, P) = H_target (monotone)."""
+
+    def resid(T, _):
+        return thermo.stream_enthalpy_flash(flows, T, P) - H_target
+
+    solver = optx.Newton(rtol=1e-9, atol=1e-4)
+    sol = optx.root_find(resid, solver, T_guess, args=None, max_steps=50, throw=False)
+    return sol.value
+
+
+@partial(jax.jit, static_argnames=("thermo",))
+def _outlet_temps_core(thermo, hot_flows, cold_flows, T_hot_in, T_cold_in,
+                       P_hot, P_cold, Q):
+    """Both outlet temperatures at duty ``Q`` from the per-side enthalpy balances."""
+    H_hot_in = thermo.stream_enthalpy_flash(hot_flows, T_hot_in, P_hot)
+    H_cold_in = thermo.stream_enthalpy_flash(cold_flows, T_cold_in, P_cold)
+    T_hot_out = _invert_T(thermo, hot_flows, H_hot_in - Q, P_hot, T_hot_in)
+    T_cold_out = _invert_T(thermo, cold_flows, H_cold_in + Q, P_cold, T_cold_in)
+    return T_hot_out, T_cold_out
+
+
+@partial(jax.jit, static_argnames=("thermo",))
+def _side_outlet_T_core(thermo, flows, T_in, P, dH):
+    """One side's outlet temperature from ``H_out = H_in + dH``.
+
+    ``dH`` is ``+Q`` for the cold side and ``-Q`` for the hot side.
+    """
+    H_in = thermo.stream_enthalpy_flash(flows, T_in, P)
+    return _invert_T(thermo, flows, H_in + dH, P, T_in)
 
 
 class DynamicCounterCurrentHX:
@@ -95,28 +141,12 @@ class DynamicCounterCurrentHX:
     def _inlets(inputs: dict[str, Stream]) -> tuple[Stream, Stream]:
         return inputs["hot"], inputs["cold"]
 
-    def _invert_T(self, flows, H_target, P, T_guess):
-        """Find T with stream_enthalpy_flash(flows, T, P) = H_target (monotone)."""
-        thermo = self.thermo
-
-        def resid(T, _):
-            return thermo.stream_enthalpy_flash(flows, T, P) - H_target
-
-        solver = optx.Newton(rtol=1e-9, atol=1e-4)
-        sol = optx.root_find(resid, solver, T_guess, args=None, max_steps=50, throw=False)
-        return sol.value
-
     def _outlet_temps(self, Q, hot: Stream, cold: Stream):
-        hot_flows = get_flows(hot)
-        cold_flows = get_flows(cold)
-        T_hot_in = jnp.asarray(hot["T"])
-        T_cold_in = jnp.asarray(cold["T"])
-        P_hot, P_cold = hot["P"], cold["P"]
-        H_hot_in = self.thermo.stream_enthalpy_flash(hot_flows, T_hot_in, P_hot)
-        H_cold_in = self.thermo.stream_enthalpy_flash(cold_flows, T_cold_in, P_cold)
-        T_hot_out = self._invert_T(hot_flows, H_hot_in - Q, P_hot, T_hot_in)
-        T_cold_out = self._invert_T(cold_flows, H_cold_in + Q, P_cold, T_cold_in)
-        return T_hot_out, T_cold_out
+        return _outlet_temps_core(
+            self.thermo, get_flows(hot), get_flows(cold),
+            jnp.asarray(hot["T"]), jnp.asarray(cold["T"]),
+            hot["P"], cold["P"], Q,
+        )
 
     def cold_outlet(self, state: Array, cold: Stream) -> Stream:
         """Cold-side outlet from the current duty and the cold inlet alone.
@@ -127,9 +157,9 @@ class DynamicCounterCurrentHX:
         a downstream heater/reactor) without a within-step algebraic loop.
         """
         Q = state[0]
-        cold_flows = get_flows(cold)
-        H_cold_in = self.thermo.stream_enthalpy_flash(cold_flows, jnp.asarray(cold["T"]), cold["P"])
-        T_cold_out = self._invert_T(cold_flows, H_cold_in + Q, cold["P"], jnp.asarray(cold["T"]))
+        T_cold_out = _side_outlet_T_core(
+            self.thermo, get_flows(cold), jnp.asarray(cold["T"]), cold["P"], Q
+        )
         out = dict(cold)
         out["T"] = T_cold_out
         return out
@@ -138,9 +168,9 @@ class DynamicCounterCurrentHX:
         """Hot-side outlet from the current duty and the hot inlet alone
         (``H_hot_out = H_hot_in - Q``)."""
         Q = state[0]
-        hot_flows = get_flows(hot)
-        H_hot_in = self.thermo.stream_enthalpy_flash(hot_flows, jnp.asarray(hot["T"]), hot["P"])
-        T_hot_out = self._invert_T(hot_flows, H_hot_in - Q, hot["P"], jnp.asarray(hot["T"]))
+        T_hot_out = _side_outlet_T_core(
+            self.thermo, get_flows(hot), jnp.asarray(hot["T"]), hot["P"], -Q
+        )
         out = dict(hot)
         out["T"] = T_hot_out
         return out

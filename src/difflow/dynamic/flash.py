@@ -31,12 +31,35 @@ temperature from its feed). ``tau_liquid`` gives the drum a real liquid inventor
 whose level responds to feed/draw imbalance -- the "holdup" this unit adds.
 """
 
+from functools import partial
+
+import jax
 import jax.numpy as jnp
 from jax import Array
 
 from difflow.streams import Stream, get_flows, make_stream
 from difflow.eos import flash_TP_eos
 from difflow.dynamic.state import StateSpec, StateVar
+
+
+@partial(jax.jit, static_argnames=("eos",))
+def _split_core(eos, n, T, P, k_ij, tau_liquid, tau_vapor):
+    """Flash the drum contents; return (x, y, L, Vg, V_frac, M_L).
+
+    JIT-compiled because ``flash_TP_eos`` is not itself jitted: called bare, it
+    re-traces and re-lowers the whole flash on every evaluation, and an ODE
+    solve calls ``derivatives`` repeatedly. ``eos`` is static (identity-hashed),
+    so a shared EOS object reuses the compiled executable.
+    """
+    n_safe = jnp.maximum(n, 0.0)
+    n_total = jnp.sum(n_safe) + 1e-30
+    z = n_safe / n_total
+    V_frac, x, y = flash_TP_eos(eos, z, T, P, k_ij)
+    M_L = (1.0 - V_frac) * n_total
+    M_V = V_frac * n_total
+    L = M_L / tau_liquid
+    Vg = M_V / tau_vapor
+    return x, y, L, Vg, V_frac, M_L
 
 
 class DynamicEOSFlash:
@@ -112,15 +135,9 @@ class DynamicEOSFlash:
 
     def _split(self, n: Array, T: Array):
         """Flash the drum contents; return (x, y, L, Vg, V_frac, M_L)."""
-        n_safe = jnp.maximum(n, 0.0)
-        n_total = jnp.sum(n_safe) + 1e-30
-        z = n_safe / n_total
-        V_frac, x, y = flash_TP_eos(self.eos, z, T, self.P, self.k_ij)
-        M_L = (1.0 - V_frac) * n_total
-        M_V = V_frac * n_total
-        L = M_L / self.tau_liquid
-        Vg = M_V / self.tau_vapor
-        return x, y, L, Vg, V_frac, M_L
+        return _split_core(
+            self.eos, n, T, self.P, self.k_ij, self.tau_liquid, self.tau_vapor
+        )
 
     def derivatives(self, t: Array, state: Array, inputs: dict[str, Stream], params=None) -> Array:
         species = self.species_order

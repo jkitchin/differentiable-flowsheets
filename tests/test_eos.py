@@ -291,8 +291,13 @@ class TestFlashTPEOS:
         z = jnp.array([0.5, 0.5])
         T = jnp.array(320.0)
 
+        # jit once and reuse: flash_TP_eos is not itself jitted, so calling it
+        # in a bare loop re-traces the whole flash graph on every pressure.
+        # Closing over pr/z/T makes them compile-time constants, so the 40
+        # points share one compiled executable.
+        flash_V = jax.jit(lambda P: flash_TP_eos(pr, z, T, P)[0])
         pressures = jnp.linspace(3e5, 12e5, 40)
-        Vs = [float(flash_TP_eos(pr, z, T, P)[0]) for P in pressures]
+        Vs = [float(flash_V(P)) for P in pressures]
 
         # Monotone non-increasing (more pressure -> less vapor), no jump > 0.2
         for lo, hi in zip(Vs[1:], Vs[:-1]):

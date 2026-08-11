@@ -24,7 +24,11 @@ from difflow.dynamic import DynamicEOSFlash, DynamicCounterCurrentHX
 jax.config.update("jax_enable_x64", True)
 
 
-@pytest.fixture
+# Session-scoped: the dynamic units' JIT cores key their compilation cache on
+# the thermo object's identity, so a fresh thermo per test would miss the cache
+# and recompile the nested Newton-over-flash solve every time. Sharing one
+# read-only thermo across the file lets each core compile once.
+@pytest.fixture(scope="session")
 def pr_cubic():
     names = ["propane", "n_butane", "n_pentane"]
     eos = PengRobinson({c: get_critical_props(c) for c in names})
