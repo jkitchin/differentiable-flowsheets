@@ -217,12 +217,18 @@ On the Zenodo record, take the **"Cite all versions"** DOI (the concept DOI, end
 lower number than the version DOI) and add its badge under the other badges in `README.md`:
 
 ```markdown
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.XXXXXXX.svg)](https://doi.org/10.5281/zenodo.XXXXXXX)
+[![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.XXXXXXX-blue.svg)](https://doi.org/10.5281/zenodo.XXXXXXX)
 ```
 
 Zenodo's GitHub settings page also offers a ready-made Markdown badge snippet, but that one
 uses the *repo* badge URL, which resolves to the latest version rather than the concept
 record. Prefer the explicit concept DOI above.
+
+Note the badge **image** is served by shields.io, not by `zenodo.org/badge/DOI/...`.
+GitHub proxies README images through camo, and Zenodo rate-limits camo: the proxy gets a
+429 and serves a 502, so the Zenodo-hosted badge shows up broken on the repo page. The
+shields.io static badge is visually identical and proxies reliably. The link target stays
+`https://doi.org/...` either way.
 
 ### 4. Backfill the DOI into the citation metadata
 

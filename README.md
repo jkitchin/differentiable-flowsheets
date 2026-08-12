@@ -2,9 +2,10 @@
 
 [![Tests](https://github.com/jkitchin/differentiable-flowsheets/actions/workflows/test.yml/badge.svg)](https://github.com/jkitchin/differentiable-flowsheets/actions/workflows/test.yml)
 [![PyPI](https://img.shields.io/pypi/v/difflow.svg)](https://pypi.org/project/difflow/)
+[![PyPI Downloads](https://static.pepy.tech/personalized-badge/difflow?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLACK&right_color=GREEN&left_text=downloads)](https://pepy.tech/projects/difflow)
 [![Python](https://img.shields.io/pypi/pyversions/difflow.svg)](https://pypi.org/project/difflow/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://github.com/jkitchin/differentiable-flowsheets/blob/main/LICENSE)
-[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21881034.svg)](https://doi.org/10.5281/zenodo.21881034)
+[![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.21881034-blue.svg)](https://doi.org/10.5281/zenodo.21881034)
 
 **Differentiable Flowsheet Framework for Chemical Processes**
 
