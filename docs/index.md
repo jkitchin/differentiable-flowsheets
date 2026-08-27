@@ -26,6 +26,7 @@
 | [Streams and Flowsheets](streams-and-flowsheets.md) | Stream handling, flowsheet solver, recycle calculations |
 | [Dynamic Modeling](dynamic-modeling.md) | Transient simulation, ODE/DAE integration, diffrax backend |
 | [Solvers and Utilities](solvers-and-utilities.md) | Numerical methods, uncertainty propagation |
+| [Data Reconciliation](data-reconciliation.md) | Constrained least squares on noisy plant data, gross error detection, observability |
 
 ## Architecture Overview
 
@@ -37,6 +38,7 @@ difflow/
 ├── database.py         # Species property database
 ├── solvers.py          # Numerical solvers
 ├── flowsheet.py        # Flowsheet management
+├── reconciliation/     # Data reconciliation and gross error detection
 ├── uncertainty.py      # Uncertainty propagation
 ├── cantera_import.py   # Cantera data import
 ├── pyglenn_import.py   # NASA Glenn (pyglenn) thermo import

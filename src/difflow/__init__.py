@@ -227,6 +227,9 @@ from difflow.plugins import (
 # Parameter estimation submodule
 from difflow import estimation
 
+# Data reconciliation submodule
+from difflow import reconciliation
+
 # Economics submodule
 from difflow import economics
 
@@ -471,6 +474,8 @@ __all__ = [
     "OperationRegistry",
     # Parameter estimation
     "estimation",
+    # Data reconciliation
+    "reconciliation",
     # Economics
     "economics",
     # Visualization (optional)
