@@ -230,6 +230,13 @@ from difflow import estimation
 # Data reconciliation submodule
 from difflow import reconciliation
 
+# Declarative kinetics
+from difflow.kinetics import (
+    KineticsSpecError,
+    ReactionSet,
+    mass_action_kinetics,
+)
+
 # Economics submodule
 from difflow import economics
 
@@ -476,6 +483,10 @@ __all__ = [
     "estimation",
     # Data reconciliation
     "reconciliation",
+    # Declarative kinetics
+    "mass_action_kinetics",
+    "ReactionSet",
+    "KineticsSpecError",
     # Economics
     "economics",
     # Visualization (optional)
