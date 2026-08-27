@@ -256,7 +256,8 @@ class MyUnit:
 - Flowsheets: `GasNetworkFlowsheet` (signed-flow Anderson + damped differentiable tear solve), `build_network_flowsheet`
 - Physics: `weymouth_beta`, `resistor_xi`, `compressor_power`, `smoothed_power_w`, GasLib unit conversions
 - Verification: full equation-oriented residual checks (`difflow_gas.verify`)
-- Reconciliation: JAX-traceable residuals (`difflow_gas.residuals`) + `reconcile_network`
+- Equations: `difflow_gas.residuals.network_residuals` is the single JAX-traceable definition of the equation set; `verify` is the reporting layer over it
+- Reconciliation: `reconcile_network` (see `difflow.reconciliation`)
 - Gotchas encoded in docs: solve with `clip_negative_flows=False` (signed flows), damp the tear map (alpha ~ 0.3), pose optimization pressure constraints in squared pressure
 
 ### Debugging Gradients

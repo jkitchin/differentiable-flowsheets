@@ -161,7 +161,9 @@ reconcile(balance, y, sigma, names=["feed", "top", "bottom"])
 
 ## Gas Networks
 
-`difflow_gas` supplies the equation set for transmission networks. `difflow_gas.residuals.network_residuals` is a JAX-traceable twin of [`difflow_gas.verify`](unit-operations-gas.md): the same nodal balances, resistance laws and valve relations, **plus** the compressor relation $p_{\text{to}} = r\, p_{\text{from}}$ that `verify` omits because a sequential solve satisfies it by construction. A reconciliation cannot omit it — and on the example network it is exactly what makes the loop observable.
+`difflow_gas` supplies the equation set for transmission networks. `difflow_gas.residuals.network_residuals` is the single definition of that set — nodal balances, resistance laws, valve relations, **and** the compressor relation $p_{\text{to}} = r\, p_{\text{from}}$. [`difflow_gas.verify`](unit-operations-gas.md) is the reporting layer over it, unflattening the same residual vector into labelled dicts of floats.
+
+`verify` reports every block except the compressor relation, which a sequential solve satisfies by construction — there is nothing to check. A reconciliation cannot drop it, and on the example network it turns out to be exactly what makes the loop observable.
 
 ```python
 import jax

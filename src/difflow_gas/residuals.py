@@ -1,16 +1,19 @@
 """JAX-traceable equation-oriented residuals of a gas network.
 
-:mod:`difflow_gas.verify` evaluates the same equation set, but on plain
-Python floats packed in dicts: it is a *reporting* tool, and its
-``_absmax`` helper (a Python ``max`` over the residual values) makes it
-impossible to trace. This module is the differentiable twin --- one
-flat state vector in, one residual array out --- so that
+This module is the single definition of a network's equation set: one
+flat state vector in, one residual array out, fully traceable, so that
 ``jax.jacobian`` yields the constraint Jacobian that data
 reconciliation, observability analysis and equation-oriented
 optimization all need.
 
-The two must agree, and :mod:`tests.gas.test_residuals` asserts that
-entry by entry.
+:mod:`difflow_gas.verify` is the reporting layer over it, unflattening
+the same vector into labelled dicts of floats. It reports every block
+below except the compressor relation, which a sequential solve
+satisfies by construction.
+
+The equations are checked against an independent restatement in
+:func:`tests.gas.test_residuals.reference_residuals` rather than
+against ``verify``, which would be checking this code against itself.
 
 State vector
 ------------
@@ -40,8 +43,7 @@ rejects supplies that do not sum to zero.
 Residual blocks
 ---------------
 
-Ordered to match the dicts of
-:func:`difflow_gas.verify.residuals_from_values`, with one addition:
+Returned in this order, labelled by :func:`residual_names`:
 
 1. nodal mass balance, one per node (kg/s),
 2. resistance law of every pipe and resistor (bar^2),
@@ -49,11 +51,11 @@ Ordered to match the dicts of
 4. control valve drop relation (bar),
 5. **compressor relation** ``p_to - ratio * p_from`` (bar).
 
-``verify`` omits block 5 because a sequential solve satisfies it by
-construction. A reconciliation or equation-oriented formulation cannot
-omit it: the relation is what ties the two sides of a compressor
-station together, and dropping it leaves the downstream pressures
-unconstrained.
+``verify`` reports blocks 1-4 and drops block 5, because a sequential
+solve satisfies it by construction and there is nothing to check. A
+reconciliation or equation-oriented formulation cannot drop it: the
+relation is what ties the two sides of a compressor station together,
+and without it the downstream pressures are unconstrained.
 """
 
 from __future__ import annotations
