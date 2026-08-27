@@ -181,3 +181,11 @@ dg.verify.residuals_from_values(p_bar, q_kg_s, net).ok      # True
 Measured nominations are deliberately kept out of `GasNetwork`, which rejects supplies that do not sum to zero — real nominations do not, and making them close is what the reconciliation is for.
 
 See [`examples/28_data_reconciliation.ipynb`](../examples/28_data_reconciliation.ipynb) for the full treatment: variance reduction, a biased flow meter found and eliminated, an unmeasured pipe-fouling factor estimated with its standard error, the observability boundary, and sensor placement.
+
+## Reconciling data vs. updating the model
+
+Both are the same optimisation — a variable with a finite `sigma` is a measurement you may move at a cost, one with `sigma = inf` is a parameter you may move for free — so the interesting question is not *how* to update a model but **when you are entitled to**. Letting a parameter float absorbs whatever is wrong, including a broken sensor, and hands back a confident wrong number.
+
+The practical discipline is two clocks: reconcile routinely with parameters **fixed**, so the global test stays a genuine instrument-health monitor; re-estimate parameters only as a deliberate campaign. The trigger is the pair of tests read together — persistent rejection with the *same* sensor blamed every day is an instrument fault, while persistent rejection with a *wandering* suspect is model drift.
+
+[`examples/29_model_updating.ipynb`](../examples/29_model_updating.ipynb) works this through on a pipe that fouls over a 45-day campaign, including the case where a free parameter manufactures a fouling estimate out of a biased flow meter.

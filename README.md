@@ -427,7 +427,9 @@ are the same solve. Whether an unknown can be recovered at all is decided
 before solving, so an ill-posed problem raises a named error instead of
 returning `NaN`. Works with any differentiable residual function; see
 `docs/data-reconciliation.md` and
-`examples/28_data_reconciliation.ipynb` for the gas-network case.
+`examples/28_data_reconciliation.ipynb` for the gas-network case, and
+`examples/29_model_updating.ipynb` for when to update a model parameter
+rather than the data.
 
 ## Thermodynamics
 
