@@ -155,6 +155,7 @@ from difflow_gas.residuals import (
     network_residuals,
     residual_names,
 )
+from difflow_gas.plotting import circular_positions, draw_network
 from difflow_gas.reconcile import (
     measurement_sigma,
     network_residual_fn,
@@ -246,6 +247,9 @@ __all__ = [
     "measurement_sigma",
     "perturb",
     "reconciled_values",
+    # plotting
+    "draw_network",
+    "circular_positions",
 ]
 
 
