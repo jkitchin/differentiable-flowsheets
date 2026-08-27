@@ -15,6 +15,16 @@ The only iterated equations of a converged sequential solve are the
 chord laws, whose residual is the tear convergence error; everything
 else should sit at floating-point noise. Reporting is in bar / bar^2
 because those are the natural magnitudes to eyeball.
+
+The equations themselves live in :func:`difflow_gas.residuals.
+network_residuals`, which is the single definition of the network's
+equation set; this module is the reporting layer over it, turning the
+flat residual vector into the labelled dicts that are easier to read.
+Note that the report deliberately omits the compressor block that
+``network_residuals`` also returns: ``p_to = ratio * p_from`` holds by
+construction for whatever ratio a sequential solve was built with, so
+there is nothing to check. An equation-oriented or reconciliation
+formulation does have to carry it.
 """
 
 from __future__ import annotations
@@ -23,6 +33,11 @@ from dataclasses import dataclass, field
 
 from difflow_gas.flowsheets import arc_flow_stream, node_pressure_stream
 from difflow_gas.network import Decomposition, GasNetwork
+from difflow_gas.residuals import (
+    gas_state_layout,
+    network_residuals,
+    residual_names,
+)
 from difflow_gas.streams import FLOW_KEY
 
 
@@ -90,37 +105,35 @@ def residuals_from_values(
         cv_drops_bar: control valve drops (bar) the state was solved
             with; defaults to 0 for every control valve.
     """
-    cv_drops_bar = cv_drops_bar or {}
+    layout = gas_state_layout(network)
+    # eps_flow=0 selects the exact q|q| rather than its smoothed form:
+    # a verification should report the equations as written, not the
+    # C-infinity surrogate a solver differentiates.
+    values = network_residuals(
+        layout.pack(p_bar, q_kg_s, network.supply_kg_s),
+        network,
+        layout,
+        cv_drops_bar=cv_drops_bar,
+        eps_flow=0.0,
+    )
 
-    imbalance = {}
-    for node in network.nodes:
-        acc = network.supply_kg_s.get(node, 0.0)
-        for aid, a in network.arcs.items():
-            if a.from_node == node:
-                acc -= q_kg_s[aid]
-            if a.to_node == node:
-                acc += q_kg_s[aid]
-        imbalance[node] = acc
-
-    resistance = {}
-    equality = {}
-    control_valve = {}
-    for aid, a in network.arcs.items():
-        f, t = a.from_node, a.to_node
-        if a.kind in ("pipe", "resistor"):
-            beta_bar2 = network.beta[aid] / 1e10  # Pa^2 -> bar^2
-            resistance[aid] = (
-                p_bar[f] ** 2 - p_bar[t] ** 2
-                - beta_bar2 * q_kg_s[aid] * abs(q_kg_s[aid])
-            )
-        elif a.kind in ("valve", "short_pipe"):
-            equality[aid] = p_bar[f] - p_bar[t]
-        elif a.kind == "control_valve":
-            control_valve[aid] = (
-                p_bar[f] - p_bar[t] - cv_drops_bar.get(aid, 0.0)
-            )
-        # compressors: p_to = ratio p_from holds by construction for
-        # whatever ratio the state was solved with; nothing to check
+    imbalance: dict[str, float] = {}
+    resistance: dict[str, float] = {}
+    equality: dict[str, float] = {}
+    control_valve: dict[str, float] = {}
+    blocks = {
+        "balance_": imbalance,
+        "resistance_": resistance,
+        "equality_": equality,
+        "cv_": control_valve,
+        # "compressor_" is intentionally not reported; see the module
+        # docstring.
+    }
+    for name, value in zip(residual_names(network, layout), values):
+        for prefix, target in blocks.items():
+            if name.startswith(prefix):
+                target[name[len(prefix):]] = float(value)
+                break
 
     def _absmax(d):
         return max((abs(v) for v in d.values()), default=0.0)

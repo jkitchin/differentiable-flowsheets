@@ -16,6 +16,7 @@ parts:
       - file: docs/thermodynamics
       - file: docs/technoeconomics
       - file: docs/parameter-estimation
+      - file: docs/data-reconciliation
       - file: docs/streams-and-flowsheets
       - file: docs/dynamic-modeling
       - file: docs/solvers-and-utilities

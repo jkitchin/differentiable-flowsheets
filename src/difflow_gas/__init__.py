@@ -145,6 +145,24 @@ from difflow_gas.flowsheets import (
 from difflow_gas import verify
 from difflow_gas.verify import ResidualReport, residual_report, residuals_from_values
 
+# ---------------------------------------------------------------------
+# Differentiable residuals and data reconciliation
+# ---------------------------------------------------------------------
+
+from difflow_gas.residuals import (
+    GasStateLayout,
+    gas_state_layout,
+    network_residuals,
+    residual_names,
+)
+from difflow_gas.reconcile import (
+    measurement_sigma,
+    network_residual_fn,
+    perturb,
+    reconcile_network,
+    reconciled_values,
+)
+
 __all__ = [
     "__version__",
     # physics
@@ -217,6 +235,17 @@ __all__ = [
     "ResidualReport",
     "residual_report",
     "residuals_from_values",
+    # differentiable residuals
+    "GasStateLayout",
+    "gas_state_layout",
+    "network_residuals",
+    "residual_names",
+    # data reconciliation
+    "reconcile_network",
+    "network_residual_fn",
+    "measurement_sigma",
+    "perturb",
+    "reconciled_values",
 ]
 
 

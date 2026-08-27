@@ -405,6 +405,30 @@ dW_dr = jax.grad(obj)({"cs_cs1.ratio": 1.3})
 Pipes, resistors, compressor stations, open valves, control valves and
 short pipes are supported; see `docs/unit-operations-gas.md`.
 
+## Data Reconciliation
+
+Plant measurements are noisy and, taken at face value, contradict the
+model. `difflow.reconciliation` finds the smallest statistically
+weighted adjustment that satisfies the model equations, and returns
+estimates sharper than the raw measurements:
+
+```python
+from difflow.reconciliation import reconcile, global_test, measurement_test
+
+res = reconcile(residual_fn, y, sigma, names=names)
+print(res.summary())           # measured vs reconciled, with standard errors
+global_test(res)               # is the data set consistent with the model?
+measurement_test(res)          # which sensor is lying?
+```
+
+An entry of `sigma` set to `inf` marks a variable to be *estimated*
+rather than reconciled, so joint parameter estimation and reconciliation
+are the same solve. Whether an unknown can be recovered at all is decided
+before solving, so an ill-posed problem raises a named error instead of
+returning `NaN`. Works with any differentiable residual function; see
+`docs/data-reconciliation.md` and
+`examples/28_data_reconciliation.ipynb` for the gas-network case.
+
 ## Thermodynamics
 
 ### Ideal Thermodynamics (for VLE)
