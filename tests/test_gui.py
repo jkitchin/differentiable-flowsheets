@@ -13,6 +13,11 @@ as `Infinity`, which the browser refuses to parse.
 """
 
 import json
+import os
+import pathlib
+import re
+import shutil
+import subprocess
 import threading
 import urllib.error
 import urllib.request
@@ -340,6 +345,143 @@ class TestRecycles:
             assert solved["streams"]["hot"]["T"] == pytest.approx(365.0, abs=1e-9)
         finally:
             live.close()
+
+
+# =============================================================================
+# Building: adding units from the palette, and naming streams
+# =============================================================================
+
+
+def heater_unit(name="heater", inlet="liq"):
+    """Exactly the document the page's ``newUnit`` builds for a Heater.
+
+    Written out rather than derived, so that a change to the page which
+    stopped producing this shape would fail here.
+    """
+    return {"name": name, "operation": "Heater", "params": {},
+            "constructor": {}, "extra_params": {},
+            "inlets": [inlet], "outlets": [name + "_out"]}
+
+
+class TestPalette:
+    def test_the_catalog_says_what_a_form_can_build(self, client):
+        """The palette dims what it cannot add; it needs to be told which."""
+        _, catalog = client.get_json("/api/catalog")
+        assert catalog["Heater"]["buildable"]
+        assert not catalog["Flash"]["buildable"], "Flash needs a thermo object"
+        assert catalog["Flash"]["constructor_extras"] == ["thermo"]
+        assert not catalog["CSTR"]["buildable"], "CSTR needs a rate law"
+        assert catalog["CSTR"]["constructor_extras"] == []
+
+    def test_every_buildable_operation_declares_its_ports(self, client):
+        """A unit whose arity is unknown cannot be given outlet names."""
+        _, catalog = client.get_json("/api/catalog")
+        for name, spec in catalog.items():
+            if not spec["buildable"]:
+                continue
+            ports = spec["ports"]
+            assert ports["variadic"] or ports["n_inlets"] is not None, name
+
+
+class TestBuilding:
+    def test_a_unit_added_from_the_palette_reaches_the_model(self, client):
+        _, doc = client.get_json("/api/flowsheet")
+        doc["flowsheet"]["units"].append(heater_unit())
+        status, payload = client.post("/api/flowsheet", doc["flowsheet"])
+        assert status == 200 and payload["ok"]
+        assert [u.name for u in client.session.flowsheet.units] == [
+            "reactor", "flash", "heater"
+        ]
+
+    def test_the_defaults_come_back_so_they_can_be_edited(self, client):
+        """The page reloads after adding; that is where the fields come from.
+
+        A unit is added with no parameters at all, and the Params
+        dataclass fills them in. If they were not written back the new
+        unit would show an empty card and be uneditable.
+        """
+        _, doc = client.get_json("/api/flowsheet")
+        doc["flowsheet"]["units"].append(heater_unit())
+        client.post("/api/flowsheet", doc["flowsheet"])
+
+        _, after = client.get_json("/api/flowsheet")
+        assert set(after["flowsheet"]["units"][-1]["params"]) == {
+            "duty", "T_out", "UA", "T_utility", "Cp"
+        }
+
+    def test_the_added_unit_then_solves(self, client):
+        _, doc = client.get_json("/api/flowsheet")
+        doc["flowsheet"]["units"].append(heater_unit())
+        client.post("/api/flowsheet", doc["flowsheet"])
+
+        _, doc = client.get_json("/api/flowsheet")
+        doc["flowsheet"]["units"][-1]["params"]["T_out"] = 400.0
+        assert client.post("/api/flowsheet", doc["flowsheet"])[1]["ok"]
+
+        _, solved = client.post("/api/solve")
+        assert solved["ok"]
+        assert solved["streams"]["heater_out"]["T"] == pytest.approx(400.0)
+
+    def test_renamed_streams_rewire_the_model(self, client):
+        """What the page's renameStream produces has to solve unchanged."""
+        _, before = client.post("/api/solve")
+        _, doc = client.get_json("/api/flowsheet")
+        units = doc["flowsheet"]["units"]
+        units[0]["outlets"] = ["crude"]        # was rx
+        units[1]["inlets"] = ["crude"]         # the consumer followed
+        assert client.post("/api/flowsheet", doc["flowsheet"])[1]["ok"]
+
+        _, after = client.post("/api/solve")
+        assert after["ok"]
+        assert "rx" not in after["streams"] and "crude" in after["streams"]
+        assert after["streams"]["crude"]["F_ethanol"] == pytest.approx(
+            before["streams"]["rx"]["F_ethanol"]
+        )
+
+    def test_a_dangling_inlet_is_reported_rather_than_raised(self, client):
+        """The page catches this first, but the socket must survive it."""
+        _, doc = client.get_json("/api/flowsheet")
+        doc["flowsheet"]["units"][1]["inlets"] = ["ghost"]
+        assert client.post("/api/flowsheet", doc["flowsheet"])[1]["ok"]
+
+        status, solved = client.post("/api/solve")
+        assert status == 200 and not solved["ok"]
+        assert "ghost" in solved["error"]
+
+
+# =============================================================================
+# The page's own logic
+# =============================================================================
+
+
+class TestPageLogic:
+    """Run the editor's model functions under node.
+
+    Renaming a stream, seeding a new unit and spotting a dangling inlet
+    all happen in the browser, and all of them would break the wiring
+    silently if they were wrong --- the one thing the Python tests
+    above cannot see. node is not a difflow dependency, so this skips
+    when it is absent.
+    """
+
+    def test_the_pages_model_functions_behave(self, tmp_path):
+        node = shutil.which("node")
+        if node is None:
+            pytest.skip("node is not installed")
+
+        script = re.search(r"<script>(.*)</script>", gui._PAGE, re.S)
+        assert script, "the page must carry its script inline"
+        page_js = tmp_path / "page.js"
+        page_js.write_text(script.group(1))
+
+        here = pathlib.Path(__file__).parent / "js"
+        result = subprocess.run(
+            [node, str(here / "checks.js")],
+            env={**os.environ, "HARNESS": str(here / "harness.js"),
+                 "PAGE_JS": str(page_js)},
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
 
 
 if __name__ == "__main__":

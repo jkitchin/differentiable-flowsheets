@@ -478,16 +478,27 @@ def _build_operation(cls: type, encoded_params: dict, unit_name: str,
             f"on load, e.g. extras={{{unit_name!r}: {{{missing[0]!r}: ...}}}}."
         )
 
+    params_cls = _params_class(cls)
+
     if not encoded_params:
         try:
+            # units that take no Params at all: Mixer, GasPipe
             return cls(**extras)
         except TypeError as exc:
+            # A Params class whose fields all carry defaults is still
+            # constructible from nothing, and "no parameters written"
+            # means exactly that -- which is the state a unit is in the
+            # moment difflow.gui adds it to a flowsheet.
+            if params_cls is not None:
+                try:
+                    return cls(params_cls(), **extras)
+                except TypeError:
+                    pass
             raise SerializationError(
                 f"unit {unit_name!r}: {cls.__name__} needs parameters, but "
                 f"none were written ({exc})."
             ) from exc
 
-    params_cls = _params_class(cls)
     if params_cls is None:
         raise SerializationError(
             f"unit {unit_name!r}: cannot find the Params class for "
