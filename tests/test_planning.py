@@ -24,6 +24,7 @@ jax.config.update("jax_enable_x64", True)
 
 import optimistix as optx
 
+from difflow.planning import chain as chain_mod
 from difflow.planning import (
     AMPLIFY_TOL,
     SPREAD_TOL,
@@ -922,6 +923,39 @@ class TestDeltaHealth:
         assert found and found[0].variable == "loop.gain"
         assert found[0].value > AMPLIFY_TOL
         assert "(I - A)^-1" in found[0].detail
+
+    def test_zero_valued_output_does_not_trigger_amplification(self):
+        """A bang-bang lever at a corner zeroes an output; that is not a defect.
+
+        "Moves by N times its own value" is undefined when the value is zero,
+        and vertex seeding guarantees the planner lands on exactly such
+        corners -- so judging those rows would fire on nearly every plan.
+        """
+        def fn(u):
+            alloc, feed = u[0], u[1]
+            return jnp.array([alloc * feed, (1.0 - alloc) * feed])
+
+        blk = Block(name="power", fn=fn, u_names=["alloc", "feed"],
+                    y_names=["burned", "sold"], lb=[0.0, 0.0], ub=[1.0, 100.0],
+                    u0=[1.0, 86.0])       # alloc at its corner -> sold == 0
+        npt.assert_allclose(float(linearize_block(blk).y0[1]), 0.0, atol=0)
+        assert not check_delta_health(blk).of_kind("amplifying")
+
+    def test_two_plant_chain_health(self):
+        """The reference chain's own findings, as a guard against drift."""
+        problem = chain_mod.two_plant_chain()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", PhaseBoundaryWarning)
+            report = problem.planner(radius=0.25).check_health()
+        # P_expander is in pascals, so dE_refrig/dP is ~1e-8 while the power
+        # block's dimensionless levers give O(10) coefficients.
+        spread = report.of_kind("scale_spread")
+        assert spread, report.summary()
+        assert spread[0].value > 1e8
+        # Nothing is dead and nothing is spuriously flagged as amplifying.
+        assert not report.of_kind("dead_lever")
+        assert not report.of_kind("amplifying")
+        assert not report.errors
 
     def test_amplification_blames_wide_bounds_when_that_is_the_cause(self):
         """A lever bounded far beyond its operating point is not a recycle."""

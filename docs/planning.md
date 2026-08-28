@@ -382,7 +382,9 @@ exploding sensitivities far more often than by vanishing ones.** The
 `amplifying` finding fires when a full trust-region step is predicted to change
 an output by more than `AMPLIFY_TOL` times its own value, and distinguishes a
 near-unity loop gain from the other common cause — bounds set far wider than
-the range the lever is actually planned over.
+the range the lever is actually planned over. Outputs whose value is *zero* at
+the linearisation point are excluded, because "a fraction of its own value" is
+undefined there and a bang-bang lever at a corner routinely produces one.
 
 **3. Scale spread.** Mixed engineering units — ppm against kbbl/d against
 $/bbl — put entries spanning many orders of magnitude in one constraint matrix.
@@ -391,6 +393,29 @@ is a *units* problem, not a gradient problem. `check_lp_scaling` flags both the
 whole matrix and individual rows whose small coefficients sit below the
 solver's effective precision relative to their large ones. Nondimensionalise
 the levers before blaming the gradients.
+
+### What it finds on the reference chain
+
+`two_plant_chain()` is small, and its one finding is the units problem:
+
+```text
+>>> problem.planner(radius=0.25).check_health().summary()
+delta-vector health: 1 findings (0 error, 1 warning)
+  [warning] scale_spread: network: constraint entries span 2.812e-08 to
+  8.044e+01 (ratio 2.860e+09); the solver's pivot tolerances are being asked to
+  separate signal from unit conversion. Re-scale the offending variables to
+  comparable magnitudes.
+```
+
+`ngl.P_expander` is in pascals and operates at 2.5e6, so `dE_refrig/dP` is
+`3.6e-08` per Pa, while `power.alloc` is dimensionless and gives
+`d gas_sold/d alloc = 85.8`. Nine orders of magnitude in one matrix, entirely
+from the choice of unit. Expressing the expander pressure in MPa removes it.
+
+Nothing is dead and nothing amplifies: the composed sensitivities span
+`0` to `2.2`, the deepest lever (`ngl.split`) still reaches an output at
+`5.8e-02`, and both blocks are well conditioned. That is what a healthy model
+looks like — the diagnostics are quiet until size makes them speak.
 
 Every diagnostic works on the **scaled** Jacobian,
 `Js[i, j] = J[i, j] * u_scale[j] / y_scale[i]` — the fractional change in output

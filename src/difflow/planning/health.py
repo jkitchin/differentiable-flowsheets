@@ -242,7 +242,10 @@ def check_block_health(block: Block, lin: Linearization | None = None,
         dead_tol: Scaled sensitivity at or below which a column or row counts
             as structurally zero.
         amplify_tol: Predicted relative change over one trust-region step
-            above which the first-order model is flagged.
+            above which the first-order model is flagged.  Outputs whose value
+            is zero at the linearisation point are excluded: "a fraction of
+            its own value" is undefined there, and a bang-bang lever at a
+            corner routinely produces such an output.
         cond_tol: Condition number of the scaled Jacobian above which the
             block is flagged.
         linked: Bare names of inputs driven by a link rather than by a free
@@ -324,11 +327,22 @@ def check_block_health(block: Block, lin: Linearization | None = None,
                     "being made against a number that cannot move.")))
 
     # -- amplification: the recycle signature -------------------------------
-    if Js.size:
-        peak = float(np.abs(Js).max())
+    # Amplification asks what fraction of its own value an output moves, which
+    # is undefined for an output whose value is zero -- and vertex seeding
+    # guarantees bang-bang levers land on exactly those corners (a gas_sold
+    # that is zero because the allocation lever burns everything). Judging
+    # those rows would fire on almost every solved plan.
+    y_abs = np.abs(np.asarray(lin.y0, dtype=float))
+    live = (y_abs > 1e-12 * y_abs.max()) if y_abs.size and y_abs.max() > 0 \
+        else np.zeros(y_abs.shape, dtype=bool)
+    if Js.size and live.any():
+        Js_live = Js[live]
+        peak = float(np.abs(Js_live).max())
         predicted = radius * peak
         if predicted > amplify_tol:
-            i, j = np.unravel_index(int(np.argmax(np.abs(Js))), Js.shape)
+            i_live, j = np.unravel_index(int(np.argmax(np.abs(Js_live))),
+                                         Js_live.shape)
+            i = int(np.nonzero(live)[0][i_live])
             # Distinguish the two causes rather than guessing: a bound range
             # far wider than the operating point inflates the scaled step all
             # by itself, and calling that a recycle would send the reader to
@@ -356,17 +370,17 @@ def check_block_health(block: Block, lin: Linearization | None = None,
                         f"{predicted:.3g}x its own value; a first-order model "
                         f"does not survive that. {cause}")))
 
-        if min(Js.shape) > 1:
-            cond = float(np.linalg.cond(Js))
-            if np.isfinite(cond) and cond > cond_tol:
-                found.append(Finding(
-                    kind="ill_conditioned", severity="warning",
-                    block=block.name, value=cond,
-                    detail=(f"scaled delta vectors have condition number "
-                            f"{cond:.3e}; distinct levers are close to "
-                            "linearly dependent, so the LP's choice among "
-                            "them is decided by rounding. Drop a redundant "
-                            "lever or re-scale the bounds.")))
+    if Js.size and min(Js.shape) > 1:
+        cond = float(np.linalg.cond(Js))
+        if np.isfinite(cond) and cond > cond_tol:
+            found.append(Finding(
+                kind="ill_conditioned", severity="warning",
+                block=block.name, value=cond,
+                detail=(f"scaled delta vectors have condition number "
+                        f"{cond:.3e}; distinct levers are close to "
+                        "linearly dependent, so the LP's choice among "
+                        "them is decided by rounding. Drop a redundant "
+                        "lever or re-scale the bounds.")))
 
     return HealthReport(
         findings=sorted(found, key=lambda f: f.severity != "error"),
