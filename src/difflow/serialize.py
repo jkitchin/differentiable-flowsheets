@@ -55,6 +55,7 @@ ARRAY_TAG = "$array"
 DATACLASS_TAG = "$dataclass"
 NAMEDTUPLE_TAG = "$namedtuple"
 THERMO_TAG = "$thermo"
+CALLABLE_TAG = "$callable"
 
 
 class SerializationError(ValueError):
@@ -76,6 +77,18 @@ def _encode_value(value: Any, where: str) -> Any:
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
     if callable(value):
+        spec = getattr(value, "__difflow_spec__", None)
+        if spec is not None:
+            # A callable built from data. The closure cannot be written,
+            # but the specification that produced it can, and rebuilding
+            # from that gives back the identical function.
+            return {
+                CALLABLE_TAG: {
+                    "factory": spec["factory"],
+                    "attr": spec.get("attr"),
+                    "kwargs": _encode_value(spec["kwargs"], f"{where} spec"),
+                }
+            }
         raise SerializationError(
             f"{where} holds a callable ({getattr(value, '__name__', type(value).__name__)!r}), "
             "which cannot be written to a file. Build it from data instead "
@@ -129,6 +142,8 @@ def _decode_value(value: Any) -> Any:
             return cls(**fields)
         if THERMO_TAG in value:
             return _decode_thermo(value)
+        if CALLABLE_TAG in value:
+            return _decode_callable(value[CALLABLE_TAG])
         return {k: _decode_value(v) for k, v in value.items()}
     if isinstance(value, list):
         return [_decode_value(v) for v in value]
@@ -188,6 +203,20 @@ def _encode_thermo(obj: Any, where: str) -> dict:
         "and pass it back on load with "
         "load(path, extras={'<unit>': {'thermo': my_thermo}})."
     )
+
+
+def _decode_callable(spec: dict):
+    """Rebuild a callable from the specification that produced it.
+
+    The factory is looked up by name among difflow's exports, called
+    with the stored arguments, and the named attribute taken off the
+    result --- so ``mass_action_kinetics(...).rate_fn`` comes back as
+    the function it was.
+    """
+    factory = _lookup_type(spec["factory"], callable)
+    built = factory(**{k: _decode_value(v) for k, v in spec["kwargs"].items()})
+    attr = spec.get("attr")
+    return getattr(built, attr) if attr else built
 
 
 def _decode_thermo(data: dict):

@@ -237,8 +237,8 @@ from difflow.kinetics import (
     mass_action_kinetics,
 )
 
-# Flowsheet serialization
-from difflow import serialize
+# Flowsheet serialization and code generation
+from difflow import codegen, serialize
 
 # Operation catalog
 from difflow.catalog import (
@@ -499,8 +499,9 @@ __all__ = [
     "mass_action_kinetics",
     "ReactionSet",
     "KineticsSpecError",
-    # Flowsheet serialization
+    # Flowsheet serialization and code generation
     "serialize",
+    "codegen",
     # Operation catalog
     "catalog",
     "describe_operation",

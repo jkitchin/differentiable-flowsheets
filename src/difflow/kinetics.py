@@ -376,6 +376,21 @@ def mass_action_kinetics(
         backward = jnp.exp(p["order_r"] @ log_c) / p["K_eq"]
         return k * (forward - backward)
 
+    # Record how this rate law was built, so it can be written to a
+    # file. The callable itself is a closure and cannot be serialized;
+    # the specification that produced it can, and rebuilding from it
+    # gives back the identical function. See difflow.serialize.
+    rate_fn.__difflow_spec__ = {
+        "factory": "mass_action_kinetics",
+        "attr": "rate_fn",
+        "kwargs": {
+            "reactions": reactions,
+            "species_order": list(names),
+            "reverse": reverse,
+            "orders": list(orders) if orders is not None else None,
+        },
+    }
+
     equations = [
         _latex(rxn, reverse == "equilibrium" and j in reversible)
         for j, rxn in enumerate(reactions)

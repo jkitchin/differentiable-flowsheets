@@ -180,6 +180,54 @@ class TestThermo:
 # =============================================================================
 
 
+class TestDataBuiltRateLaw:
+    """A rate law built from data survives, unlike a hand-written one.
+
+    mass_action_kinetics records the specification that produced its
+    closure, so the file can carry the reactions and rebuild the
+    identical function.
+    """
+
+    @pytest.fixture
+    def reactor_flowsheet(self):
+        from difflow import CSTR, CSTRParams, mass_action_kinetics
+
+        kin = mass_action_kinetics([{
+            "equation": "water -> ethanol",
+            "reactants": {"water": 1.0}, "products": {"ethanol": 1.0},
+            "rate_params": {"A": 1.0e3, "Ea": 40_000.0, "n": 0.0},
+        }], SPECIES)
+        fs = Flowsheet(species_order=SPECIES)
+        fs.add_feed("feed", make_stream(
+            {"water": 1.0, "ethanol": 0.1}, T=350.0, P=101325.0
+        ))
+        fs.add_unit(Unit("reactor", CSTR(CSTRParams(
+            V=1.0, molar_density=1000.0, **kin.params_kwargs()
+        )), ["feed"], ["out"]))
+        return fs
+
+    def test_a_reactor_round_trips(self, reactor_flowsheet):
+        reloaded = serialize.from_json(serialize.to_json(reactor_flowsheet))
+        assert callable(reloaded.units[0].operation.params.rate_fn)
+
+    def test_the_reloaded_reactor_solves_identically(self, reactor_flowsheet):
+        reloaded = serialize.from_json(serialize.to_json(reactor_flowsheet))
+        original, restored = reactor_flowsheet.solve(), reloaded.solve()
+        for stream in original:
+            for key, value in original[stream].items():
+                if isinstance(value, str):
+                    continue
+                assert float(value) == float(restored[stream][key])
+
+    def test_the_reactions_are_what_is_written(self, reactor_flowsheet):
+        """The file carries the specification, not an opaque blob."""
+        data = json.loads(serialize.to_json(reactor_flowsheet))
+        spec = data["units"][0]["params"]["rate_fn"]["$callable"]
+        assert spec["factory"] == "mass_action_kinetics"
+        assert spec["attr"] == "rate_fn"
+        assert spec["kwargs"]["reactions"][0]["equation"] == "water -> ethanol"
+
+
 class TestRefusals:
     def test_a_callable_parameter_is_refused(self, thermo):
         """A file that silently lost a rate law would reload as a different model."""
