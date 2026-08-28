@@ -251,6 +251,31 @@ def _decode_stream(data: dict) -> dict:
 # ---------------------------------------------------------------------
 
 
+def _takes_params_first(sig) -> bool:
+    """Whether a constructor's leading argument is its ``Params`` object.
+
+    Most units are built as ``Unit(Params(...), thermo)``, but a
+    substantial minority --- ``Mixer``, ``Splitter``, ``GasPipe``,
+    ``Compressor`` and the rest of the gas plugin --- take a plain
+    argument there instead. Assuming the first argument is always the
+    ``Params`` silently drops a *required* one, and the unit then fails
+    to rebuild.
+    """
+    import dataclasses
+    import inspect
+
+    for name, param in sig.parameters.items():
+        if name == "self":
+            continue
+        annotation = param.annotation
+        return (
+            name == "params"
+            or dataclasses.is_dataclass(annotation)
+            or (isinstance(annotation, str) and annotation.endswith("Params"))
+        )
+    return False
+
+
 def constructor_extras(cls: type) -> list[str]:
     """Constructor arguments a class requires besides its ``Params``.
 
@@ -258,6 +283,15 @@ def constructor_extras(cls: type) -> list[str]:
     is an object rather than data. They are read off the instance by
     attribute of the same name, and either written (when the kind is
     supported) or supplied on load via ``extras=``.
+
+    Units that take no ``Params`` at all --- ``Mixer(species_order)``,
+    ``GasPipe(beta)`` --- report every required argument, since all of
+    them have to be written for the unit to be rebuilt.
+
+    Only *required* arguments are reported, so an optional constructor
+    object left at its default --- ``Mixer``'s ``thermo``, ``Flash``'s
+    ``eos`` --- is not carried by either format. Pass it back on load
+    with ``extras=`` when it matters.
     """
     import inspect
 
@@ -271,7 +305,9 @@ def constructor_extras(cls: type) -> list[str]:
         and p.default is inspect.Parameter.empty
         and p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)
     ]
-    return required[1:]          # the first is the Params object
+    if required and _takes_params_first(sig):
+        return required[1:]
+    return required
 
 
 def _encode_extras(operation: Any, unit_name: str) -> dict:

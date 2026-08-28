@@ -237,8 +237,9 @@ from difflow.kinetics import (
     mass_action_kinetics,
 )
 
-# Flowsheet serialization and code generation
-from difflow import codegen, serialize
+# Flowsheet serialization, code generation and publishing
+from difflow import codegen, gui, publish as publish_module, serialize
+from difflow.publish import SweepAxis, SweepResult, publish, sweep
 
 # Operation catalog
 from difflow.catalog import (
@@ -499,9 +500,14 @@ __all__ = [
     "mass_action_kinetics",
     "ReactionSet",
     "KineticsSpecError",
-    # Flowsheet serialization and code generation
+    # Flowsheet serialization, code generation and publishing
     "serialize",
     "codegen",
+    "publish",
+    "sweep",
+    "SweepAxis",
+    "SweepResult",
+    "gui",
     # Operation catalog
     "catalog",
     "describe_operation",

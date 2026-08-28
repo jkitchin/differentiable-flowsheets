@@ -577,6 +577,84 @@ One name is deliberately not the class name: `difflow_gas` registers a `Compress
 
 ---
 
+## The Local Editor
+
+`difflow.gui` serves a single-page flowsheet editor on `localhost`, with the installed package doing the solving:
+
+```bash
+python -m difflow.gui plant.json          # opens a browser
+python -m difflow.gui --port 9000 --no-browser
+```
+
+or from Python, on a flowsheet you already have:
+
+```python
+from difflow import gui
+
+gui.serve(fs, path="plant.json")
+```
+
+The page shows a palette of every registered operation with its port arity, a diagram of the topology, editable parameter fields per unit, and a panel that switches between solved stream values and the generated Python. **Solve** re-solves the edited model; **Save** writes the JSON; **Python** shows what `codegen.to_python` would produce.
+
+Everything on the page is derived from `catalog()`, so plugin units appear with no extra work, and a field the catalog reports as holding code is listed as *set in code* rather than given a text box that could only reject what you type.
+
+The point is not to replace writing Python. It is to make the tedious parts quick — seeing the topology, changing one parameter and re-solving, checking what a unit expects — while leaving the door open in both directions: export a script, edit it, and read the result back through `serialize`. An editor you can only enter is worse than none.
+
+It is stdlib only (`http.server`), binds to `127.0.0.1`, and is meant for a single local user. It is a development tool, not a hardened service — do not expose it to a network.
+
+### For tests and embedding
+
+`make_server` builds the server without starting it, which is what a test wants:
+
+```python
+from difflow.gui import FlowsheetSession, make_server
+
+server = make_server(FlowsheetSession(fs), port=0)   # 0 => any free port
+```
+
+The routes are `GET /api/catalog`, `GET /api/flowsheet`, `GET /api/code`, and `POST /api/flowsheet`, `/api/solve`, `/api/save`. A failed solve or a rejected edit comes back as `{"ok": false, "error": ...}` rather than a traceback at the socket, so a bad edit from the browser cannot take the server down.
+
+One wrinkle worth knowing: JSON has no literal for the non-finite floats, and `JSON.parse` rejects the `Infinity` that Python's `json` writes. This is the *common* case, not an exotic one — `mass_action_kinetics` puts `inf` in `K_eq` for every irreversible reaction — so those values travel as the strings `"Infinity"`, `"-Infinity"` and `"NaN"`, and are restored on the way back.
+
+---
+
+## Publishing a Model
+
+`difflow.publish` turns a flowsheet into a **self-contained HTML page** that anyone can open with nothing installed — no Python, no server, no network. It is the form a model needs for a paper's supplementary material or a project page.
+
+```python
+from difflow import publish, SweepAxis
+
+publish(
+    fs,
+    axes=[
+        SweepAxis("reactor.V", 0.5, 5.0, n=21, label="Reactor volume", units="m³"),
+        SweepAxis("heater.T_out", 320.0, 400.0, n=9, label="Inlet temperature", units="K"),
+    ],
+    outputs={"conversion": lambda streams: 1 - streams["out"]["F_A"] / 1.0},
+    path="model.html",
+    title="Reactor sizing",
+)
+```
+
+Axis keys use the same `"<unit>.<param>"` dot notation as `make_objective_fn`, so they name a **unit** parameter — feed conditions are not addressable this way. To vary a feed, put a `Heater` or a `Mixer` in front of it and sweep that.
+
+The page carries sliders for each axis, the outputs, and their sensitivities. This works because the solve is *pre-computed*: `sweep` evaluates the flowsheet on the grid with `jax.vmap`, takes gradients with `jax.grad`, and bakes the results into the page, which interpolates between them in a few lines of JavaScript.
+
+That is a deliberate trade, and its limits should be stated plainly. JAX has no WebAssembly build, so a browser cannot run the real solver; the published page is an interpolation of a grid, not a live model. It is exact at the grid points and only as good as the grid between them, and it can only vary what the axes name. When you need the real thing, use the local editor above, or the generated script.
+
+`sweep` is available on its own when you want the grid as data rather than as a page:
+
+```python
+from difflow import sweep
+
+result = sweep(fs, axes, outputs)
+result.values["conversion"]      # shape (21, 9)
+result.gradients["conversion"]   # d(conversion)/d(axis), same shape per axis
+```
+
+---
+
 ## Best Practices
 
 ### Stream Naming Conventions
