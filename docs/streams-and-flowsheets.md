@@ -458,6 +458,46 @@ protein_a = OperationRegistry.get('protein_a_chromatography')
 
 ---
 
+## Saving and Loading Flowsheets
+
+A flowsheet is otherwise only expressible as Python: the code that builds it *is* the model. `difflow.serialize` gives it a file format, so a flowsheet can be saved, diffed, sent to a service, or read by something that never imported the module that built it.
+
+```python
+from difflow import serialize
+
+serialize.save(fs, "plant.json")
+fs2 = serialize.load("plant.json")
+```
+
+The round trip preserves the answer, not just the shape — a reloaded flowsheet solves to bit-identical results. `to_json`/`from_json` and `to_dict`/`from_dict` are available if you want the text or the data rather than a file.
+
+The format records `format_version` (checked on read) and the difflow version that wrote it (for provenance only).
+
+### What it can and cannot write
+
+Round-tripping goes through the [operation registry](#operation-catalog): a unit is written as the name it is registered under and rebuilt by looking that name up. An **unregistered** operation is refused, because nothing would know how to rebuild it.
+
+Parameters are written when they are *data* — numbers, strings, arrays, lists, dicts, nested `Params` dataclasses, and NamedTuples such as `SpeciesData`. A parameter holding a **callable** is refused rather than dropped:
+
+```
+SerializationError: unit 'reactor' field 'rate_fn' holds a callable ('rate_fn'),
+which cannot be written to a file. Build it from data instead ...
+```
+
+That is deliberate. A file that silently lost a reactor's rate law would reload into a different model that still looked plausible.
+
+### Thermodynamics
+
+About half the core units need a `thermo` or `eos` object in the constructor, not just a `Params`. `IdealThermo` is written and rebuilt automatically. Anything else is refused on write, and can be supplied on load instead:
+
+```python
+fs2 = serialize.load("plant.json", extras={"flash": {"thermo": my_thermo}})
+```
+
+`extras` also *overrides* a stored thermo, which is the way to reload a saved flowsheet against a different property package.
+
+---
+
 ## Operation Catalog
 
 The registry answers *what units exist*. `difflow.catalog` answers *what you can do with one*: how many streams go in and out, what parameters it takes, which are required, and which hold code rather than data.

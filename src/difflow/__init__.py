@@ -230,6 +230,9 @@ from difflow import estimation
 # Data reconciliation submodule
 from difflow import reconciliation
 
+# Flowsheet serialization
+from difflow import serialize
+
 # Operation catalog
 from difflow.catalog import (
     OperationSchema,
@@ -485,6 +488,8 @@ __all__ = [
     "estimation",
     # Data reconciliation
     "reconciliation",
+    # Flowsheet serialization
+    "serialize",
     # Operation catalog
     "catalog",
     "describe_operation",
