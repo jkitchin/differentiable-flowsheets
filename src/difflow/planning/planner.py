@@ -40,7 +40,7 @@ from __future__ import annotations
 
 import itertools
 from dataclasses import dataclass, field, replace
-from typing import Any, Callable, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Mapping, Sequence
 
 import jax
 import jax.numpy as jnp
@@ -53,6 +53,9 @@ from difflow.planning.linearize import (
 )
 from difflow.planning.lp import LPModel, LPSolution, as_spec
 from difflow.planning.network import Network, NetworkState
+if TYPE_CHECKING:  # pragma: no cover - annotation only
+    from difflow.planning.health import HealthReport
+
 from difflow.planning.piecewise import (
     PiecewiseData, PiecewiseSpec, sample_piecewise,
 )
@@ -334,6 +337,47 @@ class DeltaBasePlanner:
                         centers=state.u, radius=radius,
                         penalty=self.penalty, sense=self.sense,
                         piecewise=piecewise)
+
+    def check_health(self, decisions: Any = None,
+                     radius: float | None = None,
+                     include_lp: bool = True) -> "HealthReport":
+        """Diagnose the delta vectors and the assembled program.
+
+        Run this before trusting a plan from a large model.  It reports dead
+        levers, recycle amplification, and the constraint-matrix scale spread
+        — the three ways a delta-base model degrades with size.  See
+        :mod:`difflow.planning.health`.
+
+        Args:
+            decisions: Operating point to diagnose.  Defaults to the
+                network's nominal start, which is where ``solve`` begins.
+            radius: Trust-region radius to reason about.  Defaults to the
+                planner's own initial radius.
+            include_lp: Also check the assembled LP's coefficient scaling.
+
+        Returns:
+            A :class:`~difflow.planning.health.HealthReport`.
+
+        Example:
+            >>> planner.check_health().warn()
+            >>> print(planner.check_health().summary())
+        """
+        from difflow.planning.health import check_lp_scaling, check_network_health
+
+        r = float(self.options.radius if radius is None else radius)
+        net = self.evaluation_network
+        start = (net.decision_start() if decisions is None
+                 else net.decision_array(decisions))
+        report = check_network_health(net, decisions=start, theta=self.theta,
+                                      radius=r)
+        if include_lp:
+            state = net.evaluate(start, self.theta)
+            lp = self.build_lp(self.linearize(state), state, r)
+            lp_report = check_lp_scaling(lp)
+            report.findings.extend(lp_report.findings)
+            report.findings.sort(key=lambda f: f.severity != "error")
+            report.thresholds.update(lp_report.thresholds)
+        return report
 
     def _decisions_from_lp(self, sol: LPSolution) -> np.ndarray:
         """Read the free decisions out of an LP solution."""

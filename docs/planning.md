@@ -17,13 +17,14 @@ is for unit operations.
 5. [Scoring: realised violation, not predicted](#scoring-realised-violation-not-predicted)
 6. [Bang-bang levers and vertex seeding](#bang-bang-levers-and-vertex-seeding)
 7. [Phase boundaries](#phase-boundaries)
-8. [Sensitivity of the plan](#sensitivity-of-the-plan)
-9. [Modifier adaptation](#modifier-adaptation)
-10. [Coefficient covariance and back-off](#coefficient-covariance-and-back-off)
-11. [Piecewise-linear blocks and MILP](#piecewise-linear-blocks-and-milp)
-12. [Emitting Pyomo](#emitting-pyomo)
-13. [What this module is not](#what-this-module-is-not)
-14. [API summary](#api-summary)
+8. [Large models: what degrades and what does not](#large-models-what-degrades-and-what-does-not)
+9. [Sensitivity of the plan](#sensitivity-of-the-plan)
+10. [Modifier adaptation](#modifier-adaptation)
+11. [Coefficient covariance and back-off](#coefficient-covariance-and-back-off)
+12. [Piecewise-linear blocks and MILP](#piecewise-linear-blocks-and-milp)
+13. [Emitting Pyomo](#emitting-pyomo)
+14. [What this module is not](#what-this-module-is-not)
+15. [API summary](#api-summary)
 
 ---
 
@@ -259,6 +260,145 @@ re-centre inside one regime.
 
 The messages are also collected on `res.phase_warnings`.
 
+## Large models: what degrades and what does not
+
+> **Does a very large flowsheet suffer "gradient collapse" — the vanishing-gradient
+> failure familiar from RNNs and LSTMs?**
+> No, and the reason is worth being precise about, because three *other* things
+> do degrade with size and they have different remedies.
+
+### The non-problem: small absolute sensitivities
+
+Compose enough units and the sensitivity of a downstream product to an upstream
+lever becomes numerically tiny. That is almost always **physics, not numerical
+loss**. Run a chain of first-order stages deep enough to drive the outlet to
+`1e-61` and the *relative* sensitivity is still exact:
+
+| depth | `y0` | `dy/dk_1` | `dln y/dln k_1` | exact |
+|---|---|---|---|---|
+| 10  | 9.766e-04 | -4.883e-04 | -0.500000 | -0.5 |
+| 100 | 7.889e-31 | -3.944e-31 | -0.500000 | -0.5 |
+| 200 | 6.223e-61 | -3.112e-61 | -0.500000 | -0.5 |
+
+Nothing was lost: `y` itself is `1e-61`. A lever twenty units upstream of a
+product genuinely has little absolute leverage on it, and an LP that gives it
+little weight is right. The LSTM analogy breaks on three counts — `difflow`
+enables `float64` at import (~300 orders of headroom, not `float32`'s 38), a
+flowsheet is tens of units deep rather than thousands of timesteps, and the
+trust-region loop re-linearises every cycle instead of accumulating a product
+over many gradient steps.
+
+`composed_sensitivity` measures this directly, by **one AD pass over the
+composed network** rather than by multiplying per-block Jacobians together, so
+it does not itself suffer the rounding it is measuring:
+
+```python
+from difflow.planning import composed_sensitivity
+
+S, outputs, decisions = composed_sensitivity(net)
+# S[i, j] = fractional change in output i per full-bound-range move of decision j
+```
+
+An *exactly* zero entry is the meaningful one — it says no path from that
+decision to that output survived the linearisation.
+
+### Why the block decomposition helps
+
+Linearising the whole plant as one `Block` does form the deep chain-rule
+product, and its entries do collapse. Keeping it as linked blocks does not.
+Measured on a chain of identical stages in mixed engineering units:
+
+| depth | `cond(A_eq)` | worst block `cond(J)` | monolithic `min \|J\|` |
+|---|---|---|---|
+| 4   | 4.58e+02 | 319.6 | 1.43e+01 |
+| 16  | 8.48e+02 | 319.6 | 4.61e-02 |
+| 32  | 9.04e+02 | 319.6 | 2.20e-05 |
+| 64  | 9.19e+02 | 319.6 | 5.00e-12 |
+| 128 | 9.23e+02 | 319.6 | 2.58e-25 |
+
+The LP's condition number **saturates** while the monolithic Jacobian collapses
+to `1e-25`. Each block is linearised where the *network* puts it, so its
+entries stay `O(1)` in its own units no matter how deep it sits; composition
+lives in the link equality rows, where the solver eliminates with pivoting
+rather than you forming a 128-term floating-point product. This is the
+practical payoff of the rule in `Network` that inter-block recycles are
+rejected and loops belong *inside* a block — but note the tension: a plant-wide
+recycle forces you toward a bigger block, which is the column of that table
+where sensitivities do collapse.
+
+### The three things that actually degrade
+
+`check_delta_health` reports all three. Nothing here raises during a solve; the
+point is to make the failure visible before it is silently planned around.
+
+```python
+from difflow.planning import check_delta_health
+
+report = check_delta_health(net)          # or a single Block
+print(report.summary())
+report.raise_on_error()                   # non-finite deltas only
+report.warn()                             # as DeltaHealthWarning
+```
+
+or, including the assembled program's coefficient scaling:
+
+```python
+planner.check_health().summary()
+```
+
+**1. Dead levers — the one genuine analogue of lost information.** Every
+`jnp.clip`, `jnp.minimum` and `jnp.where` sitting on an active spec contributes
+an *exactly* zero column to `J`. The LP then correctly concludes the lever does
+nothing and never moves it — not because it does not matter, but because the
+linearisation cannot see that it does. This scales with the number of active
+quality specs, which is to say it scales with model size.
+
+```text
+[warning] dead_lever: blend.butane: delta column is structurally zero (max
+scaled sensitivity 0.000e+00); the LP will never move this lever. The lever is
+interior, so the zero comes from a saturated expression downstream of it — a
+clip, minimum or where on an active spec — rather than from the bound.
+Re-centre inside the smooth region, or model the saturation explicitly with a
+piecewise block rather than letting the clip hide it.
+```
+
+Companion findings: `dead_output` (an output that responds to nothing, so a
+price or spec on it is being applied to a constant) and `no_influence` (a
+decision that reaches no output anywhere in the network).
+
+**2. Amplification, not attenuation.** A tear solve differentiated implicitly
+returns `(I - A)^-1`, so a recycle of loop gain `g` multiplies sensitivities by
+`1/(1 - g)`:
+
+| loop gain | `x*` | `dx/dfeed` |
+|---|---|---|
+| 0.900 | 9.1743  | 9.1743  |
+| 0.990 | 50.2513 | 50.2513 |
+| 0.999 | 90.9918 | 90.9918 |
+
+Recycle-to-extinction loops push `g` toward one, the delta vectors blow up, and
+the trust region has to shrink to stay honest. **Large flowsheets fail by
+exploding sensitivities far more often than by vanishing ones.** The
+`amplifying` finding fires when a full trust-region step is predicted to change
+an output by more than `AMPLIFY_TOL` times its own value, and distinguishes a
+near-unity loop gain from the other common cause — bounds set far wider than
+the range the lever is actually planned over.
+
+**3. Scale spread.** Mixed engineering units — ppm against kbbl/d against
+$/bbl — put entries spanning many orders of magnitude in one constraint matrix.
+This is the mundane failure that actually stops a large planning model, and it
+is a *units* problem, not a gradient problem. `check_lp_scaling` flags both the
+whole matrix and individual rows whose small coefficients sit below the
+solver's effective precision relative to their large ones. Nondimensionalise
+the levers before blaming the gradients.
+
+Every diagnostic works on the **scaled** Jacobian,
+`Js[i, j] = J[i, j] * u_scale[j] / y_scale[i]` — the fractional change in output
+`i` per full-bound-range move of input `j`. Comparing raw `J` entries across a
+model in mixed units compares unit conversions. Linked inputs are scaled by
+their value at the operating point instead, because the trust region never
+steps them: the LP's link row ties them to the upstream output.
+
 ## Sensitivity of the plan
 
 Because the blocks are differentiable, the planner returns the sensitivity of
@@ -427,6 +567,11 @@ you.
 | `check_delta_vectors` | Verify AD deltas against central differences |
 | `choose_ad_mode` | `jacrev` vs `jacfwd`, chosen by shape |
 | `PhaseBoundaryWarning` | Raised when a proposal crosses a phase boundary |
+| `check_delta_health` | Dead levers, recycle amplification, ill-conditioning |
+| `check_lp_scaling` | Constraint-matrix scale spread (the units problem) |
+| `composed_sensitivity` | End-to-end relative sensitivity, by one AD pass |
+| `scaled_jacobian` | Delta vectors made dimensionless for comparison |
+| `HealthReport`, `Finding` | Diagnostic results; `.summary()`, `.warn()` |
 | `plan_sensitivity` | `d(plan)/d(price)`, `d(plan)/d(parameter)` |
 | `price_switch_point` | The finite price at which a bang-bang lever flips |
 | `Modifiers`, `run_modifier_adaptation` | Zeroth- and first-order plant corrections |

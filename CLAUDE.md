@@ -302,6 +302,17 @@ Invariants encoded in the module (do not weaken them):
 - Out of scope by design: pooling/blending bilinearity, assay libraries,
   blending correlations, scheduling. Do not add them.
 
+Scaling to large flowsheets (`difflow.planning.health`): a small *absolute*
+composed sensitivity is physics, not a vanishing gradient — difflow runs in
+float64 and relative sensitivity survives arbitrary depth. What does degrade
+with size is (1) dead levers, where a `clip`/`where`/`minimum` on an active
+spec gives an exactly-zero delta column so the LP never moves that lever,
+(2) `(I - A)^-1` amplification from recycle loop gains near one, and (3)
+constraint-matrix scale spread from mixed units. `check_delta_health(block or
+network)` and `DeltaBasePlanner.check_health()` report all three; they never
+raise during a solve. Keep blocks small — linearising a whole plant as one
+block *does* form the deep chain-rule product and its entries do collapse.
+
 Reference model: `difflow.planning.chain.two_plant_chain()`. Docs: `docs/planning.md`.
 Example: `examples/30_delta_base_planning.ipynb`. Tests: `tests/test_planning.py`.
 
