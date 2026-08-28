@@ -176,6 +176,22 @@ class Turboexpander:
     (common in cryogenic service) is handled correctly.
     """
 
+    symbol = "EXP"
+    equations = [
+        r"S(T_{\mathrm{isen}}, P_{\mathrm{out}}) = S(T_{\mathrm{in}}, P_{\mathrm{in}})",
+        r"H_{\mathrm{out}} = H_{\mathrm{in}} + \eta\,(H_{\mathrm{isen}} - H_{\mathrm{in}})",
+        r"\dot{W} = \dot{n}\,(H_{\mathrm{in}} - H_{\mathrm{out}})",
+    ]
+    assumptions = [
+        "Adiabatic, steady state; kinetic and potential energy neglected.",
+        "Isentropic efficiency applied to the enthalpy drop.",
+        "Real-fluid properties from the supplied cubic EOS.",
+    ]
+    references = [
+        "Smith, Van Ness, Abbott. Introduction to Chemical Engineering Thermodynamics, 7e, Ch. 6-7.",
+        "Moran, Shapiro, Boettner, Bailey. Fundamentals of Engineering Thermodynamics, 8e, Ch. 6-9.",
+    ]
+
     def __init__(self, params: TurboexpanderParams, thermo: CubicThermo):
         self.params = params
         self.thermo = thermo
@@ -229,6 +245,22 @@ class Compressor:
     shaft work is ``W = H_out - H_in`` (positive, in W).
     """
 
+    symbol = "COMP"
+    equations = [
+        r"S(T_{\mathrm{isen}}, P_{\mathrm{out}}) = S(T_{\mathrm{in}}, P_{\mathrm{in}})",
+        r"H_{\mathrm{out}} = H_{\mathrm{in}} + \frac{H_{\mathrm{isen}} - H_{\mathrm{in}}}{\eta}",
+        r"\dot{W} = \dot{n}\,(H_{\mathrm{out}} - H_{\mathrm{in}})",
+    ]
+    assumptions = [
+        "Adiabatic, steady state; kinetic and potential energy neglected.",
+        "Isentropic efficiency inflates the reversible enthalpy rise.",
+        "Real-fluid properties from the supplied cubic EOS.",
+    ]
+    references = [
+        "Smith, Van Ness, Abbott. Introduction to Chemical Engineering Thermodynamics, 7e, Ch. 6-7.",
+        "Moran, Shapiro, Boettner, Bailey. Fundamentals of Engineering Thermodynamics, 8e, Ch. 6-9.",
+    ]
+
     def __init__(self, params: CompressorParams, thermo: CubicThermo):
         self.params = params
         self.thermo = thermo
@@ -277,6 +309,20 @@ class JTValve:
     ideal-K model misses entirely.
     """
 
+    symbol = "JT"
+    equations = [
+        r"H(T_{\mathrm{out}}, P_{\mathrm{out}}) = H(T_{\mathrm{in}}, P_{\mathrm{in}}) \qquad \text{(isenthalpic)}",
+        r"\mu_{\mathrm{JT}} = \left(\frac{\partial T}{\partial P}\right)_H",
+    ]
+    assumptions = [
+        "Adiabatic throttling with no shaft work.",
+        "Kinetic and potential energy changes neglected.",
+        "Real-fluid enthalpy from the supplied cubic EOS, so the Joule-Thomson temperature change is captured.",
+    ]
+    references = [
+        "Smith, Van Ness, Abbott. Introduction to Chemical Engineering Thermodynamics, 7e, Ch. 6-7.",
+    ]
+
     def __init__(self, params: JTValveParams, thermo: CubicThermo):
         self.params = params
         self.thermo = thermo
@@ -324,6 +370,20 @@ class ComponentSeparator:
 
     Returns ``(residue, product, info)``.
     """
+
+    symbol = "CSEP"
+    equations = [
+        r"F_i^{\mathrm{prod}} = r_i\, F_i^{\mathrm{in}}",
+        r"F_i^{\mathrm{res}} = (1 - r_i)\, F_i^{\mathrm{in}}",
+    ]
+    assumptions = [
+        "Specified per-component recovery; no equilibrium is solved.",
+        "A black-box surrogate for a separation train, not a physical model.",
+        "Outlet temperature and pressure inherited from the inlet.",
+    ]
+    references = [
+        "Seader, Henley, Roper. Separation Process Principles, 3e, Ch. 8 (liquid-liquid extraction).",
+    ]
 
     def __init__(self, params: ComponentSeparatorParams, thermo: CubicThermo):
         self.params = params
