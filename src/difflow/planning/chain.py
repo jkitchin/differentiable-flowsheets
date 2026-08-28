@@ -51,6 +51,18 @@ SPECIES = ("methane", "ethane", "propane", "n_butane")
 #: Nominal inlet gas, mol/s.
 FEED = {"methane": 75.0, "ethane": 12.0, "propane": 8.0, "n_butane": 5.0}
 
+#: Units of every block variable, keyed by bare name.  Reported rather
+#: than enforced --- difflow carries no unit system --- but a planning
+#: table without units is unreadable, and a diagram without them is
+#: worse.
+UNITS: dict[str, str] = {
+    "ethane_recovery": "-", "T_coldbox": "K", "split": "-",
+    "P_expander": "Pa", "NGL_C2": "mol/s", "NGL_C3plus": "mol/s",
+    "residue_F": "mol/s", "E_refrig": "MW", "T_colfeed": "K",
+    "fuel_F": "mol/s", "alloc": "-", "Power": "MW", "CO2": "kg/s",
+    "gas_sold": "mol/s",
+}
+
 #: Reference temperature for the refrigeration duty (K).
 T_REFRIG_REF = 300.0
 

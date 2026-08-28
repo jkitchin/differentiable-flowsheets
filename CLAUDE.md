@@ -302,6 +302,14 @@ Invariants encoded in the module (do not weaken them):
 - Out of scope by design: pooling/blending bilinearity, assay libraries,
   blending correlations, scheduling. Do not add them.
 
+Reporting and drawings (use these rather than re-deriving them in a notebook):
+- `planner.describe()` states the problem — objective, decisions, bounds, links, specs.
+- `lp_model.as_text()` writes the assembled LP out row by row.
+- `difflow.planning.diagram`: `draw_chain` (process flow diagram of the reference
+  chain), `draw_planning_network` (any network as the LP holds it),
+  `draw_delta_vectors`, `draw_taylor_model`, `draw_trust_region`. matplotlib is
+  imported inside the functions.
+
 Reference model: `difflow.planning.chain.two_plant_chain()`. Docs: `docs/planning.md`.
 Example: `examples/30_delta_base_planning.ipynb`. Tests: `tests/test_planning.py`.
 

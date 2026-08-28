@@ -287,6 +287,99 @@ class DeltaBasePlanner:
             "state": state,
         }
 
+    def describe(self, u0=None, width: int = 78) -> str:
+        """State the planning problem in words and symbols.
+
+        Three questions come before any result: what is being planned,
+        what may be changed to get it, and what may not be violated on
+        the way.  This answers them from the planner itself, so the
+        statement cannot drift away from the model that is solved.
+
+        Args:
+            u0: Operating point to report as the starting decisions;
+                the network's nominal start when omitted.
+            width: Wrap width for the objective.
+
+        Returns:
+            The problem statement as text.
+
+        Example:
+            >>> print(planner.describe())            # doctest: +SKIP
+        """
+        import textwrap
+
+        net = self.network
+        names = net.decision_names
+        lb, ub = (np.asarray(a, dtype=float) for a in net.decision_bounds())
+        start = np.asarray(net.decision_array(
+            net.decision_start() if u0 is None else u0), dtype=float)
+        radius = self.options.radius
+
+        terms = []
+        for var, price in self.prices.items():
+            sign = "-" if price < 0 else "+"
+            terms.append(f"{sign} {abs(float(price)):g} {var}")
+        head = terms[0][2:] if terms and terms[0].startswith("+ ") else ""
+        body = " ".join([head] + terms[1:]) if terms else "0"
+
+        sense = "maximise" if self.sense == "max" else "minimise"
+        lines = [f"Planning problem: {sense} the priced objective", ""]
+        lines += ["    " + row for row in
+                  textwrap.wrap(body, width=width - 4) or ["0"]]
+        lines += ["",
+                  f"  by choosing {len(names)} decision"
+                  f"{'' if len(names) == 1 else 's'} "
+                  f"(a trust region lets each move {radius:g} of its bound "
+                  "range per cycle):"]
+        for i, name in enumerate(names):
+            step = radius * (ub[i] - lb[i])
+            window = f"[{lb[i]:g}, {ub[i]:g}]"
+            lines.append(f"    {name:<26s} start {start[i]:>10.4g}   "
+                         f"in {window:<20s} step +/- {step:.3g}")
+
+        linked = [l for l in net.links]
+        outputs = net.output_names
+        lines += ["",
+                  f"  everything else follows from the blocks "
+                  f"({len(outputs)} outputs, "
+                  f"{len(linked)} link{'' if len(linked) == 1 else 's'}):"]
+        for link in linked:
+            lines.append(f"    {link.target:<26s} = {link.source}"
+                         "   (not a free decision)")
+        constrained = {k for s in self.specs for k in s.coeffs}
+        unpriced = [y + (" (constrained)" if y in constrained else "")
+                    for y in outputs
+                    if y not in self.prices
+                    and not any(l.source == y for l in linked)]
+        if unpriced:
+            lines.append(f"    not priced: {', '.join(unpriced)}")
+
+        lines += ["", "  subject to:"]
+        if not self.specs:
+            lines.append("    no specs; only the decision bounds above")
+        for spec in self.specs:
+            lhs = (next(iter(spec.coeffs)) if len(spec.coeffs) == 1
+                   else " + ".join(f"{c:g} {k}" for k, c in spec.coeffs.items()))
+            pen = self.penalty if spec.penalty is None else spec.penalty
+            how = (f"elastic, {abs(float(pen)):g} per unit of violation"
+                   if spec.elastic else "hard")
+            back = (f", back-off {spec.backoff:g}" if spec.backoff else "")
+            lines.append(f"    {spec.name:<16s} {lhs} {spec.op} "
+                         f"{spec.rhs:g}   ({how}{back})")
+        lines += [
+            "    the decision bounds above, in every cycle",
+            "",
+            "  Violation is scored by evaluating the nonlinear blocks at the "
+            "proposal,",
+            "  never by reading the LP's own slacks, and a proposal is "
+            "accepted only",
+            "  when those blocks confirm the improvement the LP predicted."
+            if self.accept_test else
+            "  WARNING: accept_test=False -- proposals are taken on the LP's "
+            "word alone.",
+        ]
+        return "\n".join(lines)
+
     # -- linearisation ---------------------------------------------------
 
     def linearize(self, state: NetworkState) -> dict[str, Linearization]:

@@ -785,8 +785,12 @@ class TestScaling:
     def test_table_formats(self):
         rows = scaling_study(self._make, [5], repeats=1, warmup=1)
         text = format_scaling_table(rows)
-        assert text.startswith("| n |")
+        # Markdown by default, whether tabulate is installed or not.
+        assert text.lstrip().startswith("|")
         assert "speedup" in text
+        header, rule = text.splitlines()[:2]
+        assert "n" in header and set(rule) <= set("|- :")
+        assert format_scaling_table(rows, tablefmt="simple").count("|") == 0
 
 
 # --------------------------------------------------------------------------
@@ -829,3 +833,55 @@ class TestChain:
         result = chain_problem.planner(radius=0.25).solve()
         assert result.delta_vectors["ngl"].shape == (5, 4)
         assert result.delta_vectors["power"].shape == (3, 2)
+
+
+# --------------------------------------------------------------------------
+# Formal statements: the problem, and the LP that gets solved
+# --------------------------------------------------------------------------
+
+class TestProblemStatement:
+    """`describe` and `as_text` must state the model that is solved.
+
+    A statement that can drift away from the code is worse than none,
+    so these check that every price, decision, link and spec in the
+    planner reaches the text, not merely that some text comes back.
+    """
+
+    def test_describe_names_every_price_decision_and_spec(self, chain_problem):
+        planner = chain_problem.planner(radius=0.25)
+        text = planner.describe()
+        for variable in planner.prices:
+            assert variable in text, f"{variable} missing from the statement"
+        for decision in planner.network.decision_names:
+            assert decision in text
+        for spec in planner.specs:
+            assert spec.name in text
+        assert "power.fuel_F" in text and "ngl.residue_F" in text  # the link
+        assert "maximise" in text
+        # bounds and the trust-region step are what "may be changed" means
+        assert "[0.3, 0.98]" in text and "0.25" in text
+
+    def test_describe_flags_a_disabled_acceptance_test(self, chain_problem):
+        planner = chain_problem.planner(radius=0.25, accept_test=False)
+        assert "WARNING" in planner.describe()
+
+    def test_lp_as_text_covers_every_row_and_column(self, chain_problem):
+        result = chain_problem.planner(radius=0.25).solve()
+        model = result.lp_model
+        text = model.as_text()
+        for column in model.columns:
+            assert column in text
+        for row in model.eq_names + model.ub_names:
+            assert row in text
+        assert "link[ngl.residue_F->power.fuel_F]" in text
+        assert f"{model.n_cols} columns" in text
+        # the row is written with its own output variable leading
+        line = next(l for l in text.splitlines()
+                    if l.strip().startswith("model[ngl.NGL_C2]"))
+        assert line.split("]")[1].strip().startswith("ngl.NGL_C2")
+
+    def test_lp_as_text_truncates_on_request(self, chain_problem):
+        result = chain_problem.planner(radius=0.25).solve()
+        text = result.lp_model.as_text(max_rows=2)
+        assert "more equality rows" in text
+        assert "more columns" in text

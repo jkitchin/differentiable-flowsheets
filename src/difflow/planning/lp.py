@@ -192,6 +192,97 @@ class LPModel:
         except ValueError:
             raise KeyError(f"{name!r} is not a column of this LP")
 
+    def as_text(self, precision: int = 4, max_rows: int | None = None,
+                max_terms: int = 8) -> str:
+        """Write the program out algebraically, row by row.
+
+        The LP is the artefact a planner audits, so it is worth being
+        able to read it rather than inspecting array shapes.  Rows are
+        labelled by the part of the model they came from: ``model[...]``
+        rows are the delta vectors, ``link[...]`` rows the network
+        connectivity, ``spec[...]`` rows the constraints, and the
+        column bounds carry the physical limits already intersected
+        with the trust region.
+
+        Args:
+            precision: Significant figures on the coefficients.
+            max_rows: Print at most this many rows of each kind.
+            max_terms: Elide a row longer than this many terms.
+
+        Returns:
+            The program as text.
+
+        Example:
+            >>> print(result.lp_model.as_text())     # doctest: +SKIP
+        """
+        def _terms(coeffs, names, lead=None):
+            order = sorted(range(len(names)),
+                           key=lambda k: (names[k] != lead, k))
+            parts = []
+            for value, name in ((coeffs[k], names[k]) for k in order):
+                if value == 0.0:
+                    continue
+                sign = "-" if value < 0 else "+"
+                mag = f"{abs(value):.{precision}g}"
+                parts.append(f"{sign} {'' if mag == '1' else mag + ' '}{name}")
+            if not parts:
+                return "0"
+            if len(parts) > max_terms:
+                parts = parts[:max_terms] + [f"+ ... ({len(parts) - max_terms}"
+                                             " more terms)"]
+            head = parts[0][2:] if parts[0].startswith("+ ") else parts[0]
+            return " ".join([head] + parts[1:])
+
+        def _rows(A, b, names, op, kind):
+            out = []
+            keep = list(range(len(b))) if max_rows is None else \
+                list(range(min(len(b), max_rows)))
+            for i in keep:
+                label = names[i] if i < len(names) else f"{kind}[{i}]"
+                lead = label[label.index("[") + 1:-1] if "[" in label else None
+                out.append(f"  {label:<34s} "
+                           f"{_terms(A[i], self.columns, lead)} "
+                           f"{op} {b[i]:.{precision}g}")
+            if max_rows is not None and len(b) > max_rows:
+                out.append(f"  ... and {len(b) - max_rows} more {kind} rows")
+            return out
+
+        sense = ("minimise" if self.sense > 0 else
+                 "maximise  (written below as the minimisation actually "
+                 "solved)")
+        lines = [f"{sense}",
+                 f"  min  {_terms(self.c, self.columns)}"]
+        if self.objective_offset:
+            lines.append(f"       (plus a constant "
+                         f"{self.objective_offset:.{precision}g})")
+        lines.append("subject to")
+        lines += _rows(self.A_eq, self.b_eq, self.eq_names, "==", "equality")
+        if self.A_ub.size:
+            lines += _rows(self.A_ub, self.b_ub, self.ub_names, "<=",
+                           "inequality")
+        lines.append("bounds  (physical limits intersected with the trust "
+                     "region)")
+        cols = (self.columns if max_rows is None else self.columns[:max_rows])
+        for j, name in enumerate(cols):
+            lo = "-inf" if not np.isfinite(self.lb[j]) else \
+                f"{self.lb[j]:.{precision}g}"
+            hi = "+inf" if not np.isfinite(self.ub[j]) else \
+                f"{self.ub[j]:.{precision}g}"
+            kind = " (integer)" if j in self.integer_cols else ""
+            lines.append(f"  {name:<34s} in [{lo}, {hi}]{kind}")
+        if max_rows is not None and len(self.columns) > max_rows:
+            lines.append(f"  ... and {len(self.columns) - max_rows} more "
+                         "columns")
+        def _n(count, noun):
+            return f"{count} {noun}{'' if count == 1 else 's'}"
+
+        lines.append(", ".join([_n(self.n_cols, "column"),
+                                _n(len(self.b_eq), "equality row"),
+                                _n(len(self.b_ub), "inequality row"),
+                                _n(len(self.integer_cols),
+                                   "integer column")]))
+        return "\n".join(lines)
+
     def solve(self, solver: str = "auto") -> "LPSolution":
         """Solve with HiGHS via SciPy.
 
