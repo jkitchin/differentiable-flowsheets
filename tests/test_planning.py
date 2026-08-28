@@ -24,7 +24,6 @@ jax.config.update("jax_enable_x64", True)
 
 import optimistix as optx
 
-from difflow.planning import chain as chain_mod
 from difflow.planning import (
     AMPLIFY_TOL,
     SPREAD_TOL,
