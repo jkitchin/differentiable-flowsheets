@@ -118,6 +118,20 @@ class GasCompressor:
     The required shaft work is ``W = H_out - H_in`` (positive, in W).
     """
 
+    symbol = "GCOMP"
+    equations = [
+        r"S(T_{\mathrm{isen}}, r_p P_{\mathrm{in}}) = S(T_{\mathrm{in}}, P_{\mathrm{in}})",
+        r"H_{\mathrm{out}} = H_{\mathrm{in}} + \frac{H_{\mathrm{isen}} - H_{\mathrm{in}}}{\eta}",
+    ]
+    assumptions = [
+        "Adiabatic, steady state; ideal-gas properties.",
+        "Isentropic efficiency inflates the reversible enthalpy rise.",
+        "Fixed pressure ratio.",
+    ]
+    references = [
+        "Moran, Shapiro, Boettner, Bailey. Fundamentals of Engineering Thermodynamics, 8e, Ch. 6-9.",
+    ]
+
     def __init__(self, params: GasCompressorParams, thermo: IdealGasThermo):
         self.params = params
         self.thermo = thermo
@@ -168,6 +182,19 @@ class GasTurbine:
 
     The extracted shaft work is ``W = H_in - H_out`` (positive, in W).
     """
+
+    symbol = "GT"
+    equations = [
+        r"S(T_{\mathrm{isen}}, P_{\mathrm{out}}) = S(T_{\mathrm{in}}, P_{\mathrm{in}})",
+        r"H_{\mathrm{out}} = H_{\mathrm{in}} - \eta\,(H_{\mathrm{in}} - H_{\mathrm{isen}})",
+    ]
+    assumptions = [
+        "Adiabatic, steady state; ideal-gas properties.",
+        "Isentropic efficiency applied to the enthalpy drop.",
+    ]
+    references = [
+        "Moran, Shapiro, Boettner, Bailey. Fundamentals of Engineering Thermodynamics, 8e, Ch. 6-9.",
+    ]
 
     def __init__(self, params: GasTurbineParams, thermo: IdealGasThermo):
         self.params = params
@@ -257,6 +284,21 @@ class Combustor:
     Returns ``(product_stream, info)`` where ``info`` carries ``T_out``, the
     ``air_scale`` applied, the ``o2_demand`` and the heat released ``Q``.
     """
+
+    symbol = "CMB"
+    equations = [
+        r"\mathrm{C}_x\mathrm{H}_y + \left(x + \tfrac{y}{4}\right)\mathrm{O}_2 \rightarrow x\,\mathrm{CO}_2 + \tfrac{y}{2}\,\mathrm{H}_2\mathrm{O}",
+        r"\sum_i F_i^{\mathrm{in}} H_i(T_{\mathrm{in}}) = \sum_i F_i^{\mathrm{out}} H_i(T_{\mathrm{out}}) \qquad \text{(adiabatic)}",
+    ]
+    assumptions = [
+        "Complete combustion to CO2 and H2O; no dissociation or NOx.",
+        "Ideal-gas enthalpies referenced to 298.15 K.",
+        "Adiabatic, or a specified outlet temperature.",
+    ]
+    references = [
+        "Turns, S.R. An Introduction to Combustion, 3e, Ch. 2 and 7.",
+        "Moran, Shapiro, Boettner, Bailey. Fundamentals of Engineering Thermodynamics, 8e, Ch. 6-9.",
+    ]
 
     def __init__(self, params: CombustorParams, thermo: IdealGasThermo):
         self.params = params

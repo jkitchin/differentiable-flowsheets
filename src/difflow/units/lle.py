@@ -264,6 +264,21 @@ class LLEEquilibrium:
         nrtl_params: NRTL parameters (optional)
         uniquac_params: UNIQUAC parameters (optional)
     """
+
+    symbol = "LLE"
+    equations = [
+        r"K_i = \frac{y_i^{\mathrm{org}}}{x_i^{\mathrm{aq}}} \qquad \text{(distribution coefficient)}",
+        r"F z_i = E\, y_i^{\mathrm{org}} + R\, x_i^{\mathrm{aq}} \qquad \text{(component balance)}",
+        r"\gamma_i^{\mathrm{aq}} x_i^{\mathrm{aq}} = \gamma_i^{\mathrm{org}} y_i^{\mathrm{org}} \qquad \text{(isoactivity, NRTL/UNIQUAC)}",
+    ]
+    assumptions = [
+        "Two liquid phases at equilibrium, completely separated.",
+        "Either constant distribution coefficients or an activity-coefficient model.",
+        "Isothermal; no phase change other than partitioning.",
+    ]
+    references = [
+        "Seader, Henley, Roper. Separation Process Principles, 3e, Ch. 8 (liquid-liquid extraction).",
+    ]
     solutes: list[str]
     aqueous_carrier: str
     organic_carrier: str

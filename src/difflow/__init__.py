@@ -230,6 +230,15 @@ from difflow import estimation
 # Data reconciliation submodule
 from difflow import reconciliation
 
+# Operation catalog
+from difflow.catalog import (
+    OperationSchema,
+    ParameterSpec,
+    PortSpec,
+    catalog,
+    describe_operation,
+)
+
 # Economics submodule
 from difflow import economics
 
@@ -476,6 +485,12 @@ __all__ = [
     "estimation",
     # Data reconciliation
     "reconciliation",
+    # Operation catalog
+    "catalog",
+    "describe_operation",
+    "OperationSchema",
+    "ParameterSpec",
+    "PortSpec",
     # Economics
     "economics",
     # Visualization (optional)
@@ -511,3 +526,17 @@ __all__ = [
     "DAEResult",
     "DynamicFlashDrum",
 ]
+
+
+# ---------------------------------------------------------------------
+# Populate the operation registry with the core units.
+#
+# The registry was previously filled only by plugins, so it held the
+# bio, carbon-capture, gas and REE units but none of the reactors,
+# separators, columns or exchangers. This runs last because it reads
+# __all__ to discover them.
+# ---------------------------------------------------------------------
+
+from difflow.catalog import register_core_operations as _register_core_operations
+
+_register_core_operations()

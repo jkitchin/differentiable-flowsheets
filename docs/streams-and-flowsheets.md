@@ -458,6 +458,47 @@ protein_a = OperationRegistry.get('protein_a_chromatography')
 
 ---
 
+## Operation Catalog
+
+The registry answers *what units exist*. `difflow.catalog` answers *what you can do with one*: how many streams go in and out, what parameters it takes, which are required, and which hold code rather than data.
+
+```python
+from difflow import catalog, describe_operation
+
+spec = describe_operation("Flash")
+spec.ports.inlets          # ['inlet']
+spec.ports.n_outlets       # 2
+spec.required_parameters() # ['T']
+spec.equations             # LaTeX governing equations
+spec.to_dict()             # JSON-serializable, for a UI or code generator
+```
+
+`catalog()` returns a schema for every registered operation, optionally filtered:
+
+```python
+reactors = catalog(category="reactors")
+```
+
+All of it is **derived by introspection**, not from a second hand-maintained table: parameters come from `dataclasses.fields` of the unit's `Params` class, ports from the `__call__` signature, and equations from the `equations` class attribute the units already carry. The catalog therefore cannot drift from the code, and an operation whose signature is unannotated is reported as *unknown* rather than guessed at — `Splitter` returns a bare `tuple`, so its `n_outlets` is `None`.
+
+### Which operations are declarative
+
+`is_declarative` marks the operations whose parameters are all data, so a form or a JSON file could supply them:
+
+```python
+[name for name, spec in catalog().items() if not spec.is_declarative]
+```
+
+The handful that are not are the reactors, and always because of the rate law — see [Declarative Kinetics](unit-operations-chemical.md) for building that from data instead.
+
+### Core units and the registry
+
+The core reactors, separators, columns and exchangers are registered when `difflow` is imported, so they appear in `catalog()` alongside the plugin units with no `load_plugins()` call needed.
+
+One name is deliberately not the class name: `difflow_gas` registers a `Compressor`, and plugins load *after* the core, so the EOS-consistent `difflow.Compressor` is catalogued as **`EOSCompressor`**. Registering both under the bare name would silently drop one.
+
+---
+
 ## Best Practices
 
 ### Stream Naming Conventions

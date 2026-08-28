@@ -38,6 +38,7 @@ difflow/
 │   │   ├── database.py    # Species property database
 │   │   ├── flowsheet.py   # Flowsheet with recycle solving
 │   │   ├── uncertainty.py # Sensitivity & UQ
+│   ├── catalog.py     # Machine-readable schema of every unit operation
 │   ├── reconciliation/ # Data reconciliation, gross error detection, observability
 │   │   ├── params_mixin.py # ParamsMixin base class for Params dataclasses
 │   │   ├── units/         # Steady-state unit operations
