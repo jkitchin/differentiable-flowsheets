@@ -313,6 +313,14 @@ network)` and `DeltaBasePlanner.check_health()` report all three; they never
 raise during a solve. Keep blocks small — linearising a whole plant as one
 block *does* form the deep chain-rule product and its entries do collapse.
 
+Reporting and drawings (use these rather than re-deriving them in a notebook):
+- `planner.describe()` states the problem — objective, decisions, bounds, links, specs.
+- `lp_model.as_text()` writes the assembled LP out row by row.
+- `difflow.planning.diagram`: `draw_chain` (process flow diagram of the reference
+  chain), `draw_planning_network` (any network as the LP holds it),
+  `draw_delta_vectors`, `draw_taylor_model`, `draw_trust_region`. matplotlib is
+  imported inside the functions.
+
 Reference model: `difflow.planning.chain.two_plant_chain()`. Docs: `docs/planning.md`.
 Example: `examples/30_delta_base_planning.ipynb`. Tests: `tests/test_planning.py`.
 

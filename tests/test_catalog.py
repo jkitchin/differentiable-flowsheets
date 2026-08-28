@@ -177,6 +177,54 @@ class TestParameters:
 
 
 # =============================================================================
+# Buildability
+# =============================================================================
+
+
+class TestBuildability:
+    """What a form --- difflow.gui's palette --- can construct unaided."""
+
+    def test_constructor_extras_are_reported(self, cat):
+        assert cat["Flash"].constructor_extras == ["thermo"]
+        assert cat["Mixer"].constructor_extras == ["species_order"]
+        assert cat["Heater"].constructor_extras == []
+
+    def test_an_object_argument_blocks_building(self, cat):
+        assert not cat["Flash"].is_buildable, "a thermo is not data"
+
+    def test_a_required_callable_blocks_building(self, cat):
+        assert not cat["CSTR"].is_buildable, "a rate law is not data"
+
+    def test_an_optional_callable_does_not_block_building(self, cat):
+        """Weaker than is_declarative, deliberately.
+
+        A field like Flash's optional ``eos`` is no obstacle to building
+        the unit --- only to filling that one field --- so it must not
+        cost the operation its place in the palette.
+        """
+        optional_only = [
+            n for n, s in cat.items()
+            if s.callable_parameters and s.is_buildable
+        ]
+        for name in optional_only:
+            spec = cat[name]
+            assert not [
+                p.name for p in spec.parameters if p.required and p.is_callable
+            ], name
+            assert not spec.is_declarative, name
+
+    def test_a_useful_number_of_operations_are_buildable(self, cat):
+        """A palette that could add almost nothing would not be worth one."""
+        buildable = [n for n, s in cat.items() if s.is_buildable]
+        assert len(buildable) > len(cat) // 2, f"only {len(buildable)} of {len(cat)}"
+
+    def test_buildability_is_in_the_json_payload(self, cat):
+        payload = cat["Flash"].to_dict()
+        assert payload["buildable"] is False
+        assert payload["constructor_extras"] == ["thermo"]
+
+
+# =============================================================================
 # Schema
 # =============================================================================
 

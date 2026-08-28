@@ -13,18 +13,20 @@ is for unit operations.
 1. [Why delta vectors, and why AD](#why-delta-vectors-and-why-ad)
 2. [Quick start](#quick-start)
 3. [Blocks, networks and links](#blocks-networks-and-links)
-4. [The trust-region loop](#the-trust-region-loop)
-5. [Scoring: realised violation, not predicted](#scoring-realised-violation-not-predicted)
-6. [Bang-bang levers and vertex seeding](#bang-bang-levers-and-vertex-seeding)
-7. [Phase boundaries](#phase-boundaries)
-8. [Large models: what degrades and what does not](#large-models-what-degrades-and-what-does-not)
-9. [Sensitivity of the plan](#sensitivity-of-the-plan)
-10. [Modifier adaptation](#modifier-adaptation)
-11. [Coefficient covariance and back-off](#coefficient-covariance-and-back-off)
-12. [Piecewise-linear blocks and MILP](#piecewise-linear-blocks-and-milp)
-13. [Emitting Pyomo](#emitting-pyomo)
-14. [What this module is not](#what-this-module-is-not)
-15. [API summary](#api-summary)
+4. [Stating the problem, and the LP that gets solved](#stating-the-problem-and-the-lp-that-gets-solved)
+5. [Drawing the flowsheet, the model and the region](#drawing-the-flowsheet-the-model-and-the-region)
+6. [The trust-region loop](#the-trust-region-loop)
+7. [Scoring: realised violation, not predicted](#scoring-realised-violation-not-predicted)
+8. [Bang-bang levers and vertex seeding](#bang-bang-levers-and-vertex-seeding)
+9. [Phase boundaries](#phase-boundaries)
+10. [Large models: what degrades and what does not](#large-models-what-degrades-and-what-does-not)
+11. [Sensitivity of the plan](#sensitivity-of-the-plan)
+12. [Modifier adaptation](#modifier-adaptation)
+13. [Coefficient covariance and back-off](#coefficient-covariance-and-back-off)
+14. [Piecewise-linear blocks and MILP](#piecewise-linear-blocks-and-milp)
+15. [Emitting Pyomo](#emitting-pyomo)
+16. [What this module is not](#what-this-module-is-not)
+17. [API summary](#api-summary)
 
 ---
 
@@ -146,6 +148,72 @@ Recycles **inside** a block are expected, and are exactly where difflow earns
 its keep: the tear solve is differentiated implicitly, so the reduced Jacobian
 comes back for free. Recycles **between** blocks are rejected with an error that
 tells you to merge the loop into one block — that is, into one flowsheet.
+
+## Stating the problem, and the LP that gets solved
+
+Two reports write the problem out from the model that is actually solved, so a
+statement cannot drift away from the code.
+
+`DeltaBasePlanner.describe()` answers the three questions that come before any
+result: what is being planned (the priced objective), what may be changed to get
+it (the free decisions, their bounds, and how far one cycle may move them), and
+what may not be violated (the links, the specs, and the acceptance test):
+
+```python
+print(planner.describe())
+```
+
+`LPModel.as_text()` writes the subproblem out algebraically, row by row. For
+blocks `b`, links `s -> t` and specs `k`, with one slack `s_k >= 0` per elastic
+spec, each cycle solves
+
+```
+max_x    sum_v c_v x_v  -  sum_k pi_k s_k              priced outputs, less slack
+s.t.     y_b - J_b u_b  =  y0_b - J_b u0_b             model rows: the delta vectors
+         u_t - y_s      =  0                           link rows: the network
+         a_k' x - s_k  <=  r_k                         spec rows, elastic
+         max(l_i, u0_i - D_i) <= u_i <= min(h_i, u0_i + D_i)   bounds ∩ trust region
+         s_k >= 0,   D_i = radius * (h_i - l_i)
+```
+
+```python
+lp = planner.build_lp(planner.linearize(state), state, radius=0.25)
+print(lp.as_text())          # or, after a solve, res.lp_model.as_text()
+```
+
+The model rows are the only place the flowsheet enters; eliminating the link
+rows reproduces the chain rule. Everything nonlinear — the flash, the recycle,
+the efficiency curve — lives outside the LP, in the acceptance test.
+
+## Drawing the flowsheet, the model and the region
+
+A planning model is worth looking at before it is solved. Five drawings, all in
+`difflow.planning.diagram` and all exported from `difflow.planning`:
+
+```python
+from difflow.planning import (
+    draw_chain, draw_planning_network, draw_delta_vectors, draw_taylor_model,
+    draw_trust_region,
+)
+
+draw_chain(state.as_dict(), prices=problem.prices, specs=problem.specs)
+draw_planning_network(net, prices=problem.prices, specs=problem.specs)
+draw_delta_vectors(linearize_block(ngl), block=ngl)
+draw_taylor_model(ngl, "T_coldbox", "residue_F", radius=0.25)
+draw_trust_region(result, decisions=("q.x", "q.y"))
+```
+
+| Drawing | Shows |
+|---|---|
+| `draw_chain` | the reference chain as a process flow diagram: units, streams, the decisions as levers, the priced streams, the spec, and which planning block each unit belongs to |
+| `draw_planning_network` | any `Network` as the LP holds it: blocks, free decisions, links, priced outputs, specs |
+| `draw_delta_vectors` | one block's `J`, shaded within each row because the rows carry different units |
+| `draw_taylor_model` | the delta-vector prediction against the block along one decision, with the trust region marked — the picture of why the region exists |
+| `draw_trust_region` | the accept/reject/shrink cycles over the *nonlinear* merit surface |
+
+matplotlib is imported inside these functions, so a headless run pays nothing
+for importing the module. `draw_trust_region` evaluates the merit on a grid, so
+keep `grid` modest on an expensive flowsheet.
 
 ## The trust-region loop
 
@@ -544,9 +612,12 @@ this module does not cross.
 
 ## Emitting Pyomo
 
-`difflow.planning` does not own a solver. `LPModel.to_pyomo()` emits a
-`ConcreteModel` so the plan composes with the existing Pyomo/IDAES ecosystem
-instead of competing with it:
+difflow is not short of solvers — `difflow.eo_solver` solves a flowsheet's
+equations simultaneously with Newton, and the LP here is solved with HiGHS
+through `scipy.optimize.linprog`. What `difflow.planning` does not own is a
+*mathematical programming* stack: no branch-and-bound, no interior point, no
+modelling language. `LPModel.to_pyomo()` emits a `ConcreteModel` so the plan
+composes with the existing Pyomo/IDAES ecosystem instead of competing with it:
 
 ```python
 model = res.pyomo_model          # or res.lp_model.to_pyomo()
@@ -557,6 +628,16 @@ pyo.SolverFactory("cbc").solve(model)
 Pyomo is an optional dependency (`pip install "difflow[planning]"`). Without it
 the built-in HiGHS solve via SciPy is used for everything; only `to_pyomo()`
 requires it.
+
+The relation to the equation-oriented solver is worth stating, since the two are
+cousins. Both assemble every unit's equations into one system rather than
+marching unit by unit: `eo_solver` solves the *nonlinear* residuals `F(x) = 0`,
+while the planning LP is the linearised, priced, bounded version of the same
+assembly — the delta vectors are its model rows and the links its connectivity
+rows, with an objective and specs a simulation does not have. An EO solve asks
+"what does the plant do at these inputs?"; the LP asks "which inputs pay best?";
+the trust-region loop alternates between the two, which is why its acceptance
+test is a nonlinear evaluation.
 
 ## What this module is not
 
@@ -589,6 +670,10 @@ you.
 | `Spec` | A linear constraint, elastic by default, with optional back-off |
 | `LPModel` / `LPSolution` | The assembled program and its solution |
 | `Linearization` | One block's delta vectors, base point and phase regime |
+| `DeltaBasePlanner.describe` | The problem statement: objective, decisions, bounds, links, specs |
+| `LPModel.as_text` | The assembled program written out row by row |
+| `draw_chain`, `draw_planning_network` | The flowsheet, and the network as the LP holds it |
+| `draw_delta_vectors`, `draw_taylor_model`, `draw_trust_region` | The model, its locality, and the loop |
 | `check_delta_vectors` | Verify AD deltas against central differences |
 | `choose_ad_mode` | `jacrev` vs `jacfwd`, chosen by shape |
 | `PhaseBoundaryWarning` | Raised when a proposal crosses a phase boundary |

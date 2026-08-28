@@ -253,17 +253,41 @@ def scaling_study(make_problem: Callable[[int], tuple[Callable, Array]],
     return rows
 
 
-def format_scaling_table(rows: Sequence[CostRatio]) -> str:
-    """Render a scaling study as a Markdown table."""
-    out = ["| n | one eval | AD gradient | FD gradient | AD / eval | "
-           "FD / eval | speedup |",
-           "|---|---|---|---|---|---|---|"]
-    for r in rows:
-        out.append(
-            f"| {r.n} | {r.eval_seconds:.3g} s | {r.ad_seconds:.3g} s | "
-            f"{r.fd_seconds:.3g} s | {r.ad_ratio:.1f}x | {r.fd_ratio:.0f}x | "
-            f"{r.speedup:.0f}x |")
-    return "\n".join(out)
+def format_scaling_table(rows: Sequence[CostRatio],
+                         tablefmt: str = "github") -> str:
+    """Render a scaling study as a table.
+
+    Uses ``tabulate`` when it is installed --- so the column widths line
+    up whether the table is printed to a terminal or rendered as
+    Markdown in a notebook --- and falls back to a hand-written
+    Markdown table when it is not.
+
+    Args:
+        rows: The :class:`CostRatio` rows to render.
+        tablefmt: Any ``tabulate`` table format; ``"github"`` renders as
+            Markdown, ``"simple"`` reads better in a plain terminal.
+            Ignored when tabulate is unavailable.
+
+    Returns:
+        The table as text.
+
+    Example:
+        >>> print(format_scaling_table(rows, tablefmt="simple"))  # doctest: +SKIP
+    """
+    header = ["n", "one eval", "AD gradient", "FD gradient", "AD / eval",
+              "FD / eval", "speedup"]
+    body = [[f"{r.n}", f"{r.eval_seconds:.3g} s", f"{r.ad_seconds:.3g} s",
+             f"{r.fd_seconds:.3g} s", f"{r.ad_ratio:.1f}x",
+             f"{r.fd_ratio:.0f}x", f"{r.speedup:.0f}x"] for r in rows]
+    try:
+        from tabulate import tabulate
+    except ImportError:      # pragma: no cover - depends on the environment
+        out = ["| " + " | ".join(header) + " |",
+               "|" + "|".join(["---"] * len(header)) + "|"]
+        out += ["| " + " | ".join(row) + " |" for row in body]
+        return "\n".join(out)
+    return tabulate(body, headers=header, tablefmt=tablefmt,
+                    colalign=("right",) * len(header))
 
 
 def planner_objective(planner) -> Callable[[Array], Array]:

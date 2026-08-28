@@ -142,6 +142,10 @@ from difflow.planning.benchmark import (
     time_callable,
 )
 from difflow.planning.block import Block
+from difflow.planning.diagram import (
+    draw_chain, draw_delta_vectors, draw_planning_network, draw_taylor_model,
+    draw_trust_region,
+)
 from difflow.planning.health import (
     AMPLIFY_TOL, COND_TOL, DEAD_TOL, SPREAD_TOL, DeltaHealthWarning,
     Finding, HealthReport, check_block_health, check_delta_health,
@@ -227,6 +231,12 @@ __all__ = [
     "PiecewiseSpec",
     "PiecewiseData",
     "sample_piecewise",
+    # Drawings
+    "draw_chain",
+    "draw_planning_network",
+    "draw_delta_vectors",
+    "draw_taylor_model",
+    "draw_trust_region",
     # Benchmarking
     "gradient_cost_ratio",
     "scaling_study",
