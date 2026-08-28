@@ -224,6 +224,49 @@ class GasStateLayout(ParamsMixin):
         )
         return jnp.asarray(values, dtype=jnp.float64)
 
+    def embed(
+        self, x: Array, source: "GasStateLayout", fill: float = float("nan")
+    ) -> Array:
+        """Re-pack a vector from another layout into this one.
+
+        Adding a parameter to the state --- an efficiency, a compressor
+        ratio --- changes the pack order, so a measurement vector built
+        for the plain layout does not fit the extended one. This maps
+        by variable name, filling entries the source does not carry
+        with ``fill``. ``nan`` is the right fill for a measurement
+        vector, since the added entries are unmeasured and
+        :func:`difflow.reconciliation.reconcile` masks them out; use
+        ``1.0`` when embedding a *state* whose new efficiencies should
+        start clean.
+
+        Args:
+            x: vector packed by ``source``, shape ``(source.size,)``.
+            source: the layout it was packed by.
+            fill: value for variables this layout has and ``source``
+                does not.
+
+        Returns:
+            The vector re-packed for this layout, shape ``(size,)``.
+
+        Example:
+            >>> layout_eta = gas_state_layout(net, efficiency_arcs=["p3"])
+            >>> y_eta = layout_eta.embed(y, layout)   # doctest: +SKIP
+        """
+        x = jnp.asarray(x, dtype=jnp.float64)
+        if x.shape != (source.size,):
+            raise ValueError(
+                f"x has shape {x.shape}, expected {(source.size,)} for the "
+                "source layout"
+            )
+        where = {nm: i for i, nm in enumerate(source.names)}
+        return jnp.asarray(
+            [
+                x[where[nm]] if nm in where else jnp.asarray(fill)
+                for nm in self.names
+            ],
+            dtype=jnp.float64,
+        )
+
     def unpack(
         self, x: Array
     ) -> tuple[dict[str, Array], dict[str, Array],

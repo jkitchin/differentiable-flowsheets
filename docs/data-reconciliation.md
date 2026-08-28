@@ -111,6 +111,10 @@ serial_elimination(residual_fn, y, sigma, *, alpha=0.05, max_removed=3) -> list
 
 sensor_value(residual_fn, x, sigma, *, target, candidate, candidate_sigma) -> dict
 sensor_ranking(residual_fn, x, sigma, *, target, candidates, candidate_sigma) -> list
+
+monitor(residual_fn, measurements, sigma, *, names=None, alpha=0.05) -> MonitorResult
+blame_concentration(suspects, window=15) -> (fraction, culprit)
+reconcile_multi(residual_fn, measurements, sigma, *, shared, names=None) -> MultiReconcileResult
 ```
 
 `StructureReport.classes` assigns every variable one of `measured-redundant`, `measured-just-determined`, `unmeasured-observable` or `unmeasured-unobservable`, and `summary()` prints the table.
@@ -187,5 +191,43 @@ See [`examples/28_data_reconciliation.ipynb`](../examples/28_data_reconciliation
 Both are the same optimisation — a variable with a finite `sigma` is a measurement you may move at a cost, one with `sigma = inf` is a parameter you may move for free — so the interesting question is not *how* to update a model but **when you are entitled to**. Letting a parameter float absorbs whatever is wrong, including a broken sensor, and hands back a confident wrong number.
 
 The practical discipline is two clocks: reconcile routinely with parameters **fixed**, so the global test stays a genuine instrument-health monitor; re-estimate parameters only as a deliberate campaign. The trigger is the pair of tests read together — persistent rejection with the *same* sensor blamed every day is an instrument fault, while persistent rejection with a *wandering* suspect is model drift.
+
+### The routine clock: `monitor`
+
+`monitor` runs the first clock. It reconciles a sequence of data sets against one fixed model and keeps the diagnostics, which is what makes the resulting statistic series readable: the model and the sigmas never move, so every wobble in it comes from the data.
+
+```python
+from difflow.reconciliation import monitor
+
+mon = monitor(residual_fn, daily_measurements, sigma, names=layout.names)
+mon.statistic          # the chi-squared series, shape (n_days,)
+mon.suspects           # who the measurement test blamed each day
+mon.diagnose(window=15)
+# model drift: 93% of the last 15 steps reject, blame concentration 40%
+```
+
+`diagnose` applies the rule above. `blame_concentration` is the measurement behind it — the fraction of the window blaming the single most-blamed sensor, counted over the *whole* window including the quiet days, so a campaign that rejects rarely does not read as a concentrated fault just because its few rejections agreed. A verdict of `instrument fault` names the culprit and means go and calibrate it; `model drift` is the one verdict that entitles you to the second clock. Both thresholds are arguments, so the rule can be tuned to a plant's own noise.
+
+A data set whose problem cannot be posed at all records `failed` on its step rather than aborting the campaign.
+
+### The campaign clock: `reconcile_multi`
+
+One day's data gives a noisy parameter estimate, so pool a window. `reconcile_multi` gives each data set its own copy of the plant state while the variables in `shared` appear **once**, estimated from all of them in a single solve:
+
+```python
+from difflow.reconciliation import reconcile_multi
+
+res = reconcile_multi(
+    residual_fn, week_of_data, sigma,
+    shared=["eta_p3"], names=layout.names,
+)
+res.shared["eta_p3"], res.shared_std["eta_p3"]
+res.states[0]                       # day 0's reconciled state
+global_test(res)                    # on the pooled problem
+```
+
+This is not the same as reconciling each day separately and averaging the estimates, in two ways that matter. The standard error it reports is that *of the pooled estimate*, roughly $\sqrt{K}$ tighter, whereas averaging point estimates leaves you holding one day's error bar for a quantity $K$ of them informed. And because the parameter is one unknown rather than $K$ private copies, the degrees of redundancy count it once — pooling recovers the $K-1$ that separate estimations throw away, and a parameter too weakly identified to be recovered from one data set can still be observable from several. The structure check runs on the stacked problem and reports this.
+
+The catch is lag: pooling estimates the *average* truth over its window, so choose a window short enough that the parameter is genuinely constant across it. A finite `sigma` on a shared variable is a prior, and it is applied once — $K$ copies of one prior would count it $K$ times.
 
 [`examples/29_model_updating.ipynb`](../examples/29_model_updating.ipynb) works this through on a pipe that fouls over a 45-day campaign, including the case where a free parameter manufactures a fouling estimate out of a biased flow meter.

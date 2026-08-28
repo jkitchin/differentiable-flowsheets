@@ -24,8 +24,14 @@ from difflow.reconciliation import (
     identity_scaling,
     kkt_matrix,
     measurement_sensitivity,
+    MONITOR_CONSISTENT,
+    MONITOR_INSTRUMENT_FAULT,
+    MONITOR_MODEL_DRIFT,
+    blame_concentration,
     measurement_test,
+    monitor,
     reconcile,
+    reconcile_multi,
     reconciled_covariance,
     sensor_value,
     serial_elimination,
@@ -535,6 +541,312 @@ class TestSensorPlacement:
         )
         reductions = [d["variance_reduction"] for d in ranked]
         assert reductions == sorted(reductions, reverse=True)
+
+
+# =============================================================================
+# Pooling several data sets
+# =============================================================================
+
+
+def leak_balance(x, params=None):
+    """feed = top + bottom + leak, with the leak normally unmeasured."""
+    return jnp.array([x[0] - x[1] - x[2] - x[3]])
+
+
+LEAK_NAMES = ["feed", "top", "bottom", "leak"]
+LEAK_TRUTH = jnp.array([100.0, 60.0, 35.0, 5.0])
+
+
+@pytest.fixture(scope="module")
+def redundant_campaign(random_linear):
+    """Eight consistent data sets from a 6-equation, 10-variable plant.
+
+    A single balance cannot say which of its terms is wrong --- with
+    one degree of redundancy every standardized adjustment is the same
+    residual in disguise, so the argmax is noise. Identifying a culprit
+    needs redundancy to spare, which this has.
+    """
+    residual_fn, a, b, _, sigma = random_linear
+    a = np.asarray(a, dtype=float)
+    x_true = np.linalg.lstsq(a, np.asarray(b, dtype=float), rcond=None)[0]
+    rng = np.random.default_rng(11)
+    ys = [
+        jnp.asarray(x_true + rng.normal(size=10) * np.asarray(sigma))
+        for _ in range(8)
+    ]
+    return residual_fn, ys, sigma
+
+
+@pytest.fixture(scope="module")
+def leak_campaign():
+    """Six noisy data sets from a plant with a constant 5 kg/s leak."""
+    sigma = jnp.array([2.0, 1.0, 1.0, jnp.inf])
+    rng = np.random.default_rng(7)
+    noise = rng.normal(size=(6, 4)) * np.array([2.0, 1.0, 1.0, 0.0])
+    ys = [LEAK_TRUTH + jnp.asarray(n) for n in noise]
+    return ys, sigma
+
+
+class TestReconcileMulti:
+    def test_pooling_shrinks_the_standard_error_by_sqrt_k(self, leak_campaign):
+        """The whole point: K data sets estimate a shared parameter
+        sqrt(K) times more precisely than one does. Exact on a linear
+        constraint with identical per-set information."""
+        ys, sigma = leak_campaign
+        pooled = reconcile_multi(
+            leak_balance, ys, sigma, shared=["leak"], names=LEAK_NAMES
+        )
+        single = reconcile(leak_balance, ys[0], sigma, names=LEAK_NAMES)
+        assert pooled.shared_std["leak"] == pytest.approx(
+            single.std["leak"] / np.sqrt(len(ys)), rel=1e-10
+        )
+
+    def test_shared_estimate_recovers_the_truth(self, leak_campaign):
+        ys, sigma = leak_campaign
+        res = reconcile_multi(
+            leak_balance, ys, sigma, shared=["leak"], names=LEAK_NAMES
+        )
+        err = abs(res.shared["leak"] - float(LEAK_TRUTH[3]))
+        assert err < 3.0 * res.shared_std["leak"]
+        assert res.converged
+
+    def test_one_data_set_reduces_to_reconcile(self, leak_campaign):
+        ys, sigma = leak_campaign
+        multi = reconcile_multi(
+            leak_balance, ys[:1], sigma, shared=["leak"], names=LEAK_NAMES
+        )
+        single = reconcile(leak_balance, ys[0], sigma, names=LEAK_NAMES)
+        for nm in LEAK_NAMES:
+            assert multi.states[0][nm] == pytest.approx(
+                single.x_named[nm], abs=1e-9
+            )
+
+    def test_redundancy_counts_the_shared_parameter_once(self, leak_campaign):
+        """K separate problems spend K degrees of redundancy on K copies
+        of the parameter; pooling spends one."""
+        ys, sigma = leak_campaign
+        res = reconcile_multi(
+            leak_balance, ys, sigma, shared=["leak"], names=LEAK_NAMES
+        )
+        single = reconcile(leak_balance, ys[0], sigma, names=LEAK_NAMES)
+        k = len(ys)
+        assert res.structure.degree_of_redundancy == k - 1
+        assert single.structure.degree_of_redundancy * k == 0
+
+    def test_a_prior_on_a_shared_variable_is_applied_once(self, leak_campaign):
+        """K copies of one prior would count it K times. With a unit
+        prior and K data sets carrying unit total information, the
+        posterior variance must be 1/2, not 1/(K+1)."""
+        ys, sigma = leak_campaign
+        res = reconcile_multi(
+            leak_balance, ys, sigma.at[3].set(1.0),
+            shared=["leak"], names=LEAK_NAMES,
+        )
+        single = reconcile(leak_balance, ys[0], sigma, names=LEAK_NAMES)
+        data_var = (single.std["leak"] ** 2) / len(ys)
+        expected = 1.0 / (1.0 / data_var + 1.0 / 1.0**2)
+        assert res.shared_std["leak"] ** 2 == pytest.approx(expected, rel=1e-8)
+
+    def test_global_test_accepts_the_multi_result(self, leak_campaign):
+        ys, sigma = leak_campaign
+        res = reconcile_multi(
+            leak_balance, ys, sigma, shared=["leak"], names=LEAK_NAMES
+        )
+        gt = global_test(res)
+        assert gt.dof == res.structure.degree_of_redundancy
+        assert not gt.detected
+
+    def test_shared_by_index_matches_shared_by_name(self, leak_campaign):
+        ys, sigma = leak_campaign
+        by_name = reconcile_multi(
+            leak_balance, ys, sigma, shared=["leak"], names=LEAK_NAMES
+        )
+        by_index = reconcile_multi(
+            leak_balance, ys, sigma, shared=[3], names=LEAK_NAMES
+        )
+        assert by_index.shared["leak"] == pytest.approx(by_name.shared["leak"])
+
+    def test_per_data_set_params_are_threaded(self, leak_campaign):
+        """A campaign whose set point changed halfway: the leak is
+        still shared, the operating point is not."""
+        ys, sigma = leak_campaign
+
+        def scaled(x, params):
+            return jnp.array([x[0] - x[1] - x[2] - params * x[3]])
+
+        res = reconcile_multi(
+            scaled, ys, sigma, shared=["leak"], names=LEAK_NAMES,
+            params=[1.0] * len(ys),
+        )
+        flat = reconcile_multi(
+            leak_balance, ys, sigma, shared=["leak"], names=LEAK_NAMES
+        )
+        assert res.shared["leak"] == pytest.approx(flat.shared["leak"])
+
+    def test_states_are_named_over_the_per_set_variables(self, leak_campaign):
+        ys, sigma = leak_campaign
+        res = reconcile_multi(
+            leak_balance, ys, sigma, shared=["leak"], names=LEAK_NAMES
+        )
+        assert len(res.states) == len(ys)
+        assert list(res.states[0]) == LEAK_NAMES
+        # the shared variable takes the same value in every data set
+        assert len({round(st["leak"], 12) for st in res.states}) == 1
+        assert res.stacked.names[-1] == "leak"
+        assert res.stacked.names[0] == "feed[0]"
+
+    def test_per_data_set_sigma_is_accepted(self, leak_campaign):
+        ys, sigma = leak_campaign
+        stacked = jnp.stack([sigma] * len(ys))
+        res = reconcile_multi(
+            leak_balance, ys, stacked, shared=["leak"], names=LEAK_NAMES
+        )
+        flat = reconcile_multi(
+            leak_balance, ys, sigma, shared=["leak"], names=LEAK_NAMES
+        )
+        assert res.shared["leak"] == pytest.approx(flat.shared["leak"])
+
+    def test_per_variable_kwargs_are_expanded(self, leak_campaign):
+        ys, sigma = leak_campaign
+        res = reconcile_multi(
+            leak_balance, ys, sigma, shared=["leak"], names=LEAK_NAMES,
+            unmeasured_scale=jnp.ones(4) * 5.0,
+        )
+        assert res.converged
+
+    def test_rejects_an_inconsistent_problem(self, leak_campaign):
+        ys, sigma = leak_campaign
+        with pytest.raises(ValueError, match="at least one data set"):
+            reconcile_multi(
+                leak_balance, [], sigma, shared=["leak"], names=LEAK_NAMES
+            )
+        with pytest.raises(ValueError, match="expected"):
+            reconcile_multi(
+                leak_balance, [ys[0], ys[1][:3]], sigma,
+                shared=["leak"], names=LEAK_NAMES,
+            )
+        with pytest.raises(KeyError, match="not a variable"):
+            reconcile_multi(
+                leak_balance, ys, sigma, shared=["nope"], names=LEAK_NAMES
+            )
+        with pytest.raises(ValueError, match="duplicate"):
+            reconcile_multi(
+                leak_balance, ys, sigma, shared=["leak", "leak"],
+                names=LEAK_NAMES,
+            )
+        with pytest.raises(ValueError, match="different sigmas"):
+            reconcile_multi(
+                leak_balance, ys,
+                jnp.stack([sigma] * 5 + [sigma.at[3].set(0.5)]),
+                shared=["leak"], names=LEAK_NAMES,
+            )
+
+
+# =============================================================================
+# Monitoring over time
+# =============================================================================
+
+
+class TestMonitor:
+    def test_clean_data_never_rejects(self, leak_campaign):
+        ys, sigma = leak_campaign
+        # measure the leak too, so the problem is redundant
+        sig = sigma.at[3].set(1.0)
+        mon = monitor(leak_balance, ys, sig, names=LEAK_NAMES)
+        assert len(mon) == len(ys)
+        assert mon.rejection_rate() < 0.5
+        assert mon.diagnose(window=None).verdict == MONITOR_CONSISTENT
+        assert mon.dof == 1
+        assert np.isfinite(mon.critical)
+
+    def test_a_biased_sensor_concentrates_the_blame(self, redundant_campaign):
+        """One sensor lying every day: blame lands on it, every day."""
+        residual_fn, ys, sigma = redundant_campaign
+        biased = [y.at[3].add(10.0 * float(sigma[3])) for y in ys]
+        mon = monitor(residual_fn, biased, sigma)
+        assert mon.rejection_rate() == 1.0
+        concentration, culprit = blame_concentration(mon.suspects, None)
+        assert culprit == "x3"
+        assert concentration == 1.0
+        diag = mon.diagnose(window=None)
+        assert diag.verdict == MONITOR_INSTRUMENT_FAULT
+        assert diag.culprit == "x3"
+        assert not diag.drifting
+
+    def test_consistent_data_passes_on_the_same_plant(self, redundant_campaign):
+        residual_fn, ys, sigma = redundant_campaign
+        mon = monitor(residual_fn, ys, sigma)
+        assert mon.rejection_rate() < 0.5
+        assert mon.diagnose(window=None).verdict == MONITOR_CONSISTENT
+
+    def test_statistic_and_suspects_line_up_with_the_steps(self, leak_campaign):
+        ys, sigma = leak_campaign
+        mon = monitor(
+            leak_balance, ys, sigma.at[3].set(1.0), names=LEAK_NAMES,
+            keep_results=True,
+        )
+        assert mon.statistic.shape == (len(ys),)
+        assert mon.suspects == [s.suspect for s in mon.steps]
+        assert mon.steps[0].result is not None
+        assert mon.steps[0].result.objective == pytest.approx(
+            mon.statistic[0]
+        )
+
+    def test_results_are_dropped_by_default(self, leak_campaign):
+        ys, sigma = leak_campaign
+        mon = monitor(leak_balance, ys, sigma.at[3].set(1.0), names=LEAK_NAMES)
+        assert all(s.result is None for s in mon.steps)
+
+    def test_blame_concentration_counts_quiet_days(self):
+        """Two flagged days out of ten is not a concentrated fault, even
+        though both flagged the same sensor."""
+        suspects = ["q1", "q1"] + [None] * 8
+        concentration, culprit = blame_concentration(suspects, window=10)
+        assert concentration == pytest.approx(0.2)
+        assert culprit == "q1"
+        assert blame_concentration([], None) == (0.0, None)
+        assert blame_concentration([None, None], None) == (0.0, None)
+
+    def test_window_selects_the_recent_steps(self):
+        suspects = ["old"] * 10 + ["new"] * 5
+        assert blame_concentration(suspects, window=5) == (1.0, "new")
+        assert blame_concentration(suspects, window=None)[1] == "old"
+        with pytest.raises(ValueError, match="window must be positive"):
+            blame_concentration(suspects, window=0)
+
+    def test_a_wandering_suspect_reads_as_drift(self):
+        """Verdict logic in isolation: persistent rejection whose blame
+        is spread across sensors is the model's fault, not a meter's."""
+        from difflow.reconciliation.monitoring import MonitorResult, MonitorStep
+
+        suspects = ["a", "b", "c", "a", "d", "b", "c", "d"]
+        steps = [
+            MonitorStep(
+                index=i, statistic=99.0, dof=3, critical=7.8, p_value=0.0,
+                detected=True, suspect=s, z_max=5.0,
+            )
+            for i, s in enumerate(suspects)
+        ]
+        diag = MonitorResult(steps=steps).diagnose(window=None)
+        assert diag.verdict == MONITOR_MODEL_DRIFT
+        assert diag.culprit is None
+        assert diag.drifting
+        assert diag.rejection_rate == 1.0
+
+    def test_an_unsolvable_problem_is_recorded_not_raised(self, leak_campaign):
+        """One balance cannot determine two unknowns. The campaign
+        records that on every step instead of blowing up partway."""
+        ys, sigma = leak_campaign
+        blind = sigma.at[2].set(jnp.inf)     # bottom and leak both unmeasured
+        with pytest.raises(ReconciliationStructureError):
+            reconcile(leak_balance, ys[0], blind, names=LEAK_NAMES)
+        mon = monitor(leak_balance, ys, blind, names=LEAK_NAMES)
+        assert len(mon) == len(ys)
+        assert all(s.failed for s in mon.steps)
+        assert all(s.suspect is None for s in mon.steps)
+        assert np.isnan(mon.critical)
+        assert mon.dof == -1
+        assert "failed" in mon.summary()
 
 
 if __name__ == "__main__":

@@ -38,8 +38,9 @@ difflow/
 │   │   ├── database.py    # Species property database
 │   │   ├── flowsheet.py   # Flowsheet with recycle solving
 │   │   ├── uncertainty.py # Sensitivity & UQ
-│   ├── reconciliation/ # Data reconciliation, gross error detection, observability
 │   │   ├── params_mixin.py # ParamsMixin base class for Params dataclasses
+│   │   ├── reconciliation/ # Data reconciliation, gross error detection,
+│   │   │                   # observability, monitoring, multi-set pooling
 │   │   ├── units/         # Steady-state unit operations
 │   │   ├── dynamic/       # Dynamic modeling (DAE)
 │   │   ├── economics/     # Technoeconomic analysis
