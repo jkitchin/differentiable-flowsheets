@@ -90,6 +90,14 @@ class FlowsheetSession:
     """
 
     def __init__(self, flowsheet=None, path: str | Path | None = None):
+        """Open a flowsheet, from memory or from a file.
+
+        Args:
+            flowsheet: the flowsheet to edit. When omitted and ``path``
+                names an existing file, it is loaded from there.
+            path: where :meth:`save` writes. A session without one can
+                still be edited and solved; only saving is refused.
+        """
         self.path = Path(path) if path else None
         self.flowsheet = flowsheet
         if flowsheet is None and self.path and self.path.exists():
@@ -101,6 +109,13 @@ class FlowsheetSession:
     # -- reads --------------------------------------------------------
 
     def catalog(self) -> dict:
+        """Every registered operation, as the palette consumes it.
+
+        Returns:
+            Operation name -> :meth:`~difflow.catalog.OperationSchema.to_dict`.
+            Plugin units are included, since the registry holds them
+            all; nothing here is specific to the editor.
+        """
         from difflow.catalog import catalog
 
         return {
@@ -108,6 +123,14 @@ class FlowsheetSession:
         }
 
     def document(self) -> dict:
+        """The current flowsheet in the on-disk JSON form.
+
+        Returns:
+            ``{"flowsheet": <serialize.to_dict output>, "path": str}``,
+            with ``flowsheet`` ``None`` when nothing is loaded. It is
+            deliberately the same shape :meth:`replace` accepts, so the
+            browser edits the document it was given and hands it back.
+        """
         from difflow import serialize
 
         if self.flowsheet is None:
@@ -118,6 +141,14 @@ class FlowsheetSession:
         }
 
     def code(self) -> dict:
+        """The flowsheet as runnable Python, for the export panel.
+
+        Returns:
+            ``{"source": str, "error": str | None}``. Codegen refuses a
+            hand-written rate law and an unregistered unit, and that
+            refusal is the useful answer --- it is reported in ``error``
+            for the panel to show, rather than raised at the socket.
+        """
         from difflow import codegen
 
         if self.flowsheet is None:
@@ -138,6 +169,15 @@ class FlowsheetSession:
         return {"ok": True}
 
     def save(self) -> dict:
+        """Write the flowsheet back to the path it was opened with.
+
+        Returns:
+            ``{"ok": True, "path": str}``, or ``{"ok": False, "error":
+            str}`` when there is nothing to write or nowhere to write
+            it. Saving to a path the session was not given is not
+            offered: a browser choosing where a server writes is a
+            larger decision than an editor should make on its own.
+        """
         from difflow import serialize
 
         if self.flowsheet is None:
@@ -195,6 +235,7 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        """``/`` serves the page; ``/api/*`` serves the model as JSON."""
         routes = {
             "/": lambda: self._send(_PAGE, content="text/html"),
             # answered so the browser does not log a 404 on every load
@@ -209,6 +250,14 @@ class _Handler(BaseHTTPRequestHandler):
         handler()
 
     def do_POST(self):
+        """Adopt an edit, solve, or save.
+
+        Every failure below --- malformed JSON, a document the
+        serializer rejects, an exception from the solve --- comes back
+        as a 400 carrying the message. The editor has to be able to
+        show the user what went wrong, and one bad edit from a browser
+        must not end the session.
+        """
         length = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(length) if length else b"{}"
         try:

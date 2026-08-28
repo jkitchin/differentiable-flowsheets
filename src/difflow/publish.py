@@ -84,9 +84,11 @@ class SweepAxis(ParamsMixin):
 
     @property
     def title(self) -> str:
+        """The label shown on the page, defaulting to the key."""
         return self.label or self.key
 
     def values(self):
+        """The grid points, inclusive of both bounds."""
         return jnp.linspace(self.lo, self.hi, self.n)
 
 
@@ -111,10 +113,12 @@ class SweepResult(ParamsMixin):
 
     @property
     def shape(self) -> tuple[int, ...]:
+        """Grid shape, one dimension per axis."""
         return tuple(axis.n for axis in self.axes)
 
     @property
     def n_points(self) -> int:
+        """Total operating points solved --- the product of the axes."""
         n = 1
         for axis in self.axes:
             n *= axis.n
