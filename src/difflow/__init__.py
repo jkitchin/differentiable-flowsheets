@@ -230,6 +230,9 @@ from difflow import estimation
 # Data reconciliation submodule
 from difflow import reconciliation
 
+# Delta-base planning submodule
+from difflow import planning
+
 # Declarative kinetics
 from difflow.kinetics import (
     KineticsSpecError,
@@ -496,6 +499,8 @@ __all__ = [
     "estimation",
     # Data reconciliation
     "reconciliation",
+    # Delta-base planning
+    "planning",
     # Declarative kinetics
     "mass_action_kinetics",
     "ReactionSet",
