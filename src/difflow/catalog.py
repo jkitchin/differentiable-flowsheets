@@ -130,6 +130,9 @@ class OperationSchema(ParamsMixin):
         ports: stream connectivity.
         parameters: the ``Params`` fields.
         params_class: name of the ``Params`` dataclass, if one was found.
+        constructor_extras: constructor arguments the class requires
+            besides its ``Params`` --- a ``thermo``, an ``eos``. These
+            are objects, so a front end cannot supply them.
     """
 
     name: str
@@ -142,11 +145,26 @@ class OperationSchema(ParamsMixin):
     ports: PortSpec = field(default_factory=PortSpec)
     parameters: list[ParameterSpec] = field(default_factory=list)
     params_class: str | None = None
+    constructor_extras: list[str] = field(default_factory=list)
 
     @property
     def is_declarative(self) -> bool:
         """Whether every parameter is data a form could supply."""
         return not any(p.is_callable for p in self.parameters)
+
+    @property
+    def is_buildable(self) -> bool:
+        """Whether a form could construct this operation unaided.
+
+        Weaker than :attr:`is_declarative`, and deliberately so: an
+        *optional* callable left at its default is no obstacle to
+        building the unit, only to filling that one field. What blocks
+        a form is a required callable, or a constructor argument that
+        is an object rather than data.
+        """
+        return not self.constructor_extras and not any(
+            p.required and p.is_callable for p in self.parameters
+        )
 
     @property
     def callable_parameters(self) -> list[str]:
@@ -168,6 +186,8 @@ class OperationSchema(ParamsMixin):
             "equations": list(self.equations),
             "params_class": self.params_class,
             "declarative": self.is_declarative,
+            "constructor_extras": list(self.constructor_extras),
+            "buildable": self.is_buildable,
             "ports": {
                 "inlets": list(self.ports.inlets),
                 "n_inlets": self.ports.n_inlets,
@@ -338,6 +358,8 @@ def describe_class(
     Works on any class, registered or not, which is what makes it
     usable on a plugin's units before they are wired in.
     """
+    from difflow.serialize import constructor_extras
+
     params_cls = _params_class(cls)
     doc = (description or cls.__doc__ or "").strip()
     return OperationSchema(
@@ -351,6 +373,7 @@ def describe_class(
         ports=_ports(cls),
         parameters=_parameters(params_cls),
         params_class=params_cls.__name__ if params_cls else None,
+        constructor_extras=constructor_extras(cls),
     )
 
 

@@ -14,6 +14,17 @@ leaving the door open: the editor exports the model as a script
 (:mod:`difflow.codegen`) or as JSON (:mod:`difflow.serialize`), and
 reads JSON back. An editor you can only enter is worse than none.
 
+Units are added by clicking the palette, and streams are wired by
+naming them: an outlet names a stream, and an inlet chooses one that
+something already produces. Renaming a stream follows it to every
+consumer, so the wiring survives the edit.
+
+What the palette cannot add, it says so about rather than failing
+later. Roughly half the catalog needs something no form can supply ---
+a ``thermo`` object, a rate law --- and those entries are dimmed with
+the reason (:attr:`~difflow.catalog.OperationSchema.is_buildable`).
+For them the route is still Python, then JSON, then here.
+
 Everything comes from :mod:`difflow.catalog`, so the palette lists
 whatever is registered, plugins included, with the ports and parameter
 schema each unit actually declares.
@@ -345,6 +356,29 @@ _PAGE = """<!doctype html>
   .unit td:first-child { width:14rem; }
   .unit .units { color:var(--ink-soft); font-size:.72rem; }
   .code-fields { margin:.5rem 0 0; }
+  .op.add { cursor:pointer; width:100%; text-align:left; border:none;
+    background:none; font:inherit; font-size:.82rem; }
+  .op.add:hover { background:var(--panel); }
+  .op.blocked { opacity:.45; }
+  .wiring { display:grid; grid-template-columns:auto 1fr; gap:.3rem .5rem;
+    align-items:start; margin:.4rem 0 .6rem; font-size:.78rem; }
+  .wiring .lbl { color:var(--ink-soft); padding-top:.2rem; }
+  .row { display:flex; flex-wrap:wrap; gap:.3rem; align-items:center; }
+  select { font:inherit; font-size:.78rem; padding:.15rem .3rem;
+    border:1px solid var(--line); border-radius:4px; background:var(--surface);
+    color:var(--ink); }
+  select.bad, input.bad { border-color:var(--bad); background:#fbeeee; }
+  input.sname { width:8.5rem; font-size:.78rem; }
+  input.uname { font:inherit; font-size:.88rem; font-weight:650; width:12rem;
+    border:1px solid transparent; background:none; padding:.1rem .2rem;
+    border-radius:4px; }
+  input.uname:hover, input.uname:focus { border-color:var(--line);
+    background:var(--surface); }
+  .unit .rm { float:right; font-size:.72rem; padding:.1rem .45rem; }
+  .tiny { font-size:.72rem; padding:.1rem .4rem; }
+  .status.warn { background:#fdf6e8; color:#8a6100; border:1px solid #f0e2c2; }
+  .status ul { margin:.3rem 0 0; padding-left:1.1rem; }
+  .feeds { margin-bottom:.8rem; }
   .status { font-size:.8rem; padding:.4rem .6rem; border-radius:6px;
     margin-bottom:.7rem; }
   .status.err { background:#fbeeee; color:var(--bad);
@@ -379,6 +413,7 @@ _PAGE = """<!doctype html>
     <div id="status"></div>
     <svg id="diagram" viewBox="0 0 600 220" width="100%"
          role="img" aria-label="Flowsheet topology"></svg>
+    <div class="feeds" id="feeds"></div>
     <div id="units"></div>
   </section>
 
@@ -390,6 +425,8 @@ _PAGE = """<!doctype html>
 
 <script>
 let DOC = null, CATALOG = {};
+/* whether the server holds the flowsheet now on screen */
+let SYNCED = true, LAST_ERROR = "";
 
 const api = {
   get: p => fetch(p).then(r => r.json()),
@@ -407,41 +444,220 @@ function status(msg, kind) {
     msg ? '<div class="status ' + kind + '">' + msg + '</div>' : "";
 }
 
+/* ---- the document, as the browser holds it ------------------------ */
+/* Two kinds of name live in a flowsheet and they behave differently. A
+   *unit* name only labels a box. A *stream* name is the wiring: it is
+   how an outlet reaches the inlet that consumes it. So renaming a
+   stream has to travel -- to every consumer and to any recycle that
+   mentions it -- or the rename quietly disconnects the flowsheet. */
+function fsheet() { return DOC && DOC.flowsheet; }
+
+function esc(s) {
+  return String(s).replace(/[&<>"]/g, c =>
+    ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+}
+
+/* stream name -> a phrase naming whatever produces it */
+function producers() {
+  const f = fsheet(), out = {};
+  if (!f) return out;
+  Object.keys(f.feeds).forEach(n => out[n] = "feed " + n);
+  f.units.forEach(u => u.outlets.forEach(o => out[o] = "unit " + u.name));
+  /* a recycle republishes a stream under a second name, so the
+     destination is produced even though no outlet is called that */
+  Object.entries(f.recycles || {}).forEach(([src, dest]) => {
+    if (out[src] !== undefined) out[dest] = out[src];
+  });
+  return out;
+}
+function streamNames() { return Object.keys(producers()); }
+
+function renameStream(from, to) {
+  const f = fsheet();
+  if (!f || !to || from === to) return false;
+  if (streamNames().includes(to)) return false;
+  /* rebuilt, not mutated: the key order of feeds is the display order */
+  const feeds = {};
+  Object.entries(f.feeds).forEach(([k, v]) => feeds[k === from ? to : k] = v);
+  f.feeds = feeds;
+  f.units.forEach(u => {
+    u.inlets = u.inlets.map(s => s === from ? to : s);
+    u.outlets = u.outlets.map(s => s === from ? to : s);
+  });
+  const rec = {};
+  Object.entries(f.recycles || {}).forEach(([src, dest]) =>
+    rec[src === from ? to : src] = (dest === from ? to : dest));
+  f.recycles = rec;
+  return true;
+}
+
+/* ---- adding a unit ------------------------------------------------ */
+/* The catalog reports required fields but renders their defaults as
+   strings, so a seed is chosen from the declared type instead. It only
+   has to be the right *kind* of thing -- the point is a unit that
+   constructs, with the numbers left visibly wrong for editing. */
+function seedValue(p) {
+  const t = (p.type || "").toLowerCase();
+  if (p.name === "species_order") return (fsheet().species_order || []).slice();
+  if (p.is_callable) return null;
+  if (t.includes("list") || t.includes("tuple") || t.includes("sequence")) return [];
+  if (t.includes("dict") || t.includes("mapping")) return {};
+  if (t.includes("bool")) return false;
+  if (t.includes("float") || t.includes("int")) return 1.0;
+  if (t.includes("str")) return "";
+  return null;                       /* an Array, or something unread */
+}
+function seedParams(spec) {
+  const out = {};
+  (spec.parameters || []).forEach(p => { if (p.required) out[p.name] = seedValue(p); });
+  return out;                        /* optional fields: let the dataclass decide */
+}
+
+function uniqueUnitName(base) {
+  const taken = new Set(fsheet().units.map(u => u.name));
+  if (!taken.has(base)) return base;
+  for (let i = 2; ; i++) if (!taken.has(base + i)) return base + i;
+}
+
+/* the last stream nothing reads yet -- bolting a unit onto the end of
+   the flowsheet is the common case, and it should need no wiring */
+function freeStream() {
+  const consumed = new Set();
+  fsheet().units.forEach(u => u.inlets.forEach(s => consumed.add(s)));
+  const free = streamNames().filter(s => !consumed.has(s));
+  return free.length ? free[free.length - 1] : "";
+}
+
+function newUnit(opName) {
+  const spec = CATALOG[opName], ports = spec.ports || {};
+  const name = uniqueUnitName(opName.toLowerCase());
+  const nOut = ports.n_outlets === null || ports.n_outlets === undefined
+    ? 1 : ports.n_outlets;
+  const outlets = nOut === 1 ? [name + "_out"]
+    : Array.from({length: nOut}, (unused, i) => name + "_out" + (i + 1));
+  const nIn = ports.variadic ? 1 : (ports.n_inlets || 1);
+  const inlets = Array.from({length: nIn}, (unused, i) => i === 0 ? freeStream() : "");
+  return {name: name, operation: opName, params: seedParams(spec),
+          constructor: {}, extra_params: {}, inlets: inlets, outlets: outlets};
+}
+
+async function addUnit(opName) {
+  if (!fsheet()) { status("No flowsheet loaded.", "err"); return; }
+  fsheet().units.push(newUnit(opName));
+  /* on success reload: the server writes back every default the Params
+     dataclass filled in, which is what makes them editable here */
+  if (await push()) await reload();
+  render();
+}
+
+async function removeUnit(ui) {
+  fsheet().units.splice(ui, 1);
+  await push();
+  render();
+}
+
+async function renameUnit(ui, name) {
+  const f = fsheet();
+  name = name.trim();
+  if (name && !f.units.some((u, i) => i !== ui && u.name === name)) {
+    f.units[ui].name = name;
+    await push();
+  }
+  render();
+}
+
+/* ---- what is wrong with it ---------------------------------------- */
+/* Faults the server cannot see. It rebuilds a flowsheet with a dangling
+   inlet quite happily; only the solve fails, as a bare KeyError naming
+   a stream. Saying so before Solve is pressed is cheaper. */
+function problems() {
+  const f = fsheet();
+  if (!f) return [];
+  const out = [], known = streamNames(), seen = {}, named = new Set();
+  Object.keys(f.feeds).forEach(n => seen[n] = "feed " + n);
+  f.units.forEach(u => {
+    if (named.has(u.name)) out.push("two units are named " + u.name);
+    named.add(u.name);
+    u.inlets.forEach(s => {
+      if (!s) out.push(u.name + " has an inlet connected to nothing");
+      else if (!known.includes(s))
+        out.push(u.name + " reads " + s + ", which nothing produces");
+    });
+    u.outlets.forEach(s => {
+      if (!s) out.push(u.name + " has an unnamed outlet");
+      else if (seen[s])
+        out.push(s + " is produced by both " + seen[s] + " and unit " + u.name);
+      else seen[s] = "unit " + u.name;
+    });
+  });
+  return out;
+}
+
+function showProblems() {
+  if (!SYNCED) {
+    status("The model rejected that edit, and is still running the " +
+           "previous version: " + esc(LAST_ERROR), "err");
+    return;
+  }
+  const ps = problems();
+  status(ps.length ? "<strong>Not ready to solve</strong><ul>" +
+    ps.map(p => "<li>" + esc(p) + "</li>").join("") + "</ul>" : "", "warn");
+}
+
 /* ---- palette ------------------------------------------------------ */
+function blockedReason(s) {
+  const extras = s.constructor_extras || [];
+  const calls = (s.parameters || [])
+    .filter(p => p.required && p.is_callable).map(p => p.name);
+  const parts = [];
+  if (extras.length) parts.push(
+    (extras.length > 1 ? "the objects " : "the object ") + extras.join(", "));
+  if (calls.length) parts.push("code for " + calls.join(", "));
+  return s.name + " cannot be built from a form: it needs " +
+    parts.join(" and ") + ". Build it in Python, save the JSON, open it here.";
+}
+
 function renderPalette() {
   const groups = {};
   Object.values(CATALOG).forEach(s => (groups[s.category] ||= []).push(s));
   const el = document.getElementById("palette");
-  el.innerHTML = Object.keys(groups).sort().map(cat =>
-    '<div class="cat"><div class="cat-name">' + cat.replace(/_/g, " ") + '</div>' +
-    groups[cat].sort((a,b)=>a.name.localeCompare(b.name)).map(s => {
-      const p = s.ports;
-      const arity = (p.variadic ? "n" : p.n_inlets) + "&rarr;" +
-                    (p.n_outlets === null ? "?" : p.n_outlets);
-      return '<div class="op" title="' + (s.description || "").replace(/"/g,"") +
-             '"><span class="nm">' + s.name + '</span>' +
-             '<span class="ports">' + arity + '</span></div>';
-    }).join("") + '</div>'
-  ).join("");
+  el.innerHTML =
+    '<div class="hint">Click to add. Dimmed units need an object or a ' +
+    'function that only Python can supply.</div>' +
+    Object.keys(groups).sort().map(cat =>
+      '<div class="cat"><div class="cat-name">' + cat.replace(/_/g, " ") + '</div>' +
+      groups[cat].sort((a, b) => a.name.localeCompare(b.name)).map(s => {
+        const p = s.ports;
+        const arity = (p.variadic ? "n" : p.n_inlets) + "&rarr;" +
+                      (p.n_outlets === null ? "?" : p.n_outlets);
+        return '<button class="op add' + (s.buildable ? "" : " blocked") + '"' +
+               (s.buildable ? "" : " disabled") +
+               ' data-op="' + esc(s.name) + '" title="' +
+               esc(s.buildable ? (s.description || s.name) : blockedReason(s)) +
+               '"><span class="nm">' + esc(s.name) + '</span>' +
+               '<span class="ports">' + arity + '</span></button>';
+      }).join("") + '</div>'
+    ).join("");
+  el.querySelectorAll("button.add:not(.blocked)").forEach(b =>
+    b.addEventListener("click", () => addUnit(b.dataset.op)));
 }
 
 /* ---- diagram ------------------------------------------------------ */
 function renderDiagram() {
   const svg = document.getElementById("diagram");
-  if (!DOC || !DOC.flowsheet) { svg.innerHTML = ""; return; }
-  const fsheet = DOC.flowsheet;
-  const units = fsheet.units, feeds = Object.keys(fsheet.feeds);
-  const nodes = feeds.map(f => ({id:f, kind:"feed", label:f}))
-    .concat(units.map(u => ({id:u.name, kind:"unit", label:u.name, op:u.operation})));
+  const f = fsheet();
+  if (!f) { svg.innerHTML = ""; return; }
+  const units = f.units, feeds = Object.keys(f.feeds);
+  const nodes = feeds.map(n => ({id: n, kind: "feed", label: n}))
+    .concat(units.map(u => ({id: u.name, kind: "unit", label: u.name, op: u.operation})));
 
   /* A unit's inlets name *streams*, not nodes. Resolve each to whoever
      produces it -- a feed of the same name, or the unit that lists it
      as an outlet -- or the edge is silently dropped. */
   const producer = {};
-  feeds.forEach(f => producer[f] = f);
+  feeds.forEach(n => producer[n] = n);
   units.forEach(u => u.outlets.forEach(o => producer[o] = u.name));
-  /* a recycle maps a source stream onto the destination stream name */
-  const recycles = fsheet.recycles || {};
+  const recycles = f.recycles || {};
   Object.entries(recycles).forEach(([src, dest]) => {
     if (producer[src] !== undefined) producer[dest] = producer[src];
   });
@@ -487,69 +703,187 @@ function renderDiagram() {
       '" height="32" rx="7" fill="' + (feed ? "#2a78d6" : "#fcfcfb") +
       '" stroke="' + (feed ? "#2a78d6" : "#52514e") + '" stroke-width="1.2"/>');
     out.push('<text x="' + x + '" y="' + (y+4) + '" text-anchor="middle" fill="' +
-      (feed ? "#fff" : "#0b0b0b") + '">' + n.label + '</text>');
+      (feed ? "#fff" : "#0b0b0b") + '">' + esc(n.label) + '</text>');
     if (n.op) out.push('<text x="' + x + '" y="' + (y+28) +
-      '" text-anchor="middle" fill="#52514e" font-size="10">' + n.op + '</text>');
+      '" text-anchor="middle" fill="#52514e" font-size="10">' + esc(n.op) + '</text>');
   });
   svg.innerHTML = out.join("");
 }
 
-/* ---- units + editable parameters ---------------------------------- */
+/* ---- feeds --------------------------------------------------------- */
+/* Only the names are editable here. A feed's composition is a stream,
+   which the right-hand table already shows; renaming is what the
+   wiring needs, because a feed name *is* a stream name. */
+function renderFeeds() {
+  const f = fsheet(), el = document.getElementById("feeds");
+  if (!f) { el.innerHTML = ""; return; }
+  const names = Object.keys(f.feeds);
+  el.innerHTML = '<h2>Feed streams</h2>' + (names.length
+    ? '<div class="row">' + names.map(n =>
+        '<input class="sname" data-feed="' + esc(n) + '" value="' + esc(n) + '">'
+      ).join("") + '</div>'
+    : '<div class="hint">none; add one in Python</div>');
+  el.querySelectorAll("input[data-feed]").forEach(inp =>
+    inp.addEventListener("change", async e => {
+      if (renameStream(e.target.dataset.feed, e.target.value.trim())) await push();
+      render();
+    }));
+}
+
+/* ---- units: wiring and parameters ---------------------------------- */
 function renderUnits() {
   const el = document.getElementById("units");
-  if (!DOC || !DOC.flowsheet) { el.innerHTML = "<p>No flowsheet loaded.</p>"; return; }
-  el.innerHTML = DOC.flowsheet.units.map((u, ui) => {
+  const f = fsheet();
+  if (!f) { el.innerHTML = "<p>No flowsheet loaded.</p>"; return; }
+  const known = streamNames();
+
+  el.innerHTML = f.units.map((u, ui) => {
     const spec = CATALOG[u.operation] || {};
+    const ports = spec.ports || {};
     /* Fields the catalog reports as callable hold code, not data. An
        empty text box beside one invites typing a value that could only
        be rejected, so they are listed as read-only instead. */
     const byName = {};
     (spec.parameters || []).forEach(p => byName[p.name] = p);
+    const scalar = v => v === null || ["number","string","boolean"].includes(typeof v);
+    const flatList = v => Array.isArray(v) && v.every(scalar);
     const editable = ([k, v]) => !(byName[k] || {}).is_callable &&
-      (v === null || ["number","string","boolean"].includes(typeof v));
+      (scalar(v) || flatList(v));
 
     const rows = Object.entries(u.params).filter(editable).map(([k, v]) => {
-      const units = (byName[k] || {}).units;
-      return '<tr><td>' + k + (units ? ' <span class="units">' + units +
-        '</span>' : "") + '</td><td><input type="text" data-unit="' + ui +
-        '" data-key="' + k + '" value="' + (v === null ? "" : v) + '"></td></tr>';
+      const meta = byName[k] || {};
+      const shown = Array.isArray(v) ? v.join(", ") : (v === null ? "" : v);
+      const blank = shown === "" || (Array.isArray(v) && !v.length);
+      return '<tr><td>' + esc(k) + (meta.units ? ' <span class="units">' +
+        esc(meta.units) + '</span>' : "") + '</td><td><input type="text"' +
+        (meta.required && blank ? ' class="bad"' : "") +
+        ' data-unit="' + ui + '" data-key="' + esc(k) + '"' +
+        (Array.isArray(v) ? ' data-list="1"' : "") +
+        ' value="' + esc(shown) + '"></td></tr>';
     }).join("");
 
+    const inlets = u.inlets.map((s, i) => {
+      const bad = !known.includes(s);
+      const opts = ['<option value="">(not connected)</option>'].concat(
+        known.filter(n => !u.outlets.includes(n)).map(n =>
+          '<option value="' + esc(n) + '"' + (n === s ? " selected" : "") + '>' +
+          esc(n) + '</option>'));
+      if (s && bad) opts.push('<option value="' + esc(s) + '" selected>' +
+        esc(s) + ' (missing)</option>');
+      return '<select data-unit="' + ui + '" data-inlet="' + i + '"' +
+        (bad ? ' class="bad"' : "") + '>' + opts.join("") + '</select>';
+    }).join("");
+
+    const variadic = ports.variadic
+      ? '<button class="tiny" data-addin="' + ui + '" title="another inlet">+</button>' +
+        (u.inlets.length > 1
+          ? '<button class="tiny" data-delin="' + ui + '">&minus;</button>' : "")
+      : "";
+
+    const outlets = u.outlets.map((s, i) =>
+      '<input class="sname' + (s ? "" : " bad") + '" data-unit="' + ui +
+      '" data-outlet="' + i + '" value="' + esc(s) + '">').join("");
+
     const code = Object.keys(u.params).filter(k => (byName[k] || {}).is_callable);
-    return '<div class="unit"><h3>' + u.name + '</h3>' +
-      '<div class="meta">' + u.operation +
-      ' &nbsp;·&nbsp; ' + u.inlets.join(", ") + ' &rarr; ' + u.outlets.join(", ") +
-      (spec.description ? ' &nbsp;·&nbsp; ' + spec.description : "") + '</div>' +
+    return '<div class="unit">' +
+      '<button class="rm" data-rm="' + ui + '">Remove</button>' +
+      '<h3><input class="uname" data-uname="' + ui + '" value="' + esc(u.name) +
+      '" title="unit name"></h3>' +
+      '<div class="meta">' + esc(u.operation) +
+      (spec.description ? ' &nbsp;·&nbsp; ' + esc(spec.description) : "") + '</div>' +
+      '<div class="wiring">' +
+      '<span class="lbl">in</span><span class="row">' +
+      (inlets || '<span class="hint">none</span>') + variadic + '</span>' +
+      '<span class="lbl">out</span><span class="row">' +
+      (outlets || '<span class="hint">none</span>') + '</span></div>' +
       (rows ? '<table><tbody>' + rows + '</tbody></table>'
             : '<div class="meta">no editable parameters</div>') +
       (code.length ? '<div class="meta code-fields">set in code: ' +
-        code.join(", ") + '</div>' : "") + '</div>';
+        esc(code.join(", ")) + '</div>' : "") + '</div>';
   }).join("");
 
   el.querySelectorAll("input[data-key]").forEach(inp =>
-    inp.addEventListener("change", e => {
-      const u = DOC.flowsheet.units[+e.target.dataset.unit];
+    inp.addEventListener("change", async e => {
+      const u = f.units[+e.target.dataset.unit];
       const raw = e.target.value.trim();
-      const n = Number(raw);
-      /* isFinite, not !isNaN: JSON.stringify writes Infinity as null,
-         so a non-finite value has to travel back as the string the
-         server sent, which it knows how to restore. */
-      u.params[e.target.dataset.key] =
-        raw === "" ? null : (isFinite(n) && raw !== "" ? n : raw);
-      push();
+      if (e.target.dataset.list) {
+        const parts = raw === "" ? [] : raw.split(",").map(x => x.trim());
+        const nums = parts.map(Number);
+        /* a list of numbers must not arrive as a list of strings */
+        u.params[e.target.dataset.key] =
+          parts.length && nums.every(n => isFinite(n)) ? nums : parts;
+      } else {
+        const n = Number(raw);
+        /* isFinite, not !isNaN: JSON.stringify writes Infinity as null,
+           so a non-finite value has to travel back as the string the
+           server sent, which it knows how to restore. */
+        u.params[e.target.dataset.key] =
+          raw === "" ? null : (isFinite(n) && raw !== "" ? n : raw);
+      }
+      await push();
+      render();
+    }));
+
+  el.querySelectorAll("select[data-inlet]").forEach(sel =>
+    sel.addEventListener("change", async e => {
+      f.units[+e.target.dataset.unit].inlets[+e.target.dataset.inlet] = e.target.value;
+      await push();
+      render();
+    }));
+
+  el.querySelectorAll("input[data-outlet]").forEach(inp =>
+    inp.addEventListener("change", async e => {
+      const u = f.units[+e.target.dataset.unit];
+      if (renameStream(u.outlets[+e.target.dataset.outlet], e.target.value.trim()))
+        await push();
+      render();
+    }));
+
+  el.querySelectorAll("input[data-uname]").forEach(inp =>
+    inp.addEventListener("change", e => renameUnit(+e.target.dataset.uname, e.target.value)));
+
+  el.querySelectorAll("button[data-rm]").forEach(b =>
+    b.addEventListener("click", () => removeUnit(+b.dataset.rm)));
+
+  el.querySelectorAll("button[data-addin]").forEach(b =>
+    b.addEventListener("click", async () => {
+      f.units[+b.dataset.addin].inlets.push("");
+      await push();
+      render();
+    }));
+
+  el.querySelectorAll("button[data-delin]").forEach(b =>
+    b.addEventListener("click", async () => {
+      f.units[+b.dataset.delin].inlets.pop();
+      await push();
+      render();
     }));
 }
 
+function render() { renderDiagram(); renderFeeds(); renderUnits(); showProblems(); }
+
+/* ---- talking to the model ------------------------------------------ */
+/* A rejected edit leaves the server running the *previous* flowsheet
+   while the browser shows the new one. Solving then would report
+   numbers for a model that is not on screen, so the flag gates it. */
 async function push() {
-  const r = await api.post("/api/flowsheet", DOC.flowsheet);
-  status(r.ok ? "" : (r.error || "rejected"), "err");
+  const r = await api.post("/api/flowsheet", fsheet());
+  SYNCED = !!r.ok;
+  LAST_ERROR = r.ok ? "" : (r.error || "rejected");
+  return SYNCED;
+}
+
+async function reload() {
+  DOC = await api.get("/api/flowsheet");
+  document.getElementById("path").textContent = DOC.path || "(unsaved)";
 }
 
 /* ---- right panel --------------------------------------------------- */
 async function showStreams() {
+  if (!SYNCED || problems().length) { showProblems(); return; }
   document.getElementById("rightTitle").textContent = "Streams";
   const r = await api.post("/api/solve");
-  if (!r.ok) { status(r.error, "err"); document.getElementById("right").innerHTML = "";
+  if (!r.ok) { status(esc(r.error), "err"); document.getElementById("right").innerHTML = "";
                return; }
   status("Solved" + (r.iterations != null ? " in " + r.iterations + " iterations" : ""), "ok");
   const names = Object.keys(r.streams);
@@ -569,7 +903,7 @@ async function showCode() {
   document.getElementById("rightTitle").textContent = "Python";
   const r = await api.get("/api/code");
   document.getElementById("right").innerHTML = r.error
-    ? '<div class="status err">' + r.error + '</div>'
+    ? '<div class="status err">' + esc(r.error) + '</div>'
     : "<pre>" + r.source.replace(/[&<>]/g, c =>
         ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])) + "</pre>";
 }
@@ -579,14 +913,14 @@ document.getElementById("solve").addEventListener("click", showStreams);
 document.getElementById("showcode").addEventListener("click", showCode);
 document.getElementById("save").addEventListener("click", async () => {
   const r = await api.post("/api/save");
-  status(r.ok ? "Saved to " + r.path : r.error, r.ok ? "ok" : "err");
+  status(r.ok ? "Saved to " + esc(r.path) : esc(r.error), r.ok ? "ok" : "err");
 });
 
 (async function start() {
   CATALOG = await api.get("/api/catalog");
-  DOC = await api.get("/api/flowsheet");
-  document.getElementById("path").textContent = DOC.path || "(unsaved)";
-  renderPalette(); renderDiagram(); renderUnits();
+  await reload();
+  renderPalette();
+  render();
 })();
 </script>
 </body>
