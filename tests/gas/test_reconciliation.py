@@ -19,13 +19,18 @@ import difflow_gas as dg
 from difflow_gas import verify
 from difflow_gas.reconcile import (
     measurement_sigma,
+    monitor_network,
     network_residual_fn,
     perturb,
     reconcile_network,
+    reconcile_network_multi,
     reconciled_values,
 )
 from difflow_gas.residuals import gas_state_layout
 from difflow.reconciliation import (
+    MONITOR_CONSISTENT,
+    MONITOR_INSTRUMENT_FAULT,
+    MONITOR_MODEL_DRIFT,
     ReconciliationStructureError,
     global_test,
     measurement_test,
@@ -395,6 +400,193 @@ class TestEfficiencyEstimation:
         reductions = [d["variance_reduction"] for d in ranked]
         assert reductions == sorted(reductions, reverse=True)
         assert all(d["sd_after"] <= d["sd_before"] + 1e-12 for d in ranked)
+
+
+# =============================================================================
+# A campaign: monitoring, and pooling a window to update the model
+# =============================================================================
+
+
+def _campaign(net, layout, sigma, etas, key0=1000, gross=None):
+    """One measurement vector per period, for a plant fouling by ``etas``."""
+    out = []
+    for day, eta in enumerate(etas):
+        fouled = five_node()
+        fouled.beta["p3"] = net.beta["p3"] * float(eta)
+        p_bar, q = _solve(fouled, "src", P_SLACK_PA, RATIOS)
+        x = layout.pack(p_bar, q, fouled.supply_kg_s)
+        out.append(
+            perturb(
+                x, sigma, jax.random.PRNGKey(key0 + day),
+                layout=layout, gross_errors=gross(day) if gross else None,
+            )
+        )
+    return out
+
+
+class TestMonitorNetwork:
+    def test_a_healthy_plant_stays_below_the_threshold(self, five):
+        """The routine clock on a plant that has not drifted."""
+        net, layout, _, _, sigma = five
+        days = _campaign(net, layout, sigma, [1.0] * 12)
+        mon = monitor_network(net, days, sigma, layout, ratios=RATIOS)
+
+        assert len(mon) == 12
+        assert mon.names == layout.names
+        assert mon.dof == 10
+        assert mon.rejection_rate() < 0.5
+        assert mon.diagnose(window=None).verdict == MONITOR_CONSISTENT
+
+    def test_fouling_reads_as_model_drift(self, five):
+        """A pipe that fouls breaks a balance, not a reading, so the
+        adjustments smear and the blame wanders."""
+        net, layout, _, _, sigma = five
+        etas = np.linspace(1.0, 1.30, 20)
+        mon = monitor_network(
+            net, _campaign(net, layout, sigma, etas), sigma, layout,
+            ratios=RATIOS,
+        )
+        diag = mon.diagnose(window=15)
+
+        assert mon.statistic[-1] > mon.critical
+        assert diag.verdict == MONITOR_MODEL_DRIFT
+        assert diag.culprit is None
+        assert diag.drifting
+
+    def test_a_biased_meter_reads_as_an_instrument_fault(self, five):
+        """The same rejection, a different cause: one meter lying puts
+        the blame on itself, every day."""
+        net, layout, _, _, sigma = five
+        days = _campaign(
+            net, layout, sigma, [1.0] * 20,
+            gross=lambda d: {"q_p2": 6.0} if d >= 5 else None,
+        )
+        diag = monitor_network(
+            net, days, sigma, layout, ratios=RATIOS
+        ).diagnose(window=15)
+
+        assert diag.verdict == MONITOR_INSTRUMENT_FAULT
+        assert diag.culprit == "q_p2"
+        assert not diag.drifting
+
+    def test_layout_defaults_match_reconcile_network(self, five):
+        """The wrapper fills in the same names and scales, so a step
+        reproduces the single-period call exactly."""
+        net, layout, _, _, sigma = five
+        days = _campaign(net, layout, sigma, [1.0, 1.0])
+        mon = monitor_network(
+            net, days, sigma, layout, ratios=RATIOS, keep_results=True
+        )
+        direct = reconcile_network(net, days[0], sigma, layout, ratios=RATIOS)
+
+        assert mon.steps[0].statistic == pytest.approx(direct.objective)
+        assert mon.steps[0].result.names == direct.names
+        assert np.allclose(mon.steps[0].result.x, direct.x)
+
+
+class TestPooledEfficiency:
+    @staticmethod
+    def _window(net, etas, key0=2000):
+        layout = gas_state_layout(net, efficiency_arcs=["p3"])
+        plain = gas_state_layout(net)
+        sigma = measurement_sigma(layout)
+        days = [
+            layout.embed(y, plain)
+            for y in _campaign(
+                net, plain, measurement_sigma(plain), etas, key0=key0
+            )
+        ]
+        return layout, sigma, days
+
+    def test_pooling_beats_averaging_by_sqrt_k(self, five):
+        """The reason to pool: eta appears once, so every period's
+        equations constrain the same unknown."""
+        net, _, _, _, _ = five
+        k = 8
+        layout, sigma, days = self._window(net, [1.15] * k)
+
+        pooled = reconcile_network_multi(
+            net, days, sigma, layout, shared=["eta_p3"], ratios=RATIOS
+        )
+        singles = [
+            reconcile_network(net, y, sigma, layout, ratios=RATIOS)
+            for y in days
+        ]
+        per_day_sd = float(np.mean([r.std["eta_p3"] for r in singles]))
+
+        assert pooled.shared_std["eta_p3"] == pytest.approx(
+            per_day_sd / math.sqrt(k), rel=0.02
+        )
+        assert pooled.shared_std["eta_p3"] < per_day_sd
+
+    def test_pooled_estimate_recovers_a_constant_fouling(self, five):
+        net, _, _, _, _ = five
+        layout, sigma, days = self._window(net, [1.15] * 8)
+        res = reconcile_network_multi(
+            net, days, sigma, layout, shared=["eta_p3"], ratios=RATIOS
+        )
+
+        eta, sd = res.shared["eta_p3"], res.shared_std["eta_p3"]
+        assert abs(eta - 1.15) < 3.0 * sd, f"eta = {eta:.4f} +- {sd:.4f}"
+        assert res.converged
+        assert not global_test(res).detected
+
+    def test_redundancy_counts_the_parameter_once(self, five):
+        """Eight separate estimations spend eight degrees of redundancy
+        on eight copies of eta; pooling spends one."""
+        net, _, _, _, _ = five
+        k = 8
+        layout, sigma, days = self._window(net, [1.15] * k)
+
+        pooled = reconcile_network_multi(
+            net, days, sigma, layout, shared=["eta_p3"], ratios=RATIOS
+        )
+        single = reconcile_network(net, days[0], sigma, layout, ratios=RATIOS)
+
+        assert single.structure.degree_of_redundancy == 9
+        assert pooled.structure.degree_of_redundancy == k * 10 - 1
+        assert len(pooled.states) == k
+        assert list(pooled.states[0]) == layout.names
+
+    def test_updating_the_model_clears_the_rejection(self, five):
+        """The whole loop: monitor rejects, pooling estimates, the
+        corrected model accepts the very same measurements."""
+        net, _, _, _, _ = five
+        layout, sigma, days = self._window(net, [1.15] * 8)
+        plain = gas_state_layout(net)
+        sigma_plain = measurement_sigma(plain)
+        plain_days = _campaign(net, plain, sigma_plain, [1.15] * 8, key0=2000)
+
+        before = monitor_network(
+            net, plain_days, sigma_plain, plain, ratios=RATIOS
+        )
+        assert before.rejection_rate() > 0.5
+
+        eta = reconcile_network_multi(
+            net, days, sigma, layout, shared=["eta_p3"], ratios=RATIOS
+        ).shared["eta_p3"]
+
+        updated = five_node()
+        updated.beta["p3"] = net.beta["p3"] * eta
+        after = monitor_network(
+            updated, plain_days, sigma_plain, plain, ratios=RATIOS
+        )
+        assert after.statistic.mean() < before.statistic.mean()
+        assert after.rejection_rate() < 0.5
+
+
+class TestResidualClosure:
+    def test_efficiencies_survive_repeated_calls(self, five):
+        """The closure is evaluated once per Gauss-Newton step and once
+        per Jacobian column, so it must not consume its own argument."""
+        net, layout, _, x_true, _ = five
+        fn = network_residual_fn(
+            net, layout, ratios=RATIOS, efficiencies={"p3": 1.3}
+        )
+        plain = network_residual_fn(net, layout, ratios=RATIOS)
+
+        assert np.allclose(fn(x_true), fn(x_true))
+        assert not np.allclose(fn(x_true), plain(x_true))
 
 
 if __name__ == "__main__":

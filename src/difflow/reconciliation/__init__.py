@@ -42,6 +42,17 @@ at all is decided up front by
 :func:`~difflow.reconciliation.structure.classify`, so an ill-posed
 problem raises :class:`ReconciliationStructureError` naming the
 culprits instead of returning NaN.
+
+Over time the same computation becomes an operating discipline. Run it
+routinely with the parameters *fixed* --- :func:`monitor` --- and the
+global test is a genuine instrument-health monitor, because the model
+has no freedom to hide a fault; :meth:`MonitorResult.diagnose` then
+reads the statistic series and where the blame lands to say whether a
+sensor or the model is at fault, which is the question the global test
+alone cannot answer. Re-estimate parameters only as a deliberate
+campaign, and pool the window with :func:`reconcile_multi`, which
+holds a parameter common across data sets so every one of them
+constrains the same unknown.
 """
 
 from difflow.reconciliation.core import (
@@ -66,7 +77,25 @@ from difflow.reconciliation.gross_error import (
     measurement_test,
     serial_elimination,
 )
-from difflow.reconciliation.reconcile import ReconcileResult, reconcile
+from difflow.reconciliation.monitoring import (
+    CONCENTRATION_THRESHOLD,
+    MONITOR_CONSISTENT,
+    MONITOR_INSTRUMENT_FAULT,
+    MONITOR_MODEL_DRIFT,
+    MONITOR_UNDIAGNOSED,
+    REJECTION_THRESHOLD,
+    MonitorDiagnosis,
+    MonitorResult,
+    MonitorStep,
+    blame_concentration,
+    monitor,
+)
+from difflow.reconciliation.reconcile import (
+    MultiReconcileResult,
+    ReconcileResult,
+    reconcile,
+    reconcile_multi,
+)
 from difflow.reconciliation.structure import (
     MEASURED_JUST_DETERMINED,
     MEASURED_REDUNDANT,
@@ -79,9 +108,11 @@ from difflow.reconciliation.structure import (
 )
 
 __all__ = [
-    # entry point
+    # entry points
     "reconcile",
     "ReconcileResult",
+    "reconcile_multi",
+    "MultiReconcileResult",
     # KKT core
     "Scaling",
     "auto_scaling",
@@ -113,4 +144,16 @@ __all__ = [
     # sensor placement
     "sensor_value",
     "sensor_ranking",
+    # monitoring over time
+    "monitor",
+    "MonitorResult",
+    "MonitorStep",
+    "MonitorDiagnosis",
+    "blame_concentration",
+    "MONITOR_CONSISTENT",
+    "MONITOR_INSTRUMENT_FAULT",
+    "MONITOR_MODEL_DRIFT",
+    "MONITOR_UNDIAGNOSED",
+    "REJECTION_THRESHOLD",
+    "CONCENTRATION_THRESHOLD",
 ]

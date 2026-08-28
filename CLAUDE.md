@@ -38,14 +38,15 @@ difflow/
 │   │   ├── database.py    # Species property database
 │   │   ├── flowsheet.py   # Flowsheet with recycle solving
 │   │   ├── uncertainty.py # Sensitivity & UQ
-│   ├── catalog.py     # Machine-readable schema of every unit operation
-│   ├── serialize.py   # Flowsheet <-> JSON round trip
-│   ├── codegen.py     # Flowsheet -> runnable Python source
-│   ├── kinetics.py    # Declarative mass-action rate laws (data, not callables)
-│   ├── publish.py     # Flowsheet -> self-contained interactive HTML (no install)
-│   ├── gui.py         # Local browser editor (python -m difflow.gui)
-│   ├── reconciliation/ # Data reconciliation, gross error detection, observability
+│   │   ├── catalog.py     # Machine-readable schema of every unit operation
+│   │   ├── serialize.py   # Flowsheet <-> JSON round trip
+│   │   ├── codegen.py     # Flowsheet -> runnable Python source
+│   │   ├── kinetics.py    # Declarative mass-action rate laws (data, not callables)
+│   │   ├── publish.py     # Flowsheet -> self-contained interactive HTML (no install)
+│   │   ├── gui.py         # Local browser editor (python -m difflow.gui)
 │   │   ├── params_mixin.py # ParamsMixin base class for Params dataclasses
+│   │   ├── reconciliation/ # Data reconciliation, gross error detection,
+│   │   │                   # observability, monitoring, multi-set pooling
 │   │   ├── units/         # Steady-state unit operations
 │   │   ├── dynamic/       # Dynamic modeling (DAE)
 │   │   ├── economics/     # Technoeconomic analysis
@@ -264,7 +265,9 @@ class MyUnit:
 - Verification: full equation-oriented residual checks (`difflow_gas.verify`)
 - Equations: `difflow_gas.residuals.network_residuals` is the single JAX-traceable definition of the equation set; `verify` is the reporting layer over it
 - Plotting: `dg.draw_network(net, pos=..., pressures=..., flows=..., highlight=...)` draws a network schematic
-- Reconciliation: `reconcile_network` (see `difflow.reconciliation`)
+- Reconciliation: `reconcile_network`, `monitor_network` (a campaign against a fixed
+  model), `reconcile_network_multi` (pool periods sharing a parameter); all three
+  fill in the layout's names and scales (see `difflow.reconciliation`)
 - Gotchas encoded in docs: solve with `clip_negative_flows=False` (signed flows), damp the tear map (alpha ~ 0.3), pose optimization pressure constraints in squared pressure
 
 ### Debugging Gradients
