@@ -259,7 +259,9 @@ class MyUnit:
 - Verification: full equation-oriented residual checks (`difflow_gas.verify`)
 - Equations: `difflow_gas.residuals.network_residuals` is the single JAX-traceable definition of the equation set; `verify` is the reporting layer over it
 - Plotting: `dg.draw_network(net, pos=..., pressures=..., flows=..., highlight=...)` draws a network schematic
-- Reconciliation: `reconcile_network` (see `difflow.reconciliation`)
+- Reconciliation: `reconcile_network`, `monitor_network` (a campaign against a fixed
+  model), `reconcile_network_multi` (pool periods sharing a parameter); all three
+  fill in the layout's names and scales (see `difflow.reconciliation`)
 - Gotchas encoded in docs: solve with `clip_negative_flows=False` (signed flows), damp the tear map (alpha ~ 0.3), pose optimization pressure constraints in squared pressure
 
 ### Debugging Gradients

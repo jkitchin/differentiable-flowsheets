@@ -158,9 +158,11 @@ from difflow_gas.residuals import (
 from difflow_gas.plotting import circular_positions, draw_network
 from difflow_gas.reconcile import (
     measurement_sigma,
+    monitor_network,
     network_residual_fn,
     perturb,
     reconcile_network,
+    reconcile_network_multi,
     reconciled_values,
 )
 
@@ -243,6 +245,8 @@ __all__ = [
     "residual_names",
     # data reconciliation
     "reconcile_network",
+    "reconcile_network_multi",
+    "monitor_network",
     "network_residual_fn",
     "measurement_sigma",
     "perturb",

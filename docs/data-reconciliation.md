@@ -182,6 +182,8 @@ p_bar, q_kg_s, supply = dg.reconciled_values(res, layout)
 dg.verify.residuals_from_values(p_bar, q_kg_s, net).ok      # True
 ```
 
+`dg.monitor_network` and `dg.reconcile_network_multi` are the campaign-scale versions of the same call, and take the same `(network, ..., layout, ratios=...)` arguments. All three fill in `names` and `unmeasured_scale` from the layout, so a gas reconciliation never has to restate them.
+
 Measured nominations are deliberately kept out of `GasNetwork`, which rejects supplies that do not sum to zero — real nominations do not, and making them close is what the reconciliation is for.
 
 See [`examples/28_data_reconciliation.ipynb`](../examples/28_data_reconciliation.ipynb) for the full treatment: variance reduction, a biased flow meter found and eliminated, an unmeasured pipe-fouling factor estimated with its standard error, the observability boundary, and sensor placement.
@@ -197,14 +199,16 @@ The practical discipline is two clocks: reconcile routinely with parameters **fi
 `monitor` runs the first clock. It reconciles a sequence of data sets against one fixed model and keeps the diagnostics, which is what makes the resulting statistic series readable: the model and the sigmas never move, so every wobble in it comes from the data.
 
 ```python
-from difflow.reconciliation import monitor
+import difflow_gas as dg
 
-mon = monitor(residual_fn, daily_measurements, sigma, names=layout.names)
+mon = dg.monitor_network(net, daily_measurements, sigma, layout, ratios=RATIOS)
 mon.statistic          # the chi-squared series, shape (n_days,)
 mon.suspects           # who the measurement test blamed each day
 mon.diagnose(window=15)
 # model drift: 93% of the last 15 steps reject, blame concentration 40%
 ```
+
+`monitor(residual_fn, measurements, sigma, names=...)` is the domain-agnostic form; `dg.monitor_network` is the same call with the network's residual closure and the layout's names and scales filled in.
 
 `diagnose` applies the rule above. `blame_concentration` is the measurement behind it — the fraction of the window blaming the single most-blamed sensor, counted over the *whole* window including the quiet days, so a campaign that rejects rarely does not read as a concentrated fault just because its few rejections agreed. A verdict of `instrument fault` names the culprit and means go and calibrate it; `model drift` is the one verdict that entitles you to the second clock. Both thresholds are arguments, so the rule can be tuned to a plant's own noise.
 
@@ -215,16 +219,18 @@ A data set whose problem cannot be posed at all records `failed` on its step rat
 One day's data gives a noisy parameter estimate, so pool a window. `reconcile_multi` gives each data set its own copy of the plant state while the variables in `shared` appear **once**, estimated from all of them in a single solve:
 
 ```python
-from difflow.reconciliation import reconcile_multi
+layout = dg.gas_state_layout(net, efficiency_arcs=["p3"])   # carries eta
+window = [layout.embed(y, plain_layout) for y in week_of_data]
 
-res = reconcile_multi(
-    residual_fn, week_of_data, sigma,
-    shared=["eta_p3"], names=layout.names,
+res = dg.reconcile_network_multi(
+    net, window, sigma, layout, shared=["eta_p3"], ratios=RATIOS,
 )
 res.shared["eta_p3"], res.shared_std["eta_p3"]
 res.states[0]                       # day 0's reconciled state
 global_test(res)                    # on the pooled problem
 ```
+
+Again `reconcile_multi(residual_fn, measurements, sigma, shared=...)` is the general form. `GasStateLayout.embed` re-packs measurements taken against a plainer layout into the one carrying the parameter, by name — the added entry is unmeasured, so it is filled with `nan`.
 
 This is not the same as reconciling each day separately and averaging the estimates, in two ways that matter. The standard error it reports is that *of the pooled estimate*, roughly $\sqrt{K}$ tighter, whereas averaging point estimates leaves you holding one day's error bar for a quantity $K$ of them informed. And because the parameter is one unknown rather than $K$ private copies, the degrees of redundancy count it once — pooling recovers the $K-1$ that separate estimations throw away, and a parameter too weakly identified to be recovered from one data set can still be observable from several. The structure check runs on the stacked problem and reports this.
 
