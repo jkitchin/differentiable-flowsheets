@@ -230,6 +230,13 @@ from difflow import estimation
 # Data reconciliation submodule
 from difflow import reconciliation
 
+# Declarative kinetics
+from difflow.kinetics import (
+    KineticsSpecError,
+    ReactionSet,
+    mass_action_kinetics,
+)
+
 # Flowsheet serialization
 from difflow import serialize
 
@@ -488,6 +495,10 @@ __all__ = [
     "estimation",
     # Data reconciliation
     "reconciliation",
+    # Declarative kinetics
+    "mass_action_kinetics",
+    "ReactionSet",
+    "KineticsSpecError",
     # Flowsheet serialization
     "serialize",
     # Operation catalog

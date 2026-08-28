@@ -40,6 +40,7 @@ difflow/
 │   │   ├── uncertainty.py # Sensitivity & UQ
 │   ├── catalog.py     # Machine-readable schema of every unit operation
 │   ├── serialize.py   # Flowsheet <-> JSON round trip
+│   ├── kinetics.py    # Declarative mass-action rate laws (data, not callables)
 │   ├── reconciliation/ # Data reconciliation, gross error detection, observability
 │   │   ├── params_mixin.py # ParamsMixin base class for Params dataclasses
 │   │   ├── units/         # Steady-state unit operations
