@@ -133,6 +133,10 @@ from difflow.planning.benchmark import (
     time_callable,
 )
 from difflow.planning.block import Block
+from difflow.planning.diagram import (
+    draw_chain, draw_delta_vectors, draw_planning_network, draw_taylor_model,
+    draw_trust_region,
+)
 from difflow.planning.linearize import (
     Linearization, PhaseBoundaryWarning, check_delta_vectors,
     check_phase_transition, choose_ad_mode, classify_phase, jacobian_fn,
@@ -198,6 +202,12 @@ __all__ = [
     "PiecewiseSpec",
     "PiecewiseData",
     "sample_piecewise",
+    # Drawings
+    "draw_chain",
+    "draw_planning_network",
+    "draw_delta_vectors",
+    "draw_taylor_model",
+    "draw_trust_region",
     # Benchmarking
     "gradient_cost_ratio",
     "scaling_study",
