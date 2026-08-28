@@ -46,6 +46,7 @@ dependencies = [
     "gpjax>=0.12.2",
     "blackjax>=1.3",
     "matplotlib>=3.10.8",
+    "scipy>=1.10",
 ]
 
 [project.optional-dependencies]
@@ -84,6 +85,11 @@ cc = [
 ]
 gas = [
     # Gas transmission network operations are included in the main package
+]
+planning = [
+    # Pyomo model emission for difflow.planning (LPModel.to_pyomo).
+    # The planner itself solves with HiGHS via scipy and needs nothing extra.
+    "pyomo>=6.0",
 ]
 cuda12 = [
     "jax[cuda12]>=0.4.0",

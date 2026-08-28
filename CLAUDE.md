@@ -38,6 +38,7 @@ difflow/
 │   │   ├── database.py    # Species property database
 │   │   ├── flowsheet.py   # Flowsheet with recycle solving
 │   │   ├── uncertainty.py # Sensitivity & UQ
+│   │   ├── planning/      # Delta-base planning (LP/MILP + trust region)
 │   │   ├── catalog.py     # Machine-readable schema of every unit operation
 │   │   ├── serialize.py   # Flowsheet <-> JSON round trip
 │   │   ├── codegen.py     # Flowsheet -> runnable Python source
@@ -270,6 +271,40 @@ class MyUnit:
   fill in the layout's names and scales (see `difflow.reconciliation`)
 - Gotchas encoded in docs: solve with `clip_negative_flows=False` (signed flows), damp the tear map (alpha ~ 0.3), pose optimization pressure constraints in squared pressure
 
+### Delta-Base Planning (`difflow.planning`)
+
+Turns flowsheets into a planning LP/MILP whose unit submodels are AD Jacobians
+("delta vectors"), kept honest with a trust region. It is a module alongside
+`eo_solver.py` and `estimation/`, **not** a `difflow.plugins` entry point.
+
+```python
+from difflow.planning import Block, Network, DeltaBasePlanner
+
+blk = Block(name="ngl", fn=flowsheet_fn,          # any pure JAX u -> y callable
+            u_names=[...], y_names=[...], lb=[...], ub=[...], jit=True)
+net = Network([blk, power], links=[("ngl.residue_F", "power.fuel_F")])
+res = DeltaBasePlanner(net, prices={...}, specs=[("ngl.T_colfeed", "<=", 236.0)],
+                       radius=0.3).solve()
+res.plan, res.delta_vectors, res.pyomo_model, res.plan_sensitivity(wrt="prices")
+```
+
+Invariants encoded in the module (do not weaken them):
+- Trust-region proposals are accepted only after evaluating the caller's own
+  *nonlinear* blocks (`accept_test=True`); `accept_test=False` exists only to
+  demonstrate the failure mode.
+- Constraint violations are scored from the nonlinear model, never from LP slacks.
+- Bang-bang levers get vertex-seeded starts; use `price_switch_point` for the
+  finite price at which a corner flips.
+- AD mode is chosen by shape (`choose_ad_mode`), never hard-coded.
+- Blocks with a `phase_fn` raise `PhaseBoundaryWarning` when a proposal crosses
+  a phase boundary.
+- Inter-block recycles are rejected — merge them into one flowsheet.
+- Out of scope by design: pooling/blending bilinearity, assay libraries,
+  blending correlations, scheduling. Do not add them.
+
+Reference model: `difflow.planning.chain.two_plant_chain()`. Docs: `docs/planning.md`.
+Example: `examples/30_delta_base_planning.ipynb`. Tests: `tests/test_planning.py`.
+
 ### Debugging Gradients
 
 ```python
@@ -312,6 +347,7 @@ jax.debug.print("value: {x}", x=value)
 | `Makefile` | Build automation (test, book, notebooks) |
 | `src/difflow/__init__.py` | Main API exports |
 | `src/difflow/params_mixin.py` | ParamsMixin base class for all Params dataclasses |
+| `src/difflow/planning/` | Delta-base planning: AD delta vectors -> trust-region LP/MILP |
 | `src/difflow_bio/__init__.py` | Bio manufacturing plugin exports |
 | `src/difflow_ree/__init__.py` | REE extraction plugin exports |
 | `src/difflow_cc/__init__.py` | Carbon capture plugin exports |

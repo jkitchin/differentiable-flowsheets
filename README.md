@@ -431,6 +431,40 @@ returning `NaN`. Works with any differentiable residual function; see
 `examples/29_model_updating.ipynb` for when to update a model parameter
 rather than the data.
 
+## Delta-Base Planning
+
+Refinery and value-chain planning runs on linear programs whose unit
+submodels are *base plus delta vectors*, `y ~= y0 + J (u - u0)`. Every
+commercial system builds `J` by perturbing a rigorous simulator one
+variable at a time, which costs `O(n)` evaluations. A flowsheet is a pure
+function with its flash and recycle solves embedded, so `jax.jacobian`
+returns the same reduced Jacobian for a cost independent of `n`:
+
+```python
+from difflow.planning import Block, Network, DeltaBasePlanner
+
+net = Network([ngl, power], links=[("ngl.residue_F", "power.fuel_F")])
+res = DeltaBasePlanner(net, prices={"ngl.NGL_C2": 9.0, "power.Power": 55.0},
+                       specs=[("ngl.T_colfeed", "<=", 236.0)],
+                       radius=0.3).solve()
+
+res.plan                              # optimal decisions
+res.delta_vectors                     # the J blocks actually used
+res.pyomo_model                       # emitted for the Pyomo/IDAES ecosystem
+res.plan_sensitivity(wrt="prices")    # d(plan)/d(price), not just the plan
+```
+
+Measured on a two-plant chain, the AD gradient costs 1-2 model
+evaluations from 5 to 80 decisions while central differences cost `2n`.
+Every LP proposal is checked against the *nonlinear* blocks before it is
+accepted, violations are charged from the real model rather than from LP
+slacks, bang-bang levers are vertex-seeded, and a linearisation that
+straddles a phase boundary raises a warning instead of quietly
+extrapolating a branch that no longer exists. Pooling/blending
+bilinearity and the commercial trappings (assay libraries, blending
+correlations, scheduling) are explicitly out of scope. See
+`docs/planning.md` and `examples/30_delta_base_planning.ipynb`.
+
 ## Thermodynamics
 
 ### Ideal Thermodynamics (for VLE)

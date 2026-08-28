@@ -27,6 +27,7 @@
 | [Dynamic Modeling](dynamic-modeling.md) | Transient simulation, ODE/DAE integration, diffrax backend |
 | [Solvers and Utilities](solvers-and-utilities.md) | Numerical methods, uncertainty propagation |
 | [Data Reconciliation](data-reconciliation.md) | Constrained least squares on noisy plant data, gross error detection, observability |
+| [Delta-Base Planning](planning.md) | AD-generated delta vectors, trust-region LP/MILP planning, sensitivity of the plan |
 
 ## Architecture Overview
 
@@ -39,6 +40,7 @@ difflow/
 ├── solvers.py          # Numerical solvers
 ├── flowsheet.py        # Flowsheet management
 ├── reconciliation/     # Data reconciliation and gross error detection
+├── planning/           # Delta-base planning (LP/MILP from flowsheets)
 ├── uncertainty.py      # Uncertainty propagation
 ├── cantera_import.py   # Cantera data import
 ├── pyglenn_import.py   # NASA Glenn (pyglenn) thermo import
