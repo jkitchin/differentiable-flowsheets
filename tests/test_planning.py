@@ -22,8 +22,16 @@ import pytest
 
 jax.config.update("jax_enable_x64", True)
 
+import optimistix as optx
+
 from difflow.planning import (
+    AMPLIFY_TOL,
+    SPREAD_TOL,
     Block,
+    DeltaHealthWarning,
+    HealthReport,
+    check_delta_health,
+    scaled_jacobian,
     DeltaBasePlanner,
     Network,
     PhaseBoundaryWarning,
@@ -885,3 +893,232 @@ class TestProblemStatement:
         text = result.lp_model.as_text(max_rows=2)
         assert "more equality rows" in text
         assert "more columns" in text
+
+
+class TestDeltaHealth:
+    """Diagnostics for how a delta-base model degrades as it gets large.
+
+    The three failure modes these cover are the ones that scale with model
+    size — dead levers from saturated expressions, recycle amplification, and
+    constraint-matrix scale spread — plus the non-failure that is routinely
+    mistaken for one: a small *absolute* composed sensitivity, which is
+    physics rather than lost information.
+    """
+
+    def test_smooth_block_is_healthy(self):
+        report = check_delta_health(smooth_block())
+        assert report.ok, report.summary()
+        assert report.summary() == "delta-vector health: no findings"
+
+    def test_dead_lever_from_saturated_clip(self):
+        """A lever behind an active clip contributes an exactly zero column."""
+        def fn(u):
+            # u[1] only ever reaches the output through a saturated clip.
+            return jnp.array([u[0] + jnp.clip(u[1], 0.0, 1.0)])
+
+        blk = Block(name="b", fn=fn, u_names=["free", "pinned"],
+                    y_names=["y"], lb=[0.0, 2.0], ub=[1.0, 5.0],
+                    u0=[0.5, 3.0])
+        report = check_delta_health(blk)
+        assert report.dead_levers() == ["b.pinned"]
+        finding = report.of_kind("dead_lever")[0]
+        assert finding.severity == "warning"
+        assert "never move this lever" in finding.detail
+        # The lever is interior, so the diagnostic must blame the clip rather
+        # than the bound -- that distinction is the whole point of the message.
+        assert "interior" in finding.detail
+
+    def test_dead_lever_reported_when_pinned_at_a_bound(self):
+        def fn(u):
+            return jnp.array([u[0] + jnp.clip(u[1], 0.0, 1.0)])
+
+        blk = Block(name="b", fn=fn, u_names=["free", "pinned"],
+                    y_names=["y"], lb=[0.0, 2.0], ub=[1.0, 5.0],
+                    u0=[0.5, 2.0])
+        detail = check_delta_health(blk).of_kind("dead_lever")[0].detail
+        assert "at its lower bound" in detail
+
+    def test_dead_output_is_flagged(self):
+        def fn(u):
+            return jnp.array([u[0], jnp.clip(u[0], -5.0, -1.0)])
+
+        blk = Block(name="b", fn=fn, u_names=["x"], y_names=["live", "stuck"],
+                    lb=[0.0], ub=[1.0], u0=[0.5])
+        report = check_delta_health(blk)
+        assert [f.variable for f in report.of_kind("dead_output")] == ["b.stuck"]
+
+    def test_non_finite_jacobian_is_an_error(self):
+        blk = Block(name="b", fn=lambda u: jnp.array([jnp.sqrt(u[0])]),
+                    u_names=["x"], y_names=["y"], lb=[0.0], ub=[1.0],
+                    u0=[0.0])
+        report = check_delta_health(blk)
+        assert report.of_kind("non_finite"), report.summary()
+        assert not report.ok
+        with pytest.raises(ValueError, match="health check found"):
+            report.raise_on_error()
+
+    def test_recycle_amplification_is_flagged(self):
+        """(I - A)^-1 blows up as loop gain approaches one."""
+        def fn(u):
+            gain, feed = u[0], u[1]
+            sol = optx.root_find(lambda x, args: x - (feed + gain * 0.999 * x),
+                                 optx.Newton(rtol=1e-10, atol=1e-12),
+                                 jnp.asarray(1.0))
+            return jnp.array([sol.value])
+
+        tight = Block(name="loop", fn=fn, u_names=["gain", "feed"],
+                      y_names=["x"], lb=[0.0, 0.5], ub=[0.2, 2.0],
+                      u0=[0.1, 1.0])
+        assert not check_delta_health(tight).of_kind("amplifying")
+
+        hot = Block(name="loop", fn=fn, u_names=["gain", "feed"],
+                    y_names=["x"], lb=[0.0, 0.5], ub=[0.999, 2.0],
+                    u0=[0.99, 1.0])
+        found = check_delta_health(hot).of_kind("amplifying")
+        assert found and found[0].variable == "loop.gain"
+        assert found[0].value > AMPLIFY_TOL
+        assert "(I - A)^-1" in found[0].detail
+
+    def test_zero_valued_output_does_not_trigger_amplification(self):
+        """A bang-bang lever at a corner zeroes an output; that is not a defect.
+
+        "Moves by N times its own value" is undefined when the value is zero,
+        and vertex seeding guarantees the planner lands on exactly such
+        corners -- so judging those rows would fire on nearly every plan.
+        """
+        def fn(u):
+            alloc, feed = u[0], u[1]
+            return jnp.array([alloc * feed, (1.0 - alloc) * feed])
+
+        blk = Block(name="power", fn=fn, u_names=["alloc", "feed"],
+                    y_names=["burned", "sold"], lb=[0.0, 0.0], ub=[1.0, 100.0],
+                    u0=[1.0, 86.0])       # alloc at its corner -> sold == 0
+        npt.assert_allclose(float(linearize_block(blk).y0[1]), 0.0, atol=0)
+        assert not check_delta_health(blk).of_kind("amplifying")
+
+    def test_two_plant_chain_health(self):
+        """The reference chain's own findings, as a guard against drift."""
+        problem = chain_mod.two_plant_chain()
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", PhaseBoundaryWarning)
+            report = problem.planner(radius=0.25).check_health()
+        # P_expander is in pascals, so dE_refrig/dP is ~1e-8 while the power
+        # block's dimensionless levers give O(10) coefficients.
+        spread = report.of_kind("scale_spread")
+        assert spread, report.summary()
+        assert spread[0].value > 1e8
+        # Nothing is dead and nothing is spuriously flagged as amplifying.
+        assert not report.of_kind("dead_lever")
+        assert not report.of_kind("amplifying")
+        assert not report.errors
+
+    def test_amplification_blames_wide_bounds_when_that_is_the_cause(self):
+        """A lever bounded far beyond its operating point is not a recycle."""
+        blk = Block(name="b", fn=lambda u: jnp.array([u[0] * u[1]]),
+                    u_names=["x", "F"], y_names=["y"],
+                    lb=[0.0, 0.0], ub=[1.0, 1e6], u0=[0.5, 10.0])
+        found = check_delta_health(blk).of_kind("amplifying")
+        assert found, "a 1e6-wide bound on a lever at 10 should be flagged"
+        assert "Tighten the bounds" in found[0].detail
+        assert "(I - A)^-1" not in found[0].detail
+
+    def test_linked_inputs_are_scaled_by_value_not_bounds(self):
+        """A link target is not stepped by the trust region.
+
+        Scaling it by its declared bound range invents an amplification
+        finding on every downstream block of a chain.
+        """
+        def stage(u):
+            return jnp.array([0.9 * u[1] * (0.5 + u[0])])
+
+        blocks = [Block(name=f"u{i}", fn=stage, u_names=["sev", "F_in"],
+                        y_names=["F_out"], lb=[0.0, 0.0], ub=[1.0, 1e6],
+                        u0=[0.5, 100.0]) for i in range(4)]
+        net = Network(blocks,
+                      links=[(f"u{i}.F_out", f"u{i+1}.F_in") for i in range(3)])
+        blamed = {f.variable for f in
+                  check_delta_health(net).of_kind("amplifying")}
+        # u0.F_in is a genuine free decision with absurd bounds; the linked
+        # F_in on u1..u3 must not be blamed for the same thing.
+        assert "u0.F_in" in blamed
+        assert not blamed & {"u1.F_in", "u2.F_in", "u3.F_in"}
+
+    def test_no_influence_decision_in_network(self):
+        def live(u):
+            return jnp.array([u[0] * 2.0])
+
+        def blocked(u):
+            return jnp.array([jnp.clip(u[0], -3.0, -1.0)])
+
+        net = Network([Block(name="a", fn=live, u_names=["x"], y_names=["y"],
+                             lb=[0.0], ub=[1.0], u0=[0.5]),
+                       Block(name="b", fn=blocked, u_names=["x"],
+                             y_names=["y"], lb=[0.0], ub=[1.0], u0=[0.5])])
+        report = check_delta_health(net)
+        assert [f.variable for f in report.of_kind("no_influence")] == ["b.x"]
+        assert "<composed>" in report.scaled
+
+    def test_lp_scale_spread_is_flagged(self):
+        blk = Block(name="b", fn=lambda u: jnp.array([u[0] * 1e10, u[0] * 1e-6]),
+                    u_names=["x"], y_names=["big", "small"],
+                    lb=[0.0], ub=[1.0], u0=[0.5])
+        net = Network([blk])
+        planner = DeltaBasePlanner(net, prices={"b.big": 1.0}, radius=0.3)
+        report = planner.check_health()
+        spread = report.of_kind("scale_spread")
+        assert spread, report.summary()
+        assert spread[0].value > SPREAD_TOL
+
+    def test_composed_relative_sensitivity_survives_extreme_depth(self):
+        """Absolute smallness is physics; relative smallness would be loss.
+
+        A 100-stage damping chain drives the output to ~1e-30. The *relative*
+        sensitivity is still exact, which is why a deep flowsheet does not
+        suffer the vanishing-gradient failure an RNN does.
+        """
+        n = 100
+
+        def fn(u):
+            c = 1.0
+            for i in range(n):
+                c = c / (1.0 + u[i])
+            return jnp.array([c])
+
+        blk = Block(name="deep", fn=fn, u_names=[f"k{i}" for i in range(n)],
+                    y_names=["c"], lb=[0.5] * n, ub=[1.5] * n, u0=[1.0] * n)
+        lin = linearize_block(blk)
+        assert float(lin.y0[0]) < 1e-29           # absolutely tiny
+        assert float(lin.J[0, 0]) != 0.0          # but not lost
+
+        # d(ln c)/d(ln k_0) = -k_0/(1 + k_0) = -0.5, exactly, at every depth.
+        relative = float(lin.J[0, 0]) * 1.0 / float(lin.y0[0])
+        npt.assert_allclose(relative, -0.5, rtol=1e-12)
+
+        # The health check must not mistake that for a defect.
+        assert not check_delta_health(blk).of_kind("dead_lever")
+
+    def test_scaled_jacobian_is_dimensionless(self):
+        blk = Block(name="b", fn=lambda u: jnp.array([2.0 * u[0]]),
+                    u_names=["x"], y_names=["y"], lb=[0.0], ub=[10.0],
+                    u0=[5.0])
+        lin = linearize_block(blk)
+        # dy/dx = 2; range 10; y0 = 10  ->  2 * 10 / 10 = 2
+        npt.assert_allclose(scaled_jacobian(blk, lin), [[2.0]], rtol=1e-12)
+
+    def test_report_warns_and_dispatches(self):
+        blk = Block(name="b",
+                    fn=lambda u: jnp.array([u[0] + jnp.clip(u[1], 0.0, 1.0)]),
+                    u_names=["free", "pinned"], y_names=["y"],
+                    lb=[0.0, 2.0], ub=[1.0, 5.0], u0=[0.5, 3.0])
+        with pytest.warns(DeltaHealthWarning, match="dead_lever"):
+            check_delta_health(blk).warn()
+        with pytest.raises(TypeError, match="Block or a Network"):
+            check_delta_health("not a block")
+
+    def test_planner_check_health_covers_blocks_and_lp(self, chain_problem):
+        problem = chain_problem
+        report = problem.planner(radius=0.25).check_health()
+        assert isinstance(report, HealthReport)
+        assert set(report.scaled) >= {b.name for b in problem.network.blocks}
+        assert "radius" in report.thresholds
+        assert "spread_tol" in report.thresholds

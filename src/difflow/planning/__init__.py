@@ -91,6 +91,15 @@ Beyond the base plan
   often than optimality.
 * :mod:`difflow.planning.piecewise` — ``vmap`` a block over many operating
   points in one batched call and emit an SOS2 MILP.
+* :mod:`difflow.planning.health` — what degrades as a model gets large, and
+  what does not.  A small *absolute* composed sensitivity is physics: in
+  ``float64`` a chain deep enough to drive outputs to ``1e-61`` still reports
+  its log-derivative exactly, so a large flowsheet does *not* suffer the
+  vanishing-gradient failure of an RNN.  Three other things do scale with size
+  — dead levers behind saturated clips (the one real analogue of lost
+  information), ``(I - A)^-1`` amplification from near-unity recycle gains, and
+  constraint-matrix scale spread from mixed units.  ``check_delta_health`` and
+  ``DeltaBasePlanner.check_health`` report all three.
 * :mod:`difflow.planning.sensitivity` — the sensitivity of the *plan itself*:
   ``d(plan)/d(price)``, ``d(plan)/d(parameter)``, ``d(profit*)/d(parameter)``.
   This is what k_aug and sIPOPT give for a single NLP, and it is what makes
@@ -137,6 +146,12 @@ from difflow.planning.diagram import (
     draw_chain, draw_delta_vectors, draw_planning_network, draw_taylor_model,
     draw_trust_region,
 )
+from difflow.planning.health import (
+    AMPLIFY_TOL, COND_TOL, DEAD_TOL, SPREAD_TOL, DeltaHealthWarning,
+    Finding, HealthReport, check_block_health, check_delta_health,
+    check_lp_scaling, check_network_health, composed_sensitivity,
+    scaled_jacobian,
+)
 from difflow.planning.linearize import (
     Linearization, PhaseBoundaryWarning, check_delta_vectors,
     check_phase_transition, choose_ad_mode, classify_phase, jacobian_fn,
@@ -173,6 +188,20 @@ __all__ = [
     "classify_phase",
     "check_phase_transition",
     "PhaseBoundaryWarning",
+    # Delta-vector health
+    "check_delta_health",
+    "check_block_health",
+    "check_network_health",
+    "check_lp_scaling",
+    "composed_sensitivity",
+    "scaled_jacobian",
+    "HealthReport",
+    "Finding",
+    "DeltaHealthWarning",
+    "DEAD_TOL",
+    "AMPLIFY_TOL",
+    "COND_TOL",
+    "SPREAD_TOL",
     # LP
     "LPModel",
     "LPSolution",
