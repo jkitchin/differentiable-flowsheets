@@ -357,6 +357,62 @@ feed_profile = optimal_feed_profile(params, constraints={'max_T': 400.0})
 ---
 
 (separators)=
+## Declarative Kinetics
+
+The reactors above take `rate_fn` as a Python callable. That is expressive, but it is *code*, not data — it cannot be written to a file, built from a form, or round-tripped through a GUI. `mass_action_kinetics` builds the callable from plain dictionaries instead, so a reaction network can be stored, edited and shared as data.
+
+```python
+from difflow import CSTR, CSTRParams, mass_action_kinetics
+
+reactions = [{
+    "equation":  "A -> B",
+    "reactants": {"A": 1.0},
+    "products":  {"B": 1.0},
+    "rate_params": {"A": 1.0e6, "Ea": 50_000.0, "n": 0.0},
+}]
+
+kin = mass_action_kinetics(reactions, species_order=["A", "B"])
+cstr = CSTR(CSTRParams(V=1.5, **kin.params_kwargs()))
+```
+
+`params_kwargs()` supplies `rate_fn`, `stoich`, `rate_params` and `species_order` — every rate-law field the reactors need. The result is numerically identical to the equivalent hand-written callable.
+
+The dictionary format is exactly what [`import_reactions`](thermodynamics.md) returns from a Cantera YAML file, so a published mechanism goes straight into a reactor:
+
+```python
+from difflow import import_reactions
+
+reactions = import_reactions("mech.yaml")
+kin = mass_action_kinetics(reactions, reverse="forward_only")
+```
+
+### The rate law
+
+$$k_j(T) = A_j \, T^{n_j} \exp\!\left(\frac{-E_{a,j}}{R T}\right), \qquad r_j = k_j \prod_i C_i^{\alpha_{ji}}$$
+
+Orders $\alpha$ come from the reactant stoichiometry unless given explicitly via `orders=`, which covers empirical rate laws where the order is not the coefficient. A reversible reaction subtracts the reverse term scaled by its equilibrium constant:
+
+$$r_j = k_j \left( \prod_i C_i^{\alpha_{ji}} - \frac{1}{K_{eq,j}} \prod_i C_i^{\beta_{ji}} \right)$$
+
+**Parameters:**
+- `reactions` — one dict per reaction with `reactants`, `products` and `rate_params` (`A`, `Ea`, `n`); optionally `equation`, `reversible`, `type` and `K_eq`.
+- `species_order` — fixes the rows of `stoich`; defaults to the sorted union of every species mentioned.
+- `reverse` — `"error"` (default), `"forward_only"`, or `"equilibrium"`.
+- `orders` — per-reaction `{species: order}` overrides. `None` keeps stoichiometric orders; `{}` means zeroth order in everything.
+
+### What it refuses, and why
+
+Two specifications raise `KineticsSpecError` rather than being approximated, because in both cases a guess produces a plausible number that is wrong:
+
+- **Reversible reactions, by default.** Forward Arrhenius parameters alone do not determine the reverse rate. Pass `reverse="equilibrium"` with a `K_eq` on each reaction, or `reverse="forward_only"` to drop the reverse term as an explicit, recorded approximation.
+- **Three-body, falloff and other pressure-dependent types.** These need their own rate law; mass action covers elementary reactions only.
+
+### Units
+
+Concentrations mol/m³, temperature K, activation energy J/mol, rates mol/m³/s. Cantera files declare their own units in a `units:` block — a mechanism written in cm³ or kcal/mol imports numerically unchanged and will be **silently wrong**, so check that block before trusting a rate constant.
+
+---
+
 ## Separators
 
 (flash-drum)=

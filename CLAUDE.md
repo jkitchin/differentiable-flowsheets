@@ -38,6 +38,12 @@ difflow/
 │   │   ├── database.py    # Species property database
 │   │   ├── flowsheet.py   # Flowsheet with recycle solving
 │   │   ├── uncertainty.py # Sensitivity & UQ
+│   │   ├── catalog.py     # Machine-readable schema of every unit operation
+│   │   ├── serialize.py   # Flowsheet <-> JSON round trip
+│   │   ├── codegen.py     # Flowsheet -> runnable Python source
+│   │   ├── kinetics.py    # Declarative mass-action rate laws (data, not callables)
+│   │   ├── publish.py     # Flowsheet -> self-contained interactive HTML (no install)
+│   │   ├── gui.py         # Local browser editor (python -m difflow.gui)
 │   │   ├── params_mixin.py # ParamsMixin base class for Params dataclasses
 │   │   ├── reconciliation/ # Data reconciliation, gross error detection,
 │   │   │                   # observability, monitoring, multi-set pooling
