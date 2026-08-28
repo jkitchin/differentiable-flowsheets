@@ -249,6 +249,27 @@ class TestValidation:
         with pytest.raises(KineticsSpecError, match="no reactions"):
             mass_action_kinetics([], SPECIES)
 
+    def test_a_reaction_with_no_species_is_refused(self):
+        """`equation` is a label, not parsed -- so this reacts nothing."""
+        with pytest.raises(KineticsSpecError, match="no reactants and no products"):
+            mass_action_kinetics(
+                [{"equation": "A -> B", "rate_params": {"A": 1.0}}], SPECIES
+            )
+
+    def test_the_refusal_says_where_stoichiometry_comes_from(self):
+        """The whole mistake is expecting the equation string to be read."""
+        with pytest.raises(KineticsSpecError) as exc:
+            mass_action_kinetics([{"equation": "A -> B"}], SPECIES)
+        assert "'equation' is only a label" in str(exc.value)
+
+    def test_a_half_specified_reaction_is_allowed(self):
+        """Decomposition to nothing tracked, or generation from a feed."""
+        kin = mass_action_kinetics(
+            [{"equation": "A ->", "reactants": {"A": 1.0},
+              "rate_params": {"A": 1.0}}], SPECIES
+        )
+        assert float(kin.stoich[SPECIES.index("A"), 0]) == -1.0
+
     def test_bad_reverse_mode_is_refused(self):
         with pytest.raises(ValueError, match="reverse="):
             mass_action_kinetics(first_order(), SPECIES, reverse="maybe")

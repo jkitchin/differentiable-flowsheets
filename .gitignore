@@ -58,6 +58,8 @@ papers/nd_dy_separation/
 
 # Generated notebook/report exports
 examples/*.html
+# written by 30_flowsheets_as_data.ipynb
+examples/reactor.json
 differentiable-flowsheets-ree.html
 differentiable-flowsheets-ree.pdf
 

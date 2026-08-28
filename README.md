@@ -24,6 +24,7 @@ A JAX-based framework for building and optimizing chemical process flowsheets wi
 - **Technoeconomic Analysis**: Comprehensive TEA module with equipment costs, operating costs, and profitability metrics (NPV, IRR, MSP)
 - **Bio Manufacturing**: Specialized unit operations for biopharmaceutical processes (bioreactors, chromatography, filtration)
 - **Gas Networks**: Steady-state gas transmission networks with a topology-computed sequential decomposition and differentiable tear solving
+- **Flowsheets as Data**: Save a model as JSON, emit it as a script, edit it in a local browser editor, or publish it as a page that opens with nothing installed
 
 ## ⚠️ ALPHA SOFTWARE
 
@@ -430,6 +431,85 @@ returning `NaN`. Works with any differentiable residual function; see
 `examples/28_data_reconciliation.ipynb` for the gas-network case, and
 `examples/29_model_updating.ipynb` for when to update a model parameter
 rather than the data.
+
+## Flowsheets as Data
+
+A flowsheet is normally only expressible as Python — the code that builds
+it *is* the model, so it cannot be saved, diffed, or opened by anything
+that did not import the module that built it. Four pieces change that.
+
+**Rate laws from data.** Reactors are the one place a `Params` holds a
+callable, which is what kept them out of every file format:
+
+```python
+from difflow import mass_action_kinetics, CSTR, CSTRParams
+
+kin = mass_action_kinetics([
+    {"equation": "A + B -> C",                       # a label, for reports
+     "reactants": {"A": 1.0, "B": 1.0},              # the stoichiometry
+     "products": {"C": 1.0},
+     "rate_params": {"A": 1e7, "Ea": 65_000.0, "n": 0.5}},
+])
+cstr = CSTR(CSTRParams(V=1.0, **kin.params_kwargs()))
+```
+
+Modified Arrhenius `k = A·Tⁿ·exp(−Ea/RT)`, evaluated in log space so a
+zero concentration gives a finite gradient rather than a `NaN`. A
+reversible reaction has to say so — treating one as irreversible by
+default would silently be a different model.
+
+**A JSON round trip, and a script.** A parameter holding a callable
+raises rather than being dropped, because a file that quietly lost a rate
+law would reload into a different model that still looked plausible:
+
+```python
+from difflow import serialize, codegen
+
+serialize.save(fs, "plant.json")
+fs2 = serialize.load("plant.json")
+print(codegen.to_python(fs))     # the same model, as code you could have typed
+```
+
+**A machine-readable catalog.** Ports come from the `__call__`
+signature, parameters from `dataclasses.fields`, equations from the class
+attribute — derived by introspection, so it cannot drift from the code:
+
+```python
+from difflow import catalog, describe_operation
+
+describe_operation("Flash").ports.n_outlets     # 2
+[n for n, s in catalog().items() if s.is_declarative]
+```
+
+**A local editor.** Serves a single page on `127.0.0.1`, with the
+installed package doing the solving — a palette of every registered
+operation, a topology diagram, editable parameters, Solve, Save, and a
+panel showing the generated Python:
+
+```bash
+python -m difflow.gui plant.json
+```
+
+**A published model.** One self-contained HTML file that opens with no
+Python, no server and no network:
+
+```python
+from difflow import publish, SweepAxis
+
+publish(fs,
+        axes=[SweepAxis("reactor.V", 0.5, 5.0, n=21, units="m³")],
+        outputs={"conversion": lambda s: 1 - s["out"]["F_A"] / 1.0},
+        path="model.html")
+```
+
+jaxlib has no WebAssembly build, so a browser cannot run the solver — but
+a published model does not need a general one. The grid is solved ahead
+of time with `vmap`, exact derivatives are recorded with `grad`, and the
+page interpolates between the points. It is exact *at* them and only as
+good as the grid between, which the page says in its own footer.
+
+See `docs/streams-and-flowsheets.md` and
+`examples/30_flowsheets_as_data.ipynb`.
 
 ## Thermodynamics
 

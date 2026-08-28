@@ -148,12 +148,22 @@ class OperationSchema(ParamsMixin):
         """Whether every parameter is data a form could supply."""
         return not any(p.is_callable for p in self.parameters)
 
-    @property
+    # The two parameter subsets are methods, not properties, so that
+    # they read alike at the call site. One of each was worse: a caller
+    # who has just written required_parameters() reaches for
+    # callable_parameters() and gets a list back with no error.
     def callable_parameters(self) -> list[str]:
-        """Fields that hold code rather than data."""
+        """Fields that hold code rather than data.
+
+        These are the fields a declarative front end cannot author --- a
+        form has nowhere to put a function. See
+        :func:`difflow.kinetics.mass_action_kinetics` for the rate laws,
+        which is where they nearly all are.
+        """
         return [p.name for p in self.parameters if p.is_callable]
 
     def required_parameters(self) -> list[str]:
+        """Fields with no default, which a caller has to supply."""
         return [p.name for p in self.parameters if p.required]
 
     def to_dict(self) -> dict:

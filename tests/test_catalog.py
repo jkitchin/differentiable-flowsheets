@@ -154,7 +154,7 @@ class TestParameters:
 
     def test_callable_fields_are_flagged(self, cat):
         """The fields a form cannot fill in."""
-        assert set(cat["CSTR"].callable_parameters) == {
+        assert set(cat["CSTR"].callable_parameters()) == {
             "rate_fn", "eos", "H_mix_fn", "K_eq_fn"
         }
         assert not cat["CSTR"].is_declarative
@@ -165,8 +165,8 @@ class TestParameters:
         # every one of them is a reactor, and it is always the rate law
         for name in non_declarative:
             assert any(
-                "fn" in p for p in cat[name].callable_parameters
-            ), f"{name}: {cat[name].callable_parameters}"
+                "fn" in p for p in cat[name].callable_parameters()
+            ), f"{name}: {cat[name].callable_parameters()}"
 
     def test_params_class_is_found(self, cat):
         assert cat["CSTR"].params_class == "CSTRParams"

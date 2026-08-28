@@ -643,6 +643,8 @@ The page carries sliders for each axis, the outputs, and their sensitivities. Th
 
 That is a deliberate trade, and its limits should be stated plainly. JAX has no WebAssembly build, so a browser cannot run the real solver; the published page is an interpolation of a grid, not a live model. It is exact at the grid points and only as good as the grid between them, and it can only vary what the axes name. When you need the real thing, use the local editor above, or the generated script.
 
+[`examples/30_flowsheets_as_data.ipynb`](../examples/30_flowsheets_as_data.ipynb) follows one flowsheet through every representation on this page — a coded rate law that no format will take, the same reactor built from data, the catalog, the JSON, the generated script, the editor's session object, and the published page — checking at each step that the answer has not changed.
+
 `sweep` is available on its own when you want the grid as data rather than as a page:
 
 ```python
