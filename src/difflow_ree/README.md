@@ -116,12 +116,65 @@ print(f"Element recoveries: {results['element_recovery']}")
 
 ## Supported Extractants
 
-| Extractant | Type | Best For |
-|------------|------|----------|
-| D2EHPA | Acidic | Light REE separation |
-| PC88A | Acidic | General REE separation |
-| Cyanex272 | Acidic | Heavy REE, Co/Ni |
-| TBP | Neutral | Nitrate systems |
+| Extractant | Type | Mechanism | Driving variable | Best For |
+|------------|------|-----------|------------------|----------|
+| D2EHPA | Acidic | `cation_exchange` | pH | Light REE separation |
+| PC88A | Acidic | `cation_exchange` | pH | General REE separation |
+| Cyanex272 | Acidic | `cation_exchange` | pH | Heavy REE, Co/Ni |
+| TBP | Neutral | `solvating` | `[NO3-]` | Nitrate systems |
+
+The mechanism is carried by the extractant record and decides which correlation
+drives `D` (#195). TBP therefore requires a `nitrate_conc`:
+
+```python
+REEDistribution(
+    extractant="TBP", elements=("Nd",), nitrate_conc=3.0, concentration=1.1
+)
+```
+
+and raises without one. There is no other path: **TBP's `ph_coefficients` block
+has been deleted**, so `REEDistribution(extractant="TBP", ...,
+mechanism="cation_exchange")` now raises a `ValueError` naming TBP and pointing
+back at the nitrate path. The block modelled a neutral extractant (`pKa: null`,
+`protons_released: 0`) as a weak cation exchanger — there is no proton to
+exchange, no source reports a pH slope for TBP, and it carried the same refuted
+selectivity spread as the old nitrate block. `Extractant.ph_coefficients` is
+therefore `dict | None`.
+
+> **TBP's nitrate coefficients are now refitted from primary literature.**
+> They are the *only* literature-derived numbers in `data/extractants.yaml`;
+> D2EHPA / PC88A / Cyanex272 remain hand-tuned with no recorded source. Fit
+> basis: Kraikaew, Srinuttrakul & Chayavadhanakur (2005), *J. Metals, Materials
+> and Minerals* **15**(2), 89-95, Table 1, corrected to 3 M NO3⁻ / 1 M TBP /
+> 298.15 K; heat of extraction from Ganesh & Pandey (2019), *J. Rad. Nucl.
+> Appl.* **4**(2), 109-115 (`dH_Sm = -43.3 kJ/mol`).
+>
+> At the reference this now gives `D_La = 0.023` … `D_Dy = 0.24` — every value
+> below 1, `D_Dy/D_La = 10.2` (was 100), mean adjacent-pair separation factor
+> 1.29 per unit atomic number (La(57) to Dy(66) is 9 steps, Pm included). `b = 3.0` for every element is *stoichiometric*, not fitted. Every
+> temperature coefficient is now **positive**, i.e. exothermic (they were all
+> negative, which asserted the opposite).
+>
+> **Validity window:** neutral nitrate salt, ≤ 0.5 M free acid, 1–6 M NO3⁻,
+> 283–326 K. Use for relative REE selectivity, stage-count intuition, and trend
+> or sensitivity studies. Do **not** use for stage counts, solvent inventories,
+> absolute recoveries, HNO3-supplied nitrate, loaded solvent, or Y at any other
+> acidity. Tb is *interpolated*, not measured; nine of the ten temperature
+> coefficients are assumed equal to Sm. The full provenance, the per-element
+> measured/interpolated/assumed labels and the known gaps are written out on the
+> TBP record in `data/extractants.yaml` — read it before using any TBP number.
+>
+> The 0.5 M `extractant_conc` default is a cation-exchange default and knocks
+> TBP's `D` down 8x; TBP is run at ~30% v/v = 1.1 M.
+
+`pH` is on the concentration scale and `ionic_strength=None` (no activity
+correction, a conditional constant at the operating ionic strength) is the
+default and the right choice for a concentrated liquor (#194). When an ionic
+strength *is* supplied, the value fed to the activity model is clamped at that
+model's documented range limit, because the Davies bracket changes sign at
+I = 1.9404 M and above that the correction would multiply `D` instead of
+reducing it (6.5x at 3 M). Pass `extrapolate_activity_model=True` to opt into
+the raw extrapolation. See `docs/unit-operations-ree.md`.
 
 ## References
 

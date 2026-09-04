@@ -35,6 +35,12 @@ class StripperParams(ParamsMixin):
         extractant_conc: Extractant concentration (M)
         acid_type: Type of strip acid
         acid_conc: Acid concentration (M)
+        nitrate_conc: Aqueous nitrate concentration (M), required for solvating
+            extractants such as TBP whose D is nitrate- rather than pH-driven
+            (#195). For an HNO3 strip this is the nitrate the acid supplies.
+        mechanism: Explicit extraction-mechanism override passed to
+            REEDistribution ("cation_exchange" / "solvating"). None takes the
+            mechanism from the extractant record (#195).
     """
     n_stages: int | float | Array
     extractant: str
@@ -44,6 +50,8 @@ class StripperParams(ParamsMixin):
     extractant_conc: float = 0.5
     acid_type: Literal["HCl", "H2SO4", "HNO3"] = "HCl"
     acid_conc: float = 4.0  # M
+    nitrate_conc: float | None = None  # see #195
+    mechanism: str | None = None  # see #195
 
 
 class REEStripper:
@@ -103,6 +111,8 @@ class REEStripper:
             extractant=params.extractant,
             elements=params.elements,
             concentration=params.extractant_conc,
+            nitrate_conc=params.nitrate_conc,
+            mechanism=params.mechanism,
         )
 
     def __call__(

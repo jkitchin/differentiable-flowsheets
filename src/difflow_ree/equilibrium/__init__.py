@@ -21,6 +21,14 @@ from difflow_ree.equilibrium.speciation import (
     REESpeciation,
     sulfate_speciation,
     chloride_speciation,
+    # Activity models and their declared validity ranges (#194)
+    ACTIVITY_MODELS,
+    AQUEOUS_MEDIA,
+    NITRATE_BEARING_MEDIA,
+    DAVIES_MAX_IONIC_STRENGTH,
+    DAVIES_SIGN_CHANGE_IONIC_STRENGTH,
+    activity_coefficient,
+    activity_coefficient_davies,
 )
 
 __all__ = [
@@ -34,4 +42,11 @@ __all__ = [
     "REESpeciation",
     "sulfate_speciation",
     "chloride_speciation",
+    "ACTIVITY_MODELS",
+    "AQUEOUS_MEDIA",
+    "NITRATE_BEARING_MEDIA",
+    "DAVIES_MAX_IONIC_STRENGTH",
+    "DAVIES_SIGN_CHANGE_IONIC_STRENGTH",
+    "activity_coefficient",
+    "activity_coefficient_davies",
 ]

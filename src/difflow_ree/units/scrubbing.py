@@ -37,6 +37,12 @@ class ScrubberParams(ParamsMixin):
         pH: Scrub solution pH (lower pH strips more)
         extractant_conc: Extractant concentration (M)
         scrub_type: Type of scrubbing (acid, REE, water)
+        nitrate_conc: Aqueous nitrate concentration (M), required for solvating
+            extractants such as TBP whose D is nitrate- rather than pH-driven
+            (#195)
+        mechanism: Explicit extraction-mechanism override passed to
+            REEDistribution ("cation_exchange" / "solvating"). None takes the
+            mechanism from the extractant record (#195).
     """
     n_stages: int | float | Array
     extractant: str
@@ -46,6 +52,8 @@ class ScrubberParams(ParamsMixin):
     pH: float | Array = 2.0  # Lower pH than extraction to strip impurities
     extractant_conc: float = 0.5
     scrub_type: Literal["acid", "ree", "water"] = "acid"
+    nitrate_conc: float | None = None  # see #195
+    mechanism: str | None = None  # see #195
 
 
 class REEScrubber:
@@ -98,6 +106,8 @@ class REEScrubber:
             extractant=params.extractant,
             elements=params.elements,
             concentration=params.extractant_conc,
+            nitrate_conc=params.nitrate_conc,
+            mechanism=params.mechanism,
         )
 
     def __call__(
@@ -233,10 +243,17 @@ def optimal_scrub_pH(
     min_target_retention: float = 0.95,
     pH_range: tuple[float, float] = (1.0, 4.0),
     n_points: int = 50,
+    nitrate_conc: float | None = None,
+    mechanism: str | None = None,
 ) -> tuple[float, float, float]:
     """Find optimal scrub pH for separation.
 
     Finds pH that maximizes impurity removal while retaining target.
+
+    Note:
+        Only meaningful for a cation-exchange extractant. A solvating
+        extractant's D is nitrate- rather than pH-driven (#195), so the scan is
+        flat in pH and the returned pH carries no information.
 
     Args:
         extractant: Extractant name
@@ -245,6 +262,9 @@ def optimal_scrub_pH(
         min_target_retention: Minimum fraction of target to retain
         pH_range: pH range to search
         n_points: Number of evaluation points
+        nitrate_conc: Aqueous nitrate concentration (M), required for solvating
+            extractants (#195)
+        mechanism: Explicit mechanism override; see REEDistribution (#195)
 
     Returns:
         Tuple of (optimal_pH, target_D, impurity_D)
@@ -252,6 +272,8 @@ def optimal_scrub_pH(
     dist = REEDistribution(
         extractant=extractant,
         elements=(target_element, impurity_element),
+        nitrate_conc=nitrate_conc,
+        mechanism=mechanism,
     )
 
     best_pH = pH_range[0]

@@ -54,6 +54,16 @@ class ExtractScrubStripParams(ParamsMixin):
         solvent_to_feed_ratio: O/A in extraction
         scrub_to_solvent_ratio: Scrub/O ratio
         strip_to_solvent_ratio: Strip/O ratio
+        nitrate_conc: Aqueous nitrate concentration (M), required for solvating
+            extractants such as TBP whose D is nitrate- rather than pH-driven
+            (#195). None for the acidic cation-exchange extractants. Threaded
+            to all three sections.
+        mechanism: Explicit extraction-mechanism override passed to
+            REEDistribution ("cation_exchange" / "solvating"). None takes the
+            mechanism from the extractant record (#195). Threaded to all
+            three sections, so a circuit never mixes mechanisms.
+        capacity_sharpness: Sharpness k of the extraction section's smooth
+            loading limiters; see REEExtractorParams (#193).
     """
     extractant: str
     elements: tuple[str, ...]
@@ -69,6 +79,9 @@ class ExtractScrubStripParams(ParamsMixin):
     solvent_to_feed_ratio: float = 1.0
     scrub_to_solvent_ratio: float = 0.2
     strip_to_solvent_ratio: float = 0.5
+    nitrate_conc: float | None = None  # see #195
+    mechanism: str | None = None  # see #195
+    capacity_sharpness: int = 8  # see REEExtractorParams (#193)
 
 
 class ExtractScrubStripCircuit:
@@ -130,6 +143,9 @@ class ExtractScrubStripCircuit:
             diluent=params.diluent,
             pH=params.extraction_pH,
             extractant_conc=params.extractant_conc,
+            nitrate_conc=params.nitrate_conc,  # see #195
+            mechanism=params.mechanism,  # see #195
+            capacity_sharpness=params.capacity_sharpness,  # see #193
         ))
 
         # Scrubbing section
@@ -141,6 +157,8 @@ class ExtractScrubStripCircuit:
             diluent=params.diluent,
             pH=params.scrubbing_pH,
             extractant_conc=params.extractant_conc,
+            nitrate_conc=params.nitrate_conc,  # see #195
+            mechanism=params.mechanism,  # see #195
         ))
 
         # Stripping section
@@ -151,6 +169,8 @@ class ExtractScrubStripCircuit:
             diluent=params.diluent,
             pH=params.stripping_pH,
             extractant_conc=params.extractant_conc,
+            nitrate_conc=params.nitrate_conc,  # see #195
+            mechanism=params.mechanism,  # see #195
         ))
 
     def __call__(
@@ -324,6 +344,8 @@ def design_extract_scrub_strip(
     extractant: str,
     target_purity: float = 0.95,
     target_recovery: float = 0.90,
+    nitrate_conc: float | None = None,
+    mechanism: str | None = None,
 ) -> ExtractScrubStripParams:
     """Design 3-section circuit for given separation.
 
@@ -333,6 +355,9 @@ def design_extract_scrub_strip(
         extractant: Extractant to use
         target_purity: Target product purity
         target_recovery: Target recovery of target elements
+        nitrate_conc: Aqueous nitrate concentration (M), required for solvating
+            extractants such as TBP (#195)
+        mechanism: Explicit mechanism override; see REEDistribution (#195)
 
     Returns:
         Recommended ExtractScrubStripParams
@@ -371,4 +396,6 @@ def design_extract_scrub_strip(
         n_stripping_stages=n_stripping,
         extraction_pH=extraction_pH,
         scrubbing_pH=scrubbing_pH,
+        nitrate_conc=nitrate_conc,  # see #195
+        mechanism=mechanism,  # see #195
     )

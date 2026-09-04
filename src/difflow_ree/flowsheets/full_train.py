@@ -50,6 +50,17 @@ class SeparationTrainParams(ParamsMixin):
         group_separation: Whether to separate into light/middle/heavy
         individual_separation: Whether to separate individual elements
         target_purities: Target purity for each element
+        nitrate_conc: Aqueous nitrate concentration (M), required for solvating
+            extractants such as TBP whose D is nitrate- rather than pH-driven
+            (#195). None for the acidic cation-exchange extractants. Threaded
+            into every circuit the train builds.
+        mechanism: Explicit extraction-mechanism override passed to
+            REEDistribution ("cation_exchange" / "solvating"). None takes the
+            mechanism from the extractant record (#195). Threaded into every
+            section of every circuit the train builds, so no circuit mixes
+            mechanisms.
+        capacity_sharpness: Sharpness k of the smooth loading limiters in each
+            circuit's extraction section; see REEExtractorParams (#193).
     """
     elements: tuple[str, ...] = ("La", "Ce", "Pr", "Nd", "Sm", "Eu", "Gd", "Tb", "Dy", "Y")
     extractant: str = "D2EHPA"
@@ -58,6 +69,9 @@ class SeparationTrainParams(ParamsMixin):
     include_ce_removal: bool = True
     group_separation: bool = True
     individual_separation: bool = False  # Full individual sep is complex
+    nitrate_conc: float | None = None  # see #195
+    mechanism: str | None = None  # see #195
+    capacity_sharpness: int = 8  # see REEExtractorParams (#193)
     target_purities: dict = field(default_factory=lambda: {
         "Nd": 0.99,
         "Dy": 0.99,
@@ -102,6 +116,9 @@ class GroupSeparator:
         light_elements: tuple[str, ...] = ("La", "Ce", "Pr", "Nd"),
         middle_elements: tuple[str, ...] = ("Sm", "Eu"),
         heavy_elements: tuple[str, ...] = ("Gd", "Tb", "Dy", "Y"),
+        nitrate_conc: float | None = None,
+        mechanism: str | None = None,
+        capacity_sharpness: int = 8,
     ):
         """Initialize separator.
 
@@ -112,6 +129,11 @@ class GroupSeparator:
             light_elements: Elements for light group
             middle_elements: Elements for middle group
             heavy_elements: Elements for heavy group
+            nitrate_conc: Aqueous nitrate concentration (M), required for
+                solvating extractants such as TBP (#195)
+            mechanism: Explicit mechanism override; see REEDistribution (#195)
+            capacity_sharpness: Sharpness k of the extraction sections' smooth
+                loading limiters; see REEExtractorParams (#193)
         """
         self.elements = elements
         self.extractant = extractant
@@ -119,6 +141,9 @@ class GroupSeparator:
         self.light_elements = light_elements
         self.middle_elements = middle_elements
         self.heavy_elements = heavy_elements
+        self.nitrate_conc = nitrate_conc
+        self.mechanism = mechanism
+        self.capacity_sharpness = capacity_sharpness
 
         # Circuit 1: Separate heavy from light+middle
         self._heavy_circuit = ExtractScrubStripCircuit(ExtractScrubStripParams(
@@ -131,6 +156,9 @@ class GroupSeparator:
             n_stripping_stages=5,
             extraction_pH=3.0,  # All extract
             scrubbing_pH=2.0,   # Reject light+middle
+            nitrate_conc=nitrate_conc,  # see #195
+            mechanism=mechanism,  # see #195
+            capacity_sharpness=capacity_sharpness,  # see #193
         ))
 
         # Circuit 2: Separate middle from light (on Circuit 1 scrub liquor)
@@ -145,6 +173,9 @@ class GroupSeparator:
             n_stripping_stages=5,
             extraction_pH=3.5,
             scrubbing_pH=2.5,
+            nitrate_conc=nitrate_conc,  # see #195
+            mechanism=mechanism,  # see #195
+            capacity_sharpness=capacity_sharpness,  # see #193
         ))
 
     def __call__(
@@ -257,6 +288,9 @@ class FullSeparationTrain:
                 light_elements=light,
                 middle_elements=middle,
                 heavy_elements=heavy,
+                nitrate_conc=params.nitrate_conc,  # see #195
+                mechanism=params.mechanism,  # see #195
+                capacity_sharpness=params.capacity_sharpness,  # see #193
             )
         else:
             self._group_separator = None
@@ -325,6 +359,8 @@ def design_separation_train(
     feed_analysis: dict[str, float],
     target_products: list[str],
     annual_capacity_tonnes: float = 1000,
+    nitrate_conc: float | None = None,
+    mechanism: str | None = None,
 ) -> SeparationTrainParams:
     """Design separation train for given feed and products.
 
@@ -332,6 +368,9 @@ def design_separation_train(
         feed_analysis: REE composition in feed (wt%)
         target_products: List of target product elements
         annual_capacity_tonnes: Annual REE production capacity
+        nitrate_conc: Aqueous nitrate concentration (M), required for solvating
+            extractants such as TBP (#195)
+        mechanism: Explicit mechanism override; see REEDistribution (#195)
 
     Returns:
         Recommended SeparationTrainParams
@@ -353,4 +392,6 @@ def design_separation_train(
         include_ce_removal=include_ce,
         group_separation=True,
         individual_separation=individual_sep,
+        nitrate_conc=nitrate_conc,  # see #195
+        mechanism=mechanism,  # see #195
     )

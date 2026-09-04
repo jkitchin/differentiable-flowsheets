@@ -44,6 +44,15 @@ class ExtractStripParams(ParamsMixin):
         extractant_conc: Extractant concentration (M)
         solvent_to_feed_ratio: Organic/aqueous ratio in extraction
         strip_to_solvent_ratio: Strip acid/organic ratio
+        nitrate_conc: Aqueous nitrate concentration (M), required for solvating
+            extractants such as TBP whose D is nitrate- rather than pH-driven
+            (#195). Threaded to both sections.
+        mechanism: Explicit extraction-mechanism override passed to
+            REEDistribution ("cation_exchange" / "solvating"). None takes the
+            mechanism from the extractant record (#195). Threaded to both
+            sections, so a circuit never mixes mechanisms.
+        capacity_sharpness: Sharpness k of the extraction section's smooth
+            loading limiters; see REEExtractorParams (#193).
     """
     extractant: str
     elements: tuple[str, ...]
@@ -55,6 +64,9 @@ class ExtractStripParams(ParamsMixin):
     extractant_conc: float = 0.5
     solvent_to_feed_ratio: float = 1.0
     strip_to_solvent_ratio: float = 0.5
+    nitrate_conc: float | None = None  # see #195
+    mechanism: str | None = None  # see #195
+    capacity_sharpness: int = 8  # see REEExtractorParams (#193)
 
 
 class ExtractStripCircuit:
@@ -109,6 +121,9 @@ class ExtractStripCircuit:
             diluent=params.diluent,
             pH=params.extraction_pH,
             extractant_conc=params.extractant_conc,
+            nitrate_conc=params.nitrate_conc,  # see #195
+            mechanism=params.mechanism,  # see #195
+            capacity_sharpness=params.capacity_sharpness,  # see #193
         ))
 
         # Create stripping section
@@ -119,6 +134,8 @@ class ExtractStripCircuit:
             diluent=params.diluent,
             pH=params.stripping_pH,
             extractant_conc=params.extractant_conc,
+            nitrate_conc=params.nitrate_conc,  # see #195
+            mechanism=params.mechanism,  # see #195
         ))
 
     def __call__(
@@ -279,6 +296,8 @@ def design_extract_strip(
     extractant: str,
     target_recovery: float = 0.99,
     extraction_pH: float = 3.5,
+    nitrate_conc: float | None = None,
+    mechanism: str | None = None,
 ) -> ExtractStripParams:
     """Design extract-strip circuit for given feed.
 
@@ -287,6 +306,9 @@ def design_extract_strip(
         extractant: Extractant to use
         target_recovery: Target recovery fraction
         extraction_pH: Operating pH
+        nitrate_conc: Aqueous nitrate concentration (M), required for solvating
+            extractants such as TBP (#195)
+        mechanism: Explicit mechanism override; see REEDistribution (#195)
 
     Returns:
         Recommended ExtractStripParams
@@ -296,7 +318,12 @@ def design_extract_strip(
     elements = tuple(feed_composition.keys())
 
     # Get D values at operating pH
-    dist = REEDistribution(extractant=extractant, elements=elements)
+    dist = REEDistribution(
+        extractant=extractant,
+        elements=elements,
+        nitrate_conc=nitrate_conc,  # see #195
+        mechanism=mechanism,  # see #195
+    )
     D_values = dist.get_D_all(extraction_pH)
 
     # Find element with lowest D (hardest to extract)
@@ -315,4 +342,6 @@ def design_extract_strip(
         n_extraction_stages=n_ext,
         n_stripping_stages=n_strip,
         extraction_pH=extraction_pH,
+        nitrate_conc=nitrate_conc,  # see #195
+        mechanism=mechanism,  # see #195
     )
