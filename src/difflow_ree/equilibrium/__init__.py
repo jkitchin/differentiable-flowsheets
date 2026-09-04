@@ -28,6 +28,8 @@ This module provides:
 """
 
 from difflow_ree.equilibrium.distribution import (
+    stages_kremser,
+    stages_fenske,
     REEDistribution,
     get_distribution_coefficient,
     get_distribution_coefficients,
@@ -108,6 +110,8 @@ from difflow_ree.equilibrium.speciation import (
 )
 
 __all__ = [
+    "stages_kremser",
+    "stages_fenske",
     "REEDistribution",
     "get_distribution_coefficient",
     "get_distribution_coefficients",

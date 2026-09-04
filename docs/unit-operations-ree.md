@@ -1623,6 +1623,236 @@ for elem, recovery in results['target_recovery'].items():
 
 ---
 
+(separation-trains)=
+## Separation Trains: Topology as Data, with the Organic Loop Closed (#202)
+
+`FullSeparationTrain` above is a **fixed sequence**: cerium removal, then
+group separation, then individual separations, by direct calls in a set
+order. The topology is decided at import time and there is no decision
+variable over connectivity. And the `barren_organic` every circuit
+returns "for recycle" is never actually recycled, so every circuit
+silently assumes its solvent comes back perfectly stripped.
+
+`difflow_ree.flowsheets.train.SeparationTrain` lifts both limits. A train
+is **module instances plus a connectivity map**, and the organic loop is
+closed by adding one edge.
+
+### The typed module library
+
+Each module declares aqueous, organic and solid ports with the species
+they carry:
+
+| kind | wraps | inlets | outlets |
+|---|---|---|---|
+| `extract_scrub_strip` | `REEExtractor`, `REEScrubber`, `REEStripper` | `feed` (aq), `solvent` (org) | `raffinate` (aq), `scrub_liquor` (aq), `product` (aq), `barren_organic` (org) |
+| `split_shell` | `SplitShellCascade` | `feed` (aq), `solvent` (org) | `product_1..n` (org), `raffinate` (aq) |
+| `cerium_oxidation` | `CeriumOxidizer` | `feed` (aq) | `filtrate` (aq), `ceo2` (solid) |
+| `precipitation` | `OxalatePrecipitator` / `Carbonate…` / `Hydroxide…` | `feed` (aq) | `filtrate` (aq), `solid` (solid) |
+| `saponification` | `Saponifier` (#197) + solvent regeneration | `organic` (org) | `organic` (org), `spent_aqueous` (aq), `bleed` (org) |
+
+The port count is data, not code: a `split_shell` module with three
+split points has one more organic outlet than one with two.
+
+Parameter schemas are **not** restated here. `module.describe()` calls
+`difflow.catalog.describe_class` on each wrapped unit, so the parameter
+half of the schema is derived once, in the core, from the `Params`
+dataclasses. What the core catalog cannot supply is the *phase*: both
+liquid phases are `difflow.streams.Stream`, so nothing in
+`(feed: Stream, solvent: Stream) -> ...` says which inlet is organic.
+That is what `difflow_ree.flowsheets.ports.Port` adds, and it is what
+lets a wrong connection be refused:
+
+```python
+train.connect("sep.barren_organic", "sep.feed")
+# PortMismatchError: phase mismatch: sep.barren_organic carries the
+# organic phase but sep.feed expects the aqueous phase.
+```
+
+A connection that would drop a component the destination does not
+declare is refused too, because a flowsheet that quietly loses a
+component still converges. Pass `allow_species_loss=True` when the loss
+is deliberate.
+
+### Closing the organic loop
+
+```python
+from difflow.streams import make_stream
+from difflow_ree.flowsheets import (
+    ExtractScrubStripModule, ExtractScrubStripParams,
+    OperatingLimits, SeparationTrain,
+)
+
+feed = make_stream({"H2O": 100.0, "La": 3.0, "Dy": 3.0}, 298.15, 101325.0)
+
+sep = ExtractScrubStripModule("sep", ExtractScrubStripParams(
+    extractant="D2EHPA", elements=("La", "Dy"), target_elements=("Dy",),
+    n_extraction_stages=10, n_scrubbing_stages=2, n_stripping_stages=1,
+    extraction_pH=2.4, scrubbing_pH=2.3, stripping_pH=2.3,
+    solvent_to_feed_ratio=1.0, scrub_to_solvent_ratio=0.1,
+    strip_to_solvent_ratio=0.5,
+), limits=OperatingLimits(third_phase_loading=0.65))
+
+train = SeparationTrain("nd_circuit")
+train.add_module(sep)
+train.add_feed("leach", feed, "sep.feed")
+train.connect("sep.barren_organic", "sep.solvent")   # <- the whole change
+
+result = train.solve()
+```
+
+Nothing in `SeparationTrain` iterates. `to_flowsheet()` emits a real
+`difflow.flowsheet.Flowsheet` — units in topological order, feeds,
+`add_recycle` for every back edge the depth-first pass finds — and
+`solve()` calls its Anderson tear solver. The torn organic inlet is
+initialised with the fresh, REE-free solvent the open-loop circuit
+would have synthesised, which is both the sensible starting point and
+literally the assumption the closed loop exists to test.
+
+### What closing the loop costs you
+
+The open loop is not a small approximation. For the circuit above,
+solved both ways:
+
+| | raffinate La purity | Dy in raffinate (mol/s) | organic loading θ |
+|---|---|---|---|
+| open loop (fresh solvent every pass) | 0.9903 | 0.0293 | 0.357 |
+| closed loop | 0.9414 | 0.1866 | 0.575 |
+
+Six times the impurity, and five percentage points of product purity,
+from one edge. The mechanism is the one #202 names: the barren organic
+still carries Dy, that Dy occupies extractant, the free-extractant
+fraction and hence the extraction factor fall, and more Dy leaks past
+the extraction section into the La raffinate. Strip the solvent properly
+(`stripping_pH=1.5, n_stripping_stages=4`) and the two answers coincide
+to 1e-9 — the difference is the residue, not the tearing.
+
+The loop conserves every component to machine precision: what leaves the
+stripper equals what enters the extractor, and the extractant and
+diluent inventory is invariant.
+
+**A closed loop with no bleed is an accumulator.** Whatever the stripper
+misses circulates for ever, so put a `saponification` module in the loop
+and give it a `SolventRegenerationParams(bleed_fraction=...)`. The bleed
+diverts a fraction of the circulating organic to regeneration and
+replaces it with fresh solvent of the same carrier flow, so the
+inventory is unchanged and the residual loading falls.
+
+### Operating boundaries as constraints, not flags
+
+An optimizer walks up to a boundary it is only warned about and then
+crosses it, because in the model crossing is profitable. Every module
+reports a `ConstraintSet` whose margins are **feasible when ≥ 0**:
+
+```python
+constraints = train.constraints(result)
+constraints.vector()          # g(x) >= 0, a JAX array
+constraints.feasible          # False if anything is violated
+constraints.violations()      # worst first
+print(constraints.summary())
+```
+
+With the third-phase limit above (0.65) the closed loop is feasible, at
+a margin of +0.075. Tighten it to `OperatingLimits(third_phase_loading=0.40)`
+and the same solve reports:
+
+```
+sep.third_phase  third_phase  value=+0.575235  limit=+0.4  margin=-0.175235  VIOLATED
+sep.loading      loading      value=+0.575235  limit=+1    margin=+0.424765  ok
+```
+
+Four boundaries are available, each only when its limit is declared on
+`OperatingLimits`:
+
+- `third_phase` — organic loading below the onset of a second organic
+  layer, built on the signed margin #193 added.
+- `loading` — extractant saturation, θ ≤ 1. A *different* wall from the
+  third phase, which usually sits below it, so a design cannot satisfy
+  one by ignoring the other.
+- `hydraulic` — two-phase throughput below the installed settler
+  capacity. Expressed in the same units as the stream flows, on purpose:
+  a litres-per-second capacity would smuggle a hidden unit back into a
+  package that is otherwise invariant to the flow unit (#189).
+- `phase_ratio` — O/A inside the dispersion band.
+
+Every margin is a traced JAX scalar, so `jax.grad` of a margin with
+respect to a design variable works. Note which design crosses in the
+example above: at a 0.40 third-phase limit the *open-loop* circuit sits
+inside the wall (θ = 0.357) and only the honest closed-loop one crosses
+it. An open loop hides the constraint violation as well as the purity
+loss.
+
+### Screening before costing: the Fenske bound
+
+`equilibrium.distribution.stages_fenske` is the companion to
+`stages_kremser`, and where Kremser is an operating estimate Fenske is a
+rigorous lower bound — the total-reflux limit, so no finite
+solvent-to-feed ratio beats it:
+
+$$N_\min = \frac{\ln\!\left[\frac{s_E}{1-s_E}\cdot\frac{s_R}{1-s_R}\right]}{\ln \alpha}$$
+
+with `s_E` the fraction of the extract key reporting to the extract and
+`s_R` the fraction of the raffinate key reporting to the raffinate (for
+an equimolar binary feed, the two product purities). It costs two
+logarithms, so a candidate topology whose installed stage count is below
+the bound can be struck out before it is solved, let alone costed:
+
+```python
+from difflow_ree.flowsheets import screen_separation, screen_train
+
+screen_separation("D2EHPA", "Dy", "La", installed_stages=2,
+                  purity=0.99, pH=2.3).admissible     # True
+screen_separation("D2EHPA", "Dy", "La", installed_stages=2,
+                  purity=0.999, pH=2.3).admissible    # False
+
+screen_train(train, {"sep": ("Dy", "La")}, purity=0.999).summary()
+```
+
+Unlike `stages_kremser`, the result is floored at 0 rather than 1: a
+separation needing less than one theoretical stage is information a
+screening filter should keep, and flooring at 1 would turn a genuine
+lower bound into one that is sometimes wrong in the direction that
+matters.
+
+### What is deliberately not here
+
+**No discrete search.** difflow avoids Pyomo and MINLP solvers, and #202
+keeps it that way. What is provided is the graph representation, the
+closed recycle, the constraint handles and the cheap screening bound, so
+an *external* discrete layer can drive it. `SeparationTrain.to_dict()` /
+`from_dict()` write the connectivity map explicitly, which is the form a
+topology enumerator wants.
+
+Route out through `difflow.solvers` (#203), whose `as_nlp` / `as_residual`
+wrap a train's continuous subproblem. One thing to know when you do:
+discopt's `CustomCall` cannot carry binaries *around* a wrapped
+flowsheet — the wrapped call is opaque to the MILP — so the discrete
+layer must **decompose**: enumerate or branch on the topology outside and
+call in for each fixed topology, rather than hoping the solver will see
+connectivity variables through the wrapper.
+
+**Traceability.** `solve()` uses `Flowsheet.solve`, which records its
+convergence diagnostics as Python floats and therefore cannot be traced.
+`solve_differentiable()` runs the *same* flowsheet graph — same units,
+same order, same tear set — through `optimistix.fixed_point`, and gets
+implicit differentiation through the converged loop:
+
+```python
+jax.grad(objective)(0.5)   # finite through the closed organic loop
+```
+
+Its adjoint uses a least-squares linear solve deliberately. A closed
+organic loop is structurally singular in its carrier coordinates: the
+extractant and diluent come out exactly as they went in, so *any*
+solvent inventory is a fixed point. The inventory is a design degree of
+freedom, not something the loop determines, and the minimum-norm
+solution is the one that holds it fixed.
+
+The `split_shell` and `cerium_oxidation` modules wrap units that still
+concretise their diagnostics, so they are correct eager graph nodes but
+are not traceable.
+
+---
+
 (custom-elements-and-data)=
 ## Custom Elements and Data
 

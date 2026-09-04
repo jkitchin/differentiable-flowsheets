@@ -1105,3 +1105,98 @@ def stages_kremser(
     )
 
     return jnp.maximum(N, 1.0)
+
+
+def stages_fenske(
+    alpha: Array | float,
+    split_extract: Array | float,
+    split_raffinate: Array | float | None = None,
+) -> Array:
+    """Fenske minimum stages for a binary split (#202).
+
+    The companion to :func:`stages_kremser`, and a *lower* bound where
+    Kremser is an operating estimate. Fenske's expression is the stage
+    count at total reflux -- in extraction, the limit of infinite
+    solvent-to-feed ratio -- so no finite counter-current cascade can
+    achieve the same split in fewer equilibrium stages::
+
+        N_min = ln[ (s_E / (1 - s_E)) * (s_R / (1 - s_R)) ] / ln(alpha)
+
+    where ``s_E`` is the fraction of the extract key that reports to the
+    extract and ``s_R`` the fraction of the raffinate key that reports to
+    the raffinate. Two readings of the same algebra, both used here:
+
+    * **Split fractions.** ``s_E = r_A`` (recovery of the extracted key to
+      the organic) and ``s_R = 1 - r_B`` (the raffinate key's recovery to
+      the aqueous), giving the classical
+      ``ln[(d/b)_A (b/d)_B] / ln(alpha)`` key-ratio form.
+    * **Purity pair.** For an equimolar binary feed the two product
+      purities equal those split fractions, so a target such as
+      "99% pure product, 99% pure raffinate" goes straight in.
+
+    That is what makes it a screening filter (#202): it costs two
+    logarithms, needs only a separation factor, and rejects a candidate
+    topology whose installed stage count is below ``N_min`` before any
+    rigorous cascade is solved -- let alone costed.
+
+    Unlike :func:`stages_kremser`, the result is floored at 0 rather than
+    1. A separation so easy that it needs less than one theoretical stage
+    is information a screening filter should keep: flooring at 1 would
+    turn a genuine lower bound into a bound that is sometimes wrong in the
+    direction that matters (too high), and would reject admissible
+    topologies.
+
+    Args:
+        alpha: Separation factor between the two keys, ``D_A / D_B``.
+            Values below 1 are inverted (the two keys swap roles), so the
+            caller need not order the pair; ``alpha == 1`` means no
+            separation is possible and returns ``inf``.
+        split_extract: Fraction of the extract key reporting to the
+            extract, in (0, 1).
+        split_raffinate: Fraction of the raffinate key reporting to the
+            raffinate, in (0, 1). Defaults to ``split_extract``, the
+            symmetric split. Splits are clipped into the open interval, so
+            a perfect split of exactly 1 returns a large finite bound
+            rather than a nan.
+
+    Returns:
+        Minimum number of theoretical stages, as a JAX scalar. ``inf``
+        when ``alpha`` is 1, where no stage count separates the pair.
+
+    Example:
+        >>> import jax.numpy as jnp
+        >>> float(stages_fenske(100.0, 0.99, 0.99))  # doctest: +ELLIPSIS
+        1.99563...
+        >>> float(stages_fenske(1000.0, 0.9, 0.9))   # doctest: +ELLIPSIS
+        0.63616...
+
+    References:
+        Fenske, M.R. Ind. Eng. Chem. 24, 482 (1932).
+        Seader, J.D., Henley, E.J., Roper, D.K. Separation Process
+        Principles, 3rd ed., Wiley, 2011, Ch. 9.
+    """
+    alpha = jnp.asarray(alpha, dtype=jnp.float64)
+    s_E = jnp.asarray(split_extract, dtype=jnp.float64)
+    s_R = (
+        s_E if split_raffinate is None
+        else jnp.asarray(split_raffinate, dtype=jnp.float64)
+    )
+
+    # The pair is unordered: alpha < 1 just means the keys were named the
+    # other way round, and |ln alpha| is the same separation power.
+    log_alpha = jnp.abs(jnp.log(alpha))
+
+    # Odds ratio, on splits clipped into the open unit interval so that a
+    # caller passing a perfect 1.0 (or a solver stepping onto it) gets a
+    # large finite bound instead of a nan that would poison a screen.
+    _tiny = 1e-15
+
+    def _odds(s):
+        s = jnp.clip(s, _tiny, 1.0 - _tiny)
+        return s / (1.0 - s)
+
+    numerator = jnp.log(_odds(s_E) * _odds(s_R))
+    N_min = safe_divide(numerator, log_alpha)
+    # alpha == 1: no separation at any stage count.
+    N_min = jnp.where(log_alpha > 0.0, N_min, jnp.inf)
+    return jnp.maximum(N_min, 0.0)
