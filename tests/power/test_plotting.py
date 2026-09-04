@@ -13,8 +13,9 @@ import pytest
 
 jax.config.update("jax_enable_x64", True)
 
-matplotlib = pytest.importorskip("matplotlib")
-matplotlib.use("Agg")
+import matplotlib
+
+matplotlib.use("Agg")           # no display in CI; must precede pyplot
 import matplotlib.pyplot as plt
 
 import difflow_power as dp
