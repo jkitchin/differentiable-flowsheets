@@ -27,10 +27,16 @@ def feed():
 
 @pytest.fixture
 def solvent():
-    """Organic solvent with an inert diluent species (n-Heptane)."""
+    """Organic solvent: D2EHPA extractant in an n-Heptane diluent.
+
+    The carriers are named after the extractant and the diluent the
+    extractor is configured with. A stream whose organic carrier is called
+    something else ("Organic") no longer silently contributes a default
+    organic flow of 1.0 -- it raises (#192).
+    """
     return make_stream(
         flows={
-            "Organic": 10.0,
+            "D2EHPA": 10.0,
             "n-Heptane": 20.0,
             "Nd": 0.0,
             "Dy": 0.0,
@@ -69,6 +75,7 @@ class TestREEExtractorMassConservation:
         params = REEExtractorParams(
             n_stages=1,
             extractant="D2EHPA",
+            diluent="n-Heptane",  # names the solvent fixture's carrier (#192)
             elements=("Dy", "Nd"),
             pH=1.6,
         )
@@ -91,6 +98,7 @@ class TestREEExtractorMassConservation:
         params = REEExtractorParams(
             n_stages=1,
             extractant="D2EHPA",
+            diluent="n-Heptane",  # names the solvent fixture's carrier (#192)
             elements=("Dy", "Nd"),
             pH=1.6,
         )
@@ -103,6 +111,7 @@ class TestREEExtractorMassConservation:
         params = REEExtractorParams(
             n_stages=5,
             extractant="D2EHPA",
+            diluent="n-Heptane",  # names the solvent fixture's carrier (#192)
             elements=("Dy", "Nd"),
             pH=3.0,
         )

@@ -44,6 +44,12 @@ class SplitShellParams(ParamsMixin):
         product_groups: Element groups for each product
         pH: Operating pH
         extractant_conc: Extractant concentration
+        nitrate_conc: Aqueous nitrate concentration (M), required for solvating
+            extractants such as TBP whose D is nitrate- rather than pH-driven
+            (#195)
+        mechanism: Explicit extraction-mechanism override passed to
+            REEDistribution ("cation_exchange" / "solvating"). None takes the
+            mechanism from the extractant record (#195).
     """
     extractant: str
     elements: tuple[str, ...]
@@ -54,6 +60,8 @@ class SplitShellParams(ParamsMixin):
     pH: float = 3.5
     extractant_conc: float = 0.5
     solvent_to_feed_ratio: float = 1.0
+    nitrate_conc: float | None = None  # see #195
+    mechanism: str | None = None  # see #195
 
 
 def _kremser_fraction_extracted(E, n_stages):
@@ -125,6 +133,8 @@ class SplitShellCascade:
             extractant=params.extractant,
             elements=params.elements,
             concentration=params.extractant_conc,
+            nitrate_conc=params.nitrate_conc,
+            mechanism=params.mechanism,
         )
 
     def __call__(
@@ -330,6 +340,8 @@ def optimize_split_points(
     n_stages: int,
     n_products: int,
     pH: float = 3.5,
+    nitrate_conc: float | None = None,
+    mechanism: str | None = None,
 ) -> tuple[int, ...]:
     """Find split points that maximise inter-group separation.
 
@@ -359,6 +371,10 @@ def optimize_split_points(
         n_stages: Total stages available
         n_products: Number of products desired
         pH: Operating pH
+        nitrate_conc: Aqueous nitrate concentration (M), required for solvating
+            extractants such as TBP whose D is nitrate- rather than pH-driven
+            (#195)
+        mechanism: Explicit mechanism override; see REEDistribution (#195)
 
     Returns:
         Tuple of split stage numbers (length n_products - 1), sorted
@@ -378,6 +394,8 @@ def optimize_split_points(
         extractant=extractant,
         elements=tuple(elements),
         concentration=0.5,
+        nitrate_conc=nitrate_conc,
+        mechanism=mechanism,
     )
     D_vals = dist.get_D_all(pH)
     # Sort elements from lowest D (hardest to extract) to highest D

@@ -62,6 +62,9 @@ from difflow_ree.database import (
     # Custom creation helpers
     create_custom_element,
     create_custom_extractant,
+    # Extraction mechanisms (#195)
+    EXTRACTION_MECHANISMS,
+    normalize_mechanism,
     # JAX-compatible accessors
     get_atomic_weight_array,
     get_price_array,
@@ -85,6 +88,13 @@ from difflow_ree.equilibrium import (
     REESpeciation,
     sulfate_speciation,
     chloride_speciation,
+    # Activity models and their declared validity ranges (#194)
+    ACTIVITY_MODELS,
+    AQUEOUS_MEDIA,
+    NITRATE_BEARING_MEDIA,
+    DAVIES_MAX_IONIC_STRENGTH,
+    DAVIES_SIGN_CHANGE_IONIC_STRENGTH,
+    activity_coefficient,
 )
 
 # =============================================================================
@@ -374,6 +384,14 @@ __all__ = [
     "REESpeciation",
     "sulfate_speciation",
     "chloride_speciation",
+    "ACTIVITY_MODELS",
+    "AQUEOUS_MEDIA",
+    "NITRATE_BEARING_MEDIA",
+    "DAVIES_MAX_IONIC_STRENGTH",
+    "DAVIES_SIGN_CHANGE_IONIC_STRENGTH",
+    "activity_coefficient",
+    "EXTRACTION_MECHANISMS",
+    "normalize_mechanism",
     # Units
     "REEExtractor",
     "REEExtractorParams",

@@ -1,25 +1,94 @@
-# Extractant Properties and pH-Dependent Distribution Correlations
+# Extractant Properties and Distribution Correlations
 #
-# Distribution coefficient model:
-#   log10(D) = a + b*pH + c*pH^2 + d/T
+# EXTRACTION MECHANISM (#195)
+# Every extractant declares a normalized `mechanism:` key. It is the mechanism,
+# not the code, that decides which coefficient block drives D:
+#
+#   mechanism: cation_exchange -> driven by `ph_coefficients`
+#     RE3+ + p(HA)2 <-> RE(HA2)p + p H+
+#   mechanism: solvating       -> driven by `nitrate_coefficients`
+#     RE(NO3)3 + m S <-> RE(NO3)3.mS   (no protons released)
+#
+# The mapping from the free-form `type:` field is:
+#   acidic_phosphoric / acidic_phosphonic / acidic_phosphinic /
+#   acidic_carboxylic  -> cation_exchange
+#   solvating_neutral  -> solvating
+# `mechanism:` is stated explicitly on every record so it is data rather than
+# an inference; difflow_ree.database.normalize_mechanism reproduces the mapping
+# for records that omit it.
+#
+# CATION-EXCHANGE MODEL (`ph_coefficients`):
+#   log10(D) = a + b*pH + c*pH^2 + d*(1/T - 1/Tref)
 #
 # where:
 #   D = [REE]_org / [REE]_aq
-#   pH = -log10([H+])
+#   pH = -log10([H+])       <- CONCENTRATION SCALE, not the activity scale (#194)
 #   T = temperature (K)
 #
-# CALIBRATION NOTES:
-# These coefficients are calibrated to give realistic D values:
-#   - At pH 2.0: D typically 0.001-0.1 for LREE, 0.1-1 for HREE
-#   - At pH 3.0: D typically 0.05-1 for LREE, 1-30 for HREE
-#   - At pH 4.0: D typically 1-20 for LREE, 50-500 for HREE
-#   - Separation factors between adjacent REE: 1.5-4
+# pH SCALE AND ACTIVITY CONVENTION (#194)
+# `pH` here is -log10 of the free proton *concentration*. These are conditional
+# correlations: the a/b/c coefficients are fitted at the ionic strength of the
+# reported experiments and already absorb the activity coefficients at that
+# ionic strength. Consequently:
+#   - The defensible default is NO activity correction at all
+#     (REEDistribution(..., ionic_strength=None)), i.e. a conditional constant
+#     used at the ionic strength it was fitted at. This is the right choice for
+#     a 2-4 M chloride leach liquor.
+#   - If a correction to a different ionic strength is requested, it must be
+#     gamma_RE / gamma_H**p on the concentration scale, with p =
+#     stoichiometry.protons_released, NOT gamma_RE alone. Davies is only valid
+#     for I < 0.5 M and difflow_ree reports outside that range.
+#   - Davies does not merely lose accuracy above 0.5 M. Its bracket
+#     f(I) = sqrt(I)/(1+sqrt(I)) - 0.3 I changes SIGN at I = 1.940363884733242 M
+#     (the root of 0.3 I + 0.3 sqrt(I) - 1 = 0), above which
+#     gamma_RE/gamma_H**3 = 10**(-6 A f) exceeds 1 and the correction
+#     MULTIPLIES D: 0.228 at I = 0.1 M, 0.245 at 1.0 M, 6.49 at 3.0 M, 42.5 at
+#     4.0 M. difflow_ree therefore clamps the ionic strength it feeds the
+#     activity model at the model's documented limit, so the correction
+#     saturates rather than inverting, unless the caller explicitly passes
+#     extrapolate_activity_model=True (#194).
 #
-# Sources:
+# SOLVATING MODEL (`nitrate_coefficients`):
+#   log10(D) = a + b*log10([NO3-]/reference_nitrate)
+#              + c*log10([NO3-]/reference_nitrate)^2
+#              + d*(1/T - 1/Tref)
+#
+# so `a` is log10(D) AT the reference nitrate concentration and `b` is the
+# nitrate slope d log10(D) / d log10([NO3-]). There is no pH term.
+#
+# PROVENANCE OF THE COEFFICIENTS -- TWO DIFFERENT KINDS OF NUMBER
+#
+# This file now contains coefficient blocks of two DIFFERENT provenances. They
+# must not be mistaken for one another:
+#
+#   (1) HAND-TUNED, NO SOURCE  -- the `ph_coefficients` and
+#       `temperature_coefficients` of D2EHPA, PC88A and Cyanex272.
+#       These were chosen to give plausible-looking D values:
+#         - At pH 2.0: D typically 0.001-0.1 for LREE, 0.1-1 for HREE
+#         - At pH 3.0: D typically 0.05-1 for LREE, 1-30 for HREE
+#         - At pH 4.0: D typically 1-20 for LREE, 50-500 for HREE
+#         - Separation factors between adjacent REE: 1.5-4
+#       No fit, dataset or table is recorded for any of them anywhere in this
+#       repository. They are illustrative, not measured. Do not cite them, do
+#       not regress equilibrium constants against them, and do not use them
+#       for design numbers.
+#
+#   (2) LITERATURE-DERIVED    -- TBP's `nitrate_coefficients` and
+#       `temperature_coefficients` ONLY.
+#       Refitted from named, retrievable primary sources; the fit basis, the
+#       correction arithmetic, the per-element provenance (measured vs
+#       interpolated vs assumed), the validity window and the known gaps are
+#       all written out on the TBP record below. Read that block before using
+#       any TBP number.
+#
+# Nothing else in this file is literature-derived. In particular, TBP's
+# nitrate block being fitted says NOTHING about the three acidic extractants.
+#
+# Background reading behind the hand-tuned blocks (consulted qualitatively;
+# NOT the source of any specific number here):
 # - Gupta & Krishnamurthy (2005) Extractive Metallurgy of Rare Earths
-# - Xie et al. (2014) Hydrometallurgy reviews
+# - Xie, Zhang, Dreisinger & Doyle (2014) Miner. Eng. 56, 10
 # - Peppard et al. (1957) J. Inorg. Nucl. Chem.
-# - Various literature correlations
 
 extractants:
   D2EHPA:
@@ -29,13 +98,20 @@ extractants:
     density: 0.975  # g/mL
     pKa: 3.24  # in aqueous
     type: acidic_phosphoric
+    mechanism: cation_exchange  # normalized from type (#195)
     diluents: [kerosene, n-heptane, Shellsol_D70]
     typical_concentration: 0.5  # M in organic phase
 
     # Extraction mechanism: REE³⁺ + 3(HA)₂ ⇌ REE(HA₂)₃ + 3H⁺
+    # basis: dimer -> extractant_molecules counts (HA)₂ dimers, so the
+    # capacity in monomer equivalents is 3 * 2 = 6 mol D2EHPA per mol REE
+    # (max_loading = 1/6). D2EHPA is dimeric in aliphatic diluents at the low
+    # to moderate loadings these correlations cover; the monomeric (m = 3)
+    # stoichiometry is reported at high loading and in polar diluents. See #191.
     stoichiometry:
       protons_released: 3
       extractant_molecules: 3  # as dimers
+      basis: dimer
 
     # pH correlation coefficients: log10(D) = a + b*pH + c*pH²
     # Valid range: pH 1-5, T = 298K, [D2EHPA] = 0.5M
@@ -59,8 +135,19 @@ extractants:
       Y:  {a: -7.00, b: 2.65, c: 0.010, d: 0.0}
 
     # Temperature correction: add d*(1/T - 1/298.15) to log(D)
-    # Extraction is exothermic, D decreases with T
-    temperature_coefficients:  # d values in K
+    #
+    # OPEN QUESTION (unresolved, numbers deliberately unchanged). The comment
+    # line that used to sit here said "extraction is exothermic, D decreases
+    # with T", but under log10 D = ... + d*(1/T - 1/Tref) with
+    # d = -dH/(2.303 R), a NEGATIVE d is an ENDOTHERMIC dH -- these values
+    # imply dH = +29 to +46 kJ/mol, i.e. D *rising* with T, the opposite of
+    # the sentence. That may or may not be wrong: acidic organophosphorus REE
+    # extraction is reported both ways depending on system, and unlike TBP
+    # (see the TBP record, where the sign WAS refuted and fixed) no data was
+    # retrieved here either way. So the sign is left as-is and flagged rather
+    # than silently flipped. This is a separate question from the TBP refit
+    # and needs its own literature pass before any of these numbers move.
+    temperature_coefficients:  # d values in K; sign unverified, see above
       La: -1500
       Ce: -1600
       Pr: -1700
@@ -89,12 +176,16 @@ extractants:
     density: 0.955
     pKa: 4.10
     type: acidic_phosphonic
+    mechanism: cation_exchange  # normalized from type (#195)
     diluents: [kerosene, n-heptane, Shellsol_D70]
     typical_concentration: 0.5
 
+    # Extraction mechanism: REE³⁺ + 3(HA)₂ ⇌ REE(HA₂)₃ + 3H⁺
+    # Dimeric, as D2EHPA: 6 mol PC88A per mol REE (max_loading = 1/6). See #191.
     stoichiometry:
       protons_released: 3
       extractant_molecules: 3
+      basis: dimer
 
     # PC88A has better light REE selectivity than D2EHPA
     # Particularly good for Nd/Pr separation (SF ~ 3-4 vs 2-3 for D2EHPA)
@@ -116,6 +207,8 @@ extractants:
       Dy: {a: -6.32, b: 2.90, c: 0.010, d: 0.0}
       Y:  {a: -6.65, b: 2.75, c: 0.010, d: 0.0}
 
+    # Sign unverified; same open question as D2EHPA above (negative d implies
+    # ENDOTHERMIC extraction). Numbers deliberately unchanged.
     temperature_coefficients:
       La: -1400
       Ce: -1500
@@ -141,12 +234,17 @@ extractants:
     density: 0.920
     pKa: 6.37
     type: acidic_phosphinic
+    mechanism: cation_exchange  # normalized from type (#195)
     diluents: [kerosene, Shellsol_D70]
     typical_concentration: 0.3
 
+    # Extraction mechanism: REE³⁺ + 3(HA)₂ ⇌ REE(HA₂)₃ + 3H⁺
+    # Dimeric in aliphatic diluents: 6 mol Cyanex272 per mol REE
+    # (max_loading = 1/6). See #191.
     stoichiometry:
       protons_released: 3
       extractant_molecules: 3
+      basis: dimer
 
     # Cyanex 272 has high pKa - operates at higher pH (4-6)
     # Excellent Co/Ni rejection, used for specialty REE separations
@@ -167,6 +265,8 @@ extractants:
       Dy: {a: -7.15, b: 2.70, c: 0.005, d: 0.0}
       Y:  {a: -7.55, b: 2.58, c: 0.005, d: 0.0}
 
+    # Sign unverified; same open question as D2EHPA above (negative d implies
+    # ENDOTHERMIC extraction). Numbers deliberately unchanged.
     temperature_coefficients:
       La: -1300
       Ce: -1400
@@ -192,59 +292,273 @@ extractants:
     density: 0.979
     pKa: null  # Neutral extractant
     type: solvating_neutral
+    mechanism: solvating  # normalized from type (#195)
     diluents: [kerosene, n-dodecane]
     typical_concentration: 1.0  # Often 30% v/v in diluent
 
     # Solvating extraction from nitrate media
     # REE(NO3)3 + 3TBP ⇌ REE(NO3)3·3TBP
+    # Solvating, monomeric: 3 mol TBP per mol REE (max_loading = 1/3). See #191.
     stoichiometry:
       protons_released: 0
       extractant_molecules: 3
+      basis: monomer
       requires_nitrate: true
 
-    # TBP extraction depends on nitrate concentration, not pH
-    # Model: log10(D) = a + b*log10([NO3-]) + d/T
-    # Coefficients for [NO3-] = 3M reference
+    # =====================================================================
+    # TBP NITRATE COEFFICIENTS -- REFITTED FROM PRIMARY LITERATURE
+    # =====================================================================
+    # Model (as implemented by difflow_ree.equilibrium.distribution):
     #
-    # TBP shows reverse selectivity (HREE extracted more than LREE)
-    # at typical nitrate concentrations
+    #   log10(D) = a + b*log10([NO3-]/reference_nitrate)
+    #                + c*log10([NO3-]/reference_nitrate)^2
+    #                + d*(1/T - 1/298.15)
+    #                + n*log10([TBP]/reference_concentration)
+    #
+    #   `a` = log10(D) AT the reference: [NO3-] = 3.0 M, [TBP] = 1.0 M,
+    #         T = 298.15 K.
+    #   `b` = nitrate slope d log10(D) / d log10([NO3-]).
+    #   `d` = -dH / (2.303 R), so d > 0 <=> dH < 0 <=> EXOTHERMIC.
+    #
+    # WHAT WAS WRONG BEFORE, AND IS NOW FIXED
+    #   1. The old `a` values gave D_Dy/D_La = 100 at the reference. Measured:
+    #      10.2. The old spread was an acidic-organophosphorus selectivity
+    #      pattern, not a solvating one.
+    #   2. The old `a` values gave D_Dy = 3.16 at the reference. Measured
+    #      (corrected to the reference): 0.24.
+    #   3. Every old `d` was NEGATIVE, which under the model above means
+    #      ENDOTHERMIC. TBP extraction of REE nitrates is EXOTHERMIC. Every
+    #      `d` is now POSITIVE.
+    #   4. The old per-element `b` trend 2.50-2.85 had no support of any kind
+    #      and is removed; `b` is now the stoichiometric 3.0 for every element.
+    #
+    # ---------------------------------------------------------------------
+    # SOURCES (these four, and no others; nothing else here is a source)
+    # ---------------------------------------------------------------------
+    # S1  Kraikaew, Srinuttrakul & Chayavadhanakur (2005), "Solvent Extraction
+    #     Study of Rare Earths from Nitrate Medium by the Mixtures of TBP and
+    #     D2EHPA in Kerosene", J. Metals, Materials and Minerals 15(2), 89-95.
+    #     No DOI. https://jmmm.material.chula.ac.th/index.php/jmmm/article/view/1345
+    #     Table 1, p. 92. Conditions: RE nitrate from monazite, free acidity
+    #     0.2001 N, TBP in kerosene, equal phase volumes, 35 +/- 1 C.
+    #     >>> This is the ONLY source of the `a` values below. <<<
+    #
+    # S2  Topp & Weaver, ORNL-1811, "Distribution of Rare-Earth Nitrates
+    #     Between Tributyl Phosphate and Nitric Acid" (1954).
+    #     DOI 10.2172/4398970.
+    #     Used only to bound the validity window (Tables II/IV, 8.5-17.4 N).
+    #
+    # S3  Poos & Wilhelm, ISC-695, "Separation of Yttrium and Some Rare Earths
+    #     by Liquid-Liquid Extraction", Ames Laboratory (1954). OSTI 4332475.
+    #     Used only for the Y acidity-dependent-position caveat.
+    #
+    # S4  Ganesh & Pandey (2019), J. Rad. Nucl. Appl. 4(2), 109-115.
+    #     The DOI printed in the PDF (10.18576/jrna/040205) is NOT REGISTERED
+    #     IN CROSSREF -- it does not resolve. Cite the retrieved PDF instead:
+    #     https://www.naturalspublishing.com/files/published/q86xt25u4iq5o9.pdf
+    #     Table 1: dH_Sm = -43.3 +/- 6.2 kJ/mol (1.1 M TBP in n-dodecane,
+    #     3.8-3.89 M HNO3, 283-326 K, R^2 = 0.979).
+    #     Fig. 1: log D_Sm = 2.8055*log[TBP]_free - 2.8503, R^2 = 0.992.
+    #     >>> This is the ONLY source of the `d` value below. <<<
+    #
+    # S5  Jorjani & Shahbazi (2016), Arab. J. Chem. 9, S1532-S1539,
+    #     DOI 10.1016/j.arabjc.2012.04.002. Extraction fell as T went
+    #     25 -> 55 C. Corroborates exothermicity; supplies no number here.
+    #
+    # KNOWN GAP -- THE SINGLE HIGHEST-VALUE FOLLOW-UP
+    #     Fidelis (1970), "Temperature effect on the extraction of lanthanides
+    #     in the TBP-HNO3 system", J. Inorg. Nucl. Chem. 32, 997-1003,
+    #     DOI 10.1016/0022-1902(70)80079-3, measured the WHOLE lanthanide
+    #     series at 10/17/25/40 C -- i.e. exactly the per-element dH that is
+    #     assumed constant below. It is paywalled with no open-access copy and
+    #     was NOT used. Obtaining it would replace nine assumed `d` values
+    #     with nine measured ones. That is the next thing to do to this record.
+    #
+    # ---------------------------------------------------------------------
+    # FIT BASIS AND THE CORRECTION ARITHMETIC
+    # ---------------------------------------------------------------------
+    # S1 Table 1 reports D at 1.0 M TBP, at 6.06 M nitrate and 308.15 K.
+    # Corrected to the record's reference (3.0 M NO3-, 1.0 M TBP, 298.15 K):
+    #
+    #   a = log10(D_measured)
+    #       + 3*log10(3.0/6.06)              = -0.9162   (nitrate, b = 3)
+    #       - 2300*(1/308.15 - 1/298.15)     = +0.2504   (temperature, d = 2300)
+    #
+    #   i.e.  a = log10(D_measured) - 0.6658
+    #
+    # THE 6.06 M NITRATE IS DERIVED, NOT REPORTED. S1 does not state a nitrate
+    # concentration. 6.06 M was computed from S1's ppm feed table (sum of the
+    # RE nitrates, plus the 0.2 N free acid). THIS IS THE SINGLE LARGEST
+    # UNCERTAINTY IN THE `a` VALUES: the nitrate correction is 3*log10(3/[NO3-]),
+    # so a 10% error in the derived 6.06 M moves every `a` by 0.13 log units
+    # (35%) IN COMMON. Relative selectivity (the ratios, which is what these
+    # numbers are actually good for) is unaffected; the absolute level is not.
+    #
+    # ---------------------------------------------------------------------
+    # PER-ELEMENT PROVENANCE -- READ THIS BEFORE USING ANY SINGLE NUMBER
+    # ---------------------------------------------------------------------
+    #   La  DERIVED from S1 Table 1 (measured D, corrected as above)
+    #   Ce  DERIVED from S1 Table 1
+    #   Pr  DERIVED from S1 Table 1
+    #   Nd  DERIVED from S1 Table 1
+    #   Sm  DERIVED from S1 Table 1
+    #   Eu  DERIVED from S1 Table 1
+    #   Gd  DERIVED from S1 Table 1
+    #   Tb  *** INTERPOLATED -- NOT MEASURED ***
+    #       Log-linear in atomic number between Gd (Z = 64) and Dy (Z = 66).
+    #       NO TBP-nitrate distribution ratio for Tb exists in ANY source
+    #       retrieved for this refit. a_Tb is a straight-line fill-in with no
+    #       measurement behind it. Treat any Tb result as interpolation.
+    #   Dy  DERIVED from S1 Table 1
+    #   Y   DERIVED from S1 Table 1, but SPECIAL CASE -- see below.
+    #
+    # Y IS A SPECIAL CASE AND A SINGLE a_Y IS A FICTION.
+    #   Yttrium has no 4f shell; its effective position in the REE extraction
+    #   series is not fixed but SLIDES WITH ACIDITY -- Ho-like at high acidity,
+    #   La-like at very low acidity (S3). One number cannot represent that.
+    #   The a_Y written below is the ~6 M nitrate, LOW-FREE-ACID value from
+    #   S1's conditions (0.2 N), corrected like the rest. At any other acidity
+    #   it is wrong, and wrong by an unknown amount in a known direction.
+    #   Do not use Y at any acidity other than S1's.
+    #
+    # b = 3.0 IS STOICHIOMETRIC, NOT FITTED.
+    #   It is the 3 of RE(NO3)3 + 3 TBP <-> RE(NO3)3.3TBP. NO measured
+    #   d log D / d log[NO3-] in a neutral-salt system was found in any
+    #   retrieved source, so there is no fitted nitrate slope to write. The
+    #   only corroboration is INDIRECT: S4 Fig. 1 measured the TBP order as
+    #   2.81 (R^2 = 0.992), close to 3. All ten elements share b = 3.0 because
+    #   nothing in the data distinguishes them; the old 2.50-2.85 per-element
+    #   trend was invented.
+    #
+    # d = +2300 K FOR EVERY ELEMENT: ONE MEASUREMENT, NINE ASSUMPTIONS.
+    #   From S4's dH_Sm = -43.3 kJ/mol via d = -dH/(2.303 R)
+    #     = 43300 / (2.303 * 8.314) = 2262 K, rounded to 2300 K.
+    #   *** Sm is MEASURED. The other nine elements are ASSUMED EQUAL TO Sm
+    #       and are NO DATA. *** There is no per-element heat of extraction in
+    #   anything retrieved (that is what the Fidelis gap above would supply).
+    #   The sign, however, is solid and is the point: dH < 0, so d > 0, so D
+    #   FALLS as T rises. S5 corroborates the direction independently.
+    #
+    #   +/-40% AMBIGUITY IN THE MAGNITUDE. S4's Table 1 appears to have its dH
+    #   and slope columns TRANSPOSED between its two rows, so the value that
+    #   belongs to TBP is either -43.3 or -61.2 kJ/mol, giving d = +2261 K or
+    #   d = +3197 K. This cannot be resolved from the paper as published.
+    #   The defensible range is therefore d = +2260 to +3200 K; +2300 is the
+    #   low end of it. Any temperature study should sweep that range rather
+    #   than trust the single value.
+    #
+    # ---------------------------------------------------------------------
+    # VALIDITY WINDOW
+    # ---------------------------------------------------------------------
+    # These coefficients -- and in particular b = 3.0 -- are valid ONLY for:
+    #
+    #     nitrate supplied by a NEUTRAL SALT
+    #       (NH4NO3 / LiNO3 / Ca(NO3)2 / Mg(NO3)2 / Al(NO3)3),
+    #     free acid <= 0.5 M,
+    #     [NO3-] 1-6 M,
+    #     T 283-326 K.
+    #
+    # WHY ONE `b` CANNOT COVER MORE THAN THAT (both measured, both outside):
+    #   - NEAT TBP + CONCENTRATED HNO3: the slope is ~6, not 3
+    #     (S2 Tables II/IV, 8.5-17.4 N). Twice the exponent.
+    #   - DILUTE TBP + HNO3: at 1.1 M TBP, D actually FALLS with acidity,
+    #     because the acid consumes the extractant as the TBP.HNO3 adduct and
+    #     starves the RE complex of free TBP. The effective slope is ~0 or
+    #     NEGATIVE (S4 Fig. 4). Opposite sign.
+    #   A single b cannot be 3, 6 and -something at once. The neutral-salt,
+    #   low-acid window is the one where b = 3 is the right physics.
+    #
+    # TWO FURTHER CAVEATS ON THE LEVEL (not the shape):
+    #   - The model's extractant term uses TOTAL [TBP] (`[TBP]/1.0 M` raised to
+    #     concentration_exponent). The measured cube law holds in FREE TBP.
+    #     These differ whenever the solvent is loaded or the acid is high.
+    #   - S1's solvent was AT OR OVER SATURATION: an organic loading of 0.35 M
+    #     requires 1.05 M TBP of the 1.0 M available. So S1's D values -- and
+    #     hence every `a` below -- are LOADING-SUPPRESSED PROCESS values, not
+    #     trace-level D. Trace D would be higher.
+    #
+    # ---------------------------------------------------------------------
+    # USE FOR / DO NOT USE FOR
+    # ---------------------------------------------------------------------
+    # USE FOR:
+    #   - relative REE selectivity of TBP (the element ORDER and the ratios)
+    #   - showing why a TBP separation needs very many stages
+    #   - trend and sensitivity studies, gradient-based structure studies
+    #   - the DIRECTION of the temperature and nitrate dependences
+    #
+    # DO NOT USE FOR:
+    #   - stage counts or column sizing
+    #   - solvent inventories
+    #   - absolute recoveries or purities
+    #   - any system where the nitrate is supplied by HNO3 rather than a
+    #     neutral salt
+    #   - loaded solvent (these are already loading-suppressed; the loading
+    #     model would double-count)
+    #   - free acidity above ~0.5 M
+    #   - regressing equilibrium constants against these numbers
+    #   - Y at any acidity other than S1's 0.2 N
+    #
+    # AT THE REFERENCE (3.0 M NO3-, 1.0 M TBP, 298.15 K) THESE GIVE:
+    #   La 0.023, Ce 0.032, Pr 0.060, Nd 0.072, Sm 0.120, Eu 0.138,
+    #   Gd 0.174, Tb 0.204, Dy 0.240, Y 0.214
+    #   D_Dy/D_La = 10.2; mean adjacent-pair separation factor La->Dy = 1.29
+    #   (per unit atomic number over the 9 steps La(57) -> Dy(66), which
+    #   includes Pm(61); counting only the 8 gaps in the tracked element
+    #   list would inflate this to 1.34). Inside the 1.1-1.5 reported for
+    #   TBP; the old record implied 1.67, above that range.
+    #   Every D is below 1: TBP is a weak extractant and this now shows it.
+    #
+    # NOTE ON EXTRACTANT CONCENTRATION. Every Params class in difflow_ree
+    # defaults extractant_conc = 0.5 M, which with reference_concentration 1.0
+    # and concentration_exponent 3.0 multiplies every D above by 0.125. 0.5 M
+    # is a cation-exchange default and is meaningless for TBP: TBP is normally
+    # run at ~30% v/v, which for the density and MW on this record is 1.10 M
+    # (neat TBP is 3.68 M). Set extractant_conc ~ 1.1 explicitly for TBP.
     nitrate_coefficients:
-      La: {a: -1.50, b: 2.50, c: 0.0, d: 0.0}
-      Ce: {a: -1.30, b: 2.55, c: 0.0, d: 0.0}
-      Pr: {a: -1.10, b: 2.60, c: 0.0, d: 0.0}
-      Nd: {a: -0.90, b: 2.60, c: 0.0, d: 0.0}
-      Sm: {a: -0.40, b: 2.70, c: 0.0, d: 0.0}
-      Eu: {a: -0.20, b: 2.70, c: 0.0, d: 0.0}
-      Gd: {a: 0.00, b: 2.75, c: 0.0, d: 0.0}
-      Tb: {a: 0.30, b: 2.80, c: 0.0, d: 0.0}
-      Dy: {a: 0.50, b: 2.85, c: 0.0, d: 0.0}
-      Y:  {a: 0.20, b: 2.75, c: 0.0, d: 0.0}
+      La: {a: -1.63, b: 3.0, c: 0.0, d: 0.0}   # DERIVED, S1 Table 1
+      Ce: {a: -1.49, b: 3.0, c: 0.0, d: 0.0}   # DERIVED, S1 Table 1
+      Pr: {a: -1.22, b: 3.0, c: 0.0, d: 0.0}   # DERIVED, S1 Table 1
+      Nd: {a: -1.14, b: 3.0, c: 0.0, d: 0.0}   # DERIVED, S1 Table 1
+      Sm: {a: -0.92, b: 3.0, c: 0.0, d: 0.0}   # DERIVED, S1 Table 1
+      Eu: {a: -0.86, b: 3.0, c: 0.0, d: 0.0}   # DERIVED, S1 Table 1
+      Gd: {a: -0.76, b: 3.0, c: 0.0, d: 0.0}   # DERIVED, S1 Table 1
+      Tb: {a: -0.69, b: 3.0, c: 0.0, d: 0.0}   # INTERPOLATED Gd-Dy, NOT MEASURED
+      Dy: {a: -0.62, b: 3.0, c: 0.0, d: 0.0}   # DERIVED, S1 Table 1
+      Y:  {a: -0.67, b: 3.0, c: 0.0, d: 0.0}   # DERIVED, S1 Table 1; ACIDITY-SPECIFIC
 
-    # TBP also works with HNO3 - use ph_coefficients for acidic systems
-    # Lower sensitivity to pH than acidic extractants
-    ph_coefficients:
-      La: {a: -2.00, b: 0.50, c: 0.0, d: 0.0}
-      Ce: {a: -1.80, b: 0.55, c: 0.0, d: 0.0}
-      Pr: {a: -1.60, b: 0.60, c: 0.0, d: 0.0}
-      Nd: {a: -1.40, b: 0.60, c: 0.0, d: 0.0}
-      Sm: {a: -0.90, b: 0.70, c: 0.0, d: 0.0}
-      Eu: {a: -0.70, b: 0.70, c: 0.0, d: 0.0}
-      Gd: {a: -0.50, b: 0.75, c: 0.0, d: 0.0}
-      Tb: {a: -0.20, b: 0.80, c: 0.0, d: 0.0}
-      Dy: {a: 0.00, b: 0.85, c: 0.0, d: 0.0}
-      Y:  {a: -0.30, b: 0.75, c: 0.0, d: 0.0}
+    # NO ph_coefficients BLOCK -- DELETED ON PURPOSE.
+    # TBP formerly carried a `ph_coefficients` block, reachable via
+    #   REEDistribution(extractant="TBP", ..., mechanism="cation_exchange").
+    # It was removed because it was mechanistically indefensible, not merely
+    # uncalibrated:
+    #   - It modelled TBP as a weak CATION EXCHANGER, but this very record has
+    #     pKa: null and stoichiometry.protons_released: 0. There is no proton
+    #     to exchange. The model had no mechanism under it.
+    #   - No retrieved source reports a pH-slope correlation for TBP at all.
+    #   - It carried the same refuted 100x La-to-Dy spread as the old nitrate
+    #     block (see above), from the same unrecorded origin.
+    # Asking for TBP with mechanism="cation_exchange" now RAISES a ValueError
+    # naming TBP and pointing at the nitrate path. There is no fallback.
+    # TBP in HNO3 is a real system, but it is one this file has no coefficients
+    # for -- and per the validity window above, b = 3 would be wrong for it
+    # anyway (S2 measured ~6, S4 measured ~0 or negative). Anyone who needs it
+    # must supply fitted coefficients, not reach for a deleted block.
 
-    temperature_coefficients:
-      La: -800
-      Ce: -900
-      Pr: -1000
-      Nd: -1100
-      Sm: -1300
-      Eu: -1400
-      Gd: -1500
-      Tb: -1600
-      Dy: -1700
-      Y:  -1500
+    # d = -dH/(2.303 R) > 0 <=> EXOTHERMIC. All ten are +2300 K:
+    # Sm MEASURED (S4, dH = -43.3 kJ/mol); the other nine ASSUMED EQUAL TO Sm
+    # and carrying NO DATA. Defensible range +2260 to +3200 K (S4 column
+    # transposition, see above). Fidelis (1970) would replace all nine.
+    temperature_coefficients:  # d values in K
+      La: 2300   # ASSUMED = Sm (no data)
+      Ce: 2300   # ASSUMED = Sm (no data)
+      Pr: 2300   # ASSUMED = Sm (no data)
+      Nd: 2300   # ASSUMED = Sm (no data)
+      Sm: 2300   # MEASURED, S4 Table 1
+      Eu: 2300   # ASSUMED = Sm (no data)
+      Gd: 2300   # ASSUMED = Sm (no data)
+      Tb: 2300   # ASSUMED = Sm (no data)
+      Dy: 2300   # ASSUMED = Sm (no data)
+      Y:  2300   # ASSUMED = Sm (no data)
 
     valid_ph_range: [0.5, 4.0]  # Works in highly acidic conditions
     valid_temp_range: [283, 353]

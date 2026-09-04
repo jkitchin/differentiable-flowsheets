@@ -302,15 +302,54 @@ def speciation_correction(
 # Ionic Strength Effects
 # =============================================================================
 
+# Ionic strength (M) at which the Davies bracket
+#
+#     f(I) = sqrt(I)/(1 + sqrt(I)) - 0.3 I
+#
+# changes sign. Solving f(I) = 0 with x = sqrt(I) gives 0.3 x^2 + 0.3 x - 1 = 0,
+# i.e. x = (-1 + sqrt(1 + 40/3))/2 and I = x^2 (#194). Above this ionic strength
+# Davies predicts gamma > 1 for every ion, and any ratio of Davies coefficients
+# built from it INVERTS: gamma_RE/gamma_H**3 = 10**(-6 A f) crosses 1 here and
+# grows without bound. This is why difflow_ree never extrapolates Davies
+# silently -- see REEDistribution and DAVIES_MAX_IONIC_STRENGTH.
+DAVIES_SIGN_CHANGE_IONIC_STRENGTH = 1.940363884733242  # M
+
+# Documented validity limit of the Davies equation (M).
+DAVIES_MAX_IONIC_STRENGTH = 0.5
+
+# Aqueous media difflow_ree recognizes. The same vocabulary as
+# :class:`REESpeciation.medium`, reused by
+# :class:`difflow_ree.equilibrium.distribution.REEDistribution` so that a
+# nitrate-requiring (solvating) extractant declared to be operating in a
+# chloride or sulfate liquor is detected rather than merely described in an
+# error message (#195). "mixed" is treated as containing nitrate.
+AQUEOUS_MEDIA = ("sulfate", "chloride", "nitrate", "mixed")
+
+# Media that supply the nitrate (salting) anion a solvating extractant needs.
+NITRATE_BEARING_MEDIA = ("nitrate", "mixed")
+
+
 def activity_coefficient_davies(
     z: int,
     ionic_strength: Array | float,
 ) -> Array:
     """Calculate activity coefficient using Davies equation.
 
-    log(gamma) = -A * z² * (sqrt(I)/(1 + sqrt(I)) - 0.3*I)
+    log10(gamma) = -A * z^2 * f(I),  f(I) = sqrt(I)/(1 + sqrt(I)) - 0.3*I
 
-    Valid for I < 0.5 M.
+    VALIDITY (#194). The equation is documented for I < 0.5 M
+    (:data:`DAVIES_MAX_IONIC_STRENGTH`). Beyond that it is not merely an
+    inaccurate extrapolation: ``f`` changes sign at
+    I = 1.940363884733242 M (:data:`DAVIES_SIGN_CHANGE_IONIC_STRENGTH`, the
+    root of 0.3 I + 0.3 sqrt(I) - 1 = 0), so above ~1.94 M this function
+    returns gamma > 1 and any correction built as a ratio of Davies
+    coefficients reverses direction. For example
+    ``gamma_RE3+ / gamma_H+**3 = 10**(-6 A f)`` equals 0.228 at I = 0.1 M,
+    0.245 at I = 1.0 M, 1.0 at I = 1.9404 M and 6.49 at I = 3.0 M -- the
+    correction that *reduces* D in dilute solution *multiplies* it by 6.5 in a
+    3 M liquor. This function does not guard against that; callers must
+    (:class:`difflow_ree.equilibrium.distribution.REEDistribution` clamps the
+    ionic strength it feeds here unless extrapolation is explicitly requested).
 
     Args:
         z: Ion charge
@@ -326,6 +365,72 @@ def activity_coefficient_davies(
     log_gamma = -A * z**2 * (sqrt_I / (1 + sqrt_I) - 0.3 * I)
 
     return jnp.power(10.0, log_gamma)
+
+
+# Aqueous activity models available to the distribution correlations (#194).
+# Each model declares its own documented validity range so that using it
+# outside that range is a reported extrapolation rather than a silent one.
+# Bromley and SIT are deliberately absent: difflow_ree does not carry their
+# ion-interaction parameters and will not invent them.
+ACTIVITY_MODELS: dict[str, dict] = {
+    "davies": {
+        "max_ionic_strength": DAVIES_MAX_IONIC_STRENGTH,  # M
+        # Ionic strength at which the model's own bracket changes sign, so that
+        # ratios of its coefficients invert. None for models that cannot invert.
+        "sign_change_ionic_strength": DAVIES_SIGN_CHANGE_IONIC_STRENGTH,
+        "description": (
+            "Davies equation, log10(gamma) = -A z^2 "
+            "(sqrt(I)/(1+sqrt(I)) - 0.3 I), A = 0.509 at 25 C"
+        ),
+        "reference": "Davies, C.W. Ion Association, Butterworths, 1962.",
+    },
+    "none": {
+        # No correction at all: the correlation is used as the conditional
+        # constant it is, at the ionic strength it was fitted at. This is the
+        # defensible option for a 2-4 M chloride liquor.
+        "max_ionic_strength": float("inf"),
+        "sign_change_ionic_strength": None,
+        "description": (
+            "No activity correction; the correlation is treated as a "
+            "conditional constant valid at its fitting ionic strength"
+        ),
+        "reference": "n/a",
+    },
+}
+
+
+def activity_coefficient(
+    z: int,
+    ionic_strength: Array | float,
+    model: str = "davies",
+) -> Array:
+    """Aqueous activity coefficient from a named activity model (#194).
+
+    Args:
+        z: Ion charge.
+        ionic_strength: Ionic strength (M).
+        model: Model name, a key of :data:`ACTIVITY_MODELS`. ``"davies"`` uses
+            the Davies equation (valid for I < 0.5 M); ``"none"`` returns 1.0,
+            i.e. the correlation is used as a conditional constant.
+
+    Returns:
+        Activity coefficient (dimensionless).
+
+    Raises:
+        ValueError: If ``model`` is not an implemented activity model. Models
+            whose ion-interaction parameters difflow_ree does not carry
+            (Bromley, SIT) raise here rather than being approximated.
+    """
+    if model not in ACTIVITY_MODELS:
+        raise ValueError(
+            f"Unknown activity model {model!r}. Implemented models: "
+            f"{sorted(ACTIVITY_MODELS)}. Models such as Bromley or SIT are "
+            "not implemented because difflow_ree does not carry their "
+            "ion-interaction parameters."
+        )
+    if model == "none":
+        return jnp.ones_like(jnp.asarray(ionic_strength, dtype=float))
+    return activity_coefficient_davies(z, ionic_strength)
 
 
 def ionic_strength_from_composition(

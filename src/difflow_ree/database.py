@@ -204,14 +204,91 @@ class REEDatabase:
 
 @dataclass(frozen=True)
 class PHCoefficients:
-    """pH-dependent distribution coefficient parameters.
+    """Quadratic distribution-coefficient parameters in a driving variable.
 
-    log10(D) = a + b*pH + c*pH^2
+    For a cation-exchange extractant the driving variable is pH on the
+    *concentration* scale (``pH = -log10([H+])``, see the header of
+    ``data/extractants.yaml``)::
+
+        log10(D) = a + b*pH + c*pH^2
+
+    The same container is reused for the solvating extractants (#195), where
+    the driving variable is the nitrate log-ratio ``s = log10([NO3-]/[NO3-]_ref)``
+    referenced to :attr:`Extractant.reference_nitrate`::
+
+        log10(D) = a + b*s + c*s^2
+
+    so that ``a`` is ``log10(D)`` *at the reference nitrate concentration* and
+    ``b`` is the nitrate slope ``d log10(D) / d log10([NO3-])``.
     """
     a: float
     b: float
     c: float
     d: float = 0.0  # Temperature coefficient (optional)
+
+
+# Normalized extraction mechanisms (#195). The mechanism decides which
+# coefficient block drives D and whether a proton term appears in the
+# activity correction (#194); it is data, not an assumption in the code.
+EXTRACTION_MECHANISMS = ("cation_exchange", "solvating")
+
+# Mapping from the historical free-form ``type`` field to the normalized
+# mechanism. Stated explicitly in data/extractants.yaml as well (#195).
+_TYPE_TO_MECHANISM = {
+    "acidic_phosphoric": "cation_exchange",
+    "acidic_phosphonic": "cation_exchange",
+    "acidic_phosphinic": "cation_exchange",
+    "acidic_carboxylic": "cation_exchange",
+    "solvating_neutral": "solvating",
+}
+
+
+def normalize_mechanism(extractant_type: str) -> str:
+    """Normalize an extractant ``type`` string to an extraction mechanism.
+
+    Args:
+        extractant_type: Free-form type from the extractant record, e.g.
+            ``"acidic_phosphoric"`` or ``"solvating_neutral"``.
+
+    Returns:
+        One of :data:`EXTRACTION_MECHANISMS`. Types that are not recognized
+        (including the ``"custom"`` default of
+        :func:`create_custom_extractant`) fall back to ``"cation_exchange"``,
+        which is the mechanism the ``ph_coefficients`` block describes.
+    """
+    if extractant_type in _TYPE_TO_MECHANISM:
+        return _TYPE_TO_MECHANISM[extractant_type]
+    if extractant_type.startswith("acidic"):
+        return "cation_exchange"
+    if extractant_type.startswith("solvating"):
+        return "solvating"
+    return "cation_exchange"
+
+
+def _load_coefficient_block(
+    block: dict | None,
+) -> dict[str, PHCoefficients] | None:
+    """Convert a YAML ``{element: {a, b, c, d}}`` block to PHCoefficients.
+
+    Args:
+        block: Raw YAML mapping, or None when the extractant does not carry
+            that coefficient block.
+
+    Returns:
+        Mapping of element symbol to :class:`PHCoefficients`, or None if
+        ``block`` was None.
+    """
+    if block is None:
+        return None
+    return {
+        element: PHCoefficients(
+            a=coeffs["a"],
+            b=coeffs["b"],
+            c=coeffs["c"],
+            d=coeffs.get("d", 0.0),
+        )
+        for element, coeffs in block.items()
+    }
 
 
 @dataclass
@@ -227,7 +304,13 @@ class Extractant:
     typical_concentration: float
     stoichiometry_protons: int
     stoichiometry_extractant: int
-    ph_coefficients: dict[str, PHCoefficients]
+    # None when the record carries no pH-driven correlation at all. That is not
+    # an oversight: TBP's ``ph_coefficients`` block was DELETED because it
+    # modelled a neutral solvating extractant (pKa null, protons_released 0) as
+    # a weak cation exchanger, with no proton to exchange and no source. Any
+    # consumer of this field must therefore handle None; there is no empty-dict
+    # stand-in and no fallback to another block.
+    ph_coefficients: dict[str, PHCoefficients] | None
     temperature_coefficients: dict[str, float]
     valid_ph_range: tuple[float, float]
     valid_temp_range: tuple[float, float]
@@ -241,6 +324,54 @@ class Extractant:
     heat_of_extraction: float | None = None
     heat_of_scrubbing: float | None = None
     heat_of_stripping: float | None = None
+    # Basis on which ``stoichiometry_extractant`` counts extractant species:
+    # "dimer" for the acidic organophosphorus extractants, which are dimeric in
+    # aliphatic diluents, "monomer" for neutral/solvating extractants (#191).
+    stoichiometry_basis: str = "monomer"
+    # Extraction mechanism (#195). None normalizes from ``extractant_type`` in
+    # __post_init__; the YAML states it explicitly so the mechanism is data
+    # rather than an inference.
+    mechanism: str | None = None
+    # Solvating-extraction data (#195). ``nitrate_coefficients`` is shaped like
+    # ``ph_coefficients`` but is driven by log10([NO3-]/reference_nitrate).
+    nitrate_coefficients: dict[str, PHCoefficients] | None = None
+    reference_nitrate: float | None = None
+    # True when the extractant only works from a nitrate (salting) medium, so
+    # using it without a nitrate concentration is an error rather than a
+    # silent fall-back to the pH correlation (#195).
+    requires_nitrate: bool = False
+
+    def __post_init__(self):
+        """Normalize the extraction mechanism (#195)."""
+        if self.mechanism is None:
+            self.mechanism = normalize_mechanism(self.extractant_type)
+        if self.mechanism not in EXTRACTION_MECHANISMS:
+            raise ValueError(
+                f"Extractant '{self.name}': unknown mechanism "
+                f"{self.mechanism!r}. Supported mechanisms: "
+                f"{list(EXTRACTION_MECHANISMS)}."
+            )
+
+    @property
+    def monomers_per_ree(self) -> float:
+        """Extractant monomer equivalents bound per mol REE.
+
+        This is the ``m`` in the extractant balance
+
+            [HA]_total = [HA]_free + m * [RE-complex]
+
+        so the maximum organic loading is ``1 / m`` mol REE per mol extractant.
+        Derived from the declared stoichiometry and its basis rather than
+        hard-coded, so that the capacity and the free-extractant exponent can
+        never disagree (#191).
+        """
+        per_species = 2.0 if self.stoichiometry_basis == "dimer" else 1.0
+        return self.stoichiometry_extractant * per_species
+
+    @property
+    def max_loading(self) -> float:
+        """Maximum REE loading capacity (mol REE per mol extractant)."""
+        return 1.0 / self.monomers_per_ree
 
 
 class ExtractantDatabase:
@@ -263,14 +394,13 @@ class ExtractantDatabase:
         self._modifiers: dict[str, dict] = data.get("modifiers", {})
 
         for name, props in data["extractants"].items():
-            ph_coeffs = {}
-            for element, coeffs in props["ph_coefficients"].items():
-                ph_coeffs[element] = PHCoefficients(
-                    a=coeffs["a"],
-                    b=coeffs["b"],
-                    c=coeffs["c"],
-                    d=coeffs.get("d", 0.0),
-                )
+            ph_coeffs = _load_coefficient_block(props.get("ph_coefficients"))
+            # Solvating-extraction coefficients, driven by the nitrate
+            # log-ratio rather than by pH (#195). Absent for the acidic
+            # cation exchangers.
+            nitrate_coeffs = _load_coefficient_block(
+                props.get("nitrate_coefficients")
+            )
 
             self._extractants[name] = Extractant(
                 name=name,
@@ -283,6 +413,7 @@ class ExtractantDatabase:
                 typical_concentration=props["typical_concentration"],
                 stoichiometry_protons=props["stoichiometry"]["protons_released"],
                 stoichiometry_extractant=props["stoichiometry"]["extractant_molecules"],
+                stoichiometry_basis=props["stoichiometry"].get("basis", "monomer"),
                 ph_coefficients=ph_coeffs,
                 temperature_coefficients=props["temperature_coefficients"],
                 valid_ph_range=tuple(props["valid_ph_range"]),
@@ -294,6 +425,13 @@ class ExtractantDatabase:
                 heat_of_extraction=props.get("heat_of_extraction"),
                 heat_of_scrubbing=props.get("heat_of_scrubbing"),
                 heat_of_stripping=props.get("heat_of_stripping"),
+                # Mechanism and solvating-extraction data (#195)
+                mechanism=props.get("mechanism"),
+                nitrate_coefficients=nitrate_coeffs,
+                reference_nitrate=props.get("reference_nitrate"),
+                requires_nitrate=bool(
+                    props["stoichiometry"].get("requires_nitrate", False)
+                ),
             )
 
     def get(self, name: str) -> Extractant:
@@ -376,7 +514,8 @@ class ExtractantDatabase:
 
         Raises:
             KeyError: If extractant doesn't exist
-            ValueError: If element already has data for this extractant, or
+            ValueError: If the extractant carries no ``ph_coefficients`` block
+                at all, if the element already has data for this extractant, or
                 if required coefficient keys are missing
         """
         if extractant_name not in self._extractants:
@@ -386,6 +525,18 @@ class ExtractantDatabase:
             )
 
         extractant = self._extractants[extractant_name]
+
+        if extractant.ph_coefficients is None:
+            raise ValueError(
+                f"Extractant '{extractant_name}' carries no 'ph_coefficients' "
+                f"block, so a pH-driven coefficient for '{element}' cannot be "
+                f"added to it. Its mechanism is {extractant.mechanism!r}; for "
+                "a solvating extractant the pH-driven correlation does not "
+                "exist and creating one here would reintroduce exactly the "
+                "unsupported model that was deleted from the record. Add to "
+                "'nitrate_coefficients' instead, or register a separate "
+                "extractant with fitted pH coefficients."
+            )
 
         if element in extractant.ph_coefficients:
             raise ValueError(
@@ -427,7 +578,10 @@ class ExtractantDatabase:
             raise KeyError(f"Extractant '{extractant_name}' not found")
 
         extractant = self._extractants[extractant_name]
-        if element not in extractant.ph_coefficients:
+        if (
+            extractant.ph_coefficients is None
+            or element not in extractant.ph_coefficients
+        ):
             raise KeyError(
                 f"Element '{element}' not found in extractant '{extractant_name}'"
             )
@@ -671,11 +825,16 @@ def create_custom_extractant(
     typical_concentration: float = 0.5,
     stoichiometry_protons: int = 3,
     stoichiometry_extractant: int = 3,
+    stoichiometry_basis: str = "monomer",
     valid_ph_range: tuple[float, float] = (1.0, 5.0),
     valid_temp_range: tuple[float, float] = (283.0, 333.0),
     reference_concentration: float = 0.5,
     concentration_exponent: float = 3.0,
     cost_usd_kg: float = 10.0,
+    mechanism: str | None = None,
+    nitrate_coefficients: dict[str, dict[str, float]] | None = None,
+    reference_nitrate: float | None = None,
+    requires_nitrate: bool = False,
 ) -> Extractant:
     """Create a custom extractant with user-defined properties.
 
@@ -690,6 +849,11 @@ def create_custom_extractant(
         ph_coefficients: pH-dependent distribution coefficients for each REE element.
             Format: {"La": {"a": -8.0, "b": 2.2, "c": 0.01, "d": 0.0}, ...}
             Model: log10(D) = a + b*pH + c*pH^2 + d/T
+            Still REQUIRED here, even for ``mechanism="solvating"``. Note the
+            asymmetry with the YAML path, where a record may omit the block
+            entirely (TBP does, and :attr:`Extractant.ph_coefficients` is
+            therefore ``dict | None``): a custom solvating extractant must
+            still supply one. Loosening this is a separate change.
         temperature_coefficients: Temperature correction for each element (K).
             Format: {"La": -1500, "Nd": -1700, ...}
         density: Density (g/mL), default 1.0
@@ -698,11 +862,37 @@ def create_custom_extractant(
         typical_concentration: Typical operating concentration (M), default 0.5
         stoichiometry_protons: Number of protons released per extraction, default 3
         stoichiometry_extractant: Number of extractant molecules, default 3
+        stoichiometry_basis: What ``stoichiometry_extractant`` counts,
+            ``"monomer"`` (default, matching :class:`Extractant`) or
+            ``"dimer"`` (#191). The acidic organophosphorus extractants
+            (D2EHPA, PC88A, Cyanex 272) are DIMERIC in aliphatic diluents:
+            their ``stoichiometry_extractant = 3`` counts three dimers, i.e.
+            six monomer equivalents per REE, so
+            :attr:`Extractant.monomers_per_ree` is 6 and
+            :attr:`Extractant.max_loading` is 1/6. Leaving this at
+            ``"monomer"`` for such an extractant reports 3 and 1/3 instead --
+            a factor-of-two capacity error, which is exactly the bug #191 was
+            filed about. Pass ``stoichiometry_basis="dimer"`` whenever the
+            custom extractant is a dimerizing acid.
         valid_ph_range: Valid pH range as (min, max), default (1.0, 5.0)
         valid_temp_range: Valid temperature range in K as (min, max), default (283, 333)
         reference_concentration: Reference concentration for correlations (M), default 0.5
         concentration_exponent: Exponent n in D ∝ [HA]^n, default 3.0
         cost_usd_kg: Cost in USD per kg, default 10.0
+        mechanism: Extraction mechanism, one of :data:`EXTRACTION_MECHANISMS`
+            (#195). None normalizes from ``extractant_type``; an unrecognized
+            type (including the ``"custom"`` default) normalizes to
+            ``"cation_exchange"``, which is what ``ph_coefficients`` describes.
+        nitrate_coefficients: Solvating-extraction coefficients keyed by element,
+            same ``{a, b, c, d}`` shape as ``ph_coefficients`` but driven by
+            ``log10([NO3-]/reference_nitrate)`` (#195). Required for
+            ``mechanism="solvating"``.
+        reference_nitrate: Nitrate concentration (M) the ``nitrate_coefficients``
+            are referenced to, i.e. the concentration at which ``a`` equals
+            ``log10(D)``.
+        requires_nitrate: True when the extractant only works from a nitrate
+            medium, so using it without a nitrate concentration is an error
+            rather than a silent fall-back to the pH correlation (#195).
 
     Returns:
         Extractant object ready for registration
@@ -741,6 +931,12 @@ def create_custom_extractant(
     # Validate required parameters
     if not name:
         raise ValueError("name cannot be empty")
+    if stoichiometry_basis not in ("monomer", "dimer"):
+        raise ValueError(
+            f"stoichiometry_basis must be 'monomer' or 'dimer', got "
+            f"{stoichiometry_basis!r}. The acidic organophosphorus extractants "
+            "are dimeric in aliphatic diluents (#191)."
+        )
     if not ph_coefficients:
         raise ValueError("ph_coefficients is required and cannot be empty")
     if not temperature_coefficients:
@@ -791,6 +987,10 @@ def create_custom_extractant(
         typical_concentration=float(typical_concentration),
         stoichiometry_protons=int(stoichiometry_protons),
         stoichiometry_extractant=int(stoichiometry_extractant),
+        # (#191) Without this the custom path silently reports monomers_per_ree
+        # = 3 for a dimeric extractant that every built-in acidic record
+        # reports as 6.
+        stoichiometry_basis=stoichiometry_basis,
         ph_coefficients=ph_coeffs_objects,
         temperature_coefficients=temperature_coefficients,
         valid_ph_range=tuple(valid_ph_range),
@@ -798,6 +998,13 @@ def create_custom_extractant(
         reference_concentration=float(reference_concentration),
         concentration_exponent=float(concentration_exponent),
         cost_usd_kg=float(cost_usd_kg),
+        # Mechanism / solvating-extraction data (#195)
+        mechanism=mechanism,
+        nitrate_coefficients=_load_coefficient_block(nitrate_coefficients),
+        reference_nitrate=(
+            float(reference_nitrate) if reference_nitrate is not None else None
+        ),
+        requires_nitrate=bool(requires_nitrate),
     )
 
 

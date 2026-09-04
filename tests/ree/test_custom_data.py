@@ -245,6 +245,24 @@ class TestAddElementToExtractant:
         with pytest.raises(KeyError, match="not found"):
             ext_db.remove_element_from_extractant("PC88A", "Ho")
 
+    def test_adding_a_ph_element_to_tbp_raises(self, ext_db):
+        """TBP has NO ph_coefficients block -- it was deleted as
+        mechanistically unsupported (neutral extractant, pKa None, zero protons
+        released). Adding a pH coefficient here would recreate exactly that
+        model, so it must raise rather than lazily create the block."""
+        assert ext_db.get("TBP").ph_coefficients is None
+        with pytest.raises(ValueError, match="no 'ph_coefficients' block"):
+            ext_db.add_element_to_extractant(
+                "TBP", "Ho",
+                ph_coefficients={"a": -6.42, "b": 2.86, "c": 0.01},
+                temperature_coefficient=2300,
+            )
+
+    def test_removing_a_ph_element_from_tbp_raises_keyerror(self, ext_db):
+        """The None block must not leak a TypeError out of `in`."""
+        with pytest.raises(KeyError, match="not found"):
+            ext_db.remove_element_from_extractant("TBP", "Nd")
+
 
 # =============================================================================
 # Tests: SeparationFactorDatabase.add_pair / add_separation_factors

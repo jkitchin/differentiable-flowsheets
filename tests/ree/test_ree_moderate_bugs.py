@@ -129,13 +129,19 @@ class TestBug112_ExtractantLoadingCapacity:
             for elem in ("La", "Ce", "Nd", "Dy")
         )
 
-        # Get maximum capacity
+        # Get maximum capacity. Updated for #191/#193: the capacity is the
+        # molar flow F_extractant / m, not `max_ree_conc * F_org`, which
+        # multiplied a concentration by a flow and counted the diluent as if
+        # it were extractant. m comes from the declared stoichiometry (6
+        # monomer equivalents per REE for D2EHPA), so this bound is a factor
+        # of ~12 tighter than the one it replaces.
         isotherm = get_loading_isotherm("D2EHPA", 0.5)
-        F_org = 1.0 + 5.0  # D2EHPA + kerosene
-        max_capacity = isotherm.max_ree_conc * F_org
+        F_extractant = 1.0  # D2EHPA in the solvent stream
+        max_capacity = F_extractant / isotherm.m
 
-        # Total extracted should not exceed capacity
-        assert total_extracted <= max_capacity + 1e-6, (
+        # Total extracted should not exceed capacity. The smooth limiter
+        # (#193) enforces this strictly, so no tolerance is needed.
+        assert total_extracted <= max_capacity, (
             f"Total extracted ({total_extracted:.4f}) exceeds capacity "
             f"({max_capacity:.4f})"
         )

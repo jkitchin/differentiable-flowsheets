@@ -26,14 +26,47 @@ class LoadingIsotherm:
     Models the relationship between aqueous REE concentration
     and organic phase loading.
 
+    The stoichiometry ``m`` is the single source of truth for capacity: the
+    extractant balance in monomer equivalents is
+
+        [HA]_total = [HA]_free + m * [RE-complex]
+
+    so the maximum loading is ``1 / m`` mol REE per mol extractant and the
+    free-extractant exponent in :meth:`apparent_D` is the same ``m``. Storing
+    ``m`` rather than a separate ``max_loading`` literal makes it impossible
+    for the two to disagree (#191). Use :func:`get_loading_isotherm` to build
+    one with ``m`` taken from the extractant database.
+
+    .. warning:: **Breaking API change in #191.** ``max_loading`` used to be a
+       constructor field with the default 0.33, so ``LoadingIsotherm(
+       max_loading=0.33)`` was valid. It is now a read-only property derived
+       from ``m``, and that call raises ``TypeError``. Construct with
+       ``LoadingIsotherm(m=...)`` instead: the old ``max_loading=0.33``
+       becomes ``m=3.0``, and the D2EHPA/PC88A/Cyanex272 records that the
+       YAML declares as three *dimers* become ``m=6.0``, halving the capacity
+       that the 0.33 literal claimed. ``max_ree_conc`` therefore also halves
+       for those extractants relative to any pre-#191 result.
+
     Attributes:
-        max_loading: Maximum REE loading capacity (mol REE / mol extractant)
+        m: Extractant monomer equivalents bound per mol REE. The database
+            value is 6.0 for the acidic organophosphorus extractants
+            (3 dimers) and 3.0 for TBP; the default here is the monomer
+            stoichiometry 3.0.
         K_L: Langmuir constant (L/mol)
         extractant_conc: Extractant concentration (M)
     """
-    max_loading: float = 0.33  # Typical for acidic extractants (1 REE per 3 HA)
+    m: float = 3.0  # monomer equivalents per REE; max_loading = 1/m (#191)
     K_L: float = 10.0  # Langmuir constant
     extractant_conc: float = 0.5  # M
+
+    @property
+    def max_loading(self) -> float:
+        """Maximum REE loading capacity (mol REE / mol extractant).
+
+        Derived as ``1 / m`` so capacity and stoichiometry cannot
+        disagree (#191).
+        """
+        return 1.0 / self.m
 
     @property
     def max_ree_conc(self) -> float:
@@ -70,29 +103,46 @@ class LoadingIsotherm:
     def apparent_D(
         self,
         D_infinite: Array | float,
-        c_org: Array | float,
+        theta: Array | float,
     ) -> Array:
         """Calculate apparent D accounting for loading.
 
         At high loading, effective D decreases due to
-        reduced free extractant concentration.
+        reduced free extractant concentration:
 
-        D_app = D_inf * (1 - theta)^n
+            D_app = D_inf * (1 - theta)^m
 
-        where theta = loading fraction, n = stoichiometry
+        where ``1 - theta`` is the fraction of extractant still free and
+        ``m`` is the number of extractant monomers bound per REE.
+
+        Caller's obligation (#189): ``theta`` is a **dimensionless** loading
+        fraction, mol REE bound divided by mol REE capacity, equivalently
+
+            theta = m * n_REE(organic) / n_extractant
+
+        computed from quantities in the same units (both concentrations or
+        both molar flows). Passing a concentration, a molar flow, or a flow
+        ratio here is a units error: the result is raised to the m-th power,
+        so the error is amplified. :meth:`loading_fraction` converts an
+        organic REE *concentration* to this fraction.
+
+        Note (#190): ``D_inf`` must not already carry a free-extractant
+        depletion factor. ``REEDistribution.get_D`` does carry one (its
+        ``n * log10([HA]/C_ref)`` term), which is why the stage path in
+        ``difflow_ree.units.extraction`` no longer calls this method.
 
         Args:
-            D_infinite: D at infinite dilution
-            c_org: Current organic phase REE concentration (M)
+            D_infinite: D at infinite dilution (zero loading)
+            theta: Dimensionless loading fraction (0 = clean solvent,
+                1 = extractant fully saturated)
 
         Returns:
             Apparent distribution coefficient
         """
         D_infinite = jnp.asarray(D_infinite)
-        theta = self.loading_fraction(c_org)
-        # Stoichiometry effect: each REE binds ~3 extractant molecules
-        n = 3.0
-        return D_infinite * jnp.power(jnp.maximum(1 - theta, 0.01), n)
+        theta = jnp.asarray(theta)
+        # Stoichiometry effect: each REE binds m extractant monomers (#191)
+        return D_infinite * jnp.power(jnp.maximum(1 - theta, 0.01), self.m)
 
 
 def langmuir_loading(
@@ -174,24 +224,57 @@ def loading_correction(
 ) -> dict[str, Array]:
     """Apply loading correction to D values for all elements.
 
-    In multi-component systems, total loading affects all D values.
+    In multi-component systems, total loading affects all D values:
+
+        D_app,i = D_inf,i * (1 - theta_total)^m
+
+    with ``theta_total`` the summed organic REE concentration divided by
+    ``isotherm.max_ree_conc`` and ``m = isotherm.m``. It is the multi-component
+    form of :meth:`LoadingIsotherm.apparent_D` and carries the same caller
+    obligations: ``D_values`` must not already carry a free-extractant
+    depletion factor (#190), and the free fraction is floored at 0.01 so the
+    correction saturates rather than reaching zero.
+
+    .. warning:: **Breaking change in #191.** Two things moved, and the output
+       changes by orders of magnitude for the acidic extractants:
+
+       * the exponent was the literal ``3``; it is now ``isotherm.m``, which
+         is 6.0 for D2EHPA, PC88A and Cyanex272 (three dimers) and 3.0 for TBP;
+       * ``theta_total`` is computed against ``isotherm.max_ree_conc``, which
+         itself halved for those extractants because ``max_loading`` went from
+         the 0.33 literal to ``1/m = 1/6``.
+
+       At an organic REE concentration of 0.0413 M in 0.5 M D2EHPA the
+       correction was ``(1 - 0.25030)^3 = 0.42136`` and is now
+       ``(1 - 0.49560)^6 = 0.016468``, a factor of 25.59 smaller. Callers that
+       calibrated against the old form must refit.
 
     Args:
         D_values: Dictionary of infinite-dilution D values
-        c_org: Current organic concentrations for each element
+        c_org: Current organic concentrations for each element (M), keyed by
+            element; keys need not match ``D_values``
         isotherm: Loading isotherm model
 
     Returns:
-        Corrected D values accounting for total loading
+        Corrected D values accounting for total loading, with the same keys as
+        ``D_values``
+
+    Example:
+        >>> from difflow_ree.equilibrium.loading import (
+        ...     get_loading_isotherm, loading_correction)
+        >>> iso = get_loading_isotherm("D2EHPA", 0.5)   # m = 6, cap 1/12 M
+        >>> out = loading_correction({"Nd": 10.0}, {"Nd": 0.0413}, iso)
+        >>> float(out["Nd"])                            # doctest: +ELLIPSIS
+        0.1646...
     """
     # Calculate total loading fraction
     total_c_org = sum(jnp.asarray(c) for c in c_org.values())
     theta_total = isotherm.loading_fraction(total_c_org)
 
     # Apply correction to all elements
-    # D_app = D_inf * (1 - theta)^n
-    n = 3.0  # Stoichiometry
-    correction = jnp.power(jnp.maximum(1 - theta_total, 0.01), n)
+    # D_app = D_inf * (1 - theta)^m, with m the monomer stoichiometry taken
+    # from the isotherm rather than hard-coded (#191)
+    correction = jnp.power(jnp.maximum(1 - theta_total, 0.01), isotherm.m)
 
     return {elem: D * correction for elem, D in D_values.items()}
 
@@ -230,11 +313,22 @@ def competitive_langmuir(
 # Extractant Capacity Data
 # =============================================================================
 
-# Typical maximum loading capacities (mol REE per mol extractant)
+# Langmuir constants only. Capacity and stoichiometry are NOT duplicated here:
+# they are derived from the extractant record in ``difflow_ree.database``
+# (``Extractant.monomers_per_ree`` / ``Extractant.max_loading``), which reads
+# the declared extraction mechanism from ``data/extractants.yaml``. There is one
+# source of truth for m (#191).
+#
+# BREAKING CHANGE (#191): this module-level dict is public, and the per-
+# extractant ``"stoichiometry"`` and ``"max_loading"`` keys it used to carry
+# were deleted, not merely re-valued. ``EXTRACTANT_CAPACITIES["D2EHPA"]
+# ["max_loading"]`` now raises ``KeyError``; read
+# ``difflow_ree.database.get_extractant("D2EHPA").max_loading`` (or
+# ``.monomers_per_ree``) instead. The values also changed: the deleted
+# ``max_loading`` literal was 0.33 for the acidic extractants where the
+# database now derives 1/6, because the YAML declares three *dimers*.
 EXTRACTANT_CAPACITIES = {
     "D2EHPA": {
-        "stoichiometry": 3,  # 3 extractant molecules per REE
-        "max_loading": 0.33,  # mol REE / mol extractant
         "typical_K_L": {
             "La": 5.0,
             "Ce": 8.0,
@@ -249,8 +343,6 @@ EXTRACTANT_CAPACITIES = {
         },
     },
     "PC88A": {
-        "stoichiometry": 3,
-        "max_loading": 0.33,
         "typical_K_L": {
             "La": 3.0,
             "Ce": 5.0,
@@ -265,8 +357,6 @@ EXTRACTANT_CAPACITIES = {
         },
     },
     "Cyanex272": {
-        "stoichiometry": 3,
-        "max_loading": 0.33,
         "typical_K_L": {
             "La": 2.0,
             "Ce": 3.0,
@@ -281,8 +371,6 @@ EXTRACTANT_CAPACITIES = {
         },
     },
     "TBP": {
-        "stoichiometry": 3,
-        "max_loading": 0.33,
         "typical_K_L": {
             "La": 2.0,
             "Ce": 2.5,
@@ -305,6 +393,12 @@ def get_loading_isotherm(
 ) -> LoadingIsotherm:
     """Create loading isotherm for specified extractant.
 
+    The stoichiometry ``m`` (and hence the capacity ``1/m``) is read from the
+    extractant database, which derives it from the extraction mechanism
+    declared in ``data/extractants.yaml``, rather than from a hard-coded
+    literal here (#191). ``EXTRACTANT_CAPACITIES`` supplies only the Langmuir
+    constants.
+
     Args:
         extractant: Extractant name
         concentration: Extractant concentration (M)
@@ -315,12 +409,14 @@ def get_loading_isotherm(
     if extractant not in EXTRACTANT_CAPACITIES:
         raise ValueError(f"Unknown extractant: {extractant}")
 
+    from difflow_ree.database import get_extractant
+
     data = EXTRACTANT_CAPACITIES[extractant]
     # Use average K_L across elements
     avg_K_L = sum(data["typical_K_L"].values()) / len(data["typical_K_L"])
 
     return LoadingIsotherm(
-        max_loading=data["max_loading"],
+        m=get_extractant(extractant).monomers_per_ree,
         K_L=avg_K_L,
         extractant_conc=concentration,
     )
