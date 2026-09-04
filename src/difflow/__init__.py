@@ -244,6 +244,9 @@ from difflow import mhe
 # Steady-state operability screening submodule (#199)
 from difflow import operability
 
+# Flexibility analysis submodule (#198)
+from difflow import flexibility
+
 # Declarative kinetics
 from difflow.kinetics import (
     KineticsSpecError,
@@ -517,6 +520,8 @@ __all__ = [
     "mhe",
     # Operability screening
     "operability",
+    # Flexibility analysis
+    "flexibility",
     # Declarative kinetics
     "mass_action_kinetics",
     "ReactionSet",
