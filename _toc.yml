@@ -13,6 +13,7 @@ parts:
       - file: docs/unit-operations-ree
       - file: docs/unit-operations-carbon-capture
       - file: docs/unit-operations-gas
+      - file: docs/unit-operations-power
       - file: docs/thermodynamics
       - file: docs/technoeconomics
       - file: docs/parameter-estimation

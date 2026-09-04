@@ -19,6 +19,8 @@ maintainers = [
 keywords = [
     "chemical engineering",
     "process simulation",
+    "optimal power flow",
+    "power systems",
     "automatic differentiation",
     "jax",
     "optimization",
@@ -87,6 +89,9 @@ cc = [
 gas = [
     # Gas transmission network operations are included in the main package
 ]
+power = [
+    # Electrical grid operations are included in the main package
+]
 planning = [
     # Pyomo model emission for difflow.planning (LPModel.to_pyomo).
     # The planner itself solves with HiGHS via scipy and needs nothing extra.
@@ -99,7 +104,7 @@ cuda11 = [
     "jax[cuda11_local]>=0.4.0",
 ]
 all = [
-    "difflow[dev,examples,visualization,bio,ree,cc,gas]",
+    "difflow[dev,examples,visualization,bio,ree,cc,gas,power]",
 ]
 
 [project.urls]
@@ -113,6 +118,7 @@ bio = "difflow_bio:register"
 ree = "difflow_ree:register"
 cc = "difflow_cc:register"
 gas = "difflow_gas:register"
+power = "difflow_power:register"
 
 [project.scripts]
 difflow = "difflow.report.cli:main"
@@ -125,7 +131,14 @@ difflow = "difflow.report.cli:main"
 exclude = ["**/*.ipynb"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/difflow", "src/difflow_bio", "src/difflow_ree", "src/difflow_cc", "src/difflow_gas"]
+packages = [
+    "src/difflow",
+    "src/difflow_bio",
+    "src/difflow_ree",
+    "src/difflow_cc",
+    "src/difflow_gas",
+    "src/difflow_power",
+]
 
 [tool.hatch.build.targets.sdist]
 # Keep the sdist to what is needed to build and test the package. The notebook

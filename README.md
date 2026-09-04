@@ -405,6 +405,44 @@ dW_dr = jax.grad(obj)({"cs_cs1.ratio": 1.3})
 Pipes, resistors, compressor stations, open valves, control valves and
 short pipes are supported; see `docs/unit-operations-gas.md`.
 
+## Electrical Grids and AC-OPF
+
+The `difflow_power` plugin models steady-state electrical transmission
+and distribution networks, and solves the AC optimal power flow — the
+nonconvex problem every wholesale market and control centre sits on
+top of. Because the model is differentiable, the quantities a grid
+study is actually after are derivatives rather than separately-derived
+sensitivity factors: locational marginal prices, shift factors,
+marginal loss factors, and the value of relaxing any binding limit.
+
+```python
+import difflow_power as dp
+
+net = dp.cases.case9()                 # WSCC 9-bus benchmark
+pf  = dp.solve_power_flow(net)         # Newton-Raphson, implicit-diff gradients
+pf.losses_mw                           # 4.9547  (MATPOWER: 4.9547)
+
+opf = dp.solve_acopf(net)              # interior-point AC-OPF, written in JAX
+opf.cost                               # 5296.69 $/h  (MATPOWER: 5296.69)
+opf.lmp_mw                             # locational marginal prices, $/MWh
+opf.binding()                          # binding limits and their shadow prices
+
+# the multipliers ARE prices: check them against jax.grad of the optimum
+max(opf.check_prices().values())        # ~1e-12 $/MWh
+
+# and everything the classical factor tables give, as derivatives
+dp.loss_sensitivity(net)               # marginal loss factors
+dp.ptdf(net), dp.lodf(net)             # shift and outage factors
+```
+
+One branch model covers lines, transformers and phase shifters;
+generator boxes, voltage limits and thermal ratings are carried as
+inequalities by a primal-dual interior-point solver written in JAX
+(no IPOPT, so the differentiability survives). Radial feeders also
+solve sequentially, by the backward/forward sweep, which agrees with
+Newton to 1e-12. Every benchmark result is asserted against MATPOWER's
+published answer; see `docs/unit-operations-power.md`.
+
 ## Data Reconciliation
 
 Plant measurements are noisy and, taken at face value, contradict the

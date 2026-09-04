@@ -56,7 +56,7 @@ difflow/
 │   ├── difflow_ree/       # Rare earth element solvent extraction plugin
 │   ├── difflow_cc/        # Carbon capture plugin (amine, membrane, adsorption)
 │   └── difflow_gas/       # Gas transmission network plugin (pipes, compressors, computed decomposition)
-├── tests/                 # pytest test files (includes tests/bio/, tests/ree/, tests/cc/, tests/gas/)
+├── tests/                 # pytest test files (includes tests/bio/, tests/ree/, tests/cc/, tests/gas/, tests/power/)
 ├── examples/              # Jupyter notebook examples
 ├── jax-tutorials/         # JAX/autodiff tutorials
 └── docs/                  # Documentation (Markdown)
@@ -196,18 +196,19 @@ result = fs.solve(feed_stream)
 5. Add tests in `tests/test_<unit>.py`
 6. Add example usage in `examples/`
 
-### Adding to a Plugin (bio, ree, cc, gas)
+### Adding to a Plugin (bio, ree, cc, gas, power)
 
-The project has four domain-specific plugins:
+The project has five domain-specific plugins:
 - **difflow_bio**: Bio manufacturing (bioreactors, filtration, chromatography)
 - **difflow_ree**: Rare earth element solvent extraction
 - **difflow_cc**: Carbon capture (amine absorption, membrane, adsorption)
 - **difflow_gas**: Gas transmission networks (pipes, compressors, valves, topology-driven sequential decomposition)
+- **difflow_power**: Electrical grids (AC power flow, AC-OPF, DC-OPF, PTDF/LODF, state estimation)
 
-1. Add to appropriate plugin directory (`src/difflow_bio/`, `src/difflow_ree/`, `src/difflow_cc/`, or `src/difflow_gas/`)
+1. Add to appropriate plugin directory (`src/difflow_bio/`, `src/difflow_ree/`, `src/difflow_cc/`, `src/difflow_gas/`, or `src/difflow_power/`)
 2. Create a Params dataclass inheriting from `ParamsMixin`
 3. Export in plugin's `__init__.py` and add to `__all__`
-4. Add tests in `tests/bio/`, `tests/ree/`, `tests/cc/`, or `tests/gas/`
+4. Add tests in `tests/bio/`, `tests/ree/`, `tests/cc/`, `tests/gas/`, or `tests/power/`
 5. Register in the plugin's `register()` function for plugin discovery
 6. Add documentation in `docs/unit-operations-*.md`
 
@@ -270,6 +271,56 @@ class MyUnit:
   model), `reconcile_network_multi` (pool periods sharing a parameter); all three
   fill in the layout's names and scales (see `difflow.reconciliation`)
 - Gotchas encoded in docs: solve with `clip_negative_flows=False` (signed flows), damp the tear map (alpha ~ 0.3), pose optimization pressure constraints in squared pressure
+
+**difflow_power** - Electrical grids:
+- Network model: `PowerNetwork` (buses, branches, generators, loads); one branch
+  model serves lines, transformers and phase shifters
+  (`Yff = (ys + jb/2)/tau^2`, `Yft = -ys/conj(t)`, tap at the FROM end)
+- Equations: `difflow_power.residuals.power_flow_residuals` is the single
+  JAX-traceable definition of the equation set (2 balance rows per bus plus one
+  angle-reference row); `powerflow`, `opf`, `estimation` and `verify` are all
+  consumers of it and restate no physics
+- Power flow: `solve_power_flow` (Newton via optimistix, implicit-diff gradients);
+  the bus-type specification is written as `2 n_gen - 1` EQUATIONS, not by
+  eliminating variables
+- AC-OPF: `solve_acopf` over `difflow_power.ipm`, a primal-dual interior-point
+  NLP solver written in JAX (no IPOPT -- that would end the differentiability).
+  LMPs from the equality multipliers; `check_prices()` verifies them against
+  `jax.grad` of the optimal cost through the KKT system
+- DC: `solve_dcopf`, `ptdf`, `lodf`, `contingency_flows` (same IPM; a QP is an
+  NLP with a constant Hessian, so DC and AC prices are comparable)
+- Feeders: `RadialFeederFlowsheet` (backward/forward sweep, the voltage profile
+  as the tear), `build_ladder_flowsheet` (a real `difflow.Flowsheet`)
+- Sensitivity: `loss_sensitivity`, `branch_flow_sensitivity`,
+  `demand_sensitivity`, `parameter_sensitivity`, `voltage_stability_margin`
+- Estimation: `estimate_state` over `difflow.reconciliation` (state estimation
+  and data reconciliation are the same computation)
+- Cases: `case3`, `case5` (PJM), `case9` (WSCC), `case14` (IEEE),
+  `radial_feeder`, plus `from_matpower`
+
+Invariants encoded in the plugin (do not weaken them):
+- Thermal limits are posed on `|S|^2`, never `|S|`: the modulus has curvature
+  going as `1/|S|` and early interior-point iterates sit on lightly loaded
+  branches.
+- The angle-reference row stays in the residual set. Without it the Jacobian is
+  one rank short for structural reasons and everything that inverts it fails.
+- Limits are NOT equations. Voltage/generator/thermal/angle bounds live in
+  `opf.py`, not in `residuals.py`.
+- The IPM's inertia test runs on the RUIZ-EQUILIBRATED KKT matrix and uses a
+  band (`n_neg <= m_eq <= n_nonpos`), because `Sigma = z/s` spans 12 decades
+  near the solution and a weakly convex problem has genuine zero eigenvalues.
+- `mu` follows IPOPT's monotone schedule judged on the subproblem, and its floor
+  is `tol_comp / (10 m_in)`. Tying `mu` to `s.z` deadlocks on a degenerate
+  problem; a floor of `tol_comp` makes the tolerance unreachable.
+- Every benchmark number is asserted against MATPOWER's published answer. A
+  self-consistent implementation with the phase-shift sign backwards converges
+  beautifully to the wrong result.
+- Bus/branch/generator order is INSERTION order, not sorted: numeric labels
+  sorted as strings interleave "10" between "1" and "2".
+- Out of scope by design: unit commitment (integer), security-constrained OPF,
+  dynamics/transient stability, unbalanced three-phase. Do not add them.
+
+Docs: `docs/unit-operations-power.md`. Tests: `tests/power/`.
 
 ### Delta-Base Planning (`difflow.planning`)
 
@@ -370,7 +421,9 @@ jax.debug.print("value: {x}", x=value)
 | `src/difflow_bio/__init__.py` | Bio manufacturing plugin exports |
 | `src/difflow_ree/__init__.py` | REE extraction plugin exports |
 | `src/difflow_cc/__init__.py` | Carbon capture plugin exports |
-| `tests/` | All pytest tests (includes `bio/`, `ree/`, `cc/` subdirs) |
+| `src/difflow_gas/__init__.py` | Gas transmission network plugin exports |
+| `src/difflow_power/__init__.py` | Electrical grid plugin exports (AC-OPF) |
+| `tests/` | All pytest tests (includes `bio/`, `ree/`, `cc/`, `gas/`, `power/` subdirs) |
 | `examples/` | Usage examples (Jupyter notebooks) |
 | `jax-tutorials/` | JAX autodiff tutorials |
 | `docs/` | Documentation source (Markdown, built with Jupyter Book) |

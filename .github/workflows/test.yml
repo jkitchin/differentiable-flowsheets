@@ -118,10 +118,10 @@ jobs:
       - name: Import every shipped package and resolve the plugins
         run: |
           python -c "
-          import difflow, difflow_bio, difflow_ree, difflow_cc, difflow_gas
+          import difflow, difflow_bio, difflow_ree, difflow_cc, difflow_gas, difflow_power
           from importlib.metadata import entry_points
           eps = entry_points(group='difflow.plugins')
-          assert {e.name for e in eps} == {'bio', 'ree', 'cc', 'gas'}, sorted(e.name for e in eps)
+          assert {e.name for e in eps} == {'bio', 'ree', 'cc', 'gas', 'power'}, sorted(e.name for e in eps)
           for e in eps:
               e.load()
           print('difflow', difflow.__version__, '- all packages import, plugins resolve')
