@@ -24,6 +24,7 @@ A JAX-based framework for building and optimizing chemical process flowsheets wi
 - **Technoeconomic Analysis**: Comprehensive TEA module with equipment costs, operating costs, and profitability metrics (NPV, IRR, MSP)
 - **Bio Manufacturing**: Specialized unit operations for biopharmaceutical processes (bioreactors, chromatography, filtration)
 - **Gas Networks**: Steady-state gas transmission networks with a topology-computed sequential decomposition and differentiable tear solving
+- **Flowsheets Without Code**: A machine-readable catalog of every unit, JSON round trip, Python code generation, a browser-based editor served on `localhost`, and one-file interactive HTML for publishing a model
 
 ## ⚠️ ALPHA SOFTWARE
 
@@ -712,6 +713,110 @@ recycle = fixed_point_solve(
     damping=0.5,
 )
 ```
+
+## Building Flowsheets Without Code
+
+A flowsheet is a graph with numbers on it. Writing that as Python is the flexible
+route, not the only one — difflow can also describe a model as data, edit it in a
+browser, write it back out as a script, and publish it as a page that needs
+nothing installed.
+
+### The operation catalog
+
+`difflow.catalog` answers *what you can do with a unit*: how many streams go in
+and out, what parameters it takes, which are required, and which hold code rather
+than data.
+
+```python
+from difflow import catalog, describe_operation
+
+spec = describe_operation("Heater")
+spec.ports.inlets           # ['inlet']
+spec.ports.n_outlets        # 1
+spec.required_parameters()  # [] -- every field has a default
+spec.equations              # LaTeX governing equations
+spec.is_buildable           # True: constructible from data alone
+spec.to_dict()              # JSON-serializable, for a UI or code generator
+
+describe_operation("Flash").is_buildable        # False
+describe_operation("Flash").constructor_extras  # ['thermo'] -- an object, not data
+```
+
+All of it is derived by introspection — parameters from `dataclasses.fields`,
+ports from the `__call__` signature — so it cannot drift from the code, and
+plugin units appear with no extra work.
+
+### JSON round trip and code generation
+
+```python
+from difflow import serialize, codegen
+
+serialize.save(fs, "plant.json")          # flowsheet -> JSON
+fs = serialize.load("plant.json")         # JSON -> flowsheet
+print(codegen.to_python(fs))              # flowsheet -> runnable script
+```
+
+Rate laws are the usual obstacle to writing a reactor down as data, because a
+callable is code. `mass_action_kinetics` builds one from plain dictionaries
+instead, so a reaction network can be stored and edited as data.
+
+### The local editor
+
+`python -m difflow.gui` serves a single-page flowsheet editor on `127.0.0.1`,
+with the installed package doing the solving:
+
+```bash
+python -m difflow.gui plant.json          # opens a browser
+python -m difflow.gui --port 9000 --no-browser
+```
+
+```python
+from difflow import gui
+gui.serve(fs, path="plant.json")          # on a flowsheet you already have
+```
+
+Units are added by clicking a palette of everything registered; streams are wired
+by naming them, and renaming one follows it to every consumer so the wiring
+survives the edit. **Solve** re-solves the edited model, **Save** writes the JSON,
+and **Python** shows the generated script. Dangling inlets, unknown streams and
+duplicate unit names are reported before you press Solve rather than raised at
+the socket.
+
+About half the registered operations (34 of 75) need something no form can supply — a `thermo` object, a rate law — and those
+palette entries are dimmed with the reason. For them the route is Python, then
+JSON, then the editor. It is stdlib only (`http.server`), single-user, and a
+development tool: do not expose it to a network.
+
+The editor edits an existing flowsheet rather than starting from nothing, since a
+feed's composition has no form yet. Write the first version from Python, then stay
+in the editor.
+
+### Publishing a model
+
+`difflow.publish` turns a flowsheet into a self-contained HTML page anyone can
+open with nothing installed — the form a model needs for supplementary material
+or a project page.
+
+```python
+from difflow import publish, SweepAxis
+
+publish(
+    fs,
+    axes=[SweepAxis("reactor.V", 0.5, 5.0, n=21, label="Reactor volume", units="m³")],
+    outputs={"conversion": lambda streams: 1 - streams["out"]["F_A"] / 1.0},
+    path="model.html",
+)
+```
+
+JAX has no WebAssembly build, so the browser cannot run the real solver. Instead
+the solve is pre-computed: `sweep` evaluates the flowsheet on a grid with
+`jax.vmap`, takes exact gradients with `jax.grad`, and bakes both into the page,
+which interpolates between grid points and shows local sensitivities. It is exact
+at the grid points and only as good as the grid between them, and it can vary only
+what the axes name.
+
+See [`docs/streams-and-flowsheets.md`](docs/streams-and-flowsheets.md) for the
+full documentation.
 
 ## Examples
 

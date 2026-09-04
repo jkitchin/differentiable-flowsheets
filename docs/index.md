@@ -10,6 +10,7 @@
 - **Thermodynamic Models**: Ideal thermodynamics and cubic equations of state (Peng-Robinson, SRK)
 - **Technoeconomic Analysis**: Equipment costs, operating costs, and profitability metrics
 - **Extensible Architecture**: Plugin system for custom unit operations
+- **Flowsheets as Data**: An introspected catalog of every unit, JSON round trip, Python code generation, a browser-based local editor, and self-contained HTML for publishing a model
 
 ## Documentation Contents
 
@@ -23,7 +24,7 @@
 | [Unit Operations - REE](unit-operations-ree.md) | Rare earth element extraction, scrubbing, stripping, precipitation |
 | [Thermodynamics](thermodynamics.md) | Property calculations, equations of state, databases |
 | [Technoeconomics](technoeconomics.md) | Capital costs, operating costs, profitability analysis |
-| [Streams and Flowsheets](streams-and-flowsheets.md) | Stream handling, flowsheet solver, recycle calculations |
+| [Streams and Flowsheets](streams-and-flowsheets.md) | Stream handling, flowsheet solver, recycle calculations, JSON round trip, code generation, the operation catalog, the local editor, publishing |
 | [Dynamic Modeling](dynamic-modeling.md) | Transient simulation, ODE/DAE integration, diffrax backend |
 | [Solvers and Utilities](solvers-and-utilities.md) | Numerical methods, uncertainty propagation |
 | [Data Reconciliation](data-reconciliation.md) | Constrained least squares on noisy plant data, gross error detection, observability |

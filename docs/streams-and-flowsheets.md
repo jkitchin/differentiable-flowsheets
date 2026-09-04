@@ -9,6 +9,11 @@ This document covers stream handling, flowsheet management, and recycle calculat
 3. [Flowsheet Management](#flowsheet-management)
 4. [Recycle Calculations](#recycle-calculations)
 5. [Plugin System](#plugin-system)
+6. [Saving and Loading Flowsheets](#saving-and-loading-flowsheets)
+7. [Generating Python](#generating-python)
+8. [Operation Catalog](#operation-catalog)
+9. [The Local Editor](#the-local-editor)
+10. [Publishing a Model](#publishing-a-model)
 
 ---
 
@@ -546,7 +551,7 @@ from difflow import catalog, describe_operation
 spec = describe_operation("Flash")
 spec.ports.inlets          # ['inlet']
 spec.ports.n_outlets       # 2
-spec.required_parameters() # ['T']
+spec.required_parameters() # ['species_order']
 spec.equations             # LaTeX governing equations
 spec.to_dict()             # JSON-serializable, for a UI or code generator
 ```
@@ -568,6 +573,28 @@ All of it is **derived by introspection**, not from a second hand-maintained tab
 ```
 
 The handful that are not are the reactors, and always because of the rate law — see [Declarative Kinetics](unit-operations-chemical.md) for building that from data instead.
+
+### Which operations a form can build
+
+`is_declarative` is stricter than a user interface needs. An *optional* callable left at its default is no obstacle to constructing a unit — it only means one field cannot be filled in. `is_buildable` asks the question a form actually cares about: can this operation be constructed from data alone?
+
+```python
+describe_operation("Heater").is_buildable       # True
+describe_operation("Flash").is_buildable        # False
+describe_operation("Flash").constructor_extras  # ['thermo'] -- an object, not data
+describe_operation("CSTR").callable_parameters  # ['rate_fn', 'eos', 'H_mix_fn', 'K_eq_fn']
+```
+
+```python
+[name for name, spec in catalog().items() if not spec.is_buildable]
+```
+
+Two things block it, and both are reported rather than guessed at:
+
+- **`constructor_extras`** — a constructor argument that is an object, such as a `thermo` or an `eos`. No form can supply one.
+- **A required callable parameter** — a `rate_fn` with no default.
+
+The two counts are not nested: only 7 operations are non-declarative (the reactors, over the rate law), but 34 of the 75 registered operations are non-buildable, because most of the rest take a `thermo`. About half the catalog is blocked this way, which is why the round trip matters: build those in Python, write the JSON with `serialize.save`, and open that in the editor. `is_buildable` is what the editor's palette dims, with the specific reason attached.
 
 ### Core units and the registry
 
@@ -594,7 +621,52 @@ from difflow import gui
 gui.serve(fs, path="plant.json")
 ```
 
-The page shows a palette of every registered operation with its port arity, a diagram of the topology, editable parameter fields per unit, and a panel that switches between solved stream values and the generated Python. **Solve** re-solves the edited model; **Save** writes the JSON; **Python** shows what `codegen.to_python` would produce.
+The editor edits an *existing* flowsheet; it does not start from nothing. It needs a document with at least one feed, because a feed's composition is a stream — species, flows, `T`, `P` — and there is no form for that yet. Feeds can be renamed on the page but not created, and starting with no flowsheet at all leaves the palette inert. So the first step is still Python (or a JSON file someone else wrote):
+
+```python
+from difflow import serialize
+serialize.save(fs, "plant.json")          # once, from Python
+```
+
+```bash
+python -m difflow.gui plant.json          # from here on, from the editor
+```
+
+The page has three columns: a **palette** of every registered operation on the left, a **diagram** of the topology in the middle, and a **panel** on the right that switches between solved stream values and the generated Python. **Solve** re-solves the edited model; **Save** writes the JSON; **Python** shows what `codegen.to_python` would produce.
+
+### Building from the palette
+
+Click an operation and it is added to the flowsheet. The editor does the bookkeeping that a blank form would leave to you:
+
+- **A unique name.** `cstr`, then `cstr2`, then `cstr3` — never a silent collision.
+- **Outlets named for it.** One outlet becomes `cstr_out`; several become `cstr_out1`, `cstr_out2`, matching the arity the catalog reports. An operation whose outlet count is unknown (`Splitter` returns a bare `tuple`) is given one and left to you.
+- **The first inlet wired to the last unconnected stream.** Bolting a unit onto the end of the flowsheet is the common case, and it should need no wiring at all.
+- **Required parameters seeded by type** — `1.0` for a number, `[]` for a list, `{}` for a mapping — so the unit is editable immediately. Optional fields are left out entirely and the dataclass supplies its own defaults.
+
+Units with a variadic inlet (a `Mixer`) get `+` and `−` buttons to add and remove inlets.
+
+### Wiring by naming
+
+There are no ports to drag. **An outlet names a stream, and an inlet picks one that something already produces** — a text box and a dropdown, and the dropdown only offers streams that exist (feeds, unit outlets, and the destination side of a recycle). A unit is never offered its own outlet as an inlet.
+
+Renaming a stream follows it everywhere: every consumer, every recycle entry, and the feed dictionary — whose key order is the display order, so it is rebuilt rather than mutated. The wiring survives the edit, which is what makes renaming safe enough to do casually.
+
+A stream referenced but not produced is not dropped on the floor. The inlet is marked, the missing name is kept as a selected option rather than being reset to nothing, and the status bar lists what is wrong before you press Solve:
+
+```
+Not ready to solve
+  · flash has an inlet connected to nothing
+  · heater reads reactor_out, which nothing produces
+  · two units are named cstr
+```
+
+### What the palette cannot add
+
+About half the catalog needs something no form can supply — a `thermo` object, a rate law. Those entries are **dimmed and disabled**, with the reason on hover rather than a failure later:
+
+> `CSTR` cannot be built from a form: it needs code for `rate_fn`. Build it in Python, save the JSON, open it here.
+
+This is `is_buildable` from the catalog, so the line is drawn by introspection and cannot drift from the code. For those units the route is Python → JSON → editor, and it is a route, not a dead end.
 
 Everything on the page is derived from `catalog()`, so plugin units appear with no extra work, and a field the catalog reports as holding code is listed as *set in code* rather than given a text box that could only reject what you type.
 
