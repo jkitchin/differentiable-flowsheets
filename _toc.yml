@@ -16,6 +16,7 @@ parts:
       - file: docs/thermodynamics
       - file: docs/technoeconomics
       - file: docs/parameter-estimation
+      - file: docs/experiment-design
       - file: docs/data-reconciliation
       - file: docs/planning
       - file: docs/operability

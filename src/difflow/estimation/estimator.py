@@ -28,6 +28,22 @@ from difflow.estimation.bootstrap import (
     BootstrapResult,
 )
 from difflow.estimation.cross_validation import leave_n_out_cv, CrossValidationResult
+from difflow.estimation.identifiability import (
+    check_identifiability,
+    IdentifiabilityReport,
+)
+from difflow.estimation.design import (
+    design_experiments,
+    predicted_covariance,
+    DesignResult,
+)
+
+
+def _theta_of(theta, param_names):
+    """Accept a dict, an array, or an EstimationResult as a parameter point."""
+    if isinstance(theta, EstimationResult):
+        return theta.theta_array
+    return theta
 
 
 _OBJECTIVE_MAP = {
@@ -74,11 +90,24 @@ class Estimator:
         param_names: list of parameter names
         param_bounds: optional dict of (lo, hi) bounds per parameter
 
-    Example:
-        >>> est = Estimator(my_model, ['k', 'Ea'], param_bounds={'k': (0, 10)})
-        >>> result = est.fit(experiments, theta_init={'k': 1.0, 'Ea': 5000.0})
-        >>> ci = est.confidence_intervals(result, experiments)
-        >>> print(est.summary(result, experiments))
+    The design-side methods -- :meth:`check_identifiability`,
+    :meth:`design_experiments` and :meth:`predicted_covariance` -- come
+    *before* :meth:`fit` in a campaign, not after: they say whether the
+    parameters can be told apart at all, and which runs to make. See
+    ``docs/experiment-design.md``.
+
+    Example::
+
+        est = Estimator(my_model, ['k', 'Ea'], param_bounds={'k': (0, 10)})
+
+        # Before running anything: are 'k' and 'Ea' separable from these runs?
+        est.check_identifiability({'k': 1.0, 'Ea': 5000.0}, candidates)
+        design = est.design_experiments({'k': 1.0, 'Ea': 5000.0}, candidates, n=8)
+
+        # ... run design.selected, then fit what came back.
+        result = est.fit(experiments, theta_init={'k': 1.0, 'Ea': 5000.0})
+        ci = est.confidence_intervals(result, experiments)
+        print(est.summary(result, experiments))
     """
 
     def __init__(self, model_fn, param_names, param_bounds=None):
@@ -253,6 +282,71 @@ class Estimator:
         """
         return compute_diagnostics(
             self.model_fn, result.theta_opt, experiments, len(self.param_names)
+        )
+
+    def check_identifiability(self, theta, experiments, **kwargs):
+        """Test whether the parameters are separately identifiable.
+
+        This is the first question in any estimation workflow: if the
+        sensitivity matrix is rank deficient, some parameter combination
+        changes no prediction, and neither fitting nor experiment design
+        can recover the parameters individually.
+
+        Args:
+            theta: Parameter values (dict, array, or an EstimationResult)
+                to linearize about.
+            experiments: Experiments or candidates providing the
+                measurements.
+            **kwargs: Passed through to
+                :func:`difflow.estimation.check_identifiability`.
+
+        Returns:
+            IdentifiabilityReport (it does not raise; call
+            ``report.raise_if_unidentifiable()`` for that).
+        """
+        return check_identifiability(
+            self.model_fn, _theta_of(theta, self.param_names), experiments,
+            self.param_names, **kwargs,
+        )
+
+    def design_experiments(self, theta, candidates, n, criterion='D', **kwargs):
+        """Select the n candidate experiments that most reduce uncertainty.
+
+        Args:
+            theta: Current parameter estimate (dict, array, or an
+                EstimationResult); the design is local to it.
+            candidates: Pool of candidate conditions, typically built with
+                ``Experiment.candidate``.
+            n: Number of runs to select.
+            criterion: 'D' (default), 'A', 'E' or 'ME'.
+            **kwargs: Passed through to
+                :func:`difflow.estimation.design_experiments`.
+
+        Returns:
+            DesignResult
+        """
+        return design_experiments(
+            self.model_fn, _theta_of(theta, self.param_names), candidates, n,
+            criterion, self.param_names, **kwargs,
+        )
+
+    def predicted_covariance(self, theta, experiments, alpha=0.05, **kwargs):
+        """Confidence intervals a proposed campaign would buy, before running it.
+
+        Args:
+            theta: Parameter values (dict, array, or an EstimationResult).
+            experiments: The proposed campaign.
+            alpha: Significance level (0.05 = 95% intervals).
+            **kwargs: Passed through to
+                :func:`difflow.estimation.predicted_covariance`.
+
+        Returns:
+            ConfidenceResult, the same type ``confidence_intervals``
+            returns, so predicted and achieved intervals can be compared.
+        """
+        return predicted_covariance(
+            self.model_fn, _theta_of(theta, self.param_names), experiments,
+            self.param_names, alpha=alpha, **kwargs,
         )
 
     def summary(self, result, experiments, alpha=0.05):
