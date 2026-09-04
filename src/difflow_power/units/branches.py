@@ -45,6 +45,24 @@ from difflow_power.streams import (
 )
 
 
+#: shared literature references for the branch units. The MATPOWER
+#: paper is the authoritative statement of the tap/shift convention this
+#: model follows; Grainger and Stevenson derive the underlying pi-model.
+_BRANCH_REFS = [
+    "Zimmerman, R.D., Murillo-Sanchez, C.E., Thomas, R.J., "
+    "IEEE Trans. Power Syst. 26(1), 12-19 (2011).",
+    "Grainger, J.J., Stevenson, W.D., Power System Analysis, "
+    "McGraw-Hill (1994), ch. 6.",
+]
+
+#: the 2x2 admittance block, shared by every branch unit
+_BRANCH_BLOCK = [
+    r"t = \tau e^{j\theta},\quad y_s = 1/(r + jx)",
+    r"Y_{ff} = (y_s + jb/2)/\tau^2,\quad Y_{ft} = -y_s/\overline{t}",
+    r"Y_{tf} = -y_s/t,\quad Y_{tt} = y_s + jb/2",
+]
+
+
 @dataclass
 class BranchParams(ParamsMixin):
     """Parameters of a line, transformer or phase shifter.
@@ -99,6 +117,22 @@ class SeriesBranch:
         True
     """
 
+    symbol = "Branch \u2192"
+    equations = _BRANCH_BLOCK + [
+        r"I_f = \overline{(S_f / V_f)}",
+        r"V_t = (I_f - Y_{ff} V_f) / Y_{ft}",
+        r"S_t^\mathrm{out} = -V_t \overline{(Y_{tf} V_f + Y_{tt} V_t)}",
+    ]
+    assumptions = [
+        "Balanced positive-sequence steady state",
+        "The sending-end complex power and voltage are both known",
+    ]
+    references = _BRANCH_REFS
+    parameter_units = {
+        "r": "pu", "x": "pu", "b": "pu", "g": "pu",
+        "tap": "-", "shift": "rad",
+    }
+
     def __init__(self, params: BranchParams):
         self.params = params
 
@@ -133,6 +167,21 @@ class BranchDrop:
     is what is known.
     """
 
+    symbol = "Branch (drop)"
+    equations = _BRANCH_BLOCK + [
+        r"V_t = (I_f - Y_{ff} V_f) / Y_{ft}",
+    ]
+    assumptions = [
+        "Balanced positive-sequence steady state",
+        "The branch current is known; the stream's power is carried "
+        "through unchanged",
+    ]
+    references = _BRANCH_REFS
+    parameter_units = {
+        "r": "pu", "x": "pu", "b": "pu", "g": "pu",
+        "tap": "-", "shift": "rad",
+    }
+
     def __init__(self, params: BranchParams):
         self.params = params
 
@@ -157,6 +206,23 @@ class BranchFlow:
     end, so their sum is the loss --- the convention
     :func:`difflow_power.residuals.branch_flows` uses.
     """
+
+    symbol = "Branch (EO)"
+    equations = _BRANCH_BLOCK + [
+        r"S_f = V_f \overline{(Y_{ff} V_f + Y_{ft} V_t)}",
+        r"S_t = V_t \overline{(Y_{tf} V_f + Y_{tt} V_t)}",
+        r"S_\mathrm{loss} = S_f + S_t",
+    ]
+    assumptions = [
+        "Balanced positive-sequence steady state",
+        "Both end voltages are known; neither end is privileged, so this "
+        "form also works on a branch closing a loop",
+    ]
+    references = _BRANCH_REFS
+    parameter_units = {
+        "r": "pu", "x": "pu", "b": "pu", "g": "pu",
+        "tap": "-", "shift": "rad",
+    }
 
     def __init__(self, params: BranchParams):
         self.params = params
@@ -188,6 +254,21 @@ class Transformer(SeriesBranch):
     refuses parameters that make it a line, so a mislabelled component
     is caught at construction rather than by a puzzling result.
     """
+
+    symbol = "Transformer"
+    equations = _BRANCH_BLOCK + [
+        r"V'_f = V_f / t \quad \text{(ideal ratio at the from end)}",
+        r"S_t^\mathrm{out} = -V_t \overline{(Y_{tf} V_f + Y_{tt} V_t)}",
+    ]
+    assumptions = [
+        "Ideal (lossless) turns ratio at the FROM end, followed by the "
+        "series impedance",
+        "No magnetising branch or core loss",
+    ]
+    references = _BRANCH_REFS
+    parameter_units = {
+        "r": "pu", "x": "pu", "tap": "-", "shift": "rad",
+    }
 
     def __init__(self, params: BranchParams):
         if params.tap == 1.0 and params.shift == 0.0:

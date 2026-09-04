@@ -31,6 +31,25 @@ from difflow_power.streams import (
 )
 
 
+#: shared literature references for the node units
+_NODE_REFS = [
+    "Wood, A.J., Wollenberg, B.F., Sheble, G.B., Power Generation, "
+    "Operation, and Control, 3rd ed., Wiley (2013).",
+    "Grainger, J.J., Stevenson, W.D., Power System Analysis, "
+    "McGraw-Hill (1994), ch. 9.",
+]
+
+#: references for the sequential feeder units, whose tear and split
+#: conventions come from the distribution-sweep literature rather than
+#: from transmission practice
+_FEEDER_REFS = [
+    "Kersting, W.H., Distribution System Modeling and Analysis, "
+    "4th ed., CRC Press (2017).",
+    "Shirmohammadi, D. et al., IEEE Trans. Power Syst. 3(2), "
+    "753-762 (1988).",
+]
+
+
 @dataclass
 class SlackSourceParams(ParamsMixin):
     """Parameters of a slack source.
@@ -53,6 +72,18 @@ class SlackSource:
     --- the substation infeed, which must come out equal to the total
     load plus the losses nobody knows until the solve is done.
     """
+
+    symbol = "Slack"
+    equations = [
+        r"|V| = V^\mathrm{set},\quad \theta = \theta^\mathrm{ref}",
+        r"S_\mathrm{out} = S_\mathrm{in}",
+    ]
+    assumptions = [
+        "The source holds its voltage for any power drawn from it "
+        "(infinite short-circuit capacity)",
+    ]
+    references = _NODE_REFS
+    parameter_units = {"vm_setpoint": "pu", "va_reference": "rad"}
 
     def __init__(self, params: SlackSourceParams):
         self.params = params
@@ -97,6 +128,18 @@ class LoadDraw:
     voltage, which is what a backward sweep accumulates.
     """
 
+    symbol = "Load"
+    equations = [
+        r"S_\mathrm{out} = S_\mathrm{in} - (P_d + jQ_d)",
+        r"I_d = \overline{(P_d + jQ_d)/V}",
+    ]
+    assumptions = [
+        "Constant power: the demand does not vary with the voltage it "
+        "is served at (no ZIP dependence)",
+    ]
+    references = _NODE_REFS
+    parameter_units = {"p_pu": "pu", "q_pu": "pu"}
+
     def __init__(self, params: LoadParams):
         self.params = params
 
@@ -135,6 +178,18 @@ class ShuntDraw:
     and it falls straight out of the model rather than having to be
     remembered.
     """
+
+    symbol = "Shunt"
+    equations = [
+        r"S_\mathrm{sh} = |V|^2 \overline{(g + jb)}",
+        r"S_\mathrm{out} = S_\mathrm{in} - S_\mathrm{sh}",
+    ]
+    assumptions = [
+        "Constant impedance: the var output falls with the square of "
+        "the voltage",
+    ]
+    references = _NODE_REFS
+    parameter_units = {"g_pu": "pu", "b_pu": "pu"}
 
     def __init__(self, params: ShuntParams):
         self.params = params
@@ -176,6 +231,20 @@ class GeneratorInject:
     objective is the offer curve.
     """
 
+    symbol = "Gen"
+    equations = [
+        r"S_\mathrm{out} = S_\mathrm{in} + (P_g + jQ_g)",
+        r"C(P_g) = c_2 P_g^2 + c_1 P_g + c_0",
+    ]
+    assumptions = [
+        "Cost is a polynomial in real power only; reactive output is "
+        "free at the margin",
+    ]
+    references = _NODE_REFS
+    parameter_units = {
+        "p_pu": "pu", "q_pu": "pu", "base_mva": "MVA", "cost": "$/h",
+    }
+
     def __init__(self, params: GeneratorParams):
         self.params = params
 
@@ -201,6 +270,17 @@ class BusNode:
     disagreement, so a flowsheet must be built so that the first inlet
     is the one whose voltage was actually computed.
     """
+
+    symbol = "Bus"
+    equations = [
+        r"S = \sum_k S_k",
+        r"V = V_1 \quad \text{(every inlet shares the bus voltage)}",
+    ]
+    assumptions = [
+        "All inlets are electrically at the same point, so the first "
+        "inlet's voltage is taken as the bus voltage",
+    ]
+    references = _NODE_REFS
 
     def __call__(self, *inlets: Stream) -> tuple[Stream, dict]:
         if not inlets:
@@ -228,6 +308,19 @@ class PowerSplit:
     so this unit belongs only in a sequential decomposition, where the
     fraction is a tear variable a fixed-point iteration solves for.
     """
+
+    symbol = "Split"
+    equations = [
+        r"S_1 = \alpha S,\quad S_2 = (1 - \alpha) S",
+        r"V_1 = V_2 = V \quad \text{(both outlets leave the same bus)}",
+    ]
+    assumptions = [
+        "The split fraction is a TEAR VARIABLE, not a physical "
+        "parameter: how power actually divides is set by the downstream "
+        "impedances",
+    ]
+    references = _FEEDER_REFS
+    parameter_units = {"fraction": "-"}
 
     def __init__(self, params: "SplitParams"):
         self.params = params
@@ -288,6 +381,20 @@ class LadderClose:
     is close to an exact Newton step: it converges in a handful of
     passes rather than not at all.
     """
+
+    symbol = "Ladder close"
+    equations = [
+        r"S^\mathrm{in}_{k+1} = S^\mathrm{in}_k - S^\mathrm{leftover}_k",
+        r"S^\mathrm{leftover} \to 0 \quad \text{at the fixed point}",
+    ]
+    assumptions = [
+        "The feeder is a ladder: one unknown, the source infeed",
+        "The leftover is very nearly (infeed - load - loss), which makes "
+        "the correction close to an exact Newton step",
+    ]
+    references = _FEEDER_REFS
+    numerical_method = "Fixed-point tear on the source infeed"
+    parameter_units = {"vm_setpoint": "pu", "va_reference": "rad"}
 
     def __init__(self, params: LadderCloseParams):
         self.params = params

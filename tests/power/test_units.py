@@ -224,15 +224,56 @@ def test_params_support_the_difflow_mixin_api():
     assert params["x"] == 0.1       # functional, not in place
 
 
+REGISTERED = {
+    "SeriesBranch", "BranchDrop", "BranchFlow", "Transformer",
+    "SlackSource", "LoadDraw", "ShuntDraw", "GeneratorInject",
+    "BusNode", "PowerSplit", "LadderClose",
+}
+
+
 def test_registry_registration_covers_the_units():
     from difflow.plugins import OperationRegistry
 
     registry = OperationRegistry()
     dp.register(registry)
-    names = {
-        "SeriesBranch", "BranchDrop", "BranchFlow", "Transformer",
-        "SlackSource", "LoadDraw", "ShuntDraw", "GeneratorInject",
-        "BusNode", "PowerSplit", "LadderClose",
-    }
-    for name in names:
+    for name in REGISTERED:
         assert registry.get(name) is not None
+
+
+def test_registered_units_satisfy_the_report_metadata_contract():
+    """Every registered unit must be self-documenting.
+
+    ``tests/test_report.py`` asserts this across the whole registry, but
+    only sees this plugin once its entry point is installed --- so an
+    editable install predating the ``pyproject.toml`` entry cannot fail
+    it, and the gap surfaces in CI instead. Asserting it here against the
+    classes DIRECTLY makes the check independent of install state.
+    """
+    from difflow.plugins import OperationRegistry
+    from difflow.report.metadata import get_metadata
+
+    registry = OperationRegistry()
+    dp.register(registry)
+    for name in REGISTERED:
+        meta = get_metadata(registry.get(name))
+        assert meta.symbol and isinstance(meta.symbol, str), name
+        assert meta.description, name
+        assert meta.equations, f"{name} declares no equations"
+        assert meta.references, f"{name} declares no references"
+
+
+def test_declared_equations_have_balanced_latex_braces():
+    """A stray brace turns a rendered report into nonsense silently."""
+    from difflow.plugins import OperationRegistry
+    from difflow.report.metadata import get_metadata
+
+    registry = OperationRegistry()
+    dp.register(registry)
+    for name in REGISTERED:
+        for equation in get_metadata(registry.get(name)).equations:
+            assert equation.count("{") == equation.count("}"), (
+                f"{name}: unbalanced braces in {equation!r}"
+            )
+            assert "$" not in equation, (
+                f"{name}: equations are raw LaTeX, without $ delimiters"
+            )
