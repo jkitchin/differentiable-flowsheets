@@ -25,6 +25,7 @@
 | [Technoeconomics](technoeconomics.md) | Capital costs, operating costs, profitability analysis |
 | [Streams and Flowsheets](streams-and-flowsheets.md) | Stream handling, flowsheet solver, recycle calculations |
 | [Dynamic Modeling](dynamic-modeling.md) | Transient simulation, ODE/DAE integration, diffrax backend |
+| [Moving-Horizon Estimation](moving-horizon-estimation.md) | Constrained MHE over dynamic flowsheets, EKF baseline, delayed and multi-rate data, joint parameter estimation |
 | [Solvers and Utilities](solvers-and-utilities.md) | Numerical methods, uncertainty propagation |
 | [Data Reconciliation](data-reconciliation.md) | Constrained least squares on noisy plant data, gross error detection, observability |
 | [Delta-Base Planning](planning.md) | AD-generated delta vectors, trust-region LP/MILP planning, sensitivity of the plan |

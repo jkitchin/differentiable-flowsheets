@@ -20,6 +20,7 @@ parts:
       - file: docs/planning
       - file: docs/streams-and-flowsheets
       - file: docs/dynamic-modeling
+      - file: docs/moving-horizon-estimation
       - file: docs/solvers-and-utilities
       - file: docs/eo-solver
 

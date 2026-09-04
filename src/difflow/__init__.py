@@ -233,6 +233,9 @@ from difflow import reconciliation
 # Delta-base planning submodule
 from difflow import planning
 
+# Moving-horizon estimation submodule (#201)
+from difflow import mhe
+
 # Declarative kinetics
 from difflow.kinetics import (
     KineticsSpecError,
@@ -501,6 +504,8 @@ __all__ = [
     "reconciliation",
     # Delta-base planning
     "planning",
+    # Moving-horizon estimation
+    "mhe",
     # Declarative kinetics
     "mass_action_kinetics",
     "ReactionSet",
