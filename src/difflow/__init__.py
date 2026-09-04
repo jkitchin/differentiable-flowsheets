@@ -236,6 +236,9 @@ from difflow import planning
 # Moving-horizon estimation submodule (#201)
 from difflow import mhe
 
+# Steady-state operability screening submodule (#199)
+from difflow import operability
+
 # Declarative kinetics
 from difflow.kinetics import (
     KineticsSpecError,
@@ -506,6 +509,8 @@ __all__ = [
     "planning",
     # Moving-horizon estimation
     "mhe",
+    # Operability screening
+    "operability",
     # Declarative kinetics
     "mass_action_kinetics",
     "ReactionSet",

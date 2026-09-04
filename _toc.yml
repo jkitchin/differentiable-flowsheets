@@ -18,6 +18,7 @@ parts:
       - file: docs/parameter-estimation
       - file: docs/data-reconciliation
       - file: docs/planning
+      - file: docs/operability
       - file: docs/streams-and-flowsheets
       - file: docs/dynamic-modeling
       - file: docs/moving-horizon-estimation
