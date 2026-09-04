@@ -6,16 +6,43 @@ on:
   pull_request:
     branches: [main, master]
 
+# Superseded pull-request runs are cancelled; pushes to main are not. Pushing
+# three times to a branch used to leave three full matrices running, and only
+# the last one's answer was ever read. Main is left alone so its history has a
+# result for every commit.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   # Fast suite: everything except the `slow` (compile-bound) tests. Those run
   # in the `slow-tests` job below, concurrently, so total coverage is unchanged
   # and wall-clock is max(fast, slow) rather than the sum.
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        # One interpreter on a pull request, all three on main.
+        #
+        # The three jobs run concurrently, so this does not make a pull
+        # request finish sooner -- it costs the same wall-clock as one job.
+        # What it saves is job-minutes, and this being a public repository
+        # those are free. The reason to do it anyway is contention: the three
+        # jobs draw on the same runner pool as every other repository on the
+        # account, and two of them have almost never been the ones to fail.
+        #
+        # Almost, not never, and the exception is the cost of this change.
+        # Over 134 full-matrix runs, three had 3.10 fail while 3.11 passed
+        # (all on main, 2026-07-17/18). Under this split that break would
+        # reach main before anything noticed, because a pull request no
+        # longer runs 3.10 -- merges still run all three, so it is caught one
+        # commit later rather than not at all. If that trade stops being
+        # worth it, delete the condition and keep the list.
+        python-version: >-
+          ${{ fromJSON(github.event_name == 'pull_request'
+              && '["3.11"]' || '["3.10", "3.11", "3.12"]') }}
 
     steps:
       - uses: actions/checkout@v4
@@ -46,6 +73,7 @@ jobs:
   slow-tests:
     name: Slow (compile-bound) tests
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v4
@@ -71,6 +99,7 @@ jobs:
   test-minimal:
     name: Test minimal install
     runs-on: ubuntu-latest
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@v4
