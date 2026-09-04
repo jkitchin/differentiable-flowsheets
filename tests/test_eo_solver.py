@@ -291,6 +291,58 @@ class TestEOSolverSimple:
         )
 
 
+class TestEOFallbackForUnitsWithoutEOResiduals:
+    """#206: the residual builder's fallback branch, for any unit operation that
+    does not define `eo_residuals`.
+
+    Nothing in the suite exercised this branch before, which is how a plain
+    NameError survived in it: the branch read a bare `feed_names`, but that name
+    is a local of `EOSolver.__init__`, neither a closure cell nor a module
+    global, so it raised as soon as the branch was reached.
+    """
+
+    @staticmethod
+    def _scaler_flowsheet():
+        """A flowsheet whose only unit deliberately has no `eo_residuals`."""
+
+        class Scaler:
+            """Multiplies every species flow by `factor`. No eo_residuals."""
+
+            def __call__(self, inlet, factor=1.0):
+                flows = get_flows(inlet)
+                return make_stream(
+                    {k: v * factor for k, v in flows.items()},
+                    T=inlet["T"],
+                    P=inlet["P"],
+                )
+
+        assert not hasattr(Scaler, "eo_residuals"), (
+            "this test is only meaningful for an operation without eo_residuals"
+        )
+
+        fs = Flowsheet(species_order=["A", "B"])
+        fs.add_feed("feed", make_stream({"A": 2.0, "B": 3.0}, T=310.0, P=101325.0))
+        fs.add_unit(Unit("scaler", Scaler(), ["feed"], ["scaled"], params={"factor": 2.0}))
+        return fs
+
+    def test_fallback_branch_does_not_raise(self):
+        """Regression: this raised `NameError: name 'feed_names' is not defined`."""
+        fs = self._scaler_flowsheet()
+        streams = fs.solve_eo(use_sm_init=False)
+        assert "scaled" in streams
+
+    def test_fallback_branch_matches_the_sequential_solve(self):
+        """The branch must also be correct, not merely non-raising."""
+        fs = self._scaler_flowsheet()
+        sm = get_flows(fs.solve()["scaled"])
+        eo = get_flows(fs.solve_eo(use_sm_init=False)["scaled"])
+        for species in ("A", "B"):
+            assert jnp.allclose(eo[species], sm[species], atol=1e-8)
+        # And the answer is the one hand-arithmetic gives: 2x the feed.
+        assert jnp.allclose(eo["A"], 4.0, atol=1e-8)
+        assert jnp.allclose(eo["B"], 6.0, atol=1e-8)
+
+
 class TestEOSolverRecycle:
     def test_cstr_with_recycle(self, simple_thermo, simple_rate_fn):
         """EO matches SM for CSTR with simple recycle via splitter."""

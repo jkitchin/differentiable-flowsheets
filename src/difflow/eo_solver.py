@@ -276,6 +276,10 @@ class EOSolver:
         layout = self.layout
         flowsheet = self.flowsheet
         species_order = self.species_order
+        # Bound here like the other three: the fallback branch below reads this,
+        # and reading a bare `feed_names` raised NameError because the name is a
+        # local of __init__, not a closure cell (#206).
+        feed_names = self.feed_names
 
         def residual_fn(x, args):
             feeds = args
