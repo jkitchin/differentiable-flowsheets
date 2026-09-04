@@ -25,6 +25,7 @@ parts:
       - file: docs/dynamic-modeling
       - file: docs/moving-horizon-estimation
       - file: docs/solvers-and-utilities
+      - file: docs/external-solvers
       - file: docs/eo-solver
 
   - caption: About Flowsheets

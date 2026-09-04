@@ -247,6 +247,9 @@ from difflow import operability
 # Flexibility analysis submodule (#198)
 from difflow import flexibility
 
+# External solver bridges: pounce / discopt (#203)
+from difflow import solvers
+
 # Declarative kinetics
 from difflow.kinetics import (
     KineticsSpecError,
@@ -522,6 +525,8 @@ __all__ = [
     "operability",
     # Flexibility analysis
     "flexibility",
+    # External solver bridges
+    "solvers",
     # Declarative kinetics
     "mass_action_kinetics",
     "ReactionSet",

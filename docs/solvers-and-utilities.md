@@ -10,6 +10,7 @@ This document covers numerical solvers, uncertainty propagation, and utility fun
    - [Rachford-Rice Solver](#rachford-rice-solver)
    - [ODE Integration](#ode-integration)
    - [Equation-Oriented Solver](eo-solver.md) — simultaneous solution of all unit equations
+   - [External Solvers: pounce and discopt](external-solvers.md) — a flowsheet as a flat NLP or as an implicit residual block
 2. [Uncertainty Propagation](#uncertainty-propagation)
    - [Linear Propagation](#linear-propagation)
    - [Monte Carlo Propagation](#monte-carlo-propagation)
