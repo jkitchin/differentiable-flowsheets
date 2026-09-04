@@ -199,7 +199,12 @@ from difflow.report import (
     to_latex,
     to_markdown,
 )
-from difflow.eo_solver import EOSolver, EOSolveResult, EOStateLayout
+from difflow.eo_solver import (
+    EOSolver,
+    EOSolveResult,
+    EOStateLayout,
+    solve_residual_system,
+)
 from difflow.initialization import (
     AndersonAccelerator,
     wegstein_acceleration,
@@ -482,6 +487,7 @@ __all__ = [
     "EOSolver",
     "EOSolveResult",
     "EOStateLayout",
+    "solve_residual_system",
     # Initialization & Acceleration
     "AndersonAccelerator",
     "wegstein_acceleration",

@@ -93,6 +93,47 @@ streams = layout.unpack(x)
 
 Manages mapping between flat state vector and named streams.
 
+### `solve_residual_system` (#196)
+
+Some models already *are* a residual and do not need a `Flowsheet` built around
+them -- a counter-current equilibrium section, for instance. This is the
+section-scope entry point for those:
+
+```python
+from difflow.eo_solver import solve_residual_system
+
+z, residual_norm, feasible = solve_residual_system(
+    residual_fn,          # (z, args) -> r, same shape as z; JAX-traceable
+    z0,                   # initial guess; scale it well, Newton is local
+    args,                 # any pytree, differentiable
+    rtol=1e-12, atol=1e-12,
+    max_steps=200,
+)
+```
+
+It is one `optimistix.root_find`, so:
+
+- the reverse-mode tape is constant size rather than proportional to stages
+  times iterations -- optimistix differentiates the converged solution
+  implicitly, it does not tape the iteration;
+- the Jacobian `dr/dz` is an ordinary `jax.jacobian` of `residual_fn`, which is
+  the object the linearization, back-off and estimation layers want;
+- a recycle tear is just another row of `r`.
+
+**Soft failure.** Nothing is raised. One cannot raise from inside `vmap` or
+`scan`, so failure comes back as a value: `residual_norm` and `feasible` are
+traced arrays a caller branches on with `jnp.where`, and a non-converged `z` is
+still returned because the converged members of a batch have to come back too.
+
+**Tolerance.** `rtol`/`atol` default to `1e-12`, far below any outer flowsheet
+tolerance. Keep it that way: a loosely converged inner solve gives an
+implicit-function gradient that is exact for the solution manifold but
+inconsistent with the value the code actually returned, and the resulting
+finite-difference disagreement is very hard to diagnose afterwards.
+
+First user: the REE mass-action closure, `difflow_ree.equilibrium.mass_action`
+(see [REE unit operations](unit-operations-ree.md)).
+
 ## Comparison: SM vs EO
 
 | Aspect | Sequential Modular | Equation-Oriented |

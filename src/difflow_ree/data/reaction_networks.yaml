@@ -1,0 +1,204 @@
+# Reaction networks for REE solvent extraction (#196)
+#
+# WHY THIS FILE EXISTS
+#
+# `difflow_ree` used to have no mass-action equilibrium model at all: the
+# reaction and its constant appeared in a LaTeX docstring, and what ran was an
+# empirical log10(D) correlation with multiplicative corrections. Issue #196
+# adds the closed model, and the design decision that determines whether the
+# closure generalizes is that the reaction network is carried as DATA rather
+# than as code. Cation exchange, saponified cation exchange (#197), solvating
+# extraction and anion exchange are then rows in this table, not four code
+# paths in `mass_action.py`.
+#
+# THE TABLEAU CONVENTION
+#
+# Each network declares a set of COMPONENTS -- a chemically independent basis
+# whose totals are conserved -- and a set of SPECIES formed from them. Every
+# species carries integer stoichiometric coefficients against the components
+# and one log10 equilibrium constant:
+#
+#     S_j  =  sum_c  nu_jc * C_c            log10[S_j] = log10 K_j
+#                                                        + sum_c nu_jc log10[C_c]
+#
+# and the conserved total of component c over a stage is
+#
+#     T_c = sum_j nu_jc * [S_j] * Q_phase(j)
+#
+# summed over EVERY species including the free components themselves (whose
+# stoichiometry is the identity row and whose log10 K is 0). This is the
+# standard equilibrium tableau (MINEQL / PHREEQC); it makes the mass-action
+# expressions hold identically by construction, so the residuals that go to
+# the solver are the component balances alone and the system is square.
+#
+# NEGATIVE COEFFICIENTS ARE NORMAL AND ARE NOT A SIGN ERROR. `H+` appears with
+# coefficient -3 in the cation-exchange complex because the complex RELEASES
+# three protons per trivalent ion. The component `H+` therefore means "proton
+# in excess of the reference state in which the extractant is fully
+# protonated", and the H component total of a loaded organic phase is
+# negative. That bookkeeping is exact -- it is what makes the predicted pH
+# profile an output that responds to the three protons per RE(III).
+#
+# PHASES. `aqueous` species are counted against the aqueous volumetric flow,
+# `organic` species against the organic volumetric flow. A single mass-action
+# constant may span both phases; these are conditional two-phase extraction
+# constants, which is what the literature reports.
+#
+# CHARGES. `charge` on a species must equal sum_c nu_jc * charge_c. This is
+# checked when the network is built and is a real check on this file.
+#
+# per_element: true expands one row into one row per tracked rare earth, so a
+# ten-element cascade is still five component rows and one species row here.
+#
+# BASIS. `extractant_basis` states what one mole of the extractant COMPONENT
+# is: `dimer` for the acidic organophosphorus extractants, which are dimeric
+# in aliphatic diluents, `monomer` otherwise. It must agree with the
+# `stoichiometry.basis` on the extractant record in extractants.yaml -- the
+# builder reads the basis from the extractant record and checks it against
+# this field rather than trusting either alone (#191, #196).
+#
+# WHERE THE CONSTANTS COME FROM. Every `log10_K: null` below means "calibrate
+# at build time". `difflow_ree.equilibrium.network.log_K_from_correlation`
+# inverts the existing L1 correlation at a stated reference condition, which
+# is the only defensible source available here: the `ph_coefficients` of the
+# three acidic extractants are HAND-TUNED WITH NO SOURCE (see the header of
+# extractants.yaml), so a constant derived from them is illustrative, not
+# measured. Supply your own `log10_K` for design numbers.
+
+networks:
+
+  # ---------------------------------------------------------------------
+  # Cation exchange with a dimeric acidic organophosphorus extractant.
+  # D2EHPA, PC88A, Cyanex272.
+  #
+  #     RE3+ + 3 (HA)2  <->  RE(HA2)3 + 3 H+
+  #
+  # ---------------------------------------------------------------------
+  cation_exchange_dimer:
+    description: >-
+      Trivalent rare earth exchanged against three protons on three dimers of
+      an acidic organophosphorus extractant.
+    mechanism: cation_exchange
+    extractant_basis: dimer
+    components:
+      - {name: "RE3+",  phase: aqueous, charge: 3,  role: rare_earth,  per_element: true}
+      - {name: "H+",    phase: aqueous, charge: 1,  role: proton}
+      # The counter-ion is a conserved component in every network even when no
+      # species is formed from it (#196). Its balance is then trivially
+      # satisfied, which costs one well-conditioned row and buys the slot
+      # #197 needs: saponification adds ONE species row below and nothing else
+      # changes, because the counter-ion is already conserved and already
+      # carries its charge into the aqueous charge balance.
+      - {name: "M+",    phase: aqueous, charge: 1,  role: counter_ion}
+      - {name: "X-",    phase: aqueous, charge: -1, role: anion}
+      - {name: "(HA)2", phase: organic, charge: 0,  role: extractant}
+    species:
+      - name: "RE(HA2)3"
+        phase: organic
+        charge: 0
+        per_element: true
+        stoichiometry: {"RE3+": 1, "(HA)2": 3, "H+": -3}
+        log10_K: null   # calibrated from the L1 correlation; see file header
+
+      # ---- #197 SLOTS IN HERE, AND ONLY HERE --------------------------------
+      # Saponified (pre-neutralized) extractant is one more species formed
+      # from the counter-ion component that already exists:
+      #
+      #   - name: "M(HA2)"
+      #     phase: organic
+      #     charge: 0
+      #     stoichiometry: {"M+": 1, "(HA)2": 1, "H+": -1}
+      #     log10_K: <saponification constant>
+      #
+      # Adding that row makes the saponification degree an OUTPUT of the same
+      # component balances (total M partitions between M+ aqueous and M(HA2)
+      # organic), makes base addition an input through the M and H totals, and
+      # requires no change to mass_action.py. It is deliberately not enabled
+      # here: #196 ships the data model, #197 ships the constant and the
+      # saponification-degree specification.
+      # ----------------------------------------------------------------------
+
+  # ---------------------------------------------------------------------
+  # Cation exchange with a monomeric acidic extractant (polar diluents, high
+  # loading, carboxylic acids). Identical chemistry, different basis.
+  # ---------------------------------------------------------------------
+  cation_exchange_monomer:
+    description: >-
+      Trivalent rare earth exchanged against three protons on three monomers
+      of an acidic extractant.
+    mechanism: cation_exchange
+    extractant_basis: monomer
+    components:
+      - {name: "RE3+", phase: aqueous, charge: 3,  role: rare_earth, per_element: true}
+      - {name: "H+",   phase: aqueous, charge: 1,  role: proton}
+      - {name: "M+",   phase: aqueous, charge: 1,  role: counter_ion}
+      - {name: "X-",   phase: aqueous, charge: -1, role: anion}
+      - {name: "HA",   phase: organic, charge: 0,  role: extractant}
+    species:
+      - name: "REA3"
+        phase: organic
+        charge: 0
+        per_element: true
+        stoichiometry: {"RE3+": 1, "HA": 3, "H+": -3}
+        log10_K: null
+
+  # ---------------------------------------------------------------------
+  # Solvating extraction from a nitrate medium. TBP, and the diglycolamide /
+  # malonamide families.
+  #
+  #     RE3+ + 3 NO3- + 3 S  <->  RE(NO3)3.3S      (no protons released)
+  #
+  # The salting effect is not a correction here: the anion is a component, so
+  # D rises with the nitrate total through the same balance everything else
+  # uses.
+  # ---------------------------------------------------------------------
+  solvating_nitrate:
+    description: >-
+      Neutral rare-earth nitrate solvated by three molecules of a neutral
+      extractant. No proton is exchanged, so the pH is a spectator here and
+      the nitrate total is the driving variable.
+    mechanism: solvating
+    extractant_basis: monomer
+    components:
+      - {name: "RE3+", phase: aqueous, charge: 3,  role: rare_earth, per_element: true}
+      - {name: "H+",   phase: aqueous, charge: 1,  role: proton}
+      - {name: "M+",   phase: aqueous, charge: 1,  role: counter_ion}
+      - {name: "X-",   phase: aqueous, charge: -1, role: anion}
+      - {name: "S",    phase: organic, charge: 0,  role: extractant}
+    species:
+      - name: "RE(X)3.3S"
+        phase: organic
+        charge: 0
+        per_element: true
+        stoichiometry: {"RE3+": 1, "X-": 3, "S": 3}
+        log10_K: null
+
+  # ---------------------------------------------------------------------
+  # Anion exchange with a quaternary ammonium salt (Aliquat 336 in chloride
+  # or nitrate form).
+  #
+  #     RE3+ + 4 X- + R4NX  <->  R4N[REX4] + X-
+  #
+  # i.e. net RE3+ + 3 X- + R4NX -> complex. No source for a constant ships
+  # with difflow_ree; this row exists so the shape of the model is a row in
+  # this table rather than a fifth code path.
+  # ---------------------------------------------------------------------
+  anion_exchange:
+    description: >-
+      Anionic rare-earth halide/nitrate complex taken up by a quaternary
+      ammonium salt. Supply your own log10_K -- none is tabulated here.
+    mechanism: anion_exchange
+    extractant_basis: monomer
+    components:
+      - {name: "RE3+", phase: aqueous, charge: 3,  role: rare_earth, per_element: true}
+      - {name: "H+",   phase: aqueous, charge: 1,  role: proton}
+      - {name: "M+",   phase: aqueous, charge: 1,  role: counter_ion}
+      - {name: "X-",   phase: aqueous, charge: -1, role: anion}
+      - {name: "R4NX", phase: organic, charge: 0,  role: extractant}
+    species:
+      - name: "R4N.REX4"
+        phase: organic
+        charge: 0
+        per_element: true
+        stoichiometry: {"RE3+": 1, "X-": 3, "R4NX": 1}
+        log10_K: null

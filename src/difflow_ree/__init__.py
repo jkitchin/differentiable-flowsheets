@@ -76,6 +76,24 @@ from difflow_ree.database import (
 # =============================================================================
 
 from difflow_ree.equilibrium import (
+    # Mass-action equilibrium closure (#196)
+    ReactionNetwork,
+    build_network,
+    list_networks,
+    get_network_template,
+    cation_exchange_network,
+    log_K_from_correlation,
+    correlation_ph_slope_defect,
+    network_for_extractant,
+    REEStreamSchema,
+    MassActionParams,
+    MassActionSection,
+    MassActionSolution,
+    solve_section,
+    solve_stage,
+    base_addition_for_pH,
+    base_addition_bounds,
+    charge_imbalance,
     # Distribution coefficients
     REEDistribution,
     get_distribution_coefficient,
@@ -101,6 +119,7 @@ from difflow_ree.equilibrium import (
 # Unit Operations
 # =============================================================================
 
+from difflow_ree.units.extraction import EXTRACTOR_MODELS
 from difflow_ree.units import (
     # Extraction
     REEExtractor,
@@ -346,6 +365,25 @@ def register(registry):
 # =============================================================================
 
 __all__ = [
+    # Mass-action equilibrium closure (#196)
+    "ReactionNetwork",
+    "build_network",
+    "list_networks",
+    "get_network_template",
+    "cation_exchange_network",
+    "log_K_from_correlation",
+    "correlation_ph_slope_defect",
+    "network_for_extractant",
+    "REEStreamSchema",
+    "MassActionParams",
+    "MassActionSection",
+    "MassActionSolution",
+    "solve_section",
+    "solve_stage",
+    "base_addition_for_pH",
+    "base_addition_bounds",
+    "charge_imbalance",
+    "EXTRACTOR_MODELS",
     # Version
     "__version__",
     # Data classes
