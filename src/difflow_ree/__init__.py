@@ -40,6 +40,7 @@ __version__ = "0.1.0"
 # =============================================================================
 
 from difflow_ree.database import (
+    SAPONIFICATION_COUNTER_IONS,
     # Data classes
     REEElement,
     PHCoefficients,
@@ -76,6 +77,20 @@ from difflow_ree.database import (
 # =============================================================================
 
 from difflow_ree.equilibrium import (
+    # Saponification and counter-ion balance (#197)
+    SaponifiedParams,
+    SaponifiedSection,
+    saponification_log_K,
+    organic_buffer_pH,
+    organic_buffer_capacity,
+    saponification_degree_profile,
+    saponification_degree_for_pH,
+    divalent_counter_ion_template,
+    ph_profile_flatness,
+    INDUSTRIAL_DEGREE_RANGE,
+    DIVALENT_COUNTER_ION_CHARGES,
+    ALL_COUNTER_ION_CHARGES,
+    counter_ion_charge_of,
     # Mass-action equilibrium closure (#196)
     ReactionNetwork,
     build_network,
@@ -121,6 +136,9 @@ from difflow_ree.equilibrium import (
 
 from difflow_ree.units.extraction import EXTRACTOR_MODELS
 from difflow_ree.units import (
+    # Saponification (#197)
+    Saponifier,
+    SaponifierParams,
     # Extraction
     REEExtractor,
     REEExtractorParams,
@@ -163,6 +181,18 @@ from difflow_ree.flowsheets import (
 # =============================================================================
 
 from difflow_ree.economics import (
+    # Saponification duty and effluent load (#197)
+    saponification_duty,
+    compare_counter_ions,
+    SaponificationDuty,
+    BaseReagent,
+    BASE_REAGENTS,
+    base_per_ree_oxide,
+    stoichiometric_base_per_ree_oxide,
+    nitrogen_per_ree_oxide,
+    dissolved_salt_per_ree_oxide,
+    ree_oxide_mass_flow,
+    base_for_counter_ion,
     REEPricing,
     ReagentCosts,
     OperatingCosts,
@@ -243,6 +273,15 @@ def register(registry):
         cls=REEMixerSettler,
         category="ree_extraction",
         description="Single mixer-settler stage for REE extraction",
+        plugin="difflow_ree",
+    )
+
+    # Saponification (#197)
+    registry.register(
+        name="Saponifier",
+        cls=Saponifier,
+        category="ree_extraction",
+        description="Pre-neutralize the organic before the cascade",
         plugin="difflow_ree",
     )
 
@@ -365,6 +404,34 @@ def register(registry):
 # =============================================================================
 
 __all__ = [
+    # Saponification and counter-ion balance (#197)
+    "SaponifiedParams",
+    "SaponifiedSection",
+    "saponification_log_K",
+    "organic_buffer_pH",
+    "organic_buffer_capacity",
+    "saponification_degree_profile",
+    "saponification_degree_for_pH",
+    "divalent_counter_ion_template",
+    "ph_profile_flatness",
+    "INDUSTRIAL_DEGREE_RANGE",
+    "DIVALENT_COUNTER_ION_CHARGES",
+    "ALL_COUNTER_ION_CHARGES",
+    "counter_ion_charge_of",
+    "Saponifier",
+    "SaponifierParams",
+    "SAPONIFICATION_COUNTER_IONS",
+    "saponification_duty",
+    "compare_counter_ions",
+    "SaponificationDuty",
+    "BaseReagent",
+    "BASE_REAGENTS",
+    "base_per_ree_oxide",
+    "stoichiometric_base_per_ree_oxide",
+    "nitrogen_per_ree_oxide",
+    "dissolved_salt_per_ree_oxide",
+    "ree_oxide_mass_flow",
+    "base_for_counter_ion",
     # Mass-action equilibrium closure (#196)
     "ReactionNetwork",
     "build_network",

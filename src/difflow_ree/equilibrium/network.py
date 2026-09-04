@@ -194,6 +194,27 @@ class NetworkTemplate:
     per_element_components: frozenset[str]
     per_element_species: frozenset[str]
 
+    @property
+    def is_saponified(self) -> bool:
+        """True when a species is formed *from* the counter-ion (#197).
+
+        Saponification is one species row -- the counter-ion salt of the
+        extractant -- so "is this network saponified?" is a question about the
+        tableau and not a flag anyone has to remember to set. It is what
+        :func:`network_for_extractant` filters on, so that a feed carrying
+        sodium as a spectator salt does not start saponifying the organic
+        merely because sodium is present.
+
+        Returns:
+            True if any species has a positive coefficient on a component
+            whose role is ``counter_ion``.
+        """
+        counter = {c.name for c in self.components if c.role == "counter_ion"}
+        return any(
+            any(spec.stoichiometry.get(name, 0) > 0 for name in counter)
+            for spec in self.species
+        )
+
 
 # =============================================================================
 # The expanded, numeric network
@@ -226,6 +247,10 @@ class ReactionNetwork:
         component_charges / species_charges: float64 charge vectors.
         element_component_index: Column index of each element's free ion.
         element_species_index: Row index of each element's extracted complex.
+        counter_ion_species_index: Row indices of the species formed *from*
+            the counter-ion -- the saponified extractant (#197). Empty for the
+            unsaponified networks, where the counter-ion is conserved but
+            forms nothing.
 
     Example:
         >>> net = cation_exchange_network("D2EHPA", ("Nd",), calibration_pH=3.0)
@@ -253,8 +278,60 @@ class ReactionNetwork:
     counter_ion_index: int | None
     anion_index: int
     extractant_index: int
+    counter_ion_species_index: tuple[int, ...] = ()
 
     # -- convenience -----------------------------------------------------
+
+    @property
+    def is_saponified(self) -> bool:
+        """True when the network carries a saponified-extractant species (#197).
+
+        Returns:
+            True if any species is formed from the counter-ion component.
+        """
+        return bool(self.counter_ion_species_index)
+
+    @property
+    def base_equivalents_per_mole_ree(self) -> float:
+        """Moles of base per mole of rare earth moved, from the tableau (#197).
+
+        This is the number the whole reagent and effluent argument of #197
+        turns on, and it is *read off the stoichiometry* rather than written
+        down as 3. Extracting one rare earth occupies
+        ``nu_ext(complex) / nu_ext(salt)`` formula units of the saponified
+        species, and each of those holds ``|nu_H(salt)|`` equivalents of base:
+
+        .. math::
+
+            n_{\\mathrm{base}} = \\frac{\\nu_{E,\\mathrm{complex}}}
+                                       {\\nu_{E,\\mathrm{salt}}}
+                                 \\,\\bigl|\\nu_{H,\\mathrm{salt}}\\bigr|
+
+        The route runs through the *extractant* column, so it is an
+        independent check on the proton column rather than a restatement of
+        it, and it gives 3 for a divalent counter-ion too (half as many
+        formula units, twice the equivalents each).
+
+        Returns:
+            Base equivalents per mole of rare earth (3.0 for a trivalent ion
+            on an acidic extractant). Zero when the network is not saponified
+            -- there is no base in a proton-exchange circuit.
+
+        Example:
+            >>> net = build_network("cation_exchange_dimer_saponified",
+            ...                     ("Nd",), log10_K={"Nd": -7.45})
+            >>> net.base_equivalents_per_mole_ree
+            3.0
+        """
+        if not self.counter_ion_species_index:
+            return 0.0
+        salt = self.counter_ion_species_index[0]
+        complex_row = self.element_species_index[0]
+        units = (
+            float(self.nu[complex_row, self.extractant_index])
+            / float(self.nu[salt, self.extractant_index])
+        )
+        return units * abs(float(self.nu[salt, self.proton_index]))
 
     @property
     def n_components(self) -> int:
@@ -492,11 +569,14 @@ def list_networks() -> list[str]:
     return sorted(_load_templates())
 
 
-def get_network_template(name: str) -> NetworkTemplate:
+def get_network_template(name: str | NetworkTemplate) -> NetworkTemplate:
     """Fetch one unexpanded network template.
 
     Args:
-        name: Template name, see :func:`list_networks`.
+        name: Template name, see :func:`list_networks`. A
+            :class:`NetworkTemplate` is returned unchanged, so a template
+            built at runtime -- a divalent counter-ion (#197), say -- can be
+            passed anywhere a name can.
 
     Returns:
         The :class:`NetworkTemplate`.
@@ -504,6 +584,8 @@ def get_network_template(name: str) -> NetworkTemplate:
     Raises:
         KeyError: If the name is unknown.
     """
+    if isinstance(name, NetworkTemplate):
+        return name
     templates = _load_templates()
     if name not in templates:
         raise KeyError(
@@ -650,6 +732,15 @@ def build_network(
                 f"{required} balance (#196)."
             )
 
+    # Species formed *from* the counter-ion: the saponified extractant (#197).
+    # Empty for the unsaponified networks, where the counter-ion is conserved
+    # but forms nothing.
+    counter_ion_species = ()
+    if "counter_ion" in roles:
+        counter_ion_species = tuple(
+            int(j) for j in np.nonzero(nu[:, roles["counter_ion"]] > 0)[0]
+        )
+
     return ReactionNetwork(
         name=template.name,
         mechanism=template.mechanism,
@@ -674,6 +765,7 @@ def build_network(
         counter_ion_index=roles.get("counter_ion"),
         anion_index=roles["anion"],
         extractant_index=roles["extractant"],
+        counter_ion_species_index=counter_ion_species,
     )
 
 
@@ -928,11 +1020,17 @@ def correlation_ph_slope_defect(extractant: str, element: str) -> float:
     return float(ext.stoichiometry_protons - ext.ph_coefficients[element].b)
 
 
-def network_for_extractant(extractant: str) -> str:
+def network_for_extractant(extractant: str, saponified: bool = False) -> str:
     """Template name matching an extractant record's mechanism and basis.
 
     Args:
         extractant: Extractant name.
+        saponified: Select the pre-neutralized network, in which the
+            counter-ion salt of the extractant is a species and extraction
+            releases the counter-ion instead of a proton (#197). The default
+            selects the unsaponified network, so a feed carrying sodium as a
+            spectator salt does not start saponifying the organic merely
+            because sodium is present.
 
     Returns:
         A key of ``reaction_networks.yaml``.
@@ -943,6 +1041,8 @@ def network_for_extractant(extractant: str) -> str:
     Example:
         >>> network_for_extractant("D2EHPA")
         'cation_exchange_dimer'
+        >>> network_for_extractant("D2EHPA", saponified=True)
+        'cation_exchange_dimer_saponified'
         >>> network_for_extractant("TBP")
         'solvating_nitrate'
     """
@@ -950,12 +1050,16 @@ def network_for_extractant(extractant: str) -> str:
     for name, tmpl in _load_templates().items():
         if tmpl.mechanism != ext.mechanism:
             continue
+        if tmpl.is_saponified != saponified:
+            continue
         if tmpl.extractant_basis == ext.stoichiometry_basis:
             return name
     raise ValueError(
         f"No shipped reaction network matches extractant {extractant!r} "
-        f"(mechanism={ext.mechanism!r}, basis={ext.stoichiometry_basis!r}). "
-        f"Available: {list_networks()} (#196)."
+        f"(mechanism={ext.mechanism!r}, basis={ext.stoichiometry_basis!r}, "
+        f"saponified={saponified}). A neutral solvating extractant has no "
+        f"acidic proton to neutralize, so there is no saponified network for "
+        f"it. Available: {list_networks()} (#196, #197)."
     )
 
 
@@ -966,6 +1070,7 @@ def cation_exchange_network(
     T: float = 298.15,
     extractant_conc: float | None = None,
     log10_K: Mapping[str, float] | None = None,
+    saponified: bool = False,
     **distribution_kwargs: Any,
 ) -> ReactionNetwork:
     """Build the network for an extractant, calibrated from the correlation.
@@ -986,9 +1091,15 @@ def cation_exchange_network(
             :func:`log_K_from_correlation`.
         T: Reference temperature (K).
         extractant_conc: Total extractant concentration (M, monomer basis).
-        log10_K: Measured constants, keyed by element symbol. Supplying these
+        log10_K: Measured constants, keyed by element symbol (and by species
+            name for a saponified network's counter-ion salt). Supplying these
             bypasses the calibration entirely and is what a user with real
             data should do.
+        saponified: Select the pre-neutralized network (#197). The
+            saponification constant then comes from the YAML row unless it is
+            given in ``log10_K``; see
+            :func:`difflow_ree.equilibrium.saponification.saponification_log_K`
+            for the calibration that :class:`SaponifiedSection` uses instead.
         **distribution_kwargs: Forwarded to the correlation.
 
     Returns:
@@ -999,7 +1110,9 @@ def cation_exchange_network(
         >>> net.n_components
         6
     """
-    template = get_network_template(network_for_extractant(extractant))
+    template = get_network_template(
+        network_for_extractant(extractant, saponified=saponified)
+    )
     ext = get_extractant(extractant)
     if extractant_conc is None:
         extractant_conc = ext.typical_concentration

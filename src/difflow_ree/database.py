@@ -232,6 +232,16 @@ class PHCoefficients:
 # activity correction (#194); it is data, not an assumption in the code.
 EXTRACTION_MECHANISMS = ("cation_exchange", "solvating")
 
+#: Counter-ions an extractant record may declare (#197). ``"H"`` means the
+#: extractant is used un-neutralized and extraction is a proton exchange; the
+#: other three are the industrial saponification routes, and which one is
+#: chosen decides whether the plant's signature effluent is ammonium nitrogen
+#: or a saline raffinate. See
+#: :mod:`difflow_ree.economics.saponification` for that comparison, and
+#: :data:`difflow_ree.equilibrium.schema.DIVALENT_COUNTER_ION_CHARGES` for why
+#: ``"Mg"`` needs a tableau of its own.
+SAPONIFICATION_COUNTER_IONS = ("H", "Na", "NH4", "Mg")
+
 # Mapping from the historical free-form ``type`` field to the normalized
 # mechanism. Stated explicitly in data/extractants.yaml as well (#195).
 _TYPE_TO_MECHANISM = {
@@ -291,6 +301,36 @@ def _load_coefficient_block(
     }
 
 
+def _saponification_fields(block: dict | None) -> dict:
+    """Unpack a YAML ``saponification:`` block into Extractant fields (#197).
+
+    Args:
+        block: Raw YAML mapping with keys ``counter_ion``, ``degree``,
+            ``log10_K``, ``reference_pH`` and ``reference_counter_ion``, or
+            None when the extractant carries no saponification block at all
+            (a neutral solvating extractant has no acidic proton to
+            neutralize).
+
+    Returns:
+        Keyword arguments for :class:`Extractant`; empty when ``block`` is
+        None, so the record keeps its unsaponified defaults.
+    """
+    if block is None:
+        return {}
+    out = {
+        "counter_ion": block.get("counter_ion"),
+        "saponification_degree": float(block.get("degree", 0.0)),
+        "saponification_log10_K": block.get("log10_K"),
+    }
+    if "reference_pH" in block:
+        out["saponification_reference_pH"] = float(block["reference_pH"])
+    if "reference_counter_ion" in block:
+        out["saponification_reference_counter_ion"] = float(
+            block["reference_counter_ion"]
+        )
+    return out
+
+
 @dataclass
 class Extractant:
     """Properties of an extractant."""
@@ -340,9 +380,37 @@ class Extractant:
     # using it without a nitrate concentration is an error rather than a
     # silent fall-back to the pH correlation (#195).
     requires_nitrate: bool = False
+    # Saponification (#197). Industrial rare-earth circuits pre-neutralize 30
+    # to 50% of an acidic extractant before it enters the cascade, so
+    # extraction is a counter-ion exchange rather than a proton exchange:
+    #
+    #     HA_org + NaOH -> NaA_org + H2O
+    #     RE3+ + 3 NaA_org <-> RE(A)3_org + 3 Na+
+    #
+    # ``saponification_degree`` is the record's DEFAULT operating degree, not
+    # a fixed property: it is the primary manipulated variable of the circuit
+    # and a section, a Saponifier or an optimizer overrides it. 0.0 means the
+    # record ships unsaponified, which is what a neutral solvating extractant
+    # must be -- it has no acidic proton to neutralize.
+    counter_ion: str | None = None
+    saponification_degree: float = 0.0
+    # log10 of the counter-ion exchange constant K in
+    #     [M(HA2)] = K [M+] [(HA)2] / [H+]
+    # None means "calibrate from the reference degree and condition below",
+    # which is what SaponifiedSection does. No measured constant ships here.
+    saponification_log10_K: float | None = None
+    # Reference condition the constant is calibrated at when it is None.
+    saponification_reference_pH: float = 3.0
+    saponification_reference_counter_ion: float = 0.1  # M
 
     def __post_init__(self):
-        """Normalize the extraction mechanism (#195)."""
+        """Normalize the mechanism (#195) and check saponification (#197).
+
+        Raises:
+            ValueError: On an unknown mechanism, a saponification degree
+                outside [0, 1], or a saponified record for an extractant with
+                no acidic proton to neutralize.
+        """
         if self.mechanism is None:
             self.mechanism = normalize_mechanism(self.extractant_type)
         if self.mechanism not in EXTRACTION_MECHANISMS:
@@ -351,6 +419,51 @@ class Extractant:
                 f"{self.mechanism!r}. Supported mechanisms: "
                 f"{list(EXTRACTION_MECHANISMS)}."
             )
+        if not 0.0 <= float(self.saponification_degree) <= 1.0:
+            raise ValueError(
+                f"Extractant '{self.name}': saponification_degree must be "
+                f"between 0 and 1 (a fraction of the extractant's exchangeable "
+                f"protons), got {self.saponification_degree} (#197)."
+            )
+        if self.saponification_degree > 0.0 and self.stoichiometry_protons < 1:
+            raise ValueError(
+                f"Extractant '{self.name}' releases "
+                f"{self.stoichiometry_protons} protons, so there is nothing "
+                f"for a base to neutralize, but the record declares "
+                f"saponification_degree={self.saponification_degree}. "
+                f"Saponification applies to acidic (cation-exchange) "
+                f"extractants only (#197)."
+            )
+        if self.saponification_degree > 0.0 and self.counter_ion == "H":
+            raise ValueError(
+                f"Extractant '{self.name}' declares counter_ion='H', which "
+                f"means un-neutralized proton exchange, together with "
+                f"saponification_degree={self.saponification_degree}. Pick a "
+                f"base cation (Na, NH4, Mg) or set the degree to 0 (#197)."
+            )
+        if self.saponification_degree > 0.0 and self.counter_ion is None:
+            raise ValueError(
+                f"Extractant '{self.name}' declares "
+                f"saponification_degree={self.saponification_degree} but no "
+                f"counter_ion, so the base that neutralizes it has no cation. "
+                f"Declare one of {list(SAPONIFICATION_COUNTER_IONS)} (#197)."
+            )
+        if (
+            self.counter_ion is not None
+            and self.counter_ion not in SAPONIFICATION_COUNTER_IONS
+        ):
+            raise ValueError(
+                f"Extractant '{self.name}': unknown counter_ion "
+                f"{self.counter_ion!r}. Supported: "
+                f"{list(SAPONIFICATION_COUNTER_IONS)} (#197)."
+            )
+
+    @property
+    def is_saponified(self) -> bool:
+        """True when the record ships pre-neutralized (#197)."""
+        return self.saponification_degree > 0.0 and self.counter_ion not in (
+            None, "H",
+        )
 
     @property
     def monomers_per_ree(self) -> float:
@@ -432,6 +545,8 @@ class ExtractantDatabase:
                 requires_nitrate=bool(
                     props["stoichiometry"].get("requires_nitrate", False)
                 ),
+                # Saponification block (#197); absent for a neutral extractant.
+                **_saponification_fields(props.get("saponification")),
             )
 
     def get(self, name: str) -> Extractant:
@@ -835,6 +950,9 @@ def create_custom_extractant(
     nitrate_coefficients: dict[str, dict[str, float]] | None = None,
     reference_nitrate: float | None = None,
     requires_nitrate: bool = False,
+    counter_ion: str | None = None,
+    saponification_degree: float = 0.0,
+    saponification_log10_K: float | None = None,
 ) -> Extractant:
     """Create a custom extractant with user-defined properties.
 
@@ -893,6 +1011,17 @@ def create_custom_extractant(
         requires_nitrate: True when the extractant only works from a nitrate
             medium, so using it without a nitrate concentration is an error
             rather than a silent fall-back to the pH correlation (#195).
+        counter_ion: Cation the extractant is saponified with (#197), one of
+            :data:`SAPONIFICATION_COUNTER_IONS`. ``"H"`` or None means
+            un-neutralized proton exchange.
+        saponification_degree: Default operating fraction of the extractant's
+            exchangeable protons replaced by the counter-ion, 0 to 1. This is
+            the circuit's primary manipulated variable, so it is a default and
+            not a property; 0.30-0.50 is the industrial range.
+        saponification_log10_K: log10 of the counter-ion exchange constant in
+            ``[M(HA2)] = K [M+][(HA)2]/[H+]``. None calibrates it from the
+            declared degree at the record's reference condition; see
+            :func:`difflow_ree.equilibrium.saponification.saponification_log_K`.
 
     Returns:
         Extractant object ready for registration
@@ -1005,6 +1134,10 @@ def create_custom_extractant(
             float(reference_nitrate) if reference_nitrate is not None else None
         ),
         requires_nitrate=bool(requires_nitrate),
+        # Saponification (#197)
+        counter_ion=counter_ion,
+        saponification_degree=float(saponification_degree),
+        saponification_log10_K=saponification_log10_K,
     )
 
 

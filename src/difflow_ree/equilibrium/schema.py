@@ -33,6 +33,10 @@ Key conventions, which are the existing plugin conventions made explicit:
   extractants).
 - ``H`` is free acid in the aqueous phase, ``H_org`` co-extracted acid in the
   organic phase.
+- ``Na`` is the aqueous counter-ion and ``Na_org`` (#197) is the counter-ion
+  bound to the organic phase as the salt of the extractant -- a *saponified*
+  solvent. Both carry moles of counter-ion, so the pair is a partition and the
+  counter-ion total is conserved across it.
 """
 
 from __future__ import annotations
@@ -64,6 +68,51 @@ COUNTER_ION_CHARGES = {
     "K": 1,
 }
 
+#: Divalent counter-ions (#197). Magnesia saponification is a real industrial
+#: route and it is kept in its own table for the same reason ``SO4`` is kept
+#: out of the shipped reaction networks: every network in
+#: ``reaction_networks.yaml`` declares a counter-ion component of charge +1 and
+#: a species that holds one equivalent of base, and a divalent counter-ion is a
+#: different tableau -- half as many formula units, twice the equivalents each.
+#: :func:`difflow_ree.equilibrium.saponification.divalent_counter_ion_template`
+#: derives that tableau from the shipped monovalent one, so the stoichiometry
+#: still has a single source. Using one of these keys with a monovalent network
+#: raises rather than quietly running with the wrong charge.
+DIVALENT_COUNTER_ION_CHARGES = {
+    "Mg": 2,
+    "Ca": 2,
+}
+
+#: Every counter-ion key the schema accepts, monovalent and divalent.
+ALL_COUNTER_ION_CHARGES = {
+    **COUNTER_ION_CHARGES,
+    **DIVALENT_COUNTER_ION_CHARGES,
+}
+
+
+def counter_ion_charge_of(name: str) -> int:
+    """Formal charge of a counter-ion key.
+
+    Args:
+        name: Counter-ion key, e.g. ``"Na"`` or ``"Mg"``.
+
+    Returns:
+        The formal (positive) charge.
+
+    Raises:
+        KeyError: If the key is not recognised.
+
+    Example:
+        >>> counter_ion_charge_of("Na"), counter_ion_charge_of("Mg")
+        (1, 2)
+    """
+    if name not in ALL_COUNTER_ION_CHARGES:
+        raise KeyError(
+            f"Unknown counter_ion {name!r}. Recognised: "
+            f"{sorted(ALL_COUNTER_ION_CHARGES)} (#196, #197)."
+        )
+    return ALL_COUNTER_ION_CHARGES[name]
+
 
 @dataclass(frozen=True)
 class REEStreamSchema:
@@ -91,7 +140,7 @@ class REEStreamSchema:
         >>> s.aqueous_keys()
         ('Nd', 'Dy', 'H', 'Na', 'Cl', 'H2O')
         >>> s.organic_keys()
-        ('Nd', 'Dy', 'D2EHPA', 'kerosene', 'H_org', 'H2O_org')
+        ('Nd', 'Dy', 'D2EHPA', 'kerosene', 'H_org', 'H2O_org', 'Na_org')
     """
 
     elements: tuple[str, ...]
@@ -123,10 +172,13 @@ class REEStreamSchema:
                 f"Unknown anion {self.anion!r}. Recognised: "
                 f"{sorted(ANION_CHARGES)} (#196)."
             )
-        if self.counter_ion is not None and self.counter_ion not in COUNTER_ION_CHARGES:
+        if (
+            self.counter_ion is not None
+            and self.counter_ion not in ALL_COUNTER_ION_CHARGES
+        ):
             raise ValueError(
                 f"Unknown counter_ion {self.counter_ion!r}. Recognised: "
-                f"{sorted(COUNTER_ION_CHARGES)}, or None (#196)."
+                f"{sorted(ALL_COUNTER_ION_CHARGES)}, or None (#196, #197)."
             )
 
     # -- charges ---------------------------------------------------------
@@ -141,7 +193,25 @@ class REEStreamSchema:
         """Formal charge of the counter-ion, or 0 when there is none."""
         if self.counter_ion is None:
             return 0
-        return COUNTER_ION_CHARGES[self.counter_ion]
+        return ALL_COUNTER_ION_CHARGES[self.counter_ion]
+
+    @property
+    def organic_counter_ion(self) -> str | None:
+        """Key carrying counter-ion bound to the organic phase (#197).
+
+        A saponified solvent holds its counter-ion as the salt of the
+        extractant, e.g. ``NaA`` in ``Na_org``. The key carries **moles of
+        counter-ion**, not moles of the salt species, so it means the same
+        thing for a divalent counter-ion, which occupies two extractant
+        equivalents per ion.
+
+        Returns:
+            ``"<counter_ion>_org"``, or None when the schema has no
+            counter-ion.
+        """
+        if self.counter_ion is None:
+            return None
+        return f"{self.counter_ion}_org"
 
     # -- key sets --------------------------------------------------------
 
@@ -162,13 +232,16 @@ class REEStreamSchema:
 
         Returns:
             Element symbols (loaded complex), extractant total, diluent,
-            co-extracted acid, water in organic.
+            co-extracted acid, water in organic, and the saponified
+            counter-ion (#197) when the schema has one.
         """
-        return tuple(
-            list(self.elements)
-            + [self.extractant, self.diluent, self.organic_acid,
-               self.organic_water]
-        )
+        keys = list(self.elements) + [
+            self.extractant, self.diluent, self.organic_acid,
+            self.organic_water,
+        ]
+        if self.organic_counter_ion is not None:
+            keys.append(self.organic_counter_ion)
+        return tuple(keys)
 
     def all_keys(self) -> tuple[str, ...]:
         """Every key in the superset, de-duplicated, aqueous keys first."""
@@ -191,7 +264,7 @@ class REEStreamSchema:
         """
         organic_only = {
             self.extractant, self.diluent, self.organic_acid,
-            self.organic_water,
+            self.organic_water, self.organic_counter_ion,
         }
         return "organic" if key in organic_only else "aqueous"
 
@@ -256,6 +329,7 @@ class REEStreamSchema:
         element_flows: Mapping[str, float | Array] | None = None,
         organic_acid: float | Array = 0.0,
         organic_water: float | Array = 0.0,
+        counter_ion: float | Array | None = None,
         T: float | Array = 298.15,
         P: float | Array = 101325.0,
         extra: Mapping[str, float | Array] | None = None,
@@ -269,6 +343,11 @@ class REEStreamSchema:
             element_flows: Loaded organic REE molar flows (mol/s).
             organic_acid: Co-extracted acid molar flow (mol/s).
             organic_water: Water in the organic phase (mol/s).
+            counter_ion: Counter-ion bound to the organic phase (mol/s), i.e.
+                a saponified solvent (#197). None (the default) omits the key
+                entirely, so an unsaponified stream is exactly what it always
+                was; pass 0.0 to declare an explicitly unsaponified solvent.
+                See :meth:`saponified_organic` for the usual way to build one.
             T: Temperature (K).
             P: Pressure (Pa).
             extra: Additional species carried through untouched.
@@ -284,9 +363,76 @@ class REEStreamSchema:
         flows[self.diluent] = diluent_flow
         flows[self.organic_acid] = organic_acid
         flows[self.organic_water] = organic_water
+        if counter_ion is not None:
+            if self.organic_counter_ion is None:
+                raise ValueError(
+                    "make_organic was given a counter_ion loading but the "
+                    "schema declares counter_ion=None, so there is no key to "
+                    "carry it and no component to conserve it (#197)."
+                )
+            flows[self.organic_counter_ion] = counter_ion
         if extra:
             flows.update(extra)
         return make_stream(flows, T, P)
+
+    def saponified_organic(
+        self,
+        extractant_flow: float | Array,
+        saponification_degree: float | Array,
+        monomers_per_component: float = 2.0,
+        counter_ion_charge: int | None = None,
+        **kwargs,
+    ) -> Stream:
+        """Build a pre-neutralized organic stream from a degree (#197).
+
+        The saponification degree is the fraction of the extractant's
+        exchangeable protons that have been replaced by the counter-ion, so
+        the counter-ion the stream carries is
+
+        .. math::
+
+            n_M = \\frac{S\\,F_{\\mathrm{ext}}}
+                        {m\\,z_M}
+
+        with ``m`` the monomers per extractant component (2 for a dimeric
+        extractant) and ``z_M`` the counter-ion charge: one equivalent per
+        extractant component, ``z_M`` equivalents per counter-ion.
+
+        Args:
+            extractant_flow: **Total** extractant molar flow (mol/s), monomer
+                basis.
+            saponification_degree: Fraction neutralized, 0 to 1. May be a
+                tracer -- this is the primary manipulated variable (#197).
+            monomers_per_component: Extractant monomers per component; 2 for
+                the dimeric acidic organophosphorus extractants. Read it off
+                ``network.monomers_per_component`` rather than guessing.
+            counter_ion_charge: Counter-ion charge; None uses the schema's.
+            **kwargs: Forwarded to :meth:`make_organic`.
+
+        Returns:
+            A difflow :class:`~difflow.streams.Stream` carrying the bound
+            counter-ion.
+
+        Example:
+            >>> s = REEStreamSchema(elements=("Nd",), extractant="D2EHPA")
+            >>> org = s.saponified_organic(0.5, 0.4)
+            >>> round(float(org["F_Na_org"]), 4)
+            0.1
+        """
+        if counter_ion_charge is None:
+            counter_ion_charge = self.counter_ion_charge
+        if not counter_ion_charge:
+            raise ValueError(
+                "saponified_organic needs a counter-ion: the schema declares "
+                "counter_ion=None, so the base has no cation to leave behind "
+                "in the organic phase (#197)."
+            )
+        n_M = (
+            jnp.asarray(saponification_degree, dtype=jnp.float64)
+            * jnp.asarray(extractant_flow, dtype=jnp.float64)
+            / (float(monomers_per_component) * float(counter_ion_charge))
+        )
+        return self.make_organic(extractant_flow, counter_ion=n_M, **kwargs)
 
     def electroneutral_anion_flow(
         self,

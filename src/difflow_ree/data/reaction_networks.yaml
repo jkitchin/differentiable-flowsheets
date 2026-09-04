@@ -100,22 +100,23 @@ networks:
         stoichiometry: {"RE3+": 1, "(HA)2": 3, "H+": -3}
         log10_K: null   # calibrated from the L1 correlation; see file header
 
-      # ---- #197 SLOTS IN HERE, AND ONLY HERE --------------------------------
+      # ---- #197 LANDED: SEE `cation_exchange_dimer_saponified` BELOW --------
       # Saponified (pre-neutralized) extractant is one more species formed
       # from the counter-ion component that already exists:
       #
-      #   - name: "M(HA2)"
-      #     phase: organic
-      #     charge: 0
-      #     stoichiometry: {"M+": 1, "(HA)2": 1, "H+": -1}
-      #     log10_K: <saponification constant>
+      #     - name: "M(HA2)"
+      #       phase: organic
+      #       charge: 0
+      #       stoichiometry: {"M+": 1, "(HA)2": 1, "H+": -1}
+      #       log10_K: <saponification constant>
       #
-      # Adding that row makes the saponification degree an OUTPUT of the same
-      # component balances (total M partitions between M+ aqueous and M(HA2)
-      # organic), makes base addition an input through the M and H totals, and
-      # requires no change to mass_action.py. It is deliberately not enabled
-      # here: #196 ships the data model, #197 ships the constant and the
-      # saponification-degree specification.
+      # That row -- verbatim -- is what `cation_exchange_dimer_saponified`
+      # below adds, and it is the whole of #197's equilibrium model. It is a
+      # SEPARATE network rather than an extra row here so that this one keeps
+      # meaning "unsaponified proton exchange": a section built on it is the
+      # S = 0 reference that #197's tests compare against, and a feed carrying
+      # sodium as a spectator salt must not start saponifying the organic
+      # merely because sodium is present.
       # ----------------------------------------------------------------------
 
   # ---------------------------------------------------------------------
@@ -202,3 +203,110 @@ networks:
         per_element: true
         stoichiometry: {"RE3+": 1, "X-": 3, "R4NX": 1}
         log10_K: null
+
+  # ---------------------------------------------------------------------
+  # SAPONIFIED CATION EXCHANGE (#197)
+  #
+  # Industrial rare-earth circuits do not dose base into every mixer. They
+  # neutralize 30-50% of the acidic extractant BEFORE it enters the cascade,
+  #
+  #     HA_org + NaOH  ->  NaA_org + H2O
+  #
+  # so extraction is a counter-ion exchange rather than a proton exchange:
+  #
+  #     RE3+ + 3 NaA_org  <->  RE(A)3_org + 3 Na+
+  #
+  # In this tableau that is ONE added species row, `M(HA2)`, formed from the
+  # counter-ion component that `cation_exchange_dimer` already conserves. The
+  # counter-ion exchange above is not a second reaction: it is the difference
+  # of the two rows below, and the solver never sees it written out.
+  #
+  # THE ORGANIC IS A BUFFER, AND THIS ROW IS THE BUFFER. `(HA)2` and `M(HA2)`
+  # are an acid / conjugate-base pair whose proton sits in the AQUEOUS phase:
+  #
+  #     [M(HA2)] = K [M+] [(HA)2] / [H+]
+  #  => pH = -log10 K + log10(S/(1-S)) - log10[M+]
+  #
+  # with S the saponification degree. That is Henderson-Hasselbalch for the
+  # organic phase. A whole extraction section sits on it, which is why a
+  # saponified cascade holds a nearly flat pH profile while an unsaponified
+  # one collapses by the three protons released per trivalent ion. A free
+  # organic `A-` is deliberately NOT a species: a bare anion is not stable in
+  # a low-dielectric diluent, it is always paired with its counter-ion, and
+  # pairing it is exactly what `M(HA2)` is.
+  #
+  # WHERE THE CONSTANT COMES FROM. `log10_K` below is not a measurement --
+  # nothing in this repository is (see the file header). It is the value that
+  # puts the organic at a typical industrial S = 0.35 when it is in contact
+  # with an aqueous phase at pH 3.0 carrying 0.1 M counter-ion:
+  #
+  #     K = S/(1-S) * [H+]/[M+] = (0.35/0.65) * (1e-3/1e-1) = 5.3846e-3
+  #     log10 K = -2.2688
+  #
+  # `difflow_ree.equilibrium.saponification.saponification_log_K` reproduces
+  # that arithmetic for any reference condition, and `SaponifiedSection`
+  # calibrates the constant that way rather than using this default. Supply a
+  # measured constant for design numbers.
+  # ---------------------------------------------------------------------
+  cation_exchange_dimer_saponified:
+    description: >-
+      Pre-neutralized dimeric acidic organophosphorus extractant. The
+      counter-ion salt M(HA2) is the organic conjugate base, so extraction
+      releases the counter-ion instead of a proton and the organic buffers
+      the aqueous phase across the whole section (#197).
+    mechanism: cation_exchange
+    extractant_basis: dimer
+    components:
+      - {name: "RE3+",  phase: aqueous, charge: 3,  role: rare_earth,  per_element: true}
+      - {name: "H+",    phase: aqueous, charge: 1,  role: proton}
+      - {name: "M+",    phase: aqueous, charge: 1,  role: counter_ion}
+      - {name: "X-",    phase: aqueous, charge: -1, role: anion}
+      - {name: "(HA)2", phase: organic, charge: 0,  role: extractant}
+    species:
+      - name: "RE(HA2)3"
+        phase: organic
+        charge: 0
+        per_element: true
+        stoichiometry: {"RE3+": 1, "(HA)2": 3, "H+": -3}
+        log10_K: null   # calibrated from the L1 correlation; see file header
+      - name: "M(HA2)"
+        phase: organic
+        charge: 0
+        stoichiometry: {"M+": 1, "(HA)2": 1, "H+": -1}
+        log10_K: -2.2688   # S = 0.35 at pH 3.0, 0.1 M M+; see the block above
+
+  # ---------------------------------------------------------------------
+  # The same chemistry on a monomeric acidic extractant.
+  # ---------------------------------------------------------------------
+  cation_exchange_monomer_saponified:
+    description: >-
+      Pre-neutralized monomeric acidic extractant; MA is the organic
+      conjugate base (#197).
+    mechanism: cation_exchange
+    extractant_basis: monomer
+    components:
+      - {name: "RE3+", phase: aqueous, charge: 3,  role: rare_earth, per_element: true}
+      - {name: "H+",   phase: aqueous, charge: 1,  role: proton}
+      - {name: "M+",   phase: aqueous, charge: 1,  role: counter_ion}
+      - {name: "X-",   phase: aqueous, charge: -1, role: anion}
+      - {name: "HA",   phase: organic, charge: 0,  role: extractant}
+    species:
+      - name: "REA3"
+        phase: organic
+        charge: 0
+        per_element: true
+        stoichiometry: {"RE3+": 1, "HA": 3, "H+": -3}
+        log10_K: null
+      - name: "MA"
+        phase: organic
+        charge: 0
+        stoichiometry: {"M+": 1, "HA": 1, "H+": -1}
+        log10_K: -2.2688
+
+  # A DIVALENT counter-ion (magnesia saponification) is a different tableau,
+  # exactly as a divalent anion is: `M2+` carries charge +2 and neutralizes two
+  # extractant equivalents, so the species row is M(HA2)2, not M(HA2). It is
+  # not shipped here as a fifth copy of the same rows; it is DERIVED from the
+  # monovalent template above by
+  # `difflow_ree.equilibrium.saponification.divalent_counter_ion_template`, so
+  # the stoichiometry has one source and the two cannot drift apart.

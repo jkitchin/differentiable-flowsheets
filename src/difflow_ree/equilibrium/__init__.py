@@ -24,6 +24,7 @@ This module provides:
 - Extractant loading/saturation effects
 - Aqueous phase speciation
 - Reaction networks as data, and the mass-action closure over them (#196)
+- Saponified extractants and the counter-ion balance (#197)
 """
 
 from difflow_ree.equilibrium.distribution import (
@@ -57,6 +58,9 @@ from difflow_ree.equilibrium.schema import (
     # The stream schema superset shared by both levels (#196)
     ANION_CHARGES,
     COUNTER_ION_CHARGES,
+    DIVALENT_COUNTER_ION_CHARGES,
+    ALL_COUNTER_ION_CHARGES,
+    counter_ion_charge_of,
     REEStreamSchema,
 )
 from difflow_ree.equilibrium.mass_action import (
@@ -75,6 +79,19 @@ from difflow_ree.equilibrium.mass_action import (
     charge_imbalance,
     base_addition_bounds,
     base_addition_for_pH,
+)
+from difflow_ree.equilibrium.saponification import (
+    # Saponified extractants and the counter-ion balance (#197)
+    INDUSTRIAL_DEGREE_RANGE,
+    SaponifiedParams,
+    SaponifiedSection,
+    saponification_log_K,
+    organic_buffer_pH,
+    organic_buffer_capacity,
+    saponification_degree_profile,
+    saponification_degree_for_pH,
+    divalent_counter_ion_template,
+    ph_profile_flatness,
 )
 from difflow_ree.equilibrium.speciation import (
     REESpeciation,
@@ -125,6 +142,9 @@ __all__ = [
     # Stream schema superset (#196)
     "ANION_CHARGES",
     "COUNTER_ION_CHARGES",
+    "DIVALENT_COUNTER_ION_CHARGES",
+    "ALL_COUNTER_ION_CHARGES",
+    "counter_ion_charge_of",
     "REEStreamSchema",
     # Mass-action closure (#196)
     "ANION_CLOSURES",
@@ -141,4 +161,15 @@ __all__ = [
     "charge_imbalance",
     "base_addition_bounds",
     "base_addition_for_pH",
+    # Saponification (#197)
+    "INDUSTRIAL_DEGREE_RANGE",
+    "SaponifiedParams",
+    "SaponifiedSection",
+    "saponification_log_K",
+    "organic_buffer_pH",
+    "organic_buffer_capacity",
+    "saponification_degree_profile",
+    "saponification_degree_for_pH",
+    "divalent_counter_ion_template",
+    "ph_profile_flatness",
 ]

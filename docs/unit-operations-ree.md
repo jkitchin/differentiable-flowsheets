@@ -635,25 +635,28 @@ needs its own network row with the charge, and for a solvating or
 anion-exchange complex the stoichiometry, corrected.
 ```
 
-#### How #197 (saponification) slots in
+#### How #197 (saponification) slotted in
 
-The counter-ion `M+` is already a conserved component in **every** shipped
-network, even though nothing forms from it yet. Saponification adds exactly one
-species row and no code:
+The counter-ion `M+` is a conserved component in **every** shipped network even
+when nothing forms from it. Saponification (#197) was therefore exactly one
+species row and no change to `mass_action.py`:
 
 ```yaml
 - name: "M(HA2)"
   phase: organic
   charge: 0
   stoichiometry: {"M+": 1, "(HA)2": 1, "H+": -1}
-  log10_K: <saponification constant>
+  log10_K: -2.2688
 ```
 
-With that row present, sodium partitions between the phases, the saponification
-degree becomes an *output* of the same component balances, and base addition is
-an input through the M and H totals. `tests/ree/test_mass_action.py` exercises
-exactly this: it adds the row and solves a section through the unchanged
-`solve_section`.
+With that row present, sodium partitions between the phases and the
+saponification degree becomes an *output* of the same component balances. It
+ships as a separate network, `cation_exchange_dimer_saponified`, rather than as
+an extra row on `cation_exchange_dimer`, so that the unsaponified network keeps
+meaning unsaponified proton exchange: it is the `S = 0` reference the
+saponification tests compare against, and a feed carrying sodium as a spectator
+salt must not start neutralizing the organic merely because sodium is present.
+See [Saponified extractants](#saponification) below.
 
 ### Unknowns, equations and how they are solved
 
@@ -867,6 +870,290 @@ correlations use, see #194), third-phase formation, and any temperature
 dependence of `log10 K` beyond what the calibration point carries. Each of those
 is a row in `reaction_networks.yaml` away, which is the point of carrying the
 network as data.
+
+---
+
+(saponification)=
+## Saponified Extractants and the Counter-Ion Balance (#197)
+
+Industrial rare-earth circuits do not run on free acidic extractant, and they
+do not dose base into every mixer -- that causes local pH excursions which
+precipitate hydroxides and stabilize emulsions. They neutralize 30 to 50% of
+the extractant *before* it enters the cascade,
+
+```
+HA_org + NaOH  ->  NaA_org + H2O
+```
+
+so extraction becomes a counter-ion exchange rather than a proton exchange:
+
+```
+RE3+ + 3 NaA_org  <->  RE(A)3_org + 3 Na+
+```
+
+### Why it changes the answer, not just the bookkeeping
+
+A model without saponification predicts a **pH collapse down the extraction
+section that a real plant does not have**. Every trivalent ion extracted
+releases three protons into an aqueous phase with nothing to absorb them, so
+the model under-predicts loading, over-predicts the stage count required, and
+mis-ranks extractants -- while looking entirely plausible, because every stage
+is internally consistent. It is the most likely way for a closed model to be
+wrong and still pass inspection.
+
+Here is the measurement, from `tests/ree/test_saponification.py`. Both sections
+get the **same** feed, the same solvent inventory and the same number of base
+equivalents; the only difference is where the base is.
+
+| 8-stage section, D2EHPA, Nd + Dy | pH profile peak-to-peak | Nd + Dy extracted |
+|---|---|---|
+| base dosed into the aqueous feed | **0.77 pH units** | 0.0287 mol/s |
+| same base pre-neutralized onto the organic | **0.26 pH units** | 0.0227 mol/s |
+
+A factor of **2.9** flatter, and 2.3 after normalizing the excursion by the
+rare earth actually moved (which is what releases the protons). The advantage
+*grows* with the cascade: 2.6 at four stages, 2.9 at eight, 3.1 at twelve --
+because the buffer spans every stage, so the longer the cascade the more of it
+there is to spend. With no base anywhere at all -- the only thing `difflow_ree`
+could express before #197 -- the same feed extracts **more than twenty times
+less** Nd.
+
+### The organic is the buffer
+
+This is the mechanism, and it is why the acid-base equilibrium of the organic
+is not optional. `(HA)2` and its counter-ion salt `M(HA2)` are a conjugate acid
+/ base pair whose proton lives in the *aqueous* phase:
+
+$$[\overline{\mathrm{M(HA_2)}}] = K\,\frac{[\mathrm{M}^+]\,[\overline{\mathrm{(HA)_2}}]}{[\mathrm{H}^+]}
+\qquad\Longrightarrow\qquad
+\mathrm{pH} = \mathrm{p}K + \log_{10}\frac{S}{1-S} - \log_{10}[\mathrm{M}^+]$$
+
+with `S` the saponification degree. That is Henderson-Hasselbalch for the
+organic phase (`organic_buffer_pH`), and its Van Slyke capacity
+
+$$\beta = \ln(10)\,E_T\,S\,(1-S)$$
+
+(`organic_buffer_capacity`, maximal at half neutralization) is what the
+released protons are spent against. Perturbing the feed acid by 0.005 mol/s
+shows it directly: **more than a third of the added acid is absorbed by the
+organic**, released as counter-ion instead of appearing as free protons. An
+unsaponified network cannot do that at all -- it has no conjugate base, so its
+counter-ion release is identically zero.
+
+```{note}
+A free organic `A-` is deliberately **not** a species. A bare anion is not
+stable in a low-dielectric diluent; it is always paired with its counter-ion,
+and pairing it is exactly what `M(HA2)` is. So the `HA`/`A-` equilibrium is
+present, in the only form in which it is physical, as one row of the tableau.
+```
+
+### The section
+
+`SaponifiedSection` is a `MassActionSection` on the saponified network. It
+overrides exactly two things, and nothing in `mass_action.py` changed:
+
+1. the **solvent** contributes a counter-ion salt species, so a saponified
+   solvent brings counter-ion in and, through the tableau, a *negative* proton
+   component -- the protons the base removed. It enters at the solvent end of
+   the cascade, which is not the same as dosing the equivalent base into the
+   aqueous feed at the other end;
+2. the **extract** carries the counter-ion still bound to the organic when it
+   leaves, so the counter-ion is conserved across the unit's own interface and
+   not merely inside the solver.
+
+```python
+from difflow_ree.equilibrium import SaponifiedParams, SaponifiedSection
+
+section = SaponifiedSection(SaponifiedParams(
+    n_stages=8, extractant="D2EHPA", elements=("Nd", "Dy"),
+    aqueous_volumetric_flow=1.0, organic_volumetric_flow=1.0,
+    extractant_conc=0.5, saponification_degree=0.35, counter_ion="Na",
+))
+
+feed    = section.schema.make_aqueous({"Nd": 0.02, "Dy": 0.02},
+                                      acid=0.005, water=55.0)
+solvent = section.schema.saponified_organic(
+    0.5, 0.35, monomers_per_component=2.0, diluent_flow=4.0,
+)
+
+raffinate, extract, info = section(feed, solvent)
+info["pH_profile"]                      # flat, and an OUTPUT
+info["saponification_degree_profile"]   # also an OUTPUT: the organic re-equilibrates
+info["counter_ion_released"]            # the reagent duty and the effluent load
+info["pH_flatness"]                     # peak-to-peak span, in pH units
+```
+
+`S = 0` reproduces the unsaponified proton-exchange result **bit for bit**, so
+the saponified network is a strict generalization rather than a different
+model.
+
+### Saponification degree is the manipulated variable
+
+Along with phase ratio per section and scrub/strip acid strength, the degree is
+what an operator actually adjusts. A control or RTO layer whose inputs are
+stage pH setpoints is modelling a plant that does not exist. So the degree is a
+real handle:
+
+- it travels on the **stream**, written by `schema.saponified_organic` or by a
+  `Saponifier`, so it can be a tracer -- `jit`, `grad` and `check_grads` all go
+  through the section and the implicit solve;
+- `saponification_degree_for_pH(section, feed, solvent, target_pH)` inverts the
+  section for the degree that hits a pH specification, posed as one more row of
+  the same root find (the organic-side twin of `base_addition_for_pH`), so the
+  derivative comes out of one implicit differentiation.
+
+```python
+from difflow_ree.equilibrium import saponification_degree_for_pH
+
+degree, ok = saponification_degree_for_pH(section, feed, solvent, target_pH=3.2)
+```
+
+### The Saponifier
+
+A degree stated as a parameter is an assumption; a saponifier is a *duty*.
+Putting the contactor on the flowsheet is what makes the reagent bill and the
+effluent load fall out of the same balance the cascade already solves.
+
+```python
+from difflow_ree.units import Saponifier, SaponifierParams
+
+unit = Saponifier(SaponifierParams(
+    extractant="D2EHPA", saponification_degree=0.35,
+    counter_ion="Na",          # "Na", "NH4", "Mg", "K"
+    base=None,                 # None -> the default base for the counter-ion
+    base_utilization=0.9,      # base that does not reach the organic
+))
+
+organic = unit.schema.make_organic(0.5, diluent_flow=4.0)
+solvent, spent, info = unit(organic)
+
+info["base_flow"], info["base_mass_flow"]   # mol/s and kg/s of reagent
+info["saponification_degree"]               # achieved, an output
+info["counter_ion_imbalance"]               # zero to round-off, by construction
+```
+
+The contact is *stoichiometric*, not an equilibrium: a strong base against an
+extractant of pKa 3-6 goes essentially to completion, and a plant sizes the
+saponifier so that it does. All the equilibrium physics stays in the section,
+where the organic re-equilibrates and the degree becomes an output again. The
+unit does model the two things a plant actually gets wrong -- base that does
+not reach the organic, and a recycled solvent that still carries counter-ion,
+which is a credit against fresh base -- and it neutralizes no further than the
+extractant inventory allows.
+
+### kg base per kg REO
+
+The counter-ion balance that makes the cascade correct is the equation that
+predicts the raffinate load, so the reagent and environmental metric costs no
+extra machinery. `network.base_equivalents_per_mole_ree` reads **three
+equivalents per mole of rare earth** off the tableau -- through the extractant
+column, so it is an independent check on the proton column, and it gives 3 for
+a divalent counter-ion too. The solved section satisfies the exact identity
+
+```
+dT_H(aqueous) + z * dT_M(aqueous) = 3 * (rare earth extracted)
+```
+
+to round-off: every extracted trivalent ion occupies three extractant
+equivalents and gives back either a proton or a counter-ion.
+
+```python
+from difflow_ree.economics import saponification_duty, compare_counter_ions
+
+duty = saponification_duty(
+    info["base_flow"],
+    {"Nd": extract["F_Nd"], "Dy": extract["F_Dy"]},
+    base="NaOH",
+    equivalents_per_mole_ree=section.network.base_equivalents_per_mole_ree,
+)
+print(duty.report())
+```
+
+The stoichiometric floor, for Nd (Nd2O3 is 336.48 g/mol for two Nd, i.e.
+168.24 g REO per mol Nd):
+
+| Base | kg base / kg REO | kg N / kg REO | kg salt / kg REO (chloride) |
+|---|---|---|---|
+| NaOH | 3 x 39.997 / 168.24 = **0.7132** | 0 | 1.042 (NaCl) |
+| NH3 | 3 x 17.031 / 168.24 = **0.3037** | **0.2498** | 0.954 (NH4Cl) |
+| Mg(OH)2 | 1.5 x 58.320 / 168.24 = **0.5200** | 0 | 0.849 (MgCl2) |
+
+`compare_counter_ions` computes that table. It is the comparison the whole
+feature exists to make possible: **ammonia saponification is the origin of the
+ammonium-nitrogen effluent that is the industry's signature pollution problem,
+and sodium trades it for a saline raffinate.** Neither number existed before
+#197, because there was no counter-ion anywhere in the extraction path.
+Nothing here prices the effluent -- an ammonium-nitrogen discharge limit is a
+regulatory fact, not a correlation -- so the loads are reported and the
+valuation is left to the caller. `REO` is not always `RE2O3`: the oxide mass is
+taken from the element record's own formula, so `CeO2`, `Pr6O11` and `Tb4O7`
+are handled correctly.
+
+### The extractant record
+
+```yaml
+D2EHPA:
+  ...
+  saponification:
+    counter_ion: Na           # H | Na | NH4 | Mg
+    degree: 0.35              # an operating DEFAULT, not a property
+    log10_K: null             # calibrated from the degree; see below
+    reference_pH: 3.0
+    reference_counter_ion: 0.1   # M
+```
+
+`Extractant` carries `counter_ion`, `saponification_degree` and
+`saponification_log10_K`; `create_custom_extractant` takes all three. The
+record rejects a degree outside `[0, 1]`, a degree with no counter-ion, a
+degree with `counter_ion: H` (which means un-neutralized proton exchange), and
+a degree on an extractant that releases no protons.
+
+### Where the constant comes from
+
+Nowhere measurable in this repository, and it is worth being blunt about that.
+`saponification_log_K` inverts
+
+$$K = \frac{S}{1-S}\,\frac{[\mathrm{H}^+]}{[\mathrm{M}^+]}$$
+
+at a *stated* reference degree and condition, so the constant is a restatement
+of a declared operating point rather than a number from a paper -- the same
+discipline `log_K_from_correlation` follows for the extraction constants. The
+YAML default, `log10 K = -2.2688`, is `S = 0.35` at pH 3.0 with 0.1 M
+counter-ion, and `SaponifiedSection` recalibrates it from the extractant
+record's own reference block. Supply a measured constant for design numbers.
+
+### A divalent counter-ion is a different tableau
+
+Magnesia saponification is real, and it is a *different network* for exactly
+the reason a divalent anion is: the counter-ion component carries charge +2,
+the salt neutralizes two extractant equivalents and releases two protons, so
+the row is `M(HA2)2`, not `M(HA2)`. `divalent_counter_ion_template` derives it
+from the shipped monovalent template, so the stoichiometry has one source and
+the two cannot drift apart; `SaponifiedSection` builds it automatically for
+`counter_ion="Mg"` and checks the schema's charge against the network's rather
+than trusting either.
+
+### Validation
+
+| Claim | Measured |
+|---|---|
+| Counter-ion conserved across a section | Aqueous plus organic, in equals out to **machine precision**, for Na, NH4 and Mg |
+| Saponified cascade holds a flatter pH profile | **0.26 against 0.77** pH units peak-to-peak on the same reagent, a factor of 2.9; 2.3 after normalizing by the rare earth moved; the advantage grows with the stage count |
+| `S = 0` reproduces proton exchange | **Bit for bit**: pH profile identical to `1e-16`, raffinate and extract flows to `1e-12` relative |
+| Three equivalents of base per mole of rare earth | Read off the tableau through the extractant column (3.0 for monovalent *and* divalent), and `dT_H + z dT_M = 3 dRE` on the solved section to **`1e-10` relative** |
+| kg base per kg REO | Cross-checked against the hand calculation to `5e-5` absolute for NaOH, NH3 and Mg(OH)2 |
+| The organic buffers | More than **a third** of an aqueous acid perturbation is absorbed by the organic; the buffered section's pH moves less than two thirds as far |
+| `Saponifier` conservation | Counter-ion imbalance below `1e-18` at any utilization or overdose |
+| Gradients | `grad` matches central differences to `1e-4` relative through the implicit solve; `check_grads` passes; `jit` works |
+
+### What is deliberately not modelled
+
+Hydroxide as a species (so the saponifier contact is stoichiometric rather than
+an equilibrium), extractant loss to the aqueous phase, third-phase formation --
+which a high saponification degree genuinely does cause -- water transfer into
+the organic with the counter-ion, and any treatment cost for the effluent
+loads. The counter-ion is also taken as a spectator in the aqueous phase: no
+sodium complexation with the medium anion.
 
 ---
 
