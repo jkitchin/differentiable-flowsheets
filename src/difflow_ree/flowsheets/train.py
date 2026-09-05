@@ -565,7 +565,25 @@ class SeparationTrain:
                 outlet_names=[f"{name}.{p.name}" for p in module.ports.outlets],
             ))
 
+        # Flowsheet.add_recycle keys its recycles by source, so two tears
+        # sharing one outlet would collapse to one: the second call overwrites
+        # the first, the dropped tear keeps whatever default_tear_streams
+        # seeded it with, and solve() still reports convergence because the
+        # equation it should have closed is not in the residual at all.
+        # Silently converging on an unsolved tear is exactly what this module
+        # exists to prevent, so refuse it rather than let it pass (#202).
+        seen: dict[str, str] = {}
         for conn in self.tear_connections:
+            previous = seen.get(conn.source)
+            if previous is not None:
+                raise TopologyError(
+                    f"tear source {conn.source!r} feeds both {previous!r} and "
+                    f"{conn.dest!r}. Flowsheet.add_recycle keys recycles by "
+                    "source, so one of the two tears would be dropped and its "
+                    "destination never solved, while the train still reported "
+                    "convergence. Split the outlet before tearing it."
+                )
+            seen[conn.source] = conn.dest
             fs.add_recycle(conn.source, _tear_name(conn.dest))
         return fs
 

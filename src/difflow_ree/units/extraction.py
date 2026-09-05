@@ -794,18 +794,38 @@ class REEExtractor:
         # extractant balance never binds more extractant than was fed.
         capacity_info = {}
         if self._isotherm is not None:
-            total_newly_extracted = sum(
-                extract_flows[elem] - jnp.asarray(solvent_flows.get(elem, 0.0))
-                for elem in p.elements
+            # Saturate the TOTAL organic loading, not the increment. Scaling
+            # only what this section newly extracted and then adding the REE
+            # already on the entering solvent back on top left the total
+            # unbounded: with a loaded solvent, theta_total reached 2.18 while
+            # capacity_scale still read 0.78, i.e. the limiter looked as though
+            # it were binding while the organic carried 2.18x the extractant
+            # inventory. An open circuit always fed REE-free solvent so this
+            # never showed; the closed organic loop of #202 recycles loaded
+            # solvent, which is exactly the case it got wrong.
+            #
+            # Excess entering load is rejected to the aqueous, which is what a
+            # saturated extractant physically does -- it cannot hold more --
+            # and it is what drives a closed loop to a physical fixed point.
+            # With REE-free solvent every F_solvent_elem is zero and this
+            # reduces to the previous expression exactly.
+            total_in_organic = sum(
+                jnp.maximum(extract_flows[elem], 0.0) for elem in p.elements
             )
-            total_newly_extracted = jnp.maximum(total_newly_extracted, 0.0)
             max_capacity = F_extractant / self._isotherm.m
             k = k_sharp
-            scale = _soft_saturation(total_newly_extracted, max_capacity, k)
+            scale = _soft_saturation(total_in_organic, max_capacity, k)
+            total_newly_extracted = jnp.maximum(
+                sum(
+                    extract_flows[elem]
+                    - jnp.asarray(solvent_flows.get(elem, 0.0))
+                    for elem in p.elements
+                ),
+                0.0,
+            )
             for elem in p.elements:
                 F_solvent_elem = jnp.asarray(solvent_flows.get(elem, 0.0))
-                newly_extracted = extract_flows[elem] - F_solvent_elem
-                extract_flows[elem] = F_solvent_elem + newly_extracted * scale
+                extract_flows[elem] = jnp.maximum(extract_flows[elem], 0.0) * scale
                 raffinate_flows[elem] = (
                     jnp.asarray(feed_flows.get(elem, 0.0))
                     + F_solvent_elem

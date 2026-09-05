@@ -907,3 +907,40 @@ def test_have_reports_installed_backends():
 
     assert _lazy.have("json") is True
     assert _lazy.have("difflow_no_such_module") is False
+
+
+def test_unpack_reports_feed_decisions_at_their_optimized_values():
+    """#207 review: `Bounds.feeds` is frozen at the reference flowsheet.
+
+    A decision addressed `feed:<stream>.<key>` is written into the rebuilt
+    flowsheet, so the objective, constraints and residuals all see the moved
+    value -- but `unpack` merged the *stale* reference feeds into the streams
+    dict it returns. `FlowsheetOptimum.streams` therefore reported a converged
+    solution whose feed conditions were not the ones that produced it, and
+    reading a feed decision back off the streams gave its starting value with
+    no indication anything was wrong.
+    """
+    feed_T_start, feed_T_moved = 350.0, 377.0
+    f, g, bd = as_nlp(
+        make_flowsheet(feed_T_start),
+        [
+            Decision("unit:reactor.params.V", lb=0.01, ub=5.0, x0=0.5),
+            Decision("feed:feed.T", lb=300.0, ub=420.0, x0=feed_T_start),
+        ],
+        [("product.F_B", ">=", 8.0)],
+        objective=lambda streams, dvals: dvals["unit:reactor.params.V"],
+    )
+
+    # Move the feed-temperature decision away from its start.
+    i = bd.var_names.index("feed:feed.T")
+    x = np.array(bd.x0, dtype=float)
+    x[i] = feed_T_moved
+
+    dvals, streams = bd.unpack(jnp.asarray(x))
+    assert float(dvals["feed:feed.T"]) == pytest.approx(feed_T_moved)
+    assert float(streams["feed"]["T"]) == pytest.approx(feed_T_moved), (
+        "unpack reported the feed at its reference value, not the optimized one"
+    )
+    # The un-moved decision is untouched, and non-feed streams still come from
+    # the layout rather than being overwritten.
+    assert float(dvals["unit:reactor.params.V"]) == pytest.approx(bd.x0[0])

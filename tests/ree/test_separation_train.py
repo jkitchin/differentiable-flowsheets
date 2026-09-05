@@ -489,9 +489,17 @@ def test_imperfect_stripping_degrades_raffinate_purity():
     assert closed_impurity > 5.0 * open_impurity
 
     # Pinned so a change of mechanism cannot pass unnoticed.
+    #
+    # The closed-loop figures moved from 0.94137 / 6.37 when the extractor's
+    # capacity limiter was corrected to saturate the *total* organic loading
+    # rather than only the increment (#207 review): the recycled solvent enters
+    # loaded, and bounding it properly leaks slightly more Dy. The open-loop
+    # value is unchanged to every digit, because a REE-free solvent makes the
+    # corrected expression identical to the previous one -- which is the
+    # cleanest evidence that the correction touches only the loaded case.
     assert open_purity == pytest.approx(0.99032, abs=2e-4)
-    assert closed_purity == pytest.approx(0.94137, abs=2e-4)
-    assert closed_impurity / open_impurity == pytest.approx(6.37, rel=0.02)
+    assert closed_purity == pytest.approx(0.93952, abs=2e-4)
+    assert closed_impurity / open_impurity == pytest.approx(6.59, rel=0.02)
 
 
 def test_the_degradation_comes_from_the_residue_not_from_the_loop():
@@ -832,3 +840,151 @@ def test_jit_and_grad_through_a_closed_loop_train_are_finite():
     assert eager == pytest.approx(
         _flow(reported.stream("sep.raffinate"), "Dy"), rel=1e-8
     )
+
+
+# =====================================================================
+# Review findings on PR #207 -- each fix pinned so it cannot regress
+# =====================================================================
+
+class TestReviewFindings207:
+    """Mass-balance and topology defects found reviewing #202, and the
+    pre-existing extractor capacity defect the closed loop newly exposed.
+
+    Each of these was measured on the branch before it was fixed; the
+    numbers in the docstrings are what the broken code actually produced.
+    """
+
+    def test_split_shell_does_not_replicate_the_organic_carrier(self):
+        """Each organic side-draw got the *whole* inlet carrier, so a module
+        fed 2.0 mol/s of D2EHPA emitted 6.0 across three product ports --
+        3x the extractant inventory created from nothing, compounding every
+        pass around a closed loop.
+        """
+        from difflow_ree.flowsheets.modules import SplitShellModule
+        from difflow_ree.flowsheets.split_shell import SplitShellParams
+
+        mod = SplitShellModule("shell", SplitShellParams(
+            extractant="D2EHPA", elements=("La", "Nd", "Dy"),
+            n_stages=12, split_points=(4, 8)))
+        solvent_in = {"D2EHPA": 2.0, "kerosene": 18.0}
+        out = mod(
+            make_stream({"H2O": 100.0, "La": 1.0, "Nd": 1.0, "Dy": 1.0},
+                        298.15, 101325.0),
+            make_stream(solvent_in, 298.15, 101325.0),
+        )
+        n_organic_ports = len(out) - 2
+        assert n_organic_ports == 3, "test needs more than one organic draw"
+
+        totals: dict[str, float] = {}
+        for stream in out[:-1]:
+            for key, value in get_flows(stream).items():
+                totals[key] = totals.get(key, 0.0) + float(value)
+        for carrier, fed in solvent_in.items():
+            assert totals[carrier] == pytest.approx(fed, rel=1e-12), (
+                f"{carrier} not conserved across the side-draws"
+            )
+
+    def test_regeneration_bleed_partitions_the_inlet(self):
+        """`kept + bled` exceeded the inlet by b*(1-eta)*v, manufacturing
+        0.2% of the loop's REE inventory per pass at b=0.02, eta=0.9 -- a
+        slow drift the tear solve converges to happily. The bleed must also
+        equal what the module reports as removed.
+        """
+        from difflow_ree.flowsheets.modules import (
+            SaponificationModule, SolventRegenerationParams,
+        )
+        from difflow_ree.units.saponification import SaponifierParams
+
+        b, eta = 0.02, 0.9
+        mod = SaponificationModule(
+            "sap",
+            SaponifierParams(extractant="D2EHPA", elements=("La", "Nd")),
+            regeneration=SolventRegenerationParams(
+                bleed_fraction=b, regeneration_efficiency=eta),
+        )
+        organic = make_stream(
+            {"D2EHPA": 2.0, "kerosene": 18.0, "La": 0.5, "Nd": 0.5},
+            298.15, 101325.0)
+        out, _spent, bleed, info = mod(organic)
+
+        f_in, f_out, f_bleed = (
+            get_flows(organic), get_flows(out), get_flows(bleed))
+        for elem in ("La", "Nd"):
+            total_out = float(f_out.get(elem, 0.0)) + float(f_bleed.get(elem, 0.0))
+            assert total_out == pytest.approx(float(f_in[elem]), rel=1e-12), (
+                f"{elem} is created or destroyed by the bleed"
+            )
+        # ...and the reported removal is the amount that actually leaves.
+        leaving = sum(float(f_bleed.get(e, 0.0)) for e in ("La", "Nd"))
+        assert leaving == pytest.approx(
+            float(info["ree_removed_by_regeneration"]), rel=1e-12)
+
+    def test_two_tears_sharing_one_source_are_refused(self):
+        """`Flowsheet.add_recycle` keys recycles by source, so a second tear
+        from the same outlet silently overwrote the first: the dropped tear
+        kept its seed value, was never iterated, and `solve` still reported
+        convergence. Refused rather than converging on an unsolved tear.
+        """
+        from difflow_ree.flowsheets.train import SeparationTrain, TopologyError
+
+        a = _ess_module("a")
+        b = _ess_module("b")
+        train = SeparationTrain("shared_tear")
+        # b is added first, so the DFS opens b, descends into a, and both of
+        # a's organic edges below close back onto an open node -- two genuine
+        # tears sharing one source, which is the case the guard exists for.
+        train.add_module(b)
+        train.add_module(a)
+        train.add_feed("leach", _feed(), "b.feed")
+        train.connect("b.raffinate", "a.feed")
+        # One outlet torn into two inlets: add_recycle keys recycles by source,
+        # so the second would overwrite the first and its tear go unsolved
+        # while solve() still reported convergence.
+        train.connect("a.barren_organic", "a.solvent")
+        train.connect("a.barren_organic", "b.solvent")
+        with pytest.raises(TopologyError, match=r"feeds both"):
+            train.to_flowsheet()
+
+
+def test_capacity_bounds_total_organic_loading_not_just_the_increment():
+    """Pre-existing in the extractor, newly exposed by the closed loop.
+
+    The limiter scaled only what the section newly extracted and then added
+    the REE already on the entering solvent back on top, so with a loaded
+    solvent theta_total reached 2.18 while capacity_scale still read 0.78 --
+    the limiter appearing to bind while the organic carried 2.18x the
+    extractant inventory. An open circuit always fed REE-free solvent, so it
+    never showed.
+    """
+    from difflow_ree.units.extraction import REEExtractor, REEExtractorParams
+    from difflow_ree.database import get_extractant
+
+    m = get_extractant("D2EHPA").monomers_per_ree
+    extractor = REEExtractor(REEExtractorParams(
+        n_stages=5, extractant="D2EHPA", elements=("Nd", "Dy"), pH=3.0))
+    feed = make_stream({"H2O": 10.0, "Nd": 0.3, "Dy": 0.3}, 298.15, 101325.0)
+    capacity = 1.0 / m
+
+    loaded = make_stream(
+        {"D2EHPA": 1.0, "kerosene": 5.0, "Nd": 0.10, "Dy": 0.10},
+        298.15, 101325.0)
+    raffinate, extract, info = extractor(feed, loaded)
+
+    organic_ree = sum(float(get_flows(extract)[e]) for e in ("Nd", "Dy"))
+    assert organic_ree <= capacity + 1e-12, (
+        f"organic carries {organic_ree / capacity:.2f}x the extractant capacity"
+    )
+    assert float(info["theta_total"]) <= 1.0 + 1e-9
+
+    # Mass balance survives the rejection of the excess to the aqueous.
+    f_feed, f_solv = get_flows(feed), get_flows(loaded)
+    f_raff, f_ext = get_flows(raffinate), get_flows(extract)
+    for elem in ("Nd", "Dy"):
+        assert float(f_raff[elem]) + float(f_ext[elem]) == pytest.approx(
+            float(f_feed[elem]) + float(f_solv.get(elem, 0.0)), rel=1e-12)
+
+    # With REE-free solvent the corrected expression is the previous one.
+    fresh = make_stream({"D2EHPA": 1.0, "kerosene": 5.0}, 298.15, 101325.0)
+    fresh_organic = sum(
+        float(get_flows(extractor(feed, fresh)[1])[e]) for e in ("Nd", "Dy"))
+    assert fresh_organic <= capacity + 1e-12

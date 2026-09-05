@@ -319,6 +319,9 @@ class Bounds:
         n_decisions: Length of the decision block at the head of ``x``.
         layout: The :class:`~difflow.eo_solver.EOStateLayout` for the stream
             block, so ``x[n_decisions:]`` can be unpacked into streams.
+        feeds: The reference flowsheet's feed streams.
+        feed_decisions: ``(index, feed, key)`` for each ``feed:``-addressed
+            decision, used by :meth:`unpack` to report moved feeds correctly.
     """
 
     lb: Array
@@ -334,6 +337,10 @@ class Bounds:
     n_decisions: int
     layout: EOStateLayout
     feeds: dict[str, Stream] = field(default_factory=dict)
+    # (decision index, feed name, stream key) for every feed-addressed decision,
+    # so unpack can overlay the optimizer's values onto the reference feeds
+    # instead of reporting them at their starting values (#207 review).
+    feed_decisions: tuple[tuple[int, str, str], ...] = ()
 
     @property
     def n(self) -> int:
@@ -357,7 +364,15 @@ class Bounds:
         """
         x = jnp.asarray(x)
         dvals = {nm: x[i] for i, nm in enumerate(self.var_names[: self.n_decisions])}
-        streams = dict(self.feeds)
+        # `feeds` is frozen at the reference flowsheet, but a decision may be
+        # addressed as `feed:<stream>.<key>`. Overlay those here, or a feed the
+        # optimizer moved is reported at its starting value while the objective
+        # and residuals -- which see the rebuilt flowsheet -- used the new one
+        # (#207 review).
+        streams = {name: dict(stream) for name, stream in self.feeds.items()}
+        for i, owner, attr in self.feed_decisions:
+            if owner in streams:
+                streams[owner][attr] = x[i]
         streams.update(self.layout.unpack(x[self.n_decisions:]))
         return dvals, streams
 
@@ -713,6 +728,26 @@ def _coerce_decisions(decisions: Iterable) -> list[Decision]:
     return out
 
 
+def _feed_decisions(decisions) -> tuple[tuple[int, str, str], ...]:
+    """Locate the ``feed:``-addressed decisions within the decision block.
+
+    Args:
+        decisions: The :class:`Decision` sequence, in variable order.
+
+    Returns:
+        ``(index, feed_name, stream_key)`` for each feed-addressed decision.
+    """
+    out = []
+    for i, d in enumerate(decisions):
+        address = getattr(d, "address", None) or d.name
+        if not address.startswith("feed:"):
+            continue
+        kind, owner, attr = _split_address(address)
+        if kind == "feed":
+            out.append((i, owner, attr))
+    return tuple(out)
+
+
 def _var_names(decisions, layout) -> list[str]:
     names = [d.name for d in decisions]
     for s in layout.stream_names:
@@ -1051,5 +1086,6 @@ def as_nlp(
         n_decisions=n_d,
         layout=layout,
         feeds=dict(ref_fs.feeds),
+        feed_decisions=_feed_decisions(decisions),
     )
     return f, g, bounds

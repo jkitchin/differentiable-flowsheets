@@ -671,9 +671,35 @@ class SplitShellModule(REEModule):
                 solvent_flows.get(p.diluent, 0.0), dtype=jnp.float64),
         }
 
+        # Split the organic carrier across the side-draws rather than giving
+        # each the whole inlet flow: copying it per port emitted n_products
+        # copies of the extractant and diluent inventory from a module fed one,
+        # which compounds every pass around the closed loop of #202.
+        #
+        # The split is pro-rata on each draw's rare-earth flow, since a larger
+        # side-draw carries proportionally more loaded organic, falling back to
+        # an equal split when no draw carries any. The invariant either way is
+        # that the carrier leaving equals the carrier entering.
+        product_ports = self.ports.outlets[:-1]
+        draw_totals = [
+            sum(
+                (jnp.asarray(v, dtype=jnp.float64)
+                 for v in result["products"][port.name]["flows"].values()),
+                jnp.asarray(0.0, dtype=jnp.float64),
+            )
+            for port in product_ports
+        ]
+        grand = sum(draw_totals, jnp.asarray(0.0, dtype=jnp.float64))
+        equal = jnp.asarray(1.0 / len(product_ports), dtype=jnp.float64)
+        carrier_fracs = [
+            jnp.where(grand > 0.0, total / jnp.where(grand > 0.0, grand, 1.0),
+                      equal)
+            for total in draw_totals
+        ]
+
         streams = []
-        for port in self.ports.outlets[:-1]:
-            flows = dict(carrier)
+        for port, frac in zip(product_ports, carrier_fracs):
+            flows = {k: v * frac for k, v in carrier.items()}
             flows.update({
                 e: jnp.asarray(v, dtype=jnp.float64)
                 for e, v in result["products"][port.name]["flows"].items()
@@ -1071,8 +1097,15 @@ class SaponificationModule(REEModule):
                 kept[key] = value
                 bled[key] = b * value
             else:
+                # REE, unlike the carrier above, is not made up: what leaves is
+                # only what the regeneration wash actually removed, b*eta*v.
+                # The rest of the bled slipstream, (1-eta)*b*v, returns to the
+                # loop, which is why `kept` is (1 - b*eta)*v. Using b*v here
+                # instead made kept + bled exceed the inlet by b*(1-eta)*v, so
+                # the closed organic loop manufactured REE every pass and the
+                # tear solve converged happily to the inflated fixed point.
                 kept[key] = (1.0 - b * eta) * value
-                bled[key] = b * value
+                bled[key] = b * eta * value
         for elem in elements:
             kept.setdefault(elem, jnp.asarray(0.0, dtype=jnp.float64))
             bled.setdefault(elem, jnp.asarray(0.0, dtype=jnp.float64))
