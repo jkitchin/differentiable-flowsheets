@@ -25,6 +25,11 @@
 | [Technoeconomics](technoeconomics.md) | Capital costs, operating costs, profitability analysis |
 | [Streams and Flowsheets](streams-and-flowsheets.md) | Stream handling, flowsheet solver, recycle calculations |
 | [Dynamic Modeling](dynamic-modeling.md) | Transient simulation, ODE/DAE integration, diffrax backend |
+| [Moving-Horizon Estimation](moving-horizon-estimation.md) | Constrained MHE over dynamic flowsheets, EKF baseline, delayed and multi-rate data, joint parameter estimation |
+| [Operability Screening](operability.md) | Steady-state controllability from AD gains: RGA, singular values, disturbance rejection |
+| [Flexibility Analysis](flexibility.md) | Feasibility function, flexibility index, and the feed-vs-parameter uncertainty split |
+| [Experiment Design and Identifiability](experiment-design.md) | Fisher-information D/A/E-optimal run selection, predicted confidence intervals, structural identifiability |
+| [External Solvers](external-solvers.md) | Bridging flowsheets to pounce (NLP, post-optimal sensitivity) and discopt (implicit residual blocks) |
 | [Solvers and Utilities](solvers-and-utilities.md) | Numerical methods, uncertainty propagation |
 | [Data Reconciliation](data-reconciliation.md) | Constrained least squares on noisy plant data, gross error detection, observability |
 | [Delta-Base Planning](planning.md) | AD-generated delta vectors, trust-region LP/MILP planning, sensitivity of the plan |

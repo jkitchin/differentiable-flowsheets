@@ -199,7 +199,12 @@ from difflow.report import (
     to_latex,
     to_markdown,
 )
-from difflow.eo_solver import EOSolver, EOSolveResult, EOStateLayout
+from difflow.eo_solver import (
+    EOSolver,
+    EOSolveResult,
+    EOStateLayout,
+    solve_residual_system,
+)
 from difflow.initialization import (
     AndersonAccelerator,
     wegstein_acceleration,
@@ -232,6 +237,18 @@ from difflow import reconciliation
 
 # Delta-base planning submodule
 from difflow import planning
+
+# Moving-horizon estimation submodule (#201)
+from difflow import mhe
+
+# Steady-state operability screening submodule (#199)
+from difflow import operability
+
+# Flexibility analysis submodule (#198)
+from difflow import flexibility
+
+# External solver bridges: pounce / discopt (#203)
+from difflow import solvers
 
 # Declarative kinetics
 from difflow.kinetics import (
@@ -476,6 +493,7 @@ __all__ = [
     "EOSolver",
     "EOSolveResult",
     "EOStateLayout",
+    "solve_residual_system",
     # Initialization & Acceleration
     "AndersonAccelerator",
     "wegstein_acceleration",
@@ -501,6 +519,14 @@ __all__ = [
     "reconciliation",
     # Delta-base planning
     "planning",
+    # Moving-horizon estimation
+    "mhe",
+    # Operability screening
+    "operability",
+    # Flexibility analysis
+    "flexibility",
+    # External solver bridges
+    "solvers",
     # Declarative kinetics
     "mass_action_kinetics",
     "ReactionSet",

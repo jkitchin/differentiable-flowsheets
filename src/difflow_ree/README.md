@@ -25,6 +25,8 @@ Thermodynamic equilibrium models for solvent extraction:
 - **distribution.py**: `REEDistribution` - pH-dependent distribution coefficient models
 - **loading.py**: `LoadingIsotherm` - Organic phase loading corrections, Langmuir isotherms
 - **speciation.py**: `REESpeciation` - Aqueous speciation (sulfate, chloride complexes)
+- **network.py** / **mass_action.py**: reaction networks as data and the closed mass-action section, where pH is an output (#196)
+- **saponification.py**: `SaponifiedSection` - pre-neutralized extractant, the counter-ion balance and the organic buffer (#197)
 
 ### `units/`
 Unit operation models (all differentiable):
@@ -33,6 +35,7 @@ Unit operation models (all differentiable):
 - **stripping.py**: `REEStripper` - Product recovery from organic phase
 - **precipitation.py**: `OxalatePrecipitator`, `CarbonatePrecipitator`, `HydroxidePrecipitator` - Solid product recovery
 - **cerium.py**: `CeriumOxidizer` - Selective Ce(IV) oxidation and CeO2 precipitation
+- **saponification.py**: `Saponifier` - contact the organic with base before the cascade, tracking the reagent duty (#197)
 
 ### `flowsheets/`
 Pre-built flowsheet templates for common configurations:
@@ -44,6 +47,7 @@ Pre-built flowsheet templates for common configurations:
 ### `economics/`
 Technoeconomic analysis:
 - **costs.py**: `REEPricing`, `ReagentCosts`, `OperatingCosts`
+- **saponification.py**: kg base per kg REO, ammonium-nitrogen and dissolved-salt effluent loads, `compare_counter_ions()` (#197)
 - Functions: `estimate_capex()`, `estimate_opex()`, `calculate_revenue()`, `calculate_profit()`, `minimum_selling_price()`
 
 ### `data/`
@@ -95,6 +99,7 @@ print(f"Element recoveries: {results['element_recovery']}")
 - **Multi-element**: Handles mixtures of any REE combination
 - **pH-dependent**: Realistic extraction chemistry with pH effects
 - **Loading corrections**: Accounts for organic phase saturation
+- **Saponified extractants**: Counter-ion exchange, the organic acting as a buffer, and kg base per kg REO as an economic and environmental metric (#197)
 - **Explicit organic phase**: Extractant + diluent species keys (e.g., `"D2EHPA"` + `"kerosene"`) enable multi-organic flowsheets
 - **Pre-built flowsheets**: Common industrial configurations ready to use
 - **Economic analysis**: Revenue, profit, and minimum selling price calculations

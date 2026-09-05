@@ -12,6 +12,9 @@ The `difflow_ree` plugin provides:
 - **4 extractant systems**: D2EHPA, PC88A, Cyanex272, TBP
 - **pH-dependent distribution coefficient models**
 - **Loading and speciation corrections**
+- **A mass-action equilibrium closure** with the reaction network carried as
+  data, where pH is an output rather than a parameter -- see
+  [Mass-Action Equilibrium Closure](mass-action-closure) (#196)
 - **Unit operations**: extraction, scrubbing, stripping, precipitation
 - **Pre-built flowsheet templates**
 - **Economic analysis tools**
@@ -520,6 +523,638 @@ opt_pH, max_SF = dist.optimal_pH_for_separation("Nd", "Pr", pH_range=(1.0, 5.0))
 print(f"Optimal pH: {opt_pH:.2f}, Max SF: {max_SF:.2f}")
 ```
 
+
+---
+
+(mass-action-closure)=
+## Mass-Action Equilibrium Closure (#196)
+
+Everything above is the **correlation level (L1)**: `log10(D)` is evaluated at a
+pH you specify, and loading and speciation are multiplicative corrections. This
+section describes the **closed level (L2)**, where the stage solves conservation
+laws for its own state instead of evaluating a correlation at specified
+conditions.
+
+Three limitations follow directly from having no closure, and none can be fixed
+inside a correlation:
+
+- **pH was a parameter, not a state.** Every extracted trivalent ion releases
+  three protons, so a real cascade's pH profile is set by the extraction itself.
+  A model that specifies pH per cascade cannot predict the profile.
+- **Competitive loading was a correction rather than an outcome.** The elements
+  share one finite extractant inventory. That should emerge from a single free
+  extractant balance, not from multiplying independent `D` values by
+  `(1 - theta)^3` (see #189, #190, #191).
+- **Extractant selection was not physically grounded.** A fitted `D` cannot
+  respond to loading or medium, which is exactly where the ordering between
+  extractants actually changes.
+
+### The reaction network is data
+
+The design decision that determines whether this layer generalizes is that the
+reaction network is carried as **data**, in
+`src/difflow_ree/data/reaction_networks.yaml`. Cation exchange, saponified
+cation exchange (#197), solvating extraction and anion exchange are rows in a
+table, not four code paths.
+
+Each network declares a **component** basis (a chemically independent set whose
+totals are conserved) and the **species** formed from it, with integer
+stoichiometry, a phase and one `log10 K`:
+
+```yaml
+cation_exchange_dimer:
+  mechanism: cation_exchange
+  extractant_basis: dimer
+  components:
+    - {name: "RE3+",  phase: aqueous, charge: 3,  role: rare_earth, per_element: true}
+    - {name: "H+",    phase: aqueous, charge: 1,  role: proton}
+    - {name: "M+",    phase: aqueous, charge: 1,  role: counter_ion}
+    - {name: "X-",    phase: aqueous, charge: -1, role: anion}
+    - {name: "(HA)2", phase: organic, charge: 0,  role: extractant}
+  species:
+    - name: "RE(HA2)3"
+      phase: organic
+      charge: 0
+      per_element: true
+      stoichiometry: {"RE3+": 1, "(HA)2": 3, "H+": -3}
+      log10_K: null      # calibrated from the L1 correlation
+```
+
+Mass action is then `log10[S_j] = log10 K_j + sum_c nu_jc log10[C_c]`, and the
+conserved total of component `c` over a stage is
+`T_c = sum_j nu_jc [S_j] Q_phase(j)`, summed over every species including the
+free components themselves.
+
+Two things about this table are worth stating plainly:
+
+- **Negative coefficients are normal.** `H+` appears with coefficient `-3`
+  because the complex *releases* three protons. The `H+` component therefore
+  means "proton in excess of the reference state in which the extractant is
+  fully protonated", and a loaded organic phase carries a negative H component.
+  That is exact bookkeeping, and it is what makes a recycled loaded solvent
+  behave correctly.
+- **Charge consistency is checked.** A species' declared charge must equal
+  `sum_c nu_jc * charge_c`. A mistyped coefficient is otherwise invisible until
+  the charge balance quietly drifts.
+
+```python
+from difflow_ree.equilibrium import list_networks, cation_exchange_network
+
+list_networks()
+# ['anion_exchange', 'cation_exchange_dimer', 'cation_exchange_monomer',
+#  'solvating_nitrate']
+
+net = cation_exchange_network("D2EHPA", ("Nd", "Dy"), calibration_pH=3.0)
+print(net.describe())
+```
+
+Nothing in `mass_action.py` mentions cation exchange, which is checkable rather
+than aspirational: selecting a solvating extractant selects a different row and
+the same closure predicts different physics.
+
+```python
+from difflow_ree.equilibrium import MassActionParams, MassActionSection
+
+tbp = MassActionSection(MassActionParams(
+    n_stages=2, extractant="TBP", elements=("Nd", "Dy"),
+    aqueous_volumetric_flow=1.0, organic_volumetric_flow=1.0,
+    anion="NO3", extractant_conc=1.0,
+))
+tbp.network.name         # 'solvating_nitrate'
+```
+
+Two consequences fall out with no code change: the pH profile is *flat*,
+because the complex `RE(NO3)3.3S` contains no proton, and `D` rises as the
+**cube** of the free nitrate, because the anion is a conserved component that
+the complex draws three of. The salting effect is a balance, not a correction.
+
+```{warning}
+The shipped networks declare a monovalent anion. Asking for `anion="SO4"`
+raises rather than quietly running with the wrong charge: a divalent anion
+needs its own network row with the charge, and for a solvating or
+anion-exchange complex the stoichiometry, corrected.
+```
+
+#### How #197 (saponification) slotted in
+
+The counter-ion `M+` is a conserved component in **every** shipped network even
+when nothing forms from it. Saponification (#197) was therefore exactly one
+species row and no change to `mass_action.py`:
+
+```yaml
+- name: "M(HA2)"
+  phase: organic
+  charge: 0
+  stoichiometry: {"M+": 1, "(HA)2": 1, "H+": -1}
+  log10_K: -2.2688
+```
+
+With that row present, sodium partitions between the phases and the
+saponification degree becomes an *output* of the same component balances. It
+ships as a separate network, `cation_exchange_dimer_saponified`, rather than as
+an extra row on `cation_exchange_dimer`, so that the unsaponified network keeps
+meaning unsaponified proton exchange: it is the `S = 0` reference the
+saponification tests compare against, and a feed carrying sodium as a spectator
+salt must not start neutralizing the organic merely because sodium is present.
+See [Saponified extractants](#saponification) below.
+
+### Unknowns, equations and how they are solved
+
+**Unknowns per stage** are the natural logs of the free component
+concentrations: free `[H+]`, free extractant, free anion, the counter-ion and
+the aqueous concentration of each rare earth.
+
+**Equations** are the component balances -- one per component, so the system is
+square. The mass-action expressions are *substituted* rather than posed as
+extra rows, which means they hold identically at every Newton iterate, not just
+at convergence. Aqueous charge balance is then a *consequence* of the component
+balances whenever the entering totals are electroneutral; it is reported as
+`info["charge_imbalance"]` (a non-zero value is a statement about the feed, not
+the solver) and can be used *in place of* the anion balance with
+`anion_closure="charge"`.
+
+Four choices, and why:
+
+| Choice | Reason |
+|---|---|
+| **Solve at section scope**, not stage by stage | The whole section is one residual `r(z; theta, u) = 0` handed to `difflow.eo_solver.solve_residual_system`. The reverse-mode tape is constant size rather than proportional to stages times iterations; the section Jacobian falls out and is the object the linearization, back-off and estimation layers need; long-cascade conditioning becomes a residual-scaling question; and a recycle tear stops being a separate mechanism -- it is another row of `r`. |
+| **Solve in log concentration** | Positivity is automatic (no clipping, so no dead gradient), the ten-plus orders of magnitude a real cascade spans stay conditioned, and mass action becomes *linear* in the unknowns. |
+| **Initialize from the correlation** | Mass-action systems lose Newton from a poor start. The L1 Kremser profile is the starting point, which is what gives the correlation path a continuing purpose. |
+| **Return soft failures** | One cannot raise from inside `vmap` or `scan`, so `solve_section` returns the solution *with* a residual norm and a boolean feasibility flag. No Python branch is ever taken on a traced value. |
+
+**Globalization.** Undamped Newton from the correlation start proposes steps of
+1e3 or more in log space, and `exp` of that is `inf` and then `NaN`. Neither
+standard remedy is sufficient alone here: a damped monotone Newton stalls where
+the linear model of a sum of exponentials is poor (notably near full
+neutralization, where the proton total passes through zero), and
+Levenberg-Marquardt alone converges to spurious least-squares minima on a
+ten-element cascade. `difflow_ree.equilibrium.mass_action._globalize` runs
+damped Newton, then a trust region, then damped Newton again -- each phase is
+monotone or discarded, and each is a no-op if the previous one converged. The
+whole globalization runs under `stop_gradient`; the answer and its derivative
+come from the `optimistix` root find that follows.
+
+**Tolerances.** `inner_tol` defaults to `1e-12` on the *scaled* (dimensionless)
+component balances, and feasibility is declared at `1e-8`. Outer flowsheet
+tolerances in difflow are 1e-6 to 1e-8, so the inner solve is four to six
+orders tighter. Keep it that way: a loosely converged inner solve gives an
+implicit-function gradient that is exact for the solution manifold but
+inconsistent with the number the code actually returned, and the resulting
+finite-difference disagreement is very hard to diagnose after the fact.
+
+**Conservation is structural, not asymptotic.** The organic outlet is read from
+the converged stage-0 organic phase and the aqueous outlet is formed as
+`(everything in) - (organic out)`, componentwise on the tableau. Every component
+therefore balances to floating-point round-off no matter how well the
+equilibrium converged, and how well it converged is reported separately in
+`info["residual_norm"]`. `info["equilibrium_closure"]` gives the
+tolerance-sized gap against the aqueous phase the solve predicts, so the choice
+is visible rather than hidden.
+
+### Usage
+
+```python
+from difflow_ree.equilibrium import MassActionParams, MassActionSection
+
+params = MassActionParams(
+    n_stages=4,
+    extractant="D2EHPA",
+    elements=("Nd", "Dy"),
+    # The closed model works in CONCENTRATIONS, so it needs the phase volumes
+    # (L/s) that a flow ratio could stand in for at L1. There is no defensible
+    # way to guess them from molar flows, so they are required.
+    aqueous_volumetric_flow=1.0,
+    organic_volumetric_flow=1.0,
+    # NOT an operating specification: this is where the closed model and the
+    # correlation are made to agree. The operating pH is an output.
+    calibration_pH=3.0,
+)
+section = MassActionSection(params)
+
+feed = section.schema.make_aqueous(
+    {"Nd": 0.02, "Dy": 0.02}, acid=0.02, water=55.0
+)
+solvent = section.schema.make_organic(0.5, diluent_flow=4.0)
+
+raffinate, extract, info = section(feed, solvent)
+
+info["pH_profile"]      # an OUTPUT, one value per stage
+info["theta"]           # organic loading fraction per stage
+info["free_extractant"] # M, from the one shared balance
+info["D"]               # per element, from the closed model
+info["feasible"]        # boolean array -- consume with jnp.where, not `if`
+info["residual_norm"]
+info["charge_imbalance"]
+```
+
+`section.schema.make_aqueous` closes the anion by electroneutrality unless you
+give one explicitly: a feed that is not electroneutral has no physical
+realisation, and handing one to the closed model produces a free proton
+concentration that silently absorbs the imbalance.
+
+### Same interface, two things that are not hidden
+
+`REEExtractor` reaches both levels, so cascade code does not have to know which
+one it is running at:
+
+```python
+from difflow_ree import REEExtractor, REEExtractorParams
+
+params = REEExtractorParams(
+    n_stages=4, extractant="D2EHPA", elements=("Nd", "Dy"), pH=3.0,
+)
+raffinate, extract, info = REEExtractor(params)(feed, solvent)          # L1
+
+closed = REEExtractor(params.update(
+    model="mass_action",
+    aqueous_volumetric_flow=1.0,
+    organic_volumetric_flow=1.0,
+))
+raffinate, extract, info = closed(feed, solvent)                        # L2
+closed.section          # the underlying MassActionSection
+```
+
+Two things genuinely differ between the levels and are deliberately **not**
+hidden behind the shared interface.
+
+**State width.** The closed model reads and writes an acid, counter-ion and
+anion balance the correlation ignores. The vocabulary is declared once as a
+superset in `difflow_ree.equilibrium.schema.REEStreamSchema` -- rare earths by
+element, `H`, `Na`/`NH4`/`K`, `Cl`/`NO3`/`SO4`, water, extractant total (on a
+**monomer** basis, free plus bound), loaded organic by element, co-extracted
+acid, water in organic, and `T`. The correlation path passes through what it
+does not use, as it always has.
+
+**Degrees of freedom.** pH is an *input* to the correlation and an *output* of
+the closed model, whose corresponding input is base addition (or, from #197,
+saponification degree). A design specified at one level is therefore not
+directly expressible at the other. Under `model="mass_action"` the `pH` field
+becomes the *calibration* pH, and passing an explicit `pH` to the call raises
+rather than being silently ignored.
+
+The bridge is an explicit inverse problem:
+
+```python
+from difflow_ree.equilibrium import base_addition_for_pH, base_addition_bounds
+
+b_lo, b_hi = base_addition_bounds(section, feed, solvent)
+base, ok = base_addition_for_pH(section, feed, solvent, target_pH=2.5)
+
+raffinate, extract, info = section(feed, solvent, base_addition=base)
+float(info["pH"])          # 2.5
+```
+
+It is posed as an *augmented* root find -- the section's component balances
+plus one extra unknown (the base rate) and one extra row ("the pH at this stage
+equals the target") -- so `d(base)/d(pH*)` falls out of one implicit
+differentiation, and it is `jax.grad`-able. Base addition is bounded: summing
+the proton balance over the section shows there is no root at all once every
+proton has been neutralized, and below, the counter-ion total cannot go
+negative. A target outside those bounds comes back with `feasible=False` and
+`b` clipped to the nearest bound; nothing is raised.
+
+### Where the constants come from, and where the two levels part company
+
+`log_K_from_correlation` inverts the L1 correlation at a stated reference
+condition, which is the only source available in this repository. It therefore
+inherits that source's provenance: **the `ph_coefficients` of D2EHPA, PC88A and
+Cyanex272 are hand-tuned with no literature source** (see the header of
+`data/extractants.yaml`), so a constant derived from them is illustrative, not
+measured. Supply your own with `log10_K={"Nd": ..., "Dy": ...}` for design
+numbers.
+
+The calibration is exact only at the reference condition, and the residual
+disagreement is a real statement about the correlation rather than a defect of
+the closure. Mass action forces
+
+```
+d log10 D / d pH = protons_released = 3
+```
+
+while the tabulated pH slopes `b` are 2.20 to 2.90.
+`correlation_ph_slope_defect(extractant, element)` returns `3 - b` so the gap
+can be quoted rather than discovered:
+
+```python
+from difflow_ree.equilibrium import correlation_ph_slope_defect
+correlation_ph_slope_defect("D2EHPA", "Nd")   # 0.55
+```
+
+Away from the calibration pH the two levels then differ by exactly
+`(p - b)(pH - pH_ref) - c(pH^2 - pH_ref^2)`, which the test suite asserts to
+seven digits.
+
+### Validation
+
+| Claim | Measured |
+|---|---|
+| Reduces to the correlation in the dilute limit | With rare-earth totals at `1e-6` of the free acid, `D` agrees with `REEDistribution.get_D` to better than **2e-5 relative**. What is left is not model error: it is the pH shift from the protons the trace extraction releases, and it scales exactly linearly with the dilution (a ten-fold more dilute feed gives a ten-fold smaller disagreement). |
+| Independent check of the `[HA]` dependence | The correlation applies `n * log10(C/C_ref)` with `n = 3`; the closed model never sees `n` and gets the same dependence from three dimers in the tableau plus a free-extractant balance. Doubling the extractant moves both by exactly 8. |
+| Every component conserved | To **machine precision** (`< 1e-15` relative), including the proton component, and including under a deliberately unconverged solve. |
+| Gradients | `jax.test_util.check_grads` passes through the implicit solve; analytic and central-difference gradients agree to `1e-6` relative. `log10 K` is traced, so extractant selection is differentiable. |
+| `jit` / `vmap` | Both work; a failing solve under `vmap` returns `feasible=False` rather than raising. |
+| Conditioning | A six-element, eight-stage cascade whose concentrations span more than ten decades converges to a residual below `1e-10`. |
+| pH responds to three protons per trivalent ion | The acid released equals `protons_released` times the rare earth extracted, to `1e-12` relative. |
+
+An external benchmark worth reading for behaviour: Iloeje et al., *Environ. Sci.
+Technol.* **53**, 8926 (2019), [doi:10.1021/acs.est.9b01718](https://doi.org/10.1021/acs.est.9b01718),
+which poses rare-earth extraction as Gibbs energy minimization with activity
+models in both phases.
+
+### What is deliberately not modelled
+
+Water dissociation and rare-earth hydrolysis (no `OH-` species), aqueous
+complexation with the anion, non-idealities in either phase (the constants are
+conditional constants at the medium's ionic strength -- the same convention the
+correlations use, see #194), third-phase formation, and any temperature
+dependence of `log10 K` beyond what the calibration point carries. Each of those
+is a row in `reaction_networks.yaml` away, which is the point of carrying the
+network as data.
+
+---
+
+(saponification)=
+## Saponified Extractants and the Counter-Ion Balance (#197)
+
+Industrial rare-earth circuits do not run on free acidic extractant, and they
+do not dose base into every mixer -- that causes local pH excursions which
+precipitate hydroxides and stabilize emulsions. They neutralize 30 to 50% of
+the extractant *before* it enters the cascade,
+
+```
+HA_org + NaOH  ->  NaA_org + H2O
+```
+
+so extraction becomes a counter-ion exchange rather than a proton exchange:
+
+```
+RE3+ + 3 NaA_org  <->  RE(A)3_org + 3 Na+
+```
+
+### Why it changes the answer, not just the bookkeeping
+
+A model without saponification predicts a **pH collapse down the extraction
+section that a real plant does not have**. Every trivalent ion extracted
+releases three protons into an aqueous phase with nothing to absorb them, so
+the model under-predicts loading, over-predicts the stage count required, and
+mis-ranks extractants -- while looking entirely plausible, because every stage
+is internally consistent. It is the most likely way for a closed model to be
+wrong and still pass inspection.
+
+Here is the measurement, from `tests/ree/test_saponification.py`. Both sections
+get the **same** feed, the same solvent inventory and the same number of base
+equivalents; the only difference is where the base is.
+
+| 8-stage section, D2EHPA, Nd + Dy | pH profile peak-to-peak | Nd + Dy extracted |
+|---|---|---|
+| base dosed into the aqueous feed | **0.77 pH units** | 0.0287 mol/s |
+| same base pre-neutralized onto the organic | **0.26 pH units** | 0.0227 mol/s |
+
+A factor of **2.9** flatter, and 2.3 after normalizing the excursion by the
+rare earth actually moved (which is what releases the protons). The advantage
+*grows* with the cascade: 2.6 at four stages, 2.9 at eight, 3.1 at twelve --
+because the buffer spans every stage, so the longer the cascade the more of it
+there is to spend. With no base anywhere at all -- the only thing `difflow_ree`
+could express before #197 -- the same feed extracts **more than twenty times
+less** Nd.
+
+### The organic is the buffer
+
+This is the mechanism, and it is why the acid-base equilibrium of the organic
+is not optional. `(HA)2` and its counter-ion salt `M(HA2)` are a conjugate acid
+/ base pair whose proton lives in the *aqueous* phase:
+
+$$[\overline{\mathrm{M(HA_2)}}] = K\,\frac{[\mathrm{M}^+]\,[\overline{\mathrm{(HA)_2}}]}{[\mathrm{H}^+]}
+\qquad\Longrightarrow\qquad
+\mathrm{pH} = \mathrm{p}K + \log_{10}\frac{S}{1-S} - \log_{10}[\mathrm{M}^+]$$
+
+with `S` the saponification degree. That is Henderson-Hasselbalch for the
+organic phase (`organic_buffer_pH`), and its Van Slyke capacity
+
+$$\beta = \ln(10)\,E_T\,S\,(1-S)$$
+
+(`organic_buffer_capacity`, maximal at half neutralization) is what the
+released protons are spent against. Perturbing the feed acid by 0.005 mol/s
+shows it directly: **more than a third of the added acid is absorbed by the
+organic**, released as counter-ion instead of appearing as free protons. An
+unsaponified network cannot do that at all -- it has no conjugate base, so its
+counter-ion release is identically zero.
+
+```{note}
+A free organic `A-` is deliberately **not** a species. A bare anion is not
+stable in a low-dielectric diluent; it is always paired with its counter-ion,
+and pairing it is exactly what `M(HA2)` is. So the `HA`/`A-` equilibrium is
+present, in the only form in which it is physical, as one row of the tableau.
+```
+
+### The section
+
+`SaponifiedSection` is a `MassActionSection` on the saponified network. It
+overrides exactly two things, and nothing in `mass_action.py` changed:
+
+1. the **solvent** contributes a counter-ion salt species, so a saponified
+   solvent brings counter-ion in and, through the tableau, a *negative* proton
+   component -- the protons the base removed. It enters at the solvent end of
+   the cascade, which is not the same as dosing the equivalent base into the
+   aqueous feed at the other end;
+2. the **extract** carries the counter-ion still bound to the organic when it
+   leaves, so the counter-ion is conserved across the unit's own interface and
+   not merely inside the solver.
+
+```python
+from difflow_ree.equilibrium import SaponifiedParams, SaponifiedSection
+
+section = SaponifiedSection(SaponifiedParams(
+    n_stages=8, extractant="D2EHPA", elements=("Nd", "Dy"),
+    aqueous_volumetric_flow=1.0, organic_volumetric_flow=1.0,
+    extractant_conc=0.5, saponification_degree=0.35, counter_ion="Na",
+))
+
+feed    = section.schema.make_aqueous({"Nd": 0.02, "Dy": 0.02},
+                                      acid=0.005, water=55.0)
+solvent = section.schema.saponified_organic(
+    0.5, 0.35, monomers_per_component=2.0, diluent_flow=4.0,
+)
+
+raffinate, extract, info = section(feed, solvent)
+info["pH_profile"]                      # flat, and an OUTPUT
+info["saponification_degree_profile"]   # also an OUTPUT: the organic re-equilibrates
+info["counter_ion_released"]            # the reagent duty and the effluent load
+info["pH_flatness"]                     # peak-to-peak span, in pH units
+```
+
+`S = 0` reproduces the unsaponified proton-exchange result **bit for bit**, so
+the saponified network is a strict generalization rather than a different
+model.
+
+### Saponification degree is the manipulated variable
+
+Along with phase ratio per section and scrub/strip acid strength, the degree is
+what an operator actually adjusts. A control or RTO layer whose inputs are
+stage pH setpoints is modelling a plant that does not exist. So the degree is a
+real handle:
+
+- it travels on the **stream**, written by `schema.saponified_organic` or by a
+  `Saponifier`, so it can be a tracer -- `jit`, `grad` and `check_grads` all go
+  through the section and the implicit solve;
+- `saponification_degree_for_pH(section, feed, solvent, target_pH)` inverts the
+  section for the degree that hits a pH specification, posed as one more row of
+  the same root find (the organic-side twin of `base_addition_for_pH`), so the
+  derivative comes out of one implicit differentiation.
+
+```python
+from difflow_ree.equilibrium import saponification_degree_for_pH
+
+degree, ok = saponification_degree_for_pH(section, feed, solvent, target_pH=3.2)
+```
+
+### The Saponifier
+
+A degree stated as a parameter is an assumption; a saponifier is a *duty*.
+Putting the contactor on the flowsheet is what makes the reagent bill and the
+effluent load fall out of the same balance the cascade already solves.
+
+```python
+from difflow_ree.units import Saponifier, SaponifierParams
+
+unit = Saponifier(SaponifierParams(
+    extractant="D2EHPA", saponification_degree=0.35,
+    counter_ion="Na",          # "Na", "NH4", "Mg", "K"
+    base=None,                 # None -> the default base for the counter-ion
+    base_utilization=0.9,      # base that does not reach the organic
+))
+
+organic = unit.schema.make_organic(0.5, diluent_flow=4.0)
+solvent, spent, info = unit(organic)
+
+info["base_flow"], info["base_mass_flow"]   # mol/s and kg/s of reagent
+info["saponification_degree"]               # achieved, an output
+info["counter_ion_imbalance"]               # zero to round-off, by construction
+```
+
+The contact is *stoichiometric*, not an equilibrium: a strong base against an
+extractant of pKa 3-6 goes essentially to completion, and a plant sizes the
+saponifier so that it does. All the equilibrium physics stays in the section,
+where the organic re-equilibrates and the degree becomes an output again. The
+unit does model the two things a plant actually gets wrong -- base that does
+not reach the organic, and a recycled solvent that still carries counter-ion,
+which is a credit against fresh base -- and it neutralizes no further than the
+extractant inventory allows.
+
+### kg base per kg REO
+
+The counter-ion balance that makes the cascade correct is the equation that
+predicts the raffinate load, so the reagent and environmental metric costs no
+extra machinery. `network.base_equivalents_per_mole_ree` reads **three
+equivalents per mole of rare earth** off the tableau -- through the extractant
+column, so it is an independent check on the proton column, and it gives 3 for
+a divalent counter-ion too. The solved section satisfies the exact identity
+
+```
+dT_H(aqueous) + z * dT_M(aqueous) = 3 * (rare earth extracted)
+```
+
+to round-off: every extracted trivalent ion occupies three extractant
+equivalents and gives back either a proton or a counter-ion.
+
+```python
+from difflow_ree.economics import saponification_duty, compare_counter_ions
+
+duty = saponification_duty(
+    info["base_flow"],
+    {"Nd": extract["F_Nd"], "Dy": extract["F_Dy"]},
+    base="NaOH",
+    equivalents_per_mole_ree=section.network.base_equivalents_per_mole_ree,
+)
+print(duty.report())
+```
+
+The stoichiometric floor, for Nd (Nd2O3 is 336.48 g/mol for two Nd, i.e.
+168.24 g REO per mol Nd):
+
+| Base | kg base / kg REO | kg N / kg REO | kg salt / kg REO (chloride) |
+|---|---|---|---|
+| NaOH | 3 x 39.997 / 168.24 = **0.7132** | 0 | 1.042 (NaCl) |
+| NH3 | 3 x 17.031 / 168.24 = **0.3037** | **0.2498** | 0.954 (NH4Cl) |
+| Mg(OH)2 | 1.5 x 58.320 / 168.24 = **0.5200** | 0 | 0.849 (MgCl2) |
+
+`compare_counter_ions` computes that table. It is the comparison the whole
+feature exists to make possible: **ammonia saponification is the origin of the
+ammonium-nitrogen effluent that is the industry's signature pollution problem,
+and sodium trades it for a saline raffinate.** Neither number existed before
+#197, because there was no counter-ion anywhere in the extraction path.
+Nothing here prices the effluent -- an ammonium-nitrogen discharge limit is a
+regulatory fact, not a correlation -- so the loads are reported and the
+valuation is left to the caller. `REO` is not always `RE2O3`: the oxide mass is
+taken from the element record's own formula, so `CeO2`, `Pr6O11` and `Tb4O7`
+are handled correctly.
+
+### The extractant record
+
+```yaml
+D2EHPA:
+  ...
+  saponification:
+    counter_ion: Na           # H | Na | NH4 | Mg
+    degree: 0.35              # an operating DEFAULT, not a property
+    log10_K: null             # calibrated from the degree; see below
+    reference_pH: 3.0
+    reference_counter_ion: 0.1   # M
+```
+
+`Extractant` carries `counter_ion`, `saponification_degree` and
+`saponification_log10_K`; `create_custom_extractant` takes all three. The
+record rejects a degree outside `[0, 1]`, a degree with no counter-ion, a
+degree with `counter_ion: H` (which means un-neutralized proton exchange), and
+a degree on an extractant that releases no protons.
+
+### Where the constant comes from
+
+Nowhere measurable in this repository, and it is worth being blunt about that.
+`saponification_log_K` inverts
+
+$$K = \frac{S}{1-S}\,\frac{[\mathrm{H}^+]}{[\mathrm{M}^+]}$$
+
+at a *stated* reference degree and condition, so the constant is a restatement
+of a declared operating point rather than a number from a paper -- the same
+discipline `log_K_from_correlation` follows for the extraction constants. The
+YAML default, `log10 K = -2.2688`, is `S = 0.35` at pH 3.0 with 0.1 M
+counter-ion, and `SaponifiedSection` recalibrates it from the extractant
+record's own reference block. Supply a measured constant for design numbers.
+
+### A divalent counter-ion is a different tableau
+
+Magnesia saponification is real, and it is a *different network* for exactly
+the reason a divalent anion is: the counter-ion component carries charge +2,
+the salt neutralizes two extractant equivalents and releases two protons, so
+the row is `M(HA2)2`, not `M(HA2)`. `divalent_counter_ion_template` derives it
+from the shipped monovalent template, so the stoichiometry has one source and
+the two cannot drift apart; `SaponifiedSection` builds it automatically for
+`counter_ion="Mg"` and checks the schema's charge against the network's rather
+than trusting either.
+
+### Validation
+
+| Claim | Measured |
+|---|---|
+| Counter-ion conserved across a section | Aqueous plus organic, in equals out to **machine precision**, for Na, NH4 and Mg |
+| Saponified cascade holds a flatter pH profile | **0.26 against 0.77** pH units peak-to-peak on the same reagent, a factor of 2.9; 2.3 after normalizing by the rare earth moved; the advantage grows with the stage count |
+| `S = 0` reproduces proton exchange | **Bit for bit**: pH profile identical to `1e-16`, raffinate and extract flows to `1e-12` relative |
+| Three equivalents of base per mole of rare earth | Read off the tableau through the extractant column (3.0 for monovalent *and* divalent), and `dT_H + z dT_M = 3 dRE` on the solved section to **`1e-10` relative** |
+| kg base per kg REO | Cross-checked against the hand calculation to `5e-5` absolute for NaOH, NH3 and Mg(OH)2 |
+| The organic buffers | More than **a third** of an aqueous acid perturbation is absorbed by the organic; the buffered section's pH moves less than two thirds as far |
+| `Saponifier` conservation | Counter-ion imbalance below `1e-18` at any utilization or overdose |
+| Gradients | `grad` matches central differences to `1e-4` relative through the implicit solve; `check_grads` passes; `jit` works |
+
+### What is deliberately not modelled
+
+Hydroxide as a species (so the saponifier contact is stoichiometric rather than
+an equilibrium), extractant loss to the aqueous phase, third-phase formation --
+which a high saponification degree genuinely does cause -- water transfer into
+the organic with the counter-ion, and any treatment cost for the effluent
+loads. The counter-ion is also taken as a spectator in the aqueous phase: no
+sodium complexation with the medium anion.
+
 ---
 
 ## Unit Operations
@@ -547,6 +1182,25 @@ class REEExtractorParams:
     include_loading: bool = True  # Account for extractant loading capacity
     capacity_sharpness: int = 8   # Sharpness of the smooth loading limiters
     include_speciation: bool = False  # Account for aqueous speciation
+
+    # Closed mass-action level (#196); ignored by the default correlation path.
+    # See "Mass-Action Equilibrium Closure" above.
+    model: str = "correlation"        # or "mass_action"
+    aqueous_volumetric_flow: float | None = None   # L/s, required at L2
+    organic_volumetric_flow: float | None = None   # L/s, required at L2
+    counter_ion: str | None = "Na"
+    anion: str = "Cl"
+    reaction_network: str | None = None   # None picks it from the record
+    log10_K: dict | None = None           # measured constants, by element
+    base_addition: float = 0.0            # mol/s of strong base into the feed
+```
+
+```{note}
+With `model="mass_action"` the `pH` field is the **calibration** pH, not an
+operating specification: the operating pH is an output, in
+`info["pH_profile"]`, and the input that replaces it is `base_addition`.
+Passing an explicit `pH` to the call raises. See
+[Mass-Action Equilibrium Closure](mass-action-closure).
 ```
 
 #### Usage
@@ -966,6 +1620,236 @@ for elem, recovery in results['target_recovery'].items():
 ### SplitShellCascade
 
 **Description**: Multi-product split-shell cascade for producing multiple pure REE streams.
+
+---
+
+(separation-trains)=
+## Separation Trains: Topology as Data, with the Organic Loop Closed (#202)
+
+`FullSeparationTrain` above is a **fixed sequence**: cerium removal, then
+group separation, then individual separations, by direct calls in a set
+order. The topology is decided at import time and there is no decision
+variable over connectivity. And the `barren_organic` every circuit
+returns "for recycle" is never actually recycled, so every circuit
+silently assumes its solvent comes back perfectly stripped.
+
+`difflow_ree.flowsheets.train.SeparationTrain` lifts both limits. A train
+is **module instances plus a connectivity map**, and the organic loop is
+closed by adding one edge.
+
+### The typed module library
+
+Each module declares aqueous, organic and solid ports with the species
+they carry:
+
+| kind | wraps | inlets | outlets |
+|---|---|---|---|
+| `extract_scrub_strip` | `REEExtractor`, `REEScrubber`, `REEStripper` | `feed` (aq), `solvent` (org) | `raffinate` (aq), `scrub_liquor` (aq), `product` (aq), `barren_organic` (org) |
+| `split_shell` | `SplitShellCascade` | `feed` (aq), `solvent` (org) | `product_1..n` (org), `raffinate` (aq) |
+| `cerium_oxidation` | `CeriumOxidizer` | `feed` (aq) | `filtrate` (aq), `ceo2` (solid) |
+| `precipitation` | `OxalatePrecipitator` / `Carbonate…` / `Hydroxide…` | `feed` (aq) | `filtrate` (aq), `solid` (solid) |
+| `saponification` | `Saponifier` (#197) + solvent regeneration | `organic` (org) | `organic` (org), `spent_aqueous` (aq), `bleed` (org) |
+
+The port count is data, not code: a `split_shell` module with three
+split points has one more organic outlet than one with two.
+
+Parameter schemas are **not** restated here. `module.describe()` calls
+`difflow.catalog.describe_class` on each wrapped unit, so the parameter
+half of the schema is derived once, in the core, from the `Params`
+dataclasses. What the core catalog cannot supply is the *phase*: both
+liquid phases are `difflow.streams.Stream`, so nothing in
+`(feed: Stream, solvent: Stream) -> ...` says which inlet is organic.
+That is what `difflow_ree.flowsheets.ports.Port` adds, and it is what
+lets a wrong connection be refused:
+
+```python
+train.connect("sep.barren_organic", "sep.feed")
+# PortMismatchError: phase mismatch: sep.barren_organic carries the
+# organic phase but sep.feed expects the aqueous phase.
+```
+
+A connection that would drop a component the destination does not
+declare is refused too, because a flowsheet that quietly loses a
+component still converges. Pass `allow_species_loss=True` when the loss
+is deliberate.
+
+### Closing the organic loop
+
+```python
+from difflow.streams import make_stream
+from difflow_ree.flowsheets import (
+    ExtractScrubStripModule, ExtractScrubStripParams,
+    OperatingLimits, SeparationTrain,
+)
+
+feed = make_stream({"H2O": 100.0, "La": 3.0, "Dy": 3.0}, 298.15, 101325.0)
+
+sep = ExtractScrubStripModule("sep", ExtractScrubStripParams(
+    extractant="D2EHPA", elements=("La", "Dy"), target_elements=("Dy",),
+    n_extraction_stages=10, n_scrubbing_stages=2, n_stripping_stages=1,
+    extraction_pH=2.4, scrubbing_pH=2.3, stripping_pH=2.3,
+    solvent_to_feed_ratio=1.0, scrub_to_solvent_ratio=0.1,
+    strip_to_solvent_ratio=0.5,
+), limits=OperatingLimits(third_phase_loading=0.65))
+
+train = SeparationTrain("nd_circuit")
+train.add_module(sep)
+train.add_feed("leach", feed, "sep.feed")
+train.connect("sep.barren_organic", "sep.solvent")   # <- the whole change
+
+result = train.solve()
+```
+
+Nothing in `SeparationTrain` iterates. `to_flowsheet()` emits a real
+`difflow.flowsheet.Flowsheet` — units in topological order, feeds,
+`add_recycle` for every back edge the depth-first pass finds — and
+`solve()` calls its Anderson tear solver. The torn organic inlet is
+initialised with the fresh, REE-free solvent the open-loop circuit
+would have synthesised, which is both the sensible starting point and
+literally the assumption the closed loop exists to test.
+
+### What closing the loop costs you
+
+The open loop is not a small approximation. For the circuit above,
+solved both ways:
+
+| | raffinate La purity | Dy in raffinate (mol/s) | organic loading θ |
+|---|---|---|---|
+| open loop (fresh solvent every pass) | 0.9903 | 0.0293 | 0.357 |
+| closed loop | 0.9414 | 0.1866 | 0.575 |
+
+Six times the impurity, and five percentage points of product purity,
+from one edge. The mechanism is the one #202 names: the barren organic
+still carries Dy, that Dy occupies extractant, the free-extractant
+fraction and hence the extraction factor fall, and more Dy leaks past
+the extraction section into the La raffinate. Strip the solvent properly
+(`stripping_pH=1.5, n_stripping_stages=4`) and the two answers coincide
+to 1e-9 — the difference is the residue, not the tearing.
+
+The loop conserves every component to machine precision: what leaves the
+stripper equals what enters the extractor, and the extractant and
+diluent inventory is invariant.
+
+**A closed loop with no bleed is an accumulator.** Whatever the stripper
+misses circulates for ever, so put a `saponification` module in the loop
+and give it a `SolventRegenerationParams(bleed_fraction=...)`. The bleed
+diverts a fraction of the circulating organic to regeneration and
+replaces it with fresh solvent of the same carrier flow, so the
+inventory is unchanged and the residual loading falls.
+
+### Operating boundaries as constraints, not flags
+
+An optimizer walks up to a boundary it is only warned about and then
+crosses it, because in the model crossing is profitable. Every module
+reports a `ConstraintSet` whose margins are **feasible when ≥ 0**:
+
+```python
+constraints = train.constraints(result)
+constraints.vector()          # g(x) >= 0, a JAX array
+constraints.feasible          # False if anything is violated
+constraints.violations()      # worst first
+print(constraints.summary())
+```
+
+With the third-phase limit above (0.65) the closed loop is feasible, at
+a margin of +0.075. Tighten it to `OperatingLimits(third_phase_loading=0.40)`
+and the same solve reports:
+
+```
+sep.third_phase  third_phase  value=+0.575235  limit=+0.4  margin=-0.175235  VIOLATED
+sep.loading      loading      value=+0.575235  limit=+1    margin=+0.424765  ok
+```
+
+Four boundaries are available, each only when its limit is declared on
+`OperatingLimits`:
+
+- `third_phase` — organic loading below the onset of a second organic
+  layer, built on the signed margin #193 added.
+- `loading` — extractant saturation, θ ≤ 1. A *different* wall from the
+  third phase, which usually sits below it, so a design cannot satisfy
+  one by ignoring the other.
+- `hydraulic` — two-phase throughput below the installed settler
+  capacity. Expressed in the same units as the stream flows, on purpose:
+  a litres-per-second capacity would smuggle a hidden unit back into a
+  package that is otherwise invariant to the flow unit (#189).
+- `phase_ratio` — O/A inside the dispersion band.
+
+Every margin is a traced JAX scalar, so `jax.grad` of a margin with
+respect to a design variable works. Note which design crosses in the
+example above: at a 0.40 third-phase limit the *open-loop* circuit sits
+inside the wall (θ = 0.357) and only the honest closed-loop one crosses
+it. An open loop hides the constraint violation as well as the purity
+loss.
+
+### Screening before costing: the Fenske bound
+
+`equilibrium.distribution.stages_fenske` is the companion to
+`stages_kremser`, and where Kremser is an operating estimate Fenske is a
+rigorous lower bound — the total-reflux limit, so no finite
+solvent-to-feed ratio beats it:
+
+$$N_\min = \frac{\ln\!\left[\frac{s_E}{1-s_E}\cdot\frac{s_R}{1-s_R}\right]}{\ln \alpha}$$
+
+with `s_E` the fraction of the extract key reporting to the extract and
+`s_R` the fraction of the raffinate key reporting to the raffinate (for
+an equimolar binary feed, the two product purities). It costs two
+logarithms, so a candidate topology whose installed stage count is below
+the bound can be struck out before it is solved, let alone costed:
+
+```python
+from difflow_ree.flowsheets import screen_separation, screen_train
+
+screen_separation("D2EHPA", "Dy", "La", installed_stages=2,
+                  purity=0.99, pH=2.3).admissible     # True
+screen_separation("D2EHPA", "Dy", "La", installed_stages=2,
+                  purity=0.999, pH=2.3).admissible    # False
+
+screen_train(train, {"sep": ("Dy", "La")}, purity=0.999).summary()
+```
+
+Unlike `stages_kremser`, the result is floored at 0 rather than 1: a
+separation needing less than one theoretical stage is information a
+screening filter should keep, and flooring at 1 would turn a genuine
+lower bound into one that is sometimes wrong in the direction that
+matters.
+
+### What is deliberately not here
+
+**No discrete search.** difflow avoids Pyomo and MINLP solvers, and #202
+keeps it that way. What is provided is the graph representation, the
+closed recycle, the constraint handles and the cheap screening bound, so
+an *external* discrete layer can drive it. `SeparationTrain.to_dict()` /
+`from_dict()` write the connectivity map explicitly, which is the form a
+topology enumerator wants.
+
+Route out through `difflow.solvers` (#203), whose `as_nlp` / `as_residual`
+wrap a train's continuous subproblem. One thing to know when you do:
+discopt's `CustomCall` cannot carry binaries *around* a wrapped
+flowsheet — the wrapped call is opaque to the MILP — so the discrete
+layer must **decompose**: enumerate or branch on the topology outside and
+call in for each fixed topology, rather than hoping the solver will see
+connectivity variables through the wrapper.
+
+**Traceability.** `solve()` uses `Flowsheet.solve`, which records its
+convergence diagnostics as Python floats and therefore cannot be traced.
+`solve_differentiable()` runs the *same* flowsheet graph — same units,
+same order, same tear set — through `optimistix.fixed_point`, and gets
+implicit differentiation through the converged loop:
+
+```python
+jax.grad(objective)(0.5)   # finite through the closed organic loop
+```
+
+Its adjoint uses a least-squares linear solve deliberately. A closed
+organic loop is structurally singular in its carrier coordinates: the
+extractant and diluent come out exactly as they went in, so *any*
+solvent inventory is a fixed point. The inventory is a design degree of
+freedom, not something the loop determines, and the minimum-norm
+solution is the one that holds it fixed.
+
+The `split_shell` and `cerium_oxidation` modules wrap units that still
+concretise their diagnostics, so they are correct eager graph nodes but
+are not traceable.
 
 ---
 

@@ -90,6 +90,41 @@
 # - Xie, Zhang, Dreisinger & Doyle (2014) Miner. Eng. 56, 10
 # - Peppard et al. (1957) J. Inorg. Nucl. Chem.
 
+# SAPONIFICATION (#197)
+#
+# Every acidic (cation-exchange) record below carries a `saponification:`
+# block. Industrial rare-earth circuits neutralize 30 to 50% of the acidic
+# extractant BEFORE it enters the cascade,
+#
+#     HA_org + NaOH -> NaA_org + H2O
+#
+# so extraction is a counter-ion exchange rather than a proton exchange:
+#
+#     RE3+ + 3 NaA_org <-> RE(A)3_org + 3 Na+
+#
+# `degree` is a DEFAULT OPERATING POINT, not a property of the molecule: it is
+# the primary manipulated variable of the circuit, and a Saponifier, a section
+# or an optimizer overrides it. 0.30-0.50 is the industrial range; 0.35 is used
+# here as the mid-range default. `counter_ion` decides which effluent the plant
+# produces -- ammonium nitrogen (NH4) or a saline raffinate (Na, Mg).
+#
+# `log10_K: null` means "calibrate at build time", exactly as it does in
+# reaction_networks.yaml: NO MEASURED SAPONIFICATION CONSTANT SHIPS HERE.
+# difflow_ree.equilibrium.saponification.saponification_log_K inverts
+#
+#     K = S/(1-S) * [H+]/[M+]
+#
+# at the stated `reference_pH` and `reference_counter_ion`, so the constant is
+# a restatement of the declared degree at a declared condition rather than a
+# number from a paper. Supply a measured constant for design numbers.
+#
+# Background: Banda, Jeon & Lee, J. Ind. Eng. Chem. 21 (2015) 436,
+# doi:10.1016/j.jiec.2014.03.002 (Nd/Pr separation with saponified PC-88A);
+# Liao et al., J. Rare Earths 31 (2013) 331, doi:10.1016/S1002-0721(12)60281-6
+# (clean separation technologies and the effluent consequences of the
+# saponification route). Consulted qualitatively for the 30-50% range and the
+# effluent argument; NOT the source of any number in this file.
+
 extractants:
   D2EHPA:
     full_name: "Di-2-ethylhexyl phosphoric acid"
@@ -168,6 +203,15 @@ extractants:
 
     cost_usd_kg: 8.0
 
+    # Saponification (#197): see the file header for the provenance of these
+    # numbers. `degree` is an operating default, not a property.
+    saponification:
+      counter_ion: Na
+      degree: 0.35
+      log10_K: null          # calibrated from degree at the reference below
+      reference_pH: 3.0
+      reference_counter_ion: 0.1   # M
+
   PC88A:
     full_name: "2-ethylhexyl phosphonic acid mono-2-ethylhexyl ester"
     alternative_names: [EHEHPA, P507, Ionquest_801]
@@ -227,6 +271,15 @@ extractants:
     concentration_exponent: 3.0
     cost_usd_kg: 12.0
 
+    # Saponification (#197): see the file header for the provenance of these
+    # numbers. `degree` is an operating default, not a property.
+    saponification:
+      counter_ion: Na
+      degree: 0.35
+      log10_K: null          # calibrated from degree at the reference below
+      reference_pH: 3.0
+      reference_counter_ion: 0.1   # M
+
   Cyanex272:
     full_name: "Bis(2,4,4-trimethylpentyl)phosphinic acid"
     formula: "C16H35O2P"
@@ -284,6 +337,15 @@ extractants:
     reference_concentration: 0.3
     concentration_exponent: 3.0
     cost_usd_kg: 25.0
+
+    # Saponification (#197): see the file header for the provenance of these
+    # numbers. `degree` is an operating default, not a property.
+    saponification:
+      counter_ion: Na
+      degree: 0.35
+      log10_K: null          # calibrated from degree at the reference below
+      reference_pH: 3.0
+      reference_counter_ion: 0.1   # M
 
   TBP:
     full_name: "Tributyl phosphate"

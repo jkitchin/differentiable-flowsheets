@@ -40,6 +40,7 @@ __version__ = "0.1.0"
 # =============================================================================
 
 from difflow_ree.database import (
+    SAPONIFICATION_COUNTER_IONS,
     # Data classes
     REEElement,
     PHCoefficients,
@@ -76,6 +77,41 @@ from difflow_ree.database import (
 # =============================================================================
 
 from difflow_ree.equilibrium import (
+    # Stage-count correlations
+    stages_kremser,
+    stages_fenske,
+    # Saponification and counter-ion balance (#197)
+    SaponifiedParams,
+    SaponifiedSection,
+    saponification_log_K,
+    organic_buffer_pH,
+    organic_buffer_capacity,
+    saponification_degree_profile,
+    saponification_degree_for_pH,
+    divalent_counter_ion_template,
+    ph_profile_flatness,
+    INDUSTRIAL_DEGREE_RANGE,
+    DIVALENT_COUNTER_ION_CHARGES,
+    ALL_COUNTER_ION_CHARGES,
+    counter_ion_charge_of,
+    # Mass-action equilibrium closure (#196)
+    ReactionNetwork,
+    build_network,
+    list_networks,
+    get_network_template,
+    cation_exchange_network,
+    log_K_from_correlation,
+    correlation_ph_slope_defect,
+    network_for_extractant,
+    REEStreamSchema,
+    MassActionParams,
+    MassActionSection,
+    MassActionSolution,
+    solve_section,
+    solve_stage,
+    base_addition_for_pH,
+    base_addition_bounds,
+    charge_imbalance,
     # Distribution coefficients
     REEDistribution,
     get_distribution_coefficient,
@@ -101,7 +137,11 @@ from difflow_ree.equilibrium import (
 # Unit Operations
 # =============================================================================
 
+from difflow_ree.units.extraction import EXTRACTOR_MODELS
 from difflow_ree.units import (
+    # Saponification (#197)
+    Saponifier,
+    SaponifierParams,
     # Extraction
     REEExtractor,
     REEExtractorParams,
@@ -128,6 +168,43 @@ from difflow_ree.units import (
 # =============================================================================
 
 from difflow_ree.flowsheets import (
+    # Separation-train graph, ports, constraints, screening (#202)
+    SeparationTrain,
+    Connection,
+    Feed,
+    TrainResult,
+    TopologyError,
+    REEModule,
+    ExtractScrubStripModule,
+    SplitShellModule,
+    CeriumOxidationModule,
+    PrecipitationModule,
+    SaponificationModule,
+    SolventRegenerationParams,
+    MODULE_LIBRARY,
+    list_modules,
+    get_module_class,
+    build_module,
+    module_from_dict,
+    Port,
+    PortSet,
+    PortMismatchError,
+    PHASES,
+    check_connection,
+    OperatingConstraint,
+    ConstraintSet,
+    OperatingLimits,
+    third_phase_constraint,
+    loading_constraint,
+    hydraulic_constraint,
+    phase_ratio_constraints,
+    ScreeningVerdict,
+    ScreeningReport,
+    screen_separation,
+    screen_train,
+    screen_topologies,
+    minimum_stages,
+    separation_factor,
     ExtractStripCircuit,
     ExtractStripParams,
     ExtractScrubStripCircuit,
@@ -144,6 +221,18 @@ from difflow_ree.flowsheets import (
 # =============================================================================
 
 from difflow_ree.economics import (
+    # Saponification duty and effluent load (#197)
+    saponification_duty,
+    compare_counter_ions,
+    SaponificationDuty,
+    BaseReagent,
+    BASE_REAGENTS,
+    base_per_ree_oxide,
+    stoichiometric_base_per_ree_oxide,
+    nitrogen_per_ree_oxide,
+    dissolved_salt_per_ree_oxide,
+    ree_oxide_mass_flow,
+    base_for_counter_ion,
     REEPricing,
     ReagentCosts,
     OperatingCosts,
@@ -224,6 +313,15 @@ def register(registry):
         cls=REEMixerSettler,
         category="ree_extraction",
         description="Single mixer-settler stage for REE extraction",
+        plugin="difflow_ree",
+    )
+
+    # Saponification (#197)
+    registry.register(
+        name="Saponifier",
+        cls=Saponifier,
+        category="ree_extraction",
+        description="Pre-neutralize the organic before the cascade",
         plugin="difflow_ree",
     )
 
@@ -346,6 +444,92 @@ def register(registry):
 # =============================================================================
 
 __all__ = [
+    # Separation-train graph (#202)
+    "SeparationTrain",
+    "Connection",
+    "Feed",
+    "TrainResult",
+    "TopologyError",
+    "REEModule",
+    "ExtractScrubStripModule",
+    "SplitShellModule",
+    "CeriumOxidationModule",
+    "PrecipitationModule",
+    "SaponificationModule",
+    "SolventRegenerationParams",
+    "MODULE_LIBRARY",
+    "list_modules",
+    "get_module_class",
+    "build_module",
+    "module_from_dict",
+    "Port",
+    "PortSet",
+    "PortMismatchError",
+    "PHASES",
+    "check_connection",
+    "OperatingConstraint",
+    "ConstraintSet",
+    "OperatingLimits",
+    "third_phase_constraint",
+    "loading_constraint",
+    "hydraulic_constraint",
+    "phase_ratio_constraints",
+    "ScreeningVerdict",
+    "ScreeningReport",
+    "screen_separation",
+    "screen_train",
+    "screen_topologies",
+    "minimum_stages",
+    "separation_factor",
+    "stages_kremser",
+    "stages_fenske",
+    # Saponification and counter-ion balance (#197)
+    "SaponifiedParams",
+    "SaponifiedSection",
+    "saponification_log_K",
+    "organic_buffer_pH",
+    "organic_buffer_capacity",
+    "saponification_degree_profile",
+    "saponification_degree_for_pH",
+    "divalent_counter_ion_template",
+    "ph_profile_flatness",
+    "INDUSTRIAL_DEGREE_RANGE",
+    "DIVALENT_COUNTER_ION_CHARGES",
+    "ALL_COUNTER_ION_CHARGES",
+    "counter_ion_charge_of",
+    "Saponifier",
+    "SaponifierParams",
+    "SAPONIFICATION_COUNTER_IONS",
+    "saponification_duty",
+    "compare_counter_ions",
+    "SaponificationDuty",
+    "BaseReagent",
+    "BASE_REAGENTS",
+    "base_per_ree_oxide",
+    "stoichiometric_base_per_ree_oxide",
+    "nitrogen_per_ree_oxide",
+    "dissolved_salt_per_ree_oxide",
+    "ree_oxide_mass_flow",
+    "base_for_counter_ion",
+    # Mass-action equilibrium closure (#196)
+    "ReactionNetwork",
+    "build_network",
+    "list_networks",
+    "get_network_template",
+    "cation_exchange_network",
+    "log_K_from_correlation",
+    "correlation_ph_slope_defect",
+    "network_for_extractant",
+    "REEStreamSchema",
+    "MassActionParams",
+    "MassActionSection",
+    "MassActionSolution",
+    "solve_section",
+    "solve_stage",
+    "base_addition_for_pH",
+    "base_addition_bounds",
+    "charge_imbalance",
+    "EXTRACTOR_MODELS",
     # Version
     "__version__",
     # Data classes

@@ -86,9 +86,30 @@ Key capabilities:
    - Predictive performance metrics
    - Optional `max_folds` limit for large datasets
 
+9. **Identifiability** (`identifiability.py`)
+   - `check_identifiability` — rank test on the sensitivity matrix
+   - Answers whether the parameters are separately estimable *at all*
+   - Reuses the SVD rank machinery of `difflow.reconciliation.structure`
+
+10. **Experiment Design** (`design.py`)
+    - `design_experiments` — which runs to do next (D/A/E/modified-E optimal)
+    - `predicted_covariance` — the confidence intervals a campaign would buy
+    - Selects from a *candidate list*, for any model JAX can differentiate.
+      Continuous design optimization, profile likelihood, model discrimination
+      and classical designs are in the separate `discopt-doe` plugin
+      (`discopt.doe`), which needs a `discopt.modeling` model rather than a JAX
+      one.
+    - See [Experiment Design and Identifiability](experiment-design.md)
+
 ## Basic Workflow
 
-The API follows a simple fit → quantify → diagnose pattern:
+Before fitting anything, ask whether the parameters can be told apart at all:
+`check_identifiability` runs a rank test on the sensitivity matrix, and when it
+fails no estimator on this page can help — see
+[Experiment Design and Identifiability](experiment-design.md), which also covers
+choosing the *next* experiment.
+
+The fitting API then follows a simple fit → quantify → diagnose pattern:
 
 ```python
 from difflow.estimation import Estimator
@@ -173,8 +194,14 @@ to be aware of:
 - Weighting supports inverse-variance only (no robust M-estimators or correlated
   errors).
 - Bootstrap runs sequentially, so large resample counts can be slow.
-- There are no built-in identifiability diagnostics (e.g. Fisher-matrix
-  conditioning or profile likelihood).
+- Identifiability diagnostics are local and rank-based (`check_identifiability`,
+  see [Experiment Design and Identifiability](experiment-design.md)); there is
+  no profile likelihood and no global symbolic identifiability analysis.
+- There is no model discrimination, no estimability ranking, no classical or
+  screening design, and no continuous optimization of experimental conditions.
+  Those live in the `discopt-doe` plugin; see
+  [what is here and what is in `discopt-doe`](experiment-design.md#related-tools-discopt-doe-and-sensor-placement)
+  for the division of labour and when to reach for which.
 
 ## Example
 

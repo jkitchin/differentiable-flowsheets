@@ -36,6 +36,34 @@ from difflow_ree.kinetics.extraction_kinetics import approach_to_equilibrium
 _PHASE_FLOW_FLOOR_REL = 1e-12
 
 
+#: The two levels ``REEExtractor`` can run at (#196), behind one interface.
+#:
+#: ``"correlation"`` (default, unchanged) evaluates ``log10(D)`` from
+#: ``REEDistribution`` at a *specified* pH and solves the cascade with Kremser
+#: plus the smooth capacity limiter.
+#:
+#: ``"mass_action"`` solves the whole section's component balances against a
+#: reaction network carried as data, in log concentration, via
+#: ``difflow.eo_solver.solve_residual_system``.
+#:
+#: The interface is shared so cascade code is level-agnostic, but TWO THINGS
+#: GENUINELY DIFFER and are not hidden:
+#:
+#: 1. **State width.** The closed model reads and writes an acid, counter-ion
+#:    and anion balance the correlation ignores. The superset is declared once
+#:    in ``difflow_ree.equilibrium.schema.REEStreamSchema``; the correlation
+#:    path passes through what it does not use, as it always has.
+#: 2. **Degrees of freedom.** ``pH`` is an INPUT to the correlation and an
+#:    OUTPUT of the closed model, whose corresponding input is base addition
+#:    (or, from #197, saponification degree). Under ``model="mass_action"``
+#:    the ``pH`` field becomes the *calibration* pH -- where the two levels
+#:    are made to agree -- and the operating pH comes back in
+#:    ``info["pH_profile"]``. A design specified at one level is therefore not
+#:    directly expressible at the other; map between them explicitly with
+#:    ``difflow_ree.equilibrium.mass_action.base_addition_for_pH``.
+EXTRACTOR_MODELS = ("correlation", "mass_action")
+
+
 def _concrete(x) -> float | None:
     """Return ``x`` as a Python float, or None if it is a JAX tracer.
 
@@ -312,9 +340,43 @@ class REEExtractorParams(ParamsMixin):
     mechanism: str | None = None
     capacity_sharpness: int = 8
 
+    # -- Closed mass-action model (#196) ---------------------------------
+    # See EXTRACTOR_MODELS and the class docstring of REEExtractor. These are
+    # ignored entirely by the default correlation path.
+    model: str = "correlation"
+    aqueous_volumetric_flow: float | None = None
+    organic_volumetric_flow: float | None = None
+    counter_ion: str | None = "Na"
+    anion: str = "Cl"
+    reaction_network: str | None = None
+    log10_K: dict | None = None
+    base_addition: float | Array = 0.0
+
     def __post_init__(self):
         """Validate extractor parameters."""
         from difflow_ree.database import get_extractant_database, get_ree_database
+
+        if self.model not in EXTRACTOR_MODELS:
+            raise ValueError(
+                f"model must be one of {list(EXTRACTOR_MODELS)}, got "
+                f"{self.model!r} (#196)."
+            )
+        if self.model == "mass_action":
+            missing = [
+                name for name in
+                ("aqueous_volumetric_flow", "organic_volumetric_flow")
+                if getattr(self, name) is None
+            ]
+            if missing:
+                raise ValueError(
+                    f"model='mass_action' needs {missing} (L/s). The closed "
+                    f"model works in concentrations, so it needs the phase "
+                    f"volumes that the Kremser correlation could do without: "
+                    f"an equilibrium constant is not a function of a flow "
+                    f"ratio. There is no defensible way to guess them from "
+                    f"molar flows without a density model, so they are "
+                    f"required rather than defaulted (#196)."
+                )
 
         # Validate extractant exists
         extractant_db = get_extractant_database()
@@ -350,10 +412,29 @@ class REEExtractorParams(ParamsMixin):
 
 
 class REEExtractor:
-    """Multi-stage REE extraction cascade.
+    """Multi-stage REE extraction cascade, at either modelling level (#196).
 
-    Counter-current extraction using the Kremser equation
-    with optional loading and speciation corrections.
+    ``model="correlation"`` (the default, and unchanged) is counter-current
+    extraction by the Kremser equation with ``log10(D)`` from
+    :class:`~difflow_ree.equilibrium.distribution.REEDistribution`, evaluated
+    at a specified pH, plus the smooth capacity limiter.
+
+    ``model="mass_action"`` solves the section's component balances against a
+    reaction network carried as data -- see
+    :class:`difflow_ree.equilibrium.mass_action.MassActionSection`. Both are
+    reached through this one class and return
+    ``(raffinate, extract, info)``, so cascade code does not have to know
+    which level it is running at.
+
+    What the shared interface does **not** hide, and must not (see
+    :data:`EXTRACTOR_MODELS`): the closed model's state is wider (it carries
+    an acid, counter-ion and anion balance), and its degrees of freedom are
+    different. Under ``model="mass_action"`` the :attr:`REEExtractorParams.pH`
+    field is the *calibration* pH, not an operating specification: the
+    operating pH is an output, in ``info["pH_profile"]``, and the
+    corresponding input is ``base_addition``. Use
+    :func:`difflow_ree.equilibrium.mass_action.base_addition_for_pH` to map a
+    pH-specified design onto the closed model's inputs.
 
     Example:
         >>> params = REEExtractorParams(
@@ -364,6 +445,16 @@ class REEExtractor:
         ... )
         >>> extractor = REEExtractor(params)
         >>> raffinate, extract, info = extractor(feed, solvent)
+
+        The same cascade with the closed model, where pH becomes an output:
+
+        >>> closed = REEExtractor(params.update(
+        ...     model="mass_action",
+        ...     aqueous_volumetric_flow=1.0,
+        ...     organic_volumetric_flow=1.0,
+        ... ))
+        >>> raffinate, extract, info = closed(feed, solvent)
+        >>> info["pH_profile"]                       # doctest: +SKIP
     """
 
     symbol = "REE Extraction"
@@ -425,20 +516,66 @@ class REEExtractor:
         else:
             self._speciation = None
 
+        # Closed mass-action level (#196). Built here so an unbuildable
+        # network (bad element, basis mismatch) raises at construction rather
+        # than on the first call.
+        self._section = None
+        if params.model == "mass_action":
+            from difflow_ree.equilibrium.mass_action import (
+                MassActionParams,
+                MassActionSection,
+            )
+            self._section = MassActionSection(MassActionParams(
+                n_stages=int(params.n_stages),
+                extractant=params.extractant,
+                elements=tuple(params.elements),
+                aqueous_volumetric_flow=params.aqueous_volumetric_flow,
+                organic_volumetric_flow=params.organic_volumetric_flow,
+                diluent=params.diluent,
+                counter_ion=params.counter_ion,
+                anion=params.anion,
+                extractant_conc=params.extractant_conc,
+                # The correlation's operating pH becomes the CALIBRATION pH
+                # here; the operating pH is an output (#196).
+                calibration_pH=float(params.pH),
+                log10_K=params.log10_K,
+                network=params.reaction_network,
+                base_addition=params.base_addition,
+            ))
+
+    @property
+    def section(self):
+        """The underlying ``MassActionSection``, or None at the L1 level.
+
+        Returns:
+            :class:`difflow_ree.equilibrium.mass_action.MassActionSection`
+            when ``params.model == "mass_action"``, else None. Reach through
+            it for the reaction network, the tableau and the raw log-space
+            solution.
+        """
+        return self._section
+
     def __call__(
         self,
         feed: Stream,
         solvent: Stream,
         T: Array | float = 298.15,
         pH: Array | float | None = None,
+        base_addition: Array | float | None = None,
     ) -> tuple[Stream, Stream, dict]:
-        """Perform multi-stage extraction.
+        """Perform multi-stage extraction, at whichever level was configured.
 
         Args:
             feed: Aqueous feed stream (REE solution)
             solvent: Organic solvent stream
             T: Temperature (K)
-            pH: Operating pH (overrides params if provided)
+            pH: Operating pH (overrides params if provided). **Correlation
+                level only.** Under ``model="mass_action"`` the pH is an
+                output, so passing one here is refused rather than silently
+                ignored (#196).
+            base_addition: Strong monoacidic base dosed into the aqueous feed
+                (mol/s). **Closed level only**; this is the input that
+                replaces the specified pH.
 
         Returns:
             raffinate: Aqueous outlet (depleted)
@@ -451,11 +588,44 @@ class REEExtractor:
                 ``uncapped_extracted``, ``capacity_scale``,
                 ``capacity_clamped_fraction`` and ``capacity_sharpness``.
 
+                Under ``model="mass_action"``, ``info`` instead carries
+                ``pH_profile`` (an output), ``pH``, ``residual_norm``,
+                ``feasible``, ``theta``, ``free_extractant``, ``D``,
+                ``charge_imbalance`` and ``solution``.
+
         Raises:
             ValueError: If the feed has no aqueous species or the solvent has
-                no organic carrier (#192).
+                no organic carrier (#192), or if a ``pH`` is supplied to the
+                closed model, where it is an output (#196).
         """
         p = self.params
+
+        if self._section is not None:
+            if pH is not None:
+                raise ValueError(
+                    "REEExtractor(model='mass_action') was called with an "
+                    "explicit pH, but at this level pH is an OUTPUT of the "
+                    "proton balance, not an input: every trivalent ion "
+                    "extracted releases three protons, and the profile is "
+                    "solved for. The input that replaces it is "
+                    "base_addition (mol/s of strong base into the aqueous "
+                    "feed). To reproduce a design specified at a given pH, "
+                    "solve the inverse problem explicitly with "
+                    "difflow_ree.equilibrium.mass_action.base_addition_for_pH "
+                    "(#196). params.pH is used as the constant-calibration "
+                    "pH for the equilibrium constants."
+                )
+            return self._section(
+                feed, solvent, T=T, base_addition=base_addition
+            )
+        if base_addition is not None:
+            raise ValueError(
+                "base_addition is only meaningful for "
+                "REEExtractor(model='mass_action'): the correlation level has "
+                "no acid balance to dose into, and its pH is a parameter "
+                "(#196)."
+            )
+
         pH = pH if pH is not None else p.pH
         pH = jnp.asarray(pH)
         T = jnp.asarray(T)
@@ -624,18 +794,38 @@ class REEExtractor:
         # extractant balance never binds more extractant than was fed.
         capacity_info = {}
         if self._isotherm is not None:
-            total_newly_extracted = sum(
-                extract_flows[elem] - jnp.asarray(solvent_flows.get(elem, 0.0))
-                for elem in p.elements
+            # Saturate the TOTAL organic loading, not the increment. Scaling
+            # only what this section newly extracted and then adding the REE
+            # already on the entering solvent back on top left the total
+            # unbounded: with a loaded solvent, theta_total reached 2.18 while
+            # capacity_scale still read 0.78, i.e. the limiter looked as though
+            # it were binding while the organic carried 2.18x the extractant
+            # inventory. An open circuit always fed REE-free solvent so this
+            # never showed; the closed organic loop of #202 recycles loaded
+            # solvent, which is exactly the case it got wrong.
+            #
+            # Excess entering load is rejected to the aqueous, which is what a
+            # saturated extractant physically does -- it cannot hold more --
+            # and it is what drives a closed loop to a physical fixed point.
+            # With REE-free solvent every F_solvent_elem is zero and this
+            # reduces to the previous expression exactly.
+            total_in_organic = sum(
+                jnp.maximum(extract_flows[elem], 0.0) for elem in p.elements
             )
-            total_newly_extracted = jnp.maximum(total_newly_extracted, 0.0)
             max_capacity = F_extractant / self._isotherm.m
             k = k_sharp
-            scale = _soft_saturation(total_newly_extracted, max_capacity, k)
+            scale = _soft_saturation(total_in_organic, max_capacity, k)
+            total_newly_extracted = jnp.maximum(
+                sum(
+                    extract_flows[elem]
+                    - jnp.asarray(solvent_flows.get(elem, 0.0))
+                    for elem in p.elements
+                ),
+                0.0,
+            )
             for elem in p.elements:
                 F_solvent_elem = jnp.asarray(solvent_flows.get(elem, 0.0))
-                newly_extracted = extract_flows[elem] - F_solvent_elem
-                extract_flows[elem] = F_solvent_elem + newly_extracted * scale
+                extract_flows[elem] = jnp.maximum(extract_flows[elem], 0.0) * scale
                 raffinate_flows[elem] = (
                     jnp.asarray(feed_flows.get(elem, 0.0))
                     + F_solvent_elem

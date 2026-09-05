@@ -11,6 +11,11 @@ Key classes:
 - EOSolver: Assembles and solves the full system
 - EOSolveResult: Solution container with convergence info
 
+Key function:
+- solve_residual_system: Section-scope entry point for callers that already
+  have a residual r(z; args) = 0 and do not want a Flowsheet built around it
+  (#196).
+
 The EO approach is advantageous for:
 - Tightly coupled recycle loops (fewer iterations)
 - Sensitivity analysis (full Jacobian available)
@@ -34,6 +39,96 @@ import jax
 from difflow.streams import Stream, make_stream, get_flows, get_species
 from difflow.params_mixin import ParamsMixin
 import optimistix as optx
+
+
+def solve_residual_system(
+    residual_fn,
+    z0: Array,
+    args: Any = None,
+    rtol: float = 1e-12,
+    atol: float = 1e-12,
+    max_steps: int = 200,
+    feasible_tol: float | None = None,
+) -> tuple[Array, Array, Array]:
+    """Solve ``r(z; args) = 0`` with soft failure and implicit differentiation.
+
+    This is the section-scope entry point (#196). ``EOSolver`` assembles a
+    residual from a :class:`~difflow.flowsheet.Flowsheet`; some models --
+    a counter-current equilibrium section, for instance -- already *are* a
+    residual and do not need a Flowsheet built around them. Routing them
+    through here rather than through a hand-rolled Newton loop is what makes
+    the whole section one ``optimistix.root_find``, so:
+
+    - the reverse-mode tape is constant size rather than proportional to
+      stages times iterations (optimistix differentiates the converged
+      solution implicitly, it does not tape the iteration);
+    - the section Jacobian ``dr/dz`` is available as an ordinary
+      ``jax.jacobian`` of ``residual_fn``, which is the object the
+      linearization, back-off and estimation layers want;
+    - recycle tears stop being a separate mechanism -- a tear is just another
+      row of ``r``.
+
+    SOFT FAILURE. Nothing is raised. One cannot raise from inside ``vmap`` or
+    ``scan``, so failure is reported as a value: the returned residual norm
+    and boolean flag are traced arrays that a caller can branch on with
+    ``jnp.where``. A non-converged ``z`` is still returned, because under
+    ``vmap`` the converged members of the batch have to come back too.
+
+    TOLERANCE. ``rtol``/``atol`` default to 1e-12, far below any outer
+    flowsheet tolerance (typically 1e-6 to 1e-8). Keep it that way. A loosely
+    converged inner solve gives an implicit-function gradient that is exact
+    for the solution manifold but inconsistent with the value the code
+    actually returned, and the resulting finite-difference disagreement is
+    very hard to diagnose after the fact.
+
+    Args:
+        residual_fn: Callable ``(z, args) -> r`` with ``r`` the same shape as
+            ``z``. Must be JAX-traceable.
+        z0: Initial guess. Scale it well; Newton is not globally convergent.
+        args: Any pytree passed through to ``residual_fn``. Differentiable.
+        rtol: Relative tolerance for the Newton solver.
+        atol: Absolute tolerance for the Newton solver.
+        max_steps: Maximum Newton steps before giving up (softly).
+        feasible_tol: Residual infinity-norm below which the solution is
+            called feasible. None uses ``max(atol, rtol) * 1e4``, i.e. four
+            orders of margin above the solver tolerance, so a solve that
+            merely stalled just short of ``atol`` is not reported as failed.
+
+    Returns:
+        ``(z, residual_norm, feasible)``:
+
+        - ``z``: solution (or the last iterate, on failure);
+        - ``residual_norm``: scalar infinity norm of ``residual_fn(z, args)``;
+        - ``feasible``: scalar boolean array, True when ``z`` is finite and
+          the norm is below ``feasible_tol``.
+
+    Example:
+        >>> import jax.numpy as jnp
+        >>> f = lambda z, a: z ** 2 - a
+        >>> z, norm, ok = solve_residual_system(f, jnp.array([1.0]), 2.0)
+        >>> bool(ok), round(float(z[0]), 6)
+        (True, 1.414214)
+    """
+    if feasible_tol is None:
+        feasible_tol = max(atol, rtol) * 1e4
+
+    solver = optx.Newton(rtol=rtol, atol=atol)
+    sol = optx.root_find(
+        residual_fn,
+        solver,
+        z0,
+        args=args,
+        max_steps=max_steps,
+        throw=False,
+    )
+    z = sol.value
+    residual = residual_fn(z, args)
+    residual_norm = jnp.max(jnp.abs(residual))
+    feasible = jnp.logical_and(
+        jnp.all(jnp.isfinite(z)),
+        residual_norm <= feasible_tol,
+    )
+    return z, residual_norm, feasible
 
 
 @dataclass
@@ -181,6 +276,10 @@ class EOSolver:
         layout = self.layout
         flowsheet = self.flowsheet
         species_order = self.species_order
+        # Bound here like the other three: the fallback branch below reads this,
+        # and reading a bare `feed_names` raised NameError because the name is a
+        # local of __init__, not a closure cell (#206).
+        feed_names = self.feed_names
 
         def residual_fn(x, args):
             feeds = args

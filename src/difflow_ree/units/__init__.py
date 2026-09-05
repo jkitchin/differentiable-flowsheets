@@ -6,6 +6,7 @@ This module provides REE-specific unit operations:
 - REEStripper: Stripping section for product recovery
 - Precipitators: Oxalate, carbonate, hydroxide precipitation
 - CeriumOxidizer: Selective Ce removal via oxidation
+- Saponifier: Pre-neutralize the organic before the cascade (#197)
 """
 
 from difflow_ree.units.extraction import (
@@ -27,6 +28,10 @@ from difflow_ree.units.precipitation import (
     CarbonatePrecipitator,
     HydroxidePrecipitator,
     PrecipitatorParams,
+)
+from difflow_ree.units.saponification import (
+    Saponifier,
+    SaponifierParams,
 )
 from difflow_ree.units.cerium import (
     CeriumOxidizer,
@@ -50,6 +55,9 @@ __all__ = [
     "CarbonatePrecipitator",
     "HydroxidePrecipitator",
     "PrecipitatorParams",
+    # Saponification (#197)
+    "Saponifier",
+    "SaponifierParams",
     # Cerium
     "CeriumOxidizer",
     "CeriumOxidizerParams",

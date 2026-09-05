@@ -197,9 +197,19 @@ class REEStripper:
         product = make_stream(product_flows, T, P)
         barren_organic = make_stream(barren_org_flows, T, P)
 
-        # Calculate overall strip performance
-        total_in = sum(float(org_flows.get(e, 0.0)) for e in p.elements)
-        total_product = sum(float(product_flows.get(e, 0.0)) for e in p.elements)
+        # Calculate overall strip performance.
+        #
+        # Accumulated with jnp, not float(): these two sums are the only
+        # concretisation left in the unit, and they made the whole stripper
+        # untraceable, so no closed extract-strip loop containing one could be
+        # put through jit or grad (#202). The values are unchanged.
+        zero = jnp.asarray(0.0, dtype=jnp.float64)
+        total_in = sum(
+            (jnp.asarray(org_flows.get(e, 0.0)) for e in p.elements), zero
+        )
+        total_product = sum(
+            (jnp.asarray(product_flows[e]) for e in p.elements), zero
+        )
         overall_recovery = safe_divide(total_product, total_in)
 
         info = {
