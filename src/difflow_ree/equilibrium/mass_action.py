@@ -1723,8 +1723,16 @@ def base_addition_for_pH(
     # Clipped to the bracket so an unreachable target comes back as the
     # nearest reachable dosing rather than as a meaningless extrapolation. It
     # comes back with feasible=False either way.
+    #
+    # The fallback for a non-finite root is the bisection result, not b_hi. A
+    # target below the floor needs base *removed*, drives the augmented Newton
+    # into nonsense and comes back as nan -- and answering "the largest dose
+    # this section accepts" to "dose less than nothing" is the wrong end of
+    # the bracket by the whole bracket. The bisection has already collapsed to
+    # the correct end: every trial reads too high for a target under the
+    # floor, every trial too low for one over the ceiling.
     b_raw = z[-1] * b_scale
-    b = jnp.clip(jnp.where(jnp.isfinite(b_raw), b_raw, b_hi), b_lo, b_hi)
+    b = jnp.clip(jnp.where(jnp.isfinite(b_raw), b_raw, b0), b_lo, b_hi)
     # Converging is not the same as being realizable. The augmented system is
     # unbounded in b, so it will happily report a root that doses more base
     # than the section has protons to accept, or that *removes* more
