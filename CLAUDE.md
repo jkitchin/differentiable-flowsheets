@@ -8,7 +8,7 @@
 
 ```bash
 # Install in development mode
-pip install -e ".[dev,examples]"
+pip install -e ".[dev,examples,solvers]"
 
 # Run tests
 pytest tests/ -v
