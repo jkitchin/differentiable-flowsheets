@@ -53,10 +53,13 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
 
+      # `solvers` is asdex, which is where difflow.solvers gets its sparsity
+      # pattern. Without it as_nlp has only the coarse topology derivation to
+      # fall back on, and tests/test_solvers_bridge.py exercises the default.
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          pip install -e ".[dev,solvers]"
 
       # One invocation, not two. Splitting core and bio into separate pytest
       # processes meant the second one re-paid JAX/XLA startup and could not
@@ -84,10 +87,13 @@ jobs:
           python-version: "3.11"
           cache: pip
 
+      # `solvers` is asdex, which is where difflow.solvers gets its sparsity
+      # pattern. Without it as_nlp has only the coarse topology derivation to
+      # fall back on, and tests/test_solvers_bridge.py exercises the default.
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          pip install -e ".[dev,solvers]"
 
       - name: Run slow tests
         run: |

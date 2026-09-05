@@ -4,6 +4,11 @@
 every bridge imports its back end *inside* the function that needs it and
 routes the failure through :func:`require`, which names the PyPI
 distribution rather than the import name (they differ for pounce).
+
+``asdex`` goes through the same door, but it is not a back end: it is where
+the default sparsity pattern comes from, so ``difflow[solvers]`` installs it
+and :mod:`difflow.solvers.sparsity` says what the alternatives are when it is
+missing.
 """
 
 from __future__ import annotations
@@ -17,6 +22,7 @@ _PYPI_NAMES = {
     "pounce.jax": ("pounce-solver", "pounce-solver[jax]"),
     "discopt": ("discopt", "discopt"),
     "discopt.modeling": ("discopt", "discopt"),
+    "asdex": ("asdex", "difflow[solvers]"),
 }
 
 

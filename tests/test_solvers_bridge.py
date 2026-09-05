@@ -8,6 +8,11 @@ The load-bearing claims, and where each is pinned:
 * The equality rows *are* the flowsheet, so a feasible point is a converged
   flowsheet -- :func:`test_residuals_vanish_at_the_sequential_modular_solution`,
   :func:`test_optimum_is_a_converged_flowsheet`.
+* **Sparsity is derived, never probed, and never dense by default** --
+  :func:`test_the_default_pattern_is_not_dense`,
+  :func:`test_every_pattern_mode_is_a_superset_across_the_box`,
+  :func:`test_hessian_pattern_grows_linearly_with_the_flowsheet`,
+  :func:`test_missing_asdex_raises_instead_of_silently_going_dense`.
 * **The sparsity trap.** pounce probes at random ``N(0, 1)`` points unless a
   pattern is supplied. A difflow model evaluated at ``T ~ -1.3 K`` returns
   ``inf``/``nan`` derivatives, and ``nan > eps`` is ``False``, so those entries
@@ -39,6 +44,8 @@ from difflow import (  # noqa: E402
     CSTR,
     CSTRParams,
     Flowsheet,
+    Heater,
+    HeaterParams,
     IdealThermo,
     SpeciesData,
     Unit,
@@ -49,6 +56,7 @@ from difflow.solvers import (  # noqa: E402
     Decision,
     Parameter,
     Spec,
+    SparsityDetectionError,
     SparsityPatternError,
     as_implicit,
     as_nlp,
@@ -58,9 +66,13 @@ from difflow.solvers import (  # noqa: E402
     CUSTOMCALL_RESTRICTION,
     dense_hessian_pattern,
     dense_jacobian_pattern,
+    detect_hessian_pattern,
+    detect_jacobian_pattern,
+    detect_patterns,
     differentiable_problem,
     DiscoptIntegralityError,
     optimize_flowsheet,
+    pattern_density,
     require_eo_residuals,
     residual_from_system,
     solve_with_pounce,
@@ -324,15 +336,121 @@ def test_unknown_address_is_reported_with_the_grammar():
 
 
 # =============================================================================
-# Sparsity: supersets by construction, never probed
+# Sparsity: derived from the graph, never probed, never dense by default
 # =============================================================================
 
 
-def test_structural_pattern_is_a_superset_across_the_box():
-    """Point checks at many feasible points, not just at x0."""
-    _f, g, bd = free_T_problem(validate=True)
-    mask = np.zeros((bd.m, bd.n), dtype=bool)
-    mask[bd.jac_pattern[0], bd.jac_pattern[1]] = True
+def reactor_train(n_stages: int):
+    """``Heater -> CSTR`` repeated ``n_stages`` times, plus its decisions.
+
+    One CSTR cannot tell a linear pattern from a quadratic one; the growth
+    tests below need a flowsheet whose size is a knob.
+    """
+    fs = Flowsheet(species_order=["A", "B"])
+    fs.add_feed("feed", make_stream({"A": FEED_A, "B": 0.0}, T=FEED_T, P=P0))
+    prev = "feed"
+    for i in range(n_stages):
+        params = CSTRParams(
+            V=jnp.array(1.0),
+            rate_fn=_rate_fn,
+            stoich=jnp.array([[-1.0], [1.0]]),
+            rate_params={"A": jnp.array(PRE_EXP), "Ea": jnp.array(E_ACT)},
+            species_order=["A", "B"],
+        )
+        fs.add_unit(
+            Unit(f"heat{i}", Heater(HeaterParams(T_out=350.0)), [prev], [f"hot{i}"])
+        )
+        fs.add_unit(
+            Unit(
+                f"rx{i}",
+                CSTR(params, thermo=_thermo(), mode="isothermal"),
+                [f"hot{i}"],
+                [f"out{i}"],
+                params={"T_spec": 350.0, "volumetric_flow": QV},
+            )
+        )
+        prev = f"out{i}"
+    decisions = [
+        Decision(f"unit:rx{i}.params.V", lb=0.01, ub=5.0, x0=0.5)
+        for i in range(n_stages)
+    ]
+    return fs, decisions, prev
+
+
+def train_problem(n_stages: int, **kwargs):
+    fs, decisions, last = reactor_train(n_stages)
+    return as_nlp(
+        fs,
+        decisions,
+        [(f"{last}.F_B", ">=", 5.0)],
+        objective=lambda streams, dvals: sum(dvals.values()),
+        **kwargs,
+    )
+
+
+def as_mask(pattern, shape, symmetric=False):
+    mask = np.zeros(shape, dtype=bool)
+    r, c = np.asarray(pattern[0]), np.asarray(pattern[1])
+    mask[r, c] = True
+    if symmetric:
+        mask[c, r] = True
+    return mask
+
+
+def test_the_default_pattern_is_not_dense():
+    """The regression this module was rewritten for.
+
+    The topology derivation gives any row it cannot see inside *every* column,
+    and the objective is such a row unless ``objective_vars`` is passed -- so
+    ``cols(f) x cols(f)`` covered the whole triangle and the shipped default
+    Hessian pattern was exactly dense on essentially every model. The default
+    now reads the structure off the jaxpr instead.
+    """
+    _f, _g, bd = free_T_problem()
+    assert bd.sparsity_source == "global"
+
+    dense_hess = bd.n * (bd.n + 1) // 2
+    assert len(bd.hess_pattern[0]) < dense_hess / 4
+    assert len(bd.jac_pattern[0]) < bd.m * bd.n / 2
+    assert bd.hess_density < 0.25 and bd.jac_density < 0.5
+    assert "sparsity='global'" in repr(bd)
+
+
+def test_the_topology_fallback_is_dense_in_the_hessian_and_says_so():
+    """The behaviour the default replaced, kept reachable and kept honest: it
+    is still a valid superset, it is still what you get when graph analysis
+    fails, and it warns that the rows it cannot see inside cost you the
+    Hessian."""
+    with pytest.warns(RuntimeWarning, match="cannot see inside"):
+        _f, _g, bd = free_T_problem(sparsity="structural")
+    assert bd.sparsity_source == "structural"
+    assert len(bd.hess_pattern[0]) == bd.n * (bd.n + 1) // 2  # dense triangle
+
+
+def test_objective_vars_tightens_the_topology_path():
+    """The escape hatch the warning points at: name the objective's variables
+    and the structural Hessian stops being the whole triangle. It is still the
+    coarse answer -- a residual row's outer product covers a whole unit -- but
+    it is no longer dense by construction."""
+    named = [f"unit:rx{i}.params.V" for i in range(3)]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)  # no "cannot see inside"
+        _f, _g, bd = train_problem(3, sparsity="structural", objective_vars=named)
+    assert len(bd.hess_pattern[0]) < bd.n * (bd.n + 1) // 2
+
+    with pytest.warns(RuntimeWarning, match="the objective"):
+        _f2, _g2, blind = train_problem(3, sparsity="structural")
+    assert len(blind.hess_pattern[0]) == blind.n * (blind.n + 1) // 2
+
+
+@pytest.mark.parametrize("mode", ["auto", "global", "structural", "dense"])
+def test_every_pattern_mode_is_a_superset_across_the_box(mode):
+    """Point checks at many feasible points, not just at x0. A pattern is a
+    claim about all of R^n, so a pattern that holds only at x0 is not one."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        _f, g, bd = free_T_problem(sparsity=mode, validate=True)
+    mask = as_mask(bd.jac_pattern, (bd.m, bd.n))
     rng = np.random.default_rng(7)
     lo, hi = np.asarray(bd.lb), np.asarray(bd.ub)
     hi = np.minimum(hi, 1e4)  # keep the sample inside physical territory
@@ -343,13 +461,40 @@ def test_structural_pattern_is_a_superset_across_the_box():
         assert ((np.abs(J) > 0) <= mask).all()
 
 
-def test_structural_pattern_is_tighter_than_dense_but_still_valid():
-    _f, _g, bd = free_T_problem()
-    dense_nnz = bd.m * bd.n
-    assert len(bd.jac_pattern[0]) < dense_nnz
-    # The spec row touches exactly one variable, which is where the saving is.
-    rows = np.asarray(bd.jac_pattern[0])
-    assert (rows == bd.m - 1).sum() == 1
+def test_the_derived_pattern_is_inside_the_topology_pattern():
+    """Two independent derivations of the same object: the graph analysis must
+    land inside the connectivity superset, and strictly inside it."""
+    _f, _g, tight = free_T_problem()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        _f2, _g2, coarse = free_T_problem(sparsity="structural")
+
+    fine = as_mask(tight.jac_pattern, (tight.m, tight.n))
+    broad = as_mask(coarse.jac_pattern, (coarse.m, coarse.n))
+    assert (fine <= broad).all()
+    assert fine.sum() < broad.sum()
+
+
+def test_hessian_pattern_grows_linearly_with_the_flowsheet():
+    """Why dense fails 'all the time': the dense triangle is O(n^2) and n grows
+    with the flowsheet, so the Hessian colouring cost grows with the square of
+    the plant. The derived pattern grows with the number of reactors."""
+    sizes, hess_nnz, dense_nnz = [], [], []
+    for n_stages in (1, 2, 4):
+        _f, _g, bd = train_problem(n_stages, validate=False)
+        sizes.append(bd.n)
+        hess_nnz.append(len(bd.hess_pattern[0]))
+        dense_nnz.append(bd.n * (bd.n + 1) // 2)
+
+    # Quadrupling the flowsheet quadruples the pattern (linear), while the
+    # dense triangle goes up by more than an order of magnitude.
+    assert hess_nnz[2] < 6 * hess_nnz[0]
+    assert dense_nnz[2] > 10 * dense_nnz[0]
+    assert hess_nnz[2] < dense_nnz[2] / 20
+    # Per stage, the Hessian pattern is a constant -- it does not know how big
+    # the flowsheet is, only how much of it each variable touches.
+    per_stage = [h / s for h, s in zip(hess_nnz, (1, 2, 4))]
+    assert max(per_stage) / min(per_stage) < 1.5
 
 
 def test_dense_patterns_are_supersets_by_definition():
@@ -359,6 +504,81 @@ def test_dense_patterns_are_supersets_by_definition():
     }
     hr, hc = dense_hessian_pattern(4)
     assert len(hr) == 10 and np.all(hr >= hc)
+
+
+def test_detect_patterns_reads_a_hand_built_model_exactly():
+    """Not every caller has a flowsheet. On a model whose structure is
+    obvious, the derived pattern is the true one -- no slack at all."""
+
+    def f(x):
+        return x[0] ** 2 * x[1]
+
+    def g(x):
+        return jnp.array([x[0] * x[2], x[1] + x[3]])
+
+    jac, hess = detect_patterns(f, g, jnp.ones(4), 2)
+    assert set(zip(jac[0].tolist(), jac[1].tolist())) == {(0, 0), (0, 2), (1, 1), (1, 3)}
+    # d2/dx0dx0, d2/dx0dx1 from the objective; d2/dx0dx2 from row 0 of g.
+    # x3 is linear everywhere, so it has no Hessian entry at all.
+    assert set(zip(hess[0].tolist(), hess[1].tolist())) == {(0, 0), (1, 0), (2, 0)}
+
+
+def test_detection_is_used_for_both_patterns_of_the_flowsheet():
+    """The Jacobian and the Hessian come from the same analysis, and the
+    Hessian one is taken over *all* multipliers -- it is built by tracing
+    lambda, not by fixing it."""
+    f, g, bd = free_T_problem(validate=False)
+    jac = detect_jacobian_pattern(g, bd.x0)
+    hess = detect_hessian_pattern(f, g, bd.x0, bd.m)
+    assert set(zip(*[a.tolist() for a in jac])) == set(
+        zip(*[np.asarray(a).tolist() for a in bd.jac_pattern]))
+    assert set(zip(*[a.tolist() for a in hess])) == set(
+        zip(*[np.asarray(a).tolist() for a in bd.hess_pattern]))
+    assert np.all(np.asarray(hess[0]) >= np.asarray(hess[1]))  # lower triangle
+
+
+def test_missing_asdex_raises_instead_of_silently_going_dense(monkeypatch):
+    """An install problem has an obvious fix. Substituting a dense pattern
+    would hide it behind a solve that is merely slow -- or, on a real plant,
+    one that never finishes."""
+    import difflow.solvers.sparsity as sparsity_mod
+
+    def no_asdex(module):
+        raise ImportError(f"no {module}: `pip install difflow[solvers]`")
+
+    monkeypatch.setattr(sparsity_mod, "require", no_asdex)
+    with pytest.raises(ImportError, match=r"difflow\[solvers\]"):
+        free_T_problem()
+
+    # The explicit modes still work without it -- neither uses the analysis.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        _f, _g, bd = free_T_problem(sparsity="structural")
+    assert bd.sparsity_source == "structural"
+
+
+def test_detection_failure_falls_back_loudly_and_global_refuses_to(monkeypatch):
+    """asdex cannot see through an inner solve. 'auto' may fall back to the
+    connectivity pattern -- but it says so; 'global' asks for the analysis and
+    gets an error rather than a coarser answer."""
+    import difflow.solvers.nlp as nlp_mod
+
+    def boom(*args, **kwargs):
+        raise SparsityDetectionError("jaxpr contains linear_solve")
+
+    monkeypatch.setattr(nlp_mod, "detect_jacobian_pattern", boom)
+
+    with pytest.warns(RuntimeWarning, match="falling back"):
+        _f, _g, bd = free_T_problem(sparsity="auto")
+    assert bd.sparsity_source == "structural"
+
+    with pytest.raises(SparsityDetectionError, match="linear_solve"):
+        free_T_problem(sparsity="global")
+
+
+def test_unknown_sparsity_mode_is_refused_with_the_choices():
+    with pytest.raises(ValueError, match="auto"):
+        free_T_problem(sparsity="sparse")
 
 
 def test_validate_patterns_catches_a_missing_entry():
@@ -376,16 +596,44 @@ def test_validate_patterns_accepts_the_derived_pattern():
     )
 
 
+def test_sampled_validation_is_column_exact():
+    """Above the dense limit the check samples columns instead of skipping.
+    Each sample is a JVP against a basis vector, which is exactly that column
+    of J -- so a sampled check that covers every column is not weaker than the
+    dense one, only cheaper to reach."""
+    f, g, bd = train_problem(2, validate=False)
+    validate_patterns(
+        g,
+        bd.x0,
+        bd.jac_pattern,
+        bd.m,
+        bd.n,
+        f=f,
+        hess_pattern=bd.hess_pattern,
+        mode="sampled",
+        n_samples=bd.n,
+    )
+    rows, cols = (np.asarray(a) for a in bd.jac_pattern)
+    keep = cols != cols[0]
+    with pytest.raises(SparsityPatternError, match="silently wrong"):
+        validate_patterns(
+            g,
+            bd.x0,
+            (rows[keep], cols[keep]),
+            bd.m,
+            bd.n,
+            mode="sampled",
+            n_samples=bd.n,
+        )
+
+
 def test_hessian_pattern_covers_the_lagrangian():
     """With RANDOM multipliers. At lambda = 1 the CSTR's two material balances
     cancel their shared reaction term exactly (the stoichiometric column sums to
     zero), so the Lagrangian Hessian is identically zero and the check passes
     for any pattern, including an empty one."""
     f, g, bd = free_T_problem()
-    hmask = np.zeros((bd.n, bd.n), dtype=bool)
-    hr, hc = np.asarray(bd.hess_pattern[0]), np.asarray(bd.hess_pattern[1])
-    hmask[hr, hc] = True
-    hmask[hc, hr] = True
+    hmask = as_mask(bd.hess_pattern, (bd.n, bd.n), symmetric=True)
 
     ones = np.asarray(
         jax.hessian(lambda z: f(z) + jnp.dot(jnp.ones(bd.m), g(z)))(bd.x0)
@@ -410,6 +658,11 @@ def test_validate_patterns_catches_a_missing_hessian_entry():
         validate_patterns(
             g, bd.x0, bd.jac_pattern, bd.m, bd.n, f=f, hess_pattern=diag
         )
+
+
+def test_pattern_density_is_the_fraction_of_dense():
+    assert pattern_density((np.arange(3), np.arange(3)), 3, 3) == pytest.approx(1 / 3)
+    assert pattern_density(dense_jacobian_pattern(3, 4), 3, 4) == pytest.approx(1.0)
 
 
 # =============================================================================
@@ -477,7 +730,7 @@ def test_probed_pattern_breaks_the_solve_that_the_adapter_completes():
 
 @needs_pounce
 def test_the_adapter_never_reaches_pounce_without_a_pattern(monkeypatch):
-    """Structural or dense, but never None -- there is no probing code path."""
+    """A pattern always, never None -- there is no probing code path."""
     pj = require("pounce.jax")
     seen = {}
     real = pj.from_jax
@@ -492,13 +745,15 @@ def test_the_adapter_never_reaches_pounce_without_a_pattern(monkeypatch):
     assert seen["jac_pattern"] is not None
     assert seen["hess_pattern"] is not None
 
-    # Even when Bounds carries nothing, the wrapper substitutes dense.
+    # When Bounds carries nothing the wrapper refuses. It used to substitute a
+    # dense pattern, which is a valid superset and a false economy: it is n
+    # colors per Hessian evaluation, arrived at silently.
     seen.clear()
     bd.jac_pattern = None
     bd.hess_pattern = None
-    solve_with_pounce(f, g, bd)
-    assert len(seen["jac_pattern"][0]) == bd.m * bd.n
-    assert len(seen["hess_pattern"][0]) == bd.n * (bd.n + 1) // 2
+    with pytest.raises(SparsityDetectionError, match="probing"):
+        solve_with_pounce(f, g, bd)
+    assert not seen, "pounce must not be reached at all"
 
 
 # =============================================================================

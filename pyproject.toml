@@ -97,6 +97,15 @@ planning = [
     # The planner itself solves with HiGHS via scipy and needs nothing extra.
     "pyomo>=6.0",
 ]
+solvers = [
+    # difflow.solvers: sparsity patterns for the external NLP/MINLP bridges.
+    # asdex propagates index sets through the jaxpr, so the pattern it returns
+    # is valid for every input -- unlike probing at a random point, which a
+    # process model answers with nan and pounce then records as a structural
+    # zero. The back ends themselves (pounce-solver[jax], discopt) stay
+    # optional: install whichever one you solve with.
+    "asdex>=0.5",
+]
 cuda12 = [
     "jax[cuda12]>=0.4.0",
 ]
@@ -104,7 +113,7 @@ cuda11 = [
     "jax[cuda11_local]>=0.4.0",
 ]
 all = [
-    "difflow[dev,examples,visualization,bio,ree,cc,gas,power]",
+    "difflow[dev,examples,visualization,bio,ree,cc,gas,power,solvers]",
 ]
 
 [project.urls]

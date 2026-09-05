@@ -38,7 +38,9 @@ emits a ``linear_solve`` primitive, and it couples every variable in its
 block, so the sequential form is both harder to trace and *denser* than the
 residual form. Promoting the stream variables to decision variables makes
 every equation explicit and the Jacobian block-banded by topology, which is
-what ``as_nlp(sparsity="structural")`` exploits.
+what the sparsity detection below exploits -- and ``asdex`` has no handler
+for the ``linear_solve`` an inner Newton emits, so the sequential form
+cannot be analyzed at all.
 
 One trap when writing the residual form by hand rather than through
 :func:`as_nlp`: ``eo_residuals`` returns ``n_species`` material balances
@@ -49,44 +51,58 @@ directly and hold ``P`` fixed -- as the hand-written reactor train in
 collapse to ``0 = 0``; they must be sliced off or the constraint Jacobian
 gets exactly-zero rows.
 
-Sparsity is a promise, not a computation
-----------------------------------------
+Sparsity is derived, never probed
+---------------------------------
 The single most important thing this module does is hand the solver a
-sparsity pattern **derived from the flowsheet topology** instead of letting
-the solver find one by probing.
+sparsity pattern instead of letting the solver find one by probing.
 
 ``pounce.jax.from_jax`` (and ``JaxProblem``) detect sparsity by evaluating
 derivatives at random :math:`\\mathcal{N}(0, 1)` points, which have nothing
 to do with ``x0`` or the bounds. For a process model that means evaluating
 at, say, ``T = -1.3 K``: Arrhenius terms overflow, reactor linear solves go
-singular, and the probe returns garbage or raises. **Every difflow model
-hits this.** So the adapters here always supply ``jac_pattern`` and
+singular, and ``nan > eps`` is ``False``, so a whole column of real
+derivatives is recorded as structurally zero. **Every difflow model hits
+this.** So the adapters here always supply ``jac_pattern`` and
 ``hess_pattern`` and never fall through to probing.
 
-The contract on a supplied pattern is that it must be a **superset** of the
-true structure. Extra entries merely report a zero and may cost an extra
-color; a *missing* entry is silently wrong -- on the dense path the
-derivative is dropped, and under ``sparse=True`` it aliases into a
-same-colored entry and corrupts that one too. pounce never checks. So
-:func:`as_nlp` (a) builds patterns that are supersets *by construction* --
-a unit's residual rows can only touch the stream variables of its own
-inlets and outlets, plus the decisions that reach that unit -- and (b)
-verifies the pattern against a dense AD Jacobian at ``x0`` when the problem
-is small enough. Point verification is necessary, not sufficient; the
-by-construction argument is what makes it safe.
+By default the pattern comes from **global graph analysis** (:mod:`asdex`):
+index sets propagated through the jaxpr of ``g``, and of the Lagrangian for
+the Hessian, with no derivative evaluated anywhere, so the answer holds at
+every point. On difflow's equation-oriented residuals it is also tight --
+exactly the entries that are nonzero at a feasible point.
+
+The topology derivation is the fallback (``sparsity="structural"``): a
+unit's residual rows can only touch the stream variables of its own inlets
+and outlets, plus the decisions that reach that unit. That is a superset by
+construction, but it is blind to the objective and to callable spec bodies,
+which makes the Lagrangian Hessian dense -- ``n`` colors per evaluation, and
+:math:`n^2` growth where the true structure grows like :math:`n`. Dense is
+never a default anywhere in this package; ``sparsity="dense"`` is how you
+ask for it. :mod:`difflow.solvers.sparsity` has the numbers.
+
+The contract on any pattern is that it must be a **superset** of the true
+structure. Extra entries merely report a zero and may cost an extra color; a
+*missing* entry is silently wrong -- on the dense path the derivative is
+dropped, and under ``sparse=True`` it aliases into a same-colored entry and
+corrupts that one too. pounce never checks, so
+:func:`~difflow.solvers.sparsity.validate_patterns` does, and it runs by
+default: exactly against dense AD for a small problem, column by column
+against JVPs for a large one. Point verification is necessary, not
+sufficient; the derivation is what makes a pattern valid everywhere.
 
 One numerical subtlety in that verification, which is easy to get wrong:
 the Lagrangian Hessian must be checked at *random* multipliers, not at
 ``lambda = 1``. A unit's material balances share one reaction term whose
 stoichiometric coefficients sum to zero over the species, so weighting the
 rows equally cancels the nonlinearity exactly and gives ``H = 0``, at which
-point any pattern passes -- including an empty one. See
-:func:`validate_patterns`.
+point any pattern passes -- including an empty one. Graph analysis is immune
+(reachability does not cancel); the numerical check works around it.
 """
 
 from __future__ import annotations
 
 import copy
+import warnings
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable, Iterable, Sequence
 
@@ -97,6 +113,16 @@ from jax import Array
 
 from difflow.eo_solver import EOSolver, EOStateLayout
 from difflow.flowsheet import Flowsheet
+from difflow.solvers.sparsity import (
+    SparsityDetectionError,
+    SparsityPatternError,
+    dense_hessian_pattern,
+    dense_jacobian_pattern,
+    detect_hessian_pattern,
+    detect_jacobian_pattern,
+    pattern_density,
+    validate_patterns,
+)
 from difflow.streams import Stream
 
 __all__ = [
@@ -104,10 +130,13 @@ __all__ = [
     "Parameter",
     "Spec",
     "Bounds",
+    "SparsityDetectionError",
     "SparsityPatternError",
     "as_nlp",
     "dense_jacobian_pattern",
     "dense_hessian_pattern",
+    "detect_jacobian_pattern",
+    "detect_hessian_pattern",
     "require_eo_residuals",
     "validate_patterns",
 ]
@@ -123,15 +152,6 @@ BIG = 1.0e20
 DEFAULT_FLOW_BOUNDS = (0.0, BIG)
 DEFAULT_T_BOUNDS = (200.0, 1000.0)
 DEFAULT_P_BOUNDS = (1.0, 1.0e9)
-
-
-class SparsityPatternError(RuntimeError):
-    """A supplied sparsity pattern is not a superset of the true structure.
-
-    Raised by :func:`validate_patterns`. This is the failure that pounce
-    itself will *not* report: it accepts any pattern and silently returns
-    wrong derivatives for the entries the pattern omits.
-    """
 
 
 # ---------------------------------------------------------------------------
@@ -341,6 +361,11 @@ class Bounds:
     # so unpack can overlay the optimizer's values onto the reference feeds
     # instead of reporting them at their starting values (#207 review).
     feed_decisions: tuple[tuple[int, str, str], ...] = ()
+    #: Where the patterns came from: "global" (asdex graph analysis),
+    #: "structural" (flowsheet topology) or "dense". Reported by __repr__,
+    #: because a model that quietly fell back to dense is a model whose
+    #: Hessian costs n colors.
+    sparsity_source: str = "global"
 
     @property
     def n(self) -> int:
@@ -377,11 +402,24 @@ class Bounds:
         return dvals, streams
 
     def __repr__(self) -> str:  # pragma: no cover - cosmetic
+        jac_nnz = len(self.jac_pattern[0])
+        hess_nnz = len(self.hess_pattern[0])
         return (
             f"Bounds(n={self.n}, m={self.m}, n_decisions={self.n_decisions}, "
-            f"jac_nnz={len(self.jac_pattern[0])}, "
-            f"hess_nnz={len(self.hess_pattern[0])})"
+            f"jac_nnz={jac_nnz} ({100 * self.jac_density:.2g}% of dense), "
+            f"hess_nnz={hess_nnz}, sparsity={self.sparsity_source!r})"
         )
+
+    @property
+    def jac_density(self) -> float:
+        """Fraction of the dense ``(m, n)`` Jacobian the pattern occupies."""
+        return pattern_density(self.jac_pattern, self.m, self.n)
+
+    @property
+    def hess_density(self) -> float:
+        """Fraction of the dense lower triangle the Hessian pattern occupies."""
+        tri = self.n * (self.n + 1) // 2
+        return 0.0 if tri == 0 else len(self.hess_pattern[0]) / tri
 
 
 # ---------------------------------------------------------------------------
@@ -559,24 +597,8 @@ def _make_builder(flowsheet, decisions, parameters):
 
 
 # ---------------------------------------------------------------------------
-# Sparsity patterns
+# Topology-derived sparsity -- the fallback when the graph cannot be analyzed
 # ---------------------------------------------------------------------------
-
-
-def dense_jacobian_pattern(m: int, n: int) -> tuple[np.ndarray, np.ndarray]:
-    """Every entry of an ``(m, n)`` matrix, in cyipopt ``(rows, cols)`` form.
-
-    Always a valid superset, which is why it is the fallback whenever the
-    structural derivation cannot be trusted.
-    """
-    rows, cols = np.meshgrid(np.arange(m), np.arange(n), indexing="ij")
-    return rows.ravel().astype(np.int64), cols.ravel().astype(np.int64)
-
-
-def dense_hessian_pattern(n: int) -> tuple[np.ndarray, np.ndarray]:
-    """The full lower triangle of an ``(n, n)`` matrix."""
-    rows, cols = np.tril_indices(n)
-    return rows.astype(np.int64), cols.astype(np.int64)
 
 
 def _pattern_from_sets(row_cols: list[set[int]], m: int, n: int):
@@ -612,96 +634,109 @@ def _hessian_from_rows(row_cols: list[set[int]], obj_cols: set[int], n: int):
     return np.asarray(rows, dtype=np.int64), np.asarray(cols, dtype=np.int64)
 
 
-def validate_patterns(
-    g: Callable,
-    x: Array,
-    jac_pattern,
-    m: int,
-    n: int,
+def _topology_patterns(
+    ref_fs,
+    layout,
+    decisions,
+    specs,
+    x0,
     *,
-    f: Callable | None = None,
-    hess_pattern=None,
-    n_multipliers: int = 4,
-    seed: int = 0,
-) -> None:
-    """Check that the patterns cover the AD structure at ``x``.
+    n_d: int,
+    n: int,
+    m: int,
+    n_res: int,
+    var_names: list[str],
+    objective_vars,
+    addressed: bool,
+):
+    """Jacobian and Hessian patterns from the flowsheet's topology alone.
 
-    pounce accepts any pattern without looking at the model, and a missing
-    entry is silently wrong, so this is the only check there is. It is a
-    *point* check: passing means the pattern covers the structure at ``x``,
-    not everywhere. The by-construction derivation in :func:`as_nlp` is what
-    makes the pattern valid everywhere; this catches mistakes in that
-    derivation.
+    The fallback for a model whose graph cannot be analyzed. A unit's
+    residual rows can only touch the stream variables of its own inlets and
+    outlets plus the decisions written into that unit -- everything
+    downstream travels through stream variables, which are columns in their
+    own right -- so the pattern is a superset at every point, with nothing
+    evaluated.
 
-    The Lagrangian Hessian is checked at **several random multiplier
-    vectors**, not at ``lambda = 1``. The obvious choice of all-ones is
-    numerically vacuous on exactly the models this package targets: a unit's
-    material balances share one reaction term with stoichiometric coefficients
-    that sum to zero over the species, so summing the rows with equal weight
-    cancels the nonlinearity and gives ``H = 0`` identically. The check then
-    passes for *any* pattern, including an empty one. (A symbolic union such as
-    ``asdex.hessian_sparsity`` at ``lambda = 1`` is fine -- graph reachability
-    does not cancel -- but this is a numerical check.) Random multipliers
-    break the cancellation; a ``lambda = 0`` draw is also included so the
-    objective's own Hessian is covered.
+    What it cannot see is the *objective* and any spec body given as a
+    callable. Both come out dense unless ``objective_vars`` and
+    ``Spec.variables`` say otherwise, and a dense objective block makes the
+    whole Lagrangian Hessian dense. That is the reason this is the fallback
+    and not the default.
 
     Args:
-        g: Constraint body.
-        x: Point at which to evaluate the dense derivative.
-        jac_pattern: ``(rows, cols)`` for the ``(m, n)`` Jacobian.
-        m: Number of constraints.
+        ref_fs: The reference flowsheet.
+        layout: Its :class:`~difflow.eo_solver.EOStateLayout`.
+        decisions: Decisions, in variable order.
+        specs: Parsed specs, in constraint order.
+        x0: Starting point, used only to rebuild the reference streams.
+        n_d: Size of the decision block.
         n: Number of variables.
-        f: Objective; when given, the Lagrangian Hessian is checked too.
-        hess_pattern: ``(rows, cols)`` for the Hessian's lower triangle.
-        n_multipliers: Number of random multiplier draws to union.
-        seed: Seed for those draws, so the check is reproducible.
+        m: Number of constraints.
+        n_res: Number of residual rows (constraints before the specs).
+        var_names: Variable names, in order.
+        objective_vars: Variables the objective touches, or ``None``.
+        addressed: False for a builder callable, where a decision cannot be
+            attributed to a unit and so touches all of them.
 
-    Raises:
-        SparsityPatternError: If any structurally nonzero entry at ``x`` is
-            missing from the pattern.
-
-    Example:
-        >>> validate_patterns(g, x0, jac_pattern, m, n)   # doctest: +SKIP
+    Returns:
+        ``(jac_pattern, hess_pattern)``, or ``None`` if the per-unit row
+        counts do not add up to ``n_res`` -- in which case the rows cannot be
+        attributed to units and the derivation is not a superset. A wrong
+        guess degrades to ``None`` rather than to a corrupt pattern.
     """
-    x = jnp.asarray(x)
-    mask = np.zeros((m, n), dtype=bool)
-    r, c = jac_pattern
-    mask[np.asarray(r), np.asarray(c)] = True
-    J = np.asarray(jax.jacobian(g)(x))
-    missing = np.argwhere((np.abs(J) > 0) & ~mask)
-    if missing.size:
-        raise SparsityPatternError(
-            f"jac_pattern misses {len(missing)} structurally nonzero entries "
-            f"at x0, e.g. {missing[:5].tolist()}. A missing entry is silently "
-            "wrong in pounce -- fall back to dense_jacobian_pattern()."
+    ref_streams = dict(ref_fs.feeds)
+    ref_streams.update(layout.unpack(x0[n_d:]))
+    sizes = _unit_row_blocks(ref_fs, layout, ref_streams)
+    if sizes is None or sum(sizes) != n_res:
+        return None
+
+    index = {nm: i for i, nm in enumerate(var_names)}
+    dec_map = _decision_rows(ref_fs, decisions, addressed)
+    row_cols: list[set[int]] = []
+    for k, unit in enumerate(ref_fs.units):
+        cols: set[int] = set(dec_map[k])
+        for nm in set(unit.inlet_names) | set(unit.outlet_names):
+            if nm in layout.stream_names:
+                sl = layout.stream_slice(nm)
+                cols.update(range(n_d + sl.start, n_d + sl.stop))
+        row_cols.extend([set(cols)] * sizes[k])
+
+    dense_rows = []
+    for sp in specs:
+        if sp.variables is None:
+            dense_rows.append(sp.name)
+            row_cols.append(set(range(n)))
+            continue
+        missing = [nm for nm in sp.variables if nm not in index]
+        if missing:
+            raise KeyError(
+                f"spec {sp.name!r} declares unknown variables {missing}"
+            )
+        row_cols.append({index[nm] for nm in sp.variables})
+
+    if objective_vars is None:
+        obj_cols = set(range(n))
+        dense_rows.append("the objective")
+    else:
+        obj_cols = {index[nm] for nm in objective_vars}
+
+    if dense_rows:
+        warnings.warn(
+            "the topology-derived pattern cannot see inside "
+            + ", ".join(dense_rows)
+            + f", so {'their' if len(dense_rows) > 1 else 'its'} row is dense "
+            "and the Lagrangian Hessian is dense with it. Pass "
+            "objective_vars=... and Spec(variables=...), or use the default "
+            "sparsity='auto', which reads the structure off the graph.",
+            RuntimeWarning,
+            stacklevel=3,
         )
-    if f is None or hess_pattern is None:
-        return
-    hmask = np.zeros((n, n), dtype=bool)
-    hr, hc = np.asarray(hess_pattern[0]), np.asarray(hess_pattern[1])
-    hmask[hr, hc] = True
-    hmask[hc, hr] = True  # pounce folds the upper triangle onto its mirror
 
-    rng = np.random.default_rng(seed)
-    lambdas = [np.zeros(m)] + [
-        rng.standard_normal(m) for _ in range(max(1, int(n_multipliers)))
-    ]
-    seen = np.zeros((n, n), dtype=bool)
-    for lam_np in lambdas:
-        lam = jnp.asarray(lam_np)
-
-        def lagrangian(z, lam=lam):
-            return f(z) + jnp.dot(lam, g(z))
-
-        H = np.asarray(jax.hessian(lagrangian)(x))
-        seen |= np.abs(H) > 0
-    missing = np.argwhere(seen & ~hmask)
-    if missing.size:
-        raise SparsityPatternError(
-            f"hess_pattern misses {len(missing)} structurally nonzero entries "
-            f"at x0, e.g. {missing[:5].tolist()}. Fall back to "
-            "dense_hessian_pattern()."
-        )
+    return (
+        _pattern_from_sets(row_cols, m, n),
+        _hessian_from_rows(row_cols, obj_cols, n),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -841,7 +876,7 @@ def as_nlp(
     P_bounds: tuple[float, float] = DEFAULT_P_BOUNDS,
     var_bounds: dict[str, tuple[float, float]] | None = None,
     x0_streams: dict[str, Stream] | None = None,
-    sparsity: str = "structural",
+    sparsity: str = "auto",
     validate: bool | str = "auto",
 ) -> tuple[Callable, Callable, Bounds]:
     """Build a flat NLP view of a flowsheet.
@@ -867,9 +902,10 @@ def as_nlp(
         specs: :class:`Spec` objects or ``(target, op, value)`` shorthands.
         objective: ``objective(streams, decisions) -> scalar``. Defaults to a
             constant 0, which turns the NLP into a feasibility problem.
-        objective_vars: Variable names the objective touches. Supplying them
-            tightens the Hessian pattern; omitting them makes it dense, which
-            is always safe.
+        objective_vars: Variable names the objective touches. Only the
+            ``sparsity="structural"`` path needs them -- graph analysis reads
+            them off the objective itself. Omitting them on that path makes
+            the Hessian dense, and says so.
         parameters: :class:`Parameter` objects. These become the ``p``
             argument of ``f(x, p)`` / ``g(x, p)``, so an outer JAX
             computation can differentiate through the solve with
@@ -883,11 +919,33 @@ def as_nlp(
         x0_streams: Explicit starting streams. Default: the sequential-modular
             solution at the decisions' ``x0``, falling back to feed
             propagation.
-        sparsity: ``"structural"`` (default) derives the Jacobian pattern from
-            the flowsheet topology; ``"dense"`` uses the dense pattern. Both
-            are supersets; neither probes.
-        validate: ``True``, ``False``, or ``"auto"`` (default: validate when
-            ``n * m <= 40000``). See :func:`validate_patterns`.
+        sparsity: Where the sparsity patterns come from. None of these
+            probes; they differ in how tight they are and in what has to hold
+            for them to be a superset. See :mod:`difflow.solvers.sparsity`.
+
+            * ``"auto"`` (default) -- global graph analysis with :mod:`asdex`:
+              index sets propagated through the jaxpr, so the result is valid
+              at every point and is tight enough that the Lagrangian Hessian
+              grows like ``n`` rather than ``n^2``. Falls back to
+              ``"structural"``, with a :class:`RuntimeWarning`, if the graph
+              cannot be analyzed; a missing ``asdex`` install raises instead,
+              since that has a fix.
+            * ``"global"`` -- the same, but raising instead of falling back.
+            * ``"structural"`` -- from the flowsheet topology alone: a unit's
+              rows touch its own streams and its own decisions. Valid
+              everywhere, but blind to the objective and to a callable spec
+              body, both of which then come out dense.
+            * ``"dense"`` -- no pattern. A valid superset that costs ``n``
+              colors per Hessian evaluation; nothing falls back to it on its
+              own, because on a real flowsheet that is the difference between
+              a solve and a stall.
+        validate: Check the pattern against AD at ``x0``. ``"auto"``
+            (default, and the same as ``True``) checks exactly against dense
+            derivatives when the problem is small and against a random sample
+            of columns when it is large -- it is never skipped, since a
+            missing entry is silently wrong. ``"dense"`` or ``"sampled"``
+            force one; ``False`` skips. See
+            :func:`~difflow.solvers.sparsity.validate_patterns`.
 
     Returns:
         ``(f, g, bounds)``. ``f(x, p=p0)`` returns a scalar; ``g(x, p=p0)``
@@ -904,6 +962,9 @@ def as_nlp(
             underdetermined), or if a spec is malformed.
         SparsityPatternError: If validation is on and the derived pattern is
             not a superset at ``x0``.
+        SparsityDetectionError: If no pattern could be derived. Dense is a
+            valid superset, but falling back to it has to be the caller's
+            decision -- ``sparsity="dense"`` -- not a silent one.
 
     Example:
         >>> f, g, bd = as_nlp(                       # doctest: +SKIP
@@ -1020,56 +1081,88 @@ def as_nlp(
     m = n_res + len(specs)
 
     # --- sparsity --------------------------------------------------------
-    obj_cols: set[int]
-    if objective_vars is None:
-        obj_cols = set(range(n))
-    else:
-        index = {nm: i for i, nm in enumerate(var_names)}
-        obj_cols = {index[nm] for nm in objective_vars}
+    # Order matters. Global graph analysis first, because it is the only one
+    # of the three that is both valid everywhere and tight; the topology
+    # derivation as the fallback, because it is valid everywhere but coarse;
+    # dense only when explicitly asked for. See difflow.solvers.sparsity for
+    # what each costs.
+    if sparsity not in ("auto", "global", "structural", "dense"):
+        raise ValueError(
+            "sparsity must be 'auto', 'global', 'structural' or 'dense', "
+            f"got {sparsity!r}"
+        )
 
-    row_cols: list[set[int]] | None = None
-    if sparsity == "structural":
-        _d0, ref_streams = None, dict(ref_fs.feeds)
-        ref_streams.update(layout.unpack(x0[n_d:]))
-        sizes = _unit_row_blocks(ref_fs, layout, ref_streams)
-        if sizes is not None and sum(sizes) == n_res:
-            dec_map = _decision_rows(ref_fs, decisions, addressed)
-            row_cols = []
-            for k, unit in enumerate(ref_fs.units):
-                cols: set[int] = set(dec_map[k])
-                touched = set(unit.inlet_names) | set(unit.outlet_names)
-                for nm in touched:
-                    if nm in layout.stream_names:
-                        sl = layout.stream_slice(nm)
-                        cols.update(range(n_d + sl.start, n_d + sl.stop))
-                row_cols.extend([set(cols)] * sizes[k])
-            for sp in specs:
-                if sp.variables is None:
-                    row_cols.append(set(range(n)))
-                else:
-                    index = {nm: i for i, nm in enumerate(var_names)}
-                    missing = [nm for nm in sp.variables if nm not in index]
-                    if missing:
-                        raise KeyError(
-                            f"spec {sp.name!r} declares unknown variables "
-                            f"{missing}"
-                        )
-                    row_cols.append({index[nm] for nm in sp.variables})
-    elif sparsity != "dense":
-        raise ValueError(f"sparsity must be 'structural' or 'dense', got {sparsity!r}")
+    def _topology():
+        return _topology_patterns(
+            ref_fs,
+            layout,
+            decisions,
+            specs,
+            x0,
+            n_d=n_d,
+            n=n,
+            m=m,
+            n_res=n_res,
+            var_names=var_names,
+            objective_vars=objective_vars,
+            addressed=addressed,
+        )
 
-    if row_cols is None:
+    sparsity_source = sparsity
+    if sparsity == "dense":
         jac_pattern = dense_jacobian_pattern(m, n)
         hess_pattern = dense_hessian_pattern(n)
-    else:
-        jac_pattern = _pattern_from_sets(row_cols, m, n)
-        hess_pattern = _hessian_from_rows(row_cols, obj_cols, n)
+    elif sparsity in ("auto", "global"):
+        try:
+            jac_pattern = detect_jacobian_pattern(g, x0)
+            hess_pattern = detect_hessian_pattern(f, g, x0, m)
+            sparsity_source = "global"
+        except ImportError:
+            # An install problem, with an obvious fix and an actionable
+            # message. Falling back would hide it behind a pattern that is
+            # dense in the Hessian on nearly every model.
+            raise
+        except SparsityDetectionError as exc:
+            if sparsity == "global":
+                raise
+            fallback = _topology()
+            if fallback is None:
+                raise SparsityDetectionError(
+                    "no sparsity pattern could be derived for this flowsheet: "
+                    f"graph analysis failed ({exc}) and the topology "
+                    "derivation could not account for the residual rows. "
+                    "sparsity='dense' will solve it, at n colors per Hessian."
+                ) from exc
+            warnings.warn(
+                f"falling back to the topology-derived sparsity pattern: {exc}",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            jac_pattern, hess_pattern = fallback
+            sparsity_source = "structural"
+    else:  # "structural"
+        fallback = _topology()
+        if fallback is None:
+            raise SparsityDetectionError(
+                "the topology derivation could not account for the residual "
+                "rows of this flowsheet, so it cannot be trusted to be a "
+                "superset. sparsity='auto' derives the pattern from the graph "
+                "instead; sparsity='dense' accepts no pattern at all."
+            )
+        jac_pattern, hess_pattern = fallback
 
-    if validate == "auto":
-        validate = n * m <= 40_000
+    if validate is True:
+        validate = "auto"
     if validate:
         validate_patterns(
-            g, x0, jac_pattern, m, n, f=f, hess_pattern=hess_pattern
+            g,
+            x0,
+            jac_pattern,
+            m,
+            n,
+            f=f,
+            hess_pattern=hess_pattern,
+            mode="auto" if validate == "auto" else str(validate),
         )
 
     bounds = Bounds(
@@ -1083,6 +1176,7 @@ def as_nlp(
         con_names=con_names,
         jac_pattern=jac_pattern,
         hess_pattern=hess_pattern,
+        sparsity_source=sparsity_source,
         n_decisions=n_d,
         layout=layout,
         feeds=dict(ref_fs.feeds),
