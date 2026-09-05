@@ -12,18 +12,21 @@ terms overflow and the reactor linear solve is singular. It is not a
 tuning problem, it is a category error, and every difflow model hits it.
 
 So :func:`solve_with_pounce` always passes ``jac_pattern`` and
-``hess_pattern``. If :class:`~difflow.solvers.nlp.Bounds` carries structural
-patterns it uses those; otherwise it builds dense ones, which are trivially
-valid supersets. There is no code path in this module that reaches pounce
-with both patterns unset.
+``hess_pattern``, taken from :class:`~difflow.solvers.nlp.Bounds`, and
+raises if neither those nor an explicit override supply them. There is no
+code path in this module that reaches pounce with a pattern unset, and none
+that substitutes a dense one on your behalf: a dense Hessian pattern costs
+``n`` colors per evaluation, which on a real flowsheet is the difference
+between a solve and a stall. If that is what you want, ask for it --
+``as_nlp(..., sparsity="dense")``.
 
 The other half of the contract is the caller's: a supplied pattern must be a
 **superset** of the true structure. pounce does not check, and a missing
 entry is silently wrong -- dropped on the dense path, and aliased into a
 same-colored neighbour under ``sparse=True``. ``as_nlp`` derives its
-patterns from the flowsheet topology so they are supersets by construction,
-and verifies them at ``x0``; see
-:func:`difflow.solvers.nlp.validate_patterns`.
+patterns from the computation graph (or, failing that, from the flowsheet
+topology), so they are supersets everywhere, and verifies them at ``x0``;
+see :mod:`difflow.solvers.sparsity`.
 
 Note on ``pounce.jax.solve``
 ----------------------------
@@ -46,12 +49,8 @@ import numpy as np
 from jax import Array
 
 from difflow.solvers._lazy import require
-from difflow.solvers.nlp import (
-    Bounds,
-    as_nlp,
-    dense_hessian_pattern,
-    dense_jacobian_pattern,
-)
+from difflow.solvers.nlp import Bounds, as_nlp
+from difflow.solvers.sparsity import SparsityDetectionError
 from difflow.streams import Stream
 
 __all__ = [
@@ -64,15 +63,27 @@ __all__ = [
 
 
 def _patterns(bounds: Bounds, jac_pattern, hess_pattern):
-    """Resolve the patterns, guaranteeing neither is ``None``."""
+    """Resolve the patterns, guaranteeing neither is ``None``.
+
+    Raises rather than substituting a dense pattern. A dense fallback here
+    would be silent and would cost ``n`` colors per Hessian evaluation, which
+    is exactly the outcome this module exists to prevent; ``as_nlp`` always
+    fills both fields in, so reaching this means a hand-built
+    :class:`~difflow.solvers.nlp.Bounds` left one out.
+    """
     jac = jac_pattern if jac_pattern is not None else bounds.jac_pattern
     hess = hess_pattern if hess_pattern is not None else bounds.hess_pattern
-    if jac is None:
-        jac = dense_jacobian_pattern(bounds.m, bounds.n)
-    if hess is None:
-        hess = dense_hessian_pattern(bounds.n)
-    # Belt and braces: the whole point of this module.
-    assert jac is not None and hess is not None
+    missing = [nm for nm, v in (("jac_pattern", jac), ("hess_pattern", hess))
+               if v is None]
+    if missing:
+        raise SparsityDetectionError(
+            f"{' and '.join(missing)} is None, and pounce would then discover "
+            "the structure by probing at random N(0, 1) points -- where this "
+            "model is undefined. Build the problem with as_nlp(), or derive "
+            "the patterns with difflow.solvers.detect_patterns(f, g, x0, m). "
+            "difflow.solvers.dense_jacobian_pattern / dense_hessian_pattern "
+            "are the deliberate way to go dense."
+        )
     return jac, hess
 
 

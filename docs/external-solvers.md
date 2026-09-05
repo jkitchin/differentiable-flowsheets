@@ -14,9 +14,15 @@ need them, and the `ImportError` names the PyPI distribution — which for pounc
 is `pounce-solver`, not `pounce`.
 
 ```
+pip install difflow[solvers]      # asdex -- where the sparsity pattern comes from
 pip install pounce-solver[jax]
 pip install discopt
 ```
+
+`asdex` is not a back end. It is how `as_nlp` derives the sparsity pattern the
+next section is about, so it is the one thing here that is *not* optional in
+practice: without it, `as_nlp` has only the coarse topology derivation to fall
+back on, and it will tell you so.
 
 ---
 
@@ -41,13 +47,18 @@ pattern loses the entire reactor-volume column, the one column the optimizer has
 to move:
 
 ```
-probed pattern      our structural pattern      true structure at x0
-[0 0 1 0 1 0]       [1 1 1 1 1 1]               [1 0 1 0 1 0]
-[0 0 1 1 1 0]       [1 1 1 1 1 1]               [1 0 1 1 1 0]
-[0 1 0 0 0 0]       [1 1 1 1 1 1]               [0 1 0 0 1 0]
-[0 0 0 0 0 1]       [1 1 1 1 1 1]               [0 0 0 0 0 1]
-[0 0 0 1 0 0]       [0 0 0 1 0 0]               [0 0 0 1 0 0]
+probed pattern      topology pattern       derived (default)     true at x0
+[0 0 1 0 1 0]       [1 1 1 1 1 1]          [1 0 1 0 1 0]         [1 0 1 0 1 0]
+[0 0 1 1 1 0]       [1 1 1 1 1 1]          [1 0 1 1 1 0]         [1 0 1 1 1 0]
+[0 1 0 0 0 0]       [1 1 1 1 1 1]          [0 1 0 0 1 0]         [0 1 0 0 1 0]
+[0 0 0 0 0 1]       [1 1 1 1 1 1]          [0 0 0 0 0 1]         [0 0 0 0 0 1]
+[0 0 0 1 0 0]       [0 0 0 1 0 0]          [0 0 0 1 0 0]         [0 0 0 1 0 0]
 ```
+
+The probe is missing entries the model has; the topology pattern has entries
+the model does not (safe, but it pays for them in the Hessian); the derived
+pattern is the true structure, and — unlike the last column — it is the true
+structure *everywhere*, not only at `x0`.
 
 and the consequence is not a warning:
 
@@ -58,10 +69,12 @@ patterned solve:  Solve_Succeeded               obj 0.066   (analytic optimum)
 
 **Every adapter in `difflow.solvers` supplies `jac_pattern` and `hess_pattern`,
 always.** There is no code path in `solve_with_pounce` or
-`differentiable_problem` that reaches pounce with either pattern unset: if
-`Bounds` carries structural patterns they are used, otherwise dense ones are
-substituted. A dense pattern is trivially a valid superset; it costs a little
-work and is never wrong.
+`differentiable_problem` that reaches pounce with either pattern unset — a
+`Bounds` arriving without one raises `SparsityDetectionError` rather than
+quietly substituting a dense pattern. Dense is *valid*, and on a real
+flowsheet it is unaffordable: the Hessian then costs `n` colors, and `n` grows
+with the plant. Dense is a mode you can ask for, never one you get by default
+and never one you get without being told.
 
 ### The contract on a supplied pattern
 
@@ -74,28 +87,69 @@ A pattern must be a **superset** of the true structure.
   same-colored reported entry and corrupts *that* one too. pounce never
   evaluates the model to check.
 
-`as_nlp` keeps that contract two ways:
+`as_nlp` keeps that contract three ways:
 
-1. **By construction.** A unit's residual rows can only touch the stream
-   variables of its own inlets and outlets, plus the decisions written into that
-   unit. Everything downstream travels through stream variables, which are
-   already columns of their own. That argument is what makes the pattern valid
-   everywhere, not just at one point.
-2. **By verification.** `validate_patterns` compares the pattern against a dense
-   AD Jacobian and Lagrangian Hessian at `x0` and raises `SparsityPatternError`
-   on any missing entry. `as_nlp(validate="auto")` runs it whenever `n * m` is
-   under 40 000. A point check is necessary, not sufficient — but it catches
-   mistakes in the derivation.
+1. **By graph analysis — the default.** `asdex` propagates index sets through
+   the jaxpr of `g`, so the pattern it returns holds for *every* input, not for
+   the point it was traced at. The Lagrangian Hessian is obtained by tracing
+   `lambda` as an argument, which makes the result the union over all
+   multipliers rather than the pattern at one particular `lambda`. This is
+   `sparsity="auto"` (falls back if the analysis fails) or `"global"` (raises
+   instead of falling back).
+2. **By construction — the fallback.** A unit's residual rows can only touch the
+   stream variables of its own inlets and outlets, plus the decisions written
+   into that unit. Everything downstream travels through stream variables, which
+   are already columns of their own. That argument also makes the pattern valid
+   everywhere, and it needs no analysis of the code — but it is coarse, and any
+   row it cannot see inside (a `Spec` with a callable body, the objective) is a
+   dense row whose outer product makes the *Hessian* dense. It says so, in a
+   `RuntimeWarning` naming the rows. This is `sparsity="structural"`.
+3. **By verification.** `validate_patterns` compares the pattern against the
+   real AD Jacobian and Lagrangian Hessian and raises `SparsityPatternError` on
+   any missing entry. `as_nlp(validate="auto")` — the default — checks every
+   entry when `n * m` is under 40 000 and switches to sampled columns above it,
+   where a sampled column is a JVP against a basis vector and so is *exactly*
+   that column of `J`. It is never skipped. A point check is necessary, not
+   sufficient — but it catches mistakes in the derivation.
 
    The Hessian half of that check uses **random multiplier vectors**, not
    `lambda = 1`. A unit's material balances share one reaction term whose
    stoichiometric coefficients sum to zero over the species, so weighting the
    rows equally cancels the nonlinearity exactly: the Lagrangian Hessian comes
-   out identically zero and *any* pattern passes, including an empty one. (A
-   symbolic union at `lambda = 1`, as in `asdex.hessian_sparsity`, is fine —
-   graph reachability does not cancel. This is a numerical check.)
+   out identically zero and *any* pattern passes, including an empty one. (The
+   symbolic union with `lambda` traced is unaffected — graph reachability does
+   not cancel. This is the numerical check, and it is the one that can be
+   fooled.)
 
-If you ever doubt the derivation, `sparsity="dense"` is the safe answer.
+### Choosing the source
+
+| `sparsity=` | Where the pattern comes from | When it fails |
+|-------------|------------------------------|---------------|
+| `"auto"` (default) | graph analysis; topology if that fails, with a warning | never silently: `ImportError` if `asdex` is missing, `SparsityDetectionError` if neither derivation applies |
+| `"global"` | graph analysis only | raises rather than falling back — use when you want to know |
+| `"structural"` | flowsheet topology only | needs no `asdex`; warns about the rows it cannot see inside |
+| `"dense"` | no derivation at all | never wrong, and quadratic |
+
+Why this is not a micro-optimization — the `Heater -> CSTR` train from
+`tests/test_solvers_bridge.py`, `N` stages:
+
+| N | n | dense Jac | topology Jac | global Jac | dense Hess | topology Hess | global Hess |
+|---|---|-----------|--------------|------------|------------|---------------|-------------|
+| 1 | 9 | 81 | 53 | 17 | 45 | 45 | 4 |
+| 2 | 18 | 306 | 121 | 36 | 171 | 171 | 8 |
+| 4 | 36 | 1 188 | 257 | 74 | 666 | 666 | 16 |
+| 8 | 72 | 4 680 | 529 | 150 | 2 628 | 2 628 | 32 |
+| 16 | 144 | 18 576 | 1 073 | 302 | 10 440 | 10 440 | 64 |
+
+The topology Hessian column is not a coincidence: it is the *dense* column,
+exactly, at every size — with the objective's variables unnamed the topology
+derivation gives it every column, and `cols(f) x cols(f)` is the whole
+triangle. The derived Hessian is `4 N`: linear in the flowsheet, because that
+is what the flowsheet is. Detection costs about a second at `N = 16`, once, at
+build time.
+
+`sparsity="dense"` remains available for when you doubt a derivation, and
+`validate_patterns` is the cheaper way to settle the same doubt.
 
 ### Why the pattern can only come from the equation-oriented form
 
@@ -186,8 +240,10 @@ NLP layout is fixed at build time.
 
 `("<stream>.<key>", op, value)` with `op` in `<=`, `>=`, `==`, or a full `Spec`
 with a callable body `fn(streams, decisions) -> scalar`. Supplying
-`Spec(variables=[...])` tightens that Jacobian row; omitting it makes the row
-dense, which is always safe.
+`Spec(variables=[...])` tightens that Jacobian row on the `sparsity="structural"`
+path; omitting it makes the row dense there, which is safe but takes the
+Lagrangian Hessian dense with it. The default `sparsity="auto"` reads a callable
+body's structure off its jaxpr and does not need the hint.
 
 ### Post-optimal sensitivity
 
@@ -375,11 +431,20 @@ embedding in your own error messages and reports.
 |------|---------|
 | `as_nlp(flowsheet, decisions, specs, ...)` | `(f, g, Bounds)` |
 | `Decision`, `Parameter`, `Spec` | problem description |
-| `Bounds` | boxes, `x0`, `p0`, names, and both sparsity patterns |
-| `dense_jacobian_pattern`, `dense_hessian_pattern` | always-valid supersets |
-| `validate_patterns` | the check pounce does not do |
-| `SparsityPatternError` | raised by it |
+| `Bounds` | boxes, `x0`, `p0`, names, both sparsity patterns, and `sparsity_source` |
 | `require_eo_residuals` | refuse a flowsheet with no EO form |
+
+**Sparsity** (`difflow.solvers.sparsity`)
+
+| Name | Purpose |
+|------|---------|
+| `detect_patterns(f, g, x0, m)` | both patterns from the jaxpr, for a hand-built model |
+| `detect_jacobian_pattern`, `detect_hessian_pattern` | one at a time |
+| `validate_patterns` | the check pounce does not do (dense or sampled) |
+| `dense_jacobian_pattern`, `dense_hessian_pattern` | always-valid supersets, never a default |
+| `pattern_density` | fraction of dense, for reporting |
+| `SparsityPatternError` | a pattern misses a real entry |
+| `SparsityDetectionError` | no pattern could be derived, and none was invented |
 
 **pounce** (`difflow.solvers.pounce_bridge`)
 
