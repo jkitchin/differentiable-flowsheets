@@ -124,22 +124,111 @@ def live_extras(operation) -> dict:
     return out
 
 
-def known_extras(flowsheet, cls: type) -> dict:
-    """Constructor arguments a new unit can take from the flowsheet itself.
+def known_extras(flowsheet, cls: type, bindings: dict | None = None) -> dict:
+    """Constructor arguments a new unit can take without being told.
 
     A unit dropped from the palette has no file to read ``extras=`` out
-    of, so anything required has to come from somewhere. ``species_order``
-    is the one the flowsheet already holds and the one that blocks the
-    most operations --- ``Mixer``, ``Splitter`` and the rest that take it
-    instead of a ``Params``. A ``thermo`` still has to be supplied, and
-    saying so is the honest answer until the code context (step 4) can
-    provide one.
+    of, so anything required has to come from somewhere. Two places:
+
+    * ``species_order`` from the flowsheet, which already holds it and
+      which is what blocks the most operations --- ``Mixer``,
+      ``Splitter``, and the rest that take it instead of a ``Params``;
+    * a ``thermo`` or an ``eos`` from the code context, matched by name
+      first and then by type. The name match is the predictable one, and
+      the type match is what makes ``thermo = IdealThermo(...)`` --- the
+      line every difflow script opens with --- enough to drop a Flash.
+
+    An ambiguous type match is left out rather than guessed at, so the
+    refusal names what is missing instead of building the wrong unit.
     """
+    out = {}
     order = list(getattr(flowsheet, "species_order", None) or [])
-    if not order:
-        return {}
-    return {arg: order for arg in constructor_extras(cls)
-            if arg == "species_order"}
+    for arg in constructor_extras(cls):
+        if arg == "species_order" and order:
+            out[arg] = order
+        elif bindings and arg in bindings:
+            out[arg] = bindings[arg]
+        elif bindings:
+            fits = [v for v in bindings.values()
+                    if arg in type(v).__name__.lower()]
+            if len(fits) == 1:
+                out[arg] = fits[0]
+    return out
+
+
+#: What a numeric parameter with no default is set to when a unit is
+#: dropped on the canvas. Not a physical claim --- it is a placeholder,
+#: reported as one, and the first thing the inspector asks about.
+PLACEHOLDER = 1.0
+
+
+def _is_number(annotation) -> bool:
+    """Whether a dataclass field annotation admits a plain number.
+
+    Read off the text of the annotation rather than by comparing types:
+    the interesting ones are unions (``float | jax.Array``) and strings
+    (under ``from __future__ import annotations``), and both defeat an
+    identity test while reading perfectly well.
+    """
+    text = str(annotation)
+    if any(bad in text for bad in ("Callable", "dict", "list", "tuple")):
+        return False
+    return "float" in text or "int" in text
+
+
+def known_params(flowsheet, params_cls, bindings: dict | None = None):
+    """Values for the ``Params`` fields that have no default.
+
+    A palette drop has nothing to say about parameters, but a ``Params``
+    class with a required field cannot be constructed from nothing ---
+    which is why half the catalog reads as unplaceable. Four sources, in
+    order:
+
+    * ``species_order`` from the flowsheet;
+    * a binding of the same name from the code context;
+    * a binding that offers ``params_kwargs()`` and has the field in it.
+      This is the declarative route:
+      :func:`~difflow.kinetics.mass_action_kinetics` returns exactly
+      such an object, and one ``kin = mass_action_kinetics(...)`` in the
+      code context is what makes a reactor droppable --- ``rate_fn``,
+      ``stoich`` and ``rate_params`` all arrive together and consistent,
+      which is the point of building a rate law from data;
+    * for a plain number and nothing else, :data:`PLACEHOLDER`.
+
+    Returns:
+        ``(values, placeholders)``, where ``placeholders`` names the
+        fields that got a made-up number and so must be shown to the
+        user rather than trusted.
+    """
+    import dataclasses
+
+    if params_cls is None or not dataclasses.is_dataclass(params_cls):
+        return {}, []
+    order = list(getattr(flowsheet, "species_order", None) or [])
+    kwargs = {}
+    for value in (bindings or {}).values():
+        supplier = getattr(value, "params_kwargs", None)
+        if callable(supplier):
+            try:
+                kwargs.update(supplier())
+            except Exception:            # not the kind of object we hoped
+                pass
+
+    values, placeholders = {}, []
+    for f in dataclasses.fields(params_cls):
+        if (f.default is not dataclasses.MISSING
+                or f.default_factory is not dataclasses.MISSING):
+            continue
+        if f.name == "species_order" and order:
+            values[f.name] = order
+        elif bindings and f.name in bindings:
+            values[f.name] = bindings[f.name]
+        elif f.name in kwargs:
+            values[f.name] = kwargs[f.name]
+        elif _is_number(f.type):
+            values[f.name] = PLACEHOLDER
+            placeholders.append(f.name)
+    return values, placeholders
 
 
 def encoded_params(operation, unit_name: str) -> dict:

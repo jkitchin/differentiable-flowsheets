@@ -21,7 +21,19 @@ export default defineConfig({
     },
   },
   server: {
-    // `npm run dev` against a running `python -m difflow.gui --no-browser`.
-    proxy: { '/api': 'http://127.0.0.1:8756' },
+    // `npm run dev` against a running
+    //   python -m difflow.gui --no-browser --token dev
+    // The page comes from vite here, so it carries no token tag and the
+    // Origin is vite's; the proxy supplies both as the server expects.
+    proxy: {
+      '/api': {
+        target: 'http://127.0.0.1:8756',
+        changeOrigin: true,
+        headers: {
+          'X-Difflow-Token': 'dev',
+          Origin: 'http://127.0.0.1:8756',
+        },
+      },
+    },
   },
 })

@@ -612,7 +612,7 @@ Two things about wiring are worth knowing before you use it, because both are pr
 
 Feed and product nodes are drawn *from* the topology; they are stream names with nothing on one end rather than objects the flowsheet holds, so they are not draggable endpoints. A unit dropped from the palette arrives unwired with a dangling stream on each port, which is why it appears with feed-ish and product-ish stubs until you connect it.
 
-Parameter editing, the docstring inspector and the results panel are being built onto the canvas; until they land, `/classic` is where you change a number.
+**Code context** opens the Python the flowsheet carries (see below). Parameter editing, the docstring inspector and the results panel are being built onto the canvas; until they land, `/classic` is where you change a number.
 
 `/classic` is the **form editor**, and it is the one that can currently change a model: a palette of every registered operation with its port arity, an SVG of the topology, editable parameter fields per unit, and a panel that switches between solved stream values and the generated Python. **Solve** re-solves the edited model; **Save** writes the JSON; **Python** shows what `codegen.to_python` would produce. It stays until the canvas covers what it does; each page links to the other in its header.
 
@@ -621,6 +621,31 @@ Everything on both pages is derived from `catalog()`, so plugin units appear wit
 The point is not to replace writing Python. It is to make the tedious parts quick — seeing the topology, changing one parameter and re-solving, checking what a unit expects — while leaving the door open in both directions: export a script, edit it, and read the result back through `serialize`. An editor you can only enter is worse than none.
 
 It is stdlib only (`http.server`), binds to `127.0.0.1`, and is meant for a single local user. It is a development tool, not a hardened service — do not expose it to a network.
+
+Because the code context runs Python, the server answers mutating requests only from the page it served. Three checks, all in `server.py`: a token minted per process, put into the page as a `<meta>` tag and required in an `X-Difflow-Token` header; an `Origin` that must be this exact host and port; and a `Host` that must be a loopback name, which is what a DNS-rebinding request cannot produce. A request that fails any of them gets a **403** — the one case where a refusal is not a 200, because it is a failure of the request rather than an answer about the flowsheet. Reads are not guarded: the page fetches the catalog before it has done anything. A client outside the browser — `curl`, or `npm run dev` proxying to this server — has to send the token too.
+
+### The code context
+
+Roughly half the catalog cannot be built from data alone. A `Flash` needs a `thermo`, a `PengRobinson` unit needs an `eos`, a reactor needs a rate law — objects, not numbers, and no form can supply one. So the flowsheet carries a snippet of Python in `view["code_context"]`, the session `exec`s it in a fresh namespace, and anything it defines can be referred to by name:
+
+```python
+from difflow import IdealThermo, get_species_data
+
+thermo = IdealThermo({n: get_species_data(n) for n in ['water', 'ethanol']})
+```
+
+With that in the panel, `Flash` becomes droppable; with a `mass_action_kinetics(...)` call in it, so does `CSTR`. The reference is stored as `{"$ref": "thermo"}` in the unit's `constructor` block rather than inlined, and the same tag works anywhere a value goes:
+
+```python
+serialize.save(fs, "plant.json", refs={"thermo": thermo})
+serialize.load("plant.json", refs={"thermo": thermo})
+```
+
+The scan is by **identity**, and it runs after the primitive branch: two `IdealThermo`s built the same way are two objects, and small ints and short strings are interned, so `x = 1` in the context must not turn every `1.0` in the file into a reference. A `$ref` the namespace cannot resolve is a `SerializationError` naming the missing name, not a silent `None`.
+
+`codegen.to_python` emits the snippet as the script's preamble, ahead of everything that uses it, so what is exported is what ran. A snippet that fails to compile or raises is refused with the line number and *not stored* — the flowsheet keeps the last one that worked, so a half-typed line cannot unbuild the units already depending on it.
+
+That the editor runs the Python a file carries is worth stating plainly: **opening a flowsheet in the GUI executes its code context**, exactly as running a script would. Treat a flowsheet JSON from someone else the way you would treat their `.py` file.
 
 ### For tests and embedding
 
@@ -645,10 +670,11 @@ The routes are:
 | `POST` / `DELETE /api/unit[/<name>]` | add one from the palette; remove one |
 | `POST` / `DELETE /api/connect` | wire or unwire, body `{source, outlet, target, inlet}` |
 | `POST /api/layout` | positions only, no rebuild and no solve |
+| `GET` / `POST /api/code-context` | read the snippet and what it defines; set it, or say why it will not run |
 
 A failed solve or a rejected edit comes back as `{"ok": false, "error": ...}` with a **200** rather than a traceback at the socket: it is an answer about the flowsheet, not a failure of the request, and a bad edit from the browser cannot take the server down. Only malformed JSON and an unrouted path get a 4xx.
 
-The incremental routes exist because `POST /api/flowsheet` re-runs `serialize.from_dict` and re-instantiates every unit — wrong twice over for a canvas, since it costs a full reconstruction per keystroke and it drops any constructor object the file cannot carry. `PATCH` rebuilds only the unit you touched and hands its `thermo` back **by identity**, so a hand-built one survives an edit that JSON could not have round-tripped. A unit dropped from the palette takes `species_order` from the flowsheet; one that needs a `thermo` is refused with the message that names what is missing, until the code context can supply one. Removing a unit also drops any recycle naming its streams, which would otherwise tear a stream nothing produces and fail the solve somewhere far from the edit.
+The incremental routes exist because `POST /api/flowsheet` re-runs `serialize.from_dict` and re-instantiates every unit — wrong twice over for a canvas, since it costs a full reconstruction per keystroke and it drops any constructor object the file cannot carry. `PATCH` rebuilds only the unit you touched and hands its `thermo` back **by identity**, so a hand-built one survives an edit that JSON could not have round-tripped. A unit dropped from the palette takes `species_order` from the flowsheet and its constructor objects from the code context below; one whose `thermo` is nowhere to be found is refused with a message naming what is missing and where to define it. Removing a unit also drops any recycle naming its streams, which would otherwise tear a stream nothing produces and fail the solve somewhere far from the edit.
 
 `difflow.gui` is a package rather than one module: `session.py` holds the flowsheet and everything that can be done to it, `server.py` holds the wire encoding and the routes, and `static/` holds the page as files on disk. `FlowsheetSession` needs no socket, so the interesting half — load, edit, solve, emit code — is usable and testable on its own:
 

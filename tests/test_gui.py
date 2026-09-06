@@ -99,10 +99,13 @@ class Client:
         status, body = self.get(path)
         return status, json.loads(body)
 
-    def send(self, verb, path, body=None):
+    def send(self, verb, path, body=None, headers=None):
+        """A mutating request, carrying the token the page would carry."""
         request = urllib.request.Request(
             self.base + path, data=json.dumps(body or {}).encode(),
-            headers={"Content-Type": "application/json"}, method=verb,
+            headers={"Content-Type": "application/json",
+                     gui.TOKEN_HEADER: self.server.token, **(headers or {})},
+            method=verb,
         )
         try:
             with urllib.request.urlopen(request) as response:
@@ -110,14 +113,14 @@ class Client:
         except urllib.error.HTTPError as exc:
             return exc.code, json.loads(exc.read())
 
-    def post(self, path, body=None):
-        return self.send("POST", path, body)
+    def post(self, path, body=None, headers=None):
+        return self.send("POST", path, body, headers)
 
-    def patch(self, path, body=None):
-        return self.send("PATCH", path, body)
+    def patch(self, path, body=None, headers=None):
+        return self.send("PATCH", path, body, headers)
 
-    def delete(self, path, body=None):
-        return self.send("DELETE", path, body)
+    def delete(self, path, body=None, headers=None):
+        return self.send("DELETE", path, body, headers)
 
 
 @pytest.fixture
@@ -206,9 +209,14 @@ class TestStatic:
     """The page is files on disk now, so the tree is a route."""
 
     def test_the_page_comes_from_the_static_directory(self, client):
+        """The built file, plus the one thing the server adds: the token."""
         on_disk = (gui.STATIC / "index.html").read_text(encoding="utf-8")
-        assert client.get("/")[1].decode("utf-8") == on_disk
         assert gui.page() == on_disk
+        served = client.get("/")[1].decode("utf-8")
+        tag = f'<meta name="{gui.TOKEN_META}" content="{client.server.token}">'
+        assert tag in served
+        # One line added inside <head>; the rest is the file, byte for byte.
+        assert served.replace(f"  {tag}\n  ", "", 1) == on_disk
 
     def test_a_built_asset_is_served_with_its_content_type(self, client, tmp_path):
         asset = gui.STATIC / "_probe.js"
@@ -297,7 +305,8 @@ class TestEditing:
     def test_malformed_json_is_reported(self, client):
         request = urllib.request.Request(
             client.base + "/api/flowsheet", data=b"{not json",
-            headers={"Content-Type": "application/json"}, method="POST",
+            headers={"Content-Type": "application/json",
+                     gui.TOKEN_HEADER: client.server.token}, method="POST",
         )
         with pytest.raises(urllib.error.HTTPError) as excinfo:
             urllib.request.urlopen(request)
@@ -396,7 +405,8 @@ class TestIncrementalRoutes:
     def test_malformed_json_on_a_patch_is_reported(self, client):
         request = urllib.request.Request(
             client.base + "/api/unit/reactor", data=b"{not json",
-            headers={"Content-Type": "application/json"}, method="PATCH",
+            headers={"Content-Type": "application/json",
+                     gui.TOKEN_HEADER: client.server.token}, method="PATCH",
         )
         with pytest.raises(urllib.error.HTTPError) as excinfo:
             urllib.request.urlopen(request)
@@ -642,6 +652,213 @@ class TestBuilding:
         status, solved = client.post("/api/solve")
         assert status == 200 and not solved["ok"]
         assert "ghost" in solved["error"]
+
+
+# =============================================================================
+# The code context: the Python a flowsheet carries
+# =============================================================================
+
+
+THERMO_CONTEXT = (
+    "from difflow import IdealThermo, get_species_data\n"
+    "thermo = IdealThermo({n: get_species_data(n) for n in "
+    "['water', 'ethanol']})\n"
+)
+
+KINETICS_CONTEXT = (
+    "from difflow import mass_action_kinetics\n"
+    "kin = mass_action_kinetics([{'equation': 'water -> ethanol',\n"
+    "    'reactants': {'water': 1.0}, 'products': {'ethanol': 1.0},\n"
+    "    'rate_params': {'A': 1.0e3, 'Ea': 40_000.0, 'n': 0.0}}],\n"
+    "    ['water', 'ethanol'])\n"
+)
+
+
+class TestCodeContext:
+    """Half the catalog needs an object, and no form supplies one."""
+
+    def test_a_flowsheet_starts_with_no_context(self, client):
+        status, context = client.get_json("/api/code-context")
+        assert status == 200
+        assert context == {"source": "", "names": [], "error": None}
+
+    def test_a_snippet_defines_names(self, client):
+        status, payload = client.post("/api/code-context",
+                                      {"source": THERMO_CONTEXT})
+        assert status == 200 and payload["ok"]
+        assert "thermo" in payload["names"]
+        assert client.get_json("/api/code-context")[1]["names"] == payload["names"]
+
+    def test_imported_modules_are_not_offered_as_names(self, client):
+        """`import jax` binds a module; nothing in a flowsheet refers to one."""
+        client.post("/api/code-context", {"source": "import math\nx = math.pi\n"})
+        assert client.get_json("/api/code-context")[1]["names"] == ["x"]
+
+    def test_a_syntax_error_is_an_answer_and_not_a_traceback(self, client):
+        status, payload = client.post("/api/code-context", {"source": "x = (\n"})
+        assert status == 200, "a snippet that will not compile is about the file"
+        assert payload["ok"] is False
+        assert "SyntaxError" in payload["error"] and "line 1" in payload["error"]
+
+    def test_a_snippet_that_raises_names_the_line(self, client):
+        source = "a = 1\nb = 2\nraise ValueError('no good')\n"
+        _, payload = client.post("/api/code-context", {"source": source})
+        assert payload["ok"] is False
+        assert payload["error"] == "line 3: ValueError: no good"
+
+    def test_a_failing_snippet_does_not_cost_the_bindings(self, client):
+        """A half-typed line must not unbuild the units that depend on one."""
+        client.post("/api/code-context", {"source": THERMO_CONTEXT})
+        client.post("/api/code-context", {"source": "thermo = (\n"})
+        context = client.get_json("/api/code-context")[1]
+        assert context["names"] == ["IdealThermo", "get_species_data", "thermo"]
+        assert context["source"] == THERMO_CONTEXT
+
+    def test_the_context_travels_in_the_document(self, client):
+        client.post("/api/code-context", {"source": THERMO_CONTEXT})
+        _, doc = client.get_json("/api/flowsheet")
+        assert doc["flowsheet"]["view"]["code_context"] == THERMO_CONTEXT
+
+    def test_an_empty_snippet_clears_it(self, client):
+        client.post("/api/code-context", {"source": THERMO_CONTEXT})
+        assert client.post("/api/code-context", {"source": "   "})[1]["ok"]
+        assert client.get_json("/api/code-context")[1] == {
+            "source": "", "names": [], "error": None
+        }
+        assert "code_context" not in client.session.flowsheet.view
+
+    def test_a_flash_is_unbuildable_until_a_thermo_exists(self, client):
+        status, refused = client.post("/api/unit", {"operation": "Flash"})
+        assert status == 200 and refused["ok"] is False
+        assert "code context" in refused["error"], (
+            "a refusal has to say where the missing object comes from"
+        )
+
+        client.post("/api/code-context", {"source": THERMO_CONTEXT})
+        status, added = client.post("/api/unit", {"operation": "Flash"})
+        assert status == 200 and added["ok"], added.get("error")
+        assert len(added["outlets"]) == 2
+
+    def test_a_reactor_becomes_placeable_from_a_declared_rate_law(self, client):
+        """`mass_action_kinetics` is the declarative route, not a callable."""
+        assert client.post("/api/unit", {"operation": "CSTR"})[1]["ok"] is False
+        client.post("/api/code-context", {"source": KINETICS_CONTEXT})
+        status, added = client.post("/api/unit", {"operation": "CSTR"})
+        assert status == 200 and added["ok"], added.get("error")
+        assert added["placeholders"] == ["V"], (
+            "a required number with no default is a placeholder, and says so"
+        )
+
+    def test_a_unit_from_the_context_is_stored_as_a_reference(self, client):
+        """Not inlined: the document points at the name the snippet binds."""
+        client.post("/api/code-context", {"source": THERMO_CONTEXT})
+        name = client.post("/api/unit", {"operation": "Flash"})[1]["name"]
+        _, doc = client.get_json("/api/flowsheet")
+        unit = next(u for u in doc["flowsheet"]["units"] if u["name"] == name)
+        assert unit["constructor"] == {"thermo": {"$ref": "thermo"}}
+
+    def test_the_exported_script_carries_the_snippet(self, client):
+        """What is exported has to be what ran."""
+        client.post("/api/code-context", {"source": THERMO_CONTEXT})
+        name = client.post("/api/unit", {"operation": "Flash"})[1]["name"]
+        _, payload = client.get_json("/api/code")
+        assert payload["error"] is None
+        assert "code context" in payload["source"]
+        assert THERMO_CONTEXT.strip() in payload["source"]
+        assert "Flash(FlashParams(species_order=['water', 'ethanol']), thermo)" \
+            in payload["source"], "the reference is emitted by name, not inlined"
+        assert payload["source"].index("thermo = IdealThermo") < \
+            payload["source"].index(f"'{name}'"), "defined before it is used"
+
+    def test_the_context_survives_a_save_and_reopen(self, client, tmp_path):
+        client.post("/api/code-context", {"source": THERMO_CONTEXT})
+        added = client.post("/api/unit", {"operation": "Flash"})[1]["name"]
+        client.session.path = tmp_path / "plant.json"
+        assert client.post("/api/save")[1]["ok"]
+
+        reopened = FlowsheetSession(path=tmp_path / "plant.json")
+        assert reopened.code_context()["source"] == THERMO_CONTEXT
+        assert added in [u.name for u in reopened.flowsheet.units], (
+            "a $ref that cannot be resolved on load makes the file unopenable"
+        )
+
+    def test_a_context_that_is_not_a_string_is_refused(self, client):
+        _, payload = client.post("/api/code-context", {"source": 3})
+        assert payload["ok"] is False and "string" in payload["error"]
+
+
+# =============================================================================
+# Guarding an endpoint that runs Python
+# =============================================================================
+
+
+class TestSecurity:
+    """The code context makes the server `exec`-capable; it must only
+    answer the page it served."""
+
+    def test_the_page_carries_the_token(self, client):
+        page = client.get("/")[1].decode("utf-8")
+        assert f'content="{client.server.token}"' in page
+        assert client.server.token, "minted per process, not a constant"
+
+    def test_a_second_server_gets_a_different_token(self, client):
+        other = Client(FlowsheetSession(build_flowsheet(None)))
+        try:
+            assert other.server.token != client.server.token
+        finally:
+            other.close()
+
+    def test_a_mutating_request_without_the_token_is_refused(self, client):
+        request = urllib.request.Request(
+            client.base + "/api/code-context",
+            data=json.dumps({"source": "import os\nos.environ['X'] = '1'\n"}).encode(),
+            headers={"Content-Type": "application/json"}, method="POST",
+        )
+        with pytest.raises(urllib.error.HTTPError) as excinfo:
+            urllib.request.urlopen(request)
+        assert excinfo.value.code == 403
+        assert gui.TOKEN_HEADER in json.loads(excinfo.value.read())["error"]
+        assert client.get_json("/api/code-context")[1]["source"] == ""
+
+    def test_a_wrong_token_is_refused(self, client):
+        status, payload = client.post(
+            "/api/solve", headers={gui.TOKEN_HEADER: "not-the-token"}
+        )
+        assert status == 403 and payload["ok"] is False
+
+    def test_a_cross_origin_request_is_refused_even_with_the_token(self, client):
+        """The whole point: a page on another origin cannot drive this one."""
+        status, payload = client.post(
+            "/api/solve", headers={"Origin": "http://evil.example"}
+        )
+        assert status == 403
+        assert "evil.example" in payload["error"]
+
+    def test_another_port_on_localhost_is_still_cross_origin(self, client):
+        status, _ = client.post(
+            "/api/solve", headers={"Origin": "http://127.0.0.1:1"}
+        )
+        assert status == 403
+
+    def test_the_page_s_own_origin_is_accepted(self, client):
+        status, payload = client.post("/api/solve",
+                                      headers={"Origin": client.base})
+        assert status == 200 and payload["ok"]
+
+    def test_a_rebound_host_name_is_refused(self, client):
+        """A DNS-rebinding request arrives carrying the attacker's name."""
+        port = client.server.server_address[1]
+        status, payload = client.post(
+            "/api/solve", headers={"Host": f"attacker.example:{port}"}
+        )
+        assert status == 403 and "Host" in payload["error"]
+
+    def test_reading_needs_no_token(self, client):
+        """The guard is on writes; the page fetches the catalog before it
+        has done anything."""
+        assert client.get("/api/catalog")[0] == 200
+        assert client.get("/api/flowsheet")[0] == 200
+        assert client.get("/")[0] == 200
 
 
 # =============================================================================

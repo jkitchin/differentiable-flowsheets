@@ -23,6 +23,14 @@ body {
     Helvetica, Arial, sans-serif;
 }
 
+/* The editor is a column: header, then the canvas row, then whatever
+   drawer is open under it. The canvas is the part that stretches. */
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
 a { color: var(--series); }
 
 button {

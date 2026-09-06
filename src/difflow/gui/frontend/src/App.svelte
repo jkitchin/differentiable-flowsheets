@@ -1,5 +1,6 @@
 <script>
   import Canvas from './lib/Canvas.svelte'
+  import CodeContext from './lib/CodeContext.svelte'
   import Palette from './lib/Palette.svelte'
   import Selection from './lib/Selection.svelte'
   import { del, get, patch, post, send } from './lib/api.js'
@@ -12,6 +13,8 @@
   let note = $state('')
   let selected = $state(null)
   let busy = $state(false)
+  let context = $state({ source: '', names: [], error: null })
+  let showContext = $state(false)
 
   async function load() {
     const payload = await get('/api/flowsheet')
@@ -25,10 +28,16 @@
       : null
   }
 
+  const loadContext = () =>
+    get('/api/code-context').then((c) => (context = c))
+
   // Once, at startup. Deliberately not an `$effect`: `load` both reads and
   // writes `selected`, and an effect that does that re-runs itself forever.
-  Promise.all([load(), get('/api/catalog').then((c) => (catalog = c))])
-    .catch((e) => (error = String(e)))
+  Promise.all([
+    load(),
+    loadContext(),
+    get('/api/catalog').then((c) => (catalog = c)),
+  ]).catch((e) => (error = String(e)))
 
   /**
    * Run one edit, then redraw from what the server says.
@@ -55,8 +64,24 @@
 
   const connect = (wire) => edit(() => post('/api/connect', wire))
 
-  const add = (operation, position) =>
-    edit(() => post('/api/unit', { operation, position }))
+  async function add(operation, position) {
+    const answer = await edit(() => post('/api/unit', { operation, position }))
+    // A required number with no default gets a placeholder rather than
+    // blocking the drop. Saying so is the whole difference between a
+    // default and a guess.
+    if (answer?.ok && answer.placeholders?.length) {
+      note = `${answer.name}: ${answer.placeholders.join(', ')} set to a placeholder`
+    }
+    return answer
+  }
+
+  /** Apply the snippet, then reload: what it defines changes what builds. */
+  async function applyContext(source) {
+    const answer = await edit(() => post('/api/code-context', { source }))
+    await loadContext()
+    if (answer?.ok) note = `code context: ${answer.names.length} names defined`
+    return answer
+  }
 
   const rename = (name, to) =>
     edit(() => patch(`/api/unit/${encodeURIComponent(name)}`, { name: to }))
@@ -111,6 +136,8 @@
   <span class="summary">{summary}</span>
   <span class="spacer"></span>
   {#if note}<span class="note">{note}</span>{/if}
+  <button onclick={() => (showContext = !showContext)}
+          class:primary={context.error}>Code context</button>
   <button onclick={solve} disabled={busy}>Solve</button>
   <button onclick={save} disabled={busy || !path}>Save</button>
   <button onclick={() => edit(load)} disabled={busy}>Reload</button>
@@ -142,6 +169,17 @@
   <Selection node={selected} onrename={rename} ondelete={remove} />
 </main>
 
+{#if showContext}
+  <CodeContext
+    source={context.source}
+    names={context.names}
+    error={context.error ?? ''}
+    {busy}
+    onapply={applyContext}
+    onclose={() => (showContext = false)}
+  />
+{/if}
+
 <style>
   header {
     display: flex;
@@ -156,7 +194,7 @@
   .note { color: var(--accent); font-size: 0.8rem; }
   .spacer { flex: 1; }
   .classic { font-size: 0.78rem; }
-  main { display: flex; height: calc(100vh - 3.1rem); min-height: 0; }
+  main { display: flex; flex: 1; min-height: 0; }
   .stage { flex: 1; min-width: 0; }
   .error, .empty { padding: 1.5rem; color: var(--ink-soft); }
   .error { color: var(--bad); }

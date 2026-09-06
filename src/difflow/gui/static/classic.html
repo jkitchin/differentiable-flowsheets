@@ -130,9 +130,13 @@ let DOC = null, CATALOG = {};
 /* whether the server holds the flowsheet now on screen */
 let SYNCED = true, LAST_ERROR = "";
 
+/* The token the server put in this page; every mutating request carries it. */
+const TOKEN = document.querySelector('meta[name="difflow-token"]')?.content || "";
 const api = {
   get: p => fetch(p).then(r => r.json()),
-  post: (p, b) => fetch(p, {method:"POST", headers:{"Content-Type":"application/json"},
+  post: (p, b) => fetch(p, {method:"POST",
+                           headers:{"Content-Type":"application/json",
+                                    "X-Difflow-Token": TOKEN},
                            body: JSON.stringify(b || {})}).then(r => r.json()),
 };
 function fmt(v) {

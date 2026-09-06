@@ -369,6 +369,86 @@ class TestValueEncoding:
 
 
 # =============================================================================
+# References into a namespace
+# =============================================================================
+
+
+class TestRefs:
+    """`{"$ref": "thermo"}` --- how a file names an object it cannot hold.
+
+    The editor's code context is one namespace; a script that calls
+    `load(..., refs=locals())` is another. Neither is privileged: the
+    mechanism lives here so a file carrying references can be opened
+    with nothing but `serialize`.
+    """
+
+    def test_a_known_object_is_written_as_its_name(self, flowsheet, thermo):
+        data = serialize.to_dict(flowsheet, refs={"thermo": thermo})
+        assert data["units"][1]["constructor"] == {"thermo": {"$ref": "thermo"}}
+
+    def test_it_comes_back_as_the_same_object(self, flowsheet, thermo):
+        data = serialize.to_dict(flowsheet, refs={"thermo": thermo})
+        back = serialize.from_dict(data, refs={"thermo": thermo})
+        assert back.units[1].operation.thermo is thermo
+
+    def test_a_different_object_of_the_same_type_is_not_a_reference(
+        self, flowsheet, thermo
+    ):
+        """Identity, not equality: two thermos are two objects."""
+        other = IdealThermo({n: get_species_data(n) for n in SPECIES})
+        data = serialize.to_dict(flowsheet, refs={"thermo": other})
+        assert data["units"][1]["constructor"]["thermo"] != {"$ref": "thermo"}
+
+    def test_numbers_and_short_strings_are_never_captured(self, flowsheet):
+        """Small ints and identifier-like strings are interned, so an
+        identity scan run before the primitive branch would rewrite every
+        1.0 in the file into whatever the namespace happened to call it."""
+        data = serialize.to_dict(
+            flowsheet, refs={"one": 1, "hot": "hot", "name": "Heater"}
+        )
+        heat = data["units"][0]
+        assert heat["operation"] == "Heater"
+        assert heat["outlets"] == ["hot"]
+        assert json.dumps(data).count('"$ref"') == 0
+
+    def test_a_reference_the_namespace_lacks_is_refused_by_name(self, flowsheet,
+                                                                thermo):
+        data = serialize.to_dict(flowsheet, refs={"thermo": thermo})
+        with pytest.raises(SerializationError) as excinfo:
+            serialize.from_dict(data)
+        assert "thermo" in str(excinfo.value)
+        assert "code context" in str(excinfo.value)
+
+    def test_a_file_with_references_round_trips_on_disk(self, flowsheet, thermo,
+                                                        tmp_path):
+        path = serialize.save(flowsheet, tmp_path / "plant.json",
+                              refs={"thermo": thermo})
+        assert '"$ref": "thermo"' in path.read_text()
+        reloaded = serialize.load(path, refs={"thermo": thermo})
+        assert reloaded.units[1].operation.thermo is thermo
+
+    def test_a_reference_survives_a_solve(self, flowsheet, thermo, tmp_path):
+        """The point of the whole mechanism: the file still runs."""
+        path = serialize.save(flowsheet, tmp_path / "plant.json",
+                              refs={"thermo": thermo})
+        before = flowsheet.solve()
+        after = serialize.load(path, refs={"thermo": thermo}).solve()
+        for key, value in before["vap"].items():
+            if not isinstance(value, str):
+                assert float(after["vap"][key]) == float(value), f"vap.{key}"
+
+    def test_the_namespace_does_not_leak_between_calls(self, flowsheet, thermo):
+        """It is a context, not a global: the next call has none of it."""
+        serialize.to_dict(flowsheet, refs={"thermo": thermo})
+        plain = serialize.to_dict(flowsheet)
+        assert json.dumps(plain).count('"$ref"') == 0
+
+    def test_private_names_are_not_offered(self, flowsheet, thermo):
+        data = serialize.to_dict(flowsheet, refs={"_thermo": thermo})
+        assert data["units"][1]["constructor"]["thermo"] != {"$ref": "_thermo"}
+
+
+# =============================================================================
 # Files
 # =============================================================================
 

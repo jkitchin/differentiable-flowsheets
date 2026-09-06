@@ -34,7 +34,13 @@ from typing import Any
 
 import jax.numpy as jnp
 
-from difflow.serialize import SerializationError, constructor_extras
+from difflow.serialize import (
+    REF_TAG,
+    SerializationError,
+    _ref_for,
+    _with_refs,
+    constructor_extras,
+)
 
 #: rendered when a value is a JAX array
 ARRAY_CALL = "jnp.array"
@@ -54,6 +60,14 @@ def _render(value: Any, where: str, imports: set[str]) -> str:
     """Render one value as a Python expression."""
     if value is None or isinstance(value, (bool, int, float, str)):
         return repr(value)
+    # An object the code context defines is written as the *name* it is
+    # bound to there, because the code context is emitted above as the
+    # script's preamble. Same rule as the JSON format, and same reason:
+    # rendering it again would make a second, equal object where the
+    # model has one.
+    ref = _ref_for(value)
+    if ref is not None:
+        return ref[REF_TAG]
     if callable(value):
         spec = getattr(value, "__difflow_spec__", None)
         if spec is None:
@@ -169,11 +183,13 @@ def _render_stream(stream: dict, imports: set[str]) -> str:
     )
 
 
+@_with_refs
 def to_python(
     flowsheet,
     *,
     include_solve: bool = True,
     registry=None,
+    code_context: str | None = None,
 ) -> str:
     """Write a flowsheet as a runnable Python script.
 
@@ -182,9 +198,19 @@ def to_python(
         include_solve: append a ``__main__`` block that solves it.
         registry: operation registry for the name lookup; defaults to
             the global one.
+        code_context: Python emitted above the flowsheet, defining the
+            objects it refers to by name. Defaults to the flowsheet's
+            own ``view["code_context"]``, which is what the editor
+            writes there.
+        refs: the bindings that code context produces, keyword-only. A
+            value that is one of them is emitted as its name rather than
+            rendered again --- see
+            :func:`difflow.serialize.ref_namespace`.
 
     Returns:
-        Python source. Running it rebuilds the same flowsheet.
+        Python source. Running it rebuilds the same flowsheet --- code
+        context included, so a script exported from the editor is what
+        actually ran there.
 
     Raises:
         CodegenError: if an operation is unregistered, or a parameter
@@ -195,8 +221,20 @@ def to_python(
     from difflow.serialize import _registry_name
 
     imports: set[str] = {"Flowsheet", "Unit"}
-    preamble: list[str] = []
     body: list[str] = []
+
+    # The code context goes first: everything below may refer to it by
+    # name, and it carries its own imports.
+    if code_context is None:
+        code_context = (getattr(flowsheet, "view", None) or {}).get("code_context")
+    preamble: list[str] = []
+    if code_context and code_context.strip():
+        preamble += [
+            "# --- code context: the objects this flowsheet refers to by name",
+            *code_context.strip().splitlines(),
+            "# --- end code context",
+            "",
+        ]
 
     body.append(
         f"fs = Flowsheet(species_order={list(flowsheet.species_order)!r}, "
@@ -252,7 +290,10 @@ def to_python(
             value = getattr(operation, extra, None)
             if value is None:
                 continue
-            if type(value).__name__.endswith(("Thermo", "thermo")):
+            ref = _ref_for(value)
+            if ref is not None:
+                args.append(ref[REF_TAG])
+            elif type(value).__name__.endswith(("Thermo", "thermo")):
                 variable = f"thermo_{unit.name}"
                 preamble.append(
                     f"{variable} = {_render_thermo(value, where, imports)}"

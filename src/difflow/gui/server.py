@@ -8,13 +8,16 @@ Deliberately stdlib only --- see :mod:`difflow.gui`.
 
 from __future__ import annotations
 
+import hmac
+import html
 import json
+import secrets
 import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
 
 from difflow.gui.session import FlowsheetSession
 
@@ -27,6 +30,29 @@ STATIC = Path(__file__).parent / "static"
 DEFAULT_PORT = 8756
 #: only ever bound on the loopback interface
 HOST = "127.0.0.1"
+
+#: The header the page must send on every mutating request, and the name of
+#: the ``<meta>`` tag it reads the value out of.
+TOKEN_HEADER = "X-Difflow-Token"
+TOKEN_META = "difflow-token"
+
+#: Host names that can only mean this machine. A DNS-rebinding attack
+#: reaches the loopback port with the *attacker's* name in ``Host``, so
+#: refusing anything else costs nothing and closes it.
+LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def mint_token() -> str:
+    """A fresh per-process token for :data:`TOKEN_HEADER`.
+
+    The editor executes browser-supplied Python (the code context), so a
+    request that merely *reaches* the server is not enough: it has to
+    come from the page this server itself served. The token is the proof
+    of that --- another origin can send a request here, but under the
+    same-origin policy it cannot read the page to learn the token.
+    """
+    return secrets.token_urlsafe(32)
+
 
 #: JSON has no literal for the non-finite floats. Python's ``json``
 #: writes them as ``Infinity`` / ``NaN``, which the browser's
@@ -72,18 +98,29 @@ def _json_restore(value: Any) -> Any:
     return value
 
 
-def page(name: str = "index.html") -> str:
+def page(name: str = "index.html", token: str = "") -> str:
     """A page from :data:`STATIC`, read on every request.
 
     Read per request, not cached at import: during front-end work the
     rebuilt bundle should show up on reload, not on restart. It is one
     small local file read against a browser round trip.
 
+    The one thing the server adds to the built file is the token, as a
+    ``<meta>`` tag in the head. It has to be delivered *in the page*
+    rather than from a route, because a route that hands it out would
+    hand it to anyone who can reach the port, which is the whole thing
+    the token exists to prevent.
+
     Args:
         name: ``"index.html"`` for the canvas editor, ``"classic.html"``
             for the form-and-dropdown one it is replacing.
+        token: the value for :data:`TOKEN_META`; omitted, no tag is added.
     """
-    return (STATIC / name).read_text(encoding="utf-8")
+    text = (STATIC / name).read_text(encoding="utf-8")
+    if not token:
+        return text
+    tag = f'<meta name="{TOKEN_META}" content="{html.escape(token, quote=True)}">'
+    return text.replace("</head>", f"  {tag}\n  </head>", 1)
 
 
 #: What ``static/`` may serve, and as what. An allow-list rather than
@@ -130,7 +167,8 @@ def _wire(fn, payload: dict) -> dict:
 class _Handler(BaseHTTPRequestHandler):
     """Routes. The session does the work."""
 
-    session: FlowsheetSession = None            # set by :func:`serve`
+    session: FlowsheetSession = None            # set by :func:`make_server`
+    token: str = ""                             # likewise
     server_version = "difflow-gui"
 
     def log_message(self, *args):                # quiet by default
@@ -151,19 +189,44 @@ class _Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _guard(self) -> str | None:
+        """Why this mutating request must be refused, or ``None``.
+
+        Three checks, cheapest first. ``Host`` is what a DNS-rebinding
+        attack cannot control --- it carries the name the browser
+        resolved, not the address it reached. ``Origin`` is what an
+        ordinary cross-site POST cannot lie about. The token is what is
+        left for a request that carries neither, which is every client
+        that is not a browser.
+        """
+        port = self.server.server_address[1]
+        host = urlsplit(f"//{self.headers.get('Host', '')}")
+        if host.hostname not in LOCAL_HOSTS:
+            return "unexpected Host header; this server answers only on loopback"
+        origin = self.headers.get("Origin")
+        if origin is not None:
+            where = urlsplit(origin)
+            if where.hostname not in LOCAL_HOSTS or (where.port or 80) != port:
+                return f"cross-origin request from {origin!r} refused"
+        if not hmac.compare_digest(self.headers.get(TOKEN_HEADER, ""), self.token):
+            return (f"missing or wrong {TOKEN_HEADER}; the editor page carries "
+                    "it, and a client outside the browser must send it too")
+        return None
+
     def do_GET(self):
         routes = {
-            "/": lambda: self._send(page(), content="text/html"),
+            "/": lambda: self._send(page(token=self.token), content="text/html"),
             # The editor the canvas is replacing, kept reachable until the
             # canvas covers what it does. Losing the working tool for the
             # length of a rewrite is not a trade worth making.
-            "/classic": lambda: self._send(page("classic.html"),
+            "/classic": lambda: self._send(page("classic.html", self.token),
                                            content="text/html"),
             # answered so the browser does not log a 404 on every load
             "/favicon.ico": lambda: self._send(b"", content="image/x-icon"),
             "/api/catalog": lambda: self._send(self.session.catalog()),
             "/api/flowsheet": lambda: self._send(self.session.document()),
             "/api/code": lambda: self._send(self.session.code()),
+            "/api/code-context": lambda: self._send(self.session.code_context()),
         }
         handler = routes.get(self.path)
         if handler is not None:
@@ -207,7 +270,10 @@ class _Handler(BaseHTTPRequestHandler):
             if path == "/api/unit":
                 return session.add_unit(payload.get("operation", ""),
                                         name=payload.get("name"),
-                                        position=payload.get("position"))
+                                        position=payload.get("position"),
+                                        extras=payload.get("extras"))
+            if path == "/api/code-context":
+                return session.set_code_context(payload.get("source", ""))
             if path == "/api/connect":
                 return _wire(session.connect, payload)
 
@@ -222,6 +288,9 @@ class _Handler(BaseHTTPRequestHandler):
         return None
 
     def _mutate(self, verb: str):
+        refusal = self._guard()
+        if refusal is not None:
+            return self._send({"ok": False, "error": refusal}, status=403)
         payload, failed = self._body()
         if failed:
             return
@@ -246,14 +315,21 @@ class _Handler(BaseHTTPRequestHandler):
         self._mutate("DELETE")
 
 
-def make_server(session: FlowsheetSession, port: int = DEFAULT_PORT):
+def make_server(session: FlowsheetSession, port: int = DEFAULT_PORT,
+                token: str | None = None):
     """Build the HTTP server without starting it.
 
     Useful for tests, which want a port and a shutdown handle rather
-    than a blocking call.
+    than a blocking call. The token is minted here unless one is given,
+    and is left on the returned server as ``server.token`` so a caller
+    that skipped the page can still speak to it.
     """
-    handler = type("_BoundHandler", (_Handler,), {"session": session})
-    return ThreadingHTTPServer((HOST, port), handler)
+    token = mint_token() if token is None else token
+    handler = type("_BoundHandler", (_Handler,),
+                   {"session": session, "token": token})
+    server = ThreadingHTTPServer((HOST, port), handler)
+    server.token = token
+    return server
 
 
 def serve(
@@ -262,6 +338,7 @@ def serve(
     *,
     port: int = DEFAULT_PORT,
     open_browser: bool = True,
+    token: str | None = None,
 ) -> None:
     """Run the editor until interrupted.
 
@@ -271,9 +348,12 @@ def serve(
         path: file the editor saves to.
         port: TCP port on the loopback interface.
         open_browser: open a browser window at startup.
+        token: a fixed :data:`TOKEN_HEADER` value. Only useful for
+            front-end development, where the page is served by vite on
+            another port and cannot be given a freshly minted one.
     """
     session = FlowsheetSession(flowsheet, path)
-    server = make_server(session, port)
+    server = make_server(session, port, token)
     url = f"http://{HOST}:{port}/"
     print(f"difflow editor on {url}   (ctrl-c to stop)")
     if open_browser:
@@ -296,9 +376,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("path", nargs="?", help="flowsheet JSON to open and save")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--no-browser", action="store_true")
+    parser.add_argument(
+        "--token",
+        help="fixed CSRF token, for `npm run dev` against this server; "
+             "otherwise one is minted per run and put into the page",
+    )
     args = parser.parse_args(argv)
 
-    serve(path=args.path, port=args.port, open_browser=not args.no_browser)
+    serve(path=args.path, port=args.port, open_browser=not args.no_browser,
+          token=args.token)
     return 0
 
 

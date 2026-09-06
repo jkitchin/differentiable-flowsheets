@@ -19,11 +19,19 @@ naming them: an outlet names a stream, and an inlet chooses one that
 something already produces. Renaming a stream follows it to every
 consumer, so the wiring survives the edit.
 
-What the palette cannot add, it says so about rather than failing
-later. Roughly half the catalog needs something no form can supply ---
-a ``thermo`` object, a rate law --- and those entries are dimmed with
-the reason (:attr:`~difflow.catalog.OperationSchema.is_buildable`).
-For them the route is still Python, then JSON, then here.
+What no form can supply, the *code context* does. Roughly half the
+catalog needs an object rather than data --- a ``thermo``, an ``eos``, a
+rate law --- so the flowsheet carries a snippet of Python
+(``view["code_context"]``) that the session evaluates, and anything in
+it can be referred to by name. One ``thermo = IdealThermo(...)`` makes
+a Flash droppable; one ``kin = mass_action_kinetics(...)`` makes a
+reactor droppable. The same snippet is emitted as the preamble of the
+exported script, so what is exported is what ran.
+
+That means opening a flowsheet here runs the Python it carries. The
+server accordingly refuses any request that did not come from the page
+it served: a token in the page, an ``Origin`` check, and a ``Host``
+check against DNS rebinding.
 
 Everything comes from :mod:`difflow.catalog`, so the palette lists
 whatever is registered, plugins included, with the ports and parameter
@@ -41,6 +49,8 @@ growing with it:
     the flowsheet and the operations on it, usable without a socket.
 ``server.py``
     the wire encoding, the routes and the stdlib HTTP server.
+``edit.py``
+    small edits to a live flowsheet: one unit, one wire, one position.
 ``static/``
     the page as built files on disk, served by ``server.py``.
 """
@@ -48,26 +58,35 @@ growing with it:
 from difflow.gui.server import (
     DEFAULT_PORT,
     HOST,
+    LOCAL_HOSTS,
     NON_FINITE,
     STATIC,
+    TOKEN_HEADER,
+    TOKEN_META,
     main,
     make_server,
+    mint_token,
     page,
     serve,
 )
 # The wire encoding is private, but it moved modules in the split and callers
 # reached for it at ``difflow.gui``; keep that name pointing at it.
 from difflow.gui.server import _json_restore, _json_safe  # noqa: F401
-from difflow.gui.session import FlowsheetSession
+from difflow.gui.session import FlowsheetSession, evaluate_context
 
 __all__ = [
     "DEFAULT_PORT",
     "FlowsheetSession",
     "HOST",
+    "LOCAL_HOSTS",
     "NON_FINITE",
     "STATIC",
+    "TOKEN_HEADER",
+    "TOKEN_META",
+    "evaluate_context",
     "main",
     "make_server",
+    "mint_token",
     "page",
     "serve",
 ]

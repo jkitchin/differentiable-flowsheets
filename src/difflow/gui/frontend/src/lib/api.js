@@ -10,6 +10,20 @@
 
 const NON_FINITE = { Infinity: Infinity, '-Infinity': -Infinity, NaN: NaN }
 
+/**
+ * The token the server put in the page it served, sent back on every
+ * mutating request.
+ *
+ * The editor can `exec` Python (the code context), so a request that
+ * merely reaches the port is not enough -- it has to come from this
+ * page. Another origin can send us a request, but it cannot read this
+ * page to learn the token. In `npm run dev` the page comes from vite
+ * and carries no tag; the proxy adds the header instead, matching
+ * `python -m difflow.gui --token dev`.
+ */
+const TOKEN =
+  globalThis.document?.querySelector('meta[name="difflow-token"]')?.content ?? '' 
+
 /** Undo the server's `_json_safe`. */
 export function restore(value) {
   if (typeof value === 'string') {
@@ -69,7 +83,7 @@ export const get = (path) => request(path)
 export const send = (method, path, payload) =>
   request(path, {
     method,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Difflow-Token': TOKEN },
     body: JSON.stringify(safe(payload ?? {})),
   })
 
