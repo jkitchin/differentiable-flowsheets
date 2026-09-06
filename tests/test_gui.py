@@ -45,7 +45,13 @@ from difflow import (
     mass_action_kinetics,
     serialize,
 )
-from difflow.gui import FlowsheetSession, _json_restore, _json_safe, make_server
+from difflow.gui import (
+    FlowsheetSession,
+    _json_restore,
+    _json_safe,
+    make_server,
+    sensitivity,
+)
 
 SPECIES = ["water", "ethanol"]
 
@@ -1028,6 +1034,158 @@ class TestDocsRendering:
         assert fmt == "text"
         assert html.startswith("<pre>")
         assert "&lt;script&gt;" in html and "&amp;" in html
+
+
+# =============================================================================
+# Results and derivatives
+# =============================================================================
+
+
+class TestResults:
+    """The solve reports how it solved, not only what it found."""
+
+    def test_a_solve_carries_its_diagnostics(self, thermo):
+        answer = FlowsheetSession(build_flowsheet(thermo)).solve()
+        assert answer["ok"]
+        # No recycle here, so this is the sequential path -- and saying so
+        # is the point: the panel must be able to tell the two apart.
+        assert answer["method"] == "direct"
+        assert answer["converged"] is True
+        assert answer["tear_streams"] == []
+        assert answer["residual"] == 0.0
+        assert answer["tol"] is not None
+        assert answer["species"] == SPECIES
+
+    def test_a_recycle_reports_its_tear_streams(self, thermo):
+        fs = Flowsheet(species_order=SPECIES)
+        fs.add_feed("feed", make_stream({"water": 1.0, "ethanol": 0.1},
+                                        T=350.0, P=101325.0))
+        fs.add_unit(Unit("mix", Mixer(SPECIES, thermo),
+                         ["feed", "recycle"], ["mixed"]))
+        fs.add_unit(Unit("flash", Flash(FlashParams(species_order=SPECIES),
+                                        thermo), ["mixed"], ["liq", "vap"]))
+        fs.add_recycle("vap", "recycle")
+
+        answer = FlowsheetSession(fs).solve()
+        assert answer["ok"]
+        assert answer["tear_streams"] == ["recycle"]
+        assert answer["method"] != "direct"
+
+    def test_an_edit_makes_the_last_solve_stale(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        assert session.solve()["ok"]
+        assert session.levers()["solved"] is True
+        assert session.patch_unit("reactor", {"params": {"V": 2.0}})["ok"]
+        # The streams on screen describe the flowsheet as it was.
+        assert session.levers()["solved"] is False
+        assert session.levers()["outputs"] == []
+
+    def test_a_move_does_not(self, thermo):
+        """Positions are not physics: dragging a node keeps the results."""
+        session = FlowsheetSession(build_flowsheet(thermo))
+        assert session.solve()["ok"]
+        assert session.set_layout({"reactor": {"x": 10, "y": 20}})["ok"]
+        assert session.levers()["solved"] is True
+
+
+class TestSensitivity:
+    """The derivatives, which is what makes this difflow and not a form."""
+
+    def test_levers_are_the_scalars_and_nothing_else(self, thermo):
+        found = {item["key"]: item for item in
+                 sensitivity.levers(build_flowsheet(thermo))}
+        assert found["reactor.V"]["value"] == 1.0
+        assert found["reactor.V"]["units"] == "m^3"
+        # The rate function, the stoichiometry array and the species list
+        # are on the same params object and are not levers.
+        assert "reactor.rate_fn" not in found
+        assert "reactor.stoich" not in found
+        assert "reactor.species_order" not in found
+        assert found["feed:feed.total_flow"]["value"] == pytest.approx(1.1)
+        assert found["feed:feed.T"]["units"] == "K"
+
+    def test_every_lever_is_a_key_apply_params_accepts(self, thermo):
+        fs = build_flowsheet(thermo)
+        for item in sensitivity.levers(fs):
+            fs._apply_params({item["key"]: item["value"]})
+
+    def test_outputs_name_the_solved_quantities(self, thermo):
+        fs = build_flowsheet(thermo)
+        keys = {o["key"] for o in sensitivity.outputs(fs.solve())}
+        assert {"liq.total_flow", "liq.T", "liq.P", "liq.F_ethanol"} <= keys
+
+    def test_forward_moves_every_stream_from_one_lever(self, thermo):
+        answer = sensitivity.forward(build_flowsheet(thermo), "reactor.V")
+        assert answer["mode"] == "forward" and answer["u0"] == 1.0
+        # A bigger reactor converts more water to ethanol, and the two
+        # derivatives are equal and opposite because the reaction is 1:1.
+        liq = answer["streams"]["liq"]
+        assert liq["F_ethanol"]["d"] > 0
+        assert liq["F_water"]["d"] == pytest.approx(-liq["F_ethanol"]["d"])
+        # Nothing upstream of the reactor can move.
+        assert answer["streams"]["feed"]["F_water"]["d"] == 0.0
+
+    def test_forward_matches_a_finite_difference(self, thermo):
+        """The decisive check: AD through the solve, against the real thing."""
+        answer = sensitivity.forward(build_flowsheet(thermo), "reactor.V")
+        h = 1e-4
+        up = build_flowsheet(thermo, V=1.0 + h).solve()
+        down = build_flowsheet(thermo, V=1.0 - h).solve()
+        fd = (float(up["liq"]["F_ethanol"]) - float(down["liq"]["F_ethanol"])) / (2 * h)
+        assert answer["streams"]["liq"]["F_ethanol"]["d"] == pytest.approx(fd, rel=1e-5)
+
+    def test_reverse_ranks_the_levers_dimensionlessly(self, thermo):
+        answer = sensitivity.reverse(build_flowsheet(thermo), "liq.F_ethanol")
+        assert answer["mode"] == "reverse" and answer["y0"] > 0
+        ranked = answer["levers"]
+        relative = [abs(item["rel"]) for item in ranked if item["rel"] is not None]
+        assert relative == sorted(relative, reverse=True)
+        by_key = {item["key"]: item for item in ranked}
+        # V and molar_density enter the rate as their product, so their
+        # dimensionless sensitivities have to come out equal. A test that
+        # only checked signs would not notice if one were scaled wrong.
+        assert by_key["reactor.V"]["rel"] == pytest.approx(
+            by_key["reactor.molar_density"]["rel"], rel=1e-9
+        )
+
+    def test_total_flow_differentiates_through_every_species(self, thermo):
+        answer = sensitivity.reverse(build_flowsheet(thermo), "rx.total_flow")
+        assert answer["y0"] == pytest.approx(1.1)
+        # The reaction conserves moles, so the reactor cannot change the
+        # total -- but the feed rate obviously can.
+        by_key = {item["key"]: item for item in answer["levers"]}
+        assert by_key["reactor.V"]["d"] == pytest.approx(0.0, abs=1e-9)
+        assert by_key["feed:feed.total_flow"]["d"] == pytest.approx(1.0, rel=1e-6)
+
+    def test_a_lever_that_is_not_one_is_refused_by_name(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        answer = session.sensitivity(lever="reactor.rate_fn")
+        assert not answer["ok"] and "not a lever" in answer["error"]
+
+    def test_asking_both_directions_at_once_is_refused(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        assert not session.sensitivity()["ok"]
+        assert not session.sensitivity(lever="reactor.V",
+                                       target="liq.T")["ok"]
+
+    def test_the_routes_answer(self, thermo):
+        live = Client(FlowsheetSession(build_flowsheet(thermo)))
+        try:
+            _, before = live.get_json("/api/levers")
+            assert before["ok"] and before["solved"] is False
+            assert any(item["key"] == "reactor.V" for item in before["levers"])
+
+            assert live.post("/api/solve")[1]["ok"]
+            _, after = live.get_json("/api/levers")
+            assert after["solved"] is True and after["outputs"]
+
+            _, forward = live.post("/api/sensitivity", {"lever": "reactor.V"})
+            assert forward["ok"] and forward["mode"] == "forward"
+            _, reverse = live.post("/api/sensitivity",
+                                   {"target": "liq.F_ethanol"})
+            assert reverse["ok"] and reverse["mode"] == "reverse"
+        finally:
+            live.close()
 
 
 if __name__ == "__main__":

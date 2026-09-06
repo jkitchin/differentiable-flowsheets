@@ -38,6 +38,11 @@ import types
 from pathlib import Path
 
 
+def _number(value) -> float | None:
+    """A float for the wire, or ``None`` --- including for a JAX scalar."""
+    return None if value is None else float(value)
+
+
 def evaluate_context(source: str) -> tuple[dict, str | None]:
     """Run a code-context snippet and return ``(bindings, error)``.
 
@@ -82,6 +87,9 @@ class FlowsheetSession:
         self.bindings: dict = {}
         #: why the code context did not run, if it did not
         self.context_error: str | None = None
+        #: the last solve's streams, or None if it has not been solved
+        #: here. Kept so the sensitivity picker can name real outputs.
+        self.streams: dict | None = None
         if flowsheet is None and self.path and self.path.exists():
             self._load(self.path)
         elif flowsheet is not None:
@@ -139,6 +147,7 @@ class FlowsheetSession:
             return {"ok": False, "error": error}
         with self._lock:
             self.bindings, self.context_error = bindings, None
+            self.streams = None      # the snippet is part of the model
             if source.strip():
                 self.flowsheet.view["code_context"] = source
             else:
@@ -250,6 +259,7 @@ class FlowsheetSession:
         with self._lock:
             self._evaluate((document.get("view") or {}).get("code_context") or "")
             self.flowsheet = serialize.from_dict(document, refs=self.bindings)
+            self.streams = None
         return {"ok": True}
 
     # -- incremental edits --------------------------------------------
@@ -260,8 +270,14 @@ class FlowsheetSession:
     # every unit -- and where a live `thermo` must survive the edit by
     # identity rather than by round-tripping through JSON.
 
-    def _edit(self, fn, *args, **kwargs) -> dict:
-        """Run one edit under the lock, reporting a refusal as a value."""
+    def _edit(self, fn, *args, moves_only: bool = False, **kwargs) -> dict:
+        """Run one edit under the lock, reporting a refusal as a value.
+
+        Any edit that is not purely a move discards the last solve: the
+        streams on screen describe the flowsheet as it was, and leaving
+        them there after a parameter changed is the one way a results
+        panel can lie.
+        """
         from difflow.gui.edit import EditError
 
         if self.flowsheet is None:
@@ -276,6 +292,8 @@ class FlowsheetSession:
                 result = fn(*args, **kwargs)
         except EditError as exc:
             return {"ok": False, "error": str(exc)}
+        if not moves_only:
+            self.streams = None
         return {"ok": True, **(result or {})}
 
     def patch_unit(self, name: str, changes: dict) -> dict:
@@ -457,7 +475,7 @@ class FlowsheetSession:
                 self._place(key, position)
             return {"nodes": len(nodes)}
 
-        return self._edit(apply)
+        return self._edit(apply, moves_only=True)
 
     def save(self) -> dict:
         from difflow import serialize
@@ -473,7 +491,16 @@ class FlowsheetSession:
         return {"ok": True, "path": str(self.path)}
 
     def solve(self) -> dict:
-        """Solve, and report a failure rather than raising at the socket."""
+        """Solve, and report a failure rather than raising at the socket.
+
+        The diagnostics matter as much as the streams. ``Flowsheet``
+        records how it solved, how far the tear residual came down,
+        against what tolerance and on which streams; every one of those
+        was already there and none of them was ever shown. A recycle
+        that stopped at ``max_iter`` with a residual of 1e-3 returns
+        numbers that look like an answer, and the only thing that says
+        otherwise is ``converged``.
+        """
         if self.flowsheet is None:
             return {"ok": False, "error": "no flowsheet loaded"}
         try:
@@ -481,6 +508,8 @@ class FlowsheetSession:
                 streams = self.flowsheet.solve()
         except Exception as exc:
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        self.streams = streams
+        fs = self.flowsheet
         return {
             "ok": True,
             "streams": {
@@ -490,6 +519,58 @@ class FlowsheetSession:
                 }
                 for name, stream in streams.items()
             },
-            "converged": getattr(self.flowsheet, "last_solve_converged", None),
-            "iterations": getattr(self.flowsheet, "last_solve_iterations", None),
+            "species": list(getattr(fs, "species_order", []) or []),
+            "converged": getattr(fs, "last_solve_converged", None),
+            "iterations": getattr(fs, "last_solve_iterations", None),
+            "method": getattr(fs, "last_solve_method", None),
+            "residual": _number(getattr(fs, "last_solve_residual", None)),
+            "tol": _number(getattr(fs, "last_solve_tol", None)),
+            "tear_streams": list(getattr(fs, "last_solve_tear_streams", []) or []),
         }
+
+    # -- derivatives ---------------------------------------------------
+
+    def levers(self) -> dict:
+        """What a sensitivity can be taken with respect to, and of.
+
+        The outputs need a solved flowsheet to be listed, so they come
+        from the last solve; before one, the list is empty and the panel
+        says to solve first rather than offering names that may not
+        survive it.
+        """
+        from difflow.gui import sensitivity
+
+        if self.flowsheet is None:
+            return {"ok": False, "error": "no flowsheet loaded"}
+        return {
+            "ok": True,
+            "levers": sensitivity.levers(self.flowsheet),
+            "outputs": (sensitivity.outputs(self.streams)
+                        if self.streams is not None else []),
+            "solved": self.streams is not None,
+        }
+
+    def sensitivity(self, lever: str | None = None,
+                    target: str | None = None) -> dict:
+        """One derivative sweep, forward or reverse.
+
+        Which one is decided by which end the caller pinned: a ``lever``
+        asks how the whole flowsheet moves and is answered forward, a
+        ``target`` asks which knobs move it and is answered in reverse.
+        See :mod:`difflow.gui.sensitivity`.
+        """
+        from difflow.gui import sensitivity as ad
+
+        if self.flowsheet is None:
+            return {"ok": False, "error": "no flowsheet loaded"}
+        if bool(lever) == bool(target):
+            return {"ok": False,
+                    "error": "give exactly one of 'lever' (forward, every "
+                             "stream) or 'target' (reverse, every lever)"}
+        try:
+            with self._lock:
+                answer = (ad.forward(self.flowsheet, lever) if lever
+                          else ad.reverse(self.flowsheet, target))
+        except Exception as exc:
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        return {"ok": True, **answer}

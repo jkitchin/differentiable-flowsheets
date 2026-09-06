@@ -54,10 +54,14 @@ growing with it:
     the wire encoding, the routes and the stdlib HTTP server.
 ``edit.py``
     small edits to a live flowsheet: one unit, one wire, one position.
+``sensitivity.py``
+    the derivatives of a solved flowsheet, forward and reverse --- the
+    one thing here that no other flowsheet editor can offer.
 ``static/``
     the page as built files on disk, served by ``server.py``.
 """
 
+from difflow.gui import sensitivity
 from difflow.gui.server import (
     DEFAULT_PORT,
     DOCS_PREFIX,
@@ -93,6 +97,7 @@ __all__ = [
     "make_server",
     "mint_token",
     "page",
+    "sensitivity",
     "serve",
 ]
 

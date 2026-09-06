@@ -3,8 +3,10 @@
   import CodeContext from './lib/CodeContext.svelte'
   import Inspector from './lib/Inspector.svelte'
   import Palette from './lib/Palette.svelte'
+  import Results from './lib/Results.svelte'
   import { del, get, patch, post, send } from './lib/api.js'
   import { movedPositions } from './lib/model/edit.js'
+  import { flowLabels, flowTints } from './lib/model/results.js'
 
   let doc = $state(null)
   let path = $state('')
@@ -15,6 +17,10 @@
   let busy = $state(false)
   let context = $state({ source: '', names: [], error: null })
   let showContext = $state(false)
+  let result = $state(null)
+  let pickers = $state(null)
+  let sens = $state(null)
+  let showResults = $state(false)
 
   async function load() {
     const payload = await get('/api/flowsheet')
@@ -31,11 +37,16 @@
   const loadContext = () =>
     get('/api/code-context').then((c) => (context = c))
 
+  /** What a sensitivity can be taken with respect to, and of. */
+  const loadPickers = () =>
+    get('/api/levers').then((p) => (pickers = p.ok ? p : null))
+
   // Once, at startup. Deliberately not an `$effect`: `load` both reads and
   // writes `selected`, and an effect that does that re-runs itself forever.
   Promise.all([
     load(),
     loadContext(),
+    loadPickers(),
     get('/api/catalog').then((c) => (catalog = c)),
   ]).catch((e) => (error = String(e)))
 
@@ -46,13 +57,18 @@
    * `{ok: false, error}` with a 200 for anything it understood and
    * declined, and it is reported without disturbing the canvas.
    */
-  async function edit(run, { reload = true } = {}) {
+  async function edit(run, { reload = true, stale = true } = {}) {
     error = ''
     note = ''
     busy = true
     try {
       const answer = await run()
       if (answer && answer.ok === false) note = answer.error
+      // The server drops its own copy of the streams on any edit that is
+      // not a move; the panel has to drop them too, or it goes on
+      // describing a flowsheet that no longer exists. The lever list
+      // goes with them: its values are the ones the edit just changed.
+      if (stale) { result = null; sens = null; await loadPickers() }
       if (reload) await load()
       return answer
     } catch (e) {
@@ -106,24 +122,42 @@
     // Adopted locally too, so the next reload does not snap the node back
     // to where the document still says it is.
     doc = { ...doc, view: { ...doc.view, nodes: { ...doc.view?.nodes, ...moved } } }
-    edit(() => post('/api/layout', { nodes: moved }), { reload: false })
+    edit(() => post('/api/layout', { nodes: moved }),
+         { reload: false, stale: false })
   }
 
   const solve = () =>
     edit(async () => {
       const answer = await post('/api/solve')
-      note = answer.ok
-        ? `solved: ${Object.keys(answer.streams).length} streams`
-        : answer.error
+      result = answer.ok ? answer : null
+      sens = null
+      if (answer.ok) {
+        showResults = true
+        await loadPickers()
+        note = answer.converged === false
+          ? 'solved, but the tear residual did not reach the tolerance'
+          : `solved: ${Object.keys(answer.streams).length} streams`
+      } else {
+        note = answer.error
+      }
       return null
-    }, { reload: false })
+    }, { reload: false, stale: false })
+
+  /** One derivative sweep. Which direction is the server's to decide. */
+  const differentiate = (ask) =>
+    edit(async () => {
+      const answer = await post('/api/sensitivity', ask)
+      sens = answer.ok ? answer : null
+      if (!answer.ok) note = answer.error
+      return null
+    }, { reload: false, stale: false })
 
   const save = () =>
     edit(async () => {
       const answer = await post('/api/save')
       note = answer.ok ? `saved to ${answer.path}` : answer.error
       return null
-    }, { reload: false })
+    }, { reload: false, stale: false })
 
   // The canvas node says what is selected; the document says what it
   // holds and the catalog says what those parameters mean. The inspector
@@ -138,6 +172,12 @@
     selected?.data?.operation ? catalog[selected.data.operation] ?? null : null,
   )
 
+  // The solve decorates the canvas: a flow on every edge, and -- once a
+  // forward sensitivity has been run -- a tint saying how hard that
+  // stream responds to the lever, relative to everything else.
+  let flows = $derived(result?.ok ? flowLabels(result) : null)
+  let tints = $derived(sens?.mode === 'forward' ? flowTints(sens) : null)
+
   let summary = $derived(
     doc ? `${doc.units?.length ?? 0} units, ${Object.keys(doc.feeds ?? {}).length} feeds` : '',
   )
@@ -151,6 +191,7 @@
   {#if note}<span class="note">{note}</span>{/if}
   <button onclick={() => (showContext = !showContext)}
           class:primary={context.error}>Code context</button>
+  <button onclick={() => (showResults = !showResults)}>Results</button>
   <button onclick={solve} disabled={busy}>Solve</button>
   <button onclick={save} disabled={busy || !path}>Save</button>
   <button onclick={() => edit(load)} disabled={busy}>Reload</button>
@@ -173,6 +214,8 @@
         ondeletions={applyDeletions}
         onmove={move}
         onadd={add}
+        {flows}
+        {tints}
         onselect={(node) => (selected = node)}
         onrefuse={(why) => (note = why)}
       />
@@ -189,6 +232,17 @@
     onedit={edit}
   />
 </main>
+
+{#if showResults}
+  <Results
+    solve={result}
+    levers={pickers}
+    sensitivity={sens}
+    {busy}
+    onsensitivity={differentiate}
+    onclose={() => (showResults = false)}
+  />
+{/if}
 
 {#if showContext}
   <CodeContext

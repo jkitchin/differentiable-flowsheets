@@ -230,6 +230,7 @@ class _Handler(BaseHTTPRequestHandler):
             "/api/flowsheet": lambda: self._send(self.session.document()),
             "/api/code": lambda: self._send(self.session.code()),
             "/api/code-context": lambda: self._send(self.session.code_context()),
+            "/api/levers": lambda: self._send(self.session.levers()),
         }
         handler = routes.get(self.path)
         if handler is not None:
@@ -271,6 +272,9 @@ class _Handler(BaseHTTPRequestHandler):
                 return session.replace(payload)
             if path == "/api/solve":
                 return session.solve()
+            if path == "/api/sensitivity":
+                return session.sensitivity(lever=payload.get("lever"),
+                                           target=payload.get("target"))
             if path == "/api/save":
                 return session.save()
             if path == "/api/layout":

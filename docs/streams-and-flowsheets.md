@@ -672,6 +672,8 @@ The routes are:
 | `POST /api/layout` | positions only, no rebuild and no solve |
 | `GET` / `POST /api/code-context` | read the snippet and what it defines; set it, or say why it will not run |
 | `GET /api/docs/<op>` | one operation's rendered docstring, equations, assumptions and references |
+| `GET /api/levers` | what a derivative can be taken with respect to, and of |
+| `POST /api/sensitivity` | one derivative sweep, forward or reverse |
 
 A failed solve or a rejected edit comes back as `{"ok": false, "error": ...}` with a **200** rather than a traceback at the socket: it is an answer about the flowsheet, not a failure of the request, and a bad edit from the browser cannot take the server down. Only malformed JSON and an unrouted path get a 4xx.
 
@@ -710,6 +712,23 @@ Selecting a unit shows what the code already knows about it. None of it is writt
 Equations are rendered with a bundled [KaTeX](https://katex.org), to **MathML** rather than to KaTeX's own HTML. The HTML output is laid out against KaTeX's fonts and looks wrong without them, so taking it would mean committing twenty `.woff2` files and a stylesheet whose only job is positioning glyphs; MathML asks the browser to do that instead. All 214 equations in the catalog render.
 
 Parameters are editable in place, through `PATCH /api/unit/<name>`. Not all of them: `serialize` writes a JAX array as `{"$array": ...}`, a rate law from `mass_action_kinetics` as `{"$callable": ...}`, and a code-context object as `{"$ref": ...}`, and none of those is something a text input can edit. Each is shown with *where its value came from* — `mass_action_kinetics(...)`, `array 2×1`, `thermo (code context)` — in place of an input, which is the same fact the old editor put in a "set in code:" line under the form, moved to the field it belongs to. The constructor objects get their own section for the same reason: a Flash's thermodynamics are not a `Params` field, and a panel that showed only parameters would not say where they came from.
+
+### Results, and the derivatives that come with them
+
+Solving fills a drawer under the canvas with three things, and the first two are what any flowsheet editor shows: a stream table, and the solve's own diagnostics. The table's columns are the union of the species across all streams, so a stream that never sees a component reads `0` rather than going missing, and a mole-fraction toggle divides by the total — leaving the cells of a zero-flow stream blank rather than printing `NaN`. The diagnostics are `last_solve_converged`, `last_solve_method`, `last_solve_iterations`, `last_solve_residual`, `last_solve_tol` and `last_solve_tear_streams`: `Flowsheet` has recorded how it solved, how far the tear residual came down, against what tolerance and on which streams for as long as the recycle solver has, and none of that was shown anywhere. It matters because a recycle that stopped at `max_iter` with a residual of 1e-3 returns numbers that look exactly like an answer. A solve that did not converge says so in red and still shows its numbers, because the residual and the tear list are exactly what one wants to see when it did not.
+
+The third tab is the one no other flowsheet editor can offer, and it is the reason difflow is built on JAX. Ask for a derivative and the panel takes it — not by re-solving the flowsheet once per lever, but with a single AD pass:
+
+- **Pin a lever** — "if I change the reactor volume, what moves?" — and it is one `jax.jvp`. One forward pass gives `dy/du` for *every* quantity in *every* stream at once, so the cost does not grow with how much you want to look at.
+- **Pin an output** — "what moves the purge's benzene?" — and it is one `jax.value_and_grad`. One reverse pass gives `dy/du` for *every* lever at once, so the cost does not grow with how many knobs the flowsheet has.
+
+That is `difflow.planning`'s `choose_ad_mode` rule surfaced in the UI: the direction of the pass follows from which end you pinned, and either question by finite differences would cost one solve per lever. The derivative goes through the recycle tear solve implicitly, so a flowsheet with a recycle is no more expensive to differentiate than one without.
+
+Levers are found rather than declared. `difflow.gui.sensitivity.levers` walks the flowsheet and keeps every parameter whose **current value is a real scalar** — a Python `int` or `float`, or a 0-d array of float dtype. A `rate_fn` is a function, a `stoich` is an array, a `species_order` is a list and a `thermo` is an object, so all four fall out without a maintained exclusion list: they are ruled out by the same test the solver itself would apply. It falls out as very nearly the set the inspector greys out, arrived at independently and from the other direction. Feed streams are levers too, as `total_flow`, `T` and `P`; `x_<species>` is deliberately left out, because `_apply_params` rescales the other species to hold the total, which makes that derivative a composition swap rather than one knob. Every key the picker offers is a key `Flowsheet._apply_params` accepts, and therefore a key `planning.Block.from_flowsheet`'s `u` list takes — the GUI picker and the Python API name the same things.
+
+Rankings are **relative**: `d ln y / d ln u`, which is the only comparison that means anything between a volume in m³ and a temperature in K. It is `None`, not infinity, when either base value is zero. The reverse view draws them as a tornado — plain SVG geometry computed in `model/results.js`, no plotting library, so the committed bundle stays at half a megabyte and `publish.py`'s self-contained page has nothing new to swallow.
+
+Two smaller things make the panel honest. Edges carry their flow as a label once solved, and tint by relative sensitivity after a derivative — thickness by magnitude, colour by sign — through a CSS custom property, so `Canvas.svelte`'s stylesheet decides what "up" and "down" look like and the model layer never computes a colour. And any edit that is not a move drops the stored solve: results are about the flowsheet you solved, and a panel still showing the previous one is worse than an empty panel.
 
 The one thing that can go wrong with committed build output is drift — source edited, bundle not rebuilt — so CI reruns `gui-build` and fails if `static/` differs from the commit.
 

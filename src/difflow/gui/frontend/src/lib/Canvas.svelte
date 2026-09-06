@@ -20,10 +20,13 @@
   import UnitNode from './nodes/UnitNode.svelte'
   import { connectionWire, deleteRequests, dropPosition } from './model/edit.js'
   import { toGraph, toPositions } from './model/graph.js'
+  import { decorate } from './model/results.js'
 
   let {
     document: doc = null,
     positions = null,
+    flows = null,
+    tints = null,
     onconnect = () => {},
     ondeletions = () => {},
     onmove = () => {},
@@ -37,7 +40,7 @@
   let nodes = $state.raw([])
   let edges = $state.raw([])
   let viewport = $state.raw({ x: 0, y: 0, zoom: 1 })
-  let surface
+  let surface = $state(null)
 
   // Rebuilt whenever the served document changes. Positions the user has
   // dragged live on the node objects, so this deliberately re-reads them
@@ -45,7 +48,23 @@
   $effect(() => {
     const graph = toGraph(doc, positions)
     nodes = graph.nodes
-    edges = graph.edges
+    edges = decorate(graph.edges, { flows, tints })
+  })
+
+  // The results drawer opens underneath, taking height off the bottom of
+  // the canvas, and the flowsheet would simply go behind it. Re-centre
+  // rather than re-fit: whoever zoomed in on a corner meant it, and
+  // opening a panel is not a reason to throw that away.
+  $effect(() => {
+    if (!surface) return
+    let last = surface.clientHeight
+    const observer = new ResizeObserver(() => {
+      const height = surface.clientHeight
+      if (height && last) viewport = { ...viewport, y: viewport.y + (height - last) / 2 }
+      last = height
+    })
+    observer.observe(surface)
+    return () => observer.disconnect()
   })
 
   function connected({ connection }) {
@@ -106,8 +125,31 @@
     stroke: var(--accent);
     stroke-dasharray: 6 4;
   }
-  .canvas :global(.svelte-flow__edge.recycle .svelte-flow__edge-text) {
-    fill: var(--accent);
+  /* Edge labels are portaled out of the edge group, so they cannot be
+     styled through it -- one rule for all of them. They carry the stream
+     name and, once solved, its flow, so they sit over the lines and need
+     a ground of their own to stay readable. */
+  .canvas :global(.svelte-flow__edge-label) {
+    background: var(--surface);
+    color: var(--ink-soft);
+    font-size: 0.7rem;
+    padding: 0 3px;
+    border-radius: 3px;
+    font-variant-numeric: tabular-nums;
   }
-  .canvas :global(.svelte-flow__edge-textbg) { fill: var(--surface); }
+
+  /* Sensitivity tinting. The colour is chosen by sign and the weight by
+     magnitude, both from the stylesheet: the model layer sets a class and
+     a `--tint` and knows nothing about the palette. Placed after the
+     recycle rules so a tinted recycle reads as tinted. */
+  .canvas :global(.svelte-flow__edge.tinted .svelte-flow__edge-path) {
+    stroke-width: calc(1px + 3.5px * var(--tint, 0));
+    stroke-dasharray: none;
+  }
+  .canvas :global(.svelte-flow__edge.tinted.up .svelte-flow__edge-path) {
+    stroke: var(--series);
+  }
+  .canvas :global(.svelte-flow__edge.tinted.down .svelte-flow__edge-path) {
+    stroke: var(--accent);
+  }
 </style>
