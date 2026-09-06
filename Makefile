@@ -161,6 +161,11 @@ sync:
 # ---------------------------------------------------------------------------
 # The editor front end.
 #
+# Two artefacts, one rule: the JS bundle, and the assistant's retrieval
+# index over `docs/` (`static/docs-index.json`, built by a stdlib-only
+# script so CI can run it with nothing installed). Both are committed
+# and both are checked for drift, for the same reason.
+#
 # `src/difflow/gui/static/` is BUILT OUTPUT and it is committed: `pip install
 # difflow` must never need node. Only changing the UI does, and this is how.
 # CI reruns gui-build and fails if the result differs from what is committed,
@@ -169,6 +174,7 @@ GUI_FRONTEND := src/difflow/gui/frontend
 
 gui-build:
 	cd $(GUI_FRONTEND) && npm ci && npm run build
+	python3 src/difflow/gui/docs_index.py
 
 # The pure model functions, under bare node. Same files tests/test_gui.py runs.
 gui-test:

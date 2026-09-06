@@ -185,6 +185,12 @@ jobs:
         run: npm run build
         working-directory: src/difflow/gui/frontend
 
+      # The assistant's retrieval index over `docs/` is committed build
+      # output too, and it goes stale the moment anyone edits the prose.
+      # Stdlib only, so it needs nothing installed.
+      - name: Rebuild the documentation index
+        run: python3 src/difflow/gui/docs_index.py
+
       # `git add` first, so a bundle that grew a NEW file counts as drift too
       # -- a plain `git diff` sees only tracked ones and would miss it.
       - name: Fail if the committed bundle is stale

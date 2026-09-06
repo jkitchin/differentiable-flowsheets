@@ -17,7 +17,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from difflow.gui.session import FlowsheetSession
 
@@ -241,6 +241,19 @@ class _Handler(BaseHTTPRequestHandler):
         if self.path.startswith(DOCS_PREFIX):
             operation = unquote(urlsplit(self.path).path[len(DOCS_PREFIX):])
             return self._send(self.session.docs(operation))
+        # /api/context?kind=&q=&name=&operation=: the assistant's brief.
+        # The only route that takes a query string, because it is the
+        # only one whose request is a *question* rather than a resource.
+        split = urlsplit(self.path)
+        if split.path == "/api/context":
+            query = parse_qs(split.query)
+            first = lambda key: (query.get(key) or [""])[0]   # noqa: E731
+            return self._send(self.session.context(
+                kind=first("kind") or "flowsheet",
+                question=first("q"),
+                name=first("name") or None,
+                operation=first("operation") or None,
+            ))
         asset = _static_file(self.path)
         if asset is None:
             return self._send({"error": "not found"}, status=404)

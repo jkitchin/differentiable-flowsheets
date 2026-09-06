@@ -185,6 +185,25 @@ class TestRoutes:
         )
         assert "flash" in nodes, "but a node it never placed still needs one"
 
+    def test_the_assistant_brief_is_served(self, client):
+        """The one route whose request is a question, not a resource."""
+        status, pack = client.get_json(
+            "/api/context?kind=block&name=reactor&q=what+is+the+volume")
+        assert status == 200 and pack["ok"]
+        assert "Operation: CSTR" in pack["prompt"]
+        assert pack["prompt"].endswith("what is the volume")
+
+    def test_the_brief_defaults_to_the_whole_flowsheet(self, client):
+        status, pack = client.get_json("/api/context")
+        assert status == 200 and pack["ok"]
+        assert pack["kind"] == "flowsheet"
+        assert "reactor (CSTR)" in pack["prompt"]
+
+    def test_an_unknown_brief_is_refused_in_the_answer(self, client):
+        status, pack = client.get_json("/api/context?kind=tarot")
+        assert status == 200, "a bad question is an answer, not a 4xx"
+        assert pack["ok"] is False and "tarot" in pack["error"]
+
     def test_the_python_export_is_served(self, client):
         status, payload = client.get_json("/api/code")
         assert status == 200

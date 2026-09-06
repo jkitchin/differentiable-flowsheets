@@ -90,6 +90,10 @@ class FlowsheetSession:
         #: the last solve's streams, or None if it has not been solved
         #: here. Kept so the sensitivity picker can name real outputs.
         self.streams: dict | None = None
+        #: why the last solve raised, if it did. The assistant's brief
+        #: about a failed solve is mostly this string plus the
+        #: diagnostics the flowsheet keeps.
+        self.solve_error: str | None = None
         if flowsheet is None and self.path and self.path.exists():
             self._load(self.path)
         elif flowsheet is not None:
@@ -264,6 +268,20 @@ class FlowsheetSession:
             return {"ok": True, "svg": flowsheet_diagram(self.flowsheet, positions)}
         except Exception as exc:
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+    def context(self, kind: str = "flowsheet", question: str = "",
+                name: str | None = None, operation: str | None = None) -> dict:
+        """The assistant's brief about this flowsheet, as data.
+
+        Assembled by :mod:`difflow.gui.context`; see there for what each
+        ``kind`` contains. Returned whole --- prompt included --- because
+        the panel shows the brief next to the answer, and a brief the
+        user cannot read is a brief nobody can check.
+        """
+        from difflow.gui import context as context_module
+
+        return context_module.pack(self, kind=kind, question=question,
+                                   name=name, operation=operation)
 
     # -- writes -------------------------------------------------------
 
@@ -527,8 +545,10 @@ class FlowsheetSession:
             with self._lock:
                 streams = self.flowsheet.solve()
         except Exception as exc:
-            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+            self.solve_error = f"{type(exc).__name__}: {exc}"
+            return {"ok": False, "error": self.solve_error}
         self.streams = streams
+        self.solve_error = None
         fs = self.flowsheet
         return {
             "ok": True,

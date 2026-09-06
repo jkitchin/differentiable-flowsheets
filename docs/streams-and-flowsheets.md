@@ -754,6 +754,29 @@ The functions that turn a serialized flowsheet into nodes and edges (`frontend/s
 
 One wrinkle worth knowing: JSON has no literal for the non-finite floats, and `JSON.parse` rejects the `Infinity` that Python's `json` writes. This is the *common* case, not an exotic one — `mass_action_kinetics` puts `inf` in `K_eq` for every irreversible reaction — so those values travel as the strings `"Infinity"`, `"-Infinity"` and `"NaN"`, and are restored on the way back.
 
+### What the assistant is told
+
+The editor can put a small language model next to the canvas, and the model is the least interesting half of that. A 3B model knows nothing about difflow; the useful thing it can do is *read*. So the work is in the brief — and the brief is assembled from things difflow already computed and never showed anyone.
+
+`GET /api/context` (or `session.context(...)` in Python, with no server at all) returns one of four:
+
+| `kind` | What it contains |
+|---|---|
+| `block` | the catalog schema for the operation, its equations and assumptions, its docstring, and **this node's own parameter values with their units** |
+| `flowsheet` | the units and how they are wired, the feeds, the recycles, the species, and the Python `codegen` would emit |
+| `solve` | `last_solve_converged`, `method`, `iterations`, `residual`, `tol`, `tear_streams` — every one of them already recorded on `Flowsheet` and none of them previously reported — plus a troubleshooting card matched to the symptom |
+| `planning` | a `DeltaVectorSet` read out as a table, the prices and constraints, the binding marginals, and the health findings |
+
+Three decisions in there are worth stating.
+
+**The brief is the product, not the answer.** Every pack comes back whole — sections, assembled prompt, token count, and a note for anything the budget dropped — and the panel shows it. When the local model is weak that is still the useful output: read it, or paste it into a stronger assistant. It is a report about the flowsheet that difflow could not previously produce.
+
+**Retrieval is lexical and build-time.** `docs/` is 23 files and 720 KB, fixed at release. `difflow.gui.docs_index` splits it at headings — outside fenced code, since every chapter is full of Python and `# Build the flowsheet` in a fence is a comment, not a section — and writes `static/docs-index.json`. That file is committed and CI rebuilds it and fails on a difference, exactly like the JS bundle: an index that has silently stopped matching the prose it indexes is worse than no index. It lives under `static/` because `docs/` is not in the wheel and `static/` is, and it is built by a stdlib-only script so the CI job needs nothing installed.
+
+Scoring is TF-IDF with length normalisation, and it runs in Python rather than in the browser. Where a dot product happens is not architecture; running it here makes it testable without a headless browser and keeps a 667 KB file off the wire on every question. What actually sharpens it is that **each pack searches on the question plus its own subject** — the operation name, the units in the flowsheet, the solver that ran. A user's question is four words long and two of them are "why" and "this"; the pack is what knows what "this" is.
+
+**The budget is a real constraint.** The default runtime is a 3B model with a 4096-token window, and a brief that overflows it is truncated *at the end* — where the question is. So a pack is fitted to `context.BUDGET` tokens, dropping whole low-priority sections rather than truncating any of them (half a parameter table is a table with parameters missing from it), never dropping the subject, and recording what went. A thin answer then has a visible cause.
+
 ---
 
 ## Publishing a Model
