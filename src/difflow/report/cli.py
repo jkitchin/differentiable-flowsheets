@@ -8,6 +8,11 @@ Usage::
     difflow report script.py                         # Markdown to stdout
     difflow report script.py --format json -o out.json
     difflow report script.py --solve                 # run fs.solve() first
+
+The ``difflow`` entry point also dispatches ``plan-export`` to
+:mod:`difflow.planning.cli`::
+
+    difflow plan-export plan.py --format csv -o tables/
 """
 
 from __future__ import annotations
@@ -71,6 +76,10 @@ def main(argv: list[str] | None = None) -> int:
     # Support both ``difflow report script.py`` (script entry wires through
     # ``main``) and a bare ``python -m difflow.report.cli script.py`` invocation.
     argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] == "plan-export":
+        from difflow.planning.cli import main as plan_export_main
+
+        return plan_export_main(argv[1:])
     if argv and argv[0] == "report":
         argv = argv[1:]
     args = parser.parse_args(argv)

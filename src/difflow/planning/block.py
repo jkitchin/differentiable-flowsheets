@@ -53,6 +53,107 @@ def _as_array(values: Sequence[float] | Array | None, n: int, default: float,
     return arr
 
 
+_QUANTITY_UNITS = {"total_flow": "mol/s", "T": "K", "P": "Pa"}
+
+
+def _sanitize(key: str) -> str:
+    """Turn a flowsheet key into a bare variable name.
+
+    ``"feed:F1.total_flow"`` -> ``"feed_F1_total_flow"``.  Qualified names
+    become LP column names, so the separators that difflow uses to address
+    units, feeds and streams have to go.
+    """
+    out = []
+    for ch in key:
+        out.append(ch if (ch.isalnum() or ch == "_") else "_")
+    name = "".join(out).strip("_")
+    return name or "var"
+
+
+def _quantity_units(quantity: str) -> str | None:
+    """Physical unit of a stream quantity, or ``None`` if unknown."""
+    if quantity in _QUANTITY_UNITS:
+        return _QUANTITY_UNITS[quantity]
+    if quantity.startswith("F_"):
+        return "mol/s"
+    if quantity.startswith("x_"):
+        return "mol/mol"
+    return None
+
+
+def _stream_quantity(stream, quantity: str):
+    """Read one scalar quantity out of a solved stream.
+
+    Recognised: ``total_flow``, ``T``, ``P``, ``F_<species>``,
+    ``x_<species>``.  Pure ``jnp``, so it differentiates.
+    """
+    if quantity == "total_flow":
+        return sum(v for k, v in stream.items() if k.startswith("F_"))
+    if quantity in ("T", "P"):
+        return jnp.asarray(stream[quantity], dtype=float)
+    if quantity.startswith("x_"):
+        key = f"F_{quantity[2:]}"
+        if key not in stream:
+            raise KeyError(f"stream has no species {quantity[2:]!r}")
+        total = sum(v for k, v in stream.items() if k.startswith("F_"))
+        return jnp.asarray(stream[key], dtype=float) / total
+    if quantity in stream:
+        return jnp.asarray(stream[quantity], dtype=float)
+    raise KeyError(
+        f"Unknown stream quantity {quantity!r}. Use 'total_flow', 'T', 'P', "
+        f"'F_<species>' or 'x_<species>'"
+    )
+
+
+def _flowsheet_param_units(flowsheet, key: str) -> str | None:
+    """Units of a ``"<unit>.<param>"`` lever, from the dataclass metadata.
+
+    Reads the same ``field(metadata={"units": ...})`` that
+    :class:`~difflow.catalog.ParameterSpec` serves to the GUI, so a delta-vector
+    export becomes self-describing as the metadata rollout lands.  Returns
+    ``None`` when the field carries no metadata, which is the state of most of
+    the catalog today.
+    """
+    import dataclasses
+
+    unit_name, _, param_name = key.partition(".")
+    for unit in flowsheet.units:
+        if unit.name != unit_name:
+            continue
+        params = getattr(unit.operation, "params", None)
+        if params is None or not dataclasses.is_dataclass(params):
+            return None
+        for f in dataclasses.fields(params):
+            if f.name == param_name:
+                return f.metadata.get("units")
+    return None
+
+
+def _current_value(flowsheet, key: str) -> float:
+    """The flowsheet's present value for a lever key, for use as ``u0``."""
+    from difflow.flowsheet import FEED_PREFIX
+
+    if key.startswith(FEED_PREFIX):
+        feed_name, _, field_name = key[len(FEED_PREFIX):].partition(".")
+        if feed_name not in flowsheet.feeds:
+            raise KeyError(
+                f"No feed stream named {feed_name!r} in flowsheet. "
+                f"Available feeds: {list(flowsheet.feeds.keys())}")
+        return float(_stream_quantity(flowsheet.feeds[feed_name], field_name))
+
+    unit_name, _, param_name = key.partition(".")
+    for unit in flowsheet.units:
+        if unit.name == unit_name:
+            params = getattr(unit.operation, "params", None)
+            if params is None or not hasattr(params, param_name):
+                raise KeyError(
+                    f"Unit {unit_name!r} has no parameter {param_name!r}")
+            return float(jnp.asarray(getattr(params, param_name)))
+    raise KeyError(
+        f"No unit named {unit_name!r} in flowsheet. "
+        f"Available units: {[u.name for u in flowsheet.units]}")
+
+
 @dataclass
 class Block(ParamsMixin):
     """One linearisable submodel in a planning network.
@@ -266,6 +367,114 @@ class Block(ParamsMixin):
             cached = jax.jit(raw) if self.jit else raw
             self._jac_cache[key] = cached
         return cached
+
+    # -- construction from a flowsheet ------------------------------------
+
+    @classmethod
+    def from_flowsheet(cls, flowsheet, u: Sequence[str], y: Sequence[str],
+                       name: str = "flowsheet",
+                       lb: Any = None, ub: Any = None, u0: Any = None,
+                       u_names: Sequence[str] | None = None,
+                       y_names: Sequence[str] | None = None,
+                       solve_kwargs: Mapping[str, Any] | None = None,
+                       **kwargs: Any) -> "Block":
+        """Build a planning block from a difflow flowsheet.
+
+        This is the bridge that was missing between simulation and planning.
+        The returned block's ``fn`` applies the chosen levers to a *copy* of
+        the flowsheet, solves it, and reads back the chosen outputs.  Because
+        the whole path is pure JAX, ``jax.jacobian`` of that callable is the
+        reduced input-output sensitivity of the flowsheet — implicitly
+        differentiated through the recycle tear solve and every inner unit
+        solve.  That matrix is the delta vector an LP planning model wants.
+
+        Args:
+            flowsheet: A :class:`~difflow.flowsheet.Flowsheet`.  Not modified;
+                each evaluation works on a copy.
+            u: Lever keys in :meth:`~difflow.flowsheet.Flowsheet._apply_params`
+                notation: ``"<unit>.<param>"`` or ``"feed:<stream>.<field>"``.
+            y: Output keys, ``"<stream>.<quantity>"`` where quantity is
+                ``total_flow``, ``T``, ``P``, ``F_<species>`` or
+                ``x_<species>``.
+            name: Block name.
+            lb: Lower bounds on the levers.  Defaults to unbounded, but a
+                planning LP wants real ones.
+            ub: Upper bounds on the levers.
+            u0: Linearisation point.  Defaults to the flowsheet's *current*
+                values, which is almost always the base case you want.
+            u_names: Override the derived bare names for the levers.
+            y_names: Override the derived bare names for the outputs.
+            solve_kwargs: Passed through to :meth:`Flowsheet.solve`.
+            **kwargs: Forwarded to :class:`Block` (``jit``, ``ad_mode``,
+                ``phase_fn``, ``metadata``, ...).
+
+        Returns:
+            A :class:`Block` whose ``metadata`` records the original keys and
+            the units of every variable, so the delta-vector export is
+            self-describing.
+
+        Raises:
+            KeyError: If a lever or output key does not resolve.
+
+        Example:
+            >>> blk = Block.from_flowsheet(       # doctest: +SKIP
+            ...     fs,
+            ...     u=["reactor.V", "feed:feed.total_flow"],
+            ...     y=["product.F_B", "product.total_flow"],
+            ...     lb=[0.5, 5.0], ub=[5.0, 20.0], name="plant")
+        """
+        u_keys = list(u)
+        y_keys = list(y)
+        if not u_keys:
+            raise ValueError("from_flowsheet needs at least one lever in u")
+        if not y_keys:
+            raise ValueError("from_flowsheet needs at least one output in y")
+
+        solve_kw = dict(solve_kwargs or {})
+        parsed_y = []
+        for key in y_keys:
+            stream_name, sep, quantity = key.rpartition(".")
+            if not sep:
+                raise ValueError(
+                    f"Output key {key!r} must use '<stream>.<quantity>' "
+                    "notation")
+            parsed_y.append((stream_name, quantity))
+
+        # Resolve u0 from the flowsheet's current state before building fn,
+        # so a failure here is reported at construction, not at solve time.
+        if u0 is None:
+            u0 = [_current_value(flowsheet, k) for k in u_keys]
+
+        def fn(u_arr):
+            params = {key: u_arr[i] for i, key in enumerate(u_keys)}
+            streams = flowsheet._apply_params(params).solve(**solve_kw)
+            missing = [s for s, _ in parsed_y if s not in streams]
+            if missing:
+                raise KeyError(
+                    f"Solved flowsheet has no stream(s) {sorted(set(missing))}. "
+                    f"Available: {sorted(streams)}")
+            return jnp.stack([
+                jnp.asarray(_stream_quantity(streams[s], q), dtype=float)
+                for s, q in parsed_y
+            ])
+
+        derived_u = list(u_names) if u_names else [_sanitize(k) for k in u_keys]
+        derived_y = list(y_names) if y_names else [_sanitize(k) for k in y_keys]
+
+        metadata = dict(kwargs.pop("metadata", {}) or {})
+        metadata.setdefault("source", "flowsheet")
+        metadata.setdefault("u_keys", u_keys)
+        metadata.setdefault("y_keys", y_keys)
+        metadata.setdefault("u_units", [
+            _quantity_units(k.rpartition(".")[2])
+            if k.startswith("feed:")
+            else _flowsheet_param_units(flowsheet, k)
+            for k in u_keys
+        ])
+        metadata.setdefault("y_units", [_quantity_units(q) for _, q in parsed_y])
+
+        return cls(name=name, fn=fn, u_names=derived_u, y_names=derived_y,
+                   lb=lb, ub=ub, u0=u0, metadata=metadata, **kwargs)
 
     def __repr__(self) -> str:
         return (f"Block(name={self.name!r}, n_u={self.n_u}, n_y={self.n_y}, "

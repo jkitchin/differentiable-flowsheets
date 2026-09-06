@@ -372,8 +372,24 @@ Reporting and drawings (use these rather than re-deriving them in a notebook):
   `draw_delta_vectors`, `draw_taylor_model`, `draw_trust_region`. matplotlib is
   imported inside the functions.
 
+From a flowsheet, and out to someone else's LP:
+- `Block.from_flowsheet(fs, u=["reactor.V", "feed:feed.total_flow"],
+  y=["purge.F_B", ...])` is the bridge. Lever keys are `_apply_params` notation;
+  feed streams are levers via the `feed:` prefix (`T`, `P`, `total_flow`,
+  `F_<species>`, `x_<species>`). Run `check_delta_vectors` before exporting.
+- Under `jax.jacobian` a recycle solve routes to the optimistix fixed-point
+  path automatically — the Anderson/Wegstein loops are Python and cannot be
+  traced. Never record a solve diagnostic with a bare `float()`; use
+  `flowsheet._concrete()`, which returns `None` under tracing.
+- `difflow.planning.export`: `DeltaVectorSet.from_result` / `.from_block`, then
+  `write_json` / `write_csv` / `write_lp` / `write_mps` /
+  `write_iterations_csv`. Also `difflow plan-export`. Units come from
+  `Block.metadata["u_units"]`/`["y_units"]`; LP symbols are sanitised and the
+  map is in `meta["lp_symbols"]`. The export is one-way — no importer.
+
 Reference model: `difflow.planning.chain.two_plant_chain()`. Docs: `docs/planning.md`.
-Example: `examples/30_delta_base_planning.ipynb`. Tests: `tests/test_planning.py`.
+Example: `examples/30_delta_base_planning.ipynb`. Tests: `tests/test_planning.py`,
+`tests/test_planning_export.py`.
 
 ### Debugging Gradients
 

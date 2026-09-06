@@ -70,6 +70,18 @@ _thermo = IdealThermo({s: get_species_data(s) for s in SPECIES})
 _flash = Flash(FlashParams(species_order=list(SPECIES)), _thermo)
 
 
+def _units_metadata(u_names: Sequence[str],
+                    y_names: Sequence[str]) -> dict[str, list[str | None]]:
+    """Block metadata carrying :data:`UNITS` in the shape the export reads.
+
+    :mod:`difflow.planning.export` looks for ``metadata["u_units"]`` and
+    ``metadata["y_units"]``; filling them here is what makes the reference
+    chain's exported tables self-describing.
+    """
+    return {"u_units": [UNITS.get(n) for n in u_names],
+            "y_units": [UNITS.get(n) for n in y_names]}
+
+
 def _cold_box(u: Array, feed: Mapping[str, float]):
     """Flash the inlet gas at the cold-box conditions.
 
@@ -206,6 +218,9 @@ def ngl_block(name: str = "ngl", theta: Mapping[str, float] | None = None
         u0=[0.70, 232.0, 0.4, 3.2e6],
         theta=dict(NGL_THETA if theta is None else theta),
         phase_fn=ngl_phases, phase_names=("V_frac",), phase_bounds=(0.0, 1.0),
+        metadata=_units_metadata(
+            ["ethane_recovery", "T_coldbox", "split", "P_expander"],
+            ["NGL_C2", "NGL_C3plus", "residue_F", "E_refrig", "T_colfeed"]),
         jit=True)
 
 
@@ -217,7 +232,10 @@ def power_block(name: str = "power", theta: Mapping[str, float] | None = None
         u_names=["fuel_F", "alloc"],
         y_names=["Power", "CO2", "gas_sold"],
         lb=[0.0, 0.0], ub=[200.0, 1.0], u0=[70.0, 0.5],
-        theta=dict(POWER_THETA if theta is None else theta), jit=True)
+        theta=dict(POWER_THETA if theta is None else theta),
+        metadata=_units_metadata(["fuel_F", "alloc"],
+                                 ["Power", "CO2", "gas_sold"]),
+        jit=True)
 
 
 @dataclass
