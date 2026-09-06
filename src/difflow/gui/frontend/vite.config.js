@@ -15,11 +15,23 @@ export default defineConfig({
     // KaTeX is half the bundle on its own. On a loopback server that is
     // a file read, not a download, and splitting it out would put a
     // second committed chunk in git to save nothing.
-    chunkSizeWarningLimit: 700,
+    //
+    // WebLLM is the exception and is split out, because it is ~6 MB and
+    // is loaded only if someone picks it as the assistant's provider.
+    // It is bundled rather than fetched from a CDN at runtime: this page
+    // holds the CSRF token for a server that can `exec` Python, so it
+    // must not import third-party code over the network. The size is the
+    // price of that, and it is paid once, in git.
+    chunkSizeWarningLimit: 6500,
     rollupOptions: {
       output: {
         entryFileNames: 'app.js',
-        chunkFileNames: 'app-[name].js',
+        // Named for what it is; rollup would otherwise call the WebLLM
+        // chunk `app-index.js`, after its entry file.
+        chunkFileNames: (chunk) =>
+          chunk.moduleIds.some((id) => id.includes('@mlc-ai/web-llm'))
+            ? 'webllm.js'
+            : 'app-[name].js',
         assetFileNames: 'app.[ext]',
       },
     },

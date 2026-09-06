@@ -775,6 +775,17 @@ Three decisions in there are worth stating.
 
 Scoring is TF-IDF with length normalisation, and it runs in Python rather than in the browser. Where a dot product happens is not architecture; running it here makes it testable without a headless browser and keeps a 667 KB file off the wire on every question. What actually sharpens it is that **each pack searches on the question plus its own subject** — the operation name, the units in the flowsheet, the solver that ran. A user's question is four words long and two of them are "why" and "this"; the pack is what knows what "this" is.
 
+**And where the question goes is stated, not assumed.** Three things can answer a brief, chosen in the panel:
+
+| Provider | Where the brief goes |
+|---|---|
+| *No model* (the default) | nowhere. The brief is assembled and shown; copy it into an assistant of your choosing |
+| *In this browser* | a small model over WebGPU, via WebLLM. The weights come from the MLC CDN once (1–2 GB) and are cached by the browser; nothing you type leaves the machine |
+| *Local server* | an OpenAI-compatible base URL you give — Ollama, llama.cpp, vLLM |
+| *Anthropic* | `POST /api/assistant`, which the difflow process forwards with a key from **its own environment** (`ANTHROPIC_API_KEY`). The page never holds the key, and the panel says up front if the server has none |
+
+The footer names the active one in a sentence, in the accent colour when the answer is that the brief leaves the machine. The default sends nothing anywhere, and the WebLLM runtime is bundled rather than fetched from a CDN at run time — this page carries the CSRF token for a server that can `exec` Python, so it must not import third-party code over the network. That costs about 6 MB of committed build output, loaded only if someone selects that provider.
+
 **The budget is a real constraint.** The default runtime is a 3B model with a 4096-token window, and a brief that overflows it is truncated *at the end* — where the question is. So a pack is fitted to `context.BUDGET` tokens, dropping whole low-priority sections rather than truncating any of them (half a parameter table is a table with parameters missing from it), never dropping the subject, and recording what went. A thin answer then has a visible cause.
 
 ---

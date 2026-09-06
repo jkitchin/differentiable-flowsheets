@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
+from difflow.gui import assistant
 from difflow.gui.session import FlowsheetSession
 
 #: The front end, as built files on disk rather than a string literal in
@@ -232,6 +233,12 @@ class _Handler(BaseHTTPRequestHandler):
             "/api/code-context": lambda: self._send(self.session.code_context()),
             "/api/levers": lambda: self._send(self.session.levers()),
             "/api/diagram": lambda: self._send(self.session.diagram()),
+            # Whether the server-side provider can be offered at all.
+            # Asked before the option is shown, so "no key here" is a
+            # sentence in the settings rather than a failed question.
+            "/api/assistant": lambda: self._send(
+                {"ok": True, "configured": assistant.configured(),
+                 "model": assistant.DEFAULT_MODEL}),
         }
         handler = routes.get(self.path)
         if handler is not None:
@@ -300,6 +307,12 @@ class _Handler(BaseHTTPRequestHandler):
                                         extras=payload.get("extras"))
             if path == "/api/code-context":
                 return session.set_code_context(payload.get("source", ""))
+            # Not about the flowsheet, so not on the session: the brief
+            # was assembled by a GET and this only forwards it. A POST
+            # because it spends money, and so must pass `_guard`.
+            if path == "/api/assistant":
+                return assistant.answer(payload.get("messages") or [],
+                                        model=payload.get("model"))
             if path == "/api/connect":
                 return _wire(session.connect, payload)
 

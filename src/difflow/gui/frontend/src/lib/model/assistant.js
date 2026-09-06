@@ -37,7 +37,9 @@ export const PROVIDERS = [
     hint: 'a small model over WebGPU. The weights download once (~1-2 GB) and are '
         + 'cached by the browser; nothing you type leaves the machine.' },
   { id: 'openai', label: 'Local server (OpenAI-compatible)', local: true,
-    hint: 'Ollama, llama.cpp or vLLM on a base URL you give. The brief is sent there.' },
+    hint: 'Ollama, llama.cpp or vLLM on a base URL you give. The request goes '
+        + 'from this page, so that server has to allow this origin — for Ollama '
+        + 'that is OLLAMA_ORIGINS.' },
   { id: 'server', label: 'Anthropic (key held by the difflow server)', local: false,
     hint: 'the page posts to difflow, which forwards to the API with a key from '
         + 'its own environment. The brief leaves this machine.' },
@@ -129,5 +131,34 @@ export function writeSettings(storage, settings) {
   } catch {
     // private browsing, a full quota, a disabled store: the panel works
     // without persistence, so this is not worth reporting.
+  }
+}
+
+/**
+ * Split a stream of server-sent-event text into whole lines.
+ *
+ * A `fetch` body arrives in chunks that fall wherever the network put
+ * them, routinely mid-JSON. Everything before the last newline is
+ * complete and can be parsed; the remainder is carried into the next
+ * chunk. Getting this wrong shows up as an answer with occasional
+ * words missing, which is worse than an answer that fails.
+ */
+export function sseChunk(buffer, text) {
+  const combined = buffer + text
+  const cut = combined.lastIndexOf('\n')
+  if (cut < 0) return { lines: [], rest: combined }
+  return { lines: combined.slice(0, cut).split('\n'), rest: combined.slice(cut + 1) }
+}
+
+/** The token in one `data:` line, or null for anything else. */
+export function sseDelta(line) {
+  const trimmed = line.trim()
+  if (!trimmed.startsWith('data:')) return null
+  const payload = trimmed.slice(5).trim()
+  if (!payload || payload === '[DONE]') return null
+  try {
+    return JSON.parse(payload).choices?.[0]?.delta?.content ?? null
+  } catch {
+    return null                 // a keep-alive, or a server saying something else
   }
 }

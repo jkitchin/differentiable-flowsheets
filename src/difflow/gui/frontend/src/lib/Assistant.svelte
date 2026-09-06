@@ -18,9 +18,10 @@
 
   import { get } from './api.js'
   import {
-    KINDS, PROVIDERS, contextPath, destination, provider,
+    KINDS, PROVIDERS, WEBLLM_MODELS, contextPath, destination, messages, provider,
     readSettings, writeSettings,
   } from './model/assistant.js'
+  import { run } from './providers.js'
 
   let {
     kind = 'flowsheet',
@@ -41,10 +42,23 @@
   let showBrief = $state(true)
   let copied = $state('')
   let settings = $state(readSettings(globalThis.localStorage))
+  let answer = $state('')
+  let status = $state('')
+  let running = $state(false)
+  let serverKey = $state(null)
+  let controller = null
 
   let active = $derived(provider(settings.provider))
 
   $effect(() => writeSettings(globalThis.localStorage, { ...settings }))
+
+  // Whether the server has a key is the server's to say, and saying it
+  // here turns a failed question into a sentence in the settings.
+  $effect(() => {
+    if (settings.provider !== 'server' || serverKey !== null) return
+    get('/api/assistant').then((a) => (serverKey = !!a.configured))
+                         .catch(() => (serverKey = false))
+  })
 
   /**
    * Fetch the brief.
@@ -90,9 +104,42 @@
     }
   }
 
-  const ask = (event) => {
+  /**
+   * Assemble the brief for this question, then answer from it.
+   *
+   * In that order and never the other way round: the answer is only as
+   * good as the brief, and the brief is what is shown. With no model
+   * selected the first half is the whole job, which is a usable panel
+   * rather than a broken one.
+   */
+  async function ask(event) {
     event?.preventDefault()
-    brief(question)
+    if (running) return
+    answer = ''
+    status = ''
+    const pack = await brief(question)
+    if (!pack || active.id === 'none') return
+
+    running = true
+    controller = new AbortController()
+    try {
+      await run($state.snapshot(settings), messages(pack), {
+        onText: (text) => (answer = text),
+        onStatus: (line) => (status = line),
+        signal: controller.signal,
+      })
+    } catch (e) {
+      if (!controller.signal.aborted) error = String(e.message ?? e)
+    } finally {
+      running = false
+      status = ''
+      controller = null
+    }
+  }
+
+  function stop() {
+    controller?.abort()
+    running = false
   }
 </script>
 
@@ -105,6 +152,7 @@
     <p class="hint">{KINDS.find((k) => k.id === choice)?.hint}</p>
     <span class="spacer"></span>
     <button onclick={copy} disabled={!pack}>Copy brief</button>
+    {#if running}<button onclick={stop}>Stop</button>{/if}
     <button onclick={() => (showSettings = !showSettings)}
             class:primary={active.id === 'none'}>Model…</button>
     <button onclick={onclose}>Close</button>
@@ -119,12 +167,25 @@
         </select>
       </label>
       {#if settings.provider === 'webllm'}
-        <label>Model <input bind:value={settings.webllmModel} size="34" /></label>
+        <label>
+          Model
+          <input bind:value={settings.webllmModel} size="34"
+                 list="difflow-webllm-models" />
+        </label>
+        <datalist id="difflow-webllm-models">
+          {#each WEBLLM_MODELS as m (m)}<option value={m}></option>{/each}
+        </datalist>
       {:else if settings.provider === 'openai'}
         <label>Base URL <input bind:value={settings.baseUrl} size="26" /></label>
         <label>Model <input bind:value={settings.openaiModel} size="12" /></label>
       {/if}
       <p class="hint">{active.hint}</p>
+      {#if settings.provider === 'server' && serverKey === false}
+        <p class="error">
+          No ANTHROPIC_API_KEY in the environment of the process serving this
+          editor. Set it and restart, or pick a provider that answers locally.
+        </p>
+      {/if}
     </div>
   {/if}
 
@@ -143,6 +204,18 @@
     <div class="answer">
       {#if error}
         <p class="error">{error}</p>
+      {:else if answer}
+        <p class="said">{answer}</p>
+        {#if !running}
+          <p class="hint">
+            Model output, from the brief on the right. Anything it says about a
+            parameter that is not in that brief is not from difflow.
+          </p>
+        {/if}
+      {:else if status}
+        <p class="hint">{status}</p>
+      {:else if running}
+        <p class="hint">thinking…</p>
       {:else if active.id === 'none'}
         <p class="hint">
           No model is configured, so no answer is generated here. The brief
@@ -248,4 +321,5 @@
     cursor: pointer;
   }
   .error { margin: 0; color: var(--bad); font-size: 0.78rem; }
+  .said { margin: 0 0 0.6rem; font-size: 0.82rem; line-height: 1.55; white-space: pre-wrap; }
 </style>

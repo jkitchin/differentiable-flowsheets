@@ -12,7 +12,7 @@ import test from 'node:test'
 
 import {
   DEFAULTS, KINDS, PROVIDERS, contextPath, destination, inferKind,
-  messages, provider, readSettings, writeSettings,
+  messages, provider, readSettings, sseChunk, sseDelta, writeSettings,
 } from './assistant.js'
 
 test('the kinds offered are the ones the server can assemble', () => {
@@ -99,4 +99,30 @@ test('settings round-trip, and a broken store is not fatal', () => {
 
   store.set('difflow.assistant', '{not json')
   assert.deepEqual(readSettings(storage), DEFAULTS)
+})
+
+test('a stream is split on whole lines, and the tail is carried over', () => {
+  // the chunk boundary lands inside the JSON, which is the normal case
+  let { lines, rest } = sseChunk('', 'data: {"a":1}\ndata: {"b')
+  assert.deepEqual(lines, ['data: {"a":1}'])
+  assert.equal(rest, 'data: {"b')
+  ;({ lines, rest } = sseChunk(rest, '":2}\n\n'))
+  assert.deepEqual(lines, ['data: {"b":2}', ''])
+  assert.equal(rest, '')
+
+  assert.deepEqual(sseChunk('', 'no newline yet'),
+                   { lines: [], rest: 'no newline yet' })
+})
+
+test('only a data line with content is a token', () => {
+  assert.equal(
+    sseDelta('data: {"choices":[{"delta":{"content":"the "}}]}'), 'the ')
+  assert.equal(sseDelta('data: [DONE]'), null)
+  assert.equal(sseDelta(''), null)
+  assert.equal(sseDelta(': keep-alive'), null)
+  assert.equal(sseDelta('event: message'), null)
+  assert.equal(sseDelta('data: {truncated'), null)
+  // the final chunk carries a finish reason and no content
+  assert.equal(
+    sseDelta('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}'), null)
 })

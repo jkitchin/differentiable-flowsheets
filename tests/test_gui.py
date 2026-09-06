@@ -204,6 +204,34 @@ class TestRoutes:
         assert status == 200, "a bad question is an answer, not a 4xx"
         assert pack["ok"] is False and "tarot" in pack["error"]
 
+    def test_the_key_the_server_holds_is_reported_before_it_is_used(
+            self, client, monkeypatch):
+        """So "no key here" is a sentence in the settings, not a failure."""
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        status, payload = client.get_json("/api/assistant")
+        assert status == 200 and payload["ok"] and payload["configured"] is False
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-not-a-real-key")
+        _, payload = client.get_json("/api/assistant")
+        assert payload["configured"] is True
+
+    def test_forwarding_without_a_key_is_refused_in_the_answer(
+            self, client, monkeypatch):
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        status, payload = client.post(
+            "/api/assistant", {"messages": [{"role": "user", "content": "hi"}]})
+        assert status == 200, "a missing key is an answer, not a 4xx"
+        assert payload["ok"] is False
+        assert "ANTHROPIC_API_KEY" in payload["error"]
+
+    def test_forwarding_is_a_mutating_route(self, client, monkeypatch):
+        """It spends money, so it goes through the token check."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-not-a-real-key")
+        status, payload = client.post(
+            "/api/assistant", {"messages": []},
+            headers={gui.TOKEN_HEADER: "wrong"})
+        assert status == 403 and payload["ok"] is False
+
     def test_the_python_export_is_served(self, client):
         status, payload = client.get_json("/api/code")
         assert status == 200
@@ -1002,6 +1030,116 @@ class TestDocs:
         session = FlowsheetSession(build_flowsheet(thermo))
         assert session.docs("Flash")["ok"] is True
         assert session.docs("nope")["ok"] is False
+
+
+class TestAnthropicForwarder:
+    """`difflow.gui.assistant` --- the shaping and the refusals.
+
+    Nothing here reaches the network: the API is stubbed. What is worth
+    testing is that the OpenAI-shaped turns the page sends are
+    translated correctly (the system turn is a field, not a message),
+    and that every way this can fail comes back as an answer the panel
+    can show rather than a traceback.
+    """
+
+    @staticmethod
+    def _stub(monkeypatch, payload, *, capture=None):
+        import io
+        from difflow.gui import assistant as module
+
+        class _Response(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        def urlopen(request, timeout=None):
+            if capture is not None:
+                capture["body"] = json.loads(request.data)
+                capture["headers"] = dict(request.headers)
+            return _Response(json.dumps(payload).encode())
+
+        monkeypatch.setattr(module.urllib.request, "urlopen", urlopen)
+
+    def test_the_system_turn_becomes_the_system_field(self, monkeypatch):
+        from difflow.gui import assistant
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+        seen = {}
+        self._stub(monkeypatch, {
+            "content": [{"type": "text", "text": "the volume is 1.0 m^3"}],
+            "model": "claude-sonnet-5", "usage": {"input_tokens": 900},
+        }, capture=seen)
+
+        answer = assistant.answer([
+            {"role": "system", "content": "answer only from the brief"},
+            {"role": "user", "content": "## Unit\nCSTR"},
+        ])
+        assert answer["ok"] and answer["text"] == "the volume is 1.0 m^3"
+        assert seen["body"]["system"] == "answer only from the brief"
+        assert seen["body"]["messages"] == [
+            {"role": "user", "content": "## Unit\nCSTR"}
+        ], "the system turn must not also be sent as a message"
+        assert seen["headers"]["X-api-key"] == "sk-test"
+        assert seen["headers"]["Anthropic-version"] == assistant.VERSION
+
+    def test_the_model_is_overridable_from_the_environment(self, monkeypatch):
+        from difflow.gui import assistant
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+        monkeypatch.setenv("DIFFLOW_ASSISTANT_MODEL", "claude-haiku-4-5")
+        seen = {}
+        self._stub(monkeypatch, {"content": [{"type": "text", "text": "hi"}]},
+                   capture=seen)
+        assistant.answer([{"role": "user", "content": "q"}])
+        assert seen["body"]["model"] == "claude-haiku-4-5"
+
+    def test_an_http_error_is_reported_in_the_answer(self, monkeypatch):
+        import io
+
+        from difflow.gui import assistant
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+
+        def urlopen(request, timeout=None):
+            raise urllib.error.HTTPError(
+                assistant.API, 429, "Too Many Requests", {},
+                io.BytesIO(b'{"error": {"message": "rate limited"}}'))
+
+        monkeypatch.setattr(assistant.urllib.request, "urlopen", urlopen)
+        answer = assistant.answer([{"role": "user", "content": "q"}])
+        assert answer["ok"] is False
+        assert "429" in answer["error"] and "rate limited" in answer["error"]
+
+    def test_an_empty_reply_says_why(self, monkeypatch):
+        from difflow.gui import assistant
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+        self._stub(monkeypatch, {"content": [], "stop_reason": "max_tokens"})
+        answer = assistant.answer([{"role": "user", "content": "q"}])
+        assert answer["ok"] is False and "max_tokens" in answer["error"]
+
+    def test_an_oversized_brief_is_refused_before_it_is_paid_for(
+            self, monkeypatch):
+        from difflow.gui import assistant
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+
+        def urlopen(request, timeout=None):
+            raise AssertionError("must not reach the API")
+
+        monkeypatch.setattr(assistant.urllib.request, "urlopen", urlopen)
+        answer = assistant.answer(
+            [{"role": "user", "content": "x" * (assistant.MAX_CHARS + 1)}])
+        assert answer["ok"] is False and str(assistant.MAX_CHARS) in answer["error"]
+
+    def test_a_brief_with_no_question_is_refused(self, monkeypatch):
+        from difflow.gui import assistant
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+        answer = assistant.answer([{"role": "system", "content": "rules"}])
+        assert answer["ok"] is False and "no user turn" in answer["error"]
 
 
 class TestDocsRendering:
