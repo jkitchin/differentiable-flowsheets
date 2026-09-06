@@ -14,6 +14,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 from difflow.gui.session import FlowsheetSession
 
@@ -114,6 +115,18 @@ def _static_file(path: str) -> tuple[bytes, str] | None:
     return candidate.read_bytes(), content
 
 
+#: Both ends of a wire, named the way the canvas names them.
+_WIRE = ("source", "outlet", "target", "inlet")
+
+
+def _wire(fn, payload: dict) -> dict:
+    """Call a connect/disconnect with a wire read out of a request body."""
+    missing = [k for k in _WIRE if not payload.get(k)]
+    if missing:
+        return {"ok": False, "error": f"a wire needs {', '.join(missing)}"}
+    return fn(*(payload[k] for k in _WIRE))
+
+
 class _Handler(BaseHTTPRequestHandler):
     """Routes. The session does the work."""
 
@@ -161,27 +174,76 @@ class _Handler(BaseHTTPRequestHandler):
         body, content = asset
         self._send(body, content=content)
 
-    def do_POST(self):
+    def _body(self):
+        """The request body as restored JSON, or a 400 already sent."""
         length = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(length) if length else b"{}"
         try:
-            payload = _json_restore(json.loads(raw or b"{}"))
+            return _json_restore(json.loads(raw or b"{}")), None
         except json.JSONDecodeError as exc:
-            return self._send({"ok": False, "error": f"bad JSON: {exc}"}, 400)
+            self._send({"ok": False, "error": f"bad JSON: {exc}"}, 400)
+            return None, True
 
+    def _dispatch(self, verb: str, payload):
+        """The answer to one mutating request, or ``None`` if no route matched.
+
+        Every route here returns the session's own reply dict --- a
+        refusal is ``{"ok": False, "error": ...}`` with a 200, because it
+        is an answer about the flowsheet rather than a failure of the
+        request. Only a malformed request gets a 4xx.
+        """
+        path, session = self.path, self.session
+        unit_path = "/api/unit/"
+
+        if verb == "POST":
+            if path == "/api/flowsheet":
+                return session.replace(payload)
+            if path == "/api/solve":
+                return session.solve()
+            if path == "/api/save":
+                return session.save()
+            if path == "/api/layout":
+                return session.set_layout(payload.get("nodes", {}))
+            if path == "/api/unit":
+                return session.add_unit(payload.get("operation", ""),
+                                        name=payload.get("name"),
+                                        position=payload.get("position"))
+            if path == "/api/connect":
+                return _wire(session.connect, payload)
+
+        if verb == "PATCH" and path.startswith(unit_path):
+            return session.patch_unit(unquote(path[len(unit_path):]), payload)
+
+        if verb == "DELETE":
+            if path == "/api/connect":
+                return _wire(session.disconnect, payload)
+            if path.startswith(unit_path):
+                return session.remove_unit(unquote(path[len(unit_path):]))
+        return None
+
+    def _mutate(self, verb: str):
+        payload, failed = self._body()
+        if failed:
+            return
         try:
-            if self.path == "/api/flowsheet":
-                return self._send(self.session.replace(payload))
-            if self.path == "/api/solve":
-                return self._send(self.session.solve())
-            if self.path == "/api/save":
-                return self._send(self.session.save())
+            answer = self._dispatch(verb, payload)
         except Exception as exc:
             # a bad edit from the browser must not take the server down
             return self._send(
                 {"ok": False, "error": f"{type(exc).__name__}: {exc}"}, 400
             )
-        self._send({"error": "not found"}, status=404)
+        if answer is None:
+            return self._send({"error": "not found"}, status=404)
+        self._send(answer)
+
+    def do_POST(self):
+        self._mutate("POST")
+
+    def do_PATCH(self):
+        self._mutate("PATCH")
+
+    def do_DELETE(self):
+        self._mutate("DELETE")
 
 
 def make_server(session: FlowsheetSession, port: int = DEFAULT_PORT):

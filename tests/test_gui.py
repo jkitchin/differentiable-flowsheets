@@ -75,7 +75,7 @@ def build_flowsheet(thermo, V=1.0):
 
 
 class Client:
-    """A live server on an ephemeral port, plus the two verbs it takes."""
+    """A live server on an ephemeral port, plus the verbs it takes."""
 
     def __init__(self, session):
         self.session = session
@@ -99,16 +99,25 @@ class Client:
         status, body = self.get(path)
         return status, json.loads(body)
 
-    def post(self, path, body=None):
+    def send(self, verb, path, body=None):
         request = urllib.request.Request(
             self.base + path, data=json.dumps(body or {}).encode(),
-            headers={"Content-Type": "application/json"}, method="POST",
+            headers={"Content-Type": "application/json"}, method=verb,
         )
         try:
             with urllib.request.urlopen(request) as response:
                 return response.status, json.loads(response.read())
         except urllib.error.HTTPError as exc:
             return exc.code, json.loads(exc.read())
+
+    def post(self, path, body=None):
+        return self.send("POST", path, body)
+
+    def patch(self, path, body=None):
+        return self.send("PATCH", path, body)
+
+    def delete(self, path, body=None):
+        return self.send("DELETE", path, body)
 
 
 @pytest.fixture
@@ -292,6 +301,93 @@ class TestEditing:
             urllib.request.urlopen(request)
         assert excinfo.value.code == 400
         assert "bad JSON" in json.loads(excinfo.value.read())["error"]
+
+
+# =============================================================================
+# Incremental routes
+# =============================================================================
+
+
+class TestIncrementalRoutes:
+    """The verbs the canvas uses. What they do is covered in test_gui_edit."""
+
+    def test_a_patch_changes_one_parameter(self, client):
+        status, payload = client.patch("/api/unit/reactor", {"params": {"V": 5.0}})
+        assert status == 200 and payload["ok"]
+        assert float(client.session.flowsheet.units[0].operation.params.V) == 5.0
+
+    def test_a_patch_leaves_the_other_units_alone(self, client):
+        flash = client.session.flowsheet.units[1].operation
+        client.patch("/api/unit/reactor", {"params": {"V": 5.0}})
+        assert client.session.flowsheet.units[1].operation is flash
+
+    def test_a_patched_flowsheet_still_solves(self, client):
+        before = client.post("/api/solve")[1]["streams"]["rx"]["F_ethanol"]
+        client.patch("/api/unit/reactor", {"params": {"V": 5.0}})
+        after = client.post("/api/solve")[1]["streams"]["rx"]["F_ethanol"]
+        assert after > before, "a five-fold larger reactor must convert more"
+
+    def test_a_patch_to_a_unit_that_is_not_there_is_a_refusal(self, client):
+        status, payload = client.patch("/api/unit/nope", {"params": {}})
+        assert status == 200, "a wrong name is an answer about the flowsheet"
+        assert payload["ok"] is False and "nope" in payload["error"]
+
+    def test_a_name_with_a_space_survives_the_url(self, client):
+        client.patch("/api/unit/reactor", {"name": "hot reactor"})
+        status, payload = client.patch("/api/unit/hot%20reactor",
+                                       {"params": {"V": 2.0}})
+        assert status == 200 and payload["ok"]
+
+    def test_a_unit_is_added_and_removed(self, client):
+        status, added = client.post("/api/unit", {"operation": "Mixer"})
+        assert status == 200 and added["ok"]
+        names = [u.name for u in client.session.flowsheet.units]
+        assert added["name"] in names
+        assert client.delete(f"/api/unit/{added['name']}")[1]["ok"]
+        assert added["name"] not in [u.name for u in client.session.flowsheet.units]
+
+    def test_a_wire_is_made_and_broken(self, client):
+        added = client.post("/api/unit", {"operation": "Mixer"})[1]
+        wire = {"source": "flash", "outlet": "liq",
+                "target": added["name"], "inlet": added["inlets"][0]}
+        assert client.post("/api/connect", wire)[1] == {
+            "ok": True, "kind": "arc", "stream": "liq"
+        }
+        wire["inlet"] = "liq"
+        assert client.delete("/api/connect", wire)[1]["ok"]
+
+    def test_half_a_wire_is_refused_by_name(self, client):
+        status, payload = client.post("/api/connect", {"source": "flash"})
+        assert status == 200 and payload["ok"] is False
+        for missing in ("outlet", "target", "inlet"):
+            assert missing in payload["error"]
+
+    def test_positions_are_stored_without_a_rebuild(self, client):
+        reactor = client.session.flowsheet.units[0].operation
+        status, payload = client.post(
+            "/api/layout", {"nodes": {"reactor": {"x": 40, "y": 12}}}
+        )
+        assert status == 200 and payload["ok"]
+        assert client.session.flowsheet.view["nodes"]["reactor"] == {"x": 40.0, "y": 12.0}
+        assert client.session.flowsheet.units[0].operation is reactor
+
+    def test_positions_come_back_in_the_document(self, client):
+        client.post("/api/layout", {"nodes": {"reactor": {"x": 40, "y": 12}}})
+        _, doc = client.get_json("/api/flowsheet")
+        assert doc["flowsheet"]["view"]["nodes"]["reactor"] == {"x": 40, "y": 12}
+
+    def test_an_unrouted_verb_is_a_404(self, client):
+        assert client.patch("/api/nothing")[0] == 404
+        assert client.delete("/api/nothing")[0] == 404
+
+    def test_malformed_json_on_a_patch_is_reported(self, client):
+        request = urllib.request.Request(
+            client.base + "/api/unit/reactor", data=b"{not json",
+            headers={"Content-Type": "application/json"}, method="PATCH",
+        )
+        with pytest.raises(urllib.error.HTTPError) as excinfo:
+            urllib.request.urlopen(request)
+        assert excinfo.value.code == 400
 
 
 # =============================================================================
