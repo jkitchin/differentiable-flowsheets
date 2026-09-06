@@ -45,7 +45,7 @@ difflow/
 │   │   ├── kinetics.py    # Declarative mass-action rate laws (data, not callables)
 │   │   ├── publish.py     # Flowsheet -> self-contained interactive HTML (no install)
 │   │   ├── gui/           # Local browser editor (python -m difflow.gui)
-│   │   │                   # session.py + server.py + static/ (the page on disk)
+│   │   │                   # session.py + server.py + layout.py + static/
 │   │   ├── params_mixin.py # ParamsMixin base class for Params dataclasses
 │   │   ├── reconciliation/ # Data reconciliation, gross error detection,
 │   │   │                   # observability, monitoring, multi-set pooling

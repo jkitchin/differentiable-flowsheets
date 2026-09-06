@@ -34,8 +34,16 @@ and always for the rate law, so a reactor built through
 Stability
 ---------
 
-``FORMAT_VERSION`` is written into every file and checked on read. The
-difflow version is recorded too, for provenance, but is not enforced.
+``FORMAT_VERSION`` is written into every file and checked on read
+against ``SUPPORTED_VERSIONS``: difflow writes the current version and
+reads every version it still understands, so a file written by an older
+release keeps opening.
+
+Version 2 added the optional top-level ``view`` block, which carries
+presentation state --- canvas positions, the editor's code context ---
+and is read by nothing numeric. A version 1 file simply has none, which
+is indistinguishable from a version 2 file whose flowsheet was never
+opened in an editor.
 """
 
 from __future__ import annotations
@@ -47,8 +55,13 @@ from typing import Any
 
 import jax.numpy as jnp
 
-#: bumped when the on-disk layout changes incompatibly
-FORMAT_VERSION = 1
+#: bumped when the on-disk layout changes; written into every file
+FORMAT_VERSION = 2
+
+#: every version :func:`from_dict` still reads. Version 1 files predate the
+#: ``view`` block and are otherwise identical, so reading them costs nothing
+#: and refusing them would strand every file written before the editor.
+SUPPORTED_VERSIONS = (1, 2)
 
 #: keys used to tag values that JSON has no native type for
 ARRAY_TAG = "$array"
@@ -350,7 +363,8 @@ def to_dict(flowsheet, registry=None) -> dict:
 
     Returns:
         A dictionary with ``format_version``, ``species_order``,
-        ``defaults``, ``feeds``, ``units`` and ``recycles``.
+        ``defaults``, ``feeds``, ``units``, ``recycles``, and ``view``
+        if the flowsheet carries any presentation state.
 
     Raises:
         SerializationError: if an operation is unregistered or a
@@ -396,6 +410,10 @@ def to_dict(flowsheet, registry=None) -> dict:
         },
         "units": units,
         "recycles": dict(flowsheet.recycles),
+        # Omitted rather than written empty, so a flowsheet that has never
+        # been opened in an editor produces the same bytes it always did.
+        **({"view": _encode_value(flowsheet.view, "view")}
+           if getattr(flowsheet, "view", None) else {}),
     }
 
 
@@ -410,17 +428,18 @@ def from_dict(data: dict, registry=None, extras: dict | None = None):
         A :class:`~difflow.flowsheet.Flowsheet`.
 
     Raises:
-        SerializationError: on an unknown format version or an operation
-            name that is not registered.
+        SerializationError: on an unsupported format version or an
+            operation name that is not registered.
     """
     from difflow.catalog import _default_registry
     from difflow.flowsheet import Flowsheet, Unit
 
     version = data.get("format_version")
-    if version != FORMAT_VERSION:
+    if version not in SUPPORTED_VERSIONS:
         raise SerializationError(
             f"format version {version!r} is not supported; this difflow "
-            f"reads version {FORMAT_VERSION}."
+            f"reads {', '.join(str(v) for v in SUPPORTED_VERSIONS)} and "
+            f"writes {FORMAT_VERSION}."
         )
     registry = registry or _default_registry()
     operations = registry.list_operations()
@@ -460,6 +479,7 @@ def from_dict(data: dict, registry=None, extras: dict | None = None):
 
     for source, dest in data.get("recycles", {}).items():
         flowsheet.add_recycle(source, dest)
+    flowsheet.view = _decode_value(data.get("view", {})) or {}
     return flowsheet
 
 

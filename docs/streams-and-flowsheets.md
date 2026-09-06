@@ -471,7 +471,17 @@ fs2 = serialize.load("plant.json")
 
 The round trip preserves the answer, not just the shape — a reloaded flowsheet solves to bit-identical results. `to_json`/`from_json` and `to_dict`/`from_dict` are available if you want the text or the data rather than a file.
 
-The format records `format_version` (checked on read) and the difflow version that wrote it (for provenance only).
+The format records `format_version` (checked on read against `SUPPORTED_VERSIONS`) and the difflow version that wrote it (for provenance only). difflow writes version 2 and reads 1 and 2, so a file written before the editor existed keeps opening.
+
+Version 2 added an optional top-level `view` block, which round-trips through `Flowsheet.view` and is read by nothing numeric:
+
+```python
+fs.view = {"nodes": {"reactor": {"x": 260.0, "y": 40.0},
+                     "feed:feed": {"x": 40.0, "y": 40.0}},
+           "code_context": "thermo = IdealThermo(...)"}
+```
+
+It is where the editor keeps canvas positions, its code-context snippet and its planning selection, so a flowsheet laid out by hand opens the way it was left. Node keys follow the same vocabulary as `_apply_params`: a unit is its bare name, a feed is `feed:<stream>`. Nothing validates the contents, and `_apply_params` copies the block through, so a swept or optimized flowsheet keeps its layout.
 
 ### What it can and cannot write
 
@@ -623,6 +633,8 @@ session = FlowsheetSession(path="plant.json")
 session.solve()["converged"]
 session.code()["source"]
 ```
+
+`GET /api/flowsheet` fills in `view.nodes` when the document has none, from `difflow.gui.layout.auto_layout` — a longest-path column assignment with feeds banked left and dangling products right, shared with `difflow.report.diagram` so a report and the canvas agree on where a unit sits. Recycle edges are left out of the path length, which is what makes a recycle draw as an arrow going back rather than as another column. The positions are served, not adopted: opening a file does not give it a `view`, and coordinates reach disk only when the user saves.
 
 Anything else under `static/` is served alongside the page, by an allow-list of the suffixes a front-end build emits (`.html`, `.js`, `.css`, `.json`, `.svg`, `.map`, `.woff2`, `.ico`); the page is re-read from disk on every request, so a rebuilt bundle appears on reload rather than on restart.
 

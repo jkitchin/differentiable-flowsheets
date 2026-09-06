@@ -49,10 +49,27 @@ class FlowsheetSession:
 
         if self.flowsheet is None:
             return {"flowsheet": None, "path": str(self.path or "")}
-        return {
-            "flowsheet": serialize.to_dict(self.flowsheet),
-            "path": str(self.path or ""),
-        }
+        document = serialize.to_dict(self.flowsheet)
+        document.setdefault("view", {})
+        if not document["view"].get("nodes"):
+            document["view"]["nodes"] = self.layout()
+        return {"flowsheet": document, "path": str(self.path or "")}
+
+    def layout(self) -> dict:
+        """Canvas positions from the topology, for a flowsheet that has none.
+
+        Filled into the served document rather than into the flowsheet: a
+        file that has never been laid out should not acquire coordinates
+        merely because someone opened it. The browser owns them from there,
+        and they reach disk only when the user saves. :func:`auto_layout` is
+        stable, so re-deriving them on every load is not a shuffle.
+        """
+        from difflow.gui.layout import auto_layout
+
+        if self.flowsheet is None:
+            return {}
+        return {name: {"x": x, "y": y}
+                for name, (x, y) in auto_layout(self.flowsheet).items()}
 
     def code(self) -> dict:
         from difflow import codegen

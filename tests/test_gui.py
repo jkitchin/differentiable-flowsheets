@@ -143,6 +143,28 @@ class TestRoutes:
         assert [u["name"] for u in doc["flowsheet"]["units"]] == ["reactor", "flash"]
         assert doc["flowsheet"]["format_version"] == serialize.FORMAT_VERSION
 
+    def test_the_served_document_carries_canvas_positions(self, client):
+        """A canvas needs coordinates and a flowsheet carries none."""
+        status, doc = client.get_json("/api/flowsheet")
+        assert status == 200
+        nodes = doc["flowsheet"]["view"]["nodes"]
+        assert {"reactor", "flash", "feed:feed"} <= set(nodes)
+        assert nodes["reactor"]["x"] < nodes["flash"]["x"], "left to right"
+
+    def test_opening_a_flowsheet_does_not_give_it_a_view(self, client):
+        """Positions are served, not adopted; the file is untouched on open."""
+        client.get_json("/api/flowsheet")
+        assert client.session.flowsheet.view == {}
+
+    def test_positions_the_document_already_has_are_kept(self, client):
+        client.session.flowsheet.view = {
+            "nodes": {"reactor": {"x": 999.0, "y": 999.0}}
+        }
+        _, doc = client.get_json("/api/flowsheet")
+        assert doc["flowsheet"]["view"]["nodes"] == {
+            "reactor": {"x": 999.0, "y": 999.0}
+        }, "a hand-placed canvas must not be re-laid-out under the user"
+
     def test_the_python_export_is_served(self, client):
         status, payload = client.get_json("/api/code")
         assert status == 200

@@ -6,12 +6,16 @@ no ``ipycytoscape``, no external JavaScript, and no network access — it embeds
 directly in the standalone HTML report.  The layout is a simple left-to-right
 layered (Sugiyama-style) placement: feeds on the left, products on the right,
 units in longest-path columns between them; recycle arcs are drawn dashed.
+The column assignment itself is :func:`difflow.gui.layout.unit_columns`,
+shared with the editor's canvas so a report and the editor agree on where a
+unit sits.
 """
 
 from __future__ import annotations
 
 from html import escape
 
+from difflow.gui.layout import unit_columns
 from difflow.report.ir import Report
 
 # Geometry (px).
@@ -20,27 +24,6 @@ _ROW_H = 78
 _NODE_W = 130
 _NODE_H = 46
 _MARGIN = 24
-
-
-def _unit_columns(unit_names, up_edges) -> dict[str, int]:
-    """Longest-path column index per unit, ignoring back (recycle) edges.
-
-    ``up_edges`` maps a unit to the list of upstream units feeding it.  A
-    Bellman-Ford-style relaxation capped at ``len(units)`` passes assigns each
-    unit one past its deepest predecessor; the cap makes it safe on cyclic
-    graphs (recycle edges simply stop lengthening the path).
-    """
-    col = {u: 0 for u in unit_names}
-    for _ in range(len(unit_names)):
-        changed = False
-        for u in unit_names:
-            for p in up_edges.get(u, ()):  # predecessors
-                if col[p] + 1 > col[u]:
-                    col[u] = col[p] + 1
-                    changed = True
-        if not changed:
-            break
-    return col
 
 
 def _node_svg(x: int, y: int, label: str, sub: str, kind: str) -> str:
@@ -109,7 +92,7 @@ def flowsheet_svg(report: Report) -> str:
                 up_edges[u.name].append(src)
                 unit_arcs.append((src, u.name, inlet))
 
-    col = _unit_columns(unit_names, up_edges)
+    col = unit_columns(unit_names, up_edges)
     max_unit_col = max(col.values()) if col else 0
 
     # Feed streams: inlets not produced by any unit.  Product streams: outlets

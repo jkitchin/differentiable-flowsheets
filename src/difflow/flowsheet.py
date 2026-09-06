@@ -207,6 +207,13 @@ class Flowsheet:
         self.units: list[Unit] = []
         self.feeds: dict[str, Stream] = {}
         self.recycles: dict[str, str] = {}  # {source_name: dest_name}
+        #: Presentation state, round-tripped by :mod:`difflow.serialize` and
+        #: read by nothing numeric.  The editor keeps canvas positions
+        #: (``view["nodes"]``), its code-context snippet and its planning
+        #: selection here, so a flowsheet that has been laid out by hand opens
+        #: the way it was left.  Anything may go in; nothing in the solve path
+        #: looks.
+        self.view: dict[str, Any] = {}
         self._stream_cache: dict[str, Stream] = {}
         #: tear iterations used by the last accelerated solve (Wegstein
         #: or Anderson); equals max_iter if it did not converge
@@ -823,6 +830,7 @@ class Flowsheet:
         new_fs.feeds = new_feeds
         new_fs.recycles = dict(self.recycles)
         new_fs.units = new_units
+        new_fs.view = copy.deepcopy(self.view)
         return new_fs
 
     def make_objective_fn(

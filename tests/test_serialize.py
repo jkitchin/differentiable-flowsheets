@@ -282,6 +282,58 @@ class TestRefusals:
 
 
 # =============================================================================
+# The view block (format version 2)
+# =============================================================================
+
+
+class TestView:
+    """Presentation state rides along, and nothing numeric reads it."""
+
+    def test_the_view_block_round_trips(self, flowsheet):
+        flowsheet.view = {
+            "nodes": {"reactor": {"x": 120.0, "y": 40.0},
+                      "feed:feed": {"x": 20.0, "y": 40.0}},
+            "code_context": "thermo = IdealThermo(...)\n",
+        }
+        back = serialize.from_dict(serialize.to_dict(flowsheet))
+        assert back.view == flowsheet.view
+
+    def test_a_flowsheet_with_no_view_writes_no_view_key(self, flowsheet):
+        """A file that has never been opened in an editor is unchanged."""
+        assert "view" not in serialize.to_dict(flowsheet)
+        assert serialize.from_dict(serialize.to_dict(flowsheet)).view == {}
+
+    def test_a_version_1_file_still_loads(self, flowsheet):
+        """Files written before the view block existed keep opening."""
+        data = serialize.to_dict(flowsheet)
+        data["format_version"] = 1
+        data.pop("view", None)
+        back = serialize.from_dict(data)
+        assert [u.name for u in back.units] == [u.name for u in flowsheet.units]
+        assert back.view == {}
+
+    def test_the_written_version_is_the_current_one(self, flowsheet):
+        assert serialize.to_dict(flowsheet)["format_version"] == 2
+        assert FORMAT_VERSION == 2
+        assert set(serialize.SUPPORTED_VERSIONS) == {1, 2}
+
+    def test_the_view_survives_an_apply_params(self, flowsheet):
+        """_apply_params rebuilds the flowsheet; the canvas must survive it."""
+        flowsheet.view = {"nodes": {"reactor": {"x": 1.0, "y": 2.0}}}
+        applied = flowsheet._apply_params({})
+        assert applied.view == flowsheet.view
+        applied.view["nodes"]["reactor"]["x"] = 99.0
+        assert flowsheet.view["nodes"]["reactor"]["x"] == 1.0, "copied, not shared"
+
+    def test_the_view_holds_arbitrary_json(self, flowsheet):
+        """The editor puts its planning selection here too; nothing validates."""
+        flowsheet.view = {"planning": {"u": ["reactor.V"], "y": ["out.total_flow"],
+                                       "bounds": {"reactor.V": [0.5, 5.0]},
+                                       "radius": 0.3}}
+        assert serialize.from_dict(serialize.to_dict(flowsheet)).view == flowsheet.view
+
+
+# =============================================================================
 # Values
 # =============================================================================
 
