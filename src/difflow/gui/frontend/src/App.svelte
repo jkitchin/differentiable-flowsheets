@@ -1,4 +1,5 @@
 <script>
+  import Assistant from './lib/Assistant.svelte'
   import Canvas from './lib/Canvas.svelte'
   import CodeContext from './lib/CodeContext.svelte'
   import Export from './lib/Export.svelte'
@@ -6,6 +7,7 @@
   import Palette from './lib/Palette.svelte'
   import Results from './lib/Results.svelte'
   import { del, get, patch, post, send } from './lib/api.js'
+  import { inferKind } from './lib/model/assistant.js'
   import { movedPositions } from './lib/model/edit.js'
   import { flowLabels, flowTints } from './lib/model/results.js'
 
@@ -22,6 +24,12 @@
   let pickers = $state(null)
   let sens = $state(null)
   let showResults = $state(false)
+  // What the solver last said, kept whether or not it worked -- `result`
+  // is dropped on a failure because nothing can be drawn from it, but a
+  // failed solve is the thing a user is most likely to have a question
+  // about, so the assistant needs it.
+  let lastSolve = $state(null)
+  let showAssistant = $state(false)
 
   async function load() {
     const payload = await get('/api/flowsheet')
@@ -130,6 +138,7 @@
   const solve = () =>
     edit(async () => {
       const answer = await post('/api/solve')
+      lastSolve = answer
       result = answer.ok ? answer : null
       sens = null
       if (answer.ok) {
@@ -193,6 +202,7 @@
   <button onclick={() => (showContext = !showContext)}
           class:primary={context.error}>Code context</button>
   <button onclick={() => (showResults = !showResults)}>Results</button>
+  <button onclick={() => (showAssistant = !showAssistant)}>Ask</button>
   <button onclick={solve} disabled={busy}>Solve</button>
   <button onclick={save} disabled={busy || !path}>Save</button>
   <Export {path} document={doc} disabled={busy || !doc}
@@ -244,6 +254,15 @@
     {busy}
     onsensitivity={differentiate}
     onclose={() => (showResults = false)}
+  />
+{/if}
+
+{#if showAssistant}
+  <Assistant
+    kind={inferKind({ unit: selectedUnit, solve: lastSolve })}
+    unit={selectedUnit?.name ?? null}
+    operation={selected?.data?.operation ?? null}
+    onclose={() => (showAssistant = false)}
   />
 {/if}
 
