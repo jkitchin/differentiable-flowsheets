@@ -7,6 +7,7 @@ port arity, where the trap is counting the info dict every unit returns
 as though it were an outlet stream.
 """
 
+import importlib
 import inspect
 import json
 
@@ -134,6 +135,46 @@ class TestPorts:
     def test_unknown_arity_is_reported_not_guessed(self, cat):
         """Splitter returns a bare `tuple`, so its outlet count is unknown."""
         assert cat["Splitter"].ports.n_outlets is None
+
+    def test_a_lone_stream_return_is_one_outlet(self, cat):
+        """The gas units return a Stream, not a (Stream, info) tuple.
+
+        Reading only tuples left eleven of them with no outlet at all,
+        and the canvas drew them from its fallback rather than from the
+        signature.
+        """
+        for name in ("GasPipe", "Compressor", "OpenValve", "SourceHead"):
+            assert cat[name].ports.n_outlets == 1, name
+            assert cat[name].ports.inlets == ["inlet"], name
+
+    def test_a_class_with_no_call_of_its_own_has_no_ports(self, cat):
+        """`cls.__call__` on such a class reaches the metaclass slot.
+
+        Its signature is `(*args, **kwargs)`, which reads back as a unit
+        taking any number of inlets -- drawing a mixer where the catalog
+        holds a model object with named methods.
+        """
+        for name in ("LLEEquilibrium", "TFF"):
+            spec = cat[name]
+            cls = getattr(importlib.import_module(spec.module), spec.class_name)
+            assert "__call__" not in cls.__dict__, f"premise: {name}"
+            ports = spec.ports
+            assert ports.inlets == [], name
+            assert not ports.variadic, name
+
+    def test_the_ports_left_unknown_are_the_ones_that_cannot_be_known(self, cat):
+        """Guard against the count creeping back up.
+
+        What remains is honest: the REE circuits return a dict of named
+        streams, Splitter's width is a call argument, and two entries are
+        model objects with no `__call__` at all.
+        """
+        unknown = {n for n, s in cat.items() if s.ports.n_outlets is None}
+        assert unknown == {
+            "ExtractStripCircuit", "ExtractScrubStripCircuit",
+            "FullSeparationTrain", "SplitShellCascade",
+            "Splitter", "LLEEquilibrium", "TFF",
+        }
 
 
 # =============================================================================

@@ -8,6 +8,7 @@ The rest check that what cannot be written faithfully is refused with a
 message naming the culprit, rather than dropped.
 """
 
+import dataclasses
 import json
 
 import jax
@@ -470,6 +471,34 @@ class TestFiles:
         path = serialize.save(flowsheet, tmp_path / "plant.json")
         reloaded = serialize.load(path, extras={"flash": {"thermo": thermo}})
         assert reloaded.units[1].operation.thermo is thermo
+
+
+class TestPluginTypes:
+    """Every shipped plugin has to be reachable by name.
+
+    A nested ``Params`` is written as ``{"$type": "BranchParams", ...}``
+    and rebuilt by searching the packages difflow ships. A plugin missing
+    from that list fails only on the way *back* in, so a flowsheet saves
+    without complaint and refuses to load.
+    """
+
+    @pytest.mark.parametrize("name", [
+        "HeaterParams",                     # difflow
+        "BioreactorParams",                 # difflow_bio
+        "PipeParams",                       # difflow_gas
+        "BranchParams",                     # difflow_power
+    ])
+    def test_a_plugin_params_class_resolves_by_name(self, name):
+        found = serialize._lookup_type(name)
+        assert dataclasses.is_dataclass(found)
+
+    def test_every_shipped_plugin_is_searched(self):
+        from importlib.metadata import entry_points
+
+        plugins = {f"difflow_{e.name}"
+                   for e in entry_points(group="difflow.plugins")}
+        assert plugins <= set(serialize._PACKAGES), (
+            "a plugin outside _PACKAGES saves fine and refuses to load")
 
 
 if __name__ == "__main__":

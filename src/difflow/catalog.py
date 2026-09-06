@@ -274,6 +274,9 @@ def _outlet_count(ret: Any) -> int | None:
     args = typing.get_args(ret)
     if args:
         return sum(1 for a in args if _is_stream(a))
+    # a lone stream, as the gas units return: one outlet, no info payload
+    if _is_stream(ret):
+        return 1
     # a string annotation, e.g. "tuple[Stream, dict]"
     text = str(ret).strip().strip("'\"")
     if text.startswith("tuple[") and text.endswith("]"):
@@ -282,7 +285,16 @@ def _outlet_count(ret: Any) -> int | None:
 
 
 def _ports(cls: type) -> PortSpec:
-    """Derive stream connectivity from the ``__call__`` signature."""
+    """Derive stream connectivity from the ``__call__`` signature.
+
+    A class that defines no ``__call__`` of its own has no ports at all.
+    Asking for one anyway reaches the metaclass slot, whose signature is
+    ``(*args, **kwargs)`` -- which reads back as a unit accepting any
+    number of inlets, and would draw a mixer where the catalog holds a
+    model object with named methods.
+    """
+    if not inspect.isfunction(getattr(cls, "__call__", None)):
+        return PortSpec()
     try:
         sig = inspect.signature(cls.__call__)
     except (TypeError, ValueError):
