@@ -12,6 +12,10 @@ export default defineConfig({
     outDir: '../static',
     emptyOutDir: false,
     target: 'es2022',
+    // KaTeX is half the bundle on its own. On a loopback server that is
+    // a file read, not a download, and splitting it out would put a
+    // second committed chunk in git to save nothing.
+    chunkSizeWarningLimit: 700,
     rollupOptions: {
       output: {
         entryFileNames: 'app.js',

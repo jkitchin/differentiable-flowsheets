@@ -92,6 +92,12 @@ gas = [
 power = [
     # Electrical grid operations are included in the main package
 ]
+gui = [
+    # Docstring rendering for the editor's inspector (difflow.gui.docs).
+    # Without it a unit's documentation is shown as plain text, and
+    # everything else in the editor works unchanged.
+    "docutils>=0.19",
+]
 planning = [
     # Pyomo model emission for difflow.planning (LPModel.to_pyomo).
     # The planner itself solves with HiGHS via scipy and needs nothing extra.

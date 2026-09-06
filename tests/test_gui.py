@@ -920,5 +920,115 @@ class TestPageLogic:
         assert result.returncode == 0, result.stdout + result.stderr
 
 
+class TestDocs:
+    """`GET /api/docs/<op>` --- what the inspector shows about a unit.
+
+    The catalog already carries the docstring; the route's job is to
+    render it, to answer for any registered name, and to refuse an
+    unregistered one in the same shape as every other refusal rather
+    than with a traceback.
+    """
+
+    def test_a_unit_documents_itself(self, client):
+        status, body = client.get_json("/api/docs/CSTR")
+        assert status == 200
+        assert body["ok"] is True
+        assert body["operation"] == "CSTR"
+        assert body["symbol"] == "CSTR"
+        assert body["html"]
+        assert body["equations"], "the CSTR declares its governing equations"
+        assert body["assumptions"]
+        assert body["numerical_method"]
+
+    def test_docutils_renders_it_when_it_is_installed(self, client):
+        from difflow.gui import docs
+
+        _, body = client.get_json("/api/docs/CSTR")
+        expected = "rst" if docs.available() else "text"
+        assert body["format"] == expected
+        if expected == "rst":
+            # the paragraph is markup, not the escaped source
+            assert "<p>" in body["html"]
+
+    def test_an_unknown_operation_is_refused_not_raised(self, client):
+        status, body = client.get_json("/api/docs/NotAUnit")
+        assert status == 200, "a refusal is an answer, not a broken route"
+        assert body["ok"] is False
+        assert "NotAUnit" in body["error"]
+
+    def test_a_name_with_a_query_string_still_resolves(self, client):
+        _, body = client.get_json("/api/docs/CSTR?t=1")
+        assert body["ok"] is True and body["operation"] == "CSTR"
+
+    def test_the_route_needs_no_token(self, client):
+        """Reads are readable; only the mutating routes carry the token."""
+        status, _ = client.get("/api/docs/Mixer")
+        assert status == 200
+
+    def test_every_operation_answers(self, client):
+        """The palette can ask about anything it lists."""
+        _, catalog = client.get_json("/api/catalog")
+        for name in catalog:
+            _, body = client.get_json(f"/api/docs/{name}")
+            assert body["ok"] is True, name
+            assert body["html"], name
+
+    def test_the_session_answers_without_a_socket(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        assert session.docs("Flash")["ok"] is True
+        assert session.docs("nope")["ok"] is False
+
+
+class TestDocsRendering:
+    """`difflow.gui.docs` --- the rendering itself, without a server."""
+
+    def test_empty_text_is_empty(self):
+        from difflow.gui import docs
+
+        assert docs.render("   ") == ("", "text")
+
+    def test_a_sphinx_role_does_not_swallow_the_line(self):
+        """Bare docutils does not know `:class:`, and an unknown role is
+        an error that takes the whole paragraph with it."""
+        from difflow.gui import docs
+
+        if not docs.available():
+            pytest.skip("docutils is not installed")
+        html, fmt = docs.render("A :class:`~difflow.streams.Stream` goes in.")
+        assert fmt == "rst"
+        assert "Stream" in html and "goes in" in html
+        assert "difflow.streams" not in html, "`~` abbreviates, as in Sphinx"
+
+    def test_no_system_messages_reach_the_panel(self):
+        """A few docstrings indent in ways docutils reads as a block
+        quote. That is difflow's prose to fix, not a red box in the
+        user's inspector."""
+        from difflow.catalog import catalog
+        from difflow.gui import docs
+
+        if not docs.available():
+            pytest.skip("docutils is not installed")
+        for name, spec in catalog().items():
+            html, fmt = docs.render(spec.doc)
+            assert fmt == "rst", name
+            assert "system-message" not in html, name
+
+    def test_it_falls_back_to_text_without_docutils(self, monkeypatch):
+        from difflow.gui import docs
+
+        real = __import__
+
+        def no_docutils(name, *args, **kwargs):
+            if name.startswith("docutils"):
+                raise ImportError("no docutils")
+            return real(name, *args, **kwargs)
+
+        monkeypatch.setattr("builtins.__import__", no_docutils)
+        html, fmt = docs.render("A <script> & an ampersand.")
+        assert fmt == "text"
+        assert html.startswith("<pre>")
+        assert "&lt;script&gt;" in html and "&amp;" in html
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

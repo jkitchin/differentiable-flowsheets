@@ -170,6 +170,45 @@ class FlowsheetSession:
         }
         return {"flowsheet": document, "path": str(self.path or "")}
 
+    def docs(self, operation: str) -> dict:
+        """The rendered documentation for one catalog operation.
+
+        Everything here is already in the catalog except the rendered
+        HTML, which is the one part that needs a library the browser
+        does not have. Served per operation rather than with the whole
+        catalog: rendering all 87 docstrings to open the palette would
+        be work done for the one the user eventually clicks.
+
+        Args:
+            operation: the registered name.
+
+        Returns:
+            ``{"ok": True, "operation": ..., "html": ..., "format": ...,
+            "symbol", "equations", "assumptions", "references",
+            "numerical_method"}``, or ``{"ok": False, "error": ...}``
+            for a name nothing is registered under.
+        """
+        from difflow.catalog import describe_operation
+        from difflow.gui import docs as docs_module
+
+        try:
+            spec = describe_operation(operation)
+        except KeyError as exc:
+            return {"ok": False, "error": str(exc.args[0])}
+        html, fmt = docs_module.render(spec.doc)
+        return {
+            "ok": True,
+            "operation": spec.name,
+            "symbol": spec.symbol,
+            "description": spec.description,
+            "html": html,
+            "format": fmt,
+            "equations": list(spec.equations),
+            "assumptions": list(spec.assumptions),
+            "references": list(spec.references),
+            "numerical_method": spec.numerical_method,
+        }
+
     def layout(self) -> dict:
         """Canvas positions from the topology, for a flowsheet that has none.
 

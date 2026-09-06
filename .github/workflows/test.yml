@@ -59,7 +59,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev,solvers]"
+          pip install -e ".[dev,gui,solvers]"
 
       # One invocation, not two. Splitting core and bio into separate pytest
       # processes meant the second one re-paid JAX/XLA startup and could not
@@ -93,7 +93,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev,solvers]"
+          pip install -e ".[dev,gui,solvers]"
 
       - name: Run slow tests
         run: |
@@ -131,6 +131,21 @@ jobs:
           for e in eps:
               e.load()
           print('difflow', difflow.__version__, '- all packages import, plugins resolve')
+          "
+
+      # docutils is the `gui` extra, and the inspector has to degrade to
+      # plain text without it rather than break.
+      - name: The editor answers with no docstring renderer
+        run: |
+          python -c "
+          from difflow.gui import docs
+          from difflow.gui.session import FlowsheetSession
+          assert not docs.available(), 'docutils should not be installed here'
+          answer = FlowsheetSession().docs('CSTR')
+          assert answer['ok'] and answer['format'] == 'text', answer
+          assert answer['html'].startswith('<pre>'), answer['html'][:80]
+          assert answer['equations'], 'the equations do not need docutils'
+          print('the inspector degrades to plain text')
           "
 
   # The editor front end. `src/difflow/gui/static/` is committed build output --

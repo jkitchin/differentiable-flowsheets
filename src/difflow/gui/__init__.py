@@ -47,6 +47,9 @@ growing with it:
 
 ``session.py``
     the flowsheet and the operations on it, usable without a socket.
+``docs.py``
+    a unit's own docstring rendered for the inspector, with docutils
+    when it is installed and as plain text when it is not.
 ``server.py``
     the wire encoding, the routes and the stdlib HTTP server.
 ``edit.py``
@@ -57,6 +60,7 @@ growing with it:
 
 from difflow.gui.server import (
     DEFAULT_PORT,
+    DOCS_PREFIX,
     HOST,
     LOCAL_HOSTS,
     NON_FINITE,
@@ -76,6 +80,7 @@ from difflow.gui.session import FlowsheetSession, evaluate_context
 
 __all__ = [
     "DEFAULT_PORT",
+    "DOCS_PREFIX",
     "FlowsheetSession",
     "HOST",
     "LOCAL_HOSTS",

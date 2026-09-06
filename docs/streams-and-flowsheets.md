@@ -671,6 +671,7 @@ The routes are:
 | `POST` / `DELETE /api/connect` | wire or unwire, body `{source, outlet, target, inlet}` |
 | `POST /api/layout` | positions only, no rebuild and no solve |
 | `GET` / `POST /api/code-context` | read the snippet and what it defines; set it, or say why it will not run |
+| `GET /api/docs/<op>` | one operation's rendered docstring, equations, assumptions and references |
 
 A failed solve or a rejected edit comes back as `{"ok": false, "error": ...}` with a **200** rather than a traceback at the socket: it is an answer about the flowsheet, not a failure of the request, and a bad edit from the browser cannot take the server down. Only malformed JSON and an unrouted path get a 4xx.
 
@@ -699,6 +700,16 @@ make gui-build     # npm ci && npm run build, into static/
 make gui-test      # the pure model functions, under bare node
 make gui FLOWSHEET=plant.json
 ```
+
+### The inspector
+
+Selecting a unit shows what the code already knows about it. None of it is written twice: the unit classes have carried `symbol`, `equations`, `assumptions`, `references`, `parameter_symbols`, `parameter_units` and `numerical_method` since the report writer needed them, `difflow.report.metadata.get_metadata` reads them with docstring fallbacks, and `difflow.catalog` now goes through that same function. So `ParameterSpec.units` — declared from the start and always `None`, because no `Params` field uses `field(metadata={"units": ...})` — fills in from the class's own table for 147 of the 486 catalog parameters, and a field that *does* declare its own metadata still wins, being the more specific of the two.
+
+`GET /api/docs/<op>` renders the class docstring with [docutils](https://docutils.sourceforge.io) when it is installed and returns the escaped source in a `<pre>` when it is not — an optional extra, never a hard dependency, and the panel says which of the two it is showing. Two accommodations make difflow's own docstrings render: nothing rewrites the Google-style sections, because `Args:` followed by an indented block already *is* a reStructuredText definition list; and the Sphinx roles the codebase uses (`` :class:`~difflow.streams.Stream` ``) are registered as literal text, since bare docutils treats an unknown role as an error that swallows the line. Messages are suppressed rather than rendered: a red box in the inspector would be about difflow's prose, not about the user's flowsheet.
+
+Equations are rendered with a bundled [KaTeX](https://katex.org), to **MathML** rather than to KaTeX's own HTML. The HTML output is laid out against KaTeX's fonts and looks wrong without them, so taking it would mean committing twenty `.woff2` files and a stylesheet whose only job is positioning glyphs; MathML asks the browser to do that instead. All 214 equations in the catalog render.
+
+Parameters are editable in place, through `PATCH /api/unit/<name>`. Not all of them: `serialize` writes a JAX array as `{"$array": ...}`, a rate law from `mass_action_kinetics` as `{"$callable": ...}`, and a code-context object as `{"$ref": ...}`, and none of those is something a text input can edit. Each is shown with *where its value came from* — `mass_action_kinetics(...)`, `array 2×1`, `thermo (code context)` — in place of an input, which is the same fact the old editor put in a "set in code:" line under the form, moved to the field it belongs to. The constructor objects get their own section for the same reason: a Flash's thermodynamics are not a `Params` field, and a panel that showed only parameters would not say where they came from.
 
 The one thing that can go wrong with committed build output is drift — source edited, bundle not rebuilt — so CI reruns `gui-build` and fails if `static/` differs from the commit.
 

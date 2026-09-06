@@ -31,6 +31,9 @@ DEFAULT_PORT = 8756
 #: only ever bound on the loopback interface
 HOST = "127.0.0.1"
 
+#: Prefix of the per-operation documentation route, ``/api/docs/<op>``.
+DOCS_PREFIX = "/api/docs/"
+
 #: The header the page must send on every mutating request, and the name of
 #: the ``<meta>`` tag it reads the value out of.
 TOKEN_HEADER = "X-Difflow-Token"
@@ -231,6 +234,11 @@ class _Handler(BaseHTTPRequestHandler):
         handler = routes.get(self.path)
         if handler is not None:
             return handler()
+        # /api/docs/<op>: one operation's rendered docstring. A prefix
+        # route rather than a table entry, since the name is the path.
+        if self.path.startswith(DOCS_PREFIX):
+            operation = unquote(urlsplit(self.path).path[len(DOCS_PREFIX):])
+            return self._send(self.session.docs(operation))
         asset = _static_file(self.path)
         if asset is None:
             return self._send({"error": "not found"}, status=404)

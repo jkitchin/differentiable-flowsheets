@@ -266,5 +266,82 @@ class TestSchema:
             assert "\n" not in spec.description, name
 
 
+class TestMetadata:
+    """The catalog reads the metadata contract the units already carry.
+
+    ``symbol``, ``assumptions``, ``references``, ``numerical_method``
+    and the per-parameter units and symbols were declared on the unit
+    classes for the report writer and read by nobody else; an inspector
+    wants exactly them, and a second hand-maintained table would drift.
+    """
+
+    def test_the_whole_docstring_is_carried_not_just_its_first_line(self, cat):
+        spec = cat["CSTR"]
+        assert spec.description == spec.doc.splitlines()[0]
+        assert len(spec.doc.splitlines()) > 1
+        assert not spec.doc.startswith(" "), "cleaned of its indentation"
+
+    def test_every_operation_has_a_docstring(self, cat):
+        for name, spec in cat.items():
+            assert spec.doc.strip(), name
+
+    def test_symbol_falls_back_to_the_class_name(self, cat):
+        assert cat["CSTR"].symbol == "CSTR"
+        for name, spec in cat.items():
+            assert spec.symbol, name
+
+    def test_assumptions_and_references_come_through(self, cat):
+        assert len(cat["CSTR"].assumptions) >= 3
+        assert cat["CSTR"].references
+        assert cat["CSTR"].numerical_method
+
+    def test_parameter_units_come_from_the_class(self, cat):
+        """No `Params` field declares `metadata={"units": ...}`, but 54
+        unit classes declare `parameter_units`. Reading them is the
+        difference between a form with units on it and one without."""
+        by_name = {p.name: p for p in cat["CSTR"].parameters}
+        assert by_name["V"].units == "m^3"
+        assert by_name["dH_rxn"].units == "J/mol"
+        assert by_name["rate_fn"].units is None, "a callable has no units"
+
+    def test_parameter_symbols_come_through(self, cat):
+        by_name = {p.name: p for p in cat["CSTR"].parameters}
+        assert by_name["V"].symbol == "V"
+        assert by_name["stoich"].symbol == r"\nu_{ij}"
+
+    def test_a_field_that_declares_its_own_units_wins(self):
+        """The field is more specific than the class-level table."""
+        import dataclasses
+
+        from difflow.catalog import _parameters
+        from difflow.report.metadata import UnitMetadata
+
+        @dataclasses.dataclass
+        class P:
+            V: float = dataclasses.field(
+                default=1.0, metadata={"units": "L", "description": "volume"}
+            )
+            T: float = 300.0
+
+        meta = UnitMetadata(symbol="X", description="",
+                            parameter_units={"V": "m^3", "T": "K"})
+        specs = {p.name: p for p in _parameters(P, meta)}
+        assert specs["V"].units == "L"
+        assert specs["V"].description == "volume"
+        assert specs["T"].units == "K"
+
+    def test_a_meaningful_share_of_parameters_now_carry_units(self, cat):
+        with_units = sum(1 for s in cat.values()
+                         for p in s.parameters if p.units)
+        assert with_units > 100, "was zero before the classes were read"
+
+    def test_the_new_fields_survive_to_dict(self, cat):
+        payload = json.loads(json.dumps(cat["CSTR"].to_dict()))
+        for key in ("symbol", "doc", "assumptions", "references",
+                    "numerical_method"):
+            assert key in payload, key
+        assert payload["parameters"][0]["symbol"] is not None
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

@@ -1,8 +1,8 @@
 <script>
   import Canvas from './lib/Canvas.svelte'
   import CodeContext from './lib/CodeContext.svelte'
+  import Inspector from './lib/Inspector.svelte'
   import Palette from './lib/Palette.svelte'
-  import Selection from './lib/Selection.svelte'
   import { del, get, patch, post, send } from './lib/api.js'
   import { movedPositions } from './lib/model/edit.js'
 
@@ -125,6 +125,19 @@
       return null
     }, { reload: false })
 
+  // The canvas node says what is selected; the document says what it
+  // holds and the catalog says what those parameters mean. The inspector
+  // needs all three, and they are joined here rather than inside it so
+  // it stays a view of state it does not own.
+  let selectedUnit = $derived(
+    selected?.type === 'unit'
+      ? (doc?.units ?? []).find((u) => u.name === selected.id) ?? null
+      : null,
+  )
+  let selectedSpec = $derived(
+    selected?.data?.operation ? catalog[selected.data.operation] ?? null : null,
+  )
+
   let summary = $derived(
     doc ? `${doc.units?.length ?? 0} units, ${Object.keys(doc.feeds ?? {}).length} feeds` : '',
   )
@@ -166,7 +179,15 @@
     {/if}
   </div>
 
-  <Selection node={selected} onrename={rename} ondelete={remove} />
+  <Inspector
+    node={selected}
+    unit={selectedUnit}
+    spec={selectedSpec}
+    {busy}
+    onrename={rename}
+    ondelete={remove}
+    onedit={edit}
+  />
 </main>
 
 {#if showContext}
