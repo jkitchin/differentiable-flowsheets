@@ -6,6 +6,8 @@ right as the numbers baked into it.
 """
 
 import json
+import re
+from pathlib import Path
 
 import jax
 import jax.numpy as jnp
@@ -27,6 +29,12 @@ from difflow import (
 from difflow.publish import publish, sweep, to_html
 
 SPECIES = ["A", "B"]
+
+
+def payload_of(page: str) -> dict:
+    """What the page hands its front end, read back out of the file."""
+    body = page.split("window.DIFFLOW = ", 1)[1].split(";</script>", 1)[0]
+    return json.loads(body)
 
 
 @pytest.fixture(scope="module")
@@ -148,31 +156,99 @@ class TestSweepValidation:
 
 
 @pytest.fixture(scope="module")
-def page(flowsheet):
-    result = sweep(
+def sweep_result(flowsheet):
+    return sweep(
         flowsheet,
         [SweepAxis("reactor.V", 0.5, 3.0, n=5, label="Volume", units="m^3")],
         {"Product": product}, units={"Product": "mol/s"},
     )
-    return to_html(result, title="Test model", description="A description.")
+
+
+@pytest.fixture(scope="module")
+def page(sweep_result):
+    return to_html(sweep_result, title="Test model",
+                   description="A description.")
+
+
+@pytest.fixture(scope="module")
+def drawn_page(sweep_result, flowsheet):
+    """The same page, published with the flowsheet it came from."""
+    return to_html(sweep_result, title="Test model", flowsheet=flowsheet)
+
+
+#: URLs the page carries as text and never fetches. XML namespaces are
+#: names that happen to look like addresses, and the rest are the
+#: documentation links Svelte and @xyflow put in their error messages.
+#: Anything outside this list is a page that reaches out.
+INERT_URLS = (
+    "http://www.w3.org/",
+    "https://svelte.dev/e/",
+    "flow.dev/",
+    "https://svelteflow.dev",
+)
 
 
 class TestPage:
-    def test_is_self_contained(self, page):
+    def test_loads_nothing_at_run_time(self, drawn_page):
         """No network at run time: nothing to rot next to a paper."""
-        for pattern in ("http://", "https://", "<script src", "<link "):
-            assert pattern not in page, f"page reaches out via {pattern!r}"
+        for pattern in ("<script src", "<link ", "@import url(", "url(http",
+                        ' src="http', ' href="http'):
+            assert pattern not in drawn_page, f"page fetches via {pattern!r}"
+
+    def test_every_url_it_names_is_inert(self, drawn_page):
+        """The bundle carries URLs; none of them is a resource.
+
+        Stricter than the absence of ``http``, which the front-end
+        libraries make impossible: every URL in the file is accounted
+        for by name, so a new one has to be looked at.
+        """
+        for match in re.finditer(r"""https?://[^\s"'`)\\]*""", drawn_page):
+            url = match.group(0)
+            assert any(known in url for known in INERT_URLS), \
+                f"page names {url!r}"
 
     def test_carries_the_grid(self, page):
         assert '"Product"' in page
         assert "Volume" in page
         assert "m^3" in page
 
+    def test_carries_the_topology(self, drawn_page, page):
+        """The flowsheet, and what its units are, travel with the sweep."""
+        data = payload_of(drawn_page)
+        assert [u["name"] for u in data["topology"]["units"]] == ["reactor"]
+        assert data["topology"]["units"][0]["operation"] == "CSTR"
+        assert data["topology"]["feeds"]["feed"]["T"] == 350.0
+        # Placed, so the canvas opens on a flowsheet rather than a pile.
+        assert "reactor" in data["topology"]["view"]["nodes"]
+        # And described, from the same catalog the editor reads.
+        assert "CSTR" in data["catalog"]
+        assert data["catalog"]["CSTR"]["description"]
+        assert any(p["name"] == "V" for p in data["catalog"]["CSTR"]["parameters"])
+        # Without a flowsheet the page is the sliders alone, as before.
+        assert payload_of(page)["topology"] is None
+
+    def test_a_parameter_it_cannot_show_is_named_rather_than_dropped(
+        self, drawn_page
+    ):
+        """A CSTR holds more than numbers, and the page says so.
+
+        A parameter that vanished would read as a parameter the unit
+        does not have, which is worse than one shown as its own type.
+        """
+        params = payload_of(drawn_page)["topology"]["units"][0]["params"]
+        assert params["V"] == 1.0
+        assert params["rate_fn"] == "<function>"
+        assert params["stoich"] == [[-1.0], [1.0]]
+        # `mass_action_kinetics` writes an infinite equilibrium constant for
+        # every irreversible reaction, and `JSON.parse` cannot read the word
+        # Python spells it with.
+        assert params["rate_params"]["K_eq"] == ["Infinity"]
+
     def test_has_the_interactive_pieces(self, page):
-        assert 'id="sliders"' in page
-        assert 'id="chart"' in page
-        assert 'id="readout"' in page
-        assert "function interp" in page
+        for marker in ('id="sliders"', 'id="chart"', 'id="readout"',
+                       'id="output-pick"'):
+            assert marker in page, f"page has no {marker}"
+        assert "window.DIFFLOW" in page
 
     def test_title_and_description_are_escaped(self, flowsheet):
         result = sweep(
@@ -183,14 +259,43 @@ class TestPage:
         assert "<script>x</script>" not in page.split("<style>")[0]
         assert "&amp;" in page
 
+    def test_a_name_cannot_end_the_script_element(self, flowsheet):
+        """The payload carries names the user chose, not just numbers."""
+        result = sweep(
+            flowsheet, [SweepAxis("reactor.V", 0.5, 3.0, n=3)],
+            {"</script><b>x": product},
+        )
+        page = to_html(result, title="t")
+        assert "</script><b>x" not in page
+        assert payload_of(page)["sweep"]["outputs"][0]["name"] == "</script><b>x"
+
+    def test_a_title_cannot_impersonate_a_placeholder(self, flowsheet):
+        """The template is filled in one pass, so a title stays a title."""
+        result = sweep(
+            flowsheet, [SweepAxis("reactor.V", 0.5, 3.0, n=3)], {"p": product},
+        )
+        page = to_html(result, title="__SCRIPT__", description="__STYLE__")
+        assert page.count("<h1>__SCRIPT__</h1>") == 1
+        assert '<p class="lede">__STYLE__</p>' in page
+
     def test_paints_its_own_background(self, page):
         """A standalone page cannot inherit a host's colours."""
-        assert "background: var(--surface)" in page
+        assert "background:var(--surface)" in page
         assert "--surface:" in page
 
     def test_records_provenance(self, page):
         assert "Precomputed with difflow" in page
         assert "solved operating" in page   # wraps in the template
+
+
+class TestBundle:
+    def test_a_missing_bundle_is_said_out_loud(self, sweep_result, monkeypatch):
+        """Better than a blank page from a checkout that never built."""
+        import difflow.gui.server as server
+
+        monkeypatch.setattr(server, "STATIC", Path("/nonexistent"))
+        with pytest.raises(FileNotFoundError, match="gui-build"):
+            to_html(sweep_result)
 
 
 class TestPublish:

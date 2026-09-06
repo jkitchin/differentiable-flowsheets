@@ -704,6 +704,8 @@ make gui-test      # the pure model functions, under bare node
 make gui FLOWSHEET=plant.json
 ```
 
+`npm run build` runs vite twice: once for the editor (`app.js`, `app.css`, `index.html`) and once for the frozen page `difflow.publish` inlines (`publish.js`, `publish.css`). Two builds rather than two entries, for the reason given under [Publishing a Model](#publishing-a-model).
+
 ### The inspector
 
 Selecting a unit shows what the code already knows about it. None of it is written twice: the unit classes have carried `symbol`, `equations`, `assumptions`, `references`, `parameter_symbols`, `parameter_units` and `numerical_method` since the report writer needed them, `difflow.report.metadata.get_metadata` reads them with docstring fallbacks, and `difflow.catalog` now goes through that same function. So `ParameterSpec.units` — declared from the start and always `None`, because no `Params` field uses `field(metadata={"units": ...})` — fills in from the class's own table for 147 of the 486 catalog parameters, and a field that *does* declare its own metadata still wins, being the more specific of the two.
@@ -773,11 +775,27 @@ publish(
 )
 ```
 
-Axis keys use the same `"<unit>.<param>"` dot notation as `make_objective_fn`, so they name a **unit** parameter — feed conditions are not addressable this way. To vary a feed, put a `Heater` or a `Mixer` in front of it and sweep that.
+Axis keys are whatever `_apply_params` accepts — `"<unit>.<param>"` and `"feed:<stream>.<field>"` — so a feed rate or a feed temperature is an axis like any other.
 
-The page carries sliders for each axis, the outputs, and their sensitivities. This works because the solve is *pre-computed*: `sweep` evaluates the flowsheet on the grid with `jax.vmap`, takes gradients with `jax.grad`, and bakes the results into the page, which interpolates between them in a few lines of JavaScript.
+The page carries the flowsheet itself, sliders for each axis, the outputs, and their sensitivities. This works because the solve is *pre-computed*: `sweep` evaluates the flowsheet on the grid with `jax.vmap`, takes gradients with `jax.grad`, and bakes the results into the page, which interpolates between them.
+
+### The page is the editor, frozen
+
+A published page is the editor's own front end with nothing editable and nothing to solve: the same `@xyflow` canvas, the same graph model, the same palette. Click a unit and it says what the unit is — description, parameters with units, ports, equations, assumptions, references — read from `difflow.catalog`, which reads the class. A published model therefore cannot describe a unit differently from the editor, and cannot go stale against the code it was published from.
+
+That replaces what a published page used to be, which was a set of sliders belonging to nothing visible. Pass `topology=False` to `publish` to get that back.
+
+Three details follow from *self-contained*, and they are the reason this is a second Vite build rather than a second entry point of the first:
+
+- A build with two entries shares chunks between them, and a chunk is a file the page would have to fetch. `vite.publish.config.js` uses `build.lib` with `formats: ['iife']`, so `publish.js` is one file `publish.py` can inline verbatim.
+- KaTeX is deliberately left out. A quarter megabyte of typesetting is a poor trade for a file that has to open in ten years, so equations are shown as their LaTeX source.
+- The topology on the page is **not** `serialize.to_dict()`. That is a document meant to be loaded back, and it refuses a flowsheet holding a `rate_fn` or a thermo object — which is most interesting flowsheets, and no reason to publish a page without a picture. `publish._topology` builds a description meant for *looking at*: same node keys as the editor, every value reduced to something printable, and anything that cannot be shown named by its type (`<function>`, `<array (2, 1)>`) rather than dropped, because a parameter that vanishes reads as one the unit does not have.
+
+`test_is_self_contained` is now two tests, because the bundle makes the old one impossible to satisfy: Svelte and `@xyflow` ship documentation URLs inside their error messages, and every SVG carries the `http://www.w3.org/2000/svg` namespace, which is a name that looks like an address. So one test forbids the constructs that actually load something (`<script src`, `<link `, `url(http`, `@import url(`), and the other walks every URL in the file against an allowlist — which is the stricter of the two, since a new URL has to be looked at before it can be added.
 
 That is a deliberate trade, and its limits should be stated plainly. JAX has no WebAssembly build, so a browser cannot run the real solver; the published page is an interpolation of a grid, not a live model. It is exact at the grid points and only as good as the grid between them, and it can only vary what the axes name. When you need the real thing, use the local editor above, or the generated script.
+
+The arithmetic the page runs — interpolation between solved points, and the exact derivatives recorded alongside them — lives in `frontend/src/lib/model/sweep.js` and is tested under bare `node --test` with everything else in `model/`. It used to be a string of JavaScript inside a Python template, where nothing could reach it.
 
 `sweep` is available on its own when you want the grid as data rather than as a page:
 

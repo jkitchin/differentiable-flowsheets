@@ -6,9 +6,11 @@
   "description": "Front end for difflow.gui. Built to ../static/, which is committed, so installing difflow never needs node.",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "vite build && vite build -c vite.publish.config.js",
     "preview": "vite preview",
-    "test": "node --test src/lib/model/*.test.js"
+    "test": "node --test src/lib/model/*.test.js",
+    "build:editor": "vite build",
+    "build:publish": "vite build -c vite.publish.config.js"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^6.2.1",

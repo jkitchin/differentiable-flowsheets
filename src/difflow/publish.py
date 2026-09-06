@@ -24,13 +24,23 @@ cheap.
 Exact derivatives are recorded alongside the values, since difflow has
 them for free and nothing else on a static page can supply them. They
 are shown as local sensitivities rather than used for interpolation.
+
+The page is the editor's own front end, frozen: the same canvas, the
+same graph model and the same palette, with nothing editable and
+nothing to solve. So a published model shows the flowsheet it came
+from --- click a unit and it says what the unit is, in the words
+``difflow.catalog`` reads off the class --- rather than a set of
+sliders belonging to nothing visible. ``difflow.gui`` serves that
+bundle from disk; this module inlines it, which is the whole
+difference between the two.
 """
 
 from __future__ import annotations
 
 import html
-import itertools
 import json
+import math
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -223,8 +233,171 @@ def sweep(
 
 
 # ---------------------------------------------------------------------
+# What the page says about the flowsheet
+# ---------------------------------------------------------------------
+
+#: Arrays longer than this are named rather than printed. A stoichiometry
+#: vector is worth seeing; a 500-point property table is not.
+_MAX_INLINE = 12
+
+
+def _plain(value, depth: int = 0):
+    """One parameter value as something JSON and a reader can both take.
+
+    Whatever cannot be shown as data is named by its type instead of
+    dropped, because a parameter that vanishes from a published page
+    reads as a parameter the unit does not have. The non-finite floats
+    become strings for the same reason `difflow.gui` sends them as
+    strings: ``JSON.parse`` rejects the ``Infinity`` Python writes, and
+    ``mass_action_kinetics`` puts one in ``K_eq`` for every irreversible
+    reaction.
+    """
+    if value is None or isinstance(value, (bool, str)):
+        return value
+    if isinstance(value, (int, float)):
+        f = float(value)
+        return f if math.isfinite(f) else str(f).replace("inf", "Infinity")
+    if isinstance(value, dict):
+        if depth >= 2:
+            return "{...}"
+        return {str(k): _plain(v, depth + 1) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        if len(value) > _MAX_INLINE:
+            return f"<{len(value)} values>"
+        return [_plain(v, depth + 1) for v in value]
+    shape = getattr(value, "shape", None)
+    if shape is not None:
+        array = jnp.asarray(value)
+        if array.size > _MAX_INLINE:
+            return f"<array {tuple(array.shape)}>"
+        return _plain(array.tolist(), depth + 1)
+    return f"<{type(value).__name__}>"
+
+
+def _display_params(operation) -> dict:
+    """A unit's parameters, as far as they can be shown."""
+    params = getattr(operation, "params", None)
+    if params is None:
+        return {}
+    try:
+        return {name: _plain(params[name]) for name in params.keys()}
+    except Exception:                      # a params object that is not one
+        return {}
+
+
+def _topology(flowsheet) -> dict | None:
+    """The flowsheet in the shape the canvas reads.
+
+    Deliberately not :func:`difflow.serialize.to_dict`. That is a
+    document meant to be loaded back, and it refuses a flowsheet whose
+    units hold objects JSON cannot carry --- which is most interesting
+    flowsheets, and no reason to publish a page without a picture. This
+    is a description for looking at: the same node keys the editor uses,
+    and every value already reduced to something printable.
+
+    Returns ``None`` if there is nothing to draw.
+    """
+    from difflow.gui.layout import auto_layout
+
+    units = list(getattr(flowsheet, "units", None) or [])
+    if not units:
+        return None
+    view = dict(getattr(flowsheet, "view", None) or {})
+    return {
+        "units": [
+            {
+                "name": u.name,
+                "operation": type(u.operation).__name__,
+                "inlets": list(u.inlet_names),
+                "outlets": list(u.outlet_names),
+                "params": _display_params(u.operation),
+            }
+            for u in units
+        ],
+        "feeds": {
+            name: {k: _plain(v) for k, v in stream.items()}
+            for name, stream in (getattr(flowsheet, "feeds", None) or {}).items()
+        },
+        "recycles": dict(getattr(flowsheet, "recycles", None) or {}),
+        # Stored positions on top of the automatic ones, exactly as the
+        # editor serves them, so a page published from a flowsheet someone
+        # arranged in the GUI opens arranged that way.
+        "view": {"nodes": {**auto_layout(flowsheet),
+                           **(view.get("nodes") or {})}},
+    }
+
+
+def _catalog_for(flowsheet) -> dict:
+    """Catalog entries for the operations this flowsheet actually uses.
+
+    Trimmed to what the panel shows. The whole ``OperationSchema`` would
+    carry parameter *defaults*, which are arbitrary objects and not
+    JSON, and 87 entries where the page needs three.
+    """
+    from difflow.catalog import describe_class
+
+    out: dict[str, dict] = {}
+    for unit in getattr(flowsheet, "units", None) or []:
+        cls = type(unit.operation)
+        if cls.__name__ in out:
+            continue
+        try:
+            spec = describe_class(cls)
+        except Exception:                  # a class the catalog cannot read
+            continue
+        out[cls.__name__] = {
+            "description": spec.description,
+            "equations": list(spec.equations),
+            "assumptions": list(spec.assumptions),
+            "references": list(spec.references),
+            "parameters": [
+                {"name": p.name, "units": p.units, "description": p.description}
+                for p in spec.parameters
+            ],
+        }
+    return out
+
+
+# ---------------------------------------------------------------------
 # The page
 # ---------------------------------------------------------------------
+
+#: Where the built front end lives. The editor serves these files over
+#: the loopback; a published page inlines them.
+_BUNDLE = ("publish.js", "publish.css")
+
+
+def _assets() -> tuple[str, str]:
+    """The built JavaScript and CSS of the frozen front end.
+
+    Raises:
+        FileNotFoundError: if the bundle was not built. It is committed,
+            so this means a source checkout with the build not run --- and
+            saying that is better than writing a blank page.
+    """
+    from difflow.gui.server import STATIC
+
+    out = []
+    for name in _BUNDLE:
+        path = STATIC / name
+        if not path.exists():
+            raise FileNotFoundError(
+                f"{path} is missing: the published page is the editor's own "
+                f"bundle, built with `make gui-build`"
+            )
+        out.append(path.read_text(encoding="utf-8"))
+    return out[0], out[1]
+
+
+def _inline(text: str, tag: str) -> str:
+    """Text safe to sit inside a ``<script>`` or ``<style>`` element.
+
+    The parser ends the element at a literal closing tag wherever it
+    appears, string literal or not, so the one sequence that can end it
+    is broken with a backslash --- which is inert in both JavaScript
+    strings and CSS.
+    """
+    return text.replace(f"</{tag}", f"<\\/{tag}")
 
 
 def to_html(
@@ -232,6 +405,7 @@ def to_html(
     *,
     title: str = "difflow model",
     description: str = "",
+    flowsheet=None,
 ) -> str:
     """Render a sweep as one self-contained HTML page.
 
@@ -243,21 +417,39 @@ def to_html(
         result: the sweep to publish.
         title: page and document title.
         description: a paragraph under the title; plain text.
+        flowsheet: the flowsheet the sweep came from. Given, the page
+            also draws it and describes its units; omitted, the page is
+            the sliders alone, which is what it was before.
 
     Returns:
         A complete HTML document.
     """
     from difflow import __version__
 
-    payload = json.dumps(result.to_dict(), separators=(",", ":"))
-    return _TEMPLATE.format(
-        title=html.escape(title),
-        description=html.escape(description),
-        version=html.escape(__version__),
-        n_points=result.n_points,
-        palette=json.dumps(_PALETTE),
-        data=payload,
-    )
+    script, style = _assets()
+    payload = {
+        "sweep": result.to_dict(),
+        "topology": _topology(flowsheet) if flowsheet is not None else None,
+        "catalog": _catalog_for(flowsheet) if flowsheet is not None else {},
+        "version": __version__,
+        "n_points": result.n_points,
+    }
+    # `<` is escaped rather than left alone: the payload carries names the
+    # user chose, and a stream called `</script>` would otherwise end the
+    # element it is written into.
+    data = json.dumps(payload, separators=(",", ":")).replace("<", "\\u003c")
+
+    filled = {
+        "TITLE": html.escape(title),
+        "DESCRIPTION": html.escape(description),
+        "STYLE": _inline(style, "style"),
+        "DATA": data,
+        "SCRIPT": _inline(script, "script"),
+    }
+    # One pass, so a title of "__SCRIPT__" is a title and not a second copy
+    # of the bundle. `.format()` is not an option: the bundle is minified
+    # JavaScript and full of braces.
+    return re.sub(r"__([A-Z]+)__", lambda m: filled[m.group(1)], _TEMPLATE)
 
 
 def publish(
@@ -269,273 +461,59 @@ def publish(
     title: str = "difflow model",
     description: str = "",
     units: dict[str, str] | None = None,
+    topology: bool = True,
     **sweep_kwargs,
 ) -> Path:
     """Sweep a flowsheet and write the interactive page in one step.
+
+    Args:
+        flowsheet: the flowsheet to sweep and to draw.
+        axes: parameters to vary.
+        outputs: name -> ``fn(streams) -> scalar``.
+        path: where to write the page.
+        title: page and document title.
+        description: a paragraph under the title; plain text.
+        units: output name -> units, for display.
+        topology: also draw the flowsheet on the page. Off leaves the
+            sliders and the chart alone, which is the whole page as it
+            was before.
+        **sweep_kwargs: passed through to :func:`sweep`.
 
     Returns:
         The path written.
     """
     result = sweep(flowsheet, axes, outputs, units=units, **sweep_kwargs)
     path = Path(path)
-    path.write_text(to_html(result, title=title, description=description))
+    path.write_text(to_html(
+        result, title=title, description=description,
+        flowsheet=flowsheet if topology else None,
+    ))
     return path
 
 
+#: The page around the bundle. Everything interactive is Svelte; what is
+#: here is what has to be readable before any JavaScript runs, and the
+#: title and lede are written by Python because they are the one part of
+#: the page that carries text the user typed.
 _TEMPLATE = """<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{title}</title>
+<title>__TITLE__</title>
 <style>
-  :root {{
-    --surface: #fcfcfb; --panel: #f4f3f0; --ink: #0b0b0b;
-    --ink-soft: #52514e; --grid: #e4e2de; --line: #c9c7c2;
-    --series: #2a78d6;
-  }}
-  * {{ box-sizing: border-box; }}
-  body {{
-    margin: 0; padding: 2rem 1.25rem; background: var(--surface);
-    color: var(--ink);
-    font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI",
-          Roboto, Helvetica, Arial, sans-serif;
-  }}
-  main {{ max-width: 62rem; margin: 0 auto; }}
-  h1 {{ font-size: 1.5rem; margin: 0 0 .4rem; letter-spacing: -.01em; }}
-  p.lede {{ color: var(--ink-soft); margin: 0 0 1.75rem; max-width: 46rem; }}
-  .layout {{ display: grid; grid-template-columns: 17rem 1fr; gap: 1.5rem;
-             align-items: start; }}
-  @media (max-width: 46rem) {{ .layout {{ grid-template-columns: 1fr; }} }}
-  .panel {{
-    background: var(--panel); border: 1px solid var(--grid);
-    border-radius: 10px; padding: 1rem 1.1rem;
-  }}
-  .panel h2 {{
-    font-size: .72rem; text-transform: uppercase; letter-spacing: .07em;
-    color: var(--ink-soft); margin: 0 0 .9rem; font-weight: 600;
-  }}
-  .control {{ margin-bottom: 1.1rem; }}
-  .control:last-child {{ margin-bottom: 0; }}
-  .control label {{
-    display: flex; justify-content: space-between; align-items: baseline;
-    font-size: .85rem; margin-bottom: .35rem; gap: .5rem;
-  }}
-  .control .value {{
-    font-variant-numeric: tabular-nums; color: var(--ink);
-    font-weight: 600;
-  }}
-  input[type=range] {{ width: 100%; accent-color: var(--series); }}
-  select {{
-    width: 100%; padding: .35rem .5rem; border: 1px solid var(--line);
-    border-radius: 6px; background: var(--surface); color: var(--ink);
-    font: inherit; font-size: .85rem;
-  }}
-  table {{ width: 100%; border-collapse: collapse; margin-top: .25rem; }}
-  th, td {{
-    text-align: left; padding: .4rem .3rem; font-size: .85rem;
-    border-bottom: 1px solid var(--grid);
-  }}
-  th {{
-    color: var(--ink-soft); font-weight: 600; font-size: .72rem;
-    text-transform: uppercase; letter-spacing: .06em;
-  }}
-  td.num {{ text-align: right; font-variant-numeric: tabular-nums; }}
-  td.sens {{ text-align: right; font-variant-numeric: tabular-nums;
-             color: var(--ink-soft); }}
-  figure {{ margin: 0; }}
-  footer {{
-    margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--grid);
-    color: var(--ink-soft); font-size: .8rem;
-  }}
-  code {{ font-size: .82em; background: var(--panel); padding: .1em .35em;
-          border-radius: 4px; }}
+__STYLE__
 </style>
 </head>
 <body>
 <main>
-  <h1>{title}</h1>
-  <p class="lede">{description}</p>
-
-  <div class="layout">
-    <div class="panel" id="controls">
-      <h2>Parameters</h2>
-      <div id="sliders"></div>
-    </div>
-
-    <div>
-      <figure class="panel" style="margin-bottom:1.5rem">
-        <h2>Response</h2>
-        <div class="control">
-          <label for="output-pick"><span>Plotted quantity</span></label>
-          <select id="output-pick"></select>
-        </div>
-        <svg id="chart" viewBox="0 0 640 300" width="100%"
-             role="img" aria-label="Model response"></svg>
-      </figure>
-
-      <div class="panel">
-        <h2>Values at this point</h2>
-        <table>
-          <thead>
-            <tr><th>Quantity</th><th style="text-align:right">Value</th>
-                <th style="text-align:right">Sensitivity</th></tr>
-          </thead>
-          <tbody id="readout"></tbody>
-        </table>
-      </div>
-    </div>
-  </div>
-
-  <footer>
-    Precomputed with difflow {version} over {n_points} solved operating
-    points; values between grid points are interpolated. Sensitivities are
-    exact derivatives from automatic differentiation, reported per unit of
-    the first parameter.
-  </footer>
+  <h1>__TITLE__</h1>
+  <p class="lede">__DESCRIPTION__</p>
+  <div id="app"></div>
 </main>
-
+<script>window.DIFFLOW = __DATA__;</script>
 <script>
-const DATA = {data};
-const C = {palette};
-const state = DATA.axes.map(a => Math.floor(a.n / 2));
-
-/* ---- interpolation ------------------------------------------------ */
-function axisFrac(ai, x) {{
-  const a = DATA.axes[ai];
-  const t = (x - a.lo) / (a.hi - a.lo) * (a.n - 1);
-  const i = Math.max(0, Math.min(a.n - 2, Math.floor(t)));
-  return [i, Math.max(0, Math.min(1, t - i))];
-}}
-function at(grid, idx) {{ return idx.reduce((g, i) => g[i], grid); }}
-
-/* multilinear over however many axes there are */
-function interp(grid, coords) {{
-  const parts = coords.map((x, ai) => axisFrac(ai, x));
-  let total = 0;
-  const n = coords.length;
-  for (let mask = 0; mask < (1 << n); mask++) {{
-    let weight = 1, idx = [];
-    for (let ai = 0; ai < n; ai++) {{
-      const [i, f] = parts[ai];
-      const up = (mask >> ai) & 1;
-      weight *= up ? f : 1 - f;
-      idx.push(i + up);
-    }}
-    if (weight > 0) total += weight * at(grid, idx);
-  }}
-  return total;
-}}
-function coords() {{
-  return DATA.axes.map((a, i) => a.values[state[i]]);
-}}
-function fmt(v) {{
-  if (!isFinite(v)) return "--";
-  const m = Math.abs(v);
-  if (m !== 0 && (m < 1e-3 || m >= 1e5)) return v.toExponential(3);
-  return v.toFixed(m >= 100 ? 1 : m >= 1 ? 3 : 4);
-}}
-
-/* ---- controls ----------------------------------------------------- */
-const sliders = document.getElementById("sliders");
-DATA.axes.forEach((a, i) => {{
-  const wrap = document.createElement("div");
-  wrap.className = "control";
-  wrap.innerHTML =
-    '<label for="ax' + i + '"><span>' + a.label + '</span>' +
-    '<span class="value" id="val' + i + '"></span></label>' +
-    '<input type="range" id="ax' + i + '" min="0" max="' + (a.n - 1) +
-    '" step="1" value="' + state[i] + '">';
-  sliders.appendChild(wrap);
-  wrap.querySelector("input").addEventListener("input", e => {{
-    state[i] = +e.target.value;
-    render();
-  }});
-}});
-
-const pick = document.getElementById("output-pick");
-DATA.outputs.forEach((o, i) => {{
-  const opt = document.createElement("option");
-  opt.value = i;
-  opt.textContent = o.name + (o.units ? " (" + o.units + ")" : "");
-  pick.appendChild(opt);
-}});
-pick.addEventListener("change", render);
-
-/* ---- chart -------------------------------------------------------- */
-function drawChart(outIndex) {{
-  const svg = document.getElementById("chart");
-  const W = 640, H = 300, L = 64, R = 16, T = 16, B = 46;
-  const axis = DATA.axes[0], out = DATA.outputs[outIndex];
-  const here = coords();
-
-  const xs = axis.values;
-  const ys = xs.map(x => interp(out.values, [x, ...here.slice(1)]));
-  const yMin = Math.min(...ys), yMax = Math.max(...ys);
-  const pad = (yMax - yMin) * 0.08 || Math.abs(yMax) * 0.08 || 1;
-  const lo = yMin - pad, hi = yMax + pad;
-
-  const sx = x => L + (x - axis.lo) / (axis.hi - axis.lo) * (W - L - R);
-  const sy = y => H - B - (y - lo) / (hi - lo) * (H - T - B);
-
-  let parts = [];
-  /* grid + y labels, recessive */
-  for (let k = 0; k <= 4; k++) {{
-    const v = lo + (hi - lo) * k / 4, y = sy(v);
-    parts.push('<line x1="' + L + '" y1="' + y + '" x2="' + (W - R) +
-      '" y2="' + y + '" stroke="' + C.grid + '" stroke-width="1"/>');
-    parts.push('<text x="' + (L - 8) + '" y="' + (y + 4) +
-      '" text-anchor="end" font-size="11" fill="' + C.ink_soft + '">' +
-      fmt(v) + '</text>');
-  }}
-  /* x labels at the ends and middle */
-  [0, 0.5, 1].forEach(f => {{
-    const v = axis.lo + (axis.hi - axis.lo) * f;
-    parts.push('<text x="' + sx(v) + '" y="' + (H - B + 20) +
-      '" text-anchor="middle" font-size="11" fill="' + C.ink_soft + '">' +
-      fmt(v) + '</text>');
-  }});
-  parts.push('<text x="' + ((L + W - R) / 2) + '" y="' + (H - 8) +
-    '" text-anchor="middle" font-size="12" fill="' + C.ink_soft + '">' +
-    axis.label + (axis.units ? " (" + axis.units + ")" : "") + '</text>');
-
-  const d = xs.map((x, i) => (i ? "L" : "M") + sx(x) + " " + sy(ys[i])).join(" ");
-  parts.push('<path d="' + d + '" fill="none" stroke="' + C.series +
-    '" stroke-width="2" stroke-linejoin="round"/>');
-
-  /* where the sliders currently sit */
-  const cx = sx(here[0]), cy = sy(interp(out.values, here));
-  parts.push('<line x1="' + cx + '" y1="' + T + '" x2="' + cx + '" y2="' +
-    (H - B) + '" stroke="' + C.line + '" stroke-width="1" ' +
-    'stroke-dasharray="4 3"/>');
-  parts.push('<circle cx="' + cx + '" cy="' + cy + '" r="5" fill="' +
-    C.series + '" stroke="' + C.surface + '" stroke-width="2"/>');
-
-  svg.innerHTML = parts.join("");
-}}
-
-/* ---- readout ------------------------------------------------------ */
-function render() {{
-  const here = coords();
-  DATA.axes.forEach((a, i) => {{
-    document.getElementById("val" + i).textContent =
-      fmt(here[i]) + (a.units ? " " + a.units : "");
-  }});
-
-  const rows = DATA.outputs.map(o => {{
-    const v = interp(o.values, here);
-    const gKey = DATA.axes[0].key;
-    const g = o.gradients && o.gradients[gKey]
-      ? interp(o.gradients[gKey], here) : null;
-    return "<tr><td>" + o.name + "</td><td class='num'>" + fmt(v) +
-      (o.units ? " <span style='color:" + C.ink_soft + "'>" + o.units +
-        "</span>" : "") +
-      "</td><td class='sens'>" + (g === null ? "--" : fmt(g)) + "</td></tr>";
-  }});
-  document.getElementById("readout").innerHTML = rows.join("");
-  drawChart(+pick.value);
-}}
-render();
+__SCRIPT__
 </script>
 </body>
 </html>

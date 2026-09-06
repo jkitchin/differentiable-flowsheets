@@ -33,6 +33,7 @@
     onadd = () => {},
     onselect = () => {},
     onrefuse = () => {},
+    readonly = false,
   } = $props()
 
   const nodeTypes = { unit: UnitNode, stream: StreamNode }
@@ -82,6 +83,7 @@
   }
 
   function dropped(event) {
+    if (readonly) return
     event.preventDefault()
     const operation = event.dataTransfer.getData('application/difflow-operation')
     if (!operation) return
@@ -95,7 +97,11 @@
   class="canvas"
   bind:this={surface}
   role="application"
-  ondragover={(e) => { e.preventDefault(); e.dataTransfer.dropEffect = 'copy' }}
+  ondragover={(e) => {
+    if (readonly) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+  }}
   ondrop={dropped}
 >
   <SvelteFlow
@@ -104,7 +110,9 @@
     bind:viewport
     {nodeTypes}
     fitView
-    deleteKey={['Backspace', 'Delete']}
+    nodesDraggable={!readonly}
+    nodesConnectable={!readonly}
+    deleteKey={readonly ? [] : ['Backspace', 'Delete']}
     onconnect={connected}
     ondelete={deleted}
     onnodedragstop={() => onmove(toPositions(nodes))}
@@ -112,8 +120,11 @@
     onpaneclick={() => onselect(null)}
   >
     <Background />
-    <Controls />
-    <MiniMap />
+    <!-- The lock toggles dragging, which a frozen canvas does not do,
+         and a minimap is an overview of a figure the reader can already
+         see whole. -->
+    <Controls showInteractive={!readonly} />
+    {#if !readonly}<MiniMap />{/if}
   </SvelteFlow>
 </div>
 

@@ -1,0 +1,39 @@
+/* The palette is the one the rest of difflow draws with: difflow.report's
+   HTML, publish.py's pages and the classic editor all use these. */
+:root {
+  --surface: #fcfcfb;
+  --panel: #f4f3f0;
+  --ink: #0b0b0b;
+  --ink-soft: #52514e;
+  --grid: #e4e2de;
+  --line: #c9c7c2;
+  --series: #2a78d6;
+  --accent: #eb6834;
+  --bad: #d03b3b;
+  --good: #0ca30c;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--surface);
+  color: var(--ink);
+  font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto,
+    Helvetica, Arial, sans-serif;
+}
+
+a { color: var(--series); }
+
+button {
+  font: inherit;
+  font-size: 0.83rem;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+}
+button:hover { border-color: var(--ink-soft); }
+button.primary { background: var(--series); border-color: var(--series); color: #fff; }
