@@ -604,9 +604,13 @@ from difflow import gui
 gui.serve(fs, path="plant.json")
 ```
 
-The page shows a palette of every registered operation with its port arity, a diagram of the topology, editable parameter fields per unit, and a panel that switches between solved stream values and the generated Python. **Solve** re-solves the edited model; **Save** writes the JSON; **Python** shows what `codegen.to_python` would produce.
+Two pages are served, and they are at different stages.
 
-Everything on the page is derived from `catalog()`, so plugin units appear with no extra work, and a field the catalog reports as holding code is listed as *set in code* rather than given a text box that could only reject what you type.
+`/` is the **canvas**: the flowsheet as a node graph, laid out automatically, pan and zoom, feeds banked left and products right, recycle edges dashed and orange. It is read-only for the moment — it draws what `GET /api/flowsheet` returns and nothing more — and editing is being built onto it.
+
+`/classic` is the **form editor**, and it is the one that can currently change a model: a palette of every registered operation with its port arity, an SVG of the topology, editable parameter fields per unit, and a panel that switches between solved stream values and the generated Python. **Solve** re-solves the edited model; **Save** writes the JSON; **Python** shows what `codegen.to_python` would produce. It stays until the canvas covers what it does; each page links to the other in its header.
+
+Everything on both pages is derived from `catalog()`, so plugin units appear with no extra work, and a field the catalog reports as holding code is listed as *set in code* rather than given a text box that could only reject what you type.
 
 The point is not to replace writing Python. It is to make the tedious parts quick — seeing the topology, changing one parameter and re-solving, checking what a unit expects — while leaving the door open in both directions: export a script, edit it, and read the result back through `serialize`. An editor you can only enter is worse than none.
 
@@ -637,6 +641,20 @@ session.code()["source"]
 `GET /api/flowsheet` fills in `view.nodes` when the document has none, from `difflow.gui.layout.auto_layout` — a longest-path column assignment with feeds banked left and dangling products right, shared with `difflow.report.diagram` so a report and the canvas agree on where a unit sits. Recycle edges are left out of the path length, which is what makes a recycle draw as an arrow going back rather than as another column. The positions are served, not adopted: opening a file does not give it a `view`, and coordinates reach disk only when the user saves.
 
 Anything else under `static/` is served alongside the page, by an allow-list of the suffixes a front-end build emits (`.html`, `.js`, `.css`, `.json`, `.svg`, `.map`, `.woff2`, `.ico`); the page is re-read from disk on every request, so a rebuilt bundle appears on reload rather than on restart.
+
+### Building the canvas
+
+The canvas is Svelte plus [`@xyflow/svelte`](https://svelteflow.dev), and its source lives in `src/difflow/gui/frontend/`. The **build output is committed** to `src/difflow/gui/static/`, which is the whole point of the arrangement: `pip install difflow` never needs node, only changing the UI does.
+
+```bash
+make gui-build     # npm ci && npm run build, into static/
+make gui-test      # the pure model functions, under bare node
+make gui FLOWSHEET=plant.json
+```
+
+The one thing that can go wrong with committed build output is drift — source edited, bundle not rebuilt — so CI reruns `gui-build` and fails if `static/` differs from the commit.
+
+The graph functions that turn a serialized flowsheet into nodes and edges (`frontend/src/lib/model/graph.js`) are plain JavaScript with no framework in them, and they are tested under bare `node --test`. `tests/test_gui.py` runs those same files when node is on `PATH` and skips when it is not: node is a tool for building difflow, never a dependency of it.
 
 One wrinkle worth knowing: JSON has no literal for the non-finite floats, and `JSON.parse` rejects the `Infinity` that Python's `json` writes. This is the *common* case, not an exotic one — `mass_action_kinetics` puts `inf` in `K_eq` for every irreversible reaction — so those values travel as the strings `"Infinity"`, `"-Infinity"` and `"NaN"`, and are restored on the way back.
 

@@ -101,6 +101,12 @@ class TestAutoLayout:
         assert "product:purge" not in pos
         assert "product:product" in pos
 
+    def test_a_recycle_destination_is_not_a_feed(self):
+        """It is fed by the recycle arc, not from outside the flowsheet."""
+        pos = auto_layout(_recycle())
+        assert "feed:recycle" not in pos
+        assert "feed:feed" in pos
+
     def test_it_is_stable(self):
         """Reopening a file must not shuffle the diagram."""
         fs = _recycle()

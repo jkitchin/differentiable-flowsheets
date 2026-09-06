@@ -87,9 +87,12 @@ def _graph(flowsheet):
     # A feed is an inlet nothing produces; a product is an outlet nothing
     # consumes and no recycle carries back.  Declared feeds come first and in
     # their declared order, so the left-hand bank does not reshuffle when a
-    # unit is added.
+    # unit is added.  A recycle destination is not a feed: nothing produces it
+    # either, but it is fed by the recycle arc, and banking it on the left
+    # would claim the flowsheet has an inlet it does not have.
+    fed_by_recycle = set(getattr(flowsheet, "recycles", {}).values())
     feeds = [n for n in getattr(flowsheet, "feeds", {})]
-    seen = set(feeds)
+    seen = set(feeds) | fed_by_recycle
     for u in units:
         for inlet in u.inlet_names:
             if producer.get(inlet) is None and inlet not in seen:

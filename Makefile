@@ -41,7 +41,7 @@ endif
 
 .PHONY: all notebooks notebooks-force notebooks-bio notebooks-ree notebooks-cc \
         notebooks-bio-force notebooks-ree-force notebooks-cc-force \
-        clean test book book-clean sync
+        clean test book book-clean sync gui gui-build gui-test
 
 all: notebooks
 
@@ -157,3 +157,24 @@ book-serve: book
 # Sync uv virtual environment (install dependencies)
 sync:
 	uv sync
+
+# ---------------------------------------------------------------------------
+# The editor front end.
+#
+# `src/difflow/gui/static/` is BUILT OUTPUT and it is committed: `pip install
+# difflow` must never need node. Only changing the UI does, and this is how.
+# CI reruns gui-build and fails if the result differs from what is committed,
+# so the bundle cannot drift away from its source.
+GUI_FRONTEND := src/difflow/gui/frontend
+
+gui-build:
+	cd $(GUI_FRONTEND) && npm ci && npm run build
+
+# The pure model functions, under bare node. Same files tests/test_gui.py runs.
+gui-test:
+	cd $(GUI_FRONTEND) && npm test
+
+# Serve a flowsheet: `make gui FLOWSHEET=examples/whatever.json` (or bare, for
+# an empty one).
+gui:
+	$(UV_RUN) python -m difflow.gui $(FLOWSHEET)

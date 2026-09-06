@@ -71,14 +71,18 @@ def _json_restore(value: Any) -> Any:
     return value
 
 
-def page() -> str:
-    """The editor page, read from :data:`STATIC` on every request.
+def page(name: str = "index.html") -> str:
+    """A page from :data:`STATIC`, read on every request.
 
     Read per request, not cached at import: during front-end work the
     rebuilt bundle should show up on reload, not on restart. It is one
     small local file read against a browser round trip.
+
+    Args:
+        name: ``"index.html"`` for the canvas editor, ``"classic.html"``
+            for the form-and-dropdown one it is replacing.
     """
-    return (STATIC / "index.html").read_text(encoding="utf-8")
+    return (STATIC / name).read_text(encoding="utf-8")
 
 
 #: What ``static/`` may serve, and as what. An allow-list rather than
@@ -137,6 +141,11 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         routes = {
             "/": lambda: self._send(page(), content="text/html"),
+            # The editor the canvas is replacing, kept reachable until the
+            # canvas covers what it does. Losing the working tool for the
+            # length of a rewrite is not a trade worth making.
+            "/classic": lambda: self._send(page("classic.html"),
+                                           content="text/html"),
             # answered so the browser does not log a 404 on every load
             "/favicon.ico": lambda: self._send(b"", content="image/x-icon"),
             "/api/catalog": lambda: self._send(self.session.catalog()),

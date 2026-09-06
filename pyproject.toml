@@ -138,7 +138,12 @@ difflow-gui = "difflow.gui.server:main"
 # output embedded as base64 images, and nothing imports them at runtime. Some
 # live inside the package tree (src/difflow_cc/examples/), so this has to be a
 # global exclude rather than an sdist-only one. They stay on GitHub.
-exclude = ["**/*.ipynb"]
+#
+# The editor's front-end source is excluded too. The BUILT bundle
+# (src/difflow/gui/static/) is what difflow serves and it ships; the vite
+# project that produced it does not, and node_modules least of all -- it is
+# ~100 MB of toolchain that no installed difflow ever reads.
+exclude = ["**/*.ipynb", "src/difflow/gui/frontend"]
 
 [tool.hatch.build.targets.wheel]
 packages = [

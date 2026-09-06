@@ -210,7 +210,19 @@ class TestStatic:
         assert body == b"export const x = 1;\n"
 
     def test_a_missing_asset_is_a_404(self, client):
-        assert client.get("/app.css")[0] == 404
+        assert client.get("/nothing-was-ever-built-here.js")[0] == 404
+
+    def test_the_built_bundle_is_served(self, client):
+        """The committed build output is what the page loads."""
+        status, body = client.get("/app.js")
+        assert status == 200 and len(body) > 1000
+        assert b"<title>difflow editor</title>" in client.get("/")[1]
+
+    def test_the_classic_editor_is_still_reachable(self, client):
+        """It stays until the canvas covers what it does."""
+        status, body = client.get("/classic")
+        assert status == 200
+        assert b'id="palette"' in body
 
     def test_a_type_that_the_build_never_emits_is_a_404(self, client):
         """An allow-list, so a stray file in static/ is not a route."""
@@ -543,8 +555,9 @@ class TestPageLogic:
         if node is None:
             pytest.skip("node is not installed")
 
-        script = re.search(r"<script>(.*)</script>", gui._PAGE, re.S)
-        assert script, "the page must carry its script inline"
+        classic = (gui.STATIC / "classic.html").read_text(encoding="utf-8")
+        script = re.search(r"<script>(.*)</script>", classic, re.S)
+        assert script, "the classic page must carry its script inline"
         page_js = tmp_path / "page.js"
         page_js.write_text(script.group(1))
 
@@ -554,6 +567,29 @@ class TestPageLogic:
             env={**os.environ, "HARNESS": str(here / "harness.js"),
                  "PAGE_JS": str(page_js)},
             capture_output=True, text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+    def test_the_canvas_model_functions_behave(self):
+        """The wiring is what can be wrong without looking wrong.
+
+        Runs the front end's own ``node --test`` suite over
+        ``frontend/src/lib/model/``: the pure functions that turn a
+        serialize document into nodes and edges. No build, no browser, and
+        no npm install --- these modules import nothing.
+        """
+        node = shutil.which("node")
+        if node is None:
+            pytest.skip("node is not installed")
+
+        frontend = pathlib.Path(gui.__file__).parent / "frontend"
+        tests = sorted((frontend / "src" / "lib" / "model").glob("*.test.js"))
+        if not tests:
+            pytest.skip("the front-end source is not in this install")
+
+        result = subprocess.run(
+            [node, "--test", *[str(t) for t in tests]],
+            capture_output=True, text=True, cwd=frontend,
         )
         assert result.returncode == 0, result.stdout + result.stderr
 
