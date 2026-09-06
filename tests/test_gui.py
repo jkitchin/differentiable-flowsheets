@@ -18,6 +18,7 @@ import pathlib
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import urllib.error
 import urllib.request
@@ -161,6 +162,57 @@ class TestRoutes:
     def test_an_unknown_route_is_a_404(self, client):
         assert client.get("/api/nope")[0] == 404
         assert client.post("/api/nope")[0] == 404
+
+
+# =============================================================================
+# Static assets
+# =============================================================================
+
+
+class TestStatic:
+    """The page is files on disk now, so the tree is a route."""
+
+    def test_the_page_comes_from_the_static_directory(self, client):
+        on_disk = (gui.STATIC / "index.html").read_text(encoding="utf-8")
+        assert client.get("/")[1].decode("utf-8") == on_disk
+        assert gui.page() == on_disk
+
+    def test_a_built_asset_is_served_with_its_content_type(self, client, tmp_path):
+        asset = gui.STATIC / "_probe.js"
+        asset.write_text("export const x = 1;\n")
+        try:
+            status, body = client.get("/_probe.js")
+        finally:
+            asset.unlink()
+        assert status == 200
+        assert body == b"export const x = 1;\n"
+
+    def test_a_missing_asset_is_a_404(self, client):
+        assert client.get("/app.css")[0] == 404
+
+    def test_a_type_that_the_build_never_emits_is_a_404(self, client):
+        """An allow-list, so a stray file in static/ is not a route."""
+        stray = gui.STATIC / "_probe.txt"
+        stray.write_text("not for the browser")
+        try:
+            assert client.get("/_probe.txt")[0] == 404
+        finally:
+            stray.unlink()
+
+    def test_a_traversal_cannot_escape_the_static_directory(self, client):
+        """The server is reachable from a browser; the tree is not the disk."""
+        for path in ("/../server.py", "/../../difflow/flowsheet.py",
+                     "/..%2fserver.py", "/static/../../__init__.py"):
+            assert client.get(path)[0] == 404, path
+
+    def test_the_module_entry_point_still_runs(self):
+        """``python -m difflow.gui`` is the documented way in."""
+        result = subprocess.run(
+            [sys.executable, "-m", "difflow.gui", "--help"],
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 0
+        assert "--no-browser" in result.stdout
 
 
 # =============================================================================

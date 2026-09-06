@@ -131,6 +131,7 @@ power = "difflow_power:register"
 
 [project.scripts]
 difflow = "difflow.report.cli:main"
+difflow-gui = "difflow.gui.server:main"
 
 [tool.hatch.build]
 # No notebooks in either artifact. They are committed pre-executed with plot

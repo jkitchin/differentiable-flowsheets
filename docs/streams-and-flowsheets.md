@@ -614,6 +614,18 @@ server = make_server(FlowsheetSession(fs), port=0)   # 0 => any free port
 
 The routes are `GET /api/catalog`, `GET /api/flowsheet`, `GET /api/code`, and `POST /api/flowsheet`, `/api/solve`, `/api/save`. A failed solve or a rejected edit comes back as `{"ok": false, "error": ...}` rather than a traceback at the socket, so a bad edit from the browser cannot take the server down.
 
+`difflow.gui` is a package rather than one module: `session.py` holds the flowsheet and everything that can be done to it, `server.py` holds the wire encoding and the routes, and `static/` holds the page as files on disk. `FlowsheetSession` needs no socket, so the interesting half — load, edit, solve, emit code — is usable and testable on its own:
+
+```python
+from difflow.gui import FlowsheetSession
+
+session = FlowsheetSession(path="plant.json")
+session.solve()["converged"]
+session.code()["source"]
+```
+
+Anything else under `static/` is served alongside the page, by an allow-list of the suffixes a front-end build emits (`.html`, `.js`, `.css`, `.json`, `.svg`, `.map`, `.woff2`, `.ico`); the page is re-read from disk on every request, so a rebuilt bundle appears on reload rather than on restart.
+
 One wrinkle worth knowing: JSON has no literal for the non-finite floats, and `JSON.parse` rejects the `Infinity` that Python's `json` writes. This is the *common* case, not an exotic one — `mass_action_kinetics` puts `inf` in `K_eq` for every irreversible reaction — so those values travel as the strings `"Infinity"`, `"-Infinity"` and `"NaN"`, and are restored on the way back.
 
 ---
