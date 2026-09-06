@@ -245,6 +245,26 @@ class FlowsheetSession:
         except Exception as exc:                     # surfaced, not swallowed
             return {"source": "", "error": str(exc)}
 
+    def diagram(self) -> dict:
+        """The flowsheet as one inline SVG, at the canvas's own layout.
+
+        Drawn by :func:`difflow.report.diagram.flowsheet_diagram`, which
+        is the drawer the HTML reports use. A picture exported from the
+        editor and a picture in a report are then the same picture ---
+        and the export honours where the user dragged the boxes, which is
+        the difference between a diagram of this flowsheet and a diagram
+        of some flowsheet with the same topology.
+        """
+        from difflow.report.diagram import flowsheet_diagram
+
+        if self.flowsheet is None:
+            return {"ok": False, "error": "no flowsheet loaded"}
+        try:
+            positions = (self.flowsheet.view or {}).get("nodes") or {}
+            return {"ok": True, "svg": flowsheet_diagram(self.flowsheet, positions)}
+        except Exception as exc:
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
     # -- writes -------------------------------------------------------
 
     def replace(self, document: dict) -> dict:

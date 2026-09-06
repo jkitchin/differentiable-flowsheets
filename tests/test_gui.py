@@ -1188,5 +1188,35 @@ class TestSensitivity:
             live.close()
 
 
+class TestExport:
+    """The ways out of the editor: a script, a document, a drawing."""
+
+    def test_the_diagram_is_drawn_at_the_canvas_s_layout(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        answer = session.diagram()
+        assert answer["ok"] and answer["svg"].startswith("<svg")
+        assert "reactor" in answer["svg"]
+
+        assert session.set_layout({"reactor": {"x": 500, "y": 300}})["ok"]
+        moved = session.diagram()["svg"]
+        assert moved != answer["svg"] and "500" in moved
+
+    def test_an_empty_session_says_so_rather_than_raising(self):
+        assert FlowsheetSession(None).diagram() == {
+            "ok": False, "error": "no flowsheet loaded"}
+
+    def test_the_export_routes_answer(self, thermo):
+        live = Client(FlowsheetSession(build_flowsheet(thermo)))
+        try:
+            # All three exports are reads, so none of them needs the token.
+            _, svg = live.get_json("/api/diagram")
+            assert svg["ok"] and svg["svg"].startswith("<svg")
+            _, code = live.get_json("/api/code")
+            assert code["error"] is None and "Flowsheet(" in code["source"]
+            _, doc = live.get_json("/api/flowsheet")
+            assert doc["flowsheet"]["units"]
+        finally:
+            live.close()
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

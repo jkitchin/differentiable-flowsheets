@@ -11,8 +11,10 @@ The point is not to replace writing Python. It is to make the parts
 that are tedious in Python --- seeing the topology, adjusting a
 parameter and re-solving, checking what a unit expects --- quick, while
 leaving the door open: the editor exports the model as a script
-(:mod:`difflow.codegen`) or as JSON (:mod:`difflow.serialize`), and
-reads JSON back. An editor you can only enter is worse than none.
+(:mod:`difflow.codegen`), as JSON (:mod:`difflow.serialize`) which it
+reads back, or as a drawing (:mod:`difflow.report.diagram`, the same
+drawer the HTML reports use, at the canvas's own layout). An editor you
+can only enter is worse than none.
 
 Units are added by clicking the palette, and streams are wired by
 naming them: an outlet names a stream, and an inlet chooses one that

@@ -1,6 +1,7 @@
 <script>
   import Canvas from './lib/Canvas.svelte'
   import CodeContext from './lib/CodeContext.svelte'
+  import Export from './lib/Export.svelte'
   import Inspector from './lib/Inspector.svelte'
   import Palette from './lib/Palette.svelte'
   import Results from './lib/Results.svelte'
@@ -194,6 +195,8 @@
   <button onclick={() => (showResults = !showResults)}>Results</button>
   <button onclick={solve} disabled={busy}>Solve</button>
   <button onclick={save} disabled={busy || !path}>Save</button>
+  <Export {path} document={doc} disabled={busy || !doc}
+          onerror={(why) => (note = why)} />
   <button onclick={() => edit(load)} disabled={busy}>Reload</button>
   <a class="classic" href="/classic">classic editor</a>
 </header>

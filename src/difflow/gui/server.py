@@ -231,6 +231,7 @@ class _Handler(BaseHTTPRequestHandler):
             "/api/code": lambda: self._send(self.session.code()),
             "/api/code-context": lambda: self._send(self.session.code_context()),
             "/api/levers": lambda: self._send(self.session.levers()),
+            "/api/diagram": lambda: self._send(self.session.diagram()),
         }
         handler = routes.get(self.path)
         if handler is not None:

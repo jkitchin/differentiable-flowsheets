@@ -673,6 +673,7 @@ The routes are:
 | `GET` / `POST /api/code-context` | read the snippet and what it defines; set it, or say why it will not run |
 | `GET /api/docs/<op>` | one operation's rendered docstring, equations, assumptions and references |
 | `GET /api/levers` | what a derivative can be taken with respect to, and of |
+| `GET /api/diagram` | the flowsheet drawn as one SVG, at the canvas's own layout |
 | `POST /api/sensitivity` | one derivative sweep, forward or reverse |
 
 A failed solve or a rejected edit comes back as `{"ok": false, "error": ...}` with a **200** rather than a traceback at the socket: it is an answer about the flowsheet, not a failure of the request, and a bad edit from the browser cannot take the server down. Only malformed JSON and an unrouted path get a 4xx.
@@ -729,6 +730,21 @@ Levers are found rather than declared. `difflow.gui.sensitivity.levers` walks th
 Rankings are **relative**: `d ln y / d ln u`, which is the only comparison that means anything between a volume in m³ and a temperature in K. It is `None`, not infinity, when either base value is zero. The reverse view draws them as a tornado — plain SVG geometry computed in `model/results.js`, no plotting library, so the committed bundle stays at half a megabyte and `publish.py`'s self-contained page has nothing new to swallow.
 
 Two smaller things make the panel honest. Edges carry their flow as a label once solved, and tint by relative sensitivity after a derivative — thickness by magnitude, colour by sign — through a CSS custom property, so `Canvas.svelte`'s stylesheet decides what "up" and "down" look like and the model layer never computes a colour. And any edit that is not a move drops the stored solve: results are about the flowsheet you solved, and a panel still showing the previous one is worse than an empty panel.
+
+### Getting the model out again
+
+An editor you can only enter is worse than none, so **Export** offers four files and none of them is a re-implementation of something difflow already writes:
+
+| File | Where it comes from |
+|---|---|
+| `<name>.py` | `codegen.to_python`, code context and all — the script that reproduces this solve |
+| `<name>.json` | the served document, `view.nodes` included, and it loads straight back |
+| `<name>.svg` | `GET /api/diagram` |
+| `<name>.png` | that same SVG rastered at 2x in the page, on a white ground |
+
+The diagram is the part worth explaining. `difflow.report.diagram` already owned the only flowsheet-to-SVG drawer in the codebase, and the editor already shared its column algorithm through `difflow.gui.layout.unit_columns` — so rather than grow a second drawer, that one was parameterised: `topology_svg(units, recycles, positions=None)` is the drawing, `flowsheet_svg(report)` is the adapter a report uses, and `flowsheet_diagram(flowsheet, positions)` is the adapter the editor uses. A picture exported from the canvas and a picture in an HTML report are therefore the same picture, and `positions` is what makes the exported one a diagram of *your* flowsheet rather than of some flowsheet with the same topology: pass the canvas's own coordinates and the boxes land where they were dragged. The two callers key their nodes differently — the canvas uses a unit's bare name, because that is `_apply_params`'s vocabulary, while the report prefixes `unit:` — and `_diagram_keys` is the single place that translates. A position naming a node that no longer exists is ignored rather than raised on, because a stale layout is a normal thing to be holding.
+
+The PNG goes through an `Image` and a `<canvas>`, with the SVG handed over as a **data** URL rather than a blob URL: a canvas that has drawn a blob-URL image counts as tainted and `toBlob` on it throws. Its size comes from the SVG's own `viewBox`, since the drawer writes `width="100%"` — right for a document that flows, useless for a raster. Naming, the XML declaration and the raster size are pure functions in `model/download.js` and are tested under node; the `Blob` and the anchor click stay in the component, where nothing can be quietly wrong.
 
 The one thing that can go wrong with committed build output is drift — source edited, bundle not rebuilt — so CI reruns `gui-build` and fails if `static/` differs from the commit.
 
