@@ -94,6 +94,8 @@ class FlowsheetSession:
         #: about a failed solve is mostly this string plus the
         #: diagnostics the flowsheet keeps.
         self.solve_error: str | None = None
+        #: the last linearization, or None. Set by :meth:`linearize`.
+        self.delta_vectors = None
         if flowsheet is None and self.path and self.path.exists():
             self._load(self.path)
         elif flowsheet is not None:
@@ -614,3 +616,71 @@ class FlowsheetSession:
         except Exception as exc:
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
         return {"ok": True, **answer}
+
+    # -- planning ------------------------------------------------------
+
+    def linearize(self, u, y, *, bounds=None, radius=None,
+                  check: bool = False) -> dict:
+        """Linearize the flowsheet into delta vectors for an LP planner.
+
+        The selection is persisted in ``view["planning"]`` on the way
+        through, so reopening the file reopens the panel with the same
+        levers and outputs. That is a *write*, and the only one here ---
+        the linearization itself changes nothing, and the flowsheet it
+        reads is the one already in memory, not a rebuilt copy.
+
+        Args:
+            u: Lever keys, as ``GET /api/levers`` offers them.
+            y: Output keys, ``"<stream>.<quantity>"``.
+            bounds: ``{lever: {"lb": float, "ub": float}}``, partial.
+            radius: Trust-region radius as a fraction of each lever's
+                range. Defaults to the module's own.
+            check: Also verify the Jacobian against central differences.
+                Costs ``2 n_u`` extra solves, so the panel asks for it
+                explicitly.
+
+        Returns:
+            The answer dict from :func:`difflow.gui.planning.linearize`,
+            or ``{"ok": False, "error": ...}``.
+        """
+        from difflow.gui import planning
+
+        if self.flowsheet is None:
+            return {"ok": False, "error": "no flowsheet loaded"}
+        u, y = list(u or []), list(y or [])
+        if not u or not y:
+            return {"ok": False,
+                    "error": "pick at least one lever and one output"}
+        radius = planning.DEFAULT_RADIUS if radius is None else float(radius)
+        try:
+            with self._lock:
+                dvs, answer = planning.linearize(
+                    self.flowsheet, u, y, bounds=bounds, radius=radius,
+                    check=check)
+                #: the last linearization, which is what the assistant's
+                #: `planning` brief reads
+                self.delta_vectors = dvs
+                self.flowsheet.view["planning"] = {
+                    "u": u, "y": y, "bounds": dict(bounds or {}),
+                    "radius": radius,
+                }
+        except Exception as exc:
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+        return answer
+
+    def linearization_files(self, fmt: str) -> dict:
+        """The last linearization rendered for download."""
+        from difflow.gui import planning
+
+        dvs = getattr(self, "delta_vectors", None)
+        if dvs is None:
+            return {"ok": False, "error": "nothing linearized yet"}
+        # Not the flowsheet's own stem: `recycle.json` is the document,
+        # and a download that lands next to it under the same name is a
+        # flowsheet overwritten by a Jacobian.
+        stem = f"{self.path.stem if self.path else 'flowsheet'}_delta_vectors"
+        try:
+            return {"ok": True, "format": fmt,
+                    "files": planning.files(dvs, fmt, stem)}
+        except Exception as exc:
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}

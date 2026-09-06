@@ -515,7 +515,7 @@ def planning(dvs, question: str = "", lp_model=None, findings=None) -> Pack:
         as_dict = finding if isinstance(finding, dict) else vars(finding)
         sections.append(Section(
             f"Health finding: {as_dict.get('kind', 'issue')}",
-            str(as_dict.get('message') or as_dict), priority=8))
+            str(as_dict.get('detail') or as_dict), priority=8))
 
     if lp_model is not None:
         sections.append(Section("The assembled LP",

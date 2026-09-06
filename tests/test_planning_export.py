@@ -425,7 +425,12 @@ class TestBlockFromFlowsheet:
 
         assert back["u_names"] == ["plant.reactor_V",
                                    "plant.feed_feed_total_flow"]
-        assert back["u_units"] == [None, "mol/s"]
+        # Units resolve exactly as the catalog resolves them: the field's
+        # own metadata first, then the operation's `parameter_units`.
+        # `CSTRParams.V` carries none of its own and the table has it, so
+        # reading only the metadata left the axis unlabelled while the
+        # editor's own picker showed `m^3`.
+        assert back["u_units"] == ["m^3", "mol/s"]
         assert back["u_keys"] == ["reactor.V", "feed:feed.total_flow"]
 
     def test_rejects_an_empty_lever_list(self, recycle_flowsheet):

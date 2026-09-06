@@ -307,6 +307,17 @@ class _Handler(BaseHTTPRequestHandler):
                                         extras=payload.get("extras"))
             if path == "/api/code-context":
                 return session.set_code_context(payload.get("source", ""))
+            # A POST because it writes: the lever/output selection is
+            # persisted in `view["planning"]` so the panel reopens on it.
+            if path == "/api/linearize":
+                return session.linearize(payload.get("u") or [],
+                                         payload.get("y") or [],
+                                         bounds=payload.get("bounds"),
+                                         radius=payload.get("radius"),
+                                         check=bool(payload.get("check")))
+            if path == "/api/linearize/files":
+                return session.linearization_files(
+                    payload.get("format", "json"))
             # Not about the flowsheet, so not on the session: the brief
             # was assembled by a GET and this only forwards it. A POST
             # because it spends money, and so must pass `_guard`.

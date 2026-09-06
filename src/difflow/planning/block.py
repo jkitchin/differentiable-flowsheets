@@ -106,13 +106,14 @@ def _stream_quantity(stream, quantity: str):
 
 
 def _flowsheet_param_units(flowsheet, key: str) -> str | None:
-    """Units of a ``"<unit>.<param>"`` lever, from the dataclass metadata.
+    """Units of a ``"<unit>.<param>"`` lever.
 
-    Reads the same ``field(metadata={"units": ...})`` that
-    :class:`~difflow.catalog.ParameterSpec` serves to the GUI, so a delta-vector
-    export becomes self-describing as the metadata rollout lands.  Returns
-    ``None`` when the field carries no metadata, which is the state of most of
-    the catalog today.
+    Resolved exactly as :class:`~difflow.catalog.ParameterSpec` resolves it:
+    the field's own ``field(metadata={"units": ...})`` first, then the
+    operation class's ``parameter_units`` table.  Reading only the first of
+    those left most exported levers unitless while the editor's own picker
+    showed their units, because the metadata rollout is still partial and
+    ``parameter_units`` is where most units actually live.
     """
     import dataclasses
 
@@ -120,12 +121,21 @@ def _flowsheet_param_units(flowsheet, key: str) -> str | None:
     for unit in flowsheet.units:
         if unit.name != unit_name:
             continue
-        params = getattr(unit.operation, "params", None)
+        from difflow.report.metadata import get_metadata
+
+        operation = unit.operation
+        try:
+            meta = get_metadata(type(operation))
+        except Exception:      # an operation outside the metadata contract
+            meta = None
+        table = dict(getattr(meta, "parameter_units", None) or {})
+        params = getattr(operation, "params", None)
         if params is None or not dataclasses.is_dataclass(params):
-            return None
+            return table.get(param_name)
         for f in dataclasses.fields(params):
             if f.name == param_name:
-                return f.metadata.get("units")
+                return f.metadata.get("units") or table.get(param_name)
+        return table.get(param_name)
     return None
 
 

@@ -754,6 +754,26 @@ The functions that turn a serialized flowsheet into nodes and edges (`frontend/s
 
 One wrinkle worth knowing: JSON has no literal for the non-finite floats, and `JSON.parse` rejects the `Infinity` that Python's `json` writes. This is the *common* case, not an exotic one — `mass_action_kinetics` puts `inf` in `K_eq` for every irreversible reaction — so those values travel as the strings `"Infinity"`, `"-Infinity"` and `"NaN"`, and are restored on the way back.
 
+### Delta vectors, for someone else's planning model
+
+**Planning** is the panel that turns the open flowsheet into the object an LP planning system consumes: a Jacobian of chosen outputs against chosen levers, around the solved base case, with the bounds and the trust radius that say where it is valid. `difflow.planning` has computed that since it existed. What it never had was a way to say *which* levers, by pointing at them.
+
+Check parameters to make them levers and stream quantities to make them outputs, press **Linearize**, and `POST /api/linearize` builds a `Block.from_flowsheet` over the live flowsheet, calls `linearize_block`, and returns a `DeltaVectorSet`. Lever keys are `_apply_params`'s own vocabulary — `reactor.V`, `feed:feed.total_flow` — which is why the same picker serves the sensitivity sweep and this: they are asking for derivatives of the same thing, one at a time versus all at once.
+
+Four things about it are deliberate.
+
+**The selection is part of the document.** It persists as `view.planning = {"u", "y", "bounds", "radius"}` alongside `view.nodes`, so a flowsheet reopens on the levers it was last linearized against. Choosing them is the work; recomputing the Jacobian is a second.
+
+**A blank bound is not an infinity.** A lever with no bounds still needs a range for the trust region to mean anything, so an unbounded lever gets a symmetric window around its own base value. An infinite bound would make every scaled column zero and the health report would then flag the whole model as dead — a diagnostic failure caused by the diagnostic's own input.
+
+**The finite-difference check is a button, not a default.** `check_delta_vectors` compares the AD Jacobian against central differences, which costs `2 n_u` extra solves against the one the Jacobian took. It is the check that decides whether a Jacobian should leave the building — a `clip`, a `minimum` or a `where` sitting on an active constraint gives an AD derivative that is perfectly correct and completely unlike the flowsheet's actual response — so the panel offers it prominently and states the number either way, but does not make everyone pay for it on every press.
+
+**Health findings travel with the coefficients.** `check_delta_health` runs on every linearization and its findings ship inside the export, because a dead lever or a recycle loop gain near one is a fact about the numbers, and the person pricing against them downstream never sees this panel. The panel also renders an exactly-zero cell as `0` rather than `6.781e-21`: a structurally dead column is the one thing in that table a reader must not miss, and scientific notation hides it among the merely small.
+
+Downloads are the JSON manifest and the CSV tables, and they are fetched from the server rather than rebuilt in the page — `difflow.planning.export`'s own writers produce them, so what a planning system reads is byte-for-byte what `difflow plan-export` writes. The name is `<flowsheet>_delta_vectors.json`, never `<flowsheet>.json`: a download landing next to the document under that name is a flowsheet overwritten by a Jacobian.
+
+`.lp` and `.mps` are **not** offered here, and their absence is not an omission. Those are renderings of an assembled LP, and this panel poses none — no prices, no constraints, therefore no shadow prices. Run `DeltaBasePlanner` or `difflow plan-export` for those; the JSON this writes is what such a run consumes.
+
 ### What the assistant is told
 
 The editor can put a small language model next to the canvas, and the model is the least interesting half of that. A 3B model knows nothing about difflow; the useful thing it can do is *read*. So the work is in the brief — and the brief is assembled from things difflow already computed and never showed anyone.

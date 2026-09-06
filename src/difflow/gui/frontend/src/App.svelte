@@ -5,6 +5,7 @@
   import Export from './lib/Export.svelte'
   import Inspector from './lib/Inspector.svelte'
   import Palette from './lib/Palette.svelte'
+  import Planning from './lib/Planning.svelte'
   import Results from './lib/Results.svelte'
   import { del, get, patch, post, send } from './lib/api.js'
   import { inferKind } from './lib/model/assistant.js'
@@ -30,6 +31,7 @@
   // about, so the assistant needs it.
   let lastSolve = $state(null)
   let showAssistant = $state(false)
+  let showPlanning = $state(false)
 
   async function load() {
     const payload = await get('/api/flowsheet')
@@ -203,6 +205,7 @@
           class:primary={context.error}>Code context</button>
   <button onclick={() => (showResults = !showResults)}>Results</button>
   <button onclick={() => (showAssistant = !showAssistant)}>Ask</button>
+  <button onclick={() => (showPlanning = !showPlanning)}>Planning</button>
   <button onclick={solve} disabled={busy}>Solve</button>
   <button onclick={save} disabled={busy || !path}>Save</button>
   <Export {path} document={doc} disabled={busy || !doc}
@@ -254,6 +257,16 @@
     {busy}
     onsensitivity={differentiate}
     onclose={() => (showResults = false)}
+  />
+{/if}
+
+{#if showPlanning}
+  <Planning
+    {path}
+    document={doc}
+    levers={pickers}
+    solved={!!pickers?.solved}
+    onclose={() => (showPlanning = false)}
   />
 {/if}
 

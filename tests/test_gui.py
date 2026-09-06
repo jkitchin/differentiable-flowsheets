@@ -13,6 +13,7 @@ as `Infinity`, which the browser refuses to parse.
 """
 
 import json
+import math
 import os
 import pathlib
 import re
@@ -49,6 +50,7 @@ from difflow.gui import (
     FlowsheetSession,
     _json_restore,
     _json_safe,
+    context,
     make_server,
     sensitivity,
 )
@@ -1374,6 +1376,161 @@ class TestExport:
             assert doc["flowsheet"]["units"]
         finally:
             live.close()
+
+class TestPlanning:
+    """Delta vectors, which is what a planning system asks difflow for.
+
+    The load-bearing test here is the finite-difference one: everything
+    else in this file can be wrong in a way a user notices, and a
+    Jacobian cannot -- it leaves as a table of numbers and is priced
+    against by someone who never sees the flowsheet.
+    """
+
+    LEVERS = ["reactor.V", "feed:feed.total_flow"]
+    OUTPUTS = ["liq.F_ethanol", "vap.total_flow"]
+
+    def test_the_jacobian_matches_central_differences(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        assert session.solve()["ok"]
+        answer = session.linearize(self.LEVERS, self.OUTPUTS, check=True)
+        assert answer["ok"], answer
+        assert answer["check"]["passed"], answer["check"]
+        assert answer["check"]["max_rel_error"] < 1e-5
+
+    def test_a_lever_the_flowsheet_moves_has_a_nonzero_column(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        session.solve()
+        answer = session.linearize(["reactor.V"], ["liq.F_ethanol"])
+        vector = answer["delta_vectors"]["vectors"][0]
+        assert vector["J"][0][0] > 0, "a bigger reactor makes more ethanol"
+        assert vector["u0"] == [1.0]
+
+    def test_units_travel_with_the_coefficients(self, thermo):
+        """A Jacobian with unlabelled axes is not an export."""
+        session = FlowsheetSession(build_flowsheet(thermo))
+        session.solve()
+        answer = session.linearize(self.LEVERS, self.OUTPUTS)
+        vector = answer["delta_vectors"]["vectors"][0]
+        # `V` carries its units in CSTR.parameter_units, not in the
+        # dataclass field metadata, which is where most of them live.
+        assert vector["u_units"] == ["m^3", "mol/s"]
+        assert vector["y_units"] == ["mol/s", "mol/s"]
+
+    def test_an_unbounded_lever_gets_a_window_not_an_infinity(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        session.solve()
+        vector = session.linearize(
+            ["reactor.V"], ["liq.F_ethanol"])["delta_vectors"]["vectors"][0]
+        assert vector["lb"] == [0.0] and vector["ub"] == [2.0]
+        assert all(map(math.isfinite, vector["tr_lo"] + vector["tr_hi"]))
+
+    def test_bounds_given_are_the_bounds_used(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        session.solve()
+        answer = session.linearize(
+            ["reactor.V"], ["liq.F_ethanol"],
+            bounds={"reactor.V": {"lb": 0.5, "ub": 4.0}})
+        vector = answer["delta_vectors"]["vectors"][0]
+        assert vector["lb"] == [0.5] and vector["ub"] == [4.0]
+
+    def test_the_selection_is_persisted_so_the_panel_reopens_on_it(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        session.solve()
+        session.linearize(self.LEVERS, self.OUTPUTS, radius=0.1,
+                          bounds={"reactor.V": {"lb": 0.5}})
+        saved = session.flowsheet.view["planning"]
+        assert saved["u"] == self.LEVERS and saved["y"] == self.OUTPUTS
+        assert saved["radius"] == 0.1
+        assert saved["bounds"] == {"reactor.V": {"lb": 0.5}}
+
+    def test_an_empty_pick_is_refused_with_a_sentence(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        session.solve()
+        assert session.linearize([], ["liq.F_ethanol"]) == {
+            "ok": False, "error": "pick at least one lever and one output"}
+        assert session.linearize(["reactor.V"], [])["ok"] is False
+
+    def test_a_name_the_flowsheet_does_not_have_is_an_answer(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        session.solve()
+        answer = session.linearize(["reactor.V"], ["nowhere.total_flow"])
+        assert answer["ok"] is False
+        assert "nowhere" in answer["error"]
+
+    def test_an_empty_session_says_so_rather_than_raising(self):
+        assert FlowsheetSession(None).linearize(["a"], ["b"]) == {
+            "ok": False, "error": "no flowsheet loaded"}
+
+    def test_health_findings_travel_with_the_export(self, thermo):
+        """A dead lever has to be visible downstream, not just locally."""
+        session = FlowsheetSession(build_flowsheet(thermo))
+        session.solve()
+        # Nothing upstream of the reactor can respond to its volume.
+        answer = session.linearize(["reactor.V"], ["feed.total_flow"])
+        kinds = {f["kind"] for f in answer["health"]}
+        assert "dead_lever" in kinds
+        assert answer["delta_vectors"]["health"] == answer["health"]
+
+    def test_the_downloads_are_what_the_export_writers_write(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        session.solve()
+        session.linearize(self.LEVERS, self.OUTPUTS)
+
+        manifest = session.linearization_files("json")
+        assert manifest["ok"] and len(manifest["files"]) == 1
+        # Never the flowsheet's own name: a download landing next to the
+        # document under that name is a flowsheet overwritten.
+        assert manifest["files"][0]["name"].endswith("_delta_vectors.json")
+        loaded = json.loads(manifest["files"][0]["text"])
+        assert loaded["vectors"][0]["u_names"]
+        assert loaded["meta"]["source"] == "difflow.gui"
+
+        tables = session.linearization_files("csv")
+        names = {f["name"] for f in tables["files"]}
+        assert "flowsheet_jacobian.csv" in names and "bounds.csv" in names
+
+    def test_a_format_that_does_not_exist_is_refused(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        session.solve()
+        session.linearize(self.LEVERS, self.OUTPUTS)
+        answer = session.linearization_files("mps")
+        assert answer["ok"] is False and "mps" in answer["error"]
+
+    def test_downloading_before_linearizing_says_so(self, thermo):
+        assert FlowsheetSession(build_flowsheet(thermo)).linearization_files(
+            "json") == {"ok": False, "error": "nothing linearized yet"}
+
+    def test_the_route_is_guarded_because_it_writes(self, thermo):
+        """It persists the selection, so it goes through the token check."""
+        live = Client(FlowsheetSession(build_flowsheet(thermo)))
+        try:
+            status, payload = live.post(
+                "/api/linearize", {"u": self.LEVERS, "y": self.OUTPUTS},
+                headers={gui.TOKEN_HEADER: "wrong"})
+            assert status == 403 and payload["ok"] is False
+
+            live.post("/api/solve")
+            status, answer = live.post(
+                "/api/linearize", {"u": self.LEVERS, "y": self.OUTPUTS})
+            assert status == 200 and answer["ok"], answer
+            assert answer["table"].startswith("delta vectors for block")
+
+            _, files = live.post("/api/linearize/files", {"format": "csv"})
+            assert files["ok"] and files["files"]
+        finally:
+            live.close()
+
+    def test_the_assistant_can_brief_on_the_linearization(self, thermo):
+        """`context.pack(kind="planning")` reads what linearize stored."""
+        session = FlowsheetSession(build_flowsheet(thermo))
+        session.solve()
+        assert context.pack(session, kind="planning")["ok"] is False
+
+        session.linearize(self.LEVERS, self.OUTPUTS)
+        pack = context.pack(session, kind="planning", question="what is this?")
+        assert pack["ok"] and "reactor_V" in pack["prompt"]
+        assert "trust radius" in pack["prompt"]
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
