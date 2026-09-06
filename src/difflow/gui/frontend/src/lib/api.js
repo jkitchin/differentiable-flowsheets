@@ -65,9 +65,14 @@ async function request(path, init) {
 
 export const get = (path) => request(path)
 
-export const post = (path, payload) =>
+/** POST / PATCH / DELETE, all of which carry a JSON body here. */
+export const send = (method, path, payload) =>
   request(path, {
-    method: 'POST',
+    method,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(safe(payload ?? {})),
   })
+
+export const post = (path, payload) => send('POST', path, payload)
+export const patch = (path, payload) => send('PATCH', path, payload)
+export const del = (path, payload) => send('DELETE', path, payload)

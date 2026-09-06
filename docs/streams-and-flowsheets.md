@@ -606,7 +606,13 @@ gui.serve(fs, path="plant.json")
 
 Two pages are served, and they are at different stages.
 
-`/` is the **canvas**: the flowsheet as a node graph, laid out automatically, pan and zoom, feeds banked left and products right, recycle edges dashed and orange. It is read-only for the moment — it draws what `GET /api/flowsheet` returns and nothing more — and editing is being built onto it.
+`/` is the **canvas**: the flowsheet as a node graph, laid out automatically, pan and zoom, feeds banked left and products right, recycle edges dashed and orange. Drag an operation off the palette to drop a unit; drag from a unit's outlet port to another unit's inlet to wire it; drag a box to move it; select and press Delete to remove. Every gesture is one request and then a redraw from the answer, so the picture cannot drift from the model.
+
+Two things about wiring are worth knowing before you use it, because both are properties of difflow rather than of the editor. A **stream name is the wiring**: connecting an outlet to an inlet renames the inlet, it does not add an arc, so the downstream unit's port is called whatever the upstream unit's outlet is called. And a **loop is a tear, never an arc**: if the wire you draw would close a cycle, the editor records a recycle instead — the same thing `add_recycle` does — and the edge draws dashed with both stream names on it, because the two ends carry different names.
+
+Feed and product nodes are drawn *from* the topology; they are stream names with nothing on one end rather than objects the flowsheet holds, so they are not draggable endpoints. A unit dropped from the palette arrives unwired with a dangling stream on each port, which is why it appears with feed-ish and product-ish stubs until you connect it.
+
+Parameter editing, the docstring inspector and the results panel are being built onto the canvas; until they land, `/classic` is where you change a number.
 
 `/classic` is the **form editor**, and it is the one that can currently change a model: a palette of every registered operation with its port arity, an SVG of the topology, editable parameter fields per unit, and a panel that switches between solved stream values and the generated Python. **Solve** re-solves the edited model; **Save** writes the JSON; **Python** shows what `codegen.to_python` would produce. It stays until the canvas covers what it does; each page links to the other in its header.
 
@@ -626,7 +632,23 @@ from difflow.gui import FlowsheetSession, make_server
 server = make_server(FlowsheetSession(fs), port=0)   # 0 => any free port
 ```
 
-The routes are `GET /api/catalog`, `GET /api/flowsheet`, `GET /api/code`, and `POST /api/flowsheet`, `/api/solve`, `/api/save`. A failed solve or a rejected edit comes back as `{"ok": false, "error": ...}` rather than a traceback at the socket, so a bad edit from the browser cannot take the server down.
+The routes are:
+
+| Route | What it does |
+|---|---|
+| `GET /api/catalog` | every registered operation, its ports and its parameters |
+| `GET /api/flowsheet` | the document, with `view.nodes` filled in |
+| `GET /api/code` | `codegen.to_python` of the current model |
+| `POST /api/flowsheet` | replace the whole model (load a file) |
+| `POST /api/solve`, `/api/save` | solve; write the JSON |
+| `PATCH /api/unit/<name>` | one unit's `params`, `name` or `position` |
+| `POST` / `DELETE /api/unit[/<name>]` | add one from the palette; remove one |
+| `POST` / `DELETE /api/connect` | wire or unwire, body `{source, outlet, target, inlet}` |
+| `POST /api/layout` | positions only, no rebuild and no solve |
+
+A failed solve or a rejected edit comes back as `{"ok": false, "error": ...}` with a **200** rather than a traceback at the socket: it is an answer about the flowsheet, not a failure of the request, and a bad edit from the browser cannot take the server down. Only malformed JSON and an unrouted path get a 4xx.
+
+The incremental routes exist because `POST /api/flowsheet` re-runs `serialize.from_dict` and re-instantiates every unit — wrong twice over for a canvas, since it costs a full reconstruction per keystroke and it drops any constructor object the file cannot carry. `PATCH` rebuilds only the unit you touched and hands its `thermo` back **by identity**, so a hand-built one survives an edit that JSON could not have round-tripped. A unit dropped from the palette takes `species_order` from the flowsheet; one that needs a `thermo` is refused with the message that names what is missing, until the code context can supply one. Removing a unit also drops any recycle naming its streams, which would otherwise tear a stream nothing produces and fail the solve somewhere far from the edit.
 
 `difflow.gui` is a package rather than one module: `session.py` holds the flowsheet and everything that can be done to it, `server.py` holds the wire encoding and the routes, and `static/` holds the page as files on disk. `FlowsheetSession` needs no socket, so the interesting half — load, edit, solve, emit code — is usable and testable on its own:
 
@@ -638,7 +660,7 @@ session.solve()["converged"]
 session.code()["source"]
 ```
 
-`GET /api/flowsheet` fills in `view.nodes` when the document has none, from `difflow.gui.layout.auto_layout` — a longest-path column assignment with feeds banked left and dangling products right, shared with `difflow.report.diagram` so a report and the canvas agree on where a unit sits. Recycle edges are left out of the path length, which is what makes a recycle draw as an arrow going back rather than as another column. The positions are served, not adopted: opening a file does not give it a `view`, and coordinates reach disk only when the user saves.
+`GET /api/flowsheet` fills in `view.nodes` when the document has none, from `difflow.gui.layout.auto_layout` — a longest-path column assignment with feeds banked left and dangling products right, shared with `difflow.report.diagram` so a report and the canvas agree on where a unit sits. Recycle edges are left out of the path length, which is what makes a recycle draw as an arrow going back rather than as another column. The positions are served, not adopted: opening a file does not give it a `view`, and coordinates reach disk only when the user saves. Stored positions sit on top of the automatic ones rather than replacing them, so moving one box does not send every other node back to the browser unplaced.
 
 Anything else under `static/` is served alongside the page, by an allow-list of the suffixes a front-end build emits (`.html`, `.js`, `.css`, `.json`, `.svg`, `.map`, `.woff2`, `.ico`); the page is re-read from disk on every request, so a rebuilt bundle appears on reload rather than on restart.
 
@@ -654,7 +676,7 @@ make gui FLOWSHEET=plant.json
 
 The one thing that can go wrong with committed build output is drift — source edited, bundle not rebuilt — so CI reruns `gui-build` and fails if `static/` differs from the commit.
 
-The graph functions that turn a serialized flowsheet into nodes and edges (`frontend/src/lib/model/graph.js`) are plain JavaScript with no framework in them, and they are tested under bare `node --test`. `tests/test_gui.py` runs those same files when node is on `PATH` and skips when it is not: node is a tool for building difflow, never a dependency of it.
+The functions that turn a serialized flowsheet into nodes and edges (`frontend/src/lib/model/graph.js`) and the ones that turn a canvas gesture into a request (`model/edit.js`) are plain JavaScript with no framework in them, and they are tested under bare `node --test`. That is where the testing effort goes on purpose: a wire attached to the wrong port, or a delete sent to the wrong endpoint, looks exactly like one that worked until the next reload. `tests/test_gui.py` runs those same files when node is on `PATH` and skips when it is not: node is a tool for building difflow, never a dependency of it.
 
 One wrinkle worth knowing: JSON has no literal for the non-finite floats, and `JSON.parse` rejects the `Infinity` that Python's `json` writes. This is the *common* case, not an exotic one — `mass_action_kinetics` puts `inf` in `K_eq` for every irreversible reaction — so those values travel as the strings `"Infinity"`, `"-Infinity"` and `"NaN"`, and are restored on the way back.
 

@@ -51,8 +51,13 @@ class FlowsheetSession:
             return {"flowsheet": None, "path": str(self.path or "")}
         document = serialize.to_dict(self.flowsheet)
         document.setdefault("view", {})
-        if not document["view"].get("nodes"):
-            document["view"]["nodes"] = self.layout()
+        # Auto-layout underneath, stored positions on top. Not "one or the
+        # other": the moment the user drags one node the flowsheet has a
+        # `view.nodes` with a single entry in it, and serving only that
+        # would send every other node back to the browser unplaced.
+        document["view"]["nodes"] = {
+            **self.layout(), **(document["view"].get("nodes") or {})
+        }
         return {"flowsheet": document, "path": str(self.path or "")}
 
     def layout(self) -> dict:

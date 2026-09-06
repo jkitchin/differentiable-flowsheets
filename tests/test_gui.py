@@ -170,9 +170,11 @@ class TestRoutes:
             "nodes": {"reactor": {"x": 999.0, "y": 999.0}}
         }
         _, doc = client.get_json("/api/flowsheet")
-        assert doc["flowsheet"]["view"]["nodes"] == {
-            "reactor": {"x": 999.0, "y": 999.0}
-        }, "a hand-placed canvas must not be re-laid-out under the user"
+        nodes = doc["flowsheet"]["view"]["nodes"]
+        assert nodes["reactor"] == {"x": 999.0, "y": 999.0}, (
+            "a hand-placed canvas must not be re-laid-out under the user"
+        )
+        assert "flash" in nodes, "but a node it never placed still needs one"
 
     def test_the_python_export_is_served(self, client):
         status, payload = client.get_json("/api/code")
@@ -375,6 +377,17 @@ class TestIncrementalRoutes:
         client.post("/api/layout", {"nodes": {"reactor": {"x": 40, "y": 12}}})
         _, doc = client.get_json("/api/flowsheet")
         assert doc["flowsheet"]["view"]["nodes"]["reactor"] == {"x": 40, "y": 12}
+
+    def test_one_moved_node_does_not_unplace_the_others(self, client):
+        """Dragging one box must not scatter the rest of the flowsheet."""
+        _, before = client.get_json("/api/flowsheet")
+        placed = set(before["flowsheet"]["view"]["nodes"])
+        client.post("/api/layout", {"nodes": {"reactor": {"x": 40, "y": 12}}})
+        _, after = client.get_json("/api/flowsheet")
+        assert set(after["flowsheet"]["view"]["nodes"]) == placed
+        for name in placed - {"reactor"}:
+            assert after["flowsheet"]["view"]["nodes"][name] == \
+                before["flowsheet"]["view"]["nodes"][name]
 
     def test_an_unrouted_verb_is_a_404(self, client):
         assert client.patch("/api/nothing")[0] == 404
