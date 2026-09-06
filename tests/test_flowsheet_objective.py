@@ -196,3 +196,105 @@ class TestApplyParamsErrors:
 
         with pytest.raises(ValueError, match="dot notation"):
             objective({"reactor_V": jnp.array(1.0)})
+
+
+# ---------------------------------------------------------------------------
+# Tests: feed streams as levers
+# ---------------------------------------------------------------------------
+
+
+class TestFeedStreamParams:
+    """``feed:<name>.<field>`` keys make feed rate and composition levers."""
+
+    def test_total_flow_scales_the_feed(self, cstr_flowsheet):
+        fs = cstr_flowsheet._apply_params({"feed:feed.total_flow": 20.0})
+
+        assert float(fs.feeds["feed"]["F_A"]) == pytest.approx(20.0)
+        # Composition held: B was zero and stays zero.
+        assert float(fs.feeds["feed"]["F_B"]) == pytest.approx(0.0)
+        # Original untouched.
+        assert float(cstr_flowsheet.feeds["feed"]["F_A"]) == pytest.approx(10.0)
+
+    def test_mole_fraction_holds_the_total(self, cstr_flowsheet):
+        fs = cstr_flowsheet._apply_params({"feed:feed.x_B": 0.25})
+        feed = fs.feeds["feed"]
+
+        assert float(feed["F_A"] + feed["F_B"]) == pytest.approx(10.0)
+        assert float(feed["F_B"]) == pytest.approx(2.5)
+        assert float(feed["F_A"]) == pytest.approx(7.5)
+
+    def test_conditions_and_species_flows(self, cstr_flowsheet):
+        fs = cstr_flowsheet._apply_params({
+            "feed:feed.T": 320.0,
+            "feed:feed.P": 2e5,
+            "feed:feed.F_B": 1.0,
+        })
+        feed = fs.feeds["feed"]
+
+        assert float(feed["T"]) == pytest.approx(320.0)
+        assert float(feed["P"]) == pytest.approx(2e5)
+        assert float(feed["F_B"]) == pytest.approx(1.0)
+
+    def test_feed_and_unit_keys_together(self, cstr_flowsheet):
+        fs = cstr_flowsheet._apply_params({
+            "reactor.V": jnp.array(3.0),
+            "feed:feed.total_flow": 5.0,
+        })
+
+        assert float(fs.units[0].operation.params.V) == pytest.approx(3.0)
+        assert float(fs.feeds["feed"]["F_A"]) == pytest.approx(5.0)
+
+    def test_unknown_feed_name_raises(self, cstr_flowsheet):
+        with pytest.raises(KeyError, match="No feed stream named"):
+            cstr_flowsheet._apply_params({"feed:nope.total_flow": 1.0})
+
+    def test_unknown_feed_field_raises(self, cstr_flowsheet):
+        with pytest.raises(KeyError, match="Unknown feed field"):
+            cstr_flowsheet._apply_params({"feed:feed.enthalpy": 1.0})
+
+    def test_missing_dot_raises(self, cstr_flowsheet):
+        with pytest.raises(ValueError, match="feed:<stream_name>"):
+            cstr_flowsheet._apply_params({"feed:feed": 1.0})
+
+    def test_objective_varies_with_feed_rate(self, cstr_flowsheet):
+        objective = cstr_flowsheet.make_objective_fn(
+            lambda streams: streams["product"]["F_B"]
+        )
+
+        small = float(objective({"feed:feed.total_flow": jnp.array(5.0)}))
+        large = float(objective({"feed:feed.total_flow": jnp.array(20.0)}))
+
+        assert large > small
+
+    def test_gradient_through_a_feed_lever(self, cstr_flowsheet):
+        """The whole point: d(product)/d(feed rate) must be finite and right."""
+        objective = cstr_flowsheet.make_objective_fn(
+            lambda streams: streams["product"]["F_B"]
+        )
+
+        def scalar(F):
+            return objective({"feed:feed.total_flow": F})
+
+        F0 = jnp.array(10.0)
+        g = float(jax.grad(scalar)(F0))
+        h = 1e-4
+        fd = (float(scalar(F0 + h)) - float(scalar(F0 - h))) / (2 * h)
+
+        assert jnp.isfinite(g)
+        assert g == pytest.approx(fd, rel=1e-5)
+
+    def test_gradient_through_a_composition_lever(self, cstr_flowsheet):
+        objective = cstr_flowsheet.make_objective_fn(
+            lambda streams: streams["product"]["F_B"]
+        )
+
+        def scalar(x):
+            return objective({"feed:feed.x_B": x})
+
+        x0 = jnp.array(0.2)
+        g = float(jax.grad(scalar)(x0))
+        h = 1e-5
+        fd = (float(scalar(x0 + h)) - float(scalar(x0 - h))) / (2 * h)
+
+        assert jnp.isfinite(g)
+        assert g == pytest.approx(fd, rel=1e-4)
