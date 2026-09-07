@@ -166,11 +166,42 @@ class FlowsheetSession:
     # -- reads --------------------------------------------------------
 
     def catalog(self) -> dict:
-        from difflow.catalog import catalog
+        """The operations, each answered against what is in scope now.
 
-        return {
-            name: spec.to_dict() for name, spec in catalog().items()
-        }
+        ``buildable`` on the bare schema is a property of the class: it
+        asks whether a *form* could construct one. The palette needs a
+        narrower answer --- whether a drop, right now, in this session,
+        would succeed --- and the two differ. ``AbsorberParams.solvent``
+        is a required ``str``: no callable, no constructor object, so
+        the class reads as buildable, and yet nothing can invent a
+        solvent name, so the drop fails. Serving the class's answer put
+        that disagreement in front of the user as a traceback.
+
+        So each entry carries ``needs``, from :func:`difflow.gui.edit.unmet`
+        --- the same function the adder refuses with, so the palette
+        cannot promise a unit that will not drop --- and ``buildable``
+        is narrowed to mean it. Because ``needs`` is computed against
+        the code context's bindings, an operation stops being flagged
+        the moment the binding it wanted appears; the page refetches
+        the catalog whenever the code context changes.
+        """
+        from difflow.catalog import _default_registry, catalog
+        from difflow.gui import edit
+
+        classes = {name: info.cls
+                   for name, info in _default_registry().list_operations().items()}
+        out = {}
+        for name, spec in catalog().items():
+            entry = spec.to_dict()
+            cls = classes.get(name)
+            if cls is not None:
+                needs = edit.unmet(self.flowsheet, cls, self.bindings)
+                entry["needs"] = needs
+                entry["buildable"] = not needs
+            else:
+                entry["needs"] = [] if entry.get("buildable") else ["code"]
+            out[name] = entry
+        return out
 
     def document(self) -> dict:
         from difflow import serialize
@@ -436,15 +467,38 @@ class FlowsheetSession:
                 raise edit.EditError(str(exc)) from exc
             from difflow.catalog import _params_class
 
-            values, placeholders = edit.known_params(
+            values, placeholders, missing = edit.known_params(
                 self.flowsheet, _params_class(info.cls), self.bindings
             )
+            # Ask before building. `_build_operation` raises through the
+            # file-loading path, whose message offers "written by a
+            # different version of difflow" as the diagnosis -- true of a
+            # file, and nonsense about a unit dropped from the palette a
+            # second ago. The palette flagged this same list.
+            unmet = [a for a in edit.constructor_extras(info.cls)
+                     if a not in override] + missing
+            if unmet:
+                raise edit.EditError(
+                    self._needs_hint(operation, info.cls, unmet)
+                )
             try:
                 built = _build_operation(
                     info.cls, values, unit_name, override=override,
                 )
             except SerializationError as exc:
                 raise edit.EditError(self._missing_hint(str(exc))) from exc
+            except (ValueError, TypeError) as exc:
+                # The class refusing on its own terms. `Transformer` says
+                # "needs an off-nominal tap or a phase shift; with tap=1
+                # and shift=0 this is a line", which is worth more than
+                # anything generic written here -- so it is quoted, not
+                # replaced. Unpredictable ahead of the call, which is why
+                # `needs` being empty promises a clean answer and not a
+                # successful one.
+                raise edit.EditError(
+                    f"{operation} refused the parameters a palette drop "
+                    f"can supply: {exc}"
+                ) from exc
             ports = describe_class(info.cls).to_dict()["ports"]
             inlets, outlets = edit.default_ports(
                 unit_name, ports, edit.stream_names(self.flowsheet)
@@ -458,6 +512,47 @@ class FlowsheetSession:
                     "placeholders": placeholders}
 
         return self._edit(apply)
+
+    def _needs_hint(self, operation: str, cls, unmet: list[str]) -> str:
+        """Refuse a drop by naming what has to exist first.
+
+        The useful sentence names the thing, not the failure: a reader
+        told ``rate_fn`` knows what to write, and one told that a
+        constructor is missing arguments does not.
+
+        Two kinds get two sentences, because conflating them misleads.
+        A ``thermo`` or a ``rate_fn`` is genuinely code and no form
+        could ever hold it. ``AbsorberParams.solvent`` is a ``str``:
+        ordinary data, which the palette merely has no way to guess,
+        and calling that "code" tells the reader the wrong thing about
+        their own model. Both are answered in the code context --- a
+        bare ``solvent = "MEA"`` there is matched by field name --- so
+        the route is one sentence even though the diagnosis is two.
+        """
+        from difflow.catalog import describe_class
+        from difflow.serialize import constructor_extras
+
+        extras = set(constructor_extras(cls))
+        callables = {p["name"] for p in describe_class(cls).to_dict()["parameters"]
+                     if p.get("is_callable")}
+        code = [n for n in unmet if n in extras or n in callables]
+        data = [n for n in unmet if n not in extras and n not in callables]
+
+        if code and data:
+            what = (f"{', '.join(code)} (code rather than data) and "
+                    f"{', '.join(data)} (no value it could guess)")
+        elif code:
+            what = f"{', '.join(code)}, which is code rather than data"
+        else:
+            what = f"{', '.join(data)}, which it has no way to guess"
+        have = ", ".join(sorted(self.bindings)) or "nothing"
+        hint = (f"{operation} needs {what}. Define it in the code context "
+                f"(which currently defines {have}) and drop the unit again")
+        if any(n in unmet for n in ("rate_fn", "stoich", "rate_params",
+                                    "kinetic_fn", "kinetic_params")):
+            hint += (" -- mass_action_kinetics() returns the rate law, the "
+                     "stoichiometry and the rate parameters at once")
+        return hint + "."
 
     def _missing_hint(self, message: str) -> str:
         """Point a "requires X" refusal at the code context."""

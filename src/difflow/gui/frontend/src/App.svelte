@@ -108,6 +108,10 @@
   async function applyContext(source) {
     const answer = await edit(() => post('/api/code-context', { source }))
     await loadContext()
+    // The palette's flags are answered against these bindings, so a
+    // `thermo` defined here un-blocks every unit that wanted one. Refetch
+    // rather than reason about which: the server already knows.
+    catalog = await get('/api/catalog')
     if (answer?.ok) note = `code context: ${answer.names.length} names defined`
     return answer
   }

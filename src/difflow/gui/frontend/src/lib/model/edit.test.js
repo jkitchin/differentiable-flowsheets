@@ -152,6 +152,61 @@ test('an unbuildable operation is kept and flagged', () => {
   assert.deepEqual(group.ops[0].needs, ['thermo'])
 })
 
+test('the served needs list beats the class-level buildable flag', () => {
+  // The catalog's own `buildable` asks whether a form could construct
+  // the class. The server answers a narrower question -- whether a drop
+  // would succeed here, now -- and where they disagree the server wins,
+  // because it is the one the adder also consults. AbsorberParams.solvent
+  // is a required str: no callable, no constructor object, so the class
+  // reads as buildable and the drop still fails.
+  const [group] = paletteGroups({
+    AmineAbsorber: { category: 'capture', buildable: true, needs: ['solvent'] },
+  })
+  assert.equal(group.ops[0].buildable, false)
+  assert.deepEqual(group.ops[0].needs, ['solvent'])
+})
+
+test('an empty needs list un-blocks an operation the class calls unbuildable', () => {
+  // What the code context defines changes the answer: once a thermo
+  // exists, a Flash is droppable even though its class still requires
+  // one. The row has to un-dim, or defining the binding looks like it
+  // did nothing.
+  const [group] = paletteGroups({
+    Flash: { category: 'separation', buildable: false, needs: [] },
+  })
+  assert.equal(group.ops[0].buildable, true)
+})
+
+test('a catalog with no needs field falls back to constructor_extras', () => {
+  // An older difflow serving this page knows about `thermo` and cannot
+  // know about a missing `rate_fn`. Reading the old field keeps the
+  // flagging it could do rather than dropping it entirely.
+  const [group] = paletteGroups({
+    Flash: { category: 'separation', buildable: false, constructor_extras: ['thermo'] },
+  })
+  assert.equal(group.ops[0].buildable, false)
+  assert.deepEqual(group.ops[0].needs, ['thermo'])
+})
+
+test('hideBlocked drops the ones waiting on something, and only those', () => {
+  const catalog = {
+    Mixer: { category: 'mixing', needs: [] },
+    Flash: { category: 'separation', needs: ['thermo'] },
+  }
+  const names = (hide) =>
+    paletteGroups(catalog, '', hide).flatMap((g) => g.ops.map((o) => o.name))
+  assert.deepEqual(names(false), ['Mixer', 'Flash'])
+  assert.deepEqual(names(true), ['Mixer'])
+})
+
+test('hiding every operation in a category drops the category too', () => {
+  // An empty heading is worse than no heading: it reads as a loading bug.
+  const groups = paletteGroups(
+    { Flash: { category: 'separation', needs: ['thermo'] } }, '', true,
+  )
+  assert.deepEqual(groups, [])
+})
+
 test('the search reads names, categories and descriptions', () => {
   const catalog = {
     CSTR: { category: 'reactors', description: 'A stirred tank.' },

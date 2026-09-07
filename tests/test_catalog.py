@@ -193,6 +193,46 @@ class TestParameters:
         assert by_name["T_damping"].default == "0.3"
         assert by_name["V"].default is None
 
+    def test_a_params_annotation_in_quotes_still_resolves(self, cat):
+        """`params: "SplitParams"` arrives here as a string WITH its quotes.
+
+        Under ``from __future__ import annotations`` an already-quoted
+        annotation is stringified a second time, so the lookup name is
+        ``'SplitParams'`` and not ``SplitParams``. The failure is silent
+        and total: no Params class means no parameters, so the operation
+        offers an empty inspector and cannot be dropped at all.
+        """
+        pytest.importorskip("difflow_power")
+        spec = cat.get("PowerSplit")
+        if spec is None:
+            pytest.skip("difflow_power not registered")
+        assert spec.params_class == "SplitParams"
+        assert [p.name for p in spec.parameters] == ["fraction"]
+
+    def test_every_operation_that_takes_params_found_the_class(self, cat):
+        """An operation whose ``__init__`` wants a Params must resolve one.
+
+        The quoted-annotation case was invisible precisely because a
+        missing Params class looks like an operation that takes none.
+        """
+        import inspect
+
+        from difflow.catalog import _default_registry
+
+        unresolved = []
+        for name, info in _default_registry().list_operations().items():
+            try:
+                sig = inspect.signature(info.cls.__init__)
+            except (TypeError, ValueError):
+                continue
+            args = [p for n, p in sig.parameters.items() if n != "self"]
+            if not args:
+                continue
+            wants = "Params" in str(args[0].annotation)
+            if wants and cat[name].params_class is None:
+                unresolved.append((name, args[0].annotation))
+        assert not unresolved
+
     def test_callable_fields_are_flagged(self, cat):
         """The fields a form cannot fill in."""
         assert set(cat["CSTR"].callable_parameters) == {

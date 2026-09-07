@@ -644,6 +644,122 @@ class TestPalette:
             assert ports["variadic"] or ports["n_inlets"] is not None, name
 
 
+class TestWhatBlocksADrop:
+    """The palette's flag and the adder's refusal, which must agree.
+
+    They did not. The catalog answered a question about the *class* ---
+    could a form construct one --- and the adder answered a question
+    about this session, and where the two differed the user got a
+    traceback from the file-loading path offering "written by a
+    different version of difflow" as the diagnosis of a unit dropped one
+    second earlier.
+    """
+
+    def test_the_catalog_names_the_fields_and_not_just_the_extras(self, client):
+        """`constructor_extras` is empty for a CSTR; the rate law is not."""
+        _, catalog = client.get_json("/api/catalog")
+        assert catalog["CSTR"]["constructor_extras"] == []
+        assert catalog["CSTR"]["needs"] == ["rate_fn", "stoich", "rate_params"]
+        assert catalog["Flash"]["needs"] == ["thermo"]
+        assert catalog["Heater"]["needs"] == []
+
+    def test_a_required_string_blocks_a_drop_the_class_calls_buildable(self, client):
+        """The regression. No callable, no constructor object, still undroppable.
+
+        ``AbsorberParams.solvent`` is a ``str``, so ``is_buildable`` --- which
+        looks for required *callables* and constructor arguments --- says
+        yes, and nothing can invent a solvent name.
+        """
+        pytest.importorskip("difflow_cc")
+        _, catalog = client.get_json("/api/catalog")
+        spec = catalog.get("AmineAbsorber")
+        if spec is None:
+            pytest.skip("difflow_cc not registered")
+        assert spec["needs"] == ["solvent"]
+        assert spec["buildable"] is False
+
+    def test_the_flag_and_the_refusal_cannot_disagree(self, client):
+        """The invariant, over every operation the catalog offers.
+
+        A non-empty ``needs`` must mean the drop is refused, and an empty
+        one must mean it is *answered* --- either it lands, or the class
+        refuses on its own terms with a message about the model. What it
+        must never mean is a 400, a traceback, or a claim about difflow
+        versions.
+
+        Empty ``needs`` promises a clean answer rather than a successful
+        one on purpose: a class can validate whatever it likes, and
+        ``Transformer`` rejecting ``tap=1, shift=0`` as "this is a line"
+        is the model being right. Nothing short of constructing one can
+        know that in advance.
+
+        Checked exhaustively rather than by sampling, because the cases
+        that matter are the ones nobody thought to name --- a required
+        ``str``, an annotation in quotes.
+        """
+        _, catalog = client.get_json("/api/catalog")
+        wrong = []
+        for name, spec in catalog.items():
+            status, answer = client.post("/api/unit", {"operation": name})
+            if status != 200:
+                wrong.append((name, f"HTTP {status}"))
+                continue
+            if spec["needs"] and answer["ok"]:
+                wrong.append((name, "flagged, but dropped anyway"))
+            if not spec["needs"] and not answer["ok"]:
+                if "different version" in (answer.get("error") or ""):
+                    wrong.append((name, answer["error"]))
+            if answer["ok"]:
+                client.delete(f"/api/unit/{answer['name']}")
+        assert not wrong
+
+    def test_a_class_that_refuses_its_own_parameters_is_quoted(self, client):
+        """`Transformer` explains itself better than any generic message."""
+        _, catalog = client.get_json("/api/catalog")
+        if "Transformer" not in catalog:
+            pytest.skip("difflow_power not registered")
+        assert catalog["Transformer"]["needs"] == []
+        status, answer = client.post("/api/unit", {"operation": "Transformer"})
+        assert status == 200, "the class refusing is an answer, not a bad request"
+        assert answer["ok"] is False
+        assert "this is a line" in answer["error"]
+
+    def test_a_refusal_names_the_field_and_blames_no_version(self, client):
+        _, answer = client.post("/api/unit", {"operation": "CSTR"})
+        assert answer["ok"] is False
+        assert "rate_fn" in answer["error"]
+        assert "different version of difflow" not in answer["error"]
+        assert "mass_action_kinetics" in answer["error"], "offer the easy route"
+
+    def test_the_refusal_separates_code_from_data(self, client):
+        """Calling a required `str` "code" tells the reader something false."""
+        pytest.importorskip("difflow_cc")
+        _, answer = client.post("/api/unit", {"operation": "AmineAbsorber"})
+        if answer["ok"]:
+            pytest.skip("difflow_cc not registered")
+        assert "no way to guess" in answer["error"]
+        assert "code rather than data" not in answer["error"]
+
+    def test_a_binding_unblocks_the_unit_that_wanted_it(self, client):
+        """The round trip the message promises has to actually work."""
+        assert client.get_json("/api/catalog")[1]["Flash"]["needs"] == ["thermo"]
+        assert not client.post("/api/unit", {"operation": "Flash"})[1]["ok"]
+
+        client.post("/api/code-context", {"source": THERMO_CONTEXT})
+
+        assert client.get_json("/api/catalog")[1]["Flash"]["needs"] == []
+        assert client.post("/api/unit", {"operation": "Flash"})[1]["ok"]
+
+    def test_a_bare_value_in_the_context_counts_as_a_binding(self, client):
+        """`solvent = "MEA"` is matched by field name, so the hint is true."""
+        pytest.importorskip("difflow_cc")
+        if "AmineAbsorber" not in client.get_json("/api/catalog")[1]:
+            pytest.skip("difflow_cc not registered")
+        client.post("/api/code-context", {"source": "solvent = 'MEA'\n"})
+        assert client.get_json("/api/catalog")[1]["AmineAbsorber"]["needs"] == []
+        assert client.post("/api/unit", {"operation": "AmineAbsorber"})[1]["ok"]
+
+
 class TestBuilding:
     def test_a_unit_added_from_the_palette_reaches_the_model(self, client):
         _, doc = client.get_json("/api/flowsheet")

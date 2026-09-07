@@ -339,10 +339,17 @@ def _params_class(cls: type) -> type | None:
         ann = param.annotation
         if dataclasses.is_dataclass(ann):
             return ann
-        if isinstance(ann, str) and ann.endswith("Params"):
-            found = getattr(inspect.getmodule(cls), ann, None)
-            if dataclasses.is_dataclass(found):
-                return found
+        if isinstance(ann, str):
+            # Strip the quotes before looking it up. A source that writes
+            # `params: "SplitParams"` under `from __future__ import
+            # annotations` arrives here as the string `'SplitParams'`
+            # WITH its quote characters, which ends with neither "Params"
+            # nor any attribute name the module has.
+            text = ann.strip().strip("'\"")
+            if text.endswith("Params"):
+                found = getattr(inspect.getmodule(cls), text, None)
+                if dataclasses.is_dataclass(found):
+                    return found
         break
     guess = getattr(inspect.getmodule(cls), f"{cls.__name__}Params", None)
     return guess if dataclasses.is_dataclass(guess) else None

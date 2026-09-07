@@ -128,24 +128,33 @@ export function dropPosition(rect, viewport, clientX, clientY, offset = { x: 70,
 /**
  * The palette, grouped by catalog category and filtered by a query.
  *
- * Unbuildable operations are kept and flagged rather than hidden: 34 of
- * the 87 need a `thermo` or a rate law, and a palette that cannot show a
- * CSTR is not a palette. What they need is on the entry, so the UI can
- * say why rather than merely refusing.
+ * Unbuildable operations are kept and flagged rather than hidden: over
+ * half the catalog needs a `thermo` or a rate law, and a palette that
+ * cannot show a CSTR is not a palette. `hideBlocked` is there because
+ * that is a defensible preference and not because it is the default.
+ *
+ * `needs` comes from the server, which answers it against the code
+ * context as it stands rather than against the class -- so an entry
+ * stops being flagged once the binding it wanted exists. It falls back
+ * to `constructor_extras` for a catalog served by an older difflow,
+ * where the field is absent and a missing `rate_fn` cannot be known.
  */
-export function paletteGroups(catalog, query = '') {
+export function paletteGroups(catalog, query = '', hideBlocked = false) {
   const needle = query.trim().toLowerCase()
   const groups = new Map()
   for (const [name, spec] of Object.entries(catalog || {})) {
     const haystack = `${name} ${spec.category || ''} ${spec.description || ''}`
     if (needle && !haystack.toLowerCase().includes(needle)) continue
+    const needs = spec.needs ?? spec.constructor_extras ?? []
+    const buildable = spec.needs ? !needs.length : spec.buildable !== false
+    if (hideBlocked && !buildable) continue
     const category = spec.category || 'other'
     if (!groups.has(category)) groups.set(category, [])
     groups.get(category).push({
       name,
       description: spec.description || '',
-      buildable: spec.buildable !== false,
-      needs: spec.constructor_extras || [],
+      buildable,
+      needs,
       ports: spec.ports || {},
     })
   }

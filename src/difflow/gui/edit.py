@@ -196,14 +196,16 @@ def known_params(flowsheet, params_cls, bindings: dict | None = None):
     * for a plain number and nothing else, :data:`PLACEHOLDER`.
 
     Returns:
-        ``(values, placeholders)``, where ``placeholders`` names the
+        ``(values, placeholders, missing)``. ``placeholders`` names the
         fields that got a made-up number and so must be shown to the
-        user rather than trusted.
+        user rather than trusted; ``missing`` names the required fields
+        that none of the four sources could supply, which is what makes
+        the unit undroppable until the code context grows a binding.
     """
     import dataclasses
 
     if params_cls is None or not dataclasses.is_dataclass(params_cls):
-        return {}, []
+        return {}, [], []
     order = list(getattr(flowsheet, "species_order", None) or [])
     kwargs = {}
     for value in (bindings or {}).values():
@@ -214,7 +216,7 @@ def known_params(flowsheet, params_cls, bindings: dict | None = None):
             except Exception:            # not the kind of object we hoped
                 pass
 
-    values, placeholders = {}, []
+    values, placeholders, missing = {}, [], []
     for f in dataclasses.fields(params_cls):
         if (f.default is not dataclasses.MISSING
                 or f.default_factory is not dataclasses.MISSING):
@@ -228,7 +230,35 @@ def known_params(flowsheet, params_cls, bindings: dict | None = None):
         elif _is_number(f.type):
             values[f.name] = PLACEHOLDER
             placeholders.append(f.name)
-    return values, placeholders
+        else:
+            # A rate law, a stoichiometry, a solvent name: required, and
+            # not a number, so there is nothing honest to invent. Naming
+            # it is the whole answer -- it is what the palette flags and
+            # what the refusal quotes.
+            missing.append(f.name)
+    return values, placeholders, missing
+
+
+def unmet(flowsheet, cls: type, bindings: dict | None = None) -> list[str]:
+    """What a palette drop of ``cls`` cannot supply for itself.
+
+    The one definition of "droppable", used by both the served catalog
+    and :meth:`~difflow.gui.session.FlowsheetSession.add_unit`, because
+    a palette that promises a unit the adder then refuses is worse than
+    either being wrong alone. It reports constructor objects and
+    required ``Params`` fields in one list, since from the canvas they
+    are the same problem: something has to exist before this unit can.
+
+    It is answered against the *current* bindings, so it changes as the
+    code context grows. One ``thermo = IdealThermo(...)`` empties this
+    list for every unit that was waiting on a ``thermo``.
+    """
+    from difflow.catalog import _params_class
+
+    have = known_extras(flowsheet, cls, bindings)
+    needs = [a for a in constructor_extras(cls) if a not in have]
+    _, _, missing = known_params(flowsheet, _params_class(cls), bindings)
+    return needs + missing
 
 
 def encoded_params(operation, unit_name: str) -> dict:
