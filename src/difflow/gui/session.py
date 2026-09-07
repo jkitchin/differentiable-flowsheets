@@ -96,6 +96,9 @@ class FlowsheetSession:
         self.solve_error: str | None = None
         #: the last linearization, or None. Set by :meth:`linearize`.
         self.delta_vectors = None
+        #: the console's namespace, made on first use. A session that
+        #: never opens the panel pays nothing for it.
+        self._console = None
         if flowsheet is None and self.path and self.path.exists():
             self._load(self.path)
         elif flowsheet is not None:
@@ -684,3 +687,99 @@ class FlowsheetSession:
                     "files": planning.files(dvs, fmt, stem)}
         except Exception as exc:
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+    # -- the console ---------------------------------------------------
+
+    #: names the console binds before every cell, and what they hold.
+    #: They are refreshed each time rather than bound once: `streams`
+    #: changes whenever Solve is pressed, and a console describing the
+    #: previous solve is worse than one describing none.
+    CONSOLE_NAMES = {
+        "fs": "the flowsheet on the canvas, live",
+        "streams": "the last solve's streams, or None",
+        "dvs": "the last linearization, or None",
+        "session": "this session -- session.solve() keeps the panels in step",
+    }
+
+    def _live(self) -> dict:
+        """What the console sees of the editor, plus the code context."""
+        import difflow
+
+        names = dict(self.bindings)          # the flowsheet's own snippet
+        names.update(
+            difflow=difflow,
+            jax=__import__("jax"),
+            jnp=__import__("jax.numpy", fromlist=["numpy"]),
+            fs=self.flowsheet,
+            streams=self.streams,
+            dvs=self.delta_vectors,
+            session=self,
+        )
+        return names
+
+    def _fingerprint(self) -> str | None:
+        """Enough of the document to notice a cell having changed it.
+
+        ``None`` means *assume changed*: a flowsheet that will not
+        serialize is exactly the case where the canvas most needs to
+        refetch, so an unserializable model must not read as untouched.
+        """
+        if self.flowsheet is None:
+            return "none"
+        try:
+            import json
+
+            from difflow import serialize
+
+            return json.dumps(serialize.to_dict(self.flowsheet,
+                                                refs=self.bindings),
+                              sort_keys=True, default=str)
+        except Exception:
+            return None
+
+    def console_run(self, source: str) -> dict:
+        """Run one cell against the live model.
+
+        The reply always has ``ok: True`` when the cell ran at all --- a
+        traceback is the answer to the question that was asked, not a
+        refusal of the request --- and carries it in ``error`` alongside
+        whatever the cell managed to print first.
+
+        ``changed`` says whether the cell moved the model out from under
+        the canvas. It can: ``fs`` is the flowsheet itself, not a copy,
+        and a console that cannot touch the model is a worse notebook.
+        So the page is told to redraw, and the cached streams are
+        dropped the way any other edit drops them.
+        """
+        from difflow.gui import console as console_mod
+
+        if not source.strip():
+            return {"ok": True, "outputs": [], "error": None,
+                    "changed": False, "names": []}
+        with self._lock:
+            if self._console is None:
+                self._console = console_mod.Console()
+            before = self._fingerprint()
+            self._console.bind(**self._live())
+            answer = self._console.run(source)
+            after = self._fingerprint()
+            changed = before is None or after is None or before != after
+            if changed:
+                self.streams = None
+        answer["changed"] = changed
+        return answer
+
+    def console_reset(self) -> dict:
+        """Forget what the console defined; the live names come back."""
+        with self._lock:
+            if self._console is not None:
+                self._console.reset()
+        return {"ok": True, "outputs": [], "error": None,
+                "changed": False, "names": []}
+
+    def console_names(self) -> dict:
+        """What is in scope before anything is typed."""
+        return {"ok": True,
+                "live": dict(self.CONSOLE_NAMES),
+                "bindings": sorted(self.bindings),
+                "defined": self._console.names if self._console else []}

@@ -59,11 +59,16 @@ growing with it:
 ``sensitivity.py``
     the derivatives of a solved flowsheet, forward and reverse --- the
     one thing here that no other flowsheet editor can offer.
+``console.py``
+    a Python prompt over the live flowsheet, for the questions no
+    panel has a button for. ``fs`` there is the object on the canvas,
+    not a copy, which is what makes ``jax.grad`` at the prompt
+    differentiate the model you are looking at.
 ``static/``
     the page as built files on disk, served by ``server.py``.
 """
 
-from difflow.gui import sensitivity
+from difflow.gui import console, sensitivity
 from difflow.gui.server import (
     DEFAULT_PORT,
     DOCS_PREFIX,
@@ -94,6 +99,7 @@ __all__ = [
     "STATIC",
     "TOKEN_HEADER",
     "TOKEN_META",
+    "console",
     "evaluate_context",
     "main",
     "make_server",

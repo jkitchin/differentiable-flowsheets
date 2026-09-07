@@ -808,6 +808,57 @@ The footer names the active one in a sentence, in the accent colour when the ans
 
 **The budget is a real constraint.** The default runtime is a 3B model with a 4096-token window, and a brief that overflows it is truncated *at the end* — where the question is. So a pack is fitted to `context.BUDGET` tokens, dropping whole low-priority sections rather than truncating any of them (half a parameter table is a table with parameters missing from it), never dropping the subject, and recording what went. A thin answer then has a visible cause.
 
+### The console, where the flowsheet is a Python object again
+
+The assistant answers a question in English. **Console** is the same question asked in Python, and it is the panel that admits the editor can never have a button for everything. It is a REPL running *in the difflow process* — every cell is `exec`'d in a namespace that is rebound before each run:
+
+| Name | What it is |
+|---|---|
+| `fs` | the flowsheet on the canvas. Not a copy |
+| `streams` | the last solve's streams, or `None` if nothing has solved |
+| `dvs` | the last linearization, or `None` |
+| `session` | the session itself — `session.solve()` keeps the panels in step |
+| `difflow`, `jax`, `jnp` | imported for you |
+
+plus whatever the code context defines, so a `thermo` object built there is a name at the prompt.
+
+**That `fs` is live is the whole point.** A REPL over a deepcopy would answer questions about a model nobody is looking at. Edit a parameter in a cell and the server refingerprints the document, notices, drops the stale solve, and tells the page to redraw — the canvas follows the prompt. It is also what makes the panel difflow's rather than any editor's: `jax.grad` at the prompt differentiates through the recycle tear solve of the flowsheet you are looking at.
+
+```python
+>>> import jax
+>>> f = lambda V: fs._apply_params({'reactor.V': V}).solve()['liq']['F_ethanol']
+>>> float(jax.grad(f)(1.0))
+0.249960277574744
+```
+
+Four things about it are deliberate.
+
+**A traceback is an answer.** `console_run` returns `ok: True` with `error` set, which is the one place difflow's `{"ok": false, "error": ...}` convention is on purpose not followed: the cell raising *is* the normal outcome someone typing at a prompt asked about, and a panel that reported it as a failed request would be reporting on the wrong thing. The traceback is trimmed to start at the user's own frame — the server's stack above it is noise — and the offending line is shown, because cells are registered with `linecache` under `<console:n>` so Python can quote source that was never a file.
+
+**The namespace is not the code context's.** `view["code_context"]` is part of the model: it is serialized, re-evaluated on load, and it is what `$ref` tags resolve against. If a cell's assignments landed there, typing `k = 0.5` would silently change what the saved file means. The console *reads* those bindings and writes to a layer of its own, and `names` lists what you defined — never the names that were injected for you.
+
+**Figures are a hook.** v1 emits text, but the wire format (`{"kind", "mime", "data"}`) and the browser's renderer both already understand an image, so plots are a callable and nothing else:
+
+```python
+from difflow.gui.console import Console, image
+
+def figures(namespace):
+    import io, matplotlib.pyplot as plt
+    out = []
+    for num in plt.get_fignums():
+        buf = io.BytesIO()
+        plt.figure(num).savefig(buf, format="png", dpi=110)
+        out.append(image(buf.getvalue()))
+    plt.close("all")
+    return out
+
+Console(display_hooks=[figures])
+```
+
+A hook that raises is reported where its output would have been, rather than taking the cell's result down with it. And the page has an explicit branch for a `kind` it does not know, so a server emitting something newer degrades to a legible placeholder instead of an empty box.
+
+**It is not a sandbox, and says so.** The server already `exec`s browser-supplied Python for the code context; a console adds no capability that endpoint did not have, and the CSRF token plus the `Origin`/`Host` check are the whole protection either way. What it does add is a way to hang the single-threaded server with a cell that loops forever — there is no safe way to interrupt a running thread in Python, so the panel states that rather than offering a stop button that would not work.
+
 ---
 
 ## Publishing a Model

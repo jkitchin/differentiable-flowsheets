@@ -50,6 +50,7 @@ from difflow.gui import (
     FlowsheetSession,
     _json_restore,
     _json_safe,
+    console,
     context,
     make_server,
     sensitivity,
@@ -1530,6 +1531,174 @@ class TestPlanning:
         pack = context.pack(session, kind="planning", question="what is this?")
         assert pack["ok"] and "reactor_V" in pack["prompt"]
         assert "trust radius" in pack["prompt"]
+
+
+# =============================================================================
+# The console
+# =============================================================================
+
+
+class TestConsole:
+    """A Python prompt over the objects the editor is already holding.
+
+    The thing worth testing is not that `1 + 1` is 2. It is that `fs`
+    is the *same* flowsheet the canvas has --- a console over a copy
+    would answer questions about a model nobody is looking at --- and
+    that the session notices when a cell has moved it.
+    """
+
+    def test_an_expression_comes_back_as_its_repr(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        answer = session.console_run("6 * 7")
+        assert answer["ok"] and answer["error"] is None
+        assert answer["outputs"] == [
+            {"kind": "value", "stream": "stdout", "text": "42"}]
+
+    def test_statements_run_and_the_namespace_persists(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        session.console_run("import math\nradius = 2.0")
+        answer = session.console_run("round(math.pi * radius ** 2, 3)")
+        assert answer["outputs"][-1]["text"] == "12.566"
+        # a module the user imported is a name they defined, and seeing
+        # it is the confirmation the import took
+        assert answer["names"] == ["math", "radius"]
+
+    def test_print_and_the_value_both_arrive_in_order(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        answer = session.console_run("print('working')\n5")
+        assert [o["text"] for o in answer["outputs"]] == ["working\n", "5"]
+
+    def test_a_traceback_is_the_answer_not_a_refusal(self, thermo):
+        """`ok` is about the request; the cell failing is a result."""
+        session = FlowsheetSession(build_flowsheet(thermo))
+        answer = session.console_run("1 / 0")
+        assert answer["ok"] is True
+        assert "ZeroDivisionError" in answer["error"]
+        assert "1 / 0" in answer["error"], "the offending line, from linecache"
+        assert "session.py" not in answer["error"], "server frames trimmed"
+
+    def test_what_a_cell_printed_survives_the_exception(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        answer = session.console_run("print('got this far')\nboom")
+        assert answer["outputs"][0]["text"] == "got this far\n"
+        assert "NameError" in answer["error"]
+
+    def test_a_syntax_error_names_the_line(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        answer = session.console_run("x = 1\ndef f(:")
+        assert "SyntaxError" in answer["error"] and "line 2" in answer["error"]
+
+    def test_fs_is_the_flowsheet_on_the_canvas(self, thermo):
+        """Not a copy. This is the whole reason the panel exists."""
+        session = FlowsheetSession(build_flowsheet(thermo))
+        answer = session.console_run("fs is session.flowsheet")
+        assert answer["outputs"][-1]["text"] == "True"
+
+    def test_the_live_names_are_rebound_every_cell(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        assert session.console_run("streams is None")["outputs"][-1]["text"] == "True"
+        assert session.solve()["ok"]
+        answer = session.console_run("sorted(streams)[0]")
+        assert answer["error"] is None
+        assert answer["outputs"][-1]["text"].strip("'\"") in session.streams
+
+    def test_the_code_context_bindings_are_in_scope(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        session.set_code_context("greeting = 'hello'")
+        assert session.console_run("greeting")["outputs"][-1]["text"] == "'hello'"
+
+    def test_gradients_run_here_which_is_the_point(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        answer = session.console_run(
+            "float(jax.grad(lambda V: fs._apply_params({'reactor.V': V})"
+            ".solve()['liq']['F_ethanol'])(1.0))")
+        assert answer["error"] is None, answer["error"]
+        assert float(answer["outputs"][-1]["text"]) > 0
+
+    def test_a_cell_that_edits_the_model_says_so(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        assert session.solve()["ok"] and session.streams is not None
+        answer = session.console_run(
+            "unit = next(u for u in fs.units if u.name == 'reactor')\n"
+            "unit.operation.params = unit.operation.params.update(V=2.0)")
+        assert answer["error"] is None, answer["error"]
+        assert answer["changed"] is True
+        assert session.streams is None, "the cached solve describes the old model"
+
+    def test_a_cell_that_only_reads_leaves_the_canvas_alone(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        assert session.solve()["ok"]
+        assert session.console_run("len(fs.units)")["changed"] is False
+        assert session.streams is not None
+
+    def test_reset_forgets_what_the_console_defined(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        session.console_run("keep = 1")
+        session.console_reset()
+        assert "NameError" in session.console_run("keep")["error"]
+        assert session.console_run("fs is not None")["outputs"][-1]["text"] == "True"
+
+    def test_an_empty_cell_is_not_a_round_trip(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        assert session.console_run("   \n  ") == {
+            "ok": True, "outputs": [], "error": None,
+            "changed": False, "names": []}
+
+    def test_the_names_in_scope_are_advertised(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        session.set_code_context("greeting = 'hello'")
+        names = session.console_names()
+        assert set(names["live"]) == {"fs", "streams", "dvs", "session"}
+        assert names["bindings"] == ["greeting"]
+        assert names["defined"] == []
+
+    def test_the_route_is_guarded_like_every_other_exec(self, client):
+        status, body = client.send("POST", "/api/console", {"source": "1"},
+                                   headers={gui.TOKEN_HEADER: "wrong"})
+        assert status == 403 and body["ok"] is False
+        status, body = client.send("POST", "/api/console", {"source": "1 + 1"})
+        assert status == 200
+        assert body["outputs"][-1]["text"] == "2"
+
+    def test_output_is_capped(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        answer = session.console_run("print('x' * 500_000)")
+        body = answer["outputs"][0]["text"]
+        assert len(body) < console.MAX_OUTPUT + 100
+        assert "truncated" in body
+
+
+class TestConsoleFigures:
+    """The seam plots will arrive through, exercised without matplotlib."""
+
+    def test_a_display_hook_appends_to_the_cell(self):
+        drawn = console.image(b"\x89PNG-not-really")
+        shell = console.Console(display_hooks=[lambda ns: [drawn]])
+        answer = shell.run("1")
+        assert answer["outputs"] == [
+            {"kind": "value", "stream": "stdout", "text": "1"}, drawn]
+        assert drawn["kind"] == "image" and drawn["mime"] == "image/png"
+
+    def test_a_hook_sees_the_namespace(self):
+        seen = {}
+        shell = console.Console(display_hooks=[lambda ns: seen.update(ns) or []])
+        shell.run("marker = 7")
+        assert seen["marker"] == 7
+
+    def test_a_broken_hook_does_not_eat_the_result(self):
+        """A renderer that fails must not lose a number computed correctly."""
+        def broken(ns):
+            raise RuntimeError("no display")
+
+        answer = console.Console(display_hooks=[broken]).run("6 * 7")
+        assert answer["error"] is None
+        assert answer["outputs"][0]["text"] == "42"
+        assert "no display" in answer["outputs"][1]["text"]
+        assert answer["outputs"][1]["stream"] == "stderr"
+
+    def test_an_image_survives_the_json_the_server_sends(self):
+        drawn = console.image(b"\x89PNG\r\n\x1a\n binary \xff\xfe")
+        assert json.loads(json.dumps(drawn)) == drawn
 
 
 if __name__ == "__main__":

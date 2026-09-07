@@ -232,6 +232,7 @@ class _Handler(BaseHTTPRequestHandler):
             "/api/code": lambda: self._send(self.session.code()),
             "/api/code-context": lambda: self._send(self.session.code_context()),
             "/api/levers": lambda: self._send(self.session.levers()),
+            "/api/console": lambda: self._send(self.session.console_names()),
             "/api/diagram": lambda: self._send(self.session.diagram()),
             # Whether the server-side provider can be offered at all.
             # Asked before the option is shown, so "no key here" is a
@@ -318,6 +319,13 @@ class _Handler(BaseHTTPRequestHandler):
             if path == "/api/linearize/files":
                 return session.linearization_files(
                     payload.get("format", "json"))
+            # A POST because a cell can do anything the process can,
+            # the flowsheet included -- `_guard` is the whole protection
+            # and a GET would slip past a preflight.
+            if path == "/api/console":
+                return session.console_run(payload.get("source", ""))
+            if path == "/api/console/reset":
+                return session.console_reset()
             # Not about the flowsheet, so not on the session: the brief
             # was assembled by a GET and this only forwards it. A POST
             # because it spends money, and so must pass `_guard`.

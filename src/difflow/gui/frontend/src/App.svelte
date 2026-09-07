@@ -2,6 +2,7 @@
   import Assistant from './lib/Assistant.svelte'
   import Canvas from './lib/Canvas.svelte'
   import CodeContext from './lib/CodeContext.svelte'
+  import Console from './lib/Console.svelte'
   import Export from './lib/Export.svelte'
   import Inspector from './lib/Inspector.svelte'
   import Palette from './lib/Palette.svelte'
@@ -32,6 +33,7 @@
   let lastSolve = $state(null)
   let showAssistant = $state(false)
   let showPlanning = $state(false)
+  let showConsole = $state(false)
 
   async function load() {
     const payload = await get('/api/flowsheet')
@@ -206,6 +208,7 @@
   <button onclick={() => (showResults = !showResults)}>Results</button>
   <button onclick={() => (showAssistant = !showAssistant)}>Ask</button>
   <button onclick={() => (showPlanning = !showPlanning)}>Planning</button>
+  <button onclick={() => (showConsole = !showConsole)}>Console</button>
   <button onclick={solve} disabled={busy}>Solve</button>
   <button onclick={save} disabled={busy || !path}>Save</button>
   <Export {path} document={doc} disabled={busy || !doc}
@@ -257,6 +260,13 @@
     {busy}
     onsensitivity={differentiate}
     onclose={() => (showResults = false)}
+  />
+{/if}
+
+{#if showConsole}
+  <Console
+    onchanged={() => edit(async () => ({ ok: true }))}
+    onclose={() => (showConsole = false)}
   />
 {/if}
 
