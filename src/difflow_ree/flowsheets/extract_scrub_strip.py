@@ -125,6 +125,15 @@ class ExtractScrubStripCircuit:
         "n_extraction_stages": "-",
         "n_scrubbing_stages": "-",
         "n_stripping_stages": "-",
+        "extraction_pH": "-",
+        "scrubbing_pH": "-",
+        "stripping_pH": "-",
+        "extractant_conc": "mol/L",
+        "solvent_to_feed_ratio": "-",
+        "scrub_to_solvent_ratio": "-",
+        "strip_to_solvent_ratio": "-",
+        "nitrate_conc": "mol/L",
+        "capacity_sharpness": "-",
     }
 
     def __init__(self, params: ExtractScrubStripParams):

@@ -10,6 +10,7 @@ as though it were an outlet stream.
 import importlib
 import inspect
 import json
+import re
 
 import jax
 import pytest
@@ -415,6 +416,51 @@ class TestMetadata:
         with_units = sum(1 for s in cat.values()
                          for p in s.parameters if p.units)
         assert with_units > 100, "was zero before the classes were read"
+
+    def test_no_metadata_entry_names_a_field_that_does_not_exist(self):
+        # `parameter_units` and `parameter_symbols` are keyed by field name
+        # and read with .get(), so a key that no longer matches a field is
+        # silently dropped -- the unit simply never appears and nothing
+        # says why. Thirty-five such keys had accumulated: `qmax` where the
+        # field is `q_max`, `area` where it is `membrane_area`, `T_top` on
+        # an absorber whose temperatures are `T_gas_in`/`T_liquid_in`.
+        import dataclasses
+        from difflow.catalog import _default_registry, _params_class
+
+        dead = []
+        for name, info in _default_registry().list_operations().items():
+            params_cls = _params_class(info.cls)
+            if params_cls is None or not dataclasses.is_dataclass(params_cls):
+                continue                # nothing for the keys to disagree with
+            fields = {f.name for f in dataclasses.fields(params_cls)}
+            for attr in ("parameter_units", "parameter_symbols"):
+                for key in getattr(info.cls, attr, None) or {}:
+                    if key not in fields:
+                        dead.append(f"{name}.{attr}[{key!r}]")
+        assert not dead, f"metadata naming fields that do not exist: {dead}"
+
+    def test_every_numeric_parameter_carries_a_unit(self, cat):
+        # A number in a form without a unit is a number the reader has to
+        # guess at, and the same table now feeds the delta-vector export,
+        # where a mislabelled column is worse than an absent one. The
+        # exceptions are listed rather than tolerated in bulk, so a new
+        # field cannot join them by accident.
+        allowed = {
+            # a cached arity of the kinetic callable, not a quantity
+            ("ContinuousBioreactor", "_kinetic_arity"),
+            ("FedBatchBioreactor", "_kinetic_arity"),
+        }
+        numeric = re.compile(r"\b(float|int|Array|jnp|ndarray|Scalar)\b")
+        missing = [
+            (name, p.name) for name, spec in cat.items() for p in spec.parameters
+            if not p.units and not p.is_callable
+            and numeric.search(p.type)
+            and "str" not in p.type and "bool" not in p.type
+        ]
+        assert not set(missing) - allowed, sorted(set(missing) - allowed)
+        assert not allowed - set(missing), (
+            "these gained a unit; drop them from the allowlist: "
+            f"{sorted(allowed - set(missing))}")
 
     def test_the_new_fields_survive_to_dict(self, cat):
         payload = json.loads(json.dumps(cat["CSTR"].to_dict()))

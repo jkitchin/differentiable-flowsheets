@@ -62,6 +62,7 @@ class Compressor:
         r"P = q\,c_p\,T_\mathrm{in}\,(r^{(\kappa-1)/\kappa} - 1)/\eta_\mathrm{ad}",
     ]
     references = _COMPRESSOR_REFS
+    parameter_units = {"ratio": "-", "eta_ad": "-", "kappa": "-", "cp": "J/kg/K"}
 
     def __init__(self, ratio: float, **kwargs):
         self.params = CompressorParams(ratio=ratio, **kwargs)

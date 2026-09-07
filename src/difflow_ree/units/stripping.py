@@ -95,8 +95,11 @@ class REEStripper:
         "acid_conc": "[H^+]",
     }
     parameter_units = {
+        "n_stages": "-",
         "pH": "-",
+        "extractant_conc": "mol/L",
         "acid_conc": "mol/L",
+        "nitrate_conc": "mol/L",
     }
     numerical_method = "Kremser applied in the stripping direction with acid-loading boundary."
 

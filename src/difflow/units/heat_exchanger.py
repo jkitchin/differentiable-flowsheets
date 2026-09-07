@@ -1071,7 +1071,7 @@ class EnthalpyCounterCurrentHX:
     ]
     references = ["Incropera, DeWitt, Bergman. Fundamentals of Heat and Mass Transfer, 7e, Ch. 11."]
     parameter_symbols = {"UA": "UA"}
-    parameter_units = {"UA": "W/K"}
+    parameter_units = {"UA": "W/K", "max_iter": "-", "damping": "-"}
     numerical_method = "Damped fixed point on Q with per-side 1-D enthalpy inversion."
 
     def __init__(self, params: EnthalpyHXParams, thermo):
@@ -1284,7 +1284,12 @@ class CrossFlowHX:
     ]
     references = ["Kays, W.M., London, A.L. Compact Heat Exchangers, 3e, McGraw-Hill, 1984."]
     parameter_symbols = {"UA": "UA"}
-    parameter_units = {"UA": "W/K", "Cp_hot": "J/mol/K", "Cp_cold": "J/mol/K"}
+    parameter_units = {
+        "UA": "W/K",
+        "Cp_hot": "J/mol/K",
+        "Cp_cold": "J/mol/K",
+        "min_approach": "K",
+    }
     numerical_method = "Effectiveness-NTU correlation for chosen mixing configuration."
 
     def __init__(self, params: HeatExchangerParams, mixing: str = "both_unmixed"):
@@ -1553,8 +1558,14 @@ class ShellAndTubeHX:
         "Bowman, Mueller, Nagle. Trans. ASME, 62, 283 (1940).",
         "Perry's Chemical Engineers' Handbook, 9e, Sec. 11.",
     ]
-    parameter_symbols = {"UA": "UA", "n_shells": "N_s", "n_tube_passes": "N_t"}
-    parameter_units = {"UA": "W/K"}
+    parameter_symbols = {"UA": "UA", "n_shell_passes": "N_s"}
+    parameter_units = {
+        "UA": "W/K",
+        "Cp_hot": "J/mol/K",
+        "Cp_cold": "J/mol/K",
+        "min_approach": "K",
+        "n_shell_passes": "-",
+    }
     numerical_method = "Counter-current LMTD with closed-form F-correction factor."
 
     def __init__(self, params: ShellAndTubeHXParams):

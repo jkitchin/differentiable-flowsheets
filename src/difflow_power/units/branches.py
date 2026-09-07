@@ -267,7 +267,12 @@ class Transformer(SeriesBranch):
     ]
     references = _BRANCH_REFS
     parameter_units = {
-        "r": "pu", "x": "pu", "tap": "-", "shift": "rad",
+        "r": "pu",
+        "x": "pu",
+        "b": "pu",
+        "g": "pu",
+        "tap": "-",
+        "shift": "rad",
     }
 
     def __init__(self, params: BranchParams):

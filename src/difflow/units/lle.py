@@ -787,6 +787,7 @@ class DifferentialContactor:
     parameter_units = {
         "length": "m",
         "area": "m^2",
+        "n_segments": "-",
         "Kla": "1/s",
         "HETP": "m",
     }

@@ -90,7 +90,12 @@ class CeriumOxidizer:
         "temperature": "T",
         "ce_conversion": r"X_\mathrm{Ce}",
     }
-    parameter_units = {"pH": "-", "temperature": "K", "ce_conversion": "-"}
+    parameter_units = {
+        "oxidant_excess": "-",
+        "pH": "-",
+        "temperature": "K",
+        "ce_conversion": "-",
+    }
 
     def __init__(self, params: CeriumOxidizerParams):
         """Initialize oxidizer.
