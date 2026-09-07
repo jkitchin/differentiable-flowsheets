@@ -424,12 +424,17 @@ def serve(
         server.server_close()
 
 
-def main(argv: list[str] | None = None) -> int:
-    """``python -m difflow.gui [flowsheet.json] [--port N] [--no-browser]``."""
+def main(argv: list[str] | None = None, prog: str = "difflow gui") -> int:
+    """``difflow gui [flowsheet.json] [--port N] [--no-browser]``.
+
+    ``prog`` is what usage lines call this, because there are two ways in
+    --- the ``difflow`` subcommand and ``python -m difflow.gui`` --- and a
+    help text that names the other one sends the reader in a circle.
+    """
     import argparse
 
     parser = argparse.ArgumentParser(
-        prog="difflow.gui", description="Local flowsheet editor."
+        prog=prog, description="Local flowsheet editor."
     )
     parser.add_argument("path", nargs="?", help="flowsheet JSON to open and save")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)

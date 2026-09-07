@@ -136,7 +136,7 @@ gas = "difflow_gas:register"
 power = "difflow_power:register"
 
 [project.scripts]
-difflow = "difflow.report.cli:main"
+difflow = "difflow.cli:main"
 difflow-gui = "difflow.gui.server:main"
 
 [tool.hatch.build]

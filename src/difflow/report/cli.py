@@ -1,4 +1,4 @@
-"""``difflow report`` CLI entry point.
+"""``difflow report`` --- run a script and write its flowsheet report.
 
 Run a user script, locate the first :class:`~difflow.flowsheet.Flowsheet`
 instance it creates, and emit a report in the requested format.
@@ -9,10 +9,10 @@ Usage::
     difflow report script.py --format json -o out.json
     difflow report script.py --solve                 # run fs.solve() first
 
-The ``difflow`` entry point also dispatches ``plan-export`` to
-:mod:`difflow.planning.cli`::
-
-    difflow plan-export plan.py --format csv -o tables/
+:mod:`difflow.cli` is the front door that routes here; this module also
+answers to ``python -m difflow.report.cli`` and keeps its own
+``report``/``plan-export`` peek so that older invocations of it directly
+still land where they used to.
 """
 
 from __future__ import annotations

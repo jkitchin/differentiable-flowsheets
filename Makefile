@@ -183,4 +183,4 @@ gui-test:
 # Serve a flowsheet: `make gui FLOWSHEET=examples/whatever.json` (or bare, for
 # an empty one).
 gui:
-	$(UV_RUN) python -m difflow.gui $(FLOWSHEET)
+	$(UV_RUN) difflow gui $(FLOWSHEET)

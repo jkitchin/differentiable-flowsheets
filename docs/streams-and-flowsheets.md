@@ -592,9 +592,12 @@ One name is deliberately not the class name: `difflow_gas` registers a `Compress
 `difflow.gui` serves a single-page flowsheet editor on `localhost`, with the installed package doing the solving:
 
 ```bash
-python -m difflow.gui plant.json          # opens a browser
-python -m difflow.gui --port 9000 --no-browser
+difflow                                   # an empty canvas, in a browser
+difflow gui plant.json                    # ...on a flowsheet
+difflow gui --port 9000 --no-browser
 ```
+
+The editor is what a bare `difflow` does, because it is the one thing here that has nothing to print and everything to show. `python -m difflow.gui` is the same command for an environment where the console script is not on `PATH`.
 
 or from Python, on a flowsheet you already have:
 
