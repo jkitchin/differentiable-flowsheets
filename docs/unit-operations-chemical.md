@@ -799,6 +799,56 @@ $$\sum_i y_{i,j} = 1$$
 **Enthalpy Balance**:
 $$L_{j-1} H^L_{j-1} + V_{j+1} H^V_{j+1} + F_j H^F_j = L_j H^L_j + V_j H^V_j + Q_j$$
 
+#### Thermodynamics: ideal K-values or a cubic EOS
+
+The column takes either an `IdealThermo` or a
+[`CubicThermo`](thermodynamics.md), and the choice is the whole of the
+difference between a near-ideal separation and a hydrocarbon one:
+
+| | `IdealThermo` | `CubicThermo` |
+|---|---|---|
+| $K_i$ | $P^{sat}_i(T)/P$ (Raoult) | $\hat\phi^L_i(T,P,x)\,/\,\hat\phi^V_i(T,P,y)$ (PR or SRK) |
+| stage enthalpy | ideal-gas $C_p$ + Watson $H_{vap}$ | ideal-gas $C_p$ + EOS departure |
+| $K_i$ depends on composition | no | yes |
+
+```python
+from difflow import IdealThermo, CubicThermo, PengRobinson
+from difflow.database import get_critical_props, get_species_data
+from difflow.units.distillation import DistillationColumn, DistillationColumnParams
+
+names = ["propane", "isobutane", "n_butane", "isopentane",
+         "n_pentane", "n_hexane", "n_heptane", "n_octane"]
+ideal = IdealThermo({s: get_species_data(s) for s in names})
+eos = PengRobinson({s: get_critical_props(s) for s in names})
+
+column = DistillationColumn(
+    DistillationColumnParams(species_order=names, n_stages=20, feed_stage=10,
+                             condenser_type="total", P=10e5),
+    thermo=CubicThermo(ideal, eos),      # Peng-Robinson K-values and enthalpies
+)
+distillate, bottoms, info = column(feed, R=2.0, B_spec=40.0)
+```
+
+Use the EOS for light hydrocarbons at pressure. Raoult's law fails there in a
+one-sided way: a C3-C8 cut at 10 bar puts its heavy end within a degree of the
+EOS answer and its light end tens of degrees off, so an ideal-K column looks
+plausible at the reboiler and is wrong at the condenser.
+
+Two things about the EOS path are worth knowing:
+
+- **The K-values depend on composition**, so they are a fixed point rather than
+  a formula. `CubicThermo.K_values_array(T, P, x)` runs a short successive
+  substitution on $y$ internally to close it at the stage's own composition;
+  pass both `x` and `y` if you already have a consistent pair.
+- **They only exist where the cubic has two roots.** Away from the bubble point
+  -- a subcooled liquid, a superheated vapor -- there is one root, both phases
+  take it, and $K_i$ comes back identically 1. That is the EOS reporting a
+  single phase, but it makes $\sum_i K_i x_i - 1$ flat, so the column solves
+  each stage's bubble point in two passes: a Newton solve on ideal K-values to
+  land inside the two-root window, then a step-capped Newton on the EOS
+  K-values that bisects back if a step leaves it. Nothing about this is visible
+  in the API, but it is why the bubble point is not one `optimistix` call.
+
 ---
 
 ## Heat Exchangers

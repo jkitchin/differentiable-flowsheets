@@ -25,11 +25,23 @@ import jax.numpy as jnp
 from jax import Array, lax
 
 from difflow.streams import Stream, get_flows, make_stream
-from difflow.thermo import IdealThermo
+from difflow.thermo import CubicThermo, IdealThermo
 from difflow.params_mixin import ParamsMixin
 from difflow.constants import MIN_ALPHA_DIFF, MAX_STAGES, MAX_GILLILAND_Y, DEFAULT_TEMP_SCALE, EPS_DIVISION
 from difflow.numerics import safe_divide, safe_log
 import optimistix as optx
+
+
+# Second pass of the rigorous column's bubble-point solve, used only when the
+# thermo package's K-values depend on composition (an EOS). The step cap keeps
+# an iterate inside the temperature window where the cubic has two real roots
+# -- outside it the liquid and vapor roots coincide, K collapses to 1, and the
+# residual goes flat.
+_BUBBLE_T_REFINE_STEPS = 8
+_BUBBLE_T_MAX_STEP = 25.0
+# Below this the bubble-point residual is flat, i.e. the EOS is reporting one
+# phase rather than two, and a Newton step there is 0/0.
+_BUBBLE_T_FLAT_DR = 1e-8
 
 
 @dataclass(repr=False)
@@ -673,13 +685,20 @@ class DistillationColumn:
     def __init__(
         self,
         params: DistillationColumnParams,
-        thermo: IdealThermo,
+        thermo: IdealThermo | CubicThermo,
     ):
         """Initialize distillation column.
 
         Args:
             params: Column parameters
-            thermo: Thermodynamic property calculator
+            thermo: Thermodynamic property calculator. An
+                :class:`~difflow.thermo.IdealThermo` gives Raoult K-values;
+                a :class:`~difflow.thermo.CubicThermo` gives EOS K-values
+                (``K_i = phi_i^L / phi_i^V``) and EOS enthalpies, which is what
+                a light-hydrocarbon column at pressure needs -- Raoult's law is
+                out by tens of degrees at the condenser there. The column code
+                is the same either way; the composition dependence of the EOS
+                K-values rides along inside the existing MESH iteration.
         """
         self.params = params
         self.thermo = thermo
@@ -695,6 +714,12 @@ class DistillationColumn:
 
         Solves: sum(K_i * x_i) = 1 for T
 
+        With an ideal thermo package that is one Newton solve on Raoult
+        K-values. With an EOS package it is that solve followed by a
+        safeguarded refinement on the EOS K-values, which are a function of the
+        stage composition as well as of T; see the code for why the refinement
+        is written by hand rather than handed to a root finder.
+
         Args:
             x: Liquid mole fractions
             P: Pressure (Pa)
@@ -705,10 +730,6 @@ class DistillationColumn:
             (T, y): Bubble temperature and vapor composition
         """
         p = self.params
-
-        def bubble_residual(T, args):
-            K = self.thermo.K_values_array(T, P)
-            return jnp.sum(K * x) - 1.0
 
         # Initial guess: use provided guess or estimate from pressure
         # At higher pressures, boiling points are higher. Rough correlation:
@@ -725,12 +746,68 @@ class DistillationColumn:
             T_init = T_base * (P / P_ref) ** 0.08
             T_init = jnp.clip(T_init, 100.0, 800.0)  # Reasonable bounds
 
+        # Pass 1: composition-free K-values -- Raoult's law either way, since
+        # a CubicThermo hands this call back to the IdealThermo it wraps. They
+        # are smooth and monotone in T over the whole range, so Newton reaches
+        # the root from a crude guess. That is what pass 2 needs: away from the
+        # bubble point the EOS cubic has a single real root, both phases then
+        # take that same root, and K collapses identically to 1 -- a flat-zero
+        # residual a Newton step cannot recover from. Pass 1 lands inside the
+        # window where the EOS has two roots, so pass 2 never starts outside
+        # it.
+        def bubble_residual_estimate(T, args):
+            K = self.thermo.K_values_array(T, P)
+            return jnp.sum(K * x) - 1.0
+
         solver = optx.Newton(rtol=1e-10, atol=1e-10)
-        sol = optx.root_find(bubble_residual, solver, T_init, args=None, max_steps=50, throw=False)
+        sol = optx.root_find(
+            bubble_residual_estimate, solver, T_init, args=None,
+            max_steps=50, throw=False,
+        )
         T = sol.value
 
+        # Pass 2: refine against the composition-dependent K-values. Skipped
+        # when the thermo package's K-values are a function of (T, P) alone,
+        # where pass 1 already solved the real residual.
+        if getattr(self.thermo, "K_depends_on_composition", True):
+            def bubble_residual(T):
+                K = self.thermo.K_values_array(T, P, x)
+                return jnp.sum(K * x) - 1.0
+
+            # A safeguarded Newton written out rather than handed to a root
+            # finder. An EOS K-value only means anything over the temperature
+            # window where its cubic has two roots at this composition; outside
+            # it both phases take the one root, K is identically 1, and the
+            # residual is a flat zero that a root finder reads as converged
+            # wherever it happens to be standing. So: cap the step, and when a
+            # step lands somewhere flat (dr = 0), bisect back toward the last
+            # temperature that was not, instead of taking 0/0. The pass-1
+            # estimate is the first such temperature, which makes the worst
+            # case "return the ideal-K bubble point", never a NaN.
+            def newton_step(carry, _):
+                T_k, T_ok = carry
+                r, dr = jax.value_and_grad(bubble_residual)(T_k)
+                in_window = (
+                    jnp.isfinite(r) & jnp.isfinite(dr)
+                    & (jnp.abs(dr) > _BUBBLE_T_FLAT_DR)
+                )
+                # Sanitise before the divide, not after: a NaN that has already
+                # been formed is something a later jnp.where can hide from the
+                # value but not from the derivative.
+                r_safe = jnp.where(in_window, r, 0.0)
+                dr_safe = jnp.where(in_window, dr, 1.0)
+                dT = jnp.clip(
+                    -r_safe / dr_safe, -_BUBBLE_T_MAX_STEP, _BUBBLE_T_MAX_STEP
+                )
+                T_next = jnp.where(in_window, T_k + dT, 0.5 * (T_k + T_ok))
+                return (T_next, jnp.where(in_window, T_k, T_ok)), None
+
+            (T, _), _ = lax.scan(
+                newton_step, (T, T), None, length=_BUBBLE_T_REFINE_STEPS
+            )
+
         # Calculate y from K-values
-        K = self.thermo.K_values_array(T, P)
+        K = self.thermo.K_values_array(T, P, x)
         y = K * x
         y = y / jnp.sum(y)  # Normalize
 
@@ -787,10 +864,9 @@ class DistillationColumn:
 
         # Better initial guess: one-stage flash enriches the distillate estimate.
         # Use 350 K as a safe starting T for the feed bubble point.
-        T_bp_feed, _ = self._bubble_point_T(z, P, T_guess=jnp.asarray(350.0))
-        K_feed = self.thermo.K_values_array(T_bp_feed, P)
-        y_flash = K_feed * z
-        y_flash = y_flash / jnp.maximum(jnp.sum(y_flash), 1e-10)
+        T_bp_feed, y_flash = self._bubble_point_T(
+            z, P, T_guess=jnp.asarray(350.0)
+        )
         x_D_init = jnp.clip(y_flash, 1e-6, 1.0 - 1e-6)
         x_D_init = x_D_init / jnp.sum(x_D_init)
 
@@ -809,9 +885,11 @@ class DistillationColumn:
             x, T = carry
 
             # --- Step 1: K values at current stage temperatures ---
+            # The stage's liquid composition goes in too: an EOS K-value
+            # depends on it, a Raoult K-value ignores it.
             def scan_K(_, inputs):
                 x_j, T_j = inputs
-                return None, self.thermo.K_values_array(T_j, P)
+                return None, self.thermo.K_values_array(T_j, P, x_j)
 
             _, K_all = lax.scan(scan_K, None, (x, T))  # (n, nc)
 
@@ -876,13 +954,44 @@ class DistillationColumn:
         # Final equilibrium vapor compositions
         def compute_y(_, inputs):
             x_j, T_j = inputs
-            K_j = self.thermo.K_values_array(T_j, P)
+            K_j = self.thermo.K_values_array(T_j, P, x_j)
             y_j = K_j * x_j
             return None, y_j / jnp.maximum(jnp.sum(y_j), 1e-10)
 
         _, y_final = lax.scan(compute_y, None, (x_final, T_final))
 
         return x_final, y_final, T_final
+
+    def _molar_enthalpy(
+        self,
+        mole_fracs: Array,
+        T: Array,
+        phase: str,
+    ) -> Array:
+        """Molar enthalpy (J/mol) of one phase at a stage.
+
+        Goes through ``thermo.stream_enthalpy`` on a one-mole basis rather than
+        summing ``H_pure`` so that the column is not tied to one thermodynamic
+        model: for an :class:`~difflow.thermo.IdealThermo` this is exactly the
+        old ``sum_i z_i H_pure_i`` (its enthalpy is a mole-fraction-weighted sum
+        of pure-component enthalpies and it ignores ``P``), while for a
+        :class:`~difflow.thermo.CubicThermo` it is the ideal-gas sensible
+        enthalpy plus the EOS departure for this phase at the column pressure,
+        so the latent heat comes from the same EOS as the K-values.
+
+        Args:
+            mole_fracs: (nc,) mole fractions of the phase, in species order.
+            T: Stage temperature (K).
+            phase: 'liquid' or 'vapor'.
+
+        Returns:
+            Molar enthalpy (J/mol).
+        """
+        p = self.params
+        flows = {s: mole_fracs[i] for i, s in enumerate(p.species_order)}
+        return self.thermo.stream_enthalpy(
+            flows, T, phase=phase, P=jnp.asarray(p.P)
+        )
 
     def _compute_stage_enthalpies(
         self,
@@ -901,15 +1010,10 @@ class DistillationColumn:
             h_all: (n,) liquid mixture enthalpies (J/mol)
             H_all: (n,) vapor mixture enthalpies (J/mol)
         """
-        p = self.params
-
         def stage_enthalpies(_, inputs):
             x_j, y_j, T_j = inputs
-            h_j = jnp.zeros(())
-            H_j = jnp.zeros(())
-            for i, s in enumerate(p.species_order):
-                h_j = h_j + x_j[i] * self.thermo.H_pure(s, T_j, 'liquid')
-                H_j = H_j + y_j[i] * self.thermo.H_pure(s, T_j, 'vapor')
+            h_j = self._molar_enthalpy(x_j, T_j, 'liquid')
+            H_j = self._molar_enthalpy(y_j, T_j, 'vapor')
             return None, (h_j, H_j)
 
         _, (h_all, H_all) = lax.scan(stage_enthalpies, None, (x, y, T))
@@ -987,9 +1091,7 @@ class DistillationColumn:
 
         # Feed enthalpy (saturated liquid, q=1)
         z_arr = jnp.array([z[s] for s in p.species_order])
-        h_F = jnp.zeros(())
-        for i, s in enumerate(p.species_order):
-            h_F = h_F + z_arr[i] * self.thermo.H_pure(s, T_feed, 'liquid')
+        h_F = self._molar_enthalpy(z_arr, jnp.asarray(T_feed), 'liquid')
 
         # Distillate enthalpy (liquid at top T for total condenser)
         h_D = h_liquid_top
@@ -1081,10 +1183,14 @@ class DistillationColumn:
         def one_mesh_iter(carry, _):
             x, y, T, L, V = carry
 
-            # 1. Compute K values at current T
+            # 1. Compute K values at current T and stage liquid composition.
+            # An EOS K-value depends on the composition; a Raoult K ignores it
+            # and this is the old K(T, P).
             _, K = lax.scan(
-                lambda _, Tj: (None, self.thermo.K_values_array(Tj, P)),
-                None, T
+                lambda _, args: (
+                    None, self.thermo.K_values_array(args[1], P, args[0])
+                ),
+                None, (x, T)
             )
             # K shape: (n, nc)
 
@@ -1167,8 +1273,10 @@ class DistillationColumn:
 
             # 5. Recompute K and y with updated T
             _, K_new = lax.scan(
-                lambda _, Tj: (None, self.thermo.K_values_array(Tj, P)),
-                None, T_new
+                lambda _, args: (
+                    None, self.thermo.K_values_array(args[1], P, args[0])
+                ),
+                None, (x_new, T_new)
             )
             y_new = K_new * x_new
             y_new = y_new / jnp.maximum(
@@ -1179,16 +1287,10 @@ class DistillationColumn:
             h_all, H_all = self._compute_stage_enthalpies(x_new, y_new, T_new)
 
             # Feed enthalpy (saturated liquid, q=1)
-            h_F = sum(
-                z[i] * self.thermo.H_pure(s, jnp.asarray(T_feed), 'liquid')
-                for i, s in enumerate(p.species_order)
-            )
+            h_F = self._molar_enthalpy(z, jnp.asarray(T_feed), 'liquid')
 
             # Reflux enthalpy (total condenser: liquid at top stage T)
-            h_reflux = sum(
-                y_new[-1, i] * self.thermo.H_pure(s, T_new[-1], 'liquid')
-                for i, s in enumerate(p.species_order)
-            )
+            h_reflux = self._molar_enthalpy(y_new[-1], T_new[-1], 'liquid')
 
             # Top-down energy balance sweep from stage n-1 down to stage 1
             def eb_step(carry, stage_j):

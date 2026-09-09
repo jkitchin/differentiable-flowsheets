@@ -326,16 +326,30 @@ class IdealThermo:
         Psat = self.Psat(species, T)
         return Psat / jnp.asarray(P)
 
+    #: Raoult K-values are a function of (T, P) alone. Callers that solve a
+    #: composition fixed point (a column's MESH loop, a flash) read this to
+    #: skip the composition iteration entirely; see
+    #: :attr:`CubicThermo.K_depends_on_composition` for the other case.
+    K_depends_on_composition = False
+
     def K_values(
         self,
         T: Array | float,
         P: Array | float,
+        x: Array | None = None,
+        y: Array | None = None,
     ) -> dict[str, Array]:
         """Calculate K-values for all species.
 
         Args:
             T: Temperature (K)
             P: Pressure (Pa)
+            x: Liquid mole fractions. Ignored -- Raoult K-values are
+               composition independent. Accepted only so IdealThermo is
+               call-compatible with CubicThermo (whose K-values come from
+               fugacity coefficients and do depend on composition), letting
+               callers pass the phase compositions unconditionally.
+            y: Vapor mole fractions. Ignored, as for ``x``.
 
         Returns:
             Dictionary of K-values by species name
@@ -349,12 +363,16 @@ class IdealThermo:
         self,
         T: Array | float,
         P: Array | float,
+        x: Array | None = None,
+        y: Array | None = None,
     ) -> Array:
         """Calculate K-values as an array in species order.
 
         Args:
             T: Temperature (K)
             P: Pressure (Pa)
+            x: Liquid mole fractions. Ignored (see :meth:`K_values`).
+            y: Vapor mole fractions. Ignored (see :meth:`K_values`).
 
         Returns:
             Array of K-values in species_order
@@ -480,6 +498,137 @@ class CubicThermo:
         Cp therefore does not need to appear here.
         """
         return self.ideal.Cp_mix(mole_fracs, T)
+
+    # ------------------------------------------------------------------
+    # VLE K-values
+    # ------------------------------------------------------------------
+
+    #: EOS K-values are ratios of fugacity coefficients, so they depend on the
+    #: liquid and vapor compositions as well as on (T, P). Callers solve that
+    #: fixed point in their own outer loop; see :meth:`K_values_array`.
+    K_depends_on_composition = True
+
+    def K_values_array(
+        self,
+        T: Array | float,
+        P: Array | float,
+        x: Array | None = None,
+        y: Array | None = None,
+        n_inner: int = 3,
+    ) -> Array:
+        """EOS K-values as an array in species order.
+
+        The rigorous VLE ratio built from the EOS fugacity coefficients::
+
+            K_i = phi_i^L(T, P, x) / phi_i^V(T, P, y)
+
+        This is the same K-value :class:`~difflow.eos.PengRobinson` uses in its
+        own flash, exposed under ``IdealThermo``'s interface so that units
+        written against ``K_values_array`` (the rigorous ``DistillationColumn``,
+        for one) run on a cubic EOS instead of Raoult's law. For light
+        hydrocarbons at pressure that is not a small correction: the difference
+        shows up as tens of degrees in a condenser temperature.
+
+        Unlike Raoult K-values these depend on the phase compositions, so they
+        are a fixed point rather than a closed form. Pass whichever
+        compositions you have; whatever is missing is filled in by a bounded
+        successive substitution from a composition-free estimate, which is the
+        standard bubble- or dew-point K calculation.
+
+        Note the trivial solution. The EOS gives a two-phase K only over the
+        temperature window where its cubic has two distinct roots for this
+        (T, P, composition). Outside that window -- a subcooled liquid, a
+        superheated vapor -- there is one root, both phases take it, and K
+        comes back identically 1. That is the EOS reporting a single phase, but
+        it makes ``sum(K x) - 1`` a flat zero, so a bubble-point solve built on
+        this method needs an initial temperature inside the window and a step
+        that can retreat when it leaves (see
+        ``DistillationColumn._bubble_point_T``).
+
+        Args:
+            T: Temperature (K).
+            P: Pressure (Pa).
+            x: Liquid mole fractions in species order. If None it is taken
+               from ``y`` and the current K-values (``x = y / K``).
+            y: Vapor mole fractions in species order. If None it is taken from
+               ``x`` and the current K-values (``y = K x``) -- the bubble-point
+               K at composition ``x``, which is what a column stage wants.
+            n_inner: Successive-substitution steps used to fill in a missing
+               composition. Ignored when both ``x`` and ``y`` are given.
+
+        Returns:
+            Array of K-values in the EOS's species order (``eos.species_order``),
+            which is also the order ``x`` and ``y`` are read in.
+
+        Example:
+            >>> thermo = CubicThermo(ideal, PengRobinson(props))
+            >>> K = thermo.K_values_array(300.0, 10e5, x=x, y=y)
+        """
+        T = jnp.asarray(T)
+        P = jnp.asarray(P)
+
+        def _norm(v: Array) -> Array:
+            v = jnp.maximum(jnp.asarray(v), 0.0)
+            return v / jnp.maximum(jnp.sum(v), 1e-30)
+
+        if x is None and y is None:
+            # No composition to build a fugacity coefficient from. Fall back on
+            # the wrapped ideal model's Raoult K-values rather than the EOS's
+            # own Wilson correlation: both are composition-free estimates, but
+            # Antoine coefficients are fitted vapor-pressure data while Wilson
+            # is a two-constant fit off the critical point, and for the heavy
+            # ends of a hydrocarbon cut Wilson is far enough out to land a
+            # subsequent EOS iteration outside the temperature window where the
+            # cubic has two roots at all (outside it the liquid and vapor roots
+            # coincide and K collapses identically to 1).
+            return self.ideal.K_values_array(T, P)
+
+        # The successive substitutions below start from Wilson, as the EOS's
+        # own flash does. Its job here is only to be in the basin of a
+        # contraction that converges in two or three steps, which is a much
+        # weaker requirement than the one that ruled it out above.
+        if x is None:
+            y = _norm(y)
+            K = self.eos.K_values_wilson(T, P)
+            for _ in range(n_inner):
+                K = self.eos.K_values(T, P, _norm(y / jnp.maximum(K, 1e-30)), y)
+            return K
+
+        x = _norm(x)
+
+        if y is None:
+            K = self.eos.K_values_wilson(T, P)
+            for _ in range(n_inner):
+                K = self.eos.K_values(T, P, x, _norm(K * x))
+            return K
+
+        return self.eos.K_values(T, P, x, _norm(y))
+
+    def K_values(
+        self,
+        T: Array | float,
+        P: Array | float,
+        x: Array | None = None,
+        y: Array | None = None,
+        n_inner: int = 3,
+    ) -> dict[str, Array]:
+        """EOS K-values for all species, keyed by species name.
+
+        The dictionary form of :meth:`K_values_array`; see it for the meaning
+        of ``x``, ``y`` and ``n_inner``.
+
+        Args:
+            T: Temperature (K).
+            P: Pressure (Pa).
+            x: Liquid mole fractions in species order (optional).
+            y: Vapor mole fractions in species order (optional).
+            n_inner: Successive-substitution steps for a missing composition.
+
+        Returns:
+            Dictionary of K-values by species name.
+        """
+        K = self.K_values_array(T, P, x, y, n_inner)
+        return {s: K[i] for i, s in enumerate(self.eos.species_order)}
 
     def stream_enthalpy(
         self,
