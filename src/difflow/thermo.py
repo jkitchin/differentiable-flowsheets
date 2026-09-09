@@ -543,7 +543,7 @@ class CubicThermo:
         it makes ``sum(K x) - 1`` a flat zero, so a bubble-point solve built on
         this method needs an initial temperature inside the window and a step
         that can retreat when it leaves (see
-        ``DistillationColumn._bubble_point_T``).
+        ``difflow.units.distillation._bubble_T``).
 
         Args:
             T: Temperature (K).

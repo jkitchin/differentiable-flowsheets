@@ -461,7 +461,7 @@ correctly reporting a single phase, but it makes $\sum_i K_i x_i - 1$ a flat
 zero, which a root finder reads as converged wherever it is standing. A
 bubble-point solve on these K-values therefore needs to start inside the window
 and be able to retreat if a step leaves it; see the two-pass solve in
-`DistillationColumn._bubble_point_T`.
+`difflow.units.distillation._bubble_T`.
 
 With no composition at all, `CubicThermo` returns the wrapped `IdealThermo`'s
 Raoult K-values rather than the EOS's own Wilson estimate. Both are

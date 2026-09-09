@@ -239,8 +239,12 @@ class ShortcutColumnParams(ParamsMixin):
         species_order: List of species names for array ordering
         light_key: Name of light key component
         heavy_key: Name of heavy key component
-        x_D_LK: Desired mole fraction of LK in distillate
-        x_B_HK: Desired mole fraction of HK in bottoms
+        x_D_LK: Fractional **recovery** of the light key in the distillate --
+            0.99 sends 99 % of the feed's light key overhead. Despite the
+            name, which is historical, it is not a mole fraction; the
+            distillate's actual light-key mole fraction comes out in
+            ``info["x_D"]``.
+        x_B_HK: Fractional recovery of the heavy key in the bottoms, likewise.
     """
     species_order: list[str]
     light_key: str
@@ -904,12 +908,29 @@ class ShortcutColumn:
 class DistillationColumnParams(ParamsMixin):
     """Parameters for rigorous distillation column.
 
+    Stages are indexed from the bottom, zero-based: stage 0 is the reboiler,
+    stage ``n_stages - 1`` is the top tray. The condenser is not a stage -- it
+    sits outside the cascade and is what ``condenser_type`` describes -- so
+    ``n_stages`` counts the trays plus the reboiler, and every profile in
+    ``info`` is in that same order (``T_profile[0]`` is the reboiler,
+    ``T_profile[-1]`` the top tray).
+
     Attributes:
-        species_order: List of species names
-        n_stages: Total number of stages (including condenser/reboiler)
-        feed_stage: Feed stage number (1 = bottom)
-        condenser_type: 'total' or 'partial'
-        P: Column pressure (Pa)
+        species_order: List of species names. Sets the column order of every
+            array in ``info``, and must match the thermo package's species.
+        n_stages: Number of equilibrium stages: the trays plus the reboiler.
+        feed_stage: Stage the feed enters, as a zero-based index from the
+            bottom (0 = reboiler). Stages below it are the stripping section
+            and stages above it the rectifying section. Which side the feed
+            stage itself is counted on differs between the CMO sweep and the
+            MESH flow initialisation, so do not read anything into the
+            boundary stage.
+        condenser_type: 'total' or 'partial'. Only 'total' is implemented;
+            'partial' is rejected rather than silently treated as total.
+        P: Column pressure (Pa). One pressure for the whole column -- there is
+            no tray pressure drop.
+        q: Feed thermal condition (1.0 = saturated liquid, 0.0 = saturated
+            vapor).
     """
     species_order: list[str]
     n_stages: int
@@ -918,6 +939,16 @@ class DistillationColumnParams(ParamsMixin):
     P: float = 101325.0
     q: float = 1.0  # Feed thermal condition (1.0 = saturated liquid, 0.0 = saturated vapor)
 
+    def __post_init__(self):
+        if self.condenser_type != "total":
+            raise NotImplementedError(
+                f"condenser_type={self.condenser_type!r} is not implemented; "
+                "the MESH solver models a total condenser (the distillate has "
+                "the composition of the top tray's vapor and leaves as a "
+                "saturated liquid). A partial condenser would be an extra "
+                "equilibrium stage with a vapor product."
+            )
+
 
 class DistillationColumn:
     """Rigorous stage-by-stage distillation column.
@@ -925,12 +956,16 @@ class DistillationColumn:
     Solves MESH equations (Material, Equilibrium, Summation, Heat balance)
     for each stage using the bubble-point method.
 
-    Stage numbering: 1 = reboiler (bottom), n_stages = condenser (top)
+    Stage numbering: zero-based from the bottom -- stage 0 is the reboiler,
+    stage ``n_stages - 1`` is the top tray. The total condenser is outside the
+    cascade, so the distillate is not a stage's product (see
+    :meth:`_condenser_T`).
 
     Assumptions:
     - Equilibrium stages
     - No pressure drop between stages
-    - Constant molar overflow (CMO) for initial solution
+    - Total condenser
+    - Constant molar overflow (CMO) for the initial solution
 
     All calculations are JAX-compatible for automatic differentiation.
     """
