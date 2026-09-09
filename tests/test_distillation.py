@@ -213,6 +213,189 @@ class TestShortcutColumn:
         assert float(grad_R) < 0
 
 
+class TestBubblePointRobustness:
+    """The bubble-point solve has to reach the root from a cold start.
+
+    Vapor pressure is exponential in -1/T, so a few hundred degrees below the
+    bubble point both sum(K x) and its slope are ~0 and a plain Newton step is
+    one tiny number divided by another. This came up for real: the shortcut
+    column's column-end temperatures are bubble points seeded from the feed,
+    and a feed 250 K below its own bubble point sent the solve to -1e157.
+    """
+
+    @pytest.fixture
+    def far_from_boiling_thermo(self):
+        """Two species whose normal boiling points are ~600 K and ~641 K."""
+        return IdealThermo({
+            "A": SpeciesData(
+                name="A", MW=100.0, Cp_coeffs=(75.0, 0.0, 0.0, 0.0),
+                Hvap_coeffs=(30000.0, 0.38, 750.0),
+                antoine_coeffs=(10.0, 2800.0, -40.0),
+            ),
+            "B": SpeciesData(
+                name="B", MW=100.0, Cp_coeffs=(75.0, 0.0, 0.0, 0.0),
+                Hvap_coeffs=(30000.0, 0.38, 790.0),
+                antoine_coeffs=(10.0, 3000.0, -40.0),
+            ),
+        })
+
+    @pytest.mark.parametrize("T_guess", [100.0, 250.0, 365.0, 620.0, 1500.0])
+    def test_reaches_the_root_from_any_start(
+        self, far_from_boiling_thermo, T_guess
+    ):
+        from difflow.units.distillation import _bubble_T
+
+        x = jnp.array([0.5, 0.5])
+        P = jnp.asarray(101325.0)
+        T, y = _bubble_T(far_from_boiling_thermo, x, P, jnp.asarray(T_guess))
+
+        assert jnp.isfinite(T)
+        # Between the two pure boiling points, and satisfying sum(K x) = 1.
+        assert 600.0 < float(T) < 641.0
+        K = far_from_boiling_thermo.K_values_array(T, P)
+        assert float(jnp.sum(K * x)) == pytest.approx(1.0, abs=1e-8)
+        assert float(jnp.sum(y)) == pytest.approx(1.0)
+
+    def test_shortcut_column_survives_a_cold_feed(self, far_from_boiling_thermo):
+        """The case that surfaced it: the feed is 250 K under its bubble point,
+        and the design still comes out finite and feasible."""
+        column = ShortcutColumn(
+            ShortcutColumnParams(
+                species_order=["A", "B"], light_key="A", heavy_key="B",
+            ),
+            far_from_boiling_thermo,
+        )
+        feed = make_stream({"A": 0.5, "B": 0.5}, T=365.0, P=101325.0)
+        distillate, bottoms, info = column(feed, R=2.0, P=101325.0)
+
+        assert jnp.isfinite(distillate["T"])
+        assert jnp.isfinite(bottoms["T"])
+        assert jnp.isfinite(info["N_min"])
+        # Nearly pure products, so each end sits at a pure boiling point.
+        assert float(info["T_top"]) == pytest.approx(600.6, abs=1.0)
+        assert float(info["T_bot"]) == pytest.approx(640.7, abs=1.0)
+        assert bool(info["feasible"])
+
+
+class TestShortcutColumnEndTemperatures:
+    """The column ends are bubble points, not estimates around the feed."""
+
+    def _column(self, thermo):
+        params = ShortcutColumnParams(
+            species_order=["light", "middle", "heavy"],
+            light_key="middle",
+            heavy_key="heavy",
+            x_D_LK=0.95,
+            x_B_HK=0.95,
+        )
+        return ShortcutColumn(params, thermo)
+
+    def _feed(self):
+        return make_stream(
+            {"light": 20.0, "middle": 40.0, "heavy": 40.0}, T=400.0, P=101325.0
+        )
+
+    def test_products_leave_at_their_own_bubble_points(
+        self, multicomponent_thermo
+    ):
+        """Distillate at the condenser (bubble point of x_D), bottoms at the
+        reboiler (bubble point of x_B) -- checked by re-solving each from a
+        different starting temperature."""
+        from difflow.units.distillation import _bubble_T
+
+        column = self._column(multicomponent_thermo)
+        distillate, bottoms, info = column(self._feed(), R=3.0, P=101325.0)
+
+        order = ["light", "middle", "heavy"]
+        x_D = jnp.array([info["x_D"][s] for s in order])
+        x_B = jnp.array([info["x_B"][s] for s in order])
+        P = jnp.asarray(101325.0)
+
+        T_D, _ = _bubble_T(multicomponent_thermo, x_D, P, jnp.asarray(300.0))
+        T_B, _ = _bubble_T(multicomponent_thermo, x_B, P, jnp.asarray(500.0))
+
+        assert float(info["T_top"]) == pytest.approx(float(T_D), rel=1e-6)
+        assert float(info["T_bot"]) == pytest.approx(float(T_B), rel=1e-6)
+        assert float(distillate["T"]) == pytest.approx(float(info["T_top"]))
+        assert float(bottoms["T"]) == pytest.approx(float(info["T_bot"]))
+        assert float(info["T_condenser"]) == pytest.approx(float(info["T_top"]))
+        assert float(info["T_reboiler"]) == pytest.approx(float(info["T_bot"]))
+
+        # The column really does run hot at the bottom and cool at the top.
+        assert float(info["T_bot"]) > float(info["T_top"])
+
+    def test_end_temperatures_do_not_track_the_feed_temperature(
+        self, multicomponent_thermo
+    ):
+        """They are set by the products at the column pressure, so feeding the
+        same mixture in hotter cannot move them."""
+        column = self._column(multicomponent_thermo)
+        _, _, cold = column(
+            make_stream({"light": 20.0, "middle": 40.0, "heavy": 40.0},
+                        T=340.0, P=101325.0),
+            R=3.0, P=101325.0,
+        )
+        _, _, hot = column(
+            make_stream({"light": 20.0, "middle": 40.0, "heavy": 40.0},
+                        T=460.0, P=101325.0),
+            R=3.0, P=101325.0,
+        )
+        assert float(cold["T_top"]) == pytest.approx(float(hot["T_top"]), rel=1e-6)
+        assert float(cold["T_bot"]) == pytest.approx(float(hot["T_bot"]), rel=1e-6)
+
+    def test_end_temperatures_rise_with_pressure(self, multicomponent_thermo):
+        """A bubble point does depend on pressure, and the estimate it replaced
+        did not."""
+        column = self._column(multicomponent_thermo)
+        _, _, low = column(self._feed(), R=3.0, P=101325.0)
+        _, _, high = column(
+            make_stream({"light": 20.0, "middle": 40.0, "heavy": 40.0},
+                        T=400.0, P=5 * 101325.0),
+            R=3.0, P=5 * 101325.0,
+        )
+        assert float(high["T_top"]) > float(low["T_top"])
+        assert float(high["T_bot"]) > float(low["T_bot"])
+
+    def test_volatilities_come_from_the_end_temperatures(
+        self, multicomponent_thermo
+    ):
+        """alpha is the geometric mean of the two ends, and the reported ends
+        are the converged ones -- so recomputing alpha from info reproduces it."""
+        column = self._column(multicomponent_thermo)
+        _, _, info = column(self._feed(), R=3.0, P=101325.0)
+
+        order = ["light", "middle", "heavy"]
+        x_D = jnp.array([info["x_D"][s] for s in order])
+        x_B = jnp.array([info["x_B"][s] for s in order])
+        alpha = column.average_alpha(
+            info["T_top"], info["T_bot"], jnp.asarray(101325.0), x_D, x_B
+        )
+        for s in order:
+            assert float(alpha[s]) == pytest.approx(float(info["alpha"][s]), rel=1e-9)
+
+    def test_duties_still_physical(self, multicomponent_thermo):
+        column = self._column(multicomponent_thermo)
+        _, _, info = column(self._feed(), R=3.0, P=101325.0)
+        assert float(info["Q_condenser"]) < 0.0
+        assert float(info["Q_reboiler"]) > 0.0
+
+    def test_gradients_survive_the_fixed_point(self, multicomponent_thermo):
+        """The end temperatures are an unrolled fixed point, so AD still runs
+        through the whole design calculation."""
+        column = self._column(multicomponent_thermo)
+        feed = self._feed()
+
+        def stages(R):
+            _, _, info = column(feed, R=R, P=101325.0)
+            return info["N"]
+
+        g = jax.grad(stages)(3.0)
+        assert jnp.isfinite(g)
+        eps = 1e-4
+        fd = (float(stages(3.0 + eps)) - float(stages(3.0 - eps))) / (2 * eps)
+        assert float(g) == pytest.approx(fd, rel=1e-4)
+
+
 class TestDesignFunctions:
     """Tests for standalone design functions."""
 
@@ -681,6 +864,59 @@ class TestCubicThermoColumn:
         V_above, _, _ = flash_TP_eos(cubic.eos, x_D, info["T_condenser"] + 2.0, self.P)
         assert float(V_below) == pytest.approx(0.0, abs=1e-6)
         assert float(V_above) > 1e-3
+
+    def test_shortcut_column_runs_on_cubic_thermo(self, thermo_pair, feed):
+        """The shortcut column reaches the EOS through the same K-value and
+        enthalpy interfaces, so it runs on Peng-Robinson too -- and the answer
+        is not the ideal one."""
+        ideal, cubic = thermo_pair
+        params = ShortcutColumnParams(
+            species_order=self.SPECIES,
+            light_key="n_pentane",
+            heavy_key="n_hexane",
+            x_D_LK=0.98,
+            x_B_HK=0.98,
+        )
+
+        results = {}
+        for name, thermo in (("ideal", ideal), ("eos", cubic)):
+            column = ShortcutColumn(params, thermo)
+            distillate, bottoms, info = column(feed, R=2.0, P=self.P, q=1.0)
+            assert jnp.isfinite(distillate["T"])
+            assert jnp.isfinite(info["N_min"])
+            assert float(info["Q_condenser"]) < 0.0
+            assert float(info["Q_reboiler"]) > 0.0
+            results[name] = info
+
+        # Raoult overstates the light key's volatility at 10 bar, so it
+        # promises the separation in fewer stages than the EOS does.
+        assert float(results["ideal"]["alpha_LK"]) > float(results["eos"]["alpha_LK"])
+        assert float(results["ideal"]["N_min"]) < float(results["eos"]["N_min"])
+
+    def test_shortcut_column_end_temperatures_are_eos_bubble_points(
+        self, thermo_pair, feed
+    ):
+        """And its column ends are EOS bubble points: the flash puts the vapor
+        fraction at zero there and lifts it off just above."""
+        from difflow.eos import flash_TP_eos
+
+        _, cubic = thermo_pair
+        column = ShortcutColumn(
+            ShortcutColumnParams(
+                species_order=self.SPECIES, light_key="n_pentane",
+                heavy_key="n_hexane", x_D_LK=0.98, x_B_HK=0.98,
+            ),
+            cubic,
+        )
+        _, _, info = column(feed, R=2.0, P=self.P, q=1.0)
+
+        for key, T_key in (("x_D", "T_top"), ("x_B", "T_bot")):
+            comp = jnp.array([info[key][s] for s in self.SPECIES])
+            T = info[T_key]
+            V_below, _, _ = flash_TP_eos(cubic.eos, comp, T - 2.0, self.P)
+            V_above, _, _ = flash_TP_eos(cubic.eos, comp, T + 2.0, self.P)
+            assert float(V_below) == pytest.approx(0.0, abs=1e-6)
+            assert float(V_above) > 1e-3
 
     def test_cubic_column_duties_are_physical(
         self, thermo_pair, column_params, feed

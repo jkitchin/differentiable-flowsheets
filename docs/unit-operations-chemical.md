@@ -679,6 +679,22 @@ $$\alpha_{ij} = \frac{K_i}{K_j} = \frac{P_i^{sat}}{P_j^{sat}}$$
 
 $$\bar{\alpha} = (\alpha_{top} \cdot \alpha_{bottom})^{0.5}$$
 
+The two ends are the column's actual ends, not estimates around the feed: the
+top is a total condenser, so $T_{top}$ is the **bubble point of the
+distillate**, and $T_{bot}$ is the **bubble point of the bottoms** in the
+reboiler. Those are the temperatures the product streams come out at, reported
+as `info["T_condenser"]` and `info["T_reboiler"]`.
+
+They also make the design a small fixed point, since $\bar\alpha$ sets the
+product split through Hengstebeck-Geddes and the split sets the bubble points
+in turn. The column sweeps it a few times from the feed's own bubble point;
+it settles to under a hundredth of a degree by the third sweep, and the whole
+loop is unrolled, so `jax.grad` runs through it.
+
+Two consequences worth knowing, because the old estimate had neither: the end
+temperatures no longer move when you feed the same mixture in hotter, and they
+do move with column pressure.
+
 **Fenske Equation** (minimum stages):
 
 $$N_{min} = \frac{\ln\left[\frac{x_{D,LK}}{x_{B,LK}} \cdot \frac{x_{B,HK}}{x_{D,HK}}\right]}{\ln \bar{\alpha}_{LK/HK}}$$
@@ -709,8 +725,10 @@ $$\frac{N_R}{N_S} = \left[\frac{B}{D} \cdot \frac{x_{F,HK}}{x_{F,LK}} \cdot \lef
 
 | Parameter | Type | Units | Description |
 |-----------|------|-------|-------------|
-| `distillate` | Stream | - | Overhead product |
-| `bottoms` | Stream | - | Bottom product |
+| `distillate` | Stream | - | Overhead product, at the condenser temperature |
+| `bottoms` | Stream | - | Bottom product, at the reboiler temperature |
+| `info['T_condenser']` | float | K | Condenser temperature = bubble point of $x_D$ (also `T_top`) |
+| `info['T_reboiler']` | float | K | Reboiler temperature = bubble point of $x_B$ (also `T_bot`) |
 | `info['N_min']` | float | - | Minimum stages |
 | `info['N_actual']` | float | - | Actual stages |
 | `info['R_min']` | float | - | Minimum reflux ratio |
@@ -870,6 +888,16 @@ Two things about the EOS path are worth knowing:
   land inside the two-root window, then a step-capped Newton on the EOS
   K-values that bisects back if a step leaves it. Nothing about this is visible
   in the API, but it is why the bubble point is not one `optimistix` call.
+
+The ideal pass is itself in two parts, for a reason that has nothing to do with
+the EOS. Vapor pressure is exponential in $-1/T$, so a couple of hundred degrees
+below the bubble point both $\sum_i K_i x_i$ and its slope are round-off away
+from zero, and a Newton step there divides one tiny number by another and lands
+tens of thousands of degrees away. So the solve first takes a few damped steps
+on $\log \sum_i K_i x_i$ -- nearly linear in $1/T$, and well scaled over the
+whole range -- and only then runs Newton on the residual itself. This is why a
+column can be handed a feed far below its own boiling point and still find its
+ends.
 
 ---
 
