@@ -813,6 +813,37 @@ class DistillationColumn:
 
         return T, y
 
+    def _condenser_T(
+        self,
+        x_D: Array,
+        P: Array,
+        T_guess: Array | None = None,
+    ) -> Array:
+        """Temperature of a total condenser's outlet (K).
+
+        A total condenser condenses the whole of the top stage's vapor, so its
+        outlet -- the distillate, and the reflux returned to the top stage --
+        is a saturated liquid of composition ``x_D`` at the column pressure.
+        Its temperature is therefore the bubble point of ``x_D``, which is
+        **not** the top stage temperature: the top stage sits at the bubble
+        point of its own liquid ``x_top``, equivalently the dew point of the
+        vapor ``y_top = x_D`` it sends to the condenser, and a mixture's dew
+        point is above its bubble point. The gap is the width of the cut --
+        small for a sharp binary split, tens of degrees for a wide-boiling
+        multicomponent distillate.
+
+        Args:
+            x_D: Distillate mole fractions (= the top stage vapor, for a total
+                condenser).
+            P: Column pressure (Pa).
+            T_guess: Initial temperature guess (K); the top stage temperature
+                is a reasonable one, being an upper bound.
+
+        Returns:
+            Condenser temperature (K).
+        """
+        return self._bubble_point_T(x_D, P, T_guess=T_guess)[0]
+
     def _solve_constant_molar_overflow(
         self,
         feed_flows: dict[str, Array],
@@ -1032,6 +1063,7 @@ class DistillationColumn:
         B: Array,
         V_top: Array | None = None,
         V_bot: Array | None = None,
+        T_condenser: Array | None = None,
     ) -> tuple[Array, Array]:
         """Compute condenser and reboiler duties including latent heat.
 
@@ -1041,8 +1073,12 @@ class DistillationColumn:
         calculations.
 
         For total condenser:
-            Q_cond = V_top * (H_vapor_top - h_liquid_top)
-            where H_vapor includes latent heat of vaporization.
+            Q_cond = V_top * (h_D - H_vapor_top)
+            where H_vapor_top is the top stage vapor (latent heat included)
+            and h_D is the condensed product: the same composition as that
+            vapor, as a saturated liquid at the condenser temperature (see
+            :meth:`_condenser_T`), not the top stage liquid at the top stage
+            temperature.
 
         For reboiler (from overall energy balance):
             Q_reb = D * h_D + B * h_B - F * h_F + Q_cond
@@ -1059,14 +1095,20 @@ class DistillationColumn:
             B: Bottoms flow rate (mol/s)
             V_top: Vapor flow leaving top stage (mol/s).
                    If None, uses (R+1)*D (CMO assumption).
-            V_bot: Vapor flow leaving bottom stage (mol/s).
-                   If None, uses (R+1)*D (CMO assumption).
+            V_bot: Vapor flow leaving bottom stage (mol/s). Not used: the
+                   reboiler duty comes from the overall energy balance, which
+                   never needs it. Accepted so callers can pass the profile
+                   they have.
+            T_condenser: Condenser temperature (K). If None it is computed
+                   here as the bubble point of the distillate; pass it when
+                   the caller has already solved for it.
 
         Returns:
             Q_condenser: Condenser duty (J/s, negative = heat removed)
             Q_reboiler: Reboiler duty (J/s, positive = heat added)
         """
         p = self.params
+        P = jnp.asarray(p.P)
 
         # Compute stage enthalpies (includes latent heat for vapor)
         h_all, H_all = self._compute_stage_enthalpies(
@@ -1075,26 +1117,27 @@ class DistillationColumn:
 
         # Top stage enthalpies
         H_vapor_top = H_all[-1]   # Vapor enthalpy at top (includes Hvap)
-        h_liquid_top = h_all[-1]  # Liquid enthalpy at top
 
         # Bottom stage enthalpies
-        H_vapor_bot = H_all[0]    # Vapor enthalpy at bottom (includes Hvap)
         h_liquid_bot = h_all[0]   # Liquid enthalpy at bottom
 
         # Vapor flows (use provided or CMO estimates)
         V_top_flow = V_top if V_top is not None else (R + 1) * D
-        V_bot_flow = V_bot if V_bot is not None else (R + 1) * D
 
-        # Condenser duty: condense all vapor from top stage to liquid
-        # Q_cond = V_top * (h_liquid_top - H_vapor_top) < 0 (heat removed)
-        Q_condenser = V_top_flow * (h_liquid_top - H_vapor_top)
+        # The condensed product: the top stage vapor, as a saturated liquid at
+        # the condenser's own temperature.
+        x_D = y_profile[-1]
+        if T_condenser is None:
+            T_condenser = self._condenser_T(x_D, P, T_guess=T_profile[-1])
+        h_D = self._molar_enthalpy(x_D, T_condenser, 'liquid')
+
+        # Condenser duty: condense all vapor from the top stage to liquid
+        # Q_cond = V_top * (h_D - H_vapor_top) < 0 (heat removed)
+        Q_condenser = V_top_flow * (h_D - H_vapor_top)
 
         # Feed enthalpy (saturated liquid, q=1)
         z_arr = jnp.array([z[s] for s in p.species_order])
         h_F = self._molar_enthalpy(z_arr, jnp.asarray(T_feed), 'liquid')
-
-        # Distillate enthalpy (liquid at top T for total condenser)
-        h_D = h_liquid_top
 
         # Bottoms enthalpy (liquid at bottom T)
         h_B = h_liquid_bot
@@ -1289,8 +1332,14 @@ class DistillationColumn:
             # Feed enthalpy (saturated liquid, q=1)
             h_F = self._molar_enthalpy(z, jnp.asarray(T_feed), 'liquid')
 
-            # Reflux enthalpy (total condenser: liquid at top stage T)
-            h_reflux = self._molar_enthalpy(y_new[-1], T_new[-1], 'liquid')
+            # Reflux enthalpy. A total condenser returns saturated liquid of
+            # the distillate's composition at the condenser temperature, which
+            # is below the top stage temperature -- so the reflux enters the
+            # top stage subcooled, and the top stage has to boil some of it.
+            # Evaluating it at the top stage temperature instead would credit
+            # the balance with heat the condenser has already removed.
+            T_cond = self._condenser_T(y_new[-1], P, T_guess=T_new[-1])
+            h_reflux = self._molar_enthalpy(y_new[-1], T_cond, 'liquid')
 
             # Top-down energy balance sweep from stage n-1 down to stage 1
             def eb_step(carry, stage_j):
@@ -1378,12 +1427,16 @@ class DistillationColumn:
             mesh_iter: Number of MESH iterations when use_mesh=True.
 
         Returns:
-            distillate: Distillate stream
-            bottoms: Bottoms stream
+            distillate: Distillate stream, at the condenser temperature --
+                the bubble point of the distillate, which is below the top
+                stage temperature (see :meth:`_condenser_T`)
+            bottoms: Bottoms stream, at the reboiler temperature
             info: Dictionary with:
                 - 'T_profile': Stage temperatures
                 - 'x_profile': Liquid composition profiles
                 - 'y_profile': Vapor composition profiles
+                - 'T_condenser': Condenser temperature (K), = distillate T
+                - 'T_reboiler': Reboiler temperature (K), = bottoms T
                 - 'L_rect': Rectifying liquid flow rate (CMO) or 'L_profile'
                 - 'V_rect': Rectifying vapor flow rate (CMO) or 'V_profile'
                 - 'D': Distillate flow rate
@@ -1430,7 +1483,14 @@ class DistillationColumn:
             distillate_flows = {s: D * x_D[s] for s in p.species_order}
             bottoms_flows = {s: B * x_B[s] for s in p.species_order}
 
-            distillate = make_stream(distillate_flows, T_profile[-1], p.P)
+            # A total condenser delivers the distillate as a saturated liquid
+            # at its own bubble point, which is below the top stage
+            # temperature (see _condenser_T).
+            T_condenser = self._condenser_T(
+                y_profile[-1], jnp.asarray(p.P), T_guess=T_profile[-1]
+            )
+
+            distillate = make_stream(distillate_flows, T_condenser, p.P)
             bottoms = make_stream(bottoms_flows, T_profile[0], p.P)
 
             # Compute duties with actual V profile from MESH
@@ -1438,6 +1498,7 @@ class DistillationColumn:
                 x_profile, y_profile, T_profile,
                 F_total, z, T_feed, R, D, B,
                 V_top=V_profile[-1], V_bot=V_profile[0],
+                T_condenser=T_condenser,
             )
 
             info = {
@@ -1448,6 +1509,8 @@ class DistillationColumn:
                 "V_profile": V_profile,
                 "D": D,
                 "B": B,
+                "T_condenser": T_condenser,
+                "T_reboiler": T_profile[0],
                 "Q_condenser": Q_condenser,
                 "Q_reboiler": Q_reboiler,
             }
@@ -1466,13 +1529,18 @@ class DistillationColumn:
             distillate_flows = {s: D * x_D[s] for s in p.species_order}
             bottoms_flows = {s: B * x_B[s] for s in p.species_order}
 
-            distillate = make_stream(distillate_flows, T_profile[-1], p.P)
+            T_condenser = self._condenser_T(
+                y_profile[-1], jnp.asarray(p.P), T_guess=T_profile[-1]
+            )
+
+            distillate = make_stream(distillate_flows, T_condenser, p.P)
             bottoms = make_stream(bottoms_flows, T_profile[0], p.P)
 
             # Compute duties with CMO vapor flow estimates
             Q_condenser, Q_reboiler = self._compute_duties(
                 x_profile, y_profile, T_profile,
                 F_total, z, T_feed, R, D, B,
+                T_condenser=T_condenser,
             )
 
             info = {
@@ -1483,6 +1551,8 @@ class DistillationColumn:
                 "V_rect": (R + 1) * D,
                 "D": D,
                 "B": B,
+                "T_condenser": T_condenser,
+                "T_reboiler": T_profile[0],
                 "Q_condenser": Q_condenser,
                 "Q_reboiler": Q_reboiler,
             }

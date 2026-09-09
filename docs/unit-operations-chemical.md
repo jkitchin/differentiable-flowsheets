@@ -799,6 +799,28 @@ $$\sum_i y_{i,j} = 1$$
 **Enthalpy Balance**:
 $$L_{j-1} H^L_{j-1} + V_{j+1} H^V_{j+1} + F_j H^F_j = L_j H^L_j + V_j H^V_j + Q_j$$
 
+#### Product temperatures
+
+The bottoms leaves the reboiler, which is a stage, so it is at
+`info["T_profile"][0]`. The distillate does not leave a stage — it leaves the
+condenser. A total condenser condenses the whole of the top stage's vapor, so
+the distillate (and the reflux returned with it) is a **saturated liquid of
+composition $x_D$ at its own bubble point**, reported as `info["T_condenser"]`.
+
+That is not the top stage temperature. The top stage sits at the bubble point
+of its liquid $x_{top}$, equivalently the dew point of the vapor $y_{top} = x_D$
+it sends up, and a mixture's dew point is above its bubble point. The gap is
+the boiling range of the distillate itself:
+
+| distillate | top stage $T$ | condenser $T$ | gap |
+|---|---|---|---|
+| 99.6 % benzene / toluene, 1 atm | 369.1 K | 368.7 K | 0.3 K |
+| C3-C8 cut, 10 bar (Peng-Robinson) | 401.7 K | 363.3 K | 38 K |
+
+The same distinction runs through the energy balance: $Q_{cond}$ takes the top
+stage vapor down to that condensed state, and the reflux re-enters the top
+stage subcooled, at the condenser temperature rather than the tray's.
+
 #### Thermodynamics: ideal K-values or a cubic EOS
 
 The column takes either an `IdealThermo` or a

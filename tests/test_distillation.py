@@ -327,6 +327,104 @@ class TestDistillationColumn:
         assert "T_profile" in info
         assert "x_profile" in info
 
+    def test_distillate_leaves_at_the_condenser_temperature(
+        self, benzene_toluene_thermo
+    ):
+        """A total condenser delivers saturated liquid, so the distillate is at
+        the bubble point of its own composition -- not at the top stage
+        temperature, which is that composition's dew point."""
+        params = DistillationColumnParams(
+            species_order=["benzene", "toluene"],
+            n_stages=15,
+            feed_stage=7,
+            condenser_type="total",
+            P=101325.0,
+        )
+        column = DistillationColumn(params, benzene_toluene_thermo)
+        feed = make_stream({"benzene": 50.0, "toluene": 50.0}, T=380.0, P=101325.0)
+
+        distillate, bottoms, info = column(feed, R=2.0, D_spec=50.0)
+
+        x_D = info["y_profile"][-1]
+        T_bubble, _ = column._bubble_point_T(
+            x_D, jnp.asarray(101325.0), T_guess=info["T_profile"][-1]
+        )
+
+        assert float(distillate["T"]) == pytest.approx(float(T_bubble), rel=1e-9)
+        assert float(info["T_condenser"]) == pytest.approx(float(distillate["T"]))
+        # Bubble point <= dew point, with equality only for a pure component.
+        assert float(info["T_condenser"]) <= float(info["T_profile"][-1])
+
+        # The bottoms still leaves at the reboiler, which is a stage.
+        assert float(bottoms["T"]) == pytest.approx(float(info["T_profile"][0]))
+        assert float(info["T_reboiler"]) == pytest.approx(float(bottoms["T"]))
+
+    def test_condenser_gap_tracks_the_width_of_the_cut(
+        self, benzene_toluene_thermo, multicomponent_thermo
+    ):
+        """The condenser sits below the top stage by the distillate's own
+        boiling range: negligible for a sharp binary split, large for a
+        distillate carrying a spread of volatilities."""
+        sharp = DistillationColumn(
+            DistillationColumnParams(
+                species_order=["benzene", "toluene"], n_stages=15,
+                feed_stage=7, condenser_type="total", P=101325.0,
+            ),
+            benzene_toluene_thermo,
+        )
+        _, _, info_sharp = sharp(
+            make_stream({"benzene": 50.0, "toluene": 50.0}, T=380.0, P=101325.0),
+            R=2.0, D_spec=50.0,
+        )
+        gap_sharp = (float(info_sharp["T_profile"][-1])
+                     - float(info_sharp["T_condenser"]))
+
+        wide = DistillationColumn(
+            DistillationColumnParams(
+                species_order=["light", "middle", "heavy"], n_stages=15,
+                feed_stage=7, condenser_type="total", P=101325.0,
+            ),
+            multicomponent_thermo,
+        )
+        _, _, info_wide = wide(
+            make_stream({"light": 20.0, "middle": 40.0, "heavy": 40.0},
+                        T=400.0, P=101325.0),
+            R=3.0, D_spec=30.0,
+        )
+        gap_wide = (float(info_wide["T_profile"][-1])
+                    - float(info_wide["T_condenser"]))
+
+        assert gap_sharp >= 0.0
+        assert gap_wide >= gap_sharp
+
+    def test_condenser_duty_condenses_to_the_distillate_state(
+        self, benzene_toluene_thermo
+    ):
+        """Q_cond takes the top stage vapor to the condensed product, so it is
+        V_top * (h_D - H_top) with h_D at the condenser temperature."""
+        params = DistillationColumnParams(
+            species_order=["benzene", "toluene"],
+            n_stages=15,
+            feed_stage=7,
+            condenser_type="total",
+            P=101325.0,
+        )
+        column = DistillationColumn(params, benzene_toluene_thermo)
+        feed = make_stream({"benzene": 50.0, "toluene": 50.0}, T=380.0, P=101325.0)
+
+        _, _, info = column(feed, R=2.0, D_spec=50.0)
+
+        _, H_all = column._compute_stage_enthalpies(
+            info["x_profile"], info["y_profile"], info["T_profile"]
+        )
+        h_D = column._molar_enthalpy(
+            info["y_profile"][-1], info["T_condenser"], "liquid"
+        )
+        expected = float(info["V_profile"][-1]) * float(h_D - H_all[-1])
+
+        assert float(info["Q_condenser"]) == pytest.approx(expected, rel=1e-9)
+        assert float(info["Q_condenser"]) < 0.0
+
 
 class TestMulticomponentDistillation:
     """Tests for multicomponent distillation."""
@@ -556,6 +654,33 @@ class TestCubicThermoColumn:
         fd = (float(hexane_purity(2.0 + eps))
               - float(hexane_purity(2.0 - eps))) / (2 * eps)
         assert float(g) == pytest.approx(fd, rel=1e-4)
+
+    def test_condenser_is_well_below_the_top_stage_for_a_wide_cut(
+        self, thermo_pair, column_params, feed
+    ):
+        """Where this matters most: a C3-C8 distillate spans a wide boiling
+        range, so its bubble point is tens of degrees under the top stage's."""
+        _, cubic = thermo_pair
+        column = DistillationColumn(column_params, cubic)
+
+        distillate, _, info = column(feed, R=2.0, B_spec=40.0)
+
+        T_bubble, _ = column._bubble_point_T(
+            info["y_profile"][-1], jnp.asarray(self.P),
+            T_guess=info["T_profile"][-1],
+        )
+        assert float(distillate["T"]) == pytest.approx(float(T_bubble), rel=1e-9)
+        assert float(info["T_profile"][-1]) - float(info["T_condenser"]) > 20.0
+
+        # And it is a real EOS bubble point: the flash puts the vapor fraction
+        # at zero there and lifts it off just above.
+        from difflow.eos import flash_TP_eos
+
+        x_D = info["y_profile"][-1]
+        V_below, _, _ = flash_TP_eos(cubic.eos, x_D, info["T_condenser"] - 2.0, self.P)
+        V_above, _, _ = flash_TP_eos(cubic.eos, x_D, info["T_condenser"] + 2.0, self.P)
+        assert float(V_below) == pytest.approx(0.0, abs=1e-6)
+        assert float(V_above) > 1e-3
 
     def test_cubic_column_duties_are_physical(
         self, thermo_pair, column_params, feed
