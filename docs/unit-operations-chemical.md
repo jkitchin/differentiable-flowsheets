@@ -987,9 +987,22 @@ satisfy that only to within their iteration count, so both report the
 residual:
 
 ```python
+from difflow import IdealThermo, make_stream
+from difflow.database import get_species_data
+from difflow.units.distillation import DistillationColumn, DistillationColumnParams
+
+names = ['n_pentane', 'n_hexane', 'n_heptane']
+column = DistillationColumn(
+    DistillationColumnParams(species_order=names, n_stages=20, feed_stage=10,
+                             P=101325.0),
+    thermo=IdealThermo({s: get_species_data(s) for s in names}),
+)
+feed = make_stream({'n_pentane': 30.0, 'n_hexane': 40.0, 'n_heptane': 30.0},
+                   T=360.0, P=101325.0)
+
 distillate, bottoms, info = column(feed, R=2.0, B_spec=40.0, use_mesh=False)
-info['balance_error']       # (n_species,) D_i + B_i - F_i, mol/s
-info['balance_error_rel']   # max |error| / F_total
+print(info['balance_error'])      # (n_species,) D_i + B_i - F_i, mol/s
+print(info['balance_error_rel'])  # max |error| / F_total
 ```
 
 If `balance_error_rel` is larger than your problem tolerates, raise
