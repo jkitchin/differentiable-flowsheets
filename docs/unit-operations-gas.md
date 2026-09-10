@@ -53,6 +53,16 @@ s = gas_stream(mass_flow_kg_s=25.0, T_k=283.15, P_pa=50e5)
 
 Because tear flows are signed, gas flowsheets must be solved with `clip_negative_flows=False`; `GasNetworkFlowsheet.solve()` does this by default.
 
+**One pseudo-species means one kind of flowsheet.** Every unit in this
+plugin reads `F_gas`, so a gas network has to be built on a flowsheet whose
+`species_order` is `["gas"]` --- and gas units cannot share a flowsheet with
+multi-species units such as a reactor or a column. Drop a `Compressor` onto a
+flowsheet carrying, say, water and ethanol and there is no `F_gas` for it to
+read; it raises `NotAGasStream` naming what the stream does carry and pointing
+at `species_order`. This is a modelling boundary rather than a missing feature:
+the plugin's pipes and compressors describe pressure-driven mass transport of a
+single fluid, and they have no composition to track.
+
 ---
 
 (gas-network-model)=

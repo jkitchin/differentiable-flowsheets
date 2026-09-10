@@ -73,7 +73,13 @@ from difflow_gas.physics import (
 # Streams
 # =============================================================================
 
-from difflow_gas.streams import FLOW_KEY, GAS, gas_stream
+from difflow_gas.streams import (
+    FLOW_KEY,
+    GAS,
+    NotAGasStream,
+    gas_flow,
+    gas_stream,
+)
 
 # =============================================================================
 # Network model and decomposition
@@ -188,6 +194,8 @@ __all__ = [
     "GAS",
     "FLOW_KEY",
     "gas_stream",
+    "gas_flow",
+    "NotAGasStream",
     # network
     "Arc",
     "GasNetwork",

@@ -5,7 +5,13 @@ import jax.numpy as jnp
 import pytest
 
 from difflow_gas.physics import compressor_power
-from difflow_gas.streams import FLOW_KEY, gas_stream
+from difflow.streams import make_stream
+from difflow_gas.streams import (
+    FLOW_KEY,
+    NotAGasStream,
+    gas_flow,
+    gas_stream,
+)
 from difflow_gas.units import (
     MIN_P_SQUARED,
     AffineFlow,
@@ -229,3 +235,82 @@ def test_units_are_differentiable_in_their_params():
     g = float(jax.grad(dropped)(BETA))
     expected = -100.0 / (2.0 * (P0**2 - BETA * 100.0) ** 0.5)
     assert g == pytest.approx(expected, rel=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# the stream convention
+# ---------------------------------------------------------------------------
+
+
+class TestAStreamThatIsNotGas:
+    """Every unit here reads ``F_gas``, and says so when it cannot.
+
+    The plugin models one pseudo-species, so a gas unit on a flowsheet
+    whose species are anything else cannot work. Read bare, that came
+    out as ``KeyError: 'F_gas'`` --- a stream key the user never typed,
+    raised from inside a solve, with nothing to say that the species
+    order was the thing to change.
+    """
+
+    def test_the_message_names_what_the_stream_actually_carries(self):
+        chemistry = make_stream({"water": 1.0, "ethanol": 2.0}, T, P0)
+        with pytest.raises(NotAGasStream) as raised:
+            Compressor(1.2)(chemistry)
+        message = str(raised.value)
+        assert "ethanol, water" in message, "what it carries"
+        assert "species_order" in message, "and what to change"
+        assert FLOW_KEY in message
+
+    def test_it_is_still_a_key_error(self):
+        """Code that already catches one around a solve keeps working."""
+        assert issubclass(NotAGasStream, KeyError)
+        with pytest.raises(KeyError):
+            GasPipe(BETA)(make_stream({"water": 1.0}, T, P0))
+
+    def test_the_message_is_not_repr_quoted(self):
+        """`KeyError.__str__` is `repr(args[0])`, wrong for a sentence."""
+        message = str(NotAGasStream("plain words"))
+        assert message == "plain words"
+
+    def test_an_empty_stream_says_so_rather_than_listing_nothing(self):
+        with pytest.raises(NotAGasStream, match="no species at all"):
+            gas_flow({"T": T, "P": P0})
+
+    @pytest.mark.parametrize("make,arity", [
+        (lambda: Compressor(1.2), 1),
+        (lambda: CompressorBoost(1.2, 1), 2),
+        (lambda: GasPipe(BETA), 1),
+        (lambda: BackPipe(BETA), 2),
+        (lambda: PipePressure(BETA, 1), 2),
+        (lambda: OpenValve(), 1),
+        (lambda: PressureEqual(), 2),
+        (lambda: ControlValveDrop(1.0e5, 1), 2),
+        (lambda: SourceHead(P0), 1),
+        (lambda: Junction(), 2),
+        (lambda: FlowSplit(1.0), 1),
+        (lambda: TearSplit(), 2),
+        (lambda: AffineFlow(0.0, (1.0, -1.0), T, P0), 2),
+        (lambda: FlowMinus(), 2),
+    ])
+    def test_every_unit_that_reads_a_flow_reports_it_the_same_way(
+            self, make, arity):
+        """One helper behind them all, so none is left raising the bare one.
+
+        `PressureDrivenPipe` is the one unit absent here, and rightly:
+        it never reads a flow, it *computes* one from the two pressures.
+        """
+        wrong = make_stream({"water": 1.0}, T, P0)
+        with pytest.raises(NotAGasStream):
+            make()(*[wrong] * arity)
+
+    def test_the_pressure_driven_pipe_needs_no_flow_to_read(self):
+        """The exception that shows the rule is about reading, not units."""
+        out = PressureDrivenPipe(BETA)(gas_stream(0.0, T, P0),
+                                       gas_stream(0.0, T, P0 * 0.9))
+        assert FLOW_KEY in out, "it produces a flow rather than reading one"
+
+    def test_a_real_gas_stream_is_untouched(self):
+        """The guard reads the flow through, it does not reshape it."""
+        good = gas_stream(-7.5, T, P0)
+        assert float(gas_flow(good)) == pytest.approx(-7.5), "signed, as ever"
+        assert gas_flow(good) is good[FLOW_KEY]
