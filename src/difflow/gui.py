@@ -754,7 +754,10 @@ function renderUnits() {
       const meta = byName[k] || {};
       const shown = Array.isArray(v) ? v.join(", ") : (v === null ? "" : v);
       const blank = shown === "" || (Array.isArray(v) && !v.length);
-      return '<tr><td>' + esc(k) + (meta.units ? ' <span class="units">' +
+      /* the description comes from the Params class's own documentation
+         (difflow.docstrings), so it is worth showing as a tooltip */
+      return '<tr' + (meta.description ? ' title="' + esc(meta.description) +
+        '"' : "") + '><td>' + esc(k) + (meta.units ? ' <span class="units">' +
         esc(meta.units) + '</span>' : "") + '</td><td><input type="text"' +
         (meta.required && blank ? ' class="bad"' : "") +
         ' data-unit="' + ui + '" data-key="' + esc(k) + '"' +

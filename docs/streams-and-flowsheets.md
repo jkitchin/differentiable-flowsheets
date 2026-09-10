@@ -559,6 +559,34 @@ reactors = catalog(category="reactors")
 
 All of it is **derived by introspection**, not from a second hand-maintained table: parameters come from `dataclasses.fields` of the unit's `Params` class, ports from the `__call__` signature, and equations from the `equations` class attribute the units already carry. The catalog therefore cannot drift from the code, and an operation whose signature is unannotated is reported as *unknown* rather than guessed at — `Splitter` returns a bare `tuple`, so its `n_outlets` is `None`.
 
+### Where descriptions and units come from
+
+Each parameter also carries the prose that documents it, so a schema can label a field rather than only name it:
+
+```python
+for p in describe_operation("DistillationColumn").parameters:
+    print(p.name, "--", p.units, "--", p.description)
+```
+
+```
+species_order -- None -- List of species names
+n_stages -- None -- Total number of stages (including condenser/reboiler)
+feed_stage -- None -- Feed stage number (1 = bottom)
+condenser_type -- None -- 'total' or 'partial'
+P -- Pa -- Column pressure (Pa)
+q -- None -- Feed thermal condition (1.0 = saturated liquid, 0.0 = saturated vapor)
+```
+
+That text is not a second copy: `difflow.docstrings` reads it out of the `Params` class's own `Attributes:` section and the comments beside its fields, which is where the project already writes it. Populating `field(metadata=...)` on all 87 `Params` classes would have duplicated every description and then drifted from it.
+
+`units` is read from the parenthetical in the description — `Column pressure (Pa)` gives `"Pa"` — and only when the parenthetical actually reads as units. A range (`0-1`), a default (`default 10`) or a note (`1.0 = stoichiometric`) yields `None`, because a wrong unit in a machine-readable schema is worse than a missing one.
+
+Where a field needs to say something different from its docstring, its metadata still wins:
+
+```python
+P: float = field(default=101325.0, metadata={"description": "...", "units": "bar"})
+```
+
 ### Which operations are declarative
 
 `is_declarative` marks the operations whose parameters are all data, so a form or a JSON file could supply them:

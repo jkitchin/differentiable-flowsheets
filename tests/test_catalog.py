@@ -266,5 +266,112 @@ class TestSchema:
             assert "\n" not in spec.description, name
 
 
+# =============================================================================
+# Parameter documentation
+# =============================================================================
+
+
+class TestParameterDocumentation:
+    """#213: nothing populated the field metadata the catalog read, so
+    every parameter of every operation carried ``description=None``. The
+    descriptions are written --- in the ``Params`` class's own
+    ``Attributes:`` section and the comments around its fields --- and
+    :mod:`difflow.docstrings` is what carries them across. These tests
+    keep that pathway from silently going quiet again.
+    """
+
+    def test_a_representative_sample_is_described(self, cat):
+        sample = {
+            ("CSTR", "V"): "Reactor volume",
+            ("Flash", "species_order"): "species",
+            ("ShortcutColumn", "light_key"): "light key",
+            ("DistillationColumn", "n_stages"): "stages",
+            ("CounterCurrentHX", "UA"): "heat transfer",
+            ("Heater", "duty"): "heat duty",
+        }
+        for (op, param), expected in sample.items():
+            spec = next(p for p in cat[op].parameters if p.name == param)
+            assert spec.description, f"{op}.{param} has no description"
+            assert expected.lower() in spec.description.lower(), \
+                f"{op}.{param}: {spec.description!r}"
+
+    def test_units_reach_the_schema(self, cat):
+        """A ``P`` with no units in a schema is a trap."""
+        expected = {
+            ("CSTR", "V"): "m^3",
+            ("DistillationColumn", "P"): "Pa",
+            ("CounterCurrentHX", "UA"): "W/K",
+        }
+        for (op, param), units in expected.items():
+            spec = next(p for p in cat[op].parameters if p.name == param)
+            assert spec.units == units, f"{op}.{param}: {spec.units!r}"
+
+    def test_almost_every_parameter_is_described(self, cat):
+        """Not all of them: a handful of fields are genuinely undocumented.
+
+        The bar is a fraction rather than a count so that adding a unit
+        does not fail the suite, while the pathway breaking does ---
+        before #213 this was exactly 0.
+        """
+        params = [p for spec in cat.values() for p in spec.parameters]
+        described = [p for p in params if p.description]
+        assert len(described) / len(params) > 0.9, (
+            f"only {len(described)}/{len(params)} parameters are described; "
+            "the docstring pathway looks broken"
+        )
+
+    def test_units_are_found_across_the_project(self, cat):
+        with_units = [p for spec in cat.values() for p in spec.parameters
+                      if p.units]
+        assert len(with_units) > 100
+
+    def test_no_parameter_claims_an_implausible_unit(self, cat):
+        """A wrong unit is worse than a missing one."""
+        for name, spec in cat.items():
+            for p in spec.parameters:
+                if p.units is None:
+                    continue
+                assert len(p.units) <= 28, f"{name}.{p.name}: {p.units!r}"
+                assert "," not in p.units, f"{name}.{p.name}: {p.units!r}"
+                assert "=" not in p.units, f"{name}.{p.name}: {p.units!r}"
+                assert not p.is_callable, \
+                    f"{name}.{p.name} is a function, so it has no units"
+
+    def test_field_metadata_still_wins(self):
+        """Option 2 from #213 stays available per field."""
+        from dataclasses import dataclass, field
+
+        from difflow.params_mixin import ParamsMixin
+
+        @dataclass
+        class ExplicitParams(ParamsMixin):
+            """Summary.
+
+            Attributes:
+                P: Column pressure (Pa)
+            """
+
+            P: float = field(
+                default=101325.0,
+                metadata={"description": "Overridden", "units": "bar"},
+            )
+
+        class Explicit:
+            """A unit."""
+
+            def __init__(self, params: ExplicitParams):
+                self.params = params
+
+        spec = describe_class(Explicit).parameters[0]
+        assert spec.description == "Overridden"
+        assert spec.units == "bar"
+
+    def test_descriptions_survive_the_json_payload(self, cat):
+        payload = json.loads(json.dumps(cat["CSTR"].to_dict()))
+        volume = next(p for p in payload["parameters"] if p["name"] == "V")
+        assert volume["description"]
+        assert volume["units"] == "m^3"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

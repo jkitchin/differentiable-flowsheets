@@ -12,7 +12,10 @@ hand-maintained table:
 * **parameters** come from ``dataclasses.fields`` of the unit's
   ``Params`` class --- name, type, default, whether it is required, and
   whether it is a callable (which is what a declarative front end
-  cannot author; see :mod:`difflow.kinetics`).
+  cannot author; see :mod:`difflow.kinetics`). Their descriptions and
+  units come from the ``Params`` class's own documentation, read by
+  :mod:`difflow.docstrings`, so the prose the project already maintains
+  is what a consumer of the schema sees.
 * **ports** come from the ``__call__`` signature: parameters annotated
   as :data:`~difflow.streams.Stream` are inlets, and the leading
   ``Stream`` entries of the return tuple are outlets.
@@ -42,6 +45,7 @@ import typing
 from dataclasses import dataclass, field
 from typing import Any
 
+from difflow.docstrings import attribute_docs
 from difflow.params_mixin import ParamsMixin
 
 #: module name -> category, for the core unit operations
@@ -101,9 +105,11 @@ class ParameterSpec(ParamsMixin):
         is_callable: whether the field holds a function or an arbitrary
             object rather than data. These are the fields a declarative
             front end cannot fill in.
-        units: physical units, when the field declares them in its
-            dataclass metadata.
-        description: help text, when the field declares it.
+        units: physical units, from the field's dataclass metadata or,
+            failing that, from the parenthetical in its documented
+            description (``Flash pressure (Pa)`` -> ``"Pa"``).
+        description: help text, from the field's dataclass metadata or,
+            failing that, from the ``Params`` class's own documentation.
     """
 
     name: str
@@ -319,11 +325,22 @@ def _is_code(annotation: Any) -> bool:
 
 
 def _parameters(params_cls: type | None) -> list[ParameterSpec]:
-    """Describe every field of a ``Params`` dataclass."""
+    """Describe every field of a ``Params`` dataclass.
+
+    Descriptions and units come from the field's ``metadata`` where it
+    declares them, and otherwise from the class's own documentation ---
+    its ``Attributes:`` section and the comments around its fields ---
+    read by :mod:`difflow.docstrings`. Without that fallback every
+    parameter in the project would carry ``description=None``: the prose
+    is written, in the form CLAUDE.md prescribes, and metadata is
+    nowhere populated.
+    """
     if params_cls is None:
         return []
+    docs = attribute_docs(params_cls)
     specs = []
     for f in dataclasses.fields(params_cls):
+        doc = docs.get(f.name)
         has_default = (
             f.default is not dataclasses.MISSING
             or f.default_factory is not dataclasses.MISSING  # type: ignore[misc]
@@ -333,14 +350,22 @@ def _parameters(params_cls: type | None) -> list[ParameterSpec]:
             default = repr(f.default)
         elif f.default_factory is not dataclasses.MISSING:  # type: ignore[misc]
             default = f"{f.default_factory.__name__}()"  # type: ignore[misc]
+        is_callable = _is_code(f.type)
+        # a function has no units, and its documented signature often
+        # names the units of *its* arguments ("C is in mol/m^3")
+        units = f.metadata.get("units")
+        if units is None and doc is not None and not is_callable:
+            units = doc.units
         specs.append(ParameterSpec(
             name=f.name,
             type=str(f.type),
             default=default,
             required=not has_default,
-            is_callable=_is_code(f.type),
-            units=f.metadata.get("units"),
-            description=f.metadata.get("description"),
+            is_callable=is_callable,
+            units=units,
+            description=(
+                f.metadata.get("description") or (doc.description if doc else None)
+            ),
         ))
     return specs
 
