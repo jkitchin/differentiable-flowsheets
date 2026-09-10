@@ -493,6 +493,21 @@ class TFF:
         """
         rejection = rejection or {}
 
+        # Keep the arguments, not just what was built from them. TFF is a
+        # composition of two stages and holds no Params of its own, so
+        # `difflow.serialize` -- which reads a constructor argument off the
+        # instance by attribute of the same name -- had nothing to read,
+        # and a flowsheet containing a TFF could not be saved and loaded
+        # back at all. The other six are recorded for the same reason,
+        # though only the required one is carried by the file today.
+        self.membrane_area = membrane_area
+        self.MWCO = MWCO
+        self.rejection = rejection
+        self.Lp = Lp
+        self.k_mass = k_mass
+        self.sigma = sigma
+        self.fouling_coefficient = fouling_coefficient
+
         self.uf = Ultrafiltration(UltrafiltrationParams(
             membrane_area=membrane_area,
             MWCO=MWCO,

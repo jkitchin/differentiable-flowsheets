@@ -501,5 +501,110 @@ class TestPluginTypes:
             "a plugin outside _PACKAGES saves fine and refuses to load")
 
 
+# =============================================================================
+# Units that build their own Params
+# =============================================================================
+
+
+class TestUnpackedParams:
+    """Units that take their numbers as plain constructor arguments.
+
+    ``Compressor(ratio)``, ``FlowSplit(w)``, ``GasPipe(beta)`` and most of
+    the gas plugin build their own ``Params`` rather than being handed
+    one. ``to_dict`` still writes those numbers under ``"params"``,
+    because it writes whatever the instance calls ``.params`` --- so the
+    value is in the file, one field away from where the loader used to
+    look for it. It demanded them under ``"constructor"`` instead and
+    refused a file that plainly carried them.
+    """
+
+    CASES = [
+        ("Compressor", dict(ratio=1.3), "ratio", 1.3),
+        ("FlowSplit", dict(w=2.0), "w", 2.0),
+        ("SourceHead", dict(P_set=5.0e6), "P_set", 5.0e6),
+        ("GasPipe", dict(beta=7.0), "beta", 7.0),
+        ("BackPipe", dict(beta=7.0), "beta", 7.0),
+        ("PressureDrivenPipe", dict(beta=7.0), "beta", 7.0),
+    ]
+
+    def _round_trip(self, name, kwargs):
+        from difflow.catalog import _default_registry
+
+        cls = _default_registry().list_operations()[name].cls
+        fs = Flowsheet(species_order=SPECIES)
+        fs.add_unit(Unit(name.lower(), cls(**kwargs), ["a"], ["b"]))
+        return fs, serialize.from_json(serialize.to_json(fs))
+
+    @pytest.mark.parametrize("name,kwargs,field,value", CASES)
+    def test_the_value_comes_back(self, name, kwargs, field, value):
+        _, back = self._round_trip(name, kwargs)
+        assert getattr(back.units[0].operation.params, field) == value
+
+    @pytest.mark.parametrize("name,kwargs,field,value", CASES)
+    def test_the_file_carries_it_under_params(self, name, kwargs, field, value):
+        """Where the loader now reads it from, stated as its own fact."""
+        fs, _ = self._round_trip(name, kwargs)
+        written = json.loads(serialize.to_json(fs))["units"][0]
+        assert written["params"][field] == value
+        assert field not in written["constructor"]
+
+    def test_defaults_the_unit_filled_in_survive_too(self):
+        """Not just the required argument: the whole Params it built."""
+        _, back = self._round_trip("Compressor", dict(ratio=1.3))
+        params = back.units[0].operation.params
+        assert (params.eta_ad, params.kappa, params.cp) == (0.8, 1.3, 2200.0)
+
+    def test_a_non_params_argument_still_travels_as_a_constructor_extra(self):
+        """The two channels compose: `ratio` by params, `direction` by extras."""
+        _, back = self._round_trip(
+            "CompressorBoost", dict(ratio=1.2, direction=-1)
+        )
+        assert back.units[0].operation.params.ratio == 1.2
+        assert back.units[0].operation.direction == -1
+
+    def test_extras_on_load_still_outrank_the_file(self):
+        from difflow.catalog import _default_registry
+
+        cls = _default_registry().list_operations()["GasPipe"].cls
+        fs = Flowsheet(species_order=SPECIES)
+        fs.add_unit(Unit("pipe", cls(beta=7.0), ["a"], ["b"]))
+        back = serialize.from_json(
+            serialize.to_json(fs), extras={"pipe": {"beta": 9.0}}
+        )
+        assert back.units[0].operation.params.beta == 9.0
+
+    def test_a_genuinely_absent_argument_is_still_refused(self):
+        """The message has to keep meaning what it says.
+
+        ``Mixer(species_order)`` is an object the file does not carry, and
+        widening the loader to read "params" must not turn that into a
+        silent success or a different error.
+        """
+        from difflow.catalog import _default_registry
+
+        cls = _default_registry().list_operations()["Mixer"].cls
+        fs = Flowsheet(species_order=SPECIES)
+        fs.add_unit(Unit("mix", cls(species_order=SPECIES), ["a"], ["b"]))
+        text = serialize.to_json(fs)
+        spec = json.loads(text)
+        spec["units"][0]["constructor"] = {}
+        with pytest.raises(SerializationError, match="requires species_order"):
+            serialize.from_dict(spec)
+
+    def test_tff_records_the_arguments_it_was_built_with(self):
+        """A composite still has to answer for its own constructor.
+
+        TFF holds two stages and no Params, so the writer --- which reads
+        a constructor argument off the instance by attribute --- found
+        nothing to write and a TFF flowsheet could not be saved at all.
+        """
+        from difflow_bio import TFF
+
+        fs = Flowsheet(species_order=SPECIES)
+        fs.add_unit(Unit("tff", TFF(membrane_area=4.0), ["a"], ["b"]))
+        back = serialize.from_json(serialize.to_json(fs))
+        assert back.units[0].operation.membrane_area == 4.0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

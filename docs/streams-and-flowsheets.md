@@ -506,6 +506,20 @@ fs2 = serialize.load("plant.json", extras={"flash": {"thermo": my_thermo}})
 
 `extras` also *overrides* a stored thermo, which is the way to reload a saved flowsheet against a different property package.
 
+### Units that build their own `Params`
+
+Most units are constructed as `Unit(Params(...), thermo)`, but a substantial minority take their numbers as plain constructor arguments and build the `Params` themselves — `Compressor(ratio)`, `FlowSplit(w)`, `GasPipe(beta)`, and most of the gas plugin. Those numbers are written under `params`, because that is where the built unit keeps them, and they are passed straight back to the constructor on load. Nothing extra is needed:
+
+```python
+fs = Flowsheet(species_order=["CH4"])
+fs.add_unit(Unit("boost", Compressor(ratio=1.3), ["a"], ["b"]))
+serialize.from_json(serialize.to_json(fs))   # ratio comes back as 1.3
+```
+
+An argument that is *not* data — `Mixer(species_order)`, a `thermo` — still travels under `constructor`, and the two channels compose: `CompressorBoost(ratio, direction)` carries `ratio` by the first road and `direction` by the second.
+
+Only *required* constructor arguments are carried. An optional one left at its default is not written, so a unit that was built with a non-default optional argument comes back with the default; pass it on load with `extras=` when it matters.
+
 ---
 
 ## Generating Python
@@ -625,6 +639,7 @@ One name is deliberately not the class name: `difflow_gas` registers a `Compress
 difflow                                   # an empty canvas, in a browser
 difflow gui plant.json                    # ...on a flowsheet
 difflow gui --port 9000 --no-browser
+difflow gui --stay                        # ...and keep serving after the tab closes
 ```
 
 The editor is what a bare `difflow` does, because it is the one thing here that has nothing to print and everything to show. `python -m difflow.gui` is the same command for an environment where the console script is not on `PATH`.
@@ -642,6 +657,38 @@ Two pages are served, and they are at different stages.
 `/` is the **canvas**: the flowsheet as a node graph, laid out automatically, pan and zoom, feeds banked left and products right, recycle edges dashed and orange. Drag an operation off the palette to drop a unit; drag from a unit's outlet port to another unit's inlet to wire it; drag a box to move it; select and press Delete to remove. Every gesture is one request and then a redraw from the answer, so the picture cannot drift from the model.
 
 Two things about wiring are worth knowing before you use it, because both are properties of difflow rather than of the editor. A **stream name is the wiring**: connecting an outlet to an inlet renames the inlet, it does not add an arc, so the downstream unit's port is called whatever the upstream unit's outlet is called. And a **loop is a tear, never an arc**: if the wire you draw would close a cycle, the editor records a recycle instead — the same thing `add_recycle` does — and the edge draws dashed with both stream names on it, because the two ends carry different names.
+
+**A stream can be renamed, and it is not a label edit.** Select a feed or
+product node and type a new name: the server moves the feed, both ends of
+any recycle, every port that reads or writes it and the canvas node
+together, because a name that moved in some places and not others splits
+the flowsheet into two graphs that each look fine on their own. Two
+renames are refused rather than performed — a name another stream already
+has, which would *join* the two and is a connection wearing a rename's
+clothes, and a name that is not a Python identifier, which would survive
+the edit and fail later in `codegen` or on reload, a long way from the
+typing. `gui.edit.rename` is that checked door; `rename_stream` is the
+unchecked mechanism underneath, and both stay, because `connect` uses the
+unchecked one *to* rewire.
+
+**A mixer's inlet count belongs to the flowsheet, not to the class.** A
+`Mixer` mixes however many streams it is handed, and so do `Junction`,
+`BusNode` and `AffineFlow` — the four operations the catalog reports as
+`ports.variadic`. So the inspector offers `Add inlet` on those and a `−`
+per row, and until now the only way to get a third inlet on a mixer was
+to edit the JSON by hand. A variadic unit also arrives from the palette
+with **two** inlets rather than one, because one is what it means to not
+be there: a mixer mixing a single stream is a piece of pipe.
+
+A new port arrives unwired, which is what a unit dropped from the palette
+does too. Removing one is refused rather than cascaded when something is
+on it — a feed, an upstream unit, a recycle destination — because
+deleting the port and deleting the feed behind it are two edits, and
+undoing the first does not bring back the second: the composition,
+temperature and pressure are gone. The refusal names what is in the way.
+The front end draws the button from the catalog's own `variadic` flag and
+the server refuses against the same one, so the button cannot offer
+something the server will turn down.
 
 Feed and product nodes are drawn *from* the topology; they are stream names with nothing on one end rather than objects the flowsheet holds, so they are not draggable endpoints. A unit dropped from the palette arrives unwired with a dangling stream on each port, which is why it appears with feed-ish and product-ish stubs until you connect it.
 
@@ -664,6 +711,88 @@ The point is not to replace writing Python. It is to make the tedious parts quic
 It is stdlib only (`http.server`), binds to `127.0.0.1`, and is meant for a single local user. It is a development tool, not a hardened service — do not expose it to a network.
 
 Because the code context runs Python, the server answers mutating requests only from the page it served. Three checks, all in `server.py`: a token minted per process, put into the page as a `<meta>` tag and required in an `X-Difflow-Token` header; an `Origin` that must be this exact host and port; and a `Host` that must be a loopback name, which is what a DNS-rebinding request cannot produce. A request that fails any of them gets a **403** — the one case where a refusal is not a 200, because it is a failure of the request rather than an answer about the flowsheet. Reads are not guarded: the page fetches the catalog before it has done anything. A client outside the browser — `curl`, or `npm run dev` proxying to this server — has to send the token too.
+
+### The editor stops when its page does
+
+A local editor that outlives its tab is a small disaster: the port stays
+held, the next `difflow gui` refuses to bind, and nothing on screen says
+why. So the page and the server keep each other alive.
+
+The page posts `POST /api/ping` every 15 seconds with an id minted for
+that page load, and `POST /api/bye` on `pagehide`. The server keeps a
+**dict keyed by page id**, not a count: a reload increments before it
+decrements, and a tab that dies without a farewell never decrements at
+all, so a counter goes wrong in both directions. A page that has not
+been heard from in `IDLE_GRACE_SECONDS` (90) is dropped, and when the
+last one goes the server shuts itself down and the port comes back. The
+grace is six heartbeats rather than two because Chrome throttles a
+background tab's timers to roughly one firing a minute — a tab left in
+the background is not a tab that has gone away.
+
+Nothing expires before the *first* check-in, so a server started with
+`--no-browser`, or one whose page is still loading, is never killed for
+having no pages yet.
+
+`pagehide` fires for the back/forward cache too, and that is not a
+departure — the tab is coming back with its JavaScript intact. So the
+farewell is suppressed when `event.persisted` is true, and `pageshow`
+re-pings.
+
+The header also carries a **Quit** button, which asks twice: one click
+arms it (`Really quit?` for four seconds), the second posts
+`POST /api/quit`, and the page draws a *stopped* overlay so a dead tab
+does not look like a live one. Either way the process prints why it
+stopped — `stopped: quit from the editor`, or `stopped: the editor page
+was closed`.
+
+`--stay` turns all of this off and serves until Ctrl-C, which is what a
+long-running or embedded server wants. `make_server` never starts the
+watcher at all: a test builds a server and drives it, and a server that
+can vanish mid-test is not testable.
+
+**When the port is taken, the message says by whom.** `lsof` first,
+`ss` second, nothing third — none of which may exist, and none of which
+is allowed to raise:
+
+```
+difflow gui: port 8756 on 127.0.0.1 is already in use.
+
+It is held by pid 62689 (python3.12).
+    difflow gui plant.json
+
+To stop it:
+
+    kill 62689
+```
+
+The `kill` line is offered only when the process is one this user can
+signal (`os.kill(pid, 0)`), because telling someone to kill another
+user's process is telling them to run a command that will fail.
+
+### Where the book talks about a unit
+
+Every operation the palette offers carries a `?` that opens this book at
+the section describing it, and the inspector's heading carries the same
+link for the selected unit. The header has `Docs` and `GitHub` beside
+the version, read from the installed package's `Project-URL` metadata
+rather than typed into the front end.
+
+The mapping is **derived, not maintained**. `difflow.gui.doclinks` reads
+`static/docs-index.json` — the same index the assistant retrieves
+against, built from `docs/` and rebuilt by CI — and for an operation
+name prefers, in order: a section whose heading *starts* with the name,
+on a unit-operations page, at the shallowest nesting, then the section
+that mentions it most. A hand-kept table of 87 operations against 760
+sections would be wrong within a release; this one cannot drift from the
+prose, because it is computed from it.
+
+It resolves 82 of the 87 registered operations. The five it does not are
+units the book does not yet describe by name, and `catalog()` reports
+`docs_url: null` for them rather than a link to something else —
+[#228](https://github.com/jkitchin/differentiable-flowsheets/issues/228)
+tracks writing the missing sections. A test asserts that every URL it
+does emit points at a page `_toc.yml` actually builds, so a renamed
+chapter fails a test rather than shipping a 404.
 
 ### The code context
 
