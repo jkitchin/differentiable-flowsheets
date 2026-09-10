@@ -248,6 +248,9 @@ from difflow import operability
 # Flexibility analysis submodule (#198)
 from difflow import flexibility
 
+# Two-stage stochastic programming over a scenario sample
+from difflow import stochastic
+
 # External solver bridges: pounce / discopt (#203)
 from difflow import solvers
 
@@ -528,6 +531,8 @@ __all__ = [
     "operability",
     # Flexibility analysis
     "flexibility",
+    # Stochastic programming
+    "stochastic",
     # External solver bridges
     "solvers",
     # Declarative kinetics

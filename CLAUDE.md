@@ -38,6 +38,7 @@ difflow/
 │   │   ├── database.py    # Species property database
 │   │   ├── flowsheet.py   # Flowsheet with recycle solving
 │   │   ├── uncertainty.py # Sensitivity & UQ
+│   │   ├── stochastic/    # Two-stage stochastic programming (SAA over scenarios)
 │   │   ├── planning/      # Delta-base planning (LP/MILP + trust region)
 │   │   ├── catalog.py     # Machine-readable schema of every unit operation
 │   │   ├── docstrings.py  # Params field descriptions, read from the Attributes:
@@ -284,6 +285,11 @@ class MyUnit:
 - Precipitation: `OxalatePrecipitator`, `CarbonatePrecipitator`, `HydroxidePrecipitator`
 - Flowsheets: `ExtractStripCircuit`, `ExtractScrubStripCircuit`, `SplitShellCascade`, `FullSeparationTrain`
 - Database: 10 REE elements, 4 extractant systems
+- Uncertain D: `REEDistribution(..., coefficient_overrides={"Nd": {"a": ...}})`
+  replaces tabulated log10(D) correlation coefficients, and accepts JAX tracers,
+  so a distribution can be put on D and differentiated through. Passed through by
+  `REEExtractorParams`, `MixerSettlerParams`, `ScrubberParams`, `StripperParams`.
+  `n_stages` is likewise a continuous, traceable decision (Kremser is `E**(N+1)`)
 
 **difflow_cc** - Carbon capture:
 - Amine absorption: `AmineAbsorber`, `AmineStripper` (MEA, DEA, MDEA, PZ, AMP)
@@ -428,6 +434,75 @@ Reference model: `difflow.planning.chain.two_plant_chain()`. Docs: `docs/plannin
 Example: `examples/30_delta_base_planning.ipynb`. Tests: `tests/test_planning.py`,
 `tests/test_planning_export.py`.
 
+### Stochastic Programming (`difflow.stochastic`)
+
+Design under uncertainty: the sample average approximation of a two-stage
+stochastic program, over any pure JAX `model(x, u, theta) -> {name: value}`.
+Like `difflow.planning`, a module alongside `flexibility/`, **not** a
+`difflow.plugins` entry point.
+
+```python
+import difflow.stochastic as st
+scen = st.ScenarioSet.from_covariance(["a_Nd", "a_Dy"], mean, Sigma, n=256, seed=0)
+prob = st.TwoStageProblem(model=circuit,
+                          first_stage={"n_stages": (2., 16.)},   # here and now
+                          recourse={"pH": (1.8, 2.8)},           # wait and see
+                          objective="profit", maximize=True, risk=("cvar", 0.9),
+                          constraints=[("purity", ">=", 0.80, 0.90)])
+res = st.solve_saa(prob, scen)
+st.bounds(prob, scen, result=res)          # VSS and EVPI
+st.check_scenario_health(prob, scen, res)  # dead levers, empty tails, saturation
+```
+
+Invariants encoded in the module (do not weaken them):
+- The scenario sample is drawn ONCE and reused. There is no
+  resample-per-iteration option: a resampled SAA objective is not a function,
+  and a descent method on it stalls at a distance set by the noise.
+  `optimality_gap` is the only thing that redraws, and it reports a bound
+  rather than a better point.
+- Non-anticipativity is STRUCTURAL — one first-stage array shared by every
+  scenario — never a constraint that could be written down wrongly.
+- The Rockafellar-Uryasev auxiliary is NOT a decision variable. It is
+  recomputed at its closed-form optimum every iterate and frozen with
+  `stop_gradient`; that is exact by the envelope theorem. Handing it to a
+  projected method whose step scales with the box width makes the auxiliary
+  swing harder than the design, and the run ends at a bound looking converged.
+- The constraint handler is an AUGMENTED LAGRANGIAN, not a growing penalty. A
+  penalty weight of 1e4 inflates Adam's second moment by eight decades and
+  every later step shrinks to nothing — the iterate freezes and reports itself
+  feasible. `tests/test_stochastic.py::TestSolve::test_a_growing_penalty_would_have_frozen_here`
+  is the regression.
+- Objective and constraint residuals are rescaled, and the rescaling is EXACT:
+  every risk measure is translation-equivariant and positively homogeneous, and
+  every constraint form is positively homogeneous in its residual.
+- Feasibility is scored by re-evaluating the model, never read off the
+  multipliers — the same rule `difflow.planning` states for LP slacks.
+- `wait_and_see` carries the constraints across UNCHANGED. That is what makes
+  it a bound (drop non-anticipativity, change nothing else). Rewriting a chance
+  constraint per-scenario can make the relaxation infeasible where the original
+  was fine, and then EVPI comes out negative.
+- `n_aux` on a risk measure is a plain class attribute, never an annotated
+  dataclass field: as a base-class field it takes the first positional slot and
+  `CVaR(0.9)` silently sets the auxiliary count instead of alpha.
+- Out of scope by design: L-shaped/Benders decomposition, scenario reduction,
+  multistage trees, integer recourse, distributionally robust formulations.
+  Do not add them.
+
+Where the uncertain parameters come from: `difflow.estimation.predicted_covariance`
+and `difflow.reconciliation.reconciled_covariance` both return the `(mean, Sigma)`
+that `ScenarioSet.from_covariance` wants. Prefer it over the per-parameter
+constructors — correlated coefficients have a *difference* variance that a
+diagonal Sigma gets wrong by a factor of a few.
+
+Related, and cheaper — try these first: `difflow.uncertainty` (propagate a
+distribution through a fixed design), `difflow.planning.backoff` (`kappa*sigma`
+margin from one Jacobian), `difflow.flexibility.expected_feasibility` (does a
+design I already have meet spec often enough?), `difflow.flexibility` proper (a
+guarantee over an envelope, by vertex search rather than sampling).
+
+Docs: `docs/stochastic.md`. Example: `examples/32_stochastic_ree_separation.ipynb`.
+Tests: `tests/test_stochastic.py`, `tests/ree/test_coefficient_overrides.py`.
+
 ### Debugging Gradients
 
 ```python
@@ -473,6 +548,7 @@ jax.debug.print("value: {x}", x=value)
 | `src/difflow/docstrings.py` | Reads Params field descriptions out of the `Attributes:` docstrings and field comments, for the catalog |
 | `src/difflow/gui/doclinks.py` | Resolves an operation name to its section in `docs/` (the palette's documentation link) |
 | `src/difflow/planning/` | Delta-base planning: AD delta vectors -> trust-region LP/MILP |
+| `src/difflow/stochastic/` | Two-stage stochastic programming: SAA over a scenario sample, VSS/EVPI |
 | `src/difflow_bio/__init__.py` | Bio manufacturing plugin exports |
 | `src/difflow_ree/__init__.py` | REE extraction plugin exports |
 | `src/difflow_cc/__init__.py` | Carbon capture plugin exports |

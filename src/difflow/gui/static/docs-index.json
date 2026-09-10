@@ -1,5 +1,5 @@
 {
- "n_sections": 813,
+ "n_sections": 829,
  "sections": [
   {
    "anchor": "overview",
@@ -1167,7 +1167,7 @@
    "path": "Difflow Documentation > Documentation Contents > Core Modules",
    "source": "index.md",
    "targets": [],
-   "text": "| Document | Description |\n|----------|-------------|\n| [Getting Started](getting-started.md) | Installation, quick start, and basic examples |\n| [Unit Operations - Chemical](unit-operations-chemical.md) | Reactors, separators, heat exchangers, distillation |\n| [Unit Operations - Bio](unit-operations-bio.md) | Bioreactors, centrifugation, filtration, chromatography |\n| [Unit Operations - REE](unit-operations-ree.md) | Rare earth element extraction, scrubbing, stripping, precipitation |\n| [Thermodynamics](thermodynamics.md) | Property calculations, equations of state, databases |\n| [Technoeconomics](technoeconomics.md) | Capital costs, operating costs, profitability analysis |\n| [Streams and Flowsheets](streams-and-flowsheets.md) | Stream handling, flowsheet solver, recycle calculations |\n| [Dynamic Modeling](dynamic-modeling.md) | Transient simulation, ODE/DAE integration, diffrax backend |\n| [Moving-Horizon Estimation](moving-horizon-estimation.md) | Constrained MHE over dynamic flowsheets, EKF baseline, delayed and multi-rate data, joint parameter estimation |\n| [Operability Screening](operability.md) | Steady-state controllability from AD gains: RGA, singular values, disturbance rejection |\n| [Flexibility Analysis](flexibility.md) | Feasibility function, flexibility index, and the feed-vs-parameter uncertainty split |\n| [Experiment Design and Identifiability](experiment-design.md) | Fisher-information D/A/E-optimal run selection, predicted confidence intervals, structural identifiability |\n| [External Solvers](external-solvers.md) | Bridging flowsheets to pounce (NLP, post-optimal sensitivity) and discopt (implicit residual blocks) |\n| [Solvers and Utilities](solvers-and-utilities.md) | Numerical methods, uncertainty propagation |\n| [Data Reconciliation](data-reconciliation.md) | Constrained least squares on noisy plant data, gross error detection, observability |\n| [Delta-Base Planning](planning.md) | AD-generated delta vectors, trust-region LP/MILP planning, sensitivity of the plan |\n| [Aspen PIMS Integration](pims-integration.md) | Design proposal: shipping difflow delta vectors into a PIMS planning model (nothing implemented yet) |"
+   "text": "| Document | Description |\n|----------|-------------|\n| [Getting Started](getting-started.md) | Installation, quick start, and basic examples |\n| [Unit Operations - Chemical](unit-operations-chemical.md) | Reactors, separators, heat exchangers, distillation |\n| [Unit Operations - Bio](unit-operations-bio.md) | Bioreactors, centrifugation, filtration, chromatography |\n| [Unit Operations - REE](unit-operations-ree.md) | Rare earth element extraction, scrubbing, stripping, precipitation |\n| [Thermodynamics](thermodynamics.md) | Property calculations, equations of state, databases |\n| [Technoeconomics](technoeconomics.md) | Capital costs, operating costs, profitability analysis |\n| [Streams and Flowsheets](streams-and-flowsheets.md) | Stream handling, flowsheet solver, recycle calculations |\n| [Dynamic Modeling](dynamic-modeling.md) | Transient simulation, ODE/DAE integration, diffrax backend |\n| [Moving-Horizon Estimation](moving-horizon-estimation.md) | Constrained MHE over dynamic flowsheets, EKF baseline, delayed and multi-rate data, joint parameter estimation |\n| [Operability Screening](operability.md) | Steady-state controllability from AD gains: RGA, singular values, disturbance rejection |\n| [Flexibility Analysis](flexibility.md) | Feasibility function, flexibility index, and the feed-vs-parameter uncertainty split |\n| [Stochastic Programming](stochastic.md) | Two-stage design under a parameter distribution: scenario sampling, CVaR and chance constraints, VSS and EVPI |\n| [Experiment Design and Identifiability](experiment-design.md) | Fisher-information D/A/E-optimal run selection, predicted confidence intervals, structural identifiability |\n| [External Solvers](external-solvers.md) | Bridging flowsheets to pounce (NLP, post-optimal sensitivity) and discopt (implicit residual blocks) |\n| [Solvers and Utilities](solvers-and-utilities.md) | Numerical methods, uncertainty propagation |\n| [Data Reconciliation](data-reconciliation.md) | Constrained least squares on noisy plant data, gross error detection, observability |\n| [Delta-Base Planning](planning.md) | AD-generated delta vectors, trust-region LP/MILP planning, sensitivity of the plan |\n| [Aspen PIMS Integration](pims-integration.md) | Design proposal: shipping difflow delta vectors into a PIMS planning model (nothing implemented yet) |"
   },
   {
    "anchor": "architecture-overview",
@@ -2104,6 +2104,134 @@
    "source": "solvers-and-utilities.md",
    "targets": [],
    "text": "```python\n# Check for NaN/Inf\nimport jax.numpy as jnp\n\ndef check_numerics(x, name=\"value\"):\n    if jnp.any(jnp.isnan(x)):\n        print(f\"NaN detected in {name}\")\n    if jnp.any(jnp.isinf(x)):\n        print(f\"Inf detected in {name}\")\n    return x\n\n# Monitor convergence\ndef solve_with_monitoring(f, x0, args, tol, max_iter):\n    x = x0\n    for i in range(max_iter):\n        x_new = f(x, args)\n        error = jnp.max(jnp.abs(x_new - x))\n        print(f\"Iter {i}: error = {error:.2e}\")\n        if error < tol:\n            print(f\"Converged in {i+1} iterations\")\n            return x_new\n        x = x_new\n    print(\"Warning: Did not converge\")\n    return x\n```"
+  },
+  {
+   "anchor": "stochastic-programming-difflowstochastic",
+   "heading": "Stochastic Programming (`difflow.stochastic`)",
+   "path": "Stochastic Programming (`difflow.stochastic`)",
+   "source": "stochastic.md",
+   "targets": [],
+   "text": "A design that is optimal at the nominal parameters is optimal at exactly one\npoint of a distribution nobody knows. `difflow.stochastic` replaces that point\nwith a sample and optimizes the resulting histogram \u2014 the **sample average\napproximation** of a two-stage stochastic program \u2014 with the model, the\ngradients and the scenario batching all coming from the same JAX code difflow\nalready runs."
+  },
+  {
+   "anchor": "when-to-reach-for-this-and-when-not-to",
+   "heading": "When to reach for this, and when not to",
+   "path": "Stochastic Programming (`difflow.stochastic`) > When to reach for this, and when not to",
+   "source": "stochastic.md",
+   "targets": [],
+   "text": "Four modules in difflow answer questions about uncertainty, and they cost\nwildly different amounts. Work down this list and stop at the first one that\nanswers your question.\n\n| Question | Module | Cost |\n|---|---|---|\n| How much does my output move when the parameters do? | [`difflow.uncertainty`](solvers-and-utilities.md) | one Jacobian |\n| How much margin should I hold on a constraint? | `difflow.planning.backoff` | one Jacobian |\n| Does the design I already have meet spec often enough? | `difflow.flexibility.expected_feasibility` | one sampled sweep |\n| Is it feasible over the *whole* envelope, guaranteed? | [`difflow.flexibility`](flexibility.md) | vertex enumeration |\n| **What design should I build, given the distribution?** | **`difflow.stochastic`** | **an optimization per scenario set** |\n\nOnly the last row needs this module. It is the only one that *changes the\ndesign*, and it is roughly two orders of magnitude more expensive than the\nfirst two. The diagnostics below exist so you can find out quickly whether\nthat was worth paying."
+  },
+  {
+   "anchor": "the-split-that-is-the-whole-model",
+   "heading": "The split that is the whole model",
+   "path": "Stochastic Programming (`difflow.stochastic`) > The split that is the whole model",
+   "source": "stochastic.md",
+   "targets": [],
+   "text": "$$\\min_{x}\\ \\rho\\Big[\\, F\\big(x, u_s(\\theta_s), \\theta_s\\big) \\,\\Big]$$\n\n*First stage*, `x` \u2014 **here and now**. Decided once, before anything is\nrevealed, and lived with in every scenario. Number of stages, settler volume,\nwhether a scrub section exists. There is exactly one value shared by every\nscenario, and that sharing **is** non-anticipativity: it is enforced\nstructurally, by there being one array, not by constraints that could be\nwritten down wrongly.\n\n*Second stage*, `u_s` \u2014 **wait and see**. Re-decided per scenario, once the\nuncertain parameters are known. Operating pH, solvent-to-feed ratio, scrub\nacid \u2014 the knobs an operator still has when today's assay comes back.\n\nGetting the split wrong goes wrong in one direction far more often than the\nother. Putting an operating variable in the first stage prices a plant that\ncannot be adjusted, which understates its worth and over-designs it. Putting a\n*design* variable in the second stage prices a plant that rebuilds itself\nevery shift. The second mistake is the dangerous one, because its answer looks\n*better*."
+  },
+  {
+   "anchor": "which-uncertainties-admit-recourse-at-all",
+   "heading": "Which uncertainties admit recourse at all",
+   "path": "Stochastic Programming (`difflow.stochastic`) > The split that is the whole model > Which uncertainties admit recourse at all",
+   "source": "stochastic.md",
+   "targets": [],
+   "text": "Recourse is only real when the parameter is **observed** before the recourse\nmust be committed. This is the same distinction [Flexibility Analysis](flexibility.md) draws\nbetween feed uncertainty and parameter uncertainty. A feed assay is measured on\narrival, so pH can genuinely be re-optimized against it. A distribution\ncoefficient is never revealed: it is a property of the chemistry, identical in\nevery campaign and unknown in all of them.\n\nThat does not make a stochastic program over distribution coefficients wrong,\nbut it does change what the recourse variable means. The two honest\nformulations are:\n\n1. **No recourse at all** (`recourse=None`) \u2014 the design is scored against the\n   parameter distribution at a single fixed operating point. Right for an\n   unobservable parameter and a plant with no feedback.\n2. **Recourse on an observable proxy** \u2014 the operator does not see `D`, but does\n   see the raffinate assay, and turns pH until the assay is on target. Then pH\n   is genuinely second-stage, not because `D` was revealed but because its\n   *consequence* was.\n\nThe module will not guess which you mean. State it."
+  },
+  {
+   "anchor": "quick-start",
+   "heading": "Quick start",
+   "path": "Stochastic Programming (`difflow.stochastic`) > Quick start",
+   "source": "stochastic.md",
+   "targets": [],
+   "text": "```python\nimport difflow.stochastic as st\n\nscen = st.ScenarioSet.from_covariance(\n    [\"a_Nd\", \"a_Dy\"], mean, Sigma, n=256, seed=0)\n\nprob = st.TwoStageProblem(\n    model=circuit,                          # (x, u, theta) -> {name: value}\n    first_stage={\"n_stages\": (2.0, 16.0),   # decided once\n                 \"solvent\":  (3.0, 45.0)},\n    recourse={\"pH\": (1.8, 2.8)},            # re-decided per campaign\n    objective=\"profit\", maximize=True,\n    risk=(\"cvar\", 0.9),\n    constraints=[(\"purity\", \">=\", 0.80, 0.90)],\n)\n\nres = st.solve_saa(prob, scen)\nprint(res.summary())\nprint(st.bounds(prob, scen, result=res).summary())        # VSS and EVPI\nprint(st.check_scenario_health(prob, scen, res).summary())\n```\n\nThe model is any pure JAX callable taking three dicts and returning a dict of\nnamed scalars. A flowsheet solve qualifies."
+  },
+  {
+   "anchor": "the-sample",
+   "heading": "The sample",
+   "path": "Stochastic Programming (`difflow.stochastic`) > The sample",
+   "source": "stochastic.md",
+   "targets": [],
+   "text": "`ScenarioSet` is drawn once and reused for the whole solve. There is no\nresample-per-iteration option, because there is no correct way to use one: an\nSAA objective evaluated on a fresh sample at every iteration is not a function\nbut a function plus noise of the same order as the improvements the optimizer\nis chasing, and a descent method on it stalls at a distance set by the noise\nrather than by the tolerance. Fixing the sample makes the objective a genuine\ndeterministic function of `x` with an exact gradient.\n\nConstructors, ordered by how much you actually know:\n\n| Constructor | Use when |\n|---|---|\n| `ScenarioSet.from_samples(draws, names)` | you have draws \u2014 an MCMC posterior, campaign history, a vendor's lot record |\n| `ScenarioSet.from_covariance(names, mean, Sigma, ...)` | you have a fit |\n| `ScenarioSet.normal / .lognormal / .uniform` | you have a nominal value and a spread, independent |\n| `ScenarioSet.from_uncertainty_set(T, ...)` | you have a flexibility envelope and want its stochastic counterpart |\n\n**Prefer `from_covariance` whenever a fit exists.**\n[`difflow.estimation`](parameter-estimation.md) and\n[`difflow.reconciliation`](data-reconciliation.md) both hand back exactly the\n`(mean, Sigma)` pair it wants, so the distribution the plant is designed\nagainst is the one the data supports \u2014 correlations included. Correlation is\nnot a refinement here. Two distribution coefficients fitted to the same\nisotherm are strongly correlated, and the difference of their logarithms is the\nseparation factor, which is the only thing the plant cares about. A diagonal\n`Sigma` gets its variance wrong by a factor of a few, in whichever direction is\nleast convenient."
+  },
+  {
+   "anchor": "what-best-means",
+   "heading": "What \"best\" means",
+   "path": "Stochastic Programming (`difflow.stochastic`) > What \"best\" means",
+   "source": "stochastic.md",
+   "targets": [],
+   "text": "| Risk measure | Meaning | Notes |\n|---|---|---|\n| `Expectation()` | risk neutral | right when many campaigns average out |\n| `MeanStd(kappa)` | `E + kappa sd` | cheap and smooth, but penalizes upside too \u2014 not coherent |\n| `CVaR(alpha)` | mean of the worst `1-alpha` tail | coherent, convex, sensitive to *how bad* the tail is |\n| `WorstCase()` | max over the sample | the worst of `S` draws, not the worst of the distribution |\n\nAnd the constraint forms:\n\n| Constraint | Meaning |\n|---|---|\n| `(\"g\", \">=\", b)` \u2192 `Expected` | holds on average \u2014 right only for genuinely pooled quantities |\n| `(\"g\", \">=\", b, alpha)` \u2192 `Chance` | holds with probability at least `alpha` |\n| `Robust(\"g\", \">=\", b)` | holds in every scenario drawn |\n\nA chance constraint is enforced through its CVaR surrogate,\n`CVaR_alpha(residual) <= 0`, the standard convex **conservative** approximation\n(Nemirovski and Shapiro). Satisfying it implies `P(satisfied) >= alpha`, but\nnot conversely \u2014 so a design this rejects may still be acceptable. The exact\nempirical probability is printed beside it, and `summary()` says so explicitly\nwhen a design fails the surrogate while meeting its probability. Counting\nviolations with an indicator instead is exact, non-convex, has zero gradient\nalmost everywhere, and turns the problem into a MINLP. That is deliberately\nnot implemented."
+  },
+  {
+   "anchor": "three-implementation-choices-worth-knowing-about",
+   "heading": "Three implementation choices worth knowing about",
+   "path": "Stochastic Programming (`difflow.stochastic`) > Three implementation choices worth knowing about",
+   "source": "stochastic.md",
+   "targets": [],
+   "text": "These are not stylistic preferences. Each of them is the difference between a\nconverged answer and a confident wrong one."
+  },
+  {
+   "anchor": "the-rockafellaruryasev-auxiliary-is-not-a-decision-variable",
+   "heading": "The Rockafellar\u2013Uryasev auxiliary is not a decision variable",
+   "path": "Stochastic Programming (`difflow.stochastic`) > Three implementation choices worth knowing about > The Rockafellar\u2013Uryasev auxiliary is not a decision variable",
+   "source": "stochastic.md",
+   "targets": [],
+   "text": "CVaR is written in the Rockafellar\u2013Uryasev form\n\n$$\\mathrm{CVaR}_\\alpha(Z) = \\min_t\\ t + \\frac{1}{1-\\alpha}\\,\\mathbb{E}\\,[(Z-t)_+]$$\n\nwhose textbook use hands `t` to the optimizer as one more variable. This module\ndoes not. `t` lives on the scale of the objective, its useful range is not\nknown before the run, and a projected method takes steps proportional to the\nwidth of the box you give it \u2014 so a generously-sized box for `t` makes the\nauxiliary swing harder than the design variables and the search follows it\ninstead of the design. That failure is silent and looks like a converged answer\nat a bound.\n\nInstead `t` is recomputed at every iterate as the empirical value at risk \u2014 its\nexact minimizer at fixed `Z` \u2014 and frozen with `stop_gradient`. By the envelope\ntheorem this is the **exact** gradient of CVaR, and the value reported is\nexactly `min_t`. [`difflow.flexibility`](flexibility.md) makes the same trade\nfor the same reason."
+  },
+  {
+   "anchor": "an-augmented-lagrangian-not-a-growing-penalty",
+   "heading": "An augmented Lagrangian, not a growing penalty",
+   "path": "Stochastic Programming (`difflow.stochastic`) > Three implementation choices worth knowing about > An augmented Lagrangian, not a growing penalty",
+   "source": "stochastic.md",
+   "targets": [],
+   "text": "A plain penalty continuation fails here, and fails quietly. A projected Adam\nstep is normalized by the running second moment of the gradient, so one\nexcursion into a region where the penalty weight is 10\u2074 inflates that second\nmoment by eight orders of magnitude and every later step shrinks to nothing.\nThe iterate freezes where the spike left it, reports itself feasible, and is\nnowhere near the optimum. The augmented Lagrangian absorbs the constraint\nmultiplier into `lambda` instead of into the weight, so `rho` stays at its\nmodest starting value, gradients stay the size of the multiplier, and the\nconverged point is the exactly constrained one.\n`tests/test_stochastic.py::TestSolve::test_a_growing_penalty_would_have_frozen_here`\nis the regression test."
+  },
+  {
+   "anchor": "everything-is-rescaled-and-the-rescaling-is-exact",
+   "heading": "Everything is rescaled, and the rescaling is exact",
+   "path": "Stochastic Programming (`difflow.stochastic`) > Three implementation choices worth knowing about > Everything is rescaled, and the rescaling is exact",
+   "source": "stochastic.md",
+   "targets": [],
+   "text": "A profit in dollars per year and a purity in mole fraction differ by eight\norders of magnitude, and an unscaled penalty makes the whole problem one\nconstraint. Objective values and constraint residuals are affinely rescaled at\nthe starting point. This is not an approximation: every risk measure here\nsatisfies `rho(a + bZ) = a + b rho(Z)` for `b > 0` and every constraint form is\npositively homogeneous in its residual, so the rescaled problem has the *same*\nsolution and the reported numbers unscale exactly.\n\nFeasibility is always scored by re-evaluating the model at the candidate point,\nnever read off the multipliers \u2014 the same rule [Delta-Base Planning](planning.md) states for its\nLP slacks."
+  },
+  {
+   "anchor": "was-it-worth-solving",
+   "heading": "Was it worth solving?",
+   "path": "Stochastic Programming (`difflow.stochastic`) > Was it worth solving?",
+   "source": "stochastic.md",
+   "targets": [],
+   "text": "Two classical numbers, and they answer different questions.\n\n**Value of the stochastic solution** \u2014 *should I have bothered?*\n\n$$\\mathrm{VSS} = \\mathrm{EEV} - \\mathrm{SP}$$\n\nSolve the deterministic problem at the mean parameters, take the design it\nproduced, and run it \u2014 with recourse \u2014 against the real distribution. The gap\nis what modelling the uncertainty bought. A VSS of zero is a completely\nlegitimate answer, and finding it early is the point: it says the mean-value\ndesign was already right and you should stop paying for scenario runs.\n\n**Expected value of perfect information** \u2014 *should I buy an instrument\ninstead?*\n\n$$\\mathrm{EVPI} = \\mathrm{SP} - \\mathrm{WS}$$\n\nEVPI compares against the unattainable plan that knows each realization in\nadvance, so it is an **upper bound on what any measurement, assay or online\nanalyzer can possibly be worth**. If EVPI is \\$40k/yr, a \\$200k analyzer cannot\npay back no matter how good it is. That is usually the most decision-relevant\nnumber in the whole run.\n\n```python\nrep = st.bounds(prob, scen, result=res)\nprint(rep.summary())\n```\n\nBoth obey `WS <= SP <= EEV` for a minimization. `BoundReport.ordered` says\nwhether that held; when it did not, a solve failed to converge and the gaps are\nnot meaningful \u2014 the report says so rather than reporting a negative EVPI as\nthough it meant something.\n\nThe wait-and-see bound carries the constraints across **unchanged**, which is\nwhat makes it a bound: dropping non-anticipativity and changing nothing else\nmakes the two-stage feasible set a subset of it. Rewriting a chance constraint\nas a per-scenario one instead would break that \u2014 it can make the relaxation\ninfeasible where the original was fine, since a chance constraint is precisely\nthe statement that some scenarios are allowed to fail.\n\n**Recourse and information are substitutes.** A common and useful finding is\nEVPI \u2248 0 with recourse and EVPI large without it: the operating loop already\nabsorbs what the measurement would have told you. Run the problem both ways\nbefore buying an analyzer."
+  },
+  {
+   "anchor": "is-the-sample-big-enough",
+   "heading": "Is the sample big enough?",
+   "path": "Stochastic Programming (`difflow.stochastic`) > Is the sample big enough?",
+   "source": "stochastic.md",
+   "targets": [],
+   "text": "`check_scenario_health` is the counterpart of `check_delta_health` in\n[Delta-Base Planning](planning.md) \u2014 the things that go wrong quietly as a problem grows, each\nwith a number attached. It never raises and never re-solves.\n\n* **Dead levers.** A first-stage variable whose SAA gradient is exactly zero\n  cannot be moved by the optimizer, usually because a `clip`, `where` or\n  `minimum` on an active path has flattened it. Identical failure to the\n  delta-vector one, identical cause.\n* **A tail with nothing in it.** `CVaR(0.99)` on 200 scenarios averages two of\n  them. The number will be confident and meaningless. The sample size that\n  matters is `(1 - alpha) S`, not `S`.\n* **Saturated recourse.** A recourse variable pinned at a bound in most\n  scenarios is not providing recourse \u2014 the credit the model took for it is not\n  there. Usually the most actionable single number in a run: it names the knob\n  to widen or the instrument to buy.\n* **Sample sensitivity.** The risk value on half the sample against the whole\n  sample, plus a bootstrap standard error. Differences between two designs\n  smaller than that error are not real.\n\nThe formal version is `optimality_gap`, the Mak\u2013Morton\u2013Wood replication bound:\nsolve on several independent samples for a statistical lower bound, evaluate\nthe candidate on one large independent sample for an upper bound, and report\nthe gap with a confidence limit. It is the one place in the module that\ndeliberately redraws."
+  },
+  {
+   "anchor": "cost-and-where-it-stops-working",
+   "heading": "Cost, and where it stops working",
+   "path": "Stochastic Programming (`difflow.stochastic`) > Cost, and where it stops working",
+   "source": "stochastic.md",
+   "targets": [],
+   "text": "Scenarios are handled by `vmap`, which is the right answer up to the point\nwhere the batch stops fitting in memory. The scenario dimension is nearly free\nbecause `Flowsheet.solve` detects a tracer and swaps its\nAnderson and Wegstein loops \u2014 Python loops that branch on the residual, and so\ncannot be traced \u2014 for an optimistix fixed point carrying an\nimplicit-differentiation rule. A recycle solve therefore batches over scenarios\nand differentiates through to the design, with the gradient coming from the\nconverged solution rather than from an unrolled iteration.\n\nTwo practical notes:\n\n* Under `vmap` every scenario runs the same number of fixed-point iterations,\n  with no early exit, so the cost is the worst scenario times `S`.\n* The tear-solve tolerance is a floor on gradient accuracy. Tighten it before\n  blaming the scenario count."
+  },
+  {
+   "anchor": "out-of-scope-by-design",
+   "heading": "Out of scope by design",
+   "path": "Stochastic Programming (`difflow.stochastic`) > Out of scope by design",
+   "source": "stochastic.md",
+   "targets": [],
+   "text": "No L-shaped or Benders decomposition, no scenario reduction, no multistage\nscenario trees, no integer recourse, no distributionally robust formulations.\nA decomposition belongs with a solver that can exploit it, and\n[External Solvers](external-solvers.md) explains why an implicit flowsheet block cannot be\nhanded to an integer solver and still carry a certificate."
+  },
+  {
+   "anchor": "reference",
+   "heading": "Reference",
+   "path": "Stochastic Programming (`difflow.stochastic`) > Reference",
+   "source": "stochastic.md",
+   "targets": [],
+   "text": "- Rockafellar and Uryasev, *J. Risk* **2** (2000) 21,\n  [doi:10.21314/JOR.2000.038](https://doi.org/10.21314/JOR.2000.038) \u2014 CVaR.\n- Nemirovski and Shapiro, *SIAM J. Optim.* **17** (2006) 969,\n  [doi:10.1137/050622328](https://doi.org/10.1137/050622328) \u2014 CVaR as the\n  convex conservative approximation of a chance constraint.\n- Birge, *Oper. Res.* **30** (1982) 989,\n  [doi:10.1287/opre.30.5.989](https://doi.org/10.1287/opre.30.5.989) \u2014 EVPI and\n  VSS.\n- Mak, Morton and Wood, *Oper. Res. Lett.* **24** (1999) 47,\n  [doi:10.1016/S0167-6377(98)00054-6](https://doi.org/10.1016/S0167-6377(98)00054-6)\n  \u2014 the replication gap bound.\n- Birge and Louveaux, *Introduction to Stochastic Programming*, 2nd ed.,\n  Springer (2011).\n\nExample: `examples/32_stochastic_ree_separation.ipynb`.\nTests: `tests/test_stochastic.py`, `tests/ree/test_coefficient_overrides.py`."
   },
   {
    "anchor": "streams-and-flowsheets",
