@@ -271,9 +271,11 @@ distillate, bottoms, info = column(feed, R_ratio=1.5, q=1.0)
   - Specified duty mode
   - Specified outlet temperature mode
   - Rating mode (given UA and utility temperature)
+  - Constant `Cp`, or a `thermo` for a real enthalpy balance (carries latent heat)
 - **CounterCurrentHX**: Two-stream counter-current (shell-and-tube style)
 - **CoCurrentHX**: Two-stream co-current (parallel flow)
-- All use effectiveness-NTU method, fully differentiable
+- **EnthalpyCounterCurrentHX**: Two-stream, closed on EOS enthalpies through phase change
+- The constant-Cp units use the effectiveness-NTU method; all are fully differentiable
 
 ```python
 from difflow import (
@@ -286,6 +288,11 @@ from difflow import (
 heater = Heater(HeaterParams(T_out=400.0, Cp=75.0))
 heated_feed, info = heater(cold_feed)
 # info: Q, T_in, T_out, LMTD (if utility temp specified)
+
+# Duty from the thermo instead of a constant Cp -- required if the stream
+# vaporizes, since a constant Cp carries no latent heat
+heater = Heater(HeaterParams(T_out=400.0), thermo=thermo)
+heated_feed, info = heater(cold_feed)
 
 # Two-stream counter-current heat exchanger
 hx = CounterCurrentHX(HeatExchangerParams(

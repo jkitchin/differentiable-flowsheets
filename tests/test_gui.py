@@ -54,6 +54,8 @@ from difflow.gui import (
     _json_safe,
     console,
     context,
+    doclinks,
+    edit,
     make_server,
     sensitivity,
     server,
@@ -661,6 +663,22 @@ class TestPalette:
             ports = spec["ports"]
             assert ports["variadic"] or ports["n_inlets"] is not None, name
 
+    def test_every_entry_carries_where_to_read_about_it(self, client):
+        """The palette offers a documentation link; the server resolves it.
+
+        `tests/test_doclinks.py` is what holds the prose to having
+        somewhere for each of these to point (#228); this is only that
+        the catalog the page fetches actually carries the answer.
+        """
+        from difflow.gui import doclinks
+
+        _, catalog = client.get_json("/api/catalog")
+        missing = [n for n, spec in catalog.items() if not spec["docs_url"]]
+        assert missing == []
+        assert catalog["Heater"]["docs_url"] == doclinks.url_for("Heater")
+        assert catalog["Heater"]["docs_url"].endswith(
+            "unit-operations-chemical.html#heater")
+
 
 class TestWhatBlocksADrop:
     """The palette's flag and the adder's refusal, which must agree.
@@ -776,6 +794,122 @@ class TestWhatBlocksADrop:
         client.post("/api/code-context", {"source": "solvent = 'MEA'\n"})
         assert client.get_json("/api/catalog")[1]["AmineAbsorber"]["needs"] == []
         assert client.post("/api/unit", {"operation": "AmineAbsorber"})[1]["ok"]
+
+
+class TestANumberInTheConstructor:
+    """A required number is a placeholder wherever the unit keeps it.
+
+    ``known_params`` has always invented :data:`~difflow.gui.edit.PLACEHOLDER`
+    for a required ``Params`` field with no default, so a ``CSTR`` drops
+    with ``V = 1.0`` flagged for the user to correct. A unit that builds
+    its own ``Params`` from plain arguments --- ``GasPipe(beta)``,
+    ``Compressor(ratio)`` --- names an identical ``float`` one line away
+    and was refused outright. Nothing chose that asymmetry; the
+    placeholder path simply only ran down one of the two.
+
+    What must not follow from fixing it: inventing an *object*, or
+    handing the constructor the same number twice.
+    """
+
+    @pytest.fixture
+    def catalog(self, client):
+        return client.get_json("/api/catalog")[1]
+
+    def test_a_plain_float_argument_no_longer_blocks_the_drop(self, client, catalog):
+        """`GasPipe(beta)` keeps its number outside any Params difflow can find."""
+        if "GasPipe" not in catalog:
+            pytest.skip("difflow_gas not registered")
+        assert catalog["GasPipe"]["needs"] == []
+        status, added = client.post("/api/unit", {"operation": "GasPipe"})
+        assert status == 200 and added["ok"], added.get("error")
+        assert added["placeholders"] == ["beta"], (
+            "an invented number has to be flagged, exactly like a Params field"
+        )
+
+    def test_a_number_named_twice_is_supplied_once(self, client, catalog):
+        """`Compressor(ratio)` feeds `CompressorParams.ratio`.
+
+        The constructor argument and the field are one number. Answering
+        for it in both places hands the builder two values for `ratio`
+        and the drop dies in the file-loading path.
+        """
+        if "Compressor" not in catalog:
+            pytest.skip("difflow_gas not registered")
+        assert catalog["Compressor"]["needs"] == []
+        status, added = client.post("/api/unit", {"operation": "Compressor"})
+        assert status == 200 and added["ok"], added.get("error")
+        assert added["placeholders"] == ["ratio"], "named once, not twice"
+
+    def test_an_int_argument_gets_an_int(self, client, catalog):
+        """`direction` is +1 or -1; a `direction` of 1.0 is a different claim."""
+        if "CompressorBoost" not in catalog:
+            pytest.skip("difflow_gas not registered")
+        status, added = client.post("/api/unit", {"operation": "CompressorBoost"})
+        assert status == 200 and added["ok"], added.get("error")
+        name = added["name"]
+        _, doc = client.get_json("/api/flowsheet")
+        unit = next(u for u in doc["flowsheet"]["units"] if u["name"] == name)
+        assert unit["constructor"]["direction"] == 1
+        assert not isinstance(unit["constructor"]["direction"], float)
+
+    def test_a_tuple_of_numbers_is_still_refused(self, client, catalog):
+        """`AffineFlow(signs)` has a length nothing here knows."""
+        if "AffineFlow" not in catalog:
+            pytest.skip("difflow_gas not registered")
+        assert catalog["AffineFlow"]["needs"] == ["signs"], (
+            "`const`, `T_k` and `P_pa` are plain numbers; `signs` is not"
+        )
+
+    def test_a_non_numeric_argument_is_still_refused(self, client, catalog):
+        """The line held: only `_is_number` annotations get a value.
+
+        A `thermo` is an object and a `solvent` is a name; neither has a
+        plausible 1.0. `Mixer(species_order)` is deliberately absent from
+        this list --- the flowsheet already knows its species order, so
+        that one is answered rather than guessed.
+        """
+        assert catalog["Flash"]["needs"] == ["thermo"]
+        if "GroupSeparator" in catalog:
+            assert catalog["GroupSeparator"]["needs"] == ["elements"]
+        if "LLEEquilibrium" in catalog:
+            assert catalog["LLEEquilibrium"]["needs"] == [
+                "solutes", "aqueous_carrier", "organic_carrier",
+            ]
+
+    def test_a_real_binding_outranks_the_placeholder(self, client, catalog):
+        """A number the code context supplies must not be shadowed."""
+        if "GasPipe" not in catalog:
+            pytest.skip("difflow_gas not registered")
+        client.post("/api/code-context", {"source": "beta = 12.5\n"})
+        status, added = client.post("/api/unit", {"operation": "GasPipe"})
+        assert status == 200 and added["ok"], added.get("error")
+        assert "beta" not in added["placeholders"], (
+            "a bound value is known, not guessed"
+        )
+
+    def test_everything_droppable_saves_and_loads_back(self, client, catalog):
+        """The drop must not build a flowsheet the file format cannot hold.
+
+        ``encoded_params`` takes the encoding route so that a parameter
+        the editor accepts is one the file can carry. A constructor
+        argument reaches the file by a different road, and unblocking
+        nine units puts that road under load for the first time.
+        """
+        from difflow.serialize import from_json, to_json
+
+        unsaveable = []
+        for name, spec in catalog.items():
+            if spec["needs"]:
+                continue
+            status, answer = client.post("/api/unit", {"operation": name})
+            if status != 200 or not answer["ok"]:
+                continue
+            try:
+                from_json(to_json(client.session.flowsheet))
+            except Exception as exc:
+                unsaveable.append((name, f"{type(exc).__name__}: {exc}"))
+            client.delete(f"/api/unit/{answer['name']}")
+        assert not unsaveable
 
 
 class TestAnEmptyEditor:
@@ -916,9 +1050,11 @@ class TestAnEmptyEditor:
             "target": "heater", "inlet": units["heater"]["inlets"][0],
         })[1]["ok"]
 
-        # Both inlets were unfed; wiring one of them fed it.
+        # Every inlet was unfed; wiring the heater's fed that one. The
+        # mixer keeps two, because a mixer arrives able to mix.
         _, waiting = empty.get_json("/api/feeds")
-        assert waiting == {"ok": True, "feeds": [], "unfed": ["mixer_in"]}
+        assert waiting == {"ok": True, "feeds": [],
+                           "unfed": ["mixer_in", "mixer_in2"]}
 
         # And the solver says which stream, and what to do about it,
         # rather than raising the name on its own.
@@ -929,6 +1065,7 @@ class TestAnEmptyEditor:
         _, fed = empty.post("/api/feed", {"name": "mixer_in", "T": 320.0,
                                           "flows": {"water": 2.0}})
         assert fed["ok"], fed
+        assert empty.post("/api/feed", {"name": "mixer_in2"})[1]["ok"]
         # A field left out keeps what it had: the pressure is the
         # flowsheet's default, and ethanol its default flow.
         assert fed["T"] == 320.0
@@ -956,7 +1093,7 @@ class TestAnEmptyEditor:
         _, gone = empty.delete("/api/feed/mixer_in")
         assert gone == {"ok": True, "name": "mixer_in"}
         assert empty.get_json("/api/feeds")[1] == {
-            "ok": True, "feeds": [], "unfed": ["mixer_in"]
+            "ok": True, "feeds": [], "unfed": ["mixer_in", "mixer_in2"]
         }
         assert empty.delete("/api/feed/mixer_in")[1]["ok"] is False
 
@@ -984,7 +1121,7 @@ class TestBuilding:
 
         _, after = client.get_json("/api/flowsheet")
         assert set(after["flowsheet"]["units"][-1]["params"]) == {
-            "duty", "T_out", "UA", "T_utility", "Cp"
+            "duty", "T_out", "UA", "T_utility", "Cp", "phase"
         }
 
     def test_the_added_unit_then_solves(self, client):
@@ -2122,6 +2259,644 @@ class TestPortInUse:
         """
         from http.server import ThreadingHTTPServer
         assert ThreadingHTTPServer.allow_reuse_address
+
+
+# =============================================================================
+# Renaming a stream, and the ports of a unit that has as many as it likes
+# =============================================================================
+
+
+class TestRenamingAStream:
+    """The name is the wiring, which is why this is not a label edit.
+
+    `connect` already renames an inlet -- that is *how* a wire is made
+    in difflow -- so the mechanism was there and only the door was
+    missing. The door has to be narrower than the mechanism: two of the
+    renames `connect` performs on purpose are, asked for by a user,
+    silently something other than a rename.
+    """
+
+    def test_a_feed_renames_everywhere_it_appears(self, client):
+        status, answer = client.patch("/api/stream/feed", {"name": "charge"})
+        assert status == 200 and answer == {
+            "ok": True, "kind": "stream", "stream": "charge"
+        }
+        fs = client.session.flowsheet
+        assert "charge" in fs.feeds and "feed" not in fs.feeds
+        assert edit.unit(fs, "reactor").inlet_names == ["charge"]
+
+    def test_an_intermediate_stream_moves_at_both_ends(self, client):
+        """Or the graph quietly splits into two that each look fine."""
+        assert client.patch("/api/stream/rx", {"name": "effluent"})[1]["ok"]
+        fs = client.session.flowsheet
+        assert edit.unit(fs, "reactor").outlet_names == ["effluent"]
+        assert edit.unit(fs, "flash").inlet_names == ["effluent"]
+        # And it still solves, which is the whole claim.
+        assert client.post("/api/solve", {})[1]["ok"]
+
+    def test_both_ends_of_a_recycle_follow(self, client):
+        # `connect` will not wire into a stream that is already fed, so
+        # the declared feed comes off first.
+        assert client.delete("/api/feed/feed")[1]["ok"]
+        assert client.post("/api/connect", {"source": "flash", "outlet": "vap",
+                                            "target": "reactor",
+                                            "inlet": "feed"})[1]["ok"]
+        fs = client.session.flowsheet
+        assert fs.recycles, "expected the wire back to be torn"
+        assert client.patch("/api/stream/vap", {"name": "overhead"})[1]["ok"]
+        assert "overhead" in fs.recycles
+        assert "vap" not in fs.recycles
+
+    def test_the_canvas_node_follows_the_feed(self, client):
+        client.post("/api/layout", {"nodes": {"feed:feed": {"x": 5.0, "y": 6.0}}})
+        assert client.patch("/api/stream/feed", {"name": "charge"})[1]["ok"]
+        nodes = client.session.flowsheet.view["nodes"]
+        assert nodes["feed:charge"] == {"x": 5.0, "y": 6.0}
+        assert "feed:feed" not in nodes
+
+    def test_a_name_another_stream_has_is_refused(self, client):
+        """Because that is a connection, and it should be drawn as one.
+
+        `rename_stream` would do it and produce a flowsheet where the
+        reactor's inlet and the flash's outlet are the same stream --
+        which is a wire nobody drew.
+        """
+        _, answer = client.patch("/api/stream/feed", {"name": "rx"})
+        assert answer["ok"] is False
+        assert "already a stream" in answer["error"]
+        assert "connection" in answer["error"]
+        assert "feed" in client.session.flowsheet.feeds
+
+    def test_a_name_that_is_not_an_identifier_is_refused(self, client):
+        """It would survive here and fail in `codegen`, hours later."""
+        for bad in ("two words", "3rd", "liq-out", ""):
+            _, answer = client.patch("/api/stream/feed", {"name": bad})
+            assert answer["ok"] is False, bad
+        assert "feed" in client.session.flowsheet.feeds
+
+    def test_renaming_a_stream_that_is_not_there_says_so(self, client):
+        _, answer = client.patch("/api/stream/nope", {"name": "x"})
+        assert answer["ok"] is False
+        assert "no stream called 'nope'" in answer["error"]
+
+    def test_renaming_to_the_same_name_is_a_no_op_and_not_an_error(self, client):
+        _, answer = client.patch("/api/stream/feed", {"name": "feed"})
+        assert answer == {"ok": True, "kind": "stream", "stream": "feed"}
+
+    def test_a_url_encoded_stream_name_is_decoded(self, client):
+        """The same path `PATCH /api/unit/` takes, so it decodes alike."""
+        client.patch("/api/stream/feed", {"name": "feed"})
+        status, answer = client.patch("/api/stream/rx%78", {"name": "z"})
+        assert status == 200 and answer["ok"] is False
+        assert "'rxx'" in answer["error"]
+
+    def test_a_rename_needs_the_token(self, client):
+        status, _ = client.patch("/api/stream/feed", {"name": "charge"},
+                                 headers={gui.TOKEN_HEADER: "wrong"})
+        assert status == 403
+        assert "feed" in client.session.flowsheet.feeds
+
+
+class TestAUnitThatTakesAsManyInletsAsItIsGiven:
+    """A mixer's inlet count is a property of the flowsheet, not the class.
+
+    Which is why it is the canvas's to change, and why until now the
+    only way to get a third inlet on a mixer was to write the JSON by
+    hand.
+    """
+
+    @pytest.fixture
+    def empty(self):
+        live = Client(FlowsheetSession())
+        live.post("/api/species", {"species": SPECIES})
+        yield live
+        live.close()
+
+    def variadic_names(self):
+        from difflow.catalog import catalog
+
+        return {n for n, s in catalog().items() if s.to_dict()["ports"]["variadic"]}
+
+    def test_a_mixer_arrives_able_to_mix(self, empty):
+        """One inlet is what it means to not be there: that is a pipe."""
+        _, added = empty.post("/api/unit", {"operation": "Mixer"})
+        assert added["inlets"] == ["mixer_in", "mixer_in2"]
+        assert added["outlets"] == ["mixer_out"]
+
+    def test_a_fixed_unit_still_gets_the_ports_it_declares(self, empty):
+        _, added = empty.post("/api/unit", {"operation": "Heater"})
+        assert added["inlets"] == ["heater_in"]
+
+    def test_an_inlet_is_added_and_removed(self, empty):
+        empty.post("/api/unit", {"operation": "Mixer"})
+        status, added = empty.post("/api/inlet", {"unit": "mixer"})
+        assert status == 200
+        assert added == {"ok": True, "kind": "inlet", "stream": "mixer_in3"}
+        assert edit.unit(empty.session.flowsheet, "mixer").inlet_names == [
+            "mixer_in", "mixer_in2", "mixer_in3"
+        ]
+        _, gone = empty.delete("/api/inlet", {"unit": "mixer",
+                                              "stream": "mixer_in3"})
+        assert gone == {"ok": True, "kind": "inlet", "stream": "mixer_in3"}
+        assert edit.unit(empty.session.flowsheet, "mixer").inlet_names == [
+            "mixer_in", "mixer_in2"
+        ]
+
+    def test_a_new_inlet_dangles(self, empty):
+        """Same as a port on a unit just dropped: unfed, awaiting a feed."""
+        empty.post("/api/unit", {"operation": "Mixer"})
+        empty.post("/api/inlet", {"unit": "mixer"})
+        assert empty.get_json("/api/feeds")[1]["unfed"] == [
+            "mixer_in", "mixer_in2", "mixer_in3"
+        ]
+
+    def test_a_new_inlet_does_not_collide_with_a_name_in_use(self, empty):
+        empty.post("/api/unit", {"operation": "Mixer"})
+        empty.patch("/api/stream/mixer_in2", {"name": "mixer_in3"})
+        _, added = empty.post("/api/inlet", {"unit": "mixer"})
+        # `mixer_in32` would be the answer from bolting a digit onto a
+        # taken base, and it reads as the thirty-second inlet.
+        assert added["stream"] == "mixer_in4", added
+
+    def test_a_unit_with_fixed_ports_refuses_both_verbs(self, empty):
+        empty.post("/api/unit", {"operation": "Heater"})
+        _, refused = empty.post("/api/inlet", {"unit": "heater"})
+        assert refused["ok"] is False
+        assert "exactly 1 inlet" in refused["error"]
+        _, no = empty.delete("/api/inlet", {"unit": "heater",
+                                            "stream": "heater_in"})
+        assert no["ok"] is False and "fixed set of inlets" in no["error"]
+
+    def test_the_last_inlet_cannot_be_removed(self, empty):
+        """A mixer with no inlets is not a smaller mixer."""
+        empty.post("/api/unit", {"operation": "Mixer"})
+        empty.delete("/api/inlet", {"unit": "mixer", "stream": "mixer_in2"})
+        _, refused = empty.delete("/api/inlet", {"unit": "mixer",
+                                                 "stream": "mixer_in"})
+        assert refused["ok"] is False
+        assert "Delete the unit instead" in refused["error"]
+
+    def test_a_fed_inlet_is_refused_rather_than_cascaded(self, empty):
+        """Deleting the port would take the feed's conditions with it.
+
+        Two edits, and undoing the first does not bring back the second:
+        the temperature, pressure and per-species flows are gone. So the
+        refusal names what is in the way.
+        """
+        empty.post("/api/unit", {"operation": "Mixer"})
+        empty.post("/api/feed", {"name": "mixer_in2", "T": 300.0})
+        _, refused = empty.delete("/api/inlet", {"unit": "mixer",
+                                                 "stream": "mixer_in2"})
+        assert refused["ok"] is False and "is a feed" in refused["error"]
+        assert "mixer_in2" in empty.session.flowsheet.feeds
+
+    def test_a_wired_inlet_is_refused(self, empty):
+        empty.post("/api/unit", {"operation": "Mixer"})
+        empty.post("/api/unit", {"operation": "Heater"})
+        empty.post("/api/connect", {"source": "heater", "outlet": "heater_out",
+                                    "target": "mixer", "inlet": "mixer_in2"})
+        _, refused = empty.delete("/api/inlet", {"unit": "mixer",
+                                                 "stream": "heater_out"})
+        assert refused["ok"] is False
+        assert "comes from 'heater'" in refused["error"]
+
+    def test_a_recycle_destination_is_refused(self, empty):
+        empty.post("/api/unit", {"operation": "Mixer"})
+        empty.post("/api/unit", {"operation": "Heater"})
+        empty.post("/api/connect", {"source": "mixer", "outlet": "mixer_out",
+                                    "target": "heater", "inlet": "heater_in"})
+        empty.post("/api/connect", {"source": "heater", "outlet": "heater_out",
+                                    "target": "mixer", "inlet": "mixer_in2"})
+        assert empty.session.flowsheet.recycles, "expected a tear"
+        stream = next(iter(empty.session.flowsheet.recycles.values()))
+        _, refused = empty.delete("/api/inlet", {"unit": "mixer",
+                                                 "stream": stream})
+        assert refused["ok"] is False and "recycle" in refused["error"]
+
+    def test_an_inlet_the_unit_does_not_have_lists_the_ones_it_does(self, empty):
+        empty.post("/api/unit", {"operation": "Mixer"})
+        _, refused = empty.delete("/api/inlet", {"unit": "mixer",
+                                                 "stream": "nope"})
+        assert refused["ok"] is False
+        assert "mixer_in, mixer_in2" in refused["error"]
+
+    def test_a_unit_that_is_not_there_says_so(self, empty):
+        _, refused = empty.post("/api/inlet", {"unit": "nope"})
+        assert refused["ok"] is False and "no unit called 'nope'" in refused["error"]
+
+    def test_the_verbs_need_the_token(self, empty):
+        empty.post("/api/unit", {"operation": "Mixer"})
+        status, _ = empty.post("/api/inlet", {"unit": "mixer"},
+                               headers={gui.TOKEN_HEADER: "wrong"})
+        assert status == 403
+        assert len(edit.unit(empty.session.flowsheet, "mixer").inlet_names) == 2
+
+    def test_the_catalog_says_which_units_take_more(self, empty):
+        """So the panel can offer the verb only where it works.
+
+        The front end reads `ports.variadic` off the catalog to decide
+        whether to draw `Add inlet`; if that flag and the server's
+        refusal ever disagree, the button is a lie.
+        """
+        _, catalog = empty.get_json("/api/catalog")
+        flagged = {n for n, e in catalog.items() if e["ports"]["variadic"]}
+        assert flagged == self.variadic_names()
+        assert "Mixer" in flagged and "Flash" not in flagged
+
+    def test_every_flagged_unit_actually_takes_another_inlet(self, empty):
+        """The button is drawn from the flag, so the flag has to be true."""
+        accepted = []
+        for name in sorted(self.variadic_names()):
+            answer = empty.post("/api/unit", {"operation": name})[1]
+            if not answer["ok"]:
+                continue        # needs something from the code context
+            unit_name = answer["name"]
+            added = empty.post("/api/inlet", {"unit": unit_name})[1]
+            assert added["ok"], (name, added)
+            assert added["stream"] in edit.unit(
+                empty.session.flowsheet, unit_name).inlet_names
+            accepted.append(name)
+        assert "Mixer" in accepted
+
+    def test_an_added_inlet_survives_the_round_trip(self, empty, tmp_path):
+        """It is a port on a saved unit, not a decoration on the canvas."""
+        from difflow import serialize
+
+        empty.post("/api/unit", {"operation": "Mixer"})
+        empty.post("/api/inlet", {"unit": "mixer"})
+        path = tmp_path / "plant.json"
+        serialize.save(empty.session.flowsheet, path)
+        reloaded = serialize.load(path)
+        assert edit.unit(reloaded, "mixer").inlet_names == [
+            "mixer_in", "mixer_in2", "mixer_in3"
+        ]
+
+    def test_a_mixer_with_three_fed_inlets_solves(self, empty):
+        """The point of all of it: three streams in, one out."""
+        empty.post("/api/unit", {"operation": "Mixer"})
+        empty.post("/api/inlet", {"unit": "mixer"})
+        for i, stream in enumerate(("mixer_in", "mixer_in2", "mixer_in3")):
+            empty.post("/api/feed", {"name": stream, "T": 300.0 + 10 * i,
+                                     "flows": {"water": 1.0 + i}})
+        _, solved = empty.post("/api/solve", {})
+        assert solved["ok"], solved
+        out = solved["streams"]["mixer_out"]
+        assert out["F_water"] == pytest.approx(6.0)
+
+
+# =============================================================================
+# The editor's lifetime, and the links out to the book
+# =============================================================================
+
+
+class TestTheEditorStopsWithItsPage:
+    """Closing the tab should give the port back.
+
+    The editor is a Python process and a browser tab, and to the person
+    using it they are one thing: the complaint that started this was
+    that closing the tab left port 8756 held by a server nobody could
+    see, so the next ``difflow gui`` refused to start. Nothing in HTTP
+    says when a page has gone, so the page says so --- a ping while it
+    is open, a farewell as it unloads --- and :class:`server.Lifetime`
+    is what listens.
+    """
+
+    def clock(self):
+        """A hand-wound monotonic clock, so no test waits out a grace."""
+        now = [1000.0]
+        return now, lambda: now[0]
+
+    def test_nothing_expires_before_a_page_has_ever_checked_in(self):
+        """``--no-browser``, then a coffee, then open it. It must be there.
+
+        Also the invariant that keeps every other test in this file
+        alive: they drive the routes directly and never pretend to be a
+        page, and the server must not vanish underneath them.
+        """
+        now, clock = self.clock()
+        life = server.Lifetime(grace=10, clock=clock)
+        now[0] += 10_000
+        assert not life.expired()
+
+    def test_a_page_that_stops_pinging_ages_out(self):
+        now, clock = self.clock()
+        life = server.Lifetime(grace=10, clock=clock)
+        life.ping("tab-a")
+        now[0] += 9
+        assert not life.expired(), "still inside the grace"
+        now[0] += 2
+        assert life.expired()
+
+    def test_a_second_tab_keeps_the_editor_open(self):
+        """Two tabs on one flowsheet is ordinary, and a counter gets it wrong.
+
+        A reload increments before it decrements, and a tab that dies
+        without unloading never decrements at all. Ids simply age out.
+        """
+        now, clock = self.clock()
+        life = server.Lifetime(grace=10, clock=clock)
+        life.ping("tab-a")
+        life.ping("tab-b")
+        life.bye("tab-a")
+        now[0] += 5
+        life.ping("tab-b")
+        now[0] += 6
+        assert not life.expired(), "tab-b is still there"
+        life.bye("tab-b")
+        assert life.expired()
+
+    def test_the_farewell_is_what_makes_it_prompt(self):
+        """Without it the port comes back a grace later; with it, at once."""
+        now, clock = self.clock()
+        life = server.Lifetime(grace=90, clock=clock)
+        life.ping("tab-a")
+        assert not life.expired()
+        life.bye("tab-a")
+        assert life.expired(), "no waiting out 90 seconds for a closed tab"
+
+    def test_quit_does_not_wait_for_anyone(self):
+        now, clock = self.clock()
+        life = server.Lifetime(grace=10_000, clock=clock)
+        life.ping("tab-a")
+        life.quit()
+        assert life.expired()
+        assert life.asked, "serve() says which of the two endings it was"
+
+    def test_a_ping_from_a_client_that_had_gone_brings_it_back(self):
+        """A tab restored from the back/forward cache is a live tab again."""
+        now, clock = self.clock()
+        life = server.Lifetime(grace=10, clock=clock)
+        life.ping("tab-a")
+        life.bye("tab-a")
+        assert life.expired()
+        life.ping("tab-a")
+        assert not life.expired()
+
+    def test_the_routes_reach_the_lifetime(self, client):
+        """ping / bye / quit, over the wire, as the page sends them."""
+        assert client.post("/api/ping", {"client": "tab-a"})[1]["ok"]
+        assert not client.server.lifetime.expired()
+        assert client.post("/api/bye", {"client": "tab-a"})[1]["ok"]
+        assert client.server.lifetime.expired()
+
+        status, answer = client.post("/api/quit")
+        assert status == 200, "answered before anything stops, or the page sees a drop"
+        assert answer == {"ok": True, "stopped": True}
+        assert client.server.lifetime.asked
+
+    def test_stopping_the_editor_is_not_a_GET(self, client):
+        """A GET that stops the server is a link another page could embed."""
+        for path in ("/api/quit", "/api/ping", "/api/bye"):
+            status, _ = client.get(path)
+            assert status == 404, f"{path} answered a GET"
+        assert not client.server.lifetime.asked
+
+    def test_a_page_from_nowhere_cannot_stop_the_editor(self, client):
+        """The token guard covers these as it covers every other mutation."""
+        request = urllib.request.Request(
+            client.base + "/api/quit", data=b"{}", method="POST",
+            headers={"Content-Type": "application/json"},   # no token
+        )
+        with pytest.raises(urllib.error.HTTPError) as caught:
+            urllib.request.urlopen(request)
+        assert caught.value.code == 403
+        assert not client.server.lifetime.asked
+
+    def test_the_watcher_shuts_the_server_down(self):
+        """End to end: nobody is watching, so the port comes back."""
+        session = FlowsheetSession(None, None)
+        life = server.Lifetime(grace=0.05)
+        srv = server.make_server(session, port=0, lifetime=life)
+        port = srv.server_address[1]
+        thread = threading.Thread(target=srv.serve_forever, daemon=True)
+        thread.start()
+        stop = threading.Event()
+        try:
+            server.watch(srv, life, poll=0.02, stop=stop)
+            life.ping("tab-a")
+            life.bye("tab-a")
+            thread.join(timeout=5)
+            assert not thread.is_alive(), "the watcher never called shutdown"
+        finally:
+            stop.set()
+            srv.server_close()
+
+        rebind = socket.socket()
+        rebind.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            rebind.bind((gui.HOST, port))       # the whole point of the feature
+        finally:
+            rebind.close()
+
+    def test_building_a_server_does_not_start_anything_that_can_stop_it(self):
+        """``make_server`` is what the tests use; it must not grow a watchdog."""
+        before = {t.name for t in threading.enumerate()}
+        srv = server.make_server(FlowsheetSession(None, None), port=0)
+        try:
+            after = {t.name for t in threading.enumerate()}
+            assert not [n for n in after - before if "watch" in n]
+            assert srv.lifetime is not None, "the routes still need one"
+        finally:
+            srv.server_close()
+
+    def test_the_page_and_the_server_agree_on_the_interval(self, client):
+        """One agreement, written down once. The page reads its half here."""
+        status, about = client.get_json("/api/about")
+        assert status == 200
+        assert about["heartbeat"] == server.HEARTBEAT_SECONDS
+        assert server.IDLE_GRACE_SECONDS > 4 * server.HEARTBEAT_SECONDS, (
+            "a background tab has its timers throttled to about one firing a "
+            "minute; a tight grace shuts the editor down when the user looks "
+            "at another tab"
+        )
+
+
+class TestTheHeaderLinks:
+    """Where to read more, without leaving the editor to go and find it."""
+
+    def test_about_carries_the_project_urls(self, client):
+        status, about = client.get_json("/api/about")
+        assert status == 200 and about["ok"]
+        for key in ("repository", "documentation"):
+            assert about["links"][key].startswith("https://"), key
+
+    def test_the_urls_come_from_the_packaging_metadata(self):
+        """So ``pyproject.toml`` stays the one place they are written down."""
+        tomllib = pytest.importorskip("tomllib")   # 3.11+; the check, not the code
+
+        declared = tomllib.loads(
+            (pathlib.Path(__file__).resolve().parents[1] / "pyproject.toml").read_text()
+        )["project"]["urls"]
+        found = server.links()
+        assert found["repository"] == declared["Repository"]
+        assert found["documentation"] == declared["Documentation"]
+
+    def test_a_tree_with_no_metadata_still_has_links(self, monkeypatch):
+        """Running from a source checkout is not a header without links."""
+        import importlib.metadata
+
+        def missing(_name):
+            raise importlib.metadata.PackageNotFoundError("difflow")
+
+        monkeypatch.setattr(importlib.metadata, "metadata", missing)
+        assert server.links() == server.FALLBACK_LINKS
+
+
+class TestWhereTheBookTalksAboutAUnit:
+    """Every palette entry offers the documentation for that unit.
+
+    Resolved against ``static/docs-index.json`` rather than written down:
+    a hand-kept table of 87 operations against prose that gets
+    reorganised is wrong within a release, and wrong silently, because a
+    link to a renamed heading still returns 200 and lands at the top of
+    the page. :mod:`tests.test_doclinks` is where the resolution rules
+    themselves are pinned; what is here is the editor's side of it.
+    """
+
+    def test_a_unit_with_its_own_section_lands_on_it(self):
+        url = doclinks.url_for("CSTR")
+        assert url.startswith(doclinks.BASE_URL)
+        assert "unit-operations-chemical.html#" in url
+
+    def test_an_ordinary_word_is_matched_as_well_as_a_camel_case_one(self):
+        """``Junction`` and ``Transformer`` are the names a heuristic misses.
+
+        Guarding the choice to match against the name asked about rather
+        than against a guess at what an operation name looks like.
+        """
+        assert doclinks.url_for("Transformer") is not None
+        assert doclinks.url_for("Junction") is not None
+
+    def test_a_name_the_book_never_uses_gets_no_link(self):
+        """Reported as an absence rather than papered over with a home page."""
+        assert doclinks.url_for("NotAnOperationAtAll") is None
+        assert doclinks.url_for("") is None
+
+    def test_a_unit_operations_page_beats_a_passing_mention_elsewhere(self):
+        """A reader who clicked a compressor does not want the LP tutorial."""
+        url = doclinks.url_for("Compressor")
+        assert "unit-operations" in url
+
+    def test_no_link_points_at_a_page_the_book_does_not_build(self):
+        """A 404 is worse than no link, and cheap to rule out here."""
+        import yaml
+
+        root = pathlib.Path(__file__).resolve().parents[1]
+        toc = yaml.safe_load((root / "_toc.yml").read_text())
+        built = set()
+
+        def walk(node):
+            if isinstance(node, dict):
+                if "file" in node:
+                    built.add(node["file"])
+                for value in node.values():
+                    walk(value)
+            elif isinstance(node, list):
+                for item in node:
+                    walk(item)
+
+        walk(toc)
+        session = FlowsheetSession(None, None)
+        for name, entry in session.catalog().items():
+            url = entry["docs_url"]
+            if url is None:
+                continue
+            page = url[len(doclinks.BASE_URL):].split("#")[0]
+            assert "docs/" + page.removesuffix(".html") in built, (
+                f"{name} links to {page}, which _toc.yml does not build")
+
+    def test_the_catalog_carries_the_link_for_every_operation(self):
+        """All of them, now that #228 wrote the prose that was missing.
+
+        The count used to be "all but five". It is not a count any more:
+        an operation with nowhere to link to is a palette entry with
+        nothing to read, and :mod:`tests.test_doclinks` refuses it at the
+        source. This is the same line drawn where the editor stands.
+        """
+        session = FlowsheetSession(None, None)
+        catalog = session.catalog()
+        assert len(catalog) > 50
+        assert not [n for n, e in catalog.items() if not e["docs_url"]], (
+            "units with no documentation link: "
+            f"{sorted(n for n, e in catalog.items() if not e['docs_url'])}")
+
+    def test_the_inspector_gets_the_same_link_as_the_palette(self):
+        session = FlowsheetSession(None, None)
+        assert (session.docs("Flash")["docs_url"]
+                == session.catalog()["Flash"]["docs_url"])
+
+    def test_a_missing_index_is_no_links_rather_than_no_editor(self, monkeypatch):
+        """A source checkout that has never run the front-end build.
+
+        Patched at :func:`docs_index.load` rather than at its ``INDEX``
+        constant: the path is a default argument, bound once at
+        definition, so rebinding the module attribute would leave the
+        real index still being read and this test passing for no reason.
+        """
+        from difflow.gui import doclinks as dl
+
+        monkeypatch.setattr(dl.docs_index, "load", lambda *a, **k: None)
+        dl.resolve.cache_clear()
+        try:
+            assert dl.url_for("CSTR") is None
+        finally:
+            dl.resolve.cache_clear()
+
+
+class TestSayingWhatHoldsThePort:
+    """"In use" is half a sentence; the reader's next move needs the rest."""
+
+    def test_the_message_names_the_process_holding_the_port(self):
+        held = socket.socket()
+        held.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        held.bind((gui.HOST, 0))
+        held.listen(1)
+        port = held.getsockname()[1]
+        try:
+            found = server.listener_on(port)
+            if found is None:
+                pytest.skip("no lsof or ss on this machine to ask")
+            assert found["pid"] == os.getpid(), "we are the one holding it"
+            assert found["mine"] is True
+            said = server.port_in_use_message(port, "difflow gui")
+            assert str(os.getpid()) in said
+            assert f"kill {os.getpid()}" in said
+        finally:
+            held.close()
+
+    def test_a_free_port_has_no_listener_to_name(self):
+        probe = socket.socket()
+        probe.bind((gui.HOST, 0))
+        port = probe.getsockname()[1]
+        probe.close()
+        assert server.listener_on(port, timeout=1.0) is None
+
+    def test_the_message_survives_a_machine_with_neither_helper(self, monkeypatch):
+        """It runs on the way to an error; it must not become one."""
+        monkeypatch.setattr(server, "_run", lambda argv, timeout: "")
+        said = server.port_in_use_message(8756, "difflow gui")
+        assert "8756" in said and "--port" in said
+        assert "pid" not in said, "nothing was found, so nothing is claimed"
+
+    def test_a_helper_that_hangs_or_is_missing_is_not_fatal(self, monkeypatch):
+        def explode(*args, **kwargs):
+            raise FileNotFoundError("lsof")
+
+        monkeypatch.setattr(server.subprocess, "run", explode)
+        assert server.listener_on(8756) is None
+
+    def test_ss_output_is_read_when_lsof_says_nothing(self, monkeypatch):
+        """Linux without lsof. Parsed here rather than only in the wild."""
+        sample = (
+            'LISTEN 0 5 127.0.0.1:8756 0.0.0.0:* '
+            'users:(("python3",pid=4242,fd=3))\n'
+        )
+        monkeypatch.setattr(
+            server, "_run",
+            lambda argv, timeout: sample if argv[0] == "ss" else "")
+        found = server.listener_on(8756)
+        assert found["pid"] == 4242
+        assert found["name"] == "python3"
 
 
 if __name__ == "__main__":

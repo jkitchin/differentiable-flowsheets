@@ -1623,6 +1623,166 @@ for elem, recovery in results['target_recovery'].items():
 
 ---
 
+(groupseparator)=
+### GroupSeparator
+
+**Location**: `difflow_ree/flowsheets/full_train.py`
+
+**Class**: `GroupSeparator`
+
+**Description**: Splits a mixed REE feed into light, middle and heavy groups with two `ExtractScrubStripCircuit`s in series.
+
+Individual REE separation is hard because adjacent lanthanides have
+separation factors near 1.5. Group separation is the first cut that is
+*not* hard: the distribution coefficients spread monotonically across the
+series, so heavies, middles and lights can be taken apart at a cost per
+stage that individual separation cannot match. Almost every real plant
+does this first and separates individual elements only within a group.
+
+Two circuits do it:
+
+1. **Heavy circuit** --- extract everything at pH 3.0, then scrub at
+   pH 2.0. The heavies (Gd, Tb, Dy, Y) have the highest $D$ and stay in
+   the organic through the scrub, so they leave in the strip product; the
+   lights and middles are rejected into the scrub liquor.
+2. **Middle circuit** --- the first circuit's scrub liquor is the feed.
+   Extract at pH 3.5, scrub at pH 2.5: the middles (Sm, Eu) report to the
+   product, the lights (La, Ce, Pr, Nd) to the scrub liquor.
+
+Where the boundaries fall is set by those four pH values, and they are
+**fixed inside the unit**, along with the stage counts: `GroupSeparator`
+takes the element groups and the chemistry, not the operating point. To
+move a boundary --- or to optimize it, which both circuits being
+differentiable makes possible --- build the two
+[`ExtractScrubStripCircuit`](#extractscrubstripcircuit)s yourself with
+the pH values as parameters.
+
+```python
+from difflow_ree import GroupSeparator
+
+separator = GroupSeparator(
+    elements=("La", "Ce", "Pr", "Nd", "Sm", "Eu", "Gd", "Dy", "Y"),
+    extractant="D2EHPA",
+    diluent="kerosene",
+    light_elements=("La", "Ce", "Pr", "Nd"),
+    middle_elements=("Sm", "Eu"),
+    heavy_elements=("Gd", "Tb", "Dy", "Y"),
+)
+
+light, middle, heavy, info = separator(feed, T=298.15)
+info["group_compositions"]["heavy"]   # mole fractions in the heavy product
+```
+
+`nitrate_conc` and `mechanism` are threaded into every section of both
+circuits, so a solvating extractant such as TBP works here as it does on
+a single extractor (see [Solvating extractants](#solvating-extractants));
+`capacity_sharpness` likewise reaches both extraction sections' loading
+limiters.
+
+`elements` has no default, so the editor cannot drop a `GroupSeparator`
+from the palette alone --- the code context has to supply the element
+tuple.
+
+---
+
+(fullseparationtrain)=
+### FullSeparationTrain
+
+**Location**: `difflow_ree/flowsheets/full_train.py`
+
+**Class**: `FullSeparationTrain`
+
+**Description**: Cerium removal, then group separation, as one prebuilt plant with an overall mass balance.
+
+```
+feed ──▶ CeriumOxidizer ──▶ GroupSeparator ──┬──▶ light REE
+          (optional)          (optional)     ├──▶ middle REE
+             │                               └──▶ heavy REE
+             └──▶ CeO2 (solid)
+```
+
+Cerium comes first because it is the one element with an easy handle:
+oxidised to Ce(IV) it precipitates as CeO2 and leaves the circuit
+entirely, and since bastnasite feeds are often half cerium, removing it
+ahead of the extraction shrinks everything downstream.
+
+#### Parameters
+
+```python
+@dataclass
+class SeparationTrainParams:
+    elements: tuple = ("La", "Ce", "Pr", "Nd", "Sm", "Eu", "Gd", "Tb", "Dy", "Y")
+    extractant: str = "D2EHPA"
+    secondary_extractant: str = "PC88A"   # For Nd/Pr separation
+    diluent: str = "kerosene"
+    include_ce_removal: bool = True
+    group_separation: bool = True
+    individual_separation: bool = False   # Not yet implemented
+    nitrate_conc: float = None            # Required for solvating extractants
+    mechanism: str = None                 # Overrides the extractant's default
+    capacity_sharpness: int = 8
+    target_purities: dict = {"Nd": 0.99, "Dy": 0.99, "Y": 0.95}
+```
+
+`include_ce_removal` only takes effect if `"Ce"` is in `elements`, and the
+group memberships are intersected with `elements`, so a train over a
+feed with no heavies simply has no heavy product.
+
+#### Outputs
+
+A single dict, not a tuple of streams:
+
+| Key | Contents |
+|---|---|
+| `products` | `"CeO2"`, `"light_REE"`, `"middle_REE"`, `"heavy_REE"` --- whichever steps ran |
+| `intermediates` | `"ce_depleted"`, the feed to group separation |
+| `info` | `"ce_removal"` and `"group_separation"`, each step's own info |
+| `mass_balance` | `total_in`, `total_out` and their ratio, `closure` |
+
+```python
+from difflow_ree import FullSeparationTrain, SeparationTrainParams
+
+train = FullSeparationTrain(SeparationTrainParams(
+    elements=("La", "Ce", "Pr", "Nd", "Sm", "Gd", "Dy", "Y"),
+    include_ce_removal=True,
+    group_separation=True,
+))
+results = train(feed)
+results["mass_balance"]["closure"]      # REE into named products / REE in
+```
+
+`closure` is **not** a mass-balance check. It is the REE in the named
+products divided by the REE in the feed, and the two circuits' raffinates
+are not among the products --- so on a feed whose extraction is
+incomplete it reads well below 1 (0.03 on the assay above, where most of
+the feed leaves in the heavy circuit's raffinate). Read it as an overall
+recovery indicator, and look at each circuit's own
+`info[...]["mass_balance"]` to check that nothing was lost.
+
+`difflow_ree.flowsheets.full_train.design_separation_train(feed_analysis,
+target_products, ...)` returns a recommended `SeparationTrainParams` for
+a feed assay --- it switches Ce
+removal on above 30% Ce and flags individual separation when a
+high-value element (Nd, Pr, Eu, Tb) is a target.
+
+#### What it is not
+
+`FullSeparationTrain` is a **fixed sequence**: the topology is decided in
+`__init__` by direct calls in a set order, there is no decision variable
+over connectivity, `individual_separation=True` is accepted but not yet
+implemented, and the `barren_organic` each circuit returns is not
+recycled, so every circuit assumes its solvent comes back perfectly
+stripped. `mass_balance` calls `float()` on its totals, which makes it a
+reporting convenience: it cannot be differentiated through and it will
+fail under `jax.jit`.
+
+For a train whose topology *is* data --- modules plus a connectivity map,
+with the organic loop actually closed --- use
+`difflow_ree.flowsheets.train.SeparationTrain`, described in
+[Separation Trains](#separation-trains) below.
+
+---
+
 (separation-trains)=
 ## Separation Trains: Topology as Data, with the Organic Loop Closed (#202)
 

@@ -585,10 +585,56 @@ def from_dict(data: dict, registry=None, extras: dict | None = None):
 def _build_operation(cls: type, encoded_params: dict, unit_name: str,
                      stored: dict | None = None, override: dict | None = None):
     """Instantiate an operation from its encoded parameters and extras."""
+    import inspect
+
     from difflow.catalog import _params_class
 
     extras = {k: _decode_value(v) for k, v in (stored or {}).items()}
     extras.update(override or {})
+
+    try:
+        sig = inspect.signature(cls.__init__)
+    except (TypeError, ValueError):
+        # Same guard `constructor_extras` keeps: a C-implemented `__init__`
+        # has no signature to read, and the Params path below is the older
+        # and safer answer when nothing is known.
+        sig = None
+
+    if sig is not None and not _takes_params_first(sig):
+        # This unit keeps its numbers as plain constructor arguments rather
+        # than in a Params object it is handed --- ``Compressor(ratio)``,
+        # ``FlowSplit(w)``, ``GasPipe(beta)``, most of the gas plugin. They
+        # build the Params themselves, so there is nothing to hand over;
+        # the values go back in the way they came out.
+        #
+        # ``to_dict`` writes them under "params" regardless, because it
+        # reads whatever the instance calls ``.params``. Wrapping those in
+        # a fresh Params and passing it positionally puts a dataclass where
+        # a float belongs, and demanding them under "extras" instead
+        # rejects a file that does carry the value --- one field away.
+        # Neither is what the file means.
+        kwargs = {k: _decode_value(v) for k, v in encoded_params.items()}
+        # extras last: a caller's ``extras=`` outranks the file, and an
+        # object that never went to JSON at all --- a thermo, a species
+        # order --- only ever arrives that way.
+        kwargs.update(extras)
+        missing = [a for a in constructor_extras(cls) if a not in kwargs]
+        if missing:
+            raise SerializationError(
+                f"unit {unit_name!r}: {cls.__name__} requires "
+                f"{', '.join(missing)}, which the file does not carry. Supply "
+                f"it on load, e.g. extras={{{unit_name!r}: "
+                f"{{{missing[0]!r}: ...}}}}."
+            )
+        try:
+            return cls(**kwargs)
+        except TypeError as exc:
+            raise SerializationError(
+                f"unit {unit_name!r}: {cls.__name__} rejected the stored "
+                f"parameters ({exc}). The file may have been written by a "
+                "different version of difflow."
+            ) from exc
+
     missing = [a for a in constructor_extras(cls) if a not in extras]
     if missing:
         raise SerializationError(

@@ -276,23 +276,117 @@ recycle: infeed_next -> infeed
 (power-units)=
 ## Unit operations
 
-| unit | what it does |
-|---|---|
-| `SeriesBranch` | line/transformer, forward: to-end voltage and power from the from end |
-| `BranchDrop` | voltage propagation at a known current (linear) |
-| `BranchFlow` | equation-oriented: both end powers from both end voltages |
-| `Transformer` | `SeriesBranch` that refuses to be a line |
-| `SlackSource` | pin a feed to a regulated voltage |
-| `LoadDraw` | constant-power demand |
-| `ShuntDraw` | fixed shunt (capacitor bank or reactor) |
-| `GeneratorInject` | injection with a polynomial cost curve |
-| `BusNode` | sum powers, voltage from the first inlet |
-| `PowerSplit` | divide a bus's outgoing power (a tear variable, not a physical parameter) |
-| `LadderClose` | correct a feeder's infeed by the residual at its open end |
+Eleven units, one equation each, listed together because they are the
+equation set of a feeder decomposition and are understood as a set. Each
+carries its own anchor, so a link can land on the unit rather than on
+this heading.
 
-`SeriesBranch` inverts the branch relation and `BranchFlow` evaluates it directly, so they agree exactly — which is what makes either usable as a check on the other.
+### Branches
 
-Constant-power load is where a power flow's difficulty actually lives. Constant *impedance* would make the whole system linear in `V`; constant *current*, linear in the phasor. Constant power gives `S = V·conj(YV)`, and that is the nonlinearity Newton spends its iterations on.
+(power-op-seriesbranch)=
+`SeriesBranch` --- a line or transformer in the **forward** direction:
+given the from-end voltage and the power entering there, both the to-end
+voltage and the power leaving follow in closed form. The returned stream
+carries power *onward* rather than into the branch, so a chain of these
+composes into a feeder.
+
+(power-op-branchdrop)=
+`BranchDrop` --- voltage propagation at a **known current**, which is
+linear and therefore the cheap half of a backward/forward sweep. Power is
+carried through unchanged: this unit updates voltage only, and the caller
+owns the flows. Use `SeriesBranch` instead when power, not current, is
+what is known.
+
+(power-op-branchflow)=
+`BranchFlow` --- the **equation-oriented** form: both end powers from
+both end voltages. No inversion, no assumption about which end is
+upstream, and the only one of the three usable on a branch that closes a
+loop, where neither end's power is known in advance. Both returned
+streams carry power *into* the branch from their own end, so their sum is
+the loss --- the convention `difflow_power.residuals.branch_flows` uses.
+
+(power-op-transformer)=
+`Transformer` --- `SeriesBranch` with the same mathematics (the branch
+model already carries the complex tap) and a different name, because a
+flowsheet reads better when a transformer is called one. It refuses
+parameters that would make it a line, so a mislabelled component is
+caught at construction rather than by a puzzling result.
+
+`SeriesBranch` inverts the branch relation and `BranchFlow` evaluates it
+directly, so they agree exactly --- which is what makes either usable as
+a check on the other.
+
+### Nodes, sources and sinks
+
+(power-op-slacksource)=
+`SlackSource` --- pin a feed to a regulated voltage and pass its power
+through; the electrical analogue of the gas plugin's `SourceHead`. In a
+sequential feeder solve the power it carries is the tear variable: the
+substation infeed, which must come out equal to the total load plus
+losses nobody knows until the solve is done.
+
+(power-op-loaddraw)=
+`LoadDraw` --- a constant-**power** demand. Constant regardless of the
+voltage it is served at, which is what makes it the hard component: as
+voltage sags the current rises to compensate, which sags the voltage
+further. That positive feedback is the nose of a P-V curve, and why a
+heavily loaded feeder has no solution rather than a poor one.
+`info["current"]` is the current drawn at the stream's own voltage, which
+is what a backward sweep accumulates.
+
+(power-op-shuntdraw)=
+`ShuntDraw` --- a fixed shunt (capacitor bank or reactor), which unlike a
+load is constant **impedance**: it draws `|V|^2 conj(Y)`, so its var
+output falls with the square of the voltage. That is the well-known
+weakness of capacitor banks for voltage support --- they give least where
+they are needed most --- and it falls out of the model rather than having
+to be remembered.
+
+(power-op-generatorinject)=
+`GeneratorInject` --- add a generator's output to a stream and price it.
+`info["cost"]` is its cost in $/h at the current output, which is what
+makes a flowsheet objective assembled from these differentiable with
+respect to dispatch: the gradient of the objective is the offer curve.
+
+(power-op-busnode)=
+`BusNode` --- sum power at a bus; every inlet shares the **first** one's
+voltage. That shared voltage is the definition of a bus, and taking it
+from the first inlet is the sequential-modular way of saying so (the
+equation-oriented formulation carries one voltage variable per bus and
+constrains the rest to equal it). The two agree at a converged solution;
+the sequential form simply cannot detect a disagreement, so a flowsheet
+must be built with the first inlet being the one whose voltage was
+actually computed.
+
+### Tear-closing units
+
+These two exist only because a sequential decomposition needs them. Both
+carry quantities that are **tear variables, not physical parameters**.
+
+(power-op-powersplit)=
+`PowerSplit` --- divide a bus's outgoing power between two branches,
+`fraction` of both real and reactive power to the first; both outlets
+keep the bus voltage, since they leave the same bus. How power actually
+divides between two paths is set by their impedances, not chosen, so this
+unit belongs only where the fraction is a tear variable a fixed point
+solves for.
+
+(power-op-ladderclose)=
+`LadderClose` --- correct a feeder's infeed guess by the residual at its
+open end. A ladder feeder has exactly one unknown, the complex power the
+source must push in; everything downstream follows explicitly, but the
+losses, and therefore the infeed, are not known until the flow is. The
+naive closure --- recycling the open end's leftover power as the next
+infeed --- has the **wrong fixed point**: it converges where
+`leftover == infeed` rather than where `leftover == 0`. Correcting
+instead, `infeed_next = infeed - leftover`, is close to an exact Newton
+step and converges in about four Anderson iterations.
+
+Constant-power load is where a power flow's difficulty actually lives.
+Constant *impedance* would make the whole system linear in `V`; constant
+*current*, linear in the phasor. Constant power gives
+`S = V·conj(YV)`, and that is the nonlinearity Newton spends its
+iterations on.
 
 ---
 

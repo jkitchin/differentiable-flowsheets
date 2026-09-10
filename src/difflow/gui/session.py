@@ -430,6 +430,13 @@ class FlowsheetSession:
         solvent name, so the drop fails. Serving the class's answer put
         that disagreement in front of the user as a traceback.
 
+        Each entry also carries ``docs_url``, from
+        :func:`difflow.gui.doclinks.url_for` --- where in the book this
+        operation is written up, so the palette and the inspector can
+        offer the link without the front end knowing anything about how
+        ``docs/`` is organised. ``None`` for an operation the prose never
+        names, which :mod:`tests.test_doclinks` does not allow to happen.
+
         So each entry carries ``needs``, from :func:`difflow.gui.edit.unmet`
         --- the same function the adder refuses with, so the palette
         cannot promise a unit that will not drop --- and ``buildable``
@@ -439,13 +446,14 @@ class FlowsheetSession:
         the catalog whenever the code context changes.
         """
         from difflow.catalog import _default_registry, catalog
-        from difflow.gui import edit
+        from difflow.gui import doclinks, edit
 
         classes = {name: info.cls
                    for name, info in _default_registry().list_operations().items()}
         out = {}
         for name, spec in catalog().items():
             entry = spec.to_dict()
+            entry["docs_url"] = doclinks.url_for(name)
             cls = classes.get(name)
             if cls is not None:
                 needs = edit.unmet(self.flowsheet, cls, self.bindings)
@@ -453,6 +461,11 @@ class FlowsheetSession:
                 entry["buildable"] = not needs
             else:
                 entry["needs"] = [] if entry.get("buildable") else ["code"]
+            # Where the book discusses this unit, or None when it does
+            # not discuss it at all. Carried on the catalog rather than
+            # asked for per unit, because the palette wants all 87 at
+            # once and the whole map costs one pass over the index.
+            entry["docs_url"] = doclinks.url_for(name)
             out[name] = entry
         return out
 
@@ -494,11 +507,12 @@ class FlowsheetSession:
 
         Returns:
             ``{"ok": True, "operation": ..., "html": ..., "format": ...,
-            "symbol", "equations", "assumptions", "references",
-            "numerical_method"}``, or ``{"ok": False, "error": ...}``
+            "symbol", "docs_url", "equations", "assumptions",
+            "references", "numerical_method"}``, or ``{"ok": False, "error": ...}``
             for a name nothing is registered under.
         """
         from difflow.catalog import describe_operation
+        from difflow.gui import doclinks
         from difflow.gui import docs as docs_module
 
         try:
@@ -509,6 +523,9 @@ class FlowsheetSession:
         return {
             "ok": True,
             "operation": spec.name,
+            # The docstring rendered below says what the arguments are;
+            # this is where the book says what the unit is for.
+            "docs_url": doclinks.url_for(spec.name),
             "symbol": spec.symbol,
             "description": spec.description,
             "html": html,
@@ -736,13 +753,28 @@ class FlowsheetSession:
             values, placeholders, missing = edit.known_params(
                 self.flowsheet, _params_class(info.cls), self.bindings
             )
+            # After the two real sources, never before them: a number the
+            # code context actually supplies must not be shadowed by a
+            # made-up one, and a caller's `extras` outranks both. `values`
+            # counts as supplied too -- for a unit that builds its own
+            # `Params`, the constructor argument and the field it feeds
+            # are one number, and guessing it again here would hand the
+            # builder two.
+            guessed, guessed_names = edit.placeholder_extras(
+                info.cls, {**values, **override}
+            )
+            override.update(guessed)
+            placeholders = placeholders + guessed_names
             # Ask before building. `_build_operation` raises through the
             # file-loading path, whose message offers "written by a
             # different version of difflow" as the diagnosis -- true of a
             # file, and nonsense about a unit dropped from the palette a
-            # second ago. The palette flagged this same list.
+            # second ago. The palette flagged this same list, by the same
+            # reckoning: `values` supplies a constructor argument just as
+            # `override` does, along the road `_build_operation` takes for
+            # a unit that builds its own `Params`.
             unmet = [a for a in edit.constructor_extras(info.cls)
-                     if a not in override] + missing
+                     if a not in override and a not in values] + missing
             if unmet:
                 raise edit.EditError(
                     self._needs_hint(operation, info.cls, unmet)
@@ -875,6 +907,43 @@ class FlowsheetSession:
 
         return self._edit(
             lambda: edit.disconnect(self.flowsheet, source, outlet, target, inlet)
+        )
+
+    def _ports(self, name: str) -> dict:
+        """The port spec of the class behind an existing unit."""
+        from difflow.catalog import describe_class
+        from difflow.gui import edit
+
+        return describe_class(type(edit.unit(self.flowsheet, name).operation)) \
+            .to_dict()["ports"]
+
+    def rename_stream(self, old: str, new: str) -> dict:
+        """Rename one stream everywhere it appears.
+
+        A stream name is the wiring, so this moves feeds, recycle ends,
+        every port that reads or writes it and the canvas node all at
+        once. Refused if the new name is taken, because that would be a
+        connection wearing a rename's clothes.
+        """
+        from difflow.gui import edit
+
+        return self._edit(lambda: edit.rename(self.flowsheet, old, new))
+
+    def add_inlet(self, name: str) -> dict:
+        """One more inlet on a variadic unit, arriving unwired."""
+        from difflow.gui import edit
+
+        return self._edit(
+            lambda: edit.add_inlet(self.flowsheet, name, self._ports(name))
+        )
+
+    def remove_inlet(self, name: str, stream: str) -> dict:
+        """Take an inlet off a variadic unit, if nothing is on it."""
+        from difflow.gui import edit
+
+        return self._edit(
+            lambda: edit.remove_inlet(self.flowsheet, name, stream,
+                                      self._ports(name))
         )
 
     def set_layout(self, nodes: dict) -> dict:
