@@ -1,5 +1,5 @@
 {
- "n_sections": 742,
+ "n_sections": 759,
  "sections": [
   {
    "anchor": "overview",
@@ -1021,7 +1021,7 @@
    "heading": "Core Modules",
    "path": "Difflow Documentation > Documentation Contents > Core Modules",
    "source": "index.md",
-   "text": "| Document | Description |\n|----------|-------------|\n| [Getting Started](getting-started.md) | Installation, quick start, and basic examples |\n| [Unit Operations - Chemical](unit-operations-chemical.md) | Reactors, separators, heat exchangers, distillation |\n| [Unit Operations - Bio](unit-operations-bio.md) | Bioreactors, centrifugation, filtration, chromatography |\n| [Unit Operations - REE](unit-operations-ree.md) | Rare earth element extraction, scrubbing, stripping, precipitation |\n| [Thermodynamics](thermodynamics.md) | Property calculations, equations of state, databases |\n| [Technoeconomics](technoeconomics.md) | Capital costs, operating costs, profitability analysis |\n| [Streams and Flowsheets](streams-and-flowsheets.md) | Stream handling, flowsheet solver, recycle calculations |\n| [Dynamic Modeling](dynamic-modeling.md) | Transient simulation, ODE/DAE integration, diffrax backend |\n| [Moving-Horizon Estimation](moving-horizon-estimation.md) | Constrained MHE over dynamic flowsheets, EKF baseline, delayed and multi-rate data, joint parameter estimation |\n| [Operability Screening](operability.md) | Steady-state controllability from AD gains: RGA, singular values, disturbance rejection |\n| [Flexibility Analysis](flexibility.md) | Feasibility function, flexibility index, and the feed-vs-parameter uncertainty split |\n| [Experiment Design and Identifiability](experiment-design.md) | Fisher-information D/A/E-optimal run selection, predicted confidence intervals, structural identifiability |\n| [External Solvers](external-solvers.md) | Bridging flowsheets to pounce (NLP, post-optimal sensitivity) and discopt (implicit residual blocks) |\n| [Solvers and Utilities](solvers-and-utilities.md) | Numerical methods, uncertainty propagation |\n| [Data Reconciliation](data-reconciliation.md) | Constrained least squares on noisy plant data, gross error detection, observability |\n| [Delta-Base Planning](planning.md) | AD-generated delta vectors, trust-region LP/MILP planning, sensitivity of the plan |"
+   "text": "| Document | Description |\n|----------|-------------|\n| [Getting Started](getting-started.md) | Installation, quick start, and basic examples |\n| [Unit Operations - Chemical](unit-operations-chemical.md) | Reactors, separators, heat exchangers, distillation |\n| [Unit Operations - Bio](unit-operations-bio.md) | Bioreactors, centrifugation, filtration, chromatography |\n| [Unit Operations - REE](unit-operations-ree.md) | Rare earth element extraction, scrubbing, stripping, precipitation |\n| [Thermodynamics](thermodynamics.md) | Property calculations, equations of state, databases |\n| [Technoeconomics](technoeconomics.md) | Capital costs, operating costs, profitability analysis |\n| [Streams and Flowsheets](streams-and-flowsheets.md) | Stream handling, flowsheet solver, recycle calculations |\n| [Dynamic Modeling](dynamic-modeling.md) | Transient simulation, ODE/DAE integration, diffrax backend |\n| [Moving-Horizon Estimation](moving-horizon-estimation.md) | Constrained MHE over dynamic flowsheets, EKF baseline, delayed and multi-rate data, joint parameter estimation |\n| [Operability Screening](operability.md) | Steady-state controllability from AD gains: RGA, singular values, disturbance rejection |\n| [Flexibility Analysis](flexibility.md) | Feasibility function, flexibility index, and the feed-vs-parameter uncertainty split |\n| [Experiment Design and Identifiability](experiment-design.md) | Fisher-information D/A/E-optimal run selection, predicted confidence intervals, structural identifiability |\n| [External Solvers](external-solvers.md) | Bridging flowsheets to pounce (NLP, post-optimal sensitivity) and discopt (implicit residual blocks) |\n| [Solvers and Utilities](solvers-and-utilities.md) | Numerical methods, uncertainty propagation |\n| [Data Reconciliation](data-reconciliation.md) | Constrained least squares on noisy plant data, gross error detection, observability |\n| [Delta-Base Planning](planning.md) | AD-generated delta vectors, trust-region LP/MILP planning, sensitivity of the plan |\n| [Aspen PIMS Integration](pims-integration.md) | Design proposal: shipping difflow delta vectors into a PIMS planning model (nothing implemented yet) |"
   },
   {
    "anchor": "architecture-overview",
@@ -1365,6 +1365,125 @@
    "path": "Parameter Estimation > Example",
    "source": "parameter-estimation.md",
    "text": "A complete worked example is available in the Examples section:\n[REE parameter estimation](../examples/22_ree_parameter_estimation.ipynb), which\nfits pH-dependent distribution coefficients for La, Nd, and Dy from measured\nliquid\u2013liquid extraction concentrations, including Fisher and bootstrap\nuncertainty, diagnostics, and cross-validation."
+  },
+  {
+   "anchor": "design-connecting-difflow-to-aspen-pims",
+   "heading": "Design: connecting difflow to Aspen PIMS",
+   "path": "Design: connecting difflow to Aspen PIMS",
+   "source": "pims-integration.md",
+   "text": "**Status: design proposal. Nothing described here is implemented.** No module\n`difflow.planning.pims` exists. This document records the shape of the feature,\nthe decisions already taken, and the one thing that has to happen before any\ncode is written.\n\n---"
+  },
+  {
+   "anchor": "table-of-contents",
+   "heading": "Table of contents",
+   "path": "Design: connecting difflow to Aspen PIMS > Table of contents",
+   "source": "pims-integration.md",
+   "text": "1. [Summary](#summary)\n2. [Why there is something to connect](#why-there-is-something-to-connect)\n3. [What this is not](#what-this-is-not)\n4. [Architecture: three tiers](#architecture-three-tiers)\n5. [The hard part: basis and naming](#the-hard-part-basis-and-naming)\n6. [Provenance: what difflow can ship that PIMS cannot](#provenance-what-difflow-can-ship-that-pims-cannot)\n7. [API sketch](#api-sketch)\n8. [Testing without a licence](#testing-without-a-licence)\n9. [Phase 0: the gate](#phase-0-the-gate)\n10. [Decisions taken, and alternatives rejected](#decisions-taken-and-alternatives-rejected)\n11. [Risks](#risks)\n12. [Where it lands](#where-it-lands)\n\n---"
+  },
+  {
+   "anchor": "summary",
+   "heading": "Summary",
+   "path": "Design: connecting difflow to Aspen PIMS > Summary",
+   "source": "pims-integration.md",
+   "text": "difflow supplies **unit submodel delta vectors** to a PIMS model the customer\nkeeps and continues to run. It does not replace the planning LP, the recursion,\nthe assay library or anything else PIMS owns.\n\nThe deliverable in one line: a PIMS submodel table, generated by AD from a\ndifflow flowsheet, carrying the trust radius it was validated over and its\nfinite-difference cross-check \u2014 and, read in the other direction, a report\nsaying which entries of the incumbent PIMS vectors have gone stale and what the\nplan does when they are corrected."
+  },
+  {
+   "anchor": "why-there-is-something-to-connect",
+   "heading": "Why there is something to connect",
+   "path": "Design: connecting difflow to Aspen PIMS > Why there is something to connect",
+   "source": "pims-integration.md",
+   "text": "Refinery and value-chain planning has been done for decades with linear programs\nwhose unit submodels are base plus delta vectors \u2014 a first-order Taylor\nexpansion\n\n$$y \\approx y_0 + J\\,(u - u_0).$$\n\nAspen PIMS, Haverly GRTMPS, Honeywell RPMS and AVEVA Spiral Plan all work this\nway; the refereed anchor is Baker and Lasdon, *Successive Linear Programming at\nExxon*, Management Science **31**(3), 1985.\n\nIn every one of those systems $J$ is built by **perturbing a rigorous simulator\none variable at a time**. That is $O(n)$ in the number of decisions, which is\nwhy the vectors are refreshed on the order of annually \u2014 and why a planning\nmodel is usually running on submodels that describe the plant as it was, not as\nit is.\n\nA difflow flowsheet is a pure function with its flash, recycle and unit solves\nembedded, so `jax.jacobian` returns the *reduced* input-output sensitivity\ndirectly, already implicitly differentiated through those inner solves. That\nreduced Jacobian **is** the delta vector, and it costs a small constant multiple\nof one model evaluation regardless of $n$\n(`difflow.planning.benchmark` measures it; the ratio is locked in as a\nregression test).\n\nThat asymmetry \u2014 $O(1)$ against $O(n)$ \u2014 is the whole basis of the feature. It\nis not \"difflow is a better planner.\" It is \"the expensive step in your existing\nplanner is free here.\""
+  },
+  {
+   "anchor": "what-this-is-not",
+   "heading": "What this is not",
+   "path": "Design: connecting difflow to Aspen PIMS > What this is not",
+   "source": "pims-integration.md",
+   "text": "`difflow.planning` already declines two categories of work, for two entirely\ndifferent reasons, and the PIMS integration inherits both boundaries.\n\n**Bilinearity is a mathematical exclusion.** A stream quality multiplied by a\nstream flow stays nonconvex however good the unit linearisation is (Haverly,\n*ACM SIGMAP Bulletin* **25**, 1978). Better delta vectors do not touch it: the\nnonconvexity lives in the blending structure, not in the unit submodel. Every\nguarantee in `difflow.planning` chains off the subproblem being an LP \u2014 each\ntrust-region subproblem solved to global optimality, the Eason\u2013Biegler filter\nconvergence theory, duals reading as prices \u2014 and a bilinear term voids all\nthree silently while the code still returns a number. **Pools and property\nrecursion stay on the PIMS side.**\n\n**Assays, blending correlations and scheduling are a scope exclusion.** A crude\nassay library is curated proprietary data; octane, RVP and cloud-point rules are\nempirical fits. None of it is derivable from a flowsheet, which is difflow's\nonly claim to novelty here. Reimplementing it would mean competing with thirty\nyears of accumulated domain content on its own terms, and losing.\n\nAlso out: replacing the PIMS LP, and reverse-engineering the PIMS model\ndatabase. Integration stays on the documented spreadsheet interchange path."
+  },
+  {
+   "anchor": "architecture-three-tiers",
+   "heading": "Architecture: three tiers",
+   "path": "Design: connecting difflow to Aspen PIMS > Architecture: three tiers",
+   "source": "pims-integration.md",
+   "text": "Ordered by how much works without an Aspen licence."
+  },
+  {
+   "anchor": "tier-1-export",
+   "heading": "Tier 1 \u2014 Export",
+   "path": "Design: connecting difflow to Aspen PIMS > Architecture: three tiers > Tier 1 \u2014 Export",
+   "source": "pims-integration.md",
+   "text": "**This is a new writer on existing machinery, not a new exporter.**\n`difflow.planning.export` already defines `DeltaVector` / `DeltaVectorSet` and\nwrites them as `write_json`, `write_csv`, `write_lp` and `write_mps`. PIMS\nbecomes a fifth writer:\n\n```python\nwrite_pims(dvs: DeltaVectorSet, mapping: PIMSMapping, path) -> None\n```\n\n`DeltaVector` already carries nearly everything the table needs \u2014 `u0`, `y0`,\n`J`, `lb`/`ub`, `radius`, `tr_lo`/`tr_hi`, `mode`, `phase`, and per-lever\n`u_units`/`y_units`. It also carries **`scaled_J`**, the dimensionless Jacobian,\nwhose own docstring calls it *\"the form a shift-vector table is normally read\nin\"*. That is the PIMS shift vector in all but name and file format.\n\nSo Tier 1 adds exactly two things that do not already exist: the **basis\nconversion** (below), and the **tag mapping**. Everything else is plumbing an\nexisting record into a spreadsheet layout.\n\n`Block.from_flowsheet(fs, u=[...], y=[...])` is the front of the same pipeline \u2014\nthe bridge from a difflow flowsheet to a planning block, with lever keys in\n`_apply_params` notation and feed levers under a `feed:` prefix. A PIMS export\nis then: flowsheet \u2192 `Block.from_flowsheet` \u2192 `linearize_block` \u2192\n`DeltaVectorSet.from_block` \u2192 `write_pims`.\n\nOutput is a spreadsheet, one sheet per table. Buildable and testable today with\nno Aspen software present."
+  },
+  {
+   "anchor": "tier-2-import-and-the-staleness-report",
+   "heading": "Tier 2 \u2014 Import, and the staleness report",
+   "path": "Design: connecting difflow to Aspen PIMS > Architecture: three tiers > Tier 2 \u2014 Import, and the staleness report",
+   "source": "pims-integration.md",
+   "text": "`read_pims_model(path) -> list[Block]` parses submodel tables back into affine\n`Block`s. Note what this changes: `difflow.planning.export` is **one-way today \u2014\nthere is no importer at all**, for any format. A PIMS reader would be the first,\nso it is a change to the module's contract and not merely another file parser.\nIt earns that only because of what it unlocks:\n\n**a staleness report.** Incumbent PIMS vector against fresh AD vector, entry by\nentry, ranked by *economic impact* rather than by relative error \u2014 \"six of these\nforty-two entries move the plan; here they are, and here is what the plan does\nwhen they are corrected.\" A large relative error on an entry the LP never\ntouches is not news; a small one on an active lever is.\n\nSecondary, nearly free once the importer exists: run difflow's guarded\ntrust-region loop and `plan_sensitivity` over the PIMS structure. PIMS cannot\noffer that itself, because its submodels are not differentiable."
+  },
+  {
+   "anchor": "tier-3-live-coupling",
+   "heading": "Tier 3 \u2014 Live coupling",
+   "path": "Design: connecting difflow to Aspen PIMS > Architecture: three tiers > Tier 3 \u2014 Live coupling",
+   "source": "pims-integration.md",
+   "text": "Writing into a running model, or driving whatever automation surface the\ninstalled PIMS version exposes. Deferred: it needs a licence and an install to\nscope responsibly. Follow the existing precedent for third-party bridges \u2014\n`difflow.dwsim_import` is a pythonnet-gated prototype, `difflow.pyglenn_import`\nand `difflow.cantera_import` are optional imports \u2014 and keep it behind a lazy\nimport so the core path stays dependency-free."
+  },
+  {
+   "anchor": "the-hard-part-basis-and-naming",
+   "heading": "The hard part: basis and naming",
+   "path": "Design: connecting difflow to Aspen PIMS > The hard part: basis and naming",
+   "source": "pims-integration.md",
+   "text": "Writing tables is a week of work. This section is the feature.\n\n**Basis conversion.** PIMS submodel yields are per unit of feed on a weight or\nvolume basis and are expected to close. difflow blocks emit absolute molar\nflows. So `J` must be divided through by the feed rate and pushed onto the\ntarget basis via molecular weights and densities \u2014 and the exporter must\n**assert closure**, not hope for it. A yield set that silently fails to sum to\none produces a planning model that is wrong in a way no reviewer will catch by\nreading it.\n\n**Property rows are not free outputs.** Rows in a PIMS submodel that carry\nrecursed structural qualities are not the same kind of object as a difflow block\noutput. Only the subset of `y_names` that maps onto a genuine yield or property\nrow can be exported. Anything else \u2014 a spec variable such as `T_colfeed`, which\nlimits but is not priced \u2014 has no PIMS home and must **raise**, never be quietly\ndropped.\n\n**Naming.** PIMS row and column tags are short and structured. The mapping is\nexplicit, declared per block, and validated on export. No automatic mangling of\ndifflow names into tags.\n\n**Shift ranges.** PIMS shift levers have modeller-set ranges and are linear over\nthem by construction; difflow's trust radius is adaptive per cycle. Export\ncommits to a range, and records which one."
+  },
+  {
+   "anchor": "provenance-what-difflow-can-ship-that-pims-cannot",
+   "heading": "Provenance: what difflow can ship that PIMS cannot",
+   "path": "Design: connecting difflow to Aspen PIMS > Provenance: what difflow can ship that PIMS cannot",
+   "source": "pims-integration.md",
+   "text": "Every exported vector carries:\n\n- the **trust radius** it was validated over;\n- the **`check_delta_vectors` residual** against central differences at that\n  radius \u2014 the same $2n$-evaluation method the vector replaces;\n- the linearisation point `u0`, and the phase regime recorded at it.\n\nThree of those four are already fields on `DeltaVector` (`radius`, `tr_lo`/\n`tr_hi`, `u0`, `phase`); only the residual would be added. `check_delta_vectors`\nalready exists, so this is cheap. It matters because a\ndelta vector's accuracy is *local* and the receiving LP has no way to know where\nit stops. A vector that arrives stating its own domain of validity is a\ndifferent object from one that arrives as a block of numbers.\n\nA block that declares a `phase_fn` raises `PhaseBoundaryWarning` when the\nlinearisation straddles a phase appearance or disappearance. Such a vector is\nmeaningless rather than merely inaccurate \u2014 the underlying function is not\ndifferentiable there \u2014 and must never be exported silently."
+  },
+  {
+   "anchor": "api-sketch",
+   "heading": "API sketch",
+   "path": "Design: connecting difflow to Aspen PIMS > API sketch",
+   "source": "pims-integration.md",
+   "text": "Illustrative, not settled; the table layout in Phase 0 will move it.\n\n```python\nfrom difflow.planning import Block, linearize_block\nfrom difflow.planning.export import DeltaVectorSet\nfrom difflow.planning.pims import PIMSMapping, write_pims, read_pims_model\n\nblk = Block.from_flowsheet(fs, u=[\"deethanizer.reflux_ratio\", \"feed:feed.T\"],\n                           y=[\"ngl.F_C2\", \"residue.F_total\"])\ndvs = DeltaVectorSet.from_block(blk, linearize_block(blk))\n\nmapping = PIMSMapping(\n    submodel=\"SDEETH\",              # the PIMS submodel this block feeds\n    feed=\"feed_F\",                  # which lever is the feed yields are per\n    basis=\"weight\",                 # \"weight\" | \"volume\"\n    tags={\"ngl.F_C2\": \"...\", \"residue.F_total\": \"...\"},   # difflow -> PIMS tag\n    mw={...}, density={...},        # what the conversion needs\n)\n\nwrite_pims(dvs, mapping, \"deethanizer.xlsx\")   # asserts closure, or raises\n\nincumbent = read_pims_model(\"plant_model.xlsx\")          # -> list[Block]\nreport = compare_vectors(incumbent[\"SDEETH\"], dvs, prices=prices)\nprint(report.summary())        # entries ranked by effect on the plan\n```"
+  },
+  {
+   "anchor": "testing-without-a-licence",
+   "heading": "Testing without a licence",
+   "path": "Design: connecting difflow to Aspen PIMS > Testing without a licence",
+   "source": "pims-integration.md",
+   "text": "No PIMS in CI, so the test strategy carries the weight:\n\n1. **Round trip** against a synthetic fixture workbook in the PIMS table layout,\n   committed to `tests/fixtures/`.\n2. **Closure assertions** on every basis conversion, including deliberately\n   non-closing inputs that must raise.\n3. **The golden test**: the exported base-plus-shift model reproduces the\n   block's *nonlinear* response inside the stated radius, to the stated\n   tolerance. That is the property being sold, so it is the property under test.\n4. **Refusal tests**: an unmapped output raises; a phase-straddling\n   linearisation raises.\n5. Any live-PIMS test marked optional and licence-gated."
+  },
+  {
+   "anchor": "phase-0-the-gate",
+   "heading": "Phase 0: the gate",
+   "path": "Design: connecting difflow to Aspen PIMS > Phase 0: the gate",
+   "source": "pims-integration.md",
+   "text": "**Obtain one real PIMS submodel table, even redacted, before writing code.**\n\nTag conventions, the layout of base and shift columns, and which rows are yields\nversus recursed properties are facts that cannot be derived from this side.\nGuessing produces an exporter that looks right and is wrong \u2014 the failure mode\nthis whole design is organised against.\n\nPick the pilot unit at the same time: one whose difflow block maps naturally\nonto a PIMS submodel (a fractionator, a simple conversion unit), not one whose\noutputs are mostly recursed qualities."
+  },
+  {
+   "anchor": "decisions-taken-and-alternatives-rejected",
+   "heading": "Decisions taken, and alternatives rejected",
+   "path": "Design: connecting difflow to Aspen PIMS > Decisions taken, and alternatives rejected",
+   "source": "pims-integration.md",
+   "text": "**Integrate at the submodel, not the LP.** difflow supplies vectors; PIMS keeps\nthe model. Rejected: emitting a whole planning model, which would require the\npooling and assay machinery that is out of scope by design.\n\n**Spreadsheet interchange, not the model database.** Rejected: parsing the\nproprietary model store \u2014 fragile, and legally murkier.\n\n**A module, not a plugin.** `src/difflow/planning/pims.py`, alongside `lp.py`.\n`difflow.plugins` is for unit operations; `difflow.planning` is deliberately not\none, and the PIMS bridge sits at the same level.\n\n**The LP solver question is orthogonal, and was investigated separately.** The\nplanning LP stays on HiGHS via `scipy.optimize.linprog` / `milp`. What difflow\nexports is `J` from `linearize.py`; what validates it is the nonlinear block.\nNeither touches the LP solver, so no backend decision can block this work.\n\nTwo incidental findings from that investigation are worth recording here,\nbecause they are not obvious from reading the code and they constrain any future\nsolver swap:\n\n- `LPSolution.duals` and `LPSolution.active_bounds` have **no consumers**\n  anywhere in the repository. `plan_sensitivity` derives its multipliers by AD\n  on the caller's *nonlinear* blocks (`sensitivity.py:304`), not from LP duals \u2014\n  deliberately, and consistent with the invariant that violations are scored\n  from the nonlinear model and never from LP slacks. The LP is a throwaway\n  subproblem; its duals are shadow prices of a Taylor model, not of the plant.\n- If an interior-point LP backend is ever adopted, **crossover must be enabled**.\n  The load-bearing consumer of vertex structure is not any bound-reporting\n  helper but `_hit_trust_region` (`planner.py:709`), which gates radius\n  expansion at `planner.py:656`. An IPM returning the analytic centre of a tied\n  optimal face never reports `at_boundary`, so the radius can only shrink and\n  the loop crawls to `radius_min` reporting convergence \u2014 a silent\n  convergence-rate regression. A snap-to-bound tolerance does **not** address\n  this: on a tie the analytic centre is $O(1)$ from the bound, not $10^{-9}$."
+  },
+  {
+   "anchor": "risks",
+   "heading": "Risks",
+   "path": "Design: connecting difflow to Aspen PIMS > Risks",
+   "source": "pims-integration.md",
+   "text": "| Risk | Severity | Mitigation |\n|---|---|---|\n| Real submodels don't map cleanly onto difflow blocks (feed basis, recursed property rows) | Could kill the feature | Phase 0; pick the pilot unit for mapping cleanliness |\n| Silent basis-conversion error | High \u2014 wrong plan, no visible symptom | Closure assertions; golden test against the nonlinear model |\n| Table layout guessed wrong | Medium \u2014 rework | Phase 0 gate |\n| Vector exported outside its validity domain | Medium | Radius and FD residual travel with every vector; phase warnings raise |\n| Customer expects a full PIMS replacement | Medium \u2014 expectation, not code | Scope section, stated up front |"
+  },
+  {
+   "anchor": "where-it-lands",
+   "heading": "Where it lands",
+   "path": "Design: connecting difflow to Aspen PIMS > Where it lands",
+   "source": "pims-integration.md",
+   "text": "| Path | Contents |\n|---|---|\n| `src/difflow/planning/pims.py` | `PIMSMapping`, `write_pims`, `read_pims_model`, `compare_vectors` \u2014 a writer on `export.DeltaVectorSet`, kept out of `export.py` because the importer and the basis layer have no business there |\n| `tests/test_planning_pims.py` | Round trip, closure, golden, refusal tests |\n| `tests/fixtures/` | Synthetic PIMS-layout workbook |\n| `docs/planning.md` | Cross-reference once implemented |\n| `pyproject.toml` | New `pims` extra (`openpyxl`) \u2014 there is no Excel dependency in the project today |\n\nRelated reading: [`docs/planning.md`](planning.md),\n`difflow.planning.export` (the writers this extends), `Block.from_flowsheet`,\n`examples/30_delta_base_planning.ipynb`, `difflow.planning.chain.two_plant_chain`."
   },
   {
    "anchor": "delta-base-planning",
