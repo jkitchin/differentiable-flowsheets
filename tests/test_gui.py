@@ -2694,16 +2694,59 @@ class TestTheEditorStopsWithItsPage:
         now[0] += 6
         assert not life.expired(), "tab-b is still there"
         life.bye("tab-b")
+        now[0] += life.linger + 1
         assert life.expired()
 
     def test_the_farewell_is_what_makes_it_prompt(self):
-        """Without it the port comes back a grace later; with it, at once."""
+        """Without it the port comes back a grace later; with it, a linger later."""
         now, clock = self.clock()
-        life = server.Lifetime(grace=90, clock=clock)
+        life = server.Lifetime(grace=90, linger=5, clock=clock)
         life.ping("tab-a")
         assert not life.expired()
         life.bye("tab-a")
+        now[0] += 6
         assert life.expired(), "no waiting out 90 seconds for a closed tab"
+
+    def test_a_reload_is_not_a_closed_tab(self):
+        """The bug this linger exists for: reloading the page killed the editor.
+
+        A reload is a farewell and then a hello, and the hello cannot go
+        out until the new document has fetched the bundle and mounted.
+        Read the farewell as final and the server stops in that gap ---
+        so the reloaded page loads against nothing and the user sees an
+        editor that shows nothing when it starts.
+        """
+        now, clock = self.clock()
+        life = server.Lifetime(grace=90, linger=5, clock=clock)
+        life.ping("first-load")
+        life.bye("first-load")              # pagehide, on the way to reloading
+
+        now[0] += 0.4                       # fetch, parse, mount
+        assert not life.expired(), "the watchdog looked between the two halves"
+        life.ping("second-load")            # the new document checks in
+        now[0] += 60
+        life.ping("second-load")
+        assert not life.expired(), "the reloaded page is here and being served"
+
+    def test_the_linger_is_a_wait_and_not_a_reprieve(self):
+        """Silence after the farewell still gives the port back, promptly."""
+        now, clock = self.clock()
+        life = server.Lifetime(grace=90, linger=5, clock=clock)
+        life.ping("tab-a")
+        life.bye("tab-a")
+        now[0] += 4
+        assert not life.expired(), "still inside the linger"
+        now[0] += 2
+        assert life.expired(), "and no waiting out the 90-second grace after it"
+
+    def test_the_linger_runs_from_the_farewell_not_from_the_next_look(self):
+        """The watchdog polls; the clock must not start when it happens to look."""
+        now, clock = self.clock()
+        life = server.Lifetime(grace=90, linger=5, clock=clock)
+        life.ping("tab-a")
+        life.bye("tab-a")
+        now[0] += 5.5                        # a poll that arrived late
+        assert life.expired(), "the wait became the linger plus the poll gap"
 
     def test_quit_does_not_wait_for_anyone(self):
         now, clock = self.clock()
@@ -2716,19 +2759,25 @@ class TestTheEditorStopsWithItsPage:
     def test_a_ping_from_a_client_that_had_gone_brings_it_back(self):
         """A tab restored from the back/forward cache is a live tab again."""
         now, clock = self.clock()
-        life = server.Lifetime(grace=10, clock=clock)
+        life = server.Lifetime(grace=10, linger=5, clock=clock)
         life.ping("tab-a")
         life.bye("tab-a")
+        now[0] += 6
         assert life.expired()
         life.ping("tab-a")
         assert not life.expired()
+        now[0] += 6
+        assert not life.expired(), "the farewell before it must not still count"
 
     def test_the_routes_reach_the_lifetime(self, client):
         """ping / bye / quit, over the wire, as the page sends them."""
         assert client.post("/api/ping", {"client": "tab-a"})[1]["ok"]
         assert not client.server.lifetime.expired()
         assert client.post("/api/bye", {"client": "tab-a"})[1]["ok"]
-        assert client.server.lifetime.expired()
+        life = client.server.lifetime
+        assert not life.expired(), "a farewell alone stops nothing; it may be a reload"
+        life.linger = 0
+        assert life.expired()
 
         status, answer = client.post("/api/quit")
         assert status == 200, "answered before anything stops, or the page sees a drop"
@@ -2756,7 +2805,7 @@ class TestTheEditorStopsWithItsPage:
     def test_the_watcher_shuts_the_server_down(self):
         """End to end: nobody is watching, so the port comes back."""
         session = FlowsheetSession(None, None)
-        life = server.Lifetime(grace=0.05)
+        life = server.Lifetime(grace=0.05, linger=0.05)
         srv = server.make_server(session, port=0, lifetime=life)
         port = srv.server_address[1]
         thread = threading.Thread(target=srv.serve_forever, daemon=True)

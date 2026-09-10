@@ -79,3 +79,29 @@ test('a failed ping is swallowed rather than left as a loose rejection', async (
   })
   assert.equal(await alive.ping(), undefined)
 })
+
+test('the default timers survive a browser that checks its receiver', () => {
+  // `setInterval` is defined on Window and a real browser enforces it:
+  // called with anything else as `this` it throws "Illegal invocation".
+  // Node's is a plain function and jsdom's is too, so this is the only
+  // place below an actual browser where the difference shows up --- and
+  // it is worth a test, because the throw lands in App's mount effect,
+  // where Svelte answers it by rendering nothing whatsoever.
+  const real = { set: globalThis.setInterval, clear: globalThis.clearInterval }
+  const brandCheck = (fn) =>
+    function (...args) {
+      if (this !== globalThis) throw new TypeError('Illegal invocation')
+      return fn.apply(globalThis, args)
+    }
+  globalThis.setInterval = brandCheck(real.set)
+  globalThis.clearInterval = brandCheck(real.clear)
+  try {
+    const { post } = recorder()
+    const alive = keepAlive({ post })     // no timers: the browser's own
+    alive.start()                          // this is what went blank
+    alive.stop()
+  } finally {
+    globalThis.setInterval = real.set
+    globalThis.clearInterval = real.clear
+  }
+})

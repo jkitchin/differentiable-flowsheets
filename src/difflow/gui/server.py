@@ -62,6 +62,22 @@ HEARTBEAT_SECONDS = 15
 #: crashed browser, a killed tab, a laptop lid.
 IDLE_GRACE_SECONDS = 90
 
+#: How long the editor waits, after the last page has said goodbye,
+#: before concluding that none is coming back.
+#:
+#: A reload is a farewell and then a hello. The farewell goes out from
+#: `pagehide`; the hello cannot go out until the new document has
+#: fetched the bundle, parsed it and mounted, which is hundreds of
+#: milliseconds later at best. Treating the farewell as final closed
+#: the server in that gap and the reloaded page landed on nothing --- a
+#: browser reload killed the editor.
+#:
+#: So the farewell means "this page has gone", not "stop now". Five
+#: seconds is longer than a reload of a local bundle and short enough
+#: that closing the tab still gives the port back while the user is
+#: still reaching for the terminal.
+RELOAD_LINGER_SECONDS = 5
+
 #: Where the project lives, for the links in the editor's header. Read
 #: from the installed metadata so ``pyproject.toml`` stays the one place
 #: they are written down, with these as the answer for a source tree
@@ -246,32 +262,51 @@ class Lifetime:
     Args:
         grace: seconds of silence from every client before the editor
             concludes it is unwatched.
+        linger: seconds to keep serving after the last page has gone,
+            in case it is a reload rather than a departure.
         clock: the monotonic clock to read, injectable for tests.
     """
 
-    def __init__(self, grace: float = IDLE_GRACE_SECONDS, clock=time.monotonic):
+    def __init__(self, grace: float = IDLE_GRACE_SECONDS,
+                 linger: float = RELOAD_LINGER_SECONDS,
+                 clock=time.monotonic):
         self.grace = grace
+        self.linger = linger
         self.clock = clock
         self._lock = threading.Lock()
         self._seen: dict[str, float] = {}
         self._arrived = False
         self._asked = False
+        #: When the last client left, or ``None`` while one is here.
+        self._empty_since: float | None = None
 
     def ping(self, client: str) -> None:
         """Note that ``client`` is still there."""
         with self._lock:
             self._seen[client or "-"] = self.clock()
             self._arrived = True
+            self._empty_since = None
 
     def bye(self, client: str) -> None:
         """Note that ``client`` has gone.
 
         The page sends this as it unloads, which is what makes the port
-        come back in the moment rather than after :attr:`grace`. It is
-        not required: a client that vanishes without a word ages out.
+        come back after :attr:`linger` rather than after :attr:`grace`.
+        It is not required: a client that vanishes without a word ages
+        out.
+
+        Note what it does *not* mean: stop now. `pagehide` fires on a
+        reload too, and the page that fired it is about to be replaced
+        by one that will ping. Only :meth:`expired` decides, and it
+        waits out the linger first.
         """
         with self._lock:
             self._seen.pop(client or "-", None)
+            if not self._seen and self._empty_since is None:
+                # Timed from the farewell rather than from the watchdog's
+                # next look, so the wait is the linger and not the linger
+                # plus however long that poll happened to be away.
+                self._empty_since = self.clock()
 
     def quit(self) -> None:
         """Stop, whoever is still watching. The Quit button."""
@@ -294,7 +329,20 @@ class Lifetime:
             now = self.clock()
             self._seen = {client: last for client, last in self._seen.items()
                           if now - last <= self.grace}
-            return not self._seen
+            if self._seen:
+                self._empty_since = None
+                return False
+            # Nobody is here. Whether to wait depends on how they went.
+            #
+            # A client that aged out has already been silent for the
+            # whole grace, and that is all the waiting anyone needs.
+            # A farewell is different: it is also what a reload sends,
+            # on the way to a page that will ping again as soon as it
+            # has mounted, and stopping in that gap takes the server
+            # out from under the page that was about to arrive.
+            if self._empty_since is None:
+                return True
+            return now - self._empty_since >= self.linger
 
 
 def watch(server, lifetime: Lifetime, poll: float = 1.0,
