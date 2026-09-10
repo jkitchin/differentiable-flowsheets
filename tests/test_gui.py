@@ -537,11 +537,26 @@ class TestFiles:
         result = session.save()
         assert not result["ok"] and "path" in result["error"]
 
-    def test_an_empty_session_reports_rather_than_raises(self):
+    def test_an_empty_session_is_an_empty_flowsheet(self):
+        """Not `None`. See `TestAnEmptyEditor` for why.
+
+        Everything a session can be asked still answers over one: it
+        serializes, it emits code that runs, and solving nothing succeeds
+        at nothing. The only verb that refuses is the diagram, because an
+        empty SVG downloads as a file that opens onto nothing.
+        """
         session = FlowsheetSession()
-        assert session.document()["flowsheet"] is None
-        assert not session.solve()["ok"]
-        assert session.code()["error"]
+        document = session.document()
+        assert document["flowsheet"]["units"] == []
+        assert document["species"] == []
+        assert session.solve() == {
+            "ok": True, "streams": {}, "species": [], "converged": True,
+            "iterations": 0, "method": "direct", "residual": 0.0,
+            "tol": 1e-08, "tear_streams": [],
+        }
+        assert session.code()["error"] is None
+        assert "Flowsheet(species_order=[]" in session.code()["source"]
+        assert session.diagram() == {"ok": False, "error": "nothing to draw yet"}
 
 
 # =============================================================================
@@ -758,6 +773,189 @@ class TestWhatBlocksADrop:
         client.post("/api/code-context", {"source": "solvent = 'MEA'\n"})
         assert client.get_json("/api/catalog")[1]["AmineAbsorber"]["needs"] == []
         assert client.post("/api/unit", {"operation": "AmineAbsorber"})[1]["ok"]
+
+
+class TestAnEmptyEditor:
+    """`difflow gui` with no file: a live canvas, waiting for species.
+
+    The regression this class exists for: the session left
+    ``self.flowsheet = None`` when it was opened without a path, and
+    every edit route begins by refusing "no flowsheet loaded". Nothing
+    said so. The palette filled in, the canvas drew its grid, and
+    dragging a unit onto it did nothing at all --- no error, no node ---
+    which reads as a broken drag rather than as an editor that has no
+    flowsheet to edit.
+
+    So an empty editor holds a real, empty ``Flowsheet``, and the one
+    thing it is missing --- the species, which every stream array is
+    indexed by --- is asked for by name.
+    """
+
+    @pytest.fixture
+    def empty(self):
+        live = Client(FlowsheetSession())
+        yield live
+        live.close()
+
+    def test_an_editor_opened_with_no_file_still_has_a_flowsheet(self, empty):
+        status, payload = empty.get_json("/api/flowsheet")
+        assert status == 200
+        assert payload["flowsheet"]["units"] == []
+        assert payload["path"] == ""
+        assert payload["species"] == []
+        assert payload["editable"] is True
+
+    def test_a_drop_before_the_species_are_named_says_which_field(self, empty):
+        """Not "no flowsheet loaded", and not silence."""
+        _, answer = empty.post("/api/unit", {"operation": "Mixer"})
+        assert answer["ok"] is False
+        assert "species" in answer["error"]
+        assert "header" in answer["error"] and "code context" in answer["error"]
+
+    def test_naming_the_species_unblocks_the_drop(self, empty):
+        assert empty.post("/api/species", {"species": SPECIES})[1]["ok"]
+        assert empty.get_json("/api/species")[1]["species"] == SPECIES
+        answer = empty.post("/api/unit", {"operation": "Mixer"})[1]
+        assert answer["ok"], answer
+        assert [u.name for u in empty.session.flowsheet.units] == ["mixer"]
+
+    def test_the_code_context_can_name_them_instead(self, empty):
+        """`SPECIES` as well as `species_order`, because the starter says so.
+
+        The snippet the Code context panel opens with defines ``SPECIES``.
+        A session that only looked for ``species_order`` left the reader
+        applying the sample code they were handed and watching the drop
+        get refused anyway.
+        """
+        _, answer = empty.post(
+            "/api/code-context", {"source": 'SPECIES = ["water", "ethanol"]\n'}
+        )
+        assert answer["ok"] and answer["species"] == SPECIES
+        assert empty.get_json("/api/flowsheet")[1]["species"] == SPECIES
+        assert empty.post("/api/unit", {"operation": "Mixer"})[1]["ok"]
+
+    def test_a_named_list_is_not_overwritten_by_the_code_context(self, empty):
+        """Whoever typed in the header meant it."""
+        empty.post("/api/species", {"species": ["a", "b"]})
+        _, answer = empty.post(
+            "/api/code-context", {"source": 'SPECIES = ["water", "ethanol"]\n'}
+        )
+        assert answer["ok"] and "species" not in answer
+        assert empty.get_json("/api/species")[1]["species"] == ["a", "b"]
+
+    @pytest.mark.parametrize(
+        "names, why",
+        [
+            ("water", "must be a list"),
+            (["water", "water"], "named twice"),
+            (["water", "  "], "needs a name"),
+            ([1, 2], "needs a name"),
+        ],
+    )
+    def test_a_species_list_that_cannot_index_a_stream_is_refused(
+        self, empty, names, why
+    ):
+        _, answer = empty.post("/api/species", {"species": names})
+        assert answer["ok"] is False
+        assert why in answer["error"]
+
+    def test_the_list_freezes_once_a_unit_indexes_it(self, empty):
+        """Re-ordering under a built unit would relabel its numbers.
+
+        A ``Stream`` holds molar flows as an array indexed by
+        ``species_order``. Swapping the order once a unit holds one turns
+        a water flow into an ethanol flow with nothing on screen changing,
+        which is the worst kind of wrong answer.
+        """
+        empty.post("/api/species", {"species": SPECIES})
+        empty.post("/api/unit", {"operation": "Mixer"})
+        assert empty.get_json("/api/species")[1]["editable"] is False
+        _, answer = empty.post("/api/species", {"species": SPECIES[::-1]})
+        assert answer["ok"] is False and "already has units" in answer["error"]
+        assert list(empty.session.flowsheet.species_order) == SPECIES
+
+    def test_the_palette_says_what_it_is_waiting_for(self, empty):
+        """`needs species_order`, on every row, until the list exists.
+
+        The palette answers `needs` against the session rather than
+        against the class, which is what lets it be honest here: a Mixer
+        needs nothing of its own and still cannot be built, and a row that
+        looked droppable would send the reader to a refusal instead of to
+        the field that fixes it. The name is the same one the code context
+        would bind, so the two ways of answering it read alike.
+        """
+        _, catalog = empty.get_json("/api/catalog")
+        assert catalog["Mixer"]["needs"] == ["species_order"]
+        assert catalog["Mixer"]["buildable"] is False
+        empty.post("/api/species", {"species": SPECIES})
+        _, catalog = empty.get_json("/api/catalog")
+        assert catalog["Mixer"]["needs"] == []
+        assert catalog["Mixer"]["buildable"] is True
+        assert empty.post("/api/unit", {"operation": "Mixer"})[1]["ok"]
+
+    def test_a_flowsheet_built_from_nothing_can_be_fed_and_solved(self, empty):
+        """Drop, wire, feed, solve --- the whole reported defect, over HTTP.
+
+        The second half of the same bug. Once the drops worked, a
+        from-scratch flowsheet could be drawn and still not solved: every
+        other part of building is a gesture, and a feed is *data*, so
+        there was no verb for one and ``solve`` answered
+        ``KeyError: 'mixer_in'``.
+        """
+        empty.post("/api/species", {"species": SPECIES})
+        assert empty.post("/api/unit", {"operation": "Mixer"})[1]["ok"]
+        assert empty.post("/api/unit", {"operation": "Heater"})[1]["ok"]
+
+        units = {u["name"]: u for u
+                 in empty.get_json("/api/flowsheet")[1]["flowsheet"]["units"]}
+        assert empty.post("/api/connect", {
+            "source": "mixer", "outlet": units["mixer"]["outlets"][0],
+            "target": "heater", "inlet": units["heater"]["inlets"][0],
+        })[1]["ok"]
+
+        # Both inlets were unfed; wiring one of them fed it.
+        _, waiting = empty.get_json("/api/feeds")
+        assert waiting == {"ok": True, "feeds": [], "unfed": ["mixer_in"]}
+
+        # And the solver says which stream, and what to do about it,
+        # rather than raising the name on its own.
+        _, refused = empty.post("/api/solve", {})
+        assert refused["ok"] is False
+        assert "nothing feeds 'mixer_in'" in refused["error"]
+
+        _, fed = empty.post("/api/feed", {"name": "mixer_in", "T": 320.0,
+                                          "flows": {"water": 2.0}})
+        assert fed["ok"], fed
+        # A field left out keeps what it had: the pressure is the
+        # flowsheet's default, and ethanol its default flow.
+        assert fed["T"] == 320.0
+        assert fed["P"] == empty.session.flowsheet.default_P
+        assert fed["flows"] == {"water": 2.0,
+                                "ethanol": empty.session.flowsheet.default_flow}
+
+        empty.send("PATCH", "/api/unit/heater", {"params": {"T_out": 340.0}})
+        _, solved = empty.post("/api/solve", {})
+        assert solved["ok"], solved
+        assert solved["streams"]["heater_out"]["T"] == pytest.approx(340.0)
+
+    def test_a_feed_can_be_taken_back_off_a_stream(self, empty):
+        """Which is how an inlet becomes wirable again.
+
+        `connect` refuses to wire into a stream that is already fed
+        rather than quietly dropping the feed, so undeclaring one has to
+        be something the page can ask for.
+        """
+        empty.post("/api/species", {"species": SPECIES})
+        empty.post("/api/unit", {"operation": "Mixer"})
+        assert empty.post("/api/feed", {"name": "mixer_in"})[1]["ok"]
+        assert empty.get_json("/api/feeds")[1]["feeds"] == ["mixer_in"]
+
+        _, gone = empty.delete("/api/feed/mixer_in")
+        assert gone == {"ok": True, "name": "mixer_in"}
+        assert empty.get_json("/api/feeds")[1] == {
+            "ok": True, "feeds": [], "unfed": ["mixer_in"]
+        }
+        assert empty.delete("/api/feed/mixer_in")[1]["ok"] is False
 
 
 class TestBuilding:
@@ -1477,9 +1675,10 @@ class TestExport:
         moved = session.diagram()["svg"]
         assert moved != answer["svg"] and "500" in moved
 
-    def test_an_empty_session_says_so_rather_than_raising(self):
+    def test_a_flowsheet_with_nothing_in_it_says_so_rather_than_raising(self):
+        """An empty string is not an SVG, and a blank download is not an answer."""
         assert FlowsheetSession(None).diagram() == {
-            "ok": False, "error": "no flowsheet loaded"}
+            "ok": False, "error": "nothing to draw yet"}
 
     def test_the_export_routes_answer(self, thermo):
         live = Client(FlowsheetSession(build_flowsheet(thermo)))
@@ -1574,9 +1773,16 @@ class TestPlanning:
         assert answer["ok"] is False
         assert "nowhere" in answer["error"]
 
-    def test_an_empty_session_says_so_rather_than_raising(self):
-        assert FlowsheetSession(None).linearize(["a"], ["b"]) == {
-            "ok": False, "error": "no flowsheet loaded"}
+    def test_an_empty_session_answers_rather_than_raising(self):
+        """A refusal about the names asked for, from an empty flowsheet.
+
+        It no longer says "no flowsheet loaded", because there is one ---
+        an editor opened with no file starts empty rather than inert. What
+        matters here is unchanged: a request naming things that are not
+        there comes back as a message and not as a traceback.
+        """
+        answer = FlowsheetSession(None).linearize(["a"], ["b"])
+        assert answer["ok"] is False and answer["error"]
 
     def test_health_findings_travel_with_the_export(self, thermo):
         """A dead lever has to be visible downstream, not just locally."""

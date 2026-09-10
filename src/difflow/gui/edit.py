@@ -50,6 +50,31 @@ def producers(flowsheet) -> dict[str, str]:
     return {s: u.name for u in flowsheet.units for s in u.outlet_names}
 
 
+def unfed(flowsheet) -> list[str]:
+    """Inlets with nothing on the other end, in the order they are read.
+
+    An inlet is fed by exactly one of three things: a declared feed, a
+    unit's outlet, or a recycle arc. An inlet fed by none of them is what
+    the canvas draws as a feed node with nothing behind it, and what
+    ``Flowsheet.solve`` reports as a bare ``KeyError`` on the stream name
+    -- a message that names the symptom and nothing else.
+
+    Kept here rather than in the session because the canvas asks the same
+    question (`graph.js:feedStreams`) and the two answers have to agree:
+    a node drawn as an unfed inlet that the solver is happy with, or the
+    other way round, is a picture that lies.
+    """
+    made = producers(flowsheet)
+    recycled = set(flowsheet.recycles.values())
+    out = []
+    for u in flowsheet.units:
+        for inlet in u.inlet_names:
+            if (inlet not in flowsheet.feeds and inlet not in made
+                    and inlet not in recycled and inlet not in out):
+                out.append(inlet)
+    return out
+
+
 def stream_names(flowsheet) -> set[str]:
     """Every stream name in use, feeds and recycle destinations included."""
     names = set(flowsheet.feeds) | set(flowsheet.recycles.values())
@@ -124,6 +149,23 @@ def live_extras(operation) -> dict:
     return out
 
 
+def species_order(flowsheet, bindings: dict | None = None) -> list[str]:
+    """The species list to build a new unit with.
+
+    The flowsheet's own order first --- it is what its streams are
+    indexed by, and a unit built against anything else would disagree
+    with every stream it touches. A code context's list is the fallback,
+    for the flowsheet that has none yet, and ``SPECIES`` counts as well
+    as ``species_order``: that is the name a difflow script uses and the
+    name the editor's starter snippet writes, and looking only for the
+    other one left the snippet unable to unblock the palette.
+    """
+    from difflow.gui.session import species_from
+
+    order = list(getattr(flowsheet, "species_order", None) or [])
+    return order or (species_from(bindings or {}) or [])
+
+
 def known_extras(flowsheet, cls: type, bindings: dict | None = None) -> dict:
     """Constructor arguments a new unit can take without being told.
 
@@ -142,7 +184,7 @@ def known_extras(flowsheet, cls: type, bindings: dict | None = None) -> dict:
     refusal names what is missing instead of building the wrong unit.
     """
     out = {}
-    order = list(getattr(flowsheet, "species_order", None) or [])
+    order = species_order(flowsheet, bindings)
     for arg in constructor_extras(cls):
         if arg == "species_order" and order:
             out[arg] = order
@@ -206,7 +248,7 @@ def known_params(flowsheet, params_cls, bindings: dict | None = None):
 
     if params_cls is None or not dataclasses.is_dataclass(params_cls):
         return {}, [], []
-    order = list(getattr(flowsheet, "species_order", None) or [])
+    order = species_order(flowsheet, bindings)
     kwargs = {}
     for value in (bindings or {}).values():
         supplier = getattr(value, "params_kwargs", None)

@@ -8,6 +8,7 @@
   import Palette from './lib/Palette.svelte'
   import Planning from './lib/Planning.svelte'
   import Results from './lib/Results.svelte'
+  import Species from './lib/Species.svelte'
   import { del, get, patch, post, send } from './lib/api.js'
   import { inferKind } from './lib/model/assistant.js'
   import { movedPositions } from './lib/model/edit.js'
@@ -15,6 +16,11 @@
 
   let doc = $state(null)
   let path = $state('')
+  // The species list, and whether it can still be changed -- the server
+  // answers both with the document, because "can I edit this" is a fact
+  // about the flowsheet (has it any units yet?) and not a preference.
+  let species = $state([])
+  let speciesEditable = $state(true)
   let catalog = $state({})
   let error = $state('')
   let note = $state('')
@@ -34,11 +40,58 @@
   let showAssistant = $state(false)
   let showPlanning = $state(false)
   let showConsole = $state(false)
+  // Drawing preferences. Port names are off because on a wired flowsheet
+  // the edge already carries the stream name, so labelling both ends of
+  // every arc triples the text on screen to repeat itself; while wiring,
+  // they are exactly what you want. Both are remembered, because being
+  // asked the same question every time you open the editor is worse than
+  // either answer.
+  let portLabels = $state(remember('difflow:portLabels', false))
+  let dark = $state(remember('difflow:dark', false))
+
+  /** A remembered preference, or the default if there is nothing to read. */
+  function remember(key, fallback) {
+    try {
+      const saved = localStorage.getItem(key)
+      return saved === null ? fallback : saved === 'true'
+    } catch {
+      return fallback   // private window, or storage turned off
+    }
+  }
+
+  // The palette is driven entirely by tokens, so the theme is one
+  // attribute on the root element and nothing downstream has to know.
+  $effect(() => {
+    document.documentElement.dataset.theme = dark ? 'dark' : 'light'
+    try {
+      localStorage.setItem('difflow:dark', String(dark))
+      localStorage.setItem('difflow:portLabels', String(portLabels))
+    } catch { /* nothing to do about it, and nothing depends on it */ }
+  })
+
+  /**
+   * `T` for the theme, `L` for port labels.
+   *
+   * Guarded on the target: these are single letters, and a flowsheet has
+   * text fields in it. Typing "Toluene" into the species box must not
+   * flip the theme twice on the way past.
+   */
+  function hotkey(event) {
+    if (event.metaKey || event.ctrlKey || event.altKey) return
+    const tag = event.target?.tagName
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+    if (event.target?.isContentEditable) return
+    const key = event.key.toLowerCase()
+    if (key === 't') dark = !dark
+    else if (key === 'l') portLabels = !portLabels
+  }
 
   async function load() {
     const payload = await get('/api/flowsheet')
     doc = payload.flowsheet
     path = payload.path
+    species = payload.species ?? []
+    speciesEditable = payload.editable !== false
     // The selection is a snapshot of a node; after a reload it may name a
     // unit that no longer exists, or one whose ports have changed.
     const id = selected?.id
@@ -116,6 +169,22 @@
     return answer
   }
 
+  /**
+   * Name the species, then reload: it decides what can be built at all.
+   *
+   * Not `stale: false` -- naming species cannot change a stream, but it
+   * changes every palette answer, and the catalog is refetched for the
+   * same reason the code context refetches it.
+   */
+  async function setSpecies(names) {
+    const answer = await edit(() => post('/api/species', { species: names }))
+    if (answer?.ok) {
+      catalog = await get('/api/catalog')
+      note = names.length ? `species: ${names.join(', ')}` : 'species cleared'
+    }
+    return answer
+  }
+
   const rename = (name, to) =>
     edit(() => patch(`/api/unit/${encodeURIComponent(name)}`, { name: to }))
 
@@ -189,6 +258,14 @@
   let selectedSpec = $derived(
     selected?.data?.operation ? catalog[selected.data.operation] ?? null : null,
   )
+  // The stream a selected feed node carries, or `null` for an inlet
+  // nothing feeds yet -- which is a node the canvas draws either way,
+  // so the inspector has to tell the two apart by the document.
+  let selectedFeed = $derived(
+    selected?.type === 'stream' && selected.data?.kind === 'feed'
+      ? doc?.feeds?.[selected.data.label] ?? null
+      : null,
+  )
 
   // The solve decorates the canvas: a flow on every edge, and -- once a
   // forward sensitivity has been run -- a tint saying how hard that
@@ -201,12 +278,19 @@
   )
 </script>
 
+<svelte:window onkeydown={hotkey} />
+
 <header>
   <h1>difflow</h1>
   <span class="path">{path || 'no file'}</span>
+  <Species {species} editable={speciesEditable} {busy} onapply={setSpecies} />
   <span class="summary">{summary}</span>
   <span class="spacer"></span>
   {#if note}<span class="note">{note}</span>{/if}
+  <button class="toggle" class:on={portLabels} title="name every port (L)"
+          onclick={() => (portLabels = !portLabels)}>L</button>
+  <button class="toggle" title="light or dark (T)"
+          onclick={() => (dark = !dark)}>{dark ? '\u25d1' : '\u25d0'}</button>
   <button onclick={() => (showContext = !showContext)}
           class:primary={context.error}>Code context</button>
   <button onclick={() => (showResults = !showResults)}>Results</button>
@@ -228,11 +312,16 @@
     {#if error}
       <p class="error">{error}</p>
     {:else if !doc}
-      <p class="empty">No flowsheet loaded.</p>
+      <!-- Only before the first fetch answers. An editor opened with no
+           file gets an empty flowsheet, not no flowsheet. -->
+      <p class="empty">Loading&hellip;</p>
     {:else}
       <Canvas
         document={doc}
         positions={doc.view?.nodes ?? null}
+        {catalog}
+        {portLabels}
+        {dark}
         onconnect={connect}
         ondeletions={applyDeletions}
         onmove={move}
@@ -249,6 +338,9 @@
     node={selected}
     unit={selectedUnit}
     spec={selectedSpec}
+    feed={selectedFeed}
+    {species}
+    defaults={doc?.defaults ?? null}
     {busy}
     onrename={rename}
     ondelete={remove}
@@ -318,6 +410,14 @@
   .note { color: var(--accent); font-size: 0.8rem; }
   .spacer { flex: 1; }
   .classic { font-size: 0.78rem; }
+  /* One-letter switches, sized so they do not read as actions. */
+  .toggle {
+    padding: 0.2rem 0.45rem;
+    min-width: 1.7rem;
+    font-size: 0.75rem;
+    color: var(--ink-soft);
+  }
+  .toggle.on { color: var(--surface); background: var(--series); border-color: var(--series); }
   main { display: flex; flex: 1; min-height: 0; }
   .stage { flex: 1; min-width: 0; }
   .error, .empty { padding: 1.5rem; color: var(--ink-soft); }

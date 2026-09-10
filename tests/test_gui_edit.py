@@ -269,6 +269,127 @@ class TestLayout:
         assert session.set_layout("nope")["ok"] is False
 
 
+class TestFeeds:
+    """What a stream carries, and what happens when nothing does.
+
+    A feed is the one part of a flowsheet that is typed rather than
+    drawn, which makes it the one part where a refusal has to say what
+    was wrong with the number. It is also the part a from-scratch
+    flowsheet was missing entirely: everything else about building is a
+    gesture, so there was no verb for a feed and a flowsheet made on the
+    canvas could be drawn and never solved.
+    """
+
+    def test_the_declared_feeds_and_the_waiting_inlets_are_both_reported(
+        self, session
+    ):
+        """`unfed` is what the canvas draws with nothing behind it.
+
+        A recycle destination is not in it: nothing produces `recycle`
+        either, and calling it unfed would claim the flowsheet has an
+        inlet it does not have.
+        """
+        assert session.feeds() == {"ok": True, "feeds": ["feed"], "unfed": []}
+        session.remove_feed("feed")
+        assert session.feeds() == {"ok": True, "feeds": [], "unfed": ["feed"]}
+
+    def test_one_field_at_a_time_leaves_the_others_alone(self, session):
+        """Editing the temperature must not zero the flows."""
+        answer = session.set_feed("feed", {"T": 360.0})
+        assert answer["ok"]
+        assert answer["T"] == 360.0
+        assert answer["P"] == pytest.approx(101325.0)
+        assert answer["flows"] == pytest.approx({"water": 1.0, "ethanol": 0.1})
+        stream = session.flowsheet.feeds["feed"]
+        assert float(stream["T"]) == 360.0
+        assert float(stream["F_water"]) == pytest.approx(1.0)
+
+    def test_a_stream_a_unit_makes_cannot_also_be_fed(self, session):
+        """Two sources for one stream, and the solver would pick one."""
+        answer = session.set_feed("mixed", {})
+        assert answer["ok"] is False
+        assert "made by 'mixer'" in answer["error"]
+        assert "mixed" not in session.flowsheet.feeds
+
+    def test_a_stream_nothing_reads_cannot_be_fed_either(self, session):
+        """A feed into thin air is a typo, not a flowsheet."""
+        answer = session.set_feed("nope", {})
+        assert answer["ok"] is False
+        assert "nothing reads 'nope'" in answer["error"]
+
+    def test_a_feed_needs_the_species_before_it_can_carry_anything(self):
+        empty = FlowsheetSession()
+        answer = empty.set_feed("anything", {})
+        assert answer["ok"] is False
+        assert "species" in answer["error"]
+
+    @pytest.mark.parametrize(
+        "spec, why",
+        [
+            ({"T": "hot"}, "T must be a number"),
+            ({"P": "1 bar"}, "P must be a number"),
+            ({"flows": [1.0, 0.1]}, "flows must be a mapping"),
+            ({"flows": {"argon": 1.0}}, "argon is not one of the species"),
+            ({"flows": {"water": "some"}}, "water must be a number"),
+            ({"flows": {"water": -1.0}}, "a flow cannot be negative"),
+            ({"T": 0.0}, "temperature and pressure are absolute"),
+            ({"P": -1.0}, "temperature and pressure are absolute"),
+        ],
+    )
+    def test_a_number_that_is_not_one_is_named(self, session, spec, why):
+        answer = session.set_feed("feed", spec)
+        assert answer["ok"] is False
+        assert why in answer["error"], answer
+        # And the feed it refused to change is untouched.
+        assert float(session.flowsheet.feeds["feed"]["T"]) == 350.0
+
+    def test_a_zero_flow_is_a_real_flow(self, session):
+        """A species absent from a feed, which is not the same as a typo."""
+        answer = session.set_feed("feed", {"flows": {"ethanol": 0.0}})
+        assert answer["ok"]
+        assert float(session.flowsheet.feeds["feed"]["F_ethanol"]) == 0.0
+
+    def test_which_stream_has_to_be_said(self, session):
+        for name in (None, "", "   ", 7):
+            answer = session.set_feed(name, {})
+            assert answer["ok"] is False
+            assert "which stream" in answer["error"]
+
+    def test_removing_a_feed_that_is_not_there_lists_the_ones_that_are(
+        self, session
+    ):
+        answer = session.remove_feed("mixed")
+        assert answer["ok"] is False
+        assert "no feed called 'mixed'" in answer["error"]
+        assert "have: feed" in answer["error"]
+
+    def test_an_unfed_inlet_is_reported_as_a_missing_feed_not_a_key_error(
+        self, session
+    ):
+        """`KeyError: 'feed'` names the stream and nothing else.
+
+        Which is the least useful place to be told: the name is on the
+        canvas already, and what is missing is a feed on it. The
+        translation only applies to an inlet that is actually unfed, so
+        an unrelated `KeyError` still travels as itself.
+        """
+        session.remove_feed("feed")
+        answer = session.solve()
+        assert answer["ok"] is False
+        assert "nothing feeds 'feed'" in answer["error"]
+        assert "give it a feed" in answer["error"]
+
+    def test_a_feed_survives_the_round_trip_through_the_document(self, session):
+        session.set_feed("feed", {"T": 333.0, "P": 2.0e5,
+                                  "flows": {"water": 4.0, "ethanol": 0.25}})
+        doc = session.document()["flowsheet"]
+        assert doc["feeds"]["feed"] == pytest.approx(
+            {"T": 333.0, "P": 2.0e5, "F_water": 4.0, "F_ethanol": 0.25}
+        )
+        again = FlowsheetSession(serialize.from_dict(doc))
+        assert again.feeds() == {"ok": True, "feeds": ["feed"], "unfed": []}
+
+
 class TestEditedFlowsheetStillSolves:
     def test_after_a_parameter_change(self, session):
         session.patch_unit("reactor", {"params": {"V": 2.0}})
@@ -280,9 +401,24 @@ class TestEditedFlowsheetStillSolves:
         session.connect("mixer", "mixed", "reactor", freed)
         assert session.solve()["ok"]
 
-    def test_no_flowsheet_is_a_refusal_not_a_crash(self):
+    def test_an_empty_flowsheet_refuses_by_name_rather_than_crashing(self):
+        """Every verb answers over a session opened with no file.
+
+        It used to answer "no flowsheet loaded" to all of them, because
+        there was none --- which is what made dragging a unit onto a fresh
+        canvas do nothing at all. Now the flowsheet exists and empty, so
+        each refusal is about the thing actually missing: the unit that is
+        not there, or the species the streams would be indexed by.
+        """
         empty = FlowsheetSession()
-        for answer in (empty.patch_unit("x", {}), empty.add_unit("Mixer"),
-                       empty.remove_unit("x"), empty.set_layout({}),
-                       empty.connect("a", "b", "c", "d")):
-            assert answer == {"ok": False, "error": "no flowsheet loaded"}
+        for answer, expected in (
+            (empty.patch_unit("x", {}), "no unit called 'x'"),
+            (empty.add_unit("Mixer"), "needs the species"),
+            (empty.remove_unit("x"), "no unit called 'x'"),
+            (empty.connect("a", "b", "c", "d"), "no unit called 'a'"),
+        ):
+            assert answer["ok"] is False
+            assert expected in answer["error"], answer
+
+        # Placing nothing is a request that succeeded at nothing.
+        assert empty.set_layout({}) == {"ok": True, "nodes": 0}

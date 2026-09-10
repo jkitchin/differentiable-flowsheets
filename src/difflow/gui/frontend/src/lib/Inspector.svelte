@@ -16,14 +16,18 @@
   typed into a box.
 -->
 <script>
-  import { get, patch } from './api.js'
+  import { del, get, patch, post } from './api.js'
   import { render } from './math.js'
+  import { feedEdit, feedFields, feedValues } from './model/feed.js'
   import { classify, label, parse } from './model/params.js'
 
   let {
     node = null,
     unit = null,
     spec = null,
+    feed = null,
+    species = [],
+    defaults = null,
     busy = false,
     onrename = () => {},
     ondelete = () => {},
@@ -33,6 +37,7 @@
   let draft = $state('')
   let docs = $state(null)
   let isUnit = $derived(node?.type === 'unit')
+  let isFeed = $derived(node?.type === 'stream' && node.data?.kind === 'feed')
 
   // Reset whenever the selection changes, so the box never shows the
   // name of a node that is no longer selected.
@@ -100,6 +105,61 @@
       })
   })
 
+  /**
+   * The feed form: what a stream carries, if anything feeds it.
+   *
+   * The one part of a flowsheet that cannot be built by dropping and
+   * wiring. `feed` is the declared stream or `null` for an inlet with
+   * nothing on the other end, and both get the same form -- the
+   * difference between "no feed" and "a feed at the defaults" is one the
+   * user is about to erase anyway, and the button says which it is.
+   *
+   * The arithmetic is in `model/feed.js`, where node can test it: a
+   * blank box must not become a zero, and one edited field must not zero
+   * the others.
+   */
+  let feedDraft = $state({})
+
+  // A new selection, or a reload after an edit, drops the drafts: they
+  // describe a form that is no longer on screen.
+  $effect(() => {
+    void node
+    void feed
+    feedDraft = {}
+  })
+
+  let feedNow = $derived(feedValues(feed, species, defaults ?? {}))
+  let feedForm = $derived(feedFields(feedNow, species))
+  let pendingFeed = $derived(feedEdit(feedDraft, feedNow))
+  let canApplyFeed = $derived(
+    !busy && !pendingFeed.errors.length && (pendingFeed.dirty || !feed),
+  )
+
+  async function applyFeed() {
+    if (!canApplyFeed) return
+    const answer = await onedit(() =>
+      post('/api/feed', { name: node.data.label, ...pendingFeed.spec }),
+    )
+    if (answer?.ok !== false) feedDraft = {}
+  }
+
+  function removeFeed() {
+    onedit(() => del(`/api/feed/${encodeURIComponent(node.data.label)}`))
+  }
+
+  function feedKeydown(event) {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      applyFeed()
+    } else if (event.key === 'Escape') {
+      feedDraft = {}
+      event.currentTarget.blur()
+    }
+    // A species name is not a hotkey: `t` in a flow box must not flip
+    // the theme.
+    event.stopPropagation()
+  }
+
   function commitName() {
     const name = draft.trim()
     if (name && name !== node.data.label) onrename(node.id, name)
@@ -131,11 +191,60 @@
     </p>
   {:else if !isUnit}
     <h2>{node.data.label}</h2>
-    <p class="kind">{node.data.kind}</p>
-    <p class="hint">
-      A stream, not an object the flowsheet holds: it follows from the
-      units that make and read it.
-    </p>
+    <!-- An inlet with nothing on the other end is drawn as a feed node,
+         because that is where a feed would go; saying "feed" about it
+         would claim the flowsheet has an inlet it does not have yet. -->
+    <p class="kind">{isFeed && !feed ? 'inlet, unfed' : node.data.kind}</p>
+    {#if !isFeed}
+      <p class="hint">
+        A stream, not an object the flowsheet holds: it follows from the
+        units that make and read it.
+      </p>
+    {:else if !species.length}
+      <p class="hint">
+        Name the species in the header first: a feed is a flow per
+        species, and there are none yet.
+      </p>
+    {:else}
+      {#if !feed}
+        <p class="hint">
+          Nothing feeds this inlet yet. These are the flowsheet's own
+          defaults &mdash; the numbers a tear stream starts from &mdash;
+          so setting them unchanged is not a new guess.
+        </p>
+      {/if}
+
+      <h3>feed</h3>
+      <dl class="params">
+        {#each feedForm as field (field.key)}
+          <dt>{field.label} <span class="units">{field.units}</span></dt>
+          <dd>
+            <input
+              value={feedDraft[field.key] ?? String(field.value)}
+              disabled={busy}
+              inputmode="decimal"
+              oninput={(e) => (feedDraft = { ...feedDraft, [field.key]: e.currentTarget.value })}
+              onkeydown={feedKeydown}
+            />
+          </dd>
+        {/each}
+      </dl>
+
+      {#each pendingFeed.errors as problem (problem)}
+        <p class="problem">{problem}</p>
+      {/each}
+
+      <div class="row">
+        <button onclick={applyFeed} disabled={!canApplyFeed}>
+          {feed ? 'Apply' : 'Set feed'}
+        </button>
+        {#if feed}
+          <button class="danger" onclick={removeFeed} disabled={busy}>
+            Remove feed
+          </button>
+        {/if}
+      </div>
+    {/if}
   {:else}
     <h2>
       {node.data.operation}
@@ -349,6 +458,26 @@
     font-family: var(--mono, ui-monospace, monospace);
     font-size: 0.74rem;
   }
+
+  .units {
+    color: var(--ink-soft);
+    font-weight: 400;
+    font-size: 0.7rem;
+  }
+  .problem {
+    margin: 0.35rem 0 0;
+    color: var(--bad);
+    font-size: 0.75rem;
+  }
+  .row {
+    display: flex;
+    gap: 0.4rem;
+    margin-top: 0.7rem;
+  }
+  /* Two buttons side by side: `.danger` is written for the full-width
+     Delete at the foot of the panel, and its own width would fight the
+     row. */
+  .row button { flex: 1 1 auto; width: auto; margin-top: 0; }
 
   .danger {
     margin-top: 1.2rem;

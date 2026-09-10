@@ -680,6 +680,9 @@ The routes are:
 | `PATCH /api/unit/<name>` | one unit's `params`, `name` or `position` |
 | `POST` / `DELETE /api/unit[/<name>]` | add one from the palette; remove one |
 | `POST` / `DELETE /api/connect` | wire or unwire, body `{source, outlet, target, inlet}` |
+| `GET` / `POST /api/species` | the species list, and whether it can still be changed |
+| `GET /api/feeds` | the declared feeds, and the inlets still waiting for one |
+| `POST` / `DELETE /api/feed[/<name>]` | declare or change a feed, body `{name, T, P, flows}`; take one back off a stream |
 | `POST /api/layout` | positions only, no rebuild and no solve |
 | `GET` / `POST /api/code-context` | read the snippet and what it defines; set it, or say why it will not run |
 | `GET /api/docs/<op>` | one operation's rendered docstring, equations, assumptions and references |
@@ -716,6 +719,18 @@ make gui FLOWSHEET=plant.json
 ```
 
 `npm run build` runs vite twice: once for the editor (`app.js`, `app.css`, `index.html`) and once for the frozen page `difflow.publish` inlines (`publish.js`, `publish.css`). Two builds rather than two entries, for the reason given under [Publishing a Model](#publishing-a-model).
+
+A unit is drawn as its **PFD symbol** rather than as a labelled box: a distillation column as a tray stack, a heat exchanger as the circle with its zigzag, a pump as the circle with its volute, a CSTR as a vessel with an impeller. The symbols are hand-drawn SVG paths in `src/difflow/gui/frontend/src/lib/nodes/symbols.js`, mapped to operations **by name first and by catalog category second**, which is what lets a plugin's own unit — one this front end has never heard of — still draw as equipment: an unknown `reactor` gets the reactor symbol from its category. `tests/test_gui_symbols.py` joins the map to `difflow.catalog()` from the Python side and asserts that every one of the catalog's operations resolves to real equipment and none falls through to a plain block, so adding a unit operation and forgetting its symbol fails a test rather than shipping a rectangle. The same symbol is drawn on the palette row, so what is dragged looks like what lands.
+
+Wires route orthogonally, ports are small grey squares, and two keys toggle the rest: `L` names every port beside its handle, `T` swaps to a dark palette. The dark palette is opt-in by a `data-theme` attribute on the root rather than by `prefers-color-scheme`, so a *report* opened in a dark browser keeps the light palette it was designed and screenshotted with.
+
+### Starting from an empty canvas
+
+`difflow gui` with no file opens on an empty flowsheet, and *empty* rather than absent: the session used to leave `self.flowsheet = None`, every edit route begins by refusing "no flowsheet loaded", and nothing said so — so the palette filled in, the canvas drew its grid, and dragging a unit onto it did nothing at all. Which reads as a broken drag rather than as an editor with no flowsheet to edit.
+
+So the flowsheet exists from the first frame, and the one thing it is missing is asked for by name. Every stream in difflow is an array indexed by `species_order`, so until that list exists nothing can be built — and the palette says so on every row (`needs species_order`) rather than offering a drop that will be refused. The list can be typed into the header field or bound by the code context below (as `species_order`, or as `SPECIES`, which is what the starter snippet defines); whoever typed it in the header wins, and the code context does not overwrite it. It freezes once a unit indexes it: re-ordering under a built unit would turn a water flow into an ethanol flow with nothing on screen changing.
+
+The other half of building from nothing is the **feed**, and it is the half that has no gesture. Dropping and wiring can describe a whole topology, but a feed is data — a temperature, a pressure and a flow per species — so a from-scratch flowsheet could be drawn and never solved, and `solve` answered `KeyError: 'mixer_in'`: the name of the stream, which was on the canvas already, and no hint that a feed was the thing missing. An inlet with nothing on the other end is now selectable, and the inspector gives it a form. `set_feed` fills any field left out from the feed that is already there, so editing a temperature does not zero the flows, and from the flowsheet's own `default_flow`/`default_T`/`default_P` when there is no feed yet — the same numbers `Flowsheet.solve` invents for a tear stream, so an untouched feed is not a new guess about the model. It refuses a stream a unit already produces (two sources for one stream, and the solver would silently use one of them), a stream nothing reads, an unknown species, a negative flow and a non-positive temperature or pressure, each by name. A blank box is a question and not a zero: zero is a real flow, and guessing which was meant would put a number nobody typed into the model. What remains unfed at solve time is reported as *that*, with what to do about it, and `GET /api/feeds` answers the same question ahead of time.
 
 ### The inspector
 

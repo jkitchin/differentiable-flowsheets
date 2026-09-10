@@ -43,6 +43,59 @@ def _number(value) -> float | None:
     return None if value is None else float(value)
 
 
+class _BadFeed(ValueError):
+    """A feed field the browser sent that cannot be a number."""
+
+
+def _as_number(value, fallback, field: str) -> float:
+    """``value`` as a float, ``fallback`` if it was not sent at all.
+
+    A missing field means "leave this alone"; a field sent as something
+    that is not a number is a mistake worth naming, because silently
+    falling back would show the old value back in the box as though the
+    edit had been accepted.
+    """
+    if value is None or value == "":
+        return float(fallback)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        raise _BadFeed(f"{field} must be a number") from None
+
+
+#: Names the code context may use for the species list, in the order the
+#: session looks for them. ``species_order`` is what the flowsheet and
+#: every ``Params`` class call it; ``SPECIES`` is what a difflow script
+#: actually opens with, and what the editor's own starter snippet writes.
+#: Accepting only the first made the starter snippet fail to unblock the
+#: palette it was there to unblock.
+SPECIES_NAMES = ("species_order", "SPECIES")
+
+
+def species_from(bindings: dict) -> list[str] | None:
+    """The species list a code context declares, or ``None``.
+
+    Only a sequence of strings counts. A binding of the right name that
+    is something else is somebody's variable, not a species list, and
+    quietly using it would produce a flowsheet whose streams are indexed
+    by nonsense.
+    """
+    for name in SPECIES_NAMES:
+        value = (bindings or {}).get(name)
+        if isinstance(value, (list, tuple)) and value and all(
+            isinstance(s, str) for s in value
+        ):
+            return list(value)
+    return None
+
+
+def _empty_flowsheet(species: list[str] | None = None):
+    """A flowsheet with nothing in it, for an editor opened with no file."""
+    from difflow import Flowsheet
+
+    return Flowsheet(species_order=list(species or []))
+
+
 def evaluate_context(source: str) -> tuple[dict, str | None]:
     """Run a code-context snippet and return ``(bindings, error)``.
 
@@ -103,6 +156,19 @@ class FlowsheetSession:
             self._load(self.path)
         elif flowsheet is not None:
             self._evaluate(self._source())
+        else:
+            # Nothing to open: start an empty flowsheet rather than no
+            # flowsheet. `None` used to mean "the editor is inert" --- the
+            # canvas was replaced by a line of text and every edit was
+            # refused --- which made building a flowsheet from scratch, the
+            # thing you open an editor to do, the one thing it could not
+            # do. An empty flowsheet is a flowsheet: it draws, it accepts a
+            # unit, and it serializes.
+            #
+            # With no species, though, most of the catalog is still
+            # unbuildable, and it says so on the palette row. `set_species`
+            # is how that gets answered.
+            self.flowsheet = _empty_flowsheet()
         self._lock = threading.Lock()
 
     # -- the code context ---------------------------------------------
@@ -154,6 +220,7 @@ class FlowsheetSession:
         bindings, error = evaluate_context(source) if source.strip() else ({}, None)
         if error is not None:
             return {"ok": False, "error": error}
+        adopted = None
         with self._lock:
             self.bindings, self.context_error = bindings, None
             self.streams = None      # the snippet is part of the model
@@ -161,7 +228,193 @@ class FlowsheetSession:
                 self.flowsheet.view["code_context"] = source
             else:
                 self.flowsheet.view.pop("code_context", None)
-        return {"ok": True, "names": sorted(bindings)}
+            # A flowsheet with no species blocks most of the palette, and
+            # the snippet that was just applied very likely names them --
+            # `SPECIES = [...]` is the first line of a difflow script. Take
+            # them, but only when the flowsheet has none: once it has an
+            # order, the streams are indexed by it and rewriting it under
+            # the existing units would reinterpret their arrays.
+            if not list(getattr(self.flowsheet, "species_order", None) or []):
+                found = species_from(bindings)
+                if found:
+                    self.flowsheet.species_order = found
+                    adopted = found
+        answer = {"ok": True, "names": sorted(bindings)}
+        if adopted:
+            answer["species"] = adopted
+        return answer
+
+    # -- the species order --------------------------------------------
+
+    def species(self) -> dict:
+        """The species the flowsheet indexes its streams by."""
+        return {
+            "species": list(getattr(self.flowsheet, "species_order", None) or []),
+            # Renaming the order under existing units would reinterpret
+            # the arrays they hold, so the editor only offers it while the
+            # flowsheet is still empty.
+            "editable": not (self.flowsheet is None or self.flowsheet.units),
+        }
+
+    def set_species(self, names) -> dict:
+        """Name the species of a flowsheet that has no units yet.
+
+        This is what makes a new flowsheet usable. ``species_order`` is
+        the one constructor argument almost every operation needs and the
+        only one that is data rather than code, so until it is answered
+        the palette can place hardly anything -- and it cannot be guessed,
+        because it *is* the model's choice of what the streams carry.
+
+        Refused once units exist. Every stream array is indexed by this
+        order; reordering or renaming it afterwards would silently turn a
+        flow of water into a flow of ethanol.
+        """
+        if self.flowsheet is None:
+            return {"ok": False, "error": "no flowsheet loaded"}
+        if isinstance(names, str) or not isinstance(names, (list, tuple)):
+            return {"ok": False, "error": "species must be a list of names"}
+        cleaned, seen = [], set()
+        for name in names:
+            if not isinstance(name, str) or not name.strip():
+                return {"ok": False, "error": "every species needs a name"}
+            text = name.strip()
+            if text in seen:
+                return {"ok": False, "error": f"{text} is named twice"}
+            seen.add(text)
+            cleaned.append(text)
+        with self._lock:
+            if self.flowsheet.units:
+                return {
+                    "ok": False,
+                    "error": "the flowsheet already has units, whose stream "
+                             "arrays are indexed by the current species; "
+                             "delete them first, or edit the file",
+                }
+            self.flowsheet.species_order = cleaned
+            self.streams = None
+        return {"ok": True, "species": cleaned}
+
+    # -- feeds ---------------------------------------------------------
+
+    def feeds(self) -> dict:
+        """The declared feeds, and which inlets are still waiting for one.
+
+        ``unfed`` is what the canvas draws as a feed node with nothing
+        behind it. Reported rather than left to the solver, which answers
+        an unfed inlet with ``KeyError: 'mixer_in'`` --- the name of the
+        stream and no hint that a feed is the thing missing.
+        """
+        from difflow.gui import edit
+
+        if self.flowsheet is None:
+            return {"ok": False, "error": "no flowsheet loaded"}
+        return {
+            "ok": True,
+            "feeds": sorted(self.flowsheet.feeds),
+            "unfed": edit.unfed(self.flowsheet),
+        }
+
+    def set_feed(self, name, spec: dict | None = None) -> dict:
+        """Declare or change the feed on a stream, and say what it carries.
+
+        The last thing standing between a flowsheet built on the canvas
+        and a solved one. Every other part of building can be done by
+        dropping and wiring; a feed is data --- a temperature, a pressure
+        and a flow per species --- and there was no way to type it, so a
+        flowsheet made from scratch could be drawn and never solved.
+
+        Only a stream some unit reads, and only one nothing else supplies:
+        a feed on a stream a unit already produces would be two sources
+        for one stream, and the solver would silently use one of them.
+
+        The defaults are the flowsheet's own (``default_flow`` per species
+        at ``default_T``/``default_P``) --- the same numbers
+        ``Flowsheet.solve`` invents for a tear stream, so a feed left
+        untouched is not a new guess about the model.
+        """
+        from difflow import make_stream
+        from difflow.gui import edit
+
+        if self.flowsheet is None:
+            return {"ok": False, "error": "no flowsheet loaded"}
+        if not isinstance(name, str) or not name.strip():
+            return {"ok": False, "error": "which stream is the feed on?"}
+        name = name.strip()
+        order = list(getattr(self.flowsheet, "species_order", None) or [])
+        if not order:
+            return {"ok": False, "error": "name the species first"}
+
+        spec = spec or {}
+        with self._lock:
+            fs = self.flowsheet
+            if name not in fs.feeds:
+                if name not in edit.unfed(fs):
+                    made = edit.producers(fs).get(name)
+                    return {
+                        "ok": False,
+                        "error": (f"{name!r} is made by {made!r}, so it cannot "
+                                  "also be a feed"
+                                  if made else
+                                  f"nothing reads {name!r}; drop a unit and wire "
+                                  "its inlet first"),
+                    }
+                was = None
+            else:
+                was = fs.feeds[name]
+
+            try:
+                T = _as_number(spec.get("T"), was["T"] if was else fs.default_T,
+                               "T")
+                P = _as_number(spec.get("P"), was["P"] if was else fs.default_P,
+                               "P")
+                given = spec.get("flows") or {}
+                if not isinstance(given, dict):
+                    raise _BadFeed("flows must be a mapping of species to numbers")
+                unknown = set(given) - set(order)
+                if unknown:
+                    raise _BadFeed(
+                        f"{', '.join(sorted(unknown))} is not one of the species"
+                    )
+                # A field left out keeps what the feed already carried, so
+                # editing the temperature does not zero the flows.
+                flows = {
+                    s: _as_number(
+                        given.get(s),
+                        float(was[f"F_{s}"]) if was is not None
+                        else float(fs.default_flow),
+                        s,
+                    )
+                    for s in order
+                }
+                if any(f < 0 for f in flows.values()):
+                    raise _BadFeed("a flow cannot be negative")
+                if T <= 0 or P <= 0:
+                    raise _BadFeed("temperature and pressure are absolute")
+            except _BadFeed as bad:
+                return {"ok": False, "error": str(bad)}
+
+            fs.add_feed(name, make_stream(flows=flows, T=T, P=P))
+            self.streams = None
+        return {"ok": True, "name": name, "T": T, "P": P, "flows": flows}
+
+    def remove_feed(self, name: str) -> dict:
+        """Undeclare a feed, leaving the inlet unfed again.
+
+        Which is a real state and not a broken one: an inlet about to be
+        wired to a unit's outlet has to stop being a feed first, and
+        :func:`difflow.gui.edit.connect` refuses rather than quietly
+        dropping it.
+        """
+        if self.flowsheet is None:
+            return {"ok": False, "error": "no flowsheet loaded"}
+        with self._lock:
+            if name not in self.flowsheet.feeds:
+                known = ", ".join(sorted(self.flowsheet.feeds)) or "none"
+                return {"ok": False,
+                        "error": f"no feed called {name!r} (have: {known})"}
+            del self.flowsheet.feeds[name]
+            self.streams = None
+        return {"ok": True, "name": name}
 
     # -- reads --------------------------------------------------------
 
@@ -217,7 +470,15 @@ class FlowsheetSession:
         document["view"]["nodes"] = {
             **self.layout(), **(document["view"].get("nodes") or {})
         }
-        return {"flowsheet": document, "path": str(self.path or "")}
+        return {
+            "flowsheet": document,
+            "path": str(self.path or ""),
+            # The species control in the header reads these. Carried on the
+            # document rather than fetched separately because every edit
+            # already reloads it, and an empty flowsheet's species are the
+            # first thing the editor has to ask for.
+            **self.species(),
+        }
 
     def docs(self, operation: str) -> dict:
         """The rendered documentation for one catalog operation.
@@ -299,6 +560,11 @@ class FlowsheetSession:
 
         if self.flowsheet is None:
             return {"ok": False, "error": "no flowsheet loaded"}
+        # An empty flowsheet draws an empty string, which as a downloaded
+        # `.svg` is a file that opens onto nothing. Saying so is the only
+        # useful answer -- the fix is to put a unit on the canvas.
+        if not self.flowsheet.units:
+            return {"ok": False, "error": "nothing to draw yet"}
         try:
             positions = (self.flowsheet.view or {}).get("nodes") or {}
             return {"ok": True, "svg": flowsheet_diagram(self.flowsheet, positions)}
@@ -546,6 +812,15 @@ class FlowsheetSession:
         else:
             what = f"{', '.join(data)}, which it has no way to guess"
         have = ", ".join(sorted(self.bindings)) or "nothing"
+        # `species_order` is the exception to "answer it in the code
+        # context": it is the flowsheet's own field, it is plain data, and
+        # on a new flowsheet it is what blocks nearly the whole palette.
+        # Sending the reader to a Python panel to write a list of names is
+        # the wrong instruction when there is a box in the header for it.
+        if "species_order" in unmet:
+            return (f"{operation} needs the species. Name them in the header "
+                    f"-- or define species_order (or SPECIES) in the code "
+                    f"context -- and drop the unit again.")
         hint = (f"{operation} needs {what}. Define it in the code context "
                 f"(which currently defines {have}) and drop the unit again")
         if any(n in unmet for n in ("rate_fn", "stoich", "rate_params",
@@ -645,7 +920,7 @@ class FlowsheetSession:
             with self._lock:
                 streams = self.flowsheet.solve()
         except Exception as exc:
-            self.solve_error = f"{type(exc).__name__}: {exc}"
+            self.solve_error = self._solve_error(exc)
             return {"ok": False, "error": self.solve_error}
         self.streams = streams
         self.solve_error = None
@@ -667,6 +942,26 @@ class FlowsheetSession:
             "tol": _number(getattr(fs, "last_solve_tol", None)),
             "tear_streams": list(getattr(fs, "last_solve_tear_streams", []) or []),
         }
+
+    def _solve_error(self, exc: Exception) -> str:
+        """A solve failure, translated where the raw message names nothing.
+
+        An inlet with nothing on the other end comes out of
+        ``Flowsheet.solve`` as ``KeyError: 'mixer_in'``: the name of a
+        stream, with no hint that what is missing is a feed and no hint
+        that a feed is something the editor can declare. Every other
+        failure is passed through --- "Must specify duty, T_out, or (UA
+        and T_utility)" is the model being right, and rewording it would
+        only put distance between the message and the class that raised it.
+        """
+        from difflow.gui import edit
+
+        if isinstance(exc, KeyError) and exc.args:
+            missing = exc.args[0]
+            if missing in edit.unfed(self.flowsheet):
+                return (f"nothing feeds {missing!r}. Select it on the canvas "
+                        "and give it a feed, or wire a unit's outlet into it.")
+        return f"{type(exc).__name__}: {exc}"
 
     # -- derivatives ---------------------------------------------------
 

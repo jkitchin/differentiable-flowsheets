@@ -25,7 +25,12 @@
     <h2>Flowsheet</h2>
     <div class="stage">
       <div class="slot">
+        <!-- The catalog is passed for the same reason `Details` gets it:
+             it is where an operation's category comes from, and the
+             category is what picks a symbol for a plugin's own unit. A
+             published page without it draws every node as a box. -->
         <Canvas document={data.topology} positions={data.topology.view?.nodes}
+                catalog={data.catalog}
                 readonly onselect={(node) => (selected = node)} />
       </div>
       <Details node={selected} topology={data.topology} catalog={data.catalog} />

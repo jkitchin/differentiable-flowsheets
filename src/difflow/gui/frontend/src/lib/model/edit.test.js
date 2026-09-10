@@ -118,18 +118,16 @@ test('deleting nothing asks for nothing', () => {
   assert.deepEqual(deleteRequests({ nodes: [], edges: [] }), [])
 })
 
-test('a drop lands under the cursor whatever the viewport', () => {
-  const rect = { left: 100, top: 50 }
-  const at = (viewport) =>
-    dropPosition(rect, viewport, 300, 250, { x: 0, y: 0 })
-  assert.deepEqual(at({ x: 0, y: 0, zoom: 1 }), { x: 200, y: 200 })
-  assert.deepEqual(at({ x: 40, y: 20, zoom: 1 }), { x: 160, y: 180 })
-  assert.deepEqual(at({ x: 0, y: 0, zoom: 2 }), { x: 100, y: 100 })
+test('a drop puts the node under the cursor, not below and right of it', () => {
+  assert.deepEqual(dropPosition({ x: 200, y: 200 }, { x: 0, y: 0 }), { x: 200, y: 200 })
+  assert.deepEqual(dropPosition({ x: 200, y: 200 }, { x: 70, y: 24 }), { x: 130, y: 176 })
 })
 
-test('a drop with no viewport still lands somewhere finite', () => {
-  const p = dropPosition({ left: 0, top: 0 }, undefined, 10, 10)
-  assert.ok(Number.isFinite(p.x) && Number.isFinite(p.y))
+test('a drop with nothing to go on still lands somewhere finite', () => {
+  for (const bad of [undefined, {}, { x: NaN, y: Infinity }]) {
+    const p = dropPosition(bad)
+    assert.ok(Number.isFinite(p.x) && Number.isFinite(p.y), `${JSON.stringify(bad)}`)
+  }
 })
 
 test('the palette groups by category and sorts', () => {

@@ -8,7 +8,7 @@
     "dev": "vite",
     "build": "vite build && vite build -c vite.publish.config.js",
     "preview": "vite preview",
-    "test": "node --test src/lib/model/*.test.js",
+    "test": "node --test src/lib/model/*.test.js src/lib/nodes/*.test.js",
     "build:editor": "vite build",
     "build:publish": "vite build -c vite.publish.config.js"
   },

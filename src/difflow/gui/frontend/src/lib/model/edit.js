@@ -105,23 +105,23 @@ export function deleteRequests({ nodes = [], edges = [] } = {}) {
 }
 
 /**
- * Where a palette drop lands, in flow coordinates.
+ * Where a dropped node's corner goes, given where the cursor let go.
  *
- * @param {DOMRect} rect  the canvas element's bounding box
- * @param {{x: number, y: number, zoom: number}} viewport
- * @param {number} clientX
- * @param {number} clientY
+ * @param {{x: number, y: number}} point  the drop point in FLOW coordinates
+ * @param {{x: number, y: number}} [offset]  about half a node
  *
- * The node is drawn from its top-left corner, so the drop point is
- * nudged up and left by about half a node; dropping on a spot and
- * watching the box appear below and to the right of the cursor reads as
- * a bug even though the coordinate is right.
+ * Screen-to-flow is the library's job -- `screenToFlowPosition` knows the
+ * pan, the zoom and the container's box, and a hand-rolled version of it
+ * silently disagrees the moment any of the three is not what it assumed.
+ * What is left is this: a node is drawn from its top-left corner, so the
+ * corner goes up and left of the cursor. Dropping on a spot and watching
+ * the box appear below and to the right of it reads as a bug even though
+ * the coordinate is right.
  */
-export function dropPosition(rect, viewport, clientX, clientY, offset = { x: 70, y: 24 }) {
-  const zoom = viewport?.zoom || 1
+export function dropPosition(point, offset = { x: 70, y: 24 }) {
   return {
-    x: (clientX - rect.left - (viewport?.x || 0)) / zoom - offset.x,
-    y: (clientY - rect.top - (viewport?.y || 0)) / zoom - offset.y,
+    x: (Number.isFinite(point?.x) ? point.x : 0) - offset.x,
+    y: (Number.isFinite(point?.y) ? point.y : 0) - offset.y,
   }
 }
 
@@ -152,6 +152,7 @@ export function paletteGroups(catalog, query = '', hideBlocked = false) {
     if (!groups.has(category)) groups.set(category, [])
     groups.get(category).push({
       name,
+      category,
       description: spec.description || '',
       buildable,
       needs,

@@ -161,9 +161,16 @@ export function arcs(doc) {
  * @param {Object} [positions]  `view.nodes`, `{key: {x, y}}`. Missing keys
  *   fall back to a grid, so a node added since the last layout still lands
  *   somewhere reachable rather than on top of the origin.
+ * @param {Object} [options]
+ * @param {Object} [options.catalog]  the served catalog, read only for each
+ *   operation's `category`. That is what picks a symbol for an operation
+ *   this front end has never heard of -- a plugin's own units -- so a node
+ *   drawn without it falls back to a plain block.
+ * @param {boolean} [options.portLabels]  name each port beside its handle.
  */
-export function toGraph(doc, positions) {
+export function toGraph(doc, positions, options = {}) {
   if (!doc) return { nodes: [], edges: [] }
+  const { catalog = {}, portLabels = false } = options
   const place = positions || (doc.view && doc.view.nodes) || {}
   const nodes = []
   let spare = 0
@@ -179,7 +186,7 @@ export function toGraph(doc, positions) {
       id: FEED + name,
       type: 'stream',
       position: at(FEED + name),
-      data: { label: name, kind: 'feed' },
+      data: { label: name, kind: 'feed', portLabels },
     })
   }
   for (const unit of doc.units || []) {
@@ -190,8 +197,10 @@ export function toGraph(doc, positions) {
       data: {
         label: unit.name,
         operation: unit.operation,
+        category: (catalog[unit.operation] || {}).category || '',
         inlets: unit.inlets,
         outlets: unit.outlets,
+        portLabels,
       },
     })
   }
@@ -200,7 +209,7 @@ export function toGraph(doc, positions) {
       id: PRODUCT + name,
       type: 'stream',
       position: at(PRODUCT + name),
-      data: { label: name, kind: 'product' },
+      data: { label: name, kind: 'product', portLabels },
     })
   }
 

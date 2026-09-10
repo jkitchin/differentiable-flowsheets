@@ -231,6 +231,8 @@ class _Handler(BaseHTTPRequestHandler):
             "/api/flowsheet": lambda: self._send(self.session.document()),
             "/api/code": lambda: self._send(self.session.code()),
             "/api/code-context": lambda: self._send(self.session.code_context()),
+            "/api/species": lambda: self._send(self.session.species()),
+            "/api/feeds": lambda: self._send(self.session.feeds()),
             "/api/levers": lambda: self._send(self.session.levers()),
             "/api/console": lambda: self._send(self.session.console_names()),
             "/api/diagram": lambda: self._send(self.session.diagram()),
@@ -288,6 +290,7 @@ class _Handler(BaseHTTPRequestHandler):
         """
         path, session = self.path, self.session
         unit_path = "/api/unit/"
+        feed_path = "/api/feed/"
 
         if verb == "POST":
             if path == "/api/flowsheet":
@@ -308,6 +311,13 @@ class _Handler(BaseHTTPRequestHandler):
                                         extras=payload.get("extras"))
             if path == "/api/code-context":
                 return session.set_code_context(payload.get("source", ""))
+            if path == "/api/species":
+                return session.set_species(payload.get("species"))
+            # One verb for declaring a feed and for editing one: the
+            # browser sends the fields it changed, and a field left out
+            # keeps whatever the feed already carried.
+            if path == "/api/feed":
+                return session.set_feed(payload.get("name"), payload)
             # A POST because it writes: the lever/output selection is
             # persisted in `view["planning"]` so the panel reopens on it.
             if path == "/api/linearize":
@@ -343,6 +353,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return _wire(session.disconnect, payload)
             if path.startswith(unit_path):
                 return session.remove_unit(unquote(path[len(unit_path):]))
+            if path.startswith(feed_path):
+                return session.remove_feed(unquote(path[len(feed_path):]))
         return None
 
     def _mutate(self, verb: str):
