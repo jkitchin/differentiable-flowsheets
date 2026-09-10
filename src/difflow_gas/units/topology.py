@@ -45,6 +45,7 @@ class SourceHead:
     symbol = "Source"
     equations = [r"p = p_\mathrm{set}"]
     references = _TOPOLOGY_REFS
+    parameter_units = {"P_set": "Pa"}
 
     def __init__(self, P_set: float):
         self.params = SourceHeadParams(P_set=P_set)
@@ -76,6 +77,7 @@ class AffineFlow:
     symbol = "Flow balance"
     equations = [r"q = c + \textstyle\sum_i s_i\,q_i"]
     references = _TOPOLOGY_REFS
+    parameter_units = {"const": "kg/s"}
 
     def __init__(self, const: float, signs: tuple[float, ...],
                  T_k: float, P_pa: float):
@@ -118,6 +120,7 @@ class FlowSplit:
     symbol = "Split (fixed)"
     equations = [r"q_1 = w,\quad q_2 = q_\mathrm{in} - w"]
     references = _TOPOLOGY_REFS
+    parameter_units = {"w": "kg/s"}
 
     def __init__(self, w: float):
         self.params = FlowSplitParams(w=w)

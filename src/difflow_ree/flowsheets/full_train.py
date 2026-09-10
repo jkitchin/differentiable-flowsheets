@@ -254,7 +254,7 @@ class FullSeparationTrain:
     ]
     references = ["Xie, F., Zhang, T.A., Dreisinger, D., Doyle, F. Miner. Eng., 56, 10 (2014)."]
     parameter_symbols = {}
-    parameter_units = {}
+    parameter_units = {"nitrate_conc": "mol/L", "capacity_sharpness": "-"}
 
     def __init__(self, params: SeparationTrainParams):
         """Initialize separation train.

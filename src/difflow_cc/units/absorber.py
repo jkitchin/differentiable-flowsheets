@@ -179,15 +179,19 @@ class AmineAbsorber:
         "n_stages": "N",
         "solvent_conc": "[\\text{amine}]",
         "L_G_ratio": "L/G",
-        "stage_efficiency": r"E_M",
-        "T_top": "T_\\mathrm{top}",
-        "T_bot": "T_\\mathrm{bot}",
+        "stage_efficiency": "E_M",
     }
     parameter_units = {
+        "n_stages": "-",
         "solvent_conc": "wt%",
         "L_G_ratio": "-",
-        "T_top": "K",
-        "T_bot": "K",
+        "T_gas_in": "K",
+        "T_liquid_in": "K",
+        "P_absorber": "Pa",
+        "stage_efficiency": "-",
+        "lean_loading": "mol CO2 / mol amine",
+        "column_diameter": "m",
+        "packing_height": "m",
     }
     numerical_method = "Kremser with amine VLE correlation; stage-wise loading accounting."
 

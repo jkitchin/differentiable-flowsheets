@@ -22,6 +22,16 @@ from difflow.numerics import safe_divide, safe_log
 from difflow.params_mixin import ParamsMixin
 from difflow.streams import Stream, make_stream, get_flows
 from difflow_ree.database import get_ree_database
+#: Units for every :class:`PrecipitatorParams` field, shared by the oxalate,
+#: carbonate and hydroxide routes -- they differ in chemistry, not in what
+#: their parameters mean.
+_PRECIPITATOR_UNITS = {
+    "precipitant_excess": "-",
+    "temperature": "K",
+    "residence_time": "s",
+    "target_conversion": "-",
+    "coprecipitation_factor": "-",
+}
 
 
 # =============================================================================
@@ -117,12 +127,8 @@ class OxalatePrecipitator:
         "Moldoveanu, G.A., Papangelakis, V.G. Hydrometallurgy, 117-118, 71 (2012).",
         "Habashi, F. Handbook of Extractive Metallurgy, Vol. 3, Wiley-VCH, 1997.",
     ]
-    parameter_symbols = {
-        "precipitant_excess": r"\phi_\mathrm{exc}",
-        "efficiency": r"\eta",
-        "temperature": "T",
-    }
-    parameter_units = {"efficiency": "-", "temperature": "K"}
+    parameter_symbols = {"precipitant_excess": r"\phi_\mathrm{exc}", "temperature": "T"}
+    parameter_units = _PRECIPITATOR_UNITS
 
     def __init__(self, params: PrecipitatorParams):
         """Initialize precipitator.
@@ -288,8 +294,8 @@ class CarbonatePrecipitator:
         "Bulk group-precipitation; composition-selective separation is handled upstream.",
     ]
     references = ["Habashi, F. Handbook of Extractive Metallurgy, Vol. 3, Wiley-VCH, 1997."]
-    parameter_symbols = {"precipitant_excess": r"\phi_\mathrm{exc}", "efficiency": r"\eta"}
-    parameter_units = {"efficiency": "-", "temperature": "K"}
+    parameter_symbols = {"precipitant_excess": r"\phi_\mathrm{exc}"}
+    parameter_units = _PRECIPITATOR_UNITS
 
     def __init__(self, params: PrecipitatorParams):
         """Initialize precipitator.
@@ -411,8 +417,8 @@ class HydroxidePrecipitator:
         "Baes, C.F., Mesmer, R.E. The Hydrolysis of Cations, Krieger, 1986.",
         "Xie, F., Zhang, T.A., Dreisinger, D., Doyle, F. Miner. Eng., 56, 10 (2014).",
     ]
-    parameter_symbols = {"precipitant_excess": r"\phi_\mathrm{exc}", "efficiency": r"\eta"}
-    parameter_units = {"efficiency": "-", "temperature": "K"}
+    parameter_symbols = {"precipitant_excess": r"\phi_\mathrm{exc}"}
+    parameter_units = _PRECIPITATOR_UNITS
 
     def __init__(self, params: PrecipitatorParams):
         """Initialize precipitator.

@@ -59,7 +59,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev,solvers]"
+          pip install -e ".[dev,gui,solvers]"
 
       # One invocation, not two. Splitting core and bio into separate pytest
       # processes meant the second one re-paid JAX/XLA startup and could not
@@ -93,7 +93,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev,solvers]"
+          pip install -e ".[dev,gui,solvers]"
 
       - name: Run slow tests
         run: |
@@ -132,3 +132,68 @@ jobs:
               e.load()
           print('difflow', difflow.__version__, '- all packages import, plugins resolve')
           "
+
+      # docutils is the `gui` extra, and the inspector has to degrade to
+      # plain text without it rather than break.
+      - name: The editor answers with no docstring renderer
+        run: |
+          python -c "
+          from difflow.gui import docs
+          from difflow.gui.session import FlowsheetSession
+          assert not docs.available(), 'docutils should not be installed here'
+          answer = FlowsheetSession().docs('CSTR')
+          assert answer['ok'] and answer['format'] == 'text', answer
+          assert answer['html'].startswith('<pre>'), answer['html'][:80]
+          assert answer['equations'], 'the equations do not need docutils'
+          print('the inspector degrades to plain text')
+          "
+
+  # The editor front end. `src/difflow/gui/static/` is committed build output --
+  # installing difflow must never need node -- so the one thing that can go
+  # wrong is drift: someone edits the svelte source and forgets `make
+  # gui-build`, and the served bundle silently stops matching it. This job
+  # rebuilds from the lockfile and fails if the result differs from the commit.
+  #
+  # If it trips on a bundle nobody touched, the cause is a toolchain difference
+  # rather than a source change: run `make gui-build` on the node version
+  # pinned here and commit what it produces.
+  gui-frontend:
+    name: Editor front end
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: src/difflow/gui/frontend/package-lock.json
+
+      - name: Install the toolchain from the lockfile
+        run: npm ci
+        working-directory: src/difflow/gui/frontend
+
+      # The pure model functions (graph -> nodes/edges), under bare node.
+      # tests/test_gui.py runs these same files when node is on PATH.
+      - name: Test the model functions
+        run: npm test
+        working-directory: src/difflow/gui/frontend
+
+      - name: Rebuild the bundle
+        run: npm run build
+        working-directory: src/difflow/gui/frontend
+
+      # The assistant's retrieval index over `docs/` is committed build
+      # output too, and it goes stale the moment anyone edits the prose.
+      # Stdlib only, so it needs nothing installed.
+      - name: Rebuild the documentation index
+        run: python3 src/difflow/gui/docs_index.py
+
+      # `git add` first, so a bundle that grew a NEW file counts as drift too
+      # -- a plain `git diff` sees only tracked ones and would miss it.
+      - name: Fail if the committed bundle is stale
+        run: |
+          git add -A src/difflow/gui/static
+          git diff --cached --exit-code --stat src/difflow/gui/static

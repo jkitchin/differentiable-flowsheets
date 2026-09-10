@@ -12,7 +12,8 @@ acceleration methods.
 """
 
 from typing import Callable, Any, Literal
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, replace, is_dataclass
+from dataclasses import fields as dc_fields
 import copy
 import jax.numpy as jnp
 from jax import Array
@@ -25,6 +26,116 @@ from difflow.initialization import (
     Initializable,
 )
 import optimistix as optx
+
+
+FEED_PREFIX = "feed:"
+
+
+def _concrete(value) -> float | None:
+    """Return ``float(value)`` when it is concrete, else ``None``.
+
+    The solve loops record a residual for the report layer.  Under
+    ``jax.grad``/``jit`` that residual is a tracer and has no numeric value, so
+    the diagnostic is simply unavailable -- reporting ``None`` is honest,
+    whereas ``float()`` would raise and make the flowsheet undifferentiable.
+    """
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def _has_tracer(obj) -> bool:
+    """True if any pytree leaf of ``obj`` is a JAX tracer."""
+    return any(isinstance(leaf, jax.core.Tracer)
+               for leaf in jax.tree_util.tree_leaves(obj))
+
+def _update_feed_stream(stream: Stream, updates: dict[str, Any]) -> Stream:
+    """Return a copy of ``stream`` with planning-style updates applied.
+
+    Feed streams are the classic levers of an LP planning model -- feed rate
+    and feed composition -- so they need to be addressable the same way unit
+    parameters are.  The recognised field names are:
+
+    ``F_<species>``
+        Set that species' molar flow directly (mol/s).
+    ``x_<species>``
+        Set that species' mole fraction, rescaling the *other* species
+        proportionally so the total flow is unchanged.
+    ``total_flow``
+        Scale every species flow by one factor so the total matches, leaving
+        the composition unchanged.
+    ``T`` / ``P``
+        Set temperature (K) or pressure (Pa).
+
+    Updates are applied in that order regardless of dict ordering, so
+    ``{"x_A": 0.3, "total_flow": 10.0}`` means "30 mol% A at 10 mol/s".
+    All ``x_`` keys are applied together, so two of them do not fight.
+
+    Every operation is a pure ``jnp`` expression, so the result differentiates
+    and traces under ``jit``/``vmap``.
+
+    Args:
+        stream: The feed stream to update.  Not modified.
+        updates: Field name -> value.
+
+    Returns:
+        A new stream dict.
+
+    Raises:
+        KeyError: If a field name is not one of the forms above, or names a
+            species the stream does not carry.
+    """
+    new = dict(stream)
+    flow_keys = [k for k in new if k.startswith("F_")]
+
+    def _known(field: str) -> bool:
+        if field in ("T", "P", "total_flow") or field in flow_keys:
+            return True
+        return field.startswith("x_") and f"F_{field[2:]}" in flow_keys
+
+    unknown = [k for k in updates if not _known(k)]
+    if unknown:
+        species = [k[2:] for k in flow_keys]
+        raise KeyError(
+            f"Unknown feed field(s) {unknown!r}. Use 'T', 'P', 'total_flow', "
+            f"'F_<species>' or 'x_<species>' with species in {species}"
+        )
+
+    # 1. Direct species flows.
+    for k in flow_keys:
+        if k in updates:
+            new[k] = jnp.asarray(updates[k], dtype=jnp.float64)
+
+    # 2. Mole fractions, all at once, at constant total flow.
+    x_updates = {k[2:]: v for k, v in updates.items() if k.startswith("x_")}
+    if x_updates:
+        total = sum(new[k] for k in flow_keys)
+        targets = {f"F_{s}": jnp.asarray(v, dtype=jnp.float64) * total
+                   for s, v in x_updates.items()}
+        held_old = sum(new[k] for k in targets)
+        held_new = sum(targets.values())
+        rest_old = total - held_old
+        # Guard the degenerate case where the untouched species carry no flow:
+        # there is nothing to rescale, so leave them at zero.
+        safe = jnp.where(rest_old > 0.0, rest_old, 1.0)
+        scale = jnp.where(rest_old > 0.0, (total - held_new) / safe, 0.0)
+        for k in flow_keys:
+            new[k] = targets[k] if k in targets else new[k] * scale
+
+    # 3. Total flow, holding composition.
+    if "total_flow" in updates:
+        total = sum(new[k] for k in flow_keys)
+        scale = jnp.asarray(updates["total_flow"], dtype=jnp.float64) / total
+        for k in flow_keys:
+            new[k] = new[k] * scale
+
+    # 4. Conditions.
+    for k in ("T", "P"):
+        if k in updates:
+            new[k] = jnp.asarray(updates[k], dtype=jnp.float64)
+
+    return new
 
 
 @dataclass
@@ -96,6 +207,13 @@ class Flowsheet:
         self.units: list[Unit] = []
         self.feeds: dict[str, Stream] = {}
         self.recycles: dict[str, str] = {}  # {source_name: dest_name}
+        #: Presentation state, round-tripped by :mod:`difflow.serialize` and
+        #: read by nothing numeric.  The editor keeps canvas positions
+        #: (``view["nodes"]``), its code-context snippet and its planning
+        #: selection here, so a flowsheet that has been laid out by hand opens
+        #: the way it was left.  Anything may go in; nothing in the solve path
+        #: looks.
+        self.view: dict[str, Any] = {}
         self._stream_cache: dict[str, Stream] = {}
         #: tear iterations used by the last accelerated solve (Wegstein
         #: or Anderson); equals max_iter if it did not converge
@@ -222,6 +340,17 @@ class Flowsheet:
                 # Initialize with small flows
                 tear_streams[dest] = self._make_zero_stream()
 
+        # The accelerated solvers are Python loops that branch on the residual
+        # to stop early, which a tracer cannot answer.  Under jax.grad / jit,
+        # fall back to the optimistix fixed point instead: it converges without
+        # a Python branch and carries an implicit-differentiation rule, so the
+        # gradient comes from the converged solution rather than from an
+        # unrolled iteration.  Recorded in last_solve_method so the report
+        # layer tells the truth about what ran.
+        if acceleration != "none" and self._is_traced():
+            acceleration = "none"
+            self.last_solve_method = "fixed_point (traced)"
+
         # Solve with chosen method
         if acceleration == "none":
             return self._solve_with_recycle_damped(tear_streams, tol, max_iter, damping)
@@ -237,6 +366,24 @@ class Flowsheet:
             )
         else:
             raise ValueError(f"Unknown acceleration method: {acceleration}")
+
+    def _is_traced(self) -> bool:
+        """True when a feed or unit parameter currently holds a JAX tracer.
+
+        Used by :meth:`solve` to pick a differentiable solver.  Unit ``Params``
+        dataclasses are not registered pytrees, so their fields are collected
+        explicitly.
+        """
+        if _has_tracer(self.feeds):
+            return True
+        for unit in self.units:
+            params = getattr(unit.operation, "params", None)
+            if params is None or not is_dataclass(params):
+                continue
+            values = [getattr(params, f.name) for f in dc_fields(params)]
+            if _has_tracer([v for v in values if not callable(v)]):
+                return True
+        return False
 
     def _tear_flow_mask(self, n_streams: int) -> Array:
         """Boolean mask marking the flow entries of a packed tear array.
@@ -398,11 +545,12 @@ class Flowsheet:
         tear_converged = sol.value
 
         # Record convergence diagnostics for the report layer.
-        final_residual = float(
+        final_residual = _concrete(
             jnp.max(jnp.abs(flowsheet_iteration(tear_converged, args) - tear_converged))
         )
         self.last_solve_residual = final_residual
-        self.last_solve_converged = bool(final_residual < tol)
+        self.last_solve_converged = (None if final_residual is None
+                                     else bool(final_residual < tol))
         try:
             self.last_solve_iterations = int(sol.stats.get("num_steps", max_iter))
         except Exception:
@@ -480,8 +628,9 @@ class Flowsheet:
         for iteration in range(max_iter):
             # Check convergence
             residual = jnp.max(jnp.abs(g_curr - x_prev))
-            self.last_solve_residual = float(residual)
-            if float(residual) < tol:
+            res = _concrete(residual)
+            self.last_solve_residual = res
+            if res is not None and res < tol:
                 self.last_solve_iterations = iteration
                 self.last_solve_converged = True
                 break
@@ -560,8 +709,9 @@ class Flowsheet:
 
             # Check convergence
             residual = jnp.max(jnp.abs(g_curr - x_curr))
-            self.last_solve_residual = float(residual)
-            if float(residual) < tol:
+            res = _concrete(residual)
+            self.last_solve_residual = res
+            if res is not None and res < tol:
                 self.last_solve_iterations = iteration
                 self.last_solve_converged = True
                 break
@@ -589,18 +739,22 @@ class Flowsheet:
         ``unit.operation.params.update(V=2.0)`` on the unit named
         ``"reactor"``.
 
-        Feed-stream updates are not yet supported; pass a modified
-        :attr:`feeds` dict directly if that is needed.
+        Feed streams are addressed with a ``"feed:"`` prefix:
+        ``{"feed:F1.total_flow": 12.0, "feed:F1.x_A": 0.3, "feed:F1.T": 340.0}``.
+        See :func:`_update_feed_stream` for the recognised field names
+        (``T``, ``P``, ``total_flow``, ``F_<species>``, ``x_<species>``).
 
         Args:
-            params: Flat dict of ``"unit.field"`` -> value entries.
+            params: Flat dict of ``"unit.field"`` or ``"feed:stream.field"``
+                -> value entries.
 
         Returns:
             New :class:`Flowsheet` instance with the requested parameters
             applied.  The original flowsheet is not modified.
 
         Raises:
-            KeyError: If the unit name in a dotted key does not exist.
+            KeyError: If the unit or feed name in a dotted key does not exist,
+                or a feed field name is unrecognised.
             AttributeError: If the unit's operation has no ``.params``
                 attribute or the field name is not present in params.
             ValueError: If a key does not contain exactly one dot.
@@ -608,9 +762,25 @@ class Flowsheet:
         # Build a name -> Unit index map
         unit_index = {unit.name: i for i, unit in enumerate(self.units)}
 
-        # Collect per-unit updates: {unit_name: {field: value}}
+        # Collect per-unit and per-feed updates: {name: {field: value}}
         unit_updates: dict[str, dict[str, Any]] = {}
+        feed_updates: dict[str, dict[str, Any]] = {}
         for key, value in params.items():
+            if key.startswith(FEED_PREFIX):
+                feed_parts = key[len(FEED_PREFIX):].split(".", 1)
+                if len(feed_parts) != 2:
+                    raise ValueError(
+                        f"Parameter key {key!r} must use dot notation "
+                        f"'feed:<stream_name>.<field>'"
+                    )
+                feed_name, feed_field = feed_parts
+                if feed_name not in self.feeds:
+                    raise KeyError(
+                        f"No feed stream named {feed_name!r} in flowsheet. "
+                        f"Available feeds: {list(self.feeds.keys())}"
+                    )
+                feed_updates.setdefault(feed_name, {})[feed_field] = value
+                continue
             parts = key.split(".", 1)
             if len(parts) != 2:
                 raise ValueError(
@@ -652,9 +822,15 @@ class Flowsheet:
             default_T=self.default_T,
             default_P=self.default_P,
         )
-        new_fs.feeds = dict(self.feeds)
+        new_feeds = dict(self.feeds)
+        for feed_name, updates in feed_updates.items():
+            new_feeds[feed_name] = _update_feed_stream(
+                self.feeds[feed_name], updates
+            )
+        new_fs.feeds = new_feeds
         new_fs.recycles = dict(self.recycles)
         new_fs.units = new_units
+        new_fs.view = copy.deepcopy(self.view)
         return new_fs
 
     def make_objective_fn(
@@ -675,7 +851,12 @@ class Flowsheet:
         ``"<unit_name>.<param_name>"`` where ``unit_name`` is the
         :attr:`Unit.name` as registered with :meth:`add_unit`, and
         ``param_name`` is a field on that unit's ``operation.params``
-        :class:`~difflow.params_mixin.ParamsMixin` dataclass.
+        :class:`~difflow.params_mixin.ParamsMixin` dataclass.  Feed streams
+        are addressed as ``"feed:<stream_name>.<field>"`` -- see
+        :meth:`_apply_params` -- so feed rate, composition and conditions are
+        levers too::
+
+            grad = jax.grad(obj)({"reactor.V": 2.0, "feed:F1.total_flow": 10.0})
 
         Args:
             objective_fn: Callable that maps the solved stream dict returned

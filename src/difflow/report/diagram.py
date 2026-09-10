@@ -6,12 +6,17 @@ no ``ipycytoscape``, no external JavaScript, and no network access — it embeds
 directly in the standalone HTML report.  The layout is a simple left-to-right
 layered (Sugiyama-style) placement: feeds on the left, products on the right,
 units in longest-path columns between them; recycle arcs are drawn dashed.
+The column assignment itself is :func:`difflow.gui.layout.unit_columns`,
+shared with the editor's canvas so a report and the editor agree on where a
+unit sits.
 """
 
 from __future__ import annotations
 
 from html import escape
+from typing import NamedTuple
 
+from difflow.gui.layout import unit_columns
 from difflow.report.ir import Report
 
 # Geometry (px).
@@ -22,25 +27,18 @@ _NODE_H = 46
 _MARGIN = 24
 
 
-def _unit_columns(unit_names, up_edges) -> dict[str, int]:
-    """Longest-path column index per unit, ignoring back (recycle) edges.
+class _Node(NamedTuple):
+    """What the drawer needs to know about a unit."""
+    name: str
+    type: str
+    inlet_names: list[str]
+    outlet_names: list[str]
 
-    ``up_edges`` maps a unit to the list of upstream units feeding it.  A
-    Bellman-Ford-style relaxation capped at ``len(units)`` passes assigns each
-    unit one past its deepest predecessor; the cap makes it safe on cyclic
-    graphs (recycle edges simply stop lengthening the path).
-    """
-    col = {u: 0 for u in unit_names}
-    for _ in range(len(unit_names)):
-        changed = False
-        for u in unit_names:
-            for p in up_edges.get(u, ()):  # predecessors
-                if col[p] + 1 > col[u]:
-                    col[u] = col[p] + 1
-                    changed = True
-        if not changed:
-            break
-    return col
+
+class _Arc(NamedTuple):
+    """What the drawer needs to know about a recycle."""
+    source_stream: str
+    dest_stream: str
 
 
 def _node_svg(x: int, y: int, label: str, sub: str, kind: str) -> str:
@@ -80,12 +78,29 @@ def _edge_svg(x1: int, y1: int, x2: int, y2: int, label: str, recycle: bool) -> 
     return line + text
 
 
-def flowsheet_svg(report: Report) -> str:
-    """Render an inline ``<svg>`` flowsheet diagram from a :class:`Report`.
+def topology_svg(units, recycles, positions=None) -> str:
+    """Render an inline ``<svg>`` diagram of one topology.
 
-    Returns an empty string when the flowsheet has no units.
+    The drawing itself, taking the graph rather than any one container of
+    it: a report's :class:`~difflow.report.ir.Report`, or a live
+    :class:`~difflow.Flowsheet` by way of :func:`flowsheet_diagram`. Both
+    describe a unit the same way, so neither needs its own drawer.
+
+    Args:
+        units: objects carrying ``name``, ``type``, ``inlet_names`` and
+            ``outlet_names``.
+        recycles: objects carrying ``source_stream`` and ``dest_stream``.
+        positions: pixel coordinates per node, keyed ``"unit:<name>"``,
+            ``"feed:<stream>"`` or ``"product:<stream>"``. Given, they
+            replace the automatic grid node by node --- which is what the
+            editor passes, so an exported drawing matches the canvas the
+            user arranged. A node the mapping does not name keeps its
+            grid slot, so a partial layout still draws.
+
+    Returns:
+        The ``<svg>`` element, or an empty string when there are no units.
     """
-    units = report.units
+    units = list(units)
     if not units:
         return ""
 
@@ -101,7 +116,8 @@ def flowsheet_svg(report: Report) -> str:
     # Unit -> upstream units (only where an inlet is produced by another unit).
     up_edges: dict[str, list[str]] = {u.name: [] for u in units}
     unit_arcs: list[tuple[str, str, str]] = []  # (src_unit, dst_unit, stream)
-    recycle_sources = {r.source_stream for r in report.topology.recycles}
+    recycles = list(recycles)
+    recycle_sources = {r.source_stream for r in recycles}
     for u in units:
         for inlet in u.inlet_names:
             src = producer.get(inlet)
@@ -109,7 +125,7 @@ def flowsheet_svg(report: Report) -> str:
                 up_edges[u.name].append(src)
                 unit_arcs.append((src, u.name, inlet))
 
-    col = _unit_columns(unit_names, up_edges)
+    col = unit_columns(unit_names, up_edges)
     max_unit_col = max(col.values()) if col else 0
 
     # Feed streams: inlets not produced by any unit.  Product streams: outlets
@@ -150,14 +166,20 @@ def flowsheet_svg(report: Report) -> str:
     for name, row in prod_rows.items():
         node_pos[f"product:{name}"] = (product_col, row)
 
-    max_col = max((c for c, _ in node_pos.values()), default=0)
-    max_row = max((r for _, r in node_pos.values()), default=0)
-    width = 2 * _MARGIN + max_col * _COL_W + _NODE_W
-    height = 2 * _MARGIN + max_row * _ROW_H + _NODE_H
+    # Grid slots become pixels here, and a caller with real coordinates
+    # replaces them one node at a time.
+    places = {
+        key: (_MARGIN + c * _COL_W, _MARGIN + r * _ROW_H)
+        for key, (c, r) in node_pos.items()
+    }
+    for key, xy in (positions or {}).items():
+        if key in places:
+            places[key] = (round(float(xy[0])), round(float(xy[1])))
+    width = _MARGIN + max((x for x, _ in places.values()), default=0) + _NODE_W
+    height = _MARGIN + max((y for _, y in places.values()), default=0) + _NODE_H
 
     def _xy(key):
-        c, r = node_pos[key]
-        return _MARGIN + c * _COL_W, _MARGIN + r * _ROW_H
+        return places[key]
 
     def _right(key):
         x, y = _xy(key)
@@ -196,7 +218,7 @@ def flowsheet_svg(report: Report) -> str:
         x1, y1 = _right(f"unit:{source}")
         x2, y2 = _left(f"product:{name}")
         out.append(_edge_svg(x1, y1, x2, y2, "", recycle=False))
-    for rec in report.topology.recycles:
+    for rec in recycles:
         src = producer.get(rec.source_stream)
         dst = next(
             (u.name for u in units if rec.dest_stream in u.inlet_names), None
@@ -222,3 +244,53 @@ def flowsheet_svg(report: Report) -> str:
 
     out.append("</svg>")
     return "\n".join(out)
+
+
+def flowsheet_svg(report: Report) -> str:
+    """The diagram for a report, from its topology record."""
+    return topology_svg(report.units, report.topology.recycles)
+
+
+def flowsheet_diagram(flowsheet, positions=None) -> str:
+    """The diagram for a live :class:`~difflow.Flowsheet`.
+
+    A ``Unit`` already answers to ``name``, ``inlet_names`` and
+    ``outlet_names``; only its type has to be looked up, and only the
+    recycle map has to be turned into records. That is the whole
+    difference between a solved model and a reported one as far as a
+    picture is concerned, so it is the whole adapter.
+
+    Args:
+        flowsheet: the model to draw.
+        positions: canvas pixel coordinates, keyed the way
+            :mod:`difflow.gui.layout` keys them --- a unit by its bare
+            name, a feed as ``"feed:<stream>"``, a product as
+            ``"product:<stream>"``.
+    """
+    units = [
+        _Node(u.name, type(u.operation).__name__,
+              list(u.inlet_names), list(u.outlet_names))
+        for u in flowsheet.units
+    ]
+    recycles = [_Arc(src, dst)
+                for src, dst in (getattr(flowsheet, "recycles", None) or {}).items()]
+    return topology_svg(units, recycles, positions=_diagram_keys(positions))
+
+
+def _diagram_keys(positions) -> dict | None:
+    """Canvas node keys as this module keys them.
+
+    The canvas names a unit by itself, since that is the vocabulary
+    ``_apply_params`` uses; the diagram prefixes all three kinds so the
+    three namespaces cannot collide.
+    """
+    if not positions:
+        return None
+    out = {}
+    for key, value in positions.items():
+        xy = ((value.get("x"), value.get("y"))
+              if isinstance(value, dict) else tuple(value))
+        if xy[0] is None or xy[1] is None:
+            continue
+        out[key if ":" in key else f"unit:{key}"] = xy
+    return out

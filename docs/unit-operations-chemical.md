@@ -662,22 +662,54 @@ Shortcut methods are used for:
 ```python
 @dataclass
 class ShortcutColumnParams:
-    light_key: int         # Index of light key component
-    heavy_key: int         # Index of heavy key component
-    x_D_lk: float         # Light key recovery in distillate
-    x_B_hk: float         # Heavy key recovery in bottoms
-    reflux_ratio: float   # Actual reflux ratio (R/R_min multiplier)
+    species_order: list[str]   # Species names; sets array ordering
+    light_key: str             # Name of the light key component
+    heavy_key: str             # Name of the heavy key component
+    x_D_LK: float = 0.99       # Fractional recovery of LK in the distillate
+    x_B_HK: float = 0.99       # Fractional recovery of HK in the bottoms
+```
+
+`x_D_LK` and `x_B_HK` are **recoveries**, not mole fractions, despite the
+names: `x_D_LK=0.99` sends 99 % of the feed's light key overhead. The
+distillate's actual light-key mole fraction comes back in `info["x_D"]`.
+
+The reflux ratio is not a parameter — it is an argument to the call, along with
+the column pressure and the feed quality:
+
+```python
+distillate, bottoms, info = column(feed, R=3.0, P=101325.0, q=1.0)
 ```
 
 #### Governing Equations
 
 **Relative Volatility**:
 
-$$\alpha_{ij} = \frac{K_i}{K_j} = \frac{P_i^{sat}}{P_j^{sat}}$$
+$$\alpha_{ij} = \frac{K_i}{K_j}$$
+
+The second equality usually written here, $\alpha_{ij} = P_i^{sat}/P_j^{sat}$,
+holds only under Raoult's law. On a `CubicThermo` the K-values are fugacity
+coefficient ratios and the vapor pressures cancel out of nothing — which is the
+whole reason the volatilities differ between the two packages.
 
 **Average Relative Volatility** (geometric mean):
 
 $$\bar{\alpha} = (\alpha_{top} \cdot \alpha_{bottom})^{0.5}$$
+
+The two ends are the column's actual ends, not estimates around the feed: the
+top is a total condenser, so $T_{top}$ is the **bubble point of the
+distillate**, and $T_{bot}$ is the **bubble point of the bottoms** in the
+reboiler. Those are the temperatures the product streams come out at, reported
+as `info["T_condenser"]` and `info["T_reboiler"]`.
+
+They also make the design a small fixed point, since $\bar\alpha$ sets the
+product split through Hengstebeck-Geddes and the split sets the bubble points
+in turn. The column sweeps it a few times from the feed's own bubble point;
+it settles to under a hundredth of a degree by the third sweep, and the whole
+loop is unrolled, so `jax.grad` runs through it.
+
+Two consequences worth knowing, because the old estimate had neither: the end
+temperatures no longer move when you feed the same mixture in hotter, and they
+do move with column pressure.
 
 **Fenske Equation** (minimum stages):
 
@@ -707,57 +739,89 @@ $$\frac{N_R}{N_S} = \left[\frac{B}{D} \cdot \frac{x_{F,HK}}{x_{F,LK}} \cdot \lef
 
 #### Outputs
 
-| Parameter | Type | Units | Description |
-|-----------|------|-------|-------------|
-| `distillate` | Stream | - | Overhead product |
-| `bottoms` | Stream | - | Bottom product |
-| `info['N_min']` | float | - | Minimum stages |
-| `info['N_actual']` | float | - | Actual stages |
-| `info['R_min']` | float | - | Minimum reflux ratio |
-| `info['feed_stage']` | int | - | Optimal feed stage |
-| `info['condenser_duty']` | float | W | Condenser heat duty |
-| `info['reboiler_duty']` | float | W | Reboiler heat duty |
+| Key | Type | Units | Description |
+|-----|------|-------|-------------|
+| `distillate` | Stream | - | Overhead product, at the condenser temperature |
+| `bottoms` | Stream | - | Bottom product, at the reboiler temperature |
+| `info['N_min']` | float | - | Minimum stages (Fenske) |
+| `info['R_min']` | float | - | Minimum reflux ratio (Underwood) |
+| `info['N']` | float | - | Actual stages (Gilliland) |
+| `info['N_feed']` | float | - | Feed stage (Kirkbride) |
+| `info['D']`, `info['B']` | float | mol/s | Distillate and bottoms flow |
+| `info['x_D']`, `info['x_B']` | dict | - | Product compositions by species |
+| `info['T_condenser']` / `info['T_top']` | float | K | Condenser temperature = bubble point of $x_D$ |
+| `info['T_reboiler']` / `info['T_bot']` | float | K | Reboiler temperature = bubble point of $x_B$ |
+| `info['Q_condenser']` | float | W | Condenser duty (negative: heat removed) |
+| `info['Q_reboiler']` | float | W | Reboiler duty (positive: heat added) |
+| `info['alpha']` | dict | - | Relative volatilities vs the heavy key |
+| `info['alpha_LK']` | float | - | Light key's relative volatility |
+| `info['alpha_top']`, `info['alpha_bot']` | dict | - | Volatilities at each column end |
+| `info['alpha_variation']` | dict | - | Relative spread between the two ends |
+| `info['alpha_varies_significantly']` | bool | - | True if that spread exceeds 0.3 |
+| `info['theta']` | float | - | Underwood root |
+| `info['close_boiling']` | bool | - | True if $\bar\alpha \approx 1$ capped $N_{min}$ |
+| `info['near_min_reflux']` | bool | - | True if $R \approx R_{min}$ |
+| `info['negative_flows_detected']` | bool | - | True if the split produced a negative flow |
+| `info['feasible']` | bool | - | All three checks above passed |
 
 #### Example Usage
 
 ```python
+from difflow import IdealThermo, make_stream
+from difflow.database import get_species_data
 from difflow.units.distillation import ShortcutColumn, ShortcutColumnParams
 
+names = ['benzene', 'toluene', 'ethylbenzene']
+thermo = IdealThermo({s: get_species_data(s) for s in names})
+
 params = ShortcutColumnParams(
-    light_key=0,    # benzene
-    heavy_key=1,    # toluene
-    x_D_lk=0.99,    # 99% benzene recovery in distillate
-    x_B_hk=0.99,    # 99% toluene recovery in bottoms
-    reflux_ratio=1.3  # 1.3 × R_min
+    species_order=names,
+    light_key='benzene',
+    heavy_key='toluene',
+    x_D_LK=0.99,    # 99 % of the benzene recovered overhead
+    x_B_HK=0.99,    # 99 % of the toluene recovered in the bottoms
 )
 
-column = ShortcutColumn(params, thermo, species_order=['benzene', 'toluene', 'xylene'])
-feed = make_stream({'benzene': 0.4, 'toluene': 0.35, 'xylene': 0.25}, T=370.0, P=101325.0)
+column = ShortcutColumn(params, thermo)
+feed = make_stream({'benzene': 40.0, 'toluene': 35.0, 'ethylbenzene': 25.0},
+                   T=370.0, P=101325.0)
 
-distillate, bottoms, info = column(feed)
-print(f"Minimum stages: {info['N_min']:.1f}")
-print(f"Actual stages: {info['N_actual']:.1f}")
-print(f"Condenser duty: {info['condenser_duty']/1e6:.2f} MW")
+distillate, bottoms, info = column(feed, R=3.0, P=101325.0, q=1.0)
+print(f"Minimum stages:  {float(info['N_min']):.1f}")
+print(f"Minimum reflux:  {float(info['R_min']):.2f}")
+print(f"Actual stages:   {float(info['N']):.1f}")
+print(f"Feed stage:      {float(info['N_feed']):.1f}")
+print(f"Condenser:       {float(info['T_condenser']):.1f} K, "
+      f"{float(info['Q_condenser'])/1e6:.2f} MW")
+print(f"Reboiler:        {float(info['T_reboiler']):.1f} K, "
+      f"{float(info['Q_reboiler'])/1e6:.2f} MW")
 ```
 
 #### Utility Functions
 
+The design correlations are also available on their own, taking plain numbers
+rather than a column object. Note the argument order — each takes the
+quantities in the order the correlation is written, not the order the column
+computes them:
+
 ```python
 from difflow.units.distillation import (
-    relative_volatility,
-    fenske_stages,
-    minimum_reflux_ratio,
-    gilliland_stages,
-    column_diameter
+    fenske_stages,        # (x_D_LK, x_B_LK, alpha)
+    minimum_reflux_ratio, # (z_LK, z_HK, x_D_LK, alpha, q=1.0)
+    gilliland_stages,     # (R, R_min, N_min)
+    column_diameter,      # (V, rho_V, rho_L, sigma=0.02, tray_spacing=0.6)
 )
 
-# Calculate individual parameters
-alpha = relative_volatility(thermo, T=373.0, P=101325.0)
-N_min = fenske_stages(x_D, x_B, alpha)
-R_min = minimum_reflux_ratio(alpha, x_F, x_D, q=1.0)
-N = gilliland_stages(N_min, R, R_min)
-D = column_diameter(V_max, rho_V, rho_L, sigma)
+N_min = fenske_stages(x_D_LK=0.98, x_B_LK=0.02, alpha=2.4)
+R_min = minimum_reflux_ratio(z_LK=0.45, z_HK=0.55, x_D_LK=0.98, alpha=2.4, q=1.0)
+N = gilliland_stages(R=1.3 * R_min, R_min=R_min, N_min=N_min)
+diameter = column_diameter(V=50.0, rho_V=3.0, rho_L=800.0)   # mol/s, kg/m^3
 ```
+
+Relative volatility is a method on the column, not a free function
+(`column.relative_volatility(T, P, x=None)`), because it needs the key
+components from the column's parameters — and, on a `CubicThermo`, the phase
+composition.
 
 ---
 
@@ -774,12 +838,32 @@ D = column_diameter(V_max, rho_V, rho_L, sigma)
 ```python
 @dataclass
 class DistillationColumnParams:
-    n_stages: int          # Number of theoretical stages
-    feed_stage: int        # Feed stage number (from top)
-    reflux_ratio: float    # Reflux ratio (L/D)
-    condenser_type: str    # 'total' or 'partial'
-    P_top: float           # Top pressure (Pa)
-    P_bottom: float        # Bottom pressure (Pa)
+    species_order: list[str]     # Species names; sets array ordering
+    n_stages: int                # Equilibrium stages: the trays plus the reboiler
+    feed_stage: int              # Zero-based stage index from the bottom
+    condenser_type: str = 'total'  # Only 'total' is implemented
+    P: float = 101325.0          # One pressure for the whole column
+    q: float = 1.0               # Feed quality (1 = saturated liquid)
+```
+
+**Stage numbering is zero-based from the bottom**: stage 0 is the reboiler,
+stage `n_stages - 1` is the top tray, and every profile in `info` is in that
+order. The condenser is *not* a stage — it sits outside the cascade — so
+`n_stages` counts the trays plus the reboiler, and `feed_stage=10` in a
+20-stage column puts the feed halfway up. Stages below the feed stage are the
+stripping section and stages above it the rectifying section; the boundary
+stage itself is counted on different sides by the CMO sweep and the MESH flow
+initialisation, so do not read anything into it. There is one column pressure:
+no tray pressure drop.
+
+`condenser_type='partial'` raises `NotImplementedError` rather than being
+silently solved as a total condenser.
+
+The reflux ratio and the product split are arguments to the call, not
+parameters — give exactly one of `D_spec` or `B_spec`:
+
+```python
+distillate, bottoms, info = column(feed, R=2.0, B_spec=40.0)
 ```
 
 #### Governing Equations (MESH)
@@ -798,6 +882,92 @@ $$\sum_i y_{i,j} = 1$$
 
 **Enthalpy Balance**:
 $$L_{j-1} H^L_{j-1} + V_{j+1} H^V_{j+1} + F_j H^F_j = L_j H^L_j + V_j H^V_j + Q_j$$
+
+#### Product temperatures
+
+The bottoms leaves the reboiler, which is a stage, so it is at
+`info["T_profile"][0]`. The distillate does not leave a stage — it leaves the
+condenser. A total condenser condenses the whole of the top stage's vapor, so
+the distillate (and the reflux returned with it) is a **saturated liquid of
+composition $x_D$ at its own bubble point**, reported as `info["T_condenser"]`.
+
+That is not the top stage temperature. The top stage sits at the bubble point
+of its liquid $x_{top}$, equivalently the dew point of the vapor $y_{top} = x_D$
+it sends up, and a mixture's dew point is above its bubble point. The gap is
+the boiling range of the distillate itself:
+
+| distillate | top stage $T$ | condenser $T$ | gap |
+|---|---|---|---|
+| 99.6 % benzene / toluene, 1 atm | 369.1 K | 368.7 K | 0.3 K |
+| C3-C8 cut, 10 bar (Peng-Robinson) | 401.7 K | 363.3 K | 38 K |
+
+The same distinction runs through the energy balance: $Q_{cond}$ takes the top
+stage vapor down to that condensed state, and the reflux re-enters the top
+stage subcooled, at the condenser temperature rather than the tray's.
+
+#### Thermodynamics: ideal K-values or a cubic EOS
+
+The column takes either an `IdealThermo` or a
+[`CubicThermo`](thermodynamics.md), and the choice is the whole of the
+difference between a near-ideal separation and a hydrocarbon one:
+
+| | `IdealThermo` | `CubicThermo` |
+|---|---|---|
+| $K_i$ | $P^{sat}_i(T)/P$ (Raoult) | $\hat\phi^L_i(T,P,x)\,/\,\hat\phi^V_i(T,P,y)$ (PR or SRK) |
+| stage enthalpy | ideal-gas $C_p$ + Watson $H_{vap}$ | ideal-gas $C_p$ + EOS departure |
+| $K_i$ depends on composition | no | yes |
+
+```python
+from difflow import IdealThermo, CubicThermo, PengRobinson, make_stream
+from difflow.database import get_critical_props, get_species_data
+from difflow.units.distillation import DistillationColumn, DistillationColumnParams
+
+names = ["propane", "isobutane", "n_butane", "isopentane",
+         "n_pentane", "n_hexane", "n_heptane", "n_octane"]
+ideal = IdealThermo({s: get_species_data(s) for s in names})
+eos = PengRobinson({s: get_critical_props(s) for s in names})
+
+column = DistillationColumn(
+    DistillationColumnParams(species_order=names, n_stages=20, feed_stage=10,
+                             condenser_type="total", P=10e5),
+    thermo=CubicThermo(ideal, eos),      # Peng-Robinson K-values and enthalpies
+)
+feed = make_stream(
+    dict(zip(names, [10.0, 7.0, 7.0, 8.0, 8.0, 20.0, 10.0, 30.0])),
+    T=380.0, P=10e5,
+)
+distillate, bottoms, info = column(feed, R=2.0, B_spec=40.0)
+```
+
+Use the EOS for light hydrocarbons at pressure. Raoult's law fails there in a
+one-sided way: a C3-C8 cut at 10 bar puts its heavy end within a degree of the
+EOS answer and its light end tens of degrees off, so an ideal-K column looks
+plausible at the reboiler and is wrong at the condenser.
+
+Two things about the EOS path are worth knowing:
+
+- **The K-values depend on composition**, so they are a fixed point rather than
+  a formula. `CubicThermo.K_values_array(T, P, x)` runs a short successive
+  substitution on $y$ internally to close it at the stage's own composition;
+  pass both `x` and `y` if you already have a consistent pair.
+- **They only exist where the cubic has two roots.** Away from the bubble point
+  -- a subcooled liquid, a superheated vapor -- there is one root, both phases
+  take it, and $K_i$ comes back identically 1. That is the EOS reporting a
+  single phase, but it makes $\sum_i K_i x_i - 1$ flat, so the column solves
+  each stage's bubble point in two passes: a Newton solve on ideal K-values to
+  land inside the two-root window, then a step-capped Newton on the EOS
+  K-values that bisects back if a step leaves it. Nothing about this is visible
+  in the API, but it is why the bubble point is not one `optimistix` call.
+
+The ideal pass is itself in two parts, for a reason that has nothing to do with
+the EOS. Vapor pressure is exponential in $-1/T$, so a couple of hundred degrees
+below the bubble point both $\sum_i K_i x_i$ and its slope are round-off away
+from zero, and a Newton step there divides one tiny number by another and lands
+tens of thousands of degrees away. So the solve first takes a few damped steps
+on $\log \sum_i K_i x_i$ -- nearly linear in $1/T$, and well scaled over the
+whole range -- and only then runs Newton on the residual itself. This is why a
+column can be handed a feed far below its own boiling point and still find its
+ends.
 
 #### Solver Paths
 
@@ -824,6 +994,61 @@ info['balance_error_rel']   # max |error| / F_total
 
 If `balance_error_rel` is larger than your problem tolerates, raise
 `cmo_iter` (default 30) — the residual falls geometrically with it.
+
+#### Outputs
+
+| Key | Type | Units | Description |
+|-----|------|-------|-------------|
+| `distillate` | Stream | - | Overhead product, at the condenser temperature |
+| `bottoms` | Stream | - | Bottom product, at the reboiler temperature |
+| `info['T_profile']` | (n,) array | K | Stage temperatures, reboiler first |
+| `info['x_profile']` | (n, nc) array | - | Liquid compositions per stage |
+| `info['y_profile']` | (n, nc) array | - | Vapor compositions per stage |
+| `info['T_condenser']` | float | K | Condenser temperature = distillate T |
+| `info['T_reboiler']` | float | K | Reboiler temperature = bottoms T = `T_profile[0]` |
+| `info['D']`, `info['B']` | float | mol/s | Distillate and bottoms flow |
+| `info['Q_condenser']` | float | W | Condenser duty (negative: heat removed) |
+| `info['Q_reboiler']` | float | W | Reboiler duty (positive: heat added) |
+| `info['L_profile']`, `info['V_profile']` | (n,) array | mol/s | Internal flows — `use_mesh=True` only |
+| `info['L_rect']`, `info['V_rect']` | float | mol/s | Rectifying flows — `use_mesh=False` only |
+| `info['balance_error']` | (nc,) array | mol/s | Component balance residual $D_i + B_i - F_i$ |
+| `info['balance_error_rel']` | float | - | `max abs(balance_error) / F_total` |
+
+#### Example Usage
+
+```python
+from difflow import IdealThermo, make_stream
+from difflow.database import get_species_data
+from difflow.units.distillation import DistillationColumn, DistillationColumnParams
+
+names = ['n_pentane', 'n_hexane', 'n_heptane']
+thermo = IdealThermo({s: get_species_data(s) for s in names})
+
+column = DistillationColumn(
+    DistillationColumnParams(
+        species_order=names,
+        n_stages=20,      # 19 trays plus the reboiler
+        feed_stage=10,    # halfway up, counting from the reboiler at 0
+        P=101325.0,
+    ),
+    thermo=thermo,
+)
+
+feed = make_stream({'n_pentane': 30.0, 'n_hexane': 40.0, 'n_heptane': 30.0},
+                   T=360.0, P=101325.0)
+
+distillate, bottoms, info = column(feed, R=2.0, B_spec=40.0)
+print(f"Distillate: {float(distillate['T']):.1f} K, "
+      f"{float(distillate['F_n_pentane']):.1f} mol/s n-pentane")
+print(f"Bottoms:    {float(bottoms['T']):.1f} K, "
+      f"{float(bottoms['F_n_heptane']):.1f} mol/s n-heptane")
+print(f"Duties:     {float(info['Q_condenser'])/1e6:.2f} / "
+      f"{float(info['Q_reboiler'])/1e6:.2f} MW")
+```
+
+Pass `use_mesh=False` for the faster constant-molar-overflow solution, which
+skips the energy-balance correction to the internal flows but solves the same
+component material balances — see [Solver Paths](#solver-paths) above.
 
 ---
 

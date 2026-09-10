@@ -146,6 +146,10 @@ from difflow.planning.diagram import (
     draw_chain, draw_delta_vectors, draw_planning_network, draw_taylor_model,
     draw_trust_region,
 )
+from difflow.planning.export import (
+    DeltaVector, DeltaVectorSet, sanitize_name, write_csv,
+    write_iterations_csv, write_json, write_lp, write_mps,
+)
 from difflow.planning.health import (
     AMPLIFY_TOL, COND_TOL, DEAD_TOL, SPREAD_TOL, DeltaHealthWarning,
     Finding, HealthReport, check_block_health, check_delta_health,
@@ -214,6 +218,15 @@ __all__ = [
     "PlanResult",
     "TrustRegionOptions",
     "Iteration",
+    # Export to LP-style planning systems
+    "DeltaVector",
+    "DeltaVectorSet",
+    "write_json",
+    "write_csv",
+    "write_lp",
+    "write_mps",
+    "write_iterations_csv",
+    "sanitize_name",
     # Sensitivity of the plan
     "PlanSensitivity",
     "plan_sensitivity",

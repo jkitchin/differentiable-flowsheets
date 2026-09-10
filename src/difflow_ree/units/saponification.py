@@ -187,6 +187,11 @@ class Saponifier:
         "Liao, C. et al. J. Rare Earths 31, 331 (2013). doi:10.1016/S1002-0721(12)60281-6",
     ]
     numerical_method = "Closed-form stoichiometry; no iteration."
+    parameter_units = {
+        "saponification_degree": "-",
+        "base_utilization": "-",
+        "monomers_per_component": "-",
+    }
 
     def __init__(self, params: SaponifierParams):
         """Build the schema and resolve the reagent.

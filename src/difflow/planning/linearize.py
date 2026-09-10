@@ -77,6 +77,52 @@ class Linearization:
         u = jnp.atleast_1d(jnp.asarray(u, dtype=float))
         return self.y0 + self.J @ (u - self.u0)
 
+    def to_dict(self, u_names: list[str] | None = None,
+                y_names: list[str] | None = None) -> dict:
+        """Serialise the delta vectors to plain JSON-safe Python.
+
+        This is the primitive the export layer is built on, and it is useful
+        on its own: a single linearisation can be handed to an external
+        planning system without running a planner.
+
+        Args:
+            u_names: Names for the columns of ``J``.  Defaults to ``u0``,
+                ``u1``, ...
+            y_names: Names for the rows of ``J``.  Defaults to ``y0``,
+                ``y1``, ...
+
+        Returns:
+            Dict with ``block``, ``u_names``, ``y_names``, ``u0``, ``y0``,
+            ``J`` (row-major, one list per output), ``mode``, ``phase``,
+            ``phase_code`` and ``n_evals``.  Every value is a ``str``,
+            ``int``, ``float``, ``list`` or ``None``.
+        """
+        J = np.asarray(self.J)
+        n_y, n_u = J.shape
+        u_names = list(u_names) if u_names is not None else [
+            f"u{j}" for j in range(n_u)]
+        y_names = list(y_names) if y_names is not None else [
+            f"y{i}" for i in range(n_y)]
+        if len(u_names) != n_u or len(y_names) != n_y:
+            raise ValueError(
+                f"name lengths {len(y_names)}x{len(u_names)} do not match "
+                f"J shape {n_y}x{n_u}")
+        return {
+            "block": self.block,
+            "u_names": u_names,
+            "y_names": y_names,
+            "u0": [float(v) for v in np.asarray(self.u0).ravel()],
+            "y0": [float(v) for v in np.asarray(self.y0).ravel()],
+            "J": [[float(v) for v in row] for row in J],
+            "mode": self.mode,
+            "phase": (None if self.phase is None
+                      else [float(v) for v in np.asarray(self.phase).ravel()]),
+            "phase_code": (None if self.phase_code is None else
+                           [int(v) for v in
+                            np.asarray(self.phase_code).ravel()]),
+            "n_evals": int(self.n_evals),
+        }
+
     def as_table(self, u_names: list[str], y_names: list[str]) -> str:
         """Render the delta vectors as a fixed-width table."""
         J = np.asarray(self.J)
