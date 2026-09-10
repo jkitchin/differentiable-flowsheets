@@ -851,10 +851,28 @@ stage `n_stages - 1` is the top tray, and every profile in `info` is in that
 order. The condenser is *not* a stage — it sits outside the cascade — so
 `n_stages` counts the trays plus the reboiler, and `feed_stage=10` in a
 20-stage column puts the feed halfway up. Stages below the feed stage are the
-stripping section and stages above it the rectifying section; the boundary
-stage itself is counted on different sides by the CMO sweep and the MESH flow
-initialisation, so do not read anything into it. There is one column pressure:
-no tray pressure drop.
+stripping section and stages above it the rectifying section. There is one
+column pressure: no tray pressure drop.
+
+The feed stage itself is split by the feed, which contributes `q F` to the
+liquid running down and `(1 - q) F` to the vapour running up. Its liquid is
+therefore a **stripping**-section flow and its vapour a **rectifying**-section
+one:
+
+$$L_j = \begin{cases} L' = L + qF & j \le n_F \\ L = R D & j > n_F \end{cases}
+\qquad
+V_j = \begin{cases} V' = V - (1-q)F & j < n_F \\ V = (R+1) D & j \ge n_F \end{cases}$$
+
+That is one convention, not two: both flows follow from asking whether the
+horizontal cut a stream crosses has the feed above it. `_is_rectifying_cut` and
+`_cmo_section_flows` in `difflow/units/distillation.py` are the single
+definition, and `_cmo_flows` — the only thing that builds an L/V profile — is a
+thin wrapper over them, so both solver paths read the same boundary.
+
+`q` sets those rates on both paths. On the MESH path it reaches the solver only
+through the initial profile — the energy balance brings the feed in as a
+saturated liquid whatever `q` says — so `use_mesh=True` with `q != 1` moves the
+starting point rather than the converged result.
 
 `condenser_type='partial'` raises `NotImplementedError` rather than being
 silently solved as a total condenser.
