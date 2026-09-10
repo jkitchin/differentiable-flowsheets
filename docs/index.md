@@ -33,6 +33,7 @@
 | [Solvers and Utilities](solvers-and-utilities.md) | Numerical methods, uncertainty propagation |
 | [Data Reconciliation](data-reconciliation.md) | Constrained least squares on noisy plant data, gross error detection, observability |
 | [Delta-Base Planning](planning.md) | AD-generated delta vectors, trust-region LP/MILP planning, sensitivity of the plan |
+| [Aspen PIMS Integration](pims-integration.md) | Design proposal: shipping difflow delta vectors into a PIMS planning model (nothing implemented yet) |
 
 ## Architecture Overview
 
