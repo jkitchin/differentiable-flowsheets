@@ -37,7 +37,7 @@ import jax.numpy as jnp
 from difflow.params_mixin import ParamsMixin
 from difflow.streams import Stream
 
-from difflow_gas.streams import FLOW_KEY, gas_stream
+from difflow_gas.streams import gas_flow, gas_stream
 
 #: floor for squared pressure during tear iteration, (0.5 bar)^2 in Pa^2
 MIN_P_SQUARED = (0.5e5) ** 2
@@ -78,7 +78,7 @@ class GasPipe:
         self.min_p_squared = min_p_squared
 
     def __call__(self, inlet: Stream) -> Stream:
-        q = inlet[FLOW_KEY]
+        q = gas_flow(inlet, "pipe inlet")
         p2 = inlet["P"] ** 2 - self.params.beta * q * jnp.abs(q)
         P_out = jnp.sqrt(jnp.maximum(p2, self.min_p_squared))
         return gas_stream(q, inlet["T"], P_out)
@@ -101,7 +101,7 @@ class BackPipe:
         self.params = PipeParams(beta=beta)
 
     def __call__(self, node: Stream, feed: Stream) -> Stream:
-        q = feed[FLOW_KEY]
+        q = gas_flow(feed, "pipe feed")
         p2 = node["P"] ** 2 + self.params.beta * q * jnp.abs(q)
         return gas_stream(q, node["T"], jnp.sqrt(p2))
 
@@ -129,7 +129,7 @@ class PipePressure:
         self.min_p_squared = min_p_squared
 
     def __call__(self, parent: Stream, flow: Stream) -> Stream:
-        q = flow[FLOW_KEY]
+        q = gas_flow(flow, "flow stream")
         drop = self.params.beta * q * jnp.abs(q)
         p2 = parent["P"] ** 2 - self.direction * drop
         P = jnp.sqrt(jnp.maximum(p2, self.min_p_squared))

@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from difflow.params_mixin import ParamsMixin
 from difflow.streams import Stream
 
-from difflow_gas.streams import FLOW_KEY, gas_stream
+from difflow_gas.streams import gas_flow, gas_stream
 
 #: shared literature reference for the topology / balance units
 _TOPOLOGY_REFS = [
@@ -51,7 +51,8 @@ class SourceHead:
         self.params = SourceHeadParams(P_set=P_set)
 
     def __call__(self, inlet: Stream) -> Stream:
-        return gas_stream(inlet[FLOW_KEY], inlet["T"], self.params.P_set)
+        return gas_stream(gas_flow(inlet, "source inlet"), inlet["T"],
+                          self.params.P_set)
 
 
 @dataclass
@@ -94,7 +95,7 @@ class AffineFlow:
             )
         q = self.params.const
         for s, inlet in zip(self.signs, inlets):
-            q = q + s * inlet[FLOW_KEY]
+            q = q + s * gas_flow(inlet, "inlet")
         return gas_stream(q, self.T_k, self.P_pa)
 
 
@@ -128,7 +129,8 @@ class FlowSplit:
     def __call__(self, inlet: Stream) -> tuple[Stream, Stream]:
         w = self.params.w
         out1 = gas_stream(w, inlet["T"], inlet["P"])
-        out2 = gas_stream(inlet[FLOW_KEY] - w, inlet["T"], inlet["P"])
+        out2 = gas_stream(gas_flow(inlet, "split inlet") - w, inlet["T"],
+                          inlet["P"])
         return out1, out2
 
 
@@ -145,9 +147,10 @@ class TearSplit:
     references = _TOPOLOGY_REFS
 
     def __call__(self, inlet: Stream, spec: Stream) -> tuple[Stream, Stream]:
-        w = spec[FLOW_KEY]
+        w = gas_flow(spec, "draw specification")
         out1 = gas_stream(w, inlet["T"], inlet["P"])
-        out2 = gas_stream(inlet[FLOW_KEY] - w, inlet["T"], inlet["P"])
+        out2 = gas_stream(gas_flow(inlet, "split inlet") - w, inlet["T"],
+                          inlet["P"])
         return out1, out2
 
 
@@ -167,8 +170,9 @@ class Junction:
     references = _TOPOLOGY_REFS
 
     def __call__(self, *inlets: Stream) -> Stream:
-        q_tot = sum(s[FLOW_KEY] for s in inlets)
-        T = sum(s[FLOW_KEY] * s["T"] for s in inlets) / (q_tot + 1e-30)
+        q_tot = sum(gas_flow(s, "junction inlet") for s in inlets)
+        T = sum(gas_flow(s, "junction inlet") * s["T"]
+                for s in inlets) / (q_tot + 1e-30)
         return gas_stream(q_tot, T, inlets[0]["P"])
 
 
@@ -183,4 +187,5 @@ class FlowMinus:
     references = _TOPOLOGY_REFS
 
     def __call__(self, a: Stream, b: Stream) -> Stream:
-        return gas_stream(a[FLOW_KEY] - b[FLOW_KEY], a["T"], a["P"])
+        return gas_stream(gas_flow(a, "first stream") - gas_flow(b, "second stream"),
+                          a["T"], a["P"])

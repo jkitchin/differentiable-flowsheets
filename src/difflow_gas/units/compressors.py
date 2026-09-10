@@ -23,7 +23,7 @@ from difflow_gas.physics import (
     DEFAULT_ETA_AD,
     DEFAULT_KAPPA,
 )
-from difflow_gas.streams import FLOW_KEY, gas_stream
+from difflow_gas.streams import gas_flow, gas_stream
 
 #: shared literature references for the compressor units
 _COMPRESSOR_REFS = [
@@ -69,7 +69,8 @@ class Compressor:
 
     def __call__(self, inlet: Stream) -> Stream:
         return gas_stream(
-            inlet[FLOW_KEY], inlet["T"], inlet["P"] * self.params.ratio
+            gas_flow(inlet, "compressor inlet"), inlet["T"],
+            inlet["P"] * self.params.ratio,
         )
 
 
@@ -95,7 +96,7 @@ class CompressorBoost:
     def __call__(self, parent: Stream, flow: Stream) -> Stream:
         r = self.params.ratio
         P = parent["P"] * r if self.direction > 0 else parent["P"] / r
-        return gas_stream(flow[FLOW_KEY], parent["T"], P)
+        return gas_stream(gas_flow(flow, "flow stream"), parent["T"], P)
 
 
 def adiabatic_power_w(
@@ -118,5 +119,5 @@ def adiabatic_power_w(
     """
     ratio = outlet["P"] / inlet["P"]
     exponent = (kappa - 1.0) / kappa
-    q = inlet[FLOW_KEY]
+    q = gas_flow(inlet, "compressor inlet")
     return q * cp * inlet["T"] * (ratio ** exponent - 1.0) / eta_ad

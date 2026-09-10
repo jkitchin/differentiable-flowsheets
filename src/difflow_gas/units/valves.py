@@ -22,7 +22,7 @@ import jax.numpy as jnp
 from difflow.params_mixin import ParamsMixin
 from difflow.streams import Stream
 
-from difflow_gas.streams import FLOW_KEY, gas_stream
+from difflow_gas.streams import gas_flow, gas_stream
 
 #: pressure floor (Pa) after a control-valve drop, matching the pipe
 #: units' MIN_P_SQUARED floor of (0.5 bar)^2
@@ -42,7 +42,8 @@ class OpenValve:
     references = _VALVE_REFS
 
     def __call__(self, inlet: Stream) -> Stream:
-        return gas_stream(inlet[FLOW_KEY], inlet["T"], inlet["P"])
+        return gas_stream(gas_flow(inlet, "valve inlet"), inlet["T"],
+                          inlet["P"])
 
 
 class PressureEqual:
@@ -57,7 +58,8 @@ class PressureEqual:
     references = _VALVE_REFS
 
     def __call__(self, parent: Stream, flow: Stream) -> Stream:
-        return gas_stream(flow[FLOW_KEY], parent["T"], parent["P"])
+        return gas_stream(gas_flow(flow, "flow stream"), parent["T"],
+                          parent["P"])
 
 
 @dataclass
@@ -96,5 +98,5 @@ class ControlValveDrop:
     def __call__(self, parent: Stream, flow: Stream) -> Stream:
         P = parent["P"] - self.direction * self.params.dp_pa
         return gas_stream(
-            flow[FLOW_KEY], parent["T"], jnp.maximum(P, MIN_P)
+            gas_flow(flow, "flow stream"), parent["T"], jnp.maximum(P, MIN_P)
         )
