@@ -506,6 +506,20 @@ fs2 = serialize.load("plant.json", extras={"flash": {"thermo": my_thermo}})
 
 `extras` also *overrides* a stored thermo, which is the way to reload a saved flowsheet against a different property package.
 
+### Units that build their own `Params`
+
+Most units are constructed as `Unit(Params(...), thermo)`, but a substantial minority take their numbers as plain constructor arguments and build the `Params` themselves — `Compressor(ratio)`, `FlowSplit(w)`, `GasPipe(beta)`, and most of the gas plugin. Those numbers are written under `params`, because that is where the built unit keeps them, and they are passed straight back to the constructor on load. Nothing extra is needed:
+
+```python
+fs = Flowsheet(species_order=["CH4"])
+fs.add_unit(Unit("boost", Compressor(ratio=1.3), ["a"], ["b"]))
+serialize.from_json(serialize.to_json(fs))   # ratio comes back as 1.3
+```
+
+An argument that is *not* data — `Mixer(species_order)`, a `thermo` — still travels under `constructor`, and the two channels compose: `CompressorBoost(ratio, direction)` carries `ratio` by the first road and `direction` by the second.
+
+Only *required* constructor arguments are carried. An optional one left at its default is not written, so a unit that was built with a non-default optional argument comes back with the default; pass it on load with `extras=` when it matters.
+
 ---
 
 ## Generating Python
@@ -583,7 +597,8 @@ duty -- W -- Heat duty (W). Positive = heating.
 T_out -- K -- Outlet temperature (K). Alternative to duty.
 UA -- W/K -- Overall heat transfer coefficient × area (W/K). For rating.
 T_utility -- K -- Utility temperature (K). For LMTD calculation.
-Cp -- J/mol/K -- Heat capacity (J/mol·K). If None, uses thermo.
+Cp -- J/mol/K -- Constant heat capacity (J/mol·K). Ignored when the unit is built with a ``thermo``; when there is neither, the unit falls back to DEFAULT_CP and warns (DefaultCpWarning).
+phase -- - -- Force one phase ('liquid'/'vapor') for the thermo enthalpy. None (default) uses the thermo's two-phase flash enthalpy where it has one, so latent heat is carried through a partial vaporization.
 ```
 
 That text is not a second copy. `difflow.docstrings` reads it out of the `Params` class's own `Attributes:` section, which is where the project already writes it, and out of the comments beside the fields for the 35 that are documented there instead — `CSTRParams.eos` and `CSTRParams.outlet_volumetric_basis` among them. Populating `field(metadata={"description": ...})` on all 87 `Params` classes would have duplicated every description and then drifted from it.
@@ -624,6 +639,7 @@ One name is deliberately not the class name: `difflow_gas` registers a `Compress
 difflow                                   # an empty canvas, in a browser
 difflow gui plant.json                    # ...on a flowsheet
 difflow gui --port 9000 --no-browser
+difflow gui --stay                        # ...and keep serving after the tab closes
 ```
 
 The editor is what a bare `difflow` does, because it is the one thing here that has nothing to print and everything to show. `python -m difflow.gui` is the same command for an environment where the console script is not on `PATH`.
@@ -642,6 +658,38 @@ Two pages are served, and they are at different stages.
 
 Two things about wiring are worth knowing before you use it, because both are properties of difflow rather than of the editor. A **stream name is the wiring**: connecting an outlet to an inlet renames the inlet, it does not add an arc, so the downstream unit's port is called whatever the upstream unit's outlet is called. And a **loop is a tear, never an arc**: if the wire you draw would close a cycle, the editor records a recycle instead — the same thing `add_recycle` does — and the edge draws dashed with both stream names on it, because the two ends carry different names.
 
+**A stream can be renamed, and it is not a label edit.** Select a feed or
+product node and type a new name: the server moves the feed, both ends of
+any recycle, every port that reads or writes it and the canvas node
+together, because a name that moved in some places and not others splits
+the flowsheet into two graphs that each look fine on their own. Two
+renames are refused rather than performed — a name another stream already
+has, which would *join* the two and is a connection wearing a rename's
+clothes, and a name that is not a Python identifier, which would survive
+the edit and fail later in `codegen` or on reload, a long way from the
+typing. `gui.edit.rename` is that checked door; `rename_stream` is the
+unchecked mechanism underneath, and both stay, because `connect` uses the
+unchecked one *to* rewire.
+
+**A mixer's inlet count belongs to the flowsheet, not to the class.** A
+`Mixer` mixes however many streams it is handed, and so do `Junction`,
+`BusNode` and `AffineFlow` — the four operations the catalog reports as
+`ports.variadic`. So the inspector offers `Add inlet` on those and a `−`
+per row, and until now the only way to get a third inlet on a mixer was
+to edit the JSON by hand. A variadic unit also arrives from the palette
+with **two** inlets rather than one, because one is what it means to not
+be there: a mixer mixing a single stream is a piece of pipe.
+
+A new port arrives unwired, which is what a unit dropped from the palette
+does too. Removing one is refused rather than cascaded when something is
+on it — a feed, an upstream unit, a recycle destination — because
+deleting the port and deleting the feed behind it are two edits, and
+undoing the first does not bring back the second: the composition,
+temperature and pressure are gone. The refusal names what is in the way.
+The front end draws the button from the catalog's own `variadic` flag and
+the server refuses against the same one, so the button cannot offer
+something the server will turn down.
+
 Feed and product nodes are drawn *from* the topology; they are stream names with nothing on one end rather than objects the flowsheet holds, so they are not draggable endpoints. A unit dropped from the palette arrives unwired with a dangling stream on each port, which is why it appears with feed-ish and product-ish stubs until you connect it.
 
 **Code context** opens the Python the flowsheet carries (see below). Parameter editing, the docstring inspector and the results panel are being built onto the canvas; until they land, `/classic` is where you change a number.
@@ -650,19 +698,111 @@ Feed and product nodes are drawn *from* the topology; they are stream names with
 
 Everything on both pages is derived from `catalog()`, so plugin units appear with no extra work, and a field the catalog reports as holding code is listed as *set in code* rather than given a text box that could only reject what you type.
 
-**The palette says what each unit is waiting for.** Over half the catalog cannot be dropped as it stands — a `Flash` wants a `thermo`, a `CSTR` wants a rate law, an `AmineAbsorber` wants the name of a solvent — and those entries are dimmed with the missing *field names* on the row: `needs thermo`, `needs rate_fn, stoich, rate_params`. The names are the point. "Unbuildable" tells you nothing you can act on, whereas `rate_fn` is the thing you go and write, and it is the same list the refusal quotes if you drag the unit anyway. They stay visible because a palette that cannot show a CSTR is not a palette; a filter hides them for anyone who would rather it did.
+**The palette says what each unit is waiting for.** Over half the catalog cannot be dropped as it stands — a `Flash` wants a `thermo`, a `CSTR` wants a rate law, an `AmineAbsorber` wants the name of a solvent — and those entries are dimmed with the missing *field names* on the row: `needs thermo`, `needs rate_fn, stoich, rate_params`. The names are the point. "Unbuildable" tells you nothing you can act on, whereas `rate_fn` is the thing you go and write, and it is the same list the node carries if you drag the unit anyway. They stay visible because a palette that cannot show a CSTR is not a palette; a filter hides them for anyone who would rather it did.
 
 What each row needs is answered **against the code context as it stands**, not against the class, so a row un-dims the moment its binding appears — one `thermo = IdealThermo(...)` clears the flag on every unit that was waiting for one, and the page refetches the catalog when you apply the snippet. A bare value counts too: `solvent = "MEA"` is matched by field name, which is why the message can honestly tell you to go and write one.
 
-That the flag and the refusal are the same computation (`gui.edit.unmet`) is the part worth insisting on. When they were two, the catalog answered a question about the *class* — could a form construct one — and the adder answered a question about this session. `AbsorberParams.solvent` is a required `str`: no callable, no constructor object, so the class read as buildable, and nothing on earth can invent a solvent name. The palette offered it, the drop failed, and the error came from the file-loading path, which offered *"the file may have been written by a different version of difflow"* as the diagnosis of a unit dropped one second earlier. A test now walks every operation and asserts the two agree.
+That the flag and what the adder does are the same computation (`gui.edit.unmet`) is the part worth insisting on. When they were two, the catalog answered a question about the *class* — could a form construct one — and the adder answered a question about this session. `AbsorberParams.solvent` is a required `str`: no callable, no constructor object, so the class read as buildable, and nothing on earth can invent a solvent name. The palette offered it, the drop failed, and the error came from the file-loading path, which offered *"the file may have been written by a different version of difflow"* as the diagnosis of a unit dropped one second earlier. A test now walks every operation and asserts the two agree.
 
 A flag that is empty promises a clean *answer*, not a success. A class may still refuse on its own terms — `Transformer` rejects a unity tap with no phase shift, because that is a line and not a transformer — and nothing short of constructing one can know that in advance, so the class's own sentence is quoted rather than replaced.
+
+**A unit that cannot be built yet is dropped anyway, in red.** Refusing the drop threw away the only thing you actually said — *I want a `Flash`, here* — and left you to say it again after writing the `thermo`. So the drop lands as a **pending node**: dashed, red, with no ports, carrying `needs thermo` on the box and the full sentence in its tooltip. It is a node rather than a toast because a toast scrolls away and the drop does not; the red box is both the record of what you asked for and the place to find out what it is waiting for.
+
+It is deliberately *not* a `Unit`. A half-built unit inside the `Flowsheet` would have to be skipped by the solver, by `serialize` and by `codegen`, each of which is then one `if` away from writing out a broken flowsheet. Pending state lives on the `FlowsheetSession` instead, and is served **beside** the document (`{"flowsheet": ..., "pending": [...]}`) rather than inside it — so a file you save never carries a `pending` key, or a node position for a unit that does not exist. It has no ports for the same reason: handles would invite a wire to a unit that cannot receive one.
+
+The two edits that can turn an unmet need into a met one — applying the code context, naming the species — re-drop every pending node afterwards, under its own name and at its own position. One that builds becomes a real unit exactly where you put it and the red goes away; one that still cannot is parked again with its hint re-answered against the *new* bindings, so a node that needed `species_order, thermo` and got the species now says `thermo`. Deleting a pending node is the ordinary delete. `solve` reports them by name (`"pending"`) and solves the rest — they are not in the model, so they cannot break it.
+
+**And it will write the code for you.** Selecting a pending node offers *Write the code for me*, which is `POST /api/boilerplate` and `gui.boilerplate`. What comes back is a **starting point, not an answer**, and the difference is marked in the text rather than smoothed over. A generated `thermo` names this flowsheet's own species and reads their data out of the bundled database, which is very likely right. A generated rate law is one made-up reaction with made-up Arrhenius parameters, and says `# INVENTED` above it. A fallback species list says `# GUESSED`; a value derived from nothing but a declared annotation says `# PLACEHOLDER`. A snippet that quietly looked finished would be worse than no snippet, because the number it invented would end up in a flowsheet.
+
+`rate_fn`, `stoich` and `rate_params` are written as a single `mass_action_kinetics(...)` call, because a stoichiometry that disagrees with its rate law is the one failure that call exists to remove. A need with no recipe falls back to a stub of the shape the docstring documents (`Signature: rate_fn(C, T, rate_params)`) or to a value of the declared type — which is how a plugin's own constructor argument gets an entry without `boilerplate.py` knowing anything about it. The button **appends** to the code context rather than replacing it, skipping lines already there, so a second snippet cannot define `SPECIES` a second time with a different list.
 
 The point is not to replace writing Python. It is to make the tedious parts quick — seeing the topology, changing one parameter and re-solving, checking what a unit expects — while leaving the door open in both directions: export a script, edit it, and read the result back through `serialize`. An editor you can only enter is worse than none.
 
 It is stdlib only (`http.server`), binds to `127.0.0.1`, and is meant for a single local user. It is a development tool, not a hardened service — do not expose it to a network.
 
 Because the code context runs Python, the server answers mutating requests only from the page it served. Three checks, all in `server.py`: a token minted per process, put into the page as a `<meta>` tag and required in an `X-Difflow-Token` header; an `Origin` that must be this exact host and port; and a `Host` that must be a loopback name, which is what a DNS-rebinding request cannot produce. A request that fails any of them gets a **403** — the one case where a refusal is not a 200, because it is a failure of the request rather than an answer about the flowsheet. Reads are not guarded: the page fetches the catalog before it has done anything. A client outside the browser — `curl`, or `npm run dev` proxying to this server — has to send the token too.
+
+### The editor stops when its page does
+
+A local editor that outlives its tab is a small disaster: the port stays
+held, the next `difflow gui` refuses to bind, and nothing on screen says
+why. So the page and the server keep each other alive.
+
+The page posts `POST /api/ping` every 15 seconds with an id minted for
+that page load, and `POST /api/bye` on `pagehide`. The server keeps a
+**dict keyed by page id**, not a count: a reload increments before it
+decrements, and a tab that dies without a farewell never decrements at
+all, so a counter goes wrong in both directions. A page that has not
+been heard from in `IDLE_GRACE_SECONDS` (90) is dropped, and when the
+last one goes the server shuts itself down and the port comes back. The
+grace is six heartbeats rather than two because Chrome throttles a
+background tab's timers to roughly one firing a minute — a tab left in
+the background is not a tab that has gone away.
+
+Nothing expires before the *first* check-in, so a server started with
+`--no-browser`, or one whose page is still loading, is never killed for
+having no pages yet.
+
+`pagehide` fires for the back/forward cache too, and that is not a
+departure — the tab is coming back with its JavaScript intact. So the
+farewell is suppressed when `event.persisted` is true, and `pageshow`
+re-pings.
+
+The header also carries a **Quit** button, which asks twice: one click
+arms it (`Really quit?` for four seconds), the second posts
+`POST /api/quit`, and the page draws a *stopped* overlay so a dead tab
+does not look like a live one. Either way the process prints why it
+stopped — `stopped: quit from the editor`, or `stopped: the editor page
+was closed`.
+
+`--stay` turns all of this off and serves until Ctrl-C, which is what a
+long-running or embedded server wants. `make_server` never starts the
+watcher at all: a test builds a server and drives it, and a server that
+can vanish mid-test is not testable.
+
+**When the port is taken, the message says by whom.** `lsof` first,
+`ss` second, nothing third — none of which may exist, and none of which
+is allowed to raise:
+
+```
+difflow gui: port 8756 on 127.0.0.1 is already in use.
+
+It is held by pid 62689 (python3.12).
+    difflow gui plant.json
+
+To stop it:
+
+    kill 62689
+```
+
+The `kill` line is offered only when the process is one this user can
+signal (`os.kill(pid, 0)`), because telling someone to kill another
+user's process is telling them to run a command that will fail.
+
+### Where the book talks about a unit
+
+Every operation the palette offers carries a `?` that opens this book at
+the section describing it, and the inspector's heading carries the same
+link for the selected unit. The header has `Docs` and `GitHub` beside
+the version, read from the installed package's `Project-URL` metadata
+rather than typed into the front end.
+
+The mapping is **derived, not maintained**. `difflow.gui.doclinks` reads
+`static/docs-index.json` — the same index the assistant retrieves
+against, built from `docs/` and rebuilt by CI — and for an operation
+name prefers, in order: a section whose heading *starts* with the name,
+on a unit-operations page, at the shallowest nesting, then the section
+that mentions it most. A hand-kept table of 87 operations against 760
+sections would be wrong within a release; this one cannot drift from the
+prose, because it is computed from it.
+
+It resolves 82 of the 87 registered operations. The five it does not are
+units the book does not yet describe by name, and `catalog()` reports
+`docs_url: null` for them rather than a link to something else —
+[#228](https://github.com/jkitchin/differentiable-flowsheets/issues/228)
+tracks writing the missing sections. A test asserts that every URL it
+does emit points at a page `_toc.yml` actually builds, so a renamed
+chapter fails a test rather than shipping a 404.
 
 ### The code context
 
@@ -721,7 +861,7 @@ The routes are:
 
 A failed solve or a rejected edit comes back as `{"ok": false, "error": ...}` with a **200** rather than a traceback at the socket: it is an answer about the flowsheet, not a failure of the request, and a bad edit from the browser cannot take the server down. Only malformed JSON and an unrouted path get a 4xx.
 
-The incremental routes exist because `POST /api/flowsheet` re-runs `serialize.from_dict` and re-instantiates every unit — wrong twice over for a canvas, since it costs a full reconstruction per keystroke and it drops any constructor object the file cannot carry. `PATCH` rebuilds only the unit you touched and hands its `thermo` back **by identity**, so a hand-built one survives an edit that JSON could not have round-tripped. A unit dropped from the palette takes `species_order` from the flowsheet and its constructor objects from the code context below; one whose `thermo` is nowhere to be found is refused with a message naming what is missing and where to define it. Removing a unit also drops any recycle naming its streams, which would otherwise tear a stream nothing produces and fail the solve somewhere far from the edit.
+The incremental routes exist because `POST /api/flowsheet` re-runs `serialize.from_dict` and re-instantiates every unit — wrong twice over for a canvas, since it costs a full reconstruction per keystroke and it drops any constructor object the file cannot carry. `PATCH` rebuilds only the unit you touched and hands its `thermo` back **by identity**, so a hand-built one survives an edit that JSON could not have round-tripped. A unit dropped from the palette takes `species_order` from the flowsheet and its constructor objects from the code context below; one whose `thermo` is nowhere to be found is parked as a pending node naming what is missing and where to define it, and built in place once it appears. Removing a unit also drops any recycle naming its streams, which would otherwise tear a stream nothing produces and fail the solve somewhere far from the edit.
 
 `difflow.gui` is a package rather than one module: `session.py` holds the flowsheet and everything that can be done to it, `server.py` holds the wire encoding and the routes, and `static/` holds the page as files on disk. `FlowsheetSession` needs no socket, so the interesting half — load, edit, solve, emit code — is usable and testable on its own:
 
@@ -757,7 +897,7 @@ Wires route orthogonally, ports are small grey squares, and two keys toggle the 
 
 `difflow gui` with no file opens on an empty flowsheet, and *empty* rather than absent: the session used to leave `self.flowsheet = None`, every edit route begins by refusing "no flowsheet loaded", and nothing said so — so the palette filled in, the canvas drew its grid, and dragging a unit onto it did nothing at all. Which reads as a broken drag rather than as an editor with no flowsheet to edit.
 
-So the flowsheet exists from the first frame, and the one thing it is missing is asked for by name. Every stream in difflow is an array indexed by `species_order`, so until that list exists nothing can be built — and the palette says so on every row (`needs species_order`) rather than offering a drop that will be refused. The list can be typed into the header field or bound by the code context below (as `species_order`, or as `SPECIES`, which is what the starter snippet defines); whoever typed it in the header wins, and the code context does not overwrite it. It freezes once a unit indexes it: re-ordering under a built unit would turn a water flow into an ethanol flow with nothing on screen changing.
+So the flowsheet exists from the first frame, and the one thing it is missing is asked for by name. Every stream in difflow is an array indexed by `species_order`, so until that list exists nothing can be built — and the palette says so on every row (`needs species_order`). A drop before then is not lost: it parks as a red node that asks for the list and builds itself once it has it. The list can be typed into the header field or bound by the code context below (as `species_order`, or as `SPECIES`, which is what the starter snippet defines); whoever typed it in the header wins, and the code context does not overwrite it. It freezes once a unit indexes it: re-ordering under a built unit would turn a water flow into an ethanol flow with nothing on screen changing.
 
 The other half of building from nothing is the **feed**, and it is the half that has no gesture. Dropping and wiring can describe a whole topology, but a feed is data — a temperature, a pressure and a flow per species — so a from-scratch flowsheet could be drawn and never solved, and `solve` answered `KeyError: 'mixer_in'`: the name of the stream, which was on the canvas already, and no hint that a feed was the thing missing. An inlet with nothing on the other end is now selectable, and the inspector gives it a form. `set_feed` fills any field left out from the feed that is already there, so editing a temperature does not zero the flows, and from the flowsheet's own `default_flow`/`default_T`/`default_P` when there is no feed yet — the same numbers `Flowsheet.solve` invents for a tear stream, so an untouched feed is not a new guess about the model. It refuses a stream a unit already produces (two sources for one stream, and the solver would silently use one of them), a stream nothing reads, an unknown species, a negative flow and a non-positive temperature or pressure, each by name. A blank box is a question and not a zero: zero is a real flow, and guessing which was meant would put a number nobody typed into the model. What remains unfed at solve time is reported as *that*, with what to do about it, and `GET /api/feeds` answers the same question ahead of time.
 

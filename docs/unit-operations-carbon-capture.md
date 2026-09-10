@@ -447,11 +447,14 @@ print(f"Lean loading: {info['lean_loading']:.3f} mol/mol")
 ```python
 @dataclass
 class MembraneParams:
-    membrane_type: str = "Polyimide"
-    area: float = 1000.0           # m²
-    thickness: float = 0.1e-6     # m (100 nm)
-    pressure_ratio: float = 10.0   # Feed/permeate pressure
-    stage_cut: float = None        # Optional fixed stage cut
+    membrane_type: str                  # Name from list_membranes()
+    area: float = 1000.0                # m^2
+    thickness: float = None             # micrometres; None uses the database default
+    pressure_ratio: float = 10.0        # Feed/permeate pressure
+    T_operation: float = 298.15         # K
+    feed_pressure: float = 1000000.0    # Pa
+    permeate_pressure: float = None     # Pa; from the ratio if None
+    stage_cut_target: float = None      # If set, the area is adjusted to hit it
 ```
 
 #### Governing Equations
@@ -479,21 +482,118 @@ $$\theta = \frac{F_{permeate}}{F_{feed}}$$
 from difflow_cc import MembraneSeparator, MembraneParams
 
 params = MembraneParams(
-    membrane_type="PIM-1",
-    area=5000.0,
-    thickness=1e-6,
+    membrane_type="PIM_1",     # a name from list_membranes()
+    area=200.0,
+    thickness=1.0,             # micrometres
     pressure_ratio=10.0,
 )
 membrane = MembraneSeparator(params)
 
-flue_gas = make_stream({'N2': 0.85, 'CO2': 0.15}, T=298.15, P=1000000.0)
+flue_gas = make_stream({'N2': 85.0, 'CO2': 15.0}, T=298.15, P=1000000.0)
 
 retentate, permeate, info = membrane(flue_gas)
 
-print(f"Stage cut: {info['stage_cut']:.2%}")
-print(f"CO2 purity: {info['co2_purity']:.1%}")
-print(f"CO2 recovery: {info['co2_recovery']:.1%}")
+print(f"Stage cut: {float(info['stage_cut']):.2%}")       # 15.70%
+print(f"CO2 purity: {float(info['CO2_purity']):.1%}")     # 81.5%
+print(f"CO2 recovery: {float(info['CO2_recovery']):.1%}") # 85.2%
 ```
+
+---
+
+(multistagemembrane)=
+### MultistageMembrane
+
+**Location**: `difflow_cc/units/membrane.py`
+
+**Class**: `MultistageMembrane`
+
+**Description**: A cascade of `MembraneSeparator` stages, in series or with the second stage's permeate taken as the product.
+
+#### Process Role
+
+One membrane stage cannot be both selective and complete. Its purity is
+set by the selectivity and the pressure ratio, its recovery by the area,
+and pushing the area up to capture the last of the CO2 drags the permeate
+composition back towards the feed: the single PIM-1 stage of the previous
+section gives 81.5% purity at 85% recovery over 200 m^2, and over
+5000 m^2 the same stage reaches 99% recovery at 17% purity --- barely a
+separation at all. Staging is the way out, and which way you stage
+depends on which of the two you need:
+
+- **`series`** --- each stage treats the previous *retentate*, and the
+  permeates are pooled. Recovery rises (every stage gets another chance at
+  the CO2 the last one missed) and the pooled purity falls, because the
+  later stages are working on an increasingly CO2-lean gas.
+- **`permeate_recycle`** --- the second stage treats the first stage's
+  *permeate*, and its permeate is the product. Purity rises (the CO2 is
+  enriched twice) and recovery falls.
+
+#### Parameters
+
+The constructor takes a `MembraneParams` (the same one
+`MembraneSeparator` takes, with `area` read **per stage**) plus the
+cascade's own two arguments:
+
+```python
+MultistageMembrane(params, n_stages=2, configuration="series")
+#                          ^ stages     ^ "series" | "permeate_recycle"
+```
+
+#### Inputs and Outputs
+
+| Parameter | Type | Units | Description |
+|-----------|------|-------|-------------|
+| `feed` | Stream | - | Feed gas |
+| `retentate` | Stream | - | Final treated gas |
+| `permeate` | Stream | - | Final CO2 product |
+| `info['overall_CO2_recovery']` | float | - | CO2 to the product, as a fraction of the feed's |
+| `info['overall_CO2_purity']` | float | - | CO2 mole fraction of the product |
+| `info['stage_info']` | list | - | Each stage's own `MembraneSeparator` info dict |
+
+#### Governing Equations
+
+There is no new physics here --- each stage is the solution-diffusion
+model of `MembraneSeparator`. What the cascade adds is the composition of
+stage cuts, which for stages in series is
+
+$$\theta_{overall} = 1 - \prod_k (1 - \theta_k)$$
+
+and a pooled product purity
+
+$$y_{CO_2} = \frac{\sum_k \dot{n}_{CO_2,k}^{perm}}{\sum_k \dot{n}_k^{perm}}$$
+
+#### Example Usage
+
+```python
+from difflow import make_stream
+from difflow_cc import MembraneSeparator, MultistageMembrane, MembraneParams
+
+params = MembraneParams(membrane_type="PIM_1", area=200.0,
+                        thickness=1.0, pressure_ratio=10.0)
+flue_gas = make_stream({'N2': 85.0, 'CO2': 15.0}, T=298.15, P=10e5)
+
+_, _, one = MembraneSeparator(params)(flue_gas)
+_, _, ser = MultistageMembrane(params, 2, "series")(flue_gas)
+_, _, rec = MultistageMembrane(params, 2, "permeate_recycle")(flue_gas)
+
+#                  purity   recovery
+# single stage      0.815     0.852
+# series            0.671     0.949   <- recovery bought with purity
+# permeate_recycle  0.927     0.844   <- purity bought with recovery
+```
+
+#### Design Considerations
+
+- **`permeate_recycle` does not iterate a recycle.** The second stage's
+  retentate would physically return to the first stage's inlet; the
+  implementation accounts for it in the mass balance but does not converge
+  the loop, so the reported recovery is a lower bound on a truly
+  recycled design. Build the loop with a `Flowsheet` recycle when that
+  difference matters.
+- **Compression is not included.** `pressure_ratio` is a membrane
+  parameter, not a compressor; the duty that sustains it belongs to a
+  `CompressionTrain` ([CO2 Compression](#co2-compression)), and in a
+  cascade it is paid per stage.
 
 ---
 
@@ -502,55 +602,156 @@ print(f"CO2 recovery: {info['co2_recovery']:.1%}")
 
 **Location**: `difflow_cc/units/adsorption.py`
 
-Four swing adsorption variants are available:
+Four swing adsorption variants, one per regeneration route. They share
+`AdsorptionParams` and the same Langmuir working-capacity calculation;
+what differs is *which* variable swings, and therefore which energy term
+the cycle pays for.
 
-| Class | Description | Regeneration |
-|-------|-------------|--------------|
-| `PSAUnit` | Pressure Swing Adsorption | Pressure reduction |
-| `TSAUnit` | Temperature Swing Adsorption | Heating |
-| `VSAUnit` | Vacuum Swing Adsorption | Vacuum |
-| `TVSAUnit` | Temperature-Vacuum Swing | Both |
+| Class | Swing | Regeneration | Energy reported |
+|-------|-------|--------------|-----------------|
+| [`PSAUnit`](#psaunit) | Pressure, above ambient | Blowdown to a lower pressure | `compression_power` |
+| [`VSAUnit`](#vsaunit) | Pressure, below ambient | Vacuum | `vacuum_power` |
+| [`TSAUnit`](#tsaunit) | Temperature | Heating | `heating_power` |
+| [`TVSAUnit`](#tvsaunit) | Both | Warm *and* evacuated | `thermal_power` + `vacuum_power` |
 
 #### Parameters
 
 ```python
 @dataclass
 class AdsorptionParams:
-    adsorbent: str = "Zeolite13X"
-    bed_mass: float = 1000.0       # kg adsorbent
-    n_beds: int = 2                # Number of beds
-    cycle_time: float = 600.0      # s per cycle
-    # PSA/VSA specific
-    P_ads: float = 500000.0        # Pa adsorption pressure
-    P_des: float = 10000.0         # Pa desorption pressure
-    # TSA specific
-    T_ads: float = 298.15          # K adsorption temperature
-    T_des: float = 423.15          # K desorption temperature
+    adsorbent: str                   # Name from list_adsorbents()
+    cycle_type: str = 'PSA'          # 'PSA' | 'TSA' | 'VSA' | 'TVSA'
+    bed_mass: float = 1000.0         # kg adsorbent per bed
+    n_beds: int = 2                  # Beds, for continuous operation
+    void_fraction: float = 0.4
+    # Pressure swing
+    P_adsorption: float = 101325.0   # Pa
+    P_desorption: float = 10000.0    # Pa
+    # Temperature swing
+    T_adsorption: float = 298.15     # K
+    T_desorption: float = 393.15     # K
+    # Cycle timing (s): the four steps whose sum is the cycle time
+    t_adsorption: float = 300.0
+    t_blowdown: float = 60.0
+    t_purge: float = 120.0
+    t_repressure: float = 60.0
+    # Declared targets. Carried for sizing and costing; the performance
+    # the unit reports is computed, not clipped to these.
+    CO2_purity_target: float = 0.95
+    CO2_recovery_target: float = 0.90
 ```
+
+#### The quantity all four compute
+
+Every variant reduces to a **working capacity** --- the difference
+between what the adsorbent holds at adsorption conditions and what it
+still holds at regeneration conditions:
+
+$$q(P, T) = \frac{q_{max} b(T) P}{1 + b(T) P}, \qquad
+b(T) = b_0 \exp\left(\frac{-\Delta H_{ads}}{RT}\right)$$
+
+$$\Delta q_{working} = q(P_{ads}, T_{ads}) - q(P_{des}, T_{des})$$
+
+with recovery following from a mass balance over one cycle:
+
+$$\text{recovery} = \frac{\Delta q_{working}\, m_{bed}}
+{\dot{n}_{CO_2,feed}\, t_{cycle}}$$
+
+This is an equilibrium, lumped-capacity model: no intra-particle
+diffusion, no breakthrough profile, no bed dynamics. It sizes beds and
+compares technologies; it does not replace a cycle simulation. Two
+consequences worth knowing before reading its numbers:
+
+- **Recovery is capped at 95% of the feed CO2.** A bed large enough to
+  clear more than that is reporting the cap, not a result.
+- **Purity comes from the adsorbent's selectivity and the swing**, not
+  from a breakthrough calculation: it is
+  `s' / (s' + 1)` with `s'` the selectivity scaled by the swing ratio.
+  That is a reasonable ranking of adsorbents and a poor prediction of a
+  real product stream.
+
+(psaunit)=
+#### PSAUnit
+
+Adsorption at elevated pressure, regeneration by blowdown to a lower one.
+The swing is in $P$ at constant $T$, so the working capacity is the gap
+between two points on one isotherm --- which is why PSA wants a steep
+isotherm at the feed partial pressure and an already-compressed feed.
+Its natural home is pre-combustion capture and hydrogen purification,
+where the gas arrives at pressure and the compression is paid for
+anyway. `info['compression_power']` is what it costs to hold
+`P_adsorption`.
+
+(vsaunit)=
+#### VSAUnit
+
+The same pressure swing, moved below atmospheric: adsorb near ambient,
+desorb under vacuum. Post-combustion flue gas is at ambient pressure and
+there is no compressing 100 times the flow of the CO2 in it, so the
+cheaper move is to pull vacuum on the bed instead. The working capacity
+is larger than PSA's for the same ratio --- the Langmuir isotherm is
+steepest near the origin --- and the price is `info['vacuum_power']`,
+which dominates the energy balance.
+
+(tsaunit)=
+#### TSAUnit
+
+Temperature swings instead of pressure: $b(T)$ collapses with heating, so
+the bed gives up its CO2 at constant pressure. That makes TSA the
+variant that works on *dilute* feeds --- direct air capture at 400 ppm,
+where no pressure ratio buys a useful working capacity --- and the
+variant with the worst energy penalty, because the regeneration duty
+includes the sensible heat of the whole bed:
+
+$$Q_{regen} = \left(m_{bed} C_p + m_{CO_2} \Delta H_{ads}\right)
+(T_{des} - T_{ads})$$
+
+`info['Q_sensible']` and `info['Q_desorption']` report the two halves.
+The thermal mass also sets the cycle time: beds have to be heated and
+cooled, which is slow.
+
+(tvsaunit)=
+#### TVSAUnit
+
+Both at once --- mildly warm and evacuated. The point is not to add the
+two working capacities but to reach a given one at a *lower* desorption
+temperature than TSA needs, which cuts the sensible-heat penalty and lets
+amine-functionalised sorbents regenerate below the temperature at which
+they degrade (see [Adsorbent Degradation](#adsorbent-degradation)). It is
+the usual choice for solid-sorbent DAC, and it pays both
+`info['thermal_power']` and `info['vacuum_power']`.
 
 #### Example Usage
 
 ```python
-from difflow_cc import PSAUnit, AdsorptionParams
+from difflow import make_stream
+from difflow_cc import PSAUnit, VSAUnit, AdsorptionParams
 
-params = AdsorptionParams(
-    adsorbent="Zeolite13X",
+flue_gas = make_stream({'N2': 85.0, 'CO2': 15.0}, T=298.15, P=500000.0)
+
+psa = PSAUnit(AdsorptionParams(
+    adsorbent="Zeolite_13X",     # a name from list_adsorbents()
+    cycle_type="PSA",
     bed_mass=5000.0,
     n_beds=4,
-    P_ads=500000.0,
-    P_des=100000.0,
-    cycle_time=300.0,
-)
-psa = PSAUnit(params)
-
-flue_gas = make_stream({'N2': 0.85, 'CO2': 0.15}, T=298.15, P=500000.0)
+    P_adsorption=500000.0,
+    P_desorption=100000.0,
+))
 
 product, offgas, info = psa(flue_gas)
 
-print(f"CO2 purity: {info['co2_purity']:.1%}")
-print(f"CO2 recovery: {info['co2_recovery']:.1%}")
-print(f"Productivity: {info['productivity']:.2f} mol CO2/(kg·h)")
+print(f"CO2 purity:   {float(info['purity']):.1%}")          # 99.3%
+print(f"CO2 recovery: {float(info['recovery']):.1%}")        # 60.7%
+print(f"Productivity: {float(info['productivity']):.2f} "    # 1.64
+      f"mol CO2/(kg.h)")
+print(f"Working cap.: {float(info['working_capacity']):.3f} mol/kg")
 ```
+
+The same feed at ambient pressure through a `VSAUnit`
+(`P_adsorption=101325`, `P_desorption=10000`) reaches 95% recovery with a
+4.6x larger working capacity --- the comparison the four classes exist to
+make, and the reason `cycle_type` is a parameter rather than the class
+name doing the work.
 
 ---
 

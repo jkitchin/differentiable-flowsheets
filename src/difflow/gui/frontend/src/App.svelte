@@ -12,6 +12,8 @@
   import { del, get, patch, post, send } from './lib/api.js'
   import { inferKind } from './lib/model/assistant.js'
   import { movedPositions } from './lib/model/edit.js'
+  import { pendingPositions } from './lib/model/graph.js'
+  import { keepAlive } from './lib/model/lifetime.js'
   import { flowLabels, flowTints } from './lib/model/results.js'
 
   let doc = $state(null)
@@ -21,6 +23,10 @@
   // about the flowsheet (has it any units yet?) and not a preference.
   let species = $state([])
   let speciesEditable = $state(true)
+  // Units dropped on the canvas that cannot be built yet. Beside the
+  // document rather than in it, exactly as the server sends them: a
+  // flowsheet holds units that exist, and a half-built one is not a unit.
+  let pending = $state([])
   let catalog = $state({})
   let error = $state('')
   let note = $state('')
@@ -48,6 +54,17 @@
   // either answer.
   let portLabels = $state(remember('difflow:portLabels', false))
   let dark = $state(remember('difflow:dark', false))
+  // Where the project lives, asked of the server rather than built into
+  // the bundle: the URLs are in `pyproject.toml` and should be in one
+  // place. Empty until the answer arrives, which is why the links are
+  // rendered conditionally rather than with a placeholder href.
+  let about = $state({ version: '', links: {}, heartbeat: 15 })
+  // The Quit button arms on the first click and fires on the second.
+  // A single click that ends the process is the wrong shape for a
+  // button that sits beside Save.
+  let quitArmed = $state(false)
+  let stopped = $state(false)
+  let armedTimer = null
 
   /** A remembered preference, or the default if there is nothing to read. */
   function remember(key, fallback) {
@@ -92,12 +109,16 @@
     path = payload.path
     species = payload.species ?? []
     speciesEditable = payload.editable !== false
+    pending = payload.pending ?? []
     // The selection is a snapshot of a node; after a reload it may name a
-    // unit that no longer exists, or one whose ports have changed.
+    // unit that no longer exists, or one whose ports have changed. A
+    // pending node counts as still there -- it is the one selection the
+    // user is most likely to be in the middle of answering.
     const id = selected?.id
-    selected = id
-      ? (doc?.units ?? []).some((u) => u.name === id) ? selected : null
-      : null
+    const alive = (name) =>
+      (doc?.units ?? []).some((u) => u.name === name) ||
+      pending.some((p) => p.name === name)
+    selected = id ? (alive(id) ? selected : null) : null
   }
 
   const loadContext = () =>
@@ -115,6 +136,59 @@
     loadPickers(),
     get('/api/catalog').then((c) => (catalog = c)),
   ]).catch((e) => (error = String(e)))
+
+  /**
+   * Telling the server this tab is open, so that closing it stops it.
+   *
+   * Started at the default interval straight away rather than waiting
+   * for `/api/about` to say what the interval should be: the window
+   * between the two is exactly when a page that failed to load would
+   * otherwise look, to the server, like a tab that was never opened.
+   */
+  let alive = keepAlive({ post })
+  alive.start()
+
+  // Not in the `Promise.all` above: a failure here is a header without
+  // links, which is a smaller thing than a flowsheet that would not
+  // load, and it must not be reported as the latter.
+  get('/api/about')
+    .then((a) => {
+      about = a
+      // Re-pitched to whatever the server says its grace is built
+      // around. One agreement, and the server is the half that holds it.
+      alive.stop()
+      alive = keepAlive({ post, client: alive.client, interval: a.heartbeat ?? 15 })
+      alive.start()
+    })
+    .catch(() => {})
+
+  /**
+   * Stop the editor.
+   *
+   * Two clicks, because this ends a process and it sits in a row of
+   * buttons that do not. The armed state lapses after a few seconds so
+   * a stray first click does not leave a live trigger in the header.
+   */
+  async function quit() {
+    if (!quitArmed) {
+      quitArmed = true
+      clearTimeout(armedTimer)
+      armedTimer = setTimeout(() => (quitArmed = false), 4000)
+      return
+    }
+    clearTimeout(armedTimer)
+    quitArmed = false
+    alive.stop()
+    // The server answers before it stops, so a thrown request here is
+    // a real failure rather than the expected dropped connection. It is
+    // still not worth a red banner: the page is about to say it has
+    // stopped either way, and if the server is already gone that
+    // statement is true.
+    try {
+      await post('/api/quit')
+    } catch { /* already gone, which is the outcome asked for */ }
+    stopped = true
+  }
 
   /**
    * Run one edit, then redraw from what the server says.
@@ -148,10 +222,17 @@
 
   async function add(operation, position) {
     const answer = await edit(() => post('/api/unit', { operation, position }))
-    // A required number with no default gets a placeholder rather than
-    // blocking the drop. Saying so is the whole difference between a
-    // default and a guess.
-    if (answer?.ok && answer.placeholders?.length) {
+    // A drop that cannot be built is not a failure: the node is on the
+    // canvas in red, and the hint is what it is waiting for. Select it,
+    // so the inspector is already showing the way out of it.
+    if (answer?.ok && answer.pending) {
+      note = answer.hint
+      selected = { id: answer.name, type: 'unit',
+                   data: { label: answer.name, operation } }
+    } else if (answer?.ok && answer.placeholders?.length) {
+      // A required number with no default gets a placeholder rather than
+      // blocking the drop. Saying so is the whole difference between a
+      // default and a guess.
       note = `${answer.name}: ${answer.placeholders.join(', ')} set to a placeholder`
     }
     return answer
@@ -165,8 +246,21 @@
     // `thermo` defined here un-blocks every unit that wanted one. Refetch
     // rather than reason about which: the server already knows.
     catalog = await get('/api/catalog')
-    if (answer?.ok) note = `code context: ${answer.names.length} names defined`
+    if (answer?.ok) note = built(answer, `${answer.names.length} names defined`)
     return answer
+  }
+
+  /**
+   * What an edit that can promote a red node has to say about it.
+   *
+   * The server retries every pending drop after the code context or the
+   * species change, and the interesting half of "4 names defined" is
+   * which of the red boxes went away because of it.
+   */
+  function built(answer, fallback) {
+    const n = answer.promoted?.length ?? 0
+    if (!n) return fallback
+    return `${fallback} -- ${answer.promoted.join(', ')} built`
   }
 
   /**
@@ -180,7 +274,8 @@
     const answer = await edit(() => post('/api/species', { species: names }))
     if (answer?.ok) {
       catalog = await get('/api/catalog')
-      note = names.length ? `species: ${names.join(', ')}` : 'species cleared'
+      note = built(answer,
+                   names.length ? `species: ${names.join(', ')}` : 'species cleared')
     }
     return answer
   }
@@ -203,7 +298,12 @@
 
   /** Positions only: no rebuild, no solve, and no reload to fight the drag. */
   function move(positions) {
-    const moved = movedPositions(positions, doc?.view?.nodes)
+    // Pending positions live on the pending entries, not in `view.nodes`
+    // -- a coordinate for a node the flowsheet does not have has no
+    // business being saved to the file. They are joined in here so a red
+    // box that has not moved is not reported as having moved.
+    const moved = movedPositions(positions,
+                                 { ...doc?.view?.nodes, ...pendingPositions(pending) })
     if (!Object.keys(moved).length) return
     // Adopted locally too, so the next reload does not snap the node back
     // to where the document still says it is.
@@ -221,9 +321,15 @@
       if (answer.ok) {
         showResults = true
         await loadPickers()
-        note = answer.converged === false
+        const held = answer.pending?.length
+          // What was solved is not what is on the canvas. Said here
+          // rather than left to the picture, because the numbers in the
+          // results panel look exactly the same either way.
+          ? ` (${answer.pending.join(', ')} not built, and not in it)`
+          : ''
+        note = (answer.converged === false
           ? 'solved, but the tear residual did not reach the tolerance'
-          : `solved: ${Object.keys(answer.streams).length} streams`
+          : `solved: ${Object.keys(answer.streams).length} streams`) + held
       } else {
         note = answer.error
       }
@@ -258,6 +364,14 @@
   let selectedSpec = $derived(
     selected?.data?.operation ? catalog[selected.data.operation] ?? null : null,
   )
+  // A red node: dropped, not built. It has no entry in the document, so
+  // it is looked up here and the inspector shows what it is waiting for
+  // instead of a parameter form for a unit that does not exist.
+  let selectedPending = $derived(
+    selected?.type === 'unit'
+      ? pending.find((p) => p.name === selected.id) ?? null
+      : null,
+  )
   // The stream a selected feed node carries, or `null` for an inlet
   // nothing feeds yet -- which is a node the canvas draws either way,
   // so the inspector has to tell the two apart by the document.
@@ -278,10 +392,15 @@
   )
 </script>
 
-<svelte:window onkeydown={hotkey} />
+<svelte:window
+  onkeydown={hotkey}
+  onpagehide={(e) => alive.farewell({ persisted: e.persisted })}
+  onpageshow={() => { if (!stopped) alive.ping() }}
+/>
 
 <header>
   <h1>difflow</h1>
+  {#if about.version}<span class="version">{about.version}</span>{/if}
   <span class="path">{path || 'no file'}</span>
   <Species {species} editable={speciesEditable} {busy} onapply={setSpecies} />
   <span class="summary">{summary}</span>
@@ -302,8 +421,37 @@
   <Export {path} document={doc} disabled={busy || !doc}
           onerror={(why) => (note = why)} />
   <button onclick={() => edit(load)} disabled={busy}>Reload</button>
+  <!-- Ends the process, so it is set apart from the buttons that do
+       not, and it asks twice. -->
+  <button class="quit" class:armed={quitArmed} onclick={quit}
+          title={quitArmed
+            ? 'click again to stop the editor and free the port'
+            : 'stop the editor (closing this tab does the same)'}>
+    {quitArmed ? 'Really quit?' : 'Quit'}
+  </button>
+  <span class="rule"></span>
+  {#if about.links?.documentation}
+    <a class="out" href={about.links.documentation} target="_blank"
+       rel="noopener noreferrer" title="the difflow documentation">Docs</a>
+  {/if}
+  {#if about.links?.repository}
+    <a class="out" href={about.links.repository} target="_blank"
+       rel="noopener noreferrer" title="the source on GitHub">GitHub</a>
+  {/if}
   <a class="classic" href="/classic">classic editor</a>
 </header>
+
+{#if stopped}
+  <!-- The server is gone, so nothing on the page can work any more.
+       Said plainly rather than left to fail one request at a time. -->
+  <div class="stopped" role="status">
+    <h2>The editor has stopped.</h2>
+    <p>
+      Port is free. Close this tab; run <code>difflow gui{path ? ` ${path}` : ''}</code>
+      to start it again.
+    </p>
+  </div>
+{/if}
 
 <main>
   <Palette {catalog} ondrop={(op) => add(op, null)} />
@@ -319,6 +467,7 @@
       <Canvas
         document={doc}
         positions={doc.view?.nodes ?? null}
+        {pending}
         {catalog}
         {portLabels}
         {dark}
@@ -339,12 +488,14 @@
     unit={selectedUnit}
     spec={selectedSpec}
     feed={selectedFeed}
+    pending={selectedPending}
     {species}
     defaults={doc?.defaults ?? null}
     {busy}
     onrename={rename}
     ondelete={remove}
     onedit={edit}
+    oncontext={applyContext}
   />
 </main>
 
@@ -406,10 +557,10 @@
     background: var(--panel);
   }
   h1 { font-size: 0.95rem; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
-  .path, .summary { color: var(--ink-soft); font-size: 0.8rem; }
+  .path, .summary, .version { color: var(--ink-soft); font-size: 0.8rem; }
+  .version { font-variant-numeric: tabular-nums; opacity: 0.75; }
   .note { color: var(--accent); font-size: 0.8rem; }
   .spacer { flex: 1; }
-  .classic { font-size: 0.78rem; }
   /* One-letter switches, sized so they do not read as actions. */
   .toggle {
     padding: 0.2rem 0.45rem;
@@ -418,6 +569,37 @@
     color: var(--ink-soft);
   }
   .toggle.on { color: var(--surface); background: var(--series); border-color: var(--series); }
+  /* Quit is the only button here that ends the process. Ordinary until
+     it is armed, then unmistakable. */
+  .quit.armed {
+    color: var(--surface);
+    background: var(--bad);
+    border-color: var(--bad);
+  }
+  .rule {
+    width: 1px;
+    align-self: stretch;
+    margin: 0 0.1rem;
+    background: var(--grid);
+  }
+  .out, .classic { font-size: 0.78rem; }
+  /* Covers the editor rather than sitting above it: every control
+     behind this is talking to a server that is no longer there. */
+  .stopped {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    text-align: center;
+    background: var(--surface);
+    color: var(--ink-soft);
+  }
+  .stopped h2 { margin: 0; font-size: 1rem; color: var(--ink); }
+  .stopped p { margin: 0; font-size: 0.85rem; }
   main { display: flex; flex: 1; min-height: 0; }
   .stage { flex: 1; min-width: 0; }
   .error, .empty { padding: 1.5rem; color: var(--ink-soft); }

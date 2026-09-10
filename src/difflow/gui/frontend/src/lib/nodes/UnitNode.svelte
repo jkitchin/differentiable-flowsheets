@@ -14,6 +14,14 @@
   once. On a wired flowsheet the edge already carries the stream name,
   so labelling both ends of every arc triples the text on screen to say
   what it already said; while wiring, they are exactly what you need.
+
+  A node may also be PENDING: dropped, and waiting on something that has
+  to exist before it can be built -- a `thermo`, a rate law, the species
+  order. It is drawn in red and dashed, with no ports, because it is not
+  a unit yet and cannot be wired. It is on the canvas rather than in a
+  message because a message scrolls away and the drop does not: the red
+  box is both the record that you asked for a Flash and the place to
+  find out what it is waiting for.
 -->
 <script>
   import { Handle, Position } from '@xyflow/svelte'
@@ -28,13 +36,20 @@
   const at = (i, n) => `${((i + 1) * 100) / (n + 1)}%`
 </script>
 
-<div class="unit">
+<div class="unit" class:pending={!!data.pending} title={data.pending?.hint ?? ''}>
   <div class="art">
     <UnitSymbol operation={data.operation} category={data.category} size={38} />
   </div>
   <div class="text">
     <div class="name" title={data.label}>{data.label}</div>
     <div class="op" title={data.operation ?? ''}>{data.operation ?? ''}</div>
+    {#if data.pending}
+      <!-- What it is waiting for, on the node itself. The same list the
+           palette row carries, and the inspector says what to do about
+           it -- but a canvas of red boxes with no reason on them is a
+           canvas you have to click through one at a time. -->
+      <div class="needs">needs {data.pending.needs.join(', ') || 'code'}</div>
+    {/if}
   </div>
 
   {#each data.inlets as stream, i (stream)}
@@ -73,6 +88,26 @@
     border-radius: 10px;
     background: var(--node-fill);
     box-shadow: 0 1px 2px var(--node-shadow);
+  }
+  /* Red, dashed and slightly faded: it is a unit that is not there yet.
+     Dashed rather than merely red because the difference that matters is
+     "not built", and a solid red box reads as a unit that failed. */
+  .unit.pending {
+    border-style: dashed;
+    border-color: var(--bad);
+    background: var(--node-fill);
+    box-shadow: none;
+  }
+  .unit.pending .art { color: var(--bad); opacity: 0.75; }
+  .unit.pending .name { color: var(--bad); }
+  .needs {
+    font-size: 0.62rem;
+    line-height: 1.2;
+    margin-top: 0.15rem;
+    color: var(--bad);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   /* The symbol carries the accent; the text stays in the reading colour,
      because a node whose label is also coloured reads as a warning. */

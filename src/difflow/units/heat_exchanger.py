@@ -21,6 +21,7 @@ Numerical Considerations:
 - Cross-flow with Cr → 0: Smooth blending to limiting effectiveness
 """
 
+import warnings
 from dataclasses import dataclass
 from functools import partial
 from typing import Callable
@@ -409,6 +410,176 @@ def heat_capacity_rate(
 
 
 # =============================================================================
+# Heat capacity / enthalpy resolution
+# =============================================================================
+
+
+#: Fallback molar heat capacity (J/mol/K) for the constant-Cp units when
+#: neither a ``Cp`` nor a ``thermo`` is supplied. Roughly liquid water, so it
+#: is wrong for almost everything else -- hence :class:`DefaultCpWarning`.
+DEFAULT_CP = 75.0
+
+
+class DefaultCpWarning(UserWarning):
+    """A constant-Cp heat exchanger fell back to :data:`DEFAULT_CP`.
+
+    The fallback is roughly liquid water (75 J/mol/K) and carries no latent
+    heat, so a duty computed from it can be wrong by a factor of several for a
+    hydrocarbon stream, and by more if the stream changes phase. Pass ``Cp``
+    explicitly, or give the unit a ``thermo`` (:class:`Heater`,
+    :class:`Cooler`) so the duty comes from a real enthalpy balance.
+
+    Filter it as an error to make the fallback fatal::
+
+        warnings.simplefilter("error", DefaultCpWarning)
+    """
+
+
+def resolve_Cp(
+    Cp: float | None,
+    where: str,
+    has_thermo: bool = False,
+    stacklevel: int = 3,
+) -> float:
+    """Return ``Cp``, warning when the default is substituted for it.
+
+    Args:
+        Cp: The user's heat capacity (J/mol/K), or None.
+        where: What is falling back, e.g. ``"Heater"`` or ``"CounterCurrentHX
+            hot side"``; goes into the warning message.
+        has_thermo: Whether the unit could have used a thermo instead. Only
+            changes the advice in the message.
+        stacklevel: Frames between here and the user's call, so the warning
+            points at their code rather than at this module. 3 is right for a
+            unit that resolves its Cp directly in ``__call__``.
+
+    Returns:
+        ``Cp`` if given, else :data:`DEFAULT_CP`.
+    """
+    if Cp is not None:
+        return Cp
+
+    advice = (
+        "pass Cp=... explicitly, or construct the unit with a thermo "
+        "(e.g. Heater(params, thermo=CubicThermo(...))) so the duty comes "
+        "from an enthalpy balance"
+        if has_thermo
+        else "pass Cp=... explicitly"
+    )
+    warnings.warn(
+        f"{where}: no Cp given, falling back to {DEFAULT_CP} J/mol/K "
+        f"(roughly liquid water). This carries no latent heat and is wrong "
+        f"for most streams -- {advice}.",
+        DefaultCpWarning,
+        stacklevel=stacklevel,
+    )
+    return DEFAULT_CP
+
+
+def stream_enthalpy_of(thermo, flows, T, P, phase: str | None = None) -> Array:
+    """Total stream enthalpy (W) from a thermo object.
+
+    With ``phase=None`` this prefers ``stream_enthalpy_flash`` when the thermo
+    provides it (:class:`~difflow.thermo.CubicThermo` does), so the enthalpy is
+    two-phase aware and carries latent heat through a partial vaporization.
+    Naming a phase forces the single-phase ``stream_enthalpy`` path instead,
+    which is what an :class:`~difflow.thermo.IdealThermo` offers.
+
+    Args:
+        thermo: Thermodynamic property calculator.
+        flows: Molar flows by species (mol/s).
+        T: Temperature (K).
+        P: Pressure (Pa).
+        phase: ``'liquid'``/``'vapor'`` to force one phase, or None.
+
+    Returns:
+        Total enthalpy flow (J/s = W).
+    """
+    if phase is None:
+        flash = getattr(thermo, "stream_enthalpy_flash", None)
+        if flash is not None:
+            return flash(flows, T, P)
+        return thermo.stream_enthalpy(flows, T, P=P)
+    return thermo.stream_enthalpy(flows, T, phase=phase, P=P)
+
+
+def _enthalpy_scale(thermo, flows, T) -> Array:
+    """Heat capacity rate (W/K) used only to scale an enthalpy residual.
+
+    Turns a residual in W into one in K so it sits alongside the temperature
+    and pressure residuals the EO solver already has. It is a conditioning
+    choice: it multiplies a residual that is zero at the solution, so it moves
+    no root.
+    """
+    F_total = sum(flows.values())
+    Cp_mix = getattr(thermo, "Cp_mix", None)
+    if Cp_mix is not None:
+        z = {s: F / jnp.maximum(F_total, 1e-30) for s, F in flows.items()}
+        Cp = Cp_mix(z, T)
+    else:
+        Cp = DEFAULT_CP
+    return jnp.maximum(F_total * Cp, EPS_DIVISION)
+
+
+@partial(jax.jit, static_argnames=("thermo", "phase"))
+def _invert_enthalpy_T(thermo, flows, H_target, P, T_guess, phase):
+    """Find T with ``stream_enthalpy_of(...) == H_target``.
+
+    Enthalpy is monotone in T, so a Newton solve on it is well posed; going
+    through optimistix keeps the result differentiable by the implicit
+    function theorem rather than through the iteration.
+    """
+    def resid(T, _):
+        return stream_enthalpy_of(thermo, flows, T, P, phase) - H_target
+
+    solver = optx.Newton(rtol=1e-9, atol=1e-4)
+    sol = optx.root_find(
+        resid, solver, T_guess, args=None, max_steps=50, throw=False
+    )
+    return sol.value
+
+
+@partial(jax.jit, static_argnames=("thermo", "phase", "heating", "damping",
+                                   "max_iter"))
+def _utility_duty_core(thermo, flows, T_in, P, UA, T_util, phase, heating,
+                       damping, max_iter):
+    """Rating mode on a real enthalpy balance: ``Q = UA * LMTD``.
+
+    The constant-Cp path uses effectiveness-NTU, which needs a single heat
+    capacity rate for the process side. With a thermo there is no such
+    constant, so the duty is instead the fixed point of ``Q = UA * LMTD`` with
+    the outlet temperature obtained by inverting the enthalpy at ``H_in +- Q``
+    -- the same coupling :class:`EnthalpyCounterCurrentHX` solves, with the
+    utility side at a constant temperature.
+    """
+    H_in = stream_enthalpy_of(thermo, flows, T_in, P, phase)
+    sign = 1.0 if heating else -1.0
+
+    def T_out_from_Q(Q):
+        return _invert_enthalpy_T(thermo, flows, H_in + sign * Q, P, T_in, phase)
+
+    def terminal_dTs(T_out):
+        if heating:
+            return T_util - T_in, T_util - T_out
+        return T_in - T_util, T_out - T_util
+
+    def q_iteration(Q, _):
+        dT1, dT2 = terminal_dTs(T_out_from_Q(Q))
+        Q_new = UA * log_mean_temperature_difference(dT1, dT2)
+        return (1.0 - damping) * Q + damping * Q_new
+
+    driving = jnp.maximum(sign * (T_util - T_in), MIN_DELTA_T)
+    Q0 = 0.5 * UA * driving
+
+    solver = optx.FixedPointIteration(rtol=1e-7, atol=1e-3)
+    sol = optx.fixed_point(
+        q_iteration, solver, Q0, args=None, max_steps=max_iter, throw=False
+    )
+    Q = sol.value
+    return Q, T_out_from_Q(Q)
+
+
+# =============================================================================
 # Single-Stream Heat Exchangers (with utility)
 # =============================================================================
 
@@ -422,47 +593,127 @@ class HeaterParams(ParamsMixin):
         T_out: Outlet temperature (K). Alternative to duty.
         UA: Overall heat transfer coefficient × area (W/K). For rating.
         T_utility: Utility temperature (K). For LMTD calculation.
-        Cp: Heat capacity (J/mol·K). If None, uses thermo.
+        Cp: Constant heat capacity (J/mol·K). Ignored when the unit is built
+            with a ``thermo``; when there is neither, the unit falls back to
+            DEFAULT_CP and warns (DefaultCpWarning).
+        phase: Force one phase ('liquid'/'vapor') for the thermo enthalpy.
+            None (default) uses the thermo's two-phase flash enthalpy where it
+            has one, so latent heat is carried through a partial vaporization.
     """
     duty: Array | float | None = None
     T_out: Array | float | None = None
     UA: Array | float | None = None
     T_utility: Array | float | None = None
     Cp: float | None = None
+    phase: str | None = None
 
 
-class Heater:
-    """Single-stream heater with utility (steam, hot oil, etc).
+class _UtilityExchanger:
+    """Shared implementation of :class:`Heater` and :class:`Cooler`.
 
-    Can operate in three modes:
-    1. Specified duty: Q given, calculate T_out
-    2. Specified T_out: Calculate required Q
-    3. Rating mode: Given UA and T_utility, calculate Q and T_out
-
-    All modes are fully differentiable.
+    The two differ only in the sign convention for the duty (positive = heat
+    in for the heater, positive = heat removed for the cooler) and in which
+    side of the utility temperature the stream sits on, so both are set by the
+    ``_heating`` flag rather than written out twice.
     """
 
-    symbol = "Heater"
-    equations = [
-        r"Q = \dot{m}\, C_p\,(T_\mathrm{out} - T_\mathrm{in})",
-        r"Q = UA\,(T_\mathrm{utility} - \bar{T})\qquad \text{(rating mode)}",
-    ]
-    assumptions = [
-        "Single-phase sensible heating; no phase change.",
-        "Constant Cp over the process-side temperature range.",
-        "Utility temperature is constant along the exchanger.",
-    ]
-    references = ["Perry's Chemical Engineers' Handbook, 9e, Sec. 11."]
-    parameter_symbols = {"duty": "Q", "T_out": "T_\\mathrm{out}", "UA": "UA", "T_utility": "T_\\mathrm{util}"}
-    parameter_units = {"duty": "W", "T_out": "K", "UA": "W/K", "T_utility": "K", "Cp": "J/mol/K"}
+    #: True for a heater (duty adds heat), False for a cooler.
+    _heating = True
 
-    def __init__(self, params: HeaterParams):
-        """Initialize heater.
+    def __init__(self, params: "HeaterParams | CoolerParams", thermo=None):
+        """Initialize the unit.
 
         Args:
-            params: Heater parameters
+            params: Heater/Cooler parameters.
+            thermo: Optional thermodynamic property calculator. When given,
+                duties and outlet temperatures come from its stream enthalpy
+                rather than from a constant Cp, so the result carries the real
+                temperature dependence of the heat capacity and any latent
+                heat. Anything with a ``stream_enthalpy(flows, T, phase, P)``
+                works; a thermo that also has ``stream_enthalpy_flash``
+                (:class:`~difflow.thermo.CubicThermo`) is used two-phase aware
+                unless ``params.phase`` names a phase.
         """
         self.params = params
+        self.thermo = thermo
+
+    # -- constant-Cp path -------------------------------------------------
+
+    def _C(self, flows, stacklevel: int) -> Array:
+        """Heat capacity rate (W/K) for the constant-Cp path.
+
+        ``stacklevel`` counts the frames back to the caller's code, so a
+        DefaultCpWarning is reported against their call and not against this
+        module; it differs between the ``__call__`` and ``eo_residuals``
+        paths because they sit at different depths.
+        """
+        F_total = sum(flows.values())
+        Cp = resolve_Cp(
+            self.params.Cp, type(self).__name__,
+            has_thermo=True, stacklevel=stacklevel,
+        )
+        return F_total * Cp
+
+    # -- thermo path ------------------------------------------------------
+
+    def _H(self, flows, T, P) -> Array:
+        """Total stream enthalpy (W) from the unit's thermo."""
+        return stream_enthalpy_of(self.thermo, flows, T, P, self.params.phase)
+
+    def _solve_thermo(self, flows, T_in, P, Q, T_out_spec):
+        """(Q, T_out) from a real enthalpy balance."""
+        p = self.params
+        sign = 1.0 if self._heating else -1.0
+
+        if Q is not None:
+            Q = jnp.asarray(Q)
+            H_target = self._H(flows, T_in, P) + sign * Q
+            T_out_calc = _invert_enthalpy_T(
+                self.thermo, flows, H_target, P, T_in, p.phase
+            )
+            return Q, T_out_calc
+
+        if T_out_spec is not None:
+            T_out_calc = jnp.asarray(T_out_spec)
+            Q = sign * (self._H(flows, T_out_calc, P) - self._H(flows, T_in, P))
+            return Q, T_out_calc
+
+        if p.UA is not None and p.T_utility is not None:
+            return _utility_duty_core(
+                self.thermo, flows, T_in, P,
+                jnp.asarray(p.UA), jnp.asarray(p.T_utility),
+                p.phase, self._heating, 0.5, 80,
+            )
+
+        raise ValueError("Must specify duty, T_out, or (UA and T_utility)")
+
+    def _solve_constant_Cp(self, flows, T_in, Q, T_out_spec):
+        """(Q, T_out) from a constant heat capacity."""
+        p = self.params
+        sign = 1.0 if self._heating else -1.0
+        C = self._C(flows, stacklevel=5)
+
+        if Q is not None:
+            Q = jnp.asarray(Q)
+            return Q, T_in + sign * Q / C
+
+        if T_out_spec is not None:
+            T_out_calc = jnp.asarray(T_out_spec)
+            return sign * C * (T_out_calc - T_in), T_out_calc
+
+        if p.UA is not None and p.T_utility is not None:
+            UA = jnp.asarray(p.UA)
+            T_util = jnp.asarray(p.T_utility)
+
+            # Counter-current with a constant utility temperature: the utility
+            # has infinite capacity, so effectiveness-NTU collapses to
+            # 1 - exp(-NTU) and needs no iteration.
+            NTU = UA / C
+            effectiveness = 1.0 - jnp.exp(-NTU)
+            Q = effectiveness * C * sign * (T_util - T_in)
+            return Q, T_in + sign * Q / C
+
+        raise ValueError("Must specify duty, T_out, or (UA and T_utility)")
 
     def __call__(
         self,
@@ -470,7 +721,7 @@ class Heater:
         duty: Array | float | None = None,
         T_out: Array | float | None = None,
     ) -> tuple[Stream, dict[str, Array]]:
-        """Perform heater calculation.
+        """Perform the heater/cooler calculation.
 
         Args:
             inlet: Inlet stream
@@ -484,63 +735,25 @@ class Heater:
                 - 'T_in': Inlet temperature (K)
                 - 'T_out': Outlet temperature (K)
                 - 'LMTD': Log mean temperature difference (K), if applicable
+                - 'UA_required': Q / LMTD (W/K), if applicable
         """
         p = self.params
 
-        # Get inlet properties
-        T_in = inlet["T"]
+        T_in = jnp.asarray(inlet["T"])
+        P = inlet["P"]
         flows = get_flows(inlet)
-        F_total = sum(flows.values())
 
-        # Get Cp
-        Cp = p.Cp if p.Cp is not None else 75.0  # Default liquid Cp
-
-        # Heat capacity rate
-        C = F_total * Cp
-
-        # Determine operating mode
         Q = duty if duty is not None else p.duty
         T_out_spec = T_out if T_out is not None else p.T_out
 
-        if Q is not None:
-            # Mode 1: Duty specified
-            Q = jnp.asarray(Q)
-            T_out_calc = T_in + Q / C
-
-        elif T_out_spec is not None:
-            # Mode 2: Outlet temperature specified
-            T_out_calc = jnp.asarray(T_out_spec)
-            Q = C * (T_out_calc - T_in)
-
-        elif p.UA is not None and p.T_utility is not None:
-            # Mode 3: Rating with UA and utility temperature
-            UA = jnp.asarray(p.UA)
-            T_util = jnp.asarray(p.T_utility)
-
-            # For heater: utility is hotter than process
-            # Counter-current approximation:
-            # Q = UA * LMTD where LMTD = (T_util - T_in) - (T_util - T_out) / ln(...)
-            # This requires iteration, use effectiveness-NTU instead
-
-            # NTU = UA / C (utility has infinite capacity)
-            NTU = UA / C
-            effectiveness = 1.0 - jnp.exp(-NTU)
-
-            # Q_max = C * (T_utility - T_in)
-            Q_max = C * (T_util - T_in)
-            Q = effectiveness * Q_max
-            T_out_calc = T_in + Q / C
-
+        if self.thermo is not None:
+            Q, T_out_calc = self._solve_thermo(flows, T_in, P, Q, T_out_spec)
         else:
-            raise ValueError(
-                "Must specify duty, T_out, or (UA and T_utility)"
-            )
+            Q, T_out_calc = self._solve_constant_Cp(flows, T_in, Q, T_out_spec)
 
-        # Build outlet stream
         outlet = dict(inlet)
         outlet["T"] = T_out_calc
 
-        # Compute LMTD if utility temperature is known
         info = {
             "Q": Q,
             "T_in": T_in,
@@ -549,8 +762,10 @@ class Heater:
 
         if p.T_utility is not None:
             T_util = jnp.asarray(p.T_utility)
-            dT1 = T_util - T_in
-            dT2 = T_util - T_out_calc
+            if self._heating:
+                dT1, dT2 = T_util - T_in, T_util - T_out_calc
+            else:
+                dT1, dT2 = T_in - T_util, T_out_calc - T_util
             info["LMTD"] = log_mean_temperature_difference(dT1, dT2)
             info["UA_required"] = Q / info["LMTD"]
 
@@ -566,8 +781,13 @@ class Heater:
 
         Residuals:
             F_out_i - F_in_i = 0        (n_species)
-            T_out - T_expected = 0       (1)
+            energy balance = 0           (1)
             P_out - P_in = 0             (1)
+
+        The energy row is ``T_out - T_expected`` on the constant-Cp path. With
+        a thermo it is the enthalpy balance itself, scaled to K, so the EO
+        solver sees one algebraic equation rather than a nested enthalpy
+        inversion.
 
         Args:
             inlets: [inlet_stream]
@@ -580,6 +800,7 @@ class Heater:
         p = self.params
         inlet = inlets[0]
         outlet = outlets[0]
+        sign = 1.0 if self._heating else -1.0
 
         inlet_flows = get_flows(inlet)
         outlet_flows = get_flows(outlet)
@@ -590,32 +811,96 @@ class Heater:
         for s in species:
             mat_resid.append(jnp.atleast_1d(outlet_flows[s] - inlet_flows[s]))
 
-        # Temperature: compute expected outlet T
         duty = kwargs.get('duty', p.duty)
         T_out_spec = kwargs.get('T_out', p.T_out)
 
-        Cp = p.Cp if p.Cp is not None else 75.0
-        F_total = sum(inlet_flows.values())
-        C = F_total * Cp
+        T_in = inlet["T"]
+        T_out_var = outlet["T"]
 
         if T_out_spec is not None:
-            T_expected = jnp.asarray(T_out_spec)
-        elif duty is not None:
-            T_expected = inlet["T"] + jnp.asarray(duty) / C
-        elif p.UA is not None and p.T_utility is not None:
-            UA = jnp.asarray(p.UA)
-            T_util = jnp.asarray(p.T_utility)
-            NTU = UA / C
-            effectiveness = 1.0 - jnp.exp(-NTU)
-            Q = effectiveness * C * (T_util - inlet["T"])
-            T_expected = inlet["T"] + Q / C
-        else:
-            T_expected = inlet["T"]
+            energy_resid = T_out_var - jnp.asarray(T_out_spec)
 
-        T_resid = jnp.atleast_1d(outlet["T"] - T_expected)
+        elif self.thermo is not None:
+            P = inlet["P"]
+            H_in = self._H(inlet_flows, T_in, P)
+            H_out = self._H(outlet_flows, T_out_var, P)
+            scale = _enthalpy_scale(self.thermo, inlet_flows, T_in)
+
+            if duty is not None:
+                energy_resid = (sign * (H_out - H_in) - jnp.asarray(duty)) / scale
+            elif p.UA is not None and p.T_utility is not None:
+                UA = jnp.asarray(p.UA)
+                T_util = jnp.asarray(p.T_utility)
+                if self._heating:
+                    dT1, dT2 = T_util - T_in, T_util - T_out_var
+                else:
+                    dT1, dT2 = T_in - T_util, T_out_var - T_util
+                LMTD = log_mean_temperature_difference(dT1, dT2)
+                energy_resid = (sign * (H_out - H_in) - UA * LMTD) / scale
+            else:
+                energy_resid = T_out_var - T_in
+
+        else:
+            C = self._C(inlet_flows, stacklevel=4)
+            if duty is not None:
+                T_expected = T_in + sign * jnp.asarray(duty) / C
+            elif p.UA is not None and p.T_utility is not None:
+                UA = jnp.asarray(p.UA)
+                T_util = jnp.asarray(p.T_utility)
+                NTU = UA / C
+                effectiveness = 1.0 - jnp.exp(-NTU)
+                T_expected = T_in + effectiveness * (T_util - T_in)
+            else:
+                T_expected = T_in
+            energy_resid = T_out_var - T_expected
+
+        T_resid = jnp.atleast_1d(energy_resid)
         P_resid = jnp.atleast_1d(outlet["P"] - inlet["P"])
 
         return jnp.concatenate(mat_resid + [T_resid, P_resid])
+
+
+class Heater(_UtilityExchanger):
+    """Single-stream heater with utility (steam, hot oil, etc).
+
+    Can operate in three modes:
+    1. Specified duty: Q given, calculate T_out
+    2. Specified T_out: Calculate required Q
+    3. Rating mode: Given UA and T_utility, calculate Q and T_out
+
+    Two energy models are available:
+
+    - Constant Cp (``HeaterParams(Cp=...)``): ``Q = F Cp (T_out - T_in)``.
+      Sensible heat only; no phase change.
+    - Thermo (``Heater(params, thermo=...)``): ``Q = H_out - H_in`` from the
+      thermo's stream enthalpy, which carries the real temperature dependence
+      of the heat capacity and, for a thermo with a flash enthalpy, latent
+      heat. Use this whenever the stream may vaporize or condense: a constant
+      Cp cannot represent latent heat and can be low by a factor of several.
+
+    With neither, the unit falls back to ``DEFAULT_CP`` and warns
+    (:class:`DefaultCpWarning`).
+
+    All modes are fully differentiable.
+    """
+
+    _heating = True
+
+    symbol = "Heater"
+    equations = [
+        r"Q = \dot{m}\, C_p\,(T_\mathrm{out} - T_\mathrm{in})\qquad \text{(constant-}C_p\text{)}",
+        r"Q = H(T_\mathrm{out}, P) - H(T_\mathrm{in}, P)\qquad \text{(with a thermo)}",
+        r"Q = UA\,\mathrm{LMTD}\qquad \text{(rating mode)}",
+    ]
+    assumptions = [
+        "Isobaric; the outlet is the inlet stream at a new temperature.",
+        "Utility temperature is constant along the exchanger.",
+        "Constant-Cp path: single-phase sensible heating, constant Cp over the range.",
+        "Thermo path: enthalpies (incl. any vapor/liquid split) from the supplied thermo.",
+    ]
+    references = ["Perry's Chemical Engineers' Handbook, 9e, Sec. 11."]
+    parameter_symbols = {"duty": "Q", "T_out": "T_\\mathrm{out}", "UA": "UA", "T_utility": "T_\\mathrm{util}"}
+    parameter_units = {"duty": "W", "T_out": "K", "UA": "W/K", "T_utility": "K", "Cp": "J/mol/K", "phase": "-"}
 
 
 @dataclass(repr=False)
@@ -627,175 +912,47 @@ class CoolerParams(ParamsMixin):
         T_out: Outlet temperature (K). Alternative to duty.
         UA: Overall heat transfer coefficient × area (W/K). For rating.
         T_utility: Utility temperature (K). For LMTD calculation.
-        Cp: Heat capacity (J/mol·K). If None, uses default.
+        Cp: Constant heat capacity (J/mol·K). Ignored when the unit is built
+            with a ``thermo``; when there is neither, the unit falls back to
+            DEFAULT_CP and warns (DefaultCpWarning).
+        phase: Force one phase ('liquid'/'vapor') for the thermo enthalpy.
+            None (default) uses the thermo's two-phase flash enthalpy where it
+            has one, so latent heat is carried through a partial condensation.
     """
     duty: Array | float | None = None
     T_out: Array | float | None = None
     UA: Array | float | None = None
     T_utility: Array | float | None = None
     Cp: float | None = None
+    phase: str | None = None
 
 
-class Cooler:
+class Cooler(_UtilityExchanger):
     """Single-stream cooler with utility (cooling water, refrigerant, etc).
 
-    Same operating modes as Heater but for cooling.
+    Same operating modes and the same two energy models as :class:`Heater`,
+    with the duty sign reversed: ``Q > 0`` means heat removed. As with the
+    heater, a constant Cp cannot carry the latent heat of a condensing stream
+    -- pass a ``thermo`` when the stream changes phase.
     """
+
+    _heating = False
 
     symbol = "Cooler"
     equations = [
-        r"Q = \dot{m}\, C_p\,(T_\mathrm{in} - T_\mathrm{out})",
-        r"Q = UA\,(\bar{T} - T_\mathrm{utility})\qquad \text{(rating mode)}",
+        r"Q = \dot{m}\, C_p\,(T_\mathrm{in} - T_\mathrm{out})\qquad \text{(constant-}C_p\text{)}",
+        r"Q = H(T_\mathrm{in}, P) - H(T_\mathrm{out}, P)\qquad \text{(with a thermo)}",
+        r"Q = UA\,\mathrm{LMTD}\qquad \text{(rating mode)}",
     ]
     assumptions = [
-        "Single-phase sensible cooling; no phase change.",
-        "Constant Cp over the process-side temperature range.",
+        "Isobaric; the outlet is the inlet stream at a new temperature.",
+        "Utility temperature is constant along the exchanger.",
+        "Constant-Cp path: single-phase sensible cooling, constant Cp over the range.",
+        "Thermo path: enthalpies (incl. any vapor/liquid split) from the supplied thermo.",
     ]
     references = ["Perry's Chemical Engineers' Handbook, 9e, Sec. 11."]
     parameter_symbols = {"duty": "Q", "T_out": "T_\\mathrm{out}", "UA": "UA", "T_utility": "T_\\mathrm{util}"}
-    parameter_units = {"duty": "W", "T_out": "K", "UA": "W/K", "T_utility": "K", "Cp": "J/mol/K"}
-
-    def __init__(self, params: CoolerParams):
-        """Initialize cooler.
-
-        Args:
-            params: Cooler parameters
-        """
-        self.params = params
-
-    def __call__(
-        self,
-        inlet: Stream,
-        duty: Array | float | None = None,
-        T_out: Array | float | None = None,
-    ) -> tuple[Stream, dict[str, Array]]:
-        """Perform cooler calculation.
-
-        Args:
-            inlet: Inlet stream
-            duty: Heat duty override (W), positive = heat removed
-            T_out: Outlet temperature override (K)
-
-        Returns:
-            outlet: Outlet stream
-            info: Dictionary with Q, T_in, T_out, LMTD (if applicable)
-        """
-        p = self.params
-
-        T_in = inlet["T"]
-        flows = get_flows(inlet)
-        F_total = sum(flows.values())
-
-        Cp = p.Cp if p.Cp is not None else 75.0
-        C = F_total * Cp
-
-        Q = duty if duty is not None else p.duty
-        T_out_spec = T_out if T_out is not None else p.T_out
-
-        if Q is not None:
-            # Duty specified (positive = heat removed)
-            Q = jnp.asarray(Q)
-            T_out_calc = T_in - Q / C
-
-        elif T_out_spec is not None:
-            T_out_calc = jnp.asarray(T_out_spec)
-            Q = C * (T_in - T_out_calc)
-
-        elif p.UA is not None and p.T_utility is not None:
-            UA = jnp.asarray(p.UA)
-            T_util = jnp.asarray(p.T_utility)
-
-            NTU = UA / C
-            effectiveness = 1.0 - jnp.exp(-NTU)
-
-            Q_max = C * (T_in - T_util)
-            Q = effectiveness * Q_max
-            T_out_calc = T_in - Q / C
-
-        else:
-            raise ValueError(
-                "Must specify duty, T_out, or (UA and T_utility)"
-            )
-
-        outlet = dict(inlet)
-        outlet["T"] = T_out_calc
-
-        info = {
-            "Q": Q,
-            "T_in": T_in,
-            "T_out": T_out_calc,
-        }
-
-        if p.T_utility is not None:
-            T_util = jnp.asarray(p.T_utility)
-            dT1 = T_in - T_util
-            dT2 = T_out_calc - T_util
-            info["LMTD"] = log_mean_temperature_difference(dT1, dT2)
-            info["UA_required"] = Q / info["LMTD"]
-
-        return outlet, info
-
-    def eo_residuals(
-        self,
-        inlets: list[Stream],
-        outlets: list[Stream],
-        **kwargs,
-    ) -> Array:
-        """Compute residuals for the EO solver.
-
-        Residuals:
-            F_out_i - F_in_i = 0        (n_species)
-            T_out - T_expected = 0       (1)
-            P_out - P_in = 0             (1)
-
-        Args:
-            inlets: [inlet_stream]
-            outlets: [outlet_stream]
-            **kwargs: Optional duty, T_out overrides
-
-        Returns:
-            Flat residual array, length n_species + 2
-        """
-        p = self.params
-        inlet = inlets[0]
-        outlet = outlets[0]
-
-        inlet_flows = get_flows(inlet)
-        outlet_flows = get_flows(outlet)
-        species = get_species(inlet)
-
-        # Material balance: flows pass through unchanged
-        mat_resid = []
-        for s in species:
-            mat_resid.append(jnp.atleast_1d(outlet_flows[s] - inlet_flows[s]))
-
-        # Temperature: compute expected outlet T
-        duty = kwargs.get('duty', p.duty)
-        T_out_spec = kwargs.get('T_out', p.T_out)
-
-        Cp = p.Cp if p.Cp is not None else 75.0
-        F_total = sum(inlet_flows.values())
-        C = F_total * Cp
-
-        if T_out_spec is not None:
-            T_expected = jnp.asarray(T_out_spec)
-        elif duty is not None:
-            # Cooler: duty is positive = heat removed
-            T_expected = inlet["T"] - jnp.asarray(duty) / C
-        elif p.UA is not None and p.T_utility is not None:
-            UA = jnp.asarray(p.UA)
-            T_util = jnp.asarray(p.T_utility)
-            NTU = UA / C
-            effectiveness = 1.0 - jnp.exp(-NTU)
-            Q = effectiveness * C * (inlet["T"] - T_util)
-            T_expected = inlet["T"] - Q / C
-        else:
-            T_expected = inlet["T"]
-
-        T_resid = jnp.atleast_1d(outlet["T"] - T_expected)
-        P_resid = jnp.atleast_1d(outlet["P"] - inlet["P"])
-
-        return jnp.concatenate(mat_resid + [T_resid, P_resid])
+    parameter_units = {"duty": "W", "T_out": "K", "UA": "W/K", "T_utility": "K", "Cp": "J/mol/K", "phase": "-"}
 
 
 # =============================================================================
@@ -809,8 +966,11 @@ class HeatExchangerParams(ParamsMixin):
 
     Attributes:
         UA: Overall heat transfer coefficient × area (W/K)
-        Cp_hot: Hot side heat capacity (J/mol·K). If None, uses default.
-        Cp_cold: Cold side heat capacity (J/mol·K). If None, uses default.
+        Cp_hot: Hot side heat capacity (J/mol·K). If None, falls back to
+            DEFAULT_CP and warns (DefaultCpWarning); for a stream that changes
+            phase use EnthalpyCounterCurrentHX instead, which closes a real
+            enthalpy balance.
+        Cp_cold: Cold side heat capacity (J/mol·K). Same fallback as Cp_hot.
         min_approach: Minimum temperature approach (K). For design mode.
     """
     UA: Array | float | None = None
@@ -904,8 +1064,9 @@ class CounterCurrentHX:
         F_cold = sum(cold_flows.values())
 
         # Heat capacities
-        Cp_hot = p.Cp_hot if p.Cp_hot is not None else 75.0
-        Cp_cold = p.Cp_cold if p.Cp_cold is not None else 75.0
+        name = type(self).__name__
+        Cp_hot = resolve_Cp(p.Cp_hot, f"{name} hot side")
+        Cp_cold = resolve_Cp(p.Cp_cold, f"{name} cold side")
 
         # Heat capacity rates (ensure positive with small regularization)
         C_hot = jnp.maximum(F_hot * Cp_hot, 1e-10)
@@ -1194,8 +1355,9 @@ class CoCurrentHX:
         F_hot = sum(hot_flows.values())
         F_cold = sum(cold_flows.values())
 
-        Cp_hot = p.Cp_hot if p.Cp_hot is not None else 75.0
-        Cp_cold = p.Cp_cold if p.Cp_cold is not None else 75.0
+        name = type(self).__name__
+        Cp_hot = resolve_Cp(p.Cp_hot, f"{name} hot side")
+        Cp_cold = resolve_Cp(p.Cp_cold, f"{name} cold side")
 
         # Heat capacity rates (ensure positive)
         C_hot = jnp.maximum(F_hot * Cp_hot, 1e-10)
@@ -1355,8 +1517,9 @@ class CrossFlowHX:
         F_cold = sum(cold_flows.values())
 
         # Heat capacities
-        Cp_hot = p.Cp_hot if p.Cp_hot is not None else 75.0
-        Cp_cold = p.Cp_cold if p.Cp_cold is not None else 75.0
+        name = type(self).__name__
+        Cp_hot = resolve_Cp(p.Cp_hot, f"{name} hot side")
+        Cp_cold = resolve_Cp(p.Cp_cold, f"{name} cold side")
 
         # Heat capacity rates (ensure positive)
         C_hot = jnp.maximum(F_hot * Cp_hot, 1e-10)
@@ -1599,8 +1762,9 @@ class ShellAndTubeHX:
         F_hot = sum(hot_flows.values())
         F_cold = sum(cold_flows.values())
 
-        Cp_hot = p.Cp_hot if p.Cp_hot is not None else 75.0
-        Cp_cold = p.Cp_cold if p.Cp_cold is not None else 75.0
+        name = type(self).__name__
+        Cp_hot = resolve_Cp(p.Cp_hot, f"{name} hot side")
+        Cp_cold = resolve_Cp(p.Cp_cold, f"{name} cold side")
 
         C_hot = jnp.maximum(F_hot * Cp_hot, 1e-10)
         C_cold = jnp.maximum(F_cold * Cp_cold, 1e-10)

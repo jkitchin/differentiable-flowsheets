@@ -167,10 +167,15 @@ export function arcs(doc) {
  *   this front end has never heard of -- a plugin's own units -- so a node
  *   drawn without it falls back to a plain block.
  * @param {boolean} [options.portLabels]  name each port beside its handle.
+ * @param {Array} [options.pending]  units dropped on the canvas that cannot
+ *   be built yet, as the server reports them: `{name, operation, needs,
+ *   hint, position}`. They are NOT in the document -- a flowsheet holds
+ *   units that exist -- and they are drawn anyway, because a drop that
+ *   vanished into a toast is a drop the user has to remember making.
  */
 export function toGraph(doc, positions, options = {}) {
   if (!doc) return { nodes: [], edges: [] }
-  const { catalog = {}, portLabels = false } = options
+  const { catalog = {}, portLabels = false, pending = [] } = options
   const place = positions || (doc.view && doc.view.nodes) || {}
   const nodes = []
   let spare = 0
@@ -204,6 +209,33 @@ export function toGraph(doc, positions, options = {}) {
       },
     })
   }
+  // Between the units and the products, so a red node draws over a
+  // stream node rather than under one when they overlap: it is the thing
+  // that has to be noticed.
+  for (const unit of pending) {
+    if (!unit || !unit.name) continue
+    const p = unit.position
+    nodes.push({
+      id: unit.name,
+      type: 'unit',
+      position:
+        p && Number.isFinite(p.x) && Number.isFinite(p.y)
+          ? { x: p.x, y: p.y }
+          : at(unit.name),
+      data: {
+        label: unit.name,
+        operation: unit.operation,
+        category: (catalog[unit.operation] || {}).category || '',
+        // No ports: the unit was never built, so it has none. Drawing
+        // handles for the ports it *would* have would invite a wire to
+        // a unit that cannot receive one.
+        inlets: [],
+        outlets: [],
+        portLabels,
+        pending: { needs: unit.needs || [], hint: unit.hint || '' },
+      },
+    })
+  }
   for (const name of [...productStreams(doc), ...danglingDestinations(doc)]) {
     nodes.push({
       id: PRODUCT + name,
@@ -227,6 +259,18 @@ export function toGraph(doc, positions, options = {}) {
     data: { stream: a.stream, destStream: a.destStream, recycle: a.recycle },
   }))
   return { nodes, edges }
+}
+
+/** Positions of the pending nodes, keyed like `view.nodes`. */
+export function pendingPositions(pending) {
+  const out = {}
+  for (const unit of pending || []) {
+    const p = unit && unit.position
+    if (unit && unit.name && p && Number.isFinite(p.x) && Number.isFinite(p.y)) {
+      out[unit.name] = { x: p.x, y: p.y }
+    }
+  }
+  return out
 }
 
 /** `view.nodes` shaped from the canvas's current node array. */

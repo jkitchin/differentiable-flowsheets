@@ -26,12 +26,14 @@
     unit = null,
     spec = null,
     feed = null,
+    pending = null,
     species = [],
     defaults = null,
     busy = false,
     onrename = () => {},
     ondelete = () => {},
     onedit = () => {},
+    oncontext = () => {},
   } = $props()
 
   let draft = $state('')
@@ -165,6 +167,36 @@
     if (name && name !== node.data.label) onrename(node.id, name)
   }
 
+  /**
+   * Renaming a stream is one request and a redraw, like every other
+   * edit -- but it is worth knowing that it is not a label change. A
+   * stream name *is* the wiring in difflow, so the server moves the
+   * feed, both ends of any recycle and every port that reads or writes
+   * it together, and refuses a name another stream already has, since
+   * that would join the two rather than rename one.
+   */
+  function commitStreamName() {
+    const name = draft.trim()
+    if (!name || name === node.data.label) return
+    onedit(() =>
+      patch(`/api/stream/${encodeURIComponent(node.data.label)}`, { name }),
+    )
+  }
+
+  // A mixer mixes however many streams it is handed, so its inlet count
+  // belongs to the flowsheet and not to the class -- which makes it the
+  // canvas's to change. Every other unit's ports are fixed by its
+  // equations and there is nothing to offer.
+  let variadic = $derived(Boolean(spec?.ports?.variadic))
+
+  function addInlet() {
+    onedit(() => post('/api/inlet', { unit: unit.name }))
+  }
+
+  function removeInlet(stream) {
+    onedit(() => del('/api/inlet', { unit: unit.name, stream }))
+  }
+
   function commitParam(field, raw) {
     const value = parse(raw, field.kind)
     if (value === field.value) return
@@ -181,6 +213,34 @@
       ...render(latex),
     })),
   )
+
+  /**
+   * The code context this unit is waiting for, written out by the server.
+   *
+   * Fetched on demand rather than with the node: it is a page of Python
+   * per red box, and most red boxes are answered by a `thermo` that is
+   * about to be written for the first one. Kept once fetched, because
+   * the panel shows it and applying it is a second, separate click --
+   * you are meant to read the thing before running it.
+   */
+  let snippet = $state(null)
+
+  // A new selection is a new question; the old answer would be about a
+  // unit that is no longer on screen.
+  $effect(() => { void node; snippet = null })
+
+  async function writeBoilerplate() {
+    const answer = await post('/api/boilerplate', {
+      operation: node.data.operation, name: node.id,
+    })
+    snippet = answer?.ok ? answer : null
+  }
+
+  /** Apply the merged context: the snippet *added* to what is there. */
+  function applySnippet() {
+    if (!snippet) return
+    oncontext(snippet.merged)
+  }
 </script>
 
 <aside class="inspector">
@@ -195,6 +255,19 @@
          because that is where a feed would go; saying "feed" about it
          would claim the flowsheet has an inlet it does not have yet. -->
     <p class="kind">{isFeed && !feed ? 'inlet, unfed' : node.data.kind}</p>
+
+    <label>
+      name
+      <input value={draft} disabled={busy}
+             oninput={(e) => (draft = e.currentTarget.value)}
+             onblur={commitStreamName}
+             onkeydown={(e) => e.key === 'Enter' && commitStreamName()} />
+    </label>
+    <p class="hint">
+      The name is the wiring: renaming moves the feed, both ends of a
+      recycle and every port that reads or writes it, together.
+    </p>
+
     {#if !isFeed}
       <p class="hint">
         A stream, not an object the flowsheet holds: it follows from the
@@ -245,11 +318,64 @@
         {/if}
       </div>
     {/if}
+  {:else if pending}
+    <!-- A red node. There is no unit to inspect -- it was never built --
+         so the panel is about the one thing that would build it. -->
+    <h2>
+      {pending.operation}
+      {#if docs?.docs_url}
+        <a class="doc-link" href={docs.docs_url} target="_blank"
+           rel="noopener noreferrer"
+           title="read about {pending.operation} in the documentation">docs &#8599;</a>
+      {/if}
+    </h2>
+    <p class="kind waiting">not built yet</p>
+
+    <h3>waiting for</h3>
+    <ul class="needs">
+      {#each pending.needs as need (need)}<li>{need}</li>{/each}
+    </ul>
+    <p class="problem">{pending.hint}</p>
+
+    <!-- Saying what is missing answers "what"; this answers "what do I
+         write". Two clicks, not one: the snippet invents numbers where
+         it has to, marks them, and running it unread would put them in
+         the model. -->
+    {#if !snippet}
+      <button class="wide" disabled={busy} onclick={writeBoilerplate}>
+        Write the code for me
+      </button>
+    {:else}
+      <h3>a starting point</h3>
+      <pre class="snippet">{snippet.source}</pre>
+      <p class="hint">
+        Added to the code context, not replacing it. Read every
+        <code>INVENTED</code>, <code>GUESSED</code> and
+        <code>PLACEHOLDER</code> comment first &mdash; those are the
+        numbers this cannot know.
+      </p>
+      <div class="row">
+        <button class="primary" disabled={busy} onclick={applySnippet}>
+          Add to the code context
+        </button>
+        <button disabled={busy} onclick={() => (snippet = null)}>Discard</button>
+      </div>
+    {/if}
+
+    <button class="danger" onclick={() => ondelete(node.id)}>Delete node</button>
   {:else}
     <h2>
       {node.data.operation}
       {#if docs?.symbol && docs.symbol !== node.data.operation}
         <span class="symbol">{docs.symbol}</span>
+      {/if}
+      {#if docs?.docs_url}
+        <!-- The panel below renders this unit's docstring, which says
+             what the arguments are. This is the book, which says what
+             the unit is for. -->
+        <a class="doc-link" href={docs.docs_url} target="_blank"
+           rel="noopener noreferrer"
+           title="read about {node.data.operation} in the documentation">docs &#8599;</a>
       {/if}
     </h2>
     {#if spec?.description}<p class="kind">{spec.description}</p>{/if}
@@ -261,7 +387,22 @@
     </label>
 
     <h3>inlets</h3>
-    <ul>{#each node.data.inlets as s (s)}<li>{s}</li>{/each}</ul>
+    <ul class:ports={variadic}>
+      {#each node.data.inlets as s (s)}
+        <li>
+          {s}
+          {#if variadic && node.data.inlets.length > 1}
+            <button class="drop" title="remove this inlet"
+                    disabled={busy} onclick={() => removeInlet(s)}>&minus;</button>
+          {/if}
+        </li>
+      {/each}
+    </ul>
+    {#if variadic}
+      <button class="add-port" disabled={busy} onclick={addInlet}>
+        Add inlet
+      </button>
+    {/if}
     <h3>outlets</h3>
     <ul>{#each node.data.outlets as s (s)}<li>{s}</li>{/each}</ul>
 
@@ -401,6 +542,43 @@
   ul { margin: 0; padding-left: 1.1rem; }
   li { font-family: var(--mono, ui-monospace, monospace); font-size: 0.76rem; }
 
+  /* A variadic unit's inlet list carries a remove per row, so the rows
+     stop being bullets and become a small table of one column. */
+  .ports { list-style: none; padding-left: 0; }
+  .ports li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.4rem;
+    padding: 0.1rem 0;
+  }
+  .drop {
+    flex: none;
+    width: 1.2rem;
+    line-height: 1.05rem;
+    font: inherit;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: var(--surface);
+    color: var(--ink-soft);
+    cursor: pointer;
+    opacity: 0;
+  }
+  .ports li:hover .drop, .drop:focus-visible { opacity: 1; }
+  .drop:hover { color: var(--bad); border-color: var(--bad); }
+  .add-port {
+    margin-top: 0.35rem;
+    padding: 0.2rem 0.5rem;
+    font: inherit;
+    font-size: 0.75rem;
+    border: 1px dashed var(--line);
+    border-radius: 5px;
+    background: none;
+    color: var(--ink-soft);
+    cursor: pointer;
+  }
+  .add-port:hover:not(:disabled) { border-style: solid; color: inherit; }
+
   .params { margin: 0; }
   .params dt {
     font-family: var(--mono, ui-monospace, monospace);
@@ -441,6 +619,15 @@
   .prose li, .refs li { font-family: inherit; font-size: 0.78rem; margin: 0.3rem 0; }
   p.prose { margin: 0.3rem 0 0; }
 
+  .doc-link {
+    float: right;
+    font-size: 0.72rem;
+    font-weight: 400;
+    color: var(--ink-soft);
+    text-decoration: none;
+  }
+  .doc-link:hover { color: var(--series); text-decoration: underline; }
+
   /* The rendered docstring: docutils markup we do not control. */
   .doc :global(p) { margin: 0.5rem 0; }
   .doc :global(pre) {
@@ -468,6 +655,30 @@
     margin: 0.35rem 0 0;
     color: var(--bad);
     font-size: 0.75rem;
+  }
+
+  /* The red-node panel. It says the same thing the node says, at
+     length, and then offers the one thing that answers it. */
+  .kind.waiting { color: var(--bad); }
+  ul.needs { padding-left: 1.1rem; margin: 0.2rem 0; }
+  ul.needs li {
+    font-family: var(--mono, ui-monospace, monospace);
+    font-size: 0.75rem;
+    color: var(--bad);
+  }
+  button.wide { width: 100%; margin-top: 0.8rem; }
+  .snippet {
+    max-height: 18rem;
+    overflow: auto;
+    margin: 0.3rem 0 0;
+    padding: 0.5rem;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    font-family: var(--mono, ui-monospace, monospace);
+    font-size: 0.7rem;
+    line-height: 1.45;
+    white-space: pre;
   }
   .row {
     display: flex;

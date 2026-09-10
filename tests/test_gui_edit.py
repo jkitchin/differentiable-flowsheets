@@ -167,9 +167,11 @@ class TestAddAndRemove:
         assert not a & b
 
     def test_a_unit_that_needs_a_thermo_says_so(self, session):
+        """It says so on the canvas now, not in a refusal."""
         answer = session.add_unit("Flash")
-        assert answer["ok"] is False
-        assert "thermo" in answer["error"]
+        assert answer["ok"] is True and answer["pending"] is True
+        assert answer["needs"] == ["thermo"]
+        assert "thermo" in answer["hint"]
 
     def test_an_unregistered_operation_is_refused(self, session):
         answer = session.add_unit("Teleporter")
@@ -413,12 +415,154 @@ class TestEditedFlowsheetStillSolves:
         empty = FlowsheetSession()
         for answer, expected in (
             (empty.patch_unit("x", {}), "no unit called 'x'"),
-            (empty.add_unit("Mixer"), "needs the species"),
             (empty.remove_unit("x"), "no unit called 'x'"),
             (empty.connect("a", "b", "c", "d"), "no unit called 'a'"),
         ):
             assert answer["ok"] is False
             assert expected in answer["error"], answer
 
+        # A drop is the exception: it is not refused any more, it is
+        # parked. The unit lands as a pending node that says what it is
+        # waiting for --- here, the species the streams are indexed by.
+        parked = empty.add_unit("Mixer")
+        assert parked["ok"] is True and parked["pending"] is True
+        assert "needs the species" in parked["hint"], parked
+
         # Placing nothing is a request that succeeded at nothing.
         assert empty.set_layout({}) == {"ok": True, "nodes": 0}
+
+
+THERMO_SOURCE = (
+    "from difflow import IdealThermo, get_species_data\n"
+    "thermo = IdealThermo({n: get_species_data(n) for n in "
+    "['water', 'ethanol']})\n"
+)
+
+
+class TestPendingUnits:
+    """A drop that cannot be built yet lands anyway, in red.
+
+    Refusing it threw away the only thing the user actually said --- I
+    want a Flash, here --- and left them to reconstruct it after writing
+    the thermo. So the drop is kept as a *pending* node: it holds the
+    name and the position, it says what it is waiting for, and the two
+    edits that can answer it (the code context, the species) promote it
+    in place.
+
+    It is deliberately not a `Unit`. A half-built unit in the flowsheet
+    would have to be skipped by the solver, by the serializer and by the
+    code generator, each of which would then be one `if` away from
+    emitting a broken flowsheet. Pending lives on the session instead,
+    beside the document rather than inside it.
+    """
+
+    def test_a_blocked_drop_is_parked_and_not_built(self, session):
+        answer = session.add_unit("Flash", position={"x": 10, "y": 20})
+        assert answer["pending"] is True
+        assert answer["name"] == "flash2", "the built flash keeps its name"
+        assert answer["position"] == {"x": 10.0, "y": 20.0}
+        assert "flash2" not in [u.name for u in session.flowsheet.units]
+        assert [e["name"] for e in session.pending_units()] == ["flash2"]
+
+    def test_the_document_carries_it_beside_the_flowsheet(self, session):
+        """Beside, never inside: a saved file must not name a phantom.
+
+        `document()["flowsheet"]` is what gets written to disk and read
+        back by `serialize`, and a node in `view.nodes` with no unit
+        behind it is a file that another difflow cannot load.
+        """
+        session.add_unit("Flash", position={"x": 10, "y": 20})
+        document = session.document()
+        assert [e["name"] for e in document["pending"]] == ["flash2"]
+        assert "pending" not in document["flowsheet"]
+        assert "flash2" not in document["flowsheet"]["view"]["nodes"]
+        serialize.from_dict(document["flowsheet"],
+                            extras={"flash": {"thermo": session.bindings.get(
+                                "thermo")}})
+
+    def test_a_pending_name_is_taken(self, session):
+        """Two drops of the same blocked unit are two nodes.
+
+        If pending names did not count as taken, both would be called
+        `flash-2` --- and the second would either overwrite the first or
+        collide with it at promotion.
+        """
+        first = session.add_unit("Flash")["name"]
+        second = session.add_unit("Flash")["name"]
+        assert first != second
+        assert sorted(session.pending) == sorted([first, second])
+
+    def test_the_code_context_builds_it_where_it_was_dropped(self, session):
+        session.add_unit("Flash", position={"x": 10, "y": 20})
+        answer = session.set_code_context(THERMO_SOURCE)
+        assert answer["ok"] and answer["promoted"] == ["flash2"]
+        assert answer["pending"] == []
+        assert "flash2" in [u.name for u in session.flowsheet.units]
+        assert session.flowsheet.view["nodes"]["flash2"] == {"x": 10.0, "y": 20.0}
+        assert session.pending_units() == []
+
+    def test_the_species_build_what_was_waiting_on_them(self):
+        """The empty-canvas case: nearly the whole palette is blocked."""
+        empty = FlowsheetSession()
+        parked = empty.add_unit("Mixer", position={"x": 3, "y": 4})
+        assert parked["pending"] and "species" in parked["hint"]
+
+        answer = empty.set_species(SPECIES)
+        assert answer["promoted"] == ["mixer"] and answer["pending"] == []
+        assert [u.name for u in empty.flowsheet.units] == ["mixer"]
+        assert empty.flowsheet.view["nodes"]["mixer"] == {"x": 3.0, "y": 4.0}
+
+    def test_an_answer_that_only_half_answers_leaves_it_parked(self):
+        """And re-asks, so the hint is about what is missing *now*."""
+        empty = FlowsheetSession()
+        empty.add_unit("Flash")
+        assert sorted(empty.pending["flash"]["needs"]) == [
+            "species_order", "thermo"]
+
+        answer = empty.set_species(SPECIES)
+        assert answer["promoted"] == [] and answer["pending"] == ["flash"]
+        assert empty.pending["flash"]["needs"] == ["thermo"]
+        assert "species" not in empty.pending["flash"]["hint"]
+
+    def test_a_pending_node_can_be_deleted(self, session):
+        answer = session.remove_unit(session.add_unit("Flash")["name"])
+        assert answer["ok"] and answer["pending"] is True
+        assert session.pending_units() == []
+
+    def test_a_flowsheet_with_a_pending_node_still_solves(self, session):
+        """The red node is not in the model, so it cannot break the solve."""
+        session.add_unit("Flash")
+        answer = session.solve()
+        assert answer["ok"] and answer["pending"] == ["flash2"]
+
+    def test_loading_a_file_forgets_them(self, session):
+        """They belong to the canvas that was open, not to the next one."""
+        session.add_unit("Flash")
+        session.replace(serialize.to_dict(Flowsheet(species_order=SPECIES)))
+        assert session.pending_units() == []
+
+    def test_the_boilerplate_answers_the_recorded_needs(self, session):
+        name = session.add_unit("Flash")["name"]
+        answer = session.boilerplate("Flash", name=name)
+        assert answer["ok"] and answer["needs"] == ["thermo"]
+        assert "thermo = IdealThermo" in answer["source"]
+        assert 'SPECIES = ["water", "ethanol"]' in answer["source"], (
+            "the flowsheet's own species, not the fallback")
+        assert answer["merged"] == answer["source"], "the context was empty"
+
+    def test_the_boilerplate_is_appended_to_what_is_already_there(self, session):
+        session.set_code_context("solvent = 'MEA'\n")
+        answer = session.boilerplate("Flash")
+        assert answer["merged"].startswith("solvent = 'MEA'")
+        assert "thermo = IdealThermo" in answer["merged"]
+
+    def test_the_boilerplate_closes_the_loop_it_promises(self, session):
+        """Write it, apply it, and the red node has to become a unit."""
+        name = session.add_unit("Flash", position={"x": 7, "y": 8})["name"]
+        session.set_code_context(session.boilerplate("Flash", name=name)["merged"])
+        assert name in [u.name for u in session.flowsheet.units]
+        assert session.flowsheet.view["nodes"][name] == {"x": 7.0, "y": 8.0}
+
+    def test_an_unregistered_operation_has_no_boilerplate(self, session):
+        answer = session.boilerplate("Teleporter")
+        assert answer["ok"] is False and "registered" in answer["error"]

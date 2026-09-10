@@ -152,6 +152,15 @@ class FlowsheetSession:
         #: the console's namespace, made on first use. A session that
         #: never opens the panel pays nothing for it.
         self._console = None
+        #: units dropped on the canvas that cannot be built yet, by name.
+        #: Each is ``{operation, needs, hint, position}``. They are the
+        #: session's and not the flowsheet's: a `Flowsheet` holds units
+        #: that exist, and half a unit is not one --- it cannot be
+        #: solved, serialized, or drawn into a diagram. Keeping them here
+        #: means a drop that is waiting on a `thermo` stays on the canvas
+        #: in red, where it can be seen and answered, instead of being
+        #: refused into a toast that scrolls away.
+        self.pending: dict[str, dict] = {}
         if flowsheet is None and self.path and self.path.exists():
             self._load(self.path)
         elif flowsheet is not None:
@@ -242,6 +251,11 @@ class FlowsheetSession:
         answer = {"ok": True, "names": sorted(bindings)}
         if adopted:
             answer["species"] = adopted
+        # Outside the lock, because this rebuilds units and `add_unit`
+        # takes it. A `thermo` defined here is exactly what the red nodes
+        # on the canvas were waiting for, and making the user drop them
+        # again would be asking twice for one answer.
+        answer.update(self._retry_pending())
         return answer
 
     # -- the species order --------------------------------------------
@@ -292,7 +306,11 @@ class FlowsheetSession:
                 }
             self.flowsheet.species_order = cleaned
             self.streams = None
-        return {"ok": True, "species": cleaned}
+        # `species_order` is the need that blocks the most of the palette,
+        # so naming the species is the other edit that can promote a red
+        # node. Same reason as in `set_code_context` for doing it here
+        # rather than inside the lock.
+        return {"ok": True, "species": cleaned, **self._retry_pending()}
 
     # -- feeds ---------------------------------------------------------
 
@@ -430,6 +448,13 @@ class FlowsheetSession:
         solvent name, so the drop fails. Serving the class's answer put
         that disagreement in front of the user as a traceback.
 
+        Each entry also carries ``docs_url``, from
+        :func:`difflow.gui.doclinks.url_for` --- where in the book this
+        operation is written up, so the palette and the inspector can
+        offer the link without the front end knowing anything about how
+        ``docs/`` is organised. ``None`` for an operation the prose never
+        names, which :mod:`tests.test_doclinks` does not allow to happen.
+
         So each entry carries ``needs``, from :func:`difflow.gui.edit.unmet`
         --- the same function the adder refuses with, so the palette
         cannot promise a unit that will not drop --- and ``buildable``
@@ -439,13 +464,14 @@ class FlowsheetSession:
         the catalog whenever the code context changes.
         """
         from difflow.catalog import _default_registry, catalog
-        from difflow.gui import edit
+        from difflow.gui import doclinks, edit
 
         classes = {name: info.cls
                    for name, info in _default_registry().list_operations().items()}
         out = {}
         for name, spec in catalog().items():
             entry = spec.to_dict()
+            entry["docs_url"] = doclinks.url_for(name)
             cls = classes.get(name)
             if cls is not None:
                 needs = edit.unmet(self.flowsheet, cls, self.bindings)
@@ -453,6 +479,11 @@ class FlowsheetSession:
                 entry["buildable"] = not needs
             else:
                 entry["needs"] = [] if entry.get("buildable") else ["code"]
+            # Where the book discusses this unit, or None when it does
+            # not discuss it at all. Carried on the catalog rather than
+            # asked for per unit, because the palette wants all 87 at
+            # once and the whole map costs one pass over the index.
+            entry["docs_url"] = doclinks.url_for(name)
             out[name] = entry
         return out
 
@@ -473,6 +504,11 @@ class FlowsheetSession:
         return {
             "flowsheet": document,
             "path": str(self.path or ""),
+            # Beside the document rather than inside it: a pending unit is
+            # not part of the flowsheet, and a `pending` key in the
+            # serialized document would be exported to a file and read
+            # back as though it were.
+            "pending": self.pending_units(),
             # The species control in the header reads these. Carried on the
             # document rather than fetched separately because every edit
             # already reloads it, and an empty flowsheet's species are the
@@ -494,11 +530,12 @@ class FlowsheetSession:
 
         Returns:
             ``{"ok": True, "operation": ..., "html": ..., "format": ...,
-            "symbol", "equations", "assumptions", "references",
-            "numerical_method"}``, or ``{"ok": False, "error": ...}``
+            "symbol", "docs_url", "equations", "assumptions",
+            "references", "numerical_method"}``, or ``{"ok": False, "error": ...}``
             for a name nothing is registered under.
         """
         from difflow.catalog import describe_operation
+        from difflow.gui import doclinks
         from difflow.gui import docs as docs_module
 
         try:
@@ -509,6 +546,9 @@ class FlowsheetSession:
         return {
             "ok": True,
             "operation": spec.name,
+            # The docstring rendered below says what the arguments are;
+            # this is where the book says what the unit is for.
+            "docs_url": doclinks.url_for(spec.name),
             "symbol": spec.symbol,
             "description": spec.description,
             "html": html,
@@ -600,6 +640,10 @@ class FlowsheetSession:
             self._evaluate((document.get("view") or {}).get("code_context") or "")
             self.flowsheet = serialize.from_dict(document, refs=self.bindings)
             self.streams = None
+            # The pending nodes belonged to the flowsheet that was just
+            # replaced. Carrying them over would put a red box for a unit
+            # nobody dropped onto a canvas that has never seen it.
+            self.pending.clear()
         return {"ok": True}
 
     # -- incremental edits --------------------------------------------
@@ -691,6 +735,12 @@ class FlowsheetSession:
             raise edit.EditError(
                 f"position for {key!r} must be {{'x': number, 'y': number}}"
             ) from exc
+        # A pending node's position stays on the pending entry. Writing it
+        # into `view.nodes` would put a coordinate for a node that does
+        # not exist into the saved file, and it would outlive the drop.
+        if key in self.pending:
+            self.pending[key]["position"] = {"x": x, "y": y}
+            return
         self.flowsheet.view.setdefault("nodes", {})[key] = {"x": x, "y": y}
 
     def add_unit(self, operation: str, name: str | None = None,
@@ -721,7 +771,7 @@ class FlowsheetSession:
             info = _default_registry().list_operations().get(operation)
             if info is None:
                 raise edit.EditError(f"{operation!r} is not a registered operation")
-            taken = {u.name for u in self.flowsheet.units}
+            taken = self._taken()
             unit_name = edit.unique(name or operation.lower(), taken)
             if name and name in taken:
                 raise edit.EditError(f"there is already a unit called {name!r}")
@@ -736,17 +786,37 @@ class FlowsheetSession:
             values, placeholders, missing = edit.known_params(
                 self.flowsheet, _params_class(info.cls), self.bindings
             )
+            # After the two real sources, never before them: a number the
+            # code context actually supplies must not be shadowed by a
+            # made-up one, and a caller's `extras` outranks both. `values`
+            # counts as supplied too -- for a unit that builds its own
+            # `Params`, the constructor argument and the field it feeds
+            # are one number, and guessing it again here would hand the
+            # builder two.
+            guessed, guessed_names = edit.placeholder_extras(
+                info.cls, {**values, **override}
+            )
+            override.update(guessed)
+            placeholders = placeholders + guessed_names
             # Ask before building. `_build_operation` raises through the
             # file-loading path, whose message offers "written by a
             # different version of difflow" as the diagnosis -- true of a
             # file, and nonsense about a unit dropped from the palette a
-            # second ago. The palette flagged this same list.
+            # second ago. The palette flagged this same list, by the same
+            # reckoning: `values` supplies a constructor argument just as
+            # `override` does, along the road `_build_operation` takes for
+            # a unit that builds its own `Params`.
             unmet = [a for a in edit.constructor_extras(info.cls)
-                     if a not in override] + missing
+                     if a not in override and a not in values] + missing
             if unmet:
-                raise edit.EditError(
-                    self._needs_hint(operation, info.cls, unmet)
-                )
+                # Not a refusal any more. The drop happened -- the user
+                # aimed at a spot on the canvas and let go -- and the
+                # only thing wrong with it is that something has to exist
+                # first. So it lands, in red, saying what it is waiting
+                # for; `_retry_pending` builds it for real the moment the
+                # code context or the species answer it.
+                return self._hold(operation, unit_name, info.cls,
+                                  unmet, position)
             try:
                 built = _build_operation(
                     info.cls, values, unit_name, override=override,
@@ -779,8 +849,108 @@ class FlowsheetSession:
 
         return self._edit(apply)
 
+    # -- units that cannot be built yet --------------------------------
+
+    def _taken(self) -> set[str]:
+        """Every name a new unit may not have.
+
+        Pending nodes count. They are drawn on the same canvas and are
+        about to become units under exactly these names, so letting a
+        second drop take one would either collide at promotion or
+        silently rename the node the user is looking at.
+        """
+        return ({u.name for u in self.flowsheet.units} | set(self.pending))
+
+    def _hold(self, operation: str, unit_name: str, cls,
+              unmet: list[str], position) -> dict:
+        """Park an unbuildable drop on the canvas instead of refusing it."""
+        entry = {
+            "name": unit_name,
+            "operation": operation,
+            "needs": list(unmet),
+            "hint": self._needs_hint(operation, cls, unmet),
+            "position": None,
+        }
+        self.pending[unit_name] = entry
+        if position is not None:
+            self._place(unit_name, position)
+        # `ok` is True: the editor did what was asked. `pending` is what
+        # says the unit is not there yet, and the hint is the sentence
+        # the refusal used to carry.
+        return {**entry, "pending": True}
+
+    def pending_units(self) -> list[dict]:
+        """The unbuildable drops, as the canvas draws them."""
+        return [dict(entry) for entry in self.pending.values()]
+
+    def _retry_pending(self) -> dict:
+        """Drop every pending unit again, now that the context has moved.
+
+        Called after the code context or the species change --- the two
+        edits that can turn an unmet need into a met one. Each entry is
+        removed and re-dropped under its own name and at its own
+        position: if it builds it becomes a real unit and the red node
+        goes away, and if it does not it is parked again with a hint
+        answered against the *new* bindings, which is the useful half of
+        re-asking.
+
+        Not called under `self._lock`: `add_unit` takes it.
+        """
+        promoted, still = [], []
+        for name, entry in list(self.pending.items()):
+            del self.pending[name]
+            answer = self.add_unit(entry["operation"], name=name,
+                                   position=entry.get("position"))
+            if answer.get("ok") and not answer.get("pending"):
+                promoted.append(name)
+            else:
+                still.append(name)
+        return {"promoted": promoted, "pending": still}
+
+    def boilerplate(self, operation: str, name: str | None = None) -> dict:
+        """Python that would define what *operation* is waiting for.
+
+        The other half of the red node. Saying a unit needs a ``thermo``
+        answers *what*; this answers *what to write*, against this
+        flowsheet's own species, and marks every number it had to invent
+        as invented.
+
+        Args:
+            operation: the registered name.
+            name: a pending node, whose recorded needs are used instead
+                of asking the catalog again. Falls back to the catalog
+                when the node is gone or was never there.
+
+        Returns:
+            ``{"ok": True, "operation", "needs", "source", "merged"}``,
+            where ``merged`` is the snippet appended to the code context
+            as it stands --- which is what the editor applies, since a
+            snippet that replaced the context would drop whatever else
+            it defines.
+        """
+        from difflow.catalog import _default_registry
+        from difflow.gui import boilerplate, edit
+
+        info = _default_registry().list_operations().get(operation)
+        if info is None:
+            return {"ok": False, "error": f"{operation!r} is not a registered "
+                                          "operation"}
+        entry = self.pending.get(name or "")
+        needs = (list(entry["needs"]) if entry
+                 else edit.unmet(self.flowsheet, info.cls, self.bindings))
+        source = boilerplate.snippet(
+            operation, needs, edit.species_order(self.flowsheet, self.bindings)
+        )
+        return {
+            "ok": True,
+            "operation": operation,
+            "needs": needs,
+            "source": source,
+            "merged": boilerplate.merged(self._source(), source),
+        }
+
     def _needs_hint(self, operation: str, cls, unmet: list[str]) -> str:
-        """Refuse a drop by naming what has to exist first.
+        """What a drop is waiting for, as the red node's own sentence.
 
         The useful sentence names the thing, not the failure: a reader
         told ``rate_fn`` knows what to write, and one told that a
@@ -820,9 +990,14 @@ class FlowsheetSession:
         if "species_order" in unmet:
             return (f"{operation} needs the species. Name them in the header "
                     f"-- or define species_order (or SPECIES) in the code "
-                    f"context -- and drop the unit again.")
+                    f"context -- and this node builds itself.")
+        # Not "and drop the unit again": the node is still on the canvas,
+        # and answering what it asks for promotes it where it stands.
+        # Telling the reader to repeat a gesture they have already made
+        # would be describing an editor that no longer exists.
         hint = (f"{operation} needs {what}. Define it in the code context "
-                f"(which currently defines {have}) and drop the unit again")
+                f"(which currently defines {have}) and this node builds "
+                f"itself")
         if any(n in unmet for n in ("rate_fn", "stoich", "rate_params",
                                     "kinetic_fn", "kinetic_params")):
             hint += (" -- mass_action_kinetics() returns the rate law, the "
@@ -842,6 +1017,11 @@ class FlowsheetSession:
         from difflow.gui import edit
 
         def apply() -> dict:
+            # A pending node has no ports, no wires and no entry in the
+            # flowsheet: deleting it is forgetting it.
+            if name in self.pending:
+                del self.pending[name]
+                return {"name": name, "recycles_dropped": {}, "pending": True}
             u = edit.unit(self.flowsheet, name)
             touched = set(u.inlet_names) | set(u.outlet_names)
             self.flowsheet.units = [
@@ -875,6 +1055,43 @@ class FlowsheetSession:
 
         return self._edit(
             lambda: edit.disconnect(self.flowsheet, source, outlet, target, inlet)
+        )
+
+    def _ports(self, name: str) -> dict:
+        """The port spec of the class behind an existing unit."""
+        from difflow.catalog import describe_class
+        from difflow.gui import edit
+
+        return describe_class(type(edit.unit(self.flowsheet, name).operation)) \
+            .to_dict()["ports"]
+
+    def rename_stream(self, old: str, new: str) -> dict:
+        """Rename one stream everywhere it appears.
+
+        A stream name is the wiring, so this moves feeds, recycle ends,
+        every port that reads or writes it and the canvas node all at
+        once. Refused if the new name is taken, because that would be a
+        connection wearing a rename's clothes.
+        """
+        from difflow.gui import edit
+
+        return self._edit(lambda: edit.rename(self.flowsheet, old, new))
+
+    def add_inlet(self, name: str) -> dict:
+        """One more inlet on a variadic unit, arriving unwired."""
+        from difflow.gui import edit
+
+        return self._edit(
+            lambda: edit.add_inlet(self.flowsheet, name, self._ports(name))
+        )
+
+    def remove_inlet(self, name: str, stream: str) -> dict:
+        """Take an inlet off a variadic unit, if nothing is on it."""
+        from difflow.gui import edit
+
+        return self._edit(
+            lambda: edit.remove_inlet(self.flowsheet, name, stream,
+                                      self._ports(name))
         )
 
     def set_layout(self, nodes: dict) -> dict:
@@ -941,6 +1158,11 @@ class FlowsheetSession:
             "residual": _number(getattr(fs, "last_solve_residual", None)),
             "tol": _number(getattr(fs, "last_solve_tol", None)),
             "tear_streams": list(getattr(fs, "last_solve_tear_streams", []) or []),
+            # What was solved is not what is on the canvas if any of it is
+            # still red. The numbers below are right about the flowsheet
+            # that exists, and saying nothing here would let them be read
+            # as being about the one being drawn.
+            "pending": sorted(self.pending),
         }
 
     def _solve_error(self, exc: Exception) -> str:
