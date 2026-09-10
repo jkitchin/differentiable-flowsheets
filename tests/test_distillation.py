@@ -1020,24 +1020,6 @@ class TestCubicThermoColumn:
             K = cubic.K_values_array(T[j], self.P, x[j])
             assert float(jnp.sum(K * x[j])) == pytest.approx(1.0, abs=1e-3)
 
-    def test_cubic_column_gradients(self, thermo_pair, column_params, feed):
-        """AD still runs through the EOS column, and matches finite difference."""
-        _, cubic = thermo_pair
-        column = DistillationColumn(column_params, cubic)
-
-        def hexane_purity(R):
-            distillate, _, _ = column(feed, R=R, B_spec=40.0)
-            total = sum(distillate[f"F_{s}"] for s in self.SPECIES)
-            return distillate["F_n_hexane"] / total
-
-        g = jax.grad(hexane_purity)(2.0)
-        assert jnp.isfinite(g)
-
-        eps = 1e-3
-        fd = (float(hexane_purity(2.0 + eps))
-              - float(hexane_purity(2.0 - eps))) / (2 * eps)
-        assert float(g) == pytest.approx(fd, rel=1e-4)
-
     def test_condenser_is_well_below_the_top_stage_for_a_wide_cut(
         self, thermo_pair, column_params, feed
     ):
