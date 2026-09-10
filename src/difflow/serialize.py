@@ -34,21 +34,37 @@ and always for the rate law, so a reactor built through
 Stability
 ---------
 
-``FORMAT_VERSION`` is written into every file and checked on read. The
-difflow version is recorded too, for provenance, but is not enforced.
+``FORMAT_VERSION`` is written into every file and checked on read
+against ``SUPPORTED_VERSIONS``: difflow writes the current version and
+reads every version it still understands, so a file written by an older
+release keeps opening.
+
+Version 2 added the optional top-level ``view`` block, which carries
+presentation state --- canvas positions, the editor's code context ---
+and is read by nothing numeric. A version 1 file simply has none, which
+is indistinguishable from a version 2 file whose flowsheet was never
+opened in an editor.
 """
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
+import functools
 import json
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
 import jax.numpy as jnp
 
-#: bumped when the on-disk layout changes incompatibly
-FORMAT_VERSION = 1
+#: bumped when the on-disk layout changes; written into every file
+FORMAT_VERSION = 2
+
+#: every version :func:`from_dict` still reads. Version 1 files predate the
+#: ``view`` block and are otherwise identical, so reading them costs nothing
+#: and refusing them would strand every file written before the editor.
+SUPPORTED_VERSIONS = (1, 2)
 
 #: keys used to tag values that JSON has no native type for
 ARRAY_TAG = "$array"
@@ -56,6 +72,82 @@ DATACLASS_TAG = "$dataclass"
 NAMEDTUPLE_TAG = "$namedtuple"
 THERMO_TAG = "$thermo"
 CALLABLE_TAG = "$callable"
+#: A value that lives in the file's *code context* rather than in the
+#: file. ``{"$ref": "thermo_ideal"}`` means "whatever the name
+#: ``thermo_ideal`` is bound to", and resolving it needs that namespace
+#: to be supplied --- see :func:`ref_namespace`.
+REF_TAG = "$ref"
+
+
+#: The namespace ``$ref`` tags resolve against, for the duration of one
+#: read or write. A ContextVar rather than an argument threaded through
+#: the recursion: every ``_encode_value`` / ``_decode_value`` call site
+#: would otherwise have to carry it, and the GUI server is threaded, so
+#: a module global would be wrong.
+_REFS: ContextVar[dict] = ContextVar("difflow_serialize_refs", default={})
+
+
+@contextlib.contextmanager
+def ref_namespace(namespace: dict | None):
+    """Make ``namespace`` the bindings that ``$ref`` tags resolve against.
+
+    Some things a flowsheet needs are objects rather than data --- a
+    ``thermo`` of a kind this format cannot write, a hand-written rate
+    law. The escape hatch is to build them in Python that travels with
+    the flowsheet (``view["code_context"]``, which the editor evaluates)
+    and to refer to them by name::
+
+        with serialize.ref_namespace({"thermo": my_thermo}):
+            data = serialize.to_dict(fs)      # writes {"$ref": "thermo"}
+            fs2 = serialize.from_dict(data)   # reads it back
+
+    Both directions are the same namespace, and outside one nothing
+    changes: a flowsheet with no such objects writes exactly the bytes
+    it always did.
+    """
+    token = _REFS.set({
+        name: obj for name, obj in (namespace or {}).items()
+        if not name.startswith("_")
+    })
+    try:
+        yield
+    finally:
+        _REFS.reset(token)
+
+
+def _with_refs(fn):
+    """Give ``fn`` a ``refs=`` keyword that sets :func:`ref_namespace`."""
+    @functools.wraps(fn)
+    def wrapper(*args, refs: dict | None = None, **kwargs):
+        with ref_namespace(refs):
+            return fn(*args, **kwargs)
+    return wrapper
+
+
+def _ref_for(value: Any) -> dict | None:
+    """A ``$ref`` tag for ``value``, if it is bound in the namespace.
+
+    Identity, not equality: the point is to write *this object*, and two
+    equal dicts are not interchangeable when one of them is what a unit
+    was constructed with.
+    """
+    for name, obj in _REFS.get().items():
+        if obj is value:
+            return {REF_TAG: name}
+    return None
+
+
+def _resolve_ref(name: str) -> Any:
+    """The object a ``$ref`` names, or an error that says where to get it."""
+    namespace = _REFS.get()
+    if name not in namespace:
+        raise SerializationError(
+            f"this flowsheet refers to {name!r}, which is defined in its code "
+            "context rather than in the file. Supply it with "
+            "refs={'" + name + "': ...}, or open the flowsheet in "
+            "difflow.gui, which evaluates the code context for you."
+        )
+    return namespace[name]
 
 
 class SerializationError(ValueError):
@@ -76,6 +168,14 @@ def _encode_value(value: Any, where: str) -> Any:
     """Convert one parameter value to something JSON can hold."""
     if value is None or isinstance(value, (bool, int, float, str)):
         return value
+    # Checked before every other kind, and after the primitives: a name
+    # in the code context is the *identity* of the object a unit holds,
+    # so writing it out as data would silently make a copy. Primitives
+    # are excluded because small integers and short strings are interned
+    # -- `x = 1` in the context would otherwise capture every `1`.
+    ref = _ref_for(value)
+    if ref is not None:
+        return ref
     if callable(value):
         spec = getattr(value, "__difflow_spec__", None)
         if spec is not None:
@@ -130,6 +230,8 @@ def _encode_value(value: Any, where: str) -> Any:
 def _decode_value(value: Any) -> Any:
     """Invert :func:`_encode_value`."""
     if isinstance(value, dict):
+        if REF_TAG in value:
+            return _resolve_ref(value[REF_TAG])
         if ARRAY_TAG in value:
             return jnp.asarray(value[ARRAY_TAG], dtype=jnp.float64)
         if DATACLASS_TAG in value:
@@ -151,7 +253,8 @@ def _decode_value(value: Any) -> Any:
 
 
 #: packages searched when rebuilding a type by name
-_PACKAGES = ("difflow", "difflow_bio", "difflow_ree", "difflow_cc", "difflow_gas")
+_PACKAGES = ("difflow", "difflow_bio", "difflow_ree", "difflow_cc",
+             "difflow_gas", "difflow_power")
 
 
 def _lookup_type(name: str, predicate=None) -> type:
@@ -262,7 +365,6 @@ def _takes_params_first(sig) -> bool:
     to rebuild.
     """
     import dataclasses
-    import inspect
 
     for name, param in sig.parameters.items():
         if name == "self":
@@ -318,7 +420,10 @@ def _encode_extras(operation: Any, unit_name: str) -> dict:
         if value is None:
             continue
         where = f"unit {unit_name!r} constructor argument {arg!r}"
-        if type(value).__name__.endswith(("Thermo", "thermo")):
+        ref = _ref_for(value)
+        if ref is not None:
+            out[arg] = ref
+        elif type(value).__name__.endswith(("Thermo", "thermo")):
             out[arg] = _encode_thermo(value, where)
         else:
             out[arg] = _encode_value(value, where)
@@ -340,6 +445,7 @@ def _registry_name(cls: type, registry=None) -> str:
     )
 
 
+@_with_refs
 def to_dict(flowsheet, registry=None) -> dict:
     """Represent a flowsheet as plain, JSON-ready data.
 
@@ -347,10 +453,13 @@ def to_dict(flowsheet, registry=None) -> dict:
         flowsheet: the :class:`~difflow.flowsheet.Flowsheet` to write.
         registry: operation registry for the name lookup; defaults to
             the global one.
+        refs: bindings that objects may be written as ``$ref`` tags
+            against, keyword-only --- see :func:`ref_namespace`.
 
     Returns:
         A dictionary with ``format_version``, ``species_order``,
-        ``defaults``, ``feeds``, ``units`` and ``recycles``.
+        ``defaults``, ``feeds``, ``units``, ``recycles``, and ``view``
+        if the flowsheet carries any presentation state.
 
     Raises:
         SerializationError: if an operation is unregistered or a
@@ -396,31 +505,40 @@ def to_dict(flowsheet, registry=None) -> dict:
         },
         "units": units,
         "recycles": dict(flowsheet.recycles),
+        # Omitted rather than written empty, so a flowsheet that has never
+        # been opened in an editor produces the same bytes it always did.
+        **({"view": _encode_value(flowsheet.view, "view")}
+           if getattr(flowsheet, "view", None) else {}),
     }
 
 
+@_with_refs
 def from_dict(data: dict, registry=None, extras: dict | None = None):
     """Rebuild a flowsheet from :func:`to_dict` output.
 
     Args:
         data: the dictionary to read.
         registry: operation registry for the name lookup.
+        extras: constructor objects per unit, ``{unit: {arg: obj}}``.
+        refs: bindings that ``$ref`` tags resolve against, keyword-only
+            --- see :func:`ref_namespace`.
 
     Returns:
         A :class:`~difflow.flowsheet.Flowsheet`.
 
     Raises:
-        SerializationError: on an unknown format version or an operation
-            name that is not registered.
+        SerializationError: on an unsupported format version or an
+            operation name that is not registered.
     """
     from difflow.catalog import _default_registry
     from difflow.flowsheet import Flowsheet, Unit
 
     version = data.get("format_version")
-    if version != FORMAT_VERSION:
+    if version not in SUPPORTED_VERSIONS:
         raise SerializationError(
             f"format version {version!r} is not supported; this difflow "
-            f"reads version {FORMAT_VERSION}."
+            f"reads {', '.join(str(v) for v in SUPPORTED_VERSIONS)} and "
+            f"writes {FORMAT_VERSION}."
         )
     registry = registry or _default_registry()
     operations = registry.list_operations()
@@ -460,6 +578,7 @@ def from_dict(data: dict, registry=None, extras: dict | None = None):
 
     for source, dest in data.get("recycles", {}).items():
         flowsheet.add_recycle(source, dest)
+    flowsheet.view = _decode_value(data.get("view", {})) or {}
     return flowsheet
 
 
@@ -520,27 +639,32 @@ def _build_operation(cls: type, encoded_params: dict, unit_name: str,
 # ---------------------------------------------------------------------
 
 
-def to_json(flowsheet, indent: int = 2, registry=None) -> str:
+def to_json(flowsheet, indent: int = 2, registry=None, *,
+            refs: dict | None = None) -> str:
     """Serialize a flowsheet to a JSON string."""
-    return json.dumps(to_dict(flowsheet, registry), indent=indent)
+    return json.dumps(to_dict(flowsheet, registry, refs=refs), indent=indent)
 
 
-def from_json(text: str, registry=None, extras: dict | None = None):
+def from_json(text: str, registry=None, extras: dict | None = None, *,
+              refs: dict | None = None):
     """Rebuild a flowsheet from a JSON string."""
-    return from_dict(json.loads(text), registry, extras)
+    return from_dict(json.loads(text), registry, extras, refs=refs)
 
 
-def save(flowsheet, path: str | Path, indent: int = 2, registry=None) -> Path:
+def save(flowsheet, path: str | Path, indent: int = 2, registry=None, *,
+         refs: dict | None = None) -> Path:
     """Write a flowsheet to a file.
 
     Returns:
         The path written.
     """
     path = Path(path)
-    path.write_text(to_json(flowsheet, indent=indent, registry=registry))
+    path.write_text(to_json(flowsheet, indent=indent, registry=registry,
+                            refs=refs))
     return path
 
 
-def load(path: str | Path, registry=None, extras: dict | None = None):
+def load(path: str | Path, registry=None, extras: dict | None = None, *,
+         refs: dict | None = None):
     """Read a flowsheet from a file written by :func:`save`."""
-    return from_json(Path(path).read_text(), registry, extras)
+    return from_json(Path(path).read_text(), registry, extras, refs=refs)

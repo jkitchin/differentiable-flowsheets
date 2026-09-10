@@ -16,8 +16,10 @@ hand-maintained table:
 * **ports** come from the ``__call__`` signature: parameters annotated
   as :data:`~difflow.streams.Stream` are inlets, and the leading
   ``Stream`` entries of the return tuple are outlets.
-* **equations** come from the ``equations`` class attribute the unit
-  operations already carry.
+* **equations**, along with the unit's symbol, assumptions, references,
+  numerical method and per-parameter units and symbols, come from the
+  metadata contract in :mod:`difflow.report.metadata` --- the class
+  attributes the unit operations already carry for the report writer.
 
 Deriving rather than declaring means the catalog cannot drift from the
 code, and that an operation whose signature is unannotated is reported
@@ -28,7 +30,7 @@ as *unknown* rather than guessed at.
     >>> spec.ports.n_outlets
     2
     >>> [p.name for p in spec.parameters if p.required]
-    ['T']
+    ['species_order']
 
 Every schema is JSON-serializable through :meth:`OperationSchema.to_dict`,
 which is what a GUI, a CLI or a code generator would consume.
@@ -101,8 +103,12 @@ class ParameterSpec(ParamsMixin):
         is_callable: whether the field holds a function or an arbitrary
             object rather than data. These are the fields a declarative
             front end cannot fill in.
-        units: physical units, when the field declares them in its
-            dataclass metadata.
+        units: physical units. Read from the field's own dataclass
+            metadata when it declares them, and otherwise from the unit
+            class's ``parameter_units`` --- the field is the more
+            specific of the two, so it wins.
+        symbol: LaTeX symbol for the field, from the unit class's
+            ``parameter_symbols``.
         description: help text, when the field declares it.
     """
 
@@ -112,6 +118,7 @@ class ParameterSpec(ParamsMixin):
     required: bool = False
     is_callable: bool = False
     units: str | None = None
+    symbol: str | None = None
     description: str | None = None
 
 
@@ -126,7 +133,14 @@ class OperationSchema(ParamsMixin):
         category: registry category, for grouping in a palette.
         description: one-line summary.
         plugin: the package that registered it.
+        symbol: short identifier the unit uses in report headings.
+        doc: the whole class docstring, cleaned of its indentation.
+            ``description`` is its first line; this is the rest, which
+            an inspector renders.
         equations: LaTeX governing equations, if the unit declares any.
+        assumptions: what the model takes for granted.
+        references: where the model comes from.
+        numerical_method: how it is solved, in a sentence.
         ports: stream connectivity.
         parameters: the ``Params`` fields.
         params_class: name of the ``Params`` dataclass, if one was found.
@@ -141,7 +155,12 @@ class OperationSchema(ParamsMixin):
     category: str
     description: str
     plugin: str
+    symbol: str = ""
+    doc: str = ""
     equations: list[str] = field(default_factory=list)
+    assumptions: list[str] = field(default_factory=list)
+    references: list[str] = field(default_factory=list)
+    numerical_method: str | None = None
     ports: PortSpec = field(default_factory=PortSpec)
     parameters: list[ParameterSpec] = field(default_factory=list)
     params_class: str | None = None
@@ -183,7 +202,12 @@ class OperationSchema(ParamsMixin):
             "category": self.category,
             "description": self.description,
             "plugin": self.plugin,
+            "symbol": self.symbol,
+            "doc": self.doc,
             "equations": list(self.equations),
+            "assumptions": list(self.assumptions),
+            "references": list(self.references),
+            "numerical_method": self.numerical_method,
             "params_class": self.params_class,
             "declarative": self.is_declarative,
             "constructor_extras": list(self.constructor_extras),
@@ -250,6 +274,9 @@ def _outlet_count(ret: Any) -> int | None:
     args = typing.get_args(ret)
     if args:
         return sum(1 for a in args if _is_stream(a))
+    # a lone stream, as the gas units return: one outlet, no info payload
+    if _is_stream(ret):
+        return 1
     # a string annotation, e.g. "tuple[Stream, dict]"
     text = str(ret).strip().strip("'\"")
     if text.startswith("tuple[") and text.endswith("]"):
@@ -258,7 +285,16 @@ def _outlet_count(ret: Any) -> int | None:
 
 
 def _ports(cls: type) -> PortSpec:
-    """Derive stream connectivity from the ``__call__`` signature."""
+    """Derive stream connectivity from the ``__call__`` signature.
+
+    A class that defines no ``__call__`` of its own has no ports at all.
+    Asking for one anyway reaches the metaclass slot, whose signature is
+    ``(*args, **kwargs)`` -- which reads back as a unit accepting any
+    number of inlets, and would draw a mixer where the catalog holds a
+    model object with named methods.
+    """
+    if not inspect.isfunction(getattr(cls, "__call__", None)):
+        return PortSpec()
     try:
         sig = inspect.signature(cls.__call__)
     except (TypeError, ValueError):
@@ -303,10 +339,17 @@ def _params_class(cls: type) -> type | None:
         ann = param.annotation
         if dataclasses.is_dataclass(ann):
             return ann
-        if isinstance(ann, str) and ann.endswith("Params"):
-            found = getattr(inspect.getmodule(cls), ann, None)
-            if dataclasses.is_dataclass(found):
-                return found
+        if isinstance(ann, str):
+            # Strip the quotes before looking it up. A source that writes
+            # `params: "SplitParams"` under `from __future__ import
+            # annotations` arrives here as the string `'SplitParams'`
+            # WITH its quote characters, which ends with neither "Params"
+            # nor any attribute name the module has.
+            text = ann.strip().strip("'\"")
+            if text.endswith("Params"):
+                found = getattr(inspect.getmodule(cls), text, None)
+                if dataclasses.is_dataclass(found):
+                    return found
         break
     guess = getattr(inspect.getmodule(cls), f"{cls.__name__}Params", None)
     return guess if dataclasses.is_dataclass(guess) else None
@@ -318,10 +361,22 @@ def _is_code(annotation: Any) -> bool:
     return "Callable" in text or text.strip() in ("typing.Any", "Any")
 
 
-def _parameters(params_cls: type | None) -> list[ParameterSpec]:
-    """Describe every field of a ``Params`` dataclass."""
+def _parameters(
+    params_cls: type | None, metadata: Any = None
+) -> list[ParameterSpec]:
+    """Describe every field of a ``Params`` dataclass.
+
+    Args:
+        params_cls: the dataclass, or ``None`` if none was found.
+        metadata: the owning unit's
+            :class:`~difflow.report.metadata.UnitMetadata`, whose
+            ``parameter_units`` and ``parameter_symbols`` fill in fields
+            that do not carry their own dataclass metadata.
+    """
     if params_cls is None:
         return []
+    units = dict(getattr(metadata, "parameter_units", None) or {})
+    symbols = dict(getattr(metadata, "parameter_symbols", None) or {})
     specs = []
     for f in dataclasses.fields(params_cls):
         has_default = (
@@ -339,7 +394,8 @@ def _parameters(params_cls: type | None) -> list[ParameterSpec]:
             default=default,
             required=not has_default,
             is_callable=_is_code(f.type),
-            units=f.metadata.get("units"),
+            units=f.metadata.get("units") or units.get(f.name),
+            symbol=symbols.get(f.name),
             description=f.metadata.get("description"),
         ))
     return specs
@@ -358,10 +414,12 @@ def describe_class(
     Works on any class, registered or not, which is what makes it
     usable on a plugin's units before they are wired in.
     """
+    from difflow.report.metadata import get_metadata
     from difflow.serialize import constructor_extras
 
     params_cls = _params_class(cls)
     doc = (description or cls.__doc__ or "").strip()
+    meta = get_metadata(cls)
     return OperationSchema(
         name=name or cls.__name__,
         class_name=cls.__name__,
@@ -369,9 +427,14 @@ def describe_class(
         category=category,
         description=doc.splitlines()[0] if doc else "",
         plugin=plugin,
-        equations=list(getattr(cls, "equations", []) or []),
+        symbol=meta.symbol,
+        doc=inspect.cleandoc(cls.__doc__) if cls.__doc__ else "",
+        equations=list(meta.equations),
+        assumptions=list(meta.assumptions),
+        references=list(meta.references),
+        numerical_method=meta.numerical_method,
         ports=_ports(cls),
-        parameters=_parameters(params_cls),
+        parameters=_parameters(params_cls, meta),
         params_class=params_cls.__name__ if params_cls else None,
         constructor_extras=constructor_extras(cls),
     )

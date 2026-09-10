@@ -210,6 +210,15 @@ $$K_i = \frac{y_i}{x_i} = \frac{P_i^{sat}(T)}{P}$$
 - Ideal gas phase (fugacity coefficient = 1)
 - Valid for low pressures and similar molecules
 
+`K_values` and `K_values_array` also accept the liquid and vapor compositions
+`x` and `y` and ignore them — Raoult K-values are a function of $(T, P)$ alone.
+They are in the signature so that a unit written against this interface (the
+rigorous [`DistillationColumn`](unit-operations-chemical.md), for one) can pass
+its stage compositions unconditionally and run unchanged on a
+[`CubicThermo`](#cubic-thermo-k-values), whose K-values do depend on them.
+`IdealThermo.K_depends_on_composition` is `False` and `CubicThermo`'s is `True`,
+for callers that want to skip a composition iteration they do not need.
+
 #### Bubble Point and Dew Point
 
 ```python
@@ -411,6 +420,55 @@ print(f"Vapor composition: {y}")
    $$K_i^{new} = \frac{\phi_i^L}{\phi_i^V}$$
 
 5. **Iterate** until convergence
+
+---
+
+(cubic-thermo-k-values)=
+### CubicThermo K-Values
+
+`CubicThermo` exposes the same K-value interface as `IdealThermo`, built from
+the EOS fugacity coefficients rather than from Raoult's law:
+
+$$K_i = \frac{\hat\phi_i^L(T, P, x)}{\hat\phi_i^V(T, P, y)}$$
+
+```python
+thermo = CubicThermo(IdealThermo(sp), PengRobinson(crit))
+
+K = thermo.K_values_array(T=380.0, P=10e5, x=x, y=y)  # both compositions known
+K = thermo.K_values_array(T=380.0, P=10e5, x=x)       # bubble-point K at x
+K = thermo.K_values_array(T=380.0, P=10e5)            # no composition: Raoult
+K = thermo.K_values(T=380.0, P=10e5, x=x)             # same, as a dict
+```
+
+That is what lets a unit written against `IdealThermo`'s interface — the
+rigorous [`DistillationColumn`](unit-operations-chemical.md) — run on
+Peng-Robinson without changing the unit.
+
+Two properties of these K-values shape how they are used:
+
+**They depend on composition.** $K_i$ is a fixed point, not a formula. Pass
+whichever compositions you have; whichever you omit is filled in by a bounded
+successive substitution ($y = Kx$ renormalised, or $x = y/K$) from a
+composition-free starting estimate, which is the standard bubble- or dew-point
+K calculation. Pass both when you already have a consistent pair — that is a
+single evaluation with no inner loop.
+
+**They only exist inside the two-root window.** The EOS gives a two-phase K
+only where its cubic has two distinct roots at this $(T, P, x)$. Away from the
+bubble point — a subcooled liquid, a superheated vapor — there is one root,
+both phases take it, and $K_i$ comes back identically 1. That is the EOS
+correctly reporting a single phase, but it makes $\sum_i K_i x_i - 1$ a flat
+zero, which a root finder reads as converged wherever it is standing. A
+bubble-point solve on these K-values therefore needs to start inside the window
+and be able to retreat if a step leaves it; see the two-pass solve in
+`difflow.units.distillation._bubble_T`.
+
+With no composition at all, `CubicThermo` returns the wrapped `IdealThermo`'s
+Raoult K-values rather than the EOS's own Wilson estimate. Both are
+composition-free, but Antoine coefficients are fitted vapor-pressure data,
+while Wilson is a two-constant fit off the critical point that for a heavy
+hydrocarbon can be a hundred degrees out — far enough to start the EOS
+iteration outside the window.
 
 ---
 

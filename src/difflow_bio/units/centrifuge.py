@@ -126,7 +126,12 @@ class Centrifuge:
         "Doran, P.M. Bioprocess Engineering Principles, 2e, Academic Press, 2013.",
     ]
     parameter_symbols = {}
-    parameter_units = {}
+    parameter_units = {
+        "sigma": "m^2",
+        "efficiency": "-",
+        "lysis_threshold_g": "RCF",
+        "lysis_coefficient": "1/RCF",
+    }
     numerical_method = "Closed-form Stokes / sigma-factor relations with smooth efficiency."
 
     def __init__(self, params: CentrifugeParams):
@@ -276,7 +281,16 @@ class DiscStackCentrifuge:
         "Perry's Chemical Engineers' Handbook, 9e, Sec. 18.",
     ]
     parameter_symbols = {"n_discs": "n", "r_outer": "r_o", "r_inner": "r_i", "rpm": "RPM"}
-    parameter_units = {"r_outer": "m", "r_inner": "m", "half_angle": "rad", "rpm": "rev/min"}
+    parameter_units = {
+        "n_discs": "-",
+        "r_outer": "m",
+        "r_inner": "m",
+        "half_angle": "rad",
+        "rpm": "rev/min",
+        "efficiency": "-",
+        "lysis_threshold_g": "RCF",
+        "lysis_coefficient": "1/RCF",
+    }
     numerical_method = "Sigma-factor from disc-stack geometry fed to Stokes settling model."
 
     def __init__(self, params: DiscStackParams):

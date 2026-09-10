@@ -25,11 +25,210 @@ import jax.numpy as jnp
 from jax import Array, lax
 
 from difflow.streams import Stream, get_flows, make_stream
-from difflow.thermo import IdealThermo
+from difflow.thermo import CubicThermo, IdealThermo
 from difflow.params_mixin import ParamsMixin
-from difflow.constants import MIN_ALPHA_DIFF, MAX_STAGES, MAX_GILLILAND_Y, DEFAULT_TEMP_SCALE, EPS_DIVISION
+from difflow.constants import MIN_ALPHA_DIFF, MAX_STAGES, MAX_GILLILAND_Y, EPS_DIVISION
 from difflow.numerics import safe_divide, safe_log
 import optimistix as optx
+
+
+# Second pass of the rigorous column's bubble-point solve, used only when the
+# thermo package's K-values depend on composition (an EOS). The step cap keeps
+# an iterate inside the temperature window where the cubic has two real roots
+# -- outside it the liquid and vapor roots coincide, K collapses to 1, and the
+# residual goes flat.
+_BUBBLE_T_REFINE_STEPS = 8
+_BUBBLE_T_MAX_STEP = 25.0
+# Below this the bubble-point residual is flat, i.e. the EOS is reporting one
+# phase rather than two, and a Newton step there is 0/0.
+_BUBBLE_T_FLAT_DR = 1e-8
+
+# First pass of the bubble-point solve: damped Newton on log(sum(K x)), which
+# is well scaled where the residual itself is exponentially flat.
+_SEED_T_STEPS = 10
+_SEED_T_MAX_STEP = 100.0
+_SEED_T_FLOOR = 20.0
+
+# Sweeps of the shortcut column's end-temperature fixed point: the relative
+# volatilities are evaluated at the product bubble points, and the products
+# come from the volatilities.
+_SHORTCUT_END_T_ITERS = 3
+
+
+def _mixture_molar_enthalpy(
+    thermo: "IdealThermo | CubicThermo",
+    species_order: list[str],
+    mole_fracs: Array,
+    T: Array,
+    phase: str,
+    P: Array,
+) -> Array:
+    """Molar enthalpy (J/mol) of one phase of a mixture.
+
+    Goes through ``thermo.stream_enthalpy`` on a one-mole basis rather than
+    summing ``H_pure`` so that a column is not tied to one thermodynamic model:
+    for an :class:`~difflow.thermo.IdealThermo` this is exactly
+    ``sum_i z_i H_pure_i`` (its enthalpy is a mole-fraction-weighted sum of
+    pure-component enthalpies and it ignores ``P``), while for a
+    :class:`~difflow.thermo.CubicThermo` it is the ideal-gas sensible enthalpy
+    plus the EOS departure for this phase at the column pressure, so the latent
+    heat comes from the same EOS as the K-values.
+
+    Args:
+        thermo: Thermodynamic property calculator.
+        species_order: Species names, in the order ``mole_fracs`` is given.
+        mole_fracs: (nc,) mole fractions of the phase.
+        T: Temperature (K).
+        phase: 'liquid' or 'vapor'.
+        P: Pressure (Pa).
+
+    Returns:
+        Molar enthalpy (J/mol).
+    """
+    flows = {s: mole_fracs[i] for i, s in enumerate(species_order)}
+    return thermo.stream_enthalpy(flows, T, phase=phase, P=jnp.asarray(P))
+
+
+def _bubble_T(
+    thermo: "IdealThermo | CubicThermo",
+    x: Array,
+    P: Array,
+    T_guess: Array | None = None,
+) -> tuple[Array, Array]:
+    """Bubble-point temperature of a liquid mixture, and its incipient vapor.
+
+    Solves ``sum(K_i x_i) = 1`` for T.
+
+    With an ideal thermo package that is one Newton solve on Raoult K-values.
+    With an EOS package it is that solve followed by a safeguarded refinement
+    on the EOS K-values, which are a function of composition as well as of T;
+    see the comments below for why the refinement is written by hand rather
+    than handed to a root finder.
+
+    Args:
+        thermo: Thermodynamic property calculator.
+        x: Liquid mole fractions.
+        P: Pressure (Pa).
+        T_guess: Initial temperature guess (K). If None, a pressure-scaled
+            default is used.
+
+    Returns:
+        (T, y): The bubble temperature and the vapor in equilibrium with it.
+    """
+    x = jnp.asarray(x)
+
+    def residual_from_K(K: Array) -> Array:
+        return jnp.sum(K * x) - 1.0
+
+    def K_at(T: Array) -> Array:
+        """K-values at the composition this bubble point is posed at."""
+        return thermo.K_values_array(T, P, x)
+
+    # Initial guess: use provided guess or estimate from pressure
+    # At higher pressures, boiling points are higher. Rough correlation:
+    # T_bp ≈ T_nbp * (P / 101325)^0.1 for many organics
+    # Use 350K as baseline for 1 atm, scale with pressure
+    if T_guess is not None:
+        T_init = T_guess
+    else:
+        # Pressure-scaled initial guess
+        # 350K is reasonable for many organics at 1 atm
+        # For cryogenic: would need lower base, but user should provide T_guess
+        T_base = 350.0
+        P_ref = 101325.0
+        T_init = T_base * (P / P_ref) ** 0.08
+        T_init = jnp.clip(T_init, 100.0, 800.0)  # Reasonable bounds
+
+    # Pass 1: composition-free K-values -- Raoult's law either way, since a
+    # CubicThermo hands this call back to the IdealThermo it wraps. They are
+    # smooth and monotone in T, with a single root, so this pass owns getting
+    # into the right neighbourhood from a cold start. That is also what pass 2
+    # needs: away from the bubble point the EOS cubic has a single real root,
+    # both phases then take that same root, and K collapses identically to 1 --
+    # a flat-zero residual a Newton step cannot recover from. Pass 1 lands
+    # inside the window where the EOS has two roots, so pass 2 never starts
+    # outside it.
+    def estimate_residual(T, args):
+        return residual_from_K(thermo.K_values_array(T, P))
+
+    # Pass 1a: a few damped Newton steps on log(sum(K x)) rather than on
+    # sum(K x) - 1. Vapor pressure is exponential in -1/T, so far below the
+    # bubble point sum(K x) is ~0 and so is its slope: Newton on the plain
+    # residual divides one tiny number by another and steps tens of thousands
+    # of degrees, into the region where the Antoine exponent overflows. Its
+    # logarithm has a slope that stays O(1/K) over the whole range -- it is
+    # nearly linear in 1/T -- so the same step is a sane one. Capped and
+    # floored on top of that, because "nearly" is not "exactly".
+    def log_residual(T):
+        # Not safe_log: its 1e-15 floor is inside the range this pass has to
+        # work over. Two hundred degrees under the bubble point sum(K x) is
+        # ~1e-42 -- an ordinary float64 -- and clipping it there would flatten
+        # the very slope the step is derived from, stalling the seed at its
+        # starting point. Float64 goes down to ~1e-308, so the floor here only
+        # has to stop a true underflow producing -inf.
+        return jnp.log(jnp.maximum(jnp.sum(thermo.K_values_array(T, P) * x), 1e-300))
+
+    def seed_step(T_k, _):
+        r, dr = jax.value_and_grad(log_residual)(T_k)
+        ok = jnp.isfinite(r) & jnp.isfinite(dr) & (jnp.abs(dr) > 1e-12)
+        r_safe = jnp.where(ok, r, 0.0)
+        dr_safe = jnp.where(ok, dr, 1.0)
+        dT = jnp.clip(-r_safe / dr_safe, -_SEED_T_MAX_STEP, _SEED_T_MAX_STEP)
+        T_next = jnp.maximum(T_k + dT, _SEED_T_FLOOR)
+        return jnp.where(jnp.isfinite(T_next), T_next, T_k), None
+
+    T_seed, _ = lax.scan(seed_step, T_init, None, length=_SEED_T_STEPS)
+
+    # Pass 1b: finish on the residual itself. Seeded this close it converges in
+    # a step or two, and optimistix differentiates it implicitly, so the seed
+    # above never appears in the gradient.
+    solver = optx.Newton(rtol=1e-10, atol=1e-10)
+    sol = optx.root_find(
+        estimate_residual, solver, T_seed, args=None, max_steps=50, throw=False,
+    )
+    T = sol.value
+
+    # Pass 2: refine against the composition-dependent K-values. Skipped when
+    # the thermo package's K-values are a function of (T, P) alone, where pass
+    # 1 already solved the real residual.
+    if getattr(thermo, "K_depends_on_composition", True):
+        def refined_residual(T):
+            return residual_from_K(K_at(T))
+
+        # A safeguarded Newton written out rather than handed to a root finder.
+        # An EOS K-value only means anything over the temperature window where
+        # its cubic has two roots at this composition; outside it both phases
+        # take the one root, K is identically 1, and the residual is a flat
+        # zero that a root finder reads as converged wherever it happens to be
+        # standing. So: cap the step, and when a step lands somewhere flat
+        # (dr = 0), bisect back toward the last temperature that was not,
+        # instead of taking 0/0. The pass-1 estimate is the first such
+        # temperature, which makes the worst case "return the ideal-K bubble
+        # point", never a NaN.
+        def newton_step(carry, _):
+            T_k, T_ok = carry
+            r, dr = jax.value_and_grad(refined_residual)(T_k)
+            in_window = (
+                jnp.isfinite(r) & jnp.isfinite(dr)
+                & (jnp.abs(dr) > _BUBBLE_T_FLAT_DR)
+            )
+            # Sanitise before the divide, not after: a NaN that has already
+            # been formed is something a later jnp.where can hide from the
+            # value but not from the derivative.
+            r_safe = jnp.where(in_window, r, 0.0)
+            dr_safe = jnp.where(in_window, dr, 1.0)
+            dT = jnp.clip(
+                -r_safe / dr_safe, -_BUBBLE_T_MAX_STEP, _BUBBLE_T_MAX_STEP
+            )
+            T_next = jnp.where(in_window, T_k + dT, 0.5 * (T_k + T_ok))
+            return (T_next, jnp.where(in_window, T_k, T_ok)), None
+
+        (T, _), _ = lax.scan(
+            newton_step, (T, T), None, length=_BUBBLE_T_REFINE_STEPS
+        )
+
+    y = K_at(T) * x
+    return T, y / jnp.sum(y)
 
 
 @dataclass(repr=False)
@@ -40,8 +239,12 @@ class ShortcutColumnParams(ParamsMixin):
         species_order: List of species names for array ordering
         light_key: Name of light key component
         heavy_key: Name of heavy key component
-        x_D_LK: Desired mole fraction of LK in distillate
-        x_B_HK: Desired mole fraction of HK in bottoms
+        x_D_LK: Fractional **recovery** of the light key in the distillate --
+            0.99 sends 99 % of the feed's light key overhead. Despite the
+            name, which is historical, it is not a mole fraction; the
+            distillate's actual light-key mole fraction comes out in
+            ``info["x_D"]``.
+        x_B_HK: Fractional recovery of the heavy key in the bottoms, likewise.
     """
     species_order: list[str]
     light_key: str
@@ -96,12 +299,21 @@ class ShortcutColumn:
     def __init__(
         self,
         params: ShortcutColumnParams,
-        thermo: IdealThermo,
+        thermo: IdealThermo | CubicThermo,
     ):
         """Initialize shortcut column.
 
         Args:
-            params: Column parameters
+            params: Column parameters. Supplies the K-values the relative
+                volatilities are built from and the enthalpies the duties are
+                built from, so it sets what the whole
+                Fenske-Underwood-Gilliland chain is worth: an
+                :class:`~difflow.thermo.IdealThermo` gives Raoult
+                volatilities, a :class:`~difflow.thermo.CubicThermo` gives EOS
+                ones. For light hydrocarbons at pressure the difference runs
+                through to the answer -- on a C3-C8 cut at 10 bar the light
+                key's alpha is 2.32 on Raoult against 1.81 on Peng-Robinson,
+                which is 3.7 minimum stages against 5.6.
             thermo: Thermodynamic property calculator for K-values
         """
         self.params = params
@@ -111,6 +323,7 @@ class ShortcutColumn:
         self,
         T: Array,
         P: Array,
+        x: Array | None = None,
     ) -> dict[str, Array]:
         """Calculate relative volatilities with respect to heavy key.
 
@@ -119,11 +332,18 @@ class ShortcutColumn:
         Args:
             T: Temperature (K)
             P: Pressure (Pa)
+            x: Liquid mole fractions in species order, for a thermo package
+               whose K-values depend on composition (a
+               :class:`~difflow.thermo.CubicThermo`). Ignored by Raoult
+               K-values, which are a function of (T, P) alone. Omitting it on
+               an EOS package falls back to that package's composition-free
+               estimate, which is a worse relative volatility than one
+               evaluated at the composition the column end actually has.
 
         Returns:
             Dictionary of relative volatilities by species
         """
-        K = self.thermo.K_values(T, P)
+        K = self.thermo.K_values(T, P, x)
         K_HK = K[self.params.heavy_key]
 
         return {s: K[s] / K_HK for s in self.params.species_order}
@@ -133,21 +353,28 @@ class ShortcutColumn:
         T_top: Array,
         T_bot: Array,
         P: Array,
+        x_top: Array | None = None,
+        x_bot: Array | None = None,
     ) -> dict[str, Array]:
         """Calculate geometric mean relative volatility.
 
         alpha_avg = sqrt(alpha_top * alpha_bottom)
 
         Args:
-            T_top: Top temperature (K)
-            T_bot: Bottom temperature (K)
+            T_top: Top temperature (K) -- the condenser, i.e. the bubble point
+                of the distillate
+            T_bot: Bottom temperature (K) -- the reboiler, i.e. the bubble
+                point of the bottoms
             P: Column pressure (Pa)
+            x_top: Distillate mole fractions, for a composition-dependent
+                thermo package (see :meth:`relative_volatility`)
+            x_bot: Bottoms mole fractions, likewise
 
         Returns:
             Dictionary of average relative volatilities
         """
-        alpha_top = self.relative_volatility(T_top, P)
-        alpha_bot = self.relative_volatility(T_bot, P)
+        alpha_top = self.relative_volatility(T_top, P, x_top)
+        alpha_bot = self.relative_volatility(T_bot, P, x_bot)
 
         return {
             s: jnp.sqrt(alpha_top[s] * alpha_bot[s])
@@ -348,100 +575,33 @@ class ShortcutColumn:
 
         return N, near_min_reflux
 
-    def feed_stage_kirkbride(
+    def _split_products(
         self,
-        N: Array,
-        z_LK: Array,
-        z_HK: Array,
-        x_B_LK: Array,
-        x_D_HK: Array,
-        B_over_D: Array,
-    ) -> Array:
-        """Estimate optimal feed stage using Kirkbride equation.
+        feed_flows: dict[str, Array],
+        F_total: Array,
+        z: dict[str, Array],
+        alpha: dict[str, Array],
+    ) -> tuple[dict, dict, Array, Array, dict, dict]:
+        """Distribute the feed between the products at a given volatility set.
 
-        log(N_R/N_S) = 0.206 * log[(z_HK/z_LK) * (x_B_LK/x_D_HK)^2 * (B/D)]
-
-        where N_R = rectifying stages, N_S = stripping stages
+        The keys are placed by their specified recoveries; every other species
+        is distributed by the Hengstebeck-Geddes equation,
+        ``log(d_i/b_i) = A + C log(alpha_i)``, with A and C fixed by the keys.
+        Split out of :meth:`__call__` because it has to be re-evaluated as the
+        column-end temperatures converge: the split depends on ``alpha``, and
+        ``alpha`` is evaluated at the ends, which are the bubble points of the
+        products this returns.
 
         Args:
-            N: Total stages
-            z_LK: Feed mole fraction of LK
-            z_HK: Feed mole fraction of HK
-            x_B_LK: Bottoms mole fraction of LK
-            x_D_HK: Distillate mole fraction of HK
-            B_over_D: Bottoms to distillate molar flow ratio
+            feed_flows: Feed molar flows by species (mol/s).
+            F_total: Total feed flow (mol/s).
+            z: Feed mole fractions by species.
+            alpha: Relative volatilities by species (vs the heavy key).
 
         Returns:
-            Feed stage number (from bottom)
-        """
-        ratio_arg = safe_divide(z_HK, z_LK) * \
-                    safe_divide(x_B_LK, x_D_HK)**2 * \
-                    B_over_D
-
-        log_ratio = 0.206 * safe_log(ratio_arg)
-        NR_over_NS = jnp.exp(log_ratio)
-
-        # N = N_R + N_S, NR/NS = ratio
-        # N_S = N / (1 + ratio)
-        N_S = N / (1 + NR_over_NS)
-
-        return jnp.maximum(jnp.round(N_S), 1.0)
-
-    def __call__(
-        self,
-        feed: Stream,
-        R: Array | float,
-        P: Array | float = 101325.0,
-        q: Array | float = 1.0,
-    ) -> tuple[Stream, Stream, dict[str, Array]]:
-        """Perform shortcut distillation calculation.
-
-        Args:
-            feed: Feed stream
-            R: Reflux ratio (L/D)
-            P: Column pressure (Pa)
-            q: Feed quality (1 = saturated liquid)
-
-        Returns:
-            distillate: Distillate stream
-            bottoms: Bottoms stream
-            info: Dictionary with design information:
-                - 'N_min': Minimum stages
-                - 'R_min': Minimum reflux ratio
-                - 'N': Actual stages
-                - 'N_feed': Feed stage
-                - 'alpha': Relative volatilities
-                - 'close_boiling': True if α ≈ 1 (hard separation)
-                - 'near_min_reflux': True if R ≈ R_min
+            (distillate_flows, bottoms_flows, D_total, B_total, x_D, x_B)
         """
         p = self.params
-        R = jnp.asarray(R)
-        P = jnp.asarray(P)
-        q = jnp.asarray(q)
-
-        # Get feed composition
-        feed_flows = get_flows(feed)
-        F_total = sum(feed_flows.values())
-        z = {s: feed_flows[s] / F_total for s in p.species_order}
-
-        # Estimate column temperatures scaled relative to feed T
-        # Instead of hard-coded ±20K which fails for cryogenic/high-T systems,
-        # use a percentage of feed temperature. This scales appropriately:
-        # - Cryogenic (90K feed): ΔT ≈ ±4.5K
-        # - Ambient (350K feed): ΔT ≈ ±17.5K
-        # - High-T (600K feed): ΔT ≈ ±30K
-        T_feed = feed["T"]
-        T_half_range = T_feed * DEFAULT_TEMP_SCALE
-        T_top = T_feed - T_half_range
-        T_bot = T_feed + T_half_range
-
-        # Get relative volatilities (average and per-end for variation diagnostics)
-        alpha_top = self.relative_volatility(T_top, P)
-        alpha_bot = self.relative_volatility(T_bot, P)
-        alpha = {
-            s: jnp.sqrt(alpha_top[s] * alpha_bot[s])
-            for s in p.species_order
-        }
         alpha_LK = alpha[p.light_key]
 
         # Recovery calculations
@@ -497,6 +657,139 @@ class ShortcutColumn:
         x_D = {s: safe_divide(distillate_flows[s], D_total) for s in p.species_order}
         x_B = {s: safe_divide(bottoms_flows[s], B_total) for s in p.species_order}
 
+        return distillate_flows, bottoms_flows, D_total, B_total, x_D, x_B
+
+    def feed_stage_kirkbride(
+        self,
+        N: Array,
+        z_LK: Array,
+        z_HK: Array,
+        x_B_LK: Array,
+        x_D_HK: Array,
+        B_over_D: Array,
+    ) -> Array:
+        """Estimate optimal feed stage using Kirkbride equation.
+
+        log(N_R/N_S) = 0.206 * log[(z_HK/z_LK) * (x_B_LK/x_D_HK)^2 * (B/D)]
+
+        where N_R = rectifying stages, N_S = stripping stages
+
+        Args:
+            N: Total stages
+            z_LK: Feed mole fraction of LK
+            z_HK: Feed mole fraction of HK
+            x_B_LK: Bottoms mole fraction of LK
+            x_D_HK: Distillate mole fraction of HK
+            B_over_D: Bottoms to distillate molar flow ratio
+
+        Returns:
+            Feed stage number (from bottom)
+        """
+        ratio_arg = safe_divide(z_HK, z_LK) * \
+                    safe_divide(x_B_LK, x_D_HK)**2 * \
+                    B_over_D
+
+        log_ratio = 0.206 * safe_log(ratio_arg)
+        NR_over_NS = jnp.exp(log_ratio)
+
+        # N = N_R + N_S, NR/NS = ratio
+        # N_S = N / (1 + ratio)
+        N_S = N / (1 + NR_over_NS)
+
+        return jnp.maximum(jnp.round(N_S), 1.0)
+
+    def __call__(
+        self,
+        feed: Stream,
+        R: Array | float,
+        P: Array | float = 101325.0,
+        q: Array | float = 1.0,
+    ) -> tuple[Stream, Stream, dict[str, Array]]:
+        """Perform shortcut distillation calculation.
+
+        Args:
+            feed: Feed stream
+            R: Reflux ratio (L/D)
+            P: Column pressure (Pa)
+            q: Feed quality (1 = saturated liquid)
+
+        Returns:
+            distillate: Distillate stream, at the condenser temperature --
+                a total condenser delivers saturated liquid, so this is the
+                bubble point of the distillate
+            bottoms: Bottoms stream, at the reboiler temperature -- the
+                bubble point of the bottoms
+            info: Dictionary with design information:
+                - 'N_min': Minimum stages
+                - 'R_min': Minimum reflux ratio
+                - 'N': Actual stages
+                - 'N_feed': Feed stage
+                - 'alpha': Relative volatilities, the geometric mean of the
+                  values at the two column ends
+                - 'T_top'/'T_condenser': Condenser temperature (K)
+                - 'T_bot'/'T_reboiler': Reboiler temperature (K)
+                - 'close_boiling': True if α ≈ 1 (hard separation)
+                - 'near_min_reflux': True if R ≈ R_min
+        """
+        p = self.params
+        R = jnp.asarray(R)
+        P = jnp.asarray(P)
+        q = jnp.asarray(q)
+
+        # Get feed composition
+        feed_flows = get_flows(feed)
+        F_total = sum(feed_flows.values())
+        z = {s: feed_flows[s] / F_total for s in p.species_order}
+
+        # Column-end temperatures. These are not free estimates: the top of the
+        # column is a total condenser, so it sits at the bubble point of the
+        # distillate, and the bottom is the reboiler, at the bubble point of
+        # the bottoms. Fenske-Underwood-Gilliland wants the relative
+        # volatilities at those two states -- which makes them a small fixed
+        # point, since the products' compositions come from the volatilities
+        # in turn. Seed it from the feed's own bubble point and sweep a few
+        # times; the products separate on the first pass and the temperatures
+        # settle within a fraction of a degree after that.
+        T_feed = feed["T"]
+        z_arr = jnp.array([z[s] for s in p.species_order])
+        T_end, _ = _bubble_T(self.thermo, z_arr, P, T_guess=T_feed)
+        T_top = T_end
+        T_bot = T_end
+        x_D_arr = z_arr
+        x_B_arr = z_arr
+
+        def alpha_and_split(T_top, T_bot, x_D_arr, x_B_arr):
+            """One sweep: volatilities at the ends, then the product split."""
+            alpha_top = self.relative_volatility(T_top, P, x_D_arr)
+            alpha_bot = self.relative_volatility(T_bot, P, x_B_arr)
+            alpha = {
+                s: jnp.sqrt(alpha_top[s] * alpha_bot[s])
+                for s in p.species_order
+            }
+            split = self._split_products(feed_flows, F_total, z, alpha)
+            return alpha_top, alpha_bot, alpha, split
+
+        for _ in range(_SHORTCUT_END_T_ITERS):
+            *_, (_, _, _, _, x_D, x_B) = alpha_and_split(
+                T_top, T_bot, x_D_arr, x_B_arr
+            )
+            x_D_arr = jnp.array([x_D[s] for s in p.species_order])
+            x_B_arr = jnp.array([x_B[s] for s in p.species_order])
+            T_top, _ = _bubble_T(self.thermo, x_D_arr, P, T_guess=T_top)
+            T_bot, _ = _bubble_T(self.thermo, x_B_arr, P, T_guess=T_bot)
+
+        # A last sweep so the volatilities and the split that get reported are
+        # the ones belonging to the converged end temperatures.
+        alpha_top, alpha_bot, alpha, split = alpha_and_split(
+            T_top, T_bot, x_D_arr, x_B_arr
+        )
+        distillate_flows, bottoms_flows, D_total, B_total, x_D, x_B = split
+        x_D_arr = jnp.array([x_D[s] for s in p.species_order])
+        x_B_arr = jnp.array([x_B[s] for s in p.species_order])
+        alpha_LK = alpha[p.light_key]
+        z_LK = z[p.light_key]
+        z_HK = z[p.heavy_key]
+
         # Fenske minimum stages
         x_D_LK = x_D[p.light_key]
         x_B_LK = x_B[p.light_key]
@@ -514,44 +807,49 @@ class ShortcutColumn:
         x_D_HK = x_D[p.heavy_key]
         N_feed = self.feed_stage_kirkbride(N, z_LK, z_HK, x_B_LK, x_D_HK, B_over_D)
 
-        # Create output streams
+        # Create output streams. The distillate leaves the condenser as a
+        # saturated liquid (T_top is its bubble point); the bottoms leaves the
+        # reboiler at its own bubble point.
         distillate = make_stream(distillate_flows, T_top, P)
         bottoms = make_stream(bottoms_flows, T_bot, P)
 
         # Compute condenser and reboiler duties including latent heat
-        # Condenser: condense all vapor from top stage
+        # Condenser: condense all vapor from the top stage
         V_top = (R + 1) * D_total  # Vapor flow at top stage
 
-        # Compute mixture enthalpies at top and bottom using full model
-        # (sensible + latent heat via Hvap)
-        x_D_arr = jnp.array([x_D[s] for s in p.species_order])
-        x_B_arr = jnp.array([x_B[s] for s in p.species_order])
+        def h_mix(mole_fracs, T, phase):
+            return _mixture_molar_enthalpy(
+                self.thermo, p.species_order, mole_fracs, T, phase, P
+            )
 
-        # Vapor enthalpy at top (includes latent heat)
-        H_vapor_top = jnp.zeros(())
-        h_liquid_top = jnp.zeros(())
-        for i, s in enumerate(p.species_order):
-            H_vapor_top = H_vapor_top + x_D_arr[i] * self.thermo.H_pure(s, T_top, 'vapor')
-            h_liquid_top = h_liquid_top + x_D_arr[i] * self.thermo.H_pure(s, T_top, 'liquid')
+        # Condensing vapor of the distillate's composition to liquid of the
+        # same composition, both at the condenser temperature: the latent heat
+        # of the distillate. This is the standard shortcut duty, and it is
+        # where the shortcut and rigorous columns genuinely differ -- the
+        # rigorous column knows its top *tray* temperature and so also charges
+        # the condenser for cooling the vapor from the tray down to the
+        # condenser, while a shortcut method has no tray profile to take that
+        # temperature from. The dew point of x_D would supply one on paper, but
+        # a dew point is set by the heaviest trace in the mixture, and the
+        # heaviest trace in x_D is the least reliable number the
+        # Hengstebeck-Geddes distribution produces.
+        H_vapor_top = h_mix(x_D_arr, T_top, 'vapor')
 
         # Feed enthalpy
-        h_F = jnp.zeros(())
-        for i, s in enumerate(p.species_order):
-            z_arr_i = jnp.asarray(z[s])
-            h_F = h_F + z_arr_i * self.thermo.H_pure(s, T_feed, 'liquid')
+        h_F = h_mix(z_arr, T_feed, 'liquid')
+
+        # Distillate liquid enthalpy (total condenser: saturated liquid)
+        h_D = h_mix(x_D_arr, T_top, 'liquid')
 
         # Bottoms liquid enthalpy
-        h_B = jnp.zeros(())
-        for i, s in enumerate(p.species_order):
-            h_B = h_B + x_B_arr[i] * self.thermo.H_pure(s, T_bot, 'liquid')
+        h_B = h_mix(x_B_arr, T_bot, 'liquid')
 
         # Condenser duty (heat removed, negative)
-        Q_condenser = V_top * (h_liquid_top - H_vapor_top)
+        Q_condenser = V_top * (h_D - H_vapor_top)
 
         # Reboiler duty from overall energy balance
         # F*h_F + Q_reb = D*h_D + B*h_B + |Q_cond|
         # Q_reb = D*h_D + B*h_B - Q_cond - F*h_F  (Q_cond < 0)
-        h_D = h_liquid_top  # total condenser: distillate is liquid at T_top
         Q_reboiler = D_total * h_D + B_total * h_B - Q_condenser - F_total * h_F
 
         # Alpha variation diagnostics (#87)
@@ -586,6 +884,8 @@ class ShortcutColumn:
             "x_B": x_B,
             "T_top": T_top,
             "T_bot": T_bot,
+            "T_condenser": T_top,
+            "T_reboiler": T_bot,
             "close_boiling": close_boiling,
             "near_min_reflux": near_min_reflux,
             "Q_condenser": Q_condenser,
@@ -608,12 +908,29 @@ class ShortcutColumn:
 class DistillationColumnParams(ParamsMixin):
     """Parameters for rigorous distillation column.
 
+    Stages are indexed from the bottom, zero-based: stage 0 is the reboiler,
+    stage ``n_stages - 1`` is the top tray. The condenser is not a stage -- it
+    sits outside the cascade and is what ``condenser_type`` describes -- so
+    ``n_stages`` counts the trays plus the reboiler, and every profile in
+    ``info`` is in that same order (``T_profile[0]`` is the reboiler,
+    ``T_profile[-1]`` the top tray).
+
     Attributes:
-        species_order: List of species names
-        n_stages: Total number of stages (including condenser/reboiler)
-        feed_stage: Feed stage number (1 = bottom)
-        condenser_type: 'total' or 'partial'
-        P: Column pressure (Pa)
+        species_order: List of species names. Sets the column order of every
+            array in ``info``, and must match the thermo package's species.
+        n_stages: Number of equilibrium stages: the trays plus the reboiler.
+        feed_stage: Stage the feed enters, as a zero-based index from the
+            bottom (0 = reboiler). Stages below it are the stripping section
+            and stages above it the rectifying section. Which side the feed
+            stage itself is counted on differs between the CMO sweep and the
+            MESH flow initialisation, so do not read anything into the
+            boundary stage.
+        condenser_type: 'total' or 'partial'. Only 'total' is implemented;
+            'partial' is rejected rather than silently treated as total.
+        P: Column pressure (Pa). One pressure for the whole column -- there is
+            no tray pressure drop.
+        q: Feed thermal condition (1.0 = saturated liquid, 0.0 = saturated
+            vapor).
     """
     species_order: list[str]
     n_stages: int
@@ -622,6 +939,16 @@ class DistillationColumnParams(ParamsMixin):
     P: float = 101325.0
     q: float = 1.0  # Feed thermal condition (1.0 = saturated liquid, 0.0 = saturated vapor)
 
+    def __post_init__(self):
+        if self.condenser_type != "total":
+            raise NotImplementedError(
+                f"condenser_type={self.condenser_type!r} is not implemented; "
+                "the MESH solver models a total condenser (the distillate has "
+                "the composition of the top tray's vapor and leaves as a "
+                "saturated liquid). A partial condenser would be an extra "
+                "equilibrium stage with a vapor product."
+            )
+
 
 class DistillationColumn:
     """Rigorous stage-by-stage distillation column.
@@ -629,12 +956,16 @@ class DistillationColumn:
     Solves MESH equations (Material, Equilibrium, Summation, Heat balance)
     for each stage using the bubble-point method.
 
-    Stage numbering: 1 = reboiler (bottom), n_stages = condenser (top)
+    Stage numbering: zero-based from the bottom -- stage 0 is the reboiler,
+    stage ``n_stages - 1`` is the top tray. The total condenser is outside the
+    cascade, so the distillate is not a stage's product (see
+    :meth:`_condenser_T`).
 
     Assumptions:
     - Equilibrium stages
     - No pressure drop between stages
-    - Constant molar overflow (CMO) for initial solution
+    - Total condenser
+    - Constant molar overflow (CMO) for the initial solution
 
     All calculations are JAX-compatible for automatic differentiation.
     """
@@ -673,13 +1004,20 @@ class DistillationColumn:
     def __init__(
         self,
         params: DistillationColumnParams,
-        thermo: IdealThermo,
+        thermo: IdealThermo | CubicThermo,
     ):
         """Initialize distillation column.
 
         Args:
             params: Column parameters
-            thermo: Thermodynamic property calculator
+            thermo: Thermodynamic property calculator. An
+                :class:`~difflow.thermo.IdealThermo` gives Raoult K-values;
+                a :class:`~difflow.thermo.CubicThermo` gives EOS K-values
+                (``K_i = phi_i^L / phi_i^V``) and EOS enthalpies, which is what
+                a light-hydrocarbon column at pressure needs -- Raoult's law is
+                out by tens of degrees at the condenser there. The column code
+                is the same either way; the composition dependence of the EOS
+                K-values rides along inside the existing MESH iteration.
         """
         self.params = params
         self.thermo = thermo
@@ -693,7 +1031,8 @@ class DistillationColumn:
     ) -> tuple[Array, Array]:
         """Calculate bubble point temperature and vapor composition.
 
-        Solves: sum(K_i * x_i) = 1 for T
+        Solves: sum(K_i * x_i) = 1 for T. A thin wrapper on the module-level
+        :func:`_bubble_T`, which both columns share.
 
         Args:
             x: Liquid mole fractions
@@ -704,37 +1043,38 @@ class DistillationColumn:
         Returns:
             (T, y): Bubble temperature and vapor composition
         """
-        p = self.params
+        return _bubble_T(self.thermo, x, P, T_guess)
 
-        def bubble_residual(T, args):
-            K = self.thermo.K_values_array(T, P)
-            return jnp.sum(K * x) - 1.0
+    def _condenser_T(
+        self,
+        x_D: Array,
+        P: Array,
+        T_guess: Array | None = None,
+    ) -> Array:
+        """Temperature of a total condenser's outlet (K).
 
-        # Initial guess: use provided guess or estimate from pressure
-        # At higher pressures, boiling points are higher. Rough correlation:
-        # T_bp ≈ T_nbp * (P / 101325)^0.1 for many organics
-        # Use 350K as baseline for 1 atm, scale with pressure
-        if T_guess is not None:
-            T_init = T_guess
-        else:
-            # Pressure-scaled initial guess
-            # 350K is reasonable for many organics at 1 atm
-            # For cryogenic: would need lower base, but user should provide T_guess
-            T_base = 350.0
-            P_ref = 101325.0
-            T_init = T_base * (P / P_ref) ** 0.08
-            T_init = jnp.clip(T_init, 100.0, 800.0)  # Reasonable bounds
+        A total condenser condenses the whole of the top stage's vapor, so its
+        outlet -- the distillate, and the reflux returned to the top stage --
+        is a saturated liquid of composition ``x_D`` at the column pressure.
+        Its temperature is therefore the bubble point of ``x_D``, which is
+        **not** the top stage temperature: the top stage sits at the bubble
+        point of its own liquid ``x_top``, equivalently the dew point of the
+        vapor ``y_top = x_D`` it sends to the condenser, and a mixture's dew
+        point is above its bubble point. The gap is the width of the cut --
+        small for a sharp binary split, tens of degrees for a wide-boiling
+        multicomponent distillate.
 
-        solver = optx.Newton(rtol=1e-10, atol=1e-10)
-        sol = optx.root_find(bubble_residual, solver, T_init, args=None, max_steps=50, throw=False)
-        T = sol.value
+        Args:
+            x_D: Distillate mole fractions (= the top stage vapor, for a total
+                condenser).
+            P: Column pressure (Pa).
+            T_guess: Initial temperature guess (K); the top stage temperature
+                is a reasonable one, being an upper bound.
 
-        # Calculate y from K-values
-        K = self.thermo.K_values_array(T, P)
-        y = K * x
-        y = y / jnp.sum(y)  # Normalize
-
-        return T, y
+        Returns:
+            Condenser temperature (K).
+        """
+        return self._bubble_point_T(x_D, P, T_guess=T_guess)[0]
 
     def _solve_constant_molar_overflow(
         self,
@@ -787,10 +1127,9 @@ class DistillationColumn:
 
         # Better initial guess: one-stage flash enriches the distillate estimate.
         # Use 350 K as a safe starting T for the feed bubble point.
-        T_bp_feed, _ = self._bubble_point_T(z, P, T_guess=jnp.asarray(350.0))
-        K_feed = self.thermo.K_values_array(T_bp_feed, P)
-        y_flash = K_feed * z
-        y_flash = y_flash / jnp.maximum(jnp.sum(y_flash), 1e-10)
+        T_bp_feed, y_flash = self._bubble_point_T(
+            z, P, T_guess=jnp.asarray(350.0)
+        )
         x_D_init = jnp.clip(y_flash, 1e-6, 1.0 - 1e-6)
         x_D_init = x_D_init / jnp.sum(x_D_init)
 
@@ -809,9 +1148,11 @@ class DistillationColumn:
             x, T = carry
 
             # --- Step 1: K values at current stage temperatures ---
+            # The stage's liquid composition goes in too: an EOS K-value
+            # depends on it, a Raoult K-value ignores it.
             def scan_K(_, inputs):
                 x_j, T_j = inputs
-                return None, self.thermo.K_values_array(T_j, P)
+                return None, self.thermo.K_values_array(T_j, P, x_j)
 
             _, K_all = lax.scan(scan_K, None, (x, T))  # (n, nc)
 
@@ -876,13 +1217,37 @@ class DistillationColumn:
         # Final equilibrium vapor compositions
         def compute_y(_, inputs):
             x_j, T_j = inputs
-            K_j = self.thermo.K_values_array(T_j, P)
+            K_j = self.thermo.K_values_array(T_j, P, x_j)
             y_j = K_j * x_j
             return None, y_j / jnp.maximum(jnp.sum(y_j), 1e-10)
 
         _, y_final = lax.scan(compute_y, None, (x_final, T_final))
 
         return x_final, y_final, T_final
+
+    def _molar_enthalpy(
+        self,
+        mole_fracs: Array,
+        T: Array,
+        phase: str,
+    ) -> Array:
+        """Molar enthalpy (J/mol) of one phase at a stage.
+
+        A thin wrapper on the module-level :func:`_mixture_molar_enthalpy`,
+        bound to this column's species order and pressure.
+
+        Args:
+            mole_fracs: (nc,) mole fractions of the phase, in species order.
+            T: Stage temperature (K).
+            phase: 'liquid' or 'vapor'.
+
+        Returns:
+            Molar enthalpy (J/mol).
+        """
+        p = self.params
+        return _mixture_molar_enthalpy(
+            self.thermo, p.species_order, mole_fracs, T, phase, jnp.asarray(p.P)
+        )
 
     def _compute_stage_enthalpies(
         self,
@@ -901,15 +1266,10 @@ class DistillationColumn:
             h_all: (n,) liquid mixture enthalpies (J/mol)
             H_all: (n,) vapor mixture enthalpies (J/mol)
         """
-        p = self.params
-
         def stage_enthalpies(_, inputs):
             x_j, y_j, T_j = inputs
-            h_j = jnp.zeros(())
-            H_j = jnp.zeros(())
-            for i, s in enumerate(p.species_order):
-                h_j = h_j + x_j[i] * self.thermo.H_pure(s, T_j, 'liquid')
-                H_j = H_j + y_j[i] * self.thermo.H_pure(s, T_j, 'vapor')
+            h_j = self._molar_enthalpy(x_j, T_j, 'liquid')
+            H_j = self._molar_enthalpy(y_j, T_j, 'vapor')
             return None, (h_j, H_j)
 
         _, (h_all, H_all) = lax.scan(stage_enthalpies, None, (x, y, T))
@@ -928,6 +1288,7 @@ class DistillationColumn:
         B: Array,
         V_top: Array | None = None,
         V_bot: Array | None = None,
+        T_condenser: Array | None = None,
     ) -> tuple[Array, Array]:
         """Compute condenser and reboiler duties including latent heat.
 
@@ -937,8 +1298,12 @@ class DistillationColumn:
         calculations.
 
         For total condenser:
-            Q_cond = V_top * (H_vapor_top - h_liquid_top)
-            where H_vapor includes latent heat of vaporization.
+            Q_cond = V_top * (h_D - H_vapor_top)
+            where H_vapor_top is the top stage vapor (latent heat included)
+            and h_D is the condensed product: the same composition as that
+            vapor, as a saturated liquid at the condenser temperature (see
+            :meth:`_condenser_T`), not the top stage liquid at the top stage
+            temperature.
 
         For reboiler (from overall energy balance):
             Q_reb = D * h_D + B * h_B - F * h_F + Q_cond
@@ -955,14 +1320,20 @@ class DistillationColumn:
             B: Bottoms flow rate (mol/s)
             V_top: Vapor flow leaving top stage (mol/s).
                    If None, uses (R+1)*D (CMO assumption).
-            V_bot: Vapor flow leaving bottom stage (mol/s).
-                   If None, uses (R+1)*D (CMO assumption).
+            V_bot: Vapor flow leaving bottom stage (mol/s). Not used: the
+                   reboiler duty comes from the overall energy balance, which
+                   never needs it. Accepted so callers can pass the profile
+                   they have.
+            T_condenser: Condenser temperature (K). If None it is computed
+                   here as the bubble point of the distillate; pass it when
+                   the caller has already solved for it.
 
         Returns:
             Q_condenser: Condenser duty (J/s, negative = heat removed)
             Q_reboiler: Reboiler duty (J/s, positive = heat added)
         """
         p = self.params
+        P = jnp.asarray(p.P)
 
         # Compute stage enthalpies (includes latent heat for vapor)
         h_all, H_all = self._compute_stage_enthalpies(
@@ -971,28 +1342,27 @@ class DistillationColumn:
 
         # Top stage enthalpies
         H_vapor_top = H_all[-1]   # Vapor enthalpy at top (includes Hvap)
-        h_liquid_top = h_all[-1]  # Liquid enthalpy at top
 
         # Bottom stage enthalpies
-        H_vapor_bot = H_all[0]    # Vapor enthalpy at bottom (includes Hvap)
         h_liquid_bot = h_all[0]   # Liquid enthalpy at bottom
 
         # Vapor flows (use provided or CMO estimates)
         V_top_flow = V_top if V_top is not None else (R + 1) * D
-        V_bot_flow = V_bot if V_bot is not None else (R + 1) * D
 
-        # Condenser duty: condense all vapor from top stage to liquid
-        # Q_cond = V_top * (h_liquid_top - H_vapor_top) < 0 (heat removed)
-        Q_condenser = V_top_flow * (h_liquid_top - H_vapor_top)
+        # The condensed product: the top stage vapor, as a saturated liquid at
+        # the condenser's own temperature.
+        x_D = y_profile[-1]
+        if T_condenser is None:
+            T_condenser = self._condenser_T(x_D, P, T_guess=T_profile[-1])
+        h_D = self._molar_enthalpy(x_D, T_condenser, 'liquid')
+
+        # Condenser duty: condense all vapor from the top stage to liquid
+        # Q_cond = V_top * (h_D - H_vapor_top) < 0 (heat removed)
+        Q_condenser = V_top_flow * (h_D - H_vapor_top)
 
         # Feed enthalpy (saturated liquid, q=1)
         z_arr = jnp.array([z[s] for s in p.species_order])
-        h_F = jnp.zeros(())
-        for i, s in enumerate(p.species_order):
-            h_F = h_F + z_arr[i] * self.thermo.H_pure(s, T_feed, 'liquid')
-
-        # Distillate enthalpy (liquid at top T for total condenser)
-        h_D = h_liquid_top
+        h_F = self._molar_enthalpy(z_arr, jnp.asarray(T_feed), 'liquid')
 
         # Bottoms enthalpy (liquid at bottom T)
         h_B = h_liquid_bot
@@ -1081,10 +1451,14 @@ class DistillationColumn:
         def one_mesh_iter(carry, _):
             x, y, T, L, V = carry
 
-            # 1. Compute K values at current T
+            # 1. Compute K values at current T and stage liquid composition.
+            # An EOS K-value depends on the composition; a Raoult K ignores it
+            # and this is the old K(T, P).
             _, K = lax.scan(
-                lambda _, Tj: (None, self.thermo.K_values_array(Tj, P)),
-                None, T
+                lambda _, args: (
+                    None, self.thermo.K_values_array(args[1], P, args[0])
+                ),
+                None, (x, T)
             )
             # K shape: (n, nc)
 
@@ -1167,8 +1541,10 @@ class DistillationColumn:
 
             # 5. Recompute K and y with updated T
             _, K_new = lax.scan(
-                lambda _, Tj: (None, self.thermo.K_values_array(Tj, P)),
-                None, T_new
+                lambda _, args: (
+                    None, self.thermo.K_values_array(args[1], P, args[0])
+                ),
+                None, (x_new, T_new)
             )
             y_new = K_new * x_new
             y_new = y_new / jnp.maximum(
@@ -1179,16 +1555,16 @@ class DistillationColumn:
             h_all, H_all = self._compute_stage_enthalpies(x_new, y_new, T_new)
 
             # Feed enthalpy (saturated liquid, q=1)
-            h_F = sum(
-                z[i] * self.thermo.H_pure(s, jnp.asarray(T_feed), 'liquid')
-                for i, s in enumerate(p.species_order)
-            )
+            h_F = self._molar_enthalpy(z, jnp.asarray(T_feed), 'liquid')
 
-            # Reflux enthalpy (total condenser: liquid at top stage T)
-            h_reflux = sum(
-                y_new[-1, i] * self.thermo.H_pure(s, T_new[-1], 'liquid')
-                for i, s in enumerate(p.species_order)
-            )
+            # Reflux enthalpy. A total condenser returns saturated liquid of
+            # the distillate's composition at the condenser temperature, which
+            # is below the top stage temperature -- so the reflux enters the
+            # top stage subcooled, and the top stage has to boil some of it.
+            # Evaluating it at the top stage temperature instead would credit
+            # the balance with heat the condenser has already removed.
+            T_cond = self._condenser_T(y_new[-1], P, T_guess=T_new[-1])
+            h_reflux = self._molar_enthalpy(y_new[-1], T_cond, 'liquid')
 
             # Top-down energy balance sweep from stage n-1 down to stage 1
             def eb_step(carry, stage_j):
@@ -1276,12 +1652,16 @@ class DistillationColumn:
             mesh_iter: Number of MESH iterations when use_mesh=True.
 
         Returns:
-            distillate: Distillate stream
-            bottoms: Bottoms stream
+            distillate: Distillate stream, at the condenser temperature --
+                the bubble point of the distillate, which is below the top
+                stage temperature (see :meth:`_condenser_T`)
+            bottoms: Bottoms stream, at the reboiler temperature
             info: Dictionary with:
                 - 'T_profile': Stage temperatures
                 - 'x_profile': Liquid composition profiles
                 - 'y_profile': Vapor composition profiles
+                - 'T_condenser': Condenser temperature (K), = distillate T
+                - 'T_reboiler': Reboiler temperature (K), = bottoms T
                 - 'L_rect': Rectifying liquid flow rate (CMO) or 'L_profile'
                 - 'V_rect': Rectifying vapor flow rate (CMO) or 'V_profile'
                 - 'D': Distillate flow rate
@@ -1328,7 +1708,14 @@ class DistillationColumn:
             distillate_flows = {s: D * x_D[s] for s in p.species_order}
             bottoms_flows = {s: B * x_B[s] for s in p.species_order}
 
-            distillate = make_stream(distillate_flows, T_profile[-1], p.P)
+            # A total condenser delivers the distillate as a saturated liquid
+            # at its own bubble point, which is below the top stage
+            # temperature (see _condenser_T).
+            T_condenser = self._condenser_T(
+                y_profile[-1], jnp.asarray(p.P), T_guess=T_profile[-1]
+            )
+
+            distillate = make_stream(distillate_flows, T_condenser, p.P)
             bottoms = make_stream(bottoms_flows, T_profile[0], p.P)
 
             # Compute duties with actual V profile from MESH
@@ -1336,6 +1723,7 @@ class DistillationColumn:
                 x_profile, y_profile, T_profile,
                 F_total, z, T_feed, R, D, B,
                 V_top=V_profile[-1], V_bot=V_profile[0],
+                T_condenser=T_condenser,
             )
 
             info = {
@@ -1346,6 +1734,8 @@ class DistillationColumn:
                 "V_profile": V_profile,
                 "D": D,
                 "B": B,
+                "T_condenser": T_condenser,
+                "T_reboiler": T_profile[0],
                 "Q_condenser": Q_condenser,
                 "Q_reboiler": Q_reboiler,
             }
@@ -1364,13 +1754,18 @@ class DistillationColumn:
             distillate_flows = {s: D * x_D[s] for s in p.species_order}
             bottoms_flows = {s: B * x_B[s] for s in p.species_order}
 
-            distillate = make_stream(distillate_flows, T_profile[-1], p.P)
+            T_condenser = self._condenser_T(
+                y_profile[-1], jnp.asarray(p.P), T_guess=T_profile[-1]
+            )
+
+            distillate = make_stream(distillate_flows, T_condenser, p.P)
             bottoms = make_stream(bottoms_flows, T_profile[0], p.P)
 
             # Compute duties with CMO vapor flow estimates
             Q_condenser, Q_reboiler = self._compute_duties(
                 x_profile, y_profile, T_profile,
                 F_total, z, T_feed, R, D, B,
+                T_condenser=T_condenser,
             )
 
             info = {
@@ -1381,6 +1776,8 @@ class DistillationColumn:
                 "V_rect": (R + 1) * D,
                 "D": D,
                 "B": B,
+                "T_condenser": T_condenser,
+                "T_reboiler": T_profile[0],
                 "Q_condenser": Q_condenser,
                 "Q_reboiler": Q_reboiler,
             }

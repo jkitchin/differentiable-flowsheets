@@ -13,11 +13,13 @@ as `Infinity`, which the browser refuses to parse.
 """
 
 import json
+import math
 import os
 import pathlib
 import re
 import shutil
 import subprocess
+import sys
 import threading
 import urllib.error
 import urllib.request
@@ -44,7 +46,15 @@ from difflow import (
     mass_action_kinetics,
     serialize,
 )
-from difflow.gui import FlowsheetSession, _json_restore, _json_safe, make_server
+from difflow.gui import (
+    FlowsheetSession,
+    _json_restore,
+    _json_safe,
+    console,
+    context,
+    make_server,
+    sensitivity,
+)
 
 SPECIES = ["water", "ethanol"]
 
@@ -74,7 +84,7 @@ def build_flowsheet(thermo, V=1.0):
 
 
 class Client:
-    """A live server on an ephemeral port, plus the two verbs it takes."""
+    """A live server on an ephemeral port, plus the verbs it takes."""
 
     def __init__(self, session):
         self.session = session
@@ -98,16 +108,28 @@ class Client:
         status, body = self.get(path)
         return status, json.loads(body)
 
-    def post(self, path, body=None):
+    def send(self, verb, path, body=None, headers=None):
+        """A mutating request, carrying the token the page would carry."""
         request = urllib.request.Request(
             self.base + path, data=json.dumps(body or {}).encode(),
-            headers={"Content-Type": "application/json"}, method="POST",
+            headers={"Content-Type": "application/json",
+                     gui.TOKEN_HEADER: self.server.token, **(headers or {})},
+            method=verb,
         )
         try:
             with urllib.request.urlopen(request) as response:
                 return response.status, json.loads(response.read())
         except urllib.error.HTTPError as exc:
             return exc.code, json.loads(exc.read())
+
+    def post(self, path, body=None, headers=None):
+        return self.send("POST", path, body, headers)
+
+    def patch(self, path, body=None, headers=None):
+        return self.send("PATCH", path, body, headers)
+
+    def delete(self, path, body=None, headers=None):
+        return self.send("DELETE", path, body, headers)
 
 
 @pytest.fixture
@@ -142,6 +164,77 @@ class TestRoutes:
         assert [u["name"] for u in doc["flowsheet"]["units"]] == ["reactor", "flash"]
         assert doc["flowsheet"]["format_version"] == serialize.FORMAT_VERSION
 
+    def test_the_served_document_carries_canvas_positions(self, client):
+        """A canvas needs coordinates and a flowsheet carries none."""
+        status, doc = client.get_json("/api/flowsheet")
+        assert status == 200
+        nodes = doc["flowsheet"]["view"]["nodes"]
+        assert {"reactor", "flash", "feed:feed"} <= set(nodes)
+        assert nodes["reactor"]["x"] < nodes["flash"]["x"], "left to right"
+
+    def test_opening_a_flowsheet_does_not_give_it_a_view(self, client):
+        """Positions are served, not adopted; the file is untouched on open."""
+        client.get_json("/api/flowsheet")
+        assert client.session.flowsheet.view == {}
+
+    def test_positions_the_document_already_has_are_kept(self, client):
+        client.session.flowsheet.view = {
+            "nodes": {"reactor": {"x": 999.0, "y": 999.0}}
+        }
+        _, doc = client.get_json("/api/flowsheet")
+        nodes = doc["flowsheet"]["view"]["nodes"]
+        assert nodes["reactor"] == {"x": 999.0, "y": 999.0}, (
+            "a hand-placed canvas must not be re-laid-out under the user"
+        )
+        assert "flash" in nodes, "but a node it never placed still needs one"
+
+    def test_the_assistant_brief_is_served(self, client):
+        """The one route whose request is a question, not a resource."""
+        status, pack = client.get_json(
+            "/api/context?kind=block&name=reactor&q=what+is+the+volume")
+        assert status == 200 and pack["ok"]
+        assert "Operation: CSTR" in pack["prompt"]
+        assert pack["prompt"].endswith("what is the volume")
+
+    def test_the_brief_defaults_to_the_whole_flowsheet(self, client):
+        status, pack = client.get_json("/api/context")
+        assert status == 200 and pack["ok"]
+        assert pack["kind"] == "flowsheet"
+        assert "reactor (CSTR)" in pack["prompt"]
+
+    def test_an_unknown_brief_is_refused_in_the_answer(self, client):
+        status, pack = client.get_json("/api/context?kind=tarot")
+        assert status == 200, "a bad question is an answer, not a 4xx"
+        assert pack["ok"] is False and "tarot" in pack["error"]
+
+    def test_the_key_the_server_holds_is_reported_before_it_is_used(
+            self, client, monkeypatch):
+        """So "no key here" is a sentence in the settings, not a failure."""
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        status, payload = client.get_json("/api/assistant")
+        assert status == 200 and payload["ok"] and payload["configured"] is False
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-not-a-real-key")
+        _, payload = client.get_json("/api/assistant")
+        assert payload["configured"] is True
+
+    def test_forwarding_without_a_key_is_refused_in_the_answer(
+            self, client, monkeypatch):
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        status, payload = client.post(
+            "/api/assistant", {"messages": [{"role": "user", "content": "hi"}]})
+        assert status == 200, "a missing key is an answer, not a 4xx"
+        assert payload["ok"] is False
+        assert "ANTHROPIC_API_KEY" in payload["error"]
+
+    def test_forwarding_is_a_mutating_route(self, client, monkeypatch):
+        """It spends money, so it goes through the token check."""
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-not-a-real-key")
+        status, payload = client.post(
+            "/api/assistant", {"messages": []},
+            headers={gui.TOKEN_HEADER: "wrong"})
+        assert status == 403 and payload["ok"] is False
+
     def test_the_python_export_is_served(self, client):
         status, payload = client.get_json("/api/code")
         assert status == 200
@@ -161,6 +254,74 @@ class TestRoutes:
     def test_an_unknown_route_is_a_404(self, client):
         assert client.get("/api/nope")[0] == 404
         assert client.post("/api/nope")[0] == 404
+
+
+# =============================================================================
+# Static assets
+# =============================================================================
+
+
+class TestStatic:
+    """The page is files on disk now, so the tree is a route."""
+
+    def test_the_page_comes_from_the_static_directory(self, client):
+        """The built file, plus the one thing the server adds: the token."""
+        on_disk = (gui.STATIC / "index.html").read_text(encoding="utf-8")
+        assert gui.page() == on_disk
+        served = client.get("/")[1].decode("utf-8")
+        tag = f'<meta name="{gui.TOKEN_META}" content="{client.server.token}">'
+        assert tag in served
+        # One line added inside <head>; the rest is the file, byte for byte.
+        assert served.replace(f"  {tag}\n  ", "", 1) == on_disk
+
+    def test_a_built_asset_is_served_with_its_content_type(self, client, tmp_path):
+        asset = gui.STATIC / "_probe.js"
+        asset.write_text("export const x = 1;\n")
+        try:
+            status, body = client.get("/_probe.js")
+        finally:
+            asset.unlink()
+        assert status == 200
+        assert body == b"export const x = 1;\n"
+
+    def test_a_missing_asset_is_a_404(self, client):
+        assert client.get("/nothing-was-ever-built-here.js")[0] == 404
+
+    def test_the_built_bundle_is_served(self, client):
+        """The committed build output is what the page loads."""
+        status, body = client.get("/app.js")
+        assert status == 200 and len(body) > 1000
+        assert b"<title>difflow editor</title>" in client.get("/")[1]
+
+    def test_the_classic_editor_is_still_reachable(self, client):
+        """It stays until the canvas covers what it does."""
+        status, body = client.get("/classic")
+        assert status == 200
+        assert b'id="palette"' in body
+
+    def test_a_type_that_the_build_never_emits_is_a_404(self, client):
+        """An allow-list, so a stray file in static/ is not a route."""
+        stray = gui.STATIC / "_probe.txt"
+        stray.write_text("not for the browser")
+        try:
+            assert client.get("/_probe.txt")[0] == 404
+        finally:
+            stray.unlink()
+
+    def test_a_traversal_cannot_escape_the_static_directory(self, client):
+        """The server is reachable from a browser; the tree is not the disk."""
+        for path in ("/../server.py", "/../../difflow/flowsheet.py",
+                     "/..%2fserver.py", "/static/../../__init__.py"):
+            assert client.get(path)[0] == 404, path
+
+    def test_the_module_entry_point_still_runs(self):
+        """``python -m difflow.gui`` is the documented way in."""
+        result = subprocess.run(
+            [sys.executable, "-m", "difflow.gui", "--help"],
+            capture_output=True, text=True,
+        )
+        assert result.returncode == 0
+        assert "--no-browser" in result.stdout
 
 
 # =============================================================================
@@ -200,12 +361,112 @@ class TestEditing:
     def test_malformed_json_is_reported(self, client):
         request = urllib.request.Request(
             client.base + "/api/flowsheet", data=b"{not json",
-            headers={"Content-Type": "application/json"}, method="POST",
+            headers={"Content-Type": "application/json",
+                     gui.TOKEN_HEADER: client.server.token}, method="POST",
         )
         with pytest.raises(urllib.error.HTTPError) as excinfo:
             urllib.request.urlopen(request)
         assert excinfo.value.code == 400
         assert "bad JSON" in json.loads(excinfo.value.read())["error"]
+
+
+# =============================================================================
+# Incremental routes
+# =============================================================================
+
+
+class TestIncrementalRoutes:
+    """The verbs the canvas uses. What they do is covered in test_gui_edit."""
+
+    def test_a_patch_changes_one_parameter(self, client):
+        status, payload = client.patch("/api/unit/reactor", {"params": {"V": 5.0}})
+        assert status == 200 and payload["ok"]
+        assert float(client.session.flowsheet.units[0].operation.params.V) == 5.0
+
+    def test_a_patch_leaves_the_other_units_alone(self, client):
+        flash = client.session.flowsheet.units[1].operation
+        client.patch("/api/unit/reactor", {"params": {"V": 5.0}})
+        assert client.session.flowsheet.units[1].operation is flash
+
+    def test_a_patched_flowsheet_still_solves(self, client):
+        before = client.post("/api/solve")[1]["streams"]["rx"]["F_ethanol"]
+        client.patch("/api/unit/reactor", {"params": {"V": 5.0}})
+        after = client.post("/api/solve")[1]["streams"]["rx"]["F_ethanol"]
+        assert after > before, "a five-fold larger reactor must convert more"
+
+    def test_a_patch_to_a_unit_that_is_not_there_is_a_refusal(self, client):
+        status, payload = client.patch("/api/unit/nope", {"params": {}})
+        assert status == 200, "a wrong name is an answer about the flowsheet"
+        assert payload["ok"] is False and "nope" in payload["error"]
+
+    def test_a_name_with_a_space_survives_the_url(self, client):
+        client.patch("/api/unit/reactor", {"name": "hot reactor"})
+        status, payload = client.patch("/api/unit/hot%20reactor",
+                                       {"params": {"V": 2.0}})
+        assert status == 200 and payload["ok"]
+
+    def test_a_unit_is_added_and_removed(self, client):
+        status, added = client.post("/api/unit", {"operation": "Mixer"})
+        assert status == 200 and added["ok"]
+        names = [u.name for u in client.session.flowsheet.units]
+        assert added["name"] in names
+        assert client.delete(f"/api/unit/{added['name']}")[1]["ok"]
+        assert added["name"] not in [u.name for u in client.session.flowsheet.units]
+
+    def test_a_wire_is_made_and_broken(self, client):
+        added = client.post("/api/unit", {"operation": "Mixer"})[1]
+        wire = {"source": "flash", "outlet": "liq",
+                "target": added["name"], "inlet": added["inlets"][0]}
+        assert client.post("/api/connect", wire)[1] == {
+            "ok": True, "kind": "arc", "stream": "liq"
+        }
+        wire["inlet"] = "liq"
+        assert client.delete("/api/connect", wire)[1]["ok"]
+
+    def test_half_a_wire_is_refused_by_name(self, client):
+        status, payload = client.post("/api/connect", {"source": "flash"})
+        assert status == 200 and payload["ok"] is False
+        for missing in ("outlet", "target", "inlet"):
+            assert missing in payload["error"]
+
+    def test_positions_are_stored_without_a_rebuild(self, client):
+        reactor = client.session.flowsheet.units[0].operation
+        status, payload = client.post(
+            "/api/layout", {"nodes": {"reactor": {"x": 40, "y": 12}}}
+        )
+        assert status == 200 and payload["ok"]
+        assert client.session.flowsheet.view["nodes"]["reactor"] == {"x": 40.0, "y": 12.0}
+        assert client.session.flowsheet.units[0].operation is reactor
+
+    def test_positions_come_back_in_the_document(self, client):
+        client.post("/api/layout", {"nodes": {"reactor": {"x": 40, "y": 12}}})
+        _, doc = client.get_json("/api/flowsheet")
+        assert doc["flowsheet"]["view"]["nodes"]["reactor"] == {"x": 40, "y": 12}
+
+    def test_one_moved_node_does_not_unplace_the_others(self, client):
+        """Dragging one box must not scatter the rest of the flowsheet."""
+        _, before = client.get_json("/api/flowsheet")
+        placed = set(before["flowsheet"]["view"]["nodes"])
+        client.post("/api/layout", {"nodes": {"reactor": {"x": 40, "y": 12}}})
+        _, after = client.get_json("/api/flowsheet")
+        assert set(after["flowsheet"]["view"]["nodes"]) == placed
+        for name in placed - {"reactor"}:
+            assert after["flowsheet"]["view"]["nodes"][name] == \
+                before["flowsheet"]["view"]["nodes"][name]
+
+    def test_an_unrouted_verb_is_a_404(self, client):
+        assert client.patch("/api/nothing")[0] == 404
+        assert client.delete("/api/nothing")[0] == 404
+
+    def test_malformed_json_on_a_patch_is_reported(self, client):
+        request = urllib.request.Request(
+            client.base + "/api/unit/reactor", data=b"{not json",
+            headers={"Content-Type": "application/json",
+                     gui.TOKEN_HEADER: client.server.token}, method="PATCH",
+        )
+        with pytest.raises(urllib.error.HTTPError) as excinfo:
+            urllib.request.urlopen(request)
+        assert excinfo.value.code == 400
 
 
 # =============================================================================
@@ -276,11 +537,26 @@ class TestFiles:
         result = session.save()
         assert not result["ok"] and "path" in result["error"]
 
-    def test_an_empty_session_reports_rather_than_raises(self):
+    def test_an_empty_session_is_an_empty_flowsheet(self):
+        """Not `None`. See `TestAnEmptyEditor` for why.
+
+        Everything a session can be asked still answers over one: it
+        serializes, it emits code that runs, and solving nothing succeeds
+        at nothing. The only verb that refuses is the diagram, because an
+        empty SVG downloads as a file that opens onto nothing.
+        """
         session = FlowsheetSession()
-        assert session.document()["flowsheet"] is None
-        assert not session.solve()["ok"]
-        assert session.code()["error"]
+        document = session.document()
+        assert document["flowsheet"]["units"] == []
+        assert document["species"] == []
+        assert session.solve() == {
+            "ok": True, "streams": {}, "species": [], "converged": True,
+            "iterations": 0, "method": "direct", "residual": 0.0,
+            "tol": 1e-08, "tear_streams": [],
+        }
+        assert session.code()["error"] is None
+        assert "Flowsheet(species_order=[]" in session.code()["source"]
+        assert session.diagram() == {"ok": False, "error": "nothing to draw yet"}
 
 
 # =============================================================================
@@ -383,6 +659,305 @@ class TestPalette:
             assert ports["variadic"] or ports["n_inlets"] is not None, name
 
 
+class TestWhatBlocksADrop:
+    """The palette's flag and the adder's refusal, which must agree.
+
+    They did not. The catalog answered a question about the *class* ---
+    could a form construct one --- and the adder answered a question
+    about this session, and where the two differed the user got a
+    traceback from the file-loading path offering "written by a
+    different version of difflow" as the diagnosis of a unit dropped one
+    second earlier.
+    """
+
+    def test_the_catalog_names_the_fields_and_not_just_the_extras(self, client):
+        """`constructor_extras` is empty for a CSTR; the rate law is not."""
+        _, catalog = client.get_json("/api/catalog")
+        assert catalog["CSTR"]["constructor_extras"] == []
+        assert catalog["CSTR"]["needs"] == ["rate_fn", "stoich", "rate_params"]
+        assert catalog["Flash"]["needs"] == ["thermo"]
+        assert catalog["Heater"]["needs"] == []
+
+    def test_a_required_string_blocks_a_drop_the_class_calls_buildable(self, client):
+        """The regression. No callable, no constructor object, still undroppable.
+
+        ``AbsorberParams.solvent`` is a ``str``, so ``is_buildable`` --- which
+        looks for required *callables* and constructor arguments --- says
+        yes, and nothing can invent a solvent name.
+        """
+        pytest.importorskip("difflow_cc")
+        _, catalog = client.get_json("/api/catalog")
+        spec = catalog.get("AmineAbsorber")
+        if spec is None:
+            pytest.skip("difflow_cc not registered")
+        assert spec["needs"] == ["solvent"]
+        assert spec["buildable"] is False
+
+    def test_the_flag_and_the_refusal_cannot_disagree(self, client):
+        """The invariant, over every operation the catalog offers.
+
+        A non-empty ``needs`` must mean the drop is refused, and an empty
+        one must mean it is *answered* --- either it lands, or the class
+        refuses on its own terms with a message about the model. What it
+        must never mean is a 400, a traceback, or a claim about difflow
+        versions.
+
+        Empty ``needs`` promises a clean answer rather than a successful
+        one on purpose: a class can validate whatever it likes, and
+        ``Transformer`` rejecting ``tap=1, shift=0`` as "this is a line"
+        is the model being right. Nothing short of constructing one can
+        know that in advance.
+
+        Checked exhaustively rather than by sampling, because the cases
+        that matter are the ones nobody thought to name --- a required
+        ``str``, an annotation in quotes.
+        """
+        _, catalog = client.get_json("/api/catalog")
+        wrong = []
+        for name, spec in catalog.items():
+            status, answer = client.post("/api/unit", {"operation": name})
+            if status != 200:
+                wrong.append((name, f"HTTP {status}"))
+                continue
+            if spec["needs"] and answer["ok"]:
+                wrong.append((name, "flagged, but dropped anyway"))
+            if not spec["needs"] and not answer["ok"]:
+                if "different version" in (answer.get("error") or ""):
+                    wrong.append((name, answer["error"]))
+            if answer["ok"]:
+                client.delete(f"/api/unit/{answer['name']}")
+        assert not wrong
+
+    def test_a_class_that_refuses_its_own_parameters_is_quoted(self, client):
+        """`Transformer` explains itself better than any generic message."""
+        _, catalog = client.get_json("/api/catalog")
+        if "Transformer" not in catalog:
+            pytest.skip("difflow_power not registered")
+        assert catalog["Transformer"]["needs"] == []
+        status, answer = client.post("/api/unit", {"operation": "Transformer"})
+        assert status == 200, "the class refusing is an answer, not a bad request"
+        assert answer["ok"] is False
+        assert "this is a line" in answer["error"]
+
+    def test_a_refusal_names_the_field_and_blames_no_version(self, client):
+        _, answer = client.post("/api/unit", {"operation": "CSTR"})
+        assert answer["ok"] is False
+        assert "rate_fn" in answer["error"]
+        assert "different version of difflow" not in answer["error"]
+        assert "mass_action_kinetics" in answer["error"], "offer the easy route"
+
+    def test_the_refusal_separates_code_from_data(self, client):
+        """Calling a required `str` "code" tells the reader something false."""
+        pytest.importorskip("difflow_cc")
+        _, answer = client.post("/api/unit", {"operation": "AmineAbsorber"})
+        if answer["ok"]:
+            pytest.skip("difflow_cc not registered")
+        assert "no way to guess" in answer["error"]
+        assert "code rather than data" not in answer["error"]
+
+    def test_a_binding_unblocks_the_unit_that_wanted_it(self, client):
+        """The round trip the message promises has to actually work."""
+        assert client.get_json("/api/catalog")[1]["Flash"]["needs"] == ["thermo"]
+        assert not client.post("/api/unit", {"operation": "Flash"})[1]["ok"]
+
+        client.post("/api/code-context", {"source": THERMO_CONTEXT})
+
+        assert client.get_json("/api/catalog")[1]["Flash"]["needs"] == []
+        assert client.post("/api/unit", {"operation": "Flash"})[1]["ok"]
+
+    def test_a_bare_value_in_the_context_counts_as_a_binding(self, client):
+        """`solvent = "MEA"` is matched by field name, so the hint is true."""
+        pytest.importorskip("difflow_cc")
+        if "AmineAbsorber" not in client.get_json("/api/catalog")[1]:
+            pytest.skip("difflow_cc not registered")
+        client.post("/api/code-context", {"source": "solvent = 'MEA'\n"})
+        assert client.get_json("/api/catalog")[1]["AmineAbsorber"]["needs"] == []
+        assert client.post("/api/unit", {"operation": "AmineAbsorber"})[1]["ok"]
+
+
+class TestAnEmptyEditor:
+    """`difflow gui` with no file: a live canvas, waiting for species.
+
+    The regression this class exists for: the session left
+    ``self.flowsheet = None`` when it was opened without a path, and
+    every edit route begins by refusing "no flowsheet loaded". Nothing
+    said so. The palette filled in, the canvas drew its grid, and
+    dragging a unit onto it did nothing at all --- no error, no node ---
+    which reads as a broken drag rather than as an editor that has no
+    flowsheet to edit.
+
+    So an empty editor holds a real, empty ``Flowsheet``, and the one
+    thing it is missing --- the species, which every stream array is
+    indexed by --- is asked for by name.
+    """
+
+    @pytest.fixture
+    def empty(self):
+        live = Client(FlowsheetSession())
+        yield live
+        live.close()
+
+    def test_an_editor_opened_with_no_file_still_has_a_flowsheet(self, empty):
+        status, payload = empty.get_json("/api/flowsheet")
+        assert status == 200
+        assert payload["flowsheet"]["units"] == []
+        assert payload["path"] == ""
+        assert payload["species"] == []
+        assert payload["editable"] is True
+
+    def test_a_drop_before_the_species_are_named_says_which_field(self, empty):
+        """Not "no flowsheet loaded", and not silence."""
+        _, answer = empty.post("/api/unit", {"operation": "Mixer"})
+        assert answer["ok"] is False
+        assert "species" in answer["error"]
+        assert "header" in answer["error"] and "code context" in answer["error"]
+
+    def test_naming_the_species_unblocks_the_drop(self, empty):
+        assert empty.post("/api/species", {"species": SPECIES})[1]["ok"]
+        assert empty.get_json("/api/species")[1]["species"] == SPECIES
+        answer = empty.post("/api/unit", {"operation": "Mixer"})[1]
+        assert answer["ok"], answer
+        assert [u.name for u in empty.session.flowsheet.units] == ["mixer"]
+
+    def test_the_code_context_can_name_them_instead(self, empty):
+        """`SPECIES` as well as `species_order`, because the starter says so.
+
+        The snippet the Code context panel opens with defines ``SPECIES``.
+        A session that only looked for ``species_order`` left the reader
+        applying the sample code they were handed and watching the drop
+        get refused anyway.
+        """
+        _, answer = empty.post(
+            "/api/code-context", {"source": 'SPECIES = ["water", "ethanol"]\n'}
+        )
+        assert answer["ok"] and answer["species"] == SPECIES
+        assert empty.get_json("/api/flowsheet")[1]["species"] == SPECIES
+        assert empty.post("/api/unit", {"operation": "Mixer"})[1]["ok"]
+
+    def test_a_named_list_is_not_overwritten_by_the_code_context(self, empty):
+        """Whoever typed in the header meant it."""
+        empty.post("/api/species", {"species": ["a", "b"]})
+        _, answer = empty.post(
+            "/api/code-context", {"source": 'SPECIES = ["water", "ethanol"]\n'}
+        )
+        assert answer["ok"] and "species" not in answer
+        assert empty.get_json("/api/species")[1]["species"] == ["a", "b"]
+
+    @pytest.mark.parametrize(
+        "names, why",
+        [
+            ("water", "must be a list"),
+            (["water", "water"], "named twice"),
+            (["water", "  "], "needs a name"),
+            ([1, 2], "needs a name"),
+        ],
+    )
+    def test_a_species_list_that_cannot_index_a_stream_is_refused(
+        self, empty, names, why
+    ):
+        _, answer = empty.post("/api/species", {"species": names})
+        assert answer["ok"] is False
+        assert why in answer["error"]
+
+    def test_the_list_freezes_once_a_unit_indexes_it(self, empty):
+        """Re-ordering under a built unit would relabel its numbers.
+
+        A ``Stream`` holds molar flows as an array indexed by
+        ``species_order``. Swapping the order once a unit holds one turns
+        a water flow into an ethanol flow with nothing on screen changing,
+        which is the worst kind of wrong answer.
+        """
+        empty.post("/api/species", {"species": SPECIES})
+        empty.post("/api/unit", {"operation": "Mixer"})
+        assert empty.get_json("/api/species")[1]["editable"] is False
+        _, answer = empty.post("/api/species", {"species": SPECIES[::-1]})
+        assert answer["ok"] is False and "already has units" in answer["error"]
+        assert list(empty.session.flowsheet.species_order) == SPECIES
+
+    def test_the_palette_says_what_it_is_waiting_for(self, empty):
+        """`needs species_order`, on every row, until the list exists.
+
+        The palette answers `needs` against the session rather than
+        against the class, which is what lets it be honest here: a Mixer
+        needs nothing of its own and still cannot be built, and a row that
+        looked droppable would send the reader to a refusal instead of to
+        the field that fixes it. The name is the same one the code context
+        would bind, so the two ways of answering it read alike.
+        """
+        _, catalog = empty.get_json("/api/catalog")
+        assert catalog["Mixer"]["needs"] == ["species_order"]
+        assert catalog["Mixer"]["buildable"] is False
+        empty.post("/api/species", {"species": SPECIES})
+        _, catalog = empty.get_json("/api/catalog")
+        assert catalog["Mixer"]["needs"] == []
+        assert catalog["Mixer"]["buildable"] is True
+        assert empty.post("/api/unit", {"operation": "Mixer"})[1]["ok"]
+
+    def test_a_flowsheet_built_from_nothing_can_be_fed_and_solved(self, empty):
+        """Drop, wire, feed, solve --- the whole reported defect, over HTTP.
+
+        The second half of the same bug. Once the drops worked, a
+        from-scratch flowsheet could be drawn and still not solved: every
+        other part of building is a gesture, and a feed is *data*, so
+        there was no verb for one and ``solve`` answered
+        ``KeyError: 'mixer_in'``.
+        """
+        empty.post("/api/species", {"species": SPECIES})
+        assert empty.post("/api/unit", {"operation": "Mixer"})[1]["ok"]
+        assert empty.post("/api/unit", {"operation": "Heater"})[1]["ok"]
+
+        units = {u["name"]: u for u
+                 in empty.get_json("/api/flowsheet")[1]["flowsheet"]["units"]}
+        assert empty.post("/api/connect", {
+            "source": "mixer", "outlet": units["mixer"]["outlets"][0],
+            "target": "heater", "inlet": units["heater"]["inlets"][0],
+        })[1]["ok"]
+
+        # Both inlets were unfed; wiring one of them fed it.
+        _, waiting = empty.get_json("/api/feeds")
+        assert waiting == {"ok": True, "feeds": [], "unfed": ["mixer_in"]}
+
+        # And the solver says which stream, and what to do about it,
+        # rather than raising the name on its own.
+        _, refused = empty.post("/api/solve", {})
+        assert refused["ok"] is False
+        assert "nothing feeds 'mixer_in'" in refused["error"]
+
+        _, fed = empty.post("/api/feed", {"name": "mixer_in", "T": 320.0,
+                                          "flows": {"water": 2.0}})
+        assert fed["ok"], fed
+        # A field left out keeps what it had: the pressure is the
+        # flowsheet's default, and ethanol its default flow.
+        assert fed["T"] == 320.0
+        assert fed["P"] == empty.session.flowsheet.default_P
+        assert fed["flows"] == {"water": 2.0,
+                                "ethanol": empty.session.flowsheet.default_flow}
+
+        empty.send("PATCH", "/api/unit/heater", {"params": {"T_out": 340.0}})
+        _, solved = empty.post("/api/solve", {})
+        assert solved["ok"], solved
+        assert solved["streams"]["heater_out"]["T"] == pytest.approx(340.0)
+
+    def test_a_feed_can_be_taken_back_off_a_stream(self, empty):
+        """Which is how an inlet becomes wirable again.
+
+        `connect` refuses to wire into a stream that is already fed
+        rather than quietly dropping the feed, so undeclaring one has to
+        be something the page can ask for.
+        """
+        empty.post("/api/species", {"species": SPECIES})
+        empty.post("/api/unit", {"operation": "Mixer"})
+        assert empty.post("/api/feed", {"name": "mixer_in"})[1]["ok"]
+        assert empty.get_json("/api/feeds")[1]["feeds"] == ["mixer_in"]
+
+        _, gone = empty.delete("/api/feed/mixer_in")
+        assert gone == {"ok": True, "name": "mixer_in"}
+        assert empty.get_json("/api/feeds")[1] == {
+            "ok": True, "feeds": [], "unfed": ["mixer_in"]
+        }
+        assert empty.delete("/api/feed/mixer_in")[1]["ok"] is False
+
+
 class TestBuilding:
     def test_a_unit_added_from_the_palette_reaches_the_model(self, client):
         _, doc = client.get_json("/api/flowsheet")
@@ -450,6 +1025,213 @@ class TestBuilding:
 
 
 # =============================================================================
+# The code context: the Python a flowsheet carries
+# =============================================================================
+
+
+THERMO_CONTEXT = (
+    "from difflow import IdealThermo, get_species_data\n"
+    "thermo = IdealThermo({n: get_species_data(n) for n in "
+    "['water', 'ethanol']})\n"
+)
+
+KINETICS_CONTEXT = (
+    "from difflow import mass_action_kinetics\n"
+    "kin = mass_action_kinetics([{'equation': 'water -> ethanol',\n"
+    "    'reactants': {'water': 1.0}, 'products': {'ethanol': 1.0},\n"
+    "    'rate_params': {'A': 1.0e3, 'Ea': 40_000.0, 'n': 0.0}}],\n"
+    "    ['water', 'ethanol'])\n"
+)
+
+
+class TestCodeContext:
+    """Half the catalog needs an object, and no form supplies one."""
+
+    def test_a_flowsheet_starts_with_no_context(self, client):
+        status, context = client.get_json("/api/code-context")
+        assert status == 200
+        assert context == {"source": "", "names": [], "error": None}
+
+    def test_a_snippet_defines_names(self, client):
+        status, payload = client.post("/api/code-context",
+                                      {"source": THERMO_CONTEXT})
+        assert status == 200 and payload["ok"]
+        assert "thermo" in payload["names"]
+        assert client.get_json("/api/code-context")[1]["names"] == payload["names"]
+
+    def test_imported_modules_are_not_offered_as_names(self, client):
+        """`import jax` binds a module; nothing in a flowsheet refers to one."""
+        client.post("/api/code-context", {"source": "import math\nx = math.pi\n"})
+        assert client.get_json("/api/code-context")[1]["names"] == ["x"]
+
+    def test_a_syntax_error_is_an_answer_and_not_a_traceback(self, client):
+        status, payload = client.post("/api/code-context", {"source": "x = (\n"})
+        assert status == 200, "a snippet that will not compile is about the file"
+        assert payload["ok"] is False
+        assert "SyntaxError" in payload["error"] and "line 1" in payload["error"]
+
+    def test_a_snippet_that_raises_names_the_line(self, client):
+        source = "a = 1\nb = 2\nraise ValueError('no good')\n"
+        _, payload = client.post("/api/code-context", {"source": source})
+        assert payload["ok"] is False
+        assert payload["error"] == "line 3: ValueError: no good"
+
+    def test_a_failing_snippet_does_not_cost_the_bindings(self, client):
+        """A half-typed line must not unbuild the units that depend on one."""
+        client.post("/api/code-context", {"source": THERMO_CONTEXT})
+        client.post("/api/code-context", {"source": "thermo = (\n"})
+        context = client.get_json("/api/code-context")[1]
+        assert context["names"] == ["IdealThermo", "get_species_data", "thermo"]
+        assert context["source"] == THERMO_CONTEXT
+
+    def test_the_context_travels_in_the_document(self, client):
+        client.post("/api/code-context", {"source": THERMO_CONTEXT})
+        _, doc = client.get_json("/api/flowsheet")
+        assert doc["flowsheet"]["view"]["code_context"] == THERMO_CONTEXT
+
+    def test_an_empty_snippet_clears_it(self, client):
+        client.post("/api/code-context", {"source": THERMO_CONTEXT})
+        assert client.post("/api/code-context", {"source": "   "})[1]["ok"]
+        assert client.get_json("/api/code-context")[1] == {
+            "source": "", "names": [], "error": None
+        }
+        assert "code_context" not in client.session.flowsheet.view
+
+    def test_a_flash_is_unbuildable_until_a_thermo_exists(self, client):
+        status, refused = client.post("/api/unit", {"operation": "Flash"})
+        assert status == 200 and refused["ok"] is False
+        assert "code context" in refused["error"], (
+            "a refusal has to say where the missing object comes from"
+        )
+
+        client.post("/api/code-context", {"source": THERMO_CONTEXT})
+        status, added = client.post("/api/unit", {"operation": "Flash"})
+        assert status == 200 and added["ok"], added.get("error")
+        assert len(added["outlets"]) == 2
+
+    def test_a_reactor_becomes_placeable_from_a_declared_rate_law(self, client):
+        """`mass_action_kinetics` is the declarative route, not a callable."""
+        assert client.post("/api/unit", {"operation": "CSTR"})[1]["ok"] is False
+        client.post("/api/code-context", {"source": KINETICS_CONTEXT})
+        status, added = client.post("/api/unit", {"operation": "CSTR"})
+        assert status == 200 and added["ok"], added.get("error")
+        assert added["placeholders"] == ["V"], (
+            "a required number with no default is a placeholder, and says so"
+        )
+
+    def test_a_unit_from_the_context_is_stored_as_a_reference(self, client):
+        """Not inlined: the document points at the name the snippet binds."""
+        client.post("/api/code-context", {"source": THERMO_CONTEXT})
+        name = client.post("/api/unit", {"operation": "Flash"})[1]["name"]
+        _, doc = client.get_json("/api/flowsheet")
+        unit = next(u for u in doc["flowsheet"]["units"] if u["name"] == name)
+        assert unit["constructor"] == {"thermo": {"$ref": "thermo"}}
+
+    def test_the_exported_script_carries_the_snippet(self, client):
+        """What is exported has to be what ran."""
+        client.post("/api/code-context", {"source": THERMO_CONTEXT})
+        name = client.post("/api/unit", {"operation": "Flash"})[1]["name"]
+        _, payload = client.get_json("/api/code")
+        assert payload["error"] is None
+        assert "code context" in payload["source"]
+        assert THERMO_CONTEXT.strip() in payload["source"]
+        assert "Flash(FlashParams(species_order=['water', 'ethanol']), thermo)" \
+            in payload["source"], "the reference is emitted by name, not inlined"
+        assert payload["source"].index("thermo = IdealThermo") < \
+            payload["source"].index(f"'{name}'"), "defined before it is used"
+
+    def test_the_context_survives_a_save_and_reopen(self, client, tmp_path):
+        client.post("/api/code-context", {"source": THERMO_CONTEXT})
+        added = client.post("/api/unit", {"operation": "Flash"})[1]["name"]
+        client.session.path = tmp_path / "plant.json"
+        assert client.post("/api/save")[1]["ok"]
+
+        reopened = FlowsheetSession(path=tmp_path / "plant.json")
+        assert reopened.code_context()["source"] == THERMO_CONTEXT
+        assert added in [u.name for u in reopened.flowsheet.units], (
+            "a $ref that cannot be resolved on load makes the file unopenable"
+        )
+
+    def test_a_context_that_is_not_a_string_is_refused(self, client):
+        _, payload = client.post("/api/code-context", {"source": 3})
+        assert payload["ok"] is False and "string" in payload["error"]
+
+
+# =============================================================================
+# Guarding an endpoint that runs Python
+# =============================================================================
+
+
+class TestSecurity:
+    """The code context makes the server `exec`-capable; it must only
+    answer the page it served."""
+
+    def test_the_page_carries_the_token(self, client):
+        page = client.get("/")[1].decode("utf-8")
+        assert f'content="{client.server.token}"' in page
+        assert client.server.token, "minted per process, not a constant"
+
+    def test_a_second_server_gets_a_different_token(self, client):
+        other = Client(FlowsheetSession(build_flowsheet(None)))
+        try:
+            assert other.server.token != client.server.token
+        finally:
+            other.close()
+
+    def test_a_mutating_request_without_the_token_is_refused(self, client):
+        request = urllib.request.Request(
+            client.base + "/api/code-context",
+            data=json.dumps({"source": "import os\nos.environ['X'] = '1'\n"}).encode(),
+            headers={"Content-Type": "application/json"}, method="POST",
+        )
+        with pytest.raises(urllib.error.HTTPError) as excinfo:
+            urllib.request.urlopen(request)
+        assert excinfo.value.code == 403
+        assert gui.TOKEN_HEADER in json.loads(excinfo.value.read())["error"]
+        assert client.get_json("/api/code-context")[1]["source"] == ""
+
+    def test_a_wrong_token_is_refused(self, client):
+        status, payload = client.post(
+            "/api/solve", headers={gui.TOKEN_HEADER: "not-the-token"}
+        )
+        assert status == 403 and payload["ok"] is False
+
+    def test_a_cross_origin_request_is_refused_even_with_the_token(self, client):
+        """The whole point: a page on another origin cannot drive this one."""
+        status, payload = client.post(
+            "/api/solve", headers={"Origin": "http://evil.example"}
+        )
+        assert status == 403
+        assert "evil.example" in payload["error"]
+
+    def test_another_port_on_localhost_is_still_cross_origin(self, client):
+        status, _ = client.post(
+            "/api/solve", headers={"Origin": "http://127.0.0.1:1"}
+        )
+        assert status == 403
+
+    def test_the_page_s_own_origin_is_accepted(self, client):
+        status, payload = client.post("/api/solve",
+                                      headers={"Origin": client.base})
+        assert status == 200 and payload["ok"]
+
+    def test_a_rebound_host_name_is_refused(self, client):
+        """A DNS-rebinding request arrives carrying the attacker's name."""
+        port = client.server.server_address[1]
+        status, payload = client.post(
+            "/api/solve", headers={"Host": f"attacker.example:{port}"}
+        )
+        assert status == 403 and "Host" in payload["error"]
+
+    def test_reading_needs_no_token(self, client):
+        """The guard is on writes; the page fetches the catalog before it
+        has done anything."""
+        assert client.get("/api/catalog")[0] == 200
+        assert client.get("/api/flowsheet")[0] == 200
+        assert client.get("/")[0] == 200
+
+
+# =============================================================================
 # The page's own logic
 # =============================================================================
 
@@ -469,8 +1251,9 @@ class TestPageLogic:
         if node is None:
             pytest.skip("node is not installed")
 
-        script = re.search(r"<script>(.*)</script>", gui._PAGE, re.S)
-        assert script, "the page must carry its script inline"
+        classic = (gui.STATIC / "classic.html").read_text(encoding="utf-8")
+        script = re.search(r"<script>(.*)</script>", classic, re.S)
+        assert script, "the classic page must carry its script inline"
         page_js = tmp_path / "page.js"
         page_js.write_text(script.group(1))
 
@@ -482,6 +1265,762 @@ class TestPageLogic:
             capture_output=True, text=True,
         )
         assert result.returncode == 0, result.stdout + result.stderr
+
+    def test_the_canvas_model_functions_behave(self):
+        """The wiring is what can be wrong without looking wrong.
+
+        Runs the front end's own ``node --test`` suite over
+        ``frontend/src/lib/model/``: the pure functions that turn a
+        serialize document into nodes and edges. No build, no browser, and
+        no npm install --- these modules import nothing.
+        """
+        node = shutil.which("node")
+        if node is None:
+            pytest.skip("node is not installed")
+
+        frontend = pathlib.Path(gui.__file__).parent / "frontend"
+        tests = sorted((frontend / "src" / "lib" / "model").glob("*.test.js"))
+        if not tests:
+            pytest.skip("the front-end source is not in this install")
+
+        result = subprocess.run(
+            [node, "--test", *[str(t) for t in tests]],
+            capture_output=True, text=True, cwd=frontend,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+
+
+class TestDocs:
+    """`GET /api/docs/<op>` --- what the inspector shows about a unit.
+
+    The catalog already carries the docstring; the route's job is to
+    render it, to answer for any registered name, and to refuse an
+    unregistered one in the same shape as every other refusal rather
+    than with a traceback.
+    """
+
+    def test_a_unit_documents_itself(self, client):
+        status, body = client.get_json("/api/docs/CSTR")
+        assert status == 200
+        assert body["ok"] is True
+        assert body["operation"] == "CSTR"
+        assert body["symbol"] == "CSTR"
+        assert body["html"]
+        assert body["equations"], "the CSTR declares its governing equations"
+        assert body["assumptions"]
+        assert body["numerical_method"]
+
+    def test_docutils_renders_it_when_it_is_installed(self, client):
+        from difflow.gui import docs
+
+        _, body = client.get_json("/api/docs/CSTR")
+        expected = "rst" if docs.available() else "text"
+        assert body["format"] == expected
+        if expected == "rst":
+            # the paragraph is markup, not the escaped source
+            assert "<p>" in body["html"]
+
+    def test_an_unknown_operation_is_refused_not_raised(self, client):
+        status, body = client.get_json("/api/docs/NotAUnit")
+        assert status == 200, "a refusal is an answer, not a broken route"
+        assert body["ok"] is False
+        assert "NotAUnit" in body["error"]
+
+    def test_a_name_with_a_query_string_still_resolves(self, client):
+        _, body = client.get_json("/api/docs/CSTR?t=1")
+        assert body["ok"] is True and body["operation"] == "CSTR"
+
+    def test_the_route_needs_no_token(self, client):
+        """Reads are readable; only the mutating routes carry the token."""
+        status, _ = client.get("/api/docs/Mixer")
+        assert status == 200
+
+    def test_every_operation_answers(self, client):
+        """The palette can ask about anything it lists."""
+        _, catalog = client.get_json("/api/catalog")
+        for name in catalog:
+            _, body = client.get_json(f"/api/docs/{name}")
+            assert body["ok"] is True, name
+            assert body["html"], name
+
+    def test_the_session_answers_without_a_socket(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        assert session.docs("Flash")["ok"] is True
+        assert session.docs("nope")["ok"] is False
+
+
+class TestAnthropicForwarder:
+    """`difflow.gui.assistant` --- the shaping and the refusals.
+
+    Nothing here reaches the network: the API is stubbed. What is worth
+    testing is that the OpenAI-shaped turns the page sends are
+    translated correctly (the system turn is a field, not a message),
+    and that every way this can fail comes back as an answer the panel
+    can show rather than a traceback.
+    """
+
+    @staticmethod
+    def _stub(monkeypatch, payload, *, capture=None):
+        import io
+        from difflow.gui import assistant as module
+
+        class _Response(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        def urlopen(request, timeout=None):
+            if capture is not None:
+                capture["body"] = json.loads(request.data)
+                capture["headers"] = dict(request.headers)
+            return _Response(json.dumps(payload).encode())
+
+        monkeypatch.setattr(module.urllib.request, "urlopen", urlopen)
+
+    def test_the_system_turn_becomes_the_system_field(self, monkeypatch):
+        from difflow.gui import assistant
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+        seen = {}
+        self._stub(monkeypatch, {
+            "content": [{"type": "text", "text": "the volume is 1.0 m^3"}],
+            "model": "claude-sonnet-5", "usage": {"input_tokens": 900},
+        }, capture=seen)
+
+        answer = assistant.answer([
+            {"role": "system", "content": "answer only from the brief"},
+            {"role": "user", "content": "## Unit\nCSTR"},
+        ])
+        assert answer["ok"] and answer["text"] == "the volume is 1.0 m^3"
+        assert seen["body"]["system"] == "answer only from the brief"
+        assert seen["body"]["messages"] == [
+            {"role": "user", "content": "## Unit\nCSTR"}
+        ], "the system turn must not also be sent as a message"
+        assert seen["headers"]["X-api-key"] == "sk-test"
+        assert seen["headers"]["Anthropic-version"] == assistant.VERSION
+
+    def test_the_model_is_overridable_from_the_environment(self, monkeypatch):
+        from difflow.gui import assistant
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+        monkeypatch.setenv("DIFFLOW_ASSISTANT_MODEL", "claude-haiku-4-5")
+        seen = {}
+        self._stub(monkeypatch, {"content": [{"type": "text", "text": "hi"}]},
+                   capture=seen)
+        assistant.answer([{"role": "user", "content": "q"}])
+        assert seen["body"]["model"] == "claude-haiku-4-5"
+
+    def test_an_http_error_is_reported_in_the_answer(self, monkeypatch):
+        import io
+
+        from difflow.gui import assistant
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+
+        def urlopen(request, timeout=None):
+            raise urllib.error.HTTPError(
+                assistant.API, 429, "Too Many Requests", {},
+                io.BytesIO(b'{"error": {"message": "rate limited"}}'))
+
+        monkeypatch.setattr(assistant.urllib.request, "urlopen", urlopen)
+        answer = assistant.answer([{"role": "user", "content": "q"}])
+        assert answer["ok"] is False
+        assert "429" in answer["error"] and "rate limited" in answer["error"]
+
+    def test_an_empty_reply_says_why(self, monkeypatch):
+        from difflow.gui import assistant
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+        self._stub(monkeypatch, {"content": [], "stop_reason": "max_tokens"})
+        answer = assistant.answer([{"role": "user", "content": "q"}])
+        assert answer["ok"] is False and "max_tokens" in answer["error"]
+
+    def test_an_oversized_brief_is_refused_before_it_is_paid_for(
+            self, monkeypatch):
+        from difflow.gui import assistant
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+
+        def urlopen(request, timeout=None):
+            raise AssertionError("must not reach the API")
+
+        monkeypatch.setattr(assistant.urllib.request, "urlopen", urlopen)
+        answer = assistant.answer(
+            [{"role": "user", "content": "x" * (assistant.MAX_CHARS + 1)}])
+        assert answer["ok"] is False and str(assistant.MAX_CHARS) in answer["error"]
+
+    def test_a_brief_with_no_question_is_refused(self, monkeypatch):
+        from difflow.gui import assistant
+
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+        answer = assistant.answer([{"role": "system", "content": "rules"}])
+        assert answer["ok"] is False and "no user turn" in answer["error"]
+
+
+class TestDocsRendering:
+    """`difflow.gui.docs` --- the rendering itself, without a server."""
+
+    def test_empty_text_is_empty(self):
+        from difflow.gui import docs
+
+        assert docs.render("   ") == ("", "text")
+
+    def test_a_sphinx_role_does_not_swallow_the_line(self):
+        """Bare docutils does not know `:class:`, and an unknown role is
+        an error that takes the whole paragraph with it."""
+        from difflow.gui import docs
+
+        if not docs.available():
+            pytest.skip("docutils is not installed")
+        html, fmt = docs.render("A :class:`~difflow.streams.Stream` goes in.")
+        assert fmt == "rst"
+        assert "Stream" in html and "goes in" in html
+        assert "difflow.streams" not in html, "`~` abbreviates, as in Sphinx"
+
+    def test_no_system_messages_reach_the_panel(self):
+        """A few docstrings indent in ways docutils reads as a block
+        quote. That is difflow's prose to fix, not a red box in the
+        user's inspector."""
+        from difflow.catalog import catalog
+        from difflow.gui import docs
+
+        if not docs.available():
+            pytest.skip("docutils is not installed")
+        for name, spec in catalog().items():
+            html, fmt = docs.render(spec.doc)
+            assert fmt == "rst", name
+            assert "system-message" not in html, name
+
+    def test_it_falls_back_to_text_without_docutils(self, monkeypatch):
+        from difflow.gui import docs
+
+        real = __import__
+
+        def no_docutils(name, *args, **kwargs):
+            if name.startswith("docutils"):
+                raise ImportError("no docutils")
+            return real(name, *args, **kwargs)
+
+        monkeypatch.setattr("builtins.__import__", no_docutils)
+        html, fmt = docs.render("A <script> & an ampersand.")
+        assert fmt == "text"
+        assert html.startswith("<pre>")
+        assert "&lt;script&gt;" in html and "&amp;" in html
+
+
+# =============================================================================
+# Results and derivatives
+# =============================================================================
+
+
+class TestResults:
+    """The solve reports how it solved, not only what it found."""
+
+    def test_a_solve_carries_its_diagnostics(self, thermo):
+        answer = FlowsheetSession(build_flowsheet(thermo)).solve()
+        assert answer["ok"]
+        # No recycle here, so this is the sequential path -- and saying so
+        # is the point: the panel must be able to tell the two apart.
+        assert answer["method"] == "direct"
+        assert answer["converged"] is True
+        assert answer["tear_streams"] == []
+        assert answer["residual"] == 0.0
+        assert answer["tol"] is not None
+        assert answer["species"] == SPECIES
+
+    def test_a_recycle_reports_its_tear_streams(self, thermo):
+        fs = Flowsheet(species_order=SPECIES)
+        fs.add_feed("feed", make_stream({"water": 1.0, "ethanol": 0.1},
+                                        T=350.0, P=101325.0))
+        fs.add_unit(Unit("mix", Mixer(SPECIES, thermo),
+                         ["feed", "recycle"], ["mixed"]))
+        fs.add_unit(Unit("flash", Flash(FlashParams(species_order=SPECIES),
+                                        thermo), ["mixed"], ["liq", "vap"]))
+        fs.add_recycle("vap", "recycle")
+
+        answer = FlowsheetSession(fs).solve()
+        assert answer["ok"]
+        assert answer["tear_streams"] == ["recycle"]
+        assert answer["method"] != "direct"
+
+    def test_an_edit_makes_the_last_solve_stale(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        assert session.solve()["ok"]
+        assert session.levers()["solved"] is True
+        assert session.patch_unit("reactor", {"params": {"V": 2.0}})["ok"]
+        # The streams on screen describe the flowsheet as it was.
+        assert session.levers()["solved"] is False
+        assert session.levers()["outputs"] == []
+
+    def test_a_move_does_not(self, thermo):
+        """Positions are not physics: dragging a node keeps the results."""
+        session = FlowsheetSession(build_flowsheet(thermo))
+        assert session.solve()["ok"]
+        assert session.set_layout({"reactor": {"x": 10, "y": 20}})["ok"]
+        assert session.levers()["solved"] is True
+
+
+class TestSensitivity:
+    """The derivatives, which is what makes this difflow and not a form."""
+
+    def test_levers_are_the_scalars_and_nothing_else(self, thermo):
+        found = {item["key"]: item for item in
+                 sensitivity.levers(build_flowsheet(thermo))}
+        assert found["reactor.V"]["value"] == 1.0
+        assert found["reactor.V"]["units"] == "m^3"
+        # The rate function, the stoichiometry array and the species list
+        # are on the same params object and are not levers.
+        assert "reactor.rate_fn" not in found
+        assert "reactor.stoich" not in found
+        assert "reactor.species_order" not in found
+        assert found["feed:feed.total_flow"]["value"] == pytest.approx(1.1)
+        assert found["feed:feed.T"]["units"] == "K"
+
+    def test_every_lever_is_a_key_apply_params_accepts(self, thermo):
+        fs = build_flowsheet(thermo)
+        for item in sensitivity.levers(fs):
+            fs._apply_params({item["key"]: item["value"]})
+
+    def test_outputs_name_the_solved_quantities(self, thermo):
+        fs = build_flowsheet(thermo)
+        keys = {o["key"] for o in sensitivity.outputs(fs.solve())}
+        assert {"liq.total_flow", "liq.T", "liq.P", "liq.F_ethanol"} <= keys
+
+    def test_forward_moves_every_stream_from_one_lever(self, thermo):
+        answer = sensitivity.forward(build_flowsheet(thermo), "reactor.V")
+        assert answer["mode"] == "forward" and answer["u0"] == 1.0
+        # A bigger reactor converts more water to ethanol, and the two
+        # derivatives are equal and opposite because the reaction is 1:1.
+        liq = answer["streams"]["liq"]
+        assert liq["F_ethanol"]["d"] > 0
+        assert liq["F_water"]["d"] == pytest.approx(-liq["F_ethanol"]["d"])
+        # Nothing upstream of the reactor can move.
+        assert answer["streams"]["feed"]["F_water"]["d"] == 0.0
+
+    def test_forward_matches_a_finite_difference(self, thermo):
+        """The decisive check: AD through the solve, against the real thing."""
+        answer = sensitivity.forward(build_flowsheet(thermo), "reactor.V")
+        h = 1e-4
+        up = build_flowsheet(thermo, V=1.0 + h).solve()
+        down = build_flowsheet(thermo, V=1.0 - h).solve()
+        fd = (float(up["liq"]["F_ethanol"]) - float(down["liq"]["F_ethanol"])) / (2 * h)
+        assert answer["streams"]["liq"]["F_ethanol"]["d"] == pytest.approx(fd, rel=1e-5)
+
+    def test_reverse_ranks_the_levers_dimensionlessly(self, thermo):
+        answer = sensitivity.reverse(build_flowsheet(thermo), "liq.F_ethanol")
+        assert answer["mode"] == "reverse" and answer["y0"] > 0
+        ranked = answer["levers"]
+        relative = [abs(item["rel"]) for item in ranked if item["rel"] is not None]
+        assert relative == sorted(relative, reverse=True)
+        by_key = {item["key"]: item for item in ranked}
+        # V and molar_density enter the rate as their product, so their
+        # dimensionless sensitivities have to come out equal. A test that
+        # only checked signs would not notice if one were scaled wrong.
+        assert by_key["reactor.V"]["rel"] == pytest.approx(
+            by_key["reactor.molar_density"]["rel"], rel=1e-9
+        )
+
+    def test_total_flow_differentiates_through_every_species(self, thermo):
+        answer = sensitivity.reverse(build_flowsheet(thermo), "rx.total_flow")
+        assert answer["y0"] == pytest.approx(1.1)
+        # The reaction conserves moles, so the reactor cannot change the
+        # total -- but the feed rate obviously can.
+        by_key = {item["key"]: item for item in answer["levers"]}
+        assert by_key["reactor.V"]["d"] == pytest.approx(0.0, abs=1e-9)
+        assert by_key["feed:feed.total_flow"]["d"] == pytest.approx(1.0, rel=1e-6)
+
+    def test_a_lever_that_is_not_one_is_refused_by_name(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        answer = session.sensitivity(lever="reactor.rate_fn")
+        assert not answer["ok"] and "not a lever" in answer["error"]
+
+    def test_asking_both_directions_at_once_is_refused(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        assert not session.sensitivity()["ok"]
+        assert not session.sensitivity(lever="reactor.V",
+                                       target="liq.T")["ok"]
+
+    def test_the_routes_answer(self, thermo):
+        live = Client(FlowsheetSession(build_flowsheet(thermo)))
+        try:
+            _, before = live.get_json("/api/levers")
+            assert before["ok"] and before["solved"] is False
+            assert any(item["key"] == "reactor.V" for item in before["levers"])
+
+            assert live.post("/api/solve")[1]["ok"]
+            _, after = live.get_json("/api/levers")
+            assert after["solved"] is True and after["outputs"]
+
+            _, forward = live.post("/api/sensitivity", {"lever": "reactor.V"})
+            assert forward["ok"] and forward["mode"] == "forward"
+            _, reverse = live.post("/api/sensitivity",
+                                   {"target": "liq.F_ethanol"})
+            assert reverse["ok"] and reverse["mode"] == "reverse"
+        finally:
+            live.close()
+
+
+class TestExport:
+    """The ways out of the editor: a script, a document, a drawing."""
+
+    def test_the_diagram_is_drawn_at_the_canvas_s_layout(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        answer = session.diagram()
+        assert answer["ok"] and answer["svg"].startswith("<svg")
+        assert "reactor" in answer["svg"]
+
+        assert session.set_layout({"reactor": {"x": 500, "y": 300}})["ok"]
+        moved = session.diagram()["svg"]
+        assert moved != answer["svg"] and "500" in moved
+
+    def test_a_flowsheet_with_nothing_in_it_says_so_rather_than_raising(self):
+        """An empty string is not an SVG, and a blank download is not an answer."""
+        assert FlowsheetSession(None).diagram() == {
+            "ok": False, "error": "nothing to draw yet"}
+
+    def test_the_export_routes_answer(self, thermo):
+        live = Client(FlowsheetSession(build_flowsheet(thermo)))
+        try:
+            # All three exports are reads, so none of them needs the token.
+            _, svg = live.get_json("/api/diagram")
+            assert svg["ok"] and svg["svg"].startswith("<svg")
+            _, code = live.get_json("/api/code")
+            assert code["error"] is None and "Flowsheet(" in code["source"]
+            _, doc = live.get_json("/api/flowsheet")
+            assert doc["flowsheet"]["units"]
+        finally:
+            live.close()
+
+class TestPlanning:
+    """Delta vectors, which is what a planning system asks difflow for.
+
+    The load-bearing test here is the finite-difference one: everything
+    else in this file can be wrong in a way a user notices, and a
+    Jacobian cannot -- it leaves as a table of numbers and is priced
+    against by someone who never sees the flowsheet.
+    """
+
+    LEVERS = ["reactor.V", "feed:feed.total_flow"]
+    OUTPUTS = ["liq.F_ethanol", "vap.total_flow"]
+
+    def test_the_jacobian_matches_central_differences(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        assert session.solve()["ok"]
+        answer = session.linearize(self.LEVERS, self.OUTPUTS, check=True)
+        assert answer["ok"], answer
+        assert answer["check"]["passed"], answer["check"]
+        assert answer["check"]["max_rel_error"] < 1e-5
+
+    def test_a_lever_the_flowsheet_moves_has_a_nonzero_column(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        session.solve()
+        answer = session.linearize(["reactor.V"], ["liq.F_ethanol"])
+        vector = answer["delta_vectors"]["vectors"][0]
+        assert vector["J"][0][0] > 0, "a bigger reactor makes more ethanol"
+        assert vector["u0"] == [1.0]
+
+    def test_units_travel_with_the_coefficients(self, thermo):
+        """A Jacobian with unlabelled axes is not an export."""
+        session = FlowsheetSession(build_flowsheet(thermo))
+        session.solve()
+        answer = session.linearize(self.LEVERS, self.OUTPUTS)
+        vector = answer["delta_vectors"]["vectors"][0]
+        # `V` carries its units in CSTR.parameter_units, not in the
+        # dataclass field metadata, which is where most of them live.
+        assert vector["u_units"] == ["m^3", "mol/s"]
+        assert vector["y_units"] == ["mol/s", "mol/s"]
+
+    def test_an_unbounded_lever_gets_a_window_not_an_infinity(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        session.solve()
+        vector = session.linearize(
+            ["reactor.V"], ["liq.F_ethanol"])["delta_vectors"]["vectors"][0]
+        assert vector["lb"] == [0.0] and vector["ub"] == [2.0]
+        assert all(map(math.isfinite, vector["tr_lo"] + vector["tr_hi"]))
+
+    def test_bounds_given_are_the_bounds_used(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        session.solve()
+        answer = session.linearize(
+            ["reactor.V"], ["liq.F_ethanol"],
+            bounds={"reactor.V": {"lb": 0.5, "ub": 4.0}})
+        vector = answer["delta_vectors"]["vectors"][0]
+        assert vector["lb"] == [0.5] and vector["ub"] == [4.0]
+
+    def test_the_selection_is_persisted_so_the_panel_reopens_on_it(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        session.solve()
+        session.linearize(self.LEVERS, self.OUTPUTS, radius=0.1,
+                          bounds={"reactor.V": {"lb": 0.5}})
+        saved = session.flowsheet.view["planning"]
+        assert saved["u"] == self.LEVERS and saved["y"] == self.OUTPUTS
+        assert saved["radius"] == 0.1
+        assert saved["bounds"] == {"reactor.V": {"lb": 0.5}}
+
+    def test_an_empty_pick_is_refused_with_a_sentence(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        session.solve()
+        assert session.linearize([], ["liq.F_ethanol"]) == {
+            "ok": False, "error": "pick at least one lever and one output"}
+        assert session.linearize(["reactor.V"], [])["ok"] is False
+
+    def test_a_name_the_flowsheet_does_not_have_is_an_answer(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        session.solve()
+        answer = session.linearize(["reactor.V"], ["nowhere.total_flow"])
+        assert answer["ok"] is False
+        assert "nowhere" in answer["error"]
+
+    def test_an_empty_session_answers_rather_than_raising(self):
+        """A refusal about the names asked for, from an empty flowsheet.
+
+        It no longer says "no flowsheet loaded", because there is one ---
+        an editor opened with no file starts empty rather than inert. What
+        matters here is unchanged: a request naming things that are not
+        there comes back as a message and not as a traceback.
+        """
+        answer = FlowsheetSession(None).linearize(["a"], ["b"])
+        assert answer["ok"] is False and answer["error"]
+
+    def test_health_findings_travel_with_the_export(self, thermo):
+        """A dead lever has to be visible downstream, not just locally."""
+        session = FlowsheetSession(build_flowsheet(thermo))
+        session.solve()
+        # Nothing upstream of the reactor can respond to its volume.
+        answer = session.linearize(["reactor.V"], ["feed.total_flow"])
+        kinds = {f["kind"] for f in answer["health"]}
+        assert "dead_lever" in kinds
+        assert answer["delta_vectors"]["health"] == answer["health"]
+
+    def test_the_downloads_are_what_the_export_writers_write(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        session.solve()
+        session.linearize(self.LEVERS, self.OUTPUTS)
+
+        manifest = session.linearization_files("json")
+        assert manifest["ok"] and len(manifest["files"]) == 1
+        # Never the flowsheet's own name: a download landing next to the
+        # document under that name is a flowsheet overwritten.
+        assert manifest["files"][0]["name"].endswith("_delta_vectors.json")
+        loaded = json.loads(manifest["files"][0]["text"])
+        assert loaded["vectors"][0]["u_names"]
+        assert loaded["meta"]["source"] == "difflow.gui"
+
+        tables = session.linearization_files("csv")
+        names = {f["name"] for f in tables["files"]}
+        assert "flowsheet_jacobian.csv" in names and "bounds.csv" in names
+
+    def test_a_format_that_does_not_exist_is_refused(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        session.solve()
+        session.linearize(self.LEVERS, self.OUTPUTS)
+        answer = session.linearization_files("mps")
+        assert answer["ok"] is False and "mps" in answer["error"]
+
+    def test_downloading_before_linearizing_says_so(self, thermo):
+        assert FlowsheetSession(build_flowsheet(thermo)).linearization_files(
+            "json") == {"ok": False, "error": "nothing linearized yet"}
+
+    def test_the_route_is_guarded_because_it_writes(self, thermo):
+        """It persists the selection, so it goes through the token check."""
+        live = Client(FlowsheetSession(build_flowsheet(thermo)))
+        try:
+            status, payload = live.post(
+                "/api/linearize", {"u": self.LEVERS, "y": self.OUTPUTS},
+                headers={gui.TOKEN_HEADER: "wrong"})
+            assert status == 403 and payload["ok"] is False
+
+            live.post("/api/solve")
+            status, answer = live.post(
+                "/api/linearize", {"u": self.LEVERS, "y": self.OUTPUTS})
+            assert status == 200 and answer["ok"], answer
+            assert answer["table"].startswith("delta vectors for block")
+
+            _, files = live.post("/api/linearize/files", {"format": "csv"})
+            assert files["ok"] and files["files"]
+        finally:
+            live.close()
+
+    def test_the_assistant_can_brief_on_the_linearization(self, thermo):
+        """`context.pack(kind="planning")` reads what linearize stored."""
+        session = FlowsheetSession(build_flowsheet(thermo))
+        session.solve()
+        assert context.pack(session, kind="planning")["ok"] is False
+
+        session.linearize(self.LEVERS, self.OUTPUTS)
+        pack = context.pack(session, kind="planning", question="what is this?")
+        assert pack["ok"] and "reactor_V" in pack["prompt"]
+        assert "trust radius" in pack["prompt"]
+
+
+# =============================================================================
+# The console
+# =============================================================================
+
+
+class TestConsole:
+    """A Python prompt over the objects the editor is already holding.
+
+    The thing worth testing is not that `1 + 1` is 2. It is that `fs`
+    is the *same* flowsheet the canvas has --- a console over a copy
+    would answer questions about a model nobody is looking at --- and
+    that the session notices when a cell has moved it.
+    """
+
+    def test_an_expression_comes_back_as_its_repr(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        answer = session.console_run("6 * 7")
+        assert answer["ok"] and answer["error"] is None
+        assert answer["outputs"] == [
+            {"kind": "value", "stream": "stdout", "text": "42"}]
+
+    def test_statements_run_and_the_namespace_persists(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        session.console_run("import math\nradius = 2.0")
+        answer = session.console_run("round(math.pi * radius ** 2, 3)")
+        assert answer["outputs"][-1]["text"] == "12.566"
+        # a module the user imported is a name they defined, and seeing
+        # it is the confirmation the import took
+        assert answer["names"] == ["math", "radius"]
+
+    def test_print_and_the_value_both_arrive_in_order(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        answer = session.console_run("print('working')\n5")
+        assert [o["text"] for o in answer["outputs"]] == ["working\n", "5"]
+
+    def test_a_traceback_is_the_answer_not_a_refusal(self, thermo):
+        """`ok` is about the request; the cell failing is a result."""
+        session = FlowsheetSession(build_flowsheet(thermo))
+        answer = session.console_run("1 / 0")
+        assert answer["ok"] is True
+        assert "ZeroDivisionError" in answer["error"]
+        assert "1 / 0" in answer["error"], "the offending line, from linecache"
+        assert "session.py" not in answer["error"], "server frames trimmed"
+
+    def test_what_a_cell_printed_survives_the_exception(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        answer = session.console_run("print('got this far')\nboom")
+        assert answer["outputs"][0]["text"] == "got this far\n"
+        assert "NameError" in answer["error"]
+
+    def test_a_syntax_error_names_the_line(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        answer = session.console_run("x = 1\ndef f(:")
+        assert "SyntaxError" in answer["error"] and "line 2" in answer["error"]
+
+    def test_fs_is_the_flowsheet_on_the_canvas(self, thermo):
+        """Not a copy. This is the whole reason the panel exists."""
+        session = FlowsheetSession(build_flowsheet(thermo))
+        answer = session.console_run("fs is session.flowsheet")
+        assert answer["outputs"][-1]["text"] == "True"
+
+    def test_the_live_names_are_rebound_every_cell(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        assert session.console_run("streams is None")["outputs"][-1]["text"] == "True"
+        assert session.solve()["ok"]
+        answer = session.console_run("sorted(streams)[0]")
+        assert answer["error"] is None
+        assert answer["outputs"][-1]["text"].strip("'\"") in session.streams
+
+    def test_the_code_context_bindings_are_in_scope(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        session.set_code_context("greeting = 'hello'")
+        assert session.console_run("greeting")["outputs"][-1]["text"] == "'hello'"
+
+    def test_gradients_run_here_which_is_the_point(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        answer = session.console_run(
+            "float(jax.grad(lambda V: fs._apply_params({'reactor.V': V})"
+            ".solve()['liq']['F_ethanol'])(1.0))")
+        assert answer["error"] is None, answer["error"]
+        assert float(answer["outputs"][-1]["text"]) > 0
+
+    def test_a_cell_that_edits_the_model_says_so(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        assert session.solve()["ok"] and session.streams is not None
+        answer = session.console_run(
+            "unit = next(u for u in fs.units if u.name == 'reactor')\n"
+            "unit.operation.params = unit.operation.params.update(V=2.0)")
+        assert answer["error"] is None, answer["error"]
+        assert answer["changed"] is True
+        assert session.streams is None, "the cached solve describes the old model"
+
+    def test_a_cell_that_only_reads_leaves_the_canvas_alone(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        assert session.solve()["ok"]
+        assert session.console_run("len(fs.units)")["changed"] is False
+        assert session.streams is not None
+
+    def test_reset_forgets_what_the_console_defined(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        session.console_run("keep = 1")
+        session.console_reset()
+        assert "NameError" in session.console_run("keep")["error"]
+        assert session.console_run("fs is not None")["outputs"][-1]["text"] == "True"
+
+    def test_an_empty_cell_is_not_a_round_trip(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        assert session.console_run("   \n  ") == {
+            "ok": True, "outputs": [], "error": None,
+            "changed": False, "names": []}
+
+    def test_the_names_in_scope_are_advertised(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        session.set_code_context("greeting = 'hello'")
+        names = session.console_names()
+        assert set(names["live"]) == {"fs", "streams", "dvs", "session"}
+        assert names["bindings"] == ["greeting"]
+        assert names["defined"] == []
+
+    def test_the_route_is_guarded_like_every_other_exec(self, client):
+        status, body = client.send("POST", "/api/console", {"source": "1"},
+                                   headers={gui.TOKEN_HEADER: "wrong"})
+        assert status == 403 and body["ok"] is False
+        status, body = client.send("POST", "/api/console", {"source": "1 + 1"})
+        assert status == 200
+        assert body["outputs"][-1]["text"] == "2"
+
+    def test_output_is_capped(self, thermo):
+        session = FlowsheetSession(build_flowsheet(thermo))
+        answer = session.console_run("print('x' * 500_000)")
+        body = answer["outputs"][0]["text"]
+        assert len(body) < console.MAX_OUTPUT + 100
+        assert "truncated" in body
+
+
+class TestConsoleFigures:
+    """The seam plots will arrive through, exercised without matplotlib."""
+
+    def test_a_display_hook_appends_to_the_cell(self):
+        drawn = console.image(b"\x89PNG-not-really")
+        shell = console.Console(display_hooks=[lambda ns: [drawn]])
+        answer = shell.run("1")
+        assert answer["outputs"] == [
+            {"kind": "value", "stream": "stdout", "text": "1"}, drawn]
+        assert drawn["kind"] == "image" and drawn["mime"] == "image/png"
+
+    def test_a_hook_sees_the_namespace(self):
+        seen = {}
+        shell = console.Console(display_hooks=[lambda ns: seen.update(ns) or []])
+        shell.run("marker = 7")
+        assert seen["marker"] == 7
+
+    def test_a_broken_hook_does_not_eat_the_result(self):
+        """A renderer that fails must not lose a number computed correctly."""
+        def broken(ns):
+            raise RuntimeError("no display")
+
+        answer = console.Console(display_hooks=[broken]).run("6 * 7")
+        assert answer["error"] is None
+        assert answer["outputs"][0]["text"] == "42"
+        assert "no display" in answer["outputs"][1]["text"]
+        assert answer["outputs"][1]["stream"] == "stderr"
+
+    def test_an_image_survives_the_json_the_server_sends(self):
+        drawn = console.image(b"\x89PNG\r\n\x1a\n binary \xff\xfe")
+        assert json.loads(json.dumps(drawn)) == drawn
 
 
 if __name__ == "__main__":

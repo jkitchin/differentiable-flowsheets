@@ -191,6 +191,7 @@ class Turboexpander:
         "Smith, Van Ness, Abbott. Introduction to Chemical Engineering Thermodynamics, 7e, Ch. 6-7.",
         "Moran, Shapiro, Boettner, Bailey. Fundamentals of Engineering Thermodynamics, 8e, Ch. 6-9.",
     ]
+    parameter_units = {"P_out": "Pa", "eta_isentropic": "-", "T_bounds": "K"}
 
     def __init__(self, params: TurboexpanderParams, thermo: CubicThermo):
         self.params = params
@@ -260,6 +261,7 @@ class Compressor:
         "Smith, Van Ness, Abbott. Introduction to Chemical Engineering Thermodynamics, 7e, Ch. 6-7.",
         "Moran, Shapiro, Boettner, Bailey. Fundamentals of Engineering Thermodynamics, 8e, Ch. 6-9.",
     ]
+    parameter_units = {"P_out": "Pa", "eta_isentropic": "-", "T_bounds": "K"}
 
     def __init__(self, params: CompressorParams, thermo: CubicThermo):
         self.params = params
@@ -322,6 +324,7 @@ class JTValve:
     references = [
         "Smith, Van Ness, Abbott. Introduction to Chemical Engineering Thermodynamics, 7e, Ch. 6-7.",
     ]
+    parameter_units = {"P_out": "Pa", "T_bounds": "K"}
 
     def __init__(self, params: JTValveParams, thermo: CubicThermo):
         self.params = params
@@ -384,6 +387,7 @@ class ComponentSeparator:
     references = [
         "Seader, Henley, Roper. Separation Process Principles, 3e, Ch. 8 (liquid-liquid extraction).",
     ]
+    parameter_units = {"default_recovery": "-"}
 
     def __init__(self, params: ComponentSeparatorParams, thermo: CubicThermo):
         self.params = params

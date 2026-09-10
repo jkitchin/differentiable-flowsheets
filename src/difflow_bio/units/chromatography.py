@@ -226,11 +226,19 @@ class ProteinAChromatography:
         "Harrison, R.G., et al. Bioseparations Science and Engineering, 2e, Oxford, 2015.",
     ]
     parameter_symbols = {
-        "qmax": "q_\\mathrm{max}",
-        "Kd": "K_d",
-        "bed_volume": "V_\\mathrm{bed}",
+        "column_volume": r"V_\mathrm{bed}",
+        "q_max": r"q_\mathrm{max}",
+        "K_d": "K_d",
     }
-    parameter_units = {"qmax": "g/L", "Kd": "M", "bed_volume": "L"}
+    parameter_units = {
+        "column_volume": "L",
+        "q_max": "g/L",
+        "K_d": "g/L",
+        "yield_factor": "-",
+        "k_ads": "1/min",
+        "n_plates": "-",
+        "elution_cv": "CV",
+    }
     numerical_method = "Closed-form Langmuir loading + mass-balance accounting across load/wash/elute."
 
     def __init__(self, params: ProteinAParams):
@@ -428,8 +436,13 @@ class IonExchangeChromatography:
         "Brooks, C.A., Cramer, S.M. AIChE J., 38, 1969 (1992).",
         "Jungbauer, A. J. Chromatogr. A, 1065, 3 (2005).",
     ]
-    parameter_symbols = {"qmax": "q_\\mathrm{max}", "Kb": "K_b"}
-    parameter_units = {"qmax": "g/L", "Kb": "1/M"}
+    parameter_symbols = {"q_max": r"q_\mathrm{max}", "K_d": "K_d"}
+    parameter_units = {
+        "column_volume": "L",
+        "q_max": "g/L",
+        "K_d": "g/L",
+        "yield_factor": "-",
+    }
     numerical_method = "Isotherm-based mass balance; bind/flow-through selection at __call__."
 
     def __init__(self, params: IEXParams):
@@ -536,7 +549,12 @@ class SizeExclusionChromatography:
     ]
     references = ["Hagel, L. Size Exclusion Chromatography, in Protein Purification, 2e, Wiley, 2011."]
     parameter_symbols = {"column_volume": "V_t", "void_fraction": r"\varepsilon_0"}
-    parameter_units = {"column_volume": "L", "void_fraction": "-"}
+    parameter_units = {
+        "column_volume": "L",
+        "void_fraction": "-",
+        "yield_factor": "-",
+        "resolution": "-",
+    }
     numerical_method = "Kav-based elution ordering + Gaussian peak overlap."
 
     def __init__(self, params: SECParams):

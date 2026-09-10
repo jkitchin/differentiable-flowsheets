@@ -222,6 +222,68 @@ class TestRefusals:
 
 
 # =============================================================================
+# The code context, emitted as a preamble
+# =============================================================================
+
+
+CONTEXT = (
+    "from difflow import IdealThermo, get_species_data\n"
+    "thermo = IdealThermo({n: get_species_data(n) for n in "
+    "['water', 'ethanol']})\n"
+)
+
+
+class TestCodeContext:
+    """A flowsheet that refers to objects by name has to carry them.
+
+    The editor holds those definitions in `view["code_context"]`; the
+    generated script must open with the same text, or what is exported
+    is not what ran.
+    """
+
+    def test_the_snippet_is_emitted_before_it_is_used(self, flowsheet, thermo):
+        flowsheet.view = {"code_context": CONTEXT}
+        source = codegen.to_python(flowsheet, refs={"thermo": thermo})
+        assert "# --- code context" in source
+        assert CONTEXT.strip() in source
+        assert source.index("thermo = IdealThermo") < source.index("Flash(")
+
+    def test_the_reference_is_written_as_a_name(self, flowsheet, thermo):
+        flowsheet.view = {"code_context": CONTEXT}
+        source = codegen.to_python(flowsheet, refs={"thermo": thermo})
+        assert "Flash(FlashParams(species_order=['water', 'ethanol']), thermo)" \
+            in source, "inlining it would build a second, different object"
+
+    def test_the_generated_script_runs_and_solves(self, flowsheet, thermo):
+        """The whole point of the preamble."""
+        flowsheet.view = {"code_context": CONTEXT}
+        source = codegen.to_python(flowsheet, refs={"thermo": thermo})
+        rebuilt = run_generated(source)
+        original, restored = flowsheet.solve(), rebuilt.solve()
+        for stream in original:
+            for key, value in original[stream].items():
+                if not isinstance(value, str):
+                    assert float(restored[stream][key]) == pytest.approx(
+                        float(value)
+                    ), f"{stream}.{key} differs"
+
+    def test_a_flowsheet_with_no_context_gains_no_preamble(self, flowsheet):
+        assert "code context" not in codegen.to_python(flowsheet)
+
+    def test_the_context_can_be_supplied_by_the_caller(self, flowsheet, thermo):
+        """A flowsheet that never went near the editor can still use it."""
+        source = codegen.to_python(flowsheet, code_context=CONTEXT,
+                                   refs={"thermo": thermo})
+        assert CONTEXT.strip() in source
+
+    def test_an_unknown_object_is_still_refused(self, flowsheet):
+        """A namespace that does not hold it changes nothing: the thermo is
+        inlined if it can be, and refused if it cannot."""
+        source = codegen.to_python(flowsheet, refs={"other": object()})
+        assert "IdealThermo({s: get_species_data(s)" in source
+
+
+# =============================================================================
 # Files
 # =============================================================================
 
