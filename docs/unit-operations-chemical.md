@@ -774,13 +774,36 @@ D = column_diameter(V_max, rho_V, rho_L, sigma)
 ```python
 @dataclass
 class DistillationColumnParams:
-    n_stages: int          # Number of theoretical stages
-    feed_stage: int        # Feed stage number (from top)
-    reflux_ratio: float    # Reflux ratio (L/D)
-    condenser_type: str    # 'total' or 'partial'
-    P_top: float           # Top pressure (Pa)
-    P_bottom: float        # Bottom pressure (Pa)
+    species_order: list[str]  # Species names, fixes the array ordering
+    n_stages: int             # Number of theoretical stages
+    feed_stage: int           # Feed stage index, numbered from the bottom
+    condenser_type: str       # 'total' or 'partial'
+    P: float = 101325.0       # Column pressure (Pa)
+    q: float = 1.0            # Feed thermal condition (1 = sat. liquid)
 ```
+
+The reflux ratio `R` and a product rate (`D_spec` or `B_spec`) are arguments to
+the call, not parameters of the column.
+
+#### Stage numbering and the feed stage
+
+Stages are numbered from the bottom: `j = 0` is the reboiler and
+`j = n_stages - 1` is the top stage, with a total condenser above it. The feed
+enters stage `feed_stage`, which splits into `q F` of liquid running down and
+`(1 - q) F` of vapour running up. The feed stage is therefore counted with the
+**stripping** section on its liquid side and with the **rectifying** section on
+its vapour side:
+
+$$L_j = \begin{cases} L' = L + qF & j \le n_F \\ L = R D & j > n_F \end{cases}
+\qquad
+V_j = \begin{cases} V' = V - (1-q)F & j < n_F \\ V = (R+1) D & j \ge n_F \end{cases}$$
+
+That is one convention, not two: both flows follow from asking whether the
+horizontal cut a stream crosses has the feed above it. `_is_rectifying_cut` and
+`_cmo_section_flows` in `difflow/units/distillation.py` are the single
+definition, used by both the CMO (Lewis-Matheson) sweep and the MESH flow
+initialisation. Stages above `feed_stage` are rectifying, stages below it are
+stripping.
 
 #### Governing Equations (MESH)
 

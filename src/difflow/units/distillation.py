@@ -604,6 +604,115 @@ class ShortcutColumn:
         return distillate, bottoms, info
 
 
+# =============================================================================
+# Column section convention
+# =============================================================================
+#
+# Stages are numbered from the bottom: j = 0 is the reboiler and
+# j = n_stages - 1 is the top stage.  The feed enters stage ``feed_stage``.
+#
+# Everything about where the rectifying section ends and the stripping section
+# begins is decided by ``_is_rectifying_cut`` below, and the flows follow from
+# it.  Both the CMO (Lewis-Matheson) sweep and the MESH flow initialisation
+# read the section boundary from these functions, so the two solvers cannot
+# drift apart.
+
+
+def _is_rectifying_cut(j: Array | int, feed_stage: int) -> Array:
+    """Is the horizontal cut between stage ``j`` and stage ``j+1`` rectifying?
+
+    A cut is rectifying when the envelope above it -- stages ``j+1`` through
+    the condenser -- contains no feed, so a balance over that envelope closes
+    on the distillate alone.  The feed enters stage ``feed_stage``, which sits
+    above the cut only when ``j < feed_stage``:
+
+        cut j is rectifying  <=>  j >= feed_stage
+
+    The cut at ``j = feed_stage`` is therefore rectifying: it passes just below
+    the feed stage's vapour outlet and just above its liquid outlet.
+
+    Args:
+        j: Cut index (the cut above stage ``j``); may be an array.
+        feed_stage: Index of the stage the feed enters (0 = reboiler).
+
+    Returns:
+        Boolean array, True where the cut is in the rectifying section.
+    """
+    return jnp.asarray(j) >= feed_stage
+
+
+def _cmo_section_rates(
+    R: Array,
+    D: Array,
+    F_total: Array,
+    q: Array,
+) -> tuple[Array, Array, Array, Array]:
+    """Constant-molar-overflow liquid and vapour rates in each section.
+
+    The feed splits into ``q F`` of liquid joining the down-flowing liquid and
+    ``(1 - q) F`` of vapour joining the up-flowing vapour:
+
+        L_rect = R D,          V_rect = (R + 1) D
+        L_strip = L_rect + q F, V_strip = V_rect - (1 - q) F
+
+    Args:
+        R: Reflux ratio.
+        D: Distillate flow rate (mol/s).
+        F_total: Total feed flow rate (mol/s).
+        q: Feed thermal condition (1 = saturated liquid, 0 = saturated vapour).
+
+    Returns:
+        (L_rect, L_strip, V_rect, V_strip) in mol/s.
+    """
+    L_rect = R * D
+    V_rect = (R + 1) * D
+    L_strip = L_rect + q * F_total
+    V_strip = V_rect - (1.0 - q) * F_total
+    return L_rect, L_strip, V_rect, V_strip
+
+
+def _cmo_section_flows(
+    j: Array | int,
+    feed_stage: int,
+    L_rect: Array,
+    L_strip: Array,
+    V_rect: Array,
+    V_strip: Array,
+) -> tuple[Array, Array]:
+    """Constant-molar-overflow flows leaving stage ``j``.
+
+    Both flows are read off ``_is_rectifying_cut`` -- the liquid leaving stage
+    ``j`` downward crosses the cut *below* it (cut ``j-1``), the vapour leaving
+    it upward crosses the cut *above* it (cut ``j``):
+
+        L[j] = L_rect  if j > feed_stage  else L_strip
+        V[j] = V_rect  if j >= feed_stage else V_strip
+
+    The feed stage is thus counted with the stripping section on its liquid
+    side and with the rectifying section on its vapour side.  That is one
+    convention, not two: the feed splits into ``q F`` of liquid running down
+    and ``(1 - q) F`` of vapour running up, so
+    ``L[feed_stage] = L_rect + q F = L_strip`` while
+    ``V[feed_stage] = V_strip + (1 - q) F = V_rect``.
+
+    Args:
+        j: Stage index (0 = reboiler); may be an array.
+        feed_stage: Index of the stage the feed enters.
+        L_rect: Liquid rate in the rectifying section (mol/s).
+        L_strip: Liquid rate in the stripping section (mol/s).
+        V_rect: Vapour rate in the rectifying section (mol/s).
+        V_strip: Vapour rate in the stripping section (mol/s).
+
+    Returns:
+        (L_j, V_j): Liquid leaving stage ``j`` downward and vapour leaving it
+        upward (mol/s). Boundary stages (reboiler, condenser) are not special
+        cased here; callers that need the product flows override them.
+    """
+    L_j = jnp.where(_is_rectifying_cut(jnp.asarray(j) - 1, feed_stage), L_rect, L_strip)
+    V_j = jnp.where(_is_rectifying_cut(j, feed_stage), V_rect, V_strip)
+    return L_j, V_j
+
+
 @dataclass(repr=False)
 class DistillationColumnParams(ParamsMixin):
     """Parameters for rigorous distillation column.
@@ -611,9 +720,17 @@ class DistillationColumnParams(ParamsMixin):
     Attributes:
         species_order: List of species names
         n_stages: Total number of stages (including condenser/reboiler)
-        feed_stage: Feed stage number (1 = bottom)
+        feed_stage: Index of the stage the feed enters, numbered from the
+            bottom: 0 is the reboiler and ``n_stages - 1`` is the top stage.
+            The feed stage is counted with the stripping section on its liquid
+            side (``L[feed_stage] = L_rect + q F``) and with the rectifying
+            section on its vapour side (``V[feed_stage] = V_rect``); see
+            ``_cmo_section_flows``. Stages above it are rectifying, stages
+            below it are stripping.
         condenser_type: 'total' or 'partial'
         P: Column pressure (Pa)
+        q: Feed thermal condition (1.0 = saturated liquid, 0.0 = saturated
+            vapour)
     """
     species_order: list[str]
     n_stages: int
@@ -629,7 +746,10 @@ class DistillationColumn:
     Solves MESH equations (Material, Equilibrium, Summation, Heat balance)
     for each stage using the bubble-point method.
 
-    Stage numbering: 1 = reboiler (bottom), n_stages = condenser (top)
+    Stage numbering: j = 0 is the reboiler (bottom), j = n_stages - 1 is the
+    top stage, with a total condenser above it. The feed enters stage
+    ``params.feed_stage``; ``_cmo_section_flows`` defines which section each
+    stage's flows belong to.
 
     Assumptions:
     - Equilibrium stages
@@ -777,11 +897,8 @@ class DistillationColumn:
         P = jnp.asarray(p.P)
 
         B = F_total - D
-        L_rect = R * D
-        V_rect = (R + 1) * D
         q = jnp.asarray(p.q)
-        L_strip = L_rect + q * F_total
-        V_strip = V_rect - (1 - q) * F_total
+        L_rect, L_strip, V_rect, V_strip = _cmo_section_rates(R, D, F_total, q)
 
         z = jnp.array([feed_flows[s] / F_total for s in p.species_order])
 
@@ -826,15 +943,28 @@ class DistillationColumn:
             x_B = x[0]
 
             # --- Step 4: Top-down sweep using operating lines ---
-            # Rectifying OL: V*y_j = L*x_{j+1} + D*x_D  → y_j = (L*x_above + D*x_D)/V
-            # Stripping OL:  L'*x_{j+1} = V'*y_j + B*x_B → y_j = (L'*x_above - B*x_B)/V'
+            # The operating line for stage j is a balance over the envelope
+            # above the cut between stage j and stage j+1. It carries the
+            # vapour leaving stage j (V_j) and the liquid leaving stage j+1
+            # (L_{j+1}), both taken from the shared section convention, and
+            # closes on the distillate above or the bottoms below:
+            #   rectifying cut: V_j y_j = L_{j+1} x_{j+1} + D x_D
+            #   stripping cut:  L_{j+1} x_{j+1} = V_j y_j + B x_B
             # Then x_j = y_op / K_j (normalised), i.e. inverse equilibrium step.
             def update_stage(x_above, j):
-                is_rect = j >= p.feed_stage
+                is_rect = _is_rectifying_cut(j, p.feed_stage)
+                L_above, _ = _cmo_section_flows(
+                    j + 1, p.feed_stage, L_rect, L_strip, V_rect, V_strip
+                )
+                _, V_j = _cmo_section_flows(
+                    j, p.feed_stage, L_rect, L_strip, V_rect, V_strip
+                )
 
-                y_op_rect = (L_rect * x_above + D * x_D) / V_rect
-                y_op_strip = (L_strip * x_above - B * x_B) / V_strip
-                y_op = jnp.where(is_rect, y_op_rect, y_op_strip)
+                y_op = jnp.where(
+                    is_rect,
+                    (L_above * x_above + D * x_D) / V_j,
+                    (L_above * x_above - B * x_B) / V_j,
+                )
                 y_op = jnp.maximum(y_op, 0.0)
                 y_op = y_op / jnp.maximum(jnp.sum(y_op), 1e-10)
 
@@ -1066,17 +1196,20 @@ class DistillationColumn:
             feed_flows, F_total, R, D, T_feed
         )
 
-        # Initial L/V from CMO (q=1 saturated liquid feed)
-        L_rect = R * D
-        V_rect = (R + 1) * D
-        L_strip = L_rect + F_total
-        V_strip = V_rect
-
-        # L[j] = liquid leaving stage j downward
-        L_init = jnp.where(jnp.arange(n) <= p.feed_stage, L_strip, L_rect)
+        # Initial L/V from CMO, using the same section convention as the
+        # CMO sweep: L[j] is the liquid leaving stage j downward (stripping
+        # rate up to and including the feed stage), V[j] the vapour leaving it
+        # upward (rectifying rate from the feed stage up).
+        L_rect, L_strip, V_rect, V_strip = _cmo_section_rates(
+            R, D, F_total, jnp.asarray(p.q)
+        )
+        L_init, V_init = _cmo_section_flows(
+            jnp.arange(n), p.feed_stage, L_rect, L_strip, V_rect, V_strip
+        )
+        # Product ends: the reboiler's liquid leaves as bottoms, the top
+        # stage's vapour is condensed into reflux plus distillate.
         L_init = L_init.at[0].set(B)
-        V_init = jnp.full(n, V_rect)
-        V_init = V_init.at[n - 1].set((R + 1) * D)
+        V_init = V_init.at[n - 1].set(V_rect)
 
         def one_mesh_iter(carry, _):
             x, y, T, L, V = carry
