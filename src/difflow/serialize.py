@@ -467,9 +467,28 @@ def to_dict(flowsheet, registry=None) -> dict:
     """
     from difflow import __version__
 
+    from difflow.incomplete import Incomplete
+
     units = []
     for unit in flowsheet.units:
         operation = unit.operation
+        if isinstance(operation, Incomplete):
+            # On the flowsheet, wired, but without the thing it is
+            # waiting for. Written as what it is going to be, so the
+            # file keeps the ports and the wiring rather than losing a
+            # half-built flowsheet at save time.
+            units.append({
+                "name": unit.name,
+                "operation": operation.operation,
+                "params": {},
+                "constructor": {},
+                "extra_params": {},
+                "incomplete": {"needs": list(operation.needs),
+                               "hint": operation.hint},
+                "inlets": list(unit.inlet_names),
+                "outlets": list(unit.outlet_names),
+            })
+            continue
         name = _registry_name(type(operation), registry)
         params = getattr(operation, "params", None)
         encoded = {}
@@ -556,6 +575,23 @@ def from_dict(data: dict, registry=None, extras: dict | None = None):
 
     for spec in data.get("units", []):
         op_name = spec["operation"]
+        if spec.get("incomplete"):
+            # Read back as unfinished rather than built with guesses:
+            # the file recorded that nobody had chosen these yet, and
+            # inventing them on the way in would hide that.
+            from difflow.incomplete import Incomplete
+
+            flowsheet.add_unit(Unit(
+                name=spec["name"],
+                operation=Incomplete(
+                    op_name,
+                    list(spec["incomplete"].get("needs", [])),
+                    spec["incomplete"].get("hint", ""),
+                ),
+                inlet_names=list(spec["inlets"]),
+                outlet_names=list(spec["outlets"]),
+            ))
+            continue
         info = operations.get(op_name)
         if info is None:
             raise SerializationError(

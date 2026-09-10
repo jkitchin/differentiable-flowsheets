@@ -17,11 +17,18 @@
 
   A node may also be PENDING: dropped, and waiting on something that has
   to exist before it can be built -- a `thermo`, a rate law, the species
-  order. It is drawn in red and dashed, with no ports, because it is not
-  a unit yet and cannot be wired. It is on the canvas rather than in a
-  message because a message scrolls away and the drop does not: the red
-  box is both the record that you asked for a Flash and the place to
-  find out what it is waiting for.
+  order. It is drawn in red and dashed. It keeps its ports and can be
+  wired like any other node, because wiring first and writing the rate
+  law afterwards is the order people work in; what it will not do is
+  solve. It is on the canvas rather than in a message because a message
+  scrolls away and the drop does not: the red box is both the record
+  that you asked for a Flash and the place to find out what it is
+  waiting for.
+
+  A port with nothing attached is drawn as a RED DOT. Nothing else says
+  so: the canvas draws a box only for a feed someone declared, so an
+  unwired port is otherwise just an unremarkable handle at the edge of a
+  node, and the flowsheet looks finished when it is not.
 -->
 <script>
   import { Handle, Position } from '@xyflow/svelte'
@@ -34,6 +41,12 @@
   // agree with the CSS: `--port-span` is the fraction of the height they
   // are allowed to use, and the same expression places both sides.
   const at = (i, n) => `${((i + 1) * 100) / (n + 1)}%`
+
+  // The class @xyflow puts on the handle. Missing lists mean a caller
+  // that does not compute them, and the honest answer then is to say
+  // nothing rather than to mark every port as open.
+  const open = (which, stream) =>
+    which && which.includes(stream) ? 'open' : ''
 </script>
 
 <div class="unit" class:pending={!!data.pending} title={data.pending?.hint ?? ''}>
@@ -57,6 +70,7 @@
       type="target"
       position={Position.Left}
       id={`in:${stream}`}
+      class={open(data.openInlets, stream)}
       style={`top:${at(i, data.inlets.length)}`}
     />
     {#if data.portLabels}
@@ -68,6 +82,7 @@
       type="source"
       position={Position.Right}
       id={`out:${stream}`}
+      class={open(data.openOutlets, stream)}
       style={`top:${at(i, data.outlets.length)}`}
     />
     {#if data.portLabels}

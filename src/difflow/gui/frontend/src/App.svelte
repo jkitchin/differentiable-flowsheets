@@ -12,7 +12,6 @@
   import { del, get, patch, post, send } from './lib/api.js'
   import { inferKind } from './lib/model/assistant.js'
   import { movedPositions } from './lib/model/edit.js'
-  import { pendingPositions } from './lib/model/graph.js'
   import { keepAlive } from './lib/model/lifetime.js'
   import { flowLabels, flowTints } from './lib/model/results.js'
 
@@ -298,12 +297,9 @@
 
   /** Positions only: no rebuild, no solve, and no reload to fight the drag. */
   function move(positions) {
-    // Pending positions live on the pending entries, not in `view.nodes`
-    // -- a coordinate for a node the flowsheet does not have has no
-    // business being saved to the file. They are joined in here so a red
-    // box that has not moved is not reported as having moved.
-    const moved = movedPositions(positions,
-                                 { ...doc?.view?.nodes, ...pendingPositions(pending) })
+    // Every node's coordinate is in `view.nodes`, an unfinished unit's
+    // included: it is on the flowsheet, so the file has a place for it.
+    const moved = movedPositions(positions, doc?.view?.nodes)
     if (!Object.keys(moved).length) return
     // Adopted locally too, so the next reload does not snap the node back
     // to where the document still says it is.

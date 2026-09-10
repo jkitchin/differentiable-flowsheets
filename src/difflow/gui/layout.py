@@ -66,7 +66,15 @@ def unit_columns(unit_names: Iterable[str],
 
 
 def _graph(flowsheet):
-    """The four things a layout needs: units, feeds, products, up-edges."""
+    """The four things a layout needs: units, feeds, products, up-edges.
+
+    ``feeds`` and ``products`` are the stream nodes the canvas actually
+    draws, and nothing else. That is a narrower list than "every stream
+    with a free end": an unwired port is drawn as a red dot on the unit
+    rather than as a box, so laying out a box for it would bank a column
+    of positions against keys no node is ever given --- and write them
+    into the saved ``view.nodes``.
+    """
     units = list(flowsheet.units)
     producer: dict[str, str] = {}
     for u in units:
@@ -84,22 +92,17 @@ def _graph(flowsheet):
             if src is not None and inlet not in recycle_sources:
                 up_edges[u.name].append(src)
 
-    # A feed is an inlet nothing produces; a product is an outlet nothing
-    # consumes and no recycle carries back.  Declared feeds come first and in
-    # their declared order, so the left-hand bank does not reshuffle when a
-    # unit is added.  A recycle destination is not a feed: nothing produces it
-    # either, but it is fed by the recycle arc, and banking it on the left
-    # would claim the flowsheet has an inlet it does not have.
-    fed_by_recycle = set(getattr(flowsheet, "recycles", {}).values())
-    feeds = [n for n in getattr(flowsheet, "feeds", {})]
-    seen = set(feeds) | fed_by_recycle
-    for u in units:
-        for inlet in u.inlet_names:
-            if producer.get(inlet) is None and inlet not in seen:
-                seen.add(inlet)
-                feeds.append(inlet)
-    products = [out for u in units for out in u.outlet_names
-                if out not in consumed and out not in recycle_sources]
+    # A feed is a stream the flowsheet declares as one, in its declared
+    # order, so the left-hand bank does not reshuffle when a unit is added.
+    # An inlet nothing produces is not one: it is a port waiting to be
+    # wired, and a box on the left would claim the flowsheet has an inlet
+    # it does not have.
+    feeds = list(getattr(flowsheet, "feeds", {}))
+    # The only stream node on the right is a recycle whose destination
+    # nothing reads: its arc has to land somewhere. An outlet nobody
+    # consumes is a free port and is marked on the unit.
+    products = [dest for dest in getattr(flowsheet, "recycles", {}).values()
+                if dest not in consumed]
     return units, feeds, products, up_edges
 
 

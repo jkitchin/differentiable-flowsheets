@@ -44,44 +44,48 @@ export function consumed(units) {
 }
 
 /**
- * Feed nodes: declared feeds first, then any inlet nothing produces.
+ * Feed nodes: the streams the flowsheet actually declares as feeds.
  *
- * A dangling inlet is a real state in an editor -- a unit dropped on the
- * canvas has one until it is wired -- so it gets a node rather than
- * being dropped on the floor, which would make it invisible. A recycle
- * destination is the exception: nothing produces it either, but it is
- * fed by the recycle arc, and drawing it as a feed would claim the
- * flowsheet has an inlet it does not have.
+ * Only those. A dangling inlet used to get one too, and the effect on
+ * the canvas was that every unit arrived already surrounded by boxes it
+ * was joined to -- boxes standing for streams nobody had asked for,
+ * attached to ports that were in fact free. What a free port needs is
+ * to look free, which is what `openPorts` is for; a box is for a feed
+ * someone declared, with a composition behind it.
  */
 export function feedStreams(doc) {
-  const units = doc.units || []
-  const made = producers(units)
-  const fedByRecycle = new Set(Object.values(doc.recycles || {}))
-  const names = Object.keys(doc.feeds || {})
-  const seen = new Set(names)
-  for (const unit of units) {
-    for (const s of unit.inlets) {
-      if (!made[s] && !seen.has(s) && !fedByRecycle.has(s)) {
-        seen.add(s)
-        names.push(s)
-      }
-    }
-  }
-  return names
+  return Object.keys(doc.feeds || {})
 }
 
-/** Outlets nothing reads and no recycle carries back. */
-export function productStreams(doc) {
+/**
+ * The ports nothing is joined to, as sets of stream names.
+ *
+ * An inlet is open unless a unit produces that stream, a declared feed
+ * supplies it, or a recycle lands on it. An outlet is open unless a unit
+ * reads it or a recycle carries it back. The canvas marks these, and
+ * marking them is the whole of what tells the user where the wiring is
+ * still missing --- on a flowsheet drawn without stream boxes there is
+ * otherwise nothing to see at a port that has nothing attached.
+ */
+export function openPorts(doc) {
   const units = doc.units || []
+  const made = producers(units)
   const eaten = consumed(units)
-  const recycled = new Set(Object.keys(doc.recycles || {}))
-  const out = []
+  const feeds = new Set(Object.keys(doc.feeds || {}))
+  const recycles = doc.recycles || {}
+  const carriedBack = new Set(Object.keys(recycles))
+  const fedByRecycle = new Set(Object.values(recycles))
+  const inlets = new Set()
+  const outlets = new Set()
   for (const unit of units) {
+    for (const s of unit.inlets) {
+      if (!made[s] && !feeds.has(s) && !fedByRecycle.has(s)) inlets.add(s)
+    }
     for (const s of unit.outlets) {
-      if (!eaten.has(s) && !recycled.has(s)) out.push(s)
+      if (!eaten.has(s) && !carriedBack.has(s)) outlets.add(s)
     }
   }
-  return out
+  return { inlets, outlets }
 }
 
 /**
@@ -118,6 +122,9 @@ export function arcs(doc) {
   const units = doc.units || []
   const made = producers(units)
   const recycles = doc.recycles || {}
+  // Declared feeds. An inlet nothing produces is not a feed, it is an
+  // open port, and it is drawn as one rather than as an arc arriving
+  // from a box that stands for nothing.
   const feeds = new Set(feedStreams(doc))
   const out = []
 
@@ -147,10 +154,6 @@ export function arcs(doc) {
       })
     }
   }
-  for (const stream of productStreams(doc)) {
-    out.push({ from: made[stream], to: PRODUCT + stream, stream,
-               destStream: stream, recycle: false })
-  }
   return out
 }
 
@@ -167,16 +170,20 @@ export function arcs(doc) {
  *   this front end has never heard of -- a plugin's own units -- so a node
  *   drawn without it falls back to a plain block.
  * @param {boolean} [options.portLabels]  name each port beside its handle.
- * @param {Array} [options.pending]  units dropped on the canvas that cannot
- *   be built yet, as the server reports them: `{name, operation, needs,
- *   hint, position}`. They are NOT in the document -- a flowsheet holds
- *   units that exist -- and they are drawn anyway, because a drop that
- *   vanished into a toast is a drop the user has to remember making.
+ * @param {Array} [options.pending]  units on the canvas that cannot be
+ *   built yet, as the server reports them: `{name, operation, needs,
+ *   hint}`. They ARE in the document, with real ports, so that they can
+ *   be wired before they are finished -- this list only says which of
+ *   those nodes to draw in red, and what each is waiting for.
  */
 export function toGraph(doc, positions, options = {}) {
   if (!doc) return { nodes: [], edges: [] }
   const { catalog = {}, portLabels = false, pending = [] } = options
   const place = positions || (doc.view && doc.view.nodes) || {}
+  const unfinished = new Map(
+    (pending || []).filter((u) => u && u.name).map((u) => [u.name, u])
+  )
+  const open = openPorts(doc)
   const nodes = []
   let spare = 0
   const at = (key) => {
@@ -195,6 +202,11 @@ export function toGraph(doc, positions, options = {}) {
     })
   }
   for (const unit of doc.units || []) {
+    // An unfinished unit is one of these, not a node of its own. It has
+    // to be: it is in the document with real ports, and minting a second
+    // node under the same id would give @xyflow two nodes with one key
+    // and leave the edges landing on whichever it saw last.
+    const waiting = unfinished.get(unit.name)
     nodes.push({
       id: unit.name,
       type: 'unit',
@@ -205,38 +217,20 @@ export function toGraph(doc, positions, options = {}) {
         category: (catalog[unit.operation] || {}).category || '',
         inlets: unit.inlets,
         outlets: unit.outlets,
+        openInlets: unit.inlets.filter((s) => open.inlets.has(s)),
+        openOutlets: unit.outlets.filter((s) => open.outlets.has(s)),
         portLabels,
+        ...(waiting
+          ? { pending: { needs: waiting.needs || [], hint: waiting.hint || '' } }
+          : {}),
       },
     })
   }
-  // Between the units and the products, so a red node draws over a
-  // stream node rather than under one when they overlap: it is the thing
-  // that has to be noticed.
-  for (const unit of pending) {
-    if (!unit || !unit.name) continue
-    const p = unit.position
-    nodes.push({
-      id: unit.name,
-      type: 'unit',
-      position:
-        p && Number.isFinite(p.x) && Number.isFinite(p.y)
-          ? { x: p.x, y: p.y }
-          : at(unit.name),
-      data: {
-        label: unit.name,
-        operation: unit.operation,
-        category: (catalog[unit.operation] || {}).category || '',
-        // No ports: the unit was never built, so it has none. Drawing
-        // handles for the ports it *would* have would invite a wire to
-        // a unit that cannot receive one.
-        inlets: [],
-        outlets: [],
-        portLabels,
-        pending: { needs: unit.needs || [], hint: unit.hint || '' },
-      },
-    })
-  }
-  for (const name of [...productStreams(doc), ...danglingDestinations(doc)]) {
+  // A recycle destination nothing reads still needs somewhere for its
+  // arc to land -- @xyflow drops an edge whose target does not exist,
+  // without a word. Products do not: an outlet nobody reads is an open
+  // port, and it is marked on the unit rather than given a box.
+  for (const name of danglingDestinations(doc)) {
     nodes.push({
       id: PRODUCT + name,
       type: 'stream',
@@ -259,18 +253,6 @@ export function toGraph(doc, positions, options = {}) {
     data: { stream: a.stream, destStream: a.destStream, recycle: a.recycle },
   }))
   return { nodes, edges }
-}
-
-/** Positions of the pending nodes, keyed like `view.nodes`. */
-export function pendingPositions(pending) {
-  const out = {}
-  for (const unit of pending || []) {
-    const p = unit && unit.position
-    if (unit && unit.name && p && Number.isFinite(p.x) && Number.isFinite(p.y)) {
-      out[unit.name] = { x: p.x, y: p.y }
-    }
-  }
-  return out
 }
 
 /** `view.nodes` shaped from the canvas's current node array. */

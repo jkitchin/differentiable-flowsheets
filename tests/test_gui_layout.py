@@ -27,11 +27,17 @@ def _chain() -> Flowsheet:
     return fs
 
 
-def _recycle() -> Flowsheet:
-    """The same chain with the purge sent back to the mixer."""
+def _recycle(read: bool = True) -> Flowsheet:
+    """The same chain with the purge sent back to the mixer.
+
+    With ``read=False`` the destination is a stream no unit reads, which
+    is the one case that still needs a stream node on the right: the
+    recycle arc has to land somewhere.
+    """
     fs = Flowsheet(species_order=SPECIES)
     fs.add_feed("feed", make_stream({"A": 1.0, "B": 0.0}, T=300.0, P=101325.0))
-    fs.add_unit(Unit("mix", Mixer(SPECIES), ["feed", "recycle"], ["mixed"]))
+    inlets = ["feed", "recycle"] if read else ["feed"]
+    fs.add_unit(Unit("mix", Mixer(SPECIES), inlets, ["mixed"]))
     fs.add_unit(Unit("split", Splitter(SPECIES), ["mixed"],
                      ["product", "purge"], params={"split_frac": [0.5, 0.5]}))
     fs.add_recycle("purge", "recycle")
@@ -68,19 +74,31 @@ class TestAutoLayout:
         assert auto_layout(Flowsheet(species_order=SPECIES)) == {}
 
     def test_every_node_gets_a_position(self):
+        """Every node --- and nothing that is not one.
+
+        An outlet nobody reads used to be banked on the right as a
+        `product:` box. The canvas draws no such box: a port with nothing
+        attached is marked on the unit itself, so a position for one is a
+        coordinate saved into `view.nodes` under a key that will never be
+        asked for.
+        """
         pos = auto_layout(_chain())
-        assert set(pos) == {"feed:feed", "mix", "split",
-                            "product:product", "product:purge"}
+        assert set(pos) == {"feed:feed", "mix", "split"}
 
     def test_it_reads_left_to_right(self):
         pos = auto_layout(_chain())
         assert pos["feed:feed"][0] < pos["mix"][0] < pos["split"][0]
-        assert pos["split"][0] < pos["product:product"][0]
 
-    def test_two_outlets_of_one_unit_stack(self):
-        pos = auto_layout(_chain())
-        assert pos["product:product"][0] == pos["product:purge"][0]
-        assert pos["product:product"][1] != pos["product:purge"][1]
+    def test_a_dangling_recycle_still_gets_somewhere_to_land(self):
+        """The one stream node left on the right.
+
+        An edge whose target is not a node is dropped by the canvas
+        without a word, so the destination of a recycle nothing reads
+        keeps its box.
+        """
+        pos = auto_layout(_recycle(read=False))
+        assert "product:recycle" in pos
+        assert pos["product:recycle"][0] > pos["split"][0]
 
     def test_the_first_slot_sits_at_the_margin(self):
         assert auto_layout(_chain())["feed:feed"] == (float(MARGIN), float(MARGIN))
@@ -88,7 +106,11 @@ class TestAutoLayout:
     def test_the_spacing_is_the_declared_geometry(self):
         pos = auto_layout(_chain())
         assert pos["mix"][0] - pos["feed:feed"][0] == float(COL_W)
-        assert (pos["product:purge"][1] - pos["product:product"][1]) == float(ROW_H)
+        two_feeds = _chain()
+        two_feeds.add_feed("other", make_stream({"A": 1.0, "B": 0.0},
+                                                T=300.0, P=101325.0))
+        banked = auto_layout(two_feeds)
+        assert banked["feed:other"][1] - banked["feed:feed"][1] == float(ROW_H)
 
     def test_a_recycle_does_not_push_anything_right(self):
         """A recycle is an arrow going back, not another column."""
@@ -99,13 +121,28 @@ class TestAutoLayout:
     def test_a_recycled_stream_is_not_a_product(self):
         pos = auto_layout(_recycle())
         assert "product:purge" not in pos
-        assert "product:product" in pos
+        assert "product:product" not in pos, "nor is anything else, now"
 
     def test_a_recycle_destination_is_not_a_feed(self):
         """It is fed by the recycle arc, not from outside the flowsheet."""
         pos = auto_layout(_recycle())
         assert "feed:recycle" not in pos
         assert "feed:feed" in pos
+
+    def test_an_unwired_inlet_is_not_a_feed_either(self):
+        """It is a port waiting to be wired, and it is marked as one.
+
+        Banking a box on the left for it made a unit dropped on the
+        canvas arrive already surrounded by streams nobody declared,
+        looking connected when nothing was.
+        """
+        fs = Flowsheet(species_order=SPECIES)
+        fs.add_unit(Unit("mix", Mixer(SPECIES), ["nowhere"], ["out"]))
+        pos = auto_layout(fs)
+        assert set(pos) == {"mix"}
+        assert pos["mix"] == (float(MARGIN), float(MARGIN)), (
+            "and no column is reserved for the bank that is not there"
+        )
 
     def test_it_is_stable(self):
         """Reopening a file must not shuffle the diagram."""
