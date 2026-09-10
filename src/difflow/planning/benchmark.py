@@ -259,14 +259,23 @@ def format_scaling_table(rows: Sequence[CostRatio],
 
     Uses ``tabulate`` when it is installed --- so the column widths line
     up whether the table is printed to a terminal or rendered as
-    Markdown in a notebook --- and falls back to a hand-written
-    Markdown table when it is not.
+    Markdown in a notebook --- and falls back to a hand-written table
+    when it is not.
+
+    ``tabulate`` lives in the ``examples`` extra, so the fallback is the
+    path a plain ``pip install difflow[dev]`` takes. It honours the two
+    formats this function is actually called with rather than ignoring
+    the argument: a caller who asks for ``"simple"`` wants something to
+    read in a terminal, and handing back Markdown pipes because an
+    optional dependency is absent is the wrong answer, not a lesser one.
+    Any other ``tablefmt`` needs tabulate and falls back to Markdown.
 
     Args:
         rows: The :class:`CostRatio` rows to render.
         tablefmt: Any ``tabulate`` table format; ``"github"`` renders as
             Markdown, ``"simple"`` reads better in a plain terminal.
-            Ignored when tabulate is unavailable.
+            Without tabulate those two are honoured and anything else
+            renders as Markdown.
 
     Returns:
         The table as text.
@@ -281,13 +290,34 @@ def format_scaling_table(rows: Sequence[CostRatio],
              f"{r.fd_ratio:.0f}x", f"{r.speedup:.0f}x"] for r in rows]
     try:
         from tabulate import tabulate
-    except ImportError:      # pragma: no cover - depends on the environment
-        out = ["| " + " | ".join(header) + " |",
-               "|" + "|".join(["---"] * len(header)) + "|"]
-        out += ["| " + " | ".join(row) + " |" for row in body]
-        return "\n".join(out)
+    except ImportError:
+        return _plain_table(header, body, tablefmt)
     return tabulate(body, headers=header, tablefmt=tablefmt,
                     colalign=("right",) * len(header))
+
+
+def _plain_table(header: Sequence[str],
+                 body: Sequence[Sequence[str]],
+                 tablefmt: str) -> str:
+    """``format_scaling_table`` without tabulate.
+
+    Right-aligned like the tabulate call it stands in for, because these
+    are all numbers and a column of numbers is read down its last digit.
+    """
+    widths = [max(len(row[i]) for row in (header, *body))
+              for i in range(len(header))]
+    pad = lambda row: [cell.rjust(w) for cell, w in zip(row, widths)]
+
+    if tablefmt == "simple":
+        # No pipes: tabulate's `simple` is columns separated by blanks,
+        # under a rule that spans each column.
+        rule = ["-" * w for w in widths]
+        lines = [pad(header), rule, *(pad(row) for row in body)]
+        return "\n".join("  ".join(line).rstrip() for line in lines)
+
+    rule = ["-" * w for w in widths]
+    lines = [pad(header), rule, *(pad(row) for row in body)]
+    return "\n".join("| " + " | ".join(line) + " |" for line in lines)
 
 
 def planner_objective(planner) -> Callable[[Array], Array]:

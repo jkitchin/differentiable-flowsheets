@@ -102,6 +102,10 @@ cstr_params = CSTRParams(
     stoich=stoich,
     rate_params={"A": jnp.array(1e6), "Ea": jnp.array(50000.0)},
     species_order=["A", "B"],
+    # Concentration basis: tau = V*rho/F. Pass eos=<cubic EOS> +
+    # reaction_phase instead for the real density at reactor conditions;
+    # with neither, the CSTR falls back to liquid water and warns.
+    molar_density=55500.0,
 )
 cstr = CSTR(cstr_params, thermo=thermo, mode="isothermal")
 

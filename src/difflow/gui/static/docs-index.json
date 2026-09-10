@@ -1,5 +1,5 @@
 {
- "n_sections": 828,
+ "n_sections": 829,
  "sections": [
   {
    "anchor": "overview",
@@ -4810,6 +4810,14 @@
    "source": "unit-operations-chemical.md",
    "targets": [],
    "text": "```python\nfrom difflow.units.cstr import CSTR, CSTRParams\nfrom difflow.streams import make_stream\nfrom difflow.thermo import IdealThermo\nimport jax.numpy as jnp\n\n# A -> B (first-order, exothermic)\nparams = CSTRParams(\n    volume=2.0,  # m\u00b3\n    stoichiometry=jnp.array([[-1.0], [1.0]]),  # A -> B\n    k_ref=0.1,   # 1/s at 350 K\n    E_a=50000.0, # J/mol\n    T_ref=350.0, # K\n    dH_rxn=jnp.array([-80000.0])  # J/mol (exothermic)\n)\n\ncstr = CSTR(params, thermo, species_order=['A', 'B'])\ninlet = make_stream({'A': 1.0, 'B': 0.0}, T=350.0, P=101325.0)\n\n# Isothermal operation\noutlet, info = cstr(inlet, T_spec=350.0)\nprint(f\"Conversion: {info['conversion']:.2%}\")\nprint(f\"Heat duty: {info['Q']:.2f} W\")\n\n# Adiabatic operation\noutlet_adiab, info_adiab = cstr(inlet)\nprint(f\"Outlet temperature: {outlet_adiab['T']:.1f} K\")\n```"
+  },
+  {
+   "anchor": "concentration-basis-molar-density",
+   "heading": "Concentration Basis (Molar Density)",
+   "path": "Chemical Unit Operations > Reactors > CSTR (Continuous Stirred-Tank Reactor) > Concentration Basis (Molar Density)",
+   "source": "unit-operations-chemical.md",
+   "targets": [],
+   "text": "The rate law is evaluated at concentrations, so the reactor needs a molar\ndensity: $C_i = F_i / \\dot{V}$ with $\\dot{V} = F_{total}/\\rho$, which makes the\nresidence time $\\tau = V\\rho/F_{total}$. An error in $\\rho$ is a proportional\nerror in $\\tau$, and so in the conversion. Three ways to set it, in the order\nthe CSTR resolves them:\n\n1. **An equation of state** -- `eos=<cubic EOS>` with\n   `reaction_phase='liquid'` or `'vapor'`. Concentration is then the real\n   molarity at reactor $(T, P, y)$, $C_i = y_i\\,\\rho_{EOS}(T, P, y)$,\n   recomputed inside the solve, so the reactor shares the flash's\n   thermodynamics. `reaction_phase` is required with `eos`: the liquid and\n   vapor molar densities differ by two orders of magnitude, so there is no\n   defensible default. Pair it with a `CubicThermo` to make the *enthalpy*\n   real-gas too; a `CubicThermo` passed as `thermo` also supplies the EOS\n   itself when `reaction_phase` is set and no `eos=` is given.\n2. **A constant** -- `molar_density=<mol/m^3>`.\n3. **Neither**, in which case the reactor falls back to 55500 mol/m^3 (liquid\n   water) and raises a `CSTRDensityWarning`. That fallback is right only for\n   aqueous systems: it is ~8x high for a C3-C8 hydrocarbon liquid and ~200x\n   high for a gas, and it silently inflates residence time. Treat the warning\n   as a request to say which basis you meant.\n\nPassing `volumetric_flow=` to the call sets $\\dot{V}$ outright and bypasses all\nthree; `info['molar_density']` then reports the density that flow implies.\n\n```python\nfrom difflow.eos import PengRobinson\nfrom difflow.database import get_critical_props\n\neos = PengRobinson({c: get_critical_props(c) for c in species})\nparams = CSTRParams(..., eos=eos, reaction_phase='liquid')\n```"
   },
   {
    "anchor": "design-considerations",
