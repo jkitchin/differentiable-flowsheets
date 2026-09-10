@@ -28,6 +28,7 @@ from jax import Array, lax
 from difflow.streams import Stream, get_flows, make_stream
 from difflow.thermo import CubicThermo, IdealThermo
 from difflow.params_mixin import ParamsMixin
+from difflow.cache_key import ValueKeyed
 from difflow.constants import MIN_ALPHA_DIFF, MAX_STAGES, MAX_GILLILAND_Y, EPS_DIVISION
 from difflow.numerics import safe_divide, safe_log
 import optimistix as optx
@@ -314,7 +315,7 @@ class ShortcutColumnParams(ParamsMixin):
     x_B_HK: float = 0.99  # HK recovery in bottoms
 
 
-class ShortcutColumn:
+class ShortcutColumn(ValueKeyed):
     """Shortcut distillation column using Fenske-Underwood-Gilliland.
 
     This method provides quick estimates for:
@@ -379,6 +380,9 @@ class ShortcutColumn:
         """
         self.params = params
         self.thermo = thermo
+        # _solve is jitted with `self` static, so this is what decides whether
+        # a second, identical column reuses the first one's executable.
+        self._set_value_key(params, thermo)
 
     def relative_volatility(
         self,
@@ -1163,7 +1167,7 @@ class DistillationColumnParams(ParamsMixin):
             )
 
 
-class DistillationColumn:
+class DistillationColumn(ValueKeyed):
     """Rigorous stage-by-stage distillation column.
 
     Solves MESH equations (Material, Equilibrium, Summation, Heat balance)
@@ -1236,6 +1240,7 @@ class DistillationColumn:
         self.params = params
         self.thermo = thermo
         self.n_species = len(params.species_order)
+        self._set_value_key(params, thermo)
 
     def _bubble_point_T(
         self,

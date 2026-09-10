@@ -20,6 +20,8 @@ from typing import NamedTuple, Literal
 from dataclasses import dataclass
 import jax
 import jax.numpy as jnp
+
+from difflow.cache_key import ValueKeyed
 from jax import Array, lax
 
 import optimistix as optx
@@ -308,7 +310,7 @@ def build_kij_matrix(
     return k
 
 
-class PengRobinson:
+class PengRobinson(ValueKeyed):
     """Peng-Robinson equation of state.
 
     P = RT/(V-b) - a(T)/(V² + 2bV - b²)
@@ -353,6 +355,9 @@ class PengRobinson:
         self.n_species = len(self._species_order)
         self._kij_input = k_ij
         self.params = self._compute_params()
+        # Keyed on what it was built from, not on the arrays that came out of
+        # it -- those can be tracers, and are a pure function of these anyway.
+        self._set_value_key(species_data, k_ij)
 
     @property
     def species_order(self) -> list[str]:
@@ -848,7 +853,7 @@ class PengRobinson:
         return R * safe_log(Z - B) + da_m_dT / (2.0 * sqrt2 * b_m) * safe_log(log_arg)
 
 
-class SRK:
+class SRK(ValueKeyed):
     """Soave-Redlich-Kwong equation of state.
 
     P = RT/(V-b) - a(T)/(V(V+b))
@@ -888,6 +893,9 @@ class SRK:
         self.n_species = len(self._species_order)
         self._kij_input = k_ij
         self.params = self._compute_params()
+        # Keyed on what it was built from, not on the arrays that came out of
+        # it -- those can be tracers, and are a pure function of these anyway.
+        self._set_value_key(species_data, k_ij)
 
     @property
     def species_order(self) -> list[str]:
