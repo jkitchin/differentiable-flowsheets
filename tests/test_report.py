@@ -20,7 +20,7 @@ from difflow import (
 )
 from difflow.database import get_critical_props
 from difflow.plugins import load_plugins, registry
-from difflow.report import flowsheet_svg, get_metadata
+from difflow.report import flowsheet_diagram, flowsheet_svg, get_metadata
 from difflow.streams import make_stream
 
 
@@ -352,6 +352,40 @@ def test_flowsheet_svg_empty_for_no_units():
     fs = Flowsheet(["methane"])
     rep = fs.report(include_git=False)
     assert flowsheet_svg(rep) == ""
+
+
+def test_flowsheet_diagram_draws_a_live_flowsheet():
+    """The editor's export and the report's diagram are one drawer.
+
+    A report is a record of a solve; the editor has no report and should
+    not have to build one to draw a picture. Both go through
+    ``topology_svg``, so the two drawings cannot drift.
+    """
+    fs = _make_simple_flowsheet()
+    rep = fs.report(include_git=False)
+    assert flowsheet_diagram(fs) == flowsheet_svg(rep)
+
+
+def test_flowsheet_diagram_honours_dragged_positions():
+    """Where the user put the boxes is where the export puts them."""
+    fs = _make_simple_flowsheet()
+    default = flowsheet_diagram(fs)
+    moved = flowsheet_diagram(fs, {"split": {"x": 500, "y": 300}})
+    assert moved != default
+    assert "500" in moved and "300" in moved
+    # The canvas keys a unit by its bare name and a feed by `feed:<name>`;
+    # this module prefixes all three. Both spellings must land.
+    assert flowsheet_diagram(fs, {"unit:split": (500, 300)}) == moved
+    assert flowsheet_diagram(fs, {"feed:feed": {"x": 20, "y": 400}}) != default
+
+
+def test_flowsheet_diagram_ignores_positions_it_cannot_use():
+    """A stale layout names nodes that are gone; that is not an error."""
+    fs = _make_simple_flowsheet()
+    default = flowsheet_diagram(fs)
+    assert flowsheet_diagram(fs, {"deleted": {"x": 9, "y": 9}}) == default
+    assert flowsheet_diagram(fs, {"split": {"x": None, "y": 3}}) == default
+    assert flowsheet_diagram(fs, {}) == default
 
 
 # --- v2: report diff ---------------------------------------------------------

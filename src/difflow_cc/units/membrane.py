@@ -48,6 +48,17 @@ BARRER_TO_SI = 3.35e-16  # mol·m/(m²·s·Pa)
 
 # Gas constant
 R = 8.314  # J/(mol*K)
+#: Units for every :class:`MembraneParams` field, shared by the single-stage
+#: separator and the multistage cascade.
+_MEMBRANE_UNITS = {
+    "area": "m^2",
+    "thickness": "um",
+    "pressure_ratio": "-",
+    "T_operation": "K",
+    "feed_pressure": "Pa",
+    "permeate_pressure": "Pa",
+    "stage_cut_target": "-",
+}
 
 
 # =============================================================================
@@ -153,7 +164,7 @@ class MembraneSeparator:
         "thickness": r"\delta",
         "pressure_ratio": r"P_F/P_P",
     }
-    parameter_units = {"area": "m^2", "thickness": "m", "pressure_ratio": "-"}
+    parameter_units = _MEMBRANE_UNITS
     numerical_method = "Per-component flux integration with closed-form perfect-mixing solution."
 
     def __init__(self, params: MembraneParams):
@@ -446,7 +457,7 @@ class MultistageMembrane:
     ]
     references = ["Merkel, T.C. et al. J. Membr. Sci., 359, 126 (2010)."]
     parameter_symbols = {"area": "A", "pressure_ratio": r"P_F/P_P"}
-    parameter_units = {"area": "m^2", "pressure_ratio": "-"}
+    parameter_units = _MEMBRANE_UNITS
     numerical_method = "Sequential stage evaluation; optional fixed-point recycle convergence."
 
     def __init__(

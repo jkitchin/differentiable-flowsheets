@@ -25,8 +25,10 @@ is for unit operations.
 13. [Coefficient covariance and back-off](#coefficient-covariance-and-back-off)
 14. [Piecewise-linear blocks and MILP](#piecewise-linear-blocks-and-milp)
 15. [Emitting Pyomo](#emitting-pyomo)
-16. [What this module is not](#what-this-module-is-not)
-17. [API summary](#api-summary)
+16. [From a flowsheet to a block](#from-a-flowsheet-to-a-block)
+17. [Exporting delta vectors](#exporting-delta-vectors)
+18. [What this module is not](#what-this-module-is-not)
+19. [API summary](#api-summary)
 
 ---
 
@@ -639,6 +641,123 @@ rows, with an objective and specs a simulation does not have. An EO solve asks
 the trust-region loop alternates between the two, which is why its acceptance
 test is a nonlinear evaluation.
 
+## From a flowsheet to a block
+
+Every example so far hand-wrote its `Block.fn`. For a real flowsheet you do not
+have to: `Block.from_flowsheet` builds the callable, and the whole path stays
+pure JAX, so `jax.jacobian` of it is the reduced input-output sensitivity of the
+plant — implicitly differentiated through the recycle tear solve and every inner
+unit solve.
+
+```python
+from difflow.planning import Block, check_delta_vectors
+
+blk = Block.from_flowsheet(
+    fs,
+    u=["reactor.V", "feed:feed.total_flow"],   # levers
+    y=["purge.F_B", "purge.total_flow"],       # outputs
+    name="plant", lb=[0.5, 5.0], ub=[5.0, 20.0])
+
+check_delta_vectors(blk)["passed"]             # AD vs central differences
+```
+
+Lever keys are `Flowsheet._apply_params` notation: `"<unit>.<param>"` for a unit
+parameter, and `"feed:<stream>.<field>"` for a feed, where the field is `T`,
+`P`, `total_flow`, `F_<species>` or `x_<species>`. Feed rate and composition are
+the most common planning levers there are, so they are first-class: `total_flow`
+scales the stream at constant composition, `x_<species>` moves a mole fraction
+at constant total, and every `x_` in one call is applied together.
+
+Output keys are `"<stream>.<quantity>"` with the same quantity vocabulary.
+`u0` defaults to the flowsheet's *current* values, which is almost always the
+base case you want, and the block's `metadata` records the original keys and the
+units of every variable so the export below is self-describing.
+
+Two things worth knowing. A flowsheet with a recycle is solved by fixed-point
+iteration, and the Anderson/Wegstein accelerators are Python loops that cannot
+be traced — so under `jax.jacobian` the solve routes automatically to the
+optimistix fixed-point path, which carries an implicit-differentiation rule.
+And `check_delta_vectors` is worth running before anything leaves the building:
+it is `2 n_u` extra model evaluations against a Jacobian that costs `O(1)`, and
+it is the cheapest way to find out that a lever does nothing.
+
+## Exporting delta vectors
+
+The person who owns the planning model is usually not the person who owns the
+simulation. They want a table of coefficients and a base case, not a JAX
+install. `difflow.planning.export` is that hand-off: one IR, `DeltaVectorSet`,
+and several renderers over it — the same "structured IR plus renderers" shape as
+`difflow.report`.
+
+```python
+from difflow.planning import (DeltaVectorSet, write_json, write_csv,
+                              write_lp, write_mps, write_iterations_csv)
+
+res = DeltaBasePlanner(net, prices, specs=specs).solve()
+dvs = DeltaVectorSet.from_result(res)
+
+write_json(dvs, "plan.json")            # the lossless manifest
+write_csv(dvs, "tables/")               # one shift-vector table per block
+write_mps(res.lp_model, "plan.mps")     # the assembled LP itself
+write_iterations_csv(res, "iters.csv")  # the trust-region audit trail
+```
+
+The IR exists because the numbers alone are not enough. A Jacobian entry means
+nothing without the base case it was taken at, the names and units of its rows
+and columns, and the radius over which the first-order model was ever meant to
+hold. `Linearization` carries the numbers, `Block` carries the names, bounds and
+units, `PlanResult.radius` carries the validity — `from_result` joins the three,
+and adds the links, prices, specs, LP duals, health findings and provenance.
+
+| Renderer | Output |
+|---|---|
+| `write_json` | One self-describing manifest. Every field of the IR. |
+| `write_csv` | `<block>_jacobian.csv` (outputs down the rows, levers across, base case in the margins) plus `base`, `bounds`, `links`, `specs`, `prices`, `duals`, `health` and `names` tables |
+| `write_lp` / `write_mps` | The assembled LP in CPLEX LP or free MPS form, via Pyomo |
+| `write_iterations_csv` | Radius, predicted vs realised merit, `rho`, accepted |
+
+Some details that matter in practice:
+
+- **Shadow prices.** `res.duals` and `res.solution` solve the final LP once and
+  return the marginals by row and bound name. They ship inside the JSON and in
+  `duals.csv`, because they are the first thing a planning engineer asks for.
+- **Scaled coefficients.** `DeltaVector.scaled_J` is `scaled_jacobian` — the
+  fractional change in an output per full-bound-range move of a lever. That is
+  the dimensionless shift-vector form a planning table is normally read in, and
+  `write_csv(..., scaled=True)` writes it instead of the raw matrix. Comparing
+  raw `J` entries across a model in mixed units compares unit conversions.
+- **Names.** LP and MPS files cannot hold `ngl.residue_F`, so every symbol is
+  sanitised to `ngl_residue_F`. The mapping is recorded in `names.csv` and in
+  the manifest's `meta["lp_symbols"]`, so the round trip is recoverable.
+- **Sense.** Pyomo writes a minimisation; a maximising plan is emitted with
+  negated costs and the constant term dropped. `meta["lp_sense"]` and
+  `meta["lp_objective_offset"]` are what recover difflow's own objective.
+- **Health travels with the coefficients.** `check_delta_health` findings are in
+  the export, so a dead lever or a recycle loop gain near one is visible
+  downstream and not just locally.
+- **The export is one-way.** There is no importer for a foreign LP.
+
+A single linearisation can be exported with no planner run at all, which is the
+common case for a simulation engineer handing a table to a planning group:
+
+```python
+dvs = DeltaVectorSet.from_block(blk, radius=0.2)
+write_csv(dvs, "tables/")
+```
+
+And from the shell, via the `difflow` entry point:
+
+```bash
+difflow plan-export plan.py --format csv -o tables/
+difflow plan-export model.py -u reactor.V -u 'feed:F1.total_flow' \
+    -y product.F_B --lb 0.5,5 --ub 5,20 --radius 0.2 -o plan.json
+```
+
+The source is a `.py` script — run, then searched for the first `PlanResult`,
+`DeltaBasePlanner`, `Block` or `Flowsheet` — or a serialized flowsheet `.json`.
+`--format lp|mps|iterations` needs a source that actually runs the planner,
+since there is no assembled LP without one.
+
 ## What this module is not
 
 **Not a commercial planning system.** Explicitly out of scope: crude assay
@@ -670,6 +789,13 @@ you.
 | `Spec` | A linear constraint, elastic by default, with optional back-off |
 | `LPModel` / `LPSolution` | The assembled program and its solution |
 | `Linearization` | One block's delta vectors, base point and phase regime |
+| `Block.from_flowsheet` | The bridge from a difflow flowsheet to a planning block |
+| `DeltaVector`, `DeltaVectorSet` | The export IR: coefficients plus everything needed to use them elsewhere |
+| `write_json`, `write_csv` | The neutral interchange pair |
+| `write_lp`, `write_mps` | The assembled LP in CPLEX LP / free MPS form |
+| `write_iterations_csv` | The trust-region audit trail |
+| `PlanResult.duals` | Shadow prices at the plan, by row and bound name |
+| `difflow plan-export` | The same four formats from the shell |
 | `DeltaBasePlanner.describe` | The problem statement: objective, decisions, bounds, links, specs |
 | `LPModel.as_text` | The assembled program written out row by row |
 | `draw_chain`, `draw_planning_network` | The flowsheet, and the network as the LP holds it |

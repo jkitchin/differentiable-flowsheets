@@ -120,7 +120,14 @@ class SplitShellCascade:
     ]
     references = ["Perry's Chemical Engineers' Handbook, 9e, Sec. 15."]
     parameter_symbols = {"n_stages": "N", "split_points": r"\{N_k\}"}
-    parameter_units = {"n_stages": "-"}
+    parameter_units = {
+        "n_stages": "-",
+        "split_points": "-",
+        "pH": "-",
+        "extractant_conc": "mol/L",
+        "solvent_to_feed_ratio": "-",
+        "nitrate_conc": "mol/L",
+    }
 
     def __init__(self, params: SplitShellParams):
         """Initialize cascade.

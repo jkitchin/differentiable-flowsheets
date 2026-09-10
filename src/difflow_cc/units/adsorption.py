@@ -50,6 +50,24 @@ from difflow_cc.equilibrium.isotherms import (
 
 # Gas constant
 R = 8.314  # J/(mol*K)
+#: Units for every :class:`AdsorptionParams` field, shared by the four cycles.
+#: They describe the dataclass, not the cycle that reads it, so PSA, VSA, TSA
+#: and TVSA all point at this one table rather than each keeping a partial copy.
+_ADSORPTION_UNITS = {
+    "bed_mass": "kg",
+    "n_beds": "-",
+    "void_fraction": "-",
+    "P_adsorption": "Pa",
+    "P_desorption": "Pa",
+    "T_adsorption": "K",
+    "T_desorption": "K",
+    "t_adsorption": "s",
+    "t_blowdown": "s",
+    "t_purge": "s",
+    "t_repressure": "s",
+    "CO2_purity_target": "-",
+    "CO2_recovery_target": "-",
+}
 
 
 # =============================================================================
@@ -250,17 +268,11 @@ class PSAUnit(_AdsorptionBase):
         "Sircar, S. Ind. Eng. Chem. Res., 41, 1389 (2002).",
     ]
     parameter_symbols = {
+        "bed_mass": "m_\\mathrm{bed}",
         "P_adsorption": "P_\\mathrm{ads}",
         "P_desorption": "P_\\mathrm{des}",
-        "cycle_time": "t_\\mathrm{cyc}",
-        "bed_mass": "m_\\mathrm{bed}",
     }
-    parameter_units = {
-        "P_adsorption": "Pa",
-        "P_desorption": "Pa",
-        "cycle_time": "s",
-        "bed_mass": "kg",
-    }
+    parameter_units = _ADSORPTION_UNITS
     numerical_method = "Langmuir working-capacity evaluation per cycle; recovery from mass balance."
 
     def __call__(
@@ -427,7 +439,7 @@ class VSAUnit(_AdsorptionBase):
     ]
     references = ["Zhang, J. et al. Chem. Eng. Sci., 63, 1827 (2008)."]
     parameter_symbols = {"P_adsorption": "P_\\mathrm{ads}", "P_desorption": "P_\\mathrm{vac}"}
-    parameter_units = {"P_adsorption": "Pa", "P_desorption": "Pa", "cycle_time": "s", "bed_mass": "kg"}
+    parameter_units = _ADSORPTION_UNITS
     numerical_method = "Langmuir working-capacity evaluation under vacuum regeneration."
 
     def __call__(
@@ -561,7 +573,7 @@ class TSAUnit(_AdsorptionBase):
     ]
     references = ["Webley, P.A. Adsorption, 20, 225 (2014)."]
     parameter_symbols = {"T_adsorption": "T_\\mathrm{ads}", "T_desorption": "T_\\mathrm{des}"}
-    parameter_units = {"T_adsorption": "K", "T_desorption": "K"}
+    parameter_units = _ADSORPTION_UNITS
     numerical_method = "Van't Hoff-scaled Langmuir with analytical working capacity; sensible-heat duty."
 
     def __call__(
@@ -703,12 +715,7 @@ class TVSAUnit(_AdsorptionBase):
         "P_adsorption": "P_\\mathrm{ads}",
         "P_desorption": "P_\\mathrm{vac}",
     }
-    parameter_units = {
-        "T_adsorption": "K",
-        "T_desorption": "K",
-        "P_adsorption": "Pa",
-        "P_desorption": "Pa",
-    }
+    parameter_units = _ADSORPTION_UNITS
     numerical_method = "Working-capacity difference with van't Hoff-scaled Langmuir."
 
     def __call__(

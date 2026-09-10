@@ -123,12 +123,15 @@ class Ultrafiltration:
         "Kedem, O., Katchalsky, A. Biochim. Biophys. Acta, 27, 229 (1958).",
         "Cheryan, M. Ultrafiltration and Microfiltration Handbook, CRC Press, 1998.",
     ]
-    parameter_symbols = {
-        "MWCO": r"\mathrm{MWCO}",
-        "area": "A",
-        "Lp": "L_p",
+    parameter_symbols = {"membrane_area": "A", "MWCO": r"\mathrm{MWCO}", "Lp": "L_p"}
+    parameter_units = {
+        "membrane_area": "m^2",
+        "MWCO": "Da",
+        "Lp": "L/m^2/h/bar",
+        "k_mass": "m/s",
+        "sigma": "Pa*m^3/kg",
+        "fouling_coefficient": "1/L",
     }
-    parameter_units = {"MWCO": "Da", "area": "m^2", "Lp": "L/m^2/h/bar"}
     numerical_method = "Closed-form sieving + resistance-in-series flux model."
 
     def __init__(self, params: UltrafiltrationParams):
@@ -293,8 +296,15 @@ class Diafiltration:
     references = [
         "Cheryan, M. Ultrafiltration and Microfiltration Handbook, CRC Press, 1998.",
     ]
-    parameter_symbols = {"MWCO": r"\mathrm{MWCO}", "area": "A"}
-    parameter_units = {"MWCO": "Da", "area": "m^2"}
+    parameter_symbols = {"membrane_area": "A", "MWCO": r"\mathrm{MWCO}"}
+    parameter_units = {
+        "membrane_area": "m^2",
+        "MWCO": "Da",
+        "Lp": "L/m^2/h/bar",
+        "k_mass": "m/s",
+        "sigma": "Pa*m^3/kg",
+        "fouling_coefficient": "1/L",
+    }
     numerical_method = "Analytical buffer-exchange kinetics (CVD)."
 
     def __init__(self, params: DiafiltrationParams):

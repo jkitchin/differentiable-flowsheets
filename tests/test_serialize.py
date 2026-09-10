@@ -8,6 +8,7 @@ The rest check that what cannot be written faithfully is refused with a
 message naming the culprit, rather than dropped.
 """
 
+import dataclasses
 import json
 
 import jax
@@ -282,6 +283,58 @@ class TestRefusals:
 
 
 # =============================================================================
+# The view block (format version 2)
+# =============================================================================
+
+
+class TestView:
+    """Presentation state rides along, and nothing numeric reads it."""
+
+    def test_the_view_block_round_trips(self, flowsheet):
+        flowsheet.view = {
+            "nodes": {"reactor": {"x": 120.0, "y": 40.0},
+                      "feed:feed": {"x": 20.0, "y": 40.0}},
+            "code_context": "thermo = IdealThermo(...)\n",
+        }
+        back = serialize.from_dict(serialize.to_dict(flowsheet))
+        assert back.view == flowsheet.view
+
+    def test_a_flowsheet_with_no_view_writes_no_view_key(self, flowsheet):
+        """A file that has never been opened in an editor is unchanged."""
+        assert "view" not in serialize.to_dict(flowsheet)
+        assert serialize.from_dict(serialize.to_dict(flowsheet)).view == {}
+
+    def test_a_version_1_file_still_loads(self, flowsheet):
+        """Files written before the view block existed keep opening."""
+        data = serialize.to_dict(flowsheet)
+        data["format_version"] = 1
+        data.pop("view", None)
+        back = serialize.from_dict(data)
+        assert [u.name for u in back.units] == [u.name for u in flowsheet.units]
+        assert back.view == {}
+
+    def test_the_written_version_is_the_current_one(self, flowsheet):
+        assert serialize.to_dict(flowsheet)["format_version"] == 2
+        assert FORMAT_VERSION == 2
+        assert set(serialize.SUPPORTED_VERSIONS) == {1, 2}
+
+    def test_the_view_survives_an_apply_params(self, flowsheet):
+        """_apply_params rebuilds the flowsheet; the canvas must survive it."""
+        flowsheet.view = {"nodes": {"reactor": {"x": 1.0, "y": 2.0}}}
+        applied = flowsheet._apply_params({})
+        assert applied.view == flowsheet.view
+        applied.view["nodes"]["reactor"]["x"] = 99.0
+        assert flowsheet.view["nodes"]["reactor"]["x"] == 1.0, "copied, not shared"
+
+    def test_the_view_holds_arbitrary_json(self, flowsheet):
+        """The editor puts its planning selection here too; nothing validates."""
+        flowsheet.view = {"planning": {"u": ["reactor.V"], "y": ["out.total_flow"],
+                                       "bounds": {"reactor.V": [0.5, 5.0]},
+                                       "radius": 0.3}}
+        assert serialize.from_dict(serialize.to_dict(flowsheet)).view == flowsheet.view
+
+
+# =============================================================================
 # Values
 # =============================================================================
 
@@ -317,6 +370,86 @@ class TestValueEncoding:
 
 
 # =============================================================================
+# References into a namespace
+# =============================================================================
+
+
+class TestRefs:
+    """`{"$ref": "thermo"}` --- how a file names an object it cannot hold.
+
+    The editor's code context is one namespace; a script that calls
+    `load(..., refs=locals())` is another. Neither is privileged: the
+    mechanism lives here so a file carrying references can be opened
+    with nothing but `serialize`.
+    """
+
+    def test_a_known_object_is_written_as_its_name(self, flowsheet, thermo):
+        data = serialize.to_dict(flowsheet, refs={"thermo": thermo})
+        assert data["units"][1]["constructor"] == {"thermo": {"$ref": "thermo"}}
+
+    def test_it_comes_back_as_the_same_object(self, flowsheet, thermo):
+        data = serialize.to_dict(flowsheet, refs={"thermo": thermo})
+        back = serialize.from_dict(data, refs={"thermo": thermo})
+        assert back.units[1].operation.thermo is thermo
+
+    def test_a_different_object_of_the_same_type_is_not_a_reference(
+        self, flowsheet, thermo
+    ):
+        """Identity, not equality: two thermos are two objects."""
+        other = IdealThermo({n: get_species_data(n) for n in SPECIES})
+        data = serialize.to_dict(flowsheet, refs={"thermo": other})
+        assert data["units"][1]["constructor"]["thermo"] != {"$ref": "thermo"}
+
+    def test_numbers_and_short_strings_are_never_captured(self, flowsheet):
+        """Small ints and identifier-like strings are interned, so an
+        identity scan run before the primitive branch would rewrite every
+        1.0 in the file into whatever the namespace happened to call it."""
+        data = serialize.to_dict(
+            flowsheet, refs={"one": 1, "hot": "hot", "name": "Heater"}
+        )
+        heat = data["units"][0]
+        assert heat["operation"] == "Heater"
+        assert heat["outlets"] == ["hot"]
+        assert json.dumps(data).count('"$ref"') == 0
+
+    def test_a_reference_the_namespace_lacks_is_refused_by_name(self, flowsheet,
+                                                                thermo):
+        data = serialize.to_dict(flowsheet, refs={"thermo": thermo})
+        with pytest.raises(SerializationError) as excinfo:
+            serialize.from_dict(data)
+        assert "thermo" in str(excinfo.value)
+        assert "code context" in str(excinfo.value)
+
+    def test_a_file_with_references_round_trips_on_disk(self, flowsheet, thermo,
+                                                        tmp_path):
+        path = serialize.save(flowsheet, tmp_path / "plant.json",
+                              refs={"thermo": thermo})
+        assert '"$ref": "thermo"' in path.read_text()
+        reloaded = serialize.load(path, refs={"thermo": thermo})
+        assert reloaded.units[1].operation.thermo is thermo
+
+    def test_a_reference_survives_a_solve(self, flowsheet, thermo, tmp_path):
+        """The point of the whole mechanism: the file still runs."""
+        path = serialize.save(flowsheet, tmp_path / "plant.json",
+                              refs={"thermo": thermo})
+        before = flowsheet.solve()
+        after = serialize.load(path, refs={"thermo": thermo}).solve()
+        for key, value in before["vap"].items():
+            if not isinstance(value, str):
+                assert float(after["vap"][key]) == float(value), f"vap.{key}"
+
+    def test_the_namespace_does_not_leak_between_calls(self, flowsheet, thermo):
+        """It is a context, not a global: the next call has none of it."""
+        serialize.to_dict(flowsheet, refs={"thermo": thermo})
+        plain = serialize.to_dict(flowsheet)
+        assert json.dumps(plain).count('"$ref"') == 0
+
+    def test_private_names_are_not_offered(self, flowsheet, thermo):
+        data = serialize.to_dict(flowsheet, refs={"_thermo": thermo})
+        assert data["units"][1]["constructor"]["thermo"] != {"$ref": "_thermo"}
+
+
+# =============================================================================
 # Files
 # =============================================================================
 
@@ -338,6 +471,34 @@ class TestFiles:
         path = serialize.save(flowsheet, tmp_path / "plant.json")
         reloaded = serialize.load(path, extras={"flash": {"thermo": thermo}})
         assert reloaded.units[1].operation.thermo is thermo
+
+
+class TestPluginTypes:
+    """Every shipped plugin has to be reachable by name.
+
+    A nested ``Params`` is written as ``{"$type": "BranchParams", ...}``
+    and rebuilt by searching the packages difflow ships. A plugin missing
+    from that list fails only on the way *back* in, so a flowsheet saves
+    without complaint and refuses to load.
+    """
+
+    @pytest.mark.parametrize("name", [
+        "HeaterParams",                     # difflow
+        "BioreactorParams",                 # difflow_bio
+        "PipeParams",                       # difflow_gas
+        "BranchParams",                     # difflow_power
+    ])
+    def test_a_plugin_params_class_resolves_by_name(self, name):
+        found = serialize._lookup_type(name)
+        assert dataclasses.is_dataclass(found)
+
+    def test_every_shipped_plugin_is_searched(self):
+        from importlib.metadata import entry_points
+
+        plugins = {f"difflow_{e.name}"
+                   for e in entry_points(group="difflow.plugins")}
+        assert plugins <= set(serialize._PACKAGES), (
+            "a plugin outside _PACKAGES saves fine and refuses to load")
 
 
 if __name__ == "__main__":

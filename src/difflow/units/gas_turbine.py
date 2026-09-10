@@ -131,6 +131,7 @@ class GasCompressor:
     references = [
         "Moran, Shapiro, Boettner, Bailey. Fundamentals of Engineering Thermodynamics, 8e, Ch. 6-9.",
     ]
+    parameter_units = {"pressure_ratio": "-", "eta_isentropic": "-"}
 
     def __init__(self, params: GasCompressorParams, thermo: IdealGasThermo):
         self.params = params
@@ -195,6 +196,7 @@ class GasTurbine:
     references = [
         "Moran, Shapiro, Boettner, Bailey. Fundamentals of Engineering Thermodynamics, 8e, Ch. 6-9.",
     ]
+    parameter_units = {"P_out": "Pa", "eta_isentropic": "-"}
 
     def __init__(self, params: GasTurbineParams, thermo: IdealGasThermo):
         self.params = params
@@ -299,6 +301,7 @@ class Combustor:
         "Turns, S.R. An Introduction to Combustion, 3e, Ch. 2 and 7.",
         "Moran, Shapiro, Boettner, Bailey. Fundamentals of Engineering Thermodynamics, 8e, Ch. 6-9.",
     ]
+    parameter_units = {"T_out": "K", "dp_frac": "-"}
 
     def __init__(self, params: CombustorParams, thermo: IdealGasThermo):
         self.params = params
