@@ -22,10 +22,12 @@ and the new DynamicUnit protocol for unified dynamic modeling.
 
 from typing import Callable, Literal, Any
 from dataclasses import dataclass
+import warnings
 import jax
 import jax.numpy as jnp
 from jax import Array
 
+from difflow.constants import DEFAULT_CONCENTRATION
 from difflow.streams import Stream, get_flows, get_species, make_stream
 from difflow.thermo import IdealThermo
 from difflow.dynamic.state import StateSpec, StateVar, StateVector
@@ -45,6 +47,22 @@ RateFunction = Callable[[dict[str, Array], Array, dict], Array]
 
 # Type alias for parameters dict
 Params = dict[str, Any]
+
+
+class CSTRDensityWarning(UserWarning):
+    """The reactor's concentration basis fell back to an assumed molar density.
+
+    Concentration -- and therefore volumetric flow, and therefore residence
+    time (``tau = V * rho / F_total``) -- comes from a molar density. When
+    neither ``eos`` nor ``molar_density`` is given the CSTR has nothing to
+    compute one from and substitutes :data:`difflow.constants.DEFAULT_CONCENTRATION`
+    (55500 mol/m^3, about liquid water): ~8x too high for a C3-C8 hydrocarbon
+    liquid and ~200x too high for a gas, and an error in the density is a
+    proportional error in the conversion. This warning is what makes that
+    substitution visible instead of silent (#227). It is also raised for a
+    ``reaction_phase`` that nothing can use, since a phase without an EOS
+    changes no number.
+    """
 
 
 def _rate_concentrations(F_array, species_order, eos, reaction_phase, T, P, Qv_fallback):
@@ -95,6 +113,10 @@ class CSTRParams(ParamsMixin):
         T_damping: Damping factor for temperature updates in adiabatic/specified_duty
                    modes (0 < T_damping <= 1). Smaller values = more stable but slower.
                    Default 0.3.
+
+    The concentration basis is set by ``eos`` + ``reaction_phase`` or by
+    ``molar_density``; with neither, it falls back to liquid water and warns
+    (:class:`CSTRDensityWarning`). See those fields below.
     """
     V: float | Array
     rate_fn: RateFunction
@@ -103,6 +125,11 @@ class CSTRParams(ParamsMixin):
     species_order: list[str]
     dH_rxn: Array | None = None
     T_damping: float = 0.3
+    # Constant molar density (mol/m^3) setting the concentration basis when no
+    # EOS is available: C_i = F_i / Q_v with Q_v = F_total / molar_density. With
+    # neither this nor an EOS the reactor falls back to 55500 mol/m^3 (liquid
+    # water) and warns (CSTRDensityWarning), because that fallback silently sets
+    # the residence time and is ~8x off for a hydrocarbon liquid (#227).
     molar_density: float | None = None
     # Optional cubic EOS (e.g. difflow.eos.PengRobinson) for a phase-consistent
     # concentration basis. When provided, the rate-law concentration is molarity
@@ -111,7 +138,10 @@ class CSTRParams(ParamsMixin):
     # constant molar_density -- so a gas-phase reactor sees the true vapor molar
     # density, not an assumed liquid one, and the reactor shares the flash's EOS.
     # The EOS must expose density(T, P, y, phase) and species_order
-    # (see difflow.eos.PengRobinson). When None, behavior is unchanged.
+    # (see difflow.eos.PengRobinson). Requires reaction_phase to be set. When
+    # None, the CSTR falls back to its thermo's EOS if that thermo has one (a
+    # CubicThermo) and reaction_phase says which phase to evaluate it in;
+    # failing that, to molar_density.
     #
     # NOTE: eos sets only the *concentration* basis. For the *enthalpy* in the
     # non-isothermal energy balance to also carry the real-gas EOS departure,
@@ -120,10 +150,13 @@ class CSTRParams(ParamsMixin):
     # is set -- real-gas concentrations but ideal-gas enthalpy -- so pair the two
     # to keep the reactor thermodynamically consistent.
     eos: Any = None
-    # Phase whose EOS molar density sets the concentration basis when eos is
-    # provided; also the enthalpy phase when the thermo is a CubicThermo. Ignored
-    # when eos is None.
-    reaction_phase: str = "vapor"
+    # Phase ("liquid" or "vapor") whose EOS molar density sets the concentration
+    # basis; also the enthalpy phase when the thermo is a CubicThermo. Required
+    # when eos is given -- a default here would silently pick a phase, and the
+    # vapor and liquid molar densities differ by two orders of magnitude (#227).
+    # Setting it is also what opts a CubicThermo's own EOS in as the basis when
+    # eos is not given. Warns when nothing can use it.
+    reaction_phase: str | None = None
     H_mix_fn: Callable | None = None
     K_eq_fn: Callable | None = None
     # Volumetric-flow basis for concentrations (#75). By default the reactor
@@ -149,6 +182,20 @@ class CSTRParams(ParamsMixin):
                     f"dH_rxn has {self.dH_rxn.shape[0]} values "
                     f"but stoich has {n_reactions} reactions"
                 )
+        if self.reaction_phase not in (None, "liquid", "vapor"):
+            raise ValueError(
+                f"reaction_phase must be 'liquid' or 'vapor', "
+                f"got {self.reaction_phase!r}"
+            )
+        if self.eos is not None and self.reaction_phase is None:
+            # The EOS molar density is phase-dependent by an order of magnitude
+            # or two, so there is no defensible default to pick here (#227).
+            raise ValueError(
+                "CSTRParams: eos was given without reaction_phase. The EOS "
+                "molar density that sets the concentration basis depends on "
+                "the phase, so name it: reaction_phase='liquid' or "
+                "reaction_phase='vapor'."
+            )
 
 
 class CSTR:
@@ -172,7 +219,9 @@ class CSTR:
         "Perfectly mixed: outlet composition equals reactor composition.",
         "Steady-state operation.",
         "Uniform temperature throughout the vessel.",
-        "Liquid-phase default: volumetric flow from molar_density when not supplied.",
+        "Concentration basis: EOS molar density at reactor (T, P, y) in "
+        "reaction_phase when an EOS is available, else the constant "
+        "molar_density -- which, unset, falls back to liquid water and warns.",
     ]
     references = [
         "Fogler, Elements of Chemical Reaction Engineering, 5e, Ch. 8.",
@@ -216,6 +265,65 @@ class CSTR:
 
         if mode != "isothermal" and thermo is None:
             raise ValueError("Thermo object required for non-isothermal operation")
+
+        # Resolve the concentration basis once, here, so every path below --
+        # steady state, EO residuals, dynamics -- runs on the same
+        # thermodynamics (#227). An explicit eos wins; failing that, the
+        # thermo's own EOS (a CubicThermo has one) when reaction_phase names
+        # the phase to evaluate it in; an explicit molar_density keeps
+        # precedence over that inference.
+        self._eos = params.eos
+        if (
+            self._eos is None
+            and params.molar_density is None
+            and params.reaction_phase is not None
+        ):
+            self._eos = getattr(thermo, "eos", None)
+        self._phase = params.reaction_phase
+        self._warned_default_density = False
+
+        if params.reaction_phase is not None and self._eos is None:
+            why = (
+                "molar_density was given, which sets the basis outright"
+                if params.molar_density is not None
+                else "pass eos=<cubic EOS>, or a CubicThermo as thermo"
+            )
+            warnings.warn(
+                f"CSTR: reaction_phase={params.reaction_phase!r} changes "
+                "nothing here -- it names the phase of an EOS molar density "
+                f"and this reactor has no EOS ({why}).",
+                CSTRDensityWarning,
+                stacklevel=2,
+            )
+
+    def _constant_density(self) -> float | Array:
+        """Constant molar density (mol/m^3) for the volumetric-flow basis.
+
+        Returns ``molar_density`` when the caller supplied one. Otherwise there
+        is nothing to compute a density from and the reactor falls back to
+        ``DEFAULT_CONCENTRATION`` -- liquid water. That fallback sets the
+        volumetric flow and hence the residence time, so it is warned about
+        (once per reactor) rather than substituted silently (#227).
+        """
+        p = self.params
+        if p.molar_density is not None:
+            return p.molar_density
+        if not self._warned_default_density:
+            self._warned_default_density = True
+            warnings.warn(
+                "CSTR: neither eos nor molar_density was given, so the "
+                f"concentration basis falls back to {DEFAULT_CONCENTRATION:g} "
+                "mol/m^3 -- liquid water. Density sets the volumetric flow and "
+                "hence the residence time (tau = V * rho / F_total), so a wrong "
+                "density is a proportionally wrong conversion: ~8x for a C3-C8 "
+                "hydrocarbon liquid, ~200x for a gas. Pass "
+                "molar_density=<mol/m^3>, or eos=<cubic EOS> with "
+                "reaction_phase='liquid'|'vapor' for a phase-consistent basis, "
+                "or an explicit volumetric_flow= to the call.",
+                CSTRDensityWarning,
+                stacklevel=3,
+            )
+        return DEFAULT_CONCENTRATION
 
     def _compute_concentrations(
         self,
@@ -265,14 +373,20 @@ class CSTR:
         # Determine volumetric flow (concentration basis). With an EOS, use the
         # real EOS molar density at inlet conditions in reaction_phase (the
         # per-iteration basis is recomputed from the EOS at reactor/outlet
-        # conditions inside the solve); without an EOS, use the assumed constant
-        # molar_density (legacy single-liquid-phase behavior).
-        if p.eos is not None:
+        # conditions inside the solve); with an explicit volumetric_flow the
+        # caller has set the basis outright and the reported density is the one
+        # that flow implies; otherwise the constant molar_density -- or, with a
+        # warning, the default liquid-water one (#227).
+        if self._eos is not None:
             F_in_arr = jnp.array([inlet_flows[s] for s in p.species_order])
             y_in = F_in_arr / jnp.maximum(jnp.sum(F_in_arr), 1e-30)
-            density = p.eos.density(inlet["T"], inlet["P"], y_in, phase=p.reaction_phase)
+            density = self._eos.density(inlet["T"], inlet["P"], y_in, phase=self._phase)
+        elif p.molar_density is not None:
+            density = p.molar_density
+        elif volumetric_flow is not None and not p.outlet_volumetric_basis:
+            density = sum(inlet_flows.values()) / jnp.asarray(volumetric_flow)
         else:
-            density = p.molar_density if p.molar_density is not None else 55500.0
+            density = self._constant_density()
         if volumetric_flow is None:
             # Approximate as total molar flow / molar_density
             total_molar = sum(inlet_flows.values())
@@ -395,11 +509,13 @@ class CSTR:
         rate_fn = p.rate_fn
         species_order = p.species_order
         stoich = p.stoich
-        eos = p.eos
-        reaction_phase = p.reaction_phase
-        # Outlet-conditions volumetric flow (#75): Q_v = F_total_out / density
-        outlet_basis = p.outlet_volumetric_basis
-        density = p.molar_density if p.molar_density is not None else 55500.0
+        eos = self._eos
+        reaction_phase = self._phase
+        # Outlet-conditions volumetric flow (#75): Q_v = F_total_out / density.
+        # Moot under an EOS, which recomputes the density at reactor conditions
+        # on every iteration anyway.
+        outlet_basis = p.outlet_volumetric_basis and eos is None
+        density = self._constant_density() if outlet_basis else None
 
         def _effective_Qv(F_out_safe, Q_v):
             if outlet_basis:
@@ -484,8 +600,8 @@ class CSTR:
         # Full energy balance with enthalpy. With an EOS the enthalpy is
         # evaluated in the reaction phase and at reactor pressure (so a
         # CubicThermo adds the PR departure); otherwise the legacy liquid basis.
-        enth_phase = p.reaction_phase if p.eos is not None else "liquid"
-        enth_P = inlet["P"] if p.eos is not None else None
+        enth_phase = self._phase if self._eos is not None else "liquid"
+        enth_P = inlet["P"] if self._eos is not None else None
         H_in = self.thermo.stream_enthalpy(inlet_flows, inlet["T"], phase=enth_phase, P=enth_P)
         H_out = self.thermo.stream_enthalpy(outlet_flows, T_out, phase=enth_phase, P=enth_P)
 
@@ -532,8 +648,8 @@ class CSTR:
         V = p.V
         T_damping = p.T_damping
         H_mix_fn = p.H_mix_fn
-        eos = p.eos
-        reaction_phase = p.reaction_phase
+        eos = self._eos
+        reaction_phase = self._phase
         P = inlet["P"]
         # Enthalpy phase/pressure: reaction phase at reactor P when eos is set
         # (so a CubicThermo adds the PR departure), else the legacy liquid basis.
@@ -659,8 +775,8 @@ class CSTR:
         dH_rxn = p.dH_rxn
         V = p.V
         T_damping = p.T_damping
-        eos = p.eos
-        reaction_phase = p.reaction_phase
+        eos = self._eos
+        reaction_phase = self._phase
         P = inlet["P"]
         enth_phase = reaction_phase if eos is not None else "liquid"
         enth_P = P if eos is not None else None
@@ -779,11 +895,21 @@ class CSTR:
         inlet_flows = get_flows(inlet)
         outlet_flows = get_flows(outlet)
 
-        # Volumetric flow
+        # Volumetric flow / concentration basis: the same one the sequential
+        # __call__ uses, so the EO residual is the same equation set (#227) --
+        # with an EOS that is the real molar density at reactor conditions, not
+        # an assumed constant.
         volumetric_flow = kwargs.get('volumetric_flow')
         if volumetric_flow is None:
             total_molar = sum(inlet_flows.values())
-            eo_density = p.molar_density if p.molar_density is not None else 55500.0
+            if self._eos is not None:
+                F_in_arr = jnp.array([inlet_flows[s] for s in p.species_order])
+                y_in = F_in_arr / jnp.maximum(jnp.sum(F_in_arr), 1e-30)
+                eo_density = self._eos.density(
+                    inlet["T"], inlet["P"], y_in, phase=self._phase
+                )
+            else:
+                eo_density = self._constant_density()
             volumetric_flow = total_molar / eo_density
         volumetric_flow = jnp.asarray(volumetric_flow)
 
@@ -799,10 +925,10 @@ class CSTR:
         # Outlet concentrations from outlet flows
         F_out = jnp.array([outlet_flows[s] for s in p.species_order])
         F_out_safe = jnp.maximum(F_out, 1e-10)
-        C_out = {
-            s: F_out_safe[i] / volumetric_flow
-            for i, s in enumerate(p.species_order)
-        }
+        C_out = _rate_concentrations(
+            F_out_safe, p.species_order, self._eos, self._phase,
+            T_out, outlet["P"], volumetric_flow,
+        )
 
         # Reaction rates at outlet conditions
         rates = p.rate_fn(C_out, T_out, p.rate_params)
@@ -890,11 +1016,11 @@ class CSTR:
         # vapor at inlet (T, P), so the initial molar holdup is the real
         # n_total = rho_EOS(T0, P, y0) * V (not F_in * assumed-tau). The
         # reaction-adjusted outlet flow keeps this holdup constant thereafter.
-        if p.eos is not None:
+        if self._eos is not None:
             species = p.species_order
             F_in = jnp.array([inlet_flows.get(s, 0.0) for s in species])
             y0 = F_in / jnp.maximum(jnp.sum(F_in), 1e-30)
-            rho0 = p.eos.density(inlet["T"], inlet["P"], y0, phase=p.reaction_phase)
+            rho0 = self._eos.density(inlet["T"], inlet["P"], y0, phase=self._phase)
             n0 = rho0 * V * y0
             if self.mode != "isothermal":
                 return jnp.concatenate([n0, jnp.reshape(jnp.asarray(inlet["T"]), (1,))])
@@ -925,7 +1051,7 @@ class CSTR:
     ) -> dict[str, Any]:
         """Shared EOS-consistent dynamic quantities for derivatives/outputs.
 
-        Used when ``params.eos`` is set, so the dynamic (transient) path uses
+        Used when the reactor has an EOS, so the dynamic (transient) path uses
         the *same* phase-consistent basis as the steady-state ``__call__``:
 
         - concentration is EOS molarity at reactor (T, P, composition) in
@@ -964,7 +1090,7 @@ class CSTR:
             T = state[n_species]
 
         # EOS-consistent reactor concentration (mol/m^3): C_i = y_i * rho(T, P, y).
-        rho = p.eos.density(T, P, y, phase=p.reaction_phase)
+        rho = self._eos.density(T, P, y, phase=self._phase)
         C = {s: y[i] * rho for i, s in enumerate(species)}
         r = p.rate_fn(C, T, p.rate_params)          # (n_rxn,), mol/m^3/s
         gen = p.stoich @ r                           # (n_species,), mol/m^3/s
@@ -995,8 +1121,8 @@ class CSTR:
         Energy balance (non-isothermal):
             d(n*Cp*T)/dt = F_in*Cp*(T_in - T) + V*sum_j(r_j*(-dH_j)) + Q
 
-        With ``params.eos`` set (paired with a ``CubicThermo``), both balances
-        use the phase-consistent EOS basis of the steady-state ``__call__``
+        With an EOS set (paired with a ``CubicThermo``), both balances use
+        the phase-consistent EOS basis of the steady-state ``__call__``
         (real vapor molar density for the rate, ideal-gas + PR-departure
         enthalpy for the energy balance) rather than the ``C_i=n_i/V`` /
         constant-Cp legacy path, so the transient fixed point reproduces the
@@ -1014,7 +1140,7 @@ class CSTR:
         p = self.params
 
         # EOS-consistent branch (phase-aware; matches steady-state basis).
-        if p.eos is not None:
+        if self._eos is not None:
             c = self._eos_dynamic_common(state, inputs, params)
             dn_dt = c["dn_dt"]
             if self.mode == "isothermal":
@@ -1027,7 +1153,7 @@ class CSTR:
             if thermo is None:
                 raise ValueError("Thermo object required for non-isothermal EOS dynamics")
 
-            phase = p.reaction_phase
+            phase = self._phase
             F_in_dict = {s: F_in[i] for i, s in enumerate(species)}
             F_out_dict = {s: F_out[i] for i, s in enumerate(species)}
             H_in_flow = thermo.stream_enthalpy(F_in_dict, T_in, phase=phase, P=P)   # W
@@ -1149,7 +1275,7 @@ class CSTR:
 
         # EOS-consistent branch: reaction-adjusted outlet flow and phase-aware
         # composition, matching the steady-state and dynamic-derivatives basis.
-        if p.eos is not None:
+        if self._eos is not None:
             c = self._eos_dynamic_common(state, inputs, params)
             outlet_flows = {s: c["F_out"][i] for i, s in enumerate(c["species"])}
             return {"outlet": make_stream(outlet_flows, c["T"], c["P"])}

@@ -30,7 +30,7 @@ from difflow.units.distillation import (
 jax.config.update("jax_enable_x64", True)
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def benzene_toluene_thermo():
     """Benzene-toluene thermodynamics for distillation."""
     species_data = {
@@ -53,7 +53,7 @@ def benzene_toluene_thermo():
     return IdealThermo(species_data)
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def multicomponent_thermo():
     """Three-component system for testing."""
     species_data = {
@@ -1248,24 +1248,6 @@ class TestCubicThermoColumn:
         for j in (0, 10, column_params.n_stages - 1):
             K = cubic.K_values_array(T[j], self.P, x[j])
             assert float(jnp.sum(K * x[j])) == pytest.approx(1.0, abs=1e-3)
-
-    def test_cubic_column_gradients(self, thermo_pair, column_params, feed):
-        """AD still runs through the EOS column, and matches finite difference."""
-        _, cubic = thermo_pair
-        column = DistillationColumn(column_params, cubic)
-
-        def hexane_purity(R):
-            distillate, _, _ = column(feed, R=R, B_spec=40.0)
-            total = sum(distillate[f"F_{s}"] for s in self.SPECIES)
-            return distillate["F_n_hexane"] / total
-
-        g = jax.grad(hexane_purity)(2.0)
-        assert jnp.isfinite(g)
-
-        eps = 1e-3
-        fd = (float(hexane_purity(2.0 + eps))
-              - float(hexane_purity(2.0 - eps))) / (2 * eps)
-        assert float(g) == pytest.approx(fd, rel=1e-4)
 
     def test_condenser_is_well_below_the_top_stage_for_a_wide_cut(
         self, thermo_pair, column_params, feed

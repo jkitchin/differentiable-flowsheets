@@ -258,7 +258,11 @@ class TestCSTRConfigurableDensity:
         )
         cstr = CSTR(params)
         inlet = _make_ab_stream()
-        _, info = cstr(inlet)
+        # The fallback is water and it sets residence time, so it announces
+        # itself (#227) rather than being substituted silently.
+        from difflow.units.cstr import CSTRDensityWarning
+        with pytest.warns(CSTRDensityWarning):
+            _, info = cstr(inlet)
         assert float(info['molar_density']) == pytest.approx(55500.0)
 
     def test_custom_density(self):
