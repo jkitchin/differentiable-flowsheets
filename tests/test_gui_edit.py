@@ -23,6 +23,7 @@ from difflow import (
     serialize,
 )
 from difflow.gui import FlowsheetSession, edit
+from difflow.incomplete import Incomplete, IncompleteUnitError
 
 SPECIES = ["water", "ethanol"]
 
@@ -444,41 +445,60 @@ class TestPendingUnits:
 
     Refusing it threw away the only thing the user actually said --- I
     want a Flash, here --- and left them to reconstruct it after writing
-    the thermo. So the drop is kept as a *pending* node: it holds the
-    name and the position, it says what it is waiting for, and the two
-    edits that can answer it (the code context, the species) promote it
-    in place.
+    the thermo. So the drop is kept as a *pending* node: it says what it
+    is waiting for, and the two edits that can answer it (the code
+    context, the species) finish it in place.
 
-    It is deliberately not a `Unit`. A half-built unit in the flowsheet
-    would have to be skipped by the solver, by the serializer and by the
-    code generator, each of which would then be one `if` away from
-    emitting a broken flowsheet. Pending lives on the session instead,
-    beside the document rather than inside it.
+    It goes on the flowsheet, as a real `Unit` whose operation is an
+    `Incomplete` stand-in. Held off the flowsheet it had no ports, and a
+    port is what a wire lands on --- so the node was there and inert,
+    and a dropped Compressor could not be connected to anything. The
+    stand-in carries the ports the operation declares and raises if
+    anything asks it to compute, so the ways out are all closed: a solve
+    refuses by name, and `session.pending` is the note about what each
+    one is still waiting for.
     """
 
-    def test_a_blocked_drop_is_parked_and_not_built(self, session):
+    def test_a_blocked_drop_lands_on_the_flowsheet_with_its_ports(self, session):
+        """On it, so it can be wired now rather than after the thermo."""
         answer = session.add_unit("Flash", position={"x": 10, "y": 20})
         assert answer["pending"] is True
         assert answer["name"] == "flash2", "the built flash keeps its name"
-        assert answer["position"] == {"x": 10.0, "y": 20.0}
-        assert "flash2" not in [u.name for u in session.flowsheet.units]
+        assert "flash2" in [u.name for u in session.flowsheet.units]
+        assert session.flowsheet.view["nodes"]["flash2"] == {"x": 10.0, "y": 20.0}, (
+            "its coordinate is in the view with everybody else's")
         assert [e["name"] for e in session.pending_units()] == ["flash2"]
 
-    def test_the_document_carries_it_beside_the_flowsheet(self, session):
-        """Beside, never inside: a saved file must not name a phantom.
+        unit = next(u for u in session.flowsheet.units if u.name == "flash2")
+        assert isinstance(unit.operation, Incomplete)
+        assert unit.inlet_names and unit.outlet_names, (
+            "the ports are what a wire lands on")
+        with pytest.raises(IncompleteUnitError):
+            unit.operation()
 
-        `document()["flowsheet"]` is what gets written to disk and read
-        back by `serialize`, and a node in `view.nodes` with no unit
-        behind it is a file that another difflow cannot load.
+    def test_the_document_carries_it_inside_the_flowsheet(self, session):
+        """Inside, and it has to survive the trip to disk and back.
+
+        `document()["flowsheet"]` is what gets written out and read back
+        by `serialize`, so an unfinished unit that did not round-trip
+        would be a file that loses the wiring the user had already done.
+        It reloads with no extras, because there is nothing to supply
+        yet --- that is the whole point of it being unfinished.
         """
         session.add_unit("Flash", position={"x": 10, "y": 20})
         document = session.document()
         assert [e["name"] for e in document["pending"]] == ["flash2"]
-        assert "pending" not in document["flowsheet"]
-        assert "flash2" not in document["flowsheet"]["view"]["nodes"]
-        serialize.from_dict(document["flowsheet"],
-                            extras={"flash": {"thermo": session.bindings.get(
-                                "thermo")}})
+        assert document["flowsheet"]["view"]["nodes"]["flash2"] == {
+            "x": 10.0, "y": 20.0}, "its coordinate is in the view like anyone's"
+
+        written = [u for u in document["flowsheet"]["units"]
+                   if u["name"] == "flash2"]
+        assert written and written[0]["incomplete"]["needs"] == ["thermo"]
+
+        reloaded = serialize.from_dict(document["flowsheet"])
+        again = next(u for u in reloaded.units if u.name == "flash2")
+        assert isinstance(again.operation, Incomplete)
+        assert again.operation.operation == "Flash"
 
     def test_a_pending_name_is_taken(self, session):
         """Two drops of the same blocked unit are two nodes.
@@ -524,16 +544,25 @@ class TestPendingUnits:
         assert empty.pending["flash"]["needs"] == ["thermo"]
         assert "species" not in empty.pending["flash"]["hint"]
 
-    def test_a_pending_node_can_be_deleted(self, session):
-        answer = session.remove_unit(session.add_unit("Flash")["name"])
-        assert answer["ok"] and answer["pending"] is True
-        assert session.pending_units() == []
+    def test_a_pending_node_is_deleted_like_any_other(self, session):
+        """It is a unit, so there is no second delete path to get wrong."""
+        name = session.add_unit("Flash")["name"]
+        answer = session.remove_unit(name)
+        assert answer["ok"] and answer["name"] == name
+        assert name not in [u.name for u in session.flowsheet.units]
+        assert session.pending_units() == [], "and the note goes with it"
 
-    def test_a_flowsheet_with_a_pending_node_still_solves(self, session):
-        """The red node is not in the model, so it cannot break the solve."""
+    def test_a_solve_refuses_while_one_is_unfinished(self, session):
+        """The price of the node being in the model: it has to say no.
+
+        Up front and by name, rather than raising from somewhere deep in
+        the solve --- or, worse, appearing to have worked.
+        """
         session.add_unit("Flash")
         answer = session.solve()
-        assert answer["ok"] and answer["pending"] == ["flash2"]
+        assert answer["ok"] is False
+        assert answer["pending"] == ["flash2"]
+        assert "flash2" in answer["error"] and "thermo" in answer["error"]
 
     def test_loading_a_file_forgets_them(self, session):
         """They belong to the canvas that was open, not to the next one."""

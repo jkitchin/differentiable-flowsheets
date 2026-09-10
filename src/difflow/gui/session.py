@@ -265,9 +265,11 @@ class FlowsheetSession:
         return {
             "species": list(getattr(self.flowsheet, "species_order", None) or []),
             # Renaming the order under existing units would reinterpret
-            # the arrays they hold, so the editor only offers it while the
-            # flowsheet is still empty.
-            "editable": not (self.flowsheet is None or self.flowsheet.units),
+            # the arrays they hold, so the editor only offers it while
+            # nothing holds any. An unfinished unit does not: it is a
+            # stand-in with empty params, and naming the species is
+            # usually the very edit it is waiting for.
+            "editable": not (self.flowsheet is None or self._built()),
         }
 
     def set_species(self, names) -> dict:
@@ -297,7 +299,11 @@ class FlowsheetSession:
             seen.add(text)
             cleaned.append(text)
         with self._lock:
-            if self.flowsheet.units:
+            # Unfinished units do not count. Dropping a Mixer on an empty
+            # canvas leaves one waiting on `species_order`, and refusing
+            # here because of it would block the only edit that answers
+            # it. It holds no stream arrays to reinterpret.
+            if self._built():
                 return {
                     "ok": False,
                     "error": "the flowsheet already has units, whose stream "
@@ -915,6 +921,16 @@ class FlowsheetSession:
     def pending_units(self) -> list[dict]:
         """The unbuildable drops, as the canvas draws them."""
         return [dict(entry) for entry in self.pending.values()]
+
+    def _built(self) -> list:
+        """The units that are actually built, unfinished ones excluded.
+
+        The distinction matters wherever a guard is really about the
+        stream arrays a unit holds: an `Incomplete` stand-in holds none.
+        """
+        if self.flowsheet is None:
+            return []
+        return [u for u in self.flowsheet.units if u.name not in self.pending]
 
     def _retry_pending(self) -> dict:
         """Ask every unfinished unit again, now that the context has moved.
