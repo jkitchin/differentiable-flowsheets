@@ -82,12 +82,22 @@ from difflow.solvers._lazy import have, require  # noqa: E402
 
 HAVE_POUNCE = have("pounce.jax")
 HAVE_DISCOPT = have("discopt.modeling")
+HAVE_ASDEX = have("asdex")
 
 needs_pounce = pytest.mark.skipif(
     not HAVE_POUNCE, reason="pounce not installed (pip install pounce-solver[jax])"
 )
 needs_discopt = pytest.mark.skipif(
     not HAVE_DISCOPT, reason="discopt not installed"
+)
+# asdex publishes nothing for 3.10, so `difflow[solvers]` contributes nothing
+# there and the graph-derived pattern -- which is the default, and which these
+# tests are about -- cannot be produced at all. Skipping is honest: the
+# alternative is 30 failures that say "3.10" rather than anything about the
+# code. `test_missing_asdex_raises_instead_of_silently_going_dense` is NOT
+# marked, because that one asserts the behaviour when asdex is absent.
+needs_asdex = pytest.mark.skipif(
+    not HAVE_ASDEX, reason="asdex not installed (pip install difflow[solvers])"
 )
 
 
@@ -201,6 +211,7 @@ def central_diff(fn, x, i, h):
 # =============================================================================
 
 
+@needs_asdex
 def test_variable_and_constraint_layout():
     """x is [decisions | stream state]; g is [unit residuals | specs]."""
     _f, _g, bd = free_T_problem()
@@ -226,6 +237,7 @@ def test_variable_and_constraint_layout():
     assert np.asarray(bd.cl)[4] == 8.0
 
 
+@needs_asdex
 def test_residuals_vanish_at_the_sequential_modular_solution():
     """x0 comes from the SM solve, so the model rows start satisfied."""
     _f, g, bd = free_T_problem()
@@ -233,6 +245,7 @@ def test_residuals_vanish_at_the_sequential_modular_solution():
     assert np.max(np.abs(r)) < 1e-8
 
 
+@needs_asdex
 def test_objective_gradient_matches_central_difference():
     f, _g, bd = free_T_problem(
         objective=lambda s, d: -2.0 * s["product"]["F_B"]
@@ -246,6 +259,7 @@ def test_objective_gradient_matches_central_difference():
     assert np.allclose(ad, fd, rtol=1e-5, atol=1e-7)
 
 
+@needs_asdex
 def test_constraint_jacobian_matches_central_differences():
     _f, g, bd = free_T_problem()
     ad = np.asarray(jax.jacobian(g)(bd.x0))
@@ -256,6 +270,7 @@ def test_constraint_jacobian_matches_central_differences():
     assert np.allclose(ad, fd, rtol=1e-5, atol=1e-6)
 
 
+@needs_asdex
 def test_parameters_are_differentiable_but_are_not_columns_of_x():
     f, g, bd = as_nlp(
         make_flowsheet(),
@@ -271,6 +286,7 @@ def test_parameters_are_differentiable_but_are_not_columns_of_x():
     assert np.max(np.abs(dp)) > 0.0
 
 
+@needs_asdex
 def test_flowsheet_builder_callable_is_accepted():
     """The escape hatch for anything the address grammar cannot reach."""
     from dataclasses import replace as dc_replace
@@ -397,6 +413,7 @@ def as_mask(pattern, shape, symmetric=False):
     return mask
 
 
+@needs_asdex
 def test_the_default_pattern_is_not_dense():
     """The regression this module was rewritten for.
 
@@ -443,7 +460,12 @@ def test_objective_vars_tightens_the_topology_path():
     assert len(blind.hess_pattern[0]) == blind.n * (blind.n + 1) // 2
 
 
-@pytest.mark.parametrize("mode", ["auto", "global", "structural", "dense"])
+@pytest.mark.parametrize("mode", [
+    pytest.param("auto", marks=needs_asdex),
+    pytest.param("global", marks=needs_asdex),
+    "structural",
+    "dense",
+])
 def test_every_pattern_mode_is_a_superset_across_the_box(mode):
     """Point checks at many feasible points, not just at x0. A pattern is a
     claim about all of R^n, so a pattern that holds only at x0 is not one."""
@@ -461,6 +483,7 @@ def test_every_pattern_mode_is_a_superset_across_the_box(mode):
         assert ((np.abs(J) > 0) <= mask).all()
 
 
+@needs_asdex
 def test_the_derived_pattern_is_inside_the_topology_pattern():
     """Two independent derivations of the same object: the graph analysis must
     land inside the connectivity superset, and strictly inside it."""
@@ -475,6 +498,7 @@ def test_the_derived_pattern_is_inside_the_topology_pattern():
     assert fine.sum() < broad.sum()
 
 
+@needs_asdex
 def test_hessian_pattern_grows_linearly_with_the_flowsheet():
     """Why dense fails 'all the time': the dense triangle is O(n^2) and n grows
     with the flowsheet, so the Hessian colouring cost grows with the square of
@@ -506,6 +530,7 @@ def test_dense_patterns_are_supersets_by_definition():
     assert len(hr) == 10 and np.all(hr >= hc)
 
 
+@needs_asdex
 def test_detect_patterns_reads_a_hand_built_model_exactly():
     """Not every caller has a flowsheet. On a model whose structure is
     obvious, the derived pattern is the true one -- no slack at all."""
@@ -523,6 +548,7 @@ def test_detect_patterns_reads_a_hand_built_model_exactly():
     assert set(zip(hess[0].tolist(), hess[1].tolist())) == {(0, 0), (1, 0), (2, 0)}
 
 
+@needs_asdex
 def test_detection_is_used_for_both_patterns_of_the_flowsheet():
     """The Jacobian and the Hessian come from the same analysis, and the
     Hessian one is taken over *all* multipliers -- it is built by tracing
@@ -581,6 +607,7 @@ def test_unknown_sparsity_mode_is_refused_with_the_choices():
         free_T_problem(sparsity="sparse")
 
 
+@needs_asdex
 def test_validate_patterns_catches_a_missing_entry():
     """The check pounce does not do. A missing entry is otherwise silent."""
     _f, g, bd = free_T_problem()
@@ -589,6 +616,7 @@ def test_validate_patterns_catches_a_missing_entry():
         validate_patterns(g, bd.x0, (rows[1:], cols[1:]), bd.m, bd.n)
 
 
+@needs_asdex
 def test_validate_patterns_accepts_the_derived_pattern():
     f, g, bd = free_T_problem(validate=False)
     validate_patterns(
@@ -596,6 +624,7 @@ def test_validate_patterns_accepts_the_derived_pattern():
     )
 
 
+@needs_asdex
 def test_sampled_validation_is_column_exact():
     """Above the dense limit the check samples columns instead of skipping.
     Each sample is a JVP against a basis vector, which is exactly that column
@@ -627,6 +656,7 @@ def test_sampled_validation_is_column_exact():
         )
 
 
+@needs_asdex
 def test_hessian_pattern_covers_the_lagrangian():
     """With RANDOM multipliers. At lambda = 1 the CSTR's two material balances
     cancel their shared reaction term exactly (the stoichiometric column sums to
@@ -650,6 +680,7 @@ def test_hessian_pattern_covers_the_lagrangian():
     assert (seen <= hmask).all()
 
 
+@needs_asdex
 def test_validate_patterns_catches_a_missing_hessian_entry():
     """The all-ones cancellation must not let a bad Hessian pattern through."""
     f, g, bd = free_T_problem()
@@ -670,6 +701,7 @@ def test_pattern_density_is_the_fraction_of_dense():
 # =============================================================================
 
 
+@needs_asdex
 def test_the_model_is_undefined_at_the_points_pounce_probes():
     """N(0, 1) means T ~ -1.3 K. Arrhenius overflows; the Jacobian is nan/inf."""
     _f, g, bd = free_T_problem()
@@ -682,6 +714,7 @@ def test_the_model_is_undefined_at_the_points_pounce_probes():
 
 
 @needs_pounce
+@needs_asdex
 def test_probing_drops_real_entries_of_the_jacobian():
     """`nan > eps` is False, so a nan derivative is recorded as a structural
     zero. The probe loses the whole reactor-volume column -- the one column the
@@ -707,6 +740,7 @@ def test_probing_drops_real_entries_of_the_jacobian():
 
 
 @needs_pounce
+@needs_asdex
 def test_probed_pattern_breaks_the_solve_that_the_adapter_completes():
     """Same f, g, bounds and start; only the pattern differs."""
     pj = require("pounce.jax")
@@ -729,6 +763,7 @@ def test_probed_pattern_breaks_the_solve_that_the_adapter_completes():
 
 
 @needs_pounce
+@needs_asdex
 def test_the_adapter_never_reaches_pounce_without_a_pattern(monkeypatch):
     """A pattern always, never None -- there is no probing code path."""
     pj = require("pounce.jax")
@@ -762,6 +797,7 @@ def test_the_adapter_never_reaches_pounce_without_a_pattern(monkeypatch):
 
 
 @needs_pounce
+@needs_asdex
 def test_solve_reaches_the_analytic_optimum_at_fixed_temperature():
     f, g, bd = fixed_T_problem(bound=8.0, T=350.0)
     x, info = solve_with_pounce(f, g, bd, options={"tol": 1e-10})
@@ -770,6 +806,7 @@ def test_solve_reaches_the_analytic_optimum_at_fixed_temperature():
 
 
 @needs_pounce
+@needs_asdex
 def test_optimum_is_a_converged_flowsheet():
     """A feasible point of the NLP satisfies the model equations by
     construction, and the product flows match the closed form."""
@@ -795,6 +832,7 @@ def test_optimum_is_a_converged_flowsheet():
 
 
 @needs_pounce
+@needs_asdex
 def test_sparse_colored_ad_gives_the_same_answer_as_dense():
     f, g, bd = fixed_T_problem()
     x_dense, _ = solve_with_pounce(f, g, bd, sparse=False, options={"tol": 1e-10})
@@ -803,6 +841,7 @@ def test_sparse_colored_ad_gives_the_same_answer_as_dense():
 
 
 @needs_pounce
+@needs_asdex
 def test_mult_g_is_d_objective_d_bound_for_a_ge_spec():
     """The post-optimal sensitivity, against a central difference on the bound."""
     def obj_at(bound):
@@ -821,6 +860,7 @@ def test_mult_g_is_d_objective_d_bound_for_a_ge_spec():
 
 
 @needs_pounce
+@needs_asdex
 def test_mult_g_is_d_objective_d_bound_for_a_le_spec():
     """Same convention in the other direction; no per-constraint sign logic."""
     def obj_at(bound):
@@ -845,6 +885,7 @@ def test_mult_g_is_d_objective_d_bound_for_a_le_spec():
 
 
 @needs_pounce
+@needs_asdex
 def test_inactive_constraint_has_zero_sensitivity():
     f, g, bd = fixed_T_problem(bound=1.0)  # trivially met
     _x, info = solve_with_pounce(f, g, bd, options={"tol": 1e-10})
@@ -866,6 +907,7 @@ def test_inactive_constraint_has_zero_sensitivity():
 
 
 @needs_pounce
+@needs_asdex
 def test_differentiable_problem_backward_matches_a_finite_difference():
     """pounce.jax.solve has no pattern arguments and would probe, so the
     differentiable entry point is JaxProblem. d(optimal volume)/d(T_spec)."""
@@ -1164,6 +1206,7 @@ def test_have_reports_installed_backends():
     assert _lazy.have("difflow_no_such_module") is False
 
 
+@needs_asdex
 def test_unpack_reports_feed_decisions_at_their_optimized_values():
     """#207 review: `Bounds.feeds` is frozen at the reference flowsheet.
 

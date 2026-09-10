@@ -20,6 +20,7 @@ parts:
       - file: docs/experiment-design
       - file: docs/data-reconciliation
       - file: docs/planning
+      - file: docs/pims-integration
       - file: docs/operability
       - file: docs/flexibility
       - file: docs/streams-and-flowsheets
