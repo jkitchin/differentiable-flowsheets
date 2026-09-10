@@ -136,6 +136,12 @@ def _heading_rank(heading: str, word: re.Pattern) -> int | None:
 
 def _resolve(operation: str, sections: list[dict]) -> DocLink | None:
     """The best link for *operation* over already-loaded sections."""
+    # An empty name is not a unit that happens to be undocumented, it is
+    # a caller with nothing to ask about --- and it must be rejected
+    # here rather than left to match: `\b\b` matches at every position,
+    # so every heading in the book would rank as naming it.
+    if not operation.strip():
+        return None
     word = re.compile(rf"\b{re.escape(operation)}\b")
     label = target_name(operation)
     bare = operation.lower()

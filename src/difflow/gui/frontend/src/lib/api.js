@@ -79,14 +79,22 @@ async function request(path, init) {
 
 export const get = (path) => request(path)
 
-/** POST / PATCH / DELETE, all of which carry a JSON body here. */
-export const send = (method, path, payload) =>
+/**
+ * POST / PATCH / DELETE, all of which carry a JSON body here.
+ *
+ * `extra` is merged into the `fetch` init. The one caller that needs it
+ * passes `{keepalive: true}`, for the farewell the page sends as it
+ * unloads: without it the request is cancelled along with the document
+ * and the server never hears that the tab has gone.
+ */
+export const send = (method, path, payload, extra) =>
   request(path, {
     method,
     headers: { 'Content-Type': 'application/json', 'X-Difflow-Token': TOKEN },
     body: JSON.stringify(safe(payload ?? {})),
+    ...extra,
   })
 
-export const post = (path, payload) => send('POST', path, payload)
+export const post = (path, payload, extra) => send('POST', path, payload, extra)
 export const patch = (path, payload) => send('PATCH', path, payload)
 export const del = (path, payload) => send('DELETE', path, payload)

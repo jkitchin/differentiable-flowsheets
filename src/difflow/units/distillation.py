@@ -89,6 +89,66 @@ def _mixture_molar_enthalpy(
     return thermo.stream_enthalpy(flows, T, phase=phase, P=jnp.asarray(P))
 
 
+def _feed_molar_enthalpy(
+    thermo: "IdealThermo | CubicThermo",
+    species_order: list[str],
+    z: Array,
+    T_feed: Array,
+    q: Array,
+    P: Array,
+) -> Array:
+    r"""Molar enthalpy (J/mol) of a feed of thermal condition ``q``.
+
+    ``q`` is the liquid fraction of the feed, and it means the same thing in
+    the energy balance as it does in the section flows: the feed arrives as
+    ``q`` moles of liquid and ``1 - q`` moles of vapour, both at the feed
+    stream's own temperature, so
+
+    .. math::
+
+        h_F = q\, h^L(z, T_F) + (1 - q)\, H^V(z, T_F)
+
+    A saturated-vapour feed (``q = 0``) therefore carries its latent heat in
+    with it, and the reboiler is not charged for it; at ``q = 1`` this is the
+    plain liquid enthalpy.
+
+    Args:
+        thermo: Thermodynamic property calculator.
+        species_order: Species names, in the order ``z`` is given.
+        z: (nc,) feed mole fractions.
+        T_feed: Feed temperature (K).
+        q: Feed thermal condition, the liquid fraction of the feed
+            (1 = saturated liquid, 0 = saturated vapour). Outside [0, 1] it is
+            clamped for the mixture here, and only here -- see below.
+        P: Pressure (Pa).
+
+    Returns:
+        Feed molar enthalpy (J/mol).
+
+    Note:
+        A subcooled feed is ``q > 1`` and a superheated one ``q < 0``, and
+        both are ordinary things to model: on the CMO path ``q`` is the *only*
+        place either can be said, since ``_cmo_section_rates`` is the whole
+        model there and ``T_feed`` never reaches it.
+
+        What must not happen is extrapolating this mixture past the two-phase
+        range. Both enthalpies are already evaluated at the feed's own
+        temperature, so at ``q = 1.3`` the honest answer is
+        ``h_liquid(z, T_feed)`` -- an all-liquid feed, below its bubble point,
+        with the subcooling carried by ``T_feed`` itself. Forming
+        ``1.3 h_liq - 0.3 H_vap`` would subtract three tenths of a latent heat
+        that is not there and count the departure from saturation twice.
+
+        So the clamp is the physics, not a guard: it is confined to the
+        enthalpy, and the section flows and Underwood's equation read the raw
+        ``q``, which is what makes a subcooled feed expressible at all.
+    """
+    h_liq = _mixture_molar_enthalpy(thermo, species_order, z, T_feed, 'liquid', P)
+    H_vap = _mixture_molar_enthalpy(thermo, species_order, z, T_feed, 'vapor', P)
+    q = jnp.clip(jnp.asarray(q), 0.0, 1.0)
+    return q * h_liq + (1.0 - q) * H_vap
+
+
 def _bubble_T(
     thermo: "IdealThermo | CubicThermo",
     x: Array,
@@ -711,7 +771,14 @@ class ShortcutColumn:
             feed: Feed stream
             R: Reflux ratio (L/D)
             P: Column pressure (Pa)
-            q: Feed quality (1 = saturated liquid)
+            q: Feed thermal condition: the liquid fraction of the feed
+                (1 = saturated liquid, 0 = saturated vapour). It enters
+                Underwood's equation and the feed enthalpy the duties come
+                from. ``q > 1`` (subcooled) and ``q < 0`` (superheated) are
+                allowed and reach Underwood as written; the feed enthalpy
+                clamps them to [0, 1], because the subcooling is already in
+                ``T_feed`` and mixing past the range would count it twice
+                (see :func:`_feed_molar_enthalpy`).
 
         Returns:
             distillate: Distillate stream, at the condenser temperature --
@@ -835,8 +902,12 @@ class ShortcutColumn:
         # Hengstebeck-Geddes distribution produces.
         H_vapor_top = h_mix(x_D_arr, T_top, 'vapor')
 
-        # Feed enthalpy
-        h_F = h_mix(z_arr, T_feed, 'liquid')
+        # Feed enthalpy at the feed's thermal condition: q moles of liquid
+        # and (1 - q) of vapour, both at the feed temperature. The same q that
+        # Underwood's equation above uses, read the same way.
+        h_F = _feed_molar_enthalpy(
+            self.thermo, p.species_order, z_arr, T_feed, q, P
+        )
 
         # Distillate liquid enthalpy (total condenser: saturated liquid)
         h_D = h_mix(x_D_arr, T_top, 'liquid')
@@ -1042,12 +1113,20 @@ class DistillationColumnParams(ParamsMixin):
             'partial' is rejected rather than silently treated as total.
         P: Column pressure (Pa). One pressure for the whole column -- there is
             no tray pressure drop.
-        q: Feed thermal condition (1.0 = saturated liquid, 0.0 = saturated
-            vapor). It sets the section flows above. On the CMO path
-            (``use_mesh=False``) that determines the answer; with
-            ``use_mesh=True`` it only sets the initial L/V profile, because
-            the MESH energy balance brings the feed in as a saturated liquid
-            whatever ``q`` says.
+        q: Feed thermal condition: the liquid fraction of the feed
+            (1.0 = saturated liquid, 0.0 = saturated vapor). It sets the
+            section flows above on both solver paths, and it is also what the
+            energy balance forms the feed enthalpy from,
+            ``q h_liquid(z, T_feed) + (1 - q) H_vapor(z, T_feed)``, so on the
+            MESH path (``use_mesh=True``) the converged flows and duties
+            follow it too -- a saturated-vapour feed arrives with its latent
+            heat and does not charge the reboiler for it. ``q > 1`` is a
+            subcooled feed and ``q < 0`` a superheated one; both are allowed,
+            and on the CMO path ``q`` is the only place either can be said,
+            since ``T_feed`` does not reach the section flows. The feed
+            enthalpy clamps the mixture to [0, 1] --- the departure from
+            saturation is carried by ``T_feed`` and must not be counted a
+            second time (see :func:`_feed_molar_enthalpy`).
     """
     species_order: list[str]
     n_stages: int
@@ -1481,6 +1560,32 @@ class DistillationColumn:
             self.thermo, p.species_order, mole_fracs, T, phase, jnp.asarray(p.P)
         )
 
+    def _feed_enthalpy(
+        self,
+        z: Array,
+        T_feed: Array,
+    ) -> Array:
+        """Molar enthalpy (J/mol) of the feed at this column's ``q``.
+
+        A thin wrapper on :func:`_feed_molar_enthalpy`, bound to this column's
+        species order, pressure and feed thermal condition. Every energy
+        balance that sees the feed -- the MESH stage sweep and the overall
+        balance the duties come from -- goes through here, so ``q`` cannot
+        mean one thing in one of them and something else in the other.
+
+        Args:
+            z: (nc,) feed mole fractions, in species order.
+            T_feed: Feed temperature (K).
+
+        Returns:
+            Feed molar enthalpy (J/mol).
+        """
+        p = self.params
+        return _feed_molar_enthalpy(
+            self.thermo, p.species_order, z, T_feed,
+            jnp.asarray(p.q), jnp.asarray(p.P),
+        )
+
     def _compute_stage_enthalpies(
         self,
         x: Array,
@@ -1539,6 +1644,9 @@ class DistillationColumn:
 
         For reboiler (from overall energy balance):
             Q_reb = D * h_D + B * h_B - F * h_F + Q_cond
+            where h_F is the feed at the column's thermal condition
+            ``params.q`` (see :meth:`_feed_enthalpy`), so a vaporised feed
+            brings its own latent heat and the reboiler is not charged for it.
 
         Args:
             x_profile: (n, nc) liquid mole fractions
@@ -1592,9 +1700,9 @@ class DistillationColumn:
         # Q_cond = V_top * (h_D - H_vapor_top) < 0 (heat removed)
         Q_condenser = V_top_flow * (h_D - H_vapor_top)
 
-        # Feed enthalpy (saturated liquid, q=1)
+        # Feed enthalpy at the column's thermal condition p.q
         z_arr = jnp.array([z[s] for s in p.species_order])
-        h_F = self._molar_enthalpy(z_arr, jnp.asarray(T_feed), 'liquid')
+        h_F = self._feed_enthalpy(z_arr, jnp.asarray(T_feed))
 
         # Bottoms enthalpy (liquid at bottom T)
         h_B = h_liquid_bot
@@ -1690,10 +1798,11 @@ class DistillationColumn:
             # 6. Energy balance update to obtain L/V profiles
             h_all, H_all = self._compute_stage_enthalpies(x_new, y_new, T_new)
 
-            # Feed enthalpy, taken as a saturated liquid whatever p.q says:
-            # q reaches this solver only through the L/V warm start above.
-            # See DistillationColumnParams.q.
-            h_F = self._molar_enthalpy(z, jnp.asarray(T_feed), 'liquid')
+            # Feed enthalpy at the column's thermal condition: q moles of
+            # liquid and (1 - q) of vapour, both at the feed temperature. A
+            # saturated-vapour feed brings its latent heat in with it, so the
+            # reboiler is not charged for it.
+            h_F = self._feed_enthalpy(z, jnp.asarray(T_feed))
 
             # Reflux enthalpy. A total condenser returns saturated liquid of
             # the distillate's composition at the condenser temperature, which

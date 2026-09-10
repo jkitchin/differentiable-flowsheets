@@ -12,6 +12,7 @@
   import { del, get, patch, post, send } from './lib/api.js'
   import { inferKind } from './lib/model/assistant.js'
   import { movedPositions } from './lib/model/edit.js'
+  import { keepAlive } from './lib/model/lifetime.js'
   import { flowLabels, flowTints } from './lib/model/results.js'
 
   let doc = $state(null)
@@ -48,6 +49,17 @@
   // either answer.
   let portLabels = $state(remember('difflow:portLabels', false))
   let dark = $state(remember('difflow:dark', false))
+  // Where the project lives, asked of the server rather than built into
+  // the bundle: the URLs are in `pyproject.toml` and should be in one
+  // place. Empty until the answer arrives, which is why the links are
+  // rendered conditionally rather than with a placeholder href.
+  let about = $state({ version: '', links: {}, heartbeat: 15 })
+  // The Quit button arms on the first click and fires on the second.
+  // A single click that ends the process is the wrong shape for a
+  // button that sits beside Save.
+  let quitArmed = $state(false)
+  let stopped = $state(false)
+  let armedTimer = null
 
   /** A remembered preference, or the default if there is nothing to read. */
   function remember(key, fallback) {
@@ -115,6 +127,59 @@
     loadPickers(),
     get('/api/catalog').then((c) => (catalog = c)),
   ]).catch((e) => (error = String(e)))
+
+  /**
+   * Telling the server this tab is open, so that closing it stops it.
+   *
+   * Started at the default interval straight away rather than waiting
+   * for `/api/about` to say what the interval should be: the window
+   * between the two is exactly when a page that failed to load would
+   * otherwise look, to the server, like a tab that was never opened.
+   */
+  let alive = keepAlive({ post })
+  alive.start()
+
+  // Not in the `Promise.all` above: a failure here is a header without
+  // links, which is a smaller thing than a flowsheet that would not
+  // load, and it must not be reported as the latter.
+  get('/api/about')
+    .then((a) => {
+      about = a
+      // Re-pitched to whatever the server says its grace is built
+      // around. One agreement, and the server is the half that holds it.
+      alive.stop()
+      alive = keepAlive({ post, client: alive.client, interval: a.heartbeat ?? 15 })
+      alive.start()
+    })
+    .catch(() => {})
+
+  /**
+   * Stop the editor.
+   *
+   * Two clicks, because this ends a process and it sits in a row of
+   * buttons that do not. The armed state lapses after a few seconds so
+   * a stray first click does not leave a live trigger in the header.
+   */
+  async function quit() {
+    if (!quitArmed) {
+      quitArmed = true
+      clearTimeout(armedTimer)
+      armedTimer = setTimeout(() => (quitArmed = false), 4000)
+      return
+    }
+    clearTimeout(armedTimer)
+    quitArmed = false
+    alive.stop()
+    // The server answers before it stops, so a thrown request here is
+    // a real failure rather than the expected dropped connection. It is
+    // still not worth a red banner: the page is about to say it has
+    // stopped either way, and if the server is already gone that
+    // statement is true.
+    try {
+      await post('/api/quit')
+    } catch { /* already gone, which is the outcome asked for */ }
+    stopped = true
+  }
 
   /**
    * Run one edit, then redraw from what the server says.
@@ -278,10 +343,15 @@
   )
 </script>
 
-<svelte:window onkeydown={hotkey} />
+<svelte:window
+  onkeydown={hotkey}
+  onpagehide={(e) => alive.farewell({ persisted: e.persisted })}
+  onpageshow={() => { if (!stopped) alive.ping() }}
+/>
 
 <header>
   <h1>difflow</h1>
+  {#if about.version}<span class="version">{about.version}</span>{/if}
   <span class="path">{path || 'no file'}</span>
   <Species {species} editable={speciesEditable} {busy} onapply={setSpecies} />
   <span class="summary">{summary}</span>
@@ -302,8 +372,37 @@
   <Export {path} document={doc} disabled={busy || !doc}
           onerror={(why) => (note = why)} />
   <button onclick={() => edit(load)} disabled={busy}>Reload</button>
+  <!-- Ends the process, so it is set apart from the buttons that do
+       not, and it asks twice. -->
+  <button class="quit" class:armed={quitArmed} onclick={quit}
+          title={quitArmed
+            ? 'click again to stop the editor and free the port'
+            : 'stop the editor (closing this tab does the same)'}>
+    {quitArmed ? 'Really quit?' : 'Quit'}
+  </button>
+  <span class="rule"></span>
+  {#if about.links?.documentation}
+    <a class="out" href={about.links.documentation} target="_blank"
+       rel="noopener noreferrer" title="the difflow documentation">Docs</a>
+  {/if}
+  {#if about.links?.repository}
+    <a class="out" href={about.links.repository} target="_blank"
+       rel="noopener noreferrer" title="the source on GitHub">GitHub</a>
+  {/if}
   <a class="classic" href="/classic">classic editor</a>
 </header>
+
+{#if stopped}
+  <!-- The server is gone, so nothing on the page can work any more.
+       Said plainly rather than left to fail one request at a time. -->
+  <div class="stopped" role="status">
+    <h2>The editor has stopped.</h2>
+    <p>
+      Port is free. Close this tab; run <code>difflow gui{path ? ` ${path}` : ''}</code>
+      to start it again.
+    </p>
+  </div>
+{/if}
 
 <main>
   <Palette {catalog} ondrop={(op) => add(op, null)} />
@@ -406,10 +505,10 @@
     background: var(--panel);
   }
   h1 { font-size: 0.95rem; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
-  .path, .summary { color: var(--ink-soft); font-size: 0.8rem; }
+  .path, .summary, .version { color: var(--ink-soft); font-size: 0.8rem; }
+  .version { font-variant-numeric: tabular-nums; opacity: 0.75; }
   .note { color: var(--accent); font-size: 0.8rem; }
   .spacer { flex: 1; }
-  .classic { font-size: 0.78rem; }
   /* One-letter switches, sized so they do not read as actions. */
   .toggle {
     padding: 0.2rem 0.45rem;
@@ -418,6 +517,37 @@
     color: var(--ink-soft);
   }
   .toggle.on { color: var(--surface); background: var(--series); border-color: var(--series); }
+  /* Quit is the only button here that ends the process. Ordinary until
+     it is armed, then unmistakable. */
+  .quit.armed {
+    color: var(--surface);
+    background: var(--bad);
+    border-color: var(--bad);
+  }
+  .rule {
+    width: 1px;
+    align-self: stretch;
+    margin: 0 0.1rem;
+    background: var(--grid);
+  }
+  .out, .classic { font-size: 0.78rem; }
+  /* Covers the editor rather than sitting above it: every control
+     behind this is talking to a server that is no longer there. */
+  .stopped {
+    position: fixed;
+    inset: 0;
+    z-index: 50;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    text-align: center;
+    background: var(--surface);
+    color: var(--ink-soft);
+  }
+  .stopped h2 { margin: 0; font-size: 1rem; color: var(--ink); }
+  .stopped p { margin: 0; font-size: 0.85rem; }
   main { display: flex; flex: 1; min-height: 0; }
   .stage { flex: 1; min-width: 0; }
   .error, .empty { padding: 1.5rem; color: var(--ink-soft); }

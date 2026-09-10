@@ -899,10 +899,32 @@ horizontal cut a stream crosses has the feed above it. `_is_rectifying_cut` and
 definition, and `_cmo_flows` — the only thing that builds an L/V profile — is a
 thin wrapper over them, so both solver paths read the same boundary.
 
-`q` sets those rates on both paths. On the MESH path it reaches the solver only
-through the initial profile — the energy balance brings the feed in as a
-saturated liquid whatever `q` says — so `use_mesh=True` with `q != 1` moves the
-starting point rather than the converged result.
+`q` sets those rates on both paths, and it is also the feed's thermal condition
+in the energy balance:
+
+$$h_F = q\, h^L(z, T_F) + (1 - q)\, H^V(z, T_F)$$
+
+both phase enthalpies at the feed stream's own temperature. So a
+saturated-vapour feed arrives with its latent heat already in it and the
+reboiler is not charged for it: going from `q = 1` to `q = 0` drops
+`Q_reboiler` by `F (H^V - h^L)` at the feed temperature (2.4 MW on a 100 mol/s
+equimolar benzene/toluene feed at 380 K), and moves the ~`F` step in the
+converged profile from `L` to `V` across the feed stage. The shortcut column
+forms its feed enthalpy the same way, from the `q` passed to the call.
+
+`q` outside `[0, 1]` is allowed, and means what a textbook means by it: `q > 1`
+is a subcooled feed, `q < 0` a superheated one. It has to be allowed, because
+on the CMO path (`use_mesh=False`) `q` is the *only* place either can be said —
+`_cmo_section_rates` is the whole model there, and `T_feed` never reaches it.
+`L_strip = L_rect + q F` with `q > 1` is exactly how the extra internal reflux
+of a subcooled feed is written. Underwood's equation takes it as written too.
+
+The one place it is clamped is the **feed enthalpy**, and that clamp is the
+physics rather than a guard. Both phase enthalpies are evaluated at the feed's
+own temperature, so at `q = 1.3` the honest answer is `h_liquid(z, T_feed)`: an
+all-liquid feed below its bubble point, with the subcooling carried by
+`T_feed`. Forming `1.3 h^L - 0.3 H^V` would subtract three tenths of a latent
+heat that is not there, and count the departure from saturation twice.
 
 `condenser_type='partial'` raises `NotImplementedError` rather than being
 silently solved as a total condenser.

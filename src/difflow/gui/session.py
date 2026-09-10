@@ -461,6 +461,11 @@ class FlowsheetSession:
                 entry["buildable"] = not needs
             else:
                 entry["needs"] = [] if entry.get("buildable") else ["code"]
+            # Where the book discusses this unit, or None when it does
+            # not discuss it at all. Carried on the catalog rather than
+            # asked for per unit, because the palette wants all 87 at
+            # once and the whole map costs one pass over the index.
+            entry["docs_url"] = doclinks.url_for(name)
             out[name] = entry
         return out
 
@@ -502,11 +507,12 @@ class FlowsheetSession:
 
         Returns:
             ``{"ok": True, "operation": ..., "html": ..., "format": ...,
-            "symbol", "equations", "assumptions", "references",
-            "numerical_method"}``, or ``{"ok": False, "error": ...}``
+            "symbol", "docs_url", "equations", "assumptions",
+            "references", "numerical_method"}``, or ``{"ok": False, "error": ...}``
             for a name nothing is registered under.
         """
         from difflow.catalog import describe_operation
+        from difflow.gui import doclinks
         from difflow.gui import docs as docs_module
 
         try:
@@ -517,6 +523,9 @@ class FlowsheetSession:
         return {
             "ok": True,
             "operation": spec.name,
+            # The docstring rendered below says what the arguments are;
+            # this is where the book says what the unit is for.
+            "docs_url": doclinks.url_for(spec.name),
             "symbol": spec.symbol,
             "description": spec.description,
             "html": html,
@@ -898,6 +907,43 @@ class FlowsheetSession:
 
         return self._edit(
             lambda: edit.disconnect(self.flowsheet, source, outlet, target, inlet)
+        )
+
+    def _ports(self, name: str) -> dict:
+        """The port spec of the class behind an existing unit."""
+        from difflow.catalog import describe_class
+        from difflow.gui import edit
+
+        return describe_class(type(edit.unit(self.flowsheet, name).operation)) \
+            .to_dict()["ports"]
+
+    def rename_stream(self, old: str, new: str) -> dict:
+        """Rename one stream everywhere it appears.
+
+        A stream name is the wiring, so this moves feeds, recycle ends,
+        every port that reads or writes it and the canvas node all at
+        once. Refused if the new name is taken, because that would be a
+        connection wearing a rename's clothes.
+        """
+        from difflow.gui import edit
+
+        return self._edit(lambda: edit.rename(self.flowsheet, old, new))
+
+    def add_inlet(self, name: str) -> dict:
+        """One more inlet on a variadic unit, arriving unwired."""
+        from difflow.gui import edit
+
+        return self._edit(
+            lambda: edit.add_inlet(self.flowsheet, name, self._ports(name))
+        )
+
+    def remove_inlet(self, name: str, stream: str) -> dict:
+        """Take an inlet off a variadic unit, if nothing is on it."""
+        from difflow.gui import edit
+
+        return self._edit(
+            lambda: edit.remove_inlet(self.flowsheet, name, stream,
+                                      self._ports(name))
         )
 
     def set_layout(self, nodes: dict) -> dict:
