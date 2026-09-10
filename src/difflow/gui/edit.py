@@ -218,6 +218,53 @@ def _is_number(annotation) -> bool:
     return "float" in text or "int" in text
 
 
+def placeholder_extras(cls: type, have: dict) -> tuple[dict, list[str]]:
+    """Constructor arguments that are plain numbers, given a placeholder.
+
+    The same bargain :func:`known_params` already strikes for a required
+    ``Params`` field, applied to the other half of the constructor. A
+    unit that builds its own ``Params`` from plain arguments ---
+    ``GasPipe(beta)``, ``CompressorBoost(ratio, direction)`` --- was
+    reported unmet for a plain ``float``, while an identical field one
+    line away in a ``Params`` got :data:`PLACEHOLDER` and dropped fine.
+    Nothing chose that; the placeholder path simply only ran on one of
+    the two.
+
+    ``have`` is everything already supplied, and it must include what
+    :func:`known_params` answered as well as the caller's own extras.
+    Where :func:`difflow.catalog._params_class` does find the ``Params``
+    --- ``Compressor`` and ``CompressorParams`` are named for each other,
+    ``GasPipe`` and ``PipeParams`` are not --- the number is answered
+    there and is not this function's to invent a second time.
+
+    Only annotations :func:`_is_number` admits, so a ``thermo`` or a
+    ``tuple[float, ...]`` is still named rather than invented. An
+    ``int``-only argument gets an ``int``, since a discrete one --- a
+    ``direction`` of 1 --- is the whole value of the annotation.
+
+    Returns ``(values, placeholders)``, and like ``known_params`` the
+    second list is what has to be shown to the user rather than trusted.
+    """
+    import inspect
+
+    try:
+        sig = inspect.signature(cls.__init__)
+    except (TypeError, ValueError):
+        return {}, []
+    values, placeholders = {}, []
+    for arg in constructor_extras(cls):
+        if arg in have:
+            continue
+        annotation = sig.parameters[arg].annotation
+        if not _is_number(annotation):
+            continue
+        text = str(annotation)
+        values[arg] = (int(PLACEHOLDER) if "int" in text and "float" not in text
+                       else PLACEHOLDER)
+        placeholders.append(arg)
+    return values, placeholders
+
+
 def known_params(flowsheet, params_cls, bindings: dict | None = None):
     """Values for the ``Params`` fields that have no default.
 
@@ -298,8 +345,17 @@ def unmet(flowsheet, cls: type, bindings: dict | None = None) -> list[str]:
     from difflow.catalog import _params_class
 
     have = known_extras(flowsheet, cls, bindings)
-    needs = [a for a in constructor_extras(cls) if a not in have]
-    _, _, missing = known_params(flowsheet, _params_class(cls), bindings)
+    values, _, missing = known_params(flowsheet, _params_class(cls), bindings)
+    # A unit that builds its own `Params` names the same number twice:
+    # once as a constructor argument and once as the field it goes into.
+    # `known_params` has already answered for the field, placeholder and
+    # all, so asking again under the argument's name reports a need that
+    # is met. What it cannot reach --- a `PipeParams` behind a `GasPipe`,
+    # which is not found by name -- is what the placeholder is for.
+    supplied = {**values, **have}
+    guessed, _ = placeholder_extras(cls, supplied)
+    needs = [a for a in constructor_extras(cls)
+             if a not in supplied and a not in guessed]
     return needs + missing
 
 

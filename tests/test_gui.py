@@ -775,6 +775,122 @@ class TestWhatBlocksADrop:
         assert client.post("/api/unit", {"operation": "AmineAbsorber"})[1]["ok"]
 
 
+class TestANumberInTheConstructor:
+    """A required number is a placeholder wherever the unit keeps it.
+
+    ``known_params`` has always invented :data:`~difflow.gui.edit.PLACEHOLDER`
+    for a required ``Params`` field with no default, so a ``CSTR`` drops
+    with ``V = 1.0`` flagged for the user to correct. A unit that builds
+    its own ``Params`` from plain arguments --- ``GasPipe(beta)``,
+    ``Compressor(ratio)`` --- names an identical ``float`` one line away
+    and was refused outright. Nothing chose that asymmetry; the
+    placeholder path simply only ran down one of the two.
+
+    What must not follow from fixing it: inventing an *object*, or
+    handing the constructor the same number twice.
+    """
+
+    @pytest.fixture
+    def catalog(self, client):
+        return client.get_json("/api/catalog")[1]
+
+    def test_a_plain_float_argument_no_longer_blocks_the_drop(self, client, catalog):
+        """`GasPipe(beta)` keeps its number outside any Params difflow can find."""
+        if "GasPipe" not in catalog:
+            pytest.skip("difflow_gas not registered")
+        assert catalog["GasPipe"]["needs"] == []
+        status, added = client.post("/api/unit", {"operation": "GasPipe"})
+        assert status == 200 and added["ok"], added.get("error")
+        assert added["placeholders"] == ["beta"], (
+            "an invented number has to be flagged, exactly like a Params field"
+        )
+
+    def test_a_number_named_twice_is_supplied_once(self, client, catalog):
+        """`Compressor(ratio)` feeds `CompressorParams.ratio`.
+
+        The constructor argument and the field are one number. Answering
+        for it in both places hands the builder two values for `ratio`
+        and the drop dies in the file-loading path.
+        """
+        if "Compressor" not in catalog:
+            pytest.skip("difflow_gas not registered")
+        assert catalog["Compressor"]["needs"] == []
+        status, added = client.post("/api/unit", {"operation": "Compressor"})
+        assert status == 200 and added["ok"], added.get("error")
+        assert added["placeholders"] == ["ratio"], "named once, not twice"
+
+    def test_an_int_argument_gets_an_int(self, client, catalog):
+        """`direction` is +1 or -1; a `direction` of 1.0 is a different claim."""
+        if "CompressorBoost" not in catalog:
+            pytest.skip("difflow_gas not registered")
+        status, added = client.post("/api/unit", {"operation": "CompressorBoost"})
+        assert status == 200 and added["ok"], added.get("error")
+        name = added["name"]
+        _, doc = client.get_json("/api/flowsheet")
+        unit = next(u for u in doc["flowsheet"]["units"] if u["name"] == name)
+        assert unit["constructor"]["direction"] == 1
+        assert not isinstance(unit["constructor"]["direction"], float)
+
+    def test_a_tuple_of_numbers_is_still_refused(self, client, catalog):
+        """`AffineFlow(signs)` has a length nothing here knows."""
+        if "AffineFlow" not in catalog:
+            pytest.skip("difflow_gas not registered")
+        assert catalog["AffineFlow"]["needs"] == ["signs"], (
+            "`const`, `T_k` and `P_pa` are plain numbers; `signs` is not"
+        )
+
+    def test_a_non_numeric_argument_is_still_refused(self, client, catalog):
+        """The line held: only `_is_number` annotations get a value.
+
+        A `thermo` is an object and a `solvent` is a name; neither has a
+        plausible 1.0. `Mixer(species_order)` is deliberately absent from
+        this list --- the flowsheet already knows its species order, so
+        that one is answered rather than guessed.
+        """
+        assert catalog["Flash"]["needs"] == ["thermo"]
+        if "GroupSeparator" in catalog:
+            assert catalog["GroupSeparator"]["needs"] == ["elements"]
+        if "LLEEquilibrium" in catalog:
+            assert catalog["LLEEquilibrium"]["needs"] == [
+                "solutes", "aqueous_carrier", "organic_carrier",
+            ]
+
+    def test_a_real_binding_outranks_the_placeholder(self, client, catalog):
+        """A number the code context supplies must not be shadowed."""
+        if "GasPipe" not in catalog:
+            pytest.skip("difflow_gas not registered")
+        client.post("/api/code-context", {"source": "beta = 12.5\n"})
+        status, added = client.post("/api/unit", {"operation": "GasPipe"})
+        assert status == 200 and added["ok"], added.get("error")
+        assert "beta" not in added["placeholders"], (
+            "a bound value is known, not guessed"
+        )
+
+    def test_everything_droppable_saves_and_loads_back(self, client, catalog):
+        """The drop must not build a flowsheet the file format cannot hold.
+
+        ``encoded_params`` takes the encoding route so that a parameter
+        the editor accepts is one the file can carry. A constructor
+        argument reaches the file by a different road, and unblocking
+        nine units puts that road under load for the first time.
+        """
+        from difflow.serialize import from_json, to_json
+
+        unsaveable = []
+        for name, spec in catalog.items():
+            if spec["needs"]:
+                continue
+            status, answer = client.post("/api/unit", {"operation": name})
+            if status != 200 or not answer["ok"]:
+                continue
+            try:
+                from_json(to_json(client.session.flowsheet))
+            except Exception as exc:
+                unsaveable.append((name, f"{type(exc).__name__}: {exc}"))
+            client.delete(f"/api/unit/{answer['name']}")
+        assert not unsaveable
+
+
 class TestAnEmptyEditor:
     """`difflow gui` with no file: a live canvas, waiting for species.
 
