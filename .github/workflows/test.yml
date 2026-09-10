@@ -20,7 +20,12 @@ jobs:
   # and wall-clock is max(fast, slow) rather than the sum.
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 45, not 30. The fast suite ran ~22 min before the editor landed and ~28
+    # after, and a slow runner then pushed it past a 30-minute cap -- run
+    # 34425803062 was cancelled at 81% with every test to that point passing.
+    # A timeout is there to catch a hang, and a hang does not sit one minute
+    # over the budget. Matches the slow job's headroom.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
