@@ -348,6 +348,95 @@ class TestSchema:
             assert "\n" not in spec.description, name
 
 
+# =============================================================================
+# Parameter documentation
+# =============================================================================
+
+
+class TestParameterDocumentation:
+    """#213: nothing populates the ``description`` field metadata the
+    catalog read, so every parameter of every operation carried
+    ``description=None``. The descriptions are written --- in the
+    ``Params`` class's own ``Attributes:`` section and the comments
+    around its fields --- and :mod:`difflow.docstrings` is what carries
+    them across. These tests keep that pathway from silently going quiet
+    again. Units are not read from the prose; see :class:`TestMetadata`.
+    """
+
+    def test_a_representative_sample_is_described(self, cat):
+        sample = {
+            ("CSTR", "V"): "Reactor volume",
+            ("Flash", "species_order"): "species",
+            ("ShortcutColumn", "light_key"): "light key",
+            ("DistillationColumn", "n_stages"): "stages",
+            ("CounterCurrentHX", "UA"): "heat transfer",
+            ("Heater", "duty"): "heat duty",
+        }
+        for (op, param), expected in sample.items():
+            spec = next(p for p in cat[op].parameters if p.name == param)
+            assert spec.description, f"{op}.{param} has no description"
+            assert expected.lower() in spec.description.lower(), \
+                f"{op}.{param}: {spec.description!r}"
+
+    def test_almost_every_parameter_is_described(self, cat):
+        """Not all of them: a handful of fields are genuinely undocumented.
+
+        The bar is a fraction rather than a count so that adding a unit
+        does not fail the suite, while the pathway breaking does ---
+        before #213 this was exactly 0.
+        """
+        params = [p for spec in cat.values() for p in spec.parameters]
+        described = [p for p in params if p.description]
+        assert len(described) / len(params) > 0.9, (
+            f"only {len(described)}/{len(params)} parameters are described; "
+            "the docstring pathway looks broken"
+        )
+
+    def test_field_metadata_wins_over_the_docstring(self):
+        """Option 2 from #213 stays available per field."""
+        from dataclasses import dataclass, field
+
+        from difflow.params_mixin import ParamsMixin
+
+        @dataclass
+        class ExplicitParams(ParamsMixin):
+            """Summary.
+
+            Attributes:
+                P: Column pressure (Pa)
+            """
+
+            P: float = field(
+                default=101325.0, metadata={"description": "Overridden"},
+            )
+
+        class Explicit:
+            """A unit."""
+
+            def __init__(self, params: ExplicitParams):
+                self.params = params
+
+        assert describe_class(Explicit).parameters[0].description == "Overridden"
+
+    def test_a_comment_documents_a_field_the_docstring_misses(self, cat):
+        """35 fields are documented beside themselves, not in the section."""
+        by_name = {p.name: p for p in cat["CSTR"].parameters}
+        assert by_name["eos"].description.startswith("Optional cubic EOS")
+        assert by_name["outlet_volumetric_basis"].description.startswith(
+            "Volumetric-flow basis"
+        )
+
+    def test_descriptions_survive_the_json_payload(self, cat):
+        payload = json.loads(json.dumps(cat["CSTR"].to_dict()))
+        volume = next(p for p in payload["parameters"] if p["name"] == "V")
+        assert volume["description"] == "Reactor volume (m^3)"
+
+
+# =============================================================================
+# The metadata contract
+# =============================================================================
+
+
 class TestMetadata:
     """The catalog reads the metadata contract the units already carry.
 

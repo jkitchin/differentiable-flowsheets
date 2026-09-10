@@ -569,6 +569,35 @@ reactors = catalog(category="reactors")
 
 All of it is **derived by introspection**, not from a second hand-maintained table: parameters come from `dataclasses.fields` of the unit's `Params` class, ports from the `__call__` signature, and equations from the `equations` class attribute the units already carry. The catalog therefore cannot drift from the code, and an operation whose signature is unannotated is reported as *unknown* rather than guessed at — `Splitter` returns a bare `tuple`, so its `n_outlets` is `None`.
 
+### Where parameter descriptions come from
+
+Each parameter also carries the prose that documents it, so a schema can label a field rather than only name it:
+
+```python
+for p in describe_operation("Heater").parameters:
+    print(p.name, "--", p.units, "--", p.description)
+```
+
+```
+duty -- W -- Heat duty (W). Positive = heating.
+T_out -- K -- Outlet temperature (K). Alternative to duty.
+UA -- W/K -- Overall heat transfer coefficient × area (W/K). For rating.
+T_utility -- K -- Utility temperature (K). For LMTD calculation.
+Cp -- J/mol/K -- Heat capacity (J/mol·K). If None, uses thermo.
+```
+
+That text is not a second copy. `difflow.docstrings` reads it out of the `Params` class's own `Attributes:` section, which is where the project already writes it, and out of the comments beside the fields for the 35 that are documented there instead — `CSTRParams.eos` and `CSTRParams.outlet_volumetric_basis` among them. Populating `field(metadata={"description": ...})` on all 87 `Params` classes would have duplicated every description and then drifted from it.
+
+The editor gets this for free: the inspector's parameter list already rendered `spec.description` as help text under each field, and the palette already rendered `spec.units` beside its name — both written against a schema that carried neither. 470 of the 487 catalogued parameters gain help text in the inspector with no front-end change.
+
+Units are *not* read from the prose. They come from the class's `parameter_units` table (above), which names every numeric field and is guarded by a test; a parenthetical in a sentence is a weaker signal, since `(0-1)` and `(default 10)` sit in the same position as `(Pa)`, and a formula in a description will happily offer `-1/k` as "per kelvin".
+
+Where a field needs to say something different from its docstring, its metadata still wins:
+
+```python
+P: float = field(default=101325.0, metadata={"description": "..."})
+```
+
 ### Which operations are declarative
 
 `is_declarative` marks the operations whose parameters are all data, so a form or a JSON file could supply them:

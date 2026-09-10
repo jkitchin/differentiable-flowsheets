@@ -40,6 +40,8 @@ difflow/
 │   │   ├── uncertainty.py # Sensitivity & UQ
 │   │   ├── planning/      # Delta-base planning (LP/MILP + trust region)
 │   │   ├── catalog.py     # Machine-readable schema of every unit operation
+│   │   ├── docstrings.py  # Params field descriptions, read from the Attributes:
+│   │   │                   # docstrings (what the catalog reports)
 │   │   ├── serialize.py   # Flowsheet <-> JSON round trip
 │   │   ├── codegen.py     # Flowsheet -> runnable Python source
 │   │   ├── kinetics.py    # Declarative mass-action rate laws (data, not callables)
@@ -122,6 +124,15 @@ class MyUnitParams(ParamsMixin):
     """
     temperature: float
     pressure: float
+
+# The Attributes: section is not just prose: difflow.docstrings reads it, so
+# `describe_operation(...).parameters` reports each field's description. A field
+# documented only by the comment beside it is read too. Units are separate --
+# declare them in the unit class's `parameter_units`.
+#
+# That pathway reads the source from disk (inspect.getsource), so descriptions
+# go quiet -- silently, to None -- in a zipimport or frozen build where no .py
+# is on disk. A normal wheel or editable install is fine.
 
 # ParamsMixin provides:
 # - params['key'] - dict-style access
@@ -434,6 +445,7 @@ jax.debug.print("value: {x}", x=value)
 | `Makefile` | Build automation (test, book, notebooks) |
 | `src/difflow/__init__.py` | Main API exports |
 | `src/difflow/params_mixin.py` | ParamsMixin base class for all Params dataclasses |
+| `src/difflow/docstrings.py` | Reads Params field descriptions out of the `Attributes:` docstrings and field comments, for the catalog |
 | `src/difflow/planning/` | Delta-base planning: AD delta vectors -> trust-region LP/MILP |
 | `src/difflow_bio/__init__.py` | Bio manufacturing plugin exports |
 | `src/difflow_ree/__init__.py` | REE extraction plugin exports |
