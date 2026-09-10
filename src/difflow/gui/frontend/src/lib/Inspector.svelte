@@ -26,12 +26,14 @@
     unit = null,
     spec = null,
     feed = null,
+    pending = null,
     species = [],
     defaults = null,
     busy = false,
     onrename = () => {},
     ondelete = () => {},
     onedit = () => {},
+    oncontext = () => {},
   } = $props()
 
   let draft = $state('')
@@ -211,6 +213,34 @@
       ...render(latex),
     })),
   )
+
+  /**
+   * The code context this unit is waiting for, written out by the server.
+   *
+   * Fetched on demand rather than with the node: it is a page of Python
+   * per red box, and most red boxes are answered by a `thermo` that is
+   * about to be written for the first one. Kept once fetched, because
+   * the panel shows it and applying it is a second, separate click --
+   * you are meant to read the thing before running it.
+   */
+  let snippet = $state(null)
+
+  // A new selection is a new question; the old answer would be about a
+  // unit that is no longer on screen.
+  $effect(() => { void node; snippet = null })
+
+  async function writeBoilerplate() {
+    const answer = await post('/api/boilerplate', {
+      operation: node.data.operation, name: node.id,
+    })
+    snippet = answer?.ok ? answer : null
+  }
+
+  /** Apply the merged context: the snippet *added* to what is there. */
+  function applySnippet() {
+    if (!snippet) return
+    oncontext(snippet.merged)
+  }
 </script>
 
 <aside class="inspector">
@@ -288,6 +318,51 @@
         {/if}
       </div>
     {/if}
+  {:else if pending}
+    <!-- A red node. There is no unit to inspect -- it was never built --
+         so the panel is about the one thing that would build it. -->
+    <h2>
+      {pending.operation}
+      {#if docs?.docs_url}
+        <a class="doc-link" href={docs.docs_url} target="_blank"
+           rel="noopener noreferrer"
+           title="read about {pending.operation} in the documentation">docs &#8599;</a>
+      {/if}
+    </h2>
+    <p class="kind waiting">not built yet</p>
+
+    <h3>waiting for</h3>
+    <ul class="needs">
+      {#each pending.needs as need (need)}<li>{need}</li>{/each}
+    </ul>
+    <p class="problem">{pending.hint}</p>
+
+    <!-- Saying what is missing answers "what"; this answers "what do I
+         write". Two clicks, not one: the snippet invents numbers where
+         it has to, marks them, and running it unread would put them in
+         the model. -->
+    {#if !snippet}
+      <button class="wide" disabled={busy} onclick={writeBoilerplate}>
+        Write the code for me
+      </button>
+    {:else}
+      <h3>a starting point</h3>
+      <pre class="snippet">{snippet.source}</pre>
+      <p class="hint">
+        Added to the code context, not replacing it. Read every
+        <code>INVENTED</code>, <code>GUESSED</code> and
+        <code>PLACEHOLDER</code> comment first &mdash; those are the
+        numbers this cannot know.
+      </p>
+      <div class="row">
+        <button class="primary" disabled={busy} onclick={applySnippet}>
+          Add to the code context
+        </button>
+        <button disabled={busy} onclick={() => (snippet = null)}>Discard</button>
+      </div>
+    {/if}
+
+    <button class="danger" onclick={() => ondelete(node.id)}>Delete node</button>
   {:else}
     <h2>
       {node.data.operation}
@@ -580,6 +655,30 @@
     margin: 0.35rem 0 0;
     color: var(--bad);
     font-size: 0.75rem;
+  }
+
+  /* The red-node panel. It says the same thing the node says, at
+     length, and then offers the one thing that answers it. */
+  .kind.waiting { color: var(--bad); }
+  ul.needs { padding-left: 1.1rem; margin: 0.2rem 0; }
+  ul.needs li {
+    font-family: var(--mono, ui-monospace, monospace);
+    font-size: 0.75rem;
+    color: var(--bad);
+  }
+  button.wide { width: 100%; margin-top: 0.8rem; }
+  .snippet {
+    max-height: 18rem;
+    overflow: auto;
+    margin: 0.3rem 0 0;
+    padding: 0.5rem;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 5px;
+    font-family: var(--mono, ui-monospace, monospace);
+    font-size: 0.7rem;
+    line-height: 1.45;
+    white-space: pre;
   }
   .row {
     display: flex;

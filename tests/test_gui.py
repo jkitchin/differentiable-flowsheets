@@ -557,7 +557,7 @@ class TestFiles:
         assert session.solve() == {
             "ok": True, "streams": {}, "species": [], "converged": True,
             "iterations": 0, "method": "direct", "residual": 0.0,
-            "tol": 1e-08, "tear_streams": [],
+            "tol": 1e-08, "tear_streams": [], "pending": [],
         }
         assert session.code()["error"] is None
         assert "Flowsheet(species_order=[]" in session.code()["source"]
@@ -681,7 +681,7 @@ class TestPalette:
 
 
 class TestWhatBlocksADrop:
-    """The palette's flag and the adder's refusal, which must agree.
+    """The palette's flag and what the adder does, which must agree.
 
     They did not. The catalog answered a question about the *class* ---
     could a form construct one --- and the adder answered a question
@@ -689,6 +689,10 @@ class TestWhatBlocksADrop:
     traceback from the file-loading path offering "written by a
     different version of difflow" as the diagnosis of a unit dropped one
     second earlier.
+
+    A blocked drop is no longer refused: it lands as a *pending* node
+    that says what it is waiting for. So "blocks" now means "parks", and
+    the flag must predict the parking exactly.
     """
 
     def test_the_catalog_names_the_fields_and_not_just_the_extras(self, client):
@@ -714,14 +718,14 @@ class TestWhatBlocksADrop:
         assert spec["needs"] == ["solvent"]
         assert spec["buildable"] is False
 
-    def test_the_flag_and_the_refusal_cannot_disagree(self, client):
+    def test_the_flag_and_the_parking_cannot_disagree(self, client):
         """The invariant, over every operation the catalog offers.
 
-        A non-empty ``needs`` must mean the drop is refused, and an empty
-        one must mean it is *answered* --- either it lands, or the class
-        refuses on its own terms with a message about the model. What it
-        must never mean is a 400, a traceback, or a claim about difflow
-        versions.
+        A non-empty ``needs`` must mean the drop parks as a pending node,
+        and an empty one must mean it is *answered* --- either it lands
+        built, or the class refuses on its own terms with a message about
+        the model. What it must never mean is a 400, a traceback, or a
+        claim about difflow versions.
 
         Empty ``needs`` promises a clean answer rather than a successful
         one on purpose: a class can validate whatever it likes, and
@@ -740,8 +744,10 @@ class TestWhatBlocksADrop:
             if status != 200:
                 wrong.append((name, f"HTTP {status}"))
                 continue
-            if spec["needs"] and answer["ok"]:
-                wrong.append((name, "flagged, but dropped anyway"))
+            if spec["needs"] and not answer.get("pending"):
+                wrong.append((name, "flagged, but built anyway"))
+            if not spec["needs"] and answer.get("pending"):
+                wrong.append((name, "parked, but the palette said it was ready"))
             if not spec["needs"] and not answer["ok"]:
                 if "different version" in (answer.get("error") or ""):
                     wrong.append((name, answer["error"]))
@@ -760,31 +766,33 @@ class TestWhatBlocksADrop:
         assert answer["ok"] is False
         assert "this is a line" in answer["error"]
 
-    def test_a_refusal_names_the_field_and_blames_no_version(self, client):
+    def test_the_hint_names_the_field_and_blames_no_version(self, client):
         _, answer = client.post("/api/unit", {"operation": "CSTR"})
-        assert answer["ok"] is False
-        assert "rate_fn" in answer["error"]
-        assert "different version of difflow" not in answer["error"]
-        assert "mass_action_kinetics" in answer["error"], "offer the easy route"
+        assert answer["pending"] is True
+        assert "rate_fn" in answer["needs"]
+        assert "rate_fn" in answer["hint"]
+        assert "different version of difflow" not in answer["hint"]
+        assert "mass_action_kinetics" in answer["hint"], "offer the easy route"
 
-    def test_the_refusal_separates_code_from_data(self, client):
+    def test_the_hint_separates_code_from_data(self, client):
         """Calling a required `str` "code" tells the reader something false."""
         pytest.importorskip("difflow_cc")
         _, answer = client.post("/api/unit", {"operation": "AmineAbsorber"})
-        if answer["ok"]:
+        if not answer.get("pending"):
             pytest.skip("difflow_cc not registered")
-        assert "no way to guess" in answer["error"]
-        assert "code rather than data" not in answer["error"]
+        assert "no way to guess" in answer["hint"]
+        assert "code rather than data" not in answer["hint"]
 
     def test_a_binding_unblocks_the_unit_that_wanted_it(self, client):
         """The round trip the message promises has to actually work."""
         assert client.get_json("/api/catalog")[1]["Flash"]["needs"] == ["thermo"]
-        assert not client.post("/api/unit", {"operation": "Flash"})[1]["ok"]
+        assert client.post("/api/unit", {"operation": "Flash"})[1]["pending"]
 
         client.post("/api/code-context", {"source": THERMO_CONTEXT})
 
         assert client.get_json("/api/catalog")[1]["Flash"]["needs"] == []
-        assert client.post("/api/unit", {"operation": "Flash"})[1]["ok"]
+        assert not client.post(
+            "/api/unit", {"operation": "Flash"})[1].get("pending")
 
     def test_a_bare_value_in_the_context_counts_as_a_binding(self, client):
         """`solvent = "MEA"` is matched by field name, so the hint is true."""
@@ -794,6 +802,80 @@ class TestWhatBlocksADrop:
         client.post("/api/code-context", {"source": "solvent = 'MEA'\n"})
         assert client.get_json("/api/catalog")[1]["AmineAbsorber"]["needs"] == []
         assert client.post("/api/unit", {"operation": "AmineAbsorber"})[1]["ok"]
+
+
+class TestPendingNodesOverHTTP:
+    """The red node, from the browser's side.
+
+    The routes are the contract the front end draws against: a drop that
+    cannot be built answers 200 with ``pending``, the served document
+    carries the parked nodes beside the flowsheet, and there is a route
+    that writes the code they are waiting for.
+    """
+
+    def test_a_blocked_drop_answers_200_and_pending(self, client):
+        status, answer = client.post("/api/unit", {"operation": "CSTR"})
+        assert status == 200, "not being buildable is an answer, not a bad request"
+        assert answer["ok"] is True and answer["pending"] is True
+        assert answer["needs"] and answer["hint"]
+        assert "error" not in answer
+
+    def test_the_document_carries_the_parked_nodes(self, client):
+        client.post("/api/unit", {"operation": "CSTR",
+                                  "position": {"x": 10, "y": 20}})
+        _, payload = client.get_json("/api/flowsheet")
+        assert [p["name"] for p in payload["pending"]] == ["cstr"]
+        assert payload["pending"][0]["position"] == {"x": 10.0, "y": 20.0}
+        # Not in the flowsheet: what is served here is what gets saved.
+        assert "cstr" not in [u["name"] for u in payload["flowsheet"]["units"]]
+        assert "cstr" not in payload["flowsheet"]["view"]["nodes"]
+
+    def test_the_boilerplate_route_writes_what_it_is_waiting_for(self, client):
+        name = client.post("/api/unit", {"operation": "Flash"})[1]["name"]
+        status, answer = client.post(
+            "/api/boilerplate", {"operation": "Flash", "name": name}
+        )
+        assert status == 200 and answer["ok"]
+        assert answer["needs"] == ["thermo"]
+        assert "thermo = IdealThermo" in answer["source"]
+        assert answer["merged"].endswith(answer["source"])
+
+    def test_writing_it_and_applying_it_builds_the_node(self, client):
+        """The loop the button promises, over the wire."""
+        name = client.post("/api/unit", {"operation": "Flash",
+                                         "position": {"x": 7, "y": 8}})[1]["name"]
+        _, written = client.post("/api/boilerplate",
+                                 {"operation": "Flash", "name": name})
+        _, applied = client.post("/api/code-context",
+                                 {"source": written["merged"]})
+        assert applied["ok"] and applied["promoted"] == [name]
+        _, payload = client.get_json("/api/flowsheet")
+        assert payload["pending"] == []
+        assert name in [u["name"] for u in payload["flowsheet"]["units"]]
+        assert payload["flowsheet"]["view"]["nodes"][name] == {"x": 7.0, "y": 8.0}
+
+    def test_a_parked_node_is_deleted_like_any_other(self, client):
+        name = client.post("/api/unit", {"operation": "CSTR"})[1]["name"]
+        status, answer = client.delete(f"/api/unit/{name}")
+        assert status == 200 and answer["ok"] and answer["pending"] is True
+        assert client.get_json("/api/flowsheet")[1]["pending"] == []
+
+    def test_the_boilerplate_route_needs_the_token(self, client):
+        """It writes nothing, and it is still a POST.
+
+        The answer carries the code context back inside ``merged``, so an
+        unrelated page that could call it would be reading the session's
+        source. A GET would be reachable from one.
+        """
+        status, payload = client.post(
+            "/api/boilerplate", {"operation": "Flash"},
+            headers={gui.TOKEN_HEADER: "wrong"},
+        )
+        assert status == 403 and payload["ok"] is False
+
+    def test_an_unregistered_operation_is_refused(self, client):
+        _, answer = client.post("/api/boilerplate", {"operation": "Teleporter"})
+        assert answer["ok"] is False and "registered" in answer["error"]
 
 
 class TestANumberInTheConstructor:
@@ -943,11 +1025,16 @@ class TestAnEmptyEditor:
         assert payload["editable"] is True
 
     def test_a_drop_before_the_species_are_named_says_which_field(self, empty):
-        """Not "no flowsheet loaded", and not silence."""
+        """Not "no flowsheet loaded", and not silence.
+
+        It lands as a pending node rather than being refused, so the
+        sentence is the node's hint --- but it is the same sentence, and
+        it still has to name the field and both ways of filling it in.
+        """
         _, answer = empty.post("/api/unit", {"operation": "Mixer"})
-        assert answer["ok"] is False
-        assert "species" in answer["error"]
-        assert "header" in answer["error"] and "code context" in answer["error"]
+        assert answer["pending"] is True
+        assert "species" in answer["hint"]
+        assert "header" in answer["hint"] and "code context" in answer["hint"]
 
     def test_naming_the_species_unblocks_the_drop(self, empty):
         assert empty.post("/api/species", {"species": SPECIES})[1]["ok"]
@@ -1238,20 +1325,24 @@ class TestCodeContext:
         assert "code_context" not in client.session.flowsheet.view
 
     def test_a_flash_is_unbuildable_until_a_thermo_exists(self, client):
-        status, refused = client.post("/api/unit", {"operation": "Flash"})
-        assert status == 200 and refused["ok"] is False
-        assert "code context" in refused["error"], (
-            "a refusal has to say where the missing object comes from"
+        status, parked = client.post("/api/unit", {"operation": "Flash"})
+        assert status == 200 and parked["pending"] is True
+        assert "code context" in parked["hint"], (
+            "the node has to say where the missing object comes from"
         )
 
-        client.post("/api/code-context", {"source": THERMO_CONTEXT})
+        # The context both promotes the node that was waiting and lets
+        # the next drop build outright.
+        _, applied = client.post("/api/code-context", {"source": THERMO_CONTEXT})
+        assert applied["promoted"] == [parked["name"]]
         status, added = client.post("/api/unit", {"operation": "Flash"})
         assert status == 200 and added["ok"], added.get("error")
         assert len(added["outlets"]) == 2
 
     def test_a_reactor_becomes_placeable_from_a_declared_rate_law(self, client):
         """`mass_action_kinetics` is the declarative route, not a callable."""
-        assert client.post("/api/unit", {"operation": "CSTR"})[1]["ok"] is False
+        parked = client.post("/api/unit", {"operation": "CSTR"})[1]
+        assert parked["pending"] is True
         client.post("/api/code-context", {"source": KINETICS_CONTEXT})
         status, added = client.post("/api/unit", {"operation": "CSTR"})
         assert status == 200 and added["ok"], added.get("error")
@@ -2508,7 +2599,7 @@ class TestAUnitThatTakesAsManyInletsAsItIsGiven:
         accepted = []
         for name in sorted(self.variadic_names()):
             answer = empty.post("/api/unit", {"operation": name})[1]
-            if not answer["ok"]:
+            if not answer["ok"] or answer.get("pending"):
                 continue        # needs something from the code context
             unit_name = answer["name"]
             added = empty.post("/api/inlet", {"unit": unit_name})[1]
