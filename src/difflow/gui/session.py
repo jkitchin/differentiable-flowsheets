@@ -430,6 +430,13 @@ class FlowsheetSession:
         solvent name, so the drop fails. Serving the class's answer put
         that disagreement in front of the user as a traceback.
 
+        Each entry also carries ``docs_url``, from
+        :func:`difflow.gui.doclinks.url_for` --- where in the book this
+        operation is written up, so the palette and the inspector can
+        offer the link without the front end knowing anything about how
+        ``docs/`` is organised. ``None`` for an operation the prose never
+        names, which :mod:`tests.test_doclinks` does not allow to happen.
+
         So each entry carries ``needs``, from :func:`difflow.gui.edit.unmet`
         --- the same function the adder refuses with, so the palette
         cannot promise a unit that will not drop --- and ``buildable``
@@ -446,6 +453,7 @@ class FlowsheetSession:
         out = {}
         for name, spec in catalog().items():
             entry = spec.to_dict()
+            entry["docs_url"] = doclinks.url_for(name)
             cls = classes.get(name)
             if cls is not None:
                 needs = edit.unmet(self.flowsheet, cls, self.bindings)

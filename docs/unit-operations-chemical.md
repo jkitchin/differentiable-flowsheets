@@ -356,6 +356,34 @@ feed_profile = optimal_feed_profile(params, constraints={'max_T': 400.0})
 
 ---
 
+### SemiBatchReactor
+
+**Location**: `difflow/units/fed_batch.py`
+
+**Class**: `SemiBatchReactor`
+
+**Description**: `FedBatchReactor` under the name the process usually goes by. Same model, same parameters, same equations.
+
+A semi-batch reactor is a batch vessel into which one reactant is fed
+gradually --- to cap the heat release, to hold a reactant concentration
+low for selectivity, or to keep a hazardous intermediate from
+accumulating. That is exactly the fed-batch model above, so
+`SemiBatchReactor` is a subclass of `FedBatchReactor` that changes
+nothing but its display symbol:
+
+```python
+from difflow.units.fed_batch import SemiBatchReactor, FedBatchParams
+
+reactor = SemiBatchReactor(params, thermo, mode="isothermal")   # params: FedBatchParams
+```
+
+Everything in [FedBatchReactor](#fedbatchreactor) --- parameters, feed
+and temperature profiles, the material and energy balances, the utility
+functions --- applies unchanged. Pick the name that makes the flowsheet
+read correctly; there is no modelling difference to weigh.
+
+---
+
 (separators)=
 ## Declarative Kinetics
 
@@ -513,6 +541,7 @@ liquid, vapor, info = flash(feed)
 print(f"Vapor fraction: {info['V_frac']:.3f}")
 ```
 
+(eosflash)=
 ##### EOSFlash (Non-Ideal)
 
 Uses fugacity coefficients from cubic equations of state (Peng-Robinson or SRK) for non-ideal VLE.
@@ -536,6 +565,7 @@ feed = make_stream({'methane': 40.0, 'ethane': 30.0, 'propane': 30.0}, T=250.0, 
 liquid, vapor, info = flash(feed)
 ```
 
+(phflash)=
 ##### PHFlash (Isenthalpic)
 
 Performs adiabatic flash at constant pressure and enthalpy. Solves for flash temperature.
@@ -1014,6 +1044,7 @@ whole range -- and only then runs Newton on the residual itself. This is why a
 column can be handed a feed far below its own boiling point and still find its
 ends.
 
+(solver-paths)=
 #### Solver Paths
 
 Both paths run the Wang-Henke bubble-point iteration, which solves the
@@ -1442,6 +1473,226 @@ Cross-flow heat exchangers offer intermediate performance between counter-curren
 
 ---
 
+### ShellAndTubeHX
+
+**Location**: `difflow/units/heat_exchanger.py`
+
+**Class**: `ShellAndTubeHX`
+
+**Description**: Multi-pass shell-and-tube exchanger: counter-current duty reduced by the LMTD correction factor $F$.
+
+#### Process Role
+
+A 1-2N TEMA exchanger is not counter-current. Each tube pass runs with
+the shell fluid and the next against it, so part of the area works
+against a smaller driving force than the terminal temperatures suggest.
+The standard allowance for that is the correction factor $F \le 1$
+applied to the counter-current LMTD, and this unit is `CounterCurrentHX`
+with that factor in place. Use it when the geometry is a real
+shell-and-tube bundle rather than an idealised two-stream exchanger; use
+`CounterCurrentHX` when $F$ would be 1 by construction (a true
+counter-current double-pipe or a 1-1 arrangement).
+
+#### Parameters
+
+```python
+@dataclass
+class ShellAndTubeHXParams:
+    UA: float                      # Overall HTC x area (W/K)
+    Cp_hot: float = None           # Hot side heat capacity (J/mol/K), default 75
+    Cp_cold: float = None          # Cold side heat capacity (J/mol/K), default 75
+    min_approach: float = 10.0     # Minimum temperature approach (K)
+    n_shell_passes: int = 1        # Shell passes: 1-2, 2-4, ... arrangements
+```
+
+#### Inputs
+
+| Parameter | Type | Units | Description |
+|-----------|------|-------|-------------|
+| `hot_inlet` | Stream | - | Hot fluid inlet |
+| `cold_inlet` | Stream | - | Cold fluid inlet |
+| `UA` | float | W/K | Optional override of `params.UA` |
+
+#### Outputs
+
+| Parameter | Type | Units | Description |
+|-----------|------|-------|-------------|
+| `hot_outlet` | Stream | - | Hot fluid outlet |
+| `cold_outlet` | Stream | - | Cold fluid outlet |
+| `info['Q']` | float | W | Heat duty |
+| `info['F_correction']` | float | - | LMTD correction factor |
+| `info['R']`, `info['P_param']` | float | - | The two parameters $F$ depends on |
+| `info['F_too_low']` | bool | - | `F < 0.75`: add shell passes or re-split the duty |
+| `info['effectiveness']` | float | - | $\epsilon_{CC} F$ |
+| `info['LMTD']` | float | K | Counter-current LMTD |
+
+#### Governing Equations
+
+**Corrected duty**:
+
+$$Q = UA \cdot F(P, R) \cdot LMTD_{CC}$$
+
+**Correction-factor arguments** (temperature effectiveness and capacity ratio):
+
+$$P = \frac{T_{c,out} - T_{c,in}}{T_{h,in} - T_{c,in}}, \qquad
+R = \frac{T_{h,in} - T_{h,out}}{T_{c,out} - T_{c,in}}$$
+
+**Correction factor** (1-2N TEMA, Bowman-Mueller-Nagle):
+
+$$F = \frac{\sqrt{R^2+1}\,\ln\!\frac{1-P}{1-RP}}
+{(R-1)\,\ln\!\frac{2-P(R+1-\sqrt{R^2+1})}{2-P(R+1+\sqrt{R^2+1})}}$$
+
+At $R = 1$ that expression is $0/0$; `lmtd_correction_factor` takes the
+L'Hopital limit there, so $F$ and its derivative are finite for balanced
+flows instead of producing a `nan` in the middle of the usual operating
+range.
+
+$F$ falls as $P$ rises: a multi-pass exchanger asked for a close
+approach loses area effectiveness quickly, which is why `F_too_low` is
+reported rather than silently accepted. The conventional design rule is
+to keep $F > 0.75$ and add shell passes otherwise (`n_shell_passes`,
+which re-maps $P$ to the equivalent single-shell value before the
+formula above).
+
+#### Example Usage
+
+```python
+from difflow import make_stream
+from difflow.units.heat_exchanger import ShellAndTubeHX, ShellAndTubeHXParams
+
+hx = ShellAndTubeHX(ShellAndTubeHXParams(UA=500.0, Cp_hot=75.0, Cp_cold=75.0))
+
+hot = make_stream({'water': 2.0}, T=400.0, P=101325.0)
+cold = make_stream({'water': 1.0}, T=300.0, P=101325.0)
+
+hot_out, cold_out, info = hx(hot, cold)
+print(f"Q = {float(info['Q'])/1000:.2f} kW")
+print(f"F = {float(info['F_correction']):.3f}")
+```
+
+---
+
+### EnthalpyCounterCurrentHX
+
+**Location**: `difflow/units/heat_exchanger.py`
+
+**Class**: `EnthalpyCounterCurrentHX`
+
+**Description**: Counter-current exchanger closed on real, flash-based stream enthalpies, so it stays correct through a phase change.
+
+#### Process Role
+
+`CounterCurrentHX` assumes one constant $C_p$ per side, which makes its
+effectiveness-NTU solution closed-form and its answer wrong wherever the
+heat capacity is not constant --- above all where a stream boils or
+condenses, since latent heat is an infinite apparent $C_p$ that a
+constant-$C_p$ model has no way to represent. This unit closes an
+enthalpy balance per side instead, using a thermo object's two-phase
+stream enthalpy, and therefore matches an equation-oriented exchanger
+(IDAES's, say) through the phase change.
+
+Use it for condensers, reboiler-side service, cryogenic/NGL duty, and
+anywhere a vapour fraction changes across the exchanger. It costs a
+coupled solve rather than a formula, so prefer `CounterCurrentHX` for
+single-phase service where the two agree.
+
+#### Parameters
+
+```python
+@dataclass
+class EnthalpyHXParams:
+    UA: float = None       # Overall HTC x area (W/K)
+    max_iter: int = 80     # Iterations of the outer fixed point on Q
+    damping: float = 0.5   # Damping of the Q update (0 < d <= 1)
+```
+
+The constructor takes the thermo alongside the params --- `EnthalpyCounterCurrentHX(params, thermo)` --- and the thermo must provide
+`stream_enthalpy_flash(flows, T, P)`. A `CubicThermo` built from an
+`IdealThermo` and a `PengRobinson`/`SRK` EOS does
+([Thermodynamics](thermodynamics.md)).
+
+#### Inputs
+
+| Parameter | Type | Units | Description |
+|-----------|------|-------|-------------|
+| `hot_inlet` | Stream | - | Hot fluid inlet |
+| `cold_inlet` | Stream | - | Cold fluid inlet |
+| `UA` | float | W/K | Optional override of `params.UA` |
+
+#### Outputs
+
+Same keys as `CounterCurrentHX` where they mean the same thing:
+`info['Q']`, `info['LMTD']`, the four terminal temperatures,
+`info['approach']` (the smaller of the two terminal differences) and
+`info['flow_arrangement'] == 'counter_current_enthalpy'`.
+
+#### Governing Equations
+
+**Enthalpy balance per side** (not a $\dot{m} C_p \Delta T$ balance):
+
+$$H_{h,out} = H_{h,in} - Q, \qquad H_{c,out} = H_{c,in} + Q$$
+
+**Heat transfer**:
+
+$$Q = UA \cdot LMTD(T_{h,in}, T_{h,out}, T_{c,in}, T_{c,out})$$
+
+The unknowns $(Q, T_{h,out}, T_{c,out})$ are coupled: $Q$ sets the
+outlet enthalpies, the enthalpies set the outlet temperatures, and the
+temperatures set the LMTD that sets $Q$. The unit solves it as a damped
+fixed point on $Q$ with a one-dimensional enthalpy inversion per side
+(enthalpy is monotone in $T$, so each inversion is a well-posed root
+find). Every solve is an `optimistix` root find, so gradients come from
+the implicit function theorem at the converged result rather than from
+differentiating the iteration.
+
+#### Example Usage
+
+```python
+from difflow import make_stream
+from difflow.eos import PengRobinson, CriticalProperties
+from difflow.thermo import IdealThermo, CubicThermo, SpeciesData
+from difflow.units.heat_exchanger import (
+    EnthalpyCounterCurrentHX, EnthalpyHXParams,
+)
+
+species = {
+    "propane": SpeciesData(name="propane", MW=44.10,
+                           Cp_coeffs=(73.0, 0.0, 0.0, 0.0),
+                           Hvap_coeffs=(18000.0, 0.38, 369.8),
+                           antoine_coeffs=(13.72, 1872.5, -25.16)),
+    "butane": SpeciesData(name="butane", MW=58.12,
+                          Cp_coeffs=(98.0, 0.0, 0.0, 0.0),
+                          Hvap_coeffs=(22000.0, 0.38, 425.1),
+                          antoine_coeffs=(13.98, 2292.4, -27.86)),
+}
+crit = {
+    "propane": CriticalProperties(name="propane", Tc=369.8, Pc=4.25e6,
+                                  omega=0.152, MW=44.10),
+    "butane": CriticalProperties(name="butane", Tc=425.1, Pc=3.80e6,
+                                 omega=0.200, MW=58.12),
+}
+thermo = CubicThermo(IdealThermo(species), PengRobinson(crit))
+
+hot = make_stream({"propane": 1.0, "butane": 1.0}, T=400.0, P=3e5)
+cold = make_stream({"propane": 1.0, "butane": 1.0}, T=300.0, P=3e5)
+
+hx = EnthalpyCounterCurrentHX(EnthalpyHXParams(UA=200.0), thermo)
+hot_out, cold_out, info = hx(hot, cold)
+print(f"Q = {float(info['Q'])/1000:.2f} kW")
+```
+
+#### Design Considerations
+
+- **Share the thermo object.** The coupled solve is JIT-compiled and
+  cached on the identity of the thermo, so passing the same `CubicThermo`
+  to every exchanger compiles once instead of once per unit. The first
+  call takes seconds; later ones do not.
+- **`damping` is a convergence knob, not a model parameter.** Gradients
+  are exact at the fixed point regardless of its value, so lowering it
+  costs iterations and nothing else.
+
+---
+
 ### Heat Exchanger Utility Functions
 
 ```python
@@ -1474,6 +1725,96 @@ UA, area = design_heat_exchanger(Q=100000, LMTD=30, U=500)
 
 ## Liquid-Liquid Extraction
 
+### LLEEquilibrium
+
+**Location**: `difflow/units/lle.py`
+
+**Class**: `LLEEquilibrium`
+
+**Description**: The two-phase equilibrium model every extraction unit takes as a parameter: which species transfer, which carry each phase, and how the distribution coefficients are computed.
+
+#### Process Role
+
+`LLEEquilibrium` is a model object, not a unit operation: it has no
+inlets and no outlets, and it never appears in a flowsheet on its own.
+It is the `equilibrium` field of `CascadeParams` and
+`DifferentialContactorParams`, and what it decides is the part of an
+extraction calculation that is thermodynamics rather than cascade
+bookkeeping:
+
+- **which species are solutes** (they partition between the phases) and
+  which are the two **carriers** (they do not, so their flows set the
+  phase ratio at every stage);
+- **where the distribution coefficients come from** --- either tabulated
+  $K$ values, optionally with a van't Hoff temperature dependence, or an
+  activity-coefficient model (NRTL or UNIQUAC) from which
+  $K_i = \gamma_i^{aq} / \gamma_i^{org}$ follows.
+
+Because it is a model object, the editor cannot construct one from a form
+alone: `solutes`, `aqueous_carrier` and `organic_carrier` have no
+defaults, and the palette reports them as unmet requirements until the
+code context binds them.
+
+#### Parameters
+
+```python
+@dataclass
+class LLEEquilibrium:
+    solutes: list[str]                  # Species that transfer between phases
+    aqueous_carrier: str                # Species that stays aqueous
+    organic_carrier: str                # Species that stays organic
+    K_coeffs: DistributionCoeffs = None # For activity_model='K'
+    nrtl_params: NRTLParams = None      # For activity_model='NRTL'
+    uniquac_params: UNIQUACParams = None# For activity_model='UNIQUAC'
+    activity_model: str = 'K'           # 'K' | 'NRTL' | 'UNIQUAC'
+    mutual_solubility: dict = None      # Optional carrier cross-solubility
+```
+
+`DistributionCoeffs` holds `species`, `K0` at `Tref`, and optionally the
+heats of extraction `dH` that make $K$ temperature-dependent:
+
+$$K_i(T) = K_{0,i} \exp\left[-\frac{\Delta H_i}{R}
+\left(\frac{1}{T} - \frac{1}{T_{ref}}\right)\right]$$
+
+#### Governing Equations
+
+**Distribution coefficient** (the sign convention: $K > 1$ favours the
+organic/extract phase):
+
+$$K_i = \frac{y_i^{org}}{x_i^{aq}}$$
+
+**Component balance across a contact**:
+
+$$F z_i = E\, y_i^{org} + R\, x_i^{aq}$$
+
+**Isoactivity**, when an activity model is used instead of tabulated $K$:
+
+$$\gamma_i^{aq} x_i^{aq} = \gamma_i^{org} y_i^{org}
+\qquad \Rightarrow \qquad K_i = \frac{\gamma_i^{aq}}{\gamma_i^{org}}$$
+
+#### Example Usage
+
+```python
+from difflow.units.lle import LLEEquilibrium, DistributionCoeffs
+
+equilibrium = LLEEquilibrium(
+    solutes=["acetic_acid"],
+    aqueous_carrier="water",
+    organic_carrier="butanol",
+    K_coeffs=DistributionCoeffs(species=("acetic_acid",), K0=(2.5,)),
+)
+
+# The one thing it computes, at a temperature:
+equilibrium.get_distribution_coefficients({}, {}, 298.15)
+# {'acetic_acid': 2.5}
+```
+
+With `activity_model='NRTL'` the two composition arguments are used (the
+coefficients depend on them); with `'K'` they are ignored, which is why
+they can be empty above.
+
+---
+
 ### MultistageCascade
 
 **Location**: `difflow/units/lle.py`
@@ -1495,11 +1836,15 @@ LLE is used for:
 ```python
 @dataclass
 class CascadeParams:
-    n_stages: int          # Number of equilibrium stages
-    K_values: Array        # Distribution coefficients
-    feed_stage: int = 1    # Feed entry stage
-    mode: str = 'counter_current'
+    n_stages: int | float        # Equilibrium stages (continuous, for optimization)
+    equilibrium: LLEEquilibrium  # The equilibrium model (see above)
+    flow_config: str = 'counter_current'  # or 'co_current'
+    stage_efficiency: float = 0.8         # Murphree efficiency, co-current only
 ```
+
+`n_stages` is deliberately continuous: the Kremser solution below is
+smooth in it, so stage count is an ordinary design variable that
+`jax.grad` can differentiate rather than an integer to enumerate.
 
 #### Governing Equations
 
@@ -1540,21 +1885,29 @@ Combinatorial and residual contributions based on molecular size and interaction
 #### Example Usage
 
 ```python
-from difflow.units.lle import MultistageCascade, CascadeParams
-import jax.numpy as jnp
-
-params = CascadeParams(
-    n_stages=5,
-    K_values=jnp.array([0.1, 2.5, 0.05]),  # solute favors extract phase
-    mode='counter_current'
+from difflow import make_stream
+from difflow.streams import get_flows
+from difflow.units.lle import (
+    LLEEquilibrium, DistributionCoeffs, MultistageCascade, CascadeParams,
 )
 
-cascade = MultistageCascade(params)
-feed = make_stream({'water': 100.0, 'acetic_acid': 10.0, 'butanol': 0.0}, T=298.0, P=101325.0)
-solvent = make_stream({'water': 0.0, 'acetic_acid': 0.0, 'butanol': 50.0}, T=298.0, P=101325.0)
+equilibrium = LLEEquilibrium(
+    solutes=["acetic_acid"],
+    aqueous_carrier="water",
+    organic_carrier="butanol",
+    K_coeffs=DistributionCoeffs(species=("acetic_acid",), K0=(2.5,)),
+)
+cascade = MultistageCascade(CascadeParams(n_stages=5, equilibrium=equilibrium))
+
+feed = make_stream({'water': 100.0, 'acetic_acid': 10.0, 'butanol': 0.0},
+                   T=298.15, P=101325.0)
+solvent = make_stream({'water': 0.0, 'acetic_acid': 0.0, 'butanol': 50.0},
+                      T=298.15, P=101325.0)
 
 raffinate, extract, info = cascade(feed, solvent)
-print(f"Recovery: {info['recovery']:.2%}")
+recovery = 1.0 - get_flows(raffinate)['acetic_acid'] / 10.0
+print(f"Recovery: {float(recovery):.2%}")        # Recovery: 91.12%
+print(info['profiles'].keys())  # stage profiles: x, y, carrier_transfer, ...
 ```
 
 #### Utility Functions
@@ -1656,7 +2009,13 @@ outlet, info = exp(feed)
 # info: {"W", "T_isen", "T_out", "H_in", "H_out"}
 ```
 
-### Compressor
+### EOSCompressor
+
+**Exported as** `Compressor`; registered in the catalog --- and so labelled
+in the editor's palette --- as **`EOSCompressor`**, because `Compressor`
+is taken by the gas plugin's fixed-ratio compressor station
+([Gas networks](unit-operations-gas.md)) and the two are different
+models of different things.
 
 Adiabatic compression to `P_out` with an isentropic efficiency. Same entropy
 match, but the efficiency **inflates** the enthalpy rise (an inefficient machine

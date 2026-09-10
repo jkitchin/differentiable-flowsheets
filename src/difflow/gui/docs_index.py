@@ -61,7 +61,13 @@ being below between both during into through
 
 _WORD = re.compile(r"[a-z_][a-z0-9_]*")
 _FENCE = re.compile(r"^\s*(```|~~~)")
-_HEADING = re.compile(r"^(#{1,4})\s+(.*?)\s*#*\s*$")
+_HEADING = re.compile(r"^(#{1,6})\s+(.*?)\s*#*\s*$")
+#: A MyST explicit target, ``(some-label)=`` alone on a line. These are
+#: the anchors the prose *chose*, as opposed to the ones a heading slug
+#: happens to produce, so they are what :mod:`difflow.gui.doclinks`
+#: prefers --- a unit documented as one row of a table has no heading of
+#: its own and a label is the only way to link to the row.
+_TARGET = re.compile(r"^\(([^()\s]+)\)=\s*$")
 
 
 def terms(text: str) -> list[str]:
@@ -100,14 +106,22 @@ def split(text: str, source: str) -> list[dict]:
 
     The breadcrumb (``path``) carries the enclosing headings, so a
     section called "Gotchas" says which chapter's gotchas it is.
+
+    ``targets`` lists the MyST labels a section owns. A label written
+    immediately before a heading belongs to the section that heading
+    opens --- which is how every ``(gas-overview)=`` in these files is
+    written --- so pending labels move across the split rather than
+    staying with the text above them.
     """
     sections: list[dict] = []
     stack: list[str] = []
     heading, level, body = None, 0, []
+    targets: list[str] = []
+    pending: list[str] = []
     fenced = False
 
     def flush():
-        if heading is None and not "".join(body).strip():
+        if heading is None and not "".join(body).strip() and not targets:
             return
         text_ = _trim("".join(body))
         if not text_:
@@ -117,20 +131,32 @@ def split(text: str, source: str) -> list[dict]:
             "heading": heading or source,
             "path": " > ".join(stack),
             "anchor": anchor(heading or ""),
+            "targets": list(targets),
             "text": text_,
         })
 
     for line in text.splitlines(keepends=True):
         if _FENCE.match(line):
             fenced = not fenced
-        match = None if fenced else _HEADING.match(line.rstrip("\n"))
-        if match is None:
-            body.append(line)
+        stripped = line.rstrip("\n")
+        match = None if fenced else _HEADING.match(stripped)
+        if match is not None:
+            flush()
+            level, heading = len(match.group(1)), match.group(2)
+            stack = stack[:level - 1] + [heading]
+            body = []
+            targets, pending = pending, []
             continue
-        flush()
-        level, heading = len(match.group(1)), match.group(2)
-        stack = stack[:level - 1] + [heading]
-        body = []
+        body.append(line)
+        if fenced:
+            continue
+        label = _TARGET.match(stripped)
+        if label is not None:
+            pending.append(label.group(1))
+        elif stripped.strip():
+            targets.extend(pending)
+            pending.clear()
+    targets.extend(pending)
     flush()
     return sections
 
@@ -147,7 +173,7 @@ def build(docs: Path = DOCS) -> dict:
     sections = []
     for path in sorted(docs.glob("*.md")):
         sections.extend(split(path.read_text(), path.name))
-    return {"version": 1, "n_sections": len(sections), "sections": sections}
+    return {"version": 2, "n_sections": len(sections), "sections": sections}
 
 
 def index_terms(index: dict) -> dict:

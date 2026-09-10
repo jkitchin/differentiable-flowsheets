@@ -150,28 +150,114 @@ Two findings from the GasLib benchmark studies that apply to any reduced-space o
 (gas-unit-reference)=
 ## Unit operation reference
 
-Tree-propagation units (used by the builder; two inlets, parent node stream and arc flow stream):
+Fifteen small units, each one equation. They are listed together rather
+than given a chapter apiece because that is how they are understood ---
+as the equation set of a network decomposition --- but each has its own
+anchor, so a link can land on the unit rather than on this heading.
 
-- `PipePressure(beta, direction)`: squared-pressure drop with (+1) or against (-1) the arc
-- `CompressorBoost(ratio, direction)`: multiply or divide by the ratio
-- `PressureEqual()`: valves and short pipes
-- `ControlValveDrop(dp_pa, direction)`: parametric linear drop, floored at 0.5 bar
+Which ones you use follows from how the flowsheet was decomposed.
+`build_network_flowsheet` uses the tree-propagation set; a hand-built
+flowsheet that pushes pressures downstream from a known source uses the
+forward-mode set.
 
-Chord unit:
+### Tree-propagation units
 
-- `PressureDrivenPipe(beta)`: signed flow from two end pressures, `q = sign(dp2) sqrt(|dp2|/beta)`
+Two inlets each: the parent node's stream (which carries the pressure)
+and the arc's flow stream. The output is the child node's stream. These
+are what `decompose` schedules.
 
-Forward-mode units (hand-built flowsheets):
+(gas-op-pipepressure)=
+`PipePressure(beta, direction)` --- squared-pressure Weymouth drop along
+the arc: `p_child^2 = p_parent^2 ∓ beta q |q|`, with `direction=+1` when
+the tree is traversed *with* the arc (the parent is the arc's `from`
+node) and `-1` against it. Floored at `MIN_P_SQUARED`.
 
-- `GasPipe(beta)`, `BackPipe(beta)`, `Compressor(ratio)`, `OpenValve()`
+(gas-op-compressorboost)=
+`CompressorBoost(ratio, direction)` --- a compressor station:
+`p_child = ratio * p_parent` downstream (`direction=+1`), or
+`p_parent / ratio` when the child is the station inlet. `ratio` is the
+decision variable.
 
-Topology and bookkeeping:
+(gas-op-pressureequal)=
+`PressureEqual()` --- open valves and short pipes, in either traversal
+direction: `p_child = p_parent`, no parameters.
 
-- `SourceHead(P_set)`: pin the slack node pressure (differentiable parameter)
-- `AffineFlow(const, signs, T_k, P_pa)`: tree-arc flow from a local mass balance
-- `FlowSplit(w)`, `TearSplit()`, `Junction()`, `FlowMinus()`
+(gas-op-controlvalvedrop)=
+`ControlValveDrop(dp_pa, direction)` --- a control valve's parametric
+linear reduction, `p_child = p_parent ∓ dp`, floored at `MIN_P` so an
+unphysical iterate cannot produce a nonpositive pressure. `dp_pa` is the
+station's decision variable.
 
-Parameters live in `ParamsMixin` dataclasses (`PipeParams`, `CompressorParams`, `ControlValveParams`, `SourceHeadParams`, ...), so `Flowsheet._apply_params` can rebind them functionally for differentiation.
+### Chord unit
+
+(gas-op-pressuredrivenpipe)=
+`PressureDrivenPipe(beta)` --- the inverse relation: *flow* from the two
+end pressures, `q = sign(Δp²) sqrt(|Δp²| / beta)`. One per independent
+loop; its computed flow is what the tear iteration updates against.
+
+### Forward-mode units
+
+Single inlet (or inlet plus specification), for hand-built flowsheets
+that propagate state downstream.
+
+(gas-op-gaspipe)=
+`GasPipe(beta)` --- `p_out = sqrt(p_in^2 - beta q |q|)`, carrying the
+signed flow through unchanged.
+
+(gas-op-backpipe)=
+`BackPipe(beta)` --- the same pipe read backwards:
+`p_src = sqrt(p_node^2 + beta q |q|)`, for a flow-specified entry whose
+pressure is an *output* of the solve rather than an input.
+
+(gas-op-compressor)=
+`Compressor(ratio)` --- fixed-ratio boost, `p_out = ratio * p_in`. (The
+catalog name is `Compressor`; difflow's EOS-consistent compressor is
+registered as `EOSCompressor`.)
+
+(gas-op-openvalve)=
+`OpenValve()` --- `p_out = p_in`.
+
+### Topology and bookkeeping
+
+(gas-op-sourcehead)=
+`SourceHead(P_set)` --- pin the slack node's pressure. A nomination
+scenario fixes boundary *flows*, so one node must supply the pressure
+level; keeping it in a unit parameter rather than in the feed stream is
+what makes it differentiable through `Flowsheet._apply_params`.
+
+(gas-op-affineflow)=
+`AffineFlow(const, signs, T_k, P_pa)` --- a tree arc's flow from the
+node's local mass balance, `q = const + Σ signs_i q_i`, where `const` is
+the node's nomination and the inlets are its child tree-arc flows and
+incident chord tears. T and P on the output are placeholders: a flow
+stream carries only flow.
+
+(gas-op-flowsplit)=
+`FlowSplit(w)` --- fixed draw: `w` to the first outlet, the remainder to
+the second. For a demand branch whose flow the nomination fixes.
+
+(gas-op-tearsplit)=
+`TearSplit()` --- the same split with the flow taken from a second
+(tear) inlet instead of a parameter. The entry point of a hand-built
+recycle that closes a loop.
+
+(gas-op-junction)=
+`Junction()` --- a network node: flows add, and the pressure comes from
+the **first** inlet. Unlike difflow's `combine_streams` (which takes the
+minimum pressure), every arc at a gas node sees the same nodal pressure,
+so the junction takes it from the designated pressure-defining branch;
+at convergence all inlets agree, and the difference beforehand is a
+residual rather than a modelling choice. The outlet temperature is the
+flow-weighted mean.
+
+(gas-op-flowminus)=
+`FlowMinus()` --- `q = q_a - q_b`, with T and P from `a`. Tear-update
+bookkeeping.
+
+Parameters live in `ParamsMixin` dataclasses (`PipeParams`,
+`CompressorParams`, `ControlValveParams`, `SourceHeadParams`, ...), so
+`Flowsheet._apply_params` can rebind them functionally for
+differentiation.
 
 ---
 

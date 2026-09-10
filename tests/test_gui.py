@@ -663,6 +663,22 @@ class TestPalette:
             ports = spec["ports"]
             assert ports["variadic"] or ports["n_inlets"] is not None, name
 
+    def test_every_entry_carries_where_to_read_about_it(self, client):
+        """The palette offers a documentation link; the server resolves it.
+
+        `tests/test_doclinks.py` is what holds the prose to having
+        somewhere for each of these to point (#228); this is only that
+        the catalog the page fetches actually carries the answer.
+        """
+        from difflow.gui import doclinks
+
+        _, catalog = client.get_json("/api/catalog")
+        missing = [n for n, spec in catalog.items() if not spec["docs_url"]]
+        assert missing == []
+        assert catalog["Heater"]["docs_url"] == doclinks.url_for("Heater")
+        assert catalog["Heater"]["docs_url"].endswith(
+            "unit-operations-chemical.html#heater")
+
 
 class TestWhatBlocksADrop:
     """The palette's flag and the adder's refusal, which must agree.
@@ -2729,31 +2745,18 @@ class TestTheHeaderLinks:
 class TestWhereTheBookTalksAboutAUnit:
     """Every palette entry offers the documentation for that unit.
 
-    Derived from ``static/docs-index.json`` rather than written down: a
-    hand-kept table of 87 operations against prose that gets reorganised
-    is wrong within a release, and wrong silently, because a link to a
-    renamed heading still returns 200 and lands at the top of the page.
+    Resolved against ``static/docs-index.json`` rather than written down:
+    a hand-kept table of 87 operations against prose that gets
+    reorganised is wrong within a release, and wrong silently, because a
+    link to a renamed heading still returns 200 and lands at the top of
+    the page. :mod:`tests.test_doclinks` is where the resolution rules
+    themselves are pinned; what is here is the editor's side of it.
     """
 
     def test_a_unit_with_its_own_section_lands_on_it(self):
         url = doclinks.url_for("CSTR")
-        assert url.startswith(doclinks.DOCS_BASE)
+        assert url.startswith(doclinks.BASE_URL)
         assert "unit-operations-chemical.html#" in url
-        assert url.endswith("#cstr-continuous-stirred-tank-reactor")
-
-    def test_a_heading_that_says_more_than_the_name_still_matches(self):
-        """``DistillationColumn (Rigorous)`` is that unit's section."""
-        assert doclinks.url_for("DistillationColumn").endswith(
-            "#distillationcolumn-rigorous")
-
-    def test_a_unit_documented_in_a_shared_table_lands_on_the_table(self):
-        """The gas plugin documents its equation set in one reference.
-
-        The right page and the right table, if not a heading of its own
-        --- see #228, which is about giving them one.
-        """
-        url = doclinks.url_for("GasPipe")
-        assert "unit-operations-gas.html" in url
 
     def test_an_ordinary_word_is_matched_as_well_as_a_camel_case_one(self):
         """``Junction`` and ``Transformer`` are the names a heuristic misses.
@@ -2764,9 +2767,8 @@ class TestWhereTheBookTalksAboutAUnit:
         assert doclinks.url_for("Transformer") is not None
         assert doclinks.url_for("Junction") is not None
 
-    def test_a_unit_the_book_never_names_gets_no_link(self):
+    def test_a_name_the_book_never_uses_gets_no_link(self):
         """Reported as an absence rather than papered over with a home page."""
-        assert doclinks.url_for("ShellAndTubeHX") is None
         assert doclinks.url_for("NotAnOperationAtAll") is None
         assert doclinks.url_for("") is None
 
@@ -2799,19 +2801,23 @@ class TestWhereTheBookTalksAboutAUnit:
             url = entry["docs_url"]
             if url is None:
                 continue
-            page = url[len(doclinks.DOCS_BASE):].split("#")[0]
-            assert page.removesuffix(".html") in built, (
+            page = url[len(doclinks.BASE_URL):].split("#")[0]
+            assert "docs/" + page.removesuffix(".html") in built, (
                 f"{name} links to {page}, which _toc.yml does not build")
 
     def test_the_catalog_carries_the_link_for_every_operation(self):
+        """All of them, now that #228 wrote the prose that was missing.
+
+        The count used to be "all but five". It is not a count any more:
+        an operation with nowhere to link to is a palette entry with
+        nothing to read, and :mod:`tests.test_doclinks` refuses it at the
+        source. This is the same line drawn where the editor stands.
+        """
         session = FlowsheetSession(None, None)
         catalog = session.catalog()
         assert len(catalog) > 50
-        linked = [n for n, e in catalog.items() if e["docs_url"]]
-        # Not "all of them": five units have no prose at all, and #228 is
-        # the ticket for writing it. This holds the line at the count.
-        assert len(catalog) - len(linked) <= 5, (
-            f"more units lost their documentation: "
+        assert not [n for n, e in catalog.items() if not e["docs_url"]], (
+            "units with no documentation link: "
             f"{sorted(n for n, e in catalog.items() if not e['docs_url'])}")
 
     def test_the_inspector_gets_the_same_link_as_the_palette(self):
@@ -2820,16 +2826,21 @@ class TestWhereTheBookTalksAboutAUnit:
                 == session.catalog()["Flash"]["docs_url"])
 
     def test_a_missing_index_is_no_links_rather_than_no_editor(self, monkeypatch):
-        """A source checkout that has never run the front-end build."""
-        monkeypatch.setattr(doclinks, "INDEX",
-                            pathlib.Path("/nowhere/docs-index.json"))
-        doclinks._cached_sections.cache_clear()
-        doclinks.url_for.cache_clear()
+        """A source checkout that has never run the front-end build.
+
+        Patched at :func:`docs_index.load` rather than at its ``INDEX``
+        constant: the path is a default argument, bound once at
+        definition, so rebinding the module attribute would leave the
+        real index still being read and this test passing for no reason.
+        """
+        from difflow.gui import doclinks as dl
+
+        monkeypatch.setattr(dl.docs_index, "load", lambda *a, **k: None)
+        dl.resolve.cache_clear()
         try:
-            assert doclinks.url_for("CSTR") is None
+            assert dl.url_for("CSTR") is None
         finally:
-            doclinks._cached_sections.cache_clear()
-            doclinks.url_for.cache_clear()
+            dl.resolve.cache_clear()
 
 
 class TestSayingWhatHoldsThePort:

@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from difflow.gui import assistant, doclinks
+from difflow.gui import assistant
 from difflow.gui.session import FlowsheetSession
 
 #: The front end, as built files on disk rather than a string literal in
@@ -421,8 +421,10 @@ class _Handler(BaseHTTPRequestHandler):
             # agreement, and only one of them should be written down.
             "/api/about": lambda: self._send(
                 {"ok": True, "version": version(), "links": links(),
-                 "heartbeat": HEARTBEAT_SECONDS,
-                 "docs_index": doclinks.DOCS_BASE}),
+                 "heartbeat": HEARTBEAT_SECONDS}),
+            # No separate documentation-index URL here: `links()` already
+            # carries `documentation`, read from the packaging metadata,
+            # and a second copy is a second thing to move.
         }
         handler = routes.get(self.path)
         if handler is not None:
