@@ -15,28 +15,63 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Fast suite: everything except the `slow` (compile-bound) tests. Those run
-  # in the `slow-tests` job below, concurrently, so total coverage is unchanged
-  # and wall-clock is max(fast, slow) rather than the sum.
+  # The whole suite, sharded three ways and run in parallel inside each shard.
+  #
+  # Two multipliers, because one is not enough. Run end to end in one process
+  # the suite takes 50 minutes, nearly all of it XLA turning traced graphs
+  # into machine code, and that work is per-process. So:
+  #
+  #  * `-n auto --dist loadfile` spends every core of the runner. Measured on
+  #    a 4-core/16 GB box (what `ubuntu-latest` is), on the half of the suite
+  #    this job used to run alone: 40:01 -> 14:30. That is 2.8x, not 4x, and
+  #    the shortfall is not thread contention -- pinning XLA and BLAS to one
+  #    thread each changed nothing (215s vs 212s over a six-file sample). It
+  #    is the compiler itself.
+  #
+  #  * `--splits/--group` then cuts what is left across three jobs, which run
+  #    concurrently. Balance comes from `.test_durations`, not from anyone's
+  #    judgement: the three shards hold 993s, 996s and 988s of measured work,
+  #    and came in at 7:12, 6:53 and 6:02.
+  #
+  # Three *jobs* and not three pytest invocations in one job: each one re-pays
+  # JAX/XLA startup and shares no compiled code with the others, which is dead
+  # weight when it is serial (the reason core and bio were merged into a single
+  # invocation here) and free when the three run on separate runners.
+  #
+  # `loadfile`, NOT the default `load`, is what makes the first one pay. A
+  # worker has its own compilation cache, so scattering one module's tests
+  # across four workers compiles the same graph four times; keeping a file
+  # whole keeps the reuse the cache is there for. An earlier attempt at plain
+  # `-n auto` is on record as having made the compile-bound tests *worse*
+  # (17-33 min against ~11 serial, run 29622893782). It no longer reproduces
+  # -- those same tests now go 598s -> 291s at `-n 4` -- most likely because
+  # the memory that attempt ran into is what tests/conftest.py now bounds.
+  #
+  # This replaces a `-m "not slow"` / `-m slow` pair of jobs whose halves had
+  # drifted to 2382s against 598s, so wall-clock was the fast half alone: 34
+  # minutes. The `slow` marker still exists, and `make test` still skips it,
+  # but CI no longer splits on it -- see the marker note in pyproject.toml.
   test:
+    name: Tests (${{ matrix.python-version }}, shard ${{ matrix.shard }}/3)
     runs-on: ubuntu-latest
-    # 45, not 30. The fast suite ran ~22 min before the editor landed and ~28
-    # after, and a slow runner then pushed it past a 30-minute cap -- run
-    # 34425803062 was cancelled at 81% with every test to that point passing.
-    # A timeout is there to catch a hang, and a hang does not sit one minute
-    # over the budget. Matches the slow job's headroom.
-    timeout-minutes: 45
+    # A shard is ~7 minutes. 25 is enough headroom for a runner having a bad
+    # day and still short enough to catch a hang, which was the problem with
+    # reading the old 45: at 34 minutes of real work, a cap that meant "this
+    # has hung" and a cap that meant "this is slow today" were the same
+    # number, and run 34425803062 was cancelled at 81% with everything to
+    # that point passing.
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
         # One interpreter on a pull request, all three on main.
         #
-        # The three jobs run concurrently, so this does not make a pull
-        # request finish sooner -- it costs the same wall-clock as one job.
-        # What it saves is job-minutes, and this being a public repository
-        # those are free. The reason to do it anyway is contention: the three
-        # jobs draw on the same runner pool as every other repository on the
-        # account, and two of them have almost never been the ones to fail.
+        # The jobs run concurrently, so this does not make a pull request
+        # finish sooner -- it costs the same wall-clock as one job. What it
+        # saves is job-minutes, and this being a public repository those are
+        # free. The reason to do it anyway is contention: the jobs draw on the
+        # same runner pool as every other repository on the account, and two
+        # of them have almost never been the ones to fail.
         #
         # Almost, not never, and the exception is the cost of this change.
         # Over 134 full-matrix runs, three had 3.10 fail while 3.11 passed
@@ -48,6 +83,12 @@ jobs:
         python-version: >-
           ${{ fromJSON(github.event_name == 'pull_request'
               && '["3.11"]' || '["3.10", "3.11", "3.12"]') }}
+        # Sharding costs job-minutes and buys wall-clock, and it buys less
+        # of it each time: three shards are ~7 min against the ~14 min of an
+        # unsharded parallel run, where a fourth would save under two more
+        # minutes. If this list changes, `--splits` below has to change with
+        # it -- they are the same number written twice, and nothing checks.
+        shard: [1, 2, 3]
 
     steps:
       - uses: actions/checkout@v4
@@ -66,43 +107,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev,gui,solvers]"
 
-      # One invocation, not two. Splitting core and bio into separate pytest
-      # processes meant the second one re-paid JAX/XLA startup and could not
-      # reuse anything the first compiled. `tests/` already includes tests/bio.
+      # No `-m` filter: a shard is a slice of the WHOLE suite, slow tests
+      # included. `-q`, because `-v` from four workers at once interleaves
+      # into something nobody reads; a failure still prints its own name.
       - name: Run tests
         run: |
-          python -m pytest tests/ -v --tb=short -m "not slow"
-
-  # The compile-bound tests. Their cost is one-off JAX trace/compile of nested
-  # solver graphs, so they do NOT benefit from xdist -- separate worker
-  # processes have separate compilation caches and just recompile the same
-  # graphs (measured: run 29622893782 went 17-33 min with `-n auto`, vs ~11
-  # without). One job, one process, one compile each.
-  slow-tests:
-    name: Slow (compile-bound) tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-          cache: pip
-
-      # `solvers` is asdex, which is where difflow.solvers gets its sparsity
-      # pattern. Without it as_nlp has only the coarse topology derivation to
-      # fall back on, and tests/test_solvers_bridge.py exercises the default.
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev,gui,solvers]"
-
-      - name: Run slow tests
-        run: |
-          python -m pytest tests/ -v --tb=short -m slow
+          python -m pytest tests/ -q --tb=short \
+            -n auto --dist loadfile \
+            --splits 3 --group ${{ matrix.shard }}
 
   # Verify the package imports with NO optional dependencies installed. The job
   # this replaces installed ".[dev]" and re-ran the full suite, making it an

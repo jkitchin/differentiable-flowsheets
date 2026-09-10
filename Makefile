@@ -41,7 +41,8 @@ endif
 
 .PHONY: all notebooks notebooks-force notebooks-bio notebooks-ree notebooks-cc \
         notebooks-bio-force notebooks-ree-force notebooks-cc-force \
-        clean test book book-clean sync gui gui-build gui-test
+        clean test test-slow test-all test-durations book book-clean sync \
+        gui gui-build gui-test
 
 all: notebooks
 
@@ -118,19 +119,37 @@ notebooks-cc-force:
 run:
 	$(JAX_ENV) $(UV_RUN) $(NBCONVERT) "$(NB)"
 
+# The suite is compile-bound and parallelises across processes: `-n auto`
+# takes a full local run from ~40 to ~15 minutes on four cores. `--dist
+# loadfile` is not optional -- each worker has its own JAX compilation cache,
+# so splitting a module across workers recompiles the same graphs in each of
+# them and gives most of the win back. Add `-n0` to any of these to get a
+# single process back for --pdb or readable output.
+PYTEST := pytest -n auto --dist loadfile
+
 # Run tests (default: skip the compile-bound `slow` tests -- see the marker
-# description in pyproject.toml. CI runs those in a parallel job, so nothing
-# goes untested; use `make test-all` to run everything locally.)
+# description in pyproject.toml. CI shards the whole suite by measured
+# duration and runs the slow ones too, so nothing goes untested; use
+# `make test-all` to run everything locally.)
 test:
-	$(UV_RUN_DEV) pytest tests/ -v -m "not slow"
+	$(UV_RUN_DEV) $(PYTEST) tests/ -v -m "not slow"
 
 # Only the compile-bound tests
 test-slow:
-	$(UV_RUN_DEV) pytest tests/ -v -m slow
+	$(UV_RUN_DEV) $(PYTEST) tests/ -v -m slow
 
 # Everything, slow tests included
 test-all:
-	$(UV_RUN_DEV) pytest tests/ -v
+	$(UV_RUN_DEV) $(PYTEST) tests/ -v
+
+# Re-measure what CI shards on. `.test_durations` is what balances the three
+# CI jobs against each other; a test missing from it is estimated at the
+# average, so the balance degrades slowly as tests are added rather than
+# breaking. Regenerate when the shards have drifted noticeably apart (the job
+# names carry their numbers) -- serially and with nothing else running on the
+# machine, or the numbers it records are of a loaded box, which takes ~40 min.
+test-durations:
+	$(UV_RUN_DEV) pytest tests/ --store-durations
 
 # Clean generated files
 clean:
