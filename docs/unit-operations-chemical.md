@@ -898,8 +898,13 @@ the boiling range of the distillate itself:
 
 | distillate | top stage $T$ | condenser $T$ | gap |
 |---|---|---|---|
-| 99.6 % benzene / toluene, 1 atm | 369.1 K | 368.7 K | 0.3 K |
-| C3-C8 cut, 10 bar (Peng-Robinson) | 401.7 K | 363.3 K | 38 K |
+| 99.9999 % benzene / toluene, 1 atm | 368.665 K | 368.665 K | 0.0001 K |
+| C3-C8 cut, 10 bar (Peng-Robinson) | 400.6 K | 362.9 K | 38 K |
+
+A one-component distillate has no boiling range and so no gap, which is why the
+binary row reads as zero: at $\alpha \approx 8$ over 15 stages that column takes
+27 µmol/s of toluene overhead and nothing more. The gap is a property of the
+cut, not of the column.
 
 The same distinction runs through the energy balance: $Q_{cond}$ takes the top
 stage vapor down to that condensed state, and the reflux re-enters the top
@@ -1005,8 +1010,20 @@ print(info['balance_error'])      # (n_species,) D_i + B_i - F_i, mol/s
 print(info['balance_error_rel'])  # max |error| / F_total
 ```
 
-If `balance_error_rel` is larger than your problem tolerates, raise
-`cmo_iter` (default 30) — the residual falls geometrically with it.
+If `balance_error_rel` is larger than your problem tolerates, raise `cmo_iter`
+(default 30). The residual falls geometrically with it, but at a rate the
+column sets, so treat the reported number as the answer rather than assuming a
+count is enough:
+
+| case | `cmo_iter` 30 | 60 | 100 |
+|---|---|---|---|
+| 20-stage ternary, $R = 2$ | 1.6e-4 | 5.0e-10 | — |
+| 12-stage binary, $R = 1.2$ (near $R_{min}$) | 1.9e-4 | 1.8e-4 | 1.7e-4 |
+
+Near minimum reflux the fixed-point iteration converges with a rate close to
+one, and more sweeps buy almost nothing. That is a property of the column, not
+a defect in the solver — but it is exactly why the residual is reported instead
+of asserted.
 
 #### Outputs
 

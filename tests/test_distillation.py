@@ -1130,3 +1130,69 @@ class TestRigorousColumnComponentBalance:
         ]
         assert errors[0] > errors[1] > errors[2]
         assert errors[2] < 1e-6
+
+    def test_cmo_gives_up_the_energy_balance_not_the_material_balance(self):
+        """The two paths must differ where the energy balance bites, and agree
+        on the component balance (issue #211).
+
+        Both solvers now run the same tridiagonal component balance, which is
+        what closes `D_i + B_i == F_i` on both. The difference between them is
+        the L/V profile: CMO freezes it at `L' = L + qF`, MESH corrects it from
+        the stage enthalpy balances. On a mixture whose components have very
+        different latent heats that correction is large, so this test keeps
+        "CMO gives up the energy balance" a measured statement rather than a
+        sentence in a docstring -- if the two paths ever agree here, the MESH
+        energy balance has stopped doing anything.
+        """
+        # A and B differ by 2.5x in latent heat, so a mole of B condensing
+        # cannot boil a mole of A: constant molar overflow is badly wrong.
+        thermo = IdealThermo({
+            "A": SpeciesData(
+                name="A", MW=60.0, Cp_coeffs=(110.0, 0.0, 0.0, 0.0),
+                Hvap_coeffs=(25000.0, 0.38, 500.0),
+                antoine_coeffs=(13.5, 2700.0, -45.0),
+            ),
+            "B": SpeciesData(
+                name="B", MW=90.0, Cp_coeffs=(150.0, 0.0, 0.0, 0.0),
+                Hvap_coeffs=(62000.0, 0.38, 560.0),
+                antoine_coeffs=(13.5, 3000.0, -48.0),
+            ),
+        })
+        column = DistillationColumn(
+            DistillationColumnParams(
+                species_order=["A", "B"], n_stages=12, feed_stage=6, P=101325.0
+            ),
+            thermo,
+        )
+        feed = make_stream({"A": 50.0, "B": 50.0}, T=380.0, P=101325.0)
+
+        _, _, info_mesh = column(feed, R=1.2, D_spec=50.0, use_mesh=True)
+        L_cmo, _ = column._cmo_flows(100.0, 1.2, 50.0)
+
+        # Stage 0 is the reboiler, whose L is the bottoms by definition on both
+        # paths; the correction lives on the trays above it.
+        departure = max(
+            abs(float(info_mesh["L_profile"][j]) / float(L_cmo[j]) - 1.0)
+            for j in range(1, 12)
+        )
+        assert departure > 0.2, (
+            f"MESH L profile only departs from CMO by {departure:.1%}; "
+            "the energy balance correction has stopped doing anything"
+        )
+
+        # ... and yet both close the component balance.
+        feed_flows = get_flows(feed)
+        for use_mesh in (True, False):
+            distillate, bottoms, info = column(
+                feed, R=1.2, D_spec=50.0, use_mesh=use_mesh
+            )
+            dist_flows = get_flows(distillate)
+            bot_flows = get_flows(bottoms)
+            for s in ["A", "B"]:
+                total = float(dist_flows[s] + bot_flows[s])
+                assert total == pytest.approx(float(feed_flows[s]), rel=0.01)
+            # R = 1.2 is near minimum reflux for this pair, where the
+            # fixed-point iteration converges with a rate close to one -- so
+            # the residual sits near 1e-3 and more sweeps barely move it.
+            # That is the case the reported diagnostic exists for.
+            assert float(info["balance_error_rel"]) < 2e-3

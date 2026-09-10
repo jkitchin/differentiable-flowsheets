@@ -1182,7 +1182,7 @@ class DistillationColumn:
         diag = -(L[:, None] + K * V[:, None])  # (n, nc)
 
         L_next = jnp.concatenate([L[1:], jnp.zeros(1)])    # L[j+1]
-        upper = jnp.array(L_next[:, None] * jnp.ones((n, nc)))  # (n, nc)
+        upper = jnp.broadcast_to(L_next[:, None], (n, nc))  # (n, nc)
         upper = upper.at[-1].set(0.0)  # no stage above top
 
         rhs = -F_vec[:, None] * z[None, :]  # (n, nc)
@@ -1684,8 +1684,19 @@ class DistillationColumn:
             cmo_iter: Number of CMO bubble-point iterations (the warm start
                       when use_mesh=True, the whole solve when it is False).
                       Raise it if ``info['balance_error_rel']`` comes back
-                      larger than the problem can tolerate; the residual falls
-                      geometrically with this count.
+                      larger than the problem can tolerate.  The residual falls
+                      geometrically with this count, but at a rate the column
+                      sets: on a well-conditioned separation it drops several
+                      decades over a few tens of iterations, while near minimum
+                      reflux the rate approaches one and more iterations buy
+                      almost nothing (a 12-stage binary at R = 1.2 moves only
+                      1.0e-3 -> 9.5e-4 going from 30 to 100).  Read the
+                      reported residual rather than assuming a count is enough.
+                      Most of the MESH path's cost is this warm start, not the
+                      MESH iterations -- do not trim it as an optimisation
+                      without re-reading ``balance_error_rel``, because closure
+                      is what it buys (0.41 ms CMO vs 0.53 ms MESH, jitted, on
+                      a 20-stage ternary column).
 
         Returns:
             distillate: Distillate stream, at the condenser temperature --
@@ -1827,6 +1838,11 @@ class DistillationColumn:
         # Component balance closure.  Both solvers satisfy the per-species
         # balances only to within their iteration count, so report the residual
         # rather than leaving a caller to discover it (issue #211).
+        #
+        # Taken from the reported product streams, not from the profiles the
+        # solver converged: that is the number a caller can act on, and it also
+        # catches anything the stream construction gets wrong between the
+        # profile ends and the products.
         balance_error = jnp.array([
             distillate_flows[s] + bottoms_flows[s] - feed_flows[s]
             for s in p.species_order
