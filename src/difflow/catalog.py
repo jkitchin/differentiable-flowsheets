@@ -528,6 +528,11 @@ def core_operations() -> dict[str, type]:
             continue
         if not obj.__module__.startswith("difflow.units"):
             continue
+        if issubclass(obj, BaseException):
+            # A unit module may export a warning class of its own (e.g.
+            # DefaultCpWarning, so callers can escalate it to an error).
+            # It is exported from difflow.units but is not an operation.
+            continue
         if attr.endswith("Params") or attr in NOT_OPERATIONS:
             continue
         found[CORE_NAME_OVERRIDES.get(attr, attr)] = obj

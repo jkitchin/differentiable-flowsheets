@@ -1208,7 +1208,7 @@ class TestBuilding:
 
         _, after = client.get_json("/api/flowsheet")
         assert set(after["flowsheet"]["units"][-1]["params"]) == {
-            "duty", "T_out", "UA", "T_utility", "Cp"
+            "duty", "T_out", "UA", "T_utility", "Cp", "phase"
         }
 
     def test_the_added_unit_then_solves(self, client):
