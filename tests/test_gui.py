@@ -808,9 +808,10 @@ class TestPendingNodesOverHTTP:
     """The red node, from the browser's side.
 
     The routes are the contract the front end draws against: a drop that
-    cannot be built answers 200 with ``pending``, the served document
-    carries the parked nodes beside the flowsheet, and there is a route
-    that writes the code they are waiting for.
+    cannot be built answers 200 with ``pending``, the node is on the
+    flowsheet with real ports so it can be wired straight away, the
+    served document lists it under ``pending`` so the canvas can paint it
+    red, and there is a route that writes the code it is waiting for.
     """
 
     def test_a_blocked_drop_answers_200_and_pending(self, client):
@@ -825,10 +826,18 @@ class TestPendingNodesOverHTTP:
                                   "position": {"x": 10, "y": 20}})
         _, payload = client.get_json("/api/flowsheet")
         assert [p["name"] for p in payload["pending"]] == ["cstr"]
-        assert payload["pending"][0]["position"] == {"x": 10.0, "y": 20.0}
-        # Not in the flowsheet: what is served here is what gets saved.
-        assert "cstr" not in [u["name"] for u in payload["flowsheet"]["units"]]
-        assert "cstr" not in payload["flowsheet"]["view"]["nodes"]
+        # On the flowsheet, like any other node, and placed in the view
+        # where any other node is placed. It has to be: a node the
+        # flowsheet has never heard of has no ports, and a node with no
+        # ports cannot be wired to the unit that feeds it.
+        assert "cstr" in [u["name"] for u in payload["flowsheet"]["units"]]
+        assert payload["flowsheet"]["view"]["nodes"]["cstr"] == {"x": 10.0,
+                                                                "y": 20.0}
+        [spec] = [u for u in payload["flowsheet"]["units"] if u["name"] == "cstr"]
+        # And it is saved saying so, rather than as a CSTR that isn't one.
+        assert spec["incomplete"]["needs"] == ["rate_fn", "stoich",
+                                               "rate_params"]
+        assert spec["inlets"] and spec["outlets"]
 
     def test_the_boilerplate_route_writes_what_it_is_waiting_for(self, client):
         name = client.post("/api/unit", {"operation": "Flash"})[1]["name"]
@@ -855,10 +864,13 @@ class TestPendingNodesOverHTTP:
         assert payload["flowsheet"]["view"]["nodes"][name] == {"x": 7.0, "y": 8.0}
 
     def test_a_parked_node_is_deleted_like_any_other(self, client):
+        """Like any other, now literally: one path, not two."""
         name = client.post("/api/unit", {"operation": "CSTR"})[1]["name"]
         status, answer = client.delete(f"/api/unit/{name}")
-        assert status == 200 and answer["ok"] and answer["pending"] is True
-        assert client.get_json("/api/flowsheet")[1]["pending"] == []
+        assert status == 200 and answer["ok"]
+        _, payload = client.get_json("/api/flowsheet")
+        assert payload["pending"] == []
+        assert name not in [u["name"] for u in payload["flowsheet"]["units"]]
 
     def test_the_boilerplate_route_needs_the_token(self, client):
         """It writes nothing, and it is still a POST.
@@ -876,6 +888,57 @@ class TestPendingNodesOverHTTP:
     def test_an_unregistered_operation_is_refused(self, client):
         _, answer = client.post("/api/boilerplate", {"operation": "Teleporter"})
         assert answer["ok"] is False and "registered" in answer["error"]
+
+    def test_an_unfinished_unit_can_be_wired_at_once(self, client):
+        """The bug this whole arrangement exists to fix.
+
+        A reactor cannot be built until its rate law exists, and the
+        rate law is code the user writes later --- so for as long as the
+        unfinished unit was held off the flowsheet it had no ports, and
+        a compressor upstream of it had nothing to connect to. Wiring
+        first and finishing afterwards is the order people work in.
+        """
+        name = client.post("/api/unit", {"operation": "CSTR"})[1]["name"]
+        assert client.post("/api/connect", {
+            "source": "flash", "outlet": "liq",
+            "target": name, "inlet": f"{name}_in",
+        })[1] == {"ok": True, "kind": "arc", "stream": "liq"}
+        [unit] = [u for u in client.session.flowsheet.units if u.name == name]
+        assert list(unit.inlet_names) == ["liq"]
+
+    def test_finishing_it_keeps_the_wiring(self, client):
+        """Built in place, not dropped again.
+
+        A fresh drop would arrive with its own default port names and
+        quietly detach whatever had been connected in the meantime.
+        """
+        name = client.post("/api/unit", {"operation": "Flash",
+                                         "position": {"x": 3, "y": 4}})[1]["name"]
+        assert client.post("/api/connect", {
+            "source": "flash", "outlet": "vap",
+            "target": name, "inlet": f"{name}_in",
+        })[1]["ok"]
+        _, written = client.post("/api/boilerplate",
+                                 {"operation": "Flash", "name": name})
+        _, applied = client.post("/api/code-context",
+                                 {"source": written["merged"]})
+        assert applied["promoted"] == [name]
+        [unit] = [u for u in client.session.flowsheet.units if u.name == name]
+        assert list(unit.inlet_names) == ["vap"], "the wire survived the build"
+        assert type(unit.operation).__name__ == "Flash"
+
+    def test_a_solve_refuses_while_one_is_unfinished(self, client):
+        """By name, and saying what it is waiting for.
+
+        The unit is on the flowsheet now, so nothing stops the solver
+        reaching it; what it would reach is a stand-in with no model
+        behind it. Better to say so at the top than to raise from the
+        middle of a recycle loop.
+        """
+        client.post("/api/unit", {"operation": "CSTR", "name": "R1"})
+        _, answer = client.post("/api/solve", {})
+        assert answer["ok"] is False and answer["pending"] == ["R1"]
+        assert "R1" in answer["error"] and "rate_fn" in answer["error"]
 
 
 class TestANumberInTheConstructor:

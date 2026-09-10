@@ -265,9 +265,11 @@ class FlowsheetSession:
         return {
             "species": list(getattr(self.flowsheet, "species_order", None) or []),
             # Renaming the order under existing units would reinterpret
-            # the arrays they hold, so the editor only offers it while the
-            # flowsheet is still empty.
-            "editable": not (self.flowsheet is None or self.flowsheet.units),
+            # the arrays they hold, so the editor only offers it while
+            # nothing holds any. An unfinished unit does not: it is a
+            # stand-in with empty params, and naming the species is
+            # usually the very edit it is waiting for.
+            "editable": not (self.flowsheet is None or self._built()),
         }
 
     def set_species(self, names) -> dict:
@@ -297,7 +299,11 @@ class FlowsheetSession:
             seen.add(text)
             cleaned.append(text)
         with self._lock:
-            if self.flowsheet.units:
+            # Unfinished units do not count. Dropping a Mixer on an empty
+            # canvas leaves one waiting on `species_order`, and refusing
+            # here because of it would block the only edit that answers
+            # it. It holds no stream arrays to reinterpret.
+            if self._built():
                 return {
                     "ok": False,
                     "error": "the flowsheet already has units, whose stream "
@@ -724,6 +730,14 @@ class FlowsheetSession:
         nodes = (self.flowsheet.view or {}).get("nodes")
         if isinstance(nodes, dict) and u.name in nodes:
             nodes[new_name] = nodes.pop(u.name)
+        # An unfinished unit is indexed twice: on the flowsheet, and in
+        # `pending` under the same key. Moving only the first leaves the
+        # entry pointing at a name nothing answers to, and the node stops
+        # being red at the moment it is renamed.
+        if u.name in self.pending:
+            entry = self.pending.pop(u.name)
+            entry["name"] = new_name
+            self.pending[new_name] = entry
         u.name = new_name
 
     def _place(self, key: str, position) -> None:
@@ -735,12 +749,9 @@ class FlowsheetSession:
             raise edit.EditError(
                 f"position for {key!r} must be {{'x': number, 'y': number}}"
             ) from exc
-        # A pending node's position stays on the pending entry. Writing it
-        # into `view.nodes` would put a coordinate for a node that does
-        # not exist into the saved file, and it would outlive the drop.
-        if key in self.pending:
-            self.pending[key]["position"] = {"x": x, "y": y}
-            return
+        # An unfinished unit is on the flowsheet like any other, so its
+        # position goes where every other node's does. It used to be held
+        # off the flowsheet, and the coordinate with it.
         self.flowsheet.view.setdefault("nodes", {})[key] = {"x": x, "y": y}
 
     def add_unit(self, operation: str, name: str | None = None,
@@ -863,49 +874,121 @@ class FlowsheetSession:
 
     def _hold(self, operation: str, unit_name: str, cls,
               unmet: list[str], position) -> dict:
-        """Park an unbuildable drop on the canvas instead of refusing it."""
+        """Land an unbuildable drop as a unit that is not finished yet.
+
+        It goes on the flowsheet with its real ports, standing in for
+        the operation until the missing thing appears. That is the whole
+        point: a unit with no ports cannot be wired, so holding it off
+        the flowsheet meant a reactor could not be connected to
+        anything, for as long as it had no rate law --- which is to say,
+        until after the wiring was done.
+
+        What it will not do is run. :meth:`solve` refuses while one is
+        here, by name, rather than quietly returning numbers out of a
+        unit nobody finished.
+        """
+        from difflow.catalog import describe_class
+        from difflow.flowsheet import Unit
+        from difflow.gui import edit
+        from difflow.incomplete import Incomplete
+
+        hint = self._needs_hint(operation, cls, unmet)
+        ports = describe_class(cls).to_dict()["ports"]
+        inlets, outlets = edit.default_ports(
+            unit_name, ports, edit.stream_names(self.flowsheet)
+        )
+        self.flowsheet.add_unit(Unit(
+            unit_name, Incomplete(operation, list(unmet), hint),
+            inlets, outlets,
+        ))
+        # No position here: the node is on the flowsheet, so its
+        # coordinate is in the view with everybody else's.
         entry = {
             "name": unit_name,
             "operation": operation,
             "needs": list(unmet),
-            "hint": self._needs_hint(operation, cls, unmet),
-            "position": None,
+            "hint": hint,
         }
         self.pending[unit_name] = entry
         if position is not None:
             self._place(unit_name, position)
-        # `ok` is True: the editor did what was asked. `pending` is what
-        # says the unit is not there yet, and the hint is the sentence
-        # the refusal used to carry.
-        return {**entry, "pending": True}
+        # `ok` is True: the editor did what was asked. `pending` says
+        # what is still missing; the ports say it is nevertheless a unit
+        # you can wire.
+        return {**entry, "pending": True,
+                "inlets": inlets, "outlets": outlets}
 
     def pending_units(self) -> list[dict]:
         """The unbuildable drops, as the canvas draws them."""
         return [dict(entry) for entry in self.pending.values()]
 
+    def _built(self) -> list:
+        """The units that are actually built, unfinished ones excluded.
+
+        The distinction matters wherever a guard is really about the
+        stream arrays a unit holds: an `Incomplete` stand-in holds none.
+        """
+        if self.flowsheet is None:
+            return []
+        return [u for u in self.flowsheet.units if u.name not in self.pending]
+
     def _retry_pending(self) -> dict:
-        """Drop every pending unit again, now that the context has moved.
+        """Ask every unfinished unit again, now that the context has moved.
 
         Called after the code context or the species change --- the two
-        edits that can turn an unmet need into a met one. Each entry is
-        removed and re-dropped under its own name and at its own
-        position: if it builds it becomes a real unit and the red node
-        goes away, and if it does not it is parked again with a hint
-        answered against the *new* bindings, which is the useful half of
-        re-asking.
+        edits that can turn an unmet need into a met one. Each unit is
+        finished where it stands: if it builds, the stand-in operation is
+        replaced and the red node goes away, and if it does not, its
+        needs and hint are rewritten against the *new* bindings, which is
+        the useful half of re-asking.
 
         Not called under `self._lock`: `add_unit` takes it.
         """
         promoted, still = [], []
         for name, entry in list(self.pending.items()):
-            del self.pending[name]
-            answer = self.add_unit(entry["operation"], name=name,
-                                   position=entry.get("position"))
-            if answer.get("ok") and not answer.get("pending"):
-                promoted.append(name)
-            else:
-                still.append(name)
+            answer = self._finish(name, entry)
+            (promoted if answer else still).append(name)
         return {"promoted": promoted, "pending": still}
+
+    def _finish(self, name: str, entry: dict) -> bool:
+        """Build an unfinished unit for real, in place. Did it work?
+
+        In place, and not by dropping it again, because by now it may be
+        wired: its ports carry the names of the streams it is joined to,
+        and a fresh drop would arrive with `unit_in` and `unit_out` and
+        quietly detach everything the user had already connected.
+        """
+        from difflow.catalog import _default_registry, _params_class
+        from difflow.gui import edit
+        from difflow.serialize import SerializationError, _build_operation
+
+        info = _default_registry().list_operations().get(entry["operation"])
+        if info is None:
+            return False
+        override = edit.known_extras(self.flowsheet, info.cls, self.bindings)
+        values, _placeholders, missing = edit.known_params(
+            self.flowsheet, _params_class(info.cls), self.bindings
+        )
+        guessed, _names = edit.placeholder_extras(info.cls, {**values, **override})
+        override.update(guessed)
+        unmet = [a for a in edit.constructor_extras(info.cls)
+                 if a not in override and a not in values] + missing
+        if unmet:
+            # Still waiting, but perhaps for less than before: the hint
+            # is re-answered against the bindings as they are now.
+            entry["needs"] = list(unmet)
+            entry["hint"] = self._needs_hint(entry["operation"], info.cls, unmet)
+            unit = edit.unit(self.flowsheet, name)
+            unit.operation.needs = list(unmet)
+            unit.operation.hint = entry["hint"]
+            return False
+        try:
+            built = _build_operation(info.cls, values, name, override=override)
+        except (SerializationError, ValueError, TypeError):
+            return False
+        edit.unit(self.flowsheet, name).operation = built
+        del self.pending[name]
+        return True
 
     def boilerplate(self, operation: str, name: str | None = None) -> dict:
         """Python that would define what *operation* is waiting for.
@@ -1017,11 +1100,10 @@ class FlowsheetSession:
         from difflow.gui import edit
 
         def apply() -> dict:
-            # A pending node has no ports, no wires and no entry in the
-            # flowsheet: deleting it is forgetting it.
-            if name in self.pending:
-                del self.pending[name]
-                return {"name": name, "recycles_dropped": {}, "pending": True}
+            # An unfinished unit is on the flowsheet with ports and
+            # possibly wires, so it is deleted like any other. Only the
+            # note about what it was waiting for is separate.
+            self.pending.pop(name, None)
             u = edit.unit(self.flowsheet, name)
             touched = set(u.inlet_names) | set(u.outlet_names)
             self.flowsheet.units = [
@@ -1058,12 +1140,26 @@ class FlowsheetSession:
         )
 
     def _ports(self, name: str) -> dict:
-        """The port spec of the class behind an existing unit."""
-        from difflow.catalog import describe_class
-        from difflow.gui import edit
+        """The port spec of the class behind an existing unit.
 
-        return describe_class(type(edit.unit(self.flowsheet, name).operation)) \
-            .to_dict()["ports"]
+        An unfinished unit has a stand-in where its operation goes, and
+        describing *that* would report a class with no ports at all --- so
+        the question is asked of the operation it is going to be, which
+        is the one whose arity the ports were laid out from.
+        """
+        from difflow.catalog import _default_registry, describe_class
+        from difflow.gui import edit
+        from difflow.incomplete import Incomplete
+
+        operation = edit.unit(self.flowsheet, name).operation
+        if isinstance(operation, Incomplete):
+            info = _default_registry().list_operations().get(operation.operation)
+            if info is None:
+                raise edit.EditError(
+                    f"{operation.operation!r} is not a registered operation"
+                )
+            return describe_class(info.cls).to_dict()["ports"]
+        return describe_class(type(operation)).to_dict()["ports"]
 
     def rename_stream(self, old: str, new: str) -> dict:
         """Rename one stream everywhere it appears.
@@ -1133,6 +1229,23 @@ class FlowsheetSession:
         """
         if self.flowsheet is None:
             return {"ok": False, "error": "no flowsheet loaded"}
+        # An unfinished unit is on the flowsheet so that it can be wired,
+        # and refusing here is the price of that: it has ports and a name
+        # but no model behind them, and running it would either raise from
+        # somewhere deep in the solve or, worse, look like it worked. Say
+        # which units and what they are waiting for, once, at the top.
+        if self.pending:
+            names = ", ".join(sorted(self.pending))
+            waiting = sorted(
+                {need for entry in self.pending.values() for need in entry["needs"]}
+            )
+            wants = ", ".join(waiting) or "something it cannot guess"
+            self.solve_error = (
+                f"{names} not finished: still waiting on {wants}. "
+                "Define it in the code context and the unit builds itself, "
+                "keeping the wiring it already has."
+            )
+            return {"ok": False, "error": self.solve_error, "pending": sorted(self.pending)}
         try:
             with self._lock:
                 streams = self.flowsheet.solve()

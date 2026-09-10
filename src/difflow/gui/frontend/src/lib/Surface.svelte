@@ -176,6 +176,18 @@
     background: var(--series);
   }
 
+  /* A port with nothing attached: a red dot, and round, so that it does
+     not read as one of the square grey ports that happens to be tinted.
+     This is the only mark on the canvas that says the flowsheet is not
+     wired yet -- an unconnected port used to be shown by giving it a
+     stream box, which drew boxes for streams nobody had declared and
+     made every fresh node look already connected. */
+  .canvas :global(.svelte-flow__handle.open) {
+    background: var(--bad);
+    border-radius: 50%;
+    border-color: var(--node-fill);
+  }
+
   /* Wires, and the line that follows the cursor while one is being made. */
   .canvas :global(.svelte-flow__edge-path),
   .canvas :global(.svelte-flow__connectionline path) {

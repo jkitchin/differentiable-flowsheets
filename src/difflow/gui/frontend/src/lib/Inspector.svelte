@@ -193,6 +193,25 @@
     onedit(() => post('/api/inlet', { unit: unit.name }))
   }
 
+  /**
+   * Declare a feed on an open inlet, at the flowsheet's own defaults.
+   *
+   * The canvas used to draw a feed box on every unwired inlet, and
+   * selecting that box was the only way to reach this. Boxes for streams
+   * nobody had declared were exactly the thing that made a fresh node
+   * look already connected, so they are gone -- and the way in has to
+   * live somewhere. It lives on the port that would carry the feed.
+   *
+   * The numbers come after: this declares the stream, the box appears,
+   * and selecting it opens the form. Setting them here would be a second
+   * feed form in a panel that already has one.
+   */
+  function feedInlet(stream) {
+    onedit(() => post('/api/feed', { name: stream }))
+  }
+
+  const isOpen = (which, stream) => (which ?? []).includes(stream)
+
   function removeInlet(stream) {
     onedit(() => del('/api/inlet', { unit: unit.name, stream }))
   }
@@ -242,6 +261,48 @@
     oncontext(snippet.merged)
   }
 </script>
+
+<!--
+  The ports, on the panel for the node that has them.
+
+  A port with nothing joined to it is marked here as well as on the
+  canvas, and an open INLET carries the way to declare a feed on it. It
+  has to: the canvas draws a box only for a feed someone declared, so
+  there is no longer a feed node to select for a stream that has never
+  been one.
+-->
+{#snippet ports()}
+  <h3>inlets</h3>
+  <ul class:ports={variadic}>
+    {#each node.data.inlets as s (s)}
+      <li class:open={isOpen(node.data.openInlets, s)}>
+        {s}
+        {#if isOpen(node.data.openInlets, s)}
+          <button class="link" disabled={busy || !species.length}
+                  title={species.length
+                           ? `declare ${s} as a feed, at the flowsheet's defaults`
+                           : 'name the species in the header first'}
+                  onclick={() => feedInlet(s)}>feed it</button>
+        {/if}
+        {#if variadic && node.data.inlets.length > 1}
+          <button class="drop" title="remove this inlet"
+                  disabled={busy} onclick={() => removeInlet(s)}>&minus;</button>
+        {/if}
+      </li>
+    {/each}
+  </ul>
+  {#if variadic}
+    <button class="add-port" disabled={busy} onclick={addInlet}>
+      Add inlet
+    </button>
+  {/if}
+  <h3>outlets</h3>
+  <ul>
+    {#each node.data.outlets as s (s)}
+      <li class:open={isOpen(node.data.openOutlets, s)}>{s}</li>
+    {/each}
+  </ul>
+{/snippet}
 
 <aside class="inspector">
   {#if !node}
@@ -319,8 +380,13 @@
       </div>
     {/if}
   {:else if pending}
-    <!-- A red node. There is no unit to inspect -- it was never built --
-         so the panel is about the one thing that would build it. -->
+    <!-- A red node: on the flowsheet, wired like any other, and with
+         nothing behind its ports yet. The panel leads with what would
+         finish it, because that is the only thing here that cannot be
+         done by dragging. Its ports come after, since they are real and
+         wiring them is what you are meant to do meanwhile. Parameters
+         are not offered: they belong to a unit that does not exist yet,
+         and they arrive with it. -->
     <h2>
       {pending.operation}
       {#if docs?.docs_url}
@@ -329,13 +395,21 @@
            title="read about {pending.operation} in the documentation">docs &#8599;</a>
       {/if}
     </h2>
-    <p class="kind waiting">not built yet</p>
+    <p class="kind waiting">not built yet &mdash; wire it now, solve later</p>
+
+    <label>
+      name
+      <input value={draft} oninput={(e) => (draft = e.currentTarget.value)}
+             onblur={commitName} onkeydown={(e) => e.key === 'Enter' && commitName()} />
+    </label>
 
     <h3>waiting for</h3>
     <ul class="needs">
       {#each pending.needs as need (need)}<li>{need}</li>{/each}
     </ul>
     <p class="problem">{pending.hint}</p>
+
+    {@render ports()}
 
     <!-- Saying what is missing answers "what"; this answers "what do I
          write". Two clicks, not one: the snippet invents numbers where
@@ -386,25 +460,7 @@
              onblur={commitName} onkeydown={(e) => e.key === 'Enter' && commitName()} />
     </label>
 
-    <h3>inlets</h3>
-    <ul class:ports={variadic}>
-      {#each node.data.inlets as s (s)}
-        <li>
-          {s}
-          {#if variadic && node.data.inlets.length > 1}
-            <button class="drop" title="remove this inlet"
-                    disabled={busy} onclick={() => removeInlet(s)}>&minus;</button>
-          {/if}
-        </li>
-      {/each}
-    </ul>
-    {#if variadic}
-      <button class="add-port" disabled={busy} onclick={addInlet}>
-        Add inlet
-      </button>
-    {/if}
-    <h3>outlets</h3>
-    <ul>{#each node.data.outlets as s (s)}<li>{s}</li>{/each}</ul>
+    {@render ports()}
 
     {#if extras.length}
       <h3>built with</h3>
@@ -578,6 +634,38 @@
     cursor: pointer;
   }
   .add-port:hover:not(:disabled) { border-style: solid; color: inherit; }
+
+  /* A port with nothing attached, marked the way the canvas marks it:
+     the same red, so the dot on the node and the row in the panel are
+     recognisably about the same thing. The marker is a bullet rather
+     than red text, because a red stream name reads as a bad name. */
+  li.open { list-style: none; position: relative; padding-left: 0.85rem; }
+  li.open::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0.42em;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--bad);
+  }
+  /* The way to declare a feed on an inlet nothing supplies. It sits on
+     the port because there is no longer a feed box to select for a
+     stream that has never been one. */
+  .link {
+    font: inherit;
+    font-size: 0.72rem;
+    padding: 0 0.25rem;
+    margin-left: 0.35rem;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    background: none;
+    color: var(--series);
+    cursor: pointer;
+  }
+  .link:hover:not(:disabled) { border-color: var(--line); }
+  .link:disabled { color: var(--ink-soft); cursor: default; }
 
   .params { margin: 0; }
   .params dt {
