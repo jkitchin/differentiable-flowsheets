@@ -325,6 +325,13 @@ class REEExtractorParams(ParamsMixin):
             through the extractor they build,
             ``circuit._extractor.params = circuit._extractor.params.update(
             capacity_sharpness=16)``.
+        coefficient_overrides: Per-element replacements for the tabulated
+            log10(D) correlation coefficients, ``{element: {"a": ...}}``,
+            passed straight to
+            :class:`~difflow_ree.equilibrium.distribution.REEDistribution`.
+            May be JAX tracers: this is the supported way to put an
+            uncertainty distribution on D and differentiate through it. See
+            that class for the full description.
     """
     n_stages: int | float | Array
     extractant: str
@@ -339,6 +346,9 @@ class REEExtractorParams(ParamsMixin):
     nitrate_conc: float | None = None
     mechanism: str | None = None
     capacity_sharpness: int = 8
+    # Per-element log10(D) coefficient overrides, possibly traced; passed to
+    # REEDistribution. The supported way to put uncertainty on D.
+    coefficient_overrides: dict | None = None
 
     # -- Closed mass-action model (#196) ---------------------------------
     # See EXTRACTOR_MODELS and the class docstring of REEExtractor. These are
@@ -397,10 +407,15 @@ class REEExtractorParams(ParamsMixin):
                     f"Valid elements: {valid_elements}"
                 )
 
-        # Validate bounds
-        if hasattr(self.n_stages, '__float__'):
-            if float(self.n_stages) < 1:
-                raise ValueError(f"n_stages must be >= 1, got {self.n_stages}")
+        # Validate bounds. n_stages is a legitimate *continuous* decision --
+        # the Kremser expression is jnp.power(E, N + 1), which is smooth in N
+        # -- so it may arrive as a tracer under grad/vmap. hasattr(x,
+        # '__float__') is true for a tracer and float(x) then raises, so the
+        # guard has to go through _concrete: it fires on every eager call, and
+        # steps aside for a traced one.
+        n_stages = _concrete(self.n_stages)
+        if n_stages is not None and n_stages < 1:
+            raise ValueError(f"n_stages must be >= 1, got {self.n_stages}")
         if self.extractant_conc <= 0:
             raise ValueError(
                 f"extractant_conc must be > 0, got {self.extractant_conc}"
@@ -500,6 +515,7 @@ class REEExtractor:
             concentration=params.extractant_conc,
             nitrate_conc=params.nitrate_conc,
             mechanism=params.mechanism,
+            coefficient_overrides=params.coefficient_overrides,
         )
         if params.include_loading:
             self._isotherm = get_loading_isotherm(
@@ -891,6 +907,13 @@ class MixerSettlerParams(ParamsMixin):
         mixer_residence_time: Mixer residence time (s)
         settler_residence_time: Settler residence time (s)
         stage_efficiency: Murphree stage efficiency (0-1)
+        coefficient_overrides: Per-element replacements for the tabulated
+            log10(D) correlation coefficients, ``{element: {"a": ...}}``,
+            passed straight to
+            :class:`~difflow_ree.equilibrium.distribution.REEDistribution`.
+            May be JAX tracers: this is the supported way to put an
+            uncertainty distribution on D and differentiate through it. See
+            that class for the full description.
     """
     extractant: str
     elements: tuple[str, ...]
@@ -924,6 +947,9 @@ class MixerSettlerParams(ParamsMixin):
     # can be posed as an inequality constraint rather than only read as a
     # boolean (#193). None disables the check (backward compatible).
     third_phase_loading_limit: float | None = None
+    # Per-element log10(D) coefficient overrides, possibly traced; passed to
+    # REEDistribution. The supported way to put uncertainty on D.
+    coefficient_overrides: dict | None = None
 
 
 class REEMixerSettler:
@@ -984,6 +1010,7 @@ class REEMixerSettler:
             concentration=params.extractant_conc,
             nitrate_conc=params.nitrate_conc,
             mechanism=params.mechanism,
+            coefficient_overrides=params.coefficient_overrides,
         )
 
     def __call__(

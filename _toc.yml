@@ -23,6 +23,7 @@ parts:
       - file: docs/pims-integration
       - file: docs/operability
       - file: docs/flexibility
+      - file: docs/stochastic
       - file: docs/streams-and-flowsheets
       - file: docs/dynamic-modeling
       - file: docs/moving-horizon-estimation
