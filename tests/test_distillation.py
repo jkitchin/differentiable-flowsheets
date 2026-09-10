@@ -22,6 +22,7 @@ from difflow.units.distillation import (
     _cmo_section_flows,
     _cmo_section_rates,
     _is_rectifying_cut,
+    _mixture_molar_enthalpy,
 )
 
 
@@ -807,6 +808,234 @@ class TestFeedStageConvention:
         # ... and the drop is the feed itself (q = 1), to within the
         # energy-balance correction on the surrounding stages.
         assert float(drops[feed_stage]) == pytest.approx(100.0, rel=0.1)
+
+
+class TestFeedThermalCondition:
+    """``q`` is the feed's thermal condition in the energy balance too.
+
+    The section flows have always read ``q`` (see
+    :class:`TestFeedStageConvention`); these tests pin the other half, the
+    feed enthalpy ``q h_liquid(z, T_F) + (1 - q) H_vapor(z, T_F)``, so that a
+    saturated-vapour feed brings its latent heat in with it instead of being
+    solved as a saturated liquid (#219).
+    """
+
+    P = 101325.0
+    F = 100.0
+    T_FEED = 380.0
+    FEED_STAGE = 7
+    N_STAGES = 15
+
+    def _column(self, thermo, q):
+        params = DistillationColumnParams(
+            species_order=["benzene", "toluene"],
+            n_stages=self.N_STAGES,
+            feed_stage=self.FEED_STAGE,
+            P=self.P,
+            q=q,
+        )
+        return DistillationColumn(params, thermo)
+
+    def _feed(self):
+        return make_stream({"benzene": 50.0, "toluene": 50.0}, T=self.T_FEED, P=self.P)
+
+    def _latent_heat(self, thermo):
+        """``F (H_vapor - h_liquid)`` for the feed, at the feed temperature."""
+        z = jnp.array([0.5, 0.5])
+        args = (thermo, ["benzene", "toluene"], z, jnp.asarray(self.T_FEED))
+        H_vap = _mixture_molar_enthalpy(*args, "vapor", jnp.asarray(self.P))
+        h_liq = _mixture_molar_enthalpy(*args, "liquid", jnp.asarray(self.P))
+        return self.F * float(H_vap - h_liq)
+
+    @pytest.mark.parametrize("q", [0.0, 0.5])
+    def test_reboiler_duty_drops_by_the_feed_latent_heat(
+        self, benzene_toluene_thermo, q
+    ):
+        """A vapour feed carries latent heat in, so the reboiler need not.
+
+        Against a saturated-liquid feed, the reboiler duty falls by the latent
+        heat of the vaporised fraction, ``(1 - q) F (H_vap - h_liq)`` at the
+        feed temperature.
+        """
+        feed = self._feed()
+        _, _, info_liq = self._column(benzene_toluene_thermo, 1.0)(
+            feed, R=2.0, D_spec=50.0, use_mesh=True
+        )
+        _, _, info_q = self._column(benzene_toluene_thermo, q)(
+            feed, R=2.0, D_spec=50.0, use_mesh=True
+        )
+
+        expected_drop = (1.0 - q) * self._latent_heat(benzene_toluene_thermo)
+        actual_drop = float(info_liq["Q_reboiler"] - info_q["Q_reboiler"])
+
+        assert actual_drop == pytest.approx(expected_drop, rel=0.02), (
+            f"q={q}: reboiler duty moved by {actual_drop / 1e6:.4f} MW, "
+            f"expected {expected_drop / 1e6:.4f} MW -- the feed's thermal "
+            "condition is not reaching the energy balance"
+        )
+        # The condenser sees the top of the column, not the feed condition.
+        assert float(info_q["Q_condenser"]) == pytest.approx(
+            float(info_liq["Q_condenser"]), rel=1e-3
+        )
+
+    @pytest.mark.parametrize("q", [1.0, 0.5, 0.0])
+    def test_converged_profile_splits_the_feed_by_q(
+        self, benzene_toluene_thermo, q
+    ):
+        """On the CONVERGED profile the feed still splits ``q``/``1 - q``.
+
+        ``TestFeedStageConvention`` checks this on the warm start
+        (``n_iter=0``); here the MESH energy balance has run, and it has to
+        put the step on the same side.
+        """
+        _, _, info = self._column(benzene_toluene_thermo, q)(
+            self._feed(), R=2.0, D_spec=50.0, use_mesh=True
+        )
+        L, V = info["L_profile"], info["V_profile"]
+        f = self.FEED_STAGE
+
+        # The energy balance moves the surrounding stages by a few percent of
+        # the feed rate, so this is an absolute tolerance on F.
+        tol = 0.1 * self.F
+        assert float(L[f] - L[f + 1]) == pytest.approx(q * self.F, abs=tol)
+        assert float(V[f] - V[f - 1]) == pytest.approx(
+            (1.0 - q) * self.F, abs=tol
+        )
+
+    @pytest.mark.parametrize("q", [1.0, 0.5, 0.0])
+    def test_feed_enthalpy_is_the_two_phase_mixture(
+        self, benzene_toluene_thermo, q
+    ):
+        """``h_F`` interpolates the two phase enthalpies at the feed T."""
+        column = self._column(benzene_toluene_thermo, q)
+        z = jnp.array([0.5, 0.5])
+        T = jnp.asarray(self.T_FEED)
+
+        h_liq = column._molar_enthalpy(z, T, "liquid")
+        H_vap = column._molar_enthalpy(z, T, "vapor")
+        expected = q * float(h_liq) + (1.0 - q) * float(H_vap)
+
+        assert float(column._feed_enthalpy(z, T)) == pytest.approx(expected)
+
+    def test_shortcut_column_reboiler_duty_follows_q(
+        self, benzene_toluene_thermo
+    ):
+        """``ShortcutColumn`` reads ``q`` in its duty, not only in Underwood."""
+        params = ShortcutColumnParams(
+            species_order=["benzene", "toluene"],
+            light_key="benzene",
+            heavy_key="toluene",
+            x_D_LK=0.95,
+            x_B_HK=0.95,
+        )
+        column = ShortcutColumn(params, benzene_toluene_thermo)
+        feed = self._feed()
+
+        _, _, info_liq = column(feed, R=2.0, P=self.P, q=1.0)
+        _, _, info_vap = column(feed, R=2.0, P=self.P, q=0.0)
+
+        drop = float(info_liq["Q_reboiler"] - info_vap["Q_reboiler"])
+        assert drop == pytest.approx(
+            self._latent_heat(benzene_toluene_thermo), rel=1e-6
+        )
+
+    def test_a_subcooled_feed_is_expressible(self):
+        """``q > 1`` constructs: it is what a subcooled feed is called.
+
+        On the CMO path ``q`` is the only place the thermal condition can be
+        said at all --- ``_cmo_section_rates`` is the whole model there and
+        ``T_feed`` never reaches it --- so rejecting ``q > 1`` would make a
+        subcooled feed inexpressible rather than safe.
+        """
+        params = DistillationColumnParams(
+            species_order=["benzene", "toluene"],
+            n_stages=self.N_STAGES,
+            feed_stage=self.FEED_STAGE,
+            P=self.P,
+            q=1.3,
+        )
+        assert float(params.q) == pytest.approx(1.3)
+
+    @pytest.mark.parametrize("q", [1.3, -0.3])
+    def test_the_section_flows_read_q_as_written(self, q):
+        """``L_strip = L_rect + q F`` holds outside ``[0, 1]`` too.
+
+        This is the whole point of allowing it: the extra internal reflux a
+        subcooled feed generates is exactly ``q F`` with ``q > 1``.
+        """
+        L_rect, L_strip, V_rect, V_strip = _cmo_section_rates(
+            R=2.0, D=50.0, F_total=self.F, q=jnp.asarray(q)
+        )
+
+        assert float(L_strip) == pytest.approx(float(L_rect) + q * self.F)
+        assert float(V_strip) == pytest.approx(
+            float(V_rect) - (1.0 - q) * self.F
+        )
+
+    @pytest.mark.parametrize(
+        "q, phase", [(1.3, "liquid"), (-0.3, "vapor")]
+    )
+    def test_the_feed_enthalpy_clamps_where_the_flows_do_not(
+        self, benzene_toluene_thermo, q, phase
+    ):
+        """The one clamp is in the enthalpy, and it is physics not a guard.
+
+        Both phase enthalpies are evaluated at the feed's own temperature, so
+        at ``q = 1.3`` the honest answer is ``h_liquid(z, T_feed)``: an
+        all-liquid feed below its bubble point, with the subcooling already
+        carried by ``T_feed``. Forming ``1.3 h^L - 0.3 H^V`` would subtract
+        three tenths of a latent heat that is not there.
+        """
+        column = self._column(benzene_toluene_thermo, q)
+        z = jnp.array([0.5, 0.5])
+        T = jnp.asarray(self.T_FEED)
+
+        assert float(column._feed_enthalpy(z, T)) == pytest.approx(
+            float(column._molar_enthalpy(z, T, phase))
+        )
+
+    def test_underwood_takes_one_minus_q_unclamped(
+        self, benzene_toluene_thermo
+    ):
+        """A subcooled feed shifts Underwood's root, as the textbook has it.
+
+        ``sum(alpha_i z_i / (alpha_i - theta)) = 1 - q`` is stated for any
+        ``q``; at ``q = 1.3`` the right-hand side is negative, and the minimum
+        reflux it implies is lower than for a saturated liquid.
+        """
+        params = ShortcutColumnParams(
+            species_order=["benzene", "toluene"],
+            light_key="benzene",
+            heavy_key="toluene",
+            x_D_LK=0.95,
+            x_B_HK=0.95,
+        )
+        column = ShortcutColumn(params, benzene_toluene_thermo)
+        feed = self._feed()
+
+        _, _, sat = column(feed, R=2.0, P=self.P, q=1.0)
+        _, _, sub = column(feed, R=2.0, P=self.P, q=1.3)
+
+        assert float(sub["R_min"]) < float(sat["R_min"])
+
+    def test_q_stays_differentiable(self, benzene_toluene_thermo):
+        """A traced ``q`` passes the guard, and the duty responds to it.
+
+        ``dQ_reb/dq`` is the feed's latent heat: raising the liquid fraction
+        by one mole is one more mole the reboiler has to boil.
+        """
+        feed = self._feed()
+
+        def reboiler_duty(q):
+            _, _, info = self._column(benzene_toluene_thermo, q)(
+                feed, R=2.0, D_spec=50.0, use_mesh=True
+            )
+            return info["Q_reboiler"]
+
+        dQ_dq = float(jax.grad(reboiler_duty)(0.5))
+        assert dQ_dq == pytest.approx(
+            self._latent_heat(benzene_toluene_thermo), rel=0.05
+        )
 
 
 class TestMulticomponentDistillation:
