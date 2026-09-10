@@ -129,6 +129,10 @@ class MyUnitParams(ParamsMixin):
 # `describe_operation(...).parameters` reports each field's description. A field
 # documented only by the comment beside it is read too. Units are separate --
 # declare them in the unit class's `parameter_units`.
+#
+# That pathway reads the source from disk (inspect.getsource), so descriptions
+# go quiet -- silently, to None -- in a zipimport or frozen build where no .py
+# is on disk. A normal wheel or editable install is fine.
 
 # ParamsMixin provides:
 # - params['key'] - dict-style access

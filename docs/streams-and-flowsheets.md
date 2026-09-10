@@ -588,7 +588,9 @@ Cp -- J/mol/K -- Heat capacity (J/mol·K). If None, uses thermo.
 
 That text is not a second copy. `difflow.docstrings` reads it out of the `Params` class's own `Attributes:` section, which is where the project already writes it, and out of the comments beside the fields for the 35 that are documented there instead — `CSTRParams.eos` and `CSTRParams.outlet_volumetric_basis` among them. Populating `field(metadata={"description": ...})` on all 87 `Params` classes would have duplicated every description and then drifted from it.
 
-Units are *not* read from the prose. They come from the class's `parameter_units` table (above), which names every numeric field and is guarded by a test; a parenthetical in a sentence is a weaker signal, since `(0-1)` and `(default 10)` sit in the same position as `(Pa)`.
+The editor gets this for free: the inspector's parameter list already rendered `spec.description` as help text under each field, and the palette already rendered `spec.units` beside its name — both written against a schema that carried neither. 470 of the 487 catalogued parameters gain help text in the inspector with no front-end change.
+
+Units are *not* read from the prose. They come from the class's `parameter_units` table (above), which names every numeric field and is guarded by a test; a parenthetical in a sentence is a weaker signal, since `(0-1)` and `(default 10)` sit in the same position as `(Pa)`, and a formula in a description will happily offer `-1/k` as "per kelvin".
 
 Where a field needs to say something different from its docstring, its metadata still wins:
 

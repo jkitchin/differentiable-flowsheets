@@ -232,5 +232,18 @@ class TestAttributeDocs:
         assert attribute_docs(Plain) == {"a": "first (K)"}
 
 
+class TestTheModuleDocumentsItself:
+    def test_its_own_examples_run(self):
+        """The suite does not run with `--doctest-modules`, so the
+        examples in :mod:`difflow.docstrings` would otherwise rot."""
+        import doctest
+
+        import difflow.docstrings
+
+        result = doctest.testmod(difflow.docstrings, verbose=False)
+        assert result.attempted > 0, "no examples found to check"
+        assert result.failed == 0
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
