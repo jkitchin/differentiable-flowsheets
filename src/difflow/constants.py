@@ -62,8 +62,11 @@ CR_BLEND_WIDTH = 0.05
 # Smaller = sharper transitions, larger = smoother gradients
 PHASE_TRANSITION_WIDTH = 0.02
 
-# Temperature profile scaling for distillation
-# Column ΔT ≈ TEMP_SCALE_FACTOR * T_feed for typical systems
+# Temperature profile scaling for distillation.
+# Column ΔT ≈ DEFAULT_TEMP_SCALE * T_feed for typical systems. No longer used
+# by ShortcutColumn, which now takes its column-end temperatures from the
+# product bubble points rather than from a spread around the feed; kept as a
+# rough ΔT for callers that want one.
 DEFAULT_TEMP_SCALE = 0.05
 
 

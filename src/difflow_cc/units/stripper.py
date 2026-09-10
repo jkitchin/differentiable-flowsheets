@@ -132,7 +132,15 @@ class AmineStripper:
         "P_stripper": "P",
         "target_lean_loading": r"\alpha_\mathrm{lean}",
     }
-    parameter_units = {"T_reboiler": "K", "P_stripper": "Pa", "target_lean_loading": "mol CO2 / mol amine"}
+    parameter_units = {
+        "n_stages": "-",
+        "T_reboiler": "K",
+        "P_stripper": "Pa",
+        "reflux_ratio": "-",
+        "target_lean_loading": "mol CO2 / mol amine",
+        "reboiler_duty": "W",
+        "cross_exchanger_approach": "K",
+    }
     numerical_method = "Energy balance + VLE-closure loop; specific energy computed post-hoc."
 
     def __init__(self, params: StripperParams):

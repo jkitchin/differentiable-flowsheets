@@ -103,7 +103,17 @@ class ExtractStripCircuit:
         "solvent_to_feed_ratio": "O/A_E",
         "strip_to_solvent_ratio": "A/O_S",
     }
-    parameter_units = {"n_extraction_stages": "-", "n_stripping_stages": "-"}
+    parameter_units = {
+        "n_extraction_stages": "-",
+        "n_stripping_stages": "-",
+        "extraction_pH": "-",
+        "stripping_pH": "-",
+        "extractant_conc": "mol/L",
+        "solvent_to_feed_ratio": "-",
+        "strip_to_solvent_ratio": "-",
+        "nitrate_conc": "mol/L",
+        "capacity_sharpness": "-",
+    }
 
     def __init__(self, params: ExtractStripParams):
         """Initialize circuit.

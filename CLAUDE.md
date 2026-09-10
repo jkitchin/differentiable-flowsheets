@@ -40,13 +40,14 @@ difflow/
 │   │   ├── uncertainty.py # Sensitivity & UQ
 │   │   ├── planning/      # Delta-base planning (LP/MILP + trust region)
 │   │   ├── catalog.py     # Machine-readable schema of every unit operation
-│   │   ├── docstrings.py  # Params field descriptions/units, read from the
-│   │   │                   # Attributes: docstrings (what the catalog reports)
+│   │   ├── docstrings.py  # Params field descriptions, read from the Attributes:
+│   │   │                   # docstrings (what the catalog reports)
 │   │   ├── serialize.py   # Flowsheet <-> JSON round trip
 │   │   ├── codegen.py     # Flowsheet -> runnable Python source
 │   │   ├── kinetics.py    # Declarative mass-action rate laws (data, not callables)
 │   │   ├── publish.py     # Flowsheet -> self-contained interactive HTML (no install)
-│   │   ├── gui.py         # Local browser editor (python -m difflow.gui)
+│   │   ├── gui/           # Local browser editor (python -m difflow.gui)
+│   │   │                   # session.py + server.py + layout.py + static/
 │   │   ├── params_mixin.py # ParamsMixin base class for Params dataclasses
 │   │   ├── reconciliation/ # Data reconciliation, gross error detection,
 │   │   │                   # observability, monitoring, multi-set pooling
@@ -125,8 +126,9 @@ class MyUnitParams(ParamsMixin):
     pressure: float
 
 # The Attributes: section is not just prose: difflow.docstrings reads it, so
-# `describe_operation(...).parameters` reports each field's description and,
-# from the "(K)"/"(Pa)" parenthetical, its units. State the units there.
+# `describe_operation(...).parameters` reports each field's description. A field
+# documented only by the comment beside it is read too. Units are separate --
+# declare them in the unit class's `parameter_units`.
 
 # ParamsMixin provides:
 # - params['key'] - dict-style access
@@ -378,8 +380,24 @@ Reporting and drawings (use these rather than re-deriving them in a notebook):
   `draw_delta_vectors`, `draw_taylor_model`, `draw_trust_region`. matplotlib is
   imported inside the functions.
 
+From a flowsheet, and out to someone else's LP:
+- `Block.from_flowsheet(fs, u=["reactor.V", "feed:feed.total_flow"],
+  y=["purge.F_B", ...])` is the bridge. Lever keys are `_apply_params` notation;
+  feed streams are levers via the `feed:` prefix (`T`, `P`, `total_flow`,
+  `F_<species>`, `x_<species>`). Run `check_delta_vectors` before exporting.
+- Under `jax.jacobian` a recycle solve routes to the optimistix fixed-point
+  path automatically — the Anderson/Wegstein loops are Python and cannot be
+  traced. Never record a solve diagnostic with a bare `float()`; use
+  `flowsheet._concrete()`, which returns `None` under tracing.
+- `difflow.planning.export`: `DeltaVectorSet.from_result` / `.from_block`, then
+  `write_json` / `write_csv` / `write_lp` / `write_mps` /
+  `write_iterations_csv`. Also `difflow plan-export`. Units come from
+  `Block.metadata["u_units"]`/`["y_units"]`; LP symbols are sanitised and the
+  map is in `meta["lp_symbols"]`. The export is one-way — no importer.
+
 Reference model: `difflow.planning.chain.two_plant_chain()`. Docs: `docs/planning.md`.
-Example: `examples/30_delta_base_planning.ipynb`. Tests: `tests/test_planning.py`.
+Example: `examples/30_delta_base_planning.ipynb`. Tests: `tests/test_planning.py`,
+`tests/test_planning_export.py`.
 
 ### Debugging Gradients
 
@@ -423,7 +441,7 @@ jax.debug.print("value: {x}", x=value)
 | `Makefile` | Build automation (test, book, notebooks) |
 | `src/difflow/__init__.py` | Main API exports |
 | `src/difflow/params_mixin.py` | ParamsMixin base class for all Params dataclasses |
-| `src/difflow/docstrings.py` | Reads Params field descriptions/units out of the `Attributes:` docstrings for the catalog |
+| `src/difflow/docstrings.py` | Reads Params field descriptions out of the `Attributes:` docstrings and field comments, for the catalog |
 | `src/difflow/planning/` | Delta-base planning: AD delta vectors -> trust-region LP/MILP |
 | `src/difflow_bio/__init__.py` | Bio manufacturing plugin exports |
 | `src/difflow_ree/__init__.py` | REE extraction plugin exports |

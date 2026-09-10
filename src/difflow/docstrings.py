@@ -15,38 +15,41 @@ prescribes and the one that is actually maintained::
         T: float
         P: float = 101325.0
 
-:mod:`difflow.catalog` needs the same prose as *data*, so that a form,
-a code generator or an external tool reading the schema can label a
-field and state its units. Rather than duplicating every description
-into ``field(metadata=...)`` across the project --- two copies that
-would immediately start to drift --- the catalog reads the docstring
-that is already there:
+:mod:`difflow.catalog` needs the same prose as *data*, so that a form, a
+code generator or an external tool reading the schema can label a field
+rather than only name it. Rather than duplicating every description into
+``field(metadata={"description": ...})`` across the project --- two
+copies that would immediately start to drift --- the catalog reads the
+docstring that is already there:
 
     >>> from difflow.docstrings import attribute_docs
     >>> from difflow.units.cstr import CSTRParams
     >>> attribute_docs(CSTRParams)["V"]
-    AttributeDoc(description='Reactor volume (m^3)', units='m^3')
+    'Reactor volume (m^3)'
 
-Three things make this more than a ``split(":")``:
+Two things make this more than a ``split(":")``:
 
 * **Only real fields count.** Several docstrings group their attributes
   under sub-headings (``PSA/VSA parameters:``) or mix prose into the
   section. Callers pass the names they care about, or let
   :func:`attribute_docs` read them from the dataclass, so anything that
   is not a documented field is simply not an entry.
-* **Comments count too.** Where a field is documented by the comment
-  beside or above it rather than in the ``Attributes:`` section ---
-  which is how most of the fields added after a class was first written
-  are documented --- :func:`field_comments` reads that instead.
-* **Units are guessed conservatively.** ``(Pa)`` and ``(mol/m^3)`` are
-  units; ``(0-1)``, ``(default 10)`` and ``(1.0 = stoichiometric)`` are
-  not, and a wrong unit in a machine-readable schema is worse than a
-  missing one. :func:`extract_units` returns ``None`` unless the
-  parenthetical looks like a unit expression.
+* **Comments count too.** 35 fields are documented by the comment beside
+  or above them rather than in the ``Attributes:`` section, which is how
+  most of those added after a class was first written are documented;
+  :func:`field_comments` reads those.
 
 Field metadata still wins where it is present --- see
 :func:`difflow.catalog._parameters` --- so a field whose description
 must differ from the docstring can say so explicitly.
+
+Units are *not* read from here. They have an explicit source: the unit
+class's ``parameter_units``, part of the metadata contract in
+:mod:`difflow.report.metadata`, which names every numeric field and is
+guarded by a test that fails when a key stops matching a field. A
+parenthetical in prose is a weaker signal than that table --- ``(0-1)``
+and ``(default 10)`` sit in the same position as ``(Pa)`` --- and a
+wrong unit in a machine-readable schema is worse than a missing one.
 """
 
 from __future__ import annotations
@@ -57,7 +60,6 @@ import inspect
 import re
 import textwrap
 import tokenize
-from dataclasses import dataclass
 from functools import lru_cache
 from io import StringIO
 
@@ -82,83 +84,6 @@ _ENTRY = re.compile(
     r"(?:\s*\((?P<type>[^)]*)\))?"
     r"(?P<gap>\s*):\s*(?P<text>.*)$"
 )
-
-#: Unit symbols and words that carry a dimension. A candidate has to
-#: contain at least one of these to be read as units, which is what
-#: keeps ``(0-1)`` and ``(default 10)`` out. Single letters that are
-#: more often a variable than a unit (``n``, ``t``, ``r``, ``a``) are
-#: deliberately absent: ``(N)`` in a description is a count far more
-#: often than it is newtons.
-_UNIT_TOKENS = frozenset({
-    # amount, mass, length, volume
-    "mol", "mols", "mole", "moles", "kmol", "mmol", "umol", "lbmol",
-    "g", "mg", "ug", "kg", "tonne", "tonnes", "lb", "ton", "tons",
-    "m", "cm", "mm", "um", "nm", "km", "ft", "micron", "microns",
-    "l", "ml", "ul", "liter", "liters", "litre", "litres", "gal",
-    "m2", "m3", "cm2", "cm3", "nm3", "sm3", "scf", "scfm", "mscf",
-    # time
-    "s", "sec", "secs", "ms", "min", "mins", "h", "hr", "hrs", "hour",
-    "hours", "day", "days", "wk", "week", "weeks", "yr", "year", "years",
-    # temperature
-    "k", "degc", "degf", "c",
-    # pressure
-    "pa", "kpa", "mpa", "gpa", "bar", "bara", "barg", "mbar", "atm",
-    "psi", "psia", "psig", "torr", "mmhg",
-    # energy and power
-    "j", "kj", "mj", "gj", "cal", "kcal", "btu", "wh", "kwh", "mwh",
-    "w", "kw", "mw", "gw", "hp",
-    # electrical
-    "v", "kv", "va", "kva", "mva", "mvar", "kvar", "var", "ohm", "ohms",
-    "siemens", "pu", "hz", "rpm", "rev", "ah",
-    # concentration and composition
-    "ppm", "ppb", "ppmv", "wt", "vol", "fraction", "fractions", "frac",
-    "percent", "ph", "molar", "eq", "equiv", "cfu", "cp", "cpoise",
-    # currency
-    "usd", "eur", "gbp", "dollar", "dollars",
-})
-
-#: Words a unit expression may contain *alongside* a dimensional token,
-#: to say what the quantity is per: ``g cells / g substrate``,
-#: ``kg C / kg fuel``, ``mol CO2 / mol amine``. On their own they are
-#: not units, so ``(total/capacity)`` is rejected.
-_UNIT_QUALIFIERS = frozenset({
-    "dry", "wet", "basis", "bone", "db", "stp", "ntp", "std",
-    "feed", "fuel", "air", "water", "steam", "gas", "liquid", "vapor",
-    "oil", "organic", "aqueous", "solvent", "sorbent", "adsorbent",
-    "resin", "catalyst", "cat", "packing", "bed", "beds", "membrane",
-    "co2", "ch4", "h2", "h2o", "n2", "o2", "so2", "nox", "h", "oh",
-    "amine", "mea", "ree", "acid", "extractant", "salt",
-    "protein", "mab", "product", "biomass", "cell", "cells", "substrate",
-    "glucose", "total", "stage", "stages", "cycle", "cycles", "plate",
-    "plates", "module", "modules", "unit", "units", "tube", "tubes",
-    "permeate", "retentate", "solids", "solid", "slurry",
-})
-
-#: Characters a unit expression may contain. Square brackets, quotes,
-#: ``=`` and ``<``/``>`` all mark something that is not a unit;
-#: parentheses are allowed, for ``J/(kg K)``.
-_UNIT_CHARS = re.compile(
-    "^[-+*/^.()·⋅×0-9A-Za-zµμ°%$€£\u2070-\u209f\u00b2\u00b3\u00b9 ]+$"
-)
-
-#: Purely numeric candidates: ``0-1``, ``0 - 1``, ``1e-3``.
-_NUMERIC_ONLY = re.compile(r"^[-+0-9.eE\s]+$")
-
-
-@dataclass(frozen=True)
-class AttributeDoc:
-    """Documentation found for one attribute.
-
-    Attributes:
-        description: the prose, with continuation lines joined and
-            whitespace collapsed.
-        units: the unit expression read out of the description, or
-            ``None`` when it does not state one.
-    """
-
-    description: str
-    units: str | None = None
-
 
 def _dedent_lines(docstring: str) -> list[str]:
     """Docstring lines with the common leading whitespace removed.
@@ -307,106 +232,12 @@ def _parse_entries(body: list[str]) -> dict[str, str]:
     }
 
 
-def extract_units(description: str | None) -> str | None:
-    """The unit expression stated in a description, if any.
-
-    Units are written in the project's docstrings as a parenthetical or
-    as a trailing clause: ``Flash pressure (Pa)``, ``Amine
-    concentration (mol/m^3)``, ``specific heat capacity, J/(kg K)``.
-    The same positions are also used for ranges, defaults and
-    commentary, so a candidate is accepted only when it reads as a unit
-    expression --- see :func:`_looks_like_units`. A wrong unit in a
-    machine-readable schema is worse than a missing one, so anything
-    doubtful is left out.
-
-    Args:
-        description: the documented description.
-
-    Returns:
-        The units, or ``None`` when the description states none.
-
-    Example:
-        >>> extract_units("Flash pressure (Pa)")
-        'Pa'
-        >>> extract_units("specific heat capacity, J/(kg K).")
-        'J/(kg K)'
-        >>> extract_units("Murphree stage efficiency (0-1)") is None
-        True
-        >>> extract_units("Coordination number (default 10)") is None
-        True
-    """
-    if not description:
-        return None
-    for candidate in _unit_candidates(description):
-        if _looks_like_units(candidate):
-            return candidate
-    return None
-
-
-def _unit_candidates(description: str) -> list[str]:
-    """The substrings of a description that could be its units.
-
-    Parenthesised groups come first, in the order written, each
-    extended leftwards over any unit operator it hangs off so that
-    ``J/(kg K)`` is offered whole rather than as ``kg K``. The clause
-    after the final comma comes last, for the descriptions that write
-    their units there instead.
-    """
-    candidates: list[str] = []
-    depth, start = 0, None
-    for i, ch in enumerate(description):
-        if ch == "(":
-            if depth == 0:
-                start = i
-            depth += 1
-        elif ch == ")" and depth:
-            depth -= 1
-            if depth == 0 and start is not None:
-                inner = description[start + 1:i]
-                prefix = re.search(r"[0-9A-Za-z]+[*/·]$", description[:start])
-                if prefix:
-                    candidates.append(f"{prefix.group(0)}({inner})")
-                else:
-                    candidates.append(inner)
-                start = None
-    tail = description.rstrip(" .").rsplit(",", 1)
-    if len(tail) == 2:
-        candidates.append(tail[1].strip())
-    return [c.strip() for c in candidates if c.strip()]
-
-
-def _looks_like_units(text: str) -> bool:
-    """Whether a candidate substring reads as a unit expression.
-
-    It must name at least one dimensional unit, every word must be a
-    unit or a qualifier saying what the quantity is per, and it must
-    carry none of the punctuation that marks prose --- a comma, a
-    comparison, a quote, an assignment.
-    """
-    if not text or len(text) > 28:
-        return False
-    if "," in text or "_" in text:
-        return False
-    if not _UNIT_CHARS.match(text):
-        return False
-    if _NUMERIC_ONLY.match(text):
-        return False
-    words = [w for w in re.split(r"[^A-Za-z0-9%$€£°µμ]+", text) if w]
-    if not words or len(words) > 5:
-        return False
-    lowered = [w.lower() for w in words]
-    if not all(w in _UNIT_TOKENS or w in _UNIT_QUALIFIERS or w.isdigit()
-               for w in lowered):
-        return False
-    return any(w in _UNIT_TOKENS for w in lowered)
-
-
 def attribute_docs(
     cls: type,
     names: list[str] | None = None,
     *,
     comments: bool = True,
-) -> dict[str, AttributeDoc]:
+) -> dict[str, str]:
     """Documentation for a class's attributes, read from its source.
 
     The ``Attributes:`` sections come first and the comments around the
@@ -425,9 +256,8 @@ def attribute_docs(
             fields the docstrings do not mention.
 
     Returns:
-        ``{name: AttributeDoc}`` for the names that are documented;
-        names with no documentation are absent rather than present and
-        empty.
+        ``{name: description}`` for the names that are documented; names
+        with no documentation are absent rather than present and empty.
     """
     if names is None and dataclasses.is_dataclass(cls):
         names = [f.name for f in dataclasses.fields(cls)]
@@ -439,13 +269,13 @@ def attribute_docs(
 
 
 @lru_cache(maxsize=None)
-def _documented(cls: type, comments: bool) -> dict[str, AttributeDoc]:
+def _documented(cls: type, comments: bool) -> dict[str, str]:
     """Every attribute ``cls`` documents anywhere in its MRO.
 
     Cached: reading a class's source and tokenizing it costs far more
-    than the rest of building a schema, and :func:`difflow.catalog.catalog`
-    describes every registered operation at once. The values are frozen
-    and callers are handed a copy of the mapping.
+    than the rest of building a schema, and
+    :func:`difflow.catalog.catalog` describes every registered operation
+    at once. Callers are handed a copy of the mapping.
     """
     found: dict[str, str] = {}
     for klass in inspect.getmro(cls):
@@ -459,10 +289,7 @@ def _documented(cls: type, comments: bool) -> dict[str, AttributeDoc]:
                 continue
             for name, text in field_comments(klass).items():
                 found.setdefault(name, text)
-    return {
-        name: AttributeDoc(description=text, units=extract_units(text))
-        for name, text in found.items()
-    }
+    return found
 
 
 # ---------------------------------------------------------------------

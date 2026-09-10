@@ -793,6 +793,34 @@ class PlanResult:
         return {k: np.asarray(v.J) for k, v in self.linearizations.items()}
 
     @property
+    def solution(self):
+        """The final LP solved at the plan, for its duals.
+
+        A planning user asks for shadow prices -- what one more unit of a
+        binding spec or lever bound is worth -- and those live in the LP's
+        marginals, not in the primal plan.  The trust-region loop never keeps
+        its last :class:`~difflow.planning.lp.LPSolution`, so this solves
+        :attr:`lp_model` once, lazily, and caches it.  Nothing in the plan
+        depends on it; asking for duals costs exactly one LP solve.
+
+        Returns:
+            An :class:`~difflow.planning.lp.LPSolution`.
+        """
+        if getattr(self, "_solution", None) is None:
+            self._solution = self.lp_model.solve()
+        return self._solution
+
+    @property
+    def duals(self) -> dict:
+        """Shadow prices at the plan, by row and bound name.
+
+        Keys are ``"eq"``, ``"ub"``, ``"upper"`` and ``"lower"``, each a
+        ``{name: marginal}`` dict; a solver that reports no marginals yields
+        an empty dict.  See :attr:`solution`.
+        """
+        return self.solution.duals
+
+    @property
     def pyomo_model(self):
         """The emitted Pyomo model, for reuse or inspection.
 

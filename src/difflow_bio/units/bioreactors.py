@@ -558,7 +558,20 @@ class FedBatchBioreactor:
         "alpha": r"\alpha",
         "beta": r"\beta",
     }
-    parameter_units = {"V0": "L", "Y_xs": "g/g", "k_d": "1/h", "m_s": "g/g/h"}
+    parameter_units = {
+        "V0": "L",
+        "Y_xs": "g/g",
+        "k_d": "1/h",
+        "m_s": "g/g/h",
+        "alpha": "g/g",
+        "beta": "g/g/h",
+        "kLa": "1/h",
+        "Y_xo": "g/g",
+        "m_o": "g/g/h",
+        "C_O2_star": "g/L",
+        "K_O2": "g/L",
+        "C_O2_0": "g/L",
+    }
     numerical_method = "Adaptive diffrax (Tsit5 / Kvaerno5) integration of (V, VX, VS, VP)."
 
     def __init__(self, params: FedBatchParams):

@@ -1,0 +1,77 @@
+/* The palette is the one the rest of difflow draws with: difflow.report's
+   HTML, publish.py's pages and the classic editor all use these. */
+:root {
+  --surface: #fcfcfb;
+  --panel: #f4f3f0;
+  --ink: #0b0b0b;
+  --ink-soft: #52514e;
+  --grid: #e4e2de;
+  --line: #c9c7c2;
+  --series: #2a78d6;
+  --accent: #eb6834;
+  --bad: #d03b3b;
+  --good: #0ca30c;
+
+  /* Nodes on the editor canvas. Separate tokens rather than reuse of
+     --line/--panel: this file is also the palette for difflow.report and
+     for publish.py's pages, where nothing is a node, so repurposing a
+     shared token would restyle a table to move a box. */
+  --node-line: #b8b5ae;
+  --node-fill: #ffffff;
+  --node-shadow: rgb(11 11 11 / 8%);
+  --node-accent: #1f5f9e;
+  --port: #8f8d87;
+  --wire: #8f8d87;
+}
+
+/* Dark, for the editor's theme toggle. Only the tokens change: nothing
+   downstream has to know which theme it is being drawn in.
+
+   It is opt-in by attribute rather than by `prefers-color-scheme`, so a
+   report opened in a dark browser keeps the light palette it was
+   designed and screenshotted with -- the editor stamps the attribute,
+   and only the editor. */
+:root[data-theme='dark'] {
+  --surface: #17171a;
+  --panel: #1f1f23;
+  --ink: #f2f1ee;
+  --ink-soft: #a5a39d;
+  --grid: #2a2a2f;
+  --line: #3a3a41;
+  --series: #64a8f0;
+  --accent: #f0854f;
+  --bad: #e8635f;
+  --good: #4cc24c;
+
+  --node-line: #4a4a52;
+  --node-fill: #24242a;
+  --node-shadow: rgb(0 0 0 / 45%);
+  --node-accent: #7fb8ee;
+  --port: #7b7a83;
+  --wire: #6f6e77;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--surface);
+  color: var(--ink);
+  font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto,
+    Helvetica, Arial, sans-serif;
+}
+
+a { color: var(--series); }
+
+button {
+  font: inherit;
+  font-size: 0.83rem;
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+}
+button:hover { border-color: var(--ink-soft); }
+button.primary { background: var(--series); border-color: var(--series); color: #fff; }

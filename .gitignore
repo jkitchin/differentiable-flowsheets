@@ -10,8 +10,10 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+# Anchored to the root: these are setuptools artifacts, and an unanchored
+# `lib/` also swallows src/difflow/gui/frontend/src/lib/, which is source.
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -64,3 +66,7 @@ differentiable-flowsheets-ree.pdf
 # Claude Code local settings
 .claude/
 **/.claude/
+
+# Editor front end. The build OUTPUT (src/difflow/gui/static) is committed on
+# purpose -- installing difflow must not need node -- but the toolchain is not.
+src/difflow/gui/frontend/node_modules/

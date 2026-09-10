@@ -2,21 +2,20 @@
 
 The parser exists so that :mod:`difflow.catalog` can report what each
 parameter *means*; before it, every one of the project's ``Params``
-classes reached the catalog with ``description=None`` and ``units=None``
-(#213). Two things are worth pinning down here: that the forms actually
-used across the project are read, and that a doubtful parenthetical is
-*not* reported as units --- a wrong unit in a machine-readable schema is
-worse than a missing one.
+classes reached the catalog with ``description=None`` (#213). What is
+worth pinning down here is that the forms actually used across the
+project are read --- the wrapped descriptions, the sub-headings some
+classes group their fields under, the comments beside the fields added
+after a class was first written --- and that prose in an ``Attributes:``
+section is not mistaken for one of its entries.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import pytest
 
 from difflow.docstrings import (
-    AttributeDoc,
     attribute_docs,
-    extract_units,
     field_comments,
     parse_attributes,
 )
@@ -122,48 +121,6 @@ class TestParseAttributes:
 
 
 # =============================================================================
-# Units
-# =============================================================================
-
-
-class TestExtractUnits:
-    @pytest.mark.parametrize("text,units", [
-        ("Flash pressure (Pa)", "Pa"),
-        ("Reactor volume (m^3)", "m^3"),
-        ("Amine concentration (mol/m³)", "mol/m³"),
-        ("Heats of reaction (J/mol) for each reaction", "J/mol"),
-        ("Hot side heat capacity (J/mol·K). If None, uses default.", "J/mol·K"),
-        ("Overall heat transfer coefficient × area (W/K)", "W/K"),
-        ("specific heat capacity, J/(kg K).", "J/(kg K)"),
-        ("Maximum binding capacity (g mAb / L resin)", "g mAb / L resin"),
-        ("Lean solvent CO2 loading (mol CO2/mol amine)", "mol CO2/mol amine"),
-        ("series resistance (pu).", "pu"),
-    ])
-    def test_units_are_read(self, text, units):
-        assert extract_units(text) == units
-
-    @pytest.mark.parametrize("text", [
-        "Murphree stage efficiency (0-1)",
-        "Coordination number (default 10, typical range 6-12)",
-        "Molar excess of precipitant (1.0 = stoichiometric)",
-        "Strip solution pH (very low, typically < 1)",
-        "Isentropic efficiency in (0, 1].",
-        "Name of target species (mAb/product)",
-        "Sharpness k of the limiter (total/capacity)",
-        "Scrub solution pH (lower pH strips more)",
-        "Membrane type ('glassy', 'rubbery')",
-        "Signature: rate_fn(C, T, rate_params) -> r",
-        "A description with no parenthetical at all",
-    ])
-    def test_doubtful_parentheticals_are_not_units(self, text):
-        assert extract_units(text) is None
-
-    def test_nothing_to_read(self):
-        assert extract_units(None) is None
-        assert extract_units("") is None
-
-
-# =============================================================================
 # Comments
 # =============================================================================
 
@@ -208,10 +165,8 @@ class TestFieldComments:
 class TestAttributeDocs:
     def test_docstring_and_comments_are_both_used(self):
         docs = attribute_docs(SampleParams)
-        assert docs["T"] == AttributeDoc(description="Flash temperature (K)",
-                                         units="K")
-        assert docs["commented"].description == "Trailing comment (m^3)"
-        assert docs["commented"].units == "m^3"
+        assert docs["T"] == "Flash temperature (K)"
+        assert docs["commented"] == "Trailing comment (m^3)"
 
     def test_the_docstring_wins_over_a_comment(self):
         @dataclass
@@ -224,7 +179,7 @@ class TestAttributeDocs:
 
             x: float = 0.0  # from the comment
 
-        assert attribute_docs(Both)["x"].description == "from the docstring"
+        assert attribute_docs(Both)["x"] == "from the docstring"
 
     def test_only_real_fields_are_reported(self):
         docs = attribute_docs(SampleParams)
@@ -245,8 +200,8 @@ class TestAttributeDocs:
             extra: float = 0.0
 
         docs = attribute_docs(Derived)
-        assert docs["T"].description == "Flash temperature (K)"
-        assert docs["extra"].description == "An added field (s)"
+        assert docs["T"] == "Flash temperature (K)"
+        assert docs["extra"] == "An added field (s)"
 
     def test_a_subclass_can_redocument_a_field(self):
         @dataclass
@@ -257,9 +212,7 @@ class TestAttributeDocs:
                 T: Inlet temperature, not the flash temperature (K)
             """
 
-        assert attribute_docs(Redocumented)["T"].description.startswith(
-            "Inlet temperature"
-        )
+        assert attribute_docs(Redocumented)["T"].startswith("Inlet temperature")
 
     def test_comments_can_be_turned_off(self):
         docs = attribute_docs(SampleParams, comments=False)
@@ -267,6 +220,8 @@ class TestAttributeDocs:
         assert "commented" not in docs
 
     def test_a_plain_class_reports_what_it_documents(self):
+        """Not a dataclass, so there are no fields to filter by."""
+
         class Plain:
             """Summary.
 
@@ -274,7 +229,7 @@ class TestAttributeDocs:
                 a: first (K)
             """
 
-        assert attribute_docs(Plain)["a"].units == "K"
+        assert attribute_docs(Plain) == {"a": "first (K)"}
 
 
 if __name__ == "__main__":

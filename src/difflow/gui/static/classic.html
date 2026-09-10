@@ -1,304 +1,4 @@
-"""A local editor for flowsheets, served to the browser.
-
-Researchers already have difflow installed, so the browser does not need
-to run the solver --- it only needs to reach one. This serves a small
-HTTP API and a single-page editor on ``localhost``, with the real
-package doing the work:
-
-    python -m difflow.gui plant.json
-
-The point is not to replace writing Python. It is to make the parts
-that are tedious in Python --- seeing the topology, adjusting a
-parameter and re-solving, checking what a unit expects --- quick, while
-leaving the door open: the editor exports the model as a script
-(:mod:`difflow.codegen`) or as JSON (:mod:`difflow.serialize`), and
-reads JSON back. An editor you can only enter is worse than none.
-
-Units are added by clicking the palette, and streams are wired by
-naming them: an outlet names a stream, and an inlet chooses one that
-something already produces. Renaming a stream follows it to every
-consumer, so the wiring survives the edit.
-
-What the palette cannot add, it says so about rather than failing
-later. Roughly half the catalog needs something no form can supply ---
-a ``thermo`` object, a rate law --- and those entries are dimmed with
-the reason (:attr:`~difflow.catalog.OperationSchema.is_buildable`).
-For them the route is still Python, then JSON, then here.
-
-Everything comes from :mod:`difflow.catalog`, so the palette lists
-whatever is registered, plugins included, with the ports and parameter
-schema each unit actually declares.
-
-Deliberately stdlib only: a development tool that made difflow depend
-on a web framework would be a poor trade. It binds to 127.0.0.1 and is
-meant for a single local user --- it is not hardened for exposure to a
-network.
-"""
-
-from __future__ import annotations
-
-import json
-import threading
-import webbrowser
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
-from typing import Any
-
-DEFAULT_PORT = 8756
-#: only ever bound on the loopback interface
-HOST = "127.0.0.1"
-
-#: JSON has no literal for the non-finite floats. Python's ``json``
-#: writes them as ``Infinity`` / ``NaN``, which the browser's
-#: ``JSON.parse`` rejects outright --- and this is the *common* case,
-#: not an exotic one: :func:`~difflow.kinetics.mass_action_kinetics`
-#: puts ``inf`` in ``K_eq`` for every irreversible reaction. So they go
-#: over the wire as strings and are restored on the way back.
-NON_FINITE = {"Infinity": float("inf"), "-Infinity": float("-inf"),
-              "NaN": float("nan")}
-
-
-def _json_safe(value: Any) -> Any:
-    """Rewrite non-finite floats as the strings in :data:`NON_FINITE`."""
-    if isinstance(value, float):
-        if value != value:
-            return "NaN"
-        if value == float("inf"):
-            return "Infinity"
-        if value == float("-inf"):
-            return "-Infinity"
-        return value
-    if isinstance(value, dict):
-        return {k: _json_safe(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_json_safe(v) for v in value]
-    return value
-
-
-def _json_restore(value: Any) -> Any:
-    """Undo :func:`_json_safe`.
-
-    A string parameter whose value is literally ``"NaN"`` would be
-    turned into a float here. No unit declares one, and the alternative
-    --- an out-of-band encoding threaded through the whole document ---
-    costs more than the case is worth.
-    """
-    if isinstance(value, str):
-        return NON_FINITE.get(value, value)
-    if isinstance(value, dict):
-        return {k: _json_restore(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_json_restore(v) for v in value]
-    return value
-
-
-class FlowsheetSession:
-    """The flowsheet the editor is working on, plus what it can do to it.
-
-    Holds the mutable state so the request handler stays a thin shell
-    over :mod:`difflow.serialize`, :mod:`difflow.codegen` and
-    :mod:`difflow.catalog`.
-    """
-
-    def __init__(self, flowsheet=None, path: str | Path | None = None):
-        self.path = Path(path) if path else None
-        self.flowsheet = flowsheet
-        if flowsheet is None and self.path and self.path.exists():
-            from difflow import serialize
-
-            self.flowsheet = serialize.load(self.path)
-        self._lock = threading.Lock()
-
-    # -- reads --------------------------------------------------------
-
-    def catalog(self) -> dict:
-        from difflow.catalog import catalog
-
-        return {
-            name: spec.to_dict() for name, spec in catalog().items()
-        }
-
-    def document(self) -> dict:
-        from difflow import serialize
-
-        if self.flowsheet is None:
-            return {"flowsheet": None, "path": str(self.path or "")}
-        return {
-            "flowsheet": serialize.to_dict(self.flowsheet),
-            "path": str(self.path or ""),
-        }
-
-    def code(self) -> dict:
-        from difflow import codegen
-
-        if self.flowsheet is None:
-            return {"source": "", "error": "no flowsheet loaded"}
-        try:
-            return {"source": codegen.to_python(self.flowsheet), "error": None}
-        except Exception as exc:                     # surfaced, not swallowed
-            return {"source": "", "error": str(exc)}
-
-    # -- writes -------------------------------------------------------
-
-    def replace(self, document: dict) -> dict:
-        """Adopt a flowsheet sent from the browser."""
-        from difflow import serialize
-
-        with self._lock:
-            self.flowsheet = serialize.from_dict(document)
-        return {"ok": True}
-
-    def save(self) -> dict:
-        from difflow import serialize
-
-        if self.flowsheet is None:
-            return {"ok": False, "error": "no flowsheet loaded"}
-        if self.path is None:
-            return {"ok": False, "error": "no path was given on startup"}
-        serialize.save(self.flowsheet, self.path)
-        return {"ok": True, "path": str(self.path)}
-
-    def solve(self) -> dict:
-        """Solve, and report a failure rather than raising at the socket."""
-        if self.flowsheet is None:
-            return {"ok": False, "error": "no flowsheet loaded"}
-        try:
-            with self._lock:
-                streams = self.flowsheet.solve()
-        except Exception as exc:
-            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
-        return {
-            "ok": True,
-            "streams": {
-                name: {
-                    k: (v if isinstance(v, str) else float(v))
-                    for k, v in stream.items()
-                }
-                for name, stream in streams.items()
-            },
-            "converged": getattr(self.flowsheet, "last_solve_converged", None),
-            "iterations": getattr(self.flowsheet, "last_solve_iterations", None),
-        }
-
-
-class _Handler(BaseHTTPRequestHandler):
-    """Routes. The session does the work."""
-
-    session: FlowsheetSession = None            # set by :func:`serve`
-    server_version = "difflow-gui"
-
-    def log_message(self, *args):                # quiet by default
-        pass
-
-    def _send(self, payload: Any, status: int = 200, content="application/json"):
-        if isinstance(payload, bytes):
-            body = payload
-        elif isinstance(payload, str):
-            body = payload.encode("utf-8")
-        else:
-            # allow_nan=False so a leak past _json_safe fails loudly here
-            # rather than as a parse error in the browser
-            body = json.dumps(_json_safe(payload), allow_nan=False).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", f"{content}; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
-
-    def do_GET(self):
-        routes = {
-            "/": lambda: self._send(_PAGE, content="text/html"),
-            # answered so the browser does not log a 404 on every load
-            "/favicon.ico": lambda: self._send(b"", content="image/x-icon"),
-            "/api/catalog": lambda: self._send(self.session.catalog()),
-            "/api/flowsheet": lambda: self._send(self.session.document()),
-            "/api/code": lambda: self._send(self.session.code()),
-        }
-        handler = routes.get(self.path)
-        if handler is None:
-            return self._send({"error": "not found"}, status=404)
-        handler()
-
-    def do_POST(self):
-        length = int(self.headers.get("Content-Length") or 0)
-        raw = self.rfile.read(length) if length else b"{}"
-        try:
-            payload = _json_restore(json.loads(raw or b"{}"))
-        except json.JSONDecodeError as exc:
-            return self._send({"ok": False, "error": f"bad JSON: {exc}"}, 400)
-
-        try:
-            if self.path == "/api/flowsheet":
-                return self._send(self.session.replace(payload))
-            if self.path == "/api/solve":
-                return self._send(self.session.solve())
-            if self.path == "/api/save":
-                return self._send(self.session.save())
-        except Exception as exc:
-            # a bad edit from the browser must not take the server down
-            return self._send(
-                {"ok": False, "error": f"{type(exc).__name__}: {exc}"}, 400
-            )
-        self._send({"error": "not found"}, status=404)
-
-
-def make_server(session: FlowsheetSession, port: int = DEFAULT_PORT):
-    """Build the HTTP server without starting it.
-
-    Useful for tests, which want a port and a shutdown handle rather
-    than a blocking call.
-    """
-    handler = type("_BoundHandler", (_Handler,), {"session": session})
-    return ThreadingHTTPServer((HOST, port), handler)
-
-
-def serve(
-    flowsheet=None,
-    path: str | Path | None = None,
-    *,
-    port: int = DEFAULT_PORT,
-    open_browser: bool = True,
-) -> None:
-    """Run the editor until interrupted.
-
-    Args:
-        flowsheet: the flowsheet to edit. If omitted and ``path``
-            exists, it is loaded from there.
-        path: file the editor saves to.
-        port: TCP port on the loopback interface.
-        open_browser: open a browser window at startup.
-    """
-    session = FlowsheetSession(flowsheet, path)
-    server = make_server(session, port)
-    url = f"http://{HOST}:{port}/"
-    print(f"difflow editor on {url}   (ctrl-c to stop)")
-    if open_browser:
-        threading.Timer(0.4, lambda: webbrowser.open(url)).start()
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print("\nstopping")
-    finally:
-        server.server_close()
-
-
-def main(argv: list[str] | None = None) -> int:
-    """``python -m difflow.gui [flowsheet.json] [--port N] [--no-browser]``."""
-    import argparse
-
-    parser = argparse.ArgumentParser(
-        prog="difflow.gui", description="Local flowsheet editor."
-    )
-    parser.add_argument("path", nargs="?", help="flowsheet JSON to open and save")
-    parser.add_argument("--port", type=int, default=DEFAULT_PORT)
-    parser.add_argument("--no-browser", action="store_true")
-    args = parser.parse_args(argv)
-
-    serve(path=args.path, port=args.port, open_browser=not args.no_browser)
-    return 0
-
-
-_PAGE = """<!doctype html>
+<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -319,6 +19,7 @@ _PAGE = """<!doctype html>
   header h1 { font-size:.95rem; margin:0; font-weight:650; letter-spacing:-.01em; }
   header .path { color:var(--ink-soft); font-size:.8rem; }
   header .spacer { flex:1; }
+  header .canvas-link { font-size:.78rem; color:var(--series); }
   button { font:inherit; font-size:.83rem; padding:.35rem .7rem;
     border:1px solid var(--line); border-radius:6px; background:var(--surface);
     color:var(--ink); cursor:pointer; }
@@ -400,6 +101,7 @@ _PAGE = """<!doctype html>
   <button id="solve" class="primary">Solve</button>
   <button id="save">Save</button>
   <button id="showcode">Python</button>
+  <a class="canvas-link" href="/">canvas editor</a>
 </header>
 
 <main>
@@ -428,9 +130,13 @@ let DOC = null, CATALOG = {};
 /* whether the server holds the flowsheet now on screen */
 let SYNCED = true, LAST_ERROR = "";
 
+/* The token the server put in this page; every mutating request carries it. */
+const TOKEN = document.querySelector('meta[name="difflow-token"]')?.content || "";
 const api = {
   get: p => fetch(p).then(r => r.json()),
-  post: (p, b) => fetch(p, {method:"POST", headers:{"Content-Type":"application/json"},
+  post: (p, b) => fetch(p, {method:"POST",
+                           headers:{"Content-Type":"application/json",
+                                    "X-Difflow-Token": TOKEN},
                            body: JSON.stringify(b || {})}).then(r => r.json()),
 };
 function fmt(v) {
@@ -928,8 +634,3 @@ document.getElementById("save").addEventListener("click", async () => {
 </script>
 </body>
 </html>
-"""
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

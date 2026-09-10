@@ -473,16 +473,17 @@ class REEExtractor:
         "Rydberg, J., Musikas, C., Choppin, G.R. Principles and Practices of Solvent Extraction, Marcel Dekker, 1992.",
         "Xie, F., Zhang, T.A., Dreisinger, D., Doyle, F. Miner. Eng., 56, 10 (2014).",
     ]
-    parameter_symbols = {
-        "n_stages": "N",
-        "extractant_conc": "[HA]",
-        "pH": r"\mathrm{pH}",
-        "O_A_ratio": "O/A",
-    }
+    parameter_symbols = {"n_stages": "N", "pH": r"\mathrm{pH}", "extractant_conc": "[HA]"}
     parameter_units = {
-        "extractant_conc": "mol/L",
+        "n_stages": "-",
         "pH": "-",
-        "O_A_ratio": "-",
+        "extractant_conc": "mol/L",
+        "ligand_conc": "mol/L",
+        "nitrate_conc": "mol/L",
+        "capacity_sharpness": "-",
+        "aqueous_volumetric_flow": "L/s",
+        "organic_volumetric_flow": "L/s",
+        "base_addition": "mol/s",
     }
     numerical_method = "Kremser closed form with pH-dependent distribution ratios; optional loading via Langmuir isotherm."
 
@@ -958,8 +959,16 @@ class REEMixerSettler:
         "settler_residence_time": r"\tau_\mathrm{set}",
     }
     parameter_units = {
+        "pH": "-",
+        "extractant_conc": "mol/L",
         "mixer_residence_time": "s",
         "settler_residence_time": "s",
+        "stage_efficiency": "-",
+        "nitrate_conc": "mol/L",
+        "k_extraction": "1/s",
+        "entrainment_org_in_aq": "-",
+        "entrainment_aq_in_org": "-",
+        "third_phase_loading_limit": "mol REE / mol extractant",
     }
 
     def __init__(self, params: MixerSettlerParams):
