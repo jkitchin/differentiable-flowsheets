@@ -12,7 +12,10 @@ hand-maintained table:
 * **parameters** come from ``dataclasses.fields`` of the unit's
   ``Params`` class --- name, type, default, whether it is required, and
   whether it is a callable (which is what a declarative front end
-  cannot author; see :mod:`difflow.kinetics`).
+  cannot author; see :mod:`difflow.kinetics`). Their descriptions come
+  from the ``Params`` class's own documentation, read by
+  :mod:`difflow.docstrings`, so the prose the project already maintains
+  is what a consumer of the schema sees.
 * **ports** come from the ``__call__`` signature: parameters annotated
   as :data:`~difflow.streams.Stream` are inlets, and the leading
   ``Stream`` entries of the return tuple are outlets.
@@ -44,6 +47,7 @@ import typing
 from dataclasses import dataclass, field
 from typing import Any
 
+from difflow.docstrings import attribute_docs
 from difflow.params_mixin import ParamsMixin
 
 #: module name -> category, for the core unit operations
@@ -109,7 +113,9 @@ class ParameterSpec(ParamsMixin):
             specific of the two, so it wins.
         symbol: LaTeX symbol for the field, from the unit class's
             ``parameter_symbols``.
-        description: help text, when the field declares it.
+        description: help text, from the field's dataclass metadata or,
+            failing that, from the ``Params`` class's own documentation
+            (see :mod:`difflow.docstrings`).
     """
 
     name: str
@@ -366,6 +372,14 @@ def _parameters(
 ) -> list[ParameterSpec]:
     """Describe every field of a ``Params`` dataclass.
 
+    Descriptions come from the field's own ``metadata`` where it declares
+    one, and otherwise from the class's documentation --- its
+    ``Attributes:`` section and the comments around its fields --- read by
+    :mod:`difflow.docstrings`. Without that fallback every parameter in
+    the project would carry ``description=None``: the prose is written, in
+    the form CLAUDE.md prescribes, and no field declares a description.
+    Units are not read from the prose; they have the explicit table below.
+
     Args:
         params_cls: the dataclass, or ``None`` if none was found.
         metadata: the owning unit's
@@ -377,6 +391,7 @@ def _parameters(
         return []
     units = dict(getattr(metadata, "parameter_units", None) or {})
     symbols = dict(getattr(metadata, "parameter_symbols", None) or {})
+    docs = attribute_docs(params_cls)
     specs = []
     for f in dataclasses.fields(params_cls):
         has_default = (
@@ -396,7 +411,7 @@ def _parameters(
             is_callable=_is_code(f.type),
             units=f.metadata.get("units") or units.get(f.name),
             symbol=symbols.get(f.name),
-            description=f.metadata.get("description"),
+            description=f.metadata.get("description") or docs.get(f.name),
         ))
     return specs
 
