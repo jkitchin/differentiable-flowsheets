@@ -495,6 +495,12 @@ class _Handler(BaseHTTPRequestHandler):
                                         extras=payload.get("extras"))
             if path == "/api/code-context":
                 return session.set_code_context(payload.get("source", ""))
+            # Writes nothing, but it is a POST: the answer carries the
+            # code context back inside `merged`, and `_guard` runs on
+            # POST. A GET would be reachable from an unrelated page.
+            if path == "/api/boilerplate":
+                return session.boilerplate(payload.get("operation", ""),
+                                           name=payload.get("name"))
             if path == "/api/species":
                 return session.set_species(payload.get("species"))
             # One verb for declaring a feed and for editing one: the

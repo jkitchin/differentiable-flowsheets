@@ -12,6 +12,7 @@
   import { del, get, patch, post, send } from './lib/api.js'
   import { inferKind } from './lib/model/assistant.js'
   import { movedPositions } from './lib/model/edit.js'
+  import { pendingPositions } from './lib/model/graph.js'
   import { keepAlive } from './lib/model/lifetime.js'
   import { flowLabels, flowTints } from './lib/model/results.js'
 
@@ -22,6 +23,10 @@
   // about the flowsheet (has it any units yet?) and not a preference.
   let species = $state([])
   let speciesEditable = $state(true)
+  // Units dropped on the canvas that cannot be built yet. Beside the
+  // document rather than in it, exactly as the server sends them: a
+  // flowsheet holds units that exist, and a half-built one is not a unit.
+  let pending = $state([])
   let catalog = $state({})
   let error = $state('')
   let note = $state('')
@@ -104,12 +109,16 @@
     path = payload.path
     species = payload.species ?? []
     speciesEditable = payload.editable !== false
+    pending = payload.pending ?? []
     // The selection is a snapshot of a node; after a reload it may name a
-    // unit that no longer exists, or one whose ports have changed.
+    // unit that no longer exists, or one whose ports have changed. A
+    // pending node counts as still there -- it is the one selection the
+    // user is most likely to be in the middle of answering.
     const id = selected?.id
-    selected = id
-      ? (doc?.units ?? []).some((u) => u.name === id) ? selected : null
-      : null
+    const alive = (name) =>
+      (doc?.units ?? []).some((u) => u.name === name) ||
+      pending.some((p) => p.name === name)
+    selected = id ? (alive(id) ? selected : null) : null
   }
 
   const loadContext = () =>
@@ -213,10 +222,17 @@
 
   async function add(operation, position) {
     const answer = await edit(() => post('/api/unit', { operation, position }))
-    // A required number with no default gets a placeholder rather than
-    // blocking the drop. Saying so is the whole difference between a
-    // default and a guess.
-    if (answer?.ok && answer.placeholders?.length) {
+    // A drop that cannot be built is not a failure: the node is on the
+    // canvas in red, and the hint is what it is waiting for. Select it,
+    // so the inspector is already showing the way out of it.
+    if (answer?.ok && answer.pending) {
+      note = answer.hint
+      selected = { id: answer.name, type: 'unit',
+                   data: { label: answer.name, operation } }
+    } else if (answer?.ok && answer.placeholders?.length) {
+      // A required number with no default gets a placeholder rather than
+      // blocking the drop. Saying so is the whole difference between a
+      // default and a guess.
       note = `${answer.name}: ${answer.placeholders.join(', ')} set to a placeholder`
     }
     return answer
@@ -230,8 +246,21 @@
     // `thermo` defined here un-blocks every unit that wanted one. Refetch
     // rather than reason about which: the server already knows.
     catalog = await get('/api/catalog')
-    if (answer?.ok) note = `code context: ${answer.names.length} names defined`
+    if (answer?.ok) note = built(answer, `${answer.names.length} names defined`)
     return answer
+  }
+
+  /**
+   * What an edit that can promote a red node has to say about it.
+   *
+   * The server retries every pending drop after the code context or the
+   * species change, and the interesting half of "4 names defined" is
+   * which of the red boxes went away because of it.
+   */
+  function built(answer, fallback) {
+    const n = answer.promoted?.length ?? 0
+    if (!n) return fallback
+    return `${fallback} -- ${answer.promoted.join(', ')} built`
   }
 
   /**
@@ -245,7 +274,8 @@
     const answer = await edit(() => post('/api/species', { species: names }))
     if (answer?.ok) {
       catalog = await get('/api/catalog')
-      note = names.length ? `species: ${names.join(', ')}` : 'species cleared'
+      note = built(answer,
+                   names.length ? `species: ${names.join(', ')}` : 'species cleared')
     }
     return answer
   }
@@ -268,7 +298,12 @@
 
   /** Positions only: no rebuild, no solve, and no reload to fight the drag. */
   function move(positions) {
-    const moved = movedPositions(positions, doc?.view?.nodes)
+    // Pending positions live on the pending entries, not in `view.nodes`
+    // -- a coordinate for a node the flowsheet does not have has no
+    // business being saved to the file. They are joined in here so a red
+    // box that has not moved is not reported as having moved.
+    const moved = movedPositions(positions,
+                                 { ...doc?.view?.nodes, ...pendingPositions(pending) })
     if (!Object.keys(moved).length) return
     // Adopted locally too, so the next reload does not snap the node back
     // to where the document still says it is.
@@ -286,9 +321,15 @@
       if (answer.ok) {
         showResults = true
         await loadPickers()
-        note = answer.converged === false
+        const held = answer.pending?.length
+          // What was solved is not what is on the canvas. Said here
+          // rather than left to the picture, because the numbers in the
+          // results panel look exactly the same either way.
+          ? ` (${answer.pending.join(', ')} not built, and not in it)`
+          : ''
+        note = (answer.converged === false
           ? 'solved, but the tear residual did not reach the tolerance'
-          : `solved: ${Object.keys(answer.streams).length} streams`
+          : `solved: ${Object.keys(answer.streams).length} streams`) + held
       } else {
         note = answer.error
       }
@@ -322,6 +363,14 @@
   )
   let selectedSpec = $derived(
     selected?.data?.operation ? catalog[selected.data.operation] ?? null : null,
+  )
+  // A red node: dropped, not built. It has no entry in the document, so
+  // it is looked up here and the inspector shows what it is waiting for
+  // instead of a parameter form for a unit that does not exist.
+  let selectedPending = $derived(
+    selected?.type === 'unit'
+      ? pending.find((p) => p.name === selected.id) ?? null
+      : null,
   )
   // The stream a selected feed node carries, or `null` for an inlet
   // nothing feeds yet -- which is a node the canvas draws either way,
@@ -418,6 +467,7 @@
       <Canvas
         document={doc}
         positions={doc.view?.nodes ?? null}
+        {pending}
         {catalog}
         {portLabels}
         {dark}
@@ -438,12 +488,14 @@
     unit={selectedUnit}
     spec={selectedSpec}
     feed={selectedFeed}
+    pending={selectedPending}
     {species}
     defaults={doc?.defaults ?? null}
     {busy}
     onrename={rename}
     ondelete={remove}
     onedit={edit}
+    oncontext={applyContext}
   />
 </main>
 
