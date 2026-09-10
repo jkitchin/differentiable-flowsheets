@@ -869,6 +869,11 @@ horizontal cut a stream crosses has the feed above it. `_is_rectifying_cut` and
 definition, read by both the CMO (Lewis-Matheson) sweep and the MESH flow
 initialisation.
 
+`q` decides the answer on the CMO path. On the MESH path it reaches the solver
+only through that initial profile — the energy balance brings the feed in as a
+saturated liquid whatever `q` says — so `use_mesh=True` with `q != 1` moves the
+starting point rather than the converged result.
+
 `condenser_type='partial'` raises `NotImplementedError` rather than being
 silently solved as a total condenser.
 

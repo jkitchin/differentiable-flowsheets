@@ -1043,7 +1043,11 @@ class DistillationColumnParams(ParamsMixin):
         P: Column pressure (Pa). One pressure for the whole column -- there is
             no tray pressure drop.
         q: Feed thermal condition (1.0 = saturated liquid, 0.0 = saturated
-            vapor).
+            vapor). It sets the section flows above. On the CMO path
+            (``use_mesh=False``) that determines the answer; with
+            ``use_mesh=True`` it only sets the initial L/V profile, because
+            the MESH energy balance brings the feed in as a saturated liquid
+            whatever ``q`` says.
     """
     species_order: list[str]
     n_stages: int
@@ -1681,7 +1685,9 @@ class DistillationColumn:
             # 6. Energy balance update to obtain L/V profiles
             h_all, H_all = self._compute_stage_enthalpies(x_new, y_new, T_new)
 
-            # Feed enthalpy (saturated liquid, q=1)
+            # Feed enthalpy, taken as a saturated liquid whatever p.q says:
+            # q reaches this solver only through the L/V warm start above.
+            # See DistillationColumnParams.q.
             h_F = self._molar_enthalpy(z, jnp.asarray(T_feed), 'liquid')
 
             # Reflux enthalpy. A total condenser returns saturated liquid of

@@ -784,7 +784,6 @@ class TestFeedStageConvention:
         assert float(drops[feed_stage]) == pytest.approx(100.0, rel=0.1)
 
 
-
 class TestMulticomponentDistillation:
     """Tests for multicomponent distillation."""
 
