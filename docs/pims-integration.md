@@ -96,10 +96,30 @@ Ordered by how much works without an Aspen licence.
 
 ### Tier 1 — Export
 
-`write_submodel(lin, mapping, path)` takes a
-`difflow.planning.linearize.Linearization` — which already carries `u0`, `y0`,
-`J` and the AD mode — and writes a PIMS submodel table: base column plus one
-shift column per lever, with shift bounds taken from the converged trust radius.
+**This is a new writer on existing machinery, not a new exporter.**
+`difflow.planning.export` already defines `DeltaVector` / `DeltaVectorSet` and
+writes them as `write_json`, `write_csv`, `write_lp` and `write_mps`. PIMS
+becomes a fifth writer:
+
+```python
+write_pims(dvs: DeltaVectorSet, mapping: PIMSMapping, path) -> None
+```
+
+`DeltaVector` already carries nearly everything the table needs — `u0`, `y0`,
+`J`, `lb`/`ub`, `radius`, `tr_lo`/`tr_hi`, `mode`, `phase`, and per-lever
+`u_units`/`y_units`. It also carries **`scaled_J`**, the dimensionless Jacobian,
+whose own docstring calls it *"the form a shift-vector table is normally read
+in"*. That is the PIMS shift vector in all but name and file format.
+
+So Tier 1 adds exactly two things that do not already exist: the **basis
+conversion** (below), and the **tag mapping**. Everything else is plumbing an
+existing record into a spreadsheet layout.
+
+`Block.from_flowsheet(fs, u=[...], y=[...])` is the front of the same pipeline —
+the bridge from a difflow flowsheet to a planning block, with lever keys in
+`_apply_params` notation and feed levers under a `feed:` prefix. A PIMS export
+is then: flowsheet → `Block.from_flowsheet` → `linearize_block` →
+`DeltaVectorSet.from_block` → `write_pims`.
 
 Output is a spreadsheet, one sheet per table. Buildable and testable today with
 no Aspen software present.
@@ -107,7 +127,10 @@ no Aspen software present.
 ### Tier 2 — Import, and the staleness report
 
 `read_pims_model(path) -> list[Block]` parses submodel tables back into affine
-`Block`s. That unlocks the thing actually worth demonstrating:
+`Block`s. Note what this changes: `difflow.planning.export` is **one-way today —
+there is no importer at all**, for any format. A PIMS reader would be the first,
+so it is a change to the module's contract and not merely another file parser.
+It earns that only because of what it unlocks:
 
 **a staleness report.** Incumbent PIMS vector against fresh AD vector, entry by
 entry, ranked by *economic impact* rather than by relative error — "six of these
@@ -164,7 +187,9 @@ Every exported vector carries:
   radius — the same $2n$-evaluation method the vector replaces;
 - the linearisation point `u0`, and the phase regime recorded at it.
 
-`check_delta_vectors` already exists, so this is cheap. It matters because a
+Three of those four are already fields on `DeltaVector` (`radius`, `tr_lo`/
+`tr_hi`, `u0`, `phase`); only the residual would be added. `check_delta_vectors`
+already exists, so this is cheap. It matters because a
 delta vector's accuracy is *local* and the receiving LP has no way to know where
 it stops. A vector that arrives stating its own domain of validity is a
 different object from one that arrives as a block of numbers.
@@ -179,22 +204,26 @@ differentiable there — and must never be exported silently.
 Illustrative, not settled; the table layout in Phase 0 will move it.
 
 ```python
-from difflow.planning import linearize_block
-from difflow.planning.pims import PIMSMapping, write_submodel, read_pims_model
+from difflow.planning import Block, linearize_block
+from difflow.planning.export import DeltaVectorSet
+from difflow.planning.pims import PIMSMapping, write_pims, read_pims_model
+
+blk = Block.from_flowsheet(fs, u=["deethanizer.reflux_ratio", "feed:feed.T"],
+                           y=["ngl.F_C2", "residue.F_total"])
+dvs = DeltaVectorSet.from_block(blk, linearize_block(blk))
 
 mapping = PIMSMapping(
     submodel="SDEETH",              # the PIMS submodel this block feeds
-    feed="feed_F",                  # which u is the feed the yields are per
+    feed="feed_F",                  # which lever is the feed yields are per
     basis="weight",                 # "weight" | "volume"
-    tags={"NGL_C2": "...", "residue_F": "..."},   # difflow name -> PIMS tag
+    tags={"ngl.F_C2": "...", "residue.F_total": "..."},   # difflow -> PIMS tag
     mw={...}, density={...},        # what the conversion needs
 )
 
-lin = linearize_block(ngl_block)                  # one AD pass
-write_submodel(lin, mapping, "deethanizer.xlsx")  # asserts closure, or raises
+write_pims(dvs, mapping, "deethanizer.xlsx")   # asserts closure, or raises
 
-incumbent = read_pims_model("plant_model.xlsx")   # -> list[Block]
-report = compare_vectors(incumbent["SDEETH"], lin, prices=prices)
+incumbent = read_pims_model("plant_model.xlsx")          # -> list[Block]
+report = compare_vectors(incumbent["SDEETH"], dvs, prices=prices)
 print(report.summary())        # entries ranked by effect on the plan
 ```
 
@@ -277,11 +306,12 @@ solver swap:
 
 | Path | Contents |
 |---|---|
-| `src/difflow/planning/pims.py` | `PIMSMapping`, `write_submodel`, `read_pims_model`, `compare_vectors` |
+| `src/difflow/planning/pims.py` | `PIMSMapping`, `write_pims`, `read_pims_model`, `compare_vectors` — a writer on `export.DeltaVectorSet`, kept out of `export.py` because the importer and the basis layer have no business there |
 | `tests/test_planning_pims.py` | Round trip, closure, golden, refusal tests |
 | `tests/fixtures/` | Synthetic PIMS-layout workbook |
 | `docs/planning.md` | Cross-reference once implemented |
 | `pyproject.toml` | New `pims` extra (`openpyxl`) — there is no Excel dependency in the project today |
 
 Related reading: [`docs/planning.md`](planning.md),
+`difflow.planning.export` (the writers this extends), `Block.from_flowsheet`,
 `examples/30_delta_base_planning.ipynb`, `difflow.planning.chain.two_plant_chain`.
