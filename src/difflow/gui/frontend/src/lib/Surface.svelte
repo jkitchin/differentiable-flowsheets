@@ -29,6 +29,7 @@
   let {
     document: doc = null,
     positions = null,
+    pending = [],
     flows = null,
     tints = null,
     catalog = {},
@@ -60,7 +61,7 @@
   // dragged live on the node objects, so this deliberately re-reads them
   // from `positions` -- the caller decides what the truth is.
   $effect(() => {
-    const graph = toGraph(doc, positions, { catalog, portLabels })
+    const graph = toGraph(doc, positions, { catalog, portLabels, pending })
     nodes = graph.nodes
     edges = decorate(graph.edges, { flows, tints })
   })

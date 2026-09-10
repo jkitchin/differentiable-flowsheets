@@ -9,8 +9,16 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { FEED, PRODUCT, arcs, feedStreams, productStreams, toGraph, toPositions }
-  from './graph.js'
+import {
+  FEED,
+  PRODUCT,
+  arcs,
+  feedStreams,
+  pendingPositions,
+  productStreams,
+  toGraph,
+  toPositions,
+} from './graph.js'
 
 /** feed -> mix -> split -> (product, purge -> recycle back to mix). */
 const recycleDoc = {
@@ -167,4 +175,71 @@ test('every edge lands on a port its node declares', () => {
     assert.ok(ports(byId.get(e.source), 'out').includes(e.sourceHandle), e.id)
     assert.ok(ports(byId.get(e.target), 'in').includes(e.targetHandle), e.id)
   }
+})
+
+// -- pending nodes ---------------------------------------------------
+//
+// A unit that could not be built lands on the canvas anyway, in red.
+// It is not in the document -- a flowsheet holds units that exist --
+// so everything about it comes in beside the document, and the thing
+// that can go wrong is that it is drawn as if it were real: with
+// ports, in the node positions, or wired.
+
+const parked = [
+  { name: 'flash', operation: 'Flash', needs: ['thermo'],
+    hint: 'Flash needs thermo, which is code rather than data.',
+    position: { x: 10, y: 20 } },
+]
+
+test('a pending unit is drawn although the document has never heard of it', () => {
+  const g = toGraph(chainDoc, {}, { pending: parked })
+  const node = g.nodes.find((n) => n.id === 'flash')
+  assert.ok(node, 'the drop has to be visible')
+  assert.equal(node.type, 'unit')
+  assert.equal(node.data.operation, 'Flash')
+  assert.deepEqual(node.position, { x: 10, y: 20 })
+  assert.deepEqual(node.data.pending, {
+    needs: ['thermo'], hint: parked[0].hint,
+  })
+})
+
+test('a pending unit has no ports', () => {
+  // It was never built, so it has none -- and a handle would invite a
+  // wire to a unit that cannot receive one.
+  const g = toGraph(chainDoc, {}, { pending: parked })
+  const node = g.nodes.find((n) => n.id === 'flash')
+  assert.deepEqual(node.data.inlets, [])
+  assert.deepEqual(node.data.outlets, [])
+  assert.ok(!g.edges.some((e) => e.source === 'flash' || e.target === 'flash'))
+})
+
+test('a pending unit with no position still lands somewhere', () => {
+  const g = toGraph(chainDoc, {}, { pending: [{ name: 'x', operation: 'Flash' }] })
+  const node = g.nodes.find((n) => n.id === 'x')
+  assert.ok(Number.isFinite(node.position.x) && Number.isFinite(node.position.y))
+  assert.deepEqual(node.data.pending, { needs: [], hint: '' })
+})
+
+test('no pending list draws no pending nodes', () => {
+  assert.deepEqual(toGraph(chainDoc, {}).nodes, toGraph(chainDoc, {}, {}).nodes)
+})
+
+test('a pending node draws over a stream node, not under one', () => {
+  // Later in the array wins in @xyflow, and the red box is the thing
+  // that has to be noticed when two nodes land on the same spot.
+  const g = toGraph(chainDoc, {}, { pending: parked })
+  const ids = g.nodes.map((n) => n.id)
+  assert.ok(ids.indexOf('flash') > ids.indexOf('mix'))
+  assert.ok(ids.indexOf('flash') < ids.indexOf(PRODUCT + 'product'))
+})
+
+test('pending positions are keyed like view.nodes', () => {
+  // `movedPositions` treats a key it does not know as moved, so these
+  // have to merge into the known set or every drag would re-save a
+  // layout for nodes nobody touched.
+  assert.deepEqual(pendingPositions(parked), { flash: { x: 10, y: 20 } })
+  assert.deepEqual(pendingPositions([]), {})
+  assert.deepEqual(pendingPositions(undefined), {})
+  assert.deepEqual(pendingPositions([{ name: 'x' }]), {},
+    'no position is not a position of NaN')
 })
