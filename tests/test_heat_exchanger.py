@@ -1,5 +1,6 @@
 """Tests for heat exchanger unit operations."""
 
+import warnings
 from functools import lru_cache
 
 import pytest
@@ -11,6 +12,8 @@ from difflow.streams import get_flows
 from difflow.eos import PengRobinson, CriticalProperties
 from difflow.thermo import IdealThermo, CubicThermo, SpeciesData
 from difflow.units.heat_exchanger import (
+    DEFAULT_CP,
+    DefaultCpWarning,
     Heater,
     HeaterParams,
     Cooler,
@@ -700,3 +703,172 @@ class TestEnthalpyCounterCurrentHX:
         g = jax.grad(duty)(jnp.array(200.0))
         assert jnp.isfinite(g)
         assert float(g) > 0.0
+
+
+class TestDefaultCpWarning:
+    """The constant-Cp fallback announces itself instead of returning a
+    confident wrong duty (issue #226)."""
+
+    def test_heater_warns_when_Cp_omitted(self):
+        stream = make_stream({"A": 10.0}, T=300.0, P=101325.0)
+        with pytest.warns(DefaultCpWarning, match="75.0 J/mol/K"):
+            Heater(HeaterParams(T_out=350.0))(stream)
+
+    def test_cooler_warns_when_Cp_omitted(self):
+        stream = make_stream({"A": 10.0}, T=400.0, P=101325.0)
+        with pytest.warns(DefaultCpWarning):
+            Cooler(CoolerParams(T_out=350.0))(stream)
+
+    def test_two_stream_hx_warns_for_each_side(self):
+        hot = make_stream({"A": 10.0}, T=400.0, P=101325.0)
+        cold = make_stream({"B": 10.0}, T=300.0, P=101325.0)
+        with pytest.warns(DefaultCpWarning) as record:
+            CounterCurrentHX(HeatExchangerParams(UA=500.0))(hot, cold)
+        messages = " ".join(str(r.message) for r in record)
+        assert "hot side" in messages and "cold side" in messages
+
+    def test_no_warning_when_Cp_given(self):
+        stream = make_stream({"A": 10.0}, T=300.0, P=101325.0)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DefaultCpWarning)
+            Heater(HeaterParams(T_out=350.0, Cp=75.0))(stream)
+
+    def test_no_warning_when_thermo_given(self):
+        thermo = _propane_butane_cubic_thermo()
+        stream = make_stream({"propane": 1.0, "butane": 1.0}, T=300.0, P=3e5)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DefaultCpWarning)
+            Heater(HeaterParams(T_out=310.0), thermo=thermo)(stream)
+
+    def test_fallback_value_is_unchanged(self):
+        """The fallback still computes what it always did -- it is now audible,
+        not different."""
+        stream = make_stream({"A": 10.0}, T=300.0, P=101325.0)
+        with pytest.warns(DefaultCpWarning):
+            _, info = Heater(HeaterParams(T_out=350.0))(stream)
+        assert float(info["Q"]) == pytest.approx(10.0 * DEFAULT_CP * 50.0)
+
+
+class TestUtilityExchangerThermo:
+    """Heater/Cooler duties from a real enthalpy balance (issue #226)."""
+
+    def _liquid_feed(self):
+        # 10 bar, 300 K: well below the bubble point, so heating to 400 K
+        # crosses the phase envelope and the duty carries latent heat.
+        return make_stream({"propane": 1.0, "butane": 1.0}, T=300.0, P=10e5)
+
+    def test_duty_is_the_enthalpy_difference(self):
+        thermo = _propane_butane_cubic_thermo()
+        feed = self._liquid_feed()
+        _, info = Heater(HeaterParams(T_out=400.0), thermo=thermo)(feed)
+
+        flows = get_flows(feed)
+        H_in = thermo.stream_enthalpy_flash(flows, feed["T"], feed["P"])
+        H_out = thermo.stream_enthalpy_flash(flows, 400.0, feed["P"])
+        assert float(info["Q"]) == pytest.approx(float(H_out - H_in), rel=1e-6)
+
+    def test_constant_Cp_understates_a_vaporizing_duty(self):
+        """The failure in issue #226: 75 J/mol/K carries no latent heat."""
+        thermo = _propane_butane_cubic_thermo()
+        feed = self._liquid_feed()
+
+        _, info_thermo = Heater(HeaterParams(T_out=400.0), thermo=thermo)(feed)
+        with pytest.warns(DefaultCpWarning):
+            _, info_const = Heater(HeaterParams(T_out=400.0))(feed)
+
+        # 2 mol/s * 75 J/mol/K * 100 K = 15 kW, against a real duty that also
+        # has to boil the stream.
+        assert float(info_const["Q"]) == pytest.approx(15000.0)
+        assert float(info_thermo["Q"]) > 2.0 * float(info_const["Q"])
+
+    def test_cooler_reverses_the_heater(self):
+        thermo = _propane_butane_cubic_thermo()
+        feed = self._liquid_feed()
+        _, info_h = Heater(HeaterParams(T_out=400.0), thermo=thermo)(feed)
+
+        hot = make_stream({"propane": 1.0, "butane": 1.0}, T=400.0, P=10e5)
+        outlet, info_c = Cooler(CoolerParams(T_out=300.0), thermo=thermo)(hot)
+
+        # Cooler duty is positive for heat removed, and the path is reversible.
+        assert float(info_c["Q"]) == pytest.approx(float(info_h["Q"]), rel=1e-6)
+        assert float(outlet["T"]) == pytest.approx(300.0)
+
+    def test_phase_forces_a_single_phase_enthalpy(self):
+        """``phase=`` bypasses the flash, which is how an IdealThermo is used."""
+        thermo = _propane_butane_cubic_thermo()
+        feed = self._liquid_feed()
+        flows = get_flows(feed)
+
+        _, info = Heater(
+            HeaterParams(T_out=400.0, phase="vapor"), thermo=thermo
+        )(feed)
+        H_in = thermo.stream_enthalpy(flows, feed["T"], phase="vapor", P=feed["P"])
+        H_out = thermo.stream_enthalpy(flows, 400.0, phase="vapor", P=feed["P"])
+        assert float(info["Q"]) == pytest.approx(float(H_out - H_in), rel=1e-6)
+
+    def test_eo_residuals_vanish_at_the_thermo_solution(self):
+        thermo = _propane_butane_cubic_thermo()
+        feed = self._liquid_feed()
+        heater = Heater(HeaterParams(T_out=400.0), thermo=thermo)
+        outlet, info = heater(feed)
+
+        # T_out mode pins T directly; the duty mode is the one that has to
+        # close an enthalpy balance.
+        duty_heater = Heater(HeaterParams(duty=float(info["Q"])), thermo=thermo)
+        resid = duty_heater.eo_residuals([feed], [outlet])
+        assert float(jnp.max(jnp.abs(resid))) < 1e-6
+
+
+@pytest.mark.slow
+class TestUtilityExchangerThermoHeavy:
+    """The Heater/Cooler thermo paths that cost a JAX trace.
+
+    Marked slow for the same reason as TestEnthalpyCounterCurrentHX: rating
+    mode is a damped fixed point over a Newton inversion over an EOS flash,
+    duty mode is that Newton inversion, and the reverse-mode pass differentiates
+    through the flash -- the one-off trace/compile of those graphs is the cost,
+    not the assertions.
+    """
+
+    def test_rating_mode_closes_Q_equals_UA_LMTD(self):
+        thermo = _propane_butane_cubic_thermo()
+        feed = make_stream({"propane": 1.0, "butane": 1.0}, T=300.0, P=10e5)
+        heater = Heater(
+            HeaterParams(UA=500.0, T_utility=450.0), thermo=thermo
+        )
+        outlet, info = heater(feed)
+
+        assert 300.0 < float(outlet["T"]) < 450.0
+        assert float(info["Q"]) > 0.0
+        assert float(info["UA_required"]) == pytest.approx(500.0, rel=1e-3)
+
+        flows = get_flows(feed)
+        H_in = thermo.stream_enthalpy_flash(flows, feed["T"], feed["P"])
+        H_out = thermo.stream_enthalpy_flash(flows, outlet["T"], feed["P"])
+        assert float(H_out - H_in) == pytest.approx(float(info["Q"]), rel=1e-3)
+
+    def test_duty_mode_inverts_the_enthalpy(self):
+        thermo = _propane_butane_cubic_thermo()
+        feed = make_stream({"propane": 1.0, "butane": 1.0}, T=300.0, P=10e5)
+        _, info = Heater(HeaterParams(T_out=400.0), thermo=thermo)(feed)
+
+        outlet, info2 = Heater(
+            HeaterParams(duty=float(info["Q"])), thermo=thermo
+        )(feed)
+        assert float(outlet["T"]) == pytest.approx(400.0, rel=1e-6)
+        assert float(info2["Q"]) == pytest.approx(float(info["Q"]))
+
+    def test_differentiable(self):
+        """Duty is differentiable through the flash-based enthalpy."""
+        thermo = _propane_butane_cubic_thermo()
+        feed = make_stream({"propane": 1.0, "butane": 1.0}, T=300.0, P=10e5)
+
+        def duty(T_out):
+            _, info = Heater(HeaterParams(T_out=T_out), thermo=thermo)(feed)
+            return info["Q"]
+
+        g = jax.grad(duty)(jnp.array(400.0))
+        assert jnp.isfinite(g)
+        # dQ/dT_out is the stream's heat capacity rate: positive, and larger
+        # than the 150 W/K a constant 75 J/mol/K would give.
+        assert float(g) > 150.0

@@ -145,6 +145,7 @@ from difflow.units.distillation import (
     column_diameter,
 )
 from difflow.units.heat_exchanger import (
+    DefaultCpWarning,
     Heater,
     HeaterParams,
     Cooler,
@@ -435,6 +436,7 @@ __all__ = [
     "gilliland_stages",
     "column_diameter",
     # Unit operations - Heat Exchangers
+    "DefaultCpWarning",
     "Heater",
     "HeaterParams",
     "Cooler",

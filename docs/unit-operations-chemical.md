@@ -1115,22 +1115,51 @@ component material balances — see [Solver Paths](#solver-paths) above.
 ```python
 @dataclass
 class HeaterParams:
-    mode: str              # 'duty', 'outlet_T', or 'lmtd'
-    duty: float = None     # Heat duty (W) for 'duty' mode
-    T_out: float = None    # Outlet temperature (K) for 'outlet_T' mode
-    UA: float = None       # Overall HTC × Area (W/K) for 'lmtd' mode
-    T_utility: float = None  # Utility temperature (K) for 'lmtd' mode
+    duty: float = None       # Heat duty (W); the mode is set by which of
+    T_out: float = None      # Outlet temperature (K); these three you give
+    UA: float = None         # Overall HTC x Area (W/K), with T_utility
+    T_utility: float = None  # Utility temperature (K)
+    Cp: float = None         # Constant heat capacity (J/mol/K)
+    phase: str = None        # Force 'liquid'/'vapor' for the thermo enthalpy
 ```
 
-#### Governing Equations
+The operating mode is implied by which parameter is set -- `duty`, `T_out`, or
+`UA` together with `T_utility` -- there is no `mode` field.
 
-**Energy Balance**:
+#### Energy models
 
-$$Q = \dot{m} C_p (T_{out} - T_{in})$$
+The heater has two, and the choice matters more than any other parameter:
 
-Or in molar terms:
+**Constant Cp** -- `Heater(HeaterParams(T_out=400.0, Cp=75.0))`:
 
-$$Q = F_{total} C_{p,mix} (T_{out} - T_{in})$$
+$$Q = F_{total} C_p (T_{out} - T_{in})$$
+
+Sensible heat only. A constant $C_p$ cannot carry latent heat, so this is
+wrong -- often by a factor of several -- for any stream that vaporizes or
+condenses across the unit.
+
+**Thermo** -- `Heater(HeaterParams(T_out=400.0), thermo=thermo)`:
+
+$$Q = H(T_{out}, P) - H(T_{in}, P)$$
+
+with $H$ from the thermo's stream enthalpy. A
+[`CubicThermo`](thermodynamics.md) supplies a two-phase flash enthalpy, so the
+duty carries the real temperature dependence of the heat capacity *and* the
+latent heat of any phase change. Use this whenever the stream may change
+phase, and whenever you are comparing against a rigorous simulator. Pass
+`phase='liquid'` or `phase='vapor'` to force a single-phase enthalpy instead
+(which is what an `IdealThermo` provides).
+
+With neither `Cp` nor `thermo`, the unit falls back to `DEFAULT_CP`
+(75 J/mol/K, roughly liquid water) and raises a `DefaultCpWarning`. Turn that
+into an error to make the fallback fatal:
+
+```python
+import warnings
+from difflow import DefaultCpWarning
+
+warnings.simplefilter("error", DefaultCpWarning)
+```
 
 **LMTD Rating** (for utility heating):
 
@@ -1138,20 +1167,29 @@ $$Q = UA \cdot LMTD$$
 
 $$LMTD = \frac{(T_U - T_{in}) - (T_U - T_{out})}{\ln\left(\frac{T_U - T_{in}}{T_U - T_{out}}\right)}$$
 
-Where $T_U$ is the utility (steam) temperature.
+Where $T_U$ is the utility (steam) temperature. On the constant-Cp path this
+is solved in closed form by effectiveness-NTU with an infinite-capacity
+utility; with a thermo it is a damped fixed point on $Q$, with $T_{out}$ from
+inverting the enthalpy.
 
 #### Example Usage
 
 ```python
 from difflow.units.heat_exchanger import Heater, HeaterParams
 
-# Specified duty mode
-heater = Heater(HeaterParams(mode='duty', duty=50000.0), thermo, species_order=['A', 'B'])
+# Specified duty
+heater = Heater(HeaterParams(duty=50000.0, Cp=75.0))
 outlet, info = heater(inlet)
 
-# Specified outlet temperature mode
-heater = Heater(HeaterParams(mode='outlet_T', T_out=400.0), thermo, species_order=['A', 'B'])
+# Specified outlet temperature, duty from the thermo (carries latent heat)
+heater = Heater(HeaterParams(T_out=400.0), thermo=thermo)
 outlet, info = heater(inlet)
+info["Q"]  # W
+
+# Rating against a steam utility
+heater = Heater(HeaterParams(UA=5000.0, T_utility=450.0), thermo=thermo)
+outlet, info = heater(inlet)
+info["LMTD"], info["UA_required"]
 ```
 
 ---
@@ -1170,7 +1208,13 @@ Same as Heater with appropriate utility temperatures.
 
 #### Governing Equations
 
-Same as Heater (Q is negative for cooling).
+Same as Heater, including both energy models and the `DefaultCpWarning`
+fallback, with the duty sign reversed: `Q > 0` means heat removed.
+
+```python
+cooler = Cooler(CoolerParams(T_out=320.0), thermo=thermo)
+outlet, info = cooler(inlet)
+```
 
 ---
 

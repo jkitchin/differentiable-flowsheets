@@ -583,7 +583,8 @@ duty -- W -- Heat duty (W). Positive = heating.
 T_out -- K -- Outlet temperature (K). Alternative to duty.
 UA -- W/K -- Overall heat transfer coefficient × area (W/K). For rating.
 T_utility -- K -- Utility temperature (K). For LMTD calculation.
-Cp -- J/mol/K -- Heat capacity (J/mol·K). If None, uses thermo.
+Cp -- J/mol/K -- Constant heat capacity (J/mol·K). Ignored when the unit is built with a ``thermo``; when there is neither, the unit falls back to DEFAULT_CP and warns (DefaultCpWarning).
+phase -- - -- Force one phase ('liquid'/'vapor') for the thermo enthalpy. None (default) uses the thermo's two-phase flash enthalpy where it has one, so latent heat is carried through a partial vaporization.
 ```
 
 That text is not a second copy. `difflow.docstrings` reads it out of the `Params` class's own `Attributes:` section, which is where the project already writes it, and out of the comments beside the fields for the 35 that are documented there instead — `CSTRParams.eos` and `CSTRParams.outlet_volumetric_basis` among them. Populating `field(metadata={"description": ...})` on all 87 `Params` classes would have duplicated every description and then drifted from it.
