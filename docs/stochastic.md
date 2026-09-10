@@ -7,11 +7,6 @@ approximation** of a two-stage stochastic program — with the model, the
 gradients and the scenario batching all coming from the same JAX code difflow
 already runs.
 
-```{contents}
-:local:
-:depth: 2
-```
-
 ## When to reach for this, and when not to
 
 Four modules in difflow answer questions about uncertainty, and they cost
@@ -20,10 +15,10 @@ answers your question.
 
 | Question | Module | Cost |
 |---|---|---|
-| How much does my output move when the parameters do? | {doc}`difflow.uncertainty <solvers-and-utilities>` | one Jacobian |
+| How much does my output move when the parameters do? | [`difflow.uncertainty`](solvers-and-utilities.md) | one Jacobian |
 | How much margin should I hold on a constraint? | `difflow.planning.backoff` | one Jacobian |
 | Does the design I already have meet spec often enough? | `difflow.flexibility.expected_feasibility` | one sampled sweep |
-| Is it feasible over the *whole* envelope, guaranteed? | {doc}`difflow.flexibility <flexibility>` | vertex enumeration |
+| Is it feasible over the *whole* envelope, guaranteed? | [`difflow.flexibility`](flexibility.md) | vertex enumeration |
 | **What design should I build, given the distribution?** | **`difflow.stochastic`** | **an optimization per scenario set** |
 
 Only the last row needs this module. It is the only one that *changes the
@@ -33,9 +28,7 @@ that was worth paying.
 
 ## The split that is the whole model
 
-```{math}
-\min_{x}\ \rho\Big[\, F\big(x, u_s(\theta_s), \theta_s\big) \,\Big]
-```
+$$\min_{x}\ \rho\Big[\, F\big(x, u_s(\theta_s), \theta_s\big) \,\Big]$$
 
 *First stage*, `x` — **here and now**. Decided once, before anything is
 revealed, and lived with in every scenario. Number of stages, settler volume,
@@ -58,7 +51,7 @@ every shift. The second mistake is the dangerous one, because its answer looks
 ### Which uncertainties admit recourse at all
 
 Recourse is only real when the parameter is **observed** before the recourse
-must be committed. This is the same distinction {doc}`flexibility` draws
+must be committed. This is the same distinction [Flexibility Analysis](flexibility.md) draws
 between feed uncertainty and parameter uncertainty. A feed assay is measured on
 arrival, so pH can genuinely be re-optimized against it. A distribution
 coefficient is never revealed: it is a property of the chemistry, identical in
@@ -125,8 +118,8 @@ Constructors, ordered by how much you actually know:
 | `ScenarioSet.from_uncertainty_set(T, ...)` | you have a flexibility envelope and want its stochastic counterpart |
 
 **Prefer `from_covariance` whenever a fit exists.**
-{doc}`difflow.estimation <parameter-estimation>` and
-{doc}`difflow.reconciliation <data-reconciliation>` both hand back exactly the
+[`difflow.estimation`](parameter-estimation.md) and
+[`difflow.reconciliation`](data-reconciliation.md) both hand back exactly the
 `(mean, Sigma)` pair it wants, so the distribution the plant is designed
 against is the one the data supports — correlations included. Correlation is
 not a refinement here. Two distribution coefficients fitted to the same
@@ -171,9 +164,7 @@ converged answer and a confident wrong one.
 
 CVaR is written in the Rockafellar–Uryasev form
 
-```{math}
-\mathrm{CVaR}_\alpha(Z) = \min_t\ t + \frac{1}{1-\alpha}\,\mathbb{E}\,[(Z-t)_+]
-```
+$$\mathrm{CVaR}_\alpha(Z) = \min_t\ t + \frac{1}{1-\alpha}\,\mathbb{E}\,[(Z-t)_+]$$
 
 whose textbook use hands `t` to the optimizer as one more variable. This module
 does not. `t` lives on the scale of the objective, its useful range is not
@@ -186,7 +177,7 @@ at a bound.
 Instead `t` is recomputed at every iterate as the empirical value at risk — its
 exact minimizer at fixed `Z` — and frozen with `stop_gradient`. By the envelope
 theorem this is the **exact** gradient of CVaR, and the value reported is
-exactly `min_t`. {doc}`difflow.flexibility <flexibility>` makes the same trade
+exactly `min_t`. [`difflow.flexibility`](flexibility.md) makes the same trade
 for the same reason.
 
 ### An augmented Lagrangian, not a growing penalty
@@ -214,7 +205,7 @@ positively homogeneous in its residual, so the rescaled problem has the *same*
 solution and the reported numbers unscale exactly.
 
 Feasibility is always scored by re-evaluating the model at the candidate point,
-never read off the multipliers — the same rule {doc}`planning` states for its
+never read off the multipliers — the same rule [Delta-Base Planning](planning.md) states for its
 LP slacks.
 
 ## Was it worth solving?
@@ -223,9 +214,7 @@ Two classical numbers, and they answer different questions.
 
 **Value of the stochastic solution** — *should I have bothered?*
 
-```{math}
-\mathrm{VSS} = \mathrm{EEV} - \mathrm{SP}
-```
+$$\mathrm{VSS} = \mathrm{EEV} - \mathrm{SP}$$
 
 Solve the deterministic problem at the mean parameters, take the design it
 produced, and run it — with recourse — against the real distribution. The gap
@@ -236,9 +225,7 @@ design was already right and you should stop paying for scenario runs.
 **Expected value of perfect information** — *should I buy an instrument
 instead?*
 
-```{math}
-\mathrm{EVPI} = \mathrm{SP} - \mathrm{WS}
-```
+$$\mathrm{EVPI} = \mathrm{SP} - \mathrm{WS}$$
 
 EVPI compares against the unattainable plan that knows each realization in
 advance, so it is an **upper bound on what any measurement, assay or online
@@ -271,7 +258,7 @@ before buying an analyzer.
 ## Is the sample big enough?
 
 `check_scenario_health` is the counterpart of `check_delta_health` in
-{doc}`planning` — the things that go wrong quietly as a problem grows, each
+[Delta-Base Planning](planning.md) — the things that go wrong quietly as a problem grows, each
 with a number attached. It never raises and never re-solves.
 
 * **Dead levers.** A first-stage variable whose SAA gradient is exactly zero
@@ -299,7 +286,7 @@ deliberately redraws.
 
 Scenarios are handled by `vmap`, which is the right answer up to the point
 where the batch stops fitting in memory. The scenario dimension is nearly free
-because {py:meth}`difflow.Flowsheet.solve` detects a tracer and swaps its
+because `Flowsheet.solve` detects a tracer and swaps its
 Anderson and Wegstein loops — Python loops that branch on the residual, and so
 cannot be traced — for an optimistix fixed point carrying an
 implicit-differentiation rule. A recycle solve therefore batches over scenarios
@@ -318,7 +305,7 @@ Two practical notes:
 No L-shaped or Benders decomposition, no scenario reduction, no multistage
 scenario trees, no integer recourse, no distributionally robust formulations.
 A decomposition belongs with a solver that can exploit it, and
-{doc}`external-solvers` explains why an implicit flowsheet block cannot be
+[External Solvers](external-solvers.md) explains why an implicit flowsheet block cannot be
 handed to an integer solver and still carry a certificate.
 
 ## Reference

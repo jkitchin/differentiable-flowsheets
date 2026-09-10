@@ -28,6 +28,7 @@
 | [Moving-Horizon Estimation](moving-horizon-estimation.md) | Constrained MHE over dynamic flowsheets, EKF baseline, delayed and multi-rate data, joint parameter estimation |
 | [Operability Screening](operability.md) | Steady-state controllability from AD gains: RGA, singular values, disturbance rejection |
 | [Flexibility Analysis](flexibility.md) | Feasibility function, flexibility index, and the feed-vs-parameter uncertainty split |
+| [Stochastic Programming](stochastic.md) | Two-stage design under a parameter distribution: scenario sampling, CVaR and chance constraints, VSS and EVPI |
 | [Experiment Design and Identifiability](experiment-design.md) | Fisher-information D/A/E-optimal run selection, predicted confidence intervals, structural identifiability |
 | [External Solvers](external-solvers.md) | Bridging flowsheets to pounce (NLP, post-optimal sensitivity) and discopt (implicit residual blocks) |
 | [Solvers and Utilities](solvers-and-utilities.md) | Numerical methods, uncertainty propagation |
