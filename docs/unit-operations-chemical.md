@@ -882,11 +882,19 @@ equimolar benzene/toluene feed at 380 K), and moves the ~`F` step in the
 converged profile from `L` to `V` across the feed stage. The shortcut column
 forms its feed enthalpy the same way, from the `q` passed to the call.
 
-`q` must lie in `[0, 1]`; anything else raises `ValueError`. It is a fraction —
-the liquid fraction of the feed — and since both phase enthalpies are already
-evaluated at `T_feed`, a subcooled or superheated feed is expressed by giving
-the feed stream its actual temperature, not by pushing `q` outside the
-two-phase range (which would count the departure from saturation twice).
+`q` outside `[0, 1]` is allowed, and means what a textbook means by it: `q > 1`
+is a subcooled feed, `q < 0` a superheated one. It has to be allowed, because
+on the CMO path (`use_mesh=False`) `q` is the *only* place either can be said —
+`_cmo_section_rates` is the whole model there, and `T_feed` never reaches it.
+`L_strip = L_rect + q F` with `q > 1` is exactly how the extra internal reflux
+of a subcooled feed is written. Underwood's equation takes it as written too.
+
+The one place it is clamped is the **feed enthalpy**, and that clamp is the
+physics rather than a guard. Both phase enthalpies are evaluated at the feed's
+own temperature, so at `q = 1.3` the honest answer is `h_liquid(z, T_feed)`: an
+all-liquid feed below its bubble point, with the subcooling carried by
+`T_feed`. Forming `1.3 h^L - 0.3 H^V` would subtract three tenths of a latent
+heat that is not there, and count the departure from saturation twice.
 
 `condenser_type='partial'` raises `NotImplementedError` rather than being
 silently solved as a total condenser.

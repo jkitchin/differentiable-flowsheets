@@ -939,38 +939,84 @@ class TestFeedThermalCondition:
             self._latent_heat(benzene_toluene_thermo), rel=1e-6
         )
 
-    @pytest.mark.parametrize("q", [-0.2, 1.5])
-    def test_q_outside_the_two_phase_range_is_rejected(self, q):
-        """A subcooled or superheated feed is set by ``T_feed``, not by ``q``.
+    def test_a_subcooled_feed_is_expressible(self):
+        """``q > 1`` constructs: it is what a subcooled feed is called.
 
-        Extrapolating the enthalpy mixture past [0, 1] would count the
-        departure from saturation twice, since both phase enthalpies are
-        already evaluated at the feed's own temperature.
+        On the CMO path ``q`` is the only place the thermal condition can be
+        said at all --- ``_cmo_section_rates`` is the whole model there and
+        ``T_feed`` never reaches it --- so rejecting ``q > 1`` would make a
+        subcooled feed inexpressible rather than safe.
         """
-        with pytest.raises(ValueError, match=r"outside \[0, 1\]"):
-            DistillationColumnParams(
-                species_order=["benzene", "toluene"],
-                n_stages=self.N_STAGES,
-                feed_stage=self.FEED_STAGE,
-                P=self.P,
-                q=q,
-            )
+        params = DistillationColumnParams(
+            species_order=["benzene", "toluene"],
+            n_stages=self.N_STAGES,
+            feed_stage=self.FEED_STAGE,
+            P=self.P,
+            q=1.3,
+        )
+        assert float(params.q) == pytest.approx(1.3)
 
-    @pytest.mark.parametrize("q", [-0.2, 1.5])
-    def test_shortcut_column_rejects_q_outside_the_range(
-        self, benzene_toluene_thermo, q
+    @pytest.mark.parametrize("q", [1.3, -0.3])
+    def test_the_section_flows_read_q_as_written(self, q):
+        """``L_strip = L_rect + q F`` holds outside ``[0, 1]`` too.
+
+        This is the whole point of allowing it: the extra internal reflux a
+        subcooled feed generates is exactly ``q F`` with ``q > 1``.
+        """
+        L_rect, L_strip, V_rect, V_strip = _cmo_section_rates(
+            R=2.0, D=50.0, F_total=self.F, q=jnp.asarray(q)
+        )
+
+        assert float(L_strip) == pytest.approx(float(L_rect) + q * self.F)
+        assert float(V_strip) == pytest.approx(
+            float(V_rect) - (1.0 - q) * self.F
+        )
+
+    @pytest.mark.parametrize(
+        "q, phase", [(1.3, "liquid"), (-0.3, "vapor")]
+    )
+    def test_the_feed_enthalpy_clamps_where_the_flows_do_not(
+        self, benzene_toluene_thermo, q, phase
     ):
-        """The same guard on the shortcut column's call argument."""
+        """The one clamp is in the enthalpy, and it is physics not a guard.
+
+        Both phase enthalpies are evaluated at the feed's own temperature, so
+        at ``q = 1.3`` the honest answer is ``h_liquid(z, T_feed)``: an
+        all-liquid feed below its bubble point, with the subcooling already
+        carried by ``T_feed``. Forming ``1.3 h^L - 0.3 H^V`` would subtract
+        three tenths of a latent heat that is not there.
+        """
+        column = self._column(benzene_toluene_thermo, q)
+        z = jnp.array([0.5, 0.5])
+        T = jnp.asarray(self.T_FEED)
+
+        assert float(column._feed_enthalpy(z, T)) == pytest.approx(
+            float(column._molar_enthalpy(z, T, phase))
+        )
+
+    def test_underwood_takes_one_minus_q_unclamped(
+        self, benzene_toluene_thermo
+    ):
+        """A subcooled feed shifts Underwood's root, as the textbook has it.
+
+        ``sum(alpha_i z_i / (alpha_i - theta)) = 1 - q`` is stated for any
+        ``q``; at ``q = 1.3`` the right-hand side is negative, and the minimum
+        reflux it implies is lower than for a saturated liquid.
+        """
         params = ShortcutColumnParams(
             species_order=["benzene", "toluene"],
             light_key="benzene",
             heavy_key="toluene",
+            x_D_LK=0.95,
+            x_B_HK=0.95,
         )
         column = ShortcutColumn(params, benzene_toluene_thermo)
         feed = self._feed()
 
-        with pytest.raises(ValueError, match=r"outside \[0, 1\]"):
-            column(feed, R=2.0, P=self.P, q=q)
+        _, _, sat = column(feed, R=2.0, P=self.P, q=1.0)
+        _, _, sub = column(feed, R=2.0, P=self.P, q=1.3)
+
+        assert float(sub["R_min"]) < float(sat["R_min"])
 
     def test_q_stays_differentiable(self, benzene_toluene_thermo):
         """A traced ``q`` passes the guard, and the duty responds to it.

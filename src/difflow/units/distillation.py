@@ -118,59 +118,35 @@ def _feed_molar_enthalpy(
         z: (nc,) feed mole fractions.
         T_feed: Feed temperature (K).
         q: Feed thermal condition, the liquid fraction of the feed
-            (1 = saturated liquid, 0 = saturated vapour). Callers validate the
-            range with :func:`_validate_q`; nothing here rejects a value
-            outside [0, 1].
+            (1 = saturated liquid, 0 = saturated vapour). Outside [0, 1] it is
+            clamped for the mixture here, and only here -- see below.
         P: Pressure (Pa).
 
     Returns:
         Feed molar enthalpy (J/mol).
+
+    Note:
+        A subcooled feed is ``q > 1`` and a superheated one ``q < 0``, and
+        both are ordinary things to model: on the CMO path ``q`` is the *only*
+        place either can be said, since ``_cmo_section_rates`` is the whole
+        model there and ``T_feed`` never reaches it.
+
+        What must not happen is extrapolating this mixture past the two-phase
+        range. Both enthalpies are already evaluated at the feed's own
+        temperature, so at ``q = 1.3`` the honest answer is
+        ``h_liquid(z, T_feed)`` -- an all-liquid feed, below its bubble point,
+        with the subcooling carried by ``T_feed`` itself. Forming
+        ``1.3 h_liq - 0.3 H_vap`` would subtract three tenths of a latent heat
+        that is not there and count the departure from saturation twice.
+
+        So the clamp is the physics, not a guard: it is confined to the
+        enthalpy, and the section flows and Underwood's equation read the raw
+        ``q``, which is what makes a subcooled feed expressible at all.
     """
     h_liq = _mixture_molar_enthalpy(thermo, species_order, z, T_feed, 'liquid', P)
     H_vap = _mixture_molar_enthalpy(thermo, species_order, z, T_feed, 'vapor', P)
-    q = jnp.asarray(q)
+    q = jnp.clip(jnp.asarray(q), 0.0, 1.0)
     return q * h_liq + (1.0 - q) * H_vap
-
-
-def _validate_q(q, where: str) -> None:
-    """Raise unless the feed thermal condition ``q`` lies in [0, 1].
-
-    ``q`` is a fraction -- the liquid fraction of the feed -- and both the
-    section flows and the feed enthalpy read it that way. Outside [0, 1] the
-    enthalpy mixture of :func:`_feed_molar_enthalpy` becomes an extrapolation
-    past the two-phase range, and it would double count: the enthalpies are
-    already evaluated at the feed stream's own temperature, so a subcooled
-    (``q > 1``) or superheated (``q < 0``) feed is carried by ``T_feed``
-    itself. Such a feed is expressed by its temperature, not by ``q``.
-
-    A traced ``q`` is passed through unchecked -- the value is not available
-    under ``jit``/``grad``, and raising on it would make the column
-    untraceable.
-
-    Args:
-        q: Feed thermal condition.
-        where: Name of the parameter or argument, for the message.
-
-    Raises:
-        ValueError: If ``q`` is concrete and outside [0, 1].
-    """
-    if isinstance(q, jax.core.Tracer):
-        return
-    try:
-        q_val = float(q)
-    except (TypeError, ValueError):
-        return
-    if not (0.0 <= q_val <= 1.0):
-        raise ValueError(
-            f"{where}={q_val!r} is outside [0, 1]. q is the liquid fraction "
-            "of the feed, and the feed enthalpy is formed as "
-            "q h_liquid(z, T_feed) + (1 - q) H_vapor(z, T_feed) -- both at "
-            "the feed's own temperature. A subcooled (q > 1) or superheated "
-            "(q < 0) feed is already carried by that temperature, so "
-            "extrapolating the mixture outside the two-phase range would "
-            "count the departure from saturation twice. Give the feed stream "
-            "its actual temperature and keep q in [0, 1]."
-        )
 
 
 def _bubble_T(
@@ -798,9 +774,11 @@ class ShortcutColumn:
             q: Feed thermal condition: the liquid fraction of the feed
                 (1 = saturated liquid, 0 = saturated vapour). It enters
                 Underwood's equation and the feed enthalpy the duties come
-                from. Must lie in [0, 1] -- a subcooled or superheated feed is
-                expressed by the feed stream's temperature (see
-                :func:`_validate_q`).
+                from. ``q > 1`` (subcooled) and ``q < 0`` (superheated) are
+                allowed and reach Underwood as written; the feed enthalpy
+                clamps them to [0, 1], because the subcooling is already in
+                ``T_feed`` and mixing past the range would count it twice
+                (see :func:`_feed_molar_enthalpy`).
 
         Returns:
             distillate: Distillate stream, at the condenser temperature --
@@ -821,7 +799,6 @@ class ShortcutColumn:
                 - 'near_min_reflux': True if R ≈ R_min
         """
         p = self.params
-        _validate_q(q, "q")
         R = jnp.asarray(R)
         P = jnp.asarray(P)
         q = jnp.asarray(q)
@@ -1143,10 +1120,13 @@ class DistillationColumnParams(ParamsMixin):
             ``q h_liquid(z, T_feed) + (1 - q) H_vapor(z, T_feed)``, so on the
             MESH path (``use_mesh=True``) the converged flows and duties
             follow it too -- a saturated-vapour feed arrives with its latent
-            heat and does not charge the reboiler for it. Must lie in [0, 1]:
-            a subcooled or superheated feed is expressed by the feed stream's
-            temperature, not by ``q`` outside that range (see
-            :func:`_validate_q`).
+            heat and does not charge the reboiler for it. ``q > 1`` is a
+            subcooled feed and ``q < 0`` a superheated one; both are allowed,
+            and on the CMO path ``q`` is the only place either can be said,
+            since ``T_feed`` does not reach the section flows. The feed
+            enthalpy clamps the mixture to [0, 1] --- the departure from
+            saturation is carried by ``T_feed`` and must not be counted a
+            second time (see :func:`_feed_molar_enthalpy`).
     """
     species_order: list[str]
     n_stages: int
@@ -1156,7 +1136,6 @@ class DistillationColumnParams(ParamsMixin):
     q: float = 1.0  # Feed thermal condition (1.0 = saturated liquid, 0.0 = saturated vapor)
 
     def __post_init__(self):
-        _validate_q(self.q, "q")
         if self.condenser_type != "total":
             raise NotImplementedError(
                 f"condenser_type={self.condenser_type!r} is not implemented; "
