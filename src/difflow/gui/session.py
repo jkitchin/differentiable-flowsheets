@@ -736,13 +736,28 @@ class FlowsheetSession:
             values, placeholders, missing = edit.known_params(
                 self.flowsheet, _params_class(info.cls), self.bindings
             )
+            # After the two real sources, never before them: a number the
+            # code context actually supplies must not be shadowed by a
+            # made-up one, and a caller's `extras` outranks both. `values`
+            # counts as supplied too -- for a unit that builds its own
+            # `Params`, the constructor argument and the field it feeds
+            # are one number, and guessing it again here would hand the
+            # builder two.
+            guessed, guessed_names = edit.placeholder_extras(
+                info.cls, {**values, **override}
+            )
+            override.update(guessed)
+            placeholders = placeholders + guessed_names
             # Ask before building. `_build_operation` raises through the
             # file-loading path, whose message offers "written by a
             # different version of difflow" as the diagnosis -- true of a
             # file, and nonsense about a unit dropped from the palette a
-            # second ago. The palette flagged this same list.
+            # second ago. The palette flagged this same list, by the same
+            # reckoning: `values` supplies a constructor argument just as
+            # `override` does, along the road `_build_operation` takes for
+            # a unit that builds its own `Params`.
             unmet = [a for a in edit.constructor_extras(info.cls)
-                     if a not in override] + missing
+                     if a not in override and a not in values] + missing
             if unmet:
                 raise edit.EditError(
                     self._needs_hint(operation, info.cls, unmet)

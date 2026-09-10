@@ -506,6 +506,20 @@ fs2 = serialize.load("plant.json", extras={"flash": {"thermo": my_thermo}})
 
 `extras` also *overrides* a stored thermo, which is the way to reload a saved flowsheet against a different property package.
 
+### Units that build their own `Params`
+
+Most units are constructed as `Unit(Params(...), thermo)`, but a substantial minority take their numbers as plain constructor arguments and build the `Params` themselves — `Compressor(ratio)`, `FlowSplit(w)`, `GasPipe(beta)`, and most of the gas plugin. Those numbers are written under `params`, because that is where the built unit keeps them, and they are passed straight back to the constructor on load. Nothing extra is needed:
+
+```python
+fs = Flowsheet(species_order=["CH4"])
+fs.add_unit(Unit("boost", Compressor(ratio=1.3), ["a"], ["b"]))
+serialize.from_json(serialize.to_json(fs))   # ratio comes back as 1.3
+```
+
+An argument that is *not* data — `Mixer(species_order)`, a `thermo` — still travels under `constructor`, and the two channels compose: `CompressorBoost(ratio, direction)` carries `ratio` by the first road and `direction` by the second.
+
+Only *required* constructor arguments are carried. An optional one left at its default is not written, so a unit that was built with a non-default optional argument comes back with the default; pass it on load with `extras=` when it matters.
+
 ---
 
 ## Generating Python
