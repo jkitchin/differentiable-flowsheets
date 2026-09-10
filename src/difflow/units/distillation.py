@@ -736,6 +736,181 @@ class DistillationColumn:
 
         return T, y
 
+    def _cmo_flows(
+        self,
+        F_total: Array,
+        R: Array,
+        D: Array,
+    ) -> tuple[Array, Array]:
+        """Liquid and vapor flow profiles under constant molar overflow.
+
+        Stage numbering: j=0 is the reboiler (bottom), j=n-1 the top stage.
+        ``L[j]`` is the liquid leaving stage j downward and ``V[j]`` the vapor
+        leaving stage j upward.  Above the feed these are the
+        rectifying-section values; at and below the feed stage the liquid
+        picks up the feed's liquid fraction q and the vapor loses its vapor
+        fraction (1-q).
+
+        Args:
+            F_total: Total feed flow rate (mol/s)
+            R: Reflux ratio
+            D: Distillate flow rate (mol/s)
+
+        Returns:
+            (L, V): flow profiles, each of shape (n_stages,)
+        """
+        p = self.params
+        n = p.n_stages
+        q = jnp.asarray(p.q)
+        B = F_total - D
+
+        L_rect = R * D
+        V_rect = (R + 1) * D
+        L_strip = L_rect + q * F_total
+        V_strip = V_rect - (1.0 - q) * F_total
+
+        j = jnp.arange(n)
+        L = jnp.where(j <= p.feed_stage, L_strip, L_rect)
+        L = L.at[0].set(B)  # liquid leaving the reboiler is the bottoms product
+        V = jnp.where(j < p.feed_stage, V_strip, V_rect)
+        return L, V
+
+    def _bubble_point_step(
+        self,
+        x_D: Array,
+        T: Array,
+        L: Array,
+        V: Array,
+        F_vec: Array,
+        z: Array,
+        R: Array,
+        D: Array,
+    ) -> tuple[Array, Array, Array]:
+        """One bubble-point (Wang-Henke) step at frozen L/V flows.
+
+        Solves the component material balances for the whole column as a
+        tridiagonal system, then updates the stage temperatures from the
+        bubble point and recomputes the equilibrium vapor compositions.
+
+        The tridiagonal system *is* the per-species material balance, so
+        summing it over the stages telescopes to
+        ``D x_{D,i} + B x_{B,i} = F z_i`` once the lagged reflux composition
+        has converged.  Sweeps that instead march an operating line stage by
+        stage have no such guarantee (issue #211).
+
+        Args:
+            x_D: (nc,) reflux composition.  With a total condenser this is the
+                 vapor composition leaving the top stage, lagged one iteration.
+            T: (n,) stage temperatures (K)
+            L: (n,) liquid flows leaving each stage downward (mol/s)
+            V: (n,) vapor flows leaving each stage upward (mol/s)
+            F_vec: (n,) feed flow entering each stage (mol/s)
+            z: (nc,) feed mole fractions
+            R: Reflux ratio
+            D: Distillate flow rate (mol/s)
+
+        Returns:
+            (x, y, T): updated liquid compositions (n, nc), vapor
+                       compositions (n, nc) and temperatures (n,)
+        """
+        p = self.params
+        n = p.n_stages
+        nc = self.n_species
+        P = jnp.asarray(p.P)
+
+        # 1. K values at the current stage temperatures
+        _, K = lax.scan(
+            lambda _, Tj: (None, self.thermo.K_values_array(Tj, P)),
+            None, T
+        )
+        # K shape: (n, nc)
+
+        # 2. Tridiagonal component balances for all components simultaneously.
+        # Material balance at stage j (bottom-up numbering):
+        #   V[j-1]*K[j-1,i]*x[j-1,i] - (L[j] + K[j,i]*V[j])*x[j,i]
+        #   + L[j+1]*x[j+1,i] = -F[j]*z[i]
+        V_prev = jnp.concatenate([jnp.zeros(1), V[:-1]])   # V[j-1]
+        K_prev = jnp.concatenate([jnp.zeros((1, nc)), K[:-1]], axis=0)  # K[j-1]
+        lower = V_prev[:, None] * K_prev   # (n, nc), lower[0] = 0
+
+        diag = -(L[:, None] + K * V[:, None])  # (n, nc)
+
+        L_next = jnp.concatenate([L[1:], jnp.zeros(1)])    # L[j+1]
+        upper = jnp.array(L_next[:, None] * jnp.ones((n, nc)))  # (n, nc)
+        upper = upper.at[-1].set(0.0)  # no stage above top
+
+        rhs = -F_vec[:, None] * z[None, :]  # (n, nc)
+
+        # Top boundary condition: reflux enters stage n-1 with composition x_D
+        rhs = rhs.at[-1].add(-R * D * x_D)
+
+        # 3. Thomas algorithm tridiagonal solve for all nc components
+        m0_safe = jnp.where(
+            jnp.abs(diag[0]) > 1e-30,
+            diag[0],
+            jnp.sign(diag[0] + 1e-60) * 1e-30,
+        )
+        c0_prime = upper[0] / m0_safe   # (nc,)
+        d0_prime = rhs[0] / m0_safe     # (nc,)
+
+        def forward_step(carry, j):
+            c_prev, d_prev = carry  # (nc,), (nc,)
+            m = diag[j] - lower[j] * c_prev   # (nc,)
+            m_safe = jnp.where(
+                jnp.abs(m) > 1e-30,
+                m,
+                jnp.sign(m + 1e-60) * 1e-30,
+            )
+            c_new = upper[j] / m_safe                        # (nc,)
+            d_new = (rhs[j] - lower[j] * d_prev) / m_safe    # (nc,)
+            return (c_new, d_new), (c_new, d_new)
+
+        _, (c_prime_rest, d_prime_rest) = lax.scan(
+            forward_step, (c0_prime, d0_prime), jnp.arange(1, n)
+        )
+        c_prime = jnp.concatenate(
+            [c0_prime[None], c_prime_rest], axis=0
+        )  # (n, nc)
+        d_prime = jnp.concatenate(
+            [d0_prime[None], d_prime_rest], axis=0
+        )  # (n, nc)
+
+        # Back substitution
+        def backward_step(x_next, j):
+            x_j = d_prime[j] - c_prime[j] * x_next  # (nc,)
+            return x_j, x_j
+
+        x_last = d_prime[-1]  # (nc,)
+        _, x_rev = lax.scan(
+            backward_step, x_last, jnp.arange(n - 2, -1, -1)
+        )
+        # x_rev shape: (n-1, nc), from stage n-2 down to 0
+        x_new = jnp.concatenate(
+            [x_rev[::-1], x_last[None]], axis=0
+        )  # (n, nc)
+
+        # Clip and normalize
+        x_new = jnp.maximum(x_new, 1e-10)
+        x_new = x_new / jnp.sum(x_new, axis=1, keepdims=True)
+
+        # 4. Update T from the bubble point at each stage
+        _, T_new = lax.scan(
+            lambda _, args: (None, self._bubble_point_T(args[0], P, args[1])[0]),
+            None, (x_new, T)
+        )
+
+        # 5. Recompute K and y with the updated T
+        _, K_new = lax.scan(
+            lambda _, Tj: (None, self.thermo.K_values_array(Tj, P)),
+            None, T_new
+        )
+        y_new = K_new * x_new
+        y_new = y_new / jnp.maximum(
+            jnp.sum(y_new, axis=1, keepdims=True), 1e-10
+        )
+
+        return x_new, y_new, T_new
+
     def _solve_constant_molar_overflow(
         self,
         feed_flows: dict[str, Array],
@@ -743,30 +918,27 @@ class DistillationColumn:
         R: Array,
         D: Array,
         T_feed: Array,
+        n_iter: int = 30,
     ) -> tuple[Array, Array, Array]:
-        """Solve column using constant molar overflow (CMO) assumption.
+        """Solve column using the constant molar overflow (CMO) assumption.
 
-        Implements the Lewis-Matheson iterative method: a top-down sweep
-        through the column that alternates between equilibrium (bubble-point)
-        and operating-line steps until convergence.
+        Runs the same bubble-point (Wang-Henke) iteration as the MESH solver
+        but with the L/V profiles frozen at their CMO values instead of being
+        corrected by stage energy balances.  What the CMO shortcut gives up is
+        therefore the energy balance alone: because each iteration solves the
+        component balances as a tridiagonal system, the converged profile
+        still closes the per-species material balance over the column.
 
         Stage numbering: j=0 is reboiler (bottom), j=n-1 is top stage.
         Total condenser assumed: x_D = y_{top} (vapor from top stage).
-
-        For each iteration:
-        1. Compute K values and equilibrium y at each stage from current T.
-        2. Set boundary conditions: x_D = y[-1], x_B = x[0].
-        3. Top-down sweep: for each stage j (n-2 down to 0), derive x_j from
-           the operating line applied to x_{j+1} (liquid from above), then
-           back-calculate x_j = y_op / K_j.
-        4. Update T from bubble-point calculation at the new x.
 
         Args:
             feed_flows: Feed molar flows by species
             F_total: Total feed flow
             R: Reflux ratio
             D: Distillate flow rate
-            T_feed: Feed temperature (K) — unused in solver, kept for API compat
+            T_feed: Feed temperature (K), used for the initial guess
+            n_iter: Number of bubble-point iterations
 
         Returns:
             (x, y, T): Liquid compositions, vapor compositions, temperatures
@@ -777,17 +949,15 @@ class DistillationColumn:
         P = jnp.asarray(p.P)
 
         B = F_total - D
-        L_rect = R * D
-        V_rect = (R + 1) * D
-        q = jnp.asarray(p.q)
-        L_strip = L_rect + q * F_total
-        V_strip = V_rect - (1 - q) * F_total
-
         z = jnp.array([feed_flows[s] / F_total for s in p.species_order])
 
-        # Better initial guess: one-stage flash enriches the distillate estimate.
-        # Use 350 K as a safe starting T for the feed bubble point.
-        T_bp_feed, _ = self._bubble_point_T(z, P, T_guess=jnp.asarray(350.0))
+        # Feed enters on a single stage; flows are fixed by the CMO assumption.
+        F_vec = jnp.zeros(n).at[p.feed_stage].set(F_total)
+        L, V = self._cmo_flows(F_total, R, D)
+
+        # Initial guess: one-stage flash of the feed enriches the distillate
+        # estimate, and the overall balance gives the matching bottoms.
+        T_bp_feed, _ = self._bubble_point_T(z, P, T_guess=jnp.asarray(T_feed))
         K_feed = self.thermo.K_values_array(T_bp_feed, P)
         y_flash = K_feed * z
         y_flash = y_flash / jnp.maximum(jnp.sum(y_flash), 1e-10)
@@ -798,89 +968,25 @@ class DistillationColumn:
         x_B_init = jnp.clip(x_B_init, 1e-6, 1.0 - 1e-6)
         x_B_init = x_B_init / jnp.sum(x_B_init)
 
-        # Linear composition profile: reboiler (j=0) → top (j=n-1)
+        # Linear composition profile: reboiler (j=0) -> top (j=n-1)
         frac = jnp.linspace(0.0, 1.0, n)
         x_init = frac[:, None] * x_D_init[None, :] + (1.0 - frac[:, None]) * x_B_init[None, :]
 
-        # Start temperatures at 350 K (reasonable for most organics at 1 atm).
-        T_init = jnp.full(n, 350.0)
+        # Start every stage at the feed bubble point: tracks the mixture and
+        # the column pressure instead of assuming an ambient-organic value.
+        T_init = jnp.full(n, T_bp_feed)
+        yx_init = K_feed[None, :] * x_init
+        y_init = yx_init / jnp.maximum(jnp.sum(yx_init, axis=1, keepdims=True), 1e-10)
 
         def one_iteration(carry, _):
-            x, T = carry
+            x, y, T = carry
+            # Total condenser: the reflux carries the composition of the vapor
+            # leaving the top stage.
+            return self._bubble_point_step(y[-1], T, L, V, F_vec, z, R, D), None
 
-            # --- Step 1: K values at current stage temperatures ---
-            def scan_K(_, inputs):
-                x_j, T_j = inputs
-                return None, self.thermo.K_values_array(T_j, P)
-
-            _, K_all = lax.scan(scan_K, None, (x, T))  # (n, nc)
-
-            # --- Step 2: Equilibrium vapor compositions ---
-            yx = K_all * x
-            y_all = yx / jnp.maximum(jnp.sum(yx, axis=1, keepdims=True), 1e-10)
-
-            # --- Step 3: Boundary conditions ---
-            # Total condenser: distillate has same composition as vapor leaving top stage
-            x_D = y_all[-1]
-            # Reboiler: bottoms composition = liquid leaving bottom stage
-            x_B = x[0]
-
-            # --- Step 4: Top-down sweep using operating lines ---
-            # Rectifying OL: V*y_j = L*x_{j+1} + D*x_D  → y_j = (L*x_above + D*x_D)/V
-            # Stripping OL:  L'*x_{j+1} = V'*y_j + B*x_B → y_j = (L'*x_above - B*x_B)/V'
-            # Then x_j = y_op / K_j (normalised), i.e. inverse equilibrium step.
-            def update_stage(x_above, j):
-                is_rect = j >= p.feed_stage
-
-                y_op_rect = (L_rect * x_above + D * x_D) / V_rect
-                y_op_strip = (L_strip * x_above - B * x_B) / V_strip
-                y_op = jnp.where(is_rect, y_op_rect, y_op_strip)
-                y_op = jnp.maximum(y_op, 0.0)
-                y_op = y_op / jnp.maximum(jnp.sum(y_op), 1e-10)
-
-                K_j = K_all[j]
-                x_j = y_op / jnp.maximum(K_j, 1e-10)
-                x_j = jnp.maximum(x_j, 0.0)
-                x_j = x_j / jnp.maximum(jnp.sum(x_j), 1e-10)
-                return x_j, x_j
-
-            # Sweep from j=n-2 down to j=0, carrying x from the stage above.
-            stages_down = jnp.arange(n - 2, -1, -1)
-            _, x_new_rev = lax.scan(update_stage, x[-1], stages_down)
-            # x_new_rev[k] → stage (n-2-k); reverse to get [stage0, …, stage n-2]
-            x_new_lower = x_new_rev[::-1]
-
-            # Top stage: in equilibrium with x_D (total condenser constraint)
-            K_top = K_all[-1]
-            x_top_new = x_D / jnp.maximum(K_top, 1e-10)
-            x_top_new = x_top_new / jnp.maximum(jnp.sum(x_top_new), 1e-10)
-
-            x_new = jnp.concatenate([x_new_lower, x_top_new[None, :]], axis=0)
-            x_new = jnp.clip(x_new, 1e-10, 1.0)
-            x_new = x_new / jnp.sum(x_new, axis=1, keepdims=True)
-
-            # --- Step 5: Update stage temperatures from bubble point ---
-            def scan_T(_, inputs):
-                x_j, T_j_old = inputs
-                T_new, _ = self._bubble_point_T(x_j, P, T_guess=T_j_old)
-                return None, T_new
-
-            _, T_new = lax.scan(scan_T, None, (x_new, T))
-
-            return (x_new, T_new), None
-
-        (x_final, T_final), _ = lax.scan(
-            one_iteration, (x_init, T_init), None, length=30
+        (x_final, y_final, T_final), _ = lax.scan(
+            one_iteration, (x_init, y_init, T_init), None, length=n_iter
         )
-
-        # Final equilibrium vapor compositions
-        def compute_y(_, inputs):
-            x_j, T_j = inputs
-            K_j = self.thermo.K_values_array(T_j, P)
-            y_j = K_j * x_j
-            return None, y_j / jnp.maximum(jnp.sum(y_j), 1e-10)
-
-        _, y_final = lax.scan(compute_y, None, (x_final, T_final))
 
         return x_final, y_final, T_final
 
@@ -1012,6 +1118,7 @@ class DistillationColumn:
         D: Array,
         T_feed: Array,
         n_iter: int = 20,
+        cmo_iter: int = 30,
     ) -> tuple[Array, Array, Array, Array, Array]:
         """Rigorous MESH solver using Wang-Henke bubble-point method.
 
@@ -1027,6 +1134,7 @@ class DistillationColumn:
             D: Distillate flow rate (mol/s)
             T_feed: Feed temperature (K)
             n_iter: Number of MESH iterations
+            cmo_iter: Number of CMO iterations for the warm start
 
         Returns:
             x: (n, nc) liquid mole fractions
@@ -1036,143 +1144,50 @@ class DistillationColumn:
             V: (n,) vapor flows leaving each stage upward (mol/s)
 
         Example:
-            12-stage heptane / ethylbenzene column at 1 atm (R=2.5,
-            B_spec sets bottoms flow). McCabe-Thiele targets: 97 % heptane
-            in distillate, 99 % ethylbenzene in bottoms.
+            12-stage heptane / ethylbenzene column at 1 atm, feed stage 6,
+            equimolar feed of 0.02 mol/s, R=2.5, B_spec=0.01 mol/s.
+            McCabe-Thiele targets: 97 % heptane in distillate, 99 %
+            ethylbenzene in bottoms.
 
             CMO result  (use_mesh=False):
-              distillate heptane=0.862, bottoms ethylbenzene=0.996
+              distillate heptane=0.990, bottoms ethylbenzene=0.989
 
             MESH result (use_mesh=True, mesh_iter=20):
-              distillate heptane=0.962, bottoms ethylbenzene=0.989
+              distillate heptane=0.988, bottoms ethylbenzene=0.988
 
-            The energy-balance L/V correction drives the rectifying-section
-            liquid rate (~0.012 mol/s) well below the stripping-section
-            rate (~0.023 mol/s), consistent with a saturated-liquid feed
-            and the differing latent heats of heptane and ethylbenzene.
+            The two agree closely here because both solve the same component
+            balances; what MESH adds is the energy-balance L/V correction,
+            which on this case pulls the rectifying-section liquid rate
+            (~0.023 mol/s) a little below its CMO value (R*D = 0.025 mol/s)
+            and the stripping rate (~0.042 mol/s) below L'=L+F (0.045 mol/s),
+            reflecting the differing latent heats of heptane and
+            ethylbenzene.  On a mixture with a wider latent-heat spread the
+            correction is larger and the two paths separate.
         """
         p = self.params
         n = p.n_stages
-        P = jnp.asarray(p.P)
-        nc = self.n_species
         B = F_total - D
         z = jnp.array([feed_flows[s] / F_total for s in p.species_order])
 
         # Feed flow vector: nonzero only at feed stage
         F_vec = jnp.zeros(n).at[p.feed_stage].set(F_total)
 
-        # CMO warm start
+        # CMO warm start (component balances already closed)
         x_init, y_init, T_init = self._solve_constant_molar_overflow(
-            feed_flows, F_total, R, D, T_feed
+            feed_flows, F_total, R, D, T_feed, n_iter=cmo_iter
         )
 
-        # Initial L/V from CMO (q=1 saturated liquid feed)
-        L_rect = R * D
-        V_rect = (R + 1) * D
-        L_strip = L_rect + F_total
-        V_strip = V_rect
-
-        # L[j] = liquid leaving stage j downward
-        L_init = jnp.where(jnp.arange(n) <= p.feed_stage, L_strip, L_rect)
-        L_init = L_init.at[0].set(B)
-        V_init = jnp.full(n, V_rect)
-        V_init = V_init.at[n - 1].set((R + 1) * D)
+        # Initial L/V from the CMO assumption; the energy balance corrects them.
+        L_init, V_init = self._cmo_flows(F_total, R, D)
 
         def one_mesh_iter(carry, _):
             x, y, T, L, V = carry
 
-            # 1. Compute K values at current T
-            _, K = lax.scan(
-                lambda _, Tj: (None, self.thermo.K_values_array(Tj, P)),
-                None, T
-            )
-            # K shape: (n, nc)
-
-            # 2. Build tridiagonal system for all components simultaneously
-            # Material balance at stage j (bottom-up numbering):
-            #   V[j-1]*K[j-1,i]*x[j-1,i] - (L[j] + K[j,i]*V[j])*x[j,i]
-            #   + L[j+1]*x[j+1,i] = -F[j]*z[i]
-
-            V_prev = jnp.concatenate([jnp.zeros(1), V[:-1]])   # V[j-1]
-            K_prev = jnp.concatenate([jnp.zeros((1, nc)), K[:-1]], axis=0)  # K[j-1]
-            lower = V_prev[:, None] * K_prev   # (n, nc), lower[0] = 0
-
-            diag = -(L[:, None] + K * V[:, None])  # (n, nc)
-
-            L_next = jnp.concatenate([L[1:], jnp.zeros(1)])    # L[j+1]
-            upper = jnp.array(L_next[:, None] * jnp.ones((n, nc)))  # (n, nc)
-            upper = upper.at[-1].set(0.0)  # no stage above top
-
-            rhs = -F_vec[:, None] * z[None, :]  # (n, nc)
-
-            # Top boundary condition: reflux enters stage n-1 with
-            # composition x_D_prev = y[-1] (total condenser assumption)
-            x_D_prev = y[-1]
-            rhs = rhs.at[-1].add(-R * D * x_D_prev)
-
-            # 3. Thomas algorithm tridiagonal solve for all nc components
-            m0_safe = jnp.where(
-                jnp.abs(diag[0]) > 1e-30,
-                diag[0],
-                jnp.sign(diag[0] + 1e-60) * 1e-30,
-            )
-            c0_prime = upper[0] / m0_safe   # (nc,)
-            d0_prime = rhs[0] / m0_safe     # (nc,)
-
-            def forward_step(carry, j):
-                c_prev, d_prev = carry  # (nc,), (nc,)
-                m = diag[j] - lower[j] * c_prev   # (nc,)
-                m_safe = jnp.where(
-                    jnp.abs(m) > 1e-30,
-                    m,
-                    jnp.sign(m + 1e-60) * 1e-30,
-                )
-                c_new = upper[j] / m_safe                         # (nc,)
-                d_new = (rhs[j] - lower[j] * d_prev) / m_safe    # (nc,)
-                return (c_new, d_new), (c_new, d_new)
-
-            _, (c_prime_rest, d_prime_rest) = lax.scan(
-                forward_step, (c0_prime, d0_prime), jnp.arange(1, n)
-            )
-            c_prime = jnp.concatenate(
-                [c0_prime[None], c_prime_rest], axis=0
-            )  # (n, nc)
-            d_prime = jnp.concatenate(
-                [d0_prime[None], d_prime_rest], axis=0
-            )  # (n, nc)
-
-            # Back substitution
-            def backward_step(x_next, j):
-                x_j = d_prime[j] - c_prime[j] * x_next  # (nc,)
-                return x_j, x_j
-
-            x_last = d_prime[-1]  # (nc,)
-            _, x_rev = lax.scan(
-                backward_step, x_last, jnp.arange(n - 2, -1, -1)
-            )
-            # x_rev shape: (n-1, nc), from stage n-2 down to 0
-            x_new = jnp.concatenate(
-                [x_rev[::-1], x_last[None]], axis=0
-            )  # (n, nc)
-
-            # Clip and normalize
-            x_new = jnp.maximum(x_new, 1e-10)
-            x_new = x_new / jnp.sum(x_new, axis=1, keepdims=True)
-
-            # 4. Update T from bubble point at each stage
-            _, T_new = lax.scan(
-                lambda _, args: (None, self._bubble_point_T(args[0], P, args[1])[0]),
-                None, (x_new, T)
-            )
-
-            # 5. Recompute K and y with updated T
-            _, K_new = lax.scan(
-                lambda _, Tj: (None, self.thermo.K_values_array(Tj, P)),
-                None, T_new
-            )
-            y_new = K_new * x_new
-            y_new = y_new / jnp.maximum(
-                jnp.sum(y_new, axis=1, keepdims=True), 1e-10
+            # 1-5. Component balances at the current flows, then the
+            # bubble-point temperature and vapor-composition update.  Total
+            # condenser: the reflux carries the top-stage vapor composition.
+            x_new, y_new, T_new = self._bubble_point_step(
+                y[-1], T, L, V, F_vec, z, R, D
             )
 
             # 6. Energy balance update to obtain L/V profiles
@@ -1257,6 +1272,7 @@ class DistillationColumn:
         B_spec: Array | float | None = None,
         use_mesh: bool = True,
         mesh_iter: int = 20,
+        cmo_iter: int = 30,
     ) -> tuple[Stream, Stream, dict[str, Array]]:
         """Solve distillation column.
 
@@ -1271,9 +1287,18 @@ class DistillationColumn:
                       start.  The MESH solver corrects L/V flows via energy
                       balance and gives much more accurate compositions for
                       systems with unequal latent heats.
-                      If False, return the faster but less accurate CMO
-                      solution.
+                      If False, return the faster CMO solution, which solves
+                      the same component material balances but holds the L/V
+                      profiles at their constant-molar-overflow values instead
+                      of correcting them with stage energy balances.  Both
+                      paths close the per-species balance; check
+                      ``info['balance_error']`` to see how well.
             mesh_iter: Number of MESH iterations when use_mesh=True.
+            cmo_iter: Number of CMO bubble-point iterations (the warm start
+                      when use_mesh=True, the whole solve when it is False).
+                      Raise it if ``info['balance_error_rel']`` comes back
+                      larger than the problem can tolerate; the residual falls
+                      geometrically with this count.
 
         Returns:
             distillate: Distillate stream
@@ -1286,6 +1311,10 @@ class DistillationColumn:
                 - 'V_rect': Rectifying vapor flow rate (CMO) or 'V_profile'
                 - 'D': Distillate flow rate
                 - 'B': Bottoms flow rate
+                - 'balance_error': (n_species,) component balance residual
+                  D x_D,i + B x_B,i - F z_i (mol/s), in species_order
+                - 'balance_error_rel': max |balance_error| / F_total, a single
+                  number a caller can compare against a tolerance
                 When use_mesh=True, also includes:
                 - 'L_profile': (n,) liquid flows leaving each stage (mol/s)
                 - 'V_profile': (n,) vapor flows leaving each stage (mol/s)
@@ -1318,7 +1347,8 @@ class DistillationColumn:
         if use_mesh:
             # Rigorous MESH solver (Wang-Henke bubble-point method)
             x_profile, y_profile, T_profile, L_profile, V_profile = self._solve_mesh(
-                feed_flows, F_total, R, D, T_feed, n_iter=mesh_iter
+                feed_flows, F_total, R, D, T_feed,
+                n_iter=mesh_iter, cmo_iter=cmo_iter,
             )
 
             # Total condenser: distillate composition = vapor from top stage
@@ -1350,9 +1380,10 @@ class DistillationColumn:
                 "Q_reboiler": Q_reboiler,
             }
         else:
-            # Constant molar overflow (CMO / Lewis-Matheson) solver
+            # Constant molar overflow (CMO) solver: same component
+            # balances as MESH, L/V frozen at their CMO values
             x_profile, y_profile, T_profile = self._solve_constant_molar_overflow(
-                feed_flows, F_total, R, D, T_feed
+                feed_flows, F_total, R, D, T_feed, n_iter=cmo_iter
             )
 
             # Total condenser: distillate = vapor leaving top stage
@@ -1384,6 +1415,18 @@ class DistillationColumn:
                 "Q_condenser": Q_condenser,
                 "Q_reboiler": Q_reboiler,
             }
+
+        # Component balance closure.  Both solvers satisfy the per-species
+        # balances only to within their iteration count, so report the residual
+        # rather than leaving a caller to discover it (issue #211).
+        balance_error = jnp.array([
+            distillate_flows[s] + bottoms_flows[s] - feed_flows[s]
+            for s in p.species_order
+        ])
+        info["balance_error"] = balance_error
+        info["balance_error_rel"] = jnp.max(jnp.abs(balance_error)) / jnp.maximum(
+            F_total, EPS_DIVISION
+        )
 
         return distillate, bottoms, info
 

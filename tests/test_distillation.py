@@ -360,3 +360,204 @@ class TestMulticomponentDistillation:
         # Heavy should go to bottoms
         heavy_recovery_bot = float(bot_flows["heavy"]) / 40.0
         assert heavy_recovery_bot > 0.8  # Most heavy goes to bottom
+
+
+class TestRigorousColumnComponentBalance:
+    """Per-species material balance on both solver paths (issue #211).
+
+    The CMO path (``use_mesh=False``) used to run a Lewis-Matheson sweep whose
+    top-stage update was an algebraic no-op, so the distillate composition was
+    frozen at a one-stage flash of the feed and nothing in the loop enforced a
+    component balance.  A three-component case reported 51.7 mol/s of pentane
+    leaving a column fed 30 mol/s of it.  Both paths now solve the component
+    balances as a tridiagonal system, so both close them.
+    """
+
+    @pytest.fixture
+    def column(self, multicomponent_thermo):
+        params = DistillationColumnParams(
+            species_order=["light", "middle", "heavy"],
+            n_stages=20,
+            feed_stage=10,
+            P=101325.0,
+        )
+        return DistillationColumn(params, multicomponent_thermo)
+
+    @pytest.fixture
+    def feed(self):
+        return make_stream(
+            {"light": 30.0, "middle": 40.0, "heavy": 30.0},
+            T=400.0,
+            P=101325.0,
+        )
+
+    @pytest.mark.parametrize("use_mesh", [True, False])
+    def test_component_balance_closes(self, column, feed, use_mesh):
+        """D_i + B_i == F_i for every species, on both paths."""
+        distillate, bottoms, info = column(
+            feed, R=2.0, B_spec=40.0, use_mesh=use_mesh
+        )
+
+        feed_flows = get_flows(feed)
+        dist_flows = get_flows(distillate)
+        bot_flows = get_flows(bottoms)
+
+        for species in ["light", "middle", "heavy"]:
+            F = float(feed_flows[species])
+            D = float(dist_flows[species])
+            B = float(bot_flows[species])
+            assert D + B == pytest.approx(F, rel=0.05), (
+                f"{species}: D={D} + B={B} != F={F}"
+            )
+
+        # The reported closure diagnostic must agree with what we just measured
+        assert float(info["balance_error_rel"]) < 0.01
+
+    @pytest.mark.parametrize("use_mesh", [True, False])
+    def test_total_balance_closes(self, column, feed, use_mesh):
+        """Total flows are pinned by the D/B specification."""
+        distillate, bottoms, _ = column(
+            feed, R=2.0, B_spec=40.0, use_mesh=use_mesh
+        )
+        D_total = sum(float(v) for v in get_flows(distillate).values())
+        B_total = sum(float(v) for v in get_flows(bottoms).values())
+
+        assert D_total == pytest.approx(60.0, rel=1e-6)
+        assert B_total == pytest.approx(40.0, rel=1e-6)
+
+    @pytest.mark.parametrize("use_mesh", [True, False])
+    def test_balance_error_reported(self, column, feed, use_mesh):
+        """info carries the closure residual so a caller can check it."""
+        distillate, bottoms, info = column(
+            feed, R=2.0, B_spec=40.0, use_mesh=use_mesh
+        )
+
+        feed_flows = get_flows(feed)
+        dist_flows = get_flows(distillate)
+        bot_flows = get_flows(bottoms)
+
+        expected = [
+            float(dist_flows[s] + bot_flows[s] - feed_flows[s])
+            for s in ["light", "middle", "heavy"]
+        ]
+        assert list(info["balance_error"]) == pytest.approx(expected, abs=1e-12)
+        assert float(info["balance_error_rel"]) == pytest.approx(
+            max(abs(e) for e in expected) / 100.0, rel=1e-6
+        )
+
+    @pytest.mark.parametrize("use_mesh", [True, False])
+    def test_responds_to_feed_stage(self, multicomponent_thermo, feed, use_mesh):
+        """Moving the feed must change the products (issue #211).
+
+        The old CMO sweep returned byte-identical products for every feed
+        stage.  Here the keys separate essentially completely, so the signal
+        lives in the off-key impurities: stages below the feed strip the light
+        component out of the bottoms, stages above it keep the heavy component
+        out of the distillate.  Moving the feed up trades the second for the
+        first.
+        """
+        heavy_in_dist, light_in_bot = [], []
+        for feed_stage in (4, 10, 16):
+            params = DistillationColumnParams(
+                species_order=["light", "middle", "heavy"],
+                n_stages=20,
+                feed_stage=feed_stage,
+                P=101325.0,
+            )
+            column = DistillationColumn(params, multicomponent_thermo)
+            distillate, bottoms, _ = column(
+                feed, R=2.0, B_spec=40.0, use_mesh=use_mesh
+            )
+            heavy_in_dist.append(float(get_flows(distillate)["heavy"]))
+            light_in_bot.append(float(get_flows(bottoms)["light"]))
+
+        # Fewer rectifying stages -> more heavy carried into the distillate
+        assert heavy_in_dist[0] < heavy_in_dist[1] < heavy_in_dist[2]
+        # Fewer stripping stages -> more light left in the bottoms
+        assert light_in_bot[0] > light_in_bot[1]
+
+    def test_cmo_responds_to_reflux(self, column, feed):
+        """Higher reflux must sharpen the CMO separation (issue #211).
+
+        The old sweep froze x_D at a one-stage flash of the feed, making the
+        distillate composition independent of R.
+        """
+        heavy_in_dist = []
+        for R in (0.5, 2.0, 8.0):
+            distillate, _, _ = column(feed, R=R, B_spec=40.0, use_mesh=False)
+            dist_flows = get_flows(distillate)
+            total = sum(float(v) for v in dist_flows.values())
+            heavy_in_dist.append(float(dist_flows["heavy"]) / total)
+
+        assert heavy_in_dist[0] > heavy_in_dist[1] > heavy_in_dist[2]
+
+    @pytest.mark.parametrize("use_mesh", [True, False])
+    def test_gradient_wrt_reflux_is_finite(self, column, feed, use_mesh):
+        """Products stay differentiable w.r.t. the reflux ratio."""
+
+        def middle_in_distillate(R):
+            distillate, _, _ = column(
+                feed, R=R, B_spec=40.0, use_mesh=use_mesh
+            )
+            return get_flows(distillate)["middle"]
+
+        g = float(jax.grad(middle_in_distillate)(2.0))
+        assert jnp.isfinite(g)
+        assert g != 0.0
+
+    def test_issue_211_reported_case(self):
+        """The exact case from issue #211, on real pentane/hexane/heptane data.
+
+        Reported: the CMO path returned 51.696 mol/s of n-pentane from a column
+        fed 30 mol/s of it (+72 %), with n-hexane down 81 % and n-heptane up
+        36 %.  Unlike the synthetic fixture above, this case splits n-hexane
+        roughly in half, so the component balances are genuinely loaded.
+        """
+        from difflow.database import get_species_data
+
+        names = ["n_pentane", "n_hexane", "n_heptane"]
+        thermo = IdealThermo({s: get_species_data(s) for s in names})
+        feed = make_stream(
+            {"n_pentane": 30.0, "n_hexane": 40.0, "n_heptane": 30.0},
+            T=360.0,
+            P=101325.0,
+        )
+        column = DistillationColumn(
+            DistillationColumnParams(
+                species_order=names, n_stages=20, feed_stage=10, P=101325.0
+            ),
+            thermo,
+        )
+
+        feed_flows = get_flows(feed)
+        for use_mesh in (True, False):
+            distillate, bottoms, info = column(
+                feed, R=2.0, B_spec=40.0, use_mesh=use_mesh
+            )
+            dist_flows = get_flows(distillate)
+            bot_flows = get_flows(bottoms)
+            for s in names:
+                F = float(feed_flows[s])
+                total = float(dist_flows[s] + bot_flows[s])
+                assert total == pytest.approx(F, rel=0.01), (
+                    f"use_mesh={use_mesh}, {s}: D+B={total} != F={F}"
+                )
+            assert float(info["balance_error_rel"]) < 1e-3
+
+            # n-hexane really is split between the products here, so the
+            # balance above is not trivially satisfied by near-zero flows.
+            assert 5.0 < float(dist_flows["n_hexane"]) < 35.0
+            assert 5.0 < float(bot_flows["n_hexane"]) < 35.0
+
+    def test_balance_error_falls_with_cmo_iter(self, column, feed):
+        """Raising cmo_iter tightens the reported closure (issue #211)."""
+        errors = [
+            float(
+                column(feed, R=2.0, B_spec=40.0, use_mesh=False, cmo_iter=n)[2][
+                    "balance_error_rel"
+                ]
+            )
+            for n in (5, 15, 40)
+        ]
+        assert errors[0] > errors[1] > errors[2]
+        assert errors[2] < 1e-6

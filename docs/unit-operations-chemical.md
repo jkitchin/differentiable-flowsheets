@@ -799,6 +799,32 @@ $$\sum_i y_{i,j} = 1$$
 **Enthalpy Balance**:
 $$L_{j-1} H^L_{j-1} + V_{j+1} H^V_{j+1} + F_j H^F_j = L_j H^L_j + V_j H^V_j + Q_j$$
 
+#### Solver Paths
+
+Both paths run the Wang-Henke bubble-point iteration, which solves the
+component material balances for the whole column as a tridiagonal system.
+They differ only in where the L/V profiles come from:
+
+| `use_mesh` | L/V profiles | Cost |
+|---|---|---|
+| `True` (default) | corrected each iteration by the stage enthalpy balances | ~30 % more |
+| `False` | frozen at their constant-molar-overflow values, $L' = L + qF$ and $V' = V - (1-q)F$ | cheaper |
+
+The CMO path is a shortcut in the *energy* balance, not in the material
+balance: because the tridiagonal solve is the component balance, summing it
+over the stages telescopes to $D x_{D,i} + B x_{B,i} = F z_i$. Both paths
+satisfy that only to within their iteration count, so both report the
+residual:
+
+```python
+distillate, bottoms, info = column(feed, R=2.0, B_spec=40.0, use_mesh=False)
+info['balance_error']       # (n_species,) D_i + B_i - F_i, mol/s
+info['balance_error_rel']   # max |error| / F_total
+```
+
+If `balance_error_rel` is larger than your problem tolerates, raise
+`cmo_iter` (default 30) — the residual falls geometrically with it.
+
 ---
 
 ## Heat Exchangers
