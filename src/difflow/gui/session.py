@@ -439,7 +439,7 @@ class FlowsheetSession:
         the catalog whenever the code context changes.
         """
         from difflow.catalog import _default_registry, catalog
-        from difflow.gui import edit
+        from difflow.gui import doclinks, edit
 
         classes = {name: info.cls
                    for name, info in _default_registry().list_operations().items()}
@@ -453,6 +453,11 @@ class FlowsheetSession:
                 entry["buildable"] = not needs
             else:
                 entry["needs"] = [] if entry.get("buildable") else ["code"]
+            # Where the book discusses this unit, or None when it does
+            # not discuss it at all. Carried on the catalog rather than
+            # asked for per unit, because the palette wants all 87 at
+            # once and the whole map costs one pass over the index.
+            entry["docs_url"] = doclinks.url_for(name)
             out[name] = entry
         return out
 
@@ -494,11 +499,12 @@ class FlowsheetSession:
 
         Returns:
             ``{"ok": True, "operation": ..., "html": ..., "format": ...,
-            "symbol", "equations", "assumptions", "references",
-            "numerical_method"}``, or ``{"ok": False, "error": ...}``
+            "symbol", "docs_url", "equations", "assumptions",
+            "references", "numerical_method"}``, or ``{"ok": False, "error": ...}``
             for a name nothing is registered under.
         """
         from difflow.catalog import describe_operation
+        from difflow.gui import doclinks
         from difflow.gui import docs as docs_module
 
         try:
@@ -509,6 +515,9 @@ class FlowsheetSession:
         return {
             "ok": True,
             "operation": spec.name,
+            # The docstring rendered below says what the arguments are;
+            # this is where the book says what the unit is for.
+            "docs_url": doclinks.url_for(spec.name),
             "symbol": spec.symbol,
             "description": spec.description,
             "html": html,

@@ -100,6 +100,24 @@
               <UnitSymbol operation={op.name} category={op.category} size={20} />
             </span>
             <span class="op-name">{op.name}</span>
+            {#if op.docs_url}
+              <!-- Opens the book at this unit's own section. `draggable`
+                   off and the click stopped, because the row around it
+                   is a drag source whose click drops a unit on the
+                   canvas, and reading about a unit is not asking for
+                   one. -->
+              <a
+                class="doc-link"
+                href={op.docs_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                draggable="false"
+                tabindex="-1"
+                title="read about {op.name} in the documentation"
+                onclick={(e) => e.stopPropagation()}
+                ondragstart={(e) => e.preventDefault()}
+              >?</a>
+            {/if}
             {#if !op.buildable}
               <span class="needs" title="define these in the code context">
                 needs {op.needs.join(', ') || 'code'}
@@ -115,6 +133,23 @@
 </aside>
 
 <style>
+  /* Quiet until the row is under the pointer or the keyboard: 87 of
+     these lit at once is a column of punctuation, not an affordance. */
+  .doc-link {
+    margin-left: auto;
+    padding: 0 0.28rem;
+    border-radius: 3px;
+    font-size: 0.72rem;
+    line-height: 1.35;
+    color: var(--ink-soft);
+    text-decoration: none;
+    opacity: 0;
+  }
+  .op:hover .doc-link,
+  .op:focus-within .doc-link,
+  .doc-link:focus-visible { opacity: 1; }
+  .doc-link:hover { color: var(--surface); background: var(--series); }
+
   .palette {
     width: 15rem;
     display: flex;

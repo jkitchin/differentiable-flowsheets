@@ -251,6 +251,14 @@
       {#if docs?.symbol && docs.symbol !== node.data.operation}
         <span class="symbol">{docs.symbol}</span>
       {/if}
+      {#if docs?.docs_url}
+        <!-- The panel below renders this unit's docstring, which says
+             what the arguments are. This is the book, which says what
+             the unit is for. -->
+        <a class="doc-link" href={docs.docs_url} target="_blank"
+           rel="noopener noreferrer"
+           title="read about {node.data.operation} in the documentation">docs &#8599;</a>
+      {/if}
     </h2>
     {#if spec?.description}<p class="kind">{spec.description}</p>{/if}
 
@@ -440,6 +448,15 @@
   .prose, .doc { line-height: 1.5; color: var(--ink-soft); }
   .prose li, .refs li { font-family: inherit; font-size: 0.78rem; margin: 0.3rem 0; }
   p.prose { margin: 0.3rem 0 0; }
+
+  .doc-link {
+    float: right;
+    font-size: 0.72rem;
+    font-weight: 400;
+    color: var(--ink-soft);
+    text-decoration: none;
+  }
+  .doc-link:hover { color: var(--series); text-decoration: underline; }
 
   /* The rendered docstring: docutils markup we do not control. */
   .doc :global(p) { margin: 0.5rem 0; }
