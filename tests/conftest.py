@@ -31,21 +31,59 @@ compiling at that moment takes the abort, which is why the crash lands
 somewhere different every run -- ``tests/ree`` once, ``tests/test_flash_gradients.py``
 the next -- and why every one of those tests passes on its own.
 
-Clearing at each module boundary holds it flat: measured on a synthetic
-stand-in, 120 cached executables cost 665 MB and 720 mappings uncleared,
-versus 340 MB and ~20 mappings cleared per block.
+Clearing holds it flat: measured on a synthetic stand-in, 120 cached
+executables cost 665 MB and 720 mappings uncleared, versus 340 MB and ~20
+mappings cleared per block.
 
-Module scope, not function scope, on purpose. Within a file, tests
-deliberately share a session-scoped thermo so its compiled core is reused --
-``tests/test_dynamic_eos.py`` says so in as many words -- and clearing
-between them would pay that compile back on every test. Across files there
-is no such sharing to lose: no test module builds on another's objects.
+Two fixtures do it, because two different things overflow. Across files it
+is the sum that grows, and clearing at each module boundary costs nothing:
+no test module builds on another's compiled objects. Inside one file it can
+be that file alone -- ``tests/test_distillation.py`` reaches three quarters
+of the kernel's mapping ceiling within a single test class -- so a budget
+check after each test drops the caches mid-module once they have grown past
+``MAPPING_BUDGET``. That check is deliberately a budget rather than an
+unconditional per-test clear: a file whose tests share a thermo so its
+compiled core is reused (``tests/test_dynamic_eos.py`` says so in as many
+words) stays under the budget and keeps its reuse.
 """
 
 import gc
 
 import jax
 import pytest
+
+#: Clear once the process holds more mapped sections than this. The kernel's
+#: ceiling is ``vm.max_map_count``, 65530 by default; a fifth of it leaves
+#: room for a module heavier than any here today. Measured on
+#: ``tests/test_distillation.py``, the worst offender: 49480 mappings and
+#: 8.2 GB peak with only the module-boundary clear below, versus 13496 and
+#: 6.0 GB with this budget, for 15 seconds on a 10-minute module -- those
+#: tests build a fresh column per test and so recompile either way, which is
+#: why dropping the caches under them costs so little.
+MAPPING_BUDGET = 15_000
+
+
+def _mappings():
+    """Mapped regions held by this process, or -1 where that is not readable."""
+    try:
+        with open("/proc/self/maps") as fh:
+            return sum(1 for _ in fh)
+    except OSError:          # not Linux; the module-boundary clear still runs
+        return -1
+
+
+@pytest.fixture(autouse=True)
+def _bound_jax_compilation_caches():
+    """Drop the caches mid-module once they have grown past the budget.
+
+    The module-boundary clear below is not enough on its own: one file can
+    exhaust the mappings by itself, and ``tests/test_distillation.py`` gets
+    three quarters of the way there inside a single test class.
+    """
+    yield
+    if _mappings() > MAPPING_BUDGET:
+        jax.clear_caches()
+        gc.collect()
 
 
 @pytest.fixture(autouse=True, scope="module")
