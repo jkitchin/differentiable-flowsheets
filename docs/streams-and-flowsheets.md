@@ -656,6 +656,38 @@ Two pages are served, and they are at different stages.
 
 Two things about wiring are worth knowing before you use it, because both are properties of difflow rather than of the editor. A **stream name is the wiring**: connecting an outlet to an inlet renames the inlet, it does not add an arc, so the downstream unit's port is called whatever the upstream unit's outlet is called. And a **loop is a tear, never an arc**: if the wire you draw would close a cycle, the editor records a recycle instead — the same thing `add_recycle` does — and the edge draws dashed with both stream names on it, because the two ends carry different names.
 
+**A stream can be renamed, and it is not a label edit.** Select a feed or
+product node and type a new name: the server moves the feed, both ends of
+any recycle, every port that reads or writes it and the canvas node
+together, because a name that moved in some places and not others splits
+the flowsheet into two graphs that each look fine on their own. Two
+renames are refused rather than performed — a name another stream already
+has, which would *join* the two and is a connection wearing a rename's
+clothes, and a name that is not a Python identifier, which would survive
+the edit and fail later in `codegen` or on reload, a long way from the
+typing. `gui.edit.rename` is that checked door; `rename_stream` is the
+unchecked mechanism underneath, and both stay, because `connect` uses the
+unchecked one *to* rewire.
+
+**A mixer's inlet count belongs to the flowsheet, not to the class.** A
+`Mixer` mixes however many streams it is handed, and so do `Junction`,
+`BusNode` and `AffineFlow` — the four operations the catalog reports as
+`ports.variadic`. So the inspector offers `Add inlet` on those and a `−`
+per row, and until now the only way to get a third inlet on a mixer was
+to edit the JSON by hand. A variadic unit also arrives from the palette
+with **two** inlets rather than one, because one is what it means to not
+be there: a mixer mixing a single stream is a piece of pipe.
+
+A new port arrives unwired, which is what a unit dropped from the palette
+does too. Removing one is refused rather than cascaded when something is
+on it — a feed, an upstream unit, a recycle destination — because
+deleting the port and deleting the feed behind it are two edits, and
+undoing the first does not bring back the second: the composition,
+temperature and pressure are gone. The refusal names what is in the way.
+The front end draws the button from the catalog's own `variadic` flag and
+the server refuses against the same one, so the button cannot offer
+something the server will turn down.
+
 Feed and product nodes are drawn *from* the topology; they are stream names with nothing on one end rather than objects the flowsheet holds, so they are not draggable endpoints. A unit dropped from the palette arrives unwired with a dangling stream on each port, which is why it appears with feed-ish and product-ish stubs until you connect it.
 
 **Code context** opens the Python the flowsheet carries (see below). Parameter editing, the docstring inspector and the results panel are being built onto the canvas; until they land, `/classic` is where you change a number.

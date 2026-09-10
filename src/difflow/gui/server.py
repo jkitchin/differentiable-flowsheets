@@ -294,6 +294,7 @@ class _Handler(BaseHTTPRequestHandler):
         path, session = self.path, self.session
         unit_path = "/api/unit/"
         feed_path = "/api/feed/"
+        stream_path = "/api/stream/"
 
         if verb == "POST":
             if path == "/api/flowsheet":
@@ -347,13 +348,27 @@ class _Handler(BaseHTTPRequestHandler):
                                         model=payload.get("model"))
             if path == "/api/connect":
                 return _wire(session.connect, payload)
+            # A port, not a wire: a variadic unit's inlet count is a
+            # property of this flowsheet rather than of its class, so it
+            # is the canvas's to change.
+            if path == "/api/inlet":
+                return session.add_inlet(payload.get("unit", ""))
 
-        if verb == "PATCH" and path.startswith(unit_path):
-            return session.patch_unit(unquote(path[len(unit_path):]), payload)
+        if verb == "PATCH":
+            if path.startswith(unit_path):
+                return session.patch_unit(unquote(path[len(unit_path):]), payload)
+            # PATCH rather than POST for the same reason a unit's rename
+            # is one: the stream goes on existing, under another name.
+            if path.startswith(stream_path):
+                return session.rename_stream(unquote(path[len(stream_path):]),
+                                             payload.get("name", ""))
 
         if verb == "DELETE":
             if path == "/api/connect":
                 return _wire(session.disconnect, payload)
+            if path == "/api/inlet":
+                return session.remove_inlet(payload.get("unit", ""),
+                                            payload.get("stream", ""))
             if path.startswith(unit_path):
                 return session.remove_unit(unquote(path[len(unit_path):]))
             if path.startswith(feed_path):

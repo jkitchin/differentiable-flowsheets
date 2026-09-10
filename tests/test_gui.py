@@ -54,6 +54,7 @@ from difflow.gui import (
     _json_safe,
     console,
     context,
+    edit,
     make_server,
     sensitivity,
     server,
@@ -1032,9 +1033,11 @@ class TestAnEmptyEditor:
             "target": "heater", "inlet": units["heater"]["inlets"][0],
         })[1]["ok"]
 
-        # Both inlets were unfed; wiring one of them fed it.
+        # Every inlet was unfed; wiring the heater's fed that one. The
+        # mixer keeps two, because a mixer arrives able to mix.
         _, waiting = empty.get_json("/api/feeds")
-        assert waiting == {"ok": True, "feeds": [], "unfed": ["mixer_in"]}
+        assert waiting == {"ok": True, "feeds": [],
+                           "unfed": ["mixer_in", "mixer_in2"]}
 
         # And the solver says which stream, and what to do about it,
         # rather than raising the name on its own.
@@ -1045,6 +1048,7 @@ class TestAnEmptyEditor:
         _, fed = empty.post("/api/feed", {"name": "mixer_in", "T": 320.0,
                                           "flows": {"water": 2.0}})
         assert fed["ok"], fed
+        assert empty.post("/api/feed", {"name": "mixer_in2"})[1]["ok"]
         # A field left out keeps what it had: the pressure is the
         # flowsheet's default, and ethanol its default flow.
         assert fed["T"] == 320.0
@@ -1072,7 +1076,7 @@ class TestAnEmptyEditor:
         _, gone = empty.delete("/api/feed/mixer_in")
         assert gone == {"ok": True, "name": "mixer_in"}
         assert empty.get_json("/api/feeds")[1] == {
-            "ok": True, "feeds": [], "unfed": ["mixer_in"]
+            "ok": True, "feeds": [], "unfed": ["mixer_in", "mixer_in2"]
         }
         assert empty.delete("/api/feed/mixer_in")[1]["ok"] is False
 
@@ -2238,6 +2242,289 @@ class TestPortInUse:
         """
         from http.server import ThreadingHTTPServer
         assert ThreadingHTTPServer.allow_reuse_address
+
+
+# =============================================================================
+# Renaming a stream, and the ports of a unit that has as many as it likes
+# =============================================================================
+
+
+class TestRenamingAStream:
+    """The name is the wiring, which is why this is not a label edit.
+
+    `connect` already renames an inlet -- that is *how* a wire is made
+    in difflow -- so the mechanism was there and only the door was
+    missing. The door has to be narrower than the mechanism: two of the
+    renames `connect` performs on purpose are, asked for by a user,
+    silently something other than a rename.
+    """
+
+    def test_a_feed_renames_everywhere_it_appears(self, client):
+        status, answer = client.patch("/api/stream/feed", {"name": "charge"})
+        assert status == 200 and answer == {
+            "ok": True, "kind": "stream", "stream": "charge"
+        }
+        fs = client.session.flowsheet
+        assert "charge" in fs.feeds and "feed" not in fs.feeds
+        assert edit.unit(fs, "reactor").inlet_names == ["charge"]
+
+    def test_an_intermediate_stream_moves_at_both_ends(self, client):
+        """Or the graph quietly splits into two that each look fine."""
+        assert client.patch("/api/stream/rx", {"name": "effluent"})[1]["ok"]
+        fs = client.session.flowsheet
+        assert edit.unit(fs, "reactor").outlet_names == ["effluent"]
+        assert edit.unit(fs, "flash").inlet_names == ["effluent"]
+        # And it still solves, which is the whole claim.
+        assert client.post("/api/solve", {})[1]["ok"]
+
+    def test_both_ends_of_a_recycle_follow(self, client):
+        # `connect` will not wire into a stream that is already fed, so
+        # the declared feed comes off first.
+        assert client.delete("/api/feed/feed")[1]["ok"]
+        assert client.post("/api/connect", {"source": "flash", "outlet": "vap",
+                                            "target": "reactor",
+                                            "inlet": "feed"})[1]["ok"]
+        fs = client.session.flowsheet
+        assert fs.recycles, "expected the wire back to be torn"
+        assert client.patch("/api/stream/vap", {"name": "overhead"})[1]["ok"]
+        assert "overhead" in fs.recycles
+        assert "vap" not in fs.recycles
+
+    def test_the_canvas_node_follows_the_feed(self, client):
+        client.post("/api/layout", {"nodes": {"feed:feed": {"x": 5.0, "y": 6.0}}})
+        assert client.patch("/api/stream/feed", {"name": "charge"})[1]["ok"]
+        nodes = client.session.flowsheet.view["nodes"]
+        assert nodes["feed:charge"] == {"x": 5.0, "y": 6.0}
+        assert "feed:feed" not in nodes
+
+    def test_a_name_another_stream_has_is_refused(self, client):
+        """Because that is a connection, and it should be drawn as one.
+
+        `rename_stream` would do it and produce a flowsheet where the
+        reactor's inlet and the flash's outlet are the same stream --
+        which is a wire nobody drew.
+        """
+        _, answer = client.patch("/api/stream/feed", {"name": "rx"})
+        assert answer["ok"] is False
+        assert "already a stream" in answer["error"]
+        assert "connection" in answer["error"]
+        assert "feed" in client.session.flowsheet.feeds
+
+    def test_a_name_that_is_not_an_identifier_is_refused(self, client):
+        """It would survive here and fail in `codegen`, hours later."""
+        for bad in ("two words", "3rd", "liq-out", ""):
+            _, answer = client.patch("/api/stream/feed", {"name": bad})
+            assert answer["ok"] is False, bad
+        assert "feed" in client.session.flowsheet.feeds
+
+    def test_renaming_a_stream_that_is_not_there_says_so(self, client):
+        _, answer = client.patch("/api/stream/nope", {"name": "x"})
+        assert answer["ok"] is False
+        assert "no stream called 'nope'" in answer["error"]
+
+    def test_renaming_to_the_same_name_is_a_no_op_and_not_an_error(self, client):
+        _, answer = client.patch("/api/stream/feed", {"name": "feed"})
+        assert answer == {"ok": True, "kind": "stream", "stream": "feed"}
+
+    def test_a_url_encoded_stream_name_is_decoded(self, client):
+        """The same path `PATCH /api/unit/` takes, so it decodes alike."""
+        client.patch("/api/stream/feed", {"name": "feed"})
+        status, answer = client.patch("/api/stream/rx%78", {"name": "z"})
+        assert status == 200 and answer["ok"] is False
+        assert "'rxx'" in answer["error"]
+
+    def test_a_rename_needs_the_token(self, client):
+        status, _ = client.patch("/api/stream/feed", {"name": "charge"},
+                                 headers={gui.TOKEN_HEADER: "wrong"})
+        assert status == 403
+        assert "feed" in client.session.flowsheet.feeds
+
+
+class TestAUnitThatTakesAsManyInletsAsItIsGiven:
+    """A mixer's inlet count is a property of the flowsheet, not the class.
+
+    Which is why it is the canvas's to change, and why until now the
+    only way to get a third inlet on a mixer was to write the JSON by
+    hand.
+    """
+
+    @pytest.fixture
+    def empty(self):
+        live = Client(FlowsheetSession())
+        live.post("/api/species", {"species": SPECIES})
+        yield live
+        live.close()
+
+    def variadic_names(self):
+        from difflow.catalog import catalog
+
+        return {n for n, s in catalog().items() if s.to_dict()["ports"]["variadic"]}
+
+    def test_a_mixer_arrives_able_to_mix(self, empty):
+        """One inlet is what it means to not be there: that is a pipe."""
+        _, added = empty.post("/api/unit", {"operation": "Mixer"})
+        assert added["inlets"] == ["mixer_in", "mixer_in2"]
+        assert added["outlets"] == ["mixer_out"]
+
+    def test_a_fixed_unit_still_gets_the_ports_it_declares(self, empty):
+        _, added = empty.post("/api/unit", {"operation": "Heater"})
+        assert added["inlets"] == ["heater_in"]
+
+    def test_an_inlet_is_added_and_removed(self, empty):
+        empty.post("/api/unit", {"operation": "Mixer"})
+        status, added = empty.post("/api/inlet", {"unit": "mixer"})
+        assert status == 200
+        assert added == {"ok": True, "kind": "inlet", "stream": "mixer_in3"}
+        assert edit.unit(empty.session.flowsheet, "mixer").inlet_names == [
+            "mixer_in", "mixer_in2", "mixer_in3"
+        ]
+        _, gone = empty.delete("/api/inlet", {"unit": "mixer",
+                                              "stream": "mixer_in3"})
+        assert gone == {"ok": True, "kind": "inlet", "stream": "mixer_in3"}
+        assert edit.unit(empty.session.flowsheet, "mixer").inlet_names == [
+            "mixer_in", "mixer_in2"
+        ]
+
+    def test_a_new_inlet_dangles(self, empty):
+        """Same as a port on a unit just dropped: unfed, awaiting a feed."""
+        empty.post("/api/unit", {"operation": "Mixer"})
+        empty.post("/api/inlet", {"unit": "mixer"})
+        assert empty.get_json("/api/feeds")[1]["unfed"] == [
+            "mixer_in", "mixer_in2", "mixer_in3"
+        ]
+
+    def test_a_new_inlet_does_not_collide_with_a_name_in_use(self, empty):
+        empty.post("/api/unit", {"operation": "Mixer"})
+        empty.patch("/api/stream/mixer_in2", {"name": "mixer_in3"})
+        _, added = empty.post("/api/inlet", {"unit": "mixer"})
+        # `mixer_in32` would be the answer from bolting a digit onto a
+        # taken base, and it reads as the thirty-second inlet.
+        assert added["stream"] == "mixer_in4", added
+
+    def test_a_unit_with_fixed_ports_refuses_both_verbs(self, empty):
+        empty.post("/api/unit", {"operation": "Heater"})
+        _, refused = empty.post("/api/inlet", {"unit": "heater"})
+        assert refused["ok"] is False
+        assert "exactly 1 inlet" in refused["error"]
+        _, no = empty.delete("/api/inlet", {"unit": "heater",
+                                            "stream": "heater_in"})
+        assert no["ok"] is False and "fixed set of inlets" in no["error"]
+
+    def test_the_last_inlet_cannot_be_removed(self, empty):
+        """A mixer with no inlets is not a smaller mixer."""
+        empty.post("/api/unit", {"operation": "Mixer"})
+        empty.delete("/api/inlet", {"unit": "mixer", "stream": "mixer_in2"})
+        _, refused = empty.delete("/api/inlet", {"unit": "mixer",
+                                                 "stream": "mixer_in"})
+        assert refused["ok"] is False
+        assert "Delete the unit instead" in refused["error"]
+
+    def test_a_fed_inlet_is_refused_rather_than_cascaded(self, empty):
+        """Deleting the port would take the feed's conditions with it.
+
+        Two edits, and undoing the first does not bring back the second:
+        the temperature, pressure and per-species flows are gone. So the
+        refusal names what is in the way.
+        """
+        empty.post("/api/unit", {"operation": "Mixer"})
+        empty.post("/api/feed", {"name": "mixer_in2", "T": 300.0})
+        _, refused = empty.delete("/api/inlet", {"unit": "mixer",
+                                                 "stream": "mixer_in2"})
+        assert refused["ok"] is False and "is a feed" in refused["error"]
+        assert "mixer_in2" in empty.session.flowsheet.feeds
+
+    def test_a_wired_inlet_is_refused(self, empty):
+        empty.post("/api/unit", {"operation": "Mixer"})
+        empty.post("/api/unit", {"operation": "Heater"})
+        empty.post("/api/connect", {"source": "heater", "outlet": "heater_out",
+                                    "target": "mixer", "inlet": "mixer_in2"})
+        _, refused = empty.delete("/api/inlet", {"unit": "mixer",
+                                                 "stream": "heater_out"})
+        assert refused["ok"] is False
+        assert "comes from 'heater'" in refused["error"]
+
+    def test_a_recycle_destination_is_refused(self, empty):
+        empty.post("/api/unit", {"operation": "Mixer"})
+        empty.post("/api/unit", {"operation": "Heater"})
+        empty.post("/api/connect", {"source": "mixer", "outlet": "mixer_out",
+                                    "target": "heater", "inlet": "heater_in"})
+        empty.post("/api/connect", {"source": "heater", "outlet": "heater_out",
+                                    "target": "mixer", "inlet": "mixer_in2"})
+        assert empty.session.flowsheet.recycles, "expected a tear"
+        stream = next(iter(empty.session.flowsheet.recycles.values()))
+        _, refused = empty.delete("/api/inlet", {"unit": "mixer",
+                                                 "stream": stream})
+        assert refused["ok"] is False and "recycle" in refused["error"]
+
+    def test_an_inlet_the_unit_does_not_have_lists_the_ones_it_does(self, empty):
+        empty.post("/api/unit", {"operation": "Mixer"})
+        _, refused = empty.delete("/api/inlet", {"unit": "mixer",
+                                                 "stream": "nope"})
+        assert refused["ok"] is False
+        assert "mixer_in, mixer_in2" in refused["error"]
+
+    def test_a_unit_that_is_not_there_says_so(self, empty):
+        _, refused = empty.post("/api/inlet", {"unit": "nope"})
+        assert refused["ok"] is False and "no unit called 'nope'" in refused["error"]
+
+    def test_the_verbs_need_the_token(self, empty):
+        empty.post("/api/unit", {"operation": "Mixer"})
+        status, _ = empty.post("/api/inlet", {"unit": "mixer"},
+                               headers={gui.TOKEN_HEADER: "wrong"})
+        assert status == 403
+        assert len(edit.unit(empty.session.flowsheet, "mixer").inlet_names) == 2
+
+    def test_the_catalog_says_which_units_take_more(self, empty):
+        """So the panel can offer the verb only where it works.
+
+        The front end reads `ports.variadic` off the catalog to decide
+        whether to draw `Add inlet`; if that flag and the server's
+        refusal ever disagree, the button is a lie.
+        """
+        _, catalog = empty.get_json("/api/catalog")
+        flagged = {n for n, e in catalog.items() if e["ports"]["variadic"]}
+        assert flagged == self.variadic_names()
+        assert "Mixer" in flagged and "Flash" not in flagged
+
+    def test_every_flagged_unit_actually_takes_another_inlet(self, empty):
+        """The button is drawn from the flag, so the flag has to be true."""
+        accepted = []
+        for name in sorted(self.variadic_names()):
+            answer = empty.post("/api/unit", {"operation": name})[1]
+            if not answer["ok"]:
+                continue        # needs something from the code context
+            unit_name = answer["name"]
+            added = empty.post("/api/inlet", {"unit": unit_name})[1]
+            assert added["ok"], (name, added)
+            assert added["stream"] in edit.unit(
+                empty.session.flowsheet, unit_name).inlet_names
+            accepted.append(name)
+        assert "Mixer" in accepted
+
+    def test_an_added_inlet_survives_the_round_trip(self, empty, tmp_path):
+        """It is a port on a saved unit, not a decoration on the canvas."""
+        from difflow import serialize
+
+        empty.post("/api/unit", {"operation": "Mixer"})
+        empty.post("/api/inlet", {"unit": "mixer"})
+        path = tmp_path / "plant.json"
+        serialize.save(empty.session.flowsheet, path)
+        reloaded = serialize.load(path)
+        assert edit.unit(reloaded, "mixer").inlet_names == [
+            "mixer_in", "mixer_in2", "mixer_in3"
+        ]
+
+    def test_a_mixer_with_three_fed_inlets_solves(self, empty):
+        """The point of all of it: three streams in, one out."""
+        empty.post("/api/unit", {"operation": "Mixer"})
+        empty.post("/api/inlet", {"unit": "mixer"})
+        for i, stream in enumerate(("mixer_in", "mixer_in2", "mixer_in3")):
+            empty.post("/api/feed", {"name": stream, "T": 300.0 + 10 * i,
+                                     "flows": {"water": 1.0 + i}})
+        _, solved = empty.post("/api/solve", {})
+        assert solved["ok"], solved
+        out = solved["streams"]["mixer_out"]
+        assert out["F_water"] == pytest.approx(6.0)
 
 
 if __name__ == "__main__":
