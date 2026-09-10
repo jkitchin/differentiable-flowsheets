@@ -12,6 +12,8 @@ The acceptance criteria for the module are covered explicitly:
    ``test_chain_allocation_lever_switches_with_prices`` covers its claim.
 """
 
+import re
+import sys
 import warnings
 
 import jax
@@ -799,6 +801,37 @@ class TestScaling:
         header, rule = text.splitlines()[:2]
         assert "n" in header and set(rule) <= set("|- :")
         assert format_scaling_table(rows, tablefmt="simple").count("|") == 0
+
+    def test_the_table_holds_its_shape_without_tabulate(self, monkeypatch):
+        """tabulate is in the ``examples`` extra, so this is the common path.
+
+        Hidden here rather than skipped when absent: an environment that
+        has tabulate is exactly the one that would never notice the
+        fallback drifting, and CI installs ``[dev,gui,solvers]`` --- which
+        has no tabulate --- so without this the fallback is covered
+        nowhere.
+        """
+        rows = scaling_study(self._make, [5], repeats=1, warmup=1)
+        # `from tabulate import tabulate` raises ImportError against a
+        # None entry in sys.modules, which is how the fallback is reached.
+        monkeypatch.setitem(sys.modules, "tabulate", None)
+
+        text = format_scaling_table(rows)
+        assert text.lstrip().startswith("|")
+        assert "speedup" in text
+        header, rule = text.splitlines()[:2]
+        assert "n" in header and set(rule) <= set("|- :")
+
+        # `simple` is the terminal format, and the point of asking for it
+        # is not getting Markdown back.
+        plain = format_scaling_table(rows, tablefmt="simple")
+        assert plain.count("|") == 0
+        assert "speedup" in plain
+        head, rule, row = plain.splitlines()
+        assert set(rule) <= set("- ")
+        # Seven columns on every line, so the numbers sit under their names.
+        assert [len(re.split(r"\s{2,}", line.strip())) for line in
+                (head, rule, row)] == [7, 7, 7]
 
 
 # --------------------------------------------------------------------------
