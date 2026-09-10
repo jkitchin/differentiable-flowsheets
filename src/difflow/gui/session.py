@@ -901,6 +901,43 @@ class FlowsheetSession:
             lambda: edit.disconnect(self.flowsheet, source, outlet, target, inlet)
         )
 
+    def _ports(self, name: str) -> dict:
+        """The port spec of the class behind an existing unit."""
+        from difflow.catalog import describe_class
+        from difflow.gui import edit
+
+        return describe_class(type(edit.unit(self.flowsheet, name).operation)) \
+            .to_dict()["ports"]
+
+    def rename_stream(self, old: str, new: str) -> dict:
+        """Rename one stream everywhere it appears.
+
+        A stream name is the wiring, so this moves feeds, recycle ends,
+        every port that reads or writes it and the canvas node all at
+        once. Refused if the new name is taken, because that would be a
+        connection wearing a rename's clothes.
+        """
+        from difflow.gui import edit
+
+        return self._edit(lambda: edit.rename(self.flowsheet, old, new))
+
+    def add_inlet(self, name: str) -> dict:
+        """One more inlet on a variadic unit, arriving unwired."""
+        from difflow.gui import edit
+
+        return self._edit(
+            lambda: edit.add_inlet(self.flowsheet, name, self._ports(name))
+        )
+
+    def remove_inlet(self, name: str, stream: str) -> dict:
+        """Take an inlet off a variadic unit, if nothing is on it."""
+        from difflow.gui import edit
+
+        return self._edit(
+            lambda: edit.remove_inlet(self.flowsheet, name, stream,
+                                      self._ports(name))
+        )
+
     def set_layout(self, nodes: dict) -> dict:
         """Adopt canvas positions. No rebuild, no solve --- coordinates only."""
         from difflow.gui import edit

@@ -443,6 +443,122 @@ def rename_stream(flowsheet, old: str, new: str) -> None:
                 nodes[prefix + new] = nodes.pop(prefix + old)
 
 
+def rename(flowsheet, old: str, new: str) -> dict:
+    """Rename one stream, refusing the renames that would rewire.
+
+    :func:`rename_stream` is the mechanism and does no checking, because
+    :func:`connect` uses it precisely *to* rewire --- wiring an outlet to
+    an inlet in difflow is renaming the inlet to match. Asked for by a
+    user, though, the same call has two ways to do something other than
+    what was asked:
+
+    * a name already in use merges two streams into one, which is a
+      connection and should be drawn as one;
+    * a name that is not a Python identifier survives here and fails
+      later, in ``codegen`` or on reload, a long way from the typing.
+
+    So this is the checked door and ``rename_stream`` is the unchecked
+    one, and both stay.
+    """
+    old, new = str(old or ""), str(new or "").strip()
+    names = stream_names(flowsheet)
+    if old not in names:
+        raise EditError(f"no stream called {old!r}")
+    if not new:
+        raise EditError("a stream needs a name")
+    if new == old:
+        return {"kind": "stream", "stream": old}
+    if not new.isidentifier():
+        raise EditError(
+            f"{new!r} cannot be a stream name: it has to be a Python "
+            "identifier, because that is what the exported script calls it."
+        )
+    if new in names:
+        raise EditError(
+            f"{new!r} is already a stream. Renaming onto it would join the "
+            "two into one, which is a connection --- draw it as one."
+        )
+    rename_stream(flowsheet, old, new)
+    return {"kind": "stream", "stream": new}
+
+
+def variadic(ports: dict) -> bool:
+    """Whether this operation takes as many inlets as it is given."""
+    return bool(ports.get("variadic"))
+
+
+def add_inlet(flowsheet, name: str, ports: dict) -> dict:
+    """Give a variadic unit one more inlet, dangling.
+
+    A ``Mixer`` mixes however many streams it is handed, so its inlet
+    count is a property of the flowsheet and not of the class --- which
+    means it is something the canvas has to be able to change, and until
+    now the only way to get a third inlet was to write the JSON by hand.
+
+    The new port arrives unwired, as a dangling stream, which is what a
+    unit dropped from the palette does too: an inlet with nothing behind
+    it draws as a feed node waiting to be filled in.
+    """
+    u = unit(flowsheet, name)
+    if not variadic(ports):
+        n = len(u.inlet_names)
+        raise EditError(
+            f"{name!r} takes exactly {n} inlet{'s' if n != 1 else ''}; "
+            "only a mixer-like unit can take more."
+        )
+    # Count up to the first free ordinal rather than letting `unique`
+    # bolt a digit onto a taken base: with `mixer_in3` in use that gives
+    # `mixer_in32`, which reads as the thirty-second inlet.
+    taken = stream_names(flowsheet)
+    n = len(u.inlet_names) + 1
+    while f"{name}_in{n}" in taken:
+        n += 1
+    fresh = f"{name}_in{n}"
+    u.inlet_names = [*u.inlet_names, fresh]
+    return {"kind": "inlet", "stream": fresh}
+
+
+def remove_inlet(flowsheet, name: str, stream: str, ports: dict) -> dict:
+    """Take one inlet off a variadic unit, if nothing is on it.
+
+    Refused rather than cascaded when the port is wired or fed. Deleting
+    a port and silently deleting the feed behind it are two edits, and
+    the second one is not recoverable by undoing the first --- the feed's
+    composition, temperature and pressure are gone. So the refusal names
+    what is in the way and the user removes that first.
+    """
+    u = unit(flowsheet, name)
+    if not variadic(ports):
+        raise EditError(
+            f"{name!r} has a fixed set of inlets; {stream!r} cannot be removed."
+        )
+    if stream not in u.inlet_names:
+        have = ", ".join(u.inlet_names) or "none"
+        raise EditError(f"{name!r} has no inlet {stream!r} (has: {have})")
+    if len(u.inlet_names) <= 1:
+        raise EditError(
+            f"{name!r} is down to its last inlet. Delete the unit instead."
+        )
+    if stream in flowsheet.feeds:
+        raise EditError(
+            f"{stream!r} is a feed. Remove the feed first, so its conditions "
+            "are not thrown away with the port."
+        )
+    made = producers(flowsheet)
+    if stream in made:
+        raise EditError(
+            f"{stream!r} comes from {made[stream]!r}. Disconnect it first."
+        )
+    if stream in flowsheet.recycles.values():
+        source = next(s for s, d in flowsheet.recycles.items() if d == stream)
+        raise EditError(
+            f"{stream!r} is the destination of the recycle from {source!r}. "
+            "Remove the recycle first."
+        )
+    u.inlet_names = [s for s in u.inlet_names if s != stream]
+    return {"kind": "inlet", "stream": stream}
+
+
 def connect(flowsheet, source: str, outlet: str, target: str, inlet: str) -> dict:
     """Wire one unit's outlet to another's inlet.
 
@@ -499,13 +615,18 @@ def disconnect(flowsheet, source: str, outlet: str, target: str, inlet: str) -> 
 def default_ports(name: str, ports: dict, taken) -> tuple[list[str], list[str]]:
     """Inlet and outlet names for a unit just dropped on the canvas.
 
-    A variadic or unannotated port count reports ``None``; one port is
-    the useful default there, because the canvas can add more and cannot
-    remove a port the model does not have.
+    A variadic or unannotated port count reports ``None``. A *variadic*
+    unit gets two inlets, because one is what it means to not be there:
+    a ``Mixer`` mixing one stream is a piece of pipe. An unannotated one
+    gets a single port, since nothing says it wants more.
+
+    Either way the count is only a starting point --- :func:`add_inlet`
+    and :func:`remove_inlet` are how it changes afterwards.
     """
     inlets, outlets = [], []
     seen = set(taken)
-    for i in range(max(1, ports.get("n_inlets") or 1)):
+    default_inlets = 2 if variadic(ports) else 1
+    for i in range(max(1, ports.get("n_inlets") or default_inlets)):
         s = unique(f"{name}_in" if i == 0 else f"{name}_in{i + 1}", seen)
         seen.add(s)
         inlets.append(s)
