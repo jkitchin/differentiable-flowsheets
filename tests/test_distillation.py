@@ -1086,7 +1086,12 @@ class TestCubicThermoColumn:
                "n_pentane", "n_hexane", "n_heptane", "n_octane"]
     P = 10e5
 
-    @pytest.fixture
+    # Class-scoped, all of them, and the columns below with them. A column
+    # solve is compiled once per (column object, argument shapes) -- see
+    # DistillationColumn._solve -- so a fresh column per test recompiles the
+    # whole EOS graph per test, which is where this class's ~200 seconds went.
+    # Nothing here is mutated by a test, so one of each serves them all.
+    @pytest.fixture(scope="class")
     def thermo_pair(self):
         from difflow.database import get_critical_props, get_species_data
         from difflow.eos import PengRobinson
@@ -1096,7 +1101,17 @@ class TestCubicThermoColumn:
         eos = PengRobinson({s: get_critical_props(s) for s in self.SPECIES})
         return ideal, CubicThermo(ideal, eos)
 
-    @pytest.fixture
+    @pytest.fixture(scope="class")
+    def cubic_column(self, thermo_pair, column_params):
+        """The C3-C8 column on the EOS package, built once for the class."""
+        return DistillationColumn(column_params, thermo_pair[1])
+
+    @pytest.fixture(scope="class")
+    def ideal_column(self, thermo_pair, column_params):
+        """The same column on Raoult K-values, for the side-by-side."""
+        return DistillationColumn(column_params, thermo_pair[0])
+
+    @pytest.fixture(scope="class")
     def column_params(self):
         return DistillationColumnParams(
             species_order=self.SPECIES,
@@ -1106,7 +1121,7 @@ class TestCubicThermoColumn:
             P=self.P,
         )
 
-    @pytest.fixture
+    @pytest.fixture(scope="class")
     def feed(self):
         return make_stream(
             dict(zip(self.SPECIES, [10.0, 7.0, 7.0, 8.0, 8.0, 20.0, 10.0, 30.0])),
@@ -1160,14 +1175,14 @@ class TestCubicThermoColumn:
         [1e-9, 1e-9, 1e-9, 1e-9, 1e-9, 0.002, 0.25, 0.748],  # heavy cut
     ])
     def test_bubble_point_agrees_with_eos_flash(
-        self, thermo_pair, column_params, x_raw
+        self, thermo_pair, cubic_column, x_raw
     ):
         """The stage bubble point is where the EOS flash's vapor fraction lifts
         off zero -- checked against ``flash_TP_eos``, not against itself."""
         from difflow.eos import flash_TP_eos
 
         _, cubic = thermo_pair
-        column = DistillationColumn(column_params, cubic)
+        column = cubic_column
         x = jnp.array(x_raw)
         x = x / jnp.sum(x)
 
@@ -1187,13 +1202,12 @@ class TestCubicThermoColumn:
         assert float(jnp.sum(y)) == pytest.approx(1.0)
 
     def test_eos_bubble_point_differs_from_raoult_for_light_ends(
-        self, thermo_pair, column_params
+        self, ideal_column, cubic_column
     ):
         """The reason the issue matters: Raoult's law is tens of degrees out for
         light hydrocarbons at 10 bar, and within a degree for the heavy end."""
-        ideal, cubic = thermo_pair
-        col_i = DistillationColumn(column_params, ideal)
-        col_c = DistillationColumn(column_params, cubic)
+        col_i = ideal_column
+        col_c = cubic_column
         P = jnp.asarray(self.P)
         T_guess = jnp.asarray(350.0)
 
@@ -1210,10 +1224,10 @@ class TestCubicThermoColumn:
         assert abs(d_light) > 10.0
         assert abs(d_heavy) < 2.0
 
-    def test_column_runs_on_cubic_thermo(self, thermo_pair, column_params, feed):
+    def test_column_runs_on_cubic_thermo(self, thermo_pair, cubic_column, column_params, feed):
         """The issue's reproducer: no AttributeError, and a physical answer."""
         _, cubic = thermo_pair
-        column = DistillationColumn(column_params, cubic)
+        column = cubic_column
 
         distillate, bottoms, info = column(feed, R=2.0, B_spec=40.0)
 
@@ -1250,12 +1264,12 @@ class TestCubicThermoColumn:
             assert float(jnp.sum(K * x[j])) == pytest.approx(1.0, abs=1e-3)
 
     def test_condenser_is_well_below_the_top_stage_for_a_wide_cut(
-        self, thermo_pair, column_params, feed
+        self, thermo_pair, cubic_column, feed
     ):
         """Where this matters most: a C3-C8 distillate spans a wide boiling
         range, so its bubble point is tens of degrees under the top stage's."""
         _, cubic = thermo_pair
-        column = DistillationColumn(column_params, cubic)
+        column = cubic_column
 
         distillate, _, info = column(feed, R=2.0, B_spec=40.0)
 
@@ -1330,12 +1344,11 @@ class TestCubicThermoColumn:
             assert float(V_above) > 1e-3
 
     def test_cubic_column_duties_are_physical(
-        self, thermo_pair, column_params, feed
+        self, cubic_column, feed
     ):
         """The EOS enthalpy path (departure, not Watson Hvap) still gives a
         condenser that removes heat and a reboiler that adds it."""
-        _, cubic = thermo_pair
-        column = DistillationColumn(column_params, cubic)
+        column = cubic_column
         _, _, info = column(feed, R=2.0, B_spec=40.0)
 
         assert float(info["Q_condenser"]) < 0.0
