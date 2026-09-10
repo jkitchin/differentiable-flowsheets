@@ -12,13 +12,18 @@ reasons.
 
 **Smoothed for the search, exact for the answer.**  ``CVaR`` and
 ``WorstCase`` are built on kinks --- a hinge and a maximum --- whose exact
-subgradients carry information about one scenario out of hundreds and stall a
-quasi-Newton method.  Each therefore exposes a smoothed
-:meth:`~RiskMeasure.surrogate` used to generate steps, with the smoothing
-annealed to nothing over the run, and an exact :meth:`~RiskMeasure.value`
-which is the only thing ever reported.  A smoothed CVaR is *below* the true
-one, which would make a risky plan look safe; reporting the exact value is
-what stops that.
+subgradients are carried by whichever handful of scenarios sits on the kink at
+that iterate, which makes for a jumpy search direction.  Each therefore
+exposes a smoothed :meth:`~RiskMeasure.surrogate` used to generate steps, with
+the smoothing annealed to nothing over the run, and an exact
+:meth:`~RiskMeasure.value` which is the only thing ever reported.
+
+The smoothing is deliberately one-sided: ``softplus >= relu`` and
+``smooth_max >= max``, so a smoothed risk is always *above* the true one.  That
+is the safe direction --- an imperfectly annealed run over-states the risk and
+buys a little too much margin.  Had it been smoothed from below, the same run
+would have made a risky plan look safe, which is why the reported number is the
+exact one regardless.
 
 **Rockafellar--Uryasev, evaluated at its own optimum.**  CVaR is written in
 the Rockafellar--Uryasev form
