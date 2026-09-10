@@ -12,12 +12,14 @@ editor whose edits do not reach the model is worse than none --- and
 as `Infinity`, which the browser refuses to parse.
 """
 
+import errno
 import json
 import math
 import os
 import pathlib
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import threading
@@ -54,6 +56,7 @@ from difflow.gui import (
     context,
     make_server,
     sensitivity,
+    server,
 )
 
 SPECIES = ["water", "ethanol"]
@@ -2021,6 +2024,104 @@ class TestConsoleFigures:
     def test_an_image_survives_the_json_the_server_sends(self):
         drawn = console.image(b"\x89PNG\r\n\x1a\n binary \xff\xfe")
         assert json.loads(json.dumps(drawn)) == drawn
+
+
+# =============================================================================
+# Starting up
+# =============================================================================
+
+
+class TestPortInUse:
+    """Bind failures are the one startup error a user meets by accident.
+
+    Leaving them raw means a traceback out of ``socketserver`` whose only
+    content is ``[Errno 48] Address already in use`` --- no port, no
+    program name, no next move.
+    """
+
+    def taken_port(self):
+        """A port with a live listener on it, released at teardown."""
+        held = socket.socket()
+        held.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        held.bind((gui.HOST, 0))
+        held.listen(1)
+        return held, held.getsockname()[1]
+
+    def test_a_taken_port_is_a_message_and_an_exit_code(self, capsys):
+        held, port = self.taken_port()
+        try:
+            status = server.main(["--port", str(port), "--no-browser"])
+        finally:
+            held.close()
+
+        assert status == 1, "a failed start must not report success"
+        said = capsys.readouterr().err
+        assert str(port) in said, "the reader needs to know which port"
+        assert "--port" in said, "and how to get past it"
+
+    def test_the_suggested_port_steps_over_a_run_of_busy_ones(self):
+        """A suggestion that fails the same way is worse than none.
+
+        The run has to be longer than one, or a naive ``port + 1`` passes
+        this by luck: the next port is usually free anyway.
+        """
+        held, port = self.taken_port()
+        # Held open for the length of the test. A socket that goes out of
+        # scope is collected and its port freed, which quietly empties the
+        # run this test is built on.
+        holding = [held]
+        busy = {port}
+        try:
+            for offset in (1, 2, 3):
+                neighbour = socket.socket()
+                neighbour.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                try:
+                    neighbour.bind((gui.HOST, port + offset))
+                    neighbour.listen(1)
+                except OSError:       # already someone else's; still busy
+                    neighbour.close()
+                else:
+                    holding.append(neighbour)
+                busy.add(port + offset)
+            assert len(busy) > 1, "the point of the test is a run, not one port"
+
+            suggested = server.free_port_near(port)
+            assert suggested not in busy, (
+                f"suggested {suggested}, which is in the busy run {sorted(busy)}")
+            probe = socket.socket()
+            try:
+                probe.bind((gui.HOST, suggested))   # the point: this works
+            finally:
+                probe.close()
+        finally:
+            for sock in holding:
+                sock.close()
+
+    def test_the_message_names_the_way_in_that_was_used(self):
+        """Two entry points; naming the other one sends the reader in a circle."""
+        said = server.port_in_use_message(8756, "python -m difflow.gui")
+        assert "python -m difflow.gui --port" in said
+        assert "difflow gui --port" not in said
+
+    def test_another_oserror_still_raises(self, monkeypatch):
+        """Only the actionable one is swallowed; the rest keep their traceback."""
+        def refuse(**kwargs):
+            raise OSError(errno.EACCES, "permission denied")
+
+        monkeypatch.setattr(server, "serve", refuse)
+        with pytest.raises(OSError) as caught:
+            server.main(["--no-browser"])
+        assert caught.value.errno == errno.EACCES
+
+    def test_reuse_address_is_already_on(self):
+        """So the bind refusal is a live listener, not a lingering TIME_WAIT.
+
+        Pinning this down because the tempting "fix" for Errno 48 is to set
+        ``SO_REUSEADDR``, and it is set. If a future stdlib stops setting it
+        the diagnosis above changes and this should be read again.
+        """
+        from http.server import ThreadingHTTPServer
+        assert ThreadingHTTPServer.allow_reuse_address
 
 
 if __name__ == "__main__":
