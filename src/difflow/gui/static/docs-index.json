@@ -1,5 +1,5 @@
 {
- "n_sections": 759,
+ "n_sections": 760,
  "sections": [
   {
    "anchor": "overview",
@@ -2057,7 +2057,14 @@
    "heading": "Thermodynamics",
    "path": "Streams and Flowsheets > Saving and Loading Flowsheets > Thermodynamics",
    "source": "streams-and-flowsheets.md",
-   "text": "About half the core units need a `thermo` or `eos` object in the constructor, not just a `Params`. `IdealThermo` is written and rebuilt automatically. Anything else is refused on write, and can be supplied on load instead:\n\n```python\nfs2 = serialize.load(\"plant.json\", extras={\"flash\": {\"thermo\": my_thermo}})\n```\n\n`extras` also *overrides* a stored thermo, which is the way to reload a saved flowsheet against a different property package.\n\n---"
+   "text": "About half the core units need a `thermo` or `eos` object in the constructor, not just a `Params`. `IdealThermo` is written and rebuilt automatically. Anything else is refused on write, and can be supplied on load instead:\n\n```python\nfs2 = serialize.load(\"plant.json\", extras={\"flash\": {\"thermo\": my_thermo}})\n```\n\n`extras` also *overrides* a stored thermo, which is the way to reload a saved flowsheet against a different property package."
+  },
+  {
+   "anchor": "units-that-build-their-own-params",
+   "heading": "Units that build their own `Params`",
+   "path": "Streams and Flowsheets > Saving and Loading Flowsheets > Units that build their own `Params`",
+   "source": "streams-and-flowsheets.md",
+   "text": "Most units are constructed as `Unit(Params(...), thermo)`, but a substantial minority take their numbers as plain constructor arguments and build the `Params` themselves \u2014 `Compressor(ratio)`, `FlowSplit(w)`, `GasPipe(beta)`, and most of the gas plugin. Those numbers are written under `params`, because that is where the built unit keeps them, and they are passed straight back to the constructor on load. Nothing extra is needed:\n\n```python\nfs = Flowsheet(species_order=[\"CH4\"])\nfs.add_unit(Unit(\"boost\", Compressor(ratio=1.3), [\"a\"], [\"b\"]))\nserialize.from_json(serialize.to_json(fs))   # ratio comes back as 1.3\n```\n\nAn argument that is *not* data \u2014 `Mixer(species_order)`, a `thermo` \u2014 still travels under `constructor`, and the two channels compose: `CompressorBoost(ratio, direction)` carries `ratio` by the first road and `direction` by the second.\n\nOnly *required* constructor arguments are carried. An optional one left at its default is not written, so a unit that was built with a non-default optional argument comes back with the default; pass it on load with `extras=` when it matters.\n\n---"
   },
   {
    "anchor": "generating-python",
