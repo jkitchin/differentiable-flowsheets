@@ -33,7 +33,7 @@ All functions are JAX-compatible for automatic differentiation.
 """
 
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, replace as dataclasses_replace
 from typing import Literal
 
 import jax.numpy as jnp
@@ -198,6 +198,26 @@ class REEDistribution:
             (and, above 1.94 M for Davies, sign-inverted) coefficients. Default
             False. Setting this is the explicit request that makes an inverted
             ``D`` reachable; nothing else does (#194).
+        coefficient_overrides: Per-element replacements for the tabulated
+            correlation coefficients, ``{element: {"a": ..., "b": ...}}``, with
+            any of ``a``, ``b``, ``c``, ``d``. Coefficients not named keep
+            their database values, and the override applies to whichever
+            mechanism block is active.
+
+            **These may be JAX tracers**, which is the point of the field. The
+            tabulated coefficients are regression outputs with standard errors
+            of a few tenths of a log unit, and ``a`` is ``log10(D)`` at the
+            reference condition, so an uncertainty of 0.2 in ``a`` is a factor
+            of 1.6 in ``D`` and a comparable factor in the separation factor
+            between two neighbouring elements. Being able to put a distribution
+            on those coefficients --- and differentiate through it --- is what
+            :mod:`difflow.stochastic` and :mod:`difflow.uncertainty` need, and
+            reaching into ``_ext_data`` to do it was the alternative.
+
+            The overrides go in *unvalidated* beyond their names: a traced
+            value cannot be range-checked, and a coefficient set that puts
+            ``D`` somewhere physically odd is exactly what a tail scenario is
+            supposed to look like.
 
     Example:
         >>> # Cation exchange: driven by pH
@@ -220,6 +240,10 @@ class REEDistribution:
     activity_model: str = "davies"  # see ACTIVITY_MODELS (#194)
     on_out_of_range: OutOfRangeAction = "warn"  # (#194)
     extrapolate_activity_model: bool = False  # (#194) opt in to raw Davies
+    # Per-element correlation-coefficient overrides, possibly traced. See the
+    # class docstring; this is the supported way to put an uncertainty
+    # distribution on D.
+    coefficient_overrides: dict | None = None
 
     def __post_init__(self):
         """Load extractant data and resolve/validate the mechanism (#195)."""
@@ -259,6 +283,7 @@ class REEDistribution:
         # stage loop cannot spam (#194); the check itself is Python-level.
         self._reported: set = set()
 
+        self._validate_overrides()
         self._check_medium()
         self._validate_mechanism_data(self.nitrate_conc)
 
@@ -419,6 +444,31 @@ class REEDistribution:
                 f"function of. {hint}"
             )
 
+    def _validate_overrides(self) -> None:
+        """Check override *names* only; values may be tracers.
+
+        Raises:
+            ValueError: If an override names an element this instance does not
+                carry, or a coefficient that is not one of ``a``/``b``/``c``/
+                ``d``.
+        """
+        if not self.coefficient_overrides:
+            return
+        fields = {"a", "b", "c", "d"}
+        for elem, block in self.coefficient_overrides.items():
+            if elem not in self.elements:
+                raise ValueError(
+                    f"coefficient_overrides names element {elem!r}, which "
+                    f"this REEDistribution does not carry "
+                    f"({list(self.elements)})."
+                )
+            unknown = set(block) - fields
+            if unknown:
+                raise ValueError(
+                    f"coefficient_overrides[{elem!r}] carries {sorted(unknown)}"
+                    f"; the correlation has coefficients {sorted(fields)}."
+                )
+
     def _coefficients(self, element: str) -> PHCoefficients:
         """Coefficient record for ``element`` under the active mechanism.
 
@@ -448,13 +498,20 @@ class REEDistribution:
                 f"mechanism={self.mechanism!r}."
             )
         try:
-            return block[element]
+            coeffs = block[element]
         except KeyError:
             raise KeyError(
                 f"Extractant {self.extractant!r} has no {block_name} entry for "
                 f"element {element!r} (mechanism={self.mechanism!r}). "
                 f"Available: {sorted(block)}."
             ) from None
+        override = (self.coefficient_overrides or {}).get(element)
+        if override:
+            # dataclasses.replace on a frozen PHCoefficients: the substituted
+            # value flows straight into log10(D) = a + b*x + c*x^2, so a tracer
+            # here differentiates and vmaps like any other input.
+            coeffs = dataclasses_replace(coeffs, **override)
+        return coeffs
 
     # -------------------------------------------------------------------
     # Activity correction (#194)

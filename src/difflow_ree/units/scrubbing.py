@@ -43,6 +43,13 @@ class ScrubberParams(ParamsMixin):
         mechanism: Explicit extraction-mechanism override passed to
             REEDistribution ("cation_exchange" / "solvating"). None takes the
             mechanism from the extractant record (#195).
+        coefficient_overrides: Per-element replacements for the tabulated
+            log10(D) correlation coefficients, ``{element: {"a": ...}}``,
+            passed straight to
+            :class:`~difflow_ree.equilibrium.distribution.REEDistribution`.
+            May be JAX tracers: this is the supported way to put an
+            uncertainty distribution on D and differentiate through it. See
+            that class for the full description.
     """
     n_stages: int | float | Array
     extractant: str
@@ -54,6 +61,9 @@ class ScrubberParams(ParamsMixin):
     scrub_type: Literal["acid", "ree", "water"] = "acid"
     nitrate_conc: float | None = None  # see #195
     mechanism: str | None = None  # see #195
+    # Per-element log10(D) coefficient overrides, possibly traced; passed to
+    # REEDistribution. The supported way to put uncertainty on D.
+    coefficient_overrides: dict | None = None
 
 
 class REEScrubber:
@@ -113,6 +123,7 @@ class REEScrubber:
             concentration=params.extractant_conc,
             nitrate_conc=params.nitrate_conc,
             mechanism=params.mechanism,
+            coefficient_overrides=params.coefficient_overrides,
         )
 
     def __call__(
