@@ -12,17 +12,20 @@ import errno
 import hmac
 import html
 import json
+import re
 import secrets
 import socket
+import subprocess
 import sys
 import threading
+import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
-from difflow.gui import assistant
+from difflow.gui import assistant, doclinks
 from difflow.gui.session import FlowsheetSession
 
 #: The front end, as built files on disk rather than a string literal in
@@ -42,6 +45,32 @@ DOCS_PREFIX = "/api/docs/"
 #: the ``<meta>`` tag it reads the value out of.
 TOKEN_HEADER = "X-Difflow-Token"
 TOKEN_META = "difflow-token"
+
+#: How often the page says it is still there, in seconds. Read by the
+#: front end out of ``/api/about``, so the two cannot disagree.
+HEARTBEAT_SECONDS = 15
+
+#: How long after the last word from any page before the editor concludes
+#: nobody is watching and stops.
+#:
+#: Generous on purpose, and the reason is the browser rather than the
+#: network: a background tab has its timers throttled to roughly one
+#: firing a minute, so a grace of a few heartbeats would shut the editor
+#: down every time the user looked at something else. The prompt path
+#: for an ordinary close is ``/api/bye``, which the page sends as it
+#: unloads; this is the fallback for the cases that send nothing --- a
+#: crashed browser, a killed tab, a laptop lid.
+IDLE_GRACE_SECONDS = 90
+
+#: Where the project lives, for the links in the editor's header. Read
+#: from the installed metadata so ``pyproject.toml`` stays the one place
+#: they are written down, with these as the answer for a source tree
+#: that was never installed.
+FALLBACK_LINKS = {
+    "repository": "https://github.com/jkitchin/differentiable-flowsheets",
+    "documentation": "https://kitchingroup.cheme.cmu.edu/differentiable-flowsheets/",
+    "issues": "https://github.com/jkitchin/differentiable-flowsheets/issues",
+}
 
 #: Host names that can only mean this machine. A DNS-rebinding attack
 #: reaches the loopback port with the *attacker's* name in ``Host``, so
@@ -159,6 +188,143 @@ def _static_file(path: str) -> tuple[bytes, str] | None:
     return candidate.read_bytes(), content
 
 
+def links() -> dict[str, str]:
+    """The project's own URLs, for the header of the editor.
+
+    Read from the installed distribution's metadata rather than written
+    out here, so ``[project.urls]`` in ``pyproject.toml`` stays the one
+    place they live and a move of the documentation does not need a
+    second edit nobody remembers to make. A source tree that was never
+    installed has no metadata to read, and gets :data:`FALLBACK_LINKS`.
+    """
+    try:
+        from importlib.metadata import metadata
+
+        found = {}
+        for entry in metadata("difflow").get_all("Project-URL") or ():
+            name, _, url = entry.partition(",")
+            found[name.strip().lower()] = url.strip()
+    except Exception:                            # not installed, or no metadata
+        return dict(FALLBACK_LINKS)
+    return {key: found.get(key) or fallback
+            for key, fallback in FALLBACK_LINKS.items()}
+
+
+def version() -> str:
+    """The installed difflow version, or ``""`` if there is none to read."""
+    try:
+        from importlib.metadata import version as _version
+
+        return _version("difflow")
+    except Exception:
+        return ""
+
+
+class Lifetime:
+    """Who is still watching the editor, and therefore whether to stop.
+
+    The editor is a local server behind a browser tab, and the two are
+    one tool as far as the user is concerned: closing the tab ought to
+    give the port back. Nothing in HTTP says when a page has gone, so
+    the page says so itself --- a ``/api/ping`` every
+    :data:`HEARTBEAT_SECONDS` while it is open, and an ``/api/bye`` as
+    it unloads.
+
+    Clients are counted individually rather than as a number still open.
+    Two tabs on the same flowsheet is an ordinary thing to do, and a
+    counter gets it wrong in both directions: a reload increments before
+    it decrements, and a tab that dies without unloading never
+    decrements at all. A dict keyed by a per-page id has neither
+    problem, because an id that stops arriving simply ages out.
+
+    Nothing expires until at least one page has checked in. A server
+    started with ``--no-browser`` and left for a minute before anyone
+    opens it must still be there when they do, and a test that drives
+    the routes directly and never pretends to be a page must not have
+    the server disappear underneath it.
+
+    Args:
+        grace: seconds of silence from every client before the editor
+            concludes it is unwatched.
+        clock: the monotonic clock to read, injectable for tests.
+    """
+
+    def __init__(self, grace: float = IDLE_GRACE_SECONDS, clock=time.monotonic):
+        self.grace = grace
+        self.clock = clock
+        self._lock = threading.Lock()
+        self._seen: dict[str, float] = {}
+        self._arrived = False
+        self._asked = False
+
+    def ping(self, client: str) -> None:
+        """Note that ``client`` is still there."""
+        with self._lock:
+            self._seen[client or "-"] = self.clock()
+            self._arrived = True
+
+    def bye(self, client: str) -> None:
+        """Note that ``client`` has gone.
+
+        The page sends this as it unloads, which is what makes the port
+        come back in the moment rather than after :attr:`grace`. It is
+        not required: a client that vanishes without a word ages out.
+        """
+        with self._lock:
+            self._seen.pop(client or "-", None)
+
+    def quit(self) -> None:
+        """Stop, whoever is still watching. The Quit button."""
+        with self._lock:
+            self._asked = True
+
+    @property
+    def asked(self) -> bool:
+        """Whether someone pressed Quit."""
+        with self._lock:
+            return self._asked
+
+    def expired(self) -> bool:
+        """Whether the editor should now stop."""
+        with self._lock:
+            if self._asked:
+                return True
+            if not self._arrived:
+                return False
+            now = self.clock()
+            self._seen = {client: last for client, last in self._seen.items()
+                          if now - last <= self.grace}
+            return not self._seen
+
+
+def watch(server, lifetime: Lifetime, poll: float = 1.0,
+          stop: threading.Event | None = None) -> threading.Thread:
+    """Stop ``server`` once ``lifetime`` says nobody is watching.
+
+    A thread rather than a check inside a route, because the case that
+    matters most --- the tab is gone --- is precisely the case where no
+    further request arrives to do the checking.
+
+    ``shutdown`` is called from here and not from the route that asked
+    for it: it blocks until ``serve_forever`` returns, and a handler
+    that waits for the loop it is itself running in never answers.
+
+    Returns:
+        The started daemon thread, so a caller can join it.
+    """
+    stop = threading.Event() if stop is None else stop
+
+    def loop():
+        while not stop.wait(poll):
+            if lifetime.expired():
+                server.shutdown()
+                return
+
+    thread = threading.Thread(target=loop, name="difflow-gui-watch", daemon=True)
+    thread.start()
+    return thread
+
+
 #: Both ends of a wire, named the way the canvas names them.
 _WIRE = ("source", "outlet", "target", "inlet")
 
@@ -176,6 +342,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     session: FlowsheetSession = None            # set by :func:`make_server`
     token: str = ""                             # likewise
+    lifetime: "Lifetime" = None                 # likewise
     server_version = "difflow-gui"
 
     def log_message(self, *args):                # quiet by default
@@ -245,6 +412,17 @@ class _Handler(BaseHTTPRequestHandler):
             "/api/assistant": lambda: self._send(
                 {"ok": True, "configured": assistant.configured(),
                  "model": assistant.DEFAULT_MODEL}),
+            # Who we are and where to read more. The page draws its
+            # header links from this rather than carrying the URLs in
+            # the bundle, so a move of the documentation is a metadata
+            # edit and not a rebuild of the front end. `heartbeat` is
+            # here for the same reason: the interval the page keeps and
+            # the grace the server allows are two halves of one
+            # agreement, and only one of them should be written down.
+            "/api/about": lambda: self._send(
+                {"ok": True, "version": version(), "links": links(),
+                 "heartbeat": HEARTBEAT_SECONDS,
+                 "docs_index": doclinks.DOCS_BASE}),
         }
         handler = routes.get(self.path)
         if handler is not None:
@@ -353,6 +531,21 @@ class _Handler(BaseHTTPRequestHandler):
             # is the canvas's to change.
             if path == "/api/inlet":
                 return session.add_inlet(payload.get("unit", ""))
+            # The three lifetime routes. All POST, so `_guard` runs on
+            # them: a GET that stops the server is a link an unrelated
+            # page could put in an <img> tag.
+            if path == "/api/ping":
+                self.lifetime.ping(str(payload.get("client") or ""))
+                return {"ok": True}
+            if path == "/api/bye":
+                self.lifetime.bye(str(payload.get("client") or ""))
+                return {"ok": True}
+            if path == "/api/quit":
+                self.lifetime.quit()
+                # Answered before anything stops. The watcher does the
+                # shutdown a moment later, so the page gets a reply
+                # rather than a dropped connection to report.
+                return {"ok": True, "stopped": True}
 
         if verb == "PATCH":
             if path.startswith(unit_path):
@@ -404,19 +597,27 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 def make_server(session: FlowsheetSession, port: int = DEFAULT_PORT,
-                token: str | None = None):
+                token: str | None = None, lifetime: Lifetime | None = None):
     """Build the HTTP server without starting it.
 
     Useful for tests, which want a port and a shutdown handle rather
     than a blocking call. The token is minted here unless one is given,
     and is left on the returned server as ``server.token`` so a caller
     that skipped the page can still speak to it.
+
+    A :class:`Lifetime` is attached either way, because the routes that
+    use it must answer whether or not anything is watching it. What a
+    test does *not* get is :func:`watch` --- building a server does not
+    start a thread that can stop it, so nothing shuts down behind a
+    caller that only wanted a port.
     """
     token = mint_token() if token is None else token
+    lifetime = Lifetime() if lifetime is None else lifetime
     handler = type("_BoundHandler", (_Handler,),
-                   {"session": session, "token": token})
+                   {"session": session, "token": token, "lifetime": lifetime})
     server = ThreadingHTTPServer((HOST, port), handler)
     server.token = token
+    server.lifetime = lifetime
     return server
 
 
@@ -427,8 +628,15 @@ def serve(
     port: int = DEFAULT_PORT,
     open_browser: bool = True,
     token: str | None = None,
+    stay: bool = False,
 ) -> None:
-    """Run the editor until interrupted.
+    """Run the editor until the page goes away, or until interrupted.
+
+    Three things end it, and they are the same ending: the Quit button
+    in the header, the last page closing, or ctrl-c here. The first two
+    are the point --- the editor is a browser tab as far as the user is
+    concerned, and a tab that has been closed should not still be
+    holding port 8756 when they start the next one.
 
     Args:
         flowsheet: the flowsheet to edit. If omitted and ``path``
@@ -439,18 +647,34 @@ def serve(
         token: a fixed :data:`TOKEN_HEADER` value. Only useful for
             front-end development, where the page is served by vite on
             another port and cannot be given a freshly minted one.
+        stay: keep serving after the last page closes. For a session
+            driven from a script or a notebook rather than from the
+            page, where there may be no tab open at all and the Quit
+            button is not the thing that ends it.
     """
     session = FlowsheetSession(flowsheet, path)
     server = make_server(session, port, token)
     url = f"http://{HOST}:{port}/"
-    print(f"difflow editor on {url}   (ctrl-c to stop)")
+    how = "ctrl-c to stop" if stay else "Quit, or close the tab, or ctrl-c"
+    print(f"difflow editor on {url}   ({how})")
     if open_browser:
         threading.Timer(0.4, lambda: webbrowser.open(url)).start()
+    stop = threading.Event()
+    if not stay:
+        watch(server, server.lifetime, stop=stop)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         print("\nstopping")
+    else:
+        # serve_forever returned, so the watcher called shutdown. Say
+        # which of the two reasons it was: a user who pressed Quit knows
+        # already, but a user who closed a tab they had forgotten about
+        # is owed the sentence.
+        print("stopped: quit from the editor" if server.lifetime.asked
+              else "stopped: the editor page was closed")
     finally:
+        stop.set()
         server.server_close()
 
 
@@ -475,6 +699,132 @@ def free_port_near(port: int, tries: int = 20) -> int:
     return port + 1
 
 
+def listener_on(port: int, host: str = HOST, timeout: float = 2.0) -> dict | None:
+    """The process listening on ``host:port``, as far as it can be found.
+
+    "Something is using the port" is only half a sentence: the reader's
+    next move is to look at that process and decide whether to kill it,
+    and they should not have to go and find out what it is. Nine times
+    in ten it is their own forgotten editor and the answer is one
+    ``kill`` away.
+
+    ``lsof`` is asked first and ``ss`` second, which between them covers
+    macOS and Linux; both are read for a PID, and neither is required.
+    A machine with neither, a container without ``/proc``, or a listener
+    owned by another user simply yields ``None`` --- the caller then
+    says what it always said, which is still true.
+
+    Nothing here is fatal: this runs on the way to an error message, and
+    an error message that raises is worse than an incomplete one.
+
+    Args:
+        port: the TCP port to look up.
+        host: the address it is bound to.
+        timeout: seconds to wait for the helper to answer.
+
+    Returns:
+        ``{"pid": int, "name": str, "command": str, "mine": bool}``, or
+        ``None`` if nothing could be established. ``mine`` is whether
+        the process belongs to this user, since only then is ``kill``
+        advice worth giving.
+    """
+    found = _lsof_listener(port, host, timeout) or _ss_listener(port, timeout)
+    if found is None:
+        return None
+    pid = found["pid"]
+    found.setdefault("command", "")
+    found["command"] = found["command"] or _command_line(pid, timeout)
+    found["mine"] = _is_mine(pid)
+    return found
+
+
+def _run(argv: list[str], timeout: float) -> str:
+    """``argv``'s stdout, or ``""`` for anything at all going wrong."""
+    try:
+        done = subprocess.run(argv, capture_output=True, text=True,
+                              timeout=timeout, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return done.stdout or ""
+
+
+def _lsof_listener(port: int, host: str, timeout: float) -> dict | None:
+    """Read a listening PID out of ``lsof``. macOS, and most Linux."""
+    # -nP so it does not stop to resolve names and services; -F asks for
+    # the machine-readable form, one field per line tagged by its first
+    # character, which is the only lsof output worth parsing.
+    out = _run(["lsof", "-nP", f"-iTCP@{host}:{port}", "-sTCP:LISTEN", "-Fpc"],
+               timeout)
+    pid, name = None, ""
+    for line in out.splitlines():
+        if line.startswith("p"):
+            try:
+                pid = int(line[1:])
+            except ValueError:
+                return None
+        elif line.startswith("c"):
+            name = line[1:]
+    return None if pid is None else {"pid": pid, "name": name}
+
+
+def _ss_listener(port: int, timeout: float) -> dict | None:
+    """Read a listening PID out of ``ss``. Linux without ``lsof``."""
+    out = _run(["ss", "-lptnH", f"sport = :{port}"], timeout)
+    match = re.search(r'users:\(\("([^"]+)",pid=(\d+)', out)
+    if match is None:
+        return None
+    return {"pid": int(match.group(2)), "name": match.group(1)}
+
+
+def _command_line(pid: int, timeout: float) -> str:
+    """The process's command line, for saying *which* python it is.
+
+    A bare name is not enough here on purpose. Every difflow editor is
+    called ``python``, and so is everything else the reader is running;
+    the argument list is what tells the forgotten editor from the
+    notebook server they are about to kill by mistake.
+    """
+    out = _run(["ps", "-o", "command=", "-p", str(pid)], timeout).strip()
+    return out.splitlines()[0].strip() if out else ""
+
+
+def _is_mine(pid: int) -> bool:
+    """Whether this user could signal ``pid``.
+
+    Asked with signal 0, which checks permission and delivers nothing.
+    Only worth knowing so the message does not tell someone to run a
+    ``kill`` that will come back ``Operation not permitted``.
+    """
+    import os
+
+    try:
+        os.kill(pid, 0)
+    except PermissionError:
+        return False
+    except OSError:
+        return False
+    return True
+
+
+def _listener_lines(port: int) -> str:
+    """The part of :func:`port_in_use_message` that names the process."""
+    found = listener_on(port)
+    if found is None:
+        return ""
+    pid, name = found["pid"], found["name"] or "?"
+    lines = [f"\nIt is held by pid {pid} ({name})."]
+    command = found.get("command")
+    if command:
+        # Long enough to recognise, short enough not to wrap into
+        # unreadability on an eighty-column terminal.
+        lines.append(f"    {command[:160]}")
+    if found.get("mine"):
+        lines.append(f"\nTo stop it:\n\n    kill {pid}\n")
+    else:
+        lines.append("\nIt belongs to another user, so it is not yours to stop.\n")
+    return "\n".join(lines)
+
+
 def port_in_use_message(port: int, prog: str) -> str:
     """What to say when the bind fails because the port is taken.
 
@@ -482,7 +832,11 @@ def port_in_use_message(port: int, prog: str) -> str:
     traceback surfaces from inside ``socketserver`` with the port itself
     nowhere in it, so the reader learns that *a* socket is in use and
     nothing about which one or what to do. Nine times in ten the answer
-    is that they already have the editor open.
+    is that they already have the editor open --- so the process
+    holding it is named, with its command line and the ``kill`` that
+    would end it, because "in use by *what*" is the reader's actual
+    next question and looking it up by hand is three commands they
+    should not have to know.
 
     ``SO_REUSEADDR`` is not the fix and is not offered as one. It is
     already set --- ``HTTPServer`` turns it on --- and it only relieves a
@@ -492,6 +846,7 @@ def port_in_use_message(port: int, prog: str) -> str:
     """
     return (
         f"{prog}: port {port} on {HOST} is already in use.\n"
+        f"{_listener_lines(port)}"
         f"\n"
         f"An editor is probably running there already --- open\n"
         f"    http://{HOST}:{port}/\n"
@@ -518,6 +873,11 @@ def main(argv: list[str] | None = None, prog: str = "difflow gui") -> int:
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--no-browser", action="store_true")
     parser.add_argument(
+        "--stay", action="store_true",
+        help="keep serving after the last page closes; otherwise the "
+             "editor stops with the tab and gives the port back",
+    )
+    parser.add_argument(
         "--token",
         help="fixed CSRF token, for `npm run dev` against this server; "
              "otherwise one is minted per run and put into the page",
@@ -526,7 +886,7 @@ def main(argv: list[str] | None = None, prog: str = "difflow gui") -> int:
 
     try:
         serve(path=args.path, port=args.port, open_browser=not args.no_browser,
-              token=args.token)
+              token=args.token, stay=args.stay)
     except OSError as exc:
         # Only the one the caller can act on. Anything else --- a missing
         # flowsheet, a permission --- still gets its traceback, which for

@@ -54,6 +54,7 @@ from difflow.gui import (
     _json_safe,
     console,
     context,
+    doclinks,
     edit,
     make_server,
     sensitivity,
@@ -2525,6 +2526,366 @@ class TestAUnitThatTakesAsManyInletsAsItIsGiven:
         assert solved["ok"], solved
         out = solved["streams"]["mixer_out"]
         assert out["F_water"] == pytest.approx(6.0)
+
+
+# =============================================================================
+# The editor's lifetime, and the links out to the book
+# =============================================================================
+
+
+class TestTheEditorStopsWithItsPage:
+    """Closing the tab should give the port back.
+
+    The editor is a Python process and a browser tab, and to the person
+    using it they are one thing: the complaint that started this was
+    that closing the tab left port 8756 held by a server nobody could
+    see, so the next ``difflow gui`` refused to start. Nothing in HTTP
+    says when a page has gone, so the page says so --- a ping while it
+    is open, a farewell as it unloads --- and :class:`server.Lifetime`
+    is what listens.
+    """
+
+    def clock(self):
+        """A hand-wound monotonic clock, so no test waits out a grace."""
+        now = [1000.0]
+        return now, lambda: now[0]
+
+    def test_nothing_expires_before_a_page_has_ever_checked_in(self):
+        """``--no-browser``, then a coffee, then open it. It must be there.
+
+        Also the invariant that keeps every other test in this file
+        alive: they drive the routes directly and never pretend to be a
+        page, and the server must not vanish underneath them.
+        """
+        now, clock = self.clock()
+        life = server.Lifetime(grace=10, clock=clock)
+        now[0] += 10_000
+        assert not life.expired()
+
+    def test_a_page_that_stops_pinging_ages_out(self):
+        now, clock = self.clock()
+        life = server.Lifetime(grace=10, clock=clock)
+        life.ping("tab-a")
+        now[0] += 9
+        assert not life.expired(), "still inside the grace"
+        now[0] += 2
+        assert life.expired()
+
+    def test_a_second_tab_keeps_the_editor_open(self):
+        """Two tabs on one flowsheet is ordinary, and a counter gets it wrong.
+
+        A reload increments before it decrements, and a tab that dies
+        without unloading never decrements at all. Ids simply age out.
+        """
+        now, clock = self.clock()
+        life = server.Lifetime(grace=10, clock=clock)
+        life.ping("tab-a")
+        life.ping("tab-b")
+        life.bye("tab-a")
+        now[0] += 5
+        life.ping("tab-b")
+        now[0] += 6
+        assert not life.expired(), "tab-b is still there"
+        life.bye("tab-b")
+        assert life.expired()
+
+    def test_the_farewell_is_what_makes_it_prompt(self):
+        """Without it the port comes back a grace later; with it, at once."""
+        now, clock = self.clock()
+        life = server.Lifetime(grace=90, clock=clock)
+        life.ping("tab-a")
+        assert not life.expired()
+        life.bye("tab-a")
+        assert life.expired(), "no waiting out 90 seconds for a closed tab"
+
+    def test_quit_does_not_wait_for_anyone(self):
+        now, clock = self.clock()
+        life = server.Lifetime(grace=10_000, clock=clock)
+        life.ping("tab-a")
+        life.quit()
+        assert life.expired()
+        assert life.asked, "serve() says which of the two endings it was"
+
+    def test_a_ping_from_a_client_that_had_gone_brings_it_back(self):
+        """A tab restored from the back/forward cache is a live tab again."""
+        now, clock = self.clock()
+        life = server.Lifetime(grace=10, clock=clock)
+        life.ping("tab-a")
+        life.bye("tab-a")
+        assert life.expired()
+        life.ping("tab-a")
+        assert not life.expired()
+
+    def test_the_routes_reach_the_lifetime(self, client):
+        """ping / bye / quit, over the wire, as the page sends them."""
+        assert client.post("/api/ping", {"client": "tab-a"})[1]["ok"]
+        assert not client.server.lifetime.expired()
+        assert client.post("/api/bye", {"client": "tab-a"})[1]["ok"]
+        assert client.server.lifetime.expired()
+
+        status, answer = client.post("/api/quit")
+        assert status == 200, "answered before anything stops, or the page sees a drop"
+        assert answer == {"ok": True, "stopped": True}
+        assert client.server.lifetime.asked
+
+    def test_stopping_the_editor_is_not_a_GET(self, client):
+        """A GET that stops the server is a link another page could embed."""
+        for path in ("/api/quit", "/api/ping", "/api/bye"):
+            status, _ = client.get(path)
+            assert status == 404, f"{path} answered a GET"
+        assert not client.server.lifetime.asked
+
+    def test_a_page_from_nowhere_cannot_stop_the_editor(self, client):
+        """The token guard covers these as it covers every other mutation."""
+        request = urllib.request.Request(
+            client.base + "/api/quit", data=b"{}", method="POST",
+            headers={"Content-Type": "application/json"},   # no token
+        )
+        with pytest.raises(urllib.error.HTTPError) as caught:
+            urllib.request.urlopen(request)
+        assert caught.value.code == 403
+        assert not client.server.lifetime.asked
+
+    def test_the_watcher_shuts_the_server_down(self):
+        """End to end: nobody is watching, so the port comes back."""
+        session = FlowsheetSession(None, None)
+        life = server.Lifetime(grace=0.05)
+        srv = server.make_server(session, port=0, lifetime=life)
+        port = srv.server_address[1]
+        thread = threading.Thread(target=srv.serve_forever, daemon=True)
+        thread.start()
+        stop = threading.Event()
+        try:
+            server.watch(srv, life, poll=0.02, stop=stop)
+            life.ping("tab-a")
+            life.bye("tab-a")
+            thread.join(timeout=5)
+            assert not thread.is_alive(), "the watcher never called shutdown"
+        finally:
+            stop.set()
+            srv.server_close()
+
+        rebind = socket.socket()
+        rebind.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            rebind.bind((gui.HOST, port))       # the whole point of the feature
+        finally:
+            rebind.close()
+
+    def test_building_a_server_does_not_start_anything_that_can_stop_it(self):
+        """``make_server`` is what the tests use; it must not grow a watchdog."""
+        before = {t.name for t in threading.enumerate()}
+        srv = server.make_server(FlowsheetSession(None, None), port=0)
+        try:
+            after = {t.name for t in threading.enumerate()}
+            assert not [n for n in after - before if "watch" in n]
+            assert srv.lifetime is not None, "the routes still need one"
+        finally:
+            srv.server_close()
+
+    def test_the_page_and_the_server_agree_on_the_interval(self, client):
+        """One agreement, written down once. The page reads its half here."""
+        status, about = client.get_json("/api/about")
+        assert status == 200
+        assert about["heartbeat"] == server.HEARTBEAT_SECONDS
+        assert server.IDLE_GRACE_SECONDS > 4 * server.HEARTBEAT_SECONDS, (
+            "a background tab has its timers throttled to about one firing a "
+            "minute; a tight grace shuts the editor down when the user looks "
+            "at another tab"
+        )
+
+
+class TestTheHeaderLinks:
+    """Where to read more, without leaving the editor to go and find it."""
+
+    def test_about_carries_the_project_urls(self, client):
+        status, about = client.get_json("/api/about")
+        assert status == 200 and about["ok"]
+        for key in ("repository", "documentation"):
+            assert about["links"][key].startswith("https://"), key
+
+    def test_the_urls_come_from_the_packaging_metadata(self):
+        """So ``pyproject.toml`` stays the one place they are written down."""
+        tomllib = pytest.importorskip("tomllib")   # 3.11+; the check, not the code
+
+        declared = tomllib.loads(
+            (pathlib.Path(__file__).resolve().parents[1] / "pyproject.toml").read_text()
+        )["project"]["urls"]
+        found = server.links()
+        assert found["repository"] == declared["Repository"]
+        assert found["documentation"] == declared["Documentation"]
+
+    def test_a_tree_with_no_metadata_still_has_links(self, monkeypatch):
+        """Running from a source checkout is not a header without links."""
+        import importlib.metadata
+
+        def missing(_name):
+            raise importlib.metadata.PackageNotFoundError("difflow")
+
+        monkeypatch.setattr(importlib.metadata, "metadata", missing)
+        assert server.links() == server.FALLBACK_LINKS
+
+
+class TestWhereTheBookTalksAboutAUnit:
+    """Every palette entry offers the documentation for that unit.
+
+    Derived from ``static/docs-index.json`` rather than written down: a
+    hand-kept table of 87 operations against prose that gets reorganised
+    is wrong within a release, and wrong silently, because a link to a
+    renamed heading still returns 200 and lands at the top of the page.
+    """
+
+    def test_a_unit_with_its_own_section_lands_on_it(self):
+        url = doclinks.url_for("CSTR")
+        assert url.startswith(doclinks.DOCS_BASE)
+        assert "unit-operations-chemical.html#" in url
+        assert url.endswith("#cstr-continuous-stirred-tank-reactor")
+
+    def test_a_heading_that_says_more_than_the_name_still_matches(self):
+        """``DistillationColumn (Rigorous)`` is that unit's section."""
+        assert doclinks.url_for("DistillationColumn").endswith(
+            "#distillationcolumn-rigorous")
+
+    def test_a_unit_documented_in_a_shared_table_lands_on_the_table(self):
+        """The gas plugin documents its equation set in one reference.
+
+        The right page and the right table, if not a heading of its own
+        --- see #228, which is about giving them one.
+        """
+        url = doclinks.url_for("GasPipe")
+        assert "unit-operations-gas.html" in url
+
+    def test_an_ordinary_word_is_matched_as_well_as_a_camel_case_one(self):
+        """``Junction`` and ``Transformer`` are the names a heuristic misses.
+
+        Guarding the choice to match against the name asked about rather
+        than against a guess at what an operation name looks like.
+        """
+        assert doclinks.url_for("Transformer") is not None
+        assert doclinks.url_for("Junction") is not None
+
+    def test_a_unit_the_book_never_names_gets_no_link(self):
+        """Reported as an absence rather than papered over with a home page."""
+        assert doclinks.url_for("ShellAndTubeHX") is None
+        assert doclinks.url_for("NotAnOperationAtAll") is None
+        assert doclinks.url_for("") is None
+
+    def test_a_unit_operations_page_beats_a_passing_mention_elsewhere(self):
+        """A reader who clicked a compressor does not want the LP tutorial."""
+        url = doclinks.url_for("Compressor")
+        assert "unit-operations" in url
+
+    def test_no_link_points_at_a_page_the_book_does_not_build(self):
+        """A 404 is worse than no link, and cheap to rule out here."""
+        import yaml
+
+        root = pathlib.Path(__file__).resolve().parents[1]
+        toc = yaml.safe_load((root / "_toc.yml").read_text())
+        built = set()
+
+        def walk(node):
+            if isinstance(node, dict):
+                if "file" in node:
+                    built.add(node["file"])
+                for value in node.values():
+                    walk(value)
+            elif isinstance(node, list):
+                for item in node:
+                    walk(item)
+
+        walk(toc)
+        session = FlowsheetSession(None, None)
+        for name, entry in session.catalog().items():
+            url = entry["docs_url"]
+            if url is None:
+                continue
+            page = url[len(doclinks.DOCS_BASE):].split("#")[0]
+            assert page.removesuffix(".html") in built, (
+                f"{name} links to {page}, which _toc.yml does not build")
+
+    def test_the_catalog_carries_the_link_for_every_operation(self):
+        session = FlowsheetSession(None, None)
+        catalog = session.catalog()
+        assert len(catalog) > 50
+        linked = [n for n, e in catalog.items() if e["docs_url"]]
+        # Not "all of them": five units have no prose at all, and #228 is
+        # the ticket for writing it. This holds the line at the count.
+        assert len(catalog) - len(linked) <= 5, (
+            f"more units lost their documentation: "
+            f"{sorted(n for n, e in catalog.items() if not e['docs_url'])}")
+
+    def test_the_inspector_gets_the_same_link_as_the_palette(self):
+        session = FlowsheetSession(None, None)
+        assert (session.docs("Flash")["docs_url"]
+                == session.catalog()["Flash"]["docs_url"])
+
+    def test_a_missing_index_is_no_links_rather_than_no_editor(self, monkeypatch):
+        """A source checkout that has never run the front-end build."""
+        monkeypatch.setattr(doclinks, "INDEX",
+                            pathlib.Path("/nowhere/docs-index.json"))
+        doclinks._cached_sections.cache_clear()
+        doclinks.url_for.cache_clear()
+        try:
+            assert doclinks.url_for("CSTR") is None
+        finally:
+            doclinks._cached_sections.cache_clear()
+            doclinks.url_for.cache_clear()
+
+
+class TestSayingWhatHoldsThePort:
+    """"In use" is half a sentence; the reader's next move needs the rest."""
+
+    def test_the_message_names_the_process_holding_the_port(self):
+        held = socket.socket()
+        held.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        held.bind((gui.HOST, 0))
+        held.listen(1)
+        port = held.getsockname()[1]
+        try:
+            found = server.listener_on(port)
+            if found is None:
+                pytest.skip("no lsof or ss on this machine to ask")
+            assert found["pid"] == os.getpid(), "we are the one holding it"
+            assert found["mine"] is True
+            said = server.port_in_use_message(port, "difflow gui")
+            assert str(os.getpid()) in said
+            assert f"kill {os.getpid()}" in said
+        finally:
+            held.close()
+
+    def test_a_free_port_has_no_listener_to_name(self):
+        probe = socket.socket()
+        probe.bind((gui.HOST, 0))
+        port = probe.getsockname()[1]
+        probe.close()
+        assert server.listener_on(port, timeout=1.0) is None
+
+    def test_the_message_survives_a_machine_with_neither_helper(self, monkeypatch):
+        """It runs on the way to an error; it must not become one."""
+        monkeypatch.setattr(server, "_run", lambda argv, timeout: "")
+        said = server.port_in_use_message(8756, "difflow gui")
+        assert "8756" in said and "--port" in said
+        assert "pid" not in said, "nothing was found, so nothing is claimed"
+
+    def test_a_helper_that_hangs_or_is_missing_is_not_fatal(self, monkeypatch):
+        def explode(*args, **kwargs):
+            raise FileNotFoundError("lsof")
+
+        monkeypatch.setattr(server.subprocess, "run", explode)
+        assert server.listener_on(8756) is None
+
+    def test_ss_output_is_read_when_lsof_says_nothing(self, monkeypatch):
+        """Linux without lsof. Parsed here rather than only in the wild."""
+        sample = (
+            'LISTEN 0 5 127.0.0.1:8756 0.0.0.0:* '
+            'users:(("python3",pid=4242,fd=3))\n'
+        )
+        monkeypatch.setattr(
+            server, "_run",
+            lambda argv, timeout: sample if argv[0] == "ss" else "")
+        found = server.listener_on(8756)
+        assert found["pid"] == 4242
+        assert found["name"] == "python3"
 
 
 if __name__ == "__main__":

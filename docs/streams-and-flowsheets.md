@@ -638,6 +638,7 @@ One name is deliberately not the class name: `difflow_gas` registers a `Compress
 difflow                                   # an empty canvas, in a browser
 difflow gui plant.json                    # ...on a flowsheet
 difflow gui --port 9000 --no-browser
+difflow gui --stay                        # ...and keep serving after the tab closes
 ```
 
 The editor is what a bare `difflow` does, because it is the one thing here that has nothing to print and everything to show. `python -m difflow.gui` is the same command for an environment where the console script is not on `PATH`.
@@ -709,6 +710,88 @@ The point is not to replace writing Python. It is to make the tedious parts quic
 It is stdlib only (`http.server`), binds to `127.0.0.1`, and is meant for a single local user. It is a development tool, not a hardened service — do not expose it to a network.
 
 Because the code context runs Python, the server answers mutating requests only from the page it served. Three checks, all in `server.py`: a token minted per process, put into the page as a `<meta>` tag and required in an `X-Difflow-Token` header; an `Origin` that must be this exact host and port; and a `Host` that must be a loopback name, which is what a DNS-rebinding request cannot produce. A request that fails any of them gets a **403** — the one case where a refusal is not a 200, because it is a failure of the request rather than an answer about the flowsheet. Reads are not guarded: the page fetches the catalog before it has done anything. A client outside the browser — `curl`, or `npm run dev` proxying to this server — has to send the token too.
+
+### The editor stops when its page does
+
+A local editor that outlives its tab is a small disaster: the port stays
+held, the next `difflow gui` refuses to bind, and nothing on screen says
+why. So the page and the server keep each other alive.
+
+The page posts `POST /api/ping` every 15 seconds with an id minted for
+that page load, and `POST /api/bye` on `pagehide`. The server keeps a
+**dict keyed by page id**, not a count: a reload increments before it
+decrements, and a tab that dies without a farewell never decrements at
+all, so a counter goes wrong in both directions. A page that has not
+been heard from in `IDLE_GRACE_SECONDS` (90) is dropped, and when the
+last one goes the server shuts itself down and the port comes back. The
+grace is six heartbeats rather than two because Chrome throttles a
+background tab's timers to roughly one firing a minute — a tab left in
+the background is not a tab that has gone away.
+
+Nothing expires before the *first* check-in, so a server started with
+`--no-browser`, or one whose page is still loading, is never killed for
+having no pages yet.
+
+`pagehide` fires for the back/forward cache too, and that is not a
+departure — the tab is coming back with its JavaScript intact. So the
+farewell is suppressed when `event.persisted` is true, and `pageshow`
+re-pings.
+
+The header also carries a **Quit** button, which asks twice: one click
+arms it (`Really quit?` for four seconds), the second posts
+`POST /api/quit`, and the page draws a *stopped* overlay so a dead tab
+does not look like a live one. Either way the process prints why it
+stopped — `stopped: quit from the editor`, or `stopped: the editor page
+was closed`.
+
+`--stay` turns all of this off and serves until Ctrl-C, which is what a
+long-running or embedded server wants. `make_server` never starts the
+watcher at all: a test builds a server and drives it, and a server that
+can vanish mid-test is not testable.
+
+**When the port is taken, the message says by whom.** `lsof` first,
+`ss` second, nothing third — none of which may exist, and none of which
+is allowed to raise:
+
+```
+difflow gui: port 8756 on 127.0.0.1 is already in use.
+
+It is held by pid 62689 (python3.12).
+    difflow gui plant.json
+
+To stop it:
+
+    kill 62689
+```
+
+The `kill` line is offered only when the process is one this user can
+signal (`os.kill(pid, 0)`), because telling someone to kill another
+user's process is telling them to run a command that will fail.
+
+### Where the book talks about a unit
+
+Every operation the palette offers carries a `?` that opens this book at
+the section describing it, and the inspector's heading carries the same
+link for the selected unit. The header has `Docs` and `GitHub` beside
+the version, read from the installed package's `Project-URL` metadata
+rather than typed into the front end.
+
+The mapping is **derived, not maintained**. `difflow.gui.doclinks` reads
+`static/docs-index.json` — the same index the assistant retrieves
+against, built from `docs/` and rebuilt by CI — and for an operation
+name prefers, in order: a section whose heading *starts* with the name,
+on a unit-operations page, at the shallowest nesting, then the section
+that mentions it most. A hand-kept table of 87 operations against 760
+sections would be wrong within a release; this one cannot drift from the
+prose, because it is computed from it.
+
+It resolves 82 of the 87 registered operations. The five it does not are
+units the book does not yet describe by name, and `catalog()` reports
+`docs_url: null` for them rather than a link to something else —
+[#228](https://github.com/jkitchin/differentiable-flowsheets/issues/228)
+tracks writing the missing sections. A test asserts that every URL it
+does emit points at a page `_toc.yml` actually builds, so a renamed
+chapter fails a test rather than shipping a 404.
 
 ### The code context
 
