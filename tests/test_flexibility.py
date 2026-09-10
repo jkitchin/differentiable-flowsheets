@@ -115,17 +115,27 @@ CURVED_SET = {"a": (1.0, 0.3, 0.2), "b": (2.0, 0.5, 0.4), "c": (0.5, 0.25, 0.1)}
 CURVED_CONTROLS = {"u": (0.0, 6.0)}
 
 
-def brute_force_psi(theta_lo, theta_hi, u_lo, u_hi, f_np, n_theta=31, n_u=4001):
+def brute_force_psi(theta_lo, theta_hi, u_lo, u_hi, f_np, n_theta=31, n_u=4001,
+                    u_chunk=256):
     """``max_theta min_u max_j f_j`` on a dense grid, in plain numpy.
 
     Returns ``(psi, theta_star)``.  This is the independent oracle: it shares
     no code with the module under test.
+
+    The ``u`` axis is walked in blocks of ``u_chunk``.  ``min`` over the whole
+    grid is the min of the per-block minima, so the answer is bit-identical to
+    the one-shot form -- but the one-shot form materialises ``n_theta**3 x
+    n_u`` twice and then stacks it, which for the defaults is 3.6 GB resident
+    and enough to get the runner killed part way through the suite.
     """
     grids = [np.linspace(lo, hi, n_theta)
              for lo, hi in zip(theta_lo, theta_hi)]
     thetas = np.array(list(itertools.product(*grids)))
     us = np.linspace(u_lo, u_hi, n_u)
-    inner = np.max(f_np(thetas, us), axis=0).min(axis=1)
+    inner = np.full(thetas.shape[0], np.inf)
+    for start in range(0, n_u, u_chunk):
+        block = np.max(f_np(thetas, us[start:start + u_chunk]), axis=0).min(axis=1)
+        np.minimum(inner, block, out=inner)
     k = int(np.argmax(inner))
     return float(inner[k]), thetas[k]
 
