@@ -869,10 +869,24 @@ horizontal cut a stream crosses has the feed above it. `_is_rectifying_cut` and
 definition, and `_cmo_flows` — the only thing that builds an L/V profile — is a
 thin wrapper over them, so both solver paths read the same boundary.
 
-`q` sets those rates on both paths. On the MESH path it reaches the solver only
-through the initial profile — the energy balance brings the feed in as a
-saturated liquid whatever `q` says — so `use_mesh=True` with `q != 1` moves the
-starting point rather than the converged result.
+`q` sets those rates on both paths, and it is also the feed's thermal condition
+in the energy balance:
+
+$$h_F = q\, h^L(z, T_F) + (1 - q)\, H^V(z, T_F)$$
+
+both phase enthalpies at the feed stream's own temperature. So a
+saturated-vapour feed arrives with its latent heat already in it and the
+reboiler is not charged for it: going from `q = 1` to `q = 0` drops
+`Q_reboiler` by `F (H^V - h^L)` at the feed temperature (2.4 MW on a 100 mol/s
+equimolar benzene/toluene feed at 380 K), and moves the ~`F` step in the
+converged profile from `L` to `V` across the feed stage. The shortcut column
+forms its feed enthalpy the same way, from the `q` passed to the call.
+
+`q` must lie in `[0, 1]`; anything else raises `ValueError`. It is a fraction —
+the liquid fraction of the feed — and since both phase enthalpies are already
+evaluated at `T_feed`, a subcooled or superheated feed is expressed by giving
+the feed stream its actual temperature, not by pushing `q` outside the
+two-phase range (which would count the departure from saturation twice).
 
 `condenser_type='partial'` raises `NotImplementedError` rather than being
 silently solved as a total condenser.
