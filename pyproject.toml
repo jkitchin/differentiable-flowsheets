@@ -110,7 +110,15 @@ solvers = [
     # process model answers with nan and pounce then records as a structural
     # zero. The back ends themselves (pounce-solver[jax], discopt) stay
     # optional: install whichever one you solve with.
-    "asdex>=0.5",
+    #
+    # The marker is not optimism about 3.10 -- asdex has never published a
+    # 3.10 wheel, so `pip install difflow[solvers]` on 3.10 fails outright
+    # rather than resolving to something older, and it has been failing the
+    # 3.10 CI job since this extra was added. With the marker the extra
+    # installs everywhere and simply contributes nothing on 3.10, where
+    # difflow.solvers then raises on use -- which is what it already does
+    # for a missing asdex, deliberately, rather than going quietly dense.
+    "asdex>=0.5; python_version >= '3.11'",
 ]
 cuda12 = [
     "jax[cuda12]>=0.4.0",
