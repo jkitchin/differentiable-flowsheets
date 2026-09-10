@@ -866,11 +866,11 @@ V_j = \begin{cases} V' = V - (1-q)F & j < n_F \\ V = (R+1) D & j \ge n_F \end{ca
 That is one convention, not two: both flows follow from asking whether the
 horizontal cut a stream crosses has the feed above it. `_is_rectifying_cut` and
 `_cmo_section_flows` in `difflow/units/distillation.py` are the single
-definition, read by both the CMO (Lewis-Matheson) sweep and the MESH flow
-initialisation.
+definition, and `_cmo_flows` — the only thing that builds an L/V profile — is a
+thin wrapper over them, so both solver paths read the same boundary.
 
-`q` decides the answer on the CMO path. On the MESH path it reaches the solver
-only through that initial profile — the energy balance brings the feed in as a
+`q` sets those rates on both paths. On the MESH path it reaches the solver only
+through the initial profile — the energy balance brings the feed in as a
 saturated liquid whatever `q` says — so `use_mesh=True` with `q != 1` moves the
 starting point rather than the converged result.
 
@@ -916,8 +916,13 @@ the boiling range of the distillate itself:
 
 | distillate | top stage $T$ | condenser $T$ | gap |
 |---|---|---|---|
-| 99.6 % benzene / toluene, 1 atm | 369.1 K | 368.7 K | 0.3 K |
-| C3-C8 cut, 10 bar (Peng-Robinson) | 401.7 K | 363.3 K | 38 K |
+| 99.9999 % benzene / toluene, 1 atm | 368.665 K | 368.665 K | 0.0001 K |
+| C3-C8 cut, 10 bar (Peng-Robinson) | 400.6 K | 362.9 K | 38 K |
+
+A one-component distillate has no boiling range and so no gap, which is why the
+binary row reads as zero: at $\alpha \approx 8$ over 15 stages that column takes
+27 µmol/s of toluene overhead and nothing more. The gap is a property of the
+cut, not of the column.
 
 The same distinction runs through the energy balance: $Q_{cond}$ takes the top
 stage vapor down to that condensed state, and the reflux re-enters the top
@@ -987,6 +992,57 @@ whole range -- and only then runs Newton on the residual itself. This is why a
 column can be handed a feed far below its own boiling point and still find its
 ends.
 
+#### Solver Paths
+
+Both paths run the Wang-Henke bubble-point iteration, which solves the
+component material balances for the whole column as a tridiagonal system.
+They differ only in where the L/V profiles come from:
+
+| `use_mesh` | L/V profiles | Cost |
+|---|---|---|
+| `True` (default) | corrected each iteration by the stage enthalpy balances | ~30 % more |
+| `False` | frozen at their constant-molar-overflow values, $L' = L + qF$ and $V' = V - (1-q)F$ | cheaper |
+
+The CMO path is a shortcut in the *energy* balance, not in the material
+balance: because the tridiagonal solve is the component balance, summing it
+over the stages telescopes to $D x_{D,i} + B x_{B,i} = F z_i$. Both paths
+satisfy that only to within their iteration count, so both report the
+residual:
+
+```python
+from difflow import IdealThermo, make_stream
+from difflow.database import get_species_data
+from difflow.units.distillation import DistillationColumn, DistillationColumnParams
+
+names = ['n_pentane', 'n_hexane', 'n_heptane']
+column = DistillationColumn(
+    DistillationColumnParams(species_order=names, n_stages=20, feed_stage=10,
+                             P=101325.0),
+    thermo=IdealThermo({s: get_species_data(s) for s in names}),
+)
+feed = make_stream({'n_pentane': 30.0, 'n_hexane': 40.0, 'n_heptane': 30.0},
+                   T=360.0, P=101325.0)
+
+distillate, bottoms, info = column(feed, R=2.0, B_spec=40.0, use_mesh=False)
+print(info['balance_error'])      # (n_species,) D_i + B_i - F_i, mol/s
+print(info['balance_error_rel'])  # max |error| / F_total
+```
+
+If `balance_error_rel` is larger than your problem tolerates, raise `cmo_iter`
+(default 30). The residual falls geometrically with it, but at a rate the
+column sets, so treat the reported number as the answer rather than assuming a
+count is enough:
+
+| case | `cmo_iter` 30 | 60 | 100 |
+|---|---|---|---|
+| 20-stage ternary, $R = 2$ | 1.6e-4 | 5.0e-10 | — |
+| 12-stage binary, $R = 1.2$ (near $R_{min}$) | 1.9e-4 | 1.8e-4 | 1.7e-4 |
+
+Near minimum reflux the fixed-point iteration converges with a rate close to
+one, and more sweeps buy almost nothing. That is a property of the column, not
+a defect in the solver — but it is exactly why the residual is reported instead
+of asserted.
+
 #### Outputs
 
 | Key | Type | Units | Description |
@@ -1003,6 +1059,8 @@ ends.
 | `info['Q_reboiler']` | float | W | Reboiler duty (positive: heat added) |
 | `info['L_profile']`, `info['V_profile']` | (n,) array | mol/s | Internal flows — `use_mesh=True` only |
 | `info['L_rect']`, `info['V_rect']` | float | mol/s | Rectifying flows — `use_mesh=False` only |
+| `info['balance_error']` | (nc,) array | mol/s | Component balance residual $D_i + B_i - F_i$ |
+| `info['balance_error_rel']` | float | - | `max abs(balance_error) / F_total` |
 
 #### Example Usage
 
@@ -1037,7 +1095,8 @@ print(f"Duties:     {float(info['Q_condenser'])/1e6:.2f} / "
 ```
 
 Pass `use_mesh=False` for the faster constant-molar-overflow solution, which
-skips the energy-balance correction to the internal flows.
+skips the energy-balance correction to the internal flows but solves the same
+component material balances — see [Solver Paths](#solver-paths) above.
 
 ---
 
