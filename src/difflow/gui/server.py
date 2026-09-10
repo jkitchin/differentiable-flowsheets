@@ -8,10 +8,13 @@ Deliberately stdlib only --- see :mod:`difflow.gui`.
 
 from __future__ import annotations
 
+import errno
 import hmac
 import html
 import json
 import secrets
+import socket
+import sys
 import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -436,6 +439,54 @@ def serve(
         server.server_close()
 
 
+def free_port_near(port: int, tries: int = 20) -> int:
+    """The first bindable port after ``port``, for use in a suggestion.
+
+    A message that names a command has to name one that works, so the
+    candidate is actually bound and released rather than guessed. That
+    makes it a suggestion and not a reservation --- the socket is closed
+    again immediately, and something else may take it in between. The
+    fallback if the whole window is busy is ``port + 1``, which is no
+    worse than saying nothing.
+    """
+    for candidate in range(port + 1, port + 1 + tries):
+        with socket.socket() as probe:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                probe.bind((HOST, candidate))
+            except OSError:
+                continue
+            return candidate
+    return port + 1
+
+
+def port_in_use_message(port: int, prog: str) -> str:
+    """What to say when the bind fails because the port is taken.
+
+    Worth spelling out rather than letting the ``OSError`` through: the
+    traceback surfaces from inside ``socketserver`` with the port itself
+    nowhere in it, so the reader learns that *a* socket is in use and
+    nothing about which one or what to do. Nine times in ten the answer
+    is that they already have the editor open.
+
+    ``SO_REUSEADDR`` is not the fix and is not offered as one. It is
+    already set --- ``HTTPServer`` turns it on --- and it only relieves a
+    socket in ``TIME_WAIT``. A live listener is meant to refuse; the
+    flag that would override that, ``SO_REUSEPORT``, would leave two
+    editors sharing the port and requests landing on whichever won.
+    """
+    return (
+        f"{prog}: port {port} on {HOST} is already in use.\n"
+        f"\n"
+        f"An editor is probably running there already --- open\n"
+        f"    http://{HOST}:{port}/\n"
+        f"before starting a second one. To run another alongside it, or if\n"
+        f"that address is something else entirely, pick a free port:\n"
+        f"\n"
+        f"    {prog} --port {free_port_near(port)}\n"
+    )
+
+
 def main(argv: list[str] | None = None, prog: str = "difflow gui") -> int:
     """``difflow gui [flowsheet.json] [--port N] [--no-browser]``.
 
@@ -458,8 +509,17 @@ def main(argv: list[str] | None = None, prog: str = "difflow gui") -> int:
     )
     args = parser.parse_args(argv)
 
-    serve(path=args.path, port=args.port, open_browser=not args.no_browser,
-          token=args.token)
+    try:
+        serve(path=args.path, port=args.port, open_browser=not args.no_browser,
+              token=args.token)
+    except OSError as exc:
+        # Only the one the caller can act on. Anything else --- a missing
+        # flowsheet, a permission --- still gets its traceback, which for
+        # those is the useful thing.
+        if exc.errno != errno.EADDRINUSE:
+            raise
+        print(port_in_use_message(args.port, prog), file=sys.stderr)
+        return 1
     return 0
 
 
