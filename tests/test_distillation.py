@@ -29,7 +29,7 @@ from difflow.units.distillation import (
 jax.config.update("jax_enable_x64", True)
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def benzene_toluene_thermo():
     """Benzene-toluene thermodynamics for distillation."""
     species_data = {
@@ -52,7 +52,7 @@ def benzene_toluene_thermo():
     return IdealThermo(species_data)
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def multicomponent_thermo():
     """Three-component system for testing."""
     species_data = {
