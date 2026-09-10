@@ -108,7 +108,7 @@ class FedBatchReactor:
         "Fogler, Elements of Chemical Reaction Engineering, 5e, Ch. 14.",
     ]
     parameter_symbols = {"V0": "V_0", "dH_rxn": r"\Delta H_{r,j}"}
-    parameter_units = {"V0": "m^3", "dH_rxn": "J/mol"}
+    parameter_units = {"V0": "m^3", "stoich": "-", "dH_rxn": "J/mol"}
     numerical_method = "Adaptive ODE integration (diffrax) or lax.scan/RK4 of (V, n_i, T) over time."
 
     def __init__(

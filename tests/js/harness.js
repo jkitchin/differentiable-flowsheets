@@ -16,7 +16,11 @@ const noElement = () => ({
   set innerHTML(v) {}, get innerHTML() { return ""; },
   textContent: "", setAttribute() {},
 });
-globalThis.document = { getElementById: noElement };
+globalThis.document = {
+  getElementById: noElement,
+  /* the page reads its CSRF token out of a <meta> tag; there is none here */
+  querySelector: () => null,
+};
 globalThis.fetch = async () => ({ json: async () => ({ ok: true }) });
 
 vm.runInThisContext(src + `

@@ -92,7 +92,12 @@ class REEScrubber:
         "Xie, F., Zhang, T.A., Dreisinger, D., Doyle, F. Miner. Eng., 56, 10 (2014).",
     ]
     parameter_symbols = {"n_stages": "N", "pH": r"\mathrm{pH}", "extractant_conc": "[HA]"}
-    parameter_units = {"pH": "-", "extractant_conc": "mol/L"}
+    parameter_units = {
+        "n_stages": "-",
+        "pH": "-",
+        "extractant_conc": "mol/L",
+        "nitrate_conc": "mol/L",
+    }
     numerical_method = "Kremser applied to reverse extraction with scrub-type-dependent boundary condition."
 
     def __init__(self, params: ScrubberParams):

@@ -7,8 +7,10 @@ port arity, where the trap is counting the info dict every unit returns
 as though it were an outlet stream.
 """
 
+import importlib
 import inspect
 import json
+import re
 
 import jax
 import pytest
@@ -135,6 +137,46 @@ class TestPorts:
         """Splitter returns a bare `tuple`, so its outlet count is unknown."""
         assert cat["Splitter"].ports.n_outlets is None
 
+    def test_a_lone_stream_return_is_one_outlet(self, cat):
+        """The gas units return a Stream, not a (Stream, info) tuple.
+
+        Reading only tuples left eleven of them with no outlet at all,
+        and the canvas drew them from its fallback rather than from the
+        signature.
+        """
+        for name in ("GasPipe", "Compressor", "OpenValve", "SourceHead"):
+            assert cat[name].ports.n_outlets == 1, name
+            assert cat[name].ports.inlets == ["inlet"], name
+
+    def test_a_class_with_no_call_of_its_own_has_no_ports(self, cat):
+        """`cls.__call__` on such a class reaches the metaclass slot.
+
+        Its signature is `(*args, **kwargs)`, which reads back as a unit
+        taking any number of inlets -- drawing a mixer where the catalog
+        holds a model object with named methods.
+        """
+        for name in ("LLEEquilibrium", "TFF"):
+            spec = cat[name]
+            cls = getattr(importlib.import_module(spec.module), spec.class_name)
+            assert "__call__" not in cls.__dict__, f"premise: {name}"
+            ports = spec.ports
+            assert ports.inlets == [], name
+            assert not ports.variadic, name
+
+    def test_the_ports_left_unknown_are_the_ones_that_cannot_be_known(self, cat):
+        """Guard against the count creeping back up.
+
+        What remains is honest: the REE circuits return a dict of named
+        streams, Splitter's width is a call argument, and two entries are
+        model objects with no `__call__` at all.
+        """
+        unknown = {n for n, s in cat.items() if s.ports.n_outlets is None}
+        assert unknown == {
+            "ExtractStripCircuit", "ExtractScrubStripCircuit",
+            "FullSeparationTrain", "SplitShellCascade",
+            "Splitter", "LLEEquilibrium", "TFF",
+        }
+
 
 # =============================================================================
 # Parameters
@@ -151,6 +193,46 @@ class TestParameters:
         by_name = {p.name: p for p in cat["CSTR"].parameters}
         assert by_name["T_damping"].default == "0.3"
         assert by_name["V"].default is None
+
+    def test_a_params_annotation_in_quotes_still_resolves(self, cat):
+        """`params: "SplitParams"` arrives here as a string WITH its quotes.
+
+        Under ``from __future__ import annotations`` an already-quoted
+        annotation is stringified a second time, so the lookup name is
+        ``'SplitParams'`` and not ``SplitParams``. The failure is silent
+        and total: no Params class means no parameters, so the operation
+        offers an empty inspector and cannot be dropped at all.
+        """
+        pytest.importorskip("difflow_power")
+        spec = cat.get("PowerSplit")
+        if spec is None:
+            pytest.skip("difflow_power not registered")
+        assert spec.params_class == "SplitParams"
+        assert [p.name for p in spec.parameters] == ["fraction"]
+
+    def test_every_operation_that_takes_params_found_the_class(self, cat):
+        """An operation whose ``__init__`` wants a Params must resolve one.
+
+        The quoted-annotation case was invisible precisely because a
+        missing Params class looks like an operation that takes none.
+        """
+        import inspect
+
+        from difflow.catalog import _default_registry
+
+        unresolved = []
+        for name, info in _default_registry().list_operations().items():
+            try:
+                sig = inspect.signature(info.cls.__init__)
+            except (TypeError, ValueError):
+                continue
+            args = [p for n, p in sig.parameters.items() if n != "self"]
+            if not args:
+                continue
+            wants = "Params" in str(args[0].annotation)
+            if wants and cat[name].params_class is None:
+                unresolved.append((name, args[0].annotation))
+        assert not unresolved
 
     def test_callable_fields_are_flagged(self, cat):
         """The fields a form cannot fill in."""
@@ -264,6 +346,128 @@ class TestSchema:
     def test_description_is_a_single_line(self, cat):
         for name, spec in cat.items():
             assert "\n" not in spec.description, name
+
+
+class TestMetadata:
+    """The catalog reads the metadata contract the units already carry.
+
+    ``symbol``, ``assumptions``, ``references``, ``numerical_method``
+    and the per-parameter units and symbols were declared on the unit
+    classes for the report writer and read by nobody else; an inspector
+    wants exactly them, and a second hand-maintained table would drift.
+    """
+
+    def test_the_whole_docstring_is_carried_not_just_its_first_line(self, cat):
+        spec = cat["CSTR"]
+        assert spec.description == spec.doc.splitlines()[0]
+        assert len(spec.doc.splitlines()) > 1
+        assert not spec.doc.startswith(" "), "cleaned of its indentation"
+
+    def test_every_operation_has_a_docstring(self, cat):
+        for name, spec in cat.items():
+            assert spec.doc.strip(), name
+
+    def test_symbol_falls_back_to_the_class_name(self, cat):
+        assert cat["CSTR"].symbol == "CSTR"
+        for name, spec in cat.items():
+            assert spec.symbol, name
+
+    def test_assumptions_and_references_come_through(self, cat):
+        assert len(cat["CSTR"].assumptions) >= 3
+        assert cat["CSTR"].references
+        assert cat["CSTR"].numerical_method
+
+    def test_parameter_units_come_from_the_class(self, cat):
+        """No `Params` field declares `metadata={"units": ...}`, but 54
+        unit classes declare `parameter_units`. Reading them is the
+        difference between a form with units on it and one without."""
+        by_name = {p.name: p for p in cat["CSTR"].parameters}
+        assert by_name["V"].units == "m^3"
+        assert by_name["dH_rxn"].units == "J/mol"
+        assert by_name["rate_fn"].units is None, "a callable has no units"
+
+    def test_parameter_symbols_come_through(self, cat):
+        by_name = {p.name: p for p in cat["CSTR"].parameters}
+        assert by_name["V"].symbol == "V"
+        assert by_name["stoich"].symbol == r"\nu_{ij}"
+
+    def test_a_field_that_declares_its_own_units_wins(self):
+        """The field is more specific than the class-level table."""
+        import dataclasses
+
+        from difflow.catalog import _parameters
+        from difflow.report.metadata import UnitMetadata
+
+        @dataclasses.dataclass
+        class P:
+            V: float = dataclasses.field(
+                default=1.0, metadata={"units": "L", "description": "volume"}
+            )
+            T: float = 300.0
+
+        meta = UnitMetadata(symbol="X", description="",
+                            parameter_units={"V": "m^3", "T": "K"})
+        specs = {p.name: p for p in _parameters(P, meta)}
+        assert specs["V"].units == "L"
+        assert specs["V"].description == "volume"
+        assert specs["T"].units == "K"
+
+    def test_a_meaningful_share_of_parameters_now_carry_units(self, cat):
+        with_units = sum(1 for s in cat.values()
+                         for p in s.parameters if p.units)
+        assert with_units > 100, "was zero before the classes were read"
+
+    def test_no_metadata_entry_names_a_field_that_does_not_exist(self):
+        # `parameter_units` and `parameter_symbols` are keyed by field name
+        # and read with .get(), so a key that no longer matches a field is
+        # silently dropped -- the unit simply never appears and nothing
+        # says why. Thirty-five such keys had accumulated: `qmax` where the
+        # field is `q_max`, `area` where it is `membrane_area`, `T_top` on
+        # an absorber whose temperatures are `T_gas_in`/`T_liquid_in`.
+        import dataclasses
+        from difflow.catalog import _default_registry, _params_class
+
+        dead = []
+        for name, info in _default_registry().list_operations().items():
+            params_cls = _params_class(info.cls)
+            if params_cls is None or not dataclasses.is_dataclass(params_cls):
+                continue                # nothing for the keys to disagree with
+            fields = {f.name for f in dataclasses.fields(params_cls)}
+            for attr in ("parameter_units", "parameter_symbols"):
+                for key in getattr(info.cls, attr, None) or {}:
+                    if key not in fields:
+                        dead.append(f"{name}.{attr}[{key!r}]")
+        assert not dead, f"metadata naming fields that do not exist: {dead}"
+
+    def test_every_numeric_parameter_carries_a_unit(self, cat):
+        # A number in a form without a unit is a number the reader has to
+        # guess at, and the same table now feeds the delta-vector export,
+        # where a mislabelled column is worse than an absent one. The
+        # exceptions are listed rather than tolerated in bulk, so a new
+        # field cannot join them by accident.
+        allowed = {
+            # a cached arity of the kinetic callable, not a quantity
+            ("ContinuousBioreactor", "_kinetic_arity"),
+            ("FedBatchBioreactor", "_kinetic_arity"),
+        }
+        numeric = re.compile(r"\b(float|int|Array|jnp|ndarray|Scalar)\b")
+        missing = [
+            (name, p.name) for name, spec in cat.items() for p in spec.parameters
+            if not p.units and not p.is_callable
+            and numeric.search(p.type)
+            and "str" not in p.type and "bool" not in p.type
+        ]
+        assert not set(missing) - allowed, sorted(set(missing) - allowed)
+        assert not allowed - set(missing), (
+            "these gained a unit; drop them from the allowlist: "
+            f"{sorted(allowed - set(missing))}")
+
+    def test_the_new_fields_survive_to_dict(self, cat):
+        payload = json.loads(json.dumps(cat["CSTR"].to_dict()))
+        for key in ("symbol", "doc", "assumptions", "references",
+                    "numerical_method"):
+            assert key in payload, key
+        assert payload["parameters"][0]["symbol"] is not None
 
 
 if __name__ == "__main__":

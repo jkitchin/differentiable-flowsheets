@@ -144,10 +144,12 @@ class PFR:
     }
     parameter_units = {
         "V": "m^3",
+        "stoich": "-",
         "dH_rxn": "J/mol",
         "dP_dV": "Pa/m^3",
         "rtol": "-",
         "atol": "-",
+        "n_save_points": "-",
     }
     numerical_method = (
         "Adaptive ODE integration via diffrax (Tsit5/Kvaerno5) over the volume domain."
@@ -737,8 +739,12 @@ class GasPFR:
     }
     parameter_units = {
         "V": "m^3",
-        "alpha": "Pa/m^3",
+        "stoich": "-",
         "dH_rxn": "J/mol",
+        "alpha": "Pa/m^3",
+        "rtol": "-",
+        "atol": "-",
+        "n_save_points": "-",
     }
     numerical_method = "Adaptive diffrax ODE integration over V with coupled (F, T, P) state."
 

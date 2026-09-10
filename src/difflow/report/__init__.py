@@ -41,7 +41,11 @@ from difflow.report.ir import (
 from difflow.report.metadata import UnitMetadata, get_metadata, has_structured_metadata
 from difflow.report.builder import build_optimization_report, build_report
 from difflow.report.diff import ReportDiff, diff_reports
-from difflow.report.diagram import flowsheet_svg
+from difflow.report.diagram import (
+    flowsheet_diagram,
+    flowsheet_svg,
+    topology_svg,
+)
 from difflow.report.renderers.markdown import to_markdown
 from difflow.report.renderers.json_renderer import to_json
 from difflow.report.renderers.latex import to_latex
@@ -82,7 +86,9 @@ __all__ = [
     "OptimizationReport",
     "ReportDiff",
     "diff_reports",
+    "flowsheet_diagram",
     "flowsheet_svg",
+    "topology_svg",
     "UnitMetadata",
     "get_metadata",
     "has_structured_metadata",
