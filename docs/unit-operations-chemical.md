@@ -130,6 +130,41 @@ outlet_adiab, info_adiab = cstr(inlet)
 print(f"Outlet temperature: {outlet_adiab['T']:.1f} K")
 ```
 
+#### Concentration Basis (Molar Density)
+
+The rate law is evaluated at concentrations, so the reactor needs a molar
+density: $C_i = F_i / \dot{V}$ with $\dot{V} = F_{total}/\rho$, which makes the
+residence time $\tau = V\rho/F_{total}$. An error in $\rho$ is a proportional
+error in $\tau$, and so in the conversion. Three ways to set it, in the order
+the CSTR resolves them:
+
+1. **An equation of state** -- `eos=<cubic EOS>` with
+   `reaction_phase='liquid'` or `'vapor'`. Concentration is then the real
+   molarity at reactor $(T, P, y)$, $C_i = y_i\,\rho_{EOS}(T, P, y)$,
+   recomputed inside the solve, so the reactor shares the flash's
+   thermodynamics. `reaction_phase` is required with `eos`: the liquid and
+   vapor molar densities differ by two orders of magnitude, so there is no
+   defensible default. Pair it with a `CubicThermo` to make the *enthalpy*
+   real-gas too; a `CubicThermo` passed as `thermo` also supplies the EOS
+   itself when `reaction_phase` is set and no `eos=` is given.
+2. **A constant** -- `molar_density=<mol/m^3>`.
+3. **Neither**, in which case the reactor falls back to 55500 mol/m^3 (liquid
+   water) and raises a `CSTRDensityWarning`. That fallback is right only for
+   aqueous systems: it is ~8x high for a C3-C8 hydrocarbon liquid and ~200x
+   high for a gas, and it silently inflates residence time. Treat the warning
+   as a request to say which basis you meant.
+
+Passing `volumetric_flow=` to the call sets $\dot{V}$ outright and bypasses all
+three; `info['molar_density']` then reports the density that flow implies.
+
+```python
+from difflow.eos import PengRobinson
+from difflow.database import get_critical_props
+
+eos = PengRobinson({c: get_critical_props(c) for c in species})
+params = CSTRParams(..., eos=eos, reaction_phase='liquid')
+```
+
 #### Design Considerations
 
 - **Residence Time**: $\tau = V/Q_{vol}$ determines conversion

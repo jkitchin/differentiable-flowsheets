@@ -96,11 +96,20 @@ params = CSTRParams(
     V=1.0,  # Reactor volume (m^3)
     rate_fn=rate_fn,
     stoich={'A': -1, 'B': 1},
+    molar_density=55500.0,  # concentration basis; see note below
 )
 
 # Create and run CSTR
 cstr = CSTR(params)
 outlet = cstr(inlet_stream)
+
+# The rate law needs a molar density: C_i = F_i / Q_v with Q_v = F_total/rho,
+# so rho sets the residence time tau = V*rho/F_total. Give it as
+# molar_density=..., or as eos=<cubic EOS> + reaction_phase='liquid'|'vapor'
+# for the real EOS density at reactor conditions (a CubicThermo passed as the
+# CSTR's thermo supplies the EOS too, once reaction_phase names the phase).
+# With neither, the CSTR falls back to 55500 mol/m^3 -- liquid water -- and
+# raises CSTRDensityWarning rather than doing it silently.
 
 # Params support dict-like access
 print(params['V'])        # -> 1.0

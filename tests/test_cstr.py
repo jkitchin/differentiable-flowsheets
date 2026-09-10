@@ -386,3 +386,180 @@ class TestCSTRParamsUpdate:
         d = dict(params.items())
         assert float(d["V"]) == 1.0
         assert d["species_order"] == ["A", "B"]
+
+
+class TestConcentrationBasis:
+    """#227: the molar density that sets residence time must not be silently water.
+
+    Concentration is ``C_i = F_i / Q_v`` with ``Q_v = F_total / rho``, so the
+    density sets ``tau = V * rho / F_total`` and, through it, the conversion.
+    These tests pin down where that density comes from and that a guessed one
+    is announced.
+    """
+
+    species = ["n_butane", "isobutane"]
+
+    @staticmethod
+    def _rate_fn(C, T, params):
+        return jnp.array([params["k"] * C["n_butane"]])
+
+    @classmethod
+    def _params(cls, **kwargs):
+        return CSTRParams(
+            V=12.0,
+            rate_fn=cls._rate_fn,
+            stoich=jnp.array([[-1.0], [+1.0]]),
+            rate_params={"k": 1e-4},
+            species_order=cls.species,
+            **kwargs,
+        )
+
+    @staticmethod
+    def _feed():
+        # 350 K / 10 bar: a real C4 liquid (~8800 mol/m^3 by Peng-Robinson),
+        # about 6x lighter than the 55500 mol/m^3 water fallback.
+        return make_stream({"n_butane": 90.0, "isobutane": 10.0}, 350.0, 10e5)
+
+    @classmethod
+    def _eos(cls):
+        from difflow.eos import PengRobinson
+        from difflow.database import get_critical_props
+
+        return PengRobinson({c: get_critical_props(c) for c in cls.species})
+
+    @classmethod
+    def _cubic_thermo(cls, eos):
+        from difflow.thermo import CubicThermo
+        from difflow.database import get_species_data
+
+        return CubicThermo(IdealThermo({c: get_species_data(c) for c in cls.species}), eos)
+
+    def test_default_density_warns(self):
+        """With no eos and no molar_density the water fallback is announced."""
+        from difflow.units.cstr import CSTRDensityWarning
+
+        cstr = CSTR(self._params())
+        with pytest.warns(CSTRDensityWarning, match="55500"):
+            _, info = cstr(self._feed())
+        assert float(info["molar_density"]) == pytest.approx(55500.0)
+
+    def test_fallback_warns_once_per_reactor(self):
+        """A reactor called in a loop should not warn on every call."""
+        import warnings
+
+        from difflow.units.cstr import CSTRDensityWarning
+
+        cstr = CSTR(self._params())
+        feed = self._feed()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            cstr(feed)
+            cstr(feed)
+        assert sum(issubclass(w.category, CSTRDensityWarning) for w in caught) == 1
+
+    def test_explicit_molar_density_is_silent(self):
+        """An explicitly chosen density is not a guess, so it does not warn."""
+        import warnings
+
+        from difflow.units.cstr import CSTRDensityWarning
+
+        cstr = CSTR(self._params(molar_density=7000.0))
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", CSTRDensityWarning)
+            _, info = cstr(self._feed())
+        assert float(info["molar_density"]) == pytest.approx(7000.0)
+
+    def test_explicit_volumetric_flow_is_not_a_fallback(self):
+        """A caller-supplied Q_v sets the basis; report the density it implies."""
+        import warnings
+
+        from difflow.units.cstr import CSTRDensityWarning
+
+        cstr = CSTR(self._params())
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", CSTRDensityWarning)
+            _, info = cstr(self._feed(), volumetric_flow=0.01)
+        # 100 mol/s through 0.01 m^3/s is 10000 mol/m^3, not 55500.
+        assert float(info["molar_density"]) == pytest.approx(10000.0)
+
+    def test_eos_sets_the_basis_and_is_silent(self):
+        """With an EOS the density is the real one at reactor conditions."""
+        import warnings
+
+        from difflow.units.cstr import CSTRDensityWarning
+
+        eos = self._eos()
+        feed = self._feed()
+        cstr = CSTR(self._params(eos=eos, reaction_phase="liquid"))
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", CSTRDensityWarning)
+            _, info = cstr(feed)
+
+        y = jnp.array([0.9, 0.1])
+        expected = eos.density(feed["T"], feed["P"], y, phase="liquid")
+        assert float(info["molar_density"]) == pytest.approx(float(expected))
+        # A C4 liquid is nowhere near water's 55500 mol/m^3.
+        assert 5000.0 < float(info["molar_density"]) < 20000.0
+
+    def test_water_fallback_over_converts_relative_to_the_eos(self):
+        """The 8x density error of #227 is an 8x residence-time error."""
+        feed = self._feed()
+        eos = self._eos()
+
+        with pytest.warns(UserWarning):
+            fallback_out, fallback_info = CSTR(self._params())(feed)
+        eos_out, eos_info = CSTR(self._params(eos=eos, reaction_phase="liquid"))(feed)
+
+        ratio = float(fallback_info["molar_density"]) / float(eos_info["molar_density"])
+        assert ratio > 4.0
+        # Higher density is a longer tau, so the water basis leaves less n-butane.
+        assert float(get_flows(fallback_out)["n_butane"]) < float(
+            get_flows(eos_out)["n_butane"]
+        )
+
+    def test_eos_without_reaction_phase_is_an_error(self):
+        """A phase-dependent density has no defensible default phase."""
+        with pytest.raises(ValueError, match="reaction_phase"):
+            self._params(eos=self._eos())
+
+    def test_unknown_reaction_phase_is_an_error(self):
+        with pytest.raises(ValueError, match="reaction_phase"):
+            self._params(eos=self._eos(), reaction_phase="supercritical")
+
+    def test_cubic_thermo_eos_is_used_when_the_phase_is_named(self):
+        """A CubicThermo's own EOS sets the basis rather than being ignored."""
+        import warnings
+
+        from difflow.units.cstr import CSTRDensityWarning
+
+        eos = self._eos()
+        feed = self._feed()
+        cstr = CSTR(
+            self._params(reaction_phase="liquid"),
+            thermo=self._cubic_thermo(eos),
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", CSTRDensityWarning)
+            _, info = cstr(feed)
+
+        y = jnp.array([0.9, 0.1])
+        expected = eos.density(feed["T"], feed["P"], y, phase="liquid")
+        assert float(info["molar_density"]) == pytest.approx(float(expected))
+
+    def test_reaction_phase_with_nothing_to_apply_it_to_warns(self):
+        """A phase that changes no number should say so."""
+        from difflow.units.cstr import CSTRDensityWarning
+
+        with pytest.warns(CSTRDensityWarning, match="reaction_phase"):
+            CSTR(self._params(reaction_phase="liquid"))
+
+    def test_eo_residuals_use_the_same_basis_as_the_solve(self):
+        """The EO residual must vanish at the sequential solution."""
+        eos = self._eos()
+        feed = self._feed()
+        cstr = CSTR(self._params(eos=eos, reaction_phase="liquid"))
+        outlet, _ = cstr(feed)
+
+        resid = cstr.eo_residuals([feed], [outlet])
+        # Flows are ~100 mol/s, so 1e-6 is a converged material balance.
+        assert float(jnp.max(jnp.abs(resid[:2]))) < 1e-6
