@@ -40,6 +40,7 @@
     onmove = () => {},
     onadd = () => {},
     onselect = () => {},
+    onmenu = () => {},
     onrefuse = () => {},
     readonly = false,
   } = $props()
@@ -105,6 +106,22 @@
     ondeletions(deleteRequests({ nodes: gone, edges: cut }))
   }
 
+  /**
+   * Right-click on a node: our menu instead of the browser's.
+   *
+   * The node is selected on the way past, as every context menu on
+   * anything does --- a menu about a box that is not the highlighted one
+   * invites reading its items against the highlighted one instead. The
+   * screen coordinate goes up as-is: the menu is positioned in the
+   * viewport, not on the canvas, so it must not scale with the zoom or
+   * slide out from under the cursor when the flowsheet is panned.
+   */
+  function contextMenu({ event, node }) {
+    event.preventDefault()
+    onselect(node)
+    onmenu({ node, x: event.clientX, y: event.clientY })
+  }
+
   function dropped(event) {
     if (readonly) return
     event.preventDefault()
@@ -148,6 +165,7 @@
     onnodedragstop={() => onmove(toPositions(nodes))}
     onnodeclick={({ node }) => onselect(node)}
     onpaneclick={() => onselect(null)}
+    onnodecontextmenu={contextMenu}
   >
     <Background variant={BackgroundVariant.Dots} gap={16} size={1} />
     <!-- The lock toggles dragging, which a frozen canvas does not do. No

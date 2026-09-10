@@ -3,6 +3,7 @@
   import Canvas from './lib/Canvas.svelte'
   import CodeContext from './lib/CodeContext.svelte'
   import Console from './lib/Console.svelte'
+  import ContextMenu from './lib/ContextMenu.svelte'
   import Export from './lib/Export.svelte'
   import Inspector from './lib/Inspector.svelte'
   import Palette from './lib/Palette.svelte'
@@ -12,6 +13,7 @@
   import { del, get, patch, post, send } from './lib/api.js'
   import { inferKind } from './lib/model/assistant.js'
   import { movedPositions } from './lib/model/edit.js'
+  import { nodeMenu } from './lib/model/menu.js'
   import { keepAlive } from './lib/model/lifetime.js'
   import { flowLabels, flowTints } from './lib/model/results.js'
 
@@ -22,9 +24,10 @@
   // about the flowsheet (has it any units yet?) and not a preference.
   let species = $state([])
   let speciesEditable = $state(true)
-  // Units dropped on the canvas that cannot be built yet. Beside the
-  // document rather than in it, exactly as the server sends them: a
-  // flowsheet holds units that exist, and a half-built one is not a unit.
+  // What each unfinished unit is still waiting for. The units themselves
+  // are in the document --- they go on the flowsheet so that they have
+  // ports to wire --- and this is the note beside them, exactly as the
+  // server sends it: the name, and what would finish it.
   let pending = $state([])
   let catalog = $state({})
   let error = $state('')
@@ -45,6 +48,11 @@
   let showAssistant = $state(false)
   let showPlanning = $state(false)
   let showConsole = $state(false)
+  // The right-click menu: `{x, y, title, items}` while it is open. The
+  // items are built when it opens rather than derived, because they are
+  // about the node that was clicked and that is not state anything else
+  // needs --- and because an item's action must not change under it.
+  let menu = $state(null)
   // Drawing preferences. Port names are off because on a wired flowsheet
   // the edge already carries the stream name, so labelling both ends of
   // every arc triples the text on screen to repeat itself; while wiring,
@@ -94,6 +102,8 @@
    */
   function hotkey(event) {
     if (event.metaKey || event.ctrlKey || event.altKey) return
+    if (menu) return       // the open menu owns the keyboard
+
     const tag = event.target?.tagName
     if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
     if (event.target?.isContentEditable) return
@@ -285,6 +295,48 @@
   const remove = (name) =>
     edit(() => del(`/api/unit/${encodeURIComponent(name)}`))
 
+  /**
+   * A node's name on the clipboard.
+   *
+   * Worth a menu row because the names are typed elsewhere: a lever is
+   * `unit.param`, a planning spec names a stream, and the console works
+   * in the same namespace. Retyping one from the canvas is how a spec
+   * ends up pointing at a unit that does not exist.
+   */
+  async function copyName(name) {
+    try {
+      await navigator.clipboard.writeText(name)
+      note = `copied \u201c${name}\u201d`
+    } catch {
+      // Denied, or no clipboard at all over a bare http origin in some
+      // browsers. Say so: silence looks like it worked.
+      note = `could not copy \u201c${name}\u201d -- the browser refused the clipboard`
+    }
+  }
+
+  /**
+   * Open the right-click menu on a node.
+   *
+   * Every item is a shortcut to a control that is already on screen, so
+   * this adds no verbs --- it hands `nodeMenu` the ones it has. The
+   * assistant and the inspector both read the selection, which the
+   * canvas has already set by the time this runs.
+   */
+  function openMenu({ node, x, y }) {
+    const { title, items } = nodeMenu({
+      node,
+      catalog,
+      actions: {
+        docs: (url) => window.open(url, '_blank', 'noopener,noreferrer'),
+        ask: () => (showAssistant = true),
+        context: () => (showContext = true),
+        copy: copyName,
+        remove,
+      },
+    })
+    menu = items.length ? { x, y, title, items } : null
+  }
+
   async function applyDeletions(requests) {
     if (!requests.length) return load()   // redraw whatever was taken off
     await edit(async () => {
@@ -474,6 +526,7 @@
         {flows}
         {tints}
         onselect={(node) => (selected = node)}
+        onmenu={openMenu}
         onrefuse={(why) => (note = why)}
       />
     {/if}
@@ -494,6 +547,16 @@
     oncontext={applyContext}
   />
 </main>
+
+{#if menu}
+  <ContextMenu
+    x={menu.x}
+    y={menu.y}
+    title={menu.title}
+    items={menu.items}
+    onclose={() => (menu = null)}
+  />
+{/if}
 
 {#if showResults}
   <Results
