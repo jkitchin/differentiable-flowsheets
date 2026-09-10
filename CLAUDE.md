@@ -48,6 +48,8 @@ difflow/
 │   │   ├── publish.py     # Flowsheet -> self-contained interactive HTML (no install)
 │   │   ├── gui/           # Local browser editor (python -m difflow.gui)
 │   │   │                   # session.py + server.py + layout.py + static/
+│   │   │                   # docs_index.py builds static/docs-index.json (committed);
+│   │   │                   # doclinks.py resolves a unit -> its section in docs/
 │   │   ├── params_mixin.py # ParamsMixin base class for Params dataclasses
 │   │   ├── reconciliation/ # Data reconciliation, gross error detection,
 │   │   │                   # observability, monitoring, multi-set pooling
@@ -207,6 +209,20 @@ result = fs.solve(feed_stream)
 4. Ensure all operations are JAX-compatible (use `jnp`, no Python loops over arrays)
 5. Add tests in `tests/test_<unit>.py`
 6. Add example usage in `examples/`
+7. Document it in the right `docs/unit-operations-*.md`, then rerun
+   `python3 src/difflow/gui/docs_index.py` (or `make gui-build`) so the
+   committed index sees it
+
+A registered operation must have **somewhere of its own to link to**:
+either a heading that names it (at `###` or shallower --- the book only
+generates heading anchors down to `myst_heading_anchors`), or, for a unit
+documented as one row of a reference table, an explicit MyST label
+`(op-<lowercase name>)=` before the row (page-prefixed where the bare
+name is not unique across the book, as the gas and power plugins do:
+`(gas-op-gaspipe)=`). `difflow.gui.doclinks.url_for` is what resolves it
+and `tests/test_doclinks.py` asserts all 87 operations resolve, so
+skipping step 7 fails the suite rather than shipping a palette entry with
+nothing to read.
 
 ### Adding to a Plugin (bio, ree, cc, gas, power)
 
@@ -446,6 +462,7 @@ jax.debug.print("value: {x}", x=value)
 | `src/difflow/__init__.py` | Main API exports |
 | `src/difflow/params_mixin.py` | ParamsMixin base class for all Params dataclasses |
 | `src/difflow/docstrings.py` | Reads Params field descriptions out of the `Attributes:` docstrings and field comments, for the catalog |
+| `src/difflow/gui/doclinks.py` | Resolves an operation name to its section in `docs/` (the palette's documentation link) |
 | `src/difflow/planning/` | Delta-base planning: AD delta vectors -> trust-region LP/MILP |
 | `src/difflow_bio/__init__.py` | Bio manufacturing plugin exports |
 | `src/difflow_ree/__init__.py` | REE extraction plugin exports |

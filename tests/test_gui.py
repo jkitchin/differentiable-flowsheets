@@ -661,6 +661,22 @@ class TestPalette:
             ports = spec["ports"]
             assert ports["variadic"] or ports["n_inlets"] is not None, name
 
+    def test_every_entry_carries_where_to_read_about_it(self, client):
+        """The palette offers a documentation link; the server resolves it.
+
+        `tests/test_doclinks.py` is what holds the prose to having
+        somewhere for each of these to point (#228); this is only that
+        the catalog the page fetches actually carries the answer.
+        """
+        from difflow.gui import doclinks
+
+        _, catalog = client.get_json("/api/catalog")
+        missing = [n for n, spec in catalog.items() if not spec["docs_url"]]
+        assert missing == []
+        assert catalog["Heater"]["docs_url"] == doclinks.url_for("Heater")
+        assert catalog["Heater"]["docs_url"].endswith(
+            "unit-operations-chemical.html#heater")
+
 
 class TestWhatBlocksADrop:
     """The palette's flag and the adder's refusal, which must agree.
