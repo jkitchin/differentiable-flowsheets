@@ -20,6 +20,7 @@ Numerical Considerations:
 
 from typing import Callable, Literal
 from dataclasses import dataclass
+from functools import partial
 import jax
 import jax.numpy as jnp
 from jax import Array, lax
@@ -798,6 +799,22 @@ class ShortcutColumn:
                 - 'close_boiling': True if α ≈ 1 (hard separation)
                 - 'near_min_reflux': True if R ≈ R_min
         """
+        # The solve itself is jitted (see :meth:`_solve`); this wrapper is a
+        # plain function so the catalog can still read the port names off the
+        # signature -- difflow.catalog derives them with inspect.signature and
+        # skips anything that is not a Python function, which a jitted method
+        # is not.
+        return self._solve(feed, R, P, q)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _solve(
+        self,
+        feed: Stream,
+        R: Array | float,
+        P: Array | float = 101325.0,
+        q: Array | float = 1.0,
+    ) -> tuple[Stream, Stream, dict[str, Array]]:
+        """The body of :meth:`__call__`, cached on (self, argument shapes)."""
         p = self.params
         R = jnp.asarray(R)
         P = jnp.asarray(P)
@@ -1942,6 +1959,26 @@ class DistillationColumn:
                 - 'L_profile': (n,) liquid flows leaving each stage (mol/s)
                 - 'V_profile': (n,) vapor flows leaving each stage (mol/s)
         """
+        # Jitted body, plain-function wrapper: see :meth:`ShortcutColumn._solve`.
+        # By keyword, not positionally: `static_argnames` only marks an
+        # argument static when it arrives as a keyword, and a traced
+        # `use_mesh` fails on the first `if` that reads it.
+        return self._solve(feed, R, D_spec, B_spec, use_mesh=use_mesh,
+                           mesh_iter=mesh_iter, cmo_iter=cmo_iter)
+
+    @partial(jax.jit, static_argnums=(0,),
+             static_argnames=("use_mesh", "mesh_iter", "cmo_iter"))
+    def _solve(
+        self,
+        feed: Stream,
+        R: Array | float,
+        D_spec: Array | float | None = None,
+        B_spec: Array | float | None = None,
+        use_mesh: bool = True,
+        mesh_iter: int = 20,
+        cmo_iter: int = 30,
+    ) -> tuple[Stream, Stream, dict[str, Array]]:
+        """The body of :meth:`__call__`, cached on (self, argument shapes)."""
         p = self.params
         R = jnp.asarray(R)
 
