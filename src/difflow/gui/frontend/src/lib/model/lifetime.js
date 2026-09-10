@@ -48,7 +48,18 @@ export function keepAlive({
   post,
   interval = 15,
   client = clientId(),
-  timers = { setInterval, clearInterval },
+  timers = {
+    // Bound, not merely captured. `{ setInterval }` puts the native
+    // function on a plain object, and calling it there hands it that
+    // object as `this` --- which a real browser rejects, because
+    // setInterval is defined on Window and checks. The editor rendered
+    // nothing at all for it: the throw came out of App's mount effect,
+    // so Svelte abandoned the render and the page stayed blank. Neither
+    // jsdom nor node has the brand check, so nothing below a browser
+    // catches this; the test in lifetime.test.js supplies one.
+    setInterval: globalThis.setInterval.bind(globalThis),
+    clearInterval: globalThis.clearInterval.bind(globalThis),
+  },
 } = {}) {
   let handle = null
   // A ping that fails is not worth reporting: the server being
