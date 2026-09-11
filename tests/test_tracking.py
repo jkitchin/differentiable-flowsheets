@@ -565,5 +565,34 @@ class TestTrackParameters:
         assert run.n_updates == 8
         assert seen and all(s == {"eta", "scale"} for s in seen)
 
+    def test_the_diagnosis_thresholds_are_tunable(self, biased_dp1):
+        """The defaults are a rule, not a guarantee. When a campaign
+        leaks a few `model drift` days, the fix is the threshold, not a
+        wider ``allow``."""
+        leaky = track_parameters(
+            parallel_pipes, biased_dp1, SIGMA, state=start(), names=NAMES,
+            drift_std=DRIFT, window=10,
+            # blame is perfectly concentrated here, so only a threshold
+            # above 1.0 can make the campaign read as diffuse
+            concentration_threshold=1.01,
+        )
+        assert MONITOR_MODEL_DRIFT in {s.diagnosis.verdict for s in leaky.steps}
+        assert leaky.n_updates > 0
+
+        tight = track_parameters(
+            parallel_pipes, biased_dp1, SIGMA, state=start(), names=NAMES,
+            drift_std=DRIFT, window=10, concentration_threshold=0.3,
+        )
+        assert tight.n_updates == 0
+
+    def test_a_rejection_threshold_of_one_declares_nothing(self, fouling):
+        _, data = fouling
+        run = track_parameters(
+            parallel_pipes, data[:12], SIGMA, state=start(), names=NAMES,
+            drift_std=DRIFT, window=10, rejection_threshold=1.01,
+        )
+        assert {s.diagnosis.verdict for s in run.steps} == {MONITOR_CONSISTENT}
+        assert run.n_updates == 0
+
     def test_default_allow_is_the_documented_policy(self):
         assert UPDATE_WHEN_DRIFTING == frozenset({MONITOR_MODEL_DRIFT})

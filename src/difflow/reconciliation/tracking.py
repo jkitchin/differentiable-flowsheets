@@ -89,6 +89,7 @@ from difflow.params_mixin import ParamsMixin
 from difflow.reconciliation.core import measured_mask
 from difflow.reconciliation.gross_error import global_test, measurement_test
 from difflow.reconciliation.monitoring import (
+    CONCENTRATION_THRESHOLD,
     MONITOR_CONSISTENT,
     MONITOR_INSTRUMENT_FAULT,
     MONITOR_MODEL_DRIFT,
@@ -96,6 +97,7 @@ from difflow.reconciliation.monitoring import (
     MonitorDiagnosis,
     MonitorResult,
     MonitorStep,
+    REJECTION_THRESHOLD,
 )
 from difflow.reconciliation.reconcile import ReconcileResult, reconcile
 from difflow.reconciliation.structure import ReconciliationStructureError
@@ -766,6 +768,8 @@ def track_parameters(
     inject: Callable[[Any, Mapping[str, Any]], Any] | None = None,
     alpha: float = 0.05,
     window: int | None = 15,
+    rejection_threshold: float = REJECTION_THRESHOLD,
+    concentration_threshold: float = CONCENTRATION_THRESHOLD,
     allow: frozenset[str] | Sequence[str] = UPDATE_WHEN_DRIFTING,
     max_std: Sequence[float] | Array | float | None = None,
     keep_results: bool = False,
@@ -819,6 +823,15 @@ def track_parameters(
         alpha: significance level for both gross-error tests.
         window: periods the verdict is drawn from; see
             :meth:`~difflow.reconciliation.MonitorResult.diagnose`.
+        rejection_threshold: fraction of the window that must reject
+            before any fault is declared.
+        concentration_threshold: blame concentration at or above which
+            the fault is read as one sensor rather than the model.
+            Together with ``window`` this is what decides whether a
+            real instrument fault is *always* caught: the defaults are
+            a rule, not a guarantee, and a campaign where a few days
+            slip through as ``model drift`` is telling you to lengthen
+            the window or lower this, not to widen ``allow``.
         allow: verdicts the gate updates on.
         max_std: ceiling on each parameter's standard error; see
             :func:`time_update`.
@@ -896,7 +909,11 @@ def track_parameters(
         campaign = MonitorResult(
             steps=list(monitor_steps), names=plant_names or [], alpha=alpha
         )
-        diagnosis = campaign.diagnose(window)
+        diagnosis = campaign.diagnose(
+            window,
+            rejection_threshold=rejection_threshold,
+            concentration_threshold=concentration_threshold,
+        )
         decision = update_gate(diagnosis, allow=allow)
 
         # 3. the random walk runs whether or not the data were usable.
