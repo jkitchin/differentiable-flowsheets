@@ -240,6 +240,12 @@ class TrackerState(ParamsMixin):
         came from :func:`difflow.estimation.predicted_covariance` or
         :func:`~difflow.reconciliation.reconciled_covariance`, which
         return the correlations rather than discarding them).
+
+        ``time`` is the clock this prior is current at, not the clock
+        the record starts at. :func:`track_parameters` advances the
+        state by ``t - state.time`` each period, so leaving both at
+        their defaults means the first period does no drift update ---
+        the prior is taken as current, rather than one period stale.
         """
         names = list(names)
         mean = jnp.asarray(mean, dtype=jnp.float64).reshape(-1)
@@ -356,7 +362,10 @@ def time_update(
 
     Args:
         state: the current state.
-        dt: elapsed time, in whatever clock ``drift_std`` is a rate in.
+        dt: elapsed time, in whatever clock ``drift_std`` is a rate
+            in. Zero is legal and is a no-op, which is what the first
+            period of a campaign gets when the state's clock and the
+            record's first reading agree.
         drift_std: :math:`\\sqrt{\\mathrm{diag}(Q)}`, per unit time,
             scalar or per parameter. See
             :func:`drift_std_from_time_constant`.
@@ -583,7 +592,7 @@ def parameter_measurement(
     if x0 is None:
         init = 1.0 if unmeasured_init is None else unmeasured_init
         init = jnp.broadcast_to(jnp.asarray(init, dtype=jnp.float64), y.shape)
-        plant0 = jnp.where(mask, jnp.where(mask, y, 0.0), init)
+        plant0 = jnp.where(mask, y, init)
     else:
         plant0 = jnp.asarray(x0, dtype=jnp.float64).reshape(-1)
         if plant0.shape != y.shape:
@@ -814,8 +823,15 @@ def track_parameters(
             it is the bandwidth of the twin, not a nuisance. See
             :func:`drift_std_from_time_constant`.
         times: the clock reading of each period. Defaults to
-            ``0, 1, 2, ...``, which makes ``drift_std`` a per-period
-            figure.
+            ``state.time, state.time + 1, ...``, which makes
+            ``drift_std`` a per-period figure. Note what that means for
+            the first period: it carries the state's own clock reading,
+            so its ``dt`` is zero and ``n`` periods produce ``n - 1``
+            drift increments. That is deliberate --- the prior is
+            as-of its own clock, not one period stale --- and if the
+            state was last updated some time before the record starts,
+            say so by passing ``times`` explicitly rather than by
+            back-dating ``state.time``.
         params: extra argument threaded to ``residual_fn``, into which
             the tracked parameters are injected.
         names: plant variable names.

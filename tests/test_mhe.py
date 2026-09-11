@@ -328,6 +328,32 @@ def test_ekf_treats_an_infinite_sigma_as_no_reading():
     assert float(innov[0]) == 0.0
 
 
+def test_ekf_keeps_an_unsampled_channel_gradient_finite():
+    """Why ``var`` in :func:`ekf_update` squares a *masked* sigma.
+
+    Written as the single select it resembles --- ``where(mask, sigma **
+    2, 1.0)`` --- the forward value is identical, so nothing here would
+    catch it. Reverse mode is where it shows: an unsampled channel
+    carries ``sigma = inf``, ``d(sigma ** 2) = 2 inf``, and the
+    cotangent comes back ``nan``. Masking before the square keeps
+    ``inf ** 2`` from ever being evaluated.
+    """
+    model = linear_model(jnp.array([[0.9]]), jnp.array([[1.0], [1.0]]))
+
+    def posterior(sigma):
+        x_up, _, _ = ekf_update(
+            model, jnp.array([1.0]), jnp.array([[0.25]]),
+            jnp.array([1.5, 99.0]), sigma, jnp.zeros(0),
+        )
+        return jnp.sum(x_up)
+
+    sigma = jnp.array([0.3, jnp.inf])          # one sampled, one not
+    grad = np.asarray(jax.grad(posterior)(sigma))
+    assert np.all(np.isfinite(grad)), grad
+    assert grad[1] == 0.0                      # the unsampled channel
+    assert grad[0] != 0.0                      # the sampled one still moves
+
+
 def test_ekf_covariances_stay_symmetric_and_psd():
     xs, ys = simulate([[0.9, 0.1], [0.0, 0.85]], [[1.0, 0.0]], [1.0, -1.0],
                       12, 0.03, 0.2, seed=1)

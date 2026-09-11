@@ -137,6 +137,12 @@ def ekf_update(
     lin = x if x_lin is None else x_lin
     h = model.observation_jacobian(lin, u, theta)
     h = jnp.where(mask[:, None], h, 0.0)
+    # The inner `where` is load-bearing, unlike the plain select it
+    # resembles: it replaces an infinite sigma *before* the square, so
+    # `inf ** 2` is never evaluated. Written as one `where`, the
+    # unsampled channels reach reverse mode as d(sigma^2) = 2 inf and
+    # the cotangent comes back nan. Pinned by
+    # test_ekf_keeps_an_unsampled_channel_gradient_finite.
     var = jnp.where(mask, jnp.where(mask, sigma, 1.0) ** 2, 1.0)
     r = jnp.diag(var)
 
