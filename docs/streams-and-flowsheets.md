@@ -638,11 +638,26 @@ One name is deliberately not the class name: `difflow_gas` registers a `Compress
 ```bash
 difflow                                   # an empty canvas, in a browser
 difflow gui plant.json                    # ...on a flowsheet
+difflow gui plant.py                      # ...on one a script builds
 difflow gui --port 9000 --no-browser
 difflow gui --stay                        # ...and keep serving after the tab closes
 ```
 
 The editor is what a bare `difflow` does, because it is the one thing here that has nothing to print and everything to show. `python -m difflow.gui` is the same command for an environment where the console script is not on `PATH`.
+
+### Opening a script
+
+Most flowsheets here were written as Python, because the package was a library long before it was an editor. `difflow gui plant.py` opens one: the script is **run**, and the first `Flowsheet` it leaves at module level is what appears on the canvas. Running it is the only way to read it — a rate law is a function and a parameter is whatever arithmetic produced it, so there is nothing to parse — and the same act is what `difflow report plant.py` and `difflow plan-export plant.py` have always done. It carries the same trust: the file is executed, so open your own scripts with it and not a stranger's.
+
+The script runs under `__name__ == "__difflow__"`, not `"__main__"`. A script's `if __name__ == "__main__"` block is the part that solves, sweeps or plots, and opening a flowsheet in an editor should not cost an hour of optimization first. Put the flowsheet at module level, which is where it already is.
+
+A script is a way **in** only. `difflow.codegen` can write a flowsheet back out as Python, but writing it over the script it came from would delete everything in that file that is not the flowsheet — the comments, the sweep at the bottom, the `__main__` block. So the editor never saves to the `.py`: it saves the JSON beside it, `plant.py` → `plant.json`, and the header shows the script you opened with the file it will write in the tooltip. Once that JSON exists, `difflow gui plant.json` opens the edited version and the script is left alone; naming the `.py` again re-runs the script, so whichever one you name is the one you get.
+
+A script that raises, or that builds no flowsheet, is reported as one line naming the file and the cause rather than as a traceback through `runpy`:
+
+```
+difflow gui: plant.py raised while building the flowsheet: FileNotFoundError: assay.csv
+```
 
 or from Python, on a flowsheet you already have:
 
