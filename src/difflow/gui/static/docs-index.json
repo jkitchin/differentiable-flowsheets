@@ -1,5 +1,5 @@
 {
- "n_sections": 844,
+ "n_sections": 845,
  "sections": [
   {
    "anchor": "overview",
@@ -2512,6 +2512,14 @@
    "source": "streams-and-flowsheets.md",
    "targets": [],
    "text": "```python\nresults = fs.solve(\n    tol=1e-6,           # Convergence tolerance\n    max_iter=100,       # Maximum iterations\n    method='wegstein',  # 'direct', 'wegstein', or 'broyden'\n    damping=0.5         # Damping factor for direct substitution\n)\n```"
+  },
+  {
+   "anchor": "when-the-solve-does-not-converge",
+   "heading": "When the Solve Does Not Converge",
+   "path": "Streams and Flowsheets > Recycle Calculations > When the Solve Does Not Converge",
+   "source": "streams-and-flowsheets.md",
+   "targets": [],
+   "text": "A tear iteration that runs out of iterations returns anyway, and what it\nreturns is the last iterate: every stream present, every number plausible, and\nthe material balance around the loop off by the tear residual. For a loop that\nis limit-cycling that error is not small.\n\n`solve()` says so rather than leaving it to the caller to go looking:\n\n```python\nstreams = fs.solve()                          # ConvergenceWarning if it didn't\nstreams = fs.solve(on_nonconvergence=\"raise\") # ConvergenceError instead\nstreams = fs.solve(on_nonconvergence=\"ignore\")# silent; check last_solve_* yourself\n```\n\nThe message names the tear streams, the final residual, the tolerance, the\niteration count and the method used --- the same `last_solve_*` diagnostics the\nreport layer and the editor read, which stay available whichever option is\nchosen:\n\n```text\nRecycle solve did not converge: tear stream(s) recycle reached a residual of\n3.2e-03 after 100 of 100 iterations, against a tolerance of 1.0e-08\n(method: anderson). The returned streams are the last iterate, not a solution\n-- material balances around the loop are off by the tear residual. ...\n```\n\n`ConvergenceWarning` and `ConvergenceError` are exported from `difflow`, so the\nusual `warnings.simplefilter(\"error\", ConvergenceWarning)` turns every\nnon-converged solve in a script into a failure.\n\nUnder `jax.grad` or `jit` the residual is a tracer with no numeric value, so\nthere is nothing to judge: `last_solve_converged` is `None` and the solve stays\nsilent whatever `on_nonconvergence` says. That path is the optimistix fixed\npoint, which carries its own implicit-differentiation rule."
   },
   {
    "anchor": "implicit-differentiation",

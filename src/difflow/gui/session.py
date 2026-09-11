@@ -1264,7 +1264,11 @@ class FlowsheetSession:
             return {"ok": False, "error": self.solve_error, "pending": sorted(self.pending)}
         try:
             with self._lock:
-                streams = self.flowsheet.solve()
+                # The editor renders the verdict itself, in red, from the
+                # `converged` field below; a ConvergenceWarning on the
+                # server's stderr would say the same thing where nobody
+                # using the editor is looking.
+                streams = self.flowsheet.solve(on_nonconvergence="ignore")
         except Exception as exc:
             self.solve_error = self._solve_error(exc)
             return {"ok": False, "error": self.solve_error}

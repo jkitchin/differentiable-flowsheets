@@ -185,7 +185,13 @@ from difflow.units.gas_turbine import (
     make_cycle_thermo,
 )
 from difflow.combustion import IdealGasThermo
-from difflow.flowsheet import Flowsheet, Unit, create_objective
+from difflow.flowsheet import (
+    Flowsheet,
+    Unit,
+    create_objective,
+    ConvergenceWarning,
+    ConvergenceError,
+)
 from difflow.report import (
     ConvergenceInfo,
     OptimizationReport,
@@ -481,6 +487,8 @@ __all__ = [
     "Flowsheet",
     "Unit",
     "create_objective",
+    "ConvergenceWarning",
+    "ConvergenceError",
     # Reporting
     "Report",
     "OptimizationReport",
