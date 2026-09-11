@@ -97,7 +97,9 @@ class ValueKeyed:
 
     def _set_value_key(self, *parts: Any) -> None:
         key = static_key(parts)
-        self._value_key = NO_KEY if key is NO_KEY else key
+        # object.__setattr__, so a frozen dataclass can set it from
+        # __post_init__ without tripping FrozenInstanceError.
+        object.__setattr__(self, "_value_key", NO_KEY if key is NO_KEY else key)
 
     def __hash__(self) -> int:
         key = self._value_key
