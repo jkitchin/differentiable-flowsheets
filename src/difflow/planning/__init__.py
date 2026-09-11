@@ -142,6 +142,11 @@ from difflow.planning.benchmark import (
     time_callable,
 )
 from difflow.planning.block import Block
+from difflow.planning.curvature import (
+    EIG_TOL, GAIN_TOL, Curvature, ModelOrderReport, block_curvature,
+    block_hvp, check_model_order, classify_definiteness, hessian_of, hvp,
+    scalar_output,
+)
 from difflow.planning.diagram import (
     draw_chain, draw_delta_vectors, draw_planning_network, draw_taylor_model,
     draw_trust_region,
@@ -192,6 +197,18 @@ __all__ = [
     "classify_phase",
     "check_phase_transition",
     "PhaseBoundaryWarning",
+    # Curvature and model order
+    "Curvature",
+    "ModelOrderReport",
+    "block_curvature",
+    "block_hvp",
+    "check_model_order",
+    "classify_definiteness",
+    "hessian_of",
+    "hvp",
+    "scalar_output",
+    "EIG_TOL",
+    "GAIN_TOL",
     # Delta-vector health
     "check_delta_health",
     "check_block_health",

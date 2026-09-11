@@ -24,11 +24,13 @@ is for unit operations.
 12. [Modifier adaptation](#modifier-adaptation)
 13. [Coefficient covariance and back-off](#coefficient-covariance-and-back-off)
 14. [Piecewise-linear blocks and MILP](#piecewise-linear-blocks-and-milp)
-15. [Emitting Pyomo](#emitting-pyomo)
-16. [From a flowsheet to a block](#from-a-flowsheet-to-a-block)
-17. [Exporting delta vectors](#exporting-delta-vectors)
-18. [What this module is not](#what-this-module-is-not)
-19. [API summary](#api-summary)
+15. [Second-order models: is a delta vector enough?](#second-order-models-is-a-delta-vector-enough)
+16. [Multi-period planning and inventory](#multi-period-planning-and-inventory)
+17. [Emitting Pyomo](#emitting-pyomo)
+18. [From a flowsheet to a block](#from-a-flowsheet-to-a-block)
+19. [Exporting delta vectors](#exporting-delta-vectors)
+20. [What this module is not](#what-this-module-is-not)
+21. [API summary](#api-summary)
 
 ---
 
@@ -612,6 +614,115 @@ approximation of the cross terms otherwise. The alternative would multiply the
 SOS2 weights by the other inputs, which is bilinear — and bilinear is the line
 this module does not cross.
 
+## Second-order models: is a delta vector enough?
+
+A delta vector is a first-order model. AD supplies the second order for about
+what the first order costs: a Hessian-vector product is one `jax.jvp` through
+`jax.grad`, so the exact Hessian of one scalar output costs $O(n_u)$ HVPs —
+roughly what a *central-difference Jacobian alone* costs the systems that build
+delta vectors by perturbation. The second-order model is available at the price
+the incumbent already pays for its first-order one.
+
+Where it helps, it helps enormously. Stepping a reduced AC power-flow model the
+whole way from an incumbent generator schedule to the optimal one
+(`tests/power/test_planning_opf.py`):
+
+| step | true cost | linear error | quadratic error |
+|---|---|---|---|
+| 25% | 5379.35 | −7.86 | 0.00 |
+| 50% | 5336.09 | −31.44 | +0.02 |
+| 100% | 5296.69 | −125.73 | **+0.13** |
+
+Three orders of magnitude, over a step no trust region would allow in one
+cycle.
+
+Whether to *use* it is a different question, and `difflow.planning.curvature`
+answers it rather than assuming. Every guarantee in this module chains off the
+subproblem being an LP: solved to global optimality, duals readable as prices,
+Eason–Biegler filter convergence. A quadratic objective preserves those only
+while its Hessian is definite in the direction of optimisation. An indefinite
+one makes the subproblem a nonconvex QP and voids all three **while still
+returning a number**.
+
+```python
+from difflow.planning import check_model_order
+
+rep = check_model_order(block, "cost", radius=0.2, sense="min")
+print(rep.summary())
+rep.recommended        # 'linear' or 'quadratic'
+rep.improvement        # error-reduction factor, inf when exact
+rep.curvature          # Hessian, eigenvalues, definiteness verdict
+rep.caveat             # why a good fit was still refused, or None
+```
+
+`check_model_order` recommends `"quadratic"` only when the model is *both*
+materially more accurate over the step and convex in the direction of
+optimisation. A perfect fit with an indefinite Hessian is refused, and
+`rep.caveat` says what to do about it — Gauss-Newton, modified Cholesky, or a
+damped BFGS update, which needs no second derivatives at all.
+
+**Definiteness is a property of where you are, not of the model.** On the same
+nine-bus network the reduced cost Hessian is positive definite at the incumbent
+operating point and strongly indefinite at heavily loaded ones, and the
+Hessians of the voltage and thermal limits are indefinite at nearly every point
+sampled. So the check belongs at the linearisation point each cycle, not once
+at commissioning. `test_definiteness_is_a_property_of_the_point` is the
+regression.
+
+Pass a mapping to take the curvature of the *priced objective* rather than of
+one output:
+
+```python
+from difflow.planning import block_curvature
+curv = block_curvature(block, {"NGL_C2": 12.0, "Power": 40.0})
+curv.convex_for("max")
+```
+
+Nothing here changes the planner. These are diagnostics on a block, in the
+spirit of `check_delta_vectors` and `check_delta_health`: they say what a
+second-order subproblem would buy and what it would cost in guarantees, so the
+decision to build one is taken on evidence.
+
+## Multi-period planning and inventory
+
+Periods are *replicated* by `two_plant_chain(horizon=n)`, which names blocks
+`ngl@t0 … ngl@t3` and couples them only through a shared cap. That is a horizon
+built to make the AD scaling argument measurable. A planning model couples
+periods through **inventory**: what is not sold this period is still there next
+period.
+
+That needs no new machinery. A `Link` is output-to-input and the network rejects
+only *cycles*, so a forward link from one period's tank level to the next is an
+ordinary DAG edge:
+
+```python
+links.append((f"tank@t{t-1}.level_out", f"tank@t{t}.level_in"))
+```
+
+`tests/test_planning_multiperiod.py` builds a four-period storage-arbitrage
+model this way — make cheaply, hold, sell into a price spike — and it plans
+correctly, holding inventory back and drawing the tank down into the spike.
+The opening level is not constrained to zero; the first period simply uses a
+block with no `level_in` input, so the model *starts* feasible.
+
+Two traps, both found by building the model rather than by reading the code,
+and both pinned as regressions.
+
+**`Spec` is elastic by default, and that is wrong for a mass balance.** Elastic
+slack is right for a commercial specification — you can ship off-spec at a cost
+— and fiction for a physical one. With elastic inventory constraints the
+planner reports a *higher* objective than the feasible plan earns, by running
+the tank negative and selling from an empty vessel, and it converges and
+reports that number without complaint. Physical balances must be
+`elastic=False`.
+
+**There is no feasibility restoration.** If an inelastic spec is violated at the
+starting point, the LP is infeasible from the first cycle, and the planner's
+response — shrink the radius — can only tighten it. The run ends at
+`reason="lp_infeasible"` with every decision still on its start value. The
+failure is reported rather than hidden, but the remedy is to start feasible;
+a phase-1 restoration step is what would fix it properly.
+
 ## Emitting Pyomo
 
 difflow is not short of solvers — `difflow.eo_solver` solves a flowsheet's
@@ -801,6 +912,10 @@ you.
 | `draw_chain`, `draw_planning_network` | The flowsheet, and the network as the LP holds it |
 | `draw_delta_vectors`, `draw_taylor_model`, `draw_trust_region` | The model, its locality, and the loop |
 | `check_delta_vectors` | Verify AD deltas against central differences |
+| `check_model_order` | Linear against quadratic, measured on the block itself |
+| `block_curvature`, `Curvature` | Exact Hessian by HVP, with its definiteness verdict |
+| `hvp`, `hessian_of`, `block_hvp` | The second-order primitives |
+| `ModelOrderReport` | Which model earns its cost here, and why not the other |
 | `choose_ad_mode` | `jacrev` vs `jacfwd`, chosen by shape |
 | `PhaseBoundaryWarning` | Raised when a proposal crosses a phase boundary |
 | `check_delta_health` | Dead levers, recycle amplification, ill-conditioning |

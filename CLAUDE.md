@@ -407,6 +407,32 @@ network)` and `DeltaBasePlanner.check_health()` report all three; they never
 raise during a solve. Keep blocks small — linearising a whole plant as one
 block *does* form the deep chain-rule product and its entries do collapse.
 
+Second order, and multi-period (`difflow.planning.curvature`, and the `Link`
+machinery you already have):
+- A Hessian-vector product is one `jvp` through `grad`, so the exact Hessian of
+  a scalar output costs `O(n_u)` HVPs -- what a central-difference *Jacobian*
+  costs. `check_model_order(block, output, sense=...)` measures the linear and
+  quadratic models against the block itself and says which earns its cost.
+- It recommends `"quadratic"` only when the fit is better AND the Hessian is
+  definite in the direction of optimisation. An indefinite Hessian makes the
+  subproblem a nonconvex QP, which forfeits the global optimality that the
+  duals-as-prices reading and the Eason-Biegler theory both rest on -- so a
+  perfect fit is refused, and `.caveat` names the convexification to apply.
+- Definiteness is a property of the POINT, not of the model: the same reduced
+  AC cost is convex at an incumbent schedule and indefinite under heavy load.
+  Check it at the linearisation point each cycle; never cache the verdict.
+- Multi-period inventory needs no new machinery. A `Link` is output-to-input
+  and the network rejects only cycles, so `tank@t0.level_out ->
+  tank@t1.level_in` is an ordinary DAG edge. Make the first period a block with
+  no `level_in` so the model starts feasible.
+- `Spec` is `elastic=True` by default, which is right for a commercial spec and
+  WRONG for a mass balance: an elastic inventory balance lets the planner
+  report a better objective by selling from an empty tank, and it converges
+  without complaint. Physical constraints are `elastic=False`.
+- There is no feasibility restoration. An inelastic spec violated at the start
+  makes the LP infeasible, and shrinking the radius can only tighten it; the
+  run ends at `reason="lp_infeasible"` with nothing moved. Start feasible.
+
 Reporting and drawings (use these rather than re-deriving them in a notebook):
 - `planner.describe()` states the problem — objective, decisions, bounds, links, specs.
 - `lp_model.as_text()` writes the assembled LP out row by row.
@@ -432,7 +458,10 @@ From a flowsheet, and out to someone else's LP:
 
 Reference model: `difflow.planning.chain.two_plant_chain()`. Docs: `docs/planning.md`.
 Example: `examples/30_delta_base_planning.ipynb`. Tests: `tests/test_planning.py`,
-`tests/test_planning_export.py`.
+`tests/test_planning_export.py`, `tests/test_planning_curvature.py`,
+`tests/test_planning_multiperiod.py`, `tests/power/test_planning_opf.py` (the
+accuracy claim: SLP over AD delta vectors reaches the AC-OPF optimum and beats
+DC-OPF, all three dispatches scored in the full AC model).
 
 ### Stochastic Programming (`difflow.stochastic`)
 
