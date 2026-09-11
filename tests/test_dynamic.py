@@ -312,6 +312,7 @@ class TestRK45:
 class TestIntegrationGradients:
     """Tests for gradient computation through integration."""
 
+    @pytest.mark.release
     def test_gradient_wrt_initial_condition(self):
         """Test gradient of final state w.r.t. initial condition."""
         def f(t, y):
@@ -329,6 +330,7 @@ class TestIntegrationGradients:
         expected_grad = jnp.exp(-1.0)
         assert jnp.allclose(grad[0], expected_grad, rtol=1e-3)
 
+    @pytest.mark.release
     def test_gradient_wrt_parameter(self):
         """Test gradient w.r.t. parameter in ODE."""
         def f(t, y, k):

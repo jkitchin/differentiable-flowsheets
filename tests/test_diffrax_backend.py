@@ -254,6 +254,7 @@ class TestGradientsThroughDiffrax:
     through the ODE solution.
     """
 
+    @pytest.mark.release
     def test_gradient_wrt_initial_condition(self):
         """Compute gradient of final state w.r.t. initial condition."""
         def exponential_decay(t, y):
@@ -274,6 +275,7 @@ class TestGradientsThroughDiffrax:
         # Gradient should be positive (larger y0 -> larger final value)
         assert grad[0] > 0
 
+    @pytest.mark.release
     def test_gradient_wrt_parameter(self):
         """Optimize reaction rate parameter using gradient descent."""
         def make_rate_system(k):

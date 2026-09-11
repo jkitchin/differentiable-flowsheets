@@ -29,6 +29,7 @@ from difflow_power.dc import (
 )
 
 
+@pytest.mark.release
 def test_case5_dcopf_matches_matpower():
     result = solve_dcopf(dp.cases.case5())
     assert result.converged
@@ -53,6 +54,7 @@ def test_dcopf_is_lossless_so_generation_equals_load():
         )
 
 
+@pytest.mark.release
 def test_dcopf_is_optimistic_about_cost():
     """No losses means nobody generates them, so DC always under-prices."""
     net = dp.cases.case9()

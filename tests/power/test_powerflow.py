@@ -29,6 +29,7 @@ from difflow_power.powerflow import (
 from difflow_power.residuals import power_state_layout
 
 
+@pytest.mark.release
 def test_case9_matches_matpower():
     result = dp.solve_power_flow(dp.cases.case9())
     assert result.converged
@@ -45,6 +46,7 @@ def test_case9_matches_matpower():
     assert result.max_mismatch_mw < 1e-9
 
 
+@pytest.mark.release
 def test_case14_matches_matpower():
     result = dp.solve_power_flow(dp.cases.case14())
     assert result.converged

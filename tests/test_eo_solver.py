@@ -391,6 +391,7 @@ class TestEOSolverRecycle:
 
 
 class TestEODifferentiability:
+    @pytest.mark.release
     def test_eo_grad_wrt_params(self, simple_thermo, simple_rate_fn):
         """Test that grad works through EO solve."""
         stoich = jnp.array([[-1.0], [+1.0]])

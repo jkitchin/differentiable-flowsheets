@@ -6,6 +6,7 @@ produces the first and routinely fails the second, which is the whole
 reason an OPF exists.
 """
 
+import pytest
 import jax
 
 jax.config.update("jax_enable_x64", True)
@@ -51,6 +52,7 @@ def test_violations_carry_their_magnitude_and_sign():
     assert report.voltage_violations["9"] < 0.0     # under, not over
 
 
+@pytest.mark.release
 def test_branch_losses_are_non_negative_on_every_case():
     """The cheapest useful check on a new case file."""
     for case in dp.cases.CASES:

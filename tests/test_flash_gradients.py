@@ -72,6 +72,7 @@ def binary_thermo():
 class TestEOSFlashGradients:
     """Gradient tests for EOS-based flash."""
 
+    @pytest.mark.release
     def test_gradient_wrt_temperature(self, eos_flash):
         """Gradient of vapor fraction w.r.t. feed temperature.
 
@@ -96,6 +97,7 @@ class TestEOSFlashGradients:
             f"dV/dT should be positive (got {float(grad_val)})"
         )
 
+    @pytest.mark.release
     def test_gradient_wrt_pressure(self, eos_flash):
         """Gradient of vapor fraction w.r.t. feed pressure.
 
@@ -120,6 +122,7 @@ class TestEOSFlashGradients:
             f"dV/dP should be negative (got {float(grad_val)})"
         )
 
+    @pytest.mark.release
     def test_gradient_wrt_composition(self, eos_flash):
         """Gradient of vapor-phase methane purity w.r.t. feed methane flow.
 
@@ -149,6 +152,7 @@ class TestEOSFlashGradients:
 class TestPHFlashGradients:
     """Gradient tests for PH (isenthalpic) flash."""
 
+    @pytest.mark.release
     def test_gradient_wrt_feed_temperature(self, binary_thermo):
         """Gradient of vapor fraction w.r.t. feed temperature in PH flash.
 
@@ -183,6 +187,7 @@ class TestPHFlashGradients:
 class TestFlashCompositionGradients:
     """Gradient of ideal Flash w.r.t. feed composition."""
 
+    @pytest.mark.release
     def test_gradient_wrt_light_fraction(self, binary_thermo):
         """Gradient of vapor fraction w.r.t. amount of light component.
 

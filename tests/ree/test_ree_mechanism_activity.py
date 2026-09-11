@@ -600,6 +600,7 @@ class TestDaviesSignInversion:
 class TestGradients:
     """get_D stays grad- and jit-safe through both mechanisms."""
 
+    @pytest.mark.release
     def test_grad_wrt_ph_matches_finite_difference(self):
         dist = REEDistribution(extractant="D2EHPA", elements=("Nd",))
         f = lambda pH: dist.get_D("Nd", pH=pH)
@@ -609,6 +610,7 @@ class TestGradients:
         assert np.isfinite(g)
         assert g == pytest.approx(fd, rel=1e-5)
 
+    @pytest.mark.release
     def test_grad_wrt_nitrate_matches_finite_difference(self):
         dist = REEDistribution(
             extractant="TBP", elements=("Nd",), nitrate_conc=3.0
@@ -621,6 +623,7 @@ class TestGradients:
         assert g > 0.0  # D rises with nitrate
         assert g == pytest.approx(fd, rel=1e-5)
 
+    @pytest.mark.release
     def test_grad_wrt_ionic_strength_is_finite_and_negative(self):
         """In range the correction reduces D, so dD/dI < 0 and matches a finite
         difference. Probed across the whole Davies range and, critically, ALSO
@@ -649,6 +652,7 @@ class TestGradients:
             assert np.isfinite(g)
             assert g == 0.0, f"dD/dI should be flat past the range at I={I0}"
 
+    @pytest.mark.release
     def test_grad_is_positive_only_when_extrapolation_is_requested(self):
         """The inverted branch still exists, and still has the sign the bug
         report measured -- but only for a caller who asked for it (#194)."""
@@ -913,6 +917,7 @@ class TestCustomExtractantStoichiometryBasis:
         assert ext.monomers_per_ree == 6
         assert ext.max_loading == pytest.approx(1.0 / 6.0)
 
+    @pytest.mark.release
     def test_it_agrees_with_the_built_in_acidic_extractants(self):
         """The whole point: a custom D2EHPA-like record must not disagree with
         the real one about capacity."""

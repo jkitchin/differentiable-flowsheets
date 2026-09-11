@@ -48,6 +48,7 @@ words) stays under the budget and keeps its reuse.
 """
 
 import gc
+import os
 
 import jax
 import pytest
@@ -60,7 +61,21 @@ import pytest
 #: 6.0 GB with this budget, for 15 seconds on a 10-minute module -- those
 #: tests build a fresh column per test and so recompile either way, which is
 #: why dropping the caches under them costs so little.
-MAPPING_BUDGET = 15_000
+_MAPPING_BUDGET = 15_000
+
+#: Under ``pytest -n`` every worker is a separate process holding its own
+#: caches, so the budget above is spent once per worker and what they add up
+#: to is what the machine has to hold. Measured on the whole suite at
+#: ``-n 4``: 12.1 GB peak against the 16 GB a GitHub runner has, which is
+#: close enough to the edge that a slightly heavier module would be the one
+#: to find it. Dividing the budget by the worker count holds the *sum* at
+#: what one serial run costs: the same suite peaks at 7.4 GB with this in
+#: place. The floor keeps a hypothetical ``-n 32`` from clearing the caches
+#: after every test.
+MAPPING_BUDGET = max(
+    _MAPPING_BUDGET // int(os.environ.get("PYTEST_XDIST_WORKER_COUNT", 1)),
+    2_000,
+)
 
 
 def _mappings():

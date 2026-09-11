@@ -104,6 +104,7 @@ class TestFirstOrderKinetics:
         assert F_A_out_numerical == pytest.approx(F_A_out_analytical, rel=1e-6)
         assert conversion_numerical == pytest.approx(conversion_analytical, rel=1e-6)
 
+    @pytest.mark.release
     def test_gradient_wrt_k(self, simple_thermo):
         """Test gradient of conversion with respect to rate constant k."""
 
@@ -191,6 +192,7 @@ class TestSecondOrderKinetics:
         # Compare
         assert F_A_out_numerical == pytest.approx(F_A_out_analytical, rel=1e-5)
 
+    @pytest.mark.release
     def test_gradient_wrt_k(self, simple_thermo):
         """Test gradient flows correctly for second-order kinetics."""
 
@@ -273,6 +275,7 @@ class TestZeroOrderKinetics:
         # Compare (use slightly relaxed tolerance due to tanh smoothing)
         assert F_A_out_numerical == pytest.approx(F_A_out_analytical, rel=1e-3)
 
+    @pytest.mark.release
     def test_gradient_wrt_volume(self, simple_thermo):
         """Test gradient of output with respect to reactor volume."""
 
@@ -335,6 +338,7 @@ class TestMichaelisMentenKinetics:
 
         assert total_out == pytest.approx(total_in, rel=1e-6)
 
+    @pytest.mark.release
     def test_gradient_wrt_vmax(self, simple_thermo):
         """Test gradient with respect to V_max."""
 
@@ -372,6 +376,7 @@ class TestMichaelisMentenKinetics:
 
         assert float(grad_vmax) == pytest.approx(fd_grad, rel=1e-3)
 
+    @pytest.mark.release
     def test_gradient_wrt_km(self, simple_thermo):
         """Test gradient with respect to K_m."""
 
@@ -440,6 +445,7 @@ class TestReversibleKinetics:
         # Won't reach exactly K_eq due to finite residence time, but should be close
         assert ratio > 1.5  # Should be approaching K_eq = 2.0
 
+    @pytest.mark.release
     def test_gradient_wrt_equilibrium_constant(self, simple_thermo):
         """Test gradient with respect to reverse rate constant (affects equilibrium)."""
 
@@ -529,6 +535,7 @@ class TestMultipleReactions:
 class TestArrheniusTemperatureDependence:
     """Tests for temperature-dependent kinetics using Arrhenius form."""
 
+    @pytest.mark.release
     def test_arrhenius_gradient_wrt_temperature(self, simple_thermo):
         """Test gradient with respect to temperature for Arrhenius kinetics."""
 

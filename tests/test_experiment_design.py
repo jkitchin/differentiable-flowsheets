@@ -8,6 +8,7 @@ covariance against the covariance actually obtained by fitting simulated
 data from the designed runs.
 """
 
+import itertools
 from itertools import combinations_with_replacement
 
 import pytest
@@ -220,6 +221,7 @@ class TestCriteria:
         assert float(design_criterion(fim, "E")) == pytest.approx(1.0)
         assert float(design_criterion(fim, "ME")) == pytest.approx(3.0)
 
+    @pytest.mark.release
     def test_log_det_agrees_with_slogdet_but_not_via_det(self):
         rng = np.random.default_rng(0)
         a = rng.standard_normal((5, 5))
@@ -316,20 +318,37 @@ class TestCriteria:
 # ---------------------------------------------------------------------------
 
 def _brute_force_best(model_fn, theta, pool, n, criterion):
-    """Best design by exhaustive enumeration (with replacement)."""
-    contrib = [
-        np.asarray(fisher_information(model_fn, theta, [e])) for e in pool
-    ]
-    best_val, best_combo = None, None
+    """Best design by exhaustive enumeration (with replacement).
+
+    Enumerated in one batch rather than one combination at a time. The
+    arrhenius case below is C(25, 5) = 53130 designs, and scoring them in a
+    Python loop called ``design_criterion`` 53130 times outside any jit --
+    one eager dispatch per primitive, ~270k of them, which was 55 of that
+    test's 67 seconds and made this the slowest test in the suite. The FIM
+    sums are numpy; the criterion is vmapped, so it compiles once and scores
+    every design in a single call. Same reference values, same tie-breaking
+    (first best in enumeration order, which is what argmax/argmin return).
+    """
+    contrib = np.stack(
+        [np.asarray(fisher_information(model_fn, theta, [e])) for e in pool]
+    )
+    combos = np.fromiter(
+        itertools.chain.from_iterable(
+            combinations_with_replacement(range(len(pool)), n)
+        ),
+        dtype=np.intp,
+    ).reshape(-1, n)
+    fims = contrib[combos].sum(axis=1)                    # (K, p, p)
+    score = jax.jit(jax.vmap(lambda f: design_criterion(f, criterion)))
+    vals = np.asarray(score(jnp.asarray(fims)), dtype=float)
+
+    finite = np.isfinite(vals)
+    if not finite.any():
+        return None, None
     minimize = criterion in ("A", "ME")
-    for combo in combinations_with_replacement(range(len(pool)), n):
-        fim = sum(contrib[i] for i in combo)
-        val = float(design_criterion(jnp.asarray(fim), criterion))
-        if not np.isfinite(val):
-            continue
-        if best_val is None or (val < best_val if minimize else val > best_val):
-            best_val, best_combo = val, combo
-    return best_val, best_combo
+    masked = np.where(finite, vals, np.inf if minimize else -np.inf)
+    i = int(np.argmin(masked) if minimize else np.argmax(masked))
+    return float(vals[i]), tuple(int(c) for c in combos[i])
 
 
 class TestDesignSelection:
@@ -527,6 +546,7 @@ class TestDesignSelection:
 # ---------------------------------------------------------------------------
 
 class TestPredictedCovariance:
+    @pytest.mark.release
     def test_matches_the_closed_form_for_a_line(self):
         # cov = sigma^2 (X^T X)^{-1} for y = a x + b.
         sigma = 0.5
@@ -541,6 +561,7 @@ class TestPredictedCovariance:
             expected[0, 1] / np.sqrt(expected[0, 0] * expected[1, 1])
         )
 
+    @pytest.mark.release
     def test_intervals_use_the_student_t_of_the_proposed_campaign(self):
         from scipy import stats
 
@@ -556,6 +577,7 @@ class TestPredictedCovariance:
         tighter = predicted_covariance(linear_model, theta, exps, alpha=0.32)
         assert tighter.ci_upper["a"] < ci.ci_upper["a"]
 
+    @pytest.mark.release
     def test_a_singular_campaign_reports_infinite_intervals(self):
         pool = [Experiment.candidate({"x": float(x)}, ["y"]) for x in range(1, 5)]
         ci = predicted_covariance(
@@ -566,12 +588,14 @@ class TestPredictedCovariance:
         assert np.all(np.isinf(np.asarray(ci.covariance)))
         assert np.all(np.isnan(np.asarray(ci.correlation)))
 
+    @pytest.mark.release
     def test_intervals_bracket_theta(self):
         exps = line_pool([0.0, 1.0, 2.0, 3.0], sigma=0.5)
         ci = predicted_covariance(linear_model, {"a": 2.0, "b": 1.0}, exps)
         assert ci.ci_lower["a"] < 2.0 < ci.ci_upper["a"]
         assert ci.ci_lower["b"] < 1.0 < ci.ci_upper["b"]
 
+    @pytest.mark.release
     def test_more_replicates_shrink_the_intervals_as_one_over_sqrt_n(self):
         base = line_pool([0.0, 1.0, 2.0, 3.0], sigma=0.5)
         ci1 = predicted_covariance(linear_model, {"a": 2.0, "b": 1.0}, base)
@@ -579,6 +603,7 @@ class TestPredictedCovariance:
         assert ci4.std_errors["a"] == pytest.approx(ci1.std_errors["a"] / 2.0)
 
     @pytest.mark.slow
+    @pytest.mark.release
     def test_predicted_covariance_matches_a_monte_carlo_refit(self):
         """The end-to-end check: design, simulate, fit, compare.
 
@@ -638,6 +663,7 @@ class TestPredictedCovariance:
         assert rho_mc == pytest.approx(rho_pred, abs=0.12)
 
     @pytest.mark.slow
+    @pytest.mark.release
     def test_nonlinear_predicted_covariance_matches_a_monte_carlo_refit(self):
         """Same check for a nonlinear model, where the FIM is a linearization."""
         theta_true = {"A": 5.0, "E": 800.0}
@@ -677,6 +703,7 @@ class TestPredictedCovariance:
         for i in range(2):
             assert cov_mc[i, i] == pytest.approx(cov_pred[i, i], rel=0.35)
 
+    @pytest.mark.release
     def test_a_design_beats_an_arbitrary_campaign_of_the_same_size(self):
         theta = {"a": 1.0, "b": 0.0}
         pool = line_pool(np.linspace(0.0, 10.0, 11))

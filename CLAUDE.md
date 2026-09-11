@@ -10,14 +10,20 @@
 # Install in development mode
 pip install -e ".[dev,examples,solvers]"
 
-# Run tests
-pytest tests/ -v
+# Run tests (parallel; --dist loadfile keeps a module's JAX compilation
+# cache in one worker, without which the workers just recompile it each)
+make test                      # skips the `slow` marker
+make test-all                  # everything
+pytest tests/ -v -n auto --dist loadfile
 
 # Run specific test file
 pytest tests/test_cstr.py -v
 
 # Run tests with coverage
 pytest tests/ --cov=src/difflow
+
+# Re-measure the per-test durations CI shards its three jobs on
+make test-durations
 
 # Build documentation (Jupyter Book)
 make book

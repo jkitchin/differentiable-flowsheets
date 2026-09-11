@@ -213,6 +213,7 @@ class TestFlashCalculation:
 class TestFlashGradient:
     """Tests for Flash gradient compatibility."""
 
+    @pytest.mark.release
     def test_gradient_wrt_temperature(self, binary_thermo, flash_params):
         """Test gradient of vapor fraction w.r.t. temperature."""
         flash = Flash(flash_params, binary_thermo)
@@ -235,6 +236,7 @@ class TestFlashGradient:
         V_high = float(vapor_fraction(360.0))
         assert V_high >= V_low
 
+    @pytest.mark.release
     def test_gradient_wrt_pressure(self, binary_thermo, flash_params):
         """Test gradient of vapor fraction w.r.t. pressure."""
         flash = Flash(flash_params, binary_thermo)
@@ -573,6 +575,7 @@ class TestMixer:
 class TestMixerGradient:
     """Tests for Mixer gradient compatibility."""
 
+    @pytest.mark.release
     def test_mixer_gradient_wrt_flow(self):
         """Test gradient of mixer output w.r.t. input flow."""
         mixer = Mixer(species_order=["A"])

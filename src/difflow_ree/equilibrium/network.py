@@ -68,12 +68,15 @@ gap so it can be tested and quoted instead of discovered.
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 import jax.numpy as jnp
 import numpy as np
+
+from difflow.cache_key import ValueKeyed
 import yaml
 from jax import Array
 
@@ -221,7 +224,7 @@ class NetworkTemplate:
 # =============================================================================
 
 @dataclass(frozen=True, eq=False)
-class ReactionNetwork:
+class ReactionNetwork(ValueKeyed):
     """An expanded reaction network with its numeric tableau.
 
     Everything on this object except :attr:`log10_K` is *static*: it is
@@ -279,6 +282,17 @@ class ReactionNetwork:
     anion_index: int
     extractant_index: int
     counter_ion_species_index: tuple[int, ...] = ()
+
+    def __post_init__(self) -> None:
+        # Every field here is static by construction (the class docstring says
+        # so: only log10_K is traced, and it is carried in the solver's args,
+        # not on this object). Keying on their values lets two identically
+        # built networks share the residual closure -- and so the compiled
+        # solve -- instead of each one being a fresh cache miss. Frozen, so
+        # the key cannot go stale under us.
+        self._set_value_key(
+            *(getattr(self, f.name) for f in dataclasses.fields(self))
+        )
 
     # -- convenience -----------------------------------------------------
 

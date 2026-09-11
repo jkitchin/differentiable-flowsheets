@@ -44,6 +44,7 @@ def opf5():
     return dp.solve_acopf(dp.cases.case5())
 
 
+@pytest.mark.release
 def test_case9_matches_the_matpower_optimum(opf9):
     assert opf9.converged
     assert opf9.cost == pytest.approx(5296.69, abs=0.01)
@@ -52,12 +53,14 @@ def test_case9_matches_the_matpower_optimum(opf9):
     assert opf9.pg_mw["g3"] == pytest.approx(94.19, abs=0.02)
 
 
+@pytest.mark.release
 def test_case5_matches_the_matpower_optimum(opf5):
     assert opf5.converged
     assert opf5.cost == pytest.approx(17551.89, abs=0.01)
 
 
 @pytest.mark.slow
+@pytest.mark.release
 def test_case14_matches_the_matpower_optimum():
     result = dp.solve_acopf(dp.cases.case14())
     assert result.converged
@@ -112,6 +115,7 @@ def test_prices_from_multipliers_equal_prices_from_autodiff_congested(opf5):
     assert max(errors.values()) < 1e-4
 
 
+@pytest.mark.release
 def test_solution_sensitivity_matches_finite_differences():
     """d(dispatch)/d(load), by implicit differentiation of the KKT system."""
     net = dp.cases.case9()

@@ -110,6 +110,7 @@ def test_polynomial_cost_and_its_derivative():
     )
 
 
+@pytest.mark.release
 def test_marginal_cost_agrees_with_autodiff():
     coefficients = (0.002, 0.11, 5.0, 150.0)
     for p in (0.0, 37.5, 210.0):

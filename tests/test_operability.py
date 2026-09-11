@@ -641,6 +641,7 @@ def test_disturbance_gain_scaling_uses_d_span():
 # AD gains against central differences, on a real flowsheet
 # --------------------------------------------------------------------------
 
+@pytest.mark.release
 def test_gain_matrix_matches_central_differences(flowsheet):
     """The AD gain of a CSTR + flash train, verified by finite differences.
 
@@ -661,6 +662,7 @@ def test_gain_matrix_matches_central_differences(flowsheet):
     assert np.abs(G_ad[1, 0]) / scale > 1e-3
 
 
+@pytest.mark.release
 def test_disturbance_gain_matches_central_differences(flowsheet):
     Gd_ad = np.asarray(disturbance_gain(flowsheet, U0, D0))
     Gd_fd = _central_difference_jacobian(lambda d: flowsheet(U0, d), D0, 1e-5)
@@ -738,6 +740,7 @@ def test_jit_matches_eager(flowsheet, flowsheet_scaling):
     assert np.isfinite(eager) and eager > 0
 
 
+@pytest.mark.release
 def test_whole_screen_vmaps_over_operating_points(flowsheet,
                                                    flowsheet_scaling):
     """A screen per candidate design, in one batched call.
@@ -800,6 +803,7 @@ def test_metrics_are_jit_and_vmap_compatible():
     np.testing.assert_allclose(batched, eager, rtol=1e-10)
 
 
+@pytest.mark.release
 def test_msv_is_differentiable_with_respect_to_a_design_variable():
     """sigma_min inside an objective: the whole motivation of issue #199."""
     sc = Scaling(u_span=[1.0, 1.0], y_span=[1.0, 1.0])

@@ -154,6 +154,7 @@ def test_unknown_branch_parameter_is_rejected():
 # --- case files -------------------------------------------------------
 
 
+@pytest.mark.release
 def test_case9_matches_the_matpower_case_file():
     net = dp.cases.case9()
     assert net.base_mva == 100.0
@@ -186,6 +187,7 @@ def test_case5_has_two_units_on_one_bus_and_two_rated_branches():
     assert len(rated) == 2
 
 
+@pytest.mark.release
 def test_matpower_import_converts_degrees_and_drops_out_of_service():
     mpc = {
         "baseMVA": 100.0,

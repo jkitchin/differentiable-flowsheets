@@ -20,6 +20,7 @@ Numerical Considerations:
 
 from typing import Callable, Literal
 from dataclasses import dataclass
+from functools import partial
 import jax
 import jax.numpy as jnp
 from jax import Array, lax
@@ -27,6 +28,7 @@ from jax import Array, lax
 from difflow.streams import Stream, get_flows, make_stream
 from difflow.thermo import CubicThermo, IdealThermo
 from difflow.params_mixin import ParamsMixin
+from difflow.cache_key import ValueKeyed
 from difflow.constants import MIN_ALPHA_DIFF, MAX_STAGES, MAX_GILLILAND_Y, EPS_DIVISION
 from difflow.numerics import safe_divide, safe_log
 import optimistix as optx
@@ -313,7 +315,7 @@ class ShortcutColumnParams(ParamsMixin):
     x_B_HK: float = 0.99  # HK recovery in bottoms
 
 
-class ShortcutColumn:
+class ShortcutColumn(ValueKeyed):
     """Shortcut distillation column using Fenske-Underwood-Gilliland.
 
     This method provides quick estimates for:
@@ -378,6 +380,9 @@ class ShortcutColumn:
         """
         self.params = params
         self.thermo = thermo
+        # _solve is jitted with `self` static, so this is what decides whether
+        # a second, identical column reuses the first one's executable.
+        self._set_value_key(params, thermo)
 
     def relative_volatility(
         self,
@@ -798,6 +803,22 @@ class ShortcutColumn:
                 - 'close_boiling': True if α ≈ 1 (hard separation)
                 - 'near_min_reflux': True if R ≈ R_min
         """
+        # The solve itself is jitted (see :meth:`_solve`); this wrapper is a
+        # plain function so the catalog can still read the port names off the
+        # signature -- difflow.catalog derives them with inspect.signature and
+        # skips anything that is not a Python function, which a jitted method
+        # is not.
+        return self._solve(feed, R, P, q)
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _solve(
+        self,
+        feed: Stream,
+        R: Array | float,
+        P: Array | float = 101325.0,
+        q: Array | float = 1.0,
+    ) -> tuple[Stream, Stream, dict[str, Array]]:
+        """The body of :meth:`__call__`, cached on (self, argument shapes)."""
         p = self.params
         R = jnp.asarray(R)
         P = jnp.asarray(P)
@@ -1146,7 +1167,7 @@ class DistillationColumnParams(ParamsMixin):
             )
 
 
-class DistillationColumn:
+class DistillationColumn(ValueKeyed):
     """Rigorous stage-by-stage distillation column.
 
     Solves MESH equations (Material, Equilibrium, Summation, Heat balance)
@@ -1219,6 +1240,7 @@ class DistillationColumn:
         self.params = params
         self.thermo = thermo
         self.n_species = len(params.species_order)
+        self._set_value_key(params, thermo)
 
     def _bubble_point_T(
         self,
@@ -1942,6 +1964,26 @@ class DistillationColumn:
                 - 'L_profile': (n,) liquid flows leaving each stage (mol/s)
                 - 'V_profile': (n,) vapor flows leaving each stage (mol/s)
         """
+        # Jitted body, plain-function wrapper: see :meth:`ShortcutColumn._solve`.
+        # By keyword, not positionally: `static_argnames` only marks an
+        # argument static when it arrives as a keyword, and a traced
+        # `use_mesh` fails on the first `if` that reads it.
+        return self._solve(feed, R, D_spec, B_spec, use_mesh=use_mesh,
+                           mesh_iter=mesh_iter, cmo_iter=cmo_iter)
+
+    @partial(jax.jit, static_argnums=(0,),
+             static_argnames=("use_mesh", "mesh_iter", "cmo_iter"))
+    def _solve(
+        self,
+        feed: Stream,
+        R: Array | float,
+        D_spec: Array | float | None = None,
+        B_spec: Array | float | None = None,
+        use_mesh: bool = True,
+        mesh_iter: int = 20,
+        cmo_iter: int = 30,
+    ) -> tuple[Stream, Stream, dict[str, Array]]:
+        """The body of :meth:`__call__`, cached on (self, argument shapes)."""
         p = self.params
         R = jnp.asarray(R)
 

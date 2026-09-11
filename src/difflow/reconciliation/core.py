@@ -34,6 +34,7 @@ correction that *does* use the full Jacobian --- see
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import partial
 from typing import Any, Callable
 
 import jax
@@ -86,6 +87,18 @@ class Scaling(ParamsMixin):
     @property
     def m(self) -> int:
         return int(self.r.shape[0])
+
+
+# A pytree, so a Scaling can be a *traced* argument of the jitted
+# solve_reconciliation below rather than a static one. Its two children are
+# arrays; `n` and `m` read only their shapes, which stay concrete under
+# tracing. Keeping it static instead would bake each scaling in as a
+# constant and compile the solver once per problem.
+jax.tree_util.register_pytree_node(
+    Scaling,
+    lambda s: ((s.d, s.r), None),
+    lambda _aux, children: Scaling(*children),
+)
 
 
 def identity_scaling(n: int, m: int) -> Scaling:
@@ -216,6 +229,13 @@ def implicit_correction(f_tilde, w, u, lam, v) -> tuple[Array, Array]:
     return z_new[:n], z_new[n:]
 
 
+# residual_fn is argnum 0 and the rest are keyword-only, so the two forms of
+# static marking are both needed. Without this the `body` closure built below
+# is a fresh object on every call and `lax.fori_loop` re-traces and recompiles
+# the whole Gauss-Newton sweep each time: 116 compilations and 40 seconds over
+# one run of tests/gas/test_reconciliation.py.
+@partial(jax.jit, static_argnums=(0,),
+         static_argnames=("n_steps", "method", "correct"))
 def solve_reconciliation(
     residual_fn: Callable,
     y: Array,

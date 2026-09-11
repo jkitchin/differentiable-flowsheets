@@ -258,6 +258,7 @@ class TestFedBatchReactor:
         assert jnp.isfinite(X_A)
         assert float(X_A) > 0.3  # > 30% conversion (reasonable for these params)
 
+    @pytest.mark.release
     def test_differentiability(self, first_order_rate_fn):
         """Test that fed-batch reactor is differentiable."""
         stoich = jnp.array([[-1.0], [+1.0]])
