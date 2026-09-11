@@ -18,6 +18,7 @@ import difflow_power as dp
 from difflow_power.residuals import power_state_layout
 
 
+@pytest.mark.release
 def test_loss_factors_match_finite_differences():
     net = dp.cases.case9()
     factors = dp.loss_sensitivity(net)
@@ -56,6 +57,7 @@ def test_loss_factors_are_negative_beside_a_scheduled_generator():
     assert float(factors[net.bus_index["5"]]) > 0.0     # a load pocket
 
 
+@pytest.mark.release
 def test_demand_sensitivity_matches_finite_differences():
     net = dp.cases.case9()
     layout = power_state_layout(net)
@@ -98,6 +100,7 @@ def test_ac_shift_factors_are_close_to_the_dc_ptdf():
     assert float(jnp.max(jnp.abs(-ac - dc))) < 0.1
 
 
+@pytest.mark.release
 def test_branch_flow_sensitivity_matches_finite_differences():
     net = dp.cases.case9()
     factors = dp.branch_flow_sensitivity(net)
@@ -113,6 +116,7 @@ def test_branch_flow_sensitivity_matches_finite_differences():
     assert float(factors[k, i]) == pytest.approx(finite, rel=1e-5)
 
 
+@pytest.mark.release
 def test_parameter_sensitivity_matches_finite_differences():
     net = dp.cases.case9()
     layout = power_state_layout(net)

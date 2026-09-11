@@ -55,6 +55,13 @@ dependencies = [
 dev = [
     "pytest>=7.0",
     "pytest-cov",
+    # The suite is compile-bound, so it parallelises across processes and not
+    # across threads: `pytest -n 4` cut it from 40 to 14.5 minutes on a
+    # 4-core box, where forcing XLA and BLAS to one thread each changed
+    # nothing (215s vs 212s on a 6-file sample). `pytest-split` shards what
+    # is left across CI jobs by measured duration -- see `.test_durations`.
+    "pytest-xdist>=3.0",
+    "pytest-split>=0.8",
     "jupyter-book<2.0",
 ]
 examples = [
@@ -185,7 +192,8 @@ include = [
 
 [tool.pytest.ini_options]
 markers = [
-    "slow: test whose cost is the computation rather than the assertion -- usually a large one-off JAX trace/compile (nested solver graphs, implicit-diff backward passes), sometimes many repeated solves. Deselected from the default suite via `-m 'not slow'`; CI still runs them, in a separate concurrent job, so coverage is unchanged. Keep the two jobs roughly balanced: CI wall-clock is max(fast, slow), so moving work past the halfway point stops helping.",
+    "release: a test whose subject is the *answer* rather than the code -- that a covariance formula matches a Monte Carlo refit, that a derivative matches finite differences, that an EOS column closes its energy balance, that an optimum matches MATPOWER's published one. These check physics and numerics, which move when someone deliberately changes a model, and not when someone edits wiring, a schema or a route. Deselected per commit (`-m 'not release'`, which is what `make test` and the Tests workflow run); `make test-release` and the Release workflow run the whole suite, and a release must not go out until they have.\n\n    What this marker is NOT is a cost label -- `slow` is that. An expensive test that can break by accident stays in the per-commit suite, and a cheap one that only restates physics belongs here. The rule of thumb when adding a test: ask what kind of change would make it fail. If the answer is \"a typo, a rename, a bad merge\", it runs every commit. If it is \"someone changed the model on purpose\", mark it release.",
+    "slow: test whose cost is the computation rather than the assertion -- usually a large one-off JAX trace/compile (nested solver graphs, implicit-diff backward passes), sometimes many repeated solves. `make test` deselects them via `-m 'not slow'` so a local run stays short. CI does NOT split on this marker: it shards the whole suite by measured duration (`pytest-split`, `.test_durations`), so the marker no longer has to be kept balanced against the rest by hand -- mark a test slow when it is slow, and nothing else follows from it.",
 ]
 
 [dependency-groups]

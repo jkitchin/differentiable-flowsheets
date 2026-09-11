@@ -102,6 +102,7 @@ def test_line_loss_is_i_squared_r():
     )
 
 
+@pytest.mark.release
 def test_branch_drop_agrees_with_series_branch():
     """Same branch, same result, whether the flow or the current is given."""
     params = BranchParams(r=0.01, x=0.1, b=0.05)
@@ -200,6 +201,7 @@ def test_transformer_refuses_to_be_a_line():
     Transformer(BranchParams(x=0.1, tap=0.95))       # fine
 
 
+@pytest.mark.release
 def test_units_are_differentiable_end_to_end():
     """A two-unit chain, differentiated with respect to the reactance."""
 

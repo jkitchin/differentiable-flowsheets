@@ -40,6 +40,7 @@ def _make_solvent():
 # REEExtractor gradient tests
 # ---------------------------------------------------------------------------
 
+@pytest.mark.release
 def test_extractor_grad_recovery_wrt_pH():
     """Gradient of Nd recovery through REEExtractor w.r.t. pH is finite and non-zero."""
     params = REEExtractorParams(
@@ -66,6 +67,7 @@ def test_extractor_grad_recovery_wrt_pH():
     assert jnp.abs(g) > 1e-10, f"Gradient is effectively zero: {g}"
 
 
+@pytest.mark.release
 def test_extractor_grad_pH_sign():
     """Higher pH should increase REE extraction (positive gradient).
 
@@ -96,6 +98,7 @@ def test_extractor_grad_pH_sign():
     )
 
 
+@pytest.mark.release
 def test_extractor_grad_temperature():
     """Gradient of recovery w.r.t. temperature is finite and non-zero."""
     params = REEExtractorParams(
@@ -124,6 +127,7 @@ def test_extractor_grad_temperature():
 # REEMixerSettler gradient tests
 # ---------------------------------------------------------------------------
 
+@pytest.mark.release
 def test_mixer_settler_grad_wrt_stage_efficiency():
     """Gradient of extraction w.r.t. stage_efficiency is finite, non-zero, and positive."""
     feed = _make_feed()
@@ -151,6 +155,7 @@ def test_mixer_settler_grad_wrt_stage_efficiency():
     )
 
 
+@pytest.mark.release
 def test_mixer_settler_grad_wrt_pH():
     """Gradient of Nd extraction through MixerSettler w.r.t. pH is finite and positive."""
     params = MixerSettlerParams(
@@ -181,6 +186,7 @@ def test_mixer_settler_grad_wrt_pH():
 # Precipitator gradient tests
 # ---------------------------------------------------------------------------
 
+@pytest.mark.release
 def test_oxalate_precipitator_grad_wrt_oxalate_flow():
     """Gradient of yield w.r.t. oxalate flow is finite and non-zero.
 
@@ -213,6 +219,7 @@ def test_oxalate_precipitator_grad_wrt_oxalate_flow():
     )
 
 
+@pytest.mark.release
 def test_hydroxide_precipitator_grad_wrt_pH():
     """Gradient of precipitation yield w.r.t. pH is finite and positive.
 

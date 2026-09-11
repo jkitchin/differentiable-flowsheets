@@ -141,6 +141,7 @@ class TestPengRobinson:
         # Both should be positive
         assert jnp.all(K > 0)
 
+    @pytest.mark.release
     def test_pr_differentiability(self, methane_ethane_system):
         """Test that PR is differentiable w.r.t. temperature."""
         pr = PengRobinson(methane_ethane_system)
@@ -244,6 +245,7 @@ class TestFlashTPEOS:
         # Vapor should be enriched in lighter component (propane)
         assert y[0] > x[0]
 
+    @pytest.mark.release
     def test_flash_differentiability(self, propane_butane_system):
         """Test that flash is differentiable w.r.t. temperature."""
         pr = PengRobinson(propane_butane_system)
@@ -384,6 +386,7 @@ class TestEnthalpyDeparture:
         assert float(h_high) < float(h_low)
 
     @pytest.mark.parametrize("EOS", [PengRobinson, SRK])
+    @pytest.mark.release
     def test_departure_differentiable(self, propane_butane_system, EOS):
         """d(H_dep)/dT is finite (jax.jvp path stays differentiable)."""
         eos = EOS(propane_butane_system)
@@ -455,6 +458,7 @@ class TestEntropyDeparture:
         assert float(s_high) < float(s_low)
 
     @pytest.mark.parametrize("EOS", [PengRobinson, SRK])
+    @pytest.mark.release
     def test_departure_differentiable(self, propane_butane_system, EOS):
         """d(S_dep)/dT is finite (jax.jvp path stays differentiable)."""
         eos = EOS(propane_butane_system)
@@ -532,6 +536,7 @@ class TestCubicThermo:
         H_vapor = cubic.stream_enthalpy(flows, T, phase="vapor", P=P)
         assert float(H_flash) == pytest.approx(float(H_vapor), rel=1e-6)
 
+    @pytest.mark.release
     def test_flash_enthalpy_differentiable(self, propane_butane_system):
         """stream_enthalpy_flash stays differentiable through the flash."""
         ideal = _propane_butane_ideal()
@@ -562,6 +567,7 @@ class TestCubicThermo:
         S_hi = cubic.stream_entropy(flows, T, "vapor", jnp.array(5e5))
         assert float(S_hi) < float(S_lo)
 
+    @pytest.mark.release
     def test_isentropic_expansion_cools(self, propane_butane_system):
         """Matching entropy across a pressure drop yields a lower temperature --
         the physical basis of a turboexpander."""
@@ -580,6 +586,7 @@ class TestCubicThermo:
         T_out = float(jnp.clip(sol.value, 200.0, 400.0))
         assert T_out < float(T_in)
 
+    @pytest.mark.release
     def test_stream_entropy_flash_differentiable(self, propane_butane_system):
         """stream_entropy_flash stays differentiable through the flash."""
         ideal = _propane_butane_ideal()

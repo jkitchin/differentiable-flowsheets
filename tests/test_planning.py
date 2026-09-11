@@ -213,6 +213,7 @@ class TestNetwork:
 
 class TestDeltaVectors:
 
+    @pytest.mark.release
     def test_delta_vectors_match_central_differences(self):
         """Acceptance criterion 3: AD agrees with FD to <1e-4 relative."""
         result = check_delta_vectors(smooth_block(),
@@ -605,6 +606,7 @@ class TestModifiers:
         return DeltaBasePlanner(Network([blk]), prices={"r.f": 1.0},
                                 radius=0.3, vertex_seeding=False)
 
+    @pytest.mark.release
     def test_gradient_modifiers_reach_the_plant_optimum(self):
         result = run_modifier_adaptation(
             self._planner(), {"r": self.PLANT}, max_iter=40, tol=1e-7)
@@ -754,6 +756,7 @@ class TestScaling:
         return (planner_objective(problem.planner()),
                 problem.network.decision_start())
 
+    @pytest.mark.release
     def test_gradient_cost_ratio_scaling(self):
         """Acceptance criterion 1: AD gradient cost stays under 3x one eval.
 
@@ -784,6 +787,7 @@ class TestScaling:
         assert rows[-1].fd_seconds > rows[0].fd_seconds
         assert rows[-1].speedup > 1.0
 
+    @pytest.mark.release
     def test_gradient_agrees_with_finite_differences(self):
         fn, x0 = self._make(5)
         ratio = gradient_cost_ratio(fn, x0, repeats=1, warmup=1, check=True,

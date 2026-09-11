@@ -310,6 +310,7 @@ class TestTraceability:
             assert a[row, col] == pytest.approx(1.0)
         assert np.linalg.matrix_rank(a) == a.shape[0]
 
+    @pytest.mark.release
     def test_gradient_wrt_efficiency(self, triangle_state):
         """A pipe coefficient passed as an argument stays differentiable."""
         net, p_bar, q = triangle_state

@@ -544,6 +544,7 @@ class TestGasPFRAdiabatic:
 class TestPFRGradient:
     """Tests for PFR gradient compatibility."""
 
+    @pytest.mark.release
     def test_pfr_gradient_wrt_volume(
         self, simple_thermo, first_order_rate_fn, rate_params, simple_stoich
     ):
@@ -571,6 +572,7 @@ class TestPFRGradient:
         assert jnp.isfinite(grad_V)
         assert float(grad_V) > 0
 
+    @pytest.mark.release
     def test_pfr_gradient_wrt_temperature(
         self, simple_thermo, first_order_rate_fn, rate_params, simple_stoich, feed_stream
     ):
@@ -595,6 +597,7 @@ class TestPFRGradient:
         assert jnp.isfinite(grad_T)
         assert float(grad_T) > 0
 
+    @pytest.mark.release
     def test_gas_pfr_gradient_wrt_alpha(
         self, simple_thermo, first_order_rate_fn, rate_params, simple_stoich
     ):

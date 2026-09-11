@@ -450,6 +450,7 @@ def test_mhe_recovers_states_better_than_the_raw_measurements():
     assert "moving-horizon solves" in run.summary()
 
 
+@pytest.mark.release
 def test_mhe_objective_is_a_chi_squared_statistic():
     """Whitened, so the optimal objective is chi-squared on M readings.
 
@@ -616,6 +617,7 @@ def test_the_first_state_can_never_leave_its_bounds():
 # =============================================================================
 
 
+@pytest.mark.release
 def test_estimate_is_jittable_and_differentiable():
     model = linear_model(jnp.array([[0.9]]), jnp.array([[1.0]]))
     records = [Measurement(time=float(k), values=[1.0 + 0.1 * k],

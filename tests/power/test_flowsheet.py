@@ -151,6 +151,7 @@ def test_voltage_sags_away_from_the_substation():
     assert magnitudes == sorted(magnitudes, reverse=True)
 
 
+@pytest.mark.release
 def test_sweep_objective_is_differentiable_in_demand():
     net = dp.cases.radial_feeder()
     flowsheet = RadialFeederFlowsheet(net)

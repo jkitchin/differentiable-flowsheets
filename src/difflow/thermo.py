@@ -12,6 +12,8 @@ All key functions are JIT-compiled for performance.
 from typing import NamedTuple
 import jax
 import jax.numpy as jnp
+
+from difflow.cache_key import ValueKeyed
 from jax import Array
 
 from difflow.numerics import safe_log
@@ -94,7 +96,7 @@ class SpeciesData(NamedTuple):
     T_antoine_max: float = 1e6
 
 
-class IdealThermo:
+class IdealThermo(ValueKeyed):
     """Ideal thermodynamic property calculator.
 
     Provides methods for computing:
@@ -114,6 +116,10 @@ class IdealThermo:
         """
         self.species = species_data
         self._species_order = list(species_data.keys())
+        # Two IdealThermos over the same species data compile to the same
+        # graph; keying on the data rather than on identity lets them share
+        # the executable. See difflow.cache_key.
+        self._set_value_key(species_data)
 
     @property
     def species_order(self) -> list[str]:
@@ -450,7 +456,7 @@ class IdealThermo:
         return H_total
 
 
-class CubicThermo:
+class CubicThermo(ValueKeyed):
     """Peng-Robinson-consistent enthalpy: ideal-gas sensible + EOS departure.
 
     Wraps an :class:`IdealThermo` (for the ideal-gas sensible enthalpy, using
@@ -479,6 +485,7 @@ class CubicThermo:
     def __init__(self, ideal: "IdealThermo", eos):
         self.ideal = ideal
         self.eos = eos
+        self._set_value_key(ideal, eos)
 
     @property
     def species_order(self) -> list[str]:

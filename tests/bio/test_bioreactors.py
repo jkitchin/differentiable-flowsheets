@@ -121,6 +121,7 @@ class TestContinuousBioreactor:
         # (near zero, though numerical solver may not reach exactly zero)
         assert float(info["X"]) < 1.0
 
+    @pytest.mark.release
     def test_chemostat_differentiability(self, chemostat_params):
         """Test that chemostat is differentiable w.r.t. dilution rate."""
         def cell_productivity(D):
@@ -209,6 +210,7 @@ class TestFedBatchBioreactor:
         # Cells should grow
         assert float(info["X_final"]) > 0.5
 
+    @pytest.mark.release
     def test_fedbatch_differentiability(self, fedbatch_params):
         """Test that fed-batch is differentiable w.r.t. initial conditions."""
         def final_product(X0):
@@ -269,6 +271,7 @@ class TestFedBatchOxygenCoupling:
         # And runs at a lower dissolved-O2 / limitation factor
         assert float(jnp.min(lo["o2_limitation"])) < float(jnp.min(hi["o2_limitation"]))
 
+    @pytest.mark.release
     def test_oxygen_differentiable_through_kla(self):
         def final_cells(kla):
             fb = FedBatchBioreactor(self._params(kLa=kla))

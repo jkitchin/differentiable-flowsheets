@@ -43,6 +43,7 @@ class TestScrubberAcidConsumption:
         assert float(info["h_plus_remaining"]) <= float(info["h_plus_supplied"])
         assert float(info["pH_final"]) >= 1.5
 
+    @pytest.mark.release
     def test_acid_consumption_differentiable(self):
         from difflow_ree.units.scrubbing import REEScrubber, ScrubberParams
 
@@ -122,6 +123,7 @@ class TestCoprecipitation:
         # Common-ion coupling recovers more REE than independent precipitation
         assert float(info1["total_precipitated"]) > float(info0["total_precipitated"])
 
+    @pytest.mark.release
     def test_coprecipitation_differentiable(self):
         from difflow_ree.units.precipitation import OxalatePrecipitator, PrecipitatorParams
 
@@ -245,6 +247,7 @@ class TestDistributionIonicStrength:
         for e in ("Nd", "Dy"):
             assert float(D_corr[e]) < float(D_ideal[e])
 
+    @pytest.mark.release
     def test_differentiable_through_ionic_strength(self):
         d = self._dist()
         g = jax.grad(lambda I: d.get_D("Nd", pH=3.0, ionic_strength=I))(0.1)

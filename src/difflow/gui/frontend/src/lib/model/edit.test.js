@@ -48,6 +48,34 @@ test('a drag between two units is a wire', () => {
   })
 })
 
+test('a drag arrives the way @xyflow sends it, and the way a wrapper would', () => {
+  // The one that was missing. `connectionWire` was right all along and
+  // its caller was wrong: @xyflow hands `onconnect` the `Connection`
+  // itself, the caller destructured `{ connection }` off it, and every
+  // test here passed while no wire in the editor ever reached the
+  // server. Both shapes now, so the mistake cannot come back from
+  // either direction.
+  const connection = {
+    source: 'heater', sourceHandle: 'out:hot',
+    target: 'cooler', targetHandle: 'in:feed',
+  }
+  const wire = {
+    source: 'heater', outlet: 'hot', target: 'cooler', inlet: 'feed',
+  }
+  assert.deepEqual(connectionWire(connection).wire, wire)
+  assert.deepEqual(connectionWire({ connection }).wire, wire)
+})
+
+test('nothing at all is not a connection', () => {
+  // `undefined` is what the old caller actually passed. It has to come
+  // back as a refusal rather than a crash: this runs inside a library
+  // callback, where a throw takes the canvas with it.
+  for (const nothing of [undefined, null, {}]) {
+    const answer = connectionWire(nothing)
+    assert.ok(!answer.wire && answer.error)
+  }
+})
+
 test('a drag from a feed says why it is not', () => {
   const answer = connectionWire({
     source: 'feed:F1', sourceHandle: 'out:F1',

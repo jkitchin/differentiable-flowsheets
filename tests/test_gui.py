@@ -1893,6 +1893,7 @@ class TestSensitivity:
         # Nothing upstream of the reactor can move.
         assert answer["streams"]["feed"]["F_water"]["d"] == 0.0
 
+    @pytest.mark.release
     def test_forward_matches_a_finite_difference(self, thermo):
         """The decisive check: AD through the solve, against the real thing."""
         answer = sensitivity.forward(build_flowsheet(thermo), "reactor.V")
@@ -1999,6 +2000,7 @@ class TestPlanning:
     LEVERS = ["reactor.V", "feed:feed.total_flow"]
     OUTPUTS = ["liq.F_ethanol", "vap.total_flow"]
 
+    @pytest.mark.release
     def test_the_jacobian_matches_central_differences(self, thermo):
         session = FlowsheetSession(build_flowsheet(thermo))
         assert session.solve()["ok"]

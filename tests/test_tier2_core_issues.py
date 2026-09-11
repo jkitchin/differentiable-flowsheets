@@ -645,6 +645,7 @@ class TestCSTROutletVolumetricBasis:
         # Different volumetric-flow basis -> different concentration -> different X
         assert abs(X_in - X_out) > 1e-4
 
+    @pytest.mark.release
     def test_outlet_basis_differentiable(self):
         from difflow.units.cstr import CSTR, CSTRParams
 

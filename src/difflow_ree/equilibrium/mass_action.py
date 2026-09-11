@@ -113,6 +113,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Mapping
 
+from functools import lru_cache, partial
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -455,6 +456,13 @@ def floor_totals(
 # The section residual
 # =============================================================================
 
+# Memoized, because the closure it returns is what every jitted solve below
+# is keyed on: build it twice and the identical graph is compiled twice.
+# ReactionNetwork is a frozen dataclass with a value key (difflow.cache_key)
+# and n_stages/anion_closure are a small int and a short string, so equal
+# arguments really do mean an identical residual. Bounded, so a long-running
+# process cannot accumulate closures without limit.
+@lru_cache(maxsize=64)
 def make_section_residual(
     network: ReactionNetwork,
     n_stages: int,
@@ -707,6 +715,10 @@ _BACKTRACK = (1.0, 0.5, 0.25, 0.1, 0.03, 0.01)
 _TRUST_REGION_RATIO = 5
 
 
+# argnums, not argnames: _globalize calls these positionally, and
+# static_argnames only marks an argument static when it arrives as a
+# keyword. residual_fn (0) and n_steps (3) are the static pair.
+@partial(jax.jit, static_argnums=(0, 3))
 def _damped_newton(
     residual_fn: Callable[[Array, dict], Array],
     z: Array,
@@ -755,6 +767,10 @@ def _damped_newton(
     return lax.fori_loop(0, n_steps, body, z)
 
 
+# argnums, not argnames: _globalize calls these positionally, and
+# static_argnames only marks an argument static when it arrives as a
+# keyword. residual_fn (0) and n_steps (3) are the static pair.
+@partial(jax.jit, static_argnums=(0, 3))
 def _trust_region(
     residual_fn: Callable[[Array, dict], Array],
     z: Array,

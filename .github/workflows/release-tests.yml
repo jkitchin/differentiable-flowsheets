@@ -1,0 +1,58 @@
+name: Full suite
+
+# The whole suite, `release` tier included: Monte Carlo refits, derivatives
+# against finite differences, EOS energy balances, MATPOWER's published
+# answers. The Tests workflow deselects those on every commit (`-m "not
+# release"`) because they re-derive physics rather than check code, and
+# physics moves when someone changes a model on purpose. This is where that
+# bill comes due.
+#
+# Nightly, so a deliberate model change is caught within a day rather than at
+# the release; on demand, for when you have just made one; and publish.yml
+# requires this same suite to pass before it uploads anything to PyPI.
+on:
+  schedule:
+    # 04:00 UTC daily. Nothing depends on the hour beyond it being quiet.
+    - cron: "0 4 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  full:
+    name: Full suite (${{ matrix.python-version }}, shard ${{ matrix.shard }}/3)
+    runs-on: ubuntu-latest
+    # The release tier is where the expensive numerics live, so a shard here
+    # is longer than in the per-commit workflow. 40 is room for a slow runner
+    # without being so large that a hang sits unnoticed.
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+        # Same three shards as the Tests workflow, and the same caveat: if
+        # this list changes, `--splits` below changes with it.
+        shard: [1, 2, 3]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,gui,solvers]"
+
+      # No `-m` filter at all: this is the one place the release tier runs.
+      - name: Run the whole suite
+        run: |
+          python -m pytest tests/ -q --tb=short \
+            -n auto --dist loadfile \
+            --splits 3 --group ${{ matrix.shard }}

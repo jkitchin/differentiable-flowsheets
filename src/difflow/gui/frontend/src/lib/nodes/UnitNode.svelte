@@ -44,9 +44,14 @@
 
   // The class @xyflow puts on the handle. Missing lists mean a caller
   // that does not compute them, and the honest answer then is to say
-  // nothing rather than to mark every port as open.
-  const open = (which, stream) =>
-    which && which.includes(stream) ? 'open' : ''
+  // nothing rather than to mark every port as open -- or, now, to call
+  // every port satisfied, which would be the same lie the other way up.
+  //
+  // `open` and `wired` are the two halves of a question that has been
+  // answered: a port is open when nothing is joined to it and wired when
+  // something is, and a port whose state is unknown gets neither.
+  const state = (which, stream) =>
+    !which ? '' : which.includes(stream) ? 'open' : 'wired'
 </script>
 
 <div class="unit" class:pending={!!data.pending} title={data.pending?.hint ?? ''}>
@@ -70,7 +75,7 @@
       type="target"
       position={Position.Left}
       id={`in:${stream}`}
-      class={open(data.openInlets, stream)}
+      class={state(data.openInlets, stream)}
       style={`top:${at(i, data.inlets.length)}`}
     />
     {#if data.portLabels}
@@ -82,7 +87,7 @@
       type="source"
       position={Position.Right}
       id={`out:${stream}`}
-      class={open(data.openOutlets, stream)}
+      class={state(data.openOutlets, stream)}
       style={`top:${at(i, data.outlets.length)}`}
     />
     {#if data.portLabels}

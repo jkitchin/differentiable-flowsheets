@@ -365,6 +365,7 @@ class TestDynamicNonNegativity:
         result = integrate_euler(fast_decay, y0, (0.0, 1.0), n_steps=20, bounds=bounds)
         assert jnp.all(result.trajectory.y >= -1e-10)
 
+    @pytest.mark.release
     def test_grad_through_clipped_rk4(self):
         """jax.grad works through clipped RK4 integration."""
         from difflow.dynamic.integrators import integrate_rk4

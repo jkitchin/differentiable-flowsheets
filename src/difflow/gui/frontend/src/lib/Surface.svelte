@@ -92,7 +92,13 @@
     return () => observer.disconnect()
   })
 
-  function connected({ connection }) {
+  // @xyflow calls this with the `Connection` ITSELF -- `{source, target,
+  // sourceHandle, targetHandle}` -- not with an event object wrapping
+  // one. Destructuring `{ connection }` off it read `undefined`, and the
+  // failure was silent in the worst way: the library adds the edge to the
+  // canvas before calling this, so the wire appeared, the server never
+  // heard about it, and it vanished at the next redraw.
+  function connected(connection) {
     const answer = connectionWire(connection)
     if (answer.wire) onconnect(answer.wire)
     else onrefuse(answer.error)
@@ -202,6 +208,19 @@
      made every fresh node look already connected. */
   .canvas :global(.svelte-flow__handle.open) {
     background: var(--bad);
+    border-radius: 50%;
+    border-color: var(--node-fill);
+  }
+
+  /* And its answer: a port something is joined to is a green dot. Round,
+     like the red one, because the two are one state with two values and
+     changing the shape as well would read as two unrelated marks. The
+     edge already says a wire exists; what the dot adds is the same
+     sentence at the port that was red a moment ago, which is where the
+     user is looking after making the connection. A port with no lists
+     computed stays a plain grey square and claims nothing. */
+  .canvas :global(.svelte-flow__handle.wired) {
+    background: var(--good);
     border-radius: 50%;
     border-color: var(--node-fill);
   }

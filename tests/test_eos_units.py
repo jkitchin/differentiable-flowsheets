@@ -59,6 +59,7 @@ def feed():
 
 
 class TestTurboexpander:
+    @pytest.mark.release
     def test_expansion_cools_and_extracts_work(self, thermo, feed):
         exp = Turboexpander(TurboexpanderParams(P_out=20e5, eta_isentropic=0.80), thermo)
         out, info = exp(feed)
@@ -86,6 +87,7 @@ class TestTurboexpander:
         for c in NGL:
             assert float(fout[c]) == pytest.approx(float(fin[c]))
 
+    @pytest.mark.release
     def test_work_differentiable_wrt_pressure(self, thermo, feed):
         def W(Pout):
             e = Turboexpander(TurboexpanderParams(P_out=Pout, eta_isentropic=0.8), thermo)
@@ -96,6 +98,7 @@ class TestTurboexpander:
 
 
 class TestCompressor:
+    @pytest.mark.release
     def test_compression_heats_and_consumes_work(self, thermo, feed):
         comp = Compressor(CompressorParams(P_out=90e5, eta_isentropic=0.75), thermo)
         out, info = comp(feed)
@@ -117,6 +120,7 @@ class TestCompressor:
         _, c_info = comp(low)
         assert float(c_info["W"]) > float(e_info["W"])
 
+    @pytest.mark.release
     def test_work_differentiable(self, thermo, feed):
         def W(eta):
             c = Compressor(CompressorParams(P_out=90e5, eta_isentropic=eta), thermo)
@@ -126,6 +130,7 @@ class TestCompressor:
 
 
 class TestJTValve:
+    @pytest.mark.release
     def test_isenthalpic(self, thermo, feed):
         valve = JTValve(JTValveParams(P_out=20e5), thermo)
         out, info = valve(feed)
@@ -133,6 +138,7 @@ class TestJTValve:
         H_out = thermo.stream_enthalpy_flash(get_flows(out), out["T"], out["P"])
         assert float(H_out) == pytest.approx(float(H_in), rel=1e-6)
 
+    @pytest.mark.release
     def test_joule_thomson_cooling(self, thermo, feed):
         valve = JTValve(JTValveParams(P_out=20e5), thermo)
         out, _ = valve(feed)
@@ -147,6 +153,7 @@ class TestJTValve:
         T_exp = float(exp(feed)[0]["T"])
         assert T_valve > T_exp
 
+    @pytest.mark.release
     def test_outlet_T_differentiable(self, thermo, feed):
         def T_out(Pout):
             v = JTValve(JTValveParams(P_out=Pout), thermo)
@@ -180,6 +187,7 @@ class TestComponentSeparator:
         assert float(fprod["methane"]) == pytest.approx(0.0)
         assert float(fprod["propane"]) == pytest.approx(3.0)
 
+    @pytest.mark.release
     def test_recovery_differentiable(self, thermo, feed):
         def prod_propane(r):
             sep = ComponentSeparator(

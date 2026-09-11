@@ -57,6 +57,7 @@ class TestLMTD:
         expected = 50.0 / jnp.log(2.0)
         assert float(lmtd) == pytest.approx(float(expected), rel=0.01)
 
+    @pytest.mark.release
     def test_lmtd_differentiable(self):
         """Test that LMTD is differentiable."""
         def lmtd_fn(dT1):
@@ -89,6 +90,7 @@ class TestEffectiveness:
         # Counter-current always higher
         assert float(eps_counter) > float(eps_co)
 
+    @pytest.mark.release
     def test_effectiveness_differentiable(self):
         """Test effectiveness is differentiable."""
         def eps_fn(NTU):
@@ -133,6 +135,7 @@ class TestHeater:
         assert float(outlet["T"]) < 400.0
         assert float(info["Q"]) > 0
 
+    @pytest.mark.release
     def test_heater_differentiable(self):
         """Test heater is differentiable."""
         def outlet_T(duty):
@@ -205,6 +208,7 @@ class TestCounterCurrentHX:
         # For counter-current, outlet temps approach each other
         assert float(info["approach"]) > 0  # No temperature cross
 
+    @pytest.mark.release
     def test_counter_current_differentiable(self):
         """Test counter-current HX is differentiable."""
         def heat_duty(UA):
@@ -311,6 +315,7 @@ class TestCrossFlowEffectiveness:
         # Cross-flow should be higher than co-current
         assert float(eps_cross_unmixed) >= float(eps_co)
 
+    @pytest.mark.release
     def test_crossflow_differentiable(self):
         """Test all cross-flow correlations are differentiable."""
         def eps_fn(NTU):
@@ -482,6 +487,7 @@ class TestCrossFlowHX:
         Q_cold = 15.0 * 75.0 * dT_cold
         assert Q_hot == pytest.approx(Q_cold, rel=0.01)
 
+    @pytest.mark.release
     def test_crossflow_differentiable(self):
         """Test cross-flow HX is differentiable."""
         def heat_duty(UA):
@@ -559,6 +565,7 @@ class TestDesignFunctions:
         assert float(result["NTU"]) > 0
         assert 0 < float(result["effectiveness"]) < 1
 
+    @pytest.mark.release
     def test_design_differentiable(self):
         """Test design functions are differentiable."""
         def area_fn(Q):
@@ -662,6 +669,7 @@ class TestEnthalpyCounterCurrentHX:
         cold = make_stream({"propane": 1.0, "butane": 1.0}, T=300.0, P=3e5)
         return hot, cold
 
+    @pytest.mark.release
     def test_energy_balance_closes(self):
         """Q from the solve equals the enthalpy change on each side."""
         thermo = _propane_butane_cubic_thermo()
@@ -690,6 +698,7 @@ class TestEnthalpyCounterCurrentHX:
         assert float(hot_out["T"]) > float(cold["T"])
         assert float(cold_out["T"]) < float(hot["T"])
 
+    @pytest.mark.release
     def test_differentiable_wrt_UA(self):
         """Duty is differentiable through the coupled solve; more UA -> more duty."""
         thermo = _propane_butane_cubic_thermo()
@@ -830,6 +839,7 @@ class TestUtilityExchangerThermoHeavy:
     not the assertions.
     """
 
+    @pytest.mark.release
     def test_rating_mode_closes_Q_equals_UA_LMTD(self):
         thermo = _propane_butane_cubic_thermo()
         feed = make_stream({"propane": 1.0, "butane": 1.0}, T=300.0, P=10e5)
@@ -858,6 +868,7 @@ class TestUtilityExchangerThermoHeavy:
         assert float(outlet["T"]) == pytest.approx(400.0, rel=1e-6)
         assert float(info2["Q"]) == pytest.approx(float(info["Q"]))
 
+    @pytest.mark.release
     def test_differentiable(self):
         """Duty is differentiable through the flash-based enthalpy."""
         thermo = _propane_butane_cubic_thermo()
