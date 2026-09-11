@@ -40,7 +40,15 @@ export function parseHandle(handle) {
  * mean something else, and quietly doing nothing is the worst of the
  * available answers.
  */
-export function connectionWire(connection) {
+export function connectionWire(payload) {
+  // Both shapes, on purpose. @xyflow hands `onconnect` the `Connection`
+  // itself; a wrapper that passes `{connection}` is the shape this file
+  // was first written against, and reading the wrong one of the two
+  // fails silently -- the library has already drawn the edge by the time
+  // this runs, so a refusal here looks like a wire that took and then
+  // disappeared at the next redraw. Accepting either costs one line and
+  // makes that whole class of mistake impossible.
+  const connection = payload?.connection ?? payload
   const source = parseNodeId(connection?.source)
   const target = parseNodeId(connection?.target)
   if (!source || !target) return { error: 'that is not a connection' }
