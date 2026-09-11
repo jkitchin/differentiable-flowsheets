@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
+from difflow import scripts
 from difflow.gui import assistant
 from difflow.gui.session import FlowsheetSession
 
@@ -925,7 +926,12 @@ def main(argv: list[str] | None = None, prog: str = "difflow gui") -> int:
     parser = argparse.ArgumentParser(
         prog=prog, description="Local flowsheet editor."
     )
-    parser.add_argument("path", nargs="?", help="flowsheet JSON to open and save")
+    parser.add_argument(
+        "path", nargs="?",
+        help="flowsheet JSON to open and save, or a Python script that "
+             "builds one -- a script is run to read it, and the editor "
+             "then saves the JSON beside it",
+    )
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--no-browser", action="store_true")
     parser.add_argument(
@@ -943,6 +949,12 @@ def main(argv: list[str] | None = None, prog: str = "difflow gui") -> int:
     try:
         serve(path=args.path, port=args.port, open_browser=not args.no_browser,
               token=args.token, stay=args.stay)
+    except scripts.ScriptError as exc:
+        # The user's own file, not a bug here. A traceback through
+        # runpy and three frames of this package buries the one line
+        # that says what is wrong with their script.
+        print(f"difflow gui: {exc}", file=sys.stderr)
+        return 1
     except OSError as exc:
         # Only the one the caller can act on. Anything else --- a missing
         # flowsheet, a permission --- still gets its traceback, which for

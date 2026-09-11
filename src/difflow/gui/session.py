@@ -37,6 +37,8 @@ import threading
 import types
 from pathlib import Path
 
+from difflow import scripts
+
 
 def _number(value) -> float | None:
     """A float for the wire, or ``None`` --- including for a JAX scalar."""
@@ -134,7 +136,13 @@ class FlowsheetSession:
     """
 
     def __init__(self, flowsheet=None, path: str | Path | None = None):
-        self.path = Path(path) if path else None
+        path = Path(path) if path else None
+        #: the script this was opened from, if it was opened from one.
+        #: A script is a way in and not a way back out (see
+        #: :mod:`difflow.scripts`), so it is kept apart from `path`,
+        #: which is always the file `save` writes.
+        self.source = path if scripts.is_script(path) else None
+        self.path = scripts.save_target(path) if self.source else path
         self.flowsheet = flowsheet
         #: names the flowsheet may refer to, from its code context
         self.bindings: dict = {}
@@ -161,7 +169,10 @@ class FlowsheetSession:
         #: in red, where it can be seen and answered, instead of being
         #: refused into a toast that scrolls away.
         self.pending: dict[str, dict] = {}
-        if flowsheet is None and self.path and self.path.exists():
+        if flowsheet is None and self.source:
+            self.flowsheet = scripts.load_flowsheet(self.source)
+            self._evaluate(self._source())
+        elif flowsheet is None and self.path and self.path.exists():
             self._load(self.path)
         elif flowsheet is not None:
             self._evaluate(self._source())
@@ -497,7 +508,8 @@ class FlowsheetSession:
         from difflow import serialize
 
         if self.flowsheet is None:
-            return {"flowsheet": None, "path": str(self.path or "")}
+            return {"flowsheet": None, "path": str(self.path or ""),
+                    "source": str(self.source or "")}
         document = serialize.to_dict(self.flowsheet, refs=self.bindings)
         document.setdefault("view", {})
         # Auto-layout underneath, stored positions on top. Not "one or the
@@ -510,6 +522,10 @@ class FlowsheetSession:
         return {
             "flowsheet": document,
             "path": str(self.path or ""),
+            # The script it was built by running, when it was. The header
+            # says so, because `plant.json` appearing over a flowsheet the
+            # user opened as `plant.py` is otherwise just wrong.
+            "source": str(self.source or ""),
             # Beside the document rather than inside it: a pending unit is
             # not part of the flowsheet, and a `pending` key in the
             # serialized document would be exported to a file and read

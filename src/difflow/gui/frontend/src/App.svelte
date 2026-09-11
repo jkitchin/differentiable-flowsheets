@@ -21,6 +21,10 @@
 
   let doc = $state(null)
   let path = $state('')
+  // The script the flowsheet was built by running, when it was one.
+  // `path` is then the JSON beside it that Save writes, which is not
+  // the name the user typed and not the name to show them first.
+  let source = $state('')
   // The species list, and whether it can still be changed -- the server
   // answers both with the document, because "can I edit this" is a fact
   // about the flowsheet (has it any units yet?) and not a preference.
@@ -144,6 +148,7 @@
     const payload = await get('/api/flowsheet')
     doc = payload.flowsheet
     path = payload.path
+    source = payload.source ?? ''
     species = payload.species ?? []
     speciesEditable = payload.editable !== false
     pending = payload.pending ?? []
@@ -452,7 +457,7 @@
   const save = () =>
     edit(async () => {
       const answer = await post('/api/save')
-      note = answer.ok ? `saved to ${answer.path}` : answer.error
+      note = answer.ok ? `saved to ${shortPath(answer.path)}` : answer.error
       return null
     }, { reload: false, stale: false })
 
@@ -547,7 +552,10 @@
   <h1>difflow</h1>
   {#if about.version}<span class="version">{about.version}</span>{/if}
   <MenuBar {menus} />
-  <span class="path" title={path}>{path ? shortPath(path) : 'no file'}</span>
+  <span
+    class="path"
+    title={source ? `${source}\nsaves to ${path}` : path}
+  >{shortPath(source || path) || 'no file'}</span>
   <Species {species} editable={speciesEditable} {busy} onapply={setSpecies} />
   <span class="summary">{summary}</span>
   <span class="spacer"></span>
@@ -571,7 +579,7 @@
   <div class="stopped" role="status">
     <h2>The editor has stopped.</h2>
     <p>
-      Port is free. Close this tab; run <code>difflow gui{path ? ` ${path}` : ''}</code>
+      Port is free. Close this tab; run <code>difflow gui{source || path ? ` ${source || path}` : ''}</code>
       to start it again.
     </p>
   </div>
