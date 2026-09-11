@@ -176,7 +176,7 @@ def reconcile(
     if x0 is None:
         init = 1.0 if unmeasured_init is None else unmeasured_init
         init = jnp.broadcast_to(jnp.asarray(init, dtype=jnp.float64), y.shape)
-        x0 = jnp.where(mask, jnp.where(mask, y, 0.0), init)
+        x0 = jnp.where(mask, y, init)
     x0 = jnp.asarray(x0, dtype=jnp.float64)
 
     m = int(residual_fn(x0, params).shape[0])

@@ -144,7 +144,7 @@ def auto_scaling(
         fallback = jnp.broadcast_to(
             jnp.asarray(unmeasured_scale, dtype=jnp.float64), x0.shape
         )
-    d = jnp.where(mask, jnp.where(mask, sigma, 1.0), fallback)
+    d = jnp.where(mask, sigma, fallback)
     d = jnp.where(d > 0, d, 1.0)
 
     a = jacobian_of(residual_fn, x0, params)
