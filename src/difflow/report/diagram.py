@@ -16,7 +16,6 @@ from __future__ import annotations
 from html import escape
 from typing import NamedTuple
 
-from difflow.gui.layout import unit_columns
 from difflow.report.ir import Report
 
 # Geometry (px).
@@ -124,6 +123,17 @@ def topology_svg(units, recycles, positions=None) -> str:
             if src is not None and inlet not in recycle_sources:
                 up_edges[u.name].append(src)
                 unit_arcs.append((src, u.name, inlet))
+
+    # Imported here, not at module scope. `difflow.report` is imported by
+    # `difflow/__init__.py`, and reaching `difflow.gui.layout` runs
+    # `difflow.gui.__init__`, which imports back through the package root --
+    # a cycle that only bites when something imports `difflow.planning`
+    # before `difflow`, which is exactly what an xdist worker given a shard
+    # of the suite may do. It surfaced as an ImportError under 3.10 in run
+    # 34598666441 ("cannot import name 'report' from partially initialized
+    # module") while 3.11 and 3.12 happened to import in an order that hid
+    # it. A function-level import breaks the cycle for every entry order.
+    from difflow.gui.layout import unit_columns
 
     col = unit_columns(unit_names, up_edges)
     max_unit_col = max(col.values()) if col else 0
