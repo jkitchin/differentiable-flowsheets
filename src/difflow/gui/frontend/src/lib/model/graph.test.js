@@ -75,6 +75,10 @@ test('a joined port is not open', () => {
 })
 
 test('the open ports reach the node that has them', () => {
+  // And the two ends arrive under different names, because they mean
+  // different things: `openInlets` is what blocks a solve, `products` is
+  // what the flowsheet produces. Drawing both as open ports said a
+  // finished flowsheet was half-wired.
   const doc = {
     units: [
       { name: 'a', inlets: ['loose'], outlets: ['mid'] },
@@ -84,9 +88,28 @@ test('the open ports reach the node that has them', () => {
   }
   const byId = new Map(toGraph(doc, {}).nodes.map((n) => [n.id, n]))
   assert.deepEqual(byId.get('a').data.openInlets, ['loose'])
-  assert.deepEqual(byId.get('a').data.openOutlets, [], 'b reads mid')
+  assert.deepEqual(byId.get('a').data.products, [], 'b reads mid')
   assert.deepEqual(byId.get('b').data.openInlets, [])
-  assert.deepEqual(byId.get('b').data.openOutlets, ['out'])
+  assert.deepEqual(byId.get('b').data.products, ['out'])
+})
+
+test('a fed inlet is not open, and a read outlet is not a product', () => {
+  // The other half of the same sentence: both ends can be answered
+  // without a wire. A declared feed answers an inlet; a recycle carrying
+  // an outlet back answers an outlet.
+  const doc = {
+    units: [
+      { name: 'a', inlets: ['feedstock'], outlets: ['vap'] },
+      { name: 'b', inlets: ['recycle'], outlets: ['prod'] },
+    ],
+    feeds: { feedstock: {} },
+    recycles: { vap: 'recycle' },
+  }
+  const byId = new Map(toGraph(doc, {}).nodes.map((n) => [n.id, n]))
+  assert.deepEqual(byId.get('a').data.openInlets, [], 'a feed supplies it')
+  assert.deepEqual(byId.get('a').data.products, [], 'the recycle carries it')
+  assert.deepEqual(byId.get('b').data.openInlets, [], 'the recycle lands here')
+  assert.deepEqual(byId.get('b').data.products, ['prod'], 'nothing reads it')
 })
 
 test('a recycle is one arc, drawn back to its reader', () => {

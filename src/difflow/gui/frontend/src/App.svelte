@@ -14,6 +14,7 @@
   import { EXPORTS, exportFlowsheet } from './lib/export.js'
   import { inferKind } from './lib/model/assistant.js'
   import { movedPositions } from './lib/model/edit.js'
+  import { openPorts } from './lib/model/graph.js'
   import { nodeMenu } from './lib/model/menu.js'
   import { menuBar, shortPath } from './lib/model/menubar.js'
   import { keepAlive } from './lib/model/lifetime.js'
@@ -160,7 +161,35 @@
     const alive = (name) =>
       (doc?.units ?? []).some((u) => u.name === name) ||
       pending.some((p) => p.name === name)
-    selected = id ? (alive(id) ? selected : null) : null
+    selected = id ? (alive(id) ? refreshed(selected) : null) : null
+  }
+
+  /**
+   * The selected node, told what has happened since it was clicked.
+   *
+   * A selection is a snapshot taken at the click, and the panel reads
+   * the port state off it -- which inlets are open, which outlets are
+   * products. Every one of those can change without the selection
+   * changing: declaring a feed, wiring the port, adding a recycle. Kept
+   * as the snapshot, the panel went on offering `feed it` for a stream
+   * it had just fed, and went on calling an inlet open after a wire
+   * arrived in it. The canvas beside it was already right, which is the
+   * worst version of being wrong.
+   */
+  function refreshed(node) {
+    const unit = (doc?.units ?? []).find((u) => u.name === node.id)
+    if (!unit) return node
+    const open = openPorts(doc)
+    return {
+      ...node,
+      data: {
+        ...node.data,
+        inlets: unit.inlets,
+        outlets: unit.outlets,
+        openInlets: unit.inlets.filter((s) => open.inlets.has(s)),
+        products: unit.outlets.filter((s) => open.outlets.has(s)),
+      },
+    }
   }
 
   const loadContext = () =>

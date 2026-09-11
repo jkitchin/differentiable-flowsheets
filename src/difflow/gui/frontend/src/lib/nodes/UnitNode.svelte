@@ -44,14 +44,27 @@
 
   // The class @xyflow puts on the handle. Missing lists mean a caller
   // that does not compute them, and the honest answer then is to say
-  // nothing rather than to mark every port as open -- or, now, to call
-  // every port satisfied, which would be the same lie the other way up.
+  // nothing rather than to mark every port as open -- or to call every
+  // port satisfied, which would be the same lie the other way up.
   //
-  // `open` and `wired` are the two halves of a question that has been
-  // answered: a port is open when nothing is joined to it and wired when
-  // something is, and a port whose state is unknown gets neither.
-  const state = (which, stream) =>
+  // The two ends ask different questions, so they get different marks.
+  // An inlet with nothing arriving is `open`: a red dot, and the one
+  // thing on the canvas that means the flowsheet cannot be solved. An
+  // outlet nothing reads is a `product`: the stream leaves, which is
+  // what the last unit in a flowsheet is supposed to do, and a ring says
+  // "an end, on purpose" where red said "you forgot something".
+  const inlet = (which, stream) =>
     !which ? '' : which.includes(stream) ? 'open' : 'wired'
+  const outlet = (which, stream) =>
+    !which ? '' : which.includes(stream) ? 'product' : 'wired'
+
+  // On the port itself, because a dot is a mark and a mark has to be
+  // asked what it means. The inspector says the same thing in words.
+  const why = {
+    open: 'nothing feeds this inlet yet -- wire one in, or give it a feed',
+    product: 'leaves the flowsheet as a product',
+    wired: '',
+  }
 </script>
 
 <div class="unit" class:pending={!!data.pending} title={data.pending?.hint ?? ''}>
@@ -75,7 +88,8 @@
       type="target"
       position={Position.Left}
       id={`in:${stream}`}
-      class={state(data.openInlets, stream)}
+      class={inlet(data.openInlets, stream)}
+      title={why[inlet(data.openInlets, stream)] ?? ''}
       style={`top:${at(i, data.inlets.length)}`}
     />
     {#if data.portLabels}
@@ -87,7 +101,8 @@
       type="source"
       position={Position.Right}
       id={`out:${stream}`}
-      class={state(data.openOutlets, stream)}
+      class={outlet(data.products, stream)}
+      title={why[outlet(data.products, stream)] ?? ''}
       style={`top:${at(i, data.outlets.length)}`}
     />
     {#if data.portLabels}
