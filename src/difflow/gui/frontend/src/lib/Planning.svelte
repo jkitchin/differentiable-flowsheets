@@ -18,6 +18,7 @@
   import { untrack } from 'svelte'
 
   import { post } from './api.js'
+  import { offer } from './export.js'
   import {
     DEFAULT_RADIUS, FORMATS, blocked, cell, cleanBounds, jacobian,
     leverGroups, outputGroups, ranked, toggle, verdict,
@@ -85,16 +86,6 @@
     }
   }
 
-  /** Hand the browser a named file, as Export.svelte does. */
-  function save(text, name, type) {
-    const url = URL.createObjectURL(new Blob([text], { type }))
-    const anchor = document.createElement('a')
-    anchor.href = url
-    anchor.download = name
-    anchor.click()
-    setTimeout(() => URL.revokeObjectURL(url), 0)
-  }
-
   /**
    * Download, rendered by the server's own writers.
    *
@@ -109,7 +100,7 @@
       const answer = await post('/api/linearize/files', { format: fmt })
       if (!answer.ok) throw new Error(answer.error)
       const type = fmt === 'json' ? 'application/json' : 'text/csv'
-      for (const file of answer.files) save(file.text, file.name, type)
+      for (const file of answer.files) offer(new Blob([file.text], { type }), file.name)
     } catch (e) {
       error = `download failed: ${e.message ?? e}`
     } finally {

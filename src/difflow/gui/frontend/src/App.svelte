@@ -4,16 +4,18 @@
   import CodeContext from './lib/CodeContext.svelte'
   import Console from './lib/Console.svelte'
   import ContextMenu from './lib/ContextMenu.svelte'
-  import Export from './lib/Export.svelte'
   import Inspector from './lib/Inspector.svelte'
+  import MenuBar from './lib/MenuBar.svelte'
   import Palette from './lib/Palette.svelte'
   import Planning from './lib/Planning.svelte'
   import Results from './lib/Results.svelte'
   import Species from './lib/Species.svelte'
   import { del, get, patch, post, send } from './lib/api.js'
+  import { EXPORTS, exportFlowsheet } from './lib/export.js'
   import { inferKind } from './lib/model/assistant.js'
   import { movedPositions } from './lib/model/edit.js'
   import { nodeMenu } from './lib/model/menu.js'
+  import { menuBar, shortPath } from './lib/model/menubar.js'
   import { keepAlive } from './lib/model/lifetime.js'
   import { flowLabels, flowTints } from './lib/model/results.js'
 
@@ -66,12 +68,19 @@
   // place. Empty until the answer arrives, which is why the links are
   // rendered conditionally rather than with a placeholder href.
   let about = $state({ version: '', links: {}, heartbeat: 15 })
-  // The Quit button arms on the first click and fires on the second.
-  // A single click that ends the process is the wrong shape for a
-  // button that sits beside Save.
+  // Which file the File menu is writing out, if any. The menu closed
+  // behind the click, so this is what stops a second click from asking
+  // for the same file twice while the first is still being drawn.
+  let exporting = $state('')
+  // Quit arms on the first click and fires on the second. A single
+  // click that ends the process is the wrong shape for a menu row, and
+  // the armed half is a button in the header rather than a second trip
+  // into the menu -- a question asked somewhere you are not looking is
+  // not asked at all.
   let quitArmed = $state(false)
   let stopped = $state(false)
   let armedTimer = null
+  const ASKING = 'click \u201cReally quit?\u201d to stop the editor'
 
   /** A remembered preference, or the default if there is nothing to read. */
   function remember(key, fallback) {
@@ -93,20 +102,39 @@
     } catch { /* nothing to do about it, and nothing depends on it */ }
   })
 
+  /** Is this keystroke on its way into something that takes text? */
+  function typing(event) {
+    const tag = event.target?.tagName
+    return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'
+      || !!event.target?.isContentEditable
+  }
+
   /**
-   * `T` for the theme, `L` for port labels.
+   * `T` for the theme, `L` for port labels, and the two accelerators
+   * the menus advertise.
    *
-   * Guarded on the target: these are single letters, and a flowsheet has
-   * text fields in it. Typing "Toluene" into the species box must not
-   * flip the theme twice on the way past.
+   * The single letters are guarded on the target: a flowsheet has text
+   * fields in it, and typing "Toluene" into the species box must not
+   * flip the theme twice on the way past. Cmd-S is not guarded, because
+   * saving the flowsheet is what it means wherever it is pressed --- and
+   * because the browser's own answer to it, offering to save the page,
+   * has never once been what anyone wanted here. Cmd-Enter is guarded:
+   * the console already ends a cell with it.
    */
   function hotkey(event) {
-    if (event.metaKey || event.ctrlKey || event.altKey) return
     if (menu) return       // the open menu owns the keyboard
-
-    const tag = event.target?.tagName
-    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
-    if (event.target?.isContentEditable) return
+    if (event.metaKey || event.ctrlKey) {
+      if (event.altKey || event.shiftKey) return
+      if (event.key.toLowerCase() === 's') {
+        event.preventDefault()
+        if (!busy && path) save()
+      } else if (event.key === 'Enter' && !typing(event)) {
+        event.preventDefault()
+        if (!busy) solve()
+      }
+      return
+    }
+    if (event.altKey || typing(event)) return
     const key = event.key.toLowerCase()
     if (key === 't') dark = !dark
     else if (key === 'l') portLabels = !portLabels
@@ -181,8 +209,14 @@
   async function quit() {
     if (!quitArmed) {
       quitArmed = true
+      note = ASKING
       clearTimeout(armedTimer)
-      armedTimer = setTimeout(() => (quitArmed = false), 4000)
+      armedTimer = setTimeout(() => {
+        quitArmed = false
+        // Only our own note: six seconds is long enough for something
+        // else to have had something to say.
+        if (note === ASKING) note = ''
+      }, 6000)
       return
     }
     clearTimeout(armedTimer)
@@ -315,6 +349,28 @@
   }
 
   /**
+   * Write one file out.
+   *
+   * The menu is closed by the time this runs, so the note line is the
+   * only place left to say that a diagram is being drawn --- and it is
+   * where the name of the file that arrived goes too, because a
+   * download landing quietly in a folder nobody is looking at reads as
+   * a menu row that did nothing.
+   */
+  async function runExport(kind) {
+    error = ''
+    exporting = kind
+    note = `writing ${EXPORTS[kind]}\u2026`
+    try {
+      note = `wrote ${await exportFlowsheet(kind, { path, doc })}`
+    } catch (e) {
+      note = `export failed: ${e.message ?? e}`
+    } finally {
+      exporting = ''
+    }
+  }
+
+  /**
    * Open the right-click menu on a node.
    *
    * Every item is a shortcut to a control that is already on screen, so
@@ -438,6 +494,47 @@
   let summary = $derived(
     doc ? `${doc.units?.length ?? 0} units, ${Object.keys(doc.feeds ?? {}).length} feeds` : '',
   )
+
+  // The header's menus. Derived rather than built when one is opened,
+  // because half of what they report is whether something is already
+  // open: a row ticked when the drawer behind it was closed a moment
+  // ago is worse than no tick at all. Every action is a toggle or a
+  // verb that already existed -- the menus add no capability, they are
+  // where the capabilities went.
+  let menus = $derived(menuBar({
+    path,
+    doc,
+    busy,
+    exporting,
+    contextError: !!context.error,
+    portLabels,
+    dark,
+    panels: {
+      results: showResults,
+      context: showContext,
+      console: showConsole,
+      planning: showPlanning,
+      assistant: showAssistant,
+    },
+    links: about.links ?? {},
+    actions: {
+      save,
+      reload: () => edit(load),
+      export: runExport,
+      quit,
+      results: () => (showResults = !showResults),
+      context: () => (showContext = !showContext),
+      console: () => (showConsole = !showConsole),
+      planning: () => (showPlanning = !showPlanning),
+      assistant: () => (showAssistant = !showAssistant),
+      portLabels: () => (portLabels = !portLabels),
+      dark: () => (dark = !dark),
+      open: (url) => window.open(url, '_blank', 'noopener,noreferrer'),
+      // In this tab, as it has always been: the classic editor is the
+      // other half of the same session, not a page about difflow.
+      classic: () => (window.location.href = '/classic'),
+    },
+  }))
 </script>
 
 <svelte:window
@@ -449,44 +546,23 @@
 <header>
   <h1>difflow</h1>
   {#if about.version}<span class="version">{about.version}</span>{/if}
-  <span class="path">{path || 'no file'}</span>
+  <MenuBar {menus} />
+  <span class="path" title={path}>{path ? shortPath(path) : 'no file'}</span>
   <Species {species} editable={speciesEditable} {busy} onapply={setSpecies} />
   <span class="summary">{summary}</span>
   <span class="spacer"></span>
   {#if note}<span class="note">{note}</span>{/if}
-  <button class="toggle" class:on={portLabels} title="name every port (L)"
-          onclick={() => (portLabels = !portLabels)}>L</button>
-  <button class="toggle" title="light or dark (T)"
-          onclick={() => (dark = !dark)}>{dark ? '\u25d1' : '\u25d0'}</button>
-  <button onclick={() => (showContext = !showContext)}
-          class:primary={context.error}>Code context</button>
-  <button onclick={() => (showResults = !showResults)}>Results</button>
-  <button onclick={() => (showAssistant = !showAssistant)}>Ask</button>
-  <button onclick={() => (showPlanning = !showPlanning)}>Planning</button>
-  <button onclick={() => (showConsole = !showConsole)}>Console</button>
-  <button onclick={solve} disabled={busy}>Solve</button>
-  <button onclick={save} disabled={busy || !path}>Save</button>
-  <Export {path} document={doc} disabled={busy || !doc}
-          onerror={(why) => (note = why)} />
-  <button onclick={() => edit(load)} disabled={busy}>Reload</button>
-  <!-- Ends the process, so it is set apart from the buttons that do
-       not, and it asks twice. -->
-  <button class="quit" class:armed={quitArmed} onclick={quit}
-          title={quitArmed
-            ? 'click again to stop the editor and free the port'
-            : 'stop the editor (closing this tab does the same)'}>
-    {quitArmed ? 'Really quit?' : 'Quit'}
-  </button>
-  <span class="rule"></span>
-  {#if about.links?.documentation}
-    <a class="out" href={about.links.documentation} target="_blank"
-       rel="noopener noreferrer" title="the difflow documentation">Docs</a>
+  <!-- Only while it is armed. Quit is a row in the File menu, and the
+       menu shuts behind the click; this is the second half of the
+       question, asked where the answer can be seen. -->
+  {#if quitArmed}
+    <button class="quit" onclick={quit}
+            title="stop the editor and free the port">Really quit?</button>
   {/if}
-  {#if about.links?.repository}
-    <a class="out" href={about.links.repository} target="_blank"
-       rel="noopener noreferrer" title="the source on GitHub">GitHub</a>
-  {/if}
-  <a class="classic" href="/classic">classic editor</a>
+  <!-- The one verb the editor exists for, and the only control here
+       that is not a menu. -->
+  <button class="primary" onclick={solve} disabled={busy}
+          title="solve the flowsheet (Cmd-Enter)">Solve</button>
 </header>
 
 {#if stopped}
@@ -617,31 +693,17 @@
   }
   h1 { font-size: 0.95rem; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
   .path, .summary, .version { color: var(--ink-soft); font-size: 0.8rem; }
+  /* Already shortened, and never the reason the header is two lines tall. */
+  .path { white-space: nowrap; }
   .version { font-variant-numeric: tabular-nums; opacity: 0.75; }
   .note { color: var(--accent); font-size: 0.8rem; }
   .spacer { flex: 1; }
-  /* One-letter switches, sized so they do not read as actions. */
-  .toggle {
-    padding: 0.2rem 0.45rem;
-    min-width: 1.7rem;
-    font-size: 0.75rem;
-    color: var(--ink-soft);
-  }
-  .toggle.on { color: var(--surface); background: var(--series); border-color: var(--series); }
-  /* Quit is the only button here that ends the process. Ordinary until
-     it is armed, then unmistakable. */
-  .quit.armed {
+  /* It is on screen only to be answered, and it ends the process. */
+  .quit {
     color: var(--surface);
     background: var(--bad);
     border-color: var(--bad);
   }
-  .rule {
-    width: 1px;
-    align-self: stretch;
-    margin: 0 0.1rem;
-    background: var(--grid);
-  }
-  .out, .classic { font-size: 0.78rem; }
   /* Covers the editor rather than sitting above it: every control
      behind this is talking to a server that is no longer there. */
   .stopped {
