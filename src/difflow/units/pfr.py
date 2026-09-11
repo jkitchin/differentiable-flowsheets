@@ -642,6 +642,7 @@ class PFR:
         }
 
         return {
+            'outlets': (outlet,),
             'outlet': outlet,
             'states': states,
             'info': info,
