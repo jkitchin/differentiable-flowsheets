@@ -835,6 +835,7 @@ def test_saponified_section_rejects_what_cannot_be_saponified():
 # 10. The manipulated variable: differentiable, jittable, invertible
 # =============================================================================
 
+@pytest.mark.release
 def test_saponification_degree_is_differentiable_and_jits():
     """The primary manipulated variable is a real handle (#197)."""
     section = saponified_section(n_stages=3, degree=0.35)
@@ -858,6 +859,7 @@ def test_saponification_degree_is_differentiable_and_jits():
                 atol=2e-3, rtol=2e-3)
 
 
+@pytest.mark.release
 def test_base_flow_is_differentiable_through_the_saponifier():
     """The reagent pump is the handle a control layer actually turns (#197)."""
     unit = Saponifier(SaponifierParams(

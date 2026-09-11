@@ -155,6 +155,7 @@ class TestMultistageCascade:
 
         assert recovery_A > recovery_B
 
+    @pytest.mark.release
     def test_cascade_differentiability(self, simple_equilibrium):
         """Test that cascade is differentiable w.r.t. n_stages."""
 

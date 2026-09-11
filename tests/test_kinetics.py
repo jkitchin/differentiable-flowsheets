@@ -264,6 +264,7 @@ class TestValidation:
 
 
 class TestDifferentiability:
+    @pytest.mark.release
     def test_gradient_wrt_concentration(self):
         rxns = [{
             "equation": "2 A -> B", "reactants": {"A": 2.0}, "products": {"B": 1.0},
@@ -274,16 +275,19 @@ class TestDifferentiability:
         # d/dC (3 C^2) = 6 C
         assert float(g) == pytest.approx(12.0, rel=1e-9)
 
+    @pytest.mark.release
     def test_gradient_at_zero_concentration_is_finite(self):
         kin = mass_action_kinetics(first_order(Ea=0.0), SPECIES)
         g = jax.grad(lambda c: kin.rates({"A": c, "B": 0.0}, 300.0)[0])(0.0)
         assert bool(jnp.isfinite(g))
 
+    @pytest.mark.release
     def test_gradient_wrt_temperature_is_positive(self):
         kin = mass_action_kinetics(first_order(), SPECIES)
         g = jax.grad(lambda T: kin.rates({"A": 1.0, "B": 0.0}, T)[0])(350.0)
         assert bool(jnp.isfinite(g)) and float(g) > 0.0
 
+    @pytest.mark.release
     def test_rate_params_are_a_differentiable_pytree(self):
         """Fitting a rate constant differentiates through rate_params."""
         kin = mass_action_kinetics(first_order(), SPECIES)
@@ -295,6 +299,7 @@ class TestDifferentiability:
         g = jax.grad(rate)(1.0e6)
         assert bool(jnp.isfinite(g)) and float(g) > 0.0
 
+    @pytest.mark.release
     def test_can_be_built_inside_a_trace(self):
         """The structure is static, but the coefficients may be traced."""
         def rate(pre_exponential):
@@ -304,6 +309,7 @@ class TestDifferentiability:
         assert bool(jnp.isfinite(jax.grad(rate)(1.0e6)))
         assert bool(jnp.isfinite(jax.jit(rate)(1.0e6)))
 
+    @pytest.mark.release
     def test_jit(self):
         kin = mass_action_kinetics(first_order(), SPECIES)
         fn = jax.jit(lambda c, T: kin.rate_fn({"A": c, "B": 0.0}, T, kin.rate_params))

@@ -50,6 +50,7 @@ class TestStretchedExponential:
         f_fo = stretched_exponential_fraction(t, k, beta=1.0)
         assert float(f_sig) < float(f_fo)
 
+    @pytest.mark.release
     def test_differentiable(self):
         g = jax.grad(lambda k: stretched_exponential_fraction(5.0, k, beta=0.8))(0.1)
         assert jnp.isfinite(g) and float(g) > 0.0
@@ -82,6 +83,7 @@ class TestLumryEyring:
         f = lumry_eyring_fraction(1000.0, 0.5, 0.2)
         assert float(f) == pytest.approx(1.0, abs=1e-6)
 
+    @pytest.mark.release
     def test_differentiable(self):
         g = jax.grad(lambda k: lumry_eyring_fraction(5.0, 0.3, k))(0.5)
         assert jnp.isfinite(g)

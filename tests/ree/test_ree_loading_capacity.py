@@ -827,6 +827,7 @@ class TestIssue193_SmoothCapacityLimiter:
         assert bool(info_hi["third_phase_formed"])
         assert float(info_hi["third_phase_margin"]) < 0.0
 
+    @pytest.mark.release
     def test_third_phase_margin_is_differentiable(self):
         """The margin has a usable gradient; the boolean has none."""
         def margin(nd_flow):
@@ -1333,6 +1334,7 @@ class TestChangedPublicAPI:
         out = loading_correction({"Nd": 10.0}, {"Nd": 10.0}, iso)
         assert float(out["Nd"]) == pytest.approx(10.0 * 0.01 ** iso.m)
 
+    @pytest.mark.release
     def test_loading_correction_is_differentiable(self):
         """It is a model term, so grad must work through it.
 

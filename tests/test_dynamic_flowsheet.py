@@ -601,6 +601,7 @@ class TestGradients:
         assert grad.shape == y0.shape
         assert jnp.all(jnp.isfinite(grad))
 
+    @pytest.mark.release
     def test_gradient_wrt_parameter(self, species_order, feed_stream):
         """Can compute gradient with respect to rate parameter."""
         def rate_fn(C, T, params):

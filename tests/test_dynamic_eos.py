@@ -82,6 +82,7 @@ class TestCSTREOSDynamic:
         for s in names:
             assert float(out_dyn[s]) == pytest.approx(float(of[s]), abs=1e-9)
 
+    @pytest.mark.release
     def test_derivatives_differentiable(self):
         names, eos, cstr, inlet, params = self._cstr("isothermal")
         _, state = self._steady_state_vector(names, eos, cstr, inlet, params, "isothermal")
@@ -108,6 +109,7 @@ class TestDynamicEOSFlash:
             flash.initial_state(inp), max_steps=200, throw=False)
         return flash, inp, sol.value
 
+    @pytest.mark.release
     def test_steady_state_split_matches_feed_flash(self, pr_cubic):
         names, eos, _ = pr_cubic
         feed = make_stream({"propane": 5.0, "n_butane": 3.0, "n_pentane": 2.0}, 330.0, 8e5)
@@ -136,6 +138,7 @@ class TestDynamicEOSFlash:
         feed_total = sum(float(v) for v in get_flows(feed).values())
         assert draw == pytest.approx(feed_total, rel=1e-6)
 
+    @pytest.mark.release
     def test_derivatives_differentiable(self, pr_cubic):
         names, eos, _ = pr_cubic
         feed = make_stream({"propane": 5.0, "n_butane": 3.0, "n_pentane": 2.0}, 330.0, 8e5)
@@ -161,12 +164,14 @@ class TestDynamicCounterCurrentHX:
         hx = DynamicCounterCurrentHX(UA=UA, thermo=ct, tau=30.0)
         return hx, {"hot": hot, "cold": cold}, hot, cold
 
+    @pytest.mark.release
     def test_cold_start_heats_up(self, pr_cubic):
         _, _, ct = pr_cubic
         hx, inp, _, _ = self._setup(ct, 800.0)
         d0 = hx.derivatives(0.0, hx.initial_state(inp), inp)
         assert float(d0[0]) > 0.0  # zero-duty start: duty grows
 
+    @pytest.mark.release
     def test_steady_state_conserves_energy(self, pr_cubic):
         _, _, ct = pr_cubic
         hx, inp, hot, cold = self._setup(ct, 800.0)  # physical UA, no temperature cross
@@ -188,6 +193,7 @@ class TestDynamicCounterCurrentHX:
         assert float(out["cold_out"]["T"]) > 300.0
         assert float(out["hot_out"]["T"]) > float(out["cold_out"]["T"])
 
+    @pytest.mark.release
     def test_duty_differentiable_wrt_UA(self, pr_cubic):
         _, _, ct = pr_cubic
         hot = make_stream({"propane": 5.0, "n_butane": 3.0, "n_pentane": 2.0}, 400.0, 10e5)

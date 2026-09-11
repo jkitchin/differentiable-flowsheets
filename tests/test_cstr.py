@@ -93,6 +93,7 @@ class TestCSTR:
         assert "conversion" in info
         assert info["conversion"]["A"] > 0
 
+    @pytest.mark.release
     def test_cstr_differentiability(self, simple_thermo, simple_rate_fn):
         """Test that CSTR is differentiable w.r.t. volume."""
         stoich = jnp.array([[-1.0], [+1.0]])

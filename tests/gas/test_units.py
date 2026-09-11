@@ -212,6 +212,7 @@ def test_flow_minus():
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.release
 def test_units_are_differentiable_in_their_params():
     def head(P_set):
         return SourceHead(P_set)(gas_stream(1.0, T, 1.0))["P"]

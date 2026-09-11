@@ -246,6 +246,7 @@ def test_residuals_vanish_at_the_sequential_modular_solution():
 
 
 @needs_asdex
+@pytest.mark.release
 def test_objective_gradient_matches_central_difference():
     f, _g, bd = free_T_problem(
         objective=lambda s, d: -2.0 * s["product"]["F_B"]
@@ -260,6 +261,7 @@ def test_objective_gradient_matches_central_difference():
 
 
 @needs_asdex
+@pytest.mark.release
 def test_constraint_jacobian_matches_central_differences():
     _f, g, bd = free_T_problem()
     ad = np.asarray(jax.jacobian(g)(bd.x0))
@@ -271,6 +273,7 @@ def test_constraint_jacobian_matches_central_differences():
 
 
 @needs_asdex
+@pytest.mark.release
 def test_parameters_are_differentiable_but_are_not_columns_of_x():
     f, g, bd = as_nlp(
         make_flowsheet(),
@@ -444,6 +447,7 @@ def test_the_topology_fallback_is_dense_in_the_hessian_and_says_so():
     assert len(bd.hess_pattern[0]) == bd.n * (bd.n + 1) // 2  # dense triangle
 
 
+@pytest.mark.release
 def test_objective_vars_tightens_the_topology_path():
     """The escape hatch the warning points at: name the objective's variables
     and the structural Hessian stops being the whole triangle. It is still the
@@ -908,6 +912,7 @@ def test_inactive_constraint_has_zero_sensitivity():
 
 @needs_pounce
 @needs_asdex
+@pytest.mark.release
 def test_differentiable_problem_backward_matches_a_finite_difference():
     """pounce.jax.solve has no pattern arguments and would probe, so the
     differentiable entry point is JaxProblem. d(optimal volume)/d(T_spec)."""

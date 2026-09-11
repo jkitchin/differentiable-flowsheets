@@ -396,6 +396,7 @@ class TestBlockFromFlowsheet:
 
         assert y[0] == pytest.approx(float(streams["purge"]["F_B"]), rel=1e-6)
 
+    @pytest.mark.release
     def test_delta_vectors_match_finite_differences(self, recycle_block):
         """The decisive test: AD through a tear solve, checked numerically."""
         report = check_delta_vectors(recycle_block, rtol=1e-4)

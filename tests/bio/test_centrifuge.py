@@ -167,6 +167,7 @@ class TestCentrifuge:
         # Higher flow = larger minimum separable particle
         assert float(info_high_Q["critical_diameter"]) > float(info_low_Q["critical_diameter"])
 
+    @pytest.mark.release
     def test_centrifuge_differentiability(self, centrifuge_params):
         """Test that centrifuge is differentiable."""
         def cell_recovery(sigma):

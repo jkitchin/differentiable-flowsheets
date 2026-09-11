@@ -41,7 +41,7 @@ endif
 
 .PHONY: all notebooks notebooks-force notebooks-bio notebooks-ree notebooks-cc \
         notebooks-bio-force notebooks-ree-force notebooks-cc-force \
-        clean test test-slow test-all test-durations book book-clean sync \
+        clean test test-release test-slow test-all test-durations book book-clean sync \
         gui gui-build gui-test
 
 all: notebooks
@@ -127,18 +127,23 @@ run:
 # single process back for --pdb or readable output.
 PYTEST := pytest -n auto --dist loadfile
 
-# Run tests (default: skip the compile-bound `slow` tests -- see the marker
-# description in pyproject.toml. CI shards the whole suite by measured
-# duration and runs the slow ones too, so nothing goes untested; use
-# `make test-all` to run everything locally.)
+# What you run while working, and what every commit is checked against:
+# everything except the `release` tier, which re-derives physics and numerics
+# rather than checking the code (see the marker notes in pyproject.toml).
+# `slow` comes out too, so a local run stays short -- CI keeps it.
 test:
-	$(UV_RUN_DEV) $(PYTEST) tests/ -v -m "not slow"
+	$(UV_RUN_DEV) $(PYTEST) tests/ -v -m "not release and not slow"
+
+# The release tier on its own: Monte Carlo refits, finite-difference
+# agreement, energy balances, published benchmarks.
+test-release:
+	$(UV_RUN_DEV) $(PYTEST) tests/ -v -m release
 
 # Only the compile-bound tests
 test-slow:
 	$(UV_RUN_DEV) $(PYTEST) tests/ -v -m slow
 
-# Everything, slow tests included
+# Everything. What a release has to pass, and what release.yml runs.
 test-all:
 	$(UV_RUN_DEV) $(PYTEST) tests/ -v
 

@@ -107,12 +107,18 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev,gui,solvers]"
 
-      # No `-m` filter: a shard is a slice of the WHOLE suite, slow tests
-      # included. `-q`, because `-v` from four workers at once interleaves
-      # into something nobody reads; a failure still prints its own name.
+      # `-m "not release"` is the point of this job: a commit is checked
+      # against the tests that a typo, a rename or a bad merge can break, and
+      # not against the ones that re-derive physics. The release tier runs in
+      # release.yml -- see the marker note in pyproject.toml for where the
+      # line is. `slow` is NOT filtered here; it is a cost label, and the
+      # shards balance cost already.
+      #
+      # `-q`, because `-v` from four workers at once interleaves into
+      # something nobody reads; a failure still prints its own name.
       - name: Run tests
         run: |
-          python -m pytest tests/ -q --tb=short \
+          python -m pytest tests/ -q --tb=short -m "not release" \
             -n auto --dist loadfile \
             --splits 3 --group ${{ matrix.shard }}
 

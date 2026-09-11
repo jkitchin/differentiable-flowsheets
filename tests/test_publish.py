@@ -97,6 +97,7 @@ class TestSweep:
         assert result.n_points == 15
         assert jnp.asarray(result.values["product"]).shape == (5, 3)
 
+    @pytest.mark.release
     def test_the_loop_fallback_agrees_with_vmap(self, flowsheet):
         axis = SweepAxis("reactor.V", 0.5, 3.0, n=4)
         batched = sweep(flowsheet, [axis], {"product": product}, batch=True)

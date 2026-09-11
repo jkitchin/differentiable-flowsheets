@@ -646,12 +646,14 @@ def _dy_extracted(acid):
 
 
 @pytest.mark.slow
+@pytest.mark.release
 def test_check_grads_through_the_section():
     """jax.test_util.check_grads passes through the implicit solve (#196)."""
     check_grads(_dy_extracted, (0.02,), order=1, modes=["rev"], eps=1e-6)
 
 
 @pytest.mark.slow
+@pytest.mark.release
 def test_gradient_matches_central_differences():
     """A second, independent check with a step chosen for this function."""
     analytic = float(jax.grad(_dy_extracted)(0.02))
@@ -918,6 +920,7 @@ def test_base_addition_for_ph_hits_the_target():
 
 
 @pytest.mark.slow
+@pytest.mark.release
 def test_base_addition_for_ph_is_differentiable():
     """d(base rate)/d(specified pH) falls out of the augmented solve."""
     section = make_section(elements=("Nd", "Dy"), n_stages=3,

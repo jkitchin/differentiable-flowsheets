@@ -191,6 +191,7 @@ class TestShortcutColumn:
         # (but same separation spec, so N should be lower)
         assert float(info_high["N"]) <= float(info_low["N"])
 
+    @pytest.mark.release
     def test_shortcut_differentiability(self, benzene_toluene_thermo):
         """Test that shortcut column is differentiable."""
         params = ShortcutColumnParams(
@@ -1018,6 +1019,7 @@ class TestFeedThermalCondition:
 
         assert float(sub["R_min"]) < float(sat["R_min"])
 
+    @pytest.mark.release
     def test_q_stays_differentiable(self, benzene_toluene_thermo):
         """A traced ``q`` passes the guard, and the duty responds to it.
 
@@ -1174,6 +1176,7 @@ class TestCubicThermoColumn:
         [0.38, 0.16, 0.13, 0.09, 0.08, 0.10, 0.03, 0.04],   # light cut
         [1e-9, 1e-9, 1e-9, 1e-9, 1e-9, 0.002, 0.25, 0.748],  # heavy cut
     ])
+    @pytest.mark.release
     def test_bubble_point_agrees_with_eos_flash(
         self, thermo_pair, cubic_column, x_raw
     ):
@@ -1201,6 +1204,7 @@ class TestCubicThermoColumn:
         assert float(jnp.sum(K * x)) == pytest.approx(1.0, abs=1e-4)
         assert float(jnp.sum(y)) == pytest.approx(1.0)
 
+    @pytest.mark.release
     def test_eos_bubble_point_differs_from_raoult_for_light_ends(
         self, ideal_column, cubic_column
     ):
@@ -1263,6 +1267,7 @@ class TestCubicThermoColumn:
             K = cubic.K_values_array(T[j], self.P, x[j])
             assert float(jnp.sum(K * x[j])) == pytest.approx(1.0, abs=1e-3)
 
+    @pytest.mark.release
     def test_condenser_is_well_below_the_top_stage_for_a_wide_cut(
         self, thermo_pair, cubic_column, feed
     ):
@@ -1290,6 +1295,7 @@ class TestCubicThermoColumn:
         assert float(V_below) == pytest.approx(0.0, abs=1e-6)
         assert float(V_above) > 1e-3
 
+    @pytest.mark.release
     def test_shortcut_column_runs_on_cubic_thermo(self, thermo_pair, feed):
         """The shortcut column reaches the EOS through the same K-value and
         enthalpy interfaces, so it runs on Peng-Robinson too -- and the answer
@@ -1318,6 +1324,7 @@ class TestCubicThermoColumn:
         assert float(results["ideal"]["alpha_LK"]) > float(results["eos"]["alpha_LK"])
         assert float(results["ideal"]["N_min"]) < float(results["eos"]["N_min"])
 
+    @pytest.mark.release
     def test_shortcut_column_end_temperatures_are_eos_bubble_points(
         self, thermo_pair, feed
     ):
@@ -1343,6 +1350,7 @@ class TestCubicThermoColumn:
             assert float(V_below) == pytest.approx(0.0, abs=1e-6)
             assert float(V_above) > 1e-3
 
+    @pytest.mark.release
     def test_cubic_column_duties_are_physical(
         self, cubic_column, feed
     ):
@@ -1485,6 +1493,7 @@ class TestRigorousColumnComponentBalance:
         assert heavy_in_dist[0] > heavy_in_dist[1] > heavy_in_dist[2]
 
     @pytest.mark.parametrize("use_mesh", [True, False])
+    @pytest.mark.release
     def test_gradient_wrt_reflux_is_finite(self, column, feed, use_mesh):
         """Products stay differentiable w.r.t. the reflux ratio."""
 

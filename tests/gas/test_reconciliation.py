@@ -425,6 +425,7 @@ def _campaign(net, layout, sigma, etas, key0=1000, gross=None):
 
 
 class TestMonitorNetwork:
+    @pytest.mark.release
     def test_a_healthy_plant_stays_below_the_threshold(self, five):
         """The routine clock on a plant that has not drifted."""
         net, layout, _, _, sigma = five
@@ -437,6 +438,7 @@ class TestMonitorNetwork:
         assert mon.rejection_rate() < 0.5
         assert mon.diagnose(window=None).verdict == MONITOR_CONSISTENT
 
+    @pytest.mark.release
     def test_fouling_reads_as_model_drift(self, five):
         """A pipe that fouls breaks a balance, not a reading, so the
         adjustments smear and the blame wanders."""
@@ -453,6 +455,7 @@ class TestMonitorNetwork:
         assert diag.culprit is None
         assert diag.drifting
 
+    @pytest.mark.release
     def test_a_biased_meter_reads_as_an_instrument_fault(self, five):
         """The same rejection, a different cause: one meter lying puts
         the blame on itself, every day."""
@@ -469,6 +472,7 @@ class TestMonitorNetwork:
         assert diag.culprit == "q_p2"
         assert not diag.drifting
 
+    @pytest.mark.release
     def test_layout_defaults_match_reconcile_network(self, five):
         """The wrapper fills in the same names and scales, so a step
         reproduces the single-period call exactly."""
@@ -498,6 +502,7 @@ class TestPooledEfficiency:
         ]
         return layout, sigma, days
 
+    @pytest.mark.release
     def test_pooling_beats_averaging_by_sqrt_k(self, five):
         """The reason to pool: eta appears once, so every period's
         equations constrain the same unknown."""
@@ -519,6 +524,7 @@ class TestPooledEfficiency:
         )
         assert pooled.shared_std["eta_p3"] < per_day_sd
 
+    @pytest.mark.release
     def test_pooled_estimate_recovers_a_constant_fouling(self, five):
         net, _, _, _, _ = five
         layout, sigma, days = self._window(net, [1.15] * 8)
@@ -531,6 +537,7 @@ class TestPooledEfficiency:
         assert res.converged
         assert not global_test(res).detected
 
+    @pytest.mark.release
     def test_redundancy_counts_the_parameter_once(self, five):
         """Eight separate estimations spend eight degrees of redundancy
         on eight copies of eta; pooling spends one."""
@@ -548,6 +555,7 @@ class TestPooledEfficiency:
         assert len(pooled.states) == k
         assert list(pooled.states[0]) == layout.names
 
+    @pytest.mark.release
     def test_updating_the_model_clears_the_rejection(self, five):
         """The whole loop: monitor rejects, pooling estimates, the
         corrected model accepts the very same measurements."""

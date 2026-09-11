@@ -1043,6 +1043,7 @@ class TestAdsorptionUnitsExtended:
 class TestUnitOperationGradients:
     """Tests for JAX gradients through unit operations."""
 
+    @pytest.mark.release
     def test_absorber_gradient_wrt_lg_ratio(self):
         """Test absorber gradient with respect to L/G ratio."""
         from difflow_cc import AbsorberParams, AmineAbsorber
@@ -1072,6 +1073,7 @@ class TestUnitOperationGradients:
         # More amine flow (higher L/G) should increase capture efficiency
         assert float(d_eff_d_LG) > 0
 
+    @pytest.mark.release
     def test_absorber_gradient_wrt_stages(self):
         """Test absorber gradient with respect to number of stages."""
         from difflow_cc import AbsorberParams, AmineAbsorber
@@ -1100,6 +1102,7 @@ class TestUnitOperationGradients:
         # the actual CO2 absorbed. This is a model limitation, not a bug.
         assert jnp.isfinite(d_eff_d_N)
 
+    @pytest.mark.release
     def test_membrane_gradient_wrt_area(self):
         """Test membrane gradient with respect to area."""
         from difflow_cc import MembraneParams, MembraneSeparator
@@ -1130,6 +1133,7 @@ class TestUnitOperationGradients:
         # Increasing membrane area should increase CO2 recovery
         assert float(d_rec_d_area) > 0
 
+    @pytest.mark.release
     def test_membrane_gradient_wrt_pressure_ratio(self):
         """Test membrane gradient with respect to pressure ratio."""
         from difflow_cc import MembraneParams, MembraneSeparator
@@ -1159,6 +1163,7 @@ class TestUnitOperationGradients:
         # Higher pressure ratio increases driving force, improving CO2 recovery
         assert float(d_rec_d_pr) > 0
 
+    @pytest.mark.release
     def test_psa_gradient_wrt_pressure(self):
         """Test PSA gradient with respect to adsorption pressure."""
         from difflow_cc import AdsorptionParams, PSAUnit
@@ -1186,6 +1191,7 @@ class TestUnitOperationGradients:
         assert float(d_wc_d_P) != 0.0
         assert float(d_wc_d_P) > 0  # Higher pressure should give higher capacity
 
+    @pytest.mark.release
     def test_tsa_gradient_wrt_temperature(self):
         """Test TSA gradient with respect to desorption temperature."""
         from difflow_cc import AdsorptionParams, TSAUnit

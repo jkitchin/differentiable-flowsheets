@@ -178,6 +178,7 @@ def test_compressor_report(mixed_solved):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.release
 def test_power_gradient_matches_finite_differences(mixed_solved):
     net, fs, dec, streams = mixed_solved
 

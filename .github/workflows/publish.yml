@@ -10,9 +10,48 @@ on:
   workflow_dispatch:
 
 jobs:
+  # The release tier, before anything is uploaded rather than after. Those
+  # tests -- Monte Carlo refits, finite-difference agreement, EOS energy
+  # balances, MATPOWER's published answers -- are deselected on every commit
+  # (see the `release` marker in pyproject.toml), so a release is the first
+  # time the physics is checked end to end. A gate that ran after publishing
+  # would not be a gate.
+  #
+  # One interpreter and all three shards: the point here is coverage of the
+  # tier, not of the matrix, which release-tests.yml sweeps nightly.
+  full-suite:
+    name: Full suite (shard ${{ matrix.shard }}/3)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,gui,solvers]"
+
+      - name: Run the whole suite
+        run: |
+          python -m pytest tests/ -q --tb=short \
+            -n auto --dist loadfile \
+            --splits 3 --group ${{ matrix.shard }}
+
   build:
     name: Build distributions
     runs-on: ubuntu-latest
+    needs: full-suite
 
     steps:
       - uses: actions/checkout@v4

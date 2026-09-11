@@ -144,6 +144,7 @@ class TestProteinAChromatography:
             mass_out = float(prod_flows[species]) + float(waste_flows[species])
             assert mass_out == pytest.approx(mass_in, rel=0.01)
 
+    @pytest.mark.release
     def test_proa_differentiability(self, proa_params):
         """Test Protein A is differentiable w.r.t. column volume."""
         def mab_yield(CV):

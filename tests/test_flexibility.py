@@ -462,6 +462,7 @@ class TestDerivatives:
         assert np.all(np.isfinite(np.asarray(g)))
         assert abs(float(g[0]) + 0.5) < 5e-3, float(g[0])
 
+    @pytest.mark.release
     def test_gradient_matches_a_central_difference(self):
         d0 = jnp.array([1.0])
         g = jax.grad(lambda d: feasibility_value(
@@ -482,6 +483,7 @@ class TestDerivatives:
             corner_model, d, CORNER_SET, None))(jnp.array([1.0]))
         assert float(g[0]) == pytest.approx(-1.0)
 
+    @pytest.mark.release
     def test_jit_agrees_with_eager(self):
         fn = jax.jit(lambda d: feasibility_value(linear_model, d, LINEAR_SET,
                                                  LINEAR_CONTROLS))
@@ -559,6 +561,7 @@ class TestFlexibilityIndex:
                                           LINEAR_CONTROLS, scale=1.02 * F))
         assert inside <= 0.0 < outside
 
+    @pytest.mark.release
     def test_index_agrees_with_bisecting_psi_directly(self):
         # An independent route to the same number: bisect the feasibility
         # function itself instead of each vertex direction.
@@ -617,6 +620,7 @@ class TestFlexibilityIndex:
 
 
 class TestExpectedFeasibility:
+    @pytest.mark.release
     def test_probability_matches_the_analytic_one(self):
         # psi_sample = (theta - d)/2 <= 0 iff theta <= d, and theta is uniform
         # on [0.5, 1.5], so P(feasible) = d - 0.5.
@@ -627,6 +631,7 @@ class TestExpectedFeasibility:
                 d, res.probability, want)
             assert res.n_samples == 1500
 
+    @pytest.mark.release
     def test_standard_error_shrinks_with_the_sample_size(self):
         small = expected_feasibility(linear_model, [1.0], LINEAR_SET,
                                      LINEAR_CONTROLS, n_samples=100, key=1)
@@ -634,6 +639,7 @@ class TestExpectedFeasibility:
                                    LINEAR_CONTROLS, n_samples=1600, key=1)
         assert big.standard_error < 0.35 * small.standard_error
 
+    @pytest.mark.release
     def test_worst_case_bounds_the_samples(self):
         res = expected_feasibility(linear_model, [2.0], LINEAR_SET,
                                    LINEAR_CONTROLS, n_samples=300, key=2)
@@ -643,6 +649,7 @@ class TestExpectedFeasibility:
         assert res.mean <= res.worst
         assert res.probability == 1.0           # psi <= 0 => every sample ok
 
+    @pytest.mark.release
     def test_blame_names_the_constraint_that_actually_fails(self):
         # f0 fails about half the time; f1 is a constant -5 and never can.
         model = lambda d, u, th: jnp.array([th[0] - d[0], -5.0])
@@ -654,6 +661,7 @@ class TestExpectedFeasibility:
         assert 0.4 < res.violation_rate[0] < 0.6
         assert "purity" in res.summary()
 
+    @pytest.mark.release
     def test_chance_margin_is_the_quantile_and_gates_correctly(self):
         res = expected_feasibility(linear_model, [1.0], LINEAR_SET,
                                    LINEAR_CONTROLS, n_samples=800, key=5)
@@ -664,6 +672,7 @@ class TestExpectedFeasibility:
         assert res.satisfies(0.4)
         assert res.quantile(0.9) > res.quantile(0.4)
 
+    @pytest.mark.release
     def test_worst_sample_is_inside_the_set(self):
         res = expected_feasibility(linear_model, [1.0], LINEAR_SET,
                                    LINEAR_CONTROLS, n_samples=200, key=4)
@@ -672,6 +681,7 @@ class TestExpectedFeasibility:
         assert res.values[int(np.argmax(res.values))] == pytest.approx(
             res.worst)
 
+    @pytest.mark.release
     def test_sampling_is_reproducible(self):
         kw = dict(n_samples=64, key=11)
         a = expected_feasibility(linear_model, [1.0], LINEAR_SET,
@@ -681,6 +691,7 @@ class TestExpectedFeasibility:
         npt.assert_array_equal(a.samples, b.samples)
         assert a.probability == b.probability
 
+    @pytest.mark.release
     def test_uniform_samples_fill_the_scaled_box(self):
         s = np.asarray(sample_set({"a": (0.0, 1.0, 2.0)}, 2000, 1,
                                   distribution="uniform"))
@@ -689,6 +700,7 @@ class TestExpectedFeasibility:
         s2 = np.asarray(sample_set({"a": (0.0, 1.0, 2.0)}, 2000, 1, scale=2.0))
         assert s2.min() < -1.9 and s2.max() > 3.8
 
+    @pytest.mark.release
     def test_normal_samples_keep_the_asymmetry(self):
         T = as_uncertainty_set({"a": (0.0, 1.0, 2.0)})
         s = np.asarray(sample_set(T, 20000, 1, distribution="normal")).ravel()
@@ -701,10 +713,12 @@ class TestExpectedFeasibility:
         inside = np.mean((s >= -1.0) & (s <= 2.0))
         assert abs(inside - 0.6827) < 0.02
 
+    @pytest.mark.release
     def test_unknown_distribution_is_refused(self):
         with pytest.raises(ValueError, match="distribution must be one of"):
             sample_set({"a": (1.0, 0.5)}, 4, 0, distribution="beta")
 
+    @pytest.mark.release
     def test_result_type_and_repr(self):
         res = expected_feasibility(linear_model, [2.0], LINEAR_SET,
                                    LINEAR_CONTROLS, n_samples=32, key=0)
@@ -977,6 +991,7 @@ class TestDiagrams:
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.release
 def test_module_doctests():
     import doctest
 

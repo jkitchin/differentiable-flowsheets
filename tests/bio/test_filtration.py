@@ -114,6 +114,7 @@ class TestUltrafiltration:
             total_out = float(ret_flows[species]) + float(perm_flows[species])
             assert total_out == pytest.approx(float(feed_flows[species]), rel=0.01)
 
+    @pytest.mark.release
     def test_uf_differentiability(self, uf_params):
         """Test UF is differentiable w.r.t. concentration factor."""
         def product_recovery(CF):
