@@ -66,6 +66,14 @@ export function feedStreams(doc) {
  * marking them is the whole of what tells the user where the wiring is
  * still missing --- on a flowsheet drawn without stream boxes there is
  * otherwise nothing to see at a port that has nothing attached.
+ *
+ * The two halves do NOT mean the same thing, and the canvas draws them
+ * differently for that reason. An open inlet is a flowsheet that cannot
+ * be solved: `solve` refuses it by name, because a unit with nothing
+ * arriving has nothing to compute. An open outlet is a flowsheet that is
+ * finished --- it is a **product**, the stream leaves, and `solve`
+ * returns it with all the others. Marking both in red said "unfinished"
+ * about a flowsheet whose last unit was simply the last unit.
  */
 export function openPorts(doc) {
   const units = doc.units || []
@@ -218,7 +226,10 @@ export function toGraph(doc, positions, options = {}) {
         inlets: unit.inlets,
         outlets: unit.outlets,
         openInlets: unit.inlets.filter((s) => open.inlets.has(s)),
-        openOutlets: unit.outlets.filter((s) => open.outlets.has(s)),
+        // Named for what it is rather than for how it was computed. An
+        // outlet nothing reads is a product, not a loose end, and a list
+        // called `openOutlets` invites the caller to draw it as one.
+        products: unit.outlets.filter((s) => open.outlets.has(s)),
         portLabels,
         ...(waiting
           ? { pending: { needs: waiting.needs || [], hint: waiting.hint || '' } }

@@ -270,6 +270,11 @@
   has to: the canvas draws a box only for a feed someone declared, so
   there is no longer a feed node to select for a stream that has never
   been one.
+
+  An outlet nothing reads is a different matter and says so in words: it
+  is a product, the flowsheet is finished at that end, and `solve` hands
+  the stream back with the rest. Sharing the inlet's red bullet made a
+  complete flowsheet look like one that had been left half-wired.
 -->
 {#snippet ports()}
   <h3>inlets</h3>
@@ -299,7 +304,12 @@
   <h3>outlets</h3>
   <ul>
     {#each node.data.outlets as s (s)}
-      <li class:open={isOpen(node.data.openOutlets, s)}>{s}</li>
+      <li class:product={isOpen(node.data.products, s)}>
+        {s}
+        {#if isOpen(node.data.products, s)}
+          <span class="leaves" title="nothing reads this stream, so it leaves the flowsheet">product</span>
+        {/if}
+      </li>
     {/each}
   </ul>
 {/snippet}
@@ -312,9 +322,14 @@
     </p>
   {:else if !isUnit}
     <h2>{node.data.label}</h2>
-    <!-- An inlet with nothing on the other end is drawn as a feed node,
-         because that is where a feed would go; saying "feed" about it
-         would claim the flowsheet has an inlet it does not have yet. -->
+    <!-- A feed node stands for a feed the flowsheet declares, so the
+         document normally has the stream behind it. `inlet, unfed` is
+         for the gap between the two: a node whose feed has just been
+         removed, or a document that arrives with one missing. Saying
+         "feed" about that would claim an inlet the flowsheet does not
+         have. An inlet that has NEVER been fed has no node at all --
+         it is a red dot on the unit, and the way to declare one is
+         `feed it` beside the port on the unit's own panel. -->
     <p class="kind">{isFeed && !feed ? 'inlet, unfed' : node.data.kind}</p>
 
     <label>
@@ -650,6 +665,26 @@
     border-radius: 50%;
     background: var(--bad);
   }
+  /* A product, marked the way the canvas marks it: the wire's own grey,
+     and hollow. Neither red nor green, because it is neither a problem
+     nor an achievement -- it is where the flowsheet ends. */
+  li.product { list-style: none; position: relative; padding-left: 0.85rem; }
+  li.product::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 0.42em;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    border: 1.5px solid var(--wire);
+  }
+  .leaves {
+    margin-left: 0.35rem;
+    color: var(--ink-soft);
+    font-size: 0.72rem;
+  }
+
   /* The way to declare a feed on an inlet nothing supplies. It sits on
      the port because there is no longer a feed box to select for a
      stream that has never been one. */

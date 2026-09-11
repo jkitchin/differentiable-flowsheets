@@ -924,7 +924,23 @@ A unit is drawn as its **PFD symbol** rather than as a labelled box: a distillat
 
 Wires route orthogonally, and two keys toggle the rest: `L` names every port beside its handle, `T` swaps to a dark palette. The dark palette is opt-in by a `data-theme` attribute on the root rather than by `prefers-color-scheme`, so a *report* opened in a dark browser keeps the light palette it was designed and screenshotted with.
 
-**A port says whether it is waiting for something.** Three states, and the third is the honest one: a **red dot** is an inlet nothing supplies or an outlet nothing reads, a **green dot** is a port something is joined to, and a **grey square** is a port on a node that answers neither question: the feed and product boxes, whose whole existence already says which streams enter and leave. Both dots are round, because they are one state with two values; changing the shape as well would read as two unrelated marks. The answer comes from `openPorts` in `model/graph.js`, which is the same walk over the document that the palette's "waiting for" hints use: an inlet is open unless a unit produces that stream, a declared feed supplies it, or a recycle lands on it. So green is not "a wire was drawn here" — it is "the flowsheet has an answer for this stream", and a feed typed into the inspector turns an inlet green with no wire on the canvas at all.
+**A port says what it is.** Three marks, and they answer two different questions:
+
+| | | |
+|---|---|---|
+| **red dot** | an inlet nothing supplies | the flowsheet cannot be solved; `solve` refuses this stream by name |
+| **green dot** | a port something is joined to | a wire, a declared feed, or a recycle |
+| **grey ring** | an outlet nothing reads | a **product** — the stream leaves, and there is nothing further to do |
+
+The two dots are round and coloured because they are one question with two answers. The ring is neither colour and hollow, because it answers a different question: not *is this wired?* but *where does this stream go?*, and the answer — out — is what the last unit of a finished flowsheet is supposed to say. Marking it red said "unwired" about a flowsheet that was complete, and the only thing red should mean on this canvas is that `solve` will refuse.
+
+Losing the red mark at that end loses no warning. Whenever an outlet *should* have gone somewhere, the unit waiting for it still shows a red inlet, which is the end that can actually be fixed.
+
+All of it comes from `openPorts` in `model/graph.js`, the same walk over the document that the palette's "waiting for" hints use: an inlet is open unless a unit produces that stream, a declared feed supplies it, or a recycle lands on it; an outlet is a product unless a unit reads it or a recycle carries it back. So green is not "a wire was drawn here" — it is "the flowsheet has an answer for this stream", and a feed declared in the inspector turns an inlet green with no wire on the canvas at all.
+
+**The two ends are not symmetric, and the model is where that comes from.** A feed is an *object the flowsheet holds* — `Flowsheet.feeds`, a `Stream` per name — because it is data nothing on the canvas can imply: a temperature, a pressure and a flow per species. A product is not an object at all. It is an outlet nothing happens to read, `solve` returns it in `streams` with everything else, and there is nothing to declare. Which is why one end has a form to fill in and the other has only a mark saying it is finished.
+
+Feeds are declared from the panel of the unit that wants one: the **`feed it`** link beside an open inlet declares it at the flowsheet's own defaults, and the feed box that then appears on the canvas is what you select to type the numbers into. It sits on the port rather than on the canvas because the canvas draws a box only for a feed that exists, so there is no node to click for a stream that has never been one.
 
 The green half is also the acknowledgement for the gesture that earns it, and the lack of one hid a bug worth recording. `@xyflow` calls `onconnect` with the `Connection` itself — `{source, target, sourceHandle, targetHandle}` — and it calls it *after* adding the edge to the canvas. The handler destructured `{ connection }` off that argument, read `undefined`, and refused the connection with `that is not a connection`, so the wire appeared, the server never heard about it, both dots stayed red, and the phantom edge vanished at the next redraw — which dragging a node triggers. Every unit test of the pure function passed, because the function was right and its one caller was wrong. `connectionWire` now accepts either shape, and `edit.test.js` asserts both.
 
