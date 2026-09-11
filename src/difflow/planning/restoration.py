@@ -58,10 +58,14 @@ __all__ = ["restoration_model", "restoration_violation"]
 def restoration_model(lp: LPModel) -> LPModel:
     """Build the phase-one model that minimises predicted infeasibility.
 
-    Every inequality row gains a non-negative artificial column that lets it
-    be violated, and the objective becomes the sum of those artificials. The
+    Every *spec* row gains a non-negative artificial column that lets it be
+    violated, and the objective becomes the sum of those artificials. The
     original objective is dropped entirely: restoration is not a trade-off
     against profit, it is a search for any feasible point at all.
+
+    Structural inequality rows -- the SOS2 adjacency of a piecewise block --
+    are left alone for the same reason the equalities are. They define the
+    model rather than constrain it on the caller's behalf.
 
     Rows that already carry an elastic slack get an artificial too. Their
     slack is priced in the *original* objective, which restoration discards,
@@ -88,21 +92,35 @@ def restoration_model(lp: LPModel) -> LPModel:
     n_rows = int(lp.A_ub.shape[0]) if lp.A_ub.size else 0
     n_cols = lp.n_cols
 
-    if n_rows == 0:
-        # Nothing to relax: infeasibility is in the bounds or the equalities,
-        # and an artificial column would not touch either.
+    # Not every inequality row is the caller's to relax. The SOS2 adjacency
+    # rows of a piecewise block say "lambda_k may only be nonzero on the
+    # chosen interval", which is the definition of the encoding and not a
+    # requirement anyone asked for -- exactly the argument that keeps the
+    # model and link equalities out of phase one. Handing one an artificial
+    # would let restoration buy a lower predicted violation by breaking the
+    # piecewise model, and report the discount as progress.
+    relaxable = [i for i, name in enumerate(lp.ub_names)
+                 if name.startswith("spec[")]
+
+    if n_rows == 0 or not relaxable:
+        # Nothing to relax: infeasibility is in the bounds, the equalities or
+        # the structural rows, and an artificial column would not touch any
+        # of them.
         return replace(lp, c=np.zeros(n_cols), objective_offset=0.0)
 
-    names = [f"artificial[{name}]" for name in lp.ub_names]
+    n_art = len(relaxable)
+    names = [f"artificial[{lp.ub_names[i]}]" for i in relaxable]
     columns = list(lp.columns) + names
 
-    c = np.concatenate([np.zeros(n_cols), np.ones(n_rows)])
-    lb = np.concatenate([lp.lb, np.zeros(n_rows)])
-    ub = np.concatenate([lp.ub, np.full(n_rows, np.inf)])
+    c = np.concatenate([np.zeros(n_cols), np.ones(n_art)])
+    lb = np.concatenate([lp.lb, np.zeros(n_art)])
+    ub = np.concatenate([lp.ub, np.full(n_art, np.inf)])
 
-    # A_ub x - a <= b_ub
-    A_ub = np.hstack([lp.A_ub, -np.eye(n_rows)])
-    A_eq = (np.hstack([lp.A_eq, np.zeros((lp.A_eq.shape[0], n_rows))])
+    # A_ub x - a <= b_ub, with a column only for the rows phase one may relax.
+    relax_block = np.zeros((n_rows, n_art))
+    relax_block[relaxable, np.arange(n_art)] = -1.0
+    A_ub = np.hstack([lp.A_ub, relax_block])
+    A_eq = (np.hstack([lp.A_eq, np.zeros((lp.A_eq.shape[0], n_art))])
             if lp.A_eq.size else lp.A_eq)
 
     return replace(

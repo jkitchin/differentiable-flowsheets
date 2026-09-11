@@ -29,7 +29,7 @@ import pytest
 jax.config.update("jax_enable_x64", True)
 
 from difflow.planning import Block, DeltaBasePlanner, Network
-from difflow.planning.lp import Spec
+from difflow.planning.lp import LPModel, Spec
 from difflow.planning.planner import TrustRegionOptions
 from difflow.planning.restoration import (
     restoration_model, restoration_violation,
@@ -71,11 +71,43 @@ def test_restoration_model_relaxes_only_the_spec_rows():
     phase1 = restoration_model(lp)
 
     artificials = [c for c in phase1.columns if c.startswith("artificial[")]
+    # Every row of this model is a spec row, so all of them are relaxed.
     assert len(artificials) == lp.A_ub.shape[0]
+    assert all("spec[" in a for a in artificials)
     # Equality rows -- the model row y = y0 + J(u - u0) -- keep their width
     # in the new column space but gain no artificial of their own.
     assert phase1.A_eq.shape == (lp.A_eq.shape[0], phase1.n_cols)
     assert np.all(phase1.A_eq[:, lp.n_cols:] == 0.0)
+
+
+def test_a_structural_inequality_row_is_not_relaxed():
+    """The SOS2 adjacency of a piecewise block is not the caller's to break.
+
+    `A_ub` holds two unrelated kinds of row: the caller's specs, and the
+    adjacency rows a piecewise block emits to say that lambda_k may only be
+    nonzero on the chosen interval. The second kind defines the encoding, so
+    it belongs with the model and link equalities on the side phase one does
+    not touch. An artificial there would let restoration buy a lower
+    *predicted* violation by breaking the piecewise model, and report the
+    discount as progress.
+    """
+    lp = LPModel(
+        columns=["u", "lam0", "z0"],
+        c=np.array([1.0, 0.0, 0.0]),
+        A_ub=np.array([[0.0, 1.0, -1.0],     # pw_sos2: structural
+                       [1.0, 0.0, 0.0]]),    # spec: the caller's requirement
+        b_ub=np.array([0.0, 5.0]),
+        A_eq=np.zeros((0, 3)), b_eq=np.zeros(0),
+        ub_names=["pw_sos2[blk.lambda[0]]", "spec[purity>=]"],
+        lb=np.zeros(3), ub=np.array([10.0, 1.0, 1.0]),
+    )
+    phase1 = restoration_model(lp)
+
+    artificials = [c for c in phase1.columns if c.startswith("artificial[")]
+    assert artificials == ["artificial[spec[purity>=]]"]
+    # The structural row is carried through with no way to violate it.
+    assert not phase1.A_ub[0, lp.n_cols:].any()
+    assert phase1.A_ub[1, lp.n_cols:] == pytest.approx([-1.0])
 
 
 def test_restoration_model_is_feasible_where_the_lp_is_not():
