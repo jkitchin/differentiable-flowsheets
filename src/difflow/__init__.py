@@ -222,8 +222,13 @@ from difflow.initialization import (
     estimate_outlet_temperature,
     estimate_flash_split,
     FlowsheetGraph,
+    StreamEdge,
     find_cycles,
     select_tear_streams,
+    calculation_order,
+    analyze_tears,
+    TearAnalysis,
+    CycleEnumerationWarning,
 )
 
 # Plugin infrastructure
@@ -518,8 +523,13 @@ __all__ = [
     "estimate_outlet_temperature",
     "estimate_flash_split",
     "FlowsheetGraph",
+    "StreamEdge",
     "find_cycles",
     "select_tear_streams",
+    "calculation_order",
+    "analyze_tears",
+    "TearAnalysis",
+    "CycleEnumerationWarning",
     # Plugin infrastructure
     "registry",
     "load_plugins",
