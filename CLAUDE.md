@@ -459,7 +459,10 @@ machinery you already have):
   inelastic spec violated at the start, which otherwise dead-ends: shrinking
   the radius cannot restore feasibility. Phase one relaxes only the SPEC
   rows -- model and link rows are definitional, so an equality-infeasible
-  subproblem is a broken model and must be reported, not absorbed.
+  subproblem is a broken model and must be reported, not absorbed. The row
+  taxonomy is total and asserted: a label matching neither `RELAXABLE_PREFIXES`
+  nor `STRUCTURAL_PREFIXES` raises, because the match is positive and a new
+  kind left unclassified would be silently left hard.
 - Restoration has its OWN trust region and acceptance test, judged on the
   nonlinear blocks: a phase-one LP given a big enough region proposes points
   it predicts feasible and the blocks are not (measured: predicted violation
