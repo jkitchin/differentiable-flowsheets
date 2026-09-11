@@ -606,6 +606,11 @@ class Flash:
         }
 
         return {
+            # Positional, in the order __call__ returns them: that is the
+            # only thing a caller holding Unit.outlet_names can match the
+            # guesses up by. 'liquid'/'vapor' stay for callers that know
+            # they are talking to a flash.
+            'outlets': (liquid, vapor),
             'liquid': liquid,
             'vapor': vapor,
             'states': states,

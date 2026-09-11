@@ -23,6 +23,20 @@ from difflow.numerics import safe_divide
 # Protocols and Base Classes
 # =============================================================================
 
+class TearInitializationWarning(UserWarning):
+    """A unit could not be run or estimated while guessing a tear stream.
+
+    :meth:`difflow.Flowsheet.solve` starts a recycle from one pass of the
+    units over the feeds. A unit that raises on that pass is not
+    necessarily broken --- a CSTR's root find and a flash's Rachford-Rice
+    both have trouble near an empty inlet, and the pass runs before any
+    recycle is known. When the unit also has no usable ``initialize()`` to
+    fall back on, its outlets stand in as the flowsheet's default stream
+    and this warning says so, because the alternative is a tear guess that
+    is quietly worse than it looks.
+    """
+
+
 @runtime_checkable
 class Initializable(Protocol):
     """Protocol for units that support initialization."""
@@ -40,7 +54,13 @@ class Initializable(Protocol):
 
         Returns:
             Dictionary containing:
-            - 'outlet': Initial guess for outlet stream
+            - 'outlets': Initial guesses for the outlet streams, as a
+              sequence in the order ``__call__`` returns them. This is
+              how a caller with only ``Unit.outlet_names`` to go on can
+              tell which guess is which, so a multi-outlet unit has to
+              provide it to be usable by the flowsheet.
+            - 'outlet': The singular spelling, for a unit with one outlet.
+              Means the same as a one-element ``outlets``.
             - 'states': Optional dict of internal state guesses
             - 'info': Optional additional information
         """

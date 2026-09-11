@@ -15,6 +15,7 @@ from typing import Callable, Any, Literal
 from dataclasses import dataclass, field, replace, is_dataclass
 from dataclasses import fields as dc_fields
 import copy
+import warnings
 import jax.numpy as jnp
 from jax import Array
 import jax
@@ -24,6 +25,7 @@ from difflow.initialization import (
     AndersonAccelerator,
     wegstein_acceleration,
     Initializable,
+    TearInitializationWarning,
 )
 import optimistix as optx
 
@@ -136,6 +138,55 @@ def _update_feed_stream(stream: Stream, updates: dict[str, Any]) -> Stream:
             new[k] = jnp.asarray(updates[k], dtype=jnp.float64)
 
     return new
+
+
+def _parse_outlets(result: Any, unit: "Unit") -> dict[str, Stream]:
+    """Name the streams a unit returned.
+
+    A unit operation may hand back a single stream, a tuple of streams, a
+    tuple of streams with an info dict on the end, or ``(streams, info)``.
+    The mapping onto names is positional in every one of those shapes,
+    which is what makes the order of ``outlet_names`` part of a unit's
+    contract rather than a detail of how it was written down.
+    """
+    if not isinstance(result, tuple):
+        return {unit.outlet_names[0]: result}
+
+    if len(result) == len(unit.outlet_names):
+        return dict(zip(unit.outlet_names, result))
+
+    if len(result) == 2 and isinstance(result[1], dict):
+        outputs = result[0]
+        if isinstance(outputs, tuple):
+            return dict(zip(unit.outlet_names, outputs))
+        return {unit.outlet_names[0]: outputs}
+
+    if len(result) == len(unit.outlet_names) + 1:
+        return dict(zip(unit.outlet_names, result[:-1]))
+
+    raise ValueError(f"Unexpected output from {unit.name}: {len(result)} items")
+
+
+def _initialized_outlets(result: Any, unit: "Unit") -> dict[str, Stream]:
+    """Name the streams a unit's ``initialize()`` returned.
+
+    Positional, the same way :func:`_parse_outlets` is and for the same
+    reason: ``outlets`` is the sequence in ``__call__`` order, and a
+    caller holding only ``outlet_names`` has nothing else to match them
+    up by. ``outlet`` is the singular spelling and means the same thing
+    for a unit with one outlet -- which is why a flash, whose initializer
+    used to answer only in ``liquid``/``vapor``, could never be read.
+    """
+    if not isinstance(result, dict):
+        return {}
+
+    outlets = result.get("outlets")
+    if outlets is None and len(unit.outlet_names) == 1 and "outlet" in result:
+        outlets = (result["outlet"],)
+    if outlets is None:
+        return {}
+
+    return dict(zip(unit.outlet_names, outlets))
 
 
 @dataclass
@@ -327,15 +378,25 @@ class Flowsheet:
         self.last_solve_tol = tol
         self.last_solve_tear_streams = [dest for dest in self.recycles.values()]
 
-        # Initialize tear streams
+        # Initialize tear streams.  The guess comes from the SOURCE end of
+        # each recycle: `dest` is an inlet, so nothing in the flowsheet
+        # computes it, and asking for it was why this path used to return
+        # the default every time (#247).  One propagation pass serves every
+        # tear, so it is computed at most once however many recycles there
+        # are.  Under tracing it is skipped: the initial guess cannot
+        # affect a gradient that comes from the converged solution, and a
+        # best-effort pass that catches exceptions has no business running
+        # over tracers.
         tear_streams = {}
+        propagated = None
+        guess_tears = use_initialization and not self._is_traced()
         for source, dest in self.recycles.items():
             if tear_initial and dest in tear_initial:
                 tear_streams[dest] = tear_initial[dest]
-            elif use_initialization:
-                # Try to get initial guess from unit initialization
-                init_stream = self._initialize_tear_stream(dest)
-                tear_streams[dest] = init_stream
+            elif guess_tears:
+                if propagated is None:
+                    propagated = self._propagate_from_feeds()
+                tear_streams[dest] = self._initialize_tear_stream(source, propagated)
             else:
                 # Initialize with small flows
                 tear_streams[dest] = self._make_zero_stream()
@@ -399,35 +460,125 @@ class Flowsheet:
         """Project the flow entries of a packed tear array onto [0, inf)."""
         return jnp.where(mask, jnp.clip(x, 0.0, None), x)
 
-    def _initialize_tear_stream(self, stream_name: str) -> Stream:
-        """Get initial guess for a tear stream from unit initialization.
+    def _initialize_tear_stream(
+        self,
+        stream_name: str,
+        propagated: dict[str, Stream] | None = None,
+    ) -> Stream:
+        """Initial guess for a recycled stream, before any iteration.
 
         Args:
-            stream_name: Name of the tear stream
+            stream_name: The **source** end of the recycle --- the outlet
+                being recycled, not the inlet receiving it. A tear
+                destination is an inlet and no unit computes one, so
+                looking that end up could only ever find nothing.
+            propagated: The result of :meth:`_propagate_from_feeds`, when
+                the caller already has it. Computed here otherwise, which
+                makes this callable on its own.
 
         Returns:
-            Initial guess for the stream
+            The propagated value of the stream, or the flowsheet default
+            when the walk could not produce a usable one.
         """
-        # Find the unit that produces this stream and try to initialize it
-        for unit in self.units:
-            if stream_name in unit.outlet_names:
-                # Check if unit operation supports initialization
-                if isinstance(unit.operation, Initializable):
-                    # Get inlet for initialization
-                    # This is a chicken-and-egg problem; use feed or previous guess
-                    inlet_name = unit.inlet_names[0] if unit.inlet_names else None
-                    if inlet_name and inlet_name in self.feeds:
-                        try:
-                            init_result = unit.operation.initialize(
-                                self.feeds[inlet_name],
-                                **unit.params
-                            )
-                            if 'outlet' in init_result:
-                                return init_result['outlet']
-                        except Exception:
-                            pass  # Fall through to default
+        if propagated is None:
+            propagated = self._propagate_from_feeds()
 
-        return self._make_zero_stream()
+        guess = propagated.get(stream_name)
+        if guess is None or not self._usable_tear(guess):
+            return self._make_zero_stream()
+        return guess
+
+    def _usable_tear(self, stream: Any) -> bool:
+        """Whether a guess can stand in for a tear stream.
+
+        ``_streams_to_array`` indexes every species in ``species_order``
+        plus T and P, so a stream missing any of them does not fail as a
+        bad guess --- it fails as a ``KeyError`` several frames away.
+        """
+        try:
+            return (
+                all(f"F_{s}" in stream for s in self.species_order)
+                and "T" in stream
+                and "P" in stream
+            )
+        except TypeError:
+            return False
+
+    def _propagate_from_feeds(self) -> dict[str, Stream]:
+        """Run the units once from the feeds, with the recycles unknown.
+
+        A tear has to start somewhere, and the cheapest honest answer is
+        wherever one pass from the feeds puts it. Streams not available
+        yet --- the tear destinations themselves, and the outlets of any
+        unit that could not run --- stand in as the flowsheet default, so
+        the walk always finishes and always has a value for every inlet
+        it needs.
+
+        A unit that raises on this pass is not necessarily broken. The
+        pass runs before any recycle is known, so a unit inside a loop
+        sees 0.01 mol/s arriving, and a CSTR's root find or a flash's
+        Rachford-Rice can genuinely fail to converge on an almost empty
+        stream. That is the one place ``initialize()`` earns its keep: an
+        analytic estimate that cannot fail, standing in for the call that
+        did.
+        """
+        streams: dict[str, Stream] = dict(self.feeds)
+        default = self._make_zero_stream()
+
+        for unit in self.units:
+            inlets = [streams.get(name, default) for name in unit.inlet_names]
+            try:
+                result = unit.operation(*inlets, **unit.params)
+            except Exception as failure:
+                # Only the call is guarded. A unit that returns a shape
+                # `_parse_outlets` cannot read is a bug in the unit, not a
+                # stream too empty to run on, and it should say so here the
+                # same way it does in a real solve.
+                guessed = self._estimate_outlets(unit, inlets, failure)
+                for name in unit.outlet_names:
+                    streams[name] = guessed.get(name, default)
+            else:
+                streams.update(_parse_outlets(result, unit))
+
+        return streams
+
+    def _estimate_outlets(
+        self,
+        unit: Unit,
+        inlets: list[Stream],
+        failure: Exception,
+    ) -> dict[str, Stream]:
+        """What a unit's outlets look like when the unit itself would not run.
+
+        Returns an empty dict when there is nothing better than the
+        flowsheet default to say, having warned about it --- a tear guess
+        that is quietly worse than it looks is the thing worth avoiding.
+        """
+        operation = unit.operation
+        if not inlets or not isinstance(operation, Initializable):
+            warnings.warn(
+                f"{unit.name} could not run while guessing the recycle "
+                f"({failure!r}), and has no initialize() to estimate it; "
+                f"its outlets start from the flowsheet default.",
+                TearInitializationWarning,
+                stacklevel=4,
+            )
+            return {}
+
+        try:
+            estimate = operation.initialize(inlets[0], **unit.params)
+        except Exception as also_failed:
+            warnings.warn(
+                f"{unit.name} could not run while guessing the recycle "
+                f"({failure!r}), and neither could its initialize() "
+                f"({also_failed!r}); its outlets start from the flowsheet "
+                f"default.",
+                TearInitializationWarning,
+                stacklevel=4,
+            )
+            return {}
+
+        return _initialized_outlets(estimate, unit)
 
     def _make_zero_stream(self) -> Stream:
         """Create a stream with small default flows for tear initialization."""
@@ -439,39 +590,9 @@ class Flowsheet:
         streams = dict(self.feeds)
 
         for unit in self.units:
-            # Gather inlet streams
             inlets = [streams[name] for name in unit.inlet_names]
-
-            # Call unit operation
             result = unit.operation(*inlets, **unit.params)
-
-            # Handle different return types
-            if isinstance(result, tuple):
-                # Multiple outputs or (outputs, info)
-                if len(result) == len(unit.outlet_names):
-                    # Just the outlet streams
-                    for name, stream in zip(unit.outlet_names, result):
-                        streams[name] = stream
-                elif len(result) == 2 and isinstance(result[1], dict):
-                    # (stream(s), info) format
-                    outputs = result[0]
-                    if isinstance(outputs, dict):
-                        # Single stream
-                        streams[unit.outlet_names[0]] = outputs
-                    elif isinstance(outputs, tuple):
-                        for name, stream in zip(unit.outlet_names, outputs):
-                            streams[name] = stream
-                    else:
-                        streams[unit.outlet_names[0]] = outputs
-                elif len(result) == len(unit.outlet_names) + 1:
-                    # Multiple streams + info dict at end
-                    for name, stream in zip(unit.outlet_names, result[:-1]):
-                        streams[name] = stream
-                else:
-                    raise ValueError(f"Unexpected output from {unit.name}: {len(result)} items")
-            else:
-                # Single output
-                streams[unit.outlet_names[0]] = result
+            streams.update(_parse_outlets(result, unit))
 
         return streams
 
@@ -961,26 +1082,7 @@ class Flowsheet:
         for unit in self.units:
             inlets = [streams[name] for name in unit.inlet_names]
             result = unit.operation(*inlets, **unit.params)
-
-            # Parse outputs
-            if isinstance(result, tuple):
-                if len(result) == len(unit.outlet_names):
-                    for name, stream in zip(unit.outlet_names, result):
-                        streams[name] = stream
-                elif len(result) == 2 and isinstance(result[1], dict):
-                    outputs = result[0]
-                    if isinstance(outputs, dict):
-                        streams[unit.outlet_names[0]] = outputs
-                    elif isinstance(outputs, tuple):
-                        for name, stream in zip(unit.outlet_names, outputs):
-                            streams[name] = stream
-                    else:
-                        streams[unit.outlet_names[0]] = outputs
-                elif len(result) == len(unit.outlet_names) + 1:
-                    for name, stream in zip(unit.outlet_names, result[:-1]):
-                        streams[name] = stream
-            else:
-                streams[unit.outlet_names[0]] = result
+            streams.update(_parse_outlets(result, unit))
 
         return streams
 
