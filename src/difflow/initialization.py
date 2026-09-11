@@ -11,6 +11,8 @@ Based on best practices from IDAES and equation-oriented process simulators.
 
 from typing import Callable, Any, Protocol, runtime_checkable
 from dataclasses import dataclass, field
+import warnings
+import heapq
 import jax.numpy as jnp
 from jax import Array
 import jax
@@ -257,80 +259,283 @@ class AndersonAccelerator:
 # Tear Stream Selection
 # =============================================================================
 
+class CycleEnumerationWarning(UserWarning):
+    """Cycle enumeration stopped before it ran out of cycles.
+
+    :func:`find_cycles` enumerates *elementary* cycles, of which a densely
+    recycled graph can have exponentially many.  ``max_cycles`` bounds the
+    work; hitting it means the tear set that comes out covers the cycles
+    that were found and says nothing about the rest.
+    """
+
+
+@dataclass(frozen=True)
+class StreamEdge:
+    """One directed connection between two units, and the name a tear uses.
+
+    Attributes:
+        stream: The stream to tear on.  For a declared recycle this is the
+            **destination** name, because that is the name
+            :meth:`difflow.Flowsheet.solve` seeds, iterates on and reports
+            in ``last_solve_tear_streams``.
+        source: Unit that computes the stream.
+        dest: Unit that consumes it.
+        declared: Whether the connection is a recycle the user declared
+            with ``add_recycle``.
+        feedback: Whether ``dest`` comes at or before ``source`` in the
+            flowsheet's unit order --- i.e. whether a sequential pass in
+            that order reads the stream before anything writes it.  Every
+            cycle contains at least one such edge, and an untorn one is
+            what a sequential solve trips over.
+    """
+    stream: str
+    source: str
+    dest: str
+    declared: bool = False
+    feedback: bool = False
+
+
 @dataclass
 class FlowsheetGraph:
-    """Graph representation of a flowsheet for analysis."""
+    """Graph representation of a flowsheet for analysis.
+
+    Attributes:
+        units: Unit names, in the flowsheet's calculation order.
+        streams: ``stream -> (source_unit, dest_unit)``.  A declared
+            recycle's destination is credited to the unit that computes
+            the recycle's source, since that is where its value comes
+            from; a stream feeding several units lists the first of them
+            (``edges`` has them all).
+        adjacency: ``unit -> downstream units``.
+        edges: Every connection, one entry per (stream, consumer) pair.
+            This is the object the tear selection works on: two units
+            joined by two streams are two edges, and tearing one of them
+            leaves the other closing the loop.
+        inlets: ``unit -> inlet stream names``.
+        outlets: ``unit -> outlet stream names``.
+    """
     units: list[str]
     streams: dict[str, tuple[str | None, str | None]]  # stream -> (source_unit, dest_unit)
     adjacency: dict[str, list[str]]  # unit -> list of downstream units
+    edges: list[StreamEdge] = field(default_factory=list)
+    inlets: dict[str, list[str]] = field(default_factory=dict)
+    outlets: dict[str, list[str]] = field(default_factory=dict)
 
     @classmethod
     def from_flowsheet(cls, flowsheet) -> "FlowsheetGraph":
-        """Build graph from a Flowsheet object."""
+        """Build graph from a Flowsheet object.
+
+        The declared recycles are part of the graph.  They are the only
+        thing that closes a loop in a flowsheet built the usual way --- a
+        recycle destination is an inlet no unit computes, so without the
+        ``add_recycle`` map the digraph of stream names is a DAG and
+        :func:`find_cycles` would report a flowsheet with a recycle as
+        having none.
+        """
         units = [u.name for u in flowsheet.units]
-        streams = {}
-        adjacency = {u: [] for u in units}
+        order = {name: i for i, name in enumerate(units)}
+        inlets = {u.name: list(u.inlet_names) for u in flowsheet.units}
+        outlets = {u.name: list(u.outlet_names) for u in flowsheet.units}
 
-        # Map streams to their source and destination units
+        producer: dict[str, str] = {}
+        consumers: dict[str, list[str]] = {}
         for unit in flowsheet.units:
-            for outlet in unit.outlet_names:
-                streams[outlet] = (unit.name, None)
-            for inlet in unit.inlet_names:
-                if inlet not in streams:
-                    streams[inlet] = (None, unit.name)
-                else:
-                    src, _ = streams[inlet]
-                    streams[inlet] = (src, unit.name)
+            for name in unit.outlet_names:
+                producer.setdefault(name, unit.name)
+            for name in unit.inlet_names:
+                consumers.setdefault(name, []).append(unit.name)
 
-        # Build adjacency from stream connections
-        for stream, (src, dst) in streams.items():
-            if src is not None and dst is not None and src in adjacency:
-                adjacency[src].append(dst)
+        recycles = dict(getattr(flowsheet, "recycles", None) or {})
 
-        return cls(units, streams, adjacency)
+        def _feedback(src: str, dst: str) -> bool:
+            # `<=` and not `<`: a unit recycling to itself is its own
+            # feedback edge, and it has to be torn like any other.
+            return order[dst] <= order[src]
+
+        edges: list[StreamEdge] = []
+        for name, src in producer.items():
+            for dst in consumers.get(name, []):
+                edges.append(StreamEdge(
+                    stream=name,
+                    source=src,
+                    dest=dst,
+                    # A recycle written as add_recycle(s, s) tears a
+                    # stream that already has both ends; it is this edge,
+                    # not a second one.
+                    declared=recycles.get(name) == name,
+                    feedback=_feedback(src, dst),
+                ))
+
+        for source, dest in recycles.items():
+            if source == dest:
+                continue
+            src = producer.get(source)
+            if src is None:
+                continue  # recycling something no unit computes
+            for dst in consumers.get(dest, []):
+                edges.append(StreamEdge(
+                    stream=dest,
+                    source=src,
+                    dest=dst,
+                    declared=True,
+                    feedback=_feedback(src, dst),
+                ))
+
+        recycled_by = {dest: source for source, dest in recycles.items()}
+        streams: dict[str, tuple[str | None, str | None]] = {}
+        for name in list(producer) + [n for n in consumers if n not in producer]:
+            src = producer.get(name)
+            if src is None and name in recycled_by:
+                src = producer.get(recycled_by[name])
+            dst = consumers.get(name, [None])[0]
+            streams[name] = (src, dst)
+
+        adjacency: dict[str, list[str]] = {u: [] for u in units}
+        for edge in edges:
+            downstream = adjacency.setdefault(edge.source, [])
+            if edge.dest not in downstream:
+                downstream.append(edge.dest)
+
+        return cls(units, streams, adjacency, edges, inlets, outlets)
 
 
-def find_cycles(graph: FlowsheetGraph) -> list[list[str]]:
-    """Find all cycles in the flowsheet graph using DFS.
+def _edge_cycles(
+    graph: FlowsheetGraph,
+    max_cycles: int = 1000,
+) -> list[list[StreamEdge]]:
+    """Every elementary cycle of the graph, as sequences of edges.
+
+    Elementary means no unit repeats, and each cycle is reported once:
+    the search from unit ``i`` only visits units at or after ``i``, so a
+    cycle is enumerated from its earliest member and nowhere else (the
+    standard Johnson restriction).
+
+    Edges, not unit names, because a cycle is only broken by tearing an
+    edge on it: two units joined by two parallel streams sit on two
+    distinct cycles that happen to name the same units, and tearing one
+    stream leaves the other one closing the loop.
+    """
+    out_edges: dict[str, list[StreamEdge]] = {u: [] for u in graph.units}
+    for edge in graph.edges:
+        if edge.source in out_edges and edge.dest in out_edges:
+            out_edges[edge.source].append(edge)
+
+    index = {u: i for i, u in enumerate(graph.units)}
+    cycles: list[list[StreamEdge]] = []
+    path: list[StreamEdge] = []
+
+    def extend(start: int, node: str, on_path: set[str]) -> None:
+        for edge in out_edges[node]:
+            if len(cycles) >= max_cycles:
+                return
+            position = index[edge.dest]
+            if position < start:
+                continue
+            if position == start:
+                cycles.append(path + [edge])
+            elif edge.dest not in on_path:
+                on_path.add(edge.dest)
+                path.append(edge)
+                extend(start, edge.dest, on_path)
+                path.pop()
+                on_path.discard(edge.dest)
+
+    for start, unit in enumerate(graph.units):
+        if len(cycles) >= max_cycles:
+            break
+        extend(start, unit, {unit})
+
+    if len(cycles) >= max_cycles:
+        warnings.warn(
+            f"Stopped enumerating cycles at {max_cycles}; the tear set covers "
+            "the cycles that were found and says nothing about the rest. "
+            "Raise max_cycles to look further.",
+            CycleEnumerationWarning,
+            stacklevel=3,
+        )
+
+    return cycles
+
+
+def find_cycles(
+    graph: FlowsheetGraph,
+    max_cycles: int = 1000,
+) -> list[list[str]]:
+    """Find the elementary cycles in the flowsheet graph.
 
     Args:
         graph: FlowsheetGraph to analyze
+        max_cycles: Stop after this many cycles, with a
+            :class:`CycleEnumerationWarning`.  Elementary cycles can be
+            exponentially many in a densely recycled graph.
 
     Returns:
-        List of cycles, where each cycle is a list of unit names
+        List of cycles, each a list of unit names with the first unit
+        repeated at the end (``["mixer", "reactor", "mixer"]``).  Two
+        cycles over the same units by different streams appear once.
     """
-    cycles = []
-    visited = set()
-    rec_stack = set()
-    path = []
+    return _cycle_names(_edge_cycles(graph, max_cycles))
 
-    def dfs(node):
-        visited.add(node)
-        rec_stack.add(node)
-        path.append(node)
 
-        for neighbor in graph.adjacency.get(node, []):
-            if neighbor not in visited:
-                dfs(neighbor)
-            elif neighbor in rec_stack:
-                # Found a cycle
-                cycle_start = path.index(neighbor)
-                cycle = path[cycle_start:] + [neighbor]
-                cycles.append(cycle)
-
-        path.pop()
-        rec_stack.remove(node)
-
-    for unit in graph.units:
-        if unit not in visited:
-            dfs(unit)
-
+def _cycle_names(edge_cycles: list[list[StreamEdge]]) -> list[list[str]]:
+    """Edge cycles as unit names, with cycles over the same units merged."""
+    seen: set[tuple[str, ...]] = set()
+    cycles: list[list[str]] = []
+    for cycle in edge_cycles:
+        names = [edge.source for edge in cycle] + [cycle[0].source]
+        key = tuple(names)
+        if key in seen:
+            continue
+        seen.add(key)
+        cycles.append(names)
     return cycles
+
+
+def _tear_score(graph: FlowsheetGraph, edge: StreamEdge, counts: dict) -> float:
+    """How good a tear this edge would make; larger is better.
+
+    The ordering is deliberate:
+
+    - A stream the user already declared as a recycle wins outright.  The
+      point of an automatic choice is to fill a gap, not to overrule a
+      decision someone made.
+    - Then the number of loops the edge lies on, which is what makes one
+      tear serve several nested recycles instead of one each.
+    - Then the classical heuristic: tear downstream of a mixing point,
+      where the stream is the sum of everything entering it, so a guess
+      that is wrong in composition is still right in order of magnitude.
+    - A feedback edge last, as a tie-breaker only.  It is the edge the
+      flowsheet's own unit order already treats as the loop closure, so
+      preferring it keeps the automatic choice close to what whoever
+      ordered the units had in mind.  It is not a requirement:
+      :func:`calculation_order` re-sequences the units around whatever is
+      torn, which is what lets ``method="minimum"`` tear a forward edge.
+    """
+    score = 0.0
+    if edge.declared:
+        score += 100.0
+    score += 4.0 * min(counts.get(edge, 0), 5)
+    if len(graph.inlets.get(edge.source, ())) > 1:
+        score += 10.0
+    if "mix" in edge.source.lower():
+        score += 10.0
+    if edge.feedback:
+        score += 1.0
+    return score
+
+
+def _best_tear(graph: FlowsheetGraph, edges, counts: dict) -> StreamEdge:
+    """Highest-scoring edge, ties broken by name so the choice is stable."""
+    return min(
+        edges,
+        key=lambda e: (-_tear_score(graph, e, counts), e.stream, e.source, e.dest),
+    )
 
 
 def select_tear_streams(
     flowsheet,
     method: str = "heuristic",
+    max_cycles: int = 1000,
 ) -> list[str]:
     """Select tear streams for recycle convergence.
 
@@ -338,109 +543,292 @@ def select_tear_streams(
     a cyclic system into an acyclic one for sequential solving.
 
     Args:
-        flowsheet: Flowsheet object
+        flowsheet: Flowsheet object, or a :class:`FlowsheetGraph` already
+            built from one.
         method: Selection method
-            - "heuristic": Select streams after mixers or before splitters
-            - "minimum": Find minimum number of tears (more expensive)
+            - "heuristic": One tear per loop, scored by :func:`_tear_score`
+            - "minimum": Fewest tears that break every loop (greedy)
+        max_cycles: Passed to :func:`find_cycles`.
 
     Returns:
-        List of stream names to use as tear streams
+        Stream names to tear, in the order they were chosen.  These are
+        the names :meth:`difflow.Flowsheet.solve` seeds and reports: for
+        a declared recycle, the destination name.
+
+    Example:
+        >>> select_tear_streams(fs)
+        ['recycle']
     """
-    graph = FlowsheetGraph.from_flowsheet(flowsheet)
-    cycles = find_cycles(graph)
+    graph = (
+        flowsheet if isinstance(flowsheet, FlowsheetGraph)
+        else FlowsheetGraph.from_flowsheet(flowsheet)
+    )
+    cycles = _edge_cycles(graph, max_cycles)
 
     if not cycles:
         return []
 
     if method == "heuristic":
-        return _select_tears_heuristic(flowsheet, graph, cycles)
+        return _select_tears_heuristic(graph, cycles)
     elif method == "minimum":
-        return _select_tears_minimum(flowsheet, graph, cycles)
+        return _select_tears_minimum(graph, cycles)
     else:
         raise ValueError(f"Unknown tear selection method: {method}")
 
 
-def _select_tears_heuristic(flowsheet: Any, graph: FlowsheetGraph, cycles: list[list[str]]) -> list[str]:
-    """Heuristic tear selection: prefer streams after mixers."""
-    tear_streams = set()
+def _select_tears_heuristic(
+    graph: FlowsheetGraph,
+    cycles: list[list[StreamEdge]],
+) -> list[str]:
+    """Heuristic tear selection: the best-scoring edge on each open loop.
 
-    # For each cycle, find a good tear point
+    Loops are taken in the order they were found, and one already broken
+    by an earlier choice is skipped --- so nested recycles sharing a
+    stream still cost one tear, without the set-cover search that
+    ``method="minimum"`` pays for.
+    """
+    counts: dict[StreamEdge, int] = {}
     for cycle in cycles:
-        best_tear = None
-        best_score = -1
+        for edge in set(cycle):
+            counts[edge] = counts.get(edge, 0) + 1
 
-        for i, unit_name in enumerate(cycle[:-1]):
-            # Get the stream connecting this unit to next in cycle
-            next_unit = cycle[i + 1]
-            unit = next(u for u in flowsheet.units if u.name == unit_name)
-
-            for outlet in unit.outlet_names:
-                # Check if this stream goes to next_unit
-                src, dst = graph.streams.get(outlet, (None, None))
-                if dst == next_unit:
-                    score = 0
-
-                    # Prefer streams after mixers (composition known)
-                    if "mixer" in unit_name.lower() or "mix" in unit_name.lower():
-                        score += 10
-
-                    # Prefer streams with fewer components (simpler)
-                    # This would need stream info, so skip for now
-
-                    # Prefer streams that are already recycles
-                    if outlet in [s for s in flowsheet.recycles.keys()]:
-                        score += 5
-
-                    if score > best_score:
-                        best_score = score
-                        best_tear = outlet
-
-        if best_tear:
-            tear_streams.add(best_tear)
-
-    return list(tear_streams)
-
-
-def _select_tears_minimum(flowsheet: Any, graph: FlowsheetGraph, cycles: list[list[str]]) -> list[str]:
-    """Find minimum number of tear streams (greedy approximation)."""
-    # Greedy: pick stream that appears in most cycles
-    stream_counts = {}
-
+    tears: list[str] = []
+    torn: set[str] = set()
     for cycle in cycles:
-        for i, unit_name in enumerate(cycle[:-1]):
-            unit = next(u for u in flowsheet.units if u.name == unit_name)
-            for outlet in unit.outlet_names:
-                stream_counts[outlet] = stream_counts.get(outlet, 0) + 1
+        if any(edge.stream in torn for edge in cycle):
+            continue
+        best = _best_tear(graph, cycle, counts)
+        tears.append(best.stream)
+        torn.add(best.stream)
 
-    tear_streams = []
-    remaining_cycles = list(cycles)
+    return tears
 
-    while remaining_cycles:
-        # Find stream in most remaining cycles
-        best_stream = max(stream_counts.keys(),
-                         key=lambda s: stream_counts.get(s, 0))
-        tear_streams.append(best_stream)
 
-        # Remove cycles that are now broken
-        remaining_cycles = [
-            c for c in remaining_cycles
-            if best_stream not in _cycle_streams(flowsheet, graph, c)
+def _select_tears_minimum(
+    graph: FlowsheetGraph,
+    cycles: list[list[StreamEdge]],
+) -> list[str]:
+    """Fewest tear streams that break every loop (greedy set cover).
+
+    Exactly minimising the tear set is NP-hard (it is a feedback arc set),
+    so this is the standard greedy approximation: take the stream lying on
+    the most still-unbroken loops, tie-broken by :func:`_tear_score`.  It
+    is optimal on the nested and shared-stream topologies that occur in
+    practice, and within a log factor in general.
+    """
+    counts: dict[StreamEdge, int] = {}
+    for cycle in cycles:
+        for edge in set(cycle):
+            counts[edge] = counts.get(edge, 0) + 1
+
+    by_stream: dict[str, float] = {}
+    for edge in graph.edges:
+        score = _tear_score(graph, edge, counts)
+        by_stream[edge.stream] = max(by_stream.get(edge.stream, score), score)
+
+    tears: list[str] = []
+    remaining = list(cycles)
+    while remaining:
+        covered: dict[str, int] = {}
+        for cycle in remaining:
+            for name in {edge.stream for edge in cycle}:
+                covered[name] = covered.get(name, 0) + 1
+
+        pick = min(
+            covered,
+            key=lambda n: (-covered[n], -by_stream.get(n, 0.0), n),
+        )
+        tears.append(pick)
+        remaining = [
+            cycle for cycle in remaining
+            if all(edge.stream != pick for edge in cycle)
         ]
 
-        # Remove this stream from consideration
-        stream_counts.pop(best_stream, None)
-
-    return tear_streams
+    return tears
 
 
-def _cycle_streams(flowsheet: Any, graph: FlowsheetGraph, cycle: list[str]) -> set[str]:
-    """Get all streams in a cycle."""
-    streams = set()
-    for i, unit_name in enumerate(cycle[:-1]):
-        unit = next(u for u in flowsheet.units if u.name == unit_name)
-        streams.update(unit.outlet_names)
-    return streams
+def calculation_order(
+    graph: FlowsheetGraph,
+    tears: list[str] | set[str],
+) -> list[str] | None:
+    """The order to run the units in, once ``tears`` are seeded.
 
+    A topological sort (Kahn) of the graph with the torn streams removed,
+    taking the flowsheet's own unit order whenever more than one unit is
+    ready.  A flowsheet already written in a runnable order therefore
+    comes back unchanged, and one torn somewhere other than where its
+    author happened to start comes back re-sequenced rather than broken:
+    tearing the mixer outlet of a ``mixer -> reactor -> splitter`` loop
+    means running the reactor first and the mixer last, and the fixed
+    point is the same one.
+
+    Returns:
+        Unit names in calculation order, or ``None`` when the torn graph
+        still has a cycle --- i.e. when ``tears`` does not break every
+        loop, and no order exists.
+    """
+    tears = set(tears)
+    index = {unit: i for i, unit in enumerate(graph.units)}
+    indegree = {unit: 0 for unit in graph.units}
+    downstream: dict[str, list[str]] = {unit: [] for unit in graph.units}
+
+    for edge in graph.edges:
+        if edge.stream in tears:
+            continue
+        if edge.source not in indegree or edge.dest not in indegree:
+            continue
+        indegree[edge.dest] += 1
+        downstream[edge.source].append(edge.dest)
+
+    ready = [index[u] for u in graph.units if indegree[u] == 0]
+    heapq.heapify(ready)
+    order: list[str] = []
+    while ready:
+        unit = graph.units[heapq.heappop(ready)]
+        order.append(unit)
+        for consumer in downstream[unit]:
+            indegree[consumer] -= 1
+            if indegree[consumer] == 0:
+                heapq.heappush(ready, index[consumer])
+
+    return order if len(order) == len(graph.units) else None
+
+
+def calculation_order_problems(
+    graph: FlowsheetGraph,
+    tears: list[str] | set[str],
+    feeds: list[str] | set[str] = (),
+) -> tuple[list[str], list[str]]:
+    """Inlets a sequential pass in unit order could not supply.
+
+    A sequential modular solve walks ``flowsheet.units`` in order and looks
+    each inlet up in what it has computed so far, so an inlet that is not a
+    feed, not torn, and not already written is a ``KeyError`` several frames
+    down rather than a diagnosis.
+
+    Returns:
+        ``(missing, out_of_order)``.  ``missing`` names inlets no unit
+        computes and nothing supplies; ``out_of_order`` names inlets whose
+        producing unit runs later than the unit that reads them.  Either is
+        a topology the declared unit order cannot solve as it stands.
+    """
+    tears = set(tears)
+    feeds = set(feeds)
+    missing: list[str] = []
+    out_of_order: list[str] = []
+
+    for name, (source, _) in graph.streams.items():
+        if name in tears or name in feeds:
+            continue
+        consumed = any(name in ins for ins in graph.inlets.values())
+        if not consumed:
+            continue
+        if source is None:
+            missing.append(name)
+
+    for edge in graph.edges:
+        if edge.feedback and edge.stream not in tears and edge.stream not in feeds:
+            if edge.stream not in out_of_order:
+                out_of_order.append(edge.stream)
+
+    return missing, out_of_order
+
+
+@dataclass
+class TearAnalysis:
+    """What :func:`analyze_tears` found: the loops, and where to cut them.
+
+    Attributes:
+        cycles: Elementary cycles, as unit names (see :func:`find_cycles`).
+        declared: Tear streams the flowsheet already has, from
+            ``add_recycle`` --- the destination names, which is what
+            ``last_solve_tear_streams`` reports.
+        heuristic: What ``select_tear_streams(method="heuristic")`` would
+            choose from scratch.
+        minimum: What ``select_tear_streams(method="minimum")`` would
+            choose from scratch.
+        uncovered: Cycles no declared tear breaks.  A non-empty list on a
+            flowsheet with recycles means a loop is closed in the topology
+            with nothing seeding it.
+        missing_inputs: Inlets nothing supplies (see
+            :func:`calculation_order_problems`).
+        out_of_order: Inlets read before they are written, given the
+            declared tears and the declared unit order.
+    """
+    cycles: list[list[str]] = field(default_factory=list)
+    declared: list[str] = field(default_factory=list)
+    heuristic: list[str] = field(default_factory=list)
+    minimum: list[str] = field(default_factory=list)
+    uncovered: list[list[str]] = field(default_factory=list)
+    missing_inputs: list[str] = field(default_factory=list)
+    out_of_order: list[str] = field(default_factory=list)
+
+    @property
+    def torn(self) -> bool:
+        """Whether the declared tears break every cycle that was found."""
+        return not self.uncovered
+
+    def summary(self) -> str:
+        """A few lines of plain text, for a notebook or a report."""
+        def names(items) -> str:
+            return ", ".join(items) if items else "(none)"
+
+        lines = [f"Tear analysis: {len(self.cycles)} recycle loop(s)"]
+        for cycle in self.cycles:
+            lines.append("  loop: " + " -> ".join(cycle))
+        lines.append(f"  declared tears:  {names(self.declared)}")
+        lines.append(f"  heuristic would: {names(self.heuristic)}")
+        lines.append(f"  minimum would:   {names(self.minimum)}")
+        if self.uncovered:
+            for cycle in self.uncovered:
+                lines.append("  NOT TORN: " + " -> ".join(cycle))
+        if self.missing_inputs:
+            lines.append(f"  inlets nothing supplies: {names(self.missing_inputs)}")
+        if self.out_of_order:
+            lines.append(
+                f"  inlets read before they are written: {names(self.out_of_order)}"
+            )
+        return "\n".join(lines)
+
+    def __str__(self) -> str:
+        return self.summary()
+
+
+def analyze_tears(flowsheet, max_cycles: int = 1000) -> TearAnalysis:
+    """Report the recycle loops of a flowsheet and where they could be torn.
+
+    Pure diagnosis: it reads the flowsheet, runs nothing and changes
+    nothing.  See :meth:`difflow.Flowsheet.tear_analysis`.
+    """
+    graph = FlowsheetGraph.from_flowsheet(flowsheet)
+    edge_cycles = _edge_cycles(graph, max_cycles)
+    cycles = _cycle_names(edge_cycles)
+
+    recycles = getattr(flowsheet, "recycles", None) or {}
+    declared = list(dict.fromkeys(recycles.values()))
+
+    uncovered = _cycle_names([
+        cycle for cycle in edge_cycles
+        if all(edge.stream not in declared for edge in cycle)
+    ])
+
+    missing, out_of_order = calculation_order_problems(
+        graph, declared, getattr(flowsheet, "feeds", None) or {}
+    )
+
+    return TearAnalysis(
+        cycles=cycles,
+        declared=declared,
+        heuristic=(
+            _select_tears_heuristic(graph, edge_cycles) if edge_cycles else []
+        ),
+        minimum=(
+            _select_tears_minimum(graph, edge_cycles) if edge_cycles else []
+        ),
+        uncovered=uncovered,
+        missing_inputs=missing,
+        out_of_order=out_of_order,
+    )
 
 # =============================================================================
 # Initialization Helpers

@@ -26,6 +26,12 @@ from difflow.initialization import (
     wegstein_acceleration,
     Initializable,
     TearInitializationWarning,
+    FlowsheetGraph,
+    TearAnalysis,
+    analyze_tears,
+    calculation_order,
+    calculation_order_problems,
+    select_tear_streams,
 )
 import optimistix as optx
 
@@ -349,6 +355,7 @@ class Flowsheet:
         use_initialization: bool = True,
         clip_negative_flows: bool = True,
         on_nonconvergence: Literal["warn", "raise", "ignore"] = "warn",
+        tears: Literal["declared", "auto", "heuristic", "minimum"] = "declared",
     ) -> dict[str, Stream]:
         """Solve the flowsheet.
 
@@ -400,6 +407,29 @@ class Flowsheet:
                 A solve under ``jax.grad``/``jit`` has no concrete residual
                 to judge (:func:`_concrete` returns ``None``), so it stays
                 silent whatever this is set to.
+            tears: Where the tear streams come from.
+
+                - ``"declared"`` (default): the recycles given to
+                  :meth:`add_recycle`, and nothing else. A loop closed in
+                  the topology but never declared stays untorn, which is
+                  what it has always done.
+                - ``"auto"``: when --- and only when --- no recycle has
+                  been declared, pick the tear streams with
+                  :func:`~difflow.select_tear_streams`, sequence the units
+                  around them with
+                  :func:`~difflow.calculation_order`, and solve on those.
+                  The choice is recorded in ``last_solve_tear_streams``
+                  and neither it nor the sequence is kept:
+                  ``self.recycles`` and ``self.units`` are what was
+                  declared, before and after.
+                - ``"heuristic"`` / ``"minimum"``: the same, naming the
+                  selection strategy explicitly (``"auto"`` is
+                  ``"heuristic"``).
+
+                A declared recycle always wins: an automatic choice is
+                there to fill a gap, not to overrule one. Use
+                :meth:`tear_analysis` to see what the strategies would
+                pick without solving anything.
 
         Returns:
             Dictionary of all streams in the flowsheet
@@ -414,6 +444,25 @@ class Flowsheet:
             raise ValueError(
                 f"Unknown on_nonconvergence: {on_nonconvergence!r}. "
                 'Expected "warn", "raise" or "ignore".'
+            )
+        if tears not in ("declared", "auto", "heuristic", "minimum"):
+            raise ValueError(
+                f"Unknown tears: {tears!r}. "
+                'Expected "declared", "auto", "heuristic" or "minimum".'
+            )
+
+        if tears != "declared" and not self.recycles:
+            return self._solve_auto_torn(
+                "heuristic" if tears == "auto" else tears,
+                tear_initial=tear_initial,
+                tol=tol,
+                max_iter=max_iter,
+                damping=damping,
+                acceleration=acceleration,
+                anderson_depth=anderson_depth,
+                use_initialization=use_initialization,
+                clip_negative_flows=clip_negative_flows,
+                on_nonconvergence=on_nonconvergence,
             )
 
         if not self.recycles:
@@ -486,6 +535,90 @@ class Flowsheet:
 
         self._report_nonconvergence(on_nonconvergence, max_iter)
         return streams
+
+    def _solve_auto_torn(self, method: str, **solve_kwargs) -> dict[str, Stream]:
+        """Solve on tear streams this flowsheet never declared.
+
+        The selected streams are installed as recycles of themselves ---
+        ``add_recycle(s, s)``, which is how a loop closed by a single
+        stream name is torn: the iteration seeds ``s``, the units run, and
+        the unit that computes ``s`` overwrites it with the value the next
+        iterate is compared against.  They are installed for this solve
+        only; ``self.recycles`` is what the user declared, before and
+        after, so a later ``solve()`` still does what it always did.
+        """
+        chosen = select_tear_streams(self, method=method)
+        if not chosen:
+            # Nothing to tear.  Either the flowsheet is acyclic, and the
+            # sequential path is right, or the loop is closed by something
+            # the graph cannot see -- and then the declared path saying
+            # "no recycles" is still the honest answer.
+            return self.solve(tears="declared", **solve_kwargs)
+
+        graph = FlowsheetGraph.from_flowsheet(self)
+        missing, _ = calculation_order_problems(graph, chosen, self.feeds)
+        if missing:
+            raise ValueError(
+                "Automatic tear selection cannot solve this flowsheet: no "
+                "unit computes and no feed supplies "
+                f"{', '.join(missing)}, so neither a tear set nor a "
+                "calculation order can fill it in. Add the missing feed with "
+                "add_feed(), or check the stream names. "
+                "Flowsheet.tear_analysis() reports this alongside the loops "
+                "it found."
+            )
+
+        order = calculation_order(graph, chosen)
+        if order is None:
+            # Defensive: every strategy tears at least one edge of every
+            # cycle it was given, so what is left is a DAG.  A cycle that
+            # survives means the selection missed a loop (a truncated
+            # enumeration, say), and running anyway would KeyError deep in
+            # the iteration instead of saying so.
+            raise ValueError(
+                "Automatic tear selection left a recycle loop unbroken, so "
+                f"there is no calculation order for the tears it chose "
+                f"({', '.join(chosen)}). See Flowsheet.tear_analysis(), and "
+                "declare the recycles explicitly with add_recycle()."
+            )
+
+        by_name = {unit.name: unit for unit in self.units}
+        declared, sequence = self.recycles, self.units
+        self.recycles = {name: name for name in chosen}
+        self.units = [by_name[name] for name in order]
+        try:
+            return self.solve(tears="declared", **solve_kwargs)
+        finally:
+            self.recycles, self.units = declared, sequence
+
+    def tear_analysis(self, max_cycles: int = 1000) -> TearAnalysis:
+        """Report this flowsheet's recycle loops and where they could be torn.
+
+        Diagnosis only: it reads the topology, runs no unit and changes
+        nothing.  The result names the loops it found, the tears already
+        declared with :meth:`add_recycle`, what
+        :func:`~difflow.select_tear_streams` would have chosen instead,
+        any loop left untorn, and any inlet the declared unit order cannot
+        supply.
+
+        Args:
+            max_cycles: Give up enumerating elementary cycles after this
+                many, with a
+                :class:`~difflow.CycleEnumerationWarning`.
+
+        Returns:
+            :class:`~difflow.TearAnalysis`.  ``print(fs.tear_analysis())``
+            for the plain-text summary.
+
+        Example:
+            >>> print(fs.tear_analysis())
+            Tear analysis: 1 recycle loop(s)
+              loop: mixer -> reactor -> flash -> mixer
+              declared tears:  recycle
+              heuristic would: recycle
+              minimum would:   recycle
+        """
+        return analyze_tears(self, max_cycles=max_cycles)
 
     def _report_nonconvergence(self, action: str, max_iter: int) -> None:
         """Warn, raise or stay silent about the solve that just finished.

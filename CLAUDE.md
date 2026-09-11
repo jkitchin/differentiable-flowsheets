@@ -193,6 +193,15 @@ fs.set_recycle('flash', 'cstr', split_fraction=0.5)
 result = fs.solve(feed_stream)
 ```
 
+Tear placement is the user's call by default (`add_recycle`), because
+inferring it silently would change the answer for flowsheets that already
+run. `fs.tear_analysis()` reports the loops, the declared tears, what
+`select_tear_streams` would pick instead, and any inlet the unit order
+cannot supply -- reading only, no unit is called. `fs.solve(tears="auto")`
+(or `"minimum"`) picks the tears when none were declared, sequences the
+units around them with `calculation_order`, records the choice in
+`last_solve_tear_streams`, and leaves `fs.recycles`/`fs.units` as declared.
+
 ## Code Conventions
 
 ### JAX Compatibility
