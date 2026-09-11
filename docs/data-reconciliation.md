@@ -237,3 +237,93 @@ This is not the same as reconciling each day separately and averaging the estima
 The catch is lag: pooling estimates the *average* truth over its window, so choose a window short enough that the parameter is genuinely constant across it. A finite `sigma` on a shared variable is a prior, and it is applied once — $K$ copies of one prior would count it $K$ times.
 
 [`examples/29_model_updating.ipynb`](../examples/29_model_updating.ipynb) works this through on a pipe that fouls over a 45-day campaign, including the case where a free parameter manufactures a fouling estimate out of a biased flow meter.
+
+## Tracking a drifting parameter: `track_parameters`
+
+The two clocks are a discipline a person applies. A digital twin — a model kept current against the plant so that what you optimise, price or plan against is the plant as it *is* — has nobody to apply it, and the discipline does not survive being automated naively. Two things have to change.
+
+**The verdict has to gate the update, not advise it.** `diagnose()` already decides whether a sensor or the model is at fault. Left as a report, nothing stops a scheduled re-estimation from running on a day when the honest answer was "go calibrate the dp meter", and section 6 of [`examples/29_model_updating.ipynb`](../examples/29_model_updating.ipynb) shows what that costs: the free parameter absorbs part of the bias, the twin reports a confident fouling estimate for a pipe nobody inspected, **and the $\chi^2$ statistic falls while it happens**. The model looks healthier as it gets wronger. No filter gain prevents this — a slow filter reaches the wrong answer gracefully. Only a gate prevents it.
+
+**The update has to have a memory.** Pooling a window is a rectangular filter: hard edges, a ten-day-old period weighted like this morning's, recomputed from scratch each time. Run it on a schedule and the estimate lurches as periods fall off the back of the window.
+
+`track_parameters` is the two clocks written as an update law:
+
+```python
+from difflow.reconciliation import (
+    TrackerState, drift_std_from_time_constant, track_parameters,
+)
+
+run = track_parameters(
+    F, daily_measurements, sigma,
+    state=TrackerState.initial(["eta"], [1.0], std=[0.02]),
+    drift_std=drift_std_from_time_constant(0.05, 30.0),   # 5% over a month
+    names=layout.names,
+)
+
+run.final.as_params()      # {'eta': 0.71} -- feeds a model, a Block, an LP
+run.final.std              # {'eta': 0.0088}
+print(run.summary())
+```
+
+Each period does four things:
+
+1. reconcile with the parameters **frozen at the current estimate** and record both gross-error tests — the routine clock, and the only reason the tests mean anything;
+2. draw a verdict from the campaign so far and put it to `update_gate`;
+3. `time_update` the tracker, **whatever the verdict said**;
+4. only if the gate opened, estimate the parameters from this period and fold the result in with `measurement_update`.
+
+### The filter
+
+The parameter is given the random walk
+
+$$\theta_{k+1} = \theta_k + w_k, \qquad \operatorname{cov}(w_k) = Q\,\Delta t,$$
+
+which is the same model `difflow.mhe.augment_parameters` puts on a drifting parameter, and `drift_std` = $\sqrt{\operatorname{diag} Q}$ is the same knob as `process_std` there, carrying the same warning: **too large and the parameter absorbs sensor noise, too small and a genuine drift is rejected**. It is a required argument, never a default, because it is the bandwidth of the twin rather than a nuisance.
+
+A rate is hard to have an opinion about; the question an engineer can answer is *how far does this move, and over how long?* `drift_std_from_time_constant(spread, tau)` converts one to the other — a random walk accumulates $\sqrt{Q}\sqrt{t}$, so fouling that costs five percent of duty in a month is `drift_std_from_time_constant(0.05, 30.0)` on a daily clock.
+
+No new estimator is involved. A single period's reconciliation already returns both halves of a Kalman measurement update — the estimate, and the block of `reconciled_covariance` belonging to it — so the update is the combination of two Gaussians and all the physics stays inside `reconcile`:
+
+$$S = P^- + R, \quad K = P^- S^{-1}, \quad \theta^+ = \theta^- + K(\hat\theta - \theta^-).$$
+
+Four properties of that combination are worth stating, because they are what make it better than a rolling refit:
+
+- **The covariance is kept full.** Correlated parameters have a *difference* variance a diagonal covariance gets wrong by a factor of a few, so the prior is a matrix. Pass one to `TrackerState.initial(..., covariance=...)` — `difflow.estimation.predicted_covariance` and `reconciled_covariance` both return the right shape.
+- **The covariance is propagated in Joseph form**, $P^+ = (I-K)P^-(I-K)^T + KRK^T$. The short form $(I-K)P^-$ is algebraically equal and numerically worse: it loses symmetry over a long run and can go indefinite. A twin is a long run.
+- **A weakly informative period needs no special case.** Its $R$ is large, $K$ goes to zero, the estimate does not move.
+- **The time update runs on held periods too.** Holding is not knowing: while the twin refuses to move a parameter, its error bar widens at exactly the rate the drift model claims, and the next permitted update takes a correspondingly larger step. `max_std` bounds that growth if a quiet year would otherwise make the next step a jump.
+
+`Innovation.nis` is the filter's own global test — $v^T S^{-1} v$, which is $\chi^2$ on $p$ degrees of freedom when the drift model and the sigmas are right. A series running well above $p$ says the parameter is moving faster than `drift_std` admits.
+
+### The gate
+
+`update_gate` reads a `MonitorDiagnosis` and permits an update only on `model drift`:
+
+| verdict | gate | why |
+|---|---|---|
+| `model drift` | **update** | persistent rejection, blame wanders — the signature of a model fault |
+| `instrument fault` | hold | blame is concentrated; go calibrate the named sensor |
+| `consistent` | hold | the data gave the model nothing to correct |
+| `undiagnosed` | hold | persistent rejection with nothing testable to blame |
+
+Holding on `consistent` makes the loop **event-triggered**: the parameter sits still until the evidence is strong enough to reject, then moves. That deadband is deliberate. A parameter re-estimated every period tracks whatever that period's noise favoured, and the twin stops being a model.
+
+The policy is an argument (`allow=`), so it can be widened — deliberately, and at a known cost. `tests/test_tracking.py::TestGate::test_an_ungated_loop_would_have_invented_a_fouling_factor` is the regression: the same filter on the same biased-meter data, with the gate opened, reports a pipe several percent off clean.
+
+The gate is a **statistical rule, not a guarantee**, and the rule has two knobs. `track_parameters` forwards `window`, `rejection_threshold` and `concentration_threshold` to `diagnose`, because the defaults are not right for every plant: on a small network a few days early in a sensor bias can read as diffuse, slip through as `model drift`, and move the parameter before the rule settles. When that happens the fix is to tune the rule to the plant's own noise — lengthen the window, lower the concentration threshold — never to widen `allow`, which removes the rule instead of sharpening it. Section 7 of [`examples/29_model_updating.ipynb`](../examples/29_model_updating.ipynb) shows both the leak and the tuning on a real gas network.
+
+### Where the parameter lives
+
+The tracked parameters are threaded through `params`, so the frozen and free problems are the **same `residual_fn`** — a twin whose two clocks run different code drifts apart in a second, less interesting way. `parameter_measurement` appends them to the state vector with `sigma = inf` and hands the augmented problem to `reconcile` unchanged.
+
+They are left *free* there rather than having the prior passed in as a finite `sigma`, on two counts. `sigma` is a vector, so a prior smuggled through it would be diagonal and would discard exactly the correlations the filter keeps. And with the prior outside, the reconciliation's objective stays a test of data against model, uninflated by how confident the twin already was.
+
+The cost is that each period must identify the parameters on its own. If it cannot, the structure check raises `ReconciliationStructureError` naming them — loudly, rather than returning a NaN. Pool several periods with `reconcile_multi` and hand its `shared` estimate and covariance straight to `measurement_update` instead.
+
+### What it does not fix
+
+A filter on parameters assumes the model *form* is right. Under structural mismatch the parameter converges to something that is not the physical quantity and that shifts with operating point, so the twin's **gradients** are wrong even where its values match — which is fatal, since everything downstream of a differentiable flowsheet is a derivative. The symptom is visible in `run.monitor.statistic`: the gate opens, the parameter moves, and the statistic does not come back down, because no value of the parameter fits. The answer then is `difflow.planning.modifiers.update_modifiers`, which corrects values *and* gradients against the plant, not a faster filter.
+
+`track_parameters` is the offline driver, and it is also a backtest — run it over a recorded campaign to choose `drift_std` before trusting the loop live. The four steps are public and stateless (`update_gate`, `time_update`, `parameter_measurement`, `measurement_update`), so an online loop is the same four calls with a `TrackerState` carried between them.
+
+Section 7 of [`examples/29_model_updating.ipynb`](../examples/29_model_updating.ipynb) runs the whole loop on the gas network the notebook builds, over both campaigns. The gated loop tracks the fouling pipe to 1.257 against a truth of 1.300 and never moves at all on the biased-meter campaign; wiring the gate open buys 0.03 of that lag back and reports 1.165 — a confident 16% fouling claim — on the pipe that is clean.
