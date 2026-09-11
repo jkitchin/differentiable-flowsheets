@@ -200,12 +200,13 @@
     background: var(--series);
   }
 
-  /* A port with nothing attached: a red dot, and round, so that it does
-     not read as one of the square grey ports that happens to be tinted.
-     This is the only mark on the canvas that says the flowsheet is not
-     wired yet -- an unconnected port used to be shown by giving it a
-     stream box, which drew boxes for streams nobody had declared and
-     made every fresh node look already connected. */
+  /* An inlet with nothing arriving: a red dot, and round, so that it
+     does not read as one of the square grey ports that happens to be
+     tinted. This is the only mark on the canvas that says the flowsheet
+     cannot be solved -- `solve` refuses this stream by name -- and it is
+     an INLET mark only. An unconnected port used to be shown by giving
+     it a stream box, which drew boxes for streams nobody had declared
+     and made every fresh node look already connected. */
   .canvas :global(.svelte-flow__handle.open) {
     background: var(--bad);
     border-radius: 50%;
@@ -223,6 +224,25 @@
     background: var(--good);
     border-radius: 50%;
     border-color: var(--node-fill);
+  }
+
+  /* The third state, and the one the other two were being asked to cover
+     between them: an outlet nothing reads. That is a PRODUCT -- the
+     stream leaves, `solve` returns it with the rest, and there is
+     nothing further to do about it. Drawn in red it read as an unfinished
+     flowsheet, so the last unit of a perfectly complete one always
+     looked broken.
+
+     A ring rather than a colour: it is the wire's own grey, so it claims
+     neither trouble nor success, and hollow, which is what an open end
+     looks like. Slightly larger than the other two so the hole survives
+     the border at this size. */
+  .canvas :global(.svelte-flow__handle.product) {
+    width: 9px;
+    height: 9px;
+    background: var(--node-fill);
+    border: 2px solid var(--wire);
+    border-radius: 50%;
   }
 
   /* Wires, and the line that follows the cursor while one is being made. */
