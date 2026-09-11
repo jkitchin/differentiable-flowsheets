@@ -1,9 +1,19 @@
-# Design: connecting difflow to Aspen PIMS
+# Design: Aspen PIMS, and delta-base planning beyond refining
 
 **Status: design proposal. Nothing described here is implemented.** No module
 `difflow.planning.pims` exists. This document records the shape of the feature,
 the decisions already taken, and the one thing that has to happen before any
 code is written.
+
+It covers two plays that share a mechanism and almost nothing else. The first —
+connecting to PIMS, which is the bulk of this document — is an integration into
+a market with a thirty-year incumbent, and it deliberately keeps difflow
+*subordinate*: we supply vectors, the customer's PIMS keeps the model. The
+second is the observation that the exclusions which force that subordination are
+refinery-specific and stop binding the moment the domain changes; it starts at
+[Beyond refining](#beyond-refining-where-the-exclusions-stop-binding). Between
+them sits [the digital twin](#the-digital-twin-and-where-the-loop-breaks), which
+both plays want and neither has.
 
 ---
 
@@ -19,12 +29,19 @@ code is written.
 8. [Testing without a licence](#testing-without-a-licence)
 9. [Phase 0: the gate](#phase-0-the-gate)
 10. [Decisions taken, and alternatives rejected](#decisions-taken-and-alternatives-rejected)
-11. [Risks](#risks)
-12. [Where it lands](#where-it-lands)
+11. [Beyond refining: where the exclusions stop binding](#beyond-refining-where-the-exclusions-stop-binding)
+12. [The digital twin, and where the loop breaks](#the-digital-twin-and-where-the-loop-breaks)
+13. [Structural gaps both of those depend on](#structural-gaps-both-of-those-depend-on)
+14. [Risks](#risks)
+15. [Where it lands](#where-it-lands)
 
 ---
 
 ## Summary
+
+*This section and the nine that follow are the PIMS bridge. The
+domain-generality and digital-twin arguments begin at [Beyond
+refining](#beyond-refining-where-the-exclusions-stop-binding).*
 
 difflow supplies **unit submodel delta vectors** to a PIMS model the customer
 keeps and continues to run. It does not replace the planning LP, the recursion,
@@ -292,6 +309,163 @@ solver swap:
   convergence-rate regression. A snap-to-bound tolerance does **not** address
   this: on a tie the analytic centre is $O(1)$ from the bound, not $10^{-9}$.
 
+## Beyond refining: where the exclusions stop binding
+
+[What this is not](#what-this-is-not) declines two categories of work for two
+different reasons, and the difference between those reasons is the whole of this
+section. **Bilinearity is a mathematical exclusion**; **assays, blending
+correlations and scheduling are a scope exclusion**. Only the first is a
+statement about delta-base planning. The second is a statement about *refining*
+— and it is the one that makes difflow subordinate here.
+
+Nothing in the mechanism is refinery-specific. A trust-region SLP over AD delta
+vectors is generic; Baker and Lasdon happened to write it up at Exxon. What is
+refinery-specific is who holds the scarce asset. In a refinery it is curated
+crude assays and empirical property correlations, accumulated over decades, and
+difflow does not have them and should not try to. Change domain and the scarce
+asset changes with it: where a planning model's submodels are *physics*, the
+thing nobody has is a rigorous model you can differentiate, and that is the only
+asset difflow holds.
+
+difflow already carries plugins for five domains of that kind — `difflow_gas`,
+`difflow_power`, `difflow_cc`, `difflow_bio`, `difflow_ree` — which is not the
+same as five planning problems. Candidates, and the reason each is or is not
+one:
+
+* **Gas transmission — the strongest candidate.** Multi-period nomination
+  planning over `difflow_gas`. The submodels are Weymouth pipes and compressor
+  stations, `network_residuals` is a single traceable definition of the equation
+  set, and the tear solve is differentiated implicitly, so the reduced Jacobian
+  is already there. Line-pack is genuine inventory: a state that must carry from
+  one period to the next, which is exactly the structure a planning model has and
+  the reference chain does not.
+* **REE separation — the clean scope-exclusion inversion.** Campaign planning
+  across ore lots whose feed composition changes lot to lot. There is no assay
+  library to lose to, because the assay library *would be* `difflow_ree`'s
+  database, and `n_stages` is already a continuous traceable decision.
+* **Carbon capture fleet retrofit.** Planning against a carbon price, where the
+  question being asked is a price sensitivity — which is what
+  `plan_sensitivity` and `price_switch_point` return and no commercial planning
+  system can, because its submodels are not differentiable.
+* **Power dispatch — a non-candidate, named so the mistake is not made.**
+  `difflow_power` solves AC-OPF directly through its own interior-point NLP. A
+  delta-base layer earns nothing where the full nonlinear program is already
+  tractable; linearising it would be strictly worse than the solver that is
+  there. Delta-base planning earns its keep when the rigorous model is too
+  expensive or too structured to put inside the optimiser whole, not when it
+  fits.
+
+Two cautions, both load-bearing.
+
+**Bilinearity does not disappear by leaving refining.** Any domain where a
+*quality* rides on a *flow* into a pool carries the Haverly nonconvexity.
+Gas heating value and Wobbe index blending have it outright; a raffinate blend
+has it. Every guarantee in `difflow.planning` chains off the subproblem being an
+LP, and a bilinear term voids all of them while the code still returns a number.
+The mathematical exclusion survives the domain change intact — so checking for
+pooling structure is part of choosing a domain, not something to discover later.
+
+**No incumbent cuts both ways.** Outside refining there is no PIMS to integrate
+with, so no [Phase 0 gate](#phase-0-the-gate) blocks the work — and equally no
+customer with a planning model already running, a modelling group that
+understands shift vectors, and a budget line for keeping them fresh. This is a
+harder sell and an easier build. The PIMS bridge is the reverse.
+
+## The digital twin, and where the loop breaks
+
+The ambition is that a flowsheet is not a one-off source of linearisations but a
+model kept current against operating data, so that a plan is built on the plant
+as it is rather than as it was commissioned. That is the same complaint the
+[opening argument](#why-there-is-something-to-connect) makes about annually
+refreshed delta vectors, pushed one step further: refresh the *model*, and the
+vectors follow.
+
+Every piece of it exists.
+
+| Step | Where |
+|---|---|
+| Is today's data consistent with the model? | `difflow.reconciliation.monitor` |
+| Bad sensor, or model drift? | `MonitorResult.diagnose` — blame concentration, `reconciliation/monitoring.py` |
+| Re-estimate the drifted parameter over a window | `reconcile_multi`, holding a parameter common across data sets |
+| Track it online through the dynamics | `difflow.mhe`; `MHEResult.parameters` already returns the shape `Block.theta` takes |
+| Refresh the delta vectors | nothing — `jax.jacobian` follows the parameter change for free |
+| Size the constraint margin for what the estimate does not know | `constraint_backoff`, from the estimate's Σ_θ |
+
+That fifth row is the point. Refreshing the vectors after a parameter update is
+the step that costs `O(n)` simulator perturbations in a commercial system, and
+here it is not a step at all.
+
+**Where it breaks.** `run_modifier_adaptation(planner, plant_fns)`
+(`planning/modifiers.py:178`) requires plant *callables*, and `update_modifiers`
+obtains the gradient correction λ by running `linearize_block` on the plant
+function (`modifiers.py:122`). A historian supplies neither: it supplies noisy
+records at whichever operating points the plant happened to visit, with no
+gradient anywhere. The docstring already declares the seam — *"in a real
+deployment they would come from a gradient estimator, and this function accepts
+whatever `plant_fn` provides"* — but **no gradient estimator exists**, and the
+driver loop hard-requires callables. As shipped, modifier adaptation is an RTO
+study against a simulated plant. It is not yet a data-driven twin.
+
+The way through is to split the mismatch, because the two halves want entirely
+different machinery and only one of them is hard.
+
+**Parametric drift needs no modifiers at all.** Re-estimate θ and let AD carry
+the change onto `J`. This moves the model rather than papering over it, it is
+the case difflow is already fully equipped for, and — by `diagnose()`'s own
+account — it is the case that can actually be *detected* from routine
+monitoring. Shipping this loop is assembly, not research.
+
+**Structural mismatch is the one that genuinely needs λ from data**, and a
+historian is close to the worst possible source for it: steady-state records
+cluster at the operating points the plant actually holds, which is precisely
+where the gradient is least identifiable. Recovering λ needs either deliberate
+excitation — a dither or a designed step, and `difflow.estimation.design`
+already does experiment design — or a gradient estimated over a window of recent
+operating points, carrying its own covariance. The second is a research
+question, not plumbing, and it should be gated accordingly.
+
+Two things to record before either is built:
+
+* **Whatever supplies λ must supply its uncertainty.** `update_modifiers`
+  filters at a fixed gain of 0.5 precisely because an unfiltered gradient
+  correction from noisy data oscillates. A constant is a placeholder; from a
+  real estimator the gain should follow the estimate's covariance, the same way
+  `constraint_backoff` sizes κσ from Σ_θ.
+* **A twin whose parameters move invalidates every vector already exported.**
+  That is an argument *for* Tier 2: the staleness report described
+  under [Architecture](#architecture-three-tiers) is the only artefact here that
+  says which entries actually moved the plan, and a live twin is what makes that
+  question recur rather than arise once.
+
+## Structural gaps both of those depend on
+
+Neither gap below touches the PIMS bridge — Tier 1 exports one block's vectors
+and PIMS owns the commercial structure. They bite only on the play where difflow
+is itself the planner.
+
+**There are no commercial variables.** `build_lp` creates columns for block
+inputs, block outputs, elastic spec slacks and piecewise SOS2 weights
+(`planning/assemble.py:120`) and nothing else. A planning model needs purchases
+at a tiered price, sales against a contract, transport arcs, inventory. Some of
+that can be faked with an identity-function `Block`, but such a block carries a
+Jacobian, a trust region and a phase regime it has no use for, and its `lb`/`ub`
+become the only place a contract limit can live. That is a design decision worth
+taking deliberately rather than discovering.
+
+**Periods are replicated, not linked.** `two_plant_chain(horizon=4)` names
+blocks `ngl@t0 … ngl@t3` and couples them only through a shared CO₂ cap
+(`planning/chain.py:341`). That is a horizon built to make the AD scaling
+argument measurable, which is what it was for — not a multi-period planning
+model, which couples periods through inventory.
+
+But a `Link` is output-to-input, and `Network._topological_order`
+(`planning/network.py:118`) rejects only *cycles* — a self-recycle, or a loop
+among blocks. A forward link from `tank@t0.level` to `tank@t1.level_in` is an
+ordinary DAG edge and is legal today. **Multi-period inventory may therefore
+need no new machinery at all, only a demonstration — and finding that out is the
+cheapest item in this document.** It should be settled before anything else here
+is designed, because the answer changes the size of both plays.
+
 ## Risks
 
 | Risk | Severity | Mitigation |
@@ -301,6 +475,15 @@ solver swap:
 | Table layout guessed wrong | Medium — rework | Phase 0 gate |
 | Vector exported outside its validity domain | Medium | Radius and FD residual travel with every vector; phase warnings raise |
 | Customer expects a full PIMS replacement | Medium — expectation, not code | Scope section, stated up front |
+
+Risks carried by the two other plays rather than by the bridge:
+
+| Risk | Severity | Mitigation |
+|---|---|---|
+| Bilinearity assumed to be refinery-specific, and is not | High — voids every LP guarantee while still returning a number | Pooling structure is out of scope in *every* domain; check for quality-times-flow when choosing one |
+| Outside refining there is no incumbent to integrate with, and no customer already running a planning model | Medium — a harder sell, not a harder build | Choose a domain where difflow already owns the physics plugin *and* a real planning question is being asked |
+| Structural mismatch needs plant gradients a historian cannot supply | Medium — confines the twin to parametric drift | Ship the parametric loop, which is assembly; gate the structural one on a gradient estimator that reports its own covariance |
+| A delta vector exported before a twin updates θ is silently stale | Medium | Tier 2 staleness report; a live twin makes this recur rather than arise once |
 
 ## Where it lands
 
@@ -312,6 +495,17 @@ solver swap:
 | `docs/planning.md` | Cross-reference once implemented |
 | `pyproject.toml` | New `pims` extra (`openpyxl`) — there is no Excel dependency in the project today |
 
+That table is the PIMS bridge only. The other two plays land in
+`difflow.planning` proper — new LP columns in `assemble.py`, a period-linking
+demonstration on the existing `Link` machinery, a data-driven `plant_fn` seam in
+`modifiers.py` — with `docs/planning.md` and a worked example notebook rather
+than this document. None of it is scoped until one of them is chosen, and the
+[multi-period question](#structural-gaps-both-of-those-depend-on) should be
+answered first because it changes the size of the rest.
+
 Related reading: [`docs/planning.md`](planning.md),
 `difflow.planning.export` (the writers this extends), `Block.from_flowsheet`,
-`examples/30_delta_base_planning.ipynb`, `difflow.planning.chain.two_plant_chain`.
+`examples/30_delta_base_planning.ipynb`, `difflow.planning.chain.two_plant_chain`,
+[`docs/data-reconciliation.md`](data-reconciliation.md) and
+[`docs/moving-horizon-estimation.md`](moving-horizon-estimation.md) (the twin's
+existing halves), `examples/29_model_updating.ipynb`.

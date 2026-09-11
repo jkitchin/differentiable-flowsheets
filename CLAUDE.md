@@ -414,6 +414,59 @@ network)` and `DeltaBasePlanner.check_health()` report all three; they never
 raise during a solve. Keep blocks small — linearising a whole plant as one
 block *does* form the deep chain-rule product and its entries do collapse.
 
+Second order, and multi-period (`difflow.planning.curvature`, and the `Link`
+machinery you already have):
+- A Hessian-vector product is one `jvp` through `grad`, so the exact Hessian of
+  a scalar output costs `O(n_u)` HVPs -- what a central-difference *Jacobian*
+  costs. `check_model_order(block, output, sense=...)` measures the linear and
+  quadratic models against the block itself and says which earns its cost.
+- It recommends `"quadratic"` only when the fit is better AND the Hessian is
+  definite in the direction of optimisation. An indefinite Hessian makes the
+  subproblem a nonconvex QP, which forfeits the global optimality that the
+  duals-as-prices reading and the Eason-Biegler theory both rest on -- so a
+  perfect fit is refused, and `.caveat` names the convexification to apply.
+- Definiteness is a property of the POINT, not of the model: the same reduced
+  AC cost is convex at an incumbent schedule and indefinite under heavy load.
+  Check it at the linearisation point each cycle; never cache the verdict.
+- Multi-period inventory needs no new machinery. A `Link` is output-to-input
+  and the network rejects only cycles, so `tank@t0.level_out ->
+  tank@t1.level_in` is an ordinary DAG edge. Make the first period a block with
+  no `level_in` so the model starts feasible.
+- `Spec` is `elastic=True` by default, which is right for a commercial spec and
+  WRONG for a mass balance: an elastic inventory balance lets the planner
+  report a better objective by selling from an empty tank, and it converges
+  without complaint. Physical constraints are `elastic=False`.
+- `model_order="quadratic"` puts that curvature in the subproblem, which
+  becomes a QP (`difflow.planning.quadratic`). It is what makes the loop
+  TERMINATE: on case9 AC-OPF, linear runs 40 iterations and ends on the
+  iteration cap, quadratic ends on its own radius test in 12, same optimum.
+  `"auto"` takes curvature only where the Hessian is already definite.
+- The subproblem stays a QP, never a QCQP: only the OBJECTIVE gets curvature,
+  the constraint rows stay first order. Quadratic rows would make each
+  subproblem a nonconvex QCQP and void the global-optimality guarantee.
+- `convexify` clips wrong-signed eigenvalues and RECORDS it in
+  `qp.convexification`; a convexified model is not the true second-order
+  model, and the trust region plus the acceptance test are what keep it
+  honest. A block with exactly zero curvature is skipped, never floored --
+  flooring hands the solver curvature the model does not have.
+- `QPModel.minimised` vs `.objective`: the first is the solver's convention
+  (lower is better), the second the caller's. The expansion constant lives in
+  the minimised convention and `objective_offset` in the caller's; conflating
+  them shifts the reported value by twice the constant.
+- Integer columns (piecewise SOS2) would make it a MIQP: those networks fall
+  back to linear automatically.
+- Feasibility restoration (`difflow.planning.restoration`) handles an
+  inelastic spec violated at the start, which otherwise dead-ends: shrinking
+  the radius cannot restore feasibility. Phase one relaxes only the SPEC
+  rows -- model and link rows are definitional, so an equality-infeasible
+  subproblem is a broken model and must be reported, not absorbed.
+- Restoration has its OWN trust region and acceptance test, judged on the
+  nonlinear blocks: a phase-one LP given a big enough region proposes points
+  it predicts feasible and the blocks are not (measured: predicted violation
+  to zero while true violation ROSE). It also keeps its own radius -- the
+  search for a feasible point says nothing about where the objective model is
+  trustworthy, and resuming from it makes the planner crawl.
+
 Reporting and drawings (use these rather than re-deriving them in a notebook):
 - `planner.describe()` states the problem — objective, decisions, bounds, links, specs.
 - `lp_model.as_text()` writes the assembled LP out row by row.
@@ -439,7 +492,12 @@ From a flowsheet, and out to someone else's LP:
 
 Reference model: `difflow.planning.chain.two_plant_chain()`. Docs: `docs/planning.md`.
 Example: `examples/30_delta_base_planning.ipynb`. Tests: `tests/test_planning.py`,
-`tests/test_planning_export.py`.
+`tests/test_planning_export.py`, `tests/test_planning_curvature.py`,
+`tests/test_planning_multiperiod.py`, `tests/test_planning_quadratic.py`,
+`tests/test_planning_restoration.py`, `tests/power/test_planning_opf.py` (the
+accuracy claim: SLP over AD delta vectors reaches the AC-OPF optimum and beats
+DC-OPF, all three dispatches scored in the full AC model; and the termination
+claim, linear against quadratic).
 
 ### Stochastic Programming (`difflow.stochastic`)
 
