@@ -306,14 +306,17 @@ what to reach for when a loop will not close. The short version:
 
 ### Direct Substitution
 
-`acceleration="none"`: simple fixed-point iteration on tear streams, run
-through `optimistix`.
+`acceleration="none"`: fixed-point iteration on tear streams, run through
+`optimistix`, taking a fraction `damping` of each step.
 
-$$\mathbf{x}^{(k+1)} = f(\mathbf{x}^{(k)})$$
+$$\mathbf{x}^{(k+1)} = \mathbf{x}^{(k)}
++ \alpha\left(f(\mathbf{x}^{(k)}) - \mathbf{x}^{(k)}\right)$$
 
-Where $\mathbf{x}$ is the tear stream vector and $f$ is the flowsheet
-calculation. This is also the path a traced solve falls back to, because it
-is the only one without a Python branch on the residual.
+Where $\mathbf{x}$ is the tear stream vector, $f$ is the flowsheet calculation
+and $\alpha$ is `damping` (1.0 by default, i.e. plain substitution). Damping
+leaves the fixed point alone and makes the iteration contractive where $f$
+overshoots. This is also the path a traced solve falls back to, because it is
+the only one without a Python branch on the residual.
 
 ### Wegstein Acceleration
 
@@ -342,6 +345,7 @@ results = fs.solve(
     max_iter=100,             # Maximum iterations
     acceleration='wegstein',  # 'none', 'wegstein' (default: 'anderson')
     anderson_depth=5,         # History depth, for acceleration='anderson'
+    damping=1.0,              # Step fraction, for acceleration='none'
     clip_negative_flows=True, # False for signed tear flows (e.g. gas networks)
 )
 ```

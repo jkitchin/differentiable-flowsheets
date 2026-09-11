@@ -46,15 +46,19 @@ that ran. Then work down this list.
    than any change of method. See
    [Explicit guesses](#explicit-guesses) below.
 
-3. **Change the method.** The default is Anderson. A loop that *oscillates*
-   — the residual alternating in sign, flows overshooting and coming back — has
-   a tear map with negative eigenvalues, and `acceleration="wegstein"` is the
-   one that handles that directly: its acceleration factor is clipped into
-   `[-5, 0]`, which damps toward the previous iterate exactly in that case. A
-   loop that is merely slow and monotone is what Anderson is for.
-   `acceleration="none"` is plain substitution through `optimistix` and is the
-   honest baseline: if that diverges, the map itself is not contractive and no
-   amount of acceleration will rescue it.
+3. **Damp it, or change the method.** The default is Anderson. A loop that
+   *oscillates* — the residual alternating in sign, flows overshooting and
+   coming back — has a tear map with negative eigenvalues, and there are two
+   answers to that. `acceleration="none", damping=0.3` takes a short step
+   toward the substitution value, which makes the iteration contractive where
+   the undamped one is not; it is the one to reach for when the residual
+   *rises*, and the only one that also works under `jax.grad`.
+   `acceleration="wegstein"` gets there by a different route — its
+   acceleration factor is clipped into `[-5, 0]`, which damps toward the
+   previous iterate in exactly that regime — and needs no tuning. A loop that
+   is merely slow and monotone is what Anderson is for. Undamped
+   `acceleration="none"` is the honest baseline: if that diverges, the map
+   itself is not contractive.
 
 4. **Check `clip_negative_flows`.** If any tear flow is legitimately signed,
    the default clipping is not a safeguard but a bug, and the solve cannot
@@ -220,10 +224,12 @@ order.
 
 ### Direct substitution (`"none"`)
 
-`x_{k+1} = g(x_k)`, run through `optimistix.FixedPointIteration`. No history, no
-extrapolation, and the only path that is traceable — which is why it is also
-what `jax.grad` falls back to. It converges linearly at a rate set by the
-spectral radius of the tear map and diverges when that exceeds one.
+`x_{k+1} = x_k + \alpha (g(x_k) - x_k)`, run through
+`optimistix.FixedPointIteration`, with $\alpha$ = `damping` = 1 by default. No
+history, no extrapolation, and the only path that is traceable — which is why
+it is also what `jax.grad` falls back to. Undamped it converges linearly at a
+rate set by the spectral radius of the tear map and diverges when that exceeds
+one; [damping](#damping) is what extends it to maps that overshoot.
 
 Its convergence verdict is judged against the criterion `optimistix` actually
 stops on — elementwise `|dx| < atol + rtol |x|`, with `tol` serving as both —
@@ -310,30 +316,64 @@ this is the first thing to check.
 
 ### Damping
 
-For a tear map whose eigenvalue spectrum lies in `[-m, 0)` — the overshoot case
-— the damped iteration
+`damping` takes a step only part of the way toward the substitution value:
 
 $$x^{(k+1)} = x^{(k)} + \alpha\left(g(x^{(k)}) - x^{(k)}\right)$$
 
-has the same fixed point but contracts for $\alpha < 2/(1+m)$, with the optimal
-scalar damping near $\alpha = 2/(2+m)$. An $\alpha$ of 0.3 is safe up to a
-spectral radius of about 5. When in doubt, measure: a finite-difference
-Jacobian of the tear map at a solved state gives $m$ directly. The analysis is
-general even though it was written down for gas networks, where measured
-spectra reach $m \approx 3.1$ (GasLib-40).
+The fixed point is unchanged — at $g(x) = x$ the correction vanishes for any
+$\alpha$ — but the iteration is contractive where plain substitution
+overshoots. For a tear map whose eigenvalue spectrum lies in $[-m, 0)$ it
+contracts for $\alpha < 2/(1+m)$, with the optimal scalar damping near
+$\alpha = 2/(2+m)$. An $\alpha$ of 0.3 is safe up to a spectral radius of
+about 5, which is why it is the usual first thing to try; when in doubt,
+measure, since a finite-difference Jacobian of the tear map at a solved state
+gives $m$ directly. The analysis is general even though it was written down
+for gas networks, where measured spectra reach $m \approx 3.1$ (GasLib-40).
 
-```{warning}
-`Flowsheet.solve(damping=...)` is accepted and documented but **is not
-currently applied**: the `acceleration="none"` path iterates the *undamped*
-map through `optimistix`, and changing `damping` changes nothing. Verified by
-inspection and by measurement — 1.0, 0.5, 0.3 and 0.05 all take the same
-iteration count to the same residual.
+It applies to `acceleration="none"` — and therefore to the traced path, which
+falls back to it. The default is `1.0`, which is plain undamped substitution:
 
-Where a genuinely damped, traceable fixed point is needed today, the working
-implementation is `difflow_gas.GasNetworkFlowsheet.solve_differentiable(alpha=...)`,
-which iterates the damped map through `optimistix` and differentiates through
-the converged solution. For an oscillating loop on a plain `Flowsheet`, use
-`acceleration="wegstein"`, whose clipped $q$ damps in the same regime.
+```python
+streams = fs.solve(acceleration="none", damping=0.3)
+```
+
+On a loop whose tear map has eigenvalue $-2$ — substitution triples the error
+and flips its sign every step — the difference is not a matter of iteration
+count:
+
+| `damping` | outcome after 200 iterations |
+|---|---|
+| `1.0` | residual `4.8e+60`; diverged |
+| `0.3` | residual `3.0e-12`; converged to the exact fixed point |
+
+Three conventions keep this a knob on *how the solve gets there* rather than on
+what it returns:
+
+- **`damping` never moves the answer.** The fixed point is a property of the
+  map. Converged solves at 1.0, 0.5, 0.3 and 0.1 agree to the tolerance.
+- **`last_solve_residual` is the undamped residual** $|g(x) - x|$, not the
+  $\alpha$-times-smaller step the solver actually took. A heavily damped solve
+  would otherwise look converged by exactly the factor it was damped by.
+- **`tol` still means `tol`.** `optimistix` stops on the step it takes, so the
+  tolerance handed to it carries the damping factor. Without that, a solve at
+  $\alpha = 0.3$ would stop three times short of the tolerance it was asked
+  for — and the verdict above would then, correctly, call it non-converged.
+
+Gradients are unaffected: `optimistix` differentiates the converged solution
+through the implicit function theorem, so the derivative is exact whatever
+$\alpha$ and however many iterations ran. That cuts both ways — on the
+diverging run above, the *gradient* is still 1.0 while the *value* is `-6.4e+60`.
+A gradient is only as trustworthy as the solve underneath it, and under tracing
+nothing warns you.
+
+`damping` must be positive; `0.0` makes the iteration the identity, under which
+every point is a fixed point, and is refused.
+
+```{note}
+`difflow_gas.GasNetworkFlowsheet.solve_differentiable(alpha=...)` predates
+this and does the same thing with separate `rtol`/`atol` and an optional stats
+return. It is still the convenient entry point for gas networks, which also
+need `clip_negative_flows=False` and the builder's tear guesses.
 ```
 
 ---
