@@ -429,9 +429,36 @@ machinery you already have):
   WRONG for a mass balance: an elastic inventory balance lets the planner
   report a better objective by selling from an empty tank, and it converges
   without complaint. Physical constraints are `elastic=False`.
-- There is no feasibility restoration. An inelastic spec violated at the start
-  makes the LP infeasible, and shrinking the radius can only tighten it; the
-  run ends at `reason="lp_infeasible"` with nothing moved. Start feasible.
+- `model_order="quadratic"` puts that curvature in the subproblem, which
+  becomes a QP (`difflow.planning.quadratic`). It is what makes the loop
+  TERMINATE: on case9 AC-OPF, linear runs 40 iterations and ends on the
+  iteration cap, quadratic ends on its own radius test in 12, same optimum.
+  `"auto"` takes curvature only where the Hessian is already definite.
+- The subproblem stays a QP, never a QCQP: only the OBJECTIVE gets curvature,
+  the constraint rows stay first order. Quadratic rows would make each
+  subproblem a nonconvex QCQP and void the global-optimality guarantee.
+- `convexify` clips wrong-signed eigenvalues and RECORDS it in
+  `qp.convexification`; a convexified model is not the true second-order
+  model, and the trust region plus the acceptance test are what keep it
+  honest. A block with exactly zero curvature is skipped, never floored --
+  flooring hands the solver curvature the model does not have.
+- `QPModel.minimised` vs `.objective`: the first is the solver's convention
+  (lower is better), the second the caller's. The expansion constant lives in
+  the minimised convention and `objective_offset` in the caller's; conflating
+  them shifts the reported value by twice the constant.
+- Integer columns (piecewise SOS2) would make it a MIQP: those networks fall
+  back to linear automatically.
+- Feasibility restoration (`difflow.planning.restoration`) handles an
+  inelastic spec violated at the start, which otherwise dead-ends: shrinking
+  the radius cannot restore feasibility. Phase one relaxes only the SPEC
+  rows -- model and link rows are definitional, so an equality-infeasible
+  subproblem is a broken model and must be reported, not absorbed.
+- Restoration has its OWN trust region and acceptance test, judged on the
+  nonlinear blocks: a phase-one LP given a big enough region proposes points
+  it predicts feasible and the blocks are not (measured: predicted violation
+  to zero while true violation ROSE). It also keeps its own radius -- the
+  search for a feasible point says nothing about where the objective model is
+  trustworthy, and resuming from it makes the planner crawl.
 
 Reporting and drawings (use these rather than re-deriving them in a notebook):
 - `planner.describe()` states the problem — objective, decisions, bounds, links, specs.
@@ -459,9 +486,11 @@ From a flowsheet, and out to someone else's LP:
 Reference model: `difflow.planning.chain.two_plant_chain()`. Docs: `docs/planning.md`.
 Example: `examples/30_delta_base_planning.ipynb`. Tests: `tests/test_planning.py`,
 `tests/test_planning_export.py`, `tests/test_planning_curvature.py`,
-`tests/test_planning_multiperiod.py`, `tests/power/test_planning_opf.py` (the
+`tests/test_planning_multiperiod.py`, `tests/test_planning_quadratic.py`,
+`tests/test_planning_restoration.py`, `tests/power/test_planning_opf.py` (the
 accuracy claim: SLP over AD delta vectors reaches the AC-OPF optimum and beats
-DC-OPF, all three dispatches scored in the full AC model).
+DC-OPF, all three dispatches scored in the full AC model; and the termination
+claim, linear against quadratic).
 
 ### Stochastic Programming (`difflow.stochastic`)
 

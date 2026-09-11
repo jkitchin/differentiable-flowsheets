@@ -26,11 +26,13 @@ is for unit operations.
 14. [Piecewise-linear blocks and MILP](#piecewise-linear-blocks-and-milp)
 15. [Second-order models: is a delta vector enough?](#second-order-models-is-a-delta-vector-enough)
 16. [Multi-period planning and inventory](#multi-period-planning-and-inventory)
-17. [Emitting Pyomo](#emitting-pyomo)
-18. [From a flowsheet to a block](#from-a-flowsheet-to-a-block)
-19. [Exporting delta vectors](#exporting-delta-vectors)
-20. [What this module is not](#what-this-module-is-not)
-21. [API summary](#api-summary)
+17. [Solving a quadratic subproblem](#solving-a-quadratic-subproblem)
+18. [Feasibility restoration](#feasibility-restoration)
+19. [Emitting Pyomo](#emitting-pyomo)
+20. [From a flowsheet to a block](#from-a-flowsheet-to-a-block)
+21. [Exporting delta vectors](#exporting-delta-vectors)
+22. [What this module is not](#what-this-module-is-not)
+23. [API summary](#api-summary)
 
 ---
 
@@ -723,6 +725,133 @@ response — shrink the radius — can only tighten it. The run ends at
 failure is reported rather than hidden, but the remedy is to start feasible;
 a phase-1 restoration step is what would fix it properly.
 
+## Solving a quadratic subproblem
+
+Measuring the curvature is one thing; using it is another. `model_order`
+switches the subproblem from an LP to a QP:
+
+```python
+planner = DeltaBasePlanner(net, prices=..., specs=..., sense="min",
+                           model_order="quadratic")
+```
+
+| | | |
+|---|---|---|
+| `"linear"` | delta vectors alone | the default, unchanged |
+| `"quadratic"` | curvature everywhere, convexified where it points the wrong way | fewest iterations |
+| `"auto"` | curvature only where it is already definite | the exact second-order model, or nothing |
+
+The model stays a **QP, not a QCQP**. The objective is linear in the block
+outputs, so the priced combination of one block's outputs has a single Hessian
+and the whole correction collapses to one term per block:
+
+$$p^{\mathsf T} y \approx p^{\mathsf T} y_0 + p^{\mathsf T} J\,\delta u
+  + \tfrac12 \delta u^{\mathsf T} H_p\, \delta u, \qquad
+  H_p = \sum_i p_i H_i.$$
+
+Making the *rows* quadratic would turn each subproblem into a nonconvex QCQP,
+and the subproblem solving to global optimality is what every guarantee here
+rests on. Constraint rows stay first order.
+
+### What it buys: termination
+
+On the AC-OPF comparison (`tests/power/test_planning_opf.py`), from the
+incumbent generator schedule on case9:
+
+| `model_order` | AC cost | iterations | ended on |
+|---|---|---|---|
+| `"linear"` | 5296.69 | 40 | the iteration cap |
+| `"auto"` | 5296.69 | 19 | its own radius test |
+| `"quadratic"` | 5296.69 | 12 | its own radius test |
+
+Same optimum, same AC feasibility. What changes is that the loop *stops*. A
+first-order model of a curved objective promises a gain the blocks do not
+deliver, so the radius ratchets down and the run exhausts its budget sitting
+on the right answer without being able to say so. Iterations are the metric
+that matters, not wall time: each one is an evaluation of the caller's blocks,
+which on a real flowsheet is the entire cost.
+
+### Convexification, and why it is reported
+
+`convexify` clips the eigenvalues that point the wrong way for the sense being
+solved and keeps the rest, so the directions the model curves in are
+preserved and only the amount changes. A convexified model is **not** the true
+second-order model. What keeps it honest is what keeps the first-order model
+honest — the trust region, and an acceptance test against the caller's own
+nonlinear blocks — and `qp.convexification` records every block it touched:
+
+```python
+lp, qp = planner.build_subproblem(lins, state, radius)
+qp.convexified                       # did anything have to be clipped?
+qp.convexification["ngl"].summary()  # '3 of 5 eigenvalues clipped (worst -1.28e+03)'
+```
+
+Use `"auto"` to refuse the compromise instead: it takes curvature only where
+the Hessian is already definite and falls back to the LP elsewhere, so the
+model solved is always the real one.
+
+Two limits worth stating. The QP is warm-started from the LP and falls back to
+it whenever it fails to improve, so a quadratic subproblem can only match or
+beat a linear one — that is what makes it safe to switch on, and it also means
+the LP is still built and still solved every cycle. And a block with integer
+columns (a piecewise SOS2 model) would make it a MIQP, which is out of scope:
+those networks fall back to `"linear"` automatically.
+
+## Feasibility restoration
+
+An elastic spec cannot make the subproblem infeasible — that is what the slack
+is for. An **inelastic** one can, and inelastic is the right setting for
+anything physical.
+
+Before restoration the loop's only response to an infeasible LP was to shrink
+the radius, and shrinking a box that already excludes the feasible set
+excludes it harder. The run ground down to `radius_min` and reported
+`lp_infeasible` with every decision still on its starting value.
+
+Restoration solves a phase-one problem instead — stop optimising, minimise
+infeasibility:
+
+$$\min\; \textstyle\sum a \quad\text{s.t.}\quad
+  A_{eq} x = b_{eq},\;\; A_{ub} x - a \le b_{ub},\;\;
+  l \le x \le u,\;\; a \ge 0.$$
+
+Two choices in that statement are deliberate.
+
+**The equality rows are not relaxed.** They are the model rows
+($y = y_0 + J(u-u_0)$) and the link rows, and both are *definitional*: given
+$u$ inside its bounds there is always a $y$ that satisfies them. An
+equality-infeasible subproblem means the model itself is broken — contradictory
+links, a degenerate block — and relaxing it would bury that under an artificial
+variable. Only the spec rows, which are the caller's requirements rather than
+the model's structure, get artificials.
+
+**Restoration has its own trust region and its own acceptance test.** A
+phase-one LP handed a big enough region will happily propose a point it
+*predicts* feasible and the blocks are not: on the storage model this was built
+against, doubling the radius took predicted violation to zero while the true
+violation rose from 2.5 to 2.4. So a restoration step is kept only when the
+caller's own blocks report less violation, and the region shrinks on one that
+is not — the same rule the main acceptance test follows. The feasible point is
+usually outside the initial box, and it is reached the way a trust-region
+method reaches anything distant: as a sequence of accepted steps, re-centring
+each time.
+
+```
+restoration 1: violation 2.500e+00 -> 1.580e+00 | accepted
+restoration 2: violation 1.580e+00 -> 9.600e-02 | accepted
+restoration 3: violation 9.600e-02 -> 1.393e+00 | rejected, shrink
+restoration 4: violation 9.600e-02 -> 0.000e+00 | accepted
+```
+
+The optimisation radius is not the restoration radius. Searching for a
+feasible point can leave the working region very small, and that smallness is
+a fact about the search rather than about where the objective model is
+trustworthy, so restoration hands back the radius it was called with.
+
+Set `TrustRegionOptions(max_restoration=0)` to get the old behaviour; the
+history records every restoration cycle with `Iteration.restoration` set, so
+they are visible in the audit trail rather than hidden inside a solve.
+
 ## Emitting Pyomo
 
 difflow is not short of solvers — `difflow.eo_solver` solves a flowsheet's
@@ -913,6 +1042,11 @@ you.
 | `draw_delta_vectors`, `draw_taylor_model`, `draw_trust_region` | The model, its locality, and the loop |
 | `check_delta_vectors` | Verify AD deltas against central differences |
 | `check_model_order` | Linear against quadratic, measured on the block itself |
+| `model_order=` | `"linear"`, `"quadratic"` or `"auto"` subproblems |
+| `QPModel`, `build_qp` | The quadratic subproblem, warm-started from the LP |
+| `convexify`, `ConvexificationReport` | Spectral modification, and what it changed |
+| `restoration_model` | The phase-one program for an infeasible subproblem |
+| `restoration_violation` | Predicted infeasibility at a phase-one solution |
 | `block_curvature`, `Curvature` | Exact Hessian by HVP, with its definiteness verdict |
 | `hvp`, `hessian_of`, `block_hvp` | The second-order primitives |
 | `ModelOrderReport` | Which model earns its cost here, and why not the other |

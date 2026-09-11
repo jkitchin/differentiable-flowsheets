@@ -14,10 +14,11 @@ building the model rather than by reading the code:
 * ``test_elastic_specs_would_sell_from_an_empty_tank`` — the `Spec` default of
   ``elastic=True`` is right for a commercial specification and wrong for a
   mass balance, and produces a *better-looking* objective by breaking physics.
-* ``test_inelastic_spec_violated_at_the_start_is_a_dead_end`` — the planner's
-  response to an infeasible LP is to shrink the radius, which cannot restore
-  feasibility. There is no restoration phase; the failure is reported, not
-  silent, but the model has to start feasible.
+* ``test_inelastic_spec_violated_at_the_start_is_restored`` -- an inelastic
+  spec violated at the starting point makes the LP infeasible from the first
+  cycle, and shrinking the radius cannot recover it. That used to be a dead
+  end; `difflow.planning.restoration` now solves a phase-one problem instead.
+  `tests/test_planning_restoration.py` keeps the before picture executable.
 """
 
 import jax
@@ -185,21 +186,23 @@ def test_elastic_specs_would_sell_from_an_empty_tank():
         f"levels were {levels}")
 
 
-def test_inelastic_spec_violated_at_the_start_is_a_dead_end():
-    """No feasibility restoration: an infeasible start cannot be recovered.
+def test_inelastic_spec_violated_at_the_start_is_restored():
+    """An infeasible start is recovered rather than fatal.
 
     `tank@t0.level_in` defaults to the midpoint of its bounds, the trust
     region clips around that midpoint, and the `== 0` spec sits outside the
     clip. The LP is infeasible from the first cycle, and shrinking the radius
-    only tightens it. The planner reports this rather than hiding it, which
-    is what this test pins -- together with the fact that a restoration phase
-    is what would fix it.
+    only tightens it -- which is why the planner runs a phase-one restoration
+    instead. See `difflow.planning.restoration`, and
+    `tests/test_planning_restoration.py` for the dead end this used to be.
     """
     net, prices, specs = storage_network(start_as_decision=True)
     res = _solve(net, prices, specs)
-    assert not res.converged
-    assert res.reason == "lp_infeasible"
-    assert max(res.violations.values(), default=0.0) > 1e-6
+    assert res.reason != "lp_infeasible"
+    assert any(h.restoration for h in res.history)
+    assert max(res.violations.values(), default=0.0) < 1e-4
+    levels = _levels(net, res.decisions)
+    assert np.all(levels >= -1e-4), f"negative inventory: {levels}"
 
 
 def test_a_feasible_start_reaches_the_same_plan_with_the_level_as_a_decision():

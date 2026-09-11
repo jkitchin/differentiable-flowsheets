@@ -22,11 +22,14 @@ What this pins:
    `difflow.planning.benchmark` otherwise only argues about cost.
 2. ``test_slp_beats_the_fixed_linearisation`` --- and beats DC-OPF, which is
    the linearisation it is actually competing with.
-3. ``test_slp_terminates_on_iteration_budget`` --- the honest caveat. The loop
-   FINDS the optimum without CERTIFYING it: it runs out its iteration budget
-   rather than meeting a first-order test. Termination, not accuracy, is the
-   weak point, and a second-order subproblem (`difflow.planning.curvature`) is
-   what would fix it.
+3. ``test_linear_slp_terminates_on_iteration_budget`` and
+   ``test_quadratic_subproblem_terminates`` --- termination, which was the
+   weak point. A first-order model of this objective FINDS the optimum
+   without CERTIFYING it and runs out its iteration budget. Adding the
+   curvature (`difflow.planning.quadratic`) cuts the run from 40 iterations
+   that never terminate to about a dozen that do, at the same cost and the
+   same feasibility. Both are pinned, because the gap between them is the
+   claim.
 """
 
 from dataclasses import replace
@@ -110,7 +113,7 @@ def grid():
     }
 
 
-def _planner(grid, radius, max_iter=40):
+def _planner(grid, radius, max_iter=40, model_order="linear"):
     block = Block(name="grid", fn=grid["outputs"],
                   u_names=["pg2", "pg3", "vm1", "vm2", "vm3"],
                   y_names=grid["y_names"],
@@ -124,7 +127,7 @@ def _planner(grid, radius, max_iter=40):
            for k in range(2 * grid["n_branch"])])
     return DeltaBasePlanner(
         Network([block]), prices={"grid.cost": 1.0}, specs=specs,
-        radius=radius, sense="min",
+        radius=radius, sense="min", model_order=model_order,
         options=TrustRegionOptions(max_iter=max_iter))
 
 
@@ -173,16 +176,49 @@ def test_slp_beats_the_fixed_linearisation(grid, slp_plan):
         f"SLP {slp_cost:.2f} did not beat DC-OPF {dc_cost:.2f}")
 
 
-def test_slp_terminates_on_iteration_budget(grid, slp_plan):
-    """The honest caveat: it finds the optimum without certifying it.
+def test_linear_slp_terminates_on_iteration_budget(grid, slp_plan):
+    """A first-order model finds the optimum without certifying it.
 
-    Recorded as a test rather than a comment so that a future convergence
-    test --- which is what a second-order subproblem would make possible ---
-    shows up here as a failure to be updated, not as a silent improvement
-    nobody notices.
+    The delta vectors predict a gain the AC model does not deliver, the
+    radius ratchets down, and the loop exhausts its budget sitting on the
+    right answer. Pinned so the improvement below has something to be
+    measured against.
     """
     _, res = slp_plan
     assert res.reason == "max_iter"
+
+
+def test_quadratic_subproblem_terminates(grid):
+    """Curvature is what lets the loop stop.
+
+    Same optimum, same AC feasibility, a third of the iterations -- and it
+    ends on its own rather than on the iteration cap. Iterations are the
+    metric that matters here rather than wall time: each one is an
+    evaluation of the caller's blocks, which on a real flowsheet is the
+    entire cost.
+    """
+    linear = _planner(grid, radius=0.2, model_order="linear").solve()
+    quad = _planner(grid, radius=0.2, model_order="quadratic").solve()
+
+    cost, violation = grid["score"](np.asarray(quad.decisions, dtype=float))
+    assert violation < 1e-6
+    assert cost == pytest.approx(AC_OPF_COST, rel=1e-4)
+
+    assert quad.reason != "max_iter", "the quadratic loop still did not stop"
+    assert quad.n_iterations < linear.n_iterations
+
+
+def test_auto_model_order_also_terminates(grid):
+    """`auto` takes the exact curvature where it is definite, and stops too.
+
+    At the incumbent schedule the reduced AC cost Hessian is positive
+    definite, so `auto` gets a true second-order model with nothing clipped.
+    """
+    res = _planner(grid, radius=0.2, model_order="auto").solve()
+    cost, violation = grid["score"](np.asarray(res.decisions, dtype=float))
+    assert violation < 1e-6
+    assert cost == pytest.approx(AC_OPF_COST, rel=1e-4)
+    assert res.reason != "max_iter"
 
 
 @pytest.mark.parametrize("radius", [0.05, 0.2])

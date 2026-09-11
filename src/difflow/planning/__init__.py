@@ -147,6 +147,13 @@ from difflow.planning.curvature import (
     block_hvp, check_model_order, classify_definiteness, hessian_of, hvp,
     scalar_output,
 )
+from difflow.planning.quadratic import (
+    MIN_CURVATURE, ConvexificationReport, QPModel, block_objective_hessian,
+    build_qp, convexify,
+)
+from difflow.planning.restoration import (
+    restoration_model, restoration_violation,
+)
 from difflow.planning.diagram import (
     draw_chain, draw_delta_vectors, draw_planning_network, draw_taylor_model,
     draw_trust_region,
@@ -197,6 +204,15 @@ __all__ = [
     "classify_phase",
     "check_phase_transition",
     "PhaseBoundaryWarning",
+    # Second-order subproblems and restoration
+    "QPModel",
+    "ConvexificationReport",
+    "build_qp",
+    "convexify",
+    "block_objective_hessian",
+    "MIN_CURVATURE",
+    "restoration_model",
+    "restoration_violation",
     # Curvature and model order
     "Curvature",
     "ModelOrderReport",

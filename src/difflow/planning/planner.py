@@ -53,9 +53,15 @@ from difflow.planning.linearize import (
 )
 from difflow.planning.lp import LPModel, LPSolution, as_spec
 from difflow.planning.network import Network, NetworkState
+from difflow.planning.restoration import (
+    restoration_model, restoration_violation,
+)
 if TYPE_CHECKING:  # pragma: no cover - annotation only
     from difflow.planning.health import HealthReport
 
+from difflow.planning.quadratic import (
+    QPModel, block_objective_hessian, build_qp,
+)
 from difflow.planning.piecewise import (
     PiecewiseData, PiecewiseSpec, sample_piecewise,
 )
@@ -76,6 +82,11 @@ class TrustRegionOptions:
         expand: Multiplier applied on a very good step.
         max_iter: Maximum linearise/solve/evaluate cycles.
         tol: Relative predicted-improvement threshold for convergence.
+        max_restoration: Restoration cycles allowed per infeasible
+            subproblem.  Each costs one LP solve and one model evaluation.
+            Zero disables restoration, restoring the old behaviour of
+            shrinking the radius until ``radius_min``.
+        feasibility_tol: Total nonlinear violation counted as feasible.
     """
 
     radius: float = 0.3
@@ -87,6 +98,8 @@ class TrustRegionOptions:
     expand: float = 2.0
     max_iter: int = 100
     tol: float = 1e-8
+    max_restoration: int = 20
+    feasibility_tol: float = 1e-8
 
 
 @dataclass
@@ -104,6 +117,11 @@ class Iteration:
         lp_status: Solver message.
         decisions: The proposal.
         phase_warnings: Phase-boundary messages raised for this proposal.
+        restoration: True when this cycle minimised infeasibility rather
+            than the objective.  See :mod:`difflow.planning.restoration`.
+        violation: Total nonlinear violation at the proposal, recorded for
+            restoration cycles where the merit is not the quantity being
+            driven down.
     """
 
     index: int
@@ -116,6 +134,8 @@ class Iteration:
     lp_status: str
     decisions: np.ndarray
     phase_warnings: list[str] = field(default_factory=list)
+    restoration: bool = False
+    violation: float = float("nan")
 
 
 class DeltaBasePlanner:
@@ -133,6 +153,15 @@ class DeltaBasePlanner:
         penalty: Default cost per unit of spec violation, used both for the
             LP's elastic slacks and for scoring realised violations.
         sense: ``"max"`` (default) or ``"min"``.
+        model_order: ``"linear"`` (default) uses delta vectors alone.
+            ``"quadratic"`` adds each block's priced-output Hessian to the
+            subproblem objective, convexifying where the curvature points the
+            wrong way; the subproblem becomes a QP warm-started from the LP,
+            so it can only match or beat it.  ``"auto"`` takes the curvature
+            only where it is already definite and falls back to the LP
+            elsewhere, which keeps the exact second-order model rather than a
+            modified one.  See :mod:`difflow.planning.quadratic` and
+            :func:`difflow.planning.curvature.check_model_order`.
         accept_test: Judge each proposal against the nonlinear blocks.  Leave
             this on.  Setting it to ``False`` reproduces the unguarded
             re-linearisation heuristic and is provided for comparison only.
@@ -174,7 +203,12 @@ class DeltaBasePlanner:
                  theta: Mapping[str, Mapping[str, Any]] | None = None,
                  piecewise: Sequence[PiecewiseSpec] | None = None,
                  options: TrustRegionOptions | None = None,
-                 warn_phase: bool = True):
+                 warn_phase: bool = True,
+                 model_order: str = "linear"):
+        if model_order not in ("linear", "quadratic", "auto"):
+            raise ValueError(
+                "model_order must be 'linear', 'quadratic' or 'auto', got "
+                f"{model_order!r}")
         if sense not in ("max", "min"):
             raise ValueError(f"sense must be 'max' or 'min', got {sense!r}")
         self.network = network
@@ -183,6 +217,7 @@ class DeltaBasePlanner:
         self.penalty = float(penalty)
         self.sense = sense
         self.accept_test = bool(accept_test)
+        self.model_order = model_order
         self.vertex_seeding = bool(vertex_seeding)
         self.max_vertices = int(max_vertices)
         self.modifiers = dict(modifiers) if modifiers else {}
@@ -431,6 +466,70 @@ class DeltaBasePlanner:
                         penalty=self.penalty, sense=self.sense,
                         piecewise=piecewise)
 
+    def build_subproblem(self, lins: Mapping[str, Linearization],
+                         state: NetworkState, radius: float,
+                         piecewise: Mapping[str, PiecewiseData] | None = None
+                         ) -> tuple[LPModel, QPModel | None]:
+        """Assemble the trust-region subproblem, second order where asked.
+
+        Returns the LP always, and a :class:`~difflow.planning.quadratic
+        .QPModel` when ``model_order`` calls for one and the network admits
+        it. The LP is still built and still solved: the QP is warm-started
+        from it and falls back to it, so the linear subproblem is never
+        wasted work.
+
+        Args:
+            lins: The current linearisations.
+            state: Current network state, which supplies the trust-region
+                centres and the expansion points.
+            radius: Trust-region radius.
+            piecewise: Sampled piecewise data, when any block has it.
+
+        Returns:
+            ``(lp, qp_or_None)``.
+        """
+        lp = self.build_lp(lins, state, radius, piecewise)
+        if self.model_order == "linear" or lp.integer_cols:
+            # A quadratic objective over integer columns is a MIQP, which is
+            # outside what this module solves; drop to the linear model
+            # rather than raise, since piecewise blocks are a documented
+            # feature and silently failing to plan would be worse.
+            return lp, None
+
+        # Curvature is read from the caller's own blocks, not from
+        # `evaluation_network`. Modifier adaptation adds `eps + lam (u - u_ad)`,
+        # which is affine and so contributes nothing to a second derivative --
+        # the two networks have identical Hessians by construction.
+        hessians: dict[str, np.ndarray] = {}
+        columns: dict[str, list[str]] = {}
+        centers: dict[str, np.ndarray] = {}
+        for name in self.network.order:
+            block = self.network.block(name)
+            u0 = np.asarray(lins[name].u0, dtype=float)
+            theta = (self.theta or {}).get(name)
+            H = block_objective_hessian(block, self.prices, jnp.asarray(u0),
+                                        theta)
+            if H is None or not np.all(np.isfinite(H)):
+                continue
+            if self.model_order == "auto":
+                # Take the curvature only where it is already definite, so
+                # the model solved is the true second-order one rather than a
+                # spectrally modified stand-in.
+                signed = np.linalg.eigvalsh(
+                    (-1.0 if self.sense == "max" else 1.0) * H)
+                if signed.size and float(np.min(signed)) < 0.0:
+                    continue
+            hessians[name] = H
+            columns[name] = block.qualified_u()
+            centers[name] = u0
+
+        if not hessians:
+            return lp, None
+        qp = build_qp(lp, hessians, columns, centers, sense=self.sense,
+                      convex=self.model_order != "auto")
+        return lp, qp
+
+
     def check_health(self, decisions: Any = None,
                      radius: float | None = None,
                      include_lp: bool = True) -> "HealthReport":
@@ -590,15 +689,28 @@ class DeltaBasePlanner:
         for it in range(opts.max_iter):
             lins = self.linearize(state)
             pw = self.sample_piecewise(state) if self.piecewise else None
-            lp = self.build_lp(lins, state, radius, pw)
+            lp, qp = self.build_subproblem(lins, state, radius, pw)
             sol = lp.solve()
+            if qp is not None and sol.success:
+                sol = qp.solve(lp_solution=sol)
 
             if not sol.success:
                 history.append(Iteration(
                     index=it, radius=radius, merit=merit, predicted=float("nan"),
                     realised=float("nan"), rho=float("nan"), accepted=False,
                     lp_status=sol.message,
-                    decisions=np.asarray(state.decisions)))
+                    decisions=np.asarray(state.decisions),
+                    violation=scored["total_violation"]))
+                if opts.max_restoration > 0:
+                    state, scored, radius = self._restore(
+                        state, radius, opts, history, it)
+                    merit = scored["merit"]
+                    if scored["total_violation"] <= opts.feasibility_tol:
+                        # The incumbent is feasible, so the ordinary
+                        # subproblem now admits at least that point.
+                        continue
+                    reason = "restoration_failed"
+                    break
                 radius *= opts.shrink
                 if radius < opts.radius_min:
                     reason = "lp_infeasible"
@@ -674,6 +786,107 @@ class DeltaBasePlanner:
             linearizations=lins, lp_model=lp, history=history,
             converged=converged, reason=reason, radius=radius,
             phase_warnings=phase_messages, start=start)
+
+    def _restore(self, state: NetworkState, radius: float,
+                 opts: TrustRegionOptions, history: list[Iteration],
+                 index: int) -> tuple[NetworkState, dict[str, Any], float]:
+        """Drive the nonlinear violation down until the subproblem is solvable.
+
+        Called when the LP comes back infeasible. Plain shrinking cannot help
+        — a box that already excludes the feasible set excludes it harder when
+        it is smaller — so this minimises predicted infeasibility instead of
+        the objective. See :mod:`difflow.planning.restoration`.
+
+        Restoration is itself a trust-region method, on the violation rather
+        than the merit, and it has to be: a phase-one LP handed an unbounded
+        region will happily propose a point it predicts feasible and the
+        caller's blocks do not, because a delta vector stops describing them
+        long before the bounds do. Measured on the storage model this was
+        built against, a doubled radius took predicted violation to zero while
+        the true violation *rose* from 2.5 to 2.4 — the same trap the main
+        loop's acceptance test exists to catch. So a step is kept only when
+        the caller's own blocks report less violation, and the region shrinks
+        on a step that is not.
+
+        The feasible point is usually outside the initial box, and that is
+        reached the way a trust-region method reaches anything distant: as a
+        sequence of accepted steps, re-centring each time.
+
+        Args:
+            state: The infeasible incumbent.
+            radius: Radius the subproblem failed at.
+            opts: Loop settings; ``max_restoration`` caps the cycles.
+            history: Appended to, so restoration shows up in the audit trail.
+            index: Iteration number to record the cycles under.
+
+        The optimisation radius is *not* the restoration radius. Searching
+        for a feasible point can leave the working region very small, and
+        that smallness says something about the search, not about where the
+        objective model is trustworthy — resuming the main loop from it makes
+        the planner crawl. So restoration keeps its own radius and hands back
+        the one it was called with.
+
+        Returns:
+            ``(state, scored, radius)`` — the least infeasible point found and
+            the radius to resume from. When restoration fails the incumbent
+            comes back unchanged, which the caller detects by its violation.
+        """
+        scored = self._score_state(state)
+        best_violation = scored["total_violation"]
+        work = radius
+
+        for step in range(opts.max_restoration):
+            lins = self.linearize(state)
+            phase1 = restoration_model(self.build_lp(lins, state, work))
+            sol = phase1.solve()
+
+            if not sol.success:
+                # Phase one is feasible whenever the bounds and the equality
+                # rows are, so a failure here is structural: contradictory
+                # links or a degenerate block, not an over-constrained spec.
+                history.append(Iteration(
+                    index=index, radius=work, merit=scored["merit"],
+                    predicted=float("nan"), realised=float("nan"),
+                    rho=float("nan"), accepted=False,
+                    lp_status=f"restoration infeasible: {sol.message}",
+                    decisions=np.asarray(state.decisions),
+                    restoration=True, violation=best_violation))
+                break
+
+            predicted = restoration_violation(sol)
+            trial = self._decisions_from_lp(sol)
+            trial_state = self.evaluation_network.evaluate(
+                jnp.asarray(trial), self.theta)
+            trial_scored = self._score_state(trial_state)
+            violation = trial_scored["total_violation"]
+            accepted = violation < best_violation
+
+            history.append(Iteration(
+                index=index, radius=work, merit=scored["merit"],
+                predicted=predicted, realised=violation, rho=float("nan"),
+                accepted=accepted,
+                lp_status=(f"restoration {step + 1}: violation "
+                           f"{best_violation:.3e} -> {violation:.3e}"),
+                decisions=trial.copy(), restoration=True,
+                violation=violation))
+
+            if accepted:
+                gain = best_violation - violation
+                promised = max(best_violation - predicted, 1e-300)
+                state, scored, best_violation = (
+                    trial_state, trial_scored, violation)
+                if best_violation <= opts.feasibility_tol:
+                    break
+                # Expand only when the model delivered most of what it
+                # promised; otherwise keep the region that is working.
+                if gain / promised >= opts.eta_expand:
+                    work = min(opts.radius_max, work * opts.expand)
+            else:
+                work *= opts.shrink
+                if work < opts.radius_min:
+                    break
+
+        return state, scored, radius
 
     def _criticality(self, lins: Mapping[str, Linearization],
                      state: NetworkState, merit: float, radius: float,
