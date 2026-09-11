@@ -8,6 +8,7 @@ covariance against the covariance actually obtained by fitting simulated
 data from the designed runs.
 """
 
+import itertools
 from itertools import combinations_with_replacement
 
 import pytest
@@ -316,20 +317,37 @@ class TestCriteria:
 # ---------------------------------------------------------------------------
 
 def _brute_force_best(model_fn, theta, pool, n, criterion):
-    """Best design by exhaustive enumeration (with replacement)."""
-    contrib = [
-        np.asarray(fisher_information(model_fn, theta, [e])) for e in pool
-    ]
-    best_val, best_combo = None, None
+    """Best design by exhaustive enumeration (with replacement).
+
+    Enumerated in one batch rather than one combination at a time. The
+    arrhenius case below is C(25, 5) = 53130 designs, and scoring them in a
+    Python loop called ``design_criterion`` 53130 times outside any jit --
+    one eager dispatch per primitive, ~270k of them, which was 55 of that
+    test's 67 seconds and made this the slowest test in the suite. The FIM
+    sums are numpy; the criterion is vmapped, so it compiles once and scores
+    every design in a single call. Same reference values, same tie-breaking
+    (first best in enumeration order, which is what argmax/argmin return).
+    """
+    contrib = np.stack(
+        [np.asarray(fisher_information(model_fn, theta, [e])) for e in pool]
+    )
+    combos = np.fromiter(
+        itertools.chain.from_iterable(
+            combinations_with_replacement(range(len(pool)), n)
+        ),
+        dtype=np.intp,
+    ).reshape(-1, n)
+    fims = contrib[combos].sum(axis=1)                    # (K, p, p)
+    score = jax.jit(jax.vmap(lambda f: design_criterion(f, criterion)))
+    vals = np.asarray(score(jnp.asarray(fims)), dtype=float)
+
+    finite = np.isfinite(vals)
+    if not finite.any():
+        return None, None
     minimize = criterion in ("A", "ME")
-    for combo in combinations_with_replacement(range(len(pool)), n):
-        fim = sum(contrib[i] for i in combo)
-        val = float(design_criterion(jnp.asarray(fim), criterion))
-        if not np.isfinite(val):
-            continue
-        if best_val is None or (val < best_val if minimize else val > best_val):
-            best_val, best_combo = val, combo
-    return best_val, best_combo
+    masked = np.where(finite, vals, np.inf if minimize else -np.inf)
+    i = int(np.argmin(masked) if minimize else np.argmax(masked))
+    return float(vals[i]), tuple(int(c) for c in combos[i])
 
 
 class TestDesignSelection:
