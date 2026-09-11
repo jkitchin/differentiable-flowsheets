@@ -53,6 +53,13 @@ alone cannot answer. Re-estimate parameters only as a deliberate
 campaign, and pool the window with :func:`reconcile_multi`, which
 holds a parameter common across data sets so every one of them
 constrains the same unknown.
+
+:func:`track_parameters` turns that discipline into an update law, for
+a twin where nobody is there to apply it by hand: the verdict *gates*
+the re-estimation rather than merely advising it, and what gets past
+the gate is filtered onto a random walk instead of replacing the
+estimate outright, so a parameter moves at a rate you chose rather than
+at the rate one period's noise suggests.
 """
 
 from difflow.reconciliation.core import (
@@ -106,6 +113,20 @@ from difflow.reconciliation.structure import (
     StructureReport,
     classify,
 )
+from difflow.reconciliation.tracking import (
+    UPDATE_WHEN_DRIFTING,
+    GateDecision,
+    Innovation,
+    TrackerState,
+    TrackResult,
+    TrackStep,
+    drift_std_from_time_constant,
+    measurement_update,
+    parameter_measurement,
+    time_update,
+    track_parameters,
+    update_gate,
+)
 
 __all__ = [
     # entry points
@@ -156,4 +177,17 @@ __all__ = [
     "MONITOR_UNDIAGNOSED",
     "REJECTION_THRESHOLD",
     "CONCENTRATION_THRESHOLD",
+    # tracking a drifting parameter
+    "track_parameters",
+    "TrackResult",
+    "TrackStep",
+    "TrackerState",
+    "time_update",
+    "measurement_update",
+    "parameter_measurement",
+    "Innovation",
+    "drift_std_from_time_constant",
+    "update_gate",
+    "GateDecision",
+    "UPDATE_WHEN_DRIFTING",
 ]
