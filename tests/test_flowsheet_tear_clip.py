@@ -79,8 +79,13 @@ def test_default_clip_blocks_negative_fixed_point(acceleration):
     """
     fs = _recycle_flowsheet(offset=-2.0)
     streams = fs.solve(
-        tear_initial=GUESS, tol=1e-10, max_iter=50, acceleration=acceleration
+        tear_initial=GUESS, tol=1e-10, max_iter=50, acceleration=acceleration,
+        # The clip is what makes the fixed point unreachable, so this solve
+        # never converges by construction (#249); the warning is expected
+        # here and would only be noise.
+        on_nonconvergence="ignore",
     )
+    assert fs.last_solve_converged is False
     assert float(streams["loop_out"]["F_A"]) != pytest.approx(-4.0, abs=1e-3)
 
 

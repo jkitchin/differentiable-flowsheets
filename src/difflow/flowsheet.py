@@ -33,6 +33,30 @@ import optimistix as optx
 FEED_PREFIX = "feed:"
 
 
+class ConvergenceWarning(UserWarning):
+    """A recycle solve returned without meeting its tolerance.
+
+    Running out of iterations leaves :meth:`Flowsheet.solve` returning the
+    last iterate, which looks like any other result: every stream is there
+    and every number is plausible. It is not a solution, though --- the
+    material balance around the loop is off by the tear residual, which for
+    a loop that is limit-cycling can be large. This warning is what makes
+    that visible instead of silent (#249), the way
+    :class:`difflow.CSTRDensityWarning` does for an assumed density.
+
+    Silence it with ``solve(on_nonconvergence="ignore")`` or escalate it to
+    an exception with ``solve(on_nonconvergence="raise")``.
+    """
+
+
+class ConvergenceError(RuntimeError):
+    """A recycle solve did not converge and was asked to raise.
+
+    Only ``solve(on_nonconvergence="raise")`` produces this; the default is
+    a :class:`ConvergenceWarning`. It carries the same message.
+    """
+
+
 def _concrete(value) -> float | None:
     """Return ``float(value)`` when it is concrete, else ``None``.
 
@@ -324,6 +348,7 @@ class Flowsheet:
         anderson_depth: int = 5,
         use_initialization: bool = True,
         clip_negative_flows: bool = True,
+        on_nonconvergence: Literal["warn", "raise", "ignore"] = "warn",
     ) -> dict[str, Stream]:
         """Solve the flowsheet.
 
@@ -360,10 +385,37 @@ class Flowsheet:
                 where a negative fixed point is legitimate and clipping
                 prevents convergence. Only flow entries are clipped;
                 temperature and pressure are never touched.
+            on_nonconvergence: What to do when the tear iteration runs out
+                of iterations without meeting ``tol``. The returned streams
+                are the last iterate either way, and the diagnostics are in
+                ``last_solve_*`` either way; this only decides how loudly
+                the flowsheet says so.
+
+                - ``"warn"`` (default): emit a :class:`ConvergenceWarning`
+                  naming the tear streams, residual, tolerance and
+                  iteration count.
+                - ``"raise"``: raise :class:`ConvergenceError` instead.
+                - ``"ignore"``: return silently.
+
+                A solve under ``jax.grad``/``jit`` has no concrete residual
+                to judge (:func:`_concrete` returns ``None``), so it stays
+                silent whatever this is set to.
 
         Returns:
             Dictionary of all streams in the flowsheet
+
+        Raises:
+            ConvergenceError: If the solve did not converge and
+                ``on_nonconvergence="raise"``.
+            ValueError: If ``on_nonconvergence`` is not one of the three
+                recognised values, or ``acceleration`` is unknown.
         """
+        if on_nonconvergence not in ("warn", "raise", "ignore"):
+            raise ValueError(
+                f"Unknown on_nonconvergence: {on_nonconvergence!r}. "
+                'Expected "warn", "raise" or "ignore".'
+            )
+
         if not self.recycles:
             # No recycles - simple sequential solution
             self.last_solve_method = "direct"
@@ -412,21 +464,56 @@ class Flowsheet:
             acceleration = "none"
             self.last_solve_method = "fixed_point (traced)"
 
-        # Solve with chosen method
+        # Solve with chosen method.  Every path records its verdict in
+        # last_solve_converged, so the non-convergence check is done once
+        # here rather than at each of the three returns.
         if acceleration == "none":
-            return self._solve_with_recycle_damped(tear_streams, tol, max_iter, damping)
+            streams = self._solve_with_recycle_damped(
+                tear_streams, tol, max_iter, damping
+            )
         elif acceleration == "wegstein":
-            return self._solve_with_wegstein(
+            streams = self._solve_with_wegstein(
                 tear_streams, tol, max_iter,
                 clip_negative_flows=clip_negative_flows,
             )
         elif acceleration == "anderson":
-            return self._solve_with_anderson(
+            streams = self._solve_with_anderson(
                 tear_streams, tol, max_iter, anderson_depth,
                 clip_negative_flows=clip_negative_flows,
             )
         else:
             raise ValueError(f"Unknown acceleration method: {acceleration}")
+
+        self._report_nonconvergence(on_nonconvergence, max_iter)
+        return streams
+
+    def _report_nonconvergence(self, action: str, max_iter: int) -> None:
+        """Warn, raise or stay silent about the solve that just finished.
+
+        ``last_solve_converged`` is tri-state on purpose: ``True`` met the
+        tolerance, ``False`` ran out of iterations, and ``None`` means the
+        residual was a tracer and there is nothing to judge.  Only ``False``
+        is a finding -- guessing under tracing would either raise inside a
+        gradient or warn on a solve that was fine.
+        """
+        if action == "ignore" or self.last_solve_converged is not False:
+            return
+
+        residual = self.last_solve_residual
+        message = (
+            "Recycle solve did not converge: tear stream(s) "
+            f"{', '.join(self.last_solve_tear_streams) or '(none)'} reached a "
+            f"residual of {'unknown' if residual is None else f'{residual:.3e}'} "
+            f"after {self.last_solve_iterations} of {max_iter} iterations, "
+            f"against a tolerance of {self.last_solve_tol:.3e} "
+            f"(method: {self.last_solve_method}). The returned streams are the "
+            "last iterate, not a solution -- material balances around the loop "
+            "are off by the tear residual. Try more iterations (max_iter), a "
+            "better tear guess (tear_initial) or a different acceleration."
+        )
+        if action == "raise":
+            raise ConvergenceError(message)
+        warnings.warn(message, ConvergenceWarning, stacklevel=3)
 
     def _is_traced(self) -> bool:
         """True when a feed or unit parameter currently holds a JAX tracer.
@@ -665,13 +752,22 @@ class Flowsheet:
         )
         tear_converged = sol.value
 
-        # Record convergence diagnostics for the report layer.
-        final_residual = _concrete(
-            jnp.max(jnp.abs(flowsheet_iteration(tear_converged, args) - tear_converged))
+        # Record convergence diagnostics for the report layer.  The verdict
+        # is judged against the criterion optimistix ACTUALLY stopped on --
+        # elementwise |dx| < atol + rtol |x|, with tol serving as both --
+        # not against a bare |dx| < tol.  The two differ by the magnitude of
+        # the tear: with flows of order 1 and tol=1e-8, a solve optimistix
+        # calls successful lands near 2e-8, and calling that non-converged
+        # would warn on almost every damped solve.  The residual reported
+        # alongside stays the plain max-norm, which is the number to compare
+        # against tol by eye.
+        delta = flowsheet_iteration(tear_converged, args) - tear_converged
+        final_residual = _concrete(jnp.max(jnp.abs(delta)))
+        scaled = _concrete(
+            jnp.max(jnp.abs(delta) / (tol + tol * jnp.abs(tear_converged)))
         )
         self.last_solve_residual = final_residual
-        self.last_solve_converged = (None if final_residual is None
-                                     else bool(final_residual < tol))
+        self.last_solve_converged = None if scaled is None else bool(scaled < 1.0)
         try:
             self.last_solve_iterations = int(sol.stats.get("num_steps", max_iter))
         except Exception:
@@ -734,7 +830,12 @@ class Flowsheet:
 
         # Initial arrays
         x_prev = self._streams_to_array(tear_initial)
+        # Pessimistic defaults, so that a loop that never reaches its
+        # convergence test (max_iter=0) reports "did not converge" rather
+        # than whatever the previous solve left behind.
         self.last_solve_iterations = max_iter
+        self.last_solve_residual = None
+        self.last_solve_converged = False
         x_old = None
         g_prev = None
 
@@ -751,11 +852,18 @@ class Flowsheet:
             residual = jnp.max(jnp.abs(g_curr - x_prev))
             res = _concrete(residual)
             self.last_solve_residual = res
-            if res is not None and res < tol:
+            if res is None:
+                # A traced residual cannot be compared, so the loop simply
+                # runs to max_iter.  There is no verdict to report either:
+                # None says "unavailable", which is what keeps the
+                # non-convergence warning quiet under jax.grad / jit.
+                self.last_solve_converged = None
+            elif res < tol:
                 self.last_solve_iterations = iteration
                 self.last_solve_converged = True
                 break
-            self.last_solve_converged = False
+            else:
+                self.last_solve_converged = False
 
             if g_prev is None:
                 # Second iteration: can't use Wegstein yet
@@ -817,7 +925,10 @@ class Flowsheet:
 
         x_curr = self._streams_to_array(tear_initial)
 
+        # Pessimistic defaults; see _solve_with_wegstein.
         self.last_solve_iterations = max_iter
+        self.last_solve_residual = None
+        self.last_solve_converged = False
         for iteration in range(max_iter):
             # Run iteration
             tear_streams = self._array_to_streams(x_curr, tear_names)
@@ -832,11 +943,15 @@ class Flowsheet:
             residual = jnp.max(jnp.abs(g_curr - x_curr))
             res = _concrete(residual)
             self.last_solve_residual = res
-            if res is not None and res < tol:
+            if res is None:
+                # See _solve_with_wegstein: no concrete residual, no verdict.
+                self.last_solve_converged = None
+            elif res < tol:
                 self.last_solve_iterations = iteration
                 self.last_solve_converged = True
                 break
-            self.last_solve_converged = False
+            else:
+                self.last_solve_converged = False
 
             # Apply Anderson acceleration
             x_next = accelerator.step(x_curr, g_curr)

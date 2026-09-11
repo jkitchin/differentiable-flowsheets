@@ -336,6 +336,42 @@ results = fs.solve(
 )
 ```
 
+### When the Solve Does Not Converge
+
+A tear iteration that runs out of iterations returns anyway, and what it
+returns is the last iterate: every stream present, every number plausible, and
+the material balance around the loop off by the tear residual. For a loop that
+is limit-cycling that error is not small.
+
+`solve()` says so rather than leaving it to the caller to go looking:
+
+```python
+streams = fs.solve()                          # ConvergenceWarning if it didn't
+streams = fs.solve(on_nonconvergence="raise") # ConvergenceError instead
+streams = fs.solve(on_nonconvergence="ignore")# silent; check last_solve_* yourself
+```
+
+The message names the tear streams, the final residual, the tolerance, the
+iteration count and the method used --- the same `last_solve_*` diagnostics the
+report layer and the editor read, which stay available whichever option is
+chosen:
+
+```text
+Recycle solve did not converge: tear stream(s) recycle reached a residual of
+3.2e-03 after 100 of 100 iterations, against a tolerance of 1.0e-08
+(method: anderson). The returned streams are the last iterate, not a solution
+-- material balances around the loop are off by the tear residual. ...
+```
+
+`ConvergenceWarning` and `ConvergenceError` are exported from `difflow`, so the
+usual `warnings.simplefilter("error", ConvergenceWarning)` turns every
+non-converged solve in a script into a failure.
+
+Under `jax.grad` or `jit` the residual is a tracer with no numeric value, so
+there is nothing to judge: `last_solve_converged` is `None` and the solve stays
+silent whatever `on_nonconvergence` says. That path is the optimistix fixed
+point, which carries its own implicit-differentiation rule.
+
 ### Implicit Differentiation
 
 The flowsheet solver uses implicit differentiation through the converged solution:
