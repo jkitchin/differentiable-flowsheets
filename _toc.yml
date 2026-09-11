@@ -25,6 +25,7 @@ parts:
       - file: docs/flexibility
       - file: docs/stochastic
       - file: docs/streams-and-flowsheets
+      - file: docs/convergence
       - file: docs/dynamic-modeling
       - file: docs/moving-horizon-estimation
       - file: docs/solvers-and-utilities

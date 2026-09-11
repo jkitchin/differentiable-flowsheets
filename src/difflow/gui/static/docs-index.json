@@ -1,6 +1,174 @@
 {
- "n_sections": 845,
+ "n_sections": 867,
  "sections": [
+  {
+   "anchor": "convergence-and-initialization",
+   "heading": "Convergence and Initialization",
+   "path": "Convergence and Initialization",
+   "source": "convergence.md",
+   "targets": [],
+   "text": "Lack of convergence is the standard failure mode of a flowsheet simulator. A\nrecycle loop is a fixed point, a fixed point needs a starting guess, and a bad\nguess turns a correct model into a solver that limit-cycles, overshoots into\nnegative flows, or returns an answer that looks like every other answer and is\noff by the tear residual.\n\nThis page is the whole story in one place: where the initial guess comes from,\nwhat the three acceleration methods cost, which knobs are tuning and which are\ncorrectness, what changes under `jax.grad`, and what to reach for next when the\nloop still will not close."
+  },
+  {
+   "anchor": "table-of-contents",
+   "heading": "Table of Contents",
+   "path": "Convergence and Initialization > Table of Contents",
+   "source": "convergence.md",
+   "targets": [],
+   "text": "- [When a solve does not converge](#when-a-solve-does-not-converge)\n- [Where the initial guess comes from](#where-the-initial-guess-comes-from)\n- [Unit-level `initialize()`](#unit-level-initialize)\n- [The three acceleration methods](#the-three-acceleration-methods)\n- [The traced fallback](#the-traced-fallback)\n- [The equation-oriented route](#the-equation-oriented-route)\n- [Diagnostics](#diagnostics)\n- [A worked diagnosis](#a-worked-diagnosis)\n- [Tear selection](#tear-selection)\n- [What the plugins add](#what-the-plugins-add)\n\n---"
+  },
+  {
+   "anchor": "when-a-solve-does-not-converge",
+   "heading": "When a solve does not converge",
+   "path": "Convergence and Initialization > When a solve does not converge",
+   "source": "convergence.md",
+   "targets": [],
+   "text": "`Flowsheet.solve()` warns rather than staying quiet\n(see [When the Solve Does Not Converge](streams-and-flowsheets.md#when-the-solve-does-not-converge)),\nso the first thing to do is read the message it already wrote: it names the tear\nstreams, the residual reached, the tolerance, the iteration count and the method\nthat ran. Then work down this list.\n\n1. **Is it actually diverging, or just slow?** Compare\n   `fs.last_solve_residual` against `fs.last_solve_tol`. A residual a factor of\n   two or three above tolerance after `max_iter` iterations is a loop that needs\n   more iterations; a residual of the same order as the flows themselves is a\n   loop that is not converging at all. Raise `max_iter` only for the first.\n\n2. **Give it a starting point.** `tear_initial` is the only guess you control\n   directly, and a guess taken from a converged neighbouring case (a\n   slightly different feed, a slightly different setpoint) is usually worth more\n   than any change of method. See\n   [Explicit guesses](#explicit-guesses) below.\n\n3. **Change the method.** The default is Anderson. A loop that *oscillates*\n   \u2014 the residual alternating in sign, flows overshooting and coming back \u2014 has\n   a tear map with negative eigenvalues, and `acceleration=\"wegstein\"` is the\n   one that handles that directly: its acceleration factor is clipped into\n   `[-5, 0]`, which damps toward the previous iterate exactly in that case. A\n   loop that is merely slow and monotone is what Anderson is for.\n   `acceleration=\"none\"` is plain substitution through `optimistix` and is the\n   honest baseline: if that diverges, the map itself is not contractive and no\n   amount of acceleration will rescue it.\n\n4. **Check `clip_negative_flows`.** If any tear flow is legitimately signed,\n   the default clipping is not a safeguard but a bug, and the solve cannot\n   converge. This is a correctness switch, not a tuning knob \u2014 see\n   [Clipping negative flows is a correctness switch](#clipping-negative-flows-is-a-correctness-switch)."
+  },
+  {
+   "anchor": "where-the-initial-guess-comes-from",
+   "heading": "Where the initial guess comes from",
+   "path": "Convergence and Initialization > Where the initial guess comes from",
+   "source": "convergence.md",
+   "targets": [],
+   "text": "The tear streams are the **destinations** of the recycles registered with\n`fs.add_recycle(source, dest)`. A destination is an inlet, so nothing in the\nflowsheet computes it before the iteration starts, and it has to be guessed.\n`solve()` tries three sources in order."
+  },
+  {
+   "anchor": "explicit-guesses",
+   "heading": "Explicit guesses",
+   "path": "Convergence and Initialization > Where the initial guess comes from > Explicit guesses",
+   "source": "convergence.md",
+   "targets": [],
+   "text": "`tear_initial` takes a dict of `{destination_name: Stream}`. It reaches the\nsolver unmodified and wins over everything below:\n\n```python\nguess = make_stream({\"A\": 2.4}, 300.0, 1e5)\nstreams = fs.solve(tear_initial={\"tear\": guess})\n```\n\nThe natural sources of a good guess are a converged solve of a nearby case\n(continuation by hand), a hand calculation of the loop's material balance, or\nthe result of a looser solve:\n\n```python\ncoarse = fs.solve(tol=1e-4, max_iter=200)\nfine = fs.solve(tear_initial={\"tear\": coarse[\"loop_out\"]}, tol=1e-10)\n```"
+  },
+  {
+   "anchor": "one-pass-from-the-feeds",
+   "heading": "One pass from the feeds",
+   "path": "Convergence and Initialization > Where the initial guess comes from > One pass from the feeds",
+   "source": "convergence.md",
+   "targets": [],
+   "text": "With `use_initialization=True` (the default) and no explicit guess, `solve()`\nruns every unit once from the feeds with the recycles unknown, and takes the\nvalue that pass puts on the *source* end of each recycle. One pass serves every\ntear, however many recycles there are.\n\nUnits run in the order they were added, so ordering the flowsheet so that\nmaterial flows forward through the list makes this pass more useful. A unit\nwhose inlets are not available yet sees the flowsheet default stream.\n\nA unit that **raises** on this pass is not necessarily broken: the pass runs\nbefore any recycle is known, so a unit inside a loop sees 0.01 mol/s arriving,\nand a root find or a Rachford-Rice solve can genuinely fail on an almost empty\nstream. When that happens `solve()` falls back to the unit's\n[`initialize()`](#unit-level-initialize). When there is no `initialize()` either,\nthe unit's outlets start from the flowsheet default and a\n`TearInitializationWarning` says so, because a tear guess that is quietly worse\nthan it looks is the thing worth avoiding:\n\n```python\nfrom difflow.initialization import TearInitializationWarning\n```\n\n(It lives in `difflow.initialization`, not on the top-level package.)"
+  },
+  {
+   "anchor": "the-flowsheet-default-stream",
+   "heading": "The flowsheet default stream",
+   "path": "Convergence and Initialization > Where the initial guess comes from > The flowsheet default stream",
+   "source": "convergence.md",
+   "targets": [],
+   "text": "The last resort, and what is used when `use_initialization=False`: every species\nat `default_flow`, at `default_T` and `default_P`. Those three are constructor\narguments:\n\n```python\nfs = Flowsheet([\"A\", \"B\"], default_flow=1e-6, default_T=350.0, default_P=2e5)\n```\n\nUnder tracing the guessing pass is skipped entirely and the default stream is\nused, because a best-effort pass that catches exceptions has no business running\nover tracers \u2014 and the initial guess cannot affect a gradient that comes from\nthe converged solution anyway.\n\n---"
+  },
+  {
+   "anchor": "unit-level-initialize",
+   "heading": "Unit-level `initialize()`",
+   "path": "Convergence and Initialization > Unit-level `initialize()`",
+   "source": "convergence.md",
+   "targets": [],
+   "text": "`difflow.initialization.Initializable` is a runtime-checkable protocol: a unit\nsupports initialization if it has an `initialize(inlet, **kwargs)` method. The\nflowsheet's only test is `isinstance(operation, Initializable)`, so nothing has\nto be registered.\n\nThree core units implement it, each with an analytic estimate that cannot fail\nthe way the real calculation can:\n\n| Unit | Estimate |\n|---|---|\n| `CSTR` | residence time from the volumetric flow, then `X = k tau / (1 + k tau)` |\n| `PFR` | the analytic plug-flow conversion for the same rate constant |\n| `Flash` | a simplified Rachford-Rice from the thermo package's K-values, with a bubble/dew check for the fully liquid and fully vapor cases |\n\nIt is consulted only where the real call would have failed: the flowsheet\ncalls `__call__` first on its initialization pass and reaches for\n`initialize()` when that raises. An initializer is a fallback, not a\npre-processing step.\n\nThe return value is a dict. The flowsheet reads only the outlet guesses out of\nit, under either of two keys:\n\n- `outlets`: the guesses as a **sequence, in the order `__call__` returns\n  them**. That order is the only thing a caller holding `Unit.outlet_names` can\n  match the guesses up by, so a multi-outlet unit has to provide it to be\n  usable by the flowsheet.\n- `outlet`: the singular spelling, accepted for a unit with one outlet, and\n  meaning the same as a one-element `outlets`.\n\n`states` and `info` may carry anything else; the flowsheet ignores them, and\nthey are for a caller that knows which unit it is talking to (`Flash` also\nreturns its guesses under `liquid` and `vapor`).\n\nWriting one for a custom unit:\n\n```python\nfrom difflow.streams import make_stream\n\n\nclass MyReactor:\n    def __call__(self, inlet):\n        ...  # the real calculation, which may fail on an empty inlet\n\n    def initialize(self, inlet, **kwargs):\n        outlet = make_stream({\"A\": 0.5 * inlet[\"F_A\"]}, inlet[\"T\"], inlet[\"P\"])\n        return {\"outlets\": (outlet,), \"outlet\": outlet}\n```\n\n`**kwargs` receives the unit's `params` dict, so an initializer may read the\nsame specifications the call does. Keep it cheap and unconditional: its whole\nvalue is that it answers where the real calculation would not.\n\n---"
+  },
+  {
+   "anchor": "the-three-acceleration-methods",
+   "heading": "The three acceleration methods",
+   "path": "Convergence and Initialization > The three acceleration methods",
+   "source": "convergence.md",
+   "targets": [],
+   "text": "All three iterate on the same packed tear vector, which is, per tear stream and\nin `species_order`, `[F_1, ..., F_N, T, P]`, with the streams in sorted name\norder."
+  },
+  {
+   "anchor": "direct-substitution-none",
+   "heading": "Direct substitution (`\"none\"`)",
+   "path": "Convergence and Initialization > The three acceleration methods > Direct substitution (`\"none\"`)",
+   "source": "convergence.md",
+   "targets": [],
+   "text": "`x_{k+1} = g(x_k)`, run through `optimistix.FixedPointIteration`. No history, no\nextrapolation, and the only path that is traceable \u2014 which is why it is also\nwhat `jax.grad` falls back to. It converges linearly at a rate set by the\nspectral radius of the tear map and diverges when that exceeds one.\n\nIts convergence verdict is judged against the criterion `optimistix` actually\nstops on \u2014 elementwise `|dx| < atol + rtol |x|`, with `tol` serving as both \u2014\nnot against a bare `|dx| < tol`. The two differ by the magnitude of the tear:\nwith flows of order 1 and `tol=1e-8`, a solve `optimistix` calls successful\nlands near `2e-8`. `last_solve_residual` alongside it stays the plain max-norm,\nwhich is the number to compare against `tol` by eye."
+  },
+  {
+   "anchor": "wegstein",
+   "heading": "Wegstein",
+   "path": "Convergence and Initialization > The three acceleration methods > Wegstein",
+   "source": "convergence.md",
+   "targets": [],
+   "text": "Estimates the tear map's slope from the last two iterates and extrapolates:\n\n$$x^{(k+1)} = q\\, x^{(k)} + (1 - q)\\, g(x^{(k)}),\n\\qquad q = \\frac{s}{s - 1},\n\\qquad s = \\frac{g(x^{(k)}) - g(x^{(k-1)})}{x^{(k)} - x^{(k-1)}}$$\n\n$q$ is the weight on the **old** iterate and $(1-q)$ the weight on the\nsubstitution value. For a linear $g$ this cancels the map's slope exactly and\nlands on the solution in one step.\n\n$q$ is clipped into $[-5, 0]$. That bound is what makes Wegstein the right\nchoice for an oscillating loop: for $s < 0$ \u2014 the overshoot case \u2014 $q$ lands in\n$(0, 1)$ and the update is damped toward the previous iterate, while for\n$0 < s < 1$ it is negative and the update extrapolates past $g$.\n\nCost is one flowsheet pass per iteration plus two vectors of storage."
+  },
+  {
+   "anchor": "anderson",
+   "heading": "Anderson",
+   "path": "Convergence and Initialization > The three acceleration methods > Anderson",
+   "source": "convergence.md",
+   "targets": [],
+   "text": "The default. Keeps a rolling history (`anderson_depth`, default 5) and solves a\nsmall least-squares problem for the combination of past iterates that minimises\nthe residual \u2014 equivalent to GMRES on the fixed-point iteration. It is exact on\nan affine map within `depth` steps and is the best general-purpose choice for a\nloop that is slow but not oscillating.\n\nTwo implementation details matter to a user:\n\n- The least-squares problem is solved with `jnp.linalg.lstsq` on the difference\n  matrix directly, **not** through the normal equations. The normal equations\n  square the condition number, which overflows to NaN for a badly scaled packed\n  tear vector \u2014 gas transmission networks, whose `[F, T, P]` entries span\n  1e1 kg/s to 1e6 Pa, have a normal-equation condition number of order\n  `(P/F)^4`. Badly scaled tear vectors are therefore fine.\n- If an accelerated step comes back non-finite (a degenerate history), the\n  iteration silently falls back to plain substitution for that step rather than\n  propagating NaN.\n\nCost is one flowsheet pass per iteration plus `depth` vectors of storage and a\nsmall `lstsq`.\n\nOn a representative nonlinear one-loop test problem solved to `1e-10`:\n\n| `acceleration` | iterations |\n|---|---|\n| `\"none\"` | 19 |\n| `\"wegstein\"` | 5 |\n| `\"anderson\"` | 8 |\n\nThose numbers are problem-specific \u2014 Wegstein's scalar slope estimate is at its\nbest on a loop with one dominant mode, and Anderson pulls ahead as the tear\nvector grows \u2014 but the order of magnitude is typical: acceleration is worth a\nfactor of a few, not a factor of a hundred."
+  },
+  {
+   "anchor": "clipping-negative-flows-is-a-correctness-switch",
+   "heading": "Clipping negative flows is a correctness switch",
+   "path": "Convergence and Initialization > The three acceleration methods > Clipping negative flows is a correctness switch",
+   "source": "convergence.md",
+   "targets": [],
+   "text": "Both accelerated methods extrapolate, and an extrapolated molar flow can land\nbelow zero on the way to a solution that is entirely positive. By default the\naccelerated iterations therefore project the **flow** entries of the tear vector\nonto `[0, inf)` after each step. Temperature and pressure are never touched.\n\nThis is right for a chemical flowsheet and wrong wherever a negative tear flow\nis a legitimate answer. Gas transmission networks are the standing example:\nflow against an arc's reference direction is routine, the fixed point genuinely\nhas negative components, and clipping means the iteration can never reach it.\n`difflow_gas.GasNetworkFlowsheet` overrides the default to `False` for exactly\nthis reason.\n\n```python\nstreams = fs.solve(clip_negative_flows=False)   # signed tear flows\n```\n\nIf a solve with signed flows will not converge and nothing else explains it,\nthis is the first thing to check."
+  },
+  {
+   "anchor": "damping",
+   "heading": "Damping",
+   "path": "Convergence and Initialization > The three acceleration methods > Damping",
+   "source": "convergence.md",
+   "targets": [],
+   "text": "For a tear map whose eigenvalue spectrum lies in `[-m, 0)` \u2014 the overshoot case\n\u2014 the damped iteration\n\n$$x^{(k+1)} = x^{(k)} + \\alpha\\left(g(x^{(k)}) - x^{(k)}\\right)$$\n\nhas the same fixed point but contracts for $\\alpha < 2/(1+m)$, with the optimal\nscalar damping near $\\alpha = 2/(2+m)$. An $\\alpha$ of 0.3 is safe up to a\nspectral radius of about 5. When in doubt, measure: a finite-difference\nJacobian of the tear map at a solved state gives $m$ directly. The analysis is\ngeneral even though it was written down for gas networks, where measured\nspectra reach $m \\approx 3.1$ (GasLib-40).\n\n```{warning}\n`Flowsheet.solve(damping=...)` is accepted and documented but **is not\ncurrently applied**: the `acceleration=\"none\"` path iterates the *undamped*\nmap through `optimistix`, and changing `damping` changes nothing. Verified by\ninspection and by measurement \u2014 1.0, 0.5, 0.3 and 0.05 all take the same\niteration count to the same residual.\n\nWhere a genuinely damped, traceable fixed point is needed today, the working\nimplementation is `difflow_gas.GasNetworkFlowsheet.solve_differentiable(alpha=...)`,\nwhich iterates the damped map through `optimistix` and differentiates through\nthe converged solution. For an oscillating loop on a plain `Flowsheet`, use\n`acceleration=\"wegstein\"`, whose clipped $q$ damps in the same regime.\n```\n\n---"
+  },
+  {
+   "anchor": "the-traced-fallback",
+   "heading": "The traced fallback",
+   "path": "Convergence and Initialization > The traced fallback",
+   "source": "convergence.md",
+   "targets": [],
+   "text": "The accelerated solvers are Python loops that branch on the residual to stop\nearly, and a tracer cannot answer `residual < tol`. So when `solve()` sees a\ntracer in any feed or unit parameter, it **replaces the requested acceleration\nwith the `optimistix` fixed point** and records that it did:\n\n```python\ndef objective(feed_F):\n    fs.feeds[\"feed\"] = make_stream({\"A\": feed_F}, 300.0, 1e5)\n    return fs.solve(tol=1e-10, max_iter=200)[\"loop_out\"][\"F_A\"]\n\ngradient = jax.grad(objective)(1.0)\nfs.last_solve_method     # 'fixed_point (traced)'\nfs.last_solve_converged  # None -- the residual was a tracer\n```\n\nThree consequences worth knowing before differentiating through a flowsheet:\n\n- **The gradient is exact, and is not the gradient of the iteration.**\n  `optimistix` carries an implicit-differentiation rule, so the derivative comes\n  from the converged solution through the implicit function theorem, not from\n  an unrolled loop. It does not depend on how many iterations ran.\n- **You lose the acceleration.** A loop that needs Anderson to converge in 100\n  iterations eagerly may need many more under `grad`. Raise `max_iter` on the\n  differentiated path.\n- **You lose the convergence verdict.** There is no concrete residual to judge,\n  so `last_solve_converged` is `None` and the solve stays silent whatever\n  `on_nonconvergence` says \u2014 guessing would either raise inside a gradient or\n  warn on a solve that was fine. Check convergence eagerly, at the same\n  parameter values, before trusting a gradient.\n- **You lose the feed-propagation guess.** The initialization pass catches\n  exceptions, which has no business running over tracers, so a traced solve\n  starts from the flowsheet default stream unless you pass `tear_initial`.\n  For a loop the default start is nowhere near, pass the eagerly converged\n  tear in explicitly.\n\nThe same rule explains a related gotcha: never record a solve diagnostic with a\nbare `float()` in code that may be traced. `flowsheet._concrete()` returns\n`None` under tracing instead of raising.\n\n---"
+  },
+  {
+   "anchor": "the-equation-oriented-route",
+   "heading": "The equation-oriented route",
+   "path": "Convergence and Initialization > The equation-oriented route",
+   "source": "convergence.md",
+   "targets": [],
+   "text": "`fs.solve_eo()` assembles every unit's `eo_residuals` into one system\n$F(x) = 0$ and solves it with Newton via `optimistix`\n(see [Equation-Oriented (EO) Solver](eo-solver.md)). It converges quadratically\nnear the solution, which is why a tightly coupled loop that takes hundreds of\ntear iterations often takes a handful of Newton steps \u2014 and why it needs a\nstarting point inside the basin.\n\nBy default it gets one by **running the sequential solver first**:\n\n```python\nstreams = fs.solve_eo(use_sm_init=True)   # the default\n```\n\n`use_sm_init` runs `fs.solve(tol=1e-6, max_iter=50, acceleration=\"anderson\")`\nand uses the result \u2014 converged or not \u2014 as the Newton start, keeping whichever\nstreams the EO state vector needs. A loose sequential solve is cheap and lands\nclose enough for Newton far more often than a feed-propagation guess does. If\nthe sequential solve raises, `solve_eo` falls back to feed propagation rather\nthan failing.\n\nTwo things follow:\n\n- A non-converged sequential solve still makes a fine EO start. That is the\n  point: SM is being used for its robustness, Newton for its accuracy.\n- Because the sequential pre-solve swallows exceptions, a `solve_eo` that\n  behaves as if it had a bad start may have had one. Run `fs.solve()` on its\n  own to find out.\n\n`use_sm_init=False` uses feed propagation instead, and an explicit\n`initial_guess` (a dict of streams, like `tear_initial` but covering every\nunknown stream) overrides both.\n\n---"
+  },
+  {
+   "anchor": "diagnostics",
+   "heading": "Diagnostics",
+   "path": "Convergence and Initialization > Diagnostics",
+   "source": "convergence.md",
+   "targets": [],
+   "text": "Every solve records what happened, whichever path ran and whether or not it\nconverged:\n\n| Attribute | Meaning |\n|---|---|\n| `last_solve_converged` | `True` met the tolerance, `False` ran out of iterations, `None` the residual was a tracer and there is nothing to judge |\n| `last_solve_residual` | final tear residual, as a plain max-norm of `g(x) - x` |\n| `last_solve_tol` | the tolerance that was asked for |\n| `last_solve_iterations` | iterations used; equals `max_iter` when it did not converge |\n| `last_solve_method` | `\"anderson\"`, `\"wegstein\"`, `\"none\"`, `\"fixed_point (traced)\"`, or `\"direct\"` for a recycle-free sequential solve |\n| `last_solve_tear_streams` | the tear (recycle destination) names |\n\nThe tri-state `last_solve_converged` is the one to test against `is False`\nrather than falsy: `None` means \"not judged\", not \"failed\".\n\n`ConvergenceWarning` and `ConvergenceError` are exported from `difflow`, so\n\n```python\nimport warnings\nfrom difflow import ConvergenceWarning\n\nwarnings.simplefilter(\"error\", ConvergenceWarning)\n```\n\nturns every non-converged solve in a script into a failure.\n\n---"
+  },
+  {
+   "anchor": "a-worked-diagnosis",
+   "heading": "A worked diagnosis",
+   "path": "Convergence and Initialization > A worked diagnosis",
+   "source": "convergence.md",
+   "targets": [],
+   "text": "A one-unit loop whose tear map is $F \\mapsto F_{\\text{feed}} + k\\sqrt{F + 0.1}$,\ndeliberately given too few iterations:\n\n```python\nimport warnings\n\nimport jax\nimport jax.numpy as jnp\n\nfrom difflow import ConvergenceWarning\nfrom difflow.flowsheet import Flowsheet, Unit\nfrom difflow.streams import make_stream\n\njax.config.update(\"jax_enable_x64\", True)\n\n\nclass Loop:\n    def __init__(self, k):\n        self.k = k\n\n    def __call__(self, feed, tear):\n        return make_stream(\n            {\"A\": feed[\"F_A\"] + self.k * jnp.sqrt(tear[\"F_A\"] + 0.1)},\n            feed[\"T\"],\n            feed[\"P\"],\n        )\n\n\ndef build():\n    fs = Flowsheet(species_order=[\"A\"], default_flow=0.0)\n    fs.add_feed(\"feed\", make_stream({\"A\": 1.0}, 300.0, 1e5))\n    fs.add_unit(Unit(\"loop\", Loop(0.9), [\"feed\", \"tear\"], [\"loop_out\"]))\n    fs.add_recycle(\"loop_out\", \"tear\")\n    return fs\n\n\nfs = build()\nwith warnings.catch_warnings():\n    warnings.simplefilter(\"ignore\", ConvergenceWarning)\n    streams = fs.solve(max_iter=3)\n\nassert fs.last_solve_converged is False\nassert fs.last_solve_method == \"anderson\"\nassert fs.last_solve_residual > fs.last_solve_tol   # 1.9e-2 against 1e-8\n```\n\nThe residual is six orders above tolerance, so this is not a loop that needs a\nfew more iterations. A starting point taken from anywhere near the answer buys\nfour orders of magnitude at the *same* three iterations:\n\n```python\nimport warnings\n\nimport jax\nimport jax.numpy as jnp\n\nfrom difflow import ConvergenceWarning\nfrom difflow.flowsheet import Flowsheet, Unit\nfrom difflow.streams import make_stream\n\njax.config.update(\"jax_enable_x64\", True)\n\n\nclass Loop:\n    def __init__(self, k):\n        self.k = k\n\n    def __call__(self, feed, tear):\n        return make_stream(\n            {\"A\": feed[\"F_A\"] + self.k * jnp.sqrt(tear[\"F_A\"] + 0.1)},\n            feed[\"T\"],\n            feed[\"P\"],\n        )\n\n\nfs = Flowsheet(species_order=[\"A\"], default_flow=0.0)\nfs.add_feed(\"feed\", make_stream({\"A\": 1.0}, 300.0, 1e5))\nfs.add_unit(Unit(\"loop\", Loop(0.9), [\"feed\", \"tear\"], [\"loop_out\"]))\nfs.add_recycle(\"loop_out\", \"tear\")\n\nguess = {\"tear\": make_stream({\"A\": 2.4}, 300.0, 1e5)}\nwith warnings.catch_warnings():\n    warnings.simplefilter(\"ignore\", ConvergenceWarning)\n    fs.solve(tear_initial=guess, max_iter=3)\n\nassert fs.last_solve_residual < 1e-4     # 8.3e-6, from 1.9e-2\n```"
+  },
+  {
+   "anchor": "tear-selection",
+   "heading": "Tear selection",
+   "path": "Convergence and Initialization > Tear selection",
+   "source": "convergence.md",
+   "targets": [],
+   "text": "difflow does **not** choose tear streams for you: the tears are whatever\n`add_recycle` registered, one per recycle, and where you tear a loop is a\nmodelling decision with real consequences for how fast it converges.\n\n`difflow.select_tear_streams` and `difflow.find_cycles` are analysis helpers for\nmaking that decision, not part of the solve path:\n\n```python\nfrom difflow import find_cycles, select_tear_streams\nfrom difflow.initialization import FlowsheetGraph\n\ncycles = find_cycles(FlowsheetGraph.from_flowsheet(fs))\ntears = select_tear_streams(fs, method=\"heuristic\")   # or \"minimum\"\n```\n\n`\"heuristic\"` prefers a stream leaving a mixer, where the composition is\nalready known; `\"minimum\"` greedily picks the stream appearing in the most\nremaining cycles, to tear as few streams as possible. The general rule is the\none the gas plugin states quantitatively: tear where the map is least\nsensitive. A chord's tear-map slope there goes as\n`-sum(beta_e |q_e|) / (beta_c |q_c|)` over its loop, so tearing the *most*\nresistive element keeps the spectral radius small.\n\n---"
+  },
+  {
+   "anchor": "what-the-plugins-add",
+   "heading": "What the plugins add",
+   "path": "Convergence and Initialization > What the plugins add",
+   "source": "convergence.md",
+   "targets": [],
+   "text": "Two plugins solve initialization problems the core does not, and both are worth\nreading even if you work in neither domain.\n\n**Gas networks compute the decomposition from the topology.**\n`difflow_gas.decompose(net, root=...)` builds a spanning tree with the\nnon-invertible arc kinds forced in-tree and the most resistive pipe of each\nloop pushed out as the chord, then emits a leaf-to-root balance schedule. The\ntears are derived rather than declared, and the chord choice is made on the\nconvergence criterion above. See\n[The computed decomposition](unit-operations-gas.md#the-computed-decomposition)\nand [Building and solving](unit-operations-gas.md#building-and-solving).\n\n**REE mass-action sections initialize by continuation from a correlation.**\nMass-action equilibrium is exponentially nonlinear and loses Newton from a poor\nstart, so `difflow_ree` solves the existing L1 correlation first and uses its\nKremser profile as the starting point, then walks it into Newton's basin with\ndamped Newton, a trust region and damped Newton again \u2014\n`n_continuation_steps > 1` additionally ramps the rare-earth feed from dilute to\nfull strength. All of it runs under `stop_gradient`: it moves the starting point\nand never the answer, which is the pattern to copy for any globalization in a\ndifferentiable model. See\n[Unknowns, equations and how they are solved](unit-operations-ree.md#unknowns-equations-and-how-they-are-solved).\n\n---"
+  },
+  {
+   "anchor": "see-also",
+   "heading": "See also",
+   "path": "Convergence and Initialization > See also",
+   "source": "convergence.md",
+   "targets": [],
+   "text": "- [Streams and Flowsheets](streams-and-flowsheets.md) \u2014 building flowsheets, recycles, implicit differentiation\n- [Equation-Oriented (EO) Solver](eo-solver.md) \u2014 the simultaneous alternative\n- [Solvers and Utilities](solvers-and-utilities.md) \u2014 the numerics underneath\n- [Gas Transmission Network Unit Operations](unit-operations-gas.md) \u2014 computed decomposition, damped differentiable tear solve"
+  },
   {
    "anchor": "overview",
    "heading": "Overview",
@@ -543,7 +711,7 @@
    "path": "Equation-Oriented (EO) Solver > Comparison: SM vs EO",
    "source": "eo-solver.md",
    "targets": [],
-   "text": "| Aspect | Sequential Modular | Equation-Oriented |\n|--------|-------------------|-------------------|\n| Convergence | Linear (fixed-point) | Quadratic (Newton) |\n| Iterations | Many for tight recycles | Few near solution |\n| Per-iteration cost | Low (one unit eval) | High (full Jacobian) |\n| Initialization | Tolerant of poor guesses | Needs reasonable guess |\n| Best for | Simple, loosely coupled | Tightly coupled, optimization |"
+   "text": "| Aspect | Sequential Modular | Equation-Oriented |\n|--------|-------------------|-------------------|\n| Convergence | Linear (fixed-point) | Quadratic (Newton) |\n| Iterations | Many for tight recycles | Few near solution |\n| Per-iteration cost | Low (one unit eval) | High (full Jacobian) |\n| Initialization | Tolerant of poor guesses | Needs reasonable guess |\n| Best for | Simple, loosely coupled | Tightly coupled, optimization |\n\nThe two are not exclusive: `solve_eo(use_sm_init=True)` (the default) runs the\nsequential solver first and hands its result to Newton as the starting point,\nwhich is how the EO route gets a guess good enough to converge from. See\n[The equation-oriented route](convergence.md#the-equation-oriented-route), and\n[Convergence and Initialization](convergence.md) for tear guesses, the\nacceleration methods and the traced fallback."
   },
   {
    "anchor": "adding-eo-support-to-new-units",
@@ -1207,7 +1375,7 @@
    "path": "Difflow Documentation > Documentation Contents > Core Modules",
    "source": "index.md",
    "targets": [],
-   "text": "| Document | Description |\n|----------|-------------|\n| [Getting Started](getting-started.md) | Installation, quick start, and basic examples |\n| [Unit Operations - Chemical](unit-operations-chemical.md) | Reactors, separators, heat exchangers, distillation |\n| [Unit Operations - Bio](unit-operations-bio.md) | Bioreactors, centrifugation, filtration, chromatography |\n| [Unit Operations - REE](unit-operations-ree.md) | Rare earth element extraction, scrubbing, stripping, precipitation |\n| [Thermodynamics](thermodynamics.md) | Property calculations, equations of state, databases |\n| [Technoeconomics](technoeconomics.md) | Capital costs, operating costs, profitability analysis |\n| [Streams and Flowsheets](streams-and-flowsheets.md) | Stream handling, flowsheet solver, recycle calculations |\n| [Dynamic Modeling](dynamic-modeling.md) | Transient simulation, ODE/DAE integration, diffrax backend |\n| [Moving-Horizon Estimation](moving-horizon-estimation.md) | Constrained MHE over dynamic flowsheets, EKF baseline, delayed and multi-rate data, joint parameter estimation |\n| [Operability Screening](operability.md) | Steady-state controllability from AD gains: RGA, singular values, disturbance rejection |\n| [Flexibility Analysis](flexibility.md) | Feasibility function, flexibility index, and the feed-vs-parameter uncertainty split |\n| [Stochastic Programming](stochastic.md) | Two-stage design under a parameter distribution: scenario sampling, CVaR and chance constraints, VSS and EVPI |\n| [Experiment Design and Identifiability](experiment-design.md) | Fisher-information D/A/E-optimal run selection, predicted confidence intervals, structural identifiability |\n| [External Solvers](external-solvers.md) | Bridging flowsheets to pounce (NLP, post-optimal sensitivity) and discopt (implicit residual blocks) |\n| [Solvers and Utilities](solvers-and-utilities.md) | Numerical methods, uncertainty propagation |\n| [Data Reconciliation](data-reconciliation.md) | Constrained least squares on noisy plant data, gross error detection, observability |\n| [Delta-Base Planning](planning.md) | AD-generated delta vectors, trust-region LP/MILP planning, sensitivity of the plan |\n| [Aspen PIMS Integration](pims-integration.md) | Design proposal: shipping difflow delta vectors into a PIMS planning model (nothing implemented yet) |"
+   "text": "| Document | Description |\n|----------|-------------|\n| [Getting Started](getting-started.md) | Installation, quick start, and basic examples |\n| [Unit Operations - Chemical](unit-operations-chemical.md) | Reactors, separators, heat exchangers, distillation |\n| [Unit Operations - Bio](unit-operations-bio.md) | Bioreactors, centrifugation, filtration, chromatography |\n| [Unit Operations - REE](unit-operations-ree.md) | Rare earth element extraction, scrubbing, stripping, precipitation |\n| [Thermodynamics](thermodynamics.md) | Property calculations, equations of state, databases |\n| [Technoeconomics](technoeconomics.md) | Capital costs, operating costs, profitability analysis |\n| [Streams and Flowsheets](streams-and-flowsheets.md) | Stream handling, flowsheet solver, recycle calculations |\n| [Convergence and Initialization](convergence.md) | Tear-stream guesses, the three acceleration methods, the traced fallback, and what to do when a solve will not converge |\n| [Equation-Oriented Solver](eo-solver.md) | Simultaneous solution of the whole flowsheet, SM initialization, adding EO support to a unit |\n| [Dynamic Modeling](dynamic-modeling.md) | Transient simulation, ODE/DAE integration, diffrax backend |\n| [Moving-Horizon Estimation](moving-horizon-estimation.md) | Constrained MHE over dynamic flowsheets, EKF baseline, delayed and multi-rate data, joint parameter estimation |\n| [Operability Screening](operability.md) | Steady-state controllability from AD gains: RGA, singular values, disturbance rejection |\n| [Flexibility Analysis](flexibility.md) | Feasibility function, flexibility index, and the feed-vs-parameter uncertainty split |\n| [Stochastic Programming](stochastic.md) | Two-stage design under a parameter distribution: scenario sampling, CVaR and chance constraints, VSS and EVPI |\n| [Experiment Design and Identifiability](experiment-design.md) | Fisher-information D/A/E-optimal run selection, predicted confidence intervals, structural identifiability |\n| [External Solvers](external-solvers.md) | Bridging flowsheets to pounce (NLP, post-optimal sensitivity) and discopt (implicit residual blocks) |\n| [Solvers and Utilities](solvers-and-utilities.md) | Numerical methods, uncertainty propagation |\n| [Data Reconciliation](data-reconciliation.md) | Constrained least squares on noisy plant data, gross error detection, observability |\n| [Delta-Base Planning](plan"
   },
   {
    "anchor": "architecture-overview",
@@ -2479,7 +2647,15 @@
    "path": "Streams and Flowsheets > Flowsheet Management > Sequential Modular Solution",
    "source": "streams-and-flowsheets.md",
    "targets": [],
-   "text": "The flowsheet solver uses sequential modular approach:\n\n1. **Tear streams**: Identify recycle streams to \"tear\"\n2. **Initialize**: Set initial guesses for tear streams\n3. **Sequential calculation**: Solve units in order\n4. **Update tear streams**: Compare calculated vs assumed\n5. **Iterate**: Repeat until convergence\n\n```\n\u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510\n\u2502                   Flowsheet                          \u2502\n\u2502                                                      \u2502\n\u2502  Fresh Feed \u2500\u2500\u252c\u2500\u2500\u25ba Mixer \u2500\u2500\u25ba Reactor \u2500\u2500\u25ba Flash      \u2502\n\u2502               \u2502              \u2502           \u2502          \u2502\n\u2502               \u2502              \u2502      \u250c\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2510     \u2502\n\u2502               \u2502              \u2502      \u25bc         \u25bc     \u2502\n\u2502               \u2502              \u2502   Vapor    Liquid    \u2502\n\u2502               \u2502              \u2502             \u2502        \u2502\n\u2502               \u2502              \u2502      \u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2510 \u2502\n\u2502               \u2502              \u2502      \u25bc             \u25bc \u2502\n\u2502               \u2502         (Tear Stream)         Product\u2502\n\u2502               \u2502              \u2502                      \u2502\n\u2502               \u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518                      \u2502\n\u2502                  Recycle                            \u2502\n\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\n```\n\n---"
+   "text": "The flowsheet solver uses sequential modular approach:\n\n1. **Tear streams**: Identify recycle streams to \"tear\"\n2. **Initialize**: Set initial guesses for tear streams (see\n   [Where the initial guess comes from](convergence.md#where-the-initial-guess-comes-from))\n3. **Sequential calculation**: Solve units in order\n4. **Update tear streams**: Compare calculated vs assumed\n5. **Iterate**: Repeat until convergence\n\n```\n\u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510\n\u2502                   Flowsheet                          \u2502\n\u2502                                                      \u2502\n\u2502  Fresh Feed \u2500\u2500\u252c\u2500\u2500\u25ba Mixer \u2500\u2500\u25ba Reactor \u2500\u2500\u25ba Flash      \u2502\n\u2502               \u2502              \u2502           \u2502          \u2502\n\u2502               \u2502              \u2502      \u250c\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2510     \u2502\n\u2502               \u2502              \u2502      \u25bc         \u25bc     \u2502\n\u2502               \u2502              \u2502   Vapor    Liquid    \u2502\n\u2502               \u2502              \u2502             \u2502        \u2502\n\u2502               \u2502              \u2502      \u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2534\u2500\u2500\u2500\u2500\u2500\u2500\u2510 \u2502\n\u2502               \u2502              \u2502      \u25bc             \u25bc \u2502\n\u2502               \u2502         (Tear Stream)         Product\u2502\n\u2502               \u2502              \u2502                      \u2502\n\u2502               \u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518                      \u2502\n\u2502                  Recycle                            \u2502\n\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\n```\n\n---"
+  },
+  {
+   "anchor": "recycle-calculations",
+   "heading": "Recycle Calculations",
+   "path": "Streams and Flowsheets > Recycle Calculations",
+   "source": "streams-and-flowsheets.md",
+   "targets": [],
+   "text": "Three methods iterate on the tear streams, selected with `acceleration`.\n[Convergence and Initialization](convergence.md) covers all of this in\ndepth --- where the initial guess comes from, what each method costs, and\nwhat to reach for when a loop will not close. The short version:"
   },
   {
    "anchor": "direct-substitution",
@@ -2487,7 +2663,7 @@
    "path": "Streams and Flowsheets > Recycle Calculations > Direct Substitution",
    "source": "streams-and-flowsheets.md",
    "targets": [],
-   "text": "Default method: simple fixed-point iteration on tear streams.\n\n$$\\mathbf{x}^{(k+1)} = f(\\mathbf{x}^{(k)})$$\n\nWhere $\\mathbf{x}$ is the tear stream vector and $f$ is the flowsheet calculation."
+   "text": "`acceleration=\"none\"`: simple fixed-point iteration on tear streams, run\nthrough `optimistix`.\n\n$$\\mathbf{x}^{(k+1)} = f(\\mathbf{x}^{(k)})$$\n\nWhere $\\mathbf{x}$ is the tear stream vector and $f$ is the flowsheet\ncalculation. This is also the path a traced solve falls back to, because it\nis the only one without a Python branch on the residual."
   },
   {
    "anchor": "wegstein-acceleration",
@@ -2495,15 +2671,15 @@
    "path": "Streams and Flowsheets > Recycle Calculations > Wegstein Acceleration",
    "source": "streams-and-flowsheets.md",
    "targets": [],
-   "text": "Accelerated convergence using Wegstein method:\n\n$$\\mathbf{x}^{(k+1)} = \\mathbf{x}^{(k)} + \\frac{q}{1-q}[\\mathbf{x}^{(k)} - \\mathbf{x}^{(k-1)}]$$\n\nWhere:\n$$q = \\frac{f(\\mathbf{x}^{(k)}) - f(\\mathbf{x}^{(k-1)})}{\\mathbf{x}^{(k)} - \\mathbf{x}^{(k-1)}}$$\n\nBounded: $q \\in [-5, 0]$ for stability."
+   "text": "`acceleration=\"wegstein\"`: estimates the tear map's slope from the last two\niterates and extrapolates.\n\n$$\\mathbf{x}^{(k+1)} = q\\, \\mathbf{x}^{(k)} + (1 - q)\\, f(\\mathbf{x}^{(k)}),\n\\qquad q = \\frac{s}{s - 1},\n\\qquad s = \\frac{f(\\mathbf{x}^{(k)}) - f(\\mathbf{x}^{(k-1)})}{\\mathbf{x}^{(k)} - \\mathbf{x}^{(k-1)}}$$\n\n$q$ is the weight on the *old* iterate, bounded to $q \\in [-5, 0]$ for\nstability. The bound is what makes this the method for an *oscillating* loop."
   },
   {
-   "anchor": "broydens-method",
-   "heading": "Broyden's Method",
-   "path": "Streams and Flowsheets > Recycle Calculations > Broyden's Method",
+   "anchor": "anderson-acceleration",
+   "heading": "Anderson Acceleration",
+   "path": "Streams and Flowsheets > Recycle Calculations > Anderson Acceleration",
    "source": "streams-and-flowsheets.md",
    "targets": [],
-   "text": "Quasi-Newton method for challenging convergence:\n\n$$\\mathbf{x}^{(k+1)} = \\mathbf{x}^{(k)} - \\mathbf{B}^{-1} \\mathbf{g}(\\mathbf{x}^{(k)})$$\n\nWhere $\\mathbf{g}(\\mathbf{x}) = \\mathbf{x} - f(\\mathbf{x})$ and $\\mathbf{B}$ is updated using Broyden's formula."
+   "text": "`acceleration=\"anderson\"` (the default): keeps a history of `anderson_depth`\niterates and solves a small least-squares problem for the combination that\nminimises the residual --- equivalent to GMRES on the fixed-point iteration,\nand exact on an affine map."
   },
   {
    "anchor": "convergence-parameters",
@@ -2511,7 +2687,7 @@
    "path": "Streams and Flowsheets > Recycle Calculations > Convergence Parameters",
    "source": "streams-and-flowsheets.md",
    "targets": [],
-   "text": "```python\nresults = fs.solve(\n    tol=1e-6,           # Convergence tolerance\n    max_iter=100,       # Maximum iterations\n    method='wegstein',  # 'direct', 'wegstein', or 'broyden'\n    damping=0.5         # Damping factor for direct substitution\n)\n```"
+   "text": "```python\nresults = fs.solve(\n    tol=1e-6,                 # Convergence tolerance\n    max_iter=100,             # Maximum iterations\n    acceleration='wegstein',  # 'none', 'wegstein' (default: 'anderson')\n    anderson_depth=5,         # History depth, for acceleration='anderson'\n    clip_negative_flows=True, # False for signed tear flows (e.g. gas networks)\n)\n```"
   },
   {
    "anchor": "when-the-solve-does-not-converge",
@@ -2519,7 +2695,7 @@
    "path": "Streams and Flowsheets > Recycle Calculations > When the Solve Does Not Converge",
    "source": "streams-and-flowsheets.md",
    "targets": [],
-   "text": "A tear iteration that runs out of iterations returns anyway, and what it\nreturns is the last iterate: every stream present, every number plausible, and\nthe material balance around the loop off by the tear residual. For a loop that\nis limit-cycling that error is not small.\n\n`solve()` says so rather than leaving it to the caller to go looking:\n\n```python\nstreams = fs.solve()                          # ConvergenceWarning if it didn't\nstreams = fs.solve(on_nonconvergence=\"raise\") # ConvergenceError instead\nstreams = fs.solve(on_nonconvergence=\"ignore\")# silent; check last_solve_* yourself\n```\n\nThe message names the tear streams, the final residual, the tolerance, the\niteration count and the method used --- the same `last_solve_*` diagnostics the\nreport layer and the editor read, which stay available whichever option is\nchosen:\n\n```text\nRecycle solve did not converge: tear stream(s) recycle reached a residual of\n3.2e-03 after 100 of 100 iterations, against a tolerance of 1.0e-08\n(method: anderson). The returned streams are the last iterate, not a solution\n-- material balances around the loop are off by the tear residual. ...\n```\n\n`ConvergenceWarning` and `ConvergenceError` are exported from `difflow`, so the\nusual `warnings.simplefilter(\"error\", ConvergenceWarning)` turns every\nnon-converged solve in a script into a failure.\n\nUnder `jax.grad` or `jit` the residual is a tracer with no numeric value, so\nthere is nothing to judge: `last_solve_converged` is `None` and the solve stays\nsilent whatever `on_nonconvergence` says. That path is the optimistix fixed\npoint, which carries its own implicit-differentiation rule."
+   "text": "A tear iteration that runs out of iterations returns anyway, and what it\nreturns is the last iterate: every stream present, every number plausible, and\nthe material balance around the loop off by the tear residual. For a loop that\nis limit-cycling that error is not small.\n\n`solve()` says so rather than leaving it to the caller to go looking:\n\n```python\nstreams = fs.solve()                          # ConvergenceWarning if it didn't\nstreams = fs.solve(on_nonconvergence=\"raise\") # ConvergenceError instead\nstreams = fs.solve(on_nonconvergence=\"ignore\")# silent; check last_solve_* yourself\n```\n\nThe message names the tear streams, the final residual, the tolerance, the\niteration count and the method used --- the same `last_solve_*` diagnostics the\nreport layer and the editor read, which stay available whichever option is\nchosen:\n\n```text\nRecycle solve did not converge: tear stream(s) recycle reached a residual of\n3.2e-03 after 100 of 100 iterations, against a tolerance of 1.0e-08\n(method: anderson). The returned streams are the last iterate, not a solution\n-- material balances around the loop are off by the tear residual. ...\n```\n\n`ConvergenceWarning` and `ConvergenceError` are exported from `difflow`, so the\nusual `warnings.simplefilter(\"error\", ConvergenceWarning)` turns every\nnon-converged solve in a script into a failure.\n\nWhat to do about it --- a better tear guess, a different acceleration, the\nequation-oriented solver --- is\n[When a solve does not converge](convergence.md#when-a-solve-does-not-converge).\n\nUnder `jax.grad` or `jit` the residual is a tracer with no numeric value, so\nthere is nothing to judge: `last_solve_converged` is `None` and the solve stays\nsilent whatever `on_nonconvergence` says. That path is the optimistix fixed\npoint, which carries its own implicit-differentiation rule."
   },
   {
    "anchor": "implicit-differentiation",
@@ -2799,7 +2975,7 @@
    "path": "Streams and Flowsheets > Best Practices > Debugging Convergence Issues",
    "source": "streams-and-flowsheets.md",
    "targets": [],
-   "text": "```python\n# Check individual units\nfor unit in fs.units:\n    print(f\"\\n{unit.name}:\")\n    inlet = fs.streams.get(unit.inlet_names[0])\n    outlet, info = unit.operation(inlet, **unit.params)\n    print(f\"  Inlet T: {inlet['T']:.1f} K\")\n    print(f\"  Outlet T: {outlet['T']:.1f} K\")\n\n# Monitor recycle convergence\ndef callback(iteration, error, tear_streams):\n    print(f\"Iter {iteration}: error = {error:.2e}\")\n\nresults = fs.solve(callback=callback)\n```"
+   "text": "```python\n# Check individual units against the solved streams\nstreams = fs.solve()\nfor unit in fs.units:\n    inlet = streams[unit.inlet_names[0]]\n    outlet = streams[unit.outlet_names[0]]\n    print(f\"{unit.name}: {inlet['T']:.1f} K -> {outlet['T']:.1f} K\")\n\n# What the last recycle solve actually did\nprint(fs.last_solve_method)      # 'anderson', 'wegstein', 'none', ...\nprint(fs.last_solve_iterations)  # == max_iter if it ran out\nprint(fs.last_solve_residual, fs.last_solve_tol)\nprint(fs.last_solve_converged)   # False is a finding; None means \"not judged\"\n```\n\nThe full decision tree is in\n[Convergence and Initialization](convergence.md#when-a-solve-does-not-converge)."
   },
   {
    "anchor": "memory-efficiency",

@@ -24,6 +24,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 # (file, section heading, heading that ends it)
 DOC_SECTIONS = [
     ("docs/unit-operations-chemical.md", "## Distillation", "## Heat Exchangers"),
+    ("docs/convergence.md", "## A worked diagnosis", "## Tear selection"),
 ]
 
 
