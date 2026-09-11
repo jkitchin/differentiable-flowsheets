@@ -1,5 +1,6 @@
 <!--
-  A right-click menu, positioned where the click was.
+  A menu, positioned where it was asked for: at a right-click on the
+  canvas, or under a button in the header.
 
   It holds no knowledge of what the items do: the caller passes them,
   already decided for whatever was clicked, and this draws them and
@@ -14,7 +15,21 @@
   too eagerly, because it still looks live and its items now lie.
 -->
 <script>
-  let { x = 0, y = 0, title = '', items = [], onclose = () => {} } = $props()
+  let {
+    x = 0,
+    y = 0,
+    // The right edge of whatever this hangs from, when it hangs from
+    // something: a menu dropped under a header button flips about the
+    // button rather than about the point, so it stays attached to it.
+    right = null,
+    // What the menu is called, for anything reading the page rather
+    // than looking at it. `title` is the visible heading, which a menu
+    // hanging from a labelled button does not want to repeat.
+    name = '',
+    title = '',
+    items = [],
+    onclose = () => {},
+  } = $props()
 
   // Enough to place the menu on the very first frame, before it has been
   // measured. Only this is a guess --- the real box is measured below,
@@ -35,16 +50,26 @@
    * somewhere the cursor is not, and the first item is the one about to
    * be clicked. Flipping keeps a corner of the menu under the cursor.
    */
-  function place(x, y, box) {
+  function place(x, y, right, box) {
     const w = box?.width || GUESS.width
     const h = box?.height || GUESS.height
+    // Flipped about the anchor's far edge where there is one, so a menu
+    // under a button ends up right-aligned with that button instead of
+    // hanging off its left side by its own width.
+    const back = right ?? x
     return {
-      x: x + w + MARGIN > window.innerWidth ? Math.max(MARGIN, x - w) : x,
+      x: x + w + MARGIN > window.innerWidth ? Math.max(MARGIN, back - w) : x,
       y: y + h + MARGIN > window.innerHeight ? Math.max(MARGIN, y - h) : y,
     }
   }
 
-  let at = $derived(place(x, y, size))
+  let at = $derived(place(x, y, right, size))
+
+  // A tick column, but only where something in this menu can be ticked:
+  // indenting the rows of a menu that has nothing to tick would be an
+  // empty gutter, and not indenting the rows of one that does would let
+  // the labels of the plain rows sit under the ticks of the others.
+  let marks = $derived(items.some((item) => item.on !== undefined))
 
   // Measured after every render that could have changed the box, which
   // is any change to the items. Reading the DOM is not a reactive read,
@@ -125,7 +150,7 @@
   bind:this={menu}
   class="menu"
   style="left: {at.x}px; top: {at.y}px"
-  aria-label={title || 'actions'}
+  aria-label={name || title || 'actions'}
 >
   {#if title}
     <li class="title" aria-hidden="true">{title}</li>
@@ -145,8 +170,13 @@
           class:danger={item.danger}
           disabled={!!item.disabled}
           title={item.hint || ''}
+          role={item.on === undefined ? undefined : 'menuitemcheckbox'}
+          aria-checked={item.on === undefined ? undefined : item.on}
           onclick={() => choose(item)}
         >
+          {#if marks}
+            <span class="mark" aria-hidden="true">{item.on ? '✓' : ''}</span>
+          {/if}
           <span class="label">{item.label}</span>
           {#if item.note}<span class="note">{item.note}</span>{/if}
         </button>
@@ -232,6 +262,14 @@
   }
 
   .label { flex: 1; }
+
+  /* Fixed width whether or not there is a tick in it, which is what
+     keeps the labels of one menu in a single column. */
+  .mark {
+    width: 0.9rem;
+    flex: none;
+    color: var(--series);
+  }
 
   /* The keyboard shortcut, or "not here and why". Never the point of
      the row, so it stays quiet and does not widen the menu. */

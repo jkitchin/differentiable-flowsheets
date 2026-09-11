@@ -656,7 +656,11 @@ Two pages are served, and they are at different stages.
 
 `/` is the **canvas**: the flowsheet as a node graph, laid out automatically, pan and zoom, feeds banked left and products right, recycle edges dashed and orange. Drag an operation off the palette to drop a unit; drag from a unit's outlet port to another unit's inlet to wire it; drag a box to move it; select and press Delete to remove. Every gesture is one request and then a redraw from the answer, so the picture cannot drift from the model.
 
-**Right-click a node for the things you would otherwise go looking for.** On a unit the menu offers the documentation page for its operation, the assistant pointed at it, the code context, its name on the clipboard, and Delete; on a feed or product node — drawn from the topology rather than held by the flowsheet — only the last two have anything to act on, so only those are offered. Nothing in it is a new capability, and that is rather the point: the documentation link was in the palette, which is where you are *not* once the unit is on the canvas, and the code context is a header button several panels away from the red node that is waiting for it. Arrow keys walk the menu and Escape closes it; near the edge of the window it flips rather than slides, so the item under the cursor stays the item under the cursor.
+**Right-click a node for the things you would otherwise go looking for.** On a unit the menu offers the documentation page for its operation, the assistant pointed at it, the code context, its name on the clipboard, and Delete; on a feed or product node — drawn from the topology rather than held by the flowsheet — only the last two have anything to act on, so only those are offered. Nothing in it is a new capability, and that is rather the point: the documentation link was in the palette, which is where you are *not* once the unit is on the canvas, and the code context is a menu away from the red node that is waiting for it. Arrow keys walk the menu and Escape closes it; near the edge of the window it flips rather than slides, so the item under the cursor stays the item under the cursor.
+
+**The header is three menus and one button.** It had been fifteen controls in a row, which is what a toolbar becomes when every panel earns a button: the two you want on any given day sit in a hedge of the eleven you do not. So **File** writes the flowsheet out — save, reload, the four exports below, and quit — **View** lists the five drawers and the two drawing preferences with a tick beside whichever are on, **Help** is the links that leave the editor, and **Solve** stays a button because it is the verb the whole editor exists for. Nothing moved into a menu gained or lost a capability; the menus are only where the capabilities went, which is why the whole arrangement is one list in `model/menubar.js` with no behaviour in it and the header is a `<nav>` of three words.
+
+They are the same component as the right-click menu, which is the part worth insisting on: one placement rule, one keyboard, one look. A menu hanging from a button flips about the *button* rather than about the point when it would run off the edge, so it stays attached to the thing that opened it; left and right walk the bar carrying the open menu with them, down opens, Escape closes and hands the focus back to the word it came from. Two accelerators are advertised on the rows that have them — `⌘S` saves, `⌘↵` solves — because a control that moved into a menu should say how to reach it without one, and because the browser's own answer to `⌘S`, offering to save the page, has never once been what anyone wanted here.
 
 Two things about wiring are worth knowing before you use it, because both are properties of difflow rather than of the editor. A **stream name is the wiring**: connecting an outlet to an inlet renames the inlet, it does not add an arc, so the downstream unit's port is called whatever the upstream unit's outlet is called. And a **loop is a tear, never an arc**: if the wire you draw would close a cycle, the editor records a recycle instead — the same thing `add_recycle` does — and the edge draws dashed with both stream names on it, because the two ends carry different names.
 
@@ -756,10 +760,13 @@ departure — the tab is coming back with its JavaScript intact. So the
 farewell is suppressed when `event.persisted` is true, and `pageshow`
 re-pings.
 
-The header also carries a **Quit** button, which asks twice: one click
-arms it (`Really quit?` for four seconds), the second posts
-`POST /api/quit`, and the page draws a *stopped* overlay so a dead tab
-does not look like a live one. Either way the process prints why it
+**Quit** is the last row of the File menu, and it asks twice: the row
+arms it, a red `Really quit?` appears in the header for six seconds, and
+clicking that posts `POST /api/quit`, after which the page draws a
+*stopped* overlay so a dead tab does not look like a live one. The
+second half is a button rather than a second trip into the menu because
+the menu shuts behind the first click, and a question asked somewhere
+nobody is looking is not asked at all. Either way the process prints why it
 stopped — `stopped: quit from the editor`, or `stopped: the editor page
 was closed`.
 
@@ -791,9 +798,10 @@ user's process is telling them to run a command that will fail.
 
 Every operation the palette offers carries a `?` that opens this book at
 the section describing it, and the inspector's heading carries the same
-link for the selected unit. The header has `Docs` and `GitHub` beside
-the version, read from the installed package's `Project-URL` metadata
-rather than typed into the front end.
+link for the selected unit. The **Help** menu has `Documentation` and
+`Source on GitHub`, read from the installed package's `Project-URL`
+metadata rather than typed into the front end — and greyed out, saying
+so, on an install whose metadata names neither.
 
 The mapping is **derived, not maintained**. `difflow.gui.doclinks` reads
 `static/docs-index.json` — the same index the assistant retrieves
@@ -938,7 +946,7 @@ Two smaller things make the panel honest. Edges carry their flow as a label once
 
 ### Getting the model out again
 
-An editor you can only enter is worse than none, so **Export** offers four files and none of them is a re-implementation of something difflow already writes:
+An editor you can only enter is worse than none, so the **File** menu offers four files and none of them is a re-implementation of something difflow already writes:
 
 | File | Where it comes from |
 |---|---|
