@@ -78,6 +78,8 @@ from difflow_ree.database import (
 # =============================================================================
 
 from difflow_ree.equilibrium import (
+    # Saponified correlation on the pH path (#266)
+    SaponifiedCorrelationWarning,
     # Free extractant: what the correlation's [HA] means (#267)
     ExtractantCapacityWarning,
     FreeExtractantConvergenceWarning,
@@ -574,6 +576,7 @@ __all__ = [
     "list_ree_elements",
     "list_extractants",
     "get_separation_factor",
+    "SaponifiedCorrelationWarning",
     # Custom creation helpers
     "create_custom_element",
     "create_custom_extractant",
