@@ -227,10 +227,28 @@ class PHCoefficients:
     d: float = 0.0  # Temperature coefficient (optional)
 
 
-# Normalized extraction mechanisms (#195). The mechanism decides which
-# coefficient block drives D and whether a proton term appears in the
-# activity correction (#194); it is data, not an assumption in the code.
-EXTRACTION_MECHANISMS = ("cation_exchange", "solvating")
+# Normalized extraction mechanisms (#195, extended in #266). The mechanism
+# decides which coefficient block drives D and whether a proton term appears in
+# the activity correction (#194); it is data, not an assumption in the code.
+#
+#   cation_exchange      RE3+ + 3 HA(o) <-> REA3(o) + 3 H+
+#                        driven by pH, via ``ph_coefficients``
+#   solvating            RE(NO3)3 + m S <-> RE(NO3)3.mS
+#                        driven by log10([NO3-]), via ``nitrate_coefficients``
+#   counter_ion_exchange RE3+ + 3 ML(o) = REL3(o) + 3 M+
+#                        driven by log10([M+]), via ``counter_ion_coefficients``
+#
+# The third is what a SAPONIFIED circuit actually runs (#266). Z1 Eq. 4.96 /
+# Q1 Eq. 2.120: the base has already taken the proton off in a separate step
+# (Z1 Eq. 4.95, HL + NH4OH = NH4L + H2O), so no proton appears on either side
+# of the extraction and pH is not its driving variable. Putting a saponified
+# system on ``ph_coefficients`` with b = 3 is not a slope that is too large,
+# it is a slope on the wrong axis.
+EXTRACTION_MECHANISMS = (
+    "cation_exchange",
+    "solvating",
+    "counter_ion_exchange",
+)
 
 #: Counter-ions an extractant record may declare (#197). ``"H"`` means the
 #: extractant is used un-neutralized and extraction is a proton exchange; the
@@ -241,6 +259,21 @@ EXTRACTION_MECHANISMS = ("cation_exchange", "solvating")
 #: :data:`difflow_ree.equilibrium.schema.DIVALENT_COUNTER_ION_CHARGES` for why
 #: ``"Mg"`` needs a tableau of its own.
 SAPONIFICATION_COUNTER_IONS = ("H", "Na", "NH4", "Mg")
+
+#: What system a record's ``ph_coefficients`` were measured on (#266).
+#:
+#: ``"unsaponified"`` means the proton exchange the pH slope describes, which
+#: is what every record shipping with difflow_ree is fitted to. ``"saponified"``
+#: means the coefficients came from a pre-neutralized system, where the
+#: reaction is ``RE3+ + 3 ML(o) = REL3(o) + 3 M+`` with no proton on either
+#: side --- there ``b`` is a slope on the wrong axis, and the record needs a
+#: ``counter_ion_coefficients`` block to be modelled properly.
+#:
+#: It is declared rather than inferred from ``saponification.degree``, which is
+#: an operating default for the circuit and says nothing about what the
+#: correlation was fitted to. Conflating the two would warn on every D2EHPA
+#: calculation in the package, where nothing is wrong.
+CORRELATION_BASES = ("unsaponified", "saponified")
 
 # Mapping from the historical free-form ``type`` field to the normalized
 # mechanism. Stated explicitly in data/extractants.yaml as well (#195).
@@ -301,6 +334,55 @@ def _load_coefficient_block(
     }
 
 
+def _load_counter_ion_block(block: dict | None) -> tuple:
+    """Unpack a YAML ``counter_ion_coefficients:`` block (#266).
+
+    Shape, and why it is not shaped like the other two::
+
+        counter_ion_coefficients:
+          reference_counter_ion: 0.5   # M, the anchor [M+]
+          monomers_per_ree: 3.0        # optional; defaults to the record's
+          elements:
+            Nd: {a: -0.40, d: 0.0}
+
+    The per-element part carries only ``a`` (and an optional temperature
+    ``d``).  The slope on ``log10([M+])`` is a SINGLE record-level number,
+    ``-monomers_per_ree``, because the counter-ion released per REE is set by
+    the stoichiometry and is the same for every lanthanide.  That is not a
+    simplification: it is the reason a separation factor is independent of
+    the counter-ion concentration, exactly and by construction, and writing
+    it as a per-element ``b`` would let a fitted wobble break a cancellation
+    the chemistry guarantees (#266).
+
+    Returns:
+        ``(coefficients, reference_counter_ion, monomers_per_ree)``, all
+        ``None`` when the record carries no block.
+    """
+    if block is None:
+        return None, None, None
+    elements = block.get("elements", {})
+    coeffs = {
+        element: PHCoefficients(
+            a=values["a"],
+            b=0.0,           # the slope is record-level; see above
+            c=0.0,
+            d=values.get("d", 0.0),
+        )
+        for element, values in elements.items()
+    }
+    reference = block.get("reference_counter_ion")
+    if reference is None:
+        raise ValueError(
+            "A counter_ion_coefficients block must declare "
+            "reference_counter_ion: the counter-ion concentration its `a` "
+            "values were measured at. There is no defensible default -- a "
+            "made-up anchor would scale every D it touches (#266)."
+        )
+    monomers = block.get("monomers_per_ree")
+    return coeffs, float(reference), (None if monomers is None
+                                      else float(monomers))
+
+
 def _saponification_fields(block: dict | None) -> dict:
     """Unpack a YAML ``saponification:`` block into Extractant fields (#197).
 
@@ -328,6 +410,8 @@ def _saponification_fields(block: dict | None) -> dict:
         out["saponification_reference_counter_ion"] = float(
             block["reference_counter_ion"]
         )
+    if "correlation_basis" in block:
+        out["correlation_basis"] = block["correlation_basis"]
     return out
 
 
@@ -402,6 +486,27 @@ class Extractant:
     # Reference condition the constant is calibrated at when it is None.
     saponification_reference_pH: float = 3.0
     saponification_reference_counter_ion: float = 0.1  # M
+    # Counter-ion-exchange data (#266), the correlation a SAPONIFIED circuit
+    # actually runs on:
+    #
+    #     RE3+ + 3 ML(o) = REL3(o) + 3 M+        (Z1 Eq. 4.96, Q1 Eq. 2.120)
+    #
+    # shaped like ``ph_coefficients`` but driven by log10([M+]) and with the
+    # slope held record-level rather than per element -- see
+    # _load_counter_ion_block.  ``counter_ion_reference`` is the [M+] the
+    # ``a`` values were measured at and has no default: there is no measured
+    # anchor in the literature this package cites, and inventing one would
+    # scale every D it touched.
+    counter_ion_coefficients: dict[str, PHCoefficients] | None = None
+    counter_ion_reference: float | None = None
+    # Counter-ion released per mol REE.  None means "use monomers_per_ree",
+    # which is what the stoichiometry already says; a record overrides it only
+    # when its own fit says otherwise.
+    counter_ion_exponent: float | None = None
+    # Which system ``ph_coefficients`` were measured on (#266). See
+    # CORRELATION_BASES. Default "unsaponified", which is what every shipped
+    # record is and what a pH slope means.
+    correlation_basis: str = "unsaponified"
 
     def __post_init__(self):
         """Normalize the mechanism (#195) and check saponification (#197).
@@ -457,6 +562,53 @@ class Extractant:
                 f"{self.counter_ion!r}. Supported: "
                 f"{list(SAPONIFICATION_COUNTER_IONS)} (#197)."
             )
+        if self.correlation_basis not in CORRELATION_BASES:
+            raise ValueError(
+                f"Extractant '{self.name}': unknown correlation_basis "
+                f"{self.correlation_basis!r}. Expected one of "
+                f"{list(CORRELATION_BASES)} (#266)."
+            )
+        if (self.correlation_basis == "saponified"
+                and not self.is_saponified):
+            raise ValueError(
+                f"Extractant '{self.name}' declares "
+                "correlation_basis='saponified' but no saponification "
+                "(degree "
+                f"{self.saponification_degree}, counter_ion "
+                f"{self.counter_ion!r}). A correlation fitted to a "
+                "pre-neutralized system needs the base that neutralized it "
+                "named (#266)."
+            )
+        if self.mechanism == "counter_ion_exchange":
+            if self.counter_ion_coefficients is None:
+                raise ValueError(
+                    f"Extractant '{self.name}' declares "
+                    "mechanism='counter_ion_exchange' but carries no "
+                    "counter_ion_coefficients block, so nothing drives D "
+                    "(#266). Add the block, or leave the record on "
+                    "cation_exchange and read the caveat that comes with it."
+                )
+            if self.counter_ion in (None, "H"):
+                raise ValueError(
+                    f"Extractant '{self.name}' extracts by counter-ion "
+                    f"exchange but declares counter_ion={self.counter_ion!r}. "
+                    "The exchanging cation is the driving variable, so it "
+                    "cannot be the proton (that is cation_exchange) or "
+                    "absent (#266)."
+                )
+
+    @property
+    def counter_ion_monomers(self) -> float:
+        """Counter-ion released per mol REE, for the exchange correlation.
+
+        Defaults to :attr:`monomers_per_ree`, which is what the declared
+        stoichiometry already says --- one counter-ion per extractant
+        monomer bound.  A record overrides it only where its own fit
+        disagrees (#266).
+        """
+        if self.counter_ion_exponent is not None:
+            return float(self.counter_ion_exponent)
+        return self.monomers_per_ree
 
     @property
     def is_saponified(self) -> bool:
@@ -514,6 +666,13 @@ class ExtractantDatabase:
             nitrate_coeffs = _load_coefficient_block(
                 props.get("nitrate_coefficients")
             )
+            # Counter-ion-exchange coefficients, driven by log10([M+]) (#266).
+            # Absent from every record that ships today: no measured anchor
+            # for [M+] exists in the sources this package cites, and a
+            # plausible-looking default would scale every D under it.
+            counter_coeffs, counter_ref, counter_exp = _load_counter_ion_block(
+                props.get("counter_ion_coefficients")
+            )
 
             self._extractants[name] = Extractant(
                 name=name,
@@ -545,6 +704,10 @@ class ExtractantDatabase:
                 requires_nitrate=bool(
                     props["stoichiometry"].get("requires_nitrate", False)
                 ),
+                # Counter-ion-exchange block (#266); absent everywhere today.
+                counter_ion_coefficients=counter_coeffs,
+                counter_ion_reference=counter_ref,
+                counter_ion_exponent=counter_exp,
                 # Saponification block (#197); absent for a neutral extractant.
                 **_saponification_fields(props.get("saponification")),
             )

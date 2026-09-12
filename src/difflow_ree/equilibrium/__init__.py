@@ -34,6 +34,7 @@ from difflow_ree.equilibrium.distribution import (
     get_distribution_coefficient,
     get_distribution_coefficients,
     get_separation_factor,
+    SaponifiedCorrelationWarning,
 )
 from difflow_ree.equilibrium.loading import (
     LoadingIsotherm,
@@ -116,6 +117,7 @@ __all__ = [
     "get_distribution_coefficient",
     "get_distribution_coefficients",
     "get_separation_factor",
+    "SaponifiedCorrelationWarning",
     "LoadingIsotherm",
     "langmuir_loading",
     "loading_correction",

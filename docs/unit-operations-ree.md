@@ -100,6 +100,10 @@ is the mechanism that decides which correlation drives `D` (#195):
 |-----------|---------------|------------------|-------------------|
 | `cation_exchange` | `acidic_phosphoric`, `acidic_phosphonic`, `acidic_phosphinic`, `acidic_carboxylic` | pH | `ph_coefficients` |
 | `solvating` | `solvating_neutral` | nitrate concentration | `nitrate_coefficients` |
+| `counter_ion_exchange` | declared explicitly | counter-ion concentration | `counter_ion_coefficients` |
+
+The third is what a **saponified** circuit actually runs — see
+[Saponified circuits exchange a counter-ion, not a proton](#saponified-circuits-exchange-a-counter-ion-not-a-proton).
 
 A record carries only the block its mechanism needs. TBP has **no**
 `ph_coefficients` block (it was deleted — see below), so
@@ -115,6 +119,72 @@ print(get_extractant("TBP").requires_nitrate, get_extractant("TBP").reference_ni
 # True 3.0
 print(normalize_mechanism("acidic_phosphonic"))  # 'cation_exchange'
 ```
+
+(saponified-correlations)=
+### Saponified circuits exchange a counter-ion, not a proton
+
+`cation_exchange` describes proton exchange (Q1 Eq. 2.87):
+
+$$\mathrm{RE}^{3+} + 3\,\mathrm{HA}_{(o)} \rightleftharpoons \mathrm{REA}_3{}_{(o)} + 3\,\mathrm{H}^+$$
+
+which is what a pH slope of about 3 means. Industrial rare-earth circuits
+saponify 30–80 % of the extractant before the cascade, and the reaction that
+then runs is a **counter-ion** exchange (Z1 Eq. 4.96, Q1 Eq. 2.120), preceded by
+the saponification itself (Z1 Eq. 4.95):
+
+$$\mathrm{HL}_{(o)} + \mathrm{NH_4OH} = \mathrm{NH_4L}_{(o)} + \mathrm{H_2O}$$
+$$\mathrm{RE}^{3+} + 3\,\mathrm{NH_4L}_{(o)} = \mathrm{REL}_3{}_{(o)} + 3\,\mathrm{NH_4}^+$$
+
+**No proton appears on either side of the second.** For a correlation fitted to
+such a system, a `b` of 3 is not a slope that is too large — it is a slope on
+the wrong axis. Measured saponified systems put the apparent pH slope near 0.3
+(Z1 Table 4.36), and Z1 Fig. 4.43 shows about one decade of `D` over pH 4.0–5.4
+where a slope of 3 demands 10⁴·².
+
+`mechanism: counter_ion_exchange` is where such a correlation goes (#266):
+
+$$\log_{10}(D) = a - p \cdot \log_{10}\!\left(\frac{[\mathrm{M}^+]}{[\mathrm{M}^+]_{ref}}\right) + \frac{\Delta H}{R\ln 10}\left(\frac{1}{T} - \frac{1}{T_{ref}}\right) + n\log_{10}\!\left(\frac{[\mathrm{HA}]}{[\mathrm{HA}]_{ref}}\right)$$
+
+Three things are deliberate about the shape:
+
+- **The slope `p` is record-level, not per element.** It is the counter-ion
+  released per mol REE, which the stoichiometry already fixes. That is what
+  makes a separation factor *exactly* independent of `[M⁺]` — the term cancels
+  in `D_A/D_B` — so `get_separation_factor` does not ask for one at all. Stage
+  counts driven by β are untouched by this whole question; solvent inventory and
+  O/A driven by absolute `D` are not.
+- **`reference_counter_ion` has no default.** The sources cited here report no
+  anchor `[M⁺]` alongside their distribution data, and a plausible-looking one
+  would scale every `D` under it. A block without it is refused, and
+  `get_D` on this mechanism requires `counter_ion_conc` rather than assuming one.
+- **No shipped record carries the block.** The mechanism exists so a record
+  measured on a saponified system has somewhere to put its real correlation.
+
+```python
+dist = REEDistribution(extractant="MySaponified", elements=("Sm", "Nd"))
+dist.get_D("Nd", counter_ion_conc=0.5)          # needs [M+]
+dist.get_separation_factor("Sm", "Nd")          # does not: the term cancels
+```
+
+#### Which system were the coefficients measured on?
+
+The saponification `degree` on a record is an **operating default for the
+circuit** and says nothing about what its correlation was fitted to. So the
+record states that separately, as data:
+
+```yaml
+saponification:
+  counter_ion: Na
+  degree: 0.35
+  correlation_basis: unsaponified   # what ph_coefficients were measured on
+```
+
+Every record shipping with difflow_ree declares `unsaponified`, and its pH slope
+means what a pH slope means. A record declaring `saponified` while still being
+driven by `ph_coefficients` raises `SaponifiedCorrelationWarning`, naming the
+anchor its absolute `D` is tied to and the fact that separation factors survive
+it. Inferring this from `degree` instead would put a warning on every REE
+calculation in the package, where nothing is wrong.
 
 ---
 
