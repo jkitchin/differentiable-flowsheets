@@ -4,8 +4,9 @@ This plugin provides comprehensive tools for modeling and optimizing
 rare earth element (REE) solvent extraction processes.
 
 Features:
-- Database of 10 commercial REE properties
-- 4 extractant systems (D2EHPA, PC88A, Cyanex272, TBP)
+- Database of 15 REE properties (14 stable lanthanides + Y; Pm excluded)
+- 5 extractant systems (D2EHPA, PC88A, Cyanex272, TBP, naphthenic acid)
+- Field-level data provenance: every number traces to a cited source
 - pH-dependent distribution coefficient models
 - Loading and speciation corrections
 - Unit operations: extraction, scrubbing, stripping, precipitation
@@ -239,6 +240,8 @@ from difflow_ree.economics import (
     ReagentCosts,
     OperatingCosts,
     estimate_capex,
+    capex_basis,
+    CAPEX_ANCHORS,
     estimate_opex,
     calculate_revenue,
     calculate_profit,
@@ -446,6 +449,13 @@ def register(registry):
 # =============================================================================
 
 __all__ = [
+    # Data provenance
+    "Provenance",
+    "explain",
+    "audit",
+    "coverage",
+    "unsourced",
+    "untagged",
     # Separation-train graph (#202)
     "SeparationTrain",
     "Connection",
@@ -609,6 +619,8 @@ __all__ = [
     "ReagentCosts",
     "OperatingCosts",
     "estimate_capex",
+    "capex_basis",
+    "CAPEX_ANCHORS",
     "estimate_opex",
     "calculate_revenue",
     "calculate_profit",
@@ -645,3 +657,29 @@ __all__ = [
     # Registration
     "register",
 ]
+
+
+# =============================================================================
+# Data provenance -- where every number in data/ came from
+#
+# Imported lazily (PEP 562). Eagerly importing difflow_ree.provenance here puts
+# it in sys.modules before `python -m difflow_ree.provenance` executes it, which
+# makes the CLI emit a RuntimeWarning on every run. The CLI is the main way
+# people will reach this, so it gets to stay quiet.
+# =============================================================================
+
+_PROVENANCE_EXPORTS = frozenset(
+    {"Provenance", "explain", "audit", "coverage", "unsourced", "untagged"}
+)
+
+
+def __getattr__(name: str):
+    if name in _PROVENANCE_EXPORTS:
+        from difflow_ree import provenance
+
+        return getattr(provenance, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | _PROVENANCE_EXPORTS)

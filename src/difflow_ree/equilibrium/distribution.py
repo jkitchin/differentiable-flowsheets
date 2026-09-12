@@ -202,12 +202,18 @@ class REEDistribution:
             :data:`difflow_ree.equilibrium.speciation.ACTIVITY_MODELS`
             (``"davies"``, ``"none"``). Each declares its own validity range
             (#194).
-        on_out_of_range: What to do when ``ionic_strength`` is outside the
-            chosen model's validity range, cannot be checked because it is an
-            abstract tracer, or when the correction is not the right physics for
-            the mechanism: ``"warn"`` (default, UserWarning), ``"raise"``
-            (ValueError) or ``"ignore"``. This controls *reporting* only; the
-            clamp described above applies regardless.
+        on_out_of_range: What to do when a condition leaves a documented
+            validity range, cannot be checked because it is an abstract
+            tracer, or when a correction is not the right physics for the
+            mechanism: ``"warn"`` (default, UserWarning), ``"raise"``
+            (ValueError) or ``"ignore"``. Two conditions are reported through
+            it: ``ionic_strength`` against the activity model's range, and
+            (#262) ``pH`` against the extractant record's ``valid_ph_range``,
+            the window its ``ph_coefficients`` were fitted over. This controls
+            *reporting* only. The ionic-strength clamp described above applies
+            regardless; pH is deliberately **not** clamped, because silently
+            relocating a flowsheet's operating point is a worse failure than
+            an out-of-range number the caller can see.
         extrapolate_activity_model: Opt in to feeding the activity model an
             ionic strength beyond its documented validity range, reproducing raw
             (and, above 1.94 M for Davies, sign-inverted) coefficients. Default
@@ -786,6 +792,71 @@ class REEDistribution:
             return I
         return jnp.minimum(I, limit)
 
+    def _check_ph_range(self, pH) -> None:
+        """Validity report for the pH correlation itself (#262).
+
+        Every cation-exchange record declares a ``valid_ph_range`` -- the
+        window its ``ph_coefficients`` are meant to describe. Until #262 that
+        field was loaded into :class:`~difflow_ree.database.Extractant` and
+        then never read by anything, so a circuit could be operated at
+        ``stripping_pH=0.3`` against a quadratic fitted over ``[1.5, 5.5]``
+        and get a silent answer. Extrapolating ``a + b*pH + c*pH**2`` is not
+        a small error: PC88A's ``b = 2.55`` means one pH unit outside the
+        window moves ``D`` by two and a half decades.
+
+        Like :meth:`_check_activity_range` this is a *report*, not a guard --
+        the value is used as given. There is deliberately no clamp: clamping
+        pH would silently relocate the operating point of a flowsheet, which
+        is a worse failure than an out-of-range number the caller can see.
+        Honour :attr:`on_out_of_range` to make it an error or silence it.
+
+        Unlike that method, an abstract tracer is passed over in silence
+        rather than reported; the body says why.
+
+        Args:
+            pH: Solution pH, scalar, array or tracer. A concrete array is
+                checked at both ends, so a per-stage profile that leaves the
+                window anywhere is reported.
+        """
+        lo, hi = self._ext_data.valid_ph_range
+        bounds = _concrete_bounds(pH)
+        if bounds is None:
+            # Abstract tracer: nothing to inspect, and -- unlike the traced
+            # ionic_strength case (#194) -- nothing is reported either. That
+            # asymmetry is deliberate. `ionic_strength` defaults to None, so
+            # its check is opt-in and a traced value means the caller asked
+            # for a correction they cannot verify. `pH` is mandatory and is
+            # this library's primary differentiation variable: pH and
+            # n_stages are both meant to be continuous, traceable decisions,
+            # so warning here would fire on every grad/jit/vmap of every REE
+            # circuit and teach users to filter the category that carries the
+            # concrete out-of-range report as well. The concrete path below is
+            # the check; the units pass their params.pH through it untraced.
+            return
+
+        low, high = bounds
+        if low >= lo and high <= hi:
+            return
+        which = (
+            f"minimum {low:g}" if low < lo and high <= hi
+            else f"maximum {high:g}" if high > hi and low >= lo
+            else f"range [{low:g}, {high:g}]"
+        )
+        self._report(
+            f"range:ph:{low:.6g}:{high:.6g}",
+            f"pH {which} is outside the validity range of the "
+            f"{self.extractant!r} pH correlation ([{lo:g}, {hi:g}]) (#262). "
+            f"The coefficients were not fitted there, so log10(D) = a + b*pH "
+            f"+ c*pH**2 is being extrapolated; with b = "
+            f"{self._coefficients(self.elements[0]).b:g} for "
+            f"{self.elements[0]}, one pH unit of extrapolation is about that "
+            f"many decades in D. The value is used as given -- pH is NOT "
+            f"clamped, because silently moving a flowsheet's operating point "
+            f"is worse than a number you can see. Pass "
+            f"on_out_of_range='raise' to make this an error or 'ignore' to "
+            f"silence it.",
+        )
+
     def _activity_correction(self, ionic_strength) -> Array | float:
         """Residual activity factor applied to the correlated ``D`` (#194).
 
@@ -861,7 +932,10 @@ class REEDistribution:
             element: REE symbol (e.g., "Nd").
             pH: Solution pH on the concentration scale, ``-log10([H+])``.
                 Required for cation exchange; ignored (and optional) for
-                solvating extractants.
+                solvating extractants. A value outside the extractant
+                record's ``valid_ph_range`` is reported according to
+                :attr:`on_out_of_range` and then used as given -- it is not
+                clamped (#262).
             T: Temperature (K).
             ionic_strength: Aqueous ionic strength (M), scalar or array.
                 ``None`` (default and, for a concentrated liquor, the
@@ -927,6 +1001,7 @@ class REEDistribution:
                     "exchange, so get_D requires pH (concentration scale, "
                     "-log10([H+]))."
                 )
+            self._check_ph_range(pH)  # (#262) validity report, no clamp
             pH = jnp.asarray(pH)
             log_D = coeffs.a + coeffs.b * pH + coeffs.c * pH**2
 
