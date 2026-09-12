@@ -32,21 +32,31 @@ class TestTheGapIsVisibleBeforeARun:
         """Asked about the heavies, it says which records cannot do them."""
         wanted = ("Dy", "Y") + Y_PURIFICATION_NEIGHBOURS
         cov = get_extractant_database().coverage(wanted)
-        for name in cov.covered:
+        for name in ("D2EHPA", "PC88A", "Cyanex272", "TBP"):
             assert cov.missing(name) == Y_PURIFICATION_NEIGHBOURS, name
-        assert cov.complete() == ()
+        assert cov.complete() == ("naphthenic_acid",)
 
-    def test_coverage_of_what_ships_is_complete(self):
-        """Against the element database as it stands, nothing is missing.
+    def test_the_shipped_gap_is_the_one_the_issue_describes(self):
+        """Four of five extractants cover 10 of 15, and it is the same five.
 
-        The five-element gap the issue describes needs `elements.yaml` to
-        carry all fifteen; on this branch it carries ten, and the heavies
-        arrive with the record that has measured values for them. This
-        asserts the machinery agrees with the data as shipped, so the day
-        those five land the gap shows up here rather than in a solve.
+        This is the table in #269, asserted rather than described. The five
+        missing are not an arbitrary tail: they are what yttrium
+        purification runs against, so the records that lack them cannot do
+        the separation people reach for them to do.
         """
         cov = get_extractant_database().coverage()
-        assert cov.complete() == tuple(cov.covered)
+        assert len(cov.elements) == 15
+        assert cov.complete() == ("naphthenic_acid",)
+        for name in ("D2EHPA", "PC88A", "Cyanex272", "TBP"):
+            assert len(cov.covered[name]) == 10, name
+            assert cov.missing(name) == Y_PURIFICATION_NEIGHBOURS, name
+
+    def test_the_report_shows_the_gap_at_a_glance(self):
+        """What a user runs before a run, rather than finding out during one."""
+        text = get_extractant_database().coverage().as_text()
+        assert "10/15" in text
+        assert "15/15" in text
+        assert "Ho, Er, Tm, Yb, Lu" in text
 
     def test_the_report_reads(self):
         text = get_extractant_database().coverage(

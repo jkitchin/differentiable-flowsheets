@@ -89,10 +89,11 @@ print(f"Reference concentration: {d2ehpa.reference_concentration} M")
 
 | Extractant | Full Name | Primary Use | Elements covered |
 |------------|-----------|-------------|------------------|
-| D2EHPA | Di(2-ethylhexyl)phosphoric acid | Light/middle REE | La–Dy, Y |
-| PC88A | 2-ethylhexyl phosphonic acid mono-2-ethylhexyl ester | Middle REE | La–Dy, Y |
-| Cyanex272 | Bis(2,4,4-trimethylpentyl)phosphinic acid | Heavy REE, Co/Ni | La–Dy, Y |
-| TBP | Tri-n-butyl phosphate | Ce separation, nuclear | La–Dy, Y |
+| D2EHPA | Di(2-ethylhexyl)phosphoric acid | Light/middle REE | 10/15 — La–Dy, Y |
+| PC88A | 2-ethylhexyl phosphonic acid mono-2-ethylhexyl ester | Middle REE | 10/15 — La–Dy, Y |
+| Cyanex272 | Bis(2,4,4-trimethylpentyl)phosphinic acid | Heavy REE, Co/Ni | 10/15 — La–Dy, Y |
+| TBP | Tri-n-butyl phosphate | Ce separation, nuclear | 10/15 — La–Dy, Y |
+| naphthenic_acid | Naphthenic acid (saponified) | Y purification, full series | **15/15** |
 
 (element-coverage)=
 ### Which elements an extractant covers
@@ -103,11 +104,17 @@ before a run rather than during one (#269):
 ```python
 from difflow_ree import get_extractant_database
 
-cov = get_extractant_database().coverage()
-print(cov.as_text())
-cov.missing("D2EHPA")      # ()
-cov.complete()             # every extractant, against what ships today
+print(get_extractant_database().coverage().as_text())
+#   extractant       covered  missing
+#   D2EHPA            10/15   Ho, Er, Tm, Yb, Lu
+#   PC88A             10/15   Ho, Er, Tm, Yb, Lu
+#   Cyanex272         10/15   Ho, Er, Tm, Yb, Lu
+#   TBP               10/15   Ho, Er, Tm, Yb, Lu
+#   naphthenic_acid   15/15   -
 ```
+
+Four of the five stop at Dy plus Y. `naphthenic_acid` is the exception, and
+its fifteen come from one measured table (`Z1` Sec. 4.7, Table 4.36).
 
 `coverage(elements)` answers the same question for a list you care about, and
 `get_extractant("TBP").covered_elements` answers it for one record —
@@ -134,9 +141,20 @@ record whose coefficients stop at Dy plus Y cannot do that separation however
 many elements it lists.
 
 Filling such a gap is a different job per extractant, and none of it is
-interpolation: D2EHPA, PC88A and Cyanex272 have no published source for the ten
-they already carry, so extending them is a **refit**. Anything added should
-arrive with a citation, via `add_element_to_extractant`.
+interpolation:
+
+- **D2EHPA, PC88A, Cyanex272** have no published source for the ten they
+  already carry (`HAND_TUNED` in `sources.yaml`), so there is nothing to extend
+  *from* — extending them is a **refit**, not an interpolation.
+- **TBP**'s ten are literature-derived (`K05` Table 1), so extending it means
+  finding a source covering the heavies at comparable conditions, with its own
+  `sources.yaml` key.
+- **`naphthenic_acid`** is already complete, from `Z1` Table 4.36.
+
+Anything added should arrive with a citation, via `add_element_to_extractant`;
+`tests/ree/test_provenance.py` fails on a data field that matches no rule,
+which is what keeps a partial extension honest about which elements are
+measured and which are not.
 
 Every extractant record declares a normalized **extraction mechanism**, and it
 is the mechanism that decides which correlation drives `D` (#195):
