@@ -299,6 +299,101 @@ The flowsheet solver uses sequential modular approach:
 
 ## Recycle Calculations
 
+### Choosing the Tear Streams
+
+Where a loop is torn is not a formality. The tear is the fixed point the
+solve iterates on, so its placement sets the spectral radius of the map ---
+how fast the loop converges, and sometimes whether it converges at all.
+
+By default that choice is yours and only yours: `add_recycle(source, dest)`
+tears exactly where you said, and a loop closed in the topology but never
+declared is not torn at all (the sequential pass hits an inlet nothing has
+written yet and raises `KeyError`). `tear_analysis()` says what difflow
+would have picked, without solving anything and without running a single
+unit:
+
+```python
+print(fs.tear_analysis())
+```
+
+```text
+Tear analysis: 2 recycle loop(s)
+  loop: mixer -> reactor -> splitter -> flash -> mixer
+  loop: mixer -> reactor -> splitter -> mixer
+  declared tears:  recycle
+  heuristic would: recycle, mixed
+  minimum would:   mixed
+  NOT TORN: mixer -> reactor -> splitter -> mixer
+  inlets read before they are written: short
+```
+
+That flowsheet has two loops and one `add_recycle`. The second loop, the
+splitter's `short` stream back to the mixer, is closed in the topology and
+torn nowhere --- which is why the units cannot run in the order they were
+added, and why `solve()` raises `KeyError: 'short'` rather than iterating
+on it. The heuristic keeps the declared tear and adds one for the loop that
+has none; `minimum` notes that tearing `mixed` alone would break both.
+
+The returned `TearAnalysis` carries the same thing as data --- `cycles`,
+`declared`, `heuristic`, `minimum`, `uncovered`, `missing_inputs`,
+`out_of_order`, and `torn`, which is `True` when the declared tears break
+every loop that was found. The last three are the ones worth checking on a
+flowsheet that will not run: `missing_inputs` names inlets nothing
+supplies, and `out_of_order` names inlets read before they are written ---
+a unit order that needs a tear it does not have.
+
+### Tearing Automatically
+
+`solve(tears="auto")` fills the gap when no recycle has been declared:
+
+```python
+fs = Flowsheet(["A", "B"])
+fs.add_feed("feed", feed)
+fs.add_unit(Unit("mixer", mixer, ["feed", "recycle"], ["mixed"]))
+fs.add_unit(Unit("reactor", reactor, ["mixed"], ["rx_out"]))
+fs.add_unit(Unit("splitter", splitter, ["rx_out"], ["product", "recycle"]))
+
+streams = fs.solve(tears="auto")     # no add_recycle anywhere
+fs.last_solve_tear_streams           # -> ['mixed'], what it chose
+```
+
+Two strategies, and `tears=` names them: `"auto"` (`"heuristic"`) takes one
+tear per loop, preferring a stream the user declared, then one lying on
+several loops, then one leaving a mixing point --- where the stream is the
+sum of everything entering it, so a guess that is wrong in composition is
+still right in order of magnitude. `"minimum"` instead covers every loop
+with as few tears as it can (greedily: an exact minimum tear set is
+NP-hard).
+
+Tearing somewhere other than where the units happen to be listed means the
+units run in a different order, and `calculation_order` works it out: tear
+`mixed` in the loop above and the reactor runs first, the mixer last. The
+fixed point is the same one.
+
+Two things it deliberately does not do. A declared recycle always wins ---
+an automatic choice fills a gap rather than overruling a decision someone
+made --- and the choice is not kept: `fs.recycles` and `fs.units` are
+exactly what you declared once the solve returns, so nothing about a later
+`solve()` changes. Inferring tears silently would change the answer for
+flowsheets that already run, which is why the default stays `"declared"`.
+
+The pieces are usable on their own, against any flowsheet:
+
+```python
+from difflow import (
+    FlowsheetGraph, find_cycles, select_tear_streams, calculation_order,
+)
+
+graph = FlowsheetGraph.from_flowsheet(fs)   # units, streams, edges
+find_cycles(graph)                          # elementary cycles, as unit names
+tears = select_tear_streams(fs, method="minimum")
+calculation_order(graph, tears)             # unit order once those are seeded
+```
+
+`find_cycles` enumerates *elementary* cycles, of which a densely recycled
+graph can have exponentially many; `max_cycles` bounds the work and a
+`CycleEnumerationWarning` says when it was hit.
+
 Three methods iterate on the tear streams, selected with `acceleration`.
 [Convergence and Initialization](convergence.md) covers all of this in
 depth --- where the initial guess comes from, what each method costs, and

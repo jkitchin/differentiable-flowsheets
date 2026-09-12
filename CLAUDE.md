@@ -193,6 +193,15 @@ fs.set_recycle('flash', 'cstr', split_fraction=0.5)
 result = fs.solve(feed_stream)
 ```
 
+Tear placement is the user's call by default (`add_recycle`), because
+inferring it silently would change the answer for flowsheets that already
+run. `fs.tear_analysis()` reports the loops, the declared tears, what
+`select_tear_streams` would pick instead, and any inlet the unit order
+cannot supply -- reading only, no unit is called. `fs.solve(tears="auto")`
+(or `"minimum"`) picks the tears when none were declared, sequences the
+units around them with `calculation_order`, records the choice in
+`last_solve_tear_streams`, and leaves `fs.recycles`/`fs.units` as declared.
+
 ## Code Conventions
 
 ### JAX Compatibility
@@ -459,7 +468,10 @@ machinery you already have):
   inelastic spec violated at the start, which otherwise dead-ends: shrinking
   the radius cannot restore feasibility. Phase one relaxes only the SPEC
   rows -- model and link rows are definitional, so an equality-infeasible
-  subproblem is a broken model and must be reported, not absorbed.
+  subproblem is a broken model and must be reported, not absorbed. The row
+  taxonomy is total and asserted: a label matching neither `RELAXABLE_PREFIXES`
+  nor `STRUCTURAL_PREFIXES` raises, because the match is positive and a new
+  kind left unclassified would be silently left hard.
 - Restoration has its OWN trust region and acceptance test, judged on the
   nonlinear blocks: a phase-one LP given a big enough region proposes points
   it predicts feasible and the blocks are not (measured: predicted violation

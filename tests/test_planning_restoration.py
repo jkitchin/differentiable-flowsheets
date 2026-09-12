@@ -19,6 +19,10 @@ What is pinned here:
    while building it: a phase-one LP handed a big enough region proposes a
    point it *predicts* feasible and the blocks are not, so restoration needs
    its own trust region and its own acceptance test.
+5. ``test_an_unrecognised_inequality_row_is_refused`` -- the row taxonomy is
+   total. The relaxable rows are picked by a positive match, so silence is
+   the default for anything new; a third row kind added to `assemble` would
+   be left hard and phase one would minimise the wrong thing.
 """
 
 import jax
@@ -32,6 +36,7 @@ from difflow.planning import Block, DeltaBasePlanner, Network
 from difflow.planning.lp import LPModel, Spec
 from difflow.planning.planner import TrustRegionOptions
 from difflow.planning.restoration import (
+    RELAXABLE_PREFIXES, STRUCTURAL_PREFIXES,
     restoration_model, restoration_violation,
 )
 
@@ -108,6 +113,83 @@ def test_a_structural_inequality_row_is_not_relaxed():
     # The structural row is carried through with no way to violate it.
     assert not phase1.A_ub[0, lp.n_cols:].any()
     assert phase1.A_ub[1, lp.n_cols:] == pytest.approx([-1.0])
+
+
+def test_an_unrecognised_inequality_row_is_refused():
+    """A row that fits neither side of the taxonomy is an error, not a default.
+
+    `restoration_model` picks the relaxable rows by a *positive* match on the
+    name, so anything it does not recognise is quietly left hard. If a third
+    kind of `A_ub` row is ever added and it is the caller's to relax, phase
+    one cannot buy down the violation on it: restoration reports no progress,
+    `_restore` exhausts `max_restoration`, and the planner returns
+    `restoration_failed` on a problem that was recoverable -- with nothing
+    anywhere to say an artificial was never created for that row.
+
+    That is the opposite polarity from the structural-row bug above and it is
+    the one the nonlinear acceptance test cannot catch: there is nothing wrong
+    with the point restoration returns, there just isn't one. So the taxonomy
+    is asserted total here, and adding a row kind to `assemble.py` fails at
+    the moment it is added.
+    """
+    lp = LPModel(
+        columns=["u", "v"],
+        c=np.array([1.0, 0.0]),
+        A_ub=np.array([[1.0, 0.0],      # spec: recognised
+                       [0.0, 1.0]]),    # something new: not
+        b_ub=np.array([5.0, 1.0]),
+        A_eq=np.zeros((0, 2)), b_eq=np.zeros(0),
+        ub_names=["spec[purity>=]", "cut[blk.branch]"],
+        lb=np.zeros(2), ub=np.array([10.0, 10.0]),
+    )
+    with pytest.raises(ValueError, match="cannot classify"):
+        restoration_model(lp)
+
+    # The message names the offending row and where to declare it.
+    with pytest.raises(ValueError, match=r"cut\[blk\.branch\]"):
+        restoration_model(lp)
+    with pytest.raises(ValueError, match="RELAXABLE_PREFIXES"):
+        restoration_model(lp)
+
+
+def test_an_unlabelled_inequality_row_is_refused():
+    """An unlabelled row cannot be classified at all, so it is refused too.
+
+    `ub_names` is what the taxonomy reads. A row missing from it is not a
+    third kind, it is an unanswerable question -- and it would take the same
+    silent path: left hard, never relaxed, never mentioned.
+    """
+    lp = LPModel(
+        columns=["u"],
+        c=np.array([1.0]),
+        A_ub=np.array([[1.0], [1.0]]),
+        b_ub=np.array([5.0, 3.0]),
+        A_eq=np.zeros((0, 1)), b_eq=np.zeros(0),
+        ub_names=["spec[purity>=]"],          # only one of the two rows
+        lb=np.zeros(1), ub=np.array([10.0]),
+    )
+    with pytest.raises(ValueError, match="ub_names labels 1"):
+        restoration_model(lp)
+
+
+def test_every_row_assemble_emits_is_classified():
+    """The prefixes cover what `assemble` actually produces.
+
+    The check above only pays off if the two recognised prefixes are the ones
+    in use, so a real assembled LP -- specs and a piecewise block, the two
+    `ub_names` producers -- is run through the classification here. A rename
+    in `assemble.py` breaks this rather than silently un-relaxing every spec.
+    """
+    net = Network([infeasible_block()])
+    planner = _planner(net, {"b.y": 1.0},
+                       [Spec("b.y", "<=", 1.0, elastic=False)])
+    state = net.evaluate(jnp.asarray(net.decision_start()), None)
+    lp = planner.build_lp(planner.linearize(state), state, 0.1)
+
+    assert lp.ub_names, "the test model should emit inequality rows"
+    known = RELAXABLE_PREFIXES + STRUCTURAL_PREFIXES
+    assert all(n.startswith(known) for n in lp.ub_names), lp.ub_names
+    restoration_model(lp)       # does not raise
 
 
 def test_restoration_model_is_feasible_where_the_lp_is_not():
