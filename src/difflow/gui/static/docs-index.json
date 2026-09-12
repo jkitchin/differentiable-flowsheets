@@ -1,5 +1,5 @@
 {
- "n_sections": 868,
+ "n_sections": 873,
  "sections": [
   {
    "anchor": "convergence-and-initialization",
@@ -15,7 +15,7 @@
    "path": "Convergence and Initialization > Table of Contents",
    "source": "convergence.md",
    "targets": [],
-   "text": "- [When a solve does not converge](#when-a-solve-does-not-converge)\n- [Where the initial guess comes from](#where-the-initial-guess-comes-from)\n- [Unit-level `initialize()`](#unit-level-initialize)\n- [The three acceleration methods](#the-three-acceleration-methods)\n- [The traced fallback](#the-traced-fallback)\n- [The equation-oriented route](#the-equation-oriented-route)\n- [Diagnostics](#diagnostics)\n- [A worked diagnosis](#a-worked-diagnosis)\n- [Tear selection](#tear-selection)\n- [What the plugins add](#what-the-plugins-add)\n\n---"
+   "text": "- [When a solve does not converge](#when-a-solve-does-not-converge)\n- [Where the initial guess comes from](#where-the-initial-guess-comes-from)\n- [Unit-level `initialize()`](#unit-level-initialize)\n- [The three acceleration methods](#the-three-acceleration-methods)\n- [The traced fallback](#the-traced-fallback)\n- [The equation-oriented route](#the-equation-oriented-route)\n- [Diagnostics](#diagnostics)\n- [A worked diagnosis](#a-worked-diagnosis)\n- [Measured pass rates](#measured-pass-rates)\n- [Tear selection](#tear-selection)\n- [What the plugins add](#what-the-plugins-add)\n\n---"
   },
   {
    "anchor": "when-a-solve-does-not-converge",
@@ -144,6 +144,46 @@
    "source": "convergence.md",
    "targets": [],
    "text": "A one-unit loop whose tear map is $F \\mapsto F_{\\text{feed}} + k\\sqrt{F + 0.1}$,\ndeliberately given too few iterations:\n\n```python\nimport warnings\n\nimport jax\nimport jax.numpy as jnp\n\nfrom difflow import ConvergenceWarning\nfrom difflow.flowsheet import Flowsheet, Unit\nfrom difflow.streams import make_stream\n\njax.config.update(\"jax_enable_x64\", True)\n\n\nclass Loop:\n    def __init__(self, k):\n        self.k = k\n\n    def __call__(self, feed, tear):\n        return make_stream(\n            {\"A\": feed[\"F_A\"] + self.k * jnp.sqrt(tear[\"F_A\"] + 0.1)},\n            feed[\"T\"],\n            feed[\"P\"],\n        )\n\n\ndef build():\n    fs = Flowsheet(species_order=[\"A\"], default_flow=0.0)\n    fs.add_feed(\"feed\", make_stream({\"A\": 1.0}, 300.0, 1e5))\n    fs.add_unit(Unit(\"loop\", Loop(0.9), [\"feed\", \"tear\"], [\"loop_out\"]))\n    fs.add_recycle(\"loop_out\", \"tear\")\n    return fs\n\n\nfs = build()\nwith warnings.catch_warnings():\n    warnings.simplefilter(\"ignore\", ConvergenceWarning)\n    streams = fs.solve(max_iter=3)\n\nassert fs.last_solve_converged is False\nassert fs.last_solve_method == \"anderson\"\nassert fs.last_solve_residual > fs.last_solve_tol   # 1.9e-2 against 1e-8\n```\n\nThe residual is six orders above tolerance, so this is not a loop that needs a\nfew more iterations. A starting point taken from anywhere near the answer buys\nfour orders of magnitude at the *same* three iterations:\n\n```python\nimport warnings\n\nimport jax\nimport jax.numpy as jnp\n\nfrom difflow import ConvergenceWarning\nfrom difflow.flowsheet import Flowsheet, Unit\nfrom difflow.streams import make_stream\n\njax.config.update(\"jax_enable_x64\", True)\n\n\nclass Loop:\n    def __init__(self, k):\n        self.k = k\n\n    def __call__(self, feed, tear):\n        return make_stream(\n            {\"A\": feed[\"F_A\"] + self.k * jnp.sqrt(tear[\"F_A\"] + 0.1)},\n            feed[\"T\"],\n            feed[\"P\"],\n        )\n\n\nfs = Flowsheet(species_order=[\"A\"], default_flow=0.0)\nfs.add_feed(\"feed\", make_stream({\"A\": 1.0}, 300.0, 1e5))\nfs.add_unit(Unit(\"loop\", Loop(0.9), [\"feed\", \"tear\"], [\"loop_out\"]))\nfs.add_recycle(\"loop_out\", \"tear\")\n\nguess = {\"tear\": make_stream({\"A\": 2.4}, 300.0, 1e5)}\nwith warnings.catch_warnings():\n    warnings.simplefilter(\"ignore\", ConvergenceWarning)\n    fs.solve(tear_initial=guess, max_iter=3)\n\nassert fs.last_solve_residual < 1e-4     # 8.3e-6, from 1.9e-2\n```"
+  },
+  {
+   "anchor": "measured-pass-rates",
+   "heading": "Measured pass rates",
+   "path": "Convergence and Initialization > Measured pass rates",
+   "source": "convergence.md",
+   "targets": [],
+   "text": "How often any of this actually works is a measurement, and\n`difflow.convergence` is where it is made. It holds a corpus of deliberately\nhard flowsheets and runs each one across every acceleration and every\ninitialization strategy:\n\n```python\nfrom difflow.convergence import run_benchmark\n\nreport = run_benchmark()\nprint(report.as_text())\n```\n\nThe full grid is 54 solves and takes a few minutes, most of it JAX\ncompilation. Narrow it while iterating:\n\n```python\nreport = run_benchmark(cases=[\"high_gain_recycle\"], accelerations=(\"anderson\",))\n```"
+  },
+  {
+   "anchor": "passing-means-converged-and-right",
+   "heading": "Passing means converged *and* right",
+   "path": "Convergence and Initialization > Measured pass rates > Passing means converged *and* right",
+   "source": "convergence.md",
+   "targets": [],
+   "text": "A solve reports two separate things, and the benchmark keeps them apart:\n\n| | meaning |\n|---|---|\n| `Outcome.converged` | the solver's own verdict, `last_solve_converged` |\n| `Outcome.correct` | the answer closes its material balance, or matches a known one |\n| `Outcome.passed` | both |\n\nThey are not the same. `pass_rate` is 46.3% against a `convergence_rate` of\n51.9%: three of the 54 solves report success and land somewhere that does not\naudit. A benchmark that counted only the solver's flag would call those wins."
+  },
+  {
+   "anchor": "what-the-corpus-says-today",
+   "heading": "What the corpus says today",
+   "path": "Convergence and Initialization > Measured pass rates > What the corpus says today",
+   "source": "convergence.md",
+   "targets": [],
+   "text": "```\n54 solves  (tol=1e-08, max_iter=100)\npass rate         46.3%   (converged AND the answer audits)\nconvergence rate  51.9%   (the solver's own verdict)\n\nby acceleration                    by initialization\n  anderson      16/18   88.9%        default        8/18   44.4%\n  wegstein       6/18   33.3%        unit           8/18   44.4%\n  none           3/18   16.7%        feed           9/18   50.0%\n\nmean iterations over passing solves: anderson=4.9, wegstein=22.8, none=35.0\n```\n\nThree findings worth acting on:\n\n**Acceleration dominates; initialization barely registers.** Anderson passes\n88.9% where plain substitution passes 16.7%. Against that, the three starting\npoints are separated by a single solve. The obvious lever on a failing recycle\nis `acceleration`, not the guess.\n\n**The `initialize()` path (#247) changed no outcome.** `\"unit\"` \u2014 the\npropagation pass that #247 wired up \u2014 scores exactly what `\"default\"` scores,\nthe 0.01 mol/s stream it replaced: 8/18 either way. It reliably saves an\niteration or two (`flash_recycle` goes 3 \u2192 2 under Anderson) and it flips no\nverdict anywhere in the corpus. It made the first step better without making a\nfailing solve succeed. If a recycle is failing, a better guess of the same\nkind is not the fix.\n\n**Anderson is not free.** `phase_coupled_flash` is in the corpus because\nAnderson fails it where Wegstein converges in 28 iterations \u2014 and fails it by\nwalking somewhere else entirely, not by running out of iterations. On a loop\nthat changes phase regime as it iterates, try Wegstein before concluding the\nflowsheet is wrong."
+  },
+  {
+   "anchor": "the-trap-the-corpus-exposes",
+   "heading": "The trap the corpus exposes",
+   "path": "Convergence and Initialization > Measured pass rates > The trap the corpus exposes",
+   "source": "convergence.md",
+   "targets": [],
+   "text": "`tol` is an **absolute** residual on the tear, and on a high-gain loop that is\nmuch weaker than it looks. A step of $d$ on a loop of gain $g$ leaves an error\nof about $d/(1-g)$, so at $g = 0.97$ the residual understates the remaining\nerror by a factor of 33.\n\n`trace_recycle` is built on exactly that: gain 0.97 on a tear whose converged\nvalue is about $3 \\times 10^{-5}$. Wegstein stops with a residual inside\n`1e-8`, reports convergence, and is about 1% out. It is right on its own terms\n\u2014 the step really is that small \u2014 and wrong on yours.\n\nOn a loop where you know the gain is near one, tighten `tol` by roughly\n$1/(1-g)$, or audit the answer rather than the residual."
+  },
+  {
+   "anchor": "adding-a-case",
+   "heading": "Adding a case",
+   "path": "Convergence and Initialization > Measured pass rates > Adding a case",
+   "source": "convergence.md",
+   "targets": [],
+   "text": "A case is a name, a builder, and a sentence saying what makes it hard:\n\n```python\nfrom difflow.convergence import Case, run_case\n\ncase = Case(\n    name=\"my_hard_loop\",\n    build=build_my_flowsheet,          # must return a FRESH Flowsheet\n    difficulty=\"Why this one is hard, in a sentence.\",\n    tags=(\"recycle\", \"high-gain\"),\n)\nrun_case(case, acceleration=\"wegstein\")\n```\n\n`build` has to return a new flowsheet each call \u2014 `solve` records its verdict\non the object, so a shared one carries one run's result into the next. The\ndefault audit is the overall mole balance; a case whose reaction changes the\nmole count, or whose answer is known analytically, passes its own `check`.\n\nKeep at least one case in the corpus that is *meant* to pass. A benchmark\nwhere everything fails cannot distinguish a hard corpus from a broken solver;\n`two_phase_flash` is that control, and it passes 9/9.\n\n---"
   },
   {
    "anchor": "tear-selection",

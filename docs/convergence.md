@@ -21,6 +21,7 @@ loop still will not close.
 - [The equation-oriented route](#the-equation-oriented-route)
 - [Diagnostics](#diagnostics)
 - [A worked diagnosis](#a-worked-diagnosis)
+- [Measured pass rates](#measured-pass-rates)
 - [Tear selection](#tear-selection)
 - [What the plugins add](#what-the-plugins-add)
 
@@ -621,6 +622,119 @@ h = 1e-6
 finite_difference = (objective(1.0 + h) - objective(1.0 - h)) / (2 * h)
 assert abs(gradient - finite_difference) < 1e-6
 ```
+
+---
+
+## Measured pass rates
+
+How often any of this actually works is a measurement, and
+`difflow.convergence` is where it is made. It holds a corpus of deliberately
+hard flowsheets and runs each one across every acceleration and every
+initialization strategy:
+
+```python
+from difflow.convergence import run_benchmark
+
+report = run_benchmark()
+print(report.as_text())
+```
+
+The full grid is 54 solves and takes a few minutes, most of it JAX
+compilation. Narrow it while iterating:
+
+```python
+report = run_benchmark(cases=["high_gain_recycle"], accelerations=("anderson",))
+```
+
+### Passing means converged *and* right
+
+A solve reports two separate things, and the benchmark keeps them apart:
+
+| | meaning |
+|---|---|
+| `Outcome.converged` | the solver's own verdict, `last_solve_converged` |
+| `Outcome.correct` | the answer closes its material balance, or matches a known one |
+| `Outcome.passed` | both |
+
+They are not the same. `pass_rate` is 46.3% against a `convergence_rate` of
+51.9%: three of the 54 solves report success and land somewhere that does not
+audit. A benchmark that counted only the solver's flag would call those wins.
+
+### What the corpus says today
+
+```
+54 solves  (tol=1e-08, max_iter=100)
+pass rate         46.3%   (converged AND the answer audits)
+convergence rate  51.9%   (the solver's own verdict)
+
+by acceleration                    by initialization
+  anderson      16/18   88.9%        default        8/18   44.4%
+  wegstein       6/18   33.3%        unit           8/18   44.4%
+  none           3/18   16.7%        feed           9/18   50.0%
+
+mean iterations over passing solves: anderson=4.9, wegstein=22.8, none=35.0
+```
+
+Three findings worth acting on:
+
+**Acceleration dominates; initialization barely registers.** Anderson passes
+88.9% where plain substitution passes 16.7%. Against that, the three starting
+points are separated by a single solve. The obvious lever on a failing recycle
+is `acceleration`, not the guess.
+
+**The `initialize()` path (#247) changed no outcome.** `"unit"` — the
+propagation pass that #247 wired up — scores exactly what `"default"` scores,
+the 0.01 mol/s stream it replaced: 8/18 either way. It reliably saves an
+iteration or two (`flash_recycle` goes 3 → 2 under Anderson) and it flips no
+verdict anywhere in the corpus. It made the first step better without making a
+failing solve succeed. If a recycle is failing, a better guess of the same
+kind is not the fix.
+
+**Anderson is not free.** `phase_coupled_flash` is in the corpus because
+Anderson fails it where Wegstein converges in 28 iterations — and fails it by
+walking somewhere else entirely, not by running out of iterations. On a loop
+that changes phase regime as it iterates, try Wegstein before concluding the
+flowsheet is wrong.
+
+### The trap the corpus exposes
+
+`tol` is an **absolute** residual on the tear, and on a high-gain loop that is
+much weaker than it looks. A step of $d$ on a loop of gain $g$ leaves an error
+of about $d/(1-g)$, so at $g = 0.97$ the residual understates the remaining
+error by a factor of 33.
+
+`trace_recycle` is built on exactly that: gain 0.97 on a tear whose converged
+value is about $3 \times 10^{-5}$. Wegstein stops with a residual inside
+`1e-8`, reports convergence, and is about 1% out. It is right on its own terms
+— the step really is that small — and wrong on yours.
+
+On a loop where you know the gain is near one, tighten `tol` by roughly
+$1/(1-g)$, or audit the answer rather than the residual.
+
+### Adding a case
+
+A case is a name, a builder, and a sentence saying what makes it hard:
+
+```python
+from difflow.convergence import Case, run_case
+
+case = Case(
+    name="my_hard_loop",
+    build=build_my_flowsheet,          # must return a FRESH Flowsheet
+    difficulty="Why this one is hard, in a sentence.",
+    tags=("recycle", "high-gain"),
+)
+run_case(case, acceleration="wegstein")
+```
+
+`build` has to return a new flowsheet each call — `solve` records its verdict
+on the object, so a shared one carries one run's result into the next. The
+default audit is the overall mole balance; a case whose reaction changes the
+mole count, or whose answer is known analytically, passes its own `check`.
+
+Keep at least one case in the corpus that is *meant* to pass. A benchmark
+where everything fails cannot distinguish a hard corpus from a broken solver;
+`two_phase_flash` is that control, and it passes 9/9.
 
 ---
 
