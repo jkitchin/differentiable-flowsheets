@@ -161,6 +161,12 @@ class MHEResult(ParamsMixin):
         max_violation: the largest state-bound violation left by the
             penalty. Not zero by construction; check it.
         success: whether Levenberg-Marquardt converged.
+        status: *why* it stopped, as optimistix names it --- one of
+            ``"successful"``, ``"nonlinear_max_steps_reached"``,
+            ``"singular"``, ``"nonfinite_input"`` and so on. A failed
+            window says nothing useful without this: "did not converge"
+            and "the linear solve inside the step was singular" call for
+            different fixes.
         n_steps: iterations it took.
         x_names, y_names, param_names: names for reporting.
     """
@@ -179,6 +185,7 @@ class MHEResult(ParamsMixin):
     max_violation: float
     success: bool
     n_steps: int
+    status: str = "successful"
     x_names: list[str] = field(default_factory=list)
     y_names: list[str] = field(default_factory=list)
     param_names: list[str] = field(default_factory=list)
@@ -236,7 +243,8 @@ class MHEResult(ParamsMixin):
             f"{self.arrival_objective:.4g} + process "
             f"{self.process_objective:.4g} + measurement "
             f"{self.measurement_objective:.4g}",
-            f"converged = {self.success} in {self.n_steps} steps, "
+            f"converged = {self.success} ({self.status}) in "
+            f"{self.n_steps} steps, "
             f"max bound violation {self.max_violation:.3g}",
             "",
             f"{'state':<20} {'estimate':>14} {'std':>12}",
@@ -363,11 +371,44 @@ def _make_parts(problem: MHEProblem, horizon: int) -> Callable:
     return parts
 
 
+# Every outcome ``optimistix`` can report, most-specific last. The
+# membership check is deliberate: ``optimistix.RESULTS`` extends
+# ``lineax.RESULTS``, and which members exist varies with the installed
+# lineax (0.1.0 and 0.1.1 do not agree), so a name that is missing is
+# skipped rather than raising at import.
+_RESULT_NAMES = (
+    "successful",
+    "max_steps_reached",
+    "singular",
+    "breakdown",
+    "stagnation",
+    "conlim",
+    "nonfinite_input",
+    "nonlinear_max_steps_reached",
+    "nonlinear_divergence",
+)
+
+
+def _result_items() -> tuple[tuple[str, Any], ...]:
+    """``(name, item)`` for every outcome this optimistix knows about."""
+    return tuple((nm, getattr(optx.RESULTS, nm))
+                 for nm in _RESULT_NAMES if hasattr(optx.RESULTS, nm))
+
+
+def _status_name(flags: Array) -> str:
+    """Read the one-hot outcome flags ``core`` returns back to a name."""
+    hits = np.asarray(flags, dtype=bool)
+    for (nm, _), hit in zip(_result_items(), hits):
+        if hit:
+            return nm
+    return "unknown"
+
+
 def _make_core(problem: MHEProblem, horizon: int) -> Callable:
     """Build the array-in / array-out window solve.
 
     Signature ``core(x_bar, chol, y, sigma, u, d, z0) -> (xs, w, blocks,
-    covariance, success, n_steps)``. Everything it needs that is not an
+    covariance, success, status, n_steps)``. Everything it needs that is not an
     array is captured, which is what makes it safe to ``jit`` --- and a
     sliding run traces it once and calls it at every sampling time,
     because only the arrays change from window to window.
@@ -375,6 +416,7 @@ def _make_core(problem: MHEProblem, horizon: int) -> Callable:
     parts = _make_parts(problem, horizon)
     solver = optx.LevenbergMarquardt(rtol=problem.rtol, atol=problem.atol)
     max_steps = int(problem.max_steps)
+    items = _result_items()
 
     def core(x_bar, chol, y, sigma, u, d, z0):
         def fn(z, args):
@@ -386,7 +428,10 @@ def _make_core(problem: MHEProblem, horizon: int) -> Callable:
         )
         z = sol.value
         xs, w, blocks = parts(z, x_bar, chol, y, sigma, u, d)
-        success = sol.result == optx.RESULTS.successful
+        # One flag per outcome rather than the raw code: the integer
+        # values shift between lineax releases, the names do not.
+        status = jnp.stack([sol.result == item for _, item in items])
+        success = status[0]
 
         # Linearised covariance of the last state: the Gauss-Newton
         # Hessian of the *statistical* residual --- the bound penalty is
@@ -403,7 +448,8 @@ def _make_core(problem: MHEProblem, horizon: int) -> Callable:
         j = jax.jacobian(stat_residual)(z)
         g = jax.jacobian(last_state)(z)
         covariance = g @ jnp.linalg.pinv(j.T @ j) @ g.T
-        return xs, w, blocks, covariance, success, sol.stats["num_steps"]
+        return (xs, w, blocks, covariance, success, status,
+                sol.stats["num_steps"])
 
     return core
 
@@ -474,7 +520,7 @@ def estimate(
     sc = problem.scaling(k)
     core = _make_core(problem, k)
     z0 = _initial_z(problem, k, sc.d, x_guess, w_guess)
-    xs, _, _, _, _, _ = core(
+    xs, _, _, _, _, _, _ = core(
         problem.arrival.x_bar, problem.arrival.factor, window.y,
         window.sigma, window.u, sc.d, z0,
     )
@@ -512,7 +558,7 @@ def solve_mhe(
     sc = problem.scaling(k)
     core = _make_core(problem, k) if _core is None else _core
     z0 = _initial_z(problem, k, sc.d, x_guess, w_guess)
-    xs, w, blocks, covariance, success, n_steps = core(
+    xs, w, blocks, covariance, success, status, n_steps = core(
         problem.arrival.x_bar, problem.arrival.factor, window.y,
         window.sigma, window.u, sc.d, z0,
     )
@@ -536,6 +582,7 @@ def solve_mhe(
         max_violation=float(jnp.max(_violation(xs, lb, ub)))
         if problem.model.is_bounded else 0.0,
         success=bool(success),
+        status=_status_name(status),
         n_steps=int(n_steps),
         x_names=list(problem.model.x_names),
         y_names=list(problem.model.y_names),
@@ -587,20 +634,42 @@ class MHERunResult(ParamsMixin):
         """Whether every window solve converged."""
         return all(w.success for w in self.windows)
 
+    @property
+    def failures(self) -> list[tuple[int, str]]:
+        """``(window index, status)`` for every window that did not converge.
+
+        The status is what makes this actionable: a run that stopped at
+        ``max_steps`` wants a larger budget, one that reports ``singular``
+        wants a better-posed window, and guessing between them from a
+        bare ``converged = False`` wastes the diagnosis.
+        """
+        return [(i, w.status) for i, w in enumerate(self.windows)
+                if not w.success]
+
     def summary(self) -> str:
         """The run, window by window."""
         lines = [
             f"{len(self.windows)} moving-horizon solves over "
             f"[{float(self.times[0]):g}, {float(self.times[-1]):g}], "
             f"all converged = {self.converged}",
+        ]
+        if self.failures:
+            counts: dict[str, int] = {}
+            for _, st in self.failures:
+                counts[st] = counts.get(st, 0) + 1
+            lines.append("  failed: " + ", ".join(
+                f"{n} x {st}" for st, n in sorted(counts.items())))
+        lines += [
             "",
-            f"{'time':>10} {'objective':>12} {'steps':>7} {'viol':>10}",
-            "-" * 44,
+            f"{'time':>10} {'objective':>12} {'steps':>7} {'viol':>10}"
+            f"  {'status'}",
+            "-" * 56,
         ]
         for w in self.windows:
             lines.append(
                 f"{float(w.times[-1]):10g} {w.objective:12.4g} "
                 f"{w.n_steps:7d} {w.max_violation:10.2g}"
+                f"  {'' if w.success else w.status}"
             )
         return "\n".join(lines)
 

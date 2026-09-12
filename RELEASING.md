@@ -78,7 +78,7 @@ dependency must resolve from a package index.
 
 - [ ] On `main`, clean working tree, synced with remote (`git status`, `git pull`).
 - [ ] Latest CI run on `main` is green: `gh run list --branch main --limit 1`
-      (the **Tests** workflow, `.github/workflows/test.yml`, runs py3.10/3.11/3.12).
+      (the **Tests** workflow, `.github/workflows/test.yml`, runs py3.11/3.12).
 - [ ] Full test suite passes locally: `make test` (= `uv run pytest tests/ -v`).
       This includes the plugin suites (`tests/bio/`, `tests/ree/`, `tests/cc/`, `tests/gas/`).
 - [ ] Docs build clean: `make book` (`uv run jupyter-book build .`).

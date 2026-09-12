@@ -383,11 +383,25 @@ model whose parameters drifted last week is optimising the wrong plant.
 | A parameter tracks sensor noise | its `process_std` is too large | shrink it; it sets the allowed drift rate |
 | A real drift is rejected | its `process_std` is too small | raise it |
 | `max_violation` not small | penalty too weak | raise `constraint_weight` |
-| `success=False` on a window | Levenberg-Marquardt hit `max_steps` or a tolerance | the run continues; inspect `MHERunResult.summary()` before trusting it |
+| `success=False` on a window | read `MHEResult.status` --- it names which one | the run continues; inspect `MHERunResult.failures` before trusting it |
 | Objective far above the $\chi^2$ critical value | data and model disagree beyond the stated noise | `mhe_global_test`, then read the three objective parts |
 
 The estimator does **not** raise on a failed window: `MHEResult.success` reports
 it so a sliding run continues rather than stopping on one bad sample.
+
+It also reports *why*. `MHEResult.status` is optimistix's own verdict --
+`"successful"`, `"nonlinear_max_steps_reached"`, `"singular"`,
+`"nonfinite_input"` and so on -- and `MHERunResult.failures` lists
+`(window index, status)` for every window that did not converge. The
+distinction is the whole diagnosis: `nonlinear_max_steps_reached` wants a
+larger `max_steps` or looser `rtol`/`atol`, while `singular` means the
+window itself is ill-posed and a bigger budget will not help it.
+
+```python
+run = run_mhe(model, window, horizon=6, process_std=q_std, x0=x0, P0=P0)
+if not run.converged:
+    print(run.failures)     # [(3, 'nonlinear_max_steps_reached'), ...]
+```
 
 ## API summary
 

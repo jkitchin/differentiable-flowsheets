@@ -448,6 +448,39 @@ def test_mhe_matches_kalman_with_multirate_gaps():
                        atol=1e-9)
 
 
+def test_a_failed_window_says_why_it_failed():
+    # "converged = False" on its own sends you guessing. The status is
+    # optimistix's own verdict, so a starved step budget is
+    # distinguishable from a singular linear solve without a rerun.
+    a = np.array([[0.95, 0.05], [0.0, 0.9]])
+    c = np.array([[1.0, 0.0]])
+    q_std = np.array([0.02, 0.02])
+    _, ys = simulate(a, c, [2.0, 1.0], 30, q_std, 0.3, seed=11)
+    window = dense_window(ys, 0.3, ["ya"])
+    model = linear_model(jnp.asarray(a), jnp.asarray(c),
+                         x_names=["a", "b"], y_names=["ya"])
+
+    ok = run_mhe(model, window, horizon=6, process_std=jnp.asarray(q_std),
+                 x0=jnp.array([2.0, 1.0]), P0=jnp.eye(2) * 0.25)
+    assert ok.converged, ok.summary()
+    assert ok.failures == []
+    assert {w.status for w in ok.windows} == {"successful"}
+
+    starved = run_mhe(model, window, horizon=6,
+                      process_std=jnp.asarray(q_std),
+                      x0=jnp.array([2.0, 1.0]), P0=jnp.eye(2) * 0.25,
+                      max_steps=4)
+    assert not starved.converged
+    assert starved.failures
+    assert {st for _, st in starved.failures} == {
+        "nonlinear_max_steps_reached"
+    }
+    # And the reason reaches the report, which is the only place a user
+    # who did not check `failures` would ever see it.
+    assert "nonlinear_max_steps_reached" in starved.summary()
+    assert "nonlinear_max_steps_reached" in starved.windows[0].summary()
+
+
 def test_mhe_recovers_states_better_than_the_raw_measurements():
     a = np.array([[0.95, 0.05], [0.0, 0.9]])
     c = np.array([[1.0, 0.0]])
@@ -463,7 +496,7 @@ def test_mhe_recovers_states_better_than_the_raw_measurements():
     est = np.asarray(run.x)
     raw_rmse = np.sqrt(np.mean((ys[:, 0] - xs[:, 0]) ** 2))
     mhe_rmse = np.sqrt(np.mean((est[:, 0] - xs[:, 0]) ** 2))
-    assert run.converged
+    assert run.converged, run.summary()
     assert mhe_rmse < 0.5 * raw_rmse
     # The unmeasured state is recovered too, which no amount of
     # smoothing of the raw signal could do.
@@ -505,7 +538,7 @@ def test_mhe_objective_is_a_chi_squared_statistic():
     sigma = jnp.full((k + 1, 1), r_std)
 
     def objective(y):
-        _, _, blocks, _, _, _ = core(
+        _, _, blocks, _, _, _, _ = core(
             problem.arrival.x_bar, problem.arrival.factor, y, sigma, u, d, z0
         )
         return jnp.sum(jnp.concatenate(blocks[:3]) ** 2)
@@ -728,7 +761,7 @@ def test_joint_estimation_tracks_a_drifting_parameter(drift_run):
     _, _, run, a_true = drift_run
     est = np.asarray(run.parameters["a"])
 
-    assert run.converged
+    assert run.converged, run.summary()
     assert est.shape == a_true.shape
     # It starts from a prior of 0.95 and has to walk down to 0.74.
     prior_rmse = np.sqrt(np.mean((0.95 - a_true[8:]) ** 2))

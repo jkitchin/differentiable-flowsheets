@@ -64,7 +64,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # One interpreter on a pull request, all three on main.
+        # One interpreter on a pull request, both of them on main.
         #
         # The jobs run concurrently, so this does not make a pull request
         # finish sooner -- it costs the same wall-clock as one job. What it
@@ -73,16 +73,17 @@ jobs:
         # same runner pool as every other repository on the account, and two
         # of them have almost never been the ones to fail.
         #
-        # Almost, not never, and the exception is the cost of this change.
-        # Over 134 full-matrix runs, three had 3.10 fail while 3.11 passed
-        # (all on main, 2026-07-17/18). Under this split that break would
-        # reach main before anything noticed, because a pull request no
-        # longer runs 3.10 -- merges still run all three, so it is caught one
-        # commit later rather than not at all. If that trade stops being
-        # worth it, delete the condition and keep the list.
+        # Almost, not never. Every recorded exception was 3.10: over 134
+        # full-matrix runs, three had 3.10 fail while 3.11 passed (all on
+        # main, 2026-07-17/18), and 3.10 has since been dropped -- it was
+        # pinned to jax 0.6.2 / lineax 0.1.0, a frozen stack three JAX
+        # minors behind what 3.12 resolves, and the divergence was the
+        # failure, not the Python version. 3.11 and 3.12 sit one minor
+        # apart and have never disagreed here. If they start to, delete
+        # the condition and keep the list.
         python-version: >-
           ${{ fromJSON(github.event_name == 'pull_request'
-              && '["3.11"]' || '["3.10", "3.11", "3.12"]') }}
+              && '["3.11"]' || '["3.11", "3.12"]') }}
         # Sharding costs job-minutes and buys wall-clock, and it buys less
         # of it each time: three shards are ~7 min against the ~14 min of an
         # unsharded parallel run, where a fourth would save under two more
