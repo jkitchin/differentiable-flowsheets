@@ -311,6 +311,11 @@ class Flowsheet:
         self.last_solve_tol: float | None = None
         #: tear-stream (recycle destination) names of the last recycle solve
         self.last_solve_tear_streams: list[str] = []
+        #: iterations of the last solve on which ``clip_negative_flows``
+        #: actually moved the proposed iterate.  Zero on the unaccelerated
+        #: path, which does not clip at all (#263), and zero on an
+        #: accelerated solve whose iterates all stayed non-negative.
+        self.last_solve_clip_active: int = 0
 
     def add_feed(self, name: str, stream: Stream) -> None:
         """Add a feed stream to the flowsheet.
@@ -411,6 +416,36 @@ class Flowsheet:
                 where a negative fixed point is legitimate and clipping
                 prevents convergence. Only flow entries are clipped;
                 temperature and pressure are never touched.
+
+                **It binds on the accelerated paths only** (#263), and
+                that is deliberate rather than an oversight. The
+                projection is a safeguard on *extrapolation*: Wegstein
+                and Anderson each propose an iterate no unit computed,
+                and that guess can leave the physical orthant on the way
+                to a solution entirely inside it. ``acceleration="none"``
+                extrapolates nothing --- its iterate is
+                ``x + damping (g(x) - x)``, which for the usual
+                ``damping <= 1`` cannot leave a region both ends are in
+                --- so there is no guess to safeguard, and clipping there
+                would clip ``g`` itself. That is a different act with two
+                costs: it invents fixed points the model does not have,
+                and it sits inside the map ``optx.fixed_point``
+                implicitly differentiates. Wherever a tear flow converges
+                to exactly zero --- an ordinary species absent from a
+                recycle --- ``jnp.maximum(x, 0)`` contributes a
+                derivative of one half at the kink, and the gradient
+                comes back wrong while the forward pass stays right. See
+                ``tests/test_flowsheet_tear_clip.py::
+                test_clipping_inside_the_map_would_break_the_gradient``.
+
+                Because a traced solve falls back to ``"none"``, the clip
+                never applies under ``jax.grad`` or ``jit``.
+
+                When the projection actually *moves* an iterate it is
+                counted in :attr:`last_solve_clip_active`, and a solve
+                that then fails to converge says so in its warning ---
+                a clipped signed tear is the one failure mode this flag
+                causes, and it used to be silent.
             on_nonconvergence: What to do when the tear iteration runs out
                 of iterations without meeting ``tol``. The returned streams
                 are the last iterate either way, and the diagnostics are in
@@ -502,11 +537,13 @@ class Flowsheet:
             self.last_solve_converged = True
             self.last_solve_tol = tol
             self.last_solve_tear_streams = []
+            self.last_solve_clip_active = 0
             return self._solve_sequential()
 
         self.last_solve_method = acceleration
         self.last_solve_tol = tol
         self.last_solve_tear_streams = [dest for dest in self.recycles.values()]
+        self.last_solve_clip_active = 0
 
         # Initialize tear streams.  The guess comes from the SOURCE end of
         # each recycle: `dest` is an inlet, so nothing in the flowsheet
@@ -546,6 +583,13 @@ class Flowsheet:
         # last_solve_converged, so the non-convergence check is done once
         # here rather than at each of the three returns.
         if acceleration == "none":
+            # No clip_negative_flows here, and not by omission (#263).  The
+            # projection safeguards an *extrapolated* guess; this path
+            # extrapolates nothing, so clipping it would clip g itself --
+            # inventing fixed points, and putting a kink inside the map
+            # that optx.fixed_point implicitly differentiates.  The
+            # argument, and the gradient it breaks, are in solve's
+            # docstring.
             streams = self._solve_with_recycle_damped(
                 tear_streams, tol, max_iter, damping
             )
@@ -673,6 +717,19 @@ class Flowsheet:
             "are off by the tear residual. Try more iterations (max_iter), a "
             "better tear guess (tear_initial) or a different acceleration."
         )
+        if self.last_solve_clip_active:
+            # The one failure this flag causes by itself, and the reason it
+            # is worth a sentence of its own: a tear whose answer is
+            # genuinely signed cannot be reached through the projection, and
+            # nothing else in the message would ever say so (#263).
+            message += (
+                f" The negative-flow clip moved the proposed iterate on "
+                f"{self.last_solve_clip_active} of those iterations: if any "
+                "tear flow here is legitimately signed (a gas network, a "
+                "power flow, any tear carrying a signed quantity), that "
+                "projection puts the fixed point out of reach -- pass "
+                "clip_negative_flows=False."
+            )
         if action == "raise":
             raise ConvergenceError(message)
         warnings.warn(message, ConvergenceWarning, stacklevel=3)
@@ -708,6 +765,31 @@ class Flowsheet:
     def _clip_flows(self, x: Array, mask: Array) -> Array:
         """Project the flow entries of a packed tear array onto [0, inf)."""
         return jnp.where(mask, jnp.clip(x, 0.0, None), x)
+
+    def _clip_and_count(
+        self, x: Array, mask: Array, hits: Array
+    ) -> tuple[Array, Array]:
+        """:meth:`_clip_flows`, counting the steps where it changed something.
+
+        A projection that moves an iterate is the one failure mode
+        ``clip_negative_flows=True`` can cause on its own: on a tear whose
+        answer is genuinely signed it makes the fixed point unreachable,
+        and the solve then fails for a reason nothing in the output named
+        (#263).  Counting the steps where it bound is what lets
+        :meth:`_report_nonconvergence` name it.
+
+        The count stays on device and is read once, after the loop: the
+        accelerated iterations already pay one synchronisation per step
+        for the residual, and a diagnostic has no business adding a
+        second.
+        """
+        clipped = self._clip_flows(x, mask)
+        return clipped, hits + jnp.any(clipped != x)
+
+    def _record_clip_activity(self, hits: Array) -> None:
+        """Read the clip counter off the device, once the loop is done."""
+        count = _concrete(hits)
+        self.last_solve_clip_active = 0 if count is None else int(count)
 
     def _initialize_tear_stream(
         self,
@@ -1037,6 +1119,7 @@ class Flowsheet:
         self.last_solve_converged = False
         x_old = None
         g_prev = None
+        clip_hits = jnp.zeros((), dtype=jnp.int32)
 
         # First iteration
         streams = dict(self.feeds)
@@ -1071,7 +1154,9 @@ class Flowsheet:
                 # Apply Wegstein acceleration
                 x_curr = wegstein_acceleration(x_old, x_prev, g_prev, g_curr)
                 if clip_negative_flows:
-                    x_curr = self._clip_flows(x_curr, flow_mask)
+                    x_curr, clip_hits = self._clip_and_count(
+                        x_curr, flow_mask, clip_hits
+                    )
 
             # Update history
             g_prev = g_curr
@@ -1086,6 +1171,8 @@ class Flowsheet:
 
             new_tear = {dest: streams[source] for source, dest in self.recycles.items()}
             g_curr = self._streams_to_array(new_tear)
+
+        self._record_clip_activity(clip_hits)
 
         # Final solve with converged tear streams
         final_tear = self._array_to_streams(g_curr, tear_names)
@@ -1123,6 +1210,7 @@ class Flowsheet:
         accelerator = AndersonAccelerator(m=depth)
 
         x_curr = self._streams_to_array(tear_initial)
+        clip_hits = jnp.zeros((), dtype=jnp.int32)
 
         # Pessimistic defaults; see _solve_with_wegstein.
         self.last_solve_iterations = max_iter
@@ -1155,8 +1243,12 @@ class Flowsheet:
             # Apply Anderson acceleration
             x_next = accelerator.step(x_curr, g_curr)
             if clip_negative_flows:
-                x_next = self._clip_flows(x_next, flow_mask)
+                x_next, clip_hits = self._clip_and_count(
+                    x_next, flow_mask, clip_hits
+                )
             x_curr = x_next
+
+        self._record_clip_activity(clip_hits)
 
         # Final solve with converged tear streams
         final_tear = self._array_to_streams(x_curr, tear_names)
