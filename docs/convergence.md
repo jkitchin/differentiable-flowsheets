@@ -63,8 +63,9 @@ that ran. Then work down this list.
 
 4. **Check `clip_negative_flows`.** If any tear flow is legitimately signed,
    the default clipping is not a safeguard but a bug, and the solve cannot
-   converge. This is a correctness switch, not a tuning knob — see
-   [Clipping negative flows is a correctness switch](#clipping-negative-flows-is-a-correctness-switch).
+   converge. The warning says so when it happened: it counts the iterations on
+   which the projection moved the proposed iterate. See
+   [Clipping negative flows safeguards an extrapolation](#clipping-negative-flows-safeguards-an-extrapolation).
 
 5. **Look for a unit that could not run.** A `TearInitializationWarning` during
    the solve says the initial pass over the units failed somewhere and that
@@ -294,7 +295,7 @@ best on a loop with one dominant mode, and Anderson pulls ahead as the tear
 vector grows — but the order of magnitude is typical: acceleration is worth a
 factor of a few, not a factor of a hundred.
 
-### Clipping negative flows is a correctness switch
+### Clipping negative flows safeguards an extrapolation
 
 Both accelerated methods extrapolate, and an extrapolated molar flow can land
 below zero on the way to a solution that is entirely positive. By default the
@@ -314,6 +315,51 @@ streams = fs.solve(clip_negative_flows=False)   # signed tear flows
 
 If a solve with signed flows will not converge and nothing else explains it,
 this is the first thing to check.
+
+### Clipping binds on the accelerated paths only
+
+`acceleration="none"` does not clip, and passing the flag to it changes
+nothing. That is a decision (#263), not an omission, and it follows from what
+the projection is *for*.
+
+| `acceleration` | proposes | clip applies |
+|---|---|---|
+| `"none"` | `x + α(g(x) − x)`, a step toward a value the units computed | no |
+| `"wegstein"` | an extrapolation from the last two iterates | yes |
+| `"anderson"` | an extrapolation from the last `depth` iterates | yes |
+
+The projection guards a *guess no unit computed*. Wegstein and Anderson each
+propose one, and it can leave the physical orthant on the way to a solution
+entirely inside it. The unaccelerated step is a convex combination of `x` and
+`g(x)` (for the usual `α ≤ 1`), so it cannot leave a region both ends are in;
+there is no guess to guard. Clipping there would clip `g` itself, which is a
+different act with two costs:
+
+- **It invents fixed points.** `clip(g(x)) = x` has solutions where `g(x) = x`
+  has none — the module docstring of `difflow.convergence` names this as one of
+  the ways a solve reports success and lands somewhere that does not audit.
+- **It breaks gradients.** A traced solve falls back to `"none"`, so that path
+  *is* the one `jax.grad` runs on, and the clip would sit inside the map
+  `optx.fixed_point` implicitly differentiates. Wherever a tear flow converges
+  to exactly zero — an ordinary species absent from a recycle —
+  `jnp.maximum(x, 0)` contributes a derivative of one half at its kink. On the
+  two-species loop in `tests/test_flowsheet_tear_clip.py` the forward answer
+  stays right and the gradient comes back 1.333 against an exact 2.0.
+
+What the asymmetry used to cost was silence: an accelerated solve on a signed
+tear failed with nothing in the output naming the projection as the reason.
+That is now reported. `fs.last_solve_clip_active` counts the iterations on
+which the clip actually moved the proposed iterate, and a non-convergence
+warning with a non-zero count says so and names the remedy:
+
+```text
+Recycle solve did not converge: tear stream(s) tear reached a residual of
+1.324e+00 after 100 of 100 iterations ... The negative-flow clip moved the
+proposed iterate on 100 of those iterations: if any tear flow here is
+legitimately signed (a gas network, a power flow, any tear carrying a signed
+quantity), that projection puts the fixed point out of reach -- pass
+clip_negative_flows=False.
+```
 
 ### Damping
 
@@ -471,6 +517,7 @@ converged:
 | `last_solve_iterations` | iterations used; equals `max_iter` when it did not converge |
 | `last_solve_method` | `"anderson"`, `"wegstein"`, `"none"`, `"fixed_point (traced)"`, or `"direct"` for a recycle-free sequential solve |
 | `last_solve_tear_streams` | the tear (recycle destination) names |
+| `last_solve_clip_active` | iterations on which `clip_negative_flows` actually moved the proposed iterate; always `0` on the unaccelerated path, which does not clip |
 
 The tri-state `last_solve_converged` is the one to test against `is False`
 rather than falsy: `None` means "not judged", not "failed".
@@ -701,13 +748,15 @@ fix.
 iterations — Anderson walks off somewhere else rather than running out of road.
 And `signed_tear` inverts the ranking outright: plain substitution solves it
 and *both* accelerated methods fail. The reason is worth knowing —
-`clip_negative_flows` defaults to `True` and is applied by the Wegstein and
-Anderson paths but **not** by the unaccelerated one, so on a tear whose answer
-is genuinely negative the two accelerated methods carry a projection the plain
-one does not. Passing `clip_negative_flows=False` fixes Anderson on it
+`clip_negative_flows` defaults to `True` and binds on the Wegstein and Anderson
+paths but not on the unaccelerated one
+([why](#clipping-binds-on-the-accelerated-paths-only)), so on a tear whose answer is
+genuinely negative the two accelerated methods carry a projection the plain one
+does not. Passing `clip_negative_flows=False` fixes Anderson on it
 immediately (100 iterations without convergence → 13 with). This is the same
 point `difflow_gas` already makes for signed flows; it applies to any tear
-whose components can go negative.
+whose components can go negative. Since #263 the failing solve says this for
+itself rather than leaving it to be worked out.
 
 **A disjunction does not need binaries here.** `regime_switch` is a unit
 choosing between two linear branches with the answer exactly on the boundary,
@@ -756,6 +805,28 @@ A case is a name, a builder, and a sentence saying what makes it hard:
 
 ```python
 from difflow.convergence import Case, run_case
+from difflow.flowsheet import Flowsheet, Unit
+from difflow.streams import make_stream
+
+
+def build_my_flowsheet():
+    """A FRESH flowsheet every call: solve() records its verdict on the object."""
+    def mix(feed, tear):
+        return make_stream({"A": feed["F_A"] + tear["F_A"]},
+                           feed["T"], feed["P"])
+
+    def split(inlet):                  # 95% back round: loop gain 0.95
+        flow = inlet["F_A"]
+        return (make_stream({"A": 0.95 * flow}, inlet["T"], inlet["P"]),
+                make_stream({"A": 0.05 * flow}, inlet["T"], inlet["P"]))
+
+    fs = Flowsheet(["A"], default_flow=0.01)
+    fs.add_feed("feed", make_stream({"A": 1.0}, 300.0, 101325.0))
+    fs.add_unit(Unit("mix", mix, ["feed", "tear"], ["mixed"]))
+    fs.add_unit(Unit("split", split, ["mixed"], ["recycle", "product"]))
+    fs.add_recycle("recycle", "tear")
+    return fs
+
 
 case = Case(
     name="my_hard_loop",
