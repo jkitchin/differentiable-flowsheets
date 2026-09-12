@@ -72,6 +72,23 @@
 # measured on a saponified system has somewhere to put its real correlation;
 # each acidic record declares `correlation_basis: unsaponified` to say that
 # its pH slope means what a pH slope means.
+# REFERENCE CONDITIONS, AND WHY THEY ARE DECLARED (#268)
+# Every record states the condition its correlation is *anchored* at:
+# `reference_concentration` for the extractant charge, and `reference_pH`
+# (cation exchange) or `reference_nitrate` (solvating) for the driving
+# variable. These are the basis for any quantity DERIVED from the
+# correlation -- the Langmuir constants in equilibrium/loading.py are
+# computed at them rather than stored as literals, which is how those
+# literals came to describe an extractant the database no longer contained
+# (three of four were reconcilable with the coefficients at NO pH, off by
+# factors of 4-8).
+#
+# The `reference_pH` values below are the conditions
+# `data/separation_factors.yaml` already declares as typical operating for
+# the same extractant -- restated here, where a derived quantity can reach
+# them, rather than newly invented. They are a DECLARED BASIS, not a
+# measured anchor: changing one changes every derived quantity under it,
+# which is the point of having it written down.
 #
 # SOLVATING MODEL (`nitrate_coefficients`):
 #   log10(D) = a + b*log10([NO3-]/reference_nitrate)
@@ -220,6 +237,7 @@ extractants:
       Y:  -2200
 
     valid_ph_range: [1.0, 5.0]
+    reference_pH: 3.0
     valid_temp_range: [283, 333]  # K
     reference_concentration: 0.5  # M
 
@@ -299,6 +317,7 @@ extractants:
       Y:  -2100
 
     valid_ph_range: [1.5, 5.5]
+    reference_pH: 3.5
     valid_temp_range: [283, 333]
     reference_concentration: 0.5
     concentration_exponent: 3.0
@@ -367,6 +386,7 @@ extractants:
       Y:  -2000
 
     valid_ph_range: [3.0, 7.0]
+    reference_pH: 5.0
     valid_temp_range: [283, 333]
     reference_concentration: 0.3
     concentration_exponent: 3.0
@@ -1179,6 +1199,17 @@ extractants:
     valid_temp_range: [288, 313]  # deliberately narrow: there is NO T data
     reference_concentration: 0.5  # 14% v/v at MW 270 / density 0.96
     concentration_exponent: 3.0   # Q1 Eq. 2.88, cube law in FREE extractant
+    # The pH at which the `a` ladder above is referenced, and so the condition
+    # every quantity derived from this record is evaluated at (#268). 4.5 is
+    # the midpoint of the slope-3 verification range and the same pH the
+    # saponification block below uses. It is also, checkably, the pH the
+    # deleted `typical_K_L` literal had been computed at: deriving
+    # `K_L = D(4.5, 0.5 M, 298 K) / (0.5 / 3)` reproduces all fifteen of its
+    # entries to four significant figures. Declaring it is what lets those
+    # constants be computed rather than stored beside the ladder they came
+    # from -- without it, a record that plainly HAS a reference condition
+    # cannot say so, and the derivation refuses rather than guessing 4.5.
+    reference_pH: 4.5
     # Commodity refinery by-product; the cheapest extractant in this file by
     # an order of magnitude, which is most of why the industry uses it.
     cost_usd_kg: 1.0
@@ -1271,6 +1302,11 @@ provenance:
        note: "The concentration at which `a` is defined. A normalization
               choice; changing it changes `a` by n*log10(ratio)."}
     - {pattern: "extractants.*.reference_nitrate",        source: CONV}
+    - {pattern: "extractants.*.reference_pH",             source: CONV,
+       note: "The pH at which `a` is defined, and so the condition every
+              quantity derived from the record is evaluated at (#268). A
+              declared basis, like `reference_concentration`: changing it
+              moves every derived constant with it."}
     - {pattern: "extractants.*.diluents",                 source: CONV}
     - {pattern: "extractants.*.cost_usd_kg",              source: EST,
        note: "*** NOT A QUOTED PRICE. *** Indicative only, same warning as the

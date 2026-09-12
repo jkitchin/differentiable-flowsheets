@@ -314,6 +314,22 @@ class MyUnit:
   loading past `1/monomers_per_ree`, which a total-basis correlation returns a
   finite D for. Do NOT compose with `LoadingIsotherm.apparent_D`: that caps
   the answer, this changes the input (#190/#204's double count).
+- Langmuir constants are DERIVED (#268): `typical_K_L` was a second extractant
+  table hand-synced with the YAML, and three of four entries matched the
+  coefficients at NO pH (rms log10 residual 0.62/0.85/0.92 at best fit). Now
+  `K_L = D(reference)/q_max` computed on access; `EXTRACTANT_CAPACITIES` is a
+  derived Mapping, not a dict. Every record declares its basis:
+  `reference_concentration` plus `reference_pH` (cation exchange) or
+  `reference_nitrate` (solvating). A missing extractant was already tested for;
+  a STALE one was not, which is why it drifted silently. `naphthenic_acid` is
+  the check that the derivation is right: at its declared `reference_pH` of 4.5
+  it reproduces all fifteen of the deleted literals to four figures, which the
+  other three could not be made to do at any pH. The memo in front of it is
+  keyed on a FINGERPRINT of the record, never on the extractant name --
+  `add_element_to_extractant` mutates a record IN PLACE, so identity and
+  equality both say "unchanged" while the basis of every derived constant has
+  moved, and a name-keyed memo puts the staleness back in memory where no
+  drifted number in a file gives it away.
 - Uncertain D: `REEDistribution(..., coefficient_overrides={"Nd": {"a": ...}})`
   replaces tabulated log10(D) correlation coefficients, and accepts JAX tracers,
   so a distribution can be put on D and differentiated through. Passed through by
