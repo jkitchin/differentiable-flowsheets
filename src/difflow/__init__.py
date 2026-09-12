@@ -191,6 +191,7 @@ from difflow.flowsheet import (
     create_objective,
     ConvergenceWarning,
     ConvergenceError,
+    TearToleranceWarning,
 )
 from difflow.report import (
     ConvergenceInfo,
@@ -494,6 +495,7 @@ __all__ = [
     "create_objective",
     "ConvergenceWarning",
     "ConvergenceError",
+    "TearToleranceWarning",
     # Reporting
     "Report",
     "OptimizationReport",

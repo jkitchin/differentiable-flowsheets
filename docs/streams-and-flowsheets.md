@@ -441,7 +441,10 @@ results = fs.solve(
     acceleration='wegstein',  # 'none', 'wegstein' (default: 'anderson')
     anderson_depth=5,         # History depth, for acceleration='anderson'
     damping=1.0,              # Step fraction, for acceleration='none'
-    clip_negative_flows=True, # False for signed tear flows (e.g. gas networks)
+    clip_negative_flows=True, # False for signed tear flows (e.g. gas networks);
+                              # binds on the accelerated paths only
+    error_probe=2,            # extra passes measuring the error tol does not
+    tol_basis='step',         # 'error' to make tol mean the answer's accuracy
 )
 ```
 
