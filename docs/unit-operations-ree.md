@@ -524,6 +524,72 @@ print(f"Optimal pH: {opt_pH:.2f}, Max SF: {max_SF:.2f}")
 ```
 
 
+(free-extractant)=
+### Free extractant, not total
+
+`Q1` Eq. 2.88 — the working correlation the naphthenic-acid form is built on —
+is
+
+$$\lg D = \lg K_{ex} + 3\lg (\mathrm{HA})_o + 3\,\mathrm{pH}$$
+
+and Eq. 2.89 says what `(HA)o` is:
+
+$$(\mathrm{HA})_o = [\mathrm{HA}]_0 - 3\,(\mathrm{REA}_3)$$
+
+**free** extractant — total charged minus three monomers per extracted RE(III).
+`REEDistribution.get_D` applies the same functional form with `[HA]` the *total*
+charged. The two agree on a clean solvent and diverge where the cascade works
+hardest, and the error flatters the model: total overstates what is available,
+so `D` is overpredicted exactly there (#267).
+
+`solve_free_extractant` closes the loop rather than approximating it:
+
+$$c_{org} = D\big([\mathrm{HA}]_{free}\big)\,c_{aq}, \qquad
+[\mathrm{HA}]_{free} = [\mathrm{HA}]_0 - m\,c_{org}$$
+
+Substituting leaves one scalar equation in `[HA]_free` that is strictly
+decreasing and changes sign between `0` and `[HA]_0` — one root, bracketed, on a
+smooth monotone function. It is solved with `optimistix.root_find`, so it
+differentiates by the implicit function theorem rather than by unrolling.
+
+```python
+from difflow_ree import REEDistribution, solve_free_extractant
+
+dist = REEDistribution(extractant="D2EHPA", elements=("Nd",), concentration=0.5)
+r = solve_free_extractant(dist, "Nd", c_aq=0.03, pH=3.0)
+
+r.D                 # 0.362 -- against free extractant
+r.D_total_basis     # 0.549 -- what the correlation says against total
+r.overprediction    # 1.52
+r.loading_fraction  # 0.130
+```
+
+This also restores something #204's closing note recorded as lost: keeping the
+correlation's fixed-parameter concentration term left `D` independent of stage
+loading. The free extractant enters the *correlation* here — it is not a factor
+applied afterwards — so this is not a reintroduction of the double count #190
+found. `LoadingIsotherm.apparent_D` caps an answer after `D` is computed; this
+changes the input that produced it. **Do not compose the two.**
+
+#### An impossible loading is now impossible
+
+`m * c_org > [HA]_0` leaves negative free extractant, which Eq. 2.89 duly
+returns and which has no logarithm. A correlation written against total does not
+notice — it takes `log10([HA]_0 / C_ref)` and hands back a finite `D`.
+
+```python
+from difflow_ree import implied_loading_fraction, check_loading_capacity
+
+# Z1 Table 4.36 system 2: 0.13 mol/L naphthenic acid, ~0.066 mol/L RE organic
+implied_loading_fraction("naphthenic_acid", 0.066, 0.13)   # 1.523
+check_loading_capacity("naphthenic_acid", 0.066, 0.13)     # ExtractantCapacityWarning
+```
+
+That row is why system 2 was rejected as an anchor in favour of system 1, which
+sits at 19 % of capacity — a rejection that previously had to be made by hand.
+`action="raise"` turns it into a `ValueError`; the self-consistent solve above
+cannot land there at all.
+
 ---
 
 (mass-action-closure)=
@@ -544,7 +610,10 @@ inside a correlation:
 - **Competitive loading was a correction rather than an outcome.** The elements
   share one finite extractant inventory. That should emerge from a single free
   extractant balance, not from multiplying independent `D` values by
-  `(1 - theta)^3` (see #189, #190, #191).
+  `(1 - theta)^3` (see #189, #190, #191). #267 closes the balance for a
+  *single* element at the correlation level (see
+  [Free extractant, not total](#free-extractant-not-total)); sharing one
+  inventory *between* elements is still what L2 is for.
 - **Extractant selection was not physically grounded.** A fitted `D` cannot
   respond to loading or medium, which is exactly where the ordering between
   extractants actually changes.

@@ -1,5 +1,5 @@
 {
- "n_sections": 874,
+ "n_sections": 876,
  "sections": [
   {
    "anchor": "convergence-and-initialization",
@@ -6696,7 +6696,25 @@
    "targets": [
     "separation-factors"
    ],
-   "text": "The separation factor SF = D1/D2 determines separation feasibility:\n\n```python\nfrom difflow_ree import REEDistribution\n\ndist = REEDistribution(extractant=\"PC88A\", elements=(\"Nd\", \"Pr\"))\n\n# Separation factor at pH 3.0\nSF = dist.get_separation_factor(\"Nd\", \"Pr\", pH=3.0)\nprint(f\"SF(Nd/Pr) = {SF:.2f}\")\n\n# Find optimal pH for separation\nopt_pH, max_SF = dist.optimal_pH_for_separation(\"Nd\", \"Pr\", pH_range=(1.0, 5.0))\nprint(f\"Optimal pH: {opt_pH:.2f}, Max SF: {max_SF:.2f}\")\n```\n\n\n---\n\n(mass-action-closure)="
+   "text": "The separation factor SF = D1/D2 determines separation feasibility:\n\n```python\nfrom difflow_ree import REEDistribution\n\ndist = REEDistribution(extractant=\"PC88A\", elements=(\"Nd\", \"Pr\"))\n\n# Separation factor at pH 3.0\nSF = dist.get_separation_factor(\"Nd\", \"Pr\", pH=3.0)\nprint(f\"SF(Nd/Pr) = {SF:.2f}\")\n\n# Find optimal pH for separation\nopt_pH, max_SF = dist.optimal_pH_for_separation(\"Nd\", \"Pr\", pH_range=(1.0, 5.0))\nprint(f\"Optimal pH: {opt_pH:.2f}, Max SF: {max_SF:.2f}\")\n```\n\n\n(free-extractant)="
+  },
+  {
+   "anchor": "free-extractant-not-total",
+   "heading": "Free extractant, not total",
+   "path": "Rare Earth Element (REE) Unit Operations > Equilibrium Models > Free extractant, not total",
+   "source": "unit-operations-ree.md",
+   "targets": [
+    "free-extractant"
+   ],
+   "text": "`Q1` Eq. 2.88 \u2014 the working correlation the naphthenic-acid form is built on \u2014\nis\n\n$$\\lg D = \\lg K_{ex} + 3\\lg (\\mathrm{HA})_o + 3\\,\\mathrm{pH}$$\n\nand Eq. 2.89 says what `(HA)o` is:\n\n$$(\\mathrm{HA})_o = [\\mathrm{HA}]_0 - 3\\,(\\mathrm{REA}_3)$$\n\n**free** extractant \u2014 total charged minus three monomers per extracted RE(III).\n`REEDistribution.get_D` applies the same functional form with `[HA]` the *total*\ncharged. The two agree on a clean solvent and diverge where the cascade works\nhardest, and the error flatters the model: total overstates what is available,\nso `D` is overpredicted exactly there (#267).\n\n`solve_free_extractant` closes the loop rather than approximating it:\n\n$$c_{org} = D\\big([\\mathrm{HA}]_{free}\\big)\\,c_{aq}, \\qquad\n[\\mathrm{HA}]_{free} = [\\mathrm{HA}]_0 - m\\,c_{org}$$\n\nSubstituting leaves one scalar equation in `[HA]_free` that is strictly\ndecreasing and changes sign between `0` and `[HA]_0` \u2014 one root, bracketed, on a\nsmooth monotone function. It is solved with `optimistix.root_find`, so it\ndifferentiates by the implicit function theorem rather than by unrolling.\n\n```python\nfrom difflow_ree import REEDistribution, solve_free_extractant\n\ndist = REEDistribution(extractant=\"D2EHPA\", elements=(\"Nd\",), concentration=0.5)\nr = solve_free_extractant(dist, \"Nd\", c_aq=0.03, pH=3.0)\n\nr.D                 # 0.362 -- against free extractant\nr.D_total_basis     # 0.549 -- what the correlation says against total\nr.overprediction    # 1.52\nr.loading_fraction  # 0.130\n```\n\nThis also restores something #204's closing note recorded as lost: keeping the\ncorrelation's fixed-parameter concentration term left `D` independent of stage\nloading. The free extractant enters the *correlation* here \u2014 it is not a factor\napplied afterwards \u2014 so this is not a reintroduction of the double count #190\nfound. `LoadingIsotherm.apparent_D` caps an answer after `D` is computed; this\nchanges the input that produced it. **Do not compose the two.**"
+  },
+  {
+   "anchor": "an-impossible-loading-is-now-impossible",
+   "heading": "An impossible loading is now impossible",
+   "path": "Rare Earth Element (REE) Unit Operations > Equilibrium Models > Free extractant, not total > An impossible loading is now impossible",
+   "source": "unit-operations-ree.md",
+   "targets": [],
+   "text": "`m * c_org > [HA]_0` leaves negative free extractant, which Eq. 2.89 duly\nreturns and which has no logarithm. A correlation written against total does not\nnotice \u2014 it takes `log10([HA]_0 / C_ref)` and hands back a finite `D`.\n\n```python\nfrom difflow_ree import implied_loading_fraction, check_loading_capacity\n\n# Z1 Table 4.36 system 2: 0.13 mol/L naphthenic acid, ~0.066 mol/L RE organic\nimplied_loading_fraction(\"naphthenic_acid\", 0.066, 0.13)   # 1.523\ncheck_loading_capacity(\"naphthenic_acid\", 0.066, 0.13)     # ExtractantCapacityWarning\n```\n\nThat row is why system 2 was rejected as an anchor in favour of system 1, which\nsits at 19 % of capacity \u2014 a rejection that previously had to be made by hand.\n`action=\"raise\"` turns it into a `ValueError`; the self-consistent solve above\ncannot land there at all.\n\n---\n\n(mass-action-closure)="
   },
   {
    "anchor": "mass-action-equilibrium-closure-196",
@@ -6706,7 +6724,7 @@
    "targets": [
     "mass-action-closure"
    ],
-   "text": "Everything above is the **correlation level (L1)**: `log10(D)` is evaluated at a\npH you specify, and loading and speciation are multiplicative corrections. This\nsection describes the **closed level (L2)**, where the stage solves conservation\nlaws for its own state instead of evaluating a correlation at specified\nconditions.\n\nThree limitations follow directly from having no closure, and none can be fixed\ninside a correlation:\n\n- **pH was a parameter, not a state.** Every extracted trivalent ion releases\n  three protons, so a real cascade's pH profile is set by the extraction itself.\n  A model that specifies pH per cascade cannot predict the profile.\n- **Competitive loading was a correction rather than an outcome.** The elements\n  share one finite extractant inventory. That should emerge from a single free\n  extractant balance, not from multiplying independent `D` values by\n  `(1 - theta)^3` (see #189, #190, #191).\n- **Extractant selection was not physically grounded.** A fitted `D` cannot\n  respond to loading or medium, which is exactly where the ordering between\n  extractants actually changes."
+   "text": "Everything above is the **correlation level (L1)**: `log10(D)` is evaluated at a\npH you specify, and loading and speciation are multiplicative corrections. This\nsection describes the **closed level (L2)**, where the stage solves conservation\nlaws for its own state instead of evaluating a correlation at specified\nconditions.\n\nThree limitations follow directly from having no closure, and none can be fixed\ninside a correlation:\n\n- **pH was a parameter, not a state.** Every extracted trivalent ion releases\n  three protons, so a real cascade's pH profile is set by the extraction itself.\n  A model that specifies pH per cascade cannot predict the profile.\n- **Competitive loading was a correction rather than an outcome.** The elements\n  share one finite extractant inventory. That should emerge from a single free\n  extractant balance, not from multiplying independent `D` values by\n  `(1 - theta)^3` (see #189, #190, #191). #267 closes the balance for a\n  *single* element at the correlation level (see\n  [Free extractant, not total](#free-extractant-not-total)); sharing one\n  inventory *between* elements is still what L2 is for.\n- **Extractant selection was not physically grounded.** A fitted `D` cannot\n  respond to loading or medium, which is exactly where the ordering between\n  extractants actually changes."
   },
   {
    "anchor": "the-reaction-network-is-data",
