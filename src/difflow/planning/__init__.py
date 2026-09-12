@@ -137,9 +137,9 @@ from difflow.planning.backoff import (
     BackOffResult, apply_backoff, constraint_backoff,
 )
 from difflow.planning.benchmark import (
-    CostRatio, central_difference_gradient, format_scaling_table,
-    gradient_cost_ratio, paired_time, planner_objective, scaling_study,
-    time_callable,
+    CostRatio, best_cost_ratio, central_difference_gradient,
+    format_scaling_table, gradient_cost_ratio, paired_time, planner_objective,
+    scaling_study, time_callable,
 )
 from difflow.planning.block import Block
 from difflow.planning.curvature import (
@@ -284,6 +284,7 @@ __all__ = [
     "draw_taylor_model",
     "draw_trust_region",
     # Benchmarking
+    "best_cost_ratio",
     "gradient_cost_ratio",
     "scaling_study",
     "format_scaling_table",
