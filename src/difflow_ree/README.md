@@ -14,8 +14,9 @@ pip install -e ".[ree]"
 
 ### `database.py`
 Property databases for REE separation:
-- **REEDatabase**: Properties for 10 commercial rare earth elements (La, Ce, Pr, Nd, Sm, Eu, Gd, Tb, Dy, Y)
-- **ExtractantDatabase**: Properties for 4 extractant systems (D2EHPA, PC88A, Cyanex272, TBP)
+- **REEDatabase**: Properties for 15 rare earth elements (La, Ce, Pr, Nd, Sm, Eu, Gd, Tb, Dy, Ho, Er, Tm, Yb, Lu, Y). Pm is deliberately absent: no stable isotope, no process role.
+- **ExtractantDatabase**: Properties for 5 extractant systems (D2EHPA, PC88A, Cyanex272, TBP, naphthenic acid)
+- **Provenance**: every number in `data/` is tagged with a cited source and a class saying whether a published result may rest on it. `python -m difflow_ree.provenance`
 - **SeparationFactorDatabase**: Element pair separation factors
 - Convenience functions: `get_element()`, `get_extractant()`, `get_separation_factor()`
 - JAX-compatible accessors: `get_atomic_weight_array()`, `get_price_array()`, `get_ionic_radius_array()`
@@ -48,7 +49,8 @@ Pre-built flowsheet templates for common configurations:
 Technoeconomic analysis:
 - **costs.py**: `REEPricing`, `ReagentCosts`, `OperatingCosts`
 - **saponification.py**: kg base per kg REO, ammonium-nitrogen and dissolved-salt effluent loads, `compare_counter_ions()` (#197)
-- Functions: `estimate_capex()`, `estimate_opex()`, `calculate_revenue()`, `calculate_profit()`, `minimum_selling_price()`
+- Functions: `estimate_capex()`, `capex_basis()`, `estimate_opex()`, `calculate_revenue()`, `calculate_profit()`, `minimum_selling_price()`
+- `estimate_capex()` takes its level from a disclosed project cost (`CAPEX_ANCHORS`, tagged `DISCLOSED` in `data/sources.yaml`) scaled on capacity and CEPCI. The `scope` argument sets the battery limits and the three anchors differ by more than 10x at the same capacity; call `capex_basis(scope)` for the citation, what the figure enclosed, and the AACE accuracy range. Everything else in `economics/` is `ESTIMATED`.
 
 ### `data/`
 YAML data files with element properties, extractant parameters, and separation factors.
