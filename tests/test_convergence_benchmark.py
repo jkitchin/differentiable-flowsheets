@@ -407,6 +407,53 @@ class TestTheFindings:
         assert wegstein.passed
         assert not anderson.passed
 
+    def test_anderson_solves_a_disjunction_without_binaries(self):
+        """The negative result #251 most needs.
+
+        ``regime_switch`` is a unit picking between two linear branches with
+        the answer exactly on the boundary -- the disjunction that issue
+        proposes handing to a MILP's binaries. Anderson lands on it in two
+        iterations.
+        """
+        assert run_case(get_case("regime_switch"),
+                        acceleration="anderson").passed
+
+    def test_a_signed_tear_beats_both_accelerated_methods(self):
+        """The one case that inverts the corpus ranking.
+
+        ``clip_negative_flows`` defaults to True and is applied by the
+        Wegstein and Anderson paths but not by the unaccelerated one. On a
+        tear whose answer is genuinely negative, that projection is the
+        difference between solving it and not.
+        """
+        plain = run_case(get_case("signed_tear"), acceleration="none")
+        wegstein = run_case(get_case("signed_tear"), acceleration="wegstein")
+        anderson = run_case(get_case("signed_tear"), acceleration="anderson")
+        assert plain.passed, "plain substitution should solve this one"
+        assert not wegstein.passed
+        assert not anderson.passed
+
+    def test_turning_the_clip_off_rescues_the_signed_tear(self):
+        """Pins the remedy the case's `difficulty` claims."""
+        clipped = run_case(get_case("signed_tear"), acceleration="anderson")
+        unclipped = run_case(get_case("signed_tear"), acceleration="anderson",
+                             clip_negative_flows=False)
+        assert not clipped.passed
+        assert unclipped.passed
+        assert unclipped.iterations < 30
+
+    def test_a_rigorous_column_in_a_recycle_is_not_the_hard_part(self):
+        """#251 names near-pinch columns; every setting solves this one."""
+        for acceleration in ACCELERATIONS:
+            outcome = run_case(get_case("column_recycle"),
+                               acceleration=acceleration)
+            assert outcome.passed, outcome
+
+    def test_the_multi_loop_case_really_has_two_tears(self):
+        """Otherwise it is not testing what it says it tests."""
+        fs = get_case("two_loop_recycle").build()
+        assert len(fs.recycles) == 2
+
     @pytest.mark.slow
     def test_an_absolute_tear_tolerance_can_accept_a_wrong_answer(self):
         """The trap ``trace_recycle`` exists to expose.

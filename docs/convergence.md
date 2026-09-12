@@ -639,7 +639,7 @@ report = run_benchmark()
 print(report.as_text())
 ```
 
-The full grid is 54 solves and takes a few minutes, most of it JAX
+The full grid is 99 solves and takes several minutes, most of it JAX
 compilation. Narrow it while iterating:
 
 ```python
@@ -656,45 +656,78 @@ A solve reports two separate things, and the benchmark keeps them apart:
 | `Outcome.correct` | the answer closes its material balance, or matches a known one |
 | `Outcome.passed` | both |
 
-They are not the same. `pass_rate` is 46.3% against a `convergence_rate` of
-51.9%: three of the 54 solves report success and land somewhere that does not
+They are not the same. `pass_rate` is 46.5% against a `convergence_rate` of
+49.5%: three of the 99 solves report success and land somewhere that does not
 audit. A benchmark that counted only the solver's flag would call those wins.
 
 ### What the corpus says today
 
 ```
-54 solves  (tol=1e-08, max_iter=100)
-pass rate         46.3%   (converged AND the answer audits)
-convergence rate  51.9%   (the solver's own verdict)
+99 solves  (tol=1e-08, max_iter=100)
+pass rate         46.5%   (converged AND the answer audits)
+convergence rate  49.5%   (the solver's own verdict)
 
 by acceleration                    by initialization
-  anderson      16/18   88.9%        default        8/18   44.4%
-  wegstein       6/18   33.3%        unit           8/18   44.4%
-  none           3/18   16.7%        feed           9/18   50.0%
+  anderson      28/33   84.8%        default       15/33   45.5%
+  wegstein       9/33   27.3%        unit          15/33   45.5%
+  none           9/33   27.3%        feed          16/33   48.5%
 
-mean iterations over passing solves: anderson=4.9, wegstein=22.8, none=35.0
+mean iterations over passing solves: anderson=4.3, wegstein=18.9, none=41.0
 ```
 
-Three findings worth acting on:
+**Every case in the corpus is solved by at least one acceleration.** Eleven
+cases across the hard families — high loop gain, sharp splits, multi-loop,
+phase-regime switching, near-pinch columns, trace-magnitude tears, signed
+tears — and none of them defeats all three methods. That is the most useful
+thing the benchmark says, and it is a negative result.
+
+Four findings worth acting on:
 
 **Acceleration dominates; initialization barely registers.** Anderson passes
-88.9% where plain substitution passes 16.7%. Against that, the three starting
-points are separated by a single solve. The obvious lever on a failing recycle
-is `acceleration`, not the guess.
+84.8% where plain substitution passes 27.3%. Against that, the three starting
+points are separated by a single solve. The first thing to change on a failing
+recycle is `acceleration`, not the guess.
 
 **The `initialize()` path (#247) changed no outcome.** `"unit"` — the
 propagation pass that #247 wired up — scores exactly what `"default"` scores,
-the 0.01 mol/s stream it replaced: 8/18 either way. It reliably saves an
-iteration or two (`flash_recycle` goes 3 → 2 under Anderson) and it flips no
-verdict anywhere in the corpus. It made the first step better without making a
-failing solve succeed. If a recycle is failing, a better guess of the same
-kind is not the fix.
+the 0.01 mol/s stream it replaced: 15/33 either way, unchanged from when the
+corpus was six cases. It reliably saves an iteration or two and it flips no
+verdict anywhere. It made the first step better without making a failing solve
+succeed. If a recycle is failing, a better guess of the same kind is not the
+fix.
 
-**Anderson is not free.** `phase_coupled_flash` is in the corpus because
-Anderson fails it where Wegstein converges in 28 iterations — and fails it by
-walking somewhere else entirely, not by running out of iterations. On a loop
-that changes phase regime as it iterates, try Wegstein before concluding the
-flowsheet is wrong.
+**Anderson is not free, and `clip_negative_flows` is why, once.**
+`phase_coupled_flash` fails under Anderson and converges under Wegstein in 28
+iterations — Anderson walks off somewhere else rather than running out of road.
+And `signed_tear` inverts the ranking outright: plain substitution solves it
+and *both* accelerated methods fail. The reason is worth knowing —
+`clip_negative_flows` defaults to `True` and is applied by the Wegstein and
+Anderson paths but **not** by the unaccelerated one, so on a tear whose answer
+is genuinely negative the two accelerated methods carry a projection the plain
+one does not. Passing `clip_negative_flows=False` fixes Anderson on it
+immediately (100 iterations without convergence → 13 with). This is the same
+point `difflow_gas` already makes for signed flows; it applies to any tear
+whose components can go negative.
+
+**A disjunction does not need binaries here.** `regime_switch` is a unit
+choosing between two linear branches with the answer exactly on the boundary,
+expanding below the switch and contracting above it. Plain substitution can
+only chatter across the join, and Wegstein stalls — but Anderson lands on it
+in two iterations.
+
+### What is *not* hard
+
+Worth recording, because these are the families most often assumed difficult:
+
+- **A rigorous MESH column in a recycle.** `column_recycle` — twelve stages,
+  95% of the distillate returned — passes under every setting, at every reflux
+  ratio tried from just above minimum to well above it.
+- **Nonsmooth tear maps as such.** Both `regime_switch` and the kinked maps
+  tried while building the corpus fall to Anderson quickly.
+- **Tear dimension.** A tear with twelve components and a spectral radius of
+  0.985 converges under Anderson as readily as one with three, provided the
+  coupling is non-negative. Where high-dimensional cases did fail, the cause
+  was the negative-flow clipping above, not the dimension.
 
 ### The trap the corpus exposes
 
@@ -710,6 +743,12 @@ value is about $3 \times 10^{-5}$. Wegstein stops with a residual inside
 
 On a loop where you know the gain is near one, tighten `tol` by roughly
 $1/(1-g)$, or audit the answer rather than the residual.
+
+For a multicomponent tear the factor is $\lVert (I-M)^{-1} \rVert$ rather than
+$1/(1-\rho)$, and for a non-normal $M$ those are not close: `signed_tear` has
+$\rho = 0.75$, which suggests a factor of 4, and actually leaves a relative
+error of $1.2 \times 10^{-6}$ from a residual of $10^{-8}$ — a factor of about
+450.
 
 ### Adding a case
 
@@ -733,8 +772,14 @@ default audit is the overall mole balance; a case whose reaction changes the
 mole count, or whose answer is known analytically, passes its own `check`.
 
 Keep at least one case in the corpus that is *meant* to pass. A benchmark
-where everything fails cannot distinguish a hard corpus from a broken solver;
-`two_phase_flash` is that control, and it passes 9/9.
+where everything fails cannot distinguish a hard corpus from a broken solver.
+`two_phase_flash` and `column_recycle` are the controls, and both pass 9/9.
+
+And check a new case is not *rigged* — that no initialization strategy starts
+on the answer it is about to be scored against. `overshoot_loop` originally
+used $g(x) = 3F - 2x$, whose fixed point is $x = F$, exactly the `"feed"`
+guess; that strategy collected two passes on a case it had not solved.
+`TestNoCaseIsRigged` checks every case in the corpus against this.
 
 ---
 

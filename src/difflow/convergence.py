@@ -50,10 +50,25 @@ The corpus
 ----------
 Each :class:`Case` says in its own ``difficulty`` field what makes it hard,
 because a benchmark whose cases are hard for unstated reasons measures
-something nobody can act on.  The families follow the ones named in #251:
-high-gain recycles, phase-flipping flashes, sharp splits --- plus the linear
-overshoot map, which is here because its answer is known exactly and so it
-can distinguish "the solver was wrong" from "the case is hard".
+something nobody can act on.  The eleven cases cover the families #251 names
+--- high loop gain, sharp splits, multi-loop flowsheets, phase-regime
+switching, near-pinch columns --- plus a trace-magnitude tear, a signed tear,
+and two linear maps whose answers are known exactly and so can distinguish
+"the solver was wrong" from "the case is hard".
+
+Two of them are controls, meant to pass under every setting: an ordinary
+two-phase flash recycle, and a rigorous twelve-stage MESH column with 95% of
+its distillate returned.  A corpus where everything fails cannot tell a hard
+corpus from a broken solver.
+
+What it measured, and what that is for
+--------------------------------------
+**Every case is solved by at least one acceleration.**  Across eleven cases
+and three methods there is no flowsheet here that all three fail, which is
+the benchmark's main finding and a negative one.  It is the fact #251 turns
+on: a globally consistent MILP initial guess is aimed at failures that this
+corpus does not contain.  Extending the corpus until it does --- or failing
+to, deliberately and on the record --- is how that issue gets decided.
 """
 
 from __future__ import annotations
@@ -225,14 +240,20 @@ def _first_order_cstr(k: float, species: Sequence[str]):
     return CSTR(params, thermo=thermo, mode="isothermal")
 
 
-def _flash(species: Sequence[str]):
-    """An ideal-thermo flash over ``species``, from the shipped database."""
+def _ideal_thermo(species: Sequence[str]):
+    """Raoult K-values over ``species``, from the shipped database."""
     from difflow.database import get_species_data
     from difflow.thermo import IdealThermo
+
+    return IdealThermo({s: get_species_data(s) for s in species})
+
+
+def _flash(species: Sequence[str]):
+    """An ideal-thermo flash over ``species``, from the shipped database."""
     from difflow.units.flash import Flash, FlashParams
 
-    thermo = IdealThermo({s: get_species_data(s) for s in species})
-    return Flash(FlashParams(species_order=list(species)), thermo=thermo)
+    return Flash(FlashParams(species_order=list(species)),
+                 thermo=_ideal_thermo(species))
 
 
 def _passthrough(stream: Stream) -> Stream:
@@ -396,6 +417,186 @@ def _trace_check(fs: Flowsheet, streams: dict[str, Stream]) -> float:
             if jnp.isfinite(jnp.asarray(got)) else float("inf"))
 
 
+def _build_two_loop() -> Flowsheet:
+    """Two recycles around one mixer, nested: the inner split feeds the outer.
+
+    ``s_in`` returns 42.5% of the mixer outlet directly; ``s_out`` returns
+    90% of what is left, another 51.8%.  The combined gain is 0.943 and the
+    mixer carries about 17 times the feed.
+
+    The corpus was otherwise all single-tear.  Two tears is the case #251
+    calls "globally consistent around the loop" -- substitution has to
+    settle both at once, and the accelerated methods see one combined tear
+    vector rather than two loops.
+    """
+    def merge(feed: Stream, r_in: Stream, r_out: Stream) -> Stream:
+        f, a, b = get_flows(feed), get_flows(r_in), get_flows(r_out)
+        return make_stream({"A": f["A"] + a["A"] + b["A"]},
+                           feed["T"], feed["P"])
+
+    fs = Flowsheet(["A"], default_flow=0.01)
+    fs.add_feed("feed", make_stream({"A": 1.0}, 300.0, 101325.0))
+    fs.add_unit(Unit("mix", merge, ["feed", "r_in", "r_out"], ["mixed"]))
+    fs.add_unit(Unit("s_in", _splitter(0.425), ["mixed"], ["r_in_src", "mid"]))
+    fs.add_unit(Unit("s_out", _splitter(0.9), ["mid"], ["r_out_src", "product"]))
+    fs.add_recycle("r_in_src", "r_in")
+    fs.add_recycle("r_out_src", "r_out")
+    return fs
+
+
+def _build_sharp_split() -> Flowsheet:
+    """A 0.1% purge: 999 parts recycled for every one that leaves."""
+    def combine(feed: Stream, tear: Stream) -> Stream:
+        f, t = get_flows(feed), get_flows(tear)
+        return make_stream({k: f[k] + t[k] for k in f}, feed["T"], feed["P"])
+
+    fs = Flowsheet(["A"], default_flow=0.01)
+    fs.add_feed("feed", make_stream({"A": 1.0}, 300.0, 101325.0))
+    fs.add_unit(Unit("mix", combine, ["feed", "tear"], ["mixed"]))
+    fs.add_unit(Unit("split", _splitter(0.999), ["mixed"], ["rec_src", "purge"]))
+    fs.add_recycle("rec_src", "tear")
+    return fs
+
+
+#: Coupling matrix for :func:`_build_signed_tear`, spectral radius 0.75.
+#: Written out rather than reseeded so the case does not depend on NumPy's
+#: random stream staying put across versions.
+_SIGNED_M = (
+    (+0.060542, -0.063612, +0.308380, +0.050512, -0.257938, +0.174117),
+    (+0.627909, +0.456043, -0.338866, -0.609332, -0.300122, +0.019900),
+    (-1.119561, -0.105354, -0.599938, -0.352605, -0.262074, -0.152307),
+    (+0.198211, +0.501997, -0.061893, +0.657987, -0.320308, +0.169261),
+    (+0.435044, +0.045269, -0.358014, -0.443834, -0.220407, +0.106030),
+    (-0.486157, -0.100723, -0.076671, +0.260431, +0.103364, +0.171121),
+)
+
+#: ``(I - M)^-1 . 1``, the exact answer.  Three components are negative.
+_SIGNED_ANSWER = (1.151624, -0.437615, -1.230257, 3.785688, 0.365769, 1.933032)
+
+_SIGNED_SPECIES = tuple(f"S{i}" for i in range(6))
+
+
+def _build_signed_tear() -> Flowsheet:
+    """A tear that legitimately carries a signed quantity.
+
+    ``x <- f + M x`` with the spectral radius at 0.75, and three components
+    of the answer negative.  Not a contrivance: ``difflow_gas`` works in
+    signed flows throughout, because a pipe's direction is an unknown, and
+    its docs already say to solve with ``clip_negative_flows=False``.
+
+    The corpus needs it because it is the only case here that inverts the
+    usual ranking.  ``clip_negative_flows`` defaults to ``True`` and is
+    applied by the Wegstein and Anderson paths but **not** by the
+    unaccelerated one, so on this map the two accelerated methods have a
+    projection applied to their iterates that the plain one does not --
+    and they are the two that fail.
+    """
+    species = list(_SIGNED_SPECIES)
+    M = jnp.asarray(_SIGNED_M)
+
+    def loop(feed: Stream, tear: Stream) -> Stream:
+        x = jnp.array([tear[f"F_{s}"] for s in species])
+        f = jnp.array([feed[f"F_{s}"] for s in species])
+        y = f + M @ x
+        return make_stream({s: y[i] for i, s in enumerate(species)},
+                           feed["T"], feed["P"])
+
+    fs = Flowsheet(species, default_flow=0.01)
+    fs.add_feed("feed", make_stream({s: 1.0 for s in species}, 300.0, 101325.0))
+    fs.add_unit(Unit("loop", loop, ["feed", "tear"], ["loop_out"]))
+    fs.add_unit(Unit("out", _passthrough, ["loop_out"], ["product"]))
+    fs.add_recycle("loop_out", "tear")
+    return fs
+
+
+def _signed_check(fs: Flowsheet, streams: dict[str, Stream]) -> float:
+    """Against ``(I - M)^-1 f``, which is known in closed form.
+
+    The mole balance cannot audit a signed tear -- the map is not a
+    material balance and the "flows" are not moles.
+    """
+    if "product" not in streams:
+        return float("inf")
+    scale = max(abs(v) for v in _SIGNED_ANSWER)
+    worst = 0.0
+    for species, want in zip(_SIGNED_SPECIES, _SIGNED_ANSWER):
+        got = float(streams["product"][f"F_{species}"])
+        if not jnp.isfinite(jnp.asarray(got)):
+            return float("inf")
+        worst = max(worst, abs(got - want))
+    return worst / scale
+
+
+def _build_regime_switch() -> Flowsheet:
+    """The solution sits exactly on a switch between two linear regimes.
+
+    Below the threshold the loop is strongly expanding, above it strongly
+    contracting, and the two branches meet at the fixed point.  Plain
+    substitution can only chatter across the join.
+
+    This is the disjunction #251 proposes to hand to a MILP's binaries --
+    a unit picking a branch, with the answer on the boundary.  It is in the
+    corpus to find out whether difflow needs binaries to solve one.
+    """
+    threshold = 2.0
+
+    def loop(feed: Stream, tear: Stream) -> Stream:
+        x = tear["F_A"]
+        below = 4.0 * x - 6.0     # expanding;  g(2) = 2
+        above = 0.2 * x + 1.6     # contracting; g(2) = 2
+        return make_stream({"A": jnp.where(x < threshold, below, above)},
+                           feed["T"], feed["P"])
+
+    fs = Flowsheet(["A"], default_flow=0.01)
+    fs.add_feed("feed", make_stream({"A": 1.0}, 300.0, 101325.0))
+    fs.add_unit(Unit("loop", loop, ["feed", "tear"], ["loop_out"]))
+    fs.add_unit(Unit("out", _passthrough, ["loop_out"], ["product"]))
+    fs.add_recycle("loop_out", "tear")
+    return fs
+
+
+def _regime_check(fs: Flowsheet, streams: dict[str, Stream]) -> float:
+    """The switch point itself, ``x = 2``."""
+    if "product" not in streams:
+        return float("inf")
+    got = float(streams["product"]["F_A"])
+    return (abs(got - 2.0) / 2.0
+            if jnp.isfinite(jnp.asarray(got)) else float("inf"))
+
+
+def _build_column_recycle() -> Flowsheet:
+    """A rigorous MESH column with 95% of its distillate recycled.
+
+    #251 names near-pinch columns as a hard family, so the corpus should
+    contain one and say what happens.  A real
+    :class:`~difflow.units.distillation.DistillationColumn` -- twelve
+    stages, MESH after a CMO warm start -- inside a high-recycle loop.
+
+    The heaviest unit here by a wide margin, and it costs a JAX compile.
+    """
+    from difflow.units.distillation import (
+        DistillationColumn, DistillationColumnParams)
+
+    species = list(_PAIR)
+    params = DistillationColumnParams(species_order=species, n_stages=12,
+                                      feed_stage=6, P=101325.0, q=1.0)
+    column = DistillationColumn(params, _ideal_thermo(_PAIR))
+
+    def column_op(feed: Stream):
+        total = sum(get_flows(feed).values())
+        distillate, bottoms, _ = column(feed, R=1.5, D_spec=0.5 * total)
+        return distillate, bottoms
+
+    fs = Flowsheet(species, default_flow=0.01)
+    fs.add_feed("feed", make_stream({species[0]: 1.0, species[1]: 1.0},
+                                    360.0, 101325.0))
+    fs.add_unit(Unit("mix", _mixer, ["feed", "rec"], ["mixed"]))
+    fs.add_unit(Unit("col", column_op, ["mixed"], ["dist", "bot"]))
+    fs.add_unit(Unit("split", _splitter(0.95), ["dist"], ["rec_src", "product"]))
+    fs.add_recycle("rec_src", "rec")
+    return fs
+
+
 #: The corpus.  Ordered easiest-to-read, not easiest-to-solve.
 CORPUS: tuple[Case, ...] = (
     Case(
@@ -458,6 +659,69 @@ CORPUS: tuple[Case, ...] = (
         tags=("recycle", "trace", "high-gain", "analytic"),
         check=_trace_check,
         tol=1e-4,
+    ),
+    Case(
+        name="two_loop_recycle",
+        build=_build_two_loop,
+        difficulty=(
+            "Two recycles around one mixer, returning 0.425 and 0.518 of "
+            "its outlet for a combined loop gain of 0.943, so the solver "
+            "has to settle two tears at once rather than one. The only "
+            "multi-tear case in the corpus."),
+        tags=("recycle", "multi-loop", "high-gain"),
+    ),
+    Case(
+        name="sharp_split_purge",
+        build=_build_sharp_split,
+        difficulty=(
+            "A 0.1% purge: 999 parts recycled for every one leaving, so the "
+            "loop gain is 0.999 and the converged recycle is a thousand "
+            "times the feed. The sharp-split family, pushed a decade past "
+            "high_gain_recycle."),
+        tags=("recycle", "sharp-split", "high-gain"),
+    ),
+    Case(
+        name="signed_tear",
+        build=_build_signed_tear,
+        difficulty=(
+            "A tear carrying a signed quantity, as difflow_gas does: "
+            "x <- f + M x at spectral radius 0.75, with three of the six "
+            "components of the answer negative. The one case here that "
+            "inverts the ranking -- clip_negative_flows defaults to True "
+            "and is applied by Wegstein and Anderson but not by plain "
+            "substitution, and it is the two accelerated methods that "
+            "fail. Passing clip_negative_flows=False fixes Anderson."),
+        tags=("recycle", "signed", "clipping", "analytic"),
+        check=_signed_check,
+        # 1e-4, not the tighter 1e-6 the other analytic cases use: M is
+        # non-normal, so the error the tear tolerance leaves behind is
+        # amplified by ||(I - M)^-1|| rather than by 1/(1 - rho), and plain
+        # substitution lands at 1.2e-6.  Judging that "wrong" would be a
+        # verdict about the threshold rather than about the solver.
+        tol=1e-4,
+    ),
+    Case(
+        name="regime_switch",
+        build=_build_regime_switch,
+        difficulty=(
+            "Two linear branches meeting exactly at the fixed point, "
+            "expanding below the switch and contracting above it, so "
+            "substitution chatters across the join forever. This is the "
+            "disjunction #251 proposes handing to a MILP's binaries, and "
+            "it is here to find out whether difflow needs them."),
+        tags=("recycle", "phase-flip", "nonsmooth", "analytic"),
+        check=_regime_check,
+        tol=1e-6,
+    ),
+    Case(
+        name="column_recycle",
+        build=_build_column_recycle,
+        difficulty=(
+            "A rigorous twelve-stage MESH column with 95% of its "
+            "distillate recycled -- the near-pinch column family #251 "
+            "names. Not hard, as it turns out: every setting solves it. "
+            "The heaviest unit in the corpus by a wide margin."),
+        tags=("recycle", "column", "control"),
     ),
 )
 

@@ -522,7 +522,7 @@ flowsheets. `make convergence` (or `python -m difflow.convergence`), or:
 
 ```python
 from difflow.convergence import run_benchmark
-report = run_benchmark()          # 54 solves: 6 cases x 3 accelerations x 3 inits
+report = run_benchmark()          # 99 solves: 11 cases x 3 accelerations x 3 inits
 print(report.as_text())
 ```
 
@@ -547,17 +547,34 @@ Invariants encoded in the module (do not weaken them):
 - Every `Case` states its own `difficulty`. A hard case that does not say why
   measures something nobody can act on.
 
-What it measured (2026-09, and meant to move): pass rate 46.3%, convergence
-rate 51.9%. Anderson 88.9% against plain substitution's 16.7% — acceleration
+What it measured (2026-09, and meant to move): pass rate 46.5%, convergence
+rate 49.5%. Anderson 84.8% against plain substitution's 27.3% — acceleration
 dominates. The three initialization strategies are separated by one solve, and
 `"unit"` (the path #247 wired up) scores exactly what the 0.01 mol/s default
-it replaced scores: it saves an iteration or two and flips no verdict. Anderson
-is not free — `phase_coupled_flash` fails under it and converges under Wegstein.
+it replaced scores: it saves an iteration or two and flips no verdict. That
+held unchanged when the corpus went from six cases to eleven.
 
-The trap `trace_recycle` exists to expose: `tol` is an ABSOLUTE tear residual,
-so on a loop of gain `g` it understates the remaining error by `1/(1-g)`. At
-`g = 0.97` Wegstein stops inside `1e-8` and is 1% out, reporting convergence
-and meaning it.
+**Every case is solved by at least one acceleration.** Eleven cases across the
+families #251 names — high gain, sharp splits, multi-loop, phase-regime
+switching, near-pinch columns, trace tears, signed tears — and none defeats
+all three methods. That negative result is the benchmark's main finding and
+the thing #251 turns on.
+
+Two traps it exposes, both worth knowing independently of that:
+- `tol` is an ABSOLUTE tear residual, so on a loop of gain `g` it understates
+  the remaining error by `1/(1-g)` (worse for a non-normal coupling, where it
+  is `||(I - M)^-1||`). At `g = 0.97` Wegstein stops inside `1e-8` and is 1%
+  out, reporting convergence and meaning it. `trace_recycle` pins it.
+- `clip_negative_flows` defaults to True and is applied by the Wegstein and
+  Anderson paths but NOT by the unaccelerated one. On a tear whose answer is
+  genuinely negative that projection is the difference between solving it and
+  not: `signed_tear` is the one case where plain substitution beats both
+  accelerated methods, and `clip_negative_flows=False` fixes Anderson on it
+  (100 iterations to 13). Same point `difflow_gas` already makes for signed
+  flows.
+
+Anderson is not free either — `phase_coupled_flash` fails under it and
+converges under Wegstein.
 
 Docs: `docs/convergence.md` ("Measured pass rates"). Tests:
 `tests/test_convergence_benchmark.py`, `tests/test_benchmarks_verdict.py`.
