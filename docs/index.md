@@ -24,6 +24,8 @@
 | [Thermodynamics](thermodynamics.md) | Property calculations, equations of state, databases |
 | [Technoeconomics](technoeconomics.md) | Capital costs, operating costs, profitability analysis |
 | [Streams and Flowsheets](streams-and-flowsheets.md) | Stream handling, flowsheet solver, recycle calculations |
+| [Convergence and Initialization](convergence.md) | Tear-stream guesses, the three acceleration methods, the traced fallback, and what to do when a solve will not converge |
+| [Equation-Oriented Solver](eo-solver.md) | Simultaneous solution of the whole flowsheet, SM initialization, adding EO support to a unit |
 | [Dynamic Modeling](dynamic-modeling.md) | Transient simulation, ODE/DAE integration, diffrax backend |
 | [Moving-Horizon Estimation](moving-horizon-estimation.md) | Constrained MHE over dynamic flowsheets, EKF baseline, delayed and multi-rate data, joint parameter estimation |
 | [Operability Screening](operability.md) | Steady-state controllability from AD gains: RGA, singular values, disturbance rejection |

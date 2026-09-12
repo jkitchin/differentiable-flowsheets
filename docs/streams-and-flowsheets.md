@@ -270,7 +270,8 @@ results = fs.solve(tol=1e-6, max_iter=50)
 The flowsheet solver uses sequential modular approach:
 
 1. **Tear streams**: Identify recycle streams to "tear"
-2. **Initialize**: Set initial guesses for tear streams
+2. **Initialize**: Set initial guesses for tear streams (see
+   [Where the initial guess comes from](convergence.md#where-the-initial-guess-comes-from))
 3. **Sequential calculation**: Solve units in order
 4. **Update tear streams**: Compare calculated vs assumed
 5. **Iterate**: Repeat until convergence
@@ -393,41 +394,54 @@ calculation_order(graph, tears)             # unit order once those are seeded
 graph can have exponentially many; `max_cycles` bounds the work and a
 `CycleEnumerationWarning` says when it was hit.
 
+Three methods iterate on the tear streams, selected with `acceleration`.
+[Convergence and Initialization](convergence.md) covers all of this in
+depth --- where the initial guess comes from, what each method costs, and
+what to reach for when a loop will not close. The short version:
+
 ### Direct Substitution
 
-Default method: simple fixed-point iteration on tear streams.
+`acceleration="none"`: fixed-point iteration on tear streams, run through
+`optimistix`, taking a fraction `damping` of each step.
 
-$$\mathbf{x}^{(k+1)} = f(\mathbf{x}^{(k)})$$
+$$\mathbf{x}^{(k+1)} = \mathbf{x}^{(k)}
++ \alpha\left(f(\mathbf{x}^{(k)}) - \mathbf{x}^{(k)}\right)$$
 
-Where $\mathbf{x}$ is the tear stream vector and $f$ is the flowsheet calculation.
+Where $\mathbf{x}$ is the tear stream vector, $f$ is the flowsheet calculation
+and $\alpha$ is `damping` (1.0 by default, i.e. plain substitution). Damping
+leaves the fixed point alone and makes the iteration contractive where $f$
+overshoots. This is also the path a traced solve falls back to, because it is
+the only one without a Python branch on the residual.
 
 ### Wegstein Acceleration
 
-Accelerated convergence using Wegstein method:
+`acceleration="wegstein"`: estimates the tear map's slope from the last two
+iterates and extrapolates.
 
-$$\mathbf{x}^{(k+1)} = \mathbf{x}^{(k)} + \frac{q}{1-q}[\mathbf{x}^{(k)} - \mathbf{x}^{(k-1)}]$$
+$$\mathbf{x}^{(k+1)} = q\, \mathbf{x}^{(k)} + (1 - q)\, f(\mathbf{x}^{(k)}),
+\qquad q = \frac{s}{s - 1},
+\qquad s = \frac{f(\mathbf{x}^{(k)}) - f(\mathbf{x}^{(k-1)})}{\mathbf{x}^{(k)} - \mathbf{x}^{(k-1)}}$$
 
-Where:
-$$q = \frac{f(\mathbf{x}^{(k)}) - f(\mathbf{x}^{(k-1)})}{\mathbf{x}^{(k)} - \mathbf{x}^{(k-1)}}$$
+$q$ is the weight on the *old* iterate, bounded to $q \in [-5, 0]$ for
+stability. The bound is what makes this the method for an *oscillating* loop.
 
-Bounded: $q \in [-5, 0]$ for stability.
+### Anderson Acceleration
 
-### Broyden's Method
-
-Quasi-Newton method for challenging convergence:
-
-$$\mathbf{x}^{(k+1)} = \mathbf{x}^{(k)} - \mathbf{B}^{-1} \mathbf{g}(\mathbf{x}^{(k)})$$
-
-Where $\mathbf{g}(\mathbf{x}) = \mathbf{x} - f(\mathbf{x})$ and $\mathbf{B}$ is updated using Broyden's formula.
+`acceleration="anderson"` (the default): keeps a history of `anderson_depth`
+iterates and solves a small least-squares problem for the combination that
+minimises the residual --- equivalent to GMRES on the fixed-point iteration,
+and exact on an affine map.
 
 ### Convergence Parameters
 
 ```python
 results = fs.solve(
-    tol=1e-6,           # Convergence tolerance
-    max_iter=100,       # Maximum iterations
-    method='wegstein',  # 'direct', 'wegstein', or 'broyden'
-    damping=0.5         # Damping factor for direct substitution
+    tol=1e-6,                 # Convergence tolerance
+    max_iter=100,             # Maximum iterations
+    acceleration='wegstein',  # 'none', 'wegstein' (default: 'anderson')
+    anderson_depth=5,         # History depth, for acceleration='anderson'
+    damping=1.0,              # Step fraction, for acceleration='none'
+    clip_negative_flows=True, # False for signed tear flows (e.g. gas networks)
 )
 ```
 
@@ -461,6 +475,10 @@ Recycle solve did not converge: tear stream(s) recycle reached a residual of
 `ConvergenceWarning` and `ConvergenceError` are exported from `difflow`, so the
 usual `warnings.simplefilter("error", ConvergenceWarning)` turns every
 non-converged solve in a script into a failure.
+
+What to do about it --- a better tear guess, a different acceleration, the
+equation-oriented solver --- is
+[When a solve does not converge](convergence.md#when-a-solve-does-not-converge).
 
 Under `jax.grad` or `jit` the residual is a tracer with no numeric value, so
 there is nothing to judge: `last_solve_converged` is `None` and the solve stays
@@ -1322,20 +1340,22 @@ fs.add_recycle('recycle', 'mixer')
 ### Debugging Convergence Issues
 
 ```python
-# Check individual units
+# Check individual units against the solved streams
+streams = fs.solve()
 for unit in fs.units:
-    print(f"\n{unit.name}:")
-    inlet = fs.streams.get(unit.inlet_names[0])
-    outlet, info = unit.operation(inlet, **unit.params)
-    print(f"  Inlet T: {inlet['T']:.1f} K")
-    print(f"  Outlet T: {outlet['T']:.1f} K")
+    inlet = streams[unit.inlet_names[0]]
+    outlet = streams[unit.outlet_names[0]]
+    print(f"{unit.name}: {inlet['T']:.1f} K -> {outlet['T']:.1f} K")
 
-# Monitor recycle convergence
-def callback(iteration, error, tear_streams):
-    print(f"Iter {iteration}: error = {error:.2e}")
-
-results = fs.solve(callback=callback)
+# What the last recycle solve actually did
+print(fs.last_solve_method)      # 'anderson', 'wegstein', 'none', ...
+print(fs.last_solve_iterations)  # == max_iter if it ran out
+print(fs.last_solve_residual, fs.last_solve_tol)
+print(fs.last_solve_converged)   # False is a finding; None means "not judged"
 ```
+
+The full decision tree is in
+[Convergence and Initialization](convergence.md#when-a-solve-does-not-converge).
 
 ### Memory Efficiency
 

@@ -304,7 +304,8 @@ class Flowsheet:
         #: whether the last recycle solve met its tolerance
         self.last_solve_converged: bool | None = None
         #: acceleration method of the last solve ("anderson", "wegstein",
-        #: "damped", or "direct" for a recycle-free sequential solve)
+        #: "none", "fixed_point (traced)" when a tracer forced the
+        #: differentiable path, or "direct" for a recycle-free solve)
         self.last_solve_method: str | None = None
         #: tolerance requested of the last recycle solve
         self.last_solve_tol: float | None = None
@@ -349,7 +350,7 @@ class Flowsheet:
         tear_initial: dict[str, Stream] | None = None,
         tol: float = 1e-8,
         max_iter: int = 100,
-        damping: float = 0.5,
+        damping: float = 1.0,
         acceleration: Literal["none", "wegstein", "anderson"] = "anderson",
         anderson_depth: int = 5,
         use_initialization: bool = True,
@@ -375,9 +376,27 @@ class Flowsheet:
 
             tol: Convergence tolerance
             max_iter: Maximum iterations
-            damping: Damping factor for tear stream updates (used with acceleration="none")
+            damping: Step fraction for the tear update, used with
+                ``acceleration="none"`` (and therefore on the traced path,
+                which falls back to it). The iteration becomes
+                ``x + damping * (g(x) - x)``, which has the same fixed point
+                as ``g`` but contracts where plain substitution overshoots:
+                for a tear map with eigenvalues in ``[-m, 0)`` it contracts
+                for ``damping < 2/(1 + m)``, optimally near ``2/(2 + m)``.
+                ``0.3`` is safe up to a spectral radius of about 5 and is the
+                usual first thing to try on a loop whose residual *rises*.
+
+                ``1.0`` (the default) is plain undamped substitution. The
+                residual, the convergence verdict and the meaning of ``tol``
+                are all in the undamped convention, so this changes how the
+                solve gets to the answer and not which answer it is, nor how
+                tightly it is converged.
+
+                This argument was previously accepted and silently ignored;
+                the default is ``1.0`` so that making it work changes nothing
+                for a caller who never set it.
             acceleration: Acceleration method:
-                - "none": Simple fixed-point iteration with damping
+                - "none": Fixed-point iteration, damped by ``damping``
                 - "wegstein": Wegstein acceleration (uses previous 2 iterates)
                 - "anderson": Anderson acceleration (uses history of iterates)
             anderson_depth: History depth for Anderson acceleration (default 5)
@@ -438,12 +457,22 @@ class Flowsheet:
             ConvergenceError: If the solve did not converge and
                 ``on_nonconvergence="raise"``.
             ValueError: If ``on_nonconvergence`` is not one of the three
-                recognised values, or ``acceleration`` is unknown.
+                recognised values, ``acceleration`` is unknown, or
+                ``damping`` is not positive.
         """
         if on_nonconvergence not in ("warn", "raise", "ignore"):
             raise ValueError(
                 f"Unknown on_nonconvergence: {on_nonconvergence!r}. "
                 'Expected "warn", "raise" or "ignore".'
+            )
+        if not damping > 0:
+            # Checked here rather than only where it is used, so a nonsense
+            # value is a failure at the call and not a silent no-op on a
+            # flowsheet that happens to have no recycles.
+            raise ValueError(
+                f"damping must be positive, got {damping!r}. Damping scales "
+                "the step toward g(x); at zero the iteration is the identity "
+                "and every point is a fixed point."
             )
         if tears not in ("declared", "auto", "heuristic", "minimum"):
             raise ValueError(
@@ -823,8 +852,28 @@ class Flowsheet:
         max_iter: int,
         damping: float,
     ) -> dict[str, Stream]:
-        """Solve flowsheet with recycle using damped fixed-point iteration."""
+        """Solve flowsheet with recycle using damped fixed-point iteration.
 
+        Iterates ``x + alpha (g(x) - x)``, which has the same fixed point as
+        ``g`` but a contractive iteration wherever ``g`` overshoots: for a
+        tear map with eigenvalues in ``[-m, 0)`` the damped map contracts for
+        ``alpha < 2/(1 + m)``, optimally near ``2/(2 + m)``.  ``alpha = 1``
+        is plain substitution and is the default.
+
+        Two things are deliberately kept in the *undamped* convention, so
+        that ``damping`` changes how the solve gets there and nothing else:
+
+        * the residual and the convergence verdict are computed from
+          ``g(x) - x``, not from the damped step, which is ``alpha`` times
+          smaller and would flatter a loose solve by exactly that factor;
+        * the tolerance handed to optimistix is scaled by ``alpha``, because
+          optimistix stops on the *step* it takes.  Without the scaling a
+          damped solve would stop ``1/alpha`` short of the tolerance it was
+          asked for, and then the verdict above would -- correctly -- call it
+          non-converged.
+
+        ``damping`` is validated in :meth:`solve`.
+        """
         # Convert tear streams to array for fixed-point solver
         tear_array = self._streams_to_array(tear_initial)
 
@@ -873,10 +922,25 @@ class Flowsheet:
 
         args = (self.feeds, self.units, self.recycles, self.species_order)
 
-        # Solve fixed-point problem
-        fp_solver = optx.FixedPointIteration(rtol=tol, atol=tol)
+        if damping == 1.0:
+            # Not just an optimisation: `x + 1.0 * (g(x) - x)` is g(x) in
+            # exact arithmetic and not quite in floating point, and the
+            # undamped path is the one every existing result was computed on.
+            iteration = flowsheet_iteration
+        else:
+            def iteration(tear_arr, args):
+                """The damped map, which shares g's fixed point."""
+                return tear_arr + damping * (
+                    flowsheet_iteration(tear_arr, args) - tear_arr
+                )
+
+        # Solve fixed-point problem.  See the docstring for why the
+        # tolerance carries the damping factor.
+        fp_solver = optx.FixedPointIteration(
+            rtol=tol * damping, atol=tol * damping
+        )
         sol = optx.fixed_point(
-            flowsheet_iteration,
+            iteration,
             fp_solver,
             tear_array,
             args=args,
@@ -887,8 +951,10 @@ class Flowsheet:
 
         # Record convergence diagnostics for the report layer.  The verdict
         # is judged against the criterion optimistix ACTUALLY stopped on --
-        # elementwise |dx| < atol + rtol |x|, with tol serving as both --
-        # not against a bare |dx| < tol.  The two differ by the magnitude of
+        # elementwise |dx| < atol + rtol |x| on the step it took, with
+        # tol * damping serving as both, which is |g(x) - x| < tol (1 + |x|)
+        # once the damping cancels -- not against a bare |dx| < tol.  The two
+        # differ by the magnitude of
         # the tear: with flows of order 1 and tol=1e-8, a solve optimistix
         # calls successful lands near 2e-8, and calling that non-converged
         # would warn on almost every damped solve.  The residual reported

@@ -77,11 +77,13 @@ TROUBLESHOOTING: tuple[tuple[str, tuple[str, ...], str], ...] = (
         "iterates. `converged=False` means it stopped at `max_iter` "
         "with the residual still above `tol`; the numbers it returns "
         "look like an answer and are not one. What helps, in order: "
-        "raise `max_iter`; switch `method` to 'anderson' or 'wegstein' "
-        "(direct substitution converges linearly and a loop gain near 1 "
-        "makes that arbitrarily slow); damp the tear map; give the tear "
-        "stream a better initial guess. A residual that *rises* is a "
-        "loop gain above 1, which damping fixes and iterations do not.",
+        "raise `max_iter`; switch `acceleration` to 'anderson' or "
+        "'wegstein' (direct substitution converges linearly and a loop "
+        "gain near 1 makes that arbitrarily slow); damp the tear map "
+        "with `acceleration='none', damping=0.3`; give the tear stream a "
+        "better initial guess with `tear_initial`. A residual that "
+        "*rises* is a loop gain above 1, which damping fixes and "
+        "iterations do not.",
     ),
     (
         "TracerArrayConversionError",

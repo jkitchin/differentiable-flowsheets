@@ -144,6 +144,13 @@ First user: the REE mass-action closure, `difflow_ree.equilibrium.mass_action`
 | Initialization | Tolerant of poor guesses | Needs reasonable guess |
 | Best for | Simple, loosely coupled | Tightly coupled, optimization |
 
+The two are not exclusive: `solve_eo(use_sm_init=True)` (the default) runs the
+sequential solver first and hands its result to Newton as the starting point,
+which is how the EO route gets a guess good enough to converge from. See
+[The equation-oriented route](convergence.md#the-equation-oriented-route), and
+[Convergence and Initialization](convergence.md) for tear guesses, the
+acceleration methods and the traced fallback.
+
 ## Adding EO Support to New Units
 
 To add EO support to a new unit operation, implement the `eo_residuals` method:
