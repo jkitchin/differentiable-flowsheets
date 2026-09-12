@@ -4,7 +4,7 @@ Loads element properties, extractant data, and separation factors
 from YAML files.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import NamedTuple
 import yaml
@@ -730,24 +730,94 @@ class ExtractantDatabase:
 # Separation Factor Data
 # =============================================================================
 
+def _split_pair(pair: str, extractant: str) -> tuple[str, str]:
+    """``"Nd_Pr"`` -> ``("Nd", "Pr")``, heavier first.
+
+    The name is the only place the convention is written down, so a pair
+    that does not parse is a data error worth naming rather than an
+    IndexError three frames down.
+    """
+    parts = pair.split("_")
+    if len(parts) != 2 or not all(parts):
+        raise ValueError(
+            f"Separation-factor pair {pair!r} on {extractant!r} is not "
+            'of the form "<heavier>_<lighter>" (e.g. "Nd_Pr").'
+        )
+    return parts[0], parts[1]
+
+
 @dataclass
 class SeparationFactorData:
-    """Separation factor data for an extractant."""
+    """Separation factor data for an extractant.
+
+    ``adjacent_pairs`` and ``group_pairs`` map a pair to its separation
+    factor, as they always have.  What changed in #265 is where the number
+    comes from: unless the YAML states one explicitly, it is *derived* from
+    the extractant's own ``ph_coefficients`` (or ``nitrate_coefficients``)
+    at :attr:`conditions`.  ``derived`` names the pairs that were computed,
+    so a caller can tell the two apart.
+    """
     extractant: str
     conditions: dict
     adjacent_pairs: dict[str, float]
     group_pairs: dict[str, float]
     stages_for_99_purity: dict[str, int] | None = None
+    derived: frozenset[str] = field(default_factory=frozenset)
+
+
+def _separation_factor_conditions(conditions: dict) -> dict:
+    """Translate a YAML ``conditions:`` block into distribution arguments.
+
+    The two mechanisms are driven by different variables --- a cation
+    exchanger by pH and its own concentration, a solvating extractant by the
+    aqueous nitrate --- so the block is read for what it happens to declare
+    rather than against a fixed schema.  ``concentration_vol_pct`` is
+    deliberately *not* converted to mol/L: no conversion ships in either
+    file, and inventing one here would put a made-up number underneath every
+    factor it touched.  TBP does not need it, being nitrate-driven.
+    """
+    kwargs: dict = {"pH": conditions.get("pH"),
+                    "T": float(conditions.get("temperature_K", 298.15))}
+    if "concentration_M" in conditions:
+        kwargs["concentration"] = float(conditions["concentration_M"])
+    if "nitrate_M" in conditions:
+        kwargs["nitrate_conc"] = float(conditions["nitrate_M"])
+    return kwargs
 
 
 class SeparationFactorDatabase:
-    """Database of separation factors."""
+    """Separation factors, derived from the distribution correlations (#265).
+
+    This used to be a second table of hand-authored numbers, describing the
+    same physics as the ``ph_coefficients`` in ``extractants.yaml`` and
+    disagreeing with them by up to 8x --- the coefficients 1.3-2.8x high on
+    24 of 27 pairs and 4-8x low on all three Y/Dy pairs, which is a
+    disagreement about that pair rather than a calibration offset.  Neither
+    set was measured, so there was no right one to keep; what settles it is
+    that the coefficients are what every unit operation actually computes D
+    from.  A factor derived from them describes the simulator, and one
+    authored separately describes nothing else in the package.
+
+    So the YAML now says which pairs to report and at what conditions, and
+    the values come from :func:`difflow_ree.equilibrium.get_separation_factor`
+    --- the same function the rest of the plugin calls.
+
+    A YAML that gives a pair an explicit value (a mapping rather than a list
+    entry) is still honoured, and that value is used as given: an authored
+    override is a claim that a measured number exists which the coefficients
+    cannot reproduce.  None ship with difflow_ree.
+    """
 
     def __init__(self, yaml_path: Path | None = None):
         """Load separation factor data from YAML file.
 
         Args:
             yaml_path: Path to separation_factors.yaml. If None, uses default.
+
+        Raises:
+            KeyError: If a pair is to be derived for an extractant with no
+                record in :class:`ExtractantDatabase`, or for an element that
+                record does not cover.
         """
         if yaml_path is None:
             yaml_path = DATA_DIR / "separation_factors.yaml"
@@ -759,14 +829,53 @@ class SeparationFactorDatabase:
         self._stages_data: dict[str, dict[str, int]] = data.get("stages_for_99_purity", {})
 
         for extractant, sf_data in data["separation_factors"].items():
-            stages = self._stages_data.get(extractant)
+            conditions = sf_data["conditions"]
+            adjacent, adj_derived = self._resolve_pairs(
+                extractant, sf_data.get("adjacent_pairs"), conditions)
+            group, grp_derived = self._resolve_pairs(
+                extractant, sf_data.get("group_pairs"), conditions)
             self._data[extractant] = SeparationFactorData(
                 extractant=extractant,
-                conditions=sf_data["conditions"],
-                adjacent_pairs=sf_data["adjacent_pairs"],
-                group_pairs=sf_data["group_pairs"],
-                stages_for_99_purity=stages,
+                conditions=conditions,
+                adjacent_pairs=adjacent,
+                group_pairs=group,
+                stages_for_99_purity=self._stages_data.get(extractant),
+                derived=adj_derived | grp_derived,
             )
+
+    @staticmethod
+    def _resolve_pairs(
+        extractant: str, pairs, conditions: dict
+    ) -> tuple[dict[str, float], frozenset[str]]:
+        """Read one pair block, computing every value the YAML does not give.
+
+        Accepts both shapes so a caller's own file keeps working: a list of
+        pair names is derived, a mapping is taken as authored.
+        """
+        # Imported here rather than at module scope: the distribution model
+        # reads this module's ExtractantDatabase, so the dependency only
+        # goes one way at import time.
+        from difflow_ree.equilibrium.distribution import get_separation_factor
+
+        if not pairs:
+            return {}, frozenset()
+
+        items = ((p, None) for p in pairs) if isinstance(pairs, list) \
+            else pairs.items()
+        kwargs = _separation_factor_conditions(conditions)
+
+        resolved: dict[str, float] = {}
+        derived: set[str] = set()
+        for pair, value in items:
+            if value is not None:
+                resolved[pair] = float(value)
+                continue
+            heavier, lighter = _split_pair(pair, extractant)
+            resolved[pair] = float(
+                get_separation_factor(heavier, lighter, extractant, **kwargs)
+            )
+            derived.add(pair)
+        return resolved, frozenset(derived)
 
     def get(self, extractant: str) -> SeparationFactorData:
         """Get separation factor data for an extractant."""
@@ -811,6 +920,14 @@ class SeparationFactorDatabase:
         stages_99: int | None = None,
     ) -> None:
         """Add a separation factor for an element pair.
+
+        The value is taken as given --- an authored number, outside the
+        derivation the shipped pairs go through (#265), and reported as such
+        by :attr:`SeparationFactorData.derived`. Use it for a *measured*
+        factor the distribution correlations cannot reproduce; for anything
+        the correlations already describe, adding the element to the
+        extractant with :meth:`ExtractantDatabase.add_element_to_extractant`
+        keeps one description of the physics rather than two.
 
         Args:
             extractant: Extractant name (e.g., "PC88A"). Must already exist

@@ -686,6 +686,40 @@ opt_pH, max_SF = dist.optimal_pH_for_separation("Nd", "Pr", pH_range=(1.0, 5.0))
 print(f"Optimal pH: {opt_pH:.2f}, Max SF: {max_SF:.2f}")
 ```
 
+#### The tabulated factors are derived from the same correlations
+
+`get_sf_database()` reports a factor per pair at one declared set of conditions,
+which is convenient for screening. Those numbers used to be authored by hand in
+`separation_factors.yaml`, independently of the `ph_coefficients` in
+`extractants.yaml` that every unit operation computes `D` from — two hand-tuned
+descriptions of the same physics, never reconciled, disagreeing by up to 8x
+(#265). The coefficients ran 1.3–2.8x high on 24 of 27 pairs; all three Y/Dy
+pairs ran 4–8x low, which is a disagreement about that pair rather than a
+calibration offset. Which number you got depended on which API you reached for.
+
+Neither set was measured, so there was no right one to keep. The tie is broken
+by the coefficients being what the simulator actually runs on: a factor derived
+from them describes the model you are about to solve, and one authored beside
+them describes nothing else in the package. So `separation_factors.yaml` now
+declares *which* pairs to report and *at what conditions*, and the values come
+from the same `get_separation_factor` as the code above:
+
+```python
+sf_db = get_sf_database()
+data = sf_db.get("PC88A")
+data.conditions            # {'pH': 3.5, 'temperature_K': 298, 'concentration_M': 0.5}
+sf_db.get_sf("PC88A", "Nd_Pr")   # 4.03, the coefficients' own answer
+"Nd_Pr" in data.derived    # True
+```
+
+`conditions` is not decoration: it is the point the coefficients are evaluated
+at, so a factor quoted from this table is only the factor at that pH. For any
+other pH, ask `REEDistribution` directly.
+
+A pair given an explicit value in the YAML is used as authored and left out of
+`derived`. None ship with difflow_ree: an override is a claim that a measured
+number exists which the correlations cannot reproduce, and it needs a citation
+beside it.
 
 ---
 
@@ -2266,6 +2300,12 @@ ext_db.add_element_to_extractant("PC88A", "Ho", ...)
 Separation factor data can be added incrementally. You can add individual pairs to existing extractants or create complete entries for new ones.
 
 Adding pairs to an existing extractant:
+
+Anything added this way is an **authored** factor, used as given rather than
+derived from the extractant's correlations (#265). Reach for it when you have a
+*measured* number the correlations cannot reproduce; when they can, adding the
+element to the extractant (`add_element_to_extractant`, above) keeps one
+description of the physics instead of two, and every pair involving it follows.
 
 ```python
 from difflow_ree import get_sf_database
