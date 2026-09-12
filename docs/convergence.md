@@ -626,28 +626,50 @@ assert abs(gradient - finite_difference) < 1e-6
 
 ## Tear selection
 
-difflow does **not** choose tear streams for you: the tears are whatever
-`add_recycle` registered, one per recycle, and where you tear a loop is a
-modelling decision with real consequences for how fast it converges.
+Where you tear a loop is a modelling decision with real consequences: the tear
+is the fixed point the solve iterates on, so its placement sets the spectral
+radius of the map, and with it how fast the loop converges and sometimes
+whether it converges at all.
 
-`difflow.select_tear_streams` and `difflow.find_cycles` are analysis helpers for
-making that decision, not part of the solve path:
+By default difflow does not make that decision for you. The tears are whatever
+`add_recycle` registered, one per recycle, and a loop closed in the topology
+but never declared is not torn at all — inferring one silently would change
+the answer for flowsheets that already run.
+
+`fs.tear_analysis()` reports the loops, the declared tears, what each strategy
+would pick instead, and any inlet the unit order cannot supply. It reads the
+topology and runs no unit:
 
 ```python
-from difflow import find_cycles, select_tear_streams
-from difflow.initialization import FlowsheetGraph
-
-cycles = find_cycles(FlowsheetGraph.from_flowsheet(fs))
-tears = select_tear_streams(fs, method="heuristic")   # or "minimum"
+print(fs.tear_analysis())
 ```
 
-`"heuristic"` prefers a stream leaving a mixer, where the composition is
-already known; `"minimum"` greedily picks the stream appearing in the most
-remaining cycles, to tear as few streams as possible. The general rule is the
-one the gas plugin states quantitatively: tear where the map is least
-sensitive. A chord's tear-map slope there goes as
-`-sum(beta_e |q_e|) / (beta_c |q_c|)` over its loop, so tearing the *most*
-resistive element keeps the spectral radius small.
+`solve(tears="auto")` opts in to the choice, but only when no recycle has been
+declared; `"minimum"` names the other strategy. The selection is recorded in
+`last_solve_tear_streams`, and neither it nor the unit sequence is kept, so
+`fs.recycles` and `fs.units` are what you declared once the solve returns.
+[Streams and Flowsheets](streams-and-flowsheets.md) covers both in full.
+
+The pieces are also usable on their own:
+
+```python
+from difflow import (
+    FlowsheetGraph, find_cycles, select_tear_streams, calculation_order,
+)
+
+graph = FlowsheetGraph.from_flowsheet(fs)
+cycles = find_cycles(graph)                           # elementary cycles
+tears = select_tear_streams(fs, method="heuristic")   # or "minimum"
+calculation_order(graph, tears)                       # order once those are seeded
+```
+
+`"heuristic"` takes one tear per loop, preferring a stream leaving a mixing
+point, where the stream is the sum of everything entering it so a guess wrong
+in composition is still right in order of magnitude; `"minimum"` covers every
+loop with as few tears as it can. The general rule is the one the gas plugin
+states quantitatively: tear where the map is least sensitive. A chord's
+tear-map slope there goes as `-sum(beta_e |q_e|) / (beta_c |q_c|)` over its
+loop, so tearing the *most* resistive element keeps the spectral radius small.
 
 ---
 
