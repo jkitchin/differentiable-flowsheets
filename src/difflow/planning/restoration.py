@@ -19,7 +19,7 @@ infeasibility instead.
                 A_ub x - a <= b_ub
                 lb <= x <= ub,  a >= 0
 
-Two choices in that statement are deliberate.
+Three choices in that statement are deliberate.
 
 **The equality rows are not relaxed.** They are the delta-vector model rows
 (``y = y0 + J (u - u0)``) and the link rows, and both are *definitional*: given
@@ -37,6 +37,15 @@ and :meth:`~difflow.planning.planner.DeltaBasePlanner.solve` asks them. This is
 the same rule the module states for the acceptance test and for scoring
 violations, applied to restoration: never believe the LP about the plant.
 
+**Anything else is an error, not a default.** The two kinds above are the
+whole of ``A_ub`` today, and :func:`restoration_model` checks that rather
+than assuming it. The relaxable rows are picked by a *positive* match, so a
+third kind added to ``assemble`` would silently be left hard; phase one could
+then not buy down the violation on it, restoration would report no progress,
+and the planner would return ``restoration_failed`` on a recoverable problem
+with nothing anywhere to say why. An unrecognised row label raises instead,
+naming the row -- whoever adds a kind says which side it is on.
+
 Restoration widens the trust region rather than shrinking it. Infeasibility
 usually means the feasible set is *outside* the current box — in the worked
 case that produced this module, a tank's opening level was pinned to zero by a
@@ -52,7 +61,16 @@ import numpy as np
 
 from difflow.planning.lp import LPModel, LPSolution
 
-__all__ = ["restoration_model", "restoration_violation"]
+__all__ = ["restoration_model", "restoration_violation",
+           "RELAXABLE_PREFIXES", "STRUCTURAL_PREFIXES"]
+
+#: Inequality rows phase one may hand an artificial: the caller's specs.
+RELAXABLE_PREFIXES = ("spec[",)
+
+#: Inequality rows that define the model rather than constrain it on the
+#: caller's behalf, and so stay hard in phase one exactly as the equalities
+#: do: the SOS2 adjacency of a piecewise block.
+STRUCTURAL_PREFIXES = ("pw_sos2[",)
 
 
 def restoration_model(lp: LPModel) -> LPModel:
@@ -82,6 +100,13 @@ def restoration_model(lp: LPModel) -> LPModel:
         rows are consistent, so an infeasible *restoration* model is a report
         that the model structure, not the specs, is at fault.
 
+    Raises:
+        ValueError: If an inequality row is labelled with neither a relaxable
+            nor a structural prefix, or is not labelled at all. Restoration
+            does not guess: a row it cannot classify would be left hard, and
+            phase one would then minimise the wrong thing and report a
+            recoverable problem as ``restoration_failed``.
+
     Example:
         >>> from difflow.planning.restoration import restoration_model
         >>> phase1 = restoration_model(lp)          # doctest: +SKIP
@@ -99,8 +124,13 @@ def restoration_model(lp: LPModel) -> LPModel:
     # model and link equalities out of phase one. Handing one an artificial
     # would let restoration buy a lower predicted violation by breaking the
     # piecewise model, and report the discount as progress.
+    #
+    # The match is positive, so an unrecognised row would quietly be left
+    # hard and phase one would minimise the wrong thing. Classify every row
+    # and refuse the ones that fit neither side.
+    _check_row_kinds(lp, n_rows)
     relaxable = [i for i, name in enumerate(lp.ub_names)
-                 if name.startswith("spec[")]
+                 if name.startswith(RELAXABLE_PREFIXES)]
 
     if n_rows == 0 or not relaxable:
         # Nothing to relax: infeasibility is in the bounds, the equalities or
@@ -130,6 +160,38 @@ def restoration_model(lp: LPModel) -> LPModel:
         # violation, they are not a decision anybody makes.
         integer_cols=list(lp.integer_cols),
     )
+
+
+def _check_row_kinds(lp: LPModel, n_rows: int) -> None:
+    """Raise unless every inequality row is one of the two known kinds.
+
+    Args:
+        lp: The model being restored.
+        n_rows: Number of rows in ``lp.A_ub``.
+
+    Raises:
+        ValueError: If a row carries a label matching neither
+            :data:`RELAXABLE_PREFIXES` nor :data:`STRUCTURAL_PREFIXES`, or if
+            :attr:`~difflow.planning.lp.LPModel.ub_names` does not label every
+            row -- an unlabelled row cannot be classified at all.
+    """
+    known = RELAXABLE_PREFIXES + STRUCTURAL_PREFIXES
+    unknown = [n for n in lp.ub_names if not n.startswith(known)]
+    if unknown:
+        raise ValueError(
+            f"restoration cannot classify inequality row(s) "
+            f"{unknown[:3]}{' ...' if len(unknown) > 3 else ''}: every row of "
+            f"A_ub is either the caller's to relax "
+            f"({RELAXABLE_PREFIXES}) or structural "
+            f"({STRUCTURAL_PREFIXES}), and a new kind has to say which. Add "
+            f"its prefix to RELAXABLE_PREFIXES or STRUCTURAL_PREFIXES in "
+            f"difflow.planning.restoration.")
+    if len(lp.ub_names) != n_rows:
+        raise ValueError(
+            f"restoration cannot classify inequality rows: A_ub has {n_rows} "
+            f"row(s) but ub_names labels {len(lp.ub_names)} of them, so the "
+            f"rest cannot be told apart. Label every row in "
+            f"difflow.planning.assemble.")
 
 
 def restoration_violation(solution: LPSolution) -> float:

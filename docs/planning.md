@@ -815,7 +815,7 @@ $$\min\; \textstyle\sum a \quad\text{s.t.}\quad
   A_{eq} x = b_{eq},\;\; A_{ub} x - a \le b_{ub},\;\;
   l \le x \le u,\;\; a \ge 0.$$
 
-Two choices in that statement are deliberate.
+Three choices in that statement are deliberate.
 
 **The equality rows are not relaxed.** They are the model rows
 ($y = y_0 + J(u-u_0)$) and the link rows, and both are *definitional*: given
@@ -847,6 +847,17 @@ The optimisation radius is not the restoration radius. Searching for a
 feasible point can leave the working region very small, and that smallness is
 a fact about the search rather than about where the objective model is
 trustworthy, so restoration hands back the radius it was called with.
+
+**Anything that is not one of those two row kinds is an error.** `A_ub` holds
+the caller's spec rows and the SOS2 adjacency rows of a piecewise block, and
+restoration picks the first by a *positive* match on the row label — so
+silence is the default for anything new. A third row kind that was the
+caller's to relax would quietly be left hard, phase one would be unable to buy
+down the violation on it, and the planner would report `restoration_failed` on
+a recoverable problem with nothing to say why. So the taxonomy is asserted
+total: an unrecognised row label raises, naming the row. Adding a row kind to
+`assemble.py` means declaring which side it is on, in
+`RELAXABLE_PREFIXES` or `STRUCTURAL_PREFIXES`.
 
 Set `TrustRegionOptions(max_restoration=0)` to get the old behaviour; the
 history records every restoration cycle with `Iteration.restoration` set, so
