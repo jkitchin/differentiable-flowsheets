@@ -25,6 +25,9 @@ pytest tests/ --cov=src/difflow
 # Re-measure the per-test durations CI shards its three jobs on
 make test-durations
 
+# Measure the recycle solver's pass rate over the hard-flowsheet corpus
+make convergence
+
 # Build documentation (Jupyter Book)
 make book
 
@@ -44,6 +47,7 @@ difflow/
 │   │   ├── database.py    # Species property database
 │   │   ├── flowsheet.py   # Flowsheet with recycle solving
 │   │   ├── uncertainty.py # Sensitivity & UQ
+│   │   ├── convergence.py # Hard-flowsheet corpus + pass-rate benchmark
 │   │   ├── stochastic/    # Two-stage stochastic programming (SAA over scenarios)
 │   │   ├── planning/      # Delta-base planning (LP/MILP + trust region)
 │   │   ├── catalog.py     # Machine-readable schema of every unit operation
@@ -511,6 +515,94 @@ accuracy claim: SLP over AD delta vectors reaches the AC-OPF optimum and beats
 DC-OPF, all three dispatches scored in the full AC model; and the termination
 claim, linear against quadratic).
 
+### Measuring Convergence (`difflow.convergence`)
+
+How often the recycle solver works, over a corpus of deliberately hard
+flowsheets. `make convergence` (or `python -m difflow.convergence`), or:
+
+```python
+from difflow.convergence import run_benchmark
+report = run_benchmark()          # 99 solves: 11 cases x 3 accelerations x 3 inits
+print(report.as_text())
+```
+
+Invariants encoded in the module (do not weaken them):
+- **Passing is `converged AND correct`.** `Outcome.converged` is the solver's
+  own verdict and `Outcome.correct` is an audit of the answer (the overall
+  mole balance, or a known analytic solution). Keeping them apart is the
+  point: today three of 54 solves report success and land somewhere that does
+  not audit, and a benchmark reading only the flag would score those as wins.
+- **Every `Case.build` returns a FRESH flowsheet.** `solve` records its
+  verdict on the object, so a shared one carries one run's result into the
+  next.
+- **No case may be rigged.** A strategy must not start on the answer it is
+  scored against. `overshoot_loop` originally used `g(x) = 3F - 2x`, whose
+  fixed point is `x = F` — exactly the `"feed"` guess, which collected two
+  free passes. `TestNoCaseIsRigged` checks all six.
+- **Keep a control that is meant to pass.** An all-failing corpus cannot tell
+  a hard corpus from a broken solver; `two_phase_flash` passes 9/9.
+- **A raise is an outcome, not an error.** `run_case` records it and carries
+  on; a benchmark that dies on its hardest case reports the pass rate of the
+  cases before it.
+- Every `Case` states its own `difficulty`. A hard case that does not say why
+  measures something nobody can act on.
+
+What it measured (2026-09, and meant to move): pass rate 46.5%, convergence
+rate 49.5%. Anderson 84.8% against plain substitution's 27.3% — acceleration
+dominates. The three initialization strategies are separated by one solve, and
+`"unit"` (the path #247 wired up) scores exactly what the 0.01 mol/s default
+it replaced scores: it saves an iteration or two and flips no verdict. That
+held unchanged when the corpus went from six cases to eleven.
+
+**Every case is solved by at least one acceleration.** Eleven cases across the
+families #251 names — high gain, sharp splits, multi-loop, phase-regime
+switching, near-pinch columns, trace tears, signed tears — and none defeats
+all three methods. That negative result is the benchmark's main finding and
+the thing #251 turns on.
+
+Two traps it exposes, both worth knowing independently of that:
+- `tol` tests the STEP, not the error, so on a loop of gain `g` it understates
+  the remaining error by `1/(1-g)` (worse for a non-normal coupling, where the
+  worst case is `||(I - M)^-1||`). At `g = 0.97` Wegstein stops inside `1e-8`
+  and is 1% out, reporting convergence and meaning it. `trace_recycle` pins it.
+  Since #264 `solve` MEASURES that rather than leaving it to be inferred:
+  `error_probe` extra substitution passes after convergence give
+  `last_solve_gain` and `last_solve_error_estimate`, a `TearToleranceWarning`
+  fires when the error is past `tol` by 10x or more (a gain of 0.9 -- below
+  that is the step test's ordinary slack, and a warning on every solve is
+  noise), and `tol_basis="error"` tightens the step test until the measured
+  error is inside `tol`. Opt-in, because it costs iterations. Still an
+  ABSOLUTE test: the scale half of the trap is the caller's to set.
+  The extrapolation ratio is SIGNED (an oscillating loop is closer than its
+  step, not further), works on an expanding loop, and drops entries already at
+  round-off -- a ratio of noise lands near one, which is where `1/(1-s)` blows
+  up, and a tear carrying a pressure of 1e5 has such an entry most solves.
+- `signed_tear` was NOT a second instance of that trap. Its apparent 450x
+  non-normal amplification was its reference answer, written to six decimals
+  and so 4.4e-6 from `(I - M)^-1 . 1`; the solver lands 7.6e-9 away, inside its
+  own residual. Reference now at full float64 and the case audits at 1e-6 like
+  the other analytic ones (#264).
+- `clip_negative_flows` defaults to True and binds on the Wegstein and
+  Anderson paths but NOT on the unaccelerated one -- deliberately (#263): it
+  guards an *extrapolated* guess, and substitution makes none. Clipping there
+  would clip `g` itself, which invents fixed points and, since a traced solve
+  falls back to that path, puts a kink inside the map `optx.fixed_point`
+  implicitly differentiates (measured: an exact gradient of 2.0 comes back as
+  1.333 on a tear flow that converges to zero). A solve that fails *because*
+  of the clip now says so: `last_solve_clip_active` counts the iterations it
+  moved the iterate, and the non-convergence warning names the remedy.
+  On a tear whose answer is genuinely negative that projection is the
+  difference between solving it and not: `signed_tear` is the one case where
+  plain substitution beats both accelerated methods, and
+  `clip_negative_flows=False` fixes Anderson on it (100 iterations to 13).
+  Same point `difflow_gas` already makes for signed flows.
+
+Anderson is not free either — `phase_coupled_flash` fails under it and
+converges under Wegstein.
+
+Docs: `docs/convergence.md` ("Measured pass rates"). Tests:
+`tests/test_convergence_benchmark.py`, `tests/test_benchmarks_verdict.py`.
+
 ### Stochastic Programming (`difflow.stochastic`)
 
 Design under uncertainty: the sample average approximation of a two-stage
@@ -667,6 +759,7 @@ jax.debug.print("value: {x}", x=value)
 | `src/difflow/params_mixin.py` | ParamsMixin base class for all Params dataclasses |
 | `src/difflow/docstrings.py` | Reads Params field descriptions out of the `Attributes:` docstrings and field comments, for the catalog |
 | `src/difflow/gui/doclinks.py` | Resolves an operation name to its section in `docs/` (the palette's documentation link) |
+| `src/difflow/convergence.py` | Hard-flowsheet corpus and the recycle solver's measured pass rate |
 | `src/difflow/planning/` | Delta-base planning: AD delta vectors -> trust-region LP/MILP |
 | `src/difflow/stochastic/` | Two-stage stochastic programming: SAA over a scenario sample, VSS/EVPI |
 | `src/difflow_bio/__init__.py` | Bio manufacturing plugin exports |

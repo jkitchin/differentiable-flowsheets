@@ -42,7 +42,7 @@ endif
 .PHONY: all notebooks notebooks-force notebooks-bio notebooks-ree notebooks-cc \
         notebooks-bio-force notebooks-ree-force notebooks-cc-force \
         clean test test-release test-slow test-all test-durations book book-clean sync \
-        gui gui-build gui-test
+        gui gui-build gui-test convergence
 
 all: notebooks
 
@@ -155,6 +155,13 @@ test-all:
 # machine, or the numbers it records are of a loaded box, which takes ~40 min.
 test-durations:
 	$(UV_RUN_DEV) pytest tests/ --store-durations
+
+# Measure how often the recycle solver converges, over the hard-flowsheet
+# corpus in difflow.convergence. A few minutes, mostly JAX compilation. The
+# number is a measurement and is meant to move -- rerun it after anything
+# that touches initialization, acceleration or the tear solve.
+convergence:
+	$(UV_RUN_DEV) python -m difflow.convergence
 
 # Clean generated files
 clean:

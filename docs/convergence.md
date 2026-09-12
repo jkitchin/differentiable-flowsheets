@@ -21,6 +21,7 @@ loop still will not close.
 - [The equation-oriented route](#the-equation-oriented-route)
 - [Diagnostics](#diagnostics)
 - [A worked diagnosis](#a-worked-diagnosis)
+- [Measured pass rates](#measured-pass-rates)
 - [Tear selection](#tear-selection)
 - [What the plugins add](#what-the-plugins-add)
 
@@ -62,8 +63,9 @@ that ran. Then work down this list.
 
 4. **Check `clip_negative_flows`.** If any tear flow is legitimately signed,
    the default clipping is not a safeguard but a bug, and the solve cannot
-   converge. This is a correctness switch, not a tuning knob — see
-   [Clipping negative flows is a correctness switch](#clipping-negative-flows-is-a-correctness-switch).
+   converge. The warning says so when it happened: it counts the iterations on
+   which the projection moved the proposed iterate. See
+   [Clipping negative flows safeguards an extrapolation](#clipping-negative-flows-safeguards-an-extrapolation).
 
 5. **Look for a unit that could not run.** A `TearInitializationWarning` during
    the solve says the initial pass over the units failed somewhere and that
@@ -293,7 +295,7 @@ best on a loop with one dominant mode, and Anderson pulls ahead as the tear
 vector grows — but the order of magnitude is typical: acceleration is worth a
 factor of a few, not a factor of a hundred.
 
-### Clipping negative flows is a correctness switch
+### Clipping negative flows safeguards an extrapolation
 
 Both accelerated methods extrapolate, and an extrapolated molar flow can land
 below zero on the way to a solution that is entirely positive. By default the
@@ -313,6 +315,126 @@ streams = fs.solve(clip_negative_flows=False)   # signed tear flows
 
 If a solve with signed flows will not converge and nothing else explains it,
 this is the first thing to check.
+
+### Clipping binds on the accelerated paths only
+
+`acceleration="none"` does not clip, and passing the flag to it changes
+nothing. That is a decision (#263), not an omission, and it follows from what
+the projection is *for*.
+
+| `acceleration` | proposes | clip applies |
+|---|---|---|
+| `"none"` | `x + α(g(x) − x)`, a step toward a value the units computed | no |
+| `"wegstein"` | an extrapolation from the last two iterates | yes |
+| `"anderson"` | an extrapolation from the last `depth` iterates | yes |
+
+The projection guards a *guess no unit computed*. Wegstein and Anderson each
+propose one, and it can leave the physical orthant on the way to a solution
+entirely inside it. The unaccelerated step is a convex combination of `x` and
+`g(x)` (for the usual `α ≤ 1`), so it cannot leave a region both ends are in;
+there is no guess to guard. Clipping there would clip `g` itself, which is a
+different act with two costs:
+
+- **It invents fixed points.** `clip(g(x)) = x` has solutions where `g(x) = x`
+  has none — the module docstring of `difflow.convergence` names this as one of
+  the ways a solve reports success and lands somewhere that does not audit.
+- **It breaks gradients.** A traced solve falls back to `"none"`, so that path
+  *is* the one `jax.grad` runs on, and the clip would sit inside the map
+  `optx.fixed_point` implicitly differentiates. Wherever a tear flow converges
+  to exactly zero — an ordinary species absent from a recycle —
+  `jnp.maximum(x, 0)` contributes a derivative of one half at its kink. On the
+  two-species loop in `tests/test_flowsheet_tear_clip.py` the forward answer
+  stays right and the gradient comes back 1.333 against an exact 2.0.
+
+What the asymmetry used to cost was silence: an accelerated solve on a signed
+tear failed with nothing in the output naming the projection as the reason.
+That is now reported. `fs.last_solve_clip_active` counts the iterations on
+which the clip actually moved the proposed iterate, and a non-convergence
+warning with a non-zero count says so and names the remedy:
+
+```text
+Recycle solve did not converge: tear stream(s) tear reached a residual of
+1.324e+00 after 100 of 100 iterations ... The negative-flow clip moved the
+proposed iterate on 100 of those iterations: if any tear flow here is
+legitimately signed (a gas network, a power flow, any tear carrying a signed
+quantity), that projection puts the fixed point out of reach -- pass
+clip_negative_flows=False.
+```
+
+### Measuring the error, not the step
+
+`tol` tests the max-norm of $g(x) - x$, the **step** between successive tear
+iterates. The quantity a caller cares about is the **error**, $x^* - x$, and
+those are not the same number:
+
+$$x^* - x = (I - M)^{-1}\left(g(x) - x\right), \qquad M = \frac{\partial g}{\partial x}$$
+
+For a loop with one dominant mode of gain $g$ that is a factor of $1/(1-g)$:
+33 at a gain of 0.97, 1000 at 0.999. A solve that stops inside `1e-8` on such a
+loop reports convergence, means it, and is decades outside the tolerance it was
+given.
+
+After a solve converges, `solve` spends `error_probe` extra plain-substitution
+passes measuring that factor rather than assuming it (#264):
+
+$$r_j = g(x_j) - x_j, \quad x_{j+1} = g(x_j), \qquad
+x^* - x_0 = \sum_j r_j \approx \sum_{j<k} r_j + r_{k-1}\frac{s}{1-s}$$
+
+with $s = \langle r_{k-2}, r_{k-1}\rangle / \langle r_{k-2}, r_{k-2}\rangle$ the
+*signed* ratio of the dominant mode. Two passes is the default and is enough
+for a loop with one dominant mode; `error_probe=0` skips it.
+
+```python
+streams = fs.solve(tol=1e-8, acceleration="wegstein")
+fs.last_solve_residual        # 9.3e-09  -- the step, which met tol
+fs.last_solve_gain            # 0.97
+fs.last_solve_error_estimate  # 3.0e-07  -- the error, which did not
+```
+
+Three details worth knowing, because each is a way an estimator like this goes
+wrong:
+
+- **The ratio is signed.** An oscillating loop has $s < 0$, so $1/(1-s)$ is
+  *less* than one and the answer sits closer than the step suggests. A ratio of
+  norms would put such a solve on the wrong side and warn about it.
+- **It works on an expanding loop too.** $r/(1-s)$ is the analytic continuation
+  of a Neumann sum that does not converge for $|s| > 1$; a map with $s = 3$ has
+  its fixed point half a residual away, not infinitely far.
+- **Entries already at round-off are dropped.** They say nothing about the
+  error, and a ratio taken from floating-point noise lands near one — which is
+  exactly where $1/(1-s)$ blows up. A tear carrying a pressure of $10^5$
+  alongside flows of order one has such an entry on almost every solve.
+
+#### The warning
+
+A converged solve whose measured error is past `tol` raises
+`TearToleranceWarning` — but only when the error is at least ten times the
+step, which is a gain of 0.9 or more. Below that the gap is the ordinary slack
+of a step test (the unaccelerated path deliberately stops on
+$|g(x)-x| < \mathrm{tol}\,(1+|x|)$), and a warning that fires on every solve is
+read as noise exactly when it is not. Across the corpus — eleven cases times
+three accelerations — it fires once, on the one solve that is genuinely wrong.
+
+#### Asking for the error instead
+
+`tol_basis="error"` makes `tol` mean what it reads as. When the probe says the
+answer is outside it, `solve` tightens its step test by the factor just
+measured and solves again, warm-started, up to three times:
+
+```python
+fs.solve(tol=1e-8, tol_basis="error")    # on trace_recycle, gain 0.97
+# 53 iterations -> 71, error estimate 3.0e-07 -> 9.7e-09
+```
+
+It is opt-in because it costs iterations: a loop that converges today needs
+more of them to satisfy it, and changing that for every existing caller is not
+a cost to impose silently.
+
+It is also still an **absolute** test. On a tear whose converged value is
+$3\times10^{-5}$, an error of `1e-8` is a relative error of $3\times10^{-4}$ —
+the scale half of the trap, which is the caller's to set with `tol` (or with
+`Flowsheet(species_order, default_flow=...)` for a trace loop). The gain half
+is what is measured here.
 
 ### Damping
 
@@ -470,6 +592,9 @@ converged:
 | `last_solve_iterations` | iterations used; equals `max_iter` when it did not converge |
 | `last_solve_method` | `"anderson"`, `"wegstein"`, `"none"`, `"fixed_point (traced)"`, or `"direct"` for a recycle-free sequential solve |
 | `last_solve_tear_streams` | the tear (recycle destination) names |
+| `last_solve_clip_active` | iterations on which `clip_negative_flows` actually moved the proposed iterate; always `0` on the unaccelerated path, which does not clip |
+| `last_solve_gain` | measured signed gain of the tear map at the solution, or `None` where there was nothing to measure |
+| `last_solve_error_estimate` | measured error left in the tear — the number `tol` reads as if it were |
 
 The tri-state `last_solve_converged` is the one to test against `is False`
 rather than falsy: `None` means "not judged", not "failed".
@@ -621,6 +746,203 @@ h = 1e-6
 finite_difference = (objective(1.0 + h) - objective(1.0 - h)) / (2 * h)
 assert abs(gradient - finite_difference) < 1e-6
 ```
+
+---
+
+## Measured pass rates
+
+How often any of this actually works is a measurement, and
+`difflow.convergence` is where it is made. It holds a corpus of deliberately
+hard flowsheets and runs each one across every acceleration and every
+initialization strategy:
+
+```python
+from difflow.convergence import run_benchmark
+
+report = run_benchmark()
+print(report.as_text())
+```
+
+The full grid is 99 solves and takes several minutes, most of it JAX
+compilation. Narrow it while iterating:
+
+```python
+report = run_benchmark(cases=["high_gain_recycle"], accelerations=("anderson",))
+```
+
+### Passing means converged *and* right
+
+A solve reports two separate things, and the benchmark keeps them apart:
+
+| | meaning |
+|---|---|
+| `Outcome.converged` | the solver's own verdict, `last_solve_converged` |
+| `Outcome.correct` | the answer closes its material balance, or matches a known one |
+| `Outcome.passed` | both |
+
+They are not the same. `pass_rate` is 46.5% against a `convergence_rate` of
+49.5%: three of the 99 solves report success and land somewhere that does not
+audit. A benchmark that counted only the solver's flag would call those wins.
+
+### What the corpus says today
+
+```
+99 solves  (tol=1e-08, max_iter=100)
+pass rate         46.5%   (converged AND the answer audits)
+convergence rate  49.5%   (the solver's own verdict)
+
+by acceleration                    by initialization
+  anderson      28/33   84.8%        default       15/33   45.5%
+  wegstein       9/33   27.3%        unit          15/33   45.5%
+  none           9/33   27.3%        feed          16/33   48.5%
+
+mean iterations over passing solves: anderson=4.3, wegstein=18.9, none=41.0
+```
+
+**Every case in the corpus is solved by at least one acceleration.** Eleven
+cases across the hard families — high loop gain, sharp splits, multi-loop,
+phase-regime switching, near-pinch columns, trace-magnitude tears, signed
+tears — and none of them defeats all three methods. That is the most useful
+thing the benchmark says, and it is a negative result.
+
+Four findings worth acting on:
+
+**Acceleration dominates; initialization barely registers.** Anderson passes
+84.8% where plain substitution passes 27.3%. Against that, the three starting
+points are separated by a single solve. The first thing to change on a failing
+recycle is `acceleration`, not the guess.
+
+**The `initialize()` path (#247) changed no outcome.** `"unit"` — the
+propagation pass that #247 wired up — scores exactly what `"default"` scores,
+the 0.01 mol/s stream it replaced: 15/33 either way, unchanged from when the
+corpus was six cases. It reliably saves an iteration or two and it flips no
+verdict anywhere. It made the first step better without making a failing solve
+succeed. If a recycle is failing, a better guess of the same kind is not the
+fix.
+
+**Anderson is not free, and `clip_negative_flows` is why, once.**
+`phase_coupled_flash` fails under Anderson and converges under Wegstein in 28
+iterations — Anderson walks off somewhere else rather than running out of road.
+And `signed_tear` inverts the ranking outright: plain substitution solves it
+and *both* accelerated methods fail. The reason is worth knowing —
+`clip_negative_flows` defaults to `True` and binds on the Wegstein and Anderson
+paths but not on the unaccelerated one
+([why](#clipping-binds-on-the-accelerated-paths-only)), so on a tear whose answer is
+genuinely negative the two accelerated methods carry a projection the plain one
+does not. Passing `clip_negative_flows=False` fixes Anderson on it
+immediately (100 iterations without convergence → 13 with). This is the same
+point `difflow_gas` already makes for signed flows; it applies to any tear
+whose components can go negative. Since #263 the failing solve says this for
+itself rather than leaving it to be worked out.
+
+**A disjunction does not need binaries here.** `regime_switch` is a unit
+choosing between two linear branches with the answer exactly on the boundary,
+expanding below the switch and contracting above it. Plain substitution can
+only chatter across the join, and Wegstein stalls — but Anderson lands on it
+in two iterations.
+
+### What is *not* hard
+
+Worth recording, because these are the families most often assumed difficult:
+
+- **A rigorous MESH column in a recycle.** `column_recycle` — twelve stages,
+  95% of the distillate returned — passes under every setting, at every reflux
+  ratio tried from just above minimum to well above it.
+- **Nonsmooth tear maps as such.** Both `regime_switch` and the kinked maps
+  tried while building the corpus fall to Anderson quickly.
+- **Tear dimension.** A tear with twelve components and a spectral radius of
+  0.985 converges under Anderson as readily as one with three, provided the
+  coupling is non-negative. Where high-dimensional cases did fail, the cause
+  was the negative-flow clipping above, not the dimension.
+
+### The trap the corpus exposes
+
+`tol` is a residual on the **step**, and on a high-gain loop that is much
+weaker than it looks. A step of $d$ on a loop of gain $g$ leaves an error of
+about $d/(1-g)$, so at $g = 0.97$ the residual understates the remaining error
+by a factor of 33.
+
+`trace_recycle` is built on exactly that: gain 0.97 on a tear whose converged
+value is about $3 \times 10^{-5}$. Wegstein stops with a residual inside
+`1e-8`, reports convergence, and is about 1% out. It is right on its own terms
+— the step really is that small — and wrong on yours.
+
+Since #264 the solve measures that instead of leaving you to infer it. See
+[Measuring the error, not the step](#measuring-the-error-not-the-step): the
+same solve now reports `last_solve_gain = 0.97` and
+`last_solve_error_estimate = 3.0e-7`, warns that it is outside the tolerance
+it was given, and `tol_basis="error"` reaches it.
+
+**What was *not* a second instance of this.** `signed_tear` was read as the
+non-normal version of the same trap: $\rho = 0.75$ suggests an amplification
+of 4, and the case appeared to leave a relative error of $1.2 \times 10^{-6}$
+from a residual of $10^{-8}$ — a factor of about 450, blamed on
+$\lVert (I-M)^{-1} \rVert$ being the real amplification rather than
+$1/(1-\rho)$. It was not. The case's reference answer was written out to six
+decimals, which is itself $4.4 \times 10^{-6}$ from $(I-M)^{-1}\mathbf{1}$, and
+the audit was measuring that rounding. Plain substitution lands
+$7.6 \times 10^{-9}$ from the answer — *inside* its own tear residual, an
+amplification of 0.57. The reference is now at full precision and the case
+audits at `1e-6` like every other analytic one.
+
+The general point stands: for a multicomponent tear the worst-case
+amplification is $\lVert (I-M)^{-1} \rVert$ rather than $1/(1-\rho)$. The
+corpus just does not happen to contain an example of it, and the measured
+estimate reports the amplification along the residual actually present rather
+than a worst case over directions that are not.
+
+### Adding a case
+
+A case is a name, a builder, and a sentence saying what makes it hard:
+
+```python
+from difflow.convergence import Case, run_case
+from difflow.flowsheet import Flowsheet, Unit
+from difflow.streams import make_stream
+
+
+def build_my_flowsheet():
+    """A FRESH flowsheet every call: solve() records its verdict on the object."""
+    def mix(feed, tear):
+        return make_stream({"A": feed["F_A"] + tear["F_A"]},
+                           feed["T"], feed["P"])
+
+    def split(inlet):                  # 95% back round: loop gain 0.95
+        flow = inlet["F_A"]
+        return (make_stream({"A": 0.95 * flow}, inlet["T"], inlet["P"]),
+                make_stream({"A": 0.05 * flow}, inlet["T"], inlet["P"]))
+
+    fs = Flowsheet(["A"], default_flow=0.01)
+    fs.add_feed("feed", make_stream({"A": 1.0}, 300.0, 101325.0))
+    fs.add_unit(Unit("mix", mix, ["feed", "tear"], ["mixed"]))
+    fs.add_unit(Unit("split", split, ["mixed"], ["recycle", "product"]))
+    fs.add_recycle("recycle", "tear")
+    return fs
+
+
+case = Case(
+    name="my_hard_loop",
+    build=build_my_flowsheet,          # must return a FRESH Flowsheet
+    difficulty="Why this one is hard, in a sentence.",
+    tags=("recycle", "high-gain"),
+)
+run_case(case, acceleration="wegstein")
+```
+
+`build` has to return a new flowsheet each call — `solve` records its verdict
+on the object, so a shared one carries one run's result into the next. The
+default audit is the overall mole balance; a case whose reaction changes the
+mole count, or whose answer is known analytically, passes its own `check`.
+
+Keep at least one case in the corpus that is *meant* to pass. A benchmark
+where everything fails cannot distinguish a hard corpus from a broken solver.
+`two_phase_flash` and `column_recycle` are the controls, and both pass 9/9.
+
+And check a new case is not *rigged* — that no initialization strategy starts
+on the answer it is about to be scored against. `overshoot_loop` originally
+used $g(x) = 3F - 2x$, whose fixed point is $x = F$, exactly the `"feed"`
+guess; that strategy collected two passes on a case it had not solved.
+`TestNoCaseIsRigged` checks every case in the corpus against this.
 
 ---
 

@@ -38,6 +38,19 @@ import optimistix as optx
 
 FEED_PREFIX = "feed:"
 
+#: How many times ``solve(tol_basis="error")`` may tighten its step test
+#: before giving up and reporting what it reached.  Each tightening is a
+#: fresh solve warm-started from the last one, so the cost is bounded; three
+#: is enough for the gain estimate to be wrong by a decade twice over.
+_MAX_TOLERANCE_TIGHTENINGS = 3
+
+#: How much bigger than the reported step the measured error has to be
+#: before :class:`TearToleranceWarning` fires under the default
+#: ``tol_basis="step"``.  Ten is a loop gain of 0.9 --- the high-gain
+#: regime the warning is for.  See ``Flowsheet._report_tolerance`` for why
+#: a bare ``error > tol`` is the wrong test.
+_TOLERANCE_WARNING_AMPLIFICATION = 10.0
+
 
 class ConvergenceWarning(UserWarning):
     """A recycle solve returned without meeting its tolerance.
@@ -60,6 +73,30 @@ class ConvergenceError(RuntimeError):
 
     Only ``solve(on_nonconvergence="raise")`` produces this; the default is
     a :class:`ConvergenceWarning`. It carries the same message.
+    """
+
+
+class TearToleranceWarning(UserWarning):
+    """A recycle solve met its step test and is still outside its tolerance.
+
+    ``tol`` tests the max-norm of ``g(x) - x``, the *step* between
+    successive tear iterates.  On a loop of gain ``g`` a step of ``d``
+    leaves an error of about ``d / (1 - g)``, so at a gain of 0.97 a solve
+    that stops inside ``1e-8`` is about ``3e-7`` out --- and reports
+    convergence, meaning it (#264).  The solver is right on its own terms
+    and wrong on the caller's, and nothing in the result said so: the gain
+    was not reported anywhere and ``last_solve_residual`` is the step, not
+    the error.
+
+    This warning fires when the error :meth:`Flowsheet.solve` measures
+    after converging exceeds the tolerance that was asked for.  The
+    measurement is in :attr:`Flowsheet.last_solve_error_estimate` and the
+    gain behind it in :attr:`Flowsheet.last_solve_gain`.
+
+    Silence it with ``solve(error_probe=0)``, which also skips the
+    measurement, or act on it with ``solve(tol_basis="error")``, which
+    keeps tightening the step test until the measured error is inside
+    ``tol``.
     """
 
 
@@ -311,6 +348,21 @@ class Flowsheet:
         self.last_solve_tol: float | None = None
         #: tear-stream (recycle destination) names of the last recycle solve
         self.last_solve_tear_streams: list[str] = []
+        #: signed dominant contraction ratio of the tear map, measured at
+        #: the last solution.  ``None`` when it was not measured (no
+        #: recycles, a solve that did not converge, ``error_probe=0``, or a
+        #: residual already at round-off).
+        self.last_solve_gain: float | None = None
+        #: estimated error remaining in the tear at the last solution, in
+        #: the same max-norm as ``last_solve_residual``.  This is the
+        #: number ``tol`` reads as if it were, and on a high-gain loop the
+        #: two differ by ``1 / (1 - gain)`` (#264).
+        self.last_solve_error_estimate: float | None = None
+        #: iterations of the last solve on which ``clip_negative_flows``
+        #: actually moved the proposed iterate.  Zero on the unaccelerated
+        #: path, which does not clip at all (#263), and zero on an
+        #: accelerated solve whose iterates all stayed non-negative.
+        self.last_solve_clip_active: int = 0
 
     def add_feed(self, name: str, stream: Stream) -> None:
         """Add a feed stream to the flowsheet.
@@ -357,6 +409,8 @@ class Flowsheet:
         clip_negative_flows: bool = True,
         on_nonconvergence: Literal["warn", "raise", "ignore"] = "warn",
         tears: Literal["declared", "auto", "heuristic", "minimum"] = "declared",
+        error_probe: int = 2,
+        tol_basis: Literal["step", "error"] = "step",
     ) -> dict[str, Stream]:
         """Solve the flowsheet.
 
@@ -411,6 +465,36 @@ class Flowsheet:
                 where a negative fixed point is legitimate and clipping
                 prevents convergence. Only flow entries are clipped;
                 temperature and pressure are never touched.
+
+                **It binds on the accelerated paths only** (#263), and
+                that is deliberate rather than an oversight. The
+                projection is a safeguard on *extrapolation*: Wegstein
+                and Anderson each propose an iterate no unit computed,
+                and that guess can leave the physical orthant on the way
+                to a solution entirely inside it. ``acceleration="none"``
+                extrapolates nothing --- its iterate is
+                ``x + damping (g(x) - x)``, which for the usual
+                ``damping <= 1`` cannot leave a region both ends are in
+                --- so there is no guess to safeguard, and clipping there
+                would clip ``g`` itself. That is a different act with two
+                costs: it invents fixed points the model does not have,
+                and it sits inside the map ``optx.fixed_point``
+                implicitly differentiates. Wherever a tear flow converges
+                to exactly zero --- an ordinary species absent from a
+                recycle --- ``jnp.maximum(x, 0)`` contributes a
+                derivative of one half at the kink, and the gradient
+                comes back wrong while the forward pass stays right. See
+                ``tests/test_flowsheet_tear_clip.py::
+                test_clipping_inside_the_map_would_break_the_gradient``.
+
+                Because a traced solve falls back to ``"none"``, the clip
+                never applies under ``jax.grad`` or ``jit``.
+
+                When the projection actually *moves* an iterate it is
+                counted in :attr:`last_solve_clip_active`, and a solve
+                that then fails to converge says so in its warning ---
+                a clipped signed tear is the one failure mode this flag
+                causes, and it used to be silent.
             on_nonconvergence: What to do when the tear iteration runs out
                 of iterations without meeting ``tol``. The returned streams
                 are the last iterate either way, and the diagnostics are in
@@ -449,6 +533,35 @@ class Flowsheet:
                 there to fill a gap, not to overrule one. Use
                 :meth:`tear_analysis` to see what the strategies would
                 pick without solving anything.
+            error_probe: Extra plain-substitution passes to spend, after a
+                solve converges, measuring the error that ``tol`` does not
+                (#264). ``tol`` tests the max-norm of ``g(x) - x``, a
+                *step*; the error is ``(I - M)^-1 (g(x) - x)``, and on a
+                loop of gain 0.97 those differ by a factor of 33. Each pass
+                measures one more term of that inverse, and the result is
+                reported in :attr:`last_solve_gain` and
+                :attr:`last_solve_error_estimate`. Two passes --- the
+                default --- is enough for a loop with one dominant mode,
+                which is the usual case; more refines it. ``0`` skips the
+                measurement entirely, along with
+                :class:`TearToleranceWarning`.
+
+                The probe never runs on a solve that did not converge (it
+                has a warning of its own, and no solution to extrapolate
+                from) or under ``jax.grad``/``jit``.
+            tol_basis: What ``tol`` tests.
+
+                - ``"step"`` (default): the max-norm of ``g(x) - x``, which
+                  is what it has always tested. A high-gain loop is
+                  accepted well outside it, and the measurement above is
+                  what now says so.
+                - ``"error"``: the *measured* error. When the probe says
+                  the answer is outside ``tol``, ``solve`` tightens its
+                  step test by the factor just measured and solves again,
+                  warm-started, up to three times. This is the honest
+                  reading of ``tol`` and it costs iterations --- a loop
+                  that converges today needs more of them to satisfy it,
+                  which is why it is opt-in.
 
         Returns:
             Dictionary of all streams in the flowsheet
@@ -457,8 +570,9 @@ class Flowsheet:
             ConvergenceError: If the solve did not converge and
                 ``on_nonconvergence="raise"``.
             ValueError: If ``on_nonconvergence`` is not one of the three
-                recognised values, ``acceleration`` is unknown, or
-                ``damping`` is not positive.
+                recognised values, ``acceleration`` or ``tol_basis`` is
+                unknown, ``damping`` is not positive, or ``tol_basis`` is
+                ``"error"`` with no ``error_probe`` to measure it.
         """
         if on_nonconvergence not in ("warn", "raise", "ignore"):
             raise ValueError(
@@ -479,6 +593,18 @@ class Flowsheet:
                 f"Unknown tears: {tears!r}. "
                 'Expected "declared", "auto", "heuristic" or "minimum".'
             )
+        if tol_basis not in ("step", "error"):
+            raise ValueError(
+                f"Unknown tol_basis: {tol_basis!r}. Expected \"step\" (tol "
+                'tests |g(x) - x|, the historical meaning) or "error" (tol '
+                "tests the measured error, which needs error_probe > 0)."
+            )
+        if tol_basis == "error" and error_probe < 1:
+            raise ValueError(
+                'tol_basis="error" needs error_probe > 0: the error is '
+                "measured with extra substitution passes, and with none of "
+                "them there is nothing to test against."
+            )
 
         if tears != "declared" and not self.recycles:
             return self._solve_auto_torn(
@@ -492,6 +618,8 @@ class Flowsheet:
                 use_initialization=use_initialization,
                 clip_negative_flows=clip_negative_flows,
                 on_nonconvergence=on_nonconvergence,
+                error_probe=error_probe,
+                tol_basis=tol_basis,
             )
 
         if not self.recycles:
@@ -502,11 +630,15 @@ class Flowsheet:
             self.last_solve_converged = True
             self.last_solve_tol = tol
             self.last_solve_tear_streams = []
+            self.last_solve_gain = None
+            self.last_solve_error_estimate = 0.0
+            self.last_solve_clip_active = 0
             return self._solve_sequential()
 
         self.last_solve_method = acceleration
         self.last_solve_tol = tol
         self.last_solve_tear_streams = [dest for dest in self.recycles.values()]
+        self.last_solve_clip_active = 0
 
         # Initialize tear streams.  The guess comes from the SOURCE end of
         # each recycle: `dest` is an inlet, so nothing in the flowsheet
@@ -542,27 +674,77 @@ class Flowsheet:
             acceleration = "none"
             self.last_solve_method = "fixed_point (traced)"
 
-        # Solve with chosen method.  Every path records its verdict in
-        # last_solve_converged, so the non-convergence check is done once
-        # here rather than at each of the three returns.
-        if acceleration == "none":
-            streams = self._solve_with_recycle_damped(
-                tear_streams, tol, max_iter, damping
-            )
-        elif acceleration == "wegstein":
-            streams = self._solve_with_wegstein(
-                tear_streams, tol, max_iter,
-                clip_negative_flows=clip_negative_flows,
-            )
-        elif acceleration == "anderson":
-            streams = self._solve_with_anderson(
-                tear_streams, tol, max_iter, anderson_depth,
-                clip_negative_flows=clip_negative_flows,
-            )
-        else:
+        if acceleration not in ("none", "wegstein", "anderson"):
             raise ValueError(f"Unknown acceleration method: {acceleration}")
 
+        tear_names = list(self.recycles.values())
+        self.last_solve_gain = None
+        self.last_solve_error_estimate = None
+
+        # Solve, measure, and under tol_basis="error" solve again against a
+        # tighter step test.  One pass through this loop is the historical
+        # behaviour with a measurement bolted on the end; the retries only
+        # happen when the caller asked for tol to mean the error and the
+        # measurement says it does not yet.  Every path records its verdict
+        # in last_solve_converged, so the non-convergence check is done once
+        # after the loop rather than at each of the three returns.
+        tol_step = tol
+        iterations = 0
+        for attempt in range(_MAX_TOLERANCE_TIGHTENINGS + 1):
+            if acceleration == "none":
+                # No clip_negative_flows here, and not by omission (#263).
+                # The projection safeguards an *extrapolated* guess; this
+                # path extrapolates nothing, so clipping it would clip g
+                # itself -- inventing fixed points, and putting a kink
+                # inside the map that optx.fixed_point implicitly
+                # differentiates.  The argument, and the gradient it
+                # breaks, are in solve's docstring.
+                streams = self._solve_with_recycle_damped(
+                    tear_streams, tol_step, max_iter, damping
+                )
+            elif acceleration == "wegstein":
+                streams = self._solve_with_wegstein(
+                    tear_streams, tol_step, max_iter,
+                    clip_negative_flows=clip_negative_flows,
+                )
+            else:
+                streams = self._solve_with_anderson(
+                    tear_streams, tol_step, max_iter, anderson_depth,
+                    clip_negative_flows=clip_negative_flows,
+                )
+
+            # The tolerance reported is the one the caller asked for, not
+            # the internal step test a retry is running against.
+            self.last_solve_tol = tol
+            iterations += self.last_solve_iterations or 0
+            self.last_solve_iterations = iterations
+
+            if error_probe < 1 or not self.last_solve_converged:
+                # A failed solve has a warning of its own and nothing to
+                # extrapolate from; probing it would spend flowsheet passes
+                # to describe a point that is not a solution.
+                break
+
+            gain, error = self._estimate_tear_error(
+                streams, tear_names, error_probe
+            )
+            self.last_solve_gain = gain
+            self.last_solve_error_estimate = error
+
+            if (tol_basis != "error" or error is None or error <= tol
+                    or attempt == _MAX_TOLERANCE_TIGHTENINGS):
+                break
+
+            # Aim the next step test at the tolerance the caller asked for:
+            # the error runs about 1/(1 - gain) times the step, so scaling
+            # the step test by the ratio just measured lands on it.  The
+            # floor keeps a gain of 0.9999 from asking for a step below the
+            # arithmetic, which no iteration could ever meet.
+            tol_step = max(tol_step * (tol / error), tol * 1e-8)
+            tear_streams = {name: streams[name] for name in tear_names}
+
         self._report_nonconvergence(on_nonconvergence, max_iter)
+        self._report_tolerance(tol, tol_basis)
         return streams
 
     def _solve_auto_torn(self, method: str, **solve_kwargs) -> dict[str, Stream]:
@@ -673,9 +855,86 @@ class Flowsheet:
             "are off by the tear residual. Try more iterations (max_iter), a "
             "better tear guess (tear_initial) or a different acceleration."
         )
+        if self.last_solve_clip_active:
+            # The one failure this flag causes by itself, and the reason it
+            # is worth a sentence of its own: a tear whose answer is
+            # genuinely signed cannot be reached through the projection, and
+            # nothing else in the message would ever say so (#263).
+            message += (
+                f" The negative-flow clip moved the proposed iterate on "
+                f"{self.last_solve_clip_active} of those iterations: if any "
+                "tear flow here is legitimately signed (a gas network, a "
+                "power flow, any tear carrying a signed quantity), that "
+                "projection puts the fixed point out of reach -- pass "
+                "clip_negative_flows=False."
+            )
         if action == "raise":
             raise ConvergenceError(message)
         warnings.warn(message, ConvergenceWarning, stacklevel=3)
+
+    def _report_tolerance(self, tol: float, tol_basis: str) -> None:
+        """Warn when a converged solve is still outside the tolerance asked for.
+
+        The step test being met is not the same claim as the answer being
+        accurate, and on a high-gain loop the two are decades apart (#264).
+        Only a *measured* error says so; without ``error_probe`` there is
+        nothing here to report.
+
+        The error exceeding ``tol`` is not on its own enough to warn about.
+        The unaccelerated path stops on ``|g(x) - x| < tol (1 + |x|)`` --- a
+        deliberate choice, since with flows of order one and ``tol = 1e-8``
+        optimistix calls a step near ``2e-8`` successful --- so on any loop
+        with a gain worth the name the error sits a little above ``tol`` on
+        an ordinary, healthy solve. Warning there would put a warning on
+        almost every damped solve, and a warning that fires every time is
+        read as noise exactly when it is not.
+
+        So the default test is on the *amplification*: the error has to be
+        an order of magnitude past the step the solve reported, which is a
+        loop gain of 0.9 --- the regime this is about. A factor of two or
+        three is the ordinary slack of a step test on a loop with any gain
+        at all, and is not news.
+
+        Under ``tol_basis="error"`` the gate comes off. There the caller
+        asked for ``tol`` to mean the error and solve spent extra solves
+        trying to deliver it, so falling short is a finding at any factor.
+        """
+        error = self.last_solve_error_estimate
+        residual = self.last_solve_residual
+        if (error is None or not self.last_solve_converged or error <= tol):
+            return
+        if (tol_basis != "error" and residual is not None
+                and error < _TOLERANCE_WARNING_AMPLIFICATION * residual):
+            return
+
+        gain = self.last_solve_gain
+        message = (
+            "Recycle solve met its step tolerance and is still outside it: "
+            f"tear stream(s) {', '.join(self.last_solve_tear_streams) or '(none)'} "
+            f"stopped at a step of "
+            f"{'unknown' if residual is None else f'{residual:.3e}'} against "
+            f"tol={tol:.3e}, but the error measured from there is "
+            f"{error:.3e}"
+        )
+        if gain is not None:
+            message += f" -- the tear map has a gain of {gain:+.4f} there"
+        message += (
+            ". tol tests the STEP between iterates, not the error in the "
+            "answer, and the two differ by 1/(1 - gain). "
+        )
+        if tol_basis == "error":
+            message += (
+                f"tol_basis=\"error\" tightened the step test "
+                f"{_MAX_TOLERANCE_TIGHTENINGS} times without reaching it; "
+                "the loop needs more iterations (max_iter) or a method that "
+                "converges on it."
+            )
+        else:
+            message += (
+                f"Ask for {tol * tol / error:.3e} instead, or pass "
+                'tol_basis="error" to have solve do that for you.'
+            )
+        warnings.warn(message, TearToleranceWarning, stacklevel=3)
 
     def _is_traced(self) -> bool:
         """True when a feed or unit parameter currently holds a JAX tracer.
@@ -708,6 +967,126 @@ class Flowsheet:
     def _clip_flows(self, x: Array, mask: Array) -> Array:
         """Project the flow entries of a packed tear array onto [0, inf)."""
         return jnp.where(mask, jnp.clip(x, 0.0, None), x)
+
+    def _tear_substitution(self, x: Array, tear_names: list[str]) -> Array:
+        """One plain substitution pass: packed tear in, packed tear out.
+
+        This is ``g``, the map whose fixed point a recycle solve is looking
+        for, with no damping and no acceleration --- which is what makes it
+        the right instrument for measuring the map itself.
+        """
+        streams = dict(self.feeds)
+        streams.update(self._array_to_streams(x, tear_names))
+        streams = self._run_units(streams)
+        return self._streams_to_array(
+            {dest: streams[source] for source, dest in self.recycles.items()}
+        )
+
+    def _estimate_tear_error(
+        self, streams: dict[str, Stream], tear_names: list[str], probe: int
+    ) -> tuple[float | None, float | None]:
+        """Measure the error the step residual hides, and the gain behind it.
+
+        ``tol`` tests ``|g(x) - x|``, a *step*.  The error is
+        ``x* - x = (I - M)^-1 (g(x) - x)`` with ``M = dg/dx``, and on a
+        high-gain loop those differ by a factor the caller has no way to
+        see (#264).  Each extra substitution pass from the converged tear
+        yields one more term of that inverse, measured rather than
+        assumed::
+
+            r_j = g(x_j) - x_j,   x_{j+1} = g(x_j)
+            x* - x_0 = sum_j r_j   ~   sum_{j<k} r_j + r_{k-1} s / (1 - s)
+
+        where ``s = <r_{k-2}, r_{k-1}> / <r_{k-2}, r_{k-2}>`` is the signed
+        ratio of the dominant mode.  Signed, not a ratio of norms: an
+        oscillating loop has ``s < 0`` and a magnitude-only estimate would
+        put its error on the wrong side and inflate it.  The closed form
+        ``r / (1 - s)`` is also right for an *expanding* dominant mode,
+        where the Neumann sum it continues does not converge --- a map with
+        ``s = 3`` has its fixed point half a residual away, not infinitely
+        far.
+
+        Entries whose residual is already at round-off are dropped before
+        any of this. They carry no information about the error, and a ratio
+        taken from floating-point noise lands near one, which is exactly
+        where the amplification blows up: that is how an estimator like
+        this invents an alarm. A tear carrying a pressure of 1e5 alongside
+        flows of order one has such an entry on almost every solve.
+
+        Args:
+            streams: The solution, which carries the converged tear.
+            tear_names: Packing order for the tear vector.
+            probe: Extra substitution passes to spend. Two is enough for a
+                loop with one dominant mode, which is the usual case.
+
+        Returns:
+            ``(gain, error)``, either of which is ``None`` when there was
+            nothing to measure --- a residual at round-off, or a tracer.
+        """
+        x = self._streams_to_array({name: streams[name] for name in tear_names})
+        # Round-off floor, per entry: a tear carries pressures of 1e5 beside
+        # flows of order one, and one absolute floor for both would either
+        # keep the pressure noise or throw the flows away.
+        floor = 1e2 * float(jnp.finfo(x.dtype).eps) * jnp.maximum(jnp.abs(x), 1.0)
+
+        terms = []
+        xi = x
+        for _ in range(max(probe, 2)):
+            gi = self._tear_substitution(xi, tear_names)
+            terms.append(jnp.where(jnp.abs(gi - xi) > floor, gi - xi, 0.0))
+            xi = gi
+
+        first = _concrete(jnp.max(jnp.abs(terms[0])))
+        if first is None:
+            return None, None          # traced: no number to report
+        if first == 0.0:
+            # Every entry at its own round-off. The step test was not
+            # merely met, it was met to the limit of the arithmetic, and
+            # there is no amplification left to find.
+            return None, 0.0
+
+        denom = _concrete(jnp.vdot(terms[-2], terms[-2]))
+        if not denom:
+            return None, first
+        gain = _concrete(jnp.vdot(terms[-2], terms[-1])) / denom
+        if abs(1.0 - gain) < 1e-12:
+            # An eigenvalue at one: the loop has no isolated fixed point
+            # and the error is unbounded. Saying so beats reporting 1e12.
+            return gain, float("inf")
+
+        total = terms[0]
+        for term in terms[1:]:
+            total = total + term
+        total = total + terms[-1] * (gain / (1.0 - gain))
+        # Not clamped to the residual from below: an oscillating loop
+        # (gain < 0) genuinely sits closer to its answer than its step
+        # suggests, and reporting the larger of the two would hide that
+        # as surely as the bare step hides the high-gain case.
+        return gain, _concrete(jnp.max(jnp.abs(total)))
+    def _clip_and_count(
+        self, x: Array, mask: Array, hits: Array
+    ) -> tuple[Array, Array]:
+        """:meth:`_clip_flows`, counting the steps where it changed something.
+
+        A projection that moves an iterate is the one failure mode
+        ``clip_negative_flows=True`` can cause on its own: on a tear whose
+        answer is genuinely signed it makes the fixed point unreachable,
+        and the solve then fails for a reason nothing in the output named
+        (#263).  Counting the steps where it bound is what lets
+        :meth:`_report_nonconvergence` name it.
+
+        The count stays on device and is read once, after the loop: the
+        accelerated iterations already pay one synchronisation per step
+        for the residual, and a diagnostic has no business adding a
+        second.
+        """
+        clipped = self._clip_flows(x, mask)
+        return clipped, hits + jnp.any(clipped != x)
+
+    def _record_clip_activity(self, hits: Array) -> None:
+        """Read the clip counter off the device, once the loop is done."""
+        count = _concrete(hits)
+        self.last_solve_clip_active = 0 if count is None else int(count)
 
     def _initialize_tear_stream(
         self,
@@ -1037,6 +1416,7 @@ class Flowsheet:
         self.last_solve_converged = False
         x_old = None
         g_prev = None
+        clip_hits = jnp.zeros((), dtype=jnp.int32)
 
         # First iteration
         streams = dict(self.feeds)
@@ -1071,7 +1451,9 @@ class Flowsheet:
                 # Apply Wegstein acceleration
                 x_curr = wegstein_acceleration(x_old, x_prev, g_prev, g_curr)
                 if clip_negative_flows:
-                    x_curr = self._clip_flows(x_curr, flow_mask)
+                    x_curr, clip_hits = self._clip_and_count(
+                        x_curr, flow_mask, clip_hits
+                    )
 
             # Update history
             g_prev = g_curr
@@ -1086,6 +1468,8 @@ class Flowsheet:
 
             new_tear = {dest: streams[source] for source, dest in self.recycles.items()}
             g_curr = self._streams_to_array(new_tear)
+
+        self._record_clip_activity(clip_hits)
 
         # Final solve with converged tear streams
         final_tear = self._array_to_streams(g_curr, tear_names)
@@ -1123,6 +1507,7 @@ class Flowsheet:
         accelerator = AndersonAccelerator(m=depth)
 
         x_curr = self._streams_to_array(tear_initial)
+        clip_hits = jnp.zeros((), dtype=jnp.int32)
 
         # Pessimistic defaults; see _solve_with_wegstein.
         self.last_solve_iterations = max_iter
@@ -1155,8 +1540,12 @@ class Flowsheet:
             # Apply Anderson acceleration
             x_next = accelerator.step(x_curr, g_curr)
             if clip_negative_flows:
-                x_next = self._clip_flows(x_next, flow_mask)
+                x_next, clip_hits = self._clip_and_count(
+                    x_next, flow_mask, clip_hits
+                )
             x_curr = x_next
+
+        self._record_clip_activity(clip_hits)
 
         # Final solve with converged tear streams
         final_tear = self._array_to_streams(x_curr, tear_names)
