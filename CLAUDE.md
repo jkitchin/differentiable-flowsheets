@@ -305,6 +305,14 @@ class MyUnit:
 - Precipitation: `OxalatePrecipitator`, `CarbonatePrecipitator`, `HydroxidePrecipitator`
 - Flowsheets: `ExtractStripCircuit`, `ExtractScrubStripCircuit`, `SplitShellCascade`, `FullSeparationTrain`
 - Database: 10 REE elements, 4 extractant systems
+- Langmuir constants are DERIVED (#268): `typical_K_L` was a second extractant
+  table hand-synced with the YAML, and three of four entries matched the
+  coefficients at NO pH (rms log10 residual 0.62/0.85/0.92 at best fit). Now
+  `K_L = D(reference)/q_max` computed on access; `EXTRACTANT_CAPACITIES` is a
+  derived Mapping, not a dict. Every record declares its basis:
+  `reference_concentration` plus `reference_pH` (cation exchange) or
+  `reference_nitrate` (solvating). A missing extractant was already tested for;
+  a STALE one was not, which is why it drifted silently.
 - Uncertain D: `REEDistribution(..., coefficient_overrides={"Nd": {"a": ...}})`
   replaces tabulated log10(D) correlation coefficients, and accepts JAX tracers,
   so a distribution can be put on D and differentiated through. Passed through by

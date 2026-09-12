@@ -357,6 +357,11 @@ class Extractant:
     reference_concentration: float
     concentration_exponent: float
     cost_usd_kg: float
+    # The pH the correlation is anchored at, and the declared basis for any
+    # quantity derived from it (#268). None for a record whose driving
+    # variable is not pH -- a solvating extractant states
+    # ``reference_nitrate`` instead.
+    reference_pH: float | None = None
     # Optional degradation / thermo properties (#119), user-supplied with
     # citation; default None (no fabricated values). Solvent degradation rate
     # in 1/h; heats of extraction/scrubbing/stripping in kJ/mol.
@@ -448,6 +453,16 @@ class Extractant:
                 f"counter_ion, so the base that neutralizes it has no cation. "
                 f"Declare one of {list(SAPONIFICATION_COUNTER_IONS)} (#197)."
             )
+        if self.reference_pH is not None:
+            low, high = self.valid_ph_range
+            if not low <= self.reference_pH <= high:
+                raise ValueError(
+                    f"Extractant '{self.name}': reference_pH "
+                    f"{self.reference_pH} is outside the record's own "
+                    f"valid_ph_range [{low}, {high}]. It is the condition "
+                    "every derived quantity is anchored at, so it has to be "
+                    "somewhere the correlation is claimed to hold (#268)."
+                )
         if (
             self.counter_ion is not None
             and self.counter_ion not in SAPONIFICATION_COUNTER_IONS
@@ -539,6 +554,7 @@ class ExtractantDatabase:
                 heat_of_scrubbing=props.get("heat_of_scrubbing"),
                 heat_of_stripping=props.get("heat_of_stripping"),
                 # Mechanism and solvating-extraction data (#195)
+                reference_pH=props.get("reference_pH"),
                 mechanism=props.get("mechanism"),
                 nitrate_coefficients=nitrate_coeffs,
                 reference_nitrate=props.get("reference_nitrate"),

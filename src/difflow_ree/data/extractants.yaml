@@ -48,6 +48,24 @@
 #     saturates rather than inverting, unless the caller explicitly passes
 #     extrapolate_activity_model=True (#194).
 #
+# REFERENCE CONDITIONS, AND WHY THEY ARE DECLARED (#268)
+# Every record states the condition its correlation is *anchored* at:
+# `reference_concentration` for the extractant charge, and `reference_pH`
+# (cation exchange) or `reference_nitrate` (solvating) for the driving
+# variable. These are the basis for any quantity DERIVED from the
+# correlation -- the Langmuir constants in equilibrium/loading.py are
+# computed at them rather than stored as literals, which is how those
+# literals came to describe an extractant the database no longer contained
+# (three of four were reconcilable with the coefficients at NO pH, off by
+# factors of 4-8).
+#
+# The `reference_pH` values below are the conditions
+# `data/separation_factors.yaml` already declares as typical operating for
+# the same extractant -- restated here, where a derived quantity can reach
+# them, rather than newly invented. They are a DECLARED BASIS, not a
+# measured anchor: changing one changes every derived quantity under it,
+# which is the point of having it written down.
+#
 # SOLVATING MODEL (`nitrate_coefficients`):
 #   log10(D) = a + b*log10([NO3-]/reference_nitrate)
 #              + c*log10([NO3-]/reference_nitrate)^2
@@ -195,6 +213,7 @@ extractants:
       Y:  -2200
 
     valid_ph_range: [1.0, 5.0]
+    reference_pH: 3.0
     valid_temp_range: [283, 333]  # K
     reference_concentration: 0.5  # M
 
@@ -266,6 +285,7 @@ extractants:
       Y:  -2100
 
     valid_ph_range: [1.5, 5.5]
+    reference_pH: 3.5
     valid_temp_range: [283, 333]
     reference_concentration: 0.5
     concentration_exponent: 3.0
@@ -333,6 +353,7 @@ extractants:
       Y:  -2000
 
     valid_ph_range: [3.0, 7.0]
+    reference_pH: 5.0
     valid_temp_range: [283, 333]
     reference_concentration: 0.3
     concentration_exponent: 3.0

@@ -8,6 +8,7 @@ Models:
 - Loading correction factors for D values
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Callable
 
@@ -313,78 +314,150 @@ def competitive_langmuir(
 # Extractant Capacity Data
 # =============================================================================
 
-# Langmuir constants only. Capacity and stoichiometry are NOT duplicated here:
-# they are derived from the extractant record in ``difflow_ree.database``
-# (``Extractant.monomers_per_ree`` / ``Extractant.max_loading``), which reads
-# the declared extraction mechanism from ``data/extractants.yaml``. There is one
-# source of truth for m (#191).
+# Langmuir constants, DERIVED (#268). Capacity and stoichiometry are not
+# duplicated here either: they come from the extractant record in
+# ``difflow_ree.database`` (``Extractant.monomers_per_ree`` /
+# ``Extractant.max_loading``), which reads the declared extraction mechanism
+# from ``data/extractants.yaml``. There is one source of truth for m (#191).
 #
-# BREAKING CHANGE (#191): this module-level dict is public, and the per-
-# extractant ``"stoichiometry"`` and ``"max_loading"`` keys it used to carry
-# were deleted, not merely re-valued. ``EXTRACTANT_CAPACITIES["D2EHPA"]
-# ["max_loading"]`` now raises ``KeyError``; read
-# ``difflow_ree.database.get_extractant("D2EHPA").max_loading`` (or
-# ``.monomers_per_ree``) instead. The values also changed: the deleted
-# ``max_loading`` literal was 0.33 for the acidic extractants where the
-# database now derives 1/6, because the YAML declares three *dimers*.
-EXTRACTANT_CAPACITIES = {
-    "D2EHPA": {
-        "typical_K_L": {
-            "La": 5.0,
-            "Ce": 8.0,
-            "Pr": 12.0,
-            "Nd": 15.0,
-            "Sm": 30.0,
-            "Eu": 40.0,
-            "Gd": 50.0,
-            "Tb": 80.0,
-            "Dy": 100.0,
-            "Y": 70.0,
-        },
-    },
-    "PC88A": {
-        "typical_K_L": {
-            "La": 3.0,
-            "Ce": 5.0,
-            "Pr": 8.0,
-            "Nd": 12.0,
-            "Sm": 25.0,
-            "Eu": 35.0,
-            "Gd": 45.0,
-            "Tb": 70.0,
-            "Dy": 90.0,
-            "Y": 60.0,
-        },
-    },
-    "Cyanex272": {
-        "typical_K_L": {
-            "La": 2.0,
-            "Ce": 3.0,
-            "Pr": 5.0,
-            "Nd": 8.0,
-            "Sm": 15.0,
-            "Eu": 20.0,
-            "Gd": 25.0,
-            "Tb": 40.0,
-            "Dy": 50.0,
-            "Y": 35.0,
-        },
-    },
-    "TBP": {
-        "typical_K_L": {
-            "La": 2.0,
-            "Ce": 2.5,
-            "Pr": 3.0,
-            "Nd": 3.5,
-            "Sm": 5.0,
-            "Eu": 6.0,
-            "Gd": 7.0,
-            "Tb": 9.0,
-            "Dy": 10.0,
-            "Y": 8.0,
-        },
-    },
-}
+# BREAKING CHANGE (#191): the per-extractant ``"stoichiometry"`` and
+# ``"max_loading"`` keys this dict used to carry were deleted, not merely
+# re-valued. ``EXTRACTANT_CAPACITIES["D2EHPA"]["max_loading"]`` raises
+# ``KeyError``; read the record instead.
+#
+# CHANGE (#268): ``typical_K_L`` is no longer a literal either. It used to be
+# a second extractant table that had to be hand-synced with the YAML, and it
+# had drifted: asked what single pH would reconcile each stored table with the
+# coefficients it was derived from, D2EHPA, PC88A and Cyanex272 came back with
+# rms log10 residuals of 0.62, 0.85 and 0.92 at their best-fitting pH. No pH
+# reconciled them -- they were not evaluated at a different condition, they
+# described an extractant the database no longer contained. Nothing failed
+# when that happened, because a *missing* extractant was tested for and a
+# *stale* one was not.
+#
+# So they are computed, at the record's own declared reference conditions:
+#
+#     q = q_max K_L c  and  q = D c  in the trace limit, so
+#     K_L = D(reference) / q_max,   q_max = [HA]_ref / monomers_per_ree
+#
+# The mapping below still reads like the dict it replaces --- indexing,
+# iteration and ``.items()`` all work --- so call sites did not have to
+# change. What changed is that there is nothing left to hand-sync.
+
+
+def typical_K_L(
+    extractant: str,
+    concentration: float | None = None,
+) -> dict[str, float]:
+    """Langmuir constants for an extractant, from its own correlation (#268).
+
+    In the trace limit the Langmuir isotherm ``q = q_max K_L c / (1 + K_L c)``
+    is ``q = q_max K_L c``, and the distribution ratio gives ``q = D c``.  So
+
+        K_L = D(reference conditions) / q_max,
+        q_max = [HA]_ref / monomers_per_ree
+
+    with the reference conditions the ones the record declares:
+    ``reference_concentration`` together with ``reference_pH`` for a cation
+    exchanger or ``reference_nitrate`` for a solvating one.  A record whose
+    driving variable has no declared reference cannot be derived, and says so
+    rather than falling back to a plausible number.
+
+    Args:
+        extractant: Extractant name.
+        concentration: Extractant charge (M) to derive at. ``None`` (default)
+            uses the record's own ``reference_concentration``, which is the
+            declared basis; pass a value to ask what the constants would be at
+            a different charge.
+
+    Returns:
+        ``{element: K_L}`` for every element the record's coefficient block
+        covers.
+
+    Raises:
+        KeyError: If the extractant is not in the database.
+        ValueError: If the record declares no reference for its driving
+            variable.
+    """
+    from difflow_ree.database import get_extractant
+    from difflow_ree.equilibrium.distribution import REEDistribution
+
+    record = get_extractant(extractant)
+    conc = (record.reference_concentration if concentration is None
+            else float(concentration))
+
+    if record.mechanism == "solvating":
+        driving = {"nitrate_conc": record.reference_nitrate, "pH": None}
+        missing = record.reference_nitrate is None
+        which = "reference_nitrate"
+        block = record.nitrate_coefficients
+    else:
+        driving = {"pH": record.reference_pH}
+        missing = record.reference_pH is None
+        which = "reference_pH"
+        block = record.ph_coefficients
+
+    if missing:
+        raise ValueError(
+            f"Extractant {extractant!r} declares no {which}, so there is no "
+            "condition at which to evaluate its correlation and the Langmuir "
+            "constants cannot be derived (#268). Add one to its record in "
+            "data/extractants.yaml; it is a declared basis, and every derived "
+            "quantity moves with it."
+        )
+    if not block:
+        raise ValueError(
+            f"Extractant {extractant!r} carries no coefficient block for "
+            f"mechanism {record.mechanism!r}, so nothing can be derived "
+            "from it."
+        )
+
+    elements = tuple(block)
+    dist = REEDistribution(
+        extractant=extractant, elements=elements, concentration=conc,
+        **{k: v for k, v in driving.items() if k != "pH"},
+    )
+    q_max = conc / record.monomers_per_ree
+    return {
+        element: float(dist.get_D(element, **driving)) / q_max
+        for element in elements
+    }
+
+
+class _DerivedCapacities(Mapping):
+    """``EXTRACTANT_CAPACITIES``, computed rather than stored (#268).
+
+    Reads like the dict it replaces. Values are memoised per extractant,
+    since deriving them runs the correlation once per element and
+    ``get_loading_isotherm`` is called per stage construction.
+    """
+
+    def __init__(self):
+        self._cache: dict[str, dict] = {}
+
+    def _names(self) -> list[str]:
+        from difflow_ree.database import get_extractant_database
+        return get_extractant_database().list_extractants()
+
+    def __getitem__(self, extractant: str) -> dict:
+        if extractant not in self._cache:
+            if extractant not in self._names():
+                raise KeyError(extractant)
+            self._cache[extractant] = {"typical_K_L": typical_K_L(extractant)}
+        return self._cache[extractant]
+
+    def __iter__(self):
+        return iter(self._names())
+
+    def __len__(self) -> int:
+        return len(self._names())
+
+    def __repr__(self) -> str:  # pragma: no cover - debugging aid
+        return f"<derived EXTRACTANT_CAPACITIES for {self._names()}>"
+
+
+#: Langmuir constants per extractant, derived from the record (#268).
+EXTRACTANT_CAPACITIES = _DerivedCapacities()
 
 
 def get_loading_isotherm(

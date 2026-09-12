@@ -1277,10 +1277,59 @@ field defaulting to 0.33; it is now a read-only property equal to $1/m$, so
 and note that the acidic organophosphorus extractants now derive $m=6$, halving
 the capacity the old literal claimed. The `"stoichiometry"` and `"max_loading"`
 keys were removed from the public `EXTRACTANT_CAPACITIES` dict (read
-`get_extractant(name).monomers_per_ree` instead), and `loading_correction()`
+`get_extractant(name).monomers_per_ree` instead; since #268 that object is no
+longer a `dict` at all but a mapping deriving its values on access), and
+`loading_correction()`
 now raises the free fraction to `isotherm.m` rather than a literal 3 against a
 halved capacity, which moves its output by a factor of ~25 for D2EHPA.
 :::
+
+#### The Langmuir constants are derived, not stored (#268)
+
+`EXTRACTANT_CAPACITIES` used to carry per-extractant, per-element `typical_K_L`
+literals derived once from `data/extractants.yaml` and then hand-synced. In the
+trace limit the Langmuir isotherm is $q = q_{max}K_Lc$ and the distribution
+ratio gives $q = Dc$, so
+
+$$K_L = \frac{D(\text{reference conditions})}{q_{max}}, \qquad
+q_{max} = \frac{[\mathrm{HA}]_{ref}}{m}$$
+
+— a quantity the YAML already determines. The literals had drifted out of step
+with it. Asked what single pH would reconcile each stored table with the
+coefficients it came from:
+
+| extractant | best-fitting pH | rms log10 residual |
+|---|---|---|
+| D2EHPA | 3.02 | 0.62 |
+| PC88A | 2.84 | 0.85 |
+| Cyanex272 | 3.10 | 0.92 |
+
+Off by factors of 4–8 at *any* pH, so not merely evaluated at a different
+condition: they described an extractant the database no longer contained. And
+nothing failed when that happened — the suite iterated `list_extractants()`, so
+a *missing* extractant was caught and a *stale* one was not.
+
+They are now computed at the record's own declared reference conditions, and
+`EXTRACTANT_CAPACITIES` is a mapping that derives on access rather than a dict
+of numbers. It indexes, iterates and `.items()` exactly as before, so no call
+site changed; what changed is that there is nothing left to hand-sync, and
+`tests/ree/test_capacity_derivation.py` asserts `K_L == D(reference)/q_max` for
+every element of every extractant.
+
+That derivation needs a **declared** basis, so every record states one:
+`reference_concentration` for the charge, and `reference_pH` (cation exchange)
+or `reference_nitrate` (solvating) for the driving variable. The `reference_pH`
+values are the conditions `separation_factors.yaml` already treats as typical
+operating for the same extractant, restated where a derived quantity can reach
+them. Changing one moves every derived quantity under it — which is the point
+of having it written down.
+
+```python
+from difflow_ree.equilibrium.loading import typical_K_L
+
+typical_K_L("D2EHPA")                      # at the record's own reference
+typical_K_L("D2EHPA", concentration=1.0)   # what they would be at 1 M
+```
 
 Free-extractant depletion, $D \propto [\mathrm{HA}]_\mathrm{free}^n$, is applied
 in exactly one place: the concentration term inside `REEDistribution.get_D`.
