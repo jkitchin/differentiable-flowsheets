@@ -1385,8 +1385,11 @@ provenance:
               SLOPE IS AGAINST FREE EXTRACTANT (Eq. 2.89), WHICH DIFFLOW DOES
               NOT TRACK; and Z1's own two tabulated systems imply an apparent
               slope of 0.374, not 3.0, because the industrial circuit is
-              80% saponified (Z1 Eq. 4.96 releases NH4+, not H+). difflow has
-              no counter-ion-exchange mechanism. THIS IS THE KNOWN GAP."}
+              80% saponified (Z1 Eq. 4.96 releases NH4+, not H+). Since #266
+              difflow HAS a counter_ion_exchange mechanism, but no
+              counter-ion-fitted block has been sourced for this record, so
+              it is still driven by pH and REEDistribution warns as much.
+              THIS IS THE KNOWN GAP."}
     - {pattern: "extractants.naphthenic_acid.ph_coefficients.*.c", source: CONV,
        note: "Fixed at 0. Q1 Eq. 2.88 is linear in pH; a zero is a declared
               absence of curvature, not a fit."}
