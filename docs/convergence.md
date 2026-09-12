@@ -805,6 +805,28 @@ A case is a name, a builder, and a sentence saying what makes it hard:
 
 ```python
 from difflow.convergence import Case, run_case
+from difflow.flowsheet import Flowsheet, Unit
+from difflow.streams import make_stream
+
+
+def build_my_flowsheet():
+    """A FRESH flowsheet every call: solve() records its verdict on the object."""
+    def mix(feed, tear):
+        return make_stream({"A": feed["F_A"] + tear["F_A"]},
+                           feed["T"], feed["P"])
+
+    def split(inlet):                  # 95% back round: loop gain 0.95
+        flow = inlet["F_A"]
+        return (make_stream({"A": 0.95 * flow}, inlet["T"], inlet["P"]),
+                make_stream({"A": 0.05 * flow}, inlet["T"], inlet["P"]))
+
+    fs = Flowsheet(["A"], default_flow=0.01)
+    fs.add_feed("feed", make_stream({"A": 1.0}, 300.0, 101325.0))
+    fs.add_unit(Unit("mix", mix, ["feed", "tear"], ["mixed"]))
+    fs.add_unit(Unit("split", split, ["mixed"], ["recycle", "product"]))
+    fs.add_recycle("recycle", "tear")
+    return fs
+
 
 case = Case(
     name="my_hard_loop",
