@@ -145,3 +145,143 @@ def test_the_isotherm_and_the_competitive_constants_agree():
     constants = get_competitive_K_L("D2EHPA")
     assert isotherm.K_L == pytest.approx(
         sum(constants.values()) / len(constants), rel=1e-9)
+
+
+class TestTheMemoCannotGoStale:
+    """The memo must not become the new place the numbers drift.
+
+    `TestItCannotDriftAgain` calls `typical_K_L` directly, which is the one
+    path that has no memo in front of it -- so it would pass with a cache
+    that never invalidates. `EXTRACTANT_CAPACITIES` is the public name and
+    the one every call site uses, so these go through it.
+
+    What makes this a real hazard rather than a theoretical one is that
+    `ExtractantDatabase` mutates records IN PLACE:
+    `add_element_to_extractant` writes into the record's own
+    `ph_coefficients` dict. The record object is the same object afterwards
+    and compares equal to itself, so identity and equality both say
+    "unchanged" while the basis of every derived constant has moved.
+    """
+
+    def test_a_new_element_appears_after_the_table_was_already_read(self):
+        """Read first, edit second -- the order a name-keyed memo gets wrong."""
+        db = get_extractant_database()
+        before = dict(EXTRACTANT_CAPACITIES["PC88A"]["typical_K_L"])
+        assert "Ho" not in before
+        db.add_element_to_extractant(
+            "PC88A", "Ho",
+            ph_coefficients={"a": -6.15, "b": 2.95, "c": 0.010},
+            temperature_coefficient=-2350.0,
+        )
+        try:
+            assert "Ho" in EXTRACTANT_CAPACITIES["PC88A"]["typical_K_L"]
+        finally:
+            db.remove_element_from_extractant("PC88A", "Ho")
+
+    def test_a_removed_element_stops_appearing(self):
+        db = get_extractant_database()
+        db.add_element_to_extractant(
+            "PC88A", "Ho",
+            ph_coefficients={"a": -6.15, "b": 2.95, "c": 0.010},
+            temperature_coefficient=-2350.0,
+        )
+        assert "Ho" in EXTRACTANT_CAPACITIES["PC88A"]["typical_K_L"]
+        db.remove_element_from_extractant("PC88A", "Ho")
+        assert "Ho" not in EXTRACTANT_CAPACITIES["PC88A"]["typical_K_L"]
+
+    def test_a_changed_coefficient_moves_the_constant(self):
+        """`a` is log10(D), so +1 must multiply K_L by exactly ten."""
+        import dataclasses
+
+        record = get_extractant("PC88A")
+        original = record.ph_coefficients["Nd"]
+        before = EXTRACTANT_CAPACITIES["PC88A"]["typical_K_L"]["Nd"]
+        record.ph_coefficients["Nd"] = dataclasses.replace(
+            original, a=original.a + 1.0)
+        try:
+            after = EXTRACTANT_CAPACITIES["PC88A"]["typical_K_L"]["Nd"]
+            assert after / before == pytest.approx(10.0, rel=1e-9)
+        finally:
+            record.ph_coefficients["Nd"] = original
+        assert EXTRACTANT_CAPACITIES["PC88A"]["typical_K_L"]["Nd"] == (
+            pytest.approx(before, rel=1e-12))
+
+    def test_a_changed_reference_moves_every_constant(self):
+        record = get_extractant("PC88A")
+        original = record.reference_pH
+        before = dict(EXTRACTANT_CAPACITIES["PC88A"]["typical_K_L"])
+        record.reference_pH = original + 0.5
+        try:
+            after = EXTRACTANT_CAPACITIES["PC88A"]["typical_K_L"]
+            assert all(after[el] != pytest.approx(before[el], rel=1e-6)
+                       for el in before)
+        finally:
+            record.reference_pH = original
+
+    def test_it_is_still_a_memo(self):
+        """Invalidation must not turn into recomputing on every read.
+
+        `get_loading_isotherm` reads this per stage construction, and
+        deriving runs the correlation once per element.
+        """
+        import difflow_ree.equilibrium.loading as loading
+
+        calls = []
+        real = loading.typical_K_L
+
+        def counted(*args, **kwargs):
+            calls.append(args)
+            return real(*args, **kwargs)
+
+        EXTRACTANT_CAPACITIES["D2EHPA"]  # prime it
+        loading.typical_K_L = counted
+        try:
+            for _ in range(25):
+                EXTRACTANT_CAPACITIES["D2EHPA"]["typical_K_L"]
+        finally:
+            loading.typical_K_L = real
+        assert calls == []
+
+    def test_an_unknown_extractant_still_raises_key_error(self):
+        with pytest.raises(KeyError):
+            EXTRACTANT_CAPACITIES["definitely_not_an_extractant"]
+
+
+class TestNaphthenicAcidReproducesTheDeletedLiterals:
+    """The derivation is checkable against the table it replaces.
+
+    `naphthenic_acid` landed on main while #268 was open, and it declared
+    no `reference_pH` -- so deriving its constants refused outright, which
+    is the correct behaviour and a broken merge. Its deleted `typical_K_L`
+    literals carried a note saying they had been back-computed as
+    `K_L = D(pH 4.5, 0.5 M, 298 K) / (0.5 * 1/3) = 6 D`, which is this
+    derivation exactly. Declaring `reference_pH: 4.5` reproduces all
+    fifteen of them, which is the strongest evidence available that the
+    derived table and the hand table describe the same extractant -- the
+    thing that was NOT true of D2EHPA, PC88A or Cyanex272.
+    """
+
+    DELETED_LITERALS = {
+        "La": 10.02, "Ce": 17.23, "Pr": 23.82, "Nd": 29.56, "Sm": 43.37,
+        "Eu": 37.06, "Gd": 29.00, "Tb": 28.93, "Dy": 25.92, "Ho": 21.23,
+        "Er": 18.28, "Tm": 17.58, "Yb": 17.72, "Lu": 16.25, "Y": 8.20,
+    }
+
+    def test_the_reference_is_declared_and_in_range(self):
+        record = get_extractant("naphthenic_acid")
+        assert record.reference_pH == 4.5
+        low, high = record.valid_ph_range
+        assert low <= record.reference_pH <= high
+
+    def test_every_deleted_literal_is_reproduced(self):
+        derived = EXTRACTANT_CAPACITIES["naphthenic_acid"]["typical_K_L"]
+        assert set(derived) == set(self.DELETED_LITERALS)
+        for element, literal in self.DELETED_LITERALS.items():
+            assert derived[element] == pytest.approx(literal, rel=2e-3), element
+
+    def test_the_y_selectivity_survives(self):
+        """Y lowest is the entire point of this extractant."""
+        derived = EXTRACTANT_CAPACITIES["naphthenic_acid"]["typical_K_L"]
+        assert derived["Y"] == min(derived.values())
+        assert derived["Sm"] == max(derived.values())
+

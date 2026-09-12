@@ -9,7 +9,7 @@ Models:
 """
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import astuple, dataclass
 from typing import Callable
 
 import jax.numpy as jnp
@@ -427,24 +427,65 @@ def typical_K_L(
 class _DerivedCapacities(Mapping):
     """``EXTRACTANT_CAPACITIES``, computed rather than stored (#268).
 
-    Reads like the dict it replaces. Values are memoised per extractant,
-    since deriving them runs the correlation once per element and
+    Reads like the dict it replaces. Values are memoised, since deriving
+    them runs the correlation once per element and
     ``get_loading_isotherm`` is called per stage construction.
+
+    The memo is keyed on a FINGERPRINT of the record it was derived from,
+    not on the extractant name, because the database is mutable IN PLACE:
+    ``add_element_to_extractant`` and ``remove_element_from_extractant``
+    write straight into the record's own ``ph_coefficients`` dict, so
+    neither the record object's identity nor its equality changes when
+    the basis of a derived constant does. A name-keyed memo would
+    therefore serve the pre-edit constants for the life of the process --
+    reintroducing in memory precisely the staleness this class removes
+    from the literal table, and reintroducing it in the harder-to-see
+    form, since there would be no drifted numbers in the file to find.
     """
 
     def __init__(self):
-        self._cache: dict[str, dict] = {}
+        self._cache: dict[str, tuple[tuple, dict]] = {}
 
     def _names(self) -> list[str]:
         from difflow_ree.database import get_extractant_database
         return get_extractant_database().list_extractants()
 
+    @staticmethod
+    def _fingerprint(extractant: str) -> tuple:
+        """Everything :func:`typical_K_L` reads, in comparable form.
+
+        Deliberately over-inclusive: it is cheap beside running the
+        correlation per element, and a field left out is a staleness bug
+        that only shows up as a wrong number.
+        """
+        from difflow_ree.database import get_extractant
+
+        record = get_extractant(extractant)
+        block = (record.nitrate_coefficients
+                 if record.mechanism == "solvating"
+                 else record.ph_coefficients) or {}
+        return (
+            record.mechanism,
+            record.reference_concentration,
+            record.reference_pH,
+            record.reference_nitrate,
+            record.monomers_per_ree,
+            tuple(sorted(
+                (element, astuple(coefficients))
+                for element, coefficients in block.items()
+            )),
+            tuple(sorted((record.temperature_coefficients or {}).items())),
+        )
+
     def __getitem__(self, extractant: str) -> dict:
-        if extractant not in self._cache:
-            if extractant not in self._names():
-                raise KeyError(extractant)
-            self._cache[extractant] = {"typical_K_L": typical_K_L(extractant)}
-        return self._cache[extractant]
+        # ``get_extractant`` raises KeyError for an unknown name, which is
+        # what a Mapping owes its caller, so there is no membership check.
+        stamp = self._fingerprint(extractant)
+        cached = self._cache.get(extractant)
+        if cached is None or cached[0] != stamp:
+            cached = (stamp, {"typical_K_L": typical_K_L(extractant)})
+            self._cache[extractant] = cached
+        return cached[1]
 
     def __iter__(self):
         return iter(self._names())

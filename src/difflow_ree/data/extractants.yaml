@@ -650,6 +650,542 @@ extractants:
     concentration_exponent: 3.0
     cost_usd_kg: 4.0
 
+  naphthenic_acid:
+    full_name: "Naphthenic acid (commercial mixture of alkyl cyclopentane- and cyclohexane-carboxylic acids)"
+    formula: "R-(CH2)n-COOH"   # NOT a single compound; see MOLECULAR WEIGHT below
+    molecular_weight: 270.0
+    density: 0.96
+    pKa: 5.5
+    type: acidic_carboxylic
+    mechanism: cation_exchange
+    diluents: [kerosene, n-dodecane, Shellsol_D70]
+    typical_concentration: 0.5
+
+    # Cation exchange, MONOMER basis: 3 mol HA per mol RE (max_loading = 1/3).
+    # RE3+ + 3 HA(o) <-> REA3(o) + 3 H+                     (Q1 Eq. 2.87)
+    # Monomer, not dimer: naphthenic acid dimerizes in a nonpolar diluent, but
+    # the working solvent is saponified and carries an alcohol modifier, in
+    # which Q1 states it is predominantly MONOMERIC (Q1 Sec. 2.4.2.1). The 3:1
+    # ratio is confirmed twice in Q1 -- by the slope of lg D - 3 lg(HA)o vs pH
+    # and by the saturation method -- and directly in Q1 Table 2.43.
+    stoichiometry:
+      protons_released: 3
+      extractant_molecules: 3
+      basis: monomer
+
+    # =====================================================================
+    # NAPHTHENIC ACID -- READ THIS WHOLE BLOCK BEFORE USING ANY NUMBER
+    # =====================================================================
+    # PROVENANCE CLASS: *** MEASURED ANCHOR + LITERATURE-DERIVED FORM. ***
+    #
+    #   (A) LITERATURE-DERIVED. Everything about the SHAPE of the model and
+    #       the physical properties: the extraction reaction, b = 3.0, the
+    #       cube law in free extractant, the monomer basis, pKa, density,
+    #       molecular weight, the saponification degree, the validity
+    #       window, the impurity ordering. From Q1, with section numbers.
+    #
+    #   (B) MEASURED.  *** The per-element `a` ladder. ***
+    #       Back-computed element by element from ONE published table of
+    #       distribution ratios for all fifteen rare earths in a naphthenic
+    #       acid system at stated pH, extractant concentration, rare-earth
+    #       concentration, phase ratio and temperature: Z1 Table 4.36,
+    #       left-hand system. The arithmetic is written out under THE `a`
+    #       LADDER below. This is the only per-element block in this file
+    #       that traces to a single identified measurement rather than to
+    #       fitting, hand-tuning or construction.
+    #
+    #       *** SUPERSEDES A CONSTRUCTED LADDER. *** An earlier revision of
+    #       this record built the ladder from published separation-factor
+    #       BOUNDS, because no measured full-series table had been found.
+    #       That construction was monotonic in atomic number. It was WRONG
+    #       IN SHAPE. The measurement rises from La to a maximum at Sm/Eu
+    #       and falls back across the heavies, so the constructed ladder had
+    #       the heavy rare earths separating from Y far better than they do
+    #       and Sm/Eu far worse. ANY RESULT DERIVED FROM THE OLD LADDER MUST
+    #       BE RECOMPUTED. What survives from it is the one qualitative fact
+    #       both versions agree on: Y has the lowest D of the fifteen.
+    #
+    # ---------------------------------------------------------------------
+    # SOURCES (these, and no others)
+    # ---------------------------------------------------------------------
+    # Q1  Qi, Dezhi (2018), "Hydrometallurgy of Rare Earths: Extraction and
+    #     Separation", Elsevier. ISBN 978-0-12-813920-2.
+    #     Ch. 2 Sec. 2.4 (naphthenic acid) and Ch. 4 Sec. 4.3.4 (industrial
+    #     yttrium separation). Source of the MODEL FORM and the properties.
+    #     Specific loci used:
+    #       Eq. 2.87   extraction reaction (saponified, monomer)
+    #       Eq. 2.88   lg D = lg K_ex + 3 lg(HA)o + 3 pH      -> b = 3.0
+    #       Eq. 2.89   (HA)o = [HA]0 - 3 (REA3)   free-extractant balance
+    #       Eq. 2.90   RE(OH)2+ route above pH 5.6 -- the upper bound
+    #       Eq. 2.91   RECl3 + n HA -> RECl3.nHA, the NEUTRAL-COORDINATION
+    #                  route at low pH / high [RECl3]: a DIFFERENT mechanism
+    #                  that this record does not model
+    #       Sec. 2.4.2.1 (p. 280) the slope-3 verification and ITS RANGE:
+    #                  "the slope of lg D - 3 lg(HL)(O) against pH is a
+    #                  straight line, close to 3 ... in the range of Y3+
+    #                  concentrations from 0.1 to 0.8 mol/L and pH from 3.8
+    #                  to 5.0". This is the ONLY statement of where b = 3.0
+    #                  has been checked, and it is checked against the FREE
+    #                  extractant concentration. See THE FREE-EXTRACTANT GAP.
+    #       Table 2.42 physical properties
+    #       Table 2.43 (HA)/(RE) = 2.79-3.14 measured at pH 5.01-5.43
+    #       Table 2.45 solubility of solid REA3 -- the CAPACITY LIMIT, below
+    #       Table 2.49 D_Fe, D_Al, D_RE vs pH 1.18-3.20
+    #       Sec. 2.4.2.2 (p. 283) beta_RE/Y bounds: light rare earths
+    #                  "always bigger than 1.5", Gd and heavies "> 2.0", over
+    #                  aqueous RE 0.29-1.1 mol/L at pH 4.0-5.0. These were
+    #                  the basis of the superseded construction; they are now
+    #                  used only as a CHECK on the measured ladder.
+    #       Fig. 2.79  D-vs-Z, three salting-agent levels. Light rare-earth
+    #                  D and beta FALL and heavy rare-earth D and beta RISE
+    #                  as NH4Cl is added: the ladder is not rigid.
+    #       Sec. 4.3.4.2 effective beta = 1.58 and the industrial stage counts
+    #
+    # Z1  Zhang, Jack; Zhao, Baodong; Schreiner, Bryan (2016), "Separation
+    #     Hydrometallurgy of Rare Earth Elements", Springer.
+    #     Ch. 4 Sec. 4.7 (naphthenic acid extraction system).
+    #     >>> The ONLY source of the per-element `a` values. <<<
+    #     Specific loci used:
+    #       Table 4.36 Distribution ratio and separation factor in naphthenic
+    #                  acid extraction system. Two systems, both 25 C, O/A
+    #                  2/1, all fifteen rare earths, D and beta_RE/Y. The
+    #                  left-hand system (0.45 mol/L naphthenic acid, 0.142
+    #                  mol/L rare earth, pH 4.19) IS THE ANCHOR.
+    #       Eq. 4.94   RE3+ + 3 HL(o) = RE(HL2)3(o) + 3 H+  (unsaponified)
+    #       Eq. 4.95   HL(o) + NH4OH = NH4L(o) + H2O        (saponification)
+    #       Eq. 4.96   RE3+ + 3 NH4L(o) = REL3(o) + 3 NH4+  (saponified)
+    #                  >>> NO PROTON APPEARS. See THE SAPONIFICATION GAP. <<<
+    #       Fig. 4.42  Bauer & Lindstrom (1964), 0.32 M naphthenic acid in
+    #                  DIETHYL ETHER from SULFATE, pH 5-7.5. NOT USED: wrong
+    #                  diluent, wrong medium, wrong pH band. In that system Y
+    #                  sits between Tb and Dy, not at the bottom. Cited here
+    #                  only so that nobody re-finds it and thinks it conflicts
+    #                  with the anchor. It is a different system.
+    #       Fig. 4.43  D vs element, 20% naphthenic acid / 20% mixed alcohol /
+    #                  60% kerosene / RECl3, 80% saponified, at pH 4.0, 4.6,
+    #                  5.2, 5.4. Y LOWEST across pH 4.0-5.2, and the element
+    #                  order is exactly the anchor's. Independent confirmation
+    #                  of the ladder's shape in the industrial solvent.
+    #       Sec. 4.7.2 "The average separation factor of RE/Y is about 3.0."
+    #                  The anchor reproduces 2.93 -- see THE `a` LADDER.
+    #       Fig. 4.44/4.45 two-step and one-step industrial Y processes, 30-50
+    #                  and 73-110 stages.
+    #
+    # ---------------------------------------------------------------------
+    # WHERE YTTRIUM SITS, AND WHY THIS EXTRACTANT EXISTS
+    # ---------------------------------------------------------------------
+    # Naphthenic acid is the industrial yttrium extractant because Y has the
+    # LOWEST distribution ratio of all fifteen rare earths in it. Y reports to
+    # the AQUEOUS raffinate while the heavy lanthanides load the solvent. That
+    # is the opposite of D2EHPA, in which Y tracks the heavy lanthanides.
+    # Q1's measured extraction order (pH 4.6, 20% v/v HA + 18% v/v mixed ROH
+    # + 62% v/v kerosene, [RE]0 = 0.84 mol/L, O/A = 1) is
+    #
+    #   Yb > Sm > Dy > Lu > Nd > Gd > Pr > Tm > Tb > Ce > Ho > Er > La > Y
+    #
+    # -- scrambled among the lanthanides, but unambiguous at the bottom: La
+    # then Y. THIS RECORD NOW REPRODUCES THE SCRAMBLING, because the ladder
+    # is measured rather than idealized. Its own order, from Z1 Table 4.36,
+    # is
+    #
+    #   Sm > Eu > Nd > Gd > Tb > Dy > Pr > Ho > Er > Yb > Tm > Ce > Lu > La > Y
+    #
+    # Two independently measured systems, different laboratories, different
+    # conditions, different books. They are not the same permutation -- Q1's
+    # was measured at 0.84 mol/L RE, far above the solvent's capacity, so it
+    # is loading- and speciation-distorted -- but they agree on the three
+    # things that matter: Sm near the top, and La then Y at the bottom, in
+    # that order. An earlier revision of this record idealized the ladder as
+    # monotonic in atomic number and warned that the scrambling was real and
+    # unmodelled. It is now modelled.
+    #
+    # LA AND Y ARE NOT RELIABLY SEPARABLE AND THE SOURCES DISAGREE ON THEIR
+    # ORDER. Q1 puts La above Y. A retrieved review of the same system
+    # (attributed to Zheng/du Preez-Preston, see UNRETRIEVED SOURCES) reports
+    # the order La < Ce < Y < Nd, i.e. Y ABOVE La. Q1 explains the conflict
+    # directly: beta_La/Y crosses 1 as the La:Y ratio changes, because a
+    # HETERONUCLEAR La-Y complex forms. Both sources therefore agree on what
+    # matters -- beta_La/Y is near 1 and composition-dependent -- and disagree
+    # only on which side of 1. THE La AND Y VALUES BELOW CANNOT RESOLVE THAT
+    # AND SHOULD NOT BE USED TO DESIGN A La/Y SPLIT. The industrial process
+    # avoids the problem: it removes La upstream and feeds naphthenic acid a
+    # yttrium-enriched HEAVY rare-earth group.
+    #
+    # ---------------------------------------------------------------------
+    # THE `a` LADDER: WHERE IT COMES FROM
+    # ---------------------------------------------------------------------
+    # SOURCE: Z1 Table 4.36, left-hand system. Stated conditions:
+    #     naphthenic acid   0.45  mol/L
+    #     rare earth        0.142 mol/L (aqueous)
+    #     equilibrium pH    4.19
+    #     O/A               2/1
+    #     temperature       25 C
+    # and D for all fifteen elements, with beta_RE/Y alongside.
+    #
+    # THE ARITHMETIC. Inverting this record's own model at those conditions,
+    # with b = 3.0, c = 0, d = 0, n = 3.0 and reference_concentration 0.5:
+    #
+    #     a = log10(D_measured) - 3*(4.19) - 3*log10(0.45/0.5)
+    #       = log10(D_measured) - 12.5700 + 0.1373
+    #       = log10(D_measured) - 12.4327
+    #
+    # That is the whole derivation. No fitting, no smoothing, no
+    # interpolation: fifteen measured numbers, one subtraction each. Feed
+    # the record back its own anchor conditions and it returns Table 4.36.
+    #
+    # WHICH COLUMN IS AUTHORITATIVE. Table 4.36 prints D and beta_RE/Y. They
+    # disagree for three entries out of thirty (D_i/D_Y vs the printed beta):
+    #     system 1  Nd   D/D_Y = 3.61   printed beta 2.35
+    #     system 1  Lu   D/D_Y = 1.98   printed beta 2.19
+    #     system 2  Tb   D/D_Y = 3.31   printed beta 3.00
+    # D IS TAKEN AS AUTHORITATIVE, for two reasons. D is the primary
+    # measurement and beta is derived from it. And in both disputed system-1
+    # cases the D column preserves a trend that the beta column breaks:
+    # D_Nd = 0.422 keeps La < Ce < Pr < Nd < Sm monotonic (beta 2.35 would
+    # put Nd below Pr), and D_Lu = 0.232 keeps Yb > Lu, which is also the
+    # order in system 2. These are treated as typesetting errors in the beta
+    # column. If that judgement is wrong it moves Nd and Lu only.
+    #
+    # THE SHAPE IS NOT MONOTONIC IN Z, AND THAT IS THE POINT.
+    # beta_RE/Y from the anchor, by atomic number:
+    #     La 1.22  Ce 2.10  Pr 2.91  Nd 3.61  Sm 5.29  Eu 4.52  Gd 3.54
+    #     Tb 3.53  Dy 3.16  Ho 2.59  Er 2.23  Tm 2.15  Yb 2.16  Lu 1.98
+    # It rises to a maximum at Sm, falls through the middle, flattens across
+    # Er-Lu. Y sits below all of them. Carboxylic-acid extraction of the rare
+    # earths is not a monotonic function of ionic radius, and any correlation
+    # that assumes it is will be wrong at both ends.
+    #
+    # CONSEQUENCE FOR A HEAVY-RARE-EARTH FEED: the elements that separate
+    # BEST from Y are Sm and Eu (beta 5.3, 4.5), which a xenotime concentrate
+    # barely contains. Against the heavies that actually dominate such a feed
+    # the separation factors are 2.0-3.2, and against Lu it is 1.98 -- the
+    # worst of the fourteen except La. A Y/heavies split is therefore HARDER
+    # than a Y/lights split in this solvent, and stage counts scale as
+    # 1/log(beta).
+    #
+    # THREE INDEPENDENT CHECKS, NONE OF WHICH WENT INTO THE NUMBERS:
+    #   1. Z1 Sec. 4.7.2 states "the average separation factor of RE/Y is
+    #      about 3.0". The ladder gives a mean beta_RE/Y of 2.93 over the
+    #      fourteen non-Y elements. Not used in the derivation.
+    #   2. Q1 Sec. 2.4.2.2 requires beta_RE/Y > 2.0 for Gd and the heavies.
+    #      The ladder gives Gd 3.54 down to Lu 1.98 -- satisfied everywhere
+    #      except Lu, which misses by 1%.
+    #   3. Q1 Sec. 2.4.2.2 requires beta_RE/Y > 1.5 for La-Sm. The ladder
+    #      gives Ce-Sm 2.10-5.29, satisfied, but La = 1.22, which FAILS.
+    #      This is not a defect in the ladder. Q1 Sec. 2.4.2.1 says the La/Y
+    #      pair is anomalous in exactly this way: a heteronuclear La-Y
+    #      complex forms, and beta_La/Y moves with the La:Y ratio, crossing
+    #      1. The two sources agree that La/Y is composition-dependent and
+    #      not a fixed separation factor. See the La/Y warning above.
+    #
+    # WHAT THE LADDER GIVES AT pH 4.5, 0.5 M HA, 298 K (model output, i.e.
+    # EXTRAPOLATED 0.31 pH UNITS ABOVE THE ANCHOR -- read the two GAP
+    # sections below before trusting the absolute level):
+    #     Y  1.366   La 1.670   Ce 2.872   Pr 3.970   Nd 4.927   Sm 7.227
+    #     Eu 6.176   Gd 4.834   Tb 4.822   Dy 4.320   Ho 3.538   Er 3.047
+    #     Tm 2.931   Yb 2.954   Lu 2.709
+    # The beta values are pH-independent in this model (common b), so they
+    # are the anchor's betas at every pH. The absolute D values are not.
+    #
+    # ---------------------------------------------------------------------
+    # THE FREE-EXTRACTANT GAP: `a` EMBEDS THE ANCHOR'S LOADING
+    # ---------------------------------------------------------------------
+    # Q1 Eq. 2.88 is a cube law in the FREE extractant (HA)o, and Eq. 2.89
+    # defines it as (HA)o = [HA]0 - 3(REA3). difflow_ree's model raises the
+    # TOTAL extractant concentration to the power n. Those are the same thing
+    # only in the dilute limit.
+    #
+    # At the anchor the organic phase carries about 0.028 mol/L rare earth
+    # against a 3:1 stoichiometric capacity of 0.45/3 = 0.150 mol/L, i.e. it
+    # is ~19% loaded and the free extractant is ~0.366 mol/L against 0.45
+    # total. The `a` values therefore absorb a -19% free-extractant
+    # correction. Using them at a much higher or lower loading is an
+    # extrapolation the record cannot support, and difflow_ree will not warn.
+    #
+    # THE SECOND SYSTEM IN Z1 TABLE 4.36 IS NOT USABLE AND WAS NOT USED.
+    # It is printed as 0.13 mol/L naphthenic acid with 0.240 mol/L rare earth
+    # at pH 4.96, O/A 2/1. Its own D values imply ~0.066 mol/L rare earth in
+    # the organic phase against a 3:1 capacity of 0.0433 mol/L -- 153% of
+    # capacity, so Eq. 2.89 returns a NEGATIVE free extractant concentration.
+    # Something in that column is misprinted. It is recorded here so nobody
+    # re-derives a ladder from it.
+    #
+    # It is worth stating what that costs: with one usable system there is no
+    # cross-condition test of b = 3.0 in this record. Carrying the model from
+    # system 1 to system 2 as printed mispredicts by 0.40 log units on
+    # average, but with two points, three changed variables and one bad
+    # column, that number tests the printing at least as much as the physics.
+    # b = 3.0 rests on Q1 Sec. 2.4.2.1 alone, over pH 3.8-5.0 and Y 0.1-0.8
+    # mol/L, on a free-extractant basis.
+    #
+    # ---------------------------------------------------------------------
+    # THE SAPONIFICATION GAP: THE INDUSTRIAL REACTION RELEASES NH4+, NOT H+
+    # ---------------------------------------------------------------------
+    # This is the largest known structural error in this record, and it is
+    # inherited from difflow_ree's mechanism set, not introduced here.
+    #
+    # Unsaponified (Z1 Eq. 4.94, Q1 Eq. 2.87):
+    #     RE3+ + 3 HL(o)   =  REL3(o) + 3 H+     -> d(log D)/d(pH) = 3
+    # 80% saponified, which is what the industry runs and what this record
+    # declares (Z1 Eq. 4.95/4.96, Q1 Eq. 2.120):
+    #     RE3+ + 3 NH4L(o) =  REL3(o) + 3 NH4+   -> NO PROTON IN THE EQUATION
+    #
+    # In the saponified system the driving variable is the ammonium activity
+    # and the degree of saponification; pH enters only indirectly, through
+    # the NH4+/NH3 buffer and through the unsaponified 20% fraction. Z1
+    # Fig. 4.43 shows what that does: over pH 4.0 to 5.4 in the 80%-saponified
+    # industrial solvent, D rises by roughly one order of magnitude, not the
+    # 10^4.2 that a slope of 3 demands.
+    #
+    # difflow_ree has `cation_exchange` (proton) and `solvating` (neutral).
+    # It has NO counter-ion-exchange mechanism. Until it does, this record
+    # declares cation_exchange with b = 3.0 and is anchored at a MEASURED
+    # point inside the band, which is the least-wrong available option. The
+    # practical rule that follows:
+    #
+    #   *** SEPARATION FACTORS FROM THIS RECORD ARE SOUND ANYWHERE IN THE
+    #   *** VALIDITY WINDOW; they are the anchor's measured betas and do not
+    #   *** depend on b. ABSOLUTE D VALUES ARE SOUND ONLY NEAR pH 4.19 and
+    #   *** degrade fast away from it. Stage counts driven by beta are
+    #   *** usable. Solvent inventory and O/A driven by absolute D are not,
+    #   *** without re-anchoring at the intended pH.
+    #
+    # Note that the paper this work is replicating specifies pH 4.5, which is
+    # 0.31 pH units above the anchor -- a factor of 8.5 in D at slope 3, and
+    # a factor of ~1.3 at the slope Z1 Fig. 4.43 actually shows. That spread
+    # is the honest uncertainty on any absolute D at 4.5, and it is why the
+    # validity window below stops at 5.0 rather than 5.5.
+    #
+    # ---------------------------------------------------------------------
+    # CAPACITY: THE UNMODIFIED SOLVENT CANNOT REACH ITS OWN STOICHIOMETRY
+    # ---------------------------------------------------------------------
+    # At 3 HA per RE, 0.5 M naphthenic acid has a stoichiometric capacity of
+    # 0.167 mol/L RE. It cannot get there. Q1 Table 2.45 gives the solubility
+    # of solid REA3 in kerosene WITHOUT modifier as
+    #     La 0.0374 | Pr 0.0374 | Gd 0.0558 | Er 0.0611 | Lu 0.0994 mol/L
+    # i.e. 22%-60% of stoichiometric capacity. Above that the rare-earth
+    # naphthenate precipitates or forms a third phase. With 15-20% v/v C7-C9
+    # mixed alcohol the same solubilities rise to 0.23-0.48 mol/L and the
+    # problem goes away; Q1 also reports relative viscosities up to 100x
+    # kerosene without modifier. THE ALCOHOL (or petroleum sulfoxide) MODIFIER
+    # IS NOT OPTIONAL IN THIS SYSTEM. Every Q1 datum behind this record was
+    # measured on a modified solvent.
+    # >>> A flowsheet specifying naphthenic acid in a bare aliphatic diluent
+    #     with no modifier is specifying a solvent that third-phases before it
+    #     is half loaded. difflow_ree has no third-phase model, so nothing in
+    #     the code will warn you. <<<
+    #
+    # ---------------------------------------------------------------------
+    # SAPONIFICATION IS ALREADY IN THE `a` VALUES -- DO NOT APPLY IT TWICE
+    # ---------------------------------------------------------------------
+    # The record ships counter_ion NH4 at degree 0.80 because that is the
+    # industrial condition Q1 specifies for yttrium separation ("the
+    # saponification ratio of the naphthenic acid at about 80%", Sec 2.4.2.1),
+    # saponified with NH4OH or NaOH. Unlike the 0.35 on D2EHPA, that 0.80 is a
+    # sourced operating value.
+    # BUT: Q1 Eq. 2.87/2.88 -- the source of b = 3.0 and of every beta bound
+    # used above -- were themselves measured on the SAPONIFIED, modified
+    # solvent. The effect of saponification is therefore ALREADY EMBEDDED in
+    # these coefficients. Running SaponifiedSection on top of them
+    # DOUBLE-COUNTS it. Use one or the other, not both.
+    # NH4 rather than Na is also an effluent decision, not a cosmetic one: it
+    # puts ammonium nitrogen in the raffinate. See difflow_ree.economics.
+    #
+    # ---------------------------------------------------------------------
+    # IMPURITIES: Fe, Th AND U ALL EXTRACT *BEFORE* THE RARE EARTHS
+    # ---------------------------------------------------------------------
+    # Q1's metal-ion extraction order for naphthenic acid is
+    #   Fe3+ > Th4+ > Zr4+ > U4+ > In3+ > Tl3+ > ... > Cd2+ > RE3+ > Ni2+ > ...
+    # with pH(1/2) for Fe3+ = 3.0, well below the pH 4.5 operating point.
+    # Q1 Table 2.49 (equilibrium pH -> D):
+    #   pH    1.18    1.67   1.90   2.50   2.80   3.00   3.20
+    #   D_Fe  0.21    0.23   0.35   3.05   7.00   8.50   8.90
+    #   D_Al    -       -    0.19   0.22   0.32   0.20   0.33
+    #   D_RE  0.0016 0.0016 0.0017 0.0018 0.0020 0.0020 0.0021
+    # Fe is ~4000x the rare earths by pH 3. The industrial process therefore
+    # REMOVES Fe, Al, Th, U UPSTREAM and Q1 says so explicitly. A flowsheet
+    # that feeds a Th/U-bearing liquor straight to naphthenic acid at pH 4.5
+    # loads the thorium into the solvent ahead of the product, and neither
+    # this record nor REEExtractor models that -- REEExtractor gives every
+    # untracked species D = 0, i.e. perfectly non-extracted, which for Th and
+    # Fe here is the opposite of the truth. No coefficients for Fe/Th/U/Al
+    # ship on this record; the table above is documentation, not data the code
+    # can read.
+    #
+    # ---------------------------------------------------------------------
+    # MOLECULAR WEIGHT, pKa AND THE FACT THAT THIS IS NOT ONE COMPOUND
+    # ---------------------------------------------------------------------
+    # Naphthenic acid is a refinery by-product and a MIXTURE, so `formula`
+    # is a placeholder and `molecular_weight` is an average that varies
+    # between lots. Q1 Table 2.42: average MW 200-300 (Q1 Table 2.1 says
+    # 200-400); acid value 180-230 mg KOH/g, which by 56100/acid_value gives
+    # MW 244-312. 270 is the middle of the 244-300 overlap of those two
+    # ranges. At density 0.96 that makes neat naphthenic acid 3.56 M, so the
+    # 0.5 M reference here is 14% v/v -- inside Q1's validated 10-30% v/v
+    # window, at its low end.
+    # pKa 5.5 is Q1's value. Published pKa values for naphthenic acids scatter
+    # widely because the composition does; higher apparent values are reported
+    # for two-phase systems. 5.5 is what the rest of this record is consistent
+    # with. Q1 also notes Q1 Table 2.42 water solubility < 0.09 g/L at pH 4 --
+    # the saponified salt is far more soluble, and solvent loss to the
+    # raffinate is a real operating cost this record does not carry.
+    #
+    # ---------------------------------------------------------------------
+    # VALIDITY WINDOW
+    # ---------------------------------------------------------------------
+    #   pH 4.0-5.5, hydrochloric medium, [HA] 10-30% v/v (0.36-1.07 M at the
+    #   MW and density above), saponified ~80% with NH4OH, WITH an alcohol or
+    #   petroleum-sulfoxide modifier, 288-313 K, aqueous [RE] below the
+    #   capacity limit above.
+    # BELOW pH 4: D falls 1000x per pH unit (b = 3) and, at high [RECl3], Q1
+    #   Eq. 2.91 says the mechanism CHANGES to neutral coordination of RECl3 --
+    #   a different reaction this record does not describe.
+    # ABOVE pH 5.6: RE3+ hydrolyzes, the extracted species becomes RE(OH)A2
+    #   (Q1 Eq. 2.90), the HA:RE ratio drops below 3, and the solvent
+    #   emulsifies. b = 3 is wrong there.
+    # ANION: Q1 gives the medium effect as NO3- < Cl- < SO4(2-). These numbers
+    #   are CHLORIDE. They will under-predict a sulfate system and
+    #   over-predict a nitrate one, by an amount no retrieved source
+    #   quantifies.
+    # SALTING-OUT AGENTS shift the ladder NON-UNIFORMLY (Q1 Fig. 2.79: adding
+    #   NH4NO3/LiNO3 raises heavy-RE D and lowers light-RE D). The anchor is
+    #   a chloride system with NO salting-out agent and Z1 Table 4.36 names
+    #   none. Do not use this record with a salting-out agent: it would move
+    #   the two ends of the ladder in opposite directions, which is exactly
+    #   the quantity no retrieved source gives.
+    #
+    # ---------------------------------------------------------------------
+    # USE FOR / DO NOT USE FOR
+    # ---------------------------------------------------------------------
+    # USE FOR:
+    #   - that Y is the least-extracted rare earth here and reports to the
+    #     raffinate -- the qualitative fact the whole flowsheet rests on
+    #   - SEPARATION FACTORS anywhere in the validity window: these are the
+    #     anchor's measured betas and do not depend on b (see THE
+    #     SAPONIFICATION GAP)
+    #   - absolute D NEAR pH 4.19, where the anchor was measured
+    #   - stage counts, which are driven by beta
+    #   - trend, sensitivity and gradient-based structure studies
+    #   - showing that naphthenic acid cannot separate adjacent lanthanides
+    # DO NOT USE FOR:
+    #   - any published stage count, sizing, purity or recovery number
+    #   - a La/Y split (beta crosses 1; see above)
+    #   - the lanthanide-lanthanide elution ORDER (the real one is scrambled)
+    #   - temperature studies (d = 0 is a gap, not a measurement)
+    #   - sulfate or nitrate media, or any system with a salting-out agent
+    #   - an unmodified solvent at realistic loading (it third-phases)
+    #   - regressing equilibrium constants against these numbers
+    #   - Versatic 10 or any sterically hindered acid (Y inverts)
+    #
+    # ---------------------------------------------------------------------
+    # UNRETRIEVED SOURCES -- THE HIGHEST-VALUE FOLLOW-UP, IN ORDER
+    # ---------------------------------------------------------------------
+    # The `a` ladder is no longer constructed, so these are no longer needed
+    # to build it. Their value now is CORROBORATION AND EXTENSION: a second
+    # measured full-series table would test Z1 Table 4.36, which is at
+    # present a single unreplicated source for every per-element number in
+    # this record. All three are paywalled with no open-access copy and NONE
+    # was used. In priority order:
+    #
+    #   1. Zheng, D., Gray, N.B., Stevens, G.W. (1991), "Comparison of
+    #      naphthenic acid, Versatic acid and D2EHPA for the separation of
+    #      rare earths", Solvent Extr. Ion Exch. 9(1), 85-102.
+    #      DOI 10.1080/07366299108918044.
+    #      *** THE RIGHT SYSTEM: naphthenic acid, CHLORIDE medium, La/Dy/Yb/Y.
+    #      Four elements spanning the series is enough to replace the slope
+    #      AND the level. Get this one first. ***
+    #   2. du Preez, A.C. & Preston, J.S. (1992), "The solvent extraction of
+    #      rare-earth metals by carboxylic acids", Solvent Extr. Ion Exch.
+    #      10(2), 207-230. DOI 10.1080/07366299208918101.
+    #      Full La-to-Lu plus Y pH0.5 values for naphthenic acid AND Versatic
+    #      10, in xylene from NITRATE media. pH0.5 converts straight into this
+    #      record: at D = 1 and equal phase volumes, a = -3*pH0.5. Needs a
+    #      nitrate-to-chloride and a xylene-to-aliphatic correction, neither
+    #      of which any retrieved source quantifies.
+    #   3. Preston, J.S. (1985), "Solvent extraction of metals by carboxylic
+    #      acids", Hydrometallurgy 14(2), 171-188.
+    #      DOI 10.1016/0304-386X(85)90032-5. Broader, earlier, same group.
+    #
+    # Q1 Fig. 2.79 (D-vs-Z, three salting-agent levels) remains undigitized.
+    # It is no longer needed to LEVEL the ladder -- Z1 Table 4.36 does that
+    # with measurements -- but it is still the only source for how the ladder
+    # MOVES when a salting-out agent is added, which Q1 says it does
+    # non-uniformly (lights down, heavies up). Digitize it before buying
+    # anything, and before modelling any NH4Cl-loaded feed.
+    ph_coefficients:
+      # a = log10(D) - 12.4327, D from Z1 Table 4.36 system 1 (0.45 mol/L
+      # naphthenic acid, 0.142 mol/L RE, pH 4.19, O/A 2/1, 25 C).
+      # b = 3.0 is Q1 Eq. 2.88. c and d are NOT measured; see below.
+      # Trailing comment on each line is the MEASURED D that produced it.
+      La: {a: -13.2774, b: 3.0, c: 0.0, d: 0.0}  # D 0.143  beta_La/Y 1.22 -- ANOMALOUS, see La/Y warning
+      Ce: {a: -13.0418, b: 3.0, c: 0.0, d: 0.0}  # D 0.246  beta 2.10
+      Pr: {a: -12.9012, b: 3.0, c: 0.0, d: 0.0}  # D 0.340  beta 2.91
+      Nd: {a: -12.8074, b: 3.0, c: 0.0, d: 0.0}  # D 0.422  beta 3.61 (printed beta 2.35 rejected)
+      Sm: {a: -12.6410, b: 3.0, c: 0.0, d: 0.0}  # D 0.619  beta 5.29 -- MAXIMUM of the series
+      Eu: {a: -12.7093, b: 3.0, c: 0.0, d: 0.0}  # D 0.529  beta 4.52
+      Gd: {a: -12.8157, b: 3.0, c: 0.0, d: 0.0}  # D 0.414  beta 3.54
+      Tb: {a: -12.8168, b: 3.0, c: 0.0, d: 0.0}  # D 0.413  beta 3.53
+      Dy: {a: -12.8645, b: 3.0, c: 0.0, d: 0.0}  # D 0.370  beta 3.16
+      # Ho-Lu are NOT in data/elements.yaml yet. They are written here because
+      # a yttrium record without them is useless -- the industrial separation
+      # is Y against Ho/Er/Tm/Yb/Lu. They are unreachable until elements.yaml
+      # gains them. Unlike the superseded ladder, these are NOT extrapolations:
+      # Z1 Table 4.36 measures all five directly.
+      Ho: {a: -12.9513, b: 3.0, c: 0.0, d: 0.0}  # D 0.303  beta 2.59
+      Er: {a: -13.0161, b: 3.0, c: 0.0, d: 0.0}  # D 0.261  beta 2.23
+      Tm: {a: -13.0331, b: 3.0, c: 0.0, d: 0.0}  # D 0.251  beta 2.15
+      Yb: {a: -13.0296, b: 3.0, c: 0.0, d: 0.0}  # D 0.253  beta 2.16
+      Lu: {a: -13.0672, b: 3.0, c: 0.0, d: 0.0}  # D 0.232  beta 1.98 (printed beta 2.19 rejected)
+      # Y is measured like the rest; it is the reference only because every
+      # beta in this file is quoted against it. Its D is the LOWEST of the
+      # fifteen, which is the entire reason this extractant is used.
+      Y:  {a: -13.3645, b: 3.0, c: 0.0, d: 0.0}  # D 0.117  beta 1.00 by definition
+
+    # ALL ZERO = NO DATA. Not a measurement that dD/dT is zero. See the
+    # d = 0.0 block above. The true values are probably positive (exothermic).
+    temperature_coefficients:  # d values in K
+      La: 0.0   # NO DATA
+      Ce: 0.0   # NO DATA
+      Pr: 0.0   # NO DATA
+      Nd: 0.0   # NO DATA
+      Sm: 0.0   # NO DATA
+      Eu: 0.0   # NO DATA
+      Gd: 0.0   # NO DATA
+      Tb: 0.0   # NO DATA
+      Dy: 0.0   # NO DATA
+      Ho: 0.0   # NO DATA
+      Er: 0.0   # NO DATA
+      Tm: 0.0   # NO DATA
+      Yb: 0.0   # NO DATA
+      Lu: 0.0   # NO DATA
+      Y:  0.0   # NO DATA
+
+    valid_ph_range: [4.0, 5.0]   # Q1's stated slope-3 verification range is pH 3.8-5.0;
+                                 # the measured anchor is pH 4.19. See THE SAPONIFICATION GAP.
+    valid_temp_range: [288, 313]  # deliberately narrow: there is NO T data
+    reference_concentration: 0.5  # 14% v/v at MW 270 / density 0.96
+    concentration_exponent: 3.0   # Q1 Eq. 2.88, cube law in FREE extractant
+    # The pH at which the `a` ladder above is referenced, and so the condition
+    # every quantity derived from this record is evaluated at (#268). 4.5 is
+    # the midpoint of the slope-3 verification range and the same pH the
+    # saponification block below uses. It is also, checkably, the pH the
+    # deleted `typical_K_L` literal had been computed at: deriving
+    # `K_L = D(4.5, 0.5 M, 298 K) / (0.5 / 3)` reproduces all fifteen of its
+    # entries to four significant figures. Declaring it is what lets those
+    # constants be computed rather than stored beside the ladder they came
+    # from -- without it, a record that plainly HAS a reference condition
+    # cannot say so, and the derivation refuses rather than guessing 4.5.
+    reference_pH: 4.5
+    # Commodity refinery by-product; the cheapest extractant in this file by
+    # an order of magnitude, which is most of why the industry uses it.
+    cost_usd_kg: 1.0
+    saponification:
+      counter_ion: NH4        # Q1: NH4OH or NaOH; NH4 puts N in the raffinate
+      degree: 0.80            # Q1 Sec. 2.4.2.1, industrial Y separation
+      log10_K: null           # calibrate; no measured constant retrieved
+      reference_pH: 4.5
+      reference_counter_ion: 0.1
+
 # Diluent properties
 diluents:
   kerosene:
@@ -683,3 +1219,165 @@ modifiers:
     description: "Alcohol modifier for acidic extractants"
     typical_concentration: 0.05
     effect: "Prevents crud formation, improves phase disengagement"
+
+# ---------------------------------------------------------------------------
+# PROVENANCE
+#
+# This is the machine-readable form of the "TWO DIFFERENT KINDS OF NUMBER"
+# warning at the head of this file. `pattern` is a dotted path with `*` as a
+# single-segment wildcard; the MOST SPECIFIC matching rule wins. `source` is a
+# key in sources.yaml. Resolve with:
+#
+#     >>> from difflow_ree.provenance import explain, audit
+#     >>> explain("extractants", "extractants.naphthenic_acid.ph_coefficients.Dy.a")
+#     >>> audit("extractants", cls="HAND_TUNED")   # everything with no basis
+#
+# THE ONE THING TO KNOW: of the five extractants here, exactly two carry
+# coefficients traceable to a named table -- naphthenic_acid (Z1) and TBP
+# (K05/GP19). D2EHPA, PC88A and Cyanex272 do not. Their numbers were invented
+# to make demos look right and are tagged HAND_TUNED so that a query, not a
+# careful reading, is enough to notice.
+# ---------------------------------------------------------------------------
+provenance:
+  rules:
+    # --- defaults: anything not matched more specifically ------------------
+    - {pattern: "extractants.*.*", source: HAND_TUNED}
+    - {pattern: "extractants.*.*.*", source: HAND_TUNED}
+    - {pattern: "extractants.*.*.*.*", source: HAND_TUNED}
+
+    # --- molecular identity and bulk properties ---------------------------
+    # True of the molecule, not of any extraction experiment. Catalogue-grade.
+    - {pattern: "extractants.*.full_name",         source: DEF}
+    - {pattern: "extractants.*.alternative_names", source: DEF}
+    - {pattern: "extractants.*.formula",           source: DEF}
+    - {pattern: "extractants.*.type",              source: DEF}
+    - {pattern: "extractants.*.mechanism",         source: DEF,
+       note: "Normalized from `type` per the mapping at the head of this file."}
+    - {pattern: "extractants.*.molecular_weight",  source: CRC}
+    - {pattern: "extractants.*.density",           source: CRC}
+    - {pattern: "extractants.*.pKa",               source: CRC}
+
+    # --- stoichiometry ----------------------------------------------------
+    - {pattern: "extractants.*.stoichiometry.*", source: DEF,
+       note: "Follows from the declared mechanism: 3 protons per RE(III) for
+              cation exchange, 0 and requires_nitrate for solvating."}
+
+    # --- operating choices, not measurements ------------------------------
+    - {pattern: "extractants.*.typical_concentration",    source: CONV}
+    - {pattern: "extractants.*.reference_concentration",  source: CONV,
+       note: "The concentration at which `a` is defined. A normalization
+              choice; changing it changes `a` by n*log10(ratio)."}
+    - {pattern: "extractants.*.reference_nitrate",        source: CONV}
+    - {pattern: "extractants.*.reference_pH",             source: CONV,
+       note: "The pH at which `a` is defined, and so the condition every
+              quantity derived from the record is evaluated at (#268). A
+              declared basis, like `reference_concentration`: changing it
+              moves every derived constant with it."}
+    - {pattern: "extractants.*.diluents",                 source: CONV}
+    - {pattern: "extractants.*.cost_usd_kg",              source: EST,
+       note: "*** NOT A QUOTED PRICE. *** Indicative only, same warning as the
+              element prices. Solvent inventory cost is one of the larger
+              terms in a TEA; substitute a dated quote before publishing one."}
+
+    # --- saponification (#197) --------------------------------------------
+    - {pattern: "extractants.*.saponification.degree", source: CONV,
+       note: "A DEFAULT OPERATING POINT, not a property. 0.30-0.50 is the
+              industrial range; 0.35 is the mid-range default used here.
+              Overridden by a Saponifier, a section, or an optimizer."}
+    - {pattern: "extractants.*.saponification.counter_ion",           source: CONV}
+    - {pattern: "extractants.*.saponification.reference_pH",          source: CONV}
+    - {pattern: "extractants.*.saponification.reference_counter_ion", source: CONV}
+    - {pattern: "extractants.*.saponification.log10_K",               source: CALC,
+       note: "null ships here on purpose: NO MEASURED SAPONIFICATION CONSTANT
+              IS IN THIS REPOSITORY. It is inverted at build time from
+              K = S/(1-S) * [H+]/[M+] at the declared reference condition, so
+              it restates the declared degree rather than reporting a fit."}
+
+    # ======================================================================
+    # (1) HAND-TUNED, NO SOURCE -- D2EHPA, PC88A, Cyanex272
+    # ======================================================================
+    - {pattern: "extractants.D2EHPA.ph_coefficients.*.*",           source: HAND_TUNED}
+    - {pattern: "extractants.D2EHPA.temperature_coefficients.*",    source: HAND_TUNED}
+    - {pattern: "extractants.PC88A.ph_coefficients.*.*",            source: HAND_TUNED}
+    - {pattern: "extractants.PC88A.temperature_coefficients.*",     source: HAND_TUNED}
+    - {pattern: "extractants.Cyanex272.ph_coefficients.*.*",        source: HAND_TUNED}
+    - {pattern: "extractants.Cyanex272.temperature_coefficients.*", source: HAND_TUNED}
+    - {pattern: "extractants.D2EHPA.valid_ph_range",                source: HAND_TUNED}
+    - {pattern: "extractants.PC88A.valid_ph_range",                 source: HAND_TUNED}
+    - {pattern: "extractants.Cyanex272.valid_ph_range",             source: HAND_TUNED}
+
+    # ======================================================================
+    # (2) LITERATURE-DERIVED -- TBP nitrate block
+    # ======================================================================
+    - {pattern: "extractants.TBP.nitrate_coefficients.*.a", source: K05,
+       locus: "Table 1, p. 92",
+       note: "Free acidity 0.2001 N, TBP in kerosene, equal phase volumes,
+              35 +/- 1 C, corrected to the declared reference_nitrate. The
+              per-element split between measured, interpolated and assumed is
+              written element-by-element on the TBP record above."}
+    - {pattern: "extractants.TBP.nitrate_coefficients.*.b", source: K05,
+       locus: "Table 1, p. 92"}
+    - {pattern: "extractants.TBP.nitrate_coefficients.*.c", source: CONV,
+       note: "Fixed at 0. No source resolves curvature in log10[NO3-];
+              a zero here is a declared absence, not a fitted flat."}
+    - {pattern: "extractants.TBP.nitrate_coefficients.*.d", source: GP19,
+       locus: "Table 1"}
+    - {pattern: "extractants.TBP.temperature_coefficients.*", source: GP19,
+       locus: "Table 1",
+       note: ">>> ONE ELEMENT APPLIED TO FIFTEEN. <<< dH = -43.3 +/- 6.2
+              kJ/mol was measured for Sm alone and is used for the whole
+              series, so every non-Sm temperature coefficient in this block
+              is an assumption, not a measurement. Fidelis (1970),
+              J. Inorg. Nucl. Chem. 32, 997, would supply the real series and
+              is the single highest-value follow-up for this record."}
+    - {pattern: "extractants.TBP.valid_ph_range",   source: TW54,
+       locus: "Tables II and IV, 8.5-17.4 N"}
+    - {pattern: "extractants.TBP.valid_temp_range", source: GP19,
+       locus: "283-326 K"}
+
+    # ======================================================================
+    # (3) LITERATURE-DERIVED -- naphthenic acid
+    # ======================================================================
+    - {pattern: "extractants.naphthenic_acid.ph_coefficients.*.a", source: Z1,
+       locus: "Sec. 4.7, Table 4.36, system 1",
+       note: "0.45 mol/L naphthenic acid, 0.142 mol/L RE, pH 4.19, O/A 2/1,
+              25 C. a = log10(D) - 12.4327 where 12.4327 = 3*4.19 - 3*log10
+              (0.45/0.5). SEPARATION FACTORS FROM THIS BLOCK ARE SOUND
+              ANYWHERE IN THE VALIDITY WINDOW -- they are the anchor's own
+              measured betas. ABSOLUTE D IS SOUND ONLY NEAR pH 4.19."}
+    - {pattern: "extractants.naphthenic_acid.ph_coefficients.*.b", source: Q1,
+       locus: "Eq. 2.88",
+       note: "lg D = lg K_ex + 3 lg(HA)o + 3 pH, verified pH 3.8-5.0. *** THE
+              SLOPE IS AGAINST FREE EXTRACTANT (Eq. 2.89), WHICH DIFFLOW DOES
+              NOT TRACK; and Z1's own two tabulated systems imply an apparent
+              slope of 0.374, not 3.0, because the industrial circuit is
+              80% saponified (Z1 Eq. 4.96 releases NH4+, not H+). difflow has
+              no counter-ion-exchange mechanism. THIS IS THE KNOWN GAP."}
+    - {pattern: "extractants.naphthenic_acid.ph_coefficients.*.c", source: CONV,
+       note: "Fixed at 0. Q1 Eq. 2.88 is linear in pH; a zero is a declared
+              absence of curvature, not a fit."}
+    - {pattern: "extractants.naphthenic_acid.ph_coefficients.*.d", source: CONV}
+    - {pattern: "extractants.naphthenic_acid.temperature_coefficients.*", source: CONV,
+       note: "All zero. NO temperature dependence has been sourced for this
+              system. Zero is the honest placeholder; it is not a finding that
+              the system is athermal. Anchor is 25 C."}
+    - {pattern: "extractants.naphthenic_acid.valid_ph_range", source: Q1,
+       locus: "Eq. 2.88 verification range, narrowed by Eq. 2.90",
+       note: "Lower bound from Eq. 2.91 (neutral coordination at low pH and
+              high RECl3); upper bound from Eq. 2.90 (hydrolysis above 5.6),
+              pulled in to 5.0 to stay inside the verified window."}
+    - {pattern: "extractants.naphthenic_acid.valid_temp_range", source: CONV,
+       note: "Declared, not measured -- see temperature_coefficients."}
+    - {pattern: "extractants.naphthenic_acid.molecular_weight", source: Q1,
+       note: "A MIXTURE, not a compound. Naphthenic acid is a refinery
+              by-product blend of alkyl cyclopentane- and cyclohexane-
+              carboxylic acids; this is an average equivalent weight and the
+              `formula` is representative, not exact."}
+    - {pattern: "extractants.naphthenic_acid.pKa",     source: Q1}
+    - {pattern: "extractants.naphthenic_acid.density", source: Q1}
+
+    # --- diluents and modifiers -------------------------------------------
+    - {pattern: "diluents.*.density",     source: CRC}
+    - {pattern: "diluents.*.viscosity",   source: CRC}
+    - {pattern: "diluents.*.cost_usd_L",  source: EST}
+    - {pattern: "modifiers.*.*",          source: CONV}
