@@ -81,7 +81,12 @@ from typing import Callable, Iterable, Literal, Sequence
 
 import jax.numpy as jnp
 
-from difflow.flowsheet import ConvergenceWarning, Flowsheet, Unit
+from difflow.flowsheet import (
+    ConvergenceWarning,
+    Flowsheet,
+    TearToleranceWarning,
+    Unit,
+)
 from difflow.initialization import TearInitializationWarning
 from difflow.streams import Stream, get_flows, make_stream
 
@@ -471,7 +476,20 @@ _SIGNED_M = (
 )
 
 #: ``(I - M)^-1 . 1``, the exact answer.  Three components are negative.
-_SIGNED_ANSWER = (1.151624, -0.437615, -1.230257, 3.785688, 0.365769, 1.933032)
+#:
+#: In full float64, not rounded.  The six-decimal version this started as
+#: was itself 4.4e-6 away from the answer, which is a hundred times what a
+#: converged solve of this case leaves behind -- so ``_signed_check`` was
+#: measuring the constant rather than the solver, and the case's loose
+#: ``tol`` was set to accommodate that (#264).
+_SIGNED_ANSWER = (
+    1.1516238190546417,
+    -0.4376153446104903,
+    -1.2302575893785253,
+    3.785692361299334,
+    0.3657687695442713,
+    1.9330348572361187,
+)
 
 _SIGNED_SPECIES = tuple(f"S{i}" for i in range(6))
 
@@ -696,12 +714,14 @@ CORPUS: tuple[Case, ...] = (
             "fail. Passing clip_negative_flows=False fixes Anderson."),
         tags=("recycle", "signed", "clipping", "analytic"),
         check=_signed_check,
-        # 1e-4, not the tighter 1e-6 the other analytic cases use: M is
-        # non-normal, so the error the tear tolerance leaves behind is
-        # amplified by ||(I - M)^-1|| rather than by 1/(1 - rho), and plain
-        # substitution lands at 1.2e-6.  Judging that "wrong" would be a
-        # verdict about the threshold rather than about the solver.
-        tol=1e-4,
+        # 1e-6, the same as the other analytic cases.  This was 1e-4, to
+        # accommodate a 1.2e-6 error attributed to M being non-normal --
+        # ||(I - M)^-1|| amplifying the tear tolerance rather than
+        # 1/(1 - rho).  It was not that: the reference above was rounded to
+        # six decimals and the case was measuring the rounding (#264).
+        # Plain substitution lands 7.6e-9 from the answer, which is 0.57
+        # times its own tear residual, not 450 times it.
+        tol=1e-6,
     ),
     Case(
         name="regime_switch",
@@ -812,6 +832,15 @@ class Outcome:
         residual: Final tear residual.
         method: What actually ran --- ``last_solve_method``, which is not
             always the requested acceleration (a traced solve falls back).
+        gain: Measured signed gain of the tear map at the solution
+            (``last_solve_gain``), or ``None`` where there was nothing to
+            measure.
+        error_estimate: The error the step residual hides
+            (``last_solve_error_estimate``).  Recorded because it is the
+            benchmark's independent check on the ``WRONG`` verdicts: a
+            solve that reports success and does not audit should be one the
+            solver could have known about, and on ``trace_recycle`` under
+            Wegstein this reads 3.0e-7 against a residual of 9.3e-9 (#264).
         wall_time: Seconds, including JAX compilation on first touch, so
             useful for ranking rather than as an absolute cost.
         error: ``"TypeName: message"`` if the solve raised, else ``None``.
@@ -827,6 +856,8 @@ class Outcome:
     iterations: int | None = None
     residual: float | None = None
     method: str | None = None
+    gain: float | None = None
+    error_estimate: float | None = None
     wall_time: float = 0.0
     error: str | None = None
     traceback: str | None = None
@@ -888,6 +919,10 @@ def run_case(case: Case, acceleration: str = "anderson",
             # than hard.
             warnings.simplefilter("ignore", ConvergenceWarning)
             warnings.simplefilter("ignore", TearInitializationWarning)
+            # Same reasoning for the tolerance warning: the number behind
+            # it is recorded in Outcome.error_estimate, which is the point
+            # of running the probe here at all.
+            warnings.simplefilter("ignore", TearToleranceWarning)
             streams = fs.solve(acceleration=acceleration, tol=tol,
                                max_iter=max_iter,
                                on_nonconvergence="ignore", **kwargs)
@@ -902,6 +937,8 @@ def run_case(case: Case, acceleration: str = "anderson",
     outcome.iterations = fs.last_solve_iterations
     outcome.residual = fs.last_solve_residual
     outcome.method = fs.last_solve_method
+    outcome.gain = fs.last_solve_gain
+    outcome.error_estimate = fs.last_solve_error_estimate
 
     try:
         outcome.balance_error = float(case.check(fs, streams))
@@ -1015,17 +1052,23 @@ class Report:
         lines.append("detail")
         lines.append("-" * width)
         header = (f"  {'case':<22s} {'accel':<9s} {'init':<8s} "
-                  f"{'verdict':<8s} {'iters':>5s}  {'balance':>9s}")
+                  f"{'verdict':<8s} {'iters':>5s}  {'balance':>9s}"
+                  f"  {'err est':>9s}")
         lines.append(header)
         for outcome in self.outcomes:
             iters = "-" if outcome.iterations is None else str(outcome.iterations)
             err = outcome.balance_error
             bal = "-" if err != err else (  # NaN-safe
                 "inf" if err == float("inf") else f"{err:.2e}")
+            # The solver's own estimate of how far out it is, beside the
+            # audit's verdict on the same solve: on a WRONG row the two
+            # should agree, and where they do the solver could have said so.
+            est = ("-" if outcome.error_estimate is None
+                   else f"{outcome.error_estimate:.2e}")
             lines.append(
                 f"  {outcome.case:<22s} {outcome.acceleration:<9s} "
                 f"{outcome.initialization:<8s} {outcome.verdict:<8s} "
-                f"{iters:>5s}  {bal:>9s}")
+                f"{iters:>5s}  {bal:>9s}  {est:>9s}")
 
         raised = [o for o in self.outcomes if o.error]
         if raised:

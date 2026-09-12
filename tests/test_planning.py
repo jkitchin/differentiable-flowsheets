@@ -15,6 +15,7 @@ The acceptance criteria for the module are covered explicitly:
 import re
 import sys
 import warnings
+from unittest import mock
 
 import jax
 import jax.numpy as jnp
@@ -30,6 +31,7 @@ from difflow.planning import (
     AMPLIFY_TOL,
     SPREAD_TOL,
     Block,
+    CostRatio,
     DeltaHealthWarning,
     HealthReport,
     check_delta_health,
@@ -48,6 +50,7 @@ from difflow.planning import (
     classify_phase,
     constraint_backoff,
     format_scaling_table,
+    best_cost_ratio,
     gradient_cost_ratio,
     linearize_block,
     plan_sensitivity,
@@ -57,6 +60,7 @@ from difflow.planning import (
     sample_piecewise,
     scaling_study,
 )
+from difflow.planning import benchmark as benchmark_mod
 from difflow.planning import chain as chain_mod
 
 
@@ -763,19 +767,48 @@ class TestScaling:
         Reverse mode is used throughout — a scalar objective over ``n``
         decisions is exactly the shape it is for — so this also exercises the
         mode that delivers the scaling.
+
+        This is a wall-clock assertion and it used to flake under
+        ``pytest -n auto`` (#271), where the workers compete for cores and a
+        timing ratio in one worker contends with several others. The three
+        obvious answers all fail here, which is why the fix is in the
+        estimator instead:
+
+        * **Skip under xdist.** Both `.github/workflows/test.yml` and
+          `release-tests.yml` run ``-n auto``, so this would leave an
+          acceptance criterion running nowhere.
+        * **``xdist_group``.** It pins tests to one worker; it does not stop
+          the other workers running at the same time, which is the
+          contention.
+        * **Move it behind ``release``.** Already there — and
+          ``release-tests.yml`` runs ``-n auto`` too.
+
+        Nor is it a clock artifact that a different clock would remove:
+        measured on this chain at n = 80 under 8x oversubscription of 4
+        cores, the wall-clock ratio went 0.97x -> 2.12x and the CPU-time
+        ratio 1.22x -> 1.89x. A busy machine makes the gradient genuinely
+        cost more work, through cache and core sharing.
+
+        What does work is more independent draws at a quiet window. See
+        :func:`difflow.planning.best_cost_ratio`.
         """
         rows = scaling_study(self._make, [5, 10, 20, 40, 80], repeats=3,
                              warmup=2, mode="rev")
         assert [r.n for r in rows] == [5, 10, 20, 40, 80]
 
         # The estimator is a minimum over samples, so noise can only inflate
-        # it. A row over the limit therefore gets one more careful look before
-        # it is called a regression -- re-measuring is not moving the
-        # goalposts, it is taking a better sample of the same quantity.
+        # it. A row over the limit therefore gets more careful looks before it
+        # is called a regression -- re-measuring is not moving the goalposts,
+        # it is taking a better sample of the same quantity. One retry was not
+        # enough: under parallel load a whole re-measurement can land inside
+        # one contended window (#271), so this takes up to four independent
+        # draws with growing sample counts and stops at the first that lands
+        # under the limit.
         rows = [row if row.ad_ratio < self.AD_RATIO_LIMIT
-                else min(row, gradient_cost_ratio(*self._make(row.n),
-                                                  mode="rev", repeats=7,
-                                                  warmup=3),
+                else min(row, best_cost_ratio(*self._make(row.n),
+                                              limit=self.AD_RATIO_LIMIT,
+                                              mode="rev", repeats=7,
+                                              warmup=3),
                          key=lambda r: r.ad_ratio)
                 for row in rows]
 
@@ -786,6 +819,38 @@ class TestScaling:
         # Finite differences must cost more, and increasingly so.
         assert rows[-1].fd_seconds > rows[0].fd_seconds
         assert rows[-1].speedup > 1.0
+
+    def test_best_cost_ratio_keeps_the_smallest_and_stops_early(self):
+        """#271: more draws at a quiet window, and the minimum across them.
+
+        Driven against a stub rather than the clock, because what is being
+        tested is the retry policy and not a timing. The minimum is what
+        makes extra attempts legitimate: a contended sample can only be too
+        large, so taking more of them cannot flatter the result.
+        """
+        seen = []
+
+        def fake(fn, x0, repeats, warmup, **kwargs):
+            seen.append(repeats)
+            ad = float(ratios[len(seen) - 1])
+            return CostRatio(n=1, eval_seconds=1.0, ad_seconds=ad,
+                             fd_seconds=9.0, ad_ratio=ad, fd_ratio=9.0,
+                             speedup=9.0 / ad)
+
+        ratios = [7.0, 5.0, 2.0, 1.0]
+        with mock.patch.object(benchmark_mod, "gradient_cost_ratio", fake):
+            best = benchmark_mod.best_cost_ratio(
+                lambda u: u, jnp.zeros(1), limit=3.0, attempts=4, repeats=2)
+        assert best.ad_ratio == pytest.approx(2.0)
+        assert seen == [2, 4, 8], "sample count should grow per attempt"
+
+        seen.clear()
+        ratios = [7.0, 6.0, 5.0, 4.0]
+        with mock.patch.object(benchmark_mod, "gradient_cost_ratio", fake):
+            best = benchmark_mod.best_cost_ratio(
+                lambda u: u, jnp.zeros(1), limit=3.0, attempts=4, repeats=2)
+        assert best.ad_ratio == pytest.approx(4.0)
+        assert len(seen) == 4, "over the limit on every draw is a real failure"
 
     @pytest.mark.release
     def test_gradient_agrees_with_finite_differences(self):
