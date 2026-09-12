@@ -6,7 +6,7 @@ from YAML files.
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import NamedTuple
+from typing import NamedTuple, Sequence
 import yaml
 
 import jax.numpy as jnp
@@ -459,6 +459,33 @@ class Extractant:
             )
 
     @property
+    def driving_coefficients(self) -> dict[str, PHCoefficients] | None:
+        """The coefficient block the record's own mechanism reads (#269).
+
+        One place to ask "what drives D here", so a caller counting coverage
+        does not have to re-implement the mechanism dispatch and get it
+        wrong for the one solvating record.
+        """
+        if self.mechanism == "solvating":
+            return self.nitrate_coefficients
+        return self.ph_coefficients
+
+    @property
+    def covered_elements(self) -> tuple[str, ...]:
+        """Elements this record can actually give a ``D`` for (#269).
+
+        Coverage is uneven across the database and the gaps are not
+        cosmetic: the elements an extractant is missing tend to be the ones
+        a given separation runs *against*. Yttrium purification is Y against
+        Ho, Er, Tm, Yb and Lu --- Y(III)'s 90.0 pm ionic radius sits between
+        Ho's 90.1 and Er's 89.0, which is why those are the neighbours it
+        has to be told apart from --- so a record missing the heavies cannot
+        do the job people reach for it to do, however many elements it
+        lists.
+        """
+        return tuple(self.driving_coefficients or ())
+
+    @property
     def is_saponified(self) -> bool:
         """True when the record ships pre-neutralized (#197)."""
         return self.saponification_degree > 0.0 and self.counter_ion not in (
@@ -485,6 +512,41 @@ class Extractant:
     def max_loading(self) -> float:
         """Maximum REE loading capacity (mol REE per mol extractant)."""
         return 1.0 / self.monomers_per_ree
+
+
+@dataclass(frozen=True)
+class Coverage:
+    """Which extractants can give a ``D`` for which elements (#269).
+
+    Attributes:
+        elements: The elements asked about, in the order asked.
+        covered: ``{extractant: (elements it has coefficients for)}``.
+    """
+
+    elements: tuple[str, ...]
+    covered: dict[str, tuple[str, ...]]
+
+    def missing(self, extractant: str) -> tuple[str, ...]:
+        """Elements this extractant has no driving coefficients for."""
+        have = set(self.covered[extractant])
+        return tuple(e for e in self.elements if e not in have)
+
+    def complete(self) -> tuple[str, ...]:
+        """Extractants that cover every element asked about."""
+        return tuple(name for name in self.covered if not self.missing(name))
+
+    def as_text(self) -> str:
+        """The report as a table, for a terminal or an issue."""
+        width = max((len(n) for n in self.covered), default=10)
+        total = len(self.elements)
+        lines = [f"  {'extractant':<{width}}  covered  missing"]
+        for name in self.covered:
+            gap = self.missing(name)
+            lines.append(
+                f"  {name:<{width}}  {len(self.covered[name]):>3d}/{total:<3d}  "
+                + (", ".join(gap) if gap else "-")
+            )
+        return "\n".join(lines)
 
 
 class ExtractantDatabase:
@@ -571,6 +633,34 @@ class ExtractantDatabase:
     def list_diluents(self) -> list[str]:
         """List available diluents."""
         return list(self._diluents.keys())
+
+    def coverage(self, elements: Sequence[str] | None = None) -> "Coverage":
+        """Which elements each extractant can give a ``D`` for (#269).
+
+        Coverage is uneven, and a flowsheet that names an element its
+        extractant has no coefficients for used to find out mid-solve, from
+        a ``KeyError`` raised while iterating stages. This makes the gap
+        answerable before the run.
+
+        Args:
+            elements: Elements to report against. ``None`` (default) uses
+                every element in the REE database, which is the question
+                "what can this extractant not do".
+
+        Returns:
+            A :class:`Coverage` report.
+        """
+        if elements is None:
+            elements = get_ree_database().list_elements()
+        wanted = list(elements)
+        return Coverage(
+            elements=tuple(wanted),
+            covered={
+                name: tuple(e for e in wanted
+                            if e in self.get(name).covered_elements)
+                for name in self.list_extractants()
+            },
+        )
 
     def add_extractant(self, name: str, extractant: Extractant) -> None:
         """Add a custom extractant to the database at runtime.

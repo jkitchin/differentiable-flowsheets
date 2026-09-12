@@ -49,6 +49,7 @@ from difflow_ree.database import (
     # Database classes
     REEDatabase,
     ExtractantDatabase,
+    Coverage,
     SeparationFactorDatabase,
     # Database singletons
     get_ree_database,
@@ -540,6 +541,7 @@ __all__ = [
     # Database classes
     "REEDatabase",
     "ExtractantDatabase",
+    "Coverage",
     "SeparationFactorDatabase",
     # Database singletons
     "get_ree_database",

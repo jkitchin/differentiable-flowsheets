@@ -86,12 +86,56 @@ print(f"Full name: {d2ehpa.full_name}")
 print(f"Reference concentration: {d2ehpa.reference_concentration} M")
 ```
 
-| Extractant | Full Name | Primary Use |
-|------------|-----------|-------------|
-| D2EHPA | Di(2-ethylhexyl)phosphoric acid | Light/middle REE |
-| PC88A | 2-ethylhexyl phosphonic acid mono-2-ethylhexyl ester | Middle REE |
-| Cyanex272 | Bis(2,4,4-trimethylpentyl)phosphinic acid | Heavy REE, Co/Ni |
-| TBP | Tri-n-butyl phosphate | Ce separation, nuclear |
+| Extractant | Full Name | Primary Use | Elements covered |
+|------------|-----------|-------------|------------------|
+| D2EHPA | Di(2-ethylhexyl)phosphoric acid | Light/middle REE | La–Dy, Y |
+| PC88A | 2-ethylhexyl phosphonic acid mono-2-ethylhexyl ester | Middle REE | La–Dy, Y |
+| Cyanex272 | Bis(2,4,4-trimethylpentyl)phosphinic acid | Heavy REE, Co/Ni | La–Dy, Y |
+| TBP | Tri-n-butyl phosphate | Ce separation, nuclear | La–Dy, Y |
+
+(element-coverage)=
+### Which elements an extractant covers
+
+Coverage is a property of the record, not of the package, and it is uneven. Ask
+before a run rather than during one (#269):
+
+```python
+from difflow_ree import get_extractant_database
+
+cov = get_extractant_database().coverage()
+print(cov.as_text())
+cov.missing("D2EHPA")      # ()
+cov.complete()             # every extractant, against what ships today
+```
+
+`coverage(elements)` answers the same question for a list you care about, and
+`get_extractant("TBP").covered_elements` answers it for one record —
+mechanism-aware, so it reads the nitrate block for a solvating extractant and
+the pH block for a cation exchanger.
+
+Naming an element an extractant has no coefficients for is now refused **when
+the distribution is constructed**, with all of the missing elements at once and
+the coverage that does exist beside them:
+
+```python
+REEDistribution(extractant="D2EHPA", elements=("Y", "Ho", "Er", "Tm", "Yb", "Lu"))
+# ValueError: Extractant 'D2EHPA' has no coefficients for Ho, Er, Tm, Yb, Lu
+# (mechanism='cation_exchange') ... It covers: La, Ce, Pr, Nd, Sm, Eu, Gd, Tb, Dy, Y.
+```
+
+It used to be a `KeyError` from mid-solve, raised while iterating stages and
+naming one element at a time.
+
+Those five are not an arbitrary example. **Yttrium purification is Y against Ho,
+Er, Tm, Yb and Lu** — Y(III)'s 90.0 pm ionic radius sits between Ho's 90.1 and
+Er's 89.0, which is exactly why they are what it has to be told apart from. A
+record whose coefficients stop at Dy plus Y cannot do that separation however
+many elements it lists.
+
+Filling such a gap is a different job per extractant, and none of it is
+interpolation: D2EHPA, PC88A and Cyanex272 have no published source for the ten
+they already carry, so extending them is a **refit**. Anything added should
+arrive with a citation, via `add_element_to_extractant`.
 
 Every extractant record declares a normalized **extraction mechanism**, and it
 is the mechanism that decides which correlation drives `D` (#195):

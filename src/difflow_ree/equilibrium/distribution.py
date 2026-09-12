@@ -286,6 +286,7 @@ class REEDistribution:
         self._validate_overrides()
         self._check_medium()
         self._validate_mechanism_data(self.nitrate_conc)
+        self._check_element_coverage()
 
     # -------------------------------------------------------------------
     # Mechanism dispatch (#195)
@@ -388,6 +389,43 @@ class REEDistribution:
                     "is a data inconsistency; declare mechanism: solvating on "
                     "the record (#195)."
                 )
+
+    def _check_element_coverage(self) -> None:
+        """Refuse an element this extractant has no coefficients for (#269).
+
+        The gap used to surface as a ``KeyError`` from inside the solve ---
+        raised while iterating stages, naming one element, with the
+        flowsheet already half-built. It is a property of the pairing of
+        extractant and element list, knowable the moment both are named, so
+        it is answered here instead: all of the missing elements at once,
+        with the coverage that does exist beside them.
+
+        The gaps are not cosmetic. Coverage in this database stops at Dy
+        plus Y, and the five elements past it --- Ho, Er, Tm, Yb, Lu --- are
+        exactly the ones yttrium purification runs against, Y(III)'s 90.0 pm
+        ionic radius sitting between Ho's 90.1 and Er's 89.0.
+
+        Raises:
+            ValueError: If any requested element is outside the active
+                mechanism's coefficient block.
+        """
+        block = self._ext_data.driving_coefficients or {}
+        missing = [e for e in self.elements if e not in block]
+        if not missing:
+            return
+        covered = ", ".join(self._ext_data.covered_elements) or "(none)"
+        raise ValueError(
+            f"Extractant {self.extractant!r} has no coefficients for "
+            f"{', '.join(missing)} (mechanism={self.mechanism!r}), so no D "
+            f"can be computed for {'them' if len(missing) > 1 else 'it'}. "
+            f"It covers: {covered}. Either drop {'those elements' if len(missing) > 1 else 'that element'} "
+            "from the list, pick an extractant that covers them "
+            "(difflow_ree.get_extractant_database().coverage() reports the "
+            "gaps across the database), or add coefficients with "
+            "add_element_to_extractant() -- with a source, since extending "
+            "a fitted correlation to new elements is a refit rather than an "
+            "interpolation (#269)."
+        )
 
     def _require_nitrate_medium(self, nitrate_conc) -> None:
         """Raise unless a usable nitrate concentration was supplied (#195).
