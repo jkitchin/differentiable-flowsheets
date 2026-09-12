@@ -582,13 +582,20 @@ Two traps it exposes, both worth knowing independently of that:
   and so 4.4e-6 from `(I - M)^-1 . 1`; the solver lands 7.6e-9 away, inside its
   own residual. Reference now at full float64 and the case audits at 1e-6 like
   the other analytic ones (#264).
-- `clip_negative_flows` defaults to True and is applied by the Wegstein and
-  Anderson paths but NOT by the unaccelerated one. On a tear whose answer is
-  genuinely negative that projection is the difference between solving it and
-  not: `signed_tear` is the one case where plain substitution beats both
-  accelerated methods, and `clip_negative_flows=False` fixes Anderson on it
-  (100 iterations to 13). Same point `difflow_gas` already makes for signed
-  flows.
+- `clip_negative_flows` defaults to True and binds on the Wegstein and
+  Anderson paths but NOT on the unaccelerated one -- deliberately (#263): it
+  guards an *extrapolated* guess, and substitution makes none. Clipping there
+  would clip `g` itself, which invents fixed points and, since a traced solve
+  falls back to that path, puts a kink inside the map `optx.fixed_point`
+  implicitly differentiates (measured: an exact gradient of 2.0 comes back as
+  1.333 on a tear flow that converges to zero). A solve that fails *because*
+  of the clip now says so: `last_solve_clip_active` counts the iterations it
+  moved the iterate, and the non-convergence warning names the remedy.
+  On a tear whose answer is genuinely negative that projection is the
+  difference between solving it and not: `signed_tear` is the one case where
+  plain substitution beats both accelerated methods, and
+  `clip_negative_flows=False` fixes Anderson on it (100 iterations to 13).
+  Same point `difflow_gas` already makes for signed flows.
 
 Anderson is not free either — `phase_coupled_flash` fails under it and
 converges under Wegstein.

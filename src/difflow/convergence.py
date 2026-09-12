@@ -503,11 +503,14 @@ def _build_signed_tear() -> Flowsheet:
     its docs already say to solve with ``clip_negative_flows=False``.
 
     The corpus needs it because it is the only case here that inverts the
-    usual ranking.  ``clip_negative_flows`` defaults to ``True`` and is
-    applied by the Wegstein and Anderson paths but **not** by the
-    unaccelerated one, so on this map the two accelerated methods have a
-    projection applied to their iterates that the plain one does not --
-    and they are the two that fail.
+    usual ranking.  ``clip_negative_flows`` defaults to ``True`` and binds
+    on the Wegstein and Anderson paths but **not** on the unaccelerated
+    one, so on this map the two accelerated methods have a projection
+    applied to their iterates that the plain one does not -- and they are
+    the two that fail.  That asymmetry is deliberate (#263): the
+    projection guards an extrapolated guess, and the unaccelerated path
+    makes none.  What #263 changed is that a solve failing this way now
+    says so, in ``last_solve_clip_active`` and in its warning.
     """
     species = list(_SIGNED_SPECIES)
     M = jnp.asarray(_SIGNED_M)
@@ -706,7 +709,7 @@ CORPUS: tuple[Case, ...] = (
             "x <- f + M x at spectral radius 0.75, with three of the six "
             "components of the answer negative. The one case here that "
             "inverts the ranking -- clip_negative_flows defaults to True "
-            "and is applied by Wegstein and Anderson but not by plain "
+            "and binds on Wegstein and Anderson but not on plain "
             "substitution, and it is the two accelerated methods that "
             "fail. Passing clip_negative_flows=False fixes Anderson."),
         tags=("recycle", "signed", "clipping", "analytic"),

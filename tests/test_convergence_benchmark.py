@@ -421,10 +421,16 @@ class TestTheFindings:
     def test_a_signed_tear_beats_both_accelerated_methods(self):
         """The one case that inverts the corpus ranking.
 
-        ``clip_negative_flows`` defaults to True and is applied by the
-        Wegstein and Anderson paths but not by the unaccelerated one. On a
-        tear whose answer is genuinely negative, that projection is the
+        ``clip_negative_flows`` defaults to True and binds on the Wegstein
+        and Anderson paths but not on the unaccelerated one. On a tear
+        whose answer is genuinely negative, that projection is the
         difference between solving it and not.
+
+        The asymmetry is the decision #263 settled, not a bug left
+        standing: the projection guards an extrapolated guess and the
+        unaccelerated path makes none. See
+        ``tests/test_flowsheet_tear_clip.py`` for what clipping there
+        would cost.
         """
         plain = run_case(get_case("signed_tear"), acceleration="none")
         wegstein = run_case(get_case("signed_tear"), acceleration="wegstein")
