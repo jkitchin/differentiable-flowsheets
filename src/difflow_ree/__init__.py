@@ -80,6 +80,13 @@ from difflow_ree.database import (
 from difflow_ree.equilibrium import (
     # Saponified correlation on the pH path (#266)
     SaponifiedCorrelationWarning,
+    # Free extractant: what the correlation's [HA] means (#267)
+    ExtractantCapacityWarning,
+    FreeExtractantConvergenceWarning,
+    FreeExtractantResult,
+    check_loading_capacity,
+    implied_loading_fraction,
+    solve_free_extractant,
     # Stage-count correlations
     stages_kremser,
     stages_fenske,
@@ -493,6 +500,12 @@ __all__ = [
     "screen_topologies",
     "minimum_stages",
     "separation_factor",
+    "ExtractantCapacityWarning",
+    "FreeExtractantConvergenceWarning",
+    "FreeExtractantResult",
+    "check_loading_capacity",
+    "implied_loading_fraction",
+    "solve_free_extractant",
     "stages_kremser",
     "stages_fenske",
     # Saponification and counter-ion balance (#197)

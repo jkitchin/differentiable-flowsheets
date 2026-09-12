@@ -305,6 +305,15 @@ class MyUnit:
 - Precipitation: `OxalatePrecipitator`, `CarbonatePrecipitator`, `HydroxidePrecipitator`
 - Flowsheets: `ExtractStripCircuit`, `ExtractScrubStripCircuit`, `SplitShellCascade`, `FullSeparationTrain`
 - Database: 10 REE elements, 4 extractant systems
+- Free extractant (#267): the correlation's `[HA]` is FREE (Q1 Eq. 2.88/2.89),
+  not total. `solve_free_extractant(dist, el, c_aq, pH=...)` closes
+  `c_org = D([HA]_free) c_aq`, `[HA]_free = [HA]_0 - m c_org` as a monotone
+  scalar root through optimistix (implicit diff, so gradients survive). Total
+  overpredicts D where the cascade works hardest -- 1.34x at the naphthenic
+  anchor. `check_loading_capacity` / `implied_loading_fraction` reject a
+  loading past `1/monomers_per_ree`, which a total-basis correlation returns a
+  finite D for. Do NOT compose with `LoadingIsotherm.apparent_D`: that caps
+  the answer, this changes the input (#190/#204's double count).
 - Uncertain D: `REEDistribution(..., coefficient_overrides={"Nd": {"a": ...}})`
   replaces tabulated log10(D) correlation coefficients, and accepts JAX tracers,
   so a distribution can be put on D and differentiated through. Passed through by

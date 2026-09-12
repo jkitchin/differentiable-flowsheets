@@ -36,6 +36,14 @@ from difflow_ree.equilibrium.distribution import (
     get_separation_factor,
     SaponifiedCorrelationWarning,
 )
+from difflow_ree.equilibrium.free_extractant import (
+    ExtractantCapacityWarning,
+    FreeExtractantConvergenceWarning,
+    FreeExtractantResult,
+    check_loading_capacity,
+    implied_loading_fraction,
+    solve_free_extractant,
+)
 from difflow_ree.equilibrium.loading import (
     LoadingIsotherm,
     langmuir_loading,
@@ -118,6 +126,12 @@ __all__ = [
     "get_distribution_coefficients",
     "get_separation_factor",
     "SaponifiedCorrelationWarning",
+    "ExtractantCapacityWarning",
+    "FreeExtractantConvergenceWarning",
+    "FreeExtractantResult",
+    "check_loading_capacity",
+    "implied_loading_fraction",
+    "solve_free_extractant",
     "LoadingIsotherm",
     "langmuir_loading",
     "loading_correction",
