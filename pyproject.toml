@@ -7,7 +7,7 @@ name = "difflow"
 version = "0.1.0"
 description = "Differentiable flowsheet framework for chemical processes"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [
@@ -31,7 +31,6 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering",
@@ -118,14 +117,9 @@ solvers = [
     # zero. The back ends themselves (pounce-solver[jax], discopt) stay
     # optional: install whichever one you solve with.
     #
-    # The marker is not optimism about 3.10 -- asdex has never published a
-    # 3.10 wheel, so `pip install difflow[solvers]` on 3.10 fails outright
-    # rather than resolving to something older, and it has been failing the
-    # 3.10 CI job since this extra was added. With the marker the extra
-    # installs everywhere and simply contributes nothing on 3.10, where
-    # difflow.solvers then raises on use -- which is what it already does
-    # for a missing asdex, deliberately, rather than going quietly dense.
-    "asdex>=0.5; python_version >= '3.11'",
+    # The `python_version >= "3.11"` marker this carried is gone with 3.10:
+    # asdex never published a 3.10 wheel, which is what the marker was for.
+    "asdex>=0.5",
 ]
 cuda12 = [
     "jax[cuda12]>=0.4.0",

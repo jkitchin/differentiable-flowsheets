@@ -90,12 +90,11 @@ needs_pounce = pytest.mark.skipif(
 needs_discopt = pytest.mark.skipif(
     not HAVE_DISCOPT, reason="discopt not installed"
 )
-# asdex publishes nothing for 3.10, so `difflow[solvers]` contributes nothing
-# there and the graph-derived pattern -- which is the default, and which these
-# tests are about -- cannot be produced at all. Skipping is honest: the
-# alternative is 30 failures that say "3.10" rather than anything about the
-# code. `test_missing_asdex_raises_instead_of_silently_going_dense` is NOT
-# marked, because that one asserts the behaviour when asdex is absent.
+# Without asdex the graph-derived pattern -- which is the default, and which
+# these tests are about -- cannot be produced at all. Skipping is honest: the
+# alternative is 30 failures that say "asdex is missing" rather than anything
+# about the code. `test_missing_asdex_raises_instead_of_silently_going_dense`
+# is NOT marked, because that one asserts the behaviour when asdex is absent.
 needs_asdex = pytest.mark.skipif(
     not HAVE_ASDEX, reason="asdex not installed (pip install difflow[solvers])"
 )
