@@ -48,6 +48,30 @@
 #     saturates rather than inverting, unless the caller explicitly passes
 #     extrapolate_activity_model=True (#194).
 #
+# COUNTER-ION-EXCHANGE MODEL (`counter_ion_coefficients`) (#266):
+#   log10(D) = a - p*log10([M+]/reference_counter_ion) + d*(1/T - 1/Tref)
+#
+# This is the reaction a SAPONIFIED circuit actually runs (Z1 Eq. 4.96, Q1
+# Eq. 2.120):
+#
+#     HL(o) + NH4OH = NH4L(o) + H2O          <- saponification, separate step
+#     RE3+ + 3 NH4L(o) = REL3(o) + 3 NH4+    <- the extraction
+#
+# No proton appears on either side of the second, so pH is not its driving
+# variable and a `b` of 3 on `ph_coefficients` is a slope on the wrong axis
+# rather than a slope that is too large.
+#
+# The slope `p` is the counter-ion released per mol REE, taken from the
+# record's stoichiometry rather than fitted per element -- which is why a
+# SEPARATION FACTOR is exactly independent of [M+]: the term cancels in
+# D_A/D_B. `reference_counter_ion` is the [M+] the `a` values were measured
+# at and has NO DEFAULT: no source cited here reports one, and a plausible
+# anchor would scale every D under it.
+#
+# No record below carries this block. The mechanism exists so that a record
+# measured on a saponified system has somewhere to put its real correlation;
+# each acidic record declares `correlation_basis: unsaponified` to say that
+# its pH slope means what a pH slope means.
 # REFERENCE CONDITIONS, AND WHY THEY ARE DECLARED (#268)
 # Every record states the condition its correlation is *anchored* at:
 # `reference_concentration` for the extractant charge, and `reference_pH`
@@ -230,6 +254,14 @@ extractants:
       log10_K: null          # calibrated from degree at the reference below
       reference_pH: 3.0
       reference_counter_ion: 0.1   # M
+      correlation_basis: unsaponified   # a proton-exchange fit (#266)
+      # What the ph_coefficients above were measured on (#266). Stated
+      # rather than inferred from `degree`: the degree is an operating
+      # default for the circuit, and these coefficients are a proton-exchange
+      # fit whatever degree the circuit runs at. A record fitted to a
+      # pre-neutralized system says `saponified` here, and difflow_ree then
+      # warns that its pH slope is a slope on the wrong axis.
+      correlation_basis: unsaponified
 
   PC88A:
     full_name: "2-ethylhexyl phosphonic acid mono-2-ethylhexyl ester"
@@ -299,6 +331,7 @@ extractants:
       log10_K: null          # calibrated from degree at the reference below
       reference_pH: 3.0
       reference_counter_ion: 0.1   # M
+      correlation_basis: unsaponified   # a proton-exchange fit (#266)
 
   Cyanex272:
     full_name: "Bis(2,4,4-trimethylpentyl)phosphinic acid"
@@ -367,6 +400,7 @@ extractants:
       log10_K: null          # calibrated from degree at the reference below
       reference_pH: 3.0
       reference_counter_ion: 0.1   # M
+      correlation_basis: unsaponified   # a proton-exchange fit (#266)
 
   TBP:
     full_name: "Tributyl phosphate"
