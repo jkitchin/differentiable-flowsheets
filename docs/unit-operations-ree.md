@@ -163,6 +163,10 @@ is the mechanism that decides which correlation drives `D` (#195):
 |-----------|---------------|------------------|-------------------|
 | `cation_exchange` | `acidic_phosphoric`, `acidic_phosphonic`, `acidic_phosphinic`, `acidic_carboxylic` | pH | `ph_coefficients` |
 | `solvating` | `solvating_neutral` | nitrate concentration | `nitrate_coefficients` |
+| `counter_ion_exchange` | declared explicitly | counter-ion concentration | `counter_ion_coefficients` |
+
+The third is what a **saponified** circuit actually runs — see
+[Saponified circuits exchange a counter-ion, not a proton](#saponified-circuits-exchange-a-counter-ion-not-a-proton).
 
 A record carries only the block its mechanism needs. TBP has **no**
 `ph_coefficients` block (it was deleted — see below), so
@@ -178,6 +182,72 @@ print(get_extractant("TBP").requires_nitrate, get_extractant("TBP").reference_ni
 # True 3.0
 print(normalize_mechanism("acidic_phosphonic"))  # 'cation_exchange'
 ```
+
+(saponified-correlations)=
+### Saponified circuits exchange a counter-ion, not a proton
+
+`cation_exchange` describes proton exchange (Q1 Eq. 2.87):
+
+$$\mathrm{RE}^{3+} + 3\,\mathrm{HA}_{(o)} \rightleftharpoons \mathrm{REA}_3{}_{(o)} + 3\,\mathrm{H}^+$$
+
+which is what a pH slope of about 3 means. Industrial rare-earth circuits
+saponify 30–80 % of the extractant before the cascade, and the reaction that
+then runs is a **counter-ion** exchange (Z1 Eq. 4.96, Q1 Eq. 2.120), preceded by
+the saponification itself (Z1 Eq. 4.95):
+
+$$\mathrm{HL}_{(o)} + \mathrm{NH_4OH} = \mathrm{NH_4L}_{(o)} + \mathrm{H_2O}$$
+$$\mathrm{RE}^{3+} + 3\,\mathrm{NH_4L}_{(o)} = \mathrm{REL}_3{}_{(o)} + 3\,\mathrm{NH_4}^+$$
+
+**No proton appears on either side of the second.** For a correlation fitted to
+such a system, a `b` of 3 is not a slope that is too large — it is a slope on
+the wrong axis. Measured saponified systems put the apparent pH slope near 0.3
+(Z1 Table 4.36), and Z1 Fig. 4.43 shows about one decade of `D` over pH 4.0–5.4
+where a slope of 3 demands 10⁴·².
+
+`mechanism: counter_ion_exchange` is where such a correlation goes (#266):
+
+$$\log_{10}(D) = a - p \cdot \log_{10}\!\left(\frac{[\mathrm{M}^+]}{[\mathrm{M}^+]_{ref}}\right) + \frac{\Delta H}{R\ln 10}\left(\frac{1}{T} - \frac{1}{T_{ref}}\right) + n\log_{10}\!\left(\frac{[\mathrm{HA}]}{[\mathrm{HA}]_{ref}}\right)$$
+
+Three things are deliberate about the shape:
+
+- **The slope `p` is record-level, not per element.** It is the counter-ion
+  released per mol REE, which the stoichiometry already fixes. That is what
+  makes a separation factor *exactly* independent of `[M⁺]` — the term cancels
+  in `D_A/D_B` — so `get_separation_factor` does not ask for one at all. Stage
+  counts driven by β are untouched by this whole question; solvent inventory and
+  O/A driven by absolute `D` are not.
+- **`reference_counter_ion` has no default.** The sources cited here report no
+  anchor `[M⁺]` alongside their distribution data, and a plausible-looking one
+  would scale every `D` under it. A block without it is refused, and
+  `get_D` on this mechanism requires `counter_ion_conc` rather than assuming one.
+- **No shipped record carries the block.** The mechanism exists so a record
+  measured on a saponified system has somewhere to put its real correlation.
+
+```python
+dist = REEDistribution(extractant="MySaponified", elements=("Sm", "Nd"))
+dist.get_D("Nd", counter_ion_conc=0.5)          # needs [M+]
+dist.get_separation_factor("Sm", "Nd")          # does not: the term cancels
+```
+
+#### Which system were the coefficients measured on?
+
+The saponification `degree` on a record is an **operating default for the
+circuit** and says nothing about what its correlation was fitted to. So the
+record states that separately, as data:
+
+```yaml
+saponification:
+  counter_ion: Na
+  degree: 0.35
+  correlation_basis: unsaponified   # what ph_coefficients were measured on
+```
+
+Every record shipping with difflow_ree declares `unsaponified`, and its pH slope
+means what a pH slope means. A record declaring `saponified` while still being
+driven by `ph_coefficients` raises `SaponifiedCorrelationWarning`, naming the
+anchor its absolute `D` is tied to and the fact that separation factors survive
+it. Inferring this from `degree` instead would put a warning on every REE
+calculation in the package, where nothing is wrong.
 
 ---
 
@@ -748,6 +818,106 @@ opt_pH, max_SF = dist.optimal_pH_for_separation("Nd", "Pr", pH_range=(1.0, 5.0))
 print(f"Optimal pH: {opt_pH:.2f}, Max SF: {max_SF:.2f}")
 ```
 
+#### The tabulated factors are derived from the same correlations
+
+`get_sf_database()` reports a factor per pair at one declared set of conditions,
+which is convenient for screening. Those numbers used to be authored by hand in
+`separation_factors.yaml`, independently of the `ph_coefficients` in
+`extractants.yaml` that every unit operation computes `D` from — two hand-tuned
+descriptions of the same physics, never reconciled, disagreeing by up to 8x
+(#265). The coefficients ran 1.3–2.8x high on 24 of 27 pairs; all three Y/Dy
+pairs ran 4–8x low, which is a disagreement about that pair rather than a
+calibration offset. Which number you got depended on which API you reached for.
+
+Neither set was measured, so there was no right one to keep. The tie is broken
+by the coefficients being what the simulator actually runs on: a factor derived
+from them describes the model you are about to solve, and one authored beside
+them describes nothing else in the package. So `separation_factors.yaml` now
+declares *which* pairs to report and *at what conditions*, and the values come
+from the same `get_separation_factor` as the code above:
+
+```python
+sf_db = get_sf_database()
+data = sf_db.get("PC88A")
+data.conditions            # {'pH': 3.5, 'temperature_K': 298, 'concentration_M': 0.5}
+sf_db.get_sf("PC88A", "Nd_Pr")   # 4.03, the coefficients' own answer
+"Nd_Pr" in data.derived    # True
+```
+
+`conditions` is not decoration: it is the point the coefficients are evaluated
+at, so a factor quoted from this table is only the factor at that pH. For any
+other pH, ask `REEDistribution` directly.
+
+A pair given an explicit value in the YAML is used as authored and left out of
+`derived`. None ship with difflow_ree: an override is a claim that a measured
+number exists which the correlations cannot reproduce, and it needs a citation
+beside it.
+
+(free-extractant)=
+### Free extractant, not total
+
+`Q1` Eq. 2.88 — the working correlation the naphthenic-acid form is built on —
+is
+
+$$\lg D = \lg K_{ex} + 3\lg (\mathrm{HA})_o + 3\,\mathrm{pH}$$
+
+and Eq. 2.89 says what `(HA)o` is:
+
+$$(\mathrm{HA})_o = [\mathrm{HA}]_0 - 3\,(\mathrm{REA}_3)$$
+
+**free** extractant — total charged minus three monomers per extracted RE(III).
+`REEDistribution.get_D` applies the same functional form with `[HA]` the *total*
+charged. The two agree on a clean solvent and diverge where the cascade works
+hardest, and the error flatters the model: total overstates what is available,
+so `D` is overpredicted exactly there (#267).
+
+`solve_free_extractant` closes the loop rather than approximating it:
+
+$$c_{org} = D\big([\mathrm{HA}]_{free}\big)\,c_{aq}, \qquad
+[\mathrm{HA}]_{free} = [\mathrm{HA}]_0 - m\,c_{org}$$
+
+Substituting leaves one scalar equation in `[HA]_free` that is strictly
+decreasing and changes sign between `0` and `[HA]_0` — one root, bracketed, on a
+smooth monotone function. It is solved with `optimistix.root_find`, so it
+differentiates by the implicit function theorem rather than by unrolling.
+
+```python
+from difflow_ree import REEDistribution, solve_free_extractant
+
+dist = REEDistribution(extractant="D2EHPA", elements=("Nd",), concentration=0.5)
+r = solve_free_extractant(dist, "Nd", c_aq=0.03, pH=3.0)
+
+r.D                 # 0.362 -- against free extractant
+r.D_total_basis     # 0.549 -- what the correlation says against total
+r.overprediction    # 1.52
+r.loading_fraction  # 0.130
+```
+
+This also restores something #204's closing note recorded as lost: keeping the
+correlation's fixed-parameter concentration term left `D` independent of stage
+loading. The free extractant enters the *correlation* here — it is not a factor
+applied afterwards — so this is not a reintroduction of the double count #190
+found. `LoadingIsotherm.apparent_D` caps an answer after `D` is computed; this
+changes the input that produced it. **Do not compose the two.**
+
+#### An impossible loading is now impossible
+
+`m * c_org > [HA]_0` leaves negative free extractant, which Eq. 2.89 duly
+returns and which has no logarithm. A correlation written against total does not
+notice — it takes `log10([HA]_0 / C_ref)` and hands back a finite `D`.
+
+```python
+from difflow_ree import implied_loading_fraction, check_loading_capacity
+
+# Z1 Table 4.36 system 2: 0.13 mol/L naphthenic acid, ~0.066 mol/L RE organic
+implied_loading_fraction("naphthenic_acid", 0.066, 0.13)   # 1.523
+check_loading_capacity("naphthenic_acid", 0.066, 0.13)     # ExtractantCapacityWarning
+```
+
+That row is why system 2 was rejected as an anchor in favour of system 1, which
+sits at 19 % of capacity — a rejection that previously had to be made by hand.
+`action="raise"` turns it into a `ValueError`; the self-consistent solve above
+cannot land there at all.
 
 ---
 
@@ -769,7 +939,10 @@ inside a correlation:
 - **Competitive loading was a correction rather than an outcome.** The elements
   share one finite extractant inventory. That should emerge from a single free
   extractant balance, not from multiplying independent `D` values by
-  `(1 - theta)^3` (see #189, #190, #191).
+  `(1 - theta)^3` (see #189, #190, #191). #267 closes the balance for a
+  *single* element at the correlation level (see
+  [Free extractant, not total](#free-extractant-not-total)); sharing one
+  inventory *between* elements is still what L2 is for.
 - **Extractant selection was not physically grounded.** A fitted `D` cannot
   respond to loading or medium, which is exactly where the ordering between
   extractants actually changes.
@@ -2328,6 +2501,12 @@ ext_db.add_element_to_extractant("PC88A", "Ho", ...)
 Separation factor data can be added incrementally. You can add individual pairs to existing extractants or create complete entries for new ones.
 
 Adding pairs to an existing extractant:
+
+Anything added this way is an **authored** factor, used as given rather than
+derived from the extractant's correlations (#265). Reach for it when you have a
+*measured* number the correlations cannot reproduce; when they can, adding the
+element to the extractant (`add_element_to_extractant`, above) keeps one
+description of the physics instead of two, and every pair involving it follows.
 
 ```python
 from difflow_ree import get_sf_database

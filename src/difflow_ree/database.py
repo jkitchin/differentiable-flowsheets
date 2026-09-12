@@ -4,7 +4,7 @@ Loads element properties, extractant data, and separation factors
 from YAML files.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import NamedTuple, Sequence
 import yaml
@@ -227,10 +227,28 @@ class PHCoefficients:
     d: float = 0.0  # Temperature coefficient (optional)
 
 
-# Normalized extraction mechanisms (#195). The mechanism decides which
-# coefficient block drives D and whether a proton term appears in the
-# activity correction (#194); it is data, not an assumption in the code.
-EXTRACTION_MECHANISMS = ("cation_exchange", "solvating")
+# Normalized extraction mechanisms (#195, extended in #266). The mechanism
+# decides which coefficient block drives D and whether a proton term appears in
+# the activity correction (#194); it is data, not an assumption in the code.
+#
+#   cation_exchange      RE3+ + 3 HA(o) <-> REA3(o) + 3 H+
+#                        driven by pH, via ``ph_coefficients``
+#   solvating            RE(NO3)3 + m S <-> RE(NO3)3.mS
+#                        driven by log10([NO3-]), via ``nitrate_coefficients``
+#   counter_ion_exchange RE3+ + 3 ML(o) = REL3(o) + 3 M+
+#                        driven by log10([M+]), via ``counter_ion_coefficients``
+#
+# The third is what a SAPONIFIED circuit actually runs (#266). Z1 Eq. 4.96 /
+# Q1 Eq. 2.120: the base has already taken the proton off in a separate step
+# (Z1 Eq. 4.95, HL + NH4OH = NH4L + H2O), so no proton appears on either side
+# of the extraction and pH is not its driving variable. Putting a saponified
+# system on ``ph_coefficients`` with b = 3 is not a slope that is too large,
+# it is a slope on the wrong axis.
+EXTRACTION_MECHANISMS = (
+    "cation_exchange",
+    "solvating",
+    "counter_ion_exchange",
+)
 
 #: Counter-ions an extractant record may declare (#197). ``"H"`` means the
 #: extractant is used un-neutralized and extraction is a proton exchange; the
@@ -241,6 +259,21 @@ EXTRACTION_MECHANISMS = ("cation_exchange", "solvating")
 #: :data:`difflow_ree.equilibrium.schema.DIVALENT_COUNTER_ION_CHARGES` for why
 #: ``"Mg"`` needs a tableau of its own.
 SAPONIFICATION_COUNTER_IONS = ("H", "Na", "NH4", "Mg")
+
+#: What system a record's ``ph_coefficients`` were measured on (#266).
+#:
+#: ``"unsaponified"`` means the proton exchange the pH slope describes, which
+#: is what every record shipping with difflow_ree is fitted to. ``"saponified"``
+#: means the coefficients came from a pre-neutralized system, where the
+#: reaction is ``RE3+ + 3 ML(o) = REL3(o) + 3 M+`` with no proton on either
+#: side --- there ``b`` is a slope on the wrong axis, and the record needs a
+#: ``counter_ion_coefficients`` block to be modelled properly.
+#:
+#: It is declared rather than inferred from ``saponification.degree``, which is
+#: an operating default for the circuit and says nothing about what the
+#: correlation was fitted to. Conflating the two would warn on every D2EHPA
+#: calculation in the package, where nothing is wrong.
+CORRELATION_BASES = ("unsaponified", "saponified")
 
 # Mapping from the historical free-form ``type`` field to the normalized
 # mechanism. Stated explicitly in data/extractants.yaml as well (#195).
@@ -301,6 +334,55 @@ def _load_coefficient_block(
     }
 
 
+def _load_counter_ion_block(block: dict | None) -> tuple:
+    """Unpack a YAML ``counter_ion_coefficients:`` block (#266).
+
+    Shape, and why it is not shaped like the other two::
+
+        counter_ion_coefficients:
+          reference_counter_ion: 0.5   # M, the anchor [M+]
+          monomers_per_ree: 3.0        # optional; defaults to the record's
+          elements:
+            Nd: {a: -0.40, d: 0.0}
+
+    The per-element part carries only ``a`` (and an optional temperature
+    ``d``).  The slope on ``log10([M+])`` is a SINGLE record-level number,
+    ``-monomers_per_ree``, because the counter-ion released per REE is set by
+    the stoichiometry and is the same for every lanthanide.  That is not a
+    simplification: it is the reason a separation factor is independent of
+    the counter-ion concentration, exactly and by construction, and writing
+    it as a per-element ``b`` would let a fitted wobble break a cancellation
+    the chemistry guarantees (#266).
+
+    Returns:
+        ``(coefficients, reference_counter_ion, monomers_per_ree)``, all
+        ``None`` when the record carries no block.
+    """
+    if block is None:
+        return None, None, None
+    elements = block.get("elements", {})
+    coeffs = {
+        element: PHCoefficients(
+            a=values["a"],
+            b=0.0,           # the slope is record-level; see above
+            c=0.0,
+            d=values.get("d", 0.0),
+        )
+        for element, values in elements.items()
+    }
+    reference = block.get("reference_counter_ion")
+    if reference is None:
+        raise ValueError(
+            "A counter_ion_coefficients block must declare "
+            "reference_counter_ion: the counter-ion concentration its `a` "
+            "values were measured at. There is no defensible default -- a "
+            "made-up anchor would scale every D it touches (#266)."
+        )
+    monomers = block.get("monomers_per_ree")
+    return coeffs, float(reference), (None if monomers is None
+                                      else float(monomers))
+
+
 def _saponification_fields(block: dict | None) -> dict:
     """Unpack a YAML ``saponification:`` block into Extractant fields (#197).
 
@@ -328,6 +410,8 @@ def _saponification_fields(block: dict | None) -> dict:
         out["saponification_reference_counter_ion"] = float(
             block["reference_counter_ion"]
         )
+    if "correlation_basis" in block:
+        out["correlation_basis"] = block["correlation_basis"]
     return out
 
 
@@ -402,6 +486,27 @@ class Extractant:
     # Reference condition the constant is calibrated at when it is None.
     saponification_reference_pH: float = 3.0
     saponification_reference_counter_ion: float = 0.1  # M
+    # Counter-ion-exchange data (#266), the correlation a SAPONIFIED circuit
+    # actually runs on:
+    #
+    #     RE3+ + 3 ML(o) = REL3(o) + 3 M+        (Z1 Eq. 4.96, Q1 Eq. 2.120)
+    #
+    # shaped like ``ph_coefficients`` but driven by log10([M+]) and with the
+    # slope held record-level rather than per element -- see
+    # _load_counter_ion_block.  ``counter_ion_reference`` is the [M+] the
+    # ``a`` values were measured at and has no default: there is no measured
+    # anchor in the literature this package cites, and inventing one would
+    # scale every D it touched.
+    counter_ion_coefficients: dict[str, PHCoefficients] | None = None
+    counter_ion_reference: float | None = None
+    # Counter-ion released per mol REE.  None means "use monomers_per_ree",
+    # which is what the stoichiometry already says; a record overrides it only
+    # when its own fit says otherwise.
+    counter_ion_exponent: float | None = None
+    # Which system ``ph_coefficients`` were measured on (#266). See
+    # CORRELATION_BASES. Default "unsaponified", which is what every shipped
+    # record is and what a pH slope means.
+    correlation_basis: str = "unsaponified"
 
     def __post_init__(self):
         """Normalize the mechanism (#195) and check saponification (#197).
@@ -457,6 +562,53 @@ class Extractant:
                 f"{self.counter_ion!r}. Supported: "
                 f"{list(SAPONIFICATION_COUNTER_IONS)} (#197)."
             )
+        if self.correlation_basis not in CORRELATION_BASES:
+            raise ValueError(
+                f"Extractant '{self.name}': unknown correlation_basis "
+                f"{self.correlation_basis!r}. Expected one of "
+                f"{list(CORRELATION_BASES)} (#266)."
+            )
+        if (self.correlation_basis == "saponified"
+                and not self.is_saponified):
+            raise ValueError(
+                f"Extractant '{self.name}' declares "
+                "correlation_basis='saponified' but no saponification "
+                "(degree "
+                f"{self.saponification_degree}, counter_ion "
+                f"{self.counter_ion!r}). A correlation fitted to a "
+                "pre-neutralized system needs the base that neutralized it "
+                "named (#266)."
+            )
+        if self.mechanism == "counter_ion_exchange":
+            if self.counter_ion_coefficients is None:
+                raise ValueError(
+                    f"Extractant '{self.name}' declares "
+                    "mechanism='counter_ion_exchange' but carries no "
+                    "counter_ion_coefficients block, so nothing drives D "
+                    "(#266). Add the block, or leave the record on "
+                    "cation_exchange and read the caveat that comes with it."
+                )
+            if self.counter_ion in (None, "H"):
+                raise ValueError(
+                    f"Extractant '{self.name}' extracts by counter-ion "
+                    f"exchange but declares counter_ion={self.counter_ion!r}. "
+                    "The exchanging cation is the driving variable, so it "
+                    "cannot be the proton (that is cation_exchange) or "
+                    "absent (#266)."
+                )
+
+    @property
+    def counter_ion_monomers(self) -> float:
+        """Counter-ion released per mol REE, for the exchange correlation.
+
+        Defaults to :attr:`monomers_per_ree`, which is what the declared
+        stoichiometry already says --- one counter-ion per extractant
+        monomer bound.  A record overrides it only where its own fit
+        disagrees (#266).
+        """
+        if self.counter_ion_exponent is not None:
+            return float(self.counter_ion_exponent)
+        return self.monomers_per_ree
 
     @property
     def driving_coefficients(self) -> dict[str, PHCoefficients] | None:
@@ -576,6 +728,13 @@ class ExtractantDatabase:
             nitrate_coeffs = _load_coefficient_block(
                 props.get("nitrate_coefficients")
             )
+            # Counter-ion-exchange coefficients, driven by log10([M+]) (#266).
+            # Absent from every record that ships today: no measured anchor
+            # for [M+] exists in the sources this package cites, and a
+            # plausible-looking default would scale every D under it.
+            counter_coeffs, counter_ref, counter_exp = _load_counter_ion_block(
+                props.get("counter_ion_coefficients")
+            )
 
             self._extractants[name] = Extractant(
                 name=name,
@@ -607,6 +766,10 @@ class ExtractantDatabase:
                 requires_nitrate=bool(
                     props["stoichiometry"].get("requires_nitrate", False)
                 ),
+                # Counter-ion-exchange block (#266); absent everywhere today.
+                counter_ion_coefficients=counter_coeffs,
+                counter_ion_reference=counter_ref,
+                counter_ion_exponent=counter_exp,
                 # Saponification block (#197); absent for a neutral extractant.
                 **_saponification_fields(props.get("saponification")),
             )
@@ -820,24 +983,94 @@ class ExtractantDatabase:
 # Separation Factor Data
 # =============================================================================
 
+def _split_pair(pair: str, extractant: str) -> tuple[str, str]:
+    """``"Nd_Pr"`` -> ``("Nd", "Pr")``, heavier first.
+
+    The name is the only place the convention is written down, so a pair
+    that does not parse is a data error worth naming rather than an
+    IndexError three frames down.
+    """
+    parts = pair.split("_")
+    if len(parts) != 2 or not all(parts):
+        raise ValueError(
+            f"Separation-factor pair {pair!r} on {extractant!r} is not "
+            'of the form "<heavier>_<lighter>" (e.g. "Nd_Pr").'
+        )
+    return parts[0], parts[1]
+
+
 @dataclass
 class SeparationFactorData:
-    """Separation factor data for an extractant."""
+    """Separation factor data for an extractant.
+
+    ``adjacent_pairs`` and ``group_pairs`` map a pair to its separation
+    factor, as they always have.  What changed in #265 is where the number
+    comes from: unless the YAML states one explicitly, it is *derived* from
+    the extractant's own ``ph_coefficients`` (or ``nitrate_coefficients``)
+    at :attr:`conditions`.  ``derived`` names the pairs that were computed,
+    so a caller can tell the two apart.
+    """
     extractant: str
     conditions: dict
     adjacent_pairs: dict[str, float]
     group_pairs: dict[str, float]
     stages_for_99_purity: dict[str, int] | None = None
+    derived: frozenset[str] = field(default_factory=frozenset)
+
+
+def _separation_factor_conditions(conditions: dict) -> dict:
+    """Translate a YAML ``conditions:`` block into distribution arguments.
+
+    The two mechanisms are driven by different variables --- a cation
+    exchanger by pH and its own concentration, a solvating extractant by the
+    aqueous nitrate --- so the block is read for what it happens to declare
+    rather than against a fixed schema.  ``concentration_vol_pct`` is
+    deliberately *not* converted to mol/L: no conversion ships in either
+    file, and inventing one here would put a made-up number underneath every
+    factor it touched.  TBP does not need it, being nitrate-driven.
+    """
+    kwargs: dict = {"pH": conditions.get("pH"),
+                    "T": float(conditions.get("temperature_K", 298.15))}
+    if "concentration_M" in conditions:
+        kwargs["concentration"] = float(conditions["concentration_M"])
+    if "nitrate_M" in conditions:
+        kwargs["nitrate_conc"] = float(conditions["nitrate_M"])
+    return kwargs
 
 
 class SeparationFactorDatabase:
-    """Database of separation factors."""
+    """Separation factors, derived from the distribution correlations (#265).
+
+    This used to be a second table of hand-authored numbers, describing the
+    same physics as the ``ph_coefficients`` in ``extractants.yaml`` and
+    disagreeing with them by up to 8x --- the coefficients 1.3-2.8x high on
+    24 of 27 pairs and 4-8x low on all three Y/Dy pairs, which is a
+    disagreement about that pair rather than a calibration offset.  Neither
+    set was measured, so there was no right one to keep; what settles it is
+    that the coefficients are what every unit operation actually computes D
+    from.  A factor derived from them describes the simulator, and one
+    authored separately describes nothing else in the package.
+
+    So the YAML now says which pairs to report and at what conditions, and
+    the values come from :func:`difflow_ree.equilibrium.get_separation_factor`
+    --- the same function the rest of the plugin calls.
+
+    A YAML that gives a pair an explicit value (a mapping rather than a list
+    entry) is still honoured, and that value is used as given: an authored
+    override is a claim that a measured number exists which the coefficients
+    cannot reproduce.  None ship with difflow_ree.
+    """
 
     def __init__(self, yaml_path: Path | None = None):
         """Load separation factor data from YAML file.
 
         Args:
             yaml_path: Path to separation_factors.yaml. If None, uses default.
+
+        Raises:
+            KeyError: If a pair is to be derived for an extractant with no
+                record in :class:`ExtractantDatabase`, or for an element that
+                record does not cover.
         """
         if yaml_path is None:
             yaml_path = DATA_DIR / "separation_factors.yaml"
@@ -849,14 +1082,53 @@ class SeparationFactorDatabase:
         self._stages_data: dict[str, dict[str, int]] = data.get("stages_for_99_purity", {})
 
         for extractant, sf_data in data["separation_factors"].items():
-            stages = self._stages_data.get(extractant)
+            conditions = sf_data["conditions"]
+            adjacent, adj_derived = self._resolve_pairs(
+                extractant, sf_data.get("adjacent_pairs"), conditions)
+            group, grp_derived = self._resolve_pairs(
+                extractant, sf_data.get("group_pairs"), conditions)
             self._data[extractant] = SeparationFactorData(
                 extractant=extractant,
-                conditions=sf_data["conditions"],
-                adjacent_pairs=sf_data["adjacent_pairs"],
-                group_pairs=sf_data["group_pairs"],
-                stages_for_99_purity=stages,
+                conditions=conditions,
+                adjacent_pairs=adjacent,
+                group_pairs=group,
+                stages_for_99_purity=self._stages_data.get(extractant),
+                derived=adj_derived | grp_derived,
             )
+
+    @staticmethod
+    def _resolve_pairs(
+        extractant: str, pairs, conditions: dict
+    ) -> tuple[dict[str, float], frozenset[str]]:
+        """Read one pair block, computing every value the YAML does not give.
+
+        Accepts both shapes so a caller's own file keeps working: a list of
+        pair names is derived, a mapping is taken as authored.
+        """
+        # Imported here rather than at module scope: the distribution model
+        # reads this module's ExtractantDatabase, so the dependency only
+        # goes one way at import time.
+        from difflow_ree.equilibrium.distribution import get_separation_factor
+
+        if not pairs:
+            return {}, frozenset()
+
+        items = ((p, None) for p in pairs) if isinstance(pairs, list) \
+            else pairs.items()
+        kwargs = _separation_factor_conditions(conditions)
+
+        resolved: dict[str, float] = {}
+        derived: set[str] = set()
+        for pair, value in items:
+            if value is not None:
+                resolved[pair] = float(value)
+                continue
+            heavier, lighter = _split_pair(pair, extractant)
+            resolved[pair] = float(
+                get_separation_factor(heavier, lighter, extractant, **kwargs)
+            )
+            derived.add(pair)
+        return resolved, frozenset(derived)
 
     def get(self, extractant: str) -> SeparationFactorData:
         """Get separation factor data for an extractant."""
@@ -901,6 +1173,14 @@ class SeparationFactorDatabase:
         stages_99: int | None = None,
     ) -> None:
         """Add a separation factor for an element pair.
+
+        The value is taken as given --- an authored number, outside the
+        derivation the shipped pairs go through (#265), and reported as such
+        by :attr:`SeparationFactorData.derived`. Use it for a *measured*
+        factor the distribution correlations cannot reproduce; for anything
+        the correlations already describe, adding the element to the
+        extractant with :meth:`ExtractantDatabase.add_element_to_extractant`
+        keeps one description of the physics rather than two.
 
         Args:
             extractant: Extractant name (e.g., "PC88A"). Must already exist

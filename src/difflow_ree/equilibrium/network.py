@@ -85,11 +85,12 @@ from difflow_ree.database import get_extractant
 
 DATA_DIR = Path(__file__).parent.parent / "data"
 
-#: Mechanisms a reaction network may declare.  This is deliberately a superset
-#: of :data:`difflow_ree.database.EXTRACTION_MECHANISMS`: the correlation layer
-#: only knows the two mechanisms it has coefficient blocks for, whereas the
-#: network layer can express any mechanism whose stoichiometry can be written
-#: down, which is the whole point of carrying it as data (#196).
+#: Mechanisms a reaction network may declare.  Still a superset of
+#: :data:`difflow_ree.database.EXTRACTION_MECHANISMS` --- the network layer can
+#: express any mechanism whose stoichiometry can be written down, which is the
+#: whole point of carrying it as data (#196) --- but the gap narrowed in #266,
+#: when the correlation layer gained ``counter_ion_exchange`` and the saponified
+#: reaction stopped being expressible only here.
 NETWORK_MECHANISMS = (
     "cation_exchange",
     "solvating",

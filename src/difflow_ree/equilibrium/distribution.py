@@ -89,6 +89,21 @@ def _concrete_bounds(value) -> tuple[float, float] | None:
 # Distribution Coefficient Model
 # =============================================================================
 
+class SaponifiedCorrelationWarning(UserWarning):
+    """A correlation fitted to a saponified system is being driven by pH.
+
+    The saponified exchange ``RE3+ + 3 ML(o) = REL3(o) + 3 M+`` releases no
+    proton, so a pH slope fitted to it is a slope on the wrong axis (#266).
+    Raised only for a record that declares ``correlation_basis: saponified``;
+    an operating saponification degree on a proton-exchange correlation is
+    not this, and does not warn.
+
+    Silence it with :func:`warnings.filterwarnings`, or fix it by giving the
+    record a ``counter_ion_coefficients`` block and using
+    ``mechanism="counter_ion_exchange"``.
+    """
+
+
 @dataclass
 class REEDistribution:
     """REE distribution coefficient calculator.
@@ -241,6 +256,7 @@ class REEDistribution:
     elements: tuple[str, ...]
     concentration: float = 0.5  # M
     nitrate_conc: float | None = None  # M; see #195
+    counter_ion_conc: float | None = None  # M; see #266
     medium: str | None = None  # see AQUEOUS_MEDIA (#195)
     mechanism: str | None = None  # None -> take from the record (#195)
     activity_model: str = "davies"  # see ACTIVITY_MODELS (#194)
@@ -293,6 +309,7 @@ class REEDistribution:
         self._check_medium()
         self._validate_mechanism_data(self.nitrate_conc)
         self._check_element_coverage()
+        self._warn_if_saponified_on_the_ph_path()
 
     # -------------------------------------------------------------------
     # Mechanism dispatch (#195)
@@ -358,6 +375,20 @@ class REEDistribution:
                     "interpreted against (#195)."
                 )
             self._require_nitrate_medium(nitrate_conc)
+        elif self.mechanism == "counter_ion_exchange":
+            if ext.counter_ion_coefficients is None:
+                raise ValueError(
+                    f"Extractant {self.extractant!r} is used with "
+                    "mechanism='counter_ion_exchange' but its record carries "
+                    "no 'counter_ion_coefficients' block, so nothing drives "
+                    "D (#266). No record shipped with difflow_ree carries "
+                    "one: the saponified exchange RE3+ + 3 ML(o) = REL3(o) + "
+                    "3 M+ needs an anchor [M+] that the measured sources do "
+                    "not report, and a plausible-looking default would scale "
+                    "every D under it. Supply your own block, or use "
+                    "mechanism='cation_exchange' and read the caveat it "
+                    "carries."
+                )
         else:  # cation_exchange
             if not ext.ph_coefficients:
                 # No silent fall-back to nitrate_coefficients, and no
@@ -432,6 +463,91 @@ class REEDistribution:
             "a fitted correlation to new elements is a refit rather than an "
             "interpolation (#269)."
         )
+
+    def _warn_if_saponified_on_the_ph_path(self) -> None:
+        """Say so when a saponified-basis correlation is driven by pH (#266).
+
+        A saponified circuit runs the counter-ion exchange
+
+            RE3+ + 3 ML(o) = REL3(o) + 3 M+     (Z1 Eq. 4.96, Q1 Eq. 2.120)
+
+        with the proton already removed in a separate step (Z1 Eq. 4.95), so
+        no proton appears on either side and pH is not the driving variable.
+        A record whose ``ph_coefficients`` were fitted to such a system has a
+        ``b`` that is not a slope that is too large but a slope on the WRONG
+        AXIS: measured saponified systems put the apparent pH slope near 0.3
+        where the fitted ``b`` is near 3 (Z1 Table 4.36; Fig. 4.43 shows
+        about one decade of D over pH 4.0-5.4, where a slope of 3 demands
+        10^4.2).
+
+        The trigger is the record's declared ``correlation_basis``, not its
+        ``saponification.degree``.  The degree is an operating default for
+        the circuit and says nothing about what the correlation was fitted
+        to: every acidic record here ships with a degree of 0.35 and
+        proton-exchange coefficients, and warning on that would put a
+        warning on every REE calculation in the package, where nothing is
+        wrong.
+
+        What survives the wrong axis is the SEPARATION FACTOR: the
+        counter-ion term is element-independent and cancels in ``D_A / D_B``,
+        so stage counts driven by beta stay usable while absolute D degrades
+        away from the anchor condition.
+        """
+        ext = self._ext_data
+        if (self.mechanism != "cation_exchange"
+                or ext.correlation_basis != "saponified"):
+            return
+        low, high = ext.valid_ph_range
+        remedy = (
+            "Supply a 'counter_ion_coefficients' block and "
+            "mechanism='counter_ion_exchange' to model it properly"
+            if ext.counter_ion_coefficients is None else
+            "Use mechanism='counter_ion_exchange', which this record "
+            "carries coefficients for"
+        )
+        warnings.warn(
+            f"Extractant {self.extractant!r} declares "
+            f"correlation_basis='saponified' (counter-ion {ext.counter_ion}), "
+            "so the reaction its coefficients describe has no proton on "
+            "either side -- but D is being computed from 'ph_coefficients', "
+            "whose slope b is a pH slope (#266). Absolute D is anchored to "
+            f"the condition those coefficients were fitted at (pH {low}-{high}) "
+            "and degrades away from it. SEPARATION FACTORS ARE UNAFFECTED: the "
+            "counter-ion term is element-independent and cancels in D_A/D_B, "
+            "so stage counts driven by beta remain usable, while solvent "
+            "inventory and O/A driven by absolute D do not without "
+            f"re-anchoring. {remedy}.",
+            SaponifiedCorrelationWarning,
+            stacklevel=3,
+        )
+
+    def _require_counter_ion(self, counter_ion_conc):
+        """Raise unless a usable counter-ion concentration was supplied (#266).
+
+        There is deliberately no default.  The sources this package cites
+        report no anchor for ``[M+]`` alongside their distribution data, so
+        any default would be a fabricated number scaling every ``D`` under
+        it --- and it would have to be tagged as hand-tuned rather than
+        measured.  Asking the caller is the honest alternative.
+        """
+        if counter_ion_conc is None:
+            raise ValueError(
+                f"Extractant {self.extractant!r} extracts by counter-ion "
+                f"exchange, so get_D requires counter_ion_conc: the aqueous "
+                f"[{self._ext_data.counter_ion}+] in M, which is its driving "
+                "variable the way pH is for cation exchange. There is no "
+                "default on purpose -- no measured anchor for it ships with "
+                "difflow_ree, and a plausible one would scale every D (#266). "
+                "A separation factor does not need it: the term cancels, and "
+                "get_separation_factor accepts None."
+            )
+        bounds = _concrete_bounds(counter_ion_conc)
+        if bounds is not None and bounds[0] <= 0.0:
+            raise ValueError(
+                f"counter_ion_conc must be positive (it enters as "
+                f"log10([M+]/[M+]_ref)); got a minimum of {bounds[0]}."
+            )
+        return counter_ion_conc
 
     def _require_nitrate_medium(self, nitrate_conc) -> None:
         """Raise unless a usable nitrate concentration was supplied (#195).
@@ -529,6 +645,9 @@ class REEDistribution:
         if self.mechanism == "solvating":
             block = self._ext_data.nitrate_coefficients
             block_name = "nitrate_coefficients"
+        elif self.mechanism == "counter_ion_exchange":
+            block = self._ext_data.counter_ion_coefficients
+            block_name = "counter_ion_coefficients"
         else:
             block = self._ext_data.ph_coefficients
             block_name = "ph_coefficients"
@@ -822,6 +941,7 @@ class REEDistribution:
         T: Array | float = 298.15,
         ionic_strength: Array | float | None = None,
         nitrate_conc: Array | float | None = None,
+        counter_ion_conc: Array | float | None = None,
     ) -> Array:
         """Calculate distribution coefficient for a single element.
 
@@ -897,6 +1017,21 @@ class REEDistribution:
                 jnp.asarray(c_nitrate) / self._ext_data.reference_nitrate
             )
             log_D = coeffs.a + coeffs.b * s + coeffs.c * s**2
+        elif self.mechanism == "counter_ion_exchange":
+            c_counter = (
+                self.counter_ion_conc if counter_ion_conc is None
+                else counter_ion_conc
+            )
+            self._require_counter_ion(c_counter)
+            # RE3+ + p ML(o) = REL_p(o) + p M+, so D falls as the counter-ion
+            # builds up, with the slope fixed by the stoichiometry rather than
+            # fitted per element (#266). Writing it here rather than as a
+            # per-element b is what makes the cancellation in D_A/D_B exact.
+            p_exp = self._ext_data.counter_ion_monomers
+            u = jnp.log10(
+                jnp.asarray(c_counter) / self._ext_data.counter_ion_reference
+            )
+            log_D = coeffs.a - p_exp * u
         else:
             if pH is None:
                 raise ValueError(
@@ -939,6 +1074,7 @@ class REEDistribution:
         T: Array | float = 298.15,
         ionic_strength: Array | float | None = None,
         nitrate_conc: Array | float | None = None,
+        counter_ion_conc: Array | float | None = None,
     ) -> dict[str, Array]:
         """Calculate distribution coefficients for all elements.
 
@@ -947,12 +1083,14 @@ class REEDistribution:
             T: Temperature (K)
             ionic_strength: Aqueous ionic strength (M); see :meth:`get_D`.
             nitrate_conc: Nitrate concentration (M); see :meth:`get_D`.
+            counter_ion_conc: Counter-ion concentration (M); see :meth:`get_D`.
 
         Returns:
             Dictionary mapping element symbols to D values
         """
         return {
-            elem: self.get_D(elem, pH, T, ionic_strength, nitrate_conc)
+            elem: self.get_D(elem, pH, T, ionic_strength, nitrate_conc,
+                             counter_ion_conc)
             for elem in self.elements
         }
 
@@ -979,22 +1117,38 @@ class REEDistribution:
         element2: str,
         pH: Array | float | None = None,
         T: Array | float = 298.15,
+        counter_ion_conc: Array | float | None = None,
     ) -> Array:
         """Calculate separation factor between two elements.
 
         SF = D1 / D2
+
+        Under ``counter_ion_exchange`` the counter-ion term is
+        element-independent --- the slope is the stoichiometry, not a fit ---
+        so it cancels exactly here and ``counter_ion_conc`` is not needed
+        (#266).  It is accepted anyway, for a caller passing the same
+        arguments to every method.  This is the practical consequence of the
+        wrong-axis problem being confined to the absolute level: stage counts
+        driven by beta are unaffected by it, while solvent inventory and O/A
+        driven by absolute D are not.
 
         Args:
             element1: First element symbol
             element2: Second element symbol
             pH: Solution pH
             T: Temperature (K)
+            counter_ion_conc: Counter-ion concentration (M). Optional even for
+                a counter-ion-exchange record, because it cancels.
 
         Returns:
             Separation factor
         """
-        D1 = self.get_D(element1, pH, T)
-        D2 = self.get_D(element2, pH, T)
+        if self.mechanism == "counter_ion_exchange" and counter_ion_conc is None:
+            # Any positive value gives the same ratio; the reference is the
+            # one number the record is guaranteed to carry.
+            counter_ion_conc = self._ext_data.counter_ion_reference
+        D1 = self.get_D(element1, pH, T, counter_ion_conc=counter_ion_conc)
+        D2 = self.get_D(element2, pH, T, counter_ion_conc=counter_ion_conc)
         return D1 / D2
 
     def optimal_pH_for_separation(
@@ -1039,6 +1193,7 @@ def get_distribution_coefficient(
     nitrate_conc: float | None = None,
     mechanism: str | None = None,
     medium: str | None = None,
+    counter_ion_conc: float | None = None,
 ) -> Array:
     """Calculate distribution coefficient for a single element.
 
@@ -1053,6 +1208,8 @@ def get_distribution_coefficient(
             extractants such as TBP (#195)
         mechanism: Explicit mechanism override; see :class:`REEDistribution`
         medium: Declared aqueous medium; see :class:`REEDistribution` (#195)
+        counter_ion_conc: Aqueous counter-ion concentration (M), required for
+            a saponified record on ``mechanism='counter_ion_exchange'`` (#266)
 
     Returns:
         Distribution coefficient D
@@ -1062,6 +1219,7 @@ def get_distribution_coefficient(
         elements=(element,),
         concentration=concentration,
         nitrate_conc=nitrate_conc,
+        counter_ion_conc=counter_ion_conc,
         mechanism=mechanism,
         medium=medium,
     )
@@ -1077,6 +1235,7 @@ def get_distribution_coefficients(
     nitrate_conc: float | None = None,
     mechanism: str | None = None,
     medium: str | None = None,
+    counter_ion_conc: float | None = None,
 ) -> dict[str, Array]:
     """Calculate distribution coefficients for multiple elements.
 
@@ -1100,6 +1259,7 @@ def get_distribution_coefficients(
         elements=tuple(elements),
         concentration=concentration,
         nitrate_conc=nitrate_conc,
+        counter_ion_conc=counter_ion_conc,
         mechanism=mechanism,
         medium=medium,
     )
@@ -1116,6 +1276,7 @@ def get_separation_factor(
     nitrate_conc: float | None = None,
     mechanism: str | None = None,
     medium: str | None = None,
+    counter_ion_conc: float | None = None,
 ) -> Array:
     """Calculate separation factor between two elements.
 
@@ -1131,19 +1292,23 @@ def get_separation_factor(
             extractants such as TBP (#195)
         mechanism: Explicit mechanism override; see :class:`REEDistribution`
         medium: Declared aqueous medium; see :class:`REEDistribution` (#195)
+        counter_ion_conc: Counter-ion concentration (M). Not needed even for a
+            counter-ion-exchange record: the term is element-independent and
+            cancels in D1/D2 (#266).
 
     Returns:
         Separation factor D1/D2
     """
-    D1 = get_distribution_coefficient(
-        element1, extractant, pH, T, concentration, nitrate_conc, mechanism,
-        medium,
+    dist = REEDistribution(
+        extractant=extractant,
+        elements=(element1, element2),
+        concentration=concentration,
+        nitrate_conc=nitrate_conc,
+        counter_ion_conc=counter_ion_conc,
+        mechanism=mechanism,
+        medium=medium,
     )
-    D2 = get_distribution_coefficient(
-        element2, extractant, pH, T, concentration, nitrate_conc, mechanism,
-        medium,
-    )
-    return D1 / D2
+    return dist.get_separation_factor(element1, element2, pH, T)
 
 
 # =============================================================================

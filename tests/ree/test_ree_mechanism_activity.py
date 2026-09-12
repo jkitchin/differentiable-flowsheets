@@ -80,12 +80,21 @@ class TestMechanismIsData:
         assert tbp.stoichiometry_protons == 0
 
     def test_195_mechanism_normalized_from_type(self):
-        """`type` normalizes to one of the declared mechanisms."""
+        """`type` normalizes to one of the declared mechanisms.
+
+        ``counter_ion_exchange`` joined the set in #266 and is deliberately
+        absent from this mapping: the free-form ``type`` field says what the
+        extractant *is* (a carboxylic acid, a phosphonate), which does not
+        determine whether its correlation was fitted to a saponified system.
+        A record on that mechanism declares it explicitly.
+        """
         assert normalize_mechanism("acidic_phosphoric") == "cation_exchange"
         assert normalize_mechanism("acidic_phosphonic") == "cation_exchange"
         assert normalize_mechanism("acidic_phosphinic") == "cation_exchange"
         assert normalize_mechanism("solvating_neutral") == "solvating"
-        assert set(EXTRACTION_MECHANISMS) == {"cation_exchange", "solvating"}
+        assert set(EXTRACTION_MECHANISMS) == {
+            "cation_exchange", "solvating", "counter_ion_exchange",
+        }
 
     def test_195_records_declare_their_mechanism(self):
         assert get_extractant("TBP").mechanism == "solvating"
