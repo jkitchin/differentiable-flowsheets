@@ -250,6 +250,17 @@ EXTRACTION_MECHANISMS = (
     "counter_ion_exchange",
 )
 
+#: Which coefficient block each mechanism reads. Total over
+#: :data:`EXTRACTION_MECHANISMS` on purpose, and asserted so: a new mechanism
+#: left out of here would otherwise fall through to ``ph_coefficients`` and be
+#: reported as covering elements it has no correlation for (#269).
+MECHANISM_COEFFICIENT_BLOCKS = {
+    "cation_exchange": "ph_coefficients",
+    "solvating": "nitrate_coefficients",
+    "counter_ion_exchange": "counter_ion_coefficients",
+}
+assert set(MECHANISM_COEFFICIENT_BLOCKS) == set(EXTRACTION_MECHANISMS)
+
 #: Counter-ions an extractant record may declare (#197). ``"H"`` means the
 #: extractant is used un-neutralized and extraction is a proton exchange; the
 #: other three are the industrial saponification routes, and which one is
@@ -625,17 +636,42 @@ class Extractant:
             return float(self.counter_ion_exponent)
         return self.monomers_per_ree
 
+    def coefficient_block(
+        self, mechanism: str | None = None
+    ) -> tuple[str, dict[str, PHCoefficients] | None]:
+        """The block name and contents that ``mechanism`` reads (#269).
+
+        The one place the mechanism -> block dispatch is written down, so a
+        caller counting coverage and the solve that will actually run cannot
+        disagree about which coefficients drive ``D``. Both
+        :attr:`driving_coefficients` and
+        :meth:`REEDistribution._coefficients` go through here.
+
+        Args:
+            mechanism: The mechanism to resolve, one of
+                :data:`EXTRACTION_MECHANISMS`. ``None`` (default) uses the
+                record's own. Pass the *active* mechanism when a caller may
+                have overridden it --- an override is honoured whenever the
+                record carries that mechanism's block, so the record's
+                mechanism is not always the one that will be read.
+
+        Returns:
+            ``(block_name, block)``. The block is ``None`` when the record
+            carries no such block, which is what makes an unsupported
+            mechanism reportable rather than a ``TypeError`` later.
+        """
+        name = MECHANISM_COEFFICIENT_BLOCKS[mechanism or self.mechanism]
+        return name, getattr(self, name)
+
     @property
     def driving_coefficients(self) -> dict[str, PHCoefficients] | None:
         """The coefficient block the record's own mechanism reads (#269).
 
         One place to ask "what drives D here", so a caller counting coverage
         does not have to re-implement the mechanism dispatch and get it
-        wrong for the one solvating record.
+        wrong for the solvating or counter-ion-exchange records.
         """
-        if self.mechanism == "solvating":
-            return self.nitrate_coefficients
-        return self.ph_coefficients
+        return self.coefficient_block()[1]
 
     @property
     def covered_elements(self) -> tuple[str, ...]:

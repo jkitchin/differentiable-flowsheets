@@ -446,11 +446,15 @@ class REEDistribution:
             ValueError: If any requested element is outside the active
                 mechanism's coefficient block.
         """
-        block = self._ext_data.driving_coefficients or {}
+        # The ACTIVE mechanism, not the record's: an override is honoured
+        # whenever the record carries that mechanism's block, so the two can
+        # differ and it is the active one that `_coefficients` will read.
+        _, block = self._ext_data.coefficient_block(self.mechanism)
+        block = block or {}
         missing = [e for e in self.elements if e not in block]
         if not missing:
             return
-        covered = ", ".join(self._ext_data.covered_elements) or "(none)"
+        covered = ", ".join(block) or "(none)"
         raise ValueError(
             f"Extractant {self.extractant!r} has no coefficients for "
             f"{', '.join(missing)} (mechanism={self.mechanism!r}), so no D "
@@ -642,15 +646,7 @@ class REEDistribution:
             KeyError: If the element is absent from the mechanism's block, with
                 a message naming the extractant, the mechanism and the block.
         """
-        if self.mechanism == "solvating":
-            block = self._ext_data.nitrate_coefficients
-            block_name = "nitrate_coefficients"
-        elif self.mechanism == "counter_ion_exchange":
-            block = self._ext_data.counter_ion_coefficients
-            block_name = "counter_ion_coefficients"
-        else:
-            block = self._ext_data.ph_coefficients
-            block_name = "ph_coefficients"
+        block_name, block = self._ext_data.coefficient_block(self.mechanism)
         if not block:
             # Defensive: __post_init__ already refuses this combination, so
             # reaching here means the record was mutated afterwards. Fail with

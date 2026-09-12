@@ -113,8 +113,12 @@ print(get_extractant_database().coverage().as_text())
 #   naphthenic_acid   15/15   -
 ```
 
-Four of the five stop at Dy plus Y. `naphthenic_acid` is the exception, and
-its fifteen come from one measured table (`Z1` Sec. 4.7, Table 4.36).
+Four of the five stop at Dy plus Y. `naphthenic_acid` is the exception, and its
+fifteen elements come from one measured table (`Z1` Sec. 4.7, Table 4.36). Full
+coverage is not the same as a trustworthy correlation, though: only the `a`
+ladder is that table's, the pH slope `b` comes from `Q1` Eq. 2.88 and carries
+the known saponification gap (#266), and `c`/`d` are declared zeros. Run
+`difflow_ree.provenance.explain` before reading absolute `D` off it.
 
 `coverage(elements)` answers the same question for a list you care about, and
 `get_extractant("TBP").covered_elements` answers it for one record —
@@ -149,7 +153,8 @@ interpolation:
 - **TBP**'s ten are literature-derived (`K05` Table 1), so extending it means
   finding a source covering the heavies at comparable conditions, with its own
   `sources.yaml` key.
-- **`naphthenic_acid`** is already complete, from `Z1` Table 4.36.
+- **`naphthenic_acid`** already covers all fifteen, from `Z1` Table 4.36 --- a
+  coverage gap it does not have, whatever the caveats above on its slope.
 
 Anything added should arrive with a citation, via `add_element_to_extractant`;
 `tests/ree/test_provenance.py` fails on a data field that matches no rule,
