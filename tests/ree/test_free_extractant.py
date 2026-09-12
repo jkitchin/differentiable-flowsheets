@@ -20,6 +20,7 @@ import pytest
 
 from difflow_ree import (
     ExtractantCapacityWarning,
+    FreeExtractantConvergenceWarning,
     check_loading_capacity,
     implied_loading_fraction,
     solve_free_extractant,
@@ -206,3 +207,80 @@ class TestTheImpossibleLoading:
     def test_an_unknown_action_is_refused(self, naphthenic):
         with pytest.raises(ValueError, match="action"):
             check_loading_capacity(naphthenic, 0.01, 0.45, action="shout")
+
+
+class TestItSaysWhenItDidNotConverge:
+    """A failed root find must not come back looking like a converged one.
+
+    `solve_free_extractant` runs Newton with `throw=False`, which it has to:
+    an exception thrown out of a traced solve is not catchable by a caller
+    differentiating through it. The cost is that running out of steps
+    returns the last iterate, which is then clipped into `[0, total]` and
+    turned into a perfectly ordinary-looking `D`. That is the silence the
+    rest of this package argues against, so the outcome is reported.
+    """
+
+    @pytest.fixture
+    def dist(self):
+        from difflow_ree.equilibrium.distribution import REEDistribution
+        return REEDistribution(
+            extractant="PC88A", elements=("Nd", "Pr"), concentration=0.5)
+
+    def test_an_ordinary_solve_reports_success(self, dist):
+        result = solve_free_extractant(dist, "Nd", 1e-4, pH=3.0)
+        assert result.converged is True
+
+    def test_starved_of_steps_it_says_so(self, dist):
+        with pytest.warns(FreeExtractantConvergenceWarning,
+                          match="did not converge"):
+            result = solve_free_extractant(dist, "Nd", 1e-4, pH=3.0,
+                                           max_steps=1)
+        assert result.converged is False
+
+    def test_the_warning_says_not_to_trust_the_D(self, dist):
+        with pytest.warns(FreeExtractantConvergenceWarning) as record:
+            solve_free_extractant(dist, "Nd", 1e-4, pH=3.0, max_steps=1)
+        message = str(record[0].message)
+        assert "last iterate" in message
+        assert "max_steps" in message
+
+    def test_a_converged_solve_is_silent(self, dist):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", FreeExtractantConvergenceWarning)
+            solve_free_extractant(dist, "Nd", 1e-4, pH=3.0)
+
+    def test_an_eager_gradient_still_gets_a_verdict(self, dist):
+        """`grad` outside `jit` is the happy case: the tracer has a primal.
+
+        So reporting the outcome costs a differentiating caller nothing --
+        it gets the gradient AND the verdict.
+        """
+        seen = {}
+
+        def D_of(c_aq):
+            result = solve_free_extractant(dist, "Nd", c_aq, pH=3.0)
+            seen["converged"] = result.converged
+            return result.D
+
+        gradient = jax.grad(D_of)(1e-4)
+        assert seen["converged"] is True
+        assert gradient != 0.0
+
+    def test_under_jit_the_verdict_is_none_not_a_guess(self, dist):
+        """`throw=False` is what keeps this jittable; keep it that way.
+
+        Under `jit` the optimistix result is abstract, so there is no
+        verdict to read -- `None` means "not judged", which is why this is
+        tested with `is False` rather than for falsiness. Forcing it would
+        trade a missing diagnostic for an unjittable function.
+        """
+        seen = {}
+
+        def D_of(c_aq):
+            result = solve_free_extractant(dist, "Nd", c_aq, pH=3.0)
+            seen["converged"] = result.converged
+            return result.D
+
+        value = jax.jit(D_of)(1e-4)
+        assert seen["converged"] is None
+        assert float(value) > 0.0

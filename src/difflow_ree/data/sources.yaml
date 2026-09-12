@@ -1,0 +1,483 @@
+# Bibliographic source registry for difflow_ree data files
+#
+# WHY THIS FILE EXISTS
+#
+# The data files in this directory mix numbers of very different pedigree:
+# measurements copied from a named table, values computed from other values,
+# standard reference constants, and figures that were hand-tuned to make a
+# demo converge. Read as bare YAML they are indistinguishable, and that is
+# how a hand-tuned number ends up in a published stage count.
+#
+# Every leaf value in elements.yaml, extractants.yaml and separation_factors.yaml
+# is tagged with a key from this file, via the `provenance:` block at the foot
+# of each. Resolve a tag from Python:
+#
+#     from difflow_ree.provenance import explain, audit, coverage
+#     explain("elements", "Dy", "ionic_radius_pm")
+#     coverage()                      # how much of the database is measured
+#     audit(cls="HAND_TUNED")         # every number nobody can defend
+#
+# or from the shell:
+#
+#     python -m difflow_ree.provenance
+#
+# THE `cls` FIELD IS THE POINT. It answers "may I publish a number that
+# depends on this?" without reading the citation:
+#
+#   MEASURED    reported in a named source as an experimental result
+#   REFERENCE   standard reference datum (atomic weights, ionic radii)
+#   DERIVED     computed from other tagged values in this database
+#   DISCLOSED   a figure published by the party that owns it -- an as-built
+#               project cost, or a cost estimate from a named study whose
+#               AACE class is stated. Citable, and checkable against the
+#               filing; NOT a measurement and NOT independently verified
+#   CONSTRUCTED built to satisfy published constraints; not itself measured
+#   ESTIMATED   indicative order of magnitude, no identified source
+#   CONVENTION  a difflow_ree bookkeeping choice, not a fact about the world
+#   HAND_TUNED  chosen to make code behave; no external basis whatsoever
+#
+# Adding a source: give it a key, a full citation, a `cls`, and -- if the
+# document is on this machine -- an `on_disk` path, so the next person can
+# check the number rather than trust it.
+
+sources:
+
+  # -------------------------------------------------------------------
+  # Primary sources: naphthenic acid / rare earth solvent extraction
+  # -------------------------------------------------------------------
+  Q1:
+    citation: >-
+      Qi, Dezhi (2018). "Hydrometallurgy of Rare Earths: Extraction and
+      Separation". Elsevier, Amsterdam. 814 pp.
+    kind: book
+    isbn: "978-0-12-813920-2"
+    cls: MEASURED
+    access: local
+    on_disk: >-
+      nnl-rare-earth/ree-literature-updates/ree-book/fulltexts/all/hydrometallurgy-of-rare-earths.pdf
+    note: >-
+      Reference [17] of the Torres et al. preprint this work replicates.
+      Source of the naphthenic acid MODEL FORM (Eq. 2.87-2.91), the physical
+      properties, the validity window, the impurity ordering and the
+      separation-factor bounds. It has NO full-series per-element
+      distribution table for naphthenic acid; that is Z1.
+
+  Z1:
+    citation: >-
+      Zhang, Jack; Zhao, Baodong; Schreiner, Bryan (2016). "Separation
+      Hydrometallurgy of Rare Earth Elements". Springer International
+      Publishing, Cham.
+    kind: book
+    isbn: "978-3-319-28233-6"
+    doi: "10.1007/978-3-319-28235-0"
+    cls: MEASURED
+    access: local
+    on_disk: >-
+      nnl-rare-earth/ree-literature-updates/ree-book/fulltexts/all/Separation Hydrometallurgy of Rare Earth Elements.pdf
+    note: >-
+      Sec. 4.7. Table 4.36 is the ONLY retrieved full-series measured
+      distribution table for naphthenic acid, and is the sole source of every
+      per-element `a` coefficient on the naphthenic_acid record. It is
+      currently UNREPLICATED -- a second measured table is the highest-value
+      addition to this database.
+
+  # -------------------------------------------------------------------
+  # Primary sources: TBP / nitrate solvating system
+  # (the full reading of each is on the TBP record in extractants.yaml)
+  # -------------------------------------------------------------------
+  K05:
+    citation: >-
+      Kraikaew, J.; Srinuttrakul, W.; Chayavadhanakur, C. (2005). "Solvent
+      Extraction Study of Rare Earths from Nitrate Medium by the Mixtures of
+      TBP and D2EHPA in Kerosene". Journal of Metals, Materials and Minerals
+      15(2), 89-95.
+    kind: article
+    url: "https://jmmm.material.chula.ac.th/index.php/jmmm/article/view/1345"
+    cls: MEASURED
+    access: open
+    note: >-
+      No DOI is registered for this journal issue. Table 1, p. 92: RE nitrate
+      from monazite, free acidity 0.2001 N, TBP in kerosene, equal phase
+      volumes, 35 +/- 1 C. The ONLY source of TBP's per-element `a` values.
+
+  TW54:
+    citation: >-
+      Topp, A. C.; Weaver, B. S. (1954). "Distribution of Rare-Earth Nitrates
+      Between Tributyl Phosphate and Nitric Acid". ORNL-1811.
+    kind: report
+    doi: "10.2172/4398970"
+    cls: MEASURED
+    access: open
+    note: >-
+      Tables II and IV, 8.5-17.4 N. Used only to bound TBP's validity window;
+      supplies no coefficient.
+
+  PW54:
+    citation: >-
+      Poos, G. I.; Wilhelm, H. A. (1954). "Separation of Yttrium and Some Rare
+      Earths by Liquid-Liquid Extraction". ISC-695, Ames Laboratory.
+    kind: report
+    osti: "4332475"
+    cls: MEASURED
+    access: open
+    note: >-
+      Used only for the caveat that Y's position in the TBP series moves with
+      acidity; supplies no coefficient.
+
+  GP19:
+    citation: >-
+      Ganesh, S.; Pandey, N. K. (2019). "Thermodynamics of Extraction of
+      Samarium(III) by Tri-n-butyl Phosphate". Journal of Radiation and
+      Nuclear Applications 4(2), 109-115.
+    kind: article
+    url: "https://www.naturalspublishing.com/files/published/q86xt25u4iq5o9.pdf"
+    cls: MEASURED
+    access: open
+    note: >-
+      *** The DOI printed in the PDF (10.18576/jrna/040205) IS NOT REGISTERED
+      IN CROSSREF and does not resolve. *** Cite the retrieved PDF. Table 1:
+      dH_Sm = -43.3 +/- 6.2 kJ/mol. The ONLY source of TBP's `d` value, which
+      is therefore a single-element measurement applied to all fifteen.
+
+  JS16:
+    citation: >-
+      Jorjani, E.; Shahbazi, M. (2016). "The production of rare earth elements
+      group via tributyl phosphate extraction and precipitation stripping
+      using oxalic acid". Arabian Journal of Chemistry 9, S1532-S1539.
+    kind: article
+    doi: "10.1016/j.arabjc.2012.04.002"
+    cls: MEASURED
+    access: open
+    note: >-
+      Extraction fell as T went 25 -> 55 C. Corroborates exothermicity;
+      supplies no number in this database.
+
+  # -------------------------------------------------------------------
+  # Standard reference data
+  # -------------------------------------------------------------------
+  S76:
+    citation: >-
+      Shannon, R. D. (1976). "Revised effective ionic radii and systematic
+      studies of interatomic distances in halides and chalcogenides".
+      Acta Crystallographica Section A 32(5), 751-767.
+    kind: article
+    doi: "10.1107/S0567739476001551"
+    cls: REFERENCE
+    access: paywalled
+    note: >-
+      Effective ionic radii, CN = 6, 3+ oxidation state. The values in
+      elements.yaml match this table exactly and are monotonic in atomic
+      number across all fourteen lanthanides (the lanthanide contraction).
+      Y (90.0 pm) falls between Ho (90.1) and Er (89.0), which is the whole
+      reason Y behaves as a heavy rare earth.
+
+  IUPAC:
+    citation: >-
+      Prohaska, T. et al. (2022). "Standard atomic weights of the elements
+      2021 (IUPAC Technical Report)". Pure and Applied Chemistry 94(5),
+      573-600.
+    kind: article
+    doi: "10.1515/pac-2019-0603"
+    cls: REFERENCE
+    access: open
+    note: Standard atomic weights, rounded to 3 decimal places in this database.
+
+  CRC:
+    citation: >-
+      Haynes, W. M. (ed.) (2016). "CRC Handbook of Chemistry and Physics",
+      97th edition. CRC Press, Boca Raton, FL.
+    kind: book
+    isbn: "978-1-4987-5428-6"
+    cls: REFERENCE
+    access: not_retrieved
+    note: >-
+      Densities and melting points. *** THE EDITION IS ASSERTED, NOT
+      VERIFIED. *** These are textbook constants that agree across editions
+      and sources to well within any process-relevant tolerance, and nothing
+      in difflow_ree is sensitive to them, but no copy was consulted while
+      writing this database. Treat as REFERENCE-class, not as checked.
+
+  # -------------------------------------------------------------------
+  # Non-source classes. These are not citations. They are honest labels for
+  # numbers that have no citation, and they exist so that such numbers can
+  # be found later with audit() instead of being discovered in a result.
+  # -------------------------------------------------------------------
+  SF_APPROX:
+    citation: >-
+      Approximate separation factors of the kind quoted in the rare-earth
+      solvent-extraction literature. No specific table is recorded.
+    cls: CONSTRUCTED
+    note: >-
+      Background consulted qualitatively, NOT the source of any specific
+      number: Gupta & Krishnamurthy (2005) "Extractive Metallurgy of Rare
+      Earths", CRC Press; Xie, Zhang, Dreisinger & Doyle (2014) Miner. Eng.
+      56, 10, doi:10.1016/j.mineng.2013.10.021. The values are the right order
+      and the right ordering, and that is all that can be claimed for them.
+      *** THEY ALSO DISAGREE WITH extractants.yaml. *** Recomputing each
+      adjacent pair from the hand-tuned ph_coefficients at each block's own
+      stated conditions gives ratios of 1.3-2.8 against the tabulated value,
+      4.8 for Cyanex272 Sm/Nd, and 4-8 IN THE OTHER DIRECTION for every
+      Y/Dy pair. Two hand-tuned descriptions of the same physics were written
+      independently and never reconciled. Whichever you read, do not read
+      both and expect agreement, and do not use either for design.
+
+  # -------------------------------------------------------------------
+  # Capital cost anchors: public REE separation projects
+  #
+  # These are the only numbers in this package that describe a plant
+  # somebody actually costed. estimate_capex() reads its LEVEL from them;
+  # see difflow_ree.economics.costs.CAPEX_ANCHORS and capex_basis().
+  #
+  # Read the battery limits, not just the dollar figure. The three entries
+  # below differ by more than an order of magnitude at the same capacity
+  # because they enclose different amounts of plant.
+  # -------------------------------------------------------------------
+
+  EF_PH1:
+    citation: >-
+      Energy Fuels Inc. (10 June 2024). "Energy Fuels Achieves Commercial
+      Production of 'On-Spec' Separated Rare Earths at its White Mesa Mill in
+      Utah, While Simultaneously Advancing Uranium Production." Press release.
+    kind: press_release
+    url: https://www.prnewswire.com/news-releases/energy-fuels-achieves-commercial-production-of-on-spec-separated-rare-earths-at-its-white-mesa-mill-in-utah-while-simultaneously-advancing-uranium-production-302168094.html
+    url_capacity: https://www.prnewswire.com/news-releases/energy-fuels-announces-q1-2024-results-including-continued-net-income-continued-successful-uranium-ramp-up-commissioning-rare-earth-oxides-production-and-steps-to-secure-world-scale-sources-of-heavy-mineral-sands-and-monazite-302135969.html
+    cls: DISCLOSED
+    access: web
+    retrieved: 2026-09-12
+    note: >-
+      AS-BUILT ACTUAL, not an estimate: the Phase 1 REE separation circuit was
+      completed in Q1-2024 "for a total cost of only about $16 million",
+      against a $25 million budget, and the circuit is quoted at "850 to
+      1,000 metric tons of NdPr per year" (the Q1-2024 release at
+      url_capacity says "approximately 800 to 1,000 tonnes"). Cost and
+      PRODUCT capacity are therefore both disclosed.
+      THE CAPACITY BASIS IS NOT. difflow scales on REO FEED, and neither
+      release states a Phase 1 feed tonnage. The 4,500 t/yr used here is
+      difflow's own arithmetic from two figures that ARE stated: the Q1-2024
+      release (url_capacity) gives the Phase 2 design as 30,000 t/yr monazite
+      for about 3,000 t/yr NdPr oxide, a ratio of roughly 10 t monazite per
+      tonne of NdPr, and monazite concentrate runs about half TREO. Carried
+      back to Phase 1's 800-1,000 t/yr NdPr that is 8,000-10,000 t/yr
+      monazite and so 4,000-5,000 t/yr TREO; 4,500 is the midpoint.
+      Two assumptions are doing work there -- that Phase 1 and Phase 2 share
+      a monazite-to-NdPr ratio, and the concentrate grade -- and neither is
+      sourced. This is the single largest soft spot in this anchor, and it
+      enters the answer at the 0.6 power, so a factor of two in the capacity
+      basis is a factor of 1.5 in the cost.
+      SCOPE IS NARROW AND THAT IS WHY IT IS CHEAP: solvent extraction dropped
+      into an already-licensed operating mill that supplied the buildings,
+      power, utilities, effluent treatment, laboratory and permit. It is the
+      right anchor for "what does a mixer-settler cascade cost" and the wrong
+      anchor for "what does a separation plant cost".
+
+  EF_PH2:
+    citation: >-
+      Energy Fuels Inc. (15 January 2026). "Energy Fuels' U.S. Rare Earth
+      Processing Expansion Boasts Lower-Than-Expected CAPEX, Significant
+      Annual EBITDA, and Among the Lowest Cost NdPr Production in the World."
+      Press release reporting an AACE Class 3 Bankable Feasibility Study.
+    kind: press_release
+    url: https://www.prnewswire.com/news-releases/energy-fuels-us-rare-earth-processing-expansion-boasts-lower-than-expected-capex-significant-annual-ebitda-and-among-the-lowest-cost-ndpr-production-in-the-world-302662103.html
+    cls: DISCLOSED
+    access: web
+    retrieved: 2026-09-12
+    note: >-
+      $410 million initial capital for the Phase 2 circuit, AACE Class 3
+      (bankable feasibility, accuracy about -20%/+30%). Annual products
+      5,513 t NdPr, 48 t Tb, 165 t Dy, 748 t SEG concentrate and 1,080 t Ho+
+      concentrate, plus 198,000 lb U3O8; difflow sums the rare earth products
+      to 7,554 t/yr separated REO as the capacity basis. Scope runs from
+      monazite cracking and leaching through to finished separated products,
+      on an existing licensed site. The best-defined of the three anchors.
+
+  AVALON_GEISMAR:
+    citation: >-
+      Avalon Rare Metals Inc. (12 April 2012). "Avalon Announces Results of
+      Prefeasibility Study for Rare Earth Separation Plant." Marketwire press
+      release, reporting a prefeasibility study by SNC-Lavalin Inc. for a rare
+      earth separation plant in Louisiana serving the Nechalacho project.
+      Reproduced in full by MINING.com, "Processing plant to cost $302 million
+      - 1/3 of Avalon's rare earth project capex" (13 April 2012).
+    kind: press_release_via_trade_press
+    url: https://www.mining.com/avalons-rare-earth-separation-plant-in-louisiana-to-cost-302-million/
+    cls: DISCLOSED
+    access: web
+    retrieved: 2026-09-12
+    note: >-
+      The MINING.com page carries Avalon's own Marketwire release verbatim
+      below the story, so the figures below are quotations from the company,
+      not a reporter's summary. Everything in this note is in that release.
+      COST AND CAPACITY. "SNC-Lavalin estimated capital and operating costs
+      for a separation plant with a capacity of 10,000 tonnes per annum" and
+      "the estimated capital cost for the separation plant is US$302 million".
+      The 10,000 t/yr is PRODUCT: the release tabulates the slate adding to
+      exactly 10,000 t/yr (La oxide 1,583, Ce carbonate 3,572, Pr 451, Nd
+      1,783, Sm 391, Eu 49, Gd 371, Tb 54, Dy 271, Y 1,169, Ho 48, Er 126,
+      Tm/Yb/Lu 132). Overall plant recovery is given as 98%, so feed and
+      product differ by 2% and this anchor reads the same on either basis --
+      which is why difflow can scale a feed tonnage against it.
+      COST BASIS AND CLAIMED ACCURACY. "The cost estimates are based on
+      fourth quarter 2011 price quotations and have an intended overall
+      accuracy of +/-25%." difflow records the year as 2012 (CEPCI 2011 and
+      2012 differ by 0.2%, so the quarter does not matter) and carries the
+      +/-25% as the anchor's own claim. It is a claim about a study, not an
+      outcome: see LYNAS_KALGOORLIE for what happened to a real REE build.
+      SCOPE, VERBATIM. The US$302 million "includes a complete separation
+      plant facility; infrastructure, utilities and ancillary services;
+      indirect costs; and contingency". Excluded, and separate line items in
+      the same project: the mine and concentrator and the sulphuric acid bake
+      plant, all inside the CAN$902 million Nechalacho estimate that
+      "did not include costs for a separation plant"; the second cracking
+      plant "presently contemplated to be co-located with the separation
+      plant"; and land, which was not yet acquired ("two potential sites in
+      the negotiation stage"). Total project with the separation plant
+      included was put at about $1.2 billion.
+      ONE DISCLOSED SECTION SHARE. "The largest capital expense is the
+      solvent extraction circuit consisting of over 1,000 mixer-settlers, and
+      makes up 33% of the total capital cost at US$101 million." This is the
+      only section-level figure any of difflow's anchors publish, and it does
+      two things. It brackets difflow's ESTIMATED section split, which puts
+      mixer-settlers alone below 33% and the whole SX equipment group above
+      it. And it prices a mixer-settler: at over 1,000 units, US$101 million
+      is at most about US$101,000 each in 2011 dollars, roughly US$142,000 in
+      2024 dollars -- an independent check on a per-stage price, and the
+      reason a $50,000 stage is not a conservative assumption.
+      OPERATING COST, for cross-checking difflow's OPEX, which is otherwise
+      unsourced: "the estimated operating cost is US$5,634 per tonne of rare
+      earth oxide product, which includes labour, operating supplies,
+      supplies and reagents, and maintenance costs", of which reagents are
+      70% at US$3,934 per tonne, "with hydrochloric acid and sodium hydroxide
+      being the two largest contributors". Note what that excludes: no
+      capital charge, and no feed cost.
+      WEAKNESS: a prefeasibility estimate for a plant that was never built,
+      so there is no as-built figure to check it against, and the site was
+      not selected until 27 August 2012 (Geismar, Louisiana) -- after the
+      estimate was priced.
+
+  LYNAS_KALGOORLIE:
+    citation: >-
+      Mining Weekly (24 April 2024). "Lynas ups Kalgoorlie capital costs
+      budget to A$800m."
+    kind: trade_press
+    url: https://www.miningweekly.com/article/lynas-ups-kalgoorlie-capital-costs-budget-to-a800m-2024-04-24
+    cls: DISCLOSED
+    access: web
+    retrieved: 2026-09-12
+    note: >-
+      Not used as an anchor -- Kalgoorlie cracks and leaches concentrate to a
+      mixed carbonate and does not separate anything. Recorded because it is
+      the cheapest available lesson in what these estimates do over time:
+      A$800 million against an original A$500 million, a 60% overrun on a
+      plant simpler than a separation train. Any CAPEX number in this package
+      should be read with that in mind.
+
+  AACE_18R97:
+    citation: >-
+      AACE International Recommended Practice No. 18R-97, "Cost Estimate
+      Classification System - As Applied in Engineering, Procurement, and
+      Construction for the Process Industries."
+    kind: standard
+    url: https://web.aacei.org/docs/default-source/toc/toc_18r-97.pdf
+    cls: REFERENCE
+    access: web
+    retrieved: 2026-09-12
+    note: >-
+      Table 1, the estimate classification matrix for the process industries.
+      Class 5 (0-2% project definition, capacity-factored or parametric or
+      analogy): low range -20% to -50%, high range +30% to +100%. Class 4
+      (1-15%, equipment-factored): -15% to -30% and +20% to +50%. Class 3
+      (10-40%, semi-detailed unit costs): -10% to -20% and +10% to +30%.
+      WHY IT IS HERE: estimate_capex scales one project to another capacity by
+      a power law, which is a Class 5 method no matter how well defined the
+      anchor was. The class travels with the METHOD, not with the source.
+
+  CEPCI_IDX:
+    citation: >-
+      Chemical Engineering Plant Cost Index, annual averages, as published in
+      Chemical Engineering magazine.
+    kind: index
+    cls: REFERENCE
+    access: secondary
+    note: >-
+      Used only as a ratio between two years, so the absolute base is
+      irrelevant. The values in difflow_ree.economics.costs.CEPCI were carried
+      over from difflow_cc and the surrounding literature rather than read off
+      a current issue, and entries after 2024 are HELD AT THE 2024 VALUE
+      because no verified index for them was retrieved. That is a refusal to
+      extrapolate, not a claim the index was flat: moving a 2012 cost to 2024
+      already multiplies it by 1.40, so this factor is not a rounding detail.
+
+  LANG_FLUID:
+    citation: >-
+      Lang factor for fluid-processing plants, 4.74 (3.10 for solids
+      processing); the classic factored-estimate multiplier on delivered
+      equipment cost, reproduced in Peters & Timmerhaus and in Towler &
+      Sinnott, "Chemical Engineering Design", 2nd ed., Butterworth-Heinemann,
+      2013, ch. 7.
+    kind: textbook_factor
+    url: http://web.abo.fi/fak/tkf/at/Courses/Basics_in_Process_Design/notes2013/08%20-%20economy%20with%20notes.pdf
+    cls: REFERENCE
+    access: web
+    retrieved: 2026-09-12
+    note: >-
+      Not used to BUILD the current estimate, which is anchored rather than
+      factored. Recorded because it is what diagnosed the old one: the
+      superseded estimate_capex applied a total multiplier of 2.01 to
+      delivered equipment cost, where fluid-processing practice is 4.74. That
+      single discrepancy accounted for a factor of 2.4 of its shortfall; the
+      rest was battery limits.
+
+  DEF:
+    citation: "Definitional. Fixed by the identity of the element itself."
+    cls: REFERENCE
+    note: >-
+      Element names, atomic numbers, common oxidation states and sesquioxide
+      formulas. Not measurements and not in dispute. Listed so that audit()
+      can distinguish "needs no source" from "has no source".
+
+  CONV:
+    citation: "A difflow_ree bookkeeping choice, not a fact about the world."
+    cls: CONVENTION
+    note: >-
+      The light/middle/heavy grouping is a convenience for organising
+      flowsheets. The boundaries are drawn differently by different authors
+      and nothing physical depends on where this file puts them.
+
+  CALC:
+    citation: "Computed from other tagged values in this database."
+    cls: DERIVED
+    note: >-
+      Reproducible by arithmetic, no independent authority. Oxide molecular
+      weights are CALC: each recomputes from its element's atomic_weight and
+      oxide_formula to within 0.02 g/mol.
+
+  EST:
+    citation: "Indicative value. No identified source."
+    cls: ESTIMATED
+    note: >-
+      Order of magnitude only. EVERY PRICE IN THIS DATABASE IS EST, including
+      those of the ten elements that predate this registry. Rare earth prices
+      move by factors of several within a year, differ between metal and
+      oxide, and are not public for the thin-market elements (Tm, Lu). Do not
+      report an economic result that depends on one without substituting a
+      dated, sourced price.
+
+  HAND_TUNED:
+    citation: "Chosen so that example code produces reasonable behaviour."
+    cls: HAND_TUNED
+    note: >-
+      *** NO EXTERNAL BASIS OF ANY KIND. *** These numbers were selected to
+      make demonstrations converge and plots look sensible. They predate any
+      provenance discipline in this package. They are fine for exercising the
+      solver, testing gradients and teaching the API. They must never appear
+      in, or behind, a published number. Run audit(cls="HAND_TUNED") to see
+      the full list.
+
+  UNTAGGED:
+    citation: "No provenance rule matches this field."
+    cls: HAND_TUNED
+    note: >-
+      Synthesized by the resolver, never written in a file. If audit() reports
+      UNTAGGED fields, the provenance block is incomplete: add a rule. Treated
+      as HAND_TUNED because an untracked number deserves the worst assumption,
+      not the benefit of the doubt.

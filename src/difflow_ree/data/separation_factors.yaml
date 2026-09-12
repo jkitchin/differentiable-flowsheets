@@ -187,3 +187,38 @@ industrial_sequences:
       - "Ammonium sulfate leach"
       - "Oxalate precipitation"
       - "Solvent extraction separation"
+
+# ---------------------------------------------------------------------------
+# PROVENANCE
+#
+# `pattern` is a dotted path with `*` as a single-segment wildcard; the MOST
+# SPECIFIC matching rule wins; `source` is a key in sources.yaml. Resolve with
+# `from difflow_ree.provenance import explain, audit`.
+#
+# *** THIS FILE DISAGREES WITH extractants.yaml AND ALWAYS HAS. ***
+# Recompute any adjacent pair from that file's ph_coefficients at the
+# `conditions` stated in each block below and you get 1.3x to 2.8x the value
+# tabulated here (4.8x for Cyanex272 Sm/Nd), and 4x to 8x in the OPPOSITE
+# direction for every Y/Dy pair. These are two independent hand-tuned
+# descriptions of one set of physics, written at different times and never
+# reconciled. Nothing here is a measurement; see sources.yaml:SF_APPROX.
+# ---------------------------------------------------------------------------
+provenance:
+  rules:
+    - {pattern: "separation_factors.*.adjacent_pairs.*", source: SF_APPROX}
+    - {pattern: "separation_factors.*.group_pairs.*",    source: SF_APPROX}
+    - {pattern: "separation_factors.*.conditions.*",     source: CONV,
+       note: "The conditions the tabulated factors are said to apply at."}
+
+    - {pattern: "stages_for_99_purity.*.*", source: CALC,
+       note: "Fenske minimum stages from the adjacent_pairs factors above:
+              N_min = ln[(x_i/x_j)_prod * (x_j/x_i)_feed] / ln(beta). Inherits
+              every weakness of the beta it is computed from, and is a
+              THERMODYNAMIC FLOOR -- a real cascade needs more."}
+
+    - {pattern: "temperature_sensitivity.*", source: SF_APPROX}
+    - {pattern: "ph_sensitivity.*",          source: SF_APPROX}
+    - {pattern: "loading_effects.*",         source: SF_APPROX}
+    - {pattern: "industrial_sequences.*.*",  source: CONV,
+       note: "Prose descriptions of the conventional processing routes.
+              No numbers."}

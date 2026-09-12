@@ -55,6 +55,7 @@ __all__ = [
     "implied_loading_fraction",
     "check_loading_capacity",
     "solve_free_extractant",
+    "FreeExtractantConvergenceWarning",
 ]
 
 
@@ -72,6 +73,21 @@ class ExtractantCapacityWarning(UserWarning):
     """
 
 
+class FreeExtractantConvergenceWarning(UserWarning):
+    """The free-extractant root find did not converge.
+
+    :func:`solve_free_extractant` runs Newton with ``throw=False``, because
+    an exception raised out of a traced solve is not something a caller
+    differentiating through this can catch.  The cost of that choice is
+    that a solve which runs out of steps returns its last iterate, which
+    is then clipped into ``[0, total]`` and handed back as a perfectly
+    ordinary-looking ``D``.  Nothing distinguishes it from a converged
+    one, which is the silence this package spends its comments arguing
+    against --- so the result carries :attr:`FreeExtractantResult.converged`
+    and a failure warns here.
+    """
+
+
 @dataclass(frozen=True)
 class FreeExtractantResult:
     """What :func:`solve_free_extractant` found.
@@ -86,6 +102,12 @@ class FreeExtractantResult:
         D_total_basis: What the correlation says against *total* extractant
             --- the number difflow_ree returns without this module. Carried so
             the size of the difference is reportable rather than folklore.
+        converged: Whether the root find reached its tolerance. ``None``
+            means "not judged": under ``jax.jit`` the optimistix result is
+            abstract and there is no verdict to read. That third state is
+            the reason to test this against ``is False`` rather than for
+            falsiness, exactly as ``Flowsheet.last_solve_converged`` is
+            tested. An eager ``jax.grad`` does get a verdict.
     """
 
     D: Array
@@ -93,6 +115,7 @@ class FreeExtractantResult:
     free_extractant: Array
     loading_fraction: Array
     D_total_basis: Array
+    converged: bool | None = None
 
     @property
     def overprediction(self) -> Array:
@@ -186,6 +209,40 @@ def check_loading_capacity(
     return theta
 
 
+def _judge(solution, extractant: str, element: str, max_steps: int):
+    """Was the root find successful? ``None`` when it cannot be told.
+
+    ``throw=False`` is deliberate -- see
+    :class:`FreeExtractantConvergenceWarning` -- so the check is here
+    instead.  Under ``jax.jit`` the optimistix result is an abstract
+    tracer with no concrete truth, and forcing it would make this
+    function unjittable; ``None`` is the honest answer there, the same
+    convention ``difflow.flowsheet`` uses for its solve diagnostics.
+    Eager ``jax.grad`` is the happier case: its tracer still carries a
+    primal, so a gradient taken outside ``jit`` gets a real verdict and
+    warns on a real failure.
+    """
+    try:
+        ok = bool(solution.result == optx.RESULTS.successful)
+    except Exception:
+        return None
+    if not ok:
+        warnings.warn(
+            f"The free-extractant balance for {element} in "
+            f"{extractant} did not converge in {max_steps} Newton steps "
+            f"(optimistix reported {solution.result}). The D reported with "
+            "it was computed from the last iterate and is not the "
+            "self-consistent one -- do not read it as such. F is monotone "
+            "with one root in (0, total], so this usually means the "
+            "requested loading is at or past capacity (check_loading_"
+            "capacity says so directly) rather than that the solve needs "
+            "more steps; raise max_steps if it is genuinely the latter.",
+            FreeExtractantConvergenceWarning,
+            stacklevel=3,
+        )
+    return ok
+
+
 def solve_free_extractant(
     dist,
     element: str,
@@ -271,6 +328,7 @@ def solve_free_extractant(
         max_steps=max_steps,
         throw=False,
     )
+    converged = _judge(solution, dist.extractant, element, max_steps)
     free = jnp.clip(solution.value, 0.0, total)
     D = D_ref * jnp.power(free / record.reference_concentration, n)
     c_org = D * c_aq
@@ -280,4 +338,5 @@ def solve_free_extractant(
         free_extractant=free,
         loading_fraction=m * c_org / total,
         D_total_basis=D_total,
+        converged=converged,
     )

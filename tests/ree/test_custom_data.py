@@ -1,7 +1,11 @@
 """Tests for custom element, extractant coefficient, and separation factor APIs.
 
 These tests verify that users can add their own literature data for elements
-not in the built-in database (e.g., Ho) and use them in simulations.
+not in the built-in database and use them in simulations.
+
+The stand-in is Pm. It is the one rare earth elements.yaml will never ship --
+no stable isotope, no process role -- so it cannot stop being absent the way
+Ho did when the heavy elements were added.
 """
 
 import pytest
@@ -41,20 +45,27 @@ def sf_db():
 
 
 @pytest.fixture
-def ho_element():
-    """Holmium element for testing (real physical properties)."""
+def pm_element():
+    """Promethium, the element elements.yaml deliberately omits.
+
+    Real physical properties, with two honest caveats: `atomic_weight` is the
+    mass number of the longest-lived isotope (Pm-145) because Pm has no
+    standard atomic weight, and `price_usd_kg` is invented because Pm has no
+    market. Neither matters -- this fixture exists to exercise the add/update/
+    remove API, not to be extracted.
+    """
     return create_custom_element(
-        symbol="Ho",
-        name="Holmium",
-        atomic_number=67,
-        atomic_weight=164.930,
-        ionic_radius_pm=90.1,
-        density=8.795,
-        melting_point=1734,
-        group="heavy",
-        oxide_formula="Ho2O3",
-        oxide_mw=377.86,
-        price_usd_kg=60.0,
+        symbol="Pm",
+        name="Promethium",
+        atomic_number=61,
+        atomic_weight=145.0,
+        ionic_radius_pm=97.0,
+        density=7.26,
+        melting_point=1042,
+        group="light",
+        oxide_formula="Pm2O3",
+        oxide_mw=338.00,
+        price_usd_kg=0.0,
     )
 
 
@@ -65,14 +76,14 @@ def ho_element():
 
 class TestCreateCustomElement:
 
-    def test_creates_valid_element(self, ho_element):
-        assert ho_element.symbol == "Ho"
-        assert ho_element.name == "Holmium"
-        assert ho_element.atomic_number == 67
-        assert ho_element.atomic_weight == 164.930
-        assert ho_element.ionic_radius_pm == 90.1
-        assert ho_element.group == "heavy"
-        assert ho_element.oxidation_states == (3,)
+    def test_creates_valid_element(self, pm_element):
+        assert pm_element.symbol == "Pm"
+        assert pm_element.name == "Promethium"
+        assert pm_element.atomic_number == 61
+        assert pm_element.atomic_weight == 145.0
+        assert pm_element.ionic_radius_pm == 97.0
+        assert pm_element.group == "light"
+        assert pm_element.oxidation_states == (3,)
 
     def test_empty_symbol_raises(self):
         with pytest.raises(ValueError, match="symbol cannot be empty"):
@@ -115,69 +126,79 @@ class TestCreateCustomElement:
 
 class TestREEDatabaseAddElement:
 
-    def test_add_and_retrieve(self, ree_db, ho_element):
-        ree_db.add_element("Ho", ho_element)
-        retrieved = ree_db.get("Ho")
-        assert retrieved.name == "Holmium"
-        assert retrieved.atomic_weight == 164.930
+    def test_add_and_retrieve(self, ree_db, pm_element):
+        ree_db.add_element("Pm", pm_element)
+        retrieved = ree_db.get("Pm")
+        assert retrieved.name == "Promethium"
+        assert retrieved.atomic_weight == 145.0
 
-    def test_add_appears_in_list(self, ree_db, ho_element):
-        assert "Ho" not in ree_db.list_elements()
-        ree_db.add_element("Ho", ho_element)
-        assert "Ho" in ree_db.list_elements()
+    def test_add_appears_in_list(self, ree_db, pm_element):
+        assert "Pm" not in ree_db.list_elements()
+        ree_db.add_element("Pm", pm_element)
+        assert "Pm" in ree_db.list_elements()
 
-    def test_add_updates_group(self, ree_db, ho_element):
-        ree_db.add_element("Ho", ho_element)
-        heavy = ree_db.list_by_group("heavy")
-        assert "Ho" in heavy
+    def test_add_updates_group(self, ree_db, pm_element):
+        ree_db.add_element("Pm", pm_element)
+        assert "Pm" in ree_db.list_by_group("light")
 
-    def test_add_duplicate_raises(self, ree_db, ho_element):
-        ree_db.add_element("Ho", ho_element)
+    def test_add_duplicate_raises(self, ree_db, pm_element):
+        ree_db.add_element("Pm", pm_element)
         with pytest.raises(ValueError, match="already exists"):
-            ree_db.add_element("Ho", ho_element)
+            ree_db.add_element("Pm", pm_element)
 
     def test_add_wrong_type_raises(self, ree_db):
         with pytest.raises(TypeError, match="REEElement instance"):
-            ree_db.add_element("Ho", {"name": "Holmium"})
+            ree_db.add_element("Pm", {"name": "Promethium"})
 
-    def test_remove_element(self, ree_db, ho_element):
-        ree_db.add_element("Ho", ho_element)
-        ree_db.remove_element("Ho")
-        assert "Ho" not in ree_db.list_elements()
-        assert "Ho" not in ree_db.list_by_group("heavy")
-
-    def test_remove_nonexistent_raises(self, ree_db):
-        with pytest.raises(KeyError, match="not found"):
-            ree_db.remove_element("Ho")
-
-    def test_update_element(self, ree_db, ho_element):
-        ree_db.add_element("Ho", ho_element)
-        updated = create_custom_element(
+    def test_add_shipped_element_raises(self, ree_db):
+        """Ho ships now. Adding it again must be refused, not silently merged."""
+        ho = create_custom_element(
             symbol="Ho", name="Holmium", atomic_number=67,
             atomic_weight=164.930, ionic_radius_pm=90.1, density=8.795,
             melting_point=1734, group="heavy", oxide_formula="Ho2O3",
-            oxide_mw=377.86, price_usd_kg=75.0,  # Updated price
-        )
-        ree_db.update_element("Ho", updated)
-        assert ree_db.get("Ho").price_usd_kg == 75.0
-
-    def test_update_nonexistent_raises(self, ree_db, ho_element):
-        with pytest.raises(KeyError, match="not found"):
-            ree_db.update_element("Ho", ho_element)
-
-    def test_update_changes_group(self, ree_db, ho_element):
-        ree_db.add_element("Ho", ho_element)
-        assert "Ho" in ree_db.list_by_group("heavy")
-
-        reclassified = create_custom_element(
-            symbol="Ho", name="Holmium", atomic_number=67,
-            atomic_weight=164.930, ionic_radius_pm=90.1, density=8.795,
-            melting_point=1734, group="middle", oxide_formula="Ho2O3",
             oxide_mw=377.86,
         )
-        ree_db.update_element("Ho", reclassified)
-        assert "Ho" not in ree_db.list_by_group("heavy")
-        assert "Ho" in ree_db.list_by_group("middle")
+        with pytest.raises(ValueError, match="already exists"):
+            ree_db.add_element("Ho", ho)
+
+    def test_remove_element(self, ree_db, pm_element):
+        ree_db.add_element("Pm", pm_element)
+        ree_db.remove_element("Pm")
+        assert "Pm" not in ree_db.list_elements()
+        assert "Pm" not in ree_db.list_by_group("light")
+
+    def test_remove_nonexistent_raises(self, ree_db):
+        with pytest.raises(KeyError, match="not found"):
+            ree_db.remove_element("Pm")
+
+    def test_update_element(self, ree_db, pm_element):
+        ree_db.add_element("Pm", pm_element)
+        updated = create_custom_element(
+            symbol="Pm", name="Promethium", atomic_number=61,
+            atomic_weight=145.0, ionic_radius_pm=97.0, density=7.26,
+            melting_point=1042, group="light", oxide_formula="Pm2O3",
+            oxide_mw=338.00, price_usd_kg=75.0,  # Updated price
+        )
+        ree_db.update_element("Pm", updated)
+        assert ree_db.get("Pm").price_usd_kg == 75.0
+
+    def test_update_nonexistent_raises(self, ree_db, pm_element):
+        with pytest.raises(KeyError, match="not found"):
+            ree_db.update_element("Pm", pm_element)
+
+    def test_update_changes_group(self, ree_db, pm_element):
+        ree_db.add_element("Pm", pm_element)
+        assert "Pm" in ree_db.list_by_group("light")
+
+        reclassified = create_custom_element(
+            symbol="Pm", name="Promethium", atomic_number=61,
+            atomic_weight=145.0, ionic_radius_pm=97.0, density=7.26,
+            melting_point=1042, group="middle", oxide_formula="Pm2O3",
+            oxide_mw=338.00,
+        )
+        ree_db.update_element("Pm", reclassified)
+        assert "Pm" not in ree_db.list_by_group("light")
+        assert "Pm" in ree_db.list_by_group("middle")
 
 
 # =============================================================================
@@ -334,40 +355,66 @@ class TestSeparationFactorDatabase:
 # =============================================================================
 
 
-class TestIntegrationAddHolmium:
+class TestIntegrationAddElement:
     """Demonstrate the intended workflow from issue #160."""
 
-    def test_add_ho_to_pc88a_workflow(self, ree_db, ext_db, sf_db):
-        # Step 1: Add Ho to element database
-        ho = create_custom_element(
-            symbol="Ho",
-            name="Holmium",
-            atomic_number=67,
-            atomic_weight=164.930,
-            ionic_radius_pm=90.1,
-            density=8.795,
-            melting_point=1734,
-            group="heavy",
-            oxide_formula="Ho2O3",
-            oxide_mw=377.86,
-            price_usd_kg=60.0,
-        )
-        ree_db.add_element("Ho", ho)
-        assert ree_db.get("Ho").name == "Holmium"
+    def test_add_pm_to_pc88a_workflow(self, ree_db, ext_db, sf_db):
+        """The full path for an element the database does not ship at all.
 
-        # Step 2: Add Ho coefficients to PC88A only
-        # (These would come from the user's literature data)
+        Pm is used because it is the only rare earth elements.yaml will never
+        contain. The coefficients and separation factors below are invented
+        for the test; Pm has no extraction literature and no market.
+        """
+        # Step 1: Add Pm to the element database
+        pm = create_custom_element(
+            symbol="Pm",
+            name="Promethium",
+            atomic_number=61,
+            atomic_weight=145.0,
+            ionic_radius_pm=97.0,
+            density=7.26,
+            melting_point=1042,
+            group="light",
+            oxide_formula="Pm2O3",
+            oxide_mw=338.00,
+            price_usd_kg=0.0,
+        )
+        ree_db.add_element("Pm", pm)
+        assert ree_db.get("Pm").name == "Promethium"
+
+        # Step 2: Add Pm coefficients to PC88A only
+        ext_db.add_element_to_extractant(
+            "PC88A", "Pm",
+            ph_coefficients={"a": -7.4, "b": 2.86, "c": 0.010},
+            temperature_coefficient=-1650,
+        )
+        assert "Pm" in ext_db.get("PC88A").ph_coefficients
+        # Other extractants should NOT have Pm
+        assert "Pm" not in ext_db.get("D2EHPA").ph_coefficients
+
+        # Step 3: Add separation factors for Pm with its neighbours only
+        sf_db.add_pair("PC88A", "Sm_Pm", 2.4, stages_99=20)
+        sf_db.add_pair("PC88A", "Pm_Nd", 1.3)
+        assert sf_db.get_sf("PC88A", "Sm_Pm") == 2.4
+        assert sf_db.get_sf("PC88A", "Pm_Nd") == 1.3
+
+    def test_add_coefficients_for_a_shipped_element(self, ree_db, ext_db):
+        """The commoner half-workflow, and the one Ho now exercises.
+
+        The five heavy elements Ho-Lu ship in elements.yaml, but only
+        naphthenic_acid has coefficients for them: its `a` ladder is measured
+        across the full fifteen (Zhang 2016 Table 4.36), while the three
+        acidic extractants stop at Dy + Y. So a user working in PC88A supplies
+        the coefficients and nothing else.
+        """
+        assert "Ho" in ree_db.list_elements()          # step 1 already done
+        assert "Ho" not in ext_db.get("PC88A").ph_coefficients
+        assert "Ho" in ext_db.get("naphthenic_acid").ph_coefficients
+
         ext_db.add_element_to_extractant(
             "PC88A", "Ho",
             ph_coefficients={"a": -6.42, "b": 2.86, "c": 0.010},
             temperature_coefficient=-2250,
         )
-        assert "Ho" in ext_db.get("PC88A").ph_coefficients
-        # Other extractants should NOT have Ho
+        assert ext_db.get("PC88A").ph_coefficients["Ho"].a == -6.42
         assert "Ho" not in ext_db.get("D2EHPA").ph_coefficients
-
-        # Step 3: Add separation factors for Ho with Gd and Y only
-        sf_db.add_pair("PC88A", "Ho_Dy", 1.4, stages_99=20)
-        sf_db.add_pair("PC88A", "Y_Ho", 0.9)
-        assert sf_db.get_sf("PC88A", "Ho_Dy") == 1.4
-        assert sf_db.get_sf("PC88A", "Y_Ho") == 0.9

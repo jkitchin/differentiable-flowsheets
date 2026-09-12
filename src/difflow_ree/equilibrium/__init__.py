@@ -37,6 +37,7 @@ from difflow_ree.equilibrium.distribution import (
 )
 from difflow_ree.equilibrium.free_extractant import (
     ExtractantCapacityWarning,
+    FreeExtractantConvergenceWarning,
     FreeExtractantResult,
     check_loading_capacity,
     implied_loading_fraction,
@@ -124,6 +125,7 @@ __all__ = [
     "get_distribution_coefficients",
     "get_separation_factor",
     "ExtractantCapacityWarning",
+    "FreeExtractantConvergenceWarning",
     "FreeExtractantResult",
     "check_loading_capacity",
     "implied_loading_fraction",
