@@ -1,10 +1,22 @@
 # Rare Earth Element Properties
-# 10 Commercial REEs: La, Ce, Pr, Nd, Sm, Eu, Gd, Tb, Dy, Y
 #
-# Sources:
-# - Shannon (1976) ionic radii
-# - USGS mineral commodity summaries for prices
-# - CRC Handbook for physical properties
+# 15 elements: La, Ce, Pr, Nd, Sm, Eu, Gd, Tb, Dy, Ho, Er, Tm, Yb, Lu, Y.
+# Pm is deliberately absent -- it has no stable isotope and no process role.
+#
+# WHERE THESE NUMBERS COME FROM
+# Every field is tagged in the `provenance:` block at the foot of this file,
+# and every tag resolves to a full citation in `sources.yaml`. Query it:
+#
+#     from difflow_ree.provenance import explain
+#     explain("elements", "Dy.ionic_radius_pm")
+#
+# or, for the whole database at once:
+#
+#     python -m difflow_ree.provenance
+#
+# Tags used here: [S76] Shannon (1976) ionic radii; [CRC] CRC Handbook;
+# [IUPAC] IUPAC atomic weights; [CALC] computed from other tagged fields;
+# [EST] INDICATIVE ONLY, no identified source -- this covers every price.
 
 elements:
   La:
@@ -138,6 +150,84 @@ elements:
     oxide_mw: 225.81
     price_usd_kg: 35.0
 
+  # ---------------------------------------------------------------------
+  # Ho, Er, Tm, Yb, Lu added for the naphthenic acid / yttrium separation.
+  # That separation is Y against Ho/Er/Tm/Yb/Lu, so a database that stops at
+  # Dy cannot express it. `extractants.yaml` has carried measured
+  # naphthenic-acid coefficients for all five since before they were
+  # reachable here.
+  #
+  # Physical properties are [S76] and [CRC]; see `sources.yaml`.
+  # PRICES ARE INDICATIVE ONLY and tagged [EST] -- as are the prices of the
+  # original ten. Read the provenance block at the foot of this file before
+  # using any price in an economic calculation.
+  # ---------------------------------------------------------------------
+
+  Ho:
+    name: Holmium
+    atomic_number: 67
+    atomic_weight: 164.930
+    ionic_radius_pm: 90.1  # nearly identical to Y (90.0) -- see note in provenance
+    density: 8.795
+    melting_point: 1734
+    oxidation_states: [3]
+    group: heavy
+    oxide_formula: Ho2O3
+    oxide_mw: 377.86
+    price_usd_kg: 70.0
+
+  Er:
+    name: Erbium
+    atomic_number: 68
+    atomic_weight: 167.259
+    ionic_radius_pm: 89.0
+    density: 9.066
+    melting_point: 1802
+    oxidation_states: [3]
+    group: heavy
+    oxide_formula: Er2O3
+    oxide_mw: 382.52
+    price_usd_kg: 30.0
+
+  Tm:
+    name: Thulium
+    atomic_number: 69
+    atomic_weight: 168.934
+    ionic_radius_pm: 88.0
+    density: 9.321
+    melting_point: 1818
+    oxidation_states: [3]
+    group: heavy
+    oxide_formula: Tm2O3
+    oxide_mw: 385.87
+    price_usd_kg: 700.0  # thin market; the least reliable price in this file
+
+  Yb:
+    name: Ytterbium
+    atomic_number: 70
+    atomic_weight: 173.045
+    ionic_radius_pm: 86.8
+    density: 6.965  # anomalously low: divalent character in the metal
+    melting_point: 1097  # anomalously low, same reason
+    oxidation_states: [2, 3]  # Yb2+ is accessible, as for Sm and Eu
+    group: heavy
+    oxide_formula: Yb2O3
+    oxide_mw: 394.09
+    price_usd_kg: 20.0
+
+  Lu:
+    name: Lutetium
+    atomic_number: 71
+    atomic_weight: 174.967
+    ionic_radius_pm: 86.1  # smallest of the series
+    density: 9.841
+    melting_point: 1925
+    oxidation_states: [3]
+    group: heavy
+    oxide_formula: Lu2O3
+    oxide_mw: 397.93
+    price_usd_kg: 700.0
+
 # Element groups for process design
 groups:
   light:
@@ -149,7 +239,7 @@ groups:
     description: "Middle rare earths - intermediate behavior"
 
   heavy:
-    elements: [Tb, Dy, Y]
+    elements: [Tb, Dy, Ho, Er, Tm, Yb, Lu, Y]
     description: "Heavy rare earths + Y - higher K values, more valuable"
 
 # Lanthanide contraction factor
@@ -157,3 +247,66 @@ groups:
 lanthanide_contraction:
   description: "Systematic decrease in ionic radius across lanthanide series"
   effect: "Heavier REE have higher charge density, stronger extraction"
+
+# ---------------------------------------------------------------------------
+# PROVENANCE
+#
+# One rule per field. `pattern` is a dotted path into this file with `*` as a
+# single-segment wildcard; the MOST SPECIFIC matching rule wins (a rule with
+# more literal segments beats one with more wildcards; ties break on length).
+# `source` is a key in sources.yaml. Resolve with:
+#
+#     python -m difflow_ree.provenance
+#     >>> from difflow_ree.provenance import explain
+#     >>> explain("elements", "elements.Dy.ionic_radius_pm")
+#
+# Every leaf below `elements:` must match a rule; the test suite enforces it,
+# so a new field added without a rule fails CI rather than passing silently.
+# ---------------------------------------------------------------------------
+provenance:
+  rules:
+    # --- definitional -----------------------------------------------------
+    - {pattern: "elements.*.name",             source: DEF}
+    - {pattern: "elements.*.atomic_number",    source: DEF}
+    - {pattern: "elements.*.oxidation_states", source: DEF,
+       note: "Common states in hydrometallurgical process conditions. Ce(IV)
+              and Eu(II) are real and matter, but are handled in the redox
+              modules, not here."}
+    - {pattern: "elements.*.oxide_formula",    source: DEF}
+
+    # --- standard reference data -----------------------------------------
+    - {pattern: "elements.*.atomic_weight",  source: IUPAC,
+       locus: "Standard atomic weights 2021"}
+    - {pattern: "elements.*.ionic_radius_pm", source: S76,
+       locus: "Table 1; coordination number 6, oxidation state 3+"}
+    - {pattern: "elements.*.ionic_radius_4_pm", source: S76,
+       locus: "Table 1; coordination number 6, oxidation state 4+",
+       note: "Ce only. Ce(IV) is markedly smaller than Ce(III) (87 vs 101 pm),
+              which is why oxidative Ce removal ahead of the cascade works at
+              all, and is used by the redox modules rather than here."}
+    - {pattern: "elements.*.density",        source: CRC,
+       locus: "Physical Constants of Inorganic Compounds; g/cm3 at 298 K"}
+    - {pattern: "elements.*.melting_point",  source: CRC,
+       locus: "Physical Constants of Inorganic Compounds; degrees C"}
+
+    # --- computed ---------------------------------------------------------
+    - {pattern: "elements.*.oxide_mw", source: CALC,
+       note: "n_M * atomic_weight + n_O * 15.999, from this file's own
+              atomic_weight and oxide_formula. Reproduced to within
+              0.02 g/mol by test_oxide_mw_is_consistent."}
+
+    # --- no source --------------------------------------------------------
+    - {pattern: "elements.*.price_usd_kg", source: EST,
+       note: "*** NOT A SOURCED PRICE. *** Indicative oxide values of the
+              order that circulated in the late 2010s. REE prices move by
+              factors of several within a year and the thin-market elements
+              (Tm, Lu) have no public price at all. Any economic conclusion
+              that survives only at these numbers is an artifact."}
+
+    # --- difflow convention ----------------------------------------------
+    - {pattern: "elements.*.group",     source: CONV}
+    - {pattern: "groups.*.elements",    source: CONV}
+    - {pattern: "groups.*.description", source: CONV}
+    - {pattern: "lanthanide_contraction.*", source: S76,
+       note: "Prose restatement of the trend visible in the ionic_radius_pm
+              column above. Carries no numbers."}
