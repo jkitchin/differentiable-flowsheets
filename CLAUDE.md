@@ -561,10 +561,27 @@ all three methods. That negative result is the benchmark's main finding and
 the thing #251 turns on.
 
 Two traps it exposes, both worth knowing independently of that:
-- `tol` is an ABSOLUTE tear residual, so on a loop of gain `g` it understates
-  the remaining error by `1/(1-g)` (worse for a non-normal coupling, where it
-  is `||(I - M)^-1||`). At `g = 0.97` Wegstein stops inside `1e-8` and is 1%
-  out, reporting convergence and meaning it. `trace_recycle` pins it.
+- `tol` tests the STEP, not the error, so on a loop of gain `g` it understates
+  the remaining error by `1/(1-g)` (worse for a non-normal coupling, where the
+  worst case is `||(I - M)^-1||`). At `g = 0.97` Wegstein stops inside `1e-8`
+  and is 1% out, reporting convergence and meaning it. `trace_recycle` pins it.
+  Since #264 `solve` MEASURES that rather than leaving it to be inferred:
+  `error_probe` extra substitution passes after convergence give
+  `last_solve_gain` and `last_solve_error_estimate`, a `TearToleranceWarning`
+  fires when the error is past `tol` by 10x or more (a gain of 0.9 -- below
+  that is the step test's ordinary slack, and a warning on every solve is
+  noise), and `tol_basis="error"` tightens the step test until the measured
+  error is inside `tol`. Opt-in, because it costs iterations. Still an
+  ABSOLUTE test: the scale half of the trap is the caller's to set.
+  The extrapolation ratio is SIGNED (an oscillating loop is closer than its
+  step, not further), works on an expanding loop, and drops entries already at
+  round-off -- a ratio of noise lands near one, which is where `1/(1-s)` blows
+  up, and a tear carrying a pressure of 1e5 has such an entry most solves.
+- `signed_tear` was NOT a second instance of that trap. Its apparent 450x
+  non-normal amplification was its reference answer, written to six decimals
+  and so 4.4e-6 from `(I - M)^-1 . 1`; the solver lands 7.6e-9 away, inside its
+  own residual. Reference now at full float64 and the case audits at 1e-6 like
+  the other analytic ones (#264).
 - `clip_negative_flows` defaults to True and binds on the Wegstein and
   Anderson paths but NOT on the unaccelerated one -- deliberately (#263): it
   guards an *extrapolated* guess, and substitution makes none. Clipping there
