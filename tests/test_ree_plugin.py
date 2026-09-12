@@ -15,9 +15,13 @@ class TestREEDatabase:
         from difflow_ree import get_element, list_ree_elements
 
         elements = list_ree_elements()
-        assert len(elements) == 10
-        assert "Nd" in elements
-        assert "Dy" in elements
+        # 15: the fourteen stable lanthanides plus Y. Pm is deliberately
+        # absent -- no stable isotope, no process role.
+        assert set(elements) == {
+            "La", "Ce", "Pr", "Nd", "Sm", "Eu", "Gd",
+            "Tb", "Dy", "Ho", "Er", "Tm", "Yb", "Lu", "Y",
+        }
+        assert "Pm" not in elements
 
     def test_element_properties(self):
         """Test element property access."""

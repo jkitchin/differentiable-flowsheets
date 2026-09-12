@@ -813,7 +813,7 @@ class SeparationFactorDatabase:
 
         Args:
             yaml_path: Path to separation_factors.yaml. If None, uses default.
-            
+
         Raises:
             KeyError: If a pair is to be derived for an extractant with no
                 record in :class:`ExtractantDatabase`, or for an element that

@@ -208,3 +208,59 @@ industrial_sequences:
       - "Ammonium sulfate leach"
       - "Oxalate precipitation"
       - "Solvent extraction separation"
+
+# ---------------------------------------------------------------------------
+# PROVENANCE
+#
+# `pattern` is a dotted path with `*` as a single-segment wildcard; the MOST
+# SPECIFIC matching rule wins; `source` is a key in sources.yaml. Resolve with
+# `from difflow_ree.provenance import explain, audit`.
+#
+# *** THIS FILE NO LONGER CARRIES SEPARATION FACTORS. ***
+# It used to, and they disagreed with extractants.yaml by up to 8x; the
+# header at the top of this file records that disagreement and why it was
+# settled the way it was (#265). What is left here is a SELECTION -- which
+# pairs to report, at which conditions -- so the entries below are tagged
+# for what they now are, and the factors themselves inherit the provenance
+# of the `ph_coefficients` they are computed from.
+# ---------------------------------------------------------------------------
+provenance:
+  rules:
+    # The lists are a selection of pairs, not values: `adjacent_pairs` and
+    # `group_pairs` name which pairs to report and the factor is computed
+    # from the extractant's own `ph_coefficients` (#265). So the provenance
+    # of a reported number is that of the coefficient block, in
+    # extractants.yaml, and what is tagged here is the choice of pairs.
+    - {pattern: "separation_factors.*.adjacent_pairs", source: CALC,
+       note: "Which adjacent pairs to report. Each factor is derived as
+              D_i/D_j from extractants.yaml:ph_coefficients at the
+              `conditions` in this block -- see that file for the
+              provenance of the numbers themselves."}
+    - {pattern: "separation_factors.*.group_pairs", source: CALC,
+       note: "Which non-adjacent (group-separation) pairs to report;
+              derived the same way as adjacent_pairs."}
+    # An authored override is written as a mapping rather than a list entry.
+    # There are none today, on purpose. Should one be added it lands here
+    # rather than going untagged -- and SF_APPROX is the worst assumption,
+    # which is the right default for a number with no citation beside it.
+    - {pattern: "separation_factors.*.adjacent_pairs.*", source: SF_APPROX}
+    - {pattern: "separation_factors.*.group_pairs.*",    source: SF_APPROX}
+    - {pattern: "separation_factors.*.conditions.*",     source: CONV,
+       note: "The point at which the coefficients are evaluated, so
+              changing one of these changes every factor in its block."}
+
+    - {pattern: "stages_for_99_purity.*.*", source: CALC,
+       note: "Fenske minimum stages from the adjacent_pairs factors above:
+              N_min = ln[(x_i/x_j)_prod * (x_j/x_i)_feed] / ln(beta).
+              Tabulated at the betas of the day; since #265 the betas
+              themselves are derived, so these are indicative and the
+              live figure comes from the database. Inherits every weakness
+              of the beta it is computed from, and is a THERMODYNAMIC
+              FLOOR -- a real cascade needs more."}
+
+    - {pattern: "temperature_sensitivity.*", source: SF_APPROX}
+    - {pattern: "ph_sensitivity.*",          source: SF_APPROX}
+    - {pattern: "loading_effects.*",         source: SF_APPROX}
+    - {pattern: "industrial_sequences.*.*",  source: CONV,
+       note: "Prose descriptions of the conventional processing routes.
+              No numbers."}

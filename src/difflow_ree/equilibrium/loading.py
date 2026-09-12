@@ -384,6 +384,51 @@ EXTRACTANT_CAPACITIES = {
             "Y": 8.0,
         },
     },
+    "naphthenic_acid": {
+        # DERIVED FROM THE EXTRACTANT RECORD, NOT MEASURED, AND NOT INDEPENDENT
+        # OF IT. There is no Langmuir study of naphthenic acid / REE in any
+        # source retrieved for data/extractants.yaml. Rather than invent a
+        # ladder, these are back-computed from that record's own distribution
+        # ratios at its design point, using the trace-loading limit of the
+        # Langmuir isotherm, q = q_max K_L c / (1 + sum K_L c), where
+        # D = q/c -> K_L = D / q_max as c -> 0:
+        #
+        #     K_L = D(pH 4.5, 0.5 M HA, 298 K) / (0.5 M * 1/3) = 6 * D
+        #
+        # So these carry EXACTLY the information already in the `a` ladder --
+        # which is MEASURED (Zhang, Zhao & Schreiner 2016, "Separation
+        # Hydrometallurgy of Rare Earth Elements", Table 4.36; read the
+        # naphthenic_acid block in data/extractants.yaml before using any of
+        # it) -- and NO more. Fitting them against that ladder is circular.
+        # They exist so that the competitive-loading path has a consistent set
+        # of constants for this extractant, and they must be recomputed if the
+        # `a` values change.
+        #
+        # RECOMPUTED when the `a` ladder was replaced with measured values.
+        # The previous set came from a constructed ladder monotonic in atomic
+        # number; these are not monotonic, because the measurement is not.
+        # K_L peaks at Sm and is lowest for Y.
+        "typical_K_L": {
+            "La": 10.02,
+            "Ce": 17.23,
+            "Pr": 23.82,
+            "Nd": 29.56,
+            "Sm": 43.37,
+            "Eu": 37.06,
+            "Gd": 29.00,
+            "Tb": 28.93,
+            "Dy": 25.92,
+            # Ho-Lu are not in data/elements.yaml yet; see the same note on the
+            # naphthenic_acid ph_coefficients block.
+            "Ho": 21.23,
+            "Er": 18.28,
+            "Tm": 17.58,
+            "Yb": 17.72,
+            "Lu": 16.25,
+            # Y is the lowest, which is the entire point of this extractant.
+            "Y": 8.20,
+        },
+    },
 }
 
 
