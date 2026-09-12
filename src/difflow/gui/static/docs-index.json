@@ -1,5 +1,5 @@
 {
- "n_sections": 874,
+ "n_sections": 875,
  "sections": [
   {
    "anchor": "convergence-and-initialization",
@@ -6696,7 +6696,15 @@
    "targets": [
     "separation-factors"
    ],
-   "text": "The separation factor SF = D1/D2 determines separation feasibility:\n\n```python\nfrom difflow_ree import REEDistribution\n\ndist = REEDistribution(extractant=\"PC88A\", elements=(\"Nd\", \"Pr\"))\n\n# Separation factor at pH 3.0\nSF = dist.get_separation_factor(\"Nd\", \"Pr\", pH=3.0)\nprint(f\"SF(Nd/Pr) = {SF:.2f}\")\n\n# Find optimal pH for separation\nopt_pH, max_SF = dist.optimal_pH_for_separation(\"Nd\", \"Pr\", pH_range=(1.0, 5.0))\nprint(f\"Optimal pH: {opt_pH:.2f}, Max SF: {max_SF:.2f}\")\n```\n\n\n---\n\n(mass-action-closure)="
+   "text": "The separation factor SF = D1/D2 determines separation feasibility:\n\n```python\nfrom difflow_ree import REEDistribution\n\ndist = REEDistribution(extractant=\"PC88A\", elements=(\"Nd\", \"Pr\"))\n\n# Separation factor at pH 3.0\nSF = dist.get_separation_factor(\"Nd\", \"Pr\", pH=3.0)\nprint(f\"SF(Nd/Pr) = {SF:.2f}\")\n\n# Find optimal pH for separation\nopt_pH, max_SF = dist.optimal_pH_for_separation(\"Nd\", \"Pr\", pH_range=(1.0, 5.0))\nprint(f\"Optimal pH: {opt_pH:.2f}, Max SF: {max_SF:.2f}\")\n```"
+  },
+  {
+   "anchor": "the-tabulated-factors-are-derived-from-the-same-correlations",
+   "heading": "The tabulated factors are derived from the same correlations",
+   "path": "Rare Earth Element (REE) Unit Operations > Equilibrium Models > Separation Factors > The tabulated factors are derived from the same correlations",
+   "source": "unit-operations-ree.md",
+   "targets": [],
+   "text": "`get_sf_database()` reports a factor per pair at one declared set of conditions,\nwhich is convenient for screening. Those numbers used to be authored by hand in\n`separation_factors.yaml`, independently of the `ph_coefficients` in\n`extractants.yaml` that every unit operation computes `D` from \u2014 two hand-tuned\ndescriptions of the same physics, never reconciled, disagreeing by up to 8x\n(#265). The coefficients ran 1.3\u20132.8x high on 24 of 27 pairs; all three Y/Dy\npairs ran 4\u20138x low, which is a disagreement about that pair rather than a\ncalibration offset. Which number you got depended on which API you reached for.\n\nNeither set was measured, so there was no right one to keep. The tie is broken\nby the coefficients being what the simulator actually runs on: a factor derived\nfrom them describes the model you are about to solve, and one authored beside\nthem describes nothing else in the package. So `separation_factors.yaml` now\ndeclares *which* pairs to report and *at what conditions*, and the values come\nfrom the same `get_separation_factor` as the code above:\n\n```python\nsf_db = get_sf_database()\ndata = sf_db.get(\"PC88A\")\ndata.conditions            # {'pH': 3.5, 'temperature_K': 298, 'concentration_M': 0.5}\nsf_db.get_sf(\"PC88A\", \"Nd_Pr\")   # 4.03, the coefficients' own answer\n\"Nd_Pr\" in data.derived    # True\n```\n\n`conditions` is not decoration: it is the point the coefficients are evaluated\nat, so a factor quoted from this table is only the factor at that pH. For any\nother pH, ask `REEDistribution` directly.\n\nA pair given an explicit value in the YAML is used as authored and left out of\n`derived`. None ship with difflow_ree: an override is a claim that a measured\nnumber exists which the correlations cannot reproduce, and it needs a citation\nbeside it.\n\n---\n\n(mass-action-closure)="
   },
   {
    "anchor": "mass-action-equilibrium-closure-196",
@@ -7212,7 +7220,7 @@
    "targets": [
     "adding-separation-factors"
    ],
-   "text": "Separation factor data can be added incrementally. You can add individual pairs to existing extractants or create complete entries for new ones.\n\nAdding pairs to an existing extractant:\n\n```python\nfrom difflow_ree import get_sf_database\n\nsf_db = get_sf_database()\n\n# Add Ho separation factors to PC88A (from literature)\nsf_db.add_pair(\"PC88A\", \"Ho_Dy\", 1.4, adjacent=True, stages_99=20)\nsf_db.add_pair(\"PC88A\", \"Y_Ho\", 0.9, adjacent=True)\n\n# Add a non-adjacent group pair\nsf_db.add_pair(\"PC88A\", \"Ho_Nd\", 10.5, adjacent=False)\n\n# Query the new data\nprint(sf_db.get_sf(\"PC88A\", \"Ho_Dy\"))           # 1.4\nprint(sf_db.get_stages_needed(\"PC88A\", \"Ho_Dy\"))  # 20\n```\n\nCreating a complete entry for a new or custom extractant:\n\n```python\nsf_db.add_separation_factors(\n    extractant=\"MyExtractant\",\n    conditions={\"pH\": 3.0, \"temperature_K\": 298, \"concentration_M\": 0.5},\n    adjacent_pairs={\"Ho_Dy\": 1.4, \"Y_Ho\": 0.9},\n    group_pairs={\"Ho_La\": 50.0},\n    stages_for_99_purity={\"Ho_Dy\": 20},\n)\n```\n\n(custom-data-complete-workflow)="
+   "text": "Separation factor data can be added incrementally. You can add individual pairs to existing extractants or create complete entries for new ones.\n\nAdding pairs to an existing extractant:\n\nAnything added this way is an **authored** factor, used as given rather than\nderived from the extractant's correlations (#265). Reach for it when you have a\n*measured* number the correlations cannot reproduce; when they can, adding the\nelement to the extractant (`add_element_to_extractant`, above) keeps one\ndescription of the physics instead of two, and every pair involving it follows.\n\n```python\nfrom difflow_ree import get_sf_database\n\nsf_db = get_sf_database()\n\n# Add Ho separation factors to PC88A (from literature)\nsf_db.add_pair(\"PC88A\", \"Ho_Dy\", 1.4, adjacent=True, stages_99=20)\nsf_db.add_pair(\"PC88A\", \"Y_Ho\", 0.9, adjacent=True)\n\n# Add a non-adjacent group pair\nsf_db.add_pair(\"PC88A\", \"Ho_Nd\", 10.5, adjacent=False)\n\n# Query the new data\nprint(sf_db.get_sf(\"PC88A\", \"Ho_Dy\"))           # 1.4\nprint(sf_db.get_stages_needed(\"PC88A\", \"Ho_Dy\"))  # 20\n```\n\nCreating a complete entry for a new or custom extractant:\n\n```python\nsf_db.add_separation_factors(\n    extractant=\"MyExtractant\",\n    conditions={\"pH\": 3.0, \"temperature_K\": 298, \"concentration_M\": 0.5},\n    adjacent_pairs={\"Ho_Dy\": 1.4, \"Y_Ho\": 0.9},\n    group_pairs={\"Ho_La\": 50.0},\n    stages_for_99_purity={\"Ho_Dy\": 20},\n)\n```\n\n(custom-data-complete-workflow)="
   },
   {
    "anchor": "complete-workflow",
