@@ -315,6 +315,81 @@ streams = fs.solve(clip_negative_flows=False)   # signed tear flows
 If a solve with signed flows will not converge and nothing else explains it,
 this is the first thing to check.
 
+### Measuring the error, not the step
+
+`tol` tests the max-norm of $g(x) - x$, the **step** between successive tear
+iterates. The quantity a caller cares about is the **error**, $x^* - x$, and
+those are not the same number:
+
+$$x^* - x = (I - M)^{-1}\left(g(x) - x\right), \qquad M = \frac{\partial g}{\partial x}$$
+
+For a loop with one dominant mode of gain $g$ that is a factor of $1/(1-g)$:
+33 at a gain of 0.97, 1000 at 0.999. A solve that stops inside `1e-8` on such a
+loop reports convergence, means it, and is decades outside the tolerance it was
+given.
+
+After a solve converges, `solve` spends `error_probe` extra plain-substitution
+passes measuring that factor rather than assuming it (#264):
+
+$$r_j = g(x_j) - x_j, \quad x_{j+1} = g(x_j), \qquad
+x^* - x_0 = \sum_j r_j \approx \sum_{j<k} r_j + r_{k-1}\frac{s}{1-s}$$
+
+with $s = \langle r_{k-2}, r_{k-1}\rangle / \langle r_{k-2}, r_{k-2}\rangle$ the
+*signed* ratio of the dominant mode. Two passes is the default and is enough
+for a loop with one dominant mode; `error_probe=0` skips it.
+
+```python
+streams = fs.solve(tol=1e-8, acceleration="wegstein")
+fs.last_solve_residual        # 9.3e-09  -- the step, which met tol
+fs.last_solve_gain            # 0.97
+fs.last_solve_error_estimate  # 3.0e-07  -- the error, which did not
+```
+
+Three details worth knowing, because each is a way an estimator like this goes
+wrong:
+
+- **The ratio is signed.** An oscillating loop has $s < 0$, so $1/(1-s)$ is
+  *less* than one and the answer sits closer than the step suggests. A ratio of
+  norms would put such a solve on the wrong side and warn about it.
+- **It works on an expanding loop too.** $r/(1-s)$ is the analytic continuation
+  of a Neumann sum that does not converge for $|s| > 1$; a map with $s = 3$ has
+  its fixed point half a residual away, not infinitely far.
+- **Entries already at round-off are dropped.** They say nothing about the
+  error, and a ratio taken from floating-point noise lands near one — which is
+  exactly where $1/(1-s)$ blows up. A tear carrying a pressure of $10^5$
+  alongside flows of order one has such an entry on almost every solve.
+
+#### The warning
+
+A converged solve whose measured error is past `tol` raises
+`TearToleranceWarning` — but only when the error is at least ten times the
+step, which is a gain of 0.9 or more. Below that the gap is the ordinary slack
+of a step test (the unaccelerated path deliberately stops on
+$|g(x)-x| < \mathrm{tol}\,(1+|x|)$), and a warning that fires on every solve is
+read as noise exactly when it is not. Across the corpus — eleven cases times
+three accelerations — it fires once, on the one solve that is genuinely wrong.
+
+#### Asking for the error instead
+
+`tol_basis="error"` makes `tol` mean what it reads as. When the probe says the
+answer is outside it, `solve` tightens its step test by the factor just
+measured and solves again, warm-started, up to three times:
+
+```python
+fs.solve(tol=1e-8, tol_basis="error")    # on trace_recycle, gain 0.97
+# 53 iterations -> 71, error estimate 3.0e-07 -> 9.7e-09
+```
+
+It is opt-in because it costs iterations: a loop that converges today needs
+more of them to satisfy it, and changing that for every existing caller is not
+a cost to impose silently.
+
+It is also still an **absolute** test. On a tear whose converged value is
+$3\times10^{-5}$, an error of `1e-8` is a relative error of $3\times10^{-4}$ —
+the scale half of the trap, which is the caller's to set with `tol` (or with
+`Flowsheet(species_order, default_flow=...)` for a trace loop). The gain half
+is what is measured here.
+
 ### Damping
 
 `damping` takes a step only part of the way toward the substitution value:
@@ -471,6 +546,8 @@ converged:
 | `last_solve_iterations` | iterations used; equals `max_iter` when it did not converge |
 | `last_solve_method` | `"anderson"`, `"wegstein"`, `"none"`, `"fixed_point (traced)"`, or `"direct"` for a recycle-free sequential solve |
 | `last_solve_tear_streams` | the tear (recycle destination) names |
+| `last_solve_gain` | measured signed gain of the tear map at the solution, or `None` where there was nothing to measure |
+| `last_solve_error_estimate` | measured error left in the tear — the number `tol` reads as if it were |
 
 The tri-state `last_solve_converged` is the one to test against `is False`
 rather than falsy: `None` means "not judged", not "failed".
@@ -731,24 +808,39 @@ Worth recording, because these are the families most often assumed difficult:
 
 ### The trap the corpus exposes
 
-`tol` is an **absolute** residual on the tear, and on a high-gain loop that is
-much weaker than it looks. A step of $d$ on a loop of gain $g$ leaves an error
-of about $d/(1-g)$, so at $g = 0.97$ the residual understates the remaining
-error by a factor of 33.
+`tol` is a residual on the **step**, and on a high-gain loop that is much
+weaker than it looks. A step of $d$ on a loop of gain $g$ leaves an error of
+about $d/(1-g)$, so at $g = 0.97$ the residual understates the remaining error
+by a factor of 33.
 
 `trace_recycle` is built on exactly that: gain 0.97 on a tear whose converged
 value is about $3 \times 10^{-5}$. Wegstein stops with a residual inside
 `1e-8`, reports convergence, and is about 1% out. It is right on its own terms
 — the step really is that small — and wrong on yours.
 
-On a loop where you know the gain is near one, tighten `tol` by roughly
-$1/(1-g)$, or audit the answer rather than the residual.
+Since #264 the solve measures that instead of leaving you to infer it. See
+[Measuring the error, not the step](#measuring-the-error-not-the-step): the
+same solve now reports `last_solve_gain = 0.97` and
+`last_solve_error_estimate = 3.0e-7`, warns that it is outside the tolerance
+it was given, and `tol_basis="error"` reaches it.
 
-For a multicomponent tear the factor is $\lVert (I-M)^{-1} \rVert$ rather than
-$1/(1-\rho)$, and for a non-normal $M$ those are not close: `signed_tear` has
-$\rho = 0.75$, which suggests a factor of 4, and actually leaves a relative
-error of $1.2 \times 10^{-6}$ from a residual of $10^{-8}$ — a factor of about
-450.
+**What was *not* a second instance of this.** `signed_tear` was read as the
+non-normal version of the same trap: $\rho = 0.75$ suggests an amplification
+of 4, and the case appeared to leave a relative error of $1.2 \times 10^{-6}$
+from a residual of $10^{-8}$ — a factor of about 450, blamed on
+$\lVert (I-M)^{-1} \rVert$ being the real amplification rather than
+$1/(1-\rho)$. It was not. The case's reference answer was written out to six
+decimals, which is itself $4.4 \times 10^{-6}$ from $(I-M)^{-1}\mathbf{1}$, and
+the audit was measuring that rounding. Plain substitution lands
+$7.6 \times 10^{-9}$ from the answer — *inside* its own tear residual, an
+amplification of 0.57. The reference is now at full precision and the case
+audits at `1e-6` like every other analytic one.
+
+The general point stands: for a multicomponent tear the worst-case
+amplification is $\lVert (I-M)^{-1} \rVert$ rather than $1/(1-\rho)$. The
+corpus just does not happen to contain an example of it, and the measured
+estimate reports the amplification along the residual actually present rather
+than a worst case over directions that are not.
 
 ### Adding a case
 

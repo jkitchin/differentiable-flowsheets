@@ -471,6 +471,45 @@ class TestTheFindings:
         assert not outcome.correct, "and the audit should disagree"
         assert outcome.verdict == "WRONG"
 
+    @pytest.mark.slow
+    def test_the_solver_could_have_known_it_was_wrong(self):
+        """#264: the same solve, with the error measured rather than assumed.
+
+        The audit is the case's own analytic answer and is available only
+        because someone wrote it down. The error estimate is measured from
+        the flowsheet itself, and it agrees --- which is what makes it
+        usable on a flowsheet nobody has an analytic answer for.
+        """
+        outcome = run_case(get_case("trace_recycle"), acceleration="wegstein",
+                           initialization="unit")
+        assert outcome.verdict == "WRONG"
+        assert outcome.gain == pytest.approx(0.97, abs=1e-6)
+        # The tear settles near 3.33e-5, so a relative audit error of ~9e-3
+        # is an absolute ~3e-7 -- what the estimate reads, from a residual
+        # of 9.3e-9.
+        assert outcome.error_estimate == pytest.approx(3.0e-7, rel=0.05)
+        assert outcome.error_estimate > 30 * outcome.residual
+
+    @pytest.mark.slow
+    def test_the_signed_tear_amplification_was_the_reference_not_the_solver(self):
+        """#264: ``signed_tear`` was measuring a rounded constant.
+
+        Its ``tol`` was loosened to 1e-4 for a 1.2e-6 error attributed to
+        ``M`` being non-normal. The reference was written to six decimals
+        and is itself 4.4e-6 from the answer; plain substitution lands
+        7.6e-9 away, *inside* its own tear residual rather than 450 times
+        it. With the reference at full precision the case audits at 1e-6
+        like every other analytic one.
+        """
+        outcome = run_case(get_case("signed_tear"), acceleration="none",
+                           initialization="unit")
+        assert outcome.passed
+        assert outcome.balance_error < 1e-8
+        assert get_case("signed_tear").tol == 1e-6
+        # Measured amplification below one: the error is smaller than the
+        # step, not 450 times it.
+        assert outcome.error_estimate < outcome.residual
+
 
 @pytest.fixture(scope="module")
 def full_grid() -> Report:
