@@ -8,8 +8,8 @@ This document provides comprehensive documentation for the `difflow_ree` plugin,
 
 The `difflow_ree` plugin provides:
 
-- **Database** of 10 commercial REE properties (La, Ce, Pr, Nd, Sm, Eu, Gd, Tb, Dy, Y)
-- **4 extractant systems**: D2EHPA, PC88A, Cyanex272, TBP
+- **Database** of 15 REE properties (La, Ce, Pr, Nd, Sm, Eu, Gd, Tb, Dy, Ho, Er, Tm, Yb, Lu, Y)
+- **5 extractant systems**: D2EHPA, PC88A, Cyanex272, TBP, naphthenic acid
 - **pH-dependent distribution coefficient models**
 - **Loading and speciation corrections**
 - **A mass-action equilibrium closure** with the reaction network carried as
@@ -51,7 +51,8 @@ from difflow_ree import get_element, list_ree_elements
 
 # List available elements
 print(list_ree_elements())
-# ['La', 'Ce', 'Pr', 'Nd', 'Sm', 'Eu', 'Gd', 'Tb', 'Dy', 'Y']
+# ['La', 'Ce', 'Pr', 'Nd', 'Sm', 'Eu', 'Gd', 'Tb', 'Dy', 'Y',
+#  'Ho', 'Er', 'Tm', 'Yb', 'Lu']
 
 # Get element properties
 nd = get_element("Nd")
@@ -79,7 +80,7 @@ Four industrial extractants are supported:
 from difflow_ree import get_extractant, list_extractants
 
 print(list_extractants())
-# ['D2EHPA', 'PC88A', 'Cyanex272', 'TBP']
+# ['D2EHPA', 'PC88A', 'Cyanex272', 'TBP', 'naphthenic_acid']
 
 d2ehpa = get_extractant("D2EHPA")
 print(f"Full name: {d2ehpa.full_name}")
@@ -159,6 +160,92 @@ print(get_extractant("TBP").requires_nitrate, get_extractant("TBP").reference_ni
 # True 3.0
 print(normalize_mechanism("acidic_phosphonic"))  # 'cation_exchange'
 ```
+
+---
+
+(ree-provenance)=
+### Where the Numbers Come From
+
+The data files mix numbers of very different pedigree. Some are copied from a
+named table in a named book. Some are computed from other numbers in the same
+file. Some were invented so that a demo would converge. Read as bare YAML they
+look identical, and that is exactly how an invented number ends up behind a
+published stage count.
+
+Every field is tagged. `explain` resolves one field to a citation:
+
+```python
+from difflow_ree import explain
+
+p = explain("extractants", "extractants.naphthenic_acid.ph_coefficients.Dy.a")
+print(p.source, p.cls, p.publishable)
+# Z1 MEASURED True
+print(p.locus)
+# Sec. 4.7, Table 4.36, system 1
+
+p = explain("extractants", "extractants.D2EHPA.ph_coefficients.Dy.a")
+print(p.source, p.cls, p.publishable)
+# HAND_TUNED HAND_TUNED False
+```
+
+`cls` answers the only question that matters at the call site: **may a
+published number rest on this?**
+
+| class | meaning | publishable |
+|---|---|---|
+| `MEASURED` | reported as an experimental result in a named source | yes |
+| `REFERENCE` | standard reference datum (atomic weights, ionic radii) | yes |
+| `DERIVED` | computed from other tagged values in this database | yes |
+| `CONVENTION` | a bookkeeping choice, not a fact about the world | yes |
+| `CONSTRUCTED` | built to satisfy published constraints; not itself measured | **no** |
+| `ESTIMATED` | indicative order of magnitude, no identified source | **no** |
+| `HAND_TUNED` | chosen to make code behave; no external basis at all | **no** |
+
+The survey, for the whole database or one file:
+
+```python
+from difflow_ree import coverage, audit, unsourced
+
+coverage()
+# {'HAND_TUNED': 161, 'ESTIMATED': 24, 'CONSTRUCTED': 62,
+#  'CONVENTION': 133, 'DERIVED': 37, 'REFERENCE': 180, 'MEASURED': 76}
+
+len(unsourced())            # 247 of 673 fields must not back a published number
+audit(source="Z1")          # every field traceable to Zhang (2016)
+audit(cls="HAND_TUNED")     # every number nobody can defend
+```
+
+or from the shell:
+
+```bash
+python -m difflow_ree.provenance
+python -m difflow_ree.provenance --cls HAND_TUNED
+python -m difflow_ree.provenance --dataset elements --explain Dy.ionic_radius_pm
+```
+
+**Three things this makes visible that were previously invisible.**
+
+1. Of the five extractants, only two carry coefficients traceable to a named
+   table: `naphthenic_acid` (Zhang 2016 Table 4.36, all fifteen elements) and
+   `TBP` (Kraikaew 2005 for `a`, Ganesh & Pandey 2019 for `d`). **D2EHPA,
+   PC88A and Cyanex272 do not.** Their coefficients were invented to make
+   demonstrations look right. They are fine for exercising the solver, testing
+   gradients and teaching the API, and must not appear behind a design number.
+
+2. **Every price is `ESTIMATED`** — element prices and solvent costs alike.
+   Solvent inventory is one of the larger terms in a TEA, so any economic
+   conclusion that survives only at these numbers is an artifact.
+
+3. `separation_factors.yaml` and `extractants.yaml` **disagree**. Recompute any
+   adjacent pair from the `ph_coefficients` at the conditions each separation
+   factor block states, and you get 1.3x to 2.8x the tabulated value (4.8x for
+   Cyanex272 Sm/Nd), and 4x to 8x in the *opposite* direction for every Y/Dy
+   pair. They are two independently hand-tuned descriptions of one set of
+   physics that were never reconciled.
+
+The tagging is a maintained obligation rather than a comment that rots: adding
+a field to a data file without a matching rule fails CI, as does citing a
+source key that is not in `data/sources.yaml`.
 
 ---
 
@@ -547,6 +634,82 @@ plt.ylabel("Distribution Coefficient D")
 plt.legend()
 plt.grid(True)
 ```
+
+(ph-validity-range)=
+##### The pH correlation has a validity window, and it is now enforced (#262)
+
+Every cation-exchange record declares a `valid_ph_range` — the window its
+`ph_coefficients` were meant to describe:
+
+```python
+from difflow_ree import get_extractant
+{e: get_extractant(e).valid_ph_range
+ for e in ("D2EHPA", "PC88A", "Cyanex272", "TBP", "naphthenic_acid")}
+# {'D2EHPA': (1.0, 5.0), 'PC88A': (1.5, 5.5), 'Cyanex272': (3.0, 7.0),
+#  'TBP': (0.5, 4.0), 'naphthenic_acid': (4.0, 5.0)}
+```
+
+TBP's window is recorded but never checked: it is solvating, its correlation is
+driven by nitrate activity and carries no pH term at all, so there is nothing
+to extrapolate.
+
+Until #262 that field was loaded into `database.Extractant` and then read by
+nothing, so a circuit could be operated at `stripping_pH=0.3` against a
+quadratic fitted over `[1.5, 5.5]` and get a silent answer. That is not a small
+error: with `b = 2.55` for PC88A, **one pH unit outside the window moves `D` by
+two and a half decades**, and the failure is quiet — `D` stays finite, positive
+and plausible-looking all the way down.
+
+```{warning}
+`examples/10_bastnasite_separation.ipynb` did exactly this, at all three of its
+section pH values. Its product stream came out at 1e-22 mol/s of Nd, a
+`if nd_mass_yr > 0` guard let it through, and a break-even calculation divided
+by it and printed a price of `$2252838774866486493184/kg`. The notebook now
+operates inside the window and asserts that the check stays quiet.
+```
+
+`REEDistribution.get_D` now reports pH against that window through the same
+`on_out_of_range` setting as the ionic-strength check:
+
+```python
+d = REEDistribution(extractant="PC88A", elements=("Nd",))
+d.get_D("Nd", pH=3.0)      # inside [1.5, 5.5], silent
+d.get_D("Nd", pH=0.3)      # UserWarning: pH minimum 0.3 is outside ... (#262)
+
+REEDistribution(extractant="PC88A", elements=("Nd",), on_out_of_range="raise")
+REEDistribution(extractant="PC88A", elements=("Nd",), on_out_of_range="ignore")
+```
+
+Three things about it differ from the ionic-strength check above, each
+deliberately:
+
+* **It is a report, not a guard. pH is never clamped.** Ionic strength is
+  clamped because raw Davies *inverts* past 1.94 M, so extrapolating it is
+  qualitatively wrong. Extrapolating the pH quadratic is merely inaccurate, and
+  clamping pH would silently relocate a flowsheet's operating point — a worse
+  failure than an out-of-range number the caller can see.
+* **A concrete array is checked at both ends**, not just its maximum, so a
+  per-stage pH profile that leaves the window anywhere is reported.
+* **An abstract tracer is passed over in silence.** `ionic_strength` defaults to
+  `None`, so its check is opt-in and a traced value means the caller asked for a
+  correction they cannot verify. `pH` is mandatory and is this library's primary
+  differentiation variable — pH and `n_stages` are both advertised as
+  continuous, traceable decisions — so warning on a tracer would fire on every
+  `grad`/`jit`/`vmap` of every REE circuit and train users to filter the
+  category that also carries the concrete report.
+
+```{note}
+The flowsheet templates' default `stripping_pH=0.5` is *below* D2EHPA's
+`[1, 5]`, so `ExtractStripCircuit` and `ExtractScrubStripCircuit` warn on their
+own defaults. That is the check working: a strip at pH 0.5 against those
+coefficients is a half-decade extrapolation. The default was left as it is
+because changing it would move numeric results throughout the package; pass a
+`stripping_pH` inside the window, or `on_out_of_range="ignore"`, when you do
+not want the report. `tests/ree/test_kremser_temp_bugs.py::TestStripperKremser::test_stripping_at_low_pH`
+extrapolates on purpose and is expected to warn.
+```
+
+Tests: `tests/ree/test_ph_validity_range.py`.
 
 (separation-factors)=
 ### Separation Factors
@@ -2060,7 +2223,7 @@ are not traceable.
 (custom-elements-and-data)=
 ## Custom Elements and Data
 
-The built-in database covers 10 commercial REEs and 4 extractant systems, but many applications require elements or extractant data not included by default. The `difflow_ree` plugin provides a runtime API for adding your own literature data, following the same pattern as the existing `create_custom_extractant` / `add_extractant` workflow.
+The built-in database covers 15 REEs and 5 extractant systems, but coverage is uneven -- only naphthenic acid carries coefficients for all fifteen; the three acidic extractants stop at Dy and Y -- and many applications require elements or extractant data not included by default. The `difflow_ree` plugin provides a runtime API for adding your own literature data, following the same pattern as the existing `create_custom_extractant` / `add_extractant` workflow.
 
 (adding-a-custom-element)=
 ### Adding a Custom Element
@@ -2230,37 +2393,111 @@ The plugin includes economic analysis tools:
 ```python
 from difflow_ree import (
     estimate_capex,
+    capex_basis,
     estimate_opex,
     calculate_revenue,
     calculate_profit,
     minimum_selling_price,
 )
 
-# Equipment costs
+# Capital cost. `scope` is the most consequential argument -- see below.
 capex = estimate_capex(
-    n_mixer_settlers=20,
-    mixer_settler_volume=5.0,  # m³
-    precipitation_capacity=100.0,  # kg/hr
+    annual_ree_tonnes=500.0,
+    n_stages_extraction=8,
+    n_stages_scrubbing=4,
+    n_stages_stripping=4,
+    include_precipitation=False,   # selling concentrate, not finished oxide
+    year=2024,
+    scope="separation_plant",
 )
+print(capex["total"] / 1e6, "M$")
 
-# Operating costs
+# Operating cost. Mirror include_precipitation, or the plant is charged for
+# precipitant it has no capital for.
 opex = estimate_opex(
-    ree_throughput=200.0,  # tonnes/year
-    extractant_consumption=50.0,  # kg/year
-    acid_consumption=1000.0,  # kg/year
+    annual_ree_tonnes=500.0,
+    capex=capex["total"],
+    extractant="PC88A",
+    include_precipitation=False,
 )
 
-# Revenue from products
-revenue = calculate_revenue(
-    nd_production=50.0,  # kg/year
-    dy_production=10.0,
-    nd_price=100.0,  # $/kg
-    dy_price=350.0,
-)
+# Revenue from a product stream (mol/s by element, contained-oxide basis)
+revenue = calculate_revenue({"Nd": 0.02, "Pr": 0.006})
 
 # Profitability
-profit = calculate_profit(revenue, opex, capex, years=10)
+profit = calculate_profit(revenue["total"], opex["total"], capex["total"])
+msp = minimum_selling_price(opex["total"], capex["total"],
+                            annual_production_kg=500e3, target_roi=0.15)
 ```
+
+### Battery limits decide the answer
+
+`estimate_capex` takes its *level* from a disclosed project cost and moves it
+to the requested capacity by the 0.6 power law and to the requested year by a
+CEPCI ratio. Three anchors are available through `scope`, and at the same
+capacity they differ by more than a factor of ten -- not because they disagree
+about one plant, but because they draw the battery limits around different
+amounts of plant:
+
+| `scope` | Anchor | Encloses |
+|---|---|---|
+| `"sx_retrofit"` | Energy Fuels White Mesa Phase 1, $16 M as-built for 4,500 t/yr REO **feed** | The mixer-settler trains and their tanks, pumps, piping and installation. Buildings, power, utilities, effluent treatment and the licence already existed. |
+| `"separation_plant"` (default) | Avalon Nechalacho Geismar PFS, US$302 M (Q4-2011 quotations, ±25 % claimed) for 10,000 t/yr **separated** REO -- 98 % recovery, so feed and product coincide | A standalone separation refinery: the cascade plus precipitation and calcination, reagent handling, effluent treatment, civils, electrical, utilities, engineering and contingency. No mine, no concentrator, no cracking plant. |
+| `"integrated"` | Energy Fuels Phase 2, $410 M Class 3 BFS for ~7,554 t/yr separated products | The above plus monazite cracking and leaching. |
+
+`capex_basis(scope)` returns the anchor, its citation key in
+`difflow_ree/data/sources.yaml`, its capacity basis, its `includes` and
+`excludes` lists, and the accuracy range. Read it before quoting a number.
+
+Two traps the arguments cannot protect you from:
+
+- **Capacity basis.** The retrofit anchor is quoted per tonne of REO *fed*;
+  the other two per tonne of separated product. For a bastnasite circuit those
+  differ by a factor of several, so scaling a product tonnage against a feed
+  anchor silently undersizes the plant.
+- **Estimate class.** Capacity-factoring a single project is an AACE 18R-97
+  Class 5 method however well defined the anchor was. `capex_basis()` reports
+  `derived_class` and `derived_accuracy` (about -50 % / +100 %) alongside the
+  anchor's own tighter class, and the derived one is the one to quote.
+
+Dropping a section with `include_precipitation=False` or
+`include_ce_removal=False` reduces the total by that section's share of the
+anchor's scope. It does not reallocate the money over the rows that remain --
+that would quote the price of a plant with the section to a caller who asked
+for one without, and the rows would still sum to the total, so nothing would
+look wrong.
+
+Stage count moves only the stage-driven fraction of capital -- civils and a
+licence do not get more expensive because the cascade grew -- and only if you
+pass `n_stages_reference`, the base-case stage count the anchor is taken to
+correspond to. It defaults to `None`, meaning no stage adjustment at all,
+because none of the anchors publishes a stage count and assuming one would put
+an invented number into the level. Pass your own base case to get stage
+sensitivity; the anchor is then reproduced exactly at that base case.
+
+### What the section split is checked against
+
+The anchors publish totals. Between them they publish exactly one section:
+Avalon's solvent-extraction circuit, "over 1,000 mixer-settlers", at 33 % of
+total capital and US$101 million. difflow's section shares are `ESTIMATED` and
+are not derived from it, but they are held to it -- mixer-settlers alone come
+out below 33 %, the whole SX equipment group about a quarter above, and
+`tests/ree/test_capex_anchors.py` fails if that bracket breaks. The same figure
+prices a mixer-settler at no more than about US$101,000 in 2011 dollars, which
+is worth knowing before accepting any per-stage price.
+
+The same release gives the one operating rate available for a cross-check:
+US$5,634 per tonne of separated REO at 10,000 t/yr, reagents 70 % of it,
+covering labour, supplies, reagents and maintenance but no capital charge and
+no feed cost.
+
+Everything else in `difflow_ree.economics` is `ESTIMATED` in the sense of
+`sources.yaml`: the prices, the payability (there is none -- a real offtake pays
+a fraction of contained value), the reagent and utility unit rates, the labour
+model, and the *section breakdown* of the anchored CAPEX total. Break-even
+prices and profitability statements run on those, not on the anchored total, so
+what they carry is one order-of-magnitude check, not a citable basis. The
+module docstring in `difflow_ree/economics/costs.py` says which is which.
 
 ---
 
