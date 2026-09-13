@@ -873,9 +873,18 @@ def test_log_space_stays_conditioned_across_ten_orders_of_magnitude():
     spread = np.log10(values.max() / values[values > 0].min())
     assert spread > 10.0, f"only spans {spread:.1f} decades"
     assert np.all(np.isfinite(values))
+    # Non-negative to ROUND-OFF, not to zero. An outlet flow is a difference
+    # taken at the scale of the feed TOTAL (0.25 mol/s here), so its floor is
+    # a few ulps of that -- order 1e-16 -- and not of the 1e-10 the lightest
+    # element happens to carry. The absolute -1e-18 this used to assert is
+    # below float64's resolution at that scale and only ever passed by luck:
+    # a different summation order is enough to land it at -1.1e-16, which is
+    # what CI does. A genuinely negative flow is orders larger than the floor
+    # below, so nothing is being waved through here.
+    floor = -1e-12 * sum(element_flows.values())
     for el in elements:
-        assert float(raffinate[f"F_{el}"]) >= -1e-18
-        assert float(extract[f"F_{el}"]) >= -1e-18
+        assert float(raffinate[f"F_{el}"]) >= floor
+        assert float(extract[f"F_{el}"]) >= floor
 
 
 def test_jit_gives_the_same_answer():
