@@ -50,15 +50,35 @@ class TestPHRangeIsReported:
             dist.get_D("Nd", pH=6.0)
 
     def test_262_the_range_is_per_extractant_not_a_global_constant(self):
-        """Cyanex272 starts at pH 3, where PC88A is comfortably inside."""
-        assert get_extractant("Cyanex272").valid_ph_range[0] == 3.0
+        """The two windows overlap but neither contains the other.
+
+        Since the #270 refits PC88A is [0.1, 2.5] (T21's own span) and
+        Cyanex272 is [1.5, 3.5] (ZL93/L14's), which is the whole point of the
+        field: Cyanex272 is the weaker acid and needs a pH unit and a half
+        more to extract the same element. Each probe below is inside one
+        window and outside the other, in opposite directions, so a global
+        constant substituted for either record would fail one of them.
+        """
+        assert get_extractant("PC88A").valid_ph_range == (0.1, 2.5)
+        assert get_extractant("Cyanex272").valid_ph_range == (1.5, 3.5)
+
+        # pH 1.0: inside PC88A, under Cyanex272's floor.
         pc88a = REEDistribution(extractant="PC88A", elements=("Nd",))
         with warnings.catch_warnings():
             warnings.simplefilter("error", UserWarning)
-            pc88a.get_D("Nd", pH=2.0)
+            pc88a.get_D("Nd", pH=1.0)
         cyanex = REEDistribution(extractant="Cyanex272", elements=("Nd",))
         with pytest.warns(UserWarning, match="validity range"):
-            cyanex.get_D("Nd", pH=2.0)
+            cyanex.get_D("Nd", pH=1.0)
+
+        # pH 3.0: inside Cyanex272, over PC88A's ceiling.
+        cyanex_hi = REEDistribution(extractant="Cyanex272", elements=("Nd",))
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", UserWarning)
+            cyanex_hi.get_D("Nd", pH=3.0)
+        pc88a_hi = REEDistribution(extractant="PC88A", elements=("Nd",))
+        with pytest.warns(UserWarning, match="validity range"):
+            pc88a_hi.get_D("Nd", pH=3.0)
 
     def test_262_a_concrete_array_is_checked_at_both_ends(self):
         """A per-stage pH profile that leaves the window anywhere is caught."""

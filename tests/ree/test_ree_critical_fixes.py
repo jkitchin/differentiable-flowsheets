@@ -21,7 +21,7 @@ class TestBug104_ExtractionLoadedSolvent:
             n_stages=5,
             extractant="D2EHPA",
             elements=("Nd",),
-            pH=3.0,
+            pH=1.0,  # (#270) inside D2EHPA's refitted [0.0, 2.0]; 3.0 was not
             include_loading=True,
         )
         extractor = REEExtractor(params)
@@ -76,12 +76,17 @@ class TestBug105_ScrubberKremser:
         from difflow.streams import make_stream, get_flows
         from difflow_ree.units.scrubbing import REEScrubber, ScrubberParams
 
+        # (#270) pH 0.3, not 1.5. The refit puts D2EHPA's La/Dy crossover
+        # much lower -- D(La) = 1 at pH 0.665, D(Dy) = 1 at pH -0.37 -- so at
+        # pH 0.3 La is at D = 0.08 and Dy at D = 104: the scrub is selective
+        # and 98% of the Dy stays put. At 1.5 the refitted D(La) is 320 and
+        # nothing is scrubbed at all.
         params = ScrubberParams(
             n_stages=5,
             extractant="D2EHPA",
             elements=("La", "Dy"),
             target_elements=("Dy",),
-            pH=1.5,
+            pH=0.3,
         )
         scrubber = REEScrubber(params)
 
@@ -124,11 +129,13 @@ class TestBug106_StripperKremser:
         from difflow.streams import make_stream, get_flows
         from difflow_ree.units.stripping import REEStripper, StripperParams
 
+        # (#270) pH 0.2, not 0.5: D(Nd) = 1 at pH 0.312 after the refit, so
+        # 0.5 is on the extracting side of the crossover.
         params = StripperParams(
             n_stages=5,
             extractant="D2EHPA",
             elements=("Nd",),
-            pH=0.5,
+            pH=0.2,
         )
         stripper = REEStripper(params)
 
@@ -145,7 +152,7 @@ class TestBug106_StripperKremser:
         nd_stripped_frac = nd_in_product / 1.0
 
         assert nd_stripped_frac > 0.5, (
-            f"Stripper should recover >50% Nd with 5 stages at pH 0.5: "
+            f"Stripper should recover >50% Nd with 5 stages at pH 0.2: "
             f"got {nd_stripped_frac:.4f}"
         )
 
@@ -166,8 +173,8 @@ class TestBug107_TemperatureCorrection:
         T_ref = 298.15
         T_new = 350.0
 
-        D_ref = dist.get_D("Nd", pH=3.0, T=T_ref)
-        D_new = dist.get_D("Nd", pH=3.0, T=T_new)
+        D_ref = dist.get_D("Nd", pH=1.5, T=T_ref)
+        D_new = dist.get_D("Nd", pH=1.5, T=T_new)
 
         log_D_ref = float(jnp.log10(D_ref))
         log_D_new = float(jnp.log10(D_new))

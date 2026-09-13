@@ -47,9 +47,15 @@ class ExtractScrubStripParams(ParamsMixin):
         n_extraction_stages: Number of extraction stages
         n_scrubbing_stages: Number of scrubbing stages
         n_stripping_stages: Number of stripping stages
-        extraction_pH: pH in extraction section
-        scrubbing_pH: pH in scrubbing section
-        stripping_pH: pH in stripping section
+        extraction_pH: pH in extraction section. None (the default) resolves
+            to the extractant record's own default extraction pH -- the top of
+            its fitted validity window -- through
+            :func:`difflow_ree.database.default_pH` (#270).
+        scrubbing_pH: pH in scrubbing section. None resolves to a quarter of
+            the way up that window, where the light REE the extract picked up
+            have D below one and the heavy REE do not.
+        stripping_pH: pH in stripping section. None resolves to the bottom of
+            the window.
         extractant_conc: Extractant concentration (M)
         solvent_to_feed_ratio: O/A in extraction
         scrub_to_solvent_ratio: Scrub/O ratio
@@ -72,9 +78,15 @@ class ExtractScrubStripParams(ParamsMixin):
     n_extraction_stages: int = 10
     n_scrubbing_stages: int = 5
     n_stripping_stages: int = 5
-    extraction_pH: float = 3.5
-    scrubbing_pH: float = 2.0  # Lower pH to reject light REE
-    stripping_pH: float = 0.5
+    # (#270) None means "read it off the extractant record": the top of the
+    # fitted validity window for the extract, a quarter of the way up for the
+    # scrub, the bottom for the strip. The literals these replaced -- 3.5,
+    # 2.0, 0.5 -- were set against D2EHPA's pre-refit hand-tuned coefficients
+    # and all three sit outside the refitted window of [0.0, 2.0] or on the
+    # wrong side of a crossover it moved.
+    extraction_pH: float | None = None
+    scrubbing_pH: float | None = None
+    stripping_pH: float | None = None
     extractant_conc: float = 0.5
     solvent_to_feed_ratio: float = 1.0
     scrub_to_solvent_ratio: float = 0.2
@@ -82,6 +94,17 @@ class ExtractScrubStripParams(ParamsMixin):
     nitrate_conc: float | None = None  # see #195
     mechanism: str | None = None  # see #195
     capacity_sharpness: int = 8  # see REEExtractorParams (#193)
+
+    def __post_init__(self):
+        """Resolve the pH defaults the extractant record owns (#270)."""
+        from difflow_ree.database import default_pH
+
+        if self.extraction_pH is None:
+            self.extraction_pH = default_pH(self.extractant, "extraction")
+        if self.scrubbing_pH is None:
+            self.scrubbing_pH = default_pH(self.extractant, "scrubbing")
+        if self.stripping_pH is None:
+            self.stripping_pH = default_pH(self.extractant, "stripping")
 
 
 class ExtractScrubStripCircuit:
@@ -389,12 +412,14 @@ def design_extract_scrub_strip(
     n_scrubbing = 5  # Default
     n_stripping = 5
 
-    # Find extraction pH - want all REE to extract
-    extraction_pH = 3.5
+    # Extraction pH - want all REE to extract - and scrubbing pH - want to
+    # reject light REE, keep heavy - both come off the extractant record
+    # (#270), because the window they have to sit in is a property of the
+    # coefficients and differs by a decade and a half between records.
+    from difflow_ree.database import default_pH
 
-    # Find scrubbing pH - want to reject light REE, keep heavy
-    # Lower pH rejects more
-    scrubbing_pH = 2.0
+    extraction_pH = default_pH(extractant, "extraction")
+    scrubbing_pH = default_pH(extractant, "scrubbing")
 
     return ExtractScrubStripParams(
         extractant=extractant,

@@ -111,7 +111,7 @@ class TestTheErrorArrivesEarly:
 
     def test_a_covered_list_is_untouched(self):
         dist = REEDistribution(extractant="D2EHPA", elements=("Nd", "Pr"))
-        assert float(dist.get_D("Nd", pH=3.0)) > 0
+        assert float(dist.get_D("Nd", pH=1.0)) > 0  # (#270) in-window
 
     def test_an_added_element_becomes_usable(self):
         """The escape the message points at actually works."""
@@ -191,7 +191,7 @@ class TestTheDispatchIsSharedWithTheSolve:
         try:
             # On the record's own mechanism La is covered and runs.
             assert float(REEDistribution(extractant="two_block",
-                                         elements=("La",)).get_D("La", pH=3.0)) > 0
+                                         elements=("La",)).get_D("La", pH=1.0)) > 0
             # Overridden onto counter-ion exchange it is not, and saying so
             # at construction is the whole point -- before the fix this
             # passed the check and then raised a KeyError mid-solve.

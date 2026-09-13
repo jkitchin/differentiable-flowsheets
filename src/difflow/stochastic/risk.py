@@ -87,9 +87,18 @@ def _softplus(z: Array, tau: Array | float) -> Array:
         The smoothed positive part, elementwise.
     """
     t = jnp.maximum(jnp.asarray(tau, dtype=float), _TAU_FLOOR)
-    u = z / t
-    # log(1 + e^u) written so neither branch overflows.
-    return t * (jnp.maximum(u, 0.0) + jnp.log1p(jnp.exp(-jnp.abs(u))))
+    # log(1 + e^u), written so neither branch overflows AND so the derivative
+    # at u = 0 is the sigmoid's 0.5 rather than 0. The obvious branchless form
+    # `max(u, 0) + log1p(exp(-|u|))` has the same *value* everywhere and a
+    # derivative of exactly ZERO at u = 0: `max`'s JVP breaks the tie toward
+    # the constant and `abs`'s is 0 there, so the two halves of the kink
+    # cancel instead of averaging. That is not a rounding-level detail here --
+    # CVaR's auxiliary is a sample value, so `z - t` is exactly zero for the
+    # scenario at the quantile, and with a SINGLE scenario (which is what
+    # `expected_value_solution` solves) it is exactly zero for the only
+    # scenario there is. The whole objective gradient vanishes and the design
+    # never leaves its starting point while reporting convergence.
+    return t * jnp.logaddexp(z / t, 0.0)
 
 
 def weighted_quantile(z: Array, weights: Array, alpha: float) -> Array:

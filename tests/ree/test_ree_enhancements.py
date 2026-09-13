@@ -144,7 +144,10 @@ class TestMixerSettlerKinetics:
     def _stage(self, **kw):
         from difflow_ree.units.extraction import REEMixerSettler, MixerSettlerParams
         return REEMixerSettler(MixerSettlerParams(
-            extractant="D2EHPA", elements=("Nd",), pH=3.0, **kw))
+            # (#270) pH 1.0, inside D2EHPA's refitted window of [0.0, 2.0].
+            # These tests measure the kinetic efficiency factor, which
+            # multiplies D rather than depending on it.
+            extractant="D2EHPA", elements=("Nd",), pH=1.0, **kw))
 
     def _streams(self):
         aq = make_stream({"H2O": 10.0, "Nd": 1.0}, T=298.15, P=101325.0)
@@ -176,7 +179,7 @@ class TestMixerSettlerEntrainment:
     def _run(self, f_oa=0.0, f_ao=0.0):
         from difflow_ree.units.extraction import REEMixerSettler, MixerSettlerParams
         stage = REEMixerSettler(MixerSettlerParams(
-            extractant="D2EHPA", elements=("Nd",), pH=3.0,
+            extractant="D2EHPA", elements=("Nd",), pH=1.0,  # (#270) in-window
             entrainment_org_in_aq=f_oa, entrainment_aq_in_org=f_ao,
         ))
         aq = make_stream({"H2O": 10.0, "Nd": 1.0}, T=298.15, P=101325.0)
@@ -201,7 +204,7 @@ class TestThirdPhaseFormation:
     def _run(self, extractant_flow, limit=0.5):
         from difflow_ree.units.extraction import REEMixerSettler, MixerSettlerParams
         stage = REEMixerSettler(MixerSettlerParams(
-            extractant="D2EHPA", elements=("Nd", "Dy"), pH=3.5,
+            extractant="D2EHPA", elements=("Nd", "Dy"), pH=1.0,  # (#270) in-window
             third_phase_loading_limit=limit,
         ))
         aq = make_stream({"H2O": 10.0, "Nd": 1.0, "Dy": 1.0}, T=298.15, P=101325.0)
@@ -227,30 +230,33 @@ class TestDistributionIonicStrength:
 
     def test_backward_compat_no_correction(self):
         d = self._dist()
-        D0 = float(d.get_D("Nd", pH=3.0))
-        D_none = float(d.get_D("Nd", pH=3.0, ionic_strength=None))
+        # (#270) pH 1.0 throughout this class: the activity correction is a
+        # multiplicative factor on D, so the pH it is measured at is
+        # incidental -- but it has to be inside D2EHPA's refitted [0.0, 2.0].
+        D0 = float(d.get_D("Nd", pH=1.0))
+        D_none = float(d.get_D("Nd", pH=1.0, ionic_strength=None))
         assert D0 == pytest.approx(D_none, rel=1e-9)
 
     def test_higher_ionic_strength_lowers_D(self):
         d = self._dist()
-        D_lo = float(d.get_D("Nd", pH=3.0, ionic_strength=0.01))
-        D_hi = float(d.get_D("Nd", pH=3.0, ionic_strength=0.4))
-        D_ideal = float(d.get_D("Nd", pH=3.0))
+        D_lo = float(d.get_D("Nd", pH=1.0, ionic_strength=0.01))
+        D_hi = float(d.get_D("Nd", pH=1.0, ionic_strength=0.4))
+        D_ideal = float(d.get_D("Nd", pH=1.0))
         # Davies gamma < 1 for I>0, decreasing with I
         assert D_lo < D_ideal
         assert D_hi < D_lo
 
     def test_get_D_all_threads_ionic_strength(self):
         d = self._dist()
-        D_ideal = d.get_D_all(pH=3.0)
-        D_corr = d.get_D_all(pH=3.0, ionic_strength=0.3)
+        D_ideal = d.get_D_all(pH=1.0)
+        D_corr = d.get_D_all(pH=1.0, ionic_strength=0.3)
         for e in ("Nd", "Dy"):
             assert float(D_corr[e]) < float(D_ideal[e])
 
     @pytest.mark.release
     def test_differentiable_through_ionic_strength(self):
         d = self._dist()
-        g = jax.grad(lambda I: d.get_D("Nd", pH=3.0, ionic_strength=I))(0.1)
+        g = jax.grad(lambda I: d.get_D("Nd", pH=1.0, ionic_strength=I))(0.1)
         assert jnp.isfinite(g) and float(g) < 0.0
 
 

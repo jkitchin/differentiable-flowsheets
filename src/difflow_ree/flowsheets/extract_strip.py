@@ -39,8 +39,12 @@ class ExtractStripParams(ParamsMixin):
         diluent: Organic diluent name (e.g., "kerosene", "n-dodecane")
         n_extraction_stages: Number of extraction stages
         n_stripping_stages: Number of stripping stages
-        extraction_pH: pH in extraction section
-        stripping_pH: pH in stripping section
+        extraction_pH: pH in extraction section. None (the default) resolves
+            to the extractant record's own default extraction pH -- the top of
+            its fitted validity window -- through
+            :func:`difflow_ree.database.default_pH` (#270).
+        stripping_pH: pH in stripping section. None (the default) resolves to
+            the bottom of that same window.
         extractant_conc: Extractant concentration (M)
         solvent_to_feed_ratio: Organic/aqueous ratio in extraction
         strip_to_solvent_ratio: Strip acid/organic ratio
@@ -59,14 +63,29 @@ class ExtractStripParams(ParamsMixin):
     diluent: str = "kerosene"
     n_extraction_stages: int = 10
     n_stripping_stages: int = 5
-    extraction_pH: float = 3.5
-    stripping_pH: float = 0.5
+    # (#270) None means "read it off the extractant record": the top of the
+    # fitted validity window for the extract, the bottom for the strip. The
+    # literals these replaced -- 3.5 and 0.5 -- were chosen against D2EHPA's
+    # pre-refit hand-tuned coefficients. Against the refitted ones this
+    # circuit extracted at 1.5 pH units of extrapolation and then tried to
+    # strip at a pH where D(Nd) is still 3.7, and returned a 24% recovery.
+    extraction_pH: float | None = None
+    stripping_pH: float | None = None
     extractant_conc: float = 0.5
     solvent_to_feed_ratio: float = 1.0
     strip_to_solvent_ratio: float = 0.5
     nitrate_conc: float | None = None  # see #195
     mechanism: str | None = None  # see #195
     capacity_sharpness: int = 8  # see REEExtractorParams (#193)
+
+    def __post_init__(self):
+        """Resolve the pH defaults the extractant record owns (#270)."""
+        from difflow_ree.database import default_pH
+
+        if self.extraction_pH is None:
+            self.extraction_pH = default_pH(self.extractant, "extraction")
+        if self.stripping_pH is None:
+            self.stripping_pH = default_pH(self.extractant, "stripping")
 
 
 class ExtractStripCircuit:
@@ -305,7 +324,7 @@ def design_extract_strip(
     feed_composition: dict[str, float],
     extractant: str,
     target_recovery: float = 0.99,
-    extraction_pH: float = 3.5,
+    extraction_pH: float | None = None,  # (#270) record's own; see default_pH
     nitrate_conc: float | None = None,
     mechanism: str | None = None,
 ) -> ExtractStripParams:
@@ -315,7 +334,8 @@ def design_extract_strip(
         feed_composition: Element flows in feed (mol/s)
         extractant: Extractant to use
         target_recovery: Target recovery fraction
-        extraction_pH: Operating pH
+        extraction_pH: Operating pH. None reads the extractant record's own
+            default extraction pH; see :func:`difflow_ree.database.default_pH`.
         nitrate_conc: Aqueous nitrate concentration (M), required for solvating
             extractants such as TBP (#195)
         mechanism: Explicit mechanism override; see REEDistribution (#195)
@@ -326,6 +346,11 @@ def design_extract_strip(
     from difflow_ree.equilibrium.distribution import REEDistribution, stages_kremser
 
     elements = tuple(feed_composition.keys())
+
+    if extraction_pH is None:
+        from difflow_ree.database import default_pH
+
+        extraction_pH = default_pH(extractant, "extraction")
 
     # Get D values at operating pH
     dist = REEDistribution(

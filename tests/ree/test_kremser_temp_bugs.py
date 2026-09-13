@@ -38,8 +38,12 @@ class TestTemperatureCorrection:
             elements=("Nd",),
         )
 
-        D_298 = dist.get_D("Nd", 3.0, 298.15)
-        D_350 = dist.get_D("Nd", 3.0, 350.0)
+        # pH 1.5 (#270): inside D2EHPA's refitted window. The temperature
+        # term is additive in log10(D), so the ratio below does not depend on
+        # which pH it is evaluated at -- only on being somewhere the
+        # coefficients were fitted.
+        D_298 = dist.get_D("Nd", 1.5, 298.15)
+        D_350 = dist.get_D("Nd", 1.5, 350.0)
 
         # The ratio D_350/D_298 should be meaningfully different from 1.0
         # With the bug (dividing by R*ln(10)), the effect is ~19x too small.
@@ -93,13 +97,19 @@ class TestScrubberKremser:
         """
         from difflow_ree.units.scrubbing import REEScrubber, ScrubberParams
 
-        # Use D2EHPA at low pH where La has low D (easy to scrub)
+        # Use D2EHPA at low pH where La has low D (easy to scrub).
+        #
+        # (#270) pH 0.5, not the 1.0 this used to sit at. The refit put
+        # D(La) = 1 at pH 0.665 and D(Nd) = 1 at pH 0.312, so pH 0.5 is the
+        # window where the scrub is SELECTIVE -- D(La) = 0.32, D(Nd) = 3.7.
+        # At the old pH 1.0 the refitted D(La) is 10, which is not a scrub of
+        # anything; the test was reading a coefficient set with no source.
         params = ScrubberParams(
             n_stages=20,  # Many stages
             extractant="D2EHPA",
             elements=("La", "Nd"),
             target_elements=("Nd",),
-            pH=1.0,  # Very low pH - should scrub La easily
+            pH=0.5,  # Very low pH - should scrub La easily
             extractant_conc=0.5,
         )
 
@@ -115,7 +125,7 @@ class TestScrubberKremser:
             T=298.15, P=101325.0,
         )
 
-        scrub_liquor, scrubbed_org, info = scrubber(loaded_org, scrub_soln, pH=1.0)
+        scrub_liquor, scrubbed_org, info = scrubber(loaded_org, scrub_soln, pH=0.5)
 
         scrubbed_flows = get_flows(scrubbed_org)
 
@@ -143,11 +153,15 @@ class TestStripperKremser:
         """
         from difflow_ree.units.stripping import REEStripper, StripperParams
 
+        # (#270) pH 0.2, not the 0.5 this used to sit at. The refit puts
+        # D(Nd) = 1 at pH 0.312, so 0.5 is on the EXTRACTING side of the
+        # crossover -- D(Nd) = 3.7 there and no number of stages strips it.
+        # pH 0.2 gives D(Nd) = 0.46, and is inside the fitted [0.0, 2.0].
         params = StripperParams(
             n_stages=20,
             extractant="D2EHPA",
             elements=("Nd",),
-            pH=0.5,  # Very low pH
+            pH=0.2,  # Very low pH
         )
 
         stripper = REEStripper(params)
@@ -161,7 +175,7 @@ class TestStripperKremser:
             T=298.15, P=101325.0,
         )
 
-        product, barren_org, info = stripper(loaded_org, strip_acid, pH=0.5)
+        product, barren_org, info = stripper(loaded_org, strip_acid, pH=0.2)
 
         barren_flows = get_flows(barren_org)
 
@@ -172,7 +186,7 @@ class TestStripperKremser:
 
         assert frac_remaining < 0.05, (
             f"Nd remaining in organic: {frac_remaining:.4f}. "
-            f"With 20 stages at pH 0.5, stripping should be >95% complete. "
+            f"With 20 stages at pH 0.2, stripping should be >95% complete. "
             f"Bug: Kremser formula converges to E instead of 0."
         )
 
@@ -197,7 +211,7 @@ class TestExtractorLoadedSolvent:
             n_stages=5,
             extractant="D2EHPA",
             elements=("Nd",),
-            pH=3.0,
+            pH=1.0,  # (#270) inside D2EHPA's refitted [0.0, 2.0]; 3.0 was not
             include_loading=False,
         )
 

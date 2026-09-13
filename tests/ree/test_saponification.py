@@ -72,13 +72,31 @@ from difflow_ree.units.saponification import Saponifier, SaponifierParams
 # Helpers
 # =============================================================================
 
+#: The reagent every section in this module runs on, and the reason it is
+#: Cyanex272 rather than D2EHPA.
+#:
+#: #270 refitted D2EHPA against X95/PPH63 and narrowed its validity window to
+#: pH [0.0, 2.0] around a reference pH of 0.82. At that acidity D2EHPA is a
+#: very strong extractant -- log10 D_Nd = -0.937 + 3*pH puts D past 10^5 at
+#: the pH 2.3 feed these tests used to run at -- so every section extracted
+#: quantitatively and the saponification comparisons had nothing left to
+#: discriminate: the buffered and unbuffered cases both took all the rare
+#: earth. Cyanex272, refitted from ZL93/L14 in the same issue, has its
+#: window at pH [1.5, 3.5] with D_Nd = 1 at pH 2.135, which is exactly the
+#: regime where a proton released by extraction matters. Saponified
+#: ("Na-Cyanex272") operation is the standard industrial practice for this
+#: reagent, so nothing about the chemistry is contrived.
+#:
+#: `calibration_pH` is deliberately NOT set: since #270 it defaults to the
+#: record's own `reference_pH` (2.0 here), which is the basis everything else
+#: derived from the correlation is evaluated at (#268). The 3.0 that used to
+#: be pinned here is outside the D2EHPA window entirely.
 BASE_SECTION = dict(
-    extractant="D2EHPA",
+    extractant="Cyanex272",
     elements=("Nd", "Dy"),
     aqueous_volumetric_flow=1.0,
     organic_volumetric_flow=1.0,
-    extractant_conc=0.5,
-    calibration_pH=3.0,
+    extractant_conc=0.3,
 )
 
 #: Extractant on a monomer basis, and the dimer basis it converts to.
@@ -102,8 +120,16 @@ def plain_section(n_stages=4, base_addition=0.0, **kwargs):
     ))
 
 
-def make_feed(section, acid=0.005, nd=0.02, dy=0.02):
-    """Standard aqueous feed on a section's own schema."""
+def make_feed(section, acid=0.002, nd=0.02, dy=0.02):
+    """Standard aqueous feed on a section's own schema.
+
+    0.04 M rare earth against 0.002 M free acid: the protons the extraction
+    releases (three per trivalent ion, so up to 0.12 M) outweigh the feed
+    acidity by nearly two orders of magnitude, which is what makes the buffer
+    the thing that decides the answer rather than a correction to it. The
+    feed acid was 0.005 M before #270; Cyanex272 works a decade higher in pH
+    than the D2EHPA record these tests used to run on.
+    """
     return section.schema.make_aqueous(
         {"Nd": nd, "Dy": dy}, acid=acid, water=55.0
     )
@@ -239,16 +265,18 @@ def test_saponified_cascade_holds_a_markedly_flatter_ph_profile():
     span_dosed = float(ph_profile_flatness(i1["pH_profile"]))
     span_sap = float(ph_profile_flatness(i2["pH_profile"]))
 
-    # Measured: 0.77 pH units of collapse against 0.26, a factor of 2.9.
-    assert span_dosed > 0.6
+    # Measured on Cyanex272 since #270: 0.571 pH units of collapse against
+    # 0.295, a factor of 1.94. (It was 0.77 against 0.26 on the pre-#270
+    # D2EHPA record, which the refit narrowed out of this pH window.)
+    assert span_dosed > 0.5
     assert span_sap < 0.35
-    assert span_dosed / span_sap > 2.0
+    assert span_dosed / span_sap > 1.8
 
     # And it is not an artefact of extracting less: normalize the excursion by
     # the rare earth actually moved, which is what releases the protons.
     moved_dosed = float(e1["F_Nd"] + e1["F_Dy"])
     moved_sap = float(e2["F_Nd"] + e2["F_Dy"])
-    assert (span_dosed / moved_dosed) / (span_sap / moved_sap) > 1.8
+    assert (span_dosed / moved_dosed) / (span_sap / moved_sap) > 1.5
 
 
 def test_the_flatness_advantage_grows_with_the_stage_count():
@@ -266,8 +294,11 @@ def test_the_flatness_advantage_grows_with_the_stage_count():
             float(ph_profile_flatness(i1["pH_profile"]))
             / float(ph_profile_flatness(i2["pH_profile"]))
         )
+    # Measured: 1.76 at four stages, 1.98 at twelve. The saponified span is
+    # the SAME 0.295 at both counts -- the buffer does not care how long the
+    # cascade is -- while the dosed one keeps growing, which is the claim.
     assert ratios[1] > ratios[0]
-    assert ratios[0] > 2.0
+    assert ratios[0] > 1.7
 
 
 def test_an_unsaponified_section_underpredicts_loading():
@@ -361,9 +392,17 @@ def test_three_equivalents_delivered_to_the_aqueous_phase(counter_ion):
     That is the "three equivalents of base per mole of rare earth moved" of
     the issue, and it holds to round-off rather than approximately.
     """
-    section = saponified_section(counter_ion=counter_ion)
+    # 0.50, the top of INDUSTRIAL_DEGREE_RANGE, rather than the 0.40 this
+    # ran at before #270: the identity below holds at any degree, but the
+    # *sign* of the proton term asserted at the end of the test does not.
+    # At 0.40 on this feed the base is 0.100 eq against 0.1025 eq of
+    # exchange, so the last 2.5% is carried by protons and dT_H comes out
+    # positive; at 0.50 the base covers all of it and neutralizes the feed
+    # acid besides, which is the case the comment describes.
+    degree = 0.50
+    section = saponified_section(counter_ion=counter_ion, degree=degree)
     feed = make_feed(section)
-    solvent = make_solvent(section, degree=0.4)
+    solvent = make_solvent(section, degree=degree)
     raffinate, extract, info = section(feed, solvent)
     assert bool(info["feasible"])
 
@@ -451,9 +490,13 @@ def test_kg_base_per_kg_reo_from_a_solved_section():
     The base consumed is the counter-ion the section released into the
     raffinate; nothing extra is computed to get it.
     """
-    section = saponified_section(n_stages=6, degree=0.4)
+    # Same reason as the three-equivalent test above: the floor is a floor on
+    # the base BOUGHT, and a partly saponified organic buys less of it than
+    # the floor because the unsaponified fraction exchanges protons instead.
+    # 0.50 is the degree at which the circuit is fully base-driven.
+    section = saponified_section(n_stages=6, degree=0.50)
     feed = make_feed(section)
-    solvent = make_solvent(section, degree=0.4)
+    solvent = make_solvent(section, degree=0.50)
     _, extract, info = section(feed, solvent)
     assert bool(info["feasible"])
 
@@ -521,35 +564,58 @@ def test_the_organic_absorbs_an_aqueous_acid_perturbation():
 
     Adding acid to the feed is taken up by the organic converting ``M(HA2)``
     back to ``(HA)2`` and releasing its counter-ion. An unsaponified network
-    cannot do that at all -- it has no conjugate base -- so its counter-ion
-    release stays identically zero and the acid lands entirely on the pH.
+    cannot do that at all -- it has no conjugate base -- so the same acid
+    lands on the raffinate as free protons.
+
+    The feed is deliberately LEANER than the module default: at 0.04 M rare
+    earth the extraction alone consumes every equivalent of base in the
+    solvent, so there is no spare buffer left for an acid perturbation to
+    find and the uptake below is a true zero. That is not a failure of the
+    model -- it is what running a saponified circuit at its capacity means --
+    but it is not what this test is about, so the loading is halved.
+
+    The comparison is on PROTONS ABSORBED, not on pH. The two sections sit a
+    decade and a half apart in pH (the buffered one near 3.2, the unbuffered
+    one near 1.5), and a fixed acid dose is a much larger relative change in
+    free proton concentration at the higher pH -- so comparing pH excursions
+    would flatter the unbuffered section for the wrong reason.
     """
     delta = 0.005
     degree = 0.35
+    light = dict(nd=0.01, dy=0.01)
 
     sap = saponified_section(n_stages=4, degree=degree)
     solvent = make_solvent(sap, degree=degree)
-    lo = sap(make_feed(sap, acid=0.005), solvent)[2]
-    hi = sap(make_feed(sap, acid=0.005 + delta), solvent)[2]
-    assert bool(lo["feasible"]) and bool(hi["feasible"])
-
-    uptake = float(hi["counter_ion_released"]) - float(lo["counter_ion_released"])
-    # More than a third of the added acid is absorbed by the organic phase,
-    # released as counter-ion rather than showing up as free protons.
-    assert uptake / delta > 0.35
-    d_pH_sap = abs(float(hi["pH_profile"][-1]) - float(lo["pH_profile"][-1]))
-
-    dosed = plain_section(n_stages=4, base_addition=base_equivalents(degree))
-    solvent_p = make_solvent(dosed)
-    lo_p = dosed(make_feed(dosed, acid=0.005), solvent_p)[2]
-    hi_p = dosed(make_feed(dosed, acid=0.005 + delta), solvent_p)[2]
-    assert bool(lo_p["feasible"]) and bool(hi_p["feasible"])
-    d_pH_plain = abs(
-        float(hi_p["pH_profile"][-1]) - float(lo_p["pH_profile"][-1])
+    lo, hi = (
+        sap(make_feed(sap, acid=a, **light), solvent)
+        for a in (0.002, 0.002 + delta)
     )
+    assert bool(lo[2]["feasible"]) and bool(hi[2]["feasible"])
 
-    # The buffered section moves less, on the same perturbation.
-    assert d_pH_sap < d_pH_plain / 1.5
+    uptake = (
+        float(hi[2]["counter_ion_released"]) - float(lo[2]["counter_ion_released"])
+    )
+    # Measured 0.990: essentially all of the added acid is absorbed by the
+    # organic phase and comes back out as counter-ion.
+    assert uptake / delta > 0.9
+
+    # ... and so almost none of it reaches the raffinate as free acid.
+    sap_protons = (float(hi[0]["F_H"]) - float(lo[0]["F_H"])) / delta
+    assert sap_protons < 0.05                      # measured 0.010
+
+    plain = plain_section(n_stages=4)
+    solvent_p = make_solvent(plain)
+    lo_p, hi_p = (
+        plain(make_feed(plain, acid=a, **light), solvent_p)
+        for a in (0.002, 0.002 + delta)
+    )
+    assert bool(lo_p[2]["feasible"]) and bool(hi_p[2]["feasible"])
+
+    # The unsaponified network has no conjugate base to spend, so the acid
+    # stays in the aqueous phase: measured 0.895 of it, against 0.010.
+    plain_protons = (float(hi_p[0]["F_H"]) - float(lo_p[0]["F_H"])) / delta
+    assert plain_protons > 0.8
+    assert plain_protons / sap_protons > 20.0
 
 
 def test_henderson_hasselbalch_round_trip_and_capacity():
@@ -696,7 +762,7 @@ def test_saponifier_cannot_neutralize_past_the_extractant_inventory():
 def test_saponifier_picks_the_right_reagent(counter_ion, base, eq_per_mole):
     """Which base is dosed decides the effluent, so it is data (#197)."""
     unit = Saponifier(SaponifierParams(
-        extractant="D2EHPA", saponification_degree=0.35,
+        extractant="Cyanex272", saponification_degree=0.35,
         counter_ion=counter_ion,
     ))
     assert unit.base.name == base
@@ -712,7 +778,7 @@ def test_saponifier_picks_the_right_reagent(counter_ion, base, eq_per_mole):
 def test_saponifier_and_section_compose_into_a_reagent_duty():
     """The whole point: the duty comes off the flowsheet, not a rule of thumb."""
     unit = Saponifier(SaponifierParams(
-        extractant="D2EHPA", elements=("Nd", "Dy"),
+        extractant="Cyanex272", elements=("Nd", "Dy"),
         saponification_degree=0.4,
     ))
     section = saponified_section(n_stages=6, degree=0.4)

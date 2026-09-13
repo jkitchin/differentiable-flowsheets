@@ -112,68 +112,88 @@
 #
 # PROVENANCE OF THE COEFFICIENTS -- TWO DIFFERENT KINDS OF NUMBER
 #
-# This file now contains coefficient blocks of two DIFFERENT provenances. They
+# This file contains coefficient blocks of two DIFFERENT provenances. They
 # must not be mistaken for one another:
 #
-#   (1) HAND-TUNED, NO SOURCE  -- the `ph_coefficients` and
-#       `temperature_coefficients` of D2EHPA and Cyanex272, the
-#       `temperature_coefficients` of PC88A, and every acidic record's
-#       `valid_ph_range` except PC88A's.
-#       These were chosen to give plausible-looking D values:
-#         - At pH 2.0: D typically 0.001-0.1 for LREE, 0.1-1 for HREE
-#         - At pH 3.0: D typically 0.05-1 for LREE, 1-30 for HREE
-#         - At pH 4.0: D typically 1-20 for LREE, 50-500 for HREE
-#         - Separation factors between adjacent REE: 1.5-4
-#       No fit, dataset or table is recorded for any of them anywhere in this
-#       repository. They are illustrative, not measured. Do not cite them, do
-#       not regress equilibrium constants against them, and do not use them
-#       for design numbers.
+#   (1) HAND-TUNED, NO SOURCE  -- the `temperature_coefficients` of D2EHPA,
+#       PC88A and Cyanex272. That is now the whole list.
+#       They were chosen to look plausible and no fit, dataset or table is
+#       recorded for any of them anywhere in this repository. They are
+#       illustrative, not measured. A D computed at 298.15 K from any acidic
+#       record is sourced; the same D at 333 K is not. Do not cite them, do
+#       not regress enthalpies of extraction against them, and do not use a
+#       temperature sensitivity from this file for design.
+#       Every source behind the three refitted pH blocks is ISOTHERMAL, which
+#       is why none of them could retire these. Retiring them needs a
+#       variable-temperature dataset that nobody has retrieved yet.
 #
-#   (2) LITERATURE-DERIVED    -- TBP's `nitrate_coefficients` and
-#       `temperature_coefficients`, and PC88A's `ph_coefficients`,
-#       `valid_ph_range`, `reference_pH` and `activity_coefficient_A`.
-#       Refitted from named, retrievable primary sources; the fit basis, the
-#       correction arithmetic, the per-element provenance (measured vs
-#       interpolated vs assumed), the validity window and the known gaps are
-#       all written out on each record below. Read those blocks before using
-#       a number from either.
+#   (2) LITERATURE-DERIVED    -- everything else that matters: TBP's
+#       `nitrate_coefficients` and `temperature_coefficients`; the
+#       `ph_coefficients`, `valid_ph_range` and `reference_pH` of D2EHPA,
+#       PC88A and Cyanex272; PC88A's `activity_coefficient_A`; and
+#       naphthenic_acid's `ph_coefficients`.
+#       Refitted from named, retrievable primary sources; the sources are
+#       enumerated with what each one supplied and what it did not, the
+#       correction arithmetic is written out, the per-element provenance
+#       (measured vs interpolated vs assumed) is stated, and so are the
+#       validity window and the known gaps. Read the block on the record
+#       before using a number from it.
 #
-# Nothing else in this file is literature-derived. In particular, PC88A's pH
-# block being MEASURED says NOTHING about D2EHPA's or Cyanex272's.
+# The three acidic pH blocks are NOT equally strong, and each record says so
+# in its own words. In one line each:
+#   PC88A      121 digitized points, five measured elements, five
+#              interpolated, one isothermal source that IS this record's
+#              system. The strongest block in the file.
+#   D2EHPA     ONE measured absolute D (La in kerosene at the reference
+#              charge) for the level, plus fourteen printed adjacent
+#              separation factors for the shape, from two sources reached
+#              through a secondary. Level good to roughly half a decade.
+#   Cyanex272  Two sources that cannot be joined without a seam: the level
+#              from six Pr/Nd rows with measured equilibrium pH, the shape
+#              from a fifteen-element table whose extractant concentration
+#              is not printed. The seam is 0.09 decades and is quantified
+#              on the record.
 #
-# *** DO NOT COMPARE ABSOLUTE D ACROSS THE ACIDIC RECORDS (#270). ***
+# COMPARING ACROSS THE ACIDIC RECORDS (#270)
 #
-# Since PC88A was refitted from T21 and D2EHPA and Cyanex272 were not, the
-# three acidic records are no longer on a common basis, and the difference
-# is roughly 2 pH units:
+# Before #270 this header carried a warning that the three acidic records
+# were not on a common basis and that their relative strengths came out
+# BACKWARDS. All three now derive from named sources, and the ordering has
+# inverted to the physically correct one:
 #
-#            pH at which D(Nd) = 1      basis
-#   PC88A            1.03               MEASURED (T21)
-#   D2EHPA           3.10               HAND_TUNED
-#   Cyanex272        3.74               HAND_TUNED
+#            pH at which D(Nd) = 1
+#            at the record's        at a common 1.0 M
+#            own reference charge   nominal charge     level source
+#   D2EHPA         0.31                  0.31          X95 (via Q1 T2.6)
+#   PC88A          1.03                  1.03          T21
+#   Cyanex272      2.14                  1.91          L14
 #
-# Read literally, this file now says D2EHPA needs a pH two units higher than
-# PC88A to do the same job. THAT IS BACKWARDS. D2EHPA is the stronger acid
-# (pKa 3.24 against PC88A's 4.10) and extracts at LOWER pH, which is exactly
-# what the old, self-consistent hand-tuned set encoded and what the two
-# records' `reference_pH` values still imply. The inversion is an artifact of
-# fixing one record and not the others, and it will persist until D2EHPA and
-# Cyanex272 are refitted (#270 remains open for them; there is no digitized
-# dataset for either yet).
+# which is the textbook order: the stronger the acid, the lower the pH at
+# which it extracts (pKa 3.24, 4.10, 6.37 respectively). It also means the
+# three records now differ by nearly two pH units of operating window, which
+# is a real property of these reagents and not an artifact.
 #
 # What is safe, and what is not:
-#   SAFE      -- separation factors, cascade behaviour and design pH WITHIN
-#                one record. Each record is internally consistent.
-#   NOT SAFE  -- "which extractant extracts at lower pH", "which needs less
-#                acid to strip", or any cross-record ratio of D. A flowsheet
-#                that picks an extractant by comparing these blocks is
-#                comparing a measurement against a guess.
+#   SAFE      -- separation factors, cascade behaviour and design pH within
+#                one record; and now, with the caveats each record states,
+#                the ORDERING of the three by extraction strength.
+#   NOT SAFE  -- a cross-record ratio of D quoted to better than about half a
+#                decade. D2EHPA's level rests on one measurement whose phase
+#                ratio is not stated, and Cyanex272's on a two-source join.
+#                Both records quantify their own error bar; use those numbers
+#                rather than assuming the blocks are interchangeable.
+#   NOT SAFE  -- anything at a temperature other than 298.15 K, for any
+#                acidic record. See (1) above.
 #
-# Background reading behind the hand-tuned blocks (consulted qualitatively;
-# NOT the source of any specific number here):
+# Reading consulted qualitatively across all three refits, NOT the source of
+# any specific number here:
 # - Gupta & Krishnamurthy (2005) Extractive Metallurgy of Rare Earths
 # - Xie, Zhang, Dreisinger & Doyle (2014) Miner. Eng. 56, 10
-# - Peppard et al. (1957) J. Inorg. Nucl. Chem.
+# - Peppard et al. (1957) J. Inorg. Nucl. Chem. 4, 334 (quoted by Q1 as
+#   3.5e5 for Lu/La, against the 6.4e4 the shipped D2EHPA shape gives --
+#   a discordance the D2EHPA record names rather than averages away)
+# - Peppard et al. (1969) J. Inorg. Nucl. Chem. 31, 2271 (the tetrad effect,
+#   which is why a smooth curve through atomic number is imperfect)
 
 # SAPONIFICATION (#197)
 #
@@ -213,6 +233,7 @@
 extractants:
   D2EHPA:
     full_name: "Di-2-ethylhexyl phosphoric acid"
+    alternative_names: [HDEHP, P204, DEHPA]
     formula: "(C8H17O)2PO2H"
     molecular_weight: 322.43  # g/mol
     density: 0.975  # g/mL
@@ -233,28 +254,166 @@ extractants:
       extractant_molecules: 3  # as dimers
       basis: dimer
 
-    # pH correlation coefficients: log10(D) = a + b*pH + c*pH²
-    # Valid range: pH 1-5, T = 298K, [D2EHPA] = 0.5M
+    # *** REFITTED AGAINST NAMED SOURCES (#270). ***
     #
-    # EXPECTED D VALUES at pH 3.0:
-    #   La: 0.05, Ce: 0.12, Pr: 0.30, Nd: 0.70
-    #   Sm: 2.5, Eu: 4.5, Gd: 8.0, Tb: 14, Dy: 25, Y: 10
+    # Until #270 every number in this block was HAND_TUNED with no source of
+    # any kind. The replacement is built from TWO sources, because no single
+    # retrieved study gives both the absolute level and the shape of the
+    # series for D2EHPA in kerosene. Both are reached through Q1, which
+    # reprints them; neither original is on this machine.
     #
-    # Element-specific pH slopes create pH-dependent separation factors
-    # The slope (b) increases slightly across the series (lanthanide contraction effect)
+    # SOURCES
+    #   S1  X95 -- Xu et al., "Rare Earths", 2nd ed. 1995, pp. 469-611, as
+    #       Q1 Table 2.6 (p. 213).
+    #       SUPPLIED: the LEVEL. One number, D_La = 0.99, measured under one
+    #       fully stated condition -- KEROSENE, 1 mol/L extractant,
+    #       0.1 mol/L LaCl3, 0.003 mol/L HCl, 25 C.
+    #       >>> This is the ONLY absolute D for D2EHPA behind this record. <<<
+    #       DID NOT SUPPLY: any other element, any pH series, any temperature
+    #       dependence, and the phase ratio (see the O/A note below).
+    #   S2  PPH63 -- Pierce, Peck & Hobbs, J. Chromatogr. 12 (1963) 81-88, as
+    #       Q1 Table 2.8 (p. 214), HCl column.
+    #       SUPPLIED: the SHAPE. Fourteen adjacent separation factors, La to
+    #       Lu, cumulated from La under the shared slope b = 3.
+    #       >>> This is the ONLY source of the relative spacing. <<<
+    #       DID NOT SUPPLY: any absolute D, and it is not a batch
+    #       solvent-extraction experiment -- it is reversed-phase partition
+    #       chromatography on HDEHP-Corvic columns. Same equilibrium, a
+    #       different measurement.
+    #   S3  X95 again, as Q1 Table 2.7 plus the sentence on Q1 p. 213 that
+    #       "the value of the equilibrium constant of extracting yttrium with
+    #       P204 is between Ho and Er".
+    #       SUPPLIED: the position of Y. DID NOT SUPPLY: anything else used.
+    #   S4  Z1 Eqs. (4.11) and (4.12), p. 99, and (4.27)-(4.31), p. 124.
+    #       SUPPLIED: the model form -- the dimer-basis cation exchange, the
+    #       free-dimer balance and the proton balance used below. Not data.
+    #   S5  Q1 Figs. 2.8 and 2.9, pp. 216-218.
+    #       SUPPLIED: the pH window and the verification that the slope really
+    #       is 3 (Fig. 2.8, 1 mol/L P204 in methylbenzene, D_Sm = 1 at
+    #       lg[H+] = -0.6). DID NOT SUPPLY: any coefficient.
+    #
+    # THE LEVEL, WRITTEN OUT
+    #   From S1, with O/A = 1 and 0.1 mol/L La initially in the aqueous:
+    #     D_La = 0.99            ->  c_aq = 0.1/(1 + 0.99)   = 0.05025 mol/L
+    #                                c_org = 0.99 * c_aq     = 0.04975 mol/L
+    #     [H+]eq = 0.003 + 3*c_org = 0.15225 mol/L  ->  pH = 0.8175  [Z1 4.12]
+    #     free (HA)2 = 1.0/2 - 3*c_org = 0.3508 mol/L        [Z1 4.11]
+    #     lg Kex = lg D - 3 lg[(HA)2] - 3 lg[H+]... = -1.0917
+    #     a_La   = lg Kex + 3 lg(0.5) = -1.9948   at C_ref = 0.5 M DIMER
+    #   The equilibrium pH is RECOVERED, not reported: S1 states only the
+    #   initial 0.003 mol/L HCl. Z1 Eq. (4.12) is what recovers it, and that
+    #   equation is not taken on faith -- on L14's Cyanex 272 series, where
+    #   the equilibrium pH WAS measured at six charges, the same balance
+    #   reproduces all six to within 0.17 pH units (see the Cyanex272 record).
+    #
+    #   TWO TRANSFERS THAT WOULD OTHERWISE BE NEEDED ARE NOT.
+    #   The anchor is in KEROSENE, this record's own first-listed diluent, so
+    #   there is no diluent correction. And 1 mol/L nominal extractant is
+    #   exactly 0.5 mol/L as DIMER, which is this record's declared
+    #   `reference_concentration`, so there is no concentration transfer
+    #   either -- only the small free-dimer correction above, worth
+    #   3*log10(0.5/0.3508) = 0.462 decades, which is why D_La at the
+    #   reference charge (2.87) exceeds the measured 0.99 at the anchor's
+    #   partly loaded 0.3508 mol/L.
+    #
+    # THE PHASE RATIO IS NOT STATED, and it matters. O/A = 1 is assumed --
+    # the convention everywhere else in this file and in L14. What other
+    # ratios would give for a_La:
+    #     O/A = 0.5   -2.3146        O/A = 1   -1.9948        O/A = 2   -1.7966
+    # So the whole ambiguity is worth about 0.5 decades, or 0.17 pH units.
+    #
+    # THE CONTROL. Q1 Table 2.6 carries P507 (= PC88A) in the same row block
+    # under the same conditions, D_La = 0.17. Pushing that through the
+    # identical arithmetic, on PC88A's Alstad basis, gives a_La = -4.6906
+    # against the -4.0795 that T21's 121 measured points give -- the route is
+    # 0.61 decades LOW. Almost all of that is the unstated phase ratio: at
+    # O/A = 2 the control lands at -4.0105, agreeing with T21 to 0.069. The
+    # ratio was NOT tuned to make the control agree, because a phase ratio
+    # inferred from one number in a different extractant's column is not a
+    # measurement. Read the control as: this level is good to roughly half a
+    # decade, i.e. 0.2 pH units, with the sign of the likely error KNOWN
+    # (a_La is more likely too low than too high).
+    #
+    # THE SHAPE, WRITTEN OUT
+    #   S2's HCl column, adjacent factors used in order:
+    #     Ce/La 2.4  Pr/Ce 2.8  Nd/Pr 1.7  Pm/Nd 2.1  Sm/Pm 2.4  Eu/Sm 2.2
+    #     Gd/Eu 1.6  Tb/Gd 3.2  Dy/Tb 2.0  Ho/Dy 2.1  Er/Ho 2.1  Tm/Er 2.5
+    #     Yb/Tm 2.5  Lu/Yb 1.8
+    #   Pm is not a difflow element, so Sm/Nd = 2.1 * 2.4 = 5.04 is a
+    #   two-step product, not a measured adjacent factor.
+    #   Y: S3 puts Kex(Y) at (1.63 - 1.25)/(1.75 - 1.25) = 0.76 of the way
+    #   from Ho to Er, so beta(Y/Ho) = 2.1**0.76 = 1.757 and Er/Y = 1.195.
+    #   The fractional position is used rather than Table 2.7's raw Y - Ho
+    #   difference, which would put Y ABOVE Er and contradict Q1's own
+    #   sentence.
+    #
+    # PER ELEMENT: WHAT IS MEASURED, WHAT IS NOT
+    #   MEASURED level (S1):        La, and La only.
+    #   MEASURED spacing (S2/S3):   every element here. Ce, Pr, Nd, Eu, Gd,
+    #     Tb, Dy each sit one measured adjacent factor from their neighbour;
+    #     Sm is two factors from Nd across Pm; Y is placed within a measured
+    #     interval by S3.
+    #   INTERPOLATED:               nothing. There is no interpolation in this
+    #     block -- unlike PC88A, whose Ce/Pr/Eu/Gd/Tb are drawn on a curve.
+    #     Every `a` here is La's level plus a product of printed factors.
+    #   ASSUMED:  b = 3.0 (stoichiometry, S4/S5), c = 0.0, d = 0.0,
+    #     O/A = 1 in the level arithmetic, and 25 C throughout.
+    #
+    # HOW GOOD IS IT -- and this is weaker than PC88A's block, deliberately
+    # stated rather than implied. There is ONE measured D behind the level,
+    # so there is no standard error to quote and no residual to report. The
+    # honest error bar is the control above: about half a decade on every
+    # element at once, i.e. a common shift, not a per-element scatter. The
+    # SHAPE is better determined than the level.
+    #
+    # KNOWN GAP -- THE SINGLE HIGHEST-VALUE FOLLOW-UP.
+    #   Three routes to a_Sm disagree by 1.26 decades:
+    #     Q1 Table 2.6, kerosene-direct (SHIPPED)                -0.235
+    #     Q1 Fig. 2.8 (toluene) + Chai toluene->hexane + Z1 T4.1  +0.54
+    #     C98 n-hexane column + Z1 Table 4.1 kerosene shift       +1.03
+    #   Element by element the C98 route runs 1.26-1.73 decades ABOVE this
+    #   block (Pr +1.28, Nd +1.71, Sm +1.26, Dy +1.73). The kerosene-direct
+    #   route is shipped because it is the only anchor measured in this
+    #   record's own diluent, it is an unambiguous D rather than a Kex of
+    #   unverifiable convention, and it needs no 2.35-decade diluent transfer
+    #   borrowed from a different extractant's single-element table. C98 is
+    #   also internally suspect: its Nd entry sits above the Pr-Sm chord in
+    #   five of six diluent rows, which is the tetrad pattern backwards.
+    #   WHAT WOULD SETTLE IT: a digitized log D vs equilibrium pH dataset for
+    #   D2EHPA in kerosene at a stated charge and phase ratio -- the T21
+    #   analogue. That would retire S1, S2 and this whole paragraph at once.
+    #   A SECOND GAP: the shape's cumulative Lu/La is 6.4e4, geometric-mean
+    #   adjacent 2.205, against the 3.5e5 and 2.49 that Q1 quotes on the same
+    #   page from Peppard 1957 (its ref [9]). Both are printed in Q1 and they
+    #   do not agree; S2 is used because it is resolved per pair.
+    #
+    # D VALUES AT pH 0.5, 0.5 M DIMER FREE, TRACE LOADING. The old block
+    # quoted pH 3.0, where this reagent extracts everything and separates
+    # nothing:
+    #   La 0.32, Ce 0.77, Pr 2.2, Nd 3.7, Sm 18, Eu 41, Gd 65,
+    #   Tb 208, Dy 415, Y 1530
+    # At the anchor's own pH of 0.82: La 2.9, Nd 33, Dy 3.7e3, Y 1.4e4.
+    # These are the correlation's trace-loading inputs to `include_loading`
+    # and `solve_free_extractant`, not plant numbers.
     ph_coefficients:
-      La: {a: -8.50, b: 2.30, c: 0.010, d: 0.0}
-      Ce: {a: -8.25, b: 2.35, c: 0.010, d: 0.0}
-      Pr: {a: -7.95, b: 2.40, c: 0.010, d: 0.0}
-      Nd: {a: -7.70, b: 2.45, c: 0.010, d: 0.0}
-      Sm: {a: -7.35, b: 2.55, c: 0.010, d: 0.0}
-      Eu: {a: -7.18, b: 2.60, c: 0.010, d: 0.0}
-      Gd: {a: -7.05, b: 2.65, c: 0.010, d: 0.0}
-      Tb: {a: -6.90, b: 2.72, c: 0.010, d: 0.0}
-      Dy: {a: -6.78, b: 2.80, c: 0.010, d: 0.0}
-      Y:  {a: -7.00, b: 2.65, c: 0.010, d: 0.0}
+      # a = level (X95) + cumulative shape (PPH63); b = 3.0 stoichiometric, c = 0
+      La: {a: -1.9948, b: 3.0, c: 0.0, d: 0.0}
+      Ce: {a: -1.6146, b: 3.0, c: 0.0, d: 0.0}
+      Pr: {a: -1.1674, b: 3.0, c: 0.0, d: 0.0}
+      Nd: {a: -0.9370, b: 3.0, c: 0.0, d: 0.0}
+      Sm: {a: -0.2346, b: 3.0, c: 0.0, d: 0.0}   # two steps from Nd, across Pm
+      Eu: {a:  0.1079, b: 3.0, c: 0.0, d: 0.0}
+      Gd: {a:  0.3120, b: 3.0, c: 0.0, d: 0.0}
+      Tb: {a:  0.8171, b: 3.0, c: 0.0, d: 0.0}
+      Dy: {a:  1.1182, b: 3.0, c: 0.0, d: 0.0}
+      Y:  {a:  1.6853, b: 3.0, c: 0.0, d: 0.0}   # between Ho and Er (X95)
 
     # Temperature correction: add d*(1/T - 1/298.15) to log(D)
+    #
+    # STILL HAND_TUNED, and deliberately left alone by the #270 refit. Every
+    # source behind the pH block above is ISOTHERMAL at 25 C, so none of them
+    # can retire these. A D computed at 298 K from this record is now sourced;
+    # one computed at 333 K is not.
     #
     # OPEN QUESTION (unresolved, numbers deliberately unchanged). The comment
     # line that used to sit here said "extraction is exothermic, D decreases
@@ -265,8 +424,8 @@ extractants:
     # extraction is reported both ways depending on system, and unlike TBP
     # (see the TBP record, where the sign WAS refuted and fixed) no data was
     # retrieved here either way. So the sign is left as-is and flagged rather
-    # than silently flipped. This is a separate question from the TBP refit
-    # and needs its own literature pass before any of these numbers move.
+    # than silently flipped. This needs its own literature pass before any of
+    # these numbers move.
     temperature_coefficients:  # d values in K; sign unverified, see above
       La: -1500
       Ce: -1600
@@ -279,10 +438,40 @@ extractants:
       Dy: -2400
       Y:  -2200
 
-    valid_ph_range: [1.0, 5.0]
-    reference_pH: 3.0
+    # THE SOURCED WINDOW (#270). Was [1.0, 5.0], HAND_TUNED, and the upper
+    # bound was chemical nonsense for this reagent: at pH 5 the refitted block
+    # puts D(La) at 1e13. Every element is quantitatively in the organic
+    # phase, no separation is possible, and no plant operates there.
+    #
+    # Upper bound 2.0: at the reference charge D(La) is already 1e4 there, so
+    # 2.0 is generous rather than tight. Q1 Fig. 2.8 verifies the slope-3
+    # behaviour up to lg[H+] = -1, i.e. pH 1.
+    # Lower bound 0.0: Q1 Fig. 2.9 shows D passing through a MINIMUM at high
+    # acidity and rising again as the mechanism turns solvating; below that
+    # minimum a cation-exchange correlation is not merely extrapolated, it is
+    # the wrong equation. The minimum is not resolved to a number in the
+    # figure, so 0.0 is where this record stops rather than a measured bound.
+    #
+    # This is a large narrowing and it is meant to be: the anchor sits at
+    # pH 0.82 and the useful separation window for 1 mol/L D2EHPA really is
+    # around pH 0-1.5, not 1-5. At a tenth the charge (0.05 M nominal) the
+    # same lg Kex puts pH50(Nd) at 1.61, the familiar textbook figure; the
+    # cube law moves pH50 by log10(20) = 1.3 units between the two charges,
+    # which is the whole discrepancy.
+    valid_ph_range: [0.0, 2.0]
+    # The record's ONE measured point. Unlike PC88A, where five element
+    # supports had to be reconciled by a minimax, there is a single anchor
+    # here and its equilibrium pH is 0.8175. Everything DERIVED from this
+    # correlation is evaluated here (#268), so this is also where the
+    # Langmuir constants are taken. Was 3.0, outside the new window entirely.
+    reference_pH: 0.82
     valid_temp_range: [283, 333]  # K
-    reference_concentration: 0.5  # M
+    # DIMER BASIS, stated explicitly (#270): 0.5 mol/L as (HA)2, which is
+    # 1.0 mol/L nominal D2EHPA -- exactly the charge X95 used. `stoichiometry.
+    # basis` above is what makes this the dimer number, and
+    # `database.log10_concentration_factor` reads concentrations on the
+    # record's own basis.
+    reference_concentration: 0.5  # M as dimer (= 1.0 M nominal)
 
     # Concentration correction: D ∝ [HA]^n
     concentration_exponent: 3.0
@@ -297,7 +486,6 @@ extractants:
       log10_K: null          # calibrated from degree at the reference below
       reference_pH: 3.0
       reference_counter_ion: 0.1   # M
-      correlation_basis: unsaponified   # a proton-exchange fit (#266)
       # What the ph_coefficients above were measured on (#266). Stated
       # rather than inferred from `degree`: the degree is an operating
       # default for the circuit, and these coefficients are a proton-exchange
@@ -487,10 +675,17 @@ extractants:
     # it; only the right functional form can. With it, one fitted parameter
     # per element reproduces all six concentration series (r2 0.95-0.997).
     #
-    # NO OTHER RECORD IN THIS FILE CARRIES THIS FIELD, and that is correct:
-    # the hand-tuned blocks were never fitted on any concentration data, so
-    # applying a correction to them would move D away from the only thing
-    # they were ever tuned to reproduce.
+    # NO OTHER RECORD IN THIS FILE CARRIES THIS FIELD, and that is still
+    # correct after #270 retired the other two hand-tuned pH blocks. TBP and
+    # naphthenic_acid were never fitted on any concentration data, so a
+    # correction would move D away from the only thing they were tuned to
+    # reproduce. D2EHPA and Cyanex272 now ARE sourced, but neither source
+    # resolves the non-ideality: D2EHPA's level is a SINGLE charge (X95's
+    # 1 mol/L), so there is no series to fit y* to at all, and Cyanex272's
+    # six charges cannot separate it from the pH slope (r = -0.992). Adding
+    # 0.473 to either would be transferring T21's EHEHPA/Shellsol number to a
+    # different reagent in a different diluent, which is the sort of move the
+    # rest of this file exists to prevent.
     activity_coefficient_A: 0.473
     cost_usd_kg: 12.0
 
@@ -506,6 +701,7 @@ extractants:
 
   Cyanex272:
     full_name: "Bis(2,4,4-trimethylpentyl)phosphinic acid"
+    alternative_names: [HBTMPP, Cyanex_272]
     formula: "C16H35O2P"
     molecular_weight: 290.43
     density: 0.920
@@ -523,25 +719,173 @@ extractants:
       extractant_molecules: 3
       basis: dimer
 
-    # Cyanex 272 has high pKa - operates at higher pH (4-6)
-    # Excellent Co/Ni rejection, used for specialty REE separations
-    # Lower overall D values due to weaker acid strength
+    # *** REFITTED AGAINST NAMED SOURCES (#270). ***
     #
-    # EXPECTED D VALUES at pH 5.0:
-    #   La: 0.08, Ce: 0.20, Pr: 0.50, Nd: 1.2
-    #   Sm: 6.0, Eu: 12, Gd: 22, Tb: 40, Dy: 70, Y: 25
+    # Until #270 every number in this block was HAND_TUNED with no source of
+    # any kind. As with D2EHPA the replacement needs TWO sources, and for a
+    # sharper reason: the only full-series measurement of this reagent that
+    # was retrieved DOES NOT STATE THE EXTRACTANT CONCENTRATION, and under a
+    # cube law that is three decades of D per decade of charge. So the shape
+    # comes from one study and the level from another.
+    #
+    # SOURCES
+    #   S1  ZL93 -- Zhang & Li, Chin. J. Appl. Chem. 10(4) (1993) 72, as
+    #       Z1 Sec. 4.3.1 and Table 4.25 (pp. 138-139).
+    #       SUPPLIED: the SHAPE. Separation factors against La for all
+    #       fourteen stable lanthanides plus Y, in PURIFIED HBTMPP - octane -
+    #       HCl at pH 2.8, [RE3+] 4.0e-4 mol/L, [HCl] 2.0e-2 mol/L,
+    #       O/A = 1/1, 25 +/- 1 C. Average adjacent factor 3.24.
+    #       >>> This is the ONLY source of the relative spacing. <<<
+    #       DID NOT SUPPLY: the extractant concentration -- neither Z1 nor
+    #       LD19 prints it -- and therefore no absolute D and no level.
+    #   S2  L14 -- Liu, Jeon & Lee, Hydrometallurgy 150 (2014) 61-67,
+    #       Tables 1 and 2, SINGLE-extractant rows only.
+    #       SUPPLIED: the LEVEL. Six charges of Cyanex 272 in KEROSENE
+    #       (0.1-1.0 mol/L nominal), [Pr] 0.0083 and [Nd] 0.023 mol/L
+    #       chloride, initial pH 5.02, O/A = 1 (20 mL each), 30 min, ICP-OES.
+    #       Table 1 gives E% for both metals; Table 2's "Single Cyanex 272"
+    #       column gives the MEASURED equilibrium pH at the same six charges
+    #       (2.35, 2.09, 1.91, 1.86, 1.83, 1.82).
+    #       >>> This is the ONLY absolute D behind this record. <<<
+    #       DID NOT SUPPLY: any element but Pr and Nd, and no temperature
+    #       dependence. Its own subject is the Cyanex 272 + Alamine 336
+    #       SYNERGISTIC mixture, which is a different system; none of the
+    #       mixture data is used here.
+    #   S3  LD19 -- Li, J. Rare Earths 37 (2019) 468-486, Fig. 4.
+    #       SUPPLIED: a shape CROSS-CHECK only, plus the pKa above. It plots
+    #       the same primary study (its ref [67] is ZL93), so it is a check
+    #       on the digitization, not a replication. DID NOT SUPPLY: any
+    #       shipped coefficient, and no level -- it does not state the
+    #       concentration either.
+    #   S4  Z1 Eqs. (4.11), (4.12) and (4.27)-(4.31).
+    #       SUPPLIED: the model form. Not data.
+    #
+    # THE LEVEL, WRITTEN OUT
+    #   For each of S2's six rows, with O/A = 1:
+    #     D = E/(100 - E)
+    #     free (HA)2 = C_nominal/2 - 3*(0.0083*E_Pr + 0.023*E_Nd)/100   [4.11]
+    #     a = lg D - 3*pH_eq - 3*lg(free (HA)2 / 0.3)
+    #   using the MEASURED equilibrium pH, not a recovered one. Row by row:
+    #     C_nom  D_Pr    D_Nd    free(HA)2   a_Pr      a_Nd
+    #      0.1   0.0225  0.0428    0.0466   -6.2724   -5.9935
+    #      0.3   0.0604  0.0929    0.1427   -6.5207   -6.3341
+    #      0.5   0.0695  0.1062    0.2418   -6.6067   -6.4227
+    #      0.7   0.1312  0.2048    0.3354   -6.6072   -6.4139
+    #      0.9   0.1403  0.2240    0.4343   -6.8251   -6.6218
+    #      1.0   0.1792  0.2739    0.4814   -6.8227   -6.6385
+    #   a_Nd = -6.4041, rms 0.215 over the six (a is the single free
+    #   parameter, so this is a one-parameter least-squares fit). a_Pr from
+    #   the same rows is -6.6091, rms 0.189.
+    #   The two rows that BRACKET the reference charge -- 0.5 and 0.7 mol/L
+    #   nominal, i.e. 0.25 and 0.35 mol/L as dimer against a reference of
+    #   0.3 -- give -6.4227 and -6.4139, within 0.02 of the fit. The rms is
+    #   spent at the ends of the range, not at the anchor.
+    #
+    #   THE BASIS. S2 reports NOMINAL (monomer) molarity; this record's
+    #   `reference_concentration` of 0.3 is on the DIMER basis, i.e. 0.6 mol/L
+    #   nominal, which is where the factor of two in the free-dimer line comes
+    #   from. `database.log10_concentration_factor` reads concentrations on
+    #   the record's own basis, so nothing else needs converting.
+    #
+    #   Z1 Eq. (4.12) VALIDATED HERE. This is the one place in the file where
+    #   both the initial acidity and the measured equilibrium pH are printed,
+    #   so the proton balance can be tested rather than assumed. Recomputing
+    #   the six equilibrium pH values from 10**-5.02 + 3*(extracted RE)
+    #   reproduces the measured 2.35/2.09/1.91/1.86/1.83/1.82 as
+    #   2.47/2.14/2.08/1.84/1.80/1.73 -- worst error 0.17 pH units. That is
+    #   the warrant for using the same balance on D2EHPA's anchor, where the
+    #   equilibrium pH was never reported.
+    #
+    # THE SHAPE, WRITTEN OUT
+    #   Under one shared slope, lg beta(i/La) = a_i - a_La, so S1's La row
+    #   IS the shape. Values used (log10 of Table 4.25's La row):
+    #     Ce 1.068  Pr 1.599  Nd 1.711  Sm 2.832  Eu 2.959  Gd 3.022
+    #     Tb 3.530  Dy 3.814  Y 4.369
+    #   The block is anchored at Nd -- the element S2 determines best
+    #   (0.023 mol/L against Pr's 0.0083) -- and every other element is
+    #   a_Nd + lg beta(i/La) - lg beta(Nd/La).
+    #   Y sits between Ho and Er in Table 4.25 as printed, the same ordering
+    #   PC88A's refit established from T21 and Z1 p. 124 states in words.
+    #   Sm is two steps from Nd (across Pm), so its 13.2 is a product.
+    #
+    # PER ELEMENT: WHAT IS MEASURED, WHAT IS NOT
+    #   MEASURED level (S2):      Nd. Pr is measured too and is used as the
+    #     check below rather than as a second anchor.
+    #   MEASURED spacing (S1):    every element in this block.
+    #   INTERPOLATED:             nothing. As with D2EHPA there is no curve
+    #     drawn through anything here; every `a` is Nd's level plus printed
+    #     separation factors.
+    #   ASSUMED:  b = 3.0, c = 0.0, d = 0.0, and the transfer of a shape
+    #     measured in OCTANE to a level measured in KEROSENE. Both are
+    #     aliphatic and Z1 Table 4.1 puts kerosene and n-hexane 0.13 decades
+    #     apart for P507, so the diluent transfer is small -- but it is a
+    #     transfer, and it is uncorrected.
+    #
+    # HOW GOOD IS IT
+    #   THE TWO-SOURCE JOIN IS TESTABLE, because S2 measures Pr as well as Nd
+    #   and S1 gives the Nd/Pr spacing independently:
+    #     S1 (Table 4.25):   beta(Nd/Pr) = 1.295
+    #     S2 (Table 1):      1.51-1.86 across six rows, mean 1.60
+    #   so the shipped a_Pr of -6.5162 sits 0.093 decades above the -6.6091
+    #   that S2 measures directly. The shape source is used for consistency
+    #   -- one shape for the whole block -- and 0.09 decades is the size of
+    #   the seam.
+    #   THE SHAPE CROSS-CHECK. S3's Fig. 4 was digitized independently
+    #   (x-calibration to 0.019 pH units) and its pH-halves converted to
+    #   lg beta at the effective slope. Over thirteen elements it agrees with
+    #   Table 4.25 to within 0.15 decades, rms 0.08. Same primary study, so
+    #   this checks the reading, not the chemistry.
+    #
+    # KNOWN GAPS, both stated rather than hidden.
+    #   (1) THE MODEL FORM IS IMPOSED, AND S2 PREFERS A DIFFERENT ONE.
+    #   With b pinned at 3, the best-fit concentration exponent over S2's six
+    #   rows is n = 2.40 (rms 0.049), not the 3.0 this record declares
+    #   (rms 0.215); with n pinned at 3, the best-fit slope is b = 4.07. The
+    #   two cannot be separated from this dataset -- pH_eq and lg[HA] have
+    #   r = -0.992 across the series, because both are driven by the same
+    #   charge -- so neither fit refutes the other. Worse, S2 proposes for
+    #   single Cyanex 272 in chloride
+    #       RE3+ + Cl- + 2(H2A2) = REClA2.2HA + 2H+
+    #   i.e. TWO protons and a chloride, against the three-proton exchange
+    #   this record assumes from Z1 Eq. (4.27) (which S1's system, purified
+    #   HBTMPP in octane, does follow). b = 3 is kept because it is what S1
+    #   measured under, because the record declares protons_released: 3, and
+    #   because one shared slope is what makes every separation factor here
+    #   pH-independent. The cost is the 0.215 rms above, which is a smooth
+    #   drift with charge, smallest at the reference.
+    #   (2) NO LEVEL FROM THE SHAPE SOURCE. If ZL93's charge were ever
+    #   recovered, S1 would supply both halves and the seam in the previous
+    #   paragraph would close. S3's Fig. 4 implies a_Nd near -9.76, which is
+    #   3*log10(10) below the shipped level -- consistent with ZL93 having
+    #   worked near 0.05 mol/L. That is plausible for this group (Ma & Li
+    #   1992 used 0.0196 mol/L in n-octane, Liao et al. 2007 0.102 mol/L in
+    #   n-heptane, Wang et al. 1995 0.838 mol/L in kerosene) but it is an
+    #   inference from an unlabelled axis, so the figure sets no level here.
+    #   WHAT WOULD SETTLE BOTH: ZL93 itself, or any log D vs equilibrium pH
+    #   series for Cyanex 272 at a stated charge covering more than two
+    #   elements.
+    #
+    # D VALUES AT pH 2.0, 0.3 M DIMER FREE, TRACE LOADING -- inside S2's
+    # measured window of 1.82-2.35. The old block quoted pH 5.0, three pH
+    # units and nine decades past anywhere this reagent was ever measured:
+    #   La 0.008, Ce 0.09, Pr 0.31, Nd 0.39, Sm 5.2, Eu 7.0,
+    #   Gd 8.1, Tb 26, Dy 50, Y 179
     ph_coefficients:
-      La: {a: -9.80, b: 2.20, c: 0.005, d: 0.0}
-      Ce: {a: -9.50, b: 2.25, c: 0.005, d: 0.0}
-      Pr: {a: -9.15, b: 2.30, c: 0.005, d: 0.0}
-      Nd: {a: -8.85, b: 2.35, c: 0.005, d: 0.0}
-      Sm: {a: -8.25, b: 2.45, c: 0.005, d: 0.0}
-      Eu: {a: -7.95, b: 2.50, c: 0.005, d: 0.0}
-      Gd: {a: -7.68, b: 2.55, c: 0.005, d: 0.0}
-      Tb: {a: -7.40, b: 2.62, c: 0.005, d: 0.0}
-      Dy: {a: -7.15, b: 2.70, c: 0.005, d: 0.0}
-      Y:  {a: -7.55, b: 2.58, c: 0.005, d: 0.0}
+      # a = Nd level (L14) + shape against La (ZL93); b = 3.0, c = 0
+      La: {a: -8.1150, b: 3.0, c: 0.0, d: 0.0}
+      Ce: {a: -7.0468, b: 3.0, c: 0.0, d: 0.0}
+      Pr: {a: -6.5162, b: 3.0, c: 0.0, d: 0.0}   # L14 measures -6.6091 directly
+      Nd: {a: -6.4041, b: 3.0, c: 0.0, d: 0.0}   # the level anchor
+      Sm: {a: -5.2832, b: 3.0, c: 0.0, d: 0.0}   # two steps from Nd, across Pm
+      Eu: {a: -5.1560, b: 3.0, c: 0.0, d: 0.0}
+      Gd: {a: -5.0930, b: 3.0, c: 0.0, d: 0.0}
+      Tb: {a: -4.5850, b: 3.0, c: 0.0, d: 0.0}
+      Dy: {a: -4.3011, b: 3.0, c: 0.0, d: 0.0}
+      Y:  {a: -3.7460, b: 3.0, c: 0.0, d: 0.0}   # between Ho and Er (ZL93)
 
+    # STILL HAND_TUNED, and deliberately left alone by the #270 refit. Both
+    # sources behind the pH block are isothermal (25 +/- 1 C for S1, room
+    # temperature for S2), so neither can retire these.
     # Sign unverified; same open question as D2EHPA above (negative d implies
     # ENDOTHERMIC extraction). Numbers deliberately unchanged.
     temperature_coefficients:
@@ -556,10 +900,39 @@ extractants:
       Dy: -2200
       Y:  -2000
 
-    valid_ph_range: [3.0, 7.0]
-    reference_pH: 5.0
+    # THE SOURCED WINDOW (#270). Was [3.0, 7.0], HAND_TUNED, and both ends
+    # were wrong. The upper end was past chemistry: at pH 5 the refitted
+    # block puts D(La) at 7.7e6 and D(Y) at 1.8e11, so nothing separates from
+    # anything. The lower end excluded the only place this reagent has
+    # actually been measured -- S2's six equilibrium pH values all lie
+    # between 1.82 and 2.35, BELOW the old window.
+    #
+    # Lower bound 1.5: 0.3 pH units below S2's lowest measured equilibrium
+    # pH. Upper bound 3.5: S1's shape was measured at pH 2.8, and by pH 3.5
+    # D(La) is already 243, i.e. quantitative extraction of the least
+    # extracted element. Between those two the block is interpolating between
+    # its level source and its shape source rather than extrapolating past
+    # both.
+    #
+    # A NOTE ON WHY THE OLD WINDOW LOOKED REASONABLE. Cyanex 272 IS operated
+    # near pH 5 in practice -- but saponified and heavily loaded, where the
+    # free extractant is a small fraction of the charge and the free-acid
+    # concentration is buffered by the sodium form. This correlation is a
+    # trace-loading, unsaponified proton-exchange fit (`correlation_basis`
+    # below), and pH 5 is not where it was measured. Use
+    # `solve_free_extractant` and the saponification block to reach plant
+    # conditions; do not read D at pH 5 off this correlation.
+    valid_ph_range: [1.5, 3.5]
+    # The mean of S2's six measured equilibrium pH values is 1.977, and
+    # pH50(Nd) at the reference charge is 2.135. 2.0 sits between them and
+    # inside every source's window. Everything DERIVED from this correlation
+    # is evaluated here (#268). Was 5.0, outside the new window entirely.
+    reference_pH: 2.0
     valid_temp_range: [283, 333]
-    reference_concentration: 0.3
+    # DIMER BASIS, stated explicitly (#270): 0.3 mol/L as (HA)2, which is
+    # 0.6 mol/L nominal Cyanex 272 -- inside S2's 0.1-1.0 mol/L series and
+    # bracketed by its 0.5 and 0.7 mol/L rows.
+    reference_concentration: 0.3  # M as dimer (= 0.6 M nominal)
     concentration_exponent: 3.0
     cost_usd_kg: 25.0
 
@@ -1437,11 +1810,23 @@ modifiers:
 #     >>> explain("extractants", "extractants.naphthenic_acid.ph_coefficients.Dy.a")
 #     >>> audit("extractants", cls="HAND_TUNED")   # everything with no basis
 #
-# THE ONE THING TO KNOW: of the five extractants here, exactly two carry
-# coefficients traceable to a named table -- naphthenic_acid (Z1) and TBP
-# (K05/GP19). D2EHPA, PC88A and Cyanex272 do not. Their numbers were invented
-# to make demos look right and are tagged HAND_TUNED so that a query, not a
-# careful reading, is enough to notice.
+# THE ONE THING TO KNOW: every pH and nitrate coefficient in this file is now
+# traceable to a named table. #270 finished that. What is NOT traceable, and
+# is tagged HAND_TUNED so that a query rather than a careful reading is enough
+# to notice, is the `temperature_coefficients` block of D2EHPA, PC88A and
+# Cyanex272 -- thirty numbers, invented to make demos look right, and not
+# retirable by any of the sources that refitted the pH blocks, because every
+# one of those sources is isothermal. So: D at 298 K is sourced for all five
+# reagents; D at any other temperature is sourced for two.
+#
+# The remaining ESTIMATED fields are the five `cost_usd_kg` and four
+# `cost_usd_L` -- order-of-magnitude figures for the economics examples, and
+# never a basis for a cost claim.
+#
+# Read the class, not just the source key. A `source` of CALC with class
+# DERIVED means a number computed here from other sources by arithmetic the
+# record writes out; the source keys it was computed FROM are named in the
+# note beside it and in the record above.
 # ---------------------------------------------------------------------------
 provenance:
   rules:
@@ -1489,6 +1874,15 @@ provenance:
        note: "A DEFAULT OPERATING POINT, not a property. 0.30-0.50 is the
               industrial range; 0.35 is the mid-range default used here.
               Overridden by a Saponifier, a section, or an optimizer."}
+    - {pattern: "extractants.*.saponification.correlation_basis",     source: CONV,
+       note: "A DECLARATION about the ph_coefficients above, not a property
+              of the reagent: `unsaponified` says those coefficients were
+              fitted (or, before #270, tuned) against a proton-exchange
+              experiment with no alkali present, so the saponification model
+              must be applied ON TOP of them rather than being already inside
+              them (#266). True of all three acidic records, including after
+              the #270 refits -- X95, PPH63, ZL93 and L14 are all
+              unsaponified systems."}
     - {pattern: "extractants.*.saponification.counter_ion",           source: CONV}
     - {pattern: "extractants.*.saponification.reference_pH",          source: CONV}
     - {pattern: "extractants.*.saponification.reference_counter_ion", source: CONV}
@@ -1499,23 +1893,33 @@ provenance:
               it restates the declared degree rather than reporting a fit."}
 
     # ======================================================================
-    # (1) HAND-TUNED, NO SOURCE -- D2EHPA and Cyanex272
+    # (1) HAND-TUNED, NO SOURCE -- the three temperature blocks, and nothing
+    #     else. All three pH blocks left this section in #270.
     #
-    # PC88A's pH block left this section in #270 and is tagged under (2)
-    # below. Its temperature block did NOT: T21 is isothermal.
+    # None of the three is retirable by the sources that refitted the pH
+    # blocks, because every one of those sources is ISOTHERMAL. Retiring
+    # them needs a variable-temperature dataset for each reagent.
     # ======================================================================
-    - {pattern: "extractants.D2EHPA.ph_coefficients.*.*",           source: HAND_TUNED}
-    - {pattern: "extractants.D2EHPA.temperature_coefficients.*",    source: HAND_TUNED}
+    - {pattern: "extractants.D2EHPA.temperature_coefficients.*",    source: HAND_TUNED,
+       note: "NOT retired by the #270 refit and not retirable by it. X95 and
+              PPH63 are both room-temperature determinations with no
+              temperature series. Sign unverified, and as written a negative
+              d implies ENDOTHERMIC extraction (dH = +29 to +46 kJ/mol),
+              which contradicts the comment that used to sit beside them.
+              These are the last hand-tuned numbers in the D2EHPA
+              correlation: D at 298 K is sourced, D at any other temperature
+              is not."}
     - {pattern: "extractants.PC88A.temperature_coefficients.*",     source: HAND_TUNED,
        note: "NOT retired by the #270 refit and not retirable by it. T21 is
               isothermal at 298.0 +/- 0.1 K, so it carries no temperature
               information at all. These are the last hand-tuned numbers in
               the PC88A correlation: D at 298 K is measured, D at any other
               temperature is not."}
-    - {pattern: "extractants.Cyanex272.ph_coefficients.*.*",        source: HAND_TUNED}
-    - {pattern: "extractants.Cyanex272.temperature_coefficients.*", source: HAND_TUNED}
-    - {pattern: "extractants.D2EHPA.valid_ph_range",                source: HAND_TUNED}
-    - {pattern: "extractants.Cyanex272.valid_ph_range",             source: HAND_TUNED}
+    - {pattern: "extractants.Cyanex272.temperature_coefficients.*", source: HAND_TUNED,
+       note: "NOT retired by the #270 refit and not retirable by it. ZL93 is
+              at 25 +/- 1 C and L14 at room temperature; neither varies it.
+              Same unverified sign as D2EHPA above. D at 298 K is sourced,
+              D at any other temperature is not."}
 
     # ======================================================================
     # (2a) LITERATURE-DERIVED -- PC88A pH block, refitted from T21 (#270)
@@ -1588,6 +1992,203 @@ provenance:
               from T21's own treatment of its data (its Eqs. 3-5). The `a`
               values above were fitted on this form and are only valid with
               it applied."}
+
+    # ======================================================================
+    # (2a-bis) The two fields the three acidic records share, and which the
+    # #270 refits reach even though they sit outside the pH block.
+    # ======================================================================
+    - {pattern: "extractants.D2EHPA.concentration_exponent",    source: Z1,
+       locus: "Eqs. (4.27)-(4.31), p. 124",
+       note: "3.0, the same stoichiometry as `b`: three dimers per RE(III) on
+              the dimer basis this record declares. Not fitted -- X95 gives a
+              single extractant charge, so there is no concentration series
+              behind this record. Read the exponent as the mechanism's, and
+              the extrapolation away from 0.5 mol/L dimer as untested."}
+    - {pattern: "extractants.PC88A.concentration_exponent",     source: T21,
+       locus: "Eqs. 3-5",
+       note: "3.0, and unlike the other two this one is FITTED: T21 measures
+              six concentration series from 0.041 to 0.82 mol/L as dimer and
+              fits them as a cube law in the effective dimer concentration.
+              That is also why this is the only record carrying
+              activity_coefficient_A."}
+    - {pattern: "extractants.Cyanex272.concentration_exponent", source: Z1,
+       locus: "Eqs. (4.27)-(4.31), p. 124",
+       note: "3.0, the declared stoichiometry, imposed rather than fitted.
+              L14's six charges prefer n = 2.40 with b pinned at 3, but pH_eq
+              and lg[HA]_free are correlated at r = -0.992 across those rows,
+              so the series cannot separate the two exponents. The record
+              above states the residual this costs (rms 0.215 in lg D)."}
+    - {pattern: "extractants.D2EHPA.valid_temp_range",    source: CONV,
+       note: "[283, 333] K is a DECLARED bracket, not a measured one, and it
+              is wider than anything behind this record: X95 and PPH63 are
+              both single-temperature. It brackets the hand-tuned
+              temperature_coefficients, which is the only thing that varies
+              with T here. Same status as naphthenic_acid's."}
+    - {pattern: "extractants.PC88A.valid_temp_range",     source: CONV,
+       note: "[283, 333] K is a DECLARED bracket. T21 is isothermal at
+              298.0 +/- 0.1 K, so the range says nothing about where the
+              measurements are -- it brackets the hand-tuned
+              temperature_coefficients."}
+    - {pattern: "extractants.Cyanex272.valid_temp_range", source: CONV,
+       note: "[283, 333] K is a DECLARED bracket. ZL93 is at 25 +/- 1 C and
+              L14 at room temperature; neither varies it. It brackets the
+              hand-tuned temperature_coefficients."}
+
+    # ======================================================================
+    # (2a-ter) The other two `concentration_exponent`s. Not part of #270's
+    # three records, but the same defect: both had a source named in the
+    # record above and neither had a rule, so both were falling through the
+    # catch-all and reporting HAND_TUNED. After this, HAND_TUNED in this file
+    # means the thirty temperature coefficients and nothing else.
+    # ======================================================================
+    - {pattern: "extractants.TBP.concentration_exponent", source: GP19,
+       locus: "Fig. 1",
+       note: "3.0, the stoichiometric 3 of RE(NO3)3 + 3 TBP <-> RE(NO3)3.3TBP,
+              corroborated but not set by measurement: GP19 Fig. 1 fits
+              log D_Sm = 2.8055*log[TBP]_free - 2.8503 (R^2 = 0.992), i.e. an
+              order of 2.81 in FREE TBP. Rounded to the stoichiometric 3
+              rather than carrying 2.81, because the model applies the
+              exponent to TOTAL TBP -- a distinction the record above flags
+              as one of its two caveats on the level, and one that no
+              rounding of the exponent can repair."}
+    - {pattern: "extractants.naphthenic_acid.concentration_exponent", source: Q1,
+       locus: "Eq. 2.88",
+       note: "3.0, the cube law in FREE extractant that Eq. 2.88 writes for
+              cation exchange of a trivalent ion by a dimerized acid -- the
+              same 3 as this record's `b`. Not fitted here: Z1 Table 4.36 is
+              at a single extractant concentration, so this record has no
+              concentration series behind it either. #267's free-extractant
+              solve is what makes the FREE basis this exponent assumes
+              actually hold; on a total basis it overpredicts D by 1.34x at
+              this record's own anchor."}
+
+    # ======================================================================
+    # (2b) LITERATURE-DERIVED -- D2EHPA pH block, refitted for #270
+    #
+    # Two sources, both reached through Q1 as a secondary: X95 (Q1 Table 2.6)
+    # for the LEVEL, PPH63 (Q1 Table 2.8, HCl column) for the SHAPE, with Y
+    # placed from X95 again (Q1 Table 2.7 and the sentence on p. 213). The
+    # arithmetic is written out on the record above. Nothing in this block is
+    # interpolated -- every `a` is one measured D plus a product of printed
+    # separation factors.
+    # ======================================================================
+    - {pattern: "extractants.D2EHPA.ph_coefficients.*.*",  source: CALC}
+    - {pattern: "extractants.D2EHPA.ph_coefficients.*.a",  source: CALC,
+       note: "DERIVED, not measured, for every element including La. The
+              LEVEL is X95's single D_La = 0.99 (kerosene, 1 mol/L P204,
+              0.1 mol/L LaCl3, 0.003 mol/L HCl), converted to this record's
+              basis through Z1 Eq. (4.12) for the unreported equilibrium pH
+              (0.8175) and Eq. (4.11) for the free dimer (0.3508 mol/L),
+              giving a_La = -1.9948 at 0.5 mol/L dimer. The SHAPE is PPH63's
+              fourteen adjacent separation factors cumulated from La. The
+              phase ratio is NOT stated by X95; O/A = 1 is assumed and the
+              record reports that O/A 0.5 to 2 moves every `a` by +0.32 to
+              -0.20. The P507 row of the same table, pushed through the same
+              arithmetic, lands 0.61 decades below T21's independent fit, so
+              read the level as good to about half a decade with the sign of
+              the likely error known. Sm is two steps from Nd across Pm;
+              Y is placed at 0.76 of the Ho-Er interval."}
+    - {pattern: "extractants.D2EHPA.ph_coefficients.La.a", source: X95,
+       locus: "Q1 Table 2.6, p. 213",
+       note: "The one element whose ABSOLUTE level is measured rather than
+              stepped to. Still not a raw datum -- see the CALC note above
+              for the conversion -- but this is where the level enters."}
+    - {pattern: "extractants.D2EHPA.ph_coefficients.*.b",  source: Z1,
+       locus: "Eqs. (4.27)-(4.31), p. 124",
+       note: "PINNED at 3.0, the stoichiometric slope this record declares
+              (protons_released: 3). Not fitted -- there is no pH series
+              behind this record to fit it to. Q1 Fig. 2.8 verifies slope 3
+              for 1 mol/L P204 up to lg[H+] = -1. One slope for every element
+              is what makes a separation factor independent of pH, and it is
+              also what lets PPH63's separation factors be read directly as
+              differences in `a`."}
+    - {pattern: "extractants.D2EHPA.ph_coefficients.*.c",  source: CONV,
+       note: "Zero by declaration. No retrieved source resolves curvature in
+              pH for this reagent; the old blanket 0.010 was hand-tuned."}
+    - {pattern: "extractants.D2EHPA.ph_coefficients.*.d",  source: CONV,
+       note: "Zero because the temperature term lives in
+              temperature_coefficients, not because a temperature dependence
+              was measured to be absent."}
+    - {pattern: "extractants.D2EHPA.valid_ph_range",       source: Q1,
+       locus: "Figs. 2.8 and 2.9, pp. 216-218",
+       note: "[0.0, 2.0]. Upper bound: at the reference charge this block
+              puts D(La) at 1e4 by pH 2, so nothing separates above it; the
+              old 5.0 put D(La) at 1e13. Lower bound: Q1 Fig. 2.9 shows D
+              through a MINIMUM at high acidity and rising again as the
+              mechanism turns solvating, below which a cation-exchange
+              correlation is the wrong equation. The figure does not resolve
+              that minimum to a number, so 0.0 is where this record stops
+              rather than a measured bound."}
+    - {pattern: "extractants.D2EHPA.reference_pH",         source: X95,
+       locus: "Q1 Table 2.6, p. 213",
+       note: "0.82, the equilibrium pH of the record's ONE measured point,
+              recovered from the stated 0.003 mol/L initial HCl by Z1
+              Eq. (4.12). Unlike PC88A there is no minimax to do -- there is
+              a single anchor. Everything derived from this correlation is
+              evaluated here (#268). Was 3.0, outside the new window."}
+
+    # ======================================================================
+    # (2c) LITERATURE-DERIVED -- Cyanex272 pH block, refitted for #270
+    #
+    # Two sources that measure different things: L14 for the LEVEL (six
+    # Pr/Nd rows with MEASURED equilibrium pH, in kerosene) and ZL93 via Z1
+    # Table 4.25 for the SHAPE (fifteen elements, but the extractant charge
+    # is not printed anywhere, so it can set no level). LD19 Fig. 4 is a
+    # cross-check on the shape and supplies no shipped number.
+    # ======================================================================
+    - {pattern: "extractants.Cyanex272.ph_coefficients.*.*",  source: CALC}
+    - {pattern: "extractants.Cyanex272.ph_coefficients.*.a",  source: CALC,
+       note: "DERIVED, not measured. LEVEL: a_Nd = -6.4041, a one-parameter
+              least-squares fit over L14's six charges (rms 0.215; the two
+              rows bracketing the reference charge give -6.4227 and -6.4139).
+              SHAPE: ZL93's separation factors against La, applied relative
+              to Nd. The join is testable, because L14 measures Pr too:
+              ZL93 gives beta(Nd/Pr) = 1.295 against L14's measured 1.51-1.86,
+              so the shipped a_Pr sits 0.093 decades above L14's direct
+              -6.6091. Sm is two steps from Nd across Pm; Y is printed
+              between Ho and Er. See the record for the full arithmetic and
+              for why n = 3 is imposed against L14's best-fit 2.40."}
+    - {pattern: "extractants.Cyanex272.ph_coefficients.Nd.a", source: L14,
+       locus: "Tables 1 and 2, single-extractant rows",
+       note: "The element whose ABSOLUTE level is measured. L14 reports both
+              E% and the MEASURED equilibrium pH at the same six charges,
+              which is what makes this a level rather than an inference --
+              and is also the dataset that validates Z1 Eq. (4.12) to within
+              0.17 pH units, the warrant for using that balance on D2EHPA."}
+    - {pattern: "extractants.Cyanex272.ph_coefficients.*.b",  source: Z1,
+       locus: "Eqs. (4.27)-(4.31), p. 124; Sec. 4.3.1, p. 138",
+       note: "PINNED at 3.0, the stoichiometric slope this record declares,
+              and the model ZL93's purified HBTMPP-octane-HCl system follows.
+              NOT UNCONTESTED: L14 proposes RE3+ + Cl- + 2(H2A2) =
+              REClA2.2HA + 2H+ for single Cyanex 272 in chloride, i.e. two
+              protons and a chloride. b and the concentration exponent cannot
+              be separated from L14's series (r = -0.992 between pH_eq and
+              lg[HA]), so that proposal is recorded rather than adopted."}
+    - {pattern: "extractants.Cyanex272.ph_coefficients.*.c",  source: CONV,
+       note: "Zero by declaration. The old blanket 0.005 was hand-tuned."}
+    - {pattern: "extractants.Cyanex272.ph_coefficients.*.d",  source: CONV,
+       note: "Zero because the temperature term lives in
+              temperature_coefficients, not because a temperature dependence
+              was measured to be absent."}
+    - {pattern: "extractants.Cyanex272.valid_ph_range",       source: L14,
+       locus: "Table 2, single Cyanex 272 column",
+       note: "[1.5, 3.5]. The lower bound is 0.3 units below L14's lowest
+              MEASURED equilibrium pH (1.82); all six of its rows equilibrate
+              between 1.82 and 2.35, which is BELOW the old window's lower
+              bound of 3.0 entirely. The upper bound sits above ZL93's
+              pH 2.8 and at the point where D(La) reaches 243, i.e.
+              quantitative extraction of the least extracted element. The
+              old 7.0 put D(La) at 1e13. Cyanex 272 IS run near pH 5 in
+              practice, but saponified and heavily loaded -- that is what
+              solve_free_extractant and the saponification block are for,
+              not an extrapolation of this correlation."}
+    - {pattern: "extractants.Cyanex272.reference_pH",         source: L14,
+       locus: "Table 2, single Cyanex 272 column",
+       note: "2.0, between the mean of L14's six measured equilibrium pH
+              values (1.977) and this block's pH50 for Nd (2.135), and
+              inside every source's window. Everything derived from this
+              correlation is evaluated here (#268). Was 5.0, outside the new
+              window entirely."}
 
     # ======================================================================
     # (2) LITERATURE-DERIVED -- TBP nitrate block

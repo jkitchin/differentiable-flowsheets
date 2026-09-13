@@ -53,17 +53,21 @@ WHERE THE CONSTANTS COME FROM
 :func:`log_K_from_correlation` inverts the existing L1 correlation
 (:class:`~difflow_ree.equilibrium.distribution.REEDistribution`) at a stated
 reference condition. That is the only source available in this repository, and
-it inherits that source's provenance: the ``ph_coefficients`` of D2EHPA, PC88A
-and Cyanex272 are hand-tuned with no literature source (see the header of
-``data/extractants.yaml``), so a constant derived from them is illustrative.
-Supply measured constants for design numbers.
+it inherits that source's provenance, which since #270 is a named table for
+every acidic record: D2EHPA (X95/PPH63), PC88A (T21), Cyanex272 (L14/ZL93),
+naphthenic_acid (Z1). See the header of ``data/extractants.yaml`` for how good
+each one is; the ``temperature_coefficients`` are still hand-tuned, so a
+constant calibrated away from 298 K is illustrative.
 
-The calibration is exact only at the reference condition, and the residual
-disagreement is a real and reportable statement about the correlation rather
-than a defect of the closure: mass action forces
-``d log10 D / d pH = protons_released`` (3.0), while the tabulated ``b``
-coefficients are 2.20-2.90. :func:`correlation_ph_slope_defect` returns that
-gap so it can be tested and quoted instead of discovered.
+The calibration used to be exact only at the reference pH, because mass action
+forces ``d log10 D / d pH = protons_released`` (3.0) while the tabulated ``b``
+coefficients were 2.20-2.90. **That gap is now zero.** Every acidic record in
+the file carries ``b = 3.0`` and ``c = 0.0`` exactly -- the refits pin the
+slope at the stoichiometry rather than fitting it -- so the closure and the
+correlation now agree in pH *everywhere*, not just at one point.
+:func:`correlation_ph_slope_defect` still returns the gap, and returning zero
+is the assertion, not a no-op: a future record fitted with a free slope would
+make it non-zero again and the tests would say so.
 """
 
 from __future__ import annotations
@@ -257,7 +261,7 @@ class ReactionNetwork(ValueKeyed):
             forms nothing.
 
     Example:
-        >>> net = cation_exchange_network("D2EHPA", ("Nd",), calibration_pH=3.0)
+        >>> net = cation_exchange_network("D2EHPA", ("Nd",), calibration_pH=0.82)
         >>> net.n_components, net.n_species
         (5, 1)
         >>> net.component_names[net.proton_index]
@@ -859,7 +863,7 @@ def log_K_from_correlation(
     template: str | NetworkTemplate,
     elements: Sequence[str],
     extractant: str,
-    calibration_pH: float = 3.0,
+    calibration_pH: float | None = None,
     T: float = 298.15,
     extractant_conc: float | None = None,
     anion_conc: float = 1.0,
@@ -898,11 +902,18 @@ def log_K_from_correlation(
         extractant: Extractant name, passed to
             :class:`~difflow_ree.equilibrium.distribution.REEDistribution`.
         calibration_pH: Reference pH (concentration scale) at which the
-            correlation and the closure are made to agree. Choose the pH the
-            cascade will actually run at: the correlation's pH slope is 2.2-2.9
-            while mass action forces exactly ``protons_released``, so the two
-            models separate away from this point (see
-            :func:`correlation_ph_slope_defect`).
+            correlation and the closure are made to agree. None uses the
+            extractant record's own ``reference_pH``, which is the condition
+            every other derived quantity is evaluated at (#268) and is
+            guaranteed to be inside ``valid_ph_range``. Choose the pH the
+            cascade will actually run at. For the shipped acidic records the
+            two models no longer separate away from this point at all --
+            ``b`` is pinned at ``protons_released`` and ``c`` is zero, so
+            :func:`correlation_ph_slope_defect` is zero -- but a record with a
+            freely fitted slope would still make this choice load-bearing.
+            It also has to be a pH the correlation is valid at: check
+            ``valid_ph_range``, which #270 narrowed considerably for D2EHPA
+            and Cyanex272.
         T: Reference temperature (K).
         extractant_conc: Total extractant concentration (M, monomer basis).
             None uses the record's ``typical_concentration``.
@@ -925,7 +936,7 @@ def log_K_from_correlation(
 
     Example:
         >>> K = log_K_from_correlation(
-        ...     "cation_exchange_dimer", ("Nd",), "D2EHPA", calibration_pH=3.0
+        ...     "cation_exchange_dimer", ("Nd",), "D2EHPA", calibration_pH=0.82
         ... )
         >>> round(K["Nd"], 3)
         -7.454
@@ -952,6 +963,14 @@ def log_K_from_correlation(
         monomers_per_component = 2.0 if template.extractant_basis == "dimer" else 1.0
     if extractant_conc is None:
         extractant_conc = ext.typical_concentration
+    if calibration_pH is None:
+        # The record's own declared basis, which is where everything else
+        # derived from the correlation is evaluated (#268). Before #270 this
+        # defaulted to a hard-coded 3.0, which the D2EHPA refit put outside
+        # that record's validity range entirely.
+        calibration_pH = (
+            ext.reference_pH if ext.reference_pH is not None else 3.0
+        )
 
     net = build_network(
         template,
@@ -995,9 +1014,9 @@ def correlation_ph_slope_defect(extractant: str, element: str) -> float:
     """Gap between the correlation's pH slope and the mass-action slope.
 
     Mass action forces ``d log10 D / d pH = protons_released`` exactly: three
-    for a trivalent ion on an acidic extractant. The tabulated correlations
-    use element-specific slopes ``b`` between 2.20 and 2.90, so calibrating
-    ``K`` at one pH and evaluating at another leaves a *predictable* gap,
+    for a trivalent ion on an acidic extractant. A correlation fitted with a
+    free slope ``b`` need not agree, and then calibrating ``K`` at one pH and
+    evaluating at another leaves a *predictable* gap,
 
     .. math::
 
@@ -1010,6 +1029,13 @@ def correlation_ph_slope_defect(extractant: str, element: str) -> float:
     asserted quantitatively in a test rather than absorbed into a loose
     tolerance, and so a user can see whether the correlation they are
     calibrating from is mass-action consistent at all.
+
+    Since #270 every acidic record in ``extractants.yaml`` returns exactly
+    zero here, with ``c = 0`` as well: the refits pin ``b`` at the declared
+    stoichiometry instead of fitting it, which is also what makes a separation
+    factor independent of pH. Zero is therefore the expected answer for the
+    shipped data, and a non-zero answer means either a user-supplied record or
+    a future free-slope fit -- in which case the gap above is live again.
 
     Args:
         extractant: Extractant name.
@@ -1024,7 +1050,7 @@ def correlation_ph_slope_defect(extractant: str, element: str) -> float:
 
     Example:
         >>> round(correlation_ph_slope_defect("D2EHPA", "Nd"), 2)
-        0.55
+        0.0
     """
     ext = get_extractant(extractant)
     if not ext.ph_coefficients:
@@ -1081,7 +1107,7 @@ def network_for_extractant(extractant: str, saponified: bool = False) -> str:
 def cation_exchange_network(
     extractant: str,
     elements: Sequence[str],
-    calibration_pH: float = 3.0,
+    calibration_pH: float | None = None,
     T: float = 298.15,
     extractant_conc: float | None = None,
     log10_K: Mapping[str, float] | None = None,
@@ -1102,8 +1128,8 @@ def cation_exchange_network(
     Args:
         extractant: Extractant name.
         elements: REE symbols to track.
-        calibration_pH: Reference pH for the calibration; see
-            :func:`log_K_from_correlation`.
+        calibration_pH: Reference pH for the calibration. None uses the
+            record's ``reference_pH``; see :func:`log_K_from_correlation`.
         T: Reference temperature (K).
         extractant_conc: Total extractant concentration (M, monomer basis).
         log10_K: Measured constants, keyed by element symbol (and by species

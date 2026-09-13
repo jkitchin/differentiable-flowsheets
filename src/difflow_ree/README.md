@@ -149,9 +149,12 @@ selectivity spread as the old nitrate block. `Extractant.ph_coefficients` is
 therefore `dict | None`.
 
 > **TBP's nitrate coefficients are now refitted from primary literature.**
-> They are the *only* literature-derived numbers in `data/extractants.yaml`;
-> D2EHPA / PC88A / Cyanex272 remain hand-tuned with no recorded source. Fit
-> basis: Kraikaew, Srinuttrakul & Chayavadhanakur (2005), *J. Metals, Materials
+> Since #270 so are every other record's `ph_coefficients`: D2EHPA, PC88A,
+> Cyanex272 and `naphthenic_acid` all carry `sources.yaml` keys for their `a`
+> and `b` values. What is still HAND_TUNED, and tagged as such, is the
+> `temperature_coefficients` block on the three acidic records --- the primary
+> sources behind the refit are isothermal, so they carry no information about
+> `dH`. TBP's fit basis: Kraikaew, Srinuttrakul & Chayavadhanakur (2005), *J. Metals, Materials
 > and Minerals* **15**(2), 89-95, Table 1, corrected to 3 M NO3⁻ / 1 M TBP /
 > 298.15 K; heat of extraction from Ganesh & Pandey (2019), *J. Rad. Nucl.
 > Appl.* **4**(2), 109-115 (`dH_Sm = -43.3 kJ/mol`).

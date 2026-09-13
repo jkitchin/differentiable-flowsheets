@@ -58,7 +58,11 @@ class TestDistributionModel:
             elements=("La", "Nd", "Dy"),
         )
 
-        D_values = dist.get_D_all(pH=3.0, T=298.15)
+        # (#270) pH 1.0, inside D2EHPA's refitted validity window of
+        # [0.0, 2.0]. The ordering this asserts is pH-independent -- all ten
+        # elements share the slope b = 3 -- but the probe still has to be
+        # somewhere the coefficients were fitted.
+        D_values = dist.get_D_all(pH=1.0, T=298.15)
 
         # Heavy REE should have higher D
         assert D_values["Dy"] > D_values["Nd"]
@@ -68,8 +72,9 @@ class TestDistributionModel:
         """Test pH effect on D values."""
         from difflow_ree import get_distribution_coefficient
 
-        D_low_pH = get_distribution_coefficient("Nd", "D2EHPA", pH=2.0)
-        D_high_pH = get_distribution_coefficient("Nd", "D2EHPA", pH=4.0)
+        # (#270) Both ends inside D2EHPA's refitted window of [0.0, 2.0].
+        D_low_pH = get_distribution_coefficient("Nd", "D2EHPA", pH=0.5)
+        D_high_pH = get_distribution_coefficient("Nd", "D2EHPA", pH=1.5)
 
         # Higher pH = higher extraction
         assert D_high_pH > D_low_pH
@@ -83,7 +88,9 @@ class TestDistributionModel:
             elements=("Nd", "Pr"),
         )
 
-        SF = dist.get_separation_factor("Nd", "Pr", pH=3.0)
+        # (#270) pH 1.0, in-window. With one shared slope the factor is
+        # 10**(a_Nd - a_Pr) at every pH, so this reads 1.699 anywhere.
+        SF = dist.get_separation_factor("Nd", "Pr", pH=1.0)
 
         # Nd should extract slightly better than Pr
         assert SF > 1.0
@@ -102,7 +109,10 @@ class TestUnitOperations:
             n_stages=3,
             extractant="D2EHPA",
             elements=("La", "Nd", "Dy"),
-            pH=2.5,  # Lower pH reduces extraction, shows selectivity
+            # (#270) pH 0.5. The intent of the old 2.5 -- "low enough that
+            # the elements have not all saturated" -- is now a pH inside the
+            # refitted window of [0.0, 2.0]: D(La) = 0.32, D(Dy) = 104.
+            pH=0.5,
         )
         extractor = REEExtractor(params)
 
@@ -270,7 +280,7 @@ class TestFlowsheets:
             elements=("La", "Nd", "Dy"),
             n_stages=15,
             split_points=(5, 10),
-            pH=3.0,
+            pH=0.5,  # (#270) the record's own scrubbing point; see default_pH
         )
         cascade = SplitShellCascade(params)
 
@@ -310,7 +320,7 @@ class TestFlowsheets:
             elements=("La", "Dy"),
             n_stages=10,
             split_points=(5,),
-            pH=3.0,
+            pH=0.5,  # (#270) the record's own scrubbing point; see default_pH
         )
         cascade = SplitShellCascade(params)
 
@@ -340,7 +350,8 @@ class TestFlowsheets:
         """Test that optimize_split_points uses D values, not equal spacing."""
         from difflow_ree.flowsheets.split_shell import optimize_split_points
 
-        # For D2EHPA at pH 3.5, Dy >> Nd >> La in terms of D.
+        # For D2EHPA at pH 0.5 -- (#270) the record's own scrubbing point,
+        # inside its refitted window -- Dy >> Nd >> La in terms of D.
         # With 3 products from 3 elements, splits should place boundaries
         # between natural D-value gaps, not at n/3 and 2n/3.
         splits = optimize_split_points(
@@ -348,7 +359,7 @@ class TestFlowsheets:
             extractant="D2EHPA",
             n_stages=30,
             n_products=3,
-            pH=3.5,
+            pH=0.5,
         )
 
         assert len(splits) == 2  # n_products - 1 split points
@@ -365,7 +376,7 @@ class TestFlowsheets:
             extractant="D2EHPA",
             n_stages=20,
             n_products=1,
-            pH=3.0,
+            pH=0.5,
         )
         assert splits == ()
 
@@ -442,7 +453,8 @@ class TestJAXCompatibility:
             return dist.get_D("Nd", pH)
 
         # Should be able to compute gradient
-        dD_dpH = grad(D_at_pH)(3.0)
+        # (#270) pH 1.0, inside D2EHPA's refitted window of [0.0, 2.0].
+        dD_dpH = grad(D_at_pH)(1.0)
         assert dD_dpH > 0  # D increases with pH
 
 

@@ -83,10 +83,10 @@ prob = st.TwoStageProblem(
     model=circuit,                          # (x, u, theta) -> {name: value}
     first_stage={"n_stages": (2.0, 16.0),   # decided once
                  "solvent":  (3.0, 45.0)},
-    recourse={"pH": (1.8, 2.8)},            # re-decided per campaign
+    recourse={"pH": (0.1, 1.2)},            # re-decided per campaign
     objective="profit", maximize=True,
     risk=("cvar", 0.9),
-    constraints=[("purity", ">=", 0.80, 0.90)],
+    constraints=[("purity", ">=", 0.93, 0.90)],
 )
 
 res = st.solve_saa(prob, scen)
@@ -238,10 +238,21 @@ rep = st.bounds(prob, scen, result=res)
 print(rep.summary())
 ```
 
-Both obey `WS <= SP <= EEV` for a minimization. `BoundReport.ordered` says
-whether that held; when it did not, a solve failed to converge and the gaps are
-not meaningful — the report says so rather than reporting a negative EVPI as
-though it meant something.
+Both obey `WS <= SP <= EEV` for a minimization, **among admissible designs**.
+`BoundReport.ordered` says whether that held; when it did not, a solve failed to
+converge and the gaps are not meaningful — the report says so rather than
+reporting a negative EVPI as though it meant something.
+
+The qualifier is not pedantry, and it is the more common way the ordering
+breaks. EEV bounds SP only if the mean-value design is one you are allowed to
+build. A design that ignores the uncertainty and misses the chance constraint
+scores *better* than the stochastic one for exactly the reason it is not
+allowed, so VSS comes out negative and blames the solver for a modelling fact.
+`BoundReport.ev_feasible` is the flag for that case, and `summary()` names it:
+ignoring the uncertainty does not produce a usable design here, so EEV is the
+objective of an inadmissible point and the VSS printed above it is not a value.
+Without recourse to absorb the spread, this is the usual outcome rather than a
+corner case.
 
 The wait-and-see bound carries the constraints across **unchanged**, which is
 what makes it a bound: dropping non-anticipativity and changing nothing else

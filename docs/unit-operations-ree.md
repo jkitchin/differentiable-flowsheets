@@ -399,12 +399,13 @@ dist = REEDistribution(
     concentration=0.5,  # M
 )
 
-# Get D value for Nd at pH 3.0
-D_nd = dist.get_D("Nd", pH=3.0, T=298.15)
-print(f"D(Nd) at pH 3.0: {D_nd:.2f}")
+# Get D value for Nd at pH 1.0, inside D2EHPA's validity window of [0, 2]
+D_nd = dist.get_D("Nd", pH=1.0, T=298.15)
+print(f"D(Nd) at pH 1.0: {D_nd:.2f}")     # 115.61
 
 # Get all D values
-D_all = dist.get_D_all(pH=3.0)
+D_all = dist.get_D_all(pH=1.0)
+# La 10.12, Ce 24.29, Nd 115.61, Dy 13128
 for elem, D in D_all.items():
     print(f"D({elem}): {D:.2f}")
 ```
@@ -430,9 +431,18 @@ print(float(tbp.get_D("Nd", nitrate_conc=6.0)))  # rises with nitrate
 ```
 
 ```{note}
-**TBP's nitrate coefficients are refitted from primary literature.** So are
-`naphthenic_acid`'s and, since #270, PC88A's. D2EHPA and Cyanex272 remain
-**hand-tuned with no recorded source** — do not mistake one for the other.
+**Every extractant record's distribution coefficients are now fitted against
+named primary sources.** TBP, `naphthenic_acid`, PC88A, D2EHPA and Cyanex272
+all carry `sources.yaml` keys for their `ph_coefficients` (or, for TBP, its
+nitrate block); #270 closed the last three. Each record's fit basis, correction
+arithmetic, per-element measured-vs-interpolated status, validity window and
+known gaps are written into `extractants.yaml` beside the numbers.
+
+The exception, tagged rather than papered over, is the
+`temperature_coefficients` block on the three acidic records: every source
+behind the #270 refit is isothermal, so it carries no information about `dH`
+and those entries stay `HAND_TUNED`. `python -m difflow_ree.provenance --cls
+HAND_TUNED` lists them.
 
 **Fit basis.** Kraikaew, Srinuttrakul & Chayavadhanakur (2005), "Solvent
 Extraction Study of Rare Earths from Nitrate Medium by the Mixtures of TBP and
@@ -665,8 +675,8 @@ print({k: v["max_ionic_strength"] for k, v in ACTIVITY_MODELS.items()})
 # {'davies': 0.5, 'none': inf}
 
 dist = REEDistribution(extractant="D2EHPA", elements=("Nd",))
-dist.get_D("Nd", pH=3.0, ionic_strength=0.3)   # in range, silent
-dist.get_D("Nd", pH=3.0, ionic_strength=3.0)   # UserWarning: outside Davies range
+dist.get_D("Nd", pH=1.0, ionic_strength=0.3)   # in range, silent
+dist.get_D("Nd", pH=1.0, ionic_strength=3.0)   # UserWarning: outside Davies range
 
 # Escalate to an error, or silence it, at construction time
 REEDistribution(extractant="D2EHPA", elements=("Nd",), on_out_of_range="raise")
@@ -711,14 +721,14 @@ about that regime. Values inside the range are untouched.
 
 ```python
 d = REEDistribution(extractant="D2EHPA", elements=("Nd",), on_out_of_range="ignore")
-D0 = float(d.get_D("Nd", pH=3.0))
-[float(d.get_D("Nd", pH=3.0, ionic_strength=I)) / D0 for I in (0.1, 1.0, 3.0)]
+D0 = float(d.get_D("Nd", pH=1.0))
+[float(d.get_D("Nd", pH=1.0, ionic_strength=I)) / D0 for I in (0.1, 1.0, 3.0)]
 # [0.2280, 0.1560, 0.1560]   <- never above 1
 
 # Raw, possibly inverted Davies is still available, but only on request:
 e = REEDistribution(extractant="D2EHPA", elements=("Nd",),
                     on_out_of_range="ignore", extrapolate_activity_model=True)
-float(e.get_D("Nd", pH=3.0, ionic_strength=3.0)) / D0     # 6.49
+float(e.get_D("Nd", pH=1.0, ionic_strength=3.0)) / D0     # 6.49
 ```
 
 Why the clamp rather than refusing to trace, or an opt-in flag for traced
@@ -750,7 +760,7 @@ import matplotlib.pyplot as plt
 
 dist = REEDistribution(extractant="D2EHPA", elements=("La", "Nd", "Dy"))
 
-pH_range = jnp.linspace(1.0, 5.0, 50)
+pH_range = jnp.linspace(0.0, 2.0, 50)   # D2EHPA's fitted window
 for elem in ["La", "Nd", "Dy"]:
     D_values = [float(dist.get_D(elem, pH)) for pH in pH_range]
     plt.semilogy(pH_range, D_values, label=elem)
@@ -771,9 +781,16 @@ Every cation-exchange record declares a `valid_ph_range` — the window its
 from difflow_ree import get_extractant
 {e: get_extractant(e).valid_ph_range
  for e in ("D2EHPA", "PC88A", "Cyanex272", "TBP", "naphthenic_acid")}
-# {'D2EHPA': (1.0, 5.0), 'PC88A': (0.1, 2.5), 'Cyanex272': (3.0, 7.0),
+# {'D2EHPA': (0.0, 2.0), 'PC88A': (0.1, 2.5), 'Cyanex272': (1.5, 3.5),
 #  'TBP': (0.5, 4.0), 'naphthenic_acid': (4.0, 5.0)}
 ```
+
+Four of those five windows moved in #270, because the refit made them
+*measured* spans rather than declarations. D2EHPA went from `[1, 5]` to
+`[0, 2]`, Cyanex272 from `[3, 7]` to `[1.5, 3.5]`, PC88A from `[0.1, 5.5]` to
+`[0.1, 2.5]`. **No single pH is inside all four cation-exchange windows any
+more**, which is why the library stopped shipping pH literals at all; see
+{ref}`record-derived-ph-defaults`.
 
 **PC88A's window is now [0.1, 2.5], and it means something different from the
 other four.** It is the span T21 (Tanaka 2021) actually measured -- log D
@@ -840,17 +857,69 @@ deliberately:
   category that also carries the concrete report.
 
 ```{note}
-The flowsheet templates' default `stripping_pH=0.5` is *below* D2EHPA's
-`[1, 5]`, so `ExtractStripCircuit` and `ExtractScrubStripCircuit` warn on their
-own defaults. That is the check working: a strip at pH 0.5 against those
-coefficients is a half-decade extrapolation. The default was left as it is
-because changing it would move numeric results throughout the package; pass a
-`stripping_pH` inside the window, or `on_out_of_range="ignore"`, when you do
-not want the report. `tests/ree/test_kremser_temp_bugs.py::TestStripperKremser::test_stripping_at_low_pH`
-extrapolates on purpose and is expected to warn.
+Until #270 the flowsheet templates shipped a default `stripping_pH=0.5` that
+was *below* D2EHPA's window, so `ExtractStripCircuit` and
+`ExtractScrubStripCircuit` warned on their own defaults --- the check working,
+and a warning nobody could act on without picking a different literal. Every
+such default is now taken from the record; the templates no longer warn on
+themselves. `tests/ree/test_kremser_temp_bugs.py::TestStripperKremser::test_stripping_at_low_pH`
+extrapolates on purpose and is still expected to warn.
 ```
 
 Tests: `tests/ree/test_ph_validity_range.py`.
+
+(record-derived-ph-defaults)=
+##### Operating pH defaults come from the record, not from a literal (#270)
+
+The #270 refit narrowed three of the four cation-exchange windows, and it left
+the package with no pH literal that is legal everywhere: `[0, 2]`, `[0.1, 2.5]`,
+`[1.5, 3.5]` and `[4, 5]` have empty intersection. The old defaults --- 3.5 for
+extraction, 2.0 for scrubbing, 0.5 for stripping, 3.0 in the extractor ---
+were each outside at least two of them, and at D2EHPA's refitted coefficients
+`D(Nd)` at pH 0.5 is 3.7, so the "strip" was still extracting.
+
+So the defaults became `None`, and `None` means *ask the record*:
+
+```python
+from difflow_ree.database import default_pH, get_extractant
+
+default_pH("D2EHPA", "extraction")   # 2.0
+default_pH("D2EHPA", "scrubbing")    # 0.5
+default_pH("D2EHPA", "stripping")    # 0.0
+default_pH("Cyanex272", "stripping") # 1.5
+```
+
+The policy is deliberately crude, and stated rather than tuned:
+
+| duty | where in the window | why |
+|---|---|---|
+| extraction | the top | the most extracting condition the coefficients can speak to |
+| scrubbing | a quarter of the way up | above the strip, below the extract, on the record's own scale |
+| stripping | the bottom | the least extracting condition on record |
+
+The endpoints are legal: `_check_ph_range` tests inclusively, so a default at a
+window edge never warns. A solvating record has no cation-exchange duty pH ---
+`Extractant.default_extraction_pH` and friends return `None` for TBP --- and
+`default_pH` falls back to the midpoint of its declared window, which nothing
+pH-driven reads.
+
+Every params class that carried a pH literal now carries `None`:
+`REEExtractorParams`, `MixerSettlerParams`, `ScrubberParams`, `StripperParams`,
+`ExtractStripParams`, `ExtractScrubStripParams`, `SplitShellParams`. Two of
+those resolve to something other than their own duty name, on purpose:
+
+* `SplitShellParams.pH` takes the **scrubbing** default. A split-shell cascade
+  fractionates only where `D` straddles 1; at D2EHPA's extraction default both
+  La and Dy are quantitatively extracted and the cascade separates nothing.
+* The screening functions (`separation_factor`, `screen_separation`) take the
+  record's **`reference_pH`** --- the condition #268 declares every derived
+  constant at. The separation factor does not depend on the choice anyway (one
+  shared `b = 3` makes `D_i/D_j` pH-independent); what it buys is that the `D`
+  values quoted alongside the verdict are ones the coefficients were fitted for.
+
+`FullSeparationTrain`'s four internal pH values are fractions of the record's
+window rather than absolute numbers, for the same reason; see
+{ref}`groupseparator`.
 
 (separation-factors)=
 ### Separation Factors
@@ -862,12 +931,13 @@ from difflow_ree import REEDistribution
 
 dist = REEDistribution(extractant="PC88A", elements=("Nd", "Pr"))
 
-# Separation factor at pH 3.0
-SF = dist.get_separation_factor("Nd", "Pr", pH=3.0)
+# Separation factor at pH 1.0 (with one shared slope b = 3 the answer is
+# 10**(a_Nd - a_Pr) = 1.6998 at every pH; see #270)
+SF = dist.get_separation_factor("Nd", "Pr", pH=1.0)
 print(f"SF(Nd/Pr) = {SF:.2f}")
 
 # Find optimal pH for separation
-opt_pH, max_SF = dist.optimal_pH_for_separation("Nd", "Pr", pH_range=(1.0, 5.0))
+opt_pH, max_SF = dist.optimal_pH_for_separation("Nd", "Pr", pH_range=(0.1, 2.5))
 print(f"Optimal pH: {opt_pH:.2f}, Max SF: {max_SF:.2f}")
 ```
 
@@ -882,8 +952,10 @@ descriptions of the same physics, never reconciled, disagreeing by up to 8x
 pairs ran 4–8x low, which is a disagreement about that pair rather than a
 calibration offset. Which number you got depended on which API you reached for.
 
-Neither set was measured, so there was no right one to keep. The tie is broken
-by the coefficients being what the simulator actually runs on: a factor derived
+Neither set was measured at the time, so there was no right one to keep --- and
+since #270 the coefficients *are* fitted to named primary sources while
+`separation_factors.yaml` never was, which settles it a second time. The tie is
+broken by the coefficients being what the simulator actually runs on: a factor derived
 from them describes the model you are about to solve, and one authored beside
 them describes nothing else in the package. So `separation_factors.yaml` now
 declares *which* pairs to report and *at what conditions*, and the values come
@@ -963,12 +1035,12 @@ differentiates by the implicit function theorem rather than by unrolling.
 from difflow_ree import REEDistribution, solve_free_extractant
 
 dist = REEDistribution(extractant="D2EHPA", elements=("Nd",), concentration=0.5)
-r = solve_free_extractant(dist, "Nd", c_aq=0.03, pH=3.0)
+r = solve_free_extractant(dist, "Nd", c_aq=0.03, pH=0.2)
 
-r.D                 # 0.362 -- against free extractant
-r.D_total_basis     # 0.549 -- what the correlation says against total
-r.overprediction    # 1.52
-r.loading_fraction  # 0.130
+r.D                 # 0.319 -- against free extractant
+r.D_total_basis     # 0.460 -- what the correlation says against total
+r.overprediction    # 1.44
+r.loading_fraction  # 0.115
 ```
 
 This also restores something #204's closing note recorded as lost: keeping the
@@ -1080,7 +1152,9 @@ list_networks()
 # ['anion_exchange', 'cation_exchange_dimer', 'cation_exchange_monomer',
 #  'solvating_nitrate']
 
-net = cation_exchange_network("D2EHPA", ("Nd", "Dy"), calibration_pH=3.0)
+# calibration_pH defaults to the record's own reference_pH (#268), which for
+# D2EHPA is 0.82 -- inside the [0, 2] window its #270 refit was fitted over.
+net = cation_exchange_network("D2EHPA", ("Nd", "Dy"))
 print(net.describe())
 ```
 
@@ -1202,8 +1276,9 @@ params = MassActionParams(
     aqueous_volumetric_flow=1.0,
     organic_volumetric_flow=1.0,
     # NOT an operating specification: this is where the closed model and the
-    # correlation are made to agree. The operating pH is an output.
-    calibration_pH=3.0,
+    # correlation are made to agree. The operating pH is an output. Left
+    # unset it is the record's own reference_pH (#268) -- 0.82 for D2EHPA.
+    calibration_pH=None,
 )
 section = MassActionSection(params)
 
@@ -1237,7 +1312,7 @@ one it is running at:
 from difflow_ree import REEExtractor, REEExtractorParams
 
 params = REEExtractorParams(
-    n_stages=4, extractant="D2EHPA", elements=("Nd", "Dy"), pH=3.0,
+    n_stages=4, extractant="D2EHPA", elements=("Nd", "Dy"), pH=1.0,
 )
 raffinate, extract, info = REEExtractor(params)(feed, solvent)          # L1
 
@@ -1293,32 +1368,37 @@ negative. A target outside those bounds comes back with `feasible=False` and
 
 `log_K_from_correlation` inverts the L1 correlation at a stated reference
 condition, which is the only source available in this repository. It therefore
-inherits that source's provenance: **the `ph_coefficients` of D2EHPA, PC88A and
-Cyanex272 are hand-tuned with no literature source** (see the header of
-`data/extractants.yaml`), so a constant derived from them is illustrative, not
-measured. Supply your own with `log10_K={"Nd": ..., "Dy": ...}` for design
-numbers.
+inherits that source's provenance — since #270 that is a named primary source
+for every extractant, so a constant derived from one is as defensible as the
+fit behind it, no better and no worse. Read the record's own fit note in
+`data/extractants.yaml` for the window it covers and the gaps it declares, and
+supply your own with `log10_K={"Nd": ..., "Dy": ...}` where you have measured
+constants.
 
-The calibration is exact only at the reference condition, and the residual
-disagreement is a real statement about the correlation rather than a defect of
-the closure. Mass action forces
+The calibration is exact only at the reference condition. Mass action forces
 
 ```
 d log10 D / d pH = protons_released = 3
 ```
 
-while the tabulated pH slopes `b` are 2.20 to 2.90.
-`correlation_ph_slope_defect(extractant, element)` returns `3 - b` so the gap
-can be quoted rather than discovered:
+and since #270 the tabulated pH slopes agree: every acidic record is fitted
+with `b = 3` exactly, the stoichiometric slope, rather than a per-element
+number floating free of the mechanism it is supposed to express.
+`correlation_ph_slope_defect(extractant, element)` returns `3 - b` and now
+reads zero everywhere, which is the point of keeping it:
 
 ```python
 from difflow_ree.equilibrium import correlation_ph_slope_defect
-correlation_ph_slope_defect("D2EHPA", "Nd")   # 0.55
+correlation_ph_slope_defect("D2EHPA", "Nd")   # 0.0
 ```
 
-Away from the calibration pH the two levels then differ by exactly
+It used to read 0.55 on that call and up to 0.80 elsewhere, and each of those
+tenths was a decade of divergence between the two levels per pH unit away from
+the calibration point. The general statement still holds — away from the
+calibration pH the two levels differ by exactly
 `(p - b)(pH - pH_ref) - c(pH^2 - pH_ref^2)`, which the test suite asserts to
-seven digits.
+seven digits — but with `p = b` and `c = 0` the first term vanishes
+identically and the two levels now agree at every pH, not just at one.
 
 ### Validation
 
@@ -1652,7 +1732,9 @@ class REEExtractorParams:
     n_stages: int              # Number of extraction stages
     extractant: str            # Extractant name (D2EHPA, PC88A, etc.)
     elements: tuple[str, ...]  # REE elements to track
-    pH: float = 3.0            # Operating pH
+    pH: float | None = None    # Operating pH; None = the extractant record's
+                               # own default extraction pH, the top of its
+                               # fitted validity window (#270)
     extractant_conc: float = 0.5  # Extractant concentration (M)
     nitrate_conc: float | None = None  # M; required for solvating extractants
     include_loading: bool = True  # Account for extractant loading capacity
@@ -1690,7 +1772,7 @@ params = REEExtractorParams(
     n_stages=10,
     extractant="D2EHPA",
     elements=("La", "Ce", "Nd", "Dy"),
-    pH=3.0,
+    pH=1.0,   # inside D2EHPA's [0, 2]; omit it for the record's own default
 )
 extractor = REEExtractor(params)
 
@@ -1702,7 +1784,7 @@ feed = make_stream({"H2O": 1.0, "La": 0.1, "Ce": 0.2, "Nd": 0.15, "Dy": 0.05}, T
 solvent = make_stream({"D2EHPA": 0.2, "kerosene": 1.0}, T=298.15, P=101325.0)
 
 # Run extraction
-raffinate, extract, info = extractor(feed, solvent, T=298.15, pH=3.0)
+raffinate, extract, info = extractor(feed, solvent, T=298.15, pH=1.0)
 
 # Check recoveries
 for elem, data in info["profiles"].items():
@@ -1890,7 +1972,7 @@ $10^{-11}$ mol/s).
 class MixerSettlerParams:
     extractant: str
     elements: tuple[str, ...]
-    pH: float = 3.0
+    pH: float | None = None    # None = the record's default extraction pH (#270)
     extractant_conc: float = 0.5
     nitrate_conc: float | None = None  # M; required for solvating extractants
     mixer_residence_time: float = 120.0  # seconds
@@ -1924,7 +2006,8 @@ params = ScrubberParams(
     extractant="D2EHPA",
     elements=("La", "Ce", "Nd", "Dy"),
     target_elements=("Nd", "Dy"),  # Keep these in organic
-    pH=2.0,  # Lower pH to reject La, Ce
+    pH=0.5,  # low enough to reject La, Ce, and inside D2EHPA's [0, 2];
+             # omit it and the record's own scrubbing default is used
 )
 scrubber = REEScrubber(params)
 ```
@@ -2097,9 +2180,12 @@ class ExtractScrubStripParams:
     n_extraction_stages: int = 10
     n_scrubbing_stages: int = 5
     n_stripping_stages: int = 5
-    extraction_pH: float = 3.5
-    scrubbing_pH: float = 2.0  # Lower pH rejects light REE
-    stripping_pH: float = 0.5
+    # None on all three: the extractant record's own defaults, from its
+    # fitted validity window -- top for extraction, a quarter up for
+    # scrubbing, bottom for stripping (#270).
+    extraction_pH: float | None = None
+    scrubbing_pH: float | None = None   # lower pH rejects light REE
+    stripping_pH: float | None = None
     solvent_to_feed_ratio: float = 1.0
     scrub_to_solvent_ratio: float = 0.2
     strip_to_solvent_ratio: float = 0.5
@@ -2118,9 +2204,9 @@ params = ExtractScrubStripParams(
     n_extraction_stages=10,
     n_scrubbing_stages=5,
     n_stripping_stages=5,
-    extraction_pH=3.5,
-    scrubbing_pH=2.0,
-    stripping_pH=0.5,
+    # Leave the three pH values unset and the D2EHPA record supplies
+    # 2.0 / 0.5 / 0.0 -- the top, quarter point and bottom of its
+    # refitted [0, 2] window.
 )
 circuit = ExtractScrubStripCircuit(params)
 
@@ -2166,13 +2252,24 @@ does this first and separates individual elements only within a group.
 
 Two circuits do it:
 
-1. **Heavy circuit** --- extract everything at pH 3.0, then scrub at
-   pH 2.0. The heavies (Gd, Tb, Dy, Y) have the highest $D$ and stay in
-   the organic through the scrub, so they leave in the strip product; the
-   lights and middles are rejected into the scrub liquor.
+1. **Heavy circuit** --- extract at the middle of the extractant's fitted
+   pH window, then scrub a quarter of the way up it. The heavies (Gd, Tb,
+   Dy, Y) have the highest $D$ and stay in the organic through the scrub,
+   so they leave in the strip product; the lights and middles are rejected
+   into the scrub liquor.
 2. **Middle circuit** --- the first circuit's scrub liquor is the feed.
-   Extract at pH 3.5, scrub at pH 2.5: the middles (Sm, Eu) report to the
-   product, the lights (La, Ce, Pr, Nd) to the scrub liquor.
+   Extract higher (five eighths up the window) and scrub higher (three
+   eighths): the middles (Sm, Eu) report to the product, the lights
+   (La, Ce, Pr, Nd) to the scrub liquor.
+
+The four pH values are **fractions of the record's own
+`valid_ph_range`**, not literals (#270): on D2EHPA's refitted `[0, 2]`
+that is 1.00 / 0.50 / 1.25 / 0.75, and on `naphthenic_acid`'s `[4.0, 5.0]`
+it is 4.50 / 4.25 / 4.625 / 4.375. What is fixed is the *ordering* --- the
+middle circuit always runs above the heavy circuit, and each scrub always
+below its own extraction --- which is the part the group cut depends on.
+A literal would have put three of the five records outside the pH range
+their coefficients were fitted over.
 
 Where the boundaries fall is set by those four pH values, and they are
 **fixed inside the unit**, along with the stage counts: `GroupSeparator`
@@ -2704,8 +2801,8 @@ dist = REEDistribution(
     extractant="PC88A",
     elements=("Gd", "Dy", "Ho", "Y"),
 )
-D_ho = dist.get_D("Ho", pH=3.5, T=298.15)
-print(f"D(Ho) at pH 3.5: {D_ho:.2f}")
+D_ho = dist.get_D("Ho", pH=2.0, T=298.15)   # inside PC88A's [0.1, 2.5]
+print(f"D(Ho) at pH 2.0: {D_ho:.2f}")
 ```
 
 ---

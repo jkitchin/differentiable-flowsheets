@@ -779,6 +779,63 @@ class Extractant:
         """Maximum REE loading capacity (mol REE per mol extractant)."""
         return 1.0 / self.monomers_per_ree
 
+    # ------------------------------------------------------------------
+    # Record-derived operating pH defaults (#270)
+    # ------------------------------------------------------------------
+    #
+    # Every pH default in this plugin used to be a literal: extraction at
+    # 3.5, scrubbing at 2.0, stripping at 0.5, screening at 3.0. Those
+    # numbers were chosen when D2EHPA's and PC88A's coefficients were
+    # HAND_TUNED over a wide invented window, and the #270 refit against
+    # named sources narrowed the windows to what the sources actually
+    # cover: D2EHPA [0.0, 2.0], PC88A [0.1, 2.5], Cyanex272 [1.5, 3.5],
+    # naphthenic_acid [4.0, 5.0]. No single literal is inside all four --
+    # 3.5 is a decade and a half of extrapolation on D2EHPA and off the
+    # end of PC88A -- so a shared default has to be read off the record.
+    #
+    # The policy is deliberately the crudest one that is defensible: the
+    # window's own edges. The top edge is the most extracting condition the
+    # coefficients can speak to and the bottom edge the least, so
+    # `default_extraction_pH` / `default_stripping_pH` are exactly the
+    # endpoints and `default_scrubbing_pH` sits a quarter of the way up --
+    # a scrub rejects the light REE it just co-extracted, so it belongs
+    # near the strip end, not the middle. These are DEFAULTS, not
+    # recommendations: a real circuit picks its pH from the separation it
+    # wants, and every unit and flowsheet still takes an explicit pH.
+
+    @property
+    def default_extraction_pH(self) -> float | None:
+        """Top of the fitted window: the most extracting condition on record.
+
+        ``None`` for a record that is not pH-driven (a solvating extractant
+        such as TBP), where the caller wants ``nitrate_conc`` instead.
+        """
+        if self.mechanism != "cation_exchange":
+            return None
+        return float(self.valid_ph_range[1])
+
+    @property
+    def default_stripping_pH(self) -> float | None:
+        """Bottom of the fitted window: the least extracting condition on record."""
+        if self.mechanism != "cation_exchange":
+            return None
+        return float(self.valid_ph_range[0])
+
+    @property
+    def default_scrubbing_pH(self) -> float | None:
+        """A quarter of the way up the fitted window.
+
+        Between the strip and the extract, and nearer the strip: the duty is
+        to push the co-extracted light REE back into the aqueous while the
+        heavy REE stay loaded, which needs a pH where the light D is below
+        one. On D2EHPA's [0.0, 2.0] this is pH 0.5, where D(La) = 0.32 and
+        D(Nd) = 3.7.
+        """
+        if self.mechanism != "cation_exchange":
+            return None
+        lo, hi = self.valid_ph_range
+        return float(lo + 0.25 * (hi - lo))
+
 
 @dataclass(frozen=True)
 class Coverage:
@@ -1280,8 +1337,8 @@ class SeparationFactorDatabase:
         products.  It is a THERMODYNAMIC FLOOR: a real cascade runs at a
         finite solvent ratio with a real feed and needs several times more,
         and the floor inherits every weakness of the ``beta`` beneath it ---
-        which for D2EHPA and Cyanex272 is a hand-tuned number (see
-        ``extractants.yaml``).
+        since #270 a ratio of two sourced ``a`` values, but still one fitted
+        at a single temperature and concentration (see ``extractants.yaml``).
 
         This was an 18-entry hand-authored table in
         ``separation_factors.yaml`` until #270.  It matched no ``beta`` in
@@ -1796,6 +1853,49 @@ def get_element(symbol: str) -> REEElement:
 def get_extractant(name: str) -> Extractant:
     """Get extractant properties."""
     return get_extractant_database().get(name)
+
+
+def default_pH(extractant: str, duty: str) -> float:
+    """The default operating pH for one duty, read off the extractant record.
+
+    Every pH default in this plugin was a literal until #270 -- extraction at
+    3.5, scrubbing at 2.0, stripping at 0.5, screening at 3.0. Those were
+    picked when D2EHPA's and PC88A's coefficients were HAND_TUNED over an
+    invented window. The #270 refit against named sources narrowed the windows
+    to what the sources cover (D2EHPA [0.0, 2.0], PC88A [0.1, 2.5], Cyanex272
+    [1.5, 3.5], naphthenic_acid [4.0, 5.0]) and no literal is inside all four:
+    the old extraction default of 3.5 is a decade and a half of extrapolation
+    on D2EHPA -- ``b = 3``, so 4.5 decades in D -- and past the end of PC88A.
+    A shared default therefore has to come from the record, the same way #268
+    made ``calibration_pH=None`` mean the record's own ``reference_pH``.
+
+    Args:
+        extractant: Extractant name, as in the database.
+        duty: ``"extraction"``, ``"scrubbing"`` or ``"stripping"``.
+
+    Returns:
+        The pH. See :class:`Extractant`'s ``default_*_pH`` properties for the
+        policy (the window's edges, with the scrub a quarter of the way up).
+        For a record that is not pH-driven -- a solvating extractant such as
+        TBP, whose ``D`` is a function of nitrate and not of pH -- there is no
+        meaningful answer, and the middle of the declared window is returned
+        so that a params object still carries a number for a term that does
+        not enter its ``D``.
+
+    Raises:
+        ValueError: If ``duty`` is not one of the three.
+    """
+    if duty not in ("extraction", "scrubbing", "stripping"):
+        raise ValueError(
+            f"duty must be 'extraction', 'scrubbing' or 'stripping', "
+            f"got {duty!r}."
+        )
+    record = get_extractant(extractant)
+    value = getattr(record, f"default_{duty}_pH")
+    if value is not None:
+        return value
+    lo, hi = record.valid_ph_range
+    return 0.5 * (lo + hi)
 
 
 def list_ree_elements() -> list[str]:
