@@ -34,6 +34,31 @@
 #
 # `conditions` is not decoration -- it is the point at which the coefficients
 # are evaluated, so changing it changes every factor below it.
+#
+# WHERE Y SITS IS A PROPERTY OF THE EXTRACTANT, NOT OF YTTRIUM
+# -----------------------------------------------------------
+# Y(III) has no f electrons, so its position in an extraction series is not
+# fixed by the lanthanide contraction the way a lanthanide's is. It moves,
+# by a lot, with the donor:
+#
+#   PC88A / EHEHPA       Y extracts BETWEEN Dy and Ho -- beta(Y/Dy) > 1.
+#                        Measured here: 3.14, from Tanaka (2021), whose own
+#                        printed log Ke has Y at 2.24 against Dy's 1.67.
+#   D2EHPA               Y again sits in the heavy group, near Ho/Er.
+#   Cyanex 272           Y falls a long way DOWN the series, out among the
+#                        light-middle lanthanides. This is the well-known
+#                        anomaly that makes Cyanex 272 the reagent of choice
+#                        for pulling Y out of a heavy concentrate.
+#
+# So a single sentence about "where Y goes" is wrong by construction, and the
+# one that used to sit on the D2EHPA Y_Dy line below was doing exactly that.
+#
+# Read the derived Y_Dy factors with that in mind AND with the caveat in
+# extractants.yaml: only PC88A's coefficients are measured. D2EHPA's and
+# Cyanex272's are hand-tuned, and both of them put Y BELOW Dy -- right for
+# Cyanex 272, backwards for D2EHPA. Fixing that needs a D2EHPA dataset, which
+# `dcdb` does not have yet; it is not fixable by editing this file, because
+# this file no longer holds any separation factors (#265, #270).
 
 # Pairs to report, by extractant.
 # Format: heavier_lighter (SF > 1 means the heavier one extracts better)
@@ -54,7 +79,9 @@ separation_factors:
       - Gd_Eu   # Gd/Eu
       - Tb_Gd   # Tb/Gd - gap between middle and heavy
       - Dy_Tb   # Dy/Tb
-      - Y_Dy   # Y/Dy - Y behaves between Dy and Ho
+      - Y_Dy   # Y/Dy - see the note on Y in the header. The value this
+               # derives (0.21) is a HAND-TUNED record's opinion, and it
+               # puts Y below Dy, which is backwards for D2EHPA.
 
     # Non-adjacent pairs (useful for group separations)
     group_pairs:
@@ -65,16 +92,36 @@ separation_factors:
       - Gd_Nd   # Nd to Gd
 
   PC88A:
-    # At pH 3.5, 25°C, 0.5M PC88A
+    # At pH 1.33, 25 C, 0.5 M PC88A (as the dimer).
+    #
+    # It was pH 3.5 until #270, which is now outside this record's
+    # `valid_ph_range` of [0.1, 2.5] -- the span Tanaka (2021) actually
+    # measured -- so every factor below it was an extrapolation, and loading
+    # the database warned about it. 1.33 and 0.5 M are the record's own
+    # `reference_pH` and `reference_concentration`, i.e. the point its fit is
+    # centred on.
+    #
+    # It happens not to matter to the NUMBERS. Since #270 every element on
+    # this record shares one slope, b = 3, the stoichiometric value the
+    # mass-action equilibrium requires and the value T21 fits its own data
+    # with. With a common slope, log10 beta = a_i - a_j exactly, so every
+    # factor in this block is independent of pH, of temperature and of
+    # extractant concentration. Moving the conditions moves D, not beta.
+    # (Verified: Y_Dy is 3.13545086914 at pH 1.0 and at pH 2.0.)
     conditions:
-      pH: 3.5
+      pH: 1.33
       temperature_K: 298
       concentration_M: 0.5
 
     adjacent_pairs:
       - Ce_La
       - Pr_Ce
-      - Nd_Pr   # Better Nd/Pr separation than D2EHPA
+      - Nd_Pr   # 2.14, and Pr is one of the five INTERPOLATED elements
+                # on this record (T21 measured La/Nd/Sm/Dy/Y only), so
+                # it is the weakest kind of entry here. It used to claim
+                # to beat D2EHPA; on the shipped records it does not
+                # (D2EHPA derives 2.51) -- but D2EHPA's is hand-tuned,
+                # so that comparison means nothing either way.
       - Sm_Nd
       - Eu_Sm
       - Gd_Eu
@@ -139,31 +186,35 @@ separation_factors:
       - Dy_Nd
       - Gd_Nd
 
-# Stages required for 99% purity
-# Approximate stages needed for adjacent pair separation to 99% purity
-# Using counter-current extraction at S/F = 1.5x minimum
-stages_for_99_purity:
-  D2EHPA:
-    Ce_La: 15
-    Pr_Ce: 20
-    Nd_Pr: 60   # Very difficult
-    Sm_Nd: 10
-    Eu_Sm: 25
-    Gd_Eu: 30
-    Tb_Gd: 15
-    Dy_Tb: 20
-    Y_Dy: 40
-
-  PC88A:
-    Ce_La: 12
-    Pr_Ce: 15
-    Nd_Pr: 25   # Much better than D2EHPA
-    Sm_Nd: 8
-    Eu_Sm: 22
-    Gd_Eu: 25
-    Tb_Gd: 12
-    Dy_Tb: 18
-    Y_Dy: 35
+# STAGES FOR 99% PURITY ARE DERIVED TOO (#270)
+# -------------------------------------------
+# There used to be a `stages_for_99_purity:` table here, 18 hand-authored
+# integers for D2EHPA and PC88A. It went the way the separation factors went
+# in #265, and for the same reason plus one more:
+#
+#   * It was a second description of something the package already computes.
+#     Stages follow from beta by Fenske, and beta is now derived, so the
+#     table could only ever be a snapshot of betas that had since moved.
+#   * It matched NO beta in the package -- not the coefficients', not the
+#     deleted table's. Solving Fenske backwards out of its own entries gives
+#     betas spanning 1.17-3.15 on the 99/99 convention, or 1.08-1.78 on the
+#     one-product one, in an order that tracks neither set. Its two comments
+#     ("Very difficult" on Nd/Pr, "Much better than D2EHPA") disagreed with
+#     both descriptions as well.
+#   * Its Y_Dy entries were undefined: at the coefficients' beta of 0.21 the
+#     pair separates in the OTHER direction, and 40 stages of it is not a
+#     statement about anything.
+#
+# `SeparationFactorDatabase.get_stages_needed` now computes it, from the same
+# derived beta as everything else:
+#
+#     N_min = 2 ln(99) / |ln beta|
+#
+# Fenske for a 99%/99% split of an equimolar binary. It is a THERMODYNAMIC
+# FLOOR at total reflux -- a real cascade at a finite solvent ratio needs
+# several times more -- and it inherits every weakness of the beta beneath
+# it. An authored value, via `add_pair(..., stages_99=...)` or a mapping in
+# your own YAML, still wins.
 
 # Temperature effects on separation factor
 # SF generally decreases slightly with temperature
@@ -249,14 +300,15 @@ provenance:
        note: "The point at which the coefficients are evaluated, so
               changing one of these changes every factor in its block."}
 
-    - {pattern: "stages_for_99_purity.*.*", source: CALC,
-       note: "Fenske minimum stages from the adjacent_pairs factors above:
-              N_min = ln[(x_i/x_j)_prod * (x_j/x_i)_feed] / ln(beta).
-              Tabulated at the betas of the day; since #265 the betas
-              themselves are derived, so these are indicative and the
-              live figure comes from the database. Inherits every weakness
-              of the beta it is computed from, and is a THERMODYNAMIC
-              FLOOR -- a real cascade needs more."}
+    # `stages_for_99_purity` is no longer a key in this file (#270); the
+    # rule stays so that a caller's own YAML, or a value added through
+    # `add_pair(..., stages_99=...)`, is still tagged rather than untagged.
+    # A number that appears there is AUTHORED -- the derived one is computed
+    # on access and inherits the provenance of the beta it came from.
+    - {pattern: "stages_for_99_purity.*.*", source: SF_APPROX,
+       note: "An authored stage count, overriding the Fenske minimum
+              N_min = 2 ln(99)/|ln beta| that `get_stages_needed` derives
+              from the extractant's own coefficients. Nothing ships here."}
 
     - {pattern: "temperature_sensitivity.*", source: SF_APPROX}
     - {pattern: "ph_sensitivity.*",          source: SF_APPROX}

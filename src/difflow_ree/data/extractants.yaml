@@ -18,7 +18,19 @@
 # for records that omit it.
 #
 # CATION-EXCHANGE MODEL (`ph_coefficients`):
-#   log10(D) = a + b*pH + c*pH^2 + d*(1/T - 1/Tref)
+#   log10(D) = a + b*pH + c*pH^2 + d*(1/T - 1/Tref) + <concentration term>
+#
+# where the concentration term is one of two forms, chosen by whether the
+# record declares an `activity_coefficient_A` (#270):
+#
+#   absent   n * log10(C / C_ref)                        <- total concentration
+#   present  n * [log10(C/C_ref) - A(sqrt C - sqrt C_ref)]  <- effective, y*C
+#                                                             log10 y* = -A sqrt C
+#
+# Both are zero at C_ref, so `a` is log10(D) at the reference concentration
+# either way. The field travels WITH the coefficient block: a record fitted
+# on the total-concentration form must not have the effective one applied to
+# it. Only PC88A carries it. See Extractant.log10_concentration_factor.
 #
 # where:
 #   D = [REE]_org / [REE]_aq
@@ -104,7 +116,9 @@
 # must not be mistaken for one another:
 #
 #   (1) HAND-TUNED, NO SOURCE  -- the `ph_coefficients` and
-#       `temperature_coefficients` of D2EHPA, PC88A and Cyanex272.
+#       `temperature_coefficients` of D2EHPA and Cyanex272, the
+#       `temperature_coefficients` of PC88A, and every acidic record's
+#       `valid_ph_range` except PC88A's.
 #       These were chosen to give plausible-looking D values:
 #         - At pH 2.0: D typically 0.001-0.1 for LREE, 0.1-1 for HREE
 #         - At pH 3.0: D typically 0.05-1 for LREE, 1-30 for HREE
@@ -116,15 +130,44 @@
 #       for design numbers.
 #
 #   (2) LITERATURE-DERIVED    -- TBP's `nitrate_coefficients` and
-#       `temperature_coefficients` ONLY.
+#       `temperature_coefficients`, and PC88A's `ph_coefficients`,
+#       `valid_ph_range`, `reference_pH` and `activity_coefficient_A`.
 #       Refitted from named, retrievable primary sources; the fit basis, the
 #       correction arithmetic, the per-element provenance (measured vs
 #       interpolated vs assumed), the validity window and the known gaps are
-#       all written out on the TBP record below. Read that block before using
-#       any TBP number.
+#       all written out on each record below. Read those blocks before using
+#       a number from either.
 #
-# Nothing else in this file is literature-derived. In particular, TBP's
-# nitrate block being fitted says NOTHING about the three acidic extractants.
+# Nothing else in this file is literature-derived. In particular, PC88A's pH
+# block being MEASURED says NOTHING about D2EHPA's or Cyanex272's.
+#
+# *** DO NOT COMPARE ABSOLUTE D ACROSS THE ACIDIC RECORDS (#270). ***
+#
+# Since PC88A was refitted from T21 and D2EHPA and Cyanex272 were not, the
+# three acidic records are no longer on a common basis, and the difference
+# is roughly 2 pH units:
+#
+#            pH at which D(Nd) = 1      basis
+#   PC88A            1.03               MEASURED (T21)
+#   D2EHPA           3.10               HAND_TUNED
+#   Cyanex272        3.74               HAND_TUNED
+#
+# Read literally, this file now says D2EHPA needs a pH two units higher than
+# PC88A to do the same job. THAT IS BACKWARDS. D2EHPA is the stronger acid
+# (pKa 3.24 against PC88A's 4.10) and extracts at LOWER pH, which is exactly
+# what the old, self-consistent hand-tuned set encoded and what the two
+# records' `reference_pH` values still imply. The inversion is an artifact of
+# fixing one record and not the others, and it will persist until D2EHPA and
+# Cyanex272 are refitted (#270 remains open for them; there is no digitized
+# dataset for either yet).
+#
+# What is safe, and what is not:
+#   SAFE      -- separation factors, cascade behaviour and design pH WITHIN
+#                one record. Each record is internally consistent.
+#   NOT SAFE  -- "which extractant extracts at lower pH", "which needs less
+#                acid to strip", or any cross-record ratio of D. A flowsheet
+#                that picks an extractant by comparing these blocks is
+#                comparing a measurement against a guess.
 #
 # Background reading behind the hand-tuned blocks (consulted qualitatively;
 # NOT the source of any specific number here):
@@ -282,28 +325,113 @@ extractants:
       extractant_molecules: 3
       basis: dimer
 
-    # PC88A has better light REE selectivity than D2EHPA
-    # Particularly good for Nd/Pr separation (SF ~ 3-4 vs 2-3 for D2EHPA)
+    # *** THE ONLY MEASURED CATION-EXCHANGE BLOCK IN THIS FILE (#270). ***
     #
-    # EXPECTED D VALUES at pH 3.0:
-    #   La: 0.02, Ce: 0.06, Pr: 0.18, Nd: 0.60
-    #   Sm: 3.0, Eu: 6.0, Gd: 12, Tb: 22, Dy: 40, Y: 15
+    # Refitted from T21 (Tanaka, Oki, Koyama & Narita 2021, Hydrometallurgy
+    # 201, 105588), whose system IS this record: EHEHPA in Shellsol D70, the
+    # dimer basis, 3 protons per RE(III), 298.0 +/- 0.1 K, I = 1 M HNO3/NaNO3,
+    # O/A = 1, 1 mmol/L RE. 121 digitized points over six extractant charges
+    # (0.041 to 0.82 mol/L as dimer) and pH 0.12 to 2.46.
     #
-    # Note: PC88A operates at slightly higher pH than D2EHPA due to higher pKa
+    # These replace the HAND_TUNED values this record carried until #270. The
+    # old ones were not slightly off: they put every pH-half 1.5 to 2.6 pH
+    # units too high (D(Nd) at pH 2 was 0.0026 against a measured 1697) and
+    # they placed Y between Eu and Gd, when Y is measured to extract MORE
+    # STRONGLY THAN Dy. Nothing that cited a number from the old block is
+    # still valid; see the git history of this file rather than assuming a
+    # rescaling.
+    #
+    # WHAT WAS FITTED, AND WHAT WAS NOT
+    #   b = 3.0, pinned, not fitted. It is the stoichiometric slope this
+    #     record already declares (protons_released: 3), it is what T21 uses
+    #     in its own Alstad analysis, and T21's 22 measured series average
+    #     2.863 +/- 0.321 against it. Pinning costs at most 0.03 log units of
+    #     rms and BUYS the thing a per-element b destroys: with one slope for
+    #     every element, a separation factor is
+    #         log10 beta = a_i - a_j
+    #     which is INDEPENDENT OF pH, exactly as mass action requires. The old
+    #     block's per-element b (2.35 to 2.90) made beta drift with pH -- 3.4
+    #     at pH 2 to 4.8 at pH 5 for Nd/Pr -- and an optimizer handed that
+    #     drift walks to whichever pH bound is higher and calls it optimal.
+    #   c = 0.0. A quadratic buys 0.00-0.02 log units of rms and pays for it
+    #     by inflating b to 3.5-5.0 with large negative curvature: over a
+    #     window 1-2 pH units wide that is a quadratic absorbing scatter, not
+    #     curvature. The old blanket c = 0.010 was itself hand-tuned.
+    #   d: NOT set here -- see temperature_coefficients below, which are still
+    #     HAND_TUNED. T21 is isothermal, so it carries no information about
+    #     the temperature coefficient. d = 0 in this block means "the pH block
+    #     contributes no temperature term", not "the temperature coefficient
+    #     is measured to be zero".
+    #   a: one free parameter per element, fitted on all 121 points.
+    #
+    # HOW GOOD IS IT
+    #   Per element: se(a), rms and r^2 in log10(D) units --
+    #     La  se 0.045  rms 0.184  r2 0.952  n 18  pH 1.41-2.46
+    #     Nd  se 0.033  rms 0.175  r2 0.970  n 29  pH 0.68-2.37
+    #     Sm  se 0.011  rms 0.051  r2 0.997  n 21  pH 0.47-1.86
+    #     Dy  se 0.021  rms 0.112  r2 0.986  n 30  pH 0.12-1.24
+    #     Y   se 0.017  rms 0.079  r2 0.994  n 23  pH 0.42-1.24
+    #   Independent check: T21 prints a log Ke on each panel, which was never
+    #   used in the digitization. Converting these `a` back onto the paper's
+    #   basis reproduces all five printed values to within 0.06 log units.
+    #
+    # WHICH ELEMENTS ARE MEASURED
+    #   MEASURED (T21):     La, Nd, Sm, Dy, Y
+    #   INTERPOLATED (T21): Ce, Pr, Eu, Gd, Tb -- a cubic in atomic number
+    #     through the four measured LANTHANIDES (La 57, Nd 60, Sm 62, Dy 66),
+    #     which it passes through exactly. Y is NOT on that curve and is not
+    #     interpolated: it is measured, and its position in the series is the
+    #     single biggest thing #270 changed.
+    #   The interpolation is constrained, not free: Ce and Pr sit between two
+    #   measured neighbours 1.0 log units apart, so the adjacent factor they
+    #   imply (2.14-2.19) is fixed within a few percent by La and Nd whatever
+    #   smooth curve is drawn. Interpolating in ionic radius instead moves
+    #   Nd/Pr to 1.47 and Tb/Gd to 4.69 -- the radii are spaced irregularly
+    #   and a cubic amplifies that, which is why atomic number is used. Eu,
+    #   Gd and Tb lie in the 4-unit gap between Sm and Dy and are the weakest
+    #   entries here; the half-filled-shell break at Gd is real in this
+    #   chemistry and a smooth curve cannot represent it. Treat those three as
+    #   indicative and refit them before designing a middle-REE split on them.
+    #
+    # SANITY AGAINST THE WIDER LITERATURE
+    #   Adjacent factors run 2.14 (Nd/Pr) to 3.91 (Dy/Tb), geometric mean 2.66.
+    #   Nash (1993) gives ~2.5 as the adjacent-pair average for D2EHPA and has
+    #   PC88A running slightly LOWER; over the light pairs this block gives
+    #   2.14-2.19 against D2EHPA's 2.32 below, so the ordering now agrees.
+    #   Nd/Pr = 2.14 is above @li2019development's 1.8-2.0, but it is bracketed
+    #   by measurement: La and Nd are 10.04-fold apart over three steps, so
+    #   2.15 per step is what the data allow, not a choice.
+    #   Y/Dy = 3.14, with Y above Dy. Y then sits between Ho and Er, and the
+    #   implied Er/Y of ~1.5 matches @li2019development's measured 1.4-1.6.
+    #
+    # D VALUES AT pH 1.0, 0.5 M dimer, TRACE LOADING -- inside the measured
+    # window. The old block quoted pH 3.0, which is a decade past where this
+    # reagent separates anything:
+    #   La 0.083, Ce 0.18, Pr 0.39, Nd 0.84, Sm 4.3, Eu 11,
+    #   Gd 32, Tb 104, Dy 407, Y 1280
+    # These are the correlation's own trace-loading numbers, as measured at
+    # 1 mmol/L RE. A loaded organic phase reaches nothing like D = 1280 for Y;
+    # that is what `include_loading` and `solve_free_extractant` are for, and
+    # the D printed here is the input to those, not a plant number.
     ph_coefficients:
-      La: {a: -8.90, b: 2.35, c: 0.010, d: 0.0}
-      Ce: {a: -8.55, b: 2.42, c: 0.010, d: 0.0}
-      Pr: {a: -8.15, b: 2.50, c: 0.010, d: 0.0}
-      Nd: {a: -7.72, b: 2.55, c: 0.010, d: 0.0}
-      Sm: {a: -7.20, b: 2.65, c: 0.010, d: 0.0}
-      Eu: {a: -6.98, b: 2.70, c: 0.010, d: 0.0}
-      Gd: {a: -6.75, b: 2.75, c: 0.010, d: 0.0}
-      Tb: {a: -6.52, b: 2.82, c: 0.010, d: 0.0}
-      Dy: {a: -6.32, b: 2.90, c: 0.010, d: 0.0}
-      Y:  {a: -6.65, b: 2.75, c: 0.010, d: 0.0}
+      # a         MEASURED (T21)          b = 3.0 stoichiometric, c = 0
+      La: {a: -4.0795, b: 3.0, c: 0.0, d: 0.0}
+      Ce: {a: -3.7385, b: 3.0, c: 0.0, d: 0.0}   # interpolated
+      Pr: {a: -3.4086, b: 3.0, c: 0.0, d: 0.0}   # interpolated
+      Nd: {a: -3.0776, b: 3.0, c: 0.0, d: 0.0}
+      Sm: {a: -2.3640, b: 3.0, c: 0.0, d: 0.0}
+      Eu: {a: -1.9571, b: 3.0, c: 0.0, d: 0.0}   # interpolated
+      Gd: {a: -1.5006, b: 3.0, c: 0.0, d: 0.0}   # interpolated
+      Tb: {a: -0.9825, b: 3.0, c: 0.0, d: 0.0}   # interpolated
+      Dy: {a: -0.3905, b: 3.0, c: 0.0, d: 0.0}
+      Y:  {a:  0.1058, b: 3.0, c: 0.0, d: 0.0}
 
-    # Sign unverified; same open question as D2EHPA above (negative d implies
-    # ENDOTHERMIC extraction). Numbers deliberately unchanged.
+    # STILL HAND_TUNED, and deliberately left alone by the #270 refit. T21 is
+    # isothermal at 298.0 +/- 0.1 K, so it says nothing about a temperature
+    # coefficient and cannot retire these. Sign unverified; same open question
+    # as D2EHPA above (negative d implies ENDOTHERMIC extraction). This is now
+    # the only hand-tuned number left in the PC88A correlation, so a D
+    # computed at 298 K is measured and one computed at 333 K is not.
     temperature_coefficients:
       La: -1400
       Ce: -1500
@@ -316,11 +444,54 @@ extractants:
       Dy: -2300
       Y:  -2100
 
-    valid_ph_range: [1.5, 5.5]
-    reference_pH: 3.5
+    # THE MEASURED WINDOW, both ends (#270). [0.12, 2.46] is the union of the
+    # five elements' pH supports in T21, rounded outward to [0.1, 2.5].
+    #
+    # The old upper bound of 5.5 was an unsourced guess and was also chemical
+    # nonsense for this reagent: at pH 3 the refitted block puts D(La) at
+    # 8e4 and D(Dy) at 4e8. EVERY element is quantitatively in the organic
+    # phase, no separation is possible, and no plant operates there. PC88A's
+    # useful window really is roughly pH 0.5-2, which is where T21 measured
+    # and, not coincidentally, where the data are.
+    #
+    # Extrapolating past 2.5 is now much better behaved than it was, because
+    # the slope being extrapolated on is b = 3, which is stoichiometry rather
+    # than a fitted number. What is extrapolated is the intercept's validity,
+    # not the slope. It is still extrapolation, and the report still fires.
+    valid_ph_range: [0.1, 2.5]
+    # Minimax over the five per-element supports: no single pH lies inside
+    # all five (Dy's data stop at 1.24, La's start at 1.41 -- which is what a
+    # separation factor of 5000 across the series means in practice), so any
+    # anchor is outside somebody's support. 1.33 is the pH that minimizes the
+    # worst such excursion, at 0.09 pH units. Was 3.5, which is outside FOUR
+    # of the five supports and outside the validity window entirely.
+    #
+    # Everything DERIVED from this correlation is evaluated here (#268), so
+    # moving it moves the Langmuir constants and every reported separation
+    # factor with it.
+    reference_pH: 1.33
     valid_temp_range: [283, 333]
     reference_concentration: 0.5
     concentration_exponent: 3.0
+    # Alstad non-ideality of EHEHPA in Shellsol D70 (#270). The concentration
+    # term is a cube law in the EFFECTIVE dimer concentration y*C, with
+    # log10(y*) = -0.473 sqrt(C); T21 fits its own data this way (its Eqs.
+    # 3-5) and the `a` values above were fitted on the same form, so the two
+    # travel together.
+    #
+    # This is not a refinement. On a TOTAL-concentration cube law the
+    # correction spans 0.71 log units over 0.041-0.49 mol/L -- a factor of
+    # five in D between the ends of the measured range, which lands in the
+    # residual and is then partly absorbed into `a`, contaminating the
+    # intercept at every concentration but one. Fitting harder cannot remove
+    # it; only the right functional form can. With it, one fitted parameter
+    # per element reproduces all six concentration series (r2 0.95-0.997).
+    #
+    # NO OTHER RECORD IN THIS FILE CARRIES THIS FIELD, and that is correct:
+    # the hand-tuned blocks were never fitted on any concentration data, so
+    # applying a correction to them would move D away from the only thing
+    # they were ever tuned to reproduce.
+    activity_coefficient_A: 0.473
     cost_usd_kg: 12.0
 
     # Saponification (#197): see the file header for the provenance of these
@@ -1328,17 +1499,95 @@ provenance:
               it restates the declared degree rather than reporting a fit."}
 
     # ======================================================================
-    # (1) HAND-TUNED, NO SOURCE -- D2EHPA, PC88A, Cyanex272
+    # (1) HAND-TUNED, NO SOURCE -- D2EHPA and Cyanex272
+    #
+    # PC88A's pH block left this section in #270 and is tagged under (2)
+    # below. Its temperature block did NOT: T21 is isothermal.
     # ======================================================================
     - {pattern: "extractants.D2EHPA.ph_coefficients.*.*",           source: HAND_TUNED}
     - {pattern: "extractants.D2EHPA.temperature_coefficients.*",    source: HAND_TUNED}
-    - {pattern: "extractants.PC88A.ph_coefficients.*.*",            source: HAND_TUNED}
-    - {pattern: "extractants.PC88A.temperature_coefficients.*",     source: HAND_TUNED}
+    - {pattern: "extractants.PC88A.temperature_coefficients.*",     source: HAND_TUNED,
+       note: "NOT retired by the #270 refit and not retirable by it. T21 is
+              isothermal at 298.0 +/- 0.1 K, so it carries no temperature
+              information at all. These are the last hand-tuned numbers in
+              the PC88A correlation: D at 298 K is measured, D at any other
+              temperature is not."}
     - {pattern: "extractants.Cyanex272.ph_coefficients.*.*",        source: HAND_TUNED}
     - {pattern: "extractants.Cyanex272.temperature_coefficients.*", source: HAND_TUNED}
     - {pattern: "extractants.D2EHPA.valid_ph_range",                source: HAND_TUNED}
-    - {pattern: "extractants.PC88A.valid_ph_range",                 source: HAND_TUNED}
     - {pattern: "extractants.Cyanex272.valid_ph_range",             source: HAND_TUNED}
+
+    # ======================================================================
+    # (2a) LITERATURE-DERIVED -- PC88A pH block, refitted from T21 (#270)
+    # ======================================================================
+    # The catch-all for the block. More specific rules below override it for
+    # the pinned parameters and for the interpolated elements.
+    - {pattern: "extractants.PC88A.ph_coefficients.*.*",  source: T21}
+    - {pattern: "extractants.PC88A.ph_coefficients.*.a",  source: T21,
+       note: "log10(D) at reference_pH = 0 and reference_concentration, on
+              the effective-concentration (Alstad) basis. One free parameter
+              per element fitted to all 121 digitized points; se 0.011-0.045
+              log units. Independently checked against the log Ke T21 prints
+              on each figure panel -- never used in the digitization -- which
+              it reproduces to within 0.06 log units for all five measured
+              elements."}
+    - {pattern: "extractants.PC88A.ph_coefficients.*.b",  source: T21,
+       note: "PINNED at 3.0, the stoichiometric slope this record declares
+              (protons_released: 3) and the slope T21 uses in its own Alstad
+              analysis; T21's 22 measured series average 2.863 +/- 0.321
+              against it. Not fitted, so this is stoichiometry confirmed by
+              T21 rather than a T21 regression coefficient. One slope for
+              every element is what makes a separation factor independent of
+              pH, as mass action requires."}
+    - {pattern: "extractants.PC88A.ph_coefficients.*.c",  source: CONV,
+       note: "Zero by choice, not by fit. A quadratic buys 0.00-0.02 log
+              units of rms and pays by inflating b to 3.5-5.0 with large
+              negative curvature -- a quadratic absorbing scatter over a
+              1-2 unit window, not curvature."}
+    - {pattern: "extractants.PC88A.ph_coefficients.*.d",  source: CONV,
+       note: "Zero because the temperature term lives in
+              temperature_coefficients, not because a temperature dependence
+              was measured to be absent."}
+    # The five elements T21 did not measure. Interpolated, and tagged as
+    # derived rather than measured so `audit(cls=...)` counts them honestly.
+    - {pattern: "extractants.PC88A.ph_coefficients.Ce.a", source: CALC,
+       note: "INTERPOLATED, not measured. Cubic in atomic number through the
+              four measured lanthanides (La, Nd, Sm, Dy). Ce sits between
+              measured La and Nd, 1.0 log units apart over three steps, so
+              the factor it implies is fixed within a few percent by the
+              measurements whatever smooth curve is drawn."}
+    - {pattern: "extractants.PC88A.ph_coefficients.Pr.a", source: CALC,
+       note: "INTERPOLATED, not measured. As Ce above: between measured La
+              and Nd, so tightly constrained."}
+    - {pattern: "extractants.PC88A.ph_coefficients.Eu.a", source: CALC,
+       note: "INTERPOLATED, not measured, and the WEAKEST entries in this
+              block along with Gd and Tb: all three lie in the 4-unit gap
+              between measured Sm and Dy. The half-filled-shell break at Gd
+              is real in this chemistry and a smooth curve cannot represent
+              it. Indicative; refit before designing a middle-REE split."}
+    - {pattern: "extractants.PC88A.ph_coefficients.Gd.a", source: CALC,
+       note: "INTERPOLATED, not measured. See the Eu note -- Gd is the
+              element the smooth curve is most likely to be wrong about."}
+    - {pattern: "extractants.PC88A.ph_coefficients.Tb.a", source: CALC,
+       note: "INTERPOLATED, not measured. See the Eu note."}
+    - {pattern: "extractants.PC88A.valid_ph_range",       source: T21,
+       note: "[0.1, 2.5], the union of the five per-element pH supports
+              (0.12 to 2.46) rounded outward. Both ends are now measured;
+              the old 5.5 was an unsourced guess and was also chemically
+              empty -- at pH 3 this block puts D(La) at 8e4 and D(Dy) at
+              4e8, every element quantitatively in the organic and no
+              separation possible."}
+    - {pattern: "extractants.PC88A.reference_pH",         source: T21,
+       note: "1.33, the minimax over the five per-element supports: no
+              single pH lies inside all five, so any anchor is outside
+              somebody's, and this is the pH minimizing the worst excursion
+              (0.09 pH units). Was 3.5 -- outside four of the five supports
+              and outside the validity window."}
+    - {pattern: "extractants.PC88A.activity_coefficient_A", source: T21,
+       note: "0.473, the Alstad constant for EHEHPA in Shellsol D70, taken
+              from T21's own treatment of its data (its Eqs. 3-5). The `a`
+              values above were fitted on this form and are only valid with
+              it applied."}
 
     # ======================================================================
     # (2) LITERATURE-DERIVED -- TBP nitrate block

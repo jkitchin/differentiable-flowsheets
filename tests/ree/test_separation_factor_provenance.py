@@ -96,15 +96,67 @@ class TestTheTwoDescriptionsAgree:
     def test_the_y_dy_pair_follows_the_correlations(self, sf_db):
         """The pair the two descriptions disagreed about in *direction*.
 
-        Both said Y extracts less readily than Dy; they differed by 4-8x on
-        how much. The correlations now answer it everywhere.
+        #265 settled it on the coefficients, and #270 reopened it: both of
+        the descriptions #265 was choosing between put Y BELOW Dy on all
+        three acidic extractants, and for PC88A that is measurably wrong.
+        Tanaka (2021) prints log Ke = 2.24 for Y against 1.67 for Dy, and
+        the refit of its 121 points gives beta(Y/Dy) = 3.14 -- Y between Dy
+        and Ho, which is what the PC88A literature has always said.
+
+        D2EHPA and Cyanex272 still say 0.21 and 0.10. Right for Cyanex 272,
+        whose whole industrial appeal is that Y drops out of the heavy group;
+        backwards for D2EHPA, where Y also belongs near Ho/Er. Those two
+        records are hand-tuned and no dataset for them ships in `dcdb`, so
+        the number stays wrong and stays labelled HAND_TUNED rather than
+        being invented a second time.
         """
         for extractant, expected in (("D2EHPA", 0.214),
-                                     ("PC88A", 0.140),
+                                     ("PC88A", 3.135),
                                      ("Cyanex272", 0.100)):
             got = sf_db.get_sf(extractant, "Y_Dy")
-            assert got < 1.0
             assert got == pytest.approx(expected, rel=0.02)
+        assert sf_db.get_sf("D2EHPA", "Y_Dy") < 1.0
+        assert sf_db.get_sf("Cyanex272", "Y_Dy") < 1.0
+        assert sf_db.get_sf("PC88A", "Y_Dy") > 1.0
+
+    def test_the_pc88a_factors_do_not_move_with_the_conditions(self, sf_db):
+        """One slope for every element makes beta exactly pH-independent.
+
+        Since #270 PC88A's `b` is the stoichiometric 3 for all ten elements,
+        so log10 beta = a_i - a_j and the pH, temperature and concentration
+        terms cancel identically. This is what killed the "optimal pH = 5.0"
+        artifact: with per-element slopes, beta drifted with pH and an
+        optimizer chased it out of the fitted window.
+        """
+        from difflow_ree.equilibrium.distribution import get_separation_factor
+
+        at_1 = float(get_separation_factor("Y", "Dy", "PC88A", pH=1.0,
+                                           T=298.0, concentration=0.5))
+        at_2 = float(get_separation_factor("Y", "Dy", "PC88A", pH=2.0,
+                                           T=298.0, concentration=0.2))
+        assert at_1 == pytest.approx(at_2, rel=1e-12)
+
+    def test_stages_for_99_purity_is_derived_from_the_factor(self, sf_db):
+        """The 18-integer table went the way the factors went (#270)."""
+        import math
+
+        for extractant in ("D2EHPA", "PC88A"):
+            for pair, beta in sf_db.get(extractant).adjacent_pairs.items():
+                got = sf_db.get_stages_needed(extractant, pair)
+                assert got == math.ceil(2 * math.log(99) / abs(math.log(beta)))
+        # It is a floor, and a floor that moves the right way: the harder
+        # pair needs more stages than the easy one.
+        assert (sf_db.get_stages_needed("PC88A", "Ce_La")
+                > sf_db.get_stages_needed("PC88A", "Sm_Nd"))
+
+    def test_an_authored_stage_count_still_wins(self, sf_db):
+        from difflow_ree.database import SeparationFactorDatabase
+
+        db = SeparationFactorDatabase()
+        derived = db.get_stages_needed("PC88A", "Nd_Pr")
+        db.remove_pair("PC88A", "Nd_Pr")
+        db.add_pair("PC88A", "Nd_Pr", 2.142, adjacent=True, stages_99=derived + 40)
+        assert db.get_stages_needed("PC88A", "Nd_Pr") == derived + 40
 
 
 class TestAuthoredOverrides:

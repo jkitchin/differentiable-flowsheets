@@ -147,9 +147,15 @@ many elements it lists.
 Filling such a gap is a different job per extractant, and none of it is
 interpolation:
 
-- **D2EHPA, PC88A, Cyanex272** have no published source for the ten they
+- **D2EHPA, Cyanex272** have no published source for the ten they
   already carry (`HAND_TUNED` in `sources.yaml`), so there is nothing to extend
   *from* — extending them is a **refit**, not an interpolation.
+- **PC88A** was in that list until #270 and is not any more: its `a` values are
+  fitted to T21 (Tanaka 2021). Extending it is still a refit, but now for the
+  opposite reason — there *is* something to extend from, and T21 covers only
+  La, Nd, Sm, Dy and Y, so the five it does not cover (Ce, Pr, Eu, Gd, Tb) are
+  already interpolations and are tagged `DERIVED`, not `MEASURED`. Ho through
+  Lu are not even that.
 - **TBP**'s ten are literature-derived (`K05` Table 1), so extending it means
   finding a source covering the heavies at comparable conditions, with its own
   `sources.yaml` key.
@@ -300,10 +306,10 @@ The survey, for the whole database or one file:
 from difflow_ree import coverage, audit, unsourced
 
 coverage()
-# {'HAND_TUNED': 161, 'ESTIMATED': 24, 'CONSTRUCTED': 62,
-#  'CONVENTION': 133, 'DERIVED': 37, 'REFERENCE': 180, 'MEASURED': 76}
+# {'HAND_TUNED': 123, 'ESTIMATED': 18, 'CONSTRUCTED': 6,
+#  'CONVENTION': 156, 'DERIVED': 32, 'REFERENCE': 186, 'MEASURED': 94}
 
-len(unsourced())            # 247 of 673 fields must not back a published number
+len(unsourced())            # 147 of 615 fields must not back a published number
 audit(source="Z1")          # every field traceable to Zhang (2016)
 audit(cls="HAND_TUNED")     # every number nobody can defend
 ```
@@ -318,23 +324,51 @@ python -m difflow_ree.provenance --dataset elements --explain Dy.ionic_radius_pm
 
 **Three things this makes visible that were previously invisible.**
 
-1. Of the five extractants, only two carry coefficients traceable to a named
-   table: `naphthenic_acid` (Zhang 2016 Table 4.36, all fifteen elements) and
-   `TBP` (Kraikaew 2005 for `a`, Ganesh & Pandey 2019 for `d`). **D2EHPA,
-   PC88A and Cyanex272 do not.** Their coefficients were invented to make
-   demonstrations look right. They are fine for exercising the solver, testing
-   gradients and teaching the API, and must not appear behind a design number.
+1. Of the five extractants, three carry coefficients traceable to a named
+   source: `naphthenic_acid` (Zhang 2016 Table 4.36, all fifteen elements),
+   `TBP` (Kraikaew 2005 for `a`, Ganesh & Pandey 2019 for `d`) and, since
+   #270, `PC88A` (Tanaka 2021, 121 digitized points, five elements measured
+   and five interpolated). **D2EHPA and Cyanex272 do not.** Their coefficients
+   were invented to make demonstrations look right. They are fine for
+   exercising the solver, testing gradients and teaching the API, and must not
+   appear behind a design number.
 
-2. **Every price is `ESTIMATED`** — element prices and solvent costs alike.
-   Solvent inventory is one of the larger terms in a TEA, so any economic
-   conclusion that survives only at these numbers is an artifact.
+   One consequence of fixing PC88A and not the other two is worth stating
+   plainly, because the file now reads as though it says something it does not.
+   Solving each record for the pH at which `D(Nd) = 1` gives PC88A 1.03,
+   D2EHPA 3.10, Cyanex272 3.74 — i.e. that D2EHPA needs a pH two units
+   *higher* than PC88A. **That is backwards.** D2EHPA is the stronger acid
+   (pKa 3.24 against PC88A's 4.10) and extracts at the lower pH. The ordering
+   is an artifact of one record being measured and two being invented, not a
+   claim about chemistry. Separation factors, cascade behaviour and design pH
+   **within** one record are unaffected; *any* comparison of absolute `D`
+   **across** these three records is meaningless.
 
-3. `separation_factors.yaml` and `extractants.yaml` **disagree**. Recompute any
-   adjacent pair from the `ph_coefficients` at the conditions each separation
-   factor block states, and you get 1.3x to 2.8x the tabulated value (4.8x for
-   Cyanex272 Sm/Nd), and 4x to 8x in the *opposite* direction for every Y/Dy
-   pair. They are two independently hand-tuned descriptions of one set of
-   physics that were never reconciled.
+2. **Nine of fifteen element prices are `ESTIMATED`, and every solvent cost
+   is.** #270 gave La, Ce, Nd, Pr, Eu and Gd the USGS 2025 annual average
+   oxide price (`USGS26`); Nd and Pr carry the same number, because USGS
+   quotes didymium as one product and publishes no split, so a circuit that
+   separates them earns nothing here for having done so. The remaining nine —
+   Sm, Tb, Dy, Y, Ho, Er, Tm, Yb, Lu — are untouched and still indicative, and
+   solvent inventory is one of the larger terms in a TEA, so any economic
+   conclusion that survives only at those numbers is still an artifact.
+
+3. `separation_factors.yaml` **no longer carries factors at all** (#265). It
+   used to, and the two files disagreed: recomputing an adjacent pair from the
+   `ph_coefficients` gave 1.3x to 2.8x the tabulated value (4.8x for Cyanex272
+   Sm/Nd), and 4x to 8x in the *opposite* direction for every Y/Dy pair. Two
+   independently hand-tuned descriptions of one set of physics, never
+   reconciled. The file now selects which pairs to report and at what
+   conditions, and the values — and, since #270, the Fenske stage counts —
+   are computed from the coefficient block of the same extractant.
+
+   The Y/Dy pair is the interesting one in hindsight. Both descriptions put Y
+   *below* Dy on all three acidic extractants, so #265 had no way to tell that
+   both were wrong about PC88A. T21 measures β(Y/Dy) = 3.14 there — Y between
+   Dy and Ho, which is what the PC88A literature has always said. D2EHPA and
+   Cyanex272 still say 0.21 and 0.10: right for Cyanex 272, whose industrial
+   appeal *is* that Y falls out of the heavy group, and backwards for D2EHPA.
+   Where Y sits is a property of the extractant, not of yttrium.
 
 The tagging is a maintained obligation rather than a comment that rots: adding
 a field to a data file without a matching rule fails CI, as does citing a
@@ -396,10 +430,9 @@ print(float(tbp.get_D("Nd", nitrate_conc=6.0)))  # rises with nitrate
 ```
 
 ```{note}
-**TBP's nitrate coefficients are refitted from primary literature (and are the
-only literature-derived numbers in the extractant database).** D2EHPA, PC88A
-and Cyanex272 remain **hand-tuned with no recorded source** — do not mistake one
-for the other.
+**TBP's nitrate coefficients are refitted from primary literature.** So are
+`naphthenic_acid`'s and, since #270, PC88A's. D2EHPA and Cyanex272 remain
+**hand-tuned with no recorded source** — do not mistake one for the other.
 
 **Fit basis.** Kraikaew, Srinuttrakul & Chayavadhanakur (2005), "Solvent
 Extraction Study of Rare Earths from Nitrate Medium by the Mixtures of TBP and
@@ -738,9 +771,23 @@ Every cation-exchange record declares a `valid_ph_range` — the window its
 from difflow_ree import get_extractant
 {e: get_extractant(e).valid_ph_range
  for e in ("D2EHPA", "PC88A", "Cyanex272", "TBP", "naphthenic_acid")}
-# {'D2EHPA': (1.0, 5.0), 'PC88A': (1.5, 5.5), 'Cyanex272': (3.0, 7.0),
+# {'D2EHPA': (1.0, 5.0), 'PC88A': (0.1, 2.5), 'Cyanex272': (3.0, 7.0),
 #  'TBP': (0.5, 4.0), 'naphthenic_acid': (4.0, 5.0)}
 ```
+
+**PC88A's window is now [0.1, 2.5], and it means something different from the
+other four.** It is the span T21 (Tanaka 2021) actually measured -- log D
+against equilibrium pH for La, Nd, Sm, Dy and Y in Shellsol D70, that record's
+own diluent, dimer basis and three protons per RE(III), from pH 0.12 to 2.46 at
+six extractant concentrations -- and since #270 it is a window over *measured*
+`a` values rather than over invented ones. It used to read `[0.1, 5.5]`, a
+floor bounded by T21 and a ceiling bounded by nothing, sitting under
+coefficients the same source put about 2 pH units and six decades of `D` away.
+Both ends now come from the same 121 points as the coefficients.
+
+The narrowing is not a loss of capability. The old ceiling was never a place
+you could compute at; it was a place where the answer was wrong quietly instead
+of loudly. A companion source above pH 2.5 is wanted and does not exist yet.
 
 TBP's window is recorded but never checked: it is solvating, its correlation is
 driven by nitrate activity and carries no pH term at all, so there is nothing
@@ -748,9 +795,10 @@ to extrapolate.
 
 Until #262 that field was loaded into `database.Extractant` and then read by
 nothing, so a circuit could be operated at `stripping_pH=0.3` against a
-quadratic fitted over `[1.5, 5.5]` and get a silent answer. That is not a small
-error: with `b = 2.55` for PC88A, **one pH unit outside the window moves `D` by
-two and a half decades**, and the failure is quiet — `D` stays finite, positive
+quadratic fitted over `[1.5, 5.5]` (PC88A's window at the time) and get a
+silent answer. That is not a small
+error: with `b = 3` for PC88A, **one pH unit outside the window moves `D` by
+three decades**, and the failure is quiet — `D` stays finite, positive
 and plausible-looking all the way down.
 
 ```{warning}
@@ -766,8 +814,8 @@ operates inside the window and asserts that the check stays quiet.
 
 ```python
 d = REEDistribution(extractant="PC88A", elements=("Nd",))
-d.get_D("Nd", pH=3.0)      # inside [1.5, 5.5], silent
-d.get_D("Nd", pH=0.3)      # UserWarning: pH minimum 0.3 is outside ... (#262)
+d.get_D("Nd", pH=2.0)      # inside [0.1, 2.5], silent
+d.get_D("Nd", pH=0.05)     # UserWarning: pH minimum 0.05 is outside ... (#262)
 
 REEDistribution(extractant="PC88A", elements=("Nd",), on_out_of_range="raise")
 REEDistribution(extractant="PC88A", elements=("Nd",), on_out_of_range="ignore")
@@ -844,8 +892,8 @@ from the same `get_separation_factor` as the code above:
 ```python
 sf_db = get_sf_database()
 data = sf_db.get("PC88A")
-data.conditions            # {'pH': 3.5, 'temperature_K': 298, 'concentration_M': 0.5}
-sf_db.get_sf("PC88A", "Nd_Pr")   # 4.03, the coefficients' own answer
+data.conditions            # {'pH': 1.33, 'temperature_K': 298, 'concentration_M': 0.5}
+sf_db.get_sf("PC88A", "Nd_Pr")   # 2.14, the coefficients' own answer
 "Nd_Pr" in data.derived    # True
 ```
 
@@ -853,10 +901,35 @@ sf_db.get_sf("PC88A", "Nd_Pr")   # 4.03, the coefficients' own answer
 at, so a factor quoted from this table is only the factor at that pH. For any
 other pH, ask `REEDistribution` directly.
 
+PC88A is the exception that proves it, and the exception is new. Its block used
+to say pH 3.5, which is outside the `[0.1, 2.5]` window the #270 refit gave it,
+so every factor under it was an extrapolation and loading the database warned
+about it. It now says 1.33 — the record's own `reference_pH`. The *numbers* did
+not move: since #270 every element on that record shares one slope, `b = 3`,
+so `log10 β = a_i − a_j` and the pH, temperature and concentration terms cancel
+identically. Moving PC88A's conditions moves `D`, not `β`. That is also what
+killed the "optimal pH = 5.0" artifact — with per-element slopes, `β` drifted
+with pH and an optimiser would climb it straight out of the fitted window.
+
 A pair given an explicit value in the YAML is used as authored and left out of
 `derived`. None ship with difflow_ree: an override is a claim that a measured
 number exists which the correlations cannot reproduce, and it needs a citation
 beside it.
+
+**Stage counts are derived too (#270).** `separation_factors.yaml` carried an
+18-entry `stages_for_99_purity:` table until then. It matched no `β` in the
+package — solving Fenske backwards out of its own entries gives betas spanning
+1.17–3.15, in an order that tracks neither description — and its `Y_Dy` rows
+counted stages of a separation that runs the other way. `get_stages_needed`
+now computes
+
+$$N_{min} = \frac{2\ln 99}{\lvert \ln \beta \rvert}$$
+
+— Fenske at total reflux for a 99 %/99 % split of an equimolar binary. It is a
+**thermodynamic floor**: a real cascade at a finite solvent ratio needs several
+times more, and it inherits every weakness of the `β` beneath it. An authored
+value still wins, via `add_pair(..., stages_99=...)` or a
+`stages_for_99_purity` block in your own YAML.
 
 (free-extractant)=
 ### Free extractant, not total

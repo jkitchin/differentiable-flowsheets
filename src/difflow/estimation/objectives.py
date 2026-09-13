@@ -78,3 +78,13 @@ def negative_log_likelihood(model_fn, theta, experiments, param_names):
                 sigma = 1.0
             nll = nll + 0.5 * ((residual / sigma) ** 2 + jnp.log(2 * jnp.pi * sigma ** 2))
     return nll
+
+
+#: The objective names :meth:`Estimator.fit`, ``confidence_intervals``,
+#: ``summary`` and the bootstraps all dispatch on. One table, so a name added
+#: here cannot reach one caller and not another.
+OBJECTIVES = {
+    'sse': sum_squared_errors,
+    'wsse': weighted_sum_squared_errors,
+    'nll': negative_log_likelihood,
+}

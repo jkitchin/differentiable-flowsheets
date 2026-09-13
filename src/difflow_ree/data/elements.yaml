@@ -16,7 +16,15 @@
 #
 # Tags used here: [S76] Shannon (1976) ionic radii; [CRC] CRC Handbook;
 # [IUPAC] IUPAC atomic weights; [CALC] computed from other tagged fields;
-# [EST] INDICATIVE ONLY, no identified source -- this covers every price.
+# [USGS26] USGS Mineral Commodity Summaries 2026, 2025 average oxide prices;
+# [EST] INDICATIVE ONLY, no identified source.
+#
+# PRICES: FIVE ARE SOURCED, TEN ARE NOT (#270)
+# La, Ce, Nd, Pr, Eu and Gd carry USGS-reported 2025 annual average OXIDE
+# prices. Nd and Pr carry the same number because USGS quotes the NdPr pair
+# as one product and no split is published -- a flowsheet that separates them
+# earns nothing for it here. The other nine elements are unchanged, still
+# indicative, still [EST]. Do not read the citation on La as covering Dy.
 
 elements:
   La:
@@ -30,7 +38,7 @@ elements:
     group: light
     oxide_formula: La2O3
     oxide_mw: 325.81  # g/mol
-    price_usd_kg: 5.0  # approximate, highly variable
+    price_usd_kg: 1.00   # [USGS26] 2025 average, La2O3
 
   Ce:
     name: Cerium
@@ -44,7 +52,7 @@ elements:
     group: light
     oxide_formula: CeO2
     oxide_mw: 172.12
-    price_usd_kg: 2.0
+    price_usd_kg: 1.71   # [USGS26] 2025 average, CeO2
 
   Pr:
     name: Praseodymium
@@ -57,7 +65,7 @@ elements:
     group: light
     oxide_formula: Pr6O11
     oxide_mw: 1021.44
-    price_usd_kg: 85.0
+    price_usd_kg: 69.00  # [USGS26] the NdPr PAIR price -- see below
 
   Nd:
     name: Neodymium
@@ -70,7 +78,7 @@ elements:
     group: light
     oxide_formula: Nd2O3
     oxide_mw: 336.48
-    price_usd_kg: 120.0  # High demand for NdFeB magnets
+    price_usd_kg: 69.00  # [USGS26] the NdPr PAIR price -- see below
 
   Sm:
     name: Samarium
@@ -96,7 +104,7 @@ elements:
     group: middle
     oxide_formula: Eu2O3
     oxide_mw: 351.93
-    price_usd_kg: 35.0
+    price_usd_kg: 27.00  # [USGS26] 2025 average, Eu2O3
 
   Gd:
     name: Gadolinium
@@ -109,7 +117,7 @@ elements:
     group: middle
     oxide_formula: Gd2O3
     oxide_mw: 362.50
-    price_usd_kg: 55.0
+    price_usd_kg: 30.00  # [USGS26] 2025 average, Gd2O3
 
   Tb:
     name: Terbium
@@ -158,9 +166,11 @@ elements:
   # reachable here.
   #
   # Physical properties are [S76] and [CRC]; see `sources.yaml`.
-  # PRICES ARE INDICATIVE ONLY and tagged [EST] -- as are the prices of the
-  # original ten. Read the provenance block at the foot of this file before
-  # using any price in an economic calculation.
+  # NONE OF THESE FIVE PRICES IS SOURCED. They are tagged [EST]. The #270
+  # price update reached only La, Ce, Nd, Pr, Eu and Gd, all of them in the
+  # original ten; Ho, Er, Tm, Yb and Lu are exactly where they were. Read the
+  # provenance block at the foot of this file before using any price in an
+  # economic calculation.
   # ---------------------------------------------------------------------
 
   Ho:
@@ -295,13 +305,34 @@ provenance:
               atomic_weight and oxide_formula. Reproduced to within
               0.02 g/mol by test_oxide_mw_is_consistent."}
 
-    # --- no source --------------------------------------------------------
+    # --- prices -----------------------------------------------------------
+    # The default is still "no source". Six entries beat it, by being named
+    # one at a time below -- a wildcard here would quietly relabel the other
+    # nine the next time somebody added an element.
     - {pattern: "elements.*.price_usd_kg", source: EST,
        note: "*** NOT A SOURCED PRICE. *** Indicative oxide values of the
               order that circulated in the late 2010s. REE prices move by
               factors of several within a year and the thin-market elements
               (Tm, Lu) have no public price at all. Any economic conclusion
               that survives only at these numbers is an artifact."}
+    - {pattern: "elements.La.price_usd_kg", source: USGS26,
+       locus: "Rare Earths, 2025 annual average; La2O3, USD/kg oxide"}
+    - {pattern: "elements.Ce.price_usd_kg", source: USGS26,
+       locus: "Rare Earths, 2025 annual average; CeO2, USD/kg oxide"}
+    - {pattern: "elements.Eu.price_usd_kg", source: USGS26,
+       locus: "Rare Earths, 2025 annual average; Eu2O3, USD/kg oxide"}
+    - {pattern: "elements.Gd.price_usd_kg", source: USGS26,
+       locus: "Rare Earths, 2025 annual average; Gd2O3, USD/kg oxide"}
+    - {pattern: "elements.Nd.price_usd_kg", source: USGS26,
+       locus: "Rare Earths, 2025 annual average; 99% NdPr oxide, USD/kg",
+       note: "THE PAIR PRICE. USGS quotes didymium as one product and
+              publishes no Nd/Pr split, so Nd and Pr carry the same 69
+              USD/kg. Revenue from a circuit that splits them is therefore
+              flat in the split -- correct as a market fact, and not a
+              number to justify the separation with."}
+    - {pattern: "elements.Pr.price_usd_kg", source: USGS26,
+       locus: "Rare Earths, 2025 annual average; 99% NdPr oxide, USD/kg",
+       note: "The pair price -- see the note on Nd."}
 
     # --- difflow convention ----------------------------------------------
     - {pattern: "elements.*.group",     source: CONV}

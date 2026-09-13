@@ -124,7 +124,10 @@ class TestTheErrorArrivesEarly:
         try:
             assert "Ho" in get_extractant("PC88A").covered_elements
             dist = REEDistribution(extractant="PC88A", elements=("Ho", "Dy"))
-            assert float(dist.get_D("Ho", pH=3.5)) > 0
+            # Inside PC88A's [0.1, 2.5] window since #270 -- the point
+            # here is that the added element is usable, not that the
+            # correlation extrapolates.
+            assert float(dist.get_D("Ho", pH=2.0)) > 0
         finally:
             db.remove_element_from_extractant("PC88A", "Ho")
 

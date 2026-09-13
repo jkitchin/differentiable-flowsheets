@@ -80,6 +80,8 @@ Key capabilities:
    - Nonparametric (resample experiments)
    - Parametric (resample residuals)
    - Percentile confidence intervals
+   - Takes an `objective`, and it must be the one `fit` minimized (see
+     [Matching the objective](#matching-the-objective))
 
 8. **Cross-Validation** (`cross_validation.py`)
    - Leave-N-out cross-validation
@@ -127,6 +129,28 @@ print(est.summary(result, experiments))
 
 `result` exposes the fitted parameters as both a dict and an array, along with the
 convergence status and final objective value.
+
+### Matching the objective
+
+`fit`, `confidence_intervals`, `bootstrap` and `summary` each take an `objective`,
+and all four default to `'sse'`. **A weighted fit must carry `objective='wsse'`
+through every one of them.** The default is kept for backwards compatibility, and
+it is silently wrong in exactly the case where weighting mattered:
+
+```python
+result = est.fit(experiments, theta_init, objective='wsse')
+ci = est.confidence_intervals(result, experiments, objective='wsse')
+bs = est.bootstrap(result, experiments, objective='wsse')
+print(est.summary(result, experiments, objective='wsse'))
+```
+
+The intervals come from the Hessian of the objective at the optimum, so an
+unweighted Hessian over a weighted fit reports the standard errors of numbers
+nobody computed. The bootstrap is worse than that: it *refits*, so on the default
+it returns the sampling distribution of a different estimator. In
+`examples/22_ree_parameter_estimation.ipynb`, where the measured concentrations
+span four decades, the mismatch inflates the bootstrap standard errors five-fold
+and reads as a failed linearization.
 
 ## Uncertainty Quantification
 
@@ -207,6 +231,8 @@ to be aware of:
 
 A complete worked example is available in the Examples section:
 [REE parameter estimation](../examples/22_ree_parameter_estimation.ipynb), which
-fits pH-dependent distribution coefficients for La, Nd, and Dy from measured
-liquid–liquid extraction concentrations, including Fisher and bootstrap
-uncertainty, diagnostics, and cross-validation.
+recovers the shipped PC88A coefficients for La, Nd and Dy from measured
+liquid–liquid extraction concentrations. It runs the identifiability check first,
+then fits a ladder of four models — free quadratic, linear, shared slope, and the
+one-parameter mass-action form the database uses — and lets AIC and BIC choose,
+with Fisher and bootstrap uncertainty and censoring of below-LOQ measurements.
