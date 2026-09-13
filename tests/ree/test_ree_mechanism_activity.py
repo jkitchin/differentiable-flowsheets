@@ -234,12 +234,17 @@ class TestMediumIsDetectedNotDescribed:
         expected D2EHPA to be refused in some medium would be asserting a
         constraint the database does not carry."""
         for name in ("D2EHPA", "PC88A", "Cyanex272"):
-            assert get_extractant(name).requires_nitrate is False
+            rec = get_extractant(name)
+            assert rec.requires_nitrate is False
+            # Each record's own window: the three no longer overlap at a
+            # single pH, since PC88A's is [0.1, 2.5] after the #270 refit.
+            lo, hi = rec.valid_ph_range
+            pH = 0.5 * (lo + hi)
             for medium in AQUEOUS_MEDIA:
                 dist = REEDistribution(
                     extractant=name, elements=("Nd",), medium=medium
                 )
-                assert float(dist.get_D("Nd", pH=3.0)) > 0.0
+                assert float(dist.get_D("Nd", pH=pH)) > 0.0
 
     def test_unknown_medium_rejected(self):
         with pytest.raises(ValueError, match="Unknown medium"):
@@ -353,11 +358,14 @@ class TestActivityConvention:
         correction tracks it rather than a hard-coded charge."""
         I = 0.15
         for name in ("D2EHPA", "PC88A", "Cyanex272"):
-            p = get_extractant(name).stoichiometry_protons
+            rec = get_extractant(name)
+            p = rec.stoichiometry_protons
+            lo, hi = rec.valid_ph_range          # see the note in #270 above
+            pH = 0.5 * (lo + hi)
             dist = REEDistribution(extractant=name, elements=("Nd",))
             ratio = float(
-                dist.get_D("Nd", pH=3.0, ionic_strength=I)
-            ) / float(dist.get_D("Nd", pH=3.0))
+                dist.get_D("Nd", pH=pH, ionic_strength=I)
+            ) / float(dist.get_D("Nd", pH=pH))
             expected = davies_gamma(3, I) / davies_gamma(1, I) ** p
             assert ratio == pytest.approx(expected, rel=1e-10)
 

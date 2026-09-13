@@ -134,9 +134,14 @@ class TestTheClaimsTheDataFilesMake:
             assert p.publishable, sym
             assert "4.36" in p.locus
 
-    def test_the_three_acidic_extractants_are_hand_tuned(self):
-        """The header's central warning, as an assertion."""
-        for ex in ("D2EHPA", "PC88A", "Cyanex272"):
+    def test_the_two_remaining_acidic_extractants_are_hand_tuned(self):
+        """The header's central warning, as an assertion.
+
+        It used to be three. PC88A left the list in #270, when its `a` values
+        were fitted to Tanaka (2021)'s 121 digitized points; D2EHPA and
+        Cyanex272 have no dataset in `dcdb` yet and are still invented.
+        """
+        for ex in ("D2EHPA", "Cyanex272"):
             for sym in ("La", "Nd", "Dy", "Y"):
                 for c in ("a", "b"):
                     p = explain(
@@ -145,14 +150,79 @@ class TestTheClaimsTheDataFilesMake:
                     assert p.cls == "HAND_TUNED", f"{ex} {sym} {c}"
                     assert not p.publishable
 
-    def test_every_price_is_unsourced(self):
-        """elements.yaml and extractants.yaml both promise this."""
+    def test_PC88A_pH_coefficients_are_measured(self):
+        """The other half of #270: what replaced the hand-tuned block.
+
+        `a` is fitted (MEASURED, T21). `b` is pinned at the stoichiometric 3
+        rather than fitted, which is what makes every separation factor on
+        this record exactly pH-independent -- so it is T21's too, but as the
+        model form the paper itself fits with, not as a free parameter.
+        `c` and `d` are the CONVENTION zeros of an isothermal, quadratic-free
+        fit. Five elements are interpolated across the series and say so.
+        """
+        measured = ("La", "Nd", "Sm", "Dy", "Y")
+        interpolated = ("Ce", "Pr", "Eu", "Gd", "Tb")
+        for sym in measured:
+            p = explain("extractants", f"extractants.PC88A.ph_coefficients.{sym}.a")
+            assert p.cls == "MEASURED", sym
+            assert p.source == "T21", sym
+            assert p.publishable, sym
+        for sym in interpolated:
+            p = explain("extractants", f"extractants.PC88A.ph_coefficients.{sym}.a")
+            assert p.cls == "DERIVED", sym
+            assert p.source == "CALC", sym
+        for sym in measured + interpolated:
+            b = explain("extractants", f"extractants.PC88A.ph_coefficients.{sym}.b")
+            assert b.source == "T21", sym
+            for z in ("c", "d"):
+                q = explain(
+                    "extractants", f"extractants.PC88A.ph_coefficients.{sym}.{z}"
+                )
+                assert q.cls == "CONVENTION", f"{sym} {z}"
+
+    def test_six_prices_are_sourced_and_the_rest_are_not(self):
+        """elements.yaml's header, as an assertion.
+
+        Every price used to be unsourced. #270 gave six of them the USGS
+        2025 annual average oxide price; the other nine are untouched and
+        still say so, and every extractant cost is still invented.
+
+        The point of naming the six is that the default stays "no source":
+        the rule that grants USGS26 lists each element literally, so adding
+        an element to this file cannot silently inherit a citation.
+        """
+        sourced = {"La", "Ce", "Nd", "Pr", "Eu", "Gd"}
+        seen = set()
         for p in audit("elements"):
-            if p.path.endswith(".price_usd_kg"):
+            if not p.path.endswith(".price_usd_kg"):
+                continue
+            sym = p.path.split(".")[1]
+            seen.add(sym)
+            if sym in sourced:
+                assert p.cls == "REFERENCE", p.path
+                assert p.source == "USGS26", p.path
+                assert p.publishable, p.path
+            else:
                 assert p.cls == "ESTIMATED", p.path
+        assert sourced <= seen
         for p in audit("extractants"):
             if p.path.endswith(".cost_usd_kg") or p.path.endswith(".cost_usd_L"):
                 assert p.cls == "ESTIMATED", p.path
+
+    def test_nd_and_pr_carry_the_same_pair_price(self):
+        """USGS quotes didymium as one product, so difflow_ree cannot split it.
+
+        A circuit that separates Pr from Nd earns nothing for having done so
+        at these prices. That is the market, not a modelling shortcut, and
+        the note on the rule says so -- but a test is what stops somebody
+        "fixing" it by inventing a spread.
+        """
+        from difflow_ree.database import get_element
+
+        assert get_element("Nd").price_usd_kg == get_element("Pr").price_usd_kg
+        for sym in ("Nd", "Pr"):
+            p = explain("elements", f"{sym}.price_usd_kg")
+            assert "NdPr" in p.locus
 
     def test_separation_factors_carry_no_measurement(self):
         for p in audit("separation_factors"):

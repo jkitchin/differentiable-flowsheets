@@ -4,6 +4,7 @@ Loads element properties, extractant data, and separation factors
 from YAML files.
 """
 
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import NamedTuple, Sequence
@@ -126,7 +127,7 @@ class REEDatabase:
         """Add a custom element to the database at runtime.
 
         Args:
-            symbol: Element symbol (e.g., "Ho")
+            symbol: Element symbol (e.g., "Sc")
             element: REEElement object with all required properties
 
         Raises:
@@ -523,6 +524,22 @@ class Extractant:
     # CORRELATION_BASES. Default "unsaponified", which is what every shipped
     # record is and what a pH slope means.
     correlation_basis: str = "unsaponified"
+    # Non-ideality of the extractant in its diluent (#270). The concentration
+    # term on D is a power law in the extractant's EFFECTIVE concentration
+    # ``y* C``, not in the total ``C``:
+    #
+    #     log10(y*) = -A * sqrt(C)
+    #
+    # the Alstad form, which is what T21 fits its own data with (its Eqs.
+    # 3-5). ``A`` is a property of the extractant/diluent pair and is
+    # measured alongside the coefficients, so it is stored beside them.
+    #
+    # None means "no correction", and that is NOT a claim that the extractant
+    # is ideal: it means this record's ``a`` values were fitted on a
+    # TOTAL-concentration power law, so applying the correction to them would
+    # move D away from the numbers they were fitted to reproduce. The field
+    # travels with the coefficient block, and a refit sets both or neither.
+    activity_coefficient_A: float | None = None
 
     def __post_init__(self):
         """Normalize the mechanism (#195) and check saponification (#197).
@@ -695,6 +712,52 @@ class Extractant:
             None, "H",
         )
 
+    def log10_concentration_factor(self, concentration) -> "Array":
+        """log10 of the extractant-concentration factor on ``D`` (#270).
+
+        This is the ONE definition of how ``D`` responds to the extractant
+        charge. :meth:`REEDistribution.get_D` adds it to ``log10(D)`` and
+        :func:`~difflow_ree.equilibrium.free_extractant.solve_free_extractant`
+        inverts it; writing it once is what keeps the correlation and the
+        free-extractant closure describing the same power law.
+
+        Two forms, chosen by whether the record carries an
+        ``activity_coefficient_A``:
+
+        - ``None`` -- a power law in the TOTAL concentration,
+          ``n * log10(C / C_ref)``.
+        - a value ``A`` -- a power law in the EFFECTIVE concentration
+          ``y* C`` with ``log10(y*) = -A sqrt(C)``, so the factor is
+          ``n * [log10(C/C_ref) - A (sqrt(C) - sqrt(C_ref))]``.
+
+        Both are zero at ``C = C_ref`` by construction, which is what makes
+        ``a`` mean ``log10(D)`` at the reference concentration under either.
+
+        The effective form is monotone increasing in ``C`` over any physical
+        extractant charge: the factor turns over only at
+        ``C = (2 / (A ln 10))**2``, which is 3.4 M for the A = 0.473 of the
+        one record that carries it -- an order of magnitude above a real
+        organic phase. The free-extractant root find relies on that monotone
+        behaviour and would otherwise need a bracket.
+
+        Args:
+            concentration: Extractant concentration on the record's own basis
+                (dimer or monomer, per ``stoichiometry_basis``), mol/L. May be
+                a JAX tracer.
+
+        Returns:
+            log10 of the multiplicative factor on ``D``, zero at
+            ``reference_concentration``.
+        """
+        C = jnp.asarray(concentration)
+        n = self.concentration_exponent
+        C_ref = self.reference_concentration
+        ratio = jnp.log10(C / C_ref)
+        if self.activity_coefficient_A is None:
+            return n * ratio
+        A = self.activity_coefficient_A
+        return n * (ratio - A * (jnp.sqrt(C) - jnp.sqrt(jnp.asarray(C_ref))))
+
     @property
     def monomers_per_ree(self) -> float:
         """Extractant monomer equivalents bound per mol REE.
@@ -805,6 +868,7 @@ class ExtractantDatabase:
                 valid_temp_range=tuple(props["valid_temp_range"]),
                 reference_concentration=props["reference_concentration"],
                 concentration_exponent=props["concentration_exponent"],
+                activity_coefficient_A=props.get("activity_coefficient_A"),
                 cost_usd_kg=props["cost_usd_kg"],
                 degradation_rate=props.get("degradation_rate"),
                 heat_of_extraction=props.get("heat_of_extraction"),
@@ -1206,11 +1270,45 @@ class SeparationFactorDatabase:
         raise KeyError(f"No SF data for pair {pair} with {extractant}")
 
     def get_stages_needed(self, extractant: str, pair: str) -> int | None:
-        """Get estimated stages for 99% purity separation."""
+        """Minimum stages for a 99% / 99% split of this pair.
+
+        Fenske at total reflux, on the pair's separation factor::
+
+            N_min = 2 ln(99) / |ln beta|
+
+        which is the equimolar binary feed taken to 99% purity in *both*
+        products.  It is a THERMODYNAMIC FLOOR: a real cascade runs at a
+        finite solvent ratio with a real feed and needs several times more,
+        and the floor inherits every weakness of the ``beta`` beneath it ---
+        which for D2EHPA and Cyanex272 is a hand-tuned number (see
+        ``extractants.yaml``).
+
+        This was an 18-entry hand-authored table in
+        ``separation_factors.yaml`` until #270.  It matched no ``beta`` in
+        the package, and its ``Y_Dy`` entries counted stages of a separation
+        that runs the other way.  Deriving it keeps it in step with the
+        coefficients the same way #265 did for the factors themselves.
+
+        An authored value still wins --- ``add_pair(..., stages_99=...)``, or
+        a ``stages_for_99_purity`` block in a caller's own YAML.
+
+        Returns:
+            The stage count, rounded up.  ``None`` if the pair is unknown to
+            this extractant, or if ``beta`` is 1 to within float precision,
+            where no finite cascade separates the pair at all.
+        """
         data = self.get(extractant)
-        if data.stages_for_99_purity is None:
+        authored = (data.stages_for_99_purity or {}).get(pair)
+        if authored is not None:
+            return int(authored)
+        try:
+            beta = self.get_sf(extractant, pair)
+        except KeyError:
             return None
-        return data.stages_for_99_purity.get(pair)
+        log_beta = abs(math.log(beta))
+        if log_beta < 1e-12:
+            return None
+        return int(math.ceil(2.0 * math.log(99.0) / log_beta))
 
     def list_extractants(self) -> list[str]:
         """List extractants with SF data."""
@@ -1603,23 +1701,28 @@ def create_custom_element(
         ValueError: If required parameters are missing or invalid
 
     Example:
-        >>> ho = create_custom_element(
-        ...     symbol="Ho",
-        ...     name="Holmium",
-        ...     atomic_number=67,
-        ...     atomic_weight=164.930,
-        ...     ionic_radius_pm=90.1,
-        ...     density=8.795,
-        ...     melting_point=1734,
+        Scandium, which is a rare earth by every classification that counts
+        and is not one of the fifteen this database ships.  (Holmium is: the
+        gap for Ho is in the *extractant* correlations, and the API for that
+        one is :meth:`ExtractantDatabase.add_element_to_extractant`.)
+
+        >>> sc = create_custom_element(
+        ...     symbol="Sc",
+        ...     name="Scandium",
+        ...     atomic_number=21,
+        ...     atomic_weight=44.956,
+        ...     ionic_radius_pm=74.5,
+        ...     density=2.985,
+        ...     melting_point=1814,
         ...     group="heavy",
-        ...     oxide_formula="Ho2O3",
-        ...     oxide_mw=377.86,
-        ...     price_usd_kg=60.0,
+        ...     oxide_formula="Sc2O3",
+        ...     oxide_mw=137.91,
+        ...     price_usd_kg=3700.0,
         ... )
         >>>
         >>> from difflow_ree import get_ree_database
         >>> db = get_ree_database()
-        >>> db.add_element("Ho", ho)
+        >>> db.add_element("Sc", sc)
     """
     if not symbol:
         raise ValueError("symbol cannot be empty")

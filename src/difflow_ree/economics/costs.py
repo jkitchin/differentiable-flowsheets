@@ -18,10 +18,14 @@ to three published projects (``CAPEX_ANCHORS``, tagged ``DISCLOSED``);
 :func:`capex_basis` reports which one an estimate came from, what it
 enclosed, and the AACE accuracy range that follows. Specifically:
 
-* **Prices** (:attr:`REEPricing.base_prices`) are the same indicative oxide
-  values as ``elements.yaml:*.price_usd_kg`` (tagged ``EST`` there, with the
-  warning that REE prices move by factors of several within a year and are
-  not public for the thin-market elements). ``purity_premium`` and
+* **Prices** (:attr:`REEPricing.base_prices`) are READ FROM
+  ``elements.yaml:*.price_usd_kg`` at construction, not restated here -- see
+  :func:`_default_base_prices`. Their provenance is per element and
+  ``difflow_ree.provenance.explain("elements", "<El>.price_usd_kg")`` reports
+  it: the traded oxides (La, Ce, Pr, Nd, Eu, Gd) are ``REFERENCE`` to the USGS
+  Mineral Commodity Summaries, and the thin-market ones (Sm, Tb, Dy, Y and the
+  heavies) are ``ESTIMATED`` with no identified source. REE prices move by
+  factors of several within a year either way. ``purity_premium`` and
   ``form_factors`` are invented multipliers, not observed premia. Nothing
   here knows about payability: a real offtake pays a *fraction* of contained
   oxide value, and for La/Ce that fraction is small because the market is in
@@ -107,6 +111,22 @@ from difflow_ree.database import get_ree_database, get_extractant_database
 # REE Product Pricing
 # =============================================================================
 
+def _default_base_prices() -> dict[str, float]:
+    """Oxide prices, read from the element database rather than restated here.
+
+    A second copy of the price table is the failure mode #268 removed from the
+    Langmuir constants: it agrees on the day it is written and then drifts, and
+    nothing in the code can tell that it has. ``elements.yaml`` is the one place
+    a price is written down, ``provenance.explain("elements", "Nd.price_usd_kg")``
+    says where each one came from, and this function is the only thing that
+    copies them. Assign to ``base_prices`` (or call :meth:`update_prices`) for a
+    market scenario; the default always matches the database.
+    """
+    from difflow_ree.database import get_element, list_ree_elements
+
+    return {e: get_element(e).price_usd_kg for e in list_ree_elements()}
+
+
 @dataclass
 class REEPricing:
     """REE product pricing model.
@@ -121,18 +141,7 @@ class REEPricing:
         purity_premium: Premium factor for high purity
         form_factors: Price multipliers for different forms
     """
-    base_prices: dict[str, float] = field(default_factory=lambda: {
-        "La": 5.0,
-        "Ce": 2.0,
-        "Pr": 85.0,
-        "Nd": 120.0,
-        "Sm": 15.0,
-        "Eu": 35.0,
-        "Gd": 55.0,
-        "Tb": 1500.0,
-        "Dy": 450.0,
-        "Y": 35.0,
-    })
+    base_prices: dict[str, float] = field(default_factory=_default_base_prices)
 
     purity_premium: dict[str, float] = field(default_factory=lambda: {
         "99%": 1.0,

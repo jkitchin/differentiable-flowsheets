@@ -276,6 +276,58 @@ class TestBootstrap:
         np.testing.assert_allclose(bs.mean['a'], 2.0, atol=0.5)
 
     @pytest.mark.release
+    def test_bootstrap_honours_the_objective_it_is_given(self):
+        """A weighted fit needs a weighted bootstrap.
+
+        Heteroscedastic data: the second half of the runs is measured a
+        hundred times more precisely than the first. Unweighted SSE ignores
+        that and is dominated by the loud points, so a bootstrap left on the
+        default reports a spread several times the weighted estimator's --
+        not because the linearization is failing, but because it is
+        resampling a different estimator entirely.
+        """
+        rng = np.random.default_rng(0)
+        exps = []
+        for i in range(24):
+            x = 0.5 * i
+            sigma = 1.0 if i < 12 else 0.01
+            y = 2.0 * x + 1.0 + sigma * rng.standard_normal()
+            exps.append(Experiment(inputs={'x': x}, observed={'y': y},
+                                   uncertainties={'y': sigma}))
+
+        est = Estimator(linear_model, ['a', 'b'])
+        result = est.fit(exps, {'a': 1.0, 'b': 0.0}, objective='wsse')
+        ci = est.confidence_intervals(result, exps, objective='wsse')
+
+        matched = est.bootstrap(result, exps, n_bootstrap=40, seed=1,
+                                objective='wsse')
+        mismatched = est.bootstrap(result, exps, n_bootstrap=40, seed=1)
+
+        # The matched bootstrap agrees with the Fisher standard errors to
+        # within the resampling noise of 40 draws; the default does not.
+        assert 0.4 < matched.std['a'] / ci.std_errors['a'] < 2.5
+        assert mismatched.std['a'] / ci.std_errors['a'] > 3.0
+
+    @pytest.mark.release
+    def test_summary_reports_the_intervals_of_the_fit_it_summarises(self):
+        """``summary`` must be able to use the objective ``fit`` minimized."""
+        rng = np.random.default_rng(0)
+        exps = []
+        for i in range(24):
+            x = 0.5 * i
+            sigma = 1.0 if i < 12 else 0.01
+            y = 2.0 * x + 1.0 + sigma * rng.standard_normal()
+            exps.append(Experiment(inputs={'x': x}, observed={'y': y},
+                                   uncertainties={'y': sigma}))
+
+        est = Estimator(linear_model, ['a', 'b'])
+        result = est.fit(exps, {'a': 1.0, 'b': 0.0}, objective='wsse')
+        ci = est.confidence_intervals(result, exps, objective='wsse')
+        text = est.summary(result, exps, objective='wsse')
+
+        assert f"{ci.std_errors['a']:.6g}" in text
+
+    @pytest.mark.release
     def test_bootstrap_ci_contains_true(self):
         exps = make_linear_experiments(a_true=2.0, b_true=1.0, n=20, noise_std=0.05)
         est = Estimator(linear_model, ['a', 'b'])

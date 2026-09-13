@@ -12,11 +12,13 @@ This package contains:
    - Grade: **A** (production-ready)
 
 2. **Example Notebook** (`examples/22_ree_parameter_estimation.ipynb`)
-   - REE distribution coefficient fitting for La, Nd, Dy
-   - Demonstrates full estimation workflow
-   - Includes uncertainty quantification (Fisher + Bootstrap)
-   - Model validation via diagnostics and cross-validation
-   - Practical application: process design using fitted model
+   - Recovers the shipped PC88A coefficients for La, Nd, Dy from measured
+     phase concentrations
+   - Identifiability check before any fitting
+   - A ladder of four models chosen between by AIC and BIC
+   - Uncertainty quantification (Fisher + bootstrap, both on the weighted
+     objective the fit used)
+   - Below-LOQ measurements censored rather than clipped
 
 ## Quick Summary
 
@@ -147,18 +149,16 @@ The estimation module enables:
 ### Example Notebook
 **Path:** `examples/22_ree_parameter_estimation.ipynb`
 **Length:** 26 cells
-**Runtime:** ~2-3 minutes
+**Runtime:** ~3 minutes (the 200-resample bootstrap is most of it)
 **Sections:**
-- Setup & data generation
-- Data visualization
-- Model definition
-- Parameter estimation
-- Uncertainty quantification
-- Results comparison
-- Comprehensive visualizations
-- Model diagnostics
-- Process simulation
-- Cross-validation
+- The database coefficients being recovered, with provenance
+- Campaign design, synthetic measurements, LOQ censoring
+- Concentration model and the four-model ladder
+- Identifiability check
+- Fits, AIC/BIC comparison, and the test of `b = 3`
+- Recovery of the tabulated intercepts against their confidence intervals
+- Bootstrap against the Fisher intervals
+- Parity plots, D-vs-pH, diagnostics
 - Key takeaways
 
 **Dependencies:**

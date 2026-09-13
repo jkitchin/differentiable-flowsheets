@@ -14,7 +14,7 @@ from scipy.optimize import minimize
 from scipy import stats
 
 from difflow.params_mixin import ParamsMixin
-from difflow.estimation.objectives import sum_squared_errors
+from difflow.estimation.objectives import OBJECTIVES
 
 
 @dataclass
@@ -53,6 +53,7 @@ def nonparametric_bootstrap(
     n_bootstrap=200,
     alpha=0.05,
     seed=42,
+    objective='sse',
 ):
     """Nonparametric bootstrap: resample experiments with replacement.
 
@@ -65,11 +66,15 @@ def nonparametric_bootstrap(
         n_bootstrap: number of bootstrap resamples
         alpha: significance level
         seed: random seed
+        objective: 'sse', 'wsse' or 'nll'; must match the objective the
+            original fit minimized, or the resampled spread describes a
+            different estimator than the one whose value is being reported.
 
     Returns:
         BootstrapResult
     """
     import numpy as np
+    obj_fn = OBJECTIVES[objective]
     rng = np.random.default_rng(seed)
     n_exp = len(experiments)
 
@@ -83,10 +88,10 @@ def nonparametric_bootstrap(
         boot_exps = [experiments[i] for i in indices]
 
         def obj(theta):
-            return float(sum_squared_errors(model_fn, jnp.array(theta), boot_exps, param_names))
+            return float(obj_fn(model_fn, jnp.array(theta), boot_exps, param_names))
 
         def grad_obj(theta):
-            g = jax.grad(lambda t: sum_squared_errors(model_fn, t, boot_exps, param_names))(
+            g = jax.grad(lambda t: obj_fn(model_fn, t, boot_exps, param_names))(
                 jnp.array(theta)
             )
             return np.array(g, dtype=np.float64)
@@ -110,6 +115,7 @@ def parametric_bootstrap(
     n_bootstrap=200,
     alpha=0.05,
     seed=42,
+    objective='sse',
 ):
     """Parametric bootstrap: resample residuals, create synthetic data.
 
@@ -122,12 +128,15 @@ def parametric_bootstrap(
         n_bootstrap: number of bootstrap resamples
         alpha: significance level
         seed: random seed
+        objective: 'sse', 'wsse' or 'nll'; must match the objective the
+            original fit minimized.
 
     Returns:
         BootstrapResult
     """
     import numpy as np
     from copy import deepcopy
+    obj_fn = OBJECTIVES[objective]
     rng = np.random.default_rng(seed)
 
     theta_dict = {name: float(theta_opt[i]) for i, name in enumerate(param_names)}
@@ -163,10 +172,10 @@ def parametric_bootstrap(
             boot_exps.append(new_exp)
 
         def obj(theta):
-            return float(sum_squared_errors(model_fn, jnp.array(theta), boot_exps, param_names))
+            return float(obj_fn(model_fn, jnp.array(theta), boot_exps, param_names))
 
         def grad_obj(theta):
-            g = jax.grad(lambda t: sum_squared_errors(model_fn, t, boot_exps, param_names))(
+            g = jax.grad(lambda t: obj_fn(model_fn, t, boot_exps, param_names))(
                 jnp.array(theta)
             )
             return np.array(g, dtype=np.float64)

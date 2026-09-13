@@ -834,9 +834,17 @@ class REEDistribution:
         field was loaded into :class:`~difflow_ree.database.Extractant` and
         then never read by anything, so a circuit could be operated at
         ``stripping_pH=0.3`` against a quadratic fitted over ``[1.5, 5.5]``
-        and get a silent answer. Extrapolating ``a + b*pH + c*pH**2`` is not
-        a small error: PC88A's ``b = 2.55`` means one pH unit outside the
-        window moves ``D`` by two and a half decades.
+        -- PC88A's window at the time -- and get a silent answer.
+        Extrapolating ``a + b*pH + c*pH**2`` is not a small error: PC88A's
+        ``b = 2.55`` means one pH unit outside the window moves ``D`` by two
+        and a half decades.
+
+        PC88A's floor is now 0.1, widened on T21, so that particular pH is
+        inside it today. The widening is about the cation-exchange FORM,
+        which T21 demonstrates down to pH 0.12; PC88A's ``a`` values are
+        still HAND_TUNED and still wrong down there (#270), which is why
+        this report has to keep working at the new edge rather than be
+        read as a clean bill of health anywhere inside the window.
 
         Like :meth:`_check_activity_range` this is a *report*, not a guard --
         the value is used as given. There is deliberately no clamp: clamping
@@ -1052,9 +1060,12 @@ class REEDistribution:
         # deliberately NOT composed with this term in the stage path: doing
         # both double-counts the same free-extractant effect. See #190, and
         # #196 for the mass-action closure that would replace both.
-        n = self._ext_data.concentration_exponent
-        C_ref = self._ext_data.reference_concentration
-        log_D = log_D + n * jnp.log10(self.concentration / C_ref)
+        # (#270) The power law is in the extractant's EFFECTIVE concentration
+        # where the record says so -- see Extractant.log10_concentration_factor
+        # for the two forms and why the field travels with the coefficients.
+        log_D = log_D + self._ext_data.log10_concentration_factor(
+            self.concentration
+        )
 
         D = jnp.power(10.0, log_D)
 

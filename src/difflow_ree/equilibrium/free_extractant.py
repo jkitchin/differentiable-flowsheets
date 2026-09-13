@@ -296,17 +296,19 @@ def solve_free_extractant(
             f"Extractant concentration must be positive, got {total}."
         )
     m = record.monomers_per_ree
-    n = record.concentration_exponent
     c_aq = jnp.asarray(c_aq)
 
     # D at the record's own reference concentration: the concentration term is
-    # n*log10([HA]/C_ref), so factoring it out leaves a clean power law in the
-    # free extractant and keeps every other term (temperature, activity,
-    # overrides) exactly as get_D computes it.
-    D_ref = dist.get_D(element, pH, T, **get_D_kwargs) * jnp.power(
-        record.reference_concentration / total, n
-    )
+    # the record's own `log10_concentration_factor`, so dividing it out leaves
+    # a clean function of the free extractant and keeps every other term
+    # (temperature, activity, overrides) exactly as get_D computes it. Going
+    # through that method rather than restating `(C/C_ref)**n` here is what
+    # keeps this closure on the same power law the correlation was fitted on,
+    # total-concentration or effective-concentration (#270).
     D_total = dist.get_D(element, pH, T, **get_D_kwargs)
+    D_ref = D_total / jnp.power(
+        10.0, record.log10_concentration_factor(total)
+    )
 
     def residual(u, args):
         """F(u), monotone decreasing, with one root in (0, total]."""
@@ -315,7 +317,9 @@ def solve_free_extractant(
         # is interior, so the clip is inactive there and the implicit
         # derivative is unaffected.
         u_safe = jnp.clip(u, 1e-12 * total, total)
-        D_u = D_ref * jnp.power(u_safe / record.reference_concentration, n)
+        D_u = D_ref * jnp.power(
+            10.0, record.log10_concentration_factor(u_safe)
+        )
         return total - m * c_aq * D_u - u
 
     solution = optx.root_find(
@@ -330,7 +334,7 @@ def solve_free_extractant(
     )
     converged = _judge(solution, dist.extractant, element, max_steps)
     free = jnp.clip(solution.value, 0.0, total)
-    D = D_ref * jnp.power(free / record.reference_concentration, n)
+    D = D_ref * jnp.power(10.0, record.log10_concentration_factor(free))
     c_org = D * c_aq
     return FreeExtractantResult(
         D=D,

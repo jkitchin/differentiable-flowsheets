@@ -100,6 +100,41 @@ sources:
       from monazite, free acidity 0.2001 N, TBP in kerosene, equal phase
       volumes, 35 +/- 1 C. The ONLY source of TBP's per-element `a` values.
 
+  T21:
+    citation: >-
+      Tanaka, M.; Oki, T.; Koyama, K.; Narita, H. (2021). "Revaluating solvent
+      extraction equilibria of trivalent rare earths with EHEHPA (PC-88A)".
+      Hydrometallurgy 201, 105588.
+    kind: article
+    doi: "10.1016/j.hydromet.2021.105588"
+    cls: MEASURED
+    access: closed
+    note: >-
+      Figs. 1-5: log D vs equilibrium pH for La, Nd, Sm, Dy and Y against
+      EHEHPA (Daihachi) in Shellsol D70 at six dimeric concentrations
+      0.041-0.82 mol/L, 298.0 +/- 0.1 K, I = 1 mol/L HNO3/NaNO3, O/A = 1,
+      RE 1 mmol/L, ICP-AES with the organic by mass balance. The diluent,
+      dimer basis and 3 protons per RE(III) are this repository's PC88A
+      record exactly. The figures were digitized from the publisher PDF's
+      vector paths rather than read from a table -- 121 points -- and the
+      panel constants were not used during digitization, so the printed
+      log Ke is an independent check: the digitization reproduces it to
+      within 0.037 log units across all five elements.
+      SINCE #270 THIS IS WHERE PC88A'S COEFFICIENTS COME FROM. Every `a` in
+      `extractants.PC88A.ph_coefficients` is fitted to these points, on the
+      Alstad effective-concentration basis the paper itself uses (its Eqs.
+      3-5, log10 y* = -A sqrt(C) with A = 0.473 for EHEHPA in Shellsol D70,
+      stored as the record's `activity_coefficient_A`), with `b` pinned at
+      the stoichiometric 3 rather than fitted -- which costs at most 0.03
+      log units rms and makes every separation factor on the record exactly
+      pH-independent. The refit reproduces the paper's printed log Ke to
+      within 0.06 log units for all five elements.
+      Only La, Nd, Sm, Dy and Y are measured. Ce, Pr, Eu, Gd and Tb are
+      interpolated across atomic number and are tagged CALC, not MEASURED.
+      Covers pH 0.12-2.46, which is why the record's `valid_ph_range` is
+      [0.1, 2.5]; a companion source above pH 2.5 is still wanted, and until
+      one exists the record must not be used at a higher pH.
+
   TW54:
     citation: >-
       Topp, A. C.; Weaver, B. S. (1954). "Distribution of Rare-Earth Nitrates
@@ -450,6 +485,28 @@ sources:
       Reproducible by arithmetic, no independent authority. Oxide molecular
       weights are CALC: each recomputes from its element's atomic_weight and
       oxide_formula to within 0.02 g/mol.
+
+  USGS26:
+    citation: >-
+      U.S. Geological Survey (2026). "Rare Earths", in Mineral Commodity
+      Summaries 2026. U.S. Geological Survey, Reston, VA.
+    kind: report
+    doi: "10.3133/mcs2026"
+    cls: REFERENCE
+    access: open
+    note: >-
+      Reported 2025 annual average oxide prices, in USD per kilogram of
+      OXIDE (not metal): NdPr 69 (99% didymium oxide), Eu 27, Gd 30,
+      La 1.00, Ce 1.71.
+      NdPr is one product. USGS quotes the didymium pair together because
+      that is how it is sold, and no split is published, so `Nd` and `Pr`
+      in elements.yaml BOTH carry 69. A calculation that separates Pr from
+      Nd is therefore not being paid anything for having done so -- which
+      is a fair reflection of the market and a bad basis for justifying the
+      separation.
+      This source covers five of the fifteen elements in elements.yaml. The
+      other ten are still EST and still unsourced; do not read the presence
+      of a dated citation on La as saying anything about Dy.
 
   EST:
     citation: "Indicative value. No identified source."

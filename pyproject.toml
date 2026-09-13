@@ -42,6 +42,14 @@ dependencies = [
     "diffrax>=0.6.0",
     "lineax>=0.0.7",
     "optimistix>=0.0.6",
+    # Not used directly -- it arrives under diffrax/lineax/optimistix, none of
+    # which floor it high enough. jax 0.11.1 removed `jax.core.get_aval` and
+    # `jax.core.mapped_aval`, which equinox 0.13.2 still calls from
+    # `internal/_primitive.py`, so every implicitly-differentiated root find
+    # (every flash, every recycle tear, every REE free-extractant solve) dies
+    # with an AttributeError the moment a gradient is taken. 0.13.3 is the
+    # first release that does not.
+    "equinox>=0.13.3",
     "pyyaml>=6.0",
     "flax>=0.10.7",
     "gpjax>=0.12.2",

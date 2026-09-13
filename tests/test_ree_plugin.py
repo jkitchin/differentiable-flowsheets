@@ -377,13 +377,24 @@ class TestEconomics:
         """Test REE pricing model."""
         from difflow_ree import REEPricing
 
+        from difflow_ree import get_element, list_ree_elements
+
         pricing = REEPricing()
 
         nd_price = pricing.get_price("Nd", purity="99%", form="oxide")
-        assert nd_price > 100  # Nd is valuable
-
         ce_price = pricing.get_price("Ce", purity="99%", form="oxide")
-        assert ce_price < nd_price  # Ce is less valuable
+        assert ce_price < nd_price  # Ce is in surplus; Nd is the magnet metal
+
+        # The prices are READ from elements.yaml, not restated in costs.py.
+        # A second hand-synced copy is what #268 removed from the Langmuir
+        # constants: it agrees the day it is written and then drifts silently.
+        for elem in list_ree_elements():
+            assert pricing.base_prices[elem] == get_element(elem).price_usd_kg
+
+        # "oxide" and "99%" are both the unit multiplier, so the base price
+        # comes back unchanged -- if that stops holding, every notebook that
+        # quotes a revenue moved without saying so.
+        assert nd_price == get_element("Nd").price_usd_kg
 
     def test_capex_estimate(self):
         """Test capital cost estimation."""

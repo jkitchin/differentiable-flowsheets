@@ -226,20 +226,27 @@ class TestItSaysWhenItDidNotConverge:
         return REEDistribution(
             extractant="PC88A", elements=("Nd", "Pr"), concentration=0.5)
 
+    # pH 1.5 rather than the 3.0 these used to use: PC88A's window is
+    # [0.1, 2.5] since the #270 refit, and at pH 3 the measured
+    # correlation puts D(Nd) near 1e6, which is past capacity at any
+    # loading and so genuinely has no root -- it would exercise the
+    # capacity failure rather than the convergence reporting this class
+    # is about.
+
     def test_an_ordinary_solve_reports_success(self, dist):
-        result = solve_free_extractant(dist, "Nd", 1e-4, pH=3.0)
+        result = solve_free_extractant(dist, "Nd", 1e-4, pH=1.5)
         assert result.converged is True
 
     def test_starved_of_steps_it_says_so(self, dist):
         with pytest.warns(FreeExtractantConvergenceWarning,
                           match="did not converge"):
-            result = solve_free_extractant(dist, "Nd", 1e-4, pH=3.0,
+            result = solve_free_extractant(dist, "Nd", 1e-4, pH=1.5,
                                            max_steps=1)
         assert result.converged is False
 
     def test_the_warning_says_not_to_trust_the_D(self, dist):
         with pytest.warns(FreeExtractantConvergenceWarning) as record:
-            solve_free_extractant(dist, "Nd", 1e-4, pH=3.0, max_steps=1)
+            solve_free_extractant(dist, "Nd", 1e-4, pH=1.5, max_steps=1)
         message = str(record[0].message)
         assert "last iterate" in message
         assert "max_steps" in message
@@ -247,7 +254,7 @@ class TestItSaysWhenItDidNotConverge:
     def test_a_converged_solve_is_silent(self, dist):
         with warnings.catch_warnings():
             warnings.simplefilter("error", FreeExtractantConvergenceWarning)
-            solve_free_extractant(dist, "Nd", 1e-4, pH=3.0)
+            solve_free_extractant(dist, "Nd", 1e-4, pH=1.5)
 
     def test_an_eager_gradient_still_gets_a_verdict(self, dist):
         """`grad` outside `jit` is the happy case: the tracer has a primal.
@@ -258,7 +265,7 @@ class TestItSaysWhenItDidNotConverge:
         seen = {}
 
         def D_of(c_aq):
-            result = solve_free_extractant(dist, "Nd", c_aq, pH=3.0)
+            result = solve_free_extractant(dist, "Nd", c_aq, pH=1.5)
             seen["converged"] = result.converged
             return result.D
 
@@ -277,7 +284,7 @@ class TestItSaysWhenItDidNotConverge:
         seen = {}
 
         def D_of(c_aq):
-            result = solve_free_extractant(dist, "Nd", c_aq, pH=3.0)
+            result = solve_free_extractant(dist, "Nd", c_aq, pH=1.5)
             seen["converged"] = result.converged
             return result.D
 

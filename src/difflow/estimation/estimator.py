@@ -15,11 +15,7 @@ from scipy.optimize import minimize
 
 from difflow.params_mixin import ParamsMixin
 from difflow.estimation.experiment import Experiment
-from difflow.estimation.objectives import (
-    sum_squared_errors,
-    weighted_sum_squared_errors,
-    negative_log_likelihood,
-)
+from difflow.estimation.objectives import OBJECTIVES
 from difflow.estimation.confidence import fisher_confidence_intervals, ConfidenceResult
 from difflow.estimation.diagnostics import compute_diagnostics, DiagnosticsResult
 from difflow.estimation.bootstrap import (
@@ -46,11 +42,7 @@ def _theta_of(theta, param_names):
     return theta
 
 
-_OBJECTIVE_MAP = {
-    'sse': sum_squared_errors,
-    'wsse': weighted_sum_squared_errors,
-    'nll': negative_log_likelihood,
-}
+_OBJECTIVE_MAP = OBJECTIVES
 
 
 @dataclass
@@ -219,6 +211,7 @@ class Estimator:
         method='nonparametric',
         alpha=0.05,
         seed=42,
+        objective='sse',
     ):
         """Bootstrap uncertainty quantification.
 
@@ -229,6 +222,11 @@ class Estimator:
             method: 'nonparametric' or 'parametric'
             alpha: significance level
             seed: random seed
+            objective: 'sse', 'wsse' or 'nll'. Pass the SAME objective
+                :meth:`fit` used -- resampled fits that minimize a different
+                objective estimate a different estimator's sampling
+                distribution, and comparing that spread against the Fisher
+                standard errors of this one is meaningless.
 
         Returns:
             BootstrapResult
@@ -238,12 +236,12 @@ class Estimator:
         if method == 'nonparametric':
             return nonparametric_bootstrap(
                 self.model_fn, theta_init, experiments, self.param_names,
-                self.param_bounds, n_bootstrap, alpha, seed,
+                self.param_bounds, n_bootstrap, alpha, seed, objective,
             )
         elif method == 'parametric':
             return parametric_bootstrap(
                 self.model_fn, theta_init, experiments, self.param_names,
-                self.param_bounds, n_bootstrap, alpha, seed,
+                self.param_bounds, n_bootstrap, alpha, seed, objective,
             )
         else:
             raise ValueError(f"Unknown bootstrap method: {method}")
@@ -349,19 +347,23 @@ class Estimator:
             self.param_names, alpha=alpha, **kwargs,
         )
 
-    def summary(self, result, experiments, alpha=0.05):
+    def summary(self, result, experiments, alpha=0.05, objective='sse'):
         """Generate a text summary of the estimation results.
 
         Args:
             result: EstimationResult from fit()
             experiments: list of Experiment objects
             alpha: significance level for CIs
+            objective: which objective the confidence intervals are built
+                from. Pass the one :meth:`fit` minimized: the standard errors
+                of a weighted fit reported from the unweighted Hessian are
+                not the standard errors of the numbers above them.
 
         Returns:
             Formatted summary string.
         """
         diag = self.diagnostics(result, experiments)
-        ci = self.confidence_intervals(result, experiments, alpha)
+        ci = self.confidence_intervals(result, experiments, alpha, objective)
 
         lines = []
         lines.append("=" * 60)

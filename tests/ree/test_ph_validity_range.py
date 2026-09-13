@@ -7,8 +7,14 @@ be run at `stripping_pH=0.3` against a quadratic fitted over [1.5, 5.5] and
 get a silent answer. `examples/10_bastnasite_separation.ipynb` did exactly
 that, at three different pH values.
 
-Extrapolating `a + b*pH + c*pH**2` is not a small error: PC88A's b = 2.55
-means one pH unit outside the window moves D by two and a half decades.
+PC88A's window is [0.1, 2.5] since the #270 refit. It is the span T21 actually
+measured -- pH 0.12 to about 2.4 across its six extractant concentrations --
+and it is now a window over MEASURED `a` values rather than over hand-tuned
+ones, so the two ends mean the same thing they say. The probes below sit at
+0.05 (under the floor) and 6.0 (well over the ceiling).
+
+Extrapolating `a + b*pH + c*pH**2` is not a small error: PC88A's b is the
+stoichiometric 3, so one pH unit outside the window moves D by three decades.
 """
 
 import warnings
@@ -35,12 +41,12 @@ class TestPHRangeIsReported:
 
     def test_262_below_the_window_warns_and_names_the_low_end(self):
         dist = REEDistribution(extractant="PC88A", elements=("Nd",))
-        with pytest.warns(UserWarning, match=r"pH minimum 0\.3.*\[1\.5, 5\.5\]"):
-            dist.get_D("Nd", pH=0.3)
+        with pytest.warns(UserWarning, match=r"pH minimum 0\.05.*\[0\.1, 2\.5\]"):
+            dist.get_D("Nd", pH=0.05)
 
     def test_262_above_the_window_warns_and_names_the_high_end(self):
         dist = REEDistribution(extractant="PC88A", elements=("Nd",))
-        with pytest.warns(UserWarning, match=r"pH maximum 6.*\[1\.5, 5\.5\]"):
+        with pytest.warns(UserWarning, match=r"pH maximum 6.*\[0\.1, 2\.5\]"):
             dist.get_D("Nd", pH=6.0)
 
     def test_262_the_range_is_per_extractant_not_a_global_constant(self):
@@ -59,13 +65,13 @@ class TestPHRangeIsReported:
         dist = REEDistribution(extractant="PC88A", elements=("Nd",))
         with warnings.catch_warnings():
             warnings.simplefilter("error", UserWarning)
-            dist.get_D("Nd", pH=jnp.array([2.0, 3.0, 4.0]))
+            dist.get_D("Nd", pH=jnp.array([1.0, 1.5, 2.0]))
         low = REEDistribution(extractant="PC88A", elements=("Nd",))
-        with pytest.warns(UserWarning, match="pH minimum 1"):
-            low.get_D("Nd", pH=jnp.array([1.0, 3.0, 4.0]))
+        with pytest.warns(UserWarning, match=r"pH minimum 0\.05"):
+            low.get_D("Nd", pH=jnp.array([0.05, 1.5, 2.0]))
         high = REEDistribution(extractant="PC88A", elements=("Nd",))
         with pytest.warns(UserWarning, match="pH maximum 6"):
-            high.get_D("Nd", pH=jnp.array([2.0, 3.0, 6.0]))
+            high.get_D("Nd", pH=jnp.array([1.0, 2.0, 6.0]))
 
 
 class TestPHRangeIsAReportNotAGuard:
@@ -75,18 +81,24 @@ class TestPHRangeIsAReportNotAGuard:
         """A clamp would silently relocate a flowsheet's operating point.
 
         D at the extrapolated pH must differ from D at the window edge -- if
-        the check clamped, the two would be equal and a user asking for pH 0.3
-        would silently get pH 1.5 physics.
+        the check clamped, the two would be equal and a user asking for pH 7
+        would silently get pH 2.5 physics.
+
+        Probed at the TOP edge: below the floor there is only 0.05 pH of
+        room left, about 0.15 decades, which no margin can tell apart from a
+        clamp. 4.0 against the 2.5 ceiling is 1.5 pH units, four and a half
+        decades at b = 3, which keeps the original 1e3 test with room to
+        spare.
         """
         dist = REEDistribution(
             extractant="PC88A", elements=("Nd",), on_out_of_range="ignore"
         )
-        D_out = float(dist.get_D("Nd", pH=0.3))
-        D_edge = float(dist.get_D("Nd", pH=1.5))
-        assert D_out < D_edge / 1e3
+        D_out = float(dist.get_D("Nd", pH=4.0))
+        D_edge = float(dist.get_D("Nd", pH=2.5))
+        assert D_out > D_edge * 1e3
         # And it is still the honest value of the correlation there.
         c = get_extractant("PC88A").ph_coefficients["Nd"]
-        expected = 10.0 ** (c.a + c.b * 0.3 + c.c * 0.3**2)
+        expected = 10.0 ** (c.a + c.b * 4.0 + c.c * 4.0**2)
         assert D_out == pytest.approx(expected, rel=1e-10)
 
     def test_262_can_be_escalated_to_an_error(self):
@@ -94,7 +106,7 @@ class TestPHRangeIsAReportNotAGuard:
             extractant="PC88A", elements=("Nd",), on_out_of_range="raise"
         )
         with pytest.raises(ValueError, match="validity range"):
-            dist.get_D("Nd", pH=0.3)
+            dist.get_D("Nd", pH=0.05)
 
     def test_262_can_be_silenced(self):
         dist = REEDistribution(
@@ -102,14 +114,14 @@ class TestPHRangeIsAReportNotAGuard:
         )
         with warnings.catch_warnings():
             warnings.simplefilter("error", UserWarning)
-            assert np.isfinite(float(dist.get_D("Nd", pH=0.3)))
+            assert np.isfinite(float(dist.get_D("Nd", pH=0.05)))
 
     def test_262_does_not_spam_a_stage_loop(self):
         dist = REEDistribution(extractant="PC88A", elements=("Nd",))
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             for _ in range(20):
-                dist.get_D("Nd", pH=0.3)
+                dist.get_D("Nd", pH=0.05)
         assert len([w for w in caught if "262" in str(w.message)]) == 1
 
 
@@ -137,7 +149,7 @@ class TestPHRangeAndTracing:
     def test_262_gradients_are_unchanged_by_the_check(self):
         dist = REEDistribution(extractant="PC88A", elements=("Nd",))
         c = get_extractant("PC88A").ph_coefficients["Nd"]
-        pH = 3.0
+        pH = 2.0
         D = 10.0 ** (c.a + c.b * pH + c.c * pH**2)
         expected = D * np.log(10.0) * (c.b + 2 * c.c * pH)
         got = float(jax.grad(lambda x: dist.get_D("Nd", pH=x))(pH))

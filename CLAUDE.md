@@ -304,7 +304,10 @@ class MyUnit:
 - Unit operations: `REEExtractor`, `REEMixerSettler`, `REEScrubber`, `REEStripper`
 - Precipitation: `OxalatePrecipitator`, `CarbonatePrecipitator`, `HydroxidePrecipitator`
 - Flowsheets: `ExtractStripCircuit`, `ExtractScrubStripCircuit`, `SplitShellCascade`, `FullSeparationTrain`
-- Database: 10 REE elements, 4 extractant systems
+- Database: 15 REE elements (the 14 stable lanthanides -- no Pm -- plus Y), 5 extractant systems (D2EHPA, PC88A,
+  Cyanex 272, TBP, naphthenic acid). Coverage is UNEVEN and `ext_db.coverage()`
+  reports it: only naphthenic_acid has coefficients for all fifteen; the other
+  four cover ten (no Ho, Er, Tm, Yb, Lu).
 - Free extractant (#267): the correlation's `[HA]` is FREE (Q1 Eq. 2.88/2.89),
   not total. `solve_free_extractant(dist, el, c_aq, pH=...)` closes
   `c_org = D([HA]_free) c_aq`, `[HA]_free = [HA]_0 - m c_org` as a monotone
