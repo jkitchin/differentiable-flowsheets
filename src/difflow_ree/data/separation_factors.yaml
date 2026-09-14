@@ -41,32 +41,47 @@
 # fixed by the lanthanide contraction the way a lanthanide's is. It moves,
 # by a lot, with the donor:
 #
-#   PC88A / EHEHPA       Y extracts BETWEEN Dy and Ho -- beta(Y/Dy) > 1.
-#                        Measured here: 3.14, from Tanaka (2021), whose own
-#                        printed log Ke has Y at 2.24 against Dy's 1.67.
-#   D2EHPA               Y again sits in the heavy group, near Ho/Er.
-#   Cyanex 272           Y falls a long way DOWN the series, out among the
-#                        light-middle lanthanides. This is the well-known
-#                        anomaly that makes Cyanex 272 the reagent of choice
-#                        for pulling Y out of a heavy concentrate.
+#   PC88A / EHEHPA       Y extracts BETWEEN Dy and Ho. Derived here: 3.14,
+#                        from Tanaka (2021), whose own printed log Ke has Y
+#                        at 2.24 against Dy's 1.67.
+#   D2EHPA               Y sits BETWEEN Ho and Er -- higher still. Derived
+#                        here: 3.69, from Q1 p. 213 ("the equilibrium
+#                        constant of extracting yttrium with P204 is between
+#                        Ho and Er") placed on X95's measured adjacent
+#                        factors.
+#   Cyanex 272           Y again between Ho and Er. Derived here: 3.59, from
+#                        Zhang & Li (1993) Table 4.25, where Y is printed in
+#                        that position.
 #
 # So a single sentence about "where Y goes" is wrong by construction, and the
 # one that used to sit on the D2EHPA Y_Dy line below was doing exactly that.
 #
-# Read the derived Y_Dy factors with that in mind AND with the caveat in
-# extractants.yaml: only PC88A's coefficients are measured. D2EHPA's and
-# Cyanex272's are hand-tuned, and both of them put Y BELOW Dy -- right for
-# Cyanex 272, backwards for D2EHPA. Fixing that needs a D2EHPA dataset, which
-# `dcdb` does not have yet; it is not fixable by editing this file, because
-# this file no longer holds any separation factors (#265, #270).
+# All three now put Y ABOVE Dy, which is what the literature says for all
+# three donors. Until #270 D2EHPA and Cyanex272 said 0.21 and 0.10 -- Y below
+# Dy, backwards for both -- and that was not fixable by editing this file,
+# which holds no separation factors (#265). It was fixed where it lived, in
+# the hand-tuned `ph_coefficients` those two records used to ship: both are
+# now refitted against named primary sources, and both place Y from a printed
+# statement about where Y belongs rather than from nothing (#270).
 
 # Pairs to report, by extractant.
 # Format: heavier_lighter (SF > 1 means the heavier one extracts better)
 separation_factors:
   D2EHPA:
-    # At pH 3.0, 25°C, 0.5M D2EHPA
+    # At pH 0.82, 25 C, 0.5 M D2EHPA (as the dimer, = 1.0 M nominal).
+    #
+    # It was pH 3.0 until #270, which the refit put outside this record's
+    # `valid_ph_range` of [0.0, 2.0] -- the span X95 and PPH63 cover -- so
+    # every factor below it was an extrapolation and loading the database
+    # warned about it. 0.82 and 0.5 M are the record's own `reference_pH`
+    # and `reference_concentration`: the anchor X95's La point sets, by
+    # Z1 Eq. (4.12) on that experiment's own proton balance.
+    #
+    # As on PC88A it does not move the NUMBERS. Every element on this record
+    # shares b = 3, so log10 beta = a_i - a_j and the pH, temperature and
+    # concentration terms cancel identically.
     conditions:
-      pH: 3.0
+      pH: 0.82
       temperature_K: 298
       concentration_M: 0.5
 
@@ -79,9 +94,10 @@ separation_factors:
       - Gd_Eu   # Gd/Eu
       - Tb_Gd   # Tb/Gd - gap between middle and heavy
       - Dy_Tb   # Dy/Tb
-      - Y_Dy   # Y/Dy - see the note on Y in the header. The value this
-               # derives (0.21) is a HAND-TUNED record's opinion, and it
-               # puts Y below Dy, which is backwards for D2EHPA.
+      - Y_Dy   # Y/Dy - see the note on Y in the header. 3.69 since #270,
+               # Y between Ho and Er, from Q1's sentence placed on X95's
+               # measured Ho/Dy and Er/Ho. It used to derive 0.21 -- Y below
+               # Dy -- which was backwards for D2EHPA.
 
     # Non-adjacent pairs (useful for group separations)
     group_pairs:
@@ -137,9 +153,16 @@ separation_factors:
       - Gd_Nd
 
   Cyanex272:
-    # At pH 5.0, 25°C, 0.3M Cyanex 272
+    # At pH 2.0, 25 C, 0.3 M Cyanex 272 (as the dimer, = 0.6 M nominal).
+    #
+    # It was pH 5.0 until #270, a pH and a half above this record's refitted
+    # `valid_ph_range` of [1.5, 3.5] -- and at b = 3 that is four and a half
+    # decades of extrapolation in D. 2.0 and 0.3 M are the record's own
+    # `reference_pH` and `reference_concentration`. Same cancellation as the
+    # other two acidic records: one slope for every element, so beta does not
+    # move with the conditions, only D does.
     conditions:
-      pH: 5.0
+      pH: 2.0
       temperature_K: 298
       concentration_M: 0.3
 

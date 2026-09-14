@@ -16,7 +16,7 @@ import pytest
 jax.config.update("jax_enable_x64", True)
 
 import difflow.stochastic as st
-from difflow.stochastic.risk import weighted_quantile
+from difflow.stochastic.risk import _softplus, weighted_quantile
 
 FAST = st.SAAOptions(steps=250, rounds=3, n_starts=1)
 
@@ -132,6 +132,46 @@ class TestRisk:
         fine = float(c.surrogate(self.z, self.w, aux, 1e-9))
         assert fine == pytest.approx(exact, abs=1e-6)
         assert coarse > exact                     # smoothing is from above
+
+    def test_the_smoothed_positive_part_has_a_live_slope_at_zero(self):
+        """`_softplus` at exactly zero must be the sigmoid's 0.5, not 0.
+
+        CVaR's auxiliary is a *sample value*, so `z - t` is exactly 0.0 for
+        the scenario at the quantile -- and for the only scenario there is
+        when the sample has one, which is what `expected_value_solution`
+        solves. A branchless `max(u, 0) + log1p(exp(-|u|))` has the right
+        value there and a derivative of exactly zero, because `max` breaks
+        the tie toward the constant and `abs` contributes nothing; the whole
+        objective gradient then vanishes and the solve returns its start.
+        """
+        f = lambda z: _softplus(z, 0.1)                       # noqa: E731
+        assert float(jax.grad(f)(0.0)) == pytest.approx(0.5)
+        # ... and the value is still the stable one at both extremes.
+        assert float(f(-800.0)) == pytest.approx(0.0)
+        assert float(f(800.0)) == pytest.approx(800.0)
+        assert jnp.isfinite(f(jnp.array([-1e6, 1e6]))).all()
+
+    def test_a_one_scenario_cvar_solve_would_have_frozen_at_its_start(self):
+        """The regression for the above, end to end.
+
+        With one scenario CVaR is just the objective, so this must land on
+        the same design as `risk="mean"`. It used to return `lower + 0.1 *
+        span` -- `ControlSpec.starts`' first point -- for every bound pair,
+        and `expected_value_solution` (hence every VSS) with it.
+        """
+        def m(x, u, theta):
+            return {"cost": (x["x"] - 5.0) ** 2 + theta["t"] * 0.0}
+
+        one = st.ScenarioSet.normal({"t": (1.0, 0.2)}, n=64, seed=0) \
+            .mean_scenario()
+        assert one.n_scenarios == 1
+        opts = st.SAAOptions(steps=400, n_starts=1)
+        for lo, hi in ((2.0, 16.0), (0.0, 40.0)):
+            p = st.TwoStageProblem(model=m, first_stage={"x": (lo, hi)},
+                                   objective="cost", risk=("cvar", 0.9))
+            got = st.solve_saa(p, one, options=opts).first_stage["x"]
+            assert got == pytest.approx(5.0, abs=1e-3), (lo, hi)
+            assert abs(got - (lo + 0.1 * (hi - lo))) > 1e-3   # not the start
 
     def test_cvar_alpha_is_the_first_keyword_not_n_aux(self):
         """A positional argument must reach alpha; n_aux is not a field."""
@@ -451,6 +491,43 @@ class TestDiagnostics:
         rep = st.bounds(p, sample, options=st.SAAOptions(steps=400,
                                                          n_starts=1))
         assert rep.ordered and rep.vss > 0.5
+
+    def test_an_infeasible_mean_value_design_is_named_as_such(self, scen):
+        """EEV bounds SP only among ADMISSIBLE designs.
+
+        Minimize x subject to `x >= theta` in 90% of scenarios, with no
+        recourse and theta ~ N(5, 1). The mean-value design is x = 5 exactly
+        -- feasible at the mean and off spec in half the sample -- so its
+        objective beats the stochastic one for exactly the reason it is not
+        allowed. Reporting that as a negative VSS blames the solver for a
+        modelling fact.
+        """
+        def m(x, u, theta):
+            return {"cost": x["x"], "y": x["x"] - theta["t"]}
+
+        p = st.TwoStageProblem(model=m, first_stage={"x": (0.0, 10.0)},
+                               objective="cost",
+                               constraints=[("y", ">=", 0.0, 0.9)])
+        rep = st.bounds(p, scen, options=st.SAAOptions(steps=800, rounds=8,
+                                                       n_starts=2))
+        # The 90th percentile of N(5, 1) is 6.28; the mean-value design lands
+        # short of it, which is the whole point.
+        assert rep.ev_first_stage["x"] < 6.0
+        assert not rep.ev_feasible
+        assert not rep.ordered
+        assert "mean-value design does NOT meet" in rep.summary()
+        assert "did not converge" not in rep.summary()
+
+    def test_a_feasible_mean_value_design_says_nothing_about_convergence(
+            self, scen):
+        """The unconstrained case stays trivially feasible."""
+        def m(x, u, theta):
+            return {"cost": (x["x"] - theta["t"]) ** 2}
+
+        p = st.TwoStageProblem(model=m, first_stage={"x": (0.0, 10.0)},
+                               objective="cost")
+        rep = st.bounds(p, scen, options=FAST)
+        assert rep.ev_feasible and rep.ordered
 
     def test_perfect_information_is_worthless_when_recourse_can_do_it_all(
             self, scen):

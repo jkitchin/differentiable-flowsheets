@@ -56,7 +56,11 @@ class ScrubberParams(ParamsMixin):
     elements: tuple[str, ...]
     target_elements: tuple[str, ...]  # Elements to KEEP in organic
     diluent: str = "kerosene"
-    pH: float | Array = 2.0  # Lower pH than extraction to strip impurities
+    # (#270) None means "the extractant record's own default scrubbing pH", a
+    # quarter of the way up its fitted validity window -- lower than the
+    # extraction default, which is what a scrub needs, but read off the
+    # record rather than pinned to a literal that only suited one of them.
+    pH: float | Array | None = None
     extractant_conc: float = 0.5
     scrub_type: Literal["acid", "ree", "water"] = "acid"
     nitrate_conc: float | None = None  # see #195
@@ -64,6 +68,13 @@ class ScrubberParams(ParamsMixin):
     # Per-element log10(D) coefficient overrides, possibly traced; passed to
     # REEDistribution. The supported way to put uncertainty on D.
     coefficient_overrides: dict | None = None
+
+    def __post_init__(self):
+        """Resolve a pH default that the extractant record owns (#270)."""
+        if self.pH is None:
+            from difflow_ree.database import default_pH
+
+            self.pH = default_pH(self.extractant, "scrubbing")
 
 
 class REEScrubber:

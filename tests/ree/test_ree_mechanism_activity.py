@@ -8,6 +8,15 @@ read; TBP was modelled with a pH slope, i.e. as a weak cation exchanger.
 Issue #194: the ionic-strength correction multiplied D by the rare-earth
 activity coefficient alone, on an unstated pH scale, and Davies was applied far
 outside its documented validity range.
+
+Every D2EHPA probe below is at pH 1.5, inside the record's post-#270 validity
+window of [0.0, 2.0]. The pH is incidental to what these tests measure -- the
+activity correction is a ratio taken at one pH, so any pH in the window gives
+the same answer -- but it must be IN the window, because the tests that assert
+no UserWarning is raised cannot tell an activity complaint from a #262
+extrapolation complaint. They used to sit at pH 3.0, which was inside the
+pre-refit hand-tuned range of [1, 5] and is a decade and a half of
+extrapolation outside the fitted one.
 """
 
 import warnings
@@ -147,7 +156,9 @@ class TestMechanismIsData:
         )
         acidic = REEDistribution(extractant="D2EHPA", elements=("Nd",))
 
-        pH_lo, pH_hi = 1.5, 4.0
+        # Both ends inside D2EHPA's post-#270 window of [0.0, 2.0]; with
+        # b = 3 the acid still moves 4.5 decades over the span.
+        pH_lo, pH_hi = 0.5, 2.0
         tbp_ratio = float(tbp.get_D("Nd", pH=pH_hi)) / float(
             tbp.get_D("Nd", pH=pH_lo)
         )
@@ -344,8 +355,8 @@ class TestActivityConvention:
         assert p == 3  # sanity: the record actually carries it
 
         dist = REEDistribution(extractant="D2EHPA", elements=("Nd",))
-        D_plain = float(dist.get_D("Nd", pH=3.0))
-        D_corr = float(dist.get_D("Nd", pH=3.0, ionic_strength=I))
+        D_plain = float(dist.get_D("Nd", pH=1.5))
+        D_corr = float(dist.get_D("Nd", pH=1.5, ionic_strength=I))
 
         expected = davies_gamma(3, I) / davies_gamma(1, I) ** p
         assert D_corr / D_plain == pytest.approx(expected, rel=1e-10)
@@ -395,20 +406,20 @@ class TestActivityConvention:
         """A 2-4 M chloride liquor is an order of magnitude outside Davies."""
         dist = REEDistribution(extractant="D2EHPA", elements=("Nd",))
         with pytest.warns(UserWarning, match="validity range"):
-            dist.get_D("Nd", pH=3.0, ionic_strength=3.0)
+            dist.get_D("Nd", pH=1.5, ionic_strength=3.0)
 
     def test_194_in_range_does_not_warn(self):
         dist = REEDistribution(extractant="D2EHPA", elements=("Nd",))
         with warnings.catch_warnings():
             warnings.simplefilter("error", UserWarning)
-            dist.get_D("Nd", pH=3.0, ionic_strength=0.4)
+            dist.get_D("Nd", pH=1.5, ionic_strength=0.4)
 
     def test_194_out_of_range_can_be_escalated_to_an_error(self):
         dist = REEDistribution(
             extractant="D2EHPA", elements=("Nd",), on_out_of_range="raise"
         )
         with pytest.raises(ValueError, match="validity range"):
-            dist.get_D("Nd", pH=3.0, ionic_strength=3.0)
+            dist.get_D("Nd", pH=1.5, ionic_strength=3.0)
 
     def test_194_out_of_range_can_be_silenced(self):
         dist = REEDistribution(
@@ -416,7 +427,7 @@ class TestActivityConvention:
         )
         with warnings.catch_warnings():
             warnings.simplefilter("error", UserWarning)
-            D = float(dist.get_D("Nd", pH=3.0, ionic_strength=3.0))
+            D = float(dist.get_D("Nd", pH=1.5, ionic_strength=3.0))
         assert np.isfinite(D)
 
     def test_194_warning_does_not_spam_a_stage_loop(self):
@@ -425,7 +436,7 @@ class TestActivityConvention:
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             for _ in range(25):
-                dist.get_D("Nd", pH=3.0, ionic_strength=3.0)
+                dist.get_D("Nd", pH=1.5, ionic_strength=3.0)
         assert len(caught) == 1
 
     def test_194_ionic_strength_none_reproduces_the_correlation_exactly(self):
@@ -437,13 +448,13 @@ class TestActivityConvention:
         n = ext.concentration_exponent
         expected_log = (
             c.a
-            + c.b * 3.0
-            + c.c * 3.0**2
+            + c.b * 1.5
+            + c.c * 1.5**2
             + n * np.log10(dist.concentration / ext.reference_concentration)
         )
-        D_none = float(dist.get_D("Nd", pH=3.0, ionic_strength=None))
+        D_none = float(dist.get_D("Nd", pH=1.5, ionic_strength=None))
         assert np.log10(D_none) == pytest.approx(expected_log, rel=1e-12)
-        assert D_none == pytest.approx(float(dist.get_D("Nd", pH=3.0)), rel=0)
+        assert D_none == pytest.approx(float(dist.get_D("Nd", pH=1.5)), rel=0)
 
     def test_194_activity_model_none_is_uncorrected_at_any_i(self):
         dist = REEDistribution(
@@ -451,8 +462,8 @@ class TestActivityConvention:
         )
         with warnings.catch_warnings():
             warnings.simplefilter("error", UserWarning)
-            D_corr = float(dist.get_D("Nd", pH=3.0, ionic_strength=4.0))
-        assert D_corr == pytest.approx(float(dist.get_D("Nd", pH=3.0)), rel=0)
+            D_corr = float(dist.get_D("Nd", pH=1.5, ionic_strength=4.0))
+        assert D_corr == pytest.approx(float(dist.get_D("Nd", pH=1.5)), rel=0)
 
     def test_194_unimplemented_activity_models_are_refused(self):
         """Bromley / SIT parameters are not carried, so they are not offered."""
@@ -474,8 +485,8 @@ class TestActivityConvention:
         dist = REEDistribution(
             extractant="D2EHPA", elements=("Nd", "Dy"), on_out_of_range="ignore"
         )
-        plain = dist.get_D_all(pH=3.0)
-        corr = dist.get_D_all(pH=3.0, ionic_strength=0.3)
+        plain = dist.get_D_all(pH=1.5)
+        corr = dist.get_D_all(pH=1.5, ionic_strength=0.3)
         for e in ("Nd", "Dy"):
             assert float(corr[e]) < float(plain[e])
 
@@ -517,19 +528,19 @@ class TestDaviesSignInversion:
         dist = REEDistribution(
             extractant="D2EHPA", elements=("Nd",), on_out_of_range="ignore"
         )
-        D_plain = float(dist.get_D("Nd", pH=3.0))
+        D_plain = float(dist.get_D("Nd", pH=1.5))
         for I in (0.1, 0.5, 1.0, 1.9, 2.0, 2.5, 3.0, 4.0, 10.0, 100.0):
-            ratio = float(dist.get_D("Nd", pH=3.0, ionic_strength=I)) / D_plain
+            ratio = float(dist.get_D("Nd", pH=1.5, ionic_strength=I)) / D_plain
             assert ratio < 1.0, f"correction inverted at I={I}: ratio={ratio}"
 
     def test_out_of_range_correction_saturates_at_the_range_limit(self):
         dist = REEDistribution(
             extractant="D2EHPA", elements=("Nd",), on_out_of_range="ignore"
         )
-        limit = float(dist.get_D("Nd", pH=3.0, ionic_strength=DAVIES_MAX_IONIC_STRENGTH))
+        limit = float(dist.get_D("Nd", pH=1.5, ionic_strength=DAVIES_MAX_IONIC_STRENGTH))
         for I in (0.6, 2.0, 3.0, 4.0):
             assert float(
-                dist.get_D("Nd", pH=3.0, ionic_strength=I)
+                dist.get_D("Nd", pH=1.5, ionic_strength=I)
             ) == pytest.approx(limit, rel=1e-12)
 
     def test_in_range_values_are_untouched_by_the_clamp(self):
@@ -537,9 +548,9 @@ class TestDaviesSignInversion:
         dist = REEDistribution(
             extractant="D2EHPA", elements=("Nd",), on_out_of_range="ignore"
         )
-        D_plain = float(dist.get_D("Nd", pH=3.0))
+        D_plain = float(dist.get_D("Nd", pH=1.5))
         for I in (0.01, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5):
-            ratio = float(dist.get_D("Nd", pH=3.0, ionic_strength=I)) / D_plain
+            ratio = float(dist.get_D("Nd", pH=1.5, ionic_strength=I)) / D_plain
             expected = davies_gamma(3, I) / davies_gamma(1, I) ** 3
             assert ratio == pytest.approx(expected, rel=1e-10)
 
@@ -552,8 +563,8 @@ class TestDaviesSignInversion:
             on_out_of_range="ignore",
             extrapolate_activity_model=True,
         )
-        D_plain = float(opted_in.get_D("Nd", pH=3.0))
-        ratio = float(opted_in.get_D("Nd", pH=3.0, ionic_strength=3.0)) / D_plain
+        D_plain = float(opted_in.get_D("Nd", pH=1.5))
+        ratio = float(opted_in.get_D("Nd", pH=1.5, ionic_strength=3.0)) / D_plain
         assert ratio > 1.0
         assert ratio == pytest.approx(
             davies_gamma(3, 3.0) / davies_gamma(1, 3.0) ** 3, rel=1e-10
@@ -564,14 +575,14 @@ class TestDaviesSignInversion:
         pre-fix code treated it like a tracer and warned 0 times (#194)."""
         dist = REEDistribution(extractant="D2EHPA", elements=("Nd",))
         with pytest.warns(UserWarning, match="validity range"):
-            dist.get_D("Nd", pH=3.0, ionic_strength=jnp.array([0.1, 3.0, 4.0]))
+            dist.get_D("Nd", pH=1.5, ionic_strength=jnp.array([0.1, 3.0, 4.0]))
 
     def test_a_concrete_in_range_array_does_not_warn(self):
         dist = REEDistribution(extractant="D2EHPA", elements=("Nd",))
         with warnings.catch_warnings():
             warnings.simplefilter("error", UserWarning)
             dist.get_D(
-                "Nd", pH=3.0, ionic_strength=jnp.array([0.05, 0.2, 0.45])
+                "Nd", pH=1.5, ionic_strength=jnp.array([0.05, 0.2, 0.45])
             )
 
     def test_an_out_of_range_array_can_be_escalated_to_an_error(self):
@@ -579,20 +590,20 @@ class TestDaviesSignInversion:
             extractant="D2EHPA", elements=("Nd",), on_out_of_range="raise"
         )
         with pytest.raises(ValueError, match="validity range"):
-            dist.get_D("Nd", pH=3.0, ionic_strength=np.array([0.1, 3.0]))
+            dist.get_D("Nd", pH=1.5, ionic_strength=np.array([0.1, 3.0]))
 
     def test_the_report_names_the_sign_change_when_it_is_crossed(self):
         dist = REEDistribution(
             extractant="D2EHPA", elements=("Nd",), on_out_of_range="raise"
         )
         with pytest.raises(ValueError, match="changes sign"):
-            dist.get_D("Nd", pH=3.0, ionic_strength=3.0)
+            dist.get_D("Nd", pH=1.5, ionic_strength=3.0)
         # Out of range but below the sign change: no inversion claim.
         mild = REEDistribution(
             extractant="D2EHPA", elements=("Nd",), on_out_of_range="raise"
         )
         with pytest.raises(ValueError) as exc:
-            mild.get_D("Nd", pH=3.0, ionic_strength=1.0)
+            mild.get_D("Nd", pH=1.5, ionic_strength=1.0)
         assert "validity range" in str(exc.value)
         assert "changes sign" not in str(exc.value)
 
@@ -602,9 +613,9 @@ class TestDaviesSignInversion:
         dist = REEDistribution(
             extractant="D2EHPA", elements=("Nd",), on_out_of_range="ignore"
         )
-        D_plain = float(dist.get_D("Nd", pH=3.0))
+        D_plain = float(dist.get_D("Nd", pH=1.5))
         I = jnp.array([0.1, 0.5, 3.0])
-        D = np.asarray(dist.get_D("Nd", pH=3.0, ionic_strength=I))
+        D = np.asarray(dist.get_D("Nd", pH=1.5, ionic_strength=I))
         assert D.shape == (3,)
         assert np.all(D / D_plain < 1.0)
         assert D[1] == pytest.approx(D[2], rel=1e-12)  # both clamped at 0.5
@@ -621,7 +632,7 @@ class TestGradients:
     def test_grad_wrt_ph_matches_finite_difference(self):
         dist = REEDistribution(extractant="D2EHPA", elements=("Nd",))
         f = lambda pH: dist.get_D("Nd", pH=pH)
-        pH0, h = 3.0, 1e-5
+        pH0, h = 1.5, 1e-5
         g = float(jax.grad(f)(pH0))
         fd = (float(f(pH0 + h)) - float(f(pH0 - h))) / (2 * h)
         assert np.isfinite(g)
@@ -650,7 +661,7 @@ class TestGradients:
         dist = REEDistribution(
             extractant="D2EHPA", elements=("Nd",), on_out_of_range="ignore"
         )
-        f = lambda I: dist.get_D("Nd", pH=3.0, ionic_strength=I)
+        f = lambda I: dist.get_D("Nd", pH=1.5, ionic_strength=I)
 
         # In range: negative, and equal to a central difference.
         for I0 in (0.05, 0.1, 0.2):
@@ -680,7 +691,7 @@ class TestGradients:
             extrapolate_activity_model=True,
         )
         g = float(
-            jax.grad(lambda I: opted_in.get_D("Nd", pH=3.0, ionic_strength=I))(
+            jax.grad(lambda I: opted_in.get_D("Nd", pH=1.5, ionic_strength=I))(
                 3.0
             )
         )
@@ -696,12 +707,12 @@ class TestGradients:
         dist = REEDistribution(
             extractant="D2EHPA", elements=("Nd",), on_out_of_range="ignore"
         )
-        f = lambda I: dist.get_D("Nd", pH=3.0, ionic_strength=I)
+        f = lambda I: dist.get_D("Nd", pH=1.5, ionic_strength=I)
 
         g = jax.grad(f)(3.0)
         assert jnp.isfinite(g)
 
-        D_plain = float(dist.get_D("Nd", pH=3.0))
+        D_plain = float(dist.get_D("Nd", pH=1.5))
         traced = float(jax.jit(f)(3.0))
         clamped = float(f(DAVIES_MAX_IONIC_STRENGTH))
         assert traced == pytest.approx(clamped, rel=1e-12)
@@ -717,13 +728,13 @@ class TestGradients:
         )
         with pytest.raises(ValueError, match="tracer"):
             jax.grad(
-                lambda I: strict.get_D("Nd", pH=3.0, ionic_strength=I)
+                lambda I: strict.get_D("Nd", pH=1.5, ionic_strength=I)
             )(3.0)
 
         warning_mode = REEDistribution(extractant="D2EHPA", elements=("Nd",))
         with pytest.warns(UserWarning, match="cannot be range-checked"):
             jax.jit(
-                lambda I: warning_mode.get_D("Nd", pH=3.0, ionic_strength=I)
+                lambda I: warning_mode.get_D("Nd", pH=1.5, ionic_strength=I)
             )(3.0)
 
         quiet = REEDistribution(
@@ -732,7 +743,7 @@ class TestGradients:
         with warnings.catch_warnings():
             warnings.simplefilter("error", UserWarning)
             jax.jit(
-                lambda I: quiet.get_D("Nd", pH=3.0, ionic_strength=I)
+                lambda I: quiet.get_D("Nd", pH=1.5, ionic_strength=I)
             )(3.0)
 
     def test_jit_of_both_mechanisms(self):
@@ -742,8 +753,8 @@ class TestGradients:
         )
         f_acid = jax.jit(lambda pH: acidic.get_D("Nd", pH=pH))
         f_tbp = jax.jit(lambda c: tbp.get_D("Nd", nitrate_conc=c))
-        assert float(f_acid(3.0)) == pytest.approx(
-            float(acidic.get_D("Nd", pH=3.0)), rel=1e-10
+        assert float(f_acid(1.5)) == pytest.approx(
+            float(acidic.get_D("Nd", pH=1.5)), rel=1e-10
         )
         assert float(f_tbp(4.0)) == pytest.approx(
             float(tbp.get_D("Nd", nitrate_conc=4.0)), rel=1e-10

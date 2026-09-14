@@ -92,11 +92,36 @@ def minimum_stages(
     return float(stages_fenske(alpha, purity_extract, purity_raffinate))
 
 
+def _screening_pH(extractant: str) -> float:
+    """The pH a screening calculation reports D at, when the caller gives none.
+
+    (#270) The record's own ``reference_pH`` -- the condition it declares
+    every derived constant at (#268), and guaranteed inside its validity
+    window because :class:`~difflow_ree.database.Extractant` validates that.
+    The separation factor itself does not depend on the choice at all: the
+    four acidic records share one pH slope of ``b = 3``, so ``D_i / D_j`` is
+    ``10**(a_i - a_j)`` at every pH. What the choice does buy is that the
+    ``D`` values the verdict quotes alongside it are ones the coefficients
+    were fitted for. The literal 3.5 this replaced was not, on three of the
+    four records.
+
+    A solvating record has no ``reference_pH`` because its ``D`` is a function
+    of nitrate and not of pH; the middle of its declared window stands in, and
+    nothing reads it.
+    """
+    from difflow_ree.database import default_pH, get_extractant
+
+    record = get_extractant(extractant)
+    if record.reference_pH is not None:
+        return float(record.reference_pH)
+    return default_pH(extractant, "scrubbing")
+
+
 def separation_factor(
     extractant: str,
     extract_key: str,
     raffinate_key: str,
-    pH: float = 3.0,
+    pH: float | None = None,  # (#270) record's own reference_pH
     *,
     nitrate_conc: float | None = None,
     mechanism: str | None = None,
@@ -107,7 +132,8 @@ def separation_factor(
         extractant: Extractant name.
         extract_key: The element the cascade sends to the organic.
         raffinate_key: The element it leaves in the aqueous.
-        pH: Operating pH for the correlation.
+        pH: Operating pH for the correlation. None (the default) uses the
+            extractant record's own reference_pH; see ``_screening_pH``.
         nitrate_conc: Nitrate concentration (M) for solvating
             extractants; see #195.
         mechanism: Explicit mechanism override; see #195.
@@ -115,6 +141,8 @@ def separation_factor(
     Returns:
         The separation factor.
     """
+    if pH is None:
+        pH = _screening_pH(extractant)
     dist = REEDistribution(
         extractant=extractant,
         elements=(extract_key, raffinate_key),
@@ -124,6 +152,21 @@ def separation_factor(
     return float(dist.get_separation_factor(extract_key, raffinate_key, pH))
 
 
+def _module_pH(params) -> float | None:
+    """The operating pH of one train module, or None to let the record say.
+
+    A scrub section sets product purity, so its pH is the one the Fenske
+    bound should be quoted at; an extractor or a single-pH cascade carries a
+    plain ``pH``. Anything else returns None and
+    :func:`screen_separation` falls back to the extractant record (#270).
+    """
+    for attr in ("scrubbing_pH", "pH"):
+        value = getattr(params, attr, None)
+        if value is not None:
+            return float(value)
+    return None
+
+
 def screen_separation(
     extractant: str,
     extract_key: str,
@@ -131,7 +174,7 @@ def screen_separation(
     installed_stages: float,
     purity: float = 0.99,
     purity_raffinate: float | None = None,
-    pH: float = 3.0,
+    pH: float | None = None,  # (#270) record's own reference_pH
     *,
     name: str = "",
     nitrate_conc: float | None = None,
@@ -147,7 +190,8 @@ def screen_separation(
         purity: Target purity (or split) of the extract product.
         purity_raffinate: Target purity of the raffinate; defaults to
             ``purity``.
-        pH: Operating pH for the separation factor.
+        pH: Operating pH for the separation factor. None (the default) uses
+            the extractant record's own reference_pH; see ``_screening_pH``.
         name: Label for the verdict.
         nitrate_conc: Nitrate concentration (M); see #195.
         mechanism: Mechanism override; see #195.
@@ -155,6 +199,8 @@ def screen_separation(
     Returns:
         The :class:`ScreeningVerdict`.
     """
+    if pH is None:
+        pH = _screening_pH(extractant)
     alpha = separation_factor(
         extractant, extract_key, raffinate_key, pH,
         nitrate_conc=nitrate_conc, mechanism=mechanism,
@@ -268,7 +314,11 @@ def screen_train(
         verdicts.append(screen_separation(
             p.extractant, extract_key, raffinate_key, installed,
             purity=purity, purity_raffinate=purity_raffinate,
-            pH=float(getattr(p, "scrubbing_pH", getattr(p, "pH", 3.0))),
+            # (#270) Whatever pH the module actually runs at. The fallback
+            # is None -- "ask the record" -- not a literal: a module type with
+            # neither attribute has no operating pH to report, and inventing
+            # one for it names a condition no record was fitted at.
+            pH=_module_pH(p),
             name=name,
             nitrate_conc=getattr(p, "nitrate_conc", None),
             mechanism=getattr(p, "mechanism", None),

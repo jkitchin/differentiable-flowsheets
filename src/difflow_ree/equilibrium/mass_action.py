@@ -1053,7 +1053,10 @@ class MassActionParams(ParamsMixin):
             correlation. **This is not an operating specification.** In the
             closed model the pH is an output; this number only says where the
             two levels are made to agree. Set it near the pH the section
-            actually runs at.
+            actually runs at. None uses the extractant record's own
+            ``reference_pH``, which is inside its ``valid_ph_range`` by
+            construction -- the old hard-coded 3.0 was outside D2EHPA's after
+            the #270 refit.
         log10_K: Measured formation constants keyed by element symbol.
             Supplying these bypasses the calibration, and is what a user with
             real data should do.
@@ -1100,7 +1103,7 @@ class MassActionParams(ParamsMixin):
     counter_ion: str | None = "Na"
     anion: str = "Cl"
     extractant_conc: float = 0.5
-    calibration_pH: float = 3.0
+    calibration_pH: float | None = None
     log10_K: Mapping[str, float] | None = None
     network: str | None = None
     anion_conc: float | None = None
@@ -1236,13 +1239,22 @@ class MassActionSection:
         dist_kwargs = (
             {"nitrate_conc": anion_conc} if ext.requires_nitrate else {}
         )
+        #: The pH the calibration actually used, resolved once so that
+        #: ``correlation_D`` reports against the same point rather than
+        #: re-deriving it. None on the params means the record's own
+        #: ``reference_pH`` (#270).
+        self.calibration_pH = (
+            float(params.calibration_pH)
+            if params.calibration_pH is not None
+            else (ext.reference_pH if ext.reference_pH is not None else 3.0)
+        )
         log10_K = (
             dict(params.log10_K) if params.log10_K
             else log_K_from_correlation(
                 template,
                 params.elements,
                 params.extractant,
-                calibration_pH=params.calibration_pH,
+                calibration_pH=self.calibration_pH,
                 extractant_conc=params.extractant_conc,
                 anion_conc=anion_conc,
                 **dist_kwargs,
@@ -1285,14 +1297,15 @@ class MassActionSection:
         compared directly.
 
         Args:
-            pH: pH for the correlation; None uses ``calibration_pH``.
+            pH: pH for the correlation; None uses ``calibration_pH``, which
+                in turn falls back to the record's ``reference_pH``.
             T: Temperature (K).
 
         Returns:
             ``(n_elements,)`` array of ``D``.
         """
         if pH is None:
-            pH = self.params.calibration_pH
+            pH = self.calibration_pH
         return jnp.stack(
             [self._distribution.get_D(el, pH, T) for el in self.params.elements]
         )

@@ -73,11 +73,31 @@ LN10 = float(np.log(10.0))
 # Helpers
 # =============================================================================
 
+#: The pH every section in this module is calibrated and run at. It is 0.5,
+#: not 3.0, since #270: the D2EHPA refit against X95/PPH63 moved that record's
+#: `valid_ph_range` to [0, 2] and its `reference_pH` to 0.82, and at pH 3 the
+#: refitted coefficients put D(Dy) past 1e13 -- the extraction is complete, the
+#: Jacobian underflows, and the tests below would be measuring round-off
+#: instead of the closure.
+#:
+#: 0.5 sits between the record's pH50 for Nd (0.31) and its reference pH
+#: (0.82), which is where D2EHPA actually separates: Nd is 63% extracted in
+#: three stages and Dy is essentially quantitative. That asymmetry is the
+#: reagent, not a badly chosen test point -- D(Dy)/D(Nd) is 1e2 at every pH,
+#: because #270 pinned one shared slope -- so the gradient tests below track
+#: **Nd**, the element with something left to respond.
+CAL_PH = 0.5
+
+#: The free-acid concentration that puts the aqueous phase AT ``CAL_PH``. The
+#: tests that compare the closure against the correlation have to buffer there,
+#: not merely calibrate there, so this and ``CAL_PH`` move together.
+CAL_ACID = 10.0 ** (-CAL_PH)
+
 def make_section(
     elements=("Nd", "Dy"),
     n_stages=3,
     extractant="D2EHPA",
-    calibration_pH=3.0,
+    calibration_pH=CAL_PH,
     Q_aq=1.0,
     Q_org=1.0,
     **kwargs,
@@ -200,7 +220,7 @@ def test_basis_mismatch_between_record_and_network_is_rejected():
     """The dimer/monomer basis is stated twice, so it can be checked (#191)."""
     with pytest.raises(ValueError, match="extractant_basis"):
         log_K_from_correlation(
-            "cation_exchange_monomer", ("Nd",), "D2EHPA", calibration_pH=3.0
+            "cation_exchange_monomer", ("Nd",), "D2EHPA", calibration_pH=CAL_PH
         )
 
 
@@ -343,30 +363,44 @@ def test_log_K_from_correlation_inverts_the_dilute_limit_algebraically():
     """log10 K = log10 D_corr - sum_c nu_c log10 [C_c]^ref, by hand."""
     K = log_K_from_correlation(
         "cation_exchange_dimer", ("Nd",), "D2EHPA",
-        calibration_pH=3.0, extractant_conc=0.5,
+        calibration_pH=CAL_PH, extractant_conc=0.5,
     )
     dist = REEDistribution(
         extractant="D2EHPA", elements=("Nd",), concentration=0.5
     )
     expected = (
-        float(np.log10(float(dist.get_D("Nd", 3.0))))
+        float(np.log10(float(dist.get_D("Nd", CAL_PH))))
         - 3.0 * float(np.log10(0.25))   # three dimers at 0.5 M monomer
-        - 3.0 * 3.0                     # three protons at pH 3
+        - 3.0 * CAL_PH                  # three protons at the calibration pH
     )
     assert K["Nd"] == pytest.approx(expected, rel=1e-12)
 
 
 def test_correlation_ph_slope_defect_is_reported_not_hidden():
-    """The tabulated pH slope is not 3, and the gap is quoted, not absorbed."""
-    ext = get_extractant("D2EHPA")
-    for element in ("La", "Nd", "Dy"):
-        defect = correlation_ph_slope_defect("D2EHPA", element)
-        assert defect == pytest.approx(
-            3.0 - ext.ph_coefficients[element].b, abs=1e-12
-        )
-        # It is genuinely non-zero: mass action and the correlation do not
-        # have the same pH dependence, which is the point.
-        assert abs(defect) > 0.1
+    """The gap between the correlation's pH slope and mass action's is quoted.
+
+    It used to be 0.1 to 0.8, because the hand-tuned blocks carried fitted
+    slopes between 2.20 and 2.90. Since #270 every acidic record pins ``b`` at
+    the declared stoichiometry, so the shipped answer is exactly zero for all
+    four of them -- the closure and the correlation now agree in pH
+    everywhere, not just at the calibration point. Zero is the assertion here,
+    not an absence of one: the function still computes ``p - b`` from the
+    record, so a user-supplied record with a free slope makes it non-zero
+    again and :func:`test_departure_from_the_correlation_is_the_predicted_ph_slope`
+    is what says the gap is then still predictable in closed form.
+    """
+    for extractant in ("D2EHPA", "PC88A", "Cyanex272", "naphthenic_acid"):
+        ext = get_extractant(extractant)
+        for element in ("La", "Nd", "Dy"):
+            defect = correlation_ph_slope_defect(extractant, element)
+            assert defect == pytest.approx(
+                ext.stoichiometry_protons - ext.ph_coefficients[element].b,
+                abs=1e-12,
+            )
+            assert defect == 0.0
+            # And the quadratic term is gone too, which is the other half of
+            # mass-action consistency in pH.
+            assert ext.ph_coefficients[element].c == 0.0
 
 
 # =============================================================================
@@ -375,17 +409,26 @@ def test_correlation_ph_slope_defect_is_reported_not_hidden():
 
 #: Rare-earth total, as a fraction of the free acid, that defines "dilute"
 #: here. At this ratio the protons released by the trace extraction shift the
-#: pH by ~3e-8 units, and three protons per ion times that is the residual
+#: pH by ~3e-9 units, and three protons per ion times that is the residual
 #: disagreement the tolerance below allows for.
-DILUTE_RE_TO_ACID = 1e-6
+#:
+#: It was 1e-6 before #270. The refit did not change the ratio at which the
+#: discrepancy would be 1.2e-5 -- that is set by physics, not by the
+#: coefficients -- but it did change how MUCH of the feed is extracted at the
+#: calibration point (D(La) is 10 at pH 1, where the hand-tuned block gave
+#: essentially complete extraction at pH 3), and the free-extractant depletion
+#: term no longer sits below the proton term. One more decade of dilution puts
+#: both back under the tolerance with the same factor-of-two margin.
+DILUTE_RE_TO_ACID = 1e-7
 
 #: Relative agreement in D required at that dilution. The value is not
 #: arbitrary: the discrepancy is 3 * ln10 * (3 * RE / acid) in log space, i.e.
-#: 1.2e-5 at DILUTE_RE_TO_ACID = 1e-6, and
+#: 1.2e-6 at DILUTE_RE_TO_ACID = 1e-7, and
 #: test_dilute_limit_discrepancy_is_the_released_protons shows it scales
-#: exactly with the ratio. 2e-5 leaves a factor under two of margin -- tight
-#: enough that a wrong free-extractant balance, a wrong dimer basis or a wrong
-#: log-space conversion would all break it.
+#: exactly with the ratio. 2e-5 leaves better than a decade of margin on the
+#: proton term alone -- still tight enough that a wrong free-extractant
+#: balance, a wrong dimer basis or a wrong log-space conversion would all
+#: break it, since those are not small at any dilution.
 DILUTE_TOL = 2e-5
 
 
@@ -397,8 +440,8 @@ def test_dilute_limit_reduces_to_correlation():
     negligible, so the closed model must return exactly the correlation's D.
     """
     elements = ("La", "Nd", "Dy")
-    acid = 1e-3
-    section = make_section(elements=elements, n_stages=1, calibration_pH=3.0)
+    acid = CAL_ACID
+    section = make_section(elements=elements, n_stages=1, calibration_pH=CAL_PH)
     feed, solvent = streams(
         section,
         {el: acid * DILUTE_RE_TO_ACID for el in elements},
@@ -414,7 +457,7 @@ def test_dilute_limit_reduces_to_correlation():
     )
     for el in elements:
         D_closed = float(info["D"][el])
-        D_corr = float(dist.get_D(el, 3.0))
+        D_corr = float(dist.get_D(el, CAL_PH))
         assert D_closed == pytest.approx(D_corr, rel=DILUTE_TOL)
 
 
@@ -428,16 +471,16 @@ def test_dilute_limit_discrepancy_is_the_released_protons():
     fail it.
     """
     elements = ("Nd",)
-    acid = 1e-3
+    acid = CAL_ACID
     dist = REEDistribution(
         extractant="D2EHPA", elements=elements, concentration=0.5
     )
-    D_corr = float(dist.get_D("Nd", 3.0))
+    D_corr = float(dist.get_D("Nd", CAL_PH))
 
     errors = []
     for ratio in (1e-4, 1e-5, 1e-6):
         section = make_section(elements=elements, n_stages=1,
-                               calibration_pH=3.0)
+                               calibration_pH=CAL_PH)
         feed, solvent = streams(section, {"Nd": acid * ratio}, acid=acid)
         _, _, info = section(feed, solvent)
         errors.append(abs(float(info["D"]["Nd"]) - D_corr) / D_corr)
@@ -450,18 +493,25 @@ def test_departure_from_the_correlation_is_the_predicted_ph_slope():
     """Away from the calibration pH the two levels differ by a known amount.
 
     Mass action forces ``d log10 D / d pH = protons_released`` exactly. The
-    correlation uses a fitted slope ``b`` and a quadratic term ``c``. The
-    difference is therefore predictable in closed form, and matching it to
-    seven digits is a strong statement that the closure has the right proton
-    stoichiometry rather than merely a plausible one.
+    correlation uses a slope ``b`` and a quadratic term ``c``. The difference
+    is therefore predictable in closed form, and matching it to seven digits
+    is a strong statement that the closure has the right proton stoichiometry
+    rather than merely a plausible one.
+
+    Since #270 pinned ``b = 3`` and ``c = 0`` on every acidic record the
+    predicted difference is identically zero, so what this now asserts is that
+    the closure tracks the correlation across the whole validity window rather
+    than only at the point it was calibrated at. The closed form is still
+    written out rather than hard-coded to zero, so a record with a free slope
+    is still covered.
     """
     ext = get_extractant("D2EHPA")
     coeffs = ext.ph_coefficients["Nd"]
     dist = REEDistribution(
         extractant="D2EHPA", elements=("Nd",), concentration=0.5
     )
-    cal = 3.0
-    for pH in (2.0, 2.5, 3.5, 4.0):
+    cal = CAL_PH
+    for pH in (0.2, 0.35, 0.65, 0.8):
         section = make_section(elements=("Nd",), n_stages=1,
                                calibration_pH=cal)
         feed, solvent = streams(section, {"Nd": 1e-14}, acid=10.0 ** (-pH))
@@ -487,16 +537,17 @@ def test_extractant_concentration_dependence_matches_the_correlation():
     evaluated at 1.0 M. Nothing about this is circular.
     """
     elements = ("La", "Nd", "Dy")
-    base = make_section(elements=elements, n_stages=1, calibration_pH=3.0)
+    base = make_section(elements=elements, n_stages=1, calibration_pH=CAL_PH)
     log10_K = {
         el: float(base.network.log10_K[i]) for i, el in enumerate(elements)
     }
     doubled = make_section(
-        elements=elements, n_stages=1, calibration_pH=3.0,
+        elements=elements, n_stages=1, calibration_pH=CAL_PH,
         extractant_conc=1.0, log10_K=log10_K,
     )
     feed, solvent = streams(
-        doubled, {el: 1e-9 for el in elements}, acid=1e-3, extractant_flow=1.0
+        doubled, {el: 1e-9 for el in elements}, acid=CAL_ACID,
+        extractant_flow=1.0
     )
     _, _, info = doubled(feed, solvent)
 
@@ -505,11 +556,11 @@ def test_extractant_concentration_dependence_matches_the_correlation():
     d10 = REEDistribution(extractant="D2EHPA", elements=elements,
                           concentration=1.0)
     for el in elements:
-        assert float(d10.get_D(el, 3.0) / d05.get_D(el, 3.0)) == pytest.approx(
+        assert float(d10.get_D(el, CAL_PH) / d05.get_D(el, CAL_PH)) == pytest.approx(
             8.0, rel=1e-12
         )
         assert float(info["D"][el]) == pytest.approx(
-            float(d10.get_D(el, 3.0)), rel=DILUTE_TOL
+            float(d10.get_D(el, CAL_PH)), rel=DILUTE_TOL
         )
 
 
@@ -520,7 +571,7 @@ def test_extractant_concentration_dependence_matches_the_correlation():
 def test_every_component_conserved_to_machine_precision():
     """Not "to the solver tolerance": to floating-point round-off (#196)."""
     elements = ("La", "Nd", "Dy")
-    section = make_section(elements=elements, n_stages=5, calibration_pH=3.0,
+    section = make_section(elements=elements, n_stages=5, calibration_pH=CAL_PH,
                            Q_aq=1.0, Q_org=2.0)
     feed, solvent = streams(
         section, {"La": 0.03, "Nd": 0.02, "Dy": 0.01}, acid=0.02,
@@ -567,9 +618,9 @@ def test_conservation_survives_a_deliberately_crippled_solve():
     """
     section = make_section(
         elements=("Nd", "Dy"), n_stages=3,
-        n_globalize_steps=3, inner_tol=1e-1, feasible_tol=1.0, max_steps=1,
+        n_globalize_steps=0, inner_tol=1e-1, feasible_tol=1.0, max_steps=1,
     )
-    feed, solvent = streams(section, {"Nd": 0.02, "Dy": 0.02}, acid=0.01)
+    feed, solvent = streams(section, {"Nd": 0.02, "Dy": 0.02}, acid=CAL_ACID)
     raffinate, extract, info = section(feed, solvent)
 
     # Genuinely not converged: the balances are out by a factor of order ten.
@@ -614,7 +665,7 @@ def test_charge_imbalance_reports_a_non_electroneutral_feed():
 def test_anion_closure_by_charge_balance_is_available():
     """The alternative closure agrees when the feed is electroneutral."""
     assert set(ANION_CLOSURES) == {"total", "charge"}
-    kwargs = dict(elements=("Nd", "Dy"), n_stages=3, calibration_pH=3.0)
+    kwargs = dict(elements=("Nd", "Dy"), n_stages=3, calibration_pH=CAL_PH)
     a = make_section(**kwargs)
     b = make_section(anion_closure="charge", **kwargs)
     feed, solvent = streams(a, {"Nd": 0.02, "Dy": 0.02}, acid=0.01)
@@ -636,32 +687,41 @@ def test_anion_closure_by_charge_balance_is_available():
 _GRAD_SECTION = make_section(elements=("Nd", "Dy"), n_stages=3)
 
 
-def _dy_extracted(acid):
-    """Dy taken into the organic phase, as a function of the feed acid."""
+def _nd_extracted(acid):
+    """Nd taken into the organic phase, as a function of the feed acid.
+
+    Nd rather than Dy since #270: on the refitted D2EHPA block Dy is
+    quantitatively extracted anywhere in the validity window, so its
+    derivative with respect to the feed acid is a true zero and a gradient
+    test on it would pass for the wrong reason. Nd is 63% extracted here.
+    """
     feed, solvent = streams(
         _GRAD_SECTION, {"Nd": 0.02, "Dy": 0.02}, acid=acid
     )
     _, extract, _ = _GRAD_SECTION(feed, solvent)
-    return extract["F_Dy"]
+    return extract["F_Nd"]
 
 
 @pytest.mark.slow
 @pytest.mark.release
 def test_check_grads_through_the_section():
     """jax.test_util.check_grads passes through the implicit solve (#196)."""
-    check_grads(_dy_extracted, (0.02,), order=1, modes=["rev"], eps=1e-6)
+    check_grads(_nd_extracted, (CAL_ACID,), order=1, modes=["rev"], eps=1e-6)
 
 
 @pytest.mark.slow
 @pytest.mark.release
 def test_gradient_matches_central_differences():
     """A second, independent check with a step chosen for this function."""
-    analytic = float(jax.grad(_dy_extracted)(0.02))
+    analytic = float(jax.grad(_nd_extracted)(CAL_ACID))
     h = 1e-7
-    fd = float((_dy_extracted(0.02 + h) - _dy_extracted(0.02 - h)) / (2 * h))
+    fd = float(
+        (_nd_extracted(CAL_ACID + h) - _nd_extracted(CAL_ACID - h)) / (2 * h)
+    )
     assert analytic == pytest.approx(fd, rel=1e-6)
-    # And it is a real dependence, not an accidental zero.
-    assert abs(analytic) > 1e-3
+    # And it is a real dependence, not an accidental zero. More acid extracts
+    # less, so it is also signed.
+    assert analytic < -1e-3
 
 
 @pytest.mark.slow
@@ -671,27 +731,28 @@ def test_gradient_with_respect_to_equilibrium_constants():
     section = make_section(elements=elements, n_stages=3)
     # Dilute and buffered, so the answer is not dominated by the feedback of
     # the released protons on the pH.
-    feed, solvent = streams(section, {"Nd": 1e-6, "Dy": 1e-6}, acid=0.01)
+    feed, solvent = streams(section, {"Nd": 1e-6, "Dy": 1e-6}, acid=CAL_ACID)
     feed_totals, solvent_totals = section.component_totals(feed, solvent)
     D = section.correlation_D()
     base = np.asarray(section.network.log10_K)
 
+    # Nd is index 0, and it is the one with room to move: see _nd_extracted.
     def extracted(log10_K):
         sol = solve_section(
             section.network, 3, feed_totals, solvent_totals, 1.0, 1.0, D,
             log10_K=log10_K,
         )
         c = sol.concentrations(section.network)
-        return c["Dy(HA2)3"][0]
+        return c["Nd(HA2)3"][0]
 
     g = np.asarray(jax.grad(extracted)(jnp.asarray(base)))
     h = 1e-6
     fd = float(
-        (extracted(jnp.asarray(base + np.array([0.0, h])))
-         - extracted(jnp.asarray(base - np.array([0.0, h])))) / (2 * h)
+        (extracted(jnp.asarray(base + np.array([h, 0.0])))
+         - extracted(jnp.asarray(base - np.array([h, 0.0])))) / (2 * h)
     )
-    assert g[1] == pytest.approx(fd, rel=1e-5)
-    assert g[1] > 0.0  # a larger constant extracts more
+    assert g[0] == pytest.approx(fd, rel=1e-5)
+    assert g[0] > 0.0  # a larger constant extracts more
 
 
 # =============================================================================
@@ -701,13 +762,13 @@ def test_gradient_with_respect_to_equilibrium_constants():
 def test_ph_is_an_output_and_falls_as_rare_earth_is_extracted():
     """The profile is solved for; it is not the number that was handed in."""
     section = make_section(elements=("Nd", "Dy"), n_stages=4,
-                           calibration_pH=3.0)
+                           calibration_pH=CAL_PH)
     feed, solvent = streams(section, {"Nd": 0.02, "Dy": 0.02}, acid=0.02)
     _, _, info = section(feed, solvent)
     profile = np.asarray(info["pH_profile"])
 
     feed_pH = -np.log10(0.02)
-    assert not np.allclose(profile, 3.0)          # not the calibration pH
+    assert not np.allclose(profile, CAL_PH)       # not the calibration pH
     assert np.all(profile < feed_pH)              # acid is released
     # Aqueous flow runs 0 -> N-1 and picks up protons on the way.
     assert np.all(np.diff(profile) < 0.0)
@@ -721,7 +782,7 @@ def test_three_protons_are_released_per_trivalent_ion():
     approximately, and not a fitted proportionality.
     """
     section = make_section(elements=("Nd", "Dy"), n_stages=4,
-                           calibration_pH=3.0)
+                           calibration_pH=CAL_PH)
     acid_in = 0.02
     feed, solvent = streams(section, {"Nd": 0.02, "Dy": 0.02}, acid=acid_in)
     raffinate, extract, _ = section(feed, solvent)
@@ -760,15 +821,15 @@ def test_competition_emerges_from_the_shared_extractant_balance():
     depression comes from one free-extractant balance and one proton balance,
     both of which the added element also draws on.
     """
-    alone = make_section(elements=("Nd", "Dy"), n_stages=3, calibration_pH=3.0)
+    alone = make_section(elements=("Nd", "Dy"), n_stages=3, calibration_pH=CAL_PH)
     # A modest extractant charge so the competition actually bites.
     feed_a, solvent = streams(
-        alone, {"Nd": 0.05, "Dy": 0.0}, acid=0.001, extractant_flow=0.05
+        alone, {"Nd": 0.05, "Dy": 0.0}, acid=CAL_ACID, extractant_flow=0.05
     )
     _, extract_a, info_a = alone(feed_a, solvent)
 
     feed_b, _ = streams(
-        alone, {"Nd": 0.05, "Dy": 0.05}, acid=0.001, extractant_flow=0.05
+        alone, {"Nd": 0.05, "Dy": 0.05}, acid=CAL_ACID, extractant_flow=0.05
     )
     _, extract_b, info_b = alone(feed_b, solvent)
 
@@ -788,13 +849,17 @@ def test_competition_emerges_from_the_shared_extractant_balance():
 def test_log_space_stays_conditioned_across_ten_orders_of_magnitude():
     """A realistic cascade spans many orders of magnitude and must not care."""
     elements = ("La", "Ce", "Nd", "Sm", "Dy", "Y")
-    section = make_section(elements=elements, n_stages=8, calibration_pH=3.0,
+    section = make_section(elements=elements, n_stages=8, calibration_pH=CAL_PH,
                            Q_aq=1.0, Q_org=2.0)
     element_flows = {
         "La": 1e-10, "Ce": 1e-8, "Nd": 1e-5, "Sm": 1e-3, "Dy": 0.05, "Y": 0.2,
     }
-    feed, solvent = streams(section, element_flows, acid=0.05,
-                            extractant_flow=1.0)
+    # 2.0 mol/L dimer, not 1.0: the #270 refit makes D2EHPA strong enough at
+    # these pH that a 0.25 M heavy feed is past the capacity of 1.0, and the
+    # solve then fails on the loading bound rather than on conditioning, which
+    # is not what this test is about.
+    feed, solvent = streams(section, element_flows, acid=CAL_ACID,
+                            extractant_flow=2.0)
     raffinate, extract, info = section(feed, solvent)
     assert bool(info["feasible"])
     assert float(info["residual_norm"]) < 1e-10
@@ -808,15 +873,24 @@ def test_log_space_stays_conditioned_across_ten_orders_of_magnitude():
     spread = np.log10(values.max() / values[values > 0].min())
     assert spread > 10.0, f"only spans {spread:.1f} decades"
     assert np.all(np.isfinite(values))
+    # Non-negative to ROUND-OFF, not to zero. An outlet flow is a difference
+    # taken at the scale of the feed TOTAL (0.25 mol/s here), so its floor is
+    # a few ulps of that -- order 1e-16 -- and not of the 1e-10 the lightest
+    # element happens to carry. The absolute -1e-18 this used to assert is
+    # below float64's resolution at that scale and only ever passed by luck:
+    # a different summation order is enough to land it at -1.1e-16, which is
+    # what CI does. A genuinely negative flow is orders larger than the floor
+    # below, so nothing is being waved through here.
+    floor = -1e-12 * sum(element_flows.values())
     for el in elements:
-        assert float(raffinate[f"F_{el}"]) >= -1e-18
-        assert float(extract[f"F_{el}"]) >= -1e-18
+        assert float(raffinate[f"F_{el}"]) >= floor
+        assert float(extract[f"F_{el}"]) >= floor
 
 
 def test_jit_gives_the_same_answer():
     """The whole section is traceable end to end."""
-    eager = float(_dy_extracted(0.02))
-    compiled = float(jax.jit(_dy_extracted)(0.02))
+    eager = float(_nd_extracted(0.02))
+    compiled = float(jax.jit(_nd_extracted)(0.02))
     assert compiled == pytest.approx(eager, rel=1e-14)
 
 
@@ -872,7 +946,7 @@ def test_continuation_path_reaches_the_same_answer():
     move only the starting point. If it changed the converged state, the
     ``stop_gradient`` would be hiding a real dependence.
     """
-    kwargs = dict(elements=("Nd", "Dy"), n_stages=3, calibration_pH=3.0)
+    kwargs = dict(elements=("Nd", "Dy"), n_stages=3, calibration_pH=CAL_PH)
     direct = make_section(**kwargs)
     ramped = make_section(n_continuation_steps=3, **kwargs)
     feed, solvent = streams(direct, {"Nd": 0.02, "Dy": 0.02}, acid=0.01)
@@ -904,7 +978,7 @@ def test_solve_stage_is_a_section_of_one():
 def test_base_addition_for_ph_hits_the_target():
     """The explicit inverse problem: pH specified, base rate solved for."""
     section = make_section(elements=("Nd", "Dy"), n_stages=4,
-                           calibration_pH=3.0)
+                           calibration_pH=CAL_PH)
     feed, solvent = streams(section, {"Nd": 0.02, "Dy": 0.02}, acid=0.02)
     _, _, before = section(feed, solvent)
     target = 2.5
@@ -924,7 +998,7 @@ def test_base_addition_for_ph_hits_the_target():
 def test_base_addition_for_ph_is_differentiable():
     """d(base rate)/d(specified pH) falls out of the augmented solve."""
     section = make_section(elements=("Nd", "Dy"), n_stages=3,
-                           calibration_pH=3.0)
+                           calibration_pH=CAL_PH)
     feed, solvent = streams(section, {"Nd": 0.02, "Dy": 0.02}, acid=0.02)
 
     def dosing(target):
@@ -986,7 +1060,7 @@ def test_extractor_dispatches_to_either_level():
     solvent = schema.make_organic(0.5, diluent_flow=4.0)
 
     params = REEExtractorParams(
-        n_stages=4, extractant="D2EHPA", elements=("Nd", "Dy"), pH=3.0,
+        n_stages=4, extractant="D2EHPA", elements=("Nd", "Dy"), pH=CAL_PH,
     )
     r1, e1, i1 = REEExtractor(params)(feed, solvent)
     closed = REEExtractor(params.update(
@@ -1009,12 +1083,12 @@ def test_closed_model_refuses_a_specified_ph():
     feed = schema.make_aqueous({"Nd": 0.02}, acid=0.01, water=55.0)
     solvent = schema.make_organic(0.5, diluent_flow=4.0)
     extractor = REEExtractor(REEExtractorParams(
-        n_stages=2, extractant="D2EHPA", elements=("Nd",), pH=3.0,
+        n_stages=2, extractant="D2EHPA", elements=("Nd",), pH=CAL_PH,
         model="mass_action", aqueous_volumetric_flow=1.0,
         organic_volumetric_flow=1.0,
     ))
     with pytest.raises(ValueError, match="pH is an OUTPUT"):
-        extractor(feed, solvent, pH=3.0)
+        extractor(feed, solvent, pH=CAL_PH)
 
 
 def test_correlation_level_refuses_base_addition():
@@ -1023,7 +1097,7 @@ def test_correlation_level_refuses_base_addition():
     feed = schema.make_aqueous({"Nd": 0.02}, acid=0.01, water=55.0)
     solvent = schema.make_organic(0.5, diluent_flow=4.0)
     extractor = REEExtractor(REEExtractorParams(
-        n_stages=2, extractant="D2EHPA", elements=("Nd",), pH=3.0,
+        n_stages=2, extractant="D2EHPA", elements=("Nd",), pH=CAL_PH,
     ))
     with pytest.raises(ValueError, match="base_addition"):
         extractor(feed, solvent, base_addition=0.01)

@@ -42,7 +42,13 @@ class SplitShellParams(ParamsMixin):
         n_stages: Total number of stages
         split_points: Stage numbers where products are withdrawn
         product_groups: Element groups for each product
-        pH: Operating pH
+        pH: Operating pH. None (the default) resolves through
+            :func:`difflow_ree.database.default_pH` to the extractant record's
+            own scrubbing pH -- a quarter of the way up its fitted validity
+            window (#270). A split-shell cascade withdraws different element
+            groups at different stages, which only happens where D straddles
+            one across the element set; at the top of the window every element
+            is quantitatively extracted and every product is the feed.
         extractant_conc: Extractant concentration
         nitrate_conc: Aqueous nitrate concentration (M), required for solvating
             extractants such as TBP whose D is nitrate- rather than pH-driven
@@ -57,11 +63,23 @@ class SplitShellParams(ParamsMixin):
     n_stages: int = 20
     split_points: tuple[int, ...] = (5, 10, 15)  # Withdraw at these stages
     product_groups: dict = None  # Maps product name to elements
-    pH: float = 3.5
+    # (#270) None means "the extractant record's own scrubbing pH", a quarter
+    # of the way up its fitted validity window -- the fractionating point,
+    # where D straddles one across the element set. The literal 3.5 it
+    # replaced was 1.5 pH units outside D2EHPA's refitted window and put every
+    # element at 100% extraction, so the cascade separated nothing.
+    pH: float | None = None
     extractant_conc: float = 0.5
     solvent_to_feed_ratio: float = 1.0
     nitrate_conc: float | None = None  # see #195
     mechanism: str | None = None  # see #195
+
+    def __post_init__(self):
+        """Resolve a pH default that the extractant record owns (#270)."""
+        if self.pH is None:
+            from difflow_ree.database import default_pH
+
+            self.pH = default_pH(self.extractant, "scrubbing")
 
 
 def _kremser_fraction_extracted(E, n_stages):
@@ -346,7 +364,7 @@ def optimize_split_points(
     extractant: str,
     n_stages: int,
     n_products: int,
-    pH: float = 3.5,
+    pH: float | None = None,  # (#270) record's own; see default_pH
     nitrate_conc: float | None = None,
     mechanism: str | None = None,
 ) -> tuple[int, ...]:
@@ -377,7 +395,8 @@ def optimize_split_points(
         extractant: Extractant name (e.g., "D2EHPA")
         n_stages: Total stages available
         n_products: Number of products desired
-        pH: Operating pH
+        pH: Operating pH. None reads the extractant record's own scrubbing
+            pH; see :func:`difflow_ree.database.default_pH`.
         nitrate_conc: Aqueous nitrate concentration (M), required for solvating
             extractants such as TBP whose D is nitrate- rather than pH-driven
             (#195)
@@ -391,6 +410,11 @@ def optimize_split_points(
 
     if n_products <= 1:
         return ()
+
+    if pH is None:
+        from difflow_ree.database import default_pH
+
+        pH = default_pH(extractant, "scrubbing")
 
     n_splits = n_products - 1
 

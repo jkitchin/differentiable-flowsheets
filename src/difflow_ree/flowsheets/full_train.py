@@ -30,6 +30,7 @@ from jax import Array
 from difflow.numerics import safe_divide
 from difflow.params_mixin import ParamsMixin
 from difflow.streams import Stream, make_stream, get_flows
+from difflow_ree.database import get_extractant
 from difflow_ree.units.cerium import CeriumOxidizer, CeriumOxidizerParams
 from difflow_ree.units.extraction import REEExtractor, REEExtractorParams
 from difflow_ree.flowsheets.extract_scrub_strip import (
@@ -145,6 +146,24 @@ class GroupSeparator:
         self.mechanism = mechanism
         self.capacity_sharpness = capacity_sharpness
 
+        # (#270) The two circuits used to be pinned to literal pH values --
+        # 3.0/2.0 and 3.5/2.5 -- chosen when D2EHPA's coefficients were
+        # HAND_TUNED over an assumed window of [1, 5]. The refit against named
+        # sources moved that window to [0.0, 2.0], and Cyanex272's to
+        # [1.5, 3.5], so no literal is inside both. What the literals really
+        # encoded is where in the record's own window each section sits, so
+        # that is what is written down now: the same four fractions of the
+        # window, which reproduce 3.0/2.0/3.5/2.5 exactly on the old [1, 5]
+        # and follow the coefficients wherever a later refit puts them.
+        # Circuit 2 runs higher than circuit 1 because middle-from-light is a
+        # separation between two elements that are both harder to extract.
+        lo, hi = get_extractant(extractant).valid_ph_range
+        span = hi - lo
+        c1_extraction_pH = lo + 0.500 * span
+        c1_scrubbing_pH = lo + 0.250 * span
+        c2_extraction_pH = lo + 0.625 * span
+        c2_scrubbing_pH = lo + 0.375 * span
+
         # Circuit 1: Separate heavy from light+middle
         self._heavy_circuit = ExtractScrubStripCircuit(ExtractScrubStripParams(
             extractant=extractant,
@@ -154,8 +173,8 @@ class GroupSeparator:
             n_extraction_stages=10,
             n_scrubbing_stages=8,
             n_stripping_stages=5,
-            extraction_pH=3.0,  # All extract
-            scrubbing_pH=2.0,   # Reject light+middle
+            extraction_pH=c1_extraction_pH,  # All extract
+            scrubbing_pH=c1_scrubbing_pH,    # Reject light+middle
             nitrate_conc=nitrate_conc,  # see #195
             mechanism=mechanism,  # see #195
             capacity_sharpness=capacity_sharpness,  # see #193
@@ -171,8 +190,8 @@ class GroupSeparator:
             n_extraction_stages=10,
             n_scrubbing_stages=6,
             n_stripping_stages=5,
-            extraction_pH=3.5,
-            scrubbing_pH=2.5,
+            extraction_pH=c2_extraction_pH,
+            scrubbing_pH=c2_scrubbing_pH,
             nitrate_conc=nitrate_conc,  # see #195
             mechanism=mechanism,  # see #195
             capacity_sharpness=capacity_sharpness,  # see #193

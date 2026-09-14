@@ -61,6 +61,21 @@ sources:
       properties, the validity window, the impurity ordering and the
       separation-factor bounds. It has NO full-series per-element
       distribution table for naphthenic acid; that is Z1.
+      SINCE #270 IT IS ALSO THE ROUTE TO D2EHPA, as a secondary carrying
+      three primary tables that are not otherwise on this machine.
+      Table 2.6 (p. 213, Q1 ref [2] = X95) is the LEVEL anchor: D_La = 0.99
+      for P204 at 1 mol/L in kerosene, 0.1 mol/L LaCl3, 0.003 mol/L HCl.
+      Table 2.8 (p. 214, Q1 ref [12] = PPH63) is the SHAPE: fourteen adjacent
+      separation factors in HCl. Table 2.7 and the sentence on p. 213 that
+      "the value of the equilibrium constant of extracting yttrium with P204
+      is between Ho and Er" place Y. Table 2.9 (Q1 ref [11] = Sato 1989) is
+      REJECTED for this purpose and the D2EHPA record says why. Q1's own
+      account of the tetrad effect (p. 213, its ref [10] = Peppard 1969) is
+      the reason a smooth cubic-in-Z interpolation across the series is
+      imperfect, and the reason Z1's Table 4.19 Nd entry is not believed.
+      Q1 p. 216-218 (Figs. 2.8 and 2.9) set the pH window: slope 3 is
+      verified up to pH ~1, and below the D minimum the mechanism turns
+      solvating.
 
   Z1:
     citation: >-
@@ -80,6 +95,159 @@ sources:
       per-element `a` coefficient on the naphthenic_acid record. It is
       currently UNREPLICATED -- a second measured table is the highest-value
       addition to this database.
+      SINCE #270 IT IS ALSO THE ROUTE TO CYANEX 272's SHAPE, as a secondary
+      carrying ZL93: Sec. 4.3.1 (p. 138) states the conditions and Table 4.25
+      (p. 139) prints separation factors against La for all fourteen stable
+      lanthanides plus Y. Two of its model statements are used throughout the
+      acidic records and are quoted on them: Eq. (4.11), free dimer =
+      C_nominal/2 - 3*[RE(HA2)3], and Eq. (4.12), the proton balance
+      [H+]_eq = [H+]_i + 3([RE3+]_i - x), which is what licenses recovering
+      an unreported equilibrium pH in an unbuffered batch contact.
+      Eqs. (4.27)-(4.31) (p. 124) are the dimer-basis cation-exchange model
+      itself, and p. 124 states that Y falls between Ho and Er.
+      Table 4.19 (p. 127, Chai 1998 = C98) is used ONLY as a discordant
+      cross-check on D2EHPA and is not the source of any shipped number;
+      Table 4.18 (p. 125) is rejected outright as non-monotone.
+      Text-extraction caveat: in this PDF `&` renders the minus sign, and
+      the Eu/Tm cell of Table 4.25 prints 8.0 for 82.0.
+
+  # -------------------------------------------------------------------
+  # Primary sources: acidic organophosphorus systems (D2EHPA, Cyanex 272)
+  # Added by #270. Neither record had a source of any kind before it; the
+  # full reading of each is on the record itself in extractants.yaml.
+  # -------------------------------------------------------------------
+  X95:
+    citation: >-
+      Xu, Guangxian; et al. (1995). "Rare Earths", 2nd ed. Metallurgical
+      Industry Press, Beijing, pp. 469-611 (in Chinese).
+    kind: book
+    cls: MEASURED
+    access: secondary
+    note: >-
+      NOT on this machine and not read in the original. Reached through Q1,
+      which cites it as its chapter-2 ref [2] and reprints the two tables
+      used here. Table 2.6 of Q1: distribution ratios of La for five acidic
+      organophosphorus extractants under ONE stated condition -- kerosene,
+      1 mol/L extractant, 0.1 mol/L LaCl3, 0.003 mol/L HCl -- of which
+      D_La = 0.99 for P204 (D2EHPA) is the sole level anchor of the D2EHPA
+      record and D_La = 0.17 for P507 (PC88A) is the control that tests the
+      arithmetic against T21's independent fit. Table 2.7 of Q1: extraction
+      equilibrium constants for P204 in methylbenzene, used only to place Y
+      as a fraction of the Ho-Er interval. The PHASE RATIO is not stated in
+      either table; O/A = 1 is assumed and the record reports what other
+      ratios would do.
+
+  PPH63:
+    citation: >-
+      Pierce, T. B.; Peck, P. F.; Hobbs, R. S. (1963). "The separation of the
+      rare earths by partition chromatography with reversed phases. Part II.
+      Behaviour of individual elements on HDEHP-CORVIC columns". Journal of
+      Chromatography 12, 81-88.
+    kind: article
+    cls: MEASURED
+    access: secondary
+    note: >-
+      NOT on this machine. Reached through Q1, which cites it as its
+      chapter-2 ref [12] and reprints its adjacent separation factors as
+      Table 2.8 (HCl and HClO4 columns). The HCl column is the SHAPE of the
+      D2EHPA record: fourteen adjacent factors, cumulated from La under the
+      shared pH slope of 3. It is a reversed-phase partition-chromatography
+      determination on HDEHP-Corvic columns, not a batch solvent-extraction
+      series; the underlying equilibrium is the same cation exchange, but the
+      record states the difference rather than hiding it. Its cumulative
+      Lu/La of 6.4e4 (geometric-mean adjacent 2.21) is BELOW the 3.5e5 /
+      2.49 that Q1 quotes from Peppard 1957 on the same page, and the D2EHPA
+      record carries that discordance explicitly.
+
+  ZL93:
+    citation: >-
+      Zhang, Xiufang; Li, Deqian (1993). Chinese Journal of Applied Chemistry
+      10(4), 72 (in Chinese).
+    kind: article
+    cls: MEASURED
+    access: secondary
+    note: >-
+      NOT on this machine and not read in the original. Reached through Z1
+      Sec. 4.3.1 and Table 4.25, and cited independently as ref [67] of LD19,
+      whose Fig. 4 plots the same curves. Fifteen rare earths in a PURIFIED
+      HBTMPP (= Cyanex 272 active component) - octane - HCl system at
+      pH 2.8, [RE3+] 4.0e-4 mol/L, [HCl] 2.0e-2 mol/L, O/A = 1/1,
+      25 +/- 1 C; average adjacent separation factor 3.24. This is the SHAPE
+      of the Cyanex272 record. IT CANNOT SET A LEVEL: neither Z1 nor LD19
+      states the extractant concentration, and under the cube law that is
+      worth three decades per decade of charge. The level comes from L14.
+
+  L14:
+    citation: >-
+      Liu, Yang; Jeon, Ho Seok; Lee, Man Seung (2014). "Solvent extraction of
+      Pr and Nd from chloride solution by the mixtures of Cyanex 272 and
+      amine extractants". Hydrometallurgy 150, 61-67.
+    kind: article
+    doi: "10.1016/j.hydromet.2014.09.015"
+    cls: MEASURED
+    access: local
+    on_disk: >-
+      nnl-rare-earth/ree-literature-updates/ree-book/fulltexts/all/liu2014solvent.pdf
+    note: >-
+      Tables 1 and 2, the SINGLE-extractant rows only (the paper's subject is
+      the Cyanex 272 + Alamine 336 synergistic mixture, which is a different
+      system and is not used). Cyanex 272 in kerosene at six charges
+      0.1-1.0 mol/L nominal, [Pr] 0.0083 and [Nd] 0.023 mol/L in chloride,
+      initial pH 5.02, 20 mL of each phase (O/A = 1), 30 min, ICP-OES with
+      the organic by mass balance. Table 1 gives E% for Pr and Nd and the
+      Nd/Pr separation factor; Table 2's "Single Cyanex 272" column gives the
+      MEASURED equilibrium pH at the same six charges, 2.35 down to 1.82.
+      This is the LEVEL of the Cyanex272 record.
+      It is also the check that validates Z1 Eq. (4.12): recomputing those
+      six equilibrium pH values from the initial acidity and the measured
+      extraction reproduces them to within 0.17 pH units, which is the
+      warrant for using the same balance on D2EHPA's anchor, where the
+      equilibrium pH was never reported.
+      CAUTION, and stated on the record: for single Cyanex 272 in chloride
+      this paper proposes RE3+ + Cl- + 2(H2A2) = REClA2.2HA + 2H+, i.e. TWO
+      protons and a chloride, not the three-proton exchange the record
+      assumes from Z1 Eq. (4.27).
+
+  LD19:
+    citation: >-
+      Li, Deqian (2019). "Development course of separating rare earths with
+      acid phosphorus extractants: A critical review". Journal of Rare Earths
+      37(5), 468-486.
+    kind: article
+    doi: "10.1016/j.jre.2018.07.016"
+    cls: MEASURED
+    access: local
+    on_disk: >-
+      nnl-rare-earth/ree-literature-updates/ree-book/fulltexts/all/li2019development.pdf
+    note: >-
+      Used for two things and nothing else. (1) Fig. 4, "Cyanex 272-HCl-REs
+      extraction curves", digitized as a SHAPE cross-check on ZL93 -- it is
+      the same primary study (its ref [67]), so the agreement it shows is a
+      check on the digitization, not an independent replication; over
+      thirteen elements the two agree to 0.15 decades, rms 0.08. Like Z1 it
+      does not state the extractant concentration, so it sets no level.
+      (2) The pKa values quoted on the acidic records (Cyanex 272 6.37,
+      P507 3.24, P204 2.79, Cyanex 302 5.63) and its Table 1 range of
+      adjacent separation factors for HEH/EHP-HCl.
+
+  C98:
+    citation: >-
+      Chai, Jianyun (1998). "Solvent effects on extraction of rare earth
+      metals with HDEHP". Chinese Journal of Rare Metals 17(1), 29-35
+      (in Chinese).
+    kind: article
+    cls: MEASURED
+    access: secondary
+    note: >-
+      NOT on this machine. Reached through Z1 Table 4.19 (p. 127), and cited
+      independently as Q1's chapter-2 ref [3]. Extraction equilibrium
+      constants for HDEHP against six diluents at 25 C, for Pr, Nd, Sm, Dy,
+      Ho and Yb. Registered so that the D2EHPA record can name the
+      alternative it did NOT take: the Chai n-hexane column plus a kerosene
+      shift from Z1 Table 4.1 puts every level 1.26-1.73 decades above the
+      shipped block. It supplies no shipped number. Its Nd entry sits ABOVE
+      the Pr-Sm chord in five of six diluent rows, which inverts the tetrad
+      pattern Q1 documents, and is the reason its shape is not used either.
 
   # -------------------------------------------------------------------
   # Primary sources: TBP / nitrate solvating system

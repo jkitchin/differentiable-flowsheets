@@ -337,7 +337,9 @@ class REEExtractorParams(ParamsMixin):
     extractant: str
     elements: tuple[str, ...]
     diluent: str = "kerosene"
-    pH: float | Array = 3.0
+    # (#270) None means "the extractant record's own default extraction pH",
+    # the top of its fitted validity window. See database.default_pH.
+    pH: float | Array | None = None
     extractant_conc: float = 0.5
     include_loading: bool = True
     include_speciation: bool = False
@@ -364,7 +366,12 @@ class REEExtractorParams(ParamsMixin):
 
     def __post_init__(self):
         """Validate extractor parameters."""
-        from difflow_ree.database import get_extractant_database, get_ree_database
+        from difflow_ree.database import (
+            default_pH, get_extractant_database, get_ree_database,
+        )
+
+        if self.pH is None:  # (#270) the record's own; see database.default_pH
+            self.pH = default_pH(self.extractant, "extraction")
 
         if self.model not in EXTRACTOR_MODELS:
             raise ValueError(
@@ -902,7 +909,11 @@ class MixerSettlerParams(ParamsMixin):
         extractant: Extractant name
         elements: REE elements to track
         diluent: Organic diluent name (e.g., "kerosene", "n-dodecane")
-        pH: Operating pH
+        pH: Operating pH. None (the default) resolves to the extractant
+            record's own default extraction pH -- the top of its fitted
+            validity window -- through
+            :func:`difflow_ree.database.default_pH`. It used to be a literal
+            3.0, which the #270 refit put outside D2EHPA's window entirely.
         extractant_conc: Extractant concentration (M)
         mixer_residence_time: Mixer residence time (s)
         settler_residence_time: Settler residence time (s)
@@ -918,7 +929,9 @@ class MixerSettlerParams(ParamsMixin):
     extractant: str
     elements: tuple[str, ...]
     diluent: str = "kerosene"
-    pH: float = 3.0
+    # (#270) None means "the extractant record's own default extraction pH",
+    # the top of its fitted validity window. See database.default_pH.
+    pH: float | None = None
     extractant_conc: float = 0.5
     mixer_residence_time: float = 120.0  # 2 minutes typical
     settler_residence_time: float = 300.0  # 5 minutes typical
@@ -950,6 +963,13 @@ class MixerSettlerParams(ParamsMixin):
     # Per-element log10(D) coefficient overrides, possibly traced; passed to
     # REEDistribution. The supported way to put uncertainty on D.
     coefficient_overrides: dict | None = None
+
+    def __post_init__(self):
+        """Resolve a pH default that the extractant record owns (#270)."""
+        if self.pH is None:
+            from difflow_ree.database import default_pH
+
+            self.pH = default_pH(self.extractant, "extraction")
 
 
 class REEMixerSettler:

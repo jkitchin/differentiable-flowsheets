@@ -22,7 +22,7 @@ class TestBug108_ExtractionFactorTotalAqueous:
             n_stages=5,
             extractant="D2EHPA",
             elements=("Nd",),
-            pH=3.0,
+            pH=1.0,  # (#270) inside D2EHPA's refitted [0.0, 2.0]
             include_loading=False,
         )
         extractor = REEExtractor(params)
@@ -65,7 +65,7 @@ class TestBug108_ExtractionFactorTotalAqueous:
             n_stages=3,
             extractant="D2EHPA",
             elements=("La", "Nd"),
-            pH=3.0,
+            pH=1.0,  # (#270) inside D2EHPA's refitted [0.0, 2.0]
             include_loading=False,
         )
         extractor = REEExtractor(params)
@@ -104,7 +104,7 @@ class TestBug112_ExtractantLoadingCapacity:
             n_stages=20,  # Many stages to push toward full extraction
             extractant="D2EHPA",
             elements=("La", "Ce", "Nd", "Dy"),
-            pH=3.0,
+            pH=1.0,  # (#270) inside D2EHPA's refitted [0.0, 2.0]
             include_loading=True,
             extractant_conc=0.5,
         )
@@ -155,7 +155,7 @@ class TestBug112_ExtractantLoadingCapacity:
             n_stages=20,
             extractant="D2EHPA",
             elements=("Nd", "Dy"),
-            pH=3.0,
+            pH=1.0,  # (#270) inside D2EHPA's refitted [0.0, 2.0]
             include_loading=True,
             extractant_conc=0.5,
         )

@@ -96,28 +96,32 @@ class TestTheTwoDescriptionsAgree:
     def test_the_y_dy_pair_follows_the_correlations(self, sf_db):
         """The pair the two descriptions disagreed about in *direction*.
 
-        #265 settled it on the coefficients, and #270 reopened it: both of
+        #265 settled it on the coefficients, and #270 finished it. Both of
         the descriptions #265 was choosing between put Y BELOW Dy on all
-        three acidic extractants, and for PC88A that is measurably wrong.
-        Tanaka (2021) prints log Ke = 2.24 for Y against 1.67 for Dy, and
-        the refit of its 121 points gives beta(Y/Dy) = 3.14 -- Y between Dy
-        and Ho, which is what the PC88A literature has always said.
+        three acidic extractants, and that is wrong on all three: Y(III) has
+        no f electrons, so its place in the series is set by the donor, and
+        every donor here puts it in the heavy group.
 
-        D2EHPA and Cyanex272 still say 0.21 and 0.10. Right for Cyanex 272,
-        whose whole industrial appeal is that Y drops out of the heavy group;
-        backwards for D2EHPA, where Y also belongs near Ho/Er. Those two
-        records are hand-tuned and no dataset for them ships in `dcdb`, so
-        the number stays wrong and stays labelled HAND_TUNED rather than
-        being invented a second time.
+        The three numbers now come from three different printed statements
+        about where Y belongs, not from one guess repeated:
+
+          PC88A      3.14  Tanaka (2021), log Ke 2.24 for Y against 1.67 for
+                           Dy -- Y between Dy and Ho.
+          D2EHPA     3.69  Q1 p. 213, "between Ho and Er", placed on X95's
+                           measured Ho/Dy and Er/Ho steps.
+          Cyanex272  3.59  Zhang & Li (1993) Table 4.25, Y printed between
+                           Ho and Er.
+
+        The direction assertion at the bottom is the part that matters: it is
+        the claim the pre-#270 records got backwards on two of three.
         """
-        for extractant, expected in (("D2EHPA", 0.214),
-                                     ("PC88A", 3.135),
-                                     ("Cyanex272", 0.100)):
+        for extractant, expected in (("D2EHPA", 3.693),
+                                     ("PC88A", 3.138),
+                                     ("Cyanex272", 3.593)):
             got = sf_db.get_sf(extractant, "Y_Dy")
             assert got == pytest.approx(expected, rel=0.02)
-        assert sf_db.get_sf("D2EHPA", "Y_Dy") < 1.0
-        assert sf_db.get_sf("Cyanex272", "Y_Dy") < 1.0
-        assert sf_db.get_sf("PC88A", "Y_Dy") > 1.0
+        for extractant in ("D2EHPA", "PC88A", "Cyanex272"):
+            assert sf_db.get_sf(extractant, "Y_Dy") > 1.0, extractant
 
     def test_the_pc88a_factors_do_not_move_with_the_conditions(self, sf_db):
         """One slope for every element makes beta exactly pH-independent.
@@ -165,7 +169,7 @@ class TestAuthoredOverrides:
         override.write_text(
             "separation_factors:\n"
             "  D2EHPA:\n"
-            "    conditions: {pH: 3.0, temperature_K: 298, concentration_M: 0.5}\n"
+            "    conditions: {pH: 1.0, temperature_K: 298, concentration_M: 0.5}\n"
             "    adjacent_pairs: {Nd_Pr: 1.23}\n"
             "    group_pairs: [Dy_Nd]\n"
         )
@@ -176,7 +180,7 @@ class TestAuthoredOverrides:
         # and the list entry beside it is still derived
         assert "Dy_Nd" in data.derived
         assert data.group_pairs["Dy_Nd"] == pytest.approx(
-            float(get_separation_factor("Dy", "Nd", "D2EHPA", pH=3.0, T=298.0,
+            float(get_separation_factor("Dy", "Nd", "D2EHPA", pH=1.0, T=298.0,
                                         concentration=0.5)))
 
     def test_an_added_pair_is_authored_not_derived(self, sf_db):
@@ -199,9 +203,43 @@ class TestAuthoredOverrides:
 
 
 def test_conditions_are_load_bearing(sf_db):
-    """Changing the declared pH changes the factors, which is the point."""
+    """The declared conditions are where the coefficients get evaluated.
+
+    They used to change the FACTORS -- the pre-#270 records carried a
+    different `b` for every element, so beta drifted with pH and a block
+    declaring pH 3.0 reported different numbers from one declaring 1.5. They
+    no longer do: all four acidic records now share b = 3, the stoichiometric
+    slope of `RE3+ + 3 (HA)2 <-> RE(HA2)3 + 3 H+`, so log10 beta = a_i - a_j
+    and every conditions term cancels. That is a stronger property, not a
+    weaker one, and it is asserted here as such.
+
+    What the conditions still bear is D itself, and whether the evaluation
+    point is inside the record's fitted window at all. Both are checked.
+    """
     data = sf_db.get("D2EHPA")
     at_declared = data.adjacent_pairs["Nd_Pr"]
     elsewhere = float(get_separation_factor("Nd", "Pr", "D2EHPA", pH=1.5,
                                             T=298.0, concentration=0.5))
-    assert at_declared != pytest.approx(elsewhere, rel=1e-6)
+    assert at_declared == pytest.approx(elsewhere, rel=1e-9)
+
+    # D does move, by three decades a pH unit, which is why the block has to
+    # declare a pH at all.
+    from difflow_ree.equilibrium.distribution import REEDistribution
+
+    dist = REEDistribution(extractant="D2EHPA", elements=("Nd",),
+                           on_out_of_range="ignore")
+    lo = float(dist.get_D("Nd", pH=0.82))
+    hi = float(dist.get_D("Nd", pH=1.82))
+    assert hi / lo == pytest.approx(1000.0, rel=1e-6)
+
+    # And every declared point is inside the record it is evaluated against,
+    # which is what #270 had to move three of these four blocks to restore.
+    from difflow_ree.database import get_extractant
+
+    for extractant in sf_db.list_extractants():
+        pH = sf_db.get(extractant).conditions.get("pH")
+        if pH is None:            # TBP is solvating; it declares nitrate
+            continue
+        low, high = get_extractant(extractant).valid_ph_range
+        assert low <= pH <= high, f"{extractant} declares pH {pH}, window "\
+                                  f"[{low}, {high}]"

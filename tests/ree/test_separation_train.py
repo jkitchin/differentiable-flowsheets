@@ -56,30 +56,57 @@ from difflow_ree.units.saponification import SaponifierParams  # noqa: E402
 # ---------------------------------------------------------------------
 # The reference separation
 #
-# La / Dy on D2EHPA. Dy is extracted, La stays in the raffinate, so the
-# raffinate is the light product and its purity is limited by Dy
+# La / Nd on Cyanex 272. Nd is extracted, La stays in the raffinate, so
+# the raffinate is the light product and its purity is limited by Nd
 # leakage -- which is exactly the quantity residual organic loading
 # controls (#202). The stripping section is deliberately under-designed
-# (one stage at pH 2.3), because a *perfectly* stripped circuit is the
+# (one stage at pH 1.9), because a *perfectly* stripped circuit is the
 # open-loop assumption and would make the comparison vacuous.
+#
+# WHY THIS PAIR AND THIS REAGENT (#270)
+# -------------------------------------
+# It was La / Dy on D2EHPA at pH 2.4/2.3/2.3. The #270 refit gave D2EHPA
+# a `valid_ph_range` of [0.0, 2.0] around a reference pH of 0.82 -- the
+# span X95 and PPH63 actually cover -- so every one of those three pH
+# values was an extrapolation, and at the stoichiometric b = 3 that is
+# well over a decade in D per tenth of a pH unit of error. Run inside
+# the window the pair does not work either: D2EHPA's a_Dy = 1.1182 puts
+# D(Dy) = 1 at pH -0.37, so Dy cannot be stripped anywhere in [0, 2].
+# That is not an artefact of the fit; it is why loaded D2EHPA is
+# stripped with strong mineral acid in practice.
+#
+# Cyanex 272, refitted from ZL93/L14 in the same issue, has its window at
+# [1.5, 3.5] and puts D(Nd) = 1 at pH 2.135 and D(La) = 1 at pH 2.705.
+# So the whole circuit -- extract at 2.4, scrub at 2.3, strip at 1.9 --
+# fits inside the fitted window with room at both ends, and the strip
+# section is under-designed by CHOICE (one stage) rather than by being
+# impossible. beta(Nd/La) = 51.4.
+#
+# `extractant_conc` is 0.3, this record's own `reference_concentration`,
+# on its dimer basis (= 0.6 M nominal); D2EHPA's was 0.5.
 # ---------------------------------------------------------------------
 
-ELEMENTS = ("La", "Dy")
+ELEMENTS = ("La", "Nd")
+
+#: Extractant flow in the reference solvent: `extractant_conc` x the
+#: organic flow, which `solvent_to_feed_ratio` = 1 ties to the 100 mol/s
+#: of feed water.
+EXTRACTANT_FLOW = 30.0
 
 
-def _feed(la: float = 3.0, dy: float = 3.0, water: float = 100.0):
+def _feed(la: float = 3.0, nd: float = 3.0, water: float = 100.0):
     """The aqueous leach liquor used throughout.
 
     Args:
         la: La molar flow (mol/s).
-        dy: Dy molar flow (mol/s).
+        nd: Nd molar flow (mol/s).
         water: Water molar flow (mol/s).
 
     Returns:
         The stream.
     """
     return make_stream(
-        {"H2O": water, "La": la, "Dy": dy}, 298.15, 101325.0
+        {"H2O": water, "La": la, "Nd": nd}, 298.15, 101325.0
     )
 
 
@@ -93,15 +120,16 @@ def _ess_params(**overrides) -> ExtractScrubStripParams:
         The parameters.
     """
     base = dict(
-        extractant="D2EHPA",
+        extractant="Cyanex272",
         elements=ELEMENTS,
-        target_elements=("Dy",),
+        target_elements=("Nd",),
         n_extraction_stages=10,
         n_scrubbing_stages=2,
         n_stripping_stages=1,
         extraction_pH=2.4,
         scrubbing_pH=2.3,
-        stripping_pH=2.3,
+        stripping_pH=1.9,
+        extractant_conc=0.3,
         solvent_to_feed_ratio=1.0,
         scrub_to_solvent_ratio=0.1,
         strip_to_solvent_ratio=0.5,
@@ -218,7 +246,7 @@ def test_species_loss_is_refused_unless_it_is_asked_for():
         "narrow",
         _ess_params(elements=("La",), target_elements=("La",)),
     ))
-    with pytest.raises(PortMismatchError, match="Dy"):
+    with pytest.raises(PortMismatchError, match="Nd"):
         train.connect("wide.raffinate", "narrow.feed")
 
     # The escape hatch exists and is explicit.
@@ -332,14 +360,15 @@ def test_describe_delegates_the_parameter_schema_to_difflow_catalog():
 @pytest.mark.slow
 def test_two_topologies_over_the_same_modules_give_different_correct_answers():
     """Connectivity is a decision variable, not source code."""
-    elements = ("La", "Nd", "Dy")
+    elements = ("La", "Nd", "Sm")
     feed = make_stream(
-        {"H2O": 100.0, "La": 2.0, "Nd": 2.0, "Dy": 2.0}, 298.15, 101325.0
+        {"H2O": 100.0, "La": 2.0, "Nd": 2.0, "Sm": 2.0}, 298.15, 101325.0
     )
 
     def circuit(name, target, ext_pH, strip_pH):
         return ExtractScrubStripModule(name, ExtractScrubStripParams(
-            extractant="D2EHPA", elements=elements, target_elements=target,
+            extractant="Cyanex272", elements=elements,
+            target_elements=target, extractant_conc=0.3,
             n_extraction_stages=8, n_scrubbing_stages=2,
             n_stripping_stages=1, extraction_pH=ext_pH,
             scrubbing_pH=ext_pH - 0.1, stripping_pH=strip_pH,
@@ -349,8 +378,19 @@ def test_two_topologies_over_the_same_modules_give_different_correct_answers():
 
     def build(order):
         train = SeparationTrain(order)
-        train.add_module(circuit("A", ("Dy",), 2.4, 2.3))
-        train.add_module(circuit("B", ("Nd",), 3.3, 3.1))
+        # Both circuits sit inside Cyanex272's [1.5, 3.5] window (#270),
+        # strip ends included -- which is why the heavy key here is Sm
+        # rather than Dy: D(Dy) is still 1.6 at the bottom of the window,
+        # so a Dy circuit cannot be stripped in-window and its loop
+        # saturates instead of separating.
+        #
+        # A takes Sm at pH 2.0, where D(Sm) = 5.2 against D(Nd) = 0.39, so
+        # Nd is left behind for B, and strips at 1.5, where D(Sm) = 0.165.
+        # B takes Nd at pH 2.4, D(Nd) = 6.25 against D(La) = 0.12 -- and
+        # any Sm still in front of it goes too, at D(Sm) = 83. That is
+        # what makes the two orderings differ.
+        train.add_module(circuit("A", ("Sm",), 2.0, 1.5))
+        train.add_module(circuit("B", ("Nd",), 2.4, 1.6))
         train.connect("A.barren_organic", "A.solvent")
         train.connect("B.barren_organic", "B.solvent")
         if order == "AB":
@@ -377,16 +417,17 @@ def test_two_topologies_over_the_same_modules_give_different_correct_answers():
             assert out == pytest.approx(_flow(feed, element), rel=1e-9)
         results[order] = result
 
-    # And the two topologies genuinely differ. Feeding the Dy circuit
-    # first leaves the Nd circuit a Dy-depleted feed, so its product is
-    # not the same product.
-    dy_in_b_product = {
-        order: _flow(results[order].stream("B.product"), "Dy")
+    # And the two topologies genuinely differ. Feeding the Sm circuit
+    # first leaves the Nd circuit an Sm-depleted feed, so its product is
+    # not the same product. Measured: 0.018 mol/s of Sm in B's product
+    # under AB against 1.62 under BA, a factor of 90.
+    sm_in_b_product = {
+        order: _flow(results[order].stream("B.product"), "Sm")
         for order in ("AB", "BA")
     }
-    assert dy_in_b_product["BA"] > 1.3 * dy_in_b_product["AB"]
-    assert _flow(results["AB"].stream("A.product"), "Dy") != pytest.approx(
-        _flow(results["BA"].stream("A.product"), "Dy"), rel=1e-6
+    assert sm_in_b_product["BA"] > 1.3 * sm_in_b_product["AB"]
+    assert _flow(results["AB"].stream("A.product"), "Sm") != pytest.approx(
+        _flow(results["BA"].stream("A.product"), "Sm"), rel=1e-6
     )
 
 
@@ -450,7 +491,8 @@ def test_closed_loop_converges_and_conserves_every_component():
 
     # The solvent inventory is conserved exactly: an organic loop that
     # loses extractant would converge just as happily to nonsense.
-    assert float(barren["D2EHPA"]) == pytest.approx(50.0, rel=1e-12)
+    assert float(barren["Cyanex272"]) == pytest.approx(
+        EXTRACTANT_FLOW, rel=1e-12)
     assert float(barren["kerosene"]) == pytest.approx(100.0, rel=1e-12)
 
 
@@ -459,9 +501,9 @@ def test_imperfect_stripping_degrades_raffinate_purity():
 
     The open loop feeds the extraction section fresh, REE-free solvent,
     which is the assumption that stripping is perfect. Closing the loop
-    returns the solvent the stripper actually produces; the Dy it still
+    returns the solvent the stripper actually produces; the Nd it still
     carries consumes free extractant, the extraction factor falls, and
-    more Dy leaks into the La raffinate.
+    more Nd leaks into the La raffinate.
     """
     feed = _feed()
     module = _ess_module()
@@ -469,17 +511,17 @@ def test_imperfect_stripping_degrades_raffinate_purity():
     # Open loop: exactly what ExtractScrubStripCircuit does today.
     open_raffinate = module(feed, module.fresh_solvent(feed))[0]
     open_purity = _purity(open_raffinate, "La")
-    open_impurity = _flow(open_raffinate, "Dy")
+    open_impurity = _flow(open_raffinate, "Nd")
 
     # Closed loop: the same module, one extra edge.
     result = _closed_train(module, feed).solve()
     assert result.converged
     closed_raffinate = result.stream("sep.raffinate")
     closed_purity = _purity(closed_raffinate, "La")
-    closed_impurity = _flow(closed_raffinate, "Dy")
+    closed_impurity = _flow(closed_raffinate, "Nd")
 
     # The recycled solvent is measurably loaded -- this is the mechanism.
-    residual = _flow(result.stream("sep.barren_organic"), "Dy")
+    residual = _flow(result.stream("sep.barren_organic"), "Nd")
     assert residual > 0.5, "stripping must be imperfect for the test to bite"
     assert float(result.info["sep"]["extraction"]["theta_solvent"]) > 0.1
 
@@ -490,16 +532,20 @@ def test_imperfect_stripping_degrades_raffinate_purity():
 
     # Pinned so a change of mechanism cannot pass unnoticed.
     #
-    # The closed-loop figures moved from 0.94137 / 6.37 when the extractor's
-    # capacity limiter was corrected to saturate the *total* organic loading
-    # rather than only the increment (#207 review): the recycled solvent enters
-    # loaded, and bounding it properly leaks slightly more Dy. The open-loop
-    # value is unchanged to every digit, because a REE-free solvent makes the
-    # corrected expression identical to the previous one -- which is the
-    # cleanest evidence that the correction touches only the loaded case.
-    assert open_purity == pytest.approx(0.99032, abs=2e-4)
-    assert closed_purity == pytest.approx(0.93952, abs=2e-4)
-    assert closed_impurity / open_impurity == pytest.approx(6.59, rel=0.02)
+    # These are the La/Nd-on-Cyanex272 numbers the #270 refit moved the
+    # reference separation to; the D2EHPA ones they replace were
+    # 0.99032 / 0.93952 / 6.59, and before the #207 review's correction to
+    # the capacity limiter the closed-loop pair read 0.94137 / 6.37. What
+    # is worth noticing is how little the *shape* of the result moved
+    # across a change of reagent, of element pair and of operating point:
+    # a nearly pure raffinate open-loop, five points of purity lost when
+    # the loop is closed, and an order of magnitude more of the extracted
+    # element leaking past. That is the claim of #202, and it is a
+    # property of running a real circuit near its capacity rather than of
+    # any one set of coefficients.
+    assert open_purity == pytest.approx(0.99276, abs=2e-4)
+    assert closed_purity == pytest.approx(0.94347, abs=2e-4)
+    assert closed_impurity / open_impurity == pytest.approx(8.57, rel=0.02)
 
 
 def test_the_degradation_comes_from_the_residue_not_from_the_loop():
@@ -509,13 +555,16 @@ def test_the_degradation_comes_from_the_residue_not_from_the_loop():
     tearing rather than on the physics it claims to demonstrate.
     """
     feed = _feed()
-    module = _ess_module(stripping_pH=1.5, n_stripping_stages=4)
+    # pH 1.5 is the floor of Cyanex272's fitted window and D(Nd) = 0.0125
+    # there, so six stages at O/A = 2 strip to nine decimal places without
+    # leaving the window (#270).
+    module = _ess_module(stripping_pH=1.5, n_stripping_stages=6)
 
     open_raffinate = module(feed, module.fresh_solvent(feed))[0]
     result = _closed_train(module, feed).solve()
     closed_raffinate = result.stream("sep.raffinate")
 
-    assert _flow(result.stream("sep.barren_organic"), "Dy") < 1e-6
+    assert _flow(result.stream("sep.barren_organic"), "Nd") < 1e-6
     assert _purity(closed_raffinate, "La") == pytest.approx(
         _purity(open_raffinate, "La"), abs=1e-9
     )
@@ -530,12 +579,12 @@ def test_regeneration_bleed_removes_the_accumulated_residue():
     """
     feed = _feed()
     loadings = {}
-    for bleed in (0.0, 0.05, 0.20):
+    for bleed in (0.0, 0.05, 0.20, 0.40):
         train = SeparationTrain("sap")
         train.add_module(_ess_module())
         train.add_module(SaponificationModule(
             "sap",
-            SaponifierParams(extractant="D2EHPA", elements=ELEMENTS,
+            SaponifierParams(extractant="Cyanex272", elements=ELEMENTS,
                              saponification_degree=0.2),
             regeneration=SolventRegenerationParams(bleed_fraction=bleed),
         ))
@@ -562,11 +611,16 @@ def test_regeneration_bleed_removes_the_accumulated_residue():
 
         # The bleed conserves the solvent inventory: make-up replaces it.
         organic = get_flows(result.stream("sap.organic"))
-        assert float(organic["D2EHPA"]) == pytest.approx(50.0, rel=1e-12)
+        assert float(organic["Cyanex272"]) == pytest.approx(
+            EXTRACTANT_FLOW, rel=1e-12)
         assert float(organic["kerosene"]) == pytest.approx(100.0, rel=1e-12)
 
-    assert loadings[0.20] < loadings[0.05] < loadings[0.0]
-    assert loadings[0.20] < 0.75 * loadings[0.0]
+    assert loadings[0.40] < loadings[0.20] < loadings[0.05] < loadings[0.0]
+    # Measured on the reference circuit: 0.2148 with no bleed, then
+    # 0.2015 / 0.1630 / 0.1157. The response is close to linear in the bleed
+    # fraction, which is what first-order removal from a loop at steady
+    # state should give.
+    assert loadings[0.40] < 0.60 * loadings[0.0]
 
 
 # =====================================================================
@@ -575,8 +629,15 @@ def test_regeneration_bleed_removes_the_accumulated_residue():
 
 
 def test_constraints_are_numbers_an_optimizer_can_use():
-    """Not info flags: a signed margin vector, feasible when >= 0."""
-    train = _closed_train(_ess_module())
+    """Not info flags: a signed margin vector, feasible when >= 0.
+
+    On half the reference leach liquor, which is where the closed loop is
+    feasible: 3 mol/s of REE against 30 mol/s of Cyanex272 is 0.454 of the
+    stoichiometric capacity, inside the 0.65 third-phase limit. The full
+    6 mol/s feed closes at 0.850 and is the design the next test uses to
+    check that a violation is reported as one.
+    """
+    train = _closed_train(_ess_module(), _feed(1.5, 1.5))
     result = train.solve()
     constraints = train.constraints(result)
 
@@ -606,7 +667,7 @@ def test_a_design_past_third_phase_onset_is_reported_as_violating():
     An open loop hides the constraint violation as well as the purity
     loss (#202).
     """
-    feed = _feed()
+    feed = _feed(1.5, 1.5)
     limits = OperatingLimits(third_phase_loading=0.40)
     module = _ess_module(limits=limits)
 
@@ -660,10 +721,10 @@ def test_a_constraint_margin_is_differentiable():
     feed = _feed()
     module = _ess_module()
 
-    def margin(organic_dy):
-        """Third-phase margin as a function of the recycle's Dy loading."""
+    def margin(organic_nd):
+        """Third-phase margin as a function of the recycle's Nd loading."""
         solvent = dict(module.fresh_solvent(feed))
-        solvent["F_Dy"] = jnp.asarray(organic_dy, dtype=jnp.float64)
+        solvent["F_Nd"] = jnp.asarray(organic_nd, dtype=jnp.float64)
         return module.constraints(module(feed, solvent)[4])[
             "sep.third_phase"
         ].margin
@@ -773,17 +834,24 @@ def test_stages_fenske_is_a_true_lower_bound_on_stages_kremser():
 
 
 def test_fenske_screen_rejects_a_topology_before_it_is_costed():
-    """The filter must actually reject, and reject for the right reason."""
-    # Two scrub stages are enough for a 99% Dy/La split on D2EHPA ...
+    """The filter must actually reject, and reject for the right reason.
+
+    The margin the filter has to resolve is narrow on purpose. alpha(Nd/La)
+    on Cyanex272 is 51.4, so Fenske asks 2.33 stages for a 99/99 split and
+    3.50 for 99.9/99.9 -- three installed stages straddle the two. A screen
+    that rounded, or that compared against the wrong purity, would pass
+    both.
+    """
+    # Three scrub stages are enough for a 99% Nd/La split on Cyanex272 ...
     easy = screen_separation(
-        "D2EHPA", "Dy", "La", installed_stages=2, purity=0.99, pH=2.3
+        "Cyanex272", "Nd", "La", installed_stages=3, purity=0.99, pH=2.3
     )
     assert easy.admissible
-    assert easy.separation_factor > 100
+    assert easy.separation_factor > 50
 
     # ... and not enough for 99.9%.
     hard = screen_separation(
-        "D2EHPA", "Dy", "La", installed_stages=2, purity=0.999, pH=2.3
+        "Cyanex272", "Nd", "La", installed_stages=3, purity=0.999, pH=2.3
     )
     assert not hard.admissible
     assert hard.minimum_stages > hard.installed_stages
@@ -792,13 +860,14 @@ def test_fenske_screen_rejects_a_topology_before_it_is_costed():
     # The neighbouring-lanthanide split is the one that really costs
     # stages, and the bound says so without solving anything.
     neighbours = screen_separation(
-        "D2EHPA", "Nd", "Pr", installed_stages=20, purity=0.99, pH=3.0
+        "Cyanex272", "Nd", "Pr", installed_stages=20, purity=0.99, pH=2.3
     )
     assert neighbours.minimum_stages > 5.0
 
-    # And it works through a train.
+    # And it works through a train: the reference circuit installs two
+    # scrub stages, and two is short of the 3.50 a 99.9% split needs.
     train = _closed_train(_ess_module())
-    report = screen_train(train, {"sep": ("Dy", "La")}, purity=0.999)
+    report = screen_train(train, {"sep": ("Nd", "La")}, purity=0.999)
     assert not report.admissible
     assert [v.name for v in report.rejected()] == ["sep"]
     assert "REJECTED" in report.summary()
@@ -823,7 +892,7 @@ def test_jit_and_grad_through_a_closed_loop_train_are_finite():
         train.add_feed("leach", feed, "sep.feed")
         train.connect("sep.barren_organic", "sep.solvent")
         streams = train.solve_differentiable()
-        return get_flows(streams["sep.raffinate"])["Dy"]
+        return get_flows(streams["sep.raffinate"])["Nd"]
 
     eager = float(raffinate_impurity(0.5))
     compiled = float(jax.jit(raffinate_impurity)(0.5))
@@ -832,7 +901,7 @@ def test_jit_and_grad_through_a_closed_loop_train_are_finite():
     assert math.isfinite(eager) and eager > 0.0
     assert compiled == pytest.approx(eager, rel=1e-10)
     assert math.isfinite(gradient)
-    # More strip solution strips the solvent harder, so less Dy comes
+    # More strip solution strips the solvent harder, so less Nd comes
     # back on the recycle and less leaks into the raffinate.
     assert gradient < 0.0
 
@@ -840,7 +909,7 @@ def test_jit_and_grad_through_a_closed_loop_train_are_finite():
     # graph, the same units and the same tear set.
     reported = _closed_train(_ess_module()).solve()
     assert eager == pytest.approx(
-        _flow(reported.stream("sep.raffinate"), "Dy"), rel=1e-8
+        _flow(reported.stream("sep.raffinate"), "Nd"), rel=1e-8
     )
 
 
@@ -963,7 +1032,7 @@ def test_capacity_bounds_total_organic_loading_not_just_the_increment():
 
     m = get_extractant("D2EHPA").monomers_per_ree
     extractor = REEExtractor(REEExtractorParams(
-        n_stages=5, extractant="D2EHPA", elements=("Nd", "Dy"), pH=3.0))
+        n_stages=5, extractant="D2EHPA", elements=("Nd", "Dy"), pH=1.5))
     feed = make_stream({"H2O": 10.0, "Nd": 0.3, "Dy": 0.3}, 298.15, 101325.0)
     capacity = 1.0 / m
 

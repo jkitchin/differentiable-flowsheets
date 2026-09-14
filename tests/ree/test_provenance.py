@@ -99,8 +99,26 @@ class TestSpecificity:
         assert p.cls == "MEASURED"
 
     def test_catch_all_still_applies_where_nothing_is_specific(self):
-        p = explain("extractants", "extractants.D2EHPA.ph_coefficients.Nd.a")
+        """The default is fail-closed: an untagged field reads HAND_TUNED.
+
+        This used to point at `D2EHPA.ph_coefficients.Nd.a`, which was a live
+        example until #270 gave that block a source. Every field in
+        extractants.yaml is now matched by a rule of its own, so the only way
+        to exercise the fall-through is to resolve a path that is not in the
+        file -- which is exactly the case that matters: a field ADDED
+        tomorrow, by someone who does not also add a rule, must come out
+        unpublishable rather than inheriting a neighbour's citation.
+        """
+        from difflow_ree.provenance import _resolve
+
+        p = _resolve("extractants", "extractants.D2EHPA.a_field_nobody_tagged", 1.0)
         assert p.cls == "HAND_TUNED"
+        assert not p.publishable
+        for depth in (
+            "extractants.D2EHPA.new_block.field",
+            "extractants.D2EHPA.new_block.Nd.field",
+        ):
+            assert _resolve("extractants", depth, 1.0).cls == "HAND_TUNED", depth
 
     def test_unknown_path_raises(self):
         with pytest.raises(KeyError):
@@ -134,21 +152,76 @@ class TestTheClaimsTheDataFilesMake:
             assert p.publishable, sym
             assert "4.36" in p.locus
 
-    def test_the_two_remaining_acidic_extractants_are_hand_tuned(self):
-        """The header's central warning, as an assertion.
+    def test_no_acidic_extractant_ships_a_hand_tuned_pH_coefficient(self):
+        """The header's central warning, inverted -- #270 finished the job.
 
-        It used to be three. PC88A left the list in #270, when its `a` values
-        were fitted to Tanaka (2021)'s 121 digitized points; D2EHPA and
-        Cyanex272 have no dataset in `dcdb` yet and are still invented.
+        It used to be three records, then two: PC88A left the list when its
+        `a` values were fitted to Tanaka (2021)'s 121 digitized points, and
+        D2EHPA and Cyanex272 left it when they were refitted against X95 /
+        PPH63 and ZL93 / L14. Every `a` is now MEASURED or DERIVED from a
+        named table, and every `b` is the stoichiometric 3 that the source's
+        own mass-action model writes down.
         """
-        for ex in ("D2EHPA", "Cyanex272"):
+        for ex in ("D2EHPA", "PC88A", "Cyanex272", "naphthenic_acid"):
             for sym in ("La", "Nd", "Dy", "Y"):
                 for c in ("a", "b"):
                     p = explain(
                         "extractants", f"extractants.{ex}.ph_coefficients.{sym}.{c}"
                     )
-                    assert p.cls == "HAND_TUNED", f"{ex} {sym} {c}"
-                    assert not p.publishable
+                    assert p.cls in ("MEASURED", "DERIVED"), f"{ex} {sym} {c}: {p.cls}"
+                    assert p.publishable, f"{ex} {sym} {c}"
+                    assert p.source != "HAND_TUNED", f"{ex} {sym} {c}"
+
+    def test_the_only_hand_tuned_numbers_left_are_the_temperature_blocks(self):
+        """What #270 could NOT retire, stated as an assertion.
+
+        Every source behind the three refits is isothermal -- X95 and PPH63
+        are room-temperature determinations, T21 is 298.0 +/- 0.1 K, ZL93 is
+        25 +/- 1 C -- so none of them carries a heat of extraction. Thirty
+        numbers, ten per record, and nothing else in the file. D at 298 K is
+        sourced for all five reagents; D at any other temperature is sourced
+        for two.
+        """
+        hand_tuned = [p for p in audit("extractants") if p.cls == "HAND_TUNED"]
+        assert len(hand_tuned) == 30
+        for p in hand_tuned:
+            _, ex, block, _ = p.path.split(".")
+            assert block == "temperature_coefficients", p.path
+            assert ex in ("D2EHPA", "PC88A", "Cyanex272"), p.path
+            assert "not retirable by it" in p.note, p.path
+
+    def test_every_concentration_exponent_names_a_source(self):
+        """The field the #270 retagging exposed, on all five records.
+
+        `concentration_exponent` was matched by nothing and so read
+        HAND_TUNED on every record, including the two -- TBP and
+        naphthenic_acid -- that the file's header held up as the ones with
+        real provenance. Only PC88A's is FITTED (T21's six series, 0.041 to
+        0.82 mol/L as dimer); the other four are the mechanism's cube law
+        imposed, and their notes say so.
+        """
+        expected = {
+            "D2EHPA": "Z1",
+            "PC88A": "T21",
+            "Cyanex272": "Z1",
+            "TBP": "GP19",
+            "naphthenic_acid": "Q1",
+        }
+        for ex, src in expected.items():
+            p = explain("extractants", f"extractants.{ex}.concentration_exponent")
+            assert p.source == src, ex
+            assert p.publishable, ex
+            assert p.value == 3.0, ex
+        fitted = explain("extractants", "extractants.PC88A.concentration_exponent")
+        assert "FITTED" in fitted.note
+        for ex in ("D2EHPA", "Cyanex272", "TBP", "naphthenic_acid"):
+            note = explain(
+                "extractants", f"extractants.{ex}.concentration_exponent"
+            ).note
+            assert any(
+                k in note
+                for k in ("Not fitted", "imposed", "not set by measurement")
+            ), ex
 
     def test_PC88A_pH_coefficients_are_measured(self):
         """The other half of #270: what replaced the hand-tuned block.

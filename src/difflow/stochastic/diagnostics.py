@@ -27,9 +27,13 @@ possibly be worth --- if EVPI is $40k/yr, a $200k analyzer cannot pay back no
 matter how good it is.  That is usually the most decision-relevant number in
 the whole run.
 
-Both obey ``WS <= SP <= EEV`` for a minimization.  If a computed set violates
-that ordering, a solve did not converge, and the functions here say so rather
-than reporting a negative EVPI as though it meant something.
+Both obey ``WS <= SP <= EEV`` for a minimization, *among admissible designs*.
+If a computed set violates that ordering, either a solve did not converge or
+the mean-value design does not meet the constraints under the distribution ---
+:attr:`BoundReport.ev_feasible` says which, and the summary names it rather
+than reporting a negative EVPI as though it meant something.  The second case
+is not an error: without recourse to absorb the uncertainty it is the ordinary
+outcome, and it says something stronger than a large VSS would have.
 
 Then: is the *sample* big enough?
 ---------------------------------
@@ -181,11 +185,18 @@ class BoundReport:
             uncertainty was worth.
         evpi: ``SP - WS``: the ceiling on what any measurement can be worth.
         ordered: Whether ``WS <= SP <= EEV`` held (for a minimization).  False
-            means a solve did not converge, and the gaps below are not
-            meaningful.
+            means the gaps below are not meaningful --- either a solve did not
+            converge, or the mean-value design is infeasible; ``ev_feasible``
+            says which.
         ev_first_stage: The mean-value design, for comparison with the
             stochastic one.
         sp_first_stage: The stochastic design.
+        ev_feasible: Whether the mean-value design met the constraints when
+            run against the sample.  When it did not, ``EEV`` is the objective
+            of a design that is not admissible, so it bounds nothing and
+            ``vss`` is not a value --- the honest reading is that ignoring the
+            uncertainty does not produce a usable design at all.  A problem
+            with no constraints is trivially feasible.
     """
 
     stochastic: float
@@ -196,6 +207,7 @@ class BoundReport:
     ordered: bool
     ev_first_stage: dict
     sp_first_stage: dict
+    ev_feasible: bool = True
 
     def summary(self) -> str:
         """The three bounds and the two gaps, with the designs side by side."""
@@ -207,7 +219,13 @@ class BoundReport:
             f"  {'value of the stochastic solution':<34s}{self.vss:14.6g}",
             f"  {'expected value of perfect info':<34s}{self.evpi:14.6g}",
         ]
-        if not self.ordered:
+        if not self.ev_feasible:
+            lines.append("  ! the mean-value design does NOT meet the "
+                         "constraints under the distribution, so EEV is the "
+                         "objective of an inadmissible design and VSS above "
+                         "is not a value. Read it as: ignoring the "
+                         "uncertainty does not produce a usable design here.")
+        elif not self.ordered:
             lines.append("  ! WS <= SP <= EEV does not hold: at least one "
                          "solve did not converge, so the gaps above are not "
                          "meaningful. Raise SAAOptions.steps or n_starts.")
@@ -265,6 +283,12 @@ def bounds(problem: TwoStageProblem, scenarios: ScenarioSet, *,
         vss=sense * (eev_v - sp_v), evpi=sense * (sp_v - ws_v),
         ordered=ordered, ev_first_stage=dict(ev.first_stage),
         sp_first_stage=dict(sp.first_stage),
+        # EEV bounds SP only among ADMISSIBLE designs. A mean-value design that
+        # misses the chance constraint has a better objective for exactly the
+        # reason it is not allowed, and reporting that as a negative VSS blames
+        # the solver for a modelling fact. Without recourse to absorb it, that
+        # is the common case, not a corner.
+        ev_feasible=bool(eev.feasible),
     )
 
 

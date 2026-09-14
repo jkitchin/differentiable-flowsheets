@@ -53,7 +53,13 @@ class StripperParams(ParamsMixin):
     extractant: str
     elements: tuple[str, ...]
     diluent: str = "kerosene"
-    pH: float | Array = 0.5  # Very low pH for complete stripping
+    # (#270) None means "the extractant record's own default stripping pH",
+    # the bottom of its fitted validity window -- the lowest pH the
+    # coefficients can speak to, which is the most stripping condition on
+    # record. The literal 0.5 it replaced was chosen against D2EHPA's
+    # pre-refit coefficients; against the refitted ones D(Nd) there is 3.7,
+    # so it was not a strip at all.
+    pH: float | Array | None = None
     extractant_conc: float = 0.5
     acid_type: Literal["HCl", "H2SO4", "HNO3"] = "HCl"
     acid_conc: float = 4.0  # M
@@ -62,6 +68,13 @@ class StripperParams(ParamsMixin):
     # Per-element log10(D) coefficient overrides, possibly traced; passed to
     # REEDistribution. The supported way to put uncertainty on D.
     coefficient_overrides: dict | None = None
+
+    def __post_init__(self):
+        """Resolve a pH default that the extractant record owns (#270)."""
+        if self.pH is None:
+            from difflow_ree.database import default_pH
+
+            self.pH = default_pH(self.extractant, "stripping")
 
 
 class REEStripper:

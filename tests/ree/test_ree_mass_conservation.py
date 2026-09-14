@@ -113,7 +113,7 @@ class TestREEExtractorMassConservation:
             extractant="D2EHPA",
             diluent="n-Heptane",  # names the solvent fixture's carrier (#192)
             elements=("Dy", "Nd"),
-            pH=3.0,
+            pH=1.0,  # (#270) inside D2EHPA's refitted [0.0, 2.0]
         )
         extractor = REEExtractor(params)
         raffinate, extract, info = extractor(feed, solvent)
@@ -128,7 +128,7 @@ class TestMixerSettlerMassConservation:
         params = MixerSettlerParams(
             extractant="D2EHPA",
             elements=("Nd", "Dy"),
-            pH=3.0,
+            pH=1.0,  # (#270) inside D2EHPA's refitted [0.0, 2.0]
         )
         stage = REEMixerSettler(params)
 
@@ -166,7 +166,7 @@ class TestMixerSettlerMassConservation:
         params = MixerSettlerParams(
             extractant="D2EHPA",
             elements=("Nd", "Dy"),
-            pH=3.0,
+            pH=1.0,  # (#270) inside D2EHPA's refitted [0.0, 2.0]
         )
         stage = REEMixerSettler(params)
 

@@ -2,6 +2,16 @@
 
 Tests that jax.grad works through REE extractors, mixer-settlers,
 and precipitators, and that gradient signs are physically meaningful.
+
+The D2EHPA cases sit at pH 0.3 (extractor) and pH 0.5 (mixer-settler), not
+the pH 2.5-3.0 they used before the #270 refit. Two reasons, and both matter
+for a gradient test: those pH values are outside the refitted validity window
+of [0.0, 2.0], and -- the reason the tests actually FAILED -- the refit puts
+D(Nd) = 1 at pH 0.312, so by pH 1 a five-stage extractor is at 100.0000%
+recovery and the gradient has underflowed to 3e-8, by pH 2 to 3e-23. A
+saturated unit has no gradient to test. At pH 0.3 recovery is 0.49 and
+d(recovery)/d(pH) is 3.2 per pH unit, which is the operating point a gradient
+test is supposed to probe.
 """
 
 import pytest
@@ -47,7 +57,7 @@ def test_extractor_grad_recovery_wrt_pH():
         n_stages=5,
         extractant="D2EHPA",
         elements=("Nd",),
-        pH=3.0,
+        pH=0.3,
         include_loading=False,
     )
     extractor = REEExtractor(params)
@@ -61,7 +71,7 @@ def test_extractor_grad_recovery_wrt_pH():
         return 1.0 - nd_out / 1.0  # recovery
 
     grad_fn = jax.grad(recovery_fn)
-    g = grad_fn(jnp.float64(3.0))
+    g = grad_fn(jnp.float64(0.3))
 
     assert jnp.isfinite(g), f"Gradient is not finite: {g}"
     assert jnp.abs(g) > 1e-10, f"Gradient is effectively zero: {g}"
@@ -79,7 +89,7 @@ def test_extractor_grad_pH_sign():
         n_stages=5,
         extractant="D2EHPA",
         elements=("Nd",),
-        pH=2.5,
+        pH=0.3,
         include_loading=False,
     )
     extractor = REEExtractor(params)
@@ -92,7 +102,7 @@ def test_extractor_grad_pH_sign():
         nd_out = flows.get("Nd", jnp.float64(0.0))
         return 1.0 - nd_out / 1.0
 
-    g = jax.grad(recovery_fn)(jnp.float64(2.5))
+    g = jax.grad(recovery_fn)(jnp.float64(0.3))
     assert g > 0, (
         f"Expected positive gradient (higher pH -> more extraction), got {g}"
     )
@@ -105,7 +115,7 @@ def test_extractor_grad_temperature():
         n_stages=5,
         extractant="D2EHPA",
         elements=("Nd",),
-        pH=3.0,
+        pH=0.3,
         include_loading=False,
     )
     extractor = REEExtractor(params)
@@ -137,7 +147,7 @@ def test_mixer_settler_grad_wrt_stage_efficiency():
         params = MixerSettlerParams(
             extractant="D2EHPA",
             elements=("Nd",),
-            pH=3.0,
+            pH=0.5,
             stage_efficiency=eta,
         )
         ms = REEMixerSettler(params)
@@ -161,7 +171,7 @@ def test_mixer_settler_grad_wrt_pH():
     params = MixerSettlerParams(
         extractant="D2EHPA",
         elements=("Nd",),
-        pH=3.0,
+        pH=0.5,
     )
     ms = REEMixerSettler(params)
     feed = _make_feed()
@@ -173,7 +183,7 @@ def test_mixer_settler_grad_wrt_pH():
         nd_out = flows.get("Nd", jnp.float64(0.0))
         return 1.0 - nd_out / 1.0
 
-    g = jax.grad(extraction_fn)(jnp.float64(3.0))
+    g = jax.grad(extraction_fn)(jnp.float64(0.5))
 
     assert jnp.isfinite(g), f"Gradient is not finite: {g}"
     assert jnp.abs(g) > 1e-10, f"Gradient is effectively zero: {g}"

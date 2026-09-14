@@ -99,7 +99,7 @@ class TestIssue189_DimensionlessLoading:
     """
 
     @staticmethod
-    def _free_fraction_multiplier(info, elements, F_aq, F_org, pH=3.0):
+    def _free_fraction_multiplier(info, elements, F_aq, F_org, pH=1.0):
         """Back out E / (D * F_org / F_aq): the entering-solvent free fraction.
 
         Uses the correlation D rather than the reported stage D, so it is the
@@ -124,7 +124,7 @@ class TestIssue189_DimensionlessLoading:
         """
         elements = ("Nd",)
         params = REEExtractorParams(
-            n_stages=4, extractant="D2EHPA", elements=elements, pH=3.0,
+            n_stages=4, extractant="D2EHPA", elements=elements, pH=1.0,
             extractant_conc=0.5,
         )
         extractor = REEExtractor(params)
@@ -167,7 +167,7 @@ class TestIssue189_DimensionlessLoading:
         """
         elements = ("Nd",)
         params = REEExtractorParams(
-            n_stages=4, extractant="D2EHPA", elements=elements, pH=3.0,
+            n_stages=4, extractant="D2EHPA", elements=elements, pH=1.0,
             extractant_conc=0.5,
         )
         extractor = REEExtractor(params)
@@ -192,7 +192,7 @@ class TestIssue189_DimensionlessLoading:
         """theta_solvent is exactly m * F_REE(solvent) / F_extractant."""
         elements = ("Nd", "Dy")
         params = REEExtractorParams(
-            n_stages=4, extractant="D2EHPA", elements=elements, pH=3.0,
+            n_stages=4, extractant="D2EHPA", elements=elements, pH=1.0,
             extractant_conc=0.5,
         )
         extractor = REEExtractor(params)
@@ -294,7 +294,7 @@ class TestIssue189_DimensionlessLoading:
                 n_stages=10,
                 extractant="D2EHPA",
                 elements=elements,
-                pH=3.0,
+                pH=1.0,
                 extractant_conc=0.5,
             )
             extractor = REEExtractor(params)
@@ -440,7 +440,7 @@ class TestIssue191_Stoichiometry:
             n_stages=8,
             extractant="D2EHPA",
             elements=elements,
-            pH=3.0,
+            pH=1.0,
             extractant_conc=0.5,
         )
         extractor = REEExtractor(params)
@@ -470,8 +470,16 @@ class TestIssue191_Stoichiometry:
 
             # THE discriminating assertion: the model must never bind more
             # extractant than was fed. The pre-fix capacity gives -2.0 here.
+            #
+            # (#270) ``>= 0``, not ``> 0``. The refit raised D(Nd) at pH 1.0
+            # to 116, so the last point of the sweep -- 5 mol/s of each of
+            # three elements against 1 mol/s of extractant, a 90-fold excess
+            # -- now saturates EXACTLY: free = 0.0 to the last bit. That is
+            # the limiter reporting full loading, which is the correct answer
+            # and not the failure this assertion is here to catch. The
+            # pre-fix path still gives -2.0 and still fails.
             free_extractant = F_extractant - bound_extractant
-            assert free_extractant > 0.0, (
+            assert free_extractant >= 0.0, (
                 f"negative free extractant at feed {feed_ree}: "
                 f"{bound_extractant} bound of {F_extractant} fed"
             )
@@ -597,7 +605,7 @@ def _recovery_vs_solvent(solvent_scale, elements=("Nd", "Dy"), n_stages=6):
         n_stages=n_stages,
         extractant="D2EHPA",
         elements=elements,
-        pH=3.0,
+        pH=1.0,
         extractant_conc=0.5,
     )
     extractor = REEExtractor(params)
@@ -680,7 +688,7 @@ class TestIssue193_SmoothCapacityLimiter:
             n_stages=10,
             extractant="D2EHPA",
             elements=elements,
-            pH=3.0,
+            pH=1.0,
             extractant_conc=0.5,
         )
         extractor = REEExtractor(params)
@@ -727,7 +735,7 @@ class TestIssue193_SmoothCapacityLimiter:
             n_stages=3,
             extractant="D2EHPA",
             elements=elements,
-            pH=3.0,
+            pH=1.0,
             extractant_conc=0.5,
         )
         extractor = REEExtractor(params)
@@ -750,7 +758,7 @@ class TestIssue193_SmoothCapacityLimiter:
             n_stages=3,
             extractant="D2EHPA",
             elements=("Nd",),
-            pH=3.0,
+            pH=1.0,
             include_loading=True,
         )
         feed = make_stream({"H2O": 10.0, "Nd": 0.1}, T=298.15, P=101325.0)
@@ -763,7 +771,7 @@ class TestIssue193_SmoothCapacityLimiter:
             n_stages=3,
             extractant="D2EHPA",
             elements=("Nd",),
-            pH=3.0,
+            pH=1.0,
             include_loading=False,
         )
         _, extract, _ = REEExtractor(params_no_loading)(feed, solvent)
@@ -778,7 +786,7 @@ class TestIssue193_SmoothCapacityLimiter:
                 n_stages=10,
                 extractant="D2EHPA",
                 elements=elements,
-                pH=3.0,
+                pH=1.0,
                 extractant_conc=0.5,
                 capacity_sharpness=k,
             )
@@ -801,7 +809,7 @@ class TestIssue193_SmoothCapacityLimiter:
         params = MixerSettlerParams(
             extractant="D2EHPA",
             elements=elements,
-            pH=3.0,
+            pH=1.0,
             extractant_conc=0.5,
             third_phase_loading_limit=0.1,
         )
@@ -834,7 +842,7 @@ class TestIssue193_SmoothCapacityLimiter:
             params = MixerSettlerParams(
                 extractant="D2EHPA",
                 elements=("Nd",),
-                pH=3.0,
+                pH=1.0,
                 extractant_conc=0.5,
                 third_phase_loading_limit=0.1,
             )
@@ -877,7 +885,7 @@ class TestIssue190_SingleDepletionCorrection:
             n_stages=1,
             extractant="D2EHPA",
             elements=self.ELEMENTS,
-            pH=3.0,
+            pH=1.0,
             extractant_conc=0.5,
         )
         extractor = REEExtractor(params)
@@ -885,7 +893,7 @@ class TestIssue190_SingleDepletionCorrection:
         D_corr = float(
             REEDistribution(
                 extractant="D2EHPA", elements=self.ELEMENTS, concentration=0.5
-            ).get_D("Nd", pH=3.0)
+            ).get_D("Nd", pH=1.0)
         )
 
         rows = []
@@ -941,20 +949,42 @@ class TestIssue190_SingleDepletionCorrection:
         factor.
 
         The assertions below are chosen to fail if the doubled correction
-        returns. Reimplementing the pre-fix path measures ``p = 4.32`` and
-        drives ``D_app / D_corr`` down to 0.121; the fixed path measures
-        ``p = 0.03`` and never goes below 0.66.
+        returns. Reimplementing the pre-fix path measures ``p = 4.32``; the
+        fixed path measures ``p = 0.03``.
+
+        (#270) Assertion 1 used to be a single ``min(ratios) > 0.5`` over the
+        whole sweep. That bound was reading the refit's much larger D as a
+        loading falloff: with ``D(Nd) = 116`` at pH 1.0 the capacity limiter
+        clamps from ``theta ~ 0.5`` on, and ``D_app / D_corr`` reaches 0.003
+        at the saturated end -- not because D fell, but because there is no
+        extractant left to bind to and the split cannot be what D asks for.
+        Splitting the assertion in two says the same thing more precisely and
+        without a magic constant: BELOW the clamp D_app is the correlation D
+        to a part in a thousand (no loading term in D at all, which is the
+        actual claim of #190), and ABOVE it the limiter is what reshapes the
+        split -- checked pointwise in assertion 3 against the m-th power
+        curve, which at the saturated end is 1e-5 of the correlation against
+        the model's 0.003.
         """
         m, rows = self._sweep()
         _, _, D0, D_corr = rows[0]
 
-        # 1. D_app must stay of the same order as the correlation over the
-        #    whole sweep. A doubled (1-theta)^m factor drops it by ~8x here.
+        # 1a. Below the capacity clamp, D_app IS the correlation D. Not "of
+        #     the same order" -- equal, because after #190 nothing in D
+        #     depends on loading. A single (1-theta)^m factor at theta = 0.3
+        #     would already put this at 0.12.
+        unclamped = [(theta, D / D_corr) for theta, _, D, _ in rows if theta < 0.3]
+        assert len(unclamped) >= 8, "sweep did not cover the unclamped region"
+        for theta, ratio in unclamped:
+            assert ratio == pytest.approx(1.0, abs=1e-3), (
+                f"the outlet split implies D = {ratio:.6g} x the correlation "
+                f"value at theta = {theta:.4f}, below the capacity clamp "
+                f"where nothing should touch D at all"
+            )
+
+        # 1b. Nothing anywhere in the sweep is ABOVE the correlation: the
+        #     limiter only ever takes extraction away.
         ratios = [D / D_corr for _, _, D, _ in rows]
-        assert min(ratios) > 0.5, (
-            f"the outlet split implies D fell to {min(ratios):.3g} x the "
-            f"correlation value; the doubled correction (#190) reaches 0.121"
-        )
         assert max(ratios) <= 1.0 + 1e-9
 
         # 2. The effective exponent in D_app/D_corr ~ free**p, over the region
@@ -1003,14 +1033,14 @@ class TestIssue190_SingleDepletionCorrection:
             n_stages=3,
             extractant="D2EHPA",
             elements=("Nd",),
-            pH=3.0,
+            pH=1.0,
             extractant_conc=0.5,
         )
         extractor = REEExtractor(params)
         D_corr = float(
             REEDistribution(
                 extractant="D2EHPA", elements=("Nd",), concentration=0.5
-            ).get_D("Nd", pH=3.0)
+            ).get_D("Nd", pH=1.0)
         )
         for feed_nd in (1e-5, 1e-2, 0.5, 5.0):
             _, _, info = _extract_totals(
@@ -1040,7 +1070,7 @@ def _raffinate_vs_loaded_solvent(nd_org, n_stages=5, sharpness=8):
         n_stages=n_stages,
         extractant="D2EHPA",
         elements=("Nd",),
-        pH=3.0,
+        pH=1.0,
         capacity_sharpness=sharpness,
     )
     extractor = REEExtractor(params)
@@ -1131,7 +1161,7 @@ class TestIssue193_SmoothEnteringSolventLoading:
     def test_free_fraction_is_reported(self):
         """The entering-solvent free fraction is observable in info."""
         params = REEExtractorParams(
-            n_stages=5, extractant="D2EHPA", elements=("Nd",), pH=3.0
+            n_stages=5, extractant="D2EHPA", elements=("Nd",), pH=1.0
         )
         _, _, info = _extract_totals(
             REEExtractor(params),
@@ -1193,7 +1223,7 @@ class TestZeroFlowPhases:
 
     def test_extractor_raises_on_an_empty_aqueous_feed(self):
         params = REEExtractorParams(
-            n_stages=5, extractant="D2EHPA", elements=("Nd",), pH=3.0
+            n_stages=5, extractant="D2EHPA", elements=("Nd",), pH=1.0
         )
         feed = make_stream({"H2O": 0.0, "Nd": 0.0}, T=298.15, P=101325.0)
         solvent = make_stream(
@@ -1204,7 +1234,7 @@ class TestZeroFlowPhases:
 
     def test_mixer_settler_raises_on_an_empty_aqueous_inlet(self):
         params = MixerSettlerParams(
-            extractant="D2EHPA", elements=("Nd",), pH=3.0
+            extractant="D2EHPA", elements=("Nd",), pH=1.0
         )
         aq = make_stream({"H2O": 0.0, "Nd": 0.0}, T=298.15, P=101325.0)
         org = make_stream(
@@ -1231,7 +1261,7 @@ class TestZeroFlowPhases:
         params = MixerSettlerParams(
             extractant="D2EHPA",
             elements=("Nd",),
-            pH=3.0,
+            pH=1.0,
             third_phase_loading_limit=0.1,
         )
         aq = make_stream({"H2O": 10.0, "Nd": 0.5}, T=298.15, P=101325.0)
@@ -1242,7 +1272,7 @@ class TestZeroFlowPhases:
     def test_mixer_settler_without_the_limit_still_accepts_pure_diluent(self):
         """No loading-dependent quantity requested, no extractant required."""
         params = MixerSettlerParams(
-            extractant="D2EHPA", elements=("Nd",), pH=3.0
+            extractant="D2EHPA", elements=("Nd",), pH=1.0
         )
         aq = make_stream({"H2O": 10.0, "Nd": 0.5}, T=298.15, P=101325.0)
         org = make_stream({"kerosene": 5.0}, T=298.15, P=101325.0)
@@ -1256,7 +1286,7 @@ class TestZeroFlowPhases:
         params = MixerSettlerParams(
             extractant="D2EHPA",
             elements=("Nd",),
-            pH=3.0,
+            pH=1.0,
             third_phase_loading_limit=0.1,
         )
         aq = make_stream({"H2O": 10.0, "Nd": 0.5}, T=298.15, P=101325.0)
