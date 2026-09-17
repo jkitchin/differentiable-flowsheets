@@ -764,20 +764,16 @@ class REEExtractor:
             # Adjust for initial organic loading (loaded solvent reduces the
             # extractant left free to bind more REE). theta_solvent is the
             # stage-level dimensionless loading of the entering solvent (#189).
-            if self._isotherm is not None:
-                loading_factor = free_fraction_in
-            else:
-                # Simple loading correction without isotherm:
-                # Reduce E based on ratio of existing loading to feed. Guarded
-                # with a where rather than an absolute 1e-10 floor, which was
-                # a hidden unit here too (#189): with both flows below 1e-10
-                # the floored ratio was not the ratio at all.
-                denom = F_in + F_solvent
-                safe_denom = jnp.where(denom > 0.0, denom, 1.0)
-                loading_ratio = jnp.where(
-                    denom > 0.0, F_solvent / safe_denom, 0.0
-                )
-                loading_factor = 1.0 - loading_ratio
+            # Without an isotherm there is no loading correction (#286): the
+            # legacy "simple loading correction" that used to sit here shrank
+            # E by a ratio of *solute* flows to partly compensate for the
+            # pass-through bug #284 fixed. With the two-inlet solve now
+            # handling the entering solvent REE correctly, that factor only
+            # double-counts it, and it is not free-extractant physics anyway
+            # -- a solute-flow ratio makes D depend on how concentrated the
+            # feed is, the hidden-unit dependence #189 went after. That
+            # physics belongs in get_D's own concentration term (#190).
+            loading_factor = free_fraction_in if self._isotherm is not None else 1.0
             E = E * loading_factor
 
             # Kremser equation for counter-current extraction. Reported as a
