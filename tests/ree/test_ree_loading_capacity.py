@@ -51,6 +51,7 @@ from difflow_ree.units.extraction import (
     _smooth_free_fraction,
     _soft_saturation,
 )
+from difflow_ree.units.kremser import kremser_two_inlet
 
 
 def _extract_totals(extractor, feed_flows, solvent_flows, elements):
@@ -1386,3 +1387,93 @@ class TestChangedPublicAPI:
         g = float(jax.grad(corrected)(c0))
         assert g < 0.0, "more loading must lower D"
         assert g == pytest.approx(expected, rel=1e-12)
+
+
+# =============================================================================
+# #286 -- no isotherm means no loading correction
+# =============================================================================
+
+class TestIssue286_NoLoadingCorrectionWithoutIsotherm:
+    """#286: with ``include_loading=False`` there is no loading correction.
+
+    The legacy "simple loading correction" on that path shrank the extraction
+    factor by a ratio of *solute* flows, ``1 - F_solvent / (F_in + F_solvent)``.
+    It existed to partly compensate for the #284 pass-through bug: before
+    #284, REE arriving on the solvent was passed straight to the extract, so
+    shrinking E hid some of it. With #284's two-inlet Kremser solve now
+    handling the entering solvent REE correctly, that factor only
+    double-counts it and drives D toward zero as the solvent loads -- backwards
+    from the physics, where a pinched (E < 1) organic outlet should sit near
+    equilibrium with the entering aqueous *regardless* of what came in on the
+    solvent, sending any excess to the raffinate instead.
+
+    The reference in every test here is ``kremser_two_inlet`` called directly
+    with the *unscaled* D -- exactly what the extractor should reduce to once
+    the legacy factor is gone. Extractant carrier flows are scaled up 1000x
+    relative to the REE flows so the (legitimate) isotherm loading correction
+    on the ``include_loading=True`` path is negligible too, isolating the
+    ``False`` path's now-removed correction as the only thing under test.
+    """
+
+    N = 8
+    D = 0.3
+    _CARRIER_SCALE = 1000.0
+
+    def _run(self, include_loading, y_in):
+        overrides = {"Nd": {"a": float(np.log10(self.D)), "b": 0.0, "c": 0.0, "d": 0.0}}
+        params = REEExtractorParams(
+            n_stages=self.N,
+            extractant="D2EHPA",
+            elements=("Nd",),
+            pH=2.0,
+            extractant_conc=0.5,
+            include_loading=include_loading,
+            coefficient_overrides=overrides,
+        )
+        extractor = REEExtractor(params)
+        F_aq_water = 100.0 * self._CARRIER_SCALE
+        F_org_extractant = 50.0 * self._CARRIER_SCALE
+        F_org_diluent = 100.0 * self._CARRIER_SCALE
+        raffinate, extract, info = _extract_totals(
+            extractor,
+            {"H2O": F_aq_water, "Nd": 1.0},
+            {"D2EHPA": F_org_extractant, "kerosene": F_org_diluent, "Nd": y_in},
+            ("Nd",),
+        )
+        F_aq = F_aq_water + 1.0  # _phase_flows counts the feed's own REE (#192)
+        F_org = F_org_extractant + F_org_diluent
+        return raffinate, extract, F_aq, F_org
+
+    @pytest.mark.parametrize("include_loading", [False, True])
+    @pytest.mark.parametrize("y_in", [0.0, 0.5, 2.0])
+    def test_matches_the_unscaled_two_inlet_solve(self, include_loading, y_in):
+        """E < 1 (a pinched organic outlet): matches kremser_two_inlet(D, ...).
+
+        Before the fix, the False path diverged further from this reference
+        as y_in grew (extract *fell* as the entering solvent loaded, which is
+        backwards); the reference itself was validated against an exact
+        stage-by-stage solve in #284.
+        """
+        raffinate, extract, F_aq, F_org = self._run(include_loading, y_in)
+        ref_raffinate, ref_extract = kremser_two_inlet(
+            self.D, F_aq, F_org, 1.0, y_in, float(self.N)
+        )
+        # True carries a (legitimate, and here tiny) isotherm loading
+        # correction that False must not; both stay close to the unscaled
+        # reference, but False must track it far more tightly.
+        rel = 1e-6 if not include_loading else 2e-3
+        assert float(extract["Nd"]) == pytest.approx(float(ref_extract), rel=rel)
+        assert float(raffinate["Nd"]) == pytest.approx(float(ref_raffinate), rel=rel)
+
+    def test_false_path_no_longer_falls_as_the_solvent_loads(self):
+        """The pre-fix symptom, directly: extract used to shrink with y_in.
+
+        With the fix, D_eff = D regardless of y_in, so the extract this
+        pinched (E < 1) section reports should barely move as the solvent
+        goes from clean to heavily loaded -- not collapse toward zero.
+        """
+        _, extract_clean, _, _ = self._run(False, 0.0)
+        _, extract_loaded, _, _ = self._run(False, 2.0)
+        clean = float(extract_clean["Nd"])
+        loaded = float(extract_loaded["Nd"])
+        assert loaded == pytest.approx(clean, rel=5e-3)
