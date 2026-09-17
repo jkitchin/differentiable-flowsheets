@@ -20,6 +20,7 @@ from difflow.numerics import safe_divide, safe_log
 from difflow.params_mixin import ParamsMixin
 from difflow.streams import Stream, make_stream, get_flows
 from difflow_ree.equilibrium.distribution import REEDistribution
+from difflow_ree.units.kremser import kremser_two_inlet
 
 
 @dataclass(repr=False)
@@ -191,10 +192,12 @@ class REEStripper:
             F_org_in = jnp.asarray(org_flows.get(elem, 0.0))
             F_strip_in = jnp.asarray(strip_flows.get(elem, 0.0))
 
-            # Stripping factor S = F_strip / (D * F_org): S > 1 favors stripping
-            S = safe_divide(F_strip, D * F_org)  # Stripping factor
-
-            # Kremser equation - fraction remaining in organic
+            # Stripping factor S = F_strip / (D * F_org): S > 1 favors
+            # stripping. Reported as a diagnostic below; the actual outlet
+            # flows go through the two-inlet Kremser solve (#284), which
+            # handles REE arriving on the strip acid -- from a recycle --
+            # rather than lumping it in with the organic-borne REE.
+            S = safe_divide(F_strip, D * F_org)
             S_Np1 = jnp.power(S, n_stages + 1)
 
             frac_in_org = jnp.where(
@@ -207,12 +210,12 @@ class REEStripper:
             # S >> 1 means frac_in_org → 0
             frac_in_org = jnp.clip(frac_in_org, 0.0, 1.0)
 
-            F_total = F_org_in + F_strip_in
-            F_org_out = F_total * frac_in_org
-            F_strip_out = F_total * (1 - frac_in_org)
+            F_strip_out, F_org_out = kremser_two_inlet(
+                D, F_strip, F_org, F_strip_in, F_org_in, n_stages
+            )
 
-            barren_org_flows[elem] = jnp.maximum(F_org_out, 0.0)
-            product_flows[elem] = jnp.maximum(F_strip_out, 0.0)
+            barren_org_flows[elem] = F_org_out
+            product_flows[elem] = F_strip_out
 
             strip_efficiency[elem] = {
                 "D": D,

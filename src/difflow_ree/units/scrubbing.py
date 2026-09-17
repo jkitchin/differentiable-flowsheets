@@ -21,6 +21,7 @@ from difflow.numerics import safe_divide
 from difflow.params_mixin import ParamsMixin
 from difflow.streams import Stream, make_stream, get_flows
 from difflow_ree.equilibrium.distribution import REEDistribution
+from difflow_ree.units.kremser import kremser_two_inlet
 from difflow_ree.units.stripping import acid_consumption
 
 
@@ -187,10 +188,12 @@ class REEScrubber:
             F_org_in = jnp.asarray(org_flows.get(elem, 0.0))
             F_scrub_in = jnp.asarray(scrub_flows.get(elem, 0.0))
 
-            # Scrub factor S = F_scrub / (D * F_org): S > 1 favors scrubbing
+            # Scrub factor S = F_scrub / (D * F_org): S > 1 favors scrubbing.
+            # Reported as a diagnostic below; the actual outlet flows go
+            # through the two-inlet Kremser solve (#284), which handles REE
+            # arriving on the scrub solution -- from a refluxed strip liquor
+            # -- rather than lumping it in with the organic-borne REE.
             S = safe_divide(F_scrub, D * F_org)
-
-            # Kremser equation for fraction remaining in organic
             S_Np1 = jnp.power(S, n_stages + 1)
             frac_in_org = jnp.where(
                 jnp.abs(S - 1.0) < 1e-6,
@@ -199,12 +202,12 @@ class REEScrubber:
             )
             frac_in_org = jnp.clip(frac_in_org, 0.0, 1.0)
 
-            F_total = F_org_in + F_scrub_in
-            F_org_out = F_total * frac_in_org
-            F_scrub_out = F_total * (1 - frac_in_org)
+            F_scrub_out, F_org_out = kremser_two_inlet(
+                D, F_scrub, F_org, F_scrub_in, F_org_in, n_stages
+            )
 
-            scrubbed_org_flows[elem] = jnp.maximum(F_org_out, 0.0)
-            scrub_liquor_flows[elem] = jnp.maximum(F_scrub_out, 0.0)
+            scrubbed_org_flows[elem] = F_org_out
+            scrub_liquor_flows[elem] = F_scrub_out
 
             # Track scrubbing efficiency (how much was removed)
             scrub_efficiency[elem] = {

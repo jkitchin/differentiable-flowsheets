@@ -17,6 +17,7 @@ from difflow_ree.equilibrium.distribution import REEDistribution
 from difflow_ree.equilibrium.loading import LoadingIsotherm, get_loading_isotherm
 from difflow_ree.equilibrium.speciation import REESpeciation
 from difflow_ree.kinetics.extraction_kinetics import approach_to_equilibrium
+from difflow_ree.units.kremser import kremser_two_inlet
 
 
 # =============================================================================
@@ -764,7 +765,7 @@ class REEExtractor:
             # extractant left free to bind more REE). theta_solvent is the
             # stage-level dimensionless loading of the entering solvent (#189).
             if self._isotherm is not None:
-                E = E * free_fraction_in
+                loading_factor = free_fraction_in
             else:
                 # Simple loading correction without isotherm:
                 # Reduce E based on ratio of existing loading to feed. Guarded
@@ -776,9 +777,14 @@ class REEExtractor:
                 loading_ratio = jnp.where(
                     denom > 0.0, F_solvent / safe_denom, 0.0
                 )
-                E = E * (1.0 - loading_ratio)
+                loading_factor = 1.0 - loading_ratio
+            E = E * loading_factor
 
-            # Kremser equation for counter-current extraction
+            # Kremser equation for counter-current extraction. Reported as a
+            # diagnostic below; the actual outlet flows go through the
+            # two-inlet Kremser solve (#284), which lets REE entering on the
+            # solvent -- e.g. from a recycled loaded solvent -- return to the
+            # aqueous instead of being passed straight through to the extract.
             E_Np1 = jnp.power(E, n_stages + 1)
 
             frac_remaining = jnp.where(
@@ -788,11 +794,13 @@ class REEExtractor:
             )
             frac_remaining = jnp.clip(frac_remaining, 0.0, 1.0)
 
-            F_raffinate = F_in * frac_remaining
-            F_extract = F_solvent + F_in * (1.0 - frac_remaining)
+            D_eff = D * loading_factor
+            F_raffinate, F_extract = kremser_two_inlet(
+                D_eff, F_aq, F_org, F_in, F_solvent, n_stages
+            )
 
-            raffinate_flows[elem] = jnp.maximum(F_raffinate, 0.0)
-            extract_flows[elem] = jnp.maximum(F_extract, 0.0)
+            raffinate_flows[elem] = F_raffinate
+            extract_flows[elem] = F_extract
 
             stage_profiles[elem] = {
                 "D": D,
