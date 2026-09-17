@@ -538,14 +538,21 @@ def test_imperfect_stripping_degrades_raffinate_purity():
     # the capacity limiter the closed-loop pair read 0.94137 / 6.37. What
     # is worth noticing is how little the *shape* of the result moved
     # across a change of reagent, of element pair and of operating point:
-    # a nearly pure raffinate open-loop, five points of purity lost when
-    # the loop is closed, and an order of magnitude more of the extracted
-    # element leaking past. That is the claim of #202, and it is a
-    # property of running a real circuit near its capacity rather than of
-    # any one set of coefficients.
+    # a nearly pure raffinate open-loop, purity lost when the loop is
+    # closed, and the extracted element leaking through in proportion.
+    # That is the claim of #202, and it is a property of running a real
+    # circuit near its capacity rather than of any one set of coefficients.
+    #
+    # The closed-loop pair moved again with #284: the old extractor passed
+    # REE arriving on the recycled solvent straight through to the extract,
+    # which could never send any of it back to the raffinate. The two-inlet
+    # Kremser solve lets it, which is more contamination reaching the
+    # raffinate, not less -- purity drops further and the impurity ratio
+    # grows. open_purity is unmoved because the open loop feeds the
+    # extractor clean solvent, the case the fix reduces to exactly.
     assert open_purity == pytest.approx(0.99276, abs=2e-4)
-    assert closed_purity == pytest.approx(0.94347, abs=2e-4)
-    assert closed_impurity / open_impurity == pytest.approx(8.57, rel=0.02)
+    assert closed_purity == pytest.approx(0.90547, abs=2e-4)
+    assert closed_impurity / open_impurity == pytest.approx(14.88, rel=0.02)
 
 
 def test_the_degradation_comes_from_the_residue_not_from_the_loop():
