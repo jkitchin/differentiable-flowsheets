@@ -18,6 +18,7 @@ from difflow_ree.units.extraction import (
 from difflow_ree.units.scrubbing import (
     REEScrubber,
     ScrubberParams,
+    ScrubTypeDeprecationWarning,
 )
 from difflow_ree.units.stripping import (
     REEStripper,
@@ -47,6 +48,7 @@ __all__ = [
     # Scrubbing
     "REEScrubber",
     "ScrubberParams",
+    "ScrubTypeDeprecationWarning",
     # Stripping
     "REEStripper",
     "StripperParams",

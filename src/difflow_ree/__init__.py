@@ -161,6 +161,7 @@ from difflow_ree.units import (
     # Scrubbing
     REEScrubber,
     ScrubberParams,
+    ScrubTypeDeprecationWarning,
     # Stripping
     REEStripper,
     StripperParams,
@@ -611,6 +612,7 @@ __all__ = [
     "MixerSettlerParams",
     "REEScrubber",
     "ScrubberParams",
+    "ScrubTypeDeprecationWarning",
     "REEStripper",
     "StripperParams",
     "OxalatePrecipitator",

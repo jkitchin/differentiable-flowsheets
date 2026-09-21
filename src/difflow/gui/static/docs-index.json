@@ -1,5 +1,5 @@
 {
- "n_sections": 891,
+ "n_sections": 893,
  "sections": [
   {
    "anchor": "convergence-and-initialization",
@@ -7070,7 +7070,23 @@
    "targets": [
     "reescrubber"
    ],
-   "text": "**Description**: Multi-stage scrubbing section for removing impurities from loaded organic.\n\nScrubbing uses lower pH to selectively strip lighter REE back to aqueous phase while retaining heavier REE in the organic.\n\n```python\nfrom difflow_ree import REEScrubber, ScrubberParams\n\nparams = ScrubberParams(\n    n_stages=5,\n    extractant=\"D2EHPA\",\n    elements=(\"La\", \"Ce\", \"Nd\", \"Dy\"),\n    target_elements=(\"Nd\", \"Dy\"),  # Keep these in organic\n    pH=0.5,  # low enough to reject La, Ce, and inside D2EHPA's [0, 2];\n             # omit it and the record's own scrubbing default is used\n)\nscrubber = REEScrubber(params)\n```\n\n(reestripper)="
+   "text": "**Description**: Multi-stage scrubbing section for removing impurities from loaded organic.\n\nScrubbing uses lower pH to selectively strip lighter REE back to aqueous phase while retaining heavier REE in the organic.\n\n```python\nfrom difflow_ree import REEScrubber, ScrubberParams\n\nparams = ScrubberParams(\n    n_stages=5,\n    extractant=\"D2EHPA\",\n    elements=(\"La\", \"Ce\", \"Nd\", \"Dy\"),\n    target_elements=(\"Nd\", \"Dy\"),  # labels the diagnostics; see below\n    pH=0.5,  # low enough to reject La, Ce, and inside D2EHPA's [0, 2];\n             # omit it and the record's own scrubbing default is used\n)\nscrubber = REEScrubber(params)\n```"
+  },
+  {
+   "anchor": "targetelements-is-a-reporting-label-288",
+   "heading": "`target_elements` is a reporting label (#288)",
+   "path": "Rare Earth Element (REE) Unit Operations > Unit Operations > REEScrubber > `target_elements` is a reporting label (#288)",
+   "source": "unit-operations-ree.md",
+   "targets": [],
+   "text": "It does **not** steer the calculation. Every element in `elements` is scrubbed\nthrough the same two-inlet Kremser solve on its own `D`, so changing\n`target_elements` changes `info[\"target_retained\"]`, `info[\"impurity_removed\"]`\nand the `\"is_target\"` flags --- and leaves both outlet streams bit-identical.\nWhat decides which elements stay in the organic is `pH` (through each element's\n`D`), `n_stages` and the scrub/organic phase ratio.\n\nIt is therefore optional, and defaults to no labelling. What it must not be is\nwrong: a name that is not in `elements` labels nothing, which reads like \"the\nscrub retained none of the target\", so it raises instead.\n\n```python\nScrubberParams(n_stages=5, extractant=\"D2EHPA\",\n               elements=(\"La\", \"Nd\"), target_elements=(\"Y\",))\n# ValueError: target_elements ['Y'] are not in elements ('La', 'Nd')\n```\n\n`ExtractScrubStripParams.target_elements` is the same kind of label --- it\nselects which elements `target_recovery`, `target_purity` and\n`impurity_rejection` are reported over --- and is checked the same way."
+  },
+  {
+   "anchor": "scrubtype-is-deprecated-288",
+   "heading": "`scrub_type` is deprecated (#288)",
+   "path": "Rare Earth Element (REE) Unit Operations > Unit Operations > REEScrubber > `scrub_type` is deprecated (#288)",
+   "source": "unit-operations-ree.md",
+   "targets": [],
+   "text": "The field was declared `Literal[\"acid\", \"ree\", \"water\"]` and the class\nadvertised a \"scrub-type-dependent boundary condition\", but `__call__` never\nread it: all three values gave identical outlets. There is nothing left for it\nto select, because everything it claimed to switch on is already carried by\narguments the scrubber does read:\n\n- `\"acid\"` against `\"water\"` is the scrub solution's acid strength, which is\n  `pH` (and `nitrate_conc` for a solvating extractant).\n- `\"ree\"` --- a scrub carrying target REE, as in a strip liquor refluxed to the\n  scrub end --- is the REE content of the `scrub_solution` stream you pass. The\n  two-inlet Kremser solve takes that as a boundary condition through\n  `F_scrub_in` (#284), so it changes the answer where a mode flag never did.\n\nSetting it raises `ScrubTypeDeprecationWarning`; drop the argument.\n\n```{note}\nThe outlets are rebuilt from `{extractant, diluent} | elements` plus the\naqueous carrier, so `elements` must name **every** REE present in either\ninlet. An untracked REE --- or any other species carried along, a second\nextractant such as TBP, a modifier, the strip acid --- is dropped from both\noutlets and the section does not conserve it. `info[\"dropped_species\"]` lists\nwhat was left behind.\n```\n\n(reestripper)="
   },
   {
    "anchor": "reestripper",
