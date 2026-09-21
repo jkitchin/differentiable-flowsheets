@@ -42,7 +42,13 @@ class ExtractScrubStripParams(ParamsMixin):
     Attributes:
         extractant: Extractant name
         elements: All REE elements to track
-        target_elements: Elements to recover in product
+        target_elements: Elements counted as the product. REPORTING ONLY
+            (#288): the three sections are driven by their pH values, stage
+            counts and phase ratios, and every element in ``elements`` goes
+            through the same equations whatever is listed here. It selects
+            which elements ``target_recovery``, ``target_purity`` and
+            ``impurity_rejection`` are computed over. Must be a subset of
+            ``elements``.
         diluent: Organic diluent name (e.g., "kerosene", "n-dodecane")
         n_extraction_stages: Number of extraction stages
         n_scrubbing_stages: Number of scrubbing stages
@@ -73,7 +79,7 @@ class ExtractScrubStripParams(ParamsMixin):
     """
     extractant: str
     elements: tuple[str, ...]
-    target_elements: tuple[str, ...]  # Elements to keep
+    target_elements: tuple[str, ...] = ()  # reporting label only, see #288
     diluent: str = "kerosene"
     n_extraction_stages: int = 10
     n_scrubbing_stages: int = 5
@@ -96,8 +102,26 @@ class ExtractScrubStripParams(ParamsMixin):
     capacity_sharpness: int = 8  # see REEExtractorParams (#193)
 
     def __post_init__(self):
-        """Resolve the pH defaults the extractant record owns (#270)."""
+        """Resolve the record's pH defaults (#270); check the labels (#288)."""
         from difflow_ree.database import default_pH
+
+        if isinstance(self.target_elements, str):
+            raise TypeError(
+                "ExtractScrubStripParams.target_elements must be a tuple of "
+                f"element names, not the string {self.target_elements!r}; "
+                f'write ("{self.target_elements}",)'
+            )
+        self.target_elements = tuple(self.target_elements)
+        unknown = [e for e in self.target_elements if e not in tuple(self.elements)]
+        if unknown:
+            raise ValueError(
+                f"ExtractScrubStripParams.target_elements {unknown} are not "
+                f"in elements {tuple(self.elements)}. target_elements only "
+                "selects which elements the recovery and purity metrics are "
+                "reported over (#288), so an untracked name would silently "
+                "contribute nothing; add them to elements or drop them from "
+                "target_elements."
+            )
 
         if self.extraction_pH is None:
             self.extraction_pH = default_pH(self.extractant, "extraction")

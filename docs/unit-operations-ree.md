@@ -2005,11 +2005,60 @@ params = ScrubberParams(
     n_stages=5,
     extractant="D2EHPA",
     elements=("La", "Ce", "Nd", "Dy"),
-    target_elements=("Nd", "Dy"),  # Keep these in organic
+    target_elements=("Nd", "Dy"),  # labels the diagnostics; see below
     pH=0.5,  # low enough to reject La, Ce, and inside D2EHPA's [0, 2];
              # omit it and the record's own scrubbing default is used
 )
 scrubber = REEScrubber(params)
+```
+
+#### `target_elements` is a reporting label (#288)
+
+It does **not** steer the calculation. Every element in `elements` is scrubbed
+through the same two-inlet Kremser solve on its own `D`, so changing
+`target_elements` changes `info["target_retained"]`, `info["impurity_removed"]`
+and the `"is_target"` flags --- and leaves both outlet streams bit-identical.
+What decides which elements stay in the organic is `pH` (through each element's
+`D`), `n_stages` and the scrub/organic phase ratio.
+
+It is therefore optional, and defaults to no labelling. What it must not be is
+wrong: a name that is not in `elements` labels nothing, which reads like "the
+scrub retained none of the target", so it raises instead.
+
+```python
+ScrubberParams(n_stages=5, extractant="D2EHPA",
+               elements=("La", "Nd"), target_elements=("Y",))
+# ValueError: target_elements ['Y'] are not in elements ('La', 'Nd')
+```
+
+`ExtractScrubStripParams.target_elements` is the same kind of label --- it
+selects which elements `target_recovery`, `target_purity` and
+`impurity_rejection` are reported over --- and is checked the same way.
+
+#### `scrub_type` is deprecated (#288)
+
+The field was declared `Literal["acid", "ree", "water"]` and the class
+advertised a "scrub-type-dependent boundary condition", but `__call__` never
+read it: all three values gave identical outlets. There is nothing left for it
+to select, because everything it claimed to switch on is already carried by
+arguments the scrubber does read:
+
+- `"acid"` against `"water"` is the scrub solution's acid strength, which is
+  `pH` (and `nitrate_conc` for a solvating extractant).
+- `"ree"` --- a scrub carrying target REE, as in a strip liquor refluxed to the
+  scrub end --- is the REE content of the `scrub_solution` stream you pass. The
+  two-inlet Kremser solve takes that as a boundary condition through
+  `F_scrub_in` (#284), so it changes the answer where a mode flag never did.
+
+Setting it raises `ScrubTypeDeprecationWarning`; drop the argument.
+
+```{note}
+The outlets are rebuilt from `{extractant, diluent} | elements` plus the
+aqueous carrier, so `elements` must name **every** REE present in either
+inlet. An untracked REE --- or any other species carried along, a second
+extractant such as TBP, a modifier, the strip acid --- is dropped from both
+outlets and the section does not conserve it. `info["dropped_species"]` lists
+what was left behind.
 ```
 
 (reestripper)=

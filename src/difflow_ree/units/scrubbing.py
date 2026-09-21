@@ -11,6 +11,7 @@ The scrub solution is typically:
 All operations are fully differentiable using JAX.
 """
 
+import warnings
 from dataclasses import dataclass
 from typing import Literal
 
@@ -25,6 +26,28 @@ from difflow_ree.units.kremser import kremser_two_inlet
 from difflow_ree.units.stripping import acid_consumption
 
 
+class ScrubTypeDeprecationWarning(UserWarning):
+    """``ScrubberParams.scrub_type`` is deprecated and never had an effect (#288).
+
+    The field was declared as ``Literal["acid", "ree", "water"]`` and the
+    class documented a "scrub-type-dependent boundary condition", but
+    ``REEScrubber.__call__`` never read it: all three values gave bit-identical
+    outlet streams. There is nothing left for it to select, because everything
+    it claimed to switch on is already carried by arguments the scrubber does
+    read:
+
+    * ``"acid"`` vs. ``"water"`` is the scrub solution's acid strength, which
+      is ``pH`` (and, for a solvating extractant, ``nitrate_conc``).
+    * ``"ree"`` -- a scrub solution that carries target REE, as in a strip
+      liquor refluxed to the scrub end -- is the REE content of the
+      ``scrub_solution`` stream, which the two-inlet Kremser solve takes as a
+      boundary condition through ``F_scrub_in`` (#284).
+
+    So a mode flag could only ever contradict the stream it was describing.
+    Setting it raises this warning; the field will be removed.
+    """
+
+
 @dataclass(repr=False)
 class ScrubberParams(ParamsMixin):
     """Parameters for REE scrubbing section.
@@ -33,11 +56,23 @@ class ScrubberParams(ParamsMixin):
         n_stages: Number of scrubbing stages
         extractant: Extractant name
         elements: REE elements to track
-        target_elements: Elements to retain in organic (others scrubbed)
+        target_elements: Elements the scrub is meant to retain in the organic.
+            REPORTING ONLY (#288): it labels the diagnostics and does not
+            enter the calculation. Every element in ``elements`` is scrubbed
+            by its own D through the same two-inlet Kremser solve, so
+            changing this changes ``info["target_retained"]`` /
+            ``info["impurity_removed"]`` / the ``"is_target"`` flags and
+            nothing else -- the outlet streams are identical. Optional;
+            defaults to no labelling. Must be a subset of ``elements``,
+            which is checked rather than silently dropping a name that is
+            not tracked. What actually decides which elements stay in the
+            organic is ``pH`` (and ``n_stages`` and the phase ratio).
         diluent: Organic diluent name (e.g., "kerosene", "n-dodecane")
         pH: Scrub solution pH (lower pH strips more)
         extractant_conc: Extractant concentration (M)
-        scrub_type: Type of scrubbing (acid, REE, water)
+        scrub_type: DEPRECATED and ignored (#288). It never entered the
+            calculation and there is nothing for it to select; see
+            :class:`ScrubTypeDeprecationWarning`. Setting it warns.
         nitrate_conc: Aqueous nitrate concentration (M), required for solvating
             extractants such as TBP whose D is nitrate- rather than pH-driven
             (#195)
@@ -55,7 +90,9 @@ class ScrubberParams(ParamsMixin):
     n_stages: int | float | Array
     extractant: str
     elements: tuple[str, ...]
-    target_elements: tuple[str, ...]  # Elements to KEEP in organic
+    # Reporting label only -- see the Attributes entry above and #288. Kept
+    # in its original positional slot so existing positional calls still work.
+    target_elements: tuple[str, ...] = ()
     diluent: str = "kerosene"
     # (#270) None means "the extractant record's own default scrubbing pH", a
     # quarter of the way up its fitted validity window -- lower than the
@@ -63,7 +100,7 @@ class ScrubberParams(ParamsMixin):
     # record rather than pinned to a literal that only suited one of them.
     pH: float | Array | None = None
     extractant_conc: float = 0.5
-    scrub_type: Literal["acid", "ree", "water"] = "acid"
+    scrub_type: Literal["acid", "ree", "water"] | None = None  # deprecated, #288
     nitrate_conc: float | None = None  # see #195
     mechanism: str | None = None  # see #195
     # Per-element log10(D) coefficient overrides, possibly traced; passed to
@@ -71,11 +108,53 @@ class ScrubberParams(ParamsMixin):
     coefficient_overrides: dict | None = None
 
     def __post_init__(self):
-        """Resolve a pH default that the extractant record owns (#270)."""
+        """Resolve the record's pH default (#270); check the labels (#288)."""
         if self.pH is None:
             from difflow_ree.database import default_pH
 
             self.pH = default_pH(self.extractant, "scrubbing")
+
+        # (#288) target_elements is a reporting label, so a name that is not
+        # tracked cannot show up as a wrong number -- it shows up as nothing
+        # at all, an empty target_retained that reads like "no target was
+        # retained". Reject it here instead: the student who hit this had
+        # asked which elements go in target_elements, and got silence either
+        # way.
+        if isinstance(self.target_elements, str):
+            raise TypeError(
+                "ScrubberParams.target_elements must be a tuple of element "
+                f"names, not the string {self.target_elements!r}; write "
+                f'("{self.target_elements}",)'
+            )
+        self.target_elements = tuple(self.target_elements)
+        unknown = [e for e in self.target_elements if e not in tuple(self.elements)]
+        if unknown:
+            raise ValueError(
+                f"ScrubberParams.target_elements {unknown} are not in "
+                f"elements {tuple(self.elements)}. target_elements only "
+                "labels the scrubbing diagnostics (#288), so an untracked "
+                "name would silently label nothing; add them to elements or "
+                "drop them from target_elements."
+            )
+
+        if self.scrub_type is not None:
+            allowed = ("acid", "ree", "water")
+            if self.scrub_type not in allowed:
+                raise ValueError(
+                    f"ScrubberParams.scrub_type {self.scrub_type!r} is not one "
+                    f"of {allowed}."
+                )
+            warnings.warn(
+                "ScrubberParams.scrub_type is deprecated and ignored (#288): "
+                "it never entered the calculation, and all three values give "
+                "identical outlets. Set the scrub's acid strength with pH "
+                "(and nitrate_conc for a solvating extractant), and pass a "
+                "REE-bearing scrub_solution stream for a reflux scrub -- the "
+                "two-inlet Kremser solve takes that as a boundary condition "
+                "(#284). Remove the argument.",
+                ScrubTypeDeprecationWarning,
+                stacklevel=3,
+            )
 
 
 class REEScrubber:
@@ -88,12 +167,25 @@ class REEScrubber:
     - Extract at pH 3-4: All REE go to organic
     - Scrub at pH 2: Light REE return to aqueous, heavy REE stay
 
+    What sets the split is ``pH`` (through each element's own D), ``n_stages``
+    and the scrub/organic phase ratio. ``target_elements`` labels the
+    diagnostics and changes no flow (#288).
+
+    Note:
+        The outlets are rebuilt from ``{extractant, diluent} | elements``
+        plus the aqueous carrier, so ``elements`` must name every REE present
+        in either inlet: an REE that is not tracked is dropped from both
+        outlets and the section does not conserve it. The same is true of any
+        other species carried along (a second extractant such as TBP, a
+        modifier, the strip acid). ``info["dropped_species"]`` reports what
+        was left behind.
+
     Example:
         >>> params = ScrubberParams(
         ...     n_stages=5,
         ...     extractant="D2EHPA",
         ...     elements=("La", "Ce", "Nd", "Dy"),
-        ...     target_elements=("Nd", "Dy"),  # Keep these
+        ...     target_elements=("Nd", "Dy"),  # labels the diagnostics only
         ...     pH=2.0,
         ... )
         >>> scrubber = REEScrubber(params)
@@ -107,7 +199,8 @@ class REEScrubber:
     ]
     assumptions = [
         "Counter-current equilibrium stages with constant phase flows.",
-        "Scrub aqueous is an acid / REE / water solution with user-selected type.",
+        "The scrub aqueous is described by its pH and by its own REE content; "
+        "there is no separate scrub-type mode (#288).",
         "Separation factor between target and non-target REE is pH-dominated.",
     ]
     references = [
@@ -120,7 +213,12 @@ class REEScrubber:
         "extractant_conc": "mol/L",
         "nitrate_conc": "mol/L",
     }
-    numerical_method = "Kremser applied to reverse extraction with scrub-type-dependent boundary condition."
+    numerical_method = (
+        "Two-inlet Kremser (kremser_two_inlet) applied to reverse extraction: "
+        "REE arriving on the scrub solution is a boundary condition of the "
+        "solve, so a refluxed strip liquor is handled by the stream that is "
+        "passed rather than by a mode switch (#284, #288)."
+    )
 
     def __init__(self, params: ScrubberParams):
         """Initialize scrubber.
@@ -159,7 +257,10 @@ class REEScrubber:
         Returns:
             scrub_liquor: Aqueous outlet (contains scrubbed impurities)
             scrubbed_organic: Organic outlet (purified, target REE retained)
-            info: Scrubbing diagnostics
+            info: Scrubbing diagnostics, including ``dropped_species``: inlet
+                species that appear in neither outlet because they are
+                neither the extractant, the diluent, the aqueous carrier nor
+                one of ``elements`` (#288).
         """
         p = self.params
         pH = pH if pH is not None else p.pH
@@ -247,6 +348,15 @@ class REEScrubber:
             else:
                 impurity_removed[elem] = jnp.asarray(eff["fraction_scrubbed"])
 
+        # (#288) Everything that is neither a tracked element nor a carrier
+        # is dropped when the outlets are rebuilt above, and mass is not
+        # conserved across the section for it. Report it rather than leaving
+        # the user to notice the shortfall downstream.
+        kept = set(scrub_liquor_flows) | set(scrubbed_org_flows)
+        dropped_species = tuple(
+            sorted((set(org_flows) | set(scrub_flows)) - kept)
+        )
+
         info = {
             "n_stages": n_stages,
             "pH": pH,
@@ -261,6 +371,8 @@ class REEScrubber:
             "h_plus_supplied": h_plus_supplied,
             "h_plus_remaining": h_plus_remaining,
             "pH_final": pH_final,
+            # Inlet species that appear in neither outlet (#288).
+            "dropped_species": dropped_species,
         }
 
         return scrub_liquor, scrubbed_organic, info
