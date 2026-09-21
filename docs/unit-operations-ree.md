@@ -459,7 +459,7 @@ element and the digitized data live in the ree-database record
 `mason1976extraction`.
 
 The exception, tagged rather than papered over, is the
-`temperature_coefficients` block on the three acidic records: every source
+`temperature_coefficients` block on PC88A and Cyanex272 (D2EHPA's was sourced from X95's 10--50 °C table in #283, which flipped its sign): every source
 behind the #270 refit is isothermal, so it carries no information about `dH`
 and those entries stay `HAND_TUNED`. `python -m difflow_ree.provenance --cls
 HAND_TUNED` lists them.

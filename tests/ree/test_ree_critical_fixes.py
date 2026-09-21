@@ -180,7 +180,11 @@ class TestBug107_TemperatureCorrection:
         log_D_new = float(jnp.log10(D_new))
         delta_log_D = log_D_new - log_D_ref
 
-        d_coeff = -1800.0
+        # read from the record: X95's measured slope since #283 (it was a
+        # hand-tuned -1800 with the wrong sign before)
+        from difflow_ree.database import get_extractant
+        d_coeff = get_extractant("D2EHPA").temperature_coefficients["Nd"]
+        assert d_coeff > 0  # exothermic: D falls with T
         expected_delta = d_coeff * (1.0 / T_new - 1.0 / T_ref)
 
         attenuated_delta = float(

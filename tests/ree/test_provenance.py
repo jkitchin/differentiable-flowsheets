@@ -179,16 +179,18 @@ class TestTheClaimsTheDataFilesMake:
         Every source behind the three refits is isothermal -- X95 and PPH63
         are room-temperature determinations, T21 is 298.0 +/- 0.1 K, ZL93 is
         25 +/- 1 C -- so none of them carries a heat of extraction. Thirty
-        numbers, ten per record, and nothing else in the file. D at 298 K is
-        sourced for all five reagents; D at any other temperature is sourced
-        for two.
+        numbers, ten per record, and nothing else in the file -- twenty since
+        #283 retired D2EHPA's against X95's 10-50 C table (and flipped their
+        sign). D at 298 K is sourced for all five reagents; D at any other
+        temperature for three.
         """
         hand_tuned = [p for p in audit("extractants") if p.cls == "HAND_TUNED"]
-        assert len(hand_tuned) == 30
+        # 20 since #283 sourced D2EHPA's from X95 (Q1 Table 2.15)
+        assert len(hand_tuned) == 20
         for p in hand_tuned:
             _, ex, block, _ = p.path.split(".")
             assert block == "temperature_coefficients", p.path
-            assert ex in ("D2EHPA", "PC88A", "Cyanex272"), p.path
+            assert ex in ("PC88A", "Cyanex272"), p.path
             assert "not retirable by it" in p.note, p.path
 
     def test_every_concentration_exponent_names_a_source(self):

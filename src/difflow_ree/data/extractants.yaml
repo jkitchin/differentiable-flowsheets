@@ -115,8 +115,9 @@
 # This file contains coefficient blocks of two DIFFERENT provenances. They
 # must not be mistaken for one another:
 #
-#   (1) HAND-TUNED, NO SOURCE  -- the `temperature_coefficients` of D2EHPA,
-#       PC88A and Cyanex272. That is now the whole list.
+#   (1) HAND-TUNED, NO SOURCE  -- the `temperature_coefficients` of PC88A
+#       and Cyanex272. That is now the whole list (D2EHPA's were sourced
+#       from X95 in #283, and their sign flipped).
 #       They were chosen to look plausible and no fit, dataset or table is
 #       recorded for any of them anywhere in this repository. They are
 #       illustrative, not measured. A D computed at 298.15 K from any acidic
@@ -423,33 +424,31 @@ extractants:
 
     # Temperature correction: add d*(1/T - 1/298.15) to log(D)
     #
-    # STILL HAND_TUNED, and deliberately left alone by the #270 refit. Every
-    # source behind the pH block above is ISOTHERMAL at 25 C, so none of them
-    # can retire these. A D computed at 298 K from this record is now sourced;
-    # one computed at 333 K is not.
-    #
-    # OPEN QUESTION (unresolved, numbers deliberately unchanged). The comment
-    # line that used to sit here said "extraction is exothermic, D decreases
-    # with T", but under log10 D = ... + d*(1/T - 1/Tref) with
-    # d = -dH/(2.303 R), a NEGATIVE d is an ENDOTHERMIC dH -- these values
-    # imply dH = +29 to +46 kJ/mol, i.e. D *rising* with T, the opposite of
-    # the sentence. That may or may not be wrong: acidic organophosphorus REE
-    # extraction is reported both ways depending on system, and unlike TBP
-    # (see the TBP record, where the sign WAS refuted and fixed) no data was
-    # retrieved here either way. So the sign is left as-is and flagged rather
-    # than silently flipped. This needs its own literature pass before any of
-    # these numbers move.
-    temperature_coefficients:  # d values in K; sign unverified, see above
-      La: -1500
-      Ce: -1600
-      Pr: -1700
-      Nd: -1800
-      Sm: -2000
-      Eu: -2100
-      Gd: -2200
-      Tb: -2300
-      Dy: -2400
-      Y:  -2200
+    # SOURCED since #283, and the SIGN IS FLIPPED. Until then these were
+    # hand-tuned at -1500 to -2400 K, which under d = -dH/(2.303 R) is an
+    # ENDOTHERMIC extraction (dH +29 to +46 kJ/mol, D rising with T) -- the
+    # open question this block used to carry. X95, as Q1 Table 2.15 (p. 211),
+    # measures D at 10, 25, 35 and 50 C for La, Ce, Pr, Eu and Gd, and D
+    # FALLS with T for every one of them; Q1's text and Z1 Sec. 4.2.2.6 both
+    # call HDEHP extraction exothermic. A straight line of log D on 1/T
+    # through the four temperatures (rms <= 0.012) gives, in K:
+    #     La 931 (se 2)   Ce 647 (se 55)   Pr 670 (se 21)
+    #     Eu 1033 (se 6)  Gd 1080 (se 8)       i.e. dH = -12 to -21 kJ/mol
+    # Nd and Sm are INTERPOLATED linearly in Z between Pr and Eu. Tb, Dy and
+    # Y are NOT MEASURED and are held at Gd's value -- an extrapolation,
+    # tagged as one. Q1 does not print the table's extractant charge or
+    # acidity; a van't Hoff slope is read as independent of them.
+    temperature_coefficients:  # d values in K; X95 via Q1 Table 2.15
+      La: 931
+      Ce: 647
+      Pr: 670
+      Nd: 761      # interpolated, Pr-Eu
+      Sm: 942      # interpolated, Pr-Eu
+      Eu: 1033
+      Gd: 1080
+      Tb: 1080     # not measured: held at Gd
+      Dy: 1080     # not measured: held at Gd
+      Y:  1080     # not measured: held at Gd
 
     # THE SOURCED WINDOW (#270). Was [1.0, 5.0], HAND_TUNED, and the upper
     # bound was chemical nonsense for this reagent: at pH 5 the refitted block
@@ -482,7 +481,7 @@ extractants:
     # the Langmuir constants are taken. Was 3.0 before #270, outside the
     # window entirely.
     reference_pH: 0.82
-    valid_temp_range: [283, 333]  # K
+    valid_temp_range: [283, 323]  # K, the span of Q1 Table 2.15 (#283)
     # DIMER BASIS, stated explicitly (#270): 0.5 mol/L as (HA)2, which is
     # 1.0 mol/L nominal D2EHPA -- exactly the charge X95 used. `stoichiometry.
     # basis` above is what makes this the dimer number, and
@@ -1839,11 +1838,11 @@ modifiers:
 # THE ONE THING TO KNOW: every pH and nitrate coefficient in this file is now
 # traceable to a named table. #270 finished that. What is NOT traceable, and
 # is tagged HAND_TUNED so that a query rather than a careful reading is enough
-# to notice, is the `temperature_coefficients` block of D2EHPA, PC88A and
-# Cyanex272 -- thirty numbers, invented to make demos look right, and not
-# retirable by any of the sources that refitted the pH blocks, because every
-# one of those sources is isothermal. So: D at 298 K is sourced for all five
-# reagents; D at any other temperature is sourced for two.
+# to notice, is the `temperature_coefficients` block of PC88A and Cyanex272 --
+# twenty numbers, invented to make demos look right, and not retirable by the
+# isothermal sources that refitted their pH blocks. So: D at 298 K is sourced
+# for all five reagents; D at any other temperature is sourced for three
+# (D2EHPA's since #283, from X95's 10-50 C table).
 #
 # The remaining ESTIMATED fields are the five `cost_usd_kg` and four
 # `cost_usd_L` -- order-of-magnitude figures for the economics examples, and
@@ -1926,15 +1925,22 @@ provenance:
     # blocks, because every one of those sources is ISOTHERMAL. Retiring
     # them needs a variable-temperature dataset for each reagent.
     # ======================================================================
-    - {pattern: "extractants.D2EHPA.temperature_coefficients.*",    source: HAND_TUNED,
-       note: "NOT retired by the #270 refit and not retirable by it. X95 and
-              PPH63 are both room-temperature determinations with no
-              temperature series. Sign unverified, and as written a negative
-              d implies ENDOTHERMIC extraction (dH = +29 to +46 kJ/mol),
-              which contradicts the comment that used to sit beside them.
-              These are the last hand-tuned numbers in the D2EHPA
-              correlation: D at 298 K is sourced, D at any other temperature
-              is not."}
+    - {pattern: "extractants.D2EHPA.temperature_coefficients.*",    source: X95,
+       locus: "Q1 Table 2.15, p. 211",
+       note: "MEASURED for La, Ce, Pr, Eu and Gd: the slope of log D on 1/T
+              through X95's D at 10, 25, 35 and 50 C, +647 to +1080 K
+              (dH -12 to -21 kJ/mol, exothermic). The hand-tuned values
+              these replaced (#283) had the wrong sign."}
+    - {pattern: "extractants.D2EHPA.temperature_coefficients.Nd", source: CALC,
+       note: "INTERPOLATED linearly in Z between measured Pr and Eu."}
+    - {pattern: "extractants.D2EHPA.temperature_coefficients.Sm", source: CALC,
+       note: "INTERPOLATED linearly in Z between measured Pr and Eu."}
+    - {pattern: "extractants.D2EHPA.temperature_coefficients.Tb", source: EST,
+       note: "NOT MEASURED: held at Gd's 1080 K, the nearest measured element."}
+    - {pattern: "extractants.D2EHPA.temperature_coefficients.Dy", source: EST,
+       note: "NOT MEASURED: held at Gd's 1080 K, the nearest measured element."}
+    - {pattern: "extractants.D2EHPA.temperature_coefficients.Y",  source: EST,
+       note: "NOT MEASURED: held at Gd's 1080 K, the nearest measured element."}
     - {pattern: "extractants.PC88A.temperature_coefficients.*",     source: HAND_TUNED,
        note: "NOT retired by the #270 refit and not retirable by it. T21 is
               isothermal at 298.0 +/- 0.1 K, so it carries no temperature
@@ -2047,12 +2053,10 @@ provenance:
               and lg[HA]_free are correlated at r = -0.992 across those rows,
               so the series cannot separate the two exponents. The record
               above states the residual this costs (rms 0.215 in lg D)."}
-    - {pattern: "extractants.D2EHPA.valid_temp_range",    source: CONV,
-       note: "[283, 333] K is a DECLARED bracket, not a measured one, and it
-              is wider than anything behind this record: X95 and PPH63 are
-              both single-temperature. It brackets the hand-tuned
-              temperature_coefficients, which is the only thing that varies
-              with T here. Same status as naphthenic_acid's."}
+    - {pattern: "extractants.D2EHPA.valid_temp_range",    source: X95,
+       locus: "Q1 Table 2.15, p. 211",
+       note: "[283, 323] K, the 10-50 C span X95 measures D over (#283).
+              Was a declared [283, 333] bracketing hand-tuned values."}
     - {pattern: "extractants.PC88A.valid_temp_range",     source: CONV,
        note: "[283, 333] K is a DECLARED bracket. T21 is isothermal at
               298.0 +/- 0.1 K, so the range says nothing about where the
