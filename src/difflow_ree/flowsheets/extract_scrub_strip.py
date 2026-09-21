@@ -324,7 +324,9 @@ class ExtractScrubStripCircuit:
             f_product = float(product_flows.get(elem, 0.0))
             impurity_rejection[elem] = 1 - safe_divide(f_product, f_in)
 
-        # Mass balance verification
+        # Mass balance verification. The barren organic is an outlet too:
+        # REE left on the stripped solvent is not lost mass.
+        barren_flows = get_flows(barren_org)
         feed_total = {
             elem: jnp.asarray(float(feed_flows.get(elem, 0.0)))
             for elem in p.elements
@@ -334,6 +336,7 @@ class ExtractScrubStripCircuit:
                 float(raff_flows.get(elem, 0.0))
                 + float(scrub_flows.get(elem, 0.0))
                 + float(product_flows.get(elem, 0.0))
+                + float(barren_flows.get(elem, 0.0))
             )
             for elem in p.elements
         }
@@ -375,6 +378,7 @@ class ExtractScrubStripCircuit:
         raff_flows = get_flows(results["raffinate"])
         scrub_flows = get_flows(results["scrub_liquor"])
         product_flows = get_flows(results["product"])
+        barren_flows = get_flows(results["barren_organic"])
 
         balance = {}
         for elem in self.params.elements:
@@ -382,7 +386,8 @@ class ExtractScrubStripCircuit:
             f_out = (
                 float(raff_flows.get(elem, 0.0)) +
                 float(scrub_flows.get(elem, 0.0)) +
-                float(product_flows.get(elem, 0.0))
+                float(product_flows.get(elem, 0.0)) +
+                float(barren_flows.get(elem, 0.0))
             )
             closure = safe_divide(f_out, f_in)
             balance[elem] = {

@@ -74,16 +74,16 @@ LN10 = float(np.log(10.0))
 # =============================================================================
 
 #: The pH every section in this module is calibrated and run at. It is 0.5,
-#: not 3.0, since #270: the D2EHPA refit against X95/PPH63 moved that record's
+#: not 3.0, since #270: the D2EHPA refit (#270, and #283 after it) moved that record's
 #: `valid_ph_range` to [0, 2] and its `reference_pH` to 0.82, and at pH 3 the
 #: refitted coefficients put D(Dy) past 1e13 -- the extraction is complete, the
 #: Jacobian underflows, and the tests below would be measuring round-off
 #: instead of the closure.
 #:
-#: 0.5 sits between the record's pH50 for Nd (0.31) and its reference pH
-#: (0.82), which is where D2EHPA actually separates: Nd is 63% extracted in
-#: three stages and Dy is essentially quantitative. That asymmetry is the
-#: reagent, not a badly chosen test point -- D(Dy)/D(Nd) is 1e2 at every pH,
+#: 0.5 sits between the record's pH50 for Nd (0.27) and its reference pH
+#: (0.82), which is where D2EHPA actually separates: Nd is partly extracted
+#: in three stages and Dy is essentially quantitative. That asymmetry is the
+#: reagent, not a badly chosen test point -- D(Dy)/D(Nd) is 2.4e2 at every pH,
 #: because #270 pinned one shared slope -- so the gradient tests below track
 #: **Nd**, the element with something left to respond.
 CAL_PH = 0.5
@@ -526,16 +526,28 @@ def test_departure_from_the_correlation_is_the_predicted_ph_slope():
         assert observed == pytest.approx(predicted, abs=1e-7)
 
 
-def test_extractant_concentration_dependence_matches_the_correlation():
-    """Two independently written paths to D's [HA] dependence must agree.
+def test_extractant_concentration_dependence_of_closure_and_correlation():
+    """Two independently written paths to D's [HA] dependence, and their gap.
 
-    The correlation applies ``n * log10(C / C_ref)`` with ``n = 3``. The
-    closed model never sees ``n``: it gets the same dependence from three
-    dimers in the tableau and a free-extractant balance on the dimer basis.
-    Doubling the extractant must move both by the same factor of eight, and
-    the closed model calibrated at 0.5 M must reproduce the correlation
-    evaluated at 1.0 M. Nothing about this is circular.
+    The closed model never sees ``n``: it gets its dependence from three
+    dimers in the tableau and a free-extractant balance on the dimer basis,
+    so doubling the extractant moves its D by exactly 2**3 = 8. That is
+    ideal mass action.
+
+    Until #283 the correlation applied the same cube, and the two agreed
+    everywhere. D2EHPA's ``concentration_exponent`` is now the 2.38 Mason
+    (1976) MEASURES in n-heptane, not the stoichiometric 3, so the
+    correlation moves by 2**2.38 = 5.2 and the ideal closure over-predicts
+    by 2**(3 - 2.38) = 1.54 at twice its calibration charge. The two still
+    agree exactly AT the charge the network is calibrated at, which is why a
+    section calibrated at its own ``extractant_conc`` reproduces the
+    correlation; carrying constants to another charge is where the ideal
+    model's missing non-ideality shows. Nothing about this is circular.
     """
+    from difflow_ree.database import get_extractant
+
+    n = get_extractant("D2EHPA").concentration_exponent
+    assert n == pytest.approx(2.38)
     elements = ("La", "Nd", "Dy")
     base = make_section(elements=elements, n_stages=1, calibration_pH=CAL_PH)
     log10_K = {
@@ -550,6 +562,11 @@ def test_extractant_concentration_dependence_matches_the_correlation():
         extractant_flow=1.0
     )
     _, _, info = doubled(feed, solvent)
+    recalibrated = make_section(
+        elements=elements, n_stages=1, calibration_pH=CAL_PH,
+        extractant_conc=1.0,
+    )
+    _, _, info_recal = recalibrated(feed, solvent)
 
     d05 = REEDistribution(extractant="D2EHPA", elements=elements,
                           concentration=0.5)
@@ -557,9 +574,14 @@ def test_extractant_concentration_dependence_matches_the_correlation():
                           concentration=1.0)
     for el in elements:
         assert float(d10.get_D(el, CAL_PH) / d05.get_D(el, CAL_PH)) == pytest.approx(
-            8.0, rel=1e-12
+            2.0 ** n, rel=1e-12
         )
+        # ideal closure, constants carried from 0.5 M: the cube
         assert float(info["D"][el]) == pytest.approx(
+            8.0 * float(d05.get_D(el, CAL_PH)), rel=DILUTE_TOL
+        )
+        # calibrated at its own charge: the correlation, exactly
+        assert float(info_recal["D"][el]) == pytest.approx(
             float(d10.get_D(el, CAL_PH)), rel=DILUTE_TOL
         )
 
@@ -693,7 +715,8 @@ def _nd_extracted(acid):
     Nd rather than Dy since #270: on the refitted D2EHPA block Dy is
     quantitatively extracted anywhere in the validity window, so its
     derivative with respect to the feed acid is a true zero and a gradient
-    test on it would pass for the wrong reason. Nd is 63% extracted here.
+    test on it would pass for the wrong reason. Nd is only partly extracted
+    here.
     """
     feed, solvent = streams(
         _GRAD_SECTION, {"Nd": 0.02, "Dy": 0.02}, acid=acid

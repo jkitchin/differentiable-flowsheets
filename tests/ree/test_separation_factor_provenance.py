@@ -107,15 +107,17 @@ class TestTheTwoDescriptionsAgree:
 
           PC88A      3.14  Tanaka (2021), log Ke 2.24 for Y against 1.67 for
                            Dy -- Y between Dy and Ho.
-          D2EHPA     3.69  Q1 p. 213, "between Ho and Er", placed on X95's
-                           measured Ho/Dy and Er/Ho steps.
+          D2EHPA     4.01  Peppard (1957) via Stevenson & Nervik Fig. 51:
+                           Y at apparent Z 67.4, between Ho and Er, and
+                           Mason (1976) measures Y's level directly (#283;
+                           3.69 under #270, on PPH63's shallower steps).
           Cyanex272  3.59  Zhang & Li (1993) Table 4.25, Y printed between
                            Ho and Er.
 
         The direction assertion at the bottom is the part that matters: it is
         the claim the pre-#270 records got backwards on two of three.
         """
-        for extractant, expected in (("D2EHPA", 3.693),
+        for extractant, expected in (("D2EHPA", 4.011),
                                      ("PC88A", 3.138),
                                      ("Cyanex272", 3.593)):
             got = sf_db.get_sf(extractant, "Y_Dy")

@@ -157,10 +157,11 @@ class TestTheClaimsTheDataFilesMake:
 
         It used to be three records, then two: PC88A left the list when its
         `a` values were fitted to Tanaka (2021)'s 121 digitized points, and
-        D2EHPA and Cyanex272 left it when they were refitted against X95 /
-        PPH63 and ZL93 / L14. Every `a` is now MEASURED or DERIVED from a
-        named table, and every `b` is the stoichiometric 3 that the source's
-        own mass-action model writes down.
+        D2EHPA and Cyanex272 left it when they were refitted against named
+        tables (#270; D2EHPA again in #283, against Mason 1976 and Peppard
+        1957). Every `a` is now MEASURED or DERIVED from a named source, and
+        every `b` is the stoichiometric 3 that the source's own mass-action
+        model writes down.
         """
         for ex in ("D2EHPA", "PC88A", "Cyanex272", "naphthenic_acid"):
             for sym in ("La", "Nd", "Dy", "Y"):
@@ -178,16 +179,18 @@ class TestTheClaimsTheDataFilesMake:
         Every source behind the three refits is isothermal -- X95 and PPH63
         are room-temperature determinations, T21 is 298.0 +/- 0.1 K, ZL93 is
         25 +/- 1 C -- so none of them carries a heat of extraction. Thirty
-        numbers, ten per record, and nothing else in the file. D at 298 K is
-        sourced for all five reagents; D at any other temperature is sourced
-        for two.
+        numbers, ten per record, and nothing else in the file -- twenty since
+        #283 retired D2EHPA's against X95's 10-50 C table (and flipped their
+        sign). D at 298 K is sourced for all five reagents; D at any other
+        temperature for three.
         """
         hand_tuned = [p for p in audit("extractants") if p.cls == "HAND_TUNED"]
-        assert len(hand_tuned) == 30
+        # 20 since #283 sourced D2EHPA's from X95 (Q1 Table 2.15)
+        assert len(hand_tuned) == 20
         for p in hand_tuned:
             _, ex, block, _ = p.path.split(".")
             assert block == "temperature_coefficients", p.path
-            assert ex in ("D2EHPA", "PC88A", "Cyanex272"), p.path
+            assert ex in ("PC88A", "Cyanex272"), p.path
             assert "not retirable by it" in p.note, p.path
 
     def test_every_concentration_exponent_names_a_source(self):
@@ -196,25 +199,30 @@ class TestTheClaimsTheDataFilesMake:
         `concentration_exponent` was matched by nothing and so read
         HAND_TUNED on every record, including the two -- TBP and
         naphthenic_acid -- that the file's header held up as the ones with
-        real provenance. Only PC88A's is FITTED (T21's six series, 0.041 to
-        0.82 mol/L as dimer); the other four are the mechanism's cube law
-        imposed, and their notes say so.
+        real provenance. Two are FITTED: PC88A's (T21's six series, 0.041 to
+        0.82 mol/L as dimer) and, since #283, D2EHPA's (Mason 1976's three
+        concentration series in n-heptane, 2.38). The other three are the
+        mechanism's cube law imposed, and their notes say so.
         """
         expected = {
-            "D2EHPA": "Z1",
-            "PC88A": "T21",
-            "Cyanex272": "Z1",
-            "TBP": "GP19",
-            "naphthenic_acid": "Q1",
+            "D2EHPA": ("M76", 2.38),
+            "PC88A": ("T21", 3.0),
+            "Cyanex272": ("Z1", 3.0),
+            "TBP": ("GP19", 3.0),
+            "naphthenic_acid": ("Q1", 3.0),
         }
-        for ex, src in expected.items():
+        for ex, (src, value) in expected.items():
             p = explain("extractants", f"extractants.{ex}.concentration_exponent")
             assert p.source == src, ex
             assert p.publishable, ex
-            assert p.value == 3.0, ex
-        fitted = explain("extractants", "extractants.PC88A.concentration_exponent")
-        assert "FITTED" in fitted.note
-        for ex in ("D2EHPA", "Cyanex272", "TBP", "naphthenic_acid"):
+            assert p.value == value, ex
+        # Two are FITTED: PC88A as a cube law in T21's effective
+        # concentration, and since #283 D2EHPA as the power Mason (1976)
+        # measures in n-heptane, which is NOT the stoichiometric cube.
+        for ex in ("PC88A", "D2EHPA"):
+            fitted = explain("extractants", f"extractants.{ex}.concentration_exponent")
+            assert "FITTED" in fitted.note, ex
+        for ex in ("Cyanex272", "TBP", "naphthenic_acid"):
             note = explain(
                 "extractants", f"extractants.{ex}.concentration_exponent"
             ).note

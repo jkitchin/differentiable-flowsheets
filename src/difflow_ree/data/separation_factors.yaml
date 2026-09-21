@@ -45,10 +45,11 @@
 #                        from Tanaka (2021), whose own printed log Ke has Y
 #                        at 2.24 against Dy's 1.67.
 #   D2EHPA               Y sits BETWEEN Ho and Er -- higher still. Derived
-#                        here: 3.69, from Q1 p. 213 ("the equilibrium
-#                        constant of extracting yttrium with P204 is between
-#                        Ho and Er") placed on X95's measured adjacent
-#                        factors.
+#                        here: 4.01 (#283), Mason (1976)'s measured Y level
+#                        against Dy on Peppard (1957)'s spacing, where Y
+#                        sits at apparent Z 67.4. Q1 p. 213 says the same
+#                        in words ("between Ho and Er"). 3.69 under #270,
+#                        on PPH63's shallower steps.
 #   Cyanex 272           Y again between Ho and Er. Derived here: 3.59, from
 #                        Zhang & Li (1993) Table 4.25, where Y is printed in
 #                        that position.
@@ -71,11 +72,12 @@ separation_factors:
     # At pH 0.82, 25 C, 0.5 M D2EHPA (as the dimer, = 1.0 M nominal).
     #
     # It was pH 3.0 until #270, which the refit put outside this record's
-    # `valid_ph_range` of [0.0, 2.0] -- the span X95 and PPH63 cover -- so
-    # every factor below it was an extrapolation and loading the database
-    # warned about it. 0.82 and 0.5 M are the record's own `reference_pH`
-    # and `reference_concentration`: the anchor X95's La point sets, by
-    # Z1 Eq. (4.12) on that experiment's own proton balance.
+    # `valid_ph_range` of [0.0, 2.0], so every factor below it was an
+    # extrapolation and loading the database warned about it. 0.82 and
+    # 0.5 M are the record's own `reference_pH` and
+    # `reference_concentration`: X95's La point, by Z1 Eq. (4.12) on that
+    # experiment's own proton balance -- the level until #283 and its
+    # held-out check since.
     #
     # As on PC88A it does not move the NUMBERS. Every element on this record
     # shares b = 3, so log10 beta = a_i - a_j and the pH, temperature and
@@ -94,10 +96,9 @@ separation_factors:
       - Gd_Eu   # Gd/Eu
       - Tb_Gd   # Tb/Gd - gap between middle and heavy
       - Dy_Tb   # Dy/Tb
-      - Y_Dy   # Y/Dy - see the note on Y in the header. 3.69 since #270,
-               # Y between Ho and Er, from Q1's sentence placed on X95's
-               # measured Ho/Dy and Er/Ho. It used to derive 0.21 -- Y below
-               # Dy -- which was backwards for D2EHPA.
+      - Y_Dy   # Y/Dy - see the note on Y in the header. 4.01 since #283
+               # (3.69 under #270), Y between Ho and Er. It used to derive
+               # 0.21 -- Y below Dy -- which was backwards for D2EHPA.
 
     # Non-adjacent pairs (useful for group separations)
     group_pairs:
