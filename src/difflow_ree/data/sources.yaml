@@ -62,20 +62,24 @@ sources:
       separation-factor bounds. It has NO full-series per-element
       distribution table for naphthenic acid; that is Z1.
       SINCE #270 IT IS ALSO THE ROUTE TO D2EHPA, as a secondary carrying
-      three primary tables that are not otherwise on this machine.
-      Table 2.6 (p. 213, Q1 ref [2] = X95) is the LEVEL anchor: D_La = 0.99
-      for P204 at 1 mol/L in kerosene, 0.1 mol/L LaCl3, 0.003 mol/L HCl.
-      Table 2.8 (p. 214, Q1 ref [12] = PPH63) is the SHAPE: fourteen adjacent
-      separation factors in HCl. Table 2.7 and the sentence on p. 213 that
-      "the value of the equilibrium constant of extracting yttrium with P204
-      is between Ho and Er" place Y. Table 2.9 (Q1 ref [11] = Sato 1989) is
-      REJECTED for this purpose and the D2EHPA record says why. Q1's own
+      primary data not otherwise on this machine. Since #283 the record's
+      LEVEL and concentration exponent come from Figs. 2.1 and 2.2 (p. 191,
+      Q1 ref [4] = M76, printed "G.W. Masin"), redrawn as vector art with
+      the tick labels in the text layer and digitized from the drawing
+      paths. Table 2.6 (p. 213, Q1 ref [2] = X95) -- D_La = 0.99 for P204 at
+      1 mol/L in kerosene -- was the level under #270 and is now its
+      held-out check. Table 2.8 (PPH63) was the shape under #270 and is now
+      a registered cross-check only. The quotation on p. 213 of Peppard 1957
+      (Lu/La 3.5e5, 2.49 per step) is corroborated by P57 as digitized from
+      SN61. Tables 2.12-2.14 reprint C98. Table 2.9 and Figs. 2.6 and 2.54
+      (Sato 1989, ref [11]) are REJECTED: Fig. 2.54's PC88A curve fails the
+      T21 control by 1.7 decades at La. Table 2.15 gives D against
+      temperature (10-50 C) for La, Ce, Pr, Eu and Gd (X95). Q1's own
       account of the tetrad effect (p. 213, its ref [10] = Peppard 1969) is
-      the reason a smooth cubic-in-Z interpolation across the series is
-      imperfect, and the reason Z1's Table 4.19 Nd entry is not believed.
-      Q1 p. 216-218 (Figs. 2.8 and 2.9) set the pH window: slope 3 is
-      verified up to pH ~1, and below the D minimum the mechanism turns
-      solvating.
+      the reason a straight line in Z is imperfect, and the reason Z1's
+      Table 4.19 Nd entry is not believed. Q1 pp. 216-218 (Figs. 2.8 and
+      2.9) set the pH window: slope 3 is verified up to pH ~1, and below the
+      D minimum the mechanism turns solvating.
 
   Z1:
     citation: >-
@@ -125,17 +129,18 @@ sources:
     access: secondary
     note: >-
       NOT on this machine and not read in the original. Reached through Q1,
-      which cites it as its chapter-2 ref [2] and reprints the two tables
-      used here. Table 2.6 of Q1: distribution ratios of La for five acidic
+      which cites it as its chapter-2 ref [2] and reprints the tables used
+      here. Table 2.6 of Q1: distribution ratios of La for five acidic
       organophosphorus extractants under ONE stated condition -- kerosene,
-      1 mol/L extractant, 0.1 mol/L LaCl3, 0.003 mol/L HCl -- of which
-      D_La = 0.99 for P204 (D2EHPA) is the sole level anchor of the D2EHPA
-      record and D_La = 0.17 for P507 (PC88A) is the control that tests the
-      arithmetic against T21's independent fit. Table 2.7 of Q1: extraction
-      equilibrium constants for P204 in methylbenzene, used only to place Y
-      as a fraction of the Ho-Er interval. The PHASE RATIO is not stated in
-      either table; O/A = 1 is assumed and the record reports what other
-      ratios would do.
+      1 mol/L extractant, 0.1 mol/L LaCl3, 0.003 mol/L HCl. D_La = 0.99 for
+      P204 (D2EHPA) was the level of the D2EHPA record under #270; since
+      #283 it is the record's HELD-OUT CHECK, which the M76-based level
+      meets to 0.105 decades at O/A = 1. D_La = 0.17 for P507 (PC88A) is the
+      control that showed the route runs low (0.61 decades against T21).
+      The PHASE RATIO is not stated; O/A = 1 is assumed and the record
+      reports what other ratios would do. Table 2.7 of Q1: extraction
+      equilibrium constants for P204 in methylbenzene, no longer used.
+      Its equilibrium pH, 0.82, remains the D2EHPA record's reference_pH.
 
   PPH63:
     citation: >-
@@ -149,15 +154,17 @@ sources:
     note: >-
       NOT on this machine. Reached through Q1, which cites it as its
       chapter-2 ref [12] and reprints its adjacent separation factors as
-      Table 2.8 (HCl and HClO4 columns). The HCl column is the SHAPE of the
-      D2EHPA record: fourteen adjacent factors, cumulated from La under the
-      shared pH slope of 3. It is a reversed-phase partition-chromatography
-      determination on HDEHP-Corvic columns, not a batch solvent-extraction
-      series; the underlying equilibrium is the same cation exchange, but the
-      record states the difference rather than hiding it. Its cumulative
-      Lu/La of 6.4e4 (geometric-mean adjacent 2.21) is BELOW the 3.5e5 /
-      2.49 that Q1 quotes from Peppard 1957 on the same page, and the D2EHPA
-      record carries that discordance explicitly.
+      Table 2.8 (HCl and HClO4 columns). The HCl column was the SHAPE of the
+      D2EHPA record under #270. It is a reversed-phase partition-
+      chromatography determination on HDEHP-Corvic columns, not a batch
+      solvent-extraction series, and its cumulative Lu/La of 6.4e4 (2.20 per
+      step) is compressed against every batch series retrieved since: P57
+      2.48, C98's n-hexane 2.47, and M76's own Y-Tm-Lu spacing. Under it,
+      X95's La and M76's level could only be joined by a concentration
+      exponent of 1.95 against the 2.38 M76 measures. Superseded by P57 in
+      #283; supplies no shipped number. Still used for one thing: its
+      per-pair resolution sets the tetrad allowance (0.123) on the four
+      D2EHPA elements interpolated along P57's straight line.
 
   ZL93:
     citation: >-
@@ -240,14 +247,84 @@ sources:
     access: secondary
     note: >-
       NOT on this machine. Reached through Z1 Table 4.19 (p. 127), and cited
-      independently as Q1's chapter-2 ref [3]. Extraction equilibrium
-      constants for HDEHP against six diluents at 25 C, for Pr, Nd, Sm, Dy,
-      Ho and Yb. Registered so that the D2EHPA record can name the
-      alternative it did NOT take: the Chai n-hexane column plus a kerosene
-      shift from Z1 Table 4.1 puts every level 1.26-1.73 decades above the
-      shipped block. It supplies no shipped number. Its Nd entry sits ABOVE
-      the Pr-Sm chord in five of six diluent rows, which inverts the tetrad
-      pattern Q1 documents, and is the reason its shape is not used either.
+      independently as Q1's chapter-2 ref [3] (Tables 2.12-2.14, which add
+      the medium: 1.00 mol/L (Na,H)Cl, 25 C). Extraction equilibrium
+      constants for HDEHP against six diluents for Pr, Nd, Sm, Dy, Ho and
+      Yb. It supplies no shipped number, because its extractant charge is
+      not printed and the measured concentration exponent (2.38, M76) makes
+      an equilibrium constant charge-dependent. Under #270 its n-hexane
+      column, carried to the reference charge by the ideal cube law, sat
+      1.26-1.73 decades above the shipped block; #283 traces that to the
+      cube law. It corroborates two things: its aliphatic series runs at
+      0.393 decades per Z (2.47 per step), P57's slope rather than PPH63's;
+      and its heavy-end lg Kex in hexane equals M76's in heptane (Tm 4.87
+      against 4.87 read off the Ho-Yb line). Its Nd entry sits above the
+      Pr-Sm chord in five of six diluent rows, which inverts the tetrad
+      pattern Q1 documents. Z1 prints the n-hexane Pr value as 0.885, Q1 as
+      0.855.
+
+  M76:
+    citation: >-
+      Mason, G. W. (1976). "The extraction of selected M(III) metals by
+      bis(2-ethylhexyl) phosphoric acid in n-heptane". Journal of Inorganic
+      and Nuclear Chemistry 38(11), 2077-2079.
+    kind: article
+    cls: MEASURED
+    access: secondary
+    note: >-
+      NOT on this machine. Reached through Q1, which cites it as its
+      chapter-2 ref [4] (printing the author as "G.W. Masin") and redraws
+      two of its figures on p. 191 as vector art. Fig. 2.1: log D vs
+      log[H+] for tracer Y, Tm and Lu into HDEHP in n-HEPTANE at constant
+      ionic strength, 1.0 M (NaCl + HCl), at stated charges (Lu 0.0094, Y
+      0.01875, Tm 0.0133 mol/L), 27 points, slope 3.14 +/- 0.01. Fig. 2.2:
+      log D vs log[HDEHP] at 0.5 M HCl (Tm, Y) and 1.0 M HCl (Lu), 27
+      points, slope 2.382 +/- 0.011 (printed "2.5"). Digitized from the
+      drawing paths, calibration residual <= 0.004 log units; the Layer A
+      record is ree-database `sources/mason1976extraction.json`. SINCE #283
+      THIS IS THE D2EHPA RECORD'S LEVEL AND ITS CONCENTRATION EXPONENT. The
+      charges are read as formal (monomer units); a dimer reading would move
+      every level by 0.72. Temperature not stated in the reprint.
+
+  P57:
+    citation: >-
+      Peppard, D. F.; Mason, G. W.; Maier, J. L.; Driscoll, W. J. (1957).
+      "Fractional extraction of the lanthanides as their di-alkyl
+      orthophosphates". Journal of Inorganic and Nuclear Chemistry 4(5-6),
+      334-343.
+    kind: article
+    cls: MEASURED
+    access: secondary
+    note: >-
+      NOT on this machine. Reached through SN61, whose Fig. 51 reproduces
+      its log D against Z for 0.75 M HDEHP in toluene against 0.5 M HCl,
+      digitized from the scan (ree-database
+      `sources/stevenson1961radiochemistry.json`): La, Ce, Pr, Pm, Eu, Tb,
+      Tm, Yb, Lu and Y, sd 0.023 about log D = -25.696 + 0.3977 Z, adjacent
+      factor 2.499 against the text's "approximately 2.5", Y at apparent
+      Z 67.44 against the printed 67.5. Q1 p. 213 quotes it (its ref [9])
+      as Lu/La 3.5e5, 2.49 per step. SINCE #283 THIS IS THE D2EHPA RECORD'S
+      SHAPE: only differences between elements are used, so its toluene
+      diluent and one condition set nothing absolute. Nd, Sm, Gd and Dy
+      carry no marker and are read off the line.
+
+  SN61:
+    citation: >-
+      Stevenson, P. C.; Nervik, W. E. (1961). "The Radiochemistry of the Rare
+      Earths, Scandium, Yttrium, and Actinium". NAS-NS 3020, National
+      Academy of Sciences - National Research Council.
+    kind: report
+    cls: MEASURED
+    access: local
+    on_disk: >-
+      supplied by hand, outside the fulltexts corpus (the ree-database
+      record gives the path and sha256)
+    note: >-
+      Fig. 51 (printed p. 107) is the route to P57 and nothing else is used.
+      A ~300 dpi bilevel scan with no text layer in the figure; digitized
+      by rasdig.py, with four checks that were never inputs (atomic numbers
+      recovered to 0.12, adjacent factor 2.499, Y's apparent Z 67.44, and
+      the crosshair on the fitted line).
 
   # -------------------------------------------------------------------
   # Primary sources: TBP / nitrate solvating system

@@ -54,7 +54,7 @@ WHERE THE CONSTANTS COME FROM
 (:class:`~difflow_ree.equilibrium.distribution.REEDistribution`) at a stated
 reference condition. That is the only source available in this repository, and
 it inherits that source's provenance, which since #270 is a named table for
-every acidic record: D2EHPA (X95/PPH63), PC88A (T21), Cyanex272 (L14/ZL93),
+every acidic record: D2EHPA (M76/P57, #283), PC88A (T21), Cyanex272 (L14/ZL93),
 naphthenic_acid (Z1). See the header of ``data/extractants.yaml`` for how good
 each one is; the ``temperature_coefficients`` are still hand-tuned, so a
 constant calibrated away from 298 K is illustrative.

@@ -344,6 +344,11 @@ python -m difflow_ree.provenance --dataset elements --explain Dy.ionic_radius_pm
    **within** one record are unaffected; *any* comparison of absolute `D`
    **across** these three records is meaningless.
 
+   *Superseded.* #270 sourced D2EHPA and Cyanex272 and #283 refit D2EHPA's
+   level (below). The pH at which `D(Nd) = 1` is now D2EHPA 0.27, PC88A
+   1.03, Cyanex272 2.14 at each record's reference charge --- the textbook
+   order, strongest acid lowest.
+
 2. **Nine of fifteen element prices are `ESTIMATED`, and every solvent cost
    is.** #270 gave La, Ce, Nd, Pr, Eu and Gd the USGS 2025 annual average
    oxide price (`USGS26`); Nd and Pr carry the same number, because USGS
@@ -437,6 +442,21 @@ all carry `sources.yaml` keys for their `ph_coefficients` (or, for TBP, its
 nitrate block); #270 closed the last three. Each record's fit basis, correction
 arithmetic, per-element measured-vs-interpolated status, validity window and
 known gaps are written into `extractants.yaml` beside the numbers.
+
+**D2EHPA's level and shape (#283).** #270 left D2EHPA's absolute level on one
+measured `D` (La in kerosene, X95) and its shape on chromatographic separation
+factors (PPH63), with three routes to the level disagreeing by up to 1.7
+decades. The record is now fitted to 54 points digitized from Mason (1976) ---
+HDEHP in *n*-heptane, Y/Tm/Lu, a pH series at constant ionic strength and a
+concentration series --- with Peppard (1957)'s spacing for the shape (2.48 per
+step, against PPH63's 2.20). X95's point is held out and recovered to 0.105
+decades. The disagreement was the concentration law: Mason measures
+`d log D / d log C = 2.38`, not the cube, and the discordant routes had carried
+a cube across two decades of charge. `concentration_exponent` is therefore
+2.38 on D2EHPA; the stoichiometry, and so the capacity, is unchanged. Nd, Sm,
+Gd and Dy are interpolated on Peppard's line; the record gives `se(a)` per
+element and the digitized data live in the ree-database record
+`mason1976extraction`.
 
 The exception, tagged rather than papered over, is the
 `temperature_coefficients` block on the three acidic records: every source
@@ -876,7 +896,8 @@ the package with no pH literal that is legal everywhere: `[0, 2]`, `[0.1, 2.5]`,
 `[1.5, 3.5]` and `[4, 5]` have empty intersection. The old defaults --- 3.5 for
 extraction, 2.0 for scrubbing, 0.5 for stripping, 3.0 in the extractor ---
 were each outside at least two of them, and at D2EHPA's refitted coefficients
-`D(Nd)` at pH 0.5 is 3.7, so the "strip" was still extracting.
+`D(Nd)` at pH 0.5 is 5.1 (3.7 before #283), so the "strip" was still
+extracting.
 
 So the defaults became `None`, and `None` means *ask the record*:
 
@@ -1037,10 +1058,10 @@ from difflow_ree import REEDistribution, solve_free_extractant
 dist = REEDistribution(extractant="D2EHPA", elements=("Nd",), concentration=0.5)
 r = solve_free_extractant(dist, "Nd", c_aq=0.03, pH=0.2)
 
-r.D                 # 0.319 -- against free extractant
-r.D_total_basis     # 0.460 -- what the correlation says against total
-r.overprediction    # 1.44
-r.loading_fraction  # 0.115
+r.D                 # 0.428 -- against free extractant
+r.D_total_basis     # 0.638 -- what the correlation says against total
+r.overprediction    # 1.49
+r.loading_fraction  # 0.154
 ```
 
 This also restores something #204's closing note recorded as lost: keeping the

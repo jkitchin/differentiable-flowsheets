@@ -233,8 +233,12 @@ class ExtractStripCircuit:
             f_out = float(product_flows.get(elem, 0.0))
             element_recovery[elem] = safe_divide(f_out, f_in)
 
-        # Mass balance verification
+        # Mass balance verification. Every stream that leaves the circuit
+        # counts, the barren organic included: REE the stripper does not
+        # remove leaves on the solvent, and omitting it reported that as a
+        # mass loss (Nd closure 0.94 on a D2EHPA circuit stripped at pH 0).
         raff_flows = get_flows(raffinate)
+        barren_flows = get_flows(barren_org)
         feed_total = {
             elem: jnp.asarray(float(feed_flows.get(elem, 0.0)))
             for elem in p.elements
@@ -243,6 +247,7 @@ class ExtractStripCircuit:
             elem: (
                 float(product_flows.get(elem, 0.0))
                 + float(raff_flows.get(elem, 0.0))
+                + float(barren_flows.get(elem, 0.0))
             )
             for elem in p.elements
         }

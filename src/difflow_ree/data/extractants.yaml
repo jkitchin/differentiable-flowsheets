@@ -130,8 +130,9 @@
 #   (2) LITERATURE-DERIVED    -- everything else that matters: TBP's
 #       `nitrate_coefficients` and `temperature_coefficients`; the
 #       `ph_coefficients`, `valid_ph_range` and `reference_pH` of D2EHPA,
-#       PC88A and Cyanex272; PC88A's `activity_coefficient_A`; and
-#       naphthenic_acid's `ph_coefficients`.
+#       PC88A and Cyanex272; PC88A's `activity_coefficient_A`; D2EHPA's
+#       fitted `concentration_exponent` (#283); and naphthenic_acid's
+#       `ph_coefficients`.
 #       Refitted from named, retrievable primary sources; the sources are
 #       enumerated with what each one supplied and what it did not, the
 #       correction arithmetic is written out, the per-element provenance
@@ -144,10 +145,12 @@
 #   PC88A      121 digitized points, five measured elements, five
 #              interpolated, one isothermal source that IS this record's
 #              system. The strongest block in the file.
-#   D2EHPA     ONE measured absolute D (La in kerosene at the reference
-#              charge) for the level, plus fourteen printed adjacent
-#              separation factors for the shape, from two sources reached
-#              through a secondary. Level good to roughly half a decade.
+#   D2EHPA     54 digitized points in n-heptane (Y, Tm, Lu; a pH series
+#              at constant ionic strength and a concentration series) for
+#              the level and the concentration exponent, Peppard 1957's
+#              spacing for the shape, and X95's kerosene La point held out
+#              as a check it meets to 0.105 decades (#283). Four elements
+#              interpolated. Both sources are read from redrawn figures.
 #   Cyanex272  Two sources that cannot be joined without a seam: the level
 #              from six Pr/Nd rows with measured equilibrium pH, the shape
 #              from a fifteen-element table whose extractant concentration
@@ -164,7 +167,7 @@
 #            pH at which D(Nd) = 1
 #            at the record's        at a common 1.0 M
 #            own reference charge   nominal charge     level source
-#   D2EHPA         0.31                  0.31          X95 (via Q1 T2.6)
+#   D2EHPA         0.27                  0.27          M76 (via Q1 F2.1-2.2)
 #   PC88A          1.03                  1.03          T21
 #   Cyanex272      2.14                  1.91          L14
 #
@@ -177,11 +180,12 @@
 #   SAFE      -- separation factors, cascade behaviour and design pH within
 #                one record; and now, with the caveats each record states,
 #                the ORDERING of the three by extraction strength.
-#   NOT SAFE  -- a cross-record ratio of D quoted to better than about half a
-#                decade. D2EHPA's level rests on one measurement whose phase
-#                ratio is not stated, and Cyanex272's on a two-source join.
-#                Both records quantify their own error bar; use those numbers
-#                rather than assuming the blocks are interchangeable.
+#   NOT SAFE  -- a cross-record ratio of D quoted to better than a few
+#                tenths of a decade. D2EHPA's light-end level is placed from
+#                Y through a toluene spacing (#283), and Cyanex272's rests on
+#                a two-source join. Both records quantify their own error bar;
+#                use those numbers rather than assuming the blocks are
+#                interchangeable.
 #   NOT SAFE  -- anything at a temperature other than 298.15 K, for any
 #                acidic record. See (1) above.
 #
@@ -189,9 +193,10 @@
 # any specific number here:
 # - Gupta & Krishnamurthy (2005) Extractive Metallurgy of Rare Earths
 # - Xie, Zhang, Dreisinger & Doyle (2014) Miner. Eng. 56, 10
-# - Peppard et al. (1957) J. Inorg. Nucl. Chem. 4, 334 (quoted by Q1 as
-#   3.5e5 for Lu/La, against the 6.4e4 the shipped D2EHPA shape gives --
-#   a discordance the D2EHPA record names rather than averages away)
+# - Peppard et al. (1957) J. Inorg. Nucl. Chem. 4, 334 -- no longer only
+#   consulted: since #283 it is the D2EHPA record's SHAPE (source P57,
+#   read through Stevenson & Nervik 1961), which settled the 3.5e5 vs 6.4e4
+#   Lu/La discordance #270 recorded in Peppard's favour
 # - Peppard et al. (1969) J. Inorg. Nucl. Chem. 31, 2271 (the tetrad effect,
 #   which is why a smooth curve through atomic number is imperfect)
 
@@ -254,159 +259,167 @@ extractants:
       extractant_molecules: 3  # as dimers
       basis: dimer
 
-    # *** REFITTED AGAINST NAMED SOURCES (#270). ***
+    # *** REFITTED AGAINST AN ALIPHATIC pH SERIES (#283), after #270. ***
     #
-    # Until #270 every number in this block was HAND_TUNED with no source of
-    # any kind. The replacement is built from TWO sources, because no single
-    # retrieved study gives both the absolute level and the shape of the
-    # series for D2EHPA in kerosene. Both are reached through Q1, which
-    # reprints them; neither original is on this machine.
+    # #270 replaced a hand-tuned block with one measured D (X95's La in
+    # kerosene) for the LEVEL and PPH63's chromatographic separation factors
+    # for the SHAPE, and said plainly that the level rested on one number and
+    # that three routes to it disagreed by up to 1.7 decades. #283 replaces
+    # both halves. The level is now FITTED to 54 digitized points in an
+    # aliphatic diluent at stated charges; the shape is Peppard 1957's; and
+    # X95's La point, which used to be the level, is held out as the check.
     #
     # SOURCES
-    #   S1  X95 -- Xu et al., "Rare Earths", 2nd ed. 1995, pp. 469-611, as
-    #       Q1 Table 2.6 (p. 213).
-    #       SUPPLIED: the LEVEL. One number, D_La = 0.99, measured under one
-    #       fully stated condition -- KEROSENE, 1 mol/L extractant,
-    #       0.1 mol/L LaCl3, 0.003 mol/L HCl, 25 C.
-    #       >>> This is the ONLY absolute D for D2EHPA behind this record. <<<
-    #       DID NOT SUPPLY: any other element, any pH series, any temperature
-    #       dependence, and the phase ratio (see the O/A note below).
-    #   S2  PPH63 -- Pierce, Peck & Hobbs, J. Chromatogr. 12 (1963) 81-88, as
-    #       Q1 Table 2.8 (p. 214), HCl column.
-    #       SUPPLIED: the SHAPE. Fourteen adjacent separation factors, La to
-    #       Lu, cumulated from La under the shared slope b = 3.
-    #       >>> This is the ONLY source of the relative spacing. <<<
-    #       DID NOT SUPPLY: any absolute D, and it is not a batch
-    #       solvent-extraction experiment -- it is reversed-phase partition
-    #       chromatography on HDEHP-Corvic columns. Same equilibrium, a
-    #       different measurement.
-    #   S3  X95 again, as Q1 Table 2.7 plus the sentence on Q1 p. 213 that
-    #       "the value of the equilibrium constant of extracting yttrium with
-    #       P204 is between Ho and Er".
-    #       SUPPLIED: the position of Y. DID NOT SUPPLY: anything else used.
-    #   S4  Z1 Eqs. (4.11) and (4.12), p. 99, and (4.27)-(4.31), p. 124.
-    #       SUPPLIED: the model form -- the dimer-basis cation exchange, the
-    #       free-dimer balance and the proton balance used below. Not data.
-    #   S5  Q1 Figs. 2.8 and 2.9, pp. 216-218.
-    #       SUPPLIED: the pH window and the verification that the slope really
-    #       is 3 (Fig. 2.8, 1 mol/L P204 in methylbenzene, D_Sm = 1 at
-    #       lg[H+] = -0.6). DID NOT SUPPLY: any coefficient.
+    #   S1  M76 -- Mason, J. Inorg. Nucl. Chem. 38 (1976) 2077, as Q1
+    #       Figs. 2.1 and 2.2 (p. 191; Q1 prints the author as "Masin").
+    #       HDEHP in n-HEPTANE, tracer Y, Tm and Lu.
+    #       Fig. 2.1: log D vs log[H+] at CONSTANT ionic strength, 1.0 M
+    #         (NaCl + HCl), at stated charges (Lu 0.0094, Y 0.01875, Tm
+    #         0.0133 mol/L), 27 points over pH -0.02 to 1.15.
+    #       Fig. 2.2: log D vs log[HDEHP] at 0.5 M HCl (Tm, Y) and 1.0 M
+    #         HCl (Lu), 27 points over 0.0093 to 0.18 mol/L.
+    #       SUPPLIED: the LEVEL (Y directly; Tm and Lu through the shape) and
+    #       the CONCENTRATION EXPONENT. Tracer-level, so the phase ratio the
+    #       caption does not state cannot enter D, and [H+] is not moved by
+    #       the extraction -- equilibrium and initial acidity are the same.
+    #       DID NOT SUPPLY: any light or middle lanthanide, and a temperature
+    #       (not stated in the reprint).
+    #   S2  P57 -- Peppard, Mason, Maier & Driscoll, J. Inorg. Nucl. Chem. 4
+    #       (1957) 334, as SN61 Fig. 51 (Stevenson & Nervik 1961), digitized
+    #       from the scan: log D for La, Ce, Pr, Pm, Eu, Tb, Tm, Yb, Lu and Y
+    #       at 0.75 M HDEHP / toluene / 0.5 M HCl, sd 0.023 about the
+    #       straight line log D = -25.696 + 0.3977 Z the source asserts.
+    #       SUPPLIED: the SHAPE -- every element's offset from Y. Toluene
+    #       sets no level here; only DIFFERENCES between elements are used.
+    #       Nd, Sm, Gd and Dy carry no marker and are read off the line.
+    #   S3  Z1 Eqs. (4.11), (4.12), (4.27)-(4.31) -- the model form, as
+    #       before. Not data.
+    #
+    # WHAT CHANGED, AND WHY THE THREE ROUTES DISAGREED
+    #   Two things were wrong, and neither was the X95 number itself.
+    #   (1) THE CONCENTRATION LAW. M76 Fig. 2.2 measures d(log D)/d(log C)
+    #       = 2.382 +/- 0.011 over 0.0093-0.18 M in heptane (printed "lines
+    #       of slope 2.5"; the drawn lines digitize to 2.37-2.40 as well).
+    #       An Alstad sqrt(C) form -- what PC88A carries -- fits worse, rms
+    #       0.059 against 0.021, with systematic curvature, and with both
+    #       free its A goes to zero. So on this reagent the law is a power,
+    #       not the ideal cube. The routes through an equilibrium constant
+    #       measured at ~0.01 M (C98's hexane lg Kex, and M76 read the same
+    #       way) carried the CUBE across the 1.7-2.0 decades between M76's
+    #       charges and C_ref; 0.62 per decade of excess slope over that span
+    #       is 1.1-1.2 decades, most of the 1.26-1.73 #270 recorded.
+    #   (2) THE SHAPE. PPH63's cumulative Lu/La is 6.4e4 (2.20 per step);
+    #       P57's is 3.4e5 (2.48 per step, matching the 3.5e5 and 2.49 Q1
+    #       quotes from it). Three things decide for P57:
+    #         - C98, measured in n-HEXANE, runs Pr to Yb at 0.393 decades per
+    #           Z (2.47 per step) and in cyclohexane at 0.407 (2.55); P57 is
+    #           0.398, PPH63 0.342. The aliphatic series has P57's slope.
+    #         - M76's own spacing: Tm - Y = 0.670 and Lu - Y = 1.267 against
+    #           P57's 0.614 / 1.358 and PPH63's 0.475 / 1.129.
+    #         - Joining X95's La to M76's level NEEDS an exponent: 2.30
+    #           under P57's shape, 1.95 under PPH63's. The measured value is
+    #           2.38. PPH63's shape needs an exponent 0.43 below it: 40
+    #           statistical standard errors, and nearly four times the 0.12
+    #           between the digitized slope and the figure's printed 2.5.
+    #       PPH63 is partition chromatography on HDEHP-Corvic, and a
+    #       compressed series is what that measurement would give if the
+    #       stationary phase is not a free solvent. It is kept as a registered
+    #       source and supplies nothing here.
     #
     # THE LEVEL, WRITTEN OUT
-    #   From S1, with O/A = 1 and 0.1 mol/L La initially in the aqueous:
-    #     D_La = 0.99            ->  c_aq = 0.1/(1 + 0.99)   = 0.05025 mol/L
-    #                                c_org = 0.99 * c_aq     = 0.04975 mol/L
-    #     [H+]eq = 0.003 + 3*c_org = 0.15225 mol/L  ->  pH = 0.8175  [Z1 4.12]
-    #     free (HA)2 = 1.0/2 - 3*c_org = 0.3508 mol/L        [Z1 4.11]
-    #     lg Kex = lg D - 3 lg[(HA)2] - 3 lg[H+]... = -1.0917
-    #     a_La   = lg Kex + 3 lg(0.5) = -1.9948   at C_ref = 0.5 M DIMER
-    #   The equilibrium pH is RECOVERED, not reported: S1 states only the
-    #   initial 0.003 mol/L HCl. Z1 Eq. (4.12) is what recovers it, and that
-    #   equation is not taken on faith -- on L14's Cyanex 272 series, where
-    #   the equilibrium pH WAS measured at six charges, the same balance
-    #   reproduces all six to within 0.17 pH units (see the Cyanex272 record).
+    #   Model, dimer basis, C_ref = 0.5 M dimer = 1.0 M formal:
+    #     log10 D = a + 3 pH + n log10(C / C_ref),   n = 2.38,  b pinned at 3
+    #   Every M76 point gives a = log D - 3 pH - n log10(C_formal / 1.0):
+    #     Y   a = 2.1942   se 0.016 (18 pts)   Fig. 2.1 2.141 / Fig. 2.2 2.247
+    #     Tm  a = 2.8644   se 0.019 (18 pts)             2.801 /          2.928
+    #     Lu  a = 3.4614   se 0.016 (18 pts)             3.512 /          3.411
+    #   The two figures differ by 0.10-0.13 in opposite directions for Lu and
+    #   for Y/Tm; they are different media (1.0 M (Na,H)Cl against HCl
+    #   alone), and both are kept. Fig. 2.1's own pH slope is 3.14 +/- 0.01
+    #   against the stoichiometric 3 it is pinned at.
+    #   Level on P57's shape: L = mean(a_i - P57_i) over Y, Tm, Lu
+    #     offsets 1.050, 1.106, 0.959  ->  L = 1.0387,  se 0.043
+    #   and a_i = L + P57_i for every element except Y, which ships M76's
+    #   own value.
     #
-    #   TWO TRANSFERS THAT WOULD OTHERWISE BE NEEDED ARE NOT.
-    #   The anchor is in KEROSENE, this record's own first-listed diluent, so
-    #   there is no diluent correction. And 1 mol/L nominal extractant is
-    #   exactly 0.5 mol/L as DIMER, which is this record's declared
-    #   `reference_concentration`, so there is no concentration transfer
-    #   either -- only the small free-dimer correction above, worth
-    #   3*log10(0.5/0.3508) = 0.462 decades, which is why D_La at the
-    #   reference charge (2.87) exceeds the measured 0.99 at the anchor's
-    #   partly loaded 0.3508 mol/L.
+    # THE CHECK THAT WAS NOT FITTED -- X95, which USED TO BE the level.
+    #   Q1 Table 2.6: D_La = 0.99 in KEROSENE at 1 mol/L P204 (the reference
+    #   charge itself), 0.1 mol/L LaCl3, 0.003 mol/L HCl. Through Z1 Eq.
+    #   (4.12) for the equilibrium pH (0.8175) and Eq. (4.11) for the free
+    #   dimer (0.3508 M), now with n = 2.38:
+    #     a_La = -0.0044 - 3(0.8175) + 2.38 log10(0.5/0.3508) = -2.0903
+    #   against -1.9853 here: 0.105 decades, in the direction #270 predicted
+    #   (the X95 route runs low; on PC88A it ran 0.61 low against T21). A
+    #   different diluent, laboratory, element, charge and era. The phase
+    #   ratio is still unstated: O/A 0.5 / 1 / 2 gives -2.451 / -2.090 /
+    #   -1.856, so the check holds to 0.13 unless O/A was 0.5.
+    #   Nothing was tuned to make this agree.
     #
-    # THE PHASE RATIO IS NOT STATED, and it matters. O/A = 1 is assumed --
-    # the convention everywhere else in this file and in L14. What other
-    # ratios would give for a_La:
-    #     O/A = 0.5   -2.3146        O/A = 1   -1.9948        O/A = 2   -1.7966
-    # So the whole ambiguity is worth about 0.5 decades, or 0.17 pH units.
-    #
-    # THE CONTROL. Q1 Table 2.6 carries P507 (= PC88A) in the same row block
-    # under the same conditions, D_La = 0.17. Pushing that through the
-    # identical arithmetic, on PC88A's Alstad basis, gives a_La = -4.6906
-    # against the -4.0795 that T21's 121 measured points give -- the route is
-    # 0.61 decades LOW. Almost all of that is the unstated phase ratio: at
-    # O/A = 2 the control lands at -4.0105, agreeing with T21 to 0.069. The
-    # ratio was NOT tuned to make the control agree, because a phase ratio
-    # inferred from one number in a different extractant's column is not a
-    # measurement. Read the control as: this level is good to roughly half a
-    # decade, i.e. 0.2 pH units, with the sign of the likely error KNOWN
-    # (a_La is more likely too low than too high).
-    #
-    # THE SHAPE, WRITTEN OUT
-    #   S2's HCl column, adjacent factors used in order:
-    #     Ce/La 2.4  Pr/Ce 2.8  Nd/Pr 1.7  Pm/Nd 2.1  Sm/Pm 2.4  Eu/Sm 2.2
-    #     Gd/Eu 1.6  Tb/Gd 3.2  Dy/Tb 2.0  Ho/Dy 2.1  Er/Ho 2.1  Tm/Er 2.5
-    #     Yb/Tm 2.5  Lu/Yb 1.8
-    #   Pm is not a difflow element, so Sm/Nd = 2.1 * 2.4 = 5.04 is a
-    #   two-step product, not a measured adjacent factor.
-    #   Y: S3 puts Kex(Y) at (1.63 - 1.25)/(1.75 - 1.25) = 0.76 of the way
-    #   from Ho to Er, so beta(Y/Ho) = 2.1**0.76 = 1.757 and Er/Y = 1.195.
-    #   The fractional position is used rather than Table 2.7's raw Y - Ho
-    #   difference, which would put Y ABOVE Er and contradict Q1's own
-    #   sentence.
+    # WHAT DID NOT GO IN
+    #   Sato 1989 (Q1 Figs. 2.6 and 2.54, Table 2.9): kerosene, full series,
+    #   but its PC88A curve in the same figure sits 1.7 decades ABOVE T21 at
+    #   La and 0.3 below at Dy -- a compressed, loaded series, not trace. It
+    #   fails the control, so its D2EHPA curve sets nothing.
+    #   C98's absolute lg Kex: its extractant charge is not printed, and with
+    #   n = 2.38 a Kex is charge-dependent. Read at M76's charge it lands on
+    #   this block within 0.04 for Pr and Dy, and +/-0.27 for Nd and Sm,
+    #   which is C98's own Nd-above-the-chord anomaly -- a consistency, not
+    #   evidence, until the charge is known.
+    #   The #270 KNOWN GAP paragraph (three routes to a_Sm, 1.26 decades
+    #   apart) is retired: (1) and (2) above account for it, and the new
+    #   a_Sm, 0.000, sits between the old -0.235 and C98's +1.03.
     #
     # PER ELEMENT: WHAT IS MEASURED, WHAT IS NOT
-    #   MEASURED level (S1):        La, and La only.
-    #   MEASURED spacing (S2/S3):   every element here. Ce, Pr, Nd, Eu, Gd,
-    #     Tb, Dy each sit one measured adjacent factor from their neighbour;
-    #     Sm is two factors from Nd across Pm; Y is placed within a measured
-    #     interval by S3.
-    #   INTERPOLATED:               nothing. There is no interpolation in this
-    #     block -- unlike PC88A, whose Ce/Pr/Eu/Gd/Tb are drawn on a curve.
-    #     Every `a` here is La's level plus a product of printed factors.
-    #   ASSUMED:  b = 3.0 (stoichiometry, S4/S5), c = 0.0, d = 0.0,
-    #     O/A = 1 in the level arithmetic, and 25 C throughout.
+    #   MEASURED level:        Y (M76, direct, 18 points).
+    #   MEASURED spacing:      La, Ce, Pr, Eu, Tb -- a P57 marker each, placed
+    #                          on L, which M76's Y, Tm and Lu set.
+    #   INTERPOLATED:          Nd, Sm, Gd, Dy -- on P57's straight line, which
+    #                          cannot represent the tetrad effect Q1 describes
+    #                          (Peppard 1969). Weaker; see se below.
+    #   ASSUMED:  b = 3.0 (stoichiometric; M76 measures 3.14), c = 0, d = 0,
+    #     M76's charges read as FORMAL (monomer units, the Argonne
+    #     convention; a dimer reading would move every level by
+    #     2.38 log10 2 = 0.72), and room temperature.
     #
-    # HOW GOOD IS IT -- and this is weaker than PC88A's block, deliberately
-    # stated rather than implied. There is ONE measured D behind the level,
-    # so there is no standard error to quote and no residual to report. The
-    # honest error bar is the control above: about half a decade on every
-    # element at once, i.e. a common shift, not a per-element scatter. The
-    # SHAPE is better determined than the level.
+    # HOW GOOD IS IT
+    #   se(a), log10 D units, statistical (level, P57 digitization, and n's
+    #   uncertainty carried over the extrapolation to C_ref):
+    #     Y 0.023;  La Ce Pr Eu Tb 0.052;  Nd Sm Gd Dy 0.134
+    #   The interpolated four carry a tetrad allowance of 0.123, the largest
+    #   deviation of PPH63's per-pair-resolved series from its own straight
+    #   line at those four elements (Gd).
+    #   SYSTEMATIC, shared by every element and not in se: the aliphatic
+    #   diluent (C98's hexane and cyclohexane differ by 0.25-0.55), and the
+    #   exponent over 0.18-1.0 M, which M76 does not cover (0.1 in n is
+    #   0.08 in a at M76's top point). X95 bounds the NET of these at the
+    #   reference charge: 0.105 at La.
     #
-    # KNOWN GAP -- THE SINGLE HIGHEST-VALUE FOLLOW-UP.
-    #   Three routes to a_Sm disagree by 1.26 decades:
-    #     Q1 Table 2.6, kerosene-direct (SHIPPED)                -0.235
-    #     Q1 Fig. 2.8 (toluene) + Chai toluene->hexane + Z1 T4.1  +0.54
-    #     C98 n-hexane column + Z1 Table 4.1 kerosene shift       +1.03
-    #   Element by element the C98 route runs 1.26-1.73 decades ABOVE this
-    #   block (Pr +1.28, Nd +1.71, Sm +1.26, Dy +1.73). The kerosene-direct
-    #   route is shipped because it is the only anchor measured in this
-    #   record's own diluent, it is an unambiguous D rather than a Kex of
-    #   unverifiable convention, and it needs no 2.35-decade diluent transfer
-    #   borrowed from a different extractant's single-element table. C98 is
-    #   also internally suspect: its Nd entry sits above the Pr-Sm chord in
-    #   five of six diluent rows, which is the tetrad pattern backwards.
-    #   WHAT WOULD SETTLE IT: a digitized log D vs equilibrium pH dataset for
-    #   D2EHPA in kerosene at a stated charge and phase ratio -- the T21
-    #   analogue. That would retire S1, S2 and this whole paragraph at once.
-    #   A SECOND GAP: the shape's cumulative Lu/La is 6.4e4, geometric-mean
-    #   adjacent 2.205, against the 3.5e5 and 2.49 that Q1 quotes on the same
-    #   page from Peppard 1957 (its ref [9]). Both are printed in Q1 and they
-    #   do not agree; S2 is used because it is resolved per pair.
+    # REMAINING GAP. The light end's LEVEL is not measured in an aliphatic
+    # diluent: La-Tb are placed from Y through P57's toluene spacing, and
+    # X95's single La point is the only aliphatic check on them. The primaries
+    # of M76 and P57 are not on this machine either -- both are read from
+    # redrawn figures. A measured light-lanthanide pH series in kerosene
+    # would replace the shape with data where it matters most for Nd/Pr.
     #
-    # D VALUES AT pH 0.5, 0.5 M DIMER FREE, TRACE LOADING. The old block
-    # quoted pH 3.0, where this reagent extracts everything and separates
-    # nothing:
-    #   La 0.32, Ce 0.77, Pr 2.2, Nd 3.7, Sm 18, Eu 41, Gd 65,
-    #   Tb 208, Dy 415, Y 1530
-    # At the anchor's own pH of 0.82: La 2.9, Nd 33, Dy 3.7e3, Y 1.4e4.
+    # D VALUES AT pH 0.5, 0.5 M DIMER FREE, TRACE LOADING:
+    #   La 0.33, Ce 0.85, Pr 1.9, Nd 5.1, Sm 32, Eu 80, Gd 197,
+    #   Tb 495, Dy 1233, Y 4944
+    # At pH 0.82: La 3.0, Nd 46, Dy 1.1e4, Y 4.5e4.
     # These are the correlation's trace-loading inputs to `include_loading`
     # and `solve_free_extractant`, not plant numbers.
     ph_coefficients:
-      # a = level (X95) + cumulative shape (PPH63); b = 3.0 stoichiometric, c = 0
-      La: {a: -1.9948, b: 3.0, c: 0.0, d: 0.0}
-      Ce: {a: -1.6146, b: 3.0, c: 0.0, d: 0.0}
-      Pr: {a: -1.1674, b: 3.0, c: 0.0, d: 0.0}
-      Nd: {a: -0.9370, b: 3.0, c: 0.0, d: 0.0}
-      Sm: {a: -0.2346, b: 3.0, c: 0.0, d: 0.0}   # two steps from Nd, across Pm
-      Eu: {a:  0.1079, b: 3.0, c: 0.0, d: 0.0}
-      Gd: {a:  0.3120, b: 3.0, c: 0.0, d: 0.0}
-      Tb: {a:  0.8171, b: 3.0, c: 0.0, d: 0.0}
-      Dy: {a:  1.1182, b: 3.0, c: 0.0, d: 0.0}
-      Y:  {a:  1.6853, b: 3.0, c: 0.0, d: 0.0}   # between Ho and Er (X95)
+      # a = level L (M76 Y/Tm/Lu) + P57 spacing; b = 3.0 pinned, c = 0.
+      # Y is M76's own value. se in the block above.
+      La: {a: -1.9853, b: 3.0, c: 0.0, d: 0.0}
+      Ce: {a: -1.5733, b: 3.0, c: 0.0, d: 0.0}
+      Pr: {a: -1.2113, b: 3.0, c: 0.0, d: 0.0}
+      Nd: {a: -0.7953, b: 3.0, c: 0.0, d: 0.0}   # interpolated, P57 line
+      Sm: {a:  0.0001, b: 3.0, c: 0.0, d: 0.0}   # interpolated, P57 line
+      Eu: {a:  0.4007, b: 3.0, c: 0.0, d: 0.0}
+      Gd: {a:  0.7955, b: 3.0, c: 0.0, d: 0.0}   # interpolated, P57 line
+      Tb: {a:  1.1947, b: 3.0, c: 0.0, d: 0.0}
+      Dy: {a:  1.5909, b: 3.0, c: 0.0, d: 0.0}   # interpolated, P57 line
+      Y:  {a:  2.1942, b: 3.0, c: 0.0, d: 0.0}   # measured (M76)
 
     # Temperature correction: add d*(1/T - 1/298.15) to log(D)
     #
@@ -445,25 +458,29 @@ extractants:
     #
     # Upper bound 2.0: at the reference charge D(La) is already 1e4 there, so
     # 2.0 is generous rather than tight. Q1 Fig. 2.8 verifies the slope-3
-    # behaviour up to lg[H+] = -1, i.e. pH 1.
+    # behaviour up to lg[H+] = -1, i.e. pH 1, and since #283 M76 Fig. 2.1
+    # measures it in n-heptane at constant ionic strength over pH -0.02 to
+    # 1.15 (slope 3.14 +/- 0.01).
     # Lower bound 0.0: Q1 Fig. 2.9 shows D passing through a MINIMUM at high
     # acidity and rising again as the mechanism turns solvating; below that
     # minimum a cation-exchange correlation is not merely extrapolated, it is
     # the wrong equation. The minimum is not resolved to a number in the
     # figure, so 0.0 is where this record stops rather than a measured bound.
     #
-    # This is a large narrowing and it is meant to be: the anchor sits at
-    # pH 0.82 and the useful separation window for 1 mol/L D2EHPA really is
-    # around pH 0-1.5, not 1-5. At a tenth the charge (0.05 M nominal) the
-    # same lg Kex puts pH50(Nd) at 1.61, the familiar textbook figure; the
-    # cube law moves pH50 by log10(20) = 1.3 units between the two charges,
-    # which is the whole discrepancy.
+    # This is a large narrowing and it is meant to be: the useful separation
+    # window for 1 mol/L D2EHPA really is around pH 0-1.5, not 1-5. At a
+    # tenth the charge (0.05 M nominal) the block puts pH50(Nd) at 1.30; the
+    # measured n = 2.38 moves pH50 by 2.38 log10(20) / 3 = 1.03 units between
+    # the two charges, which is why textbook pH50 figures quoted at low
+    # charge sit a pH unit above this record's reference.
     valid_ph_range: [0.0, 2.0]
-    # The record's ONE measured point. Unlike PC88A, where five element
-    # supports had to be reconciled by a minimax, there is a single anchor
-    # here and its equilibrium pH is 0.8175. Everything DERIVED from this
-    # correlation is evaluated here (#268), so this is also where the
-    # Langmuir constants are taken. Was 3.0, outside the new window entirely.
+    # The equilibrium pH of X95's La point (0.8175), which set the level
+    # until #283 and is now its held-out check. Kept because it sits inside
+    # M76's measured support (pH -0.02 to 1.15) and because moving it would
+    # move every derived quantity for no gain in accuracy. Everything DERIVED
+    # from this correlation is evaluated here (#268), so this is also where
+    # the Langmuir constants are taken. Was 3.0 before #270, outside the
+    # window entirely.
     reference_pH: 0.82
     valid_temp_range: [283, 333]  # K
     # DIMER BASIS, stated explicitly (#270): 0.5 mol/L as (HA)2, which is
@@ -473,8 +490,17 @@ extractants:
     # record's own basis.
     reference_concentration: 0.5  # M as dimer (= 1.0 M nominal)
 
-    # Concentration correction: D ∝ [HA]^n
-    concentration_exponent: 3.0
+    # Concentration correction: D ∝ [HA]^n. FITTED (#283), not the cube law
+    # the stoichiometry would give: M76 Fig. 2.2 measures 2.382 +/- 0.011
+    # over 0.0093-0.18 M in n-heptane, straight in log-log (rms 0.021), and
+    # an Alstad sqrt(C) correction on top of n = 3 fits it worse. The
+    # stoichiometry is unchanged -- three dimers per RE(III) still set the
+    # CAPACITY (max_loading = 1/6) -- this is the apparent order in the
+    # extractant, which non-ideality of the dimer at these charges lowers.
+    # Cyanex272's L14 series prefers 2.40 for the same reason. Beyond 0.18 M
+    # the exponent is not measured; X95's La point at 1.0 M agrees with the
+    # extrapolation to 0.105 decades.
+    concentration_exponent: 2.38
 
     cost_usd_kg: 8.0
 
@@ -1997,13 +2023,16 @@ provenance:
     # (2a-bis) The two fields the three acidic records share, and which the
     # #270 refits reach even though they sit outside the pH block.
     # ======================================================================
-    - {pattern: "extractants.D2EHPA.concentration_exponent",    source: Z1,
-       locus: "Eqs. (4.27)-(4.31), p. 124",
-       note: "3.0, the same stoichiometry as `b`: three dimers per RE(III) on
-              the dimer basis this record declares. Not fitted -- X95 gives a
-              single extractant charge, so there is no concentration series
-              behind this record. Read the exponent as the mechanism's, and
-              the extrapolation away from 0.5 mol/L dimer as untested."}
+    - {pattern: "extractants.D2EHPA.concentration_exponent",    source: M76,
+       locus: "Q1 Fig. 2.2, p. 191",
+       note: "2.38, FITTED (#283): the common slope of log D on log[HDEHP]
+              over M76's three nine-point series, 0.0093-0.18 mol/L in
+              n-heptane, 2.382 +/- 0.011, rms 0.021. The figure prints
+              'lines of slope 2.5'; its drawn lines digitize to 2.37-2.40.
+              An Alstad sqrt(C) correction on n = 3 fits worse (rms 0.059,
+              curved residuals). Not the stoichiometry: three dimers per
+              RE(III) still set the capacity. Unmeasured above 0.18 M; X95's
+              La point at 1.0 M agrees with the extrapolation to 0.105."}
     - {pattern: "extractants.PC88A.concentration_exponent",     source: T21,
        locus: "Eqs. 3-5",
        note: "3.0, and unlike the other two this one is FITTED: T21 measures
@@ -2063,69 +2092,76 @@ provenance:
               this record's own anchor."}
 
     # ======================================================================
-    # (2b) LITERATURE-DERIVED -- D2EHPA pH block, refitted for #270
+    # (2b) LITERATURE-DERIVED -- D2EHPA pH block, refitted for #283
     #
-    # Two sources, both reached through Q1 as a secondary: X95 (Q1 Table 2.6)
-    # for the LEVEL, PPH63 (Q1 Table 2.8, HCl column) for the SHAPE, with Y
-    # placed from X95 again (Q1 Table 2.7 and the sentence on p. 213). The
-    # arithmetic is written out on the record above. Nothing in this block is
-    # interpolated -- every `a` is one measured D plus a product of printed
-    # separation factors.
+    # LEVEL from M76 (Mason 1976, n-heptane, Y/Tm/Lu, via Q1 Figs. 2.1-2.2),
+    # SHAPE from P57 (Peppard 1957, via SN61 Fig. 51). X95's kerosene La
+    # point, the level until #283, is held out and met to 0.105 decades. The
+    # arithmetic is written out on the record above.
     # ======================================================================
     - {pattern: "extractants.D2EHPA.ph_coefficients.*.*",  source: CALC}
     - {pattern: "extractants.D2EHPA.ph_coefficients.*.a",  source: CALC,
-       note: "DERIVED, not measured, for every element including La. The
-              LEVEL is X95's single D_La = 0.99 (kerosene, 1 mol/L P204,
-              0.1 mol/L LaCl3, 0.003 mol/L HCl), converted to this record's
-              basis through Z1 Eq. (4.12) for the unreported equilibrium pH
-              (0.8175) and Eq. (4.11) for the free dimer (0.3508 mol/L),
-              giving a_La = -1.9948 at 0.5 mol/L dimer. The SHAPE is PPH63's
-              fourteen adjacent separation factors cumulated from La. The
-              phase ratio is NOT stated by X95; O/A = 1 is assumed and the
-              record reports that O/A 0.5 to 2 moves every `a` by +0.32 to
-              -0.20. The P507 row of the same table, pushed through the same
-              arithmetic, lands 0.61 decades below T21's independent fit, so
-              read the level as good to about half a decade with the sign of
-              the likely error known. Sm is two steps from Nd across Pm;
-              Y is placed at 0.76 of the Ho-Er interval."}
-    - {pattern: "extractants.D2EHPA.ph_coefficients.La.a", source: X95,
-       locus: "Q1 Table 2.6, p. 213",
-       note: "The one element whose ABSOLUTE level is measured rather than
-              stepped to. Still not a raw datum -- see the CALC note above
-              for the conversion -- but this is where the level enters."}
+       locus: "M76 via Q1 Figs. 2.1-2.2, p. 191; P57 via SN61 Fig. 51",
+       note: "DERIVED: level plus spacing. LEVEL: L = 1.0387, the mean of
+              a_i - P57_i over M76's Y, Tm and Lu (se 0.043), each a_i the
+              mean over 18 digitized points of log D - 3 pH - 2.38
+              log10(C/1.0 M formal). SPACING: P57's digitized log D, a
+              marker for La, Ce, Pr, Eu and Tb (sd 0.023). se(a) 0.052.
+              Checked, not fitted, against X95's D_La = 0.99 in kerosene at
+              the reference charge: -2.090 against -1.985 at O/A = 1."}
+    - {pattern: "extractants.D2EHPA.ph_coefficients.Y.a",  source: M76,
+       locus: "Q1 Figs. 2.1 and 2.2, p. 191",
+       note: "MEASURED: the one element whose level M76 measures directly,
+              2.1942 over 18 points (se 0.023 including the exponent's
+              uncertainty carried to the reference charge). The two figures
+              give 2.141 and 2.247 in different media and both are kept."}
+    - {pattern: "extractants.D2EHPA.ph_coefficients.Nd.a", source: CALC,
+       note: "INTERPOLATED, not measured: on P57's straight line in Z (no
+              marker at Nd). se 0.134, of which 0.123 is a tetrad allowance
+              (PPH63's worst deviation from its own line at Nd/Sm/Gd/Dy).
+              C98's hexane series puts Nd 0.24 above its own chord."}
+    - {pattern: "extractants.D2EHPA.ph_coefficients.Sm.a", source: CALC,
+       note: "INTERPOLATED, not measured: on P57's line. se 0.134."}
+    - {pattern: "extractants.D2EHPA.ph_coefficients.Gd.a", source: CALC,
+       note: "INTERPOLATED, not measured: on P57's line, and the element
+              the straight line is most likely to be wrong about (the
+              half-filled shell; PPH63 sits 0.12 below its own line here).
+              se 0.134."}
+    - {pattern: "extractants.D2EHPA.ph_coefficients.Dy.a", source: CALC,
+       note: "INTERPOLATED, not measured: on P57's line. se 0.134."}
     - {pattern: "extractants.D2EHPA.ph_coefficients.*.b",  source: Z1,
        locus: "Eqs. (4.27)-(4.31), p. 124",
        note: "PINNED at 3.0, the stoichiometric slope this record declares
-              (protons_released: 3). Not fitted -- there is no pH series
-              behind this record to fit it to. Q1 Fig. 2.8 verifies slope 3
-              for 1 mol/L P204 up to lg[H+] = -1. One slope for every element
-              is what makes a separation factor independent of pH, and it is
-              also what lets PPH63's separation factors be read directly as
-              differences in `a`."}
+              (protons_released: 3). M76 Fig. 2.1 measures 3.14 +/- 0.01 in
+              n-heptane at constant ionic strength over pH -0.02 to 1.15;
+              pinning costs little and makes every separation factor
+              independent of pH, which is also what lets P57's spacing be
+              read directly as differences in `a`."}
     - {pattern: "extractants.D2EHPA.ph_coefficients.*.c",  source: CONV,
-       note: "Zero by declaration. No retrieved source resolves curvature in
-              pH for this reagent; the old blanket 0.010 was hand-tuned."}
+       note: "Zero by declaration. M76's pH series is straight (rms 0.018
+              about slope-3.14 lines); the old blanket 0.010 was hand-tuned."}
     - {pattern: "extractants.D2EHPA.ph_coefficients.*.d",  source: CONV,
        note: "Zero because the temperature term lives in
               temperature_coefficients, not because a temperature dependence
               was measured to be absent."}
     - {pattern: "extractants.D2EHPA.valid_ph_range",       source: Q1,
-       locus: "Figs. 2.8 and 2.9, pp. 216-218",
+       locus: "Figs. 2.1, 2.8 and 2.9, pp. 191, 216-218",
        note: "[0.0, 2.0]. Upper bound: at the reference charge this block
               puts D(La) at 1e4 by pH 2, so nothing separates above it; the
               old 5.0 put D(La) at 1e13. Lower bound: Q1 Fig. 2.9 shows D
               through a MINIMUM at high acidity and rising again as the
               mechanism turns solvating, below which a cation-exchange
-              correlation is the wrong equation. The figure does not resolve
-              that minimum to a number, so 0.0 is where this record stops
-              rather than a measured bound."}
+              correlation is the wrong equation. M76 measures slope 3 down
+              to pH -0.02, so 0.0 is where this record stops rather than a
+              measured bound."}
     - {pattern: "extractants.D2EHPA.reference_pH",         source: X95,
        locus: "Q1 Table 2.6, p. 213",
-       note: "0.82, the equilibrium pH of the record's ONE measured point,
-              recovered from the stated 0.003 mol/L initial HCl by Z1
-              Eq. (4.12). Unlike PC88A there is no minimax to do -- there is
-              a single anchor. Everything derived from this correlation is
-              evaluated here (#268). Was 3.0, outside the new window."}
+       note: "0.82, the equilibrium pH of X95's La point, recovered from the
+              stated 0.003 mol/L initial HCl by Z1 Eq. (4.12). That point set
+              the level until #283 and is now its held-out check; 0.82 is
+              kept because it lies inside M76's measured support (pH -0.02 to
+              1.15). Everything derived from this correlation is evaluated
+              here (#268)."}
 
     # ======================================================================
     # (2c) LITERATURE-DERIVED -- Cyanex272 pH block, refitted for #270

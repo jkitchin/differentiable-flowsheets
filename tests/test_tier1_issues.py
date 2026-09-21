@@ -97,9 +97,12 @@ class TestREEMassBalance:
         assert "output" in mb
         assert "closure" in mb
 
-        # Closure should be close to 1.0 for each element
+        # Closure is exact once every outlet is counted. It was a 5% band
+        # while the barren organic was left out of `output`, which is how a
+        # D2EHPA circuit stripped at pH 0 came to report 3-6% of its Nd as
+        # lost (#283): it had stayed on the solvent.
         for elem in ("La", "Ce", "Nd"):
-            assert float(mb["closure"][elem]) == pytest.approx(1.0, abs=0.05)
+            assert float(mb["closure"][elem]) == pytest.approx(1.0, abs=1e-9)
 
     def test_extract_scrub_strip_mass_balance(self, ree_feed):
         """ExtractScrubStripCircuit returns mass_balance dict."""
@@ -122,7 +125,11 @@ class TestREEMassBalance:
         assert "mass_balance" in results
         mb = results["mass_balance"]
         for elem in ("La", "Ce", "Nd"):
-            assert float(mb["closure"][elem]) == pytest.approx(1.0, abs=0.05)
+            assert float(mb["closure"][elem]) == pytest.approx(1.0, abs=1e-9)
+        # the method and the dict agree, barren organic included
+        mat = circuit.material_balance(ree_feed, results)
+        for elem in ("La", "Ce", "Nd"):
+            assert mat[elem]["closure"] == pytest.approx(1.0, abs=1e-9)
 
     def test_split_shell_mass_balance(self):
         """SplitShellCascade returns mass_balance dict."""
