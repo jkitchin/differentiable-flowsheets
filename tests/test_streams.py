@@ -116,6 +116,54 @@ class TestCombineStreams:
         assert float(combined["T"]) == pytest.approx(350.0)
 
 
+class TestCombineStreamsMismatchedSpecies:
+    """Mixing inlets that do not carry the same species list.
+
+    Taking only the first inlet's species dropped the rest silently: the
+    flows left the mole balance and, because each inlet still weighted its
+    own *full* total, the temperature weights summed to more than one and
+    the mixed temperature landed outside the inlet range.
+    """
+
+    def test_disjoint_species_are_both_carried(self):
+        s1 = make_stream({"A": 1.0}, T=300.0, P=101325.0)
+        s2 = make_stream({"B": 2.0}, T=400.0, P=101325.0)
+
+        combined = combine_streams(s1, s2)
+
+        assert float(combined["F_A"]) == pytest.approx(1.0)
+        assert float(combined["F_B"]) == pytest.approx(2.0)
+
+    def test_species_only_in_a_later_inlet_is_not_dropped(self):
+        s1 = make_stream({"A": 1.0}, T=300.0, P=101325.0)
+        s2 = make_stream({"A": 1.0, "B": 2.0}, T=400.0, P=101325.0)
+
+        combined = combine_streams(s1, s2)
+
+        assert float(total_flow(combined)) == pytest.approx(4.0)
+        assert float(combined["F_B"]) == pytest.approx(2.0)
+
+    def test_mixed_temperature_stays_within_the_inlet_range(self):
+        s1 = make_stream({"A": 1.0}, T=300.0, P=101325.0)
+        s2 = make_stream({"A": 1.0, "B": 2.0}, T=400.0, P=101325.0)
+
+        combined = combine_streams(s1, s2)
+
+        # Flow-weighted: (1/4)*300 + (3/4)*400
+        assert float(combined["T"]) == pytest.approx(375.0)
+        assert 300.0 <= float(combined["T"]) <= 400.0
+
+    def test_zero_flow_inlets_give_a_finite_temperature(self):
+        """A zero stream is an ordinary outcome of a split or a purge."""
+        s1 = make_stream({"A": 0.0}, T=300.0, P=101325.0)
+        s2 = make_stream({"A": 0.0}, T=400.0, P=101325.0)
+
+        combined = combine_streams(s1, s2)
+
+        assert not jnp.isnan(combined["T"])
+        assert float(combined["T"]) == pytest.approx(350.0)
+
+
 class TestScaleStream:
     def test_scale_stream(self):
         stream = make_stream({"A": 10.0, "B": 5.0}, T=300.0, P=101325.0)
