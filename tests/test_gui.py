@@ -492,10 +492,16 @@ class TestNonFiniteFloats:
         json.loads(body, parse_constant=reject)
 
     def test_an_irreversible_reaction_puts_inf_in_the_document(self, client):
-        """Guards the premise: without inf present the test above is vacuous."""
+        """Guards the premise: without inf present the test above is vacuous.
+
+        The serializer tags the non-finite floats itself (so a saved file
+        is valid JSON too), which is what the document carries here;
+        `_json_safe` still covers everything that does not come through
+        the serializer.
+        """
         _, doc = client.get_json("/api/flowsheet")
         rate_params = doc["flowsheet"]["units"][0]["params"]["rate_params"]
-        assert rate_params["K_eq"]["$array"] == ["Infinity"]
+        assert rate_params["K_eq"]["$array"] == [{"$float": "inf"}]
 
     def test_the_round_trip_restores_the_value(self, client):
         _, doc = client.get_json("/api/flowsheet")

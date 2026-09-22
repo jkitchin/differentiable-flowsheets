@@ -172,6 +172,61 @@ class TestChromatographyMassBalance:
                 f"feed={float(feed_flows[species])}, total_out={total_out}"
             )
 
+    def test_protein_a_overload_does_not_create_mass(self):
+        """A load volume larger than the feed volume.
+
+        The loading calculation scaled the target flow by an unclipped
+        `load_volume / feed_volume`, so loading 20 L of an 11.1 L feed
+        loaded 18 mol/s of a 10 mol/s stream and the column reported 8
+        mol/s it was never given. The mass-balance section right below it
+        already clipped its copy of the fraction, and the ion-exchange and
+        size-exclusion columns clip theirs.
+        """
+        feed = make_stream(
+            {"mAb": jnp.array(10.0), "HCP": jnp.array(1.0)},
+            T=jnp.array(300.0),
+            P=jnp.array(101325.0),
+        )
+        params = ProteinAParams(
+            column_volume=1.0,
+            q_max=35.0,
+            K_d=0.1,
+            target_species="mAb",
+            yield_factor=0.95,
+            impurity_clearance={"HCP": 2.0},
+        )
+        col = ProteinAChromatography(params)
+        (product, waste), info = col(feed, load_volume=20.0, feed_volume=11.1)
+
+        feed_flows = get_flows(feed)
+        for species in feed_flows:
+            total_out = float(get_flows(product).get(species, 0.0)) + float(
+                get_flows(waste).get(species, 0.0)
+            )
+            assert total_out == pytest.approx(float(feed_flows[species]), rel=1e-6)
+
+    def test_protein_a_overload_matches_a_full_load(self):
+        """Loading more than there is loads what there is, and no more."""
+        feed = make_stream(
+            {"mAb": jnp.array(10.0), "HCP": jnp.array(1.0)},
+            T=jnp.array(300.0),
+            P=jnp.array(101325.0),
+        )
+        params = ProteinAParams(
+            column_volume=1.0,
+            q_max=35.0,
+            K_d=0.1,
+            target_species="mAb",
+            yield_factor=0.95,
+            impurity_clearance={"HCP": 2.0},
+        )
+        col = ProteinAChromatography(params)
+        (over, _), _ = col(feed, load_volume=20.0, feed_volume=11.1)
+        (full, _), _ = col(feed, load_volume=11.1, feed_volume=11.1)
+
+        assert float(get_flows(over)["mAb"]) == pytest.approx(
+            float(get_flows(full)["mAb"]))
+
     def test_protein_a_partial_load_mass_balance(self):
         """When only partial feed is loaded, unloaded mass goes to waste."""
         feed = make_stream(

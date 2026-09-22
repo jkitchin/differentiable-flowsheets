@@ -195,6 +195,14 @@ class TestVLE:
         P_high = co2_equilibrium_pressure(loading=0.4, T=313.15, solvent="MEA")
         assert float(P_high) > float(P_low)
 
+    def test_vle_magnitude_matches_the_data_it_cites(self):
+        """See TestVLEMagnitude below; this is the anchor point."""
+        from difflow_cc import co2_equilibrium_pressure
+
+        P = co2_equilibrium_pressure(loading=0.4, T=313.15, solvent="MEA")
+
+        assert 500.0 < float(P) < 2000.0
+
     def test_amine_vle_class(self):
         """Test AmineVLE class."""
         from difflow_cc import AmineVLE
@@ -1602,3 +1610,67 @@ class TestEdgeCases:
 
         assert jnp.isfinite(P)
         assert float(P) >= 0
+
+
+class TestVLEMagnitude:
+    """The equilibrium pressure has to be the right SIZE, not just the
+    right shape.
+
+    Every other VLE test here checks a sign, a monotonicity or a
+    finiteness, and the correlation passed all of them while sitting about
+    28 decades low -- 1e-25 Pa at a loading of 0.3, against the ~1e2 Pa the
+    Jou et al. (1995) data it cites reports. The absorber divides by the
+    slope of this curve, so its absorption factor came out at 5.6e9 instead
+    of tens: every Kremser stage count saturated, and `n_stages` changed no
+    answer at any solvent, L/G, lean loading or temperature.
+    """
+
+    @staticmethod
+    def _P(loading, T=313.15, solvent="MEA"):
+        from difflow_cc import co2_equilibrium_pressure
+
+        return float(co2_equilibrium_pressure(loading=loading, T=T, solvent=solvent))
+
+    def test_the_anchor_point(self):
+        """30 wt% MEA, 40 C, alpha = 0.4: about 1 kPa."""
+        assert self._P(0.4) == pytest.approx(1000.0, rel=0.5)
+
+    def test_a_lean_loading_is_tens_to_hundreds_of_pascals(self):
+        assert 5.0 < self._P(0.2) < 500.0
+
+    def test_stripper_conditions_are_hundreds_of_kilopascals(self):
+        """120 C is where the CO2 comes back off."""
+        assert 1e5 < self._P(0.4, T=393.15) < 5e6
+
+    def test_it_still_rises_with_loading_and_with_temperature(self):
+        assert self._P(0.4) > self._P(0.2)
+        assert self._P(0.3, T=393.15) > self._P(0.3, T=313.15)
+
+    def test_the_absorber_absorption_factor_is_a_plausible_size(self):
+        """A is L/(mG); an MEA absorber runs at tens, not billions."""
+        from difflow.streams import make_stream
+        from difflow_cc import AbsorberParams, AmineAbsorber
+
+        absorber = AmineAbsorber(AbsorberParams(
+            solvent="MEA", n_stages=10, solvent_conc=30.0, L_G_ratio=3.0))
+        _, _, info = absorber(
+            make_stream({"CO2": 1.0, "N2": 9.0}, T=313.15, P=101325.0))
+
+        assert 1.0 < float(info["absorption_factor"]) < 1e3
+
+    def test_the_stage_count_moves_the_capture(self):
+        """The whole Kremser calculation was inert before."""
+        from difflow.streams import get_flows, make_stream
+        from difflow_cc import AbsorberParams, AmineAbsorber
+
+        def capture(n):
+            absorber = AmineAbsorber(AbsorberParams(
+                solvent="MEA", n_stages=n, solvent_conc=30.0, L_G_ratio=3.0))
+            gas, _, _ = absorber(
+                make_stream({"CO2": 1.0, "N2": 9.0}, T=313.15, P=101325.0))
+            return 1.0 - float(get_flows(gas)["CO2"])
+
+        one, five = capture(1), capture(5)
+
+        assert five > one + 1e-6
+        assert one > 0.5

@@ -290,15 +290,24 @@ class ProteinAChromatography:
         total_flow = sum(inlet_flows.values())
         target_flow = inlet_flows.get(p.target_species, jnp.array(0.0))
 
-        # Mass loaded calculation
+        # Mass loaded calculation. The fraction is clipped to [0, 1] here for
+        # the same reason it is clipped in the mass balance below, and as the
+        # ion-exchange and size-exclusion columns already clip theirs: a load
+        # volume larger than the feed volume otherwise loads more of the
+        # target than the feed contains, and the column reports mass it was
+        # never given -- loading 20 L of an 11.1 L feed closed 8 mol/s out.
         if feed_volume is not None:
             # Proper calculation: concentration = mass/volume, then mass = conc * load_vol
             # load_fraction = load_volume / feed_volume
-            load_fraction = jnp.asarray(load_volume) / jnp.asarray(feed_volume)
+            load_fraction = jnp.clip(
+                jnp.asarray(load_volume) / jnp.asarray(feed_volume), 0.0, 1.0
+            )
             target_mass_loaded = target_flow * load_fraction
         else:
             # Legacy: assume flows represent concentrations (g/L) and total_flow is volume
-            target_mass_loaded = target_flow * load_volume / total_flow
+            target_mass_loaded = target_flow * jnp.clip(
+                jnp.asarray(load_volume) / total_flow, 0.0, 1.0
+            )
 
         # Dynamic binding capacity.
         # Kinetic model (#100): when an adsorption rate constant and a load

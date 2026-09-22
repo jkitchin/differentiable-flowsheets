@@ -34,11 +34,21 @@ def safe_divide(
     Example:
         >>> safe_divide(1.0, 0.0)  # Returns 1e10 instead of inf
         >>> safe_divide(1.0, -1e-15)  # Returns -1e10, preserving sign
+
+    Note:
+        The sign of a denominator that is exactly zero is taken as positive,
+        so the function is (necessarily) discontinuous there -- but only
+        there. A denominator anywhere in ``[-eps, 0)`` keeps its negative
+        sign, so the branch boundary at ``|d| = eps`` introduces no jump of
+        its own.
     """
-    # Preserve sign while ensuring minimum magnitude
+    # Preserve sign while ensuring minimum magnitude. Note this must test the
+    # sign of the denominator itself: `sign(denominator + eps)` is positive
+    # for every denominator in (-eps, 0), which silently flips the sign of
+    # the result exactly where the clip is meant to be protecting it.
     safe_denom = jnp.where(
         jnp.abs(denominator) < eps,
-        jnp.sign(denominator + eps) * eps,
+        jnp.where(denominator < 0, -eps, eps),
         denominator,
     )
     return numerator / safe_denom

@@ -210,22 +210,35 @@ class ParamsMixin:
         import jax
         from dataclasses import fields as dc_fields
 
+        def is_leaf_value(val):
+            # `bool` is a subclass of `int`, so an unguarded numeric test
+            # makes a boolean flag a differentiable leaf -- and `grad` then
+            # rejects the whole params object over a field that only ever
+            # picks a branch. Flags are static.
+            if isinstance(val, bool):
+                return False
+            return isinstance(val, (int, float, jnp.ndarray)) or hasattr(val, 'shape')
+
         def tree_flatten(obj):
             children = []
+            child_names = []
             aux_data = {}
             for f in dc_fields(obj):
                 val = getattr(obj, f.name)
-                if isinstance(val, (int, float, jnp.ndarray)) or hasattr(val, 'shape'):
+                if is_leaf_value(val):
                     children.append(val)
+                    child_names.append(f.name)
                 else:
                     aux_data[f.name] = val
-            child_names = [f.name for f in dc_fields(obj)
-                          if isinstance(getattr(obj, f.name), (int, float, jnp.ndarray))
-                          or hasattr(getattr(obj, f.name), 'shape')]
             aux_data['_child_names'] = tuple(child_names)
             return children, aux_data
 
         def tree_unflatten(aux_data, children):
+            # Copy before popping: JAX hands the SAME aux object to every
+            # unflatten of a given treedef, and `grad` alone unflattens twice
+            # (primal in, cotangent out). Mutating it here made the second
+            # call fail with KeyError('_child_names').
+            aux_data = dict(aux_data)
             child_names = aux_data.pop('_child_names')
             kwargs = dict(zip(child_names, children))
             kwargs.update(aux_data)

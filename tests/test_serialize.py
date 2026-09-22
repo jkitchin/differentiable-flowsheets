@@ -369,6 +369,86 @@ class TestValueEncoding:
             _encode_value(Opaque(), "test")
 
 
+class TestNonFiniteFloats:
+    """A saved file has to be JSON that something other than Python reads.
+
+    Python's `json` writes the non-finite floats as the bare tokens
+    `Infinity` / `NaN`, which are not JSON: `JSON.parse`, `jq` and every
+    strict reader reject the whole file. And this is the common case --
+    `mass_action_kinetics` puts `inf` in `K_eq` for every irreversible
+    reaction.
+    """
+
+    @staticmethod
+    def _strict(text):
+        def reject(token):
+            raise AssertionError(f"bare {token} is not valid JSON")
+
+        return json.loads(text, parse_constant=reject)
+
+    def test_scalar_round_trip(self):
+        from difflow.serialize import _decode_value, _encode_value
+
+        for value in (float("inf"), float("-inf")):
+            restored = _decode_value(_encode_value(value, "test"))
+            assert restored == value
+        assert jnp.isnan(_decode_value(_encode_value(float("nan"), "test")))
+
+    def test_array_round_trip(self):
+        from difflow.serialize import _decode_value, _encode_value
+
+        original = jnp.array([1.0, jnp.inf, -jnp.inf])
+        restored = _decode_value(_encode_value(original, "test"))
+
+        assert jnp.array_equal(restored, original)
+
+    def test_the_encoding_is_valid_json(self):
+        from difflow.serialize import _encode_value
+
+        text = json.dumps(_encode_value(jnp.array([jnp.inf, jnp.nan]), "test"))
+
+        self._strict(text)
+
+    def test_a_saved_flowsheet_with_an_irreversible_reaction_is_valid_json(self):
+        from difflow.kinetics import mass_action_kinetics
+        from difflow import CSTR, CSTRParams
+
+        reactions = mass_action_kinetics(
+            [{"equation": "A -> B",
+              "reactants": {"A": 1.0}, "products": {"B": 1.0},
+              "rate_params": {"A": 0.5, "Ea": 0.0}}],
+            species_order=["A", "B"],
+        )
+        assert bool(jnp.isinf(reactions.rate_params["K_eq"]).all())
+
+        fs = Flowsheet(species_order=["A", "B"])
+        fs.add_feed("feed", make_stream({"A": 1.0, "B": 0.0}, T=350.0, P=101325.0))
+        fs.add_unit(Unit(
+            "r",
+            CSTR(CSTRParams(V=1.0, rate_fn=reactions.rate_fn,
+                            stoich=reactions.stoich,
+                            rate_params=reactions.rate_params,
+                            species_order=["A", "B"], molar_density=55500.0)),
+            ["feed"], ["out"],
+        ))
+        text = serialize.to_json(fs)
+
+        self._strict(text)
+        back = serialize.from_json(text)
+        assert bool(jnp.isinf(
+            back.units[0].operation.params.rate_params["K_eq"]).all())
+
+    def test_files_written_with_the_bare_tokens_still_load(self, flowsheet):
+        """Python's reader accepts them, so files written before the tag
+        -- which hold `Infinity` -- keep loading unchanged."""
+        legacy = serialize.to_json(flowsheet).replace(
+            '"T_out": 360.0', '"T_out": Infinity')
+
+        back = serialize.from_json(legacy)
+
+        assert back.units[0].operation.params.T_out == float("inf")
+
+
 # =============================================================================
 # References into a namespace
 # =============================================================================

@@ -93,11 +93,13 @@ def mole_fractions(stream: Stream) -> dict[str, Array]:
 def combine_streams(*streams: Stream) -> Stream:
     """Combine multiple streams by adding flows.
 
-    All streams must have the same species. Temperature is computed as a
-    flow-weighted average (equivalent to assuming equal Cp for all species,
-    which is a standard first approximation for adiabatic mixing when no
-    thermodynamic model is available). Pressure is taken as the minimum of
-    the inlet pressures.
+    The outlet carries the UNION of the inlet species: a species missing from
+    one inlet is taken as zero flow there, so mixing a pure-A feed with a
+    pure-B feed gives both. Temperature is computed as a flow-weighted
+    average (equivalent to assuming equal Cp for all species, which is a
+    standard first approximation for adiabatic mixing when no thermodynamic
+    model is available). Pressure is taken as the minimum of the inlet
+    pressures.
 
     Args:
         *streams: Variable number of streams to combine
@@ -110,21 +112,42 @@ def combine_streams(*streams: Stream) -> Stream:
         raise ValueError("At least one stream required")
 
     result = {}
-    species = get_species(streams[0])
+    # Union of species, first-seen order. Taking only the first stream's
+    # species drops the others' silently: the flows vanish from the mole
+    # balance AND the T weights stop summing to one, which puts the mixed
+    # temperature outside the range of the inlet temperatures.
+    species: list[str] = []
+    for stream in streams:
+        for s in get_species(stream):
+            if s not in species:
+                species.append(s)
 
-    # Sum flows for each species
+    zero = jnp.asarray(0.0, dtype=jnp.float64)
     for s in species:
         key = f"F_{s}"
-        result[key] = sum(stream[key] for stream in streams)
+        result[key] = sum(stream.get(key, zero) for stream in streams)
 
     # Adiabatic mixing: approximate by flow-weighted average T
     # (assumes equal Cp; for accurate results use IdealThermo)
-    F_total = sum(v for k, v in result.items() if k.startswith("F_"))
-    T_mix = sum(
-        streams[i]["T"] * sum(v for k, v in streams[i].items() if k.startswith("F_")) / F_total
-        for i in range(len(streams))
+    totals = [
+        sum(
+            (v for k, v in stream.items() if k.startswith("F_")),
+            start=zero,
+        )
+        for stream in streams
+    ]
+    F_total = sum(totals, start=zero)
+    # With no flow at all the weights are 0/0. Fall back to an equal-weight
+    # average rather than emitting a NaN temperature (and a NaN gradient)
+    # into the rest of the flowsheet; a zero stream is an ordinary outcome of
+    # a split or a purge.
+    any_flow = F_total > 0.0
+    denom = jnp.where(any_flow, F_total, 1.0)
+    n = len(streams)
+    result["T"] = sum(
+        streams[i]["T"] * jnp.where(any_flow, totals[i] / denom, 1.0 / n)
+        for i in range(n)
     )
-    result["T"] = T_mix
 
     # Use minimum pressure (most conservative for downstream units).
     # Use jnp.minimum reduce to stay JAX-compatible inside jit/vmap.

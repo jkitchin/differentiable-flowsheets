@@ -52,6 +52,7 @@ import contextlib
 import dataclasses
 import functools
 import json
+import math
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
@@ -72,6 +73,18 @@ DATACLASS_TAG = "$dataclass"
 NAMEDTUPLE_TAG = "$namedtuple"
 THERMO_TAG = "$thermo"
 CALLABLE_TAG = "$callable"
+#: JSON has no literal for the non-finite floats, and Python's ``json``
+#: writes them as the bare tokens ``Infinity`` / ``NaN``, which are not
+#: JSON: the browser's ``JSON.parse``, ``jq`` and every strict reader
+#: reject the file. That is the *common* case, not an exotic one ---
+#: :func:`~difflow.kinetics.mass_action_kinetics` puts ``inf`` in
+#: ``K_eq`` for every irreversible reaction --- so they are tagged.
+#: Files written before this encoding hold the bare tokens, which
+#: Python's reader still accepts, so they keep loading unchanged.
+NONFINITE_TAG = "$float"
+
+#: the tagged spellings, and what they decode back to
+_NONFINITE = {"nan": math.nan, "inf": math.inf, "-inf": -math.inf}
 #: A value that lives in the file's *code context* rather than in the
 #: file. ``{"$ref": "thermo_ideal"}`` means "whatever the name
 #: ``thermo_ideal`` is bound to", and resolving it needs that namespace
@@ -164,9 +177,40 @@ class SerializationError(ValueError):
 # ---------------------------------------------------------------------
 
 
+def _encode_nonfinite(x: float) -> Any:
+    """Tag a non-finite float; pass every other float through."""
+    if x != x:
+        return {NONFINITE_TAG: "nan"}
+    if x == math.inf:
+        return {NONFINITE_TAG: "inf"}
+    if x == -math.inf:
+        return {NONFINITE_TAG: "-inf"}
+    return x
+
+
+def _encode_array_payload(values: Any) -> Any:
+    """Tag the non-finite entries of a nested ``tolist()`` result."""
+    if isinstance(values, list):
+        return [_encode_array_payload(v) for v in values]
+    if isinstance(values, float):
+        return _encode_nonfinite(values)
+    return values
+
+
+def _decode_array_payload(values: Any) -> Any:
+    """Invert :func:`_encode_array_payload`."""
+    if isinstance(values, list):
+        return [_decode_array_payload(v) for v in values]
+    if isinstance(values, dict) and NONFINITE_TAG in values:
+        return _NONFINITE[values[NONFINITE_TAG]]
+    return values
+
+
 def _encode_value(value: Any, where: str) -> Any:
     """Convert one parameter value to something JSON can hold."""
-    if value is None or isinstance(value, (bool, int, float, str)):
+    if isinstance(value, float):
+        return _encode_nonfinite(value)
+    if value is None or isinstance(value, (bool, int, str)):
         return value
     # Checked before every other kind, and after the primitives: a name
     # in the code context is the *identity* of the object a unit holds,
@@ -207,7 +251,7 @@ def _encode_value(value: Any, where: str) -> Any:
         }
     if hasattr(value, "shape") or hasattr(value, "tolist"):
         arr = jnp.asarray(value)
-        return {ARRAY_TAG: arr.tolist()}
+        return {ARRAY_TAG: _encode_array_payload(arr.tolist())}
     if dataclasses.is_dataclass(value):
         return {
             DATACLASS_TAG: type(value).__name__,
@@ -233,7 +277,10 @@ def _decode_value(value: Any) -> Any:
         if REF_TAG in value:
             return _resolve_ref(value[REF_TAG])
         if ARRAY_TAG in value:
-            return jnp.asarray(value[ARRAY_TAG], dtype=jnp.float64)
+            return jnp.asarray(_decode_array_payload(value[ARRAY_TAG]),
+                               dtype=jnp.float64)
+        if NONFINITE_TAG in value:
+            return _NONFINITE[value[NONFINITE_TAG]]
         if DATACLASS_TAG in value:
             cls = _lookup_dataclass(value[DATACLASS_TAG])
             fields = {k: _decode_value(v) for k, v in value["fields"].items()}

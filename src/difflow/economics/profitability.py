@@ -132,6 +132,10 @@ MACRS_SCHEDULES = {
 # Time Value of Money Functions
 # =============================================================================
 
+#: below this the annuity formulas are taken at their r -> 0 limit
+_RATE_FLOOR = 1e-12
+
+
 def present_value(
     future_value: Array,
     rate: Array,
@@ -207,8 +211,20 @@ def capital_recovery_factor(
     Returns:
         Capital recovery factor
     """
-    factor = jnp.power(1.0 + rate, years)
-    return rate * factor / (factor - 1.0)
+    # ``expm1(n log1p(r))`` rather than ``(1+r)**n - 1``: the subtraction
+    # loses every significant digit for a small rate. At r = 0 the ratio is
+    # 0/0 and the limit is 1/n -- the undiscounted case is an ordinary
+    # baseline, and a sweep of rates through zero should not return NaN.
+    # The dummy rate keeps the unused branch finite, so the gradient of the
+    # taken branch is not poisoned by a NaN from the other one.
+    near_zero = jnp.abs(rate) < _RATE_FLOOR
+    safe_rate = jnp.where(near_zero, 1.0, rate)
+    growth = jnp.expm1(years * jnp.log1p(safe_rate))
+    # The limit branch carries its first-order term, so that d(CRF)/dr at
+    # r = 0 is (n+1)/2n rather than the zero a flat constant would hand an
+    # optimiser sweeping the rate.
+    limit = (1.0 + rate * (years + 1.0) / 2.0) / years
+    return jnp.where(near_zero, limit, safe_rate * (growth + 1.0) / growth)
 
 
 def present_value_factor(
@@ -228,8 +244,13 @@ def present_value_factor(
     Returns:
         Present value factor
     """
-    factor = jnp.power(1.0 + rate, years)
-    return (factor - 1.0) / (rate * factor)
+    # See :func:`capital_recovery_factor`: this is its reciprocal, and the
+    # limit at r = 0 is n (n payments, undiscounted).
+    near_zero = jnp.abs(rate) < _RATE_FLOOR
+    safe_rate = jnp.where(near_zero, 1.0, rate)
+    growth = jnp.expm1(years * jnp.log1p(safe_rate))
+    limit = years * (1.0 - rate * (years + 1.0) / 2.0)
+    return jnp.where(near_zero, limit, growth / (safe_rate * (growth + 1.0)))
 
 
 # =============================================================================
@@ -450,17 +471,31 @@ def discounted_payback(
     Returns:
         Discounted payback period (years, fractional)
     """
-    years = jnp.arange(1, len(cash_flows) + 1)
+    n_years = len(cash_flows)
+    years = jnp.arange(1, n_years + 1)
     dcf = cash_flows * discount_factor(discount_rate, years)
     cumulative = jnp.cumsum(dcf)
 
-    # Find crossover point using differentiable approximation
-    # Use softmax-weighted average of years where cumulative > investment
-    weights = jax.nn.sigmoid(10.0 * (cumulative - initial_investment))
-    # Approximate payback as weighted average
-    payback = safe_divide(jnp.sum(years * weights), jnp.sum(weights))
+    # The crossover year, then linear interpolation inside it. A
+    # sigmoid-weighted MEAN of the years past the crossover was the wrong
+    # object entirely: it converges on the middle of the remaining project
+    # rather than on its start, so the same project reported 3.7, 6.2 or
+    # 16.2 years according only to how many years of cash flow were passed.
+    # Picking the year is a step, but the interpolation inside it carries
+    # the derivative with respect to the cash flows and the investment,
+    # which is the derivative that exists.
+    recovered = cumulative >= initial_investment
+    crossover = jnp.argmax(recovered)
+    before = jnp.where(crossover > 0,
+                       cumulative[jnp.maximum(crossover - 1, 0)], 0.0)
+    shortfall = initial_investment - before
+    fraction = safe_divide(shortfall, dcf[crossover])
+    payback = crossover + fraction
 
-    return jnp.minimum(payback, float(len(cash_flows)))
+    # Never recovered within the horizon: report the horizon, as the
+    # previous cap did.
+    payback = jnp.where(jnp.any(recovered), payback, float(n_years))
+    return jnp.minimum(payback, float(n_years))
 
 
 # =============================================================================
