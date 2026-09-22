@@ -313,6 +313,93 @@ class TestProfitability:
         assert abs(float(tac) - 217500) < 1000
 
 
+class TestDiscountedPayback:
+    """The year the discounted cash flow first covers the investment.
+
+    This was a sigmoid-weighted MEAN of the years past the crossover,
+    which converges on the middle of the remaining project rather than on
+    its start: the same project reported 3.7, 6.2 or 16.2 years according
+    only to how many years of cash flow it was handed.
+    """
+
+    def test_undiscounted_crossover(self):
+        payback = econ.discounted_payback(
+            jnp.full(10, 50.0), jnp.array(100.0), jnp.array(0.0))
+
+        assert float(payback) == pytest.approx(2.0)
+
+    def test_answer_does_not_depend_on_the_length_of_the_horizon(self):
+        answers = [
+            float(econ.discounted_payback(
+                jnp.full(n, 50.0), jnp.array(100.0), jnp.array(0.0)))
+            for n in (5, 10, 20, 30)
+        ]
+
+        assert answers == pytest.approx([2.0] * 4)
+
+    def test_discounting_lengthens_it(self):
+        """DCF 45.45, 41.32, 37.57 -> crosses 100 partway through year 3."""
+        payback = econ.discounted_payback(
+            jnp.full(10, 50.0), jnp.array(100.0), jnp.array(0.10))
+
+        assert float(payback) == pytest.approx(2 + (100 - 86.777) / 37.566, rel=1e-3)
+
+    def test_partial_first_year(self):
+        payback = econ.discounted_payback(
+            jnp.full(10, 50.0), jnp.array(25.0), jnp.array(0.0))
+
+        assert float(payback) == pytest.approx(0.5)
+
+    def test_never_recovered_reports_the_horizon(self):
+        payback = econ.discounted_payback(
+            jnp.full(10, 1.0), jnp.array(1e6), jnp.array(0.10))
+
+        assert float(payback) == pytest.approx(10.0)
+
+    def test_it_is_still_differentiable_in_the_investment(self):
+        grad = jax.grad(lambda i: econ.discounted_payback(
+            jnp.full(10, 50.0), i, jnp.array(0.0)))(jnp.array(100.0))
+
+        assert float(grad) == pytest.approx(1.0 / 50.0)
+
+
+class TestAnnuityFactorsAtZeroRate:
+    """An undiscounted comparison is an ordinary baseline, and a rate
+    sweep passes through zero. Both factors were 0/0 there."""
+
+    def test_capital_recovery_factor_limit(self):
+        crf = econ.capital_recovery_factor(jnp.array(0.0), jnp.array(10.0))
+
+        assert float(crf) == pytest.approx(0.1)
+
+    def test_present_value_factor_limit(self):
+        pvf = econ.present_value_factor(jnp.array(0.0), jnp.array(10.0))
+
+        assert float(pvf) == pytest.approx(10.0)
+
+    def test_they_stay_reciprocal(self):
+        for rate in (0.0, 1e-13, 1e-8, 0.05, 0.10):
+            crf = econ.capital_recovery_factor(jnp.array(rate), jnp.array(20.0))
+            pvf = econ.present_value_factor(jnp.array(rate), jnp.array(20.0))
+
+            assert float(crf * pvf) == pytest.approx(1.0)
+
+    def test_the_limit_branch_carries_a_derivative(self):
+        """A flat constant would hand a rate sweep a zero gradient."""
+        grad = jax.grad(
+            lambda r: econ.capital_recovery_factor(r, jnp.array(10.0))
+        )(jnp.array(0.0))
+
+        # d(CRF)/dr at r = 0 is (n + 1) / 2n
+        assert float(grad) == pytest.approx(11.0 / 20.0)
+
+    def test_a_small_rate_does_not_lose_its_digits(self):
+        """`(1+r)**n - 1` cancels away every significant digit here."""
+        crf = econ.capital_recovery_factor(jnp.array(1e-9), jnp.array(10.0))
+
+        assert float(crf) == pytest.approx(0.1 * (1 + 1e-9 * 11 / 2), rel=1e-12)
+
+
 class TestDifferentiability:
     """Tests for JAX differentiability."""
 
