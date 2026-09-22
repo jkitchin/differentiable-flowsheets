@@ -142,7 +142,17 @@ def co2_equilibrium_pressure(
     # Fitted form: K = K0 * exp(-dH/(R*T))
     # dH is approximately the heat of absorption
     dH = s.heat_of_absorption * 1000.0  # Convert kJ to J
-    K0 = 6e-11  # Calibrated base constant (Pa) - fits MEA VLE data (Jou et al., 1995)
+    # Calibrated so that P_CO2 = 1.0 kPa at alpha = 0.4 and 313.15 K for
+    # 30 wt% MEA, the anchor point of the Jou et al. (1995) data this
+    # correlation is fitted to. The previous value, 6e-11, carried the same
+    # claim but put the whole curve about 28 decades low -- 1e-25 Pa at
+    # alpha = 0.3 -- because it was not paired with the exp(-dH/RT) factor,
+    # which is 2.1e-14 here. Nothing noticed, since the VLE was only ever
+    # tested for sign and monotonicity, but the absorber divides by this
+    # slope: its absorption factor came out at 5.6e9 rather than the tens it
+    # should be, every Kremser stage count saturated, and `n_stages` moved
+    # no answer anywhere in its range. See TestVLEMagnitude.
+    K0 = 2.7e16  # base constant (Pa)
     K = K0 * jnp.exp(-dH / (R * T))
 
     # Exponents (typical values for MEA-like behavior)
