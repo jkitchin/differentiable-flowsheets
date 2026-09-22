@@ -10,7 +10,8 @@ AVEVA Spiral Plan) obtain by perturbing a rigorous simulator once per
 decision variable.
 
 The distinction matters asymptotically.  One-at-a-time perturbation costs
-``O(n)`` model evaluations for ``n`` decisions; reverse-mode AD costs ``O(1)``.
+``2 n_u`` model evaluations; the AD Jacobian costs ``min(n_u, n_y)`` passes,
+and the gradient of a scalar objective one reverse pass, ``O(1)`` in ``n``.
 See :mod:`difflow.planning.linearize`.
 
 Example:
