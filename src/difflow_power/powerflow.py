@@ -541,7 +541,7 @@ class PowerFlowResult(ParamsMixin):
         return (
             f"{self.network.name or 'power flow'}: {state} in "
             f"{self.num_steps} Newton steps, max mismatch "
-            f"{self.max_mismatch_mw:.2e} MW; "
+            f"{self.max_mismatch_mw:.2e} MW/MVAr; "
             f"{self.total_generation_mw:.1f} MW generated for "
             f"{self.network.total_load_mw:.1f} MW load "
             f"({self.losses_mw:.2f} MW loss); voltages "

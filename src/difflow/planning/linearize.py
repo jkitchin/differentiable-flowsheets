@@ -308,7 +308,7 @@ def check_delta_vectors(block: Block, u0: Array | None = None,
 
     Note:
         Central differences cost ``2 n_u`` model evaluations; the AD Jacobian
-        costs ``O(1)``.  This function is a correctness check, not a
+        costs ``min(n_u, n_y)`` passes.  This function is a correctness check, not a
         recommendation — see the benchmark in
         :func:`difflow.planning.benchmark.gradient_cost_ratio`.
     """
