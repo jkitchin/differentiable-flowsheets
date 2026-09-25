@@ -511,6 +511,14 @@ machinery you already have):
   search for a feasible point says nothing about where the objective model is
   trustworthy, and resuming from it makes the planner crawl.
 
+Modifiers from plant history (`difflow.planning.attribution`):
+`attribute_deltas(block, U, {output: y}, sigma_y=...)` estimates the level and
+slope corrections from logged data. Slope estimability is decided by a
+column-pivoted QR of the *design* only, never by the fitted answer; most
+slopes are not estimable from routine closed-loop data, and saying so is the
+point. Do not drop the autocorrelation inflation or the alias report -- both
+exist because their absence produced confident false flags.
+
 Reporting and drawings (use these rather than re-deriving them in a notebook):
 - `planner.describe()` states the problem — objective, decisions, bounds, links, specs.
 - `lp_model.as_text()` writes the assembled LP out row by row.
@@ -538,7 +546,7 @@ Reference model: `difflow.planning.chain.two_plant_chain()`. Docs: `docs/plannin
 Example: `examples/30_delta_base_planning.ipynb`. Tests: `tests/test_planning.py`,
 `tests/test_planning_export.py`, `tests/test_planning_curvature.py`,
 `tests/test_planning_multiperiod.py`, `tests/test_planning_quadratic.py`,
-`tests/test_planning_restoration.py`, `tests/power/test_planning_opf.py` (the
+`tests/test_planning_restoration.py`, `tests/test_planning_attribution.py`, `tests/power/test_planning_opf.py` (the
 accuracy claim: SLP over AD delta vectors reaches the AC-OPF optimum and beats
 DC-OPF, all three dispatches scored in the full AC model; and the termination
 claim, linear against quadratic).
