@@ -72,8 +72,9 @@ difflow/
 │   ├── difflow_bio/       # Bio manufacturing plugin (bioreactors, filtration, chromatography)
 │   ├── difflow_ree/       # Rare earth element solvent extraction plugin
 │   ├── difflow_cc/        # Carbon capture plugin (amine, membrane, adsorption)
-│   └── difflow_gas/       # Gas transmission network plugin (pipes, compressors, computed decomposition)
-├── tests/                 # pytest test files (includes tests/bio/, tests/ree/, tests/cc/, tests/gas/, tests/power/)
+│   ├── difflow_gas/       # Gas transmission network plugin (pipes, compressors, computed decomposition)
+│   └── difflow_refinery/  # Refinery plugin (crude assay characterisation, crude distillation unit)
+├── tests/                 # pytest test files (includes tests/bio/, tests/ree/, tests/cc/, tests/gas/, tests/power/, tests/refinery/)
 ├── examples/              # Jupyter notebook examples
 ├── jax-tutorials/         # JAX/autodiff tutorials
 └── docs/                  # Documentation (Markdown)
@@ -254,14 +255,15 @@ and `tests/test_doclinks.py` asserts all 87 operations resolve, so
 skipping step 7 fails the suite rather than shipping a palette entry with
 nothing to read.
 
-### Adding to a Plugin (bio, ree, cc, gas, power)
+### Adding to a Plugin (bio, ree, cc, gas, power, refinery)
 
-The project has five domain-specific plugins:
+The project has six domain-specific plugins:
 - **difflow_bio**: Bio manufacturing (bioreactors, filtration, chromatography)
 - **difflow_ree**: Rare earth element solvent extraction
 - **difflow_cc**: Carbon capture (amine absorption, membrane, adsorption)
 - **difflow_gas**: Gas transmission networks (pipes, compressors, valves, topology-driven sequential decomposition)
 - **difflow_power**: Electrical grids (AC power flow, AC-OPF, DC-OPF, PTDF/LODF, state estimation)
+- **difflow_refinery**: Petroleum refining (TBP assay characterisation, crude distillation unit)
 
 1. Add to appropriate plugin directory (`src/difflow_bio/`, `src/difflow_ree/`, `src/difflow_cc/`, `src/difflow_gas/`, or `src/difflow_power/`)
 2. Create a Params dataclass inheriting from `ParamsMixin`
@@ -412,6 +414,22 @@ Invariants encoded in the plugin (do not weaken them):
   dynamics/transient stability, unbalanced three-phase. Do not add them.
 
 Docs: `docs/unit-operations-power.md`. Tests: `tests/power/`.
+
+**difflow_refinery** - Petroleum refining:
+- Assay: `Assay` (TBP curve, SG or SG curve, light ends) -> `characterize` ->
+  pseudo-components (Twu / Riazi-Daubert / Lee-Kesler critical properties)
+- Thermo: `ColumnThermo` -- vectorised, Raoult + Lee-Kesler Psat, ideal-gas-path
+  enthalpy; water is steam or free water in the drum, never in the HC liquid
+- Column: `CrudeColumn` -- EO MESH (Naphtali-Sandholm), side strippers,
+  pumparounds, steam; specs from `column.*` builders, one per degree of freedom
+- `Furnace`: solved WITH the column (coil outlet T is an unknown), so an
+  `overflash` spec sets the furnace. A spec set with no solution (e.g. too little
+  overflash for a big pumparound) returns `converged=False`, not an answer
+- `CrudeUnit` (assay in, yield table out) and `CrudeDistillationUnit` (the
+  registered operation; outlets in `outlet_names` order)
+- Products: `product_properties`, `products.gaps` -- TBP, not D86
+
+Docs: `docs/unit-operations-refinery.md`. Tests: `tests/refinery/`.
 
 ### Delta-Base Planning (`difflow.planning`)
 
@@ -819,6 +837,7 @@ jax.debug.print("value: {x}", x=value)
 | `src/difflow_cc/__init__.py` | Carbon capture plugin exports |
 | `src/difflow_gas/__init__.py` | Gas transmission network plugin exports |
 | `src/difflow_power/__init__.py` | Electrical grid plugin exports (AC-OPF) |
+| `src/difflow_refinery/__init__.py` | Refinery plugin exports (crude assay, CDU) |
 | `tests/` | All pytest tests (includes `bio/`, `ree/`, `cc/`, `gas/`, `power/` subdirs) |
 | `examples/` | Usage examples (Jupyter notebooks) |
 | `jax-tutorials/` | JAX autodiff tutorials |

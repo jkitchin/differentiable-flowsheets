@@ -25,6 +25,9 @@ from typing import Literal
 import jax
 from jax import Array
 
+from difflow.params_mixin import ParamsMixin
+from difflow.streams import Stream
+
 from difflow_refinery import products as prod
 from difflow_refinery.assay import Assay, Characterization, characterize, default_cut_points
 from difflow_refinery.column import BARREL, CrudeColumn, CrudeColumnParams, CrudeColumnResult, Furnace
@@ -175,4 +178,114 @@ class CrudeUnit:
                                feed=feed)
 
 
-__all__ = ["CrudeUnit", "CrudeUnitResult"]
+@dataclass
+class CrudeDistillationUnitParams(ParamsMixin):
+    """Parameters for :class:`CrudeDistillationUnit`.
+
+    Attributes:
+        assay: The crude's TBP assay; it fixes the pseudo-components.
+        column: The atmospheric column (stages, products, pumparounds,
+            steam and specs). A default furnace is added if it has none.
+        cut_points: Interior cut boundaries (K); default
+            :func:`~difflow_refinery.assay.default_cut_points`.
+        method: Critical-property correlation for the pseudo-components.
+    """
+
+    assay: Assay
+    column: CrudeColumnParams
+    cut_points: tuple | None = None
+    method: str = "twu"
+
+    def __post_init__(self):
+        if self.cut_points is not None:
+            self.cut_points = tuple(self.cut_points)
+
+
+class CrudeDistillationUnit:
+    """Crude distillation unit as a flowsheet operation: one crude in, its cuts out.
+
+    The furnace and atmospheric column of :class:`CrudeUnit`, behind the
+    operation protocol every difflow unit follows -- built from one Params
+    object, called with the inlet stream, returning the outlet streams --
+    so it can be placed in a :class:`~difflow.Flowsheet`, written to JSON
+    and drawn in the editor.
+
+    The inlet is the crude at the furnace inlet (the preheat train's
+    outlet), with a flow for every component the assay characterises into;
+    :meth:`feed` makes one. The outlets are, in order, :attr:`outlet_names`:
+    the distillate, each side product in the order the column declares
+    them, the residue, the decanted water, and with a partial condenser the
+    offgas.
+
+    Key equations:
+        MESH equations on every stage and side-stripper stage, solved
+        simultaneously with the furnace coil outlet temperature
+        Furnace duty: Q_f = H_feed(T_coil, P_flash) - H_feed(T_in, P_in)
+
+    Assumptions:
+        Equilibrium stages; Raoult's law with Lee-Kesler vapour pressures;
+        ideal-gas-path enthalpies
+        Free water decants in the condenser; water vapour leaves overhead
+
+    References:
+        Russell, R. A. (1983). A flexible and reliable method solves single-
+        tower and crude-distillation-column problems. Chem. Eng. 90(21).
+        Riazi, M. R. (2005). Characterization and Properties of Petroleum
+        Fractions. ASTM MNL50.
+
+    Example:
+        >>> from difflow_refinery import Assay, column as cc
+        >>> from difflow_refinery.unit import (CrudeDistillationUnit,
+        ...                                    CrudeDistillationUnitParams)
+        >>> cdu = CrudeDistillationUnit(CrudeDistillationUnitParams(
+        ...     assay=Assay([0, 30, 70, 100], [320., 480., 640., 900.], sg=0.85),
+        ...     column=cc.CrudeColumnParams(
+        ...         n_stages=8, feed_stage=7, bottom_steam=0.2,
+        ...         specs=(cc.product_rate("naphtha", 0.25, basis="mole"),
+        ...                cc.coil_outlet_temperature(620.0)))))
+        >>> naphtha, residue, water = cdu(cdu.feed(1.0, T=500.0, P=4e5, basis="mole"))
+        >>> cdu.outlet_names
+        ('naphtha', 'residue', 'water')
+    """
+
+    symbol = "CDU"
+    numerical_method = "Damped Newton on the full MESH system (Naphtali-Sandholm); implicit-function gradients"
+    parameter_units = {"cut_points": "K"}
+
+    def __init__(self, params: CrudeDistillationUnitParams):
+        self.params = params
+        self.unit = CrudeUnit(params.assay, params.column, params.cut_points, params.method)
+        self.last_result: CrudeUnitResult | None = None
+
+    @property
+    def outlet_names(self) -> tuple[str, ...]:
+        """The outlet streams' names, in the order :meth:`__call__` returns them."""
+        p = self.unit.params
+        names = (p.distillate_name, *(s.name for s in p.side_products), "residue", "water")
+        return names + (("offgas",) if p.condenser == "partial" else ())
+
+    @property
+    def crude(self) -> Characterization:
+        """The characterised crude: its components are the inlet's."""
+        return self.unit.crude
+
+    def feed(self, rate, T, P, basis: Literal["volume", "mass", "mole", "bpd"] = "bpd") -> Stream:
+        """A crude inlet stream (see :meth:`CrudeUnit.feed`)."""
+        return self.unit.feed(rate, T, P, basis)
+
+    def solve(self, feed: Stream) -> CrudeUnitResult:
+        """The full result -- column profiles, duties, product properties."""
+        result = self.unit.column.solve(feed)
+        return CrudeUnitResult(column=result,
+                               properties=prod.product_properties(result.products, self.unit.thermo, feed),
+                               feed=feed)
+
+    def __call__(self, feed: Stream) -> tuple:
+        result = self.solve(feed)
+        # kept for inspection after a flowsheet solve; a traced call leaves
+        # tracers here, which is why nothing downstream reads it
+        self.last_result = result
+        return tuple(result.products[n] for n in self.outlet_names)
+
+
+__all__ = ["CrudeDistillationUnit", "CrudeDistillationUnitParams", "CrudeUnit", "CrudeUnitResult"]

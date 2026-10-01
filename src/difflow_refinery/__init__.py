@@ -43,7 +43,12 @@ from difflow_refinery.correlations import (
 )
 from difflow_refinery.products import ProductProperties, product_properties
 from difflow_refinery.thermo import ColumnThermo, water_vapor_pressure
-from difflow_refinery.unit import CrudeUnit, CrudeUnitResult
+from difflow_refinery.unit import (
+    CrudeDistillationUnit,
+    CrudeDistillationUnitParams,
+    CrudeUnit,
+    CrudeUnitResult,
+)
 
 __all__ = [
     "Assay",
@@ -60,6 +65,8 @@ __all__ = [
     "CrudeColumn",
     "CrudeColumnParams",
     "CrudeColumnResult",
+    "CrudeDistillationUnit",
+    "CrudeDistillationUnitParams",
     "CrudeUnit",
     "CrudeUnitResult",
     "Furnace",
@@ -76,4 +83,24 @@ __all__ = [
     "watson_k",
     "sg_from_api",
     "api_from_sg",
+    "register",
 ]
+
+
+def register(registry):
+    """Register the refinery unit operations with difflow.
+
+    Called by ``difflow.plugins.load_plugins()`` when the plugin is
+    discovered through its entry point.
+
+    Args:
+        registry: difflow OperationRegistry instance
+    """
+    registry.register(
+        name="CrudeDistillationUnit",
+        cls=CrudeDistillationUnit,
+        category="refinery",
+        description="Crude unit: furnace and atmospheric column with side "
+                    "strippers and pumparounds, built on a TBP assay",
+        plugin="difflow_refinery",
+    )
