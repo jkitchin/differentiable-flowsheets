@@ -48,6 +48,7 @@ words) stays under the budget and keeps its reuse.
 """
 
 import gc
+import json
 import os
 
 import jax
@@ -141,3 +142,44 @@ def _release_jax_compilation_caches():
     yield
     jax.clear_caches()
     gc.collect()
+
+
+_DURATIONS = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".test_durations")
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_collection_modifyitems(config, items):
+    """Under xdist, hand the files out longest first (#315).
+
+    ``--dist loadfile`` makes each file one unit of work. xdist's own order
+    is by test COUNT, descending, and each worker keeps its next unit queued
+    -- so a file with four tests and five minutes of setup is handed out
+    late, queued behind a running one, and ends the shard alone while the
+    other worker sits idle. Measured on shard 2: the refinery planning files
+    started at 552s and 879s and ran to 1089s, one worker idle from 775s.
+
+    Sorting whole files by their recorded duration (``.test_durations``,
+    the same numbers pytest-split splits on) is the longest-processing-time
+    rule. CI passes ``--no-loadscope-reorder`` so xdist keeps this order.
+    The order inside a file is untouched. This is a wrapper so it runs after
+    pytest-split has chosen the group, and only on xdist workers (where the
+    collection that xdist schedules from happens), so a serial run is
+    unchanged.
+    """
+    result = yield
+    if not os.environ.get("PYTEST_XDIST_WORKER") or not items:
+        return result
+    try:
+        with open(_DURATIONS) as fh:
+            durations = json.load(fh)
+    except (OSError, ValueError):
+        return result
+    known = [durations[i.nodeid] for i in items if i.nodeid in durations]
+    default = sum(known) / len(known) if known else 0.0
+    totals = {}
+    for item in items:
+        path = item.nodeid.split("::", 1)[0]
+        totals[path] = totals.get(path, 0.0) + durations.get(item.nodeid, default)
+    # sorted() is stable: in-file order survives, ties keep collection order.
+    items[:] = sorted(items, key=lambda i: -totals[i.nodeid.split("::", 1)[0]])
+    return result

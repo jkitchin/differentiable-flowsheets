@@ -131,10 +131,15 @@ jobs:
       #
       # `-q`, because `-v` from four workers at once interleaves into
       # something nobody reads; a failure still prints its own name.
+      #
+      # `--no-loadscope-reorder` (pytest-xdist >= 3.8) keeps the order
+      # tests/conftest.py gives the files -- longest recorded duration first.
+      # xdist's own order is by test count, which handed shard 2's few-test,
+      # many-minute refinery files out last, to run alone at the end (#315).
       - name: Run tests
         run: |
-          python -m pytest tests/ -v --durations=40 --tb=short -m "not release" \
-            -n auto --dist loadfile \
+          python -m pytest tests/ -q --tb=short -m "not release" \
+            -n auto --dist loadfile --no-loadscope-reorder \
             --splits 3 --group ${{ matrix.shard }}
 
   # Verify the package imports with NO optional dependencies installed. The job
