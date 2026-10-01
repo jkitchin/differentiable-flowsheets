@@ -1237,6 +1237,8 @@
     "tests/refinery/test_vacuum_assay.py::TestTwu::test_reproduces_n_hexadecane": 0.1398863736540079,
     "tests/refinery/test_vacuum_assay.py::TestTwu::test_riazi_daubert_agrees_where_both_are_fitted": 0.3566366261802614,
     "tests/refinery/test_vacuum_assay.py::TestTwu::test_sane_through_the_heavy_end": 0.5721049180720001,
+    "tests/refinery/test_validation_file.py::test_every_layer_is_there": 0.0645767911337316,
+    "tests/refinery/test_validation_file.py::test_it_records_where_it_came_from": 0.02218120777979493,
     "tests/test_boilerplate.py::TestMerging::test_an_addition_that_says_nothing_new_changes_nothing": 0.001,
     "tests/test_boilerplate.py::TestMerging::test_an_empty_context_takes_the_snippet_whole": 0.001,
     "tests/test_boilerplate.py::TestMerging::test_an_indented_line_is_never_dropped": 0.27,
