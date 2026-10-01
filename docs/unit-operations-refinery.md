@@ -57,8 +57,8 @@ pip install difflow[refinery]
 ```python
 import difflow_refinery as dr
 
-char = dr.characterize(dr.heavy_crude())           # 20 cuts 300-800 C + lump
-feed = dr.atmospheric_residue(char, crude_rate_kg_s=100.0)
+char = dr.vacuum.characterize(dr.vacuum.heavy_crude())           # 20 cuts 300-800 C + lump
+feed = dr.vacuum.atmospheric_residue(char, crude_rate_kg_s=100.0)
 
 vdu = dr.VacuumColumn(dr.VacuumColumnParams(components=char.components))
 overhead, lvgo, hvgo, slop, residue, info = vdu(feed)
@@ -236,7 +236,7 @@ point costs:
 
 ```python
 specs = dr.default_vacuum_specs() + (
-    dr.Spec("hvgo.T95", 570.0 + 273.15, replaces="furnace.T"),)
+    dr.StageSpec("hvgo.T95", 570.0 + 273.15, replaces="furnace.T"),)
 vdu = dr.VacuumColumn(params.update(specs=specs))
 ```
 

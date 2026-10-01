@@ -448,7 +448,7 @@ Invariants encoded in the plugin (do not weaken them):
   low-efficiency HVGO bed cannot make), not a solver failure.
 
 Docs: `docs/unit-operations-refinery.md`. Tests: `tests/refinery/`.
-Example: `examples/33_vacuum_distillation.ipynb`.
+Example: `examples/34_vacuum_distillation.ipynb`.
 
 ### Delta-Base Planning (`difflow.planning`)
 

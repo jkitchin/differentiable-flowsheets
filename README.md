@@ -468,8 +468,8 @@ cut's derivative with respect to a single point of the assay's TBP curve.
 ```python
 import difflow_refinery as dr
 
-char = dr.characterize(dr.heavy_crude())       # 300-800 C cuts + residue lump
-feed = dr.atmospheric_residue(char, crude_rate_kg_s=100.0)
+char = dr.vacuum.characterize(dr.vacuum.heavy_crude())       # 300-800 C cuts + residue lump
+feed = dr.vacuum.atmospheric_residue(char, crude_rate_kg_s=100.0)
 vdu = dr.VacuumColumn(dr.VacuumColumnParams(components=char.components))
 overhead, lvgo, hvgo, slop, residue, info = vdu(feed)
 info["properties"]["hvgo"]          # rate, SG, S, N, CCR, Ni+V, TBP 5/50/95

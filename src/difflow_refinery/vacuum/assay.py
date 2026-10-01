@@ -22,7 +22,7 @@ The heavy end, which is what a vacuum column is about:
   in ``x`` is neither. Inside the data the curve is a monotone cubic in
   ``z``, C1 at every point, so derivatives with respect to a TBP point are
   single-valued even where a cut boundary sits on it.
-- Twu's correlations (see :mod:`~difflow_refinery.correlations`) are used
+- Twu's correlations (see :mod:`~difflow_refinery.vacuum.correlations`) are used
   for every cut and hold up to about 820 C TBP; past that the n-alkane
   reference has no root. The residue lump is therefore *not* run through
   them: its boiling point, gravity and molecular weight are set directly
@@ -47,7 +47,7 @@ import jax.numpy as jnp
 import numpy as np
 from jax.scipy.special import ndtr, ndtri
 
-from difflow_refinery import correlations as corr
+from difflow_refinery.vacuum import correlations as corr
 
 C_TO_K = 273.15
 

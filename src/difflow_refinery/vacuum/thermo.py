@@ -7,7 +7,7 @@ a vacuum column makes true:
   solution. At 1-10 kPa the vapor is ideal to far better than the
   correlations are accurate, and a mixture of neighbouring petroleum cuts is
   close to an ideal solution. Vapor pressure is Maxwell-Bonnell (see
-  :mod:`~difflow_refinery.correlations`), which is fitted down to a fraction
+  :mod:`~difflow_refinery.vacuum.correlations`), which is fitted down to a fraction
   of a mmHg.
 - **Steam** is a vapor-only component. Water's vapor pressure at the
   column's coldest point (60-80 C, 20-50 kPa) is ten times the column's
@@ -29,8 +29,8 @@ from __future__ import annotations
 import jax
 import jax.numpy as jnp
 
-from difflow_refinery import correlations as corr
-from difflow_refinery.assay import PseudoComponents
+from difflow_refinery.vacuum import correlations as corr
+from difflow_refinery.vacuum.assay import PseudoComponents
 
 MW_WATER = 18.01528
 R_GAS = corr.R_GAS
@@ -57,7 +57,7 @@ class ColumnThermo:
     """K-values and enthalpies of a pseudocomponent set (see module doc).
 
     Args:
-        components: The :class:`~difflow_refinery.assay.PseudoComponents`.
+        components: The :class:`~difflow_refinery.vacuum.assay.PseudoComponents`.
         correct_kw: Apply Maxwell-Bonnell's Watson-K correction.
     """
 

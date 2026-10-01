@@ -27,7 +27,7 @@ Routes
 Specs
     Every share route has a default equation, ``<route>.rate`` equal to the
     knob of that name (kg/s). Every other knob (a duty, the furnace outlet
-    temperature, a pressure) is a fixed number. A :class:`Spec` *replaces*
+    temperature, a pressure) is a fixed number. A :class:`StageSpec` *replaces*
     one of those -- a route's rate equation, or a knob's fixed value, which
     then becomes a variable -- with ``output == target``. So the degrees of
     freedom always balance, and any column output (a stage temperature, a
@@ -54,8 +54,8 @@ from typing import Callable, Optional, Sequence
 import jax
 import jax.numpy as jnp
 
-from difflow_refinery.assay import PseudoComponents, product_properties
-from difflow_refinery.thermo import ColumnThermo, MW_WATER
+from difflow_refinery.vacuum.assay import PseudoComponents, product_properties
+from difflow_refinery.vacuum.thermo import ColumnThermo, MW_WATER
 
 
 @dataclass(frozen=True)
@@ -82,7 +82,7 @@ class Route:
 
 
 @dataclass(frozen=True)
-class Spec:
+class StageSpec:
     """``output == target``, in place of the equation or knob ``replaces``.
 
     Attributes:
@@ -150,7 +150,7 @@ def _output_scale(name, mass_scale, h_scale):
 
 
 class StageColumn:
-    """Solver for a :class:`ColumnLayout` with a set of :class:`Spec`.
+    """Solver for a :class:`ColumnLayout` with a set of :class:`StageSpec`.
 
     Args:
         layout: The stage network.
@@ -164,7 +164,7 @@ class StageColumn:
     """
 
     def __init__(self, layout: ColumnLayout, n_components: int,
-                 knob_names: Sequence[str], specs: Sequence[Spec] = (),
+                 knob_names: Sequence[str], specs: Sequence[StageSpec] = (),
                  max_iter: int = 150, tol: float = 1e-10,
                  homotopy_steps: int = 3):
         self.layout = layout

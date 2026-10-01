@@ -5,8 +5,8 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from difflow_refinery import correlations as corr
-from difflow_refinery.assay import (
+from difflow_refinery.vacuum import correlations as corr
+from difflow_refinery.vacuum.assay import (
     atmospheric_residue,
     characterize,
     heavy_crude,
@@ -15,7 +15,7 @@ from difflow_refinery.assay import (
     tbp_fraction,
     tbp_temperature,
 )
-from difflow_refinery.thermo import ColumnThermo, steam_enthalpy
+from difflow_refinery.vacuum.thermo import ColumnThermo, steam_enthalpy
 
 C_TO_K = 273.15
 

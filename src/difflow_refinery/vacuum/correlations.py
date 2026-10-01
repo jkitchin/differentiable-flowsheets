@@ -25,7 +25,7 @@ What is here and why it was chosen for a *vacuum* column:
 - :func:`kesler_lee_liquid_cp` -- liquid heat capacity of a petroleum
   fraction. The vapor enthalpy is the liquid's plus the heat of
   vaporization from the Clausius-Clapeyron slope of the *same*
-  Maxwell-Bonnell curve (:mod:`difflow_refinery.thermo`), so the energy
+  Maxwell-Bonnell curve (:mod:`difflow_refinery.vacuum.thermo`), so the energy
   balance and the K-values cannot disagree about volatility.
 
 References:

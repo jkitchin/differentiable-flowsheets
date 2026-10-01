@@ -18,9 +18,9 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
-from difflow_refinery import (
+from difflow_refinery.vacuum import (
     CrackingWarning,
-    Spec,
+    StageSpec,
     VacuumColumn,
     VacuumColumnParams,
     atmospheric_residue,
@@ -129,7 +129,7 @@ class TestSpecs:
         base = VacuumColumn(params)(feed)[-1]["outputs"]
         target = float(base["hvgo.T95"])
         specs = tuple(params.specs) + (
-            Spec("hvgo.T95", target, replaces="furnace.T"),)
+            StageSpec("hvgo.T95", target, replaces="furnace.T"),)
         out = VacuumColumn(params.update(furnace_T=650.0, specs=specs))(feed)[-1]
         assert bool(out["converged"])
         assert float(out["outputs"]["furnace.T"]) == pytest.approx(
@@ -148,7 +148,7 @@ class TestSpecs:
     def test_bad_specs_are_rejected(self, heavy):
         char, feed, params = heavy
         with pytest.raises(ValueError, match="neither a draw rate"):
-            VacuumColumn(params.update(specs=(Spec("top.T", 340.0, replaces="nope"),)))
+            VacuumColumn(params.update(specs=(StageSpec("top.T", 340.0, replaces="nope"),)))
         with pytest.raises(ValueError, match="no value and no spec"):
             VacuumColumn(params.update(specs=()))
 
@@ -204,7 +204,7 @@ class TestPhysics:
         with pytest.warns(Warning, match="did not converge"):
             bad = VacuumColumn(params.update(hvgo_efficiency=0.7))(feed)[-1]
         assert not bool(bad["converged"])
-        specs = tuple(Spec(s.output, 520.0 + C_TO_K, s.replaces)
+        specs = tuple(StageSpec(s.output, 520.0 + C_TO_K, s.replaces)
                       if s.output == "lvgo.T95" else s for s in params.specs)
         ok = VacuumColumn(params.update(hvgo_efficiency=0.7, specs=specs))(feed)[-1]
         assert bool(ok["converged"])

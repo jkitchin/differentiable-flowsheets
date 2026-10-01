@@ -26,7 +26,7 @@ There is no condenser and no reflux drum: the top stage's vapor leaves as
 overhead at the top-stage temperature, and the top temperature is held by
 the LVGO pumparound (the default spec frees its duty).
 
-Degrees of freedom. Knobs are fixed numbers; a :class:`~difflow_refinery.column.Spec`
+Degrees of freedom. Knobs are fixed numbers; a :class:`~difflow_refinery.vacuum.column.StageSpec`
 trades one for a target on any output. Defaults:
 
 - ``top.T = 70 C``, replacing ``lvgo_pa.duty``
@@ -37,7 +37,7 @@ trades one for a target on any output. Defaults:
 So with the defaults the furnace outlet temperature, the flash-zone
 pressure and the stripping steam are the operating levers, and LVGO, HVGO,
 slop and residue yields come out -- which is the trade-off a planner wants.
-Swap ``Spec("hvgo.T95", ..., replaces="furnace.T")`` in to ask instead what
+Swap ``StageSpec("hvgo.T95", ..., replaces="furnace.T")`` in to ask instead what
 furnace temperature a given VGO end point costs.
 
 Contaminants. Sulfur, nitrogen, CCR, Ni+V and asphaltenes are carried per
@@ -64,9 +64,9 @@ import jax.numpy as jnp
 
 from difflow.params_mixin import ParamsMixin
 from difflow.streams import Stream
-from difflow_refinery.assay import PseudoComponents, product_properties
-from difflow_refinery.column import ColumnLayout, Route, Spec, StageColumn
-from difflow_refinery.thermo import MW_WATER
+from difflow_refinery.vacuum.assay import PseudoComponents, product_properties
+from difflow_refinery.vacuum.column import ColumnLayout, Route, StageSpec, StageColumn
+from difflow_refinery.vacuum.thermo import MW_WATER
 
 C_TO_K = 273.15
 MMHG = 133.322368
@@ -80,12 +80,12 @@ class VacuumConvergenceWarning(UserWarning):
     """The vacuum column did not converge."""
 
 
-def default_vacuum_specs() -> Tuple[Spec, ...]:
+def default_vacuum_specs() -> Tuple[StageSpec, ...]:
     """The default spec set (see module docstring)."""
     return (
-        Spec("top.T", 70.0 + C_TO_K, replaces="lvgo_pa.duty"),
-        Spec("overflash", 0.03, replaces="hvgo.rate"),
-        Spec("lvgo.T95", 450.0 + C_TO_K, replaces="hvgo_pa.duty"),
+        StageSpec("top.T", 70.0 + C_TO_K, replaces="lvgo_pa.duty"),
+        StageSpec("overflash", 0.03, replaces="hvgo.rate"),
+        StageSpec("lvgo.T95", 450.0 + C_TO_K, replaces="hvgo_pa.duty"),
     )
 
 
@@ -348,7 +348,7 @@ def _init_guess(sec: _Sections, col: StageColumn, ctx):
 
 @lru_cache(maxsize=32)
 def _compiled(sec: _Sections, n_comp: int, spec_key: tuple, max_iter: int, tol: float):
-    specs = tuple(Spec(o, 0.0, r, s) for (o, r, s) in spec_key)
+    specs = tuple(StageSpec(o, 0.0, r, s) for (o, r, s) in spec_key)
     col = StageColumn(_build_layout(sec), n_comp, KNOBS, specs,
                       max_iter=max_iter, tol=tol)
 
@@ -382,7 +382,7 @@ class VacuumColumn:
     converged MESH equations.
 
     Example:
-        >>> from difflow_refinery import (heavy_crude, characterize,
+        >>> from difflow_refinery.vacuum import (heavy_crude, characterize,
         ...     atmospheric_residue, VacuumColumn, VacuumColumnParams)
         >>> char = characterize(heavy_crude())
         >>> feed = atmospheric_residue(char, crude_rate_kg_s=100.0)
