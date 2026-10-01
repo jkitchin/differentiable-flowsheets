@@ -5,6 +5,8 @@ import jax.numpy as jnp
 import numpy as np
 import pytest
 
+import difflow_refinery as dr
+
 from difflow_refinery.vacuum import correlations as corr
 from difflow_refinery.vacuum.assay import (
     atmospheric_residue,
@@ -205,15 +207,16 @@ class TestCharacterize:
         assert float(char.components.SG[-1]) == pytest.approx(1.08)
 
     def test_watson_k_reproduces_bulk_gravity(self):
-        """Constant Kw, fitted so the whole crude has its bulk SG."""
+        """Constant Kw, fitted so the whole crude -- cuts and lump, volumes
+        adding -- has its bulk SG. Since #301 the fit is over the shared
+        characterization's own cuts, so the identity is exact on them."""
         a = heavy_crude()
-        fine = np.arange(0.0, 800.1, 10.0)
-        ch = characterize(a, cuts_C=fine)
-        c = ch.components
-        Tb0 = tbp_temperature(a, 0.5 * ch.light_ends) + C_TO_K
-        sg0 = corr.sg_from_watson_k(Tb0, ch.Kw)
-        inv = ch.light_ends / sg0 + jnp.sum(ch.yields / c.SG)
-        assert float(1.0 / inv) == pytest.approx(float(a.bulk_sg()), rel=1e-10)
+        full = dr.characterize(a.to_assay())
+        inv = jnp.sum(full.mass_fraction / full.component_SG)
+        assert float(1.0 / inv) == pytest.approx(float(a.bulk_sg()), rel=1e-12)
+        assert np.ptp(np.asarray(full.Kw)) < 1e-12        # one Kw, lump included
+        # The vacuum view reports the Kw of the characterization it slices.
+        assert np.allclose(characterize(a).components.Kw[:-1], characterize(a).Kw, rtol=1e-12)
 
     def test_contaminants_reproduce_bulk_values(self):
         a = heavy_crude()

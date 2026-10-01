@@ -10,11 +10,21 @@ finished components into gasoline, jet, ULSD or fuel oil with the
 nonlinear rules refiners use and reports signed spec margins.
 
 The vacuum unit (:mod:`difflow_refinery.vacuum`) takes the atmospheric
-residue to LVGO, HVGO, slop and vacuum residue. It is built on its own
-characterization (cut down to 800 C, with sulfur, nitrogen, CCR and metals
-per cut) and its own stage-network column, which live in that subpackage.
+residue to LVGO, HVGO, slop and vacuum residue on its own stage-network
+column. All three consumers read ONE characterization (#301): an ``Assay``
+with a :class:`HeavyEnd` is extended past its last TBP point into the vacuum
+range and closed by a residue lump, and carries sulfur, nitrogen, CCR, Ni+V
+and asphaltenes per component. The crude unit runs on it, the vacuum column
+takes ``Characterization.pseudo_components()`` as its property table (so the
+crude unit's ``"residue"`` outlet feeds it in a ``Flowsheet`` as it is), and
+``BlendCharacterization.from_characterization`` puts the products in the
+blend pool on the same grid. The correlations behind all three live once,
+in :mod:`difflow_refinery.correlations`. An assay without a heavy end
+characterizes exactly as it did before.
+
 Differentiable end to end: a yield or a duty has a gradient with respect to
-the column's specs, its feed, and the assay data behind its thermodynamics.
+the column's specs, its feed, and the assay data behind its thermodynamics,
+and across the crude-to-vacuum connection.
 
 >>> import difflow_refinery as dr
 >>> assay = dr.Assay(tbp_percent=[0, 50, 100], tbp_T=[300.0, 600.0, 900.0], sg=0.85)
@@ -23,13 +33,17 @@ the column's specs, its feed, and the assay data behind its thermodynamics.
 
 from difflow_refinery import column, correlations, products, vacuum
 from difflow_refinery.assay import (
+    CONTAMINANTS,
     DEFAULT_CUT_WIDTHS,
+    DEFAULT_HEAVY_CUT_WIDTHS,
     LIGHT_END_SG,
     Assay,
     Characterization,
+    HeavyEnd,
     characterize,
     default_cut_points,
     fit_antoine,
+    tbp_curve,
 )
 from difflow_refinery.blending import (
     PRODUCT_DERIVED,
@@ -112,7 +126,11 @@ __all__ = [
     "characterize",
     "default_cut_points",
     "fit_antoine",
+    "HeavyEnd",
+    "tbp_curve",
+    "CONTAMINANTS",
     "DEFAULT_CUT_WIDTHS",
+    "DEFAULT_HEAVY_CUT_WIDTHS",
     "LIGHT_END_SG",
     "correlations",
     "column",

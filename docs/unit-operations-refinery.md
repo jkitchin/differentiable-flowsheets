@@ -9,7 +9,7 @@ This document covers the `difflow_refinery` plugin. It characterises a crude fro
 
 The `difflow_refinery` plugin provides:
 
-- **Assay characterisation** (`Assay`, `characterize`): a TBP curve plus a gravity, cut into pseudo-components with the standard petroleum correlations. Light ends (C1--C6) are kept as real species.
+- **Assay characterisation** (`Assay`, `characterize`): a TBP curve plus a gravity, cut into pseudo-components with the standard petroleum correlations. Light ends (C1--C6) are kept as real species. With a `HeavyEnd` the curve is carried into the vacuum range and closed by a residue lump, and sulfur, nitrogen, CCR, Ni+V and asphaltenes are carried per component. This **one characterization** is what the crude unit, the vacuum column and the blend pool all read.
 - **Column thermodynamics** (`ColumnThermo`): vectorised over stages and components.
   - Raoult's law with Lee-Kesler vapour pressures.
   - Ideal-gas-path enthalpies.
@@ -19,7 +19,8 @@ The `difflow_refinery` plugin provides:
 - **Product properties** (`product_properties`, `products.gaps`): rates, volume and mass yields, SG/API, and TBP 5/10/50/90/95 points. Also the 5--95 gaps between neighbouring cuts.
 - **`CrudeUnit`**: the assembly a planner means by "the CDU": assay in, yield table out.
 - **`CrudeDistillationUnit`**: the same unit behind difflow's operation protocol, for a `Flowsheet`, JSON and the editor.
-- **`VacuumColumn`** (`difflow_refinery.vacuum`): the vacuum unit, atmospheric residue to LVGO, HVGO, slop and vacuum residue, with contaminants carried per cut.
+- **`VacuumColumn`** (`difflow_refinery.vacuum`): the vacuum unit, atmospheric residue to LVGO, HVGO, slop and vacuum residue, with contaminants carried per cut. It runs on the crude unit's own pseudo-components, so the CDU residue feeds it directly in a `Flowsheet`.
+- **Correlations** (`difflow_refinery.correlations`): Twu, Riazi-Daubert, Lee-Kesler, Kesler-Lee and Maxwell-Bonnell, each written once, for all three of the above.
 - **Product blending** (`BlendPool`, `BlendComponent`): gasoline, jet, ULSD and fuel-oil pools with the nonlinear blending rules, signed spec margins and LP back-off. A library for optimisation and planning, not a palette operation.
 
 Everything is differentiable with `jax`. A product yield, a gravity or a furnace duty has an exact gradient with respect to:
@@ -65,7 +66,8 @@ crude.names, crude.Tb, crude.sg, crude.volume_fraction
 - **Default cut widths:** 20 K below 400 °C, 40 K to 600 °C, 100 K above that (`DEFAULT_CUT_WIDTHS`).
 - **Gravity:** a bulk SG is distributed over the cuts at a constant Watson K. Alternatively, pass `sg_curve=` to give the gravity cut by cut.
 - **Critical-property correlations** (`CRITICAL_METHODS`):
-  - `"twu"` (the default);
+  - `"twu"` (the default; Twu 1984 as published, also named `"twu_1984"`);
+  - `"twu_legacy"` (the crude unit's coding before #301; see below);
   - `"riazi_daubert_1987"`;
   - `"riazi_daubert_1980"`;
   - `"lee_kesler"`.
@@ -75,6 +77,32 @@ crude.names, crude.Tb, crude.sg, crude.volume_fraction
 The cut points fix the number of pseudo-components and, with it, the shape of the column's equations. Keep them fixed when differentiating with respect to the assay.
 
 This is not an assay library. Curated assays are proprietary data; the module characterises the curve the caller brings.
+
+(refinery-heavy-end)=
+### The heavy end and contaminants
+
+An atmospheric column only needs the crude to its residue. A vacuum column needs pseudo-components to 750--800 °C, past where any TBP distillation stops. `HeavyEnd` adds them, and is opt-in. An assay without one characterizes exactly as before, and `tests/refinery/test_cdu_baseline.py` pins that.
+
+```python
+import difflow_refinery as dr
+
+assay = dr.Assay([5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95],
+                 [t + 273.15 for t in (60, 95, 150, 205, 260, 315, 370, 430, 500, 600, 680)],
+                 sg=0.86, light_ends={"propane": 0.5, "n_butane": 1.0, "n_pentane": 1.5},
+                 heavy_end=dr.HeavyEnd(),                     # T_max 800 C, lump at 950 C, MW 1500
+                 sulfur_wt=1.8, nitrogen_wppm=1500.0, ccr_wt=6.0,
+                 nickel_vanadium_wppm=60.0, asphaltenes_wt=3.0)
+char = dr.characterize(assay)            # method "twu" by default
+char.sulfur, char.ccr                    # per component, mass fraction
+char.pseudo_components()                 # the vacuum column's property table
+```
+
+- **The curve.** With a heavy end the TBP curve is drawn on a probability scale, `z = Phi^-1(x)` against T. Inside the data it is a monotone C1 cubic in `z`; beyond it, the least-squares line through the last `n_tail` points. Because the curve is open at both ends, the percentages must lie strictly inside (0, 100), there must be at least 3 of them, and the last temperature must be below `T_max`.
+- **The cuts** run to `T_max` (default 800 °C) on `DEFAULT_HEAVY_CUT_WIDTHS`. Everything above is one **residue lump** whose `Tb`, `MW` and optionally `SG` are set directly (`residue_Tb`, `residue_mw`, `residue_sg`), because Twu's n-alkane reference has no root past about 820--840 °C TBP. The lump's critical constants are still computed, so the EOS and the vapour pressure stay defined.
+- **Contaminants** (`CONTAMINANTS`): bulk sulfur, nitrogen, CCR, Ni+V and asphaltenes are distributed over the cuts by a logistic in boiling point, scaled so they recombine *exactly* to the bulk. Measured curves can be given for S, N and CCR (`sulfur_curve=` and so on). Light ends carry none.
+- **Differentiable.** Everything is a function of the assay data. A gradient with respect to one TBP point matches central differences to 1e-6 relative, with the cut points held fixed.
+
+**Which Twu.** The heavy end made the correlations disagree visibly. Twu's molecular weight had three codings in the package. The crude unit's divided Twu's Rankine constants by `sqrt(1.8)` while taking the square root of `Tb` in Rankine, which under-corrects aromatics (naphthalene 10 % low, phenanthrene 15 % low). The vacuum unit's coding matches the 1984 paper and two independent implementations. On the reference set the published form has a molecular-weight AAD of 0.5 %, against 2.4 % for the old coding. `"twu"` is now the published form, for every unit. The old coding is kept as `"twu_legacy"`, which reproduces the crude unit's earlier results to round-off (`tests/refinery/test_cdu_baseline.py`). On the test crude below the change moves the coil outlet by 1.7 K and the fired duty by about 3 %. The yields do not move, because they are specs.
 
 ---
 
@@ -147,6 +175,8 @@ MESH holds on every equilibrium stage of the main column and of every stripper, 
 
 The solve is a damped Newton from a bubble-point initialisation. It reports `converged` rather than raising: a set of specs with no solution comes back `converged=False`. Too little overflash for the heat a pumparound removes is one such set.
 
+**Involatile components.** A heavy-end assay brings components that are essentially involatile: a 950 °C residue lump has a vapour pressure of about 3e-5 Pa at 600 K. From the bubble-point start, such a component stalls the damped Newton. When any component's vapour pressure at 600 K is below 0.05 Pa, the column is first solved with those vapour pressures raised to that floor. It is then solved again with the true ones, starting from the first answer. The answer, and its gradients, are those of the true vapour pressures. The default characterization's heaviest cut is at 7.6e-2 Pa, so it never takes this path.
+
 (refinery-furnace)=
 ### The furnace
 
@@ -190,7 +220,7 @@ res.gaps()
 
 On the test crude, a 30-stage column with three side strippers, two pumparounds and a 5 % overflash gives:
 
-- a coil outlet of about 315 °C and about 52 MW fired;
+- a coil outlet of about 313 °C and about 50 MW fired;
 - naphtha, kerosene, diesel, AGO and residue at 20, 11, 17, 5 and 47 vol %;
 - API gravities from 64.5 down to 18.7.
 
@@ -268,9 +298,9 @@ Temperatures are in °C and temperature differences in K. Every unit is recorded
 
 The `preheat.T` lever is not dead, but on a column closed by an overflash it moves only the fired duty. The overflash fixes the flash-zone vaporisation, so the preheat temperature changes how much heat the furnace must add and nothing about the products.
 
-**Non-convergence.** Some spec sets have no solution. With 5 % overflash, taking more than about 25 MW out of PA1 on the test column dries out the section above it. The column then reports `converged=False` with a finite state. `cdu_block` returns NaN at such a point, and the planner rejects any proposal at which a block is not finite ([A block that cannot be evaluated](planning.md#a-block-that-cannot-be-evaluated)).
+**Non-convergence.** Some spec sets have no solution. With 5 % overflash, taking more than about 24 MW out of PA1 on the test column dries out the section above it. The column then reports `converged=False` with a finite state. `cdu_block` returns NaN at such a point, and the planner rejects any proposal at which a block is not finite ([A block that cannot be evaluated](planning.md#a-block-that-cannot-be-evaluated)).
 
-On the test column, a credit on PA1 duty drives the planner past the edge. It proposes 30, 27, 25.5 and 24.75 MW, rejects each, and settles at 24.4 MW, which converges. With `mask_nonconverged=False`, the same run ends at 30 MW on a column that did not converge and reports itself as converged.
+On the test column, a credit on PA1 duty drives the planner past the edge. It proposes 30, 27, 25.5, 24.75 and 24.38 MW (among others), rejects each, and settles at 23.62 MW, which converges. With `mask_nonconverged=False`, the same run ends at 30 MW on a column that did not converge and reports itself as converged.
 
 **Yields as levers, cut points as outputs.** A cut-point target such as "kero TBP95 ≤ 235 °C" is a planner `Spec` on a CDU output, and the LP inverts the delta vector to find the yield that meets it. In the example plan, the kero end point binds at 235.000 °C. The planner trades naphtha yield, which pays \$70/bbl, against kero, which pays \$95/bbl, because a heavier naphtha cut also makes the kero heavier.
 
@@ -319,14 +349,40 @@ cdu.last_result.table()                           # the full result of the last 
 (refinery-vacuum)=
 ## The vacuum unit
 
-The vacuum distillation unit (VDU) takes the atmospheric residue to light and heavy vacuum gas oil (LVGO, HVGO), slop and vacuum residue. It is built on a stack of its own in `difflow_refinery.vacuum`:
+The vacuum distillation unit (VDU) takes the atmospheric residue to light and heavy vacuum gas oil (LVGO, HVGO), slop and vacuum residue. Its column lives in `difflow_refinery.vacuum`. Its components come from the **same characterization as the crude unit's** ([The heavy end and contaminants](#refinery-heavy-end)):
 
-- **Assays and characterization** (`vacuum.Assay`, `vacuum.characterize`): a TBP curve and bulk properties cut into pseudocomponents. The curve is extended past 565 C into the residue, and a residue lump gets its properties set directly. Sulfur, nitrogen, CCR, Ni+V and asphaltenes are carried per cut.
-- **Heavy-end correlations** (`difflow_refinery.vacuum.correlations`): Twu critical properties and molecular weight, Kesler-Lee acentric factor and liquid Cp, Maxwell-Bonnell vapor pressure (the D1160 vacuum conversion).
+- **Its property table** is `Characterization.pseudo_components()`. Every pseudo-component of the crude unit is one of the vacuum column's, with the same Tb, SG, MW, critical constants and contaminants. The crude unit's residue therefore feeds the column as it is, with no re-cut.
+- **Correlations** come from `difflow_refinery.correlations`: Twu critical properties and molecular weight, the Kesler-Lee acentric factor and liquid Cp, and Maxwell-Bonnell vapour pressure (the D1160 vacuum conversion). `difflow_refinery.vacuum.correlations` keeps the vacuum code's old names for them.
 - **A stage-network column** (`StageColumn`, `ColumnLayout`, `Route`, `StageSpec`): Naphtali-Sandholm MESH equations with liquids routed to side draws, pumparounds and entrainment, Murphree efficiencies, and any column output specifiable in place of any knob.
-- **`VacuumColumn`**, the registered operation.
+- **`VacuumColumn`** is the registered operation. Feed species it does not model, such as the light ends and the crude unit's water dissolved in the residue, leave with its overhead, so a flowsheet still balances.
+- **`vacuum.Assay` and `vacuum.characterize`** are kept as a compatibility view. The old `Assay` (Celsius, wt%) converts with `to_assay()`. `characterize` runs the shared characterization on a vacuum cut grid and returns the old `(components, yields, light_ends, Kw)` shape. `vacuum.atmospheric_residue` is an idealized TBP cut for running the column without a crude unit in front of it.
 
-The vacuum stack does not yet share the crude unit's characterization: the two cut the crude on different grids. `vacuum.atmospheric_residue` stands in for the crude column's bottoms by applying an idealized TBP cut. The vacuum column only ever sees a difflow stream, so feeding it the `CrudeDistillationUnit`'s residue needs only a common component set.
+(refinery-crude-to-vacuum)=
+### Crude unit into vacuum column
+
+```python
+from difflow import Flowsheet
+from difflow.flowsheet import Unit
+from difflow_refinery.vacuum import VacuumColumn, VacuumColumnParams
+
+char = dr.characterize(assay)                         # one HeavyEnd assay, as above
+cdu = dr.CrudeDistillationUnit(dr.CrudeDistillationUnitParams(assay=assay, column=params))
+vdu = VacuumColumn(VacuumColumnParams(components=char.pseudo_components()))
+
+fs = Flowsheet(list(char.names) + ["water", "H2O"])  # CDU water is F_water, VDU steam F_H2O
+fs.add_feed("crude", cdu.feed(95_000, T=513.15, P=6e5))
+fs.add_unit(Unit("cdu", cdu, ["crude"], list(cdu.outlet_names)))
+fs.add_unit(Unit("vdu", vdu, ["residue"],             # renamed: "residue" is the CDU's
+                 ["vac_overhead", "lvgo", "hvgo", "slop", "vac_residue", "vdu_info"]))
+streams = fs.solve()
+```
+
+On the 95 000 bbl/d test crude (`tests/refinery/test_one_characterization.py`, `examples/36_crude_to_vacuum.ipynb`):
+
+- Both units converge.
+- The balance closes per component to round-off. It also closes in total, once the crude unit's and the vacuum unit's steam are counted, each at its own water molar mass (18.015 and 18.01528 g/mol).
+- At the default 400 °C furnace, the vacuum column turns 0.74 of its feed into VGO.
+- d(VGO yield)/d(VDU furnace T) is 2.8e-3 per K. d(VGO rate)/d(crude rate) runs through both units' implicit solves. Both match central differences.
 
 (refinery-vacuum-quick-start)=
 ### Quick start: the vacuum unit
@@ -366,8 +422,8 @@ default is 300-800 C in 25 C steps. Each cut gets:
 | Property | How |
 |---|---|
 | mass yield | difference of the TBP curve across the cut |
-| `Tb` | the mid-percent temperature of the cut |
-| `SG` | from a constant Watson K, fitted so the whole crude matches its bulk SG |
+| `Tb` | the mean of the TBP curve over the cut |
+| `SG` | from a constant Watson K, fitted over all the cuts so the whole crude matches its bulk SG |
 | `MW`, `Tc`, `Pc` | Twu (1984) |
 | `omega` | Kesler-Lee (1976) |
 | S, N, CCR, Ni+V, asphaltenes | a logistic in boiling point, scaled to the bulk assay value (or a measured curve) |
@@ -542,13 +598,15 @@ Default specs, 100 kg/s of crude, furnace 400 C, flash zone 30 mmHg:
 
 | | light: LVGO | HVGO | slop | residue | heavy: LVGO | HVGO | slop | residue |
 |---|---|---|---|---|---|---|---|---|
-| yield on feed | 0.154 | 0.488 | 0.030 | 0.328 | 0.070 | 0.296 | 0.030 | 0.603 |
+| yield on feed | 0.155 | 0.487 | 0.030 | 0.328 | 0.071 | 0.296 | 0.030 | 0.604 |
 | TBP T50 (C) | 393 | 484 | 605 | 674 | 391 | 473 | 595 | 753 |
-| TBP T95 (C) | 450 | 579 | 700 | 868 | 450 | 566 | 834 | 888 |
-| SG | 0.876 | 0.914 | 0.959 | 0.992 | 0.909 | 0.944 | 0.999 | 1.054 |
-| S (wt%) | 0.74 | 1.10 | 1.38 | 1.45 | 2.73 | 3.98 | 5.14 | 5.50 |
-| CCR (wt%) | 0.19 | 1.48 | 8.0 | 15.1 | 0.29 | 1.84 | 12.9 | 28.4 |
+| TBP T95 (C) | 450 | 579 | 699 | 868 | 450 | 566 | 834 | 888 |
+| SG | 0.873 | 0.910 | 0.955 | 0.988 | 0.907 | 0.942 | 0.996 | 1.052 |
+| S (wt%) | 0.76 | 1.13 | 1.42 | 1.49 | 2.76 | 4.01 | 5.18 | 5.55 |
+| CCR (wt%) | 0.19 | 1.48 | 8.0 | 15.2 | 0.29 | 1.84 | 12.9 | 28.4 |
 | Ni+V (wppm) | 0.00 | 0.14 | 8.1 | 57 | 0.01 | 1.05 | 100 | 495 |
+
+These numbers moved slightly when the vacuum unit moved onto the shared characterization (#301). A cut's `Tb` is now the mean of the curve over it, not its mid-percent point, and the Watson K is fitted over the cuts themselves. Gravities fell by up to 0.004 and sulfur rose by up to 3 %. Yields and TBP points are unchanged to the figures shown.
 
 Both converge from the default initialization in 6-7 Newton iterations.
 The per-pseudocomponent mass balance closes to 1e-15. Implicit gradients
@@ -643,20 +701,23 @@ Recipes can be given as `basis="volume_fraction"` (the default), `"volume_flow"`
 
 | Property | Key | Rule (default first) | Source |
 |---|---|---|---|
-| RON, MON | `RON`, `MON` | Ethyl RT-70 interaction model; or linear by volume | Healy, Maassen & Peterson (1959), Ethyl report RT-70 |
-| RVP | `RVP_psi` | RVP^1.25 index by volume; Raoult on the pseudocomponents; or linear | Gary, Handwerk & Kaiser, product blending chapter |
+| RON, MON | `RON`, `MON` | Ethyl RT-70 interaction model; or linear by volume | Healy, Maassen & Peterson (1959), Ethyl report RT-70; coefficients as tabulated in Maples (2000) |
+| RVP | `RVP_psi` | RVP^1.25 index by volume; Raoult on the pseudocomponents; or linear | Gary, Handwerk & Kaiser, product blending chapter; tested against a published worked example |
 | Sulfur, nitrogen, CCR | `S_ppm`, `N_ppm`, `CCR_wt` | by mass | - |
 | Aromatics, olefins, benzene, PNA, smoke point | `*_vol`, `smoke_mm` | by volume | - |
 | Flash point | `flash_C` | Hu-Burns index, `log10 BI = -6.1188 + 2414/(T - 42.6)` (K), by volume | Hu & Burns (1970); identical to Wickey-Chittenden in °F |
 | Cloud, pour point | `cloud_C`, `pour_C` | `BI = T^n` (K), n = 1/0.05 and 1/0.08 | Hu & Burns (1970) |
-| Freeze point, CFPP | `freeze_C`, `CFPP_C` | `BI = T^n`, cloud-type and pour-type exponents | approximation, override with `rules={"freeze_C_exponent": ...}` |
-| Viscosity | `viscosity_cSt` | Refutas VBN `14.534 ln ln(nu + 0.8) + 10.975`, by mass | Refutas, as given in Maples (2000) |
+| Freeze point | `freeze_C` | `BI = T^n`, n = 20 | omsQlibs *Blending Quality Models Equations* (2016), generic freeze index; its Ethyl index defaults to n = 12.5 |
+| CFPP | `CFPP_C` | `BI = T^n`, n = 12.5 (the pour-point exponent) | no published index found; an assumption, override with `rules={"CFPP_C_exponent": ...}` |
+| Viscosity | `viscosity_cSt` | Refutas VBN `14.534 ln ln(nu + 0.8) + 10.975`, by mass | Refutas, as given in Maples (2000); tested against a published worked example |
 | Distillation | `E70_tbp`, `E100_tbp`, `T{10,50,90,95}_d86_C` | from the blend's composition: smoothed TBP, then Riazi-Daubert TBP->D86 | Riazi & Daubert (1986) |
 | Cetane index | `cetane_index` | ASTM D4737 (default) or D976 on the blend's density and D86 points; computed, never blended | ASTM D4737, D976 |
 
 Choose rules per property with `BlendPool(rules={"octane": "volume", "RVP_psi": "raoult", "cetane": "d976"})`.
 
-The RT-70 corrections are all *spreads*: covariances and variances across the components of sensitivity, olefins and aromatics. The model therefore reduces exactly to the linear blend when the components agree. The coefficients are the published 75-blend fit (`a1 = 0.03224`, `a2 = 0.00101`, `a3 = 0`, `b1 = 0.04450`, `b2 = 0.00081`, `b3 = -0.0645`, the last on the squared aromatic spread / 1e4), as restated in the gasoline-blending literature. They live in `EthylRT70` and can be refitted. On a reformate/FCC pool the MON correction is several octane numbers, so check them against your own blend data.
+The RT-70 corrections are all *spreads*: covariances and variances across the components of sensitivity, olefins and aromatics. The model therefore reduces exactly to the linear blend when the components agree. The MON equation's first term is the MON×sensitivity covariance, the same form as RON's. The coefficients are the 75-blend fit (`a1 = 0.03224`, `a2 = 0.00101`, `a3 = 0`, `b1 = 0.04450`, `b2 = 0.00081`, `b3 = -0.00645`, the last on the squared aromatic spread / 1e4), as tabulated in Maples, *Petroleum Refinery Process Economics*, 2nd ed. (2000). The 1959 original was not reachable. They live in `EthylRT70` and can be refitted.
+
+Until #301 the code had `b3 = -0.0645` and an olefin×MON first term. The factor of ten is a transcription error: Maples gives -0.00645, and the 135-blend fit written out in full (`-6.32e-7 (A^2 - A A)^2` against a tabulated -0.00632) fixes both the digit and the /1e4 scaling. Both errors made MON blend much worse than it does. On a reformate/FCC pool the MON correction is now a few tenths of a number. Check it against your own blend data.
 
 The distillation points are on a TBP curve made differentiable by spreading each pseudocomponent with a logistic of `distillation_width` (default 5 K). Each point is then converted to D86 with the Riazi-Daubert correlation, because specs are written on D86. `E70`/`E100` stay on the TBP basis, and the key says so.
 
@@ -673,9 +734,10 @@ The distillation points are on a TBP curve made differentiable by spreading each
 
 The example measures what this means for a gasoline LP:
 
-- without back-off, the LP promises about 50% more margin than any feasible plan, and its recipe is about two MON numbers off spec;
-- the back-off depends on the recipe, so one pass is not enough; successive back-off takes about a dozen passes to settle;
-- on that pool the converged plan coincides with the best local optimum of the nonlinear problem, but a single-start NLP stops at a worse one. Blending is nonconvex, so neither tool is safe alone.
+- the example sets MON at 86, so that the MON row binds; at a regular grade's 82, MON is slack and the LP is exact;
+- without back-off, the LP promises about 5% more margin than any feasible plan, and its recipe is about 0.6 MON numbers off spec;
+- the back-off depends on the recipe, so one pass is not enough; successive back-off takes about six passes to settle, at about 0.98 MON against a first estimate of 0.58;
+- on that pool every NLP start finds the converged back-off plan. That is not guaranteed in general: blending is nonconvex, and the back-off fixed point is a feasible vertex, not a certified optimum.
 
 ### Planning hook
 
@@ -685,7 +747,9 @@ The example measures what this means for a gasoline LP:
 
 `BlendCharacterization(names, Tb, SG, MW=, Tc=, Pc=, omega=, qualities=)` is the pseudocomponent grid. Molecular weight and critical constants come from Riazi-Daubert (1980), the acentric factor from Edmister, and vapor pressure from Lee-Kesler. Any of them can be overridden per pseudocomponent by passing a vector with NaN where the correlation should be used. That is how a defined component such as n-butane takes its own constants. `qualities` holds the per-pseudocomponent composition vectors (`S_ppm`, `aromatics_vol`, ...), each averaged on its own basis.
 
-This is the minimum a blend pool needs to compute properties from composition. It is not an assay model: there is no TBP fitting and no heavy-end extrapolation. The CDU/VDU work is where those belong.
+This is the minimum a blend pool needs to compute properties from composition. It is not an assay model: there is no TBP fitting and no heavy-end extrapolation.
+
+For products of the crude and vacuum units, use `BlendCharacterization.from_characterization(char)` instead. It takes the crude characterization's Tb, SG, MW, its critical constants and its vapour-pressure acentric factor, so the pool's Raoult RVP sees `psat(Tb) = 1 atm` exactly as the columns do. It also takes the sulfur vector (and, with `contaminants=True`, nitrogen and CCR) as the `S_ppm`, `N_ppm` and `CCR_wt` qualities. Qualities the assay did not give are left out. A product stream from either column is then a `BlendComponent.from_stream` input; `F_water` and `F_H2O` are ignored. The pool's sulfur for LVGO or HVGO equals the vacuum column's own report to 1e-10, since both average the same per-component vector.
 
 ### Not in scope
 
@@ -722,12 +786,12 @@ Three of MNL50's printed values are not reproduced. None is asserted.
   - K-values agree to 1e-6.
   - Liquid and vapour enthalpies agree to 1e-6.
   - Each stage splits back into its own L and V to 1e-5.
-  - IDAES's crude bubble point (381 K) and dew point (847 K) at the flash-zone pressure satisfy difflow's sum z K = 1 and sum z / K = 1.
+  - IDAES's crude bubble point (379 K) and dew point (845 K) at the flash-zone pressure satisfy difflow's sum z K = 1 and sum z / K = 1.
 
   This confirms that difflow's arrays implement the equations it states. It says nothing about whether those equations are right.
 - *Peng-Robinson on the same Tc, Pc, omega and ideal-gas Cp* (kij = 0, hydrocarbons only). These are modelling differences. They are documented and pinned in the tests, not tuned away:
-  - On every stage, and at the coil outlet, the vapour fraction agrees within 0.021. At the coil outlet the difference is 0.0035.
-  - At the furnace inlet (240 C, 6 bar), Raoult vaporises 22 mol % of the crude and PR vaporises 15 %.
+  - On every stage, and at the coil outlet, the vapour fraction agrees within 0.021. At the coil outlet the difference is 0.0033.
+  - At the furnace inlet (240 C, 6 bar), Raoult vaporises 23 mol % of the crude and PR vaporises 17 %.
   - The crude's enthalpy rise from the furnace inlet to the coil outlet is **4.0 % higher under PR**. That is the furnace-duty difference a PR crude case would show from the property model alone.
   - For the cuts boiling 420-640 K, which make the side products, PR and Raoult K-values agree within -30 % / +25 % at the flash zone.
   - Raoult over Lee-Kesler badly overpredicts the supercritical light ends. Propane's K is about 60 times PR's. The light ends go overhead under either model, but do not read a light-ends K-value off this model.
@@ -735,31 +799,32 @@ Three of MNL50's printed values are not reproduced. None is asserted.
   - Liquid enthalpy at the same composition agrees within 1.5 kJ/mol above the flash zone. Where residue is in the liquid, PR's is 13-18 kJ/mol higher. Watson's latent heat and PR with an extrapolated omega are both extrapolations for a 1000 K cut, and nothing here says which is closer to the truth.
 - *Water.* difflow's Wagner-Pruss Psat agrees with IAPWS-95 to 0.004 % and with IAPWS-IF97 to 0.02 %. Watson's latent heat for water is exact at Tb, 1.3 % high at 300 K and 2.6 % low at 550 K, compared with IAPWS-95 by Clausius-Clapeyron.
 
-**Layer 3: the column, against an independent EO model.** `reference/mesh.py` writes every stage, stripper, pumparound, the condenser and the furnace flash as Pyomo equations with the same specs. It solves them with IPOPT from a linear 380-580 K profile and round-number flows; no difflow result is used to initialise it. It converges in about 25 s. The two solutions agree as follows:
+**Layer 3: the column, against an independent EO model.** `reference/mesh.py` writes every stage, stripper, pumparound, the condenser and the furnace flash as Pyomo equations with the same specs. It solves them with IPOPT from a linear 380-580 K profile and round-number flows; no difflow result is used to initialise it. It converges in about 17 s. The two solutions agree as follows:
 
-- stage, stripper and condenser temperatures and the coil outlet (588.0 K): 6e-6 K
-- condenser duty (32.39 MW): 6e-7 relative
-- fired duty (51.59 MW): 3e-10 relative
+- stage and stripper temperatures and the coil outlet (586.3 K): 5e-6 K
+- condenser temperature: 3e-4 K, all of it the difference between the two water Psat formulations (below) in the bubble point of the condensate with free water
+- condenser duty (31.39 MW): 6e-7 relative
+- fired duty (49.89 MW): 3e-10 relative
 - pumparound return temperatures: agree within 1e-3 K (the test tolerance)
-- feed vaporised (0.691): agrees within 1e-6 (the test tolerance)
-- volume yields: 4e-10
-- API gravities: 2e-7
-- TBP 5/10/50/90/95 % points: 5e-7 K
-- 5-95 gaps: 6e-7 K
+- feed vaporised (0.696): agrees within 1e-6 (the test tolerance)
+- volume yields: 2e-10
+- API gravities: 1e-7
+- TBP 5/10/50/90/95 % points: 4e-7 K
+- 5-95 gaps: 5e-7 K
 - steam saturation: within the 0.02 % that separates the two water Psat formulations
 
-The test tolerances are set at the solvers' precision, not at engineering accuracy, so a transcription error in either column has nowhere to hide. The same column with Watson's floor unsmoothed (eps = 0.01 → 1e-6) moves the fired duty by 0.10 %, the condenser duty by 0.003 %, stage temperatures by at most 0.019 K and the API gravities by at most 2e-4. That is the price of the smoothing that gives difflow a derivative everywhere.
+The test tolerances are set at the solvers' precision, not at engineering accuracy, so a transcription error in either column has nowhere to hide. The same column with Watson's floor unsmoothed (eps = 0.01 → 1e-6) moves the fired duty by 0.10 %, the condenser duty by 0.003 %, stage temperatures by at most 0.017 K and the API gravities by at most 2e-4. That is the price of the smoothing that gives difflow a derivative everywhere.
 
 **Layer 4: gradients.** Central finite differences of the reference column (each spec ± 0.002, IPOPT warm-started) against `jax.grad` through difflow's implicit-function solve:
 
 | Gradient | `jax.grad` | Reference FD | Agreement |
 | --- | --- | --- | --- |
-| d(diesel API)/d(diesel vol. yield) | -30.0685 | -30.0689 | 1.5e-5 |
-| d(fired duty)/d(overflash) | 170.915 MW | 170.920 MW | 3.2e-5 |
+| d(diesel API)/d(diesel vol. yield) | -30.2248 | -30.2254 | 1.8e-5 |
+| d(fired duty)/d(overflash) | 167.758 MW | 167.764 MW | 3.2e-5 |
 
 The file also stores d(condenser duty)/d(diesel yield) and d(residue API)/d(overflash) for later use.
 
-**What this does not validate.** It does not show that Raoult/Watson is the right property model for a given crude; layer 2 measures how far it is from PR, nothing more. It does not cover a commercial simulator's characterisation, its D86 interconversion defaults, or its tray-efficiency and hydraulics models, and it does not replace plant data. The 5-95 gaps of this case are negative (-27 to -55 K): equilibrium stages with these specs give overlapping products. Both implementations agree on that, which says nothing about whether a real column would overlap the same way. When a deliberate model change moves any number above, `TestReferenceIsCurrent` fails first and asks for the reference to be regenerated.
+**What this does not validate.** It does not show that Raoult/Watson is the right property model for a given crude; layer 2 measures how far it is from PR, nothing more. It does not cover a commercial simulator's characterisation, its D86 interconversion defaults, or its tray-efficiency and hydraulics models, and it does not replace plant data. The 5-95 gaps of this case are negative (-28 to -54 K): equilibrium stages with these specs give overlapping products. Both implementations agree on that, which says nothing about whether a real column would overlap the same way. When a deliberate model change moves any number above, `TestReferenceIsCurrent` fails first and asks for the reference to be regenerated.
 
 (refinery-vacuum-validation)=
 ### Validation: the vacuum unit
@@ -797,13 +862,13 @@ which writes `vdu_reference.json`: provenance, the frozen component table, both 
 
 | Quantity | difflow | Reference | Agreement (test tolerance) |
 | --- | --- | --- | --- |
-| LVGO / HVGO / slop / residue (kg/s) | 4.66199 / 19.6104 / 1.98588 / 39.9371 | same | ≤ 1e-7 rel (1e-6) |
-| LVGO / HVGO pumparound duty (MW) | 2.8141 / 13.6700 | same | ≤ 1.3e-7 rel (1e-6) |
-| Furnace duty (MW), vapour fraction | 13.1145, 0.30368 | same | 2e-10, 4e-8 rel (1e-6) |
-| Stage temperatures, flash zone 669.52 K | | | ≤ 1e-5 K (1e-4 K) |
+| LVGO / HVGO / slop / residue (kg/s) | 4.67239 / 19.5862 / 1.98589 / 39.9512 | same | ≤ 1e-7 rel (1e-6) |
+| LVGO / HVGO pumparound duty (MW) | 2.8208 / 13.6600 | same | ≤ 1.3e-7 rel (1e-6) |
+| Furnace duty (MW), vapour fraction | 13.1119, 0.30336 | same | 2e-10, 4e-8 rel (1e-6) |
+| Stage temperatures, flash zone 669.54 K | | | ≤ 1e-5 K (1e-4 K) |
 | Product TBP 5-95 % points; SGs | | | ≤ 1e-5 K (1e-4 K); ≤ 3e-9 (1e-8) |
 
-The second case is Murphree beds: LVGO 80 %, HVGO 70 %, wash 50 %, stripping 40 %. It agrees just as closely: rates within 3e-7, duties within 1.6e-7, temperatures within 2e-5 K. With these beds the LVGO rate rises to 15.25 kg/s and HVGO falls to 8.01 kg/s, so the comparison exercises the efficiency path, not an unchanged column. The case needs a 520 C LVGO end point. With beds this poor, enough heavy vapour reaches the LVGO section that the 450 C spec cannot be met at any pumparound duty. Both implementations stop finding a column halfway from equilibrium to these efficiencies: difflow does not converge and IPOPT reports local infeasibility. That is consistent with the existing infeasible-spec test, although a local NLP verdict is not a proof. The reference reaches this case by continuation from its own equilibrium solution.
+The second case is Murphree beds: LVGO 80 %, HVGO 70 %, wash 50 %, stripping 40 %. It agrees just as closely: rates within 3e-7, duties within 1.6e-7, temperatures within 2e-5 K. With these beds the LVGO rate rises to 15.27 kg/s and HVGO falls to 7.98 kg/s, so the comparison exercises the efficiency path, not an unchanged column. The case needs a 520 C LVGO end point. With beds this poor, enough heavy vapour reaches the LVGO section that the 450 C spec cannot be met at any pumparound duty. Both implementations stop finding a column halfway from equilibrium to these efficiencies: difflow does not converge and IPOPT reports local infeasibility. That is consistent with the existing infeasible-spec test, although a local NLP verdict is not a proof. The reference reaches this case by continuation from its own equilibrium solution.
 
 The remaining ~1e-7 differences come from one coefficient. The reference writes the Watson-K correction's coefficient as 2.5/1.8 in Rankine, and difflow uses 1.3889 in SI.
 
@@ -812,7 +877,7 @@ The reference also measures what two of difflow's numerical choices cost. These 
 - **Four Watson-K passes instead of the exact fixed point.** The fixed point moves ln Psat at the top stage by 6e-3, but the products by under 1e-8.
 - **Blending Maxwell-Bonnell's branches instead of switching at the published joins.** This keeps a derivative everywhere. It moves the LVGO rate by 8.7e-4, the pumparound and furnace duties by 8-9e-4, and the flash zone by 0.01 K.
 
-**Sensitivities.** `jax.jacfwd` through difflow's solve was compared with central differences of the reference, with IPOPT warm-started at each perturbed point. The perturbations were furnace outlet ± 0.25 K, flash-zone pressure ± 10 Pa and steam ± 2.5e-5 kg/kg. Over the rates, duties, flash-zone temperature and HVGO T95 they agree within 4.1e-5 relative (tolerance 2e-4); the remaining difference is the finite differences' own truncation error. Two examples are d(HVGO rate)/d(furnace T) = 0.15520 kg/s/K and d(HVGO pumparound duty)/d(steam) = 234.39 MW per kg/kg.
+**Sensitivities.** `jax.jacfwd` through difflow's solve was compared with central differences of the reference, with IPOPT warm-started at each perturbed point. The perturbations were furnace outlet ± 0.25 K, flash-zone pressure ± 10 Pa and steam ± 2.5e-5 kg/kg. Over the rates, duties, flash-zone temperature and HVGO T95 they agree within 4.2e-5 relative (tolerance 2e-4); the remaining difference is the finite differences' own truncation error. Two examples are d(HVGO rate)/d(furnace T) = 0.15506 kg/s/K and d(HVGO pumparound duty)/d(steam) = 235.01 MW per kg/kg.
 
 **What this does not validate.** It does not test the property model. Maxwell-Bonnell with Raoult at 10-30 mmHg is a choice that nothing here tests against data or an equation of state; the crude unit's layer 2 is the nearest evidence. It does not cover a commercial simulator's vacuum characterisation, packing HETP and pressure-drop models, or the ejector system, and it does not replace plant data.
 
@@ -821,7 +886,7 @@ The reference also measures what two of difflow's numerical choices cost. These 
 (refinery-limitations)=
 ## Limitations
 
-- **The crude unit is the atmospheric column only.** The preflash drum and preheat train are not modelled; the inlet is the preheat train's outlet. The vacuum unit is separate (above) and is not yet fed from it.
+- **The crude unit is the atmospheric column only.** The preflash drum and preheat train are not modelled; the inlet is the preheat train's outlet. The vacuum unit is a separate operation, fed from the crude unit's residue in a `Flowsheet` (above).
 - **Thermodynamics:** Raoult's law and ideal-gas-path enthalpies. This is the usual model for an atmospheric column at one or two bar; it is not a cubic equation of state.
 - **Equilibrium stages.** There are no tray efficiencies or hydraulics.
 - **Boiling ranges are TBP, not ASTM D86.**
