@@ -17,6 +17,7 @@ import jax
 import jax.numpy as jnp
 
 from difflow.params_mixin import ParamsMixin
+from difflow.streams import Stream
 
 from difflow_refinery.assay import Assay, characterize, default_cut_points
 from difflow_refinery.column import CrudeColumnParams
@@ -76,7 +77,7 @@ class DesalterUnitParams(ParamsMixin):
     assay: Assay
     desalter: DesalterParams
     cut_points: tuple | None = None
-    method: str = "twu"
+    method: str | None = None
 
     def __post_init__(self):
         if self.cut_points is not None:
@@ -154,7 +155,7 @@ class Desalter:
             "salt_out": (1.0 - jnp.asarray(d.efficiency)) * jnp.asarray(d.salt_in),
         }
 
-    def __call__(self, feed: dict) -> tuple:
+    def __call__(self, feed: Stream) -> tuple[Stream, Stream]:
         out = self.solve(feed)
         return out["crude"], out["brine"]
 
@@ -179,7 +180,7 @@ class PreflashDrumUnitParams(ParamsMixin):
     assay: Assay
     drum: PreflashDrumParams
     cut_points: tuple | None = None
-    method: str = "twu"
+    method: str | None = None
 
     def __post_init__(self):
         if self.cut_points is not None:
@@ -261,7 +262,7 @@ class PreflashDrum:
             "T": T, "P": P, "vapor_fraction": jnp.sum(sp["vapor"]) / jnp.sum(f),
         }
 
-    def __call__(self, feed: dict) -> tuple:
+    def __call__(self, feed: Stream) -> tuple[Stream, Stream, Stream]:
         out = self.solve(feed)
         return out["vapor"], out["liquid"], out["water"]
 
@@ -288,7 +289,7 @@ class CrudeUnitWithPreheatParams(ParamsMixin):
     column: CrudeColumnParams
     train: PreheatTrainParams
     cut_points: tuple | None = None
-    method: str = "twu"
+    method: str | None = None
 
     def __post_init__(self):
         if self.cut_points is not None:
@@ -317,7 +318,7 @@ class CrudeUnitWithPreheat:
         No pressure drop across exchangers; pumps add no enthalpy
 
     Example:
-        >>> # see examples/34_crude_preheat_train.ipynb
+        >>> # see examples/37_crude_preheat_train.ipynb
     """
 
     symbol = "PHT"
@@ -351,7 +352,7 @@ class CrudeUnitWithPreheat:
         f, _ = _flows(feed, self.unit.thermo)
         return self.unit.solve(jnp.sum(f), feed["T"], basis="mole", flows=f)
 
-    def __call__(self, feed: dict) -> tuple:
+    def __call__(self, feed: Stream) -> tuple:
         res = self.solve(feed)
         self.last_result = res
         th = self.unit.thermo

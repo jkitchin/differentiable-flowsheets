@@ -135,7 +135,7 @@ class PreheatedCrudeUnit:
     """
 
     def __init__(self, assay: Assay, column: CrudeColumnParams, train: PreheatTrainParams,
-                 cut_points=None, method: str = "twu", tol: float = 1e-8, max_iter: int = 30):
+                 cut_points=None, method: str | None = None, tol: float = 1e-8, max_iter: int = 30):
         self.assay = assay
         self.cut_points = tuple(default_cut_points(assay) if cut_points is None else cut_points)
         self.method = method

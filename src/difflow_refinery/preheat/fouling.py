@@ -10,7 +10,7 @@ Below the *threshold* -- the film temperature and velocity at which the two
 terms cancel -- an exchanger does not foul. The form is the one the
 literature uses; **the default constants are illustrative**. They are not
 fitted to any crude: they are chosen only so that a hot-end exchanger fouls
-at a few 1e-11 m^2 K/J (about 1e-3 m^2 K/W a year) and a cold one barely at
+at about 1e-11 m^2 K/J (a few 1e-4 m^2 K/W a year) and the cold end not at
 all, which is the right order for a crude preheat train. Fit ``alpha``,
 ``E`` and ``gamma`` to your own monitoring data before reading a cleaning
 date off them.
