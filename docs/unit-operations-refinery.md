@@ -9,7 +9,7 @@ This document covers the `difflow_refinery` plugin. It characterises a crude fro
 
 The `difflow_refinery` plugin provides:
 
-- **Assay characterisation** (`Assay`, `characterize`): a TBP curve plus a gravity, cut into pseudo-components with the standard petroleum correlations. Light ends (C1--C6) are kept as real species.
+- **Assay characterisation** (`Assay`, `characterize`): a TBP curve plus a gravity, cut into pseudo-components with the standard petroleum correlations. Light ends (C1--C6) are kept as real species. With a `HeavyEnd` the curve is carried into the vacuum range and closed by a residue lump, and sulfur, nitrogen, CCR, Ni+V and asphaltenes are carried per component. This **one characterization** is what the crude unit, the vacuum column and the blend pool all read.
 - **Column thermodynamics** (`ColumnThermo`): vectorised over stages and components.
   - Raoult's law with Lee-Kesler vapour pressures.
   - Ideal-gas-path enthalpies.
@@ -19,7 +19,8 @@ The `difflow_refinery` plugin provides:
 - **Product properties** (`product_properties`, `products.gaps`): rates, volume and mass yields, SG/API, and TBP 5/10/50/90/95 points. Also the 5--95 gaps between neighbouring cuts.
 - **`CrudeUnit`**: the assembly a planner means by "the CDU": assay in, yield table out.
 - **`CrudeDistillationUnit`**: the same unit behind difflow's operation protocol, for a `Flowsheet`, JSON and the editor.
-- **`VacuumColumn`** (`difflow_refinery.vacuum`): the vacuum unit, atmospheric residue to LVGO, HVGO, slop and vacuum residue, with contaminants carried per cut.
+- **`VacuumColumn`** (`difflow_refinery.vacuum`): the vacuum unit, atmospheric residue to LVGO, HVGO, slop and vacuum residue, with contaminants carried per cut. It runs on the crude unit's own pseudo-components, so the CDU residue feeds it directly in a `Flowsheet`.
+- **Correlations** (`difflow_refinery.correlations`): Twu, Riazi-Daubert, Lee-Kesler, Kesler-Lee and Maxwell-Bonnell, each written once, for all three of the above.
 - **Product blending** (`BlendPool`, `BlendComponent`): gasoline, jet, ULSD and fuel-oil pools with the nonlinear blending rules, signed spec margins and LP back-off. A library for optimisation and planning, not a palette operation.
 
 Everything is differentiable with `jax`. A product yield, a gravity or a furnace duty has an exact gradient with respect to:
@@ -65,7 +66,8 @@ crude.names, crude.Tb, crude.sg, crude.volume_fraction
 - **Default cut widths:** 20 K below 400 °C, 40 K to 600 °C, 100 K above that (`DEFAULT_CUT_WIDTHS`).
 - **Gravity:** a bulk SG is distributed over the cuts at a constant Watson K. Alternatively, pass `sg_curve=` to give the gravity cut by cut.
 - **Critical-property correlations** (`CRITICAL_METHODS`):
-  - `"twu"` (the default);
+  - `"twu"` (the default without a heavy end);
+  - `"twu_1984"` (the default with one; see below);
   - `"riazi_daubert_1987"`;
   - `"riazi_daubert_1980"`;
   - `"lee_kesler"`.
@@ -75,6 +77,32 @@ crude.names, crude.Tb, crude.sg, crude.volume_fraction
 The cut points fix the number of pseudo-components and, with it, the shape of the column's equations. Keep them fixed when differentiating with respect to the assay.
 
 This is not an assay library. Curated assays are proprietary data; the module characterises the curve the caller brings.
+
+(refinery-heavy-end)=
+### The heavy end and contaminants
+
+An atmospheric column only needs the crude to its residue. A vacuum column needs pseudo-components to 750--800 °C, past where any TBP distillation stops. `HeavyEnd` adds them, and is opt-in. An assay without one characterizes exactly as before, and `tests/refinery/test_cdu_baseline.py` pins that.
+
+```python
+import difflow_refinery as dr
+
+assay = dr.Assay([5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95],
+                 [t + 273.15 for t in (60, 95, 150, 205, 260, 315, 370, 430, 500, 600, 680)],
+                 sg=0.86, light_ends={"propane": 0.5, "n_butane": 1.0, "n_pentane": 1.5},
+                 heavy_end=dr.HeavyEnd(),                     # T_max 800 C, lump at 950 C, MW 1500
+                 sulfur_wt=1.8, nitrogen_wppm=1500.0, ccr_wt=6.0,
+                 nickel_vanadium_wppm=60.0, asphaltenes_wt=3.0)
+char = dr.characterize(assay)            # method "twu_1984" by default with a heavy end
+char.sulfur, char.ccr                    # per component, mass fraction
+char.pseudo_components()                 # the vacuum column's property table
+```
+
+- **The curve.** With a heavy end the TBP curve is drawn on a probability scale, `z = Phi^-1(x)` against T. Inside the data it is a monotone C1 cubic in `z`; beyond it, the least-squares line through the last `n_tail` points. Because the curve is open at both ends, the percentages must lie strictly inside (0, 100), there must be at least 3 of them, and the last temperature must be below `T_max`.
+- **The cuts** run to `T_max` (default 800 °C) on `DEFAULT_HEAVY_CUT_WIDTHS`. Everything above is one **residue lump** whose `Tb`, `MW` and optionally `SG` are set directly (`residue_Tb`, `residue_mw`, `residue_sg`), because Twu's n-alkane reference has no root past about 820--840 °C TBP. The lump's critical constants are still computed, so the EOS and the vapour pressure stay defined.
+- **Contaminants** (`CONTAMINANTS`): bulk sulfur, nitrogen, CCR, Ni+V and asphaltenes are distributed over the cuts by a logistic in boiling point, scaled so they recombine *exactly* to the bulk. Measured curves can be given for S, N and CCR (`sulfur_curve=` and so on). Light ends carry none.
+- **Differentiable.** Everything is a function of the assay data. A gradient with respect to one TBP point matches central differences to 1e-6 relative, with the cut points held fixed.
+
+**Which Twu.** The heavy end made the correlations disagree visibly. Twu's molecular weight had three codings in the package. The crude unit's divided Twu's Rankine constants by `sqrt(1.8)` while taking the square root of `Tb` in Rankine, which under-corrects aromatics (naphthalene 10 % low, phenanthrene 15 % low). The vacuum unit's coding matches the 1984 paper and two independent implementations. On the reference set the published form has a molecular-weight AAD of 0.5 %, against 2.4 % for the old coding. It is `method="twu_1984"`, and it is the default when the assay has a heavy end. `"twu"` keeps the old coding bit for bit, because the crude unit's default numbers are pinned. Its docstring no longer calls it the published correlation.
 
 ---
 
@@ -146,6 +174,8 @@ MESH holds on every equilibrium stage of the main column and of every stripper, 
 - **Duties** are evaluated from the converged state; they are not unknowns.
 
 The solve is a damped Newton from a bubble-point initialisation. It reports `converged` rather than raising: a set of specs with no solution comes back `converged=False`. Too little overflash for the heat a pumparound removes is one such set.
+
+**Involatile components.** A heavy-end assay brings components that are essentially involatile: a 950 °C residue lump has a vapour pressure of about 3e-5 Pa at 600 K. From the bubble-point start, such a component stalls the damped Newton. When any component's vapour pressure at 600 K is below 0.05 Pa, the column is first solved with those vapour pressures raised to that floor. It is then solved again with the true ones, starting from the first answer. The answer, and its gradients, are those of the true vapour pressures. The default characterization's heaviest cut is at 7.6e-2 Pa, so it never takes this path.
 
 (refinery-furnace)=
 ### The furnace
@@ -244,14 +274,40 @@ cdu.last_result.table()                           # the full result of the last 
 (refinery-vacuum)=
 ## The vacuum unit
 
-The vacuum distillation unit (VDU) takes the atmospheric residue to light and heavy vacuum gas oil (LVGO, HVGO), slop and vacuum residue. It is built on a stack of its own in `difflow_refinery.vacuum`:
+The vacuum distillation unit (VDU) takes the atmospheric residue to light and heavy vacuum gas oil (LVGO, HVGO), slop and vacuum residue. Its column lives in `difflow_refinery.vacuum`. Its components come from the **same characterization as the crude unit's** ([The heavy end and contaminants](#refinery-heavy-end)):
 
-- **Assays and characterization** (`vacuum.Assay`, `vacuum.characterize`): a TBP curve and bulk properties cut into pseudocomponents. The curve is extended past 565 C into the residue, and a residue lump gets its properties set directly. Sulfur, nitrogen, CCR, Ni+V and asphaltenes are carried per cut.
-- **Heavy-end correlations** (`difflow_refinery.vacuum.correlations`): Twu critical properties and molecular weight, Kesler-Lee acentric factor and liquid Cp, Maxwell-Bonnell vapor pressure (the D1160 vacuum conversion).
+- **Its property table** is `Characterization.pseudo_components()`. Every pseudo-component of the crude unit is one of the vacuum column's, with the same Tb, SG, MW, critical constants and contaminants. The crude unit's residue therefore feeds the column as it is, with no re-cut.
+- **Correlations** come from `difflow_refinery.correlations`: Twu critical properties and molecular weight, the Kesler-Lee acentric factor and liquid Cp, and Maxwell-Bonnell vapour pressure (the D1160 vacuum conversion). `difflow_refinery.vacuum.correlations` keeps the vacuum code's old names for them.
 - **A stage-network column** (`StageColumn`, `ColumnLayout`, `Route`, `StageSpec`): Naphtali-Sandholm MESH equations with liquids routed to side draws, pumparounds and entrainment, Murphree efficiencies, and any column output specifiable in place of any knob.
-- **`VacuumColumn`**, the registered operation.
+- **`VacuumColumn`** is the registered operation. Feed species it does not model, such as the light ends and the crude unit's water dissolved in the residue, leave with its overhead, so a flowsheet still balances.
+- **`vacuum.Assay` and `vacuum.characterize`** are kept as a compatibility view. The old `Assay` (Celsius, wt%) converts with `to_assay()`. `characterize` runs the shared characterization on a vacuum cut grid and returns the old `(components, yields, light_ends, Kw)` shape. `vacuum.atmospheric_residue` is an idealized TBP cut for running the column without a crude unit in front of it.
 
-The vacuum stack does not yet share the crude unit's characterization: the two cut the crude on different grids. `vacuum.atmospheric_residue` stands in for the crude column's bottoms by applying an idealized TBP cut. The vacuum column only ever sees a difflow stream, so feeding it the `CrudeDistillationUnit`'s residue needs only a common component set.
+(refinery-crude-to-vacuum)=
+### Crude unit into vacuum column
+
+```python
+from difflow import Flowsheet
+from difflow.flowsheet import Unit
+from difflow_refinery.vacuum import VacuumColumn, VacuumColumnParams
+
+char = dr.characterize(assay)                         # one HeavyEnd assay, as above
+cdu = dr.CrudeDistillationUnit(dr.CrudeDistillationUnitParams(assay=assay, column=params))
+vdu = VacuumColumn(VacuumColumnParams(components=char.pseudo_components()))
+
+fs = Flowsheet(list(char.names) + ["water", "H2O"])  # CDU water is F_water, VDU steam F_H2O
+fs.add_feed("crude", cdu.feed(95_000, T=513.15, P=6e5))
+fs.add_unit(Unit("cdu", cdu, ["crude"], list(cdu.outlet_names)))
+fs.add_unit(Unit("vdu", vdu, ["residue"],             # renamed: "residue" is the CDU's
+                 ["vac_overhead", "lvgo", "hvgo", "slop", "vac_residue", "vdu_info"]))
+streams = fs.solve()
+```
+
+On the 95 000 bbl/d test crude (`tests/refinery/test_one_characterization.py`, `examples/36_crude_to_vacuum.ipynb`):
+
+- Both units converge.
+- The balance closes per component to round-off. It also closes in total, once the crude unit's and the vacuum unit's steam are counted, each at its own water molar mass (18.015 and 18.01528 g/mol).
+- At the default 400 °C furnace, the vacuum column turns 0.74 of its feed into VGO.
+- d(VGO yield)/d(VDU furnace T) is 2.8e-3 per K. d(VGO rate)/d(crude rate) runs through both units' implicit solves. Both match central differences.
 
 (refinery-vacuum-quick-start)=
 ### Quick start: the vacuum unit
@@ -291,8 +347,8 @@ default is 300-800 C in 25 C steps. Each cut gets:
 | Property | How |
 |---|---|
 | mass yield | difference of the TBP curve across the cut |
-| `Tb` | the mid-percent temperature of the cut |
-| `SG` | from a constant Watson K, fitted so the whole crude matches its bulk SG |
+| `Tb` | the mean of the TBP curve over the cut |
+| `SG` | from a constant Watson K, fitted over all the cuts so the whole crude matches its bulk SG |
 | `MW`, `Tc`, `Pc` | Twu (1984) |
 | `omega` | Kesler-Lee (1976) |
 | S, N, CCR, Ni+V, asphaltenes | a logistic in boiling point, scaled to the bulk assay value (or a measured curve) |
@@ -467,13 +523,15 @@ Default specs, 100 kg/s of crude, furnace 400 C, flash zone 30 mmHg:
 
 | | light: LVGO | HVGO | slop | residue | heavy: LVGO | HVGO | slop | residue |
 |---|---|---|---|---|---|---|---|---|
-| yield on feed | 0.154 | 0.488 | 0.030 | 0.328 | 0.070 | 0.296 | 0.030 | 0.603 |
+| yield on feed | 0.155 | 0.487 | 0.030 | 0.328 | 0.071 | 0.296 | 0.030 | 0.604 |
 | TBP T50 (C) | 393 | 484 | 605 | 674 | 391 | 473 | 595 | 753 |
-| TBP T95 (C) | 450 | 579 | 700 | 868 | 450 | 566 | 834 | 888 |
-| SG | 0.876 | 0.914 | 0.959 | 0.992 | 0.909 | 0.944 | 0.999 | 1.054 |
-| S (wt%) | 0.74 | 1.10 | 1.38 | 1.45 | 2.73 | 3.98 | 5.14 | 5.50 |
-| CCR (wt%) | 0.19 | 1.48 | 8.0 | 15.1 | 0.29 | 1.84 | 12.9 | 28.4 |
+| TBP T95 (C) | 450 | 579 | 699 | 868 | 450 | 566 | 834 | 888 |
+| SG | 0.873 | 0.910 | 0.955 | 0.988 | 0.907 | 0.942 | 0.996 | 1.052 |
+| S (wt%) | 0.76 | 1.13 | 1.42 | 1.49 | 2.76 | 4.01 | 5.18 | 5.55 |
+| CCR (wt%) | 0.19 | 1.48 | 8.0 | 15.2 | 0.29 | 1.84 | 12.9 | 28.4 |
 | Ni+V (wppm) | 0.00 | 0.14 | 8.1 | 57 | 0.01 | 1.05 | 100 | 495 |
+
+These numbers moved slightly when the vacuum unit moved onto the shared characterization (#301). A cut's `Tb` is now the mean of the curve over it, not its mid-percent point, and the Watson K is fitted over the cuts themselves. Gravities fell by up to 0.004 and sulfur rose by up to 3 %. Yields and TBP points are unchanged to the figures shown.
 
 Both converge from the default initialization in 6-7 Newton iterations.
 The per-pseudocomponent mass balance closes to 1e-15. Implicit gradients
@@ -612,7 +670,9 @@ The example measures what this means for a gasoline LP:
 
 `BlendCharacterization(names, Tb, SG, MW=, Tc=, Pc=, omega=, qualities=)` is the pseudocomponent grid. Molecular weight and critical constants come from Riazi-Daubert (1980), the acentric factor from Edmister, and vapor pressure from Lee-Kesler. Any of them can be overridden per pseudocomponent by passing a vector with NaN where the correlation should be used. That is how a defined component such as n-butane takes its own constants. `qualities` holds the per-pseudocomponent composition vectors (`S_ppm`, `aromatics_vol`, ...), each averaged on its own basis.
 
-This is the minimum a blend pool needs to compute properties from composition. It is not an assay model: there is no TBP fitting and no heavy-end extrapolation. The CDU/VDU work is where those belong.
+This is the minimum a blend pool needs to compute properties from composition. It is not an assay model: there is no TBP fitting and no heavy-end extrapolation.
+
+For products of the crude and vacuum units, use `BlendCharacterization.from_characterization(char)` instead. It takes the crude characterization's Tb, SG, MW, its critical constants and its vapour-pressure acentric factor, so the pool's Raoult RVP sees `psat(Tb) = 1 atm` exactly as the columns do. It also takes the sulfur vector (and, with `contaminants=True`, nitrogen and CCR) as the `S_ppm`, `N_ppm` and `CCR_wt` qualities. Qualities the assay did not give are left out. A product stream from either column is then a `BlendComponent.from_stream` input; `F_water` and `F_H2O` are ignored. The pool's sulfur for LVGO or HVGO equals the vacuum column's own report to 1e-10, since both average the same per-component vector.
 
 ### Not in scope
 
@@ -625,7 +685,7 @@ This is the minimum a blend pool needs to compute properties from composition. I
 (refinery-limitations)=
 ## Limitations
 
-- **The crude unit is the atmospheric column only.** The preflash drum and preheat train are not modelled; the inlet is the preheat train's outlet. The vacuum unit is separate (above) and is not yet fed from it.
+- **The crude unit is the atmospheric column only.** The preflash drum and preheat train are not modelled; the inlet is the preheat train's outlet. The vacuum unit is a separate operation, fed from the crude unit's residue in a `Flowsheet` (above).
 - **Thermodynamics:** Raoult's law and ideal-gas-path enthalpies. This is the usual model for an atmospheric column at one or two bar; it is not a cubic equation of state.
 - **Equilibrium stages.** There are no tray efficiencies or hydraulics.
 - **Boiling ranges are TBP, not ASTM D86.**
