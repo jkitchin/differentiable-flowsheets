@@ -72,8 +72,9 @@ difflow/
 │   ├── difflow_bio/       # Bio manufacturing plugin (bioreactors, filtration, chromatography)
 │   ├── difflow_ree/       # Rare earth element solvent extraction plugin
 │   ├── difflow_cc/        # Carbon capture plugin (amine, membrane, adsorption)
-│   └── difflow_gas/       # Gas transmission network plugin (pipes, compressors, computed decomposition)
-├── tests/                 # pytest test files (includes tests/bio/, tests/ree/, tests/cc/, tests/gas/, tests/power/)
+│   ├── difflow_gas/       # Gas transmission network plugin (pipes, compressors, computed decomposition)
+│   └── difflow_refinery/  # Refinery models: product blending pool (not a plugin entry point)
+├── tests/                 # pytest test files (includes tests/bio/, tests/ree/, tests/cc/, tests/gas/, tests/power/, tests/refinery/)
 ├── examples/              # Jupyter notebook examples
 ├── jax-tutorials/         # JAX/autodiff tutorials
 └── docs/                  # Documentation (Markdown)
@@ -412,6 +413,35 @@ Invariants encoded in the plugin (do not weaken them):
   dynamics/transient stability, unbalanced three-phase. Do not add them.
 
 Docs: `docs/unit-operations-power.md`. Tests: `tests/power/`.
+
+### Refinery Blending (`difflow_refinery`)
+
+`BlendPool(product, specs, rules)` blends `BlendComponent`s (from properties,
+or from pseudocomponent streams on a shared `Characterization`) and returns
+properties, signed spec margins and, in stream mode, the product stream. Like
+`difflow.planning` it is a library, **not** a `difflow.plugins` entry point
+(no palette operation, so nothing for `doclinks` to resolve).
+
+Invariants encoded in the module (do not weaken them):
+- Volumes are ideal-mixing volumes at 15 degC from SG; product SG is the
+  volume average and the stream-mode mass and volume balances close to
+  round-off. Both are tested.
+- Ethyl RT-70 corrections are spreads, so the rule reduces exactly to the
+  linear blend when the components agree -- tested, keep it that way.
+- Distillation and cetane index are COMPUTED from the blend's composition,
+  never blended; the linear view averages each component's own value, and the
+  difference is real (T10 especially).
+- The smooth violation is `t * logaddexp(-m/t, 0)` (derivative -1/2 at an
+  active spec), never the branchless form -- same reason as `difflow.stochastic`.
+- Margins for an optimizer over volume flows are `weighted=True` (`V * m`):
+  properties are 0/0 at an empty pool.
+- `exact=` in `linear_properties`/`backoff` accepts only rules linear in the
+  volumes; it describes an LP.
+- Blending is nonconvex: the example finds two KKT points; do not present a
+  single-start NLP as "the" optimum.
+
+Docs: `docs/unit-operations-refinery.md`. Example:
+`examples/33_refinery_gasoline_blending.ipynb`. Tests: `tests/refinery/`.
 
 ### Delta-Base Planning (`difflow.planning`)
 
