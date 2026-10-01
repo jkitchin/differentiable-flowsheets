@@ -42,7 +42,8 @@ streams)::
     c3         propane, propylene                    -> alkylation (#310)
     c4         isobutane, n_butane, 1_butene, isobutylene,
                cis_2_butene, trans_2_butene          -> alkylation (#310)
-    gasoline   fcc01..fcc10 (product pseudocomponents, C5-221 C)
+    gasoline   fcc01..fcc22 product pseudocomponents (mostly fcc01..fcc10,
+               the C5-221 C cuts; the split overlaps)
     lco        fcc01..fcc22 (mostly 221-343 C)
     slurry     fcc01..fcc22 (mostly 343 C+)
     sour_water water (the riser steam)
