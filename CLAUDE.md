@@ -441,10 +441,11 @@ feeds the VDU in a `Flowsheet` with no re-cut (rename the VDU's outlets:
 `difflow_refinery.correlations`; `vacuum.correlations` and the
 `characterization` helpers are re-export shims.
 - Opt-in, and pinned: an assay without a heavy end characterizes bit for
-  bit as before (`tests/refinery/test_cdu_baseline.py`). Do not change the
-  default `method="twu"`: it is the OLD Twu MW coding (Rankine constants /
-  sqrt(1.8), aromatics up to 15% low) kept for that pin; `"twu_1984"` is the
-  published form and the default with a heavy end.
+  bit as before UNDER `method="twu_legacy"` (`tests/refinery/test_cdu_baseline.py`).
+  The default `"twu"` is Twu (1984) as published (alias `"twu_1984"`);
+  `"twu_legacy"` is the old crude-unit MW coding (Rankine constants /
+  sqrt(1.8), aromatics up to 15% low), kept only to reproduce old numbers.
+  Do not make it the default again.
 - Water rides under TWO keys: CDU water/steam is `F_water` (WATER_MW
   18.015), VDU steam is `F_H2O` (MW_WATER 18.01528). A flowsheet species list
   is `char.names + ["water", "H2O"]`; a total balance counts each at its own

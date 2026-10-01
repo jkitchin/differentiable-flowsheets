@@ -900,9 +900,7 @@ def characterize(
             boiling point. Default: :func:`default_cut_points`.
         method: Critical-property correlation, one of
             :data:`~difflow_refinery.correlations.CRITICAL_METHODS`. Default
-            ``"twu"`` -- the crude unit's historical coding, whose numbers
-            are pinned -- or ``"twu_1984"``, Twu as published, for an assay
-            with a :class:`HeavyEnd` (see :mod:`~difflow_refinery.correlations`).
+            ``"twu"``, Twu (1984) as published.
         prefix: Pseudo-component names are ``f"{prefix}{i:02d}"``, from 1;
             a residue lump is ``f"{prefix}resid"``.
 
@@ -917,7 +915,7 @@ def characterize(
         A :class:`Characterization`.
     """
     if method is None:
-        method = "twu" if assay.heavy_end is None else "twu_1984"
+        method = "twu"
     if cut_points is None:
         cut_points = default_cut_points(assay)
     points = jnp.asarray(cut_points, dtype=float).reshape(-1)

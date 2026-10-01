@@ -40,8 +40,9 @@ MW_REF = MW
 # Average absolute deviation (%) allowed for (MW, Tc, Pc), per method: the
 # published accuracy for this kind of compound, with some room.
 AAD_LIMITS = {
-    "twu": (4.0, 1.0, 3.0),
+    "twu": (1.5, 1.0, 3.0),
     "twu_1984": (1.5, 1.0, 3.0),
+    "twu_legacy": (4.0, 1.0, 3.0),
     "riazi_daubert_1987": (4.0, 1.0, 4.5),
     "riazi_daubert_1980": (6.0, 1.5, 5.0),
     "lee_kesler": (7.0, 1.5, 5.5),
@@ -81,8 +82,8 @@ AROMATICS = [  # name, Tb (K), SG, MW
 ]
 
 
-def test_twu_1984_is_the_published_molecular_weight():
-    """``twu_1984`` carries Twu's Rankine constants; ``twu`` the Kelvin-form
+def test_twu_is_the_published_molecular_weight():
+    """``twu`` carries Twu's Rankine constants; ``twu_legacy`` the Kelvin-form
     ones against sqrt(Tb in R), which under-corrects aromatics' MW.
 
     The published-constant coding is checked against independent codings of
@@ -90,13 +91,17 @@ def test_twu_1984_is_the_published_molecular_weight():
     ``data/twu.py`` both have 0.328086 and 0.193168 with Tb in Rankine).
     """
     _, tb, sg, mw = (np.array(c) if i else c for i, c in enumerate(zip(*AROMATICS)))
-    good = corr.critical_properties(jnp.asarray(tb), jnp.asarray(sg), "twu_1984")[0]
-    old = corr.critical_properties(jnp.asarray(tb), jnp.asarray(sg), "twu")[0]
+    good = corr.critical_properties(jnp.asarray(tb), jnp.asarray(sg), "twu")[0]
+    old = corr.critical_properties(jnp.asarray(tb), jnp.asarray(sg), "twu_legacy")[0]
     assert _aad(good, mw) < 3.0
     assert _aad(old, mw) > 3.0 * _aad(good, mw)
     # Tc and Pc do not involve the MW constants: the two codings agree.
-    for a, b in zip(corr.critical_properties(TB, SG, "twu")[1:],
-                    corr.critical_properties(TB, SG, "twu_1984")[1:]):
+    for a, b in zip(corr.critical_properties(TB, SG, "twu_legacy")[1:],
+                    corr.critical_properties(TB, SG, "twu")[1:]):
+        np.testing.assert_array_equal(a, b)
+    # "twu_1984" is the same function under its paper's name.
+    for a, b in zip(corr.critical_properties(tb, sg, "twu"),
+                    corr.critical_properties(tb, sg, "twu_1984")):
         np.testing.assert_array_equal(a, b)
     # The dict form is the same function.
     d = corr.twu_critical_properties(tb, sg)

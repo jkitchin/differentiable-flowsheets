@@ -325,7 +325,7 @@ def characterize(
 
 
 def _characterize_cached(ua, pts):
-    return _assay.characterize(ua, cut_points=pts, method="twu_1984")
+    return _assay.characterize(ua, cut_points=pts, method="twu")
 
 
 # ---------------------------------------------------------------------------

@@ -17,28 +17,25 @@ Accuracy, measured against 13 pure hydrocarbons (n-C5 to n-C20, two
 naphthenes, three aromatics; ``tests/refinery/test_correlations.py``)::
 
     method               MW     Tc     Pc     (average absolute % deviation)
-    twu_1984             0.5    0.4    1.8
-    twu                  2.4    0.4    1.8
+    twu (= twu_1984)     0.5    0.4    1.8
+    twu_legacy           2.4    0.4    1.8
     riazi_daubert_1987   2.4    0.6    3.1
     riazi_daubert_1980   4.1    0.7    3.3
     lee_kesler           5.3    0.6    4.0
 
-``"twu_1984"`` is Twu's correlation as published. ``"twu"`` -- the crude
-unit's default since it was written, kept bit-for-bit so its solved numbers
-do not move under the planning and validation work built on them -- differs
-in two constants of the molecular-weight perturbation: it has the Kelvin-form
+``"twu"`` is Twu's correlation as published, and the default everywhere;
+``"twu_1984"`` is an alias for it. ``"twu_legacy"`` is the coding the crude
+unit used before #301, kept so an old result can be reproduced: it differs
+in two constants of the molecular-weight perturbation, having the Kelvin-form
 ``0.244541`` and ``0.143979`` (Twu's Rankine constants ``0.328086`` and
 ``0.193168`` divided by ``sqrt(1.8)``) against ``sqrt(Tb)`` in *Rankine*,
 which shrinks the SG correction by ``sqrt(1.8)``. The n-alkanes are its
 reference, where the perturbation vanishes, so they do not see it; aromatics
 do (benzene -7.5 %, naphthalene -10 %, phenanthrene -15 % in MW, against
--0.5 %, +0.5 % and -3 % for ``"twu_1984"``). Earlier versions of this
-docstring called that "the published behaviour"; it is not. Two independent
-codings of the 1984 paper agree with ``"twu_1984"`` (pychemqt's
-``lib/petro.py``, ``prop_Twu`` Eqs. 21-22, and sim21's ``data/twu.py``).
-Tc, Pc and Vc are the same in both. The heavy end and the vacuum column use
-``"twu_1984"``; switching the crude unit's default is left to a change that
-can re-baseline the numbers pinned in ``tests/refinery/test_cdu_baseline.py``.
+-0.5 %, +0.5 % and -3 % as published). Two independent codings of the 1984
+paper agree with ``"twu"`` (pychemqt's ``lib/petro.py``, ``prop_Twu``
+Eqs. 21-22, and sim21's ``data/twu.py``). Tc, Pc and Vc are the same in all
+three names.
 
 What else is here, and where it is used:
 
@@ -91,7 +88,9 @@ ATM_MMHG = 760.0
 BTU_LB_R = _BTU_PER_LB_F
 
 #: Methods :func:`critical_properties` accepts.
-CRITICAL_METHODS = ("twu", "twu_1984", "riazi_daubert_1987", "riazi_daubert_1980", "lee_kesler")
+CRITICAL_METHODS = (
+    "twu", "twu_1984", "twu_legacy", "riazi_daubert_1987", "riazi_daubert_1980", "lee_kesler",
+)
 
 # Twu's reference-alkane molecular weight is implicit in Tb. Newton from his
 # own starting estimate converges to round-off in under six steps across
@@ -237,14 +236,14 @@ def _twu_core(Tb, SG, mw_a, mw_b):
 
 
 def _twu(Tb, SG):
-    # The crude unit's original coding: Kelvin-form MW constants against
-    # sqrt(Tb in Rankine). Kept bit-for-bit; see the module docstring.
-    return _twu_core(Tb, SG, 0.244541, 0.143979)[:3]
-
-
-def _twu_1984(Tb, SG):
     # Twu (1984) Eqs. 21-22 as published (T in Rankine).
     return _twu_core(Tb, SG, 0.328086, 0.193168)[:3]
+
+
+def _twu_legacy(Tb, SG):
+    # The crude unit's coding before #301: Kelvin-form MW constants against
+    # sqrt(Tb in Rankine). Kept bit-for-bit; see the module docstring.
+    return _twu_core(Tb, SG, 0.244541, 0.143979)[:3]
 
 
 def twu_critical_properties(Tb: Array, SG: Array) -> dict[str, Array]:
@@ -257,7 +256,7 @@ def twu_critical_properties(Tb: Array, SG: Array) -> dict[str, Array]:
     Returns:
         dict with ``Tc`` (K), ``Pc`` (Pa), ``Vc`` (m^3/mol) and ``MW``
         (g/mol), broadcast to the shape of the inputs. The published
-        constants (method ``"twu_1984"``), which the heavy end uses.
+        constants (method ``"twu"``).
     """
     MW, Tc, Pc, Vc = _twu_core(jnp.asarray(Tb, dtype=float), jnp.asarray(SG, dtype=float),
                                0.328086, 0.193168)
@@ -266,7 +265,8 @@ def twu_critical_properties(Tb: Array, SG: Array) -> dict[str, Array]:
 
 _METHODS = {
     "twu": _twu,
-    "twu_1984": _twu_1984,
+    "twu_1984": _twu,
+    "twu_legacy": _twu_legacy,
     "riazi_daubert_1987": _riazi_daubert_1987,
     "riazi_daubert_1980": _riazi_daubert_1980,
     "lee_kesler": _lee_kesler,
@@ -279,10 +279,10 @@ def critical_properties(Tb: Array, SG: Array, method: str = "twu") -> tuple[Arra
     Args:
         Tb: Normal boiling point (K).
         SG: Specific gravity, 60 F / 60 F.
-        method: One of :data:`CRITICAL_METHODS`. ``"twu_1984"`` is the most
-            accurate on the reference set. ``"twu"`` (the default, kept for
-            the crude unit's pinned numbers) is the same except for the
-            aromatics' molecular weight; see the module docstring.
+        method: One of :data:`CRITICAL_METHODS`. ``"twu"`` (the default,
+            Twu 1984 as published; ``"twu_1984"`` is an alias) is the most
+            accurate on the reference set. ``"twu_legacy"`` reproduces the
+            crude unit's results from before #301; see the module docstring.
 
     Returns:
         ``(MW, Tc, Pc)`` in g/mol, K and Pa.

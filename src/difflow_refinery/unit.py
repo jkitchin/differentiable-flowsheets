@@ -99,8 +99,7 @@ class CrudeUnit:
             :func:`~difflow_refinery.assay.default_cut_points`.
         method: Critical-property correlation for the characterisation.
             ``None`` (default) lets :func:`~difflow_refinery.assay.characterize`
-            choose: ``"twu"`` for a plain assay, which is what the unit has
-            always used, and ``"twu_1984"`` for one with a ``heavy_end``.
+            choose, which is ``"twu"`` (Twu 1984 as published).
 
     Example:
         >>> from difflow_refinery import Assay, CrudeUnit, column as cc
@@ -192,8 +191,7 @@ class CrudeDistillationUnitParams(ParamsMixin):
         cut_points: Interior cut boundaries (K); default
             :func:`~difflow_refinery.assay.default_cut_points`.
         method: Critical-property correlation for the pseudo-components;
-            ``None`` lets ``characterize`` choose (``"twu"``, or
-            ``"twu_1984"`` for an assay with a ``heavy_end``).
+            ``None`` lets ``characterize`` choose (``"twu"``).
     """
 
     assay: Assay

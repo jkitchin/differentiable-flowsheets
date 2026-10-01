@@ -1,10 +1,14 @@
-"""The crude unit's default numbers, pinned before #301 touched the assay.
+"""The crude unit's numbers from before #301, reproduced by `twu_legacy`.
 
 #301 put the crude and vacuum units on one characterization. The new
 machinery (heavy-end extension, a residue lump, contaminants per cut) is
 opt-in, so an assay that uses none of it has to come out of `characterize`
-and `CrudeUnit.solve` exactly as it did before -- other work (#297's planning
-block, #298's IDAES validation) holds numbers against those defaults.
+and `CrudeUnit.solve` exactly as it did before -- given the same correlation.
+#301 also changed the default correlation: `"twu"` is now Twu (1984) as
+published, and the old coding, which under-corrects aromatics' molecular
+weight, is `"twu_legacy"`. Run under that name, the merged correlation
+module and the volatility continuation must give the old numbers to
+round-off.
 
 `data/cdu_baseline.json` was written from main at 8829a11, before any #301
 change, by characterizing the test assay under every critical-property
@@ -42,31 +46,36 @@ def _check(char, ref):
                                    err_msg=f)
 
 
-@pytest.mark.parametrize("method", ["twu", "riazi_daubert_1980", "riazi_daubert_1987", "lee_kesler"])
-def test_default_characterization_is_unchanged(method):
+# the baseline file's "twu" is today's "twu_legacy"
+BASELINE_NAME = {"twu_legacy": "twu"}
+
+
+@pytest.mark.parametrize("method", ["twu_legacy", "riazi_daubert_1980", "riazi_daubert_1987",
+                                    "lee_kesler"])
+def test_characterization_is_unchanged(method):
     char = characterize(ASSAY, method=method)
-    ref = BASE[f"char_{method}"]
+    ref = BASE[f"char_{BASELINE_NAME.get(method, method)}"]
     assert list(char.names) == ref["names"]
     _check(char, ref)
 
 
 def test_mass_basis_characterization_is_unchanged():
-    _check(characterize(MASS_ASSAY), BASE["char_mass"])
+    _check(characterize(MASS_ASSAY, method="twu_legacy"), BASE["char_mass"])
 
 
-def test_default_vapor_pressures_are_unchanged():
-    th = ColumnThermo.from_characterization(characterize(ASSAY))
+def test_vapor_pressures_are_unchanged():
+    th = ColumnThermo.from_characterization(characterize(ASSAY, method="twu_legacy"))
     np.testing.assert_allclose(np.asarray(th.psat(500.0)), BASE["thermo_psat_500K"], rtol=1e-10)
 
 
-def test_default_crude_unit_solve_is_unchanged():
-    crude = characterize(ASSAY)
+def test_crude_unit_solve_is_unchanged():
+    crude = characterize(ASSAY, method="twu_legacy")
     th = ColumnThermo.from_characterization(crude)
     kg_s = BPD * cc.BARREL / 86400.0 * float(crude.bulk_sg) * 999.016
     feed = crude.stream(kg_s, T=600.0, P=1.9e5, basis="mass")
     base = _atmospheric_params(feed, th, pa1_duty=15e6)
     params = _atmospheric_params(feed, th, pa1_duty=15e6, specs=base.specs + (cc.overflash(0.05),))
-    r = dr.CrudeUnit(ASSAY, params).solve(BPD, T=273.15 + 240.0, P=6e5)
+    r = dr.CrudeUnit(ASSAY, params, method="twu_legacy").solve(BPD, T=273.15 + 240.0, P=6e5)
     assert bool(r.converged)
     for name, ref in BASE["solve"].items():
         if name == "converged":

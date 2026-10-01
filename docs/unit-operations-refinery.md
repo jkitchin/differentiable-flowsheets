@@ -66,8 +66,8 @@ crude.names, crude.Tb, crude.sg, crude.volume_fraction
 - **Default cut widths:** 20 K below 400 °C, 40 K to 600 °C, 100 K above that (`DEFAULT_CUT_WIDTHS`).
 - **Gravity:** a bulk SG is distributed over the cuts at a constant Watson K. Alternatively, pass `sg_curve=` to give the gravity cut by cut.
 - **Critical-property correlations** (`CRITICAL_METHODS`):
-  - `"twu"` (the default without a heavy end);
-  - `"twu_1984"` (the default with one; see below);
+  - `"twu"` (the default; Twu 1984 as published, also named `"twu_1984"`);
+  - `"twu_legacy"` (the crude unit's coding before #301; see below);
   - `"riazi_daubert_1987"`;
   - `"riazi_daubert_1980"`;
   - `"lee_kesler"`.
@@ -92,7 +92,7 @@ assay = dr.Assay([5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95],
                  heavy_end=dr.HeavyEnd(),                     # T_max 800 C, lump at 950 C, MW 1500
                  sulfur_wt=1.8, nitrogen_wppm=1500.0, ccr_wt=6.0,
                  nickel_vanadium_wppm=60.0, asphaltenes_wt=3.0)
-char = dr.characterize(assay)            # method "twu_1984" by default with a heavy end
+char = dr.characterize(assay)            # method "twu" by default
 char.sulfur, char.ccr                    # per component, mass fraction
 char.pseudo_components()                 # the vacuum column's property table
 ```
@@ -102,7 +102,7 @@ char.pseudo_components()                 # the vacuum column's property table
 - **Contaminants** (`CONTAMINANTS`): bulk sulfur, nitrogen, CCR, Ni+V and asphaltenes are distributed over the cuts by a logistic in boiling point, scaled so they recombine *exactly* to the bulk. Measured curves can be given for S, N and CCR (`sulfur_curve=` and so on). Light ends carry none.
 - **Differentiable.** Everything is a function of the assay data. A gradient with respect to one TBP point matches central differences to 1e-6 relative, with the cut points held fixed.
 
-**Which Twu.** The heavy end made the correlations disagree visibly. Twu's molecular weight had three codings in the package. The crude unit's divided Twu's Rankine constants by `sqrt(1.8)` while taking the square root of `Tb` in Rankine, which under-corrects aromatics (naphthalene 10 % low, phenanthrene 15 % low). The vacuum unit's coding matches the 1984 paper and two independent implementations. On the reference set the published form has a molecular-weight AAD of 0.5 %, against 2.4 % for the old coding. It is `method="twu_1984"`, and it is the default when the assay has a heavy end. `"twu"` keeps the old coding bit for bit, because the crude unit's default numbers are pinned. Its docstring no longer calls it the published correlation.
+**Which Twu.** The heavy end made the correlations disagree visibly. Twu's molecular weight had three codings in the package. The crude unit's divided Twu's Rankine constants by `sqrt(1.8)` while taking the square root of `Tb` in Rankine, which under-corrects aromatics (naphthalene 10 % low, phenanthrene 15 % low). The vacuum unit's coding matches the 1984 paper and two independent implementations. On the reference set the published form has a molecular-weight AAD of 0.5 %, against 2.4 % for the old coding. `"twu"` is now the published form, for every unit. The old coding is kept as `"twu_legacy"`, which reproduces the crude unit's earlier results to round-off (`tests/refinery/test_cdu_baseline.py`). On the test crude below the change moves the coil outlet by 1.7 K and the fired duty by about 3 %. The yields do not move, because they are specs.
 
 ---
 
@@ -220,7 +220,7 @@ res.gaps()
 
 On the test crude, a 30-stage column with three side strippers, two pumparounds and a 5 % overflash gives:
 
-- a coil outlet of about 315 °C and about 52 MW fired;
+- a coil outlet of about 313 °C and about 50 MW fired;
 - naphtha, kerosene, diesel, AGO and residue at 20, 11, 17, 5 and 47 vol %;
 - API gravities from 64.5 down to 18.7.
 

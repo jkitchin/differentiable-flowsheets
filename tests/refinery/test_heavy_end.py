@@ -103,7 +103,7 @@ def test_the_curve_passes_through_its_data():
 
 
 def test_method_defaults():
-    assert dr.characterize(_assay()).method == "twu_1984"
+    assert dr.characterize(_assay()).method == "twu"
     plain = dr.Assay([0, 50, 100], [300.0, 600.0, 900.0], sg=0.85)
     assert dr.characterize(plain).method == "twu"
 
