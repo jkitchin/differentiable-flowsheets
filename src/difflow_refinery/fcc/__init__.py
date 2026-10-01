@@ -34,11 +34,12 @@ from difflow_refinery.fcc.unit import (
     FCCConvergenceWarning,
     FCCParams,
     FCCUnit,
+    RegeneratorTemperatureWarning,
 )
 from difflow_refinery.fcc.planning import FCCPlanningModel, fcc_block
 
 __all__ = [
-    "FCCFeed", "FCCParams", "FCCUnit", "FCCConvergenceWarning",
+    "FCCFeed", "FCCParams", "FCCUnit", "FCCConvergenceWarning", "RegeneratorTemperatureWarning",
     "GROUPS", "ILLUSTRATIVE_5LUMP", "LumpScheme", "Reaction",
     "ancheyta_5", "lee_4", "weekman_nace_3", "get_scheme",
     "deactivation", "voorhies_coke", "arthur_co_co2",

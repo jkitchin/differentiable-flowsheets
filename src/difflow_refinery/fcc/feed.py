@@ -140,7 +140,8 @@ class FCCFeed:
         return cls.from_components(components, mol * jnp.asarray(components.MW) / 1000.0, hydrogen)
 
     @classmethod
-    def from_characterization(cls, char, rate: float | Array, T_lo: float, T_hi: float
+    def from_characterization(cls, char, rate: float | Array, T_lo: float | None = None,
+                              T_hi: float | None = None, indices: Sequence[int] | None = None
                               ) -> "FCCFeed":
         """An ideal TBP cut ``T_lo < Tb < T_hi`` (K) of a crude characterization.
 
@@ -148,12 +149,13 @@ class FCCFeed:
         boiling points -- it fixes a shape), then re-scaled to ``rate``
         (kg/s). Differentiable in every assay number through the cuts'
         properties. Hydrogen comes from ``char.composition`` if it is set.
+
+        Under ``jax.grad`` with respect to the assay the boiling points are
+        traced: pass ``indices=`` (from :func:`cut_indices` on the concrete
+        characterization) instead of ``T_lo``/``T_hi``.
         """
         k = len(char.light_names)
-        Tb = np.asarray(jax.lax.stop_gradient(char.Tb))
-        idx = np.nonzero((Tb > T_lo) & (Tb < T_hi))[0]
-        if idx.size == 0:
-            raise ValueError(f"no pseudocomponent has {T_lo} K < Tb < {T_hi} K")
+        idx = np.asarray(indices if indices is not None else cut_indices(char, T_lo, T_hi))
         mass = char.mass_fraction[k + idx]
         comp = _Table(
             Tb=char.Tb[idx], SG=char.SG[idx], MW=char.MW[idx],
@@ -164,6 +166,23 @@ class FCCFeed:
             h = char.composition.hydrogen[k + idx]
         flows = jnp.asarray(rate, dtype=float) * mass / jnp.sum(mass)
         return cls.from_components(comp, flows, h)
+
+
+def cut_indices(char, T_lo: float, T_hi: float) -> np.ndarray:
+    """Indices of the pseudocomponents of ``char`` with ``T_lo < Tb < T_hi`` (K).
+
+    Needs a concrete characterization (the selection is a shape).
+    """
+    try:
+        Tb = np.asarray(char.Tb)
+    except Exception as e:  # a tracer
+        raise ValueError("cut_indices needs concrete boiling points; under jax.grad "
+                         "compute the indices on the concrete characterization and "
+                         "pass indices= to FCCFeed.from_characterization") from e
+    idx = np.nonzero((Tb > T_lo) & (Tb < T_hi))[0]
+    if idx.size == 0:
+        raise ValueError(f"no pseudocomponent has {T_lo} K < Tb < {T_hi} K")
+    return idx
 
 
 @dataclass(frozen=True)

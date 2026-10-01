@@ -31,9 +31,9 @@ Integration: Tsit5 at a constant step (``n_steps`` steps over the height)
 with ``diffrax.DirectAdjoint``, so the solution is differentiable in both
 forward mode (the heat-balance Newton's Jacobian) and reverse mode (the
 implicit-function VJP). A constant step makes the discrete solution a
-smooth function of every parameter; at the default 120 steps the 5th-order
-scheme's error in the outlet yields is below 1e-10 (checked against 480
-steps in the tests).
+smooth function of every parameter; at the default 200 steps the outlet
+yields agree with an 800-step solve to better than 1e-8 relative (checked
+in the tests; 120 steps give ~4e-8).
 """
 
 from __future__ import annotations

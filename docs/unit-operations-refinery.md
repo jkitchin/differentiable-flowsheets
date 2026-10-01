@@ -21,6 +21,7 @@ The `difflow_refinery` plugin provides:
 - **`CrudeDistillationUnit`**: the same unit behind difflow's operation protocol, for a `Flowsheet`, JSON and the editor.
 - **`VacuumColumn`** (`difflow_refinery.vacuum`): the vacuum unit, atmospheric residue to LVGO, HVGO, slop and vacuum residue, with contaminants carried per cut. It runs on the crude unit's own pseudo-components, so the CDU residue feeds it directly in a `Flowsheet`.
 - **Correlations** (`difflow_refinery.correlations`): Twu, Riazi-Daubert, Lee-Kesler, Kesler-Lee and Maxwell-Bonnell, each written once, for all three of the above.
+- **The fluid catalytic cracker** (`difflow_refinery.fcc`): a lumped-kinetics riser (3-, 4- or 5-lump) and a coke-burning regenerator solved together as the unit's heat balance (catalyst circulation and regenerator temperature are unknowns, the riser outlet temperature the spec), with a simplified main fractionator; dry gas, C3/C4 olefin streams, gasoline, LCO and slurry. A library, not a palette operation; its kinetic constants are illustrative. See [The fluid catalytic cracker](#refinery-fcc).
 - **Product blending** (`BlendPool`, `BlendComponent`): gasoline, jet, ULSD and fuel-oil pools with the nonlinear blending rules, signed spec margins and LP back-off. A library for optimisation and planning, not a palette operation.
 
 Everything is differentiable with `jax`. A product yield, a gravity or a furnace duty has an exact gradient with respect to:
@@ -817,6 +818,160 @@ and does not establish.
 
 ---
 
+(refinery-fcc)=
+## The fluid catalytic cracker
+
+`difflow_refinery.fcc` (issue #308) is the gasoline-oriented refinery's VGO conversion unit: a **riser** with lumped cracking kinetics and catalyst deactivation, a **regenerator** that burns the coke, the two solved **together** as the unit's heat balance, and a **main fractionator** (simplified, see below) that splits the effluent into dry gas, C3, C4, gasoline, light cycle oil (LCO) and slurry. Like the blending pool it is a library, not a palette operation: nothing new is registered with the editor.
+
+```python
+import difflow_refinery as dr
+from difflow_refinery.fcc import FCCFeed, FCCParams, FCCUnit, fcc_block
+from difflow_refinery.vacuum import light_crude
+
+char = dr.characterize(light_crude().to_assay(heavy_end=dr.HeavyEnd()))
+feed = FCCFeed.from_characterization(char, rate=50.0,             # kg/s
+                                     T_lo=616.15, T_hi=823.15)    # 343-550 C VGO
+unit = FCCUnit(FCCParams(riser_outlet_T=793.15, feed_T=500.0))
+res = unit.solve(feed)
+res["outputs"]["conversion"], res["outputs"]["cat_oil"], res["outputs"]["regenerator_T"]
+# (0.747, 5.82, 1003.9 K) -- with the ILLUSTRATIVE default constants
+res["balances"]          # mass, C, H, S, N, energy: relative errors ~1e-16
+```
+
+The feed can also be a VDU outlet stream: `FCCFeed.from_stream(hvgo, vdu.params.components)`, or `FCCUnit(params, components=...)` called on the stream directly (it then returns the eight outlet streams and the result dict).
+
+**What is physics and what is fitted.** The heat balance -- energy and mass conservation across riser and regenerator, coke combustion stoichiometry, ideal-gas flue-gas enthalpies -- is transferable. **Yields are not**: every published lumped parameter set is for one feed and one catalyst, and the defaults shipped here are not even that (below). Out of the box the yields are illustrative; the unit is predictive only after the kinetic constants and `activity` are fitted to the user's test-run data.
+
+(refinery-fcc-model)=
+### FCC model
+
+**Riser** (`difflow_refinery.fcc.riser`). One-dimensional adiabatic plug flow in height `z`, integrated with `diffrax` (Tsit5, constant step, `DirectAdjoint`):
+
+$$
+\frac{dt_c}{dz} = \frac{s}{u_g},\qquad
+\frac{dy}{dz} = \frac{C}{O}\,\frac{dt_c}{dz}\; a\, f_\text{feed}\; r(y, T, \phi),\qquad
+u_g = \frac{n_\text{vap} R T}{P A},\qquad
+T = T_\text{mix} - \frac{F_o\,\Delta H_c\,(1-y_\text{go})}{C_{p,\text{tot}}}
+$$
+
+- `y`: lump mass fractions (feed basis); `t_c`: catalyst residence time; `s`: slip factor; `a`: catalyst activity; `f_feed = exp(k_K (K_w - K_ref)) / (1 + N_basic/N_0)`: feed crackability and basic-nitrogen poisoning (illustrative forms).
+- `dy/dz` is the catalyst-holdup formulation (`F_o dy = r F_c dt_c`), so rate constants are in **1/s per unit catalyst-to-oil ratio**.
+- Rate law, all schemes: gas-oil cracking **second order** in the gas-oil mass fraction, every other reaction **first order** [F1]; Arrhenius about 500 °C, `k = k_ref exp(-Ea/R (1/T - 1/773.15))`.
+- Energy: one constant vapour heat capacity for every hydrocarbon lump, and the heat of cracking `ΔH_c` (J per kg gas oil converted, endothermic) charged to every product including coke. Then the riser enthalpy is invariant along `z` and `T` is algebraic in the gas-oil fraction (above).
+- `T_mix`: adiabatic mixing at the riser base of regenerated catalyst at `T_rg`, liquid feed at the preheat temperature (vaporising with latent heat `λ` at that temperature) and riser steam.
+- Feed effects at the riser base, taken out of the gas oil before it cracks (all illustrative): additive coke `ccr_to_coke × CCR`; contaminant coke `metals_coke × (Ni+V)` and contaminant H2 `metals_h2 × (Ni+V)`.
+- Deactivation: `phi = exp(-alpha t_c)` (time on stream, [F5]) or `phi = exp(-alpha C_c)` (coke on catalyst). `voorhies_coke(t_c, A, n) = A t_c^n` [F6] is provided as a diagnostic; the riser's coke is a kinetic lump.
+
+| Scheme | Lumps | Reactions | Source |
+| --- | --- | --- | --- |
+| `weekman_nace_3` | gas oil, gasoline, gas+coke | GO→G, GO→C, G→C | [F1] |
+| `lee_4` | gas oil, gasoline, gas (C1-C4), coke | GO→G, GO→gas, GO→coke, G→gas, G→coke | [F2] |
+| `ancheyta_5` (default) | gas oil, gasoline, LPG (C3-C4), dry gas (H2, C1-C2), coke | GO→G, GO→LPG, GO→DG, GO→coke, G→LPG, G→DG, G→coke | [F3] |
+| `jacob_10` | -- | -- | [F4]; **not implemented** |
+
+The 3- and 4-lump schemes' combined lumps are mapped onto products by split parameters (`coke_share`, `dry_gas_share`).
+
+**Regenerator** (`difflow_refinery.fcc.regenerator`). A well-mixed bed at `T_rg` burns coke of composition C/H/S/N (coke H `coke_hydrogen`; S at `coke_sulfur_factor` × feed S; `n_to_coke` of the feed N) to CO2, CO, H2O, SO2 and N2. CO/CO2 is specified (`co_co2`, 0 = full burn) or Arthur's primary-product ratio [F7], `CO/CO2 = 10^3.4 exp(-12400/RT)` (R in cal/mol/K) times `arthur_factor`; afterburn is not modelled, so `"arthur"` is a partial-burn model. Air (dry, 20.95 % O2) follows from the flue-gas O2 spec (`flue_o2`, wet mole fraction) -- or `air_rate` is given and the excess O2 is an output. Enthalpies are ideal-gas, `Hf(298.15) + ∫Cp dT` [F10, F11]; coke's enthalpy of formation is zero (elements), so its heat of combustion follows from its H content. The regenerated catalyst leaves clean.
+
+**Heat balance** (`difflow_refinery.fcc.unit`). Unknowns `C/O` and `T_rg`; equations: riser outlet temperature = ROT spec, and regenerator energy in = out. Newton (`optimistix`) from `C/O = 6`, `T_rg = 980 K`; gradients of every output by the implicit function theorem (`optimistix`'s implicit adjoint, forward and reverse mode). The heat balance can have **more than one steady state** (multiplicity is a known property of FCC heat balances); with a very active catalyst the solve can land on a hot, low-circulation one, and `RegeneratorTemperatureWarning` fires above `regenerator_T_max` (760 °C, illustrative) -- the state is reported, not hidden.
+
+**Products.** Real species for the gases; product pseudocomponents `fcc01`..`fcc22` for the liquids:
+
+- **Dry gas**: hydrogen, methane, ethane, ethylene by a mass split (`dry_gas_split`), plus contaminant H2 and H2S.
+- **LPG**: C3 share `c3_share`; propylene share of C3 `propylene_in_c3`; olefin share of C4 `olefins_in_c4`; isobutane share of C4 paraffins; the butenes split over 1-butene, isobutylene, cis- and trans-2-butene (`butene_split`). These are the "olefin split parameters" of the issue; all illustrative.
+- **Gasoline** (C5-221 °C) and **cycle oil** (221 °C+, LCO + slurry) lumps are put on a fixed pseudocomponent grid by a fixed TBP distribution per lump (a logistic CDF, `(T50, width)` per lump), gravities from a Watson K per lump, MW from Twu [the plugin's `correlations`].
+- Elemental bookkeeping: gasoline and coke carry hydrogen contents (parameters; gasoline H moves with feed H by `gasoline_hydrogen_slope`); sulfur in gasoline, coke and cycle oil at multiples of feed S (cycle oil `1 + cycle_oil_sulfur_slope × X`), **H2S takes the rest**; nitrogen `n_to_coke` to coke, the rest to cycle oil; **cycle-oil hydrogen by difference** (reported as `cycle_oil_hydrogen` -- 8.7 and 7.4 wt% on the two test feeds -- so an implausible value is visible); carbon is mass less H, S, N (feed metals and oxygen are counted as carbon).
+- Gasoline RON/MON: `RON = ron_ref + ron_dT (ROT - T_ref) + ron_dX (X - X_ref)`, likewise MON -- fitted forms with illustrative defaults; there is no transferable open correlation. Gasoline PONA is a fixed parameter vector (olefins 27 vol%).
+- LCO cetane index: ASTM D4737 (`blending.cetane_index_d4737`) on D86 points from the TBP curve; known to read high for aromatic cracked stocks [F12], so treat it as indicative.
+
+**Main fractionator -- simplified.** The issue asks for a `StageColumn` layout with pumparounds, side strippers and a bottom quench. **That is not what is built.** The fractionator is a smooth TBP split of the product pseudocomponents at two cut points, `gasoline_cut` (221 °C) and `lco_cut` (343 °C): each pseudocomponent goes to the lighter product with fraction `sigmoid((T_cut - Tb)/w)` (`split_width` 6 K), which mimics real product overlap and keeps the cut points differentiable. The gases are split ideally into dry gas, C3 and C4 -- standing in for the gas plant of issue #312, which does not exist. Mass is conserved exactly; there is no energy model of the fractionator (no condenser or pumparound duties), and the energy balance covers riser and regenerator only.
+
+(refinery-fcc-specs)=
+### FCC degrees of freedom and specs
+
+| Spec / lever | Parameter | Notes |
+| --- | --- | --- |
+| Riser outlet temperature | `riser_outlet_T` (K) | the spec; catalyst circulation follows from the heat balance |
+| Feed preheat | `feed_T` (K) | |
+| Feed rate | `FCCFeed.mass` (kg/s) | `feed.with_rate(...)`; recycle of HCO/slurry is **not** modelled |
+| Regenerator air | `flue_o2` (wet mole fraction) **or** `air_rate` (kg/s) | |
+| CO/CO2 | `co_co2` or `"arthur"` (+ `arthur_factor`) | |
+| Catalyst activity | `activity` | the parameter to track with `difflow.reconciliation.tracking` |
+| Fractionator | `gasoline_cut`, `lco_cut` (K) | TBP cut points |
+| Kinetics | `k_ref`, `Ea` (per reaction), `deactivation_alpha` | to be fitted |
+
+Every numeric parameter is traceable: `unit.solve(feed, riser_outlet_T=jnp.asarray(800.0))`, or differentiate through `FCCFeed` fields and through `characterize` (pass `indices=` from `fcc.feed.cut_indices` when the assay itself is traced).
+
+**Outlets** (`FCCUnit.OUTLETS`, difflow streams in mol/s; species are `difflow.database` names):
+
+| Outlet | Species | Consumer |
+| --- | --- | --- |
+| `dry_gas` | `hydrogen`, `methane`, `ethane`, `ethylene`, `hydrogen_sulfide` (+ feed species not on the feed's property table, passed through) | fuel gas / amine |
+| `c3` | `propane`, `propylene` | alkylation (#310), polymer-grade propylene |
+| `c4` | `isobutane`, `n_butane`, `1_butene`, `isobutylene`, `cis_2_butene`, `trans_2_butene` | **alkylation (#310)**: C4= olefins and isobutane |
+| `gasoline` | `fcc01`..`fcc22` | `BlendPool` (`BlendComponent` from properties: SG, RON, MON, S, olefins) |
+| `lco` | `fcc01`..`fcc22` | diesel hydrotreating |
+| `slurry` | `fcc01`..`fcc22` | fuel oil |
+| `sour_water` | `water` | |
+| `flue_gas` | `nitrogen`, `oxygen`, `carbon_dioxide`, `carbon_monoxide`, `water`, `sulfur_dioxide` | |
+
+`carbon_monoxide` is not in `difflow.database`; it is defined (formula, Cp, Hf) in `fcc.species`.
+
+**Outputs** (`res["outputs"]`): `conversion` (1 - unconverted 221 °C+ lump, coke included), `cat_oil`, `catalyst_circulation`, `regenerator_T`, `regenerator_margin`, `mix_T`, `residence_time`, `activity_out`, `coke_on_catalyst`, `air_rate`, `flue_o2`/`flue_co`/`flue_co2`, `co_co2`, `coke_burn`; `yield.<x>` for `dry_gas`, `lpg`, `c3`, `c4`, `gasoline_lump`, `cycle_oil`, `coke`, `h2s` and the fractionator products `gasoline`, `lco`, `slurry`; per liquid product `<p>.SG`, `.API`, `.sulfur`, `.hydrogen`, `.nitrogen`, `.tbp10/50/90`; `gasoline.RON`, `.MON`, `.olefins`, ...; `lco.cetane_index`; `c3_olefins`, `c4_olefins`, `cycle_oil_hydrogen`. `unit.profile(feed, res["x"])` gives the riser profiles.
+
+**Planning.** `fcc_block(unit, feed, levers=["riser_outlet_T", "feed_T", "feed.ccr"], outputs=[...])` is a `difflow.planning.Block`, like `cdu_block`: its Jacobian carries the heat-balance coupling a fixed yield vector misses. Levers are numeric `FCCParams` fields and `feed.<field>`; outputs are `res["outputs"]` keys, in SI units; a non-converged solve returns NaN.
+
+(refinery-fcc-validation)=
+### FCC: what is tested, and what is not
+
+Tested (`tests/refinery/test_fcc.py`):
+
+- Converges from the default initialisation on the light and heavy synthetic VGOs (343-550 °C cuts of `vacuum.light_crude` / `heavy_crude`), heat balance closed (`|residual| < 1e-10`).
+- Mass, C, H, S, N and energy (riser + regenerator) balances close to 1e-8 relative -- in practice to ~1e-16 -- for both feeds and for every scheme/deactivation/burn option.
+- `jax.jacfwd` of conversion, gasoline yield, coke yield and regenerator T with respect to ROT, feed preheat and one VGO TBP point (450 °C, through `characterize`) matches central differences to 1e-5 relative (observed ~1e-7); reverse mode matches forward.
+- Conversion rises with ROT; the gasoline lump passes through an interior maximum along a ROT sweep (overcracking); higher feed CCR raises the regenerator temperature at fixed ROT; the riser solution is converged in step size (the default 200 steps and 800 steps agree to 1e-8).
+- Pinned constants: Arthur's as quoted, heats of formation, IUPAC atomic weights, N2/CO2 Cp equal to `difflow.database`'s.
+
+**Not done** (stated plainly):
+
+- **Literature cross-check: not done.** Reproducing the published steady state of Arbel et al. (1995) [F8] or McFarlane et al. (1993) Model IV [F9], or Ancheyta et al.'s (1999) predicted yields [F3], needs the papers' parameter tables and reported results. The papers could not be accessed for this implementation (network access to publishers was blocked), and no numbers from them are reproduced or claimed.
+- **Default rate constants are not from any paper.** `ILLUSTRATIVE_5LUMP` was chosen to give commonly quoted VGO FCC yield ranges; the 3- and 4-lump defaults aggregate it. The networks follow the papers' descriptions; the 5-lump reaction set follows the abstract of [F3] (seven reaction constants plus deactivation, "eight kinetic constants") and was not checked against the paper's scheme figure.
+- **Jacob et al.'s 10-lump** composition-aware scheme [F4] is not implemented (`get_scheme("jacob_10")` raises). #305's `Composition` is read only for feed hydrogen.
+- **Main fractionator on `StageColumn`**: not built; the simplified split above stands in for it.
+- **Riser hydrodynamics**: a constant slip factor (default 2, illustrative). The Han & Chung (2001) [F13] parameters named in the issue were not checked and are not used.
+- **HCO/slurry recycle**, stripper (entrained hydrocarbons in coke), carbon on regenerated catalyst, NOx/NH3/HCN, pressure drop along the riser, and the gas plant (#312): not modelled.
+- **Example notebook** (VDU → FCC → gas plant and gasoline pool): not written.
+- No catalyst-vendor or licensor yield model: proprietary, out of reach by design.
+
+**Performance.** The first solve of a configuration (scheme, deactivation kind, burn and air modes) compiles in about 7 s; later solves take ~20-30 ms. A Jacobian through `characterize` and the unit compiles in about 30 s.
+
+(refinery-fcc-references)=
+### FCC references
+
+"Verified" below means the bibliographic data (authors, title, journal, volume, pages, year) were confirmed by web search; the papers' **contents** (equations, tables, constants) could not be read for this implementation, so no equation or table number is claimed from them unless stated.
+
+| Key | Reference | Used for | How checked |
+| --- | --- | --- | --- |
+| F1 | Weekman, V.W., Jr.; Nace, D.M. "Kinetics of catalytic cracking selectivity in fixed, moving, and fluid bed reactors." *AIChE J.* **1970**, 16(3), 397--404. | 3-lump network; gas oil second order, gasoline first order | Citation verified (web search). Rate-law orders are the well-known form of this model, not re-read from the paper (unverified). No constants used. |
+| F2 | Lee, L.-S.; Chen, Y.-W.; Huang, T.-N.; Pan, W.-Y. "Four-lump kinetic model for fluid catalytic cracking process." *Can. J. Chem. Eng.* **1989**, 67, 615--619. | 4-lump network | The 4-lump network (Weekman's gas+coke lump split into gas and coke) confirmed by web search of citing papers; **journal, volume, pages unverified**. No constants used. |
+| F3 | Ancheyta-Juárez, J.; López-Isunza, F.; Aguilar-Rodríguez, E. "5-Lump kinetic model for gas oil catalytic cracking." *Appl. Catal. A: General* **1999**, 177(2), 227--235. | 5-lump network | Citation and abstract verified (web search: eight kinetic constants including deactivation; LPG C3-C4 and dry gas C2- lumps; MAT at 480/500/520 °C on one VGO and one equilibrium catalyst). Reaction set as coded unverified against the paper's figure. **No constants used; predicted yields not reproduced.** |
+| F4 | Jacob, S.M.; Gross, B.; Voltz, S.E.; Weekman, V.W., Jr. "A lumping and reaction scheme for catalytic cracking." *AIChE J.* **1976**, 22(4), 701--713. | (10-lump scheme, not implemented) | Authors, title, journal, volume, first page verified; end page unverified. |
+| F5 | Weekman, V.W., Jr. "A model of catalytic cracking conversion in fixed, moving, and fluid-bed reactors." *Ind. Eng. Chem. Process Des. Dev.* **1968**, 7(1), 90--95. | Exponential time-on-stream deactivation; C/O × t_c formulation | **Unverified** (web search did not return the paper); the exponential decay form is as commonly attributed to it. |
+| F6 | Voorhies, A., Jr. "Carbon formation in catalytic cracking." *Ind. Eng. Chem.* **1945**, 37(4), 318--322. | `voorhies_coke` C = A t^n | Citation verified (web search). |
+| F7 | Arthur, J.R. "Reactions between carbon and oxygen." *Trans. Faraday Soc.* **1951**, 47, 164--178. doi:10.1039/TF9514700164 | CO/CO2 ratio form | Citation verified (RSC listing; DOI from the RSC article URL). **Constants 10^3.4 and 12400 cal/mol are as quoted in the FCC literature, unverified against the paper.** |
+| F8 | Arbel, A.; Huang, Z.; Rinard, I.H.; Shinnar, R.; Sapre, A.V. "Dynamic and control of fluidized catalytic crackers. 1. Modeling of the current generation of FCC's." *Ind. Eng. Chem. Res.* **1995**, 34(4), 1228--1243. | (cross-check target, not done) | Citation verified (web search). |
+| F9 | McFarlane, R.C.; Reineman, R.C.; Bartee, J.F.; Georgakis, C. "Dynamic simulator for a model IV fluid catalytic cracking unit." *Comput. Chem. Eng.* **1993**, 17(3), 275--300. | (cross-check target, not done) | Citation verified (web search). |
+| F10 | Reid, R.C.; Prausnitz, J.M.; Poling, B.E. *The Properties of Gases and Liquids*, 4th ed.; McGraw-Hill: New York, **1987**; Appendix A. | Ideal-gas Cp of N2, O2, CO2, CO, H2O, SO2 | N2 and CO2 equal the `difflow.database` entries (same source; pinned by test). **O2, CO, H2O, SO2 transcribed for this module, unverified against the book.** |
+| F11 | Cox, J.D.; Wagman, D.D.; Medvedev, V.A. *CODATA Key Values for Thermodynamics*; Hemisphere: New York, **1989**. CO: Chase, M.W. *NIST-JANAF Thermochemical Tables*, 4th ed., *J. Phys. Chem. Ref. Data* Monograph 9, **1998**. | Hf(298.15) of CO2 (-393.51), H2O(g) (-241.826), SO2 (-296.81), CO (-110.53) kJ/mol | Values are the standard tabulated ones, from memory of the tables (unverified against the printed tables in this session); pinned by test. |
+| F12 | ASTM D4737, *Standard Test Method for Calculated Cetane Index by Four Variable Equation* (edition unverified). | LCO cetane index | The plugin's existing `cetane_index_d4737`. |
+| F13 | Han, I.-S.; Chung, C.-B. "Dynamic modeling and simulation of a fluidized catalytic cracking process. Part I: Process modeling." *Chem. Eng. Sci.* **2001**, 56(5), 1951--1971. | (riser slip parameters, not used) | Citation verified (web search). |
+| F14 | Sadeghbeigi, R. *Fluid Catalytic Cracking Handbook*, 3rd ed.; Butterworth-Heinemann: Oxford, **2012**. | Orders of magnitude for the illustrative defaults (yield ranges, coke H 6-8 wt%, H2S share of feed S, CCR to coke) | **Not checked in this session (unverified)**; no number is attributed to a specific page. |
+| F15 | IUPAC CIAAW, standard atomic weights (abridged/conventional values), Prohaska, T. et al. *Pure Appl. Chem.* **2022**, 94(5), 573--600. | Atomic weights C 12.011, H 1.008, N 14.007, O 15.999, S 32.06 | Values standard; page range unverified. |
+
+**Illustrative parameters** (no source claimed for any number; each is a plausible order of magnitude to be fitted): all `k_ref` and `Ea`, `activity`, deactivation constants, `kw_sensitivity`, `nitrogen_poisoning`, `basic_nitrogen_fraction`, `ccr_to_coke` (0.6), `metals_coke`, `metals_h2`, all gas splits, product H/S/N factors and gradients, the lump TBP distributions and Watson Ks, `heat_of_cracking` (350 kJ/kg), `latent_heat` (250 kJ/kg), `cp_vapor` (3.0 kJ/kg/K), `cp_catalyst` (1.15 kJ/kg/K), `cp_steam` (2.1 kJ/kg/K), riser geometry, slip, steam ratio, the octane forms and the gasoline PONA, and `regenerator_T_max`.
+
+---
+
 (refinery-blending)=
 ## Product blending
 
@@ -1053,5 +1208,6 @@ The reference also measures what two of difflow's numerical choices cost. These 
 - **Thermodynamics:** Raoult's law and ideal-gas-path enthalpies. This is the usual model for an atmospheric column at one or two bar; it is not a cubic equation of state.
 - **Equilibrium stages.** There are no tray efficiencies or hydraulics.
 - **Boiling ranges are TBP, not ASTM D86.**
+- **FCC:** illustrative kinetics (no published parameter set reproduced), a simplified main fractionator (a TBP split, not a `StageColumn`), no gas plant, no 10-lump scheme, no literature cross-check. See [FCC: what is tested, and what is not](#refinery-fcc-validation).
 - **Composition is correlated, not measured.** Hydrocarbon types and hydrogen come from Riazi-Daubert / Goossens (or n-d-M) unless the caller gives PIONA, SARA or hydrogen data; the default sulfur- and nitrogen-class splits are illustrative. The MNL50 worked examples for those correlations are not reproduced (see [the composition section](#refinery-composition)).
 - **Validation:** against an independent equation-oriented model, IDAES property packages and published characterisation examples; not against a commercial simulator's crude case. The vacuum column likewise, against an independent Pyomo/IPOPT model on the same residue (equilibrium and Murphree beds, and sensitivities); not against DWSIM. See [Validation](#refinery-validation) and [the vacuum unit's](#refinery-vacuum-validation) for what that does and does not establish.

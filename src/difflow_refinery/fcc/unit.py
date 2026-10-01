@@ -84,6 +84,17 @@ class FCCConvergenceWarning(UserWarning):
     """The riser-regenerator heat balance did not converge."""
 
 
+class RegeneratorTemperatureWarning(UserWarning):
+    """The solved regenerator temperature is above ``regenerator_T_max``.
+
+    The heat balance can have more than one steady state, and with a very
+    active catalyst or a coke-rich feed the solved one can be far outside
+    any operable range (a few hundred kelvin of catalyst circulation away
+    from the default start). The solve is not wrong -- it is the steady
+    state of the equations -- but nobody runs a regenerator there.
+    """
+
+
 #: Default deactivation constant per deactivation kind (illustrative).
 DEFAULT_DEACTIVATION_ALPHA = {"time": 0.12, "coke": 60.0}
 
@@ -165,6 +176,10 @@ class FCCParams(ParamsMixin):
             is ignored and the excess O2 is an output).
         air_T: Air (blower discharge) temperature (K).
         regen_heat_loss: Regenerator heat loss (W).
+        regenerator_T_max: Regenerator temperature above which a
+            :class:`RegeneratorTemperatureWarning` is raised (K; 760 C, a
+            commonly quoted metallurgical limit -- illustrative). Not
+            imposed; reported as ``regenerator_margin``.
         ron_ref, ron_dT, ron_dX: Gasoline RON ``ron_ref + ron_dT (ROT -
             T_octane_ref) + ron_dX (X - X_octane_ref)``.
         mon_ref, mon_dT, mon_dX: The same for MON.
@@ -235,6 +250,7 @@ class FCCParams(ParamsMixin):
     air_rate: Optional[float] = None
     air_T: float = 470.0
     regen_heat_loss: float = 0.0
+    regenerator_T_max: float = 1033.15
     ron_ref: float = 92.0
     ron_dT: float = 0.06
     ron_dX: float = 8.0
@@ -244,7 +260,7 @@ class FCCParams(ParamsMixin):
     T_octane_ref: float = 793.15
     X_octane_ref: float = 0.70
     gasoline_pona: Sequence[float] = (0.33, 0.10, 0.30, 0.27)
-    n_steps: int = 120
+    n_steps: int = 200
     max_iter: int = 50
     tol: float = 1e-10
     CTO_guess: float = 6.0
@@ -333,7 +349,7 @@ def _product_grid(p) -> dict:
 # =============================================================================
 
 
-def _model(theta, scheme: LumpScheme, static: tuple):
+def _model(theta, scheme: LumpScheme, static: tuple, ts=None):
     """Build the residual and the post-processing for one configuration."""
     n_steps, deact, co_mode, air_mode = static
     p, feed = theta["params"], theta["feed"]
@@ -344,7 +360,7 @@ def _model(theta, scheme: LumpScheme, static: tuple):
     inv_mw = riser.lump_inverse_mw(scheme, M, group_mw)
 
     def run_riser(CTO, T_rg):
-        return riser.integrate(p, feed, scheme, M, inv_mw, CTO, T_rg, n_steps, deact)
+        return riser.integrate(p, feed, scheme, M, inv_mw, CTO, T_rg, n_steps, deact, ts=ts)
 
     def coke_of(r):
         groups = r["y"] @ M
@@ -527,6 +543,7 @@ def _post(theta, scheme, static, M, grid, run_riser, coke_of, x) -> dict:
         "cat_oil": CTO,
         "catalyst_circulation": CTO * Fo,
         "regenerator_T": T_rg,
+        "regenerator_margin": p["regenerator_T_max"] - T_rg,
         "riser_outlet_T": ROT,
         "mix_T": r["T_mix"],
         "residence_time": r["t_c"],
@@ -620,20 +637,24 @@ class FCCUnit:
             warnings.warn(f"FCC heat balance did not converge: residual "
                           f"{float(res['residual']):.2e} after {int(res['iterations'])} iterations",
                           FCCConvergenceWarning, stacklevel=2)
+        margin = _concrete_float(res["outputs"]["regenerator_margin"])
+        if margin is not None and margin < 0:
+            warnings.warn(f"regenerator temperature is {-margin:.1f} K above "
+                          f"regenerator_T_max", RegeneratorTemperatureWarning, stacklevel=2)
         return res
 
     def profile(self, feed: FCCFeed, x, n_points: int = 61, **overrides) -> dict:
-        """Riser profiles (lumps, residence time, T) along the height at a solved ``x``."""
+        """Riser profiles along the height at a solved ``x = res["x"]``.
+
+        Returns ``z`` (m), lump mass fractions ``y``, product-group fractions
+        ``groups`` (:data:`~difflow_refinery.fcc.kinetics.GROUPS` order),
+        catalyst residence time ``t_c`` (s) and temperature ``T`` (K).
+        """
         theta = self.theta(feed, **overrides)
-        M, grid, run_riser, coke_of, residual = _model(theta, self.scheme, self.static)
         p = theta["params"]
-        group_mw = None  # noqa: F841 -- built inside _model
-        ts = jnp.linspace(0.0, p["riser_height"], n_points)
-        inv = riser.lump_inverse_mw(self.scheme, M, {
-            "gas_oil": feed.MW, "gasoline": grid["MW_gasoline"],
-            "lpg": _mix_mw(lpg_fractions(p)), "dry_gas": _mix_mw(dry_gas_fractions(p))})
-        out = riser.integrate(p, feed, self.scheme, M, inv, x[0], x[1] * 1000.0,
-                              self.static[0], self.static[1], ts=ts)
+        M, _, run_riser, _, _ = _model(theta, self.scheme, self.static,
+                                       ts=jnp.linspace(0.0, p["riser_height"], n_points))
+        out = run_riser(x[0], x[1] * 1000.0)
         out["groups"] = out["y"] @ M
         return out
 
@@ -672,5 +693,12 @@ class FCCUnit:
 def _concrete(v):
     try:
         return bool(v)
+    except Exception:
+        return None
+
+
+def _concrete_float(v):
+    try:
+        return float(v)
     except Exception:
         return None

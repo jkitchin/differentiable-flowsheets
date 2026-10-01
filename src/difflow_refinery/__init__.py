@@ -130,6 +130,7 @@ from difflow_refinery.unit import (
     CrudeUnit,
     CrudeUnitResult,
 )
+from difflow_refinery import fcc  # fluid catalytic cracker (#308); a library, not registered
 
 __all__ = [
     "Assay",
@@ -183,6 +184,7 @@ __all__ = [
     "Composition", "CompositionData", "CompositionRangeWarning", "CutData",
     "StreamComposition", "estimate_composition",
     "vacuum",
+    "fcc",
     "CrackingWarning",
     "PseudoComponents",
     "StageSpec",

@@ -174,7 +174,7 @@ ILLUSTRATIVE_5LUMP: tuple[tuple[str, str, float, float], ...] = (
     ("gas_oil", "gasoline", 0.0900, 60.0e3),
     ("gas_oil", "lpg", 0.0150, 75.0e3),
     ("gas_oil", "dry_gas", 0.0035, 90.0e3),
-    ("gas_oil", "coke", 0.0080, 40.0e3),
+    ("gas_oil", "coke", 0.0070, 40.0e3),
     ("gasoline", "lpg", 0.0070, 70.0e3),
     ("gasoline", "dry_gas", 0.0008, 90.0e3),
     ("gasoline", "coke", 0.0004, 50.0e3),
