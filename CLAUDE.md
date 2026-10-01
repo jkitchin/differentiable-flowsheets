@@ -417,7 +417,7 @@ Docs: `docs/unit-operations-power.md`. Tests: `tests/power/`.
 ### Refinery Blending (`difflow_refinery`)
 
 `BlendPool(product, specs, rules)` blends `BlendComponent`s (from properties,
-or from pseudocomponent streams on a shared `Characterization`) and returns
+or from pseudocomponent streams on a shared `BlendCharacterization`) and returns
 properties, signed spec margins and, in stream mode, the product stream. Like
 `difflow.planning` it is a library, **not** a `difflow.plugins` entry point
 (no palette operation, so nothing for `doclinks` to resolve).

@@ -15,7 +15,7 @@ from difflow_refinery import (
     BlendComponent,
     BlendPool,
     BlendSpec,
-    Characterization,
+    BlendCharacterization,
     EthylRT70,
     cetane_index_d4737,
     cetane_index_d976,
@@ -46,7 +46,7 @@ def _grid():
     Tb = [272.66] + list(np.linspace(320.0, 640.0, 14))
     SG = [0.584] + list(np.linspace(0.66, 0.88, 14))
     nan = float("nan")
-    return Characterization(
+    return BlendCharacterization(
         names=names, Tb=Tb, SG=SG,
         MW=[58.12] + [nan] * 14, Tc=[425.12] + [nan] * 14,
         Pc=[37.96e5] + [nan] * 14, omega=[0.200] + [nan] * 14,
@@ -294,7 +294,7 @@ class TestDistillation:
 
 class TestCharacterization:
     def test_heptane_like_cut(self):
-        c = Characterization(["h"], [371.6], [0.688])
+        c = BlendCharacterization(["h"], [371.6], [0.688])
         assert float(c.tc[0]) == pytest.approx(540.2, rel=0.01)
         assert float(c.pc[0]) == pytest.approx(27.4e5, rel=0.05)
         assert float(c.mw[0]) == pytest.approx(100.2, rel=0.08)
@@ -627,7 +627,7 @@ class TestGradients:
         _fd_check(f, jnp.array([0.6, 0.3, 0.1]))
 
         def g(tb):
-            c = Characterization(names=char.names, Tb=tb, SG=char.SG,
+            c = BlendCharacterization(names=char.names, Tb=tb, SG=char.SG,
                                  MW=char.MW, Tc=char.Tc, Pc=char.Pc,
                                  omega=char.omega, qualities=char.qualities)
             comps = [BlendComponent.from_stream(

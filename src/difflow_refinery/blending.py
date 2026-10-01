@@ -37,7 +37,7 @@ Two ways to describe a component:
   measured or unit-reported properties.  Enough for every blended property.
 * **stream mode** -- :meth:`BlendComponent.from_stream`: a difflow stream
   of pseudocomponent molar flows on a shared
-  :class:`~difflow_refinery.characterization.Characterization`.  Adds the
+  :class:`~difflow_refinery.characterization.BlendCharacterization`.  Adds the
   product stream itself, an exact mass and volume balance, and the
   properties that only composition can give (distillation, cetane index,
   Raoult RVP).  Unit-reported properties (RON/MON from a reformer, say)
@@ -70,7 +70,7 @@ from difflow_refinery.characterization import (
     PSI,
     R_GAS,
     RHO_WATER_15C,
-    Characterization,
+    BlendCharacterization,
 )
 
 jax.config.update("jax_enable_x64", True)
@@ -510,7 +510,7 @@ class BlendComponent:
 
     name: str
     properties: dict[str, Array]
-    characterization: Characterization | None = None
+    characterization: BlendCharacterization | None = None
     moles_per_volume: Array | None = None
     available_volume: Array | None = None
     T: Array | None = None
@@ -546,7 +546,7 @@ class BlendComponent:
 
     @classmethod
     def from_stream(cls, name: str, stream: Mapping[str, Any],
-                    characterization: Characterization,
+                    characterization: BlendCharacterization,
                     **overrides: Any) -> "BlendComponent":
         """A component computed from a stream of pseudocomponent flows.
 
@@ -732,7 +732,7 @@ class BlendPool:
             chars = {id(c.characterization) for c in components}
             if len(chars) > 1:
                 raise ValueError("stream-mode components must share one "
-                                 "Characterization object")
+                                 "BlendCharacterization object")
         return stream
 
     def volumes(self, components: Sequence[BlendComponent], recipe: Any,
@@ -845,7 +845,7 @@ class BlendPool:
     def _raoult_psi(moles, char) -> Array:
         return raoult_rvp(moles, char.psat(T_RVP), char.molar_volume) / PSI
 
-    def _derived(self, moles: Array, char: Characterization
+    def _derived(self, moles: Array, char: BlendCharacterization
                  ) -> dict[str, Array]:
         """Composition-derived properties of a pseudocomponent mixture."""
         out: dict[str, Array] = {}

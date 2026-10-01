@@ -54,7 +54,7 @@ from difflow_refinery.blending import (
 from difflow_refinery.characterization import (
     PSI,
     RHO_WATER_15C,
-    Characterization,
+    BlendCharacterization,
     edmister_omega,
     lee_kesler_psat,
     riazi_daubert_mw,
@@ -64,7 +64,7 @@ from difflow_refinery.characterization import (
 
 __all__ = [
     "BlendComponent", "BlendPool", "BlendResult", "BlendSpec", "EthylRT70",
-    "Characterization",
+    "BlendCharacterization",
     "PRODUCT_DERIVED", "PRODUCT_SPECS", "PROPERTY_RULES", "TBP_D86",
     "TEMPERATURE_INDEX_EXPONENTS", "T_RVP", "PSI", "RHO_WATER_15C",
     "cetane_index_d4737", "cetane_index_d976", "ethyl_rt70",

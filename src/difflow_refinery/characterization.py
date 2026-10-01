@@ -118,7 +118,7 @@ def lee_kesler_psat(T: Array, Tc: Array, Pc: Array, omega: Array) -> Array:
 
 
 @dataclass
-class Characterization(ParamsMixin):
+class BlendCharacterization(ParamsMixin):
     """A pseudocomponent grid and its per-component property vectors.
 
     Attributes:
