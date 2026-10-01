@@ -133,7 +133,7 @@ jobs:
           mkdir -p diag
           cat /proc/sys/vm/max_map_count > diag/max_map_count.txt; nproc >> diag/max_map_count.txt
           (while true; do echo "$(date +%s) $(free -m | sed -n 2p)"; sleep 5; done) > diag/mem.log &
-          python -m pytest tests/ -q --tb=short -m "${{ matrix.tier == 'all' && '' || 'not release' }}" \
+          python -m pytest tests/ -q --tb=short -m "${{ matrix.tier == 'all' && 'release or not release' || 'not release' }}" \
             -n auto --dist loadfile \
             --splits 3 --group ${{ matrix.shard }} \
             --durations=50 --store-durations --durations-path diag/durations.json
