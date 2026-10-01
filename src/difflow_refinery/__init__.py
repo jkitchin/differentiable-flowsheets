@@ -31,7 +31,7 @@ and across the crude-to-vacuum connection.
 >>> crude = dr.characterize(assay)
 """
 
-from difflow_refinery import column, correlations, products, vacuum
+from difflow_refinery import column, correlations, preheat, products, vacuum
 from difflow_refinery.assay import (
     CONTAMINANTS,
     DEFAULT_CUT_WIDTHS,
@@ -120,6 +120,24 @@ from difflow_refinery.unit import (
     CrudeUnitResult,
 )
 
+# The preheat train (#313): nested params are exported here for serialization.
+from difflow_refinery.preheat import (  # noqa: E402
+    CrudeUnitWithPreheat,
+    CrudeUnitWithPreheatParams,
+    Desalter,
+    DesalterParams,
+    DesalterUnitParams,
+    EbertPanchal,
+    HotStream,
+    PreflashDrum,
+    PreflashDrumParams,
+    PreflashDrumUnitParams,
+    PreheatExchanger,
+    PreheatTrain,
+    PreheatTrainParams,
+    PreheatedCrudeUnit,
+)
+
 __all__ = [
     "Assay",
     "Characterization",
@@ -176,6 +194,21 @@ __all__ = [
     "VacuumColumnParams",
     "VacuumConvergenceWarning",
     "default_vacuum_specs",
+    "preheat",
+    "CrudeUnitWithPreheat",
+    "CrudeUnitWithPreheatParams",
+    "Desalter",
+    "DesalterParams",
+    "DesalterUnitParams",
+    "EbertPanchal",
+    "HotStream",
+    "PreflashDrum",
+    "PreflashDrumParams",
+    "PreflashDrumUnitParams",
+    "PreheatExchanger",
+    "PreheatTrain",
+    "PreheatTrainParams",
+    "PreheatedCrudeUnit",
     "register",
 ]
 
@@ -205,3 +238,12 @@ def register(registry):
                     "slop and vacuum residue",
         plugin="difflow_refinery",
     )
+    for name, cls, description in (
+        ("Desalter", Desalter, "Crude desalter: wash water in, brine out, adiabatic"),
+        ("PreflashDrum", PreflashDrum, "Preflash drum: three-phase flash of the preheated crude"),
+        ("CrudeUnitWithPreheat", CrudeUnitWithPreheat,
+         "Crude unit from the tank: preheat train against the column's pumparounds "
+         "and products, desalter, preflash drum, furnace and atmospheric column"),
+    ):
+        registry.register(name=name, cls=cls, category="refinery",
+                          description=description, plugin="difflow_refinery")
