@@ -694,6 +694,101 @@ _IDEAL_THERMO_DATA = {
 }
 
 
+# Alkylation species (issue #310): the C7 propylene alkylate (2,3- and
+# 2,4-dimethylpentane), the C9 amylene alkylate (2,2,5-trimethylhexane), the
+# heavy-end property surrogate (n-dodecane) and ideal-gas data for 1-butene,
+# whose critical constants were already here. Obtained and checked exactly
+# as the refinery isomers above: read from the data tables of the `chemicals`
+# package (C. Bell et al., v1.5.2) and accepted where independent tables
+# agree; values only one table carries, or on which the tables disagree, are
+# marked "(unverified)" in the per-species note. Ideal-gas Cp is the same
+# kind of cubic fit (250-1000 K) to the TRC correlation as above (max
+# deviation from it 0.04-2.3%; n-dodecane the worst). Antoine: PPO 5e
+# App. A, log10(P/Pa), T in K. Hvap: Watson A back-solved from the CRC
+# dHvap at the CRC Tb. Hf: CRC ideal-gas value where CRC has one, else the
+# API Technical Data Book (Albahri) value. Pinned in
+# tests/refinery/test_alkylation.py::TestDatabaseSpecies.
+_ALKYLATION_CRITICAL = {
+    "2_3_dimethylpentane": (537.3, 2.910e6, 0.297, 100.20),
+    "2_4_dimethylpentane": (519.8, 2.740e6, 0.304, 100.20),
+    "2_2_5_trimethylhexane": (569.8, 2.330e6, 0.357, 128.26),
+    "n_dodecane": (658.0, 1.820e6, 0.576, 170.34),
+}
+_ALKYLATION_IDEAL = {
+    "1_butene": {
+        "MW": 56.11,
+        "Cp": (2.6419, 3.2085e-01, -1.4671e-04, 1.9026e-08),
+        "Hvap": (32410.0, 0.38, 419.5),
+        "antoine": (8.9178, 908.8, -34.61),
+        "Hf": 100.0,
+        "T_antoine_min": 196.41,
+        "T_antoine_max": 285.88,
+    },
+    "2_3_dimethylpentane": {
+        "MW": 100.20,
+        "Cp": (-35.121, 7.9476e-01, -5.0099e-04, 1.3257e-07),
+        "Hvap": (46715.0, 0.38, 537.3),
+        "antoine": (8.98066, 1238.986, -51.208),
+        "Hf": -198700.0,
+        "T_antoine_min": 281.56,
+        "T_antoine_max": 387.89,
+    },
+    "2_4_dimethylpentane": {
+        "MW": 100.20,
+        "Cp": (-23.801, 7.9644e-01, -5.2659e-04, 1.4802e-07),
+        "Hvap": (45580.0, 0.38, 519.8),
+        "antoine": (8.95442, 1193.612, -51.343),
+        "Hf": -201600.0,
+        "T_antoine_min": 262.4,
+        "T_antoine_max": 378.01,
+    },
+    "2_2_5_trimethylhexane": {
+        "MW": 128.26,
+        "Cp": (-35.917, 9.7760e-01, -5.7667e-04, 1.3805e-07),
+        "Hvap": (52981.0, 0.38, 569.8),
+        "antoine": (8.97372, 1332.86, -61.34),
+        "Hf": -253300.0,
+        "T_antoine_min": 296.3,
+        "T_antoine_max": 424.25,
+    },
+    "n_dodecane": {
+        "MW": 170.34,
+        "Cp": (-15.412, 1.1537, -5.8026e-04, 7.2305e-08),
+        "Hvap": (73982.0, 0.38, 658.0),
+        "antoine": (9.12285, 1639.27, -91.31),
+        "Hf": -289400.0,
+        "T_antoine_min": 372.89,
+        "T_antoine_max": 520.24,
+    },
+}
+_ALKYLATION_NOTES = {
+    "1_butene": (
+        " Ideal-gas data added for #310 (critical constants predate it). "
+        "Hf = +0.1 kJ/mol (CRC); the tables span -0.5 to +0.1 kJ/mol "
+        "(ATcT -0.03, Yaws -0.5)."
+    ),
+    "2_3_dimethylpentane": (
+        " Hf = -198.7 kJ/mol (unverified): CRC -198.7, API TDB and Yaws "
+        "-194.1. omega: Yaws 0.296, PSRK 0.299."
+    ),
+    "2_4_dimethylpentane": " omega: Yaws 0.302, PSRK 0.306.",
+    "2_2_5_trimethylhexane": (
+        " Pc = 2.330 MPa (unverified): no IUPAC value; Yaws and PSRK agree. "
+        "omega = 0.357 (unverified): PSRK 0.357, Yaws 0.345. Hf: API TDB "
+        "and Yaws (no CRC value)."
+    ),
+    "n_dodecane": (
+        " omega = 0.576 (unverified): Yaws 0.576, PSRK 0.562. Hf: CRC "
+        "-289.4, API TDB -290.8 kJ/mol."
+    ),
+}
+_CRITICAL_DATA.update(_ALKYLATION_CRITICAL)
+_IDEAL_THERMO_DATA.update(_ALKYLATION_IDEAL)
+for _name, _note in _ALKYLATION_NOTES.items():
+    SOURCE_CITATIONS[_name] = _REFINERY_ISOMER_SOURCE + _note
+del _name, _note
+
+
 def get_species_data(name: str) -> SpeciesData:
     """Get SpeciesData for ideal thermodynamics by name.
 
