@@ -67,7 +67,7 @@ jobs:
     # than on a laptop -- the mid-module cache clear in tests/conftest.py
     # fires on Linux only, and at -n 4 its budget is 3750 mappings a worker.
     # 35 keeps a hang distinguishable from that until it is fixed.
-    timeout-minutes: 35
+    timeout-minutes: 50
     strategy:
       fail-fast: false
       matrix:
@@ -97,6 +97,8 @@ jobs:
         # minutes. If this list changes, `--splits` below has to change with
         # it -- they are the same number written twice, and nothing checks.
         shard: [1, 2, 3]
+        # DIAGNOSTIC (#315): current budget vs. no mid-module clear
+        budget: ["default", "off"]
 
     steps:
       - uses: actions/checkout@v4
@@ -125,10 +127,24 @@ jobs:
       # `-q`, because `-v` from four workers at once interleaves into
       # something nobody reads; a failure still prints its own name.
       - name: Run tests
+        env:
+          DIAG_CACHE_LOG: ${{ github.workspace }}/diag
+          DIAG_MAPPING_BUDGET: ${{ matrix.budget == 'off' && '1000000000' || '' }}
         run: |
+          mkdir -p diag
+          cat /proc/sys/vm/max_map_count > diag/max_map_count.txt; nproc >> diag/max_map_count.txt
+          (while true; do echo "$(date +%s) $(free -m | sed -n 2p)"; sleep 5; done) > diag/mem.log &
           python -m pytest tests/ -q --tb=short -m "not release" \
             -n auto --dist loadfile \
-            --splits 3 --group ${{ matrix.shard }}
+            --splits 3 --group ${{ matrix.shard }} \
+            --durations=50 --store-durations --durations-path diag/durations.json
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diag-${{ matrix.shard }}-${{ matrix.budget }}
+          path: diag/
 
   # Verify the package imports with NO optional dependencies installed. The job
   # this replaces installed ".[dev]" and re-ran the full suite, making it an

@@ -77,6 +77,40 @@ MAPPING_BUDGET = max(
     2_000,
 )
 
+# --- DIAGNOSTIC (issue #315), removed before merge -------------------------
+import json as _json, time as _time
+if os.environ.get("DIAG_MAPPING_BUDGET"):
+    MAPPING_BUDGET = int(os.environ["DIAG_MAPPING_BUDGET"])
+_DIAG_DIR = os.environ.get("DIAG_CACHE_LOG")
+_DIAG = {"clears": 0}
+
+
+def _diag_meminfo():
+    out = {}
+    try:
+        with open("/proc/self/status") as fh:
+            for line in fh:
+                if line.startswith(("VmRSS", "VmHWM")):
+                    k, v = line.split(":")
+                    out[k] = int(v.split()[0])
+        with open("/proc/meminfo") as fh:
+            for line in fh:
+                if line.startswith("MemAvailable"):
+                    out["MemAvailable"] = int(line.split()[1])
+    except OSError:
+        pass
+    return out
+
+
+def _diag_write(rec):
+    if not _DIAG_DIR:
+        return
+    os.makedirs(_DIAG_DIR, exist_ok=True)
+    w = os.environ.get("PYTEST_XDIST_WORKER", "main")
+    with open(os.path.join(_DIAG_DIR, f"{w}.jsonl"), "a") as fh:
+        fh.write(_json.dumps(rec) + "\n")
+# ---------------------------------------------------------------------------
+
 
 def _mappings():
     """Mapped regions held by this process, or -1 where that is not readable."""
@@ -88,22 +122,38 @@ def _mappings():
 
 
 @pytest.fixture(autouse=True)
-def _bound_jax_compilation_caches():
+def _bound_jax_compilation_caches(request):
     """Drop the caches mid-module once they have grown past the budget.
 
     The module-boundary clear below is not enough on its own: one file can
     exhaust the mappings by itself, and ``tests/test_distillation.py`` gets
     three quarters of the way there inside a single test class.
     """
+    t0 = _time.time()
     yield
-    if _mappings() > MAPPING_BUDGET:
+    t1 = _time.time()
+    m = _mappings()
+    cleared = m > MAPPING_BUDGET
+    if cleared:
         jax.clear_caches()
         gc.collect()
+        _DIAG["clears"] += 1
+    if _DIAG_DIR:
+        _diag_write(dict(node=request.node.nodeid, t0=t0, t1=t1,
+                         t2=_time.time(), maps=m, budget=MAPPING_BUDGET,
+                         cleared=cleared, maps_after=_mappings(),
+                         **_diag_meminfo()))
 
 
 @pytest.fixture(autouse=True, scope="module")
-def _release_jax_compilation_caches():
+def _release_jax_compilation_caches(request):
     """Drop JAX's compilation caches when a test module finishes."""
+    t0 = _time.time()
     yield
+    m = _mappings()
     jax.clear_caches()
     gc.collect()
+    if _DIAG_DIR:
+        _diag_write(dict(module=request.node.nodeid, t0=t0, t1=_time.time(),
+                         maps=m, maps_after=_mappings(), clears=_DIAG["clears"],
+                         **_diag_meminfo()))
