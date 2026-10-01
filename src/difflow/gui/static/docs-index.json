@@ -1,5 +1,5 @@
 {
- "n_sections": 928,
+ "n_sections": 929,
  "sections": [
   {
    "anchor": "convergence-and-initialization",
@@ -7734,7 +7734,17 @@
    "path": "Refinery Unit Operations > Product blending > Not in scope",
    "source": "unit-operations-refinery.md",
    "targets": [],
-   "text": "- Tank inventory and multi-period scheduling. The pool is steady state, per period.\n- Crude blending ahead of the CDU (assay mixing).\n- A straight-run octane correlation from PNA. Octane is unit-reported or measured.\n\n---\n\n(refinery-limitations)="
+   "text": "- Tank inventory and multi-period scheduling. The pool is steady state, per period.\n- Crude blending ahead of the CDU (assay mixing).\n- A straight-run octane correlation from PNA. Octane is unit-reported or measured.\n\n(refinery-validation)="
+  },
+  {
+   "anchor": "validation",
+   "heading": "Validation",
+   "path": "Refinery Unit Operations > Validation",
+   "source": "unit-operations-refinery.md",
+   "targets": [
+    "refinery-validation"
+   ],
+   "text": "The crude unit has been checked against an independent reference. The issue asked for a DWSIM (or HYSYS or PRO/II) crude case. None of those were available, so the reference is built with **IDAES** 2.10 (Pyomo 6.10, IPOPT 3.13.2): the U.S. DOE's open equation-oriented process modelling platform. That choice decides what the check can say. It is an independent *implementation*: different code, a different solver, a different formulation and a different starting point. It is not an independent *model*: the column and its property model are the ones difflow states, written again. A commercial simulator's crude case would also bring its own characterisation and its own thermodynamics. Here those are tested separately, against published numbers and against Peng-Robinson.\n\nThe generator is `tests/refinery/reference/generate.py`. It writes `cdu_reference.json`, which records the tool versions, the property methods, the date and the difflow commit. `tests/refinery/test_validation.py` checks difflow against that file, with each tolerance and the reason for it written beside the assertion. The test needs neither IDAES nor IPOPT. The case is the 95 000 bbl/d test crude in the 30-stage column used throughout this page: three side strippers, two pumparounds, bottom and stripper steam, a total condenser, and a 5 vol % overflash. The column builder (`reference/mesh.py`) takes a stage network, not a fixed layout, so the vacuum column (#294) can reuse it.\n\n**Layer 1: characterisation, against published worked examples.**\n\n| Source | Check | Agreement |\n| --- | --- | --- |\n| Riazi, ASTM MNL50 (2005), Ex. 2.5 and Ex. 2.7 / Table 2.11 | Riazi-Daubert 1980 and 1987, Lee-Kesler and Twu M, Tc, Pc | to the printed digits; Twu Pc within 1 % (below) |\n| Ahmed, *Equations of State and PVT Analysis* (2016), Ex. 2.2 | Riazi-Daubert 1980/1987 and Kesler-Lee M, Tc, Pc | to the printed 3 figures |\n| MNL50 Ex. 3.3 / Table 3.8 | TBP to ASTM D86 (Riazi-Daubert) | within 0.1 C at all six points |\n| `chemicals` 1.5.2 docstring examples (API TDB 2B4.1; Lee-Kesler; Riedel) | Watson K, Lee-Kesler Psat, Riedel latent heat at Tb | to the printed digits |\n| `chemicals` 1.5.2, on this crude's 28 components | Lee-Kesler Psat, Lee-Kesler omega, Riedel latent heat | 1e-10 |\n\nThree of MNL50's printed values are not reproduced. None is asserted."
   },
   {
    "anchor": "limitations",
@@ -7744,7 +7754,7 @@
    "targets": [
     "refinery-limitations"
    ],
-   "text": "- **The crude unit is the atmospheric column only.** The preflash drum and preheat train are not modelled; the inlet is the preheat train's outlet. The vacuum unit is a separate operation, fed from the crude unit's residue in a `Flowsheet` (above).\n- **Thermodynamics:** Raoult's law and ideal-gas-path enthalpies. This is the usual model for an atmospheric column at one or two bar; it is not a cubic equation of state.\n- **Equilibrium stages.** There are no tray efficiencies or hydraulics.\n- **Boiling ranges are TBP, not ASTM D86.**\n- **Validation:** checked against its own balances and against finite differences, not yet against a commercial simulator's crude case."
+   "text": "- **The crude unit is the atmospheric column only.** The preflash drum and preheat train are not modelled; the inlet is the preheat train's outlet. The vacuum unit is a separate operation, fed from the crude unit's residue in a `Flowsheet` (above).\n- **Thermodynamics:** Raoult's law and ideal-gas-path enthalpies. This is the usual model for an atmospheric column at one or two bar; it is not a cubic equation of state.\n- **Equilibrium stages.** There are no tray efficiencies or hydraulics.\n- **Boiling ranges are TBP, not ASTM D86.**\n- **Validation:** against an independent equation-oriented model, IDAES property packages and published characterisation examples; not against a commercial simulator's crude case. See [Validation](#refinery-validation) for what that does and does not establish."
   }
  ],
  "version": 2
