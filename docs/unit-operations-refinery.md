@@ -588,9 +588,11 @@ and HVGO properties with respect to furnace T, flash-zone P, steam, and the
 ### Vacuum unit: out of scope
 
 Ejectors and vacuum-system modelling, dynamics, lube vacuum towers, and
-D1160 (as opposed to TBP) product curves. A cross-check against an
-independent simulator (DWSIM or IDAES on the same characterized feed) has
-not been done; neither is available in the test environment.
+D1160 (as opposed to TBP) product curves. The cross-check against an
+independent simulator is against an equation-oriented re-implementation in
+Pyomo/IPOPT on the same characterized feed, not against DWSIM; see
+[Validation: the vacuum unit](#refinery-vacuum-validation) for what that does
+and does not establish.
 
 ---
 
@@ -696,7 +698,7 @@ This is the minimum a blend pool needs to compute properties from composition. I
 
 The crude unit has been checked against an independent reference. The issue asked for a DWSIM (or HYSYS or PRO/II) crude case. None of those were available, so the reference is built with **IDAES** 2.10 (Pyomo 6.10, IPOPT 3.13.2): the U.S. DOE's open equation-oriented process modelling platform. That choice decides what the check can say. It is an independent *implementation*: different code, a different solver, a different formulation and a different starting point. It is not an independent *model*: the column and its property model are the ones difflow states, written again. A commercial simulator's crude case would also bring its own characterisation and its own thermodynamics. Here those are tested separately, against published numbers and against Peng-Robinson.
 
-The generator is `tests/refinery/reference/generate.py`. It writes `cdu_reference.json`, which records the tool versions, the property methods, the date and the difflow commit. `tests/refinery/test_validation.py` checks difflow against that file, with each tolerance and the reason for it written beside the assertion. The test needs neither IDAES nor IPOPT. The case is the 95 000 bbl/d test crude in the 30-stage column used throughout this page: three side strippers, two pumparounds, bottom and stripper steam, a total condenser, and a 5 vol % overflash. The column builder (`reference/mesh.py`) takes a stage network, not a fixed layout, so the vacuum column (#294) can reuse it.
+The generator is `tests/refinery/reference/generate.py`. It writes `cdu_reference.json`, which records the tool versions, the property methods, the date and the difflow commit. `tests/refinery/test_validation.py` checks difflow against that file, with each tolerance and the reason for it written beside the assertion. The test needs neither IDAES nor IPOPT. The case is the 95 000 bbl/d test crude in the 30-stage column used throughout this page: three side strippers, two pumparounds, bottom and stripper steam, a total condenser, and a 5 vol % overflash. The column builder (`reference/mesh.py`) takes a stage network, not a fixed layout. The vacuum column has its own (below): its liquid routes, Murphree beds and Maxwell-Bonnell property model did not fit this one without rewriting most of it.
 
 **Layer 1: characterisation, against published worked examples.**
 
@@ -759,6 +761,61 @@ The file also stores d(condenser duty)/d(diesel yield) and d(residue API)/d(over
 
 **What this does not validate.** It does not show that Raoult/Watson is the right property model for a given crude; layer 2 measures how far it is from PR, nothing more. It does not cover a commercial simulator's characterisation, its D86 interconversion defaults, or its tray-efficiency and hydraulics models, and it does not replace plant data. The 5-95 gaps of this case are negative (-27 to -55 K): equilibrium stages with these specs give overlapping products. Both implementations agree on that, which says nothing about whether a real column would overlap the same way. When a deliberate model change moves any number above, `TestReferenceIsCurrent` fails first and asks for the reference to be regenerated.
 
+(refinery-vacuum-validation)=
+### Validation: the vacuum unit
+
+The vacuum column (#294) is checked the same way and with the same caveat. DWSIM was not available. IDAES has no vacuum-column model with pumparounds, a wash bed, entrainment routes and Murphree beds. So the column is written again in Pyomo, IDAES's modelling layer, as an equation-oriented MESH model (`tests/refinery/reference/vdu_mesh.py`) and solved with IDAES's IPOPT 3.13.2. Its property model (`vdu_formulas.py`) is transcribed from the published correlations:
+
+- Maxwell-Bonnell vapour pressure in Rankine, with the Watson-K correction;
+- Kesler-Lee liquid Cp;
+- Clausius-Clapeyron latent heat;
+- NIST Shomate steam.
+
+This is an independent implementation of the model difflow states, not an independent model.
+
+The two share only the input: difflow's characterised residue (the `heavy_crude` assay cut at 370 C, 21 pseudo-components, 66.2 kg/s). Otherwise the reference does each thing differently:
+
+- mole fractions and total flows where difflow uses log component flows;
+- absolute route flows where difflow uses softmax draws;
+- an explicit summation equation;
+- pumparound return temperatures as unknowns, where difflow makes the duties the knobs;
+- the LVGO end point as a smooth cumulative-mass equation;
+- IPOPT where difflow uses a damped Newton.
+
+The reference starts from an engineering guess built from the feed flash and the specs, not from difflow's answer. It solves in two steps:
+
+1. With the overflash spec relaxed and the HVGO draw held, so the wash bed stays wet.
+2. With the spec restored.
+
+Together they take about 12 s.
+
+The case is the 2-2-2-2 bed layout of this page, at a 400 C furnace outlet, 30 mmHg at the flash zone and 0.5 wt % stripping steam. Its specs are a 70 C top, 3 wt % overflash and a 450 C LVGO T95. Regenerate it with
+
+    PYTHONPATH=src:tests python -m refinery.reference.vdu_generate
+
+which writes `vdu_reference.json`: provenance, the frozen component table, both columns, two model variants and the finite differences. `tests/refinery/test_vdu_validation.py` (release) compares against it. `test_vdu_validation_file.py` runs on every commit and checks two things: the file is intact, and difflow's characterisation is still the one the reference was built on.
+
+| Quantity | difflow | Reference | Agreement (test tolerance) |
+| --- | --- | --- | --- |
+| LVGO / HVGO / slop / residue (kg/s) | 4.66199 / 19.6104 / 1.98588 / 39.9371 | same | ≤ 1e-7 rel (1e-6) |
+| LVGO / HVGO pumparound duty (MW) | 2.8141 / 13.6700 | same | ≤ 1.3e-7 rel (1e-6) |
+| Furnace duty (MW), vapour fraction | 13.1145, 0.30368 | same | 2e-10, 4e-8 rel (1e-6) |
+| Stage temperatures, flash zone 669.52 K | | | ≤ 1e-5 K (1e-4 K) |
+| Product TBP 5-95 % points; SGs | | | ≤ 1e-5 K (1e-4 K); ≤ 3e-9 (1e-8) |
+
+The second case is Murphree beds: LVGO 80 %, HVGO 70 %, wash 50 %, stripping 40 %. It agrees just as closely: rates within 3e-7, duties within 1.6e-7, temperatures within 2e-5 K. With these beds the LVGO rate rises to 15.25 kg/s and HVGO falls to 8.01 kg/s, so the comparison exercises the efficiency path, not an unchanged column. The case needs a 520 C LVGO end point. With beds this poor, enough heavy vapour reaches the LVGO section that the 450 C spec cannot be met at any pumparound duty. Both implementations stop finding a column halfway from equilibrium to these efficiencies: difflow does not converge and IPOPT reports local infeasibility. That is consistent with the existing infeasible-spec test, although a local NLP verdict is not a proof. The reference reaches this case by continuation from its own equilibrium solution.
+
+The remaining ~1e-7 differences come from one coefficient. The reference writes the Watson-K correction's coefficient as 2.5/1.8 in Rankine, and difflow uses 1.3889 in SI.
+
+The reference also measures what two of difflow's numerical choices cost. These are not disagreements; each change applies to both implementations alike:
+
+- **Four Watson-K passes instead of the exact fixed point.** The fixed point moves ln Psat at the top stage by 6e-3, but the products by under 1e-8.
+- **Blending Maxwell-Bonnell's branches instead of switching at the published joins.** This keeps a derivative everywhere. It moves the LVGO rate by 8.7e-4, the pumparound and furnace duties by 8-9e-4, and the flash zone by 0.01 K.
+
+**Sensitivities.** `jax.jacfwd` through difflow's solve was compared with central differences of the reference, with IPOPT warm-started at each perturbed point. The perturbations were furnace outlet ± 0.25 K, flash-zone pressure ± 10 Pa and steam ± 2.5e-5 kg/kg. Over the rates, duties, flash-zone temperature and HVGO T95 they agree within 4.1e-5 relative (tolerance 2e-4); the remaining difference is the finite differences' own truncation error. Two examples are d(HVGO rate)/d(furnace T) = 0.15520 kg/s/K and d(HVGO pumparound duty)/d(steam) = 234.39 MW per kg/kg.
+
+**What this does not validate.** It does not test the property model. Maxwell-Bonnell with Raoult at 10-30 mmHg is a choice that nothing here tests against data or an equation of state; the crude unit's layer 2 is the nearest evidence. It does not cover a commercial simulator's vacuum characterisation, packing HETP and pressure-drop models, or the ejector system, and it does not replace plant data.
+
 ---
 
 (refinery-limitations)=
@@ -768,4 +825,4 @@ The file also stores d(condenser duty)/d(diesel yield) and d(residue API)/d(over
 - **Thermodynamics:** Raoult's law and ideal-gas-path enthalpies. This is the usual model for an atmospheric column at one or two bar; it is not a cubic equation of state.
 - **Equilibrium stages.** There are no tray efficiencies or hydraulics.
 - **Boiling ranges are TBP, not ASTM D86.**
-- **Validation:** against an independent equation-oriented model, IDAES property packages and published characterisation examples; not against a commercial simulator's crude case. See [Validation](#refinery-validation) for what that does and does not establish.
+- **Validation:** against an independent equation-oriented model, IDAES property packages and published characterisation examples; not against a commercial simulator's crude case. The vacuum column likewise, against an independent Pyomo/IPOPT model on the same residue (equilibrium and Murphree beds, and sensitivities); not against DWSIM. See [Validation](#refinery-validation) and [the vacuum unit's](#refinery-vacuum-validation) for what that does and does not establish.
