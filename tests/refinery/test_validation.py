@@ -312,7 +312,7 @@ class TestPengRobinsonDifferences:
     def test_the_vapour_fraction_on_the_stages_agrees_within_two_mole_percent(self):
         """At every stage state and at the coil outlet PR and Raoult vaporise
         the same hydrocarbons to within 0.021 (measured worst: stage 22); at
-        the coil outlet, where the furnace closes, 0.0035."""
+        the coil outlet, where the furnace closes, 0.0033."""
         for k, s in self.pr.items():
             if k != "furnace_inlet":
                 assert abs(s["beta"] - s["beta_ideal"]) < 0.025, k
@@ -320,15 +320,15 @@ class TestPengRobinsonDifferences:
         assert abs(s["beta"] - s["beta_ideal"]) < 0.005
 
     def test_but_not_at_the_furnace_inlet(self):
-        """At 240 C and 6 bar Raoult vaporises 22 % of the crude (molar),
-        PR 15 %: the light ends, which carry that vapour, are supercritical
+        """At 240 C and 6 bar Raoult vaporises 23 % of the crude (molar),
+        PR 17 %: the light ends, which carry that vapour, are supercritical
         or nearly so, and that is where the two part (next test)."""
         s = self.pr["furnace_inlet"]
         assert 0.05 < s["beta_ideal"] - s["beta"] < 0.09
 
     def test_the_furnace_enthalpy_rise_is_four_percent_higher_under_pr(self):
         """The furnace duty at a fixed coil outlet is ``H(COT) - H(inlet)``.
-        PR's is 4.0 % above Raoult/Watson's on this crude (59.3 against 57.0
+        PR's is 4.0 % above Raoult/Watson's on this crude (59.4 against 57.1
         kJ/mol): the size of the furnace-duty difference a PR crude case
         would show, from the property model alone."""
         pr = self.pr

@@ -784,12 +784,12 @@ Three of MNL50's printed values are not reproduced. None is asserted.
   - K-values agree to 1e-6.
   - Liquid and vapour enthalpies agree to 1e-6.
   - Each stage splits back into its own L and V to 1e-5.
-  - IDAES's crude bubble point (381 K) and dew point (847 K) at the flash-zone pressure satisfy difflow's sum z K = 1 and sum z / K = 1.
+  - IDAES's crude bubble point (379 K) and dew point (845 K) at the flash-zone pressure satisfy difflow's sum z K = 1 and sum z / K = 1.
 
   This confirms that difflow's arrays implement the equations it states. It says nothing about whether those equations are right.
 - *Peng-Robinson on the same Tc, Pc, omega and ideal-gas Cp* (kij = 0, hydrocarbons only). These are modelling differences. They are documented and pinned in the tests, not tuned away:
-  - On every stage, and at the coil outlet, the vapour fraction agrees within 0.021. At the coil outlet the difference is 0.0035.
-  - At the furnace inlet (240 C, 6 bar), Raoult vaporises 22 mol % of the crude and PR vaporises 15 %.
+  - On every stage, and at the coil outlet, the vapour fraction agrees within 0.021. At the coil outlet the difference is 0.0033.
+  - At the furnace inlet (240 C, 6 bar), Raoult vaporises 23 mol % of the crude and PR vaporises 17 %.
   - The crude's enthalpy rise from the furnace inlet to the coil outlet is **4.0 % higher under PR**. That is the furnace-duty difference a PR crude case would show from the property model alone.
   - For the cuts boiling 420-640 K, which make the side products, PR and Raoult K-values agree within -30 % / +25 % at the flash zone.
   - Raoult over Lee-Kesler badly overpredicts the supercritical light ends. Propane's K is about 60 times PR's. The light ends go overhead under either model, but do not read a light-ends K-value off this model.
@@ -797,31 +797,32 @@ Three of MNL50's printed values are not reproduced. None is asserted.
   - Liquid enthalpy at the same composition agrees within 1.5 kJ/mol above the flash zone. Where residue is in the liquid, PR's is 13-18 kJ/mol higher. Watson's latent heat and PR with an extrapolated omega are both extrapolations for a 1000 K cut, and nothing here says which is closer to the truth.
 - *Water.* difflow's Wagner-Pruss Psat agrees with IAPWS-95 to 0.004 % and with IAPWS-IF97 to 0.02 %. Watson's latent heat for water is exact at Tb, 1.3 % high at 300 K and 2.6 % low at 550 K, compared with IAPWS-95 by Clausius-Clapeyron.
 
-**Layer 3: the column, against an independent EO model.** `reference/mesh.py` writes every stage, stripper, pumparound, the condenser and the furnace flash as Pyomo equations with the same specs. It solves them with IPOPT from a linear 380-580 K profile and round-number flows; no difflow result is used to initialise it. It converges in about 25 s. The two solutions agree as follows:
+**Layer 3: the column, against an independent EO model.** `reference/mesh.py` writes every stage, stripper, pumparound, the condenser and the furnace flash as Pyomo equations with the same specs. It solves them with IPOPT from a linear 380-580 K profile and round-number flows; no difflow result is used to initialise it. It converges in about 17 s. The two solutions agree as follows:
 
-- stage, stripper and condenser temperatures and the coil outlet (588.0 K): 6e-6 K
-- condenser duty (32.39 MW): 6e-7 relative
-- fired duty (51.59 MW): 3e-10 relative
+- stage and stripper temperatures and the coil outlet (586.3 K): 5e-6 K
+- condenser temperature: 3e-4 K, all of it the difference between the two water Psat formulations (below) in the bubble point of the condensate with free water
+- condenser duty (31.39 MW): 6e-7 relative
+- fired duty (49.89 MW): 3e-10 relative
 - pumparound return temperatures: agree within 1e-3 K (the test tolerance)
-- feed vaporised (0.691): agrees within 1e-6 (the test tolerance)
-- volume yields: 4e-10
-- API gravities: 2e-7
-- TBP 5/10/50/90/95 % points: 5e-7 K
-- 5-95 gaps: 6e-7 K
+- feed vaporised (0.696): agrees within 1e-6 (the test tolerance)
+- volume yields: 2e-10
+- API gravities: 1e-7
+- TBP 5/10/50/90/95 % points: 4e-7 K
+- 5-95 gaps: 5e-7 K
 - steam saturation: within the 0.02 % that separates the two water Psat formulations
 
-The test tolerances are set at the solvers' precision, not at engineering accuracy, so a transcription error in either column has nowhere to hide. The same column with Watson's floor unsmoothed (eps = 0.01 → 1e-6) moves the fired duty by 0.10 %, the condenser duty by 0.003 %, stage temperatures by at most 0.019 K and the API gravities by at most 2e-4. That is the price of the smoothing that gives difflow a derivative everywhere.
+The test tolerances are set at the solvers' precision, not at engineering accuracy, so a transcription error in either column has nowhere to hide. The same column with Watson's floor unsmoothed (eps = 0.01 → 1e-6) moves the fired duty by 0.10 %, the condenser duty by 0.003 %, stage temperatures by at most 0.017 K and the API gravities by at most 2e-4. That is the price of the smoothing that gives difflow a derivative everywhere.
 
 **Layer 4: gradients.** Central finite differences of the reference column (each spec ± 0.002, IPOPT warm-started) against `jax.grad` through difflow's implicit-function solve:
 
 | Gradient | `jax.grad` | Reference FD | Agreement |
 | --- | --- | --- | --- |
-| d(diesel API)/d(diesel vol. yield) | -30.0685 | -30.0689 | 1.5e-5 |
-| d(fired duty)/d(overflash) | 170.915 MW | 170.920 MW | 3.2e-5 |
+| d(diesel API)/d(diesel vol. yield) | -30.2248 | -30.2254 | 1.8e-5 |
+| d(fired duty)/d(overflash) | 167.758 MW | 167.764 MW | 3.2e-5 |
 
 The file also stores d(condenser duty)/d(diesel yield) and d(residue API)/d(overflash) for later use.
 
-**What this does not validate.** It does not show that Raoult/Watson is the right property model for a given crude; layer 2 measures how far it is from PR, nothing more. It does not cover a commercial simulator's characterisation, its D86 interconversion defaults, or its tray-efficiency and hydraulics models, and it does not replace plant data. The 5-95 gaps of this case are negative (-27 to -55 K): equilibrium stages with these specs give overlapping products. Both implementations agree on that, which says nothing about whether a real column would overlap the same way. When a deliberate model change moves any number above, `TestReferenceIsCurrent` fails first and asks for the reference to be regenerated.
+**What this does not validate.** It does not show that Raoult/Watson is the right property model for a given crude; layer 2 measures how far it is from PR, nothing more. It does not cover a commercial simulator's characterisation, its D86 interconversion defaults, or its tray-efficiency and hydraulics models, and it does not replace plant data. The 5-95 gaps of this case are negative (-28 to -54 K): equilibrium stages with these specs give overlapping products. Both implementations agree on that, which says nothing about whether a real column would overlap the same way. When a deliberate model change moves any number above, `TestReferenceIsCurrent` fails first and asks for the reference to be regenerated.
 
 ---
 
