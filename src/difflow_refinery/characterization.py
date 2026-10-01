@@ -39,6 +39,8 @@ from jax import Array
 
 from difflow.params_mixin import ParamsMixin
 from difflow.streams import get_flow_array
+from difflow_refinery import correlations as _corr
+from difflow_refinery.correlations import edmister_omega, lee_kesler_psat  # noqa: F401
 
 jax.config.update("jax_enable_x64", True)
 
@@ -54,67 +56,23 @@ R_GAS = 8.314462618
 ATM = 101325.0
 PSI = 6894.757293168
 
-_K_TO_R = 1.8
+# The correlations themselves live in difflow_refinery.correlations (#301);
+# these are the names the blending pool has always exported.
 
 
 def riazi_daubert_mw(Tb: Array, SG: Array) -> Array:
-    """Molecular weight (g/mol) from Riazi & Daubert (1980).
-
-    ``MW = 4.5673e-5 Tb^2.1962 SG^-1.0164`` with ``Tb`` in degR (Riazi
-    MNL50 Ch. 2); intended for MW ~70-300.
-
-    Args:
-        Tb: Normal boiling point (K).
-        SG: Specific gravity at 15 degC.
-    """
-    Tb_R = Tb * _K_TO_R
-    return 4.5673e-5 * Tb_R ** 2.1962 * SG ** -1.0164
+    """Molecular weight (g/mol), Riazi & Daubert (1980): ``4.5673e-5 Tb^2.1962 SG^-1.0164``, Tb in degR."""
+    return _corr.riazi_daubert_1980(Tb, SG)[0]
 
 
 def riazi_daubert_tc(Tb: Array, SG: Array) -> Array:
-    """Critical temperature (K) from Riazi & Daubert (1980).
-
-    ``Tc = 24.2787 Tb^0.58848 SG^0.3596``, both temperatures in degR.
-    """
-    Tb_R = Tb * _K_TO_R
-    return 24.2787 * Tb_R ** 0.58848 * SG ** 0.3596 / _K_TO_R
+    """Critical temperature (K), Riazi & Daubert (1980): ``24.2787 Tb^0.58848 SG^0.3596``, degR."""
+    return _corr.riazi_daubert_1980(Tb, SG)[1]
 
 
 def riazi_daubert_pc(Tb: Array, SG: Array) -> Array:
-    """Critical pressure (Pa) from Riazi & Daubert (1980).
-
-    ``Pc = 3.12281e9 Tb^-2.3125 SG^2.3201`` with ``Tb`` in degR and ``Pc``
-    in psia.
-    """
-    Tb_R = Tb * _K_TO_R
-    return 3.12281e9 * Tb_R ** -2.3125 * SG ** 2.3201 * PSI
-
-
-def edmister_omega(Tb: Array, Tc: Array, Pc: Array) -> Array:
-    """Acentric factor from Edmister (1958).
-
-    ``omega = 3/7 * log10(Pc / 1 atm) / (Tc/Tb - 1) - 1``.
-    """
-    return 3.0 / 7.0 * jnp.log10(Pc / ATM) / (Tc / Tb - 1.0) - 1.0
-
-
-def lee_kesler_psat(T: Array, Tc: Array, Pc: Array, omega: Array) -> Array:
-    """Vapor pressure (Pa) from the Lee-Kesler (1975) correlation.
-
-    ``ln Pr = f0(Tr) + omega f1(Tr)`` with
-
-    * ``f0 = 5.92714 - 6.09648/Tr - 1.28862 ln Tr + 0.169347 Tr^6``
-    * ``f1 = 15.2518 - 15.6875/Tr - 13.4721 ln Tr + 0.43577 Tr^6``
-
-    Heavy pseudocomponents at gasoline-test
-    temperatures sit at ``Tr ~ 0.4`` where the value is tiny; that is the
-    correct answer for an RVP, not a numerical problem.
-    """
-    Tr = T / Tc
-    lnTr = jnp.log(Tr)
-    f0 = 5.92714 - 6.09648 / Tr - 1.28862 * lnTr + 0.169347 * Tr ** 6
-    f1 = 15.2518 - 15.6875 / Tr - 13.4721 * lnTr + 0.43577 * Tr ** 6
-    return Pc * jnp.exp(f0 + omega * f1)
+    """Critical pressure (Pa), Riazi & Daubert (1980): ``3.12281e9 Tb^-2.3125 SG^2.3201`` psia, degR."""
+    return _corr.riazi_daubert_1980(Tb, SG)[2]
 
 
 @dataclass

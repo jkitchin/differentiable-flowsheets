@@ -41,6 +41,7 @@ MW_REF = MW
 # published accuracy for this kind of compound, with some room.
 AAD_LIMITS = {
     "twu": (4.0, 1.0, 3.0),
+    "twu_1984": (1.5, 1.0, 3.0),
     "riazi_daubert_1987": (4.0, 1.0, 4.5),
     "riazi_daubert_1980": (6.0, 1.5, 5.0),
     "lee_kesler": (7.0, 1.5, 5.5),
@@ -67,6 +68,39 @@ def test_twu_reproduces_its_own_reference_series():
     np.testing.assert_allclose(MW, MW_REF[alkanes], rtol=0.01)
     np.testing.assert_allclose(Tc, TC[alkanes], rtol=0.01)
     np.testing.assert_allclose(Pc, PC[alkanes], rtol=0.02)
+
+
+# Molecular weights, Poling-Prausnitz-O'Connell 5th ed. Appendix A; SG at
+# 60 F, API Technical Data Book. Polynuclear aromatics are where Twu's SG
+# perturbation does the most work, so they are what tells the two codings
+# of it apart.
+AROMATICS = [  # name, Tb (K), SG, MW
+    ("naphthalene", 491.14, 1.0253, 128.17),
+    ("phenanthrene", 613.0, 1.1800, 178.23),
+    ("tetralin", 480.77, 0.9752, 132.20),
+]
+
+
+def test_twu_1984_is_the_published_molecular_weight():
+    """``twu_1984`` carries Twu's Rankine constants; ``twu`` the Kelvin-form
+    ones against sqrt(Tb in R), which under-corrects aromatics' MW.
+
+    The published-constant coding is checked against independent codings of
+    Twu (1984) Eqs. 21-22 (pychemqt ``lib/petro.py`` and sim21
+    ``data/twu.py`` both have 0.328086 and 0.193168 with Tb in Rankine).
+    """
+    _, tb, sg, mw = (np.array(c) if i else c for i, c in enumerate(zip(*AROMATICS)))
+    good = corr.critical_properties(jnp.asarray(tb), jnp.asarray(sg), "twu_1984")[0]
+    old = corr.critical_properties(jnp.asarray(tb), jnp.asarray(sg), "twu")[0]
+    assert _aad(good, mw) < 3.0
+    assert _aad(old, mw) > 3.0 * _aad(good, mw)
+    # Tc and Pc do not involve the MW constants: the two codings agree.
+    for a, b in zip(corr.critical_properties(TB, SG, "twu")[1:],
+                    corr.critical_properties(TB, SG, "twu_1984")[1:]):
+        np.testing.assert_array_equal(a, b)
+    # The dict form is the same function.
+    d = corr.twu_critical_properties(tb, sg)
+    np.testing.assert_allclose(d["MW"], good, rtol=1e-14)
 
 
 def test_unknown_method_is_refused():
