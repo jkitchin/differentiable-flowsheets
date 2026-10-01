@@ -58,7 +58,6 @@ LIGHT_END_SG: dict[str, float] = {
     "propane": 0.50736,
     "isobutane": 0.56293,
     "n_butane": 0.58407,
-    "neopentane": 0.59670,
     "isopentane": 0.62470,
     "n_pentane": 0.63086,
     "n_hexane": 0.66404,
@@ -170,6 +169,12 @@ class Assay:
         if self.api is not None:
             return corr.sg_from_api(jnp.asarray(self.api, dtype=float))
         return None
+
+
+def _light_end_mw(name: str) -> float:
+    from difflow_refinery.thermo import LIGHT_ENDS, WATER_MW
+
+    return WATER_MW if name == "water" else LIGHT_ENDS[name][0]
 
 
 def _traced(x) -> bool:
@@ -624,7 +629,7 @@ def characterize(
     Tb = (edges[1:] * x_edges[1:] - edges[:-1] * x_edges[:-1] - jnp.diff(integral)) / frac
 
     le_sg = jnp.asarray([LIGHT_END_SG[n] for n in light_names], dtype=float).reshape(-1)
-    le_mw = jnp.asarray([get_species_data(n).MW for n in light_names], dtype=float).reshape(-1)
+    le_mw = jnp.asarray([_light_end_mw(n) for n in light_names], dtype=float).reshape(-1)
 
     if assay.sg_curve is not None:
         mid, sgs = (jnp.asarray(a, dtype=float) / s for a, s in zip(assay.sg_curve, (100.0, 1.0)))

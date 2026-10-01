@@ -1,15 +1,18 @@
 """difflow_refinery: petroleum refining for difflow.
 
-Phase 1 is crude characterisation: a TBP assay cut into pseudo-components
-whose properties come from the standard petroleum correlations, differentiable
-end to end with respect to the assay data.
+Crude characterisation -- a TBP assay cut into pseudo-components whose
+properties come from the standard petroleum correlations -- and the
+atmospheric crude column that separates them, an equation-oriented MESH model
+with side strippers, pumparounds and stripping steam. Differentiable end to
+end: a product rate or a duty has a gradient with respect to the column's
+specs, its feed, and the assay data behind its thermodynamics.
 
 >>> import difflow_refinery as dr
 >>> assay = dr.Assay(tbp_percent=[0, 50, 100], tbp_T=[300.0, 600.0, 900.0], sg=0.85)
 >>> crude = dr.characterize(assay)
 """
 
-from difflow_refinery import correlations
+from difflow_refinery import column, correlations
 from difflow_refinery.assay import (
     DEFAULT_CUT_WIDTHS,
     LIGHT_END_SG,
@@ -18,6 +21,14 @@ from difflow_refinery.assay import (
     characterize,
     default_cut_points,
     fit_antoine,
+)
+from difflow_refinery.column import (
+    CrudeColumn,
+    CrudeColumnParams,
+    CrudeColumnResult,
+    Pumparound,
+    SideProduct,
+    Spec,
 )
 from difflow_refinery.correlations import (
     CRITICAL_METHODS,
@@ -28,6 +39,7 @@ from difflow_refinery.correlations import (
     vapor_pressure,
     watson_k,
 )
+from difflow_refinery.thermo import ColumnThermo, water_vapor_pressure
 
 __all__ = [
     "Assay",
@@ -38,6 +50,15 @@ __all__ = [
     "DEFAULT_CUT_WIDTHS",
     "LIGHT_END_SG",
     "correlations",
+    "column",
+    "ColumnThermo",
+    "water_vapor_pressure",
+    "CrudeColumn",
+    "CrudeColumnParams",
+    "CrudeColumnResult",
+    "Pumparound",
+    "SideProduct",
+    "Spec",
     "CRITICAL_METHODS",
     "critical_properties",
     "acentric_factor",
