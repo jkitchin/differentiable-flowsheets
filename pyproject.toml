@@ -176,6 +176,7 @@ packages = [
     "src/difflow_cc",
     "src/difflow_gas",
     "src/difflow_power",
+    "src/difflow_refinery",
 ]
 
 [tool.hatch.build.targets.sdist]
