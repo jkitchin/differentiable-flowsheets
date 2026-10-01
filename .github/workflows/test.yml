@@ -97,8 +97,8 @@ jobs:
         # minutes. If this list changes, `--splits` below has to change with
         # it -- they are the same number written twice, and nothing checks.
         shard: [1, 2, 3]
-        # DIAGNOSTIC (#315): current budget vs. no mid-module clear
-        budget: ["default", "off"]
+        # DIAGNOSTIC (#315): per-commit tier, and the whole suite for durations
+        tier: ["commit", "all"]
 
     steps:
       - uses: actions/checkout@v4
@@ -129,12 +129,11 @@ jobs:
       - name: Run tests
         env:
           DIAG_CACHE_LOG: ${{ github.workspace }}/diag
-          DIAG_MAPPING_BUDGET: ${{ matrix.budget == 'off' && '1000000000' || '' }}
         run: |
           mkdir -p diag
           cat /proc/sys/vm/max_map_count > diag/max_map_count.txt; nproc >> diag/max_map_count.txt
           (while true; do echo "$(date +%s) $(free -m | sed -n 2p)"; sleep 5; done) > diag/mem.log &
-          python -m pytest tests/ -q --tb=short -m "not release" \
+          python -m pytest tests/ -q --tb=short -m "${{ matrix.tier == 'all' && '' || 'not release' }}" \
             -n auto --dist loadfile \
             --splits 3 --group ${{ matrix.shard }} \
             --durations=50 --store-durations --durations-path diag/durations.json
@@ -143,7 +142,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: diag-${{ matrix.shard }}-${{ matrix.budget }}
+          name: diag-${{ matrix.shard }}-${{ matrix.tier }}
           path: diag/
 
   # Verify the package imports with NO optional dependencies installed. The job

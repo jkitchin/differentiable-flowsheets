@@ -53,15 +53,38 @@ import os
 import jax
 import pytest
 
-#: Clear once the process holds more mapped sections than this. The kernel's
-#: ceiling is ``vm.max_map_count``, 65530 by default; a fifth of it leaves
-#: room for a module heavier than any here today. Measured on
-#: ``tests/test_distillation.py``, the worst offender: 49480 mappings and
-#: 8.2 GB peak with only the module-boundary clear below, versus 13496 and
-#: 6.0 GB with this budget, for 15 seconds on a 10-minute module -- those
-#: tests build a fresh column per test and so recompile either way, which is
-#: why dropping the caches under them costs so little.
-_MAPPING_BUDGET = 15_000
+#: The kernel's ceiling on mapped sections per process, ``vm.max_map_count``.
+#: 65530 is the kernel default and what this budget was first measured
+#: against, but distributions and CI images raise it: GitHub's
+#: ``ubuntu-latest`` runner has 262144.
+_DEFAULT_MAX_MAP_COUNT = 65_530
+
+
+def _max_map_count():
+    """``vm.max_map_count``, or the kernel default where it is not readable."""
+    try:
+        with open("/proc/sys/vm/max_map_count") as fh:
+            return int(fh.read())
+    except (OSError, ValueError):
+        return _DEFAULT_MAX_MAP_COUNT
+
+
+#: Clear once the process holds more mapped sections than this. Against the
+#: default ceiling of 65530 it is 15000, which leaves room for a module
+#: heavier than any here today. Measured on ``tests/test_distillation.py``,
+#: the worst offender: 49480 mappings and 8.2 GB peak with only the
+#: module-boundary clear below, versus 13496 and 6.0 GB with this budget, for
+#: 15 seconds on a 10-minute module -- those tests build a fresh column per
+#: test and so recompile either way, which is why dropping the caches under
+#: them costs so little.
+#:
+#: It scales with the real ceiling, because the ceiling is what it protects.
+#: A fixed 15000 on a 262144-mapping CI runner cleared the caches 19 times
+#: in shard 2 (#315), every one of them at a quarter of the headroom the
+#: kernel actually had, and not every module recompiles anyway: the crude
+#: unit's tests reuse one compiled column across a module, and clearing it
+#: under them cost ``tests/refinery/test_planning.py`` 929 s -> 1150 s.
+_MAPPING_BUDGET = 15_000 * _max_map_count() // _DEFAULT_MAX_MAP_COUNT
 
 #: Under ``pytest -n`` every worker is a separate process holding its own
 #: caches, so the budget above is spent once per worker and what they add up
@@ -72,6 +95,14 @@ _MAPPING_BUDGET = 15_000
 #: what one serial run costs: the same suite peaks at 7.4 GB with this in
 #: place. The floor keeps a hypothetical ``-n 32`` from clearing the caches
 #: after every test.
+#:
+#: On CI (``-n auto`` is 2 workers there: the runner's 4 vCPUs are 2
+#: physical cores) the budget comes to 30000 a worker. The bound on memory
+#: there was measured directly, with the mid-module clear switched off
+#: altogether: the heaviest shard peaked at 10.6 GB used of 16 GB, against
+#: 8.7 GB with the old 7500 budget (#315). A clear does not hand memory back
+#: -- resident size stays where it was -- it only stops it climbing, so that
+#: run is an upper bound on any budget.
 MAPPING_BUDGET = max(
     _MAPPING_BUDGET // int(os.environ.get("PYTEST_XDIST_WORKER_COUNT", 1)),
     2_000,
