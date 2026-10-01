@@ -491,6 +491,7 @@ export const OPERATION_SYMBOLS = {
 
   // refinery
   CrudeDistillationUnit: 'column',
+  VacuumColumn: 'column',
 }
 
 /**

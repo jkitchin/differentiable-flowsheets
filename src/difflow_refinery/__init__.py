@@ -8,6 +8,11 @@ steam, reporting its products as yields, gravities and TBP ranges -- and
 the product blending pool (:mod:`difflow_refinery.blending`), which blends
 finished components into gasoline, jet, ULSD or fuel oil with the
 nonlinear rules refiners use and reports signed spec margins.
+
+The vacuum unit (:mod:`difflow_refinery.vacuum`) takes the atmospheric
+residue to LVGO, HVGO, slop and vacuum residue. It is built on its own
+characterization (cut down to 800 C, with sulfur, nitrogen, CCR and metals
+per cut) and its own stage-network column, which live in that subpackage.
 Differentiable end to end: a yield or a duty has a gradient with respect to
 the column's specs, its feed, and the assay data behind its thermodynamics.
 
@@ -16,7 +21,7 @@ the column's specs, its feed, and the assay data behind its thermodynamics.
 >>> crude = dr.characterize(assay)
 """
 
-from difflow_refinery import column, correlations, products
+from difflow_refinery import column, correlations, products, vacuum
 from difflow_refinery.assay import (
     DEFAULT_CUT_WIDTHS,
     LIGHT_END_SG,
@@ -85,6 +90,15 @@ from difflow_refinery.correlations import (
 )
 from difflow_refinery.products import ProductProperties, product_properties
 from difflow_refinery.thermo import ColumnThermo, water_vapor_pressure
+from difflow_refinery.vacuum import (
+    CrackingWarning,
+    PseudoComponents,
+    StageSpec,
+    VacuumColumn,
+    VacuumColumnParams,
+    VacuumConvergenceWarning,
+    default_vacuum_specs,
+)
 from difflow_refinery.unit import (
     CrudeDistillationUnit,
     CrudeDistillationUnitParams,
@@ -136,6 +150,14 @@ __all__ = [
     "temperature_index_blend", "volume_blend",
     "edmister_omega", "lee_kesler_psat", "riazi_daubert_mw",
     "riazi_daubert_pc", "riazi_daubert_tc",
+    "vacuum",
+    "CrackingWarning",
+    "PseudoComponents",
+    "StageSpec",
+    "VacuumColumn",
+    "VacuumColumnParams",
+    "VacuumConvergenceWarning",
+    "default_vacuum_specs",
     "register",
 ]
 
@@ -155,5 +177,13 @@ def register(registry):
         category="refinery",
         description="Crude unit: furnace and atmospheric column with side "
                     "strippers and pumparounds, built on a TBP assay",
+        plugin="difflow_refinery",
+    )
+    registry.register(
+        name="VacuumColumn",
+        cls=VacuumColumn,
+        category="refinery",
+        description="Vacuum distillation: atmospheric residue to LVGO, HVGO, "
+                    "slop and vacuum residue",
         plugin="difflow_refinery",
     )
