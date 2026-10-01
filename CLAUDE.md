@@ -73,7 +73,7 @@ difflow/
 │   ├── difflow_ree/       # Rare earth element solvent extraction plugin
 │   ├── difflow_cc/        # Carbon capture plugin (amine, membrane, adsorption)
 │   ├── difflow_gas/       # Gas transmission network plugin (pipes, compressors, computed decomposition)
-│   └── difflow_refinery/  # Refinery plugin (assay characterization, vacuum column)
+│   └── difflow_refinery/  # Refinery plugin (crude assay, crude and vacuum distillation units, product blending pool)
 ├── tests/                 # pytest test files (includes tests/bio/, tests/ree/, tests/cc/, tests/gas/, tests/power/, tests/refinery/)
 ├── examples/              # Jupyter notebook examples
 ├── jax-tutorials/         # JAX/autodiff tutorials
@@ -251,7 +251,7 @@ documented as one row of a reference table, an explicit MyST label
 `(op-<lowercase name>)=` before the row (page-prefixed where the bare
 name is not unique across the book, as the gas and power plugins do:
 `(gas-op-gaspipe)=`). `difflow.gui.doclinks.url_for` is what resolves it
-and `tests/test_doclinks.py` asserts all 87 operations resolve, so
+and `tests/test_doclinks.py` asserts all 89 operations resolve, so
 skipping step 7 fails the suite rather than shipping a palette entry with
 nothing to read.
 
@@ -263,7 +263,7 @@ The project has six domain-specific plugins:
 - **difflow_cc**: Carbon capture (amine absorption, membrane, adsorption)
 - **difflow_gas**: Gas transmission networks (pipes, compressors, valves, topology-driven sequential decomposition)
 - **difflow_power**: Electrical grids (AC power flow, AC-OPF, DC-OPF, PTDF/LODF, state estimation)
-- **difflow_refinery**: Refinery (crude assay characterization, vacuum distillation unit)
+- **difflow_refinery**: Petroleum refining (TBP assay characterisation, crude and vacuum distillation units, product blending)
 
 1. Add to appropriate plugin directory (`src/difflow_bio/`, `src/difflow_ree/`, `src/difflow_cc/`, `src/difflow_gas/`, `src/difflow_power/`, or `src/difflow_refinery/`)
 2. Create a Params dataclass inheriting from `ParamsMixin`
@@ -415,17 +415,35 @@ Invariants encoded in the plugin (do not weaken them):
 
 Docs: `docs/unit-operations-power.md`. Tests: `tests/power/`.
 
-**difflow_refinery** - Refinery:
+**difflow_refinery** - Petroleum refining:
+- Assay: `Assay` (TBP curve, SG or SG curve, light ends) -> `characterize` ->
+  pseudo-components (Twu / Riazi-Daubert / Lee-Kesler critical properties)
+- Thermo: `ColumnThermo` -- vectorised, Raoult + Lee-Kesler Psat, ideal-gas-path
+  enthalpy; water is steam or free water in the drum, never in the HC liquid
+- Column: `CrudeColumn` -- EO MESH (Naphtali-Sandholm), side strippers,
+  pumparounds, steam; specs from `column.*` builders, one per degree of freedom
+- `Furnace`: solved WITH the column (coil outlet T is an unknown), so an
+  `overflash` spec sets the furnace. A spec set with no solution (e.g. too little
+  overflash for a big pumparound) returns `converged=False`, not an answer
+- `CrudeUnit` (assay in, yield table out) and `CrudeDistillationUnit` (the
+  registered operation; outlets in `outlet_names` order)
+- Products: `product_properties`, `products.gaps` -- TBP, not D86
+
+Docs: `docs/unit-operations-refinery.md`. Tests: `tests/refinery/`.
+
+**difflow_refinery.vacuum** - the vacuum unit, on its own stack (its own
+characterization and stage-network column, separate from the crude unit's;
+the two do not share a component set yet):
 - Assays: `Assay`, `characterize` (cuts 300-800 C + a residue lump),
   `light_crude`/`heavy_crude` (synthetic), `atmospheric_residue` (an
-  idealized CDU cut standing in for a `CrudeColumn` that does not exist yet)
+  idealized CDU cut standing in for the crude column's residue)
 - Correlations: Twu (Tc, Pc, MW), Kesler-Lee (omega, liquid Cp),
   Maxwell-Bonnell psat (the D1160 conversion), Riazi-Daubert/Lee-Kesler
   for comparison, `fit_antoine`
-- Column: `StageColumn` over a `ColumnLayout` of `Route`s, `Spec` trades a
+- Column: `StageColumn` over a `ColumnLayout` of `Route`s, `StageSpec` trades a
   knob or draw rate for a target on any output; `VacuumColumn` builds the VDU
 
-Invariants encoded in the plugin (do not weaken them):
+Invariants encoded in the vacuum stack (do not weaken them):
 - Component balances are in LOG form (`ln(l+v) - logsumexp(ln ins)`). The
   residue lump in the top stage is 1e-200 of its feed; in linear form its
   rows underflow to zero and the Jacobian is singular (cond 1.7e17).
@@ -447,8 +465,36 @@ Invariants encoded in the plugin (do not weaken them):
 - A non-converging solve is usually an infeasible spec (an LVGO end point a
   low-efficiency HVGO bed cannot make), not a solver failure.
 
-Docs: `docs/unit-operations-refinery.md`. Tests: `tests/refinery/`.
-Example: `examples/34_vacuum_distillation.ipynb`.
+Tests: `tests/refinery/test_vacuum*.py`. Example: `examples/34_vacuum_distillation.ipynb`.
+
+### Refinery Blending (`difflow_refinery`)
+
+`BlendPool(product, specs, rules)` blends `BlendComponent`s (from properties,
+or from pseudocomponent streams on a shared `BlendCharacterization`) and returns
+properties, signed spec margins and, in stream mode, the product stream. Like
+`difflow.planning` it is a library, not a palette operation: the plugin's
+entry point registers `CrudeDistillationUnit` and `VacuumColumn` only.
+
+Invariants encoded in the module (do not weaken them):
+- Volumes are ideal-mixing volumes at 15 degC from SG; product SG is the
+  volume average and the stream-mode mass and volume balances close to
+  round-off. Both are tested.
+- Ethyl RT-70 corrections are spreads, so the rule reduces exactly to the
+  linear blend when the components agree -- tested, keep it that way.
+- Distillation and cetane index are COMPUTED from the blend's composition,
+  never blended; the linear view averages each component's own value, and the
+  difference is real (T10 especially).
+- The smooth violation is `t * logaddexp(-m/t, 0)` (derivative -1/2 at an
+  active spec), never the branchless form -- same reason as `difflow.stochastic`.
+- Margins for an optimizer over volume flows are `weighted=True` (`V * m`):
+  properties are 0/0 at an empty pool.
+- `exact=` in `linear_properties`/`backoff` accepts only rules linear in the
+  volumes; it describes an LP.
+- Blending is nonconvex: the example finds two KKT points; do not present a
+  single-start NLP as "the" optimum.
+
+Docs: `docs/unit-operations-refinery.md`. Example:
+`examples/33_refinery_gasoline_blending.ipynb`. Tests: `tests/refinery/`.
 
 ### Delta-Base Planning (`difflow.planning`)
 
@@ -856,7 +902,7 @@ jax.debug.print("value: {x}", x=value)
 | `src/difflow_cc/__init__.py` | Carbon capture plugin exports |
 | `src/difflow_gas/__init__.py` | Gas transmission network plugin exports |
 | `src/difflow_power/__init__.py` | Electrical grid plugin exports (AC-OPF) |
-| `src/difflow_refinery/__init__.py` | Refinery plugin exports (assay, vacuum column) |
+| `src/difflow_refinery/__init__.py` | Refinery plugin exports (crude assay, CDU, VDU, blending) |
 | `tests/` | All pytest tests (includes `bio/`, `ree/`, `cc/`, `gas/`, `power/`, `refinery/` subdirs) |
 | `examples/` | Usage examples (Jupyter notebooks) |
 | `jax-tutorials/` | JAX autodiff tutorials |

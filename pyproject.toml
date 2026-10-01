@@ -107,7 +107,7 @@ power = [
     # Electrical grid operations are included in the main package
 ]
 refinery = [
-    # Refinery operations (crude characterization, vacuum column) are
+    # Refinery operations (crude and vacuum units, blending) are
     # included in the main package
 ]
 gui = [

@@ -65,6 +65,27 @@ def _flows(stream, names):
 # -- convergence and balances ----------------------------------------------
 
 
+class TestSerialization:
+    def test_json_round_trip(self, heavy):
+        import difflow_refinery as dr
+        from difflow import serialize
+        from difflow.flowsheet import Flowsheet, Unit
+        from difflow.plugins import OperationRegistry
+
+        char, feed, params = heavy
+        op = VacuumColumn(params)
+        reg = OperationRegistry()
+        dr.register(reg)
+        fs = Flowsheet([k[2:] for k in feed if k.startswith("F_")])
+        fs.add_feed("resid", feed)
+        fs.add_unit(Unit("vdu", op, ["resid"], [*PRODUCTS, "info"]))
+        text = serialize.to_json(fs, registry=reg)
+        back = serialize.from_json(text, registry=reg).units[0].operation
+        assert isinstance(back, VacuumColumn)
+        assert back.params.specs == op.params.specs
+        assert serialize.to_json(serialize.from_json(text, registry=reg), registry=reg) == text
+
+
 class TestConvergence:
     def test_converges_from_the_default_initialization(self, solved):
         *_, info = solved[3]

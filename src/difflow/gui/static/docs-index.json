@@ -1,5 +1,5 @@
 {
- "n_sections": 905,
+ "n_sections": 923,
  "sections": [
   {
    "anchor": "convergence-and-initialization",
@@ -7442,7 +7442,7 @@
    "path": "Refinery Unit Operations",
    "source": "unit-operations-refinery.md",
    "targets": [],
-   "text": "This document covers the `difflow_refinery` plugin: crude assay\ncharacterization into pseudocomponents, and a differentiable vacuum\ndistillation unit (VDU) built on a general network-of-stages column.\n\n---\n\n(refinery-overview)="
+   "text": "This document covers the `difflow_refinery` plugin. It characterises a crude from its assay, separates it in a crude distillation unit (CDU): a fired heater and an atmospheric column, with side strippers, pumparounds and stripping steam. The products are reported the way a refinery reads them: yields, API gravities and TBP ranges. The atmospheric residue goes on to a vacuum distillation unit (VDU), and finished components are blended into products in a nonlinear blending pool.\n\n---\n\n(refinery-overview)="
   },
   {
    "anchor": "overview",
@@ -7452,7 +7452,7 @@
    "targets": [
     "refinery-overview"
    ],
-   "text": "The plugin provides:\n\n- **Assays and characterization** (`Assay`, `characterize`): a TBP curve and\n  bulk properties cut into pseudocomponents. The curve is extended past 565 C\n  into the residue, and a residue lump gets its properties set directly.\n  Sulfur, nitrogen, CCR, Ni+V and asphaltenes are carried per cut.\n- **Heavy-end correlations** (`difflow_refinery.correlations`): Twu critical\n  properties and molecular weight, Kesler-Lee acentric factor and liquid Cp,\n  Maxwell-Bonnell vapor pressure (the D1160 vacuum conversion), with\n  Riazi-Daubert and Lee-Kesler kept for comparison.\n- **A stage-network column** (`StageColumn`, `ColumnLayout`, `Route`, `Spec`):\n  Naphtali-Sandholm MESH equations solved simultaneously. Liquids can be\n  routed to side draws, pumparounds and entrainment, and any column output\n  can be specified in place of any knob.\n- **`VacuumColumn`**: atmospheric residue to LVGO, HVGO, slop and vacuum\n  residue.\n\nEverything is differentiable end to end. The gradient of an HVGO end point,\na residue yield or the HVGO sulfur content is exact, and it costs one linear\nsolve. That holds for the furnace outlet temperature, the flash-zone\npressure, the stripping steam, every spec target and stage efficiency, and\nevery number in the assay, down to a single TBP point.\n\nThere is no `CrudeColumn` yet. `atmospheric_residue` stands in for its\nbottoms: it applies an idealized TBP cut with a realistic overlap. The\nvacuum column only ever sees a difflow stream, so swapping the stand-in for\na real atmospheric column changes nothing downstream.\n\n---\n\n(refinery-installation)="
+   "text": "The `difflow_refinery` plugin provides:\n\n- **Assay characterisation** (`Assay`, `characterize`): a TBP curve plus a gravity, cut into pseudo-components with the standard petroleum correlations. Light ends (C1--C6) are kept as real species.\n- **Column thermodynamics** (`ColumnThermo`): vectorised over stages and components.\n  - Raoult's law with Lee-Kesler vapour pressures.\n  - Ideal-gas-path enthalpies.\n  - Stripping steam as a vapour that condenses only as free water in the overhead drum.\n- **The atmospheric column** (`CrudeColumn`): an equation-oriented MESH model, with side strippers, pumparounds, bottom and stripper steam, and a total or partial condenser.\n- **The furnace** (`Furnace`): solved *with* the column, so an overflash spec sets the coil outlet temperature, as it does in operation.\n- **Product properties** (`product_properties`, `products.gaps`): rates, volume and mass yields, SG/API, and TBP 5/10/50/90/95 points. Also the 5--95 gaps between neighbouring cuts.\n- **`CrudeUnit`**: the assembly a planner means by \"the CDU\": assay in, yield table out.\n- **`CrudeDistillationUnit`**: the same unit behind difflow's operation protocol, for a `Flowsheet`, JSON and the editor.\n- **`VacuumColumn`** (`difflow_refinery.vacuum`): the vacuum unit, atmospheric residue to LVGO, HVGO, slop and vacuum residue, with contaminants carried per cut.\n- **Product blending** (`BlendPool`, `BlendComponent`): gasoline, jet, ULSD and fuel-oil pools with the nonlinear blending rules, signed spec margins and LP back-off. A library for optimisation and planning, not a palette operation.\n\nEverything is differentiable with `jax`. A product yield, a gravity or a furnace duty has an exact gradient with respect to:\n\n- every spec value;\n- the crude rate and preheat temperature;\n- the assay data behind the thermodynamics (TBP points, gravity).\n\nThe column is solved by damped Newton. Gradients are implicit-function gradients at the converged point, not derivatives taped through the iterations.\n\n---\n\n(refinery-installation)="
   },
   {
    "anchor": "installation",
@@ -7462,85 +7462,245 @@
    "targets": [
     "refinery-installation"
    ],
-   "text": "The plugin ships with difflow and registers itself through the\n`difflow.plugins` entry point:\n\n```bash\npip install difflow[refinery]\n```\n\n---\n\n(refinery-quick-start)="
+   "text": "The plugin ships with difflow and registers itself through the `difflow.plugins` entry point:\n\n```python\nimport difflow_refinery as dr\n```\n\n---\n\n(refinery-characterisation)="
   },
   {
-   "anchor": "quick-start",
-   "heading": "Quick start",
-   "path": "Refinery Unit Operations > Quick start",
+   "anchor": "characterising-a-crude",
+   "heading": "Characterising a crude",
+   "path": "Refinery Unit Operations > Characterising a crude",
    "source": "unit-operations-refinery.md",
    "targets": [
-    "refinery-quick-start"
+    "refinery-characterisation"
    ],
-   "text": "```python\nimport difflow_refinery as dr\n\nchar = dr.characterize(dr.heavy_crude())           # 20 cuts 300-800 C + lump\nfeed = dr.atmospheric_residue(char, crude_rate_kg_s=100.0)\n\nvdu = dr.VacuumColumn(dr.VacuumColumnParams(components=char.components))\noverhead, lvgo, hvgo, slop, residue, info = vdu(feed)\n\ninfo[\"converged\"], info[\"iterations\"]               # True, 6\ninfo[\"properties\"][\"hvgo\"][\"T95\"] - 273.15          # 566 C\ninfo[\"properties\"][\"hvgo\"][\"ccr_wt\"]                # 1.84\ninfo[\"outputs\"][\"furnace.duty\"]                     # 1.31e7 W\n```\n\nStreams use difflow's convention: `F_<pseudocomponent>` in mol/s, with `T`\nin K and `P` in Pa. The overhead also carries the stripping steam as\n`F_H2O`.\n\n---\n\n(refinery-characterization)="
+   "text": "A crude is too many molecules to list. It is described by its true boiling point (TBP) curve and a gravity, and the curve is cut into narrow boiling ranges, each of which becomes one pseudo-component:\n\n```python\nfrom difflow_refinery import Assay, characterize\n\nassay = Assay(\n    tbp_percent=[0, 5, 10, 30, 50, 70, 90, 95, 100],\n    tbp_T=[t + 273.15 for t in [20, 60, 95, 205, 315, 430, 580, 640, 760]],\n    sg=0.86,\n    light_ends={\"propane\": 0.005, \"n_butane\": 0.01, \"n_pentane\": 0.015},\n)\ncrude = characterize(assay)          # default cut points, Twu critical properties\ncrude.names, crude.Tb, crude.sg, crude.volume_fraction\n```\n\n- **Interpolation:** the curve is interpolated monotonically (PCHIP).\n- **Default cut widths:** 20 K below 400 \u00b0C, 40 K to 600 \u00b0C, 100 K above that (`DEFAULT_CUT_WIDTHS`).\n- **Gravity:** a bulk SG is distributed over the cuts at a constant Watson K. Alternatively, pass `sg_curve=` to give the gravity cut by cut.\n- **Critical-property correlations** (`CRITICAL_METHODS`):\n  - `\"twu\"` (the default);\n  - `\"riazi_daubert_1987\"`;\n  - `\"riazi_daubert_1980\"`;\n  - `\"lee_kesler\"`.\n\n  Acentric factors are chosen so that each pseudo-component boils at its own `Tb`.\n\nThe cut points fix the number of pseudo-components and, with it, the shape of the column's equations. Keep them fixed when differentiating with respect to the assay.\n\nThis is not an assay library. Curated assays are proprietary data; the module characterises the curve the caller brings.\n\n---\n\n(refinery-column)="
   },
   {
-   "anchor": "characterization",
-   "heading": "Characterization",
-   "path": "Refinery Unit Operations > Characterization",
+   "anchor": "the-atmospheric-column",
+   "heading": "The atmospheric column",
+   "path": "Refinery Unit Operations > The atmospheric column",
    "source": "unit-operations-refinery.md",
    "targets": [
-    "refinery-characterization"
+    "refinery-column"
    ],
-   "text": "An `Assay` holds what a lab reports: a TBP curve (cumulative wt% distilled\nagainst temperature) and bulk properties. Two synthetic assays of the right\nshape are included, `light_crude()` (38 API, 15% vacuum residue) and\n`heavy_crude()` (20 API, 40%). They are not the assays of named crudes.\n\n`characterize(assay, cuts_C=...)` cuts the curve on a temperature grid. The\ndefault is 300-800 C in 25 C steps. Each cut gets:\n\n| Property | How |\n|---|---|\n| mass yield | difference of the TBP curve across the cut |\n| `Tb` | the mid-percent temperature of the cut |\n| `SG` | from a constant Watson K, fitted so the whole crude matches its bulk SG |\n| `MW`, `Tc`, `Pc` | Twu (1984) |\n| `omega` | Kesler-Lee (1976) |\n| S, N, CCR, Ni+V, asphaltenes | a logistic in boiling point, scaled to the bulk assay value (or a measured curve) |\n\n**The heavy end.** A TBP curve stops at about 565 C, but a VDU needs\npseudocomponents to 750-800 C. The curve is drawn on a probability scale,\n`z = Phi^-1(x)` against T, which is close to linear for crude oils. Inside\nthe data it is a monotone cubic Hermite in `z`, and beyond the data it is a\nleast-squares line through the last three points. The curve is C1\neverywhere. That matters because the default grid puts a cut boundary *on*\nevery assay point (both fall on multiples of 50 C). A piecewise-linear\ncurve has a kink exactly there, so a derivative with respect to that TBP\npoint has two values, and central differences average them. That error\nmeasured 1e-3 relative before the curve was made C1.\n\n**The residue lump** is everything past the last cut. Twu's n-alkane\nreference has no root past about 840 C, and Riazi-Daubert is fitted only to\nabout 580 C, so the lump's `Tb`, `SG` and `MW` are set directly\n(`residue_Tb_C`, `residue_sg`, `residue_mw`). Its vapor pressure at VDU\nconditions is then negligible, which is the property that matters.\n\n---\n\n(refinery-thermodynamics)="
+   "text": "An atmospheric crude column is a main column with no reboiler:\n\n- The crude arrives partly vaporised from the furnace and is stripped with steam.\n- **Side products** are drawn as liquid from intermediate stages. Each is usually finished in a steam-stripped side stripper, whose vapour returns one stage above the draw.\n- **Pumparounds** draw liquid, cool it outside the column and return it higher up. They remove heat part-way up, and so set the internal reflux in each section.\n\n```python\nfrom difflow_refinery import ColumnThermo, column as cc\n\nthermo = ColumnThermo.from_characterization(crude)\nparams = cc.CrudeColumnParams(\n    n_stages=30, feed_stage=27, P_top=1.5e5, P_bottom=1.9e5, P_condenser=1.3e5,\n    bottom_steam=..., steam_T=533.15,               # steam in mol/s\n    side_products=(cc.SideProduct(\"kero\", 9, 4, steam=...),\n                   cc.SideProduct(\"diesel\", 16, 4, steam=...),\n                   cc.SideProduct(\"ago\", 22, 3, steam=...)),\n    pumparounds=(cc.Pumparound(\"pa1\", 12, 10), cc.Pumparound(\"pa2\", 19, 17)),\n    specs=(cc.product_rate(\"naphtha\", ...), cc.product_rate(\"kero\", ...),\n           cc.product_rate(\"diesel\", ...), cc.product_rate(\"ago\", ...),\n           cc.pumparound_duty(\"pa1\", 15e6), cc.pumparound_delta_t(\"pa1\", 60.0),\n           cc.pumparound_duty(\"pa2\", 20e6), cc.pumparound_delta_t(\"pa2\", 60.0)),\n)\ncol = cc.CrudeColumn(params, thermo)\ncol.degrees_of_freedom()\nres = col.solve(feed)                # res.products, res.T, res.condenser_duty, ...\n```"
+  },
+  {
+   "anchor": "degrees-of-freedom-and-specs",
+   "heading": "Degrees of freedom and specs",
+   "path": "Refinery Unit Operations > The atmospheric column > Degrees of freedom and specs",
+   "source": "unit-operations-refinery.md",
+   "targets": [],
+   "text": "The degrees of freedom follow a simulator's:\n\n| Element | Freedoms |\n|---|---|\n| Total condenser | 1 (the distillate split) |\n| Partial condenser | 2 |\n| Each side product | 1 (its draw rate) |\n| Each pumparound | 2 (rate and return temperature) |\n| `Furnace` | 1 (its coil outlet temperature) |\n\nClose them with specs, exactly as many as there are freedoms (the constructor says how many are missing):\n\n| Spec | Meaning |\n|---|---|\n| `product_rate(name, value, basis=\"volume\")` | rate of the distillate, a side product, `\"residue\"` or `\"offgas\"` |\n| `reflux_ratio(value)` | reflux over overhead product, molar |\n| `stage_temperature(stage, T)` | a main-column stage temperature (stage 0 is the condenser) |\n| `pumparound_rate`, `pumparound_duty`, `pumparound_return_temperature`, `pumparound_delta_t` | the two pumparound freedoms |\n| `overflash(value, basis=\"volume\")` | liquid leaving the stage above the flash zone, as a fraction of crude |\n| `coil_outlet_temperature(T)`, `furnace_duty(Q)` | the furnace, directly |\n\nSpec values are traceable: the gradient with respect to one is the column's sensitivity to that spec. Rates are in mol/s, kg/s or standard m\u00b3/s at 60 \u00b0F; `cc.BARREL` converts to barrels."
+  },
+  {
+   "anchor": "model",
+   "heading": "Model",
+   "path": "Refinery Unit Operations > The atmospheric column > Model",
+   "source": "unit-operations-refinery.md",
+   "targets": [],
+   "text": "MESH holds on every equilibrium stage of the main column and of every stripper, all solved simultaneously (the Naphtali--Sandholm approach). The bubble-point method fails on a feed that boils across 600 K.\n\n- **Unknowns per stage:**\n  - the log component liquid flows;\n  - the temperature;\n  - the log total vapour flow, steam included.\n- **Vapour:** the hydrocarbon vapour follows from Raoult's law. The water vapour is what is left, so the water balance is the stage's summation equation.\n- **Water** is never in the hydrocarbon liquid. It condenses only in the overhead drum, as free water.\n- **Duties** are evaluated from the converged state; they are not unknowns.\n\nThe solve is a damped Newton from a bubble-point initialisation. It reports `converged` rather than raising: a set of specs with no solution comes back `converged=False`. Too little overflash for the heat a pumparound removes is one such set.\n\n(refinery-furnace)="
+  },
+  {
+   "anchor": "the-furnace",
+   "heading": "The furnace",
+   "path": "Refinery Unit Operations > The atmospheric column > The furnace",
+   "source": "unit-operations-refinery.md",
+   "targets": [
+    "refinery-furnace"
+   ],
+   "text": "With a `Furnace` in the params, the column's feed is the furnace *inlet*: the crude as the preheat train delivers it. The coil outlet temperature becomes one more unknown, solved with the column:\n\n- The absorbed duty is the enthalpy rise of the crude from inlet to coil outlet, each evaluated by a flash. The fired duty is the absorbed duty over `efficiency`.\n- The coil outlet pressure defaults to the feed stage's.\n- The extra freedom is usually closed by an `overflash`, which is how an operator runs the heater. Solving the furnace in front of the column instead would need the outlet temperature guessed and iterated by hand.\n\n---\n\n(refinery-products)="
+  },
+  {
+   "anchor": "products",
+   "heading": "Products",
+   "path": "Refinery Unit Operations > Products",
+   "source": "unit-operations-refinery.md",
+   "targets": [
+    "refinery-products"
+   ],
+   "text": "`product_properties(products, thermo, feed)` returns, for each hydrocarbon product:\n\n- its rates: `mole`, `mass`, `volume` and `bpd`;\n- `yield_volume` and `yield_mass` against the crude;\n- `sg`, `api` and `mw`;\n- TBP points at 5, 10, 50, 90 and 95 % (`tbp_at(pct)`).\n\n`products.gaps(properties, order)` gives the 5--95 gap between neighbouring cuts: `TBP5(heavier) - TBP95(lighter)`. A positive gap is a clean separation; a negative one is an overlap.\n\nThe TBP curves are built from the pseudo-components a product contains, so they are no finer than the cuts. A gap of a few kelvin is within that resolution. ASTM D86 conversion is not done; the gap is defined on TBP.\n\n---\n\n(refinery-crude-unit)="
+  },
+  {
+   "anchor": "the-crude-unit",
+   "heading": "The crude unit",
+   "path": "Refinery Unit Operations > The crude unit",
+   "source": "unit-operations-refinery.md",
+   "targets": [
+    "refinery-crude-unit"
+   ],
+   "text": "`CrudeUnit` puts characterisation, thermo, furnace, column and product properties together:\n\n```python\nimport difflow_refinery as dr\n\nunit = dr.CrudeUnit(assay, params)     # a default Furnace is added if params has none\nres = unit.solve(95_000, T=273.15 + 240, P=6e5)   # bbl/d at the furnace inlet\nprint(res.table())\nres.gaps()\n```\n\nOn the test crude, a 30-stage column with three side strippers, two pumparounds and a 5 % overflash gives:\n\n- a coil outlet of about 315 \u00b0C and about 52 MW fired;\n- naphtha, kerosene, diesel, AGO and residue at 20, 11, 17, 5 and 47 vol %;\n- API gravities from 64.5 down to 18.7.\n\n`solve` takes `assay=` (same light ends and cut points) and `params=` (same layout), so derivatives with respect to the assay and the specs are a `jax.grad` of a function that calls it:\n\n```python\nimport jax\n\ndef residue_api(sg):\n    a = dr.Assay([0, 30, 70, 100], [320.0, 480.0, 640.0, 900.0], sg=sg)\n    return unit.solve(1.0, T=480.0, P=4e5, basis=\"mole\", assay=a).properties[\"residue\"].api\n\njax.grad(residue_api)(0.85)\n```\n\n---\n\n(refinery-unit-operations)="
+  },
+  {
+   "anchor": "crudedistillationunit",
+   "heading": "CrudeDistillationUnit",
+   "path": "Refinery Unit Operations > Unit operations > CrudeDistillationUnit",
+   "source": "unit-operations-refinery.md",
+   "targets": [],
+   "text": "The crude unit as a flowsheet operation. It is built from one `CrudeDistillationUnitParams` (`assay`, `column`, `cut_points`, `method`), called with the crude stream at the furnace inlet, and returns the product streams in `outlet_names` order:\n\n1. the distillate;\n2. each side product, in the order the column declares them;\n3. `\"residue\"`;\n4. `\"water\"`;\n5. with a partial condenser, `\"offgas\"`.\n\n```python\nfrom difflow import Flowsheet\nfrom difflow.flowsheet import Unit\n\ncdu = dr.CrudeDistillationUnit(dr.CrudeDistillationUnitParams(assay=assay, column=params))\nfeed = cdu.feed(95_000, T=513.15, P=6e5)          # bbl/d; also basis=\"mass\"/\"mole\"/\"volume\"\n\nfs = Flowsheet(list(cdu.unit.thermo.names) + [\"water\"])\nfs.add_feed(\"crude\", feed)\nfs.add_unit(Unit(\"cdu\", cdu, [\"crude\"], list(cdu.outlet_names)))\nstreams = fs.solve()\ncdu.last_result.table()                           # the full result of the last call\n```\n\n- **Inlet:** the inlet needs a flow for every component the assay characterises into; `cdu.feed(...)` makes one.\n- **Full result:** `cdu.solve(feed)` returns the full `CrudeUnitResult` (column profiles, duties, product properties) rather than the streams.\n- **Serialisation:** the assay, the column params and every nested spec, side product, pumparound and furnace are plain dataclasses, so the unit writes to and reads back from JSON with `difflow.serialize`.\n\n---\n\n(refinery-vacuum)="
+  },
+  {
+   "anchor": "the-vacuum-unit",
+   "heading": "The vacuum unit",
+   "path": "Refinery Unit Operations > The vacuum unit",
+   "source": "unit-operations-refinery.md",
+   "targets": [
+    "refinery-vacuum"
+   ],
+   "text": "The vacuum distillation unit (VDU) takes the atmospheric residue to light and heavy vacuum gas oil (LVGO, HVGO), slop and vacuum residue. It is built on a stack of its own in `difflow_refinery.vacuum`:\n\n- **Assays and characterization** (`vacuum.Assay`, `vacuum.characterize`): a TBP curve and bulk properties cut into pseudocomponents. The curve is extended past 565 C into the residue, and a residue lump gets its properties set directly. Sulfur, nitrogen, CCR, Ni+V and asphaltenes are carried per cut.\n- **Heavy-end correlations** (`difflow_refinery.vacuum.correlations`): Twu critical properties and molecular weight, Kesler-Lee acentric factor and liquid Cp, Maxwell-Bonnell vapor pressure (the D1160 vacuum conversion).\n- **A stage-network column** (`StageColumn`, `ColumnLayout`, `Route`, `StageSpec`): Naphtali-Sandholm MESH equations with liquids routed to side draws, pumparounds and entrainment, Murphree efficiencies, and any column output specifiable in place of any knob.\n- **`VacuumColumn`**, the registered operation.\n\nThe vacuum stack does not yet share the crude unit's characterization: the two cut the crude on different grids. `vacuum.atmospheric_residue` stands in for the crude column's bottoms by applying an idealized TBP cut. The vacuum column only ever sees a difflow stream, so feeding it the `CrudeDistillationUnit`'s residue needs only a common component set.\n\n(refinery-vacuum-quick-start)="
+  },
+  {
+   "anchor": "quick-start-the-vacuum-unit",
+   "heading": "Quick start: the vacuum unit",
+   "path": "Refinery Unit Operations > The vacuum unit > Quick start: the vacuum unit",
+   "source": "unit-operations-refinery.md",
+   "targets": [
+    "refinery-vacuum-quick-start"
+   ],
+   "text": "```python\nimport difflow_refinery as dr\n\nchar = dr.vacuum.characterize(dr.vacuum.heavy_crude())           # 20 cuts 300-800 C + lump\nfeed = dr.vacuum.atmospheric_residue(char, crude_rate_kg_s=100.0)\n\nvdu = dr.VacuumColumn(dr.VacuumColumnParams(components=char.components))\noverhead, lvgo, hvgo, slop, residue, info = vdu(feed)\n\ninfo[\"converged\"], info[\"iterations\"]               # True, 6\ninfo[\"properties\"][\"hvgo\"][\"T95\"] - 273.15          # 566 C\ninfo[\"properties\"][\"hvgo\"][\"ccr_wt\"]                # 1.84\ninfo[\"outputs\"][\"furnace.duty\"]                     # 1.31e7 W\n```\n\nStreams use difflow's convention: `F_<pseudocomponent>` in mol/s, with `T`\nin K and `P` in Pa. The overhead also carries the stripping steam as\n`F_H2O`.\n\n---\n\n(refinery-vacuum-characterization)="
+  },
+  {
+   "anchor": "vacuum-characterization",
+   "heading": "Vacuum characterization",
+   "path": "Refinery Unit Operations > The vacuum unit > Vacuum characterization",
+   "source": "unit-operations-refinery.md",
+   "targets": [
+    "refinery-vacuum-characterization"
+   ],
+   "text": "A `vacuum.Assay` holds what a lab reports: a TBP curve (cumulative wt% distilled\nagainst temperature) and bulk properties. Two synthetic assays of the right\nshape are included, `light_crude()` (38 API, 15% vacuum residue) and\n`heavy_crude()` (20 API, 40%). They are not the assays of named crudes.\n\n`vacuum.characterize(assay, cuts_C=...)` cuts the curve on a temperature grid. The\ndefault is 300-800 C in 25 C steps. Each cut gets:\n\n| Property | How |\n|---|---|\n| mass yield | difference of the TBP curve across the cut |\n| `Tb` | the mid-percent temperature of the cut |\n| `SG` | from a constant Watson K, fitted so the whole crude matches its bulk SG |\n| `MW`, `Tc`, `Pc` | Twu (1984) |\n| `omega` | Kesler-Lee (1976) |\n| S, N, CCR, Ni+V, asphaltenes | a logistic in boiling point, scaled to the bulk assay value (or a measured curve) |\n\n**The heavy end.** A TBP curve stops at about 565 C, but a VDU needs\npseudocomponents to 750-800 C. The curve is drawn on a probability scale,\n`z = Phi^-1(x)` against T, which is close to linear for crude oils. Inside\nthe data it is a monotone cubic Hermite in `z`, and beyond the data it is a\nleast-squares line through the last three points. The curve is C1\neverywhere. That matters because the default grid puts a cut boundary *on*\nevery assay point (both fall on multiples of 50 C). A piecewise-linear\ncurve has a kink exactly there, so a derivative with respect to that TBP\npoint has two values, and central differences average them. That error\nmeasured 1e-3 relative before the curve was made C1.\n\n**The residue lump** is everything past the last cut. Twu's n-alkane\nreference has no root past about 840 C, and Riazi-Daubert is fitted only to\nabout 580 C, so the lump's `Tb`, `SG` and `MW` are set directly\n(`residue_Tb_C`, `residue_sg`, `residue_mw`). Its vapor pressure at VDU\nconditions is then negligible, which is the property that matters.\n\n---\n\n(refinery-vacuum-thermodynamics)="
   },
   {
    "anchor": "thermodynamics-at-vacuum",
    "heading": "Thermodynamics at vacuum",
-   "path": "Refinery Unit Operations > Thermodynamics at vacuum",
+   "path": "Refinery Unit Operations > The vacuum unit > Thermodynamics at vacuum",
    "source": "unit-operations-refinery.md",
    "targets": [
-    "refinery-thermodynamics"
+    "refinery-vacuum-thermodynamics"
    ],
    "text": "`ColumnThermo` makes three simplifications, each of which holds at vacuum:\n\n- **K-values are `psat / P`.** At 1-10 kPa the vapor is ideal to far better\n  than the correlations are accurate. Vapor pressure is Maxwell-Bonnell, the\n  correlation ASTM D1160 uses to convert a boiling point measured under\n  vacuum to its atmospheric equivalent. It is anchored at the boiling\n  point the assay measures and fitted down to a fraction of a mmHg. A\n  500 C cut boils at 331 C at 10 mmHg, as in the D1160 tables. Its three\n  pressure branches are joined by a narrow logistic blend, so Newton sees a\n  continuous derivative. Lee-Kesler with Twu criticals agrees near the\n  boiling point and drifts at the reduced temperatures of a flash zone.\n- **Steam does not condense.** At the coldest point in the column (60-80 C)\n  water's vapor pressure is ten times the column pressure. Steam lowers the\n  hydrocarbon partial pressure and carries enthalpy, and that is all it\n  does.\n- **The heat of vaporization is `R T^2 dln(psat)/dT`.** It is the\n  Clausius-Clapeyron slope of the curve that sets the K-values, so the\n  energy balance and the phase equilibrium cannot disagree about how\n  volatile a cut is. Liquid enthalpy comes from Kesler-Lee's Cp.\n\n`fit_antoine` fits Antoine constants to Maxwell-Bonnell over a range, for\nhanding a pseudocomponent to a simulator that takes nothing else.\n\n---\n\n(refinery-stage-network)="
   },
   {
    "anchor": "the-stage-network-column",
    "heading": "The stage-network column",
-   "path": "Refinery Unit Operations > The stage-network column",
+   "path": "Refinery Unit Operations > The vacuum unit > The stage-network column",
    "source": "unit-operations-refinery.md",
    "targets": [
     "refinery-stage-network"
    ],
-   "text": "`StageColumn` is the machinery any refinery column is built from. Stages\nare numbered from the top. A furnace outlet flash sits in front of the feed\nstage. The liquid leaving each stage is split between its **routes**:\n\n| Route kind | Takes | Variable |\n|---|---|---|\n| `fixed` | a fraction set by the knobs (entrainment) | none |\n| `reference` | what the share routes leave | none |\n| `share` | a softmax share of the rest | one logit, with an equation `<route>.rate == knob` (kg/s) |\n\nA route with `duty=` is a pumparound: its liquid returns to its destination\nstage with that much heat removed. Draws are softmax shares rather than\nrates, so a draw can never take more liquid than its stage has. That is\nwhat makes a rate spec safe to give Newton.\n\n**Specs.** Every share route has a default rate equation, and every other\nknob (a duty, the furnace temperature, a pressure) is a fixed number. A\n`Spec(output, target, replaces=...)` trades one of those for\n`output == target`. The degrees of freedom always balance, and any output\ncan be specified by giving up the knob that controls it: a stage\ntemperature, a product's TBP point, the overflash, a pumparound return\ntemperature.\n\n**Variables and residuals.** The variables are, for every stage, the log\nof each component's liquid and vapor flow, plus the stage temperature. The\ncomponent balances are written in log form too, as\n`ln(out) - logsumexp(ln ins)`. A residue lump in the top stage is 1e-200 of\nits feed or less. In linear form its flows underflow, its balance rows go\nto zero and the Jacobian is singular (condition number 1.7e17 was\nmeasured). In log form every row is O(1) and exact. Equilibrium is Murphree\non the vapor, `y = eta K x + (1 - eta) y_in`, also in log form.\n\n**Solve.** The solver runs damped Newton with a dense `jax.jacfwd`\nJacobian; a VDU has about 430 variables. Steps are capped at 30 K on\ntemperatures and 5 on log flows, and an Armijo backtracking line search runs\ninside `lax.while_loop`. *Trace* flows, below 1e-7 of their component's\nfeed, are exempt from the cap and clipped individually instead. Otherwise\none residue-lump vapor that wants to fall by 600 log units scales every\nstep to nothing. Stage efficiencies are reached by a three-pass homotopy:\nequilibrium stages first, then halfway, then the target."
+   "text": "`StageColumn` is the machinery any refinery column is built from. Stages\nare numbered from the top. A furnace outlet flash sits in front of the feed\nstage. The liquid leaving each stage is split between its **routes**:\n\n| Route kind | Takes | Variable |\n|---|---|---|\n| `fixed` | a fraction set by the knobs (entrainment) | none |\n| `reference` | what the share routes leave | none |\n| `share` | a softmax share of the rest | one logit, with an equation `<route>.rate == knob` (kg/s) |\n\nA route with `duty=` is a pumparound: its liquid returns to its destination\nstage with that much heat removed. Draws are softmax shares rather than\nrates, so a draw can never take more liquid than its stage has. That is\nwhat makes a rate spec safe to give Newton.\n\n**Specs.** Every share route has a default rate equation, and every other\nknob (a duty, the furnace temperature, a pressure) is a fixed number. A\n`StageSpec(output, target, replaces=...)` trades one of those for\n`output == target`. The degrees of freedom always balance, and any output\ncan be specified by giving up the knob that controls it: a stage\ntemperature, a product's TBP point, the overflash, a pumparound return\ntemperature.\n\n**Variables and residuals.** The variables are, for every stage, the log\nof each component's liquid and vapor flow, plus the stage temperature. The\ncomponent balances are written in log form too, as\n`ln(out) - logsumexp(ln ins)`. A residue lump in the top stage is 1e-200 of\nits feed or less. In linear form its flows underflow, its balance rows go\nto zero and the Jacobian is singular (condition number 1.7e17 was\nmeasured). In log form every row is O(1) and exact. Equilibrium is Murphree\non the vapor, `y = eta K x + (1 - eta) y_in`, also in log form.\n\n**Solve.** The solver runs damped Newton with a dense `jax.jacfwd`\nJacobian; a VDU has about 430 variables. Steps are capped at 30 K on\ntemperatures and 5 on log flows, and an Armijo backtracking line search runs\ninside `lax.while_loop`. *Trace* flows, below 1e-7 of their component's\nfeed, are exempt from the cap and clipped individually instead. Otherwise\none residue-lump vapor that wants to fall by 600 log units scales every\nstep to nothing. Stage efficiencies are reached by a three-pass homotopy:\nequilibrium stages first, then halfway, then the target."
   },
   {
    "anchor": "vacuumcolumn",
    "heading": "VacuumColumn",
-   "path": "Refinery Unit Operations > VacuumColumn",
+   "path": "Refinery Unit Operations > The vacuum unit > VacuumColumn",
    "source": "unit-operations-refinery.md",
    "targets": [
     "refinery-vacuumcolumn"
    ],
-   "text": "```text\noverhead vapor (steam + light HC) -> ejectors\n+---------------------------+\n| LVGO pumparound section   |  n_lvgo stages; LVGO PA returns to the top\n|   LVGO draw (total draw)  |  -> LVGO product + LVGO PA\n| HVGO pumparound section   |  n_hvgo stages; HVGO PA returns to its top\n|   HVGO draw               |  -> HVGO product + HVGO PA + wash oil down\n| wash zone                 |  n_wash stages\n|   slop draw (total draw)  |  -> slop / overflash\n| flash zone  <- furnace    |  1 stage; entrainment carried up\n| stripping section         |  n_strip stages\n+---------------------------+  <- bottom steam\nvacuum residue\n```\n\nThere is no condenser and no reflux drum. The top stage's vapor leaves as\noverhead at the top-stage temperature, and the LVGO pumparound holds that\ntemperature. Each packed bed is `n` equilibrium stages with a Murphree\nefficiency to fit. The defaults are two stages per bed, two stripping\nstages and efficiency 1, which gives nine stages.\n\n**Default specs** (`default_vacuum_specs()`):\n\n| Spec | Replaces |\n|---|---|\n| `top.T = 70 C` | `lvgo_pa.duty` |\n| `overflash = 0.03` (slop / feed, mass) | `hvgo.rate` |\n| `lvgo.T95 = 450 C` | `hvgo_pa.duty` |\n\nThe pumparound circulations are fixed at 0.3 and 0.8 x feed unless given.\nWith the defaults, the operating levers are the furnace outlet temperature,\nthe flash-zone pressure and the stripping steam, and the yields and\nqualities come out. That is the trade-off a planner wants to see. To ask\nthe reverse question, for example what furnace temperature a given HVGO end\npoint costs:\n\n```python\nspecs = dr.default_vacuum_specs() + (\n    dr.Spec(\"hvgo.T95\", 570.0 + 273.15, replaces=\"furnace.T\"),)\nvdu = dr.VacuumColumn(params.update(specs=specs))\n```\n\n**Outputs** (`info[\"outputs\"]`, SI units) include every stage `T` and `P`,\nevery route's `.rate`, each product's `.T05/.T10/.T50/.T90/.T95`, `.yield`\nand draw temperature, pumparound `.duty` and `.return_T`, `furnace.duty`,\n`furnace.vapor_fraction`, `furnace.cracking_margin`, `flash_zone.T`,\n`overflash`, `vgo.yield` and `steam.rate`. `info[\"properties\"]` gives SG,\nAPI, S, N, CCR, Ni+V, asphaltenes and the TBP points of each product."
+   "text": "```text\noverhead vapor (steam + light HC) -> ejectors\n+---------------------------+\n| LVGO pumparound section   |  n_lvgo stages; LVGO PA returns to the top\n|   LVGO draw (total draw)  |  -> LVGO product + LVGO PA\n| HVGO pumparound section   |  n_hvgo stages; HVGO PA returns to its top\n|   HVGO draw               |  -> HVGO product + HVGO PA + wash oil down\n| wash zone                 |  n_wash stages\n|   slop draw (total draw)  |  -> slop / overflash\n| flash zone  <- furnace    |  1 stage; entrainment carried up\n| stripping section         |  n_strip stages\n+---------------------------+  <- bottom steam\nvacuum residue\n```\n\nThere is no condenser and no reflux drum. The top stage's vapor leaves as\noverhead at the top-stage temperature, and the LVGO pumparound holds that\ntemperature. Each packed bed is `n` equilibrium stages with a Murphree\nefficiency to fit. The defaults are two stages per bed, two stripping\nstages and efficiency 1, which gives nine stages.\n\n**Default specs** (`default_vacuum_specs()`):\n\n| Spec | Replaces |\n|---|---|\n| `top.T = 70 C` | `lvgo_pa.duty` |\n| `overflash = 0.03` (slop / feed, mass) | `hvgo.rate` |\n| `lvgo.T95 = 450 C` | `hvgo_pa.duty` |\n\nThe pumparound circulations are fixed at 0.3 and 0.8 x feed unless given.\nWith the defaults, the operating levers are the furnace outlet temperature,\nthe flash-zone pressure and the stripping steam, and the yields and\nqualities come out. That is the trade-off a planner wants to see. To ask\nthe reverse question, for example what furnace temperature a given HVGO end\npoint costs:\n\n```python\nspecs = dr.default_vacuum_specs() + (\n    dr.StageSpec(\"hvgo.T95\", 570.0 + 273.15, replaces=\"furnace.T\"),)\nvdu = dr.VacuumColumn(params.update(specs=specs))\n```\n\n**Outputs** (`info[\"outputs\"]`, SI units) include every stage `T` and `P`,\nevery route's `.rate`, each product's `.T05/.T10/.T50/.T90/.T95`, `.yield`\nand draw temperature, pumparound `.duty` and `.return_T`, `furnace.duty`,\n`furnace.vapor_fraction`, `furnace.cracking_margin`, `flash_zone.T`,\n`overflash`, `vgo.yield` and `steam.rate`. `info[\"properties\"]` gives SG,\nAPI, S, N, CCR, Ni+V, asphaltenes and the TBP points of each product."
   },
   {
    "anchor": "results-on-the-two-included-assays",
    "heading": "Results on the two included assays",
-   "path": "Refinery Unit Operations > VacuumColumn > Results on the two included assays",
+   "path": "Refinery Unit Operations > The vacuum unit > VacuumColumn > Results on the two included assays",
    "source": "unit-operations-refinery.md",
    "targets": [],
-   "text": "Default specs, 100 kg/s of crude, furnace 400 C, flash zone 30 mmHg:\n\n| | light: LVGO | HVGO | slop | residue | heavy: LVGO | HVGO | slop | residue |\n|---|---|---|---|---|---|---|---|---|\n| yield on feed | 0.154 | 0.488 | 0.030 | 0.328 | 0.070 | 0.296 | 0.030 | 0.603 |\n| TBP T50 (C) | 393 | 484 | 605 | 674 | 391 | 473 | 595 | 753 |\n| TBP T95 (C) | 450 | 579 | 700 | 868 | 450 | 566 | 834 | 888 |\n| SG | 0.876 | 0.914 | 0.959 | 0.992 | 0.909 | 0.944 | 0.999 | 1.054 |\n| S (wt%) | 0.74 | 1.10 | 1.38 | 1.45 | 2.73 | 3.98 | 5.14 | 5.50 |\n| CCR (wt%) | 0.19 | 1.48 | 8.0 | 15.1 | 0.29 | 1.84 | 12.9 | 28.4 |\n| Ni+V (wppm) | 0.00 | 0.14 | 8.1 | 57 | 0.01 | 1.05 | 100 | 495 |\n\nBoth converge from the default initialization in 6-7 Newton iterations.\nThe per-pseudocomponent mass balance closes to 1e-15. Implicit gradients\nmatch central differences to better than 1e-5 relative, for product rates\nand HVGO properties with respect to furnace T, flash-zone P, steam, and the\n500 C point of the assay's TBP curve (`tests/refinery/test_vacuum.py`).\n\n---\n\n(refinery-gotchas)="
+   "text": "Default specs, 100 kg/s of crude, furnace 400 C, flash zone 30 mmHg:\n\n| | light: LVGO | HVGO | slop | residue | heavy: LVGO | HVGO | slop | residue |\n|---|---|---|---|---|---|---|---|---|\n| yield on feed | 0.154 | 0.488 | 0.030 | 0.328 | 0.070 | 0.296 | 0.030 | 0.603 |\n| TBP T50 (C) | 393 | 484 | 605 | 674 | 391 | 473 | 595 | 753 |\n| TBP T95 (C) | 450 | 579 | 700 | 868 | 450 | 566 | 834 | 888 |\n| SG | 0.876 | 0.914 | 0.959 | 0.992 | 0.909 | 0.944 | 0.999 | 1.054 |\n| S (wt%) | 0.74 | 1.10 | 1.38 | 1.45 | 2.73 | 3.98 | 5.14 | 5.50 |\n| CCR (wt%) | 0.19 | 1.48 | 8.0 | 15.1 | 0.29 | 1.84 | 12.9 | 28.4 |\n| Ni+V (wppm) | 0.00 | 0.14 | 8.1 | 57 | 0.01 | 1.05 | 100 | 495 |\n\nBoth converge from the default initialization in 6-7 Newton iterations.\nThe per-pseudocomponent mass balance closes to 1e-15. Implicit gradients\nmatch central differences to better than 1e-5 relative, for product rates\nand HVGO properties with respect to furnace T, flash-zone P, steam, and the\n500 C point of the assay's TBP curve (`tests/refinery/test_vacuum.py`).\n\n---\n\n(refinery-vacuum-gotchas)="
   },
   {
-   "anchor": "gotchas",
-   "heading": "Gotchas",
-   "path": "Refinery Unit Operations > Gotchas",
+   "anchor": "vacuum-unit-gotchas",
+   "heading": "Vacuum unit gotchas",
+   "path": "Refinery Unit Operations > The vacuum unit > Vacuum unit gotchas",
    "source": "unit-operations-refinery.md",
    "targets": [
-    "refinery-gotchas"
+    "refinery-vacuum-gotchas"
    ],
-   "text": "- **An end point the beds cannot make is infeasible, not hard.** Each\n  Murphree stage passes `(1 - eta)` of the vapor through unchanged. An HVGO\n  bed of two stages at 70% therefore sends 9% of the heavy vapor into the\n  LVGO section. The default `lvgo.T95 = 450 C` then cannot be met at any\n  HVGO pumparound duty, and Newton drives the duty to 1e13 W before it\n  gives up. Loosen the spec (520 C converges) or raise the efficiency.\n- **Specs must be feasible for the feed.** Overflash, draw rates and end\n  points compete for the same vaporized material. A furnace that vaporizes\n  25% of the feed cannot give 30% HVGO. When the solve does not converge,\n  check that the specs add up before suspecting the solver.\n- **The LVGO and slop draws are total draws.** No liquid passes from the\n  LVGO section to the HVGO section, or from the wash bed to the flash zone,\n  as on chimney trays. The LVGO yield is therefore whatever the HVGO section\n  does not condense. It is set through the HVGO pumparound, by the\n  `lvgo.T95` spec.\n- **Compile once, solve many.** The first solve for a spec *structure*\n  (which outputs replace which knobs) compiles in about 20 s. Every later\n  solve with the same structure costs about 0.2 s, whatever the numbers,\n  because spec targets, knobs, efficiencies and the whole assay are\n  runtime inputs.\n\n---\n\n(refinery-out-of-scope)="
+   "text": "- **An end point the beds cannot make is infeasible, not hard.** Each\n  Murphree stage passes `(1 - eta)` of the vapor through unchanged. An HVGO\n  bed of two stages at 70% therefore sends 9% of the heavy vapor into the\n  LVGO section. The default `lvgo.T95 = 450 C` then cannot be met at any\n  HVGO pumparound duty, and Newton drives the duty to 1e13 W before it\n  gives up. Loosen the spec (520 C converges) or raise the efficiency.\n- **Specs must be feasible for the feed.** Overflash, draw rates and end\n  points compete for the same vaporized material. A furnace that vaporizes\n  25% of the feed cannot give 30% HVGO. When the solve does not converge,\n  check that the specs add up before suspecting the solver.\n- **The LVGO and slop draws are total draws.** No liquid passes from the\n  LVGO section to the HVGO section, or from the wash bed to the flash zone,\n  as on chimney trays. The LVGO yield is therefore whatever the HVGO section\n  does not condense. It is set through the HVGO pumparound, by the\n  `lvgo.T95` spec.\n- **Compile once, solve many.** The first solve for a spec *structure*\n  (which outputs replace which knobs) compiles in about 20 s. Every later\n  solve with the same structure costs about 0.2 s, whatever the numbers,\n  because spec targets, knobs, efficiencies and the whole assay are\n  runtime inputs.\n\n---\n\n(refinery-vacuum-out-of-scope)="
   },
   {
-   "anchor": "out-of-scope",
-   "heading": "Out of scope",
-   "path": "Refinery Unit Operations > Out of scope",
+   "anchor": "vacuum-unit-out-of-scope",
+   "heading": "Vacuum unit: out of scope",
+   "path": "Refinery Unit Operations > The vacuum unit > Vacuum unit: out of scope",
    "source": "unit-operations-refinery.md",
    "targets": [
-    "refinery-out-of-scope"
+    "refinery-vacuum-out-of-scope"
    ],
-   "text": "Ejectors and vacuum-system modelling, dynamics, lube vacuum towers, and\nD1160 (as opposed to TBP) product curves. A cross-check against an\nindependent simulator (DWSIM or IDAES on the same characterized feed) has\nnot been done; neither is available in the test environment."
+   "text": "Ejectors and vacuum-system modelling, dynamics, lube vacuum towers, and\nD1160 (as opposed to TBP) product curves. A cross-check against an\nindependent simulator (DWSIM or IDAES on the same characterized feed) has\nnot been done; neither is available in the test environment.\n\n---\n\n(refinery-blending)="
+  },
+  {
+   "anchor": "product-blending",
+   "heading": "Product blending",
+   "path": "Refinery Unit Operations > Product blending",
+   "source": "unit-operations-refinery.md",
+   "targets": [
+    "refinery-blending"
+   ],
+   "text": "`difflow_refinery` holds refinery models. Its first one is the **product blending pool**. It mixes component streams into finished products (gasoline, jet, ULSD, fuel oil), computes the properties that specs are written on, and reports a signed margin per spec. It uses the nonlinear blending rules refiners use, and it is differentiable in the recipe and in every component property.\n\n```python\nfrom difflow_refinery import BlendComponent, BlendPool\n\nreformate = BlendComponent.from_properties(\n    \"reformate\", SG=0.80, RON=98.0, MON=88.0, RVP_psi=3.5, S_ppm=1.0,\n    olefins_vol=1.0, aromatics_vol=65.0)\n# ... fcc, alkylate, butane likewise\n\npool = BlendPool(\"gasoline\")                 # default specs: RON, MON, RVP, S\nres = pool([reformate, fcc, alkylate, butane], recipe=[0.35, 0.35, 0.25, 0.05])\nres.properties[\"MON\"], res.margins[\"MON >= 82\"]\n\npool.linear_blend_error(components, recipe)  # nonlinear minus linear-by-volume\npool.backoff(components, recipe, exact=(\"RVP_psi\", \"S_ppm\"))\npool.spec_violations(components, recipe, temperature=0.05)   # smooth max(-m, 0)\npool.as_block(components)                    # a difflow.planning.Block\n```\n\nLike `difflow.planning`, this is a library rather than a set of GUI palette operations. It registers no `difflow.plugins` entry point. A pool is called with a recipe and returns properties and margins, which is not the stream-in/stream-out shape a palette unit has.\n\nExample: `examples/33_refinery_gasoline_blending.ipynb`. Tests: `tests/refinery/test_blending.py`."
+  },
+  {
+   "anchor": "components-property-mode-and-stream-mode",
+   "heading": "Components: property mode and stream mode",
+   "path": "Refinery Unit Operations > Product blending > Components: property mode and stream mode",
+   "source": "unit-operations-refinery.md",
+   "targets": [],
+   "text": "A `BlendComponent` is built one of two ways:\n\n- **`from_properties(name, SG=..., RON=..., ...)`**: measured or unit-reported properties only. This is enough for every *blended* property.\n- **`from_stream(name, stream, characterization, **overrides)`**: a difflow stream of pseudocomponent molar flows on a shared `BlendCharacterization`. The composition gives `SG`, sulfur, nitrogen, PNA and a Raoult RVP. Overrides (a reformer's reported RON, say) take precedence. This mode adds:\n  - the product **stream**, with an exact mass and volume balance;\n  - the properties only composition can give: distillation and cetane index;\n  - the Raoult RVP of the blend itself.\n\nOne pool takes one mode. Mixing the two raises an error rather than producing a product stream that is missing some components' mass.\n\n**Volume basis.** Volumes are ideal-mixing volumes at 15 \u00b0C from `SG` (`rho = SG * 999.10 kg/m^3`). The product volume is the sum of the component volumes, and the product `SG` is the volume average. Both are tested to round-off against the product stream's own composition.\n\nRecipes can be given as `basis=\"volume_fraction\"` (the default), `\"volume_flow\"`, or `\"split\"`. A split is the fraction of each component stream's available volume sent to the pool, which is the natural lever when the pool sits in a flowsheet."
+  },
+  {
+   "anchor": "blending-rules",
+   "heading": "Blending rules",
+   "path": "Refinery Unit Operations > Product blending > Blending rules",
+   "source": "unit-operations-refinery.md",
+   "targets": [],
+   "text": "| Property | Key | Rule (default first) | Source |\n|---|---|---|---|\n| RON, MON | `RON`, `MON` | Ethyl RT-70 interaction model; or linear by volume | Healy, Maassen & Peterson (1959), Ethyl report RT-70 |\n| RVP | `RVP_psi` | RVP^1.25 index by volume; Raoult on the pseudocomponents; or linear | Gary, Handwerk & Kaiser, product blending chapter |\n| Sulfur, nitrogen, CCR | `S_ppm`, `N_ppm`, `CCR_wt` | by mass | - |\n| Aromatics, olefins, benzene, PNA, smoke point | `*_vol`, `smoke_mm` | by volume | - |\n| Flash point | `flash_C` | Hu-Burns index, `log10 BI = -6.1188 + 2414/(T - 42.6)` (K), by volume | Hu & Burns (1970); identical to Wickey-Chittenden in \u00b0F |\n| Cloud, pour point | `cloud_C`, `pour_C` | `BI = T^n` (K), n = 1/0.05 and 1/0.08 | Hu & Burns (1970) |\n| Freeze point, CFPP | `freeze_C`, `CFPP_C` | `BI = T^n`, cloud-type and pour-type exponents | approximation, override with `rules={\"freeze_C_exponent\": ...}` |\n| Viscosity | `viscosity_cSt` | Refutas VBN `14.534 ln ln(nu + 0.8) + 10.975`, by mass | Refutas, as given in Maples (2000) |\n| Distillation | `E70_tbp`, `E100_tbp`, `T{10,50,90,95}_d86_C` | from the blend's composition: smoothed TBP, then Riazi-Daubert TBP->D86 | Riazi & Daubert (1986) |\n| Cetane index | `cetane_index` | ASTM D4737 (default) or D976 on the blend's density and D86 points; computed, never blended | ASTM D4737, D976 |\n\nChoose rules per property with `BlendPool(rules={\"octane\": \"volume\", \"RVP_psi\": \"raoult\", \"cetane\": \"d976\"})`.\n\nThe RT-70 corrections are all *spreads*: covariances and variances across the components of sensitivity, olefins and aromatics. The model therefore reduces exactly to the linear blend when the components agree. The coefficients are the published 75-blend fit (`a1 = 0.03224`, `a2 = 0.00101`, `a3 = 0`, `b1 = 0.04450`, `b2 = 0.00081`, `b3 = -0.0645`, the last on the squared aromatic spread / 1e4), as restated in the gasoline-blending literature. They live in `EthylRT70` and can be refitted. On a reformate/FCC pool the MON correction is several octane numbers, so check them against your own blend data."
+  },
+  {
+   "anchor": "specs-and-margins",
+   "heading": "Specs and margins",
+   "path": "Refinery Unit Operations > Product blending > Specs and margins",
+   "source": "unit-operations-refinery.md",
+   "targets": [],
+   "text": "`BlendSpec(property, op, limit, scale=1.0)`. The margin is `value - limit` for `>=` and `limit - value` for `<=`, divided by `scale`, so **positive means on spec**. `PRODUCT_SPECS` holds illustrative defaults for each product: US regular summer gasoline, Jet A, ULSD S15, and VLSFO RMG 380. Pass your own specs for anything real.\n\n- `spec_margins(components, recipe)` returns the margin vector, smooth in everything. With `weighted=True` it returns `V * margin` instead. A property is intensive, so it is 0/0 at an empty pool. The weighted form is the same constraint wherever `V > 0`, stays finite at zero, and is the form an LP's blending rows take. Use it as the constraint for an optimizer over volume flows.\n- `spec_violations(..., temperature=t)` returns `max(-margin, 0)`, or its softplus `t * logaddexp(-margin/t, 0)`. The smooth form is within `t ln 2` of the kink and its derivative at an active spec is exactly `-1/2`. The branchless `max(u,0) + log1p(exp(-|u|))` has the same value and a derivative of zero there; see the CVaR note in `difflow.stochastic`."
+  },
+  {
+   "anchor": "linear-blend-error-and-back-off",
+   "heading": "Linear blend error and back-off",
+   "path": "Refinery Unit Operations > Product blending > Linear blend error and back-off",
+   "source": "unit-operations-refinery.md",
+   "targets": [],
+   "text": "`linear_properties` is the planning-LP view: every property linear by volume. `linear_blend_error` is nonlinear minus that view, and it is what a planner's back-off is meant to cover. Pass `exact=(\"RVP_psi\", \"S_ppm\")` for properties the LP already models with the pool's own rule (the RVP index, sulfur by mass). Their error is then zero. `backoff` turns the error into a per-spec tightening, `max(linear margin - nonlinear margin, 0)`.\n\nThe example measures what this means for a gasoline LP:\n\n- without back-off, the LP promises about 50% more margin than any feasible plan, and its recipe is about two MON numbers off spec;\n- the back-off depends on the recipe, so one pass is not enough; successive back-off takes about a dozen passes to settle;\n- on that pool the converged plan coincides with the best local optimum of the nonlinear problem, but a single-start NLP stops at a worse one. Blending is nonconvex, so neither tool is safe alone."
+  },
+  {
+   "anchor": "planning-hook",
+   "heading": "Planning hook",
+   "path": "Refinery Unit Operations > Product blending > Planning hook",
+   "source": "unit-operations-refinery.md",
+   "targets": [],
+   "text": "`pool.as_block(components)` returns a `difflow.planning.Block`. Its levers are the component volume flows (`<name>_V`), bounded by availability in stream mode. Its outputs are the product `volume`, the spec properties, and `margin:<spec>` for every spec. `jax.jacobian` of the block is the delta-vector set: the volume row is the volume balance, all ones, and the property rows are the blend's sensitivities at the linearisation point."
+  },
+  {
+   "anchor": "blend-characterization",
+   "heading": "Blend characterization",
+   "path": "Refinery Unit Operations > Product blending > Blend characterization",
+   "source": "unit-operations-refinery.md",
+   "targets": [],
+   "text": "`BlendCharacterization(names, Tb, SG, MW=, Tc=, Pc=, omega=, qualities=)` is the pseudocomponent grid. Molecular weight and critical constants come from Riazi-Daubert (1980), the acentric factor from Edmister, and vapor pressure from Lee-Kesler. Any of them can be overridden per pseudocomponent by passing a vector with NaN where the correlation should be used. That is how a defined component such as n-butane takes its own constants. `qualities` holds the per-pseudocomponent composition vectors (`S_ppm`, `aromatics_vol`, ...), each averaged on its own basis.\n\nThis is the minimum a blend pool needs to compute properties from composition. It is not an assay model: there is no TBP fitting and no heavy-end extrapolation. The CDU/VDU work is where those belong."
+  },
+  {
+   "anchor": "not-in-scope",
+   "heading": "Not in scope",
+   "path": "Refinery Unit Operations > Product blending > Not in scope",
+   "source": "unit-operations-refinery.md",
+   "targets": [],
+   "text": "- Tank inventory and multi-period scheduling. The pool is steady state, per period.\n- Crude blending ahead of the CDU (assay mixing).\n- A straight-run octane correlation from PNA. Octane is unit-reported or measured.\n\n---\n\n(refinery-limitations)="
+  },
+  {
+   "anchor": "limitations",
+   "heading": "Limitations",
+   "path": "Refinery Unit Operations > Limitations",
+   "source": "unit-operations-refinery.md",
+   "targets": [
+    "refinery-limitations"
+   ],
+   "text": "- **The crude unit is the atmospheric column only.** The preflash drum and preheat train are not modelled; the inlet is the preheat train's outlet. The vacuum unit is separate (above) and is not yet fed from it.\n- **Thermodynamics:** Raoult's law and ideal-gas-path enthalpies. This is the usual model for an atmospheric column at one or two bar; it is not a cubic equation of state.\n- **Equilibrium stages.** There are no tray efficiencies or hydraulics.\n- **Boiling ranges are TBP, not ASTM D86.**\n- **Validation:** checked against its own balances and against finite differences, not yet against a commercial simulator's crude case."
   }
  ],
  "version": 2

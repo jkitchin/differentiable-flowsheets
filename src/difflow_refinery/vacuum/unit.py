@@ -156,6 +156,10 @@ class VacuumColumnParams(ParamsMixin):
     max_iter: int = 150
     tol: float = 1e-11
 
+    def __post_init__(self):
+        # a JSON round trip hands the specs back as a list
+        self.specs = tuple(self.specs)
+
 
 # ---------------------------------------------------------------------------
 # Layout

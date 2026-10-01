@@ -490,6 +490,7 @@ export const OPERATION_SYMBOLS = {
   PowerSplit: 'splitter',
 
   // refinery
+  CrudeDistillationUnit: 'column',
   VacuumColumn: 'column',
 }
 

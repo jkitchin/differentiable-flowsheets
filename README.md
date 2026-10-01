@@ -454,9 +454,27 @@ solve sequentially, by the backward/forward sweep, which agrees with
 Newton to 1e-12. Every benchmark result is asserted against MATPOWER's
 published answer; see `docs/unit-operations-power.md`.
 
+## Refinery: Crude Distillation
+
+`difflow_refinery.CrudeDistillationUnit` is a crude unit: a TBP assay
+characterized into pseudo-components, a fired heater solved together with
+an atmospheric column (side strippers, pumparounds, stripping steam), and
+products reported as yields, API gravities and TBP ranges. Specs follow a
+simulator's degrees of freedom (product rates, pumparound duties,
+overflash), and every yield or duty has an implicit-function gradient with
+respect to the specs, the feed and the assay.
+
+```python
+import difflow_refinery as dr
+
+unit = dr.CrudeUnit(assay, column_params)          # dr.Assay, dr.column.CrudeColumnParams
+res = unit.solve(95_000, T=513.15, P=6e5)          # bbl/d at the furnace inlet
+print(res.table())                                  # yields, API, TBP 5/50/95
+```
+
 ## Refinery: Vacuum Distillation
 
-The `difflow_refinery` plugin characterizes a crude assay into
+`difflow_refinery.vacuum` characterizes a crude assay into
 pseudocomponents and runs a vacuum distillation unit on the atmospheric
 residue. It covers LVGO and HVGO pumparound sections, a wash zone with an
 overflash spec, a flash zone fed by the furnace, and a steam-stripped
@@ -478,6 +496,30 @@ info["properties"]["hvgo"]          # rate, SG, S, N, CCR, Ni+V, TBP 5/50/95
 Any output can be specified in place of the knob that controls it, for
 example an HVGO end point instead of the furnace temperature. See
 `docs/unit-operations-refinery.md`.
+
+## Refinery Product Blending
+
+`difflow_refinery.BlendPool` blends component streams into finished
+products (gasoline, jet, ULSD, fuel oil) with the nonlinear rules
+refiners use: Ethyl RT-70 octane interactions, the RVP^1.25 index (and
+Raoult on the pseudocomponents as a check), Hu-Burns flash and cold-flow
+indices, Refutas viscosity, and distillation and cetane index computed
+from the blend's composition. It is differentiable in the recipe and in
+every component property, and it reports signed spec margins with a
+smooth-violation option.
+
+```python
+from difflow_refinery import BlendPool
+
+pool = BlendPool("gasoline")            # RON, MON, RVP, S specs
+res = pool(components, recipe)          # properties, margins, product stream
+pool.linear_blend_error(components, recipe)   # what an LP's back-off must cover
+pool.as_block(components)               # a difflow.planning.Block
+```
+
+See `docs/unit-operations-refinery.md` and
+`examples/33_refinery_gasoline_blending.ipynb`, which compares the
+nonlinear optimum with a linear-by-volume LP plus successive back-off.
 
 ## Data Reconciliation
 
