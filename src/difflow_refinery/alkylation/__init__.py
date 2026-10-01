@@ -62,6 +62,9 @@ from difflow_refinery.alkylation.unit import (
     AlkylationUnit,
     AlkylationUnitParams,
     ColumnSpec,
+    GeddesShortcutColumn,
+    PRODUCTS,
+    RecycleSplitter,
     IsobutaneMakeup,
     IsobutaneMakeupParams,
     alkylate_properties,
@@ -78,6 +81,6 @@ __all__ = [
     "AlkylationReactorParams", "alkylation_thermo", "feed_stream", "flows_array",
     "ALKYLATE", "ALKYLATION_SPECIES", "HEAVY_END", "INERTS", "OLEFINS",
     "OUTPUT_UNITS", "AlkylationResult", "AlkylationUnit", "AlkylationUnitParams",
-    "ColumnSpec", "IsobutaneMakeup", "IsobutaneMakeupParams", "alkylate_properties",
+    "ColumnSpec", "GeddesShortcutColumn", "PRODUCTS", "RecycleSplitter", "IsobutaneMakeup", "IsobutaneMakeupParams", "alkylate_properties",
     "atom_balance",
 ]

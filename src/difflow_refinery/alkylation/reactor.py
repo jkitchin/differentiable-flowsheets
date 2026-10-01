@@ -350,6 +350,9 @@ class AlkylationReactor:
         x = F_ol * p.olefin_conversion
         xi_A, xi_H = x * (1.0 - h), x * h
         F_out = F + xi_A @ self._nu_A + xi_H @ self._nu_H
+        # The olefins left are set exactly: summed through the routes they come
+        # out at +/- round-off, and a -1e-17 flow trips the columns' checks.
+        F_out = F_out.at[self._olefin_idx].set(F_ol * (1.0 - p.olefin_conversion))
 
         V_reacted = jnp.sum(x * _V60[self._olefin_idx])
         V_alk = jnp.sum((F_out - F) * _ALKYLATE_MASK * _V60)
