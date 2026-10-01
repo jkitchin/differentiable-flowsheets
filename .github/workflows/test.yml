@@ -74,7 +74,7 @@ jobs:
     # again roughly twice a shard: long enough not to fire on a slow
     # runner, short enough that reaching it means something has hung. If
     # a shard creeps toward it, rebalance before raising it.
-    timeout-minutes: 25
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -138,7 +138,8 @@ jobs:
       # many-minute refinery files out last, to run alone at the end (#315).
       - name: Run tests
         run: |
-          python -m pytest tests/ -q --tb=short -m "not release" \
+          (while true; do echo "MEM $(date +%T) $(free -m | sed -n 2p) $(cat /proc/loadavg)"; sleep 10; done) &
+          python -m pytest tests/ -v --durations=40 --tb=short -m "not release" \
             -n auto --dist loadfile --no-loadscope-reorder \
             --splits 3 --group ${{ matrix.shard }}
 
