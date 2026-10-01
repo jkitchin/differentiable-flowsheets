@@ -30,7 +30,7 @@ brackets, so the margin is visible):
 * product specific gravities, 1e-8 (<= 3e-9);
 * sensitivities to furnace outlet temperature, flash-zone pressure and
   stripping steam -- ``jax.jacfwd`` through difflow's solve against central
-  differences of the reference -- 2e-4 relative (<= 4.1e-5, which is the
+  differences of the reference -- 2e-4 relative (<= 4.2e-5, which is the
   differences' own truncation error).
 
 The residual 1e-7-level differences are not noise to be explained away: the
@@ -168,10 +168,17 @@ class TestGradientsAgainstReference:
             o = vc.solve_difflow(comp, FEED, **{knob: x})[-1]["outputs"]
             return jnp.stack([o[k] for k in names])
 
-        J = np.asarray(jax.jacfwd(q)(jnp.asarray(vc.LAYOUT[knob])))
+        x0 = float(vc.LAYOUT[knob])
+        J = np.asarray(jax.jacfwd(q)(jnp.asarray(x0)))
+        base = REF["column"]["outputs"]
         for k, g in zip(names, J):
-            # an absolute floor for the furnace duty's steam sensitivity, which is zero
-            assert g == pytest.approx(fd[k], rel=2e-4, abs=1e-6), (knob, k)
+            # An absolute floor for the furnace duty's steam sensitivity, which
+            # is exactly zero. It has to sit above round-off, which goes as
+            # eps * |output| / |knob|: ~6e-7 W for a 13 MW duty and a steam
+            # ratio of 0.005, so a fixed 1e-6 W passed or failed by an ulp or
+            # two depending on the characterisation.
+            floor = 1e-12 * abs(float(base[k])) / abs(x0)
+            assert g == pytest.approx(fd[k], rel=2e-4, abs=floor), (knob, k)
 
 
 @pytest.mark.slow

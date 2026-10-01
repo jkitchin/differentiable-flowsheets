@@ -431,15 +431,41 @@ Docs: `docs/unit-operations-power.md`. Tests: `tests/power/`.
 
 Docs: `docs/unit-operations-refinery.md`. Tests: `tests/refinery/`.
 
-**difflow_refinery.vacuum** - the vacuum unit, on its own stack (its own
-characterization and stage-network column, separate from the crude unit's;
-the two do not share a component set yet):
-- Assays: `Assay`, `characterize` (cuts 300-800 C + a residue lump),
-  `light_crude`/`heavy_crude` (synthetic), `atmospheric_residue` (an
-  idealized CDU cut standing in for the crude column's residue)
-- Correlations: Twu (Tc, Pc, MW), Kesler-Lee (omega, liquid Cp),
-  Maxwell-Bonnell psat (the D1160 conversion), Riazi-Daubert/Lee-Kesler
-  for comparison, `fit_antoine`
+**One characterization (#301).** `dr.Assay(..., heavy_end=dr.HeavyEnd(),
+sulfur_wt=..., ccr_wt=...)` -> `dr.characterize` is read by all three
+consumers: the CDU, the VDU (`VacuumColumnParams(components=
+char.pseudo_components())`) and the blend pool
+(`BlendCharacterization.from_characterization(char)`). The CDU's `"residue"`
+feeds the VDU in a `Flowsheet` with no re-cut (rename the VDU's outlets:
+`"residue"` is taken). Correlations live once, in
+`difflow_refinery.correlations`; `vacuum.correlations` and the
+`characterization` helpers are re-export shims.
+- Opt-in, and pinned: an assay without a heavy end characterizes bit for
+  bit as before UNDER `method="twu_legacy"` (`tests/refinery/test_cdu_baseline.py`).
+  The default `"twu"` is Twu (1984) as published (alias `"twu_1984"`);
+  `"twu_legacy"` is the old crude-unit MW coding (Rankine constants /
+  sqrt(1.8), aromatics up to 15% low), kept only to reproduce old numbers.
+  Do not make it the default again.
+- Water rides under TWO keys: CDU water/steam is `F_water` (WATER_MW
+  18.015), VDU steam is `F_H2O` (MW_WATER 18.01528). A flowsheet species list
+  is `char.names + ["water", "H2O"]`; a total balance counts each at its own
+  molar mass.
+- `CrudeColumn` solves a column with a near-involatile component (psat at
+  600 K < 0.05 Pa, e.g. the 950 C lump) by a volatility continuation: first
+  with those psats floored, then the true ones from there. Without it Newton
+  stalls from the bubble-point start.
+- `VacuumColumn` sends feed species it does not model (light ends, CDU
+  water) out the overhead, so the flowsheet balance closes.
+
+**difflow_refinery.vacuum** - the vacuum unit (stage-network column) and a
+compatibility view of the shared characterization:
+- Assays: `Assay` (Celsius, wt%; `to_assay()` converts), `characterize`
+  (the shared characterization on a 300-800 C grid + a residue lump, returned
+  in the old shape), `light_crude`/`heavy_crude` (synthetic),
+  `atmospheric_residue` (an idealized CDU cut, for running without a CDU)
+- Correlations: names re-exported from `difflow_refinery.correlations` --
+  Twu (Tc, Pc, MW), Kesler-Lee (omega, liquid Cp), Maxwell-Bonnell psat (the
+  D1160 conversion), Riazi-Daubert/Lee-Kesler for comparison, `fit_antoine`
 - Column: `StageColumn` over a `ColumnLayout` of `Route`s, `StageSpec` trades a
   knob or draw rate for a target on any output; `VacuumColumn` builds the VDU
 
@@ -465,7 +491,35 @@ Invariants encoded in the vacuum stack (do not weaken them):
 - A non-converging solve is usually an infeasible spec (an LVGO end point a
   low-efficiency HVGO bed cannot make), not a solver failure.
 
-Tests: `tests/refinery/test_vacuum*.py`. Example: `examples/34_vacuum_distillation.ipynb`.
+Tests: `tests/refinery/test_vacuum*.py`, `test_heavy_end.py`, `test_one_characterization.py`.
+Examples: `examples/34_vacuum_distillation.ipynb`, `examples/36_crude_to_vacuum.ipynb`.
+
+### Crude Preheat Train (`difflow_refinery.preheat`)
+
+`PreheatedCrudeUnit(assay, column, train)` puts a heat-exchanger train,
+`Desalter` and `PreflashDrum` in front of the atmospheric column and solves
+the coupled problem: an outer Newton on the tear (pumparound return
+temperatures, drum temperature, furnace inlet temperature) around the train's
+own Newton and the EO column, steps clipped to 30 K, implicit gradients.
+`CrudeUnitWithPreheat` is the flowsheet operation. Fouling is a per-exchanger
+`Rf`; `fouling_sensitivity` and `cleaning_ranking` give d(fired duty)/dRf and
+the exchangers ranked by what cleaning them saves.
+
+Invariants (do not weaken them):
+- A pumparound that runs through the train is specified by its rate and its
+  RETURN TEMPERATURE; the spec's value is only the loop's starting guess, the
+  train sets the answer.
+- The LMTD uses `abs()` and a `MIN_DELTA_T` floor (1e-6 K), so a temperature
+  cross is NOT prevented -- an undersized hot stream on a large area pinches
+  and the answer is the floor, not an error. Check the approach temperatures.
+- Free water in the drum is a third phase (all water to vapour or liquid
+  water, never dissolved in the oil).
+- The Ebert-Panchal fouling constants are illustrative, not fitted.
+
+Validation: `tests/refinery/test_preheat_validation.py` (release) against IDAES
+`Flash` and `HeatExchanger` on the same ideal thermo -- an independent
+implementation, not an independent model. Tests: `tests/refinery/test_preheat*.py`.
+Example: `examples/37_crude_preheat_train.ipynb`.
 
 **difflow_refinery.gasplant** - the saturated gas plant (#312), on a cubic EOS
 (PR default, SRK) because Raoult is tens of percent off in K at 10-20 bar:
@@ -509,7 +563,10 @@ Invariants encoded in the module (do not weaken them):
   volume average and the stream-mode mass and volume balances close to
   round-off. Both are tested.
 - Ethyl RT-70 corrections are spreads, so the rule reduces exactly to the
-  linear blend when the components agree -- tested, keep it that way.
+  linear blend when the components agree -- tested, keep it that way. The MON
+  interaction is on MON x SENSITIVITY and b3 = -0.00645 (Maples 2000); the
+  pre-#301 code had MON x olefins and -0.0645, which inflated the MON penalty
+  ten-fold. RVP index and Refutas are tested against published worked examples.
 - Distillation and cetane index are COMPUTED from the blend's composition,
   never blended; the linear view averages each component's own value, and the
   difference is real (T10 especially).
@@ -519,7 +576,8 @@ Invariants encoded in the module (do not weaken them):
   properties are 0/0 at an empty pool.
 - `exact=` in `linear_properties`/`backoff` accepts only rules linear in the
   volumes; it describes an LP.
-- Blending is nonconvex: the example finds two KKT points; do not present a
+- Blending is nonconvex (with the corrected RT-70 every start in the example
+  happens to find one plan, which is not a guarantee); do not present a
   single-start NLP as "the" optimum.
 
 Docs: `docs/unit-operations-refinery.md`. Example:

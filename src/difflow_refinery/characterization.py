@@ -39,6 +39,8 @@ from jax import Array
 
 from difflow.params_mixin import ParamsMixin
 from difflow.streams import get_flow_array
+from difflow_refinery import correlations as _corr
+from difflow_refinery.correlations import edmister_omega, lee_kesler_psat  # noqa: F401
 
 jax.config.update("jax_enable_x64", True)
 
@@ -54,67 +56,23 @@ R_GAS = 8.314462618
 ATM = 101325.0
 PSI = 6894.757293168
 
-_K_TO_R = 1.8
+# The correlations themselves live in difflow_refinery.correlations (#301);
+# these are the names the blending pool has always exported.
 
 
 def riazi_daubert_mw(Tb: Array, SG: Array) -> Array:
-    """Molecular weight (g/mol) from Riazi & Daubert (1980).
-
-    ``MW = 4.5673e-5 Tb^2.1962 SG^-1.0164`` with ``Tb`` in degR (Riazi
-    MNL50 Ch. 2); intended for MW ~70-300.
-
-    Args:
-        Tb: Normal boiling point (K).
-        SG: Specific gravity at 15 degC.
-    """
-    Tb_R = Tb * _K_TO_R
-    return 4.5673e-5 * Tb_R ** 2.1962 * SG ** -1.0164
+    """Molecular weight (g/mol), Riazi & Daubert (1980): ``4.5673e-5 Tb^2.1962 SG^-1.0164``, Tb in degR."""
+    return _corr.riazi_daubert_1980(Tb, SG)[0]
 
 
 def riazi_daubert_tc(Tb: Array, SG: Array) -> Array:
-    """Critical temperature (K) from Riazi & Daubert (1980).
-
-    ``Tc = 24.2787 Tb^0.58848 SG^0.3596``, both temperatures in degR.
-    """
-    Tb_R = Tb * _K_TO_R
-    return 24.2787 * Tb_R ** 0.58848 * SG ** 0.3596 / _K_TO_R
+    """Critical temperature (K), Riazi & Daubert (1980): ``24.2787 Tb^0.58848 SG^0.3596``, degR."""
+    return _corr.riazi_daubert_1980(Tb, SG)[1]
 
 
 def riazi_daubert_pc(Tb: Array, SG: Array) -> Array:
-    """Critical pressure (Pa) from Riazi & Daubert (1980).
-
-    ``Pc = 3.12281e9 Tb^-2.3125 SG^2.3201`` with ``Tb`` in degR and ``Pc``
-    in psia.
-    """
-    Tb_R = Tb * _K_TO_R
-    return 3.12281e9 * Tb_R ** -2.3125 * SG ** 2.3201 * PSI
-
-
-def edmister_omega(Tb: Array, Tc: Array, Pc: Array) -> Array:
-    """Acentric factor from Edmister (1958).
-
-    ``omega = 3/7 * log10(Pc / 1 atm) / (Tc/Tb - 1) - 1``.
-    """
-    return 3.0 / 7.0 * jnp.log10(Pc / ATM) / (Tc / Tb - 1.0) - 1.0
-
-
-def lee_kesler_psat(T: Array, Tc: Array, Pc: Array, omega: Array) -> Array:
-    """Vapor pressure (Pa) from the Lee-Kesler (1975) correlation.
-
-    ``ln Pr = f0(Tr) + omega f1(Tr)`` with
-
-    * ``f0 = 5.92714 - 6.09648/Tr - 1.28862 ln Tr + 0.169347 Tr^6``
-    * ``f1 = 15.2518 - 15.6875/Tr - 13.4721 ln Tr + 0.43577 Tr^6``
-
-    Heavy pseudocomponents at gasoline-test
-    temperatures sit at ``Tr ~ 0.4`` where the value is tiny; that is the
-    correct answer for an RVP, not a numerical problem.
-    """
-    Tr = T / Tc
-    lnTr = jnp.log(Tr)
-    f0 = 5.92714 - 6.09648 / Tr - 1.28862 * lnTr + 0.169347 * Tr ** 6
-    f1 = 15.2518 - 15.6875 / Tr - 13.4721 * lnTr + 0.43577 * Tr ** 6
-    return Pc * jnp.exp(f0 + omega * f1)
+    """Critical pressure (Pa), Riazi & Daubert (1980): ``3.12281e9 Tb^-2.3125 SG^2.3201`` psia, degR."""
+    return _corr.riazi_daubert_1980(Tb, SG)[2]
 
 
 @dataclass
@@ -173,6 +131,72 @@ class BlendCharacterization(ParamsMixin):
         self.qualities = {k: jnp.asarray(v, dtype=jnp.float64)
                           for k, v in self.qualities.items()}
 
+    #: Species a refinery stream may carry that are not blend components:
+    #: the crude unit's decanted/stripping water (``F_water``) and the
+    #: vacuum column's steam (``F_H2O``). :meth:`flows` ignores them --
+    #: water is drained from a product tank, not blended.
+    WATER_SPECIES = ("water", "H2O")
+
+    @classmethod
+    def from_characterization(cls, char, contaminants: bool | None = None
+                              ) -> "BlendCharacterization":
+        """The blend grid of a crude-unit :class:`~difflow_refinery.assay.Characterization`.
+
+        So the crude and vacuum units' product streams -- whose species are
+        ``char.names`` -- go straight into :meth:`BlendComponent.from_stream`
+        with the properties those units ran on, rather than re-estimated
+        from Riazi-Daubert on a grid of their own.
+
+        * ``Tb``, ``SG`` and ``MW`` are the characterization's, light ends
+          included (their constants from the column's light-end table).
+        * ``Tc``, ``Pc`` and the acentric factor are the ones the columns'
+          Lee-Kesler vapour pressure uses: for a cut that is ``omega_vp``,
+          which puts ``psat(Tb)`` at one atmosphere, so the pool's Raoult
+          RVP sees the same volatility the column did.
+        * The per-component contaminants become the pool's quality vectors:
+          ``S_ppm`` and ``N_ppm`` (wppm) and ``CCR_wt`` (wt%), all
+          mass-averaged. Ni+V and asphaltenes have no blending rule in the
+          pool and are left out.
+
+        Args:
+            char: The characterization.
+            contaminants: Include the quality vectors. ``None`` (default)
+                includes each one the assay actually gave (a vector that is
+                not all zero); ``True`` includes all three; ``False`` none.
+
+        Differentiable: every array is the characterization's, so a blend
+        property computed through this reaches back to the assay.
+        """
+        from difflow_refinery.thermo import LIGHT_ENDS
+
+        rows = [LIGHT_ENDS[n] for n in char.light_names]
+        light = {key: jnp.asarray([r[i] for r in rows], dtype=jnp.float64).reshape(-1)
+                 for i, key in ((1, "Tb"), (2, "Tc"), (3, "Pc"), (4, "omega"))}
+        qualities = {}
+        for key, field_name, scale in (("S_ppm", "sulfur", 1e6), ("N_ppm", "nitrogen", 1e6),
+                                       ("CCR_wt", "ccr", 100.0)):
+            vec = jnp.asarray(getattr(char, field_name), dtype=jnp.float64) * scale
+            if contaminants is None:
+                try:
+                    keep = bool(np.any(np.asarray(vec) != 0.0))
+                except (jax.errors.ConcretizationTypeError,
+                        jax.errors.TracerArrayConversionError):
+                    keep = True
+            else:
+                keep = bool(contaminants)
+            if keep:
+                qualities[key] = vec
+        return cls(
+            names=list(char.names),
+            Tb=jnp.concatenate([light["Tb"], jnp.asarray(char.Tb)]),
+            SG=jnp.asarray(char.component_SG),
+            MW=jnp.asarray(char.component_MW),
+            Tc=jnp.concatenate([light["Tc"], jnp.asarray(char.Tc)]),
+            Pc=jnp.concatenate([light["Pc"], jnp.asarray(char.Pc)]),
+            omega=jnp.concatenate([light["omega"], jnp.asarray(char.omega_vp)]),
+            qualities=qualities,
+        )
+
     @property
     def n(self) -> int:
         """Number of pseudocomponents."""
@@ -224,12 +248,15 @@ class BlendCharacterization(ParamsMixin):
     def flows(self, stream: Mapping[str, Any]) -> Array:
         """Molar flows (mol/s) of the grid's pseudocomponents in ``stream``.
 
-        A pseudocomponent missing from the stream counts as zero flow.
+        A pseudocomponent missing from the stream counts as zero flow;
+        water (:attr:`WATER_SPECIES`) is ignored, any other species is an
+        error.
         """
         zero = jnp.asarray(0.0, dtype=jnp.float64)
         present = [n for n in self.names if f"F_{n}" in stream]
         extra = [k for k in stream if k.startswith("F_")
-                 and k[2:] not in self.names]
+                 and k[2:] not in self.names
+                 and k[2:] not in self.WATER_SPECIES]
         if extra:
             raise ValueError(
                 f"stream carries species outside the characterization: "

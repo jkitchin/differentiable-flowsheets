@@ -494,8 +494,25 @@ info["properties"]["hvgo"]          # rate, SG, S, N, CCR, Ni+V, TBP 5/50/95
 ```
 
 Any output can be specified in place of the knob that controls it, for
-example an HVGO end point instead of the furnace temperature. See
-`docs/unit-operations-refinery.md`.
+example an HVGO end point instead of the furnace temperature.
+
+The crude unit, the vacuum column and the blend pool can share one
+characterization. An `Assay` with a `HeavyEnd` is carried into the vacuum
+range, closed by a residue lump, and given sulfur, nitrogen, CCR and metals
+per component. The CDU runs on it, and the VDU's components are
+`char.pseudo_components()`, so the CDU's `"residue"` outlet feeds the VDU
+directly in a `Flowsheet`. The balance closes, and gradients cross the
+connection:
+
+```python
+char = dr.characterize(assay)                        # assay has heavy_end=dr.HeavyEnd()
+cdu = dr.CrudeDistillationUnit(dr.CrudeDistillationUnitParams(assay=assay, column=params))
+vdu = dr.VacuumColumn(dr.VacuumColumnParams(components=char.pseudo_components()))
+grid = dr.BlendCharacterization.from_characterization(char)   # products into the pool
+```
+
+See `docs/unit-operations-refinery.md` and
+`examples/36_crude_to_vacuum.ipynb`.
 
 ## Refinery Product Blending
 

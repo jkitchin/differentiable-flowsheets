@@ -1,21 +1,26 @@
-"""The vacuum distillation unit and the characterization it is built on.
+"""The vacuum distillation unit, and a vacuum view of the shared characterization.
 
-A self-contained stack, kept in its own namespace because the crude unit
-(:mod:`difflow_refinery.assay`, :mod:`difflow_refinery.column`) has a
-characterization and a column of its own:
+The crude unit, this column and the blend pool characterize a crude ONCE,
+with :func:`difflow_refinery.characterize` on an :class:`difflow_refinery.Assay`
+that has a :class:`~difflow_refinery.HeavyEnd` (#301). The vacuum column's
+property table is that characterization's ``pseudo_components()``, so the
+crude unit's residue feeds it as it stands -- same grid, no re-cut -- and
+nothing between the two units interpolates. What is here:
 
-- :mod:`~difflow_refinery.vacuum.assay`: a TBP curve plus bulk properties cut
-  into pseudocomponents, extended past 565 C into the residue on a
-  probability scale, with a residue lump whose properties are set directly,
-  and sulfur / nitrogen / CCR / metals per cut.
-- :mod:`~difflow_refinery.vacuum.correlations`: Twu criticals and molecular
-  weight, Kesler-Lee acentric factor and liquid Cp, Maxwell-Bonnell vapor
-  pressure (the D1160 vacuum conversion).
+- :mod:`~difflow_refinery.vacuum.assay`: a compatibility view. Its
+  ``Assay`` (Celsius, wt%) converts with ``to_assay()``, and its
+  ``characterize`` runs the shared characterization on a vacuum cut grid and
+  returns the old ``(components, yields, light_ends, Kw)`` shape.
+  ``atmospheric_residue`` is an idealized TBP cut for running the column
+  without a crude unit in front of it.
+- :mod:`~difflow_refinery.vacuum.correlations`: the vacuum code's names for
+  correlations that live once, in :mod:`difflow_refinery.correlations`.
 - :mod:`~difflow_refinery.vacuum.column`: a stage-network column
   (Naphtali-Sandholm MESH with routed liquids, Murphree efficiencies and
   entrainment; any output specifiable in place of any knob).
 - :class:`VacuumColumn`: atmospheric residue to LVGO, HVGO, slop and vacuum
-  residue.
+  residue. Feed species it does not model (light ends, the crude unit's
+  water) leave with the overhead, so a flowsheet still balances.
 
 >>> from difflow_refinery import vacuum
 >>> char = vacuum.characterize(vacuum.heavy_crude())

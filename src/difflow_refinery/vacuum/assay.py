@@ -1,53 +1,46 @@
-"""Crude assays and their characterization into pseudocomponents.
+"""The vacuum column's view of a crude: compatibility layer over one assay.
 
-An :class:`Assay` is what a lab reports: a TBP curve (cumulative wt%
-distilled against temperature) and bulk properties. :func:`characterize`
-cuts it into pseudocomponents on a fixed temperature grid and gives each
-one a boiling point, gravity, molecular weight, critical properties and a
-sulfur / nitrogen / CCR / metals content, plus a *residue lump* for
-everything past the last cut.
+The vacuum column used to have its own assay and characterization. Since
+#301 there is one: :class:`difflow_refinery.assay.Assay` with a
+:class:`~difflow_refinery.assay.HeavyEnd` (curve extended on a probability
+scale, a residue lump whose properties are set directly) and contaminants per
+cut, characterised by :func:`difflow_refinery.assay.characterize`, which the
+crude unit, this column and the blending pool all read. What remains here:
 
-Everything is a ``jax.numpy`` function of the assay's numbers, so a
-derivative with respect to one TBP point -- or the bulk gravity, or the
-bulk sulfur -- reaches every pseudocomponent property and from there every
-column result.
+- :class:`PseudoComponents`, the column's property table (now built by
+  :meth:`difflow_refinery.assay.Characterization.pseudo_components`), with
+  :func:`product_properties`, :func:`tbp_point` and
+  :func:`atmospheric_residue` over it.
+- :class:`Assay` -- a thin input adapter in the vacuum column's units (TBP in
+  C against cumulative wt%, contaminants with the old defaults), kept so code
+  written against it runs. It holds data only; :meth:`Assay.to_assay` is the
+  one place it turns into the shared assay, and nothing here characterises.
+  It was kept rather than removed because its differences are units and
+  defaults, not modelling, and every vacuum example, test and notebook used
+  it; a shim costs nothing to keep and breaks nobody.
+- :func:`characterize` -- the shared characterization, sliced to the cuts at
+  and above ``cuts_C[0]`` (the old interface, where everything lighter was
+  reported only as a ``light_ends`` fraction).
 
-The heavy end, which is what a vacuum column is about:
-
-- A TBP curve stops at about 565 C (the end of D5236); a VDU needs
-  pseudocomponents up to 750-800 C. The curve is extended on a *probability
-  scale* -- ``z = Phi^-1(x)`` is close to linear in T for crude oils (a
-  log-normal-like distribution) -- by a least-squares line through the last
-  three points. That is smooth and monotone where a polynomial or a spline
-  in ``x`` is neither. Inside the data the curve is a monotone cubic in
-  ``z``, C1 at every point, so derivatives with respect to a TBP point are
-  single-valued even where a cut boundary sits on it.
-- Twu's correlations (see :mod:`~difflow_refinery.vacuum.correlations`) are used
-  for every cut and hold up to about 820 C TBP; past that the n-alkane
-  reference has no root. The residue lump is therefore *not* run through
-  them: its boiling point, gravity and molecular weight are set directly
-  (``residue_Tb``, ``residue_sg``, ``residue_mw``), as Riazi recommends for
-  the non-distillable end.
-- Gravity follows a constant Watson K fitted so the whole crude matches its
-  bulk SG -- the classical assumption, and exact for the bulk number.
-- Contaminants follow default boiling-point shapes (logistic in T, rising
-  with boiling point: sulfur gradually, nitrogen later, CCR and metals
-  almost only in the residue), scaled so each matches the bulk assay value.
-  Any of them can be replaced by a measured curve.
+What changed numerically with the merge, so that old numbers can be compared:
+each cut's Tb is the mean TBP temperature over the cut (it was the
+mid-percent temperature); the crude's Watson K is fitted over the
+characterization's own cuts and lump in closed form (it was fitted over a
+separate 10 C grid); and contaminants are scaled over the cuts themselves.
 """
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field
-from functools import partial
 from typing import Optional, Sequence
 
 import jax
 import jax.numpy as jnp
 import numpy as np
-from jax.scipy.special import ndtr, ndtri
 
-from difflow_refinery.vacuum import correlations as corr
+from difflow_refinery import assay as _assay
+from difflow_refinery import correlations as corr
 
 C_TO_K = 273.15
 
@@ -97,7 +90,38 @@ class Assay:
     def with_tbp_point(self, index: int, temperature_C):
         """A copy with one TBP temperature replaced (for sensitivities)."""
         T = jnp.asarray(self.tbp_C, dtype=float).at[index].set(temperature_C)
-        return _replace(self, tbp_C=T)
+        return dataclasses.replace(self, tbp_C=T)
+
+    def to_assay(self, heavy_end: "_assay.HeavyEnd | None" = None) -> "_assay.Assay":
+        """The same data as a :class:`difflow_refinery.assay.Assay`.
+
+        Mass basis, kelvin, a :class:`~difflow_refinery.assay.HeavyEnd`
+        (default settings unless one is given) and the contaminants. Curves
+        given as ``(T_C, value)`` rows become ``(T_K, value)`` columns.
+        """
+        def curve(rows):
+            if rows is None:
+                return None
+            arr = jnp.asarray(rows, dtype=float)
+            return (arr[:, 0] + C_TO_K, arr[:, 1])
+
+        return _assay.Assay(
+            tbp_percent=self.tbp_wt,
+            tbp_T=jnp.asarray(self.tbp_C, dtype=float) + C_TO_K,
+            basis="mass",
+            sg=self.sg,
+            api=self.api if self.sg is None else None,
+            name=self.name,
+            heavy_end=_assay.HeavyEnd() if heavy_end is None else heavy_end,
+            sulfur_wt=self.sulfur_wt,
+            nitrogen_wppm=self.nitrogen_wppm,
+            ccr_wt=self.ccr_wt,
+            nickel_vanadium_wppm=self.nickel_vanadium_wppm,
+            asphaltenes_wt=self.asphaltenes_wt,
+            sulfur_curve=curve(self.sulfur_curve),
+            nitrogen_curve=curve(self.nitrogen_curve),
+            ccr_curve=curve(self.ccr_curve),
+        )
 
 
 jax.tree_util.register_dataclass(
@@ -107,11 +131,6 @@ jax.tree_util.register_dataclass(
                  "sulfur_curve", "nitrogen_curve", "ccr_curve"],
     meta_fields=["name"],
 )
-
-
-def _replace(obj, **kw):
-    import dataclasses
-    return dataclasses.replace(obj, **kw)
 
 
 def light_crude() -> Assay:
@@ -149,77 +168,27 @@ def heavy_crude() -> Assay:
 # ---------------------------------------------------------------------------
 
 
-def _tbp_spline(assay: Assay, n_tail: int = 3):
-    """Knots, values and slopes of the TBP curve on the probability scale.
-
-    ``z = Phi^-1(x)`` against T, as a monotone cubic Hermite (Fritsch-Butland
-    weighted-harmonic slopes) inside the data and straight lines outside,
-    whose slopes are least-squares fits to the first / last ``n_tail``
-    points and are also the Hermite end slopes -- so the curve is C1
-    everywhere, including at every data point.
-
-    C1 matters here: the default cut grid puts a cut boundary *on* every
-    assay point (both are multiples of 50 C), and a piecewise-linear curve
-    has a kink exactly there -- a derivative with respect to that TBP point
-    then has two values, and central differences average them.
-    """
-    Td = jnp.asarray(assay.tbp_C, dtype=float)
-    zd = ndtri(jnp.asarray(assay.tbp_wt, dtype=float) / 100.0)
-
-    def ls_slope(t, z):
-        tm, zm = jnp.mean(t), jnp.mean(z)
-        return jnp.sum((t - tm) * (z - zm)) / jnp.sum((t - tm) ** 2)
-
-    h = jnp.diff(Td)
-    delta = jnp.diff(zd) / h
-    w1 = 2.0 * h[1:] + h[:-1]
-    w2 = h[1:] + 2.0 * h[:-1]
-    d_int = (w1 + w2) / (w1 / delta[:-1] + w2 / delta[1:])
-    # end slopes, capped at Fritsch-Carlson's 3x so the end intervals stay monotone
-    s_lo = jnp.minimum(ls_slope(Td[:n_tail], zd[:n_tail]), 3.0 * delta[0])
-    s_hi = jnp.minimum(ls_slope(Td[-n_tail:], zd[-n_tail:]), 3.0 * delta[-1])
-    d = jnp.concatenate([s_lo[None], d_int, s_hi[None]])
-    return Td, zd, d
+def _as_assay(assay) -> "_assay.Assay":
+    if isinstance(assay, Assay):
+        return assay.to_assay()
+    if assay.heavy_end is None:
+        raise ValueError("the vacuum column needs an assay with a heavy_end")
+    return assay
 
 
-def _hermite(T, Td, zd, d):
-    n = Td.shape[0]
-    k = jnp.clip(jnp.searchsorted(Td, T, side="right") - 1, 0, n - 2)
-    h = Td[k + 1] - Td[k]
-    t = (T - Td[k]) / h
-    t2, t3 = t * t, t * t * t
-    inside = ((2 * t3 - 3 * t2 + 1) * zd[k] + (t3 - 2 * t2 + t) * h * d[k]
-              + (-2 * t3 + 3 * t2) * zd[k + 1] + (t3 - t2) * h * d[k + 1])
-    up = zd[-1] + d[-1] * (T - Td[-1])
-    dn = zd[0] + d[0] * (T - Td[0])
-    return jnp.where(T > Td[-1], up, jnp.where(T < Td[0], dn, inside))
-
-
-def tbp_fraction(assay: Assay, T_C, n_tail: int = 3):
+def tbp_fraction(assay, T_C, n_tail: int = 3):
     """Cumulative mass fraction distilled at ``T_C`` (C), any temperature.
 
-    See :func:`_tbp_spline`: a C1 monotone curve in ``Phi^-1(x)`` through the
-    data, extended by straight lines on the probability scale.
+    The shared assay's probability-scale curve
+    (:func:`difflow_refinery.assay.tbp_curve`); ``n_tail`` is kept for
+    compatibility and read from the assay's heavy end.
     """
-    Td, zd, d = _tbp_spline(assay, n_tail)
-    return ndtr(_hermite(jnp.asarray(T_C, dtype=float), Td, zd, d))
+    return _assay.tbp_curve(_as_assay(assay))(jnp.asarray(T_C, dtype=float) + C_TO_K)
 
 
-def tbp_temperature(assay: Assay, fraction, n_tail: int = 3):
-    """Inverse of :func:`tbp_fraction`: TBP temperature (C) at a mass fraction.
-
-    Newton on the Hermite curve from the piecewise-linear inverse (unrolled,
-    so it differentiates like the forward curve).
-    """
-    Td, zd, d = _tbp_spline(assay, n_tail)
-    z = ndtri(jnp.asarray(fraction, dtype=float))
-    T = jnp.where(z > zd[-1], Td[-1] + (z - zd[-1]) / d[-1],
-                  jnp.where(z < zd[0], Td[0] + (z - zd[0]) / d[0],
-                            jnp.interp(z, zd, Td)))
-    for _ in range(8):
-        val, slope = jax.jvp(lambda t: _hermite(t, Td, zd, d), (T,), (jnp.ones_like(T),))
-        T = T - (val - z) / slope
-    return T
+def tbp_temperature(assay, fraction, n_tail: int = 3):
+    """Inverse of :func:`tbp_fraction`: TBP temperature (C) at a mass fraction."""
+    return _assay.tbp_curve(_as_assay(assay)).invert(fraction) - C_TO_K
 
 
 # ---------------------------------------------------------------------------
@@ -277,13 +246,13 @@ class PseudoComponents:
 @jax.tree_util.register_dataclass
 @dataclass
 class Characterization:
-    """Result of :func:`characterize`.
+    """Result of :func:`characterize`: the cuts at and above ``cuts_C[0]``.
 
     Attributes:
-        components: The pseudocomponent property table.
+        components: The pseudocomponent property table (residue lump last).
         yields: Mass fraction of the whole crude in each pseudocomponent.
-        light_ends: Mass fraction of the crude boiling below the first cut
-            (not represented by any pseudocomponent here).
+        light_ends: Mass fraction of the crude below ``cuts_C[0]`` (in the
+            shared characterization, but not in this view).
         Kw: The crude's Watson K (fitted to the bulk gravity).
     """
 
@@ -299,22 +268,14 @@ def vacuum_cuts(start_C: float = 300.0, stop_C: float = 800.0,
     return np.arange(start_C, stop_C + 0.5 * step_C, step_C)
 
 
-def _logistic(T_C, center, width):
-    return 1.0 / (1.0 + jnp.exp(-(T_C - center) / width))
-
-
-# default contaminant shapes: (center C, width C) of a logistic in TBP
-_SHAPES = {
-    "sulfur": (400.0, 80.0),
-    "nitrogen": (500.0, 70.0),
-    "ccr": (650.0, 50.0),
-    "nickel_vanadium": (760.0, 30.0),
-    "asphaltenes": (740.0, 35.0),
-}
+def _take(components: PseudoComponents, start: int) -> PseudoComponents:
+    arrays = {f.name: getattr(components, f.name)[start:]
+              for f in dataclasses.fields(components) if f.name != "names"}
+    return PseudoComponents(names=components.names[start:], **arrays)
 
 
 def characterize(
-    assay: Assay,
+    assay,
     cuts_C=None,
     residue_Tb_C: float = 950.0,
     residue_sg=None,
@@ -322,125 +283,49 @@ def characterize(
     fine_step_C: float = 10.0,
     fine_start_C: float = 0.0,
 ) -> Characterization:
-    """Cut an assay into pseudocomponents plus a residue lump.
+    """The shared characterization on a vacuum cut grid (compatibility).
+
+    Cuts the assay with :func:`difflow_refinery.assay.characterize` at
+    ``cuts_C`` -- the last boundary is the heavy end's ``T_max`` and the
+    lump follows -- and returns the cuts from ``cuts_C[0]`` up. Material
+    below ``cuts_C[0]`` is in the characterization as one more cut (or
+    more, where ``cuts_C`` starts below the first TBP point) and is reported
+    here as ``light_ends``.
 
     Args:
-        assay: The crude assay.
-        cuts_C: Cut boundaries (C); ``len(cuts_C) - 1`` pseudocomponents.
-            Default :func:`vacuum_cuts`.
-        residue_Tb_C: Equivalent boiling point given to the residue lump.
+        assay: A :class:`Assay` or a :class:`difflow_refinery.assay.Assay`
+            with a heavy end (whose ``T_max`` and residue settings are then
+            replaced by these arguments).
+        cuts_C: Cut boundaries (C). Default :func:`vacuum_cuts`.
+        residue_Tb_C: Equivalent boiling point of the residue lump (C).
         residue_sg: Gravity of the lump; default from the crude's Watson K.
-        residue_mw: Molecular weight of the lump (set directly; Twu and
-            Riazi-Daubert have no root or no validity there).
-        fine_step_C: Grid spacing for fitting the bulk-property balances
-            (Watson K, contaminant scales) over the *whole* crude.
-        fine_start_C: Bottom of that grid; the crude below it is one lump.
-
-    Returns:
-        :class:`Characterization`.
+        residue_mw: Molecular weight of the lump.
+        fine_step_C, fine_start_C: Ignored; kept for signature compatibility
+            (the Watson K is now fitted over the cuts themselves).
     """
-    cuts_np = np.asarray(vacuum_cuts() if cuts_C is None else cuts_C, dtype=float)
-    return _characterize(assay, tuple(float(c) for c in cuts_np), residue_Tb_C,
-                         residue_sg, residue_mw, float(fine_step_C),
-                         float(fine_start_C))
+    ua = _as_assay(assay)
+    cuts = np.asarray(vacuum_cuts() if cuts_C is None else cuts_C, dtype=float) + C_TO_K
+    pts = cuts[:-1]
+    if not _assay._traced((ua.tbp_T, ua.tbp_percent)):
+        x_le = sum(float(v) for v in ua.light_ends.values()) / 100.0
+        T_start = float(_assay._heavy_start(ua, _assay.tbp_curve(ua), x_le))
+        pts = pts[pts > T_start + 1e-6]
+    i0 = int(np.sum(pts <= cuts[0]))
+    he = dataclasses.replace(
+        ua.heavy_end, T_max=float(cuts[-1]),
+        residue_Tb=jnp.asarray(residue_Tb_C, dtype=float) + C_TO_K,
+        residue_mw=residue_mw, residue_sg=residue_sg,
+        lump_span=4.0 * (cuts[-1] - cuts[-2]) / (cuts[-1] - (pts[-1] if pts.size else cuts[-2])))
+    full = _characterize_cached(dataclasses.replace(ua, heavy_end=he), tuple(float(p) for p in pts))
+    k = len(full.light_names)
+    yields = full.mass_fraction[k + i0:]
+    comps = _take(full.pseudo_components(), i0)
+    return Characterization(components=comps, yields=yields,
+                            light_ends=1.0 - jnp.sum(yields), Kw=full.Kw[i0])
 
 
-@partial(jax.jit, static_argnums=(1, 5, 6))
-def _characterize(assay, cuts_key, residue_Tb_C, residue_sg, residue_mw,
-                  fine_step_C, fine_start_C):
-    cuts_np = np.asarray(cuts_key)
-    cuts = jnp.asarray(cuts_np)
-    lo, hi = cuts[:-1], cuts[1:]
-    names = tuple(f"PC{int(round(a))}_{int(round(b))}"
-                  for a, b in zip(cuts_np[:-1], cuts_np[1:])) + ("RESID",)
-
-    def cut_set(lo, hi):
-        x_lo, x_hi = tbp_fraction(assay, lo), tbp_fraction(assay, hi)
-        w = x_hi - x_lo
-        Tb_C = tbp_temperature(assay, 0.5 * (x_lo + x_hi))  # mid-percent
-        return w, Tb_C
-
-    w, Tb_C = cut_set(lo, hi)
-    x_end = tbp_fraction(assay, cuts[-1])
-    w_res = 1.0 - x_end
-    light = tbp_fraction(assay, cuts[0])
-
-    # Watson K from the bulk gravity, over the whole crude on a fine grid
-    # (a static grid: the TBP temperatures may be traced)
-    nfine = int(np.ceil((cuts_np[-1] - fine_start_C) / fine_step_C))
-    fine = jnp.linspace(fine_start_C, cuts_np[-1], nfine + 1)
-    wf, Tbf_C = cut_set(fine[:-1], fine[1:])
-    wf0 = tbp_fraction(assay, fine[0])          # below the fine grid
-    Tb0_C = tbp_temperature(assay, 0.5 * wf0)
-    wf = jnp.concatenate([wf0[None], wf, w_res[None]])
-    Tbf_K = jnp.concatenate([Tb0_C[None], Tbf_C,
-                             jnp.asarray([residue_Tb_C], dtype=float)]) + C_TO_K
-    cbrt = (1.8 * Tbf_K) ** (1.0 / 3.0)
-    # 1/SG_bulk = sum w_i / SG_i = Kw^-1 ... no: SG_i = cbrt_i / Kw
-    #   => 1/SG_bulk = Kw * sum(w_i / cbrt_i)
-    Kw = 1.0 / (assay.bulk_sg() * jnp.sum(wf / cbrt))
-    Tbf_C_all = Tbf_K - C_TO_K
-
-    Tb = Tb_C + C_TO_K
-    SG = corr.sg_from_watson_k(Tb, Kw)
-    twu = corr.twu_critical_properties(Tb, SG)
-    om = corr.lee_kesler_acentric(Tb, twu["Tc"], twu["Pc"], Kw)
-
-    res_Tb = jnp.asarray(residue_Tb_C, dtype=float) + C_TO_K
-    res_SG = (corr.sg_from_watson_k(res_Tb, Kw) if residue_sg is None
-              else jnp.asarray(residue_sg, dtype=float))
-    # lump criticals: Twu at the last cut's boundary (as far as it goes),
-    # carried to the lump's Tb at constant Tb/Tc; Pc and omega stay at the
-    # edge values. Placeholders, reported for completeness -- the lump's VLE
-    # and enthalpy use only Tb, SG, Kw and MW.
-    T_edge = cuts[-1] + C_TO_K
-    edge = corr.twu_critical_properties(T_edge, corr.sg_from_watson_k(T_edge, Kw))
-    res_om = corr.lee_kesler_acentric(T_edge, edge["Tc"], edge["Pc"], Kw)
-    res_Tc = edge["Tc"] * res_Tb / T_edge
-
-    # contaminants: shape(T) scaled to the bulk number over the whole crude
-    Tb_all_C = jnp.concatenate([Tb_C, jnp.asarray([residue_Tb_C], dtype=float)])
-    bulk = {
-        "sulfur": assay.sulfur_wt / 100.0,
-        "nitrogen": assay.nitrogen_wppm * 1e-6,
-        "ccr": assay.ccr_wt / 100.0,
-        "nickel_vanadium": assay.nickel_vanadium_wppm * 1e-6,
-        "asphaltenes": assay.asphaltenes_wt / 100.0,
-    }
-    measured = {"sulfur": (assay.sulfur_curve, 1e-2),
-                "nitrogen": (assay.nitrogen_curve, 1e-6),
-                "ccr": (assay.ccr_curve, 1e-2)}
-    contaminants = {}
-    for key, (center, width) in _SHAPES.items():
-        curve = measured.get(key, (None, None))
-        if curve[0] is not None:
-            arr = jnp.asarray(curve[0], dtype=float)
-            contaminants[key] = jnp.interp(Tb_all_C, arr[:, 0], arr[:, 1]) * curve[1]
-            continue
-        shape_f = _logistic(Tbf_C_all, center, width)
-        scale = bulk[key] / jnp.sum(wf * shape_f)
-        contaminants[key] = jnp.minimum(_logistic(Tb_all_C, center, width) * scale,
-                                        0.9)
-
-    def cat(a, b):
-        return jnp.concatenate([a, jnp.atleast_1d(b)])
-
-    span = cuts[-1] - cuts[-2]
-    comps = PseudoComponents(
-        Tb=cat(Tb, res_Tb),
-        SG=cat(SG, res_SG),
-        MW=cat(twu["MW"], jnp.asarray(residue_mw, dtype=float)),
-        Kw=jnp.full(len(names), Kw),
-        Tc=cat(twu["Tc"], res_Tc),
-        Pc=cat(twu["Pc"], edge["Pc"]),
-        omega=cat(om, res_om),
-        T_lo=cat(lo, cuts[-1]) + C_TO_K,
-        T_hi=cat(hi, cuts[-1] + 4.0 * span) + C_TO_K,
-        names=names,
-        **contaminants,
-    )
-    return Characterization(components=comps, yields=cat(w, w_res),
-                            light_ends=light, Kw=Kw)
+def _characterize_cached(ua, pts):
+    return _assay.characterize(ua, cut_points=pts, method="twu")
 
 
 # ---------------------------------------------------------------------------
@@ -514,7 +399,10 @@ def atmospheric_residue(
     changes: the vacuum column only sees a stream.
 
     Args:
-        char: The crude's characterization.
+        char: The crude's characterization: the shared
+            :class:`difflow_refinery.assay.Characterization` (light ends are
+            left out -- they leave with the crude column's overhead) or the
+            vacuum view from :func:`characterize`.
         crude_rate_kg_s: Crude charge (kg/s).
         cut_point_C: TBP cut point between AGO and residue (C).
         sharpness_C: Width of the overlap (C).
@@ -524,10 +412,14 @@ def atmospheric_residue(
     Returns:
         A difflow stream ``{"F_<name>": mol/s, ..., "T": K, "P": Pa}``.
     """
-    comps = char.components
+    if isinstance(char, _assay.Characterization):
+        comps = char.pseudo_components()
+        yields = char.mass_fraction[len(char.light_names):]
+    else:
+        comps, yields = char.components, char.yields
     Tb_C = comps.Tb - C_TO_K
     frac = 1.0 / (1.0 + jnp.exp(-(Tb_C - cut_point_C) / sharpness_C))
-    mass = crude_rate_kg_s * char.yields * frac          # kg/s
+    mass = crude_rate_kg_s * yields * frac          # kg/s
     mol = mass / comps.MW * 1000.0                         # mol/s
     stream = {f"F_{n}": mol[i] for i, n in enumerate(comps.names)}
     stream["T"] = jnp.asarray(T_C, dtype=float) + C_TO_K

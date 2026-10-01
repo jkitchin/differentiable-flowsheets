@@ -118,15 +118,27 @@ class EthylRT70(ParamsMixin):
 
     Healy, Maassen & Peterson, "A new approach to blending octanes", API
     Division of Refining, 24th midyear meeting, New York (1959); Ethyl Corp.
-    report RT-70.  The values are the 75-blend fit as restated in the
-    gasoline-blending literature (e.g. Singh, Forbes, Vermeer & Woo,
-    *Comput. Chem. Eng.* 24 (2000) 1027).
+    report RT-70.  The primary source was not reachable (#301); the values
+    are the 75-blend fit as tabulated in Maples, *Petroleum Refinery Process
+    Economics*, 2nd ed., PennWell (2000), reproduced in J. Jechura, "Product
+    Blending & Optimization Considerations", CBEN 409 notes, Colorado School
+    of Mines (2019), slide 6, alongside the 135-blend fit (a1 0.03324,
+    a2 0.00085, b1 0.04285, b2 0.00066, b3 -0.00632).  The same model form
+    is used by Singh, Forbes, Vermeer & Woo, *J. Process Control* 10 (2000)
+    43-58.
+
+    ``b3`` was -0.0645 here until #301: a factor-of-ten transcription error.
+    Maples gives -0.00645 on ``((A^2 - A A)/100)^2``, and the same slides
+    write the 135-blend term out as ``-6.32e-7 (A^2 - A A)^2`` -- i.e.
+    ``-0.00632 / 1e4`` -- which fixes both the digit and the scaling.
+    The MON interaction term is likewise on the *sensitivity*, ``M J``,
+    in both restatements, not on the olefins.
 
     Attributes:
         a1: RON sensitivity interaction coefficient.
         a2: RON olefin-spread coefficient.
         a3: RON aromatic-spread coefficient (zero in the published fit).
-        b1: MON olefin interaction coefficient.
+        b1: MON sensitivity interaction coefficient.
         b2: MON olefin-spread coefficient.
         b3: MON aromatic-spread coefficient (on the squared spread / 1e4).
     """
@@ -136,7 +148,7 @@ class EthylRT70(ParamsMixin):
     a3: float = 0.0
     b1: float = 0.04450
     b2: float = 0.00081
-    b3: float = -0.0645
+    b3: float = -0.00645
 
 
 def ethyl_rt70(v: Array, ron: Array, mon: Array, olefins: Array,
@@ -148,14 +160,18 @@ def ethyl_rt70(v: Array, ron: Array, mon: Array, olefins: Array,
     sensitivity and ``O``, ``A`` the olefin and aromatic contents (vol%)::
 
         RON = r + a1 (rs - r s) + a2 (O^2 - O O) + a3 (A^2 - A A)^2 / 1e4
-        MON = m + b1 (mO - m O) + b2 (O^2 - O O) + b3 (A^2 - A A)^2 / 1e4
+        MON = m + b1 (ms - m s) + b2 (O^2 - O O) + b3 (A^2 - A A)^2 / 1e4
 
     where ``rs`` means the average of the product ``r_i s_i`` and ``r s``
-    the product of the averages.  Every correction is a *spread* (a
-    covariance or variance across the components), so the model reduces
-    exactly to the linear volume blend whenever the components agree --
-    one component, or components with identical sensitivity, olefins and
-    aromatics.  Healy, Maassen & Peterson (1959); see :class:`EthylRT70`.
+    the product of the averages (likewise ``ms``).  Every correction is a
+    *spread* (a covariance or variance across the components), so the
+    model reduces exactly to the linear volume blend whenever the
+    components agree -- one component, or components with identical
+    sensitivity, olefins and aromatics.  The sensitivity terms correct for
+    octanes being rated at compression ratios other than the blend's; the
+    olefin and aromatic terms are the chemical interaction.  Healy,
+    Maassen & Peterson (1959); see :class:`EthylRT70` for where the form
+    and the coefficients were checked.
 
     Args:
         v: Volume fractions (or flows) of the components.
@@ -181,7 +197,7 @@ def ethyl_rt70(v: Array, ron: Array, mon: Array, olefins: Array,
     c = coeffs
     blend_ron = (r_bar + c.a1 * (avg(ron * s) - r_bar * s_bar)
                  + c.a2 * o_spread + c.a3 * a_spread ** 2 / 1e4)
-    blend_mon = (m_bar + c.b1 * (avg(mon * olefins) - m_bar * o_bar)
+    blend_mon = (m_bar + c.b1 * (avg(mon * s) - m_bar * s_bar)
                  + c.b2 * o_spread + c.b3 * a_spread ** 2 / 1e4)
     return blend_ron, blend_mon
 
@@ -192,7 +208,8 @@ def rvp_index_blend(v: Array, rvp: Array, exponent: float = 1.25) -> Array:
     ``RVP_blend = (sum v_i RVP_i^1.25)^(1/1.25)``.  The Chevron blending
     index; Gary, Handwerk & Kaiser, *Petroleum Refining: Technology and
     Economics*, chapter on product blending.  Units cancel,
-    so any pressure unit works.
+    so any pressure unit works.  Reproduced against a published worked
+    example in ``tests/refinery/test_blending.py``.
     """
     v = _normalise(v)
     return jnp.sum(v * jnp.asarray(rvp) ** exponent) ** (1.0 / exponent)
@@ -248,13 +265,25 @@ def flash_point_blend(v: Array, flash_K: Array) -> Array:
     return 42.6 + 2414.0 / (log10_blend + 6.1188)
 
 
-#: Exponents of the power-law temperature indices ``BI = T^n`` (T in K).
+#: Exponents of the power-law temperature indices ``BI = T^n`` (absolute
+#: T; K and degR give the same blend, since a scale factor cancels).
 #: Cloud (n = 1/0.05) and pour (n = 1/0.08) are Hu & Burns (1970), as
-#: restated in Riazi MNL50 Ch. 3.  Freeze point and CFPP have no index of
-#: their own in that source: freeze point is a crystal-*disappearance*
-#: temperature like the cloud point and takes its exponent, and CFPP a
-#: flow-plugging temperature like the pour point and takes that one.  Both
-#: are approximations; override through ``BlendPool(rules=...)``.
+#: restated in Riazi MNL50 Ch. 3.
+#:
+#: Freeze point and CFPP (#301, checked against what could be reached):
+#: Offsite Management Systems, *omsQlibs Blending Quality Models
+#: Equations*, ver. 1.0 (2016), "Freeze Point Temperature", gives a
+#: generic index ``(0.0026415 T_R)^20`` -- n = 20, the cloud-point
+#: exponent, which is what is used here -- and an Ethyl Corp. index whose
+#: default exponent is x = 0.08 (n = 12.5).  The same document's Ethyl
+#: defaults are x = 0.06 for cloud and 0.08 for pour, and its generic pour
+#: index ``exp(-73.0883 + 12.8852 ln T_R)`` is n = 12.89, close to 12.5.
+#: So freeze point has two published exponents, 20 and 12.5; 20 is kept
+#: because freeze point is a crystal-*disappearance* temperature, measured
+#: like the cloud point.  For CFPP no blending index was found in any
+#: source reached; it takes the pour-point exponent as a flow-plugging
+#: temperature, which is an assumption, not a citation.  Override either
+#: through ``BlendPool(rules={"freeze_C_exponent": ...})``.
 TEMPERATURE_INDEX_EXPONENTS = {
     "cloud_C": 1.0 / 0.05,
     "freeze_C": 1.0 / 0.05,
