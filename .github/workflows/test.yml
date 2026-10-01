@@ -133,7 +133,7 @@ jobs:
       # something nobody reads; a failure still prints its own name.
       - name: Run tests
         run: |
-          python -m pytest tests/ -q --tb=short -m "not release" \
+          python -m pytest tests/ -v --durations=40 --tb=short -m "not release" \
             -n auto --dist loadfile \
             --splits 3 --group ${{ matrix.shard }}
 
