@@ -80,10 +80,11 @@ def _max_map_count():
 #:
 #: It scales with the real ceiling, because the ceiling is what it protects.
 #: A fixed 15000 on a 262144-mapping CI runner cleared the caches 19 times
-#: in shard 2 (#315), every one of them at a quarter of the headroom the
-#: kernel actually had, and not every module recompiles anyway: the crude
-#: unit's tests reuse one compiled column across a module, and clearing it
-#: under them cost ``tests/refinery/test_planning.py`` 929 s -> 1150 s.
+#: in shard 2 (#315), each at a small fraction of the headroom the kernel
+#: actually had. And not every module recompiles regardless: the crude-unit
+#: planning tests reuse compiled column cores across tests, and clearing
+#: them mid-module took ``tests/refinery/test_planning.py`` from 929 s to
+#: 1150 s on the runner.
 _MAPPING_BUDGET = 15_000 * _max_map_count() // _DEFAULT_MAX_MAP_COUNT
 
 #: Under ``pytest -n`` every worker is a separate process holding its own
@@ -97,50 +98,18 @@ _MAPPING_BUDGET = 15_000 * _max_map_count() // _DEFAULT_MAX_MAP_COUNT
 #: after every test.
 #:
 #: On CI (``-n auto`` is 2 workers there: the runner's 4 vCPUs are 2
-#: physical cores) the budget comes to 30000 a worker. The bound on memory
-#: there was measured directly, with the mid-module clear switched off
-#: altogether: the heaviest shard peaked at 10.6 GB used of 16 GB, against
-#: 8.7 GB with the old 7500 budget (#315). A clear does not hand memory back
-#: -- resident size stays where it was -- it only stops it climbing, so that
-#: run is an upper bound on any budget.
+#: physical cores) this comes to 30000 a worker. Memory there was measured
+#: rather than assumed (#315). With the mid-module clear switched off
+#: altogether the heaviest per-commit shard peaked at 10.6 GB used of 16 GB,
+#: against 8.7 GB with the old 7500 budget; with this one, 10.8 GB on the
+#: per-commit tier and 11.3 GB on the whole suite (the release tier
+#: included). A clear does not hand memory back -- resident size stays where
+#: it was -- it only stops it climbing, so a larger budget costs headroom
+#: slowly, and that headroom is what to re-measure if a module gets heavier.
 MAPPING_BUDGET = max(
     _MAPPING_BUDGET // int(os.environ.get("PYTEST_XDIST_WORKER_COUNT", 1)),
     2_000,
 )
-
-# --- DIAGNOSTIC (issue #315), removed before merge -------------------------
-import json as _json, time as _time
-if os.environ.get("DIAG_MAPPING_BUDGET"):
-    MAPPING_BUDGET = int(os.environ["DIAG_MAPPING_BUDGET"])
-_DIAG_DIR = os.environ.get("DIAG_CACHE_LOG")
-_DIAG = {"clears": 0}
-
-
-def _diag_meminfo():
-    out = {}
-    try:
-        with open("/proc/self/status") as fh:
-            for line in fh:
-                if line.startswith(("VmRSS", "VmHWM")):
-                    k, v = line.split(":")
-                    out[k] = int(v.split()[0])
-        with open("/proc/meminfo") as fh:
-            for line in fh:
-                if line.startswith("MemAvailable"):
-                    out["MemAvailable"] = int(line.split()[1])
-    except OSError:
-        pass
-    return out
-
-
-def _diag_write(rec):
-    if not _DIAG_DIR:
-        return
-    os.makedirs(_DIAG_DIR, exist_ok=True)
-    w = os.environ.get("PYTEST_XDIST_WORKER", "main")
-    with open(os.path.join(_DIAG_DIR, f"{w}.jsonl"), "a") as fh:
-        fh.write(_json.dumps(rec) + "\n")
-# ---------------------------------------------------------------------------
 
 
 def _mappings():
@@ -153,38 +122,22 @@ def _mappings():
 
 
 @pytest.fixture(autouse=True)
-def _bound_jax_compilation_caches(request):
+def _bound_jax_compilation_caches():
     """Drop the caches mid-module once they have grown past the budget.
 
     The module-boundary clear below is not enough on its own: one file can
     exhaust the mappings by itself, and ``tests/test_distillation.py`` gets
     three quarters of the way there inside a single test class.
     """
-    t0 = _time.time()
     yield
-    t1 = _time.time()
-    m = _mappings()
-    cleared = m > MAPPING_BUDGET
-    if cleared:
+    if _mappings() > MAPPING_BUDGET:
         jax.clear_caches()
         gc.collect()
-        _DIAG["clears"] += 1
-    if _DIAG_DIR:
-        _diag_write(dict(node=request.node.nodeid, t0=t0, t1=t1,
-                         t2=_time.time(), maps=m, budget=MAPPING_BUDGET,
-                         cleared=cleared, maps_after=_mappings(),
-                         **_diag_meminfo()))
 
 
 @pytest.fixture(autouse=True, scope="module")
-def _release_jax_compilation_caches(request):
+def _release_jax_compilation_caches():
     """Drop JAX's compilation caches when a test module finishes."""
-    t0 = _time.time()
     yield
-    m = _mappings()
     jax.clear_caches()
     gc.collect()
-    if _DIAG_DIR:
-        _diag_write(dict(module=request.node.nodeid, t0=t0, t1=_time.time(),
-                         maps=m, maps_after=_mappings(), clears=_DIAG["clears"],
-                         **_diag_meminfo()))

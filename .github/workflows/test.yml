@@ -30,8 +30,17 @@ jobs:
   #
   #  * `--splits/--group` then cuts what is left across three jobs, which run
   #    concurrently. Balance comes from `.test_durations`, not from anyone's
-  #    judgement: the three shards hold 993s, 996s and 988s of measured work,
-  #    and came in at 7:12, 6:53 and 6:02.
+  #    judgement -- and those durations are measured HERE, on the runner,
+  #    not on a laptop (#315). A Mac is ~2.3x faster on this suite on
+  #    average but far from uniformly: the crude-unit planning tests are
+  #    ~7x, so Mac numbers put 27 minutes of runner work in one shard and
+  #    8 in another. To re-record, run the suite on CI with
+  #    `--store-durations --durations-path <file>` and upload the file as an
+  #    artifact, once with `-m "not release"` and once with the release
+  #    tier too (publish.yml splits on the same file).
+  #
+  #  * `-n auto` is 2 workers on `ubuntu-latest`, not 4: it counts physical
+  #    cores, and the 4 vCPUs are 2 of them.
   #
   # Three *jobs* and not three pytest invocations in one job: each one re-pays
   # JAX/XLA startup and shares no compiled code with the others, which is dead
@@ -60,14 +69,12 @@ jobs:
     # meant "this is slow today" were the same number, and run 34425803062
     # was cancelled at 81% with everything to that point passing.
     #
-    # Shards are now 9-22 minutes, and the long one is a tail, not a
-    # balance problem: shard 2 reaches 94% at 8-11 minutes and spends 10-13
-    # more on its last few files, one worker running alone (runs 36908310108,
-    # which hit 25 on #303, and 36913554019 on #314). Those files are far slower here
-    # than on a laptop -- the mid-module cache clear in tests/conftest.py
-    # fires on Linux only, and at -n 4 its budget is 3750 mappings a worker.
-    # 35 keeps a hang distinguishable from that until it is fixed.
-    timeout-minutes: 50
+    # #315 took shards from 8-10 / 20-22 / 9 minutes back to ~13 each
+    # (see `.test_durations` below and tests/conftest.py), so 25 is once
+    # again roughly twice a shard: long enough not to fire on a slow
+    # runner, short enough that reaching it means something has hung. If
+    # a shard creeps toward it, rebalance before raising it.
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -97,8 +104,6 @@ jobs:
         # minutes. If this list changes, `--splits` below has to change with
         # it -- they are the same number written twice, and nothing checks.
         shard: [1, 2, 3]
-        # DIAGNOSTIC (#315): per-commit tier, and the whole suite for durations
-        tier: ["commit", "all"]
 
     steps:
       - uses: actions/checkout@v4
@@ -127,23 +132,10 @@ jobs:
       # `-q`, because `-v` from four workers at once interleaves into
       # something nobody reads; a failure still prints its own name.
       - name: Run tests
-        env:
-          DIAG_CACHE_LOG: ${{ github.workspace }}/diag
         run: |
-          mkdir -p diag
-          cat /proc/sys/vm/max_map_count > diag/max_map_count.txt; nproc >> diag/max_map_count.txt
-          (while true; do echo "$(date +%s) $(free -m | sed -n 2p)"; sleep 5; done) > diag/mem.log &
-          python -m pytest tests/ -q --tb=short -m "${{ matrix.tier == 'all' && 'release or not release' || 'not release' }}" \
+          python -m pytest tests/ -q --tb=short -m "not release" \
             -n auto --dist loadfile \
-            --splits 3 --group ${{ matrix.shard }} \
-            --durations=50 --store-durations --durations-path diag/durations.json
-
-      - name: Upload diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: diag-${{ matrix.shard }}-${{ matrix.tier }}
-          path: diag/
+            --splits 3 --group ${{ matrix.shard }}
 
   # Verify the package imports with NO optional dependencies installed. The job
   # this replaces installed ".[dev]" and re-ran the full suite, making it an

@@ -153,6 +153,12 @@ test-all:
 # breaking. Regenerate when the shards have drifted noticeably apart (the job
 # names carry their numbers) -- serially and with nothing else running on the
 # machine, or the numbers it records are of a loaded box, which takes ~40 min.
+#
+# The committed file is measured on the CI runner, not here (#315): a laptop
+# is faster unevenly enough -- ~2.3x overall, ~7x on the crude-unit planning
+# tests -- that local numbers left one shard at 27 minutes and another at 8.
+# This target is for a NEW test file, whose keys can be measured here and
+# merged in; for a full rebalance, record on CI (see .github/workflows/test.yml).
 test-durations:
 	$(UV_RUN_DEV) pytest tests/ --store-durations
 
