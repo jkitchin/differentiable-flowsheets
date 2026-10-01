@@ -23,13 +23,17 @@ the column's specs, its feed, and the assay data behind its thermodynamics.
 
 from difflow_refinery import column, correlations, products, vacuum
 from difflow_refinery.assay import (
+    CONTAMINANTS,
     DEFAULT_CUT_WIDTHS,
+    DEFAULT_HEAVY_CUT_WIDTHS,
     LIGHT_END_SG,
     Assay,
     Characterization,
+    HeavyEnd,
     characterize,
     default_cut_points,
     fit_antoine,
+    tbp_curve,
 )
 from difflow_refinery.blending import (
     PRODUCT_DERIVED,
@@ -112,7 +116,11 @@ __all__ = [
     "characterize",
     "default_cut_points",
     "fit_antoine",
+    "HeavyEnd",
+    "tbp_curve",
+    "CONTAMINANTS",
     "DEFAULT_CUT_WIDTHS",
+    "DEFAULT_HEAVY_CUT_WIDTHS",
     "LIGHT_END_SG",
     "correlations",
     "column",
