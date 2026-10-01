@@ -146,3 +146,27 @@ def test_vgo_rate_gradient_in_crude_rate_crosses_both_units(plant):
     assert g > 0
     # and is a sizeable share of the crude's mass, not a trace effect
     assert g > 0.1 * float(plant["streams"]["vdu_info"]["outputs"]["vgo.rate"])
+
+
+def test_products_blend_on_the_characterization(plant):
+    """CDU and VDU product streams are BlendComponent.from_stream inputs.
+
+    The pool's mass-averaged sulfur must equal what the vacuum column itself
+    reports for its product: both average the same per-component vectors.
+    """
+    grid = dr.BlendCharacterization.from_characterization(plant["char"])
+    streams = plant["streams"]
+    props = streams["vdu_info"]["properties"]
+    for name in ("lvgo", "hvgo"):
+        comp = dr.BlendComponent.from_stream(name, streams[name], grid)
+        assert float(comp.properties["S_ppm"]) == pytest.approx(
+            float(props[name]["sulfur_wt"]) * 1e4, rel=1e-10)
+        assert float(comp.properties["SG"]) == pytest.approx(float(props[name]["sg"]), rel=1e-10)
+    diesel = dr.BlendComponent.from_stream("diesel", streams["diesel"], grid)
+    assert 0.0 < float(diesel.properties["S_ppm"]) < float(
+        dr.BlendComponent.from_stream("hvgo", streams["hvgo"], grid).properties["S_ppm"])
+    lvgo = dr.BlendComponent.from_stream("lvgo", streams["lvgo"], grid)
+    blend = dr.BlendPool("ulsd", specs=[("S_ppm", "<=", 15.0)])([diesel, lvgo], [0.7, 0.3])
+    # sulfur blends by mass, so it lies between the two components'
+    S = sorted(float(c.properties["S_ppm"]) for c in (diesel, lvgo))
+    assert S[0] < float(blend.properties["S_ppm"]) < S[1]

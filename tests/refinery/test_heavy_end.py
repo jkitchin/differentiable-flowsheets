@@ -147,3 +147,37 @@ def test_vacuum_assay_converts_to_the_same_crude():
 def test_heavy_end_rejects_unusable_data(pct, T, msg):
     with pytest.raises(ValueError, match=msg):
         dr.Assay(pct, T, sg=0.9, heavy_end=dr.HeavyEnd())
+
+
+# -- into the blend pool ----------------------------------------------------
+
+
+def test_blend_grid_from_the_characterization(char):
+    """The whole crude as a blend component recombines to the assay."""
+    grid = dr.BlendCharacterization.from_characterization(char)
+    assert grid.names == list(char.names)
+    stream = dict(char.stream(10.0, T=300.0, P=1e5), F_water=0.3, F_H2O=0.1)
+    comp = dr.BlendComponent.from_stream("crude", stream, grid)
+    assert float(comp.properties["SG"]) == pytest.approx(float(char.bulk_sg), rel=1e-12)
+    assert float(comp.properties["S_ppm"]) == pytest.approx(BULK["sulfur_wt"] * 1e4, rel=1e-12)
+    assert float(comp.properties["N_ppm"]) == pytest.approx(BULK["nitrogen_wppm"], rel=1e-12)
+    assert float(comp.properties["CCR_wt"]) == pytest.approx(BULK["ccr_wt"], rel=1e-12)
+    # the pool's vapour pressure is the column's: one atmosphere at each Tb
+    k = len(char.light_names)
+    p = np.asarray(jax.vmap(grid.psat)(grid.Tb))[np.arange(grid.n), np.arange(grid.n)]
+    np.testing.assert_allclose(p[k:], 101325.0, rtol=1e-9)
+
+
+def test_blend_grid_leaves_out_what_the_assay_did_not_give():
+    plain = dr.characterize(dr.Assay(PCT, T_K, sg=0.86, light_ends=LIGHT,
+                                     heavy_end=dr.HeavyEnd(), sulfur_wt=1.0))
+    grid = dr.BlendCharacterization.from_characterization(plain)
+    assert set(grid.qualities) == {"S_ppm"}
+    assert set(dr.BlendCharacterization.from_characterization(plain, contaminants=True)
+               .qualities) == {"S_ppm", "N_ppm", "CCR_wt"}
+
+
+def test_blend_grid_still_rejects_a_foreign_species(char):
+    grid = dr.BlendCharacterization.from_characterization(char)
+    with pytest.raises(ValueError, match="outside the characterization"):
+        grid.flows({"F_benzene": 1.0})
