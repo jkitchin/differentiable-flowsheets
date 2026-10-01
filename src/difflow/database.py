@@ -61,6 +61,25 @@ _CRITICAL_DATA = {
     "ethylene": (282.3, 5.041e6, 0.087, 28.05),
     "propylene": (365.6, 4.600e6, 0.140, 42.08),
     "1_butene": (419.5, 4.023e6, 0.191, 56.11),
+    "cis_2_butene": (435.5, 4.210e6, 0.202, 56.11),
+    "trans_2_butene": (428.6, 4.100e6, 0.214, 56.11),
+    "isobutylene": (417.9, 4.000e6, 0.194, 56.11),
+    "1_pentene": (464.8, 3.560e6, 0.237, 70.13),
+    "2_methyl_2_butene": (470.0, 3.420e6, 0.285, 70.13),
+
+    # Naphthenes and branched paraffins (refinery light naphtha / gasoline
+    # isomers). Tc, Pc: IUPAC critical-property reviews, as also tabulated
+    # in Poling-Prausnitz-O'Connell 5e App. A; omega: PPO / DIPPR
+    # consensus. See SOURCE_CITATIONS.
+    "cyclohexane": (553.5, 4.073e6, 0.211, 84.16),
+    "methylcyclopentane": (532.7, 3.790e6, 0.230, 84.16),
+    "2_methylpentane": (497.7, 3.040e6, 0.279, 86.18),
+    "3_methylpentane": (504.6, 3.120e6, 0.273, 86.18),
+    "2_2_dimethylbutane": (489.0, 3.100e6, 0.232, 86.18),
+    "2_3_dimethylbutane": (500.0, 3.150e6, 0.247, 86.18),
+    "2_2_4_trimethylpentane": (543.8, 2.570e6, 0.303, 114.23),
+    "2_3_4_trimethylpentane": (566.4, 2.730e6, 0.316, 114.23),
+    "2_5_dimethylhexane": (550.0, 2.490e6, 0.355, 114.23),
 
     # Alkynes
     "acetylene": (308.3, 6.114e6, 0.190, 26.04),
@@ -121,6 +140,84 @@ _DEFAULT_SOURCE = "NIST Chemistry WebBook; Perry's 9e; Yaws; DIPPR 801"
 SOURCE_CITATIONS: dict[str, str] = {
     name: _DEFAULT_SOURCE for name in _CRITICAL_DATA
 }
+
+# Refinery C4-C8 olefins, naphthenes and branched paraffins (issues #308-#310).
+#
+# How these values were obtained and checked: no primary source could be
+# opened directly when they were entered (NIST WebBook unreachable). Each
+# value was read from the data tables shipped with the `chemicals` Python
+# package (C. Bell et al., v1.5.2), which transcribe the sources named below,
+# and was accepted only where those independent tables agree (Tc to ~0.5 K,
+# Pc to ~1%, omega to ~0.01, Hf to ~1 kJ/mol). Bibliographic details (page,
+# table and edition numbers) are therefore marked "(unverified)": the numbers
+# are cross-checked, the citations' fine print is not. The tests in
+# tests/test_database_refinery_species.py pin every species to these
+# references and tie Tc/Pc/omega to the Antoine set through Lee-Kesler.
+_REFINERY_ISOMER_SOURCE = (
+    "Tc, Pc: IUPAC critical-property review series 'Vapor-Liquid Critical "
+    "Properties of Elements and Compounds' (Ambrose, Tsonopoulos et al., "
+    "J. Chem. Eng. Data, 1995 onward; part and page numbers unverified), as "
+    "also tabulated in Poling, Prausnitz & O'Connell, The Properties of Gases "
+    "and Liquids, 5th ed., McGraw-Hill, 2001, App. A; cross-checked against "
+    "CRC Handbook and NIST WebBook values. "
+    "omega: Poling-Prausnitz-O'Connell 5e App. A / DIPPR 801 consensus, "
+    "cross-checked against the PSRK (Horstmann et al. 2005) and Yaws tables. "
+    "Ideal-gas Cp: cubic least-squares fit (250-1000 K) by this project to "
+    "the TRC Thermodynamic Tables (Thermodynamics Research Center) ideal-gas "
+    "correlation; agrees with the PPO 5e App. A tabulated Cp(298.15 K) to "
+    "0.2%. Antoine A, B, C and range: PPO 5e App. A (section number "
+    "unverified), converted to log10(P/Pa), T in K. "
+    "Hvap: CRC Handbook of Chemistry and Physics, 'Enthalpy of Vaporization' "
+    "table, dHvap at Tb (edition unverified); Watson A back-solved by this "
+    "project. Hf: CRC Handbook, ideal-gas standard enthalpy of formation at "
+    "298.15 K (edition unverified)."
+)
+# Per-species notes, appended to the shared citation above. "(unverified)"
+# marks a value the cross-check could not settle.
+_REFINERY_ISOMER_NOTES = {
+    "cis_2_butene": "",
+    "trans_2_butene": (
+        " omega = 0.214 (unverified): sources span 0.205-0.218 "
+        "(PSRK 0.214, Yaws 0.218, HEOS 0.210)."
+    ),
+    "isobutylene": (
+        " Hvap: no CRC entry; Perry's Chemical Engineers' Handbook Table "
+        "2-150 (C1 = 32614 J/mol, C2 = 0.38073, Tc = 417.9 K) evaluated at "
+        "Tb = 266.25 K (edition and Tb source unverified). omega = 0.194: "
+        "sources span 0.189-0.197."
+    ),
+    "1_pentene": "",
+    "2_methyl_2_butene": (
+        " Tc = 470.0 K (unverified): IUPAC, CRC and Yaws give 470.0 K but "
+        "the NIST WebBook gives 473.9 K."
+    ),
+    "cyclohexane": "",
+    "methylcyclopentane": (
+        " omega = 0.230 (unverified): Yaws 0.230, PSRK 0.239. The chemicals "
+        "package's 'IUPAC' rows for cyclohexane and methylcyclopentane are "
+        "swapped; Tc and Pc here follow CRC, NIST WebBook, PSRK and Yaws, "
+        "which agree."
+    ),
+    "2_methylpentane": "",
+    "3_methylpentane": (
+        " Cp: the PPO 5e App. A polynomial for this species does not "
+        "reproduce its own tabulated Cp(298 K) (a transcription error in "
+        "the source or its digitisation); the TRC fit used here does."
+    ),
+    "2_2_dimethylbutane": "",
+    "2_3_dimethylbutane": "",
+    "2_2_4_trimethylpentane": "",
+    "2_3_4_trimethylpentane": (
+        " Cp: PPO 5e App. A has no polynomial for this species, only "
+        "Cp(298 K) = 191.59 J/mol/K, which the TRC fit matches."
+    ),
+    "2_5_dimethylhexane": (
+        " omega = 0.355 (unverified): sources span 0.352-0.358."
+    ),
+}
+for _name, _note in _REFINERY_ISOMER_NOTES.items():
+    SOURCE_CITATIONS[_name] = _REFINERY_ISOMER_SOURCE + _note
+del _name, _note
 
 
 def get_critical_props(name: str) -> CriticalProperties:
@@ -299,6 +396,141 @@ _IDEAL_THERMO_DATA = {
         # shifted +5 for difflow's Pa convention.
         "antoine": (8.90935, 1018.516, -40.081),
         "Hf": -153700.0,
+    },
+
+    # Refinery C4-C8 olefins, naphthenes and branched paraffins.
+    # Unlike several older entries above (whose Watson "A" is simply dHvap at
+    # Tb), the Watson A here is back-solved, A = dHvap(Tb) / (1 - Tb/Tc)**0.38,
+    # so the correlation reproduces the CRC dHvap at the normal boiling point
+    # (and lands within ~2% of the CRC value at 298 K). Cp is a cubic fit to
+    # the TRC ideal-gas correlation over 250-1000 K (max deviation < 3%,
+    # < 1% at 298 K). Antoine (PPO 5e App. A) is already in the Pa / K form
+    # used here; its fitted range is recorded in T_antoine_min/max.
+    "cis_2_butene": {
+        "MW": 56.11,
+        "Cp": (1.7909, 2.9268e-01, -9.6484e-05, -5.1338e-09),
+        "Hvap": (34258.0, 0.38, 435.5),
+        "antoine": (9.00958, 967.32, -35.277),
+        "Hf": -7100.0,
+        "T_antoine_min": 204.73,
+        "T_antoine_max": 296.11,
+    },
+    "trans_2_butene": {
+        "MW": 56.11,
+        "Cp": (17.143, 2.5781e-01, -6.5496e-05, -1.4603e-08),
+        "Hvap": (33475.0, 0.38, 428.6),
+        "antoine": (9.00827, 967.5, -32.31),
+        "Hf": -11400.0,
+        "T_antoine_min": 201.83,
+        "T_antoine_max": 293.29,
+    },
+    "isobutylene": {
+        "MW": 56.11,
+        "Cp": (10.678, 2.9565e-01, -1.2341e-04, 1.2269e-08),
+        "Hvap": (32590.0, 0.38, 417.9),
+        "antoine": (8.80956, 866.25, -38.51),
+        "Hf": -16900.0,
+        "T_antoine_min": 195.77,
+        "T_antoine_max": 285.41,
+    },
+    "1_pentene": {
+        "MW": 70.13,
+        "Cp": (-4.7482e-01, 4.2488e-01, -2.0783e-04, 2.9140e-08),
+        "Hvap": (37641.0, 0.38, 464.8),
+        "antoine": (8.96914, 1044.01, -39.7),
+        "Hf": -21100.0,
+        "T_antoine_min": 223.89,
+        "T_antoine_max": 324.32,
+    },
+    "2_methyl_2_butene": {
+        "MW": 70.13,
+        "Cp": (-5.2007, 4.3102e-01, -2.2737e-04, 4.6403e-08),
+        "Hvap": (39786.0, 0.38, 470.0),
+        "antoine": (9.09149, 1124.33, -36.52),
+        "Hf": -41700.0,
+        "T_antoine_min": 230.69,
+        "T_antoine_max": 333.14,
+    },
+    "cyclohexane": {
+        "MW": 84.16,
+        "Cp": (-45.988, 5.6596e-01, -1.7435e-04, -3.1534e-08),
+        "Hvap": (44156.0, 0.38, 553.5),
+        "antoine": (8.93002, 1182.774, -52.532),
+        "Hf": -123400.0,
+        "T_antoine_min": 282.11,
+        "T_antoine_max": 378.46,
+    },
+    "methylcyclopentane": {
+        "MW": 84.16,
+        "Cp": (-36.699, 5.5399e-01, -2.1029e-04, -4.3959e-09),
+        "Hvap": (43221.0, 0.38, 532.7),
+        "antoine": (9.18199, 1295.543, -34.76),
+        "Hf": -106200.0,
+        "T_antoine_min": 255.06,
+        "T_antoine_max": 368.58,
+    },
+    "2_methylpentane": {
+        "MW": 86.18,
+        "Cp": (-13.136, 6.1350e-01, -3.2823e-04, 6.4361e-08),
+        "Hvap": (42345.0, 0.38, 497.7),
+        "antoine": (8.98332, 1145.8, -45.335),
+        "Hf": -174600.0,
+        "T_antoine_min": 246.9,
+        "T_antoine_max": 356.5,
+    },
+    "3_methylpentane": {
+        "MW": 86.18,
+        "Cp": (-12.441, 5.9692e-01, -3.0058e-04, 5.1476e-08),
+        "Hvap": (42600.0, 0.38, 504.6),
+        "antoine": (8.99283, 1162.37, -44.864),
+        "Hf": -171900.0,
+        "T_antoine_min": 249.0,
+        "T_antoine_max": 359.72,
+    },
+    "2_2_dimethylbutane": {
+        "MW": 86.18,
+        "Cp": (-8.973, 5.7983e-01, -2.6270e-04, 3.9235e-08),
+        "Hvap": (39655.0, 0.38, 489.0),
+        "antoine": (8.8959, 1090.16, -42.633),
+        "Hf": -185900.0,
+        "T_antoine_min": 237.4,
+        "T_antoine_max": 345.89,
+    },
+    "2_3_dimethylbutane": {
+        "MW": 86.18,
+        "Cp": (-20.854, 6.3770e-01, -3.6163e-04, 8.5476e-08),
+        "Hvap": (41355.0, 0.38, 500.0),
+        "antoine": (8.93486, 1127.4, -44.184),
+        "Hf": -178100.0,
+        "T_antoine_min": 244.2,
+        "T_antoine_max": 354.43,
+    },
+    "2_2_4_trimethylpentane": {
+        "MW": 114.23,
+        "Cp": (-23.936, 8.4297e-01, -4.6936e-04, 1.0446e-07),
+        "Hvap": (47745.0, 0.38, 543.8),
+        "antoine": (8.93646, 1257.85, -52.383),
+        "Hf": -224000.0,
+        "T_antoine_min": 275.5,
+        "T_antoine_max": 398.38,
+    },
+    "2_3_4_trimethylpentane": {
+        "MW": 114.23,
+        "Cp": (-30.448, 9.0998e-01, -6.0879e-04, 1.7711e-07),
+        "Hvap": (50052.0, 0.38, 566.4),
+        "antoine": (8.977, 1314.31, -55.669),
+        "Hf": -217300.0,
+        "T_antoine_min": 300.19,
+        "T_antoine_max": 413.19,
+    },
+    "2_5_dimethylhexane": {
+        "MW": 114.23,
+        "Cp": (-30.405, 8.6874e-01, -5.2198e-04, 1.2478e-07),
+        "Hvap": (51098.0, 0.38, 550.0),
+        "antoine": (8.98112, 1285.47, -58.902),
+        "Hf": -222500.0,
+        "T_antoine_min": 285.2,
+        "T_antoine_max": 408.2,
     },
 
     # Alkenes
@@ -621,6 +853,11 @@ _ALIASES = {
     "etoh": "ethanol",
     "etbe": "diethyl_ether",
     "xylene": "m_xylene",  # Default to m-xylene
+    "isobutene": "isobutylene",
+    "2_methylpropene": "isobutylene",
+    "isooctane": "2_2_4_trimethylpentane",
+    "isohexane": "2_methylpentane",
+    "neohexane": "2_2_dimethylbutane",
 }
 
 
