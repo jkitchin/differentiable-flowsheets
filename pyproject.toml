@@ -151,6 +151,7 @@ ree = "difflow_ree:register"
 cc = "difflow_cc:register"
 gas = "difflow_gas:register"
 power = "difflow_power:register"
+refinery = "difflow_refinery:register"
 
 [project.scripts]
 difflow = "difflow.cli:main"
@@ -176,6 +177,7 @@ packages = [
     "src/difflow_cc",
     "src/difflow_gas",
     "src/difflow_power",
+    "src/difflow_refinery",
 ]
 
 [tool.hatch.build.targets.sdist]
