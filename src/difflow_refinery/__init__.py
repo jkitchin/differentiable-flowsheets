@@ -1,27 +1,31 @@
-"""difflow_refinery: refinery models for difflow.
+"""difflow_refinery: petroleum refining for difflow.
 
-Currently the product blending pool (:mod:`difflow_refinery.blending`) and
-the small pseudocomponent characterization it computes properties from
-(:mod:`difflow_refinery.characterization`).
+Crude characterisation -- a TBP assay cut into pseudo-components whose
+properties come from the standard petroleum correlations -- and the crude
+unit that separates them: a furnace and an atmospheric column, an
+equation-oriented MESH model with side strippers, pumparounds and stripping
+steam, reporting its products as yields, gravities and TBP ranges -- and
+the product blending pool (:mod:`difflow_refinery.blending`), which blends
+finished components into gasoline, jet, ULSD or fuel oil with the
+nonlinear rules refiners use and reports signed spec margins.
+Differentiable end to end: a yield or a duty has a gradient with respect to
+the column's specs, its feed, and the assay data behind its thermodynamics.
 
-Like :mod:`difflow.planning`, this is a library of models rather than a set
-of stream-in/stream-out palette operations, so it registers no
-``difflow.plugins`` entry point: a blend pool is called with a recipe and
-returns properties and spec margins, which is not the shape a GUI unit has.
-
-Example::
-
-    from difflow_refinery import BlendComponent, BlendPool
-
-    reformate = BlendComponent.from_properties(
-        "reformate", SG=0.80, RON=98.0, MON=88.0, RVP_psi=3.5, S_ppm=1.0,
-        olefins_vol=1.0, aromatics_vol=65.0)
-    ...
-    res = BlendPool("gasoline")([reformate, fcc, alkylate, butane],
-                                recipe=[0.3, 0.4, 0.25, 0.05])
-    res.properties["RON"], res.margins
+>>> import difflow_refinery as dr
+>>> assay = dr.Assay(tbp_percent=[0, 50, 100], tbp_T=[300.0, 600.0, 900.0], sg=0.85)
+>>> crude = dr.characterize(assay)
 """
 
+from difflow_refinery import column, correlations, products
+from difflow_refinery.assay import (
+    DEFAULT_CUT_WIDTHS,
+    LIGHT_END_SG,
+    Assay,
+    Characterization,
+    characterize,
+    default_cut_points,
+    fit_antoine,
+)
 from difflow_refinery.blending import (
     PRODUCT_DERIVED,
     PRODUCT_SPECS,
@@ -61,8 +65,66 @@ from difflow_refinery.characterization import (
     riazi_daubert_pc,
     riazi_daubert_tc,
 )
+from difflow_refinery.column import (
+    CrudeColumn,
+    CrudeColumnParams,
+    CrudeColumnResult,
+    Furnace,
+    Pumparound,
+    SideProduct,
+    Spec,
+)
+from difflow_refinery.correlations import (
+    CRITICAL_METHODS,
+    acentric_factor,
+    api_from_sg,
+    critical_properties,
+    sg_from_api,
+    vapor_pressure,
+    watson_k,
+)
+from difflow_refinery.products import ProductProperties, product_properties
+from difflow_refinery.thermo import ColumnThermo, water_vapor_pressure
+from difflow_refinery.unit import (
+    CrudeDistillationUnit,
+    CrudeDistillationUnitParams,
+    CrudeUnit,
+    CrudeUnitResult,
+)
 
 __all__ = [
+    "Assay",
+    "Characterization",
+    "characterize",
+    "default_cut_points",
+    "fit_antoine",
+    "DEFAULT_CUT_WIDTHS",
+    "LIGHT_END_SG",
+    "correlations",
+    "column",
+    "ColumnThermo",
+    "water_vapor_pressure",
+    "CrudeColumn",
+    "CrudeColumnParams",
+    "CrudeColumnResult",
+    "CrudeDistillationUnit",
+    "CrudeDistillationUnitParams",
+    "CrudeUnit",
+    "CrudeUnitResult",
+    "Furnace",
+    "ProductProperties",
+    "product_properties",
+    "products",
+    "Pumparound",
+    "SideProduct",
+    "Spec",
+    "CRITICAL_METHODS",
+    "critical_properties",
+    "acentric_factor",
+    "vapor_pressure",
+    "watson_k",
+    "sg_from_api",
+    "api_from_sg",
     "BlendComponent", "BlendPool", "BlendResult", "BlendSpec", "EthylRT70",
     "BlendCharacterization",
     "PRODUCT_DERIVED", "PRODUCT_SPECS", "PROPERTY_RULES", "TBP_D86",
@@ -74,4 +136,24 @@ __all__ = [
     "temperature_index_blend", "volume_blend",
     "edmister_omega", "lee_kesler_psat", "riazi_daubert_mw",
     "riazi_daubert_pc", "riazi_daubert_tc",
+    "register",
 ]
+
+
+def register(registry):
+    """Register the refinery unit operations with difflow.
+
+    Called by ``difflow.plugins.load_plugins()`` when the plugin is
+    discovered through its entry point.
+
+    Args:
+        registry: difflow OperationRegistry instance
+    """
+    registry.register(
+        name="CrudeDistillationUnit",
+        cls=CrudeDistillationUnit,
+        category="refinery",
+        description="Crude unit: furnace and atmospheric column with side "
+                    "strippers and pumparounds, built on a TBP assay",
+        plugin="difflow_refinery",
+    )
