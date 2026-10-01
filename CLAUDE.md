@@ -428,6 +428,25 @@ Docs: `docs/unit-operations-power.md`. Tests: `tests/power/`.
 - `CrudeUnit` (assay in, yield table out) and `CrudeDistillationUnit` (the
   registered operation; outlets in `outlet_names` order)
 - Products: `product_properties`, `products.gaps` -- TBP, not D86
+- Composition (#305, `difflow_refinery.composition`): `characterize(assay,
+  composition=True)` / `char.with_composition(CompositionData(...))` puts a
+  `Composition` on `char.composition` -- per component, `char.names` order:
+  `hc_type` (n,4) vol fractions of `HC_TYPES` (P, N, A, O; rows sum to 1,
+  O = 0 straight run), `hydrogen` (n,) mass fraction, `sulfur`/`nitrogen`
+  (n,) mass fractions with `sulfur_split` (n,5) over `SULFUR_CLASSES` and
+  `nitrogen_split` (n,2) over `NITROGEN_CLASSES`. `comp.of_flows(moles)` /
+  `of_stream(s)` -> `StreamComposition` (types by std volume, H/S/N by mass);
+  `product_properties(..., composition=comp)`; `BlendCharacterization.
+  from_characterization` picks the types up as `*_vol` qualities (vol%).
+  A conversion unit edits a copy with `comp.replace(...)`.
+  Invariants: C/H for the type correlation is DERIVED from the hydrogen
+  (`(1-H-S-N)/H`), so H and PNA are one estimate; correlation branch joins
+  (Huang index at 620 K, 2B4.1 at MW 200) are logistic BLENDS because the
+  published branches disagree there -- never hard switches; measured
+  PIONA/SARA/n20/H override per cut via `jnp.where` (differentiable); the
+  default S/N class splits are ILLUSTRATIVE; out-of-range use warns
+  (`CompositionRangeWarning`), never clips the answer. MNL50 worked examples
+  for these correlations are NOT reproduced -- do not claim they are.
 
 Docs: `docs/unit-operations-refinery.md`. Tests: `tests/refinery/`.
 

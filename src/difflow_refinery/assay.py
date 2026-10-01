@@ -567,6 +567,11 @@ class Characterization:
             the correlation's values at ``T_max`` carried to its ``Tb`` at
             constant ``Tb/Tc`` -- placeholders that keep an EOS defined, not
             properties anyone measured. Its upper cut edge is notional.
+        composition: Hydrocarbon type, hydrogen and sulfur/nitrogen classes
+            of every component (a
+            :class:`~difflow_refinery.composition.Composition`), or ``None``
+            until :meth:`with_composition` (or ``characterize(...,
+            composition=...)``) estimates it.
     """
 
     pseudo_names: tuple[str, ...]
@@ -595,6 +600,7 @@ class Characterization:
     nickel_vanadium: Array = None
     asphaltenes: Array = None
     residue_lump: bool = False
+    composition: object = None
 
     def __post_init__(self):
         # Contaminants default to zero, so a Characterization built by hand
@@ -645,6 +651,18 @@ class Characterization:
             names=self.pseudo_names,
             **{key: getattr(self, key)[k:] for key in CONTAMINANTS},
         )
+
+    def with_composition(self, data=None, **kwargs) -> "Characterization":
+        """A copy carrying its :class:`~difflow_refinery.composition.Composition`.
+
+        Hydrocarbon types, hydrogen content and sulfur/nitrogen classes of
+        every component, from :func:`~difflow_refinery.composition.estimate_composition`
+        (``data`` is a :class:`~difflow_refinery.composition.CompositionData`,
+        or give its fields as keywords). Traceable.
+        """
+        from difflow_refinery.composition import estimate_composition
+
+        return dataclasses.replace(self, composition=estimate_composition(self, data, **kwargs))
 
     def mass_flows(self, total: Array | float) -> Array:
         """Mass flow of every component (``names`` order) for ``total`` kg/s."""
@@ -785,7 +803,7 @@ jax.tree_util.register_dataclass(
     data_fields=["cut_edges", "Tb", "SG", "MW", "Tc", "Pc", "omega", "omega_vp", "Kw",
                  "hvap_nb", "cp_liquid_coeffs", "cp_ig_coeffs", "component_MW",
                  "component_SG", "volume_fraction", "mass_fraction", "mole_fraction",
-                 *CONTAMINANTS],
+                 *CONTAMINANTS, "composition"],
     meta_fields=["pseudo_names", "light_names", "method", "residue_lump"],
 )
 
@@ -882,6 +900,7 @@ def characterize(
     cut_points: Sequence[float] | None = None,
     method: str | None = None,
     prefix: str = "pc",
+    composition=None,
 ) -> Characterization:
     """Cut an assay into pseudo-components and estimate their properties.
 
@@ -903,6 +922,11 @@ def characterize(
             ``"twu"``, Twu (1984) as published.
         prefix: Pseudo-component names are ``f"{prefix}{i:02d}"``, from 1;
             a residue lump is ``f"{prefix}resid"``.
+        composition: Also estimate hydrocarbon types, hydrogen and
+            sulfur/nitrogen classes (:attr:`Characterization.composition`):
+            ``True`` with the defaults, or a
+            :class:`~difflow_refinery.composition.CompositionData`.
+            ``None`` (default) leaves it unset.
 
     With a :class:`HeavyEnd` the cuts run from where the curve reaches the
     light ends to ``T_max`` and are followed by the residue lump; the curve
@@ -914,6 +938,9 @@ def characterize(
     Returns:
         A :class:`Characterization`.
     """
+    if composition is not None and composition is not False:
+        char = characterize(assay, cut_points, method, prefix)
+        return char.with_composition(None if composition is True else composition)
     if method is None:
         method = "twu"
     if cut_points is None:

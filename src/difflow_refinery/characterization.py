@@ -138,8 +138,8 @@ class BlendCharacterization(ParamsMixin):
     WATER_SPECIES = ("water", "H2O")
 
     @classmethod
-    def from_characterization(cls, char, contaminants: bool | None = None
-                              ) -> "BlendCharacterization":
+    def from_characterization(cls, char, contaminants: bool | None = None,
+                              composition=None) -> "BlendCharacterization":
         """The blend grid of a crude-unit :class:`~difflow_refinery.assay.Characterization`.
 
         So the crude and vacuum units' product streams -- whose species are
@@ -163,6 +163,13 @@ class BlendCharacterization(ParamsMixin):
             contaminants: Include the quality vectors. ``None`` (default)
                 includes each one the assay actually gave (a vector that is
                 not all zero); ``True`` includes all three; ``False`` none.
+            composition: Hydrocarbon types as the ``paraffins_vol``,
+                ``naphthenes_vol``, ``aromatics_vol`` and ``olefins_vol``
+                qualities (vol%, volume-averaged): a
+                :class:`~difflow_refinery.composition.Composition` over
+                ``char.names``. ``None`` (default) takes
+                ``char.composition`` if the characterization carries one;
+                ``False`` leaves them out.
 
         Differentiable: every array is the characterization's, so a blend
         property computed through this reaches back to the assay.
@@ -186,6 +193,12 @@ class BlendCharacterization(ParamsMixin):
                 keep = bool(contaminants)
             if keep:
                 qualities[key] = vec
+        if composition is None:
+            composition = getattr(char, "composition", None)
+        if composition is not None and composition is not False:
+            if tuple(composition.names) != tuple(char.names):
+                raise ValueError("composition must cover char.names, in order")
+            qualities.update(composition.blend_qualities())
         return cls(
             names=list(char.names),
             Tb=jnp.concatenate([light["Tb"], jnp.asarray(char.Tb)]),

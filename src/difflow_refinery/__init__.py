@@ -31,7 +31,7 @@ and across the crude-to-vacuum connection.
 >>> crude = dr.characterize(assay)
 """
 
-from difflow_refinery import column, correlations, products, vacuum
+from difflow_refinery import column, composition, correlations, products, vacuum
 from difflow_refinery.assay import (
     CONTAMINANTS,
     DEFAULT_CUT_WIDTHS,
@@ -92,6 +92,17 @@ from difflow_refinery.column import (
     Pumparound,
     SideProduct,
     Spec,
+)
+from difflow_refinery.composition import (
+    HC_TYPES,
+    NITROGEN_CLASSES,
+    SULFUR_CLASSES,
+    Composition,
+    CompositionData,
+    CompositionRangeWarning,
+    CutData,
+    StreamComposition,
+    estimate_composition,
 )
 from difflow_refinery.correlations import (
     CRITICAL_METHODS,
@@ -168,6 +179,9 @@ __all__ = [
     "temperature_index_blend", "volume_blend",
     "edmister_omega", "lee_kesler_psat", "riazi_daubert_mw",
     "riazi_daubert_pc", "riazi_daubert_tc",
+    "composition", "HC_TYPES", "SULFUR_CLASSES", "NITROGEN_CLASSES",
+    "Composition", "CompositionData", "CompositionRangeWarning", "CutData",
+    "StreamComposition", "estimate_composition",
     "vacuum",
     "CrackingWarning",
     "PseudoComponents",
