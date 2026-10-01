@@ -7,9 +7,10 @@ rather than propagated, that "the solver said it converged" and "the answer
 audits" stay separate, and that no case is rigged so a strategy starts on
 the answer.
 
-The full grid is minutes of JAX compilation, so it is marked ``slow`` and
-everything else here runs against the two cheap analytic cases or against
-synthetic ones built in the test.
+The full grid is minutes of JAX compilation, so it lives in
+``test_convergence_full_grid.py`` (marked ``slow``), and everything else here
+runs against the two cheap analytic cases or against synthetic ones built in
+the test.
 """
 
 import warnings
@@ -515,41 +516,3 @@ class TestTheFindings:
         # Measured amplification below one: the error is smaller than the
         # step, not 450 times it.
         assert outcome.error_estimate < outcome.residual
-
-
-@pytest.fixture(scope="module")
-def full_grid() -> Report:
-    """The whole corpus, once.
-
-    Several minutes of JAX compilation, so it is shared rather than rebuilt
-    per test.  Safe to share: a :class:`Report` is read-only once returned,
-    and each solve inside it built its own flowsheet.
-    """
-    return run_benchmark()
-
-
-@pytest.mark.slow
-class TestFullGrid:
-
-    def test_it_covers_every_combination(self, full_grid):
-        assert len(full_grid.outcomes) == (
-            len(CORPUS) * len(ACCELERATIONS) * len(INITIALIZATIONS))
-
-    def test_the_corpus_measures_something(self, full_grid):
-        """All-pass or all-fail would mean the corpus is mistuned."""
-        assert 0.0 < full_grid.pass_rate < 1.0
-
-    def test_no_case_raises_at_any_setting(self, full_grid):
-        """A raise is a harness-visible outcome, but not one we expect here."""
-        raised = [o for o in full_grid.outcomes if o.error]
-        assert not raised, [o.error for o in raised]
-
-    def test_every_case_passes_somewhere(self, full_grid):
-        """A case no setting solves cannot discriminate between settings."""
-        for case, (passed, _) in full_grid.by("case").items():
-            assert passed > 0, f"{case} fails under every setting"
-
-    def test_the_report_renders(self, full_grid):
-        text = full_grid.as_text()
-        for case in CORPUS:
-            assert case.name in text

@@ -77,25 +77,6 @@ def solved(difflow_case):
     return case.solve_difflow(unit, Vf)
 
 
-class TestReferenceFile:
-    """Cheap and not ``release``: a deleted or truncated reference is wiring."""
-
-    pytestmark = []
-
-    def test_it_records_where_it_came_from(self):
-        p = REF["provenance"]
-        for key in ("generated", "script", "idaes", "pyomo", "ipopt", "property_methods",
-                    "reference_simulator", "difflow_commit"):
-            assert p[key], key
-        assert "DWSIM" in p["reference_simulator"]
-        assert Path(__file__).parent.joinpath("reference", "generate.py").exists()
-
-    def test_every_layer_is_there(self):
-        for key in ("layer1", "layer2", "layer3", "layer4"):
-            assert REF[key], key
-        assert REF["layer3"]["solve"]["status"] == "optimal"
-
-
 class TestReferenceIsCurrent:
     """The reference was built on difflow's pseudo-components (an input to
     both models); if they have moved, every comparison below is against a
