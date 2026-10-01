@@ -616,6 +616,74 @@ This is the minimum a blend pool needs to compute properties from composition. I
 - Crude blending ahead of the CDU (assay mixing).
 - A straight-run octane correlation from PNA. Octane is unit-reported or measured.
 
+(refinery-validation)=
+## Validation
+
+The crude unit has been checked against an independent reference. The issue asked for a DWSIM (or HYSYS or PRO/II) crude case. None of those were available, so the reference is built with **IDAES** 2.10 (Pyomo 6.10, IPOPT 3.13.2): the U.S. DOE's open equation-oriented process modelling platform. That choice decides what the check can say. It is an independent *implementation*: different code, a different solver, a different formulation and a different starting point. It is not an independent *model*: the column and its property model are the ones difflow states, written again. A commercial simulator's crude case would also bring its own characterisation and its own thermodynamics. Here those are tested separately, against published numbers and against Peng-Robinson.
+
+The generator is `tests/refinery/reference/generate.py`. It writes `cdu_reference.json`, which records the tool versions, the property methods, the date and the difflow commit. `tests/refinery/test_validation.py` checks difflow against that file, with each tolerance and the reason for it written beside the assertion. The test needs neither IDAES nor IPOPT. The case is the 95 000 bbl/d test crude in the 30-stage column used throughout this page: three side strippers, two pumparounds, bottom and stripper steam, a total condenser, and a 5 vol % overflash. The column builder (`reference/mesh.py`) takes a stage network, not a fixed layout, so the vacuum column (#294) can reuse it.
+
+**Layer 1: characterisation, against published worked examples.**
+
+| Source | Check | Agreement |
+| --- | --- | --- |
+| Riazi, ASTM MNL50 (2005), Ex. 2.5 and Ex. 2.7 / Table 2.11 | Riazi-Daubert 1980 and 1987, Lee-Kesler and Twu M, Tc, Pc | to the printed digits; Twu Pc within 1 % (below) |
+| Ahmed, *Equations of State and PVT Analysis* (2016), Ex. 2.2 | Riazi-Daubert 1980/1987 and Kesler-Lee M, Tc, Pc | to the printed 3 figures |
+| MNL50 Ex. 3.3 / Table 3.8 | TBP to ASTM D86 (Riazi-Daubert) | within 0.1 C at all six points |
+| `chemicals` 1.5.2 docstring examples (API TDB 2B4.1; Lee-Kesler; Riedel) | Watson K, Lee-Kesler Psat, Riedel latent heat at Tb | to the printed digits |
+| `chemicals` 1.5.2, on this crude's 28 components | Lee-Kesler Psat, Lee-Kesler omega, Riedel latent heat | 1e-10 |
+
+Three of MNL50's printed values are not reproduced. None is asserted.
+
+- Twu Pc for n-C36. The printed value is 6.02 bar (6.03 in Table 2.12); ours is 5.97. Our Vc reproduces the printed 2010 cm3/mol and Pc° = 6.015 bar, so the printed Pc appears to omit Twu's f_P correction. The test allows 1.5 %.
+- The "API" Pc of 7.37 bar. The extended Riazi-Daubert 1987 equation gives 5.90.
+- The Lee-Kesler Tc of 935.1 K. The Kesler-Lee equation gives 870.7, and our implementation reproduces Ahmed's Kesler-Lee example to three figures.
+
+**Layer 2: thermodynamics, against IDAES.**
+
+- *IDAES running difflow's property model.* The IDAES generic framework was given the same pure-component methods. The test flashes each stage's whole contents at the reference column's T and P:
+  - K-values agree to 1e-6.
+  - Liquid and vapour enthalpies agree to 1e-6.
+  - Each stage splits back into its own L and V to 1e-5.
+  - IDAES's crude bubble point (381 K) and dew point (847 K) at the flash-zone pressure satisfy difflow's sum z K = 1 and sum z / K = 1.
+
+  This confirms that difflow's arrays implement the equations it states. It says nothing about whether those equations are right.
+- *Peng-Robinson on the same Tc, Pc, omega and ideal-gas Cp* (kij = 0, hydrocarbons only). These are modelling differences. They are documented and pinned in the tests, not tuned away:
+  - On every stage, and at the coil outlet, the vapour fraction agrees within 0.021. At the coil outlet the difference is 0.0035.
+  - At the furnace inlet (240 C, 6 bar), Raoult vaporises 22 mol % of the crude and PR vaporises 15 %.
+  - The crude's enthalpy rise from the furnace inlet to the coil outlet is **4.0 % higher under PR**. That is the furnace-duty difference a PR crude case would show from the property model alone.
+  - For the cuts boiling 420-640 K, which make the side products, PR and Raoult K-values agree within -30 % / +25 % at the flash zone.
+  - Raoult over Lee-Kesler badly overpredicts the supercritical light ends. Propane's K is about 60 times PR's. The light ends go overhead under either model, but do not read a light-ends K-value off this model.
+  - For the heaviest residue cut (Tb 1033 K), PR's K is about 20 times Raoult's.
+  - Liquid enthalpy at the same composition agrees within 1.5 kJ/mol above the flash zone. Where residue is in the liquid, PR's is 13-18 kJ/mol higher. Watson's latent heat and PR with an extrapolated omega are both extrapolations for a 1000 K cut, and nothing here says which is closer to the truth.
+- *Water.* difflow's Wagner-Pruss Psat agrees with IAPWS-95 to 0.004 % and with IAPWS-IF97 to 0.02 %. Watson's latent heat for water is exact at Tb, 1.3 % high at 300 K and 2.6 % low at 550 K, compared with IAPWS-95 by Clausius-Clapeyron.
+
+**Layer 3: the column, against an independent EO model.** `reference/mesh.py` writes every stage, stripper, pumparound, the condenser and the furnace flash as Pyomo equations with the same specs. It solves them with IPOPT from a linear 380-580 K profile and round-number flows; no difflow result is used to initialise it. It converges in about 25 s. The two solutions agree as follows:
+
+- stage, stripper and condenser temperatures and the coil outlet (588.0 K): 6e-6 K
+- condenser duty (32.39 MW): 6e-7 relative
+- fired duty (51.59 MW): 3e-10 relative
+- pumparound return temperatures: agree within 1e-3 K (the test tolerance)
+- feed vaporised (0.691): agrees within 1e-6 (the test tolerance)
+- volume yields: 4e-10
+- API gravities: 2e-7
+- TBP 5/10/50/90/95 % points: 5e-7 K
+- 5-95 gaps: 6e-7 K
+- steam saturation: within the 0.02 % that separates the two water Psat formulations
+
+The test tolerances are set at the solvers' precision, not at engineering accuracy, so a transcription error in either column has nowhere to hide. The same column with Watson's floor unsmoothed (eps = 0.01 → 1e-6) moves the fired duty by 0.10 %, the condenser duty by 0.003 %, stage temperatures by at most 0.019 K and the API gravities by at most 2e-4. That is the price of the smoothing that gives difflow a derivative everywhere.
+
+**Layer 4: gradients.** Central finite differences of the reference column (each spec ± 0.002, IPOPT warm-started) against `jax.grad` through difflow's implicit-function solve:
+
+| Gradient | `jax.grad` | Reference FD | Agreement |
+| --- | --- | --- | --- |
+| d(diesel API)/d(diesel vol. yield) | -30.0685 | -30.0689 | 1.5e-5 |
+| d(fired duty)/d(overflash) | 170.915 MW | 170.920 MW | 3.2e-5 |
+
+The file also stores d(condenser duty)/d(diesel yield) and d(residue API)/d(overflash) for later use.
+
+**What this does not validate.** It does not show that Raoult/Watson is the right property model for a given crude; layer 2 measures how far it is from PR, nothing more. It does not cover a commercial simulator's characterisation, its D86 interconversion defaults, or its tray-efficiency and hydraulics models, and it does not replace plant data. The 5-95 gaps of this case are negative (-27 to -55 K): equilibrium stages with these specs give overlapping products. Both implementations agree on that, which says nothing about whether a real column would overlap the same way. When a deliberate model change moves any number above, `TestReferenceIsCurrent` fails first and asks for the reference to be regenerated.
+
 ---
 
 (refinery-limitations)=
@@ -625,4 +693,4 @@ This is the minimum a blend pool needs to compute properties from composition. I
 - **Thermodynamics:** Raoult's law and ideal-gas-path enthalpies. This is the usual model for an atmospheric column at one or two bar; it is not a cubic equation of state.
 - **Equilibrium stages.** There are no tray efficiencies or hydraulics.
 - **Boiling ranges are TBP, not ASTM D86.**
-- **Validation:** checked against its own balances and against finite differences, not yet against a commercial simulator's crude case.
+- **Validation:** against an independent equation-oriented model, IDAES property packages and published characterisation examples; not against a commercial simulator's crude case. See [Validation](#refinery-validation) for what that does and does not establish.
