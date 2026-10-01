@@ -162,7 +162,7 @@ class TestBlock:
         exactly the n-butane node, and its slope is one-sided.
         """
         blk = cdu_block(unit, ["naphtha.yield"], ["naphtha.tbp5"], rate=BPD, T=T_IN, P=P_IN)
-        f = lambda x: float(blk.fn(np.array([x]))[0])
+        f = lambda x: float(blk.evaluate(np.array([x]))[0])
         h = 1e-3
         left = (f(0.2) - f(0.2 - h)) / h
         right = (f(0.2 + h) - f(0.2)) / h
