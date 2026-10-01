@@ -54,13 +54,20 @@ jobs:
   test:
     name: Tests (${{ matrix.python-version }}, shard ${{ matrix.shard }}/3)
     runs-on: ubuntu-latest
-    # A shard is ~7 minutes. 25 is enough headroom for a runner having a bad
-    # day and still short enough to catch a hang, which was the problem with
-    # reading the old 45: at 34 minutes of real work, a cap that meant "this
-    # has hung" and a cap that meant "this is slow today" were the same
-    # number, and run 34425803062 was cancelled at 81% with everything to
-    # that point passing.
-    timeout-minutes: 25
+    # A shard was ~7 minutes when this cap was 25, chosen to be short enough
+    # to catch a hang, which was the problem with reading the old 45: at 34
+    # minutes of real work, a cap that meant "this has hung" and a cap that
+    # meant "this is slow today" were the same number, and run 34425803062
+    # was cancelled at 81% with everything to that point passing.
+    #
+    # Shards are now 9-22 minutes, and the long one is a tail, not a
+    # balance problem: shard 2 reaches 94% at 8-11 minutes and spends 10-13
+    # more on its last few files, one worker running alone (runs 36908310108,
+    # which hit 25 on #303, and 36913554019 on #314). Those files are far slower here
+    # than on a laptop -- the mid-module cache clear in tests/conftest.py
+    # fires on Linux only, and at -n 4 its budget is 3750 mappings a worker.
+    # 35 keeps a hang distinguishable from that until it is fixed.
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
