@@ -251,6 +251,11 @@ class CrudeColumnParams(ParamsMixin):
         distillate_name: Name of the liquid overhead product.
         furnace: A :class:`Furnace` in front of the column, or ``None`` for a
             column fed at a known temperature.
+        vapor_feed_stage: Where a second, vapour feed enters -- a preflash
+            drum's vapour (:mod:`difflow_refinery.preheat`): a stage number,
+            or 0 for the condenser (the overhead line). ``None`` (the
+            default): no second feed, and :meth:`CrudeColumn.solve` takes
+            none.
         max_iter: Damped-Newton iterations before giving up (softly).
         tol: Converged when the scaled residual's infinity norm is below this.
     """
@@ -268,6 +273,7 @@ class CrudeColumnParams(ParamsMixin):
     steam_T: float | Array = 600.0
     distillate_name: str = "naphtha"
     furnace: Furnace | None = None
+    vapor_feed_stage: int | None = None
     max_iter: int = 80
     tol: float = 1e-9
 
@@ -298,6 +304,7 @@ class _Layout:
     n_pa: int
     partial: bool
     furnace: bool
+    vapor_feed: int | None = None  # node the vapour feed enters (M = condenser)
 
     @property
     def n_draw(self) -> int:
@@ -356,6 +363,12 @@ def _layout(p: CrudeColumnParams) -> _Layout:
             raise ValueError(f"side product name {reserved!r} is taken")
     vap[0] = M  # the condenser is node M, after every stage
     steam_node = [N - 1] + steam_node
+    vapor_feed = None
+    if p.vapor_feed_stage is not None:
+        if not 0 <= int(p.vapor_feed_stage) <= N:
+            raise ValueError(f"vapor_feed_stage {p.vapor_feed_stage} is not the condenser (0) "
+                             f"or a stage of a {N}-stage column")
+        vapor_feed = M if int(p.vapor_feed_stage) == 0 else int(p.vapor_feed_stage) - 1
     return _Layout(
         n_main=N, n_total=M, feed=p.feed_stage - 1,
         vap_dst=np.asarray(vap, dtype=int), liq_dst=np.asarray(liq, dtype=int),
@@ -364,7 +377,7 @@ def _layout(p: CrudeColumnParams) -> _Layout:
         steam_node=np.asarray(steam_node, dtype=int),
         stage_of_main=np.asarray(stage_of, dtype=int), product_nodes=products,
         n_side=len(p.side_products), n_pa=len(p.pumparounds),
-        partial=p.condenser == "partial", furnace=p.furnace is not None,
+        partial=p.condenser == "partial", furnace=p.furnace is not None, vapor_feed=vapor_feed,
     )
 
 
@@ -517,12 +530,19 @@ class CrudeColumn:
 
     # ------------------------------------------------------------------
 
-    def __call__(self, feed: dict) -> dict:
-        return self.solve(feed).products
+    def __call__(self, feed: dict, vapor_feed: dict | None = None) -> dict:
+        return self.solve(feed, vapor_feed).products
 
-    def solve(self, feed: dict) -> CrudeColumnResult:
-        """Solve the column for a feed stream."""
-        args = self._args(feed)
+    def solve(self, feed: dict, vapor_feed: dict | None = None) -> CrudeColumnResult:
+        """Solve the column for a feed stream.
+
+        ``vapor_feed`` is the second feed of ``params.vapor_feed_stage`` (a
+        stream dict, entering as vapour at its ``T``); omitted, it is zero.
+        """
+        return self._solve_args(self._args(feed, vapor_feed))
+
+    def _solve_args(self, args) -> CrudeColumnResult:
+        """:meth:`solve` from already assembled inputs (``args["specs"]`` may be replaced)."""
         frozen = jax.lax.stop_gradient(args)
         z0 = self._initial_guess(frozen)
         if self._needs_continuation(frozen["thermo"]):
@@ -573,7 +593,7 @@ class CrudeColumn:
     # Inputs
     # ------------------------------------------------------------------
 
-    def _args(self, feed: dict) -> dict:
+    def _args(self, feed: dict, vapor_feed: dict | None = None) -> dict:
         p, th = self.params, self.thermo
         missing = [n for n in th.names if f"F_{n}" not in feed]
         if missing:
@@ -597,7 +617,18 @@ class CrudeColumn:
         steam = jnp.stack([jnp.asarray(p.bottom_steam, dtype=float)]
                           + [jnp.asarray(sp.steam, dtype=float)
                              for sp in p.side_products if sp.stripper_stages > 0])
+        extra = {}
+        if self.layout.vapor_feed is not None:
+            vf = vapor_feed or {}
+            extra = {
+                "fx": jnp.stack([jnp.asarray(vf.get(f"F_{n}", 0.0), dtype=float) for n in th.names]),
+                "fx_water": jnp.asarray(vf.get("F_water", 0.0), dtype=float),
+                "T_x": jnp.asarray(vf.get("T", 400.0), dtype=float),
+            }
+        elif vapor_feed is not None:
+            raise ValueError("a vapor_feed needs params.vapor_feed_stage")
         return {
+            **extra,
             "thermo": th,
             "f": f,
             "f_water": jnp.asarray(feed.get("F_water", 0.0), dtype=float),
@@ -619,7 +650,7 @@ class CrudeColumn:
 
     @staticmethod
     def _has_water(args) -> Array:
-        return (jnp.sum(args["steam"]) + args["f_water"]) > 0
+        return (jnp.sum(args["steam"]) + args["f_water"] + args.get("fx_water", 0.0)) > 0
 
     def _pressures(self, args) -> Array:
         lay = self.layout
@@ -767,6 +798,13 @@ class CrudeColumn:
         comp_in = comp_in.at[lay.feed].add(args["f"])
         water_in = water_in.at[lay.feed].add(args["f_water"])
         E_in = E_in.at[lay.feed].add(E_feed)
+        # a second feed, as vapour: what arrives is its own enthalpy flow
+        if lay.vapor_feed is not None:
+            n = lay.vapor_feed
+            comp_in = comp_in.at[n].add(args["fx"])
+            water_in = water_in.at[n].add(args["fx_water"])
+            E_in = E_in.at[n].add(jnp.sum(args["fx"] * th.h_vapor(args["T_x"]))
+                                  + args["fx_water"] * th.water_h_vapor(args["T_x"]))
         # steam
         water_in = water_in.at[lay.steam_node].add(args["steam"])
         E_in = E_in.at[lay.steam_node].add(args["steam"] * th.water_h_vapor(args["T_steam"]))
@@ -828,6 +866,8 @@ class CrudeColumn:
         s = self._state(z, args)
         F = s["F"]
         steam_scale = jnp.sum(args["steam"]) + args["f_water"] + 1e-3 * F
+        if lay.vapor_feed is not None:
+            steam_scale = steam_scale + args["fx_water"]
         E_scale = 3e4 * F
         # Two scalings of the component balances, with the same roots.
         #
@@ -1002,6 +1042,11 @@ class CrudeColumn:
         P = self._pressures(args)
         steam = args["steam"]
         steam_total = jnp.sum(steam) + args["f_water"]
+        fx = args["fx"] if lay.vapor_feed is not None else jnp.zeros(nc)
+        if lay.vapor_feed is not None:
+            # the second feed is vapour, and all of it rises past the products
+            V_feed = V_feed + jnp.sum(fx)
+            steam_total = steam_total + args["fx_water"]
         specs = {(s.kind, s.target): (i, s) for i, s in enumerate(p.specs)}
 
         # --- 1. product rates and compositions -----------------------------
@@ -1034,7 +1079,7 @@ class CrudeColumn:
                 amount[n], basis_of[n] = share, "mole"
 
         tb_order = jnp.argsort(th.Tb)
-        remaining = f
+        remaining = f + fx
         comp = {}
         for name in order:
             fac = factor[basis_of[name]]
@@ -1181,6 +1226,8 @@ class CrudeColumn:
                     si += 1
             if j <= lay.feed + 1:
                 wj = wj + args["f_water"]
+            if lay.vapor_feed is not None and lay.vapor_feed < M and j <= lay.vapor_feed + 1:
+                wj = wj + args["fx_water"]
             w_main.append(wj)
         w_all = list(w_main)
         Lnet_all, V_hc_all = [Lnet], [V_hc]
@@ -1245,6 +1292,8 @@ class CrudeColumn:
                     A = A.at[:, lay.draw_dst[into], lay.draw_src[into]].add(-coef[None, :])
             A = A.at[:, 0, C].add(-rho)
             b = jnp.zeros((nc, nodes)).at[:, lay.feed].set(f)
+            if lay.vapor_feed is not None:
+                b = b.at[:, lay.vapor_feed].add(fx)
             sol = jnp.linalg.solve(A, b[..., None])[..., 0]  # (nc, nodes)
             sol = jnp.maximum(sol, 1e-30 * F)
             return sol[:, :M].T, sol[:, C]
@@ -1291,6 +1340,9 @@ class CrudeColumn:
                     want = want + 0.85 * args["specs"][i] / mean[s.basis]
                 elif s.kind == "overflash":
                     want = want + args["specs"][i] * F * mean["mole"] / mean[s.basis]
+            if self.layout.vapor_feed is not None:
+                # what the second feed brings as vapour need not be vaporised here
+                want = want - jnp.sum(args["fx"])
             want = jnp.clip(want, 0.05 * F, 0.9 * F)
 
             def excess(T):

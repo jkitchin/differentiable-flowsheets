@@ -168,7 +168,8 @@ class TestPorts:
 
         What remains is honest: the REE circuits return a dict of named
         streams, Splitter's width is a call argument, the crude unit's
-        products are whatever side products its column declares, and two
+        products (with or without its preheat train in front) are whatever
+        side products its column declares, and two
         entries are model objects with no `__call__` at all.
         """
         unknown = {n for n, s in cat.items() if s.ports.n_outlets is None}
@@ -176,7 +177,7 @@ class TestPorts:
             "ExtractStripCircuit", "ExtractScrubStripCircuit",
             "FullSeparationTrain", "SplitShellCascade",
             "Splitter", "LLEEquilibrium", "TFF",
-        } | ({"CrudeDistillationUnit"} if "CrudeDistillationUnit" in cat else set())
+        } | ({"CrudeDistillationUnit", "CrudeUnitWithPreheat"} & set(cat))
 
 
 # =============================================================================
