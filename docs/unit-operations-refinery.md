@@ -236,6 +236,81 @@ def residue_api(sg):
 jax.grad(residue_api)(0.85)
 ```
 
+## Planning with the crude unit
+
+`difflow_refinery.planning.cdu_block` wraps a `CrudeUnit` as a `difflow.planning.Block`. Its delta vectors are the column's own derivatives, taken by AD through the Newton solve, and the trust-region planner refreshes them every cycle (see [Delta-base planning](planning.md)). The full walk-through is `examples/35_refinery_cdu_planning.ipynb`.
+
+```python
+from difflow_refinery.planning import available_levers, cdu_block, link_cdu, product_value_block
+from difflow.planning import DeltaBasePlanner, Network, check_delta_vectors
+from difflow.planning.lp import Spec
+
+cdu = cdu_block(unit, ["crude.rate", "naphtha.yield", "kero.yield", "overflash"],
+                ["kero.bpd", "kero.tbp95", "gap.kero_diesel", "furnace.fired", ...],
+                rate=95_000, T=273.15 + 240, P=6e5,          # the base point, as for unit.solve
+                bounds={"kero.yield": (0.08, 0.15), ...})
+check_delta_vectors(cdu)["passed"]                           # AD against central differences
+value = product_value_block({"naphtha": 70.0, "kero": 95.0, ...})   # $/bbl
+net = Network([cdu, value], link_cdu(cdu, value))
+plan = DeltaBasePlanner(net, prices={"value.revenue": 1.0, "cdu.crude.rate": -65.0,
+                                     "cdu.furnace.fired": -700.0},
+                        specs=[Spec("cdu.kero.tbp95", "<=", 235.0)]).solve()
+```
+
+**Levers come from the specs.** `available_levers(unit)` lists them:
+
+- `crude.rate` (bbl/d) and `preheat.T` (°C) are always levers.
+- Each volume product-rate spec offers `<product>.yield` (a fraction of the crude) or `<product>.bpd`.
+- The other spec levers are `overflash`, `<pa>.duty` (MW), `<pa>.dT` (K), `<pa>.return_T` (°C), `<pa>.rate` (bbl/d), `furnace.cot` (°C), `furnace.duty` (MW absorbed), `reflux_ratio` and `stage<k>.T` (°C).
+- The stripping steam rates are levers in kg/h.
+
+A spec the column does not have is not a lever. A column closed by an overflash has no `furnace.cot`, because fixing the coil outlet as well would over-specify it.
+
+A spec that is not chosen as a lever is held. A volume product rate is held **as its yield**, so it follows `crude.rate`. Holding it as an absolute rate would give the whole rate change to the residue.
+
+**Outputs** are reported per product and for the unit as a whole:
+
+| Output | Units | Notes |
+|---|---|---|
+| `<product>.bpd` | bbl/d | |
+| `<product>.yield` | - | volume fraction of the crude |
+| `<product>.yield_mass` | - | mass fraction of the crude |
+| `<product>.sg` | - | |
+| `<product>.api` | API | |
+| `<product>.mw` | g/mol | |
+| `<product>.tbp5` … `.tbp95` | °C | |
+| `gap.<a>_<b>` | K | TBP5(b) less TBP95(a) |
+| `cut.<a>_<b>` | °C | the effective cut point: the crude's TBP at the cumulative yield through `a` |
+| `furnace.fired`, `furnace.absorbed` | MW | |
+| `furnace.cot` | °C | |
+| `furnace.vaporized` | - | |
+| `condenser.duty`, `<pa>.duty` | MW | |
+| `steam.total` | kg/h | |
+| `water.saturation_max` | - | |
+
+Temperatures are in °C and temperature differences in K. Every unit is recorded in `block.metadata["u_units"]` and `["y_units"]`, so an export is self-describing.
+
+**Health.** `check_delta_health` passes on the default outputs. Three kinds of output would fail it and are left out of the defaults; ask for them by name if you want them.
+
+- **A held product's yield** is a constant row.
+- **`steam.total`** is a constant row unless a steam rate is a lever.
+- **The lightest product's TBP5** has a kink. A TBP point is piecewise linear in the cumulative volume, with one node per component, and the nodes among the discrete light ends are tens of degrees apart. On the test crude the naphtha's 5 % point sits on the n-butane node at the base point, with a slope of 277.6 K per unit yield to the left and 146.2 to the right.
+
+The `preheat.T` lever is not dead, but on a column closed by an overflash it moves only the fired duty. The overflash fixes the flash-zone vaporisation, so the preheat temperature changes how much heat the furnace must add and nothing about the products.
+
+**Non-convergence.** Some spec sets have no solution. With 5 % overflash, taking more than about 25 MW out of PA1 on the test column dries out the section above it. The column then reports `converged=False` with a finite state. `cdu_block` returns NaN at such a point, and the planner rejects any proposal at which a block is not finite ([A block that cannot be evaluated](planning.md#a-block-that-cannot-be-evaluated)).
+
+On the test column, a credit on PA1 duty drives the planner past the edge. It proposes 30, 27, 25.5 and 24.75 MW, rejects each, and settles at 24.4 MW, which converges. With `mask_nonconverged=False`, the same run ends at 30 MW on a column that did not converge and reports itself as converged.
+
+**Yields as levers, cut points as outputs.** A cut-point target such as "kero TBP95 ≤ 235 °C" is a planner `Spec` on a CDU output, and the LP inverts the delta vector to find the yield that meets it. In the example plan, the kero end point binds at 235.000 °C. The planner trades naphtha yield, which pays \$70/bbl, against kero, which pays \$95/bbl, because a heavier naphtha cut also makes the kero heavier.
+
+Making a cut point a column *spec* would describe the same feasible set, and it would cost more in two ways:
+
+- it would put a piecewise-linear TBP point inside the column's Newton solve;
+- or, as an alternative, it would wrap a root find around the column, which means several column solves per evaluation.
+
+For the same reason, `product_value_block` prices products in bbl/d only. Folded into the revenue as a smooth penalty, a quality limit puts curvature in the objective that a linear model cannot see. On the test crude, that version crawled along the penalty's shoulder at a radius of 1e-4 and stopped at the iteration cap.
+
 ---
 
 (refinery-unit-operations)=

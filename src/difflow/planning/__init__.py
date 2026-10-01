@@ -191,6 +191,7 @@ from difflow.planning.piecewise import (
 )
 from difflow.planning.planner import (
     DeltaBasePlanner, Iteration, PlanResult, TrustRegionOptions,
+    state_is_finite,
 )
 from difflow.planning.sensitivity import (
     PlanSensitivity, plan_sensitivity, price_switch_point,
@@ -255,6 +256,7 @@ __all__ = [
     "trust_region_bounds",
     # Planner
     "DeltaBasePlanner",
+    "state_is_finite",
     "PlanResult",
     "TrustRegionOptions",
     "Iteration",

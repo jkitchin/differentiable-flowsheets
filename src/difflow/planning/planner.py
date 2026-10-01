@@ -30,6 +30,12 @@ Two further traps are encoded rather than left to the caller:
   keep it feasible, but the merit function scores the violation computed from
   the *nonlinear* blocks.  Score against the LP's own prediction and a planner
   with stale coefficients wins by running off-spec on paper.
+* **A block that cannot be evaluated is not scored.**  An inner solve that
+  fails (a column with no solution for its specs) reports NaN outputs.  A
+  state holding any non-finite value scores merit ``-inf`` and violation
+  ``inf``: the proposal is rejected and the radius shrinks, under either
+  setting of ``accept_test``.  Left to the arithmetic it is not safe --
+  ``max(0.0, nan)`` is ``0.0``, so a NaN spec output reads as satisfied.
 * **Vertex seeding.**  Levers like ethane recovery versus rejection sit at a
   bound and switch discretely with prices.  A single interior start converges
   to whichever corner it happens to face, so the planner seeds the loop from
@@ -306,8 +312,10 @@ class DeltaBasePlanner:
             decisions: Free-decision array or dict.
 
         Returns:
-            Dict with ``objective``, ``violations``, ``penalty``, ``merit``
-            and the full ``state``.
+            Dict with ``objective``, ``violations``, ``penalty``, ``merit``,
+            ``evaluable`` and the full ``state``.  A state holding any
+            non-finite value is not ``evaluable``: its merit is ``-inf`` and
+            its total violation ``inf``, so it can never be preferred.
         """
         state = self.evaluation_network.evaluate(decisions, self.theta)
         return self._score_state(state)
@@ -316,12 +324,26 @@ class DeltaBasePlanner:
         obj = self.objective_value(state.values)
         viol = self.violations(state.values)
         pen = self.penalty_cost(viol)
+        evaluable = state_is_finite(state)
+        total = float(sum(viol.values()))
+        merit = self._merit_sign * obj - pen
+        if not evaluable:
+            # A block that could not be evaluated -- an inner solve that did
+            # not converge, reported as NaN -- has no merit and no violation
+            # to compare. Both are pinned to the worst value rather than left
+            # to the arithmetic: a NaN merit already loses ``rho >= eta``, but
+            # a NaN spec output scores ZERO violation (``max(0.0, nan)`` is
+            # 0.0), and a NaN output that is neither priced nor specified
+            # leaves the merit finite. Either would let restoration or the
+            # main loop accept a point the model never produced.
+            merit, total = -np.inf, np.inf
         return {
             "objective": obj,
             "violations": viol,
-            "total_violation": float(sum(viol.values())),
+            "total_violation": total,
             "penalty": pen,
-            "merit": self._merit_sign * obj - pen,
+            "merit": merit,
+            "evaluable": evaluable,
             "state": state,
         }
 
@@ -668,6 +690,15 @@ class DeltaBasePlanner:
             if best is None or res.merit > best.merit:
                 best = res
         assert best is not None
+        if best.reason == "start_not_evaluable":
+            # Every start, the caller's own included, failed to evaluate:
+            # there is no plan, and returning the start dressed as one would
+            # hand back decisions no model run supports.
+            raise ValueError(
+                "no starting point could be evaluated: some block returned a "
+                "non-finite output (an inner solve that did not converge?) at "
+                f"every one of the {len(starts)} start(s). Move u0 into the "
+                "region where the blocks converge.")
         best.attempts = attempts
         best.n_starts = len(starts)
         return best
@@ -680,6 +711,18 @@ class DeltaBasePlanner:
         state = net.evaluate(jnp.asarray(start), self.theta)
         scored = self._score_state(state)
         merit = scored["merit"]
+        if not scored["evaluable"]:
+            # Nothing can be linearised at a point the model did not produce.
+            # A vertex seed in a corner where an inner solve fails lands here
+            # routinely; it loses to any evaluable start on merit (-inf).
+            return PlanResult(
+                planner=self, network=self.network, state=state,
+                decisions=np.asarray(state.decisions, dtype=float),
+                objective=scored["objective"], merit=merit,
+                violations=scored["violations"], penalty=scored["penalty"],
+                linearizations={}, lp_model=None, history=[],
+                converged=False, reason="start_not_evaluable", radius=radius,
+                start=start)
 
         history: list[Iteration] = []
         phase_messages: list[str] = []
@@ -754,13 +797,18 @@ class DeltaBasePlanner:
             realised = trial_scored["merit"]
             rho = (realised - merit) / gain
 
-            accepted = (True if not self.accept_test
-                        else rho >= opts.eta_accept)
+            # A proposal the model could not evaluate is rejected under
+            # either setting of accept_test: it is not a worse point but no
+            # point at all, and the next cycle could not linearise there.
+            accepted = trial_scored["evaluable"] and (
+                True if not self.accept_test else rho >= opts.eta_accept)
             history.append(Iteration(
                 index=it, radius=radius, merit=merit, predicted=predicted,
                 realised=realised, rho=float(rho), accepted=accepted,
-                lp_status=sol.message, decisions=trial.copy(),
-                phase_warnings=msgs))
+                lp_status=(sol.message if trial_scored["evaluable"] else
+                           f"{sol.message}; model not evaluable at the "
+                           "proposal (non-finite output)"),
+                decisions=trial.copy(), phase_warnings=msgs))
 
             if accepted:
                 at_boundary = self._hit_trust_region(state, trial, radius)
@@ -859,6 +907,7 @@ class DeltaBasePlanner:
                 jnp.asarray(trial), self.theta)
             trial_scored = self._score_state(trial_state)
             violation = trial_scored["total_violation"]
+            # inf for a point the model could not evaluate, so never accepted
             accepted = violation < best_violation
 
             history.append(Iteration(
@@ -962,7 +1011,9 @@ class PlanResult:
         lp_model: The final :class:`~difflow.planning.lp.LPModel`.
         history: The trust-region cycles.
         converged: Whether the loop reached a stationary point.
-        reason: Why the loop stopped.
+        reason: Why the loop stopped.  ``"start_not_evaluable"`` for a
+            start at which some block returned a non-finite output; such a
+            run has no linearisations and ``lp_model`` is ``None``.
         radius: Final trust-region radius.
         phase_warnings: Phase-boundary diagnostics raised during the solve.
         start: The starting point this run used.
@@ -1112,6 +1163,18 @@ class PlanResult:
         return (f"PlanResult(objective={self.objective:.6g}, "
                 f"merit={self.merit:.6g}, converged={self.converged}, "
                 f"iterations={self.n_iterations})")
+
+
+def state_is_finite(state: NetworkState) -> bool:
+    """Whether every input and output of an evaluated network is finite.
+
+    The convention by which a block reports that it could not be evaluated
+    -- an inner solve that did not converge, say -- is to return NaN.  The
+    planner treats a state that fails this test as no point at all: never
+    accepted, never scored as feasible, never linearised.
+    """
+    vals = [np.asarray(v, dtype=float) for v in state.values.values()]
+    return bool(all(np.all(np.isfinite(v)) for v in vals))
 
 
 def _corrected_fn(block: "Any", modifiers: "Any") -> Callable:
