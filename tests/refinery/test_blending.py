@@ -126,6 +126,26 @@ class TestRefutas:
         # a little cutter goes a long way: far below the 490 cSt linear mix
         assert 40.0 < float(got) < 200.0
 
+    def test_published_worked_example(self):
+        # K. Johnsen, "Blending by Index", Haverly Systems blog no. 60
+        # (2 Oct 2019), https://www.haverly.com/kathy-blog/716-blog-60-blend-index:
+        # a 30 cSt @ 100 C fuel oil from a 34 cSt base and a 1.5 cSt
+        # diluent.  The post tabulates VBI 29.389, 8.318 and 28.880 and
+        # finds 0.0242 weight fraction diluent (12.3 % if blended linearly).
+        # Its formula is printed with 14.543, a typo for 14.534: 14.534
+        # reproduces the diluent's 8.318 and both constants land within
+        # 0.01 of the other two, inside the post's rounding.
+        base, diluent, target = (float(refutas_vbn(nu)) for nu in (34.0, 1.5, 30.0))
+        assert base == pytest.approx(29.389, abs=0.003)
+        assert diluent == pytest.approx(8.318, abs=0.001)
+        assert target == pytest.approx(28.880, abs=0.003)
+        x = (base - target) / (base - diluent)
+        assert x == pytest.approx(0.0242, abs=1e-4)
+        # and blending that fraction back by mass lands on the spec
+        nu = float(refutas_viscosity((1 - x) * base + x * diluent))
+        assert nu == pytest.approx(30.0, rel=1e-12)
+        assert (34.0 - 30.0) / (34.0 - 1.5) == pytest.approx(0.123, abs=5e-4)
+
     def test_mass_basis(self):
         # the heavier component carries more weight than its volume says
         light = refutas_blend(jnp.array([0.5, 0.5]), jnp.array([0.8, 0.8]),
@@ -145,11 +165,11 @@ class TestEthylRT70:
             return sum(v[i] * x[i] for i in range(2))
 
         rs = avg([r[i] * s[i] for i in range(2)]) - avg(r) * avg(s)
-        mo = avg([m[i] * o[i] for i in range(2)]) - avg(m) * avg(o)
+        ms = avg([m[i] * s[i] for i in range(2)]) - avg(m) * avg(s)
         o2 = avg([x * x for x in o]) - avg(o) ** 2
         a2 = avg([x * x for x in a]) - avg(a) ** 2
         ron = avg(r) + 0.03224 * rs + 0.00101 * o2
-        mon = avg(m) + 0.04450 * mo + 0.00081 * o2 - 0.0645 * a2 ** 2 / 1e4
+        mon = avg(m) + 0.04450 * ms + 0.00081 * o2 - 0.00645 * (a2 / 100) ** 2
         got = ethyl_rt70(jnp.array(v), jnp.array(r), jnp.array(m),
                          jnp.array(o), jnp.array(a))
         assert float(got[0]) == pytest.approx(ron, rel=1e-13)
@@ -167,9 +187,46 @@ class TestEthylRT70:
         assert float(got[1]) == pytest.approx(float(jnp.sum(v * mon)))
 
     def test_coefficients_are_the_published_fit(self):
+        # Maples, Petroleum Refinery Process Economics, 2nd ed. (PennWell,
+        # 2000), 75-blend fit, as tabulated in J. Jechura, CBEN 409 "Product
+        # Blending & Optimization Considerations", Colorado School of Mines
+        # (2019), slide 6.  b3 was -0.0645 before #301 -- ten times too big.
         c = EthylRT70()
         assert (c.a1, c.a2, c.a3) == (0.03224, 0.00101, 0.0)
-        assert (c.b1, c.b2, c.b3) == (0.04450, 0.00081, -0.0645)
+        assert (c.b1, c.b2, c.b3) == (0.04450, 0.00081, -0.00645)
+
+    def test_aromatic_term_scaling_matches_the_written_out_form(self):
+        # Jechura slide 19 writes the 135-blend MON aromatic term out as
+        # -6.32e-7 (A^2 - A A)^2 against b3 = -0.00632 in the table: the
+        # spread is divided by 100 BEFORE squaring.  Pin that scaling.
+        v = jnp.array([0.5, 0.5])
+        r = jnp.array([95.0, 95.0])
+        m = jnp.array([85.0, 85.0])
+        o = jnp.zeros(2)
+        a = jnp.array([10.0, 60.0])
+        c135 = EthylRT70(a1=0.03324, a2=0.00085, b1=0.04285, b2=0.00066,
+                         b3=-0.00632)
+        _, mon = ethyl_rt70(v, r, m, o, a, c135)
+        spread = 0.5 * (10.0 ** 2 + 60.0 ** 2) - 35.0 ** 2
+        assert float(mon) == pytest.approx(85.0 - 6.32e-7 * spread ** 2, rel=1e-13)
+
+    def test_mon_interaction_is_on_sensitivity_not_olefins(self):
+        # Same olefins everywhere, different sensitivity: the b1 term must
+        # still act (Maples 2000; Singh et al., J. Process Control 10 (2000)
+        # 43-58, both write it as M*J with J = RON - MON).
+        v = jnp.array([0.5, 0.5])
+        r = jnp.array([100.0, 90.0])
+        m = jnp.array([88.0, 88.0])
+        o = jnp.full(2, 5.0)
+        a = jnp.full(2, 20.0)
+        _, mon = ethyl_rt70(v, r, m, o, a)
+        assert float(mon) == pytest.approx(88.0, abs=1e-12)  # M constant: zero covariance
+        m2 = jnp.array([90.0, 84.0])
+        _, mon2 = ethyl_rt70(v, r, m2, o, a)
+        s = r - m2
+        cov = float(jnp.mean(m2 * s) - jnp.mean(m2) * jnp.mean(s))
+        assert float(mon2) == pytest.approx(87.0 + 0.04450 * cov, rel=1e-13)
+        assert cov != 0.0
 
 
 class TestRVP:
@@ -178,6 +235,22 @@ class TestRVP:
         expected = (sum(v[i] * rvp[i] ** 1.25 for i in range(2))) ** 0.8
         got = rvp_index_blend(jnp.array(v), jnp.array(rvp))
         assert float(got) == pytest.approx(expected, rel=1e-13)
+
+    def test_published_worked_example(self):
+        # J. Jechura, CBEN 409 "Product Blending & Optimization
+        # Considerations", Colorado School of Mines (2019), slide 22,
+        # "Gasoline Blending Example - All Into Regular": 30,000 gal
+        # butane (54 psi), 35,000 straight-run naphtha (11.2), 60,000 high
+        # octane reformate (3.2), 70,000 FCC naphtha (1.4) and 40,000
+        # alkylate (4.6) give RVP^1.25 = 24.43 and RVP = 12.9 psi.
+        v = jnp.array([30_000.0, 35_000.0, 60_000.0, 70_000.0, 40_000.0])
+        rvp = jnp.array([54.0, 11.2, 3.2, 1.4, 4.6])
+        got = float(rvp_index_blend(v, rvp))
+        assert got ** 1.25 == pytest.approx(24.43, abs=0.005)
+        assert got == pytest.approx(12.9, abs=0.05)
+        # the slide's per-component index column
+        np.testing.assert_allclose(np.asarray(rvp) ** 1.25,
+                                   [146.4, 20.5, 4.3, 1.5, 6.7], atol=0.05)
 
     def test_index_is_linear_at_exponent_one(self):
         v, rvp = jnp.array([0.3, 0.7]), jnp.array([4.0, 10.0])

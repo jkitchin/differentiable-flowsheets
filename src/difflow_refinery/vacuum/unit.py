@@ -525,7 +525,8 @@ class VacuumColumn:
         Returns:
             ``(overhead, lvgo, hvgo, slop, residue, info)``: five difflow
             streams (mol/s per pseudocomponent; the overhead also carries
-            ``F_H2O``) and an info dict with ``converged``, ``iterations``,
+            ``F_H2O`` and every feed species the column does not model,
+            passed through unchanged) and an info dict with ``converged``, ``iterations``,
             ``residual``, every column output under ``outputs`` (rates in
             kg/s, temperatures in K, duties in W), product ``properties``
             (SG, API, S, N, CCR, Ni+V, TBP points) and stage ``profiles``.
@@ -550,6 +551,19 @@ class VacuumColumn:
             st["phase"] = "vapor" if name == "overhead" else "liquid"
             if name == "overhead":
                 st["F_H2O"] = outs["steam.rate"] / MW_WATER * 1000.0
+                # Species the column does not model -- light ends and water
+                # a crude unit's residue carries when the VDU is fed from it
+                # in a Flowsheet -- leave with the overhead, unchanged. At
+                # 1-10 kPa and a 650+ K furnace nothing lighter than the first
+                # vacuum pseudocomponent can stay liquid, so this is where
+                # they would go; passing them through rather than dropping
+                # them is what lets the flowsheet's mass balance close. They
+                # take no part in the MESH equations (their heat and their
+                # effect on the vapor partial pressures are neglected), which
+                # is right for the traces a stripped residue carries and
+                # wrong for a feed that is mostly light.
+                for key in _passthrough_keys(feed, comps.names):
+                    st[key] = st.get(key, 0.0) + feed[key]
             streams.append(st)
             props[name] = product_properties(comps, m)
         info = {
@@ -564,6 +578,14 @@ class VacuumColumn:
                         "cracking_margin": outs["furnace.cracking_margin"]},
         }
         return (*streams, info)
+
+
+def _passthrough_keys(feed, names):
+    """The ``F_*`` keys of ``feed`` that are not column components."""
+    own = {f"F_{n}" for n in names}
+    keys = feed.keys() if hasattr(feed, "keys") else ()
+    return [k for k in keys if isinstance(k, str) and k.startswith("F_")
+            and k not in own]
 
 
 def _concrete(v):
