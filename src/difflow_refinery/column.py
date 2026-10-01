@@ -28,9 +28,11 @@ the overhead drum, as free water at its own vapour pressure.
 
 Degrees of freedom follow a simulator's: a total condenser has one (the
 distillate split), a partial condenser two, each side product one (its draw
-rate) and each pumparound two (rate and return temperature). They are closed
+rate), each pumparound two (rate and return temperature) and a
+:class:`Furnace`, when there is one, its coil outlet temperature. They are closed
 by :class:`Spec` s -- product rates, reflux ratio, temperatures, pumparound
-duties, overflash -- which the caller lists, as many as there are freedoms.
+duties, overflash, furnace outlet temperature or duty -- which the caller
+lists, as many as there are freedoms.
 Duties are not unknowns: the condenser and pumparound duties are evaluated
 from the converged state.
 
@@ -177,8 +179,40 @@ def overflash(value, basis: Basis = "volume") -> Spec:
     return Spec("overflash", None, value, basis)
 
 
+def coil_outlet_temperature(value) -> Spec:
+    """Furnace coil outlet temperature (K). Needs a :class:`Furnace`."""
+    return Spec("furnace_T", None, value)
+
+
+def furnace_duty(value) -> Spec:
+    """Heat absorbed by the crude in the furnace (W). Needs a :class:`Furnace`."""
+    return Spec("furnace_duty", None, value)
+
+
 _SPEC_KINDS = {"product_rate", "reflux_ratio", "stage_T", "pa_rate", "pa_duty",
-               "pa_return_T", "pa_delta_T", "overflash"}
+               "pa_return_T", "pa_delta_T", "overflash", "furnace_T", "furnace_duty"}
+
+
+@dataclass(frozen=True)
+class Furnace:
+    """The fired heater in front of the column.
+
+    With a furnace the column's feed is the furnace *inlet* -- the crude as
+    the preheat train delivers it -- and the coil outlet temperature becomes
+    an unknown of the column, closed by one more spec: the outlet temperature
+    itself (:func:`coil_outlet_temperature`), the duty (:func:`furnace_duty`),
+    or, as an operator runs it, the :func:`overflash` the outlet temperature
+    has to deliver. Solving it with the column rather than in front of it is
+    what lets an overflash set the furnace.
+
+    Attributes:
+        outlet_P: Coil outlet pressure (Pa), where the crude flashes. Default:
+            the feed stage's pressure.
+        efficiency: Absorbed over fired duty, for the fuel the furnace burns.
+    """
+
+    outlet_P: float | Array | None = None
+    efficiency: float | Array = 0.85
 
 
 @dataclass
@@ -201,6 +235,8 @@ class CrudeColumnParams(ParamsMixin):
         bottom_steam: Stripping steam to the bottom stage (mol/s).
         steam_T: Temperature of all stripping steam (K).
         distillate_name: Name of the liquid overhead product.
+        furnace: A :class:`Furnace` in front of the column, or ``None`` for a
+            column fed at a known temperature.
         max_iter: Damped-Newton iterations before giving up (softly).
         tol: Converged when the scaled residual's infinity norm is below this.
     """
@@ -217,6 +253,7 @@ class CrudeColumnParams(ParamsMixin):
     bottom_steam: float | Array = 0.0
     steam_T: float | Array = 600.0
     distillate_name: str = "naphtha"
+    furnace: Furnace | None = None
     max_iter: int = 80
     tol: float = 1e-9
 
@@ -246,6 +283,7 @@ class _Layout:
     n_side: int
     n_pa: int
     partial: bool
+    furnace: bool
 
     @property
     def n_draw(self) -> int:
@@ -312,7 +350,7 @@ def _layout(p: CrudeColumnParams) -> _Layout:
         steam_node=np.asarray(steam_node, dtype=int),
         stage_of_main=np.asarray(stage_of, dtype=int), product_nodes=products,
         n_side=len(p.side_products), n_pa=len(p.pumparounds),
-        partial=p.condenser == "partial",
+        partial=p.condenser == "partial", furnace=p.furnace is not None,
     )
 
 
@@ -341,6 +379,13 @@ class CrudeColumnResult:
         pumparound_rate: Each pumparound's molar rate (mol/s).
         pumparound_return_T: Each pumparound's return temperature (K).
         reflux: Molar reflux to stage 1 (mol/s).
+        coil_outlet_T: Temperature the feed enters the flash zone at (K): the
+            furnace outlet, solved for when there is a :class:`Furnace`, the
+            feed's own ``T`` when there is not.
+        feed_vaporized: Molar fraction of the hydrocarbon feed vapour at the
+            coil outlet.
+        furnace_duty: Heat absorbed in the furnace (W); 0 without one.
+        furnace_fired_duty: ``furnace_duty / efficiency`` (W); 0 without one.
         water_saturation: ``y_w P / Psat_w(T)`` on each main stage. Above 1,
             free water would condense on that tray -- a column that has to be
             run hotter or with less steam.
@@ -361,6 +406,10 @@ class CrudeColumnResult:
     pumparound_rate: Array
     pumparound_return_T: Array
     reflux: Array
+    coil_outlet_T: Array
+    feed_vaporized: Array
+    furnace_duty: Array
+    furnace_fired_duty: Array
     water_saturation: Array
     residual_norm: Array
     converged: Array
@@ -371,6 +420,7 @@ jax.tree_util.register_dataclass(
     CrudeColumnResult,
     data_fields=["products", "T", "T_condenser", "L", "V", "x", "stripper_T", "condenser_duty",
                  "pumparound_duty", "pumparound_rate", "pumparound_return_T", "reflux",
+                 "coil_outlet_T", "feed_vaporized", "furnace_duty", "furnace_fired_duty",
                  "water_saturation", "residual_norm", "converged", "iterations"],
     meta_fields=[],
 )
@@ -421,14 +471,15 @@ class CrudeColumn:
                 f"the column has {self.degrees_of_freedom()} degrees of freedom "
                 f"({'2' if self.layout.partial else '1'} at the condenser, "
                 f"{self.layout.n_side} side-product draw(s), 2 x {self.layout.n_pa} "
-                f"pumparound(s)) but {n_specs} spec(s) were given"
+                f"pumparound(s){', 1 furnace' if self.layout.furnace else ''}) "
+                f"but {n_specs} spec(s) were given"
             )
         self._check_targets()
 
     def degrees_of_freedom(self) -> int:
         """How many specs the column needs."""
         lay = self.layout
-        return (2 if lay.partial else 1) + lay.n_side + 2 * lay.n_pa
+        return (2 if lay.partial else 1) + lay.n_side + 2 * lay.n_pa + int(lay.furnace)
 
     def _check_targets(self):
         p = self.params
@@ -443,6 +494,8 @@ class CrudeColumn:
                 raise ValueError(f"no pumparound {s.target!r}")
             if s.kind == "stage_T" and not 0 <= int(s.target) <= p.n_stages:
                 raise ValueError(f"no stage {s.target}")
+            if s.kind.startswith("furnace") and not self.layout.furnace:
+                raise ValueError(f"a {s.kind} spec needs a Furnace in the column's params")
             if s.kind == "overflash" and p.feed_stage < 2:
                 raise ValueError("overflash needs a stage above the feed")
             if s.basis not in ("mole", "mass", "volume"):
@@ -487,6 +540,18 @@ class CrudeColumn:
         if extra:
             raise ValueError(f"feed species {extra} are not components of the thermo")
         f = jnp.stack([jnp.asarray(feed[f"F_{n}"], dtype=float) for n in th.names])
+        T_in = jnp.asarray(feed["T"], dtype=float)
+        P_in = jnp.asarray(feed["P"], dtype=float)
+        if p.furnace is not None:
+            if p.furnace.outlet_P is None:
+                frac = (p.feed_stage - 1) / max(p.n_stages - 1, 1)
+                P_F = jnp.asarray(p.P_top, dtype=float) + (
+                    jnp.asarray(p.P_bottom, dtype=float) - jnp.asarray(p.P_top, dtype=float)) * frac
+            else:
+                P_F = jnp.asarray(p.furnace.outlet_P, dtype=float)
+            efficiency = jnp.asarray(p.furnace.efficiency, dtype=float)
+        else:
+            P_F, efficiency = P_in, jnp.asarray(1.0)
         steam = jnp.stack([jnp.asarray(p.bottom_steam, dtype=float)]
                           + [jnp.asarray(sp.steam, dtype=float)
                              for sp in p.side_products if sp.stripper_stages > 0])
@@ -494,8 +559,14 @@ class CrudeColumn:
             "thermo": th,
             "f": f,
             "f_water": jnp.asarray(feed.get("F_water", 0.0), dtype=float),
-            "T_F": jnp.asarray(feed["T"], dtype=float),
-            "P_F": jnp.asarray(feed["P"], dtype=float),
+            # T_F/P_F: where the feed flashes; T_in/P_in: what arrives. The
+            # same point without a furnace. With one, T_F is a placeholder
+            # the solve replaces with its unknown.
+            "T_F": T_in,
+            "P_F": P_F,
+            "T_in": T_in,
+            "P_in": P_in,
+            "efficiency": efficiency,
             "steam": steam,
             "T_steam": jnp.asarray(p.steam_T, dtype=float),
             "P_top": jnp.asarray(p.P_top, dtype=float),
@@ -519,7 +590,7 @@ class CrudeColumn:
 
     def _sizes(self):
         lay, nc = self.layout, self.thermo.n_components
-        return lay.n_total * (nc + 2), nc + 3, lay.n_draw, lay.n_pa
+        return lay.n_total * (nc + 2), nc + 3, lay.n_draw, lay.n_pa + int(lay.furnace)
 
     def _unpack(self, z, F):
         lay, nc = self.layout, self.thermo.n_components
@@ -527,29 +598,37 @@ class CrudeColumn:
         st = z[:n_st].reshape(lay.n_total, nc + 2)
         c = z[n_st:n_st + n_c]
         d = z[n_st + n_c:n_st + n_c + n_d]
-        tret = z[n_st + n_c + n_d:]
-        return dict(
+        tail = z[n_st + n_c + n_d:]
+        tret = tail[:lay.n_pa]
+        T_F = tail[lay.n_pa] if lay.furnace else None
+        return dict(T_F=T_F,
             l=F * jnp.exp(st[:, :nc]), T=st[:, nc], V=F * jnp.exp(st[:, nc + 1]),
             l0=F * jnp.exp(c[:nc]), T0=c[nc], G=F * c[nc + 1], D=F * c[nc + 2],
             d=F * d, T_ret=tret,
         )
 
-    def _pack(self, liq, T, V, l0, T0, G, D, d, T_ret, F):
+    def _pack(self, liq, T, V, l0, T0, G, D, d, T_ret, F, T_F=None):
         st = jnp.concatenate([jnp.log(liq / F), T[:, None], jnp.log(V / F)[:, None]], axis=1)
+        tail = [T_ret] + ([jnp.reshape(T_F, (1,))] if self.layout.furnace else [])
         return jnp.concatenate([st.reshape(-1), jnp.log(l0 / F), jnp.stack([T0, G / F, D / F]),
-                                d / F, T_ret])
+                                d / F, *tail])
 
     # ------------------------------------------------------------------
     # The model
     # ------------------------------------------------------------------
 
-    def _feed_split(self, args):
-        """Raoult flash of the feed at its T and P: (liquid, vapour) component flows."""
+    def _feed_split(self, args, T=None, P=None):
+        """Raoult flash of the feed: (liquid, vapour) component flows.
+
+        At the flash zone (``T_F``, ``P_F``) unless ``T`` and ``P`` are given.
+        """
         th = args["thermo"]
+        T = args["T_F"] if T is None else T
+        P = args["P_F"] if P is None else P
         f, fw = args["f"], args["f_water"]
         total = jnp.sum(f) + fw
         z, zw = f / total, fw / total
-        K = th.K(args["T_F"], args["P_F"])
+        K = th.K(T, P)
 
         def rr(psi):
             return jnp.sum(z * (K - 1.0) / (1.0 + psi * (K - 1.0))) + zw / psi
@@ -637,12 +716,14 @@ class CrudeColumn:
         hL0 = th.h_liquid(T0)
         comp_in = comp_in.at[0].add(reflux)
         E_in = E_in.at[0].add(jnp.sum(reflux * hL0))
-        # feed
-        f_liq, f_vap = self._feed_split(args)
+        # feed, at the coil outlet
+        if lay.furnace:
+            args = {**args, "T_F": u["T_F"]}
+        E_feed, f_vap = self._feed_enthalpy(args, args["T_F"], args["P_F"])
+        Q_f = (E_feed - self._feed_enthalpy(args, args["T_in"], args["P_in"])[0]
+               if lay.furnace else jnp.asarray(0.0))
         comp_in = comp_in.at[lay.feed].add(args["f"])
         water_in = water_in.at[lay.feed].add(args["f_water"])
-        E_feed = (jnp.sum(f_liq * th.h_liquid(args["T_F"])) + jnp.sum(f_vap * th.h_vapor(args["T_F"]))
-                  + args["f_water"] * th.water_h_vapor(args["T_F"]))
         E_in = E_in.at[lay.feed].add(E_feed)
         # steam
         water_in = water_in.at[lay.steam_node].add(args["steam"])
@@ -661,7 +742,16 @@ class CrudeColumn:
             l0=l0, T0=T0, G=G, D=D, L0=L0, x0=x0, K0=K0, y_w0=y_w0, g=g, W=W,
             d=d, T_ret=T_ret, phi=phi, comp_in=comp_in, water_in=water_in, E_in=E_in,
             E_out=E_out, Q_c=Q_c, pa_duty=pa_duty, reflux=reflux,
+            T_F=args["T_F"], Q_f=Q_f, feed_vaporized=jnp.sum(f_vap) / F,
         )
+
+    def _feed_enthalpy(self, args, T, P):
+        """Enthalpy flow (W) of the feed at ``T`` and ``P``, and its vapour flows."""
+        th = args["thermo"]
+        f_liq, f_vap = self._feed_split(args, T, P)
+        E = (jnp.sum(f_liq * th.h_liquid(T)) + jnp.sum(f_vap * th.h_vapor(T))
+             + args["f_water"] * th.water_h_vapor(T))
+        return E, f_vap
 
     # rates of products and draws, on a basis -----------------------------
 
@@ -749,6 +839,10 @@ class CrudeColumn:
             elif spec.kind == "stage_T":
                 T = s["T0"] if int(spec.target) == 0 else s["T"][int(spec.target) - 1]
                 r = (T - val) / _T_SCALE
+            elif spec.kind == "furnace_T":
+                r = (s["T_F"] - val) / _T_SCALE
+            elif spec.kind == "furnace_duty":
+                r = (s["Q_f"] - val) / (3e4 * F)
             elif spec.kind == "overflash":
                 above = lay.feed - 1
                 r = (self._rate(s["lnet"][above], 0.0, spec.basis, th) / feed_rate[spec.basis]) - val
@@ -859,6 +953,8 @@ class CrudeColumn:
         lay, p, th = self.layout, self.params, args["thermo"]
         nc, M, N = th.n_components, lay.n_total, lay.n_main
         f, F = args["f"], jnp.sum(args["f"])
+        if lay.furnace:
+            args = {**args, "T_F": self._guess_coil_outlet(args)}
         f_liq, f_vap = self._feed_split(args)
         V_feed = jnp.sum(f_vap)
         P = self._pressures(args)
@@ -1121,7 +1217,51 @@ class CrudeColumn:
 
         T, T0 = jax.lax.fori_loop(0, _INIT_PASSES, pass_, (T, T0))
         liq, l0 = comp_solve(T, T0)
-        return self._pack(liq, T, V, l0, T0, G, D, d, T_ret, F)
+        return self._pack(liq, T, V, l0, T0, G, D, d, T_ret, F, args["T_F"])
+
+    def _guess_coil_outlet(self, args):
+        """A starting furnace outlet temperature, from the spec that sets it.
+
+        The outlet temperature itself if it is specified; the temperature
+        that absorbs a specified duty; otherwise the temperature that
+        vaporises, at the flash-zone pressure, what the specs take overhead
+        and out the side, less the share the stripping steam lifts out of
+        the residue, plus any overflash. Both are monotone in T: bisection.
+        """
+        p, th = self.params, args["thermo"]
+        f, F = args["f"], jnp.sum(args["f"])
+        specs = {s.kind: (i, s) for i, s in enumerate(p.specs)}
+        if "furnace_T" in specs:
+            return args["specs"][specs["furnace_T"][0]]
+        factor = {"mole": jnp.ones(th.n_components), "mass": th.MW / 1000.0,
+                  "volume": th.MW / (1000.0 * th.SG * RHO_WATER_60F)}
+        mean = {b: jnp.sum(f * factor[b]) / F for b in factor}
+        if "furnace_duty" in specs:
+            target = args["specs"][specs["furnace_duty"][0]]
+            E_in = self._feed_enthalpy(args, args["T_in"], args["P_in"])[0]
+
+            def excess(T):
+                return self._feed_enthalpy(args, T, args["P_F"])[0] - E_in - target
+        else:
+            want = jnp.asarray(0.0)
+            for i, s in enumerate(p.specs):
+                if s.kind == "product_rate" and s.target not in ("residue", "water"):
+                    want = want + 0.85 * args["specs"][i] / mean[s.basis]
+                elif s.kind == "overflash":
+                    want = want + args["specs"][i] * F * mean["mole"] / mean[s.basis]
+            want = jnp.clip(want, 0.05 * F, 0.9 * F)
+
+            def excess(T):
+                return jnp.sum(self._feed_split(args, T, args["P_F"])[1]) - want
+
+        def body(_, c):
+            a, b = c
+            m = 0.5 * (a + b)
+            hot = excess(m) > 0
+            return jnp.where(hot, a, m), jnp.where(hot, m, b)
+
+        a, b = jax.lax.fori_loop(0, 50, body, (jnp.asarray(300.0), jnp.asarray(800.0)))
+        return 0.5 * (a + b)
 
     # ------------------------------------------------------------------
 
@@ -1151,21 +1291,24 @@ class CrudeColumn:
 
         y_w = s["w"] / s["V"]
         sat = y_w * s["P"] / th.water_psat(s["T"])
+        Q_f = s["Q_f"]
         return CrudeColumnResult(
             products=products,
             T=s["T"][:N], T_condenser=s["T0"], L=s["L"][:N], V=s["V"][:N], x=s["x"][:N],
             stripper_T=s["T"][N:],
             condenser_duty=s["Q_c"], pumparound_duty=s["pa_duty"],
             pumparound_rate=s["d"][lay.n_side:], pumparound_return_T=s["T_ret"],
-            reflux=jnp.sum(s["reflux"]), water_saturation=sat[:N],
+            reflux=jnp.sum(s["reflux"]), coil_outlet_T=s["T_F"], feed_vaporized=s["feed_vaporized"],
+            furnace_duty=Q_f, furnace_fired_duty=Q_f / args["efficiency"],
+            water_saturation=sat[:N],
             residual_norm=norm, converged=jnp.isfinite(norm) & (norm <= 100.0 * p.tol),
             iterations=iters,
         )
 
 
 __all__ = [
-    "BARREL", "CrudeColumn", "CrudeColumnParams", "CrudeColumnResult", "Pumparound",
-    "SideProduct", "Spec", "overflash", "product_rate", "pumparound_delta_t",
+    "BARREL", "CrudeColumn", "CrudeColumnParams", "CrudeColumnResult", "Furnace", "Pumparound",
+    "SideProduct", "Spec", "coil_outlet_temperature", "furnace_duty", "overflash", "product_rate", "pumparound_delta_t",
     "pumparound_duty", "pumparound_rate", "pumparound_return_temperature",
     "reflux_ratio", "stage_temperature",
 ]

@@ -1,18 +1,19 @@
 """difflow_refinery: petroleum refining for difflow.
 
 Crude characterisation -- a TBP assay cut into pseudo-components whose
-properties come from the standard petroleum correlations -- and the
-atmospheric crude column that separates them, an equation-oriented MESH model
-with side strippers, pumparounds and stripping steam. Differentiable end to
-end: a product rate or a duty has a gradient with respect to the column's
-specs, its feed, and the assay data behind its thermodynamics.
+properties come from the standard petroleum correlations -- and the crude
+unit that separates them: a furnace and an atmospheric column, an
+equation-oriented MESH model with side strippers, pumparounds and stripping
+steam, reporting its products as yields, gravities and TBP ranges.
+Differentiable end to end: a yield or a duty has a gradient with respect to
+the column's specs, its feed, and the assay data behind its thermodynamics.
 
 >>> import difflow_refinery as dr
 >>> assay = dr.Assay(tbp_percent=[0, 50, 100], tbp_T=[300.0, 600.0, 900.0], sg=0.85)
 >>> crude = dr.characterize(assay)
 """
 
-from difflow_refinery import column, correlations
+from difflow_refinery import column, correlations, products
 from difflow_refinery.assay import (
     DEFAULT_CUT_WIDTHS,
     LIGHT_END_SG,
@@ -26,6 +27,7 @@ from difflow_refinery.column import (
     CrudeColumn,
     CrudeColumnParams,
     CrudeColumnResult,
+    Furnace,
     Pumparound,
     SideProduct,
     Spec,
@@ -39,7 +41,9 @@ from difflow_refinery.correlations import (
     vapor_pressure,
     watson_k,
 )
+from difflow_refinery.products import ProductProperties, product_properties
 from difflow_refinery.thermo import ColumnThermo, water_vapor_pressure
+from difflow_refinery.unit import CrudeUnit, CrudeUnitResult
 
 __all__ = [
     "Assay",
@@ -56,6 +60,12 @@ __all__ = [
     "CrudeColumn",
     "CrudeColumnParams",
     "CrudeColumnResult",
+    "CrudeUnit",
+    "CrudeUnitResult",
+    "Furnace",
+    "ProductProperties",
+    "product_properties",
+    "products",
     "Pumparound",
     "SideProduct",
     "Spec",
