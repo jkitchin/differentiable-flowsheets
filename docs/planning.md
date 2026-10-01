@@ -31,9 +31,10 @@ is for unit operations.
 19. [Feasibility restoration](#feasibility-restoration)
 20. [Emitting Pyomo](#emitting-pyomo)
 21. [From a flowsheet to a block](#from-a-flowsheet-to-a-block)
-22. [Exporting delta vectors](#exporting-delta-vectors)
-23. [What this module is not](#what-this-module-is-not)
-24. [API summary](#api-summary)
+22. [A crude unit as a block](#a-crude-unit-as-a-block)
+23. [Exporting delta vectors](#exporting-delta-vectors)
+24. [What this module is not](#what-this-module-is-not)
+25. [API summary](#api-summary)
 
 ---
 
@@ -289,6 +290,36 @@ provably optimal oracle.
 Back-off (below) is treated as a margin, not a promise: `Spec.violation`
 measures against the stated right-hand side, so eating into the margin is not
 scored as a violation.
+
+### A block that cannot be evaluated
+
+A block with an inner solve has operating points where the solve has no answer.
+A distillation column can dry out, and a flash can lose a phase. The convention
+is that such a block returns **NaN**. The planner treats any non-finite value
+in the network state (`state_is_finite(state)` is false) as a model that cannot
+be evaluated:
+
+- Such a point scores merit `-inf` and violation `+inf` (`planner.score(u)["evaluable"]`
+  is `False`).
+- A proposal there is **rejected** and the radius shrinks. This holds even with
+  `accept_test=False`, because a point that cannot be evaluated cannot be linearised.
+- Restoration never takes such a point as its least-violating one.
+- A start point that cannot be evaluated is an attempt with reason
+  `"start_not_evaluable"`, and any evaluable seed beats it. If no start can be
+  evaluated, `solve()` raises.
+
+This is written down rather than left to IEEE arithmetic. A NaN *merit* already
+fails `rho >= eta_accept`, but the other two cases do not fail on their own:
+
+- A NaN *spec output* scores **zero** violation, because Python's `max(0.0, nan)`
+  is `0.0`. Restoration would then take a failed solve for a feasible point.
+- A NaN output that is neither priced nor in a spec leaves the merit finite. The
+  main loop would accept the point and then try to linearise at it.
+
+The tests are in `tests/test_planning_nonfinite.py`. The crude unit is the worked
+case: [Planning with the crude unit](unit-operations-refinery.md#planning-with-the-crude-unit)
+drives a column into the region where it does not converge and shows the plan
+backing off.
 
 ## Bang-bang levers and vertex seeding
 
@@ -984,6 +1015,30 @@ optimistix fixed-point path, which carries an implicit-differentiation rule.
 And `check_delta_vectors` is worth running before anything leaves the building:
 it is `2 n_u` extra model evaluations against a Jacobian that costs `min(n_u, n_y)` AD passes, and
 it is the cheapest way to find out that a lever does nothing.
+
+## A crude unit as a block
+
+`difflow_refinery.planning.cdu_block(unit, levers, outputs, rate=, T=, P=)` is a
+ready-made block for a rigorous atmospheric crude column. Its levers and outputs
+are named by meaning, for example `naphtha.yield`, `pa1.duty`, `crude.rate`,
+`kero.tbp95`, `gap.kero_diesel` and `furnace.fired`. They are carried in planner
+units: bbl/d, MW, °C for temperatures, K for temperature differences, and kg/h
+for steam. The units are recorded in `metadata["u_units"]` and `["y_units"]`.
+
+`product_value_block` and `link_cdu` give the downstream half of a
+CDU → product value network. On the 30-stage test column:
+
+- `check_delta_vectors` passes with an error of 5.6e-10 relative to the largest entry.
+- `check_delta_health` is clean on the default outputs.
+- A four-lever plan (crude rate, two yields, overflash) under a kero end-point
+  spec terminates `stationary` in 6 iterations.
+- A fresh column solve at that plan reproduces the planner's state to 4e-15.
+
+The column has operating points where it does not converge, and the block
+returns NaN there; see [A block that cannot be evaluated](#a-block-that-cannot-be-evaluated).
+The details, including why yields are the levers and cut points the outputs, are in
+[Planning with the crude unit](unit-operations-refinery.md#planning-with-the-crude-unit).
+Example: `examples/35_refinery_cdu_planning.ipynb`.
 
 ## Exporting delta vectors
 
