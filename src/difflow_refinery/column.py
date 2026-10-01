@@ -46,7 +46,7 @@ through the iterations.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 import jax
@@ -71,6 +71,20 @@ _LOG_SIGNIFICANT = float(np.log(1e-9))  # flows below 1e-9 of the feed
 _BACKTRACKS = 12
 # Bubble-point passes in the initialisation.
 _INIT_PASSES = 25
+# Volatility continuation (#301). A component whose vapour pressure at
+# _PSAT_REF_T is below _PSAT_FLOOR -- a vacuum-residue lump boiling near
+# 950 C has ~3e-5 Pa there -- stalls the damped Newton from the bubble-point
+# start: the merit stops falling within three iterations at a residual of
+# order one, although the same column converges in five iterations when
+# started from the solution of a column whose lump is 1000x more volatile.
+# So such a column is first solved with those vapour pressures raised to
+# the floor, and the real one is solved from there. Measured on the test
+# crude with a 950 C lump: 3e-3 Pa still stalls, 3e-2 Pa converges; the
+# heaviest cut of the default (no heavy end) characterization has 7.6e-2 Pa,
+# so a column without such a component never takes this path and its
+# numbers are untouched.
+_PSAT_REF_T = 600.0
+_PSAT_FLOOR = 0.05
 _T_SCALE = 100.0  # K, for temperature spec residuals
 
 
@@ -511,6 +525,9 @@ class CrudeColumn:
         args = self._args(feed)
         frozen = jax.lax.stop_gradient(args)
         z0 = self._initial_guess(frozen)
+        if self._needs_continuation(frozen["thermo"]):
+            easy = {**frozen, "thermo": self._raised_volatility(frozen["thermo"])}
+            z0, _ = self._damped_newton(self._initial_guess(easy), easy)
         z1, iters = self._damped_newton(z0, frozen)
         # The implicit function theorem written as code: the value is the
         # converged z1, untouched, and the derivative with respect to
@@ -526,6 +543,31 @@ class CrudeColumn:
         z = z1 - (dz - jax.lax.stop_gradient(dz))
         norm = jnp.max(jnp.abs(self._residual(z1, frozen)))
         return self._result(z, args, norm, iters)
+
+    @staticmethod
+    def _needs_continuation(thermo) -> bool:
+        """Whether a component is too involatile to start from the bubble point.
+
+        Decided on concrete numbers. When they cannot be read (under ``jit``
+        or a transformation that traces the thermo) the continuation is
+        taken: an unneeded one costs an extra Newton run, a missing one
+        fails the solve.
+        """
+        try:
+            return bool(np.min(np.asarray(thermo.psat(_PSAT_REF_T))) < _PSAT_FLOOR)
+        except (jax.errors.ConcretizationTypeError, jax.errors.TracerArrayConversionError):
+            return True
+
+    @staticmethod
+    def _raised_volatility(thermo):
+        """``thermo`` with every vapour pressure below the floor raised to it.
+
+        Lee-Kesler's ``psat`` is proportional to ``Pc`` at fixed ``Tc`` and
+        ``omega``, so scaling ``Pc`` lifts the whole curve by the same
+        factor and keeps its shape (and the component's enthalpies).
+        """
+        ratio = _PSAT_FLOOR / thermo.psat(_PSAT_REF_T)
+        return replace(thermo, Pc=thermo.Pc * jnp.maximum(ratio, 1.0))
 
     # ------------------------------------------------------------------
     # Inputs

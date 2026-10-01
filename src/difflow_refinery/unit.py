@@ -98,6 +98,9 @@ class CrudeUnit:
         cut_points: Interior cut boundaries (K). Default:
             :func:`~difflow_refinery.assay.default_cut_points`.
         method: Critical-property correlation for the characterisation.
+            ``None`` (default) lets :func:`~difflow_refinery.assay.characterize`
+            choose: ``"twu"`` for a plain assay, which is what the unit has
+            always used, and ``"twu_1984"`` for one with a ``heavy_end``.
 
     Example:
         >>> from difflow_refinery import Assay, CrudeUnit, column as cc
@@ -112,7 +115,7 @@ class CrudeUnit:
     """
 
     def __init__(self, assay: Assay, params: CrudeColumnParams,
-                 cut_points=None, method: str = "twu"):
+                 cut_points=None, method: str | None = None):
         self.assay = assay
         self.cut_points = tuple(default_cut_points(assay) if cut_points is None else cut_points)
         self.method = method
@@ -188,13 +191,15 @@ class CrudeDistillationUnitParams(ParamsMixin):
             steam and specs). A default furnace is added if it has none.
         cut_points: Interior cut boundaries (K); default
             :func:`~difflow_refinery.assay.default_cut_points`.
-        method: Critical-property correlation for the pseudo-components.
+        method: Critical-property correlation for the pseudo-components;
+            ``None`` lets ``characterize`` choose (``"twu"``, or
+            ``"twu_1984"`` for an assay with a ``heavy_end``).
     """
 
     assay: Assay
     column: CrudeColumnParams
     cut_points: tuple | None = None
-    method: str = "twu"
+    method: str | None = None
 
     def __post_init__(self):
         if self.cut_points is not None:
