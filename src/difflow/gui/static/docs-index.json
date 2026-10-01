@@ -1,5 +1,5 @@
 {
- "n_sections": 928,
+ "n_sections": 939,
  "sections": [
   {
    "anchor": "convergence-and-initialization",
@@ -7648,7 +7648,103 @@
    "targets": [
     "refinery-vacuum-out-of-scope"
    ],
-   "text": "Ejectors and vacuum-system modelling, dynamics, lube vacuum towers, and\nD1160 (as opposed to TBP) product curves. The cross-check against an\nindependent simulator is against an equation-oriented re-implementation in\nPyomo/IPOPT on the same characterized feed, not against DWSIM; see\n[Validation: the vacuum unit](#refinery-vacuum-validation) for what that does\nand does not establish.\n\n---\n\n(refinery-blending)="
+   "text": "Ejectors and vacuum-system modelling, dynamics, lube vacuum towers, and\nD1160 (as opposed to TBP) product curves. The cross-check against an\nindependent simulator is against an equation-oriented re-implementation in\nPyomo/IPOPT on the same characterized feed, not against DWSIM; see\n[Validation: the vacuum unit](#refinery-vacuum-validation) for what that does\nand does not establish.\n\n---\n\n(refinery-gasplant)="
+  },
+  {
+   "anchor": "the-saturated-gas-plant",
+   "heading": "The saturated gas plant",
+   "path": "Refinery Unit Operations > The saturated gas plant",
+   "source": "unit-operations-refinery.md",
+   "targets": [
+    "refinery-gasplant"
+   ],
+   "text": "The gas plant (`difflow_refinery.gasplant`, #312) recovers the light ends.\nIts feeds are the CDU overhead gas and unstabilised naphtha, and an FCC's\nwet gas where there is one. Its products are fuel gas, LPG, and a\nstabilised naphtha cut to a vapour-pressure spec:\n\n```text\nwet gas -> GasCompressor -> AmineTreater -> absorber-deethanizer -> fuel gas\n                 | condensate                    | bottoms\n                 +---------------------------->  +-> debutanizer -> LPG -> C3/C4 splitter\nunstabilised naphtha ---------------------------^                \\-> stabilised naphtha\n```\n\nAt 10-20 bar, Raoult's law is no longer the right model, and the crude\ncolumn's thermodynamics would be wrong here by tens of percent in K.\nThe gas plant therefore runs on a cubic equation of state, Peng-Robinson\n(default) or SRK. Real components and naphtha pseudocomponents go into\none `GasComponents` table, so one EOS covers the mixture:\n\n```python\nimport difflow_refinery as dr\nfrom difflow_refinery.gasplant import gas_components, debutanizer, GasPlantColumn\n\ncuts = dr.characterize(dr.Assay([0, 50, 100], [360., 400., 470.], sg=0.74),\n                       cut_points=[385., 420.])\ncomps = gas_components([\"hydrogen_sulfide\", \"ethane\", \"propane\", \"isobutane\",\n                        \"n_butane\", \"isopentane\", \"n_pentane\", \"n_hexane\"], pseudo=cuts)\ncol = GasPlantColumn(debutanizer(comps, naphtha_rvp=80e3))\nlpg, naphtha, info = col(feed)        # feed = {\"F_propane\": ..., \"T\": ..., \"P\": ...}\ninfo[\"outputs\"][\"reboiler.duty\"], info[\"outputs\"][\"bottoms.rvp\"]\n```"
+  },
+  {
+   "anchor": "components-and-thermodynamics",
+   "heading": "Components and thermodynamics",
+   "path": "Refinery Unit Operations > The saturated gas plant > Components and thermodynamics",
+   "source": "unit-operations-refinery.md",
+   "targets": [],
+   "text": "`gas_components(light, pseudo=None, kij=None, cuts=None)` builds the\ntable from two sources. For the real species (hydrogen, H2S, N2, CO2, C1-C6 paraffins,\nethylene, propylene and the four butenes), it uses `difflow.database`\nplus the tables in `gasplant/components.py`, whose sources are listed in\nthat module. For the pseudocomponents, it uses the refinery\ncharacterisation's Tc, Pc, acentric factor and Watson-Nelson Cp. `kij`\nis zero between hydrocarbons. The tabulated nonzero pairs (CO2, H2S and\nN2 with the light paraffins) are recalled from the DECHEMA compilation\nand are marked *verify* in the source. Each component also carries a\nlower heating value, computed from its heat of formation.\n\n`cuts=` keeps only the named cuts of the characterisation, in its own\norder. A naphtha taken off a whole-crude characterisation carries the\nfirst few cuts and almost nothing of the rest, and every cut in the\ntable is a column in every EOS call. `examples/38_refinery_gas_plant.ipynb`\nkeeps the cuts above 0.1 % of the naphtha and folds the remainder,\nabout 1e-4 of it, into the heaviest cut it keeps.\n\n`CubicThermo` gives `ln K = ln phi_L - ln phi_V` at each stage's own\n`(T, P, x, y)`, and residual enthalpies from the departure functions.\nThe cubic is solved in closed form. One Newton polish then carries the\nroot's exact implicit derivative, so no gradient passes through\n`arccos`. Where the cubic has a single real root, both phases take it\nand `K = 1`, as in any cubic-EOS package.\n\n(refinery-gasplantcolumn)="
+  },
+  {
+   "anchor": "gasplantcolumn",
+   "heading": "GasPlantColumn",
+   "path": "Refinery Unit Operations > The saturated gas plant > GasPlantColumn",
+   "source": "unit-operations-refinery.md",
+   "targets": [
+    "refinery-gasplantcolumn"
+   ],
+   "text": "`GasPlantColumn` is the vacuum unit's [stage network](#refinery-stage-network)\non the EOS. The MESH equations use log flows, the same `StageSpec`\nmechanism and the same implicit-function gradients. Trays are numbered\nfrom 1 at the top. The column can have any of:\n\n- a condenser that is `\"total\"` (the liquid at its bubble point, duty computed), `\"partial\"` (vapour product, duty a knob) or `None` (an absorber top);\n- a kettle reboiler, or none;\n- any number of feeds, each a stream at its own `(T, P)`, flashed once per solve;\n- liquid side draws.\n\nThe factories return the parameters with the spec set each column is\nnormally run on:\n\n| Factory | Products | Default specs (replacing) |\n|---|---|---|\n| `absorber_deethanizer` | `overhead` (fuel gas), `bottoms` | `bottoms.x.C2-` = 0.005 (reboiler duty); or `bottom.T` |\n| `debutanizer` | `distillate` (LPG), `bottoms` (naphtha) | `distillate.x.C5+` = 0.01 (distillate rate); `bottoms.rvp` or `bottoms.x.C4` (reboiler duty) |\n| `c3c4_splitter` | propane, butane | `distillate.x.C3` = 0.95; `bottoms.x.light` = 0.02 |\n| `deisobutanizer` | isobutane, normal butane | `distillate.x.isobutane` = 0.95; `bottoms.x.isobutane` = 0.05 |\n| `splitter` | any two-product cut | the cut placed by `light=`, specs as `(output, target)` pairs |\n\nThe absorber-deethanizer takes two feeds, `lean_oil` on tray 1 and\n`feed`. Its lever is the lean-oil rate, which is the lean-oil stream's\nown flow. Every factory accepts the `GasPlantColumnParams` fields as\nkeywords (`n_trays`, `top_P`, `side_draws=`, `eos=\"SRK\"`, ...), so the\nsame factories serve a naphtha splitter (#311).\n\n**Outputs** (`info[\"outputs\"]`, SI) include:\n\n- per product: `<p>.x.<component|group>`, `.recovery.<...>`, `.mol`, `.rate` (kg/s) and `.T`; for liquid products also `.rvp` and `.tvp`;\n- `reflux_ratio`, `boilup_ratio`, `condenser.duty`, `reboiler.duty`, `energy_balance`;\n- `top.T`, `bottom.T` and every `stage{j}.T`/`.P`;\n- `<feed>.vapor_fraction`.\n\nThe groups are C2-, C3, C4, C3-, C4+ and C5+. Pseudocomponents count as\nC5+. Any output can be specified."
+  },
+  {
+   "anchor": "gascompressor",
+   "heading": "GasCompressor",
+   "path": "Refinery Unit Operations > The saturated gas plant > GasCompressor",
+   "source": "unit-operations-refinery.md",
+   "targets": [
+    "refinery-gascompressor"
+   ],
+   "text": "The wet-gas compressor has `n_stages` isentropic stages at equal\npressure ratios. Each stage's work is the isentropic enthalpy rise\ndivided by `efficiency`. An aftercooler and knockout drum follow each\nstage. The condensate from all the drums leaves as one liquid stream,\nwhich in a gas plant joins the absorber feed. `info` reports:\n\n- `power` (W);\n- `stage_power`;\n- `discharge_T`;\n- the stage pressure `ratio`.\n\nSurge, choke and the compressor map are out of scope.\n\n(refinery-aminetreater)="
+  },
+  {
+   "anchor": "aminetreater",
+   "heading": "AmineTreater",
+   "path": "Refinery Unit Operations > The saturated gas plant > AmineTreater",
+   "source": "unit-operations-refinery.md",
+   "targets": [
+    "refinery-aminetreater"
+   ],
+   "text": "H2S is a component throughout. The amine contactor is a fixed removal\nfraction per component (`removal={\"hydrogen_sulfide\": 0.99}`), which\nsplits the gas into sweet gas and acid gas. Treating chemistry and\nMerox are out of scope. For a rate-based contactor, see\n`difflow_cc.AmineAbsorber`."
+  },
+  {
+   "anchor": "products",
+   "heading": "Products",
+   "path": "Refinery Unit Operations > The saturated gas plant > Products",
+   "source": "unit-operations-refinery.md",
+   "targets": [],
+   "text": "- `fuel_gas(flows, comps)` returns the rate, mass rate, MW, LHV (molar and mass), heat release and H2S ppm.\n- `lpg_quality(flows, comps, grade)` checks the LPG against a GPA 2140 grade (`\"HD-5\"`, `\"commercial_propane\"`, `\"commercial_butane\"`). It returns `values`, signed `margins` (positive on spec) and `on_spec`. The vapour pressure is gauge, at 100 F, on the EOS.\n- `reid_vapor_pressure(flows, comps)` and `true_vapor_pressure` give the same numbers the column reports.\n\nThe limits in `GPA_2140` are recalled values and are marked *verify*.\nThe standard writes its composition limits in liquid volume percent;\nthey are compared here as mole fractions, which differ by a few percent\nof the value for C3/C4. The 95% evaporated, residue, copper strip,\nsulfur and moisture tests are not computed."
+  },
+  {
+   "anchor": "planning-with-the-gas-plant",
+   "heading": "Planning with the gas plant",
+   "path": "Refinery Unit Operations > The saturated gas plant > Planning with the gas plant",
+   "source": "unit-operations-refinery.md",
+   "targets": [],
+   "text": "`gasplant_block(column, feeds, levers, outputs=None)` is the gas plant's\n`cdu_block`. It returns a `difflow.planning.Block` whose delta vectors\nare implicit-function Jacobians of the converged column. The levers are\nof three kinds:\n\n- every spec target by its own name (`distillate.x.C5+`, `bottoms.rvp`);\n- every knob a spec has not replaced (`top.P`);\n- per feed, `<feed>.mol`, `<feed>.T` and `<feed>.F_<component>`.\n\nThe outputs are in planner units (C, kPa, MW, kg/h, kmol/h).\nNon-convergence is masked to NaN, as in `cdu_block`.\n\n```python\nblk = gasplant_block(col, [feed], [\"distillate.x.C5+\", \"bottoms.rvp\", \"top.P\", \"feed.mol\"],\n                     outputs=[\"reboiler.duty\", \"condenser.duty\", \"distillate.rate\"])\n```"
+  },
+  {
+   "anchor": "results",
+   "heading": "Results",
+   "path": "Refinery Unit Operations > The saturated gas plant > Results",
+   "source": "unit-operations-refinery.md",
+   "targets": [],
+   "text": "All four factories converge from the default initialisation, with no\nwarnings. They are run on two feeds: a straight-run feed (CDU light ends\nwith H2S, and two naphtha pseudocomponents) and an FCC feed (adding\nhydrogen, ethylene, propylene and the four butenes). On both feeds:\n\n- the total mass balance closes to 1e-15 relative;\n- every component's balance closes to better than 1e-8;\n- each column's energy balance closes to 1e-9 W on duties of order 1 MW.\n\nOn the deisobutanizer, the FCC butenes boil with the isobutane. The\nolefin-rich case is therefore run at a 0.5 isobutane purity: a higher\npurity is not available from that feed at any reflux, and the solve\nsays so by not converging.\n\nThe tests check the following, in `tests/refinery/test_gasplant.py`:\n\n- The implicit gradients of LPG C5+, naphtha RVP and reboiler duty, with respect to the reflux ratio, the top pressure and a feed component, match central differences to 1e-5 relative.\n- The reboiler duty rises monotonically as the naphtha RVP spec is tightened.\n- The absorber-deethanizer's C2 slip falls monotonically as its bottoms temperature rises."
+  },
+  {
+   "anchor": "the-gas-plant-on-a-crude-unit",
+   "heading": "The gas plant on a crude unit",
+   "path": "Refinery Unit Operations > The saturated gas plant > The gas plant on a crude unit",
+   "source": "unit-operations-refinery.md",
+   "targets": [],
+   "text": "`examples/38_refinery_gas_plant.ipynb` runs the whole chain on the CDU\nof `examples/35_refinery_cdu_planning.ipynb`, with a partial condenser\nheld at 40 C:\n\n- the offgas goes through a two-stage compressor to 14.5 bar, then the amine treater;\n- an absorber-deethanizer takes the whole unstabilised naphtha as lean oil;\n- a debutanizer makes the LPG;\n- a naphtha splitter makes light and heavy naphtha.\n\nEvery column converges from the default initialisation. The material\nbalance across the plant closes to 1e-12 mol/s on 280 mol/s. The\ndebutanizer's implicit derivatives with respect to its C4 spec match\ncentral differences to the digits printed.\n\nThis crude's offgas is mostly C3/C4. At 14.5 bar and 40 C almost all of\nit condenses in the compressor's knock-out drums, so the amine treats a\nfew percent of what was compressed. The condensate carries most of the\nH2S past it, into the fuel gas and the LPG.\n\nThe H2S figure starts from an assumption. The assay says nothing about\nsulfur, so the offgas is given 2 mol % H2S."
+  },
+  {
+   "anchor": "gas-plant-gotchas",
+   "heading": "Gas plant gotchas",
+   "path": "Refinery Unit Operations > The saturated gas plant > Gas plant gotchas",
+   "source": "unit-operations-refinery.md",
+   "targets": [],
+   "text": "- **The naphtha sets a floor on its own RVP.** A stabiliser cannot bring the naphtha below the RVP of its C5+ part. The C5/C6 in the test feed alone sit near 70 kPa. A 60 kPa spec is infeasible, and Newton does not converge.\n- **Purity specs must be reachable on the trays you gave.** At O'Connell efficiencies near 0.5, a 12-tray debutanizer is about six theoretical stages. That is not enough for 1% C5+ in the LPG and 1% C4 in the naphtha together.\n- **A C2- spec has to be smaller than the C2- there is.** With the whole naphtha as lean oil, the absorber-deethanizer's bottoms are about 290 mol/s. At the factory's 0.5 %, that is 1.4 mol/s of C2-, but the CDU feeds bring in 1.07 mol/s. The spec cannot be met at any duty, so the solve does not converge. The example uses 0.2 %.\n- **A hot feed sets a ceiling on the naphtha's RVP.** The deethanizer bottoms reach the debutanizer at 180 C. On that feed, an RVP spec of 40 or 50 kPa converges, at 2.7 and 1.7 MW. At 70 kPa the reboiler duty would have to go below zero, and the solve does not converge.\n- **A heavy lean oil.** When the lean oil is a hundred times the gas, the guess's vapour profile is its 5 %-of-feed floor, and a pass-1 boilup ratio taken from it is a few percent: pass 1 then has almost no vapour and never converges. Pass 1's boilup ratio is therefore at least one (`test_deethanizer_with_a_lean_oil_a_hundred_times_the_gas`).\n- **Compile once per spec structure.** The first solve compiles for 10-40 s. Later solves with the same structure (which specs replace which knobs) reuse the compiled solve for any numbers."
+  },
+  {
+   "anchor": "gas-plant-out-of-scope",
+   "heading": "Gas plant: out of scope",
+   "path": "Refinery Unit Operations > The saturated gas plant > Gas plant: out of scope",
+   "source": "unit-operations-refinery.md",
+   "targets": [],
+   "text": "Treating chemistry, Merox, cryogenic C2 recovery, column hydraulics and\ncompressor surge.\n\n---\n\n(refinery-blending)="
   },
   {
    "anchor": "product-blending",
