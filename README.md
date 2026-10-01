@@ -454,6 +454,30 @@ solve sequentially, by the backward/forward sweep, which agrees with
 Newton to 1e-12. Every benchmark result is asserted against MATPOWER's
 published answer; see `docs/unit-operations-power.md`.
 
+## Refinery Product Blending
+
+`difflow_refinery.BlendPool` blends component streams into finished
+products (gasoline, jet, ULSD, fuel oil) with the nonlinear rules
+refiners use: Ethyl RT-70 octane interactions, the RVP^1.25 index (and
+Raoult on the pseudocomponents as a check), Hu-Burns flash and cold-flow
+indices, Refutas viscosity, and distillation and cetane index computed
+from the blend's composition. It is differentiable in the recipe and in
+every component property, and it reports signed spec margins with a
+smooth-violation option.
+
+```python
+from difflow_refinery import BlendPool
+
+pool = BlendPool("gasoline")            # RON, MON, RVP, S specs
+res = pool(components, recipe)          # properties, margins, product stream
+pool.linear_blend_error(components, recipe)   # what an LP's back-off must cover
+pool.as_block(components)               # a difflow.planning.Block
+```
+
+See `docs/unit-operations-refinery.md` and
+`examples/33_refinery_gasoline_blending.ipynb`, which compares the
+nonlinear optimum with a linear-by-volume LP plus successive back-off.
+
 ## Data Reconciliation
 
 Plant measurements are noisy and, taken at face value, contradict the

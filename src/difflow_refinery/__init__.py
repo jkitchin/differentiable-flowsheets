@@ -4,7 +4,10 @@ Crude characterisation -- a TBP assay cut into pseudo-components whose
 properties come from the standard petroleum correlations -- and the crude
 unit that separates them: a furnace and an atmospheric column, an
 equation-oriented MESH model with side strippers, pumparounds and stripping
-steam, reporting its products as yields, gravities and TBP ranges.
+steam, reporting its products as yields, gravities and TBP ranges -- and
+the product blending pool (:mod:`difflow_refinery.blending`), which blends
+finished components into gasoline, jet, ULSD or fuel oil with the
+nonlinear rules refiners use and reports signed spec margins.
 Differentiable end to end: a yield or a duty has a gradient with respect to
 the column's specs, its feed, and the assay data behind its thermodynamics.
 
@@ -22,6 +25,45 @@ from difflow_refinery.assay import (
     characterize,
     default_cut_points,
     fit_antoine,
+)
+from difflow_refinery.blending import (
+    PRODUCT_DERIVED,
+    PRODUCT_SPECS,
+    PROPERTY_RULES,
+    TBP_D86,
+    TEMPERATURE_INDEX_EXPONENTS,
+    T_RVP,
+    BlendComponent,
+    BlendPool,
+    BlendResult,
+    BlendSpec,
+    EthylRT70,
+    cetane_index_d4737,
+    cetane_index_d976,
+    ethyl_rt70,
+    flash_point_blend,
+    mass_blend,
+    raoult_rvp,
+    refutas_blend,
+    refutas_vbn,
+    refutas_viscosity,
+    rvp_index_blend,
+    smooth_violation,
+    tbp_evaporated,
+    tbp_temperature,
+    tbp_to_d86,
+    temperature_index_blend,
+    volume_blend,
+)
+from difflow_refinery.characterization import (
+    PSI,
+    RHO_WATER_15C,
+    BlendCharacterization,
+    edmister_omega,
+    lee_kesler_psat,
+    riazi_daubert_mw,
+    riazi_daubert_pc,
+    riazi_daubert_tc,
 )
 from difflow_refinery.column import (
     CrudeColumn,
@@ -83,6 +125,17 @@ __all__ = [
     "watson_k",
     "sg_from_api",
     "api_from_sg",
+    "BlendComponent", "BlendPool", "BlendResult", "BlendSpec", "EthylRT70",
+    "BlendCharacterization",
+    "PRODUCT_DERIVED", "PRODUCT_SPECS", "PROPERTY_RULES", "TBP_D86",
+    "TEMPERATURE_INDEX_EXPONENTS", "T_RVP", "PSI", "RHO_WATER_15C",
+    "cetane_index_d4737", "cetane_index_d976", "ethyl_rt70",
+    "flash_point_blend", "mass_blend", "raoult_rvp", "refutas_blend",
+    "refutas_vbn", "refutas_viscosity", "rvp_index_blend",
+    "smooth_violation", "tbp_evaporated", "tbp_temperature", "tbp_to_d86",
+    "temperature_index_blend", "volume_blend",
+    "edmister_omega", "lee_kesler_psat", "riazi_daubert_mw",
+    "riazi_daubert_pc", "riazi_daubert_tc",
     "register",
 ]
 
