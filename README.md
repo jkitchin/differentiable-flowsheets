@@ -454,6 +454,31 @@ solve sequentially, by the backward/forward sweep, which agrees with
 Newton to 1e-12. Every benchmark result is asserted against MATPOWER's
 published answer; see `docs/unit-operations-power.md`.
 
+## Refinery: Vacuum Distillation
+
+The `difflow_refinery` plugin characterizes a crude assay into
+pseudocomponents and runs a vacuum distillation unit on the atmospheric
+residue. It covers LVGO and HVGO pumparound sections, a wash zone with an
+overflash spec, a flash zone fed by the furnace, and a steam-stripped
+residue. The MESH equations of every stage are solved simultaneously, and
+the result carries exact implicit-function gradients, so the VGO/residue
+cut point is a decision variable with a derivative. That includes the
+cut's derivative with respect to a single point of the assay's TBP curve.
+
+```python
+import difflow_refinery as dr
+
+char = dr.characterize(dr.heavy_crude())       # 300-800 C cuts + residue lump
+feed = dr.atmospheric_residue(char, crude_rate_kg_s=100.0)
+vdu = dr.VacuumColumn(dr.VacuumColumnParams(components=char.components))
+overhead, lvgo, hvgo, slop, residue, info = vdu(feed)
+info["properties"]["hvgo"]          # rate, SG, S, N, CCR, Ni+V, TBP 5/50/95
+```
+
+Any output can be specified in place of the knob that controls it, for
+example an HVGO end point instead of the furnace temperature. See
+`docs/unit-operations-refinery.md`.
+
 ## Data Reconciliation
 
 Plant measurements are noisy and, taken at face value, contradict the

@@ -488,6 +488,9 @@ export const OPERATION_SYMBOLS = {
   LoadDraw: 'load',
   ShuntDraw: 'load',
   PowerSplit: 'splitter',
+
+  // refinery
+  VacuumColumn: 'column',
 }
 
 /**
@@ -514,6 +517,7 @@ export const CATEGORY_SYMBOLS = {
   ree_extraction: 'stirred_tank',
   ree_precipitation: 'precipitator',
   ree_flowsheets: 'train',
+  refinery: 'column',
 }
 
 /**
