@@ -104,6 +104,11 @@ class Desalter:
         Water immiscible with the hydrocarbon liquid; three-phase crude enthalpy
         No pressure drop
 
+    References:
+        Gary, J. H., Handwerk, G. E. and Kaiser, M. J. (2007). Petroleum
+        Refining: Technology and Economics, 5th ed. CRC Press (desalting
+        and crude preheat).
+
     Example:
         >>> from difflow_refinery import Assay
         >>> from difflow_refinery.preheat import Desalter, DesalterUnitParams, DesalterParams
@@ -203,6 +208,11 @@ class PreflashDrum:
     Assumptions:
         Raoult's law (Lee-Kesler vapour pressures); water immiscible with the hydrocarbon liquid
         Equilibrium; no entrainment
+
+    References:
+        Rachford, H. H. and Rice, J. D. (1952). J. Petroleum Tech. 4(10).
+        Riazi, M. R. (2005). Characterization and Properties of Petroleum
+        Fractions. ASTM MNL50.
 
     Example:
         >>> from difflow_refinery import Assay
@@ -316,6 +326,14 @@ class CrudeUnitWithPreheat:
         The column's: equilibrium stages, Raoult with Lee-Kesler vapour pressures
         Pumparounds cooled in the train have no trim cooler
         No pressure drop across exchangers; pumps add no enthalpy
+
+    References:
+        Gary, J. H., Handwerk, G. E. and Kaiser, M. J. (2007). Petroleum
+        Refining: Technology and Economics, 5th ed. CRC Press (desalting
+        and crude preheat).
+        Ebert, W. and Panchal, C. B. (1995). Analysis of Exxon crude-oil slip
+        stream coking data. In Fouling Mitigation of Industrial Heat-Exchange
+        Equipment, Begell House (the fouling-rate model).
 
     Example:
         >>> # see examples/37_crude_preheat_train.ipynb
