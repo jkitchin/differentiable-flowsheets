@@ -759,6 +759,252 @@ and does not establish.
 
 ---
 
+(refinery-gasplant)=
+## The saturated gas plant
+
+The gas plant (`difflow_refinery.gasplant`, #312) recovers the light ends.
+Its feeds are the CDU overhead gas and unstabilised naphtha, and an FCC's
+wet gas where there is one. Its products are fuel gas, LPG, and a
+stabilised naphtha cut to a vapour-pressure spec:
+
+```text
+wet gas -> GasCompressor -> AmineTreater -> absorber-deethanizer -> fuel gas
+                 | condensate                    | bottoms
+                 +---------------------------->  +-> debutanizer -> LPG -> C3/C4 splitter
+unstabilised naphtha ---------------------------^                \-> stabilised naphtha
+```
+
+At 10-20 bar, Raoult's law is no longer the right model, and the crude
+column's thermodynamics would be wrong here by tens of percent in K.
+The gas plant therefore runs on a cubic equation of state, Peng-Robinson
+(default) or SRK. Real components and naphtha pseudocomponents go into
+one `GasComponents` table, so one EOS covers the mixture:
+
+```python
+import difflow_refinery as dr
+from difflow_refinery.gasplant import gas_components, debutanizer, GasPlantColumn
+
+cuts = dr.characterize(dr.Assay([0, 50, 100], [360., 400., 470.], sg=0.74),
+                       cut_points=[385., 420.])
+comps = gas_components(["hydrogen_sulfide", "ethane", "propane", "isobutane",
+                        "n_butane", "isopentane", "n_pentane", "n_hexane"], pseudo=cuts)
+col = GasPlantColumn(debutanizer(comps, naphtha_rvp=80e3))
+lpg, naphtha, info = col(feed)        # feed = {"F_propane": ..., "T": ..., "P": ...}
+info["outputs"]["reboiler.duty"], info["outputs"]["bottoms.rvp"]
+```
+
+### Components and thermodynamics
+
+`gas_components(light, pseudo=None, kij=None, cuts=None)` builds the
+table from two sources. For the real species (hydrogen, H2S, N2, CO2, C1-C6 paraffins,
+ethylene, propylene and the four butenes), it uses `difflow.database`
+plus the tables in `gasplant/components.py`, whose sources are listed in
+that module. For the pseudocomponents, it uses the refinery
+characterisation's Tc, Pc, acentric factor and Watson-Nelson Cp. `kij`
+is zero between hydrocarbons. The tabulated nonzero pairs (CO2, H2S and
+N2 with the light paraffins) are recalled from the DECHEMA compilation
+and are marked *verify* in the source. Each component also carries a
+lower heating value, computed from its heat of formation.
+
+`cuts=` keeps only the named cuts of the characterisation, in its own
+order. A naphtha taken off a whole-crude characterisation carries the
+first few cuts and almost nothing of the rest, and every cut in the
+table is a column in every EOS call. `examples/38_refinery_gas_plant.ipynb`
+keeps the cuts above 0.1 % of the naphtha and folds the remainder,
+about 1e-4 of it, into the heaviest cut it keeps.
+
+`CubicThermo` gives `ln K = ln phi_L - ln phi_V` at each stage's own
+`(T, P, x, y)`, and residual enthalpies from the departure functions.
+The cubic is solved in closed form. One Newton polish then carries the
+root's exact implicit derivative, so no gradient passes through
+`arccos`. Where the cubic has a single real root, both phases take it
+and `K = 1`, as in any cubic-EOS package.
+
+(refinery-gasplantcolumn)=
+### GasPlantColumn
+
+`GasPlantColumn` is the vacuum unit's [stage network](#refinery-stage-network)
+on the EOS. The MESH equations use log flows, the same `StageSpec`
+mechanism and the same implicit-function gradients. Trays are numbered
+from 1 at the top. The column can have any of:
+
+- a condenser that is `"total"` (the liquid at its bubble point, duty computed), `"partial"` (vapour product, duty a knob) or `None` (an absorber top);
+- a kettle reboiler, or none;
+- any number of feeds, each a stream at its own `(T, P)`, flashed once per solve;
+- liquid side draws.
+
+The factories return the parameters with the spec set each column is
+normally run on:
+
+| Factory | Products | Default specs (replacing) |
+|---|---|---|
+| `absorber_deethanizer` | `overhead` (fuel gas), `bottoms` | `bottoms.x.C2-` = 0.005 (reboiler duty); or `bottom.T` |
+| `debutanizer` | `distillate` (LPG), `bottoms` (naphtha) | `distillate.x.C5+` = 0.01 (distillate rate); `bottoms.rvp` or `bottoms.x.C4` (reboiler duty) |
+| `c3c4_splitter` | propane, butane | `distillate.x.C3` = 0.95; `bottoms.x.light` = 0.02 |
+| `deisobutanizer` | isobutane, normal butane | `distillate.x.isobutane` = 0.95; `bottoms.x.isobutane` = 0.05 |
+| `splitter` | any two-product cut | the cut placed by `light=`, specs as `(output, target)` pairs |
+
+The absorber-deethanizer takes two feeds, `lean_oil` on tray 1 and
+`feed`. Its lever is the lean-oil rate, which is the lean-oil stream's
+own flow. Every factory accepts the `GasPlantColumnParams` fields as
+keywords (`n_trays`, `top_P`, `side_draws=`, `eos="SRK"`, ...), so the
+same factories serve a naphtha splitter (#311).
+
+**Outputs** (`info["outputs"]`, SI) include:
+
+- per product: `<p>.x.<component|group>`, `.recovery.<...>`, `.mol`, `.rate` (kg/s) and `.T`; for liquid products also `.rvp` and `.tvp`;
+- `reflux_ratio`, `boilup_ratio`, `condenser.duty`, `reboiler.duty`, `energy_balance`;
+- `top.T`, `bottom.T` and every `stage{j}.T`/`.P`;
+- `<feed>.vapor_fraction`.
+
+The groups are C2-, C3, C4, C3-, C4+ and C5+. Pseudocomponents count as
+C5+. Any output can be specified.
+
+**Tray efficiency.** By default the factories apply O'Connell's (1946)
+correlation, `E_o = 0.492 (alpha mu_L)^-0.245`, as the Murphree vapour
+efficiency of every tray. Alpha is the key components' relative
+volatility at the feed. `mu_L` is `liquid_viscosity`, 0.1 cP by default,
+which is a typical C3-C6 value and not a prediction. Two caveats apply:
+
+- `E_MV = E_o` holds only at a stripping factor of one;
+- the correlation is itself good to about 25%.
+
+So the column is a rating model of that accuracy. `tray_efficiency=1.0`
+turns the trays into theoretical stages.
+
+**Vapour pressure.** `<product>.rvp` is the ASTM D323 construction on
+the EOS: the liquid in contact with four times its volume of vapour, at
+100 F. It is computed with the same EOS, not with a correlation.
+`.tvp` is the bubble-point pressure at 100 F.
+
+**Solve.** The solve runs in three passes, like the vacuum column's:
+
+1. Equilibrium stages with easy specs. A rate is used for a rate slot, the reflux ratio for the distillate of a total condenser, and the boilup ratio for a reboiler duty.
+2. Continuation of every target and efficiency to the user's values.
+3. One implicit-function step.
+
+The initial guess comes from the feed. Wilson K-values place the
+temperature profile between the overhead's dew point and the bottoms'
+bubble point. No user initialisation is needed.
+
+(refinery-gascompressor)=
+### GasCompressor
+
+The wet-gas compressor has `n_stages` isentropic stages at equal
+pressure ratios. Each stage's work is the isentropic enthalpy rise
+divided by `efficiency`. An aftercooler and knockout drum follow each
+stage. The condensate from all the drums leaves as one liquid stream,
+which in a gas plant joins the absorber feed. `info` reports:
+
+- `power` (W);
+- `stage_power`;
+- `discharge_T`;
+- the stage pressure `ratio`.
+
+Surge, choke and the compressor map are out of scope.
+
+(refinery-aminetreater)=
+### AmineTreater
+
+H2S is a component throughout. The amine contactor is a fixed removal
+fraction per component (`removal={"hydrogen_sulfide": 0.99}`), which
+splits the gas into sweet gas and acid gas. Treating chemistry and
+Merox are out of scope. For a rate-based contactor, see
+`difflow_cc.AmineAbsorber`.
+
+### Products
+
+- `fuel_gas(flows, comps)` returns the rate, mass rate, MW, LHV (molar and mass), heat release and H2S ppm.
+- `lpg_quality(flows, comps, grade)` checks the LPG against a GPA 2140 grade (`"HD-5"`, `"commercial_propane"`, `"commercial_butane"`). It returns `values`, signed `margins` (positive on spec) and `on_spec`. The vapour pressure is gauge, at 100 F, on the EOS.
+- `reid_vapor_pressure(flows, comps)` and `true_vapor_pressure` give the same numbers the column reports.
+
+The limits in `GPA_2140` are recalled values and are marked *verify*.
+The standard writes its composition limits in liquid volume percent;
+they are compared here as mole fractions, which differ by a few percent
+of the value for C3/C4. The 95% evaporated, residue, copper strip,
+sulfur and moisture tests are not computed.
+
+### Planning with the gas plant
+
+`gasplant_block(column, feeds, levers, outputs=None)` is the gas plant's
+`cdu_block`. It returns a `difflow.planning.Block` whose delta vectors
+are implicit-function Jacobians of the converged column. The levers are
+of three kinds:
+
+- every spec target by its own name (`distillate.x.C5+`, `bottoms.rvp`);
+- every knob a spec has not replaced (`top.P`);
+- per feed, `<feed>.mol`, `<feed>.T` and `<feed>.F_<component>`.
+
+The outputs are in planner units (C, kPa, MW, kg/h, kmol/h).
+Non-convergence is masked to NaN, as in `cdu_block`.
+
+```python
+blk = gasplant_block(col, [feed], ["distillate.x.C5+", "bottoms.rvp", "top.P", "feed.mol"],
+                     outputs=["reboiler.duty", "condenser.duty", "distillate.rate"])
+```
+
+### Results
+
+All four factories converge from the default initialisation, with no
+warnings. They are run on two feeds: a straight-run feed (CDU light ends
+with H2S, and two naphtha pseudocomponents) and an FCC feed (adding
+hydrogen, ethylene, propylene and the four butenes). On both feeds:
+
+- the total mass balance closes to 1e-15 relative;
+- every component's balance closes to better than 1e-8;
+- each column's energy balance closes to 1e-9 W on duties of order 1 MW.
+
+On the deisobutanizer, the FCC butenes boil with the isobutane. The
+olefin-rich case is therefore run at a 0.5 isobutane purity: a higher
+purity is not available from that feed at any reflux, and the solve
+says so by not converging.
+
+The tests check the following, in `tests/refinery/test_gasplant.py`:
+
+- The implicit gradients of LPG C5+, naphtha RVP and reboiler duty, with respect to the reflux ratio, the top pressure and a feed component, match central differences to 1e-5 relative.
+- The reboiler duty rises monotonically as the naphtha RVP spec is tightened.
+- The absorber-deethanizer's C2 slip falls monotonically as its bottoms temperature rises.
+
+### The gas plant on a crude unit
+
+`examples/38_refinery_gas_plant.ipynb` runs the whole chain on the CDU
+of `examples/35_refinery_cdu_planning.ipynb`, with a partial condenser
+held at 40 C:
+
+- the offgas goes through a two-stage compressor to 14.5 bar, then the amine treater;
+- an absorber-deethanizer takes the whole unstabilised naphtha as lean oil;
+- a debutanizer makes the LPG;
+- a naphtha splitter makes light and heavy naphtha.
+
+Every column converges from the default initialisation. The material
+balance across the plant closes to 1e-12 mol/s on 280 mol/s. The
+debutanizer's implicit derivatives with respect to its C4 spec match
+central differences to the digits printed.
+
+This crude's offgas is mostly C3/C4. At 14.5 bar and 40 C almost all of
+it condenses in the compressor's knock-out drums, so the amine treats a
+few percent of what was compressed. The condensate carries most of the
+H2S past it, into the fuel gas and the LPG.
+
+The H2S figure starts from an assumption. The assay says nothing about
+sulfur, so the offgas is given 2 mol % H2S.
+
+### Gas plant gotchas
+
+- **The naphtha sets a floor on its own RVP.** A stabiliser cannot bring the naphtha below the RVP of its C5+ part. The C5/C6 in the test feed alone sit near 70 kPa. A 60 kPa spec is infeasible, and Newton does not converge.
+- **Purity specs must be reachable on the trays you gave.** At O'Connell efficiencies near 0.5, a 12-tray debutanizer is about six theoretical stages. That is not enough for 1% C5+ in the LPG and 1% C4 in the naphtha together.
+- **A C2- spec has to be smaller than the C2- there is.** With the whole naphtha as lean oil, the absorber-deethanizer's bottoms are about 290 mol/s. At the factory's 0.5 %, that is 1.4 mol/s of C2-, but the CDU feeds bring in 1.07 mol/s. The spec cannot be met at any duty, so the solve does not converge. The example uses 0.2 %.
+- **A hot feed sets a ceiling on the naphtha's RVP.** The deethanizer bottoms reach the debutanizer at 180 C. On that feed, an RVP spec of 40 or 50 kPa converges, at 2.7 and 1.7 MW. At 70 kPa the reboiler duty would have to go below zero, and the solve does not converge.
+- **A heavy lean oil.** When the lean oil is a hundred times the gas, the guess's vapour profile is its 5 %-of-feed floor, and a pass-1 boilup ratio taken from it is a few percent: pass 1 then has almost no vapour and never converges. Pass 1's boilup ratio is therefore at least one (`test_deethanizer_with_a_lean_oil_a_hundred_times_the_gas`).
+- **Compile once per spec structure.** The first solve compiles for 10-40 s. Later solves with the same structure (which specs replace which knobs) reuse the compiled solve for any numbers.
+
+### Gas plant: out of scope
+
+Treating chemistry, Merox, cryogenic C2 recovery, column hydraulics and
+compressor surge.
+
+---
+
 (refinery-blending)=
 ## Product blending
 
@@ -1005,6 +1251,29 @@ What the check does not cover:
 
 **Published case study: none found.** The issue named Polley, Wilson, Yeap and Pugh (2002) as a candidate. No preheat-train study was found that publishes a train's full data (assay, exchanger areas and U values, hot-stream rates) in a form that could be set up here, so nothing is reproduced. The eight-exchanger layout is a textbook one, and its numbers are not a validation.
 
+(refinery-gasplant-validation)=
+### Validation: the gas plant
+
+The gas plant's columns are checked against IDAES 2.10 (`tests/refinery/reference/gasplant_generate.py` writes `gasplant_reference.json`). `test_gasplant_validation.py` (release) compares a fresh difflow solve against the file. `test_gasplant_validation_file.py` runs on every commit: it checks that the file is intact, that the component constants and cases are the ones it was built on, and the state-point comparison below, which needs no column solve. As for the crude unit, this is **an independent implementation, not an independent model**. IDAES's generic Peng-Robinson package (its `Cubic` EOS, `SmoothVLE`, log-fugacity equilibrium) is given difflow's constants (Tc, Pc, omega, ideal-gas Cp) with kij = 0. Both sides use equilibrium trays (`tray_efficiency=1.0`), a total condenser at the bubble point, a kettle reboiler and no pressure drop, with the reflux and boilup ratios fixed. IDAES signs the condenser duty negative; difflow reports the heat removed.
+
+| Case | IDAES model | Agreement (test tolerance) |
+| --- | --- | --- |
+| Debutanizer: C3 to nC5, 10 bar, 10 trays, R = 2, boilup 2 | `TrayColumn`, IDAES's own initialization | product compositions 7.5e-8 rel (1e-5); condenser and reboiler duties 1.2e-8 and 2.4e-8 rel (1e-5); stage temperatures 6.8e-7 K (1e-4); K-values at IDAES's own (T, P, x, y), 1.4e-13 rel (1e-6) |
+| C3/C4 splitter: C2 to nC4 with propylene, 17 bar, 20 trays, R = 5, boilup 3 | state block: a TP flash of each of difflow's 21 stage states (z, T, P), from IDAES's own initialization | K 7.1e-7 rel (1e-5); vapour fraction 3.3e-5 (1e-4); phase compositions 1.1e-6 (1e-5); phase enthalpies 2e-9 J/mol (1e-3) |
+
+Two things the reference had to work around, both on the IDAES side:
+
+- **SmoothVLE's smoothing.** At IDAES's default smoothing parameters the bubble-point condenser outlet is left 4e-4 vapour. The total condenser's ports carry the liquid composition at the total flow, so the condenser loses components while the total balances: 0.07 % of the propane, and a 0.7 % gap in the products. The generator tightens the parameters by continuation to eps_2 = 1e-9. The gap then falls to the 1e-7 in the table, which is the evidence it was all smoothing.
+- **The splitter's column.** IDAES's `TrayColumn` was not converged on the C3/C4 splitter. Its initialization fails at the "column section + condenser" step for every variant tried: with and without ethane and propylene; 10 to 17 bar; 10 to 20 trays; reflux/boilup from 2/2 to 5/3. Starting every state block from difflow's profile did not help either. At the case's ratios IPOPT ends infeasible. At 4.0/2.5 it reports optimal on a spurious solution with two trays single phase (x = y on `SmoothVLE`'s branch). A reference seeded from difflow's answer would not have been independent of it anyway. So **the issue's 1 % column-level check is met for the debutanizer only**. For the splitter the comparison stops at the thermodynamics. The release test checks that difflow's column still puts its stages at the recorded states.
+
+Regenerate (needs IDAES and IPOPT; `--case NAME` redoes one case):
+
+```bash
+PYTHONPATH=src:tests python -m refinery.reference.gasplant_generate
+```
+
+**What this does not validate.** It does not test how well PR with zero kij describes these mixtures. That is the propylene/propane split above all, where the relative volatility is near 1.1 and a small kij moves the trays needed. It does not test the O'Connell efficiency, the GPA 2140 limits, the RVP construction against measured RVPs, or the compressor. Those are tested against their definitions in `test_gasplant.py`, not against a second simulator or plant data.
+
 ---
 
 (refinery-limitations)=
@@ -1015,4 +1284,4 @@ What the check does not cover:
 - **Thermodynamics:** Raoult's law and ideal-gas-path enthalpies. This is the usual model for an atmospheric column at one or two bar; it is not a cubic equation of state.
 - **Equilibrium stages.** There are no tray efficiencies or hydraulics.
 - **Boiling ranges are TBP, not ASTM D86.**
-- **Validation:** against an independent equation-oriented model, IDAES property packages and published characterisation examples; not against a commercial simulator's crude case. The vacuum column likewise, against an independent Pyomo/IPOPT model on the same residue (equilibrium and Murphree beds, and sensitivities); not against DWSIM. See [Validation](#refinery-validation) and [the vacuum unit's](#refinery-vacuum-validation) for what that does and does not establish.
+- **Validation:** against an independent equation-oriented model, IDAES property packages and published characterisation examples; not against a commercial simulator's crude case. The vacuum column likewise, against an independent Pyomo/IPOPT model on the same residue (equilibrium and Murphree beds, and sensitivities); not against DWSIM. The gas plant's debutanizer against IDAES's `TrayColumn` on PR, its C3/C4 splitter at the thermodynamic level only. See [Validation](#refinery-validation), [the vacuum unit's](#refinery-vacuum-validation) and [the gas plant's](#refinery-gasplant-validation) for what that does and does not establish.

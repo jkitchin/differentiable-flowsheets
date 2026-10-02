@@ -61,6 +61,15 @@ _CRITICAL_DATA = {
     "ethylene": (282.3, 5.041e6, 0.087, 28.05),
     "propylene": (365.6, 4.600e6, 0.140, 42.08),
     "1_butene": (419.5, 4.023e6, 0.191, 56.11),
+    # The other three C4 olefins (FCC LPG). Tc, Pc and omega are the
+    # constants of Lemmon & Ihmels' reference equations of state, "Thermodynamic
+    # properties of the butenes Part II. Short fundamental equations of
+    # state", Fluid Phase Equilib. 228-229, 173-187 (2005), as CoolProp
+    # tabulates them. NIST WebBook (Tsonopoulos & Ambrose 1996) agrees on Tc
+    # to 0.3 K; its Pc differs by up to 2% (cis 42.1, trans 41.0, iso 40.0 bar).
+    "cis_2_butene": (435.75, 4.236e6, 0.2024, 56.106),
+    "trans_2_butene": (428.61, 4.019e6, 0.2101, 56.106),
+    "isobutylene": (418.09, 4.016e6, 0.1926, 56.106),
 
     # Alkynes
     "acetylene": (308.3, 6.114e6, 0.190, 26.04),
@@ -121,6 +130,12 @@ _DEFAULT_SOURCE = "NIST Chemistry WebBook; Perry's 9e; Yaws; DIPPR 801"
 SOURCE_CITATIONS: dict[str, str] = {
     name: _DEFAULT_SOURCE for name in _CRITICAL_DATA
 }
+_BUTENES_SOURCE = (
+    "Tc, Pc, omega: Lemmon & Ihmels, Fluid Phase Equilib. 228-229, 173 (2005); "
+    "ideal-gas Cp: cubic fitted to TRC (1997) tables via NIST WebBook, 200-800 K; "
+    "Hvap, Antoine, Hf: NIST WebBook (sources in database.py)")
+SOURCE_CITATIONS.update({name: _BUTENES_SOURCE for name in
+                         ("cis_2_butene", "trans_2_butene", "isobutylene")})
 
 
 def get_critical_props(name: str) -> CriticalProperties:
@@ -315,6 +330,44 @@ _IDEAL_THERMO_DATA = {
         "Hvap": (18420.0, 0.38, 365.6),
         "antoine": (9.10, 786.00, -25.52),
         "Hf": 20410.0,
+    },
+    # cis-2-butene, trans-2-butene, isobutylene. Cp: a cubic fitted here, by
+    # least squares, to the TRC (1997) ideal-gas tables in the NIST WebBook at
+    # 200-800 K (worst point 1.1%, cis at 200 K; tests/test_database.py
+    # checks it against the tabulated values). Hvap: the Watson A that
+    # reproduces one NIST WebBook value -- Majer & Svoboda (1985) at the normal
+    # boiling point for cis (23.34 kJ/mol, 276.9 K) and trans (22.72, 274 K);
+    # Lamb & Roper (1940) for isobutylene (22.8, 258 K). Antoine: NIST WebBook
+    # log10(P/bar) fits with A shifted +5 for Pa -- Scott et al. 1944
+    # (203-296 K), Guttman & Pitzer 1945 (202-274 K), Lamb & Roper 1940
+    # (216-273 K); the range is recorded. Hf (gas, 298 K): Prosen, Maron &
+    # Rossini, J. Res. NBS 46, 106 (1951).
+    "cis_2_butene": {
+        "MW": 56.106,
+        "Cp": (29.245, 0.11883, 2.4322e-4, -2.1312e-7),
+        "Hvap": (34248.0, 0.38, 435.75),
+        "antoine": (8.98744, 957.06, -36.504),
+        "Hf": -7700.0,
+        "T_antoine_min": 203.06,
+        "T_antoine_max": 295.91,
+    },
+    "trans_2_butene": {
+        "MW": 56.106,
+        "Cp": (35.445, 0.14124, 1.6382e-4, -1.5586e-7),
+        "Hvap": (33472.0, 0.38, 428.61),
+        "antoine": (9.0436, 982.166, -30.775),
+        "Hf": -10800.0,
+        "T_antoine_min": 201.70,
+        "T_antoine_max": 274.13,
+    },
+    "isobutylene": {
+        "MW": 56.106,
+        "Cp": (23.064, 0.21696, 3.1111e-5, -8.2884e-8),
+        "Hvap": (32837.0, 0.38, 418.09),
+        "antoine": (8.64709, 799.055, -46.615),
+        "Hf": -17900.0,
+        "T_antoine_min": 216.40,
+        "T_antoine_max": 273.0,
     },
 
     # Aromatics
@@ -621,6 +674,10 @@ _ALIASES = {
     "etoh": "ethanol",
     "etbe": "diethyl_ether",
     "xylene": "m_xylene",  # Default to m-xylene
+    "isobutene": "isobutylene",
+    "2_methylpropene": "isobutylene",
+    "cis_butene": "cis_2_butene",
+    "trans_butene": "trans_2_butene",
 }
 
 
