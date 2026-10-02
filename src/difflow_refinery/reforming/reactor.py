@@ -64,7 +64,8 @@ def stream_of(F: Array, T: Array, P: Array) -> Stream:
 def _rate_model(iso_fraction: float) -> RateModel:
     key = float(iso_fraction)
     if key not in _RATE_MODELS:
-        _RATE_MODELS[key] = RateModel(key)
+        with jax.ensure_compile_time_eval():  # concrete arrays even when first built under jit
+            _RATE_MODELS[key] = RateModel(key)
     return _RATE_MODELS[key]
 
 

@@ -1,4 +1,4 @@
-"""The reformer as a :class:`difflow.planning.Block` (``reformer_block``).
+r"""The reformer as a :class:`difflow.planning.Block` (``reformer_block``).
 
 Levers (planner units):
 
