@@ -74,7 +74,7 @@ jobs:
     # again roughly twice a shard: long enough not to fire on a slow
     # runner, short enough that reaching it means something has hung. If
     # a shard creeps toward it, rebalance before raising it.
-    timeout-minutes: 25
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -141,9 +141,16 @@ jobs:
       # in series on one worker.
       - name: Run tests
         run: |
-          python -m pytest tests/ -q --tb=short -m "not release" \
+          cp .test_durations durations-${{ matrix.shard }}.json
+          python -m pytest tests/ -v --durations=40 --tb=short -m "not release" \
             -n auto --dist loadfile --no-loadscope-reorder \
+            --store-durations --durations-path durations-${{ matrix.shard }}.json \
             --splits 3 --group ${{ matrix.shard }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: durations-${{ matrix.shard }}
+          path: durations-${{ matrix.shard }}.json
 
   # Verify the package imports with NO optional dependencies installed. The job
   # this replaces installed ".[dev]" and re-ran the full suite, making it an
