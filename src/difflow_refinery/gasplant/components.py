@@ -23,6 +23,11 @@ Sources of the tables here
       the JANAF 28.85, the latter 28.32;
     * hydrogen sulfide: a cubic fitted here to the NIST-JANAF Shomate
       equation (Chase 1998) over 298-1000 K, worst point 0.25%.
+    * benzene and n-heptane: cubics fitted here to the NIST WebBook
+      ideal-gas tables at 273.15-800 K (TRC 1997 for benzene, Scott 1974
+      for n-heptane), worst point 0.4%; :mod:`difflow.database` holds
+      both only as constants. n-Heptane stands in for the C7+ of a light
+      naphtha in :mod:`difflow_refinery.isomerization`.
 
     Lower heating values are computed from the heats of formation
     (gas, 298 K) by ``LHV = dHf(species) - c dHf(CO2) - h/2 dHf(H2O, g)
@@ -72,6 +77,8 @@ CP_IG: dict[str, tuple[float, float, float, float]] = {
     "propylene": (3.710, 2.345e-1, -1.160e-4, 2.205e-8),
     "1_butene": (-2.994, 3.532e-1, -1.990e-4, 4.463e-8),
     "hydrogen_sulfide": (31.69, 2.0829e-3, 2.3835e-5, -1.1894e-8),
+    "benzene": (-41.768, 0.51126, -3.3693e-4, 7.5704e-8),
+    "n_heptane": (16.089, 0.53113, -6.3869e-5, -1.1342e-7),
 }
 
 #: Heats of formation (J/mol, gas, 298 K) for components the database lacks.
@@ -92,6 +99,9 @@ FORMULA: dict[str, tuple[int, int, int]] = {
     "n_hexane": (6, 14, 0), "n_heptane": (7, 16, 0), "n_octane": (8, 18, 0),
     "ethylene": (2, 4, 0), "propylene": (3, 6, 0), "1_butene": (4, 8, 0),
     "cis_2_butene": (4, 8, 0), "trans_2_butene": (4, 8, 0), "isobutylene": (4, 8, 0),
+    "2_methylpentane": (6, 14, 0), "3_methylpentane": (6, 14, 0),
+    "2_2_dimethylbutane": (6, 14, 0), "2_3_dimethylbutane": (6, 14, 0),
+    "methylcyclopentane": (6, 12, 0), "cyclohexane": (6, 12, 0),
     "benzene": (6, 6, 0), "toluene": (7, 8, 0),
     "nitrogen": (0, 0, 0), "carbon_dioxide": (0, 0, 0), "water": (0, 0, 0),
 }

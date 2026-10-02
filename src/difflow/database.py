@@ -71,6 +71,17 @@ _CRITICAL_DATA = {
     "trans_2_butene": (428.61, 4.019e6, 0.2101, 56.106),
     "isobutylene": (418.09, 4.016e6, 0.1926, 56.106),
 
+    # C6 isomers and naphthenes of light-naphtha isomerization (issue #311).
+    # Tc, Pc and omega are the PSRK Revision 4 appendix values (Horstmann,
+    # Jaborowski, Fischer & Gmehling, Fluid Phase Equilib. 227, 157 (2005));
+    # Passut & Danner (1973) agrees on Tc to 0.3 K and Pc to 1%.
+    "2_methylpentane": (497.7, 3.03975e6, 0.279, 86.177),
+    "3_methylpentane": (504.6, 3.119797e6, 0.275, 86.177),
+    "2_2_dimethylbutane": (489.0, 3.099532e6, 0.231, 86.177),
+    "2_3_dimethylbutane": (500.0, 3.149181e6, 0.247, 86.177),
+    "methylcyclopentane": (532.7, 3.789555e6, 0.239, 84.161),
+    "cyclohexane": (553.8, 4.080358e6, 0.213, 84.161),
+
     # Alkynes
     "acetylene": (308.3, 6.114e6, 0.190, 26.04),
 
@@ -136,6 +147,15 @@ _BUTENES_SOURCE = (
     "Hvap, Antoine, Hf: NIST WebBook (sources in database.py)")
 SOURCE_CITATIONS.update({name: _BUTENES_SOURCE for name in
                          ("cis_2_butene", "trans_2_butene", "isobutylene")})
+_C6_ISOMERS_SOURCE = (
+    "Tc, Pc, omega: PSRK Rev. 4 appendix, Horstmann et al., Fluid Phase "
+    "Equilib. 227, 157 (2005); ideal-gas Cp: cubic fitted to the NIST WebBook "
+    "tables (Scott 1974; TRC 1997; Dorofeeva 1986), 273-800 K; Hvap, Antoine "
+    "(Willingham, Taylor et al. 1945), Hf (Prosen & Rossini 1945; Prosen, "
+    "Johnson et al. 1946): NIST WebBook (details in database.py)")
+C6_ISOMERS = ("2_methylpentane", "3_methylpentane", "2_2_dimethylbutane",
+              "2_3_dimethylbutane", "methylcyclopentane", "cyclohexane")
+SOURCE_CITATIONS.update({name: _C6_ISOMERS_SOURCE for name in C6_ISOMERS})
 
 
 def get_critical_props(name: str) -> CriticalProperties:
@@ -155,7 +175,7 @@ def get_critical_props(name: str) -> CriticalProperties:
         >>> props.Tc
         190.6
     """
-    key = name.lower().replace(" ", "_").replace("-", "_")
+    key = name.lower().replace(" ", "_").replace("-", "_").replace(",", "_")
     if key not in _CRITICAL_DATA:
         available = ", ".join(sorted(_CRITICAL_DATA.keys()))
         raise KeyError(
@@ -370,6 +390,74 @@ _IDEAL_THERMO_DATA = {
         "T_antoine_max": 273.0,
     },
 
+    # The C6 isomers and naphthenes of light-naphtha isomerization (#311).
+    # Cp: a cubic fitted here, by least squares, to the NIST WebBook ideal-gas
+    # tables at 273.15-800 K -- Scott (1974) for the four branched hexanes,
+    # TRC (1997) for methylcyclopentane, Dorofeeva et al. (1986) for
+    # cyclohexane; worst point 0.5% (tests/test_database.py checks them).
+    # Hvap: the Watson A that reproduces one NIST WebBook value -- Majer &
+    # Svoboda (1985) at the normal boiling point for 2-methylpentane (27.79
+    # kJ/mol, 333.4 K); the 298 K standard value otherwise (3-MP 30.3,
+    # 2,2-DMB 27.68, 2,3-DMB 29.12, MCP 31.7, cyclohexane 33.1 kJ/mol).
+    # Antoine: NIST WebBook log10(P/bar) fits of Willingham, Taylor et al.
+    # (1945) with A shifted +5 for Pa; the range is recorded. Hf (gas, 298 K):
+    # Prosen & Rossini (1945) for the hexanes, Prosen, Johnson & Rossini
+    # (1946) for the naphthenes, as the NIST WebBook gives them.
+    "2_methylpentane": {
+        "MW": 86.177,
+        "Cp": (-6.882, 0.57438, -2.5124e-4, 1.6512e-8),
+        "Hvap": (42344.0, 0.38, 497.7),
+        "antoine": (8.9640, 1135.41, -46.578),
+        "Hf": -174300.0,
+        "T_antoine_min": 285.91,
+        "T_antoine_max": 334.22,
+    },
+    "3_methylpentane": {
+        "MW": 86.177,
+        "Cp": (-4.5919, 0.54702, -2.0104e-4, -1.1154e-8),
+        "Hvap": (42553.0, 0.38, 504.6),
+        "antoine": (8.97377, 1152.368, -46.021),
+        "Hf": -171600.0,
+        "T_antoine_min": 288.44,
+        "T_antoine_max": 337.23,
+    },
+    "2_2_dimethylbutane": {
+        "MW": 86.177,
+        "Cp": (-3.1491, 0.54281, -1.8902e-4, -6.8825e-9),
+        "Hvap": (39577.0, 0.38, 489.0),
+        "antoine": (8.87973, 1081.176, -43.807),
+        "Hf": -185600.0,
+        "T_antoine_min": 288.53,
+        "T_antoine_max": 323.68,
+    },
+    "2_3_dimethylbutane": {
+        "MW": 86.177,
+        "Cp": (-20.012, 0.6334, -3.5449e-4, 8.1562e-8),
+        "Hvap": (41104.0, 0.38, 500.0),
+        "antoine": (8.93473, 1127.187, -44.2),
+        "Hf": -177800.0,
+        "T_antoine_min": 287.41,
+        "T_antoine_max": 331.94,
+    },
+    "methylcyclopentane": {
+        "MW": 84.161,
+        "Cp": (-35.499, 0.53993, -1.5819e-4, -5.2279e-8),
+        "Hvap": (43295.0, 0.38, 532.7),
+        "antoine": (8.98773, 1186.059, -47.108),
+        "Hf": -106700.0,
+        "T_antoine_min": 288.18,
+        "T_antoine_max": 345.78,
+    },
+    "cyclohexane": {
+        "MW": 84.161,
+        "Cp": (-30.506, 0.46222, 3.0128e-5, -1.5954e-7),
+        "Hvap": (44401.0, 0.38, 553.8),
+        "antoine": (8.96988, 1203.526, -50.287),
+        "Hf": -123100.0,
+        "T_antoine_min": 293.06,
+        "T_antoine_max": 354.73,
+    },
+
     # Aromatics
     "benzene": {
         "MW": 78.11,
@@ -532,7 +620,7 @@ def get_species_data(name: str) -> SpeciesData:
         >>> data.MW
         32.04
     """
-    key = name.lower().replace(" ", "_").replace("-", "_")
+    key = name.lower().replace(" ", "_").replace("-", "_").replace(",", "_")
     if key not in _IDEAL_THERMO_DATA:
         available = ", ".join(sorted(_IDEAL_THERMO_DATA.keys()))
         raise KeyError(
@@ -578,7 +666,7 @@ def get_species_info(name: str) -> dict:
         Dictionary with all available properties
     """
     _record_access(name, "info")
-    key = name.lower().replace(" ", "_").replace("-", "_")
+    key = name.lower().replace(" ", "_").replace("-", "_").replace(",", "_")
     info = {"name": key}
 
     if key in _CRITICAL_DATA:
@@ -678,6 +766,13 @@ _ALIASES = {
     "2_methylpropene": "isobutylene",
     "cis_butene": "cis_2_butene",
     "trans_butene": "trans_2_butene",
+    "2mp": "2_methylpentane",
+    "3mp": "3_methylpentane",
+    "22dmb": "2_2_dimethylbutane",
+    "23dmb": "2_3_dimethylbutane",
+    "neohexane": "2_2_dimethylbutane",
+    "diisopropyl": "2_3_dimethylbutane",
+    "mcp": "methylcyclopentane",
 }
 
 
@@ -690,7 +785,7 @@ def resolve_alias(name: str) -> str:
     Returns:
         Canonical species name
     """
-    key = name.lower().replace(" ", "_").replace("-", "_")
+    key = name.lower().replace(" ", "_").replace("-", "_").replace(",", "_")
     return _ALIASES.get(key, key)
 
 
