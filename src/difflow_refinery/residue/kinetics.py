@@ -66,7 +66,7 @@ Where the numbers come from -- read this before trusting a wt%:
 * The RATE CONSTANTS, activation energies and the refractory share of the
   residue sulfur (:data:`DEFAULT_RESIDUE_S_SHARE` in :mod:`.feed`) are
   ILLUSTRATIVE: chosen here so that an atmospheric residue of about 3 wt%
-  sulfur at a WABT near 390 C, LHSV 0.25 1/h, 150 bar and 1000 Nm3/m3
+  sulfur at a WABT near 395 C, LHSV 0.25 1/h, 150 bar and 1000 Nm3/m3
   desulfurizes by 85-90 %, demetallizes by 70-85 % and converts 10-20 % of
   its 538 C+ -- the ranges that ARDS units report (Speight 2000, Ch. 7;
   Rana et al. 2007). They are not fitted to any unit or catalyst, and the

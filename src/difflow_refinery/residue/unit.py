@@ -335,7 +335,7 @@ class ResidueDesulfurizer:
         for a, v in VOLUME_INCREMENTS.items():
             inc = inc.at[ai[a]].set(v)
         v_feed = c["MW"] / (1000.0 * c["SG"] * RHO_WATER_60F)
-        v_cut = v_feed - th["unit_attr"] @ inc / 1.0 + pm @ inc
+        v_cut = v_feed - th["unit_attr"] @ inc + pm @ inc
         has = out.cut > 1e-20 * jnp.sum(out.cut)
         mw_cut = jnp.where(has, out.cut_mw(lay), c["MW"])
         v_cut = jnp.where(has, v_cut, v_feed)
