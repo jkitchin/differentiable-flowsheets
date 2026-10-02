@@ -167,7 +167,7 @@ def pytest_collection_modifyitems(config, items):
     unchanged.
     """
     result = yield
-    if not os.environ.get("PYTEST_XDIST_WORKER") or not items:
+    if not os.environ.get("PYTEST_XDIST_WORKER") or not items or os.environ.get("DIFFLOW_TEST_NO_LPT"):
         return result
     try:
         with open(_DURATIONS) as fh:
