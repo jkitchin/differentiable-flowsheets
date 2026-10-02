@@ -90,7 +90,8 @@ import optimistix as optx
 from jax import Array
 
 from difflow_refinery.hydroprocessing.layout import Flows, Layout
-from difflow_refinery.hydroprocessing.separator import flash_components, pr_flash, rachford_rice
+from difflow_refinery.hydroprocessing.separator import (
+    flash_components, phase_denominator, pr_flash, rachford_rice)
 from difflow_refinery.hydroprocessing.solve import newton_scalar
 from difflow_refinery.hydroprocessing.thermo import Components
 
@@ -219,14 +220,19 @@ jax.tree_util.register_dataclass(KModel, data_fields=["lnK0", "dlnK_dT", "T0"], 
 
 
 def k_model_at(flows: Flows, layout: Layout, comps: Components, T, P) -> tuple[KModel, Any]:
-    """PR flash at ``(T, P)`` and its K-values' temperature slope (forward-mode AD)."""
+    """PR flash at ``(T, P)`` and its K-values' temperature slope (forward-mode AD).
+
+    Returns ``(KModel, flash residual)``; a residual far from zero (or not
+    finite) is a flash that failed (see :func:`.separator.pr_flash`).
+    """
     z = flash_components(flows, layout, comps)
 
     def lnK_of(T):
-        return pr_flash(T, P, z, comps).lnK
+        fr = pr_flash(T, P, z, comps)
+        return fr.lnK, fr.residual
 
-    lnK0, slope = jax.jvp(lnK_of, (jnp.asarray(T, dtype=float),), (jnp.asarray(1.0),))
-    return KModel(lnK0, slope, jnp.asarray(T, dtype=float)), None
+    (lnK0, res), (slope, _) = jax.jvp(lnK_of, (jnp.asarray(T, dtype=float),), (jnp.asarray(1.0),))
+    return KModel(lnK0, slope, jnp.asarray(T, dtype=float)), res
 
 
 def phase_state(flows: Flows, layout: Layout, comps: Components, km: KModel, T):
@@ -236,7 +242,7 @@ def phase_state(flows: Flows, layout: Layout, comps: Components, km: KModel, T):
     zn = zt / jnp.sum(zt)
     K = jnp.exp(km.lnK(T))
     V = rachford_rice(zn, K)
-    x = zn / (1.0 + V * (K - 1.0))
+    x = zn / phase_denominator(zn, K, V)
     y = K * x
     return V, x / jnp.sum(x), y / jnp.sum(y)
 
@@ -307,6 +313,7 @@ class BedResult:
         profile: :class:`Flows` with a leading ``(n_save,)`` axis.
         k_model: The bed's linearised K-values.
         steps: Accepted solver steps.
+        flash_residual: Residual of the bed-inlet PR flash (see :func:`k_model_at`).
     """
 
     inlet: Flows
@@ -318,10 +325,12 @@ class BedResult:
     profile: Flows
     k_model: KModel
     steps: Array
+    flash_residual: Array = 0.0
 
 
 jax.tree_util.register_dataclass(
-    BedResult, data_fields=["inlet", "outlet", "T_in", "T_out", "xi", "T", "profile", "k_model", "steps"],
+    BedResult, data_fields=["inlet", "outlet", "T_in", "T_out", "xi", "T", "profile", "k_model", "steps",
+                 "flash_residual"],
     meta_fields=[])
 
 
@@ -354,7 +363,7 @@ def integrate_bed(kinetics: KineticModel, params, layout: Layout, comps: Compone
     T_in = jnp.asarray(T_in, dtype=float)
     P = jnp.asarray(P, dtype=float)
     W = jnp.asarray(W, dtype=float)
-    km, _ = k_model_at(inlet, layout, comps, T_in, P)
+    km, flash_res = k_model_at(inlet, layout, comps, T_in, P)
 
     y0 = jnp.concatenate([inlet.ravel(), T_in[None]])
     # scale: each block by its own inlet values, floored at 1e-10 of the block's largest
@@ -399,7 +408,8 @@ def integrate_bed(kinetics: KineticModel, params, layout: Layout, comps: Compone
     prof = jax.vmap(lambda v: Flows.unravel(v[:n], layout))(ys)
     out = Flows.unravel(ys[-1, :n], layout)
     return BedResult(inlet=inlet, outlet=out, T_in=T_in, T_out=ys[-1, n], xi=ts, T=ys[:, n],
-                     profile=prof, k_model=km, steps=sol.stats["num_accepted_steps"])
+                     profile=prof, k_model=km, steps=sol.stats["num_accepted_steps"],
+                     flash_residual=flash_res)
 
 
 # =============================================================================

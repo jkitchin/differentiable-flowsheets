@@ -119,6 +119,13 @@ def compress(gas: Flows, layout: Layout, comps: Components, T_in, P_in, P_out, e
     z, cp = _gas_z(gas, layout, comps)
     T_in = jnp.asarray(T_in, dtype=float)
     lnr = jnp.log(jnp.asarray(P_out, dtype=float) / jnp.asarray(P_in, dtype=float))
+    # A non-finite inlet (an upstream failure) gives a NaN outlet, never an exception from
+    # the root finders' implicit adjoint, whose linear solve raises on non-finite input (#332).
+    ok = jnp.all(jnp.isfinite(z)) & jnp.isfinite(T_in) & jnp.isfinite(lnr) & jnp.all(jnp.isfinite(cp))
+    z = jnp.where(ok, z, 1.0)
+    T_in = jnp.where(ok, T_in, 300.0)
+    lnr = jnp.where(ok, lnr, 0.1)
+    cp = jnp.where(ok, cp, comps.cp_ig[:comps.n_gas])
 
     def r_s(T, args):
         z, cp, T_in, lnr = args
@@ -138,7 +145,7 @@ def compress(gas: Flows, layout: Layout, comps: Components, T_in, P_in, P_out, e
 
     T2 = optx.root_find(r_h, solver, jax.lax.stop_gradient(Ts), args=(z, cp, H2), max_steps=50,
                         throw=False).value
-    return T2, H2 - H1
+    return jnp.where(ok, T2, jnp.nan), jnp.where(ok, H2 - H1, jnp.nan)
 
 
 def makeup_for_ratio(recycle: Flows, layout: Layout, makeup_y: Array, h2_target) -> tuple[Flows, Array]:
