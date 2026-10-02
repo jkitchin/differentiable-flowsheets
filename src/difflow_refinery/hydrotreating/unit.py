@@ -46,10 +46,12 @@ from difflow_refinery.blending import cetane_index_d4737, tbp_temperature, tbp_t
 from difflow_refinery.characterization import RHO_WATER_15C, BlendCharacterization
 from difflow_refinery.composition import NITROGEN_CLASSES, SULFUR_CLASSES
 from difflow_refinery.hydroprocessing.layout import ELEMENTS, Flows, Layout, relative_balance_error
-from difflow_refinery.hydroprocessing.reactor import ReactorOptions, TrickleBedReactor
+from difflow_refinery.hydroprocessing.layout import gas_mw
+from difflow_refinery.hydroprocessing.reactor import (
+    ReactorOptions, TrickleBedReactor, k_model_at, stream_enthalpy, vapor_enthalpy)
 from difflow_refinery.hydroprocessing.recycle import (
     MOL_PER_NM3, amine_scrub, compress, knockout, makeup_for_ratio, makeup_vector, purge_split, solve_tear)
-from difflow_refinery.hydroprocessing.separator import HPSeparator
+from difflow_refinery.hydroprocessing.separator import HPSeparator, flash_components
 from difflow_refinery.hydroprocessing.solve import newton_scalar
 from difflow_refinery.hydroprocessing.stripper import (
     StripperSpec, cut_pseudo_components, overhead_drum, strip)
@@ -58,7 +60,7 @@ from difflow_refinery.hydrotreating.feed import (
     DEFAULT_AROMATIC_SPLIT, cut_indices, hdt_feed, hdt_layout)
 from difflow_refinery.hydrotreating.kinetics import (
     AROMATIC_CLASSES, HDTKineticParams, HDTKinetics, crack_targets)
-from difflow_refinery.thermo import LIGHT_ENDS, RHO_WATER_60F
+from difflow_refinery.thermo import LIGHT_ENDS, RHO_WATER_60F, ColumnThermo
 
 jax.config.update("jax_enable_x64", True)
 
@@ -79,6 +81,14 @@ SCF_PER_NM3 = 37.326  # standard ft^3 (60 F, 14.696 psia) per normal m^3 (0 C, 1
 VOLUME_INCREMENTS: dict[str, float] = {
     "A_mono": -20.1e-6, "A_di": -31.1e-6, "A_poly": -42.1e-6, "olefins": -5.5e-6, "naphthenes": 0.0,
 }
+
+
+#: Largest PR-flash residual (in ln K) a converged solve accepts.
+FLASH_TOL = 1e-8
+
+#: Outlets that carry no real gas by construction: the stripper sends every
+#: real species (H2, H2S, NH3, C1-C6) overhead, so its bottoms has none.
+_GAS_FREE_STREAMS: tuple[str, ...] = ("product",)
 
 
 class HydrotreaterConvergenceWarning(UserWarning):
@@ -122,6 +132,14 @@ class HydrotreaterParams(ParamsMixin):
             for the defaults.
         reactor: :class:`ReactorOptions`.
         tear_tol: Recycle-tear convergence tolerance (scaled residual).
+        heater_efficiency: Charge-heater thermal efficiency, absorbed over
+            fired duty. ILLUSTRATIVE default 0.85 (a typical fired process
+            heater with some heat recovery; not from a cited source).
+        heater_inlet_T: Temperature (K) of the combined oil and treat gas
+            entering the charge heater -- the feed/effluent exchanger's
+            cold-side outlet. ``None`` (default): no exchanger, the oil enters
+            at its feed temperature and the treat gas at the compressor
+            discharge temperature, so the heater does all the heating.
     """
 
     T_in: tuple = (613.15,)
@@ -150,6 +168,8 @@ class HydrotreaterParams(ParamsMixin):
     kij: dict | None = None
     reactor: ReactorOptions = field(default_factory=ReactorOptions)
     tear_tol: float = 1e-11
+    heater_efficiency: float = 0.85
+    heater_inlet_T: float | None = None
 
 
 @dataclass(frozen=True)
@@ -197,6 +217,7 @@ class HydrotreaterResult:
     balances: dict
     converged: Array
     product_names: tuple = ()
+    gas_names: tuple = ()
 
     @property
     def product_char(self) -> BlendCharacterization:
@@ -205,20 +226,63 @@ class HydrotreaterResult:
         return BlendCharacterization(names=list(self.product_names), Tb=g.Tb, SG=g.SG, MW=g.MW, Tc=g.Tc,
                                      Pc=g.Pc, omega=g.omega, qualities=dict(g.qualities))
 
-    def product_stream(self, name: str = "product", T=298.15, P=101325.0) -> dict:
-        """A ``F_<name>`` stream on :attr:`product_char` (for ``BlendComponent.from_stream``)."""
+    def product_stream(self, name: str = "product", T=298.15, P=101325.0, gases: bool = True) -> dict:
+        """A liquid outlet as an ``F_<name>`` stream, mol/s (for ``BlendComponent.from_stream``).
+
+        The stream carries the components of :attr:`product_char` (the liquid
+        light ends and the treated cuts) and, with ``gases=True`` (default), the
+        real gases dissolved in it that are not on that grid -- H2, H2S, NH3,
+        methane and ethane, under their own ``F_<gas>`` keys -- so that a
+        downstream mass balance on it closes to round-off (:meth:`stream_mass`;
+        #333). The stripper bottoms (``"product"``) carries none by
+        construction (the stripper sends every real gas overhead), so its
+        stream is the blend grid only either way. The wild naphtha does carry
+        them: ``BlendComponent.from_stream`` refuses species outside its grid,
+        so blend it with ``gases=False``, which leaves them out --
+        ``outputs["naphtha.dissolved_gas_rate"]`` is the mass that drops (or
+        fractionate it, :meth:`fractionate`, which sends them to an off-gas).
+        Water is never in these streams (the drum decants all of it).
+        """
         f = self.streams[name]
         names = list(self.product_names)
-        lay_cuts = names[len(names) - f.cut.shape[0]:]
-        out = {}
         n_light = len(names) - f.cut.shape[0]
+        gi = {g: i for i, g in enumerate(self.gas_names)}
+        out = {}
         for i in range(n_light):
-            out[f"F_{names[i]}"] = self.streams["_light_" + name][i]
-        for i, c in enumerate(lay_cuts):
+            out[f"F_{names[i]}"] = f.gas[gi[names[i]]]
+        for i, c in enumerate(names[n_light:]):
             out[f"F_{c}"] = f.cut[i]
+        if gases and name not in _GAS_FREE_STREAMS:
+            for g, i in gi.items():
+                if g not in names and g != "water":
+                    out[f"F_{g}"] = f.gas[i]
         out["T"] = jnp.asarray(T)
         out["P"] = jnp.asarray(P)
         return out
+
+    def stream_mass(self, stream: Mapping) -> Array:
+        """Mass flow (kg/s) of a stream from :meth:`product_stream` or :meth:`fractionate`.
+
+        Components of :attr:`product_char` at its molar masses, real gases at
+        theirs (the atomic weights every balance of the unit closes on).
+        """
+        g = self.product_grid
+        mw = dict(zip(self.product_names, [g.MW[i] for i in range(len(self.product_names))]))
+        m = jnp.asarray(0.0)
+        for k, v in stream.items():
+            if not k.startswith("F_"):
+                continue
+            n = k[2:]
+            m = m + jnp.asarray(v) * (mw[n] if n in mw else gas_mw(n))
+        return m / 1000.0
+
+    def fractionate(self, cut_points=None, products=None, width=None, feeds=("product",), T=298.15,
+                    P=101325.0):
+        """Split the liquid product(s) at TBP cut points (#328); see :func:`.fractionator.fractionate`."""
+        from difflow_refinery.hydrotreating import fractionator as fr
+        return fr.fractionate(self, fr.DEFAULT_CUT_POINTS if cut_points is None else cut_points,
+                              fr.DEFAULT_PRODUCTS if products is None else products,
+                              fr.DEFAULT_WIDTH if width is None else width, feeds=feeds, T=T, P=P)
 
     def table(self) -> str:
         """The headline outputs as text."""
@@ -240,7 +304,7 @@ class HydrotreaterResult:
 
 jax.tree_util.register_dataclass(HydrotreaterResult, data_fields=["outputs", "streams", "reactor",
                                                                   "product_grid", "balances", "converged"],
-                                 meta_fields=["product_names"])
+                                 meta_fields=["product_names", "gas_names"])
 
 
 @dataclass(frozen=True)
@@ -275,7 +339,10 @@ OUTPUT_UNITS: dict[str, str] = {
     "reactor.pH2_in": "Pa", "compressor.power": "W", "compressor.T_out": "K",
     "feed.rate": "kg/s", "feed.volume": "m3/s", "feed.S_wppm": "wppm", "feed.N_wppm": "wppm",
     "catalyst.mass": "kg", "hds.conversion": "-", "hdn.conversion": "-",
-    "tear.residual": "-", "stripper.residual": "-",
+    "tear.residual": "-", "stripper.residual": "-", "flash.residual": "-",
+    "yields.total": "-", "feed.h2_water_rate": "kg/s",
+    "product.dissolved_gas_rate": "kg/s", "naphtha.dissolved_gas_rate": "kg/s",
+    "heater.duty": "W", "heater.fired_duty": "W", "heater.inlet_T": "K", "feed_effluent.duty": "W",
 }
 
 
@@ -364,7 +431,8 @@ class Hydrotreater:
         pidx = idx - k
         num = {f.name: jnp.asarray(getattr(p, f.name), dtype=float) for f in dataclasses.fields(p)
                if f.name not in ("T_in", "quench", "bed_fractions", "makeup", "kinetics", "kij", "reactor",
-                                 "stripper_stages", "tear_tol")}
+                                 "stripper_stages", "tear_tol", "heater_inlet_T")}
+        num["heater_inlet_T"] = jnp.asarray(0.0 if p.heater_inlet_T is None else p.heater_inlet_T, dtype=float)
         num["T_in"] = jnp.asarray(p.T_in, dtype=float)
         num["quench"] = jnp.asarray(p.quench if p.quench is not None else (), dtype=float)
         num["bed_fractions"] = jnp.asarray(p.bed_fractions, dtype=float)
@@ -488,7 +556,8 @@ class Hydrotreater:
         outputs["T_shift"] = shift
         return HydrotreaterResult(outputs=outputs, streams=streams, reactor=out["rx"], product_grid=pchar,
                                   balances=balances, converged=conv,
-                                  product_names=tuple(self._product_lights()) + tuple(self.cuts))
+                                  product_names=tuple(self._product_lights()) + tuple(self.cuts),
+                                  gas_names=tuple(lay.gases))
 
     def _outputs(self, th, comps, o, full=False):
         """Stripper, products, outputs and balances from a converged loop evaluation."""
@@ -536,7 +605,10 @@ class Hydrotreater:
         lights = self._product_lights()
         l_Tb = jnp.asarray([LIGHT_ENDS[nm][1] for nm in lights], dtype=float).reshape(-1)
         l_sg = jnp.asarray([LIGHT_END_SG[nm] for nm in lights], dtype=float).reshape(-1)
-        l_mw = jnp.asarray([LIGHT_ENDS[nm][0] for nm in lights], dtype=float).reshape(-1)
+        # molar masses from the atomic weights the unit's balances close on, not the crude unit's
+        # tabulated ones (they differ in the fifth figure), so a balance on these streams
+        # downstream closes to round-off (#333)
+        l_mw = jnp.asarray([gas_mw(nm) for nm in lights], dtype=float).reshape(-1)
         l_tc = jnp.asarray([LIGHT_ENDS[nm][2] for nm in lights], dtype=float).reshape(-1)
         l_pc = jnp.asarray([LIGHT_ENDS[nm][3] for nm in lights], dtype=float).reshape(-1)
         l_w = jnp.asarray([LIGHT_ENDS[nm][4] for nm in lights], dtype=float).reshape(-1)
@@ -651,10 +723,28 @@ class Hydrotreater:
         outputs["reactor.pH2_in"] = n["P"] * b1.gas[hi] / (jnp.sum(b1.gas) + jnp.sum(b1.cut))
         outputs["compressor.power"] = o["Wc"]
         outputs["compressor.T_out"] = o["T2"]
-        outputs["gas.yield"] = (jnp.sum((off + o["purge"] + o["absorbed"]).gas_mass(lay) * jnp.asarray(
-            [0.0 if g in ("hydrogen", "water") else 1.0 for g in lay.gases])) - jnp.sum(
-            (oil + o["makeup"]).gas_mass(lay) * jnp.asarray(
-                [0.0 if g in ("hydrogen", "water") else 1.0 for g in lay.gases]))) / feed_mass
+        outputs.update(self._charge_heater(th, comps, o))
+        # gas yield (#332): everything that leaves as gas -- the gas outlets plus the real gases
+        # dissolved in the liquid products off their blend grid -- less the makeup gas's own
+        # hydrocarbons; H2 and water excluded. Feed light ends count where they leave (C5s in the
+        # wild naphtha's yield, C3-C4 mostly in the gas), so the three yields add up to the feed's
+        # non-H2, non-water mass plus the chemical hydrogen (``yields.total``).
+        not_h2w = jnp.asarray([0.0 if g in ("hydrogen", "water") else 1.0 for g in lay.gases])
+        off_grid = jnp.asarray([0.0 if (g in ("hydrogen", "water") or g in lights) else 1.0
+                                for g in lay.gases])
+        gas_streams = off + o["purge"] + o["absorbed"] + o["water"] + sour
+        # (the drum's off-gas also carries some vapour of the lightest cuts)
+        gas_out = jnp.sum(gas_streams.gas_mass(lay) * not_h2w) + jnp.sum(gas_streams.cut_mass(lay))
+        diss = {k: jnp.sum(f.gas_mass(lay) * off_grid) for k, f in (("product", prod), ("naphtha", naph))}
+        outputs["gas.yield"] = (gas_out + diss["product"] + diss["naphtha"]
+                                - jnp.sum(o["makeup"].gas_mass(lay) * not_h2w)) / feed_mass
+        outputs["yields.total"] = outputs["product.yield"] + outputs["naphtha.yield"] + outputs["gas.yield"]
+        hw = jnp.asarray([1.0 if g in ("hydrogen", "water") else 0.0 for g in lay.gases])
+        outputs["feed.h2_water_rate"] = jnp.sum(oil.gas_mass(lay) * hw)
+        # real gases dissolved in the liquid products, off their blend grid (#333): H2, H2S, NH3, C1, C2
+        h2m = jnp.asarray([1.0 if g == "hydrogen" else 0.0 for g in lay.gases])
+        for k, f in (("product", prod), ("naphtha", naph)):
+            outputs[f"{k}.dissolved_gas_rate"] = diss[k] + jnp.sum(f.gas_mass(lay) * h2m)
         outputs["tear.residual"] = o["tear"].residual
         outputs["stripper.residual"] = st.residual
         outputs["stripper.bottoms_T"] = st.outputs["bottoms.T"]
@@ -667,7 +757,12 @@ class Hydrotreater:
         balances = {"mass": relative_balance_error(tot_in.mass(lay), tot_out.mass(lay))}
         for k, e in enumerate(ELEMENTS):
             balances[e] = relative_balance_error(e_in[k], e_out[k])
-        conv = o["tear"].converged & st.converged
+        # converged: the tear and the stripper, and every PR flash (bed inlets, HPS, drum) -- a
+        # flash that fails returns its start with a large residual rather than raising (#332)
+        flash_res = jnp.stack([b.flash_residual for b in rx.beds] + [o["fr"].residual, frd.residual])
+        outputs["flash.residual"] = jnp.max(flash_res)
+        conv = (o["tear"].converged & st.converged & jnp.all(flash_res < FLASH_TOL)
+                & jnp.isfinite(outputs["product.S_wppm"]) & jnp.isfinite(outputs["h2.chemical"]))
         if not full:
             return outputs, None, None, None, None
         streams = {"feed": oil, "makeup": o["makeup"], "treat_gas": gas_t, "reactor_out": rx.outlet,
@@ -676,6 +771,51 @@ class Hydrotreater:
                    "wild_naphtha": naph, "off_gas": off, "sour_water": sour, "steam": steam_f,
                    "_light_product": light_flows(prod), "_light_wild_naphtha": light_flows(naph)}
         return outputs, streams, pchar, balances, conv
+
+    def _charge_heater(self, th, comps, o) -> dict:
+        """Charge-heater duty (#332): bed-1 inlet enthalpy less that of what enters the heater.
+
+        The oil and the first bed's share of the treat gas (the treat gas less
+        every quench) are heated to the bed-1 inlet temperature, which stays the
+        spec. What enters the heater is either the oil at its feed temperature
+        and the gas at the recycle compressor's discharge (``heater_inlet_T is
+        None``), or both mixed at ``heater_inlet_T`` after a feed/effluent
+        exchanger, whose cold-side duty is then reported too (its hot side is
+        not modelled, so a temperature cross is not checked). Enthalpies are
+        the reactor's own (:func:`~difflow_refinery.hydroprocessing.reactor.stream_enthalpy`:
+        PR K-values and phase split, ideal-gas and liquid enthalpies on one
+        basis) at the reactor pressure; feed water, if any, is taken as vapour
+        (the reactor's convention), which understates the duty by its latent
+        heat. Fired duty is the absorbed duty over ``heater_efficiency``.
+        """
+        lay = self.layout
+        n = th["num"]
+        P = n["P"]
+        b1 = o["rx"].beds[0]
+        oil = th["oil"]
+        gas1 = b1.inlet - oil
+        H_bed = stream_enthalpy(b1.inlet, lay, comps, b1.k_model, b1.T_in)
+        # the oil is pumped to reactor pressure and enters as liquid (no H2 in it yet, so it is
+        # below its bubble point there); water, if any, on the reactor's vapour convention
+        T_f = th["feed_T"]
+        H_oil = jnp.sum(flash_components(oil, lay, comps) * comps.h_liquid(T_f))
+        if "water" in lay.gases:
+            H_oil = H_oil + oil.gas[lay.gas_index("water")] * ColumnThermo.water_h_vapor(T_f)
+        H_cold = H_oil + vapor_enthalpy(gas1, lay, comps, o["T2"])
+        out = {}
+        if self.params.heater_inlet_T is None:
+            H_in = H_cold
+            out["heater.inlet_T"] = jnp.minimum(th["feed_T"], o["T2"])
+            out["feed_effluent.duty"] = jnp.asarray(0.0)
+        else:
+            T_h = n["heater_inlet_T"]
+            km_mix, _ = k_model_at(b1.inlet, lay, comps, T_h, P)
+            H_in = stream_enthalpy(b1.inlet, lay, comps, km_mix, T_h)
+            out["heater.inlet_T"] = T_h
+            out["feed_effluent.duty"] = H_in - H_cold
+        out["heater.duty"] = H_bed - H_in
+        out["heater.fired_duty"] = out["heater.duty"] / n["heater_efficiency"]
+        return out
 
     def _product_lights(self) -> list[str]:
         """Light ends that are blend components of the liquid products (C3+ with a liquid SG)."""
@@ -691,6 +831,8 @@ class Hydrotreater:
         """
         if params is not None:
             static = ("stripper_stages", "tear_tol", "reactor")
+            if (params.heater_inlet_T is None) != (self.params.heater_inlet_T is None):
+                raise ValueError("heater_inlet_T None vs a value shapes the solve; build a new Hydrotreater")
             for k in static:
                 if getattr(params, k) != getattr(self.params, k):
                     raise ValueError(f"params.{k} shapes the solve; build a new Hydrotreater to change it")
@@ -709,7 +851,8 @@ class Hydrotreater:
             if not ok:
                 warnings.warn(f"hydrotreater did not converge (tear residual "
                               f"{float(res.outputs['tear.residual']):.2e}, stripper residual "
-                              f"{float(res.outputs['stripper.residual']):.2e})",
+                              f"{float(res.outputs['stripper.residual']):.2e}, largest flash residual "
+                              f"{float(res.outputs['flash.residual']):.2e})",
                               HydrotreaterConvergenceWarning, stacklevel=2)
         return res
 

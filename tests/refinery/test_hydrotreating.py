@@ -459,3 +459,160 @@ def test_volume_increments_pinned_to_model_compounds():
     assert 1e6 * (V["A_di"] - V["A_poly"]) == pytest.approx(1e6 * (V["A_mono"] - V["A_di"]))
     olef = np.mean([129.70 - 124.12, 193.62 - 188.19])                     # hexene, decene
     assert -1e6 * V["olefins"] == pytest.approx(olef, abs=0.05)
+
+
+# =============================================================================
+# Products: dissolved gases (#333), yields and charge heater (#332), fractionator (#328)
+# =============================================================================
+
+
+def test_fractionator_shares_telescope_to_one():
+    from difflow_refinery.hydrotreating.fractionator import split_shares
+    Tb = jnp.linspace(300.0, 700.0, 41)
+    s = split_shares(Tb, jnp.asarray([420.0, 520.0, 600.0]), 8.0)
+    assert s.shape == (41, 4)
+    np.testing.assert_allclose(np.asarray(s.sum(axis=1)), 1.0, rtol=0, atol=1e-15)
+    assert np.all(np.asarray(s) >= 0.0)
+    assert float(s[0, 0]) > 0.9999 and float(s[-1, -1]) > 0.9999
+
+
+@pytest.mark.slow
+def test_downstream_mass_balance_closes_with_dissolved_gases(diesel_result, diesel):
+    """#333: the liquid outlets as streams carry everything the unit sends out in them."""
+    r = diesel_result
+    lay = diesel[3].layout
+    for name in ("product", "wild_naphtha"):
+        assert float(r.stream_mass(r.product_stream(name))) == pytest.approx(
+            float(r.streams[name].mass(lay)), rel=1e-13)
+    # the wild naphtha carries H2, H2S, C1, C2 off the blend grid; leaving them out is a flag
+    wn = r.product_stream("wild_naphtha")
+    assert "F_hydrogen" in wn and "F_hydrogen_sulfide" in wn and "F_methane" in wn
+    blend = r.product_stream("wild_naphtha", gases=False)
+    assert not any(k[2:] in ("hydrogen", "hydrogen_sulfide", "methane") for k in blend)
+    dropped = float(r.stream_mass(wn) - r.stream_mass(blend))
+    assert dropped > 0.0
+    assert dropped == pytest.approx(float(r.outputs["naphtha.dissolved_gas_rate"]), rel=1e-12)
+    assert "F_hydrogen" not in r.product_stream("product")      # the stripper bottoms has none
+    # the whole unit: liquid outlets as streams, the gas and water outlets as Flows
+    m_in = sum(float(r.streams[k].mass(lay)) for k in ("feed", "makeup", "steam"))
+    m_out = (float(r.stream_mass(r.product_stream("product")) + r.stream_mass(wn))
+             + sum(float(r.streams[k].mass(lay)) for k in ("off_gas", "purge", "acid_gas", "hps_water",
+                                                           "sour_water")))
+    assert abs(m_out - m_in) / m_in < 1e-13
+
+
+@pytest.mark.slow
+def test_yields_add_up(diesel_result):
+    """#332: product + wild naphtha + gas = feed (less its H2 and water) + chemical hydrogen."""
+    o = diesel_result.outputs
+    f = float(o["feed.rate"])
+    rhs = 1.0 - float(o["feed.h2_water_rate"]) / f + float(o["h2.consumed_by_balance"]) * 2.01588e-3 / f
+    assert float(o["yields.total"]) == pytest.approx(rhs, rel=1e-9)
+    assert 0.0 < float(o["gas.yield"]) < 0.05
+
+
+@pytest.mark.slow
+def test_charge_heater_duty(diesel_result, diesel):
+    """#332: the heater takes the oil from its feed T and the gas from the compressor to bed 1's inlet."""
+    o = diesel_result.outputs
+    p = diesel[3].params
+    assert float(o["heater.fired_duty"]) == pytest.approx(float(o["heater.duty"]) / p.heater_efficiency,
+                                                          rel=1e-14)
+    # order of magnitude: 50 kg/s of diesel from 25 C to 340 C at 2.5-3 kJ/kg/K, some of it vaporised
+    sensible = 50.0 * 2.6e3 * (p.T_in[0] - 298.15)
+    assert 0.7 * sensible < float(o["heater.duty"]) < 1.6 * sensible
+    assert float(o["feed_effluent.duty"]) == 0.0
+
+
+@pytest.mark.slow
+def test_fractionator_jet_and_ulsd_pools(diesel_result):
+    """#328: named products, mass closure to round-off, and blend pools on the outputs."""
+    from difflow_refinery.blending import BlendComponent, BlendPool
+    r = diesel_result
+    fr = r.fractionate(cut_points=(240.0 + 273.15,), products=("jet", "diesel"))
+    assert set(fr.products) == {"jet", "diesel"}
+    assert float(fr.balance) < 1e-13
+    assert float(fr.rates["off_gas"]) == 0.0          # the stripper bottoms has no gas
+    jet = BlendPool("jet")([BlendComponent.from_stream("jet", fr.products["jet"], fr.char, flash_C=42.0,
+                                                      freeze_C=-47.0, smoke_mm=22.0)], [1.0])
+    ulsd = BlendPool("ulsd")([BlendComponent.from_stream("diesel", fr.products["diesel"], fr.char,
+                                                        flash_C=60.0)], [1.0])
+    assert any(k.startswith("S_ppm") for k in jet.margins)
+    assert any(k.startswith("T90_d86_C") for k in ulsd.margins)
+    assert float(jet.properties["T90_d86_C"]) < float(ulsd.properties["T90_d86_C"])
+    # sulfur is mass-averaged: the two products average back to the unit's product sulfur
+    m_j, m_d = float(fr.rates["jet"]), float(fr.rates["diesel"])
+    S = (m_j * float(jet.properties["S_ppm"]) + m_d * float(ulsd.properties["S_ppm"])) / (m_j + m_d)
+    assert S == pytest.approx(float(r.outputs["product.S_wppm"]), rel=1e-9)
+    # three products off the product and the wild naphtha, whose dissolved gases go to the off-gas
+    fr3 = r.fractionate(cut_points=(180.0 + 273.15, 250.0 + 273.15), products=("naphtha", "jet", "diesel"),
+                        feeds=("product", "wild_naphtha"))
+    assert float(fr3.balance) < 1e-13
+    assert float(fr3.rates["off_gas"]) == pytest.approx(float(r.outputs["naphtha.dissolved_gas_rate"]),
+                                                        rel=1e-12)
+    with pytest.raises(ValueError, match="cut points"):
+        r.fractionate(cut_points=(500.0, 450.0), products=("a", "b", "c"))
+
+
+@pytest.mark.slow
+@pytest.mark.release
+def test_fractionator_cut_point_gradient_matches_central_differences(diesel_result):
+    """#328: d(jet rate, jet S, ULSD T90, ULSD cetane)/d(cut point), AD against Richardson differences."""
+    from difflow_refinery.blending import BlendComponent, BlendPool
+    r = diesel_result
+
+    def f(T):
+        fr = r.fractionate(cut_points=(T,))
+        jet = BlendComponent.from_stream("jet", fr.products["jet"], fr.char)
+        d = BlendPool("ulsd")([BlendComponent.from_stream("diesel", fr.products["diesel"], fr.char,
+                                                          flash_C=60.0)], [1.0]).properties
+        return jnp.stack([fr.rates["jet"], jet.properties["S_ppm"], d["T90_d86_C"], d["cetane_index"]])
+
+    T0 = 240.0 + 273.15
+    J = np.asarray(jax.jacrev(f)(T0))
+    fd = np.asarray(richardson(f, T0, 1.0))
+    assert np.all(np.abs(J) > 0)
+    np.testing.assert_allclose(J, fd, rtol=GRAD_RTOL)
+
+
+# =============================================================================
+# Makeup composition as a traced input (for the hydrogen network, #329)
+# =============================================================================
+
+
+def test_makeup_composition_is_traceable(diesel):
+    """``HydrotreaterParams.makeup`` values may be tracers: d(makeup_y)/d(purity) is exact."""
+    from difflow_refinery.hydroprocessing.recycle import makeup_vector
+    char, cuts, feed, unit = diesel
+    lay = unit.layout
+    hi, mi = lay.gas_index("hydrogen"), lay.gas_index("methane")
+
+    def y(purity):
+        p = dataclasses.replace(unit.params, makeup={"hydrogen": purity, "methane": 1.0 - purity})
+        return unit.theta(feed, params=p)["makeup_y"]
+
+    d = np.asarray(jax.jacfwd(y)(0.95))
+    assert d[hi] == pytest.approx(1.0) and d[mi] == pytest.approx(-1.0)
+    assert np.all(d[[i for i in range(lay.n_gas) if i not in (hi, mi)]] == 0.0)
+    # the dict API is unchanged, and an array on the layout's gases is accepted
+    v = makeup_vector(lay, {"hydrogen": 0.97, "methane": 0.03})
+    np.testing.assert_allclose(np.asarray(makeup_vector(lay, v)), np.asarray(v), rtol=0, atol=1e-16)
+    with pytest.raises(ValueError, match="not in the layout"):
+        makeup_vector(lay, {"argon": 1.0})
+
+
+@pytest.mark.slow
+@pytest.mark.release
+def test_makeup_purity_gradient_matches_central_differences(diesel):
+    """d(h2.makeup, recycle purity, product S)/d(makeup H2 purity) through the whole unit, AD against FD."""
+    char, cuts, feed, unit = diesel
+
+    def f(purity):
+        p = dataclasses.replace(unit.params, makeup={"hydrogen": purity, "methane": 1.0 - purity})
+        o = unit.solve(feed, params=p, warn=False).outputs
+        return jnp.stack([o["h2.makeup"], o["recycle.h2_purity"], o["product.S_wppm"]])
+
+    J = np.asarray(jax.jacrev(f)(0.97))
+    assert np.all(np.isfinite(J))
+    fd = np.asarray(richardson(f, 0.97, 0.005))
+    np.testing.assert_allclose(J, fd, rtol=GRAD_RTOL)

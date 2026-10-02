@@ -44,6 +44,7 @@ References:
 
 from __future__ import annotations
 
+import functools
 from dataclasses import dataclass
 
 import jax
@@ -58,6 +59,25 @@ jax.config.update("jax_enable_x64", True)
 
 _RR_BISECT = 120
 _SS_PASSES = 25
+#: A component below this fraction of the feed is a trace: it does not set the
+#: Rachford-Rice bracket (see :func:`rachford_rice`).
+TRACE = 1e-20
+
+
+def _present(z: Array) -> Array:
+    """Mask of the components above :data:`TRACE` of the total (constant: no gradient)."""
+    zs = jax.lax.stop_gradient(z)
+    return zs > TRACE * jnp.sum(zs)
+
+
+def phase_denominator(z: Array, K: Array, V: Array) -> Array:
+    """``1 + V (K - 1)``, kept positive for a trace component whose pole the root lies beyond.
+
+    Then ``x = z / d`` is the trace's own (negligible) amount rather than a
+    negative or infinite one.
+    """
+    d = 1.0 + V * (K - 1.0)
+    return jnp.where(_present(z) | (d > 0.0), d, 1.0)
 
 
 def rachford_rice(z: Array, K: Array) -> Array:
@@ -70,15 +90,23 @@ def rachford_rice(z: Array, K: Array) -> Array:
     derivatives are right), which matters because the reactor differentiates
     a quantity that is itself a derivative (``C_eff = dH/dT``, ``d ln K/dT``).
     Needs ``K_max > 1 > K_min`` (otherwise returns the nearer bound).
+
+    The bracket is set by the poles of the components actually present
+    (``z > 1e-20`` of the total; :data:`TRACE`): an absent species -- the
+    floored zero flow of hydrogen in a feed oil, say -- has a pole of its own
+    that the physical root may lie beyond, and bracketing on it put the root
+    at the bracket's edge and the Newton polish across the pole, with every
+    mole fraction NaN from there on (#332).
     """
     zs, Ks = jax.lax.stop_gradient(z), jax.lax.stop_gradient(K)
-    lo = 1.0 / (1.0 - jnp.max(Ks))
-    hi = 1.0 / (1.0 - jnp.min(Ks))
+    sig = _present(z)
+    lo = 1.0 / (1.0 - jnp.max(jnp.where(sig, Ks, -jnp.inf)))
+    hi = 1.0 / (1.0 - jnp.min(jnp.where(sig, Ks, jnp.inf)))
     span = hi - lo
     lo, hi = lo + 1e-14 * jnp.abs(span), hi - 1e-14 * jnp.abs(span)
 
     def f(V, z, K):
-        return jnp.sum(z * (K - 1.0) / (1.0 + V * (K - 1.0)))
+        return jnp.sum(jnp.where(sig, z * (K - 1.0) / jnp.where(sig, 1.0 + V * (K - 1.0), 1.0), 0.0))
 
     def body(_, b):
         lo, hi = b
@@ -96,7 +124,7 @@ def rachford_rice(z: Array, K: Array) -> Array:
 def _phases(z, lnK):
     K = jnp.exp(lnK)
     V = rachford_rice(z, K)
-    x = z / (1.0 + V * (K - 1.0))
+    x = z / phase_denominator(z, K, V)
     y = K * x
     return V, x / jnp.sum(x), y / jnp.sum(y)
 
@@ -139,6 +167,34 @@ jax.tree_util.register_dataclass(FlashResult, data_fields=["V", "beta", "x", "y"
                                  meta_fields=[])
 
 
+@functools.partial(jax.custom_jvp, nondiff_argnums=(2, 3, 4))
+def _flash_root(lnK_start, args, max_steps, rtol, atol):
+    """Root of :func:`_residual` from ``lnK_start`` (Newton, optimistix); the start if Newton fails.
+
+    The derivative is the implicit-function one, ``-J^-1 dR/dargs`` with
+    ``J = dR/d lnK`` at the root (:func:`_flash_root_jvp`), solved by
+    ``jnp.linalg.solve``: a non-finite Jacobian gives non-finite tangents,
+    not an exception. The rule calls this function for its primal, so a
+    second derivative differentiates the rule again and is exact too.
+    """
+    sargs = jax.lax.stop_gradient(args)
+    s = jax.lax.stop_gradient(lnK_start)
+    sol = optx.root_find(_residual, optx.Newton(rtol=rtol, atol=atol), s, args=sargs,
+                         max_steps=max_steps, throw=False)
+    root = sol.value
+    return jnp.where(jnp.all(jnp.isfinite(root)), root, s)
+
+
+@_flash_root.defjvp
+def _flash_root_jvp(max_steps, rtol, atol, primals, tangents):
+    lnK_start, args = primals
+    _, t_args = tangents
+    lnK = _flash_root(lnK_start, args, max_steps, rtol, atol)
+    J = jax.jacfwd(_residual)(lnK, args)
+    _, dR = jax.jvp(lambda a: _residual(lnK, a), (args,), (t_args,))
+    return lnK, -jnp.linalg.solve(J, dR)
+
+
 def pr_flash(T, P, z, comps: Components, lnK0: Array | None = None,
              max_steps: int = 60, rtol: float = 1e-12, atol: float = 1e-12) -> FlashResult:
     """Isothermal Peng-Robinson flash of feed ``z`` at ``(T, P)``.
@@ -151,6 +207,14 @@ def pr_flash(T, P, z, comps: Components, lnK0: Array | None = None,
         max_steps, rtol, atol: Newton controls.
 
     Differentiable in everything, by the implicit-function theorem.
+
+    A flash that fails -- Newton diverging to a non-finite ``ln K``, as it
+    can near a mixture critical point -- returns its successive-substitution
+    start instead, with a large (or non-finite) :attr:`FlashResult.residual`,
+    never an exception: the caller's convergence flag reads the residual
+    (#332). That is why the implicit derivative is attached here rather than
+    by optimistix's implicit adjoint, whose linear solve raises on a
+    non-finite Jacobian.
     """
     T = jnp.asarray(T, dtype=float)
     P = jnp.asarray(P, dtype=float)
@@ -159,15 +223,15 @@ def pr_flash(T, P, z, comps: Components, lnK0: Array | None = None,
     z = z / jnp.sum(z)
     args = (T, P, z, comps)
     sargs = jax.lax.stop_gradient(args)
-    lnK = wilson_lnK(sargs[0], sargs[1], sargs[3]) if lnK0 is None else jax.lax.stop_gradient(lnK0)
+    lnK_w = wilson_lnK(sargs[0], sargs[1], sargs[3])
+    lnK = lnK_w if lnK0 is None else jax.lax.stop_gradient(lnK0)
 
     def ss(_, lk):
         return lk - _residual(lk, sargs)
 
     lnK = jax.lax.fori_loop(0, _SS_PASSES, ss, lnK)
-    sol = optx.root_find(_residual, optx.Newton(rtol=rtol, atol=atol), lnK, args=args,
-                         max_steps=max_steps, throw=False)
-    lnK = sol.value
+    lnK = jnp.where(jnp.all(jnp.isfinite(lnK)), lnK, lnK_w)
+    lnK = _flash_root(lnK, args, int(max_steps), float(rtol), float(atol))
     V, x, y = _phases(z, lnK)
     res = jnp.max(jnp.abs(_residual(jax.lax.stop_gradient(lnK), sargs)))
     return FlashResult(V=V, beta=jnp.clip(V, 0.0, 1.0), x=x, y=y, lnK=lnK, residual=res)
@@ -223,5 +287,5 @@ class HPSeparator:
         return vap, liq, water, fr
 
 
-__all__ = ["rachford_rice", "pr_flash", "FlashResult", "HPSeparator", "flash_components",
+__all__ = ["TRACE", "phase_denominator", "rachford_rice", "pr_flash", "FlashResult", "HPSeparator", "flash_components",
            "split_by_vapor_fraction"]

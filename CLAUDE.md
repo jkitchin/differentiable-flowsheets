@@ -585,6 +585,19 @@ Invariants (do not weaken them):
   1e-300)` gives a 1e300 cotangent for an empty cut and NaN gradients.
 - The stripper feeds 10 % of its steam with the feed: a degassed separator
   liquid is subcooled and `StageColumn`'s feed flash is otherwise singular.
+- Outside the two-phase region `reactor.phase_state` returns the stream itself
+  and its incipient phase (`y = z, x = z/K` for a vapour), never the negative
+  flash's fictitious split: that put a vapour naphtha bed's pH2 6x low and ran
+  the aromatics equilibrium backwards (#332).
+- `pr_flash` never raises: the Rachford-Rice bracket ignores absent (trace)
+  species, a diverged Newton returns its start with a large `residual`, and
+  the implicit derivative is the module's own `custom_jvp` (optimistix's
+  implicit adjoint raises on a NaN Jacobian). Callers fold the residual into
+  `converged` (the hydrotreater's `flash.residual`).
+- `Hydrotreater.product_stream()` includes the dissolved real gases by
+  default (mass closes downstream, #333); blend the wild naphtha with
+  `gases=False` or through `res.fractionate(...)` (#328, a TBP sigmoid split).
+  `NAPHTHA_HDT_PARAMS` is the illustrative naphtha constant set.
 - Rate constants are ILLUSTRATIVE; thermochemistry is model-compound data from
   the `chemicals` tables. The Korsten-Hoffmann profile cross-check is NOT done.
 
