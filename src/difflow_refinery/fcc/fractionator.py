@@ -18,7 +18,8 @@ at two cut points (gasoline/LCO and LCO/slurry), each pseudocomponent going
 to the lighter product with the fraction ``sigmoid((T_cut - Tb)/w)``,
 which mimics the overlap of a real column's products. The light species
 are split ideally: dry gas, C3, C4 (the gas plant's job, which here stands
-in for issue #312, not built). Mass is conserved exactly. No energy model:
+in for the gas plant, ``difflow_refinery.gasplant`` (#312), which
+reached main after this unit was built; routing through it is follow-up). Mass is conserved exactly. No energy model:
 the split is at riser outlet conditions, and condenser/pumparound duties
 are not computed. Building the main fractionator on the vacuum unit's
 ``StageColumn`` machinery is listed as not done in the documentation.

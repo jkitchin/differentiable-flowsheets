@@ -50,6 +50,18 @@ REFERENCE = {
 
 NAMES = sorted(REFERENCE)
 
+# Records that #311 (isomerization) added to the database independently, with
+# its own sources (Lemmon & Ihmels butenes, PSRK C6 isomers; see
+# SOURCE_CITATIONS); where both branches added a species, #311's record is
+# the one kept. The independent reference checks below still apply to them --
+# a second, unrelated cross-check of #311's numbers -- but the citation tests
+# are about this file's source and run on the others only, and their Cp
+# cubics are checked over the range they were fitted on (up to 800 K).
+SHARED = {"cis_2_butene", "trans_2_butene", "isobutylene", "cyclohexane",
+          "methylcyclopentane", "2_methylpentane", "3_methylpentane",
+          "2_2_dimethylbutane", "2_3_dimethylbutane"}
+OWN = [n for n in NAMES if n not in SHARED]
+
 
 def _cp(data, T):
     a, b, c, d = data.Cp_coeffs
@@ -63,14 +75,17 @@ def test_loads_from_both_tables(name):
     assert crit.name == name and data.name == name
     assert name in list_species()
     assert crit.MW == data.MW
-    assert name in SOURCE_CITATIONS and "IUPAC" in SOURCE_CITATIONS[name]
+    assert name in SOURCE_CITATIONS
+    if name in SHARED:
+        assert "NIST Chemistry WebBook; Perry" not in SOURCE_CITATIONS[name]
+    else:
+        assert "IUPAC" in SOURCE_CITATIONS[name]
 
 
 def test_unverified_values_are_flagged_in_their_citation():
     """The values the source cross-check could not settle say so."""
-    flagged = {"trans_2_butene", "2_methyl_2_butene", "methylcyclopentane",
-               "2_5_dimethylhexane"}
-    for name in NAMES:
+    flagged = {"2_methyl_2_butene", "2_5_dimethylhexane"}
+    for name in OWN:
         cite = SOURCE_CITATIONS[name]
         assert "Poling" in cite and "TRC" in cite and "CRC" in cite
         note = cite.split("298.15 K (edition unverified).")[-1]
@@ -92,7 +107,7 @@ def test_ideal_gas_cp_at_298(name):
 @pytest.mark.parametrize("name", NAMES)
 def test_ideal_gas_cp_is_increasing_and_positive(name):
     data = get_species_data(name)
-    T = jnp.linspace(250.0, 1000.0, 76)
+    T = jnp.linspace(250.0, 800.0 if name in SHARED else 1000.0, 76)
     cp = _cp(data, T)
     assert bool(jnp.all(cp > 0)) and bool(jnp.all(jnp.diff(cp) > 0))
 

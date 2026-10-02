@@ -30,8 +30,9 @@ specified by its two key recoveries and its reflux ratio
 (:class:`~difflow_refinery.alkylation.fractionation.KeySplitColumn`: Raoult
 volatilities from Lee-Kesler vapour pressures, Hengstebeck-Geddes non-key
 split, constant-molar-overflow duties). This is a SHORTCUT simplification:
-the rigorous gas-plant cubic-EOS stage columns the issue points to (#312) do
-not exist. ``fractionation="pr_shortcut"`` swaps in difflow's own
+the rigorous gas-plant cubic-EOS columns the issue points to (#312,
+``difflow_refinery.gasplant``) reached main after this unit was built and are
+not used yet. ``fractionation="pr_shortcut"`` swaps in difflow's own
 Peng-Robinson :class:`~difflow.units.distillation.ShortcutColumn` (with its
 non-key split corrected, :class:`GeddesShortcutColumn`) for forward
 cross-checks.

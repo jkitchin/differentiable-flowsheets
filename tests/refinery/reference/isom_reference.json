@@ -1,0 +1,571 @@
+{
+ "provenance": {
+  "generated": "2026-10-02T03:27:37+00:00",
+  "script": "tests/refinery/reference/isom_generate.py",
+  "command": "PYTHONPATH=src:tests python -m refinery.reference.isom_generate",
+  "idaes": "2.10.0",
+  "pyomo": "6.10.0",
+  "ipopt": "Ipopt 3.13.2 (aarch64-apple-darwin22.5.0), ASL(20190605)",
+  "python": "3.12.11",
+  "difflow_commit": "3633b04502b3e0fccd1cb40e7cd27a6f199fb081",
+  "model": "IDAES GibbsReactor on a modular ideal-gas package (Ideal EOS, RPP4) given difflow's dHf, S and Cp: an independent implementation of the same thermochemistry, not an independent one",
+  "elements": "H plus one skeleton label per conserved carbon skeleton (C5, C6) and per species the network holds fixed; see the generator's docstring"
+ },
+ "components": {
+  "hydrogen": {
+   "Hf": 0.0,
+   "S": 130.68,
+   "cp": [
+    27.14,
+    0.009274,
+    -1.381e-05,
+    7.645e-09
+   ],
+   "H": 2,
+   "C": 0,
+   "MW": 2.016
+  },
+  "ethane": {
+   "Hf": -83800.0,
+   "S": 229.45,
+   "cp": [
+    5.409,
+    0.1781,
+    -6.938e-05,
+    8.713e-09
+   ],
+   "H": 6,
+   "C": 2,
+   "MW": 30.07
+  },
+  "propane": {
+   "Hf": -104700.0,
+   "S": 270.28,
+   "cp": [
+    -4.224,
+    0.3063,
+    -0.0001586,
+    3.215e-08
+   ],
+   "H": 8,
+   "C": 3,
+   "MW": 44.097
+  },
+  "isobutane": {
+   "Hf": -134200.0,
+   "S": 295.34,
+   "cp": [
+    -1.39,
+    0.3847,
+    -0.0001846,
+    2.895e-08
+   ],
+   "H": 10,
+   "C": 4,
+   "MW": 58.123999999999995
+  },
+  "n_butane": {
+   "Hf": -125600.0,
+   "S": 304.4,
+   "cp": [
+    9.487,
+    0.3313,
+    -0.0001108,
+    -2.822e-09
+   ],
+   "H": 10,
+   "C": 4,
+   "MW": 58.123999999999995
+  },
+  "isopentane": {
+   "Hf": -154500.0,
+   "S": 343.89,
+   "cp": [
+    -1.1224,
+    0.4517,
+    -0.00016418,
+    -4.0841e-09
+   ],
+   "H": 12,
+   "C": 5,
+   "MW": 72.151
+  },
+  "n_pentane": {
+   "Hf": -146400.0,
+   "S": 349.25,
+   "cp": [
+    10.67,
+    0.39135,
+    -6.5389e-05,
+    -6.1227e-08
+   ],
+   "H": 12,
+   "C": 5,
+   "MW": 72.151
+  },
+  "2_2_dimethylbutane": {
+   "Hf": -185600.0,
+   "S": 358.22,
+   "cp": [
+    -3.1491,
+    0.54281,
+    -0.00018902,
+    -6.8825e-09
+   ],
+   "H": 14,
+   "C": 6,
+   "MW": 86.178
+  },
+  "2_3_dimethylbutane": {
+   "Hf": -177800.0,
+   "S": 365.94,
+   "cp": [
+    -20.012,
+    0.6334,
+    -0.00035449,
+    8.1562e-08
+   ],
+   "H": 14,
+   "C": 6,
+   "MW": 86.178
+  },
+  "2_methylpentane": {
+   "Hf": -174300.0,
+   "S": 380.69,
+   "cp": [
+    -6.882,
+    0.57438,
+    -0.00025124,
+    1.6512e-08
+   ],
+   "H": 14,
+   "C": 6,
+   "MW": 86.178
+  },
+  "3_methylpentane": {
+   "Hf": -171600.0,
+   "S": 383.04,
+   "cp": [
+    -4.5919,
+    0.54702,
+    -0.00020104,
+    -1.1154e-08
+   ],
+   "H": 14,
+   "C": 6,
+   "MW": 86.178
+  },
+  "n_hexane": {
+   "Hf": -167200.0,
+   "S": 388.74,
+   "cp": [
+    8.3803,
+    0.48881,
+    -0.00011298,
+    -6.0572e-08
+   ],
+   "H": 14,
+   "C": 6,
+   "MW": 86.178
+  },
+  "methylcyclopentane": {
+   "Hf": -106700.0,
+   "S": 339.9,
+   "cp": [
+    -35.499,
+    0.53993,
+    -0.00015819,
+    -5.2279e-08
+   ],
+   "H": 12,
+   "C": 6,
+   "MW": 84.162
+  },
+  "cyclohexane": {
+   "Hf": -123100.0,
+   "S": 297.31,
+   "cp": [
+    -30.506,
+    0.46222,
+    3.0128e-05,
+    -1.5954e-07
+   ],
+   "H": 12,
+   "C": 6,
+   "MW": 84.162
+  },
+  "benzene": {
+   "Hf": 82930.0,
+   "S": 269.18,
+   "cp": [
+    -41.768,
+    0.51126,
+    -0.00033693,
+    7.5704e-08
+   ],
+   "H": 6,
+   "C": 6,
+   "MW": 78.114
+  },
+  "n_heptane": {
+   "Hf": -187800.0,
+   "S": 428.23,
+   "cp": [
+    16.089,
+    0.53113,
+    -6.3869e-05,
+    -1.1342e-07
+   ],
+   "H": 16,
+   "C": 7,
+   "MW": 100.205
+  }
+ },
+ "cases": {
+  "P": 3000000.0,
+  "family_T": [
+   400.0,
+   450.0,
+   500.0,
+   550.0
+  ],
+  "c6_ring": {
+   "feed": {
+    "hydrogen": 4.0,
+    "benzene": 0.3,
+    "methylcyclopentane": 0.4,
+    "cyclohexane": 0.3,
+    "n_hexane": 1.0
+   },
+   "T": [
+    420.0,
+    480.0
+   ],
+   "P": 3000000.0
+  },
+  "adiabatic": {
+   "feeds": [
+    "paraffinic",
+    "benzene_rich"
+   ],
+   "mass_rate": 10.0,
+   "H2_HC": 0.3,
+   "T_in": 413.15,
+   "P": 3000000.0
+  },
+  "skeleton": {
+   "hydrogen": null,
+   "ethane": "K2",
+   "propane": "K3",
+   "isobutane": "Ki4",
+   "n_butane": "Kn4",
+   "isopentane": "C5",
+   "n_pentane": "C5",
+   "2_2_dimethylbutane": "C6",
+   "2_3_dimethylbutane": "C6",
+   "2_methylpentane": "C6",
+   "3_methylpentane": "C6",
+   "n_hexane": "C6",
+   "methylcyclopentane": "C6",
+   "cyclohexane": "C6",
+   "benzene": "C6",
+   "n_heptane": "K7"
+  }
+ },
+ "families": {
+  "C5": [
+   {
+    "T": 400.0,
+    "x": {
+     "n_pentane": 0.1433144713812643,
+     "isopentane": 0.8566855286187357
+    },
+    "solve": {
+     "status": "optimal",
+     "message": "Ipopt 3.13.2\\x3a Optimal Solution Found"
+    }
+   },
+   {
+    "T": 450.0,
+    "x": {
+     "n_pentane": 0.17998734872755237,
+     "isopentane": 0.8200126512724476
+    },
+    "solve": {
+     "status": "optimal",
+     "message": "Ipopt 3.13.2\\x3a Optimal Solution Found"
+    }
+   },
+   {
+    "T": 500.0,
+    "x": {
+     "n_pentane": 0.21418258174081473,
+     "isopentane": 0.7858174182591853
+    },
+    "solve": {
+     "status": "optimal",
+     "message": "Ipopt 3.13.2\\x3a Optimal Solution Found"
+    }
+   },
+   {
+    "T": 550.0,
+    "x": {
+     "n_pentane": 0.24533950555510864,
+     "isopentane": 0.7546604944448914
+    },
+    "solve": {
+     "status": "optimal",
+     "message": "Ipopt 3.13.2\\x3a Optimal Solution Found"
+    }
+   }
+  ],
+  "C6P": [
+   {
+    "T": 400.0,
+    "x": {
+     "n_hexane": 0.07102917855346258,
+     "2_methylpentane": 0.2288043085935251,
+     "3_methylpentane": 0.13335633937925725,
+     "2_3_dimethylbutane": 0.10984578978562493,
+     "2_2_dimethylbutane": 0.4569643836881302
+    },
+    "solve": {
+     "status": "optimal",
+     "message": "Ipopt 3.13.2\\x3a Optimal Solution Found"
+    }
+   },
+   {
+    "T": 450.0,
+    "x": {
+     "n_hexane": 0.10272656224592829,
+     "2_methylpentane": 0.2623239041464562,
+     "3_methylpentane": 0.1657015064668202,
+     "2_3_dimethylbutane": 0.1109823924187218,
+     "2_2_dimethylbutane": 0.3582656347220735
+    },
+    "solve": {
+     "status": "optimal",
+     "message": "Ipopt 3.13.2\\x3a Optimal Solution Found"
+    }
+   },
+   {
+    "T": 500.0,
+    "x": {
+     "n_hexane": 0.13315119504272088,
+     "2_methylpentane": 0.28321114996417585,
+     "3_methylpentane": 0.19018232620991124,
+     "2_3_dimethylbutane": 0.108067490167916,
+     "2_2_dimethylbutane": 0.28538783861527606
+    },
+    "solve": {
+     "status": "optimal",
+     "message": "Ipopt 3.13.2\\x3a Optimal Solution Found"
+    }
+   },
+   {
+    "T": 550.0,
+    "x": {
+     "n_hexane": 0.1608387294366148,
+     "2_methylpentane": 0.29541155319779216,
+     "3_methylpentane": 0.20803440981603358,
+     "2_3_dimethylbutane": 0.10344511335975175,
+     "2_2_dimethylbutane": 0.23227019418980765
+    },
+    "solve": {
+     "status": "optimal",
+     "message": "Ipopt 3.13.2\\x3a Optimal Solution Found"
+    }
+   }
+  ],
+  "C6N": [
+   {
+    "T": 400.0,
+    "x": {
+     "methylcyclopentane": 0.5522758159403356,
+     "cyclohexane": 0.44772418405966447
+    },
+    "solve": {
+     "status": "optimal",
+     "message": "Ipopt 3.13.2\\x3a Optimal Solution Found"
+    }
+   },
+   {
+    "T": 450.0,
+    "x": {
+     "methylcyclopentane": 0.6840133768186947,
+     "cyclohexane": 0.3159866231813053
+    },
+    "solve": {
+     "status": "optimal",
+     "message": "Ipopt 3.13.2\\x3a Optimal Solution Found"
+    }
+   },
+   {
+    "T": 500.0,
+    "x": {
+     "methylcyclopentane": 0.7728328133568003,
+     "cyclohexane": 0.22716718664319963
+    },
+    "solve": {
+     "status": "optimal",
+     "message": "Ipopt 3.13.2\\x3a Optimal Solution Found"
+    }
+   },
+   {
+    "T": 550.0,
+    "x": {
+     "methylcyclopentane": 0.8312481068773996,
+     "cyclohexane": 0.16875189312260044
+    },
+    "solve": {
+     "status": "optimal",
+     "message": "Ipopt 3.13.2\\x3a Optimal Solution Found"
+    }
+   }
+  ]
+ },
+ "c6_ring": [
+  {
+   "T": 420.0,
+   "feed": {
+    "hydrogen": 4.0,
+    "benzene": 0.3,
+    "methylcyclopentane": 0.4,
+    "cyclohexane": 0.3,
+    "n_hexane": 1.0,
+    "2_methylpentane": 0.001,
+    "3_methylpentane": 0.001,
+    "2_3_dimethylbutane": 0.001,
+    "2_2_dimethylbutane": 0.001
+   },
+   "flows": {
+    "hydrogen": 2.1000099169113966,
+    "benzene": 3.7736090014726733e-16,
+    "methylcyclopentane": 6.056683686556479e-06,
+    "cyclohexane": 3.860227698918831e-06,
+    "n_hexane": 0.16773956629014194,
+    "2_methylpentane": 0.4889374239661519,
+    "3_methylpentane": 0.295112571097322,
+    "2_3_dimethylbutane": 0.22243035947264353,
+    "2_2_dimethylbutane": 0.8297701622623542
+   },
+   "heat_duty": -136358.48399045892,
+   "solve": {
+    "status": "optimal",
+    "message": "Ipopt 3.13.2\\x3a Optimal Solution Found"
+   }
+  },
+  {
+   "T": 480.0,
+   "feed": {
+    "hydrogen": 4.0,
+    "benzene": 0.3,
+    "methylcyclopentane": 0.4,
+    "cyclohexane": 0.3,
+    "n_hexane": 1.0,
+    "2_methylpentane": 0.001,
+    "3_methylpentane": 0.001,
+    "2_3_dimethylbutane": 0.001,
+    "2_2_dimethylbutane": 0.001
+   },
+   "flows": {
+    "hydrogen": 2.10010224053918,
+    "benzene": 5.539212717985216e-12,
+    "methylcyclopentane": 7.582938944983522e-05,
+    "cyclohexane": 2.6411127565552995e-05,
+    "n_hexane": 0.24298957162491422,
+    "2_methylpentane": 0.5532938193238065,
+    "3_methylpentane": 0.36325519176083915,
+    "2_3_dimethylbutane": 0.21950742520324495,
+    "2_2_dimethylbutane": 0.6248517515646406
+   },
+   "heat_duty": -133913.16988994787,
+   "solve": {
+    "status": "optimal",
+    "message": "Ipopt 3.13.2\\x3a Optimal Solution Found"
+   }
+  }
+ ],
+ "adiabatic": {
+  "paraffinic": {
+   "feed": {
+    "hydrogen": 37.81238282295954,
+    "isobutane": 0.8602298534168331,
+    "n_butane": 2.580689560250499,
+    "isopentane": 23.56169699657663,
+    "n_pentane": 34.64955440673033,
+    "2_2_dimethylbutane": 0.696233377428114,
+    "2_3_dimethylbutane": 2.088700132284342,
+    "2_methylpentane": 13.92466754856228,
+    "3_methylpentane": 9.863306180231616,
+    "n_hexane": 19.726612360463232,
+    "methylcyclopentane": 7.129108148570613,
+    "cyclohexane": 3.5645540742853066,
+    "benzene": 1.4081982743170236,
+    "n_heptane": 5.987725163414999
+   },
+   "T": 477.023118602291,
+   "flows": {
+    "hydrogen": 21.495373472647184,
+    "isobutane": 0.8602298534168332,
+    "n_butane": 2.5806895602504984,
+    "isopentane": 46.63735037890178,
+    "n_pentane": 11.573901024405187,
+    "2_2_dimethylbutane": 18.454564338660866,
+    "2_3_dimethylbutane": 6.407348419011255,
+    "2_methylpentane": 16.05304837115747,
+    "3_methylpentane": 10.501856115308732,
+    "n_hexane": 6.9751169306074265,
+    "methylcyclopentane": 0.00695761285060653,
+    "cyclohexane": 0.002488292407789876,
+    "benzene": 1.6138383216700226e-08,
+    "n_heptane": 5.987725163415
+   },
+   "heat_duty": 0.0,
+   "solve": {
+    "status": "optimal",
+    "message": "Ipopt 3.13.2\\x3a Optimal Solution Found"
+   }
+  },
+  "benzene_rich": {
+   "feed": {
+    "hydrogen": 37.013051829772415,
+    "isobutane": 0.6881838827334664,
+    "n_butane": 2.0645516482003994,
+    "isopentane": 18.017768291499774,
+    "n_pentane": 26.33366134911505,
+    "2_2_dimethylbutane": 0.580194481190095,
+    "2_3_dimethylbutane": 1.740583443570285,
+    "2_methylpentane": 11.6038896238019,
+    "3_methylpentane": 8.12272273666133,
+    "n_hexane": 16.24544547332266,
+    "methylcyclopentane": 13.070031605712792,
+    "cyclohexane": 8.911385185713268,
+    "benzene": 5.12072099751645,
+    "n_heptane": 10.87770071353725
+   },
+   "T": 522.22456099641,
+   "flows": {
+    "hydrogen": 0.8381402750610583,
+    "isobutane": 0.6881838827334666,
+    "n_butane": 2.0645516482003994,
+    "isopentane": 34.2206584776186,
+    "n_pentane": 10.130771162996227,
+    "2_2_dimethylbutane": 16.39515469366233,
+    "2_3_dimethylbutane": 6.700115083829555,
+    "2_methylpentane": 18.27635147835629,
+    "3_methylpentane": 12.552997105449553,
+    "n_hexane": 9.206971097357005,
+    "methylcyclopentane": 0.7387840403671138,
+    "cyclohexane": 0.18259833581805593,
+    "benzene": 1.3420017126488601,
+    "n_heptane": 10.87770071353725
+   },
+   "heat_duty": 0.0,
+   "solve": {
+    "status": "optimal",
+    "message": "Ipopt 3.13.2\\x3a Optimal Solution Found"
+   }
+  }
+ }
+}

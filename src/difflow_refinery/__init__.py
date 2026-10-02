@@ -30,6 +30,17 @@ recycle-gas loop, steam stripper), with HDS/HDN/aromatics kinetics on the
 (:mod:`difflow_refinery.hydrocracking`, #307) is the same blocks with a
 pretreat bed, a continuous-lumping cracking bed, a fractionator and a UCO
 recycle; also a library.
+The gas plant (:mod:`difflow_refinery.gasplant`) recovers the light ends:
+absorber-deethanizer, debutanizer and splitters on a cubic EOS that carries
+real light components and naphtha pseudocomponents together, with the
+wet-gas compressor, amine treating as a removal fraction, and LPG, fuel gas
+and naphtha qualities.
+
+The isomerization unit (:mod:`difflow_refinery.isomerization`) takes the
+light-naphtha cut to isomerate: an adiabatic approach-to-equilibrium bed,
+a product separator and stabilizer, and optionally a deisopentanizer and a
+deisohexanizer whose side draw is recycled, built on the gas plant's
+columns.
 
 Differentiable end to end: a yield or a duty has a gradient with respect to
 the column's specs, its feed, and the assay data behind its thermodynamics,
@@ -40,7 +51,8 @@ and across the crude-to-vacuum connection.
 >>> crude = dr.characterize(assay)
 """
 
-from difflow_refinery import column, composition, correlations, products, reforming, vacuum
+from difflow_refinery import (column, composition, correlations, gasplant, isomerization, preheat,
+                              products, reforming, vacuum)
 from difflow_refinery import hydroprocessing, hydrotreating
 from difflow_refinery.assay import (
     CONTAMINANTS,
@@ -125,6 +137,21 @@ from difflow_refinery.correlations import (
 )
 from difflow_refinery.products import ProductProperties, product_properties
 from difflow_refinery.thermo import ColumnThermo, water_vapor_pressure
+from difflow_refinery.gasplant import (
+    AmineTreater,
+    AmineTreaterParams,
+    GasCompressor,
+    GasCompressorParams,
+    GasPlantColumn,
+    GasPlantColumnParams,
+)
+from difflow_refinery.isomerization import (
+    IsomerizationReactor,
+    IsomerizationReactorParams,
+    IsomerizationUnit,
+    IsomerizationUnitParams,
+    isom_block,
+)
 from difflow_refinery.vacuum import (
     CrackingWarning,
     PseudoComponents,
@@ -143,6 +170,24 @@ from difflow_refinery.unit import (
 from difflow_refinery import fcc  # fluid catalytic cracker (#308); a library, not registered
 from difflow_refinery import alkylation  # noqa: E402  (#310; imports the units above)
 from difflow_refinery import hydrocracking  # VGO hydrocracker (#307); a library, not registered
+
+# The preheat train (#313): nested params are exported here for serialization.
+from difflow_refinery.preheat import (  # noqa: E402
+    CrudeUnitWithPreheat,
+    CrudeUnitWithPreheatParams,
+    Desalter,
+    DesalterParams,
+    DesalterUnitParams,
+    EbertPanchal,
+    HotStream,
+    PreflashDrum,
+    PreflashDrumParams,
+    PreflashDrumUnitParams,
+    PreheatExchanger,
+    PreheatTrain,
+    PreheatTrainParams,
+    PreheatedCrudeUnit,
+)
 
 __all__ = [
     "Assay",
@@ -200,6 +245,19 @@ __all__ = [
     "reforming",
     "hydroprocessing", "hydrotreating", "hydrocracking",
     "alkylation",
+    "gasplant",
+    "AmineTreater",
+    "AmineTreaterParams",
+    "GasCompressor",
+    "GasCompressorParams",
+    "GasPlantColumn",
+    "GasPlantColumnParams",
+    "isomerization",
+    "IsomerizationReactor",
+    "IsomerizationReactorParams",
+    "IsomerizationUnit",
+    "IsomerizationUnitParams",
+    "isom_block",
     "CrackingWarning",
     "PseudoComponents",
     "StageSpec",
@@ -207,6 +265,21 @@ __all__ = [
     "VacuumColumnParams",
     "VacuumConvergenceWarning",
     "default_vacuum_specs",
+    "preheat",
+    "CrudeUnitWithPreheat",
+    "CrudeUnitWithPreheatParams",
+    "Desalter",
+    "DesalterParams",
+    "DesalterUnitParams",
+    "EbertPanchal",
+    "HotStream",
+    "PreflashDrum",
+    "PreflashDrumParams",
+    "PreflashDrumUnitParams",
+    "PreheatExchanger",
+    "PreheatTrain",
+    "PreheatTrainParams",
+    "PreheatedCrudeUnit",
     "register",
 ]
 
@@ -234,5 +307,53 @@ def register(registry):
         category="refinery",
         description="Vacuum distillation: atmospheric residue to LVGO, HVGO, "
                     "slop and vacuum residue",
+        plugin="difflow_refinery",
+    )
+    for name, cls, description in (
+        ("Desalter", Desalter, "Crude desalter: wash water in, brine out, adiabatic"),
+        ("PreflashDrum", PreflashDrum, "Preflash drum: three-phase flash of the preheated crude"),
+        ("CrudeUnitWithPreheat", CrudeUnitWithPreheat,
+         "Crude unit from the tank: preheat train against the column's pumparounds "
+         "and products, desalter, preflash drum, furnace and atmospheric column"),
+    ):
+        registry.register(name=name, cls=cls, category="refinery",
+                          description=description, plugin="difflow_refinery")
+    registry.register(
+        name="GasPlantColumn",
+        cls=GasPlantColumn,
+        category="refinery",
+        description="Light-ends column on a cubic EOS: absorber-deethanizer, "
+                    "debutanizer, C3/C4 splitter, deisobutanizer",
+        plugin="difflow_refinery",
+    )
+    registry.register(
+        name="GasCompressor",
+        cls=GasCompressor,
+        category="refinery",
+        description="Wet-gas compressor: isentropic stages with intercoolers "
+                    "and knockout drums",
+        plugin="difflow_refinery",
+    )
+    registry.register(
+        name="IsomerizationReactor",
+        cls=IsomerizationReactor,
+        category="refinery",
+        description="C5/C6 isomerization bed: adiabatic approach to equilibrium, "
+                    "with benzene saturation and hydrocracking",
+        plugin="difflow_refinery",
+    )
+    registry.register(
+        name="IsomerizationUnit",
+        cls=IsomerizationUnit,
+        category="refinery",
+        description="Light-naphtha isomerization unit: once through, or with a "
+                    "deisopentanizer and a deisohexanizer recycle",
+        plugin="difflow_refinery",
+    )
+    registry.register(
+        name="AmineTreater",
+        cls=AmineTreater,
+        category="refinery",
+        description="Amine treating as a fixed H2S removal fraction",
         plugin="difflow_refinery",
     )

@@ -50,8 +50,8 @@ streams)::
     flue_gas   nitrogen, oxygen, carbon_dioxide, carbon_monoxide, water,
                sulfur_dioxide
 
-The C3/C4 split is ideal -- it stands in for the gas plant (issue #312,
-which does not exist yet).
+The C3/C4 split is ideal -- it stands in for the gas plant (``difflow_refinery.gasplant``,
+#312, reached main after this unit was built; routing through it is follow-up).
 """
 
 from __future__ import annotations

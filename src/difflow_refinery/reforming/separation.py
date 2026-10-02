@@ -16,8 +16,8 @@ they can be folded into it later without changing the reformer's numbers.
   of naphtha hydrocarbon: the H2/HC ratio is the specification, the split
   fraction is what follows from it.
 * :class:`Stabilizer` -- a DOCUMENTED SIMPLIFICATION. A real stabilizer is a
-  debutanizer column; issue #312's gas-plant columns, which this would use,
-  do not exist, and difflow's stage columns are not set up for a
+  debutanizer column; issue #312's gas-plant columns (``difflow_refinery.gasplant``)
+  reached main after this unit was built and are not used yet, and difflow's stage columns are not set up for a
   hydrogen-bearing feed. It is a component split instead: hydrogen,
   methane and ethane leave as fuel gas, propane and ``c4_recovery`` of the
   butanes as LPG, and the rest (with ``1 - c4_recovery`` of the butanes) as

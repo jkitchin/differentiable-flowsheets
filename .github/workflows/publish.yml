@@ -45,7 +45,7 @@ jobs:
       - name: Run the whole suite
         run: |
           python -m pytest tests/ -q --tb=short \
-            -n auto --dist loadfile \
+            -n auto --dist loadfile --no-loadscope-reorder \
             --splits 3 --group ${{ matrix.shard }}
 
   build:

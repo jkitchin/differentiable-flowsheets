@@ -73,8 +73,8 @@ difflow/
 │   ├── difflow_ree/       # Rare earth element solvent extraction plugin
 │   ├── difflow_cc/        # Carbon capture plugin (amine, membrane, adsorption)
 │   ├── difflow_gas/       # Gas transmission network plugin (pipes, compressors, computed decomposition)
-│   └── difflow_refinery/  # Refinery plugin (crude assay, crude and vacuum distillation units, product blending pool,
-│                          # hydroprocessing/ building blocks + hydrotreating/ and hydrocracking/ units)
+│   └── difflow_refinery/  # Refinery plugin (crude assay, crude and vacuum distillation units, saturated gas plant, product blending pool,
+│                          # hydroprocessing/ building blocks + hydrotreating/, hydrocracking/, fcc/, reforming/, alkylation/ units)
 ├── tests/                 # pytest test files (includes tests/bio/, tests/ree/, tests/cc/, tests/gas/, tests/power/, tests/refinery/)
 ├── examples/              # Jupyter notebook examples
 ├── jax-tutorials/         # JAX/autodiff tutorials
@@ -264,7 +264,7 @@ The project has six domain-specific plugins:
 - **difflow_cc**: Carbon capture (amine absorption, membrane, adsorption)
 - **difflow_gas**: Gas transmission networks (pipes, compressors, valves, topology-driven sequential decomposition)
 - **difflow_power**: Electrical grids (AC power flow, AC-OPF, DC-OPF, PTDF/LODF, state estimation)
-- **difflow_refinery**: Petroleum refining (TBP assay characterisation, crude and vacuum distillation units, product blending)
+- **difflow_refinery**: Petroleum refining (TBP assay characterisation, crude and vacuum distillation units, saturated gas plant, product blending)
 
 1. Add to appropriate plugin directory (`src/difflow_bio/`, `src/difflow_ree/`, `src/difflow_cc/`, `src/difflow_gas/`, `src/difflow_power/`, or `src/difflow_refinery/`)
 2. Create a Params dataclass inheriting from `ParamsMixin`
@@ -607,6 +607,65 @@ Invariants (do not weaken them):
 - Recycle at fixed catalyst and T LOWERS per-pass conversion (a recycle
   reactor is less efficient than plug flow); what it buys is selectivity.
 - Full-unit tests compile 2-6 min each: slow.
+### Crude Preheat Train (`difflow_refinery.preheat`)
+
+`PreheatedCrudeUnit(assay, column, train)` puts a heat-exchanger train,
+`Desalter` and `PreflashDrum` in front of the atmospheric column and solves
+the coupled problem: an outer Newton on the tear (pumparound return
+temperatures, drum temperature, furnace inlet temperature) around the train's
+own Newton and the EO column, steps clipped to 30 K, implicit gradients.
+`CrudeUnitWithPreheat` is the flowsheet operation. Fouling is a per-exchanger
+`Rf`; `fouling_sensitivity` and `cleaning_ranking` give d(fired duty)/dRf and
+the exchangers ranked by what cleaning them saves.
+
+Invariants (do not weaken them):
+- A pumparound that runs through the train is specified by its rate and its
+  RETURN TEMPERATURE; the spec's value is only the loop's starting guess, the
+  train sets the answer.
+- The LMTD uses `abs()` and a `MIN_DELTA_T` floor (1e-6 K), so a temperature
+  cross is NOT prevented -- an undersized hot stream on a large area pinches
+  and the answer is the floor, not an error. Check the approach temperatures.
+- Free water in the drum is a third phase (all water to vapour or liquid
+  water, never dissolved in the oil).
+- The Ebert-Panchal fouling constants are illustrative, not fitted.
+
+Validation: `tests/refinery/test_preheat_validation.py` (release) against IDAES
+`Flash` and `HeatExchanger` on the same ideal thermo -- an independent
+implementation, not an independent model. Tests: `tests/refinery/test_preheat*.py`.
+Example: `examples/37_crude_preheat_train.ipynb`.
+
+**difflow_refinery.gasplant** - the saturated gas plant (#312), on a cubic EOS
+(PR default, SRK) because Raoult is tens of percent off in K at 10-20 bar:
+- `gas_components(light, pseudo=, kij=, cuts=)`: real light ends + naphtha
+  pseudocomponents in one table; `cuts=` keeps only the named cuts
+- `GasPlantColumn` (the vacuum `StageColumn` machinery on `CubicThermo`:
+  total/partial/no condenser, reboiler, any feeds, side draws); factories
+  `absorber_deethanizer`, `debutanizer`, `splitter`, `c3c4_splitter`,
+  `deisobutanizer` (general enough for the naphtha splitter, #311)
+- `GasCompressor` (stages + knock-out condensate), `AmineTreater` (a removal
+  FRACTION -- treating chemistry is out of scope), `fuel_gas`, `lpg_quality`
+  (GPA 2140, limits marked verify), `reid_vapor_pressure`, `gasplant_block`
+
+Invariants encoded in the gas plant (do not weaken them):
+- Three passes: easy specs on equilibrium stages, continuation of targets AND
+  Murphree efficiencies, one implicit step. Pass 1's boilup ratio is at least
+  one: from the guess's 5 %-of-feed vapor floor a heavy lean oil gets a few
+  percent, and pass 1 never converges (the CDU-naphtha absorber of example 38).
+- O'Connell is the factories' default tray efficiency; `tray_efficiency=1.0`
+  gives theoretical stages. The IDAES cross-check uses 1.0 on both sides.
+- RVP is the D323 construction on the same EOS, never a correlation.
+- A non-converging solve is usually an infeasible spec: a C2- spec larger than
+  the C2- fed, an RVP above what a hot feed allows, an olefin-limited iC4 purity.
+- The IDAES reference (`tests/refinery/reference/gasplant_reference.json`) is
+  an independent IMPLEMENTATION of the same model (PR, kij 0, same constants),
+  not an independent model. Regenerate it, never loosen the staleness checks.
+  The debutanizer is a full `TrayColumn` comparison (agreement 1e-7, but only
+  after the generator tightens SmoothVLE's eps: at IDAES's defaults the total
+  condenser leaks 0.07 % of a component). IDAES's TrayColumn does not converge
+  the C3/C4 splitter, so that case is IDAES flashes at difflow's stage states.
+
+Docs: `docs/unit-operations-refinery.md` ("The saturated gas plant").
+Tests: `tests/refinery/test_gasplant*.py`. Example: `examples/38_refinery_gas_plant.ipynb`.
 
 ### Refinery Blending (`difflow_refinery`)
 
@@ -1070,6 +1129,7 @@ jax.debug.print("value: {x}", x=value)
 | `src/difflow_gas/__init__.py` | Gas transmission network plugin exports |
 | `src/difflow_power/__init__.py` | Electrical grid plugin exports (AC-OPF) |
 | `src/difflow_refinery/__init__.py` | Refinery plugin exports (crude assay, CDU, VDU, blending, hydrotreating) |
+| `src/difflow_refinery/__init__.py` | Refinery plugin exports (crude assay, CDU, VDU, gas plant, blending) |
 | `tests/` | All pytest tests (includes `bio/`, `ree/`, `cc/`, `gas/`, `power/`, `refinery/` subdirs) |
 | `examples/` | Usage examples (Jupyter notebooks) |
 | `jax-tutorials/` | JAX autodiff tutorials |
