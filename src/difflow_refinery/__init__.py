@@ -22,6 +22,12 @@ blend pool on the same grid. The correlations behind all three live once,
 in :mod:`difflow_refinery.correlations`. An assay without a heavy end
 characterizes exactly as it did before.
 
+The gas plant (:mod:`difflow_refinery.gasplant`) recovers the light ends:
+absorber-deethanizer, debutanizer and splitters on a cubic EOS that carries
+real light components and naphtha pseudocomponents together, with the
+wet-gas compressor, amine treating as a removal fraction, and LPG, fuel gas
+and naphtha qualities.
+
 Differentiable end to end: a yield or a duty has a gradient with respect to
 the column's specs, its feed, and the assay data behind its thermodynamics,
 and across the crude-to-vacuum connection.
@@ -31,7 +37,7 @@ and across the crude-to-vacuum connection.
 >>> crude = dr.characterize(assay)
 """
 
-from difflow_refinery import column, correlations, preheat, products, vacuum
+from difflow_refinery import column, correlations, gasplant, preheat, products, vacuum
 from difflow_refinery.assay import (
     CONTAMINANTS,
     DEFAULT_CUT_WIDTHS,
@@ -104,6 +110,14 @@ from difflow_refinery.correlations import (
 )
 from difflow_refinery.products import ProductProperties, product_properties
 from difflow_refinery.thermo import ColumnThermo, water_vapor_pressure
+from difflow_refinery.gasplant import (
+    AmineTreater,
+    AmineTreaterParams,
+    GasCompressor,
+    GasCompressorParams,
+    GasPlantColumn,
+    GasPlantColumnParams,
+)
 from difflow_refinery.vacuum import (
     CrackingWarning,
     PseudoComponents,
@@ -187,6 +201,13 @@ __all__ = [
     "edmister_omega", "lee_kesler_psat", "riazi_daubert_mw",
     "riazi_daubert_pc", "riazi_daubert_tc",
     "vacuum",
+    "gasplant",
+    "AmineTreater",
+    "AmineTreaterParams",
+    "GasCompressor",
+    "GasCompressorParams",
+    "GasPlantColumn",
+    "GasPlantColumnParams",
     "CrackingWarning",
     "PseudoComponents",
     "StageSpec",
@@ -247,3 +268,26 @@ def register(registry):
     ):
         registry.register(name=name, cls=cls, category="refinery",
                           description=description, plugin="difflow_refinery")
+    registry.register(
+        name="GasPlantColumn",
+        cls=GasPlantColumn,
+        category="refinery",
+        description="Light-ends column on a cubic EOS: absorber-deethanizer, "
+                    "debutanizer, C3/C4 splitter, deisobutanizer",
+        plugin="difflow_refinery",
+    )
+    registry.register(
+        name="GasCompressor",
+        cls=GasCompressor,
+        category="refinery",
+        description="Wet-gas compressor: isentropic stages with intercoolers "
+                    "and knockout drums",
+        plugin="difflow_refinery",
+    )
+    registry.register(
+        name="AmineTreater",
+        cls=AmineTreater,
+        category="refinery",
+        description="Amine treating as a fixed H2S removal fraction",
+        plugin="difflow_refinery",
+    )

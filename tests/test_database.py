@@ -240,3 +240,60 @@ class TestDataConsistency:
                 assert data.MW > 0, f"MW should be positive for {name}"
             except KeyError:
                 pass  # Species might only have critical data
+
+
+class TestC4Olefins:
+    """cis-2-butene, trans-2-butene and isobutylene (FCC LPG olefins).
+
+    Each check is against a number published independently of the one
+    stored, so a transcription or fitting slip shows up here.
+    """
+
+    # TRC (1997) ideal-gas Cp tables, as the NIST WebBook gives them (J/mol/K)
+    TRC_CP = {
+        "cis_2_butene": {200: 61.73, 298.15: 80.15, 400: 102.73, 500: 123.64,
+                         600: 141.91, 700: 157.66, 800: 171.27},
+        "trans_2_butene": {200: 69.41, 298.15: 87.67, 400: 108.53, 500: 128.08,
+                           600: 145.43, 700: 160.56, 800: 173.75},
+        "isobutylene": {200: 67.34, 298.15: 88.09, 400: 109.79, 500: 129.35,
+                        600: 146.48, 700: 161.35, 800: 174.30},
+    }
+    # NIST WebBook normal boiling points (averages of 7, 10 and 25 values)
+    TB = {"cis_2_butene": 276.84, "trans_2_butene": 274.2, "isobutylene": 266.7}
+
+    @pytest.mark.parametrize("name", sorted(TRC_CP))
+    def test_ideal_gas_cp_matches_the_trc_table(self, name):
+        a, b, c, d = get_species_data(name).Cp_coeffs
+        for T, cp in self.TRC_CP[name].items():
+            assert a + b * T + c * T**2 + d * T**3 == pytest.approx(cp, rel=0.012)
+
+    @pytest.mark.parametrize("name", sorted(TB))
+    def test_antoine_boils_at_the_normal_boiling_point(self, name):
+        A, B, C = get_species_data(name).antoine_coeffs
+        T = self.TB[name]
+        assert 10 ** (A - B / (T + C)) == pytest.approx(101325.0, rel=0.03)
+
+    @pytest.mark.parametrize("name", sorted(TB))
+    def test_critical_constants_agree_with_tsonopoulos_ambrose(self, name):
+        # The stored constants are Lemmon & Ihmels (2005); Tsonopoulos &
+        # Ambrose (1996), via the NIST WebBook, is the independent check.
+        ta = {"cis_2_butene": (435.5, 42.1e5), "trans_2_butene": (428.6, 41.0e5),
+              "isobutylene": (417.9, 40.0e5)}[name]
+        p = get_critical_props(name)
+        assert p.Tc == pytest.approx(ta[0], abs=0.5)
+        assert p.Pc == pytest.approx(ta[1], rel=0.025)
+        assert 0.18 < p.omega < 0.22
+
+    def test_aliases_and_sources(self):
+        from difflow.database import SOURCE_CITATIONS, resolve_alias
+        assert resolve_alias("isobutene") == "isobutylene"
+        for name in self.TB:
+            assert "Lemmon" in SOURCE_CITATIONS[name]
+
+    def test_volatility_order_from_the_critical_constants(self):
+        # Normal boiling points order isobutylene < trans < cis; Wilson's
+        # K (from Tc, Pc, omega alone) must order them the same way.
+        eos = PengRobinson({n: get_critical_props(n) for n in
+                            ("isobutylene", "trans_2_butene", "cis_2_butene")})
+        K = eos.K_values_wilson(300.0, 5e5)
+        assert K[0] > K[1] > K[2]
