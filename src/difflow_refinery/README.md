@@ -48,6 +48,7 @@ still differentiable, with no palette entry.
 | C5/C6 isomerization | `isomerization` | `IsomerizationReactor`, `IsomerizationUnit` | both | light naphtha → isomerate |
 | Hydrotreater | `hydrotreating` | `Hydrotreater` | library | naphtha, kerosene or diesel → treated product, wild naphtha, off-gas |
 | Hydrocracker | `hydrocracking` | `Hydrocracker` | library | VGO → LPG, naphtha, kerosene, diesel, unconverted oil |
+| Residue desulfurizer | `residue` | `ResidueDesulfurizer`, `fuel_oil_blend` | library | atmospheric residue → desulfurized residue, distillate, gas; VLSFO (0.5 wt% S) pool |
 | Fluid catalytic cracker | `fcc` | `FCCUnit` | library | VGO → dry gas, C3, C4, gasoline, LCO, slurry, flue gas |
 | Catalytic reformer | `reforming` | `CatalyticReformer` | library | heavy naphtha → reformate, net H2, LPG, fuel gas |
 | Alkylation | `alkylation` | `AlkylationUnit` | library | C3-C5 olefins + isobutane → alkylate, propane, n-butane |
@@ -81,8 +82,8 @@ model: the CDU and VDU against Pyomo/IPOPT columns, and the preheat
 train, gas plant and isomerization reactor against IDAES. Alkylation's
 correlations reproduce the GAMS `process.gms` optimum.
 
-The kinetic and yield constants of the hydrotreater, hydrocracker, FCC,
-reformer and the isomerization rates are **illustrative**. They give the
+The kinetic and yield constants of the hydrotreater, residue
+desulfurizer, hydrocracker, FCC, reformer and the isomerization rates are **illustrative**. They give the
 right trends and exact gradients, but the absolute yields are not
 predictions until they are fitted to a unit's own data.
 

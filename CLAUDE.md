@@ -75,7 +75,7 @@ difflow/
 │   ├── difflow_cc/        # Carbon capture plugin (amine, membrane, adsorption)
 │   ├── difflow_gas/       # Gas transmission network plugin (pipes, compressors, computed decomposition)
 │   └── difflow_refinery/  # Refinery plugin (crude assay, crude and vacuum distillation units, saturated gas plant, product blending pool,
-│                          # hydroprocessing/ building blocks + hydrotreating/, hydrocracking/, fcc/, reforming/, alkylation/ units)
+│                          # hydroprocessing/ building blocks + hydrotreating/, hydrocracking/, fcc/, reforming/, alkylation/, residue/ units)
 ├── tests/                 # pytest test files (includes tests/bio/, tests/ree/, tests/cc/, tests/gas/, tests/power/, tests/refinery/)
 ├── examples/              # Jupyter notebook examples
 ├── jax-tutorials/         # JAX/autodiff tutorials
@@ -614,6 +614,28 @@ Invariants (do not weaken them):
 - Recycle at fixed catalyst and T LOWERS per-pass conversion (a recycle
   reactor is less efficient than plug flow); what it buys is selectivity.
 - Full-unit tests compile 2-6 min each: slow.
+### Residue Desulfurizer and Fuel Oil (`difflow_refinery.residue`, #331)
+
+`ResidueDesulfurizer(char, residue).solve(residue)` -> `RDSResult`; fuel oil is
+`fuel_oil_blend([res.blend_component("residue"), ...], [res.volume("residue"), ...])`
+(a property-mode `BlendPool`, `VLSFO_SPECS`: 0.5 wt% S, 380 cSt, SG 0.991, CCR 18).
+`RDSKinetics` = `HDTKinetics` with residue constants + refractory `S_residue`,
+`NiV` (HDM onto the catalyst), `CCR` reduction, 538 C+ conversion. Once-through
+treat gas, ideal product split (gas / distillate / residue). A library.
+- Route (a) chosen over VDU + cutters on the lever rule
+  (`cutter_fraction_for_sulfur`): a 3.3 wt% residue needs 85 % ULSD by mass to
+  reach 0.5 wt%. Keep that argument in the docs if the route changes.
+- `NiV` and `CCR` attributes have NO element (metals outside a cut's mass, CCR a
+  subset of C); `S_residue` counts S. Balances incl. Ni+V (with the deposit) close
+  to round-off -- tested at 1e-10, keep it that way.
+- Conversion moves ALL of a parent's atoms to `m = nC_i/nC_j` lighter molecules
+  with `m - 1` H2; the HDT cracking leak is off (`crack_k=0`) so nothing double counts.
+- Constants and the refractory-S share table are ILLUSTRATIVE (ARDS ranges, pinned
+  by release tests); R1-R5 references are unverified.
+
+Docs: `docs/unit-operations-refinery.md` ("Residue desulfurization and fuel oil").
+Tests: `tests/refinery/test_residue.py` (gradient and CDU route: release + slow).
+
 ### Crude Preheat Train (`difflow_refinery.preheat`)
 
 `PreheatedCrudeUnit(assay, column, train)` puts a heat-exchanger train,
