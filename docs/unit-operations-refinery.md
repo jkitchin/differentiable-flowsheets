@@ -1662,7 +1662,42 @@ The fractionator is a **documented simplified split**, not a column (the issue a
 
 Not computed: **jet smoke point and freeze point** (the (Tb, SG) correlations the issue names could not be verified, and are poor for highly saturated product; a jet pool takes measured overrides), fractionator duties, naphtha octane.
 
-RESULTS-TBD
+(refinery-hydrocracker-results)=
+### Results on the test VGOs
+
+Feeds: the LVGO + HVGO of a `VacuumColumn` on the idealized atmospheric residue (`vacuum.atmospheric_residue`, 150 kg/s of crude) of two test crudes, both characterized with a heavy end and the #305 composition -- the light crude of the composition section (SG 0.86, 1.8 wt% S, 1500 wppm N) and a heavy one (SG 0.93, 3.0 wt% S, 2500 wppm N). The VDU products carry every cut at some trace level; the unit keeps 28 (light) and 26 (heavy) cuts and drops 1.7e-4 and 2.4e-4 of the feed mass (`dropped_mass_fraction`). Defaults otherwise (the heavy VGO with 365 °C cracking inlets: at 380 °C its beds run away).
+
+| | light VGO, once-through | light VGO, 60 % UCO recycle | heavy VGO, once-through |
+|---|---|---|---|
+| fresh feed | 45.1 kg/s; 2.91 wt% S, 2214 wppm N | same | 48.5 kg/s; 4.10 wt% S, 2948 wppm N |
+| to the cracker | 947 wppm S, 42.7 wppm N | 844 wppm S, 40.0 wppm N | 315 wppm S, 14.5 wppm N |
+| WABT pretreat / cracking | 394.1 / 395.2 °C | 393.9 / 391.0 °C | 416.8 / 383.4 °C |
+| bed rises, cracking | 19.1, 21.4, 22.0, 23.1, 26.2 K | 13.3, 15.4, 16.2, 17.0, 18.8 K | 28.6, 30.3, 27.9, 26.0, 26.1 K |
+| conversion (370 °C+), per pass / overall | 69.7 / 69.7 % | 46.9 / 68.8 % | 58.2 / 58.2 % |
+| off-gas, LPG (wt%) | 1.07, 1.23 | 1.22, 1.06 | 1.43, 1.85 |
+| light, heavy naphtha (wt%) | 2.55, 10.47 | 2.19, 9.22 | 1.47, 8.01 |
+| kerosene, diesel (wt%) | 24.83, 31.48 | 23.03, 34.09 | 20.05, 27.13 |
+| UCO bleed (wt%) | 28.60 | 29.47 | 39.81 |
+| naphtha / middle distillate | 0.231 | 0.200 | 0.201 |
+| chemical H2 | 278 Nm³/m³ (1649 scf/bbl, 2.69 wt%) | 264 Nm³/m³ (1565 scf/bbl) | 359 Nm³/m³ (2129 scf/bbl) |
+| kerosene SG; diesel SG, cetane index | 0.790; 0.840, 65.5 | 0.790; 0.842, 65.3 | 0.829; 0.882, 47.4 |
+| UCO BMCI | 33.1 | 34.1 | 50.1 |
+| closure (worst of mass, C, H, S, N) | 2e-15 | 3e-12 | 1e-15 |
+| tears | gas 1e-14 | gas 9e-12; UCO 1.8e-10 relative, 13 Anderson passes | gas 3e-13 |
+
+Read these as the shape of the answer: every cracking constant is illustrative. A few things they show, all of which follow from the model rather than being tuned in: the recycle at the same catalyst and temperature *lowers* the per-pass conversion (a recycle reactor is less efficient than plug flow) and the overall conversion slightly, and buys selectivity -- 2.6 wt% more diesel, less naphtha per middle distillate, less H2; the heavy, aromatic VGO consumes more hydrogen, gives denser, lower-cetane products (its products inherit its lower Watson K through `Kw_feed + dKw`) and a higher-BMCI UCO; its pretreat bed rises 81 K, which a real unit would quench harder (the pretreat quench is a spec).
+
+Compiling a once-through unit takes about 2.5 min and a solve about 7--9 s (the gas tear: 12 substitution passes, then Newton); with the UCO recycle the compile is about 6.5 min and a solve about 40 s. A reverse-mode gradient adds one compile.
+
+GRADIENTS-TBD
+
+**What the tests check** (`tests/refinery/test_hydrocracking.py`; full-unit tests `slow`):
+
+- convergence from the default initialization on both VDU VGOs, once-through and with 60 % UCO recycle; mass, C, H, S and N closure to 1e-8 relative (they close to 1e-15 once-through and 3e-12 with the recycle); `h2.chemical` (H balance) equal to H2 in less H2 out; the UCO recycle identity `overall = 1 - (1 - rho)(1 - X)/(1 - rho (1 - X))`;
+- conversion, naphtha/middle distillate and H2 consumption all rising with the cracking inlet temperature (360, 370, 380 °C), and the recycle lowering per-pass conversion and the naphtha/middle-distillate ratio;
+- gradients against Richardson-extrapolated central differences (above);
+- the kerosene and diesel entering `BlendPool("jet")` / `BlendPool("ulsd")` through `BlendComponent.from_stream` with the unit's gravity, sulfur and cetane index; `hcu_block` delta vectors passing `check_delta_vectors`;
+- the pieces: element conservation of both schemes at a point (1e-12 of the cracked flow), the distribution matrix row-stochastic with nothing landing in the parent's cut or heavier, reactivity rising with boiling point, the yield distribution's end points, `species_density` as derived, the product property chain (Watson K, Twu MW, H/C consistent with the H mass fraction), organic-N inhibition, the fractionator's shares (exactly zero UCO below `T_uco - w`), the adjoint fixed point against the implicit-function closed form, a cracking bed's conversion rising with temperature, the pretreat bed removing 95 %+ of the nitrogen; pins: the scission and saturation heats against the model-compound table, BMCI at its anchors (n-heptane 0, benzene 100).
 
 (refinery-hydrocracker-planning)=
 ### Planning: `hcu_block`
