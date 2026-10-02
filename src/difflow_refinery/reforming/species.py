@@ -50,8 +50,8 @@ what was not checked against a primary source):
     for every species but hydrogen (zero by definition) and 2-methylhexane
     (no API TDB entry; CRC Handbook value). Cross-checked against the CRC
     Handbook, ATcT and Yaws tables: they agree to within 1.5 kJ/mol for every
-    species (2-methylnonane: CRC -260.2 against API -256.5, the largest
-    spread; unverified).
+    species except 2-methylnonane, where the CRC table gives -260.2 kJ/mol
+    against the API TDB's -256.5 (which is right is unverified).
   - ``S0``: Yaws, *Thermophysical Properties of Chemicals and Hydrocarbons*
     (William Andrew, 2008) ideal-gas entropy table ("YAWS"), for every
     species, so the set is internally consistent. Cross-checked against the
