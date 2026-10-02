@@ -1,6 +1,46 @@
 {
- "n_sections": 1020,
+ "n_sections": 1025,
  "sections": [
+  {
+   "anchor": "ask-the-in-browser-docs-assistant",
+   "heading": "Ask: the in-browser docs assistant",
+   "path": "Ask: the in-browser docs assistant",
+   "source": "ask.md",
+   "targets": [],
+   "text": "The floating **Ask** button in the lower-right corner of every page opens a\nquestion box for this book. It has two halves, and they work independently:\n\n| | What it does | What it costs |\n|---|---|---|\n| **Search** | Ranks passages from the guides, the tutorials and the example notebooks, each linked to the section it came from | one index download (about 1 MB compressed) the first time the panel opens |\n| **Answer** | Writes those passages up into prose, with numbered citations | a language model download, roughly 1\u20132 GB, only if you ask for it |\n\nSearch always works. The answer half is opt-in: nothing is downloaded until\nyou pick a model and click **Load model**. If you never do, you still get\nranked, linked passages, which is most of the value on a reference manual.\n\nNothing you type leaves your browser. There is no API key, no server and no\ntelemetry. The assistant is a static script; the only third-party requests it\nmakes are for the WebLLM runtime and the model weights, after you click.\n\nThe design, and most of the code for the search half, comes from the\nassistant on the [POUNCE documentation](https://kitchingroup.cheme.cmu.edu/pounce/)."
+  },
+  {
+   "anchor": "what-it-searches",
+   "heading": "What it searches",
+   "path": "Ask: the in-browser docs assistant > What it searches",
+   "source": "ask.md",
+   "targets": [],
+   "text": "Every page of this book, including the notebooks under *About Flowsheets*,\n*JAX Tutorials* and *Examples*. Notebook passages are marked `example` in the\nsource list: they show a worked call rather than define it. Notebook outputs\nare left out; the input cells are kept, cut to their first thirty lines.\n\nPassages are cut at section boundaries, so every citation lands on the section\nthat answered rather than at the top of a long page."
+  },
+  {
+   "anchor": "requirements-for-written-answers",
+   "heading": "Requirements for written answers",
+   "path": "Ask: the in-browser docs assistant > Requirements for written answers",
+   "source": "ask.md",
+   "targets": [],
+   "text": "| | |\n|---|---|\n| **Browser** | WebGPU: Chrome or Edge 113+, Safari 26+, Firefox with WebGPU enabled |\n| **Download** | 0.9\u20132.3 GB depending on the model, cached by the browser afterwards |\n| **Memory** | roughly the model's size in GPU memory while it is loaded |\n\nWithout WebGPU the panel says so and stays in search-only mode. It asks the\nbrowser for a GPU adapter before offering the button, because a browser can\nadvertise WebGPU and still have no usable GPU behind it.\n\nThree models are offered, smallest first: Llama 3.2 1B, Qwen 2.5 1.5B and\nLlama 3.2 3B. The smallest is the default, because a download that finishes\nbeats a larger one you abandon; the larger ones follow the instructions and\nthe citation format more reliably. A GPU that supports half precision gets the\nsmaller half-precision builds."
+  },
+  {
+   "anchor": "how-much-to-trust-it",
+   "heading": "How much to trust it",
+   "path": "Ask: the in-browser docs assistant > How much to trust it",
+   "source": "ask.md",
+   "targets": [],
+   "text": "The model sees only the five passages your question retrieved, and it is told\nto answer from them alone and to cite each claim. That keeps it much closer to\nthe book than an unaided chatbot, but a small model reading the right passages\ncan still summarize them wrongly.\n\n**Treat the answer as a pointer and the passages as the source.** Every answer\nis shown with the passages it was built from, in rank order, each linked to\nits section. When the two disagree, the passage is right.\n\nSearch is [BM25](https://en.wikipedia.org/wiki/Okapi_BM25) over words, not\nembeddings. It is good at exact names (a class, a keyword argument, a warning\ncopied out of your traceback) and weaker at questions that share no word with\nthe book. If a question comes back empty, search for the name instead."
+  },
+  {
+   "anchor": "for-maintainers",
+   "heading": "For maintainers",
+   "path": "Ask: the in-browser docs assistant > For maintainers",
+   "source": "ask.md",
+   "targets": [],
+   "text": "| Piece | File |\n|---|---|\n| Sphinx extension and index builder | `_ext/ask_index.py` |\n| Panel, retrieval, WebLLM glue | `_ext/ask_static/ask.js`, `_ext/ask_static/ask.css` |\n| Retrieval check over the built book | `tests/docs_ask/ask_retrieval.mjs` (`make ask-check`) |\n| Builder and script unit tests | `tests/test_docs_ask.py` |\n\n`jupyter-book build .` does everything: the extension, listed under\n`sphinx.local_extensions` in `_config.yml`, adds the script and stylesheet to\nevery page and writes `ask-index.json` at the root of `_build/html` when the\nbuild finishes. The index is built from the rendered HTML rather than the\nmarkdown, so a citation names a section anchor only if Sphinx actually wrote\nit. To rebuild the index alone after a build, run\n`python3 _ext/ask_index.py _build/html`.\n\nTo try it, serve the build over HTTP (the index is fetched, which a `file://`\npage cannot do):\n\n```console\n$ make book\n$ python3 -m http.server -d _build/html 8000    # http://localhost:8000/\n```\n\nThe ranking has no exception to throw when it gets worse: it returns the wrong\npassage, silently. `make ask-check` runs the shipped `ask.js` against a\nlabelled set of questions over the built index, and the deploy workflow runs\nthe same check before it publishes."
+  },
   {
    "anchor": "convergence-and-initialization",
    "heading": "Convergence and Initialization",

@@ -33,6 +33,7 @@ parts:
       - file: docs/solvers-and-utilities
       - file: docs/external-solvers
       - file: docs/eo-solver
+      - file: docs/ask
 
   - caption: About Flowsheets
     chapters:

@@ -42,7 +42,7 @@ endif
 .PHONY: all notebooks notebooks-force notebooks-bio notebooks-ree notebooks-cc \
         notebooks-bio-force notebooks-ree-force notebooks-cc-force \
         clean test test-release test-slow test-all test-durations book book-clean sync \
-        gui gui-build gui-test convergence
+        gui gui-build gui-test convergence ask-check
 
 all: notebooks
 
@@ -178,9 +178,15 @@ clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name ".pytest_cache" -exec rm -rf {} + 2>/dev/null || true
 
-# Build jupyter book
+# Build jupyter book. The build also writes _build/html/ask-index.json, the
+# corpus of the "Ask" docs assistant (_ext/ask_index.py, docs/ask.md).
 book:
 	$(UV_RUN_DEV) jupyter-book build .
+
+# Run the shipped ask.js against a labelled question set over the built book
+# (needs node). The deploy workflow runs the same check before publishing.
+ask-check: book
+	node tests/docs_ask/ask_retrieval.mjs _build/html/ask-index.json
 
 # Clean jupyter book build
 book-clean:

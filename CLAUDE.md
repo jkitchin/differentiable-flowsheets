@@ -28,8 +28,9 @@ make test-durations
 # Measure the recycle solver's pass rate over the hard-flowsheet corpus
 make convergence
 
-# Build documentation (Jupyter Book)
+# Build documentation (Jupyter Book); also writes the "Ask" assistant's index
 make book
+make ask-check                 # its retrieval check over the built book (node)
 
 # Execute all example notebooks
 make notebooks
@@ -78,7 +79,10 @@ difflow/
 ├── tests/                 # pytest test files (includes tests/bio/, tests/ree/, tests/cc/, tests/gas/, tests/power/, tests/refinery/)
 ├── examples/              # Jupyter notebook examples
 ├── jax-tutorials/         # JAX/autodiff tutorials
-└── docs/                  # Documentation (Markdown)
+├── docs/                  # Documentation (Markdown)
+└── _ext/                  # Sphinx extension for the book's in-browser "Ask"
+                           # assistant (BM25 over the rendered pages + optional
+                           # WebLLM); see docs/ask.md
 ```
 
 ## Key Concepts
