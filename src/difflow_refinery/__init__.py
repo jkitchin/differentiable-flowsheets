@@ -130,6 +130,7 @@ from difflow_refinery.unit import (
     CrudeUnit,
     CrudeUnitResult,
 )
+from difflow_refinery import alkylation  # noqa: E402  (#310; imports the units above)
 
 __all__ = [
     "Assay",
@@ -183,6 +184,7 @@ __all__ = [
     "Composition", "CompositionData", "CompositionRangeWarning", "CutData",
     "StreamComposition", "estimate_composition",
     "vacuum",
+    "alkylation",
     "CrackingWarning",
     "PseudoComponents",
     "StageSpec",

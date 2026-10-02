@@ -22,6 +22,7 @@ The `difflow_refinery` plugin provides:
 - **`VacuumColumn`** (`difflow_refinery.vacuum`): the vacuum unit, atmospheric residue to LVGO, HVGO, slop and vacuum residue, with contaminants carried per cut. It runs on the crude unit's own pseudo-components, so the CDU residue feeds it directly in a `Flowsheet`.
 - **Correlations** (`difflow_refinery.correlations`): Twu, Riazi-Daubert, Lee-Kesler, Kesler-Lee and Maxwell-Bonnell, each written once, for all three of the above.
 - **Product blending** (`BlendPool`, `BlendComponent`): gasoline, jet, ULSD and fuel-oil pools with the nonlinear blending rules, signed spec margins and LP back-off. A library for optimisation and planning, not a palette operation.
+- **Alkylation** (`difflow_refinery.alkylation`): C3-C5 olefins + isobutane over H2SO4 or HF, the Sauer-Colville-Burwick correlations (cross-checked against GAMS `process.gms`), shortcut DIB/depropanizer/debutanizer and the isobutane recycle as a `Flowsheet` tear; alkylate to `BlendPool`, `alky_block` for planning. See [Alkylation](#refinery-alkylation).
 
 Everything is differentiable with `jax`. A product yield, a gravity or a furnace duty has an exact gradient with respect to:
 
@@ -919,6 +920,276 @@ For products of the crude and vacuum units, use `BlendCharacterization.from_char
 - Tank inventory and multi-period scheduling. The pool is steady state, per period.
 - Crude blending ahead of the CDU (assay mixing).
 - A straight-run octane correlation from PNA. Octane is unit-reported or measured.
+
+(refinery-alkylation)=
+## Alkylation
+
+`difflow_refinery.alkylation` (#310) combines isobutane with C3-C5 olefins over sulfuric or hydrofluoric acid, settles the acid out, and fractionates the effluent: a deisobutanizer (DIB) whose overhead is the isobutane recycle, a depropanizer on a slipstream of that recycle, and a debutanizer. The products are alkylate (to `BlendPool`), propane and n-butane. It is differentiable in the isobutane/olefin ratio, reactor temperature, acid strength, space velocity and olefin feed rate and composition, through the recycle.
+
+```python
+import difflow_refinery.alkylation as al
+
+unit = al.AlkylationUnit()                      # defaults: I/O 8, 10 C, 89 wt% H2SO4
+res = unit.solve(al.c3c4_olefin_feed())         # or al.combine_feeds(fcc_c3, fcc_c4)
+res.outputs["alkylate.MON"], res.outputs["dib.reboiler"]
+alkylate = res.alkylate_component(S_ppm=5.0)    # a BlendComponent for BlendPool
+
+blk = al.alky_block(unit, feed, levers=["io_ratio", "reactor.T", "acid_strength"])
+al.solve_process_gms()                          # the Bracken-McCormick problem, profit 1161.3366
+```
+
+Like the blend pool, this is a library, not a palette operation: the plugin registers no new entry point. Tests: `tests/refinery/test_alkylation.py`. No example notebook was written (see [Alkylation: not done](#refinery-alkylation-not-done)).
+
+**The correlations are not predictive.** The yield, octane and acid correlations are regressions on one 1960s sulfuric-acid plant. The defaults are illustrative. Refit them to the unit's own data (`difflow.estimation`) before the model is used to plan.
+
+### Alkylation: the flowsheet
+
+```
+olefin feed --+
+makeup iC4 ---+--> makeup --> reactor --> DIB --+--> bottoms --> DeC4 --> alkylate
+              ^                               |  overhead          \--> n-butane
+              |                               v  (tear)
+              +----------- direct -------- splitter
+              |                               | slipstream
+              +------ DeC3 bottoms <------- DeC3 --> propane
+```
+
+A difflow `Flowsheet`. The tear is the DIB overhead (`dib_recycle`). It is solved by Anderson acceleration in a forward solve, and under `jax.grad`/`jax.jacfwd` by the flowsheet's `optimistix` fixed point, differentiated implicitly. Both default feeds converge from the default initialisation in 5-6 tear iterations. That initialisation is the isobutane the I/O ratio needs, less the feed's, plus the propane the purge will hold.
+
+- **Makeup** (`IsobutaneMakeup`) mixes the fresh feed, both recycle branches and makeup isobutane. It adds the makeup that brings the reactor feed to the specified external I/O ratio. The ratio is a spec and the makeup rate is computed.
+- **Reactor** (`AlkylationReactor`), with an ideal acid settler. The acid phase is not carried. The acid consumed is reported as an operating cost.
+- **DIB** on the reactor effluent. Isobutane and the propane go overhead, n-butane and alkylate to the bottoms.
+- **Depropanizer** on a fraction (`depropanizer_fraction`, 0.3) of the DIB overhead. It rejects propane, and its bottoms rejoin the recycle. At steady state the recycle carries `F_C3 / (fraction x recovery)` of propane.
+- **Debutanizer** on the DIB bottoms. n-butane goes overhead, alkylate to the bottoms.
+
+**Feeds.** The feed is a plain difflow stream of real species (mol/s). Any subset of `ALKYLATION_SPECIES` is accepted, with absent species counted as zero. The FCC of #308 emits its `c3` (propane, propylene) and `c4` (isobutane, n-butane, 1-butene, isobutylene, cis- and trans-2-butene) outlets in exactly these names. `al.combine_feeds(c3, c4)` makes them one feed, and a test runs the unit on that union. The two example feeds, `c3c4_olefin_feed` and `c4_olefin_feed`, have **illustrative** compositions that are not taken from a source.
+
+### Alkylation: species and properties
+
+All species are real molecules in `difflow.database`.
+
+| Role | Species |
+|---|---|
+| Olefins | propylene; 1-butene, cis-2-butene, trans-2-butene, isobutylene; 1-pentene, 2-methyl-2-butene |
+| Isoparaffin | isobutane |
+| Inerts | propane, n-butane, isopentane, n-pentane |
+| C7 alkylate (from propylene) | 2,3-dimethylpentane, 2,4-dimethylpentane |
+| C8 alkylate (from butenes) | 2,2,4-trimethylpentane, 2,3,4-trimethylpentane, 2,5-dimethylhexane |
+| C9 alkylate (from amylenes) | 2,2,5-trimethylhexane |
+| Heavy ends | a C12 lump with n-dodecane's properties |
+
+The heavy-end lump is a *property surrogate*. Dimer-alkylate heavy ends are C12 (2 C4= + iC4 → C12H26), and n-dodecane is the C12 paraffin that every property table carries. Its octane never enters the model.
+
+Added to `difflow.database` for this issue: 2,3- and 2,4-dimethylpentane, 2,2,5-trimethylhexane and n-dodecane (both tables), and ideal-gas data for 1-butene. They were obtained and checked the same way as the #305 isomers. Each value is read from the data tables of the `chemicals` package (v1.5.2) and accepted where independent tables agree. Values on which the tables disagree are marked "(unverified)" in `SOURCE_CITATIONS`:
+
+- 2,3-dimethylpentane Hf: CRC -198.7 kJ/mol, API TDB -194.1 kJ/mol.
+- 2,2,5-trimethylhexane Pc: no IUPAC value.
+- 2,2,5-trimethylhexane ω: 0.345 to 0.357.
+- n-dodecane ω: 0.562 to 0.576.
+
+What the alkylation model adds (`alkylation.species`):
+
+- **Molar mass** from the formula and the IUPAC atomic weights. The database values are rounded to 0.01 g/mol, and with them a mass balance across C5= + iC4 → C9 would close only to about 1e-5.
+- **Standard volumes at 60 °F** by COSTALD (Hankinson & Thomson 1979). The characteristic volumes `V*` and `ω_SRK` are the published fitted parameters. For 2,3,4-TMP, 2,5-DMH and 2,2,5-TMH, which have none, `V*` is fitted to the CRC density at 20 °C. Checked against GPA 2145: propane, isobutane and n-butane come out at 0.5073, 0.5625 and 0.5844 against 0.50736, 0.56293 and 0.58407, and isopentane and n-pentane agree within 0.4 %. Checked against CRC at 20 °C: within 1.5 % for every species with tabulated parameters, the worst being 2,3-DMP at 1.44 %.
+- **Liquid heats of formation**, `Hf(l) = Hf(g) - ΔHvap(298 K)`. `Hf(g)` comes from the database and ΔHvap from CRC. Checked against CRC's own liquid Hf for 1-butene, 2,3-DMP, 2,4-DMP, 2,2,4-TMP and n-dodecane: all within 0.8 kJ/mol.
+
+### Alkylation: the reactor
+
+Every olefin `C_nH_2n` reacts with isobutane by one of two routes. Both conserve C and H exactly, so mass balances by construction:
+
+| Route | Stoichiometry | Products |
+|---|---|---|
+| Alkylation | `C_nH_2n + iC4H10 → C_(n+4)H_(2n+10)` | per-olefin selectivity table (`DEFAULT_SELECTIVITY`) |
+| Heavy ends | `(8/n) C_nH_2n + iC4H10 → C12H26` | the C12 lump |
+
+Conversion is complete by default (`olefin_conversion = 1`). **The split between the routes is what the correlation sets.** The Sauer-Colville-Burwick yield `Y(r) = 1.12 + 0.13167 r - 0.00667 r²` (vol alkylate per vol olefin, `r` the external I/O ratio by 60 °F volume) peaks at `Y_max = 1.7698` at `r = 9.87`. The model reads `ε = Y(r)/Y_max` as an alkylation efficiency. For each olefin it then sends to heavy ends the fraction `h_j` that makes that olefin's volume yield `ε` times its all-alkylation yield:
+
+```
+(1 - h_j) Y_A,j + h_j Y_H,j = ε Y_A,j     =>     h_j = Y_A,j (1 - ε) / (Y_A,j - Y_H,j)
+```
+
+Here `Y_A,j` and `Y_H,j` are the stoichiometric 60 °F volume yields of the two routes. The butenes' `Y_A` are 1.73 to 1.81, within 2.5 % of `Y_max`, so on a butene feed the reactor reproduces the correlation's yield to about 1 % (tested). Propylene (1.80) and the amylenes (1.67 to 1.72) follow the correlation's *shape* about their own stoichiometric yields. **This mapping is this module's modelling choice, not part of the published correlation.** The default selectivities are illustrative too:
+
+- isobutylene and 2-butenes go mostly to TMPs;
+- 1-butene gives more 2,5-DMH;
+- propylene gives 60/40 2,3-/2,4-DMP;
+- amylenes give 2,2,5-TMH.
+
+They are not from a source.
+
+**Octane.** The motor octane number is the correlation's, plus two linear corrections:
+
+```
+MON = 86.35 + 1.098 r - 0.038 r² - 0.325 (89 - S) + c_T (T - T_ref) + c_SV (SV - SV_ref)
+```
+
+Here `S` is the acid strength (wt%), `T` the reactor temperature and `SV` the olefin space velocity. **The temperature and space-velocity terms are not in Sauer et al., and their defaults are assumptions of this module:**
+
+- `c_T = -0.1` MON/K about `T_ref = 283.15 K` (about -0.55 per 10 °F);
+- `c_SV = -2` MON per v/h/v about 0.3.
+
+Set both to zero to recover the published correlation exactly; a test checks that. RON is `MON + 2.5`. The 2.5 is the sensitivity of the illustrative alkylate in `BlendComponent`'s example (RON 96, MON 93.5), and it is unverified.
+
+**Acid.** For H2SO4, the acid consumed per bbl of alkylate is `dilute · S / (98 - S)`, with `dilute = 35.82 - 0.222 F4` and `F4 = -133 + 3 MON` (Sauer et al., as in `process.gms`). A temperature rise therefore raises acid consumption through the octane. HF has no open correlation. `acid="HF"` requires `hf_acid_lb_per_bbl` from the unit's data and raises without it. It uses the H2SO4 yield and octane correlations as they stand.
+
+**Heat.** The heat of alkylation comes from Hess's law on the liquid heats of formation at 298.15 K. The temperature dependence of the heat of reaction between 298 K and the reactor is neglected. Values:
+
+- isobutylene + iC4 → 2,2,4-TMP: -67.9 kJ/mol olefin;
+- trans-2-butene: -71.5 kJ/mol;
+- propylene: -86.3 kJ/mol.
+
+The refrigeration duty is that heat plus the sensible heat of cooling the reactor feed to `T` (Peng-Robinson liquid enthalpy, `CubicThermo`, kij = 0). It is also reported as the isobutane vaporised to remove it (Watson's latent heat from the CRC value at Tb).
+
+**Range.** `process.gms` bounds the regression variables to where the plant ran: `r` in [3, 12], `S` in [85, 93], MON in [90, 95]. Outside them the reactor raises `AlkylationRangeWarning`. The yield quadratic, for one, falls again above `r = 9.87`.
+
+### Alkylation: fractionation
+
+`#312`'s gas-plant cubic-EOS stage columns do not exist. All three columns are Fenske-Underwood-Gilliland **shortcut columns** (`KeySplitColumn`), each specified by its two key recoveries and its reflux ratio:
+
+| Step | Equation | Source |
+|---|---|---|
+| Volatility | `α_i = Psat_i(T_col)/Psat_HK(T_col)`, Raoult, Lee-Kesler `Psat` from the database (Tc, Pc, ω); `T_col` where `Psat_LK Psat_HK = P²` | Lee & Kesler (1975) |
+| Non-key split | `log(d_i/b_i) = A + C log α_i`, `A = log(d_HK/b_HK)`, `C = [log(d_LK/b_LK) - A]/log α_LK`; fraction overhead `sigmoid(A + C log α_i)` | Geddes (1958); Hengstebeck (1961) |
+| Minimum stages | `N_min = log[(d/b)_LK (b/d)_HK]/log α_LK` | Fenske (1932) |
+| Minimum reflux | `Σ α_i z_i/(α_i - θ) = 0` (q = 1), root just above the heavy key; `R_min + 1 = Σ α_i x_D,i/(α_i - θ)` | Underwood (1948) |
+| Stages | `Y = 1 - exp[(1 + 54.4X)/(11 + 117.2X)·(X - 1)/√X]` | Gilliland (1940), Molokanov et al. (1972) form |
+| Duties | CMO, saturated-liquid feed and products: `V = (R+1)D`; condenser `V·Σ x_D λ(T_top)`, reboiler `V·Σ x_B λ(T_bot)`; `T_top`, `T_bot` the Raoult bubble points of the products; λ by Watson from CRC ΔHvap(298 K) | Watson (1943) |
+
+The only inner solves are two fixed-length bisections, each followed by one Newton step that attaches the implicit-function gradient. Column-level AD matches central differences to 1e-5 relative (tested).
+
+| Column | Keys | Recoveries (LK up / HK down) | R | P (bar) | On the C3/C4 feed: N_min, R_min, N |
+|---|---|---|---|---|---|
+| Depropanizer | propane / isobutane | 0.95 / 0.99 | 40 | 17 | 8.8, 8.4, 9.9 |
+| DIB | isobutane / n-butane | 0.97 / 0.85 | 2.5 | 7 | 16.6, 2.03, 35.6 |
+| Debutanizer | n-butane / isopentane | 0.95 / 0.90 | 1.5 | 5 | 6.2, 0.53, 9.5 |
+
+These defaults are illustrative design choices, made so that the reflux is above the Underwood minimum on both example feeds. On the C4-only feed the depropanizer's R_min is 34, because the slipstream is lean in propane. `columns_feasible` reports `R > R_min` for every column.
+
+**Two things found on the way.**
+
+1. **difflow's `ShortcutColumn` has a sign error in its Hengstebeck-Geddes constants.** It uses `A = log(d_LK/b_LK) - log(d_HK/b_HK)` and `C = log(d_LK/b_LK)/log α_LK`. That does not reproduce the heavy key's own split, and on a propane/isobutane depropanizer it sent 99.9 % of the n-butane overhead. `GeddesShortcutColumn` overrides only that method. The shared class was left unchanged; it is reported for a separate fix.
+2. **`ShortcutColumn` with Peng-Robinson is too expensive to differentiate through the recycle.** Three of them, each with nested Newton bubble-point solves inside the tear's implicit fixed point, exhausted this machine's memory. They remain available for forward cross-checks as `AlkylationUnitParams(fractionation="pr_shortcut")`.
+
+Measured on the C3/C4 feed against `pr_shortcut` with the same specs (`test_peng_robinson_shortcut_cross_check`):
+
+- product flows and the alkylate RVP agree to 0.2 %;
+- condenser duties agree to 1 %;
+- reboiler duties differ by up to 20 % (the DIB's: 33.6 MW CMO against 26.8 MW by the PR energy balance), because the CMO duty uses the bottoms' latent heat and neglects sensible heat;
+- `R_min` and `N_min` differ by up to a factor of two between Raoult/Lee-Kesler and PR volatilities.
+
+**Treat the reboiler duties as order-of-magnitude** until #312's rigorous columns exist.
+
+### Alkylation: specs and outputs
+
+| Degree of freedom | Where | Default |
+|---|---|---|
+| External I/O ratio (sets makeup, hence recycle) | `makeup.io_ratio` | 8 |
+| Reactor temperature | `reactor.T` | 283.15 K |
+| Acid strength | `reactor.acid_strength` | 89 wt% |
+| Olefin space velocity | `reactor.space_velocity` | 0.3 1/h |
+| Olefin feed rate and composition | the feed stream | |
+| Key recoveries and reflux of each column | `deisobutanizer`, `depropanizer`, `debutanizer` | table above |
+| Depropanizer slipstream | `depropanizer_fraction` | 0.3 |
+
+The debutanizer is specified by its n-butane recovery, not by the alkylate RVP. RVP is an output, and an RVP target is a row on `alkylate.RVP_psi` (the same argument as `cdu_block`'s for cut points). The issue's other suggested specs are not implemented as specs: DIB overhead purity and acid/hydrocarbon ratio.
+
+Outputs (`OUTPUT_UNITS`), from the two default feeds at the default specs:
+
+| Output | Units | C4 feed | C3/C4 feed |
+|---|---|---|---|
+| `olefin.bpd` | bbl/d | 2709 | 2921 |
+| `alkylate.bpd` | bbl/d | 4840 | 5234 |
+| `alkylate.yield` (debutanized alkylate per vol olefin, incl. feed C5s) | - | 1.787 | 1.792 |
+| `alkylate.yield_correlation` | - | 1.746 | 1.746 |
+| `alkylate.MON` / `RON` | - | 92.7 / 95.2 | 92.7 / 95.2 |
+| `alkylate.SG` | - | 0.704 | 0.700 |
+| `alkylate.RVP_psi` (Raoult, D323 bomb, Lee-Kesler Psat) | psi | 2.39 | 2.66 |
+| `alkylate.T10/50/90_tbp` | °C | 92 / 106 / 120 | 79 / 99 / 120 |
+| `isobutane.consumed_bpd` / `makeup_bpd` / `recycle_bpd` | bbl/d | 2969 / 1730 / 18 140 | 3356 / 2778 / 19 410 |
+| `propane.bpd`, `n_butane.bpd` | bbl/d | 102, 1083 | 437, 968 |
+| `acid.lb_per_bbl`, `acid.klb_d` | lb/bbl, 1000 lb/d | 35.7, 173 | 35.7, 187 |
+| `reactor.heat`, `refrigeration.duty` | MW | 4.0, 7.0 | 4.8, 8.0 |
+| `dib.reboiler`, `dib.condenser` | MW | 29.9, 20.0 | 33.6, 22.8 |
+| `dec3.*`, `dec4.*` reboiler/condenser | MW | 1.1/1.1, 1.3/0.9 | 5.0/4.8, 1.2/0.8 |
+
+D86 points (`T10/50/90_d86`) come from the TBP points by Riazi-Daubert. That correlation was fitted on petroleum fractions. On this narrow-boiling alkylate it gives a D86 T10 above T50 (111 against 106 °C on the C4 feed), so read the TBP points. The alkylate here has no C5-C7 light ends from cracking or hydrogen transfer, which a real alkylate has, so its front end is too heavy.
+
+**Trends** (tested, C4 feed):
+
+- MON rises with I/O and falls with temperature;
+- DIB duty rises with I/O;
+- acid consumption falls with I/O.
+
+**Gradients** (tested): the implicit gradients of alkylate yield, MON and DIB reboiler duty with respect to I/O ratio, temperature and acid strength, taken by `jax.jacfwd` through the recycle, match central differences to 1e-5 relative. At the C4 base point:
+
+| Output | d/d(I/O) | d/dT (per K) | d/dS (per wt%) |
+|---|---|---|---|
+| Yield | 0.0250 | 0 | 0 |
+| MON | 0.490 | -0.1 | 0.325 |
+| DIB reboiler | 3.65 MW | 0 | 0 |
+
+The zeros are structural: in the correlations neither yield nor flows depend on T or S.
+
+### Alkylation: the correlation layer, cross-checked against process.gms
+
+`alkylation.correlations` transcribes the Sauer-Colville-Burwick regressions from the GAMS model `process.gms`. The source was read from GAMS's own GAMSPy translation (`GAMS-dev/gamspy-examples`, `models/process/process.py`; gams.com itself was not reachable). Every coefficient, bound, price and starting level is pinned in the tests. `ratio` is labelled "isobutane makeup to olefin ratio" in `process.gms`, but it is *defined* as `(isor + isom)/olefin`, the external I/O ratio.
+
+`solve_process_gms()` solves the problem with difflow's own gradient-based solver: the JAX primal-dual interior-point method of `difflow_power.ipm`, with exact Hessians, on scaled variables, from `process.gms`'s starting point.
+
+| Model | Published | difflow | Notes |
+|---|---|---|---|
+| `process` (regressions exact) | 1161.33660200 (MINLPLib primal bound for instance `process`, minimisation sign) | **1161.336602**, converged in 10 iterations, residual < 1e-9 | reproduced to the digits given; olefin 1728.92, isor 16000 (bound), isom 2000 (bound), acid 98.161, alkylate 3056.49, strength 90.616, octane 94.188, ratio 10.411, dilute 2.617, f4 149.563 |
+| `rproc` (each regression ±10 %) | none found | 2410.83 | not checked against a published number |
+
+The MINLPLib value was read from a search-engine summary of minlplib.org, which itself was not reachable. The 1968 book was not opened.
+
+### Alkylation: planning
+
+`alky_block(unit, feed, levers, outputs)` is a `difflow.planning.Block`, like `cdu_block`. It has these levers:
+
+- `io_ratio`;
+- `reactor.T` (°C);
+- `acid_strength` (wt%);
+- `space_velocity` (1/h);
+- `olefin.bpd`, the feed rate with composition held.
+
+Any `OUTPUT_UNITS` name can be an output. The `alkylate.bpd`, `alkylate.RON`, `alkylate.MON` and `alkylate.RVP_psi` outputs link to a blend-pool component, and `result.alkylate_component()` gives the same properties as a `BlendComponent`. `jit=False` is the default: compiling the traced recycle takes minutes. A forward evaluation is about 20 s eager, and a 3-lever Jacobian by `jacfwd` about 35 s.
+
+(refinery-alkylation-not-done)=
+### Alkylation: not done, and why
+
+- **Rigorous fractionation (#312).** The issue's columns do not exist, and shortcut columns stand in (above). The reboiler duties are uncertain to about 20 %.
+- **Kinetic option.** The carbocation schemes of Langley & Pike (1972) and Lee & Harriott (1977) are not implemented. The issue lists them as non-default; the papers were not available to transcribe.
+- **Per-olefin yields, isobutane consumption and octanes from Gary, Handwerk & Kaiser.** The table could not be consulted. The per-olefin selectivities and the octane corrections are labelled illustrative instead.
+- **Pure-component octanes (API RP 45).** Not used. The alkylate octane is the correlation's.
+- **Example notebook** (FCC LPG → alkylation → gasoline pool). Not written. A forward solve takes about 20 s, plus a minute of compilation on first use.
+- **HF acid consumption, ASO make, and selectivity against mixing.** There is no open model (class (d)). The HF figure is a required input.
+- Out of scope per the issue: acid regeneration, HF mitigation, solid-acid and ionic-liquid alkylation, contactor hydrodynamics, dynamics.
+
+### Alkylation: references
+
+| What | Source | Checked |
+|---|---|---|
+| Yield, MON, F-4, dilution, acid and makeup equations and coefficients; bounds; prices | GAMS Model Library `process.gms` (SEQ=20), "Alkylation Process Optimization", read via GAMS's GAMSPy translation `GAMS-dev/gamspy-examples/models/process/process.py` | transcribed and pinned in tests; optimum reproduced |
+| The correlations' origin | Sauer, R.N., Colville, A.R., Burwick, C.W., "Computer points the way to more profits", *Hydrocarbon Processing* 43(3), 84 (1964) | **unverified**: not opened; volume, issue and page as given in the issue |
+| Their restatement as an NLP | Bracken, J., McCormick, G.P., *Selected Applications of Nonlinear Programming*, Wiley, New York (1968), Ch. 4 | as cited by `process.gms`; book not opened |
+| Reference optimum 1161.33660200 | MINLPLib, instance `process` (primal bound) | **from a search summary**; minlplib.org not reachable |
+| Mechanistic kinetics (not implemented) | Langley, J.R., Pike, R.W., "The kinetics of alkylation of isobutane with propylene", *AIChE J.* 18(4), 698-705 (1972); Lee, L.M., Harriott, P., "The kinetics of isobutane alkylation in sulfuric acid", *Ind. Eng. Chem. Process Des. Dev.* 16(3), 282-287 (1977) | journal, volume, issue and pages confirmed by web search; DOIs not confirmed and so not given |
+| COSTALD liquid volume | Hankinson, R.W., Thomson, G.H., "A new correlation for saturated densities of liquids and their mixtures", *AIChE J.* 25(4), 653-663 (1979), doi:10.1002/aic.690250412 | citation confirmed by web search; coefficients checked against the `chemicals` implementation and its API Technical Data Book propane example (530.30 kg/m³, reproduced to 1e-12) |
+| COSTALD parameters V*, ω_SRK | Hankinson & Thomson (1979), as tabulated in `chemicals` 1.5.2 "COSTALD Parameters.tsv" | table number unverified; validated against GPA 2145 SGs (below) |
+| Standard SGs of light ends (check) | GPA 2145, as in `difflow_refinery.assay.LIGHT_END_SG` | edition as in that module |
+| Tb, ΔHvap(298 K), ΔHvap(Tb); liquid Hf and 20 °C densities (checks) | CRC Handbook of Chemistry and Physics, tables "Enthalpy of Vaporization", "Standard Thermodynamic Properties of Chemical Substances", "Physical Constants of Organic Compounds", as transcribed in `chemicals` 1.5.2 | edition unverified |
+| Isobutylene ΔHvap | Perry's Chemical Engineers' Handbook, Table 2-150 (C1 = 32614 J/mol, C2 = 0.38073) | edition unverified |
+| Gas Hf (check) | API Technical Data Book (Albahri), as in `chemicals` 1.5.2 "API TDB Albahri Hf (g).tsv"; ATcT 1.112 for 1-butene | all within 1.5 kJ/mol except 2,3-DMP (flagged) |
+| New database species (Tc, Pc, ω, Cp, Antoine, ΔHvap, Hf) | as for the #305 isomers: IUPAC critical reviews / PPO 5e App. A, TRC Cp fits, PPO Antoine, CRC; see `difflow.database.SOURCE_CITATIONS` | Cp(298) against the Poling databank to 1.5 %, Antoine Tb to 2 %, Lee-Kesler Psat(Tb) to 6 %, all tested |
+| Lee-Kesler vapour pressure | Lee, B.I., Kesler, M.G., *AIChE J.* 21(3), 510 (1975) (`difflow_refinery.correlations.vapor_pressure`) | as in that module |
+| Watson latent heat | Watson, K.M., *Ind. Eng. Chem.* 35, 398 (1943) | as commonly cited; not opened |
+| Fenske, Underwood, Gilliland/Molokanov, Geddes, Hengstebeck | Fenske, *Ind. Eng. Chem.* 24, 482 (1932); Underwood, *Chem. Eng. Prog.* 44, 603 (1948); Gilliland, *Ind. Eng. Chem.* 32, 1220 (1940); Molokanov et al., *Int. Chem. Eng.* 12, 209 (1972); Geddes, *AIChE J.* 4, 389 (1958); Hengstebeck, *Distillation*, Reinhold (1961) | as commonly cited; not opened; equations checked by their defining properties in the tests |
+| Reid vapour pressure | `difflow_refinery.blending.raoult_rvp` (ASTM D323 bomb, V/L = 4, 100 °F) | as in that module |
+| TBP → D86 | Riazi & Daubert (1986), `difflow_refinery.blending.TBP_D86` | as in that module |
+| Temperature and space-velocity octane terms; per-olefin selectivities; RON - MON = 2.5; example feeds; column specs | **assumptions of this module, not from a source** | - |
+
+---
 
 (refinery-validation)=
 ## Validation

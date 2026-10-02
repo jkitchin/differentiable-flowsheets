@@ -24,10 +24,11 @@ olefin's volume yield ``eps`` times its all-alkylation yield::
     =>  h_j = Y_A,j (1 - eps) / (Y_A,j - Y_H,j)
 
 with ``Y_A,j``/``Y_H,j`` the stoichiometric volume yields of the two routes
-at 60 F (COSTALD volumes). For butenes ``Y_A`` is 1.78, within 1 % of
-``Y_max`` = 1.770, so on a butene feed the reactor reproduces the
-correlation's yield curve almost exactly; propylene and amylenes follow its
-*shape* about their own stoichiometric yields. This mapping is a modelling
+at 60 F (COSTALD volumes). For the butenes ``Y_A`` is 1.73-1.81
+(trans-2-butene 1.76), within 2.5 % of ``Y_max`` = 1.770, so on a butene
+feed the reactor reproduces the correlation's yield to about 1 %; propylene
+(``Y_A`` 1.80) and the amylenes (1.67-1.72) follow its *shape* about their
+own stoichiometric yields. This mapping is a modelling
 choice of this module, not part of the published correlation.
 
 The alkylate's motor octane is the correlation's

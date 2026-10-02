@@ -469,3 +469,34 @@ class TestGradients:
         # (yield and DIB duty do not depend on T or acid strength) to round-off
         assert np.all(np.abs(J - fd) <= 1e-5 * np.abs(fd) + 1e-9 * y0), (J, fd)
         assert J[1, 0] > 0 and J[1, 1] < 0 and J[2, 0] > 0
+
+
+def test_alky_block_builds():
+    unit = al.AlkylationUnit()
+    blk = al.alky_block(unit, al.c4_olefin_feed(), levers=["io_ratio", "reactor.T", "olefin.bpd"],
+                        bounds={"io_ratio": (6.0, 10.0)})
+    assert blk.u_names == ["io_ratio", "reactor.T", "olefin.bpd"]
+    assert blk.u0[0] == 8.0 and blk.u0[1] == pytest.approx(10.0)
+    assert float(blk.lb[0]) == 6.0 and float(blk.ub[0]) == 10.0
+    assert blk.metadata["y_units"]["dib.reboiler"] == "MW"
+    with pytest.raises(KeyError):
+        al.alky_block(unit, al.c4_olefin_feed(), levers=["nonsense"])
+
+
+@pytest.mark.slow
+def test_peng_robinson_shortcut_cross_check():
+    """The default columns against difflow's Peng-Robinson ShortcutColumn, same specs.
+
+    Measured on the C3/C4 feed: product flows and every condenser duty agree
+    to < 1 % (the splits are set by the same recoveries); the reboiler
+    duties do not -- the DIB's is 20 % above the PR energy balance, because
+    the CMO duty charges the boil-up at the bottoms' latent heat and neglects
+    sensible heat. Asserted at those measured levels, so a drift shows.
+    """
+    feed = al.c3c4_olefin_feed()
+    a = al.AlkylationUnit().solve(feed).outputs
+    b = al.AlkylationUnit(al.AlkylationUnitParams(fractionation="pr_shortcut")).solve(feed).outputs
+    for k in ("alkylate.bpd", "propane.bpd", "n_butane.bpd", "isobutane.recycle_bpd",
+              "alkylate.RVP_psi", "dec3.condenser", "dib.condenser", "dec4.condenser"):
+        assert float(a[k]) == pytest.approx(float(b[k]), rel=0.01), k
+    assert float(a["dib.reboiler"]) == pytest.approx(float(b["dib.reboiler"]), rel=0.25)
