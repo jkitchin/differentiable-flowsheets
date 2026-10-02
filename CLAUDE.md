@@ -74,7 +74,8 @@ difflow/
 │   ├── difflow_cc/        # Carbon capture plugin (amine, membrane, adsorption)
 │   ├── difflow_gas/       # Gas transmission network plugin (pipes, compressors, computed decomposition)
 │   └── difflow_refinery/  # Refinery plugin (crude assay, crude and vacuum distillation units, saturated gas plant, product blending pool,
-│                          # hydroprocessing/ building blocks + hydrotreating/, hydrocracking/, fcc/, reforming/, alkylation/ units)
+│                          # hydroprocessing/ building blocks + hydrotreating/, hydrocracking/, fcc/, reforming/, alkylation/ units,
+│                          # hydrogen/ header network)
 ├── tests/                 # pytest test files (includes tests/bio/, tests/ree/, tests/cc/, tests/gas/, tests/power/, tests/refinery/)
 ├── examples/              # Jupyter notebook examples
 ├── jax-tutorials/         # JAX/autodiff tutorials
@@ -607,6 +608,32 @@ Invariants (do not weaken them):
 - Recycle at fixed catalyst and T LOWERS per-pass conversion (a recycle
   reactor is less efficient than plug flow); what it buys is selectivity.
 - Full-unit tests compile 2-6 min each: slow.
+### The Hydrogen Network (`difflow_refinery.hydrogen`, #329)
+
+`HydrogenNetwork(producers, consumers, headers).solve()` -> `H2NetworkResult`
+(`outputs["h2.surplus"]`, `<consumer>.purity`, `<consumer>.purity_margin`,
+`balances`, `makeup_composition(c, gases)`). `Producer.from_reformer(res)` /
+`.of_purity`, `Consumer.from_hydrotreater(name, res, params)`, `PSA(recovery,
+purity, target_purity=)`, swing `Import`/`H2Plant` (filled in order, capped),
+`Header(min_purge=, purge_to="fuel"|"export")`. `close_hydrotreater_loop(net,
+{c: (Hydrotreater, feed, params)})` feeds the header composition into
+`HydrotreaterParams.makeup` by substitution on purity; `h2_block` for planning.
+A library, not a palette operation.
+- Every consumer on a header gets the header's purity; a consumer's demand is
+  its makeup H2 FLOW (`h2.makeup`), the impurities ride along at `d/y`.
+- The purge is by difference, so total/H2/mass balances close by
+  construction; `balances["makeup_h2"]` is the independent check. A deficit
+  is returned as a negative surplus, never clipped (`feasible` says so).
+- `HydrotreaterParams.makeup` is concrete (`makeup_vector` calls `float()`):
+  the loop is Python, and the returned network carries each unit's purity
+  response as a LINEAR secant (`d_demand_d_purity`). Reformer gradients go
+  through it in forward mode (`jax.jacfwd`).
+- `min_pH2` is the MAKEUP's `y P`, not the reactor-inlet pH2 (that is the
+  HDT's `reactor.pH2_in`). PSA defaults are illustrative.
+
+Docs: `docs/unit-operations-refinery.md` ("The hydrogen network"). Tests:
+`tests/refinery/test_hydrogen.py`, `tests/refinery/test_hydrogen_loop.py` (slow).
+
 ### Crude Preheat Train (`difflow_refinery.preheat`)
 
 `PreheatedCrudeUnit(assay, column, train)` puts a heat-exchanger train,

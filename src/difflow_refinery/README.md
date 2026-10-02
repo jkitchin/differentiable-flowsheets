@@ -51,6 +51,7 @@ still differentiable, with no palette entry.
 | Fluid catalytic cracker | `fcc` | `FCCUnit` | library | VGO → dry gas, C3, C4, gasoline, LCO, slurry, flue gas |
 | Catalytic reformer | `reforming` | `CatalyticReformer` | library | heavy naphtha → reformate, net H2, LPG, fuel gas |
 | Alkylation | `alkylation` | `AlkylationUnit` | library | C3-C5 olefins + isobutane → alkylate, propane, n-butane |
+| Hydrogen network | `hydrogen` | `HydrogenNetwork` | library | reformer net gas, H2 plant, import → hydrotreater / hydrocracker makeup at the header purity, fuel gas, export |
 
 ### Products
 
@@ -69,7 +70,7 @@ still differentiable, with no palette entry.
 | Stage-network column | `vacuum` | `StageColumn`, under the VDU, the gas plant and the hydrotreater's stripper |
 | Hydroprocessing blocks | `hydroprocessing` | trickle-bed reactor, PR high-pressure separator, recycle-gas loop, stripper |
 | Product properties | `products` | `product_properties`: yields, SG/API, TBP points |
-| Planning blocks | `planning`, and each unit's package or its `planning` submodule (e.g. `hydrotreating.planning.hdt_block`) | `cdu_block`, `gasplant_block`, `isom_block`, `hdt_block`, `hcu_block`, `fcc_block`, `reformer_block`, `alky_block`, `product_value_block`, for `difflow.planning` |
+| Planning blocks | `planning`, and each unit's package or its `planning` submodule (e.g. `hydrotreating.planning.hdt_block`) | `cdu_block`, `gasplant_block`, `isom_block`, `hdt_block`, `hcu_block`, `fcc_block`, `reformer_block`, `alky_block`, `h2_block`, `product_value_block`, for `difflow.planning` |
 
 ## How far to trust it
 
