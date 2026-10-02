@@ -29,6 +29,7 @@ The `difflow_refinery` plugin provides:
 - **Hydroprocessing building blocks** (`difflow_refinery.hydroprocessing`) and the **hydrotreater** (`difflow_refinery.hydrotreating`): a trickle-bed reactor around any kinetic model, a Peng-Robinson HP separator, the recycle-gas loop and a steam stripper; HDS by sulfur class, HDN and aromatics saturation on the #305 composition. A library, not a palette operation. See [Hydroprocessing](#refinery-hydroprocessing) and [The hydrotreater](#refinery-hydrotreater).
 - **Alkylation** (`difflow_refinery.alkylation`): C3-C5 olefins + isobutane over H2SO4 or HF, the Sauer-Colville-Burwick correlations (cross-checked against GAMS `process.gms`), shortcut DIB/depropanizer/debutanizer and the isobutane recycle as a `Flowsheet` tear; alkylate to `BlendPool`, `alky_block` for planning. See [Alkylation](#refinery-alkylation).
 - **The VGO hydrocracker** (`difflow_refinery.hydrocracking`): the same building blocks with a pretreat bed (the hydrotreating kinetics, VGO constants), a cracking bed on continuous lumping over the pseudo-component grid (Laxminarasimhan et al. 1996, or discrete lumps) with organic-N inhibition, a simplified fractionator and a UCO recycle tear. A library, not a palette operation; its cracking constants are illustrative. See [The hydrocracker](#refinery-hydrocracker).
+- **The hydrogen network** (`difflow_refinery.hydrogen`): producers (the reformer's net gas, an H2 plant, imports), consumers (hydrotreater and hydrocracker makeup with a purity or partial-pressure spec), an optional PSA, purge to fuel gas and export, on one or more headers; returns the balanced header and each consumer's makeup purity, feeds it back into the hydrotreaters (`close_hydrotreater_loop`), and `h2_block` for planning. A library. See [The hydrogen network](#refinery-hydrogen).
 
 Everything is differentiable with `jax`. A product yield, a gravity or a furnace duty has an exact gradient with respect to:
 
@@ -2631,6 +2632,158 @@ Compiling a once-through unit takes about 2.5 min and a solve about 7--9 s (the 
 - **Deactivation** is the `activity` multiplier of either catalyst, a differentiable parameter that `difflow.reconciliation.tracking` can track; not wired up or demonstrated.
 - **Not a difflow `Flowsheet` object**: both tears are the unit's own.
 - Out of scope (as the issue says): residue hydrocracking, hydrogen-network optimisation, cycle-length optimisation, dynamics; two-stage units are not built (the pieces would compose).
+
+---
+
+(refinery-hydrogen)=
+## The hydrogen network
+
+`difflow_refinery.hydrogen` (#329) balances the refinery's hydrogen: the
+reformer's net gas, a hydrogen plant and imports on one side, the
+hydrotreaters' and hydrocracker's makeup on the other, through one or more
+headers, with an optional PSA, purge to fuel gas, and export. It returns the
+balanced header and the purity each consumer receives, and
+`close_hydrotreater_loop` feeds that purity back into the hydrotreaters. A
+library, not a palette operation.
+
+```python
+import difflow_refinery.hydrogen as h2
+
+net = h2.HydrogenNetwork(
+    producers=[h2.Producer.from_reformer(ref)],              # the reformer's net gas, as it is
+    consumers=[h2.Consumer("nht", 20.0, P=60e5, min_purity=0.85),
+               h2.Consumer("dht", 40.0, P=60e5, min_pH2=50e5)],
+    headers=[h2.Header("main", P=20e5, min_purge=1.0,
+                       psa=None,                             # or h2.PSA(recovery=0.88, purity=0.999)
+                       swing=[h2.Import(purity=0.999)])])     # fills a deficit
+res = net.solve()
+res.outputs["h2.surplus"], res.outputs["nht.purity"], res.balances
+
+# feed the purity back into the hydrotreaters (substitution on the purity)
+loop = h2.close_hydrotreater_loop(net, {"nht": (nht, nht_feed, nht_params),
+                                        "dht": (dht, dht_feed, dht_params)})
+loop.header.outputs["h2.surplus"], loop.params["nht"].makeup, loop.units["nht"].outputs["reactor.pH2_in"]
+```
+
+### Hydrogen network: model
+
+Every stream is a vector of molar flows on `HEADER_GASES` (hydrogen,
+methane to n-pentane, and n-hexane for anything heavier, on the
+hydroprocessing gas names).
+
+- **Producers** (`Producer`) have a fixed flow and composition:
+  `Producer.from_reformer(result)` (the reformer's `net_gas`; C6+ traces
+  lumped into n-hexane on a mole basis, so H2 and total moles are
+  conserved), `Producer.of_purity(name, h2, purity, impurity=...)`, or
+  `Producer.from_flows(name, {gas: mol/s})`. A share `to_psa` of each can
+  go through the header's PSA.
+- **PSA** (`PSA(recovery, purity)`): product H2 = `R s E_H2`; product
+  impurities `R s E_H2 (1 - y_P)/y_P`, split like the feed's; tail gas the
+  rest, to fuel gas. `s = 1`, or with `target_purity` the share for which the
+  header purity equals the target, which is linear in `s`:
+  `s = (y* B - A) / (E_H2 (R - 1) - y* (R E_H2/y_P - E))`, clipped to
+  `[0, 1]` (`<h>.psa.target_error` is nonzero when the PSA cannot make the
+  target). Impurities slip in the feed's proportions; there is no
+  multicomponent adsorption model.
+- **Swing sources** (`Import`, `H2Plant`) fill the deficit
+  `need = sum_j d_j + min_purge - S_H2`, in order, each `clip(need, 0,
+  capacity)`.
+- **Consumers** (`Consumer`) take a makeup H2 flow `d_j` (the
+  `Hydrotreater`'s `h2.makeup` output: chemical consumption, solution loss
+  and the purge's H2) at the header's composition, so their total makeup is
+  `d_j / y`. `Consumer.from_hydrotreater(name, result, params)` reads it. A
+  demand may respond linearly to purity,
+  `d_j(y) = d_j0 + (dd_j/dy)(y - y_ref)`; then the header purity is the
+  fixed point of `y -> purity(d(y))` (30 iterations, residual reported as
+  `<h>.loop_residual`).
+- **Purge** is what is left, `G - sum_j M_j`, to fuel or (`purge_to="export"`)
+  export. Its H2 is the **surplus**; a negative surplus is a deficit the
+  swing could not cover. It is returned, not hidden, and
+  `res.feasible["<h>.balanced"]` is `False`.
+
+Consumers on one header all receive the header's purity. Consumers that
+need different purities go on different headers (a header per pressure
+level, say); a cascade from one header's purge into another is not built.
+
+**Specs.** `min_purity` is on the makeup's H2 mole fraction;
+`min_pH2` on its H2 partial pressure at the consumer's makeup pressure,
+`y P`. Both report as `<c>.purity_margin` (mole fraction). Neither is the
+reactor-inlet H2 partial pressure: that also depends on the unit's recycle
+purity and is the `Hydrotreater`'s `reactor.pH2_in` output, which the
+closed loop gives.
+
+**Balances.** `res.balances` closes the network over producers + swing
+against makeups + fuel gas + export, in total moles, H2 and mass, and checks
+each consumer's makeup H2 against its demand. The purge is computed by
+difference, so the first three close by construction (to round-off,
+tested); the last is an independent check of the makeup bookkeeping.
+
+### Hydrogen network: closing the loop on the hydrotreaters
+
+`close_hydrotreater_loop(network, {consumer: (Hydrotreater, feed, params)})`
+substitutes on the purity: balance the network; solve every hydrotreater
+with `HydrotreaterParams.makeup` set to its header's composition (folded
+onto the unit's gases by `fold_composition`, which moves a heavier gas into
+the nearest lighter one so the purity is unchanged); put each `h2.makeup`
+back on its consumer, with a secant `d_demand_d_purity` once two passes at
+different purities exist; re-balance; stop when no purity moves by more than
+`tol`. With purge as the only swing the purity does not depend on the
+demands and one pass closes it; with an import or H2 plant as the swing,
+the demands move the purity and a few more passes follow, each a re-solve
+of a compiled unit.
+
+**AD mode.** The loop is concrete Python: `HydrotreaterParams.makeup` is a
+dict that `makeup_vector` reads with `float()`, so the makeup composition is
+not a traced input of `Hydrotreater.solve`. The returned `loop.network`
+carries each unit's purity response as the LINEAR model above (a delta
+vector), so `loop.network.solve()` is differentiable in either mode with the
+units' response to first order. The reformer is differentiated in forward
+mode (`jax.jacfwd`; its beds are `diffrax.ForwardMode`): rebuild the producer
+inside the function, `loop.network.replace(producers=[Producer.from_reformer(r)])`.
+`response_step=` gets each slope from one extra solve when the loop itself
+did not produce two purities.
+
+### Hydrogen network: planning
+
+`h2_block(network, levers, outputs)` wraps a network for `difflow.planning`.
+Levers: `<producer>.h2` (mol/s), `<producer>.purity` (mol%),
+`<consumer>.makeup` (Nm3/h), `<header>.min_purge` (mol/s),
+`<header>.psa.recovery`. The units match `reformer_block`'s `h2.net_mol_s`
+and `h2.purity` and `hdt_block`'s `h2.makeup`, so `link_reformer()` and
+`link_hdt("nht")` give one-to-one links. Outputs are any network outputs
+(default: surplus, purities and margins, fuel gas, swing H2). A planning
+producer keeps the base impurity mix and moves only its H2 and purity.
+
+### Hydrogen network: what is tested, and what is not
+
+Per commit (`tests/refinery/test_hydrogen.py`, a few seconds): the
+balances close to 1e-12 on every configuration (two producers, PSA,
+purity target, ordered swing with capacity, deficit, two headers with
+export, purity response); the PSA split, its target, and its failure to
+reach an impossible one; the specs; the species mapping from the reformer;
+`jit`, reverse and forward mode agree; `h2_block` reproduces the network.
+Release: the network's Jacobian against central differences.
+Slow (`tests/refinery/test_hydrogen_loop.py`): the acceptance case, the
+reformer's net gas through an import-swing header into a kerosene and a
+diesel hydrotreater with the makeup purity fed back, closing to `1e-7` in
+purity with every unit solved at the purity the header delivers it; and
+(release) d(surplus)/d(WAIT) through the reformer and the closed network
+against central differences.
+
+Not done: compression power and header pressure drop (supply pressures are
+only checked to be at least the header's, `res.feasible["<h>.pressure"]`);
+a cascade of one header's purge into another; consumer purges routed back
+to the header (they can be added as a `Producer.from_flows` and closed by
+the same substitution); a hydrogen-pinch targeting or a network
+superstructure optimisation; the HDT's traced makeup composition (see AD mode).
+
+### Hydrogen network: references
+
+| What | Source | Status |
+|---|---|---|
+| Source-sink hydrogen network with purifier and purge to fuel (background) | Alves, J.J., Towler, G.P., "Analysis of refinery hydrogen distribution systems", *Ind. Eng. Chem. Res.* 41(23), 5759-5769 (2002) | Not consulted (unverified); the superstructure is the usual one and no number of the paper is used or reproduced. |
+| PSA recovery 0.88, product 99.9 mol% | none | Illustrative defaults, inside the range usually quoted for refinery PSA units (unverified). Set them from the unit's data. |
+| Nm3 at 0 C, 1 atm | `MOL_PER_NM3 = 101325/(R 273.15)` | As in the hydroprocessing blocks. |
 
 ---
 

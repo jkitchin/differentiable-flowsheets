@@ -171,6 +171,7 @@ from difflow_refinery import fcc  # fluid catalytic cracker (#308); a library, n
 from difflow_refinery import alkylation  # noqa: E402  (#310; imports the units above)
 from difflow_refinery import hydrocracking  # VGO hydrocracker (#307); a library, not registered
 from difflow_refinery import properties  # noqa: E402  (#330; product property estimates)
+from difflow_refinery import hydrogen  # hydrogen header network (#329); a library, not registered
 
 # The preheat train (#313): nested params are exported here for serialization.
 from difflow_refinery.preheat import (  # noqa: E402
@@ -247,6 +248,7 @@ __all__ = [
     "reforming",
     "hydroprocessing", "hydrotreating", "hydrocracking",
     "alkylation",
+    "hydrogen",
     "gasplant",
     "AmineTreater",
     "AmineTreaterParams",

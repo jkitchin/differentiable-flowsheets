@@ -93,6 +93,7 @@ delta-base planning ([`difflow.planning`](planning.md)).
 | [Fluid catalytic cracker](unit-operations-refinery.md#the-fluid-catalytic-cracker) | `FCCUnit` (library) | VGO → dry gas, C3, C4, gasoline, LCO, slurry, flue gas | 3-, 4- or 5-lump riser and coke-burning regenerator solved together for the heat balance; TBP-split main fractionator | `fcc_block` | Balances and gradients only; no literature cross-check; constants illustrative ([details](unit-operations-refinery.md#fcc-what-is-tested-and-what-is-not)) | — |
 | [Catalytic reformer](unit-operations-refinery.md#catalytic-reforming) | `CatalyticReformer` (library) | hydrotreated heavy naphtha → reformate, net H2, LPG, fuel gas | 29 lumps by carbon number, equilibrium from Gibbs energies; three adiabatic beds with fired heaters; PR separator and H2 recycle; component-split stabilizer; feed sulfur to H2S and reformate S (trace) | `reformer_block` | Balances and gradients only; no literature cross-check; constants illustrative | 40 |
 | [Alkylation](unit-operations-refinery.md#alkylation) | `AlkylationUnit` (library) | C3-C5 olefins + isobutane → alkylate, propane, n-butane | Sauer-Colville-Burwick yield and octane correlations; per-olefin stoichiometry; shortcut DIB, depropanizer and debutanizer; isobutane recycle | `alky_block` | The correlation layer reproduces the GAMS `process.gms` optimum (profit 1161.3366) | — |
+| [Hydrogen network](unit-operations-refinery.md#the-hydrogen-network) | `HydrogenNetwork` (library) | reformer net gas, H2 plant, import → hydrotreater / hydrocracker makeup, fuel gas, export | Header balance by species; optional PSA (recovery, product purity); ordered swing sources with capacities; purity and makeup partial-pressure specs; makeup purity fed back into the hydrotreaters by substitution | `h2_block` | Balances close by construction; gradients against finite differences; PSA defaults illustrative | — |
 
 ### Products
 
@@ -159,3 +160,5 @@ in the code.
   into a naphtha splitter or a `NaphthaFeed` (which reads the untreated
   composition), a jet/diesel split after a distillate hydrotreater, a
   hydrogen header, and a fuel-oil route for the atmospheric residue.
+  The hydrogen header is now a library block, `difflow_refinery.hydrogen`
+  (#329); example 40 still does it by arithmetic.
