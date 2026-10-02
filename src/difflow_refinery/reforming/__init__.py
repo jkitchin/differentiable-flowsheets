@@ -1,6 +1,6 @@
 """Catalytic reforming (#309): naphtha to reformate and hydrogen, semi-regen train."""
 
-from difflow_refinery.reforming import feed, kinetics, products, separation, species, thermo
+from difflow_refinery.reforming import feed, kinetics, products, separation, species, sulfur, thermo
 from difflow_refinery.reforming.feed import NaphthaFeed, lean_naphtha, rich_naphtha
 from difflow_refinery.reforming.products import reformate_properties
 from difflow_refinery.reforming.separation import (
@@ -18,7 +18,7 @@ from difflow_refinery.reforming.reactor import (
 )
 
 __all__ = [
-    "feed", "kinetics", "products", "separation", "species", "thermo",
+    "feed", "kinetics", "products", "separation", "species", "sulfur", "thermo",
     "NaphthaFeed", "lean_naphtha", "rich_naphtha", "reformate_properties",
     "ProductSeparator", "ProductSeparatorParams", "RecycleSplitter", "RecycleSplitterParams",
     "Stabilizer", "StabilizerParams",

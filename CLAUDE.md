@@ -543,7 +543,10 @@ Examples: `examples/34_vacuum_distillation.ipynb`, `examples/36_crude_to_vacuum.
   (the recycle's implicit fixed point needs JVPs), warm-start with
   `tear_initial=res.tear`.
 - Kinetic pre-exponentials are ILLUSTRATIVE (this project's); octanes other
-  than n-heptane are recalled (unverified). No Padmavathi/Taskar-Riggs
+  than n-heptane are recalled (unverified). Feed sulfur (#330,
+  `reforming.sulfur`) is a TRACE element solved on the converged streams,
+  outside the species list and the tear: H2S to net/fuel gas, unconverted S
+  to reformate, balance exact. No Padmavathi/Taskar-Riggs
   cross-check is claimed. Separator/recycle are thin and local, to merge with
   #306's shared module later.
 
@@ -700,6 +703,14 @@ Invariants encoded in the module (do not weaken them):
 - Blending is nonconvex (with the corrected RT-70 every start in the example
   happens to find one plan, which is not a guarantee); do not present a
   single-start NLP as "the" optimum.
+
+- Property estimates (#330, `difflow_refinery.properties`): `from_stream`
+  estimates flash (Riazi-Daubert from D86 T10), freeze (n-paraffin ideal
+  solubility on Won 1986), smoke (Riazi), viscosity (Abbott + D341 at
+  `viscosity_T_C`) and straight-run RON/MON (the reformer's pure-compound
+  octanes by P/N/A/O, RT-70) unless given; `estimate=False` is the old
+  behaviour. All but Won's melting points are UNVERIFIED against their
+  sources -- keep them marked so, and let a measured value override.
 
 Docs: `docs/unit-operations-refinery.md`. Example:
 `examples/33_refinery_gasoline_blending.ipynb`. Tests: `tests/refinery/`.

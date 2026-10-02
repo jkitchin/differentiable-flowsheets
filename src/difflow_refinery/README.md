@@ -69,6 +69,7 @@ still differentiable, with no palette entry.
 | Stage-network column | `vacuum` | `StageColumn`, under the VDU, the gas plant and the hydrotreater's stripper |
 | Hydroprocessing blocks | `hydroprocessing` | trickle-bed reactor, PR high-pressure separator, recycle-gas loop, stripper |
 | Product properties | `products` | `product_properties`: yields, SG/API, TBP points |
+| Product property estimates | `properties` | flash, freeze and smoke points, viscosity, straight-run RON/MON from a stream (#330, mostly unverified); used by `BlendComponent.from_stream` |
 | Planning blocks | `planning`, and each unit's package or its `planning` submodule (e.g. `hydrotreating.planning.hdt_block`) | `cdu_block`, `gasplant_block`, `isom_block`, `hdt_block`, `hcu_block`, `fcc_block`, `reformer_block`, `alky_block`, `product_value_block`, for `difflow.planning` |
 
 ## How far to trust it
