@@ -26,7 +26,10 @@ The hydrotreater (:mod:`difflow_refinery.hydrotreating`, #306) runs on the
 shared hydroprocessing building blocks (:mod:`difflow_refinery.hydroprocessing`:
 trickle-bed reactor around any kinetic model, Peng-Robinson HP separator,
 recycle-gas loop, steam stripper), with HDS/HDN/aromatics kinetics on the
-#305 composition. A library, not a palette operation.
+#305 composition. A library, not a palette operation. The VGO hydrocracker
+(:mod:`difflow_refinery.hydrocracking`, #307) is the same blocks with a
+pretreat bed, a continuous-lumping cracking bed, a fractionator and a UCO
+recycle; also a library.
 
 Differentiable end to end: a yield or a duty has a gradient with respect to
 the column's specs, its feed, and the assay data behind its thermodynamics,
@@ -139,6 +142,7 @@ from difflow_refinery.unit import (
 )
 from difflow_refinery import fcc  # fluid catalytic cracker (#308); a library, not registered
 from difflow_refinery import alkylation  # noqa: E402  (#310; imports the units above)
+from difflow_refinery import hydrocracking  # VGO hydrocracker (#307); a library, not registered
 
 __all__ = [
     "Assay",
@@ -194,7 +198,7 @@ __all__ = [
     "vacuum",
     "fcc",
     "reforming",
-    "hydroprocessing", "hydrotreating",
+    "hydroprocessing", "hydrotreating", "hydrocracking",
     "alkylation",
     "CrackingWarning",
     "PseudoComponents",

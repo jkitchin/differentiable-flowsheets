@@ -318,8 +318,11 @@ class HDTKinetics:
     attribute_elements: tuple = HDT_ATTRIBUTE_ELEMENTS
 
     def __post_init__(self):
-        if tuple(self.layout.attributes) != HDT_ATTRIBUTES:
-            raise ValueError("the layout's attributes must be HDT_ATTRIBUTES")
+        # The layout's attributes must START with HDT_ATTRIBUTES; a unit that
+        # tracks more per-cut attributes (the hydrocracker's "cracked" count)
+        # appends them, and the cracking leak carries them with the molecule.
+        if tuple(self.layout.attributes[:len(HDT_ATTRIBUTES)]) != HDT_ATTRIBUTES:
+            raise ValueError("the layout's attributes must be (or begin with) HDT_ATTRIBUTES")
         need = ("hydrogen", "hydrogen_sulfide", "ammonia") + tuple(CRACK_GAS_SPLIT)
         missing = [g for g in need if g not in self.layout.gases]
         if missing:
