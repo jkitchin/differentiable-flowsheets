@@ -165,3 +165,7 @@ in the code.
   (#329), and the fuel-oil route a library too (`difflow_refinery.residue`,
   #331: a residue desulfurizer and the VLSFO pool); example 40 does not use
   either yet ([the residue replacement](unit-operations-refinery.md#in-the-whole-refinery-example)).
+  The CDU-to-gas-plant bridge is now `gasplant.gas_plant_feed` (#326:
+  cut selection, folding, water and an explicit H2S assumption, with the
+  folded and dropped mass reported); example 38 uses it, example 40 not yet
+  ([details](unit-operations-refinery.md#from-crude-unit-products-to-a-gas-plant-feed)).

@@ -68,6 +68,7 @@ still differentiable, with no palette entry.
 | Composition | `composition` | P/N/A/O fractions, hydrogen, sulfur and nitrogen classes per pseudo-component |
 | Correlations | `correlations` | Twu, Riazi-Daubert, Lee-Kesler, Kesler-Lee, Maxwell-Bonnell |
 | Column thermodynamics | `thermo` | `ColumnThermo`: Raoult with Lee-Kesler vapour pressures |
+| CDU to gas plant | `gasplant.feed` | `gas_plant_feed`: crude-unit offgas and naphtha onto a `gas_components` table (cut selection, folding, water, H2S), with the folded and dropped mass reported (#326) |
 | Stage-network column | `vacuum` | `StageColumn`, under the VDU, the gas plant and the hydrotreater's stripper |
 | Hydroprocessing blocks | `hydroprocessing` | trickle-bed reactor, PR high-pressure separator, recycle-gas loop, stripper |
 | Product properties | `products` | `product_properties`: yields, SG/API, TBP points |
