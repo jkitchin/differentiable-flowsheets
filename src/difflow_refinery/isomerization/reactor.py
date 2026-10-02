@@ -51,6 +51,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from difflow.params_mixin import ParamsMixin
+from difflow.streams import Stream
 from difflow_refinery.isomerization import thermochem as tc
 
 jax.config.update("jax_enable_x64", True)
@@ -483,7 +484,7 @@ class IsomerizationReactor:
         return dict(F=F, T=T, P=P, extents=xi, F_in=F0, T_in=T0, k_theta_max=jnp.max(kth),
                     info=info)
 
-    def __call__(self, stream: Mapping):
+    def __call__(self, stream: Stream) -> tuple[Stream, dict]:
         res = self.run(flows_of(stream), stream["T"], P=stream.get("P", self.params.P))
         return stream_of(res["F"], res["T"], res["P"], phase="vapor"), res["info"]
 

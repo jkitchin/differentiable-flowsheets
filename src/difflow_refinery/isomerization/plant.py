@@ -62,6 +62,7 @@ import jax.numpy as jnp
 
 from difflow.flowsheet import Flowsheet, Unit
 from difflow.params_mixin import ParamsMixin
+from difflow.streams import Stream
 from difflow_refinery.blending import BlendComponent, ethyl_rt70
 from difflow_refinery.gasplant import GasPlantColumn, GasPlantColumnParams, gas_components, splitter
 from difflow_refinery.gasplant.products import reid_vapor_pressure
@@ -270,7 +271,10 @@ class IsomerizationUnit:
     parameter_units = {
         "T_in": "K", "H2_HC": "mol/mol", "stabilizer_rvp": "Pa", "stabilizer_P": "Pa",
         "separator_T": "K", "separator_P": "Pa", "dih_side_draw": "kg/s", "dih_P": "Pa", "dip_P": "Pa",
-        "tol": "mol/s",
+        "tol": "mol/s", "dih_trays": "-", "dih_feed_tray": "-", "dih_side_tray": "-",
+        "dih_heavy_in_overhead": "mol/mol", "dih_light_in_bottoms": "mol/mol",
+        "dip_trays": "-", "dip_feed_tray": "-", "dip_nc5_in_overhead": "mol/mol",
+        "dip_ic5_in_bottoms": "mol/mol", "max_iter": "-",
     }
 
     def __init__(self, params: IsomerizationUnitParams):
@@ -423,7 +427,7 @@ class IsomerizationUnit:
                 "raise LHSV or raise H2_HC.",
                 IsomerizationHydrogenWarning, stacklevel=3)
 
-    def __call__(self, feed: Mapping):
+    def __call__(self, feed: Stream) -> tuple[Stream, Stream, dict]:
         res = self.solve(feed)
         out = self.summarize(feed, res)
         info = dict(res["info"], outputs=out, streams=res["streams"], loop=res["loop"])
