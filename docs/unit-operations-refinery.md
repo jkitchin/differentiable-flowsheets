@@ -1060,6 +1060,8 @@ Checked (`tests/refinery/test_reforming.py`; flowsheet tests are marked `slow`):
 - Overall mass, carbon, hydrogen and energy balances close to 1e-8 relative (measured: 1e-11 to 1e-12), and every reactor is adiabatic to round-off.
 - The first reactor has the largest temperature drop.
 - RON and net H2 rise and C5+ yield falls with WAIT; aromatics rise as the separator pressure falls.
+- `wait_for_ron` reaches a RON target (95 on the lean feed) to 1e-3.
+- The reformate enters a `BlendPool` as a property-mode `BlendComponent`.
 - Implicit gradients of reformate yield, RON, net H2 and first-reactor ΔT with respect to WAIT, separator pressure, H2/HC and naphthene content match central differences to 1e-5 (measured: 1e-7). A full `jax.jacfwd` of those 4x4 plus the eight finite-difference solves takes about eight minutes on one CPU core, mostly compilation of the traced recycle.
 - Thermochemistry: coded `Hf`/`S0` are pinned to their sources; `Hf` agrees with `difflow.database` within 1 kJ/mol for the 16 species both hold; `ln K` is the Gibbs energy; van 't Hoff holds against the coded heats of reaction; a long bed reaches the Gibbs-energy equilibrium.
 

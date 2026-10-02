@@ -22,9 +22,13 @@ ideal-gas sensible heat + Peng-Robinson vapour departure), so the heats of
 reaction are those of the thermochemistry, and the temperature drop is the
 model's most visible check against operation.
 
-The ODE is integrated by ``diffrax`` (Kvaerno5, an L-stable ESDIRK: the
-dehydrogenation equilibrium makes the system stiff at the bed inlet) in the
-normalised bed coordinate ``w = W / W_total`` with ``F / F_in`` as the state.
+The ODE is integrated by ``diffrax`` in the normalised bed coordinate
+``w = W / W_total`` with ``F / F_in`` as the state, by Tsit5 (explicit,
+adaptive) by default: the fastest relaxation, the dehydrogenation
+equilibrium at the bed inlet, is a few hundred per unit ``w`` with the
+default kinetics, which an explicit method handles in a few hundred steps
+and compiles several times faster than an implicit one. ``solver_name=
+"kvaerno5"`` (an L-stable ESDIRK) is there for much faster kinetics.
 Gradients use ``diffrax.ForwardMode`` by default, because a reformer is
 differentiated through the recycle's implicit fixed point, which needs
 forward-mode (JVP) derivatives of everything inside the loop; pass

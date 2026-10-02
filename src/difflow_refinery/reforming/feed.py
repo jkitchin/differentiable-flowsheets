@@ -303,7 +303,7 @@ jax.tree_util.register_dataclass(NaphthaFeed, data_fields=["flows", "T", "P"], m
 def lean_naphtha(total_kg_s: float = 10.0) -> NaphthaFeed:
     """An illustrative LEAN (high-paraffin) hydrotreated heavy naphtha.
 
-    About 64 vol% paraffins, 26 % naphthenes, 10 % aromatics (N + 2A ~ 46).
+    About 67 vol% paraffins, 24 % naphthenes, 8 % aromatics (N + 2A ~ 41).
     The distribution is made up for this module to be typical of a
     paraffinic straight-run heavy naphtha -- not any crude's assay.
     """
@@ -318,7 +318,7 @@ def lean_naphtha(total_kg_s: float = 10.0) -> NaphthaFeed:
 def rich_naphtha(total_kg_s: float = 10.0) -> NaphthaFeed:
     """An illustrative RICH (high-naphthene) hydrotreated heavy naphtha.
 
-    About 36 vol% paraffins, 48 % naphthenes, 16 % aromatics (N + 2A ~ 80),
+    About 39 vol% paraffins, 47 % naphthenes, 14 % aromatics (N + 2A ~ 75),
     made up for this module to be typical of a naphthenic crude's heavy
     naphtha -- not any crude's assay.
     """

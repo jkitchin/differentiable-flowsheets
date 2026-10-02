@@ -321,6 +321,14 @@ class TestFlowsheet:
 
 
 @pytest.mark.slow
+def test_ron_target_sets_the_wait(lean):
+    reformer = CatalyticReformer(ReformerParams())
+    wait, res = reformer.wait_for_ron(lean_naphtha(), 95.0, tol=1e-3)
+    assert float(res.outputs()["reformate.RON"]) == pytest.approx(95.0, abs=1e-3)
+    assert float(wait) > float(ReformerParams().wait)      # base RON is below 95
+
+
+@pytest.mark.slow
 def test_implicit_gradients_match_central_differences(lean):
     feed0 = lean_naphtha()
     N0 = float(feed0.group_fractions("volume")["naphthenes"])
