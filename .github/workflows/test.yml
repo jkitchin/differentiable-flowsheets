@@ -61,7 +61,7 @@ jobs:
   # minutes. The `slow` marker still exists, and `make test` still skips it,
   # but CI no longer splits on it -- see the marker note in pyproject.toml.
   test:
-    name: Tests (${{ matrix.python-version }}, shard ${{ matrix.shard }}/3, ${{ matrix.variant }})
+    name: Tests (${{ matrix.python-version }}, shard ${{ matrix.shard }}/3)
     runs-on: ubuntu-latest
     # A shard was ~7 minutes when this cap was 25, chosen to be short enough
     # to catch a hang, which was the problem with reading the old 45: at 34
@@ -74,7 +74,7 @@ jobs:
     # again roughly twice a shard: long enough not to fire on a slow
     # runner, short enough that reaching it means something has hung. If
     # a shard creeps toward it, rebalance before raising it.
-    timeout-minutes: 40
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -103,8 +103,7 @@ jobs:
         # unsharded parallel run, where a fourth would save under two more
         # minutes. If this list changes, `--splits` below has to change with
         # it -- they are the same number written twice, and nothing checks.
-        shard: [2]
-        variant: [lpt-1thread, xdist-1thread, xdist-default]
+        shard: [1, 2, 3]
 
     steps:
       - uses: actions/checkout@v4
@@ -134,27 +133,17 @@ jobs:
       # something nobody reads; a failure still prints its own name.
       #
       # `--no-loadscope-reorder` (pytest-xdist >= 3.8) keeps the order
-      # tests/conftest.py gives the files -- longest recorded duration first.
-      # xdist's own order is by test count, which handed shard 2's few-test,
-      # many-minute refinery files out last, to run alone at the end (#315).
+      # tests/conftest.py gives the work units -- longest recorded duration
+      # first. xdist's own order is by test count, which handed shard 2's
+      # few-test, many-minute refinery files out last, to run alone at the
+      # end (#315). tests/conftest.py also makes the three files that slow
+      # each other down 2-2.5x when overlapped one work unit, so they run
+      # in series on one worker.
       - name: Run tests
         run: |
-          case "${{ matrix.variant }}" in
-            lpt-1thread) ORDER="--no-loadscope-reorder"; export XLA_FLAGS="--xla_cpu_multi_thread_eigen=false intra_op_parallelism_threads=1";;
-            xdist-1thread) ORDER=""; export DIFFLOW_TEST_NO_LPT=1; export XLA_FLAGS="--xla_cpu_multi_thread_eigen=false intra_op_parallelism_threads=1";;
-            xdist-default) ORDER=""; export DIFFLOW_TEST_NO_LPT=1;;
-          esac
-          cp .test_durations durations-${{ matrix.variant }}.json
-          (while true; do echo "MEM $(date +%T) $(free -m | sed -n 2p) $(cat /proc/loadavg)"; sleep 10; done) &
-          python -m pytest tests/ -v --durations=40 --tb=short -m "not release" \
-            -n auto --dist loadfile $ORDER \
-            --store-durations --durations-path durations-${{ matrix.variant }}.json \
+          python -m pytest tests/ -q --tb=short -m "not release" \
+            -n auto --dist loadfile --no-loadscope-reorder \
             --splits 3 --group ${{ matrix.shard }}
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: durations-${{ matrix.variant }}
-          path: durations-${{ matrix.variant }}.json
 
   # Verify the package imports with NO optional dependencies installed. The job
   # this replaces installed ".[dev]" and re-ran the full suite, making it an

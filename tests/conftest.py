@@ -144,30 +144,67 @@ def _release_jax_compilation_caches():
     gc.collect()
 
 
+
 _DURATIONS = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".test_durations")
+
+#: Files that must not run at the same time as each other (#315). On the CI
+#: runner (2 physical cores, 4 vCPUs) each of these runs 2-2.5x slower when
+#: another of them is running on the other worker -- measured: the
+#: non-convergence file 470s alone against 1140s overlapped, the full grid
+#: 210s against 510s, the planning file 420s against 630s -- so overlapping
+#: them costs more time than it saves. ``--dist loadfile`` hands them out as
+#: ONE work unit, which puts them on one worker in series, while the other
+#: worker takes everything else. (Pinning XLA to one thread did not help:
+#: measured, same wall time.) A file belongs here only on that evidence.
+_SERIAL_GROUP = "serial-heavy"
+_SERIAL_FILES = frozenset({
+    "tests/refinery/test_planning.py",
+    "tests/refinery/test_planning_nonconvergence.py",
+    "tests/test_convergence_full_grid.py",
+})
+
+
+def _work_unit(nodeid):
+    """The unit ``--dist loadfile`` hands out: the file, or the serial group."""
+    path = nodeid.split("::", 1)[0]
+    return _SERIAL_GROUP if path in _SERIAL_FILES else path
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_xdist_make_scheduler(config, log):
+    """``--dist loadfile``, with :data:`_SERIAL_FILES` as one work unit."""
+    if config.getvalue("dist") != "loadfile":
+        return None
+    from xdist.scheduler import LoadFileScheduling
+
+    class _Scheduling(LoadFileScheduling):
+        def _split_scope(self, nodeid):
+            return _work_unit(nodeid)
+
+    return _Scheduling(config, log)
 
 
 @pytest.hookimpl(wrapper=True)
 def pytest_collection_modifyitems(config, items):
-    """Under xdist, hand the files out longest first (#315).
+    """Under xdist, hand the work units out longest first (#315).
 
-    ``--dist loadfile`` makes each file one unit of work. xdist's own order
-    is by test COUNT, descending, and each worker keeps its next unit queued
-    -- so a file with four tests and five minutes of setup is handed out
-    late, queued behind a running one, and ends the shard alone while the
-    other worker sits idle. Measured on shard 2: the refinery planning files
-    started at 552s and 879s and ran to 1089s, one worker idle from 775s.
+    xdist's own order is by test COUNT, descending, and each worker keeps
+    its next unit queued -- so a unit with a few tests and many minutes of
+    setup is handed out late, queued behind a running one, and ends the
+    shard alone while the other worker sits idle. Measured on shard 2: the
+    refinery planning files started at 552s and 879s and ran to 1089s, one
+    worker idle from 775s.
 
-    Sorting whole files by their recorded duration (``.test_durations``,
+    Sorting whole units by their recorded duration (``.test_durations``,
     the same numbers pytest-split splits on) is the longest-processing-time
-    rule. CI passes ``--no-loadscope-reorder`` so xdist keeps this order.
+    rule; CI passes ``--no-loadscope-reorder`` so xdist keeps this order.
     The order inside a file is untouched. This is a wrapper so it runs after
     pytest-split has chosen the group, and only on xdist workers (where the
     collection that xdist schedules from happens), so a serial run is
     unchanged.
     """
     result = yield
-    if not os.environ.get("PYTEST_XDIST_WORKER") or not items or os.environ.get("DIFFLOW_TEST_NO_LPT"):
+    if not os.environ.get("PYTEST_XDIST_WORKER") or not items:
         return result
     try:
         with open(_DURATIONS) as fh:
@@ -178,8 +215,8 @@ def pytest_collection_modifyitems(config, items):
     default = sum(known) / len(known) if known else 0.0
     totals = {}
     for item in items:
-        path = item.nodeid.split("::", 1)[0]
-        totals[path] = totals.get(path, 0.0) + durations.get(item.nodeid, default)
+        unit = _work_unit(item.nodeid)
+        totals[unit] = totals.get(unit, 0.0) + durations.get(item.nodeid, default)
     # sorted() is stable: in-file order survives, ties keep collection order.
-    items[:] = sorted(items, key=lambda i: -totals[i.nodeid.split("::", 1)[0]])
+    items[:] = sorted(items, key=lambda i: -totals[_work_unit(i.nodeid)])
     return result

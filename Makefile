@@ -124,8 +124,9 @@ run:
 # loadfile` is not optional -- each worker has its own JAX compilation cache,
 # so splitting a module across workers recompiles the same graphs in each of
 # them and gives most of the win back. Add `-n0` to any of these to get a
-# single process back for --pdb or readable output.
-PYTEST := pytest -n auto --dist loadfile
+# single process back for --pdb or readable output. `--no-loadscope-reorder`
+# keeps tests/conftest.py's longest-first order of the files (#315).
+PYTEST := pytest -n auto --dist loadfile --no-loadscope-reorder
 
 # What you run while working, and what every commit is checked against:
 # everything except the `release` tier, which re-derives physics and numerics
