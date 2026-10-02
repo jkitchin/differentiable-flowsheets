@@ -22,6 +22,16 @@
   --node-accent: #1f5f9e;
   --port: #8f8d87;
   --wire: #8f8d87;
+
+  /* Python syntax in the code editor. Every one clears 4.5:1 (WCAG AA
+     text) on --surface, in both themes; none is --bad or --good, which
+     would make a string read as an error or a success. */
+  --code-keyword: #8a3ab9;
+  --code-string: #1d7334;
+  --code-number: #a65300;
+  --code-comment: #6b6a66;
+  --code-def: #1f5f9e;
+  --code-class: #0e6b75;
 }
 
 /* Dark, for the editor's theme toggle. Only the tokens change: nothing
@@ -49,6 +59,13 @@
   --node-accent: #7fb8ee;
   --port: #7b7a83;
   --wire: #6f6e77;
+
+  --code-keyword: #c792ea;
+  --code-string: #8fd18f;
+  --code-number: #f0a060;
+  --code-comment: #8d8b85;
+  --code-def: #7fb8ee;
+  --code-class: #6fd0d0;
 }
 
 * { box-sizing: border-box; }

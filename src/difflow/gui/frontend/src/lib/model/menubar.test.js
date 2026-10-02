@@ -16,9 +16,32 @@ const full = (over = {}) =>
     repository: 'https://github.com/example/difflow',
   }, ...over })
 
-test('the bar is File, View and Help, in that order', () => {
-  assert.deepEqual(full().map((m) => m.id), ['file', 'view', 'help'])
-  assert.deepEqual(full().map((m) => m.label), ['File', 'View', 'Help'])
+test('the bar is File, Examples, View and Help, in that order', () => {
+  assert.deepEqual(full().map((m) => m.id), ['file', 'examples', 'view', 'help'])
+  assert.deepEqual(full().map((m) => m.label), ['File', 'Examples', 'View', 'Help'])
+})
+
+const EXAMPLES = [
+  { key: '01_flash', title: 'Flash drum', description: 'a feed, split' },
+  { key: '02_rx', title: 'Reactor', description: '' },
+]
+
+test('the examples menu lists each example and opens it by key', () => {
+  const { actions, seen } = recorder()
+  const bar = full({ actions, examples: EXAMPLES })
+  assert.deepEqual(labels(bar, 'examples'), ['Flash drum', 'Reactor'])
+  row(bar, 'examples', 'Reactor').run()
+  assert.deepEqual(seen, [['example', '02_rx']])
+  // It replaces the canvas, and says so before the click.
+  assert.match(row(bar, 'examples', 'Flash drum').hint, /a feed, split.*replaces/)
+})
+
+test('the examples menu is disabled while busy, and says when it is empty', () => {
+  const bar = full({ busy: true, examples: EXAMPLES })
+  assert.ok(menu(bar, 'examples').items.every((i) => i.disabled))
+  const empty = menu(full(), 'examples').items
+  assert.equal(empty.length, 1)
+  assert.ok(empty[0].disabled)
 })
 
 /** Every action the bar knows how to ask for, recording what it was asked. */
@@ -26,7 +49,7 @@ function recorder() {
   const seen = []
   const names = ['save', 'reload', 'export', 'quit', 'results', 'context',
                  'console', 'planning', 'assistant', 'portLabels', 'dark',
-                 'open', 'classic']
+                 'open', 'classic', 'example', 'widthByFlow', 'colorBy', 'script']
   const actions = Object.fromEntries(
     names.map((n) => [n, (...args) => seen.push([n, ...args])]))
   return { actions, seen }
@@ -48,7 +71,7 @@ test('each row runs the action it is named for', () => {
   for (const [id, label, name] of [
     ['file', 'Save', 'save'], ['file', 'Reload', 'reload'], ['file', 'Quit', 'quit'],
     ['view', 'Results', 'results'], ['view', 'Code context', 'context'],
-    ['view', 'Console', 'console'], ['view', 'Planning', 'planning'],
+    ['view', 'Script', 'script'], ['view', 'Console', 'console'], ['view', 'Planning', 'planning'],
     ['view', 'Ask difflow', 'assistant'], ['view', 'Port names', 'portLabels'],
     ['view', 'Dark theme', 'dark'], ['help', 'Classic editor', 'classic'],
   ]) {
@@ -151,7 +174,7 @@ test('a missing action does not throw', () => {
 
 test('menuBar() with nothing at all still describes a bar', () => {
   const bar = menuBar()
-  assert.equal(bar.length, 3)
+  assert.equal(bar.length, 4)
   assert.ok(bar.every((m) => m.items.length))
 })
 
@@ -170,4 +193,20 @@ test('there being no path at all is not a crash', () => {
   assert.equal(shortPath(''), '')
   assert.equal(shortPath(null), '')
   assert.equal(shortPath(undefined), '')
+})
+
+test('the solution views wait for a solve, then run and tick', () => {
+  const { actions, seen } = recorder()
+  const before = full({ actions })
+  assert.ok(row(before, 'view', 'Wire width by flow').disabled)
+  assert.ok(row(before, 'view', 'Colour wires').disabled)
+  assert.equal(row(before, 'view', 'Colour wires').hint, 'solve first')
+
+  const after = full({ actions, solved: true, widthByFlow: true, colorBy: 'T' })
+  assert.ok(!row(after, 'view', 'Wire width by flow').disabled)
+  assert.ok(row(after, 'view', 'Wire width by flow').on)
+  assert.ok(row(after, 'view', 'Colour wires').on)
+  row(after, 'view', 'Colour wires').run()
+  row(after, 'view', 'Wire width by flow').run()
+  assert.deepEqual(seen.map((s) => s[0]), ['colorBy', 'widthByFlow'])
 })

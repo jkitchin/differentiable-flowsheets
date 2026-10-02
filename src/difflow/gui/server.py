@@ -26,7 +26,7 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from difflow import scripts
-from difflow.gui import assistant
+from difflow.gui import assistant, examples
 from difflow.gui.session import FlowsheetSession
 
 #: The front end, as built files on disk rather than a string literal in
@@ -455,6 +455,10 @@ class _Handler(BaseHTTPRequestHandler):
             "/api/levers": lambda: self._send(self.session.levers()),
             "/api/console": lambda: self._send(self.session.console_names()),
             "/api/diagram": lambda: self._send(self.session.diagram()),
+            # The Examples menu. Read from disk each time, which costs a
+            # few small files and means a new example needs no restart.
+            "/api/examples": lambda: self._send(
+                {"ok": True, "examples": examples.listing()}),
             # Whether the server-side provider can be offered at all.
             # Asked before the option is shown, so "no key here" is a
             # sentence in the settings rather than a failed question.
@@ -533,6 +537,8 @@ class _Handler(BaseHTTPRequestHandler):
             if path == "/api/sensitivity":
                 return session.sensitivity(lever=payload.get("lever"),
                                            target=payload.get("target"))
+            if path == "/api/examples/open":
+                return session.open_example(payload.get("key", ""))
             if path == "/api/save":
                 return session.save()
             if path == "/api/layout":

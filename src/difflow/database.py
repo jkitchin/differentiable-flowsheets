@@ -102,6 +102,12 @@ _CRITICAL_DATA = {
     "formic_acid": (588.0, 5.810e6, 0.473, 46.03),
     "acetic_acid": (592.0, 5.786e6, 0.467, 60.05),
 
+    # Esters. Tc from Majer & Svoboda's Watson fit and Pc from Ambrose,
+    # Ellender et al. (1981), both via the NIST WebBook; omega computed
+    # from the NIST Antoine equation at Tr = 0.7 (366.2 K, a short
+    # extrapolation past its 349 K upper limit).
+    "ethyl_acetate": (523.2, 3.882e6, 0.366, 88.106),
+
     # Halogenated
     "chloromethane": (416.3, 6.679e6, 0.153, 50.49),
     "dichloromethane": (510.0, 6.080e6, 0.199, 84.93),
@@ -121,6 +127,11 @@ _DEFAULT_SOURCE = "NIST Chemistry WebBook; Perry's 9e; Yaws; DIPPR 801"
 SOURCE_CITATIONS: dict[str, str] = {
     name: _DEFAULT_SOURCE for name in _CRITICAL_DATA
 }
+SOURCE_CITATIONS["ethyl_acetate"] = (
+    "NIST Chemistry WebBook (C141786): Antoine, Polak & Mertl 1965; Pc, "
+    "Ambrose, Ellender et al. 1981; Tc and Hvap, Majer & Svoboda 1985; "
+    "Cp(l), Pintos, Bravo et al. 1988; Hf(g), Wiberg & Waldron 1991"
+)
 
 
 def get_critical_props(name: str) -> CriticalProperties:
@@ -165,7 +176,15 @@ def get_critical_props(name: str) -> CriticalProperties:
 # Format: name -> {
 #     "MW": molecular weight (g/mol),
 #     "Cp": (a, b, c, d) for Cp = a + bT + cT² + dT³ (J/mol/K),
-#     "Hvap": (A, n, Tc) for Hvap = A*(1-T/Tc)^n (J/mol),
+#     "Hvap": (H_ref, n, Tc) and "Hvap_T": T_ref -- the MEASURED heat of
+#         vaporization H_ref (J/mol) at T_ref (K), normally the normal boiling
+#         point. `get_species_data` turns it into Watson's prefactor,
+#         A = H_ref / (1 - T_ref/Tc)^n, so Hvap(T) = A (1 - T/Tc)^n passes
+#         through H_ref at T_ref. The table used to hold H_ref in A's place,
+#         which put every species' Hvap 30-40% low (water: 29.3 kJ/mol at
+#         its boiling point instead of 40.66). Keeping the measured number
+#         and its temperature is what lets a test check each entry against
+#         the value it came from. T_ref is from the NIST WebBook.
 #     "antoine": (A, B, C) for log10(P/Pa) = A - B/(T+C),
 #         Note: A = A_NIST + 5 because NIST uses bar and we use Pa (1 bar = 1e5 Pa).
 #     "Hf": standard heat of formation (J/mol) at 298.15 K,
@@ -185,6 +204,7 @@ _IDEAL_THERMO_DATA = {
         # accurate over the 50-1000 K span needed for cryogenic duties.
         "Cp": (31.15, -1.357e-2, 2.680e-5, -1.168e-8),
         "Hvap": (5577.0, 0.38, 126.2),
+        "Hvap_T": 77.34,
         "antoine": (8.61, 255.68, -6.6),
         "Hf": 0.0,
     },
@@ -192,6 +212,7 @@ _IDEAL_THERMO_DATA = {
         "MW": 32.00,
         "Cp": (29.4, 0.0, 0.0, 0.0),
         "Hvap": (6820.0, 0.38, 154.6),
+        "Hvap_T": 90.2,
         "antoine": (8.68, 319.01, -6.45),
         "Hf": 0.0,
     },
@@ -199,7 +220,12 @@ _IDEAL_THERMO_DATA = {
         "MW": 44.01,
         # Ideal-gas Cp cubic (Reid, Prausnitz & Poling 4th ed., App. A).
         "Cp": (19.80, 7.344e-2, -5.602e-5, 1.715e-8),
-        "Hvap": (16700.0, 0.38, 304.2),  # Sublimes at 1 atm
+        # CO2 sublimes at 1 atm, so no normal boiling point: anchored at the
+        # triple point instead, 15.42 kJ/mol at 216.59 K (NIST WebBook fluid
+        # tables, Span-Wagner EOS). The former 16.7 kJ/mol was a
+        # Clausius-Clapeyron value "at 288 K", where the true latent heat is 7.8.
+        "Hvap": (15420.0, 0.38, 304.2),
+        "Hvap_T": 216.59,
         "antoine": (9.81, 1347.79, -35.52),
         "Hf": -393510.0,
     },
@@ -207,6 +233,7 @@ _IDEAL_THERMO_DATA = {
         "MW": 17.03,
         "Cp": (35.0, 0.0, 0.0, 0.0),
         "Hvap": (23350.0, 0.38, 405.4),
+        "Hvap_T": 239.82,
         "antoine": (10.20, 1596.49, -28.16),
         "Hf": -45940.0,
     },
@@ -217,6 +244,7 @@ _IDEAL_THERMO_DATA = {
         # Ideal-gas Cp cubic (Reid, Prausnitz & Poling 4th ed., App. A).
         "Cp": (19.25, 5.213e-2, 1.197e-5, -1.132e-8),
         "Hvap": (8180.0, 0.38, 190.6),
+        "Hvap_T": 111.67,
         "antoine": (8.68, 405.42, -26.09),
         "Hf": -74870.0,
     },
@@ -225,6 +253,7 @@ _IDEAL_THERMO_DATA = {
         # Ideal-gas Cp cubic (Reid, Prausnitz & Poling 4th ed., App. A).
         "Cp": (5.409, 1.781e-1, -6.938e-5, 8.713e-9),
         "Hvap": (14690.0, 0.38, 305.3),
+        "Hvap_T": 184.6,
         "antoine": (9.04, 663.70, -16.47),
         "Hf": -84000.0,
     },
@@ -233,6 +262,7 @@ _IDEAL_THERMO_DATA = {
         # Ideal-gas Cp cubic (Reid, Prausnitz & Poling 4th ed., App. A).
         "Cp": (-4.224, 3.063e-1, -1.586e-4, 3.215e-8),
         "Hvap": (19040.0, 0.38, 369.8),
+        "Hvap_T": 231.1,
         "antoine": (9.10, 803.81, -26.11),
         "Hf": -104700.0,
     },
@@ -241,6 +271,7 @@ _IDEAL_THERMO_DATA = {
         # Ideal-gas Cp cubic (Reid, Prausnitz & Poling 4th ed., App. A).
         "Cp": (9.487, 3.313e-1, -1.108e-4, -2.822e-9),
         "Hvap": (22390.0, 0.38, 425.1),
+        "Hvap_T": 273.0,
         "antoine": (9.05, 935.86, -34.42),
         "Hf": -125600.0,
     },
@@ -249,6 +280,7 @@ _IDEAL_THERMO_DATA = {
         # Ideal-gas Cp cubic (Reid, Prausnitz & Poling 4th ed., App. A).
         "Cp": (-3.626, 4.873e-1, -2.580e-4, 5.305e-8),
         "Hvap": (25790.0, 0.38, 469.7),
+        "Hvap_T": 309.2,
         "antoine": (9.02, 1075.78, -40.45),
         "Hf": -146800.0,
     },
@@ -257,6 +289,7 @@ _IDEAL_THERMO_DATA = {
         # Ideal-gas Cp cubic (Reid, Prausnitz & Poling 4th ed., App. A).
         "Cp": (-4.413, 5.820e-1, -3.119e-4, 6.494e-8),
         "Hvap": (28850.0, 0.38, 507.6),
+        "Hvap_T": 341.9,
         "antoine": (9.00266, 1171.530, -48.784),
         "Hf": -167200.0,
     },
@@ -264,6 +297,7 @@ _IDEAL_THERMO_DATA = {
         "MW": 100.20,
         "Cp": (166.0, 0.0, 0.0, 0.0),
         "Hvap": (31770.0, 0.38, 540.2),
+        "Hvap_T": 371.5,
         "antoine": (9.02832, 1268.636, -56.199),
         "Hf": -187800.0,
     },
@@ -271,6 +305,7 @@ _IDEAL_THERMO_DATA = {
         "MW": 114.23,
         "Cp": (189.0, 0.0, 0.0, 0.0),
         "Hvap": (34410.0, 0.38, 568.7),
+        "Hvap_T": 398.7,
         "antoine": (9.04867, 1355.126, -63.633),
         "Hf": -208600.0,
     },
@@ -284,6 +319,7 @@ _IDEAL_THERMO_DATA = {
         "Cp": (-1.390, 3.847e-1, -1.846e-4, 2.895e-8),
         # Watson Hvap interpolated between propane and n-butane (approximate).
         "Hvap": (21300.0, 0.38, 407.8),
+        "Hvap_T": 262.0,
         # Antoine: NIST WebBook, Das, Reed et al. 1973 (261-408 K); the NIST
         # log10(P/bar) A is shifted +5 for difflow's Pa convention.
         "antoine": (9.3281, 1132.108, 0.918),
@@ -295,6 +331,7 @@ _IDEAL_THERMO_DATA = {
         "Cp": (-9.525, 5.066e-1, -2.729e-4, 5.723e-8),
         # Watson Hvap interpolated between n-butane and n-pentane (approximate).
         "Hvap": (24700.0, 0.38, 460.4),
+        "Hvap_T": 301.1,
         # Antoine: NIST WebBook, Stull 1947 (190-301 K); NIST log10(P/bar) A
         # shifted +5 for difflow's Pa convention.
         "antoine": (8.90935, 1018.516, -40.081),
@@ -306,6 +343,7 @@ _IDEAL_THERMO_DATA = {
         "MW": 28.05,
         "Cp": (43.0, 0.0, 0.0, 0.0),
         "Hvap": (13540.0, 0.38, 282.3),
+        "Hvap_T": 169.0,
         "antoine": (9.08, 595.42, -15.09),
         "Hf": 52470.0,
     },
@@ -313,6 +351,7 @@ _IDEAL_THERMO_DATA = {
         "MW": 42.08,
         "Cp": (64.0, 0.0, 0.0, 0.0),
         "Hvap": (18420.0, 0.38, 365.6),
+        "Hvap_T": 225.6,
         "antoine": (9.10, 786.00, -25.52),
         "Hf": 20410.0,
     },
@@ -322,6 +361,7 @@ _IDEAL_THERMO_DATA = {
         "MW": 78.11,
         "Cp": (136.0, 0.0, 0.0, 0.0),
         "Hvap": (30720.0, 0.38, 562.0),
+        "Hvap_T": 353.3,
         "antoine": (9.01814, 1203.835, -53.226),
         "Hf": 82880.0,
         "T_antoine_min": 287.7,
@@ -331,6 +371,7 @@ _IDEAL_THERMO_DATA = {
         "MW": 92.14,
         "Cp": (157.0, 0.0, 0.0, 0.0),
         "Hvap": (33180.0, 0.38, 591.8),
+        "Hvap_T": 383.8,
         "antoine": (9.07827, 1343.943, -53.773),
         "Hf": 50170.0,
     },
@@ -338,6 +379,7 @@ _IDEAL_THERMO_DATA = {
         "MW": 106.17,
         "Cp": (183.0, 0.0, 0.0, 0.0),
         "Hvap": (35570.0, 0.38, 617.2),
+        "Hvap_T": 409.3,
         "antoine": (9.07488, 1419.315, -60.539),
         "Hf": 29790.0,
     },
@@ -345,6 +387,7 @@ _IDEAL_THERMO_DATA = {
         "MW": 104.15,
         "Cp": (182.0, 0.0, 0.0, 0.0),
         "Hvap": (36820.0, 0.38, 636.0),
+        "Hvap_T": 419.0,
         "antoine": (9.10, 1420.00, -60.00),
         "Hf": 147360.0,
     },
@@ -354,6 +397,7 @@ _IDEAL_THERMO_DATA = {
         "MW": 32.04,
         "Cp": (81.0, 0.0, 0.0, 0.0),
         "Hvap": (35210.0, 0.38, 512.6),
+        "Hvap_T": 337.8,
         "antoine": (10.20409, 1581.341, -33.500),
         "Hf": -201200.0,
         "T_antoine_min": 288.1,
@@ -363,6 +407,7 @@ _IDEAL_THERMO_DATA = {
         "MW": 46.07,
         "Cp": (112.0, 0.0, 0.0, 0.0),
         "Hvap": (38560.0, 0.38, 513.9),
+        "Hvap_T": 351.5,
         "antoine": (10.24677, 1598.673, -46.424),
         "Hf": -234800.0,
         "T_antoine_min": 292.77,
@@ -372,6 +417,7 @@ _IDEAL_THERMO_DATA = {
         "MW": 60.10,
         "Cp": (144.0, 0.0, 0.0, 0.0),
         "Hvap": (41440.0, 0.38, 536.8),
+        "Hvap_T": 370.3,
         "antoine": (10.24, 1796.27, -48.25),
         "Hf": -255200.0,
     },
@@ -379,6 +425,7 @@ _IDEAL_THERMO_DATA = {
         "MW": 60.10,
         "Cp": (155.0, 0.0, 0.0, 0.0),
         "Hvap": (39850.0, 0.38, 508.3),
+        "Hvap_T": 355.5,
         "antoine": (10.16, 1664.17, -50.88),
         "Hf": -272700.0,
     },
@@ -386,6 +433,7 @@ _IDEAL_THERMO_DATA = {
         "MW": 74.12,
         "Cp": (177.0, 0.0, 0.0, 0.0),
         "Hvap": (43290.0, 0.38, 563.1),
+        "Hvap_T": 390.6,
         "antoine": (9.97, 1778.02, -59.08),
         "Hf": -274600.0,
     },
@@ -395,6 +443,7 @@ _IDEAL_THERMO_DATA = {
         "MW": 58.08,
         "Cp": (125.0, 0.0, 0.0, 0.0),
         "Hvap": (29100.0, 0.38, 508.2),
+        "Hvap_T": 329.3,
         "antoine": (9.42448, 1312.253, -32.445),
         "Hf": -217100.0,
         "T_antoine_min": 259.16,
@@ -406,6 +455,7 @@ _IDEAL_THERMO_DATA = {
         "MW": 46.07,
         "Cp": (65.0, 0.0, 0.0, 0.0),
         "Hvap": (21510.0, 0.38, 400.1),
+        "Hvap_T": 248.2,
         "antoine": (9.21, 987.31, -25.18),
         "Hf": -184100.0,
     },
@@ -413,6 +463,7 @@ _IDEAL_THERMO_DATA = {
         "MW": 74.12,
         "Cp": (172.0, 0.0, 0.0, 0.0),
         "Hvap": (26520.0, 0.38, 466.7),
+        "Hvap_T": 307.7,
         "antoine": (9.12, 1098.20, -38.00),
         "Hf": -252100.0,
     },
@@ -422,15 +473,37 @@ _IDEAL_THERMO_DATA = {
         "MW": 46.03,
         "Cp": (99.0, 0.0, 0.0, 0.0),
         "Hvap": (22690.0, 0.38, 588.0),
+        "Hvap_T": 373.9,
         "antoine": (9.37, 1563.28, -42.15),
         "Hf": -378600.0,
     },
     "acetic_acid": {
         "MW": 60.05,
         "Cp": (124.0, 0.0, 0.0, 0.0),
-        "Hvap": (52100.0, 0.38, 592.0),  # Watson A calibrated to ~52 kJ/mol at 25C
+        # Anchored at 25 C, not the boiling point: the vapor is mostly dimer,
+        # so the calorimetric value at 391 K (23.7 kJ/mol) is to a dimerised
+        # gas, while this thermo's vapor is ideal monomer. 52 kJ/mol at 25 C
+        # is vaporization to monomer (Hf liquid -484.3 vs gas -432.8 kJ/mol).
+        "Hvap": (52100.0, 0.38, 592.0),
+        "Hvap_T": 298.15,
         "antoine": (9.68, 1642.54, -39.76),
         "Hf": -432800.0,
+    },
+
+    # Esters
+    "ethyl_acetate": {
+        "MW": 88.106,
+        "Cp": (168.94, 0.0, 0.0, 0.0),  # liquid, 298.15 K (Pintos, Bravo et al. 1988)
+        # 31.94 kJ/mol at 350.3 K (Majer & Svoboda 1985); with n = 0.38 it
+        # gives 35.3 kJ/mol at 298 K (NIST: 35 +/- 2).
+        "Hvap": (31940.0, 0.38, 523.2),
+        "Hvap_T": 350.3,
+        # log10(P/Pa): Polak & Mertl (1965) as fitted by NIST, +5 for bar -> Pa.
+        "antoine": (9.22809, 1245.702, -55.189),
+        # Gas phase, like the other organics here (Wiberg & Waldron 1991).
+        "Hf": -444800.0,
+        "T_antoine_min": 288.73,
+        "T_antoine_max": 348.98,
     },
 
     # Water
@@ -438,6 +511,7 @@ _IDEAL_THERMO_DATA = {
         "MW": 18.015,
         "Cp": (75.3, 0.0, 0.0, 0.0),  # Liquid at 25°C
         "Hvap": (40660.0, 0.38, 647.1),
+        "Hvap_T": 373.12,
         "antoine": (10.20389, 1733.926, -39.485),
         "Hf": -285830.0,  # Liquid-phase formation enthalpy (consistent with liquid Cp)
         "T_antoine_min": 273.0,
@@ -449,6 +523,7 @@ _IDEAL_THERMO_DATA = {
         "MW": 119.38,
         "Cp": (114.0, 0.0, 0.0, 0.0),
         "Hvap": (29240.0, 0.38, 536.4),
+        "Hvap_T": 334.3,
         "antoine": (9.08, 1163.03, -46.38),
         "Hf": -134100.0,
     },
@@ -456,10 +531,30 @@ _IDEAL_THERMO_DATA = {
         "MW": 153.82,
         "Cp": (131.0, 0.0, 0.0, 0.0),
         "Hvap": (29820.0, 0.38, 556.4),
+        "Hvap_T": 349.8,
         "antoine": (9.02, 1212.02, -45.19),
         "Hf": -128200.0,
     },
 }
+
+
+def watson_coeffs(H_ref: float, n: float, Tc: float, T_ref: float) -> tuple:
+    """Watson's ``(A, n, Tc)`` from one measured heat of vaporization.
+
+    ``Hvap(T) = A (1 - T/Tc)^n`` passes through ``H_ref`` at ``T_ref`` when
+    ``A = H_ref / (1 - T_ref/Tc)^n``. Handing ``H_ref`` over as ``A``
+    instead is the error the table used to make: ``A`` is the value the
+    correlation would take at 0 K, and at any real temperature
+    ``(1 - T/Tc)^n`` is well below one.
+
+    Example:
+        >>> A, n, Tc = watson_coeffs(40660.0, 0.38, 647.1, 373.12)
+        >>> round(A * (1 - 373.12 / Tc) ** n)
+        40660
+    """
+    if not 0.0 < T_ref < Tc:
+        raise ValueError(f"T_ref = {T_ref} K must lie between 0 and Tc = {Tc} K")
+    return (H_ref / (1.0 - T_ref / Tc) ** n, n, Tc)
 
 
 def get_species_data(name: str) -> SpeciesData:
@@ -492,7 +587,7 @@ def get_species_data(name: str) -> SpeciesData:
         name=key,
         MW=d["MW"],
         Cp_coeffs=d["Cp"],
-        Hvap_coeffs=d["Hvap"],
+        Hvap_coeffs=watson_coeffs(*d["Hvap"], d["Hvap_T"]),
         antoine_coeffs=d["antoine"],
         Hf=d.get("Hf", 0.0),
         T_antoine_min=d.get("T_antoine_min", 0.0),
@@ -619,6 +714,7 @@ _ALIASES = {
     "h2o": "water",
     "meoh": "methanol",
     "etoh": "ethanol",
+    "etoac": "ethyl_acetate",
     "etbe": "diethyl_ether",
     "xylene": "m_xylene",  # Default to m-xylene
 }

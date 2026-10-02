@@ -668,6 +668,24 @@ class FlowsheetSession:
             self.pending.clear()
         return {"ok": True}
 
+    def open_example(self, key: str) -> dict:
+        """Replace the flowsheet with one of :mod:`difflow.gui.examples`.
+
+        The file the editor was opened on is forgotten along with its
+        flowsheet: Save would otherwise write the example over it, which
+        is not what anyone choosing an example from a menu meant. The
+        example can still be written out with File > Flowsheet JSON.
+        """
+        from difflow.gui import examples
+
+        try:
+            document = examples.document(key)
+        except KeyError:
+            return {"ok": False, "error": f"no example named {key!r}"}
+        answer = self.replace(document)
+        self.path = self.source = None
+        return answer
+
     # -- incremental edits --------------------------------------------
     #
     # Each one changes the flowsheet in place and rebuilds only what it

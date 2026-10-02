@@ -168,21 +168,42 @@ export function fmt(value, digits = 4) {
  * from one that goes up), magnitude sets the property, and the
  * stylesheet decides what either looks like.
  *
+ * Width and colour from the solution views (`solution.js`) go the same
+ * way: a class and a custom property, `--w` and `--c`. A wire coloured by
+ * a variable is not also tinted by a sensitivity --- one colour cannot
+ * say two things --- so `colors` wins and the tint is dropped.
+ *
  * @param {Array} edges  edges from `toGraph`
- * @param {{flows?: Object, tints?: Object}} data
+ * @param {{flows?: Object, tints?: Object, widths?: Object, colors?: Object}} data
  */
-export function decorate(edges, { flows = null, tints = null } = {}) {
-  if (!flows && !tints) return edges
+export function decorate(edges, { flows = null, tints = null, widths = null, colors = null } = {}) {
+  if (!flows && !tints && !widths && !colors) return edges
+  if (colors) tints = null
   return edges.map((edge) => {
     const stream = edge.data?.stream
     const flow = flows ? flows[stream] : undefined
     const tint = tints ? tints[stream] : undefined
+    const width = widths ? widths[stream] : undefined
+    const color = colors ? colors[stream] : undefined
     const next = { ...edge }
+    const classes = [edge.class ?? '']
+    const style = []
     if (flow !== undefined) next.label = `${edge.label}  ${fmt(flow, 3)}`
     if (tint !== undefined && tint !== 0) {
-      next.class = `${edge.class} tinted ${tint > 0 ? 'up' : 'down'}`.trim()
-      next.style = `--tint: ${Math.abs(tint).toFixed(3)}`
+      classes.push('tinted', tint > 0 ? 'up' : 'down')
+      style.push(`--tint: ${Math.abs(tint).toFixed(3)}`)
     }
+    if (width !== undefined) {
+      classes.push('sized')
+      style.push(`--w: ${width.toFixed(2)}px`)
+    }
+    if (color !== undefined) {
+      classes.push('colored')
+      style.push(`--c: ${color}`)
+    }
+    const cls = classes.join(' ').trim()
+    if (cls !== (edge.class ?? '')) next.class = cls
+    if (style.length) next.style = style.join('; ')
     return next
   })
 }

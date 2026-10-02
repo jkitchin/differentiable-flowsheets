@@ -797,6 +797,22 @@ difflow gui --stay                        # ...and keep serving after the tab cl
 
 The editor is what a bare `difflow` does, because it is the one thing here that has nothing to print and everything to show. `python -m difflow.gui` is the same command for an environment where the console script is not on `PATH`.
 
+### Starting from an example
+
+The **Examples** menu opens a flowsheet that already solves: a water/ethanol flash drum, then ethyl acetate made from acetic acid and ethanol (a reversible Fischer esterification, equilibrium-limited at $K_{eq} = 4$) in a CSTR followed by a flash, and the same process with the acid-rich flash liquid recycled to the reactor and a purge. The reaction's stoichiometry and equilibrium constant are real; its forward rate constant is illustrative, and the flash uses Raoult's law, which does not know about the ethyl acetate azeotropes. Each is an ordinary flowsheet file (`src/difflow/gui/examples/*.json`), code context included, so it is also a template for writing your own. Choosing one replaces the canvas and forgets the file the editor was opened on, so **Save** cannot write the example over it; export it with **File > Flowsheet JSON** to keep it. A new `NN_name.json` in that directory, with `view.title` and `view.description` set, joins the menu.
+
+### Seeing the solution on the canvas
+
+After a solve, every wire answers a hover with its stream: temperature, pressure, total flow, and a composition bar over a row per species with its mole fraction and flow. Hovering the wire's label works too, which matters on short wires the label mostly covers, and so does hovering a port. A product (an outlet nothing reads) has no wire, only the ring on its unit's edge, so its port is where to read it. Clicking a wire pins its card, and clicking the canvas lets it go.
+
+Hovering a unit shows what it did, read from the streams around it: each inlet and outlet with its temperature and flow, each outlet's share of what leaves (a flash's vapor fraction, a splitter's split), the change in every species from in to out (where a reactor's conversion shows), and the unit's numeric parameters. It does not show a unit's internal results such as a heater's duty, because the solve does not report them.
+
+Two views in the **View** menu draw the solve onto the wires themselves. **Wire width by flow** (or `W`) makes each wire as wide as its molar flow, linearly, so a recycle carrying twice the feed looks it. **Colour wires** shades them on a single-hue scale by temperature, pressure, total flow or any species' mole fraction; the legend in the corner picks the variable and states the range, which is the streams' own range rather than one from zero. A variable that is the same on every stream says so instead of spreading round-off across the scale. Both views wait for a solve, and an edit that clears the solve clears them from the wires until the next one. A coloured wire drops the tint from a forward sensitivity run: one colour cannot say two things.
+
+### The script
+
+**View > Script** shows the whole flowsheet as the Python that **File > Python script** writes, syntax-highlighted and read-only. It regenerates as the flowsheet changes, so it is always the script of what is on the canvas; **Copy** puts it on the clipboard. It is read-only because it is generated: an edit made there would be gone at the next change. The Python the flowsheet keeps is the code context, which is also the script's preamble, and its panel is a code editor too, with the same highlighting, `Tab` to indent, and `Cmd-Enter` (`Ctrl-Enter`) to apply.
+
 ### Opening a script
 
 Most flowsheets here were written as Python, because the package was a library long before it was an editor. `difflow gui plant.py` opens one: the script is **run**, and the first `Flowsheet` it leaves at module level is what appears on the canvas. Running it is the only way to read it — a rate law is a function and a parameter is whatever arithmetic produced it, so there is nothing to parse — and the same act is what `difflow report plant.py` and `difflow plan-export plant.py` have always done. It carries the same trust: the file is executed, so open your own scripts with it and not a stranger's.

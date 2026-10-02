@@ -2,6 +2,7 @@
   import Assistant from './lib/Assistant.svelte'
   import Canvas from './lib/Canvas.svelte'
   import CodeContext from './lib/CodeContext.svelte'
+  import ScriptView from './lib/ScriptView.svelte'
   import Console from './lib/Console.svelte'
   import ContextMenu from './lib/ContextMenu.svelte'
   import Inspector from './lib/Inspector.svelte'
@@ -43,6 +44,7 @@
   let busy = $state(false)
   let context = $state({ source: '', names: [], error: null })
   let showContext = $state(false)
+  let showScript = $state(false)
   let result = $state(null)
   let pickers = $state(null)
   let sens = $state(null)
@@ -73,6 +75,12 @@
   // place. Empty until the answer arrives, which is why the links are
   // rendered conditionally rather than with a placeholder href.
   let about = $state({ version: '', links: {}, heartbeat: 15 })
+  let examples = $state([])
+  // The solution views: wire width by flow, and the variable wires are
+  // coloured by ('' for none). Preferences, so an edit that clears the
+  // solve does not clear them; they come back with the next solve.
+  let widthByFlow = $state(false)
+  let colorBy = $state('')
   // Which file the File menu is writing out, if any. The menu closed
   // behind the click, so this is what stops a second click from asking
   // for the same file twice while the first is still being drawn.
@@ -143,6 +151,7 @@
     const key = event.key.toLowerCase()
     if (key === 't') dark = !dark
     else if (key === 'l') portLabels = !portLabels
+    else if (key === 'w' && result?.ok) widthByFlow = !widthByFlow
   }
 
   async function load() {
@@ -222,6 +231,12 @@
   // Not in the `Promise.all` above: a failure here is a header without
   // links, which is a smaller thing than a flowsheet that would not
   // load, and it must not be reported as the latter.
+  // Beside `/api/about` for the same reason: no examples is an empty
+  // menu, not a flowsheet that failed to load.
+  get('/api/examples')
+    .then((e) => (examples = e.examples ?? []))
+    .catch(() => {})
+
   get('/api/about')
     .then((a) => {
       about = a
@@ -543,26 +558,44 @@
     contextError: !!context.error,
     portLabels,
     dark,
+    solved: !!result?.ok,
+    widthByFlow,
+    colorBy,
     panels: {
       results: showResults,
       context: showContext,
+      script: showScript,
       console: showConsole,
       planning: showPlanning,
       assistant: showAssistant,
     },
     links: about.links ?? {},
+    examples,
     actions: {
       save,
       reload: () => edit(load),
+      // A whole new flowsheet, so everything that described the old one
+      // has to go: the code context, and the palette's flags, which are
+      // answered against its bindings, as well as the canvas.
+      example: (key) => edit(async () => {
+        const answer = await post('/api/examples/open', { key })
+        selected = null
+        await loadContext()
+        catalog = await get('/api/catalog')
+        return answer
+      }),
       export: runExport,
       quit,
       results: () => (showResults = !showResults),
       context: () => (showContext = !showContext),
+      script: () => (showScript = !showScript),
       console: () => (showConsole = !showConsole),
       planning: () => (showPlanning = !showPlanning),
       assistant: () => (showAssistant = !showAssistant),
       portLabels: () => (portLabels = !portLabels),
       dark: () => (dark = !dark),
+      widthByFlow: () => (widthByFlow = !widthByFlow),
+      colorBy: () => (colorBy = colorBy ? '' : 'T'),
       open: (url) => window.open(url, '_blank', 'noopener,noreferrer'),
       // In this tab, as it has always been: the classic editor is the
       // other half of the same session, not a page about difflow.
@@ -638,6 +671,10 @@
         onadd={add}
         {flows}
         {tints}
+        solve={result?.ok ? result : null}
+        {widthByFlow}
+        {colorBy}
+        oncolorby={(key) => (colorBy = key)}
         onselect={(node) => (selected = node)}
         onmenu={openMenu}
         onrefuse={(why) => (note = why)}
@@ -706,6 +743,10 @@
     operation={selected?.data?.operation ?? null}
     onclose={() => (showAssistant = false)}
   />
+{/if}
+
+{#if showScript}
+  <ScriptView {doc} onclose={() => (showScript = false)} />
 {/if}
 
 {#if showContext}

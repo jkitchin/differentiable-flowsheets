@@ -7,10 +7,11 @@
  * The header had grown to fifteen controls in a row, which is what a
  * toolbar becomes when every panel earns a button: the two that matter
  * on any given day sit in a hedge of the eleven that do not. Here it is
- * three words and one button, and the arrangement is the whole idea ---
- * **File** writes the flowsheet out, **View** decides what is on the
- * screen, **Help** leaves the editor, and **Solve** stays a button
- * because it is the verb the editor exists for.
+ * four words and one button, and the arrangement is the whole idea ---
+ * **File** writes the flowsheet out, **Examples** replaces it with one
+ * that already works, **View** decides what is on the screen, **Help**
+ * leaves the editor, and **Solve** stays a button because it is the verb
+ * the editor exists for.
  *
  * Nothing here knows how to do anything. Every row's `run` is handed in,
  * which keeps the arrangement testable without a browser and keeps the
@@ -47,6 +48,8 @@ export function shortPath(path, keep = 2) {
  *   click while the first is still working would write the file twice.
  * @param state.panels  which drawers are open, so their rows can be ticked
  * @param state.links  the project's URLs, as `/api/about` reported them
+ * @param state.examples  `[{key, title, description}]`, as
+ *   `/api/examples` reported them
  */
 export function menuBar({
   path = '',
@@ -56,8 +59,12 @@ export function menuBar({
   contextError = false,
   portLabels = false,
   dark = false,
+  solved = false,
+  widthByFlow = false,
+  colorBy = '',
   panels = {},
   links = {},
+  examples = [],
   actions = {},
 } = {}) {
   // Every export reads the flowsheet, three of them through the server.
@@ -102,6 +109,22 @@ export function menuBar({
       ],
     },
     {
+      id: 'examples',
+      label: 'Examples',
+      // Never an empty menu: one that opens onto nothing reads as broken,
+      // where a disabled row says what is missing.
+      items: examples.length
+        ? examples.map((ex) => ({
+            label: ex.title,
+            // Choosing one replaces the canvas and forgets the file, so
+            // the hint says so before the click rather than after.
+            hint: `${ex.description ? ex.description + ' --- ' : ''}replaces the current flowsheet`,
+            disabled: busy,
+            run: () => actions.example?.(ex.key),
+          }))
+        : [{ label: 'No examples installed', disabled: true, run: () => {} }],
+    },
+    {
       id: 'view',
       label: 'View',
       items: [
@@ -125,6 +148,12 @@ export function menuBar({
           run: actions.context,
         },
         {
+          label: 'Script',
+          on: !!panels.script,
+          hint: 'the whole flowsheet as Python, highlighted and read-only',
+          run: actions.script,
+        },
+        {
           label: 'Console',
           on: !!panels.console,
           hint: 'a Python prompt in the editor process',
@@ -141,6 +170,27 @@ export function menuBar({
           on: !!panels.assistant,
           hint: 'the assistant, on whatever is selected',
           run: actions.assistant,
+        },
+        { separator: true },
+        // The solution views. Off until there is a solution to show:
+        // turned on over an unsolved flowsheet they would change nothing,
+        // which reads as broken.
+        {
+          label: 'Wire width by flow',
+          note: 'W',
+          on: !!widthByFlow,
+          disabled: !solved,
+          hint: solved ? 'each wire as wide as its molar flow' : 'solve first',
+          run: actions.widthByFlow,
+        },
+        {
+          label: 'Colour wires',
+          on: !!colorBy,
+          disabled: !solved,
+          hint: solved
+            ? 'by temperature, pressure, flow or a mole fraction; the legend picks which'
+            : 'solve first',
+          run: actions.colorBy,
         },
         { separator: true },
         {

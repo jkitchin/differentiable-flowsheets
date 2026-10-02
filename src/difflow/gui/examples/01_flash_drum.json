@@ -1,0 +1,52 @@
+{
+  "format_version": 2,
+  "difflow_version": "0.1.0",
+  "species_order": [
+    "water",
+    "ethanol"
+  ],
+  "defaults": {
+    "flow": 0.01,
+    "T": 300.0,
+    "P": 101325.0
+  },
+  "feeds": {
+    "feed": {
+      "F_water": 1.0,
+      "F_ethanol": 1.0,
+      "T": 362.0,
+      "P": 101325.0
+    }
+  },
+  "units": [
+    {
+      "name": "flash",
+      "operation": "Flash",
+      "params": {
+        "species_order": [
+          "water",
+          "ethanol"
+        ]
+      },
+      "constructor": {
+        "thermo": {
+          "$ref": "thermo"
+        }
+      },
+      "extra_params": {},
+      "inlets": [
+        "feed"
+      ],
+      "outlets": [
+        "liquid",
+        "vapor"
+      ]
+    }
+  ],
+  "recycles": {},
+  "view": {
+    "code_context": "from difflow import IdealThermo, get_species_data\n\nspecies = ['water', 'ethanol']\nthermo = IdealThermo({n: get_species_data(n) for n in species})\n",
+    "title": "Flash drum",
+    "description": "A two-phase water/ethanol feed split into vapor and liquid."
+  }
+}

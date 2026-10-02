@@ -240,3 +240,75 @@ class TestDataConsistency:
                 assert data.MW > 0, f"MW should be positive for {name}"
             except KeyError:
                 pass  # Species might only have critical data
+
+
+class TestEthylAcetate:
+    """Ethyl acetate's entry against the measurements it was taken from.
+
+    Each number was entered by hand from the NIST WebBook, so each is
+    checked against a value it should reproduce rather than against itself.
+    """
+
+    @pytest.fixture(scope="class")
+    def thermo(self):
+        return IdealThermo({"ethyl_acetate": get_species_data("ethyl_acetate")})
+
+    def test_normal_boiling_point(self, thermo):
+        # Tb = 350.2 K (NIST average of 58 values): Psat there is 1 atm.
+        assert float(thermo.Psat("ethyl_acetate", 350.2)) == pytest.approx(101325, rel=0.005)
+
+    def test_vapor_pressure_at_25C(self, thermo):
+        # About 12.6 kPa at 298.15 K.
+        assert float(thermo.Psat("ethyl_acetate", 298.15)) == pytest.approx(12600, rel=0.02)
+
+    def test_heat_of_vaporization(self, thermo):
+        # 31.94 kJ/mol at 350.3 K (Majer & Svoboda); 35 +/- 2 at 298 K.
+        assert float(thermo.Hvap("ethyl_acetate", 350.3)) == pytest.approx(31940, rel=0.002)
+        assert float(thermo.Hvap("ethyl_acetate", 298.15)) == pytest.approx(35000, abs=2000)
+
+    def test_critical_properties(self):
+        props = get_critical_props("ethyl_acetate")
+        assert props.Tc == pytest.approx(523.2)
+        assert props.Pc == pytest.approx(38.82e5)
+        assert props.MW == pytest.approx(88.106)
+
+    def test_alias(self):
+        assert resolve_alias("etoac") == "ethyl_acetate"
+
+
+class TestHeatOfVaporization:
+    """The database's Watson coefficients against measured latent heats.
+
+    The table once held each species' Hvap at its boiling point in the
+    place of Watson's prefactor, which put every Hvap 30-40% low at every
+    temperature (water: 29.3 kJ/mol at 100 C). Nothing failed, because
+    nothing compared the correlation with the number it was built from.
+    """
+
+    @pytest.mark.parametrize("name", list_species())
+    def test_every_entry_reproduces_its_own_measurement(self, name):
+        from difflow.database import _IDEAL_THERMO_DATA
+        if name not in _IDEAL_THERMO_DATA:
+            pytest.skip("no ideal-thermo record")
+        d = _IDEAL_THERMO_DATA[name]
+        thermo = IdealThermo({name: get_species_data(name)})
+        assert float(thermo.Hvap(name, d["Hvap_T"])) == pytest.approx(d["Hvap"][0], rel=1e-9)
+
+    @pytest.mark.parametrize("name, T, nist", [
+        # Independent of the anchor: NIST WebBook fluid tables (reference
+        # equations of state), H_vapor - H_liquid on the saturation line.
+        ("water", 373.124, 40650.0),
+        ("water", 298.15, 43973.0),
+        ("ammonia", 298.15, 19855.0),
+        ("carbon_dioxide", 273.15, 10161.0),
+        ("carbon_dioxide", 250.0, 12733.0),
+        ("methane", 111.67, 8195.0),
+    ])
+    def test_against_reference_equations_of_state(self, name, T, nist):
+        thermo = IdealThermo({name: get_species_data(name)})
+        assert float(thermo.Hvap(name, T)) == pytest.approx(nist, rel=0.03)
+
+    def test_watson_coeffs_refuses_a_reference_past_critical(self):
+        from difflow.database import watson_coeffs
+        with pytest.raises(ValueError):
+            watson_coeffs(10000.0, 0.38, 300.0, 316.0)

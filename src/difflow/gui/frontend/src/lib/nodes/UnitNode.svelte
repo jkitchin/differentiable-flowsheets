@@ -72,8 +72,8 @@
     <UnitSymbol operation={data.operation} category={data.category} size={38} />
   </div>
   <div class="text">
-    <div class="name" title={data.label}>{data.label}</div>
-    <div class="op" title={data.operation ?? ''}>{data.operation ?? ''}</div>
+    <div class="name" title={data.solved ? undefined : data.label}>{data.label}</div>
+    <div class="op" title={data.solved ? undefined : (data.operation ?? '')}>{data.operation ?? ''}</div>
     {#if data.pending}
       <!-- What it is waiting for, on the node itself. The same list the
            palette row carries, and the inspector says what to do about
@@ -89,7 +89,7 @@
       position={Position.Left}
       id={`in:${stream}`}
       class={inlet(data.openInlets, stream)}
-      title={why[inlet(data.openInlets, stream)] ?? ''}
+      title={data.solved ? undefined : (why[inlet(data.openInlets, stream)] ?? '')}
       style={`top:${at(i, data.inlets.length)}`}
     />
     {#if data.portLabels}
@@ -102,7 +102,7 @@
       position={Position.Right}
       id={`out:${stream}`}
       class={outlet(data.products, stream)}
-      title={why[outlet(data.products, stream)] ?? ''}
+      title={data.solved ? undefined : (why[outlet(data.products, stream)] ?? '')}
       style={`top:${at(i, data.outlets.length)}`}
     />
     {#if data.portLabels}

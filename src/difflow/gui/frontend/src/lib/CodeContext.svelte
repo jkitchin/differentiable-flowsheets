@@ -11,6 +11,8 @@
 <script>
   import { untrack } from 'svelte'
 
+  import CodeEditor from './CodeEditor.svelte'
+
   let {
     source = '',
     names = [],
@@ -40,16 +42,6 @@ kin = mass_action_kinetics([{
 }], SPECIES)
 `
 
-  /** Tab indents rather than leaving the box: this is a code editor. */
-  function keydown(event) {
-    if (event.key === 'Tab') {
-      event.preventDefault()
-      const box = event.currentTarget
-      const at = box.selectionStart
-      draft = draft.slice(0, at) + '    ' + draft.slice(box.selectionEnd)
-      queueMicrotask(() => box.setSelectionRange(at + 4, at + 4))
-    }
-  }
 </script>
 
 <section class="context">
@@ -64,17 +56,20 @@ kin = mass_action_kinetics([{
       <button onclick={() => (draft = STARTER)}>Insert an example</button>
     {/if}
     <button class="primary" disabled={busy || !dirty}
+            title="apply (Cmd-Enter in the editor)"
             onclick={() => onapply(draft)}>Apply</button>
     <button onclick={onclose}>Close</button>
   </header>
 
-  <textarea
-    spellcheck="false"
-    value={draft}
-    oninput={(e) => (draft = e.currentTarget.value)}
-    onkeydown={keydown}
-    placeholder="thermo = IdealThermo(...)"
-  ></textarea>
+  <div class="body">
+    <CodeEditor
+      value={draft}
+      label="code context"
+      placeholder="thermo = IdealThermo(...)"
+      onchange={(text) => (draft = text)}
+      onsubmit={(text) => { if (!busy && text !== source) onapply(text) }}
+    />
+  </div>
 
   <footer>
     {#if error}
@@ -108,18 +103,11 @@ kin = mass_action_kinetics([{
   h2 { font-size: 0.85rem; margin: 0; }
   .spacer { flex: 1; }
   .hint { color: var(--ink-soft); font-size: 0.76rem; margin: 0; }
-  textarea {
+  .body {
+    display: flex;
     flex: 1;
     min-height: 0;
     margin: 0 0.8rem;
-    padding: 0.5rem 0.6rem;
-    resize: none;
-    font: 0.79rem/1.55 ui-monospace, SFMono-Regular, Menlo, monospace;
-    tab-size: 4;
-    border: 1px solid var(--line);
-    border-radius: 6px;
-    background: var(--surface);
-    color: inherit;
   }
   footer {
     display: flex;
