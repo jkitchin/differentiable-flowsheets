@@ -360,6 +360,7 @@ def sweep():
 
 
 @pytest.mark.slow
+@pytest.mark.release
 class TestTrends:
     def test_mon_rises_with_io(self, sweep):
         m = [float(sweep[("io", r)]["alkylate.MON"]) for r in (6.0, 8.0, 10.0)]
@@ -484,6 +485,7 @@ def test_alky_block_builds():
 
 
 @pytest.mark.slow
+@pytest.mark.release
 def test_peng_robinson_shortcut_cross_check():
     """The default columns against difflow's Peng-Robinson ShortcutColumn, same specs.
 

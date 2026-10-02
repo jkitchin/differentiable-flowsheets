@@ -299,6 +299,7 @@ class TestGradients:
             np.testing.assert_allclose(J[:, j], fd, rtol=1e-5, atol=1e-12)
 
     @pytest.mark.slow
+    @pytest.mark.release
     def test_implicit_gradients_match_central_fd(self, light_assay, unit):
         """d(conversion, gasoline, coke, T_rg)/d(ROT, preheat, one VGO TBP point)."""
         cuts = dr.default_cut_points(light_assay)

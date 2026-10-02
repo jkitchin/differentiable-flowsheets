@@ -393,6 +393,7 @@ def test_heavy_vgo_converges(recycle):
 
 
 @pytest.mark.slow
+@pytest.mark.release
 def test_trends_with_cracking_temperature(light_once):
     """Conversion rises with WABT; naphtha/middle distillate and H2 consumption rise with conversion."""
     unit, feed, _ = light_once

@@ -278,11 +278,13 @@ class TestFlowsheet:
         for k, v in res.balances().items():
             assert abs(float(v)) < 1e-8, (k, float(v))
 
+    @pytest.mark.release
     @pytest.mark.parametrize("which", ["lean", "rich"])
     def test_first_reactor_drop_is_largest(self, which, request):
         dT = [float(r["dT"]) for r in request.getfixturevalue(which).reactors]
         assert dT[0] < 0 and dT[0] == min(dT)
 
+    @pytest.mark.release
     def test_products_are_plausible(self, lean, rich):
         for res in (lean, rich):
             o = {k: float(v) for k, v in res.outputs().items()}
@@ -292,6 +294,7 @@ class TestFlowsheet:
             assert o["reformate.aromatics_vol"] > 40.0
         assert float(rich.outputs()["reformate.RON"]) > float(lean.outputs()["reformate.RON"])
 
+    @pytest.mark.release
     def test_severity_trends(self, lean):
         hot = CatalyticReformer(ReformerParams().with_wait(783.15)).solve(lean_naphtha(),
                                                                            tear_initial=lean.tear)
@@ -300,6 +303,7 @@ class TestFlowsheet:
         assert float(b["h2.net_mol_s"]) > float(a["h2.net_mol_s"])
         assert float(b["c5plus.yield_vol"]) < float(a["c5plus.yield_vol"])
 
+    @pytest.mark.release
     def test_aromatics_rise_as_pressure_falls(self, lean):
         low = CatalyticReformer(ReformerParams(P_separator=8.0e5)).solve(lean_naphtha(),
                                                                          tear_initial=lean.tear)
@@ -329,6 +333,7 @@ def test_ron_target_sets_the_wait(lean):
 
 
 @pytest.mark.slow
+@pytest.mark.release
 def test_implicit_gradients_match_central_differences(lean):
     feed0 = lean_naphtha()
     N0 = float(feed0.group_fractions("volume")["naphthenes"])
