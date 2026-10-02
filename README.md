@@ -542,6 +542,11 @@ Every refinery unit (preheat train, crude and vacuum units, gas plant,
 isomerization, hydrotreater, hydrocracker, FCC, reformer, alkylation and
 blending) is listed, with its model and how far it has been validated, in
 `docs/refinery-summary.md` and `src/difflow_refinery/README.md`.
+`examples/40_refinery_flowsheet.ipynb` joins them into a small whole
+refinery, from the crude to the product pools and the hydrogen header, and
+`difflow_refinery.plant` (`Chain`, `Stage`, `AD_MODES`) composes library units
+into one differentiable function across their different AD modes (the
+reformer is forward-only, a default hydrotreater reverse-only).
 
 ## Data Reconciliation
 

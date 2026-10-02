@@ -73,6 +73,7 @@ still differentiable, with no palette entry.
 | Hydroprocessing blocks | `hydroprocessing` | trickle-bed reactor, PR high-pressure separator, recycle-gas loop, stripper |
 | Product properties | `products` | `product_properties`: yields, SG/API, TBP points |
 | Product property estimates | `properties` | flash, freeze and smoke points, viscosity, straight-run RON/MON from a stream (#330, mostly unverified); used by `BlendComponent.from_stream` |
+| Chaining units | `plant` | `Chain`, `Stage`, `AD_MODES`: library units composed into one differentiable function; one `jax.jacfwd`/`jacrev` when every unit shares the mode, else the chain rule by unit Jacobians (#334) |
 | Planning blocks | `planning`, and each unit's package or its `planning` submodule (e.g. `hydrotreating.planning.hdt_block`) | `cdu_block`, `gasplant_block`, `isom_block`, `hdt_block`, `hcu_block`, `fcc_block`, `reformer_block`, `alky_block`, `h2_block`, `product_value_block`, for `difflow.planning` |
 
 ## How far to trust it
@@ -99,6 +100,8 @@ predictions until they are fitted to a unit's own data.
 - Examples: `examples/33_refinery_gasoline_blending.ipynb` through
   `examples/39_refinery_isomerization.ipynb`, and
   `examples/40_refinery_flowsheet.ipynb`, a small whole refinery (CDU,
-  gas plant, naphtha and distillate hydrotreaters, reformer, product
-  pools, hydrogen balance).
+  gas plant, naphtha and distillate hydrotreaters with their
+  fractionators, reformer, residue desulfurizer, product pools with
+  estimated properties, the hydrogen header, and a gradient across the
+  hydrotreater and the reformer).
 - Tests: `tests/refinery/`.

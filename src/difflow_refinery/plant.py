@@ -53,13 +53,19 @@ Two things this does not do, by design: it is not a ``Flowsheet`` (the units
 already contain their own recycles; a chain between them has none -- a
 recycle between library units would be a tear around two compiled solves,
 which the hydrogen loop of :mod:`difflow_refinery.hydrogen.loop` shows is a
-concrete Python iteration, not a traced one), and it does not cache or jit
-the composition (each unit jit-compiles its own solve, and the stage
-Jacobians are jit-compiled per stage).
+concrete Python iteration, not a traced one), and it does not jit the
+composition as a whole. ``Stage(..., jit=True)`` jits one stage: do that for
+a unit whose solve has a Python-level recycle (the reformer's
+``Flowsheet``), which under a transform is otherwise traced and compiled
+again on every call -- every tangent of an unvectorized Jacobian, and every
+repeated Jacobian. Measured on example 40's chain (NHT -> fractionator ->
+reformer -> gasoline pool, 2 inputs, 4 cores): 487 s for the first
+Jacobian with jitted stages, 34 s for a repeat; unjitted, 671 s and 511 s.
 
 The hydrotreater and the residue desulfurizer can be made forward-capable:
-``HydrotreaterParams(reactor=ReactorOptions(adjoint="forward"))`` (and
-``RDSParams(reactor=...)``) integrate the beds with ``diffrax.ForwardMode``;
+``HydrotreaterParams(reactor=ReactorOptions(adjoint="forward"))`` integrates
+the beds with ``diffrax.ForwardMode`` (``RDSParams(reactor=...)`` should do
+the same for the residue desulfurizer; not tested);
 the Newton loops already use a forward copy, and the final implicit step
 ``x* - J^-1 f(x*)`` is differentiable in both modes. Then a chain of those
 units and the reformer is all forward, and ``method="fwd"`` traces it end to
@@ -118,13 +124,15 @@ AD_MODES: dict[str, ADMode] = {m.name: m for m in (
     ADMode("crude unit", "unit.CrudeUnit / column.CrudeColumn", ("fwd", "rev"),
            "EO MESH Newton in lax.while_loop on stop-gradient inputs, then one Newton step with the "
            "converged Jacobian (implicit-function derivative)",
-           evidence="tests/refinery/test_column.py, test_unit.py (jax.grad); test_column.py::TestTransforms (vmap)"),
+           evidence="tests/refinery/test_column.py, test_unit.py (jax.grad); test_planning.py::TestBlock (cdu_block, "
+                    "forward mode by shape)"),
     ADMode("vacuum unit", "vacuum.VacuumColumn / vacuum.StageColumn", ("fwd", "rev"),
            "stage-network Newton, implicit step reusing the converged Jacobian",
            evidence="tests/refinery/test_vacuum.py (jax.jacfwd and jax.grad)"),
     ADMode("gas plant columns", "gasplant.GasPlantColumn", ("fwd", "rev"),
            "the vacuum StageColumn machinery on CubicThermo: three Newton passes, then the implicit step",
-           evidence="tests/refinery/test_gasplant.py (jax.jacfwd of gasplant_block)"),
+           evidence="tests/refinery/test_gasplant.py (jax.jacfwd of gasplant_block); reverse by the same implicit "
+                    "step as the vacuum column (jax.grad tested there, not on the gas plant)"),
     ADMode("gas compressor, amine treater", "gasplant.GasCompressor, gasplant.AmineTreater", ("fwd", "rev"),
            "closed-form stages and removal fractions (pure JAX)"),
     ADMode("hydrotreater", "hydrotreating.Hydrotreater", ("rev",),
@@ -133,10 +141,12 @@ AD_MODES: dict[str, ADMode] = {m.name: m for m in (
            "implicit step on the reverse-mode residual",
            switch="HydrotreaterParams(reactor=ReactorOptions(adjoint='forward')) integrates the beds with "
                   "diffrax.ForwardMode: then forward mode only (jax.jacfwd), same values",
-           evidence="tests/refinery/test_hydrotreating.py (jax.jacrev); tests/refinery/test_plant.py (forward)"),
+           evidence="tests/refinery/test_hydrotreating.py (jax.jacrev); tests/refinery/test_plant_chain.py "
+                    "(forward, against reverse and central differences)"),
     ADMode("residue desulfurizer", "residue.ResidueDesulfurizer", ("rev",),
            "trickle beds with RecursiveCheckpointAdjoint (reverse only), quench mixing by implicit Newton",
-           switch="RDSParams(reactor=ReactorOptions(adjoint='forward')) for forward mode only",
+           switch="RDSParams(reactor=ReactorOptions(adjoint='forward')) should give forward mode only, by the "
+                  "hydrotreater's construction (not tested)",
            evidence="tests/refinery/test_residue.py (jax.grad of fuel-oil sulfur)"),
     ADMode("hydrocracker", "hydrocracking.Hydrocracker", ("rev",),
            "checkpointed bed adjoints, and the UCO recycle's Anderson fixed point with a GMRES adjoint "
@@ -209,11 +219,19 @@ class Stage:
         modes: The AD modes ``fn`` supports, a non-empty subset of
             ``("fwd", "rev")`` -- for a unit, its :data:`AD_MODES` entry
             (``"rev"`` for a default hydrotreater, ``"fwd"`` for the reformer).
+        jit: Wrap ``fn`` in ``jax.jit`` (once, here). A unit's solve that is
+            not one jitted function -- the reformer's ``Flowsheet`` recycle --
+            is traced and compiled anew on every transform call otherwise
+            (each JVP, each repeated Jacobian); jitted, the compiled
+            derivative is cached and a repeated Jacobian costs only its run.
+            Everything the stage reads besides ``x`` becomes a compile-time
+            constant.
     """
 
     name: str
     fn: Callable
     modes: tuple = MODES
+    jit: bool = False
 
     def __post_init__(self):
         modes = (self.modes,) if isinstance(self.modes, str) else tuple(self.modes)
@@ -221,6 +239,8 @@ class Stage:
         if not modes or bad:
             raise ValueError(f"stage {self.name!r}: modes must be a non-empty subset of {MODES}, got {modes}")
         object.__setattr__(self, "modes", tuple(m for m in MODES if m in modes))
+        if self.jit:
+            object.__setattr__(self, "fn", jax.jit(self.fn))
 
 
 def _block(tree):
@@ -306,12 +326,19 @@ class Chain:
             return choose_ad_mode(n_in, n_out)
         return common[0] if common else "chain"
 
-    def jacobian(self, x, method: str = "auto") -> ChainJacobian:
+    def jacobian(self, x, method: str = "auto", vectorize: bool = True) -> ChainJacobian:
         """Value and Jacobian of the chain at ``x`` (see the module docstring for the methods).
 
         ``"auto"`` needs the output size to choose between ``fwd`` and
         ``rev`` and gets it by evaluating the chain once, unless the chain is
         mixed (then ``chain``) or supports one mode only.
+
+        ``vectorize=True`` (default) pushes every tangent (or cotangent) at
+        once, as ``jax.jacfwd``/``jax.jacrev`` do (``vmap``). ``False`` pushes
+        them one at a time: the same Jacobian and one compile (the later
+        columns hit the units' jit caches), with the peak memory of a single
+        tangent -- what a chain through two units' solves needs on a
+        machine where several compiled units already fill the memory.
         """
         x_flat, unravel_in = ravel_pytree(x)
         if method == "auto" and len(self.modes) == 2:
@@ -320,27 +347,33 @@ class Chain:
             method = self.choose(x_flat.size, n_out, "auto")
         else:
             method = self.choose(x_flat.size, 0, method)
+        eye = jnp.eye(x_flat.size)
         if method in MODES:
             t0 = time.perf_counter()
-            out_struct = {}
+            box = {}
 
             def flat(v):
                 y = self(unravel_in(v))
                 yf, un = ravel_pytree(y)
-                out_struct["unravel"] = un
-                return yf, y
+                box["unravel"] = un
+                return yf
 
-            jac = jax.jacfwd if method == "fwd" else jax.jacrev
-            J, y = jac(flat, has_aux=True)(x_flat)
+            if method == "fwd":
+                yf, J = _push_columns(flat, x_flat, eye, vectorize)
+                y = box["unravel"](yf)
+            else:
+                yf, pull = jax.vjp(flat, x_flat)
+                J = _pull_rows(pull, yf.size, vectorize)
+                y = box["unravel"](yf)
             J, y = _block(J), _block(y)
             return ChainJacobian(value=y, jacobian=J, method=method,
                                  timings={"total": time.perf_counter() - t0},
-                                 unravel_in=unravel_in, unravel_out=out_struct["unravel"])
+                                 unravel_in=unravel_in, unravel_out=ravel_pytree(y)[1])
         # the chain rule by unit Jacobians, forward accumulation
         timings = {}
         t_all = time.perf_counter()
         xk = x
-        J = jnp.eye(x_flat.size)
+        J = eye
         for s in self.stages:
             t0 = time.perf_counter()
             xf, unravel = ravel_pytree(xk)
@@ -353,20 +386,42 @@ class Chain:
                 return yf
 
             if "fwd" in s.modes:
-                def push(t, f=f, xf=xf):
-                    return jax.jvp(f, (xf,), (t,))[1]
-                J = jax.vmap(push, in_axes=1, out_axes=1)(J)
-                xk = _block(s.fn(xk))
+                yf, J = _push_columns(f, xf, J, vectorize)
+                xk = _block(box["unravel"](yf))
             else:
                 yf, pull = jax.vjp(f, xf)
-                Jk = jax.vmap(lambda c, pull=pull: pull(c)[0])(jnp.eye(yf.size))
-                J = Jk @ J
+                J = _pull_rows(pull, yf.size, vectorize) @ J
                 xk = _block(box["unravel"](yf))
             J = _block(J)
             timings[s.name] = time.perf_counter() - t0
         timings["total"] = time.perf_counter() - t_all
         return ChainJacobian(value=xk, jacobian=J, method="chain", timings=timings,
                              unravel_in=unravel_in, unravel_out=ravel_pytree(xk)[1])
+
+
+def _push_columns(f, x, T, vectorize):
+    """``(f(x), df(x) @ T)`` by JVPs, one per column of ``T`` (vmapped, or in a Python loop).
+
+    The primal comes out of the same JVP (vmapped, every column carries a copy
+    of it; the first is taken), so the chain is not evaluated, or compiled,
+    a second time for its value.
+    """
+    if vectorize:
+        ys, J = jax.vmap(lambda t: jax.jvp(f, (x,), (t,)), in_axes=1, out_axes=(0, 1))(T)
+        return ys[0], J
+    cols, y = [], None
+    for j in range(T.shape[1]):
+        y, t = jax.jvp(f, (x,), (T[:, j],))
+        cols.append(_block(t))
+    return y, jnp.stack(cols, axis=1)
+
+
+def _pull_rows(pull, n_out, vectorize):
+    """The Jacobian ``(n_out, n_in)`` from a VJP, one cotangent per output."""
+    eye = jnp.eye(n_out)
+    if vectorize:
+        return jax.vmap(lambda c: pull(c)[0])(eye)
+    return jnp.stack([_block(pull(eye[i])[0]) for i in range(n_out)])
 
 
 # =============================================================================

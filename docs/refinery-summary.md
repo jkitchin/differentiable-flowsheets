@@ -39,11 +39,16 @@ Every arrow is a differentiable connection: a product property has an exact
 gradient with respect to the assay data, the specs and the operating
 variables upstream of it.
 
-The hydroskimming part of the map (CDU, gas plant, naphtha hydrotreater,
-reformer, distillate hydrotreater, residue to fuel oil, and the four pools)
-runs end to end in `examples/40_refinery_flowsheet.ipynb`. Some of its
-arrows are bridges written in that notebook rather than library
-connections; they are listed under [Known gaps](#refinery-summary-gaps).
+The hydroskimming part of the map runs end to end in
+`examples/40_refinery_flowsheet.ipynb`: CDU, gas plant, naphtha hydrotreater
+and its fractionator, reformer, distillate hydrotreater and its
+fractionator, residue desulfurizer, the hydrogen header with a hydrogen
+plant, and the four pools. Every connection there is now a library one
+(#326 to #333). The example also takes one gradient across the naphtha
+hydrotreater, the reformer and the gasoline pool with
+`difflow_refinery.plant` (#334), checked against central differences.
+In that refinery the jet, ULSD and fuel oil (0.31 wt% S) make spec, and the
+gasoline is 7 RON short (no isomerization unit).
 
 ---
 
@@ -60,6 +65,7 @@ These are not units, but every unit reads them.
 | Column thermodynamics | `ColumnThermo` | Raoult's law with Lee-Kesler vapour pressures and ideal-gas-path enthalpies, vectorised over stages and components. |
 | Stage-network column | `vacuum.StageColumn` | The equation-oriented column the VDU, the gas plant and the hydrotreater's stripper are built on. [Details](unit-operations-refinery.md#the-stage-network-column) |
 | Hydroprocessing blocks | `difflow_refinery.hydroprocessing` | A trickle-bed reactor around any kinetic model, a Peng-Robinson high-pressure separator, the recycle-gas loop and a steam stripper. Shared by the hydrotreater and the hydrocracker. [Details](unit-operations-refinery.md#hydroprocessing-building-blocks) |
+| Chaining units | `difflow_refinery.plant` | `Chain`, `Stage` and `AD_MODES`: library units composed into one differentiable function. It uses one `jax.jacfwd`/`jacrev` when every unit supports that mode, and the chain rule by unit Jacobians when they do not (the reformer is forward-only, a default hydrotreater reverse-only). The AD-mode table of every unit and the measured compile costs are under [Details](unit-operations-refinery.md#chaining-units-into-one-differentiable-function). |
 
 ---
 
@@ -155,18 +161,22 @@ in the code.
   ([details](unit-operations-refinery.md#estimated-product-properties)).
   A measured value overrides each.
 - **Boiling ranges are TBP, not ASTM D86**, throughout.
-- **Connections between units.** `examples/40_refinery_flowsheet.ipynb`
-  joins the CDU, gas plant, naphtha and distillate hydrotreaters, reformer
-  and four pools, and its last section lists the bridges it had to write:
-  CDU streams into a `gas_components` table, the hydrotreater's product grid
-  into a naphtha splitter or a `NaphthaFeed` (which reads the untreated
-  composition), a jet/diesel split after a distillate hydrotreater, a
-  hydrogen header, and a fuel-oil route for the atmospheric residue.
-  The hydrogen header is now a library block, `difflow_refinery.hydrogen`
-  (#329), and the fuel-oil route a library too (`difflow_refinery.residue`,
-  #331: a residue desulfurizer and the VLSFO pool); example 40 does not use
-  either yet ([the residue replacement](unit-operations-refinery.md#in-the-whole-refinery-example)).
-  The CDU-to-gas-plant bridge is now `gasplant.gas_plant_feed` (#326:
-  cut selection, folding, water and an explicit H2S assumption, with the
-  folded and dropped mass reported); example 38 uses it, example 40 not yet
-  ([details](unit-operations-refinery.md#from-crude-unit-products-to-a-gas-plant-feed)).
+- **Connections between units.** The nine gaps that
+  `examples/40_refinery_flowsheet.ipynb` first ran into (#326 to #334) are
+  closed: `gas_plant_feed`, `NaphthaFeed.from_hydrotreater` and
+  `hydroprocessed_feed`, the hydrotreater's fractionator, the hydrogen
+  network, the product property estimates and reformer sulfur, the residue
+  desulfurizer, the charge heater and dissolved-gas reporting, and
+  `difflow_refinery.plant` for gradients across units. The example's refinery
+  mass balance closes to 1.8e-6, and that remainder is the reported fold of
+  `gas_plant_feed`. What it still assumes: the crude unit's offgas H2S
+  (2 mol %; `evolved_h2s` gives a sulfur-balance basis but no sourced
+  fraction), a once-through treat gas on the residue desulfurizer (its
+  hydrogen demand is a lower bound), and an unlimited hydrogen plant
+  (the notebook's section 11 lists them).
+- **Chaining units across AD modes costs compile time and memory.** A
+  forward-only reformer next to a reverse-only (default) hydrotreater cannot
+  be traced end to end in either mode; `Chain(method="chain")` uses the unit
+  Jacobians, or the hydrotreater can be put in forward mode. Example 40's
+  2-input chain Jacobian compiled in about 7.5 minutes on 4 cores
+  ([details](unit-operations-refinery.md#chaining-units-into-one-differentiable-function)).

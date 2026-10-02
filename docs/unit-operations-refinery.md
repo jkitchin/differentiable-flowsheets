@@ -31,6 +31,7 @@ The `difflow_refinery` plugin provides:
 - **The VGO hydrocracker** (`difflow_refinery.hydrocracking`): the same building blocks with a pretreat bed (the hydrotreating kinetics, VGO constants), a cracking bed on continuous lumping over the pseudo-component grid (Laxminarasimhan et al. 1996, or discrete lumps) with organic-N inhibition, a simplified fractionator and a UCO recycle tear. A library, not a palette operation; its cracking constants are illustrative. See [The hydrocracker](#refinery-hydrocracker).
 - **The hydrogen network** (`difflow_refinery.hydrogen`): producers (the reformer's net gas, an H2 plant, imports), consumers (hydrotreater and hydrocracker makeup with a purity or partial-pressure spec), an optional PSA, purge to fuel gas and export, on one or more headers; returns the balanced header and each consumer's makeup purity, feeds it back into the hydrotreaters (`close_hydrotreater_loop`), and `h2_block` for planning. A library. See [The hydrogen network](#refinery-hydrogen).
 - **Residue desulfurization and fuel oil** (`difflow_refinery.residue`, #331): an atmospheric-residue desulfurizer on the same building blocks (HDS by sulfur class plus refractory residue sulfur, HDM of Ni+V, CCR reduction, a small 538 C+ conversion; once-through treat gas, ideal product split) and the VLSFO pool (`fuel_oil_blend`). It takes a 3 wt% S residue to a 0.5 wt% S fuel oil, which cutter blending alone cannot. A library; constants illustrative. See [Residue desulfurization and fuel oil](#refinery-residue).
+- **Chaining units** (`difflow_refinery.plant`, #334): compose library units (hydrotreater, reformer, residue desulfurizer, ...) and their adapters into one differentiable function, with each unit's AD mode in one table (`AD_MODES`). `Chain.jacobian` uses one `jax.jacfwd`/`jax.jacrev` when every unit supports that mode, and the chain rule by unit Jacobians when they do not (the reformer is forward-only, a default hydrotreater reverse-only). See [Chaining units](#refinery-plant).
 
 Everything is differentiable with `jax`. A product yield, a gravity or a furnace duty has an exact gradient with respect to:
 
@@ -1923,7 +1924,7 @@ Checked (`tests/refinery/test_reforming.py`; flowsheet tests are marked `slow`):
 
 - **No published commercial-reformer simulation is reproduced.** Neither Padmavathi & Chaudhuri (1997) nor Taskar & Riggs (1997) could be obtained to check which one tabulates feed, conditions and outlet data in full, so no cross-check against them is made. The kinetics are illustrative and would have to be replaced by either paper's parameters for such a comparison.
 - **No IDAES `GibbsReactor` comparison** of the equilibrium layer: IDAES is not installed in this environment. The equilibrium layer is checked against its own Gibbs energies (above).
-- **No dedicated example notebook.** The reformer runs inside the whole-refinery example, `examples/40_refinery_flowsheet.ipynb` (naphtha hydrotreater -> reformer -> gasoline pool), on a feed from `NaphthaFeed.from_characterization`; `NaphthaFeed.from_hydrotreater` (#327) is the route from the hydrotreated product.
+- **No dedicated example notebook.** The reformer runs inside the whole-refinery example, `examples/40_refinery_flowsheet.ipynb` (naphtha hydrotreater -> fractionator -> reformer -> gasoline pool and hydrogen header), on a feed from `NaphthaFeed.from_hydrotreater` (#327) with the treated naphtha's sulfur; the example also takes its forward-mode gradient together with the hydrotreater's ([Chaining units](#refinery-plant)).
 - No Gary-Handwerk-Kaiser yield-versus-RON cross-check: the figure could not be consulted.
 
 ### References
@@ -2397,7 +2398,7 @@ A crude-unit product carries every cut at some trace level. `Hydrotreater(..., t
 
 - **The Korsten & Hoffmann (1996) profile cross-check is not done.** Their paper could not be reached from here (publisher sites are blocked), so neither their parameters nor their profiles could be verified, and no reproduction is claimed. Their gas-liquid / liquid-solid film model and their Henry's-law and Standing-Katz density correlations are not implemented either.
 - **Smoke point** is not computed. The correlation the issue names (Riazi MNL50, Tb and SG) could not be verified; a jet pool takes a measured `smoke_mm` override.
-- **No dedicated example notebook.** `examples/40_refinery_flowsheet.ipynb` runs the unit twice inside a whole refinery: as a naphtha hydrotreater ahead of the reformer, and as a distillate hydrotreater on the CDU's kerosene, diesel and AGO, whose product goes to the jet and ULSD pools through `res.product_stream()` and `res.product_char`.
+- **No dedicated example notebook.** `examples/40_refinery_flowsheet.ipynb` runs the unit twice inside a whole refinery: as a naphtha hydrotreater (`NAPHTHA_HDT_PARAMS`, 30 bar, 320 °C, LHSV 4) whose product and wild naphtha are fractionated into light and heavy naphtha ahead of the reformer, and as a distillate hydrotreater on the CDU's kerosene, diesel and AGO, whose product is fractionated into jet and diesel (`res.fractionate`). Both take their makeup from the hydrogen header (`close_hydrotreater_loop`).
 - **Not a difflow `Flowsheet` object.** The recycle is solved by the unit's own tear (above); a `Flowsheet` wiring of the same pieces is not provided.
 - **Commercial catalyst kinetics** are not reproduced and must not be implied: the rate constants are illustrative.
 - **No dissolved-gas effect in the stripper**: the real gases leave with the overhead without taking part in the column's equations.
@@ -2994,7 +2995,7 @@ On the CDU residue of `examples/40` (3.06 wt% S, no Ni+V given), the fuel oil co
 (refinery-residue-ex40)=
 ### In the whole-refinery example
 
-`examples/40_refinery_flowsheet.ipynb` still sends the raw residue to the fuel-oil pool, with an assumed viscosity (its stand-in). The replacement is:
+`examples/40_refinery_flowsheet.ipynb` sends the crude unit's atmospheric residue through the desulfurizer to the fuel-oil pool:
 
 ```python
 from difflow_refinery.residue import ResidueDesulfurizer, fuel_oil_blend
@@ -3004,7 +3005,7 @@ fuel_oil = fuel_oil_blend([rds_res.blend_component("residue"), rds_res.blend_com
                           [rds_res.volume("residue"), rds_res.volume("distillate")])
 ```
 
-The H2 consumer it adds is `rds_res.outputs["h2.chemical"]`, which the hydrogen balance of that example would need. Its H2S is `rds_res.outputs["h2s.make"]`, for the sulfur table. Give the assay `nickel_vanadium_wppm=` for HDM to have anything to remove.
+The assay there is given 40 wppm Ni+V, so HDM has something to remove. On its 44 500 bbl/d of residue (3.06 wt% S), the desulfurized residue is at 0.335 wt% S, with HDS at 89.9 % and HDM at 79.7 %. The distillate is 12.6 %, at 1760 wppm S, and goes to the fuel oil. The fuel oil makes every VLSFO spec: 0.31 wt% S, 69 cSt at 50 C (estimated), SG 0.920 and 4.8 wt% CCR. The unit is the refinery's largest hydrogen consumer. On the example's hydrogen header it draws its chemical consumption, `rds_res.outputs["h2.chemical"]` (400 of 546 mol/s). That is a lower bound, since the once-through treat gas has no purge or solution losses. Its `outputs["h2s.make"]` carries 79 % of the crude's sulfur in the sulfur table.
 
 (refinery-residue-references)=
 ### References
@@ -3181,6 +3182,97 @@ superstructure optimisation; the HDT's traced makeup composition (see AD mode).
 | Source-sink hydrogen network with purifier and purge to fuel (background) | Alves, J.J., Towler, G.P., "Analysis of refinery hydrogen distribution systems", *Ind. Eng. Chem. Res.* 41(23), 5759-5769 (2002) | Not consulted (unverified); the superstructure is the usual one and no number of the paper is used or reproduced. |
 | PSA recovery 0.88, product 99.9 mol% | none | Illustrative defaults, inside the range usually quoted for refinery PSA units (unverified). Set them from the unit's data. |
 | Nm3 at 0 C, 1 atm | `MOL_PER_NM3 = 101325/(R 273.15)` | As in the hydroprocessing blocks. |
+
+---
+
+(refinery-plant)=
+## Chaining units into one differentiable function
+
+The library units (hydrotreater, reformer, residue desulfurizer, FCC, hydrocracker and the rest) are Python objects with a `solve`, and the adapters between them are pure JAX: `gas_plant_feed`, `HydrotreaterResult.fractionate`, `NaphthaFeed.from_hydrotreater`, `fuel_oil_blend` and the hydrogen network. So a chain of units, such as CDU → hydrotreater → reformer → gasoline pool, is a Python function, and it has an exact derivative. What needs care is the AD mode, because the units do not all support the same one. `difflow_refinery.plant` (#334) handles that, and deliberately does no more. It is a small module, not a framework, and a library, not a palette operation.
+
+```python
+from difflow_refinery.plant import Chain, Stage, central_difference
+
+def nht(x):                      # hydrotreater + fractionator + adapter
+    r = unit.solve(feed, params=dataclasses.replace(p, T_in=(x[0],)), warn=False)
+    f = r.fractionate(cut_points=(x[1],), products=("light_naphtha", "heavy_naphtha"),
+                      feeds=("product", "wild_naphtha"))
+    return NaphthaFeed.from_hydrotreater(f, "heavy_naphtha")
+
+def reform(feed):                # the reformer, warm-started
+    o = reformer.solve(feed, tear_initial=tear, tol=1e-11, on_nonconvergence="ignore").outputs()
+    return jnp.stack([o["reformate.S_wppm"], o["reformate.RON"], o["h2.net_mol_s"]])
+
+chain = Chain(Stage("nht", nht, modes="rev"),            # a default hydrotreater: reverse only
+              Stage("reformer", reform, modes="fwd"))     # the reformer: forward only
+res = chain.jacobian(x0)               # method "chain": the chain rule by unit Jacobians
+res.jacobian, res.timings              # (n_out, n_in), seconds per stage
+central_difference(chain, x0, h=[0.5, 0.5])
+```
+
+A `Stage` is a function from an array pytree to an array pytree, together with the modes it supports. `Chain.jacobian(x, method="auto", vectorize=True)` differentiates the composition in one of three ways:
+
+- **`"fwd"`** is `jax.jacfwd` of the whole chain, and **`"rev"`** is `jax.jacrev`. Each is one trace through every unit, so it is possible only when every stage supports that mode. With both modes available, `"auto"` picks by shape (`difflow.planning.linearize.choose_ad_mode`).
+- **`"chain"`** is the chain rule by unit Jacobians. It is what `"auto"` falls back to for a mixed chain. The stages are evaluated one at a time on concrete values, and `dx_k/dx_0` is carried along by forward accumulation. A forward stage pushes the current Jacobian's columns through by JVPs, which costs one tangent per chain input. A reverse-only stage forms its own Jacobian by VJPs, one cotangent per output of that stage, and multiplies. So keep the interface after a reverse-only unit narrow: a `NaphthaFeed` is 23 numbers, while a whole `HydrotreaterResult` is thousands.
+- `vectorize=False` pushes the tangents (or cotangents) one at a time instead of in a `vmap`. The Jacobian is the same, and the peak memory is that of a single tangent. It costs nothing extra only when the stages are jitted: an unjitted reformer recompiles for every tangent (see the measurements below).
+
+`Stage(name, fn, modes, jit=False)` with `jit=True` wraps `fn` in `jax.jit` once. Do that for any stage that holds a unit with a Python-level recycle, such as the reformer.
+
+**A mixed chain cannot be differentiated end to end in either mode.** `jax.jacfwd` fails in the reverse-only unit with "can't apply forward-mode autodiff (jvp) to a custom_vjp function", which is the hydrotreater's `RecursiveCheckpointAdjoint` bed integration. `jax.jacrev` fails in the forward-only unit, because the reformer's `ForwardMode` beds are a `while_loop`, which cannot be transposed. The per-commit tests pin both failures on toy stages with exactly these restrictions (`tests/refinery/test_plant.py`). There are two supported patterns:
+
+1. **Make every unit forward-capable, then use one `jax.jacfwd`.** The hydrotreater can be built with `HydrotreaterParams(reactor=ReactorOptions(adjoint="forward"))`. Its beds are then integrated with `diffrax.ForwardMode`. The values are the same, and its tear Newton already takes its Jacobian from a forward copy. The cost is reverse mode on that unit. A chain of that hydrotreater and the reformer is all forward.
+2. **Keep the units as they are and use `method="chain"`.** It gives the same Jacobian (`tests/refinery/test_plant_chain.py` checks that the two agree to 1e-6).
+
+### AD modes of the units
+
+`difflow_refinery.plant.AD_MODES` holds this table, and `ad_mode_table()` prints it. "Modes" are the modes with the unit's default options.
+
+| Unit | Modes | Why | Other mode | Tested by |
+|---|---|---|---|---|
+| Crude unit (`CrudeUnit`, `CrudeColumn`) | fwd + rev | EO MESH Newton on stop-gradient inputs, then one Newton step with the converged Jacobian | -- | `test_column.py`, `test_unit.py` (grad); `test_planning.py` (`cdu_block`, forward) |
+| Vacuum unit (`VacuumColumn`, `StageColumn`) | fwd + rev | stage-network Newton, implicit step reusing the converged Jacobian | -- | `test_vacuum.py` (jacfwd and grad) |
+| Gas plant (`GasPlantColumn`) | fwd + rev | the vacuum machinery on `CubicThermo`: three passes, then the implicit step | -- | `test_gasplant.py` (jacfwd); reverse by the vacuum column's construction (not tested on the gas plant) |
+| Gas compressor, amine treater | fwd + rev | closed-form, pure JAX | -- | |
+| Hydrotreater (`Hydrotreater`) | **rev** | beds by diffrax `RecursiveCheckpointAdjoint` (a `custom_vjp`); the tear Newton's Jacobian from a forward-adjoint copy, then one implicit step on the reverse-mode residual | `ReactorOptions(adjoint="forward")`: forward only, same values | `test_hydrotreating.py` (jacrev); `test_plant_chain.py` (forward) |
+| Residue desulfurizer (`ResidueDesulfurizer`) | **rev** | checkpointed bed adjoints; quench mixing by implicit Newton | `RDSParams(reactor=ReactorOptions(adjoint="forward"))` should give forward only (same construction; not tested) | `test_residue.py` (grad) |
+| Hydrocracker (`Hydrocracker`) | **rev** | checkpointed beds and the UCO recycle's Anderson fixed point with a GMRES adjoint (a `custom_vjp`) | none | `test_hydrocracking.py` (jacrev) |
+| Catalytic reformer (`CatalyticReformer`) | **fwd** | `diffrax.ForwardMode` beds inside the `Flowsheet`'s traced recycle (optimistix fixed point, implicit differentiation, which needs JVPs of the loop) | none for the unit; `adjoint="reverse"` serves a stand-alone reactor only | `test_reforming.py` (jacfwd) |
+| FCC (`FCCUnit`) | fwd + rev | constant-step Tsit5 with `diffrax.DirectAdjoint`; heat-balance Newton by optimistix with implicit adjoint | -- | `test_fcc.py::TestGradients::test_reverse_mode_matches_forward` |
+| Isomerization (`IsomerizationUnit`) | **fwd** | with a DIH, the recycle is converged by a Python Anderson loop and differentiated at its solution by a `jax.custom_jvp` | -- | `test_isomerization_dih_gradients.py` (jacfwd) |
+| Alkylation (`AlkylationUnit`) | **fwd** | DIB-overhead tear by the `Flowsheet`'s traced optimistix fixed point | -- | `test_alkylation.py` (jvp, jacfwd) |
+| Preheat train (`PreheatedCrudeUnit`) | fwd + rev | outer Newton with an implicit step | -- | `test_preheat.py` (grad, jacfwd) |
+| Blend pool, property estimates | fwd + rev | closed-form, pure JAX | -- | `test_blending.py`, `test_properties.py` |
+| Adapters (`gas_plant_feed`, `fractionate`, `NaphthaFeed.from_hydrotreater`, `fuel_oil_blend`) | fwd + rev | sums, sigmoid splits, lumping; `gas_plant_feed`'s cut *selection* is static (pass `cuts=` under a transform) | -- | `test_gasplant_feed.py`, `test_hydrotreated_naphtha_feeds.py` |
+| Hydrogen network (`HydrogenNetwork`) | fwd + rev | pure JAX; the swing clips and the PSA share are kinks | -- | `test_hydrogen.py`; `close_hydrotreater_loop` is a concrete iteration that returns a linear purity response |
+
+### What it costs
+
+These were measured on this 4-core, 15 GB machine while other jobs were running (`difflow_refinery.plant.timed`, or wall clock around `Chain.jacobian`). Each figure is the first call, which traces and compiles, and then a repeated call:
+
+| Derivative | First call | Repeated | Peak memory |
+|---|---|---|---|
+| Naphtha hydrotreater alone, d(product S)/d(bed inlet T), `jax.jacrev`, default beds | 227 s | 2.4 s | |
+| The same, `jax.jacfwd`, `ReactorOptions(adjoint="forward")` | 132 s | 1.0 s | |
+| NHT → fractionator → reformer → gasoline pool, 2 inputs × 5 outputs, `method="fwd"`, stages `jit=True` | 487 s (446 s inside example 40, after `jax.clear_caches()`) | 34 s (31 s) | 7.1 GB (the whole process, prototype) |
+| The same, stages not jitted, `vectorize=False` | 671 s | 511 s | 8.6 GB |
+| The same, stages not jitted, `vectorize=True` (plain `jax.jacfwd`) | killed by the out-of-memory killer at 5.6 GB resident, with another 10 GB in use on the machine | | |
+
+The two hydrotreater gradients agree to six figures (−0.224247 wppm/K). A central difference over ±0.5 K gives −0.22457, which is the truncation error. The forward one compiles in a little over half the time here, because one tangent through the beds is cheaper to build than the checkpointed adjoint.
+
+Two findings come from those rows.
+
+- **Jit the stages.** The reformer's solve is a `Flowsheet` with a Python-level recycle. Under a transform it switches to its traced path, which is built afresh on every call. Without `jit`, every JVP and every repeated Jacobian traces and compiles the reformer again: in the fourth row, two tangents cost two compiles, and so does the second call. With `Stage(..., jit=True)` the stage is one jitted function. Its derivative is compiled once (most of the 487 s is the reformer's JVP), and a repeated Jacobian costs only its 34 s run.
+- **Memory, not time, is what limits a chain on a machine like this.** Every compiled solve stays resident. Example 40 calls `jax.clear_caches()` before it differentiates, after its central differences, and that keeps the derivative's compile inside the machine.
+
+In example 40 (section 10) the ten entries of that Jacobian agree with central differences at h = 0.25 K to 0.1 % or better. The exception is d(gasoline S)/d(T_NHT), at 0.5 %, which is the truncation error of a sulfur that falls exponentially with temperature. Four central-difference evaluations of the already compiled units took 41 s, against 446 s for the first AD Jacobian. For a single gradient on this machine, finite differences are cheaper. AD pays off in exactness, and for a planner that relinearizes a compiled chain, which costs 31 s per Jacobian after the first.
+
+### Gotchas
+
+- **Pure stages.** A stage may read constants from its closure, such as the unit object, a feed, a warm start or the other pool components. Only what it receives as `x` is differentiated.
+- **Warm starts.** Pass the reformer `tear_initial=` from a converged solve, and use `on_nonconvergence="ignore"` inside the chain, so that a central difference does not trip the warning.
+- **Not a `Flowsheet`.** A recycle between library units, such as the hydrogen header's purity feeding back into the hydrotreaters, is a tear around two compiled solves. `difflow_refinery.hydrogen.close_hydrotreater_loop` iterates it concretely in Python and returns a linear purity response. A chain has no recycles.
+
+Tests: `tests/refinery/test_plant.py` runs per commit, on toy stages with the units' restrictions: a mixed chain fails end to end in both modes, `"chain"` is exact, the methods and `vectorize` agree, and the table names real objects. `tests/refinery/test_plant_chain.py` is a release and slow test. It runs NHT → fractionator → reformer against central differences, all-forward with `jax.jacfwd`, and the mixed chain by unit Jacobians against it.
 
 ---
 

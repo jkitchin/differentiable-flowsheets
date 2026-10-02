@@ -798,6 +798,28 @@ planning. A library, not registered.
 Docs: `docs/unit-operations-refinery.md` ("The fluid catalytic cracker").
 Tests: `tests/refinery/test_fcc.py`.
 
+### Chaining Units (`difflow_refinery.plant`, #334)
+
+`Chain(Stage("nht", f, modes="rev"), Stage("reformer", g, modes="fwd", jit=True)).jacobian(x)`
+composes library units (and the pure-JAX adapters between them) into one
+differentiable function. `method="auto"`: one `jax.jacfwd`/`jacrev` when every
+stage shares the mode, else `"chain"` (the chain rule by unit Jacobians, forward
+accumulation). `AD_MODES` / `ad_mode_table()` is the one place each unit's AD mode
+is written down. Example 40, section 10, uses it. A library.
+- A mixed chain (forward-only reformer, reverse-only default hydrotreater) can NOT
+  be traced end to end in either mode; `tests/refinery/test_plant.py` pins both
+  failures on toy stages. `HydrotreaterParams(reactor=ReactorOptions(adjoint="forward"))`
+  makes the hydrotreater forward-capable (same values).
+- `jit=True` on any stage holding a Python-level recycle (the reformer's
+  `Flowsheet`): unjitted, it is traced and compiled anew on every JVP and every
+  call (measured 671 s / 511 s vs 487 s / 34 s jitted).
+- Memory, not time, limits a chain on a 15 GB box: example 40 calls
+  `jax.clear_caches()` before differentiating. Keep interfaces after a
+  reverse-only stage narrow (one cotangent per output of that stage).
+
+Docs: `docs/unit-operations-refinery.md` ("Chaining units"). Tests:
+`tests/refinery/test_plant.py` (per commit), `tests/refinery/test_plant_chain.py` (release, slow).
+
 ### Delta-Base Planning (`difflow.planning`)
 
 Turns flowsheets into a planning LP/MILP whose unit submodels are AD Jacobians

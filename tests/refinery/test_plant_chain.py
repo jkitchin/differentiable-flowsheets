@@ -41,7 +41,7 @@ C = 273.15
 #: Bed inlet 300 C (product S ~1 wppm, so the reformer's sulfur balance has
 #: something to carry) and the light/heavy cut at 85 C.
 X0 = jnp.asarray([C + 300.0, C + 85.0])
-H = [0.5, 0.5]
+H = [0.25, 0.25]
 OUT = ("reformate.S_wppm", "reformate.RON", "h2.net_mol_s", "reformate.yield_vol")
 
 
@@ -74,14 +74,16 @@ def _chain(char, adjoint):
         o = reformer.solve(feed, tear_initial=tear, tol=1e-11, max_iter=400, on_nonconvergence="ignore").outputs()
         return jnp.stack([o[k] for k in OUT])
 
-    return Chain(Stage("nht", nht, modes="fwd" if adjoint == "forward" else "rev"),
-                 Stage("reformer", reform, modes="fwd"))
+    # jitted stages: the reformer's recycle is otherwise traced and compiled on every call
+    return Chain(Stage("nht", nht, modes="fwd" if adjoint == "forward" else "rev", jit=True),
+                 Stage("reformer", reform, modes="fwd", jit=True))
 
 
 @pytest.fixture(scope="module")
 def forward(char):
     chain = _chain(char, "forward")
-    return chain, chain.jacobian(X0), central_difference(chain, X0, H)
+    fd = central_difference(chain, X0, H)
+    return chain, chain.jacobian(X0), fd
 
 
 def test_an_all_forward_chain_is_one_jacfwd_and_matches_central_differences(forward):

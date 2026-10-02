@@ -103,6 +103,10 @@ def test_the_chain_rule_by_unit_jacobians_is_exact(mixed):
     # and the finite-difference check agrees
     fd = central_difference(mixed, X, 1e-6)
     np.testing.assert_allclose(np.asarray(res.jacobian), fd, rtol=1e-7, atol=1e-9)
+    # one tangent at a time gives the same Jacobian
+    seq = mixed.jacobian(X, vectorize=False)
+    np.testing.assert_allclose(np.asarray(seq.jacobian), np.asarray(res.jacobian), rtol=1e-14)
+    np.testing.assert_allclose(float(seq.value["z"]), float(res.value["z"]), rtol=1e-14)
 
 
 def test_a_chain_of_one_mode_traces_end_to_end():
@@ -112,9 +116,14 @@ def test_a_chain_of_one_mode_traces_end_to_end():
     assert res.method == "fwd"
     ref = Chain(Stage("a", _rev_only, modes="rev"), Stage("b", _fwd_only, modes="fwd")).jacobian(X)
     np.testing.assert_allclose(np.asarray(res.jacobian), np.asarray(ref.jacobian), rtol=1e-12)
+    seq = fwd.jacobian(X, vectorize=False)
+    np.testing.assert_allclose(np.asarray(seq.jacobian), np.asarray(res.jacobian), rtol=1e-14)
+    assert float(seq.value["z"]) == pytest.approx(float(res.value["z"]), rel=1e-14)
     rev = Chain(Stage("a", _rev_only, modes="rev"), Stage("b", lambda y: jnp.sum(y ** 2), modes="rev"))
     r = rev.jacobian(X)
     assert r.method == "rev" and r.jacobian.shape == (1, 2)
+    np.testing.assert_allclose(np.asarray(rev.jacobian(X, vectorize=False).jacobian), np.asarray(r.jacobian),
+                               rtol=1e-14)
 
 
 def test_auto_chooses_by_shape_when_every_stage_has_both_modes():
@@ -173,3 +182,11 @@ def test_the_ad_mode_table_names_real_objects():
     md = ad_mode_table()
     assert md.count("\n") == len(AD_MODES) + 1 and "| catalytic reformer |" in md
     assert "hydrotreater: rev" in ad_mode_table(markdown=False)
+
+
+def test_a_jitted_stage_gives_the_same_jacobian(mixed):
+    jitted = Chain(Stage("hdt-like", _rev_only, modes="rev", jit=True),
+                   Stage("reformer-like", _fwd_only, modes="fwd", jit=True))
+    for vec in (True, False):
+        np.testing.assert_allclose(np.asarray(jitted.jacobian(X, vectorize=vec).jacobian),
+                                   np.asarray(mixed.jacobian(X).jacobian), rtol=1e-13)
