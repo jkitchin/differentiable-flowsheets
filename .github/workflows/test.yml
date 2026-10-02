@@ -69,12 +69,14 @@ jobs:
     # meant "this is slow today" were the same number, and run 34425803062
     # was cancelled at 81% with everything to that point passing.
     #
-    # #315 took shards from 8-10 / 20-22 / 9 minutes back to ~13 each
-    # (see `.test_durations` below and tests/conftest.py), so 25 is once
-    # again roughly twice a shard: long enough not to fire on a slow
-    # runner, short enough that reaching it means something has hung. If
-    # a shard creeps toward it, rebalance before raising it.
-    timeout-minutes: 45
+    # #315 put the shards back in balance: 14-16 minutes each on its final
+    # run, against 10 / 28 / 10 measured on the runner before it (the issue
+    # saw 16-18 / 20-22 / 6-9). 30 is about 1.5x a shard: long enough not
+    # to fire on a slow runner -- the same commit has measured 3-4 minutes
+    # apart -- short enough that reaching it means something is wrong. If
+    # a shard creeps toward it, re-record `.test_durations` (below) before
+    # raising it.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -141,16 +143,9 @@ jobs:
       # in series on one worker.
       - name: Run tests
         run: |
-          cp .test_durations durations-${{ matrix.shard }}.json
-          python -m pytest tests/ -v --durations=40 --tb=short -m "not release" \
+          python -m pytest tests/ -q --tb=short -m "not release" \
             -n auto --dist loadfile --no-loadscope-reorder \
-            --store-durations --durations-path durations-${{ matrix.shard }}.json \
             --splits 3 --group ${{ matrix.shard }}
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: durations-${{ matrix.shard }}
-          path: durations-${{ matrix.shard }}.json
 
   # Verify the package imports with NO optional dependencies installed. The job
   # this replaces installed ".[dev]" and re-ran the full suite, making it an
