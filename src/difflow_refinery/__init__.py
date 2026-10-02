@@ -138,6 +138,7 @@ from difflow_refinery.unit import (
     CrudeUnitResult,
 )
 from difflow_refinery import fcc  # fluid catalytic cracker (#308); a library, not registered
+from difflow_refinery import alkylation  # noqa: E402  (#310; imports the units above)
 
 __all__ = [
     "Assay",
@@ -194,6 +195,7 @@ __all__ = [
     "fcc",
     "reforming",
     "hydroprocessing", "hydrotreating",
+    "alkylation",
     "CrackingWarning",
     "PseudoComponents",
     "StageSpec",

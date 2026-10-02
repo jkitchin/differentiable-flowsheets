@@ -429,6 +429,16 @@ Docs: `docs/unit-operations-power.md`. Tests: `tests/power/`.
 - `CrudeUnit` (assay in, yield table out) and `CrudeDistillationUnit` (the
   registered operation; outlets in `outlet_names` order)
 - Products: `product_properties`, `products.gaps` -- TBP, not D86
+- Alkylation (#310, `difflow_refinery.alkylation`, a library): Sauer-Colville-
+  Burwick correlations transcribed from GAMS `process.gms` (`solve_process_gms`
+  reproduces its 1161.3366 optimum); reactor = per-olefin stoichiometry whose
+  heavy-end split is set by the correlation's yield; DIB overhead is the
+  `Flowsheet` tear. Columns are `KeySplitColumn` shortcuts (Lee-Kesler
+  Raoult), NOT difflow's PR `ShortcutColumn`: AD through the recycle with that
+  one runs out of memory, and its Geddes constants are wrong (overridden in
+  `GeddesShortcutColumn`). The temperature/space-velocity octane terms and the
+  selectivities are illustrative, not sourced. FCC (#308) `c3`/`c4` outlets
+  feed it via `combine_feeds`.
 - Composition (#305, `difflow_refinery.composition`): `characterize(assay,
   composition=True)` / `char.with_composition(CompositionData(...))` puts a
   `Composition` on `char.composition` -- per component, `char.names` order:
