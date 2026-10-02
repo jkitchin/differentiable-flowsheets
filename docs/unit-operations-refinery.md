@@ -23,6 +23,7 @@ The `difflow_refinery` plugin provides:
 - **Correlations** (`difflow_refinery.correlations`): Twu, Riazi-Daubert, Lee-Kesler, Kesler-Lee and Maxwell-Bonnell, each written once, for all three of the above.
 - **The fluid catalytic cracker** (`difflow_refinery.fcc`): a lumped-kinetics riser (3-, 4- or 5-lump) and a coke-burning regenerator solved together as the unit's heat balance (catalyst circulation and regenerator temperature are unknowns, the riser outlet temperature the spec), with a simplified main fractionator; dry gas, C3/C4 olefin streams, gasoline, LCO and slurry. A library, not a palette operation; its kinetic constants are illustrative. See [The fluid catalytic cracker](#refinery-fcc).
 - **Product blending** (`BlendPool`, `BlendComponent`): gasoline, jet, ULSD and fuel-oil pools with the nonlinear blending rules, signed spec margins and LP back-off. A library for optimisation and planning, not a palette operation.
+- **Catalytic reforming** (`difflow_refinery.reforming`): a semi-regen reactor train with fired heaters, a PR separator, H2 recycle through a `Flowsheet` tear and a stabilizer; naphtha P/N/A by carbon number in, reformate (with RON from composition), net H2, LPG and fuel gas out. A library and flowsheet, not a palette operation.
 
 Everything is differentiable with `jax`. A product yield, a gravity or a furnace duty has an exact gradient with respect to:
 
@@ -1075,6 +1076,182 @@ For products of the crude and vacuum units, use `BlendCharacterization.from_char
 - Crude blending ahead of the CDU (assay mixing).
 - A straight-run octane correlation from PNA. Octane is unit-reported or measured.
 
+(refinery-reforming)=
+## Catalytic reforming
+
+`difflow_refinery.reforming` (#309) is a semi-regenerative catalytic reformer: hydrotreated heavy naphtha to reformate and hydrogen over three (or any number of) adiabatic reactors with fired interstage heaters, a high-pressure separator, hydrogen-rich recycle gas and a stabilizer. It is a `difflow.Flowsheet` with the recycle gas as its tear. Every output is differentiable in the reactor inlet temperatures (or WAIT), separator pressure, H2/HC ratio, space velocity and the naphtha's composition.
+
+```python
+from difflow_refinery.reforming import CatalyticReformer, ReformerParams, lean_naphtha
+
+reformer = CatalyticReformer(ReformerParams())           # 3 reactors, WAIT 500 C, 12 bar, H2/HC 5
+res = reformer.solve(lean_naphtha())                     # 10 kg/s of an illustrative lean naphtha
+print(res.summary())
+res.outputs()["reformate.RON"], res.outputs()["h2.net_mol_s"], res.balances()
+
+# Implicit gradients through the converged recycle (forward mode):
+import jax
+def ron(wait):
+    p = ReformerParams().with_wait(wait)
+    return reformer.solve(lean_naphtha(), p, tear_initial=res.tear).outputs()["reformate.RON"]
+jax.jacfwd(ron)(773.15)
+```
+
+On the two illustrative feeds, at WAIT 500 °C, 12 bar separator, H2/HC 5, LHSV 1.5 h-1 (these are the model's own numbers with its illustrative kinetics, not data):
+
+| | lean (N+2A 41) | rich (N+2A 75) |
+|---|---|---|
+| reactor ΔT (K) | -66, -62, -47 | -61, -56, -39 |
+| C5+ reformate, vol% of feed | 79 | 81 |
+| RON (RT-70) / MON | 92.5 / 82.6 | 98.1 / 87.4 |
+| aromatics / benzene, vol% | 60 / 1.7 | 68 / 2.1 |
+| net H2, wt% of feed / purity mol% | 2.8 / 87 | 2.4 / 85 |
+
+`res.summary()` prints these; ten degrees more WAIT on the lean feed gives RON 98.8 at 76 vol% C5+ and 3.0 wt% H2.
+
+**Known defect of the illustrative constants: the rich feed makes less hydrogen than the lean one.** With the default `ReformingKinetics()`, the rich (high-naphthene) feed makes 2.4 wt% net H2 and the lean (high-paraffin) feed 2.8 wt%. Commercial experience is the opposite: a naphthenic feed makes more hydrogen. The cause is the paraffin chemistry. The ring-opening pre-exponential (`A["ring_opening"] = 0.5`) and its carbon-number factors (up to 2.5 for C10) make dehydrocyclization of C7+ paraffins fast enough that the lean feed converts most of its paraffins to aromatics. Each one releases 4 H2, against the 3 H2 a naphthene gives. The rich feed has few paraffins to convert, and it also loses hydrogen to naphthene hydrocracking (`A["hydrocracking_N"]`, 2 H2 per event). The constants were tuned for octane and yield, not hydrogen. This is a defect of the illustrative parameter set, not a property of the model. Fitting the kinetics to plant or published data should remove it, and until then the hydrogen-versus-feed trend should not be relied on.
+
+The module is a library plus a flowsheet, like the blend pool: it registers **no** palette operation.
+
+### Feed: P/N/A by carbon number
+
+The model cannot run on a boiling curve and a gravity. It needs paraffins, naphthenes and aromatics by carbon number, C6 to C10. A `NaphthaFeed` holds molar flows of the reformer's species and is built from:
+
+- **`NaphthaFeed.from_piona(...)`**, a measured PIONA by carbon number (ASTM D5134 / D6730 grouped), on a mass, volume or mole basis. This is the preferred input.
+- **`NaphthaFeed.from_characterization(char, flows)`**, the naphtha cuts of the unified characterization (#301) with the #305 hydrocarbon-type estimate (`characterize(assay, composition=True)`). The mapping:
+  1. each cut's P/N/A/O **volume** fractions are converted to mass with the density of the type's model compound at the cut's carbon number, so the cut's mass is conserved exactly; olefins count as paraffins (the feed is hydrotreated);
+  2. each type's mass is placed on C6..C10 by the cut's `Tb`, interpolated against the boiling points of the type's model compounds (n-paraffins; cyclohexane then the n-alkylcyclohexanes; benzene then the n-alkylbenzenes) and split linearly between the two neighbouring carbon numbers, clipped at C6 and C10;
+  3. paraffins are split into normal and iso by `iso_fraction`, and C6 naphthenes into methylcyclopentane and cyclohexane by `mcp_fraction`. Neither split is in a Tb/SG characterization; the defaults (0.5, 0.6) are ILLUSTRATIVE and a PIONA replaces them;
+  4. light ends kept as real species map to themselves (`n_hexane` -> `nP6`, `isopentane` -> `iC5`, ...); water is dropped.
+
+  The #305 estimate is coarse at carbon-number resolution; the lumped feed's hydrogen content is the model compounds', not the #305 hydrogen estimate (`feed.hydrogen_wt()` reports it for comparison).
+- `lean_naphtha()` and `rich_naphtha()` are two made-up, ILLUSTRATIVE feeds (not any crude's assay).
+
+`feed.with_group_fraction("naphthenes", x)` is the naphthene-content lever (other groups rescaled at constant volume or mass); `feed.n_plus_2a()` is the reformability index.
+
+### Species and model compounds
+
+Every lump is one real compound, whose formula, thermochemistry, critical constants, density and octane it takes:
+
+| C | n-paraffin `nP` | iso-paraffin `iP` | naphthene `N` | aromatic `A` |
+|---|---|---|---|---|
+| 6 | n-hexane | 2-methylpentane | cyclohexane `N6` and methylcyclopentane `N5_6` | benzene |
+| 7 | n-heptane | 2-methylhexane | methylcyclohexane | toluene |
+| 8 | n-octane | 2-methylheptane | ethylcyclohexane | ethylbenzene |
+| 9 | n-nonane | 2-methyloctane | n-propylcyclohexane | n-propylbenzene |
+| 10 | n-decane | 2-methylnonane | n-butylcyclohexane | n-butylbenzene |
+
+plus H2 and the C1-C5 paraffins (`C1`, `C2`, `C3`, `iC4`, `nC4`, `iC5`, `nC5`): 29 species. Naphthene/aromatic pairs share their side chain, so each dehydrogenation equilibrium is that of a real reaction. The main simplification of the thermodynamic layer is that a lump's free energy is one isomer's, not that of the isomer distribution the catalyst holds (a C8 reformate aromatic is mostly xylenes, not ethylbenzene). C9 and C10 lumps are therefore pseudocomponents *by group*, represented by their n-alkyl member.
+
+### Reaction network and rate laws
+
+Smith's (1959) four reactions, per carbon number in the manner of Krane et al. (1959), plus three steps the carbon-number view needs. With `P` the total pressure and `p` partial pressures, both in bar, rates in mol/s per kg of catalyst:
+
+| Family | Reaction | Rate | Form from |
+|---|---|---|---|
+| dehydrogenation | N_n = A_n + 3 H2 | k (p_N - p_A p_H2^3 / K) | Smith (1959) |
+| ring opening | N_n + H2 = nP_n, N_n + H2 = iP_n | k (p_N p_H2 - p_P / K) | Smith (1959) (the reverse is dehydrocyclization) |
+| hydrocracking of P | P_n + H2 -> lighter paraffins | k p_P / P | Smith (1959) |
+| hydrocracking of N | N_n + 2 H2 -> lighter paraffins | k p_N / P | Smith (1959) |
+| isomerization | nP_n = iP_n | k (p_nP - p_iP / K) | this module, ILLUSTRATIVE |
+| ring expansion | MCP = CH (C6 only) | k (p_MCP - p_CH / K) | this module, ILLUSTRATIVE |
+| dealkylation | A_n + H2 -> A_(n-1) + CH4 (n >= 7) | k p_A p_H2 / P | this module, ILLUSTRATIVE |
+
+For C6 the ring a paraffin closes to is methylcyclopentane, which must expand to cyclohexane before it dehydrogenates: that is why benzene forms slowly. Hydrocracking splits a `C_n` at one C-C bond chosen uniformly, `2/(n-1)` mol of each `C_k`, `k = 1..n-1`, with `iso_fraction` of each C4+ product branched. That conserves carbon and hydrogen exactly (tested reaction by reaction) and is ILLUSTRATIVE.
+
+`k = activity A f(n) exp(-E/R (1/T - 1/T_ref))`, `T_ref = 773.15 K`. The activation energies of Smith's reactions are his temperature coefficients, 34 750, 59 600 and 62 300 °R (dehydrogenation, ring opening, both hydrocrackings), divided by 1.8; they are as the reforming literature commonly reproduces Smith's model, and were not checked against the paper (unverified). The pre-exponentials `A` and carbon-number factors `f(n)` are **neither Smith's nor Krane's**: they were chosen for this module so that the unit behaves like a modern semi-regen reformer (first-reactor ΔT, octane and yields in the commonly quoted ranges) and are ILLUSTRATIVE until fitted. Their trends (heavier paraffins cyclize and crack faster; C6 paraffins barely cyclize) are the trends Krane et al. reported, not their values. `activity` scales every rate constant: it is the parameter `difflow.reconciliation.tracking` would estimate from plant data as the catalyst deactivates (the tracking loop itself is not wired in here).
+
+**Equilibrium constants come from the Gibbs energies**, never from a kinetic paper: `ln K = -ΔG°(T)/(RT)`, with `ΔG° = ΔH°(T) - TΔS°(T)` from the species' ideal-gas `Hf`, `S0` and Cp, 1-bar standard state. Dehydrogenation therefore limits correctly at low pressure and high temperature. The heats of reaction come from the same data (cyclohexane to benzene: +206.06 kJ/mol at 298 K). Tests pin `ln K` to the Gibbs energy, check van 't Hoff against the coded heats of reaction, and check that a long bed relaxes the C7 dehydrogenation quotient to `K(T_out)`.
+
+**Coke** (kg per kg catalyst per s) is `k_c (p_N + p_A) / p_H2` with an Arrhenius `k_c`. It rises with severity and falls with hydrogen partial pressure, the dependence the deactivation literature describes; the form and constants are this module's (ILLUSTRATIVE). The cycle length is the days to `coke_capacity` (default 0.15 kg/kg, ILLUSTRATIVE) of coke on catalyst. Coke is reported, not withdrawn from the balances (about 1e-5 of the feed).
+
+### Reactors and heaters
+
+Each bed is one-dimensional plug flow in catalyst mass, isobaric, adiabatic:
+
+```
+dF/dW = nu^T r(p, T),   H(F, T, P) = H_in,   d(coke)/dW = r_coke
+```
+
+The temperature is recovered from the enthalpy at every point by Newton's method rather than integrated as an ODE. Element balances are then exact (the stoichiometry conserves them, and Runge-Kutta methods preserve linear invariants), and the energy balance is exact to the Newton tolerance whatever the ODE tolerance. `diffrax` integrates it (Tsit5, adaptive, `rtol` 1e-8 by default) in the normalized bed coordinate. Gradients use `diffrax.ForwardMode`, because the reformer is differentiated through the recycle's implicit fixed point, which needs forward-mode derivatives of everything in the loop: **use `jax.jacfwd`**, not `jax.grad`, on a reformer (`ReformingReactor(..., adjoint="reverse")` exists for a stand-alone bed).
+
+**One enthalpy basis** is used throughout: `H = sum F_i [Hf_i + int cp_i dT] + F h_dep(T, P, y)`. That is `CubicThermo`'s Peng-Robinson enthalpy (ideal-gas sensible plus PR departure) with the heats of formation added. `thermo.cubic_thermo()` builds the `CubicThermo` from the same Cp fits, so the reactor, the fired heaters, difflow's `EOSFlash` and its `Compressor` all share one reference state. A fired heater's absorbed duty is the outlet minus inlet enthalpy, and `fired = duty / efficiency` (as `Furnace` reports it). There is no feed-effluent exchanger: the charge-heater duty is the whole of heating the naphtha and recycle gas from separator to reactor temperature, and is larger than a real unit's for that reason.
+
+### Separator, recycle and stabilizer
+
+These are kept thin and local (`reforming/separation.py`) so they can be consolidated with the hydrotreater's shared separator and recycle module (#306) later:
+
+- **`ProductSeparator`**: effluent cooler and Peng-Robinson flash (difflow's `EOSFlash`) at the separator temperature and pressure. The vapour is the flash's `V y`; the liquid is the feed minus the vapour, so the component balance closes to round-off. PR runs with all `k_ij = 0`, hydrogen-hydrocarbon included, so the hydrogen dissolved in the liquid is PR's unfitted prediction.
+- **`RecycleSplitter`**: recycles enough of the vapour to carry `H2_HC` mol of hydrogen per mol of naphtha hydrocarbon (the spec); the rest is net gas.
+- **Recycle compressor**: difflow's `eos_units.Compressor` (isentropic, efficiency 0.75) from separator to reactor pressure.
+- **`Stabilizer`**: a **documented simplification**. Issue #312's gas-plant debutanizer does not exist, and difflow's stage columns are not set up for a hydrogen-bearing feed. It is a component split instead: H2, C1 and C2 to fuel gas, C3 and `c4_recovery` of the butanes to LPG, the rest to stabilized reformate. `c4_recovery` stands in for the RVP / C4-in-reformate spec. Its duty is the net heat on the enthalpy basis, not a column design.
+
+### Specs and outputs
+
+| Spec (`ReformerParams`) | Default | |
+|---|---|---|
+| `inlet_T` (or `with_wait(...)`) | 773.15 K each | reactor inlet temperatures; WAIT is their catalyst-weighted mean |
+| `catalyst_split` | 0.15, 0.30, 0.55 | number of reactors = its length |
+| `LHSV`, `catalyst_density` | 1.5 1/h, 700 kg/m3 | catalyst mass = density x feed std volume per hour / LHSV (density ILLUSTRATIVE) |
+| `P_separator`, `loop_dP` | 12 bar, 3 bar | reactors at `P_separator + loop_dP`, isobaric |
+| `T_separator` | 311.15 K | |
+| `H2_HC` | 5 | recycle H2 per naphtha hydrocarbon, mol/mol |
+| `c4_recovery` | 0.95 | stabilizer butanes to LPG |
+| `kinetics` | `ReformingKinetics()` | rate parameters, `activity` |
+
+A reformate RON target in place of WAIT: `reformer.wait_for_ron(feed, ron)` solves for the WAIT by secant iteration (concrete). Its gradient with respect to any other input is `-(dRON/dx)/(dRON/dWAIT)`, both from `jax.jacfwd` at the returned point.
+
+`res.outputs()` (units in `reforming.OUTPUT_UNITS`) includes reformate and C5+ yield (vol%, wt%), RON/MON (RT-70 and linear), aromatics, benzene, RVP, SG, net H2 (mol/s, wt% of feed, purity), LPG and fuel gas, every reactor's ΔT and outlet temperature, heater absorbed and fired duties, compressor power, separator duty, coke make, cycle length, WAIT and WABT. `res.balances()` returns the overall mass, carbon, hydrogen and energy closures and each reactor's adiabatic residual.
+
+**Reformate properties from composition** (`reforming.products`). RON and MON are the pure-compound octanes of the species, blended with the Ethyl RT-70 rule that `BlendPool` uses. Aromatics and benzene are standard liquid volume fractions. RVP is `raoult_rvp` (D323 geometry) on Lee-Kesler vapour pressures. `products.blend_component("reformate", res.flows("reformate"))` hands it to a `BlendPool`. Pure-component octanes are not blending octanes; the RT-70 rule with the large aromatic and sensitivity spreads of a reformate puts RON 8-12 above the linear average. The low-octane paraffins sit below the range RT-70 was fitted on, so the rule extrapolates there.
+
+### Planning
+
+`reformer_block(reformer, feed, levers, outputs)` gives a `difflow.planning.Block`, like `cdu_block`. The levers are `wait` (C), `P_separator` (bar), `H2_HC`, `LHSV`, `feed.rate` (kg/s), `feed.naphthenes` (vol%) and `c4_recovery`. The outputs are any `res.outputs()` keys; link `reformate.*` to a blend-pool block and `h2.net_mol_s` to a hydrogen balance. The block runs the traced recycle (optimistix fixed point with implicit differentiation, warm-started at the base solution) and defaults to `ad_mode="fwd"`.
+
+### Validation: what is and is not checked
+
+Checked (`tests/refinery/test_reforming.py`; flowsheet tests are marked `slow`):
+
+- Converges with H2 recycle on the lean and rich feeds from the default initialization (Anderson, about 25-30 recycle iterations).
+- Overall mass, carbon, hydrogen and energy balances close to 1e-8 relative (measured: 1e-11 to 1e-12), and every reactor is adiabatic to round-off.
+- The first reactor has the largest temperature drop.
+- RON and net H2 rise and C5+ yield falls with WAIT; aromatics rise as the separator pressure falls.
+- `wait_for_ron` reaches a RON target (95 on the lean feed) to 1e-3.
+- The reformate enters a `BlendPool` as a property-mode `BlendComponent`.
+- Implicit gradients of reformate yield, RON, net H2 and first-reactor ΔT with respect to WAIT, separator pressure, H2/HC and naphthene content match central differences to 1e-5 (measured: 1e-7). A full `jax.jacfwd` of those 4x4 plus the eight finite-difference solves takes about eight minutes on one CPU core, mostly compilation of the traced recycle.
+- Thermochemistry: coded `Hf`/`S0` are pinned to their sources; `Hf` agrees with `difflow.database` within 1 kJ/mol for the 16 species both hold; `ln K` is the Gibbs energy; van 't Hoff holds against the coded heats of reaction; a long bed reaches the Gibbs-energy equilibrium.
+
+**Not done, and not claimed:**
+
+- **No published commercial-reformer simulation is reproduced.** Neither Padmavathi & Chaudhuri (1997) nor Taskar & Riggs (1997) could be obtained to check which one tabulates feed, conditions and outlet data in full, so no cross-check against them is made. The kinetics are illustrative and would have to be replaced by either paper's parameters for such a comparison.
+- **No IDAES `GibbsReactor` comparison** of the equilibrium layer: IDAES is not installed in this environment. The equilibrium layer is checked against its own Gibbs energies (above).
+- **No example notebook** (naphtha hydrotreater -> reformer -> gasoline pool). The hydrotreater (#306) is being built separately, and the notebook was not written.
+- No Gary-Handwerk-Kaiser yield-versus-RON cross-check: the figure could not be consulted.
+
+### References
+
+| What | Source | Status |
+|---|---|---|
+| 4-reaction network, rate-law forms, activation energies (34 750, 59 600, 62 300 °R) | Smith, R.B., "Kinetic analysis of naphtha reforming with platinum catalyst", *Chem. Eng. Prog.* 55(6), 76-80 (1959) | Paper not consulted. The forms and coefficients are as commonly reproduced in later reforming papers (unverified); the title and pages are as cited there (unverified). |
+| Carbon-number lumping, rate trends with carbon number | Krane, H.G., Groh, A.B., Schulman, B.L., Sinfelt, J.H., "Reactions in catalytic reforming of naphthas", *Proc. 5th World Petroleum Congress*, New York (1959), Sect. III | Not consulted; section and pages unverified. Only the lumping idea and the qualitative trends are used, none of its numbers. |
+| Commercial reformer models with coking (not used numerically) | Padmavathi, G., Chaudhuri, K.K., *Can. J. Chem. Eng.* 75(5), 930-937 (1997); Taskar, U., Riggs, J.B., "Modeling and optimization of a semiregenerative catalytic naphtha reformer", *AIChE J.* 43(3), 740-753 (1997) | Not consulted (unverified). Cited for the coke dependence on severity and H2 partial pressure only, qualitatively. |
+| KINPTR (background) | Ramage, M.P., Graziani, K.R., Schipper, P.H., Krambeck, F.J., Choi, B.C., *Adv. Chem. Eng.* 13, 193 (1987) | Not consulted (unverified); background only. |
+| Ideal-gas Hf (298.15 K) | API Technical Data Book (as `API_TDB_G` in `chemicals` 1.5.2); 2-methylhexane from the CRC Handbook (as `CRC`) | Read from the `chemicals` tables; cross-checked against the CRC, ATcT and Yaws tables (spread within 1.5 kJ/mol except 2-methylnonane, CRC -260.2 against API -256.5 kJ/mol, unresolved; a sample is pinned in `HF_CROSSCHECK`). The primary tables were not opened. |
+| Ideal-gas S0 (298.15 K, 1 bar) | Yaws ideal-gas entropy table (as `YAWS` in `chemicals` 1.5.2) | Read from `chemicals`; cross-checked against NIST WebBook values carried by `chemicals` (within 2.5 J/mol/K). Book edition unverified. |
+| Ideal-gas Cp | TRC ideal-gas heat-capacity correlation (Thermodynamics Research Center), as tabulated in `chemicals.heat_capacity.TRC_gas_data`; cubic fit 298-1000 K by this module | Fit within 1.4 % of the correlation; values at 298 K pinned. |
+| Tc, Pc, omega, Tb | First-ranked source in `chemicals` 1.5.2 (CoolProp reference EOS; IUPAC critical-property review; CRC; PSRK) | Read from `chemicals`; the primary tables were not opened. |
+| Liquid density at 60 F | Perry's *Chemical Engineers' Handbook*, 8th ed., DIPPR-105 table (via `chemicals`); VDI Heat Atlas PPDS (n-propyl-, n-butylcyclohexane); COSTALD, Hankinson & Thomson, *AIChE J.* 25(4), 653-663 (1979) (2-methylhexane) | Table numbers and COSTALD pages unverified. 2-Methylheptane, -octane and -nonane are recalled handbook values (unverified). |
+| Pure-compound RON/MON | API Research Project 45, ASTM STP 225, *Knocking Characteristics of Pure Hydrocarbons* (1958) | **Not consulted.** n-Heptane = 0 (and isooctane = 100) are exact by definition (ASTM D2699/D2700). Every other value is recalled (unverified). C9/C10 paraffins and n-butylcyclohexane are extrapolations by this module (`octane_source="estimate"`). Benzene's RON is the least certain. |
+| Octane blending | Ethyl RT-70: Healy, Maassen & Peterson (1959), coefficients as in Maples (2000) | As in the blend pool (see [Blending rules](#refinery-blending)). |
+| RVP | `raoult_rvp`, Lee-Kesler vapour pressure | As in the blend pool and `correlations`. |
+| Separator VLE, departure enthalpy | Peng, D.-Y., Robinson, D.B., "A new two-constant equation of state", *Ind. Eng. Chem. Fundam.* 15(1), 59-64 (1976), doi:10.1021/i160057a011, via difflow's `PengRobinson` | `k_ij = 0`. |
+| ΔG(T), ln K route | Smith, J.M., Van Ness, H.C., Abbott, M.M., *Introduction to Chemical Engineering Thermodynamics*, McGraw-Hill, chemical-reaction-equilibria chapter | Standard thermodynamics; chapter and equation numbers vary by edition (unverified). |
+| Thermochemistry of model compounds (the issue's suggestion) | Stull, D.R., Westrum, E.F., Sinke, G.C., *The Chemical Thermodynamics of Organic Compounds*, Wiley (1969) | **Not used**: the values come from the `chemicals` tables above. |
+| Reforming practice, yield vs. RON | Gary, J.H., Handwerk, G.E., Kaiser, M.J., *Petroleum Refining: Technology and Economics*, 5th ed., CRC Press (2007), catalytic reforming chapter | Not consulted; no cross-check made. |
+
+---
+
 (refinery-validation)=
 ## Validation
 
@@ -1204,6 +1381,7 @@ The reference also measures what two of difflow's numerical choices cost. These 
 (refinery-limitations)=
 ## Limitations
 
+- **The reformer's kinetics are illustrative.** The rate-law forms and activation energies are Smith's (1959, unverified transcription); the pre-exponentials are this module's, chosen for plausible behaviour, and no published commercial-reformer simulation is reproduced. Pure-compound octanes other than the reference fuels are recalled, not checked against ASTM STP 225. The stabilizer is a component split, not a column. See [Catalytic reforming](#refinery-reforming).
 - **The crude unit is the atmospheric column only.** The preflash drum and preheat train are not modelled; the inlet is the preheat train's outlet. The vacuum unit is a separate operation, fed from the crude unit's residue in a `Flowsheet` (above).
 - **Thermodynamics:** Raoult's law and ideal-gas-path enthalpies. This is the usual model for an atmospheric column at one or two bar; it is not a cubic equation of state.
 - **Equilibrium stages.** There are no tray efficiencies or hydraulics.
