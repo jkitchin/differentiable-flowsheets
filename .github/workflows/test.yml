@@ -69,13 +69,16 @@ jobs:
     # meant "this is slow today" were the same number, and run 34425803062
     # was cancelled at 81% with everything to that point passing.
     #
-    # #315 put the shards back in balance: 14-16 minutes each on its final
-    # run, against 10 / 28 / 10 measured on the runner before it (the issue
-    # saw 16-18 / 20-22 / 6-9). 30 is about 1.5x a shard: long enough not
-    # to fire on a slow runner -- the same commit has measured 3-4 minutes
-    # apart -- short enough that reaching it means something is wrong. If
-    # a shard creeps toward it, re-record `.test_durations` (below) before
-    # raising it.
+    # After #315 the shards ran 17.7 / 21.6 / 16.6 minutes (run
+    # 36957483515), against 10 / 28 / 10 measured on the runner before it
+    # (the issue saw 16-18 / 20-22 / 6-9) -- on a suite that has grown by
+    # the preheat train and gas plant since. Shard 2 stays the longest: the
+    # three files tests/conftest.py runs in series are ~15 minutes on one
+    # worker, a floor for whichever shard holds them. 30 is ~1.4x that
+    # shard: long enough not to fire on a slow runner (the same commit has
+    # measured 3-4 minutes apart), short enough that reaching it means
+    # something is wrong. If a shard creeps toward it, re-record
+    # `.test_durations` (below) before raising it.
     timeout-minutes: 30
     strategy:
       fail-fast: false
