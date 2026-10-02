@@ -67,7 +67,7 @@ dev = [
     # 4-core box, where forcing XLA and BLAS to one thread each changed
     # nothing (215s vs 212s on a 6-file sample). `pytest-split` shards what
     # is left across CI jobs by measured duration -- see `.test_durations`.
-    "pytest-xdist>=3.0",
+    "pytest-xdist>=3.8",
     "pytest-split>=0.8",
     "jupyter-book<2.0",
 ]

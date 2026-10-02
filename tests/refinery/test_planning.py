@@ -10,10 +10,9 @@ What is pinned here, and why:
 * A spec the block does not lever is held as the planner means it: a held
   product *yield* follows the crude rate, not a held absolute rate that
   hands the whole rate change to the residue.
-* A non-converged column is NaN, and a plan never lands there. The rejection
-  test runs the planner into the region where the column fails and checks
-  it backs off; the same run with the mask off shows what the planner would
-  otherwise have taken -- a column that did not converge, scored as a plan.
+* A non-converged column is NaN, and a plan never lands there: see
+  test_planning_nonconvergence.py, a module of its own so that CI's
+  ``--dist loadfile`` can put it on a different worker from this one (#315).
 * CDU -> product value, planned, then re-scored in a fresh nonlinear CDU
   solve that converges and agrees with the planner's state.
 """
@@ -25,8 +24,7 @@ import numpy as np
 import pytest
 
 import difflow_refinery as dr
-from difflow.planning import (DeltaBasePlanner, Network, check_delta_health, check_delta_vectors,
-                              state_is_finite)
+from difflow.planning import DeltaBasePlanner, Network, check_delta_health, check_delta_vectors
 from difflow.planning.export import DeltaVectorSet, write_json
 from difflow.planning.lp import Spec
 from difflow.planning.planner import TrustRegionOptions
@@ -46,8 +44,7 @@ T_IN, P_IN = 273.15 + 240.0, 6e5
 PRODUCTS = ["naphtha", "kero", "diesel", "ago", "residue"]
 
 
-@pytest.fixture(scope="module")
-def unit():
+def build_unit():
     """The 30-stage atmospheric column of test_unit.py, closed by a 5% overflash."""
     crude = characterize(ASSAY)
     th = ColumnThermo.from_characterization(crude)
@@ -56,6 +53,11 @@ def unit():
     base = _atmospheric_params(feed, th, pa1_duty=15e6)
     params = _atmospheric_params(feed, th, pa1_duty=15e6, specs=base.specs + (cc.overflash(0.05),))
     return dr.CrudeUnit(ASSAY, params)
+
+
+@pytest.fixture(scope="module")
+def unit():
+    return build_unit()
 
 
 @pytest.fixture(scope="module")
@@ -172,61 +174,6 @@ class TestBlock:
         path = write_json(DeltaVectorSet.from_block(block), tmp_path / "cdu.json")
         text = json.dumps(json.load(open(path)))
         assert "bbl/d" in text and "MW" in text
-
-
-class TestNonConvergence:
-    #: 5% overflash and 25 MW out of PA1 dries the column (test_furnace.py
-    #: shows the same edge at 150 kg/s); 15 MW converges.
-    FAIL_MW = 30.0
-
-    def test_a_failed_solve_is_nan(self, unit):
-        blk = cdu_block(unit, ["pa1.duty"], ["naphtha.tbp95", "furnace.fired"], rate=BPD, T=T_IN, P=P_IN,
-                        bounds={"pa1.duty": (10.0, 30.0)})
-        u = np.array([self.FAIL_MW])
-        assert not bool(blk.fn.solve(u).converged)
-        assert np.all(np.isnan(np.asarray(blk.fn(u))))
-        assert np.all(np.isfinite(np.asarray(blk.fn(np.array([15.0])))))
-
-    def test_unmasked_it_would_have_looked_like_an_answer(self, unit):
-        blk = cdu_block(unit, ["pa1.duty"], ["naphtha.tbp95"], rate=BPD, T=T_IN, P=P_IN,
-                        bounds={"pa1.duty": (10.0, 30.0)}, mask_nonconverged=False)
-        assert np.all(np.isfinite(np.asarray(blk.fn(np.array([self.FAIL_MW])))))
-
-    @staticmethod
-    def _plan(unit, mask):
-        """Heat recovered from PA1 is credited; the credit pushes toward the edge."""
-        blk = cdu_block(unit, ["pa1.duty"], ["naphtha.tbp95", "kero.tbp95", "furnace.fired"],
-                        rate=BPD, T=T_IN, P=P_IN, bounds={"pa1.duty": (10.0, 30.0)},
-                        mask_nonconverged=mask)
-        planner = DeltaBasePlanner(Network([blk]), prices={"cdu.pa1.duty": 1000.0},
-                                   options=TrustRegionOptions(radius=0.3, radius_min=1e-2, tol=1e-6,
-                                                              max_iter=30),
-                                   vertex_seeding=False)
-        return blk, planner.solve()
-
-    @pytest.mark.slow
-    def test_a_non_converging_proposal_is_rejected(self, unit):
-        blk, res = self._plan(unit, mask=True)
-        failed = [h for h in res.history if "not evaluable" in h.lp_status]
-        assert failed, "the plan never proposed past the edge; the test proves nothing"
-        assert not any(h.accepted for h in failed)
-        assert any(h.decisions[0] > 24.5 for h in failed)
-        # every accepted point, and the plan, is a converged column
-        for h in res.history:
-            if h.accepted:
-                assert bool(blk.fn.solve(h.decisions).converged)
-        duty = res.plan["cdu.pa1.duty"]
-        assert 23.0 < duty < 25.0
-        assert bool(blk.fn.solve(np.array([duty])).converged)
-        assert state_is_finite(res.state)
-
-    @pytest.mark.slow
-    def test_without_the_mask_the_plan_is_a_failed_column(self, unit):
-        """The control: the planner takes the bound, where the column did not converge."""
-        blk, res = self._plan(unit, mask=False)
-        duty = res.plan["cdu.pa1.duty"]
-        assert duty == pytest.approx(30.0)
-        assert not bool(blk.fn.solve(np.array([duty])).converged)
 
 
 @pytest.mark.slow
