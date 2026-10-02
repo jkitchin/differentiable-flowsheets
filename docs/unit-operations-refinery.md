@@ -1752,6 +1752,7 @@ The model cannot run on a boiling curve and a gravity. It needs paraffins, napht
   4. light ends kept as real species map to themselves (`n_hexane` -> `nP6`, `isopentane` -> `iC5`, ...); water is dropped.
 
   The #305 estimate is coarse at carbon-number resolution; the lumped feed's hydrogen content is the model compounds', not the #305 hydrogen estimate (`feed.hydrogen_wt()` reports it for comparison).
+- **`NaphthaFeed.from_hydrotreater(res_or_fractionation, product)`** (#327), a hydrotreater's product (or a `FractionationResult` product such as `"heavy_naphtha"`) on its TREATED product grid: the same mapping as `from_characterization`, but with the grid's molar masses (so the feed's mass is the hydrotreater product's to round-off), its hydrocarbon types after aromatics saturation, and its sulfur as `feed.sulfur_wppm`, which the reformer's trace-sulfur balance takes when `ReformerParams.feed_sulfur_wppm` is `None`. See [Hydrotreated naphtha to the splitter and the reformer](#refinery-hydrotreated-naphtha-downstream).
 - `lean_naphtha()` and `rich_naphtha()` are two made-up, ILLUSTRATIVE feeds (not any crude's assay).
 
 `feed.with_group_fraction("naphthenes", x)` is the naphthene-content lever (other groups rescaled at constant volume or mass); `feed.n_plus_2a()` is the reformability index.
@@ -1862,7 +1863,7 @@ Checked (`tests/refinery/test_reforming.py`; flowsheet tests are marked `slow`):
 
 - **No published commercial-reformer simulation is reproduced.** Neither Padmavathi & Chaudhuri (1997) nor Taskar & Riggs (1997) could be obtained to check which one tabulates feed, conditions and outlet data in full, so no cross-check against them is made. The kinetics are illustrative and would have to be replaced by either paper's parameters for such a comparison.
 - **No IDAES `GibbsReactor` comparison** of the equilibrium layer: IDAES is not installed in this environment. The equilibrium layer is checked against its own Gibbs energies (above).
-- **No dedicated example notebook.** The reformer runs inside the whole-refinery example, `examples/40_refinery_flowsheet.ipynb` (naphtha hydrotreater -> reformer -> gasoline pool), on a feed from `NaphthaFeed.from_characterization`.
+- **No dedicated example notebook.** The reformer runs inside the whole-refinery example, `examples/40_refinery_flowsheet.ipynb` (naphtha hydrotreater -> reformer -> gasoline pool), on a feed from `NaphthaFeed.from_characterization`; `NaphthaFeed.from_hydrotreater` (#327) is the route from the hydrotreated product.
 - No Gary-Handwerk-Kaiser yield-versus-RON cross-check: the figure could not be consulted.
 
 ### References
@@ -2191,6 +2192,77 @@ On example 40's naphtha (single bed, stripper feed at 150 °C; the stripper's de
 (Feed 1072 wppm S. Figures far below 1 wppm only say "removed": the illustrative first-order classes have no refractory tail.) So a reformer feed (below about 0.5 wppm S and N) is reached at 30 bar and LHSV 4 from about 310 °C for sulfur and 320 °C for nitrogen. The charge heater takes 23.6 MW absorbed (27.8 MW fired at 0.85) at 320 °C with no feed/effluent exchanger, and the wild naphtha carries 0.011 kg/s of dissolved gas. The reformer model carries neither sulfur nor nitrogen, so nothing downstream sees these numbers. Example 40's earlier conditions (60 bar, LHSV 0.7, 400 Nm³/m³), which were what the diesel constants needed under the old phase model, now run away on the diesel constants (the aromatics saturate, the integration does not finish, `converged=False`); on the naphtha set they converge.
 
 **Where it fails.** At 320 °C, 50 bar, LHSV 0.5 and 150 Nm³/m³ the bed-inlet PR flash does not converge (the mixture is near its critical region; Newton diverges). The unit returns `converged=False` with `flash.residual` about 1e-3 and warns; it used to raise an equinox NaN-in-linear-solve error (`tests/refinery/test_hydrotreating_naphtha.py::test_a_failed_bed_inlet_flash_reports_a_residual_instead_of_raising`, per commit, on the flash itself; `test_a_failed_flash_is_reported_not_raised`, release, on the whole unit).
+
+(refinery-hydrotreated-naphtha-downstream)=
+### Hydrotreated naphtha to the splitter and the reformer (#327)
+
+A hydrotreater's liquids leave on its product grid, `res.product_char`. This is a `BlendCharacterization` of the liquid light ends (C3--C5, as real species) and the **treated** cuts. Each treated cut has the molar mass and gravity the reactor gave it, and its hydrocarbon types and sulfur as the `*_vol` and `S_ppm` qualities. Two adapters take a product from that grid to the two units that follow a naphtha hydrotreater.
+
+Both read their input through `gasplant.hydroprocessed.resolve_product(source, product, char=)`, which accepts:
+
+- a `HydrotreaterResult` with one outlet name or several (summed), taken with its dissolved gases;
+- a `FractionationResult` with a product name;
+- anything with `product_stream`/`product_char`, such as a hydrocracker result;
+- an explicit `F_` stream together with `char=` its grid.
+
+**Reformer.** `NaphthaFeed.from_hydrotreater(source, product)` maps the stream onto the reformer's P/N/A lumps by carbon number. The steps are those of `from_characterization` (see [the reformer feed](#refinery-reforming)), with three inputs taken from the grid instead of the crude characterization:
+
+- **Mass.** Each component's mass is `F_i MW_i` at the **grid** molar mass. That is the treated cut's for a cut, and the hydroprocessing atomic weights for light ends and gases. Each lump's moles are then mass over the lump's molar mass, so `feed.mass_flow` equals `res.stream_mass(stream)` to round-off.
+- **Types.** Each cut's P/N/A/O volume fractions are the grid's `paraffins_vol`, `naphthenes_vol`, `aromatics_vol` and `olefins_vol` after saturation. The hydrotreater reports types on the rule it reads them in by, so an unreacted cut maps exactly as `from_characterization` maps it (tested to 1e-12). Olefins count as paraffins.
+- **Sulfur.** `feed.sulfur_wppm = sum_i m_i S_i / sum_i m_i`, the mass average of the grid's `S_ppm`. The reformer takes it as the feed's organic sulfur when `ReformerParams.feed_sulfur_wppm` is `None` (#330). Dissolved H2S is not counted.
+
+Methane and ethane map to `C1` and `C2`. H2, H2S and NH3 dissolved in a wild naphtha are refused unless `drop_gases=True`; you can also fractionate them off first, since a fractionator sends them to its off-gas. The iso/normal and MCP/cyclohexane splits are `from_characterization`'s **illustrative** defaults. The feed is differentiable in the flows and in the grid's arrays.
+
+```python
+fr = nht_res.fractionate(cut_points=(85 + 273.15,), products=("light_naphtha", "heavy_naphtha"),
+                         feeds=("product", "wild_naphtha"))
+feed = NaphthaFeed.from_hydrotreater(fr, "heavy_naphtha")      # mass = fr.rates["heavy_naphtha"]
+ref = CatalyticReformer(ReformerParams()).solve(feed)          # its sulfur balance sees feed.sulfur_wppm
+```
+
+**Gas plant.** `gasplant.hydroprocessed.hydroprocessed_feed(source, product, T=, P=)` returns a `HydroprocessedFeed`, with these fields:
+
+- `components`: a `GasComponents` table;
+- `stream`: the `F_<components.names>` stream;
+- `mass_flow`;
+- `dropped`;
+- `below(T_cut)`: a `light=` set for `splitter`.
+
+The table is built by `product_components(grid, gases=)` and holds three kinds of component:
+
+- **Dissolved real gases** (H2, H2S, C1, C2): real components with `light_component_data` constants. Ammonia has none in the gas plant's tables (no ideal-gas Cp or LHV), so it is refused, or left out with `unsupported="drop"` and reported in `dropped`.
+- **Grid light ends:** real components with the database's critical constants and Cp. Their molar mass is the grid's, so the feed's mass is the product's to round-off; the two molar masses differ in the fifth figure.
+- **Treated cuts:** pseudocomponents with the grid's `MW`, `Tc`, `Pc` and `omega`, and a Watson-Nelson ideal-gas Cp from the grid's `Tb`, `SG` and `MW` (the correlation `characterize` uses for its own cuts). Only `MW` and `SG` are changed by the hydrotreater: `Tb`, `Tc`, `Pc` and `omega` are the feed cut's. That is an approximation for a saturated cut (unverified in size).
+
+`min_flow=` trims cuts carrying no more than that flow. The trimmed flow is reported in `dropped`.
+
+```python
+feed = hydroprocessed_feed(nht_res, ("product", "wild_naphtha"), T=100 + 273.15, P=4e5,
+                           unsupported="drop", min_flow=1e-9)
+col = GasPlantColumn(splitter(feed.components, feed.below(85 + 273.15),
+                              heavy_spec=("bottoms.x.light", 0.02), light_spec=("distillate.x.heavy", 0.02),
+                              n_trays=12, feed_tray=6, top_P=3e5))
+light_naphtha, heavy_naphtha, info = col(feed.stream)
+```
+
+The splitter's products are streams over `components.names`. Their grid components go back to `BlendComponent.from_stream(..., nht_res.product_char)` or `NaphthaFeed.from_hydrotreater(stream, char=nht_res.product_char)` unchanged.
+
+How this relates to `gas_components(light, pseudo=char)` and the crude-unit gas-plant feed helper (#326): it builds the same kind of table, from a product grid instead of a crude characterization. A CDU naphtha and an HDT naphtha carry different cuts under the same names. Do not mix them in one column; build one table per source.
+
+What the tests check (`tests/refinery/test_hydrotreated_naphtha_feeds.py`):
+
+Per commit, on a grid derived from a characterization with half its aromatics saturated, 1 % heavier cuts and a tenth of the sulfur:
+
+- untreated, the grid maps as `from_characterization` does;
+- treated, the mass is conserved to 1e-13, the aromatics are the treated ones, the sulfur average is exact, and the gases are refused or dropped;
+- `jax.jacfwd` through the grid's qualities matches central differences;
+- the gas-plant table's mass matches the product's, less the dropped NH3;
+- an 8-tray naphtha splitter on a 7-component treated grid converges to both specs, and every component balances to 1e-8.
+
+Slow, on example 40's naphtha through the naphtha hydrotreater:
+
+- the fractionated heavy naphtha into the reformer: mass conserved to 1e-13, sulfur carried, reformer converged with mass, C, H and S closing;
+- a 12-tray splitter on product plus wild naphtha: converges and balances.
 
 (refinery-hydrotreater-results)=
 ### Results on the test diesel

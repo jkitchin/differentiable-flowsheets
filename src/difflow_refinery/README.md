@@ -39,7 +39,7 @@ still differentiable, with no palette entry.
 | Preheat train | `preheat` | `PreheatedCrudeUnit` | `Desalter`, `PreflashDrum`, `CrudeUnitWithPreheat` | crude from the tank → crude at the furnace inlet, with fouling |
 | Crude distillation unit | `unit`, `column` | `CrudeUnit`, `CrudeColumn`, `Furnace` | `CrudeDistillationUnit` | crude → naphtha, kerosene, diesel, AGO, residue |
 | Vacuum unit | `vacuum` | `VacuumColumn` | `VacuumColumn` | atmospheric residue → LVGO, HVGO, slop, vacuum residue |
-| Saturated gas plant | `gasplant` | `GasPlantColumn`, `GasCompressor`, `AmineTreater` | all three | light ends → fuel gas, LPG, C3/C4 splits, stabilized naphtha |
+| Saturated gas plant | `gasplant` | `GasPlantColumn`, `GasCompressor`, `AmineTreater` | all three | light ends → fuel gas, LPG, C3/C4 splits, stabilized naphtha; a hydrotreater product on a component table via `gasplant.hydroprocessed.hydroprocessed_feed` |
 
 ### Conversion
 
@@ -50,7 +50,7 @@ still differentiable, with no palette entry.
 | Hydrocracker | `hydrocracking` | `Hydrocracker` | library | VGO → LPG, naphtha, kerosene, diesel, unconverted oil |
 | Residue desulfurizer | `residue` | `ResidueDesulfurizer`, `fuel_oil_blend` | library | atmospheric residue → desulfurized residue, distillate, gas; VLSFO (0.5 wt% S) pool |
 | Fluid catalytic cracker | `fcc` | `FCCUnit` | library | VGO → dry gas, C3, C4, gasoline, LCO, slurry, flue gas |
-| Catalytic reformer | `reforming` | `CatalyticReformer` | library | heavy naphtha → reformate, net H2, LPG, fuel gas |
+| Catalytic reformer | `reforming` | `CatalyticReformer` | library | heavy naphtha (from a hydrotreater: `NaphthaFeed.from_hydrotreater`) → reformate, net H2, LPG, fuel gas |
 | Alkylation | `alkylation` | `AlkylationUnit` | library | C3-C5 olefins + isobutane → alkylate, propane, n-butane |
 | Hydrogen network | `hydrogen` | `HydrogenNetwork` | library | reformer net gas, H2 plant, import → hydrotreater / hydrocracker makeup at the header purity, fuel gas, export |
 

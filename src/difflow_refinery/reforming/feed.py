@@ -14,6 +14,11 @@ from one of two sources:
   characterization (#301) with the hydrocarbon-type estimate of #305
   (``Characterization.composition``). The estimate is coarse at carbon-number
   resolution; the mapping below is what turns it into lumps.
+* :meth:`NaphthaFeed.from_hydrotreater` -- a hydrotreater's (or its
+  fractionator's) product, on the TREATED cuts of its product grid: the
+  same mapping, with the grid's molar masses, its hydrocarbon types after
+  saturation, and its sulfur (#327). This is the path for a reformer that
+  follows a naphtha hydrotreater, as every reformer does.
 
 Mapping a characterization to lumps (``from_characterization``):
 
@@ -84,6 +89,48 @@ def _series(kind: str, attr: str) -> np.ndarray:
     return np.array([getattr(sp.SPECIES[k], attr) for k in keys])
 
 
+
+def _lump_cuts(m_cut: Array, Tb: Array, phi: Array, iso_fraction, mcp_fraction) -> Array:
+    """Reformer-species molar flows (mol/s) of cuts: steps 1-3 of the module docstring.
+
+    ``m_cut`` is each cut's mass flow (kg/s), ``Tb`` its boiling point (K) and
+    ``phi`` its ``(n_cuts, 4)`` hydrocarbon-type VOLUME fractions over P, N,
+    A, O (olefins are counted as paraffins). Mass is conserved to round-off:
+    the type weights and the hat weights each sum to one per cut.
+    """
+    out = jnp.zeros(sp.N_SPECIES)
+    cn = np.asarray(sp.CARBON_NUMBERS, dtype=float)
+    kinds = ("P", "N", "A")
+    # Carbon-number position and the type's density there, per cut and type.
+    rho = []
+    pos = []
+    for t in kinds:
+        Tb_t = jnp.asarray(_series(t, "Tb"))
+        c = jnp.interp(Tb, Tb_t, jnp.asarray(cn))               # clipped at both ends
+        pos.append(c)
+        rho.append(jnp.interp(c, jnp.asarray(cn), jnp.asarray(_series(t, "rho60"))))
+    rho = jnp.stack(rho, axis=1)                                 # (n_cuts, 3)
+    vol = jnp.stack([phi[:, 0] + phi[:, 3], phi[:, 1], phi[:, 2]], axis=1)
+    w = vol * rho
+    w = w / jnp.sum(w, axis=1, keepdims=True)
+    m_type = m_cut[:, None] * w                                  # (n_cuts, 3) kg/s
+    # Hat-function weights onto C6..C10.
+    for ti, t in enumerate(kinds):
+        c = pos[ti]
+        hat = jnp.clip(1.0 - jnp.abs(c[:, None] - jnp.asarray(cn)[None, :]), 0.0, 1.0)  # (n_cuts, 5)
+        m_cn = m_type[:, ti] @ hat                                # (5,) kg/s
+        for slot, n in enumerate(sp.CARBON_NUMBERS):
+            if t == "P":
+                targets = ((f"iP{n}", iso_fraction), (f"nP{n}", 1.0 - jnp.asarray(iso_fraction)))
+            elif t == "N" and n == 6:
+                targets = (("N5_6", mcp_fraction), ("N6", 1.0 - jnp.asarray(mcp_fraction)))
+            else:
+                targets = ((f"{t}{n}", 1.0),)
+            for key, share in targets:
+                j = sp.INDEX[key]
+                out = out.at[j].add(share * m_cn[slot] / (sp.MW[j] / 1000.0))
+    return out
+
 @dataclass(frozen=True)
 class NaphthaFeed:
     """A reformer feed: molar flows of the reformer species.
@@ -94,11 +141,17 @@ class NaphthaFeed:
             should be zero (the recycle supplies it).
         T: Feed temperature (K).
         P: Feed pressure (Pa).
+        sulfur_wppm: Organic sulfur in the feed (wppm, mass basis), a trace
+            element outside the species list. :class:`~.unit.CatalyticReformer`
+            reads it when ``ReformerParams.feed_sulfur_wppm`` is ``None``
+            (#330). :meth:`from_hydrotreater` sets it from the treated
+            product; the other builders leave it at zero.
     """
 
     flows: Array
     T: Array = 311.0
     P: Array = 15.0e5
+    sulfur_wppm: Array = 0.0
 
     # ----- builders -------------------------------------------------------
 
@@ -190,40 +243,106 @@ class NaphthaFeed:
             if n in LIGHT_END_MAP:
                 j = sp.INDEX[LIGHT_END_MAP[n]]
                 out = out.at[j].add(mass[i] / (sp.MW[j] / 1000.0))
-        Tb = jnp.asarray(char.Tb)
         phi = jnp.asarray(comp.hc_type)[k:]                         # (n_cuts, 4) P N A O
-        m_cut = mass[k:]
-        cn = np.asarray(sp.CARBON_NUMBERS, dtype=float)
-        kinds = ("P", "N", "A")
-        # Carbon-number position and the type's density there, per cut and type.
-        rho = []
-        pos = []
-        for t in kinds:
-            Tb_t = jnp.asarray(_series(t, "Tb"))
-            c = jnp.interp(Tb, Tb_t, jnp.asarray(cn))               # clipped at both ends
-            pos.append(c)
-            rho.append(jnp.interp(c, jnp.asarray(cn), jnp.asarray(_series(t, "rho60"))))
-        rho = jnp.stack(rho, axis=1)                                 # (n_cuts, 3)
-        vol = jnp.stack([phi[:, 0] + phi[:, 3], phi[:, 1], phi[:, 2]], axis=1)
-        w = vol * rho
-        w = w / jnp.sum(w, axis=1, keepdims=True)
-        m_type = m_cut[:, None] * w                                  # (n_cuts, 3) kg/s
-        # Hat-function weights onto C6..C10.
-        for ti, t in enumerate(kinds):
-            c = pos[ti]
-            hat = jnp.clip(1.0 - jnp.abs(c[:, None] - jnp.asarray(cn)[None, :]), 0.0, 1.0)  # (n_cuts, 5)
-            m_cn = m_type[:, ti] @ hat                                # (5,) kg/s
-            for slot, n in enumerate(sp.CARBON_NUMBERS):
-                if t == "P":
-                    targets = ((f"iP{n}", iso_fraction), (f"nP{n}", 1.0 - jnp.asarray(iso_fraction)))
-                elif t == "N" and n == 6:
-                    targets = (("N5_6", mcp_fraction), ("N6", 1.0 - jnp.asarray(mcp_fraction)))
-                else:
-                    targets = ((f"{t}{n}", 1.0),)
-                for key, share in targets:
-                    j = sp.INDEX[key]
-                    out = out.at[j].add(share * m_cn[slot] / (sp.MW[j] / 1000.0))
+        out = out + _lump_cuts(mass[k:], jnp.asarray(char.Tb), phi, iso_fraction, mcp_fraction)
         return cls(out, jnp.asarray(T, dtype=float), jnp.asarray(P, dtype=float))
+
+    @classmethod
+    def from_hydrotreater(cls, source, product: str | tuple | None = None, *, char=None,
+                          iso_fraction: float | Array = 0.5, mcp_fraction: float | Array = 0.6,
+                          drop_gases: bool = False, T: float = 311.0, P: float = 15.0e5) -> "NaphthaFeed":
+        """A feed from a hydrotreated naphtha, on its TREATED composition (#327).
+
+        Args:
+            source: A ``HydrotreaterResult`` (outlet ``product``, default the
+                stripper bottoms ``"product"``; a tuple such as ``("product",
+                "wild_naphtha")`` sums outlets), a ``FractionationResult``
+                (``product`` names one of its products, e.g.
+                ``"heavy_naphtha"``), anything else with ``product_stream`` /
+                ``product_char`` (a hydrocracker's naphtha), or an ``F_``
+                stream with ``char=`` its
+                :class:`~difflow_refinery.BlendCharacterization`
+                (:func:`difflow_refinery.gasplant.hydroprocessed.resolve_product`).
+            iso_fraction, mcp_fraction: As :meth:`from_characterization`.
+            drop_gases: Leave out the dissolved H2, H2S, NH3 (and water) a
+                wild naphtha carries; without it they are refused. Methane
+                and ethane map to ``C1`` and ``C2`` either way.
+
+        What differs from :meth:`from_characterization` is where the cut data
+        come from: the hydrotreater's product grid (``product_char``), not the
+        crude's characterization.
+
+        * **Molar masses.** Each component's mass is its flow times the
+          GRID's molar mass -- the treated cut's, and for light ends and gases
+          the atomic weights the hydrotreater's balances close on -- so the
+          feed's mass is the product's (``res.stream_mass``) to round-off.
+          ``from_characterization`` on the same flows uses the untreated
+          crude's molar masses (example 40 lost 4e-4 of the mass that way).
+        * **Types.** The cuts' hydrocarbon types are the grid's
+          ``paraffins_vol``, ``naphthenes_vol``, ``aromatics_vol`` and
+          ``olefins_vol`` qualities: what is left after the hydrotreater's
+          aromatics saturation and olefin hydrogenation. (The hydrotreater
+          tracks them per molecule and reports them back on the rule it read
+          them in by, so an unreacted cut maps exactly as
+          ``from_characterization`` maps it.) Olefins, if any are left, count
+          as paraffins. Placement on the carbon-number grid (by the grid's
+          ``Tb``) and the iso/normal and MCP/cyclohexane splits are the
+          module docstring's steps 2-3.
+        * **Sulfur.** The grid's ``S_ppm`` quality, mass-averaged over the
+          feed, becomes :attr:`sulfur_wppm`, which
+          :class:`~difflow_refinery.reforming.CatalyticReformer` takes as the
+          feed's organic sulfur when ``ReformerParams.feed_sulfur_wppm`` is
+          ``None`` (#330). Dissolved H2S is not organic sulfur and is not
+          counted.
+
+        Traceable in the flows and the grid's arrays, so a reformer output is
+        differentiable back through the hydrotreater.
+        """
+        from difflow_refinery.gasplant.hydroprocessed import resolve_product
+        from difflow_refinery.hydroprocessing.layout import gas_mw
+        from difflow_refinery.thermo import LIGHT_ENDS
+
+        stream, grid = resolve_product(source, product, char)
+        names = list(grid.names)
+        q = grid.qualities
+        missing = [k for k in ("paraffins_vol", "naphthenes_vol", "aromatics_vol") if k not in q]
+        if missing:
+            raise ValueError(f"the product grid has no {missing} qualities: it carries no hydrocarbon types")
+        z = jnp.asarray(0.0)
+        Fg = jnp.stack([jnp.asarray(stream.get(f"F_{n}", z), dtype=float) for n in names])
+        mass = Fg * jnp.asarray(grid.MW, dtype=float) / 1000.0     # kg/s per grid component
+        out = jnp.zeros(sp.N_SPECIES)
+        cut_i = []
+        for i, n in enumerate(names):
+            if n in LIGHT_END_MAP:
+                j = sp.INDEX[LIGHT_END_MAP[n]]
+                out = out.at[j].add(mass[i] / (sp.MW[j] / 1000.0))
+            elif n in LIGHT_ENDS:
+                raise ValueError(f"light end {n!r} has no reformer species")
+            else:
+                cut_i.append(i)
+        m_hc = jnp.sum(mass)
+        for k, v in stream.items():
+            if not k.startswith("F_") or k[2:] in names:
+                continue
+            g = k[2:]
+            if g in LIGHT_END_MAP:
+                j = sp.INDEX[LIGHT_END_MAP[g]]
+                m = jnp.asarray(v, dtype=float) * gas_mw(g) / 1000.0
+                out = out.at[j].add(m / (sp.MW[j] / 1000.0))
+                m_hc = m_hc + m
+            elif not drop_gases:
+                raise ValueError(f"{g!r} is dissolved in the product and is not a reformer feed species; "
+                                 "pass drop_gases=True (or fractionate it off first)")
+        if cut_i:
+            ci = jnp.asarray(cut_i)
+            o = q["olefins_vol"][ci] if "olefins_vol" in q else jnp.zeros(len(cut_i))
+            phi = jnp.stack([q["paraffins_vol"][ci], q["naphthenes_vol"][ci], q["aromatics_vol"][ci], o],
+                            axis=1) / 100.0
+            out = out + _lump_cuts(mass[ci], jnp.asarray(grid.Tb, dtype=float)[ci], phi,
+                                   iso_fraction, mcp_fraction)
+        S = (jnp.sum(mass * q["S_ppm"]) / jnp.maximum(m_hc, 1e-300)) if "S_ppm" in q else jnp.asarray(0.0)
+        return cls(out, jnp.asarray(T, dtype=float), jnp.asarray(P, dtype=float), S)
 
     # ----- edits and views -------------------------------------------------
 
@@ -245,10 +364,11 @@ class NaphthaFeed:
         q_in = jnp.sum(jnp.where(mask, q, 0.0))
         value = jnp.asarray(value, dtype=float)
         scale = jnp.where(mask, value * Q / q_in, (1.0 - value) * Q / (Q - q_in))
-        return NaphthaFeed(self.flows * scale, self.T, self.P)
+        return NaphthaFeed(self.flows * scale, self.T, self.P, self.sulfur_wppm)
 
     def scaled(self, factor: Array) -> "NaphthaFeed":
-        return NaphthaFeed(self.flows * factor, self.T, self.P)
+        """The same feed at ``factor`` times the rate (sulfur content unchanged)."""
+        return NaphthaFeed(self.flows * factor, self.T, self.P, self.sulfur_wppm)
 
     @property
     def mass_flow(self) -> Array:
@@ -293,7 +413,7 @@ class NaphthaFeed:
         return stream_of(self.flows, self.T, self.P)
 
 
-jax.tree_util.register_dataclass(NaphthaFeed, data_fields=["flows", "T", "P"], meta_fields=[])
+jax.tree_util.register_dataclass(NaphthaFeed, data_fields=["flows", "T", "P", "sulfur_wppm"], meta_fields=[])
 
 
 # -----------------------------------------------------------------------------
