@@ -19,6 +19,7 @@ The `difflow_refinery` plugin provides:
 - **Product properties** (`product_properties`, `products.gaps`): rates, volume and mass yields, SG/API, and TBP 5/10/50/90/95 points. Also the 5--95 gaps between neighbouring cuts.
 - **`CrudeUnit`**: the assembly a planner means by "the CDU": assay in, yield table out.
 - **`CrudeDistillationUnit`**: the same unit behind difflow's operation protocol, for a `Flowsheet`, JSON and the editor.
+- **The preheat train** (`difflow_refinery.preheat`): tank to furnace inlet. It covers the exchangers, the desalter and the preflash drum, and is solved together with the column whose products and pumparounds heat it (`PreheatedCrudeUnit`). It also provides the Ebert-Panchal fouling rates and a cleaning ranking from one gradient. The palette operations are `Desalter`, `PreflashDrum` and `CrudeUnitWithPreheat`.
 - **`VacuumColumn`** (`difflow_refinery.vacuum`): the vacuum unit, atmospheric residue to LVGO, HVGO, slop and vacuum residue, with contaminants carried per cut. It runs on the crude unit's own pseudo-components, so the CDU residue feeds it directly in a `Flowsheet`.
 - **Correlations** (`difflow_refinery.correlations`): Twu, Riazi-Daubert, Lee-Kesler, Kesler-Lee and Maxwell-Bonnell, each written once, for all three of the above.
 - **Product blending** (`BlendPool`, `BlendComponent`): gasoline, jet, ULSD and fuel-oil pools with the nonlinear blending rules, signed spec margins and LP back-off. A library for optimisation and planning, not a palette operation.
@@ -259,7 +260,7 @@ plan = DeltaBasePlanner(net, prices={"value.revenue": 1.0, "cdu.crude.rate": -65
 
 **Levers come from the specs.** `available_levers(unit)` lists them:
 
-- `crude.rate` (bbl/d) and `preheat.T` (°C) are always levers.
+- `crude.rate` (bbl/d) is always a lever. So is `preheat.T` (°C), the furnace inlet temperature, except on a `PreheatedCrudeUnit`, where the train computes it (see [the preheat train](#refinery-preheat)).
 - Each volume product-rate spec offers `<product>.yield` (a fraction of the crude) or `<product>.bpd`.
 - The other spec levers are `overflash`, `<pa>.duty` (MW), `<pa>.dT` (K), `<pa>.return_T` (°C), `<pa>.rate` (bbl/d), `furnace.cot` (°C), `furnace.duty` (MW absorbed), `reflux_ratio` and `stage<k>.T` (°C).
 - The stripping steam rates are levers in kg/h.
@@ -296,7 +297,7 @@ Temperatures are in °C and temperature differences in K. Every unit is recorded
 - **`steam.total`** is a constant row unless a steam rate is a lever.
 - **The lightest product's TBP5** has a kink. A TBP point is piecewise linear in the cumulative volume, with one node per component, and the nodes among the discrete light ends are tens of degrees apart. On the test crude the naphtha's 5 % point sits on the n-butane node at the base point, with a slope of 277.6 K per unit yield to the left and 146.2 to the right.
 
-The `preheat.T` lever is not dead, but on a column closed by an overflash it moves only the fired duty. The overflash fixes the flash-zone vaporisation, so the preheat temperature changes how much heat the furnace must add and nothing about the products.
+On a unit with a preheat train, `preheat.T` is replaced by what sets it: the tank temperature and the exchangers ([below](#refinery-preheat-planning)). On a bare `CrudeUnit`, the `preheat.T` lever is not dead, but on a column closed by an overflash it moves only the fired duty. The overflash fixes the flash-zone vaporisation, so the preheat temperature changes how much heat the furnace must add and nothing about the products.
 
 **Non-convergence.** Some spec sets have no solution. With 5 % overflash, taking more than about 24 MW out of PA1 on the test column dries out the section above it. The column then reports `converged=False` with a finite state. `cdu_block` returns NaN at such a point, and the planner rejects any proposal at which a block is not finite ([A block that cannot be evaluated](planning.md#a-block-that-cannot-be-evaluated)).
 
@@ -310,6 +311,98 @@ Making a cut point a column *spec* would describe the same feasible set, and it 
 - or, as an alternative, it would wrap a root find around the column, which means several column solves per evaluation.
 
 For the same reason, `product_value_block` prices products in bbl/d only. Folded into the revenue as a smooth penalty, a quality limit puts curvature in the objective that a linear model cannot see. On the test crude, that version crawled along the penalty's shoulder at a radius of 1e-4 and stopped at the iteration cap.
+
+(refinery-preheat)=
+## The preheat train
+
+The crude reaches the furnace at 250 °C or so, from a tank at ambient temperature. Most of that heat is recovered from the column's own products and pumparounds in a train of exchangers. The furnace supplies the rest, so the train sets the fuel bill as much as the column does. `difflow_refinery.preheat` models the train from tank to furnace inlet. It has three kinds of item:
+
+- **Exchangers** (`PreheatExchanger`): `UA = A / (1/U + R_f)`, with the duty from the LMTD equation of `difflow.units.heat_exchanger` (and its F-factor when `shells` is given). An optional `bypass` sends part of the hot stream around the exchanger.
+- **A desalter** (`DesalterParams`): wash water at its own temperature is mixed in. The brine leaves at the desalter temperature, and the crude keeps `water_out` of its volume as water. Salt removal is a fixed `efficiency`. The 120-150 °C operating window is reported as two signed margins (`margin_low`, `margin_high`), not imposed.
+- **A preflash drum** (`PreflashDrumParams`): an adiabatic flash at a set pressure, or at the pressure that flashes a set `vapor_fraction` of the hydrocarbons. The vapour goes to the column, on the stage above the flash zone by default (`vapor_stage`). The liquid is pumped on through the hot train. Free water is drawn off.
+
+The crude side is a three-phase split on the column's own thermodynamics: hydrocarbon liquid, vapour, and free water. Water is immiscible with the hydrocarbon liquid, as it is on the column's trays. With free water present, water's partial pressure is its vapour pressure and the hydrocarbons see the rest. Without it, all the water is vapour. The two cases agree on the boundary. A dry crude's enthalpy computed this way equals the column's own feed enthalpy to round-off, which is what lets the energy balance close across the train and the column. The hot streams are liquid throughout.
+
+The train and the column are coupled both ways:
+
+- The hot streams are the column's products and pumparounds, so their rates and temperatures come from the column.
+- The column's feed is the furnace inlet, which is the train's outlet. The drum vapour is a second, vapour feed.
+- A pumparound cooled in the train returns at the temperature the train sends it back at.
+
+`PreheatedCrudeUnit` solves the two together:
+
+```python
+import difflow_refinery as dr
+
+tp = dr.PreheatTrainParams(
+    exchangers=(dr.PreheatExchanger("E1", U=350.0, area=300.0), ..., dr.PreheatExchanger("E8", 350.0, 1200.0, Rf=2e-4)),
+    hot_streams=(dr.HotStream("residue", ("E8", "E7", "E2")), dr.HotStream("pa2", ("E6",)), ...),
+    crude_path=("E1", "E2", "E3", "desalter", "E4", "E5", "preflash", "E6", "E7", "E8"),
+    desalter=dr.DesalterParams(), drum=dr.PreflashDrumParams(P=3e5))
+unit = dr.PreheatedCrudeUnit(assay, column_params, tp)
+res = unit.solve(95_000, T_tank=300.0)          # bbl/d from the tank
+res.furnace_inlet_T, res.fired_duty, res.preflash_vapor
+unit.balances(res)                               # tank to products: mass, water, energy
+```
+
+Each hot stream lists its exchangers hottest first. The crude path lists everything in the order the crude meets it, tank to furnace. Every exchanger must be on the crude path once and on exactly one hot stream; the train raises a `ValueError` when it is not. A pumparound in the train must have one `pumparound_return_temperature` spec on the column (its value only starts the loop) and one other spec, such as its rate. A pumparound not in the train keeps whatever spec it has.
+
+**The solve.** The train alone is one damped Newton over its exchanger outlet temperatures, the desalter temperature and the drum temperature (and the drum pressure in `vapor_fraction` mode). Around it, an outer Newton works on the tear: the pumparound return temperatures, the drum state and the furnace inlet temperature. Each outer iteration solves the train and the column, and differentiates both with one forward-mode trace. Steps are clipped to 30 K. It starts from a default guess built from the specs, not from a previous solution.
+
+Gradients are implicit-function gradients at the converged point. The last outer Jacobian is reused for the implicit step, so a `jax.grad` or `jax.jacfwd` with respect to an area, an `R_f`, the drum pressure or a TBP point costs one more linear solve, not a differentiated iteration history.
+
+On the test crude (95 000 bbl/d from a 27 °C tank), with the column of [the crude unit](#refinery-crude-unit) and an eight-exchanger textbook layout (`tests/refinery/reference/preheat_case.py`, `examples/37_crude_preheat_train.ipynb`):
+
+- the solve converges in 4 outer iterations;
+- the train recovers 81.7 MW and delivers the crude to the furnace at 251.2 °C;
+- the furnace fires 46.5 MW;
+- the desalter runs at 140.8 °C;
+- the drum flashes 8.9 mol % of the hydrocarbons at 150 °C and 3 bar;
+- the mass, water and energy balances close to 1.5e-12.
+
+A heavier invented crude (every TBP point 25 °C higher above 10 %, SG 0.885) converges from the same default start. It reaches the furnace at 272.9 °C with 48.8 MW fired. Its desalter sits at 154 °C, 4 K above the window, which the margin reports.
+
+### Fouling and cleaning
+
+`difflow_refinery.preheat.fouling` has the Ebert-Panchal (1995) threshold model. Fouling grows by deposition, which is Arrhenius in the crude-side film temperature and falls with Reynolds number. It shrinks by removal, which goes with the wall shear stress:
+
+    dR_f/dt = alpha Re^beta Pr^(-0.33) exp(-E / (R T_film)) - gamma tau_w
+
+Below the threshold an exchanger does not foul. `fouling_rates(result.train, train_params)` evaluates it for every exchanger of a solved train. The crude side's Re, Pr and wall shear are inputs, because the train carries no geometry beyond the area.
+
+**The default constants (`EbertPanchal()`) are illustrative.** They are not fitted to any crude. They were chosen so that the hot end fouls at a few 1e-4 m²K/W a year and the cold end not at all, which is the right order for a crude train. Fit `alpha`, `E` and `gamma` to your own monitoring data before reading a cleaning date off them. On the test train they give E8 4.1e-4 and E7 2.0e-4 m²K/W a year, and zero for E1-E3.
+
+Two methods turn a fouled train into a decision:
+
+- `unit.fouling_sensitivity(rate, T_tank, train=...)` gives `d(fired duty)/d(R_f)` for every exchanger from one reverse-mode gradient.
+- `unit.cleaning_ranking(rate, T_tank, train=...)` multiplies each sensitivity by its `R_f` (the linear estimate of the saving from cleaning). It then re-solves with each exchanger clean (the exact saving) and sorts by the exact saving.
+
+After 18 months of the illustrative fouling, the fired duty has risen from 46.49 to 47.04 MW. The ranking is E8 (0.26 MW), E7 (0.18) and E6 (0.15). The linear estimates are within 10 % of the exact savings and in the same order.
+
+The sensitivities alone tell a different story. Per unit of `R_f`, E6 costs the most (1.2 MW per 1e-3 m²K/W), and E2 at the cold end costs as much as E7. The hot end tops the ranking only because only the hot end fouls. Keeping the two apart is the point: the sensitivity says where fouling hurts, and the fouling model says where it happens.
+
+(refinery-preheat-planning)=
+### Planning with the preheat train
+
+`cdu_block` accepts a `PreheatedCrudeUnit` (or a `CrudeUnitWithPreheat`). The base point is `rate=` and `T=` (the tank temperature); `P` is not needed. `preheat.T` is no longer a lever, because the train computes it. A pumparound cooled in the train has no `return_T` lever, because the train sets its return temperature. In their place the train offers these levers:
+
+| Lever | Units | |
+|---|---|---|
+| `tank.T` | °C | |
+| `<E>.Rf` | m²K/kW | the fouling resistance, so a delta vector reads per 1e-3 m²K/W |
+| `<E>.area` | m² | |
+| `<E>.bypass` | - | hot-stream fraction |
+| `desalter.wash` | - | wash water, standard-volume fraction of the crude |
+| `preflash.P` | bar | or `preflash.vapor_fraction` in that mode |
+
+The train adds these outputs: `furnace.inlet_T` (°C) and `preheat.recovered` (MW); per exchanger `<E>.duty` (MW) and `<E>.approach` (K, negative for a temperature cross); `<source>.train_out_T` (°C) for each hot stream; `desalter.T` with its two margins; and `preflash.T`, `.P` and `.vapor_fraction`. The `furnace.fired` row of the delta vectors against the `<E>.Rf` levers is the fouling sensitivity above.
+
+### Preheat train gotchas
+
+- **A pinched exchanger may not solve.** The duty is `UA F LMTD`. When a small hot stream meets a large exchanger, its hot-side NTU is very large and the terminal difference at the cold end falls like `exp(-NTU)`. The LMTD of `difflow.units.heat_exchanger` floors each terminal difference at `MIN_DELTA_T` (1e-6 K), so below that floor the duty equation stops responding to the outlet temperature, and the Newton iteration fails. The case found while building the tests was 0.25 mol/s of naphtha against 40 m², where the NTU is about 240. Size the exchanger to the stream, or bypass most of it.
+- **A temperature cross is not prevented.** The LMTD takes the absolute value of each terminal difference, so a solution with a cross is not a physical exchanger. `approach` reports it as negative. Check it, or hold it with a spec when planning.
+- **The desalter window is a margin, not a constraint.** The heavy test crude runs its desalter outside the window, and the solve does not stop it.
+- **The drum's vapour goes into the column, not past it.** It enters at `vapor_stage`, by default the stage above the flash zone, so the column's specs see it.
 
 ---
 
@@ -343,6 +436,18 @@ cdu.last_result.table()                           # the full result of the last 
 - **Inlet:** the inlet needs a flow for every component the assay characterises into; `cdu.feed(...)` makes one.
 - **Full result:** `cdu.solve(feed)` returns the full `CrudeUnitResult` (column profiles, duties, product properties) rather than the streams.
 - **Serialisation:** the assay, the column params and every nested spec, side product, pumparound and furnace are plain dataclasses, so the unit writes to and reads back from JSON with `difflow.serialize`.
+
+### Desalter
+
+The desalter alone, for a flowsheet. It is built from `DesalterUnitParams` (`assay`, `desalter`, `cut_points`, `method`) and called with a wet crude stream. It returns `("crude", "brine")`. `desalter.feed(rate, T, P, water=0.002)` makes an inlet, and `desalter.solve(feed)` also returns the temperature and the window margins.
+
+### PreflashDrum
+
+The preflash drum alone. It is built from `PreflashDrumUnitParams` (`assay`, `drum`, ...) and returns `("vapor", "liquid", "water")`. With `drum.vapor_fraction` set, the pressure is solved for. `feed(rate, T, P, water=0.0)` makes an inlet at the train's pressure.
+
+### CrudeUnitWithPreheat
+
+The whole coupled unit (`PreheatedCrudeUnit`) as a flowsheet operation. It is built from `CrudeUnitWithPreheatParams` (`assay`, `column`, `train`, ...) and called with the tank crude (`op.feed(95_000, T=300.0)`). Its outlets are the column's products, then `"brine"` (with a desalter) and `"drum_water"` (with a drum). A product cooled in the train leaves at the train's outlet temperature, not the column's. `op.last_result` holds the full `PreheatedUnitResult`. The nested train params (exchangers, hot streams, desalter, drum) are plain dataclasses, so the unit round-trips through `difflow.serialize`.
 
 ---
 
@@ -881,12 +986,32 @@ The reference also measures what two of difflow's numerical choices cost. These 
 
 **What this does not validate.** It does not test the property model. Maxwell-Bonnell with Raoult at 10-30 mmHg is a choice that nothing here tests against data or an equation of state; the crude unit's layer 2 is the nearest evidence. It does not cover a commercial simulator's vacuum characterisation, packing HETP and pressure-drop models, or the ejector system, and it does not replace plant data.
 
+(refinery-preheat-validation)=
+### Validation: the preheat train
+
+The drum and the exchangers are checked against IDAES 2.10 unit models (`tests/refinery/reference/preheat_generate.py` writes `preheat_reference.json`). `test_preheat_validation.py` (release) compares against the file. `test_preheat_validation_file.py` runs on every commit and checks that the file is intact and the characterisation unchanged. As for the column, this is **an independent implementation, not an independent model**. IDAES is given difflow's property model (Raoult over Lee-Kesler, the cubic ideal-gas Cp, Watson liquid enthalpy, water vapour-only) on the same pseudo-components. Its liquid `(P - P_ref)/rho` term is switched off, because difflow's model has none.
+
+| Check | IDAES model | Agreement (test tolerance) |
+| --- | --- | --- |
+| Adiabatic drum: dry crude from 500 K and 15 bar to 3 bar | `Flash` | T within 2e-6 K (1e-5); vapour fraction 0.3052, 3e-8 rel (1e-6); vapour composition 2e-9 (1e-8) |
+| Wet crude at drum states (470 K, 3 bar; 500 K, 2 bar), all water vapour | state block | vapour fraction and vapour water fraction 2e-11 rel (1e-9) |
+| E7 and E8 at the base case's inlets (residue against drum liquid; E8's crude starts to boil) | `HeatExchanger`, counter-current, exact LMTD | duty 3.5e-10 rel (1e-8); outlet temperatures 8e-8 K (1e-6) |
+
+What the check does not cover:
+
+- **The free-water branch of the split.** IDAES's package carries water as vapour-only. That branch is checked by hand in the per-commit tests: the drum at 380 K and 3 bar leaves free water, at 430 K none, and the split is continuous between.
+- **The F-factor.** IDAES's exchanger is pure counter-current. The F-factor is difflow's `lmtd_correction_factor`, which `difflow.units.heat_exchanger` already tests.
+- **The coupled train and column.** That is checked against itself. The balances close to 1e-12, and the implicit gradients match central differences: `jax.jacfwd` of the furnace inlet temperature, the fired duty and the drum vapour with respect to E6's area, E8's `R_f`, the drum pressure and the 40 % TBP point agree within 1e-5 relative (`test_preheat.py`, release).
+
+**Published case study: none found.** The issue named Polley, Wilson, Yeap and Pugh (2002) as a candidate. No preheat-train study was found that publishes a train's full data (assay, exchanger areas and U values, hot-stream rates) in a form that could be set up here, so nothing is reproduced. The eight-exchanger layout is a textbook one, and its numbers are not a validation.
+
 ---
 
 (refinery-limitations)=
 ## Limitations
 
-- **The crude unit is the atmospheric column only.** The preflash drum and preheat train are not modelled; the inlet is the preheat train's outlet. The vacuum unit is a separate operation, fed from the crude unit's residue in a `Flowsheet` (above).
+- **The crude unit is the atmospheric column; the preheat train is optional.** `CrudeUnit` and `CrudeDistillationUnit` take the crude at the furnace inlet. `PreheatedCrudeUnit` and `CrudeUnitWithPreheat` add the train, desalter and preflash drum from the tank ([above](#refinery-preheat)). The vacuum unit is a separate operation, fed from the crude unit's residue in a `Flowsheet` (above).
+- **The preheat train has no hydraulics or geometry.** Its exchangers are `U`, area and `R_f`. Film coefficients, pressure drops, and the Re, Pr and wall shear the fouling model needs are inputs, not computed. The fouling constants are illustrative. A pinched exchanger (hot-side NTU of a few hundred) cannot be solved ([gotchas](#refinery-preheat)).
 - **Thermodynamics:** Raoult's law and ideal-gas-path enthalpies. This is the usual model for an atmospheric column at one or two bar; it is not a cubic equation of state.
 - **Equilibrium stages.** There are no tray efficiencies or hydraulics.
 - **Boiling ranges are TBP, not ASTM D86.**
