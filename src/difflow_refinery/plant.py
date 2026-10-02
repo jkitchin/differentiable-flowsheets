@@ -44,7 +44,7 @@ Jacobian ``dx_k/dx_0`` along (forward accumulation)::
 
 A forward stage costs one tangent per chain INPUT; a reverse-only stage one
 cotangent per output of that stage, so keep the interfaces after a
-reverse-only unit narrow (a ``NaphthaFeed`` is 23 numbers, a whole
+reverse-only unit narrow (a ``NaphthaFeed`` is 32 numbers, a whole
 hydrotreater result is thousands). Each stage compiles on its own, which
 is also what makes the cost of each one visible (:class:`ChainJacobian`
 ``.timings``).
@@ -60,7 +60,8 @@ a unit whose solve has a Python-level recycle (the reformer's
 again on every call -- every tangent of an unvectorized Jacobian, and every
 repeated Jacobian. Measured on example 40's chain (NHT -> fractionator ->
 reformer -> gasoline pool, 2 inputs, 4 cores): 487 s for the first
-Jacobian with jitted stages, 34 s for a repeat; unjitted, 671 s and 511 s.
+Jacobian with jitted stages, 34 s for a repeat; unjitted (one tangent at a
+time), 671 s and 511 s.
 
 The hydrotreater and the residue desulfurizer can be made forward-capable:
 ``HydrotreaterParams(reactor=ReactorOptions(adjoint="forward"))`` integrates
