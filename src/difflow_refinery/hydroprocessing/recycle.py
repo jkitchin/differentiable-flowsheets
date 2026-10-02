@@ -156,11 +156,24 @@ def makeup_for_ratio(recycle: Flows, layout: Layout, makeup_y: Array, h2_target)
 
 
 def makeup_vector(layout: Layout, composition: Mapping[str, float]) -> Array:
-    """A makeup-gas mole-fraction vector on ``layout``'s gases (normalised)."""
+    """A makeup-gas mole-fraction vector on ``layout``'s gases (normalised).
+
+    ``composition`` is ``{gas: mole fraction}``; the values may be JAX
+    tracers, so a hydrotreater output is differentiable in the makeup's
+    purity (``makeup={"hydrogen": y, "methane": 1 - y}``; the hydrogen
+    network of #329 takes ``d h2.makeup / d purity`` that way). An array
+    already on ``layout.gases`` is accepted too.
+    """
+    if not isinstance(composition, Mapping):
+        v = jnp.asarray(composition, dtype=float)
+        if v.shape != (layout.n_gas,):
+            raise ValueError(f"a makeup array needs one entry per layout gas ({layout.n_gas})")
+        return v / jnp.sum(v)
     unknown = [k for k in composition if k not in layout.gases]
     if unknown:
         raise ValueError(f"makeup species {unknown} are not in the layout's gases")
-    v = jnp.asarray([float(composition.get(g, 0.0)) for g in layout.gases])
+    zero = jnp.asarray(0.0)
+    v = jnp.stack([jnp.asarray(composition.get(g, zero), dtype=float) for g in layout.gases])
     return v / jnp.sum(v)
 
 

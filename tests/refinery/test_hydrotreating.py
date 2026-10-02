@@ -573,3 +573,46 @@ def test_fractionator_cut_point_gradient_matches_central_differences(diesel_resu
     fd = np.asarray(richardson(f, T0, 1.0))
     assert np.all(np.abs(J) > 0)
     np.testing.assert_allclose(J, fd, rtol=GRAD_RTOL)
+
+
+# =============================================================================
+# Makeup composition as a traced input (for the hydrogen network, #329)
+# =============================================================================
+
+
+def test_makeup_composition_is_traceable(diesel):
+    """``HydrotreaterParams.makeup`` values may be tracers: d(makeup_y)/d(purity) is exact."""
+    from difflow_refinery.hydroprocessing.recycle import makeup_vector
+    char, cuts, feed, unit = diesel
+    lay = unit.layout
+    hi, mi = lay.gas_index("hydrogen"), lay.gas_index("methane")
+
+    def y(purity):
+        p = dataclasses.replace(unit.params, makeup={"hydrogen": purity, "methane": 1.0 - purity})
+        return unit.theta(feed, params=p)["makeup_y"]
+
+    d = np.asarray(jax.jacfwd(y)(0.95))
+    assert d[hi] == pytest.approx(1.0) and d[mi] == pytest.approx(-1.0)
+    assert np.all(d[[i for i in range(lay.n_gas) if i not in (hi, mi)]] == 0.0)
+    # the dict API is unchanged, and an array on the layout's gases is accepted
+    v = makeup_vector(lay, {"hydrogen": 0.97, "methane": 0.03})
+    np.testing.assert_allclose(np.asarray(makeup_vector(lay, v)), np.asarray(v), rtol=0, atol=1e-16)
+    with pytest.raises(ValueError, match="not in the layout"):
+        makeup_vector(lay, {"argon": 1.0})
+
+
+@pytest.mark.slow
+@pytest.mark.release
+def test_makeup_purity_gradient_matches_central_differences(diesel):
+    """d(h2.makeup, recycle purity, product S)/d(makeup H2 purity) through the whole unit, AD against FD."""
+    char, cuts, feed, unit = diesel
+
+    def f(purity):
+        p = dataclasses.replace(unit.params, makeup={"hydrogen": purity, "methane": 1.0 - purity})
+        o = unit.solve(feed, params=p, warn=False).outputs
+        return jnp.stack([o["h2.makeup"], o["recycle.h2_purity"], o["product.S_wppm"]])
+
+    J = np.asarray(jax.jacrev(f)(0.97))
+    assert np.all(np.isfinite(J))
+    fd = np.asarray(richardson(f, 0.97, 0.005))
+    np.testing.assert_allclose(J, fd, rtol=GRAD_RTOL)

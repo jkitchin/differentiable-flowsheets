@@ -2020,7 +2020,9 @@ The DDS/HYD route shares of the two DBT classes are illustrative, set by the qua
 | `catalyst_density` | 800 kg/m³ | loaded density |
 | `h2_oil` | 300 Nm³/m³ | treat-gas H2 to oil, including quench |
 | `purge` | 0.05 | fraction of the scrubbed separator gas purged |
-| `makeup` | 97 % H2, 3 % CH4 | makeup-gas composition |
+| `makeup` | 97 % H2, 3 % CH4 | makeup-gas composition, `{gas: mole fraction}`; the values may be JAX tracers, so outputs are differentiable in the makeup purity (the hydrogen network's `d h2.makeup / d purity`); an array on the layout's gases is accepted too |
+| `heater_efficiency` | 0.85 | charge-heater absorbed / fired duty (illustrative) |
+| `heater_inlet_T` | `None` | charge-heater inlet temperature after a feed/effluent exchanger; `None`: no exchanger |
 | `h2s_removal`, `nh3_removal` | 0.99, 1.0 | amine and wash-water removal fractions |
 | `hps_T`, `loop_dP` | 50 °C, 3 bar | separator temperature; pressure drop round the loop (the compressor makes it up) |
 | `compressor_eta` | 0.75 | isentropic efficiency |
@@ -2175,6 +2177,7 @@ The numbers come from illustrative rate constants: read them as the shape of the
 - `TargetSpec("wabt", ...)` lands on its target; `hdt_block` delta vectors pass `check_delta_vectors`;
 - the product enters `BlendPool("ulsd")` through `BlendComponent.from_stream`, with the same sulfur, gravity and cetane index the unit reports;
 - the liquid outlets as streams carry their whole mass (dissolved gases included), and the unit's mass balance closes to 1e-13 over them; `gases=False` drops exactly `naphtha.dissolved_gas_rate`; the yields add up (`yields.total`); the charge heater's duty is positive and of the sensible-heat order;
+- the makeup composition is a traced input (`jax.jacfwd` through `theta`), and (release) `d(h2.makeup, recycle purity, product S)/d(makeup purity)` through the whole unit against Richardson differences;
 - the fractionator: shares sum to one, the jet/diesel split closes to 1e-13 and its two products go into the jet and ULSD pools with their sulfur averaging back to the unit's; three products over product and wild naphtha send the dissolved gas to the off-gas; the cut-point gradient of four pool properties against Richardson differences (release);
 - on example 40's naphtha (`tests/refinery/test_hydrotreating_naphtha.py`): balances, `gas.yield` positive and consistent on a feed carrying light ends, the charge heater with a feed/effluent exchanger, positive chemical hydrogen in a vapour bed, the light/heavy naphtha split; the 320 °C / 50 bar / LHSV 0.5 / 150 Nm³/m³ point returning `converged=False` with a warning instead of raising; and (release) `NAPHTHA_HDT_PARAMS` reaching below 0.5 wppm S at 30 bar, 320 °C, LHSV 4;
 - pins: PR fugacity coefficients against difflow's `PengRobinson` (1e-8), the H2/H2S/NH3 Cp polynomials against PPO 5th ed. (0.5 %), every heat of reaction and the aromatic-step entropies against the model-compound table, element conservation of the kinetics at a point, and the power-law fallback.
