@@ -179,8 +179,13 @@ def total_enthalpy(F: Array, T: Array, P: Array | None = None, phase: str = "vap
     return H + Ft * peng_robinson().enthalpy_departure(T, P, y, phase)
 
 
+@jax.jit
 def total_enthalpy_flash(F: Array, T: Array, P: Array) -> Array:
-    """Two-phase-aware total enthalpy flow (W): ``CubicThermo`` flash enthalpy + Hf."""
+    """Two-phase-aware total enthalpy flow (W): ``CubicThermo`` flash enthalpy + Hf.
+
+    Jit-compiled (one compile for every stream of the reformer's species).
+    """
+    F = jnp.asarray(F, dtype=float)
     flows = {k: F[i] for i, k in enumerate(sp.NAMES)}
     return cubic_thermo().stream_enthalpy_flash(flows, T, P) + jnp.asarray(F) @ _HF
 

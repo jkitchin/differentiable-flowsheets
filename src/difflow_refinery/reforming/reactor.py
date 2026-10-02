@@ -161,7 +161,8 @@ class ReformingReactor:
                                               kin, iso_fraction=float(kin.iso_fraction),
                                               adjoint=self.adjoint, rtol=p.rtol)
         info = {"T_in": T_in, "T_out": T_out, "dT": T_out - T_in, "coke": coke,
-                "H_in": th.total_enthalpy(F_in, T_in, P), "H_out": th.total_enthalpy(F_out, T_out, P)}
+                "H_in": th.total_enthalpy_flash(F_in, T_in, P),
+                "H_out": th.total_enthalpy_flash(F_out, T_out, P)}
         return stream_of(F_out, T_out, P), info
 
 
@@ -197,20 +198,16 @@ class FiredHeater:
     symbol = "H"
     parameter_units = {"T_out": "K", "efficiency": "-", "P_out": "Pa"}
 
-    def __init__(self, params: FiredHeaterParams, two_phase_inlets: bool = False):
+    def __init__(self, params: FiredHeaterParams):
         self.params = params
-        self.two_phase_inlets = two_phase_inlets
 
     def __call__(self, *inlets: Stream) -> tuple[Stream, dict]:
         p = self.params
         F = sum(flows_of(s) for s in inlets)
         P = jnp.asarray(inlets[0]["P"] if p.P_out is None else p.P_out, dtype=float)
-        if self.two_phase_inlets:
-            H_in = sum(th.total_enthalpy_flash(flows_of(s), s["T"], s["P"]) for s in inlets)
-        else:
-            H_in = sum(th.total_enthalpy(flows_of(s), s["T"], s["P"]) for s in inlets)
+        H_in = sum(th.total_enthalpy_flash(flows_of(s), s["T"], s["P"]) for s in inlets)
         T_out = jnp.asarray(p.T_out, dtype=float)
-        H_out = th.total_enthalpy(F, T_out, P)
+        H_out = th.total_enthalpy_flash(F, T_out, P)
         duty = H_out - H_in
         return stream_of(F, T_out, P), {"duty": duty, "fired": duty / p.efficiency,
                                         "H_in": H_in, "H_out": H_out}

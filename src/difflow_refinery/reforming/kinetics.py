@@ -132,10 +132,10 @@ class ReformingKinetics(ParamsMixin):
     A: dict = field(default_factory=lambda: {
         "dehydrogenation": 0.5,
         "ring_expansion": 0.02,
-        "ring_opening": 4.0e-4,
-        "isomerization": 4.0e-3,
-        "hydrocracking_P": 3.0e-3,
-        "hydrocracking_N": 1.5e-3,
+        "ring_opening": 0.5,
+        "isomerization": 0.1,
+        "hydrocracking_P": 0.1,
+        "hydrocracking_N": 5.0e-3,
         "dealkylation": 5.0e-6,
     })
     E: dict = field(default_factory=lambda: {
@@ -149,16 +149,16 @@ class ReformingKinetics(ParamsMixin):
     })
     carbon_factor: dict = field(default_factory=lambda: {
         "dehydrogenation": (0.3, 1.0, 1.2, 1.4, 1.6),
-        "ring_opening": (0.4, 1.0, 1.8, 2.5, 3.2),
+        "ring_opening": (0.2, 1.0, 1.5, 2.0, 2.5),
         "isomerization": (1.0, 1.0, 1.0, 1.0, 1.0),
-        "hydrocracking_P": (0.5, 1.0, 1.4, 1.8, 2.2),
+        "hydrocracking_P": (0.3, 1.0, 2.5, 5.0, 8.0),
         "hydrocracking_N": (0.5, 1.0, 1.3, 1.6, 1.9),
         "dealkylation": (0.0, 1.0, 1.0, 1.0, 1.0),
         "ring_expansion": (1.0, 0.0, 0.0, 0.0, 0.0),
     })
     iso_fraction: float = 0.5
     activity: float = 1.0
-    coke_A: float = 1.5e-9
+    coke_A: float = 1.7e-7
     coke_E: float = 120.0e3
 
 
