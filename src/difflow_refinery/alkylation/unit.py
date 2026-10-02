@@ -25,15 +25,16 @@ A difflow :class:`~difflow.flowsheet.Flowsheet`::
   the recycle carries ``F_C3 / (fraction * recovery)`` of it.
 * **Debutanizer** on the DIB bottoms: n-butane overhead, alkylate bottoms.
 
-The three columns are difflow's :class:`~difflow.units.distillation.ShortcutColumn`
--- Fenske minimum stages, Underwood minimum reflux, Gilliland stages, duties
-from an energy balance -- on Peng-Robinson K-values and enthalpies
-(:func:`~difflow_refinery.alkylation.reactor.alkylation_thermo`), with the
-non-key distribution corrected (:class:`GeddesShortcutColumn`). Each column is
-specified by its two key recoveries and its reflux ratio. This is a SHORTCUT
-simplification: the rigorous gas-plant cubic-EOS stage columns the issue
-points to (#312) do not exist, and the shortcut method is the existing
-difflow column machinery that fits.
+The three columns are Fenske-Underwood-Gilliland shortcut columns, each
+specified by its two key recoveries and its reflux ratio
+(:class:`~difflow_refinery.alkylation.fractionation.KeySplitColumn`: Raoult
+volatilities from Lee-Kesler vapour pressures, Hengstebeck-Geddes non-key
+split, constant-molar-overflow duties). This is a SHORTCUT simplification:
+the rigorous gas-plant cubic-EOS stage columns the issue points to (#312) do
+not exist. ``fractionation="pr_shortcut"`` swaps in difflow's own
+Peng-Robinson :class:`~difflow.units.distillation.ShortcutColumn` (with its
+non-key split corrected, :class:`GeddesShortcutColumn`) for forward
+cross-checks.
 
 **Recycle**: the DIB overhead is the tear, solved by the flowsheet (Anderson
 forward; ``optimistix`` fixed point with implicit differentiation under
@@ -59,6 +60,7 @@ from difflow.params_mixin import ParamsMixin
 from difflow.streams import Stream
 from difflow.units.distillation import ShortcutColumn, ShortcutColumnParams
 
+from difflow_refinery.alkylation.fractionation import KeySplitColumn, KeySplitColumnParams
 from difflow_refinery.alkylation.reactor import (
     AlkylationReactor, AlkylationReactorParams, alkylation_thermo, flows_array,
     stream_from_array, to_bpd,
@@ -247,11 +249,11 @@ class ColumnSpec(ParamsMixin):
 
 
 def _default_dec3():
-    return ColumnSpec("propane", "isobutane", 0.95, 0.98, 20.0, 17.0e5)
+    return ColumnSpec("propane", "isobutane", 0.95, 0.99, 40.0, 17.0e5)
 
 
 def _default_dib():
-    return ColumnSpec("isobutane", "n_butane", 0.97, 0.85, 1.0, 7.0e5)
+    return ColumnSpec("isobutane", "n_butane", 0.97, 0.85, 2.5, 7.0e5)
 
 
 def _default_dec4():
@@ -270,6 +272,13 @@ class AlkylationUnitParams(ParamsMixin):
         debutanizer: Debutanizer specs (n-butane overhead, alkylate bottoms).
         depropanizer_fraction: Fraction of the DIB overhead sent to the
             depropanizer.
+        fractionation: ``"shortcut"`` (default): the
+            :class:`~difflow_refinery.alkylation.fractionation.KeySplitColumn`
+            on Lee-Kesler volatilities, differentiable through the recycle;
+            ``"pr_shortcut"``: difflow's Peng-Robinson
+            :class:`~difflow.units.distillation.ShortcutColumn` (with the
+            Geddes split corrected), for forward cross-checks -- its
+            gradient through the recycle is too expensive to take.
         tol: Recycle tolerance (mol/s, max-norm of the tear step).
         max_iter: Recycle iteration cap.
     """
@@ -280,15 +289,26 @@ class AlkylationUnitParams(ParamsMixin):
     depropanizer: ColumnSpec = field(default_factory=_default_dec3)
     debutanizer: ColumnSpec = field(default_factory=_default_dec4)
     depropanizer_fraction: float = 0.3
+    fractionation: str = "shortcut"
     tol: float = 1e-9
     max_iter: int = 200
 
 
-def _column(spec: ColumnSpec) -> GeddesShortcutColumn:
-    return GeddesShortcutColumn(ShortcutColumnParams(
-        species_order=list(ALKYLATION_SPECIES), light_key=spec.light_key,
-        heavy_key=spec.heavy_key, x_D_LK=spec.lk_recovery, x_B_HK=spec.hk_recovery),
-        alkylation_thermo())
+#: The column models ``AlkylationUnitParams.fractionation`` can name.
+FRACTIONATION_MODELS = ("shortcut", "pr_shortcut")
+
+
+def _column(spec: ColumnSpec, model: str):
+    if model == "shortcut":
+        return KeySplitColumn(KeySplitColumnParams(
+            light_key=spec.light_key, heavy_key=spec.heavy_key, lk_recovery=spec.lk_recovery,
+            hk_recovery=spec.hk_recovery, reflux_ratio=spec.reflux_ratio, P=spec.P))
+    if model == "pr_shortcut":
+        return GeddesShortcutColumn(ShortcutColumnParams(
+            species_order=list(ALKYLATION_SPECIES), light_key=spec.light_key,
+            heavy_key=spec.heavy_key, x_D_LK=spec.lk_recovery, x_B_HK=spec.hk_recovery),
+            alkylation_thermo())
+    raise ValueError(f"fractionation must be one of {FRACTIONATION_MODELS}, got {model!r}")
 
 
 #: Outputs of :meth:`AlkylationUnit.solve`, and their units.
@@ -392,8 +412,9 @@ class AlkylationUnit:
         self.makeup = IsobutaneMakeup(p.makeup)
         self.reactor = AlkylationReactor(p.reactor)
         self.splitter = RecycleSplitter(p.depropanizer_fraction)
-        self.columns = {"dec3": _column(p.depropanizer), "dib": _column(p.deisobutanizer),
-                        "dec4": _column(p.debutanizer)}
+        self.columns = {"dec3": _column(p.depropanizer, p.fractionation),
+                        "dib": _column(p.deisobutanizer, p.fractionation),
+                        "dec4": _column(p.debutanizer, p.fractionation)}
 
     def flowsheet(self, feed: Stream) -> Flowsheet:
         """The unit's :class:`~difflow.flowsheet.Flowsheet` on ``feed``."""
@@ -402,8 +423,9 @@ class AlkylationUnit:
         fs.add_feed("olefin_feed", feed)
 
         def col(name, spec, inlet, outs):
-            fs.add_unit(Unit(name, self.columns[name], [inlet], outs,
-                             params={"R": spec.reflux_ratio, "P": spec.P, "q": 1.0}))
+            kw = ({"R": spec.reflux_ratio, "P": spec.P, "q": 1.0}
+                  if p.fractionation == "pr_shortcut" else {})
+            fs.add_unit(Unit(name, self.columns[name], [inlet], outs, params=kw))
 
         fs.add_unit(Unit("splitter", self.splitter, ["dib_recycle"],
                          ["dec3_feed", "recycle_direct"]))
@@ -512,6 +534,6 @@ def atom_balance(streams_in, streams_out) -> dict[str, tuple[Array, Array]]:
 
 __all__ = [
     "AlkylationResult", "AlkylationUnit", "AlkylationUnitParams", "ColumnSpec",
-    "GeddesShortcutColumn", "IsobutaneMakeup", "IsobutaneMakeupParams", "OUTPUT_UNITS",
+    "FRACTIONATION_MODELS", "GeddesShortcutColumn", "IsobutaneMakeup", "IsobutaneMakeupParams", "OUTPUT_UNITS",
     "PRODUCTS", "RecycleSplitter", "TBP_WIDTH", "alkylate_properties", "atom_balance",
 ]

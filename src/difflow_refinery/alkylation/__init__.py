@@ -35,6 +35,7 @@ from difflow_refinery.alkylation.feeds import (
     C4_COMPOSITION,
     c3c4_olefin_feed,
     c4_olefin_feed,
+    combine_feeds,
 )
 from difflow_refinery.alkylation.planning import (
     ALKY_LEVERS,
@@ -75,7 +76,7 @@ __all__ = [
     "correlations", "species",
     "PROCESS_OPTIMUM_PROFIT", "SAUER_1964", "ProcessSolution", "SauerCorrelation",
     "acid_per_alkylate", "alkylate_yield", "motor_octane", "solve_process_gms",
-    "C3C4_COMPOSITION", "C4_COMPOSITION", "c3c4_olefin_feed", "c4_olefin_feed",
+    "C3C4_COMPOSITION", "C4_COMPOSITION", "c3c4_olefin_feed", "c4_olefin_feed", "combine_feeds",
     "ALKY_LEVERS", "alky_block",
     "DEFAULT_SELECTIVITY", "AlkylationRangeWarning", "AlkylationReactor",
     "AlkylationReactorParams", "alkylation_thermo", "feed_stream", "flows_array",

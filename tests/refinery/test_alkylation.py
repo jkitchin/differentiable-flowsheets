@@ -45,6 +45,7 @@ class TestCorrelations:
         r = 0.13167 / (2 * 0.00667)
         assert corr.max_alkylate_yield() == pytest.approx(float(corr.alkylate_yield(r)), rel=1e-14)
 
+    @pytest.mark.release
     def test_process_gms_optimum(self):
         """The ``process`` model's published optimum, to the digits given."""
         sol = corr.solve_process_gms()
@@ -358,6 +359,7 @@ def sweep():
     return res
 
 
+@pytest.mark.slow
 class TestTrends:
     def test_mon_rises_with_io(self, sweep):
         m = [float(sweep[("io", r)]["alkylate.MON"]) for r in (6.0, 8.0, 10.0)]
@@ -380,7 +382,73 @@ class TestTrends:
 # =============================================================================
 
 
+class TestColumn:
+    """The key-recovery shortcut column on its own."""
+
+    @pytest.fixture(scope="class")
+    @classmethod
+    def dib(cls):
+        unit = al.AlkylationUnit()
+        mix = al.IsobutaneMakeup()
+        fed, _ = mix(al.c3c4_olefin_feed(), al.feed_stream({}, 311.0, 6e5))
+        eff, _ = al.AlkylationReactor()(fed)
+        return unit.columns["dib"], eff
+
+    def test_keys_and_balance(self, dib):
+        col, eff = dib
+        D, B, info = col(eff)
+        p = col.params
+        lk, hk = p.light_key, p.heavy_key
+        assert float(D[f"F_{lk}"]) == pytest.approx(p.lk_recovery * float(eff[f"F_{lk}"]), rel=1e-12)
+        assert float(B[f"F_{hk}"]) == pytest.approx(p.hk_recovery * float(eff[f"F_{hk}"]), rel=1e-12)
+        for s in ALKYLATION_SPECIES:
+            assert float(D[f"F_{s}"] + B[f"F_{s}"]) == pytest.approx(float(eff[f"F_{s}"]), abs=1e-12)
+        # Geddes: the lighter propane goes up, the alkylate goes down
+        assert float(D["F_propane"]) > 0.99 * float(eff["F_propane"])
+        assert float(B["F_2_2_4_trimethylpentane"]) > 0.9999 * float(eff["F_2_2_4_trimethylpentane"])
+        assert bool(info["feasible"])
+
+    def test_underwood_root(self, dib):
+        col, eff = dib
+        _, _, info = col(eff)
+        F = al.flows_array(eff)
+        z = F / jnp.sum(F)
+        a, th = info["alpha"], info["theta"]
+        assert abs(float(jnp.sum(a * z / (a - th)))) < 1e-8
+        assert 1.0 < float(th) < float(a[ALKYLATION_SPECIES.index(col.params.light_key)])
+
+    def test_column_gradient(self, dib):
+        col, eff = dib
+        F0 = al.flows_array(eff)
+        d = jnp.zeros_like(F0).at[ALKYLATION_SPECIES.index("isobutane")].set(1.0)
+
+        def f(s):
+            *_, info = col(al.reactor.stream_from_array(F0 + s * d, eff["T"], eff["P"]))
+            return jnp.stack([info["Q_reboiler"], info["Q_condenser"], info["T_bot"], info["R_min"]])
+        _, t = jax.jvp(f, (0.0,), (1.0,))
+        h = 1e-4
+        fd = (f(h) - f(-h)) / (2 * h)
+        np.testing.assert_allclose(np.asarray(t), np.asarray(fd), rtol=1e-5)
+
+
 @pytest.mark.slow
+def test_fcc_outlets_feed_the_unit():
+    """The FCC (#308) c3 and c4 outlets, in exactly their species names, combined."""
+    from difflow.streams import make_stream
+    c3 = make_stream({"propane": 6.0, "propylene": 24.0}, 313.0, 1.6e6)
+    c4 = make_stream({"isobutane": 22.0, "n_butane": 7.0, "1_butene": 8.0, "isobutylene": 9.0,
+                      "cis_2_butene": 8.0, "trans_2_butene": 11.0}, 318.0, 8e5)
+    feed = al.combine_feeds(c3, c4)
+    res = al.AlkylationUnit().solve(feed)
+    assert res.converged and all(res.columns_feasible.values()), res.columns_feasible
+    ins = [feed, res.streams["makeup"]]
+    outs = [res.streams[k] for k in PRODUCTS]
+    for k, (a, b) in _balance(ins, outs).items():
+        assert b == pytest.approx(a, rel=1e-8), k
+
+
+@pytest.mark.slow
+@pytest.mark.release
 class TestGradients:
     def test_implicit_gradients_match_central_differences(self):
         """d(yield, MON, DIB duty)/d(I/O, T, acid strength), AD through the recycle vs FD."""
@@ -389,13 +457,15 @@ class TestGradients:
         blk = al.alky_block(unit, feed, levers=["io_ratio", "reactor.T", "acid_strength"],
                             outputs=["alkylate.yield", "alkylate.MON", "dib.reboiler"])
         u0 = jnp.asarray(blk.u0)
-        J = np.asarray(jax.jacrev(blk.fn)(u0))
+        J = np.asarray(jax.jacfwd(blk.fn)(u0))
         h = np.array([1e-3, 1e-2, 1e-2])
         fd = np.zeros_like(J)
         for j in range(3):
             e = np.zeros(3)
             e[j] = h[j]
             fd[:, j] = (np.asarray(blk.fn(u0 + e)) - np.asarray(blk.fn(u0 - e))) / (2 * h[j])
-        scale = np.maximum(np.abs(fd), 1e-8 * np.abs(np.asarray(blk.fn(u0)))[:, None] + 1e-12)
-        assert np.all(np.abs(J - fd) / scale < 1e-5), (J, fd)
+        y0 = np.abs(np.asarray(blk.fn(u0)))[:, None]
+        # relative 1e-5 where the derivative is not zero; the structural zeros
+        # (yield and DIB duty do not depend on T or acid strength) to round-off
+        assert np.all(np.abs(J - fd) <= 1e-5 * np.abs(fd) + 1e-9 * y0), (J, fd)
         assert J[1, 0] > 0 and J[1, 1] < 0 and J[2, 0] > 0
