@@ -378,3 +378,60 @@ def test_reformate_properties_of_pure_toluene():
     assert float(p["RON"]) == pytest.approx(sp.SPECIES["A7"].RON)
     assert float(p["aromatics_vol"]) == pytest.approx(100.0)
     assert float(p["SG"]) == pytest.approx(872.5 / 999.016, rel=1e-9)
+
+
+# =============================================================================
+# Sulfur through the reformer (#330)
+# =============================================================================
+
+
+class TestSulfur:
+    """Trace sulfur: feed S -> H2S in the net and fuel gases + residual S in reformate."""
+
+    @staticmethod
+    def _balance(**kw):
+        from difflow_refinery.reforming.sulfur import sulfur_balance
+
+        args = dict(feed_mass=10.0, feed_S_wppm=0.5, conversion=0.95, V=900.0, L=110.0,
+                    T_sep=311.15, P_sep=12e5, recycle_fraction=0.8, reformate_mass=8.5,
+                    net_gas_moles=180.0, recycle_moles=720.0)
+        args.update(kw)
+        return sulfur_balance(**args)
+
+    @pytest.mark.parametrize("kw", [{}, {"conversion": 0.5}, {"recycle_fraction": 0.99},
+                                    {"V": 50.0, "L": 500.0}, {"T_sep": 280.0, "P_sep": 30e5}])
+    def test_balance_closes(self, kw):
+        S = self._balance(**kw)
+        out = S["S.reformate"] + S["S.net_gas"] + S["S.fuel_gas"]
+        assert float(out) == pytest.approx(float(S["S.feed"]), rel=1e-12)
+
+    def test_limits(self):
+        assert float(self._balance(conversion=1.0)["S.reformate"]) == 0.0
+        assert float(self._balance(recycle_fraction=0.0)["H2S.recycle"]) == 0.0
+        S = self._balance()
+        # Net gas and recycle are one vapour, so one H2S concentration.
+        assert float(S["net_gas.H2S_ppmv"]) == pytest.approx(float(S["recycle.H2S_ppmv"]),
+                                                             rel=1e-12)
+        # H2S is volatile at separator conditions: most goes to the vapour.
+        assert 0.5 < float(S["separator.H2S_to_vapor"]) < 1.0
+        assert float(self._balance(feed_S_wppm=0.0)["S.net_gas"]) == 0.0
+
+    def test_differentiable(self):
+        g = jax.grad(lambda x: self._balance(feed_S_wppm=x)["reformate.S_wppm"])(0.5)
+        assert float(g) == pytest.approx(10.0 * 0.05 / 8.5, rel=1e-12)
+
+
+@pytest.mark.slow
+def test_reformer_carries_sulfur(lean):
+    assert float(lean.balances()["sulfur"]) == 0.0          # sulfur-free feed by default
+    assert float(lean.outputs()["reformate.S_wppm"]) == 0.0
+    # Sulfur is a trace element outside the tear: no re-solve needed.
+    res = dataclasses.replace(lean, params=dataclasses.replace(lean.params, feed_sulfur_wppm=0.5))
+    S = res.sulfur()
+    assert abs(float(res.balances()["sulfur"])) < 1e-12
+    ref_kg = float(res.outputs()["reformate.kg_s"])
+    expect = (1e6 * (1 - res.params.sulfur_conversion) * 0.5e-6
+              * float(lean.feed.mass_flow) / ref_kg)
+    assert float(res.reformate["S_ppm"]) == pytest.approx(expect, rel=1e-12)
+    assert float(res.blend_component().properties["S_ppm"]) == pytest.approx(expect, rel=1e-12)
+    assert float(S["net_gas.H2S_ppmv"]) > 0.0 and float(S["H2S.fuel_gas"]) > 0.0

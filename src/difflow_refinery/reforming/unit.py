@@ -52,6 +52,7 @@ from difflow_refinery.reforming.kinetics import ReformingKinetics
 from difflow_refinery.reforming.products import reformate_properties
 from difflow_refinery.reforming.reactor import (
     FiredHeater, FiredHeaterParams, ReformingReactor, ReformingReactorParams, flows_of, stream_of)
+from difflow_refinery.reforming.sulfur import sulfur_balance
 from difflow_refinery.reforming.separation import (
     ProductSeparator, ProductSeparatorParams, RecycleSplitter, RecycleSplitterParams, Stabilizer,
     StabilizerParams)
@@ -85,6 +86,13 @@ class ReformerParams(ParamsMixin):
         coke_capacity: Coke on catalyst at end of run (kg/kg) the cycle length
             is reckoned to. ILLUSTRATIVE.
         rtol: Relative tolerance of the reactor integrations.
+        feed_sulfur_wppm: Organic sulfur in the naphtha feed (wppm). ``None``
+            (default) takes the feed's own ``sulfur_wppm`` if it has one, else
+            zero. Carried as a trace element (:mod:`.sulfur`), outside the
+            species list and the recycle tear.
+        sulfur_conversion: Share of the feed's sulfur hydrogenolysed to H2S
+            over the reactor train; the rest stays in the reformate.
+            ILLUSTRATIVE.
     """
 
     inlet_T: tuple = (773.15, 773.15, 773.15)
@@ -101,6 +109,8 @@ class ReformerParams(ParamsMixin):
     c4_recovery: float = 0.95
     coke_capacity: float = 0.15
     rtol: float = 1e-8
+    feed_sulfur_wppm: float | None = None
+    sulfur_conversion: float = 0.95
 
     def __post_init__(self):
         if len(self.inlet_T) != len(self.catalyst_split):
@@ -167,8 +177,40 @@ class ReformerResult:
 
     @property
     def reformate(self) -> dict[str, Array]:
-        """Reformate properties (:func:`~difflow_refinery.reforming.products.reformate_properties`)."""
-        return reformate_properties(self.flows("reformate"))
+        """Reformate properties (:func:`~difflow_refinery.reforming.products.reformate_properties`),
+        plus its sulfur ``S_ppm`` (wppm) from :meth:`sulfur`."""
+        props = reformate_properties(self.flows("reformate"))
+        props["S_ppm"] = self.sulfur()["reformate.S_wppm"]
+        return props
+
+    @property
+    def feed_sulfur_wppm(self) -> Array:
+        """Organic sulfur in the feed (wppm): the spec's, else the feed's own, else zero."""
+        if self.params.feed_sulfur_wppm is not None:
+            return jnp.asarray(self.params.feed_sulfur_wppm, dtype=float)
+        return jnp.asarray(getattr(self.feed, "sulfur_wppm", 0.0), dtype=float)
+
+    def sulfur(self) -> dict[str, Array]:
+        """Where the feed's sulfur goes (:func:`.sulfur.sulfur_balance`), on the converged streams."""
+        F_v, F_l = self.flows("sep_vapor"), self.flows("sep_liquid")
+        MW = jnp.asarray(sp.MW) / 1000.0
+        return sulfur_balance(
+            feed_mass=self.feed.mass_flow, feed_S_wppm=self.feed_sulfur_wppm,
+            conversion=self.params.sulfur_conversion, V=jnp.sum(F_v), L=jnp.sum(F_l),
+            T_sep=self.streams["sep_vapor"]["T"], P_sep=self.streams["sep_vapor"]["P"],
+            recycle_fraction=self.splitter["fraction"],
+            reformate_mass=self.flows("reformate") @ MW,
+            net_gas_moles=jnp.sum(self.flows("net_gas")),
+            recycle_moles=jnp.sum(self.flows("recycle")))
+
+    def blend_component(self, name: str = "reformate", **overrides):
+        """The reformate as a property-mode :class:`~difflow_refinery.blending.BlendComponent`,
+        its sulfur included (``S_ppm``); ``overrides`` win."""
+        from difflow_refinery.reforming.products import blend_component
+
+        props = {"S_ppm": self.sulfur()["reformate.S_wppm"]}
+        props.update(overrides)
+        return blend_component(name, self.flows("reformate"), **props)
 
     def outputs(self) -> dict[str, Array]:
         """The numbers a planner reads, as one flat dict (see :data:`OUTPUT_UNITS`)."""
@@ -208,6 +250,14 @@ class ReformerResult:
             "wait.C": self.params.wait - 273.15,
             "wabt.C": self.wabt - 273.15,
         }
+        S = self.sulfur()
+        out.update({
+            "reformate.S_wppm": S["reformate.S_wppm"],
+            "net_gas.H2S_ppmv": S["net_gas.H2S_ppmv"],
+            "recycle.H2S_ppmv": S["recycle.H2S_ppmv"],
+            "fuel_gas.H2S_mol_s": S["H2S.fuel_gas"],
+            "net_gas.H2S_mol_s": S["H2S.net_gas"],
+        })
         for k, r in enumerate(self.reactors, start=1):
             out[f"rx{k}.dT"] = r["dT"]
             out[f"rx{k}.T_out_C"] = r["T_out"] - 273.15
@@ -244,7 +294,9 @@ class ReformerResult:
         stream on the one basis) relative to the total fired-heater duty;
         ``adiabatic_<k>`` is reactor ``k``'s enthalpy change relative to its
         heater's duty. Coke is not withdrawn from the balance (it is
-        reported, ~1e-6 of the feed).
+        reported, ~1e-6 of the feed). ``sulfur`` closes the trace sulfur
+        balance (:meth:`sulfur`: feed S against reformate S + net-gas and
+        fuel-gas H2S; zero for a sulfur-free feed).
         """
         Fin = self.feed.flows
         outs = [self.flows(n) for n in ("reformate", "lpg", "fuel_gas", "net_gas")]
@@ -264,6 +316,10 @@ class ReformerResult:
              + sum(r["H_out"] - r["H_in"] for r in self.reactors))
         Q_ref = sum(h["duty"] for h in self.heaters)
         res["energy"] = (H_prod - H_feed - Q) / Q_ref
+        S = self.sulfur()
+        S_out = S["S.reformate"] + S["S.net_gas"] + S["S.fuel_gas"]
+        res["sulfur"] = jnp.where(S["S.feed"] > 0, (S_out - S["S.feed"])
+                                  / jnp.where(S["S.feed"] > 0, S["S.feed"], 1.0), 0.0)
         for k, (r, h) in enumerate(zip(self.reactors, self.heaters), start=1):
             res[f"adiabatic_{k}"] = (r["H_out"] - r["H_in"]) / h["duty"]
         return res
@@ -296,6 +352,8 @@ OUTPUT_UNITS: dict[str, str] = {
     "net_gas.kg_s": "kg/s", "lpg.kg_s": "kg/s", "fuel_gas.kg_s": "kg/s",
     "compressor.power_MW": "MW", "separator.duty_MW": "MW", "heaters.fired_MW": "MW",
     "coke.kg_h": "kg/h", "cycle.days": "d", "wait.C": "C", "wabt.C": "C",
+    "reformate.S_wppm": "wppm", "net_gas.H2S_ppmv": "ppmv", "recycle.H2S_ppmv": "ppmv",
+    "fuel_gas.H2S_mol_s": "mol/s", "net_gas.H2S_mol_s": "mol/s",
     "rx.dT": "K", "rx.T_out_C": "C", "heater.duty_MW": "MW", "heater.fired_MW": "MW",
 }
 
