@@ -54,7 +54,9 @@ Where the cracked molecules go -- the two schemes (``scheme=``):
   These forms are the model of Laxminarasimhan et al. (1996) AS RESTATED IN
   THE LATER LITERATURE THAT USES IT, from recollection; the paper itself
   could not be reached, so its equation numbers are not given and the forms
-  are marked unverified. Note what the restated forms imply, which a reader
+  are marked unverified (web-search snippets of citing papers corroborate the
+  five parameters alpha, a0, a1, delta, k_max and the exp(-(0.5)^2/a1) term,
+  not the whole form). Note what the restated forms imply, which a reader
   of the paper should check: with ``k = k_max theta^(1/alpha)`` and the
   ``D(k)`` above, the number of species per unit ``theta`` goes as
   ``theta^(1/alpha^2 - 1)`` -- uniform only at ``alpha = 1``. The code

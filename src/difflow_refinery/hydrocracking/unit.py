@@ -92,8 +92,9 @@ class HydrocrackerParams(ParamsMixin):
         quench_pretreat: Quench into each later pretreat bed (fractions of the treat gas).
         pretreat_beds: Catalyst share of each pretreat bed (sums to 1).
         lhsv_pretreat: Pretreat LHSV on fresh feed, 1/h.
-        T_crack: Cracking first-bed inlet temperature (K); an interstage
-            exchanger is implied (its duty is not computed).
+        T_crack: Cracking bed inlet temperature (K): every bed's when
+            ``quench_crack`` is None, else the first bed's. The first bed's
+            implies an interstage exchanger (its duty is not computed).
         quench_crack: ``None`` (default): every cracking bed's inlet is held at
             ``T_crack`` and the quench each needs is solved (with the gas loop;
             the pretreat inlet gets what the quenches leave, ``crack.gas_left``);
@@ -123,7 +124,8 @@ class HydrocrackerParams(ParamsMixin):
         kij: PR binary interaction parameters (dict of name pairs), or None.
         reactor: :class:`ReactorOptions`.
         tear_tol: Recycle-gas tear tolerance (scaled residual).
-        uco_tol: UCO recycle tolerance (max scaled change per pass).
+        uco_tol: UCO recycle tolerance (max relative change per pass; the bed
+            integrations' rtol of 1e-9 sets the floor it can reach).
         uco_max_steps: UCO substitution limit.
     """
 
@@ -153,7 +155,7 @@ class HydrocrackerParams(ParamsMixin):
     kij: dict | None = None
     reactor: ReactorOptions = field(default_factory=ReactorOptions)
     tear_tol: float = 1e-11
-    uco_tol: float = 1e-12
+    uco_tol: float = 1e-9
     uco_max_steps: int = 80
 
 
@@ -557,12 +559,11 @@ class Hydrocracker:
         n_uco = nu * (1 + lay.n_attr)
         x_def, gscale = self._gas_x0(th)
         oil = th["oil"]
-        # scale of the UCO entries: the fresh feed's flows in the UCO cuts (floored per column)
+        # scale of the UCO entries: the fresh feed's flows in the UCO cuts, floored at
+        # 1e-6 of its largest cut's molecule flow (attributes the feed lacks -- the
+        # cracked-molecule count, olefins -- are counts of molecules, so that is their scale)
         ref = jax.lax.stop_gradient(self._uco_vector(oil))
-        cmax = jax.lax.stop_gradient(jnp.concatenate([
-            jnp.full(nu, jnp.max(oil.cut)),
-            jnp.tile(jnp.max(jnp.abs(oil.attr), axis=0), nu)]))
-        uscale = jnp.maximum(jnp.abs(ref), 1e-6 * cmax + 1e-300)
+        uscale = jnp.maximum(jnp.abs(ref), 1e-6 * jax.lax.stop_gradient(jnp.max(oil.cut)))
 
         def G(z, A, adjoint=None):
             th, comps, cst, T_shift = A
@@ -572,7 +573,9 @@ class Hydrocracker:
             return jnp.concatenate([new, o["tear"].value])
 
         z0 = jnp.concatenate([jnp.zeros(n_uco), x_def])
-        scale = jnp.concatenate([uscale, jnp.full(x_def.size, jnp.inf)])
+        # the gas entries are the inner Newton's converged answers: their scale is
+        # loose (the inner tolerance, not the outer one, decides their accuracy)
+        scale = jnp.concatenate([uscale, 1e3 * gscale])
         sol = fixed_point(G, z0, (th, comps, cst, T_shift), scale=scale, tol=self.params.uco_tol,
                           max_steps=int(self.params.uco_max_steps),
                           G_iter=lambda z, A: G(z, A, adjoint="forward"))
@@ -766,8 +769,7 @@ class Hydrocracker:
 
         outs_all = [o["purge"], o["absorbed"], o["water"]] + [prods[k] for k in PRODUCTS if k != "uco"] \
             + [uco_bleed]
-        chem = (sum(H_nonH2(f) for f in outs_all) - H_nonH2(oil) - H_nonH2(o["makeup"])
-                - H_nonH2(o["uco_in"]) + H_nonH2(uco_rec_out)) / 2.0
+        chem = (sum(H_nonH2(f) for f in outs_all) - H_nonH2(oil) - H_nonH2(o["makeup"])) / 2.0
         H2_in = o["makeup"].gas[hi] + oil.gas[hi]
         H2_out = sum(f.gas[hi] for f in outs_all)
         outputs["h2.chemical"] = chem
@@ -792,13 +794,12 @@ class Hydrocracker:
         usol = o["uco_sol"]
         outputs["uco.residual"] = usol.residual if usol is not None else jnp.asarray(0.0)
         outputs["uco.steps"] = jnp.asarray(usol.steps, dtype=float) if usol is not None else jnp.asarray(0.0)
-        # balances: in = fresh oil + makeup; out = purge + acid gas + HPS water + products + UCO bleed
-        # (+ the recycle tear's own residual: recycled UCO computed less recycled UCO assumed)
+        # balances: in = fresh oil + makeup; out = purge + acid gas + HPS water + products + UCO bleed.
+        # Nothing is added for the recycle: what the UCO tear has not converged shows up here.
         tot_in = oil + o["makeup"]
         tot_out = outs_all[0]
         for f in outs_all[1:]:
             tot_out = tot_out + f
-        tot_out = tot_out + uco_rec_out - o["uco_in"]
         e_in, e_out = tot_in.elements(lay), tot_out.elements(lay)
         balances = {"mass": relative_balance_error(tot_in.mass(lay), tot_out.mass(lay))}
         for k, e in enumerate(ELEMENTS):

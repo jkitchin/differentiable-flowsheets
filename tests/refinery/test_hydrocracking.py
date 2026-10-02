@@ -362,8 +362,13 @@ def test_light_vgo_with_uco_recycle(light_vdu, light_once):
     o, o1 = r.outputs, light_once[2].outputs
     assert float(o["uco.steps"]) > 1
     assert float(o["uco.recycle_rate"]) > 0
-    # recycling the UCO converts more of the fresh feed
-    assert float(o["conversion.overall"]) > float(o1["conversion.overall"])
+    # the recycle closes: overall = 1 - (1 - rho)(1 - X) / (1 - rho (1 - X)), X the per-pass conversion
+    X, rho = float(o["conversion.per_pass"]), 0.6
+    assert float(o["conversion.overall"]) == pytest.approx(1 - (1 - rho) * (1 - X) / (1 - rho * (1 - X)), rel=1e-9)
+    # on the same catalyst at the same temperature the recycle lowers the per-pass severity,
+    # and with it the overcracking: less naphtha per middle distillate
+    assert X < float(o1["conversion.per_pass"])
+    assert float(o["naphtha_to_middle_distillate"]) < float(o1["naphtha_to_middle_distillate"])
 
 
 @pytest.mark.slow
