@@ -538,6 +538,11 @@ See `docs/unit-operations-refinery.md` and
 `examples/33_refinery_gasoline_blending.ipynb`, which compares the
 nonlinear optimum with a linear-by-volume LP plus successive back-off.
 
+Every refinery unit (preheat train, crude and vacuum units, gas plant,
+isomerization, hydrotreater, hydrocracker, FCC, reformer, alkylation and
+blending) is listed, with its model and how far it has been validated, in
+`docs/refinery-summary.md` and `src/difflow_refinery/README.md`.
+
 ## Data Reconciliation
 
 Plant measurements are noisy and, taken at face value, contradict the

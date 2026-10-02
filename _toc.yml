@@ -15,6 +15,7 @@ parts:
       - file: docs/unit-operations-gas
       - file: docs/unit-operations-power
       - file: docs/unit-operations-refinery
+      - file: docs/refinery-summary
       - file: docs/thermodynamics
       - file: docs/technoeconomics
       - file: docs/parameter-estimation
