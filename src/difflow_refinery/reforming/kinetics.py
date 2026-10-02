@@ -70,6 +70,17 @@ are ILLUSTRATIVE until fitted to a plant. The ``f(n)`` trends -- heavier
 paraffins cyclize and crack faster, the C6 paraffins barely cyclize -- are
 the trends Krane et al. reported, not their values.
 
+KNOWN DEFECT of these illustrative constants: the rich (high-naphthene)
+feed makes LESS net hydrogen than the lean (high-paraffin) one -- 2.4
+against 2.8 wt% of feed at the default design -- the opposite of commercial
+experience. The ring-opening pre-exponential and its carbon-number factors
+make C7+ paraffin dehydrocyclization (4 H2 per aromatic formed, against 3
+from a naphthene) fast enough that the lean feed converts most of its
+paraffins, while the rich feed has few to convert and also loses hydrogen to
+naphthene hydrocracking (2 H2 each). The constants were tuned for octane and
+yield, not hydrogen. This is a defect of the parameter set, not of the
+model, and fitting the kinetics is what removes it.
+
 Coke make (kg coke per kg catalyst per second) is an illustrative
 precursor-over-hydrogen form, ``k_c (p_N + p_A) / p_H2`` with an Arrhenius
 ``k_c``: coke rises with severity and falls with the hydrogen partial

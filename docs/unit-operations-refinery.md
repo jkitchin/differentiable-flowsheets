@@ -954,6 +954,8 @@ On the two illustrative feeds, at WAIT 500 °C, 12 bar separator, H2/HC 5, LHSV 
 
 `res.summary()` prints these; ten degrees more WAIT on the lean feed gives RON 98.8 at 76 vol% C5+ and 3.0 wt% H2.
 
+**Known defect of the illustrative constants: the rich feed makes less hydrogen than the lean one.** With the default `ReformingKinetics()`, the rich (high-naphthene) feed makes 2.4 wt% net H2 and the lean (high-paraffin) feed 2.8 wt%. Commercial experience is the opposite: a naphthenic feed makes more hydrogen. The cause is the paraffin chemistry. The ring-opening pre-exponential (`A["ring_opening"] = 0.5`) and its carbon-number factors (up to 2.5 for C10) make dehydrocyclization of C7+ paraffins fast enough that the lean feed converts most of its paraffins to aromatics. Each one releases 4 H2, against the 3 H2 a naphthene gives. The rich feed has few paraffins to convert, and it also loses hydrogen to naphthene hydrocracking (`A["hydrocracking_N"]`, 2 H2 per event). The constants were tuned for octane and yield, not hydrogen. This is a defect of the illustrative parameter set, not a property of the model. Fitting the kinetics to plant or published data should remove it, and until then the hydrogen-versus-feed trend should not be relied on.
+
 The module is a library plus a flowsheet, like the blend pool: it registers **no** palette operation.
 
 ### Feed: P/N/A by carbon number
