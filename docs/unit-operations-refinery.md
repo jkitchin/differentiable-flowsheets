@@ -1594,7 +1594,7 @@ Example: `examples/33_refinery_gasoline_blending.ipynb`. Tests: `tests/refinery/
 A `BlendComponent` is built one of two ways:
 
 - **`from_properties(name, SG=..., RON=..., ...)`**: measured or unit-reported properties only. This is enough for every *blended* property.
-- **`from_stream(name, stream, characterization, **overrides)`**: a difflow stream of pseudocomponent molar flows on a shared `BlendCharacterization`. The composition gives `SG`, sulfur, nitrogen, PNA and a Raoult RVP. Overrides (a reformer's reported RON, say) take precedence. This mode adds:
+- **`from_stream(name, stream, characterization, **overrides)`**: a difflow stream of pseudocomponent molar flows on a shared `BlendCharacterization`. The composition gives `SG`, sulfur, nitrogen, PNA and a Raoult RVP, and flash, freeze and smoke points, viscosity and straight-run RON/MON are estimated (see {ref}`refinery-blend-estimates` below). Overrides (a reformer's reported RON, a measured flash point) take precedence, and an overridden property is not estimated. This mode adds:
   - the product **stream**, with an exact mass and volume balance;
   - the properties only composition can give: distillation and cetane index;
   - the Raoult RVP of the blend itself.
@@ -1604,6 +1604,42 @@ One pool takes one mode. Mixing the two raises an error rather than producing a 
 **Volume basis.** Volumes are ideal-mixing volumes at 15 °C from `SG` (`rho = SG * 999.10 kg/m^3`). The product volume is the sum of the component volumes, and the product `SG` is the volume average. Both are tested to round-off against the product stream's own composition.
 
 Recipes can be given as `basis="volume_fraction"` (the default), `"volume_flow"`, or `"split"`. A split is the fraction of each component stream's available volume sent to the pool, which is the natural lever when the pool sits in a flowsheet.
+
+(refinery-blend-estimates)=
+### Estimated product properties
+
+`difflow_refinery.properties` (#330) estimates the properties a stream does not carry, and `from_stream` uses them whenever no measured value is given. `estimate=True` (default) estimates every property the characterization has the inputs for, `estimate=False` none (the pre-#330 behaviour), and a list names the ones wanted.
+
+```python
+from difflow_refinery import BlendComponent, BlendCharacterization, properties
+
+bc = BlendCharacterization.from_characterization(char)        # char built with composition=True
+jet = BlendComponent.from_stream("jet", jet_stream, bc)        # flash, freeze, smoke, viscosity estimated
+fo = BlendComponent.from_stream("fuel oil", residue, bc, viscosity_T_C=50.0)
+lsr = BlendComponent.from_stream("LSR", light_naphtha, bc)     # RON/MON from the P/N/A/O composition
+jet_measured = BlendComponent.from_stream("jet", jet_stream, bc, flash_C=42.0)   # a measurement wins
+properties.estimate_properties(bc, moles)                      # the estimates alone
+```
+
+| Property | Estimate | Inputs | Status |
+|---|---|---|---|
+| `flash_C` | `1/T_F = -0.024209 + 2.84947/T10 + 3.4254e-3 ln T10` (K), Riazi & Daubert (1987), API TDB 2B7.1, Riazi MNL50 Ch. 3 | D86 10 % point of the stream (smoothed TBP, Riazi-Daubert TBP->D86) | (unverified) |
+| `freeze_C` | ideal solubility of each cut's n-paraffins, `1/T = 1/T_f - R ln x / dH_f`, Won (1986) `T_f = 374.5 + 0.02617 MW - 20172/MW`, `dH_f = 0.1426 MW T_f` cal/mol; the freeze point is the smooth maximum over cuts | `paraffins_vol`, MW, `n_paraffin_share` | `T_f` checked against n-C10..n-C24 melting points (within 7 K at C10, 3.5 K above); `dH_f` 4-7 % high (odd) / 25-32 % low (even) against CRC; the freeze point itself not validated |
+| `smoke_mm` | `SP = exp(-1.028 + 0.474 Kw - 0.00168 Tb')`, Riazi MNL50 Ch. 3, `Tb'` read in degR (see below) | TBP 50 % point, SG | (unverified) |
+| `viscosity_cSt` | Abbott, Kaufmann & Domash (1971), API TDB 11A4.2, at 100 and 210 °F; ASTM D341 (Walther) line to `viscosity_T_C` (default 50 °C) | TBP 50 % point, SG | (unverified); `PropertyRangeWarning` near the correlation's pole |
+| `RON`, `MON` | each cut split into n-/iso-paraffins, naphthenes, aromatics and olefins; pure-compound octanes of the reformer's model compounds at the cut's Tb; Ethyl RT-70 over the sub-components (the reformate's rule) | `paraffins_vol`, `naphthenes_vol`, `aromatics_vol` (`olefins_vol`), `n_paraffin_share` | (unverified); method of this project |
+
+**Unverified means unverified.** No primary source could be opened while this was written (the API Technical Data Book, ASTM MNL50 and the journals were unreachable), so the constants are as recalled and no published worked example is reproduced. The tests check what can be checked without one: Won's melting points against tabulated data, the Walther line on its two points, the octane of a single-compound stream, monotonicity in the direction the physics requires, plausible values on typical products, and gradients against central differences. Give a measured value whenever you have one.
+
+Things to know about each estimate:
+
+- **Flash point** comes from the D86 10 % point, which is the lightest material in the cut; it gives about -45 °C for a gasoline, 55-70 °C for a kerosene and around 100 °C for a diesel, kerosenes on the high side of measured values.
+- **Freeze point** is a physical model, not a correlation. ASTM D2386 measures the temperature at which the last crystal disappears, and in a kerosene those crystals are n-paraffins. Each cut's n-paraffins (mole fraction `z_j * P_j * n_paraffin_share`) are treated as one n-alkane of the cut's molar mass crystallizing pure from an ideal solution. A coarse cut grid hides the heaviest members of a cut and so puts the estimate low, as does Won's low heat of fusion for the even n-alkanes. Cuts lighter than MW 100 are left out; a liquid with none heavier gets the floor `FREEZE_FLOOR_K` (150 K). `n_paraffin_share` (default 0.5) is ILLUSTRATIVE.
+- **Smoke point**: with `Tb` in kelvin, as the constants were recalled, the equation puts an ordinary kerosene (Tb 473 K, SG 0.80) at 44 mm, far above the 20-30 mm such kerosenes measure. With `Tb` in degrees Rankine it gives 23 mm, and 15 mm for a naphthenic one. The Rankine reading is used because it gives measured magnitudes. That is a judgement, not a citation, and the first thing to check when the source is to hand.
+- **Viscosity** is the Abbott correlation on the stream's bulk TBP 50 % point and SG, not a Refutas blend of per-cut values: per cut the heaviest lumps sit on the correlation's pole. The temperature of `viscosity_cSt` is `viscosity_T_C` (50 °C, the fuel-oil reference). Every component in one pool must be at one temperature for the Refutas rule. The D341 line drops the low-viscosity correction terms below about 2 cSt.
+- **Octane** uses the reformer's pure-compound octanes (`reforming.species`, API Research Project 45 values as recalled, unverified, C9-C10 paraffins extrapolated), one model compound per type and carbon number, an ILLUSTRATIVE n-/iso-paraffin split, and the iso-paraffin octane as a placeholder for olefins. Straight-run C8+ iso-paraffins are many isomers, most of them higher in octane than the 2-methylalkane that stands for them, so heavy naphthas come out low. On the tests' crude it gives RON 74 for a C5-85 °C light naphtha and 41 for an 85-180 °C heavy naphtha; measured ranges are about 60-75 and 40-60. Because it uses the reformer's numbers and rule, a straight-run naphtha and a reformate in one pool are on one octane basis. It is meaningful for naphthas boiling below about 460 K.
+
+Tests: `tests/refinery/test_properties.py`.
 
 ### Blending rules
 
@@ -1663,7 +1699,7 @@ For products of the crude and vacuum units, use `BlendCharacterization.from_char
 
 - Tank inventory and multi-period scheduling. The pool is steady state, per period.
 - Crude blending ahead of the CDU (assay mixing).
-- A straight-run octane correlation from PNA. Octane is unit-reported or measured.
+- A *validated* straight-run octane correlation. The PNA-based estimate above is this project's method on recalled pure-compound octanes; measured or unit-reported octanes override it.
 
 (refinery-reforming)=
 ## Catalytic reforming
@@ -1790,9 +1826,18 @@ These are kept thin and local (`reforming/separation.py`) so they can be consoli
 
 A reformate RON target in place of WAIT: `reformer.wait_for_ron(feed, ron)` solves for the WAIT by secant iteration (concrete). Its gradient with respect to any other input is `-(dRON/dx)/(dRON/dWAIT)`, both from `jax.jacfwd` at the returned point.
 
-`res.outputs()` (units in `reforming.OUTPUT_UNITS`) includes reformate and C5+ yield (vol%, wt%), RON/MON (RT-70 and linear), aromatics, benzene, RVP, SG, net H2 (mol/s, wt% of feed, purity), LPG and fuel gas, every reactor's ΔT and outlet temperature, heater absorbed and fired duties, compressor power, separator duty, coke make, cycle length, WAIT and WABT. `res.balances()` returns the overall mass, carbon, hydrogen and energy closures and each reactor's adiabatic residual.
+`res.outputs()` (units in `reforming.OUTPUT_UNITS`) includes reformate and C5+ yield (vol%, wt%), RON/MON (RT-70 and linear), aromatics, benzene, RVP, SG, net H2 (mol/s, wt% of feed, purity), LPG and fuel gas, every reactor's ΔT and outlet temperature, heater absorbed and fired duties, compressor power, separator duty, coke make, cycle length, WAIT and WABT. `res.balances()` returns the overall mass, carbon, hydrogen, energy and sulfur closures and each reactor's adiabatic residual.
 
 **Reformate properties from composition** (`reforming.products`). RON and MON are the pure-compound octanes of the species, blended with the Ethyl RT-70 rule that `BlendPool` uses. Aromatics and benzene are standard liquid volume fractions. RVP is `raoult_rvp` (D323 geometry) on Lee-Kesler vapour pressures. `products.blend_component("reformate", res.flows("reformate"))` hands it to a `BlendPool`. Pure-component octanes are not blending octanes; the RT-70 rule with the large aromatic and sensitivity spreads of a reformate puts RON 8-12 above the linear average. The low-octane paraffins sit below the range RT-70 was fitted on, so the rule extrapolates there.
+
+**Sulfur through the reformer** (#330, `reforming.sulfur`). The feed's organic sulfur, `ReformerParams.feed_sulfur_wppm` (default `None`: the feed's own `sulfur_wppm` if it has one, else zero), is carried as a trace element, outside the species list and the recycle tear. At sub-ppm levels it changes neither the chemistry nor the phase split, so its balance is solved on the converged streams:
+
+- a share `sulfur_conversion` (default 0.95, ILLUSTRATIVE, not a desulfurization model) is hydrogenolysed to H2S over the reactors; the rest stays in the reformate;
+- the separator sends a share `a = K V / (K V + L)` of the H2S to the vapour, with the ideal K-value `K = Psat(T)/P` (Lee-Kesler, H2S critical constants from the `chemicals` 1.5.2 PSRK table) against the separator's own vapour and liquid flows;
+- with a share `s` of the vapour recycled, the steady state puts `(1 - s) a G / (1 - s a)` of an H2S make `G` in the net gas and `(1 - a) G / (1 - s a)` in the separator liquid. The two add up to `G`, so the balance closes exactly, and the recycle gas holds the same H2S concentration as the net gas;
+- the stabilizer sends all dissolved H2S overhead with the fuel gas. H2S boils between ethane and propane; a real stabilizer puts some in the LPG.
+
+`res.sulfur()` returns the split, `res.outputs()` adds `reformate.S_wppm`, `net_gas.H2S_ppmv`, `recycle.H2S_ppmv` and the H2S flows, `res.balances()["sulfur"]` is the closure, `res.reformate["S_ppm"]` is the reformate's sulfur and `res.blend_component()` hands the reformate to a pool with it. The hydrogen the H2S takes and the hydrocarbon part of the sulfur compound are not tracked, since both are ppm of their streams.
 
 ### Planning
 

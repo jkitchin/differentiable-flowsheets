@@ -91,14 +91,14 @@ delta-base planning ([`difflow.planning`](planning.md)).
 | [Hydrotreater](unit-operations-refinery.md#the-hydrotreater) | `Hydrotreater` (library) | naphtha, kerosene or diesel → treated product, wild naphtha, off-gas | Trickle-bed HDS by sulfur class (LHHW, H2S-inhibited), HDN, aromatics saturation with equilibrium; HP separator, H2 recycle, stripper | `hdt_block` | Balances and gradients only; no literature cross-check; constants illustrative | 40 |
 | [Hydrocracker](unit-operations-refinery.md#the-hydrocracker) | `Hydrocracker` (library) | VGO → LPG, naphtha, kerosene, diesel, unconverted oil | Pretreat bed (hydrotreating kinetics) then cracking bed on continuous lumping or discrete lumps, organic-N inhibition; TBP-split fractionator; UCO recycle | `hcu_block` | Balances and gradients only; no literature cross-check; constants illustrative | — |
 | [Fluid catalytic cracker](unit-operations-refinery.md#the-fluid-catalytic-cracker) | `FCCUnit` (library) | VGO → dry gas, C3, C4, gasoline, LCO, slurry, flue gas | 3-, 4- or 5-lump riser and coke-burning regenerator solved together for the heat balance; TBP-split main fractionator | `fcc_block` | Balances and gradients only; no literature cross-check; constants illustrative ([details](unit-operations-refinery.md#fcc-what-is-tested-and-what-is-not)) | — |
-| [Catalytic reformer](unit-operations-refinery.md#catalytic-reforming) | `CatalyticReformer` (library) | hydrotreated heavy naphtha → reformate, net H2, LPG, fuel gas | 29 lumps by carbon number, equilibrium from Gibbs energies; three adiabatic beds with fired heaters; PR separator and H2 recycle; component-split stabilizer | `reformer_block` | Balances and gradients only; no literature cross-check; constants illustrative | 40 |
+| [Catalytic reformer](unit-operations-refinery.md#catalytic-reforming) | `CatalyticReformer` (library) | hydrotreated heavy naphtha → reformate, net H2, LPG, fuel gas | 29 lumps by carbon number, equilibrium from Gibbs energies; three adiabatic beds with fired heaters; PR separator and H2 recycle; component-split stabilizer; feed sulfur to H2S and reformate S (trace) | `reformer_block` | Balances and gradients only; no literature cross-check; constants illustrative | 40 |
 | [Alkylation](unit-operations-refinery.md#alkylation) | `AlkylationUnit` (library) | C3-C5 olefins + isobutane → alkylate, propane, n-butane | Sauer-Colville-Burwick yield and octane correlations; per-olefin stoichiometry; shortcut DIB, depropanizer and debutanizer; isobutane recycle | `alky_block` | The correlation layer reproduces the GAMS `process.gms` optimum (profit 1161.3366) | — |
 
 ### Products
 
 | Unit | Main class | In → out | Model | Planning | Validation | Example |
 |---|---|---|---|---|---|---|
-| [Product blending](unit-operations-refinery.md#product-blending) | `BlendPool`, `BlendComponent` (library) | components → gasoline, jet, ULSD or fuel oil, with spec margins | Nonlinear blending rules (Ethyl RT-70 octane, RVP index, Refutas viscosity); distillation and cetane index computed from the blend | `product_value_block` | Rules tested against published worked examples (RVP index, Refutas) | 33, 40 |
+| [Product blending](unit-operations-refinery.md#product-blending) | `BlendPool`, `BlendComponent` (library) | components → gasoline, jet, ULSD or fuel oil, with spec margins | Nonlinear blending rules (Ethyl RT-70 octane, RVP index, Refutas viscosity); distillation and cetane index computed from the blend; flash, freeze and smoke points, viscosity and straight-run octane estimated from a stream (`properties`, unverified) | `product_value_block` | Rules tested against published worked examples (RVP index, Refutas) | 33, 40 |
 
 ---
 
@@ -139,13 +139,18 @@ in the code.
   reformer: the papers named in their issues could not be obtained.
 - **Not built:** example notebooks for the hydrocracker, FCC and alkylation
   (the hydrotreater and the reformer appear only inside the whole-refinery
-  example 40); smoke, freeze and flash points, viscosity and straight-run
-  octane; the 10-lump FCC scheme;
+  example 40); the 10-lump FCC scheme;
   mechanistic alkylation kinetics; catalyst-activity tracking wired into
   `difflow.reconciliation.tracking`.
 - **Known model defect:** with the illustrative reformer constants, a rich
   (high-naphthene) naphtha makes less net H2 than a lean one, the reverse of
   commercial experience ([details](unit-operations-refinery.md#catalytic-reforming)).
+- **Product property estimates are unverified** (#330): flash, smoke point,
+  viscosity and straight-run octane come from correlations recalled but not
+  checked against their sources; the freeze point is an n-paraffin
+  solubility model on checked melting points
+  ([details](unit-operations-refinery.md#estimated-product-properties)).
+  A measured value overrides each.
 - **Boiling ranges are TBP, not ASTM D86**, throughout.
 - **Connections between units.** `examples/40_refinery_flowsheet.ipynb`
   joins the CDU, gas plant, naphtha and distillate hydrotreaters, reformer

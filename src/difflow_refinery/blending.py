@@ -40,8 +40,11 @@ Two ways to describe a component:
   :class:`~difflow_refinery.characterization.BlendCharacterization`.  Adds the
   product stream itself, an exact mass and volume balance, and the
   properties that only composition can give (distillation, cetane index,
-  Raoult RVP).  Unit-reported properties (RON/MON from a reformer, say)
-  are passed as overrides and take precedence.
+  Raoult RVP).  Flash, freeze and smoke points, viscosity and straight-run
+  RON/MON are estimated from the composition by
+  :mod:`difflow_refinery.properties` (#330; mostly unverified, see there).
+  Unit-reported or measured properties (RON/MON from a reformer, say) are
+  passed as overrides and take precedence.
 
 Volumes are ideal-mixing volumes at 15 degC from ``SG``: the product
 volume is the sum of the component volumes, and the product ``SG`` is the
