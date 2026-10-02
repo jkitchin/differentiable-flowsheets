@@ -30,6 +30,7 @@ The `difflow_refinery` plugin provides:
 - **Alkylation** (`difflow_refinery.alkylation`): C3-C5 olefins + isobutane over H2SO4 or HF, the Sauer-Colville-Burwick correlations (cross-checked against GAMS `process.gms`), shortcut DIB/depropanizer/debutanizer and the isobutane recycle as a `Flowsheet` tear; alkylate to `BlendPool`, `alky_block` for planning. See [Alkylation](#refinery-alkylation).
 - **The VGO hydrocracker** (`difflow_refinery.hydrocracking`): the same building blocks with a pretreat bed (the hydrotreating kinetics, VGO constants), a cracking bed on continuous lumping over the pseudo-component grid (Laxminarasimhan et al. 1996, or discrete lumps) with organic-N inhibition, a simplified fractionator and a UCO recycle tear. A library, not a palette operation; its cracking constants are illustrative. See [The hydrocracker](#refinery-hydrocracker).
 - **The hydrogen network** (`difflow_refinery.hydrogen`): producers (the reformer's net gas, an H2 plant, imports), consumers (hydrotreater and hydrocracker makeup with a purity or partial-pressure spec), an optional PSA, purge to fuel gas and export, on one or more headers; returns the balanced header and each consumer's makeup purity, feeds it back into the hydrotreaters (`close_hydrotreater_loop`), and `h2_block` for planning. A library. See [The hydrogen network](#refinery-hydrogen).
+- **Residue desulfurization and fuel oil** (`difflow_refinery.residue`, #331): an atmospheric-residue desulfurizer on the same building blocks (HDS by sulfur class plus refractory residue sulfur, HDM of Ni+V, CCR reduction, a small 538 C+ conversion; once-through treat gas, ideal product split) and the VLSFO pool (`fuel_oil_blend`). It takes a 3 wt% S residue to a 0.5 wt% S fuel oil, which cutter blending alone cannot. A library; constants illustrative. See [Residue desulfurization and fuel oil](#refinery-residue).
 
 Everything is differentiable with `jax`. A product yield, a gravity or a furnace duty has an exact gradient with respect to:
 
@@ -2632,6 +2633,166 @@ Compiling a once-through unit takes about 2.5 min and a solve about 7--9 s (the 
 - **Deactivation** is the `activity` multiplier of either catalyst, a differentiable parameter that `difflow.reconciliation.tracking` can track; not wired up or demonstrated.
 - **Not a difflow `Flowsheet` object**: both tears are the unit's own.
 - Out of scope (as the issue says): residue hydrocracking, hydrogen-network optimisation, cycle-length optimisation, dynamics; two-stage units are not built (the pieces would compose).
+
+(refinery-residue)=
+## Residue desulfurization and fuel oil
+
+`difflow_refinery.residue` is the route from an atmospheric residue to a very-low-sulfur fuel oil (VLSFO, 0.50 wt% S). Its unit, `ResidueDesulfurizer`, is an atmospheric-residue desulfurizer (ARDS/RDS) built on the shared hydroprocessing blocks ([above](#refinery-hydroprocessing)): the hydrotreating kinetics with residue constants, plus refractory residue sulfur, hydrodemetallization (HDM) of Ni+V, CCR reduction and a small residue conversion, in the same `TrickleBedReactor`. `fuel_oil_blend` blends its products, and any cutter, in a `BlendPool` with the VLSFO specs. Like the hydrotreater it is a library, not a palette operation. Its rate constants are **illustrative**.
+
+```python
+import difflow_refinery as dr
+from difflow_refinery.residue import ResidueDesulfurizer, RDSParams, fuel_oil_blend
+
+char = dr.characterize(assay, composition=True)     # sulfur, CCR and Ni+V per cut; the #305 composition is required
+residue = cdu.products["residue"]                     # or residue.atmospheric_residue_cut(char, kg_s)
+rds = ResidueDesulfurizer(char, residue, RDSParams(T_in=(373.0 + 273.15,)))
+res = rds.solve(residue)
+print(res.table())
+
+fo = fuel_oil_blend([res.blend_component("residue"), res.blend_component("distillate")],
+                    [res.volume("residue"), res.volume("distillate")])
+fo.properties["S_ppm"], fo.margins                    # 0.31 wt% S, every VLSFO spec met
+```
+
+```
+atmospheric residue --+--> [bed 1] --quench--> [bed 2] --quench--> [bed 3] --> product separation --+--> gas: H2, H2S, NH3, C1-C5, water
+                      |                                                                             +--> distillate (cuts below 350 C)
+treat gas ------------+                                                                             +--> desulfurized residue
+                                                                    fuel oil pool  <-- desulfurized residue + distillate (+ cutters)
+```
+
+(refinery-residue-route)=
+### Which route, and why
+
+The issue (#331) offered two routes: a residue hydrotreater, or the vacuum unit plus cutter-stock blending. The choice turns on one piece of arithmetic. Sulfur blends linearly by mass, so a base stock at `S_r` blended with a cutter at `S_c` reaches a spec `S_s` only with a cutter mass fraction of at least
+
+$$
+x_c = \frac{S_r - S_s}{S_r - S_c} \qquad \text{(\texttt{cutter\_fraction\_for\_sulfur})}
+$$
+
+For the test crude's atmospheric residue (3.27 wt% S) and a 15 ppm ULSD cutter, $x_c = 0.85$. The "fuel oil" would be 85 % diesel by mass. A refinery cannot make it: the crude unit of `examples/40` makes about a third as much diesel as residue. Nor would it want to: the blend sells for less than the diesel it consumed. An LCO cutter is worse, since an FCC on a high-sulfur feed makes LCO at around 1--2 wt% S (a typical figure, unverified). The vacuum residue is worse again (about 4 wt% S): the VDU sends the sulfur to its bottoms, so the VDU on its own moves the problem without solving it. Cutter blending is what sets a residual fuel's *viscosity*. It is not a way to take a high-sulfur crude's residue to 0.5 wt% S.
+
+So the route here is (a), the residue desulfurizer. It is **credible**: it is how refineries that run high-sulfur crudes make VLSFO, and ARDS units report 85--92 % HDS on atmospheric residue (R2, R3; unverified). It is **affordable** in this code base: it adds a kinetic model and a thin unit around the reactor that #306 already built and tested, and changes none of it. It compiles in about 20 s and re-solves in 0.1--0.2 s. A gradient through it compiles in about 90 s. The cutter route stays available through the same pool (`fuel_oil_blend` takes any property-mode cutter), and `cutter_fraction_for_sulfur` gives the arithmetic for a low-sulfur crude, where cutting alone does work.
+
+(refinery-residue-feed)=
+### Feed and layout
+
+The layout is the hydrotreater's (`HDT_ATTRIBUTES`: C and H atoms, S in five classes, N in two, mono/di/poly-aromatic, olefinic and naphthenic molecule counts) with three more per-cut attributes (`RDS_ATTRIBUTES`):
+
+| Attribute | What it counts | Element in the balance | From the characterization |
+|---|---|---|---|
+| `S_residue` | sulfur atoms in asphaltene/resin molecules: the refractory residue sulfur | S | a share `residue_s_share(Tb)` of each cut's sulfur, taken from the five classes in proportion |
+| `NiV` | Ni + V atoms, as moles of a nominal metal of `METAL_MW` (a 3:1 V:Ni mix, 52.9 g/mol) | none (metals are outside a cut's mass, as everywhere in the layout) | `char.nickel_vanadium` |
+| `CCR` | carbon atoms the Conradson test would leave as coke | none (a subset of the cut's C; counting it as C would count it twice) | `char.ccr` |
+
+`rds_feed(char, stream, layout)` is `hdt_feed` plus these three columns, so a cut's mass from its atoms is still `F * MW`. The refractory share (`DEFAULT_RESIDUE_S_SHARE`) is zero up to 450 C, 0.10 at 538 C, 0.25 at 600 C, 0.35 at 700 C and 0.50 at 800 C, linear in between. It is **illustrative**: it has the shape the residue-HDS literature describes, with asphaltene sulfur concentrated in the heaviest fraction, but the numbers are this project's. Pass `residue_s_share=` with measured shares, e.g. from the sulfur of the C7 asphaltenes. An assay without Ni+V or CCR gives zero columns. The unit carries every pseudo-component from the lightest one in the feed (or the lightest one conversion can reach, if that is lighter) up to the heaviest one. A crude-unit residue goes in as it is; `atmospheric_residue_cut(char, kg_s)` is an idealized one (every cut above 350 C, in crude proportion).
+
+(refinery-residue-kinetics)=
+### Reactions and rate laws
+
+`RDSKinetics.rates` is `HDTKinetics.rates` with the residue constants (`residue_hdt_params`), plus four reactions per cut. The symbols are those of the hydrotreater ([rate laws](#refinery-hydrotreater-kinetics)): `c` are the fugacity-equivalent liquid concentrations, `f = activity * effectiveness * wetting`, `k(T)` is Arrhenius about `T_ref` = 380 C, and `h = (c_H2/c_ref)^m`:
+
+$$
+\begin{aligned}
+\text{refractory HDS:}\quad & r_{S,res} = f\,k_{S,res}\,c_{S,res}\,h^{m}/D^2, \quad D = 1 + K_{H_2S} c_{H_2S} + K_N c_{N,basic} && (3\ \mathrm{H_2} \to \mathrm{H_2S}) \\
+\text{HDM:}\quad & r_M = f\,k_M\,c_{NiV}\,h^{m_M} && \text{(metal onto the catalyst)} \\
+\text{CCR reduction:}\quad & r_{CCR} = f\,k_{CCR}\,c_{CCR}\,h && (0.5\ \mathrm{H_2}\ \text{per CCR carbon}) \\
+\text{conversion:}\quad & r_X = f\,k_X\,c_i \quad (T_{b,i} \ge T_{conv}) && (\text{molecule of } i + (m_i-1)\,\mathrm{H_2} \to m_i \text{ molecules of } j(i))
+\end{aligned}
+$$
+
+- **HDS by class** keeps the hydrotreater's LHHW form: first order in each of the five classes, with the squared H2S and basic-nitrogen inhibition denominator (Korsten & Hoffmann 1996; Froment et al. 1994; hydrotreater refs H7, H8). The residue constants change four things. The effectiveness factor is 0.35, for the hindered diffusion of residue molecules into the pores. The class constants are lower. The basic-nitrogen adsorption constant is weaker, because most of a residue's basic nitrogen sits in molecules too large to reach the sites. The hydrotreater's cracking leak is switched off (`crack_k = 0`); conversion replaces it. The refractory class shares the inhibition denominator and reacts more slowly still. Being first order with its own constant, it is part of what gives the lumped total a high apparent order, as in residue HDS data.
+- **HDM, CCR reduction and conversion** are first-order lumps with an H2 term, the forms reviewed for heavy-oil hydroprocessing by Ancheyta et al. (2005). Removed metal deposits on the catalyst, reported as `metals.deposit` (kg/s); that deposit is what sets a residue unit's cycle length (Rana et al. 2007). HDM takes no hydrogen and gives no heat: the metals are at ppm level, and their H2 would be about 1e-4 of the unit's.
+- **Conversion** acts only on cuts boiling at or above `T_conv` (538 C), the "residue" of a conversion figure. Each converted molecule of cut `i` sends all of its atoms to `m_i = n_C,i/n_C,j` molecules of the lighter cut `j(i)` whose carbon number is nearest half of `i`'s (`conversion_targets`). The `m_i - 1` new chain ends take one H2 each, so carbon, hydrogen and every heteroatom balance exactly. The fragments inherit the parent's sulfur, nitrogen, metals, CCR and ring classes, per atom.
+- **Heats** are the hydrotreater's model-compound reaction enthalpies: benzothiophene HDS for the refractory class, benzene to cyclohexane per H2 for CCR reduction, and n-hexane + H2 to n-butane + ethane per bond broken. The CCR stoichiometry (one aromatic ring of six carbons saturated by three H2) is **illustrative**.
+- **Constants** (`RDSKineticParams`, `residue_hdt_params`) are **illustrative**, not fitted to any catalyst or unit. They were chosen so that this crude's residue at a WABT near 395 C, LHSV 0.25 1/h, 150 bar and 1000 Nm³/m³ lands in the ranges ARDS units report: 85--92 % HDS, 70--85 % HDM, 40--60 % CCR reduction and 10--20 % conversion of the 538 C+ (Speight 2000; Rana et al. 2007). The release tests pin those ranges. In a real unit the HDM catalyst grades into the HDS catalyst; here one average catalyst fills every bed.
+
+(refinery-residue-specs)=
+### Degrees of freedom and specs
+
+`RDSParams`: `T_in` (bed-1 inlet with given quench fractions, default 373 C; or one per bed with `quench=None`, which solves each quench), `quench` (default 0.20 and 0.25 of the treat gas into beds 2 and 3), `bed_fractions` (0.25, 0.35, 0.40), `P` (150 bar), `lhsv` (0.25 1/h on 60 F feed volume), `catalyst_density` (800 kg/m³), `gas_oil` (treat gas, 1000 Nm³/m³), `treat_gas` (90 % H2 / 10 % CH4), `T_gas` (quench gas, 70 C), `product_cut_T` (350 C), `T_conv` (538 C), `kinetics`, `kij`, `reactor` (`ReactorOptions`, rtol 1e-8).
+
+- **Once-through treat gas.** The treat gas is a given rate and composition, not a solved recycle loop. That equals a recycle loop with an ideal amine scrubber and makeup that holds the recycle purity. `hydroprocessing.recycle` has the pieces to close the loop, which matters for the hydrogen balance and little for the product sulfur. Chemical H2 consumption comes from the hydrogen balance.
+- **Product separation** is an ideal component split of the effluent. Every gas and light end (H2, H2S, NH3, C1--C5, water) goes to `gas`. Every cut below `product_cut_T` goes to `distillate`, and the rest to `residue`. It stands in for the hot and cold separators and the fractionator, and the balances close through it exactly. No dissolved gas is carried into the liquids.
+- No feed heater: the bed-1 inlet temperature is a spec, and oil and treat gas enter at it. No bed pressure drop.
+- Fixed at construction (they shape the layout, or say which code path runs): the bed count, the quench mode, `T_conv`, `product_cut_T`, `kij`. Everything else can be traced, and `solve(feed, params=...)` re-solves without recompiling.
+
+(refinery-residue-outputs)=
+### Outputs and the fuel-oil pool
+
+`RDSResult.outputs` (units in `residue.OUTPUT_UNITS`) holds:
+
+- feed and product qualities: `feed.S_wt`, `feed.NiV_wppm`, `feed.CCR_wt`, `residue.S_wt`, `residue.NiV_wppm`, `residue.CCR_wt`, `residue.sg`, `distillate.S_wppm`;
+- yields: `residue.yield`, `distillate.yield`, `gas.rate`;
+- conversions: `hds.conversion`, `hdm.conversion`, `ccr.reduction`, `hdn.conversion`, and `conversion` (of the cuts at or above `T_conv`);
+- hydrogen: `h2.chemical`, `h2.chemical_nm3_m3`, `h2.chemical_wt`, and `h2s.make`;
+- the reactor: `metals.deposit`, `wabt`, `bed<k>.T_in`, `bed<k>.dT`, `bed<k>.quench`.
+
+`balances` are the relative errors of mass, C, H, S, N and Ni+V across the unit; the Ni+V balance counts the catalyst deposit.
+
+`product_char` is a `BlendCharacterization` of the treated cuts. Their molar mass comes from their atoms. Their gravity comes from the feed cut's molar volume plus the hydrotreater's per-molecule volume increments for the types saturated. Each cut carries `S_ppm`, `N_ppm`, `CCR_wt` and hydrocarbon types. `blend_component(name)` turns `"residue"` or `"distillate"` into a fuel-oil component. Its viscosity at 50 C is *estimated* by `difflow_refinery.properties` (Abbott at 100/210 F and Walther between, from the treated cuts' TBP 50 % point and gravity, **unverified** there). It is property mode by default, so it blends with cutters from any other unit. `volume(name)` gives the standard volume flow at 15 C.
+
+`fuel_oil_blend(components, volumes)` is a fuel-oil `BlendPool` by volume flow with `VLSFO_SPECS`: S ≤ 5000 ppm, viscosity ≤ 380 cSt at 50 C, SG ≤ 0.991 and CCR ≤ 18 wt%. The sulfur limit is the MARPOL Annex VI 0.50 % m/m global cap of 2020. The other three are the ISO 8217 RMG 380 limits, **as recalled** and not checked against the standard's table. Sulfur, nitrogen and CCR blend by mass, SG by volume, and viscosity by Refutas. The pool's mass is the products' mass to round-off, so a route balance closes through it.
+
+(refinery-residue-results)=
+### Results on the test crude
+
+These are the test crude of `examples/35`--`40` (1.8 wt% S, 1500 wppm N, 5 wt% CCR), given 40 wppm Ni+V, with the defaults and 50 kg/s of idealized 350 C+ residue (`tests/refinery/test_residue.py`):
+
+| | feed (atm. residue) | desulfurized residue | fuel oil (residue + RDS distillate) |
+|---|---|---|---|
+| S | 3.27 wt% | 0.306 wt% | 0.31 wt% (spec 0.50) |
+| Ni+V | 86 wppm | 16.8 wppm | |
+| CCR | 10.8 wt% | 5.3 wt% | (spec 18) |
+| SG | 0.953 | 0.928 | (spec 0.991) |
+| viscosity at 50 C (estimated) | 225 cSt | 106 cSt | (spec 380) |
+
+WABT is 394.7 C over a total bed rise of 71 K. HDS is 90.7 %, HDM 81.1 %, CCR reduction 51.6 % and 538 C+ conversion 13.1 %. The distillate yield is 1.8 % (at 0.50 wt% S: the fragments inherit their parent's sulfur, so it wants a distillate hydrotreater before the diesel pool). Chemical H2 is 121 Nm³/m³ (1.15 wt%). All balances close to 1e-15.
+
+Over the route, the residue's sulfur equals the fuel oil's plus the H2S to 1e-10, and residue plus treat gas equals fuel oil plus gas.
+
+The gradient of fuel-oil sulfur with respect to the bed-1 inlet temperature is −602 ppm/K, by reverse mode through the beds, the quench mixing, the product grid and the pool. A central difference at h = 0.5 K gives −602.0. The release test holds the two to 0.2 %.
+
+On the CDU residue of `examples/40` (3.06 wt% S, no Ni+V given), the fuel oil comes out at 0.31 wt% S and 69 cSt, with every spec met (release test).
+
+(refinery-residue-ex40)=
+### In the whole-refinery example
+
+`examples/40_refinery_flowsheet.ipynb` still sends the raw residue to the fuel-oil pool, with an assumed viscosity (its stand-in). The replacement is:
+
+```python
+from difflow_refinery.residue import ResidueDesulfurizer, fuel_oil_blend
+rds = ResidueDesulfurizer(char, P["residue"])
+rds_res = rds.solve(P["residue"])
+fuel_oil = fuel_oil_blend([rds_res.blend_component("residue"), rds_res.blend_component("distillate")],
+                          [rds_res.volume("residue"), rds_res.volume("distillate")])
+```
+
+The H2 consumer it adds is `rds_res.outputs["h2.chemical"]`, which the hydrogen balance of that example would need. Its H2S is `rds_res.outputs["h2s.make"]`, for the sulfur table. Give the assay `nickel_vanadium_wppm=` for HDM to have anything to remove.
+
+(refinery-residue-references)=
+### References
+
+| Key | Reference | Used for | How checked |
+|---|---|---|---|
+| R1 | Ancheyta, J.; Sanchez, S.; Rodriguez, M.A. "Kinetic modeling of hydrocracking of heavy oil fractions: a review." *Catal. Today* **2005**, 109, 76--92. doi:10.1016/j.cattod.2005.08.015 | First-order lumped forms for heavy-oil HDS, HDM, CCR and conversion | Recalled; not reached (unverified). Forms only; no constants used. |
+| R2 | Rana, M.S.; Samano, V.; Ancheyta, J.; Diaz, J.A.I. "A review of recent advances on process technologies for upgrading of heavy oils and residua." *Fuel* **2007**, 86, 1216--1231. doi:10.1016/j.fuel.2006.08.004 | ARDS severity ranges; metals deposit limits cycle length | Recalled (unverified). Qualitative ranges only. |
+| R3 | Speight, J.G. *The Desulfurization of Heavy Oils and Residua*, 2nd ed., Marcel Dekker, **2000** | Residue HDS behaviour, refractory asphaltene sulfur, typical ARDS conditions | Recalled; chapter not checked (unverified). Qualitative only. |
+| R4 | IMO, MARPOL Annex VI, Regulation 14 (0.50 % m/m global sulfur limit from 1 January 2020) | VLSFO sulfur spec | Widely reported limit; regulation text not opened (unverified). |
+| R5 | ISO 8217:2017, *Petroleum products -- Fuels (class F) -- Specifications of marine fuels*, Table 2, grade RMG 380 | Viscosity 380 mm²/s at 50 C, density 991.0 kg/m³ at 15 C, CCR 18 % m/m | As recalled; the standard was not opened (unverified). |
+| -- | Hydrotreater references H1--H16 | PR flash, HDS/HDN/HDA forms, model-compound heats | See [the hydrotreater](#refinery-hydrotreater-references). |
+| -- | Refutas viscosity blending; Abbott-Kaufmann-Domash viscosity | Fuel-oil viscosity | As cited for the blend pool and `difflow_refinery.properties`. |
+
+(refinery-residue-not-done)=
+### What is not done
+
+- **No literature or plant cross-check.** The constants are illustrative and were chosen to land in published severity ranges. They are not fitted, and no paper's profiles are reproduced. Product sulfur, metals and hydrogen are the shape of the answer, not a prediction for any catalyst.
+- **No recycle-gas loop, hot/cold separators or fractionator column**: see the specs above for what stands in for each.
+- **No catalyst deactivation.** `metals.deposit` is reported, and `activity` is a differentiable multiplier that `difflow.reconciliation.tracking` could follow, but neither metals-driven deactivation nor cycle length is modelled.
+- **One average catalyst** for every bed (no HDM/HDS grading), and one `T_ref`.
+- **The RDS distillate** leaves at about the parent's sulfur and is not hydrotreated. In the example it goes to the fuel oil.
+- **No VDU in the route.** For this crude it is not needed, as explained above. The pieces compose: `VacuumColumn` on the RDS residue, or the RDS on a vacuum residue (VRDS), with the same unit.
+- Out of scope: ebullated-bed and slurry residue hydrocracking, solvent deasphalting, coking, and IMO compatibility and stability (the P-value).
 
 ---
 

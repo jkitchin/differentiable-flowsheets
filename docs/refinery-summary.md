@@ -94,6 +94,7 @@ delta-base planning ([`difflow.planning`](planning.md)).
 | [Catalytic reformer](unit-operations-refinery.md#catalytic-reforming) | `CatalyticReformer` (library) | hydrotreated heavy naphtha → reformate, net H2, LPG, fuel gas | 29 lumps by carbon number, equilibrium from Gibbs energies; three adiabatic beds with fired heaters; PR separator and H2 recycle; component-split stabilizer; feed sulfur to H2S and reformate S (trace) | `reformer_block` | Balances and gradients only; no literature cross-check; constants illustrative | 40 |
 | [Alkylation](unit-operations-refinery.md#alkylation) | `AlkylationUnit` (library) | C3-C5 olefins + isobutane → alkylate, propane, n-butane | Sauer-Colville-Burwick yield and octane correlations; per-olefin stoichiometry; shortcut DIB, depropanizer and debutanizer; isobutane recycle | `alky_block` | The correlation layer reproduces the GAMS `process.gms` optimum (profit 1161.3366) | — |
 | [Hydrogen network](unit-operations-refinery.md#the-hydrogen-network) | `HydrogenNetwork` (library) | reformer net gas, H2 plant, import → hydrotreater / hydrocracker makeup, fuel gas, export | Header balance by species; optional PSA (recovery, product purity); ordered swing sources with capacities; purity and makeup partial-pressure specs; makeup purity fed back into the hydrotreaters by substitution | `h2_block` | Balances close by construction; gradients against finite differences; PSA defaults illustrative | — |
+| [Residue desulfurizer](unit-operations-refinery.md#residue-desulfurization-and-fuel-oil) | `ResidueDesulfurizer` (library) | atmospheric residue → desulfurized residue (VLSFO base), distillate, gas | Trickle beds: HDS by sulfur class plus refractory residue sulfur (LHHW, H2S-inhibited), HDM of Ni+V onto the catalyst, CCR reduction, small 538 C+ conversion; once-through treat gas, ideal product split; `fuel_oil_blend` to a 0.5 wt% S pool | — | Balances and gradients only; no literature cross-check; constants illustrative | — |
 
 ### Products
 
@@ -115,7 +116,7 @@ Two kinds of number appear in these units, and they deserve different trust.
   implementation of the same model (Pyomo/IPOPT, IDAES), not against a
   commercial simulator.
 - **Kinetic and yield constants in the conversion units** (hydrotreater,
-  hydrocracker, FCC, reformer, isomerization rates, alkylation octane
+  residue desulfurizer, hydrocracker, FCC, reformer, isomerization rates, alkylation octane
   temperature terms): **illustrative**. They were chosen to give plausible
   behaviour, not taken from a published parameter set, and they must be
   fitted to the unit's own data (for example with `difflow.estimation`)
@@ -136,8 +137,8 @@ in the code.
   reformer's stabilizer is a component split, and alkylation uses shortcut
   columns. The gas plant's rigorous columns reached `main` after these units
   were built and are not yet wired in.
-- **No literature cross-check** for the hydrotreater, hydrocracker, FCC or
-  reformer: the papers named in their issues could not be obtained.
+- **No literature cross-check** for the hydrotreater, residue desulfurizer,
+  hydrocracker, FCC or reformer: the papers named in their issues could not be obtained.
 - **Not built:** example notebooks for the hydrocracker, FCC and alkylation
   (the hydrotreater and the reformer appear only inside the whole-refinery
   example 40); the 10-lump FCC scheme;
@@ -161,4 +162,6 @@ in the code.
   composition), a jet/diesel split after a distillate hydrotreater, a
   hydrogen header, and a fuel-oil route for the atmospheric residue.
   The hydrogen header is now a library block, `difflow_refinery.hydrogen`
-  (#329); example 40 still does it by arithmetic.
+  (#329), and the fuel-oil route a library too (`difflow_refinery.residue`,
+  #331: a residue desulfurizer and the VLSFO pool); example 40 does not use
+  either yet ([the residue replacement](unit-operations-refinery.md#in-the-whole-refinery-example)).
