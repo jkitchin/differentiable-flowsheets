@@ -16,7 +16,7 @@ the loop is worth. Instead:
   tolerance in a few tens of passes fewer.
 * **Gradient**: the implicit-function one, never the iterations. For ``z* =
   G(z*, theta)`` a cotangent ``v`` on ``z*`` pulls back to ``w^T dG/dtheta``
-  with ``(I - (dG/dz)^T) w = v``, solved by GMRES on the scaled system
+  with ``(I - (dG/dz)^T) w = v``, solved by restarted GMRES (:func:`gmres`) on the scaled system
   (``y = s w``), each operator application one vector-Jacobian product of ``G``.
   That needs only reverse mode -- what the reactor's checkpointed diffrax
   adjoint supports.
@@ -60,9 +60,52 @@ jax.tree_util.register_dataclass(FixedPointSolution, data_fields=["value", "resi
                                  meta_fields=[])
 
 
+def gmres(A: Callable, b: Array, k: int = 20, restarts: int = 3) -> Array:
+    """Restarted GMRES(k) for ``A x = b``, written out (Arnoldi with twice-applied
+    modified Gram-Schmidt, least squares on the Hessenberg matrix).
+
+    ``jax.scipy.sparse.linalg.gmres`` wraps its solve in ``custom_linear_solve``,
+    which differentiates the operator to transpose it; the operator here is a
+    pullback through while loops, which reverse mode cannot differentiate. This
+    one only ever applies ``A``.
+    """
+    n = b.size
+    bn = jnp.linalg.norm(b)
+
+    def cycle(x):
+        r = b - A(x)
+        beta = jnp.linalg.norm(r)
+        safe = jnp.where(beta > 0, beta, 1.0)
+        V = jnp.zeros((k + 1, n)).at[0].set(r / safe)
+        H = jnp.zeros((k + 1, k))
+
+        def arnoldi(j, VH):
+            V, H = VH
+            w = A(V[j])
+            h = V @ w
+            w = w - h @ V
+            h2 = V @ w
+            w = w - h2 @ V
+            h = h + h2
+            nw = jnp.linalg.norm(w)
+            H = H.at[:, j].set(h.at[j + 1].set(nw))
+            V = V.at[j + 1].set(jnp.where(nw > 1e-300, w / jnp.where(nw > 0, nw, 1.0), 0.0))
+            return V, H
+
+        V, H = jax.lax.fori_loop(0, k, arnoldi, (V, H))
+        e1 = jnp.zeros(k + 1).at[0].set(beta)
+        y = jnp.linalg.lstsq(H, e1)[0]
+        return jnp.where(beta > 1e-300 * jnp.maximum(bn, 1.0), x + V[:k].T @ y, x)
+
+    x = jnp.zeros_like(b)
+    for _ in range(restarts):
+        x = cycle(x)
+    return x
+
+
 def fixed_point(G: Callable, z0: Array, args, scale: Array, tol: float = 1e-12, max_steps: int = 80,
-                G_iter: Callable | None = None, memory: int = 5, adjoint_tol: float = 1e-12,
-                adjoint_restart: int = 40, adjoint_maxiter: int = 4) -> FixedPointSolution:
+                G_iter: Callable | None = None, memory: int = 5,
+                adjoint_restart: int = 20, adjoint_maxiter: int = 3) -> FixedPointSolution:
     """Solve ``z = G(z, args)`` (Anderson-accelerated substitution); reverse-mode gradient by the adjoint.
 
     Args:
@@ -77,7 +120,8 @@ def fixed_point(G: Callable, z0: Array, args, scale: Array, tol: float = 1e-12, 
         G_iter: The map the forward iterations use (same values, e.g. built
             with a forward-mode diffrax adjoint); ``G`` is what the gradient follows.
         memory: Anderson depth ``m`` (1: plain substitution).
-        adjoint_tol, adjoint_restart, adjoint_maxiter: GMRES controls of the adjoint.
+        adjoint_restart, adjoint_maxiter: Krylov dimension and number of
+            restarts of the adjoint's :func:`gmres`.
     """
     Gi = G if G_iter is None else G_iter
     z0 = jax.lax.stop_gradient(jnp.asarray(z0, dtype=float))
@@ -85,7 +129,7 @@ def fixed_point(G: Callable, z0: Array, args, scale: Array, tol: float = 1e-12, 
     n = z0.size
     m = int(memory)
 
-    def solve(a):
+    def solve(a, z0, scale):
         def cond(s):
             return (s[5] >= tol) & (s[4] < max_steps)
 
@@ -113,30 +157,30 @@ def fixed_point(G: Callable, z0: Array, args, scale: Array, tol: float = 1e-12, 
         z, _, _, _, it, err = jax.lax.while_loop(cond, body, init)
         return z, it, err
 
+    # z0 and scale are explicit (non-differentiated) inputs: a custom_vjp must not
+    # close over traced values
     @jax.custom_vjp
-    def fp(a):
-        z, it, err = solve(a)
+    def fp(a, z0, scale):
+        z, it, err = solve(a, z0, scale)
         return z, err, jnp.asarray(it, dtype=float)
 
-    def fwd(a):
-        z, it, err = solve(a)
-        return (z, err, jnp.asarray(it, dtype=float)), (z, a)
+    def fwd(a, z0, scale):
+        z, it, err = solve(a, z0, scale)
+        return (z, err, jnp.asarray(it, dtype=float)), (z, a, z0, scale)
 
     def bwd(res, cts):
-        z, a = res
+        z, a, z0, scale = res
         v = cts[0]
         _, pull = jax.vjp(G, z, a)
 
         def A(y):
             return y - scale * pull(y / scale)[0]
 
-        y, _ = jax.scipy.sparse.linalg.gmres(A, scale * v, tol=adjoint_tol, atol=0.0,
-                                             restart=adjoint_restart, maxiter=adjoint_maxiter,
-                                             solve_method="batched")
-        return (pull(y / scale)[1],)
+        y = gmres(A, scale * v, adjoint_restart, adjoint_maxiter)
+        return pull(y / scale)[1], jnp.zeros_like(z0), jnp.zeros_like(scale)
 
     fp.defvjp(fwd, bwd)
-    value, err, it = fp(args)
+    value, err, it = fp(args, z0, scale)
     err, it = jax.lax.stop_gradient(err), jax.lax.stop_gradient(it)
     return FixedPointSolution(value=value, residual=err, steps=it, converged=err < tol)
 

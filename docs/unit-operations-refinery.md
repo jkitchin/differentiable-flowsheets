@@ -1689,7 +1689,7 @@ Read these as the shape of the answer: every cracking constant is illustrative. 
 
 Compiling a once-through unit takes about 2.5 min and a solve about 7--9 s (the gas tear: 12 substitution passes, then Newton); with the UCO recycle the compile is about 6.5 min and a solve about 40 s. A reverse-mode gradient adds one compile.
 
-GRADIENTS-TBD
+**Gradients** (`test_gradients_match_central_differences`, `test_recycle_ratio_gradient`): kerosene yield, per-pass conversion and chemical H2 consumption with respect to the cracking inlet temperature, the reactor pressure and the 70 % TBP point of the assay (the feed's mass per cut held, so its moles move with the cut molecular weights), on the once-through light VGO; and overall conversion, diesel yield and chemical H2 with respect to the UCO recycle fraction, through the UCO tear's adjoint. One reverse-mode Jacobian each, against Richardson-extrapolated central differences (steps 0.5 K, 1 bar, 1 K; 0.02 in the recycle fraction) at `rtol` 1e-5.
 
 **What the tests check** (`tests/refinery/test_hydrocracking.py`; full-unit tests `slow`):
 

@@ -27,8 +27,8 @@ from the shared hydroprocessing pieces (:mod:`difflow_refinery.hydroprocessing`)
   (:mod:`.fractionator`), not a column.
 * **UCO recycle** -- a fraction of the fractionator bottoms returns to the
   cracking reactor inlet: a tear on the UCO stream (molecules and attributes
-  of every UCO cut), solved by successive substitution around the gas-loop
-  Newton, with an adjoint (implicit) gradient (:mod:`.fixed_point`).
+  of every UCO cut), solved by Anderson-accelerated substitution around the gas-loop
+  Newton, with an adjoint (implicit, GMRES) gradient (:mod:`.fixed_point`).
 
 Everything is differentiable -- with respect to every spec, every kinetic
 constant, the feed rate and the characterization (a TBP point of the assay)
@@ -675,8 +675,9 @@ class Hydrocracker:
             Tb=cat(lv(1), c["Tb"]), SG=cat(l_sg, sg_cut), MW=cat(jnp.asarray([gas_mw(nm) for nm in lights],
                                                                           dtype=float).reshape(-1), mw_cut),
             Tc=cat(lv(2), c["Tc"]), Pc=cat(lv(3), c["Pc"]), omega=cat(lv(4), c["omega"]),
-            qualities={k: cat(l_h if k == "H_wt" else (100.0 + zl if k == "paraffins_vol" else zl), v)
-                       for k, v in qual.items()})
+            qualities={k: cat(100.0 + zl if k == "paraffins_vol" else zl, v)
+                       for k, v in qual.items() if k != "H_wt"})
+        h_grid = cat(l_h, qual["H_wt"])          # wt% H per component (not a blend quality)
 
         def light_flows(f: Flows):
             return jnp.stack([f.gas[lay.gas_index(nm)] for nm in lights]) if lights else jnp.zeros(0)
@@ -699,7 +700,7 @@ class Hydrocracker:
             outputs[f"{pre}.api"] = 141.5 / sg - 131.5
             outputs[f"{pre}.S_wppm"] = jnp.sum(w * grid.qualities["S_ppm"])
             outputs[f"{pre}.N_wppm"] = jnp.sum(w * grid.qualities["N_ppm"])
-            outputs[f"{pre}.H_wt"] = jnp.sum(w * grid.qualities["H_wt"])
+            outputs[f"{pre}.H_wt"] = jnp.sum(w * h_grid)
             outputs[f"{pre}.aromatics_vol"] = jnp.sum(phi * grid.qualities["aromatics_vol"])
             if tbp:
                 for pct in (5, 10, 50, 90, 95):

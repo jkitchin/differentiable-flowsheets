@@ -249,6 +249,15 @@ def test_fixed_point_adjoint_gradient():
     np.testing.assert_allclose(np.asarray(J), np.asarray(2 * z @ dz_da), rtol=1e-10)
 
 
+def test_gmres_solves_a_nonsymmetric_system():
+    from difflow_refinery.hydrocracking.fixed_point import gmres
+    rng = np.random.default_rng(0)
+    M = jnp.asarray(np.eye(60) - 0.08 * rng.standard_normal((60, 60)))
+    b = jnp.asarray(rng.standard_normal(60))
+    x = gmres(lambda v: M @ v, b, k=20, restarts=3)
+    np.testing.assert_allclose(np.asarray(M @ x), np.asarray(b), atol=1e-10)
+
+
 # =============================================================================
 # A cracking bed
 # =============================================================================
@@ -464,10 +473,10 @@ def test_products_blend_into_jet_and_ulsd_pools(light_once):
         assert float(comp.properties["SG"]) == pytest.approx(float(r.outputs[f"{name}.sg"]), rel=1e-9)
         assert float(comp.properties["S_ppm"]) == pytest.approx(float(r.outputs[f"{name}.S_wppm"]), rel=1e-9,
                                                                abs=1e-9)
-        res = BlendPool(pool)([comp], [1.0])
+        res = BlendPool(pool, specs=[])([comp], [1.0])     # no specs: freeze/smoke points are not computed
         assert np.isfinite(float(res.properties["SG"]))
     d = BlendComponent.from_stream("hcu_diesel", r.product_stream("diesel"), grid, flash_C=60.0)
-    assert float(BlendPool("ulsd")([d], [1.0]).properties["cetane_index"]) == pytest.approx(
+    assert float(BlendPool("ulsd", specs=[])([d], [1.0]).properties["cetane_index"]) == pytest.approx(
         float(r.outputs["diesel.cetane_index"]), rel=1e-6)
 
 
@@ -481,3 +490,15 @@ def test_hcu_block_delta_vectors(light_once):
                                                                    "h2.chemical"], feed_product="vgo")
     chk = check_delta_vectors(blk, rtol=1e-3)
     assert chk["passed"], chk["max_rel_error"]
+
+
+@pytest.mark.slow
+def test_discrete_lump_scheme_runs_the_unit(light_vdu):
+    """The discrete-lump option through the whole unit: converges, closes, and makes a lighter slate when hotter."""
+    char, feed = light_vdu
+    p = HydrocrackerParams(T_crack=638.15, crack_kinetics=hck.HCKineticParams(scheme="discrete"))
+    unit = Hydrocracker(char, feed, p)
+    r = unit.solve(feed)
+    _check_solution(r)
+    hot = unit.solve(feed, params=dataclasses.replace(p, T_crack=p.T_crack + 5.0)).outputs
+    assert float(hot["conversion.per_pass"]) > float(r.outputs["conversion.per_pass"])
