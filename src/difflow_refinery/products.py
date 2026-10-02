@@ -47,6 +47,10 @@ class ProductProperties:
         sg, api: Specific gravity (60/60 F) and API gravity.
         mw: Number-average molecular weight (g/mol).
         tbp: TBP temperatures (K) at :data:`TBP_POINTS`, volume basis.
+        composition: Hydrocarbon types, hydrogen, sulfur and nitrogen and
+            their classes (a
+            :class:`~difflow_refinery.composition.StreamComposition`), when
+            :func:`product_properties` was given a composition; else ``None``.
     """
 
     name: str
@@ -60,6 +64,7 @@ class ProductProperties:
     api: Array
     mw: Array
     tbp: Array
+    composition: object = None
 
     def tbp_at(self, percent: float) -> Array:
         """The TBP temperature (K) at one of :data:`TBP_POINTS`."""
@@ -68,7 +73,8 @@ class ProductProperties:
 
 jax.tree_util.register_dataclass(
     ProductProperties,
-    data_fields=["mole", "mass", "volume", "bpd", "yield_volume", "yield_mass", "sg", "api", "mw", "tbp"],
+    data_fields=["mole", "mass", "volume", "bpd", "yield_volume", "yield_mass", "sg", "api", "mw", "tbp",
+                 "composition"],
     meta_fields=["name"],
 )
 
@@ -100,8 +106,8 @@ def tbp_curve(flows: Array, thermo: ColumnThermo, percents=TBP_POINTS) -> Array:
     return jnp.interp(frac, centre, Tb)
 
 
-def product_properties(products: dict, thermo: ColumnThermo, feed: dict | None = None
-                       ) -> dict[str, ProductProperties]:
+def product_properties(products: dict, thermo: ColumnThermo, feed: dict | None = None,
+                       composition=None) -> dict[str, ProductProperties]:
     """Rates, yields, gravities and TBP ranges of a column's products.
 
     Args:
@@ -110,10 +116,18 @@ def product_properties(products: dict, thermo: ColumnThermo, feed: dict | None =
             that leaves in an offgas: these are hydrocarbon properties.
         thermo: The column's thermo.
         feed: The crude feed stream, for yields. Optional.
+        composition: A :class:`~difflow_refinery.composition.Composition`
+            over ``thermo.names`` (``char.composition``), to report each
+            product's hydrocarbon types (volume-averaged), hydrogen, sulfur
+            and nitrogen and their classes (mass-averaged) as
+            :attr:`ProductProperties.composition`. Optional.
 
     Returns:
         ``{name: ProductProperties}`` in the products' order.
     """
+    if composition is not None and tuple(composition.names) != tuple(thermo.names):
+        raise ValueError("composition and thermo must cover the same components in the "
+                         "same order (use the characterization the thermo was built from)")
     if feed is not None:
         f = _component_flows(feed, thermo)
         feed_volume, feed_mass = thermo.std_volume(f), thermo.mass(f)
@@ -132,6 +146,7 @@ def product_properties(products: dict, thermo: ColumnThermo, feed: dict | None =
             yield_mass=None if feed is None else mass / feed_mass,
             sg=sg, api=corr.api_from_sg(sg), mw=1000.0 * mass / mole,
             tbp=tbp_curve(flows, thermo),
+            composition=None if composition is None else composition.of_flows(flows),
         )
     return out
 

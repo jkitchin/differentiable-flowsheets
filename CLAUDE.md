@@ -73,7 +73,8 @@ difflow/
 │   ├── difflow_ree/       # Rare earth element solvent extraction plugin
 │   ├── difflow_cc/        # Carbon capture plugin (amine, membrane, adsorption)
 │   ├── difflow_gas/       # Gas transmission network plugin (pipes, compressors, computed decomposition)
-│   └── difflow_refinery/  # Refinery plugin (crude assay, crude and vacuum distillation units, saturated gas plant, product blending pool)
+│   └── difflow_refinery/  # Refinery plugin (crude assay, crude and vacuum distillation units, saturated gas plant, product blending pool,
+│                          # hydroprocessing/ building blocks + hydrotreating/, hydrocracking/, fcc/, reforming/, alkylation/ units)
 ├── tests/                 # pytest test files (includes tests/bio/, tests/ree/, tests/cc/, tests/gas/, tests/power/, tests/refinery/)
 ├── examples/              # Jupyter notebook examples
 ├── jax-tutorials/         # JAX/autodiff tutorials
@@ -428,6 +429,35 @@ Docs: `docs/unit-operations-power.md`. Tests: `tests/power/`.
 - `CrudeUnit` (assay in, yield table out) and `CrudeDistillationUnit` (the
   registered operation; outlets in `outlet_names` order)
 - Products: `product_properties`, `products.gaps` -- TBP, not D86
+- Alkylation (#310, `difflow_refinery.alkylation`, a library): Sauer-Colville-
+  Burwick correlations transcribed from GAMS `process.gms` (`solve_process_gms`
+  reproduces its 1161.3366 optimum); reactor = per-olefin stoichiometry whose
+  heavy-end split is set by the correlation's yield; DIB overhead is the
+  `Flowsheet` tear. Columns are `KeySplitColumn` shortcuts (Lee-Kesler
+  Raoult), NOT difflow's PR `ShortcutColumn`: AD through the recycle with that
+  one runs out of memory, and its Geddes constants are wrong (overridden in
+  `GeddesShortcutColumn`). The temperature/space-velocity octane terms and the
+  selectivities are illustrative, not sourced. FCC (#308) `c3`/`c4` outlets
+  feed it via `combine_feeds`.
+- Composition (#305, `difflow_refinery.composition`): `characterize(assay,
+  composition=True)` / `char.with_composition(CompositionData(...))` puts a
+  `Composition` on `char.composition` -- per component, `char.names` order:
+  `hc_type` (n,4) vol fractions of `HC_TYPES` (P, N, A, O; rows sum to 1,
+  O = 0 straight run), `hydrogen` (n,) mass fraction, `sulfur`/`nitrogen`
+  (n,) mass fractions with `sulfur_split` (n,5) over `SULFUR_CLASSES` and
+  `nitrogen_split` (n,2) over `NITROGEN_CLASSES`. `comp.of_flows(moles)` /
+  `of_stream(s)` -> `StreamComposition` (types by std volume, H/S/N by mass);
+  `product_properties(..., composition=comp)`; `BlendCharacterization.
+  from_characterization` picks the types up as `*_vol` qualities (vol%).
+  A conversion unit edits a copy with `comp.replace(...)`.
+  Invariants: C/H for the type correlation is DERIVED from the hydrogen
+  (`(1-H-S-N)/H`), so H and PNA are one estimate; correlation branch joins
+  (Huang index at 620 K, 2B4.1 at MW 200) are logistic BLENDS because the
+  published branches disagree there -- never hard switches; measured
+  PIONA/SARA/n20/H override per cut via `jnp.where` (differentiable); the
+  default S/N class splits are ILLUSTRATIVE; out-of-range use warns
+  (`CompositionRangeWarning`), never clips the answer. MNL50 worked examples
+  for these correlations are NOT reproduced -- do not claim they are.
 
 Docs: `docs/unit-operations-refinery.md`. Tests: `tests/refinery/`.
 
@@ -494,6 +524,89 @@ Invariants encoded in the vacuum stack (do not weaken them):
 Tests: `tests/refinery/test_vacuum*.py`, `test_heavy_end.py`, `test_one_characterization.py`.
 Examples: `examples/34_vacuum_distillation.ipynb`, `examples/36_crude_to_vacuum.ipynb`.
 
+### Catalytic Reforming (`difflow_refinery.reforming`, #309)
+
+`CatalyticReformer(ReformerParams()).solve(NaphthaFeed)` -- semi-regen train
+(adiabatic beds in diffrax, fired heaters, PR separator, H2 recycle as a
+`Flowsheet` tear, component-split stabilizer). Library, not a palette op.
+- Lumps C6-C10 nP/iP/N/A (+ MCP, H2, C1-C5), each ONE model compound
+  (`species.SPECIES`); thermo from `chemicals` 1.5.2 tables (API TDB Hf, Yaws
+  S0), K from Gibbs energies -- never from a kinetic paper.
+- One enthalpy basis: Hf + `CubicThermo` (ideal-gas Cp fit + PR departure).
+  Reactor T comes from the conserved enthalpy by Newton, so balances close
+  to round-off at any ODE tolerance. Keep it that way.
+- Beds use `diffrax.ForwardMode`: differentiate a reformer with `jax.jacfwd`
+  (the recycle's implicit fixed point needs JVPs), warm-start with
+  `tear_initial=res.tear`.
+- Kinetic pre-exponentials are ILLUSTRATIVE (this project's); octanes other
+  than n-heptane are recalled (unverified). No Padmavathi/Taskar-Riggs
+  cross-check is claimed. Separator/recycle are thin and local, to merge with
+  #306's shared module later.
+
+Docs: `docs/unit-operations-refinery.md` (Catalytic reforming). Tests:
+`tests/refinery/test_reforming.py` (flowsheet tests `slow`).
+### Hydroprocessing and the Hydrotreater (`difflow_refinery.hydroprocessing`, `.hydrotreating`)
+
+`hydroprocessing/` is kinetics-agnostic and shared (the hydrocracker of #307
+is meant to reuse it): `layout` (`Layout`/`Flows`: gases, cuts, and per-cut
+ATTRIBUTE flows `F_<cut>@<attr>` -- C and H atoms compulsory, a cut's mass is
+computed from its atoms), `thermo` (vectorised PR on traceable cut constants),
+`separator` (`pr_flash`, negative flash, `HPSeparator`), `reactor`
+(`TrickleBedReactor` around any object with `attributes`,
+`attribute_elements` and `rates(ctx: ReactionContext, params) -> Rates`),
+`recycle` (knock-out, amine, purge, ideal-gas compressor, makeup, `solve_tear`),
+`stripper` (`StageColumn` steam stripper + PR overhead drum), `solve`
+(`newton_solve`). `hydrotreating/` adds `HDTKinetics` (HDS by sulfur class,
+LHHW; HDN; reversible aromatics; olefins; cracking leak), `Hydrotreater`,
+`hdt_block`. A library, not a palette operation.
+
+Invariants (do not weaken them):
+- Attributes are extensive and follow their cut through every split; element
+  balances (C, H, S, N) and mass close to round-off -- tested at 1e-8.
+- A diffrax solve with `RecursiveCheckpointAdjoint` is reverse-mode only.
+  Newton loops around the reactor (tear, quench, targets) use
+  `hydroprocessing.solve.newton_solve`: Jacobian from a FORWARD-adjoint copy
+  (`f_iter`, `jac="fwd"`), then one implicit step with the reverse-mode
+  residual. Residuals must be pure in `(x, args)` -- no traced closures.
+  Reverse-mode Jacobians through the checkpointed adjoint compiled for 6 min.
+- Root polishing (Rachford-Rice, the PR cubic) takes TWO Newton steps on live
+  inputs: the reactor differentiates derivatives (`C_eff = dH/dT`,
+  `d ln K/dT`); one step left the second derivatives wrong and the loop's
+  implicit gradient was 1-80 % off (high loop gain amplifies it).
+- `Flows.per_molecule` uses a safe inverse (`F/(F^2+eps^2)`): `attr/max(F,
+  1e-300)` gives a 1e300 cotangent for an empty cut and NaN gradients.
+- The stripper feeds 10 % of its steam with the feed: a degassed separator
+  liquid is subcooled and `StageColumn`'s feed flash is otherwise singular.
+- Rate constants are ILLUSTRATIVE; thermochemistry is model-compound data from
+  the `chemicals` tables. The Korsten-Hoffmann profile cross-check is NOT done.
+
+Docs: `docs/unit-operations-refinery.md` (Hydroprocessing building blocks; The
+hydrotreater). Tests: `tests/refinery/test_hydrotreating.py`.
+
+### The Hydrocracker (`difflow_refinery.hydrocracking`, #307)
+
+The same building blocks: pretreat bed (`HDTKinetics` + `VGO_PRETREAT_PARAMS`)
+-> cracking bed (`HCKinetics`, a new kinetic model: continuous lumping on the
+cut grid after Laxminarasimhan et al. 1996, or discrete lumps; organic-N
+inhibition; H2 from the H balance of each event; heat per H2) -> HPS and
+recycle gas -> simplified fractionator (smooth TBP split, NOT a column) -> UCO
+recycle. Layout attributes are `HDT_ATTRIBUTES + ("cracked",)`. `hcu_block`
+for planning. A library, not a palette operation.
+
+Invariants (do not weaken them):
+- The Laxminarasimhan forms are UNVERIFIED against the paper (not reachable);
+  no equation numbers are given and its parameters are not used. The
+  yield-vs-conversion cross-check is NOT done. Constants are illustrative.
+- Cracking quench is held to bed-inlet temperature (`quench_crack=None`); its
+  total share is one more unknown of the gas tear (no inner Newton). Fixed
+  quench rates are a knife-edge (runaway or die-out within a few K).
+- The UCO tear (~200 unknowns) is Anderson substitution with a GMRES adjoint
+  (`hydrocracking.fixed_point`), never Newton; its test is relative (the bed
+  integration's rtol is the noise floor). Balances add nothing for the
+  recycle, so an unconverged tear shows in them.
+- Recycle at fixed catalyst and T LOWERS per-pass conversion (a recycle
+  reactor is less efficient than plug flow); what it buys is selectivity.
+- Full-unit tests compile 2-6 min each: slow.
 ### Crude Preheat Train (`difflow_refinery.preheat`)
 
 `PreheatedCrudeUnit(assay, column, train)` puts a heat-exchanger train,
@@ -586,6 +699,28 @@ Invariants encoded in the module (do not weaken them):
 
 Docs: `docs/unit-operations-refinery.md`. Example:
 `examples/33_refinery_gasoline_blending.ipynb`. Tests: `tests/refinery/`.
+
+### Fluid Catalytic Cracker (`difflow_refinery.fcc`, #308)
+
+`FCCUnit(FCCParams(...)).solve(FCCFeed.from_characterization(char, rate, T_lo, T_hi))`:
+lumped riser (`ancheyta_5` default, `lee_4`, `weekman_nace_3`; diffrax,
+constant-step Tsit5 + `DirectAdjoint`) and coke-burning regenerator solved
+TOGETHER by optimistix Newton -- unknowns C/O and T_rg, ROT the spec --
+with implicit gradients; simplified main fractionator (TBP sigmoid split,
+NOT a StageColumn). Outlets `dry_gas, c3, c4, gasoline, lco, slurry,
+sour_water, flue_gas` (C3=/C4= for alkylation #310). `fcc_block(...)` for
+planning. A library, not registered.
+- Kinetic constants (`ILLUSTRATIVE_5LUMP`) are NOT from any paper; no
+  literature cross-check was reproduced. Do not present yields as predictions.
+- Balances (mass, C, H, S, N, energy) close by construction: cycle-oil H and
+  H2S are BY DIFFERENCE; keep it that way, and keep `cycle_oil_hydrogen`
+  reported so an implausible by-difference value is visible.
+- The heat balance has multiple steady states; `RegeneratorTemperatureWarning`
+  flags a hot one rather than hiding it.
+- Under `jax.grad` w.r.t. the assay pass `indices=` (`fcc.feed.cut_indices`).
+
+Docs: `docs/unit-operations-refinery.md` ("The fluid catalytic cracker").
+Tests: `tests/refinery/test_fcc.py`.
 
 ### Delta-Base Planning (`difflow.planning`)
 
@@ -993,6 +1128,7 @@ jax.debug.print("value: {x}", x=value)
 | `src/difflow_cc/__init__.py` | Carbon capture plugin exports |
 | `src/difflow_gas/__init__.py` | Gas transmission network plugin exports |
 | `src/difflow_power/__init__.py` | Electrical grid plugin exports (AC-OPF) |
+| `src/difflow_refinery/__init__.py` | Refinery plugin exports (crude assay, CDU, VDU, blending, hydrotreating) |
 | `src/difflow_refinery/__init__.py` | Refinery plugin exports (crude assay, CDU, VDU, gas plant, blending) |
 | `tests/` | All pytest tests (includes `bio/`, `ree/`, `cc/`, `gas/`, `power/`, `refinery/` subdirs) |
 | `examples/` | Usage examples (Jupyter notebooks) |

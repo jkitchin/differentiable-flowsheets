@@ -22,6 +22,14 @@ blend pool on the same grid. The correlations behind all three live once,
 in :mod:`difflow_refinery.correlations`. An assay without a heavy end
 characterizes exactly as it did before.
 
+The hydrotreater (:mod:`difflow_refinery.hydrotreating`, #306) runs on the
+shared hydroprocessing building blocks (:mod:`difflow_refinery.hydroprocessing`:
+trickle-bed reactor around any kinetic model, Peng-Robinson HP separator,
+recycle-gas loop, steam stripper), with HDS/HDN/aromatics kinetics on the
+#305 composition. A library, not a palette operation. The VGO hydrocracker
+(:mod:`difflow_refinery.hydrocracking`, #307) is the same blocks with a
+pretreat bed, a continuous-lumping cracking bed, a fractionator and a UCO
+recycle; also a library.
 The gas plant (:mod:`difflow_refinery.gasplant`) recovers the light ends:
 absorber-deethanizer, debutanizer and splitters on a cubic EOS that carries
 real light components and naphtha pseudocomponents together, with the
@@ -43,8 +51,9 @@ and across the crude-to-vacuum connection.
 >>> crude = dr.characterize(assay)
 """
 
-from difflow_refinery import (column, correlations, gasplant, isomerization, preheat, products,
-                              vacuum)
+from difflow_refinery import (column, composition, correlations, gasplant, isomerization, preheat,
+                              products, reforming, vacuum)
+from difflow_refinery import hydroprocessing, hydrotreating
 from difflow_refinery.assay import (
     CONTAMINANTS,
     DEFAULT_CUT_WIDTHS,
@@ -106,6 +115,17 @@ from difflow_refinery.column import (
     SideProduct,
     Spec,
 )
+from difflow_refinery.composition import (
+    HC_TYPES,
+    NITROGEN_CLASSES,
+    SULFUR_CLASSES,
+    Composition,
+    CompositionData,
+    CompositionRangeWarning,
+    CutData,
+    StreamComposition,
+    estimate_composition,
+)
 from difflow_refinery.correlations import (
     CRITICAL_METHODS,
     acentric_factor,
@@ -147,6 +167,9 @@ from difflow_refinery.unit import (
     CrudeUnit,
     CrudeUnitResult,
 )
+from difflow_refinery import fcc  # fluid catalytic cracker (#308); a library, not registered
+from difflow_refinery import alkylation  # noqa: E402  (#310; imports the units above)
+from difflow_refinery import hydrocracking  # VGO hydrocracker (#307); a library, not registered
 
 # The preheat train (#313): nested params are exported here for serialization.
 from difflow_refinery.preheat import (  # noqa: E402
@@ -214,7 +237,14 @@ __all__ = [
     "temperature_index_blend", "volume_blend",
     "edmister_omega", "lee_kesler_psat", "riazi_daubert_mw",
     "riazi_daubert_pc", "riazi_daubert_tc",
+    "composition", "HC_TYPES", "SULFUR_CLASSES", "NITROGEN_CLASSES",
+    "Composition", "CompositionData", "CompositionRangeWarning", "CutData",
+    "StreamComposition", "estimate_composition",
     "vacuum",
+    "fcc",
+    "reforming",
+    "hydroprocessing", "hydrotreating", "hydrocracking",
+    "alkylation",
     "gasplant",
     "AmineTreater",
     "AmineTreaterParams",
