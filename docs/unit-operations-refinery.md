@@ -2269,7 +2269,7 @@ These defaults are illustrative design choices, made so that the reflux is above
 
 **Two things found on the way.**
 
-1. **difflow's `ShortcutColumn` has a sign error in its Hengstebeck-Geddes constants.** It uses `A = log(d_LK/b_LK) - log(d_HK/b_HK)` and `C = log(d_LK/b_LK)/log α_LK`. That does not reproduce the heavy key's own split, and on a propane/isobutane depropanizer it sent 99.9 % of the n-butane overhead. `GeddesShortcutColumn` overrides only that method. The shared class was left unchanged; it is reported for a separate fix.
+1. **difflow's `ShortcutColumn` had a sign error in its Hengstebeck-Geddes constants (now fixed).** It used `A = log(d_LK/b_LK) - log(d_HK/b_HK)` and `C = log(d_LK/b_LK)/log α_LK`. That does not reproduce the heavy key's own split, and on a propane/isobutane depropanizer it sent 99.9 % of the n-butane overhead. This unit first worked around it with an override, `GeddesShortcutColumn`. The base class is now fixed (`A = log(d_HK/b_HK)`, `C = [log(d_LK/b_LK) - log(d_HK/b_HK)]/log α_LK`, the line through both keys). `GeddesShortcutColumn` remains as an alias, and `tests/test_distillation.py::TestShortcutColumnNonKeyDistribution` is the regression test.
 2. **`ShortcutColumn` with Peng-Robinson is too expensive to differentiate through the recycle.** Three of them, each with nested Newton bubble-point solves inside the tear's implicit fixed point, exhausted this machine's memory. They remain available for forward cross-checks as `AlkylationUnitParams(fractionation="pr_shortcut")`.
 
 Measured on the C3/C4 feed against `pr_shortcut` with the same specs (`test_peng_robinson_shortcut_cross_check`):

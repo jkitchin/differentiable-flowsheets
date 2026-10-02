@@ -282,6 +282,70 @@ class TestBubblePointRobustness:
         assert bool(info["feasible"])
 
 
+class TestShortcutColumnNonKeyDistribution:
+    """Non-keys follow the Hengstebeck-Geddes line through BOTH keys.
+
+    ``log(d_i/b_i) = A + C log(alpha_i)`` with ``alpha`` relative to the heavy
+    key, so ``A = log(d/b)_HK`` and ``C = [log(d/b)_LK - log(d/b)_HK] /
+    log(alpha_LK)``. The constants used to be ``A = log(d/b)_LK -
+    log(d/b)_HK`` and ``C = log(d/b)_LK / log(alpha_LK)``: a line that misses
+    the heavy key, so a non-key heavier than the heavy key went mostly
+    overhead (99.9 % of the n-butane on a propane/isobutane depropanizer).
+    """
+
+    def _split(self, thermo, light_key, heavy_key):
+        params = ShortcutColumnParams(
+            species_order=["light", "middle", "heavy"],
+            light_key=light_key,
+            heavy_key=heavy_key,
+            x_D_LK=0.95,
+            x_B_HK=0.95,
+        )
+        feed = make_stream(
+            {"light": 20.0, "middle": 40.0, "heavy": 40.0}, T=400.0, P=101325.0
+        )
+        D, B, info = ShortcutColumn(params, thermo)(feed, R=3.0)
+        d, b = get_flows(D), get_flows(B)
+        return d, b, info
+
+    def test_a_nonkey_heavier_than_the_heavy_key_goes_to_the_bottoms(
+        self, multicomponent_thermo
+    ):
+        d, b, _ = self._split(multicomponent_thermo, "light", "middle")
+        frac_heavy = float(d["heavy"] / (d["heavy"] + b["heavy"]))
+        # The heavy key itself sends 5 % overhead; anything heavier sends less.
+        assert frac_heavy < 0.05
+
+    def test_a_nonkey_lighter_than_the_light_key_goes_overhead(
+        self, multicomponent_thermo
+    ):
+        d, b, _ = self._split(multicomponent_thermo, "middle", "heavy")
+        frac_light = float(d["light"] / (d["light"] + b["light"]))
+        assert frac_light > 0.95
+
+    @pytest.mark.parametrize(
+        "keys, nonkey", [(("light", "middle"), "heavy"), (("middle", "heavy"), "light")]
+    )
+    def test_the_nonkey_lies_on_the_line_through_both_keys(
+        self, multicomponent_thermo, keys, nonkey
+    ):
+        lk, hk = keys
+        d, b, info = self._split(multicomponent_thermo, lk, hk)
+        alpha = info["alpha"]
+        log_db = {s: float(jnp.log(d[s] / b[s])) for s in d}
+        log_alpha = {s: float(jnp.log(alpha[s])) for s in d}
+        assert abs(log_alpha[hk]) < 1e-12  # alpha is relative to the heavy key
+        slope = (log_db[lk] - log_db[hk]) / log_alpha[lk]
+        expected = log_db[hk] + slope * log_alpha[nonkey]
+        assert log_db[nonkey] == pytest.approx(expected, rel=1e-9, abs=1e-9)
+
+    def test_species_balance_closes(self, multicomponent_thermo):
+        d, b, _ = self._split(multicomponent_thermo, "light", "middle")
+        feed = {"light": 20.0, "middle": 40.0, "heavy": 40.0}
+        for s, f in feed.items():
+            assert float(d[s] + b[s]) == pytest.approx(f, rel=1e-12)
+
+
 class TestShortcutColumnEndTemperatures:
     """The column ends are bubble points, not estimates around the feed."""
 

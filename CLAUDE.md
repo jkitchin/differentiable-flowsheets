@@ -435,8 +435,8 @@ Docs: `docs/unit-operations-power.md`. Tests: `tests/power/`.
   heavy-end split is set by the correlation's yield; DIB overhead is the
   `Flowsheet` tear. Columns are `KeySplitColumn` shortcuts (Lee-Kesler
   Raoult), NOT difflow's PR `ShortcutColumn`: AD through the recycle with that
-  one runs out of memory, and its Geddes constants are wrong (overridden in
-  `GeddesShortcutColumn`). The temperature/space-velocity octane terms and the
+  one runs out of memory (its Geddes non-key split is fixed in the base class;
+  `GeddesShortcutColumn` is now an alias). The temperature/space-velocity octane terms and the
   selectivities are illustrative, not sourced. FCC (#308) `c3`/`c4` outlets
   feed it via `combine_feeds`.
 - Composition (#305, `difflow_refinery.composition`): `characterize(assay,
