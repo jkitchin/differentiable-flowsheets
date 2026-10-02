@@ -1815,7 +1815,7 @@ Checked (`tests/refinery/test_reforming.py`; flowsheet tests are marked `slow`):
 
 - **No published commercial-reformer simulation is reproduced.** Neither Padmavathi & Chaudhuri (1997) nor Taskar & Riggs (1997) could be obtained to check which one tabulates feed, conditions and outlet data in full, so no cross-check against them is made. The kinetics are illustrative and would have to be replaced by either paper's parameters for such a comparison.
 - **No IDAES `GibbsReactor` comparison** of the equilibrium layer: IDAES is not installed in this environment. The equilibrium layer is checked against its own Gibbs energies (above).
-- **No example notebook** (naphtha hydrotreater -> reformer -> gasoline pool). The hydrotreater (#306) is being built separately, and the notebook was not written.
+- **No dedicated example notebook.** The reformer runs inside the whole-refinery example, `examples/40_refinery_flowsheet.ipynb` (naphtha hydrotreater -> reformer -> gasoline pool), on a feed from `NaphthaFeed.from_characterization`.
 - No Gary-Handwerk-Kaiser yield-versus-RON cross-check: the figure could not be consulted.
 
 ### References
@@ -2117,7 +2117,7 @@ A crude-unit product carries every cut at some trace level. `Hydrotreater(..., t
 
 - **The Korsten & Hoffmann (1996) profile cross-check is not done.** Their paper could not be reached from here (publisher sites are blocked), so neither their parameters nor their profiles could be verified, and no reproduction is claimed. Their gas-liquid / liquid-solid film model and their Henry's-law and Standing-Katz density correlations are not implemented either.
 - **Smoke point** is not computed. The correlation the issue names (Riazi MNL50, Tb and SG) could not be verified; a jet pool takes a measured `smoke_mm` override.
-- **No example notebook** (CDU diesel -> hydrotreater -> ULSD pool) was written. The pieces are tested: `res.product_stream()` and `res.product_char` feed `BlendComponent.from_stream`.
+- **No dedicated example notebook.** `examples/40_refinery_flowsheet.ipynb` runs the unit twice inside a whole refinery: as a naphtha hydrotreater ahead of the reformer, and as a distillate hydrotreater on the CDU's kerosene, diesel and AGO, whose product goes to the jet and ULSD pools through `res.product_stream()` and `res.product_char`.
 - **Not a difflow `Flowsheet` object.** The recycle is solved by the unit's own tear (above); a `Flowsheet` wiring of the same pieces is not provided.
 - **Commercial catalyst kinetics** are not reproduced and must not be implied: the rate constants are illustrative.
 - **No dissolved-gas effect in the stripper**: the real gases leave with the overhead without taking part in the column's equations.

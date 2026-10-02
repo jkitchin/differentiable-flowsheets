@@ -39,6 +39,12 @@ Every arrow is a differentiable connection: a product property has an exact
 gradient with respect to the assay data, the specs and the operating
 variables upstream of it.
 
+The hydroskimming part of the map (CDU, gas plant, naphtha hydrotreater,
+reformer, distillate hydrotreater, residue to fuel oil, and the four pools)
+runs end to end in `examples/40_refinery_flowsheet.ipynb`. Some of its
+arrows are bridges written in that notebook rather than library
+connections; they are listed under [Known gaps](#refinery-summary-gaps).
+
 ---
 
 (refinery-summary-foundations)=
@@ -73,26 +79,26 @@ delta-base planning ([`difflow.planning`](planning.md)).
 | Unit | Main class (palette name) | In → out | Model | Planning | Validation | Example |
 |---|---|---|---|---|---|---|
 | [Preheat train](unit-operations-refinery.md#the-preheat-train) | `PreheatedCrudeUnit` (palette: `Desalter`, `PreflashDrum`, `CrudeUnitWithPreheat`) | crude from the tank → crude at the furnace inlet | Exchanger train heated by the column's pumparounds and products, solved together with the column; desalter; three-phase preflash drum; Ebert-Panchal fouling | `cdu_block` | Drum and exchangers against IDAES 2.10 unit models on the same thermo | 37 |
-| [Crude distillation unit](unit-operations-refinery.md#the-crude-unit) | `CrudeUnit` (palette: `CrudeDistillationUnit`) | crude → naphtha, kerosene, diesel, AGO, residue | Fired heater solved with an equation-oriented MESH column; side strippers, pumparounds, steam | `cdu_block` | Against an independent Pyomo/IPOPT column and IDAES property packages ([details](unit-operations-refinery.md#validation)) | 35, 36 |
+| [Crude distillation unit](unit-operations-refinery.md#the-crude-unit) | `CrudeUnit` (palette: `CrudeDistillationUnit`) | crude → naphtha, kerosene, diesel, AGO, residue | Fired heater solved with an equation-oriented MESH column; side strippers, pumparounds, steam | `cdu_block` | Against an independent Pyomo/IPOPT column and IDAES property packages ([details](unit-operations-refinery.md#validation)) | 35, 36, 40 |
 | [Vacuum unit](unit-operations-refinery.md#the-vacuum-unit) | `VacuumColumn` (palette: `VacuumColumn`) | atmospheric residue → LVGO, HVGO, slop, vacuum residue | Stage-network column at vacuum with packed beds; contaminants carried per cut | — | Against an independent Pyomo/IPOPT model, equilibrium and Murphree beds ([details](unit-operations-refinery.md#validation-the-vacuum-unit)) | 34, 36 |
-| [Saturated gas plant](unit-operations-refinery.md#the-saturated-gas-plant) | `GasPlantColumn`, `GasCompressor`, `AmineTreater` (all three on the palette) | light ends + naphtha → fuel gas, LPG, C3/C4 splits, stabilized naphtha | Cubic-EOS (PR or SRK) stage columns, staged compressor with knock-outs, amine treating as a removal fraction | `gasplant_block` | Debutanizer against IDAES `TrayColumn`; splitter against IDAES flashes ([details](unit-operations-refinery.md#validation-the-gas-plant)) | 38 |
+| [Saturated gas plant](unit-operations-refinery.md#the-saturated-gas-plant) | `GasPlantColumn`, `GasCompressor`, `AmineTreater` (all three on the palette) | light ends + naphtha → fuel gas, LPG, C3/C4 splits, stabilized naphtha | Cubic-EOS (PR or SRK) stage columns, staged compressor with knock-outs, amine treating as a removal fraction | `gasplant_block` | Debutanizer against IDAES `TrayColumn`; splitter against IDAES flashes ([details](unit-operations-refinery.md#validation-the-gas-plant)) | 38, 40 |
 
 ### Conversion
 
 | Unit | Main class | In → out | Model | Planning | Validation | Example |
 |---|---|---|---|---|---|---|
 | [C5/C6 isomerization](unit-operations-refinery.md#c5c6-light-naphtha-isomerization) | `IsomerizationReactor`, `IsomerizationUnit` (both on the palette) | light naphtha → isomerate | Adiabatic approach-to-equilibrium bed on ideal-gas thermochemistry; optional deisopentanizer and deisohexanizer recycle | `isom_block` | Equilibrium layer against IDAES `GibbsReactor` ([details](unit-operations-refinery.md#validation-the-isomerization-unit)); rate constants illustrative | 39 |
-| [Hydrotreater](unit-operations-refinery.md#the-hydrotreater) | `Hydrotreater` (library) | naphtha, kerosene or diesel → treated product, wild naphtha, off-gas | Trickle-bed HDS by sulfur class (LHHW, H2S-inhibited), HDN, aromatics saturation with equilibrium; HP separator, H2 recycle, stripper | `hdt_block` | Balances and gradients only; no literature cross-check; constants illustrative | — |
+| [Hydrotreater](unit-operations-refinery.md#the-hydrotreater) | `Hydrotreater` (library) | naphtha, kerosene or diesel → treated product, wild naphtha, off-gas | Trickle-bed HDS by sulfur class (LHHW, H2S-inhibited), HDN, aromatics saturation with equilibrium; HP separator, H2 recycle, stripper | `hdt_block` | Balances and gradients only; no literature cross-check; constants illustrative | 40 |
 | [Hydrocracker](unit-operations-refinery.md#the-hydrocracker) | `Hydrocracker` (library) | VGO → LPG, naphtha, kerosene, diesel, unconverted oil | Pretreat bed (hydrotreating kinetics) then cracking bed on continuous lumping or discrete lumps, organic-N inhibition; TBP-split fractionator; UCO recycle | `hcu_block` | Balances and gradients only; no literature cross-check; constants illustrative | — |
 | [Fluid catalytic cracker](unit-operations-refinery.md#the-fluid-catalytic-cracker) | `FCCUnit` (library) | VGO → dry gas, C3, C4, gasoline, LCO, slurry, flue gas | 3-, 4- or 5-lump riser and coke-burning regenerator solved together for the heat balance; TBP-split main fractionator | `fcc_block` | Balances and gradients only; no literature cross-check; constants illustrative ([details](unit-operations-refinery.md#fcc-what-is-tested-and-what-is-not)) | — |
-| [Catalytic reformer](unit-operations-refinery.md#catalytic-reforming) | `CatalyticReformer` (library) | hydrotreated heavy naphtha → reformate, net H2, LPG, fuel gas | 29 lumps by carbon number, equilibrium from Gibbs energies; three adiabatic beds with fired heaters; PR separator and H2 recycle; component-split stabilizer | `reformer_block` | Balances and gradients only; no literature cross-check; constants illustrative | — |
+| [Catalytic reformer](unit-operations-refinery.md#catalytic-reforming) | `CatalyticReformer` (library) | hydrotreated heavy naphtha → reformate, net H2, LPG, fuel gas | 29 lumps by carbon number, equilibrium from Gibbs energies; three adiabatic beds with fired heaters; PR separator and H2 recycle; component-split stabilizer | `reformer_block` | Balances and gradients only; no literature cross-check; constants illustrative | 40 |
 | [Alkylation](unit-operations-refinery.md#alkylation) | `AlkylationUnit` (library) | C3-C5 olefins + isobutane → alkylate, propane, n-butane | Sauer-Colville-Burwick yield and octane correlations; per-olefin stoichiometry; shortcut DIB, depropanizer and debutanizer; isobutane recycle | `alky_block` | The correlation layer reproduces the GAMS `process.gms` optimum (profit 1161.3366) | — |
 
 ### Products
 
 | Unit | Main class | In → out | Model | Planning | Validation | Example |
 |---|---|---|---|---|---|---|
-| [Product blending](unit-operations-refinery.md#product-blending) | `BlendPool`, `BlendComponent` (library) | components → gasoline, jet, ULSD or fuel oil, with spec margins | Nonlinear blending rules (Ethyl RT-70 octane, RVP index, Refutas viscosity); distillation and cetane index computed from the blend | `product_value_block` | Rules tested against published worked examples (RVP index, Refutas) | 33 |
+| [Product blending](unit-operations-refinery.md#product-blending) | `BlendPool`, `BlendComponent` (library) | components → gasoline, jet, ULSD or fuel oil, with spec margins | Nonlinear blending rules (Ethyl RT-70 octane, RVP index, Refutas viscosity); distillation and cetane index computed from the blend | `product_value_block` | Rules tested against published worked examples (RVP index, Refutas) | 33, 40 |
 
 ---
 
@@ -131,11 +137,20 @@ in the code.
   were built and are not yet wired in.
 - **No literature cross-check** for the hydrotreater, hydrocracker, FCC or
   reformer: the papers named in their issues could not be obtained.
-- **Not built:** example notebooks for the hydrotreater, hydrocracker, FCC,
-  reformer and alkylation; smoke and freeze points; the 10-lump FCC scheme;
+- **Not built:** example notebooks for the hydrocracker, FCC and alkylation
+  (the hydrotreater and the reformer appear only inside the whole-refinery
+  example 40); smoke, freeze and flash points, viscosity and straight-run
+  octane; the 10-lump FCC scheme;
   mechanistic alkylation kinetics; catalyst-activity tracking wired into
   `difflow.reconciliation.tracking`.
 - **Known model defect:** with the illustrative reformer constants, a rich
   (high-naphthene) naphtha makes less net H2 than a lean one, the reverse of
   commercial experience ([details](unit-operations-refinery.md#catalytic-reforming)).
 - **Boiling ranges are TBP, not ASTM D86**, throughout.
+- **Connections between units.** `examples/40_refinery_flowsheet.ipynb`
+  joins the CDU, gas plant, naphtha and distillate hydrotreaters, reformer
+  and four pools, and its last section lists the bridges it had to write:
+  CDU streams into a `gas_components` table, the hydrotreater's product grid
+  into a naphtha splitter or a `NaphthaFeed` (which reads the untreated
+  composition), a jet/diesel split after a distillate hydrotreater, a
+  hydrogen header, and a fuel-oil route for the atmospheric residue.

@@ -93,5 +93,8 @@ predictions until they are fitted to a unit's own data.
 - [Refinery Unit Operations](../../docs/unit-operations-refinery.md):
   equations, specs, outputs and references for each unit.
 - Examples: `examples/33_refinery_gasoline_blending.ipynb` through
-  `examples/39_refinery_isomerization.ipynb`.
+  `examples/39_refinery_isomerization.ipynb`, and
+  `examples/40_refinery_flowsheet.ipynb`, a small whole refinery (CDU,
+  gas plant, naphtha and distillate hydrotreaters, reformer, product
+  pools, hydrogen balance).
 - Tests: `tests/refinery/`.
