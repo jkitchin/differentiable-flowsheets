@@ -296,6 +296,34 @@ jax.tree_util.register_dataclass(
 )
 
 
+#: An ILLUSTRATIVE parameter set for a NAPHTHA hydrotreater (#332): the
+#: diesel constants of :class:`HDTKineticParams` with
+#:
+#: * HDS of sulfides, thiophenes and benzothiophenes ten times faster -- in
+#:   a naphtha those classes are mercaptans, light sulfides and
+#:   (alkyl)thiophenes, which react far faster than the diesel-range
+#:   molecules the default constants stand for (the class reactivity order
+#:   of Girgis & Gates 1991, unverified; the factor is chosen here);
+#: * HDN a hundred times faster (light pyrroles and pyridines; a reformer
+#:   feed needs N as well as S below about 0.5 wppm);
+#: * aromatics saturation ten times slower on every step, as on a CoMo
+#:   naphtha catalyst at 20-35 bar, where benzene and the alkylbenzenes pass
+#:   through largely unsaturated. Slowing the di and poly steps also tames
+#:   an artefact of the lumping: the di <-> mono equilibrium is that of
+#:   naphthalene/tetralin, so in a cut with no di-aromatics its reverse rate
+#:   turns an alkylbenzene into "di-aromatic" at low H2 pressure, which no
+#:   real naphtha does.
+#:
+#: Chosen so that a straight-run naphtha at 30 bar, 320 C bed inlet, LHSV
+#: 4 1/h and 100 Nm3/m3 reaches below 0.5 wppm S (a reformer feed): see the
+#: docs ("A naphtha hydrotreater"). Not any catalyst's constants.
+NAPHTHA_HDT_PARAMS = HDTKineticParams(
+    hds_k=(4.0e-4, 2.0e-4, 1.2e-4, 1.0e-5, 5.0e-6),
+    hdn_k=(4.0e-5, 7.0e-5),
+    hda_k=(4.0e-7, 1.5e-7, 3.0e-8),
+)
+
+
 def _arr(k, E, T, T_ref):
     return jnp.asarray(k, dtype=float) * jnp.exp(-jnp.asarray(E, dtype=float) / R_GAS * (1.0 / T - 1.0 / T_ref))
 
@@ -450,5 +478,5 @@ def crack_targets(carbon_per_molecule) -> tuple[int, ...]:
 
 __all__ = ["AROMATIC_CLASSES", "HDT_ATTRIBUTES", "HDT_ATTRIBUTE_ELEMENTS", "MODEL_COMPOUNDS",
            "HDS_ROUTE_DDS", "HDS_H2", "HDS_HEAT", "HDN_H2", "HDN_HEAT", "HDA_H2", "AROMATIC_THERMO",
-           "OLEFIN_HEAT", "CRACK_HEAT", "CRACK_GAS_SPLIT", "HDTKineticParams", "HDTKinetics",
+           "OLEFIN_HEAT", "CRACK_HEAT", "CRACK_GAS_SPLIT", "HDTKineticParams", "NAPHTHA_HDT_PARAMS", "HDTKinetics",
            "crack_targets"]

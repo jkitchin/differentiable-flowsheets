@@ -75,7 +75,8 @@ difflow/
 │   ├── difflow_cc/        # Carbon capture plugin (amine, membrane, adsorption)
 │   ├── difflow_gas/       # Gas transmission network plugin (pipes, compressors, computed decomposition)
 │   └── difflow_refinery/  # Refinery plugin (crude assay, crude and vacuum distillation units, saturated gas plant, product blending pool,
-│                          # hydroprocessing/ building blocks + hydrotreating/, hydrocracking/, fcc/, reforming/, alkylation/ units)
+│                          # hydroprocessing/ building blocks + hydrotreating/, hydrocracking/, fcc/, reforming/, alkylation/, residue/ units,
+│                          # hydrogen/ header network)
 ├── tests/                 # pytest test files (includes tests/bio/, tests/ree/, tests/cc/, tests/gas/, tests/power/, tests/refinery/)
 ├── examples/              # Jupyter notebook examples
 ├── jax-tutorials/         # JAX/autodiff tutorials
@@ -543,7 +544,10 @@ Examples: `examples/34_vacuum_distillation.ipynb`, `examples/36_crude_to_vacuum.
   (the recycle's implicit fixed point needs JVPs), warm-start with
   `tear_initial=res.tear`.
 - Kinetic pre-exponentials are ILLUSTRATIVE (this project's); octanes other
-  than n-heptane are recalled (unverified). No Padmavathi/Taskar-Riggs
+  than n-heptane are recalled (unverified). Feed sulfur (#330,
+  `reforming.sulfur`) is a TRACE element solved on the converged streams,
+  outside the species list and the tear: H2S to net/fuel gas, unconverted S
+  to reformate, balance exact. No Padmavathi/Taskar-Riggs
   cross-check is claimed. Separator/recycle are thin and local, to merge with
   #306's shared module later.
 
@@ -581,6 +585,19 @@ Invariants (do not weaken them):
   1e-300)` gives a 1e300 cotangent for an empty cut and NaN gradients.
 - The stripper feeds 10 % of its steam with the feed: a degassed separator
   liquid is subcooled and `StageColumn`'s feed flash is otherwise singular.
+- Outside the two-phase region `reactor.phase_state` returns the stream itself
+  and its incipient phase (`y = z, x = z/K` for a vapour), never the negative
+  flash's fictitious split: that put a vapour naphtha bed's pH2 6x low and ran
+  the aromatics equilibrium backwards (#332).
+- `pr_flash` never raises: the Rachford-Rice bracket ignores absent (trace)
+  species, a diverged Newton returns its start with a large `residual`, and
+  the implicit derivative is the module's own `custom_jvp` (optimistix's
+  implicit adjoint raises on a NaN Jacobian). Callers fold the residual into
+  `converged` (the hydrotreater's `flash.residual`).
+- `Hydrotreater.product_stream()` includes the dissolved real gases by
+  default (mass closes downstream, #333); blend the wild naphtha with
+  `gases=False` or through `res.fractionate(...)` (#328, a TBP sigmoid split).
+  `NAPHTHA_HDT_PARAMS` is the illustrative naphtha constant set.
 - Rate constants are ILLUSTRATIVE; thermochemistry is model-compound data from
   the `chemicals` tables. The Korsten-Hoffmann profile cross-check is NOT done.
 
@@ -611,6 +628,53 @@ Invariants (do not weaken them):
 - Recycle at fixed catalyst and T LOWERS per-pass conversion (a recycle
   reactor is less efficient than plug flow); what it buys is selectivity.
 - Full-unit tests compile 2-6 min each: slow.
+### The Hydrogen Network (`difflow_refinery.hydrogen`, #329)
+
+`HydrogenNetwork(producers, consumers, headers).solve()` -> `H2NetworkResult`
+(`outputs["h2.surplus"]`, `<consumer>.purity`, `<consumer>.purity_margin`,
+`balances`, `makeup_composition(c, gases)`). `Producer.from_reformer(res)` /
+`.of_purity`, `Consumer.from_hydrotreater(name, res, params)`, `PSA(recovery,
+purity, target_purity=)`, swing `Import`/`H2Plant` (filled in order, capped),
+`Header(min_purge=, purge_to="fuel"|"export")`. `close_hydrotreater_loop(net,
+{c: (Hydrotreater, feed, params)})` feeds the header composition into
+`HydrotreaterParams.makeup` by substitution on purity; `h2_block` for planning.
+A library, not a palette operation.
+- Every consumer on a header gets the header's purity; a consumer's demand is
+  its makeup H2 FLOW (`h2.makeup`), the impurities ride along at `d/y`.
+- The purge is by difference, so total/H2/mass balances close by
+  construction; `balances["makeup_h2"]` is the independent check. A deficit
+  is returned as a negative surplus, never clipped (`feasible` says so).
+- `HydrotreaterParams.makeup` is concrete (`makeup_vector` calls `float()`):
+  the loop is Python, and the returned network carries each unit's purity
+  response as a LINEAR secant (`d_demand_d_purity`). Reformer gradients go
+  through it in forward mode (`jax.jacfwd`).
+- `min_pH2` is the MAKEUP's `y P`, not the reactor-inlet pH2 (that is the
+  HDT's `reactor.pH2_in`). PSA defaults are illustrative.
+
+Docs: `docs/unit-operations-refinery.md` ("The hydrogen network"). Tests:
+`tests/refinery/test_hydrogen.py`, `tests/refinery/test_hydrogen_loop.py` (slow).
+### Residue Desulfurizer and Fuel Oil (`difflow_refinery.residue`, #331)
+
+`ResidueDesulfurizer(char, residue).solve(residue)` -> `RDSResult`; fuel oil is
+`fuel_oil_blend([res.blend_component("residue"), ...], [res.volume("residue"), ...])`
+(a property-mode `BlendPool`, `VLSFO_SPECS`: 0.5 wt% S, 380 cSt, SG 0.991, CCR 18).
+`RDSKinetics` = `HDTKinetics` with residue constants + refractory `S_residue`,
+`NiV` (HDM onto the catalyst), `CCR` reduction, 538 C+ conversion. Once-through
+treat gas, ideal product split (gas / distillate / residue). A library.
+- Route (a) chosen over VDU + cutters on the lever rule
+  (`cutter_fraction_for_sulfur`): a 3.3 wt% residue needs 85 % ULSD by mass to
+  reach 0.5 wt%. Keep that argument in the docs if the route changes.
+- `NiV` and `CCR` attributes have NO element (metals outside a cut's mass, CCR a
+  subset of C); `S_residue` counts S. Balances incl. Ni+V (with the deposit) close
+  to round-off -- tested at 1e-10, keep it that way.
+- Conversion moves ALL of a parent's atoms to `m = nC_i/nC_j` lighter molecules
+  with `m - 1` H2; the HDT cracking leak is off (`crack_k=0`) so nothing double counts.
+- Constants and the refractory-S share table are ILLUSTRATIVE (ARDS ranges, pinned
+  by release tests); R1-R5 references are unverified.
+
+Docs: `docs/unit-operations-refinery.md` ("Residue desulfurization and fuel oil").
+Tests: `tests/refinery/test_residue.py` (gradient and CDU route: release + slow).
+
 ### Crude Preheat Train (`difflow_refinery.preheat`)
 
 `PreheatedCrudeUnit(assay, column, train)` puts a heat-exchanger train,
@@ -701,6 +765,14 @@ Invariants encoded in the module (do not weaken them):
   happens to find one plan, which is not a guarantee); do not present a
   single-start NLP as "the" optimum.
 
+- Property estimates (#330, `difflow_refinery.properties`): `from_stream`
+  estimates flash (Riazi-Daubert from D86 T10), freeze (n-paraffin ideal
+  solubility on Won 1986), smoke (Riazi), viscosity (Abbott + D341 at
+  `viscosity_T_C`) and straight-run RON/MON (the reformer's pure-compound
+  octanes by P/N/A/O, RT-70) unless given; `estimate=False` is the old
+  behaviour. All but Won's melting points are UNVERIFIED against their
+  sources -- keep them marked so, and let a measured value override.
+
 Docs: `docs/unit-operations-refinery.md`. Example:
 `examples/33_refinery_gasoline_blending.ipynb`. Tests: `tests/refinery/`.
 
@@ -725,6 +797,28 @@ planning. A library, not registered.
 
 Docs: `docs/unit-operations-refinery.md` ("The fluid catalytic cracker").
 Tests: `tests/refinery/test_fcc.py`.
+
+### Chaining Units (`difflow_refinery.plant`, #334)
+
+`Chain(Stage("nht", f, modes="rev"), Stage("reformer", g, modes="fwd", jit=True)).jacobian(x)`
+composes library units (and the pure-JAX adapters between them) into one
+differentiable function. `method="auto"`: one `jax.jacfwd`/`jacrev` when every
+stage shares the mode, else `"chain"` (the chain rule by unit Jacobians, forward
+accumulation). `AD_MODES` / `ad_mode_table()` is the one place each unit's AD mode
+is written down. Example 40, section 10, uses it. A library.
+- A mixed chain (forward-only reformer, reverse-only default hydrotreater) can NOT
+  be traced end to end in either mode; `tests/refinery/test_plant.py` pins both
+  failures on toy stages. `HydrotreaterParams(reactor=ReactorOptions(adjoint="forward"))`
+  makes the hydrotreater forward-capable (same values).
+- `jit=True` on any stage holding a Python-level recycle (the reformer's
+  `Flowsheet`): unjitted, it is traced and compiled anew on every JVP and every
+  call (measured 671 s / 511 s vs 487 s / 34 s jitted).
+- Memory, not time, limits a chain on a 15 GB box: example 40 calls
+  `jax.clear_caches()` before differentiating. Keep interfaces after a
+  reverse-only stage narrow (one cotangent per output of that stage).
+
+Docs: `docs/unit-operations-refinery.md` ("Chaining units"). Tests:
+`tests/refinery/test_plant.py` (per commit), `tests/refinery/test_plant_chain.py` (release, slow).
 
 ### Delta-Base Planning (`difflow.planning`)
 

@@ -39,18 +39,20 @@ still differentiable, with no palette entry.
 | Preheat train | `preheat` | `PreheatedCrudeUnit` | `Desalter`, `PreflashDrum`, `CrudeUnitWithPreheat` | crude from the tank → crude at the furnace inlet, with fouling |
 | Crude distillation unit | `unit`, `column` | `CrudeUnit`, `CrudeColumn`, `Furnace` | `CrudeDistillationUnit` | crude → naphtha, kerosene, diesel, AGO, residue |
 | Vacuum unit | `vacuum` | `VacuumColumn` | `VacuumColumn` | atmospheric residue → LVGO, HVGO, slop, vacuum residue |
-| Saturated gas plant | `gasplant` | `GasPlantColumn`, `GasCompressor`, `AmineTreater` | all three | light ends → fuel gas, LPG, C3/C4 splits, stabilized naphtha |
+| Saturated gas plant | `gasplant` | `GasPlantColumn`, `GasCompressor`, `AmineTreater` | all three | light ends → fuel gas, LPG, C3/C4 splits, stabilized naphtha; a hydrotreater product on a component table via `gasplant.hydroprocessed.hydroprocessed_feed` |
 
 ### Conversion
 
 | Unit | Module | Main class | Palette | In → out |
 |---|---|---|---|---|
 | C5/C6 isomerization | `isomerization` | `IsomerizationReactor`, `IsomerizationUnit` | both | light naphtha → isomerate |
-| Hydrotreater | `hydrotreating` | `Hydrotreater` | library | naphtha, kerosene or diesel → treated product, wild naphtha, off-gas |
+| Hydrotreater | `hydrotreating` | `Hydrotreater` | library | naphtha, kerosene or diesel → treated product, wild naphtha, off-gas; `res.fractionate(...)` → jet / diesel or light / heavy naphtha |
 | Hydrocracker | `hydrocracking` | `Hydrocracker` | library | VGO → LPG, naphtha, kerosene, diesel, unconverted oil |
+| Residue desulfurizer | `residue` | `ResidueDesulfurizer`, `fuel_oil_blend` | library | atmospheric residue → desulfurized residue, distillate, gas; VLSFO (0.5 wt% S) pool |
 | Fluid catalytic cracker | `fcc` | `FCCUnit` | library | VGO → dry gas, C3, C4, gasoline, LCO, slurry, flue gas |
-| Catalytic reformer | `reforming` | `CatalyticReformer` | library | heavy naphtha → reformate, net H2, LPG, fuel gas |
+| Catalytic reformer | `reforming` | `CatalyticReformer` | library | heavy naphtha (from a hydrotreater: `NaphthaFeed.from_hydrotreater`) → reformate, net H2, LPG, fuel gas |
 | Alkylation | `alkylation` | `AlkylationUnit` | library | C3-C5 olefins + isobutane → alkylate, propane, n-butane |
+| Hydrogen network | `hydrogen` | `HydrogenNetwork` | library | reformer net gas, H2 plant, import → hydrotreater / hydrocracker makeup at the header purity, fuel gas, export |
 
 ### Products
 
@@ -66,10 +68,13 @@ still differentiable, with no palette entry.
 | Composition | `composition` | P/N/A/O fractions, hydrogen, sulfur and nitrogen classes per pseudo-component |
 | Correlations | `correlations` | Twu, Riazi-Daubert, Lee-Kesler, Kesler-Lee, Maxwell-Bonnell |
 | Column thermodynamics | `thermo` | `ColumnThermo`: Raoult with Lee-Kesler vapour pressures |
+| CDU to gas plant | `gasplant.feed` | `gas_plant_feed`: crude-unit offgas and naphtha onto a `gas_components` table (cut selection, folding, water, H2S), with the folded and dropped mass reported (#326) |
 | Stage-network column | `vacuum` | `StageColumn`, under the VDU, the gas plant and the hydrotreater's stripper |
 | Hydroprocessing blocks | `hydroprocessing` | trickle-bed reactor, PR high-pressure separator, recycle-gas loop, stripper |
 | Product properties | `products` | `product_properties`: yields, SG/API, TBP points |
-| Planning blocks | `planning`, and each unit's package or its `planning` submodule (e.g. `hydrotreating.planning.hdt_block`) | `cdu_block`, `gasplant_block`, `isom_block`, `hdt_block`, `hcu_block`, `fcc_block`, `reformer_block`, `alky_block`, `product_value_block`, for `difflow.planning` |
+| Product property estimates | `properties` | flash, freeze and smoke points, viscosity, straight-run RON/MON from a stream (#330, mostly unverified); used by `BlendComponent.from_stream` |
+| Chaining units | `plant` | `Chain`, `Stage`, `AD_MODES`: library units composed into one differentiable function; one `jax.jacfwd`/`jacrev` when every unit shares the mode, else the chain rule by unit Jacobians (#334) |
+| Planning blocks | `planning`, and each unit's package or its `planning` submodule (e.g. `hydrotreating.planning.hdt_block`) | `cdu_block`, `gasplant_block`, `isom_block`, `hdt_block`, `hcu_block`, `fcc_block`, `reformer_block`, `alky_block`, `h2_block`, `product_value_block`, for `difflow.planning` |
 
 ## How far to trust it
 
@@ -80,8 +85,8 @@ model: the CDU and VDU against Pyomo/IPOPT columns, and the preheat
 train, gas plant and isomerization reactor against IDAES. Alkylation's
 correlations reproduce the GAMS `process.gms` optimum.
 
-The kinetic and yield constants of the hydrotreater, hydrocracker, FCC,
-reformer and the isomerization rates are **illustrative**. They give the
+The kinetic and yield constants of the hydrotreater, residue
+desulfurizer, hydrocracker, FCC, reformer and the isomerization rates are **illustrative**. They give the
 right trends and exact gradients, but the absolute yields are not
 predictions until they are fitted to a unit's own data.
 
@@ -95,6 +100,8 @@ predictions until they are fitted to a unit's own data.
 - Examples: `examples/33_refinery_gasoline_blending.ipynb` through
   `examples/39_refinery_isomerization.ipynb`, and
   `examples/40_refinery_flowsheet.ipynb`, a small whole refinery (CDU,
-  gas plant, naphtha and distillate hydrotreaters, reformer, product
-  pools, hydrogen balance).
+  gas plant, naphtha and distillate hydrotreaters with their
+  fractionators, reformer, residue desulfurizer, product pools with
+  estimated properties, the hydrogen header, and a gradient across the
+  hydrotreater and the reformer).
 - Tests: `tests/refinery/`.

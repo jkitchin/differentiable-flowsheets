@@ -119,6 +119,13 @@ def compress(gas: Flows, layout: Layout, comps: Components, T_in, P_in, P_out, e
     z, cp = _gas_z(gas, layout, comps)
     T_in = jnp.asarray(T_in, dtype=float)
     lnr = jnp.log(jnp.asarray(P_out, dtype=float) / jnp.asarray(P_in, dtype=float))
+    # A non-finite inlet (an upstream failure) gives a NaN outlet, never an exception from
+    # the root finders' implicit adjoint, whose linear solve raises on non-finite input (#332).
+    ok = jnp.all(jnp.isfinite(z)) & jnp.isfinite(T_in) & jnp.isfinite(lnr) & jnp.all(jnp.isfinite(cp))
+    z = jnp.where(ok, z, 1.0)
+    T_in = jnp.where(ok, T_in, 300.0)
+    lnr = jnp.where(ok, lnr, 0.1)
+    cp = jnp.where(ok, cp, comps.cp_ig[:comps.n_gas])
 
     def r_s(T, args):
         z, cp, T_in, lnr = args
@@ -138,7 +145,7 @@ def compress(gas: Flows, layout: Layout, comps: Components, T_in, P_in, P_out, e
 
     T2 = optx.root_find(r_h, solver, jax.lax.stop_gradient(Ts), args=(z, cp, H2), max_steps=50,
                         throw=False).value
-    return T2, H2 - H1
+    return jnp.where(ok, T2, jnp.nan), jnp.where(ok, H2 - H1, jnp.nan)
 
 
 def makeup_for_ratio(recycle: Flows, layout: Layout, makeup_y: Array, h2_target) -> tuple[Flows, Array]:
@@ -149,11 +156,24 @@ def makeup_for_ratio(recycle: Flows, layout: Layout, makeup_y: Array, h2_target)
 
 
 def makeup_vector(layout: Layout, composition: Mapping[str, float]) -> Array:
-    """A makeup-gas mole-fraction vector on ``layout``'s gases (normalised)."""
+    """A makeup-gas mole-fraction vector on ``layout``'s gases (normalised).
+
+    ``composition`` is ``{gas: mole fraction}``; the values may be JAX
+    tracers, so a hydrotreater output is differentiable in the makeup's
+    purity (``makeup={"hydrogen": y, "methane": 1 - y}``; the hydrogen
+    network of #329 takes ``d h2.makeup / d purity`` that way). An array
+    already on ``layout.gases`` is accepted too.
+    """
+    if not isinstance(composition, Mapping):
+        v = jnp.asarray(composition, dtype=float)
+        if v.shape != (layout.n_gas,):
+            raise ValueError(f"a makeup array needs one entry per layout gas ({layout.n_gas})")
+        return v / jnp.sum(v)
     unknown = [k for k in composition if k not in layout.gases]
     if unknown:
         raise ValueError(f"makeup species {unknown} are not in the layout's gases")
-    v = jnp.asarray([float(composition.get(g, 0.0)) for g in layout.gases])
+    zero = jnp.asarray(0.0)
+    v = jnp.stack([jnp.asarray(composition.get(g, zero), dtype=float) for g in layout.gases])
     return v / jnp.sum(v)
 
 

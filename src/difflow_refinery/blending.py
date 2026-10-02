@@ -40,8 +40,11 @@ Two ways to describe a component:
   :class:`~difflow_refinery.characterization.BlendCharacterization`.  Adds the
   product stream itself, an exact mass and volume balance, and the
   properties that only composition can give (distillation, cetane index,
-  Raoult RVP).  Unit-reported properties (RON/MON from a reformer, say)
-  are passed as overrides and take precedence.
+  Raoult RVP).  Flash, freeze and smoke points, viscosity and straight-run
+  RON/MON are estimated from the composition by
+  :mod:`difflow_refinery.properties` (#330; mostly unverified, see there).
+  Unit-reported or measured properties (RON/MON from a reformer, say) are
+  passed as overrides and take precedence.
 
 Volumes are ideal-mixing volumes at 15 degC from ``SG``: the product
 volume is the sum of the component volumes, and the product ``SG`` is the
@@ -576,19 +579,35 @@ class BlendComponent:
     @classmethod
     def from_stream(cls, name: str, stream: Mapping[str, Any],
                     characterization: BlendCharacterization,
+                    *, estimate: bool | Sequence[str] = True,
+                    viscosity_T_C: float = 50.0,
+                    n_paraffin_share: float = 0.5,
                     **overrides: Any) -> "BlendComponent":
         """A component computed from a stream of pseudocomponent flows.
 
         ``SG`` comes from the composition (volume-weighted, ideal mixing at
         15 degC), each of the characterization's ``qualities`` on its own
-        basis, and ``RVP_psi`` from :func:`raoult_rvp`.  ``overrides`` -- a
-        RON/MON reported by the reformer, a measured flash point -- win
-        over anything computed.
+        basis, and ``RVP_psi`` from :func:`raoult_rvp`.  Flash, freeze and
+        smoke points, viscosity and (straight-run) RON/MON are ESTIMATED by
+        :func:`difflow_refinery.properties.estimate_properties` (#330), each
+        from what the characterization can supply (see
+        :func:`~difflow_refinery.properties.estimable`; most are marked
+        unverified there).  ``overrides`` -- a RON/MON reported by the
+        reformer, a measured flash point -- win over anything computed, and
+        an overridden property is not estimated at all.
 
         Args:
             name: Component name.
             stream: difflow stream with ``F_<pseudocomponent>`` flows (mol/s).
             characterization: The grid the stream's species belong to.
+            estimate: ``True`` (default) estimates every property the
+                characterization has the inputs for; ``False`` none (the
+                pre-#330 behaviour); a sequence names the ones to estimate.
+            viscosity_T_C: Temperature of the estimated ``viscosity_cSt``
+                (degC); 50 C, the residual fuel oil reference, by default.
+                Every component of a pool must be at one temperature.
+            n_paraffin_share: Normal share of the paraffins, for the freeze
+                point and the octane estimate.  ILLUSTRATIVE.
             **overrides: Property values, keys from :data:`PROPERTY_RULES`.
         """
         char = characterization
@@ -604,6 +623,16 @@ class BlendComponent:
             props[key] = jnp.sum((w if basis == "mass" else phi) * vec)
         props["RVP_psi"] = raoult_rvp(moles, char.psat(T_RVP),
                                       char.molar_volume) / PSI
+        if estimate is not False:
+            from difflow_refinery import properties as _est
+
+            which = (_est.estimable(char) if estimate is True
+                     else tuple(estimate))
+            which = [p for p in which if p not in overrides]
+            if which:
+                props.update(_est.estimate_properties(
+                    char, moles, which, viscosity_T_C=viscosity_T_C,
+                    n_paraffin_share=n_paraffin_share))
         for k, v in overrides.items():
             props[k] = jnp.asarray(v, dtype=jnp.float64)
         return cls(name=name, properties=props, characterization=char,
