@@ -61,7 +61,8 @@ from difflow_refinery.hydrocracking.fractionator import (
     DEFAULT_CUT_POINTS, LIQUID_PRODUCTS, PRODUCTS, cut_shares, fractionate, uco_cuts)
 from difflow_refinery.hydrocracking.kinetics import HCKineticParams, HCKinetics, HCU_ATTRIBUTES
 from difflow_refinery.hydroprocessing.layout import ELEMENTS, GAS_ELEMENTS, Flows, gas_mw, relative_balance_error
-from difflow_refinery.hydroprocessing.reactor import ReactorOptions, TrickleBedReactor
+from difflow_refinery.hydroprocessing.reactor import (
+    ReactorOptions, ReactorResult, TrickleBedReactor, integrate_bed, stream_enthalpy, vapor_enthalpy)
 from difflow_refinery.hydroprocessing.recycle import (
     MOL_PER_NM3, amine_scrub, compress, knockout, makeup_for_ratio, makeup_vector, purge_split, solve_tear)
 from difflow_refinery.hydroprocessing.separator import HPSeparator
@@ -94,12 +95,11 @@ class HydrocrackerParams(ParamsMixin):
         T_crack: Cracking first-bed inlet temperature (K); an interstage
             exchanger is implied (its duty is not computed).
         quench_crack: ``None`` (default): every cracking bed's inlet is held at
-            ``T_crack`` and the quench each needs is solved, from a pool of
-            ``crack_gas`` of the treat gas; or the quench into each later
-            cracking bed as fractions of the treat gas (inlets then follow).
-        crack_gas: Share of the treat gas reserved for the cracking reactor
-            when ``quench_crack`` is None (its first bed gets what the
-            quenches leave; ``crack.gas_left`` reports it).
+            ``T_crack`` and the quench each needs is solved (with the gas loop;
+            the pretreat inlet gets what the quenches leave, ``crack.gas_left``);
+            or the quench into each later cracking bed as fixed fractions of
+            the treat gas (inlets then follow -- a fixed quench is a
+            knife-edge: the beds run away or die out with a few kelvin).
         crack_beds: Catalyst share of each cracking bed (sums to 1).
         lhsv_crack: Cracking LHSV on FRESH feed, 1/h (catalyst volume = fresh
             feed rate / LHSV, so a recycle loads the same catalyst harder).
@@ -127,14 +127,13 @@ class HydrocrackerParams(ParamsMixin):
         uco_max_steps: UCO substitution limit.
     """
 
-    T_pretreat: float = 648.15
+    T_pretreat: float = 643.15
     quench_pretreat: tuple = (0.06,)
     pretreat_beds: tuple = (0.5, 0.5)
     lhsv_pretreat: float = 1.5
-    T_crack: float = 643.15
+    T_crack: float = 653.15
     quench_crack: tuple | None = None
-    crack_gas: float = 0.7
-    crack_beds: tuple = (0.12, 0.16, 0.20, 0.24, 0.28)
+    crack_beds: tuple = (0.15, 0.18, 0.20, 0.22, 0.25)
     lhsv_crack: float = 1.5
     catalyst_density: float = 800.0
     P: float = 150e5
@@ -430,32 +429,40 @@ class Hydrocracker:
         W_crk = [W_crk_tot * n["crack_beds"][k] for k in range(len(p.crack_beds))]
         h2_target = n["h2_oil"] * Q * MOL_PER_NM3
         P_hps = n["P"] - n["loop_dP"]
-        R = Flows(jnp.maximum(x[:-1], 0.0), jnp.zeros(lay.n_cut), jnp.zeros((lay.n_cut, lay.n_attr)))
-        T_gas = x[-1]
+        R = Flows(jnp.maximum(x[:-2], 0.0), jnp.zeros(lay.n_cut), jnp.zeros((lay.n_cut, lay.n_attr)))
+        T_gas = x[-2]
         makeup, M = makeup_for_ratio(R, lay, th["makeup_y"], h2_target)
         gas = R + makeup
         q_pre = n["quench_pretreat"]
         n_crk = len(p.crack_beds)
-        if p.quench_crack is None:
-            # cracking quench solved for the bed inlet temperatures, from a gas pool
-            s_crk = n["crack_gas"] if n_crk > 1 else jnp.asarray(0.0)
+        if n_crk == 1:
+            s_crk = jnp.asarray(0.0)
+        elif p.quench_crack is None:
+            # the cracking quench, a tear unknown: the share of the treat gas the
+            # cracking beds' quench valves take (solved with the gas loop)
+            # (clipped to a physical range so a Newton iterate cannot starve or flood
+            # the pretreat bed; the clip is inactive at any solution the unit accepts)
+            s_crk = jnp.clip(x[-1], 0.0, 0.9)
         else:
-            s_crk = jnp.sum(n["quench_crack"]) if n_crk > 1 else jnp.asarray(0.0)
+            s_crk = jnp.sum(n["quench_crack"])
         gas1 = gas.scale(1.0 - s_crk)
         quench1 = [q_pre[k] / (1.0 - s_crk) for k in range(q_pre.shape[0])] if len(p.pretreat_beds) > 1 else None
         rx1 = self.pretreat_reactor(oil, gas1, [n["T_pretreat"]], T_gas, n["P"], W_pre, comps, th["pre"],
                                     quench=quench1, adjoint=adjoint)
         crack_in = rx1.outlet + uco
         T2_in = n["T_crack"] + T_shift
-        if n_crk == 1:
-            gas2, quench2, T2_list = gas.scale(0.0), None, [T2_in]
-        elif p.quench_crack is None:
-            gas2, quench2, T2_list = gas.scale(s_crk), None, [T2_in] * n_crk
+        if n_crk > 1 and p.quench_crack is None:
+            rx2 = self._crack_beds(crack_in, gas, T2_in, T_gas, n["P"], W_crk, comps, cst, adjoint)
+            s_next = jnp.sum(rx2.quench)
         else:
-            q_crk = n["quench_crack"]
-            gas2, quench2, T2_list = gas.scale(s_crk), [q_crk[k] / s_crk for k in range(q_crk.shape[0])], [T2_in]
-        rx2 = self.crack_reactor(crack_in, gas2, T2_list, T_gas, n["P"], W_crk, comps, cst,
-                                 quench=quench2, adjoint=adjoint)
+            if n_crk == 1:
+                gas2, quench2 = gas.scale(0.0), None
+            else:
+                q_crk = n["quench_crack"]
+                gas2, quench2 = gas.scale(s_crk), [q_crk[k] / s_crk for k in range(q_crk.shape[0])]
+            rx2 = self.crack_reactor(crack_in, gas2, [T2_in], T_gas, n["P"], W_crk, comps, cst,
+                                     quench=quench2, adjoint=adjoint)
+            s_next = s_crk
         vap, liq, water, fr = HPSeparator(lay)(rx2.outlet, n["hps_T"], P_hps, comps)
         vap, liq = knockout(vap, liq)
         sweet, absorbed = amine_scrub(vap, lay, n["h2s_removal"], n["nh3_removal"])
@@ -464,8 +471,48 @@ class Hydrocracker:
         prods = fractionate(liq, lay, th["cut"]["Tb"], [n["cut_points"][k] for k in range(4)], n["cut_width"])
         out = dict(R=R, makeup=makeup, M=M, gas=gas, rx1=rx1, rx2=rx2, crack_in=crack_in, vap=vap, liq=liq,
                    water=water, absorbed=absorbed, rec=rec, purge=purge, T2=T2, Wc=Wc, W_pre=W_pre, W_crk=W_crk,
-                   Q=Q, prods=prods, uco_in=uco)
-        return jnp.concatenate([rec.gas, T2[None]]), out
+                   Q=Q, prods=prods, uco_in=uco, s_crk=s_crk)
+        return jnp.concatenate([rec.gas, T2[None], jnp.reshape(s_next, (1,))]), out
+
+    def _crack_beds(self, stream, gas, T_in, T_gas, P, W, comps, cst, adjoint=None) -> ReactorResult:
+        """Cracking beds with every inlet held at ``T_in``, the quench into each later bed explicit.
+
+        The first bed takes the pretreat effluent (and the UCO) with no gas of
+        its own; the quench into bed ``k+1`` is the treat-gas fraction whose
+        heating from ``T_gas`` to ``T_in`` absorbs the cooling of bed ``k``'s
+        outlet to ``T_in`` -- the enthalpy balance of
+        :class:`~difflow_refinery.hydroprocessing.reactor.TrickleBedReactor`'s
+        ``quench=None`` mode (same functions, same linearised K-values). Here
+        the total is a tear unknown of the gas loop instead of a Newton solve
+        of its own, so a pass runs each bed once.
+        """
+        lay = self.layout
+        kin = self.kinetics
+        opts = self.crack_reactor.options if adjoint is None else dataclasses.replace(
+            self.crack_reactor.options, adjoint=adjoint)
+        Ws = jnp.stack([jnp.asarray(w, dtype=float) for w in W])
+        last = jnp.arange(len(W)) == len(W) - 1
+        T_in = jnp.asarray(T_in, dtype=float)
+
+        def body(s, xs):
+            Wk, is_last = xs
+            bed = integrate_bed(kin, cst, lay, comps, s, T_in, P, Wk, opts)
+            km, out = bed.k_model, bed.outlet
+            dH = stream_enthalpy(out, lay, comps, km, bed.T_out) - stream_enthalpy(out, lay, comps, km, T_in)
+            per = vapor_enthalpy(gas, lay, comps, T_in) - vapor_enthalpy(gas, lay, comps, T_gas)
+            qk = jnp.where(is_last, 0.0, dH / per)
+            return out + gas.scale(qk), (bed, qk)
+
+        _, (beds, qs) = jax.lax.scan(body, stream, (Ws, last))
+        q = jnp.concatenate([jnp.zeros(1), qs[:-1]])
+        wabt = jnp.sum(Ws * (beds.T_in + 2.0 * beds.T_out) / 3.0) / jnp.sum(Ws)
+        bed_list = tuple(jax.tree_util.tree_map(lambda a, k=k: a[k], beds) for k in range(len(W)))
+        return ReactorResult(beds=bed_list, quench=q, outlet=bed_list[-1].outlet, T_out=beds.T_out[-1],
+                             wabt=wabt, delta_T=beds.T_out - beds.T_in)
+
+    #: Substitution passes before the gas-tear Newton (cold and warm start).
+    PRE_PASSES = 12
+    PRE_PASSES_WARM = 1
 
     def _gas_x0(self, th):
         lay = self.layout
@@ -473,16 +520,24 @@ class Hydrocracker:
         hi, mi = lay.gas_index("hydrogen"), lay.gas_index("methane")
         x0 = jnp.concatenate([(jnp.zeros(lay.n_gas) + 1e-4 * h2_target).at[hi].set(0.85 * h2_target)
                               .at[mi].set(0.08 * h2_target),
-                              jax.lax.stop_gradient(th["num"]["hps_T"] + 25.0)[None]])
+                              jax.lax.stop_gradient(th["num"]["hps_T"] + 25.0)[None], jnp.asarray([0.4])])
         scale = jnp.concatenate([jnp.full(lay.n_gas, 1e-2 * h2_target).at[hi].set(h2_target),
-                                 jnp.asarray([100.0])])
+                                 jnp.asarray([100.0, 0.1])])
         return x0, scale
 
     def _gas_loop(self, th, comps, cst, uco, T_shift, x0=None, adjoint=None):
         """Converge the recycle-gas tear for a given UCO recycle; returns the converged pass (with ``"tear"``)."""
         A = (th, comps, cst, uco, T_shift)
         x_def, scale = self._gas_x0(th)
+        n_pre = self.PRE_PASSES if x0 is None else self.PRE_PASSES_WARM
         x0 = x_def if x0 is None else x0
+        # a few successive-substitution passes before Newton: from the default
+        # start Newton's first steps overshoot the cracking-quench share (whose
+        # row is coupled to the whole gas composition); substitution brings
+        # every entry but the slow methane build-up close first
+        A_s = jax.lax.stop_gradient(A)
+        x0 = jax.lax.fori_loop(0, n_pre, lambda _, x: self._evaluate(x, A_s, adjoint="forward")[0],
+                               jax.lax.stop_gradient(x0))
         sol = solve_tear(lambda x, A: self._evaluate(x, A, adjoint=adjoint)[0], x0, A, scale=scale,
                          tol=self.params.tear_tol, max_step=2.0,
                          g_iter=lambda x, A: self._evaluate(x, A, adjoint="forward")[0], jac="fwd")
@@ -698,7 +753,7 @@ class Hydrocracker:
         for k in range(len(p.crack_beds)):
             outputs[f"crack.bed{k + 1}.quench"] = rx2.quench[k]
         # share of the cracking reactor's gas left for its first bed (negative: the quench pool is too small)
-        outputs["crack.gas_left"] = 1.0 - jnp.sum(rx2.quench)
+        outputs["crack.gas_left"] = 1.0 - o["s_crk"] - jnp.sum(n["quench_pretreat"])
         outputs["catalyst.pretreat"] = sum(o["W_pre"])
         outputs["catalyst.crack"] = sum(o["W_crk"])
         # hydrogen: chemical consumption by the H balance on everything but H2

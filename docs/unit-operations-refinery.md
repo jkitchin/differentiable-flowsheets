@@ -25,6 +25,7 @@ The `difflow_refinery` plugin provides:
 - **Product blending** (`BlendPool`, `BlendComponent`): gasoline, jet, ULSD and fuel-oil pools with the nonlinear blending rules, signed spec margins and LP back-off. A library for optimisation and planning, not a palette operation.
 - **Catalytic reforming** (`difflow_refinery.reforming`): a semi-regen reactor train with fired heaters, a PR separator, H2 recycle through a `Flowsheet` tear and a stabilizer; naphtha P/N/A by carbon number in, reformate (with RON from composition), net H2, LPG and fuel gas out. A library and flowsheet, not a palette operation.
 - **Hydroprocessing building blocks** (`difflow_refinery.hydroprocessing`) and the **hydrotreater** (`difflow_refinery.hydrotreating`): a trickle-bed reactor around any kinetic model, a Peng-Robinson HP separator, the recycle-gas loop and a steam stripper; HDS by sulfur class, HDN and aromatics saturation on the #305 composition. A library, not a palette operation. See [Hydroprocessing](#refinery-hydroprocessing) and [The hydrotreater](#refinery-hydrotreater).
+- **The VGO hydrocracker** (`difflow_refinery.hydrocracking`): the same building blocks with a pretreat bed (the hydrotreating kinetics, VGO constants), a cracking bed on continuous lumping over the pseudo-component grid (Laxminarasimhan et al. 1996, or discrete lumps) with organic-N inhibition, a simplified fractionator and a UCO recycle tear. A library, not a palette operation; its cracking constants are illustrative. See [The hydrocracker](#refinery-hydrocracker).
 
 Everything is differentiable with `jax`. A product yield, a gravity or a furnace duty has an exact gradient with respect to:
 
@@ -1535,6 +1536,164 @@ A crude-unit product carries every cut at some trace level. `Hydrotreater(..., t
 - **No dissolved-gas effect in the stripper**: the real gases leave with the overhead without taking part in the column's equations.
 - **Deactivation tracking** with `difflow.reconciliation.tracking` is possible (the activity is a parameter with a gradient) but not demonstrated.
 - Out of scope (as the issue says): residue hydrotreating/HDM, countercurrent reactors, reactor internals and pressure drop, amine unit detail, dynamics.
+
+---
+
+(refinery-hydrocracker)=
+## The hydrocracker
+
+`difflow_refinery.hydrocracking.Hydrocracker` is a single-stage, series-flow VGO hydrocracker on the shared hydroprocessing building blocks ([above](#refinery-hydroprocessing-layout)): a pretreat reactor (the hydrotreating kinetics with a VGO parameter set), a cracking reactor (a new kinetic model plugged into the same `TrickleBedReactor`), effluent cooler and HP separator, the recycle-gas loop (knock-out, amine, purge, compressor, makeup to an H2/oil spec), a product fractionator, and an optional recycle of unconverted oil (UCO) to the cracking reactor. Like the hydrotreater it is a library, not a palette operation.
+
+```python
+import difflow_refinery as dr
+from difflow_refinery.hydrocracking import Hydrocracker, HydrocrackerParams
+
+char = dr.characterize(assay, composition=True)        # #305 composition is required; heavy end recommended
+vgo = {**lvgo, **{k: lvgo.get(k, 0.0) + hvgo[k] for k in hvgo if k.startswith("F_")}}   # VDU LVGO + HVGO
+hcu = Hydrocracker(char, vgo, HydrocrackerParams(T_crack=643.15, uco_recycle=0.5))
+res = hcu.solve(vgo)
+print(res.table())
+res.outputs["conversion.per_pass"], res.outputs["kerosene.yield"], res.outputs["h2.chemical_nm3_m3"]
+```
+
+```
+fresh VGO -> [pretreat beds] -> (+ UCO recycle) -> [cracking beds] -> cooler -> HPS -> fractionator
+                 ^ quench                ^ quench to each bed inlet            |        |   off-gas, LPG, LN, HN,
+treat gas -------+-----------------------+                      recycle gas <--+        |   kerosene, diesel, UCO
+    ^ makeup H2  <- compressor <- purge <- amine <- KO drum                             +-> UCO bleed / recycle
+```
+
+The unit carries every pseudo-component from the lightest up to the heaviest one in the feed above `trace` of its pseudo-component mass (default 1e-4; a VDU product carries every cut at some trace level, and what is left out is `dropped_mass_fraction`). A VDU VGO goes in as it is (`F_<char.names>`); `hydrotreating.straight_run_cut(char, 370 + 273.15, 560 + 273.15, rate)` is an idealized one.
+
+(refinery-hydrocracker-layout)=
+### Stream, feed and pretreat bed
+
+The layout is the hydrotreater's (`HDT_ATTRIBUTES`: C and H atoms, S in five classes, N in two, mono/di/poly-aromatic, olefinic and naphthenic molecule counts) plus one attribute, `"cracked"`: the number of molecules in the cut that are cracked *product*. It rides with the molecules like every attribute and is what lets the unit compute the gravity of a cut holding both feed and cracked molecules (below). The gases are the hydrotreater's plus isopentane and n-pentane, which cracking makes. The feed is read exactly as the hydrotreater reads one (`hcu_feed` = `hdt_feed` plus a zero `"cracked"` column).
+
+The **pretreat bed** is `HDTKinetics` unchanged, with `VGO_PRETREAT_PARAMS`: the hydrotreater's illustrative constants with HDN made several times faster (a NiMo pretreat catalyst at 150 bar is chosen for HDN, which is what protects the cracking catalyst) and aromatics saturation slower. The only change to the hydrotreating code is that `HDTKinetics` now accepts a layout whose attributes *begin* with `HDT_ATTRIBUTES` (the cracking leak carries extra attributes with the molecule).
+
+(refinery-hydrocracker-kinetics)=
+### Cracking kinetics
+
+`HCKinetics` is a kinetic model for `TrickleBedReactor` (the interface of the building blocks). Per cut `i`, molecules cracked per second per kg of catalyst:
+
+```
+r_i = f k_max exp(-E/R (1/T - 1/T_ref)) kappa_i c_i (c_H2/c_ref)^m / (1 + K_N(T) c_Norg + K_NH3 c_NH3)
+```
+
+with `f = activity x effectiveness x wetting`, `c_i` the cut's fugacity-equivalent liquid concentration, `c_Norg` the total **organic nitrogen** concentration of the liquid (both nitrogen classes, all cuts -- the nitrogen the pretreat bed left), `K_N(T) = K_N exp(-dH_N/R (1/T - 1/T_ref))` (Langmuir adsorption inhibition: basic nitrogen adsorbs on the acid sites) and `m = 0` by default (first order in hydrocarbon, as the lumping models are). The hydrotreating network runs alongside on the cracking catalyst (`HCKineticParams.hdt`, default `CRACK_BED_HDT_PARAMS`, its own cracking leak off).
+
+**Continuous lumping** (`scheme="continuous"`, the default), after Laxminarasimhan, Verma & Ramachandran (1996). Each cut has a normalised boiling point `theta = (Tb - T_low)/(T_high - T_low)` and reactivity `kappa = theta^(1/alpha)` (`k = k_max theta^(1/alpha)`). The species-type distribution is `D(k) = dN/dk = N0/(alpha k_max^(1/alpha)) k^(1/alpha - 1)` and the yield distribution of species of reactivity `k` formed by cracking species of reactivity `K`
+
+```
+p(k, K) = [exp(-((k/K)^a0 - 0.5)^2 / a1) - exp(-0.25/a1) + delta (1 - k/K)] / (S0 sqrt(2 pi))
+```
+
+with `S0` from mass conservation, `int_0^K p(k, K) D(k) dk = 1`. `p(K, K) = 0` (a species does not crack to itself) and `p(0, K) ∝ delta` (light ends). On the grid the cracked mass of cut `i` is shared between the gas bin (below the lightest cut's lower edge) and every lighter cut `j` in proportion to `int_bin_j p(k(theta), K_i) D(k(theta)) dk/dtheta dtheta` (8-point Gauss-Legendre per bin), normalised over the bins -- the `S0` normalisation, discretised. Products of cut `i` stop at its lower cut edge: a cracked molecule always leaves its parent's cut. The weights distribute the parent's **carbon** (the paper's distribution is by mass; the two differ by the products' carbon fraction, 84--87 wt%).
+
+```{note}
+**These equations are not checked against the paper.** The paper (AIChE J. 42(9), 2645--2653, 1996) could not be reached from here; the forms above are the model as it is restated in the later literature that uses it, from recollection, so they are given **without equation numbers** and are marked unverified. One consequence of the forms *as stated* is worth checking against the original: with `k = k_max theta^(1/alpha)` and that `D(k)`, the number of species per unit `theta` goes as `theta^(1/alpha^2 - 1)` -- uniform only at `alpha = 1`. The code follows the stated forms (`species_density` is computed from them, not assumed uniform). The paper's own parameter values are **not used** and their yield-versus-conversion results are **not reproduced** (below).
+```
+
+**Discrete lumps** (`scheme="discrete"`): TBP lumps (`lump_edges`, default naphtha < 165 °C < kerosene < 260 °C < diesel < 370 °C < VGO), a relative reactivity per lump (`lump_k`) and a selectivity row per lump (`lump_selectivity`: shares of a parent's cracked carbon to gas and each lighter lump), each product lump's share spread uniformly in `theta` over its cuts lighter than the parent (that spreading is this coding's assumption). The form is Stangeland's (1974) and the lump form of Mohanty, Saraf & Kunzru (1991); the default numbers are illustrative, not theirs. Both schemes reduce to one reactivity vector and one row-stochastic matrix, computed once per solve (`HCKinetics.prepare`) from the cut boiling points, so a TBP point of the assay moves them.
+
+**What a cracked molecule becomes -- the property assignment (a modelling assumption).** The product landing in cut `j`:
+
+- has cut `j`'s boiling point and the specific gravity of a **saturation-adjusted Watson K**, `SG_j = (1.8 Tb_j)^(1/3) / (Kw_feed + dKw)`, with `Kw_feed` the mass-average Watson K of the fresh feed's cuts and `dKw = +0.3` (illustrative; hydrocracked products are more paraffinic and naphthenic than the VGO they come from);
+- has the molecular weight of Twu (1984) from `(Tb_j, SG_j)`, and the refractive index (Riazi-Daubert Huang index), hydrogen content (Goossens 1997) and hydrocarbon types (Riazi-Daubert 1986, API 2B4.1) of the composition module's own chain (#305) applied to those `(Tb, SG)`; aromatics split mono/di/poly by the hydrotreater's `DEFAULT_AROMATIC_SPLIT`; no olefins;
+- carries no sulfur or nitrogen: a cracked molecule's heteroatoms leave as H2S and NH3 (the uncracked molecules keep theirs, and the hydrotreating network removes them);
+- the gas bin's carbon becomes C1--C5 in the mole shares `HCU_GAS_SPLIT` (3/5/22/25/12/22/11 % C1/C2/C3/iC4/nC4/iC5/nC5; illustrative, iso-rich as hydrocracker light ends are).
+
+The cut's critical constants and K-values stay the feed pseudo-component's (as in the hydrotreater): only its atoms, molecule count and the volume model below change.
+
+**Hydrogen and heat.** Hydrogen consumption is the **hydrogen balance** of each event -- H atoms in the products (cuts, gas, H2S, NH3) less those of the parent, halved -- so it follows the conversion and the slate, not a separate correlation. C, S and N are conserved by construction and H through the H2 drawn; `check_element_conservation` is zero to round-off. Heat is per H2: an event making `n` molecules from one breaks `n - 1` C--C bonds, each with one H2 and the heat of n-hexane + H2 -> n-butane + ethane (`SCISSION_HEAT`, -42.7 kJ/mol); the rest of the H2 (saturation of the products, heteroatom removal) releases the benzene + 3 H2 -> cyclohexane heat per H2 (`SATURATION_HEAT_PER_H2`, -68.4 kJ/mol H2). Both are the hydrotreater's model-compound thermochemistry.
+
+**Constants.** Every number in `HCKineticParams` (`k_max`, `E`, `alpha`, `a0`, `a1`, `delta`, `K_N`, `dH_N`, `dKw`, the lump tables) is **illustrative**: chosen here so that the default VGO cracks 60--80 % per pass at a cracking WABT near 375--385 °C, LHSV 1.5 h⁻¹ and 150 bar, with a middle-distillate-selective slate. Published hydrocracking parameters belong to one catalyst and one feed; a predictive slate needs the yield-distribution parameters fitted to the unit's own test runs (`difflow.estimation`). The commercial yield models (UOP Unicracking, Chevron Lummus ISOCRACKING, Shell, Axens) are proprietary; nothing here is equivalent to them.
+
+(refinery-hydrocracker-fractionator)=
+### Fractionator and UCO recycle
+
+The fractionator is a **documented simplified split**, not a column (the issue allows either). Gases go whole to one product (H2, H2S, NH3, C1, C2 to off-gas; C3, C4 to LPG; C5, C6 to light naphtha; water to sour water). Cut `i` goes to the liquid products by a smooth step in its boiling point about each TBP cut point `T_c` (defaults 85, 165, 260, 370 °C): its share above `T_c` is `S((Tb_i - T_c)/w)`, `S` the quintic smootherstep on [-1, 1] (exactly 0 below, 1 above, C²), `w = 15 K`. `w` stands for the overlap between neighbouring products and is what makes a yield differentiable in its cut point on a grid of 20--25 K cuts. Attributes follow their cut, so the balances close exactly. Not computed: fractionator and side-stripper duties, steam, flash points; a `StageColumn` fractionator with side draws would replace `fractionate` without changing its callers.
+
+**UCO recycle.** `uco_recycle` (a fraction of the bottoms) returns to the cracking reactor inlet; the rest is the UCO bleed. Because the step is exactly 1 above `T_uco + w`, the UCO is exactly empty below `T_uco - w`, so the recycle is torn on a fixed set of cuts (every cut boiling above `T_uco - w - uco_margin`, `uco_margin = 30 K`): their molecules and every attribute, a couple of hundred unknowns. Newton on that would need a tangent per unknown through the reactors; the loop is a contraction instead (its gain is the recycle fraction times the share of recycled oil that survives a pass), so it is solved by **successive substitution around the gas-loop Newton** (`hydrocracking.fixed_point`), and its gradient is the implicit one: the adjoint fixed point `w = v + (dG/dz)^T w`, each pass one vector-Jacobian product, which needs only reverse mode -- what the reactor's diffrax adjoint supports. A once-through unit (`uco_recycle = 0` at construction) builds no UCO tear; `recycle=True` builds one even at zero recycle.
+
+(refinery-hydrocracker-specs)=
+### Degrees of freedom and specs
+
+`HydrocrackerParams`:
+
+| Spec | Default | |
+|---|---|---|
+| `T_pretreat` | 375 °C | pretreat first-bed inlet |
+| `quench_pretreat`, `pretreat_beds` | (0.06,), (0.5, 0.5) | quench to pretreat bed 2 (fraction of treat gas); catalyst split |
+| `lhsv_pretreat` | 1.5 h⁻¹ | on fresh feed |
+| `T_crack` | 370 °C | inlet of **every** cracking bed when `quench_crack=None` (the quench to each is solved) |
+| `quench_crack`, `crack_gas` | None, 0.7 | or fixed quench fractions; the gas pool of the cracking reactor |
+| `crack_beds` | (0.12, 0.16, 0.20, 0.24, 0.28) | catalyst split, small beds first (the heat release is steep) |
+| `lhsv_crack` | 1.5 h⁻¹ | on fresh feed (a recycle loads the same catalyst harder) |
+| `P` | 150 bar | uniform |
+| `h2_oil` | 1500 Nm³/m³ | treat gas H2 per fresh feed, quench included |
+| `purge`, `makeup` | 0.05, 99 % H2 / 1 % CH4 | |
+| `h2s_removal`, `nh3_removal` | 0.99, 1.0 | amine / wash water |
+| `hps_T`, `loop_dP`, `compressor_eta` | 50 °C, 8 bar, 0.75 | |
+| `uco_recycle` | 0 | fraction of UCO recycled |
+| `cut_points`, `cut_width` | 85/165/260/370 °C, 15 K | fractionator |
+| `pretreat_kinetics`, `crack_kinetics` | `VGO_PRETREAT_PARAMS`, `HCKineticParams()` | activities are the deactivation handles |
+
+`TargetSpec(output, target)` (the hydrotreater's) replaces the cracking inlet temperature with a target on any output -- `TargetSpec("conversion.per_pass", 0.7)` or `TargetSpec("wabt.crack", 653.15)` -- by a scalar Newton solve round the whole unit, differentiated implicitly (`outputs["T_shift"]`).
+
+**Assumptions** beyond the hydrotreater's: series flow (the pretreat effluent, H2S and NH3 included, goes to the cracker); the cracking reactor's inlet temperature is a spec (an interstage exchanger is implied, its duty not computed); with `quench_crack=None` each cracking bed's quench is solved from the cracking gas pool, whose remainder goes to the first cracking bed (`crack.gas_left`, which must stay positive -- a negative value means the pool is too small for the heat released); the UCO is recycled to the cracking reactor inlet at the cracking inlet temperature.
+
+**Product gravity.** A cut holds feed molecules (treated) and cracked ones. Its molar volume is `(1 - f_cr) v0 + f_cr v0' + attr . dv`: `f_cr` the cracked share of its molecules, `v0` the feed molecule's volume with its aromatics and olefins taken out by the hydrotreater's `VOLUME_INCREMENTS`, `v0'` the same for the assigned cracked product, and `attr . dv` the current aromatic/olefin counts times those increments (so saturation after cracking still counts). Its SG is its mass (from its atoms) over that volume.
+
+(refinery-hydrocracker-outputs)=
+### Outputs
+
+`HydrocrackerResult.outputs` (units in `OUTPUT_UNITS` and `PRODUCT_OUTPUT_UNITS`):
+
+- per product (`off_gas`, `lpg`, `light_naphtha`, `heavy_naphtha`, `kerosene`, `diesel`, `uco`, `uco_bleed`): `.rate` (kg/s), `.yield` (mass, on fresh feed); for LPG and the liquids `.volume`, `.volume_yield`, `.sg`, `.api`, `.S_wppm`, `.N_wppm`, `.H_wt`, `.aromatics_vol`; for the liquids TBP `.T05` ... `.T95`; `diesel.cetane_index` (ASTM D4737 from TBP->D86 and density, the blend pool's functions); `uco.bmci` (US Bureau of Mines correlation index from the volume-average boiling point and SG);
+- `conversion.per_pass` (`1 - UCO / (fresh 370+ + UCO recycled)`) and `conversion.overall` (`1 - UCO bleed / fresh 370+`), both on the fractionator's own UCO cut; `naphtha_to_middle_distillate` (mass); `liquid.volume_yield`;
+- hydrogen: `h2.chemical` (mol/s; by the hydrogen balance over every outlet), `h2.chemical_nm3_m3`, `.chemical_scf_bbl`, `.chemical_wt`, `h2.consumed_by_balance` (H2 in less out, equal to it to round-off), `h2.makeup`, `h2.purge`, `h2.dissolved`;
+- reactors: `wabt.pretreat`, `wabt.crack`, `pretreat.dT_total`, `crack.dT_total`, per bed `<reactor>.bed<k>.T_in`, `.dT`, cracking `.quench`; `crack.gas_left`; `pretreat.N_wppm` and `.S_wppm` (the organic N and S the cracking catalyst sees); catalyst masses;
+- loop: `recycle.rate`, `recycle.h2_purity`, `purge.rate`, `makeup.rate`, `compressor.power`, `reactor.pH2_in`; `uco.recycle_rate`;
+- convergence: `tear.residual`, `uco.residual`, `uco.steps`; `res.converged`.
+
+`res.balances`: relative closure of mass, C, H, S, N over the unit (fresh feed + makeup = products + UCO bleed + purge + acid gas + separator water, plus the UCO tear's own residual). `res.product_char` / `res.product_stream(name)` put any product into `BlendComponent.from_stream` (jet, ULSD pools).
+
+Not computed: **jet smoke point and freeze point** (the (Tb, SG) correlations the issue names could not be verified, and are poor for highly saturated product; a jet pool takes measured overrides), fractionator duties, naphtha octane.
+
+RESULTS-TBD
+
+(refinery-hydrocracker-planning)=
+### Planning: `hcu_block`
+
+`difflow_refinery.hydrocracking.planning.hcu_block(unit, feed, levers, outputs)` wraps the unit as a `difflow.planning.Block` in the style of `hdt_block`. Levers: `feed.bpd` (renamed `<product>.bpd` with `feed_product=`, e.g. `"vgo"`; composition held, both LHSVs move with the rate), `crack.T_in`, `pretreat.T_in` (°C), `h2_oil`, `pressure` (bar), `uco_recycle` (recycle units), `uco.cut_point` (°C). Outputs (`HCU_OUTPUTS`): product bbl/d (LPG, light and heavy naphtha, kerosene, diesel, UCO bleed), conversion per pass and overall, naphtha/middle-distillate ratio, chemical H2 and makeup (Nm³/h), cracking WABT, diesel cetane and sulfur, kerosene and diesel SG. Reverse mode only.
+
+(refinery-hydrocracker-references)=
+### References
+
+| Key | Reference | Used for | How checked |
+|---|---|---|---|
+| C1 | Laxminarasimhan, C.S.; Verma, R.P.; Ramachandran, P.A. "Continuous lumping model for simulation of hydrocracking." *AIChE J.* **1996**, 42(9), 2645--2653. doi:10.1002/aic.690420925 | Continuous-lumping form: `theta`, `k(theta)`, `D(k)`, `p(k, K)`, the mass-conservation normalisation | Title, journal, volume, issue, pages and DOI confirmed by web search (publisher and index listings). The paper was **not reached**: the equations are as restated in the later literature, from recollection -- **equation numbers not given, forms unverified**; the published parameter values are **not used**. |
+| C2 | Stangeland, B.E. "A kinetic model for the prediction of hydrocracker yields." *Ind. Eng. Chem. Process Des. Dev.* **1974**, 13(1), 71--76. doi:10.1021/i260049a013 | Discrete-lump form (reactivity rising with boiling point, a product-distribution rule) | Title and DOI confirmed by web search; issue and pages as in the issue (unverified). Form only, qualitative. |
+| C3 | Mohanty, S.; Saraf, D.N.; Kunzru, D. "Modeling of a hydrocracking reactor." *Fuel Process. Technol.* **1991**, 29, 1--17 | Discrete-lump scheme on a commercial reactor | Not checked (unverified); qualitative only. |
+| C4 | Quader, S.A.; Hill, G.R. *Ind. Eng. Chem. Process Des. Dev.* **1969**, 8, 98 | Early lumped hydrocracking kinetics | Listed by the issue; not checked (unverified); not used. |
+| C5 | Twu, C.H. *Fluid Phase Equilib.* **1984**, 16, 137--150 | MW of the assigned products | As cited for `difflow_refinery.correlations`. |
+| C6 | Riazi & Daubert (1986, 1987); Goossens (1997) | n20, H content and PNA of the assigned products | As cited for the composition module (#305). |
+| C7 | Watson, K.M.; Nelson, E.F. *Ind. Eng. Chem.* **1933**, 25, 880 | Watson K | As cited for `correlations.watson_k` (unverified there). |
+| C8 | Smith, H.M. "Correlation index to aid in interpreting crude-oil analyses." US Bureau of Mines Tech. Paper 610, **1940** | BMCI = 48640/VABP(K) + 473.7 SG - 456.8 | Formula as commonly given (e.g. Gary, Handwerk & Kaiser); source not checked (unverified). Pinned in the tests to the index's anchors (n-heptane 0, benzene 100). |
+| C9 | Christianson, B. "Reverse accumulation and attractive fixed points." *Optim. Methods Softw.* **1994**, 3(4), 311--326 | Adjoint of a fixed-point iteration | Unverified (recalled); the construction is tested against the implicit-function closed form. |
+| -- | Hydrotreater references H1--H16 | PR flash, kinetics forms of the pretreat bed, model-compound heats, cetane index | See [the hydrotreater](#refinery-hydrotreater-references). |
+
+(refinery-hydrocracker-not-done)=
+### What is not done
+
+- **The yield-versus-conversion cross-check is not done.** It needs the published numbers of Laxminarasimhan et al. (1996) (or Mohanty et al. 1991's plant comparison) with their parameters; neither paper could be reached, so nothing is reproduced and no agreement is claimed. The model's trends are tested (below); its absolute slate is illustrative.
+- **No example notebook** (VDU -> hydrocracker -> jet/ULSD pools). The pieces are tested: a VDU VGO feeds the unit, and `product_stream`/`product_char` feed `BlendComponent.from_stream`.
+- **The fractionator is not a column** (above), so no duties; jet smoke and freeze points are not computed.
+- **Deactivation** is the `activity` multiplier of either catalyst, a differentiable parameter that `difflow.reconciliation.tracking` can track; not wired up or demonstrated.
+- **Not a difflow `Flowsheet` object**: both tears are the unit's own.
+- Out of scope (as the issue says): residue hydrocracking, hydrogen-network optimisation, cycle-length optimisation, dynamics; two-stage units are not built (the pieces would compose).
 
 ---
 

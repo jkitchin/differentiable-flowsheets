@@ -293,3 +293,184 @@ def test_cracking_bed_conversion_rises_with_temperature(bed_setup, pretreated):
         np.testing.assert_allclose(np.asarray(e_out), np.asarray(e_in), rtol=1e-12)
         assert float(b.T_out) > T
     assert 0 < cs[0] < cs[1] < cs[2] < 1
+
+
+# =============================================================================
+# The whole unit
+# =============================================================================
+
+
+def vdu_vgo(char, crude_kg_s=150.0):
+    """LVGO + HVGO of a VacuumColumn on an idealized atmospheric residue of ``char``."""
+    from difflow_refinery.vacuum import VacuumColumn, VacuumColumnParams, atmospheric_residue
+    res = atmospheric_residue(char, crude_kg_s)
+    out = dict(zip(["vac_overhead", "lvgo", "hvgo", "slop", "vac_residue", "info"],
+                   VacuumColumn(VacuumColumnParams(components=char.pseudo_components()))(res)))
+    vgo = {k: v for k, v in out["lvgo"].items() if k.startswith("F_")}
+    for k, v in out["hvgo"].items():
+        if k.startswith("F_"):
+            vgo[k] = vgo.get(k, 0.0) + v
+    vgo["T"], vgo["P"] = jnp.asarray(298.15), jnp.asarray(101325.0)
+    return vgo
+
+
+def _check_solution(r, rtol=1e-8):
+    assert bool(r.converged), (float(r.outputs["tear.residual"]), float(r.outputs["uco.residual"]))
+    for k, v in r.balances.items():
+        assert float(v) < rtol, (k, float(v))
+    o = r.outputs
+    assert float(o["h2.chemical"]) == pytest.approx(float(o["h2.consumed_by_balance"]), rel=1e-8)
+    assert 0.0 < float(o["conversion.per_pass"]) < 1.0
+    assert float(o["crack.gas_left"]) > 0.0
+    for p in ("light_naphtha", "heavy_naphtha", "kerosene", "diesel"):
+        assert float(o[f"{p}.yield"]) > 0.0
+    # the slate is ordered by boiling range
+    T50 = [float(o[f"{p}.T50"]) for p in ("heavy_naphtha", "kerosene", "diesel", "uco")]
+    assert T50 == sorted(T50)
+    assert float(o["pretreat.N_wppm"]) < 0.05 * float(o["feed.N_wppm"])
+
+
+@pytest.fixture(scope="module")
+def light_vdu():
+    char = char_a()
+    return char, vdu_vgo(char)
+
+
+@pytest.fixture(scope="module")
+def light_once(light_vdu):
+    char, feed = light_vdu
+    unit = Hydrocracker(char, feed, HydrocrackerParams())
+    return unit, feed, unit.solve(feed)
+
+
+@pytest.mark.slow
+def test_light_vgo_once_through_converges_and_balances(light_once):
+    unit, feed, r = light_once
+    assert unit.dropped_mass_fraction < 1e-3
+    _check_solution(r)
+    o = r.outputs
+    assert float(o["conversion.overall"]) == pytest.approx(float(o["conversion.per_pass"]), rel=1e-12)
+    assert 100.0 < float(o["h2.chemical_nm3_m3"]) < 600.0
+
+
+@pytest.mark.slow
+def test_light_vgo_with_uco_recycle(light_vdu, light_once):
+    char, feed = light_vdu
+    unit = Hydrocracker(char, feed, HydrocrackerParams(uco_recycle=0.6))
+    r = unit.solve(feed)
+    _check_solution(r)
+    o, o1 = r.outputs, light_once[2].outputs
+    assert float(o["uco.steps"]) > 1
+    assert float(o["uco.recycle_rate"]) > 0
+    # recycling the UCO converts more of the fresh feed
+    assert float(o["conversion.overall"]) > float(o1["conversion.overall"])
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("recycle", [0.0, 0.6])
+def test_heavy_vgo_converges(recycle):
+    char = char_h()
+    feed = vdu_vgo(char)
+    unit = Hydrocracker(char, feed, HydrocrackerParams(uco_recycle=recycle))
+    r = unit.solve(feed)
+    _check_solution(r)
+
+
+@pytest.mark.slow
+def test_trends_with_cracking_temperature(light_once):
+    """Conversion rises with WABT; naphtha/middle distillate and H2 consumption rise with conversion."""
+    unit, feed, _ = light_once
+    p = unit.params
+    rows = []
+    for T in (633.15, 643.15, 653.15):
+        o = unit.solve(feed, params=dataclasses.replace(p, T_crack=T)).outputs
+        rows.append([float(o[k]) for k in ("wabt.crack", "conversion.per_pass", "naphtha_to_middle_distillate",
+                                           "h2.chemical")])
+    rows = np.asarray(rows)
+    for j in range(4):
+        assert np.all(np.diff(rows[:, j]) > 0), (j, rows)
+
+
+#: AD against Richardson-extrapolated central differences.
+GRAD_RTOL = 1e-5
+
+
+def richardson(f, x0, h):
+    d = lambda s: (f(x0 + s) - f(x0 - s)) / (2 * s)
+    return (4.0 * d(h / 2) - d(h)) / 3.0
+
+
+@pytest.mark.slow
+@pytest.mark.release
+def test_gradients_match_central_differences(light_once):
+    """d(kerosene yield, conversion, chemical H2)/d(cracking T, pressure, one TBP point of the assay)."""
+    unit, feed, _ = light_once
+    p0 = unit.params
+    tbp0 = jnp.asarray([t + 273.15 for t in TBP_A])
+    char0 = char_a()
+    names = [n for n in char0.pseudo_names if n in unit.cuts]
+    mw0 = dict(zip(char0.names, np.asarray(char0.component_MW)))
+    # hold the feed's MASS per cut while the assay moves (the cut's molecular weight moves with it)
+    mass = {n: float(feed.get(f"F_{n}", 0.0)) * mw0[n] for n in names}
+    keys = ("kerosene.yield", "conversion.per_pass", "h2.chemical")
+
+    def f(v):
+        c = char_a(tbp0.at[7].set(v[2]))
+        mw = dict(zip(c.names, c.component_MW))
+        fd = {f"F_{n}": mass[n] / mw[n] for n in names}
+        r = unit.solve(fd, char=c, params=dataclasses.replace(p0, T_crack=v[0], P=v[1]), warn=False).outputs
+        return jnp.stack([r[k] for k in keys])
+
+    v0 = jnp.asarray([float(p0.T_crack), float(p0.P), float(tbp0[7])])
+    J = np.asarray(jax.jacrev(f)(v0))
+    for j, h in enumerate((0.5, 1e5, 1.0)):
+        e = jnp.zeros(3).at[j].set(1.0)
+        fd = np.asarray(richardson(lambda t: f(v0 + t * e), 0.0, h))
+        np.testing.assert_allclose(J[:, j], fd, rtol=GRAD_RTOL, err_msg=f"input {j}")
+
+
+@pytest.mark.slow
+@pytest.mark.release
+def test_recycle_ratio_gradient(light_vdu):
+    """d(overall conversion, diesel yield, chemical H2)/d(UCO recycle fraction), through the UCO tear's adjoint."""
+    char, feed = light_vdu
+    unit = Hydrocracker(char, feed, HydrocrackerParams(uco_recycle=0.6))
+    p0 = unit.params
+    keys = ("conversion.overall", "diesel.yield", "h2.chemical")
+
+    def f(x):
+        o = unit.solve(feed, params=dataclasses.replace(p0, uco_recycle=x), warn=False).outputs
+        return jnp.stack([o[k] for k in keys])
+
+    g = np.asarray(jax.jacrev(f)(0.6))
+    fd = np.asarray(richardson(f, 0.6, 0.02))
+    np.testing.assert_allclose(g, fd, rtol=GRAD_RTOL)
+
+
+@pytest.mark.slow
+def test_products_blend_into_jet_and_ulsd_pools(light_once):
+    from difflow_refinery.blending import BlendComponent, BlendPool
+    unit, feed, r = light_once
+    grid = r.product_char
+    for name, pool in (("kerosene", "jet"), ("diesel", "ulsd")):
+        comp = BlendComponent.from_stream(f"hcu_{name}", r.product_stream(name), grid, flash_C=60.0)
+        assert float(comp.properties["SG"]) == pytest.approx(float(r.outputs[f"{name}.sg"]), rel=1e-9)
+        assert float(comp.properties["S_ppm"]) == pytest.approx(float(r.outputs[f"{name}.S_wppm"]), rel=1e-9,
+                                                               abs=1e-9)
+        res = BlendPool(pool)([comp], [1.0])
+        assert np.isfinite(float(res.properties["SG"]))
+    d = BlendComponent.from_stream("hcu_diesel", r.product_stream("diesel"), grid, flash_C=60.0)
+    assert float(BlendPool("ulsd")([d], [1.0]).properties["cetane_index"]) == pytest.approx(
+        float(r.outputs["diesel.cetane_index"]), rel=1e-6)
+
+
+@pytest.mark.slow
+@pytest.mark.release
+def test_hcu_block_delta_vectors(light_once):
+    from difflow.planning import check_delta_vectors
+    from difflow_refinery.hydrocracking.planning import hcu_block
+    unit, feed, _ = light_once
+    blk = hcu_block(unit, feed, ["crack.T_in", "uco.cut_point"], ["kerosene.bpd", "conversion.per_pass",
+                                                                   "h2.chemical"], feed_product="vgo")
+    chk = check_delta_vectors(blk, rtol=1e-3)
+    assert chk["passed"], chk["max_rel_error"]
