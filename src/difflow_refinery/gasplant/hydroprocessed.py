@@ -239,7 +239,7 @@ class HydroprocessedFeed:
 def hydroprocessed_feed(source, product: str | Sequence[str] | None = None, *, char=None,
                         T=None, P=None, kij: Optional[Mapping] = None,
                         unsupported: Literal["raise", "drop"] = "raise",
-                        min_flow: float = 0.0) -> HydroprocessedFeed:
+                        drop_gases: bool = False, min_flow: float = 0.0) -> HydroprocessedFeed:
     """A hydroprocessing product as a gas-plant feed: its table and its stream.
 
     Args:
@@ -253,6 +253,12 @@ def hydroprocessed_feed(source, product: str | Sequence[str] | None = None, *, c
         unsupported: What to do with a dissolved gas the gas plant has no
             constants for (ammonia): ``"raise"`` (default) or ``"drop"``
             (its flow goes to :attr:`HydroprocessedFeed.dropped`).
+        drop_gases: Leave out EVERY dissolved real gas off the product grid
+            (H2, H2S, NH3, C1, C2 of a wild naphtha), into ``dropped``. A
+            total condenser has no outlet for them: on example 40's product
+            plus wild naphtha a splitter does not converge (NaN) with them
+            in and converges without. In a refinery they leave before the
+            splitter, in a stabilizer or the stripper's overhead drum.
         min_flow: Leave out grid cuts whose flow is at most this (mol/s);
             every cut is kept by default. A fractionator product carries a
             sigmoid tail of every cut; this trims the table, not the mass
@@ -268,6 +274,9 @@ def hydroprocessed_feed(source, product: str | Sequence[str] | None = None, *, c
     dropped: dict = {}
     gases = []
     for g in extra:
+        if drop_gases:
+            dropped[g] = stream[f"F_{g}"]
+            continue
         try:
             light_component_data(g)
         except KeyError:

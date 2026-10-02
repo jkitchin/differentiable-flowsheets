@@ -170,6 +170,11 @@ class TestGasPlantFeed:
         assert float(feed.stream["T"]) == 320.0
         assert set(feed.below(C + 85.0)) >= {"hydrogen", "propane", "n_pentane"}
         assert treated.names[-1] not in feed.below(C + 85.0)
+        # drop_gases: none of the off-grid gases, all of them in dropped, the rest of the mass exact
+        bare = hydroprocessed_feed(wild, char=treated, drop_gases=True)
+        assert bare.components.names == tuple(treated.names)
+        assert set(bare.dropped) == {"hydrogen", "hydrogen_sulfide", "ammonia"}
+        assert float(bare.mass_flow) == pytest.approx(float(stream_mass(stream, treated)), rel=1e-13)
 
     def test_min_flow_trims_the_table(self, grids):
         _, treated, stream = grids
@@ -261,11 +266,14 @@ def test_nht_to_reformer(nht):
 @pytest.mark.slow
 def test_splitter_on_the_hydrotreated_naphtha(nht):
     _, res = nht
-    feed = hydroprocessed_feed(res, ("product", "wild_naphtha"), T=C + 100.0, P=4e5, unsupported="drop",
-                               min_flow=1e-9)
-    total = float(stream_mass(*resolve_product(res, ("product", "wild_naphtha"))))
-    dropped = sum(float(v) * (17.03052e-3 if k == "ammonia" else 0.0) for k, v in feed.dropped.items())
-    assert float(feed.mass_flow) == pytest.approx(total - dropped, rel=1e-6)
+    # the wild naphtha's dissolved H2/H2S/NH3/C1/C2 leave before a splitter (a total condenser
+    # cannot condense hydrogen), so they are dropped -- and the mass accounts for them exactly
+    feed = hydroprocessed_feed(res, ("product", "wild_naphtha"), T=C + 100.0, P=4e5, drop_gases=True)
+    stream, grid = resolve_product(res, ("product", "wild_naphtha"))
+    gas = {k: v for k, v in stream.items() if k.startswith("F_") and k[2:] not in grid.names}
+    assert gas and set(feed.dropped) == {k[2:] for k in gas}
+    m = float(stream_mass(stream, grid)) - float(stream_mass(gas, grid))
+    assert float(feed.mass_flow) == pytest.approx(m, rel=1e-13)
     p = splitter(feed.components, feed.below(C + 85.0), heavy_spec=("bottoms.x.light", 0.02),
                  light_spec=("distillate.x.heavy", 0.02), n_trays=12, feed_tray=6, top_P=3e5)
     with warnings.catch_warnings():

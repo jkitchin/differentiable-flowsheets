@@ -2234,11 +2234,13 @@ The table is built by `product_components(grid, gases=)` and holds three kinds o
 - **Grid light ends:** real components with the database's critical constants and Cp. Their molar mass is the grid's, so the feed's mass is the product's to round-off; the two molar masses differ in the fifth figure.
 - **Treated cuts:** pseudocomponents with the grid's `MW`, `Tc`, `Pc` and `omega`, and a Watson-Nelson ideal-gas Cp from the grid's `Tb`, `SG` and `MW` (the correlation `characterize` uses for its own cuts). Only `MW` and `SG` are changed by the hydrotreater: `Tb`, `Tc`, `Pc` and `omega` are the feed cut's. That is an approximation for a saturated cut (unverified in size).
 
-`min_flow=` trims cuts carrying no more than that flow. The trimmed flow is reported in `dropped`.
+`min_flow=` trims cuts carrying no more than that flow. `drop_gases=True` leaves out every dissolved gas that is off the grid. Both report what they leave out in `dropped`.
+
+**A splitter takes no dissolved gas.** Example 40's wild naphtha carries 0.31 mol/s H2, 0.26 mol/s H2S and 0.07 mol/s C1 in about 240 mol/s, which a total condenser has no outlet for. With them in the feed, a 12-tray splitter on product plus wild naphtha does not converge (NaN after 300 iterations). Without them, it converges in about 20 iterations. In a refinery these gases leave before the splitter, in a stabilizer or the stripper's overhead drum. Pass `drop_gases=True`, or keep them and run a column that has somewhere to send them, such as a partial-condenser stabilizer.
 
 ```python
 feed = hydroprocessed_feed(nht_res, ("product", "wild_naphtha"), T=100 + 273.15, P=4e5,
-                           unsupported="drop", min_flow=1e-9)
+                           drop_gases=True)
 col = GasPlantColumn(splitter(feed.components, feed.below(85 + 273.15),
                               heavy_spec=("bottoms.x.light", 0.02), light_spec=("distillate.x.heavy", 0.02),
                               n_trays=12, feed_tray=6, top_P=3e5))
@@ -2262,7 +2264,7 @@ Per commit, on a grid derived from a characterization with half its aromatics sa
 Slow, on example 40's naphtha through the naphtha hydrotreater:
 
 - the fractionated heavy naphtha into the reformer: mass conserved to 1e-13, sulfur carried, reformer converged with mass, C, H and S closing;
-- a 12-tray splitter on product plus wild naphtha: converges and balances.
+- a 12-tray splitter on product plus wild naphtha (`drop_gases=True`): the feed's mass is the product's less exactly the dropped gas, and the column converges and balances.
 
 (refinery-hydrotreater-results)=
 ### Results on the test diesel
