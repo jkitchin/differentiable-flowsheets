@@ -13,6 +13,11 @@ from difflow_refinery.gasplant.components import (
     gas_components,
     light_component_data,
 )
+from difflow_refinery.gasplant.feed import (
+    GasPlantFeed,
+    evolved_h2s,
+    gas_plant_feed,
+)
 from difflow_refinery.gasplant.thermo import (
     PR,
     SRK,
@@ -71,4 +76,5 @@ __all__ = [
     "deisobutanizer", "oconnell_efficiency", "splitter",
     "GPA_2140", "fuel_gas", "lpg_quality", "reid_vapor_pressure", "true_vapor_pressure",
     "GasPlantPlanningModel", "gasplant_block", "planner_units",
+    "GasPlantFeed", "evolved_h2s", "gas_plant_feed",
 ]

@@ -1311,6 +1311,66 @@ H2S past it, into the fuel gas and the LPG.
 The H2S figure starts from an assumption. The assay says nothing about
 sulfur, so the offgas is given 2 mol % H2S.
 
+### From crude-unit products to a gas-plant feed
+
+The crude unit's products are on the crude's whole characterization
+(`F_<light end>`, `F_pc01` ... `F_pcNN`, `F_water`); the gas plant works
+on a `GasComponents` table holding only the light ends and the cuts the
+naphtha carries. `gas_plant_feed` (#326) is the bridge:
+
+```python
+from difflow_refinery.gasplant import gas_plant_feed
+gp = gas_plant_feed(cdu.products, char,
+                    ["hydrogen_sulfide", "ethane", "propane", "isobutane",
+                     "n_butane", "isopentane", "n_pentane"],
+                    min_fraction=1e-3, h2s={"offgas": 0.02}, T=313.15, P=1.3e5)
+comps, offgas, naphtha = gp.components, gp["offgas"], gp["naphtha"]
+print(gp.summary())
+```
+
+It does three things, in this order:
+
+1. **Selects the cuts.** Cut $i$ is kept when
+   $F_i^{\mathrm{basis}} > f_{\min} \sum_j F_j^{\mathrm{basis}}$, the sum
+   over every component of the basis stream (the naphtha by default) as the
+   crude unit reports it, water included. The selection is a static choice:
+   it is made on the concrete flows, or given as `cuts=` (required under
+   `jax.jit`).
+2. **Folds the rest.** Every cut not kept, in every converted stream, goes
+   into the heaviest kept cut $d$: $F_d \leftarrow F_d + \sum_{i\ \mathrm{folded}} F_i$.
+   Moles are conserved exactly. Mass is not: the fold changes it by
+   $\sum_i F_i (M_d - M_i)$ (`fold_mass_change`, negative since the folded
+   cuts are the heavy ones). `mass_change` is the whole difference between
+   the stream on the gas-plant table and its water-free mass on the
+   characterization, so it also holds the small difference between a light
+   end's database molar mass and the characterization's.
+3. **Drops the water** (and anything else in `drop=`), reported as
+   `dropped_mol` / `dropped_kg`.
+
+A light end in a stream that is neither in `light` nor in `drop=` raises,
+rather than being lost. `folded_fraction` is the folded moles of all
+streams over the basis stream's total (the figure example 38 prints);
+`folded_fraction_of(name)` is per stream. The result is differentiable in
+the stream flows (and the characterization's arrays): folding is a sum.
+
+**H2S.** The crude unit makes none; the assay's sulfur stays on the cuts.
+Two explicit ways to add it:
+
+- `h2s={"offgas": r}`: an assumption, $r$ mol of H2S per mol of the
+  water-free stream (examples 38 and 40 use $r = 0.02$).
+- `h2s_flow={"offgas": evolved_h2s(cdu.products, char, fraction)}`: a flow
+  from a sulfur balance,
+  $F_{\mathrm{H_2S}} = \phi \sum_{\mathrm{streams}} \sum_i F_i M_i S_i / M_S$,
+  with $S_i$ the characterization's sulfur mass fraction (an assay with
+  `sulfur_wt`) and $M_S = 32.065$ g/mol. The fraction $\phi$ that evolves as
+  H2S in the furnace and column depends on the crude and the severity; no
+  value is sourced here, so it has no default, and any value is illustrative.
+  The cuts' sulfur is not reduced, so that sulfur is counted twice (as gas and
+  on the cuts); subtract it in a sulfur balance.
+
+Tests: `tests/refinery/test_gasplant_feed.py` (against example 38's former
+hand code, to 1e-12, and the folded-mass report).
+
 ### Gas plant gotchas
 
 - **The naphtha sets a floor on its own RVP.** A stabiliser cannot bring the naphtha below the RVP of its C5+ part. The C5/C6 in the test feed alone sit near 70 kPa. A 60 kPa spec is infeasible, and Newton does not converge.
