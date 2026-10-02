@@ -18,6 +18,11 @@ from difflow_refinery.gasplant.feed import (
     evolved_h2s,
     gas_plant_feed,
 )
+from difflow_refinery.gasplant.hydroprocessed import (
+    HydroprocessedFeed,
+    hydroprocessed_feed,
+    product_components,
+)
 from difflow_refinery.gasplant.thermo import (
     PR,
     SRK,
@@ -66,6 +71,7 @@ from difflow_refinery.gasplant.planning import (
 )
 
 __all__ = [
+    "HydroprocessedFeed", "hydroprocessed_feed", "product_components",
     "GasComponents", "PR_KIJ", "default_kij", "gas_components", "light_component_data",
     "PR", "SRK", "Cubic", "CubicThermo", "bubble_pressure", "bubble_temperature",
     "feed_state", "flash_tp", "vapor_pressure_vl",
