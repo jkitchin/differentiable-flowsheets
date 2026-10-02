@@ -72,9 +72,10 @@ jobs:
     # After #315 the shards ran 17.7 / 21.6 / 16.6 minutes (run
     # 36957483515), against 10 / 28 / 10 measured on the runner before it
     # (the issue saw 16-18 / 20-22 / 6-9) -- on a suite that has grown by
-    # the preheat train and gas plant since. Shard 2 stays the longest: the
-    # three files tests/conftest.py runs in series are ~15 minutes on one
-    # worker, a floor for whichever shard holds them. 30 is ~1.4x that
+    # the preheat train and gas plant since. Shard 2 stays the longest: it
+    # holds tests/refinery/test_planning_nonconvergence.py, 776s of runner
+    # time in four tests that cannot be split across workers, which is a
+    # floor for whichever shard holds it. 30 is ~1.4x that
     # shard: long enough not to fire on a slow runner (the same commit has
     # measured 3-4 minutes apart), short enough that reaching it means
     # something is wrong. If a shard creeps toward it, re-record
