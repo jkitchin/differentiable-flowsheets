@@ -381,6 +381,7 @@ def test_light_vgo_with_uco_recycle(light_vdu, light_once):
 
 
 @pytest.mark.slow
+@pytest.mark.release  # the second-feed acceptance claim; the light VGO covers the code per commit
 @pytest.mark.parametrize("recycle", [0.0, 0.6])
 def test_heavy_vgo_converges(recycle):
     """The heavy crude's VGO (SG 0.93 crude, 3 wt% S): heavier, so more reactive per the lumping

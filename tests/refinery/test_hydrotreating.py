@@ -315,6 +315,7 @@ def test_diesel_converges_and_balances(diesel_result):
 
 
 @pytest.mark.slow
+@pytest.mark.release  # the second-feed acceptance claim; the diesel covers the code per commit
 def test_kerosene_from_second_assay_converges():
     char = char_b()
     feed = straight_run_cut(char, 150 + 273.15, 250 + 273.15, 30.0)
@@ -383,6 +384,7 @@ def test_gradients_match_central_differences(diesel):
 
 
 @pytest.mark.slow
+@pytest.mark.release  # ~10 min on the runner; that the target is met is an answer
 def test_wabt_target(diesel):
     char, cuts, feed, unit = diesel
     u = Hydrotreater(char, feed, unit.params, target=TargetSpec("wabt", 630.0))
