@@ -1872,7 +1872,12 @@ A hydroprocessing stream carries real **gases** (H2, H2S, NH3, C1--C4, the light
 ln K_i - ln phi_i^L(x) + ln phi_i^V(y) = 0,    x = z / (1 + V (K - 1)),  y = K x
 ```
 
-with `V` from Rachford-Rice solved as a **negative flash** (Whitson & Michelsen 1989): bracketed between the poles `1/(1 - K_max)` and `1/(1 - K_min)` instead of clipped to [0, 1]. The equations stay smooth through a phase boundary, and `x` and `y` remain the compositions of the (possibly incipient) phases. The reported split uses `beta = clip(V, 0, 1)`. Start: Wilson's K and 25 successive-substitution passes; finish: `optimistix` Newton, whose implicit adjoint gives the derivative.
+with `V` from Rachford-Rice solved as a **negative flash** (Whitson & Michelsen 1989): bracketed between the poles `1/(1 - K_max)` and `1/(1 - K_min)` instead of clipped to [0, 1]. The equations stay smooth through a phase boundary, and `x` and `y` remain the compositions of the (possibly incipient) phases. The reported split uses `beta = clip(V, 0, 1)`. Start: Wilson's K and 25 successive-substitution passes; finish: `optimistix` Newton. The derivative is the implicit-function one, `-J^-1 dR/dtheta` at the root, attached by a rule of the module's own (`_flash_root`, a `jax.custom_jvp` that calls itself for its primal, so second derivatives are exact too).
+
+Two robustness rules (#332):
+
+- **The Rachford-Rice bracket is set by the components present** (`z` above `TRACE = 1e-20` of the feed). A species that is absent -- the floored zero flow of hydrogen in a feed oil -- has a pole of its own that the physical root can lie beyond; bracketing on it left the root at the bracket's edge, the Newton polish crossed the pole, and every mole fraction came out NaN. A trace component beyond its pole gets `x = z` (`phase_denominator`), its own negligible amount.
+- **A flash that fails reports, it does not raise.** Near a mixture's critical region Newton can diverge to a non-finite `ln K`. The flash then returns its successive-substitution start with a large `FlashResult.residual`. optimistix's implicit adjoint is not used because its linear solve raises on a non-finite Jacobian -- the "equinox NaN in linear solve" error a naphtha unit at 320 °C / 50 bar / LHSV 0.5 / 150 Nm³/m³ used to stop with. Callers read the residual: the hydrotreater's `converged` includes every flash (`outputs["flash.residual"]`), and `compress` returns NaN, not an exception, for a non-finite inlet.
 
 `HPSeparator(layout)(flows, T, P, comps)` returns `(vapour, liquid, water, FlashResult)`: gases and cut molecules split by the flash, every attribute with its cut, water decanted whole (no free-water VLE).
 
@@ -1897,7 +1902,7 @@ C_eff(F, T) dT/dw = q(F, T, P)        adiabatic
 - `attributes` and `attribute_elements` -- the per-cut attributes it needs (the layout's must be these);
 - `rates(ctx, params) -> Rates`.
 
-`ReactionContext` is what it reads at a point: `flows`, `T`, `P`; the equilibrium `x`, `y` and vapour fraction `beta` of the flashing components; their **fugacity-equivalent liquid concentrations** `c = x / v_L` (mol/m³; `v_L` from the cuts' Rackett volumes); `c_attr`, the attribute concentrations in that liquid (`c_cut x attribute-per-molecule`); the partial pressures `p = y P`; `per_molecule`; and helpers `ctx.c_gas(name)`, `ctx.p_gas(name)`, `ctx.c_cut`. Concentrations are defined through `x` even where the stream is all vapour (the negative flash gives the incipient liquid's `x`), so a rate law written on them is continuous through a dry-out. `Rates(gas, cut, attr, heat)` returns `d/dw` of every flow and the heat released. Element conservation is the kinetic model's job; `check_element_conservation(kinetics, ctx, params)` returns the net C, H, S, N production at a point.
+`ReactionContext` is what it reads at a point: `flows`, `T`, `P`; the equilibrium `x`, `y` and vapour fraction `beta` of the flashing components; their **fugacity-equivalent liquid concentrations** `c = x / v_L` (mol/m³; `v_L` from the cuts' Rackett volumes); `c_attr`, the attribute concentrations in that liquid (`c_cut x attribute-per-molecule`); the partial pressures `p = y P`; `per_molecule`; and helpers `ctx.c_gas(name)`, `ctx.p_gas(name)`, `ctx.c_cut`. Inside the two-phase region (`0 < V < 1`) `x` and `y` are the equilibrium phases. Outside it they are the stream itself and the incipient phase in equilibrium with it, which is what the negative flash gives *at* the boundary: an all-vapour stream has `y = z` and `x = z / K` (its dew-point liquid, unnormalised, so the liquid's fugacities are the vapour's); an all-liquid one `x = z` and `y = K z`. So concentrations are defined through `x` even where the stream is all vapour, and a rate law written on them is continuous through a dry-out (`v_L` is the incipient liquid's molar volume). Before #332 the reactor used the negative flash's own fictitious split beyond the boundary; in a vapour-phase naphtha bed (`V = 9`) that put the hydrogen partial pressure at 1.9 bar instead of 11 (`y_H2 = 0.06` against `z_H2 = 0.37`), and the aromatics equilibrium ran backwards -- the dehydrogenation, negative chemical hydrogen and cooling beds first seen in example 40. A diesel bed is two-phase and is not affected. `Rates(gas, cut, attr, heat)` returns `d/dw` of every flow and the heat released. Element conservation is the kinetic model's job; `check_element_conservation(kinetics, ctx, params)` returns the net C, H, S, N production at a point.
 
 **Beds and quench.** `reactor(oil, gas, T_in, T_gas, P, W, comps, params, quench=None)`. With `quench` fractions given, bed 1 gets the oil and the treat gas less every quench at `T_in[0]`, and each later bed's inlet temperature follows from the adiabatic mix (a scalar enthalpy balance, Newton). With `quench=None` every bed's inlet temperature is given and the quench each needs is solved (a scalar equation in the total quench, since the first bed's gas depends on it). The quench-mixing enthalpy uses the upstream bed's linearised K-values; the extra vaporisation caused by the quench gas itself is neglected, and the next bed's inlet flash resets the split. WABT is `sum_k W_k (T_in,k + 2 T_out,k)/3 / sum W`.
 
@@ -2031,7 +2036,7 @@ The DDS/HYD route shares of the two DBT classes are illustrative, set by the qua
 
 - the reactor pressure is uniform (no bed pressure drop); the separator sits `loop_dP` below it and the compressor makes that up;
 - the makeup gas is delivered at the recycle compressor's discharge temperature, and the treat gas and quench are at that temperature;
-- bed 1's inlet temperature is a spec (the furnace is not modelled); the oil's own feed temperature is not used;
+- bed 1's inlet temperature is a spec; the charge heater's duty is computed from it (below), and the oil's own feed temperature enters only there;
 - there is no wash water: the separator decants only the water the feed brought, and NH3 removal is the amine/wash fraction;
 - the HP separator vapour's cuts are knocked out back into its liquid (`knockout`), so the recycle gas is real species only;
 - a cut's gravity after treatment is computed from liquid molar-volume increments per saturation step (`VOLUME_INCREMENTS`: mono-aromatic -> naphthene +20.1, di -> mono +11.0, poly -> di +11.0, olefin -> paraffin +5.5 cm³/mol), from model-compound liquid densities at 60 °F (DIPPR 105 of Perry's 8th ed., via `chemicals`); heteroatom removal is taken to change the volume by nothing; the cut's boiling point and critical constants are the feed's;
@@ -2043,13 +2048,100 @@ The DDS/HYD route shares of the two DBT classes are illustrative, set by the qua
 `HydrotreaterResult.outputs` (units in `OUTPUT_UNITS`):
 
 - product: `product.S_wppm`, `.N_wppm`, `.sg`, `.api`, `.H_wt`, `.aromatics_vol` and its `mono_`/`di_`/`poly_aromatics_vol`, `.olefins_vol`, TBP `.T05` ... `.T95` (K), `.cetane_index` (ASTM D4737 from the TBP->D86 points and density, the blend pool's functions), `.rate`, `.yield` (mass), `.volume_yield`;
-- wild naphtha `naphtha.rate`, `.yield`, `.sg`, `.S_wppm`, `.T50`; `gas.yield` (C1--C4, H2S and NH3 net of the makeup's, mass fraction of feed);
+- wild naphtha `naphtha.rate`, `.yield`, `.sg`, `.S_wppm`, `.T50` (on the blend grid: liquid light ends and cuts);
+- `gas.yield` (mass fraction of feed): everything that leaves as gas -- C1--C4, H2S and NH3 in the off-gas, purge, acid gas and waters, the vapour of the lightest cuts in the drum's off-gas, plus the real gases dissolved in the liquid products off their blend grid -- less the makeup's own hydrocarbons; H2 and water excluded. A feed light end counts where it leaves (a C5 in the wild naphtha, a C3 mostly in the gas). Before #332 it subtracted every feed light end, including the C5s that leave as liquid, and came out at -10 % on a naphtha. `yields.total` = product + wild naphtha + gas yields, which equals `1 - feed.h2_water_rate/feed.rate` plus the chemical hydrogen as a mass fraction (tested to 1e-9);
+- dissolved gases (#333): `product.dissolved_gas_rate` (zero: the stripper sends every real gas overhead) and `naphtha.dissolved_gas_rate`, kg/s of H2, H2S, NH3, C1 and C2 in the wild naphtha;
+- charge heater (#332, [below](#refinery-hydrotreater-heater)): `heater.duty` (absorbed, W), `heater.fired_duty`, `heater.inlet_T`, `feed_effluent.duty`;
 - hydrogen: `h2.chemical` (mol/s), `h2.chemical_nm3_m3`, `h2.chemical_scf_bbl`, `h2.chemical_wt` -- chemical consumption **from the hydrogen balance on the characterized products** (H atoms in every outlet's cuts, H2S, NH3 and light hydrocarbons less those fed, halved); `h2.consumed_by_balance` (H2 in less H2 out, equal to it to round-off); `h2.makeup`, `h2.makeup_nm3_m3`, `h2.dissolved` (H2 in the separator liquid), `h2.purge`;
 - loop: `recycle.rate`, `recycle.h2_purity`, `purge.rate`, `makeup.rate`, `compressor.power`, `compressor.T_out`, `reactor.pH2_in`;
 - reactor: `wabt`, `reactor.T_out`, `reactor.dT_total`, per bed `bed<k>.T_in`, `.dT`, `.quench`; `catalyst.mass`; `hds.conversion`, `hdn.conversion`;
-- convergence: `tear.residual`, `stripper.residual`; `res.converged`.
+- convergence: `tear.residual`, `stripper.residual`, `flash.residual` (the largest PR-flash residual: bed inlets, HP separator, drum); `res.converged` requires all three (flashes below `FLASH_TOL = 1e-8`) and a finite product.
 
 `res.balances` gives the relative closure of mass, C, H, S and N over the whole unit (feed + makeup + steam = product + wild naphtha + off-gas + purge + acid gas + separator water + sour water). `res.streams` has every internal stream as `Flows`; `res.reactor` the bed profiles. `res.product_char` is a `BlendCharacterization` of the treated cuts and `res.product_stream("product")` the product as a stream on it, so the product goes straight into `BlendComponent.from_stream` for the ULSD or jet pool.
+
+(refinery-hydrotreater-streams)=
+### Product streams and dissolved gases
+
+`res.product_stream(name, T=298.15, P=101325.0, gases=True)` returns a liquid outlet (`"product"`, `"wild_naphtha"`) as `F_<name>` flows (mol/s) on `res.product_char`, **plus**, with `gases=True` (the default), the real gases dissolved in it that are not on that grid -- H2, H2S, NH3, methane, ethane -- under their own `F_<gas>` keys. With them the stream carries its whole mass, so a balance downstream closes to round-off: `res.stream_mass(stream)` (kg/s) equals `res.streams[name].mass(unit.layout)` to 1e-13, and the grid's light-end molar masses are now the layout's (IUPAC atomic weights), not the crude unit's table, which differed in the fifth figure (#333).
+
+- The stripper bottoms carries no real gas by construction (the stripper sends them all overhead), so `product_stream("product")` is the blend grid only either way.
+- The wild naphtha does carry them (in example 40, 0.022 t/h at the naphtha unit and 0.047 t/h at the distillate unit -- most of that refinery's mass imbalance). `BlendComponent.from_stream` refuses species outside its grid, so a pool takes `product_stream("wild_naphtha", gases=False)`, and `outputs["naphtha.dissolved_gas_rate"]` is exactly the mass that drops. Or send the wild naphtha through the fractionator, which puts the gases in an off-gas.
+- Water is never in these streams: the drum decants all of it.
+
+(refinery-hydrotreater-heater)=
+### The charge heater
+
+The bed-1 inlet temperature stays the spec; the heater duty follows from it (#332). The heater takes the oil and bed 1's share of the treat gas (the treat gas less every quench) to `T_in[0]`:
+
+```
+Q_absorbed = H(bed-1 inlet, T_in) - H(heater inlet)
+Q_fired    = Q_absorbed / heater_efficiency
+```
+
+`H` is the reactor's own enthalpy (`stream_enthalpy`: the PR K-values and phase split at the bed inlet, ideal-gas and Watson-liquid enthalpies on one basis), so the heater and the bed agree on what the stream holds. The heater inlet is either
+
+- `heater_inlet_T=None` (default): no feed/effluent exchanger. The oil enters at its feed temperature (`feed["T"]`) as liquid -- it is pumped to reactor pressure and holds no hydrogen yet, so it is below its bubble point -- and the treat gas at the recycle compressor's discharge temperature (ideal gas). The heater does all the heating. `feed_effluent.duty` is 0.
+- `heater_inlet_T=<K>`: the oil and gas mixed at that temperature, after a feed/effluent exchanger. `feed_effluent.duty` is that exchanger's cold-side duty. Its hot side is **not** modelled (the reactor effluent goes to the separator at `hps_T`), so a temperature cross is not checked: keep `heater_inlet_T` below the reactor outlet less an approach.
+
+`heater_efficiency` (default 0.85, absorbed over fired) is **illustrative**: a typical fired process heater with some heat recovery, from no cited source. Feed water, if any, is taken as vapour (the reactor's convention), which understates the duty by its latent heat. Not modelled: the heater's pressure drop, coil vaporisation profile, fuel and stack.
+
+On the test diesel (50 kg/s from 25 °C, no exchanger) the absorbed duty is in the range a sensible-heat estimate gives (tested within 0.7--1.6 of `m cp dT` at 2.6 kJ/kg/K).
+
+(refinery-hydrotreater-fractionator)=
+### The product fractionator (optional, #328)
+
+`res.fractionate(cut_points, products, width, feeds=("product",))` (or `hydrotreating.fractionate(res, ...)`) splits the liquid product -- or the product and the wild naphtha together, `feeds=("product", "wild_naphtha")` -- into named products at TBP cut points. Like the FCC and hydrocracker fractionators it is an idealized, differentiable split, **not** a stage column. Component `i` of the product grid (boiling point `Tb_i`) goes to product `k` (lightest first, cut points `T_1 < ... < T_{n-1}`) with the share
+
+```
+a_k(Tb) = sigmoid((Tb - T_k) / w),   a_0 = 1,  a_n = 0
+share_k = a_{k-1} - a_k
+```
+
+the FCC main fractionator's logistic step generalised to `n` products. The shares telescope to one, so every component's moles, and the treated attributes they carry, are conserved: the mass closure is reported (`FractionationResult.balance`, below 1e-13 in the tests). The real gases the wild naphtha carries go whole to an `off_gas` stream (`fr.off_gas`, `fr.rates["off_gas"]`), so the liquid products are blendable as they are.
+
+- Defaults: `products=("jet", "diesel")`, `cut_points=(240 °C,)`, `w = 8 K`. All three **illustrative**: `w` stands for the overlap of a real column's neighbouring products; a column calculation would set it. A logistic step rather than the hydrocracker's quintic because the quintic is flat beyond `+/- w`, which gives an exactly zero cut-point derivative when the cut point sits midway between two 30 K grid cuts.
+- `fr.products[name]` is an `F_<product_char.names>` stream, straight into `BlendComponent.from_stream(name, stream, fr.char)`; `fr.rates` is kg/s per product.
+- Cut points and width are traceable: `jax.grad` of a pool property with respect to a cut point is exact, checked against Richardson-extrapolated central differences at 1e-5 (release test).
+
+```python
+fr = res.fractionate(cut_points=(240 + 273.15,), products=("jet", "diesel"))
+jet = BlendPool("jet")([BlendComponent.from_stream("jet", fr.products["jet"], fr.char,
+                                                   flash_C=42.0, freeze_C=-47.0, smoke_mm=22.0)], [1.0])
+ulsd = BlendPool("ulsd")([BlendComponent.from_stream("diesel", fr.products["diesel"], fr.char,
+                                                     flash_C=60.0)], [1.0])
+```
+
+Not modelled: duties, reflux, side-stripper steam, flash points (the pools still take measured `flash_C`), and the D86 overlap a real column produces.
+
+(refinery-hydrotreater-naphtha)=
+### A naphtha hydrotreater
+
+The unit runs a naphtha as it is (example 40's stabilised naphtha: C3--C5 light ends and four 30 °C cuts to 180 °C, 1070 wppm S). The bed is all vapour (`V` 9--14 in the negative flash), which is where the reactor's phase model was wrong until #332 (see [the reactor](#refinery-hydroprocessing-reactor)); with it fixed, the default (diesel) constants hydrogenate as they should, but they were chosen for diesel-range sulfur and reach only about 90 wppm at 30 bar, 320 °C, LHSV 4 h⁻¹ and 100 Nm³/m³.
+
+`NAPHTHA_HDT_PARAMS` is an **illustrative** naphtha set: the diesel constants with HDS of the sulfide, thiophene and benzothiophene classes ten times faster (in a naphtha those are mercaptans, light sulfides and alkylthiophenes; the reactivity order of Girgis & Gates 1991, the factor chosen here), HDN a hundred times faster, and every aromatics-saturation step ten times slower (a CoMo naphtha catalyst at 20--35 bar passes benzene largely unsaturated). It is not any catalyst's.
+
+```python
+from difflow_refinery.hydrotreating import NAPHTHA_HDT_PARAMS
+nht = Hydrotreater(char, naphtha, HydrotreaterParams(
+    T_in=(320 + 273.15,), quench=None, bed_fractions=(1.0,), P=30e5, lhsv=4.0, h2_oil=100.0,
+    stripper_feed_T=150 + 273.15, kinetics=NAPHTHA_HDT_PARAMS))
+```
+
+On example 40's naphtha (single bed, stripper feed at 150 °C; the stripper's default 230 °C does not converge on a naphtha and says so):
+
+| Bed inlet, P, LHSV, H2/oil | product S (wppm) | product N (wppm) | chemical H2 (Nm³/m³) | bed dT (K) |
+|---|---|---|---|---|
+| 300 °C, 30 bar, 4 h⁻¹, 100 Nm³/m³ | 0.87 | 4.6 | 1.7 | 2.1 |
+| 310 °C, 30 bar, 4 h⁻¹, 100 Nm³/m³ | 0.033 | 1.7 | 1.7 | 2.2 |
+| 320 °C, 30 bar, 4 h⁻¹, 100 Nm³/m³ | < 0.001 | 0.34 | 1.8 | 2.3 |
+| 340 °C, 30 bar, 4 h⁻¹, 100 Nm³/m³ | < 0.001 | < 0.001 | 2.1 | 2.8 |
+| 320 °C, 30 bar, 6 h⁻¹, 100 Nm³/m³ | 0.015 | 1.2 | 1.7 | 2.2 |
+| 320 °C, 20 bar, 4 h⁻¹, 100 Nm³/m³ | 0.068 | 2.0 | 1.6 | 2.0 |
+| 320 °C, 30 bar, 4 h⁻¹, 100 Nm³/m³, **diesel** constants | 87 | 23 | 3.0 | 4.1 |
+
+(Feed 1072 wppm S. Figures far below 1 wppm only say "removed": the illustrative first-order classes have no refractory tail.) So a reformer feed (below about 0.5 wppm S and N) is reached at 30 bar and LHSV 4 from about 310 °C for sulfur and 320 °C for nitrogen. The charge heater takes 23.6 MW absorbed (27.8 MW fired at 0.85) at 320 °C with no feed/effluent exchanger, and the wild naphtha carries 0.011 kg/s of dissolved gas. The reformer model carries neither sulfur nor nitrogen, so nothing downstream sees these numbers. Example 40's earlier conditions (60 bar, LHSV 0.7, 400 Nm³/m³), which were what the diesel constants needed under the old phase model, now run away on the diesel constants (the aromatics saturate, the integration does not finish, `converged=False`); on the naphtha set they converge.
+
+**Where it fails.** At 320 °C, 50 bar, LHSV 0.5 and 150 Nm³/m³ the bed-inlet PR flash does not converge (the mixture is near its critical region; Newton diverges). The unit returns `converged=False` with `flash.residual` about 1e-3 and warns; it used to raise an equinox NaN-in-linear-solve error (`tests/refinery/test_hydrotreating_naphtha.py::test_a_failed_bed_inlet_flash_reports_a_residual_instead_of_raising`, per commit, on the flash itself; `test_a_failed_flash_is_reported_not_raised`, release, on the whole unit).
 
 (refinery-hydrotreater-results)=
 ### Results on the test diesel
@@ -2060,7 +2152,8 @@ The test crude of the composition section (SG 0.86, 1.8 wt% S, 1500 wppm N, with
 |---|---|
 | WABT | 351.4 °C; bed rises 13.2 and 7.2 K |
 | product | 241 wppm S, 229 wppm N, SG 0.850, 14.2 vol% aromatics, cetane index 58.4 |
-| yields (mass) | product 98.74 %, wild naphtha 0.39 %, gas (C1--C4, H2S, NH3) 1.20 % |
+| yields (mass) | product 98.74 %, wild naphtha 0.39 %, gas (C1--C4, H2S, NH3) 1.21 % |
+| charge heater | 47.4 MW absorbed, 55.8 MW fired (from a 25 °C feed, no feed/effluent exchanger) |
 | hydrogen | chemical 32.4 Nm³/m³ (192 scf/bbl), makeup 49.7 Nm³/m³; recycle purity 95.1 % |
 | loop | recycle compressor 153 kW; purge 36 mol/s |
 | closure | mass, C, H, S and N to 1e-15 relative; tear residual 4e-14; stripper 2e-12 |
@@ -2081,6 +2174,9 @@ The numbers come from illustrative rate constants: read them as the shape of the
 - product S falls with temperature and pressure, H2 consumption rises with temperature, aromatics pass through a minimum in temperature;
 - `TargetSpec("wabt", ...)` lands on its target; `hdt_block` delta vectors pass `check_delta_vectors`;
 - the product enters `BlendPool("ulsd")` through `BlendComponent.from_stream`, with the same sulfur, gravity and cetane index the unit reports;
+- the liquid outlets as streams carry their whole mass (dissolved gases included), and the unit's mass balance closes to 1e-13 over them; `gases=False` drops exactly `naphtha.dissolved_gas_rate`; the yields add up (`yields.total`); the charge heater's duty is positive and of the sensible-heat order;
+- the fractionator: shares sum to one, the jet/diesel split closes to 1e-13 and its two products go into the jet and ULSD pools with their sulfur averaging back to the unit's; three products over product and wild naphtha send the dissolved gas to the off-gas; the cut-point gradient of four pool properties against Richardson differences (release);
+- on example 40's naphtha (`tests/refinery/test_hydrotreating_naphtha.py`): balances, `gas.yield` positive and consistent on a feed carrying light ends, the charge heater with a feed/effluent exchanger, positive chemical hydrogen in a vapour bed, the light/heavy naphtha split; the 320 °C / 50 bar / LHSV 0.5 / 150 Nm³/m³ point returning `converged=False` with a warning instead of raising; and (release) `NAPHTHA_HDT_PARAMS` reaching below 0.5 wppm S at 30 bar, 320 °C, LHSV 4;
 - pins: PR fugacity coefficients against difflow's `PengRobinson` (1e-8), the H2/H2S/NH3 Cp polynomials against PPO 5th ed. (0.5 %), every heat of reaction and the aromatic-step entropies against the model-compound table, element conservation of the kinetics at a point, and the power-law fallback.
 
 A crude-unit product carries every cut at some trace level. `Hydrotreater(..., trace=1e-9)` leaves out cuts heavier than the heaviest one above that mole fraction, and reports what that drops as `dropped_mass_fraction` (below 1e-6 on the crude-unit diesel).
@@ -2121,6 +2217,9 @@ A crude-unit product carries every cut at some trace level. `Hydrotreater(..., t
 - **Not a difflow `Flowsheet` object.** The recycle is solved by the unit's own tear (above); a `Flowsheet` wiring of the same pieces is not provided.
 - **Commercial catalyst kinetics** are not reproduced and must not be implied: the rate constants are illustrative.
 - **No dissolved-gas effect in the stripper**: the real gases leave with the overhead without taking part in the column's equations.
+- **The product fractionator is a TBP split, not a column** (no duties, reflux or steam; the overlap width is illustrative). A `StageColumn` fractionator is not built.
+- **The charge heater has no feed/effluent exchanger hot side**: `heater_inlet_T` is taken as given and a temperature cross is not checked; no heater pressure drop, coil profile or fuel balance.
+- **Near a mixture's critical region** (a naphtha with little treat gas at 50--60 bar) the bed-inlet PR flash can fail; the unit then returns `converged=False`. A stability test and a critical-point-robust flash are not implemented.
 - **Deactivation tracking** with `difflow.reconciliation.tracking` is possible (the activity is a parameter with a gradient) but not demonstrated.
 - Out of scope (as the issue says): residue hydrotreating/HDM, countercurrent reactors, reactor internals and pressure drop, amine unit detail, dynamics.
 (refinery-alkylation)=

@@ -46,7 +46,7 @@ still differentiable, with no palette entry.
 | Unit | Module | Main class | Palette | In → out |
 |---|---|---|---|---|
 | C5/C6 isomerization | `isomerization` | `IsomerizationReactor`, `IsomerizationUnit` | both | light naphtha → isomerate |
-| Hydrotreater | `hydrotreating` | `Hydrotreater` | library | naphtha, kerosene or diesel → treated product, wild naphtha, off-gas |
+| Hydrotreater | `hydrotreating` | `Hydrotreater` | library | naphtha, kerosene or diesel → treated product, wild naphtha, off-gas; `res.fractionate(...)` → jet / diesel or light / heavy naphtha |
 | Hydrocracker | `hydrocracking` | `Hydrocracker` | library | VGO → LPG, naphtha, kerosene, diesel, unconverted oil |
 | Fluid catalytic cracker | `fcc` | `FCCUnit` | library | VGO → dry gas, C3, C4, gasoline, LCO, slurry, flue gas |
 | Catalytic reformer | `reforming` | `CatalyticReformer` | library | heavy naphtha → reformate, net H2, LPG, fuel gas |

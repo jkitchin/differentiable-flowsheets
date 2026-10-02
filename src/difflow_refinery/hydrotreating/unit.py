@@ -732,7 +732,9 @@ class Hydrotreater:
         not_h2w = jnp.asarray([0.0 if g in ("hydrogen", "water") else 1.0 for g in lay.gases])
         off_grid = jnp.asarray([0.0 if (g in ("hydrogen", "water") or g in lights) else 1.0
                                 for g in lay.gases])
-        gas_out = jnp.sum((off + o["purge"] + o["absorbed"] + o["water"] + sour).gas_mass(lay) * not_h2w)
+        gas_streams = off + o["purge"] + o["absorbed"] + o["water"] + sour
+        # (the drum's off-gas also carries some vapour of the lightest cuts)
+        gas_out = jnp.sum(gas_streams.gas_mass(lay) * not_h2w) + jnp.sum(gas_streams.cut_mass(lay))
         diss = {k: jnp.sum(f.gas_mass(lay) * off_grid) for k, f in (("product", prod), ("naphtha", naph))}
         outputs["gas.yield"] = (gas_out + diss["product"] + diss["naphtha"]
                                 - jnp.sum(o["makeup"].gas_mass(lay) * not_h2w)) / feed_mass

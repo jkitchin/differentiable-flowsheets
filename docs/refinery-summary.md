@@ -88,7 +88,7 @@ delta-base planning ([`difflow.planning`](planning.md)).
 | Unit | Main class | In → out | Model | Planning | Validation | Example |
 |---|---|---|---|---|---|---|
 | [C5/C6 isomerization](unit-operations-refinery.md#c5c6-light-naphtha-isomerization) | `IsomerizationReactor`, `IsomerizationUnit` (both on the palette) | light naphtha → isomerate | Adiabatic approach-to-equilibrium bed on ideal-gas thermochemistry; optional deisopentanizer and deisohexanizer recycle | `isom_block` | Equilibrium layer against IDAES `GibbsReactor` ([details](unit-operations-refinery.md#validation-the-isomerization-unit)); rate constants illustrative | 39 |
-| [Hydrotreater](unit-operations-refinery.md#the-hydrotreater) | `Hydrotreater` (library) | naphtha, kerosene or diesel → treated product, wild naphtha, off-gas | Trickle-bed HDS by sulfur class (LHHW, H2S-inhibited), HDN, aromatics saturation with equilibrium; HP separator, H2 recycle, stripper | `hdt_block` | Balances and gradients only; no literature cross-check; constants illustrative | 40 |
+| [Hydrotreater](unit-operations-refinery.md#the-hydrotreater) | `Hydrotreater` (library) | naphtha, kerosene or diesel → treated product, wild naphtha, off-gas; optionally jet / diesel (or light / heavy naphtha) | Trickle-bed HDS by sulfur class (LHHW, H2S-inhibited), HDN, aromatics saturation with equilibrium; charge-heater duty; HP separator, H2 recycle, stripper; optional TBP-split product fractionator (`res.fractionate`); diesel and naphtha (`NAPHTHA_HDT_PARAMS`) constant sets | `hdt_block` | Balances and gradients only; no literature cross-check; constants illustrative | 40 |
 | [Hydrocracker](unit-operations-refinery.md#the-hydrocracker) | `Hydrocracker` (library) | VGO → LPG, naphtha, kerosene, diesel, unconverted oil | Pretreat bed (hydrotreating kinetics) then cracking bed on continuous lumping or discrete lumps, organic-N inhibition; TBP-split fractionator; UCO recycle | `hcu_block` | Balances and gradients only; no literature cross-check; constants illustrative | — |
 | [Fluid catalytic cracker](unit-operations-refinery.md#the-fluid-catalytic-cracker) | `FCCUnit` (library) | VGO → dry gas, C3, C4, gasoline, LCO, slurry, flue gas | 3-, 4- or 5-lump riser and coke-burning regenerator solved together for the heat balance; TBP-split main fractionator | `fcc_block` | Balances and gradients only; no literature cross-check; constants illustrative ([details](unit-operations-refinery.md#fcc-what-is-tested-and-what-is-not)) | — |
 | [Catalytic reformer](unit-operations-refinery.md#catalytic-reforming) | `CatalyticReformer` (library) | hydrotreated heavy naphtha → reformate, net H2, LPG, fuel gas | 29 lumps by carbon number, equilibrium from Gibbs energies; three adiabatic beds with fired heaters; PR separator and H2 recycle; component-split stabilizer | `reformer_block` | Balances and gradients only; no literature cross-check; constants illustrative | 40 |
@@ -131,7 +131,8 @@ in the code.
 ## Known gaps
 
 - **Fractionation in the conversion units is simplified.** The FCC main
-  fractionator and the hydrocracker fractionator are TBP splits, the
+  fractionator, the hydrocracker fractionator and the hydrotreater's
+  optional product fractionator are TBP splits, the
   reformer's stabilizer is a component split, and alkylation uses shortcut
   columns. The gas plant's rigorous columns reached `main` after these units
   were built and are not yet wired in.

@@ -38,9 +38,10 @@ flashing components, their **fugacity-equivalent liquid concentrations**
 Rackett volumes, dissolved gases taking none), the attribute concentrations
 in that liquid (``c_attr = c_cut * attribute-per-molecule``), and the partial
 pressures ``p = y P``. Concentrations are defined through ``x`` even where
-the stream is all vapour (the negative flash gives the incipient liquid's
-``x``), so a rate law written on them is continuous across a dry-out --
-what a naphtha hydrotreater, whose bed is vapour, needs.
+the stream is all vapour: there ``x`` is the incipient (dew-point) liquid in
+equilibrium with the vapour, ``z / K``, and ``y`` the vapour itself
+(:func:`phase_state`), so a rate law written on them is continuous across a
+dry-out -- what a naphtha hydrotreater, whose bed is vapour, needs.
 
 Plugging in a kinetic model: anything with
 
@@ -236,15 +237,35 @@ def k_model_at(flows: Flows, layout: Layout, comps: Components, T, P) -> tuple[K
 
 
 def phase_state(flows: Flows, layout: Layout, comps: Components, km: KModel, T):
-    """``(beta, x, y)`` of ``flows`` at ``T`` with the bed's linearised K-values."""
+    """``(V, x, y)`` of ``flows`` at ``T`` with the bed's linearised K-values.
+
+    ``V`` is the negative-flash vapour fraction. Inside the two-phase region
+    (``0 < V < 1``) ``x`` and ``y`` are the equilibrium liquid and vapour
+    (normalised). Outside it they are the stream itself and the incipient
+    phase in equilibrium with it: an all-vapour stream (``V >= 1``) has
+    ``y = z`` and ``x = z / K`` (the dew-point liquid, unnormalised, so its
+    fugacities are the vapour's), an all-liquid one (``V <= 0``) ``x = z``
+    and ``y = K z`` (likewise). Both are what the negative flash gives *at*
+    the phase boundary, so the two definitions meet continuously there.
+
+    Using the negative flash's own fictitious split beyond the boundary
+    instead (the code before #332) put the vapour's hydrogen partial
+    pressure six times too low in a vapour-phase naphtha bed (``V = 9``:
+    ``y_H2 = 0.06`` against ``z_H2 = 0.37``), and the aromatics equilibrium
+    ran backwards.
+    """
     z = flash_components(flows, layout, comps)
     zt = jnp.maximum(z, 1e-300)
     zn = zt / jnp.sum(zt)
     K = jnp.exp(km.lnK(T))
     V = rachford_rice(zn, K)
-    x = zn / phase_denominator(zn, K, V)
+    two = (V > 0.0) & (V < 1.0)
+    beta = jnp.clip(V, 0.0, 1.0)
+    x = zn / phase_denominator(zn, K, beta)
     y = K * x
-    return V, x / jnp.sum(x), y / jnp.sum(y)
+    x = jnp.where(two, x / jnp.sum(x), x)
+    y = jnp.where(two, y / jnp.sum(y), y)
+    return V, x, y
 
 
 def stream_enthalpy(flows: Flows, layout: Layout, comps: Components, km: KModel, T) -> Array:
@@ -282,7 +303,7 @@ def reaction_context(flows: Flows, layout: Layout, comps: Components, km: KModel
     V, x, y = phase_state(flows, layout, comps, km, T)
     vcut = comps.cut_liquid_volume(T)
     k = comps.n_gas
-    v_L = jnp.sum(x[k:] * vcut)
+    v_L = jnp.sum(x[k:] * vcut) / jnp.sum(x)          # molar volume of the (incipient) liquid
     c = x / v_L
     pm = flows.per_molecule()
     return ReactionContext(layout=layout, comps=comps, flows=flows, T=jnp.asarray(T), P=jnp.asarray(P),
