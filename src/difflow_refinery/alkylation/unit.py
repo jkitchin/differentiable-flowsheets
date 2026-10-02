@@ -33,8 +33,7 @@ split, constant-molar-overflow duties). This is a SHORTCUT simplification:
 the rigorous gas-plant cubic-EOS columns the issue points to (#312,
 ``difflow_refinery.gasplant``) reached main after this unit was built and are
 not used yet. ``fractionation="pr_shortcut"`` swaps in difflow's own
-Peng-Robinson :class:`~difflow.units.distillation.ShortcutColumn` (with its
-non-key split corrected, :class:`GeddesShortcutColumn`) for forward
+Peng-Robinson :class:`~difflow.units.distillation.ShortcutColumn` for forward
 cross-checks.
 
 **Recycle**: the DIB overhead is the tear, solved by the flowsheet (Anderson
@@ -178,53 +177,12 @@ class RecycleSplitter:
 # =============================================================================
 
 
-class GeddesShortcutColumn(ShortcutColumn):
-    """:class:`~difflow.units.distillation.ShortcutColumn` with the Geddes non-key split.
-
-    The Hengstebeck-Geddes distribution is ``log(d_i/b_i) = A + C log
-    alpha_i`` with ``alpha`` relative to the heavy key, so the two key
-    conditions give ``A = log(d_HK/b_HK)`` and ``C = [log(d_LK/b_LK) -
-    log(d_HK/b_HK)] / log alpha_LK`` (Geddes, AIChE J. 4, 389 (1958);
-    Hengstebeck, Distillation, Reinhold (1961); as in Seader, Henley &
-    Roper, Separation Process Principles, Fenske-Underwood-Gilliland
-    chapter -- page and equation numbers unverified). The base class has
-    ``A = log(d_LK/b_LK) - log(d_HK/b_HK)`` and ``C = log(d_LK/b_LK) / log
-    alpha_LK``, which does not reproduce the heavy key's own split and sends
-    a non-key slightly heavier than the heavy key to the distillate: on a
-    propane/isobutane depropanizer it put 99.9 % of the n-butane overhead.
-    Only the non-key distribution is overridden; the keys, Fenske,
-    Underwood, Gilliland and the duties are the base class's.
-    """
-
-    def _split_products(self, feed_flows, F_total, z, alpha):
-        p = self.params
-        rec_LK, rec_HK = p.x_D_LK, p.x_B_HK
-        D_LK = F_total * z[p.light_key] * rec_LK
-        B_LK = F_total * z[p.light_key] * (1 - rec_LK)
-        D_HK = F_total * z[p.heavy_key] * (1 - rec_HK)
-        B_HK = F_total * z[p.heavy_key] * rec_HK
-        log_hk = jnp.log((1 - rec_HK) / rec_HK)
-        log_lk = jnp.log(rec_LK / (1 - rec_LK))
-        A = log_hk
-        C = (log_lk - log_hk) / jnp.log(alpha[p.light_key])
-        dist, bott = {}, {}
-        D_total, B_total = D_LK + D_HK, B_LK + B_HK
-        for s in p.species_order:
-            if s == p.light_key:
-                dist[s], bott[s] = D_LK, B_LK
-            elif s == p.heavy_key:
-                dist[s], bott[s] = D_HK, B_HK
-            else:
-                # d/(d+b) = sigmoid(log(d/b)): bounded in [0, 1], so the split
-                # conserves the species exactly and needs no clip.
-                frac = jax.nn.sigmoid(A + C * jnp.log(alpha[s]))
-                dist[s] = feed_flows[s] * frac
-                bott[s] = feed_flows[s] - dist[s]
-                D_total = D_total + dist[s]
-                B_total = B_total + bott[s]
-        x_D = {s: dist[s] / D_total for s in p.species_order}
-        x_B = {s: bott[s] / B_total for s in p.species_order}
-        return dist, bott, D_total, B_total, x_D, x_B
+# The name this module used while it carried its own copy of the
+# Hengstebeck-Geddes non-key split. ``ShortcutColumn`` itself now puts the
+# Geddes line through both keys (``A = log(d/b)_HK``, ``C = [log(d/b)_LK -
+# log(d/b)_HK] / log alpha_LK``), so the override is gone and the name is an
+# alias, kept so existing imports work.
+GeddesShortcutColumn = ShortcutColumn
 
 
 @dataclass(repr=False)
@@ -277,8 +235,8 @@ class AlkylationUnitParams(ParamsMixin):
             :class:`~difflow_refinery.alkylation.fractionation.KeySplitColumn`
             on Lee-Kesler volatilities, differentiable through the recycle;
             ``"pr_shortcut"``: difflow's Peng-Robinson
-            :class:`~difflow.units.distillation.ShortcutColumn` (with the
-            Geddes split corrected), for forward cross-checks -- its
+            :class:`~difflow.units.distillation.ShortcutColumn`, for
+            forward cross-checks -- its
             gradient through the recycle is too expensive to take.
         tol: Recycle tolerance (mol/s, max-norm of the tear step).
         max_iter: Recycle iteration cap.
@@ -305,7 +263,7 @@ def _column(spec: ColumnSpec, model: str):
             light_key=spec.light_key, heavy_key=spec.heavy_key, lk_recovery=spec.lk_recovery,
             hk_recovery=spec.hk_recovery, reflux_ratio=spec.reflux_ratio, P=spec.P))
     if model == "pr_shortcut":
-        return GeddesShortcutColumn(ShortcutColumnParams(
+        return ShortcutColumn(ShortcutColumnParams(
             species_order=list(ALKYLATION_SPECIES), light_key=spec.light_key,
             heavy_key=spec.heavy_key, x_D_LK=spec.lk_recovery, x_B_HK=spec.hk_recovery),
             alkylation_thermo())

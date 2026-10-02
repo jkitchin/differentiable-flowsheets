@@ -47,10 +47,9 @@ same equations with Peng-Robinson bubble points at both column ends, and it
 is available here (``AlkylationUnitParams(fractionation="pr_shortcut")``,
 forward solves). Differentiating the isobutane recycle through three of
 them -- nested Newton bubble-point solves inside the tear's implicit
-fixed point -- did not fit in this machine's memory, and its non-key split
-has a sign error in the Geddes constants (see
-:class:`~difflow_refinery.alkylation.unit.GeddesShortcutColumn`). This
-column has no inner solve at all apart from two fixed-length bisections,
+fixed point -- did not fit in this machine's memory. (Its non-key split
+also had a sign error in the Geddes constants when this module was written;
+that is fixed in ``ShortcutColumn`` itself.) This column has no inner solve at all apart from two fixed-length bisections,
 and its gradient is exact.
 """
 
