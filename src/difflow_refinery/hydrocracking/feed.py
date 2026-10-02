@@ -31,7 +31,7 @@ VGO_PRETREAT_PARAMS = HDTKineticParams(
     hds_k=(4.0e-5, 2.0e-5, 1.2e-5, 1.0e-5, 6.0e-6),
     hdn_k=(3.0e-6, 4.0e-6),
     hdn_E=(110e3, 110e3),
-    hda_k=(4.0e-6, 1.5e-6, 3.0e-7),
+    hda_k=(1.5e-6, 6.0e-7, 1.0e-7),
     crack_k=1.0e-10,
 )
 

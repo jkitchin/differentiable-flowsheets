@@ -93,7 +93,13 @@ class HydrocrackerParams(ParamsMixin):
         lhsv_pretreat: Pretreat LHSV on fresh feed, 1/h.
         T_crack: Cracking first-bed inlet temperature (K); an interstage
             exchanger is implied (its duty is not computed).
-        quench_crack: Quench into each later cracking bed (fractions of the treat gas).
+        quench_crack: ``None`` (default): every cracking bed's inlet is held at
+            ``T_crack`` and the quench each needs is solved, from a pool of
+            ``crack_gas`` of the treat gas; or the quench into each later
+            cracking bed as fractions of the treat gas (inlets then follow).
+        crack_gas: Share of the treat gas reserved for the cracking reactor
+            when ``quench_crack`` is None (its first bed gets what the
+            quenches leave; ``crack.gas_left`` reports it).
         crack_beds: Catalyst share of each cracking bed (sums to 1).
         lhsv_crack: Cracking LHSV on FRESH feed, 1/h (catalyst volume = fresh
             feed rate / LHSV, so a recycle loads the same catalyst harder).
@@ -126,7 +132,8 @@ class HydrocrackerParams(ParamsMixin):
     pretreat_beds: tuple = (0.5, 0.5)
     lhsv_pretreat: float = 1.5
     T_crack: float = 643.15
-    quench_crack: tuple = (0.093, 0.136, 0.174, 0.20)
+    quench_crack: tuple | None = None
+    crack_gas: float = 0.7
     crack_beds: tuple = (0.12, 0.16, 0.20, 0.24, 0.28)
     lhsv_crack: float = 1.5
     catalyst_density: float = 800.0
@@ -331,7 +338,7 @@ class Hydrocracker:
         self.kinetics = HCKinetics(self.layout, self.hdt_kinetics if ck.hdt is not None else None,
                                    scheme=ck.scheme, aromatic_table=aromatic_split)
         for nm, q, b in (("pretreat", p.quench_pretreat, p.pretreat_beds), ("crack", p.quench_crack, p.crack_beds)):
-            if len(q) != len(b) - 1:
+            if q is not None and len(q) != len(b) - 1:
                 raise ValueError(f"quench_{nm} needs {len(b) - 1} fractions")
         self.pretreat_reactor = TrickleBedReactor(self.layout, self.hdt_kinetics, p.reactor)
         self.crack_reactor = TrickleBedReactor(self.layout, self.kinetics, p.reactor)
@@ -354,7 +361,7 @@ class Hydrocracker:
         skip = ("makeup", "pretreat_kinetics", "crack_kinetics", "kij", "reactor", "tear_tol", "uco_tol",
                 "uco_max_steps")
         num = {f.name: jnp.asarray(getattr(p, f.name), dtype=float) for f in dataclasses.fields(p)
-               if f.name not in skip}
+               if f.name not in skip and getattr(p, f.name) is not None}
         light = list(char.light_names)
         return {
             "oil": hcu_feed(char, feed, lay, self.aromatic_split),
@@ -428,19 +435,26 @@ class Hydrocracker:
         makeup, M = makeup_for_ratio(R, lay, th["makeup_y"], h2_target)
         gas = R + makeup
         q_pre = n["quench_pretreat"]
-        q_crk = n["quench_crack"]
-        s_crk = jnp.sum(q_crk) if len(p.crack_beds) > 1 else jnp.asarray(0.0)
+        n_crk = len(p.crack_beds)
+        if p.quench_crack is None:
+            # cracking quench solved for the bed inlet temperatures, from a gas pool
+            s_crk = n["crack_gas"] if n_crk > 1 else jnp.asarray(0.0)
+        else:
+            s_crk = jnp.sum(n["quench_crack"]) if n_crk > 1 else jnp.asarray(0.0)
         gas1 = gas.scale(1.0 - s_crk)
         quench1 = [q_pre[k] / (1.0 - s_crk) for k in range(q_pre.shape[0])] if len(p.pretreat_beds) > 1 else None
         rx1 = self.pretreat_reactor(oil, gas1, [n["T_pretreat"]], T_gas, n["P"], W_pre, comps, th["pre"],
                                     quench=quench1, adjoint=adjoint)
         crack_in = rx1.outlet + uco
-        if len(p.crack_beds) > 1:
-            gas2 = gas.scale(s_crk)
-            quench2 = [q_crk[k] / s_crk for k in range(q_crk.shape[0])]
+        T2_in = n["T_crack"] + T_shift
+        if n_crk == 1:
+            gas2, quench2, T2_list = gas.scale(0.0), None, [T2_in]
+        elif p.quench_crack is None:
+            gas2, quench2, T2_list = gas.scale(s_crk), None, [T2_in] * n_crk
         else:
-            gas2, quench2 = gas.scale(0.0), None
-        rx2 = self.crack_reactor(crack_in, gas2, [n["T_crack"] + T_shift], T_gas, n["P"], W_crk, comps, cst,
+            q_crk = n["quench_crack"]
+            gas2, quench2, T2_list = gas.scale(s_crk), [q_crk[k] / s_crk for k in range(q_crk.shape[0])], [T2_in]
+        rx2 = self.crack_reactor(crack_in, gas2, T2_list, T_gas, n["P"], W_crk, comps, cst,
                                  quench=quench2, adjoint=adjoint)
         vap, liq, water, fr = HPSeparator(lay)(rx2.outlet, n["hps_T"], P_hps, comps)
         vap, liq = knockout(vap, liq)
@@ -681,6 +695,10 @@ class Hydrocracker:
             for k, b in enumerate(rx.beds):
                 outputs[f"{tag}.bed{k + 1}.T_in"] = b.T_in
                 outputs[f"{tag}.bed{k + 1}.dT"] = b.T_out - b.T_in
+        for k in range(len(p.crack_beds)):
+            outputs[f"crack.bed{k + 1}.quench"] = rx2.quench[k]
+        # share of the cracking reactor's gas left for its first bed (negative: the quench pool is too small)
+        outputs["crack.gas_left"] = 1.0 - jnp.sum(rx2.quench)
         outputs["catalyst.pretreat"] = sum(o["W_pre"])
         outputs["catalyst.crack"] = sum(o["W_crk"])
         # hydrogen: chemical consumption by the H balance on everything but H2
@@ -759,7 +777,8 @@ class Hydrocracker:
                 if getattr(params, k) != getattr(self.params, k):
                     raise ValueError(f"params.{k} shapes the solve; build a new Hydrocracker to change it")
             for k in ("pretreat_beds", "crack_beds", "quench_pretreat", "quench_crack"):
-                if len(getattr(params, k)) != len(getattr(self.params, k)):
+                a, b = getattr(params, k), getattr(self.params, k)
+                if (a is None) != (b is None) or (a is not None and len(a) != len(b)):
                     raise ValueError("the bed counts shape the solve; build a new Hydrocracker")
             if params.crack_kinetics.scheme != self.params.crack_kinetics.scheme or \
                     (params.crack_kinetics.hdt is None) != (self.params.crack_kinetics.hdt is None):
