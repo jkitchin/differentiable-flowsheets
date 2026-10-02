@@ -546,6 +546,10 @@ Invariants encoded in the gas plant (do not weaken them):
 - The IDAES reference (`tests/refinery/reference/gasplant_reference.json`) is
   an independent IMPLEMENTATION of the same model (PR, kij 0, same constants),
   not an independent model. Regenerate it, never loosen the staleness checks.
+  The debutanizer is a full `TrayColumn` comparison (agreement 1e-7, but only
+  after the generator tightens SmoothVLE's eps: at IDAES's defaults the total
+  condenser leaks 0.07 % of a component). IDAES's TrayColumn does not converge
+  the C3/C4 splitter, so that case is IDAES flashes at difflow's stage states.
 
 Docs: `docs/unit-operations-refinery.md` ("The saturated gas plant").
 Tests: `tests/refinery/test_gasplant*.py`. Example: `examples/38_refinery_gas_plant.ipynb`.

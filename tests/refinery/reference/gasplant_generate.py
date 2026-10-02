@@ -4,19 +4,36 @@ Run from the repository root (needs IDAES, Pyomo and an IPOPT)::
 
     PYTHONPATH=src:tests python -m refinery.reference.gasplant_generate [--ipopt PATH]
 
-What it computes, for each case of :mod:`.gasplant_case`:
+What it computes, for each case of :mod:`.gasplant_case` whose
+``reference`` is ``"column"`` (the default; ``debutanizer``):
 
 * **The column** -- IDAES's ``TrayColumn`` (total condenser at the bubble
   point, equilibrium trays, kettle reboiler, no pressure change) on IDAES's
   generic Peng-Robinson package (:func:`.idaes_thermo.pr_config`: its
   ``Cubic`` EOS, ``SmoothVLE`` and log-fugacity equilibrium), initialized by
   IDAES's own routine and solved by IPOPT, with the reflux and boilup
-  ratios fixed. Recorded: product component flows, condenser and reboiler
+  ratios fixed. Recorded: product component flows (the distillate at the
+  condenser outlet's overall composition; see :func:`idaes_column`), condenser and reboiler
   duties, and every stage's temperature, pressure and phase compositions.
 * **K-values point by point** -- ``K = y/x`` on every equilibrium stage of
   IDAES's solution, with the state they belong to, so difflow's PR
   ``ln K = ln phi_L - ln phi_V`` can be evaluated at exactly IDAES's (T, P,
   x, y) and compared without either column in the way.
+
+For a case whose ``reference`` is ``"state_points"`` (``c3c4_splitter``),
+IDAES's flash at each of difflow's stage states instead
+(:func:`idaes_state_points`). IDAES's ``TrayColumn`` was not converged on
+this column. ``TrayColumn.initialize`` fails at its "column section +
+condenser" step on every variant tried: with and without ethane and
+propylene; 10, 12 and 17 bar; 10, 12, 15 and 20 trays; reflux/boilup 2/2,
+3/2 and 5/3; 3000 IPOPT iterations. Starting every state block from
+difflow's own converged profile was tried too: at the case's ratios IPOPT
+ends infeasible, and at 4.0/2.5 it reports optimal on a spurious solution
+with two trays single phase (``SmoothVLE``'s x == y branch). Neither is a
+reference, and a reference seeded from difflow's answer would not be
+independent of it anyway, so the splitter's comparison stops at the
+thermodynamics, where IDAES solves from its own initialization at every
+point.
 
 This is an independent *implementation* of the same model (PR 1976 with
 zero kij on the same constants, the same column topology), not an
@@ -48,7 +65,7 @@ def idaes_column(case: dict, comp: dict, ipopt: str) -> dict:
     from idaes.models.properties.modular_properties import GenericParameterBlock
     from idaes.models_extra.column_models import TrayColumn
     from idaes.models_extra.column_models.condenser import CondenserType, TemperatureSpec
-    from pyomo.environ import ConcreteModel, value
+    from pyomo.environ import ConcreteModel, Param, value
     from pyomo.environ import units as u
 
     from . import idaes_thermo as it
@@ -76,14 +93,25 @@ def idaes_column(case: dict, comp: dict, ipopt: str) -> dict:
     col.condenser.reflux_ratio.fix(case["reflux_ratio"])
     col.condenser.condenser_pressure.fix(case["P"])
     col.reboiler.boilup_ratio.fix(case["boilup_ratio"])
-    start = case.get("idaes_start", "idaes_initialize")
-    if start == "idaes_initialize":
-        col.initialize()
-    else:
-        profile_initialize(col, case, names)
+    col.initialize()
     solver = get_solver(options={"max_iter": 3000, "tol": 1e-10})
     solver.set_executable(ipopt)
     res = solver.solve(m, tee=False)
+    # SmoothVLE's smoothing parameters, tightened by continuation. At the
+    # defaults (eps_1 = 0.01, eps_2 = 5e-4) the total condenser's bubble-point
+    # outlet is left 4e-4 vapor, and since its reflux and distillate ports
+    # carry the LIQUID composition at the total flow, the condenser loses
+    # components (0.07 % of the propane in the debutanizer) while the total
+    # balances. The vapor fraction, and the leak, scale with eps_2.
+    eps = [(1e-3, 1e-5), (1e-4, 1e-6), (1e-5, 1e-7), (1e-6, 1e-8), (1e-7, 1e-9)]
+    for e1, e2 in eps:
+        for o in m.component_data_objects(Param, descend_into=True):
+            name = o.parent_component().local_name
+            if name == "eps_1_Vap_Liq":
+                o.set_value(e1)
+            elif name == "eps_2_Vap_Liq":
+                o.set_value(e2)
+        res = solver.solve(m, tee=False)
     status = str(res.solver.termination_condition)
 
     def phase(sb, p):
@@ -106,13 +134,24 @@ def idaes_column(case: dict, comp: dict, ipopt: str) -> dict:
     for s in stages:
         s["K"] = None if s["y"] is None else [y / x for x, y in zip(s["x"], s["y"])]
 
+    cout = col.condenser.control_volume.properties_out[0]
     D = value(col.condenser.distillate.flow_mol[0])
     B = value(col.reboiler.bottoms.flow_mol[0])
     reflux = value(col.condenser.reflux.flow_mol[0])
     boilup = value(col.reboiler.vapor_reboil.flow_mol[0])
     return {
-        "solve": {"status": status, "solver": "ipopt", "start": start},
-        "distillate": {n: D * value(col.condenser.distillate.mole_frac_comp[0, n]) for n in names},
+        "solve": {"status": status, "solver": "ipopt", "start": "idaes_initialize",
+                  "smooth_vle_eps": list(eps[-1])},
+        # The distillate at the condenser outlet's OVERALL composition, not the
+        # port's. At the bubble point SmoothVLE's smoothing leaves the outlet a
+        # few 1e-4 vapor, and the total condenser's ports carry the LIQUID
+        # phase composition at the total flow, so the port flows break the
+        # component balance (by 0.07 % on propane in the debutanizer) while
+        # the total balances. The port's values are kept for the record.
+        "distillate": {n: D * value(cout.mole_frac_comp[n]) for n in names},
+        "distillate_port": {n: D * value(col.condenser.distillate.mole_frac_comp[0, n])
+                            for n in names},
+        "condenser_outlet_vapor_fraction": value(cout.phase_frac["Vap"]),
         "bottoms": {n: B * value(col.reboiler.bottoms.mole_frac_comp[0, n]) for n in names},
         "reflux_ratio": reflux / D,
         "boilup_ratio": boilup / B,
@@ -122,90 +161,60 @@ def idaes_column(case: dict, comp: dict, ipopt: str) -> dict:
     }
 
 
-def profile_initialize(col, case: dict, names: list) -> None:
-    """A shortcut-column start for IDAES's trays, built without difflow.
+def difflow_profile(case: dict) -> dict:
+    """difflow's converged stage profile for ``case``: where the state points are."""
+    import jax
+    import numpy as np
 
-    IDAES's own ``TrayColumn.initialize`` gives every rectifying tray the
-    feed tray's vapour and the reflux's liquid. On the C3/C4 splitter that
-    start ends locally infeasible or at the iteration cap (tried with and
-    without ethane, at 12 and 17 bar, with 12 and 20
-    trays, and with a 3000-iteration cap). This start is the textbook
-    one instead:
+    from . import gasplant_case as gc
 
-    * constant molar overflow from the fixed ratios, for a saturated-liquid
-      feed: ``D = boilup B / (R + 1)``;
-    * a sharp split by volatility order: the lightest components fill the
-      distillate, the rest go to the bottoms;
-    * liquid compositions linear in tray number from distillate to bottoms,
-      each tray's vapour the composition of the liquid above it;
-    * temperatures linear between the condenser's and the reboiler's own
-      bubble points, which IDAES's condenser and reboiler initializations
-      compute from those compositions.
+    jax.config.update("jax_enable_x64", True)
+    col, feed = gc.difflow_column(case)
+    _, _, info = col(feed)
+    assert bool(info["converged"]), "difflow did not converge the case's column"
+    return {k: np.asarray(info["profiles"][k], dtype=float).tolist()
+            for k in ("L", "V", "T", "P", "x", "y")}
 
-    Then each tray is initialized by IDAES's ``Tray.initialize`` from its
-    inlets. Nothing here comes from difflow's solution.
+
+def idaes_state_points(case: dict, comp: dict) -> list:
+    """IDAES's PR flash at each of difflow's stage states (trays and reboiler).
+
+    For the cases IDAES's ``TrayColumn`` does not converge (see
+    :mod:`.gasplant_case`). Each stage's two phases are recombined into the
+    stage's overall composition ``z = (L x + V y)/(L + V)``, which is well
+    inside the two-phase region, and IDAES flashes ``z`` at the stage's T
+    and P on its own generic PR package (its ``SmoothVLE``, log-fugacity
+    equilibrium) from its own state-block initialization. Recorded: IDAES's
+    phase fraction, phase compositions, ``K = y/x``, and each phase's molar
+    enthalpy. difflow's profile picks the points; it is not used as a start.
     """
     from pyomo.environ import value
 
-    n, nf = case["n_trays"], case["feed_tray"]
-    F, P, R, bu = case["F"], case["P"], case["reflux_ratio"], case["boilup_ratio"]
-    fz = [F * z for z in case["z"]]
-    B = F / (1.0 + bu / (R + 1.0))
-    D = F - B
-    dist, left = [], D
-    for f in fz:                                    # names are light to heavy
-        take = min(f, left)
-        dist.append(take)
-        left -= take
-    bot = [f - d for f, d in zip(fz, dist)]
-    xD = [d / D for d in dist]
-    xB = [b / B for b in bot]
-    eps = 1e-4                                      # no zero mole fraction
-    xD = [(x + eps) / (1 + eps * len(xD)) for x in xD]
-    xB = [(x + eps) / (1 + eps * len(xB)) for x in xB]
+    from . import idaes_thermo as it
 
-    def x_on(j):                                    # j = 0 condenser ... n + 1 reboiler
-        w = j / (n + 1)
-        return [(1 - w) * a + w * b for a, b in zip(xD, xB)]
-
-    def put(sb, flow, x, T):
-        sb.flow_mol.value = flow
-        sb.temperature.value = T
-        sb.pressure.value = P
-        for nm, xi in zip(names, x):
-            sb.mole_frac_comp[nm].value = xi
-
-    V_rect, L_rect = (R + 1.0) * D, R * D
-    V_strip, L_strip = bu * B, bu * B + B
-    T_guess = case["T"]
-    put(col.condenser.control_volume.properties_in[0], V_rect, xD, T_guess)
-    col.condenser.initialize()
-    T_top = value(col.condenser.control_volume.properties_out[0].temperature)
-    put(col.reboiler.control_volume.properties_in[0], L_strip, xB, T_guess)
-    col.reboiler.initialize()
-    T_bot = value(col.reboiler.control_volume.properties_out[0].temperature)
-
-    def T_on(j):
-        return T_top + (T_bot - T_top) * j / (n + 1)
-
-    def args(flow, x, T):
-        return {"flow_mol": flow, "temperature": T, "pressure": P,
-                "mole_frac_comp": dict(zip(names, x))}
-
-    for j in range(1, n + 1):
-        L_in = L_rect if j <= nf else L_strip
-        V_in = V_rect if j < nf else V_strip
-        liq = args(L_in, x_on(j - 1), T_on(j - 1))
-        vap = args(V_in, x_on(j), T_on(j + 1))
-        if j == nf:
-            feed = args(F, case["z"], case["T"])
-            col.feed_tray.initialize(state_args_feed=feed, state_args_liq=liq,
-                                     state_args_vap=vap)
-            continue
-        tray = col.rectification_section[j] if j < nf else col.stripping_section[j]
-        put(tray.properties_in_liq[0], liq["flow_mol"], x_on(j - 1), liq["temperature"])
-        put(tray.properties_in_vap[0], vap["flow_mol"], x_on(j), vap["temperature"])
-        tray.initialize()
+    names = comp["names"]
+    cfg = it.pr_config({"names": names, "MW": comp["MW"], "Tc": comp["Tc"], "Pc": comp["Pc"],
+                        "omega_eos": comp["omega"], "omega_vp": comp["omega"],
+                        "cp_ig": comp["cp_ig"]})
+    cfg["state_bounds"]["temperature"] = (150, 350, 700, cfg["state_bounds"]["temperature"][3])
+    sp = it.StatePoint(cfg)
+    prof = difflow_profile(case)
+    out = []
+    for j in range(1, case["n_trays"] + 2):         # trays 1..n, then the reboiler
+        Lj, Vj = prof["L"][j], prof["V"][j]
+        z = [(Lj * a + Vj * b) / (Lj + Vj) for a, b in zip(prof["x"][j], prof["y"][j])]
+        T, P = prof["T"][j], prof["P"][j]
+        ok = sp.solve(dict(zip(names, z)), T, P)
+        s = sp.s
+        x = [value(s.mole_frac_phase_comp["Liq", n]) for n in names]
+        y = [value(s.mole_frac_phase_comp["Vap", n]) for n in names]
+        out.append({"stage": "reboiler" if j == case["n_trays"] + 1 else f"tray{j}",
+                    "status": sp.termination, "optimal": ok, "T": T, "P": P, "z": z,
+                    "vapor_fraction": value(s.phase_frac["Vap"]), "x": x, "y": y,
+                    "K": [b / a for a, b in zip(x, y)],
+                    "h_liq": value(s.enth_mol_phase["Liq"]),
+                    "h_vap": value(s.enth_mol_phase["Vap"])})
+    return out
 
 
 def provenance(ipopt: str) -> dict:
@@ -229,7 +238,8 @@ def provenance(ipopt: str) -> dict:
         "reference_simulator": (
             f"IDAES {idaes.__version__} TrayColumn on its generic Peng-Robinson property "
             "package (Cubic EOS, SmoothVLE, log-fugacity equilibrium, kij = 0), solved by "
-            "IPOPT from IDAES's own initialization. The same model as difflow's, "
+            "IPOPT from IDAES's own initialization; for state-point cases, IDAES's TP flash on "
+            "the same package at difflow's stage states. The same model as difflow's, "
             "implemented independently."),
         "idaes": idaes.__version__,
         "pyomo": pyomo.version.version,
@@ -256,9 +266,14 @@ def main():
             continue
         comp = gc.component_data(case["names"])
         print("solving", name, flush=True)
-        data["cases"][name] = {"case": case, "components": comp,
-                               "idaes": idaes_column(case, comp, a.ipopt)}
-        print(" ", data["cases"][name]["idaes"]["solve"]["status"], flush=True)
+        entry = {"case": case, "components": comp}
+        if case.get("reference", "column") == "column":
+            entry["idaes"] = idaes_column(case, comp, a.ipopt)
+            print(" ", entry["idaes"]["solve"]["status"], flush=True)
+        else:
+            entry["idaes_points"] = idaes_state_points(case, comp)
+            print(" ", [p["status"] for p in entry["idaes_points"]], flush=True)
+        data["cases"][name] = entry
     Path(a.out).write_text(json.dumps(data, indent=1, default=float) + "\n")
     print("wrote", a.out)
 

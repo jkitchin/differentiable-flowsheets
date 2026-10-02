@@ -32,10 +32,9 @@ CASES: dict[str, dict] = {
         "F": 100.0, "T": 320.0, "P": 17e5,
         "n_trays": 20, "feed_tray": 10,
         "reflux_ratio": 5.0, "boilup_ratio": 3.0,
-        # IDAES's own TrayColumn.initialize ends locally infeasible on this
-        # column; the generator starts it from a shortcut profile instead
-        # (gasplant_generate.profile_initialize)
-        "idaes_start": "profile",
+        # IDAES's TrayColumn does not converge this column (see the module
+        # docstring); the reference is IDAES's flash at difflow's stages
+        "reference": "state_points",
     },
 }
 

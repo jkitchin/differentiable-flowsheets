@@ -1251,6 +1251,29 @@ What the check does not cover:
 
 **Published case study: none found.** The issue named Polley, Wilson, Yeap and Pugh (2002) as a candidate. No preheat-train study was found that publishes a train's full data (assay, exchanger areas and U values, hot-stream rates) in a form that could be set up here, so nothing is reproduced. The eight-exchanger layout is a textbook one, and its numbers are not a validation.
 
+(refinery-gasplant-validation)=
+### Validation: the gas plant
+
+The gas plant's columns are checked against IDAES 2.10 (`tests/refinery/reference/gasplant_generate.py` writes `gasplant_reference.json`). `test_gasplant_validation.py` (release) compares a fresh difflow solve against the file. `test_gasplant_validation_file.py` runs on every commit: it checks that the file is intact, that the component constants and cases are the ones it was built on, and the state-point comparison below, which needs no column solve. As for the crude unit, this is **an independent implementation, not an independent model**. IDAES's generic Peng-Robinson package (its `Cubic` EOS, `SmoothVLE`, log-fugacity equilibrium) is given difflow's constants (Tc, Pc, omega, ideal-gas Cp) with kij = 0. Both sides use equilibrium trays (`tray_efficiency=1.0`), a total condenser at the bubble point, a kettle reboiler and no pressure drop, with the reflux and boilup ratios fixed. IDAES signs the condenser duty negative; difflow reports the heat removed.
+
+| Case | IDAES model | Agreement (test tolerance) |
+| --- | --- | --- |
+| Debutanizer: C3 to nC5, 10 bar, 10 trays, R = 2, boilup 2 | `TrayColumn`, IDAES's own initialization | product compositions 7.5e-8 rel (1e-5); condenser and reboiler duties 1.2e-8 and 2.4e-8 rel (1e-5); stage temperatures 6.8e-7 K (1e-4); K-values at IDAES's own (T, P, x, y), 1.4e-13 rel (1e-6) |
+| C3/C4 splitter: C2 to nC4 with propylene, 17 bar, 20 trays, R = 5, boilup 3 | state block: a TP flash of each of difflow's 21 stage states (z, T, P), from IDAES's own initialization | K 7.1e-7 rel (1e-5); vapour fraction 3.3e-5 (1e-4); phase compositions 1.1e-6 (1e-5); phase enthalpies 2e-9 J/mol (1e-3) |
+
+Two things the reference had to work around, both on the IDAES side:
+
+- **SmoothVLE's smoothing.** At IDAES's default smoothing parameters the bubble-point condenser outlet is left 4e-4 vapour. The total condenser's ports carry the liquid composition at the total flow, so the condenser loses components while the total balances: 0.07 % of the propane, and a 0.7 % gap in the products. The generator tightens the parameters by continuation to eps_2 = 1e-9. The gap then falls to the 1e-7 in the table, which is the evidence it was all smoothing.
+- **The splitter's column.** IDAES's `TrayColumn` was not converged on the C3/C4 splitter. Its initialization fails at the "column section + condenser" step for every variant tried: with and without ethane and propylene; 10 to 17 bar; 10 to 20 trays; reflux/boilup from 2/2 to 5/3. Starting every state block from difflow's profile did not help either. At the case's ratios IPOPT ends infeasible. At 4.0/2.5 it reports optimal on a spurious solution with two trays single phase (x = y on `SmoothVLE`'s branch). A reference seeded from difflow's answer would not have been independent of it anyway. So **the issue's 1 % column-level check is met for the debutanizer only**. For the splitter the comparison stops at the thermodynamics. The release test checks that difflow's column still puts its stages at the recorded states.
+
+Regenerate (needs IDAES and IPOPT; `--case NAME` redoes one case):
+
+```bash
+PYTHONPATH=src:tests python -m refinery.reference.gasplant_generate
+```
+
+**What this does not validate.** It does not test how well PR with zero kij describes these mixtures. That is the propylene/propane split above all, where the relative volatility is near 1.1 and a small kij moves the trays needed. It does not test the O'Connell efficiency, the GPA 2140 limits, the RVP construction against measured RVPs, or the compressor. Those are tested against their definitions in `test_gasplant.py`, not against a second simulator or plant data.
+
 ---
 
 (refinery-limitations)=
@@ -1261,4 +1284,4 @@ What the check does not cover:
 - **Thermodynamics:** Raoult's law and ideal-gas-path enthalpies. This is the usual model for an atmospheric column at one or two bar; it is not a cubic equation of state.
 - **Equilibrium stages.** There are no tray efficiencies or hydraulics.
 - **Boiling ranges are TBP, not ASTM D86.**
-- **Validation:** against an independent equation-oriented model, IDAES property packages and published characterisation examples; not against a commercial simulator's crude case. The vacuum column likewise, against an independent Pyomo/IPOPT model on the same residue (equilibrium and Murphree beds, and sensitivities); not against DWSIM. See [Validation](#refinery-validation) and [the vacuum unit's](#refinery-vacuum-validation) for what that does and does not establish.
+- **Validation:** against an independent equation-oriented model, IDAES property packages and published characterisation examples; not against a commercial simulator's crude case. The vacuum column likewise, against an independent Pyomo/IPOPT model on the same residue (equilibrium and Murphree beds, and sensitivities); not against DWSIM. The gas plant's debutanizer against IDAES's `TrayColumn` on PR, its C3/C4 splitter at the thermodynamic level only. See [Validation](#refinery-validation), [the vacuum unit's](#refinery-vacuum-validation) and [the gas plant's](#refinery-gasplant-validation) for what that does and does not establish.
