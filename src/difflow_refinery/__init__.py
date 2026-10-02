@@ -28,6 +28,12 @@ real light components and naphtha pseudocomponents together, with the
 wet-gas compressor, amine treating as a removal fraction, and LPG, fuel gas
 and naphtha qualities.
 
+The isomerization unit (:mod:`difflow_refinery.isomerization`) takes the
+light-naphtha cut to isomerate: an adiabatic approach-to-equilibrium bed,
+a product separator and stabilizer, and optionally a deisopentanizer and a
+deisohexanizer whose side draw is recycled, built on the gas plant's
+columns.
+
 Differentiable end to end: a yield or a duty has a gradient with respect to
 the column's specs, its feed, and the assay data behind its thermodynamics,
 and across the crude-to-vacuum connection.
@@ -37,7 +43,8 @@ and across the crude-to-vacuum connection.
 >>> crude = dr.characterize(assay)
 """
 
-from difflow_refinery import column, correlations, gasplant, preheat, products, vacuum
+from difflow_refinery import (column, correlations, gasplant, isomerization, preheat, products,
+                              vacuum)
 from difflow_refinery.assay import (
     CONTAMINANTS,
     DEFAULT_CUT_WIDTHS,
@@ -117,6 +124,13 @@ from difflow_refinery.gasplant import (
     GasCompressorParams,
     GasPlantColumn,
     GasPlantColumnParams,
+)
+from difflow_refinery.isomerization import (
+    IsomerizationReactor,
+    IsomerizationReactorParams,
+    IsomerizationUnit,
+    IsomerizationUnitParams,
+    isom_block,
 )
 from difflow_refinery.vacuum import (
     CrackingWarning,
@@ -208,6 +222,12 @@ __all__ = [
     "GasCompressorParams",
     "GasPlantColumn",
     "GasPlantColumnParams",
+    "isomerization",
+    "IsomerizationReactor",
+    "IsomerizationReactorParams",
+    "IsomerizationUnit",
+    "IsomerizationUnitParams",
+    "isom_block",
     "CrackingWarning",
     "PseudoComponents",
     "StageSpec",
@@ -282,6 +302,22 @@ def register(registry):
         category="refinery",
         description="Wet-gas compressor: isentropic stages with intercoolers "
                     "and knockout drums",
+        plugin="difflow_refinery",
+    )
+    registry.register(
+        name="IsomerizationReactor",
+        cls=IsomerizationReactor,
+        category="refinery",
+        description="C5/C6 isomerization bed: adiabatic approach to equilibrium, "
+                    "with benzene saturation and hydrocracking",
+        plugin="difflow_refinery",
+    )
+    registry.register(
+        name="IsomerizationUnit",
+        cls=IsomerizationUnit,
+        category="refinery",
+        description="Light-naphtha isomerization unit: once through, or with a "
+                    "deisopentanizer and a deisohexanizer recycle",
         plugin="difflow_refinery",
     )
     registry.register(

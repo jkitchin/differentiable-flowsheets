@@ -22,6 +22,7 @@ The `difflow_refinery` plugin provides:
 - **The preheat train** (`difflow_refinery.preheat`): tank to furnace inlet. It covers the exchangers, the desalter and the preflash drum, and is solved together with the column whose products and pumparounds heat it (`PreheatedCrudeUnit`). It also provides the Ebert-Panchal fouling rates and a cleaning ranking from one gradient. The palette operations are `Desalter`, `PreflashDrum` and `CrudeUnitWithPreheat`.
 - **`VacuumColumn`** (`difflow_refinery.vacuum`): the vacuum unit, atmospheric residue to LVGO, HVGO, slop and vacuum residue, with contaminants carried per cut. It runs on the crude unit's own pseudo-components, so the CDU residue feeds it directly in a `Flowsheet`.
 - **Correlations** (`difflow_refinery.correlations`): Twu, Riazi-Daubert, Lee-Kesler, Kesler-Lee and Maxwell-Bonnell, each written once, for all three of the above.
+- **C5/C6 isomerization** (`difflow_refinery.isomerization`): an adiabatic approach-to-equilibrium reactor on ideal-gas thermochemistry, with a shortcut stabilizer and optional DIP and DIH columns. The DIH recycle is converged by Anderson and differentiated implicitly. `isom_block` links the isomerate to a blend pool. The palette operations are `IsomerizationReactor` and `IsomerizationUnit`.
 - **Product blending** (`BlendPool`, `BlendComponent`): gasoline, jet, ULSD and fuel-oil pools with the nonlinear blending rules, signed spec margins and LP back-off. A library for optimisation and planning, not a palette operation.
 
 Everything is differentiable with `jax`. A product yield, a gravity or a furnace duty has an exact gradient with respect to:
@@ -1005,6 +1006,243 @@ compressor surge.
 
 ---
 
+(refinery-isomerization)=
+## C5/C6 light naphtha isomerization
+
+The isomerization unit (`difflow_refinery.isomerization`, #311) raises the
+octane of a light straight-run naphtha. It does so by rearranging the
+normal pentane and hexanes into their branched isomers, and saturating the
+benzene on the way. The products are an isomerate for the gasoline pool,
+an off-gas, and (with a DIH) a side draw sent back to the reactor:
+
+```text
+                      H2 make-up
+                          |
+fresh feed -> [DIP] -> reactor -> separator -> stabilizer -> [DIH] -> isomerate
+                ^ iC5 round it      | H2         | C3-        | side draw (MP, nC6)
+                +-> isomerate       +-> off-gas  +-> off-gas  +-> back to the reactor
+```
+
+```python
+from difflow_refinery.isomerization import (
+    IsomerizationUnit, IsomerizationUnitParams, IsomerizationReactorParams, constructed_feed)
+
+feed = constructed_feed("paraffinic", 10.0)        # kg/s; the speciation is ASSUMED
+unit = IsomerizationUnit(IsomerizationUnitParams(
+    configuration="dih", T_in=413.15, H2_HC=0.3,
+    reactor=IsomerizationReactorParams(LHSV=2.0), dih_side_draw=6.0, stabilizer_rvp=90e3))
+isomerate, offgas, info = unit(feed)
+info["outputs"]["RON"], info["outputs"]["dih_duty"], info["loop"]["iterations"]
+```
+
+Four configurations (`CONFIGURATIONS`) are built from the same pieces:
+
+- `once_through`: the reactor, a product separator and a stabilizer.
+- `dip`: a deisopentanizer ahead of the reactor sends the feed's isopentane (and butanes) round it.
+- `dih`: a deisohexanizer after the stabilizer. Its overhead (the dimethylbutanes and the C5s) and bottoms (naphthenes and C7+) are isomerate. Its side draw (the methylpentanes and n-hexane, the low-octane C6s) goes back to the reactor inlet.
+- `dip_dih`: both.
+
+The specs are the reactor inlet temperature `T_in`, the reactor pressure,
+`H2_HC`, `LHSV`, the configuration, the DIH side-draw rate
+(`dih_side_draw`, kg/s) and the stabilizer RVP (`stabilizer_rvp`). The
+DIH and DIP also take their purity specs and tray counts.
+
+### Thermochemistry and feeds
+
+The reactor carries sixteen species (`thermochem.SPECIES`): hydrogen,
+ethane to the butanes, both pentanes, the five C6 paraffins, MCP,
+cyclohexane, benzene and an inert C7+ lump. Every equilibrium constant
+follows from the species' ideal-gas heats of formation, absolute
+entropies and Cp:
+
+- dHf from Prosen and Rossini (the API Project 44 values, as the NIST WebBook gives them);
+- entropies from Yaws;
+- Cp cubics fitted here to the NIST WebBook gas tables.
+
+The module docstring lists the sources one by one. **No test yet compares
+the free energies derived here with a tabulated set.** It matters: 0.5
+kJ/mol in one isomer moves its equilibrium share by about 15 % at 420 K.
+
+`equilibrium_table(T)` and `family_equilibrium(family, T)` give the
+closed-form isomer equilibrium. The shares within the C6 paraffins are:
+
+| T (C) | nC6 | 2MP | 3MP | 2,3-DMB | 2,2-DMB |
+| --- | --- | --- | --- | --- | --- |
+| 120 | 0.067 | 0.223 | 0.128 | 0.109 | 0.473 |
+| 160 | 0.092 | 0.253 | 0.156 | 0.111 | 0.388 |
+| 200 | 0.117 | 0.273 | 0.178 | 0.110 | 0.322 |
+| 240 | 0.141 | 0.287 | 0.195 | 0.107 | 0.270 |
+
+The isopentane share falls from 0.86 to 0.78 over the same range. The
+branched isomers are favoured cold, which is why the catalysts that run
+coldest make the best isomerate.
+
+The octanes are the pure-hydrocarbon RON and MON of API Research Project
+45 (ASTM STP 225). **They were recalled, not checked against the printed
+tables, and are marked verify.** Benzene's MON and the C7+ lump's octanes
+are assumptions. The isomerate's octane is the Ethyl RT-70 blend of the
+species, as in the blend pool.
+
+**The feed's speciation is constructed, not measured.** A TBP assay does
+not say which C6 is n-hexane and which is 2,2-DMB. `constructed_feed` and
+`light_naphtha_from_cdu` split the light-naphtha pseudo-components by an
+assumed composition (`NaphthaSpeciation`). Two are provided:
+
+- `PARAFFINIC`: about 1.5 wt % benzene in the C6 cut.
+- `BENZENE_RICH`: a naphthenic crude's, about 5 wt % benzene and more MCP and cyclohexane.
+
+Their numbers are in the range of the light straight-run analyses quoted in
+refining texts; verify against a real PIONA before relying on them.
+
+(refinery-isomerizationreactor)=
+### IsomerizationReactor
+
+A pseudo-homogeneous, adiabatic plug-flow bed. Every reversible reaction
+`A (+ n H2) <=> B` runs at a first-order approach-to-equilibrium rate:
+
+```text
+r_j = theta k_j(T) (F_A - F_B / (K_j(T) p_H2^n)),   theta = 1/LHSV
+```
+
+The rate is zero at equilibrium whatever `k` is. So the equilibrium is set
+by the thermochemistry alone, and the rate constants only set how close to
+it the bed gets. The reactions are:
+
+- `nC5 <=> iC5`;
+- `nC6 <=> 2MP`, `2MP <=> 3MP`, `2MP <=> 23DMB`, `23DMB <=> 22DMB` (the slow step);
+- `MCP <=> CH`;
+- benzene saturation, `Bz + 3 H2 <=> CH`;
+- ring opening, `MCP + H2 <=> 2MP`;
+- hydrocracking to ethane and propane, irreversible.
+
+**The rate constants are illustrative.** The catalyst presets (`CATALYSTS`:
+chlorided alumina, sulfated zirconia, zeolite) give orders of magnitude and
+each catalyst's temperature window. They are not fitted to any catalyst's
+data. `k_scale` is the one factor to calibrate against a plant's measured
+approach to equilibrium.
+
+`info["approach"]` reports the approach to equilibrium of each reaction.
+In an adiabatic bed it can exceed one: benzene saturation reaches about
+1.016 on the benzene-rich feed. The saturation is fast and runs near
+equilibrium at the hot outlet. The approach is measured against the
+equilibrium at the outlet temperature, which the bed is still heating
+towards.
+
+The temperature is not integrated. At every point along the bed it is the
+root of the energy balance, so the enthalpy is conserved exactly. The bed
+is stiff (benzene saturation's rate constant is fifty times 2,2-DMB formation's), so it is integrated by a two-stage L-stable SDIRK. Each stage
+is solved by Newton in a `lax.while_loop` to a residual tolerance. That
+loop has no reverse-mode rule, so **the reactor is differentiable in
+forward mode only** (`jax.jacfwd`, `jax.jvp`). Every block and test here
+uses forward mode. `info["stage_residual"]` reports the worst stage
+residual, and `IsomerizationConvergenceWarning` fires when it is not small.
+
+Why not `difflow.kinetics`? Its rate laws are mass action in
+concentrations with Arrhenius constants, written as data. These rates are
+in molar flows against a temperature-dependent `K_eq` from the species'
+free energies, with the hydrogen partial pressure in bar. Writing them as
+mass action would need `K_eq(T)` as a rate-law term, which the module does
+not have.
+
+(refinery-isomerizationunit)=
+### IsomerizationUnit
+
+The unit around the reactor:
+
+- **Hydrogen is once-through.** The charge is made up to `H2_HC` with pure hydrogen, and what is left leaves in the off-gas. There is no recycle-gas compressor.
+- **The product separator** is one equilibrium stage at `separator_T` (a 1-tray `GasPlantColumn`). The effluent cooler is a specification and its duty is not reported.
+- **The stabilizer is a shortcut, not a tray column.** Hydrogen, ethane and propane go overhead, the pentanes and heavier stay in the bottoms. The fraction of the butanes kept is solved so that the bottoms meet `stabilizer_rvp`. A rigorous stabilizer on the gas-plant column was tried in three layouts. None converged reliably over the compositions the DIH recycle produces, so no stabilizer duty is reported.
+- **The DIP and DIH** are `GasPlantColumn` splitters: the gas plant's Peng-Robinson MESH model on the sixteen species. The DIH has a side draw at `dih_side_tray`, at the rate `dih_side_draw`.
+
+With a DIH, the recycle is a `difflow.Flowsheet` recycle torn on the side
+draw and converged by Anderson acceleration. `IsomerizationUnit.outputs(feed,
+T_in, LHSV, x_nc6=None)` returns the output vector (`OUTPUT_NAMES`) and
+differentiates the converged loop by the implicit function theorem through
+a `jax.custom_jvp`:
+
+```text
+dy/du = Y_u + Y_x (I - G_x)^-1 G_u
+```
+
+Here `G` is one pass of the loop (recycle in, side draw out) and `Y` is the
+outputs, both linearised by forward-mode AD at the solution. The once-through
+and DIP configurations have no loop and are differentiated straight through.
+`unit.last_solve["recycle"]` keeps the converged side draw, to warm-start
+the next solve.
+
+`unit.blend_component(info["outputs"])` returns the isomerate as a
+`BlendComponent` for a `BlendPool`.
+
+### Planning with the isomerization unit
+
+`isom_block(unit, feed, levers, outputs=None)` returns a
+`difflow.planning.Block`. The levers are `T_in` (C), `LHSV` (1/h) and
+`x_nC6`, the fresh feed's n-hexane mole fraction. The outputs are any of
+`OUTPUT_NAMES` in planner units, plus `isomerate_V` (m3/h). The block is
+not jit-compiled and its AD mode is forward, because the DIH loop is a
+Python loop.
+
+`link_isom(isom_blk, pool_blk)` links the isomerate volume to the
+`isomerate_V` lever of `BlendPool.as_block`, so the blend component must be
+named `"isomerate"`:
+
+```python
+from difflow.planning import Network
+from difflow_refinery.blending import BlendPool
+from difflow_refinery.isomerization import isom_block, link_isom
+
+blk = isom_block(unit, feed, levers=["T_in", "LHSV"])
+iso = unit.blend_component(info["outputs"])        # properties at the base point
+pool = BlendPool("gasoline").as_block([iso, reformate])   # reformate: another BlendComponent
+net = Network([blk, pool], links=link_isom(blk, pool))
+```
+
+What crosses the link is the isomerate's volume. A `BlendComponent` has
+fixed properties, so the isomerate's octane in the pool is the one at the
+linearisation point. Rebuild it from `blend_component` at each new base point.
+
+### Results
+
+Both constructed feeds were run at 10 kg/s, `T_in` 140 C, LHSV 2, H2/HC
+0.3 and 30 bar, on the chlorided-alumina preset. Every column converges.
+The total and per-carbon-number balances close to 2e-11 or better.
+
+| Configuration | Paraffinic: RON | Yield (vol) | DIH / DIP duty (MW) | Benzene-rich: RON | Yield (vol) | DIH / DIP duty (MW) |
+| --- | --- | --- | --- | --- | --- | --- |
+| once-through | 82.18 | 0.988 | - | 81.56 | 1.008 | - |
+| DIP | 83.06 | 0.999 | - / 6.96 | 81.13 | 1.007 | - / 5.24 |
+| DIH | 82.81 | 0.992 | 6.92 / - | 82.79 | 1.004 | 6.26 / - |
+| DIP + DIH | 83.47 | | 7.11 / 6.96 | 83.20 | | 6.38 / 5.24 |
+
+The volume yield exceeds one on the benzene-rich feed. Saturating benzene
+and adding hydrogen makes a liquid of lower density.
+
+The DIH loop converges in eight (paraffinic) or nine (benzene-rich) Anderson
+iterations, one to three minutes on a laptop. A once-through solve takes
+about 12 s the first time and 4 s after that.
+
+What the numbers show:
+
+- **The recycle gain is modest.** The DIH adds 0.6 RON on the paraffinic feed and 1.2 on the benzene-rich one. Licensors usually quote a larger gap between once-through and DIH units (verify). These rate constants and constructed feeds are not fitted to any unit, so neither number should be read as a prediction.
+- **A DIP can lower the octane.** On the benzene-rich feed, taking the isopentane round the reactor leaves less mass to absorb the benzene exotherm. The bed runs hotter (a 91 K rise, against 70 K once through), and the hotter outlet equilibrium favours the less-branched isomers.
+- **RON has a maximum in `T_in`.** Cold, the bed is short of equilibrium; hot, the equilibrium itself is worse. Once-through on the paraffinic feed, RON is 77.0 at 110 C, 82.5 at 150 C and 80.6 at 190 C. On the benzene-rich feed it peaks near 120 C, at 82.2.
+- **The benzene-rich feed runs away.** At `T_in` of 160 C and above, the exotherm drives hydrocracking, which is itself exothermic and uses hydrogen. The bed then uses up its hydrogen. `IsomerizationHydrogenWarning` fires when the outlet H2/HC falls below 0.05, before the separator flash fails.
+- **The stabilizer spec is not always met.** On the benzene-rich feed with a DIH, the isomerate's RVP is 80 kPa against a 90 kPa spec. The stabilizer keeps every butane and its C5+ alone is below the spec. `stabilizer_c4_recovery` reports this as 1 and `info["stabilizer"]["spec_met"]` as False.
+
+### Isomerization gotchas
+
+- **Forward mode only.** `jax.grad` through the reactor fails on the stage Newton's `while_loop`; use `jax.jacfwd` or `jax.jvp`.
+- **Outputs at a spec have zero derivatives.** The isomerate RVP is held at its spec, the once-through H2 make-up does not depend on the reactor, and a stabilizer at its bound has a zero derivative. A finite-difference check of these compares zero with noise.
+- **Keep `T_in` in the catalyst's window.** The presets carry their windows (`CATALYSTS[...]["window"]`). Outside them the constants mean nothing, and a hot benzene-rich charge runs away.
+
+### Isomerization: out of scope
+
+C4 isomerization, catalyst chloriding and its HCl/caustic scrubbing,
+molecular-sieve (Ipsorb, TIP) separations, the recycle-gas loop, and
+dynamics.
+
+---
+
 (refinery-blending)=
 ## Product blending
 
@@ -1274,6 +1512,64 @@ PYTHONPATH=src:tests python -m refinery.reference.gasplant_generate
 
 **What this does not validate.** It does not test how well PR with zero kij describes these mixtures. That is the propylene/propane split above all, where the relative volatility is near 1.1 and a small kij moves the trays needed. It does not test the O'Connell efficiency, the GPA 2140 limits, the RVP construction against measured RVPs, or the compressor. Those are tested against their definitions in `test_gasplant.py`, not against a second simulator or plant data.
 
+(refinery-isomerization-validation)=
+### Validation: the isomerization unit
+
+The reactor's thermochemistry is checked against IDAES 2.10's
+`GibbsReactor` (`tests/refinery/reference/isom_generate.py` writes
+`isom_reference.json`). IDAES minimises the total Gibbs energy subject to
+element balances, on an ideal-gas modular property package given difflow's
+heats of formation, entropies and Cp cubics. As for the other units, this
+is **an independent implementation, not an independent model**. It checks
+how the free energies are assembled, the equilibrium-constant convention
+(bar against a 1 bar standard state), the hydrogen-pressure dependence, the
+reactor's energy balance, and that the rate law relaxes onto the
+equilibrium it claims. It does not check the constants: both sides are
+given the same ones.
+
+A Gibbs minimiser given only C and H would turn pentanes into hexanes and
+butanes, which no reaction here does. So each conserved carbon skeleton
+gets its own element label (`C5`, `C6`, and one per species the network
+holds fixed). The minimisation is then over exactly the reactor's reaction
+space.
+
+| Case | difflow side | Agreement (test tolerance) |
+| --- | --- | --- |
+| Each isomer family alone (C5, C6 paraffins, C6 naphthenes), 400-550 K | closed form `family_equilibrium` | 6.8e-13 (1e-10), per commit |
+| C6 ring: H2, benzene, MCP, CH, n-hexane at 30 bar, 420 and 480 K | the reactor, isothermal, rate constants x 1e4, no cracking | mole fractions 1.4e-15 (1e-10) |
+| Adiabatic: both feeds' reactor charge, 140 C, 30 bar | the reactor, adiabatic, rate constants x 10, LHSV 0.1, no cracking | outlet T 477.023 K (paraffinic) and 522.225 K (benzene-rich), within 1e-6 K; mole fractions 6.9e-14 (1e-10) |
+
+`test_isomerization_validation.py` (release) runs difflow against the file.
+`test_isomerization_validation_file.py` runs on every commit. It checks
+that the file is intact and that the constants and feeds are the ones it
+was built on. It also checks that the IDAES answers conserve atoms, close
+difflow's own enthalpy balance, and match the closed-form families.
+
+Regenerate (needs IDAES and IPOPT):
+
+```bash
+PYTHONPATH=src:tests python -m refinery.reference.isom_generate
+```
+
+The rest is checked against difflow itself, in `test_isomerization.py`,
+`test_isomerization_dih.py` and `test_isomerization_dih_gradients.py`:
+
+- The total mass and per-carbon-number balances close to 1e-8 or better, once-through and with the DIH, on both feeds. The reactor alone closes to 1e-12.
+- The implicit gradients of RON, MON, volume yield, H2 consumption and gas make (once-through), and of RON, MON, yield, DIH duty and H2 make-up (DIH), with respect to `T_in`, `LHSV` and `x_nC6`, match central differences to 1e-5 relative. With the DIH, the worst entry is 4.4e-6 on the benzene-rich feed; the test runs the paraffinic one.
+- At equilibrium, the 2,2-DMB and isopentane shares fall with temperature. RON has an interior maximum in `T_in` on both feeds. The DIH raises RON on both feeds.
+
+**Published case study: none found.** No published isomerization case was
+found that gives a feed analysis, catalyst, conditions and product analysis
+complete enough to set up and reproduce here. The search was not
+exhaustive. So the unit's absolute octanes and yields are not validated
+against any plant or published simulation.
+
+**What this does not validate.** It does not test the thermochemical
+constants against a tabulated free-energy set. It does not test the
+species octanes, which are recalled values marked verify. It does not test
+the rate constants, which are illustrative, or the constructed feeds,
+which are assumed.
+
 ---
 
 (refinery-limitations)=
@@ -1285,3 +1581,4 @@ PYTHONPATH=src:tests python -m refinery.reference.gasplant_generate
 - **Equilibrium stages.** There are no tray efficiencies or hydraulics.
 - **Boiling ranges are TBP, not ASTM D86.**
 - **Validation:** against an independent equation-oriented model, IDAES property packages and published characterisation examples; not against a commercial simulator's crude case. The vacuum column likewise, against an independent Pyomo/IPOPT model on the same residue (equilibrium and Murphree beds, and sensitivities); not against DWSIM. The gas plant's debutanizer against IDAES's `TrayColumn` on PR, its C3/C4 splitter at the thermodynamic level only. See [Validation](#refinery-validation), [the vacuum unit's](#refinery-vacuum-validation) and [the gas plant's](#refinery-gasplant-validation) for what that does and does not establish.
+- **Isomerization:** the rate constants are illustrative, the feed speciation is constructed and the species octanes are recalled (verify). The stabilizer is a shortcut and the hydrogen is once-through. Validated against IDAES's `GibbsReactor` on the same thermochemistry; no published case study was found ([validation](#refinery-isomerization-validation)).
