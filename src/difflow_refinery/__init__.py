@@ -22,6 +22,12 @@ blend pool on the same grid. The correlations behind all three live once,
 in :mod:`difflow_refinery.correlations`. An assay without a heavy end
 characterizes exactly as it did before.
 
+The hydrotreater (:mod:`difflow_refinery.hydrotreating`, #306) runs on the
+shared hydroprocessing building blocks (:mod:`difflow_refinery.hydroprocessing`:
+trickle-bed reactor around any kinetic model, Peng-Robinson HP separator,
+recycle-gas loop, steam stripper), with HDS/HDN/aromatics kinetics on the
+#305 composition. A library, not a palette operation.
+
 Differentiable end to end: a yield or a duty has a gradient with respect to
 the column's specs, its feed, and the assay data behind its thermodynamics,
 and across the crude-to-vacuum connection.
@@ -32,6 +38,7 @@ and across the crude-to-vacuum connection.
 """
 
 from difflow_refinery import column, composition, correlations, products, reforming, vacuum
+from difflow_refinery import hydroprocessing, hydrotreating
 from difflow_refinery.assay import (
     CONTAMINANTS,
     DEFAULT_CUT_WIDTHS,
@@ -186,6 +193,7 @@ __all__ = [
     "vacuum",
     "fcc",
     "reforming",
+    "hydroprocessing", "hydrotreating",
     "CrackingWarning",
     "PseudoComponents",
     "StageSpec",

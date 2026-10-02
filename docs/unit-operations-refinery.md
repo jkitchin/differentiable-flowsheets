@@ -24,6 +24,7 @@ The `difflow_refinery` plugin provides:
 - **The fluid catalytic cracker** (`difflow_refinery.fcc`): a lumped-kinetics riser (3-, 4- or 5-lump) and a coke-burning regenerator solved together as the unit's heat balance (catalyst circulation and regenerator temperature are unknowns, the riser outlet temperature the spec), with a simplified main fractionator; dry gas, C3/C4 olefin streams, gasoline, LCO and slurry. A library, not a palette operation; its kinetic constants are illustrative. See [The fluid catalytic cracker](#refinery-fcc).
 - **Product blending** (`BlendPool`, `BlendComponent`): gasoline, jet, ULSD and fuel-oil pools with the nonlinear blending rules, signed spec margins and LP back-off. A library for optimisation and planning, not a palette operation.
 - **Catalytic reforming** (`difflow_refinery.reforming`): a semi-regen reactor train with fired heaters, a PR separator, H2 recycle through a `Flowsheet` tear and a stabilizer; naphtha P/N/A by carbon number in, reformate (with RON from composition), net H2, LPG and fuel gas out. A library and flowsheet, not a palette operation.
+- **Hydroprocessing building blocks** (`difflow_refinery.hydroprocessing`) and the **hydrotreater** (`difflow_refinery.hydrotreating`): a trickle-bed reactor around any kinetic model, a Peng-Robinson HP separator, the recycle-gas loop and a steam stripper; HDS by sulfur class, HDN and aromatics saturation on the #305 composition. A library, not a palette operation. See [Hydroprocessing](#refinery-hydroprocessing) and [The hydrotreater](#refinery-hydrotreater).
 
 Everything is differentiable with `jax`. A product yield, a gravity or a furnace duty has an exact gradient with respect to:
 
@@ -1249,6 +1250,291 @@ Checked (`tests/refinery/test_reforming.py`; flowsheet tests are marked `slow`):
 | ΔG(T), ln K route | Smith, J.M., Van Ness, H.C., Abbott, M.M., *Introduction to Chemical Engineering Thermodynamics*, McGraw-Hill, chemical-reaction-equilibria chapter | Standard thermodynamics; chapter and equation numbers vary by edition (unverified). |
 | Thermochemistry of model compounds (the issue's suggestion) | Stull, D.R., Westrum, E.F., Sinke, G.C., *The Chemical Thermodynamics of Organic Compounds*, Wiley (1969) | **Not used**: the values come from the `chemicals` tables above. |
 | Reforming practice, yield vs. RON | Gary, J.H., Handwerk, G.E., Kaiser, M.J., *Petroleum Refining: Technology and Economics*, 5th ed., CRC Press (2007), catalytic reforming chapter | Not consulted; no cross-check made. |
+(refinery-hydroprocessing)=
+## Hydroprocessing building blocks
+
+`difflow_refinery.hydroprocessing` holds the parts every hydroprocessing unit shares: the stream state, a Peng-Robinson flash, an adiabatic trickle-bed reactor that runs *any* kinetic model, the recycle-gas loop and a product stripper. The hydrotreater ([below](#refinery-hydrotreater)) is these parts plus its own kinetics (`difflow_refinery.hydrotreating`); a hydrocracker is meant to be these parts plus another kinetic model. Nothing in this module knows what HDS is.
+
+(refinery-hydroprocessing-layout)=
+### The stream: gases, cuts and attributes
+
+A hydroprocessing stream carries real **gases** (H2, H2S, NH3, C1--C4, the light ends the characterization keeps as species, water) and the characterization's **cuts**. A reactor changes what a cut is made of, which a molecule flow cannot say, so each cut also carries **attribute flows**: extensive amounts that ride with its molecules. `Layout(gases, cuts, attributes, attribute_elements)` names them; `Flows(gas, cut, attr)` holds them as arrays of shape `(n_gas,)`, `(n_cut,)` and `(n_cut, n_attr)`.
+
+- `"C"` and `"H"` (carbon and hydrogen atoms) are compulsory. A cut's mass is computed from its atoms, `m = 12.0107 n_C + 1.00794 n_H + 32.065 n_S + 14.0067 n_N` (g/s; S and N summed over every attribute that counts them), and its molecular weight is `m / F`. A saturated cut is heavier per molecule, a desulfurized one lighter, and the mass balance closes because the hydrogen came from the gas.
+- Attributes are extensive. A mixer adds them, a splitter scales them, a phase split partitions them in proportion to their cut's molecules. So the element balances close to round-off through any sequence of units.
+- As a difflow stream (`Flows.to_stream`): `F_<gas>`, `F_<cut>` and `F_<cut>@<attribute>`, all mol/s. difflow's own mixers and splitters therefore handle them correctly.
+- `Flows.elements(layout)` gives the C, H, S and N atom flows; `Flows.mass(layout)` the total mass.
+
+(refinery-hydroprocessing-thermo)=
+### Thermodynamics
+
+`hydroprocessing.thermo.Components` is the property table of the flashing components (the layout's gases except water, then its cuts), built with `Components.build(layout, Tb, SG, MW, Tc, Pc, omega, hvap_nb, cp_ig, kij=None)` from the characterization's own arrays, so a gradient reaches the assay through it. `difflow.thermo.CubicThermo` is not used because it is built from concrete species data (`Characterization.thermo("pr")` needs floats).
+
+- **Peng-Robinson** (Peng & Robinson 1976, Eqs. 3, 4, 9--12 and the fugacity coefficient Eq. 17), van der Waals one-fluid mixing with a `k_ij` matrix. `kappa` is the 1976 quadratic up to `omega = 0.491` and the Robinson-Peng (1978) cubic above it. The liquid takes the smallest real root of the cubic, the vapour the largest; each root is polished by one implicit Newton step so its derivative is the implicit-function one.
+- **k_ij** (`DEFAULT_KIJ`): the light-gas pairs from the ChemSep PR table (as distributed with the `thermo` package), H2S with every cut 0.0333 (ChemSep's H2S/n-decane), every other pair zero. Illustrative; pass `kij=`.
+- **Enthalpy**: the ideal-gas path of the crude unit's `ColumnThermo`. Ideal-gas Cp integrated from 298.15 K; a liquid sits below it by Watson's heat of vaporisation through `dHvap(Tb)`. Gas constants: Tc, Pc and omega of H2, H2S and NH3 from `difflow.database`, of the hydrocarbons from the crude unit's light-end table (Poling, Prausnitz & O'Connell 5th ed., App. A); ideal-gas Cp of H2, H2S and NH3 from Reid, Prausnitz & Poling 4th ed., App. A; dHvap at the normal boiling point from the CRC Handbook as tabulated in `chemicals`.
+- **Liquid molar volume** of a cut at temperature: the Rackett equation in the Spencer-Danner form, anchored to the cut's 60 °F density, with the Yamada-Gunn `Z_RA = 0.29056 - 0.08775 omega`; `Tr` capped smoothly at 0.95. Dissolved gases take no volume.
+
+(refinery-hydroprocessing-flash)=
+### The flash and the HP separator
+
+`pr_flash(T, P, z, comps)` is an isothermal PR flash solved as `n` equations in `ln K`:
+
+```
+ln K_i - ln phi_i^L(x) + ln phi_i^V(y) = 0,    x = z / (1 + V (K - 1)),  y = K x
+```
+
+with `V` from Rachford-Rice solved as a **negative flash** (Whitson & Michelsen 1989): bracketed between the poles `1/(1 - K_max)` and `1/(1 - K_min)` instead of clipped to [0, 1]. The equations stay smooth through a phase boundary, and `x` and `y` remain the compositions of the (possibly incipient) phases. The reported split uses `beta = clip(V, 0, 1)`. Start: Wilson's K and 25 successive-substitution passes; finish: `optimistix` Newton, whose implicit adjoint gives the derivative.
+
+`HPSeparator(layout)(flows, T, P, comps)` returns `(vapour, liquid, water, FlashResult)`: gases and cut molecules split by the flash, every attribute with its cut, water decanted whole (no free-water VLE).
+
+At 50 °C and 47 bar the default diesel case dissolves 10.7 mol/s of H2 in about 230 mol/s of separator liquid (x_H2 about 0.045); that is the `h2.dissolved` loss.
+
+(refinery-hydroprocessing-reactor)=
+### The trickle-bed reactor and the kinetic-model interface
+
+`TrickleBedReactor(layout, kinetics, options)` integrates adiabatic beds in series:
+
+```
+dF/dw = r(F, T, P)                   every gas, cut and attribute flow (w: kg of catalyst)
+C_eff(F, T) dT/dw = q(F, T, P)        adiabatic
+```
+
+`r` (mol/s per kg) and `q` (W/kg, positive exothermic) come from the kinetic model. `C_eff = dH/dT` at fixed flows is the stream's heat capacity **including** the vaporisation a temperature rise causes, by forward-mode AD of the stream enthalpy.
+
+**Phase model (pseudo-homogeneous).** Gas and liquid are in equilibrium along the bed. The K-values come from a PR flash at each bed's inlet and are carried down the bed linearised in temperature, `ln K(T) = ln K_in + (d ln K/dT)_in (T - T_in)` (the slope by forward-mode AD of the flash). Along a bed only the phase split moves (Rachford-Rice), not the K-values' composition dependence. Mass-transfer resistances, wetting and the effectiveness factor are multipliers the kinetic model applies; the Korsten-Hoffmann film model is **not** implemented.
+
+**The interface.** A kinetic model is any object with
+
+- `attributes` and `attribute_elements` -- the per-cut attributes it needs (the layout's must be these);
+- `rates(ctx, params) -> Rates`.
+
+`ReactionContext` is what it reads at a point: `flows`, `T`, `P`; the equilibrium `x`, `y` and vapour fraction `beta` of the flashing components; their **fugacity-equivalent liquid concentrations** `c = x / v_L` (mol/m³; `v_L` from the cuts' Rackett volumes); `c_attr`, the attribute concentrations in that liquid (`c_cut x attribute-per-molecule`); the partial pressures `p = y P`; `per_molecule`; and helpers `ctx.c_gas(name)`, `ctx.p_gas(name)`, `ctx.c_cut`. Concentrations are defined through `x` even where the stream is all vapour (the negative flash gives the incipient liquid's `x`), so a rate law written on them is continuous through a dry-out. `Rates(gas, cut, attr, heat)` returns `d/dw` of every flow and the heat released. Element conservation is the kinetic model's job; `check_element_conservation(kinetics, ctx, params)` returns the net C, H, S, N production at a point.
+
+**Beds and quench.** `reactor(oil, gas, T_in, T_gas, P, W, comps, params, quench=None)`. With `quench` fractions given, bed 1 gets the oil and the treat gas less every quench at `T_in[0]`, and each later bed's inlet temperature follows from the adiabatic mix (a scalar enthalpy balance, Newton). With `quench=None` every bed's inlet temperature is given and the quench each needs is solved (a scalar equation in the total quench, since the first bed's gas depends on it). The quench-mixing enthalpy uses the upstream bed's linearised K-values; the extra vaporisation caused by the quench gas itself is neglected, and the next bed's inlet flash resets the split. WABT is `sum_k W_k (T_in,k + 2 T_out,k)/3 / sum W`.
+
+**Integration** is `diffrax` (Tsit5, PID step control on a state scaled by its inlet values; `ReactorOptions` sets tolerances, `fixed_steps`, `n_save` and the adjoint). Gradients are reverse mode through the solver with `RecursiveCheckpointAdjoint` (diffrax's default: the exact derivative of the discrete solution, checkpointed). `adjoint="backsolve"` selects the continuous adjoint; `adjoint="forward"` (`diffrax.ForwardMode`) makes the reactor forward-mode differentiable. Beds run under `lax.scan`, so the compiled program holds one copy of a bed whatever the bed count.
+
+(refinery-hydroprocessing-recycle)=
+### The recycle-gas loop
+
+- `knockout(vapour, liquid)`: the recycle compressor's suction drum returns every cut in the separator vapour (and its attributes) to the separator liquid. A modelling choice: the recycle gas then carries only real species, and the tear does not need every cut attribute. At 40--60 °C the cuts in separator vapour are a few hundred ppm of it.
+- `amine_scrub(gas, layout, h2s_removal, nh3_removal)`: fixed removal fractions. The NH3 fraction stands for the wash water a real unit injects upstream of the separator.
+- `purge_split(gas, fraction)`.
+- `compress(gas, layout, comps, T_in, P_in, P_out, eta)`: ideal-gas isentropic compression with temperature-dependent Cp (`sum z_i int Cp_i/T dT = R ln(P2/P1)`), `H_out = H_in + (H_s - H_in)/eta`, the convention of `difflow.units.eos_units.Compressor`. Ideal gas, not PR: the recycle gas is 80--95 % H2 at a compression ratio near 1.1, where the compressibility correction to the work is a few per cent (stated, not computed).
+- `makeup_for_ratio(recycle, layout, makeup_y, h2_target)`: the makeup that brings the treat gas's H2 to a target, explicitly. The H2/oil ratio is a spec and the makeup rate an output.
+- `solve_tear(g, x0, args, ...)`: Newton on `g(x, args) = x` over the recycle-gas flows (and the compressor outlet temperature). It is a difflow `Flowsheet` recycle in substance -- a tear on the recycle gas, converged and implicitly differentiated -- without the `Flowsheet` object, whose stream packing does not carry per-cut attributes.
+
+**Newton through diffrax** (`hydroprocessing.solve.newton_solve`). optimistix's Newton forms its Jacobian in forward mode, and a diffrax solve with `RecursiveCheckpointAdjoint` supports only reverse mode. The tear, the quench balance and any target spec are therefore solved by a Newton loop of their own, inside `lax.while_loop` on stop-gradient inputs, with the Jacobian from `jax.jacfwd` of a copy of the residual built with the forward-mode diffrax adjoint (`f_iter`); then one step `x = x* - J^-1 f(x*, theta)` with `J` frozen at the solution and `f` the reverse-mode residual. Its value is `x*` and its derivative is `-J^-1 df/dtheta`, exactly the implicit-function one. So `g` must be a pure function of `(x, args)`: everything the loop depends on goes in `args`, never in a closure. Building the Jacobian with VJPs through the checkpointed adjoint instead compiled for six minutes on the default diesel case; the forward-mode copy, with the beds under `lax.scan`, brings the whole hydrotreater to about 70 s.
+
+(refinery-hydroprocessing-stripper)=
+### The product stripper
+
+`strip(feed, layout, comps, feed_T, P_top, dP_stage, steam_rate, steam_T, spec)` runs a short steam-stripped column on the vacuum unit's `StageColumn`: `n_stages` equilibrium stages, the feed (heated to `feed_T`, the column's "furnace" knob) entering the top, liquid down, the bottoms leaving the last stage, steam under the last stage and (10 % by default, `feed_steam_fraction`) in the feed line. No condenser; the overhead goes to a drum. Thermodynamics are the vacuum unit's (Raoult with Maxwell-Bonnell vapour pressures, steam as a non-condensing vapour). Real gas species are not column components and leave with the overhead, as in the vacuum column. Cut attributes follow their cut, and the overhead is the feed less the bottoms, so the balances close exactly.
+
+Why steam in the feed line: a separator liquid with its gases taken out is a subcooled liquid at the stripper's pressure, and `StageColumn`'s feed flash then has no vapour phase, which makes its Jacobian singular (condition number 1e16 on the default diesel). A tenth of the steam in the feed line gives the flash a vapour phase; the column then converges in four Newton iterations.
+
+`overhead_drum(overhead, layout, comps, T, P)` is a PR flash: vapour is the sour off-gas, liquid the wild naphtha, all water decanted.
+
+`cut_pseudo_components(...)` gives the stripper's property table, with each cut's own molecular weight (from its atoms) where it has flow.
+
+---
+
+(refinery-hydrotreater)=
+## The hydrotreater
+
+`difflow_refinery.hydrotreating.Hydrotreater` is a distillate hydrotreater -- naphtha, kerosene or diesel, straight-run or cracked -- on the shared building blocks: adiabatic trickle beds with quench, effluent cooler and HP separator, recycle-gas loop with amine scrubber, purge, compressor and makeup, product steam stripper and overhead drum. It is a library, not a palette operation (like the blend pool).
+
+```python
+import difflow_refinery as dr
+from difflow_refinery.hydrotreating import Hydrotreater, HydrotreaterParams, straight_run_cut
+
+char = dr.characterize(assay, composition=True)              # #305 composition is required
+feed = straight_run_cut(char, 230 + 273.15, 370 + 273.15, 50.0)   # or a CDU product stream
+hdt = Hydrotreater(char, feed, HydrotreaterParams(T_in=(613.15,), P=50e5, lhsv=1.0, h2_oil=300.0))
+res = hdt.solve(feed)
+print(res.table())
+res.outputs["product.S_wppm"], res.outputs["h2.chemical_nm3_m3"], res.balances
+```
+
+The unit carries every cut the feed has and every lighter pseudo-component, because the cracking leak puts molecules there. A crude-unit product stream works as it is (`F_<char.names>`); `straight_run_cut` is an idealized one (every cut boiling in a TBP range, in its crude proportion) for running without a crude unit.
+
+(refinery-hydrotreater-feed)=
+### The feed on the attribute layout
+
+`hdt_feed(char, stream, layout)` turns a characterized stream into attribute flows (`HDT_ATTRIBUTES`): C and H atoms; S atoms in each of the five `SULFUR_CLASSES`; N atoms in the two `NITROGEN_CLASSES`; molecules that are mono-, di- and poly-aromatic, olefinic and naphthenic. All of it is read from `char.composition` (#305):
+
+- carbon is `1 - H - S - N` by mass, so the cut's mass from its atoms equals `F x MW` exactly;
+- a cut's **volume** fractions of types are taken as its **mole** fractions (the same assumption the composition module makes for procedure 2B4.1; product aromatics are reported back through the same rule, so an untreated cut reports exactly what it came in with);
+- total aromatics are split into mono/di/poly by `DEFAULT_AROMATIC_SPLIT`, an **illustrative** split by boiling point (all mono in naphtha, about 60/30/10 in diesel, more polyaromatic in the vacuum range) from no source. Pass measured ones (`aromatic_split=`, e.g. from EN 12916 or IP 391).
+
+(refinery-hydrotreater-kinetics)=
+### Reactions and rate laws
+
+Per cut, on the cut's own attribute concentrations (`c`, mol/m³ of fugacity-equivalent liquid), per kg of catalyst, with `f = activity x effectiveness x wetting`, Arrhenius `k(T) = k_ref exp(-E/R (1/T - 1/T_ref))`, `h = (c_H2/c_ref)^m` and adsorption constants `K(T) = K_ref exp(-dH_ads/R (1/T - 1/T_ref))`:
+
+| Reaction | Rate | H2 per event | Heat per event (kJ/mol) |
+|---|---|---|---|
+| HDS, class j: S_j + nu_j H2 -> H2S | `f k_j c_Sj h / (1 + K_H2S c_H2S + K_N c_Nbasic)^2` | 2.0, 4.0, 3.0, 2.6, 3.95 | -104.7, -261.4, -157.0, -83.9, -173.1 |
+| HDN, basic / non-basic | `f k_j c_Nj h / (1 + K_H2S c_H2S)` | 4.0, 5.0 | -238.2, -263.0 |
+| poly + 2 H2 <-> di | `f k h (c_A3 - c_A2 / (K3 (pH2/1 bar)^2))` | 2 | -115.2 |
+| di + 2 H2 <-> mono | `f k h (c_A2 - c_A1 / (K2 (pH2/1 bar)^2))` | 2 | -124.6 |
+| mono + 3 H2 <-> naphthene | `f k h (c_A1 - c_Nn / (K1 (pH2/1 bar)^3))` | 3 | -205.3 |
+| olefin + H2 -> paraffin | `f k c_O h` | 1 | -123.4 |
+| cracking leak: molecule + H2 -> lighter molecule + C1--C4 | `f k c_cut` | 1 | -42.7 |
+
+Sulfur classes in the order sulfides, thiophenes, benzothiophenes, dibenzothiophenes, hindered (4-/4,6-alkyl) DBTs.
+
+- **HDS** is the Langmuir-Hinshelwood-Hougen-Watson rate with a squared H2S-inhibition denominator, the form of Korsten & Hoffmann (1996) and, with a richer denominator, of Froment, Depauw & Vanrysselberghe (1994) and Vanrysselberghe & Froment (1996). It is first order in each class. A sum of first-order classes with different constants is what gives a lumped total-sulfur rate its apparent order above one. Basic nitrogen adsorbs on the same sites and sits in the denominator. `hds_form="power"` gives the nth-order fallback `f k c_ref,S (c_Sj/c_ref,S)^n h`, with no inhibition.
+- **Aromatics** saturate reversibly, first order, with equilibrium constants `K = exp(-(dH - T dS)/RT)` (pressures in bar) from model-compound thermochemistry. Saturation is exothermic and loses moles of gas, so equilibrium recedes as temperature rises and aromatics pass through a minimum.
+- **H2 stoichiometry** per class is that of a model compound (below). The hydrogen not leaving as H2S or NH3 goes onto the cut (`H += 2 nu - 2` per S, `2 nu - 3` per N). A desulfurized molecule keeps its carbon skeleton; the cut's molecule count does not change. Element balances are exact.
+- **The cracking leak** moves a molecule of cut `i` to the cut whose carbon number per molecule is nearest to `i`'s less the gas fragment's (fixed at construction from the composition), splitting off one C1--C4 molecule in the proportions `CRACK_GAS_SPLIT` (10/15/35/15/25 % C1/C2/C3/iC4/nC4, illustrative), with one H2.
+- **Deactivation** is the `activity` multiplier a(t). It is a differentiable parameter, so `difflow.reconciliation.tracking` can track it from plant data as the drifting parameter that loop is built for (not wired up or tested here).
+
+**Model compounds** behind the stoichiometry, heats and equilibrium (ideal gas, 298 K; formation enthalpies and entropies as tabulated in the `chemicals` package, which transcribes TRC/ATcT/CRC sources -- per-compound primary source unverified):
+
+| Class | Model reaction | dH (kJ/mol) | dS (J/mol/K) |
+|---|---|---|---|
+| sulfides | diethyl sulfide + 2 H2 -> 2 ethane + H2S | -104.7 | |
+| thiophenes | thiophene + 4 H2 -> n-butane + H2S | -261.4 | |
+| benzothiophenes | benzothiophene + 3 H2 -> ethylbenzene + H2S | -157.0 | |
+| DBTs | 80 % DBT + 2 H2 -> biphenyl + H2S (DDS), 20 % DBT + 5 H2 -> cyclohexylbenzene + H2S (HYD) | -83.9 | |
+| hindered DBTs | 35 % DDS / 65 % HYD, DBT model compounds | -173.1 | |
+| basic N | quinoline + 4 H2 -> propylbenzene + NH3 | -238.2 | |
+| non-basic N | carbazole + 5 H2 -> cyclohexylbenzene + NH3 | -263.0 | |
+| poly -> di | phenanthrene + 2 H2 -> 1,2,3,4-tetrahydrophenanthrene | -115.2 | -228.3 (taken from di; THP entropy not tabulated) |
+| di -> mono | naphthalene + 2 H2 -> tetralin | -124.6 | -228.3 |
+| mono -> naphthene | benzene + 3 H2 -> cyclohexane | -205.3 | -363.1 |
+| olefins | 1-hexene + H2 -> n-hexane | -123.4 | |
+| cracking | n-hexane + H2 -> n-butane + ethane | -42.7 | |
+
+The DDS/HYD route shares of the two DBT classes are illustrative, set by the qualitative finding (Girgis & Gates 1991; Vanrysselberghe & Froment 1996) that CoMo removes DBT mainly by direct desulfurization and 4,6-DMDBT mainly after ring hydrogenation. Heats are gas-phase at 298 K: the heats of vaporisation of the reacting species and the temperature dependence are neglected. Benzene is a more favourable case than an alkylbenzene, so the mono-aromatic equilibrium is if anything too far to the right.
+
+**Where the rate constants come from.** The forms are the literature's. The constants in `HDTKineticParams` (rate constants, activation energies, adsorption constants and enthalpies, H2 orders) are **illustrative**, chosen here so that a straight-run diesel at about 350 °C, LHSV 1 h⁻¹, 50 bar and 300 Nm³/m³ desulfurizes to a few hundred wppm and needs 370--380 °C for ULSD -- the right order of magnitude for a CoMo catalyst. They are not Korsten & Hoffmann's, not Froment's, and not any commercial catalyst's (those are proprietary). With these constants the model gives trends and orders of magnitude. Product sulfur to 10 ppm is predictive only after `activity` and the refractory-class constants are fitted to the unit's own data (`difflow.estimation`).
+
+(refinery-hydrotreater-specs)=
+### Degrees of freedom and specs
+
+`HydrotreaterParams`:
+
+| Spec | Default | |
+|---|---|---|
+| `T_in` | (613.15,) K | bed inlet temperatures: the first only when `quench` is given, every bed's when `quench=None` |
+| `quench` | (0.15,) | quench into each later bed, fraction of the treat gas; `None` to solve it from `T_in` |
+| `bed_fractions` | (0.4, 0.6) | catalyst split between beds |
+| `P` | 50 bar | reactor pressure (no bed pressure drop) |
+| `lhsv` | 1.0 h⁻¹ | feed standard liquid volume per hour per catalyst volume |
+| `catalyst_density` | 800 kg/m³ | loaded density |
+| `h2_oil` | 300 Nm³/m³ | treat-gas H2 to oil, including quench |
+| `purge` | 0.05 | fraction of the scrubbed separator gas purged |
+| `makeup` | 97 % H2, 3 % CH4 | makeup-gas composition |
+| `h2s_removal`, `nh3_removal` | 0.99, 1.0 | amine and wash-water removal fractions |
+| `hps_T`, `loop_dP` | 50 °C, 3 bar | separator temperature; pressure drop round the loop (the compressor makes it up) |
+| `compressor_eta` | 0.75 | isentropic efficiency |
+| `stripper_feed_T`, `stripper_P`, `stripper_dP` | 230 °C, 7 bar, 1 kPa/stage | stripper |
+| `steam_ratio`, `steam_T` | 0.01 kg/kg, 250 °C | stripping steam |
+| `drum_T`, `drum_dP` | 40 °C, 0.3 bar | overhead drum |
+| `stripper_stages` | 6 | |
+| `kinetics` | `HDTKineticParams()` | rate constants and catalyst activity |
+
+`TargetSpec(output, target)` replaces the inlet temperatures by a target on any output -- `TargetSpec("wabt", 623.15)` or `TargetSpec("product.S_wppm", 10.0, scale=10.0)` -- by shifting every bed inlet by the same amount. It is a scalar Newton solve around the whole unit, differentiated implicitly (the shift is `outputs["T_shift"]`).
+
+**Assumptions**, beyond those of the building blocks:
+
+- the reactor pressure is uniform (no bed pressure drop); the separator sits `loop_dP` below it and the compressor makes that up;
+- the makeup gas is delivered at the recycle compressor's discharge temperature, and the treat gas and quench are at that temperature;
+- bed 1's inlet temperature is a spec (the furnace is not modelled); the oil's own feed temperature is not used;
+- there is no wash water: the separator decants only the water the feed brought, and NH3 removal is the amine/wash fraction;
+- the HP separator vapour's cuts are knocked out back into its liquid (`knockout`), so the recycle gas is real species only;
+- a cut's gravity after treatment is computed from liquid molar-volume increments per saturation step (`VOLUME_INCREMENTS`: mono-aromatic -> naphthene +20.1, di -> mono +11.0, poly -> di +11.0, olefin -> paraffin +5.5 cm³/mol), from model-compound liquid densities at 60 °F (DIPPR 105 of Perry's 8th ed., via `chemicals`); heteroatom removal is taken to change the volume by nothing; the cut's boiling point and critical constants are the feed's;
+- the stripper and the overhead drum run on the treated cuts' own molecular weights.
+
+(refinery-hydrotreater-outputs)=
+### Outputs
+
+`HydrotreaterResult.outputs` (units in `OUTPUT_UNITS`):
+
+- product: `product.S_wppm`, `.N_wppm`, `.sg`, `.api`, `.H_wt`, `.aromatics_vol` and its `mono_`/`di_`/`poly_aromatics_vol`, `.olefins_vol`, TBP `.T05` ... `.T95` (K), `.cetane_index` (ASTM D4737 from the TBP->D86 points and density, the blend pool's functions), `.rate`, `.yield` (mass), `.volume_yield`;
+- wild naphtha `naphtha.rate`, `.yield`, `.sg`, `.S_wppm`, `.T50`; `gas.yield` (C1--C4, H2S and NH3 net of the makeup's, mass fraction of feed);
+- hydrogen: `h2.chemical` (mol/s), `h2.chemical_nm3_m3`, `h2.chemical_scf_bbl`, `h2.chemical_wt` -- chemical consumption **from the hydrogen balance on the characterized products** (H atoms in every outlet's cuts, H2S, NH3 and light hydrocarbons less those fed, halved); `h2.consumed_by_balance` (H2 in less H2 out, equal to it to round-off); `h2.makeup`, `h2.makeup_nm3_m3`, `h2.dissolved` (H2 in the separator liquid), `h2.purge`;
+- loop: `recycle.rate`, `recycle.h2_purity`, `purge.rate`, `makeup.rate`, `compressor.power`, `compressor.T_out`, `reactor.pH2_in`;
+- reactor: `wabt`, `reactor.T_out`, `reactor.dT_total`, per bed `bed<k>.T_in`, `.dT`, `.quench`; `catalyst.mass`; `hds.conversion`, `hdn.conversion`;
+- convergence: `tear.residual`, `stripper.residual`; `res.converged`.
+
+`res.balances` gives the relative closure of mass, C, H, S and N over the whole unit (feed + makeup + steam = product + wild naphtha + off-gas + purge + acid gas + separator water + sour water). `res.streams` has every internal stream as `Flows`; `res.reactor` the bed profiles. `res.product_char` is a `BlendCharacterization` of the treated cuts and `res.product_stream("product")` the product as a stream on it, so the product goes straight into `BlendComponent.from_stream` for the ULSD or jet pool.
+
+(refinery-hydrotreater-results)=
+### Results on the test diesel
+
+The test crude of the composition section (SG 0.86, 1.8 wt% S, 1500 wppm N, with a heavy end), its 230--370 °C straight-run diesel at 50 kg/s (11 286 wppm S, 406 wppm N), and the defaults above (two beds, 15 % quench to the second, bed 1 inlet 340 °C, 50 bar, LHSV 1 h⁻¹, 300 Nm³/m³):
+
+| | |
+|---|---|
+| WABT | 351.4 °C; bed rises 13.2 and 7.2 K |
+| product | 241 wppm S, 229 wppm N, SG 0.850, 14.2 vol% aromatics, cetane index 58.4 |
+| yields (mass) | product 98.74 %, wild naphtha 0.39 %, gas (C1--C4, H2S, NH3) 1.20 % |
+| hydrogen | chemical 32.4 Nm³/m³ (192 scf/bbl), makeup 49.7 Nm³/m³; recycle purity 95.1 % |
+| loop | recycle compressor 153 kW; purge 36 mol/s |
+| closure | mass, C, H, S and N to 1e-15 relative; tear residual 4e-14; stripper 2e-12 |
+
+Compiling the unit takes about 70 s (more on a loaded machine); a solve then takes about 1.7 s, of which the recycle tear is five Newton steps. A reverse-mode gradient of all outputs costs one more compile and 30--140 s.
+
+**Gradients** (`tests/refinery/test_hydrotreating.py::test_gradients_match_central_differences`): product S, chemical H2 consumption and liquid yield with respect to the bed inlet temperature, the pressure, the H2/oil ratio and the 50 % TBP point of the assay, AD against central differences. With plain central differences (steps 0.5 K, 0.5 bar, 3 Nm³/m³) they agree to 1e-5 -- 9e-4, and the larger figures are the differences' own O(h²) truncation; the test compares against Richardson-extrapolated differences at `rtol` 1e-5.
+
+**Trends** (tested): product sulfur falls with inlet temperature and with pressure (H2 partial pressure); chemical H2 consumption rises with temperature; on a bed at 30 bar, total aromatics pass through a minimum between 300 and 480 °C as the saturation equilibrium recedes.
+
+The numbers come from illustrative rate constants: read them as the shape of the answer, not a prediction for any catalyst.
+
+**What the tests check** (`tests/refinery/test_hydrotreating.py`; the full-unit ones are marked `slow`):
+
+- converges from the default initialization, recycle included, on the straight-run diesel above, on a straight-run kerosene (150--250 °C) of a second, lighter and low-sulfur assay (SG 0.83, 0.35 wt% S), and on the diesel side product of a 30-stage `CrudeDistillationUnit` as it comes (stripping water and light-end traces included);
+- mass, C, H, S and N close to 1e-8 relative over reactor, separator, recycle and stripper (they close to about 1e-15); the H2 consumption by the hydrogen balance equals H2 in less H2 out;
+- gradients against Richardson-extrapolated central differences at 1e-5 (above); a single bed's gradients, and `newton_solve` / `solve_tear` against closed forms;
+- product S falls with temperature and pressure, H2 consumption rises with temperature, aromatics pass through a minimum in temperature;
+- `TargetSpec("wabt", ...)` lands on its target; `hdt_block` delta vectors pass `check_delta_vectors`;
+- the product enters `BlendPool("ulsd")` through `BlendComponent.from_stream`, with the same sulfur, gravity and cetane index the unit reports;
+- pins: PR fugacity coefficients against difflow's `PengRobinson` (1e-8), the H2/H2S/NH3 Cp polynomials against PPO 5th ed. (0.5 %), every heat of reaction and the aromatic-step entropies against the model-compound table, element conservation of the kinetics at a point, and the power-law fallback.
+
+A crude-unit product carries every cut at some trace level. `Hydrotreater(..., trace=1e-9)` leaves out cuts heavier than the heaviest one above that mole fraction, and reports what that drops as `dropped_mass_fraction` (below 1e-6 on the crude-unit diesel).
+
+(refinery-hydrotreater-planning)=
+### Planning: `hdt_block`
+
+`difflow_refinery.hydrotreating.planning.hdt_block(unit, feed, levers, outputs)` wraps the unit as a `difflow.planning.Block`, modelled on `cdu_block`. Levers: `feed.bpd` (or `<product>.bpd` with `feed_product=`, so `link_cdu` finds it; the feed composition is held at the base and, with the catalyst volume fixed, LHSV moves with the rate), `reactor.T_in` (°C; every bed inlet moves together -- WABT is an output, write a row on it), `h2_oil`, `pressure` (bar), `purge`. Outputs (`HDT_OUTPUTS`): product S and N, gravity, cetane index, aromatics, product and wild-naphtha bbl/d, chemical H2 and makeup in Nm³/h, WABT, temperature rise, compressor kW, inlet H2 partial pressure, HDS conversion. Reverse mode only (`ad_mode="rev"` is forced): the diffrax adjoint is a `custom_vjp`.
+
+(refinery-hydrotreater-references)=
+### References
+
+| Key | Reference | Used for | How checked |
+|---|---|---|---|
+| H1 | Peng, D.-Y.; Robinson, D.B. "A new two-constant equation of state." *Ind. Eng. Chem. Fundam.* **1976**, 15(1), 59--64. doi:10.1021/i160057a011 | PR EOS, mixing rules, fugacity coefficient | The equations as coded match the standard form difflow's own `PengRobinson` uses and are pinned against it in the tests. The bibliographic details are as recalled; the paper was not reached (publisher blocked) -- volume/pages/DOI unverified. |
+| H2 | Robinson, D.B.; Peng, D.-Y. *The characterization of the heptanes and heavier fractions for the GPA Peng-Robinson programs*, GPA Research Report RR-28, **1978** | `kappa` for omega > 0.49 | Not checked against the report (unverified); the cubic is the form in common use. |
+| H3 | Rackett, H.G. *J. Chem. Eng. Data* **1970**, 15(4), 514--517, doi:10.1021/je60047a012; Spencer, C.F.; Danner, R.P. *J. Chem. Eng. Data* **1972**, 17(2), 236--241, doi:10.1021/je60053a012; Yamada, T.; Gunn, R.D. *J. Chem. Eng. Data* **1973**, 18(2), 234--236, doi:10.1021/je60057a006 | Liquid molar volume of the cuts | Equation form as in Poling, Prausnitz & O'Connell 5th ed. ch. 4 (recalled); citations unverified. |
+| H4 | Whitson, C.H.; Michelsen, M.L. "The negative flash." *Fluid Phase Equilib.* **1989**, 53, 51--71. doi:10.1016/0378-3812(89)80072-X | Negative flash | Unverified (not reached). |
+| H5 | Rachford, H.H.; Rice, J.D. *J. Petrol. Technol.* **1952**, 4(10), sec. 1 p. 19, sec. 2 p. 3 | Rachford-Rice | Unverified. |
+| H6 | Michelsen, M.L. "The isothermal flash problem. Part II. Phase-split calculation." *Fluid Phase Equilib.* **1982**, 9(1), 21--40 | SS then Newton in ln K | Unverified. |
+| H7 | Korsten, H.; Hoffmann, U. "Three-phase reactor model for hydrotreating in pilot trickle-bed reactors." *AIChE J.* **1996**, 42(5), 1350--1360. doi:10.1002/aic.690420515 | LHHW HDS form with squared H2S inhibition | Title, journal and year confirmed by web search (citing literature); volume/issue/pages/DOI as recalled (unverified). Their rate constants, solubility and density correlations are **not** used; their published profiles are **not** reproduced (below). |
+| H8 | Froment, G.F.; Depauw, G.A.; Vanrysselberghe, V. "Kinetic modeling and reactor simulation in hydrodesulfurization of oil fractions." *Ind. Eng. Chem. Res.* **1994**, 33(12), 2975--2988 | LHHW HDS by sulfur class | Title, pages and DOI not verified (unverified). Form only; constants not used. |
+| H9 | Vanrysselberghe, V.; Froment, G.F. "Hydrodesulfurization of dibenzothiophene on a CoMo/Al2O3 catalyst: reaction network and kinetics." *Ind. Eng. Chem. Res.* **1996**, 35(10), 3311--3318 | DBT network (DDS/HYD routes), LHHW form | Web search did not return the paper; details unverified. Qualitative use only. |
+| H10 | Girgis, M.J.; Gates, B.C. "Reactivities, reaction networks, and kinetics in high-pressure catalytic hydroprocessing." *Ind. Eng. Chem. Res.* **1991**, 30(9), 2021--2058 | Class reactivity order; DBT routes | Unverified. Qualitative use only. |
+| H11 | Mederos, F.S.; Elizalde, I.; Ancheyta, J. "Steady-state and dynamic reactor models for hydrotreatment of oil fractions: a review." *Catal. Rev. Sci. Eng.* **2009**, 51(4), 485--607 | Background: lumped HDS/HDN/HDA models | Title confirmed by web search (publisher listing); volume/pages as in the issue, DOI unverified. Not used for numbers. |
+| H12 | Bell, C. et al., `chemicals` (Python package) v1.5.2 and `thermo` v0.6.1 | Model-compound Hf, S°; liquid densities (DIPPR 105 from Perry's 8th ed.); dHvap at Tb (CRC); ChemSep PR k_ij; cross-check of the RPP Cp polynomials | Values read from the packages' tables (offline). The packages transcribe primary sources; the primary source of each number was not checked (unverified). |
+| H13 | Reid, R.C.; Prausnitz, J.M.; Poling, B.E. *The Properties of Gases and Liquids*, 4th ed., McGraw-Hill, **1987**, App. A | Ideal-gas Cp of H2, H2S, NH3 | Coefficients as recalled; checked against the PPO 5th ed. polynomials (via `chemicals`): within 0.5 % at 300--700 K (pinned in tests). |
+| H14 | Poling, B.E.; Prausnitz, J.M.; O'Connell, J.P. *The Properties of Gases and Liquids*, 5th ed., McGraw-Hill, **2001**, App. A | Light-end constants (via the crude unit's table) | As the crude unit cites them. |
+| H15 | ASTM D4737 (four-variable cetane index) | Product cetane index | The blend pool's function, as cited there. |
+| H16 | Wieser, M.E.; Berglund, M. "Atomic weights of the elements 2007." *Pure Appl. Chem.* **2009**, 81(11), 2131--2156 | Atomic masses | Values are the standard ones; citation details unverified. |
+
+(refinery-hydrotreater-not-done)=
+### What is not done
+
+- **The Korsten & Hoffmann (1996) profile cross-check is not done.** Their paper could not be reached from here (publisher sites are blocked), so neither their parameters nor their profiles could be verified, and no reproduction is claimed. Their gas-liquid / liquid-solid film model and their Henry's-law and Standing-Katz density correlations are not implemented either.
+- **Smoke point** is not computed. The correlation the issue names (Riazi MNL50, Tb and SG) could not be verified; a jet pool takes a measured `smoke_mm` override.
+- **No example notebook** (CDU diesel -> hydrotreater -> ULSD pool) was written. The pieces are tested: `res.product_stream()` and `res.product_char` feed `BlendComponent.from_stream`.
+- **Not a difflow `Flowsheet` object.** The recycle is solved by the unit's own tear (above); a `Flowsheet` wiring of the same pieces is not provided.
+- **Commercial catalyst kinetics** are not reproduced and must not be implied: the rate constants are illustrative.
+- **No dissolved-gas effect in the stripper**: the real gases leave with the overhead without taking part in the column's equations.
+- **Deactivation tracking** with `difflow.reconciliation.tracking` is possible (the activity is a parameter with a gradient) but not demonstrated.
+- Out of scope (as the issue says): residue hydrotreating/HDM, countercurrent reactors, reactor internals and pressure drop, amine unit detail, dynamics.
 
 ---
 
@@ -1388,4 +1674,5 @@ The reference also measures what two of difflow's numerical choices cost. These 
 - **Boiling ranges are TBP, not ASTM D86.**
 - **FCC:** illustrative kinetics (no published parameter set reproduced), a simplified main fractionator (a TBP split, not a `StageColumn`), no gas plant, no 10-lump scheme, no literature cross-check. See [FCC: what is tested, and what is not](#refinery-fcc-validation).
 - **Composition is correlated, not measured.** Hydrocarbon types and hydrogen come from Riazi-Daubert / Goossens (or n-d-M) unless the caller gives PIONA, SARA or hydrogen data; the default sulfur- and nitrogen-class splits are illustrative. The MNL50 worked examples for those correlations are not reproduced (see [the composition section](#refinery-composition)).
+- **Hydrotreater kinetics are illustrative** (rate forms from the literature, constants chosen for CoMo-like trends), and the Korsten-Hoffmann cross-check is not done; see [the hydrotreater](#refinery-hydrotreater-not-done).
 - **Validation:** against an independent equation-oriented model, IDAES property packages and published characterisation examples; not against a commercial simulator's crude case. The vacuum column likewise, against an independent Pyomo/IPOPT model on the same residue (equilibrium and Murphree beds, and sensitivities); not against DWSIM. See [Validation](#refinery-validation) and [the vacuum unit's](#refinery-vacuum-validation) for what that does and does not establish.

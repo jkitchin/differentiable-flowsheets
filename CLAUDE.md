@@ -73,7 +73,8 @@ difflow/
 │   ├── difflow_ree/       # Rare earth element solvent extraction plugin
 │   ├── difflow_cc/        # Carbon capture plugin (amine, membrane, adsorption)
 │   ├── difflow_gas/       # Gas transmission network plugin (pipes, compressors, computed decomposition)
-│   └── difflow_refinery/  # Refinery plugin (crude assay, crude and vacuum distillation units, product blending pool)
+│   └── difflow_refinery/  # Refinery plugin (crude assay, crude and vacuum distillation units, product blending pool,
+│                          # hydroprocessing/ building blocks + hydrotreating/ unit)
 ├── tests/                 # pytest test files (includes tests/bio/, tests/ree/, tests/cc/, tests/gas/, tests/power/, tests/refinery/)
 ├── examples/              # Jupyter notebook examples
 ├── jax-tutorials/         # JAX/autodiff tutorials
@@ -534,6 +535,43 @@ Examples: `examples/34_vacuum_distillation.ipynb`, `examples/36_crude_to_vacuum.
 
 Docs: `docs/unit-operations-refinery.md` (Catalytic reforming). Tests:
 `tests/refinery/test_reforming.py` (flowsheet tests `slow`).
+### Hydroprocessing and the Hydrotreater (`difflow_refinery.hydroprocessing`, `.hydrotreating`)
+
+`hydroprocessing/` is kinetics-agnostic and shared (the hydrocracker of #307
+is meant to reuse it): `layout` (`Layout`/`Flows`: gases, cuts, and per-cut
+ATTRIBUTE flows `F_<cut>@<attr>` -- C and H atoms compulsory, a cut's mass is
+computed from its atoms), `thermo` (vectorised PR on traceable cut constants),
+`separator` (`pr_flash`, negative flash, `HPSeparator`), `reactor`
+(`TrickleBedReactor` around any object with `attributes`,
+`attribute_elements` and `rates(ctx: ReactionContext, params) -> Rates`),
+`recycle` (knock-out, amine, purge, ideal-gas compressor, makeup, `solve_tear`),
+`stripper` (`StageColumn` steam stripper + PR overhead drum), `solve`
+(`newton_solve`). `hydrotreating/` adds `HDTKinetics` (HDS by sulfur class,
+LHHW; HDN; reversible aromatics; olefins; cracking leak), `Hydrotreater`,
+`hdt_block`. A library, not a palette operation.
+
+Invariants (do not weaken them):
+- Attributes are extensive and follow their cut through every split; element
+  balances (C, H, S, N) and mass close to round-off -- tested at 1e-8.
+- A diffrax solve with `RecursiveCheckpointAdjoint` is reverse-mode only.
+  Newton loops around the reactor (tear, quench, targets) use
+  `hydroprocessing.solve.newton_solve`: Jacobian from a FORWARD-adjoint copy
+  (`f_iter`, `jac="fwd"`), then one implicit step with the reverse-mode
+  residual. Residuals must be pure in `(x, args)` -- no traced closures.
+  Reverse-mode Jacobians through the checkpointed adjoint compiled for 6 min.
+- Root polishing (Rachford-Rice, the PR cubic) takes TWO Newton steps on live
+  inputs: the reactor differentiates derivatives (`C_eff = dH/dT`,
+  `d ln K/dT`); one step left the second derivatives wrong and the loop's
+  implicit gradient was 1-80 % off (high loop gain amplifies it).
+- `Flows.per_molecule` uses a safe inverse (`F/(F^2+eps^2)`): `attr/max(F,
+  1e-300)` gives a 1e300 cotangent for an empty cut and NaN gradients.
+- The stripper feeds 10 % of its steam with the feed: a degassed separator
+  liquid is subcooled and `StageColumn`'s feed flash is otherwise singular.
+- Rate constants are ILLUSTRATIVE; thermochemistry is model-compound data from
+  the `chemicals` tables. The Korsten-Hoffmann profile cross-check is NOT done.
+
+Docs: `docs/unit-operations-refinery.md` (Hydroprocessing building blocks; The
+hydrotreater). Tests: `tests/refinery/test_hydrotreating.py`.
 
 ### Refinery Blending (`difflow_refinery`)
 
@@ -996,7 +1034,7 @@ jax.debug.print("value: {x}", x=value)
 | `src/difflow_cc/__init__.py` | Carbon capture plugin exports |
 | `src/difflow_gas/__init__.py` | Gas transmission network plugin exports |
 | `src/difflow_power/__init__.py` | Electrical grid plugin exports (AC-OPF) |
-| `src/difflow_refinery/__init__.py` | Refinery plugin exports (crude assay, CDU, VDU, blending) |
+| `src/difflow_refinery/__init__.py` | Refinery plugin exports (crude assay, CDU, VDU, blending, hydrotreating) |
 | `tests/` | All pytest tests (includes `bio/`, `ree/`, `cc/`, `gas/`, `power/`, `refinery/` subdirs) |
 | `examples/` | Usage examples (Jupyter notebooks) |
 | `jax-tutorials/` | JAX autodiff tutorials |
