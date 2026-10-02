@@ -48,20 +48,45 @@ words) stays under the budget and keeps its reuse.
 """
 
 import gc
+import json
 import os
 
 import jax
 import pytest
 
-#: Clear once the process holds more mapped sections than this. The kernel's
-#: ceiling is ``vm.max_map_count``, 65530 by default; a fifth of it leaves
-#: room for a module heavier than any here today. Measured on
-#: ``tests/test_distillation.py``, the worst offender: 49480 mappings and
-#: 8.2 GB peak with only the module-boundary clear below, versus 13496 and
-#: 6.0 GB with this budget, for 15 seconds on a 10-minute module -- those
-#: tests build a fresh column per test and so recompile either way, which is
-#: why dropping the caches under them costs so little.
-_MAPPING_BUDGET = 15_000
+#: The kernel's ceiling on mapped sections per process, ``vm.max_map_count``.
+#: 65530 is the kernel default and what this budget was first measured
+#: against, but distributions and CI images raise it: GitHub's
+#: ``ubuntu-latest`` runner has 262144.
+_DEFAULT_MAX_MAP_COUNT = 65_530
+
+
+def _max_map_count():
+    """``vm.max_map_count``, or the kernel default where it is not readable."""
+    try:
+        with open("/proc/sys/vm/max_map_count") as fh:
+            return int(fh.read())
+    except (OSError, ValueError):
+        return _DEFAULT_MAX_MAP_COUNT
+
+
+#: Clear once the process holds more mapped sections than this. Against the
+#: default ceiling of 65530 it is 15000, which leaves room for a module
+#: heavier than any here today. Measured on ``tests/test_distillation.py``,
+#: the worst offender: 49480 mappings and 8.2 GB peak with only the
+#: module-boundary clear below, versus 13496 and 6.0 GB with this budget, for
+#: 15 seconds on a 10-minute module -- those tests build a fresh column per
+#: test and so recompile either way, which is why dropping the caches under
+#: them costs so little.
+#:
+#: It scales with the real ceiling, because the ceiling is what it protects.
+#: A fixed 15000 on a 262144-mapping CI runner cleared the caches 19 times
+#: in shard 2 (#315), each at a small fraction of the headroom the kernel
+#: actually had. And not every module recompiles regardless: the crude-unit
+#: planning tests reuse compiled column cores across tests, and clearing
+#: them mid-module took ``tests/refinery/test_planning.py`` from 929 s to
+#: 1150 s on the runner.
+_MAPPING_BUDGET = 15_000 * _max_map_count() // _DEFAULT_MAX_MAP_COUNT
 
 #: Under ``pytest -n`` every worker is a separate process holding its own
 #: caches, so the budget above is spent once per worker and what they add up
@@ -72,6 +97,16 @@ _MAPPING_BUDGET = 15_000
 #: what one serial run costs: the same suite peaks at 7.4 GB with this in
 #: place. The floor keeps a hypothetical ``-n 32`` from clearing the caches
 #: after every test.
+#:
+#: On CI (``-n auto`` is 2 workers there: the runner's 4 vCPUs are 2
+#: physical cores) this comes to 30000 a worker. Memory there was measured
+#: rather than assumed (#315). With the mid-module clear switched off
+#: altogether the heaviest per-commit shard peaked at 10.6 GB used of 16 GB,
+#: against 8.7 GB with the old 7500 budget; with this one, 10.8 GB on the
+#: per-commit tier and 11.3 GB on the whole suite (the release tier
+#: included). A clear does not hand memory back -- resident size stays where
+#: it was -- it only stops it climbing, so a larger budget costs headroom
+#: slowly, and that headroom is what to re-measure if a module gets heavier.
 MAPPING_BUDGET = max(
     _MAPPING_BUDGET // int(os.environ.get("PYTEST_XDIST_WORKER_COUNT", 1)),
     2_000,
@@ -107,3 +142,81 @@ def _release_jax_compilation_caches():
     yield
     jax.clear_caches()
     gc.collect()
+
+
+
+_DURATIONS = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".test_durations")
+
+#: Files that must not run at the same time as each other (#315). On the CI
+#: runner (2 physical cores, 4 vCPUs) each of these runs 2-2.5x slower when
+#: another of them is running on the other worker -- measured: the
+#: non-convergence file 470s alone against 1140s overlapped, the full grid
+#: 210s against 510s, the planning file 420s against 630s -- so overlapping
+#: them costs more time than it saves. ``--dist loadfile`` hands them out as
+#: ONE work unit, which puts them on one worker in series, while the other
+#: worker takes everything else. (Pinning XLA to one thread did not help:
+#: measured, same wall time.) A file belongs here only on that evidence.
+_SERIAL_GROUP = "serial-heavy"
+_SERIAL_FILES = frozenset({
+    "tests/refinery/test_planning.py",
+    "tests/refinery/test_planning_nonconvergence.py",
+    "tests/test_convergence_full_grid.py",
+})
+
+
+def _work_unit(nodeid):
+    """The unit ``--dist loadfile`` hands out: the file, or the serial group."""
+    path = nodeid.split("::", 1)[0]
+    return _SERIAL_GROUP if path in _SERIAL_FILES else path
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_xdist_make_scheduler(config, log):
+    """``--dist loadfile``, with :data:`_SERIAL_FILES` as one work unit."""
+    if config.getvalue("dist") != "loadfile":
+        return None
+    from xdist.scheduler import LoadFileScheduling
+
+    class _Scheduling(LoadFileScheduling):
+        def _split_scope(self, nodeid):
+            return _work_unit(nodeid)
+
+    return _Scheduling(config, log)
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_collection_modifyitems(config, items):
+    """Under xdist, hand the work units out longest first (#315).
+
+    xdist's own order is by test COUNT, descending, and each worker keeps
+    its next unit queued -- so a unit with a few tests and many minutes of
+    setup is handed out late, queued behind a running one, and ends the
+    shard alone while the other worker sits idle. Measured on shard 2: the
+    refinery planning files started at 552s and 879s and ran to 1089s, one
+    worker idle from 775s.
+
+    Sorting whole units by their recorded duration (``.test_durations``,
+    the same numbers pytest-split splits on) is the longest-processing-time
+    rule; CI passes ``--no-loadscope-reorder`` so xdist keeps this order.
+    The order inside a file is untouched. This is a wrapper so it runs after
+    pytest-split has chosen the group, and only on xdist workers (where the
+    collection that xdist schedules from happens), so a serial run is
+    unchanged.
+    """
+    result = yield
+    if not os.environ.get("PYTEST_XDIST_WORKER") or not items:
+        return result
+    try:
+        with open(_DURATIONS) as fh:
+            durations = json.load(fh)
+    except (OSError, ValueError):
+        return result
+    known = [durations[i.nodeid] for i in items if i.nodeid in durations]
+    default = sum(known) / len(known) if known else 0.0
+    totals = {}
+    for item in items:
+        unit = _work_unit(item.nodeid)
+        totals[unit] = totals.get(unit, 0.0) + durations.get(item.nodeid, default)
+    # sorted() is stable: in-file order survives, ties keep collection order.
+    items[:] = sorted(items, key=lambda i: -totals[_work_unit(i.nodeid)])
+    return result
