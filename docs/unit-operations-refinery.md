@@ -1074,7 +1074,7 @@ Measured on the C3/C4 feed against `pr_shortcut` with the same specs (`test_peng
 
 - product flows and the alkylate RVP agree to 0.2 %;
 - condenser duties agree to 1 %;
-- reboiler duties differ by up to 20 % (the DIB's: 33.6 MW CMO against 26.8 MW by the PR energy balance), because the CMO duty uses the bottoms' latent heat and neglects sensible heat;
+- reboiler duties differ by up to 25 % (the DIB's: 33.6 MW CMO against 26.8 MW by the PR energy balance), because the CMO duty uses the bottoms' latent heat and neglects sensible heat;
 - `R_min` and `N_min` differ by up to a factor of two between Raoult/Lee-Kesler and PR volatilities.
 
 **Treat the reboiler duties as order-of-magnitude** until #312's rigorous columns exist.
@@ -1158,7 +1158,7 @@ Any `OUTPUT_UNITS` name can be an output. The `alkylate.bpd`, `alkylate.RON`, `a
 (refinery-alkylation-not-done)=
 ### Alkylation: not done, and why
 
-- **Rigorous fractionation (#312).** The issue's columns do not exist, and shortcut columns stand in (above). The reboiler duties are uncertain to about 20 %.
+- **Rigorous fractionation (#312).** The issue's columns do not exist, and shortcut columns stand in (above). The reboiler duties are uncertain to about 25 %.
 - **Kinetic option.** The carbocation schemes of Langley & Pike (1972) and Lee & Harriott (1977) are not implemented. The issue lists them as non-default; the papers were not available to transcribe.
 - **Per-olefin yields, isobutane consumption and octanes from Gary, Handwerk & Kaiser.** The table could not be consulted. The per-olefin selectivities and the octane corrections are labelled illustrative instead.
 - **Pure-component octanes (API RP 45).** Not used. The alkylate octane is the correlation's.
