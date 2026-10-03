@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { decorate, flowLabels, flowTints, fmt, speciesOf, streamTable,
+import { decorate, flowLabels, flowTints, fmt, productLabel, speciesOf, streamTable,
          tornado, total } from './results.js'
 
 const SOLVE = {
@@ -139,4 +139,10 @@ test('the phase column is offered only when some stream has a phase', () => {
   const table = streamTable({ species: ['water'], streams })
   assert.equal(table.phases, true)
   assert.deepEqual(table.rows.map((r) => r.phase), [null, 'vapor'])
+})
+
+test('a product is labelled with its name, and its flow once solved', () => {
+  assert.equal(productLabel('liq'), 'liq')
+  assert.equal(productLabel('liq', { vap: 1 }), 'liq')
+  assert.equal(productLabel('liq', { liq: 0.5 }), `liq  ${fmt(0.5, 3)}`)
 })

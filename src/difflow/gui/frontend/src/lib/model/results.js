@@ -169,6 +169,20 @@ export function fmt(value, digits = 4) {
 }
 
 /**
+ * The text beside a product's ring: its stream name, and its flow once
+ * there is one.
+ *
+ * A product has no wire, so it has no wire label either -- and the wire
+ * label is where every other stream's name and flow are written. Without
+ * this the one stream a flowsheet exists to make was the one stream the
+ * canvas never named. Same text as a wire's label, so the two read alike.
+ */
+export function productLabel(stream, flows = null) {
+  const flow = flows ? flows[stream] : undefined
+  return flow === undefined ? stream : `${stream}  ${fmt(flow, 3)}`
+}
+
+/**
  * Put the solve onto the canvas edges: a flow on the label, a tint on
  * the line.
  *

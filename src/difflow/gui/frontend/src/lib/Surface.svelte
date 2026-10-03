@@ -78,8 +78,9 @@
     const graph = toGraph(doc, positions, { catalog, portLabels, pending })
     // Solved, a port's native tooltip ("leaves the flowsheet as a
     // product") would open on top of the stream card, which says more.
+    // `flows` too, for the label beside each product's ring.
     nodes = solve
-      ? graph.nodes.map((n) => ({ ...n, data: { ...n.data, solved: true } }))
+      ? graph.nodes.map((n) => ({ ...n, data: { ...n.data, solved: true, flows } }))
       : graph.nodes
     edges = decorate(graph.edges, {
       flows, tints, widths: sized?.widths ?? null, colors: scale?.colors ?? null,
