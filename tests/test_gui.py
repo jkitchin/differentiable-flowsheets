@@ -102,9 +102,11 @@ class Client:
         self.server.shutdown()
         self.server.server_close()
 
-    def get(self, path):
+    def get(self, path, headers=None):
+        request = urllib.request.Request(self.base + path,
+                                         headers=headers or {})
         try:
-            with urllib.request.urlopen(self.base + path) as response:
+            with urllib.request.urlopen(request) as response:
                 return response.status, response.read()
         except urllib.error.HTTPError as exc:
             return exc.code, exc.read()
@@ -1530,6 +1532,16 @@ class TestSecurity:
         assert client.get("/api/catalog")[0] == 200
         assert client.get("/api/flowsheet")[0] == 200
         assert client.get("/")[0] == 200
+
+    @pytest.mark.parametrize("path", ["/", "/api/flowsheet", "/api/code-context"])
+    def test_a_rebound_host_name_cannot_read_either(self, client, path):
+        """Rebound, the hostile page is same-origin with the answer: "/"
+        would hand it the token, and the API routes the model."""
+        port = client.server.server_address[1]
+        status, body = client.get(path,
+                                  headers={"Host": f"attacker.example:{port}"})
+        assert status == 403
+        assert client.server.token.encode() not in body
 
 
 # =============================================================================

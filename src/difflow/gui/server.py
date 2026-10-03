@@ -423,9 +423,9 @@ class _Handler(BaseHTTPRequestHandler):
         that is not a browser.
         """
         port = self.server.server_address[1]
-        host = urlsplit(f"//{self.headers.get('Host', '')}")
-        if host.hostname not in LOCAL_HOSTS:
-            return "unexpected Host header; this server answers only on loopback"
+        refusal = self._host_refusal()
+        if refusal is not None:
+            return refusal
         origin = self.headers.get("Origin")
         if origin is not None:
             where = urlsplit(origin)
@@ -436,7 +436,21 @@ class _Handler(BaseHTTPRequestHandler):
                     "it, and a client outside the browser must send it too")
         return None
 
+    def _host_refusal(self) -> str | None:
+        host = urlsplit(f"//{self.headers.get('Host', '')}")
+        if host.hostname not in LOCAL_HOSTS:
+            return "unexpected Host header; this server answers only on loopback"
+        return None
+
     def do_GET(self):
+        # Reads need the Host check as much as writes do. Under DNS
+        # rebinding a hostile page reaches this server under its own name
+        # and is same-origin with the answer: without the check it could
+        # read the model, the code context and, from "/", the token that
+        # every write is then accepted on.
+        refusal = self._host_refusal()
+        if refusal is not None:
+            return self._send({"ok": False, "error": refusal}, status=403)
         routes = {
             "/": lambda: self._send(page(token=self.token), content="text/html"),
             # The editor the canvas is replacing, kept reachable until the
