@@ -214,7 +214,8 @@ AROMATIC_REACTIONS: tuple[Mapping[str, float], ...] = (
 HDA_H2: tuple[float, ...] = (2.0, 2.0, 3.0)
 for _nu, _h2 in zip(AROMATIC_REACTIONS, HDA_H2):
     tc.check_balance(_nu)
-    assert -_nu["hydrogen"] == _h2
+    if -_nu["hydrogen"] != _h2:
+        raise ValueError(f"HDA_H2 does not match the saturation step {dict(_nu)}")
 _AROMATIC_SPECIES: tuple[str, ...] = tuple(dict.fromkeys(k for nu in AROMATIC_REACTIONS for k in nu))
 _AROMATIC_SET = tc.IdealGasSet(_AROMATIC_SPECIES)
 _AROMATIC_NU = np.array([[nu.get(k, 0.0) for k in _AROMATIC_SPECIES] for nu in AROMATIC_REACTIONS],
