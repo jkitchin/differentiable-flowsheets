@@ -3630,6 +3630,134 @@ documented API and never run, now works against DWSIM 9.0.5: the
 since DWSIM 6, pythonnet has to be pointed at CoreCLR, and the path is
 checked before any .NET runtime starts.
 
+(refinery-dwsim-reactions)=
+### Validation against DWSIM: reaction thermochemistry
+
+DWSIM has no hydrotreater, FCC, reformer or alkylation kinetic model, so what
+is compared is the physics those units rest on: heats of formation and Gibbs
+energies, heats of reaction, equilibria and energy balances. DWSIM 9.0.5's
+equilibrium, Gibbs and conversion reactors do the DWSIM side
+(`tests/refinery/reference/dwsim_reactions_generate.py` writes
+`dwsim_reactions_reference.json`; `dwsim_reactors.py` is the reactor half of
+the harness, `dwsim_reactions_case.py` the cases; the test is
+`tests/refinery/test_dwsim_reactions.py`). Every case is run two ways:
+
+- **(a) `hypo`**: DWSIM's reactors on hypothetical compounds carrying difflow's
+  own H_f, S (entered as G_f), Cp cubic and critical constants. This tests
+  the implementation.
+- **(b) `dwsim`**: DWSIM's database compounds (ChemSep; tetralin from ChEDL
+  Thermo), its formation data and Cp. This tests the data.
+
+The equilibria are ideal-gas on both sides: difflow's isomerization,
+reformer and hydrotreating equilibria are ideal-gas, and DWSIM's Raoult's-law
+package is made one by multiplying every vapour pressure by e^40, so that
+nothing condenses. The reformer bed and the alkylation heats use
+Peng-Robinson.
+
+**How DWSIM computes it** (read from its compiled code, then reproduced in
+`tests/refinery/_dwsim_rx_emulation.py`):
+
+- Both DWSIM reactors take a compound's formation Gibbs energy at T from
+  `PropertyPackage.AUX_DELGF_T`. This is the Gibbs-Helmholtz integral from
+  the database G_f and H_f at 25 C with the compound's own Cp, the same route
+  as difflow's `H - T S`. Two details differ from difflow: the Cp integrals
+  are midpoint-rule quadratures (as in the harness's enthalpies), and
+  `R = 8.314`. For the hypos the emulation reproduces DWSIM's `int Cp dT`,
+  `int Cp/T dT` and G_f(T) to 9e-11 J/mol.
+- DWSIM's reactors divide pressures by **P0 = 101325 Pa**; difflow's
+  equilibrium constants are on 1 bar. For a reaction that changes the moles
+  of gas by dn, K moves by (1.01325)^dn: 4 % for `Bz + 3 H2 = CH`. Which
+  pressure ChemSep's G_f refer to is not stated in DWSIM. On one standard
+  state, DWSIM's database and difflow's reformer data agree on that ln K to
+  0.02.
+- The conversion reactor applies conversions as percentages of the base
+  compound **present when its rank runs**. Its energy balance is a state
+  function, so any reaction set that reaches the same outlet gives the same
+  outlet temperature.
+
+**DWSIM's reactors are checked before they are believed.** An equilibrium
+answer counts only if it is the ideal-gas equilibrium of DWSIM's own numbers,
+to 3e-6 in mole fraction. That means DWSIM's tabulated G_f(T) for database
+compounds, and difflow's constants under DWSIM's conventions for hypos.
+Accepted answers sit at 2.1e-6 or better, most at 1e-8. Of 108 reactor runs
+over 54 isothermal cases, 24 do not pass. All of them are pinned in the test,
+and every case still has a DWSIM answer that does pass:
+
+- **The equilibrium reactor** stops with "Solution led to negative mole
+  fractions" on the isomerization reactor's eight-reaction network (C6 ring,
+  full charge) and on benzene at 300 C and 100 bar. It **silently
+  converges wrong** on the C6 paraffins at 400 K (6.3e-2 off), and it fails
+  in adiabatic mode (a flash error). Where it converges, it reproduces the
+  emulation to 1e-11.
+- **The Gibbs reactor** (DWSIM's own minimiser; IPOPT is its default, but
+  `libIpopt39` is not in the Linux package and the process aborts) can leave
+  a minor species at zero or at its trace start without an error: MCH at
+  773 K, 2-methylhexane, benzene, naphthalene; from 5e-6 to 1e-2 off. With
+  inert species and the isomerization skeleton labels (below), it stops 2e-5
+  (paraffinic) and 1e-4 (benzene-rich charge) short of equilibrium.
+- A first solve raises "invalid initial estimates" unless
+  `InitializeFromPreviousSolution` is off; the harness sets it.
+
+**(a) Implementation: difflow's constants in DWSIM's reactors.**
+
+| Case | difflow | DWSIM (hypo) | Difference, and why |
+| --- | --- | --- | --- |
+| Isomer families (C5, C6 paraffins, C6 naphthenes), 400-550 K | closed form | equilibrium reactor (Gibbs at C6P 400 K) | 1.6e-5 mole fraction: the midpoint-rule Cp integrals. The emulation under DWSIM's conventions gives 4e-8 |
+| C6 ring (H2, Bz, MCP, CH, C6 paraffins), 420/480 K, 30 bar | the reactor (≡ IDAES) | Gibbs | 7.0e-6: 1 atm, R, quadrature (emulation: 1.4e-6) |
+| Isomerization adiabatic, both charges, 140 C, 30 bar | 477.023 / 522.225 K | 477.032 / 522.304 K (Gibbs) | +9 mK / +0.08 K: DWSIM's minimiser with inerts, 2e-5 / 1e-4 short of its own equilibrium (emulated DWSIM model: 477.023 / 522.200 K) |
+| Reformer equilibria (MCH/toluene, MCP/CH/Bz, nC7 dehydrocyclization), 700-773 K, 10-25 bar | ideal-gas K from Gibbs energies | equilibrium reactor | up to 1.1e-3 mole fraction, nearly all the 1 atm standard state (emulation: 1e-11) |
+| Benzene and naphthalene saturation, 300-420 C, 30-100 bar (constant dH and dS, Cp zero) | `AROMATIC_THERMO` | equilibrium reactor | up to 3e-4 (1 atm) |
+| First reformer bed, rich naphtha, 773.15 K in, 15 bar: the conversion reactor (PR, kij 0) taken to difflow's outlet | 710.6503 K (dT -62.4997 K) | 710.6506 K | 0.3 mK: DWSIM's R in the PR departure and its quadrature |
+| FCC coke burn (C + H2, flue at 2 % O2), 25 C and 700/730 C | `combustion` + `flue_enthalpy` | conversion reactor | reproduced to 1 W in 21-39 MW from the per-species data differences alone |
+
+The reformer bed's composition change is handed to DWSIM as sequential
+conversion reactions through methane (`CxHy + (2x - y/2) H2 = x CH4` for
+every species consumed, the reverse for every species made). DWSIM's outlet
+then reproduces difflow's to 2e-16 in mole flow. The energy balance does not
+depend on the reaction path.
+
+**(b) Data: DWSIM's database against difflow's tables.** All of these are
+pinned at their measured size.
+
+| Quantity | difflow | DWSIM | Cause |
+| --- | --- | --- | --- |
+| iC5 share of the C5s at equilibrium, 450 K | 0.820 | 0.762 | dH(nC5 = iC5): -8.10 kJ/mol (Prosen & Rossini, `isomerization.thermochem`) against ChemSep's -6.94. difflow's own reformer table has iC5 at -153.70 kJ/mol (API TDB), as ChemSep does, not the isomerization module's -154.5 |
+| C6 paraffin and naphthene shares, 400-550 K | | | up to 0.067 (C6P) and 0.052 (C6N): dG(450 K) of 2MP = 23DMB 3.22 against 4.57 kJ/mol; MCP = CH -16.9 against -17.4 kJ/mol dH |
+| Adiabatic isomerization outlet, paraffinic / benzene-rich charge | 477.02 / 522.22 K | 473.19 / 519.58 K | ChemSep's smaller heats of isomerization: 3.83 and 2.65 K less temperature rise |
+| Reformer reactions, 14 of them | | | dH(298 K) within 0.7 kJ/mol (MCP = CH the largest); dH(773 K) within 1.4 kJ/mol; ln K(773 K) within 0.20 on one standard state (nP8 = A8 + 4 H2) |
+| Reformer equilibria, 700-773 K, 10-25 bar | | | within 3.1e-3 mole fraction (MCP/CH split at 700 K) |
+| First reformer bed outlet | 710.65 K | 711.16 K | the bed 0.8 % less endothermic on ChemSep H_f and Cp |
+| HDS of benzothiophene, per mol H2 | -52.3 kJ/mol | -42.6 kJ/mol | benzothiophene H_f: 166.3 kJ/mol (difflow, the `chemicals` tables) against ChemSep's 137.0. Which is right was not checked against a primary source; 166.3 is the value the other tables carry |
+| Other hydroprocessing heats per mol H2 at 25 C (sulfide and thiophene HDS, Bz and naphthalene saturation, 1-hexene, nC6 cracking) | | | within 1.9 kJ/mol (1-hexene saturation the largest) |
+| The same heats at 350 C (DWSIM's conversion reactor) | 298 K values, by design | 3-15 % more heat | the reactions' dCp; difflow's per-class heats neglect it (documented) |
+| Benzene + 3 H2 = cyclohexane, ln K | constant dH, dS (`AROMATIC_THERMO`) | with Cp | **difflow's hydrotreating K is 2.9x, 3.6x, 4.9x too large at 300, 350, 420 C** (ln K 1.05, 1.29, 1.60 high). DWSIM and difflow's own reformer thermochemistry, which both carry Cp, agree to 0.02 |
+| Naphthalene + 2 H2 = tetralin | constant dH, dS | not computable | DWSIM's tetralin (ChEDL Thermo) has G_f = 0: ln K about 60, every naphthalene saturated |
+| Liquid heat of alkylation, 25 C, 7 single-product reactions and difflow's route A for 7 olefins | H_f(g) - CRC Hvap | Peng-Robinson liquid, ChemSep H_f | DWSIM 1.4-6.2 kJ/mol less exothermic (e.g. iC4 + 1-butene to 2,2,4-TMP: -85.6 against -82.7 kJ/mol). Gas-phase H_f account for up to 3.7 kJ/mol (propylene route); the rest is PR's liquid departure against the CRC heats of vaporisation. At 10 C DWSIM gives 0.6-1.0 kJ/mol less again; difflow neglects the temperature |
+| Heat of coke combustion (7 wt% H), 25 C | | | 1.1e-5 (water's H_f, -241.826 against -241.814 kJ/mol) |
+| Coke burn to a 700/730 C flue | | | DWSIM releases 0.05-0.07 % more: the RPP Cp fits of `fcc.species` against ChemSep's, all of it, to 1 W |
+
+**What DWSIM 9.0.5 cannot check.** It has no dibenzothiophene,
+cyclohexylbenzene, quinoline, carbazole or tetrahydrophenanthrene, so it
+cannot check the DBT and 4,6-DMDBT HDS heats, either HDN heat, or the
+poly-aromatic step. It has no catalyst. The FCC heat balance's catalyst
+term, the heat of cracking and the regenerator adiabatic temperature are
+therefore not compared; a coke-and-air adiabatic flame is above 2000 K,
+past both sides' Cp fits. DWSIM's own "Graphite" (its "User" table) has a
+constant vapour pressure that cannot be lifted, so coke carbon is a
+hypothetical compound with H_f = 0 (it enters at 25 C and burns completely,
+so nothing else about it matters).
+
+**Unexplained differences: none.** Every (a) difference is reproduced by the
+emulation of DWSIM's conventions, or is DWSIM's own convergence, measured
+against its own model. Every (b) difference traces to a formation enthalpy,
+entropy or Cp in one of the two databases.
+
+Regenerate (DWSIM 9.0.5; about 15 minutes):
+
+```bash
+PYTHONPATH=src:tests python -m refinery.reference.dwsim_reactions_generate
+```
+
 ---
 
 (refinery-limitations)=
