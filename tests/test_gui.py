@@ -1873,6 +1873,21 @@ class TestDocsRendering:
         html, _ = docs.render("A <img src=x onerror=alert(1)> tag.")
         assert "<img" not in html
 
+    def test_an_image_is_not_fetched(self):
+        """A docstring image would be a request the user never made."""
+        from difflow.gui import docs
+
+        if not docs.available():
+            pytest.skip("docutils is not installed")
+        for rst in (".. image:: https://t.example/p.png\n   :alt: a plot",
+                    ".. figure:: //t.example/p.png\n\n   cap",
+                    "x |a| y\n\n.. |a| image:: https://t.example/i.gif",
+                    ".. image:: https://t.example/v.mp4"):
+            html, _ = docs.render(rst)
+            assert "<img" not in html and " src=" not in html, rst
+        html, _ = docs.render(".. image:: https://t.example/p.png\n   :alt: a plot")
+        assert "[a plot]" in html
+
     def test_no_system_messages_reach_the_panel(self):
         """A few docstrings indent in ways docutils reads as a block
         quote. That is difflow's prose to fix, not a red box in the

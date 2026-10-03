@@ -516,7 +516,8 @@ def rename(flowsheet, old: str, new: str) -> dict:
     what was asked:
 
     * a name already in use merges two streams into one, which is a
-      connection and should be drawn as one;
+      connection and should be drawn as one --- except a feed nothing
+      reads, which an unfed inlet may take over;
     * a name that is not a Python identifier survives here and fails
       later, in ``codegen`` or on reload, a long way from the typing.
 
@@ -536,13 +537,30 @@ def rename(flowsheet, old: str, new: str) -> dict:
             f"{new!r} cannot be a stream name: it has to be a Python "
             "identifier, because that is what the exported script calls it."
         )
-    if new in names:
+    if new in names and not _attaches_to_idle_feed(flowsheet, old, new):
         raise EditError(
             f"{new!r} is already a stream. Renaming onto it would join the "
             "two into one, which is a connection --- draw it as one."
         )
+    nodes = (flowsheet.view or {}).get("nodes")
+    if new in flowsheet.feeds and isinstance(nodes, dict):
+        # The unfed inlet's own box goes; the feed's box stays where it is.
+        nodes.pop(f"feed:{old}", None)
     rename_stream(flowsheet, old, new)
     return {"kind": "stream", "stream": new}
+
+
+def _attaches_to_idle_feed(flowsheet, old: str, new: str) -> bool:
+    """Whether renaming ``old`` onto ``new`` hands a feed to an inlet.
+
+    The one join that is not a connection: ``new`` is a declared feed
+    that nothing reads (its unit was deleted, which keeps the feed and
+    its composition), and ``old`` is an inlet with nothing behind it.
+    Joining them is how a replacement unit takes over the feed.
+    """
+    if new not in flowsheet.feeds or old not in unfed(flowsheet):
+        return False
+    return not any(new in u.inlet_names for u in flowsheet.units)
 
 
 def variadic(ports: dict) -> bool:
@@ -668,7 +686,28 @@ def connect(flowsheet, source: str, outlet: str, target: str, inlet: str) -> dic
         return {"kind": "recycle", "source": outlet, "dest": inlet}
 
     rename_stream(flowsheet, inlet, outlet)
+    resequence(flowsheet)
     return {"kind": "arc", "stream": outlet}
+
+
+def resequence(flowsheet) -> None:
+    """Put the units in an order a sequential solve can run.
+
+    The solve walks ``flowsheet.units`` as written, and a unit dropped on
+    the canvas is appended. Wired in upstream of units already there ---
+    the usual way to replace one --- it would run after its consumers,
+    and the solve fails on a stream nobody has computed yet. The sort
+    keeps the declared order wherever that order already works, so a
+    flowsheet that ran is left exactly as it was.
+    """
+    from difflow.initialization import FlowsheetGraph, calculation_order
+
+    tears = set(flowsheet.recycles) | set(flowsheet.recycles.values())
+    order = calculation_order(FlowsheetGraph.from_flowsheet(flowsheet), tears)
+    if order is None:
+        return  # a loop with no recycle declared: nothing to sequence by
+    by_name = {u.name: u for u in flowsheet.units}
+    flowsheet.units = [by_name[name] for name in order]
 
 
 def disconnect(flowsheet, source: str, outlet: str, target: str, inlet: str) -> dict:

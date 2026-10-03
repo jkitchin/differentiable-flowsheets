@@ -64,6 +64,9 @@ SAFE_SCHEMES = ("http", "https", "mailto")
 
 _HREF = re.compile(r'\shref="([^"]*)"')
 _SCHEME = re.compile(r"^([a-z][a-z0-9+.-]*):")
+_IMG = re.compile(r"<img\b[^>]*>")
+_ALT = re.compile(r'\salt="([^"]*)"')
+_FETCH = re.compile(r'\s(?:src|poster|data)="[^"]*"')
 
 _registered = False
 
@@ -118,7 +121,7 @@ def render(text: str) -> tuple[str, str]:
         parts = publish_parts(text, writer_name="html5", settings_overrides=SETTINGS)
     except Exception:
         return f"<pre>{html.escape(text)}</pre>", "text"
-    return _safe_links(parts["fragment"].strip()), "rst"
+    return _no_fetches(_safe_links(parts["fragment"].strip())), "rst"
 
 
 def _safe_links(fragment: str) -> str:
@@ -135,3 +138,22 @@ def _safe_links(fragment: str) -> str:
         return match.group(0) if scheme is None or scheme.group(1) in SAFE_SCHEMES else ""
 
     return _HREF.sub(keep, fragment)
+
+
+def _no_fetches(fragment: str) -> str:
+    """Show no image or media the browser would have to fetch.
+
+    An ``.. image::`` in a plugin's docstring renders as an ``<img>`` the
+    page loads on its own, from wherever it points --- a request the
+    user never chose to make, which is what a tracking pixel is. A
+    relative one would 404 against the editor's server anyway. So an
+    image is shown as its alt text, and a ``<video>``'s source is
+    dropped (it keeps the link docutils puts inside it, which is a
+    request only when clicked).
+    """
+    def alt(match):
+        found = _ALT.search(match.group(0))
+        text = found.group(1) if found else "image"
+        return f'<span class="image-alt">[{text}]</span>'
+
+    return _FETCH.sub("", _IMG.sub(alt, fragment))

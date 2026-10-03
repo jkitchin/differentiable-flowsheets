@@ -45,6 +45,7 @@
     portLabels = false,
     dark = false,
     onconnect = () => {},
+    onattach = () => {},
     ondeletions = () => {},
     onmove = () => {},
     onadd = () => {},
@@ -205,6 +206,7 @@
   function connected(connection) {
     const answer = connectionWire(connection)
     if (answer.wire) onconnect(answer.wire)
+    else if (answer.attach) onattach(answer.attach)
     else onrefuse(answer.error)
   }
 

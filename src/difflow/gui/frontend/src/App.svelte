@@ -373,6 +373,10 @@
 
   const connect = (wire) => edit(() => post('/api/connect', wire))
 
+  // A feed dragged onto an inlet: the inlet takes the feed's name.
+  const attach = ({ stream, feed }) =>
+    edit(() => patch(`/api/stream/${encodeURIComponent(stream)}`, { name: feed }))
+
   async function add(operation, position) {
     const answer = await edit(() => post('/api/unit', { operation, position }))
     // A drop that cannot be built is not a failure: the node is on the
@@ -848,6 +852,7 @@
         {portLabels}
         {dark}
         onconnect={connect}
+        onattach={attach}
         ondeletions={applyDeletions}
         onmove={move}
         onadd={add}

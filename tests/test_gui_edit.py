@@ -6,6 +6,8 @@ what did *not* move: the other units' objects, the live thermo, the
 recycles that had nothing to do with the edit.
 """
 
+import json
+
 import pytest
 
 from difflow import (
@@ -185,6 +187,24 @@ class TestPatchUnit:
         assert answer["ok"] is False and "feeds and products" in answer["error"]
         assert "reactor" in [u.name for u in session.flowsheet.units]
 
+    @pytest.mark.parametrize("name", ["feed:feed", "product:vapor"])
+    def test_a_file_cannot_bring_one_in_either(self, session, thermo, name,
+                                               tmp_path):
+        """Refused on rename, so refused on the other ways in too."""
+        doc = serialize.to_dict(build(thermo))
+        doc["units"][1]["name"] = name
+        doc["units"][2]["inlets"] = ["rx"]
+        before = session.flowsheet
+        answer = session.replace(doc)
+        assert answer["ok"] is False and "feeds and products" in answer["error"]
+        assert session.flowsheet is before
+        path = tmp_path / "bad.json"
+        path.write_text(json.dumps(doc))
+        answer = session.open_file(str(path))
+        assert answer["ok"] is False and "feeds and products" in answer["error"]
+        with pytest.raises(ValueError, match="feeds and products"):
+            FlowsheetSession(serialize.from_dict(doc))
+
     def test_a_rename_onto_an_existing_name_is_refused(self, session):
         answer = session.patch_unit("reactor", {"name": "flash"})
         assert answer["ok"] is False and "already" in answer["error"]
@@ -243,24 +263,49 @@ class TestAddAndRemove:
         assert answer["ok"] and answer["recycles_dropped"] == {"vap": "recycle"}
         assert session.flowsheet.recycles == {}
 
-    def test_removing_a_unit_drops_the_feed_only_it_read(self, session):
-        """Left behind, it is a feed box wired to nothing."""
+    def test_removing_a_unit_keeps_the_feed_only_it_read(self, session):
+        """The feed is the part that took typing; a replacement takes it."""
         feed = next(iter(session.flowsheet.feeds))
+        spec = session.flowsheet.feeds[feed]
         reader = next(u.name for u in session.flowsheet.units
                       if feed in u.inlet_names)
         session.set_layout({f"feed:{feed}": {"x": 1, "y": 2}})
         answer = session.remove_unit(reader)
-        assert answer["ok"] and answer["feeds_dropped"] == [feed]
-        assert feed not in session.flowsheet.feeds
-        assert f"feed:{feed}" not in session.flowsheet.view["nodes"]
-        # and Undo gives it back
-        assert session.undo()["ok"]
-        assert feed in session.flowsheet.feeds
+        assert answer["ok"] and answer["feeds_unread"] == [feed]
+        assert session.flowsheet.feeds[feed] is spec
+        assert f"feed:{feed}" in session.flowsheet.view["nodes"]
 
-    def test_a_feed_another_unit_reads_is_kept(self, session):
+    def test_a_replacement_unit_takes_over_the_kept_feed(self, session):
+        """Delete the mixer, drop a new one, and the flowsheet solves.
+
+        Two things this needed: the kept feed has to be attachable (an
+        unfed inlet renamed onto it), and the new unit, appended last,
+        has to be run before the reactor it now feeds.
+        """
+        session.remove_unit("mixer")
+        name = session.add_unit("Mixer")["name"]
+        new = edit.unit(session.flowsheet, name)
+        first, spare = new.inlet_names
+        assert session.rename_stream(first, "feed")["ok"]
+        assert session.remove_inlet(name, spare)["ok"]
+        assert session.connect(name, new.outlet_names[0],
+                               "reactor", "mixed")["ok"]
+        assert [u.name for u in session.flowsheet.units][0] == name
+        solved = session.solve()
+        assert solved["ok"], solved.get("error")
+
+    def test_only_an_idle_feed_can_be_taken_over(self, session):
+        """A feed another unit reads is a connection, drawn as one."""
+        feed = next(iter(session.flowsheet.feeds))
+        session.add_inlet("mixer")
+        new = edit.unit(session.flowsheet, "mixer").inlet_names[-1]
+        answer = session.rename_stream(new, feed)
+        assert not answer["ok"] and "already a stream" in answer["error"]
+
+    def test_a_feed_another_unit_reads_is_unaffected(self, session):
         before = dict(session.flowsheet.feeds)
         answer = session.remove_unit("flash")
-        assert answer["feeds_dropped"] == []
+        assert answer["feeds_unread"] == []
         assert session.flowsheet.feeds == before
 
     def test_removing_a_unit_leaves_the_others(self, session):
@@ -518,13 +563,15 @@ class TestFeeds:
 class TestEditedFlowsheetStillSolves:
     def test_after_a_parameter_change(self, session):
         session.patch_unit("reactor", {"params": {"V": 2.0}})
-        assert session.solve()["ok"]
+        solved = session.solve()
+        assert solved["ok"], solved.get("error")
 
     def test_after_a_disconnect_and_reconnect(self, session):
         session.disconnect("mixer", "mixed", "reactor", "mixed")
         freed = edit.unit(session.flowsheet, "reactor").inlet_names[0]
         session.connect("mixer", "mixed", "reactor", freed)
-        assert session.solve()["ok"]
+        solved = session.solve()
+        assert solved["ok"], solved.get("error")
 
     def test_an_empty_flowsheet_refuses_by_name_rather_than_crashing(self):
         """Every verb answers over a session opened with no file.

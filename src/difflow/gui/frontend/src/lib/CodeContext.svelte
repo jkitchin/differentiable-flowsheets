@@ -32,8 +32,21 @@
     if (!dirty) return       // nothing unapplied: the window's save is right
     event.preventDefault()
     event.stopPropagation()
-    if (!busy) onsave(draft)
+    // Busy (a solve, a console cell): remember the keystroke and save
+    // when it is done. Dropping it said nothing, and the user had every
+    // reason to think the file was saved.
+    if (busy) saveQueued = true
+    else onsave(draft)
   }
+
+  let saveQueued = $state(false)
+  $effect(() => {
+    if (busy || !saveQueued) return
+    untrack(() => {
+      saveQueued = false
+      if (dirty) onsave(draft)
+    })
+  })
 
   // Seeded once, at mount, and deliberately so: the panel exists only
   // while it is open, and the text in it is the user's, not the
@@ -103,6 +116,9 @@ kin = mass_action_kinetics([{
   </div>
 
   <footer>
+    {#if saveQueued}
+      <p class="names">will apply and save once the current run finishes</p>
+    {/if}
     {#if error}
       <p class="error">{error}</p>
     {:else if names.length}
