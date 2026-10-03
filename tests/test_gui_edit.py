@@ -1056,6 +1056,13 @@ class TestPendingUnits:
         assert answer["ok"] is False and repr(name) in answer["error"]
         assert empty.set_species(["water", "1_butanol"])["ok"]
 
+    def test_a_name_the_flowsheet_already_has_is_not_refused(self):
+        """A file from before the rule must still take species edits."""
+        session = FlowsheetSession()
+        session.flowsheet.species_order = ["water", "n-butane"]
+        assert session.set_species(["water", "n-butane", "ethanol"])["ok"]
+        assert session.set_species(["water", "n-butane", "x.y"])["ok"] is False
+
     def test_an_answer_that_only_half_answers_leaves_it_parked(self):
         """And re-asks, so the hint is about what is missing *now*."""
         empty = FlowsheetSession()

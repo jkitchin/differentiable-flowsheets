@@ -53,6 +53,11 @@ export function speciesColors(order, theme = 'light') {
   return out
 }
 
+/** Whether any species flow on the stream is negative; card and wire agree. */
+function hasNegativeFlow(stream) {
+  return Object.keys(stream).some((k) => k.startsWith('F_') && stream[k] < 0)
+}
+
 /**
  * Everything the hover card says about one stream.
  *
@@ -80,7 +85,7 @@ export function streamSummary(stream, order = [], theme = 'light') {
   const full = [...(order ?? []), ...names.filter((s) => !(order ?? []).includes(s))]
   const rank = Object.fromEntries(full.map((s, i) => [s, i]))
   const colors = speciesColors(full, theme)
-  const negative = names.some((s) => stream[`F_${s}`] < 0)
+  const negative = hasNegativeFlow(stream)
   const rows = names.map((s) => {
     const flow = stream[`F_${s}`]
     return {
@@ -185,8 +190,7 @@ export function valueOf(stream, key) {
     const F = total(stream)
     const flow = stream[`F_${key.slice(2)}`] ?? 0
     // as on the card: a stream with a negative flow has no composition
-    const negative = Object.keys(stream).some((k) => k.startsWith('F_') && stream[k] < 0)
-    return F > 0 && !negative && Number.isFinite(flow) ? flow / F : null
+    return F > 0 && !hasNegativeFlow(stream) && Number.isFinite(flow) ? flow / F : null
   }
   return null
 }

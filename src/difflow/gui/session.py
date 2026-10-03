@@ -401,6 +401,10 @@ class FlowsheetSession:
         if isinstance(names, str) or not isinstance(names, (list, tuple)):
             return {"ok": False, "error": "species must be a list of names"}
         cleaned, seen = [], set()
+        # A name the flowsheet already has is let through: one loaded from
+        # a file or built in a script may predate the rule, and refusing
+        # it would lock every later species edit on that flowsheet.
+        existing = set(getattr(self.flowsheet, "species_order", None) or [])
         for name in names:
             if not isinstance(name, str) or not name.strip():
                 return {"ok": False, "error": "every species needs a name"}
@@ -410,7 +414,7 @@ class FlowsheetSession:
             # on it -- `F_<species>`, `x_<species>`, `<stream>.F_<species>`
             # -- and a dot, a space or a dash in it splits those keys in
             # the wrong place or makes a codegen line that does not parse.
-            if not _SPECIES_NAME.fullmatch(text):
+            if text not in existing and not _SPECIES_NAME.fullmatch(text):
                 return {"ok": False,
                         "error": f"{text!r} is not a species name: use letters, "
                                  f"digits and underscores only"}
