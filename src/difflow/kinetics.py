@@ -277,6 +277,25 @@ def mass_action_kinetics(
             "refused rather than approximated."
         )
 
+    # ``equation`` is a label, not a source of stoichiometry, so a
+    # reaction giving neither side would build an all-zero column: a
+    # rate law that runs, consumes nothing and produces nothing. That is
+    # the silently-different model this module exists to prevent.
+    empty = [
+        j for j, rxn in enumerate(reactions)
+        if not rxn.get("reactants") and not rxn.get("products")
+    ]
+    if empty:
+        listed = ", ".join(
+            f"{j} ({reactions[j].get('equation', '?')!r})" for j in empty
+        )
+        raise KineticsSpecError(
+            f"reaction(s) {listed} name no reactants and no products, so "
+            "they would react nothing. Stoichiometry comes from the "
+            "'reactants' and 'products' keys; 'equation' is only a label "
+            "and is not parsed."
+        )
+
     unknown = sorted({
         s
         for rxn in reactions
