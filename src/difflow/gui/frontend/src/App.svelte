@@ -40,6 +40,11 @@
   let catalog = $state({})
   let error = $state('')
   let note = $state('')
+  /**
+   * The note text that is a warning about an answer that came back
+   * anyway. Compared by text, so any later message is not shown as one.
+   */
+  let warnNote = $state(null)
   let selected = $state(null)
   let busy = $state(false)
   let context = $state({ source: '', names: [], error: null })
@@ -480,9 +485,13 @@
           // results panel look exactly the same either way.
           ? ` (${answer.pending.join(', ')} not built, and not in it)`
           : ''
+        const warnings = answer.audit?.warnings ?? []
         note = (answer.converged === false
           ? 'solved, but the tear residual did not reach the tolerance'
-          : `solved: ${Object.keys(answer.streams).length} streams`) + held
+          : warnings.length
+            ? `solved, but ${warnings[0]}`
+            : `solved: ${Object.keys(answer.streams).length} streams`) + held
+        warnNote = answer.converged === false || warnings.length ? note : null
       } else {
         note = answer.error
       }
@@ -621,7 +630,7 @@
   <Species {species} editable={speciesEditable} {busy} onapply={setSpecies} />
   <span class="summary">{summary}</span>
   <span class="spacer"></span>
-  {#if note}<span class="note">{note}</span>{/if}
+  {#if note}<span class="note" class:warn={note === warnNote}>{note}</span>{/if}
   <!-- Only while it is armed. Quit is a row in the File menu, and the
        menu shuts behind the click; this is the second half of the
        question, asked where the answer can be seen. -->
@@ -775,6 +784,7 @@
   .path { white-space: nowrap; }
   .version { font-variant-numeric: tabular-nums; opacity: 0.75; }
   .note { color: var(--accent); font-size: 0.8rem; }
+  .note.warn { color: var(--bad); }
   .spacer { flex: 1; }
   /* It is on screen only to be answered, and it ends the process. */
   .quit {

@@ -136,6 +136,18 @@
              ? solve.tear_streams.join(', ')
              : 'none — solved in sequence'}</dd>
       </dl>
+      {#each solve.audit?.warnings ?? [] as warning (warning)}
+        <p class="warn">The solve returned, but {warning}.</p>
+      {/each}
+      {#if solve.audit?.mass}
+        <dl class="diagnostics">
+          <dt>mass in</dt><dd>{fmt(solve.audit.mass.in)} kg/s</dd>
+          <dt>mass out</dt>
+          <dd class:bad={Math.abs(solve.audit.mass.relative_gap) > 1e-4}>
+            {fmt(solve.audit.mass.out)} kg/s
+          </dd>
+        </dl>
+      {/if}
       {#if solve.converged === false}
         <p class="warn">
           The tear residual never reached the tolerance. The streams above

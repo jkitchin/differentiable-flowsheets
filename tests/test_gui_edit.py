@@ -530,6 +530,44 @@ class TestCallParameters:
         assert "call parameters" in answer["error"]
 
 
+class TestSolveAudit:
+    """A solve that returns is not yet a solve that is right.
+
+    A CSTR with ``V = -1`` solved, and the editor said "solved", with more
+    mass leaving than entering.
+    """
+
+    @pytest.fixture
+    def ester(self):
+        s = FlowsheetSession()
+        assert s.open_example("02_reactor_flash")["ok"]
+        return s
+
+    def test_a_sound_flowsheet_has_nothing_to_say(self, ester):
+        answer = ester.solve()
+        assert answer["ok"]
+        assert answer["audit"]["warnings"] == []
+        mass = answer["audit"]["mass"]
+        assert mass["out"] == pytest.approx(mass["in"], rel=1e-4)
+        assert set(mass["products"]) == {"liquid", "vapor"}
+
+    def test_a_negative_volume_is_reported_not_passed(self, ester):
+        assert ester.patch_unit("reactor", {"params": {"V": -1.0}})["ok"]
+        answer = ester.solve()
+        assert answer["ok"]   # it ran; the audit is what says it is wrong
+        assert any("mass is not conserved" in w
+                   for w in answer["audit"]["warnings"]), answer["audit"]
+
+    def test_species_the_database_lacks_skip_the_balance(self):
+        from difflow import Flowsheet, Mixer, Unit, make_stream
+        fs = Flowsheet(species_order=["A", "B"])
+        fs.add_feed("f", make_stream({"A": 1.0, "B": 0.0}, T=300.0, P=1e5))
+        fs.add_feed("g", make_stream({"A": 0.0, "B": 1.0}, T=300.0, P=1e5))
+        fs.add_unit(Unit("mix", Mixer(["A", "B"]), ["f", "g"], ["out"]))
+        answer = FlowsheetSession(fs).solve()
+        assert answer["ok"] and answer["audit"] == {"warnings": [], "mass": None}
+
+
 class TestPendingUnits:
     """A drop that cannot be built yet lands anyway, in red.
 

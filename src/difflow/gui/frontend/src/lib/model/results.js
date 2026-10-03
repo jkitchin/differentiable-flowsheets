@@ -17,11 +17,18 @@ export function speciesOf(stream, order) {
   return [...known, ...extra]
 }
 
-/** Total molar flow of a stream. */
+/**
+ * Total molar flow of a stream.
+ *
+ * NaN if any flow is NaN or infinite: skipping those showed a broken
+ * stream's total as the sum of the flows that happened to survive.
+ */
 export function total(stream) {
   let sum = 0
   for (const [k, v] of Object.entries(stream)) {
-    if (k.startsWith('F_') && Number.isFinite(v)) sum += v
+    if (!k.startsWith('F_') || typeof v !== 'number') continue
+    if (!Number.isFinite(v)) return NaN
+    sum += v
   }
   return sum
 }

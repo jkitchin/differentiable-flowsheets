@@ -564,6 +564,7 @@ class TestFiles:
             "ok": True, "streams": {}, "species": [], "converged": True,
             "iterations": 0, "method": "direct", "residual": 0.0,
             "tol": 1e-08, "tear_streams": [], "pending": [],
+            "audit": {"warnings": [], "mass": None},
         }
         assert session.code()["error"] is None
         assert "Flowsheet(species_order=[]" in session.code()["source"]

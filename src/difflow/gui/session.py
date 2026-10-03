@@ -1348,7 +1348,69 @@ class FlowsheetSession:
             # that exists, and saying nothing here would let them be read
             # as being about the one being drawn.
             "pending": sorted(self.pending),
+            "audit": self._audit(streams),
         }
+
+    #: Relative mass-balance gap above which a solve is flagged. Loose on
+    #: purpose: a recycle converged to its tolerance closes to about that
+    #: tolerance, and the case this exists for (a negative reactor volume
+    #: creating 12 % more mass) is nowhere near it.
+    MASS_GAP = 1e-4
+
+    def _audit(self, streams: dict) -> dict:
+        """What a solve that "worked" should still be checked for.
+
+        ``Flowsheet.solve`` returning is not the answer being physical: a
+        CSTR with ``V = -1`` solved to 2 mol/s in and 2.25 out and the
+        editor said "solved". Three checks, each cheap, none of which
+        changes ``ok``: streams holding NaN or infinity, negative flows,
+        and the overall mass balance --- feeds against the streams no unit
+        reads --- when every species has a molar mass in the database.
+        """
+        from difflow.database import get_species_data
+
+        fs = self.flowsheet
+        warnings = []
+        bad = sorted(name for name, stream in streams.items()
+                     if any(not isinstance(v, str) and not math.isfinite(float(v))
+                            for v in stream.values()))
+        if bad:
+            warnings.append(f"non-finite values (NaN or infinity) in "
+                            f"{', '.join(bad)}")
+        negative = sorted(
+            name for name, stream in streams.items() if name not in bad
+            and any(k.startswith("F_") and float(v) < -1e-9 for k, v in stream.items())
+        )
+        if negative:
+            warnings.append(f"negative flows in {', '.join(negative)}")
+
+        order = list(getattr(fs, "species_order", None) or [])
+        mass = None
+        try:
+            mw = {s: float(get_species_data(s).MW) for s in order}
+        except Exception:  # noqa: BLE001 -- a species the database lacks
+            mw = None
+        if mw and not bad:
+            read = {n for u in fs.units for n in u.inlet_names}
+            made = {n for u in fs.units for n in u.outlet_names}
+            products = sorted(made - read - set(fs.recycles))
+
+            def kg(names):
+                return sum(float(streams[n].get(f"F_{s}", 0.0)) * mw[s]
+                           for n in names if n in streams for s in order) / 1000.0
+
+            m_in, m_out = kg(fs.feeds), kg(products)
+            gap = (m_out - m_in) / max(abs(m_in), 1e-300)
+            mass = {"in": m_in, "out": m_out, "relative_gap": gap,
+                    "products": products}
+            if m_in > 0 and abs(gap) > self.MASS_GAP:
+                warnings.append(
+                    f"mass is not conserved: {m_in:.6g} kg/s in, "
+                    f"{m_out:.6g} kg/s out ({gap:+.2%}). Check the unit "
+                    "parameters (a volume or a fraction outside its range) "
+                    "and the reaction stoichiometry."
+                )
+        return {"warnings": warnings, "mass": mass}
 
     def _missing_call_params(self) -> dict[str, list[str]]:
         """Required ``__call__`` arguments no unit has a value for."""
