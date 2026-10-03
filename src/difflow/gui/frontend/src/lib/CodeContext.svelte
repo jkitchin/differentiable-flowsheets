@@ -28,6 +28,24 @@
   let draft = $state(untrack(() => source))
   let dirty = $derived(draft !== source)
 
+  // The source can change while the panel is open -- Undo, Open, an
+  // example, a console cell. An untouched draft follows it; seeding only
+  // at mount left the old text there, marked "not applied", one click
+  // from writing it back over the change. A draft the user has edited is
+  // theirs and stays, but says it was written against an older version.
+  let seen = untrack(() => source)
+  let behind = $state(false)
+  $effect(() => {
+    const next = source
+    untrack(() => {
+      if (next === seen) return
+      if (draft === seen) draft = next
+      else behind = true
+      seen = next
+    })
+  })
+  $effect(() => { if (!dirty) behind = false })
+
   const STARTER = `from difflow import IdealThermo, get_species_data, mass_action_kinetics
 
 SPECIES = ["water", "ethanol"]
@@ -81,7 +99,12 @@ kin = mass_action_kinetics([{
     {:else}
       <p class="hint">Nothing defined yet.</p>
     {/if}
-    {#if dirty && !error}<p class="hint">Not applied.</p>{/if}
+    {#if behind}
+      <p class="stale" role="alert">
+        The code context changed since this draft was started.
+        <button onclick={() => (draft = source)}>Discard the draft</button>
+      </p>
+    {:else if dirty && !error}<p class="hint">Not applied.</p>{/if}
   </footer>
 </section>
 
@@ -116,6 +139,7 @@ kin = mass_action_kinetics([{
     font-size: 0.76rem;
   }
   .names { margin: 0; color: var(--ink-soft); }
+  .stale { margin: 0; color: var(--bad); }
   code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
   .error { margin: 0; color: var(--bad); font-family: ui-monospace, monospace; }
 </style>
