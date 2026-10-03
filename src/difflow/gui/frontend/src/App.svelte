@@ -349,7 +349,9 @@
       // not a move; the panel has to drop them too, or it goes on
       // describing a flowsheet that no longer exists. The lever list
       // goes with them: its values are the ones the edit just changed.
-      if (stale) { result = null; sens = null; await loadPickers() }
+      // lastSolve goes too: the assistant reads it to decide whether the
+      // question is about a failed solve, and an edit has made it history.
+      if (stale) { result = null; sens = null; lastSolve = null; await loadPickers() }
       if (reload) await load()
       return answer
     } catch (e) {

@@ -634,6 +634,22 @@ class TestFailureReporting:
         assert not result["ok"]
         assert result["error"], "a failure must carry a message"
 
+    def test_an_edit_clears_the_last_solve_error(self, thermo):
+        """The assistant's solve brief must not describe a flowsheet that has
+        since been edited."""
+        fs = Flowsheet(species_order=SPECIES)
+        fs.add_feed("feed", make_stream({"water": 1.0}, T=350.0, P=101325.0))
+        fs.add_unit(Unit("heat", Heater(HeaterParams(T_out=360.0)),
+                         ["feed", "recycle"], ["hot"]))
+        fs.add_unit(Unit("flash", Flash(FlashParams(species_order=SPECIES), thermo),
+                         ["hot"], ["liq", "vap"]))
+        fs.add_recycle("liq", "recycle")
+        session = FlowsheetSession(fs)
+        assert not session.solve()["ok"]
+        assert session.solve_error
+        assert session.remove_feed("feed")["ok"]
+        assert session.solve_error is None
+
     def test_an_unregistered_unit_makes_the_code_panel_report(self, thermo):
         class HomeMadeUnit:
             params = None

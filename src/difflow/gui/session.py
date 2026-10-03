@@ -342,7 +342,7 @@ class FlowsheetSession:
         adopted = None
         with self._lock:
             self.bindings, self.context_error = bindings, None
-            self.streams = None      # the snippet is part of the model
+            self.streams = self.solve_error = None      # the snippet is part of the model
             if source.strip():
                 self.flowsheet.view["code_context"] = source
             else:
@@ -431,7 +431,7 @@ class FlowsheetSession:
                              "delete them first, or edit the file",
                 }
             self.flowsheet.species_order = cleaned
-            self.streams = None
+            self.streams = self.solve_error = None
         # `species_order` is the need that blocks the most of the palette,
         # so naming the species is the other edit that can promote a red
         # node. Same reason as in `set_code_context` for doing it here
@@ -539,7 +539,7 @@ class FlowsheetSession:
                 return {"ok": False, "error": str(bad)}
 
             fs.add_feed(name, make_stream(flows=flows, T=T, P=P))
-            self.streams = None
+            self.streams = self.solve_error = None
         return {"ok": True, "name": name, "T": T, "P": P, "flows": flows}
 
     @_undoable
@@ -559,7 +559,7 @@ class FlowsheetSession:
                 return {"ok": False,
                         "error": f"no feed called {name!r} (have: {known})"}
             del self.flowsheet.feeds[name]
-            self.streams = None
+            self.streams = self.solve_error = None
         return {"ok": True, "name": name}
 
     # -- reads --------------------------------------------------------
@@ -883,10 +883,10 @@ class FlowsheetSession:
             # Anything else may have left the edit half done. The streams
             # cannot be trusted to describe what is there now.
             if not moves_only:
-                self.streams = None
+                self.streams = self.solve_error = None
             raise
         if not moves_only:
-            self.streams = None
+            self.streams = self.solve_error = None
         return {"ok": True, **(result or {})}
 
     @_undoable
@@ -1688,7 +1688,7 @@ class FlowsheetSession:
                 self.flowsheet.view["solver"] = stored
             else:
                 self.flowsheet.view.pop("solver", None)
-            self.streams = None
+            self.streams = self.solve_error = None
         return {"ok": True, "solver": self.solver_options()}
 
     def solve(self) -> dict:
@@ -2097,7 +2097,7 @@ class FlowsheetSession:
             after = self._fingerprint()
             changed = before is None or after is None or before != after
             if changed:
-                self.streams = None
+                self.streams = self.solve_error = None
         answer["changed"] = changed
         return answer
 
