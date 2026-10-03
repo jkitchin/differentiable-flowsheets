@@ -1875,8 +1875,14 @@ class FlowsheetSession:
         word to say so.
         """
         fs = self.flowsheet
+        # Unaccelerated, whatever the stored options say: a traced solve
+        # always drops to plain substitution (``Flowsheet.solve`` cannot
+        # branch on a tracer), so that is the iteration the derivative went
+        # through. Asked with Anderson, a loop it closes in ten steps and
+        # substitution does not close in max_iter read as converged.
+        kw = {**self._solve_kw(), "acceleration": "none"}
         try:
-            fs.solve(on_nonconvergence="ignore", **self._solve_kw())
+            fs.solve(on_nonconvergence="ignore", **kw)
         except Exception:
             return {"converged": None, "residual": None, "warning": None}
         converged = fs.last_solve_converged

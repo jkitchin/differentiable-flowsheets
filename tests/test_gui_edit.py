@@ -887,6 +887,22 @@ class TestSolverOptions:
         assert answer["ok"], answer
         assert answer["converged"] is False
 
+    def test_the_verdict_is_of_the_iteration_the_derivative_used(self, recycle):
+        """A traced solve is plain substitution whatever is stored.
+
+        At 15 iterations Anderson closes this loop (in 10) and substitution
+        does not; the derivative went through substitution, so the panel
+        must not call it converged.
+        """
+        assert recycle.set_solver_options(
+            {"max_iter": 15, "acceleration": "anderson"})["ok"]
+        assert recycle.solve()["converged"] is True
+        lever = recycle.levers()["levers"][0]["key"]
+        answer = recycle.sensitivity(lever=lever)
+        assert answer["ok"], answer
+        assert answer["converged"] is False
+        assert answer["warning"]
+
 
 class TestPendingUnits:
     """A drop that cannot be built yet lands anyway, in red.
