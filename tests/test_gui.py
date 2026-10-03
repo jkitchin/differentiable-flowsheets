@@ -2149,12 +2149,30 @@ class TestPlanning:
         names = {f["name"] for f in tables["files"]}
         assert "flowsheet_jacobian.csv" in names and "bounds.csv" in names
 
+    @pytest.mark.parametrize("fmt", ["lp", "mps"])
+    def test_the_structural_lp_downloads(self, thermo, fmt):
+        """The model rows and bounds, with nothing to price them."""
+        pytest.importorskip("pyomo")
+        session = FlowsheetSession(build_flowsheet(thermo))
+        session.solve()
+        session.linearize(self.LEVERS, self.OUTPUTS)
+        answer = session.linearization_files(fmt)
+        assert answer["ok"], answer
+        [written] = answer["files"]
+        assert written["name"] == f"flowsheet_delta_vectors.{fmt}"
+        lp = session.delta_vectors.lp_model
+        assert not lp.c.any()             # no prices: an empty objective
+        assert lp.A_eq.shape[0] == len(self.OUTPUTS)
+        text = written["text"]
+        assert ("s.t." in text) if fmt == "lp" else ("ROWS" in text)
+        assert "flowsheet_reactor_V" in text
+
     def test_a_format_that_does_not_exist_is_refused(self, thermo):
         session = FlowsheetSession(build_flowsheet(thermo))
         session.solve()
         session.linearize(self.LEVERS, self.OUTPUTS)
-        answer = session.linearization_files("mps")
-        assert answer["ok"] is False and "mps" in answer["error"]
+        answer = session.linearization_files("xlsx")
+        assert answer["ok"] is False and "xlsx" in answer["error"]
 
     def test_downloading_before_linearizing_says_so(self, thermo):
         assert FlowsheetSession(build_flowsheet(thermo)).linearization_files(

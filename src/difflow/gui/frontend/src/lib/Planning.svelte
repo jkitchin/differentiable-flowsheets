@@ -7,8 +7,9 @@
   them. This panel is that way.
 
   Two things it deliberately does not do. It does not run a planner, so
-  there are no prices, no shadow prices and no `.lp`/`.mps` -- those are
-  renderings of an LP that does not exist until someone poses one, and
+  there are no prices and no shadow prices, and the `.lp`/`.mps` it
+  offers are the model rows and bounds with an empty objective -- the
+  planning LP itself does not exist until someone prices it, and
   `difflow plan-export` is where that lives. And it does not check the
   Jacobian against finite differences unless asked: the check costs 2n
   extra solves, and a button that says so is more honest than a wait
