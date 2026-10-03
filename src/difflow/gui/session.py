@@ -33,6 +33,7 @@ entirely.
 
 from __future__ import annotations
 
+import math
 import threading
 import types
 from pathlib import Path
@@ -59,10 +60,17 @@ def _as_number(value, fallback, field: str) -> float:
     """
     if value is None or value == "":
         return float(fallback)
+    # `float(True)` is 1.0 and `float("nan")` is a float: both used to be
+    # accepted, and a NaN feed solved "successfully" to NaN everywhere.
+    if isinstance(value, bool):
+        raise _BadFeed(f"{field} must be a number")
     try:
-        return float(value)
+        number = float(value)
     except (TypeError, ValueError):
         raise _BadFeed(f"{field} must be a number") from None
+    if not math.isfinite(number):
+        raise _BadFeed(f"{field} must be a finite number")
+    return number
 
 
 #: Names the code context may use for the species list, in the order the

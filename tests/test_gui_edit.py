@@ -357,6 +357,11 @@ class TestFeeds:
             ({"flows": {"water": -1.0}}, "a flow cannot be negative"),
             ({"T": 0.0}, "temperature and pressure are absolute"),
             ({"P": -1.0}, "temperature and pressure are absolute"),
+            ({"T": float("nan")}, "T must be a finite number"),
+            ({"P": float("inf")}, "P must be a finite number"),
+            ({"flows": {"water": float("inf")}}, "water must be a finite"),
+            ({"flows": {"ethanol": True}}, "ethanol must be a number"),
+            ({"T": "NaN"}, "T must be a finite number"),
         ],
     )
     def test_a_number_that_is_not_one_is_named(self, session, spec, why):
