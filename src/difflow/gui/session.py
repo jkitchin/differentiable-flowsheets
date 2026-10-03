@@ -753,14 +753,24 @@ class FlowsheetSession:
         """
         from difflow import serialize
 
+        if not isinstance(document, dict):
+            return {"ok": False, "error": "a flowsheet must be a JSON object"}
+        # Built in full before anything is replaced. Evaluating the
+        # document's code context straight into the session used to swap
+        # the bindings first, so a document that then failed to build left
+        # the old flowsheet running against the new document's names.
+        try:
+            context = (document.get("view") or {}).get("code_context") or ""
+            bindings, error = (evaluate_context(context)
+                               if context.strip() else ({}, None))
+            flowsheet = serialize.from_dict(document, refs=bindings)
+        except Exception as exc:
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
         with self._lock:
-            self._evaluate((document.get("view") or {}).get("code_context") or "")
-            self.flowsheet = serialize.from_dict(document, refs=self.bindings)
-            self.streams = None
-            # The pending nodes belonged to the flowsheet that was just
-            # replaced. Carrying them over would put a red box for a unit
-            # nobody dropped onto a canvas that has never seen it.
-            self.pending.clear()
+            # `_adopt` rebuilds the pending nodes from the new flowsheet's
+            # own unfinished units: the old ones belonged to a canvas that
+            # is gone.
+            self._adopt(flowsheet, bindings, error)
         return {"ok": True}
 
     def open_example(self, key: str) -> dict:

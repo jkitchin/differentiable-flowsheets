@@ -986,3 +986,37 @@ class TestPendingUnits:
     def test_an_unregistered_operation_has_no_boilerplate(self, session):
         answer = session.boilerplate("Teleporter")
         assert answer["ok"] is False and "registered" in answer["error"]
+
+
+class TestReplace:
+    def test_a_document_that_will_not_build_leaves_everything_as_it_was(
+            self, session):
+        """The code context used to be adopted before the build, so a
+        failing document left the old flowsheet on the new names."""
+        session.set_code_context("K = 2.0")
+        before = session.flowsheet
+        document = serialize.to_dict(build_plain())
+        document["view"] = {"code_context": "OTHER = 1"}
+        document["units"][0]["operation"] = "NoSuchOperation"
+        answer = session.replace(document)
+        assert answer["ok"] is False
+        assert session.flowsheet is before
+        assert sorted(session.bindings) == ["K"]
+
+    def test_a_document_that_is_not_an_object_is_refused(self, session):
+        assert session.replace(["not", "a", "flowsheet"])["ok"] is False
+
+    def test_an_unfinished_unit_in_the_document_arrives_pending(self, session):
+        fs = build_plain()
+        fs.add_unit(Unit("todo", Incomplete("CSTR", needs=["rate_fn"]),
+                         ["liq"], ["out"]))
+        assert session.replace(serialize.to_dict(fs))["ok"]
+        assert "todo" in session.pending
+
+
+def build_plain():
+    fs = Flowsheet(species_order=SPECIES)
+    fs.add_feed("feed", make_stream({"water": 1.0, "ethanol": 0.1},
+                                    T=350.0, P=101325.0))
+    fs.add_unit(Unit("mixer", Mixer(SPECIES), ["feed"], ["liq"]))
+    return fs

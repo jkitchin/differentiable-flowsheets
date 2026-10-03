@@ -531,7 +531,11 @@ class _Handler(BaseHTTPRequestHandler):
 
         if verb == "POST":
             if path == "/api/flowsheet":
-                return session.replace(payload)
+                # A document that will not build is a bad request, as it
+                # was when `replace` raised on one; it is just no longer
+                # half adopted on the way.
+                answer = session.replace(payload)
+                return answer if answer.get("ok") else {**answer, "_status": 400}
             if path == "/api/solve":
                 return session.solve()
             if path == "/api/sensitivity":
@@ -656,7 +660,8 @@ class _Handler(BaseHTTPRequestHandler):
             )
         if answer is None:
             return self._send({"error": "not found"}, status=404)
-        self._send(answer)
+        status = answer.pop("_status", 200) if isinstance(answer, dict) else 200
+        self._send(answer, status=status)
 
     def do_POST(self):
         self._mutate("POST")
