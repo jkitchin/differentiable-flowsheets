@@ -1018,6 +1018,14 @@ class TestPendingUnits:
         assert [u.name for u in empty.flowsheet.units] == ["mixer"]
         assert empty.flowsheet.view["nodes"]["mixer"] == {"x": 3.0, "y": 4.0}
 
+    @pytest.mark.parametrize("name", ["n-butane", "ethyl acetate", "a.b", "x'y"])
+    def test_a_species_name_that_would_split_its_keys_is_refused(self, name):
+        """`<stream>.F_<species>` has to come apart at the right dot."""
+        empty = FlowsheetSession()
+        answer = empty.set_species(["water", name])
+        assert answer["ok"] is False and repr(name) in answer["error"]
+        assert empty.set_species(["water", "1_butanol"])["ok"]
+
     def test_an_answer_that_only_half_answers_leaves_it_parked(self):
         """And re-asks, so the hint is about what is missing *now*."""
         empty = FlowsheetSession()

@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import functools
 import math
+import re
 import threading
 import types
 from pathlib import Path
@@ -81,6 +82,10 @@ def _solver_option(key: str, value):
         return value
     raise ValueError(f"{key!r} is not a solver option the editor sets "
                      f"(it sets {', '.join(SOLVER_DEFAULTS)})")
+
+
+#: What `set_species` accepts as a species name.
+_SPECIES_NAME = re.compile(r"[A-Za-z0-9_]+")
 
 
 def _undoable(method):
@@ -400,6 +405,15 @@ class FlowsheetSession:
             if not isinstance(name, str) or not name.strip():
                 return {"ok": False, "error": "every species needs a name"}
             text = name.strip()
+            # Letters, digits and underscores, as the database's own names
+            # are (`1_butanol`). A species name is half of every key built
+            # on it -- `F_<species>`, `x_<species>`, `<stream>.F_<species>`
+            # -- and a dot, a space or a dash in it splits those keys in
+            # the wrong place or makes a codegen line that does not parse.
+            if not _SPECIES_NAME.fullmatch(text):
+                return {"ok": False,
+                        "error": f"{text!r} is not a species name: use letters, "
+                                 f"digits and underscores only"}
             if text in seen:
                 return {"ok": False, "error": f"{text} is named twice"}
             seen.add(text)
