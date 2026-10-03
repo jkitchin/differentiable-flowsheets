@@ -111,22 +111,21 @@ def mint_token() -> str:
 #: writes them as ``Infinity`` / ``NaN``, which the browser's
 #: ``JSON.parse`` rejects outright --- and this is the *common* case,
 #: not an exotic one: :func:`~difflow.kinetics.mass_action_kinetics`
-#: puts ``inf`` in ``K_eq`` for every irreversible reaction. So they go
-#: over the wire as strings and are restored on the way back.
-NON_FINITE = {"Infinity": float("inf"), "-Infinity": float("-inf"),
-              "NaN": float("nan")}
+#: puts ``inf`` in ``K_eq`` for every irreversible reaction. So they
+#: cross the wire in the serializer's own tag, ``{"$float": "inf"}``.
+#: They used to travel as the bare strings ``"Infinity"`` and ``"NaN"``,
+#: and every string that spelled one was turned into a float on the way
+#: in --- a species, a unit, a stream or a line of console output named
+#: ``NaN`` among them. A tag cannot be mistaken for text.
+NON_FINITE = {"inf": float("inf"), "-inf": float("-inf"), "nan": float("nan")}
 
 
 def _json_safe(value: Any) -> Any:
-    """Rewrite non-finite floats as the strings in :data:`NON_FINITE`."""
+    """Rewrite non-finite floats as ``{"$float": ...}`` tags."""
+    from difflow.serialize import _encode_nonfinite
+
     if isinstance(value, float):
-        if value != value:
-            return "NaN"
-        if value == float("inf"):
-            return "Infinity"
-        if value == float("-inf"):
-            return "-Infinity"
-        return value
+        return _encode_nonfinite(value)
     if isinstance(value, dict):
         return {k: _json_safe(v) for k, v in value.items()}
     if isinstance(value, list):
@@ -135,16 +134,13 @@ def _json_safe(value: Any) -> Any:
 
 
 def _json_restore(value: Any) -> Any:
-    """Undo :func:`_json_safe`.
+    """Undo :func:`_json_safe`. Strings are left alone, whatever they say."""
+    from difflow.serialize import NONFINITE_TAG
 
-    A string parameter whose value is literally ``"NaN"`` would be
-    turned into a float here. No unit declares one, and the alternative
-    --- an out-of-band encoding threaded through the whole document ---
-    costs more than the case is worth.
-    """
-    if isinstance(value, str):
-        return NON_FINITE.get(value, value)
     if isinstance(value, dict):
+        if (len(value) == 1 and isinstance(value.get(NONFINITE_TAG), str)
+                and value[NONFINITE_TAG] in NON_FINITE):
+            return NON_FINITE[value[NONFINITE_TAG]]
         return {k: _json_restore(v) for k, v in value.items()}
     if isinstance(value, list):
         return [_json_restore(v) for v in value]
@@ -423,9 +419,9 @@ class _Handler(BaseHTTPRequestHandler):
         that is not a browser.
         """
         port = self.server.server_address[1]
-        host = urlsplit(f"//{self.headers.get('Host', '')}")
-        if host.hostname not in LOCAL_HOSTS:
-            return "unexpected Host header; this server answers only on loopback"
+        refusal = self._host_refusal()
+        if refusal is not None:
+            return refusal
         origin = self.headers.get("Origin")
         if origin is not None:
             where = urlsplit(origin)
@@ -436,7 +432,21 @@ class _Handler(BaseHTTPRequestHandler):
                     "it, and a client outside the browser must send it too")
         return None
 
+    def _host_refusal(self) -> str | None:
+        host = urlsplit(f"//{self.headers.get('Host', '')}")
+        if host.hostname not in LOCAL_HOSTS:
+            return "unexpected Host header; this server answers only on loopback"
+        return None
+
     def do_GET(self):
+        # Reads need the Host check as much as writes do. Under DNS
+        # rebinding a hostile page reaches this server under its own name
+        # and is same-origin with the answer: without the check it could
+        # read the model, the code context and, from "/", the token that
+        # every write is then accepted on.
+        refusal = self._host_refusal()
+        if refusal is not None:
+            return self._send({"ok": False, "error": refusal}, status=403)
         routes = {
             "/": lambda: self._send(page(token=self.token), content="text/html"),
             # The editor the canvas is replacing, kept reachable until the
@@ -531,7 +541,11 @@ class _Handler(BaseHTTPRequestHandler):
 
         if verb == "POST":
             if path == "/api/flowsheet":
-                return session.replace(payload)
+                # A document that will not build is a bad request, as it
+                # was when `replace` raised on one; it is just no longer
+                # half adopted on the way.
+                answer = session.replace(payload)
+                return answer if answer.get("ok") else {**answer, "_status": 400}
             if path == "/api/solve":
                 return session.solve()
             if path == "/api/sensitivity":
@@ -567,6 +581,8 @@ class _Handler(BaseHTTPRequestHandler):
                                            name=payload.get("name"))
             if path == "/api/species":
                 return session.set_species(payload.get("species"))
+            if path == "/api/solver":
+                return session.set_solver_options(payload)
             # One verb for declaring a feed and for editing one: the
             # browser sends the fields it changed, and a field left out
             # keeps whatever the feed already carried.
@@ -656,7 +672,8 @@ class _Handler(BaseHTTPRequestHandler):
             )
         if answer is None:
             return self._send({"error": "not found"}, status=404)
-        self._send(answer)
+        status = answer.pop("_status", 200) if isinstance(answer, dict) else 200
+        self._send(answer, status=status)
 
     def do_POST(self):
         self._mutate("POST")

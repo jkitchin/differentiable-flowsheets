@@ -10,6 +10,7 @@
   import Palette from './lib/Palette.svelte'
   import Planning from './lib/Planning.svelte'
   import Results from './lib/Results.svelte'
+  import { solverOptions } from './lib/model/solver.js'
   import Species from './lib/Species.svelte'
   import { del, get, patch, post, send } from './lib/api.js'
   import { EXPORTS, exportFlowsheet } from './lib/export.js'
@@ -20,6 +21,7 @@
   import { menuBar, shortPath } from './lib/model/menubar.js'
   import { keepAlive } from './lib/model/lifetime.js'
   import { flowLabels, flowTints } from './lib/model/results.js'
+  import { validColorBy } from './lib/model/solution.js'
 
   let doc = $state(null)
   let path = $state('')
@@ -93,6 +95,11 @@
   // solve does not clear them; they come back with the next solve.
   let widthByFlow = $state(false)
   let colorBy = $state('')
+  // Kept to a key this solve can colour by (see `validColorBy`).
+  $effect(() => {
+    const valid = validColorBy(result?.ok ? result : null, colorBy)
+    if (valid !== colorBy) colorBy = valid
+  })
   // Which file the File menu is writing out, if any. The menu closed
   // behind the click, so this is what stops a second click from asking
   // for the same file twice while the first is still being drawn.
@@ -333,7 +340,10 @@
       if (reload) await load()
       return answer
     } catch (e) {
-      error = String(e)
+      // The canvas may already show the change (a drag, a deletion), and
+      // the server may never have had it: say both, and offer Reload.
+      error = `the server did not answer (${e.message ?? e}); ` +
+        'the canvas may not match it'
     } finally {
       busy = false
     }
@@ -398,6 +408,13 @@
       note = built(answer,
                    names.length ? `species: ${names.join(', ')}` : 'species cleared')
     }
+    return answer
+  }
+
+  /** The recycle solver's options; stored in the file, so a reload shows them. */
+  async function setSolver(options) {
+    const answer = await edit(() => post('/api/solver', options))
+    if (answer?.ok) note = 'solver options changed: solve again to use them'
     return answer
   }
 
@@ -531,6 +548,7 @@
       const answer = await post('/api/sensitivity', ask)
       sens = answer.ok ? answer : null
       if (!answer.ok) note = answer.error
+      else if (answer.warning) warnNote = note = answer.warning
       return null
     }, { reload: false, stale: false })
 
@@ -768,13 +786,27 @@
   <Palette {catalog} ondrop={(op) => add(op, null)} />
 
   <div class="stage">
-    {#if error}
+    {#if error && !doc}
       <p class="error">{error}</p>
     {:else if !doc}
       <!-- Only before the first fetch answers. An editor opened with no
            file gets an empty flowsheet, not no flowsheet. -->
       <p class="empty">Loading&hellip;</p>
     {:else}
+      {#if error}
+        <!-- A request that failed (a dropped connection, a server that
+             stopped) said nothing about the flowsheet, so the canvas
+             stays: blanking it lost the work on screen for a network
+             blip. The banner offers to fetch the model again. -->
+        <div class="banner" role="alert">
+          <span>{error}</span>
+          <button type="button" onclick={async () => {
+            error = ''
+            try { await load() } catch (e) { error = String(e) }
+          }}>Reload</button>
+          <button type="button" aria-label="Dismiss" onclick={() => (error = '')}>&times;</button>
+        </div>
+      {/if}
       <Canvas
         document={doc}
         positions={doc.view?.nodes ?? null}
@@ -831,6 +863,8 @@
     levers={pickers}
     sensitivity={sens}
     {busy}
+    solver={doc ? solverOptions(doc.view) : null}
+    onsolver={setSolver}
     onsensitivity={differentiate}
     onclose={() => (showResults = false)}
   />
@@ -919,7 +953,15 @@
   .stopped h2 { margin: 0; font-size: 1rem; color: var(--ink); }
   .stopped p { margin: 0; font-size: 0.85rem; }
   main { display: flex; flex: 1; min-height: 0; }
-  .stage { flex: 1; min-width: 0; }
+  .stage { flex: 1; min-width: 0; position: relative; }
   .error, .empty { padding: 1.5rem; color: var(--ink-soft); }
   .error { color: var(--bad); }
+  .banner {
+    position: absolute; top: 0.5rem; left: 50%; transform: translateX(-50%);
+    z-index: 5; display: flex; gap: 0.5rem; align-items: center;
+    max-width: calc(100% - 2rem); padding: 0.4rem 0.6rem;
+    background: var(--surface); color: var(--bad);
+    border: 1px solid var(--bad); border-radius: 4px;
+  }
+  .banner span { overflow-wrap: anywhere; }
 </style>

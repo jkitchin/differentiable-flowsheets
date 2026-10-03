@@ -118,8 +118,8 @@ export function shape(value) {
  *
  * `isFinite`, not `!isNaN`: a field may legitimately hold `Infinity`
  * (`mass_action_kinetics` writes it into `K_eq` for every irreversible
- * reaction), and it travels as the string the server knows how to
- * restore rather than as a number JSON cannot write.
+ * reaction). It is returned as the number; `safe` in api.js tags it
+ * for the wire, which JSON has no literal for.
  */
 export function parse(raw, kind) {
   const text = String(raw).trim()
@@ -127,19 +127,28 @@ export function parse(raw, kind) {
   if (kind === 'list') {
     if (text === '') return []
     const parts = text.split(',').map((p) => p.trim())
-    const numbers = parts.map(Number)
-    // a list of numbers must not arrive as a list of strings
-    return numbers.every((n) => Number.isFinite(n)) ? numbers : parts
+    const numbers = parts.map(number)
+    // a list of numbers must not arrive as a list of strings, and one
+    // holding an Infinity (shown as such) is still a list of numbers
+    return numbers.every((n) => n !== null) ? numbers : parts
   }
   if (text === '') return null
   if (kind === 'number') {
-    const n = Number(text)
-    if (Number.isFinite(n)) return n
-    if (/^\+?(inf|infinity)$/i.test(text)) return 'Infinity'
-    if (/^-(inf|infinity)$/i.test(text)) return '-Infinity'
+    const n = number(text)
+    if (n !== null) return n
     throw new ParseError(`'${text}' is not a number`)
   }
   return text
+}
+
+/** `text` as a number, infinities included; `null` if it is not one. */
+function number(text) {
+  if (text === '') return null
+  const n = Number(text)
+  if (Number.isFinite(n)) return n
+  if (/^\+?(inf|infinity)$/i.test(text)) return Infinity
+  if (/^-(inf|infinity)$/i.test(text)) return -Infinity
+  return null
 }
 
 /** The label for a field: its name, its symbol and its units. */

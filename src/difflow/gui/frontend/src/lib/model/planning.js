@@ -15,6 +15,8 @@ export const DEFAULT_RADIUS = 0.3
 export const FORMATS = [
   { id: 'json', label: 'JSON manifest', note: 'names, units, bounds, health' },
   { id: 'csv', label: 'CSV tables', note: 'one matrix per block, plus bases' },
+  { id: 'lp', label: 'CPLEX LP', note: 'model rows and bounds, no objective' },
+  { id: 'mps', label: 'MPS', note: 'model rows and bounds, no objective' },
 ]
 
 /**

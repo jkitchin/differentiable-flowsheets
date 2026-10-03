@@ -13,6 +13,7 @@ import {
   speciesColors,
   streamSummary,
   unitSummary,
+  validColorBy,
   valueOf,
 } from './solution.js'
 
@@ -88,6 +89,13 @@ test('with no flow anywhere every wire is the minimum', () => {
 test('colour options are T, P, flow and each species', () => {
   assert.deepEqual(colorOptions(SOLVE).map((o) => o.key),
                    ['T', 'P', 'F', 'x:water', 'x:ethanol'])
+})
+
+test('a colour-by key the solve has no row for falls back to temperature', () => {
+  assert.equal(validColorBy(SOLVE, 'x:ethanol'), 'x:ethanol')
+  assert.equal(validColorBy(SOLVE, 'x:acetone'), 'T')
+  assert.equal(validColorBy(SOLVE, ''), '')
+  assert.equal(validColorBy(null, 'x:acetone'), 'x:acetone')
 })
 
 test('values: pressure in kPa, and a fraction only where there is flow', () => {

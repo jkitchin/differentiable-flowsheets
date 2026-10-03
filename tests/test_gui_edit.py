@@ -92,6 +92,38 @@ class TestGraphReading:
 
 
 class TestPatchUnit:
+    def test_a_refused_patch_changes_nothing(self, session):
+        """A good parameter beside a taken name used to land, and the
+        patch was then reported as refused: the editor showed 1.0 over a
+        reactor holding 3.0."""
+        session.solve()
+        answer = session.patch_unit("reactor",
+                                    {"params": {"V": 3.0}, "name": "flash"})
+        assert answer["ok"] is False and "flash" in answer["error"]
+        reactor = edit.unit(session.flowsheet, "reactor")
+        assert float(reactor.operation.params.V) == 1.0
+        assert session.streams is not None
+        assert session.history()["undo"] is False
+
+    def test_a_bad_position_refuses_the_rename_beside_it(self, session):
+        answer = session.patch_unit("reactor",
+                                    {"name": "r1", "position": {"x": "left"}})
+        assert answer["ok"] is False
+        assert [u.name for u in session.flowsheet.units] == [
+            "mixer", "reactor", "flash"]
+
+    def test_an_empty_name_is_refused_not_ignored(self, session):
+        answer = session.patch_unit("reactor", {"name": ""})
+        assert answer["ok"] is False and "empty" in answer["error"]
+
+    def test_an_edit_that_fails_unexpectedly_drops_the_streams(self, session):
+        session.solve()
+        def boom():
+            raise RuntimeError("half done")
+        with pytest.raises(RuntimeError):
+            session._edit(boom)
+        assert session.streams is None
+
     def test_a_parameter_changes(self, session):
         assert session.patch_unit("reactor", {"params": {"V": 3.0}})["ok"]
         reactor = edit.unit(session.flowsheet, "reactor")
@@ -760,6 +792,126 @@ class TestUndo:
         assert len(ester._undo) == UNDO_DEPTH
 
 
+class TestDerivativesAtAnUnconvergedPoint:
+    """A Jacobian through a tear that never closed was shown as any other."""
+
+    @pytest.fixture
+    def ester(self):
+        s = FlowsheetSession()
+        assert s.open_example("02_reactor_flash")["ok"]
+        return s
+
+    def test_a_converged_point_says_so(self, ester):
+        answer = ester.sensitivity(lever="reactor.V")
+        assert answer["ok"], answer
+        assert answer["converged"] is True and answer["warning"] is None
+
+    def test_an_unconverged_point_is_flagged(self, ester):
+        fs = ester.flowsheet
+        real = fs.solve
+
+        def stalls(**kw):
+            out = real(**kw)
+            fs.last_solve_converged, fs.last_solve_residual = False, 0.25
+            return out
+
+        fs.solve = stalls
+        answer = ester.sensitivity(lever="reactor.V")
+        assert answer["ok"] and answer["converged"] is False
+        assert "did not converge" in answer["warning"]
+        assert "0.25" in answer["warning"]
+        linear = ester.linearize(["reactor.V"], [self._an_output(ester)])
+        assert linear["ok"], linear
+        assert "did not converge" in linear["warning"]
+
+    @staticmethod
+    def _an_output(session):
+        session.solve()
+        stream = next(iter(session.streams))
+        return f"{stream}.T"
+
+
+class TestSolverOptions:
+    """The recycle solver's options were fixed at their defaults.
+
+    A loop that needed 150 iterations, a looser tolerance or Wegstein in
+    place of Anderson could not be solved from the editor at all.
+    """
+
+    @pytest.fixture
+    def recycle(self):
+        s = FlowsheetSession()
+        assert s.open_example("03_reactor_recycle")["ok"]
+        return s
+
+    def test_the_options_reach_the_solve(self, recycle):
+        assert recycle.set_solver_options({"max_iter": 1})["ok"]
+        answer = recycle.solve()
+        assert answer["ok"] and answer["converged"] is False
+        assert answer["solver"]["max_iter"] == 1
+        assert recycle.set_solver_options(
+            {"max_iter": None, "acceleration": "wegstein", "tol": 1e-6})["ok"]
+        answer = recycle.solve()
+        assert answer["converged"] is True
+        assert answer["tol"] == pytest.approx(1e-6)
+        assert "wegstein" in answer["method"].lower()
+
+    def test_an_unknown_stored_key_does_not_break_later_options(self, recycle):
+        """A key from a hand-edited file used to raise KeyError on every set."""
+        recycle.flowsheet.view["solver"] = {"future_option": 3}
+        assert recycle.set_solver_options({"tol": 1e-6})["ok"]
+        assert recycle.flowsheet.view["solver"] == {"future_option": 3,
+                                                    "tol": 1e-6}
+        assert recycle.solve()["ok"]
+
+    def test_they_are_saved_with_the_file_and_undone(self, recycle):
+        assert recycle.set_solver_options({"tol": 1e-6})["ok"]
+        assert recycle.flowsheet.view["solver"] == {"tol": 1e-6}
+        assert recycle.undo()["ok"]
+        assert "solver" not in recycle.flowsheet.view
+        assert recycle.solver_options()["tol"] == 1e-8
+
+    def test_a_default_is_not_stored(self, recycle):
+        assert recycle.set_solver_options({"acceleration": "anderson"})["ok"]
+        assert "solver" not in recycle.flowsheet.view
+
+    @pytest.mark.parametrize("bad", [
+        {"tol": 0}, {"tol": -1e-6}, {"tol": float("nan")}, {"tol": "1e-6"},
+        {"max_iter": 0}, {"max_iter": 2.5}, {"max_iter": True},
+        {"acceleration": "newton"}, {"clip_negative_flows": "no"},
+        {"damping": 0.5}, ["tol"],
+    ])
+    def test_a_bad_option_is_refused_and_nothing_is_kept(self, recycle, bad):
+        good = {"acceleration": "wegstein"}
+        answer = recycle.set_solver_options(
+            {**good, **bad} if isinstance(bad, dict) else bad)
+        assert not answer["ok"]
+        assert "solver" not in recycle.flowsheet.view
+
+    def test_the_derivatives_use_them_too(self, recycle):
+        assert recycle.set_solver_options({"max_iter": 1})["ok"]
+        lever = recycle.levers()["levers"][0]["key"]
+        answer = recycle.sensitivity(lever=lever)
+        assert answer["ok"], answer
+        assert answer["converged"] is False
+
+    def test_the_verdict_is_of_the_iteration_the_derivative_used(self, recycle):
+        """A traced solve is plain substitution whatever is stored.
+
+        At 15 iterations Anderson closes this loop (in 10) and substitution
+        does not; the derivative went through substitution, so the panel
+        must not call it converged.
+        """
+        assert recycle.set_solver_options(
+            {"max_iter": 15, "acceleration": "anderson"})["ok"]
+        assert recycle.solve()["converged"] is True
+        lever = recycle.levers()["levers"][0]["key"]
+        answer = recycle.sensitivity(lever=lever)
+        assert answer["ok"], answer
+        assert answer["converged"] is False
+        assert answer["warning"]
+
+
 class TestPendingUnits:
     """A drop that cannot be built yet lands anyway, in red.
 
@@ -915,3 +1067,37 @@ class TestPendingUnits:
     def test_an_unregistered_operation_has_no_boilerplate(self, session):
         answer = session.boilerplate("Teleporter")
         assert answer["ok"] is False and "registered" in answer["error"]
+
+
+class TestReplace:
+    def test_a_document_that_will_not_build_leaves_everything_as_it_was(
+            self, session):
+        """The code context used to be adopted before the build, so a
+        failing document left the old flowsheet on the new names."""
+        session.set_code_context("K = 2.0")
+        before = session.flowsheet
+        document = serialize.to_dict(build_plain())
+        document["view"] = {"code_context": "OTHER = 1"}
+        document["units"][0]["operation"] = "NoSuchOperation"
+        answer = session.replace(document)
+        assert answer["ok"] is False
+        assert session.flowsheet is before
+        assert sorted(session.bindings) == ["K"]
+
+    def test_a_document_that_is_not_an_object_is_refused(self, session):
+        assert session.replace(["not", "a", "flowsheet"])["ok"] is False
+
+    def test_an_unfinished_unit_in_the_document_arrives_pending(self, session):
+        fs = build_plain()
+        fs.add_unit(Unit("todo", Incomplete("CSTR", needs=["rate_fn"]),
+                         ["liq"], ["out"]))
+        assert session.replace(serialize.to_dict(fs))["ok"]
+        assert "todo" in session.pending
+
+
+def build_plain():
+    fs = Flowsheet(species_order=SPECIES)
+    fs.add_feed("feed", make_stream({"water": 1.0, "ethanol": 0.1},
+                                    T=350.0, P=101325.0))
+    fs.add_unit(Unit("mixer", Mixer(SPECIES), ["feed"], ["liq"]))
+    return fs

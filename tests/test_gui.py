@@ -102,9 +102,11 @@ class Client:
         self.server.shutdown()
         self.server.server_close()
 
-    def get(self, path):
+    def get(self, path, headers=None):
+        request = urllib.request.Request(self.base + path,
+                                         headers=headers or {})
         try:
-            with urllib.request.urlopen(self.base + path) as response:
+            with urllib.request.urlopen(request) as response:
                 return response.status, response.read()
         except urllib.error.HTTPError as exc:
             return exc.code, exc.read()
@@ -512,8 +514,8 @@ class TestNonFiniteFloats:
 
     def test_json_safe_and_restore_are_inverse(self):
         value = {"a": [1.0, float("inf"), -float("inf")], "b": {"c": 2.0}}
-        assert _json_safe(value) == {"a": [1.0, "Infinity", "-Infinity"],
-                                     "b": {"c": 2.0}}
+        assert _json_safe(value) == {
+            "a": [1.0, {"$float": "inf"}, {"$float": "-inf"}], "b": {"c": 2.0}}
         assert _json_restore(_json_safe(value)) == value
 
     def test_nan_survives_the_round_trip(self):
@@ -522,6 +524,18 @@ class TestNonFiniteFloats:
 
     def test_ordinary_strings_are_left_alone(self):
         assert _json_restore({"phase": "vapor"}) == {"phase": "vapor"}
+
+    def test_a_string_that_spells_a_non_finite_float_stays_a_string(self):
+        """It used to be turned into one: a unit or species called NaN
+        arrived as a float."""
+        value = {"name": "NaN", "notes": ["Infinity", "-Infinity"]}
+        assert _json_restore(value) == value
+
+    def test_a_unit_named_nan_can_be_renamed_to_through_the_server(self, client):
+        status, payload = client.send("PATCH", "/api/unit/reactor",
+                                      {"name": "NaN"})
+        assert status == 200 and payload["ok"], payload
+        assert any(u.name == "NaN" for u in client.session.flowsheet.units)
 
 
 # =============================================================================
@@ -565,6 +579,9 @@ class TestFiles:
             "iterations": 0, "method": "direct", "residual": 0.0,
             "tol": 1e-08, "tear_streams": [], "pending": [],
             "audit": {"warnings": [], "mass": None},
+            "solver": {"tol": 1e-8, "max_iter": 100,
+                       "acceleration": "anderson",
+                       "clip_negative_flows": True},
         }
         assert session.code()["error"] is None
         assert "Flowsheet(species_order=[]" in session.code()["source"]
@@ -1113,6 +1130,13 @@ class TestAnEmptyEditor:
         assert answer["ok"], answer
         assert [u.name for u in empty.session.flowsheet.units] == ["mixer"]
 
+    def test_the_solver_options_route(self, empty):
+        status, answer = empty.post("/api/solver", {"max_iter": 7})
+        assert status == 200 and answer["solver"]["max_iter"] == 7
+        flowsheet = empty.get_json("/api/flowsheet")[1]["flowsheet"]
+        assert flowsheet["view"]["solver"] == {"max_iter": 7}
+        assert not empty.post("/api/solver", {"tol": -1})[1]["ok"]
+
     def test_the_code_context_can_name_them_instead(self, empty):
         """`SPECIES` as well as `species_order`, because the starter says so.
 
@@ -1530,6 +1554,16 @@ class TestSecurity:
         assert client.get("/api/catalog")[0] == 200
         assert client.get("/api/flowsheet")[0] == 200
         assert client.get("/")[0] == 200
+
+    @pytest.mark.parametrize("path", ["/", "/api/flowsheet", "/api/code-context"])
+    def test_a_rebound_host_name_cannot_read_either(self, client, path):
+        """Rebound, the hostile page is same-origin with the answer: "/"
+        would hand it the token, and the API routes the model."""
+        port = client.server.server_address[1]
+        status, body = client.get(path,
+                                  headers={"Host": f"attacker.example:{port}"})
+        assert status == 403
+        assert client.server.token.encode() not in body
 
 
 # =============================================================================
@@ -2115,12 +2149,30 @@ class TestPlanning:
         names = {f["name"] for f in tables["files"]}
         assert "flowsheet_jacobian.csv" in names and "bounds.csv" in names
 
+    @pytest.mark.parametrize("fmt", ["lp", "mps"])
+    def test_the_structural_lp_downloads(self, thermo, fmt):
+        """The model rows and bounds, with nothing to price them."""
+        pytest.importorskip("pyomo")
+        session = FlowsheetSession(build_flowsheet(thermo))
+        session.solve()
+        session.linearize(self.LEVERS, self.OUTPUTS)
+        answer = session.linearization_files(fmt)
+        assert answer["ok"], answer
+        [written] = answer["files"]
+        assert written["name"] == f"flowsheet_delta_vectors.{fmt}"
+        lp = session.delta_vectors.lp_model
+        assert not lp.c.any()             # no prices: an empty objective
+        assert lp.A_eq.shape[0] == len(self.OUTPUTS)
+        text = written["text"]
+        assert ("s.t." in text) if fmt == "lp" else ("ROWS" in text)
+        assert "flowsheet_reactor_V" in text
+
     def test_a_format_that_does_not_exist_is_refused(self, thermo):
         session = FlowsheetSession(build_flowsheet(thermo))
         session.solve()
         session.linearize(self.LEVERS, self.OUTPUTS)
-        answer = session.linearization_files("mps")
-        assert answer["ok"] is False and "mps" in answer["error"]
+        answer = session.linearization_files("xlsx")
+        assert answer["ok"] is False and "xlsx" in answer["error"]
 
     def test_downloading_before_linearizing_says_so(self, thermo):
         assert FlowsheetSession(build_flowsheet(thermo)).linearization_files(

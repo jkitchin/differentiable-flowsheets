@@ -37,8 +37,8 @@ const VECTOR = {
   radius: 0.3,
 }
 
-test('the formats offered are the two the server can write', () => {
-  assert.deepEqual(FORMATS.map((f) => f.id), ['json', 'csv'])
+test('the formats offered are the ones the server can write', () => {
+  assert.deepEqual(FORMATS.map((f) => f.id), ['json', 'csv', 'lp', 'mps'])
   assert.equal(DEFAULT_RADIUS, 0.3)
 })
 
