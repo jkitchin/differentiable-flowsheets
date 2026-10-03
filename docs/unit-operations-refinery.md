@@ -1990,7 +1990,7 @@ Two robustness rules (#332):
 
 `HPSeparator(layout)(flows, T, P, comps)` returns `(vapour, liquid, water, FlashResult)`: gases and cut molecules split by the flash, every attribute with its cut, water decanted whole (no free-water VLE).
 
-At 50 °C and 47 bar the default diesel case dissolves 10.7 mol/s of H2 in about 230 mol/s of separator liquid (x_H2 about 0.045); that is the `h2.dissolved` loss.
+At 50 °C and 47 bar the default diesel case dissolves 10.7 mol/s of H2 in about 230 mol/s of separator liquid (x_H2 about 0.045); that is the `h2.dissolved` loss. The flash is checked against DWSIM's PR78 on the same effluent, and the dissolved H2, H2S, NH3 and C1 are tabulated there with what DWSIM's own constants and kij do to them: [Validation against DWSIM: light ends, HP separator and gas plant](#refinery-dwsim-lightends).
 
 (refinery-hydroprocessing-reactor)=
 ### The trickle-bed reactor and the kinetic-model interface
@@ -3440,7 +3440,7 @@ Regenerate (needs IDAES and IPOPT; `--case NAME` redoes one case):
 PYTHONPATH=src:tests python -m refinery.reference.gasplant_generate
 ```
 
-**What this does not validate.** It does not test how well PR with zero kij describes these mixtures. That is the propylene/propane split above all, where the relative volatility is near 1.1 and a small kij moves the trays needed. It does not test the O'Connell efficiency, the GPA 2140 limits, the RVP construction against measured RVPs, or the compressor. Those are tested against their definitions in `test_gasplant.py`, not against a second simulator or plant data.
+**What this does not validate.** It does not test how well PR with zero kij describes these mixtures. That is the propylene/propane split above all, where the relative volatility is near 1.1 and a small kij moves the trays needed. It does not test the O'Connell efficiency, the GPA 2140 limits, the RVP construction against measured RVPs, or the compressor. Those are tested against their definitions in `test_gasplant.py`, not against plant data. DWSIM 9.0.5 has since given the C3/C4 splitter its column-level check, and checked the compressor train and the TVP/RVP implementation (same model), and what DWSIM's own kij do to the splits: [Validation against DWSIM: light ends, HP separator and gas plant](#refinery-dwsim-lightends).
 
 (refinery-isomerization-validation)=
 ### Validation: the isomerization unit
@@ -3568,8 +3568,11 @@ Lee-Kesler.
 **What DWSIM 9.0.5 offers.** Property packages: Peng-Robinson (PR), PR 1978,
 PRSV2, Soave-Redlich-Kwong, Lee-Kesler-Plöcker, Grayson-Streed, Chao-Seader,
 Raoult's Law, NRTL, UNIQUAC, UNIFAC variants, Wilson, PC-SAFT, GERG-2008,
-CoolProp, IAPWS-IF97, Black Oil and others. Its PR is the 1976 form for every
-omega (no 1978 branch), as difflow's gas-plant and hydroprocessing PR.
+CoolProp, IAPWS-IF97, Black Oil and others. Its "PR" is the 1976 form for
+every omega (no 1978 branch), as difflow's gas-plant PR. Its "PR78" switches to
+the 1978 kappa above omega 0.491, as difflow's hydroprocessing PR does, but
+writes the 1976 branch's 1.54226 as 1.5422 (see
+[the HP separator](#refinery-dwsim-lightends)).
 
 **The smoke test** (`dwsim_smoke_generate.py`, `test_dwsim_smoke.py`) proves
 the pattern end to end on the gas plant's PR (`difflow_refinery.gasplant`):
@@ -3629,6 +3632,337 @@ documented API and never run, now works against DWSIM 9.0.5: the
 "standalone" thermodynamics calculator is inside `DWSIM.Thermodynamics.dll`
 since DWSIM 6, pythonnet has to be pointed at CoreCLR, and the path is
 checked before any .NET runtime starts.
+
+(refinery-dwsim-reactions)=
+### Validation against DWSIM: reaction thermochemistry
+
+DWSIM has no hydrotreater, FCC, reformer or alkylation kinetic model, so what
+is compared is the physics those units rest on: heats of formation and Gibbs
+energies, heats of reaction, equilibria and energy balances. DWSIM 9.0.5's
+equilibrium, Gibbs and conversion reactors do the DWSIM side
+(`tests/refinery/reference/dwsim_reactions_generate.py` writes
+`dwsim_reactions_reference.json`; `dwsim_reactors.py` is the reactor half of
+the harness, `dwsim_reactions_case.py` the cases; the test is
+`tests/refinery/test_dwsim_reactions.py`). Every case is run two ways:
+
+- **(a) `hypo`**: DWSIM's reactors on hypothetical compounds carrying difflow's
+  own H_f, S (entered as G_f), Cp cubic and critical constants. This tests
+  the implementation.
+- **(b) `dwsim`**: DWSIM's database compounds (ChemSep; tetralin from ChEDL
+  Thermo), its formation data and Cp. This tests the data.
+
+The equilibria are ideal-gas on both sides: difflow's isomerization,
+reformer and hydrotreating equilibria are ideal-gas, and DWSIM's Raoult's-law
+package is made one by multiplying every vapour pressure by e^40, so that
+nothing condenses. The reformer bed and the alkylation heats use
+Peng-Robinson.
+
+**How DWSIM computes it** (read from its compiled code, then reproduced in
+`tests/refinery/_dwsim_rx_emulation.py`):
+
+- Both DWSIM reactors take a compound's formation Gibbs energy at T from
+  `PropertyPackage.AUX_DELGF_T`. This is the Gibbs-Helmholtz integral from
+  the database G_f and H_f at 25 C with the compound's own Cp, the same route
+  as difflow's `H - T S`. Two details differ from difflow: the Cp integrals
+  are midpoint-rule quadratures (as in the harness's enthalpies), and
+  `R = 8.314`. For the hypos the emulation reproduces DWSIM's `int Cp dT`,
+  `int Cp/T dT` and G_f(T) to 9e-11 J/mol.
+- DWSIM's reactors divide pressures by **P0 = 101325 Pa**; difflow's
+  equilibrium constants are on 1 bar. For a reaction that changes the moles
+  of gas by dn, K moves by (1.01325)^dn: 4 % for `Bz + 3 H2 = CH`. Which
+  pressure ChemSep's G_f refer to is not stated in DWSIM. On one standard
+  state, DWSIM's database and difflow's reformer data agree on that ln K to
+  0.02.
+- The conversion reactor applies conversions as percentages of the base
+  compound **present when its rank runs**. Its energy balance is a state
+  function, so any reaction set that reaches the same outlet gives the same
+  outlet temperature.
+
+**DWSIM's reactors are checked before they are believed.** An equilibrium
+answer counts only if it is the ideal-gas equilibrium of DWSIM's own numbers,
+to 3e-6 in mole fraction. That means DWSIM's tabulated G_f(T) for database
+compounds, and difflow's constants under DWSIM's conventions for hypos.
+Accepted answers sit at 2.1e-6 or better, most at 1e-8. Of 108 reactor runs
+over 54 isothermal cases, 24 do not pass. All of them are pinned in the test,
+and every case still has a DWSIM answer that does pass:
+
+- **The equilibrium reactor** stops with "Solution led to negative mole
+  fractions" on the isomerization reactor's eight-reaction network (C6 ring,
+  full charge) and on benzene at 300 C and 100 bar. It **silently
+  converges wrong** on the C6 paraffins at 400 K (6.3e-2 off), and it fails
+  in adiabatic mode (a flash error). Where it converges, it reproduces the
+  emulation to 1e-11.
+- **The Gibbs reactor** (DWSIM's own minimiser; IPOPT is its default, but
+  `libIpopt39` is not in the Linux package and the process aborts) can leave
+  a minor species at zero or at its trace start without an error: MCH at
+  773 K, 2-methylhexane, benzene, naphthalene; from 5e-6 to 1e-2 off. With
+  inert species and the isomerization skeleton labels (below), it stops 2e-5
+  (paraffinic) and 1e-4 (benzene-rich charge) short of equilibrium.
+- A first solve raises "invalid initial estimates" unless
+  `InitializeFromPreviousSolution` is off; the harness sets it.
+
+**(a) Implementation: difflow's constants in DWSIM's reactors.**
+
+| Case | difflow | DWSIM (hypo) | Difference, and why |
+| --- | --- | --- | --- |
+| Isomer families (C5, C6 paraffins, C6 naphthenes), 400-550 K | closed form | equilibrium reactor (Gibbs at C6P 400 K) | 1.6e-5 mole fraction: the midpoint-rule Cp integrals. The emulation under DWSIM's conventions gives 4e-8 |
+| C6 ring (H2, Bz, MCP, CH, C6 paraffins), 420/480 K, 30 bar | the reactor (≡ IDAES) | Gibbs | 7.0e-6: 1 atm, R, quadrature (emulation: 1.4e-6) |
+| Isomerization adiabatic, both charges, 140 C, 30 bar | 477.023 / 522.225 K | 477.032 / 522.304 K (Gibbs) | +9 mK / +0.08 K: DWSIM's minimiser with inerts, 2e-5 / 1e-4 short of its own equilibrium (emulated DWSIM model: 477.023 / 522.200 K) |
+| Reformer equilibria (MCH/toluene, MCP/CH/Bz, nC7 dehydrocyclization), 700-773 K, 10-25 bar | ideal-gas K from Gibbs energies | equilibrium reactor | up to 1.1e-3 mole fraction, nearly all the 1 atm standard state (emulation: 1e-11) |
+| Benzene and naphthalene saturation, 300-420 C, 30-100 bar (constant dH and dS, Cp zero) | `AROMATIC_THERMO` | equilibrium reactor | up to 3e-4 (1 atm) |
+| First reformer bed, rich naphtha, 773.15 K in, 15 bar: the conversion reactor (PR, kij 0) taken to difflow's outlet | 710.6503 K (dT -62.4997 K) | 710.6506 K | 0.3 mK: DWSIM's R in the PR departure and its quadrature |
+| FCC coke burn (C + H2, flue at 2 % O2), 25 C and 700/730 C | `combustion` + `flue_enthalpy` | conversion reactor | reproduced to 1 W in 21-39 MW from the per-species data differences alone |
+
+The reformer bed's composition change is handed to DWSIM as sequential
+conversion reactions through methane (`CxHy + (2x - y/2) H2 = x CH4` for
+every species consumed, the reverse for every species made). DWSIM's outlet
+then reproduces difflow's to 2e-16 in mole flow. The energy balance does not
+depend on the reaction path.
+
+**(b) Data: DWSIM's database against difflow's tables.** All of these are
+pinned at their measured size.
+
+| Quantity | difflow | DWSIM | Cause |
+| --- | --- | --- | --- |
+| iC5 share of the C5s at equilibrium, 450 K | 0.820 | 0.762 | dH(nC5 = iC5): -8.10 kJ/mol (Prosen & Rossini, `isomerization.thermochem`) against ChemSep's -6.94. difflow's own reformer table has iC5 at -153.70 kJ/mol (API TDB), as ChemSep does, not the isomerization module's -154.5 |
+| C6 paraffin and naphthene shares, 400-550 K | | | up to 0.067 (C6P) and 0.052 (C6N): dG(450 K) of 2MP = 23DMB 3.22 against 4.57 kJ/mol; MCP = CH -16.9 against -17.4 kJ/mol dH |
+| Adiabatic isomerization outlet, paraffinic / benzene-rich charge | 477.02 / 522.22 K | 473.19 / 519.58 K | ChemSep's smaller heats of isomerization: 3.83 and 2.65 K less temperature rise |
+| Reformer reactions, 14 of them | | | dH(298 K) within 0.7 kJ/mol (MCP = CH the largest); dH(773 K) within 1.4 kJ/mol; ln K(773 K) within 0.20 on one standard state (nP8 = A8 + 4 H2) |
+| Reformer equilibria, 700-773 K, 10-25 bar | | | within 3.1e-3 mole fraction (MCP/CH split at 700 K) |
+| First reformer bed outlet | 710.65 K | 711.16 K | the bed 0.8 % less endothermic on ChemSep H_f and Cp |
+| HDS of benzothiophene, per mol H2 | -52.3 kJ/mol | -42.6 kJ/mol | benzothiophene H_f: 166.3 kJ/mol (difflow, the `chemicals` tables) against ChemSep's 137.0. Which is right was not checked against a primary source; 166.3 is the value the other tables carry |
+| Other hydroprocessing heats per mol H2 at 25 C (sulfide and thiophene HDS, Bz and naphthalene saturation, 1-hexene, nC6 cracking) | | | within 1.9 kJ/mol (1-hexene saturation the largest) |
+| The same heats at 350 C (DWSIM's conversion reactor) | 298 K values, by design | 3-15 % more heat | the reactions' dCp; difflow's per-class heats neglect it (documented) |
+| Benzene + 3 H2 = cyclohexane, ln K | constant dH, dS (`AROMATIC_THERMO`) | with Cp | **difflow's hydrotreating K is 2.9x, 3.6x, 4.9x too large at 300, 350, 420 C** (ln K 1.05, 1.29, 1.60 high). DWSIM and difflow's own reformer thermochemistry, which both carry Cp, agree to 0.02 |
+| Naphthalene + 2 H2 = tetralin | constant dH, dS | not computable | DWSIM's tetralin (ChEDL Thermo) has G_f = 0: ln K about 60, every naphthalene saturated |
+| Liquid heat of alkylation, 25 C, 7 single-product reactions and difflow's route A for 7 olefins | H_f(g) - CRC Hvap | Peng-Robinson liquid, ChemSep H_f | DWSIM 1.4-6.2 kJ/mol less exothermic (e.g. iC4 + 1-butene to 2,2,4-TMP: -85.6 against -82.7 kJ/mol). Gas-phase H_f account for up to 3.7 kJ/mol (propylene route); the rest is PR's liquid departure against the CRC heats of vaporisation. At 10 C DWSIM gives 0.6-1.0 kJ/mol less again; difflow neglects the temperature |
+| Heat of coke combustion (7 wt% H), 25 C | | | 1.1e-5 (water's H_f, -241.826 against -241.814 kJ/mol) |
+| Coke burn to a 700/730 C flue | | | DWSIM releases 0.05-0.07 % more: the RPP Cp fits of `fcc.species` against ChemSep's, all of it, to 1 W |
+
+**What DWSIM 9.0.5 cannot check.** It has no dibenzothiophene,
+cyclohexylbenzene, quinoline, carbazole or tetrahydrophenanthrene, so it
+cannot check the DBT and 4,6-DMDBT HDS heats, either HDN heat, or the
+poly-aromatic step. It has no catalyst. The FCC heat balance's catalyst
+term, the heat of cracking and the regenerator adiabatic temperature are
+therefore not compared; a coke-and-air adiabatic flame is above 2000 K,
+past both sides' Cp fits. DWSIM's own "Graphite" (its "User" table) has a
+constant vapour pressure that cannot be lifted, so coke carbon is a
+hypothetical compound with H_f = 0 (it enters at 25 C and burns completely,
+so nothing else about it matters).
+
+**Unexplained differences: none.** Every (a) difference is reproduced by the
+emulation of DWSIM's conventions, or is DWSIM's own convergence, measured
+against its own model. Every (b) difference traces to a formation enthalpy,
+entropy or Cp in one of the two databases.
+
+Regenerate (DWSIM 9.0.5; about 15 minutes):
+
+```bash
+PYTHONPATH=src:tests python -m refinery.reference.dwsim_reactions_generate
+```
+
+(refinery-dwsim-lightends)=
+### Validation against DWSIM: light ends, HP separator and gas plant
+
+Two references, built on the harness above. Each says which comparison it is:
+**(a)** same model and constants (DWSIM hypothetical compounds on difflow's
+constants and kij, liquid density from the EOS), which tests the
+implementation; **(b)** DWSIM's own compounds and kij, which tests the model.
+
+- `tests/refinery/reference/dwsim_gasplant_generate.py` writes
+  `dwsim_gasplant_reference.json`. It holds three rigorous columns, the wet-gas
+  compressor train and two vapour pressures; the cases are in
+  `dwsim_gasplant_case.py`.
+- `tests/refinery/reference/dwsim_hps_generate.py` writes
+  `dwsim_hps_reference.json`. It holds a solved hydrotreater's reactor effluent
+  flashed at HP-separator conditions; the case is in `dwsim_hps_case.py`.
+- `tests/refinery/reference/dwsim_lightends.py` holds the DWSIM unit operations
+  (column, compressor/cooler/knock-out train, RVP) that the generators use. It
+  adds to the harness and does not change it.
+
+`test_dwsim_gasplant.py` and `test_dwsim_hps.py` hold the comparisons
+(`release`), plus per-commit checks that the files are intact and still
+describe difflow's constants and cases.
+
+```bash
+PYTHONPATH=src:tests python -m refinery.reference.dwsim_gasplant_generate
+PYTHONPATH=src:tests python -m refinery.reference.dwsim_hps_generate   # solves the hydrotreater first (~2 min)
+```
+
+#### Columns (comparison (a))
+
+DWSIM's `DistillationColumn` uses the same layout as the IDAES reference.
+That is a total condenser at the bubble point, equilibrium trays, a kettle
+reboiler and no pressure drop. The reflux and boilup ratios are specified,
+PR with kij = 0, and every component is a hypo on difflow's constants.
+The **C3/C4 splitter converges in DWSIM** (Wang-Henke, 2 s), so the column-level
+check that IDAES's `TrayColumn` could not give (see
+[the gas plant's validation](#refinery-gasplant-validation)) is made here.
+The naphtha splitter adds four Twu pseudo-components (NBP 375 to 465 K) to C4 to C6.
+
+| Case | DWSIM solver | Stage T | L, V profiles | Phase x, y | Products | Duties (plain) | Duties, DWSIM's enthalpy reproduced |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Debutanizer: C3 to nC5, 10 bar, 10 trays, R = 2, boilup 2 | Naphtali-Sandholm | 5.8e-5 K | 3.7e-6 rel | 4.2e-7 | 5.9e-6 rel | 5.2e-5, 5.1e-5 rel | 7e-16 |
+| C3/C4 splitter: C2 to nC4 with propylene, 17 bar, 20 trays, R = 5, boilup 3 | Wang-Henke | 3.5e-5 K | 2.1e-6 rel | 2.1e-7 | 2.1e-6 rel | 5.5e-5, 5.1e-5 rel | 3e-14 |
+| Naphtha splitter: nC4 to nC6 and four cuts, 2.5 bar, 20 trays, R = 1.5, boilup 1.2 | Wang-Henke | 2.0e-4 K | 1.3e-5 rel | 6.2e-6 | 4.2e-5 rel | 5.1e-5, 4.7e-5 rel | 9e-14 |
+
+The K-values at DWSIM's own stage states agree to 1.2e-6 (DWSIM's truncated
+sqrt 2, as in the smoke test). Three things set the size of the rest:
+
+- **DWSIM's column tolerance, not difflow.** The loop tolerance is 1e-9.
+  Wang-Henke closes the component balances only to about 1e-8 (7.8e-9 on
+  the naphtha splitter), and that is the 2e-4 K and 1e-5 level of the
+  naphtha splitter. On the debutanizer, Naphtali-Sandholm closes them to
+  5e-16. There DWSIM agrees with IDAES's column to 6e-5 K, and with difflow
+  to 5.8e-5 K.
+- **The duties are 5e-5 apart, and all of it is understood.** DWSIM's PR
+  uses R = 8.314, and its ideal-gas enthalpy is a midpoint-rule integral
+  (both found by the smoke test). DWSIM's condenser and reboiler duties were
+  recomputed from DWSIM's own stage flows, temperatures and compositions,
+  with difflow's PR plus those two reproduced. They match DWSIM's to
+  1e-13. With difflow's exact enthalpy the 5e-5 comes back
+  (`test_dwsims_duties_are_its_own_enthalpies`).
+- **DWSIM's solvers.** `SolvingMethodName` is matched by substring:
+  "Bubble" is Wang-Henke, "Napthali" (sic) is Naphtali-Sandholm, "Rates" is
+  Burningham-Otto.
+  - Wang-Henke converges the debutanizer, but DWSIM's own post-solve
+    component-balance check then fails it. The check is at
+    `10 * min(loop tolerances)`, and the balance came to 1.8e-8 against 1e-8.
+  - Naphtali-Sandholm had not finished the C3/C4 splitter or the naphtha
+    splitter after four minutes; Wang-Henke takes 2 to 3 s. The reference
+    records which solver ran each case.
+  - Two other things were read from the IL. After a solve,
+    `Stage.Lout`/`Vout`/`Kvalues` are empty; the profiles are the column's
+    `Tf`, `Lf`, `Vf`, `xf`, `yf` and `Kf`. A feed goes whole, both phases,
+    to the stage it is connected to.
+
+**Comparison (b), the same columns on DWSIM's database and kij.** DWSIM
+carries kij for most hydrocarbon pairs, and difflow uses zero for them.
+On the debutanizer DWSIM's kij (propane/n-pentane 0.027, isopentane/n-pentane
+0.060, n-butane/n-pentane 0.017) put more C5 overhead. The isopentane in the
+distillate goes from 3.2 % to 5.3 %, the distillate rate rises 4.1 %, the
+condenser duty rises 6.1 % and the reboiler duty falls 8.3 %. On the C3/C4 splitter (propylene/propane 0.0096,
+propylene/isobutane -0.014, and DWSIM's propylene Tc 364.85 K against 365.6 K)
+the distillate's propylene rises 1.3 points and its isobutane falls from 850 to
+330 ppm, with the duties within 0.2 %. These are model differences, set by
+binary parameters difflow leaves at zero. They are reported, not tuned to.
+
+#### Compressor (comparison (a), and the bug it found)
+
+The case is a wet gas (H2, H2S, C1 to nC6, 100 mol/s) at 1.6 bar and 40 °C. It
+goes through an inlet knock-out, then two stages to 14 bar (75 % isentropic),
+each cooled to 40 °C and knocked out. DWSIM builds it from `Compressor`
+(adiabatic, outlet pressure), `Cooler` and `Vessel`, on difflow's constants and
+difflow's kij (H2S with C1 to C3).
+
+| Quantity | DWSIM | difflow | Agreement |
+| --- | --- | --- | --- |
+| Stage 1 power / discharge T | 389.33 kW / 365.227 K | 389.35 kW / 365.230 K | 5.1e-5 rel / 2.7 mK |
+| Stage 2 power / discharge T | 349.58 kW / 369.567 K | 349.60 kW / 369.570 K | 4.9e-5 rel / 2.8 mK |
+| Gas out / condensate (component flows) | 66.72 / 33.28 mol/s | same | 1.9e-6 / 3.9e-7 rel |
+
+The power and temperature gaps are again R and the midpoint rule. Entropy
+follows the same pattern: DWSIM's mixture entropy is difflow's plus a
+constant 34.12 J/mol/K (another reference state), so isentropic paths agree.
+
+**This comparison found a bug in `GasCompressor`**, now fixed. Its temperature
+solve (`gasplant.units._solve_T`, used for the isentropic and actual discharge
+temperatures) took Newton steps with the slope
+`jax.grad(stop_gradient(fn))`, which is identically zero. Every step divided by
+zero, the clip bounced the temperature between half and twice the guess, and
+the answer was the one final Newton step from wherever the bounce ended.
+
+- On this case that step landed 1.27 K below the isentropic temperature,
+  with the first stage 3.6 % low in power (375.5 kW against 389.3 kW) and
+  1.5 K cold.
+- The existing release test against difflow's own EOS compressor
+  (`rel=5e-3`, `abs=0.5 K`, dry gas, one stage) had not caught it.
+- The slope is now `stop_gradient(grad(fn))`, and
+  `test_gasplant.py::test_solve_T_converges` checks convergence and the
+  implicit derivative.
+- Any gas-plant compressor result computed before this fix moves. That
+  includes example 40's wet-gas compressor; the stored notebook outputs were
+  not re-run.
+
+On DWSIM's compounds and kij (b), difflow's total power is 0.40 % lower and its
+condensate 0.86 % higher than DWSIM's.
+
+#### Vapour pressure
+
+| Liquid | TVP at 100 °F, DWSIM / difflow | D323 RVP, difflow's construction on DWSIM / difflow | DWSIM's own "RVP" | (b) TVP, D323 on DWSIM's data |
+| --- | --- | --- | --- | --- |
+| Debutanizer bottoms (C3 to C5) | 168.37 kPa, 8.6e-7 rel | 166.60 kPa, 8.6e-7 rel | 111.07 kPa (-33 %) | +9.8 %, +10.2 % |
+| Stabilized naphtha (C4 to C6 + 3 cuts) | 51.82 kPa, 1.1e-6 rel | 50.77 kPa, 1.1e-6 rel | 41.76 kPa (-18 %) | (pseudo-components: not run) |
+
+The D323 construction (vapour space four times the liquid's volume at 100 °F)
+was rebuilt on DWSIM's flashes: T-VF flashes, with DWSIM's PR liquid root at
+1 bar for the liquid volume. It agrees with difflow's to 1e-6.
+
+**DWSIM's own RVP is not a reference.** It lives only in the classic Windows
+UI's "Petroleum Cold Flow Properties" utility (`DWSIM.FrmColdProperties.Update1`
+in `DWSIM.exe`). That utility takes the stream package's bubble pressure at
+310.95 K and returns
+`RVP = 6894.76 * 10**((ln(TVP/6894.76) + 12.9728 - 12.82)/2.7738)`. This is a
+correlation on the TVP that mixes a natural log with a power of ten, and it
+equals the TVP only at 2.1 psi. Above that it puts the RVP of any liquid below
+its TVP: 33 % low on the debutanizer bottoms, and so on, even for a pure
+component, whose RVP must equal its vapour pressure. difflow's D323
+construction stays. The TVP agrees, and the correlation is recorded so the
+difference is visible.
+
+#### HP separator (the hydrotreater)
+
+The feed is the reactor effluent of the diesel hydrotreater of
+`test_hydrotreating.py` (crude A, 230 to 370 °C, 50 kg/s, defaults), solved and
+frozen. It is 71 % H2, 1.8 % H2S, 0.07 % NH3, 3.8 % C1, traces of C2 to C4, and
+22.8 % treated cuts (omega 0.23 to 0.79). It is flashed with `pr_flash` at the
+unit's separator (50 °C, 47 bar) and at the corners of 40 to 60 °C by 30 to
+60 bar.
+
+**(a) Same model.** DWSIM's "Peng-Robinson 1978 (PR78)" switches kappa at
+omega 0.491 as difflow's hydroprocessing PR does. DWSIM's plain "PR" uses
+the 1976 kappa for every omega. DWSIM's PR78 code (`ThermoPlugs.PR78`)
+writes the 1976 branch's 1.54226 as **1.5422**. Reproduced, the fugacity
+coefficients at DWSIM's phase compositions agree to 3e-14. Plain, the
+truncation is worth 1.7e-4 in the liquid phi of the cut just below the switch.
+difflow's flash lands on DWSIM's to 4.7e-7 in vapour fraction and 1.7e-6 in
+the liquid composition. DWSIM's own equilibrium residual is up to 2.6e-7.
+
+**What dissolves in the separator liquid** (#333): the fraction of each gas fed
+that leaves in the liquid, from DWSIM.
+
+| T, P | H2 | H2S | NH3 | CH4 | x_H2 in the liquid |
+| --- | --- | --- | --- | --- | --- |
+| 50 °C, 47 bar (the unit) | 1.53 % | 27.7 % | 36.6 % | 6.0 % | 0.044 |
+| 40 °C, 30 bar | 0.94 % | 22.5 % | 31.3 % | 4.2 % | 0.028 |
+| 40 °C, 60 bar | 1.92 % | 35.5 % | 46.2 % | 7.9 % | 0.054 |
+| 60 °C, 30 bar | 0.99 % | 18.0 % | 24.3 % | 3.7 % | 0.029 |
+| 60 °C, 60 bar | 2.02 % | 29.6 % | 38.0 % | 7.2 % | 0.057 |
+
+difflow's `pr_flash` matches these to 3.4e-5 relative (H2) and 6e-6 (the
+others). At the unit's conditions that is the 10.6 mol/s of H2 quoted above.
+
+**(b) What the model choices are worth**, as changes in these fractions:
+
+| Change | H2 | H2S | NH3 | CH4 |
+| --- | --- | --- | --- | --- |
+| 1976 kappa for every omega (DWSIM "PR") instead of the 1978 branch | +1.5 % | 0 to +0.1 % | -0.1 to -0.3 % | +1.0 % |
+| DWSIM's gas constants (H2S omega 0.094 vs 0.09, NH3 0.256 vs 0.253) | 0 | +0.1 to +0.2 % | +0.1 % | 0 |
+| DWSIM's kij instead of difflow's, and no H2S-cut kij (difflow 0.0333) | +0.2 to +0.4 % | **+12 to +15 %** | +0.2 % | +0.4 to +0.7 % |
+
+H2 solubility is robust to these choices; H2S solubility is not. It is set by
+the H2S-cut kij, for which neither side has data. difflow's 0.0333 is ChemSep's
+H2S/n-decane value carried to every cut (`DEFAULT_KIJ_H2S_CUT`), and DWSIM has
+no value for a pseudo-component. Two DWSIM kij stand out and are recorded, not
+adopted: H2/methane +0.026 (difflow -0.0044) and H2/n-butane -0.397. None of
+this is checked against measured solubilities. Both sides are PR, and PR with
+these kij is the model being compared, not validated.
+
+**Harness note.** `DWSIMFlowsheet._set_kij` with an explicit array removes and
+adds pairs in one loop over (i, j). The removal for (j, i) deletes the pair
+just added for (i, j), so every kij comes out zero and the call raises "DWSIM
+did not take the kij". `dwsim_lightends.set_kij` sets the matrix after a
+`kij="zero"` flowsheet instead. The harness itself is left as it is.
 
 ---
 
