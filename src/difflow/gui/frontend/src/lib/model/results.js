@@ -42,7 +42,11 @@ export function total(stream) {
  * table missing the column that matters.
  *
  * @param {Object} solve the `/api/solve` answer
- * @returns {{species: string[], rows: Array}}
+ * `phases` says whether any stream carries a phase label. Most units do
+ * not set one, and a column that is blank on every row reads as a
+ * phase that failed to compute.
+ *
+ * @returns {{species: string[], rows: Array, phases: boolean}}
  */
 export function streamTable(solve) {
   const streams = solve?.streams ?? {}
@@ -70,7 +74,7 @@ export function streamTable(solve) {
         F ? (stream[`F_${s}`] ?? 0) / F : null),
     }
   })
-  return { species, rows }
+  return { species, rows, phases: rows.some((row) => row.phase !== null) }
 }
 
 /** Total flow per stream, for badging the canvas edges. */

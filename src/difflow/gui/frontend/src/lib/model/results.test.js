@@ -131,3 +131,12 @@ test('decoration with nothing to say returns the edges themselves', () => {
   const edges = [{ id: 'a', label: 'liq', class: '', data: { stream: 'liq' } }]
   assert.equal(decorate(edges, {}), edges)
 })
+
+test('the phase column is offered only when some stream has a phase', () => {
+  const streams = { a: { F_water: 1, T: 300, P: 1e5 } }
+  assert.equal(streamTable({ species: ['water'], streams }).phases, false)
+  streams.b = { F_water: 1, T: 300, P: 1e5, phase: 'vapor' }
+  const table = streamTable({ species: ['water'], streams })
+  assert.equal(table.phases, true)
+  assert.deepEqual(table.rows.map((r) => r.phase), [null, 'vapor'])
+})

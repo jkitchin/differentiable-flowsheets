@@ -116,7 +116,7 @@
             {#each table.species as s (s)}
               <th>{showFractions ? `x_${s}` : `F_${s}`}</th>
             {/each}
-            <th class="name">phase</th>
+            {#if table.phases}<th class="name">phase</th>{/if}
           </tr>
         </thead>
         <tbody>
@@ -129,7 +129,9 @@
               {#each table.species as s, i (s)}
                 <td>{fmt(showFractions ? row.fractions[i] : row.flows[i])}</td>
               {/each}
-              <td class="name soft">{row.phase ?? ''}</td>
+              {#if table.phases}
+                <td class="name soft">{row.phase ?? ''}</td>
+              {/if}
             </tr>
           {/each}
         </tbody>
