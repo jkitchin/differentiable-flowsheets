@@ -230,3 +230,21 @@ test('the fold goes by flowsheet order, not by rank in the stream', () => {
   assert.ok(!s.parts.some((p) => p.species === 's8'))
   assert.equal(s.parts.at(-1).key, 'other')
 })
+
+test('a negative flow leaves the stream without a composition', () => {
+  const s = streamSummary({ T: 300, P: 1e5, F_A: 2, F_B: -1 }, ['A', 'B'])
+  assert.equal(s.negative, true)
+  assert.deepEqual(s.parts, [], 'no bar showing A at 200 %')
+  assert.deepEqual(s.rows.map((r) => r.x), [null, null])
+  assert.deepEqual(s.rows.map((r) => r.flow), [2, -1], 'the flows are still shown')
+  assert.equal(streamSummary({ F_A: 1, F_B: 0 }, ['A', 'B']).negative, false)
+  assert.equal(valueOf({ F_A: 2, F_B: -1 }, 'x:A'), null, 'nor a wire colour by it')
+})
+
+test('a span past the float limit still spreads the ramp', () => {
+  const solve = { streams: { a: { T: -1e308 }, b: { T: 0 }, c: { T: 1e308 } } }
+  const scale = colorScale(solve, 'T')
+  assert.equal(scale.uniform, false)
+  assert.equal(new Set(Object.values(scale.colors)).size, 3)
+  assert.equal(scale.colors.b, colorScale({ streams: { a: { T: -1 }, b: { T: 0 }, c: { T: 1 } } }, 'T').colors.b)
+})

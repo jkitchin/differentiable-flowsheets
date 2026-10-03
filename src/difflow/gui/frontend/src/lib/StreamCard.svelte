@@ -46,7 +46,9 @@
       <dt>F</dt><dd>{fmt(summary.total, 4)} <span class="soft">mol/s</span></dd>
     </dl>
 
-    {#if summary.parts.length}
+    {#if summary.negative}
+      <p class="hint">a negative flow: no composition</p>
+    {:else if summary.parts.length}
       <!-- A 2px surface gap between segments, from the flex gap, so two
            neighbouring hues never share an edge. -->
       <div class="bar" role="img"
