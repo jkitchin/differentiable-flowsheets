@@ -61,7 +61,10 @@
    */
   let okNote = $state(null)
   let selected = $state(null)
-  let busy = $state(false)
+  // Edits in flight, counted: a drag's layout post finishing in the middle
+  // of a long solve must not report the editor idle and re-enable Solve.
+  let inflight = $state(0)
+  let busy = $derived(inflight > 0)
   let context = $state({ source: '', names: [], error: null })
   let showContext = $state(false)
   let showScript = $state(false)
@@ -338,7 +341,7 @@
   async function edit(run, { reload = true, stale = true } = {}) {
     error = ''
     note = ''
-    busy = true
+    inflight += 1
     try {
       const answer = await run()
       if (answer && answer.ok === false) note = answer.error
@@ -355,7 +358,7 @@
       error = `the server did not answer (${e.message ?? e}); ` +
         'the canvas may not match it'
     } finally {
-      busy = false
+      inflight -= 1
     }
   }
 
