@@ -16,17 +16,51 @@ const full = (over = {}) =>
     repository: 'https://github.com/example/difflow',
   }, ...over })
 
-test('the bar is File, View and Help, in that order', () => {
-  assert.deepEqual(full().map((m) => m.id), ['file', 'view', 'help'])
-  assert.deepEqual(full().map((m) => m.label), ['File', 'View', 'Help'])
+test('the bar is File, Edit, Examples, View and Help, in that order', () => {
+  assert.deepEqual(full().map((m) => m.id), ['file', 'edit', 'examples', 'view', 'help'])
+  assert.deepEqual(full().map((m) => m.label), ['File', 'Edit', 'Examples', 'View', 'Help'])
+})
+
+test('Undo and Redo are offered only when there is a step to take', () => {
+  const { actions, seen } = recorder()
+  assert.ok(row(full(), 'edit', 'Undo').disabled)
+  assert.ok(row(full(), 'edit', 'Redo').disabled)
+  const bar = full({ actions, canUndo: true, canRedo: true })
+  row(bar, 'edit', 'Undo').run()
+  row(bar, 'edit', 'Redo').run()
+  assert.deepEqual(seen, [['undo'], ['redo']])
+  assert.ok(row(full({ canUndo: true, busy: true }), 'edit', 'Undo').disabled)
+})
+
+const EXAMPLES = [
+  { key: '01_flash', title: 'Flash drum', description: 'a feed, split' },
+  { key: '02_rx', title: 'Reactor', description: '' },
+]
+
+test('the examples menu lists each example and opens it by key', () => {
+  const { actions, seen } = recorder()
+  const bar = full({ actions, examples: EXAMPLES })
+  assert.deepEqual(labels(bar, 'examples'), ['Flash drum', 'Reactor'])
+  row(bar, 'examples', 'Reactor').run()
+  assert.deepEqual(seen, [['example', '02_rx']])
+  // It replaces the canvas, and says so before the click.
+  assert.match(row(bar, 'examples', 'Flash drum').hint, /a feed, split.*replaces/)
+})
+
+test('the examples menu is disabled while busy, and says when it is empty', () => {
+  const bar = full({ busy: true, examples: EXAMPLES })
+  assert.ok(menu(bar, 'examples').items.every((i) => i.disabled))
+  const empty = menu(full(), 'examples').items
+  assert.equal(empty.length, 1)
+  assert.ok(empty[0].disabled)
 })
 
 /** Every action the bar knows how to ask for, recording what it was asked. */
 function recorder() {
   const seen = []
-  const names = ['save', 'reload', 'export', 'quit', 'results', 'context',
+  const names = ['undo', 'redo', 'save', 'saveAs', 'newFile', 'openFile', 'reload', 'export', 'quit', 'results', 'context',
                  'console', 'planning', 'assistant', 'portLabels', 'dark',
-                 'open', 'classic']
+                 'open', 'classic', 'example', 'widthByFlow', 'colorBy', 'script']
   const actions = Object.fromEntries(
     names.map((n) => [n, (...args) => seen.push([n, ...args])]))
   return { actions, seen }
@@ -46,9 +80,10 @@ test('each row runs the action it is named for', () => {
   const { actions, seen } = recorder()
   const bar = full({ actions })
   for (const [id, label, name] of [
-    ['file', 'Save', 'save'], ['file', 'Reload', 'reload'], ['file', 'Quit', 'quit'],
+    ['file', 'Save', 'save'], ['file', 'Save as…', 'saveAs'],
+    ['file', 'New', 'newFile'], ['file', 'Open…', 'openFile'], ['file', 'Reload', 'reload'], ['file', 'Quit', 'quit'],
     ['view', 'Results', 'results'], ['view', 'Code context', 'context'],
-    ['view', 'Console', 'console'], ['view', 'Planning', 'planning'],
+    ['view', 'Script', 'script'], ['view', 'Console', 'console'], ['view', 'Planning', 'planning'],
     ['view', 'Ask difflow', 'assistant'], ['view', 'Port names', 'portLabels'],
     ['view', 'Dark theme', 'dark'], ['help', 'Classic editor', 'classic'],
   ]) {
@@ -58,16 +93,19 @@ test('each row runs the action it is named for', () => {
   }
 })
 
-test('Save is disabled when there is no file to save to', () => {
-  assert.equal(row(full(), 'file', 'Save').disabled, false)
-  assert.equal(row(full({ path: '' }), 'file', 'Save').disabled, true)
-  // ...and it says so where the hint goes, rather than greying out mutely.
-  assert.match(row(full({ path: '' }), 'file', 'Save').hint, /without a file/)
+test('Save with no file to save to asks where, rather than greying out', () => {
+  const { actions, seen } = recorder()
+  const bare = full({ path: '', actions })
+  assert.equal(row(bare, 'file', 'Save').disabled, false)
+  assert.match(row(bare, 'file', 'Save').hint, /no file yet/)
+  row(bare, 'file', 'Save').run()
+  assert.deepEqual(seen, [['saveAs']])
 })
 
 test('busy disables everything that would edit or write', () => {
   const bar = full({ busy: true })
-  for (const label of ['Save', 'Reload', 'Python script', 'Diagram PNG']) {
+  for (const label of ['New', 'Open…', 'Save', 'Save as…', 'Reload',
+                       'Python script', 'Diagram PNG']) {
     assert.equal(row(bar, 'file', label).disabled, true, label)
   }
   // Opening a drawer is not an edit, and is the one thing still worth
@@ -77,7 +115,7 @@ test('busy disables everything that would edit or write', () => {
 
 test('the four exports are offered, and only with a flowsheet', () => {
   assert.deepEqual(labels(full(), 'file'),
-    ['Save', 'Reload', 'Python script', 'Flowsheet JSON', 'Diagram SVG',
+    ['New', 'Open…', 'Save', 'Save as…', 'Reload', 'Python script', 'Flowsheet JSON', 'Diagram SVG',
      'Diagram PNG', 'Quit'])
   const empty = full({ doc: null })
   for (const label of ['Python script', 'Flowsheet JSON', 'Diagram SVG', 'Diagram PNG']) {
@@ -151,7 +189,7 @@ test('a missing action does not throw', () => {
 
 test('menuBar() with nothing at all still describes a bar', () => {
   const bar = menuBar()
-  assert.equal(bar.length, 3)
+  assert.equal(bar.length, 5)
   assert.ok(bar.every((m) => m.items.length))
 })
 
@@ -170,4 +208,20 @@ test('there being no path at all is not a crash', () => {
   assert.equal(shortPath(''), '')
   assert.equal(shortPath(null), '')
   assert.equal(shortPath(undefined), '')
+})
+
+test('the solution views wait for a solve, then run and tick', () => {
+  const { actions, seen } = recorder()
+  const before = full({ actions })
+  assert.ok(row(before, 'view', 'Wire width by flow').disabled)
+  assert.ok(row(before, 'view', 'Colour wires').disabled)
+  assert.equal(row(before, 'view', 'Colour wires').hint, 'solve first')
+
+  const after = full({ actions, solved: true, widthByFlow: true, colorBy: 'T' })
+  assert.ok(!row(after, 'view', 'Wire width by flow').disabled)
+  assert.ok(row(after, 'view', 'Wire width by flow').on)
+  assert.ok(row(after, 'view', 'Colour wires').on)
+  row(after, 'view', 'Colour wires').run()
+  row(after, 'view', 'Wire width by flow').run()
+  assert.deepEqual(seen.map((s) => s[0]), ['colorBy', 'widthByFlow'])
 })

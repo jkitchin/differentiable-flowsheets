@@ -34,6 +34,7 @@ own prose, not about the user's flowsheet.
 from __future__ import annotations
 
 import html
+import re
 
 #: Sphinx roles the difflow docstrings use, rendered as literal text.
 SPHINX_ROLES = (
@@ -53,8 +54,23 @@ SETTINGS = {
     "input_encoding": "unicode",
     "file_insertion_enabled": False,
     "raw_enabled": False,
+    # An image is a reference, never read from disk and inlined: with
+    # `:loading: embed` docutils would paste an SVG file's markup in.
+    "image_loading": "link",
     "_disable_config": True,
 }
+
+#: Link schemes a rendered docstring may keep. ``raw_enabled`` keeps
+#: markup out, but a reST link target is copied into ``href`` as written,
+#: so `` `x <javascript:...>`_ `` would run in the editor's page.
+SAFE_SCHEMES = ("http", "https", "mailto")
+
+_HREF = re.compile(r'\shref="([^"]*)"')
+_SCHEME = re.compile(r"^([a-z][a-z0-9+.-]*):")
+_IMG = re.compile(r"<img\b[^>]*>")
+_ALT = re.compile(r'\salt="([^"]*)"')
+_FETCH = re.compile(r'\s(?:src|poster|data)="[^"]*"')
+_SVG = re.compile(r"<svg\b.*?</svg>", re.S | re.I)
 
 _registered = False
 
@@ -109,4 +125,40 @@ def render(text: str) -> tuple[str, str]:
         parts = publish_parts(text, writer_name="html5", settings_overrides=SETTINGS)
     except Exception:
         return f"<pre>{html.escape(text)}</pre>", "text"
-    return parts["fragment"].strip(), "rst"
+    return _no_fetches(_safe_links(parts["fragment"].strip())), "rst"
+
+
+def _safe_links(fragment: str) -> str:
+    """Drop every ``href`` whose scheme is not in :data:`SAFE_SCHEMES`.
+
+    The value is read as a browser would read it: entities decoded, and
+    the whitespace and control characters it ignores inside a URL
+    removed, so ``java&#9;script:`` is not a way round the check. A link
+    without a scheme (``#anchor``, a relative path) is kept.
+    """
+    def keep(match):
+        url = re.sub(r"[\x00-\x20]", "", html.unescape(match.group(1))).lower()
+        scheme = _SCHEME.match(url)
+        return match.group(0) if scheme is None or scheme.group(1) in SAFE_SCHEMES else ""
+
+    return _HREF.sub(keep, fragment)
+
+
+def _no_fetches(fragment: str) -> str:
+    """Show no image or media the browser would have to fetch.
+
+    An ``.. image::`` in a plugin's docstring renders as an ``<img>`` the
+    page loads on its own, from wherever it points --- a request the
+    user never chose to make, which is what a tracking pixel is. A
+    relative one would 404 against the editor's server anyway. So an
+    image is shown as its alt text, and a ``<video>``'s source is
+    dropped (it keeps the link docutils puts inside it, which is a
+    request only when clicked).
+    """
+    def alt(match):
+        found = _ALT.search(match.group(0))
+        text = found.group(1) if found else "image"
+        return f'<span class="image-alt">[{text}]</span>'
+
+    fragment = _SVG.sub('<span class="image-alt">[image]</span>', fragment)
+    return _FETCH.sub("", _IMG.sub(alt, fragment))

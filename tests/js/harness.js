@@ -26,5 +26,6 @@ globalThis.fetch = async () => ({ json: async () => ({ ok: true }) });
 vm.runInThisContext(src + `
 ;globalThis.T = {renameStream, producers, streamNames, newUnit, problems,
                  seedValue, seedParams, uniqueUnitName, freeStream, esc,
+                 toNumber, showScalar, isFloatTag,
                  setDOC: d => { DOC = d; }, setCAT: c => { CATALOG = c; }};
 `);

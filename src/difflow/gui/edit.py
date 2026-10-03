@@ -20,6 +20,8 @@ socket or knows there is one.
 
 from __future__ import annotations
 
+import re
+
 from difflow.serialize import (
     SerializationError,
     _build_operation,
@@ -379,6 +381,30 @@ def encoded_params(operation, unit_name: str) -> dict:
     }
 
 
+_NUMERIC = re.compile(r"\b(float|int|Array|Scalar)\b")
+_LOOSE = re.compile(r"\b(str|Any|Callable|object)\b")
+
+
+def check_numeric(value, annotation, where: str) -> None:
+    """Refuse text for a field declared as a number.
+
+    A typo in the inspector used to be stored as the string it was: ``V``
+    held ``"abc"``, the edit reported success, and every solve after it
+    failed deep inside JAX with "Only integer scalar arrays can be
+    converted to a scalar index" --- an error that names neither the unit
+    nor the field. Only a field whose annotation is numeric and admits no
+    text is checked; anything looser is left to the unit.
+    """
+    if not isinstance(value, str):
+        return
+    if isinstance(annotation, type):
+        text = annotation.__name__
+    else:
+        text = annotation if isinstance(annotation, str) else repr(annotation)
+    if _NUMERIC.search(text) and not _LOOSE.search(text):
+        raise EditError(f"{where} is a number; {value!r} is not one.")
+
+
 def rebuild(operation, unit_name: str, updates: dict):
     """A copy of ``operation`` with ``updates`` applied to its parameters."""
     import dataclasses
@@ -397,6 +423,10 @@ def rebuild(operation, unit_name: str, updates: dict):
             f"{', '.join(repr(u) for u in unknown)}; it has "
             f"{', '.join(sorted(fields))}."
         )
+    for field in dataclasses.fields(params):
+        if field.name in updates:
+            check_numeric(updates[field.name], field.type,
+                          f"{type(params).__name__}.{field.name}")
     try:
         encoded = encoded_params(operation, unit_name)
     except SerializationError as exc:
@@ -412,6 +442,39 @@ def rebuild(operation, unit_name: str, updates: dict):
                                 override=live_extras(operation))
     except SerializationError as exc:
         raise EditError(str(exc)) from exc
+
+
+def call_params(current: dict, updates: dict, unit_name: str,
+                specs: list[dict]) -> dict:
+    """``Unit.params`` with ``updates`` merged in, checked against the
+    operation's ``__call__``.
+
+    These are the arguments a flowsheet passes to the operation every
+    time it runs it --- a Splitter's ``split_frac`` --- and a unit dropped
+    from the palette had no way to get one: the solve raised ``missing 1
+    required positional argument``. A ``None`` removes the entry, so the
+    call falls back to the argument's default.
+    """
+    if not isinstance(updates, dict):
+        raise EditError("'call_params' must be an object")
+    known = {spec["name"] for spec in specs}
+    unknown = sorted(set(updates) - known)
+    if unknown:
+        takes = ", ".join(sorted(known)) or "none"
+        raise EditError(
+            f"{unit_name!r} is not called with "
+            f"{', '.join(repr(u) for u in unknown)}; it takes {takes}."
+        )
+    types = {spec["name"]: spec.get("type") or "" for spec in specs}
+    for key, value in updates.items():
+        check_numeric(value, types[key], f"{unit_name}.{key}")
+    merged = dict(current or {})
+    for key, value in updates.items():
+        if value is None:
+            merged.pop(key, None)
+        else:
+            merged[key] = value
+    return merged
 
 
 # ---------------------------------------------------------------------
@@ -453,7 +516,8 @@ def rename(flowsheet, old: str, new: str) -> dict:
     what was asked:
 
     * a name already in use merges two streams into one, which is a
-      connection and should be drawn as one;
+      connection and should be drawn as one --- except a feed nothing
+      reads, which an unfed inlet may take over;
     * a name that is not a Python identifier survives here and fails
       later, in ``codegen`` or on reload, a long way from the typing.
 
@@ -473,13 +537,40 @@ def rename(flowsheet, old: str, new: str) -> dict:
             f"{new!r} cannot be a stream name: it has to be a Python "
             "identifier, because that is what the exported script calls it."
         )
-    if new in names:
+    if new in flowsheet.feeds and old in unfed(flowsheet) and \
+            not _attaches_to_idle_feed(flowsheet, old, new):
+        reader = next(u.name for u in flowsheet.units if new in u.inlet_names)
+        raise EditError(f"the feed {new!r} already goes to {reader!r}; one "
+                        "feed feeds one inlet.")
+    if new in flowsheet.feeds and old not in unfed(flowsheet) and \
+            any(old in u.inlet_names for u in flowsheet.units):
+        raise EditError(f"{old!r} already has something feeding it; "
+                        "disconnect it first to give it the feed "
+                        f"{new!r}.")
+    if new in names and not _attaches_to_idle_feed(flowsheet, old, new):
         raise EditError(
             f"{new!r} is already a stream. Renaming onto it would join the "
             "two into one, which is a connection --- draw it as one."
         )
+    nodes = (flowsheet.view or {}).get("nodes")
+    if new in flowsheet.feeds and isinstance(nodes, dict):
+        # The unfed inlet's own box goes; the feed's box stays where it is.
+        nodes.pop(f"feed:{old}", None)
     rename_stream(flowsheet, old, new)
     return {"kind": "stream", "stream": new}
+
+
+def _attaches_to_idle_feed(flowsheet, old: str, new: str) -> bool:
+    """Whether renaming ``old`` onto ``new`` hands a feed to an inlet.
+
+    The one join that is not a connection: ``new`` is a declared feed
+    that nothing reads (its unit was deleted, which keeps the feed and
+    its composition), and ``old`` is an inlet with nothing behind it.
+    Joining them is how a replacement unit takes over the feed.
+    """
+    if new not in flowsheet.feeds or old not in unfed(flowsheet):
+        return False
+    return not any(new in u.inlet_names for u in flowsheet.units)
 
 
 def variadic(ports: dict) -> bool:
@@ -582,6 +673,21 @@ def connect(flowsheet, source: str, outlet: str, target: str, inlet: str) -> dic
     if outlet in flowsheet.recycles:
         raise EditError(f"{outlet!r} is already recycled to "
                         f"{flowsheet.recycles[outlet]!r}.")
+    # A stream read by two units is not split between them: each gets all
+    # of it, and the flowsheet makes material out of nothing while the
+    # solve reports success.
+    readers = [u.name for u in flowsheet.units
+               if outlet in u.inlet_names and u.name != target]
+    if readers:
+        raise EditError(f"{outlet!r} already goes to {readers[0]!r}; one "
+                        "outlet feeds one inlet. Put a Splitter in to send "
+                        "it to both.")
+    # The tear's destination is the stream the recycle fills; wiring over
+    # it renamed it out from under the recycle, which then fed nothing.
+    for tear, dest in flowsheet.recycles.items():
+        if dest == inlet:
+            raise EditError(f"{target!r}'s inlet {inlet!r} already takes the "
+                            f"recycle from {tear!r}; disconnect that first.")
 
     if source == target or reaches(flowsheet, target, source):
         # The wire closes a loop, so it is a tear, and the two ends keep
@@ -590,7 +696,28 @@ def connect(flowsheet, source: str, outlet: str, target: str, inlet: str) -> dic
         return {"kind": "recycle", "source": outlet, "dest": inlet}
 
     rename_stream(flowsheet, inlet, outlet)
+    resequence(flowsheet)
     return {"kind": "arc", "stream": outlet}
+
+
+def resequence(flowsheet) -> None:
+    """Put the units in an order a sequential solve can run.
+
+    The solve walks ``flowsheet.units`` as written, and a unit dropped on
+    the canvas is appended. Wired in upstream of units already there ---
+    the usual way to replace one --- it would run after its consumers,
+    and the solve fails on a stream nobody has computed yet. The sort
+    keeps the declared order wherever that order already works, so a
+    flowsheet that ran is left exactly as it was.
+    """
+    from difflow.initialization import FlowsheetGraph, calculation_order
+
+    tears = set(flowsheet.recycles) | set(flowsheet.recycles.values())
+    order = calculation_order(FlowsheetGraph.from_flowsheet(flowsheet), tears)
+    if order is None:
+        return  # a loop with no recycle declared: nothing to sequence by
+    by_name = {u.name: u for u in flowsheet.units}
+    flowsheet.units = [by_name[name] for name in order]
 
 
 def disconnect(flowsheet, source: str, outlet: str, target: str, inlet: str) -> dict:
@@ -618,7 +745,8 @@ def default_ports(name: str, ports: dict, taken) -> tuple[list[str], list[str]]:
     A variadic or unannotated port count reports ``None``. A *variadic*
     unit gets two inlets, because one is what it means to not be there:
     a ``Mixer`` mixing one stream is a piece of pipe. An unannotated one
-    gets a single port, since nothing says it wants more.
+    gets a single port, since nothing says it wants more --- unless its
+    class names a ``default_outlets`` (a Splitter's two).
 
     Either way the count is only a starting point --- :func:`add_inlet`
     and :func:`remove_inlet` are how it changes afterwards.
@@ -630,7 +758,8 @@ def default_ports(name: str, ports: dict, taken) -> tuple[list[str], list[str]]:
         s = unique(f"{name}_in" if i == 0 else f"{name}_in{i + 1}", seen)
         seen.add(s)
         inlets.append(s)
-    for i in range(max(1, ports.get("n_outlets") or 1)):
+    n_outlets = ports.get("n_outlets") or ports.get("default_outlets") or 1
+    for i in range(max(1, n_outlets)):
         s = unique(f"{name}_out" if i == 0 else f"{name}_out{i + 1}", seen)
         seen.add(s)
         outlets.append(s)

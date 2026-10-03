@@ -26,7 +26,7 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from difflow import scripts
-from difflow.gui import assistant
+from difflow.gui import assistant, examples
 from difflow.gui.session import FlowsheetSession
 
 #: The front end, as built files on disk rather than a string literal in
@@ -111,22 +111,21 @@ def mint_token() -> str:
 #: writes them as ``Infinity`` / ``NaN``, which the browser's
 #: ``JSON.parse`` rejects outright --- and this is the *common* case,
 #: not an exotic one: :func:`~difflow.kinetics.mass_action_kinetics`
-#: puts ``inf`` in ``K_eq`` for every irreversible reaction. So they go
-#: over the wire as strings and are restored on the way back.
-NON_FINITE = {"Infinity": float("inf"), "-Infinity": float("-inf"),
-              "NaN": float("nan")}
+#: puts ``inf`` in ``K_eq`` for every irreversible reaction. So they
+#: cross the wire in the serializer's own tag, ``{"$float": "inf"}``.
+#: They used to travel as the bare strings ``"Infinity"`` and ``"NaN"``,
+#: and every string that spelled one was turned into a float on the way
+#: in --- a species, a unit, a stream or a line of console output named
+#: ``NaN`` among them. A tag cannot be mistaken for text.
+NON_FINITE = {"inf": float("inf"), "-inf": float("-inf"), "nan": float("nan")}
 
 
 def _json_safe(value: Any) -> Any:
-    """Rewrite non-finite floats as the strings in :data:`NON_FINITE`."""
+    """Rewrite non-finite floats as ``{"$float": ...}`` tags."""
+    from difflow.serialize import _encode_nonfinite
+
     if isinstance(value, float):
-        if value != value:
-            return "NaN"
-        if value == float("inf"):
-            return "Infinity"
-        if value == float("-inf"):
-            return "-Infinity"
-        return value
+        return _encode_nonfinite(value)
     if isinstance(value, dict):
         return {k: _json_safe(v) for k, v in value.items()}
     if isinstance(value, list):
@@ -135,16 +134,13 @@ def _json_safe(value: Any) -> Any:
 
 
 def _json_restore(value: Any) -> Any:
-    """Undo :func:`_json_safe`.
+    """Undo :func:`_json_safe`. Strings are left alone, whatever they say."""
+    from difflow.serialize import NONFINITE_TAG
 
-    A string parameter whose value is literally ``"NaN"`` would be
-    turned into a float here. No unit declares one, and the alternative
-    --- an out-of-band encoding threaded through the whole document ---
-    costs more than the case is worth.
-    """
-    if isinstance(value, str):
-        return NON_FINITE.get(value, value)
     if isinstance(value, dict):
+        if (len(value) == 1 and isinstance(value.get(NONFINITE_TAG), str)
+                and value[NONFINITE_TAG] in NON_FINITE):
+            return NON_FINITE[value[NONFINITE_TAG]]
         return {k: _json_restore(v) for k, v in value.items()}
     if isinstance(value, list):
         return [_json_restore(v) for v in value]
@@ -423,9 +419,9 @@ class _Handler(BaseHTTPRequestHandler):
         that is not a browser.
         """
         port = self.server.server_address[1]
-        host = urlsplit(f"//{self.headers.get('Host', '')}")
-        if host.hostname not in LOCAL_HOSTS:
-            return "unexpected Host header; this server answers only on loopback"
+        refusal = self._host_refusal()
+        if refusal is not None:
+            return refusal
         origin = self.headers.get("Origin")
         if origin is not None:
             where = urlsplit(origin)
@@ -436,7 +432,21 @@ class _Handler(BaseHTTPRequestHandler):
                     "it, and a client outside the browser must send it too")
         return None
 
+    def _host_refusal(self) -> str | None:
+        host = urlsplit(f"//{self.headers.get('Host', '')}")
+        if host.hostname not in LOCAL_HOSTS:
+            return "unexpected Host header; this server answers only on loopback"
+        return None
+
     def do_GET(self):
+        # Reads need the Host check as much as writes do. Under DNS
+        # rebinding a hostile page reaches this server under its own name
+        # and is same-origin with the answer: without the check it could
+        # read the model, the code context and, from "/", the token that
+        # every write is then accepted on.
+        refusal = self._host_refusal()
+        if refusal is not None:
+            return self._send({"ok": False, "error": refusal}, status=403)
         routes = {
             "/": lambda: self._send(page(token=self.token), content="text/html"),
             # The editor the canvas is replacing, kept reachable until the
@@ -455,6 +465,10 @@ class _Handler(BaseHTTPRequestHandler):
             "/api/levers": lambda: self._send(self.session.levers()),
             "/api/console": lambda: self._send(self.session.console_names()),
             "/api/diagram": lambda: self._send(self.session.diagram()),
+            # The Examples menu. Read from disk each time, which costs a
+            # few small files and means a new example needs no restart.
+            "/api/examples": lambda: self._send(
+                {"ok": True, "examples": examples.listing()}),
             # Whether the server-side provider can be offered at all.
             # Asked before the option is shown, so "no key here" is a
             # sentence in the settings rather than a failed question.
@@ -475,18 +489,21 @@ class _Handler(BaseHTTPRequestHandler):
             # carries `documentation`, read from the packaging metadata,
             # and a second copy is a second thing to move.
         }
-        handler = routes.get(self.path)
+        # Routed on the path alone. A query string is not part of the
+        # resource -- `/?reload=1` or a cache-busting `?v=` is still the
+        # page -- and matching the raw request line answered both 404.
+        split = urlsplit(self.path)
+        handler = routes.get(split.path)
         if handler is not None:
             return handler()
         # /api/docs/<op>: one operation's rendered docstring. A prefix
         # route rather than a table entry, since the name is the path.
-        if self.path.startswith(DOCS_PREFIX):
-            operation = unquote(urlsplit(self.path).path[len(DOCS_PREFIX):])
+        if split.path.startswith(DOCS_PREFIX):
+            operation = unquote(split.path[len(DOCS_PREFIX):])
             return self._send(self.session.docs(operation))
         # /api/context?kind=&q=&name=&operation=: the assistant's brief.
-        # The only route that takes a query string, because it is the
+        # The only route that READS a query string, because it is the
         # only one whose request is a *question* rather than a resource.
-        split = urlsplit(self.path)
         if split.path == "/api/context":
             query = parse_qs(split.query)
             first = lambda key: (query.get(key) or [""])[0]   # noqa: E731
@@ -496,21 +513,40 @@ class _Handler(BaseHTTPRequestHandler):
                 name=first("name") or None,
                 operation=first("operation") or None,
             ))
-        asset = _static_file(self.path)
+        asset = _static_file(split.path)
         if asset is None:
             return self._send({"error": "not found"}, status=404)
         body, content = asset
         self._send(body, content=content)
 
     def _body(self):
-        """The request body as restored JSON, or a 400 already sent."""
-        length = int(self.headers.get("Content-Length") or 0)
+        """The request body as restored JSON, or a 400 already sent.
+
+        Always an object. Every route reads its body as one, so a list or
+        a bare number used to get as far as a route and come back as
+        ``AttributeError: 'list' object has no attribute 'get'`` --- a
+        400 still, but one that blamed the server for the request.
+        """
+        def refuse(error):
+            self._send({"ok": False, "error": error}, 400)
+            return None, True
+
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            return refuse("bad Content-Length")
+        if length < 0:
+            return refuse("bad Content-Length")
         raw = self.rfile.read(length) if length else b"{}"
         try:
-            return _json_restore(json.loads(raw or b"{}")), None
+            body = json.loads(raw or b"{}")
+        except UnicodeDecodeError:
+            return refuse("bad JSON: the body is not UTF-8")
         except json.JSONDecodeError as exc:
-            self._send({"ok": False, "error": f"bad JSON: {exc}"}, 400)
-            return None, True
+            return refuse(f"bad JSON: {exc}")
+        if not isinstance(body, dict):
+            return refuse(f"the body must be a JSON object, not {type(body).__name__}")
+        return _json_restore(body), None
 
     def _dispatch(self, verb: str, payload):
         """The answer to one mutating request, or ``None`` if no route matched.
@@ -520,21 +556,36 @@ class _Handler(BaseHTTPRequestHandler):
         is an answer about the flowsheet rather than a failure of the
         request. Only a malformed request gets a 4xx.
         """
-        path, session = self.path, self.session
+        path, session = urlsplit(self.path).path, self.session
         unit_path = "/api/unit/"
         feed_path = "/api/feed/"
         stream_path = "/api/stream/"
 
         if verb == "POST":
             if path == "/api/flowsheet":
-                return session.replace(payload)
+                # A document that will not build is a bad request, as it
+                # was when `replace` raised on one; it is just no longer
+                # half adopted on the way.
+                answer = session.replace(payload)
+                return answer if answer.get("ok") else {**answer, "_status": 400}
             if path == "/api/solve":
                 return session.solve()
             if path == "/api/sensitivity":
                 return session.sensitivity(lever=payload.get("lever"),
                                            target=payload.get("target"))
+            if path == "/api/examples/open":
+                return session.open_example(payload.get("key", ""))
             if path == "/api/save":
-                return session.save()
+                return session.save(payload.get("path"),
+                                    overwrite=bool(payload.get("overwrite")))
+            if path == "/api/open":
+                return session.open_file(payload.get("path"))
+            if path == "/api/new":
+                return session.new()
+            if path == "/api/undo":
+                return session.undo()
+            if path == "/api/redo":
+                return session.redo()
             if path == "/api/layout":
                 return session.set_layout(payload.get("nodes", {}))
             if path == "/api/unit":
@@ -552,6 +603,8 @@ class _Handler(BaseHTTPRequestHandler):
                                            name=payload.get("name"))
             if path == "/api/species":
                 return session.set_species(payload.get("species"))
+            if path == "/api/solver":
+                return session.set_solver_options(payload)
             # One verb for declaring a feed and for editing one: the
             # browser sends the fields it changed, and a field left out
             # keeps whatever the feed already carried.
@@ -641,7 +694,8 @@ class _Handler(BaseHTTPRequestHandler):
             )
         if answer is None:
             return self._send({"error": "not found"}, status=404)
-        self._send(answer)
+        status = answer.pop("_status", 200) if isinstance(answer, dict) else 200
+        self._send(answer, status=status)
 
     def do_POST(self):
         self._mutate("POST")

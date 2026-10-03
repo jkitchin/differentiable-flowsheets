@@ -2,6 +2,7 @@
   import Assistant from './lib/Assistant.svelte'
   import Canvas from './lib/Canvas.svelte'
   import CodeContext from './lib/CodeContext.svelte'
+  import ScriptView from './lib/ScriptView.svelte'
   import Console from './lib/Console.svelte'
   import ContextMenu from './lib/ContextMenu.svelte'
   import Inspector from './lib/Inspector.svelte'
@@ -9,6 +10,7 @@
   import Palette from './lib/Palette.svelte'
   import Planning from './lib/Planning.svelte'
   import Results from './lib/Results.svelte'
+  import { solverOptions } from './lib/model/solver.js'
   import Species from './lib/Species.svelte'
   import { del, get, patch, post, send } from './lib/api.js'
   import { EXPORTS, exportFlowsheet } from './lib/export.js'
@@ -19,6 +21,7 @@
   import { menuBar, shortPath } from './lib/model/menubar.js'
   import { keepAlive } from './lib/model/lifetime.js'
   import { flowLabels, flowTints } from './lib/model/results.js'
+  import { validColorBy } from './lib/model/solution.js'
 
   let doc = $state(null)
   let path = $state('')
@@ -26,6 +29,13 @@
   // `path` is then the JSON beside it that Save writes, which is not
   // the name the user typed and not the name to show them first.
   let source = $state('')
+  // Edits the server holds that no file does. The server compares the
+  // model against what it last read or wrote, so an edit made from the
+  // console counts as much as one made on the canvas.
+  let dirty = $state(false)
+  // Whether the server has a step to undo or redo, for the Edit menu.
+  let canUndo = $state(false)
+  let canRedo = $state(false)
   // The species list, and whether it can still be changed -- the server
   // answers both with the document, because "can I edit this" is a fact
   // about the flowsheet (has it any units yet?) and not a preference.
@@ -39,10 +49,25 @@
   let catalog = $state({})
   let error = $state('')
   let note = $state('')
+  /**
+   * The note text that is a warning about an answer that came back
+   * anyway. Compared by text, so any later message is not shown as one.
+   */
+  let warnNote = $state(null)
+  /**
+   * Likewise for a plain success -- a clean solve, a save. Green, so the
+   * answer you wanted does not arrive in the colour of a caution; every
+   * other note is neutral text.
+   */
+  let okNote = $state(null)
   let selected = $state(null)
-  let busy = $state(false)
+  // Edits in flight, counted: a drag's layout post finishing in the middle
+  // of a long solve must not report the editor idle and re-enable Solve.
+  let inflight = $state(0)
+  let busy = $derived(inflight > 0)
   let context = $state({ source: '', names: [], error: null })
   let showContext = $state(false)
+  let showScript = $state(false)
   let result = $state(null)
   let pickers = $state(null)
   let sens = $state(null)
@@ -60,6 +85,8 @@
   // about the node that was clicked and that is not state anything else
   // needs --- and because an item's action must not change under it.
   let menu = $state(null)
+  // The menu bar's open menu, if any (bound from MenuBar).
+  let barMenu = $state(null)
   // Drawing preferences. Port names are off because on a wired flowsheet
   // the edge already carries the stream name, so labelling both ends of
   // every arc triples the text on screen to repeat itself; while wiring,
@@ -73,6 +100,17 @@
   // place. Empty until the answer arrives, which is why the links are
   // rendered conditionally rather than with a placeholder href.
   let about = $state({ version: '', links: {}, heartbeat: 15 })
+  let examples = $state([])
+  // The solution views: wire width by flow, and the variable wires are
+  // coloured by ('' for none). Preferences, so an edit that clears the
+  // solve does not clear them; they come back with the next solve.
+  let widthByFlow = $state(false)
+  let colorBy = $state('')
+  // Kept to a key this solve can colour by (see `validColorBy`).
+  $effect(() => {
+    const valid = validColorBy(result?.ok ? result : null, colorBy)
+    if (valid !== colorBy) colorBy = valid
+  })
   // Which file the File menu is writing out, if any. The menu closed
   // behind the click, so this is what stops a second click from asking
   // for the same file twice while the first is still being drawn.
@@ -86,6 +124,13 @@
   let stopped = $state(false)
   let armedTimer = null
   const ASKING = 'click \u201cReally quit?\u201d to stop the editor'
+  const ASKING_DIRTY = 'unsaved edits: click \u201cReally quit?\u201d to stop the editor and lose them'
+
+  /** Go ahead with something that replaces the model, if nothing is lost. */
+  function discard(what) {
+    return !dirty || window.confirm(
+      `The flowsheet has edits that are not saved. ${what} anyway, and lose them?`)
+  }
 
   /** A remembered preference, or the default if there is nothing to read. */
   function remember(key, fallback) {
@@ -124,15 +169,24 @@
    * saving the flowsheet is what it means wherever it is pressed --- and
    * because the browser's own answer to it, offering to save the page,
    * has never once been what anyone wanted here. Cmd-Enter is guarded:
-   * the console already ends a cell with it.
+   * the console already ends a cell with it. Cmd-Z is guarded too: in a
+   * text field it is the field's own undo, which is the one meant there.
    */
   function hotkey(event) {
-    if (menu) return       // the open menu owns the keyboard
+    // An open menu owns the keyboard, the bar's as much as the right-click
+    // one; and a panel that already answered the key has had its say.
+    if (menu || barMenu || event.defaultPrevented) return
     if (event.metaKey || event.ctrlKey) {
-      if (event.altKey || event.shiftKey) return
+      if (event.altKey) return
+      if (event.key.toLowerCase() === 'z' && !typing(event)) {
+        event.preventDefault()
+        if (!busy) event.shiftKey ? redo() : undo()
+        return
+      }
+      if (event.shiftKey) return
       if (event.key.toLowerCase() === 's') {
         event.preventDefault()
-        if (!busy && path) save()
+        if (!busy) (path ? save() : saveAs())
       } else if (event.key === 'Enter' && !typing(event)) {
         event.preventDefault()
         if (!busy) solve()
@@ -143,6 +197,7 @@
     const key = event.key.toLowerCase()
     if (key === 't') dark = !dark
     else if (key === 'l') portLabels = !portLabels
+    else if (key === 'w' && result?.ok) widthByFlow = !widthByFlow
   }
 
   async function load() {
@@ -150,6 +205,9 @@
     doc = payload.flowsheet
     path = payload.path
     source = payload.source ?? ''
+    dirty = !!payload.dirty
+    canUndo = !!payload.undo
+    canRedo = !!payload.redo
     species = payload.species ?? []
     speciesEditable = payload.editable !== false
     pending = payload.pending ?? []
@@ -222,6 +280,12 @@
   // Not in the `Promise.all` above: a failure here is a header without
   // links, which is a smaller thing than a flowsheet that would not
   // load, and it must not be reported as the latter.
+  // Beside `/api/about` for the same reason: no examples is an empty
+  // menu, not a flowsheet that failed to load.
+  get('/api/examples')
+    .then((e) => (examples = e.examples ?? []))
+    .catch(() => {})
+
   get('/api/about')
     .then((a) => {
       about = a
@@ -243,13 +307,13 @@
   async function quit() {
     if (!quitArmed) {
       quitArmed = true
-      note = ASKING
+      note = dirty ? ASKING_DIRTY : ASKING
       clearTimeout(armedTimer)
       armedTimer = setTimeout(() => {
         quitArmed = false
         // Only our own note: six seconds is long enough for something
         // else to have had something to say.
-        if (note === ASKING) note = ''
+        if (note === ASKING || note === ASKING_DIRTY) note = ''
       }, 6000)
       return
     }
@@ -277,7 +341,7 @@
   async function edit(run, { reload = true, stale = true } = {}) {
     error = ''
     note = ''
-    busy = true
+    inflight += 1
     try {
       const answer = await run()
       if (answer && answer.ok === false) note = answer.error
@@ -285,17 +349,33 @@
       // not a move; the panel has to drop them too, or it goes on
       // describing a flowsheet that no longer exists. The lever list
       // goes with them: its values are the ones the edit just changed.
-      if (stale) { result = null; sens = null; await loadPickers() }
+      // lastSolve goes too: the assistant reads it to decide whether the
+      // question is about a failed solve, and an edit has made it history.
+      if (stale) { result = null; sens = null; lastSolve = null; await loadPickers() }
       if (reload) await load()
       return answer
     } catch (e) {
-      error = String(e)
+      unreachable(e)
     } finally {
-      busy = false
+      inflight -= 1
     }
   }
 
+  /**
+   * A request that never got an answer. The canvas may already show the
+   * change (a drag, a deletion), and the server may never have had it:
+   * say both, and offer Reload.
+   */
+  function unreachable(e) {
+    error = `the server did not answer (${e.message ?? e}); ` +
+      'the canvas may not match it'
+  }
+
   const connect = (wire) => edit(() => post('/api/connect', wire))
+
+  // A feed dragged onto an inlet: the inlet takes the feed's name.
+  const attach = ({ stream, feed }) =>
+    edit(() => patch(`/api/stream/${encodeURIComponent(stream)}`, { name: feed }))
 
   async function add(operation, position) {
     const answer = await edit(() => post('/api/unit', { operation, position }))
@@ -317,12 +397,18 @@
 
   /** Apply the snippet, then reload: what it defines changes what builds. */
   async function applyContext(source) {
-    const answer = await edit(() => post('/api/code-context', { source }))
-    await loadContext()
-    // The palette's flags are answered against these bindings, so a
-    // `thermo` defined here un-blocks every unit that wanted one. Refetch
-    // rather than reason about which: the server already knows.
-    catalog = await get('/api/catalog')
+    // The follow-up fetches run inside the edit, so a server that drops
+    // between them is reported like any other, not left as an unhandled
+    // rejection with the panel half-updated.
+    const answer = await edit(async () => {
+      const answer = await post('/api/code-context', { source })
+      await loadContext()
+      // The palette's flags are answered against these bindings, so a
+      // `thermo` defined here un-blocks every unit that wanted one. Refetch
+      // rather than reason about which: the server already knows.
+      catalog = await get('/api/catalog')
+      return answer
+    })
     if (answer?.ok) note = built(answer, `${answer.names.length} names defined`)
     return answer
   }
@@ -348,12 +434,22 @@
    * same reason the code context refetches it.
    */
   async function setSpecies(names) {
-    const answer = await edit(() => post('/api/species', { species: names }))
+    const answer = await edit(async () => {
+      const answer = await post('/api/species', { species: names })
+      if (answer?.ok) catalog = await get('/api/catalog')
+      return answer
+    })
     if (answer?.ok) {
-      catalog = await get('/api/catalog')
       note = built(answer,
                    names.length ? `species: ${names.join(', ')}` : 'species cleared')
     }
+    return answer
+  }
+
+  /** The recycle solver's options; stored in the file, so a reload shows them. */
+  async function setSolver(options) {
+    const answer = await edit(() => post('/api/solver', options))
+    if (answer?.ok) note = 'solver options changed: solve again to use them'
     return answer
   }
 
@@ -428,7 +524,10 @@
   }
 
   async function applyDeletions(requests) {
-    if (!requests.length) return load()   // redraw whatever was taken off
+    if (!requests.length) {   // redraw whatever was taken off
+      try { await load() } catch (e) { unreachable(e) }
+      return
+    }
     await edit(async () => {
       for (const r of requests) {
         const answer = await send(r.method, r.path, r.body)
@@ -446,8 +545,11 @@
     // Adopted locally too, so the next reload does not snap the node back
     // to where the document still says it is.
     doc = { ...doc, view: { ...doc.view, nodes: { ...doc.view?.nodes, ...moved } } }
-    edit(() => post('/api/layout', { nodes: moved }),
-         { reload: false, stale: false })
+    edit(async () => {
+      const answer = await post('/api/layout', { nodes: moved })
+      if (answer?.ok) { dirty = true; canUndo = true; canRedo = false }
+      return answer
+    }, { reload: false, stale: false })
   }
 
   const solve = () =>
@@ -459,15 +561,14 @@
       if (answer.ok) {
         showResults = true
         await loadPickers()
-        const held = answer.pending?.length
-          // What was solved is not what is on the canvas. Said here
-          // rather than left to the picture, because the numbers in the
-          // results panel look exactly the same either way.
-          ? ` (${answer.pending.join(', ')} not built, and not in it)`
-          : ''
+        const warnings = answer.audit?.warnings ?? []
         note = (answer.converged === false
           ? 'solved, but the tear residual did not reach the tolerance'
-          : `solved: ${Object.keys(answer.streams).length} streams`) + held
+          : warnings.length
+            ? `solved, but ${warnings[0]}`
+            : `solved: ${Object.keys(answer.streams).length} streams`)
+        warnNote = answer.converged === false || warnings.length ? note : null
+        okNote = warnNote ? null : note
       } else {
         note = answer.error
       }
@@ -480,6 +581,7 @@
       const answer = await post('/api/sensitivity', ask)
       sens = answer.ok ? answer : null
       if (!answer.ok) note = answer.error
+      else if (answer.warning) warnNote = note = answer.warning
       return null
     }, { reload: false, stale: false })
 
@@ -487,8 +589,83 @@
     edit(async () => {
       const answer = await post('/api/save')
       note = answer.ok ? `saved to ${shortPath(answer.path)}` : answer.error
+      if (answer.ok) { dirty = false; okNote = note }
       return null
     }, { reload: false, stale: false })
+
+  /**
+   * Save under a path the user types, and keep editing that file.
+   *
+   * A file already there is replaced only after a second question: the
+   * path is typed, and a typo should cost a dialog, not a flowsheet.
+   */
+  function saveAs() {
+    const where = window.prompt('Save the flowsheet as (a .json path):',
+                                path || 'flowsheet.json')
+    if (!where) return
+    return edit(async () => {
+      let answer = await post('/api/save', { path: where })
+      if (!answer.ok && answer.exists) {
+        if (!window.confirm(`${answer.path} already exists. Replace it?`)) {
+          note = 'not saved'
+          return null
+        }
+        answer = await post('/api/save', { path: where, overwrite: true })
+      }
+      if (answer.ok) {
+        note = `saved to ${shortPath(answer.path)}`
+        path = answer.path
+        source = ''
+        dirty = false
+        okNote = note
+      } else {
+        note = answer.error
+      }
+      return null
+    }, { reload: false, stale: false })
+  }
+
+  /**
+   * A whole new flowsheet, so everything that described the old one has
+   * to go: the code context, and the palette's flags, which are answered
+   * against its bindings, as well as the canvas.
+   */
+  async function adopted(answer) {
+    selected = null
+    await loadContext()
+    catalog = await get('/api/catalog')
+    return answer
+  }
+
+  function openFile() {
+    const where = window.prompt(
+      'Open a flowsheet (.json) or a difflow script (.py), by path:', '')
+    if (!where || !discard('Open another file')) return
+    return edit(async () => {
+      const answer = await post('/api/open', { path: where })
+      return answer.ok ? adopted(answer) : answer
+    })
+  }
+
+  /**
+   * One step back or forward through the server's history. The code
+   * context can be part of the step, so it and the palette's flags are
+   * read again along with the canvas.
+   */
+  const step = (verb) =>
+    edit(async () => {
+      const answer = await post(`/api/${verb}`)
+      if (answer.ok) {
+        await loadContext()
+        catalog = await get('/api/catalog')
+      }
+      return answer
+    })
+  const undo = () => step('undo')
+  const redo = () => step('redo')
+
+  const newFile = () =>
+    discard('Start a new flowsheet') && edit(async () => adopted(await post('/api/new')))
 
   // The canvas node says what is selected; the document says what it
   // holds and the catalog says what those parameters mean. The inspector
@@ -543,26 +720,46 @@
     contextError: !!context.error,
     portLabels,
     dark,
+    solved: !!result?.ok,
+    widthByFlow,
+    colorBy,
+    canUndo,
+    canRedo,
     panels: {
       results: showResults,
       context: showContext,
+      script: showScript,
       console: showConsole,
       planning: showPlanning,
       assistant: showAssistant,
     },
     links: about.links ?? {},
+    examples,
     actions: {
       save,
       reload: () => edit(load),
+      // A whole new flowsheet: see `adopted`.
+      example: (key) => discard('Open the example') && edit(async () => {
+        const answer = await post('/api/examples/open', { key })
+        return answer.ok ? adopted(answer) : answer
+      }),
+      saveAs,
+      openFile,
+      undo,
+      redo,
+      newFile,
       export: runExport,
       quit,
       results: () => (showResults = !showResults),
       context: () => (showContext = !showContext),
+      script: () => (showScript = !showScript),
       console: () => (showConsole = !showConsole),
       planning: () => (showPlanning = !showPlanning),
       assistant: () => (showAssistant = !showAssistant),
       portLabels: () => (portLabels = !portLabels),
       dark: () => (dark = !dark),
+      widthByFlow: () => (widthByFlow = !widthByFlow),
+      colorBy: () => (colorBy = colorBy ? '' : 'T'),
       open: (url) => window.open(url, '_blank', 'noopener,noreferrer'),
       // In this tab, as it has always been: the classic editor is the
       // other half of the same session, not a page about difflow.
@@ -573,6 +770,10 @@
 
 <svelte:window
   onkeydown={hotkey}
+  onbeforeunload={(e) => {
+    // Closing the last tab stops the server, and the edits with it.
+    if (dirty && !stopped) { e.preventDefault(); e.returnValue = '' }
+  }}
   onpagehide={(e) => alive.farewell({ persisted: e.persisted })}
   onpageshow={() => { if (!stopped) alive.ping() }}
 />
@@ -580,15 +781,19 @@
 <header>
   <h1>difflow</h1>
   {#if about.version}<span class="version">{about.version}</span>{/if}
-  <MenuBar {menus} />
+  <MenuBar {menus} bind:open={barMenu} />
   <span
     class="path"
     title={source ? `${source}\nsaves to ${path}` : path}
-  >{shortPath(source || path) || 'no file'}</span>
+  >{shortPath(source || path) || 'no file'}{#if dirty}<span
+      class="dirty" title="edited since it was last saved"> •</span>{/if}</span>
   <Species {species} editable={speciesEditable} {busy} onapply={setSpecies} />
   <span class="summary">{summary}</span>
   <span class="spacer"></span>
-  {#if note}<span class="note">{note}</span>{/if}
+  <!-- One line, cut short with the whole of it on hover: a long error
+       used to wrap the header to three lines and push the canvas down. -->
+  {#if note}<span class="note" class:warn={note === warnNote}
+    class:ok={note === okNote} title={note}>{note}</span>{/if}
   <!-- Only while it is armed. Quit is a row in the File menu, and the
        menu shuts behind the click; this is the second half of the
        question, asked where the answer can be seen. -->
@@ -618,13 +823,27 @@
   <Palette {catalog} ondrop={(op) => add(op, null)} />
 
   <div class="stage">
-    {#if error}
+    {#if error && !doc}
       <p class="error">{error}</p>
     {:else if !doc}
       <!-- Only before the first fetch answers. An editor opened with no
            file gets an empty flowsheet, not no flowsheet. -->
       <p class="empty">Loading&hellip;</p>
     {:else}
+      {#if error}
+        <!-- A request that failed (a dropped connection, a server that
+             stopped) said nothing about the flowsheet, so the canvas
+             stays: blanking it lost the work on screen for a network
+             blip. The banner offers to fetch the model again. -->
+        <div class="banner" role="alert">
+          <span>{error}</span>
+          <button type="button" onclick={async () => {
+            error = ''
+            try { await load() } catch (e) { error = String(e) }
+          }}>Reload</button>
+          <button type="button" aria-label="Dismiss" onclick={() => (error = '')}>&times;</button>
+        </div>
+      {/if}
       <Canvas
         document={doc}
         positions={doc.view?.nodes ?? null}
@@ -633,11 +852,16 @@
         {portLabels}
         {dark}
         onconnect={connect}
+        onattach={attach}
         ondeletions={applyDeletions}
         onmove={move}
         onadd={add}
         {flows}
         {tints}
+        solve={result?.ok ? result : null}
+        {widthByFlow}
+        {colorBy}
+        oncolorby={(key) => (colorBy = key)}
         onselect={(node) => (selected = node)}
         onmenu={openMenu}
         onrefuse={(why) => (note = why)}
@@ -677,6 +901,8 @@
     levers={pickers}
     sensitivity={sens}
     {busy}
+    solver={doc ? solverOptions(doc.view) : null}
+    onsolver={setSolver}
     onsensitivity={differentiate}
     onclose={() => (showResults = false)}
   />
@@ -708,6 +934,10 @@
   />
 {/if}
 
+{#if showScript}
+  <ScriptView {doc} onclose={() => (showScript = false)} />
+{/if}
+
 {#if showContext}
   <CodeContext
     source={context.source}
@@ -715,6 +945,10 @@
     error={context.error ?? ''}
     {busy}
     onapply={applyContext}
+    onsave={async (text) => {
+      if (text !== null && !(await applyContext(text))?.ok) return
+      await (path ? save() : saveAs())
+    }}
     onclose={() => (showContext = false)}
   />
 {/if}
@@ -731,9 +965,20 @@
   h1 { font-size: 0.95rem; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
   .path, .summary, .version { color: var(--ink-soft); font-size: 0.8rem; }
   /* Already shortened, and never the reason the header is two lines tall. */
-  .path { white-space: nowrap; }
+  .path, .summary { white-space: nowrap; }
+  .dirty { color: var(--accent); }
   .version { font-variant-numeric: tabular-nums; opacity: 0.75; }
-  .note { color: var(--accent); font-size: 0.8rem; }
+  .note {
+    color: var(--ink);
+    font-size: 0.8rem;
+    min-width: 0;
+    flex: 0 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .note.warn { color: var(--bad); }
+  .note.ok { color: var(--good); }
   .spacer { flex: 1; }
   /* It is on screen only to be answered, and it ends the process. */
   .quit {
@@ -759,7 +1004,15 @@
   .stopped h2 { margin: 0; font-size: 1rem; color: var(--ink); }
   .stopped p { margin: 0; font-size: 0.85rem; }
   main { display: flex; flex: 1; min-height: 0; }
-  .stage { flex: 1; min-width: 0; }
+  .stage { flex: 1; min-width: 0; position: relative; }
   .error, .empty { padding: 1.5rem; color: var(--ink-soft); }
   .error { color: var(--bad); }
+  .banner {
+    position: absolute; top: 0.5rem; left: 50%; transform: translateX(-50%);
+    z-index: 5; display: flex; gap: 0.5rem; align-items: center;
+    max-width: calc(100% - 2rem); padding: 0.4rem 0.6rem;
+    background: var(--surface); color: var(--bad);
+    border: 1px solid var(--bad); border-radius: 4px;
+  }
+  .banner span { overflow-wrap: anywhere; }
 </style>
