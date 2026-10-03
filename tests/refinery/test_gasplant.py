@@ -240,6 +240,22 @@ class TestAmine:
 WET_GAS = ["hydrogen", "methane", "ethane", "propane", "n_butane", "n_pentane"]
 
 
+def test_solve_T_converges():
+    """The compressor's temperature solve converges, and carries the
+    implicit derivative. Its Newton slope was ``grad(stop_gradient(fn))`` --
+    zero -- so the loop bounced between half and twice the guess and the
+    answer was one final Newton step (found against DWSIM:
+    ``test_dwsim_gasplant.py``)."""
+    from difflow_refinery.gasplant.units import _solve_T
+
+    fn = lambda T, a: a * T ** 3 + jnp.log(T)  # noqa: E731
+    T = _solve_T(lambda t: fn(t, 2.0), 2.0 * 350.0 ** 3 + np.log(350.0), 300.0)
+    assert float(T) == pytest.approx(350.0, rel=1e-13)
+    # implicit derivative dT/da = -(T^3) / (3 a T^2 + 1/T)
+    g = jax.grad(lambda a: _solve_T(lambda t: fn(t, a), 2.0 * 350.0 ** 3 + np.log(350.0), 300.0))(2.0)
+    assert float(g) == pytest.approx(-350.0 ** 3 / (6.0 * 350.0 ** 2 + 1 / 350.0), rel=1e-8)
+
+
 @pytest.mark.slow
 class TestCompressor:
     @pytest.fixture(scope="class")
