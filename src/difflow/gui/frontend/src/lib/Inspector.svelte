@@ -108,6 +108,23 @@
   })
 
   /**
+   * The arguments the flowsheet passes to the operation on every call
+   * (`Unit.params`): a Splitter's `split_frac`, a PFR's
+   * `volumetric_flow`. They are not `Params` fields, and without a place
+   * to type them a unit dropped from the palette could be wired and
+   * never solved.
+   */
+  let callFields = $derived.by(() => {
+    if (!unit) return []
+    const values = unit.extra_params ?? {}
+    return (spec?.call_parameters ?? []).map((field) => {
+      const value = values[field.name] ?? null
+      return { name: field.name, value, spec: field, call: true,
+               ...classify(value, field) }
+    })
+  })
+
+  /**
    * The feed form: what a stream carries, if anything feeds it.
    *
    * The one part of a flowsheet that cannot be built by dropping and
@@ -219,9 +236,10 @@
   function commitParam(field, raw) {
     const value = parse(raw, field.kind)
     if (value === field.value) return
+    const key = field.call ? 'call_params' : 'params'
     onedit(() =>
       patch(`/api/unit/${encodeURIComponent(unit.name)}`, {
-        params: { [field.name]: value },
+        [key]: { [field.name]: value },
       }),
     )
   }
@@ -492,12 +510,7 @@
       </p>
     {/if}
 
-    <h3>parameters</h3>
-    {#if !fields.length}
-      <p class="hint">This operation takes none.</p>
-    {:else}
-      <dl class="params">
-        {#each fields as field (field.name)}
+    {#snippet row(field)}
           <dt title={field.spec.type ?? ''}>
             {label(field.spec)}
             {#if field.spec.required}<span class="req" title="required">*</span>{/if}
@@ -521,6 +534,25 @@
               <span class="help">{field.spec.description}</span>
             {/if}
           </dd>
+    {/snippet}
+
+    <h3>parameters</h3>
+    {#if !fields.length}
+      <p class="hint">This operation takes none.</p>
+    {:else}
+      <dl class="params">
+        {#each fields as field (field.name)}
+          {@render row(field)}
+        {/each}
+      </dl>
+    {/if}
+
+    {#if callFields.length}
+      <h3>call parameters</h3>
+      <p class="hint">Passed to the unit each time the flowsheet runs it.</p>
+      <dl class="params">
+        {#each callFields as field (field.name)}
+          {@render row(field)}
         {/each}
       </dl>
     {/if}

@@ -440,6 +440,50 @@ THERMO_SOURCE = (
 )
 
 
+class TestCallParameters:
+    """Arguments a unit takes each time it runs, not when it is built.
+
+    A Splitter's ``split_frac`` is an argument of ``__call__``; difflow keeps
+    it on ``Unit.params``. A palette Splitter that could not be given one
+    could never solve.
+    """
+
+    def test_the_catalog_lists_them(self, session):
+        schema = session._schema(session.add_unit("Splitter")["name"])
+        names = {p["name"]: p for p in schema["call_parameters"]}
+        assert names["split_frac"]["required"] is True
+
+    def test_a_palette_splitter_has_both_outlets(self, session):
+        name = session.add_unit("Splitter")["name"]
+        assert len(edit.unit(session.flowsheet, name).outlet_names) == 2
+
+    def test_they_are_set_and_removed_through_patch_unit(self, session):
+        name = session.add_unit("Splitter")["name"]
+        answer = session.patch_unit(name, {"call_params": {"split_frac": 0.7}})
+        assert answer["ok"], answer
+        assert edit.unit(session.flowsheet, name).params == {"split_frac": 0.7}
+        assert session.patch_unit(
+            name, {"call_params": {"split_frac": None}})["ok"]
+        assert edit.unit(session.flowsheet, name).params == {}
+
+    def test_an_unknown_one_is_refused(self, session):
+        name = session.add_unit("Splitter")["name"]
+        answer = session.patch_unit(name, {"call_params": {"spilt_frac": 0.7}})
+        assert answer["ok"] is False
+        assert "spilt_frac" in answer["error"]
+        assert edit.unit(session.flowsheet, name).params == {}
+
+    def test_a_missing_required_one_stops_the_solve_and_says_where(
+            self, session):
+        name = session.add_unit("Splitter")["name"]
+        session.connect("flash", "liq", name,
+                        edit.unit(session.flowsheet, name).inlet_names[0])
+        answer = session.solve()
+        assert answer["ok"] is False
+        assert name in answer["error"] and "split_frac" in answer["error"]
+        assert "call parameters" in answer["error"]
+
+
 class TestPendingUnits:
     """A drop that cannot be built yet lands anyway, in red.
 

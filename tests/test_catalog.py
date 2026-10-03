@@ -163,6 +163,24 @@ class TestPorts:
             assert ports.inlets == [], name
             assert not ports.variadic, name
 
+    def test_an_unknown_count_can_still_suggest_a_start(self, cat):
+        """The count stays unknown; the editor gets a number to draw."""
+        assert cat["Splitter"].ports.default_outlets == 2
+        assert cat["Splitter"].to_dict()["ports"]["default_outlets"] == 2
+
+    def test_call_time_arguments_are_listed(self, cat):
+        """What the flowsheet passes on every call (``Unit.params``).
+
+        Not ``Params`` fields, and without them a palette unit could be
+        wired and never solved.
+        """
+        split = {p.name: p for p in cat["Splitter"].call_parameters}
+        assert split["split_frac"].required
+        assert split["split_frac"].description
+        pfr = {p.name for p in cat["PFR"].call_parameters}
+        assert "volumetric_flow" in pfr
+        assert cat["Mixer"].call_parameters == []
+
     def test_the_ports_left_unknown_are_the_ones_that_cannot_be_known(self, cat):
         """Guard against the count creeping back up.
 

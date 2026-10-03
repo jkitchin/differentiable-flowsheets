@@ -728,7 +728,9 @@ class FlowsheetSession:
         """Set parameters, rename, or move one unit.
 
         ``changes`` may carry ``params`` (a partial dict, merged over
-        what the unit has), ``name`` (a rename) and ``position``
+        what the unit has), ``call_params`` (the same, for the arguments
+        passed to the operation on every call --- ``Unit.params``; a
+        ``None`` value removes one), ``name`` (a rename) and ``position``
         (``{"x": .., "y": ..}``), in any combination. Anything else is
         refused by name rather than ignored: an editor that drops an
         edit on the floor is worse than one that rejects it.
@@ -736,11 +738,13 @@ class FlowsheetSession:
         from difflow.gui import edit
 
         def apply() -> dict:
-            unknown = sorted(set(changes) - {"params", "name", "position"})
+            unknown = sorted(set(changes) - {"params", "call_params", "name",
+                                             "position"})
             if unknown:
                 raise edit.EditError(
                     f"cannot patch {', '.join(repr(u) for u in unknown)}; "
-                    "a unit takes 'params', 'name' and 'position'."
+                    "a unit takes 'params', 'call_params', 'name' and "
+                    "'position'."
                 )
             u = edit.unit(self.flowsheet, name)
             params = changes.get("params")
@@ -748,6 +752,11 @@ class FlowsheetSession:
                 if not isinstance(params, dict):
                     raise edit.EditError("'params' must be an object")
                 u.operation = edit.rebuild(u.operation, name, params)
+            call_params = changes.get("call_params")
+            if call_params:
+                u.params = edit.call_params(
+                    u.params, call_params, name,
+                    self._schema(name).get("call_parameters", []))
             new_name = changes.get("name")
             if new_name and new_name != name:
                 self._rename_unit(u, new_name)
@@ -1178,7 +1187,11 @@ class FlowsheetSession:
         )
 
     def _ports(self, name: str) -> dict:
-        """The port spec of the class behind an existing unit.
+        """The port spec of the class behind an existing unit."""
+        return self._schema(name)["ports"]
+
+    def _schema(self, name: str) -> dict:
+        """The catalog schema of the class behind an existing unit.
 
         An unfinished unit has a stand-in where its operation goes, and
         describing *that* would report a class with no ports at all --- so
@@ -1196,8 +1209,8 @@ class FlowsheetSession:
                 raise edit.EditError(
                     f"{operation.operation!r} is not a registered operation"
                 )
-            return describe_class(info.cls).to_dict()["ports"]
-        return describe_class(type(operation)).to_dict()["ports"]
+            return describe_class(info.cls).to_dict()
+        return describe_class(type(operation)).to_dict()
 
     def rename_stream(self, old: str, new: str) -> dict:
         """Rename one stream everywhere it appears.
@@ -1284,6 +1297,15 @@ class FlowsheetSession:
                 "keeping the wiring it already has."
             )
             return {"ok": False, "error": self.solve_error, "pending": sorted(self.pending)}
+        # A required call argument that was never set raises "missing 1
+        # required positional argument" from inside the solve, naming
+        # neither the unit nor where to set it.
+        missing = self._missing_call_params()
+        if missing:
+            self.solve_error = "; ".join(
+                f"{unit} needs {', '.join(names)}" for unit, names in missing.items()
+            ) + ". Set them under 'call parameters' in the inspector."
+            return {"ok": False, "error": self.solve_error}
         try:
             with self._lock:
                 # The editor renders the verdict itself, in red, from the
@@ -1319,6 +1341,20 @@ class FlowsheetSession:
             # as being about the one being drawn.
             "pending": sorted(self.pending),
         }
+
+    def _missing_call_params(self) -> dict[str, list[str]]:
+        """Required ``__call__`` arguments no unit has a value for."""
+        missing = {}
+        for u in self.flowsheet.units:
+            try:
+                specs = self._schema(u.name).get("call_parameters", [])
+            except Exception:  # noqa: BLE001 -- the solve will say what
+                continue
+            names = [p["name"] for p in specs
+                     if p["required"] and p["name"] not in (u.params or {})]
+            if names:
+                missing[u.name] = names
+        return missing
 
     def _solve_error(self, exc: Exception) -> str:
         """A solve failure, translated where the raw message names nothing.

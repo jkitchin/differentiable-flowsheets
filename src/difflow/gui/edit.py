@@ -414,6 +414,36 @@ def rebuild(operation, unit_name: str, updates: dict):
         raise EditError(str(exc)) from exc
 
 
+def call_params(current: dict, updates: dict, unit_name: str,
+                specs: list[dict]) -> dict:
+    """``Unit.params`` with ``updates`` merged in, checked against the
+    operation's ``__call__``.
+
+    These are the arguments a flowsheet passes to the operation every
+    time it runs it --- a Splitter's ``split_frac`` --- and a unit dropped
+    from the palette had no way to get one: the solve raised ``missing 1
+    required positional argument``. A ``None`` removes the entry, so the
+    call falls back to the argument's default.
+    """
+    if not isinstance(updates, dict):
+        raise EditError("'call_params' must be an object")
+    known = {spec["name"] for spec in specs}
+    unknown = sorted(set(updates) - known)
+    if unknown:
+        takes = ", ".join(sorted(known)) or "none"
+        raise EditError(
+            f"{unit_name!r} is not called with "
+            f"{', '.join(repr(u) for u in unknown)}; it takes {takes}."
+        )
+    merged = dict(current or {})
+    for key, value in updates.items():
+        if value is None:
+            merged.pop(key, None)
+        else:
+            merged[key] = value
+    return merged
+
+
 # ---------------------------------------------------------------------
 # Mutations
 # ---------------------------------------------------------------------
@@ -618,7 +648,8 @@ def default_ports(name: str, ports: dict, taken) -> tuple[list[str], list[str]]:
     A variadic or unannotated port count reports ``None``. A *variadic*
     unit gets two inlets, because one is what it means to not be there:
     a ``Mixer`` mixing one stream is a piece of pipe. An unannotated one
-    gets a single port, since nothing says it wants more.
+    gets a single port, since nothing says it wants more --- unless its
+    class names a ``default_outlets`` (a Splitter's two).
 
     Either way the count is only a starting point --- :func:`add_inlet`
     and :func:`remove_inlet` are how it changes afterwards.
@@ -630,7 +661,8 @@ def default_ports(name: str, ports: dict, taken) -> tuple[list[str], list[str]]:
         s = unique(f"{name}_in" if i == 0 else f"{name}_in{i + 1}", seen)
         seen.add(s)
         inlets.append(s)
-    for i in range(max(1, ports.get("n_outlets") or 1)):
+    n_outlets = ports.get("n_outlets") or ports.get("default_outlets") or 1
+    for i in range(max(1, n_outlets)):
         s = unique(f"{name}_out" if i == 0 else f"{name}_out{i + 1}", seen)
         seen.add(s)
         outlets.append(s)
