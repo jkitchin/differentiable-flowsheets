@@ -353,13 +353,20 @@
       if (reload) await load()
       return answer
     } catch (e) {
-      // The canvas may already show the change (a drag, a deletion), and
-      // the server may never have had it: say both, and offer Reload.
-      error = `the server did not answer (${e.message ?? e}); ` +
-        'the canvas may not match it'
+      unreachable(e)
     } finally {
       inflight -= 1
     }
+  }
+
+  /**
+   * A request that never got an answer. The canvas may already show the
+   * change (a drag, a deletion), and the server may never have had it:
+   * say both, and offer Reload.
+   */
+  function unreachable(e) {
+    error = `the server did not answer (${e.message ?? e}); ` +
+      'the canvas may not match it'
   }
 
   const connect = (wire) => edit(() => post('/api/connect', wire))
@@ -384,12 +391,18 @@
 
   /** Apply the snippet, then reload: what it defines changes what builds. */
   async function applyContext(source) {
-    const answer = await edit(() => post('/api/code-context', { source }))
-    await loadContext()
-    // The palette's flags are answered against these bindings, so a
-    // `thermo` defined here un-blocks every unit that wanted one. Refetch
-    // rather than reason about which: the server already knows.
-    catalog = await get('/api/catalog')
+    // The follow-up fetches run inside the edit, so a server that drops
+    // between them is reported like any other, not left as an unhandled
+    // rejection with the panel half-updated.
+    const answer = await edit(async () => {
+      const answer = await post('/api/code-context', { source })
+      await loadContext()
+      // The palette's flags are answered against these bindings, so a
+      // `thermo` defined here un-blocks every unit that wanted one. Refetch
+      // rather than reason about which: the server already knows.
+      catalog = await get('/api/catalog')
+      return answer
+    })
     if (answer?.ok) note = built(answer, `${answer.names.length} names defined`)
     return answer
   }
@@ -415,9 +428,12 @@
    * same reason the code context refetches it.
    */
   async function setSpecies(names) {
-    const answer = await edit(() => post('/api/species', { species: names }))
+    const answer = await edit(async () => {
+      const answer = await post('/api/species', { species: names })
+      if (answer?.ok) catalog = await get('/api/catalog')
+      return answer
+    })
     if (answer?.ok) {
-      catalog = await get('/api/catalog')
       note = built(answer,
                    names.length ? `species: ${names.join(', ')}` : 'species cleared')
     }
@@ -502,7 +518,10 @@
   }
 
   async function applyDeletions(requests) {
-    if (!requests.length) return load()   // redraw whatever was taken off
+    if (!requests.length) {   // redraw whatever was taken off
+      try { await load() } catch (e) { unreachable(e) }
+      return
+    }
     await edit(async () => {
       for (const r of requests) {
         const answer = await send(r.method, r.path, r.body)
