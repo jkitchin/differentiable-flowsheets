@@ -4,11 +4,11 @@
  * JSON has no literal for the non-finite floats, and `JSON.parse` rejects
  * the `Infinity` that Python's `json` writes -- which is the common case,
  * not an exotic one: `mass_action_kinetics` puts `inf` in `K_eq` for every
- * irreversible reaction. So they cross the wire as strings and are
- * restored here, matching `_json_safe` / `_json_restore` in server.py.
+ * irreversible reaction. So they cross the wire as `{"$float": "inf"}`
+ * tags and are restored here, matching `_json_safe` / `_json_restore` in server.py.
  */
 
-const NON_FINITE = { Infinity: Infinity, '-Infinity': -Infinity, NaN: NaN }
+const NON_FINITE = { inf: Infinity, '-inf': -Infinity, nan: NaN }
 
 /**
  * The token the server put in the page it served, sent back on every
@@ -24,15 +24,20 @@ const NON_FINITE = { Infinity: Infinity, '-Infinity': -Infinity, NaN: NaN }
 const TOKEN =
   globalThis.document?.querySelector('meta[name="difflow-token"]')?.content ?? '' 
 
-/** Undo the server's `_json_safe`. */
+/**
+ * Undo the server's `_json_safe`: a `{"$float": "inf"}` tag, and only
+ * that, becomes the number. Strings are left alone whatever they spell
+ * -- the bare-string encoding this replaced turned a unit named "NaN"
+ * into a number.
+ */
 export function restore(value) {
-  if (typeof value === 'string') {
-    return Object.prototype.hasOwnProperty.call(NON_FINITE, value)
-      ? NON_FINITE[value]
-      : value
-  }
   if (Array.isArray(value)) return value.map(restore)
   if (value && typeof value === 'object') {
+    const keys = Object.keys(value)
+    if (keys.length === 1 && keys[0] === '$float' &&
+        Object.prototype.hasOwnProperty.call(NON_FINITE, value.$float)) {
+      return NON_FINITE[value.$float]
+    }
     const out = {}
     for (const [k, v] of Object.entries(value)) out[k] = restore(v)
     return out
@@ -43,9 +48,9 @@ export function restore(value) {
 /** Match the server's `_json_restore` on the way back. */
 export function safe(value) {
   if (typeof value === 'number') {
-    if (Number.isNaN(value)) return 'NaN'
-    if (value === Infinity) return 'Infinity'
-    if (value === -Infinity) return '-Infinity'
+    if (Number.isNaN(value)) return { $float: 'nan' }
+    if (value === Infinity) return { $float: 'inf' }
+    if (value === -Infinity) return { $float: '-inf' }
     return value
   }
   if (Array.isArray(value)) return value.map(safe)

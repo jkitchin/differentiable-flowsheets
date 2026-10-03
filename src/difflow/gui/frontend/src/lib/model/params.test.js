@@ -7,6 +7,7 @@
  * the parsing are tested here and the component stays thin.
  */
 
+import { restore, safe } from '../api.js'
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
@@ -75,11 +76,24 @@ test('an emptied field is cleared, not set to zero', () => {
   assert.equal(parse('', 'text'), null)
 })
 
-test('a non-finite float survives as the string the server restores', () => {
+test('a non-finite float is parsed as the number', () => {
   // K_eq is `inf` for every irreversible reaction, so this is the
-  // common case rather than an exotic one.
-  assert.equal(parse('Infinity', 'number'), 'Infinity')
+  // common case rather than an exotic one. `safe` tags it for the wire.
+  assert.equal(parse('Infinity', 'number'), Infinity)
   assert.equal(parse('1e6', 'number'), 1e6)
+  assert.deepEqual(safe({ K_eq: [Infinity, 1] }),
+                   { K_eq: [{ $float: 'inf' }, 1] })
+})
+
+test('the wire tags round trip, and a string is never taken for one', () => {
+  const value = { a: [1, Infinity, -Infinity], b: { c: 2 } }
+  assert.deepEqual(restore(safe(value)), value)
+  assert.ok(Number.isNaN(restore(safe({ x: NaN })).x))
+  // A unit, species or console line named NaN used to come back a number.
+  const text = { name: 'NaN', notes: ['Infinity', '-Infinity'] }
+  assert.deepEqual(restore(text), text)
+  // A tag with company is a real object, not a float.
+  assert.deepEqual(restore({ $float: 'inf', other: 1 }), { $float: 'inf', other: 1 })
 })
 
 test('a number field that is given a word refuses it', () => {
@@ -88,8 +102,8 @@ test('a number field that is given a word refuses it', () => {
   assert.throws(() => parse('warm', 'number'), ParseError)
   assert.throws(() => parse('abc', 'number'), /'abc' is not a number/)
   assert.throws(() => parse('NaN', 'number'), ParseError)
-  assert.equal(parse('-inf', 'number'), '-Infinity')
-  assert.equal(parse('inf', 'number'), 'Infinity')
+  assert.equal(parse('-inf', 'number'), -Infinity)
+  assert.equal(parse('inf', 'number'), Infinity)
 })
 
 test('text already in a number field still gets a number box', () => {

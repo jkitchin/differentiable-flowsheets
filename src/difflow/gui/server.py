@@ -111,22 +111,21 @@ def mint_token() -> str:
 #: writes them as ``Infinity`` / ``NaN``, which the browser's
 #: ``JSON.parse`` rejects outright --- and this is the *common* case,
 #: not an exotic one: :func:`~difflow.kinetics.mass_action_kinetics`
-#: puts ``inf`` in ``K_eq`` for every irreversible reaction. So they go
-#: over the wire as strings and are restored on the way back.
-NON_FINITE = {"Infinity": float("inf"), "-Infinity": float("-inf"),
-              "NaN": float("nan")}
+#: puts ``inf`` in ``K_eq`` for every irreversible reaction. So they
+#: cross the wire in the serializer's own tag, ``{"$float": "inf"}``.
+#: They used to travel as the bare strings ``"Infinity"`` and ``"NaN"``,
+#: and every string that spelled one was turned into a float on the way
+#: in --- a species, a unit, a stream or a line of console output named
+#: ``NaN`` among them. A tag cannot be mistaken for text.
+NON_FINITE = {"inf": float("inf"), "-inf": float("-inf"), "nan": float("nan")}
 
 
 def _json_safe(value: Any) -> Any:
-    """Rewrite non-finite floats as the strings in :data:`NON_FINITE`."""
+    """Rewrite non-finite floats as ``{"$float": ...}`` tags."""
+    from difflow.serialize import _encode_nonfinite
+
     if isinstance(value, float):
-        if value != value:
-            return "NaN"
-        if value == float("inf"):
-            return "Infinity"
-        if value == float("-inf"):
-            return "-Infinity"
-        return value
+        return _encode_nonfinite(value)
     if isinstance(value, dict):
         return {k: _json_safe(v) for k, v in value.items()}
     if isinstance(value, list):
@@ -135,16 +134,13 @@ def _json_safe(value: Any) -> Any:
 
 
 def _json_restore(value: Any) -> Any:
-    """Undo :func:`_json_safe`.
+    """Undo :func:`_json_safe`. Strings are left alone, whatever they say."""
+    from difflow.serialize import NONFINITE_TAG
 
-    A string parameter whose value is literally ``"NaN"`` would be
-    turned into a float here. No unit declares one, and the alternative
-    --- an out-of-band encoding threaded through the whole document ---
-    costs more than the case is worth.
-    """
-    if isinstance(value, str):
-        return NON_FINITE.get(value, value)
     if isinstance(value, dict):
+        if (len(value) == 1 and isinstance(value.get(NONFINITE_TAG), str)
+                and value[NONFINITE_TAG] in NON_FINITE):
+            return NON_FINITE[value[NONFINITE_TAG]]
         return {k: _json_restore(v) for k, v in value.items()}
     if isinstance(value, list):
         return [_json_restore(v) for v in value]

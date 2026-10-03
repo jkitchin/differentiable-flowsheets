@@ -118,8 +118,8 @@ export function shape(value) {
  *
  * `isFinite`, not `!isNaN`: a field may legitimately hold `Infinity`
  * (`mass_action_kinetics` writes it into `K_eq` for every irreversible
- * reaction), and it travels as the string the server knows how to
- * restore rather than as a number JSON cannot write.
+ * reaction). It is returned as the number; `safe` in api.js tags it
+ * for the wire, which JSON has no literal for.
  */
 export function parse(raw, kind) {
   const text = String(raw).trim()
@@ -135,8 +135,8 @@ export function parse(raw, kind) {
   if (kind === 'number') {
     const n = Number(text)
     if (Number.isFinite(n)) return n
-    if (/^\+?(inf|infinity)$/i.test(text)) return 'Infinity'
-    if (/^-(inf|infinity)$/i.test(text)) return '-Infinity'
+    if (/^\+?(inf|infinity)$/i.test(text)) return Infinity
+    if (/^-(inf|infinity)$/i.test(text)) return -Infinity
     throw new ParseError(`'${text}' is not a number`)
   }
   return text

@@ -523,11 +523,13 @@ function renderUnits() {
           parts.length && nums.every(n => isFinite(n)) ? nums : parts;
       } else {
         const n = Number(raw);
-        /* isFinite, not !isNaN: JSON.stringify writes Infinity as null,
-           so a non-finite value has to travel back as the string the
-           server sent, which it knows how to restore. */
+        /* JSON.stringify writes Infinity as null, so an infinite value
+           travels in the serializer's tag; a string is never read as one. */
+        const inf = /^([+-]?)(inf|infinity)$/i.exec(raw);
         u.params[e.target.dataset.key] =
-          raw === "" ? null : (isFinite(n) && raw !== "" ? n : raw);
+          raw === "" ? null
+          : inf ? {"$float": inf[1] === "-" ? "-inf" : "inf"}
+          : (isFinite(n) ? n : raw);
       }
       await push();
       render();

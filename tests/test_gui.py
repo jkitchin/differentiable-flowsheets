@@ -514,8 +514,8 @@ class TestNonFiniteFloats:
 
     def test_json_safe_and_restore_are_inverse(self):
         value = {"a": [1.0, float("inf"), -float("inf")], "b": {"c": 2.0}}
-        assert _json_safe(value) == {"a": [1.0, "Infinity", "-Infinity"],
-                                     "b": {"c": 2.0}}
+        assert _json_safe(value) == {
+            "a": [1.0, {"$float": "inf"}, {"$float": "-inf"}], "b": {"c": 2.0}}
         assert _json_restore(_json_safe(value)) == value
 
     def test_nan_survives_the_round_trip(self):
@@ -524,6 +524,18 @@ class TestNonFiniteFloats:
 
     def test_ordinary_strings_are_left_alone(self):
         assert _json_restore({"phase": "vapor"}) == {"phase": "vapor"}
+
+    def test_a_string_that_spells_a_non_finite_float_stays_a_string(self):
+        """It used to be turned into one: a unit or species called NaN
+        arrived as a float."""
+        value = {"name": "NaN", "notes": ["Infinity", "-Infinity"]}
+        assert _json_restore(value) == value
+
+    def test_a_unit_named_nan_can_be_renamed_to_through_the_server(self, client):
+        status, payload = client.send("PATCH", "/api/unit/reactor",
+                                      {"name": "NaN"})
+        assert status == 200 and payload["ok"], payload
+        assert any(u.name == "NaN" for u in client.session.flowsheet.units)
 
 
 # =============================================================================
