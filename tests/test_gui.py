@@ -1855,6 +1855,24 @@ class TestDocsRendering:
         assert "Stream" in html and "goes in" in html
         assert "difflow.streams" not in html, "`~` abbreviates, as in Sphinx"
 
+    def test_a_link_cannot_carry_script(self):
+        """The panel is put in with {@html}. Raw HTML is already off, but a
+        reST link target is copied into href as written -- a plugin's
+        docstring could otherwise run script in the editor's page."""
+        from difflow.gui import docs
+
+        if not docs.available():
+            pytest.skip("docutils is not installed")
+        for target in ("javascript:alert(1)", "JavaScript:alert(1)",
+                       "data:text/html,x", "vbscript:x"):
+            html, _ = docs.render(f"See `here <{target}>`_.")
+            assert "href" not in html, target
+            assert "here" in html, "the text of the link stays"
+        html, _ = docs.render("See `the book <https://example.org/x>`_.")
+        assert 'href="https://example.org/x"' in html
+        html, _ = docs.render("A <img src=x onerror=alert(1)> tag.")
+        assert "<img" not in html
+
     def test_no_system_messages_reach_the_panel(self):
         """A few docstrings indent in ways docutils reads as a block
         quote. That is difflow's prose to fix, not a red box in the
