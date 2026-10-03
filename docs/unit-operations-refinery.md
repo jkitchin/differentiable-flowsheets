@@ -2098,40 +2098,42 @@ Per cut, on the cut's own attribute concentrations (`c`, mol/m³ of fugacity-equ
 
 | Reaction | Rate | H2 per event | Heat per event (kJ/mol) |
 |---|---|---|---|
-| HDS, class j: S_j + nu_j H2 -> H2S | `f k_j c_Sj h / (1 + K_H2S c_H2S + K_N c_Nbasic)^2` | 2.0, 4.0, 3.0, 2.6, 3.95 | -104.7, -261.4, -157.0, -83.9, -173.1 |
-| HDN, basic / non-basic | `f k_j c_Nj h / (1 + K_H2S c_H2S)` | 4.0, 5.0 | -238.2, -263.0 |
-| poly + 2 H2 <-> di | `f k h (c_A3 - c_A2 / (K3 (pH2/1 bar)^2))` | 2 | -115.2 |
-| di + 2 H2 <-> mono | `f k h (c_A2 - c_A1 / (K2 (pH2/1 bar)^2))` | 2 | -124.6 |
-| mono + 3 H2 <-> naphthene | `f k h (c_A1 - c_Nn / (K1 (pH2/1 bar)^3))` | 3 | -205.3 |
-| olefin + H2 -> paraffin | `f k c_O h` | 1 | -123.4 |
-| cracking leak: molecule + H2 -> lighter molecule + C1--C4 | `f k c_cut` | 1 | -42.7 |
+| HDS, class j: S_j + nu_j H2 -> H2S | `f k_j c_Sj h / (1 + K_H2S c_H2S + K_N c_Nbasic)^2` | 2.0, 4.0, 3.0, 2.6, 3.95 | -104.8, -261.2, -157.1, -83.4, -172.8 |
+| HDN, basic / non-basic | `f k_j c_Nj h / (1 + K_H2S c_H2S)` | 4.0, 5.0 | -238.5, -263.3 |
+| poly + 2 H2 <-> di | `f k h (c_A3 - c_A2 / (K3(T) (pH2/1 bar)^2))` | 2 | dH(T): -114.8 at 25 °C, -124.8 at 350 °C |
+| di + 2 H2 <-> mono | `f k h (c_A2 - c_A1 / (K2(T) (pH2/1 bar)^2))` | 2 | dH(T): -124.0, -132.1 |
+| mono + 3 H2 <-> naphthene | `f k h (c_A1 - c_Nn / (K1(T) (pH2/1 bar)^3))` | 3 | dH(T): -206.1, -219.9 |
+| olefin + H2 -> paraffin | `f k c_O h` | 1 | -125.3 |
+| cracking leak: molecule + H2 -> lighter molecule + C1--C4 | `f k c_cut` | 1 | -42.55 |
 
 Sulfur classes in the order sulfides, thiophenes, benzothiophenes, dibenzothiophenes, hindered (4-/4,6-alkyl) DBTs.
 
 - **HDS** is the Langmuir-Hinshelwood-Hougen-Watson rate with a squared H2S-inhibition denominator, the form of Korsten & Hoffmann (1996) and, with a richer denominator, of Froment, Depauw & Vanrysselberghe (1994) and Vanrysselberghe & Froment (1996). It is first order in each class. A sum of first-order classes with different constants is what gives a lumped total-sulfur rate its apparent order above one. Basic nitrogen adsorbs on the same sites and sits in the denominator. `hds_form="power"` gives the nth-order fallback `f k c_ref,S (c_Sj/c_ref,S)^n h`, with no inhibition.
-- **Aromatics** saturate reversibly, first order, with equilibrium constants `K = exp(-(dH - T dS)/RT)` (pressures in bar) from model-compound thermochemistry. Saturation is exothermic and loses moles of gas, so equilibrium recedes as temperature rises and aromatics pass through a minimum.
+- **Aromatics** saturate reversibly, first order, with equilibrium constants `ln K(T) = -dG(T)/RT` from model-compound thermochemistry, with the heat capacities integrated from 298.15 K to the bed temperature: `aromatic_ln_K(T)`, the shared table's `IdealGasSet.ln_K` (#338). The standard state is the ideal gas at 1 bar, which is why the rate law divides by `(pH2/1 bar)^n`. The heat each step releases is `aromatic_heat(T)`, the same integration, so the energy balance and the equilibrium's van 't Hoff slope (`d ln K/dT = dH(T)/RT²`, tested to 1e-12) agree. Both are pure JAX in `T`. Saturation is exothermic and loses moles of gas, so equilibrium recedes as temperature rises and aromatics pass through a minimum. Until #338 `K` used the 298 K `dH` and `dS` as constants; that made the benzene step's `K` 3.1x, 3.8x and 5.1x too large at 300, 350 and 420 °C (2.6x and 2.2x for the poly and di steps at 350 °C).
 - **H2 stoichiometry** per class is that of a model compound (below). The hydrogen not leaving as H2S or NH3 goes onto the cut (`H += 2 nu - 2` per S, `2 nu - 3` per N). A desulfurized molecule keeps its carbon skeleton; the cut's molecule count does not change. Element balances are exact.
 - **The cracking leak** moves a molecule of cut `i` to the cut whose carbon number per molecule is nearest to `i`'s less the gas fragment's (fixed at construction from the composition), splitting off one C1--C4 molecule in the proportions `CRACK_GAS_SPLIT` (10/15/35/15/25 % C1/C2/C3/iC4/nC4, illustrative), with one H2.
 - **Deactivation** is the `activity` multiplier a(t). It is a differentiable parameter, so `difflow.reconciliation.tracking` can track it from plant data as the drifting parameter that loop is built for (not wired up or tested here).
 
-**Model compounds** behind the stoichiometry, heats and equilibrium (ideal gas, 298 K; formation enthalpies and entropies as tabulated in the `chemicals` package, which transcribes TRC/ATcT/CRC sources -- per-compound primary source unverified):
+**Model compounds** behind the stoichiometry, heats and equilibrium: ideal gas, from the refinery's one [thermochemistry table](#refinery-thermochemistry) (`Hf`, `S0` and Cp of each compound with its source; CODATA for H2, H2S and NH3, API TDB for most organics). The module keeps no copy: `MODEL_COMPOUNDS` is a view of the table. Values at 298.15 K:
 
 | Class | Model reaction | dH (kJ/mol) | dS (J/mol/K) |
 |---|---|---|---|
-| sulfides | diethyl sulfide + 2 H2 -> 2 ethane + H2S | -104.7 | |
-| thiophenes | thiophene + 4 H2 -> n-butane + H2S | -261.4 | |
-| benzothiophenes | benzothiophene + 3 H2 -> ethylbenzene + H2S | -157.0 | |
-| DBTs | 80 % DBT + 2 H2 -> biphenyl + H2S (DDS), 20 % DBT + 5 H2 -> cyclohexylbenzene + H2S (HYD) | -83.9 | |
-| hindered DBTs | 35 % DDS / 65 % HYD, DBT model compounds | -173.1 | |
-| basic N | quinoline + 4 H2 -> propylbenzene + NH3 | -238.2 | |
-| non-basic N | carbazole + 5 H2 -> cyclohexylbenzene + NH3 | -263.0 | |
-| poly -> di | phenanthrene + 2 H2 -> 1,2,3,4-tetrahydrophenanthrene | -115.2 | -228.3 (taken from di; THP entropy not tabulated) |
-| di -> mono | naphthalene + 2 H2 -> tetralin | -124.6 | -228.3 |
-| mono -> naphthene | benzene + 3 H2 -> cyclohexane | -205.3 | -363.1 |
-| olefins | 1-hexene + H2 -> n-hexane | -123.4 | |
-| cracking | n-hexane + H2 -> n-butane + ethane | -42.7 | |
+| sulfides | diethyl sulfide + 2 H2 -> 2 ethane + H2S | -104.8 | |
+| thiophenes | thiophene + 4 H2 -> n-butane + H2S | -261.2 | |
+| benzothiophenes | benzothiophene + 3 H2 -> ethylbenzene + H2S | -157.1 | |
+| DBTs | 80 % DBT + 2 H2 -> biphenyl + H2S (DDS), 20 % DBT + 5 H2 -> cyclohexylbenzene + H2S (HYD) | -83.4 | |
+| hindered DBTs | 35 % DDS / 65 % HYD, DBT model compounds | -172.8 | |
+| basic N | quinoline + 4 H2 -> propylbenzene + NH3 | -238.5 | |
+| non-basic N | carbazole + 5 H2 -> cyclohexylbenzene + NH3 | -263.3 | |
+| poly -> di | phenanthrene + 2 H2 -> 1,2,3,4-tetrahydrophenanthrene | -114.8 | -228.7 (THP's S0 is the table's estimate, phenanthrene + tetralin - naphthalene, so this equals the di step's) |
+| di -> mono | naphthalene + 2 H2 -> tetralin | -124.0 | -228.7 |
+| mono -> naphthene | benzene + 3 H2 -> cyclohexane | -206.1 | -363.9 |
+| olefins | 1-hexene + H2 -> n-hexane | -125.3 | |
+| cracking | n-hexane + H2 -> n-butane + ethane | -42.55 | |
 
-The DDS/HYD route shares of the two DBT classes are illustrative, set by the qualitative finding (Girgis & Gates 1991; Vanrysselberghe & Froment 1996) that CoMo removes DBT mainly by direct desulfurization and 4,6-DMDBT mainly after ring hydrogenation. Heats are gas-phase at 298 K: the heats of vaporisation of the reacting species and the temperature dependence are neglected. Benzene is a more favourable case than an alkylbenzene, so the mono-aromatic equilibrium is if anything too far to the right.
+At 350 °C (1 bar standard state) the three saturation steps have `ln K` = -6.29, -4.36 and -5.34 and release 124.8, 132.1 and 219.9 kJ/mol.
+
+The DDS/HYD route shares of the two DBT classes are illustrative, set by the qualitative finding (Girgis & Gates 1991; Vanrysselberghe & Froment 1996) that CoMo removes DBT mainly by direct desulfurization and 4,6-DMDBT mainly after ring hydrogenation. Heats are gas-phase. The aromatics steps' heats are taken at the bed temperature (with their `K`); the irreversible reactions' are 298 K values, a deliberate simplification -- at 350 °C DWSIM's conversion reactor gives them 3--15 % more heat ([DWSIM comparison](#refinery-dwsim-reactions)). The heats of vaporisation of the reacting species are neglected. Benzene is a more favourable case than an alkylbenzene, so the mono-aromatic equilibrium is if anything too far to the right.
 
 **Where the rate constants come from.** The forms are the literature's. The constants in `HDTKineticParams` (rate constants, activation energies, adsorption constants and enthalpies, H2 orders) are **illustrative**, chosen here so that a straight-run diesel at about 350 °C, LHSV 1 h⁻¹, 50 bar and 300 Nm³/m³ desulfurizes to a few hundred wppm and needs 370--380 °C for ULSD -- the right order of magnitude for a CoMo catalyst. They are not Korsten & Hoffmann's, not Froment's, and not any commercial catalyst's (those are proprietary). With these constants the model gives trends and orders of magnitude. Product sulfur to 10 ppm is predictive only after `activity` and the refractory-class constants are fitted to the unit's own data (`difflow.estimation`).
 
@@ -2367,7 +2369,7 @@ Compiling the unit takes about 70 s (more on a loaded machine); a solve then tak
 
 **Gradients** (`tests/refinery/test_hydrotreating.py::test_gradients_match_central_differences`): product S, chemical H2 consumption and liquid yield with respect to the bed inlet temperature, the pressure, the H2/oil ratio and the 50 % TBP point of the assay, AD against central differences. With plain central differences (steps 0.5 K, 0.5 bar, 3 Nm³/m³) they agree to 1e-5 -- 9e-4, and the larger figures are the differences' own O(h²) truncation; the test compares against Richardson-extrapolated differences at `rtol` 1e-5.
 
-**Trends** (tested): product sulfur falls with inlet temperature and with pressure (H2 partial pressure); chemical H2 consumption rises with temperature; on a bed at 30 bar, total aromatics pass through a minimum between 300 and 480 °C as the saturation equilibrium recedes.
+**Trends** (tested): product sulfur falls with inlet temperature and with pressure (H2 partial pressure); chemical H2 consumption rises with temperature; on a bed at 30 bar, total aromatics pass through a minimum between 300 and 480 °C as the saturation equilibrium recedes. On the test diesel's bed (the trend test) the minimum is at 360 °C; it was at 390 °C before #338, when the equilibrium constants were 2--5x too large.
 
 The numbers come from illustrative rate constants: read them as the shape of the answer, not a prediction for any catalyst.
 
@@ -2383,7 +2385,7 @@ The numbers come from illustrative rate constants: read them as the shape of the
 - the makeup composition is a traced input (`jax.jacfwd` through `theta`), and (release) `d(h2.makeup, recycle purity, product S)/d(makeup purity)` through the whole unit against Richardson differences;
 - the fractionator: shares sum to one, the jet/diesel split closes to 1e-13 and its two products go into the jet and ULSD pools with their sulfur averaging back to the unit's; three products over product and wild naphtha send the dissolved gas to the off-gas; the cut-point gradient of four pool properties against Richardson differences (release);
 - on example 40's naphtha (`tests/refinery/test_hydrotreating_naphtha.py`): balances, `gas.yield` positive and consistent on a feed carrying light ends, the charge heater with a feed/effluent exchanger, positive chemical hydrogen in a vapour bed, the light/heavy naphtha split; the 320 °C / 50 bar / LHSV 0.5 / 150 Nm³/m³ point returning `converged=False` with a warning instead of raising; and (release) `NAPHTHA_HDT_PARAMS` reaching below 0.5 wppm S at 30 bar, 320 °C, LHSV 4;
-- pins: PR fugacity coefficients against difflow's `PengRobinson` (1e-8), the H2/H2S/NH3 Cp polynomials against PPO 5th ed. (0.5 %), every heat of reaction and the aromatic-step entropies against the model-compound table, element conservation of the kinetics at a point, and the power-law fallback.
+- pins: PR fugacity coefficients against difflow's `PengRobinson` (1e-8), the H2/H2S/NH3 Cp polynomials against PPO 5th ed. (0.5 %), every heat of reaction against the shared table, the aromatics `ln K(T)` against `tc.ln_K` (and its distance from the old constant-`dH`/`dS` form at 350 °C), its van 't Hoff slope against the heat the energy balance uses, element conservation of the kinetics at a point, and the power-law fallback.
 
 A crude-unit product carries every cut at some trace level. `Hydrotreater(..., trace=1e-9)` leaves out cuts heavier than the heaviest one above that mole fraction, and reports what that drops as `dropped_mass_fraction` (below 1e-6 on the crude-unit diesel).
 
@@ -2768,7 +2770,7 @@ with `S0` from mass conservation, `int_0^K p(k, K) D(k) dk = 1`. `p(K, K) = 0` (
 
 The cut's critical constants and K-values stay the feed pseudo-component's (as in the hydrotreater): only its atoms, molecule count and the volume model below change.
 
-**Hydrogen and heat.** Hydrogen consumption is the **hydrogen balance** of each event -- H atoms in the products (cuts, gas, H2S, NH3) less those of the parent, halved -- so it follows the conversion and the slate, not a separate correlation. C, S and N are conserved by construction and H through the H2 drawn; `check_element_conservation` is zero to round-off. Heat is per H2: an event making `n` molecules from one breaks `n - 1` C--C bonds, each with one H2 and the heat of n-hexane + H2 -> n-butane + ethane (`SCISSION_HEAT`, -42.7 kJ/mol); the rest of the H2 (saturation of the products, heteroatom removal) releases the benzene + 3 H2 -> cyclohexane heat per H2 (`SATURATION_HEAT_PER_H2`, -68.4 kJ/mol H2). Both are the hydrotreater's model-compound thermochemistry.
+**Hydrogen and heat.** Hydrogen consumption is the **hydrogen balance** of each event -- H atoms in the products (cuts, gas, H2S, NH3) less those of the parent, halved -- so it follows the conversion and the slate, not a separate correlation. C, S and N are conserved by construction and H through the H2 drawn; `check_element_conservation` is zero to round-off. Heat is per H2: an event making `n` molecules from one breaks `n - 1` C--C bonds, each with one H2 and the heat of n-hexane + H2 -> n-butane + ethane (`SCISSION_HEAT`, -42.55 kJ/mol); the rest of the H2 (saturation of the products, heteroatom removal) releases the benzene + 3 H2 -> cyclohexane heat per H2 (`SATURATION_HEAT_PER_H2`, -68.7 kJ/mol H2). Both are 298 K values from the shared [thermochemistry table](#refinery-thermochemistry), a deliberate simplification: the hydrotreater's own aromatics heats are Cp-integrated to the bed temperature since #338, 3--5 % larger at 350--420 °C. The residue desulfurizer's `CCR_HEAT_PER_H2` is the same 298 K value.
 
 **Constants.** Every number in `HCKineticParams` (`k_max`, `E`, `alpha`, `a0`, `a1`, `delta`, `K_N`, `dH_N`, `dKw`, the lump tables) is **illustrative**: chosen here so that the default VGO cracks about 70 % per pass with 380 °C bed inlets (WABT near 395 °C), LHSV 1.5 h⁻¹ and 150 bar, with bed rises of 20--25 K and a middle-distillate-selective slate. Published hydrocracking parameters belong to one catalyst and one feed; a predictive slate needs the yield-distribution parameters fitted to the unit's own test runs (`difflow.estimation`). The commercial yield models (UOP Unicracking, Chevron Lummus ISOCRACKING, Shell, Axens) are proprietary; nothing here is equivalent to them.
 
@@ -3312,8 +3314,10 @@ sources, and the copies disagreed: benzene 82.88-83.18 kJ/mol, cyclohexane
 -122.08 to -123.13, isopentane -153.7 to -154.5. So did the heats and the
 equilibria. Benzene saturation in the hydrotreater and naphthene
 dehydrogenation in the reformer are the same reaction run in reverse, and
-they used different data. The isomerization unit's C5 equilibrium was 0.06 off
-what the reformer's own data give.
+they used different data (and the hydrotreater neglected Cp, which made its K
+3-5x too large; #338). Now both read the same row and the same Cp-integrated
+`ln K`. The isomerization unit's C5 equilibrium was 0.06 off what the
+reformer's own data give.
 
 ```python
 from difflow_refinery import thermochemistry as tc
@@ -3427,10 +3431,6 @@ would be 42.6.
   references are built on them. The alkylation unit's fractionation and feed
   cooling use `difflow.database`'s Cp for the same reason. Its heat of
   reaction is this table's.
-- **The hydrotreater** (and through it the hydrocracker and the residue
-  desulfurizer) still carries `MODEL_COMPOUNDS` until #338 migrates it. The
-  guard allows that one copy by name. Every compound it uses is already in
-  the table.
 
 ### Numbers that moved
 
@@ -3452,33 +3452,51 @@ Gas-plant lower heating values (kJ/mol), before and after: methane 802.29 →
 below (light crude VGO, ROT 520 C) moves from conversion 0.7470, C/O 5.824,
 regenerator 1003.94 K to 0.7469, 5.819, 1004.13 K.
 
-The hydrotreater's numbers do not move yet; #338 migrates it. When it does,
-its `MODEL_COMPOUNDS` becomes `tc.Hf(name)`, `tc.S0(name)` (or
-`tc.reaction_enthalpy({...})` with the element balance checked), and
-`AROMATIC_THERMO` can take Cp into account through `tc.ln_K`. Its current copy differs from the table where the table below shows (every other model compound is unchanged):
+### The hydrotreater on the table (#338)
 
-| Model compound | Hf now (kJ/mol) | Hf table | S° now (J/mol/K) | S° table |
+The hydrotreater (and through it the hydrocracker's pretreat bed and the
+residue desulfurizer) reads the table too: `hydrotreating.kinetics` keeps no
+copy (the guard covers it), every heat is `tc.reaction_enthalpy` with the
+element balance checked, and the aromatics equilibria are `tc.ln_K` --
+Cp-integrated -- instead of constant 298 K `dH` and `dS`. Its private copy had
+differed from the table here (every other model compound unchanged):
+
+| Model compound | Hf before (kJ/mol) | Hf table | S° before (J/mol/K) | S° table |
 | --- | --- | --- | --- | --- |
 | `hydrogen` | 0 | 0 | 130.7 | 130.68 |
-| `hydrogen_sulfide` | -20.6 | -20.6 | 205.8 | 205.81 |
 | `ammonia` | -45.558 | -45.94 | 192.8 | 192.77 |
 | `benzene` | 83.18 | 82.93 | 269.2 | 269.18 |
 | `cyclohexane` | -122.08 | -123.13 | 298.19 | 297.31 |
 | `naphthalene` | 150.6 | 150.58 | 333.1 | 333.6 |
 | `tetralin` | 26 | 26.61 | 366.22 | 366.22 |
 | `phenanthrene` | 207.5 | 207.1 | 396.01 | 396.01 |
-| `tetrahydrophenanthrene` | 92.3 | 92.3 | -- | 428.63 |
+| `tetrahydrophenanthrene` | 92.3 | 92.3 | -- (di step's dS used) | 428.63 (estimate) |
 | `diethyl_sulfide` | -83.5 | -83.47 | 368.1 | 368.32 |
 | `ethane` | -83.78 | -83.85 | 229.2 | 229.45 |
-| `thiophene` | 114.9 | 114.9 | 278.8 | 278.81 |
 | `n_butane` | -125.85 | -125.65 | 304.4 | 304.4 |
-| `benzothiophene` | 166.3 | 166.3 | 212.76 | -- |
+| `benzothiophene` | 166.3 | 166.3 | 212.76 | -- (rejected) |
 | `ethylbenzene` | 29.9 | 29.79 | 360.6 | 361.24 |
 | `biphenyl` | 181.4 | 182.09 | 391.24 | 391.24 |
 | `propylbenzene` | 7.9 | 7.9 | 397.86 | 399.08 |
-| `carbazole` | 200.7 | 200.7 | 244.95 | -- |
+| `carbazole` | 200.7 | 200.7 | 244.95 | -- (rejected) |
 | `1_hexene` | -43.5 | -41.67 | 383.84 | 383.84 |
 | `n_hexane` | -166.94 | -166.95 | 388.82 | 388.74 |
+
+(The S° the table rejects were never used: only the saturation steps need an
+entropy.) What moved:
+
+| Where | Before | After | Why |
+| --- | --- | --- | --- |
+| Benzene + 3 H2 = cyclohexane, `ln K` at 300 / 350 / 420 °C (1 bar) | -0.53 / -4.00 / -8.01 | -1.65 / -5.34 / -9.64 | Cp integrated (K was 3.1x, 3.8x, 5.1x too large); DWSIM's ChemSep data give -1.65 / -5.35 / -9.65 |
+| Naphthalene / phenanthrene steps, `ln K` at 350 °C | -3.58 / -5.35 | -4.36 / -6.29 | the same (2.2x, 2.6x) |
+| Saturation heats, 25 °C (poly / di / mono, kJ/mol) | -115.2 / -124.6 / -205.3 | -114.8 / -124.0 / -206.1 | table Hf; and now taken at the bed temperature: -124.8 / -132.1 / -219.9 at 350 °C |
+| HDS heats (kJ/mol S) | -104.7, -261.4, -157.0, -83.9, -173.1 | -104.8, -261.2, -157.1, -83.4, -172.8 | table Hf (biphenyl +0.69, ethane, n-butane) |
+| HDN heats | -238.2, -263.0 | -238.5, -263.3 | NH3 -45.558 -> -45.94 (CODATA) |
+| Olefin / cracking heats | -123.4 / -42.7 | -125.3 / -42.55 | 1-hexene -43.5 -> -41.67 (API TDB) |
+| Hydrocracker / residue saturation heat per H2 | -68.4 | -68.7 kJ/mol H2 | benzene, cyclohexane |
+| Test diesel, 340 °C bed 1 inlet: product aromatics, chemical H2, reactor outlet | 14.21 vol%, 32.39 Nm³/m³, 355.54 °C | 14.28 vol%, 30.48 Nm³/m³, 354.80 °C | see [the results](#refinery-hydrotreater-results) |
+| Test diesel, 380 °C bed 1 inlet | 10.44 vol%, 44.45 Nm³/m³, 400.39 °C | 12.11 vol%, 31.47 Nm³/m³, 393.14 °C | the equilibrium limit binds: poly-aromatics 0.92 -> 3.05 vol% |
+| Aromatics minimum, single bed at 30 bar (trend test) | 390 °C | 360 °C | |
 
 ### Provenance
 
@@ -4029,7 +4047,7 @@ a DWSIM answer that does pass:
 | C6 ring (H2, Bz, MCP, CH, C6 paraffins), 420 K, 30 bar | the reactor | Gibbs | 5.0e-6: 1 atm, R, quadrature (emulation: 1.9e-6). At 480 K neither DWSIM reactor gives its own equilibrium (above) |
 | Isomerization adiabatic, both charges, 140 C, 30 bar | 473.183 / 519.383 K | 473.183 / 519.466 K (Gibbs) | -0.3 mK / +0.083 K: DWSIM's minimiser with inerts, short of its own equilibrium (emulated DWSIM model: 473.183 / 519.359 K). difflow's reactor lands on the emulated difflow temperature to 1e-6 K (`test_the_reactor_reaches_the_emulated_adiabatic_equilibrium`, while the IDAES reference is stale) |
 | Reformer equilibria (MCH/toluene, MCP/CH/Bz, nC7 dehydrocyclization), 700-773 K, 10-25 bar | ideal-gas K from Gibbs energies | equilibrium reactor | up to 1.1e-3 mole fraction, nearly all the 1 atm standard state (emulation: 1e-11) |
-| Benzene and naphthalene saturation, 300-420 C, 30-100 bar (constant dH and dS, Cp zero) | `AROMATIC_THERMO` | equilibrium reactor | up to 3e-4 (1 atm) |
+| Benzene and naphthalene saturation, 300-420 C, 30-100 bar (Cp-integrated since #338; the hypos carry the table's Cp) | `aromatic_ln_K` (ideal-gas equilibrium of the same constants) | equilibrium reactor | up to 5.4e-4 (1 atm and the quadrature; benzene at 420 C, 30 bar) |
 | First reformer bed, rich naphtha, 773.15 K in, 15 bar: the conversion reactor (PR, kij 0) taken to difflow's outlet | 710.6503 K (dT -62.4997 K) | 710.6506 K | 0.3 mK: DWSIM's R in the PR departure and its quadrature |
 | FCC coke burn (C + H2, flue at 2 % O2), 25 C and 700/730 C | `combustion` + `flue_enthalpy` | conversion reactor | reproduced to 1 W in 21-39 MW from the per-species data differences alone |
 
@@ -4052,9 +4070,10 @@ pinned at their measured size.
 | First reformer bed outlet | 710.65 K | 711.16 K | the bed 0.8 % less endothermic on ChemSep H_f and Cp |
 | HDS of benzothiophene, per mol H2 | -52.3 kJ/mol | -42.6 kJ/mol | benzothiophene H_f: 166.3 kJ/mol (difflow) against ChemSep's 137.0. 166.3 is the calorimetric value: Sabbah (1979) 166.28 ± 0.48 and Good (1972) 166.6 kJ/mol, as listed by the NIST WebBook (read through a search summary; see [Thermochemical data](#refinery-thermochemistry)). ChemSep's matches no measurement found |
 | Other hydroprocessing heats per mol H2 at 25 C (sulfide and thiophene HDS, Bz and naphthalene saturation, 1-hexene, nC6 cracking) | | | within 1.9 kJ/mol (1-hexene saturation the largest) |
-| The same heats at 350 C (DWSIM's conversion reactor) | 298 K values, by design | 3-15 % more heat | the reactions' dCp; difflow's per-class heats neglect it (documented) |
-| Benzene + 3 H2 = cyclohexane, ln K | constant dH, dS (`AROMATIC_THERMO`) | with Cp | **difflow's hydrotreating K is 2.9x, 3.6x, 4.9x too large at 300, 350, 420 C** (ln K 1.05, 1.29, 1.60 high). DWSIM and difflow's own reformer thermochemistry, which both carry Cp, agree to 0.02 |
-| Naphthalene + 2 H2 = tetralin | constant dH, dS | not computable | DWSIM's tetralin (ChEDL Thermo) has G_f = 0: ln K about 60, every naphthalene saturated |
+| The same heats at 350 C (DWSIM's conversion reactor) | irreversible reactions: 298 K values, by design; aromatics: at T | 3-15 % more heat than at 298 K | the reactions' dCp. difflow's irreversible per-class heats neglect it (documented); its aromatics heats carry it since #338 and agree within 0.3 kJ/mol (benzene -219.89 against -220.17, naphthalene -132.12 against -132.33) |
+| Benzene + 3 H2 = cyclohexane, ln K, 300 / 350 / 420 C | Cp-integrated (`aromatic_ln_K`, #338) | with Cp | **0.005, 0.009, 0.016** above DWSIM on one standard state; equal to difflow's reformer thermochemistry (one table). Until #338 difflow's hydrotreating K held dH and dS constant and was 2.9x, 3.6x, 4.9x too large (ln K 1.05, 1.29, 1.60 high; 1.12, 1.34, 1.62 on the table's constants) |
+| Benzene / cyclohexane equilibria, 300-420 C, 30-100 bar | the hydrotreater's constants | DWSIM's data, accepted reactor | within 2.1e-4 mole fraction (420 C, 30 bar, 40 % of the benzene left); 5e-6 or less at 300-350 C |
+| Naphthalene + 2 H2 = tetralin | Cp-integrated | not computable | DWSIM's tetralin (ChEDL Thermo) has G_f = 0: ln K about 60, every naphthalene saturated. This step and the poly step (DWSIM has no tetrahydrophenanthrene) are checked as an implementation instead: DWSIM's reactors on difflow's constants (table (a)), and `aromatic_ln_K` against `tc.ln_K` in `test_hydrotreating.py` |
 | Liquid heat of alkylation, 25 C, 7 single-product reactions and difflow's route A for 7 olefins | H_f(g) - CRC Hvap | Peng-Robinson liquid, ChemSep H_f | DWSIM 1.2-5.9 kJ/mol less exothermic (e.g. iC4 + 1-butene to 2,2,4-TMP: -84.8 against -82.7 kJ/mol). Gas-phase H_f account for up to 2.2 kJ/mol (propylene route; 3.7 before #339 put these species on the shared table); the rest is PR's liquid departure against the CRC heats of vaporisation. At 10 C DWSIM gives 0.6-1.0 kJ/mol less again; difflow neglects the temperature |
 | Heat of coke combustion (7 wt% H), 25 C | | | 1.1e-5 (water's H_f, -241.826 against -241.814 kJ/mol) |
 | Coke burn to a 700/730 C flue | | | DWSIM releases 0.007-0.009 % more: difflow's JANAF Cp fits against ChemSep's, all of it, to 1 W (0.05-0.07 % with the RPP cubics `fcc.species` had before #339) |
@@ -4077,7 +4096,8 @@ entropy or Cp in one of the two databases.
 
 Since #339 the reference was regenerated on the shared thermochemistry table
 (isomerization, alkylation and FCC regenerator constants moved; the reformer's
-and the hydrotreater's did not). The isomerization and adiabatic gaps to
+and the hydrotreater's did not), and again for #338 (the hydrotreater's model
+compounds moved onto the table, and its aromatics hypos carry their Cp). The isomerization and adiabatic gaps to
 ChemSep closed by an order of magnitude, because ChemSep uses the same
 API TDB paraffin values.
 
