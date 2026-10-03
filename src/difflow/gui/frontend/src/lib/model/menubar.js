@@ -8,7 +8,8 @@
  * toolbar becomes when every panel earns a button: the two that matter
  * on any given day sit in a hedge of the eleven that do not. Here it is
  * four words and one button, and the arrangement is the whole idea ---
- * **File** writes the flowsheet out, **Examples** replaces it with one
+ * **File** writes the flowsheet out, **Edit** takes an edit back,
+ * **Examples** replaces it with one
  * that already works, **View** decides what is on the screen, **Help**
  * leaves the editor, and **Solve** stays a button because it is the verb
  * the editor exists for.
@@ -62,6 +63,8 @@ export function menuBar({
   solved = false,
   widthByFlow = false,
   colorBy = '',
+  canUndo = false,
+  canRedo = false,
   panels = {},
   links = {},
   examples = [],
@@ -82,11 +85,32 @@ export function menuBar({
       label: 'File',
       items: [
         {
+          label: 'New',
+          hint: 'an empty flowsheet, with no file behind it',
+          disabled: busy,
+          run: actions.newFile,
+        },
+        {
+          label: 'Open…',
+          hint: 'a flowsheet JSON or a difflow script, by path',
+          disabled: busy,
+          run: actions.openFile,
+        },
+        {
           label: 'Save',
           note: '⌘S',
-          hint: path || 'this editor was opened without a file to save to',
-          disabled: busy || !path,
-          run: actions.save,
+          // With no file yet, Save is Save As rather than a grey row: an
+          // example, or a flowsheet built from nothing, is exactly what
+          // most needs writing down.
+          hint: path || 'no file yet: asks where to save it',
+          disabled: busy,
+          run: path ? actions.save : actions.saveAs,
+        },
+        {
+          label: 'Save as…',
+          hint: 'write it to another file, and keep editing that one',
+          disabled: busy,
+          run: actions.saveAs,
         },
         {
           label: 'Reload',
@@ -105,6 +129,26 @@ export function menuBar({
           hint: 'stop the editor and free the port; it asks once more',
           danger: true,
           run: actions.quit,
+        },
+      ],
+    },
+    {
+      id: 'edit',
+      label: 'Edit',
+      items: [
+        {
+          label: 'Undo',
+          note: '⌘Z',
+          hint: 'put the flowsheet back as it was before the last edit',
+          disabled: busy || !canUndo,
+          run: actions.undo,
+        },
+        {
+          label: 'Redo',
+          note: '⇧⌘Z',
+          hint: 'make the last undone edit again',
+          disabled: busy || !canRedo,
+          run: actions.redo,
         },
       ],
     },

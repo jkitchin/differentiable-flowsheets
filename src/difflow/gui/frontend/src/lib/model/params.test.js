@@ -10,7 +10,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { classify, describe, label, parse, shape, tagOf } from './params.js'
+import {
+  ParseError, classify, describe, label, numericType, parse, shape, tagOf,
+} from './params.js'
 
 test('a plain value is editable, by its own type', () => {
   assert.deepEqual(classify(1.0), { kind: 'number', editable: true, text: '1' })
@@ -80,9 +82,23 @@ test('a non-finite float survives as the string the server restores', () => {
   assert.equal(parse('1e6', 'number'), 1e6)
 })
 
-test('a number field that is given a word keeps the word', () => {
-  // The server refuses it by name; silently posting NaN would not.
-  assert.equal(parse('warm', 'number'), 'warm')
+test('a number field that is given a word refuses it', () => {
+  // It used to be posted as text, stored, and every later solve failed
+  // in JAX. Silently posting NaN would be no better.
+  assert.throws(() => parse('warm', 'number'), ParseError)
+  assert.throws(() => parse('abc', 'number'), /'abc' is not a number/)
+  assert.throws(() => parse('NaN', 'number'), ParseError)
+  assert.equal(parse('-inf', 'number'), '-Infinity')
+  assert.equal(parse('inf', 'number'), 'Infinity')
+})
+
+test('text already in a number field still gets a number box', () => {
+  // So the next edit is checked, rather than accepted as more text.
+  assert.equal(classify('0', { type: 'float | jax.Array' }).kind, 'number')
+  assert.equal(classify('liquid', { type: 'str | None' }).kind, 'text')
+  assert.equal(classify('x', { type: 'float | str' }).kind, 'text')
+  assert.equal(numericType('int'), true)
+  assert.equal(numericType('typing.Any'), false)
 })
 
 test('the shape of a nested array is read outermost first', () => {

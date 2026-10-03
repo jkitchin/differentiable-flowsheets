@@ -16,9 +16,20 @@ const full = (over = {}) =>
     repository: 'https://github.com/example/difflow',
   }, ...over })
 
-test('the bar is File, Examples, View and Help, in that order', () => {
-  assert.deepEqual(full().map((m) => m.id), ['file', 'examples', 'view', 'help'])
-  assert.deepEqual(full().map((m) => m.label), ['File', 'Examples', 'View', 'Help'])
+test('the bar is File, Edit, Examples, View and Help, in that order', () => {
+  assert.deepEqual(full().map((m) => m.id), ['file', 'edit', 'examples', 'view', 'help'])
+  assert.deepEqual(full().map((m) => m.label), ['File', 'Edit', 'Examples', 'View', 'Help'])
+})
+
+test('Undo and Redo are offered only when there is a step to take', () => {
+  const { actions, seen } = recorder()
+  assert.ok(row(full(), 'edit', 'Undo').disabled)
+  assert.ok(row(full(), 'edit', 'Redo').disabled)
+  const bar = full({ actions, canUndo: true, canRedo: true })
+  row(bar, 'edit', 'Undo').run()
+  row(bar, 'edit', 'Redo').run()
+  assert.deepEqual(seen, [['undo'], ['redo']])
+  assert.ok(row(full({ canUndo: true, busy: true }), 'edit', 'Undo').disabled)
 })
 
 const EXAMPLES = [
@@ -47,7 +58,7 @@ test('the examples menu is disabled while busy, and says when it is empty', () =
 /** Every action the bar knows how to ask for, recording what it was asked. */
 function recorder() {
   const seen = []
-  const names = ['save', 'reload', 'export', 'quit', 'results', 'context',
+  const names = ['undo', 'redo', 'save', 'saveAs', 'newFile', 'openFile', 'reload', 'export', 'quit', 'results', 'context',
                  'console', 'planning', 'assistant', 'portLabels', 'dark',
                  'open', 'classic', 'example', 'widthByFlow', 'colorBy', 'script']
   const actions = Object.fromEntries(
@@ -69,7 +80,8 @@ test('each row runs the action it is named for', () => {
   const { actions, seen } = recorder()
   const bar = full({ actions })
   for (const [id, label, name] of [
-    ['file', 'Save', 'save'], ['file', 'Reload', 'reload'], ['file', 'Quit', 'quit'],
+    ['file', 'Save', 'save'], ['file', 'Save as…', 'saveAs'],
+    ['file', 'New', 'newFile'], ['file', 'Open…', 'openFile'], ['file', 'Reload', 'reload'], ['file', 'Quit', 'quit'],
     ['view', 'Results', 'results'], ['view', 'Code context', 'context'],
     ['view', 'Script', 'script'], ['view', 'Console', 'console'], ['view', 'Planning', 'planning'],
     ['view', 'Ask difflow', 'assistant'], ['view', 'Port names', 'portLabels'],
@@ -81,16 +93,19 @@ test('each row runs the action it is named for', () => {
   }
 })
 
-test('Save is disabled when there is no file to save to', () => {
-  assert.equal(row(full(), 'file', 'Save').disabled, false)
-  assert.equal(row(full({ path: '' }), 'file', 'Save').disabled, true)
-  // ...and it says so where the hint goes, rather than greying out mutely.
-  assert.match(row(full({ path: '' }), 'file', 'Save').hint, /without a file/)
+test('Save with no file to save to asks where, rather than greying out', () => {
+  const { actions, seen } = recorder()
+  const bare = full({ path: '', actions })
+  assert.equal(row(bare, 'file', 'Save').disabled, false)
+  assert.match(row(bare, 'file', 'Save').hint, /no file yet/)
+  row(bare, 'file', 'Save').run()
+  assert.deepEqual(seen, [['saveAs']])
 })
 
 test('busy disables everything that would edit or write', () => {
   const bar = full({ busy: true })
-  for (const label of ['Save', 'Reload', 'Python script', 'Diagram PNG']) {
+  for (const label of ['New', 'Open…', 'Save', 'Save as…', 'Reload',
+                       'Python script', 'Diagram PNG']) {
     assert.equal(row(bar, 'file', label).disabled, true, label)
   }
   // Opening a drawer is not an edit, and is the one thing still worth
@@ -100,7 +115,7 @@ test('busy disables everything that would edit or write', () => {
 
 test('the four exports are offered, and only with a flowsheet', () => {
   assert.deepEqual(labels(full(), 'file'),
-    ['Save', 'Reload', 'Python script', 'Flowsheet JSON', 'Diagram SVG',
+    ['New', 'Open…', 'Save', 'Save as…', 'Reload', 'Python script', 'Flowsheet JSON', 'Diagram SVG',
      'Diagram PNG', 'Quit'])
   const empty = full({ doc: null })
   for (const label of ['Python script', 'Flowsheet JSON', 'Diagram SVG', 'Diagram PNG']) {
@@ -174,7 +189,7 @@ test('a missing action does not throw', () => {
 
 test('menuBar() with nothing at all still describes a bar', () => {
   const bar = menuBar()
-  assert.equal(bar.length, 4)
+  assert.equal(bar.length, 5)
   assert.ok(bar.every((m) => m.items.length))
 })
 

@@ -27,6 +27,13 @@
   // `path` is then the JSON beside it that Save writes, which is not
   // the name the user typed and not the name to show them first.
   let source = $state('')
+  // Edits the server holds that no file does. The server compares the
+  // model against what it last read or wrote, so an edit made from the
+  // console counts as much as one made on the canvas.
+  let dirty = $state(false)
+  // Whether the server has a step to undo or redo, for the Edit menu.
+  let canUndo = $state(false)
+  let canRedo = $state(false)
   // The species list, and whether it can still be changed -- the server
   // answers both with the document, because "can I edit this" is a fact
   // about the flowsheet (has it any units yet?) and not a preference.
@@ -40,6 +47,11 @@
   let catalog = $state({})
   let error = $state('')
   let note = $state('')
+  /**
+   * The note text that is a warning about an answer that came back
+   * anyway. Compared by text, so any later message is not shown as one.
+   */
+  let warnNote = $state(null)
   let selected = $state(null)
   let busy = $state(false)
   let context = $state({ source: '', names: [], error: null })
@@ -94,6 +106,13 @@
   let stopped = $state(false)
   let armedTimer = null
   const ASKING = 'click \u201cReally quit?\u201d to stop the editor'
+  const ASKING_DIRTY = 'unsaved edits: click \u201cReally quit?\u201d to stop the editor and lose them'
+
+  /** Go ahead with something that replaces the model, if nothing is lost. */
+  function discard(what) {
+    return !dirty || window.confirm(
+      `The flowsheet has edits that are not saved. ${what} anyway, and lose them?`)
+  }
 
   /** A remembered preference, or the default if there is nothing to read. */
   function remember(key, fallback) {
@@ -132,15 +151,22 @@
    * saving the flowsheet is what it means wherever it is pressed --- and
    * because the browser's own answer to it, offering to save the page,
    * has never once been what anyone wanted here. Cmd-Enter is guarded:
-   * the console already ends a cell with it.
+   * the console already ends a cell with it. Cmd-Z is guarded too: in a
+   * text field it is the field's own undo, which is the one meant there.
    */
   function hotkey(event) {
     if (menu) return       // the open menu owns the keyboard
     if (event.metaKey || event.ctrlKey) {
-      if (event.altKey || event.shiftKey) return
+      if (event.altKey) return
+      if (event.key.toLowerCase() === 'z' && !typing(event)) {
+        event.preventDefault()
+        if (!busy) event.shiftKey ? redo() : undo()
+        return
+      }
+      if (event.shiftKey) return
       if (event.key.toLowerCase() === 's') {
         event.preventDefault()
-        if (!busy && path) save()
+        if (!busy) (path ? save() : saveAs())
       } else if (event.key === 'Enter' && !typing(event)) {
         event.preventDefault()
         if (!busy) solve()
@@ -159,6 +185,9 @@
     doc = payload.flowsheet
     path = payload.path
     source = payload.source ?? ''
+    dirty = !!payload.dirty
+    canUndo = !!payload.undo
+    canRedo = !!payload.redo
     species = payload.species ?? []
     speciesEditable = payload.editable !== false
     pending = payload.pending ?? []
@@ -258,13 +287,13 @@
   async function quit() {
     if (!quitArmed) {
       quitArmed = true
-      note = ASKING
+      note = dirty ? ASKING_DIRTY : ASKING
       clearTimeout(armedTimer)
       armedTimer = setTimeout(() => {
         quitArmed = false
         // Only our own note: six seconds is long enough for something
         // else to have had something to say.
-        if (note === ASKING) note = ''
+        if (note === ASKING || note === ASKING_DIRTY) note = ''
       }, 6000)
       return
     }
@@ -461,8 +490,11 @@
     // Adopted locally too, so the next reload does not snap the node back
     // to where the document still says it is.
     doc = { ...doc, view: { ...doc.view, nodes: { ...doc.view?.nodes, ...moved } } }
-    edit(() => post('/api/layout', { nodes: moved }),
-         { reload: false, stale: false })
+    edit(async () => {
+      const answer = await post('/api/layout', { nodes: moved })
+      if (answer?.ok) { dirty = true; canUndo = true; canRedo = false }
+      return answer
+    }, { reload: false, stale: false })
   }
 
   const solve = () =>
@@ -480,9 +512,13 @@
           // results panel look exactly the same either way.
           ? ` (${answer.pending.join(', ')} not built, and not in it)`
           : ''
+        const warnings = answer.audit?.warnings ?? []
         note = (answer.converged === false
           ? 'solved, but the tear residual did not reach the tolerance'
-          : `solved: ${Object.keys(answer.streams).length} streams`) + held
+          : warnings.length
+            ? `solved, but ${warnings[0]}`
+            : `solved: ${Object.keys(answer.streams).length} streams`) + held
+        warnNote = answer.converged === false || warnings.length ? note : null
       } else {
         note = answer.error
       }
@@ -502,8 +538,82 @@
     edit(async () => {
       const answer = await post('/api/save')
       note = answer.ok ? `saved to ${shortPath(answer.path)}` : answer.error
+      if (answer.ok) dirty = false
       return null
     }, { reload: false, stale: false })
+
+  /**
+   * Save under a path the user types, and keep editing that file.
+   *
+   * A file already there is replaced only after a second question: the
+   * path is typed, and a typo should cost a dialog, not a flowsheet.
+   */
+  function saveAs() {
+    const where = window.prompt('Save the flowsheet as (a .json path):',
+                                path || 'flowsheet.json')
+    if (!where) return
+    return edit(async () => {
+      let answer = await post('/api/save', { path: where })
+      if (!answer.ok && answer.exists) {
+        if (!window.confirm(`${answer.path} already exists. Replace it?`)) {
+          note = 'not saved'
+          return null
+        }
+        answer = await post('/api/save', { path: where, overwrite: true })
+      }
+      if (answer.ok) {
+        note = `saved to ${shortPath(answer.path)}`
+        path = answer.path
+        source = ''
+        dirty = false
+      } else {
+        note = answer.error
+      }
+      return null
+    }, { reload: false, stale: false })
+  }
+
+  /**
+   * A whole new flowsheet, so everything that described the old one has
+   * to go: the code context, and the palette's flags, which are answered
+   * against its bindings, as well as the canvas.
+   */
+  async function adopted(answer) {
+    selected = null
+    await loadContext()
+    catalog = await get('/api/catalog')
+    return answer
+  }
+
+  function openFile() {
+    const where = window.prompt(
+      'Open a flowsheet (.json) or a difflow script (.py), by path:', '')
+    if (!where || !discard('Open another file')) return
+    return edit(async () => {
+      const answer = await post('/api/open', { path: where })
+      return answer.ok ? adopted(answer) : answer
+    })
+  }
+
+  /**
+   * One step back or forward through the server's history. The code
+   * context can be part of the step, so it and the palette's flags are
+   * read again along with the canvas.
+   */
+  const step = (verb) =>
+    edit(async () => {
+      const answer = await post(`/api/${verb}`)
+      if (answer.ok) {
+        await loadContext()
+        catalog = await get('/api/catalog')
+      }
+      return answer
+    })
+  const undo = () => step('undo')
+  const redo = () => step('redo')
+
+  const newFile = () =>
+    discard('Start a new flowsheet') && edit(async () => adopted(await post('/api/new')))
 
   // The canvas node says what is selected; the document says what it
   // holds and the catalog says what those parameters mean. The inspector
@@ -561,6 +671,8 @@
     solved: !!result?.ok,
     widthByFlow,
     colorBy,
+    canUndo,
+    canRedo,
     panels: {
       results: showResults,
       context: showContext,
@@ -574,16 +686,16 @@
     actions: {
       save,
       reload: () => edit(load),
-      // A whole new flowsheet, so everything that described the old one
-      // has to go: the code context, and the palette's flags, which are
-      // answered against its bindings, as well as the canvas.
-      example: (key) => edit(async () => {
+      // A whole new flowsheet: see `adopted`.
+      example: (key) => discard('Open the example') && edit(async () => {
         const answer = await post('/api/examples/open', { key })
-        selected = null
-        await loadContext()
-        catalog = await get('/api/catalog')
-        return answer
+        return answer.ok ? adopted(answer) : answer
       }),
+      saveAs,
+      openFile,
+      undo,
+      redo,
+      newFile,
       export: runExport,
       quit,
       results: () => (showResults = !showResults),
@@ -606,6 +718,10 @@
 
 <svelte:window
   onkeydown={hotkey}
+  onbeforeunload={(e) => {
+    // Closing the last tab stops the server, and the edits with it.
+    if (dirty && !stopped) { e.preventDefault(); e.returnValue = '' }
+  }}
   onpagehide={(e) => alive.farewell({ persisted: e.persisted })}
   onpageshow={() => { if (!stopped) alive.ping() }}
 />
@@ -617,11 +733,12 @@
   <span
     class="path"
     title={source ? `${source}\nsaves to ${path}` : path}
-  >{shortPath(source || path) || 'no file'}</span>
+  >{shortPath(source || path) || 'no file'}{#if dirty}<span
+      class="dirty" title="edited since it was last saved"> •</span>{/if}</span>
   <Species {species} editable={speciesEditable} {busy} onapply={setSpecies} />
   <span class="summary">{summary}</span>
   <span class="spacer"></span>
-  {#if note}<span class="note">{note}</span>{/if}
+  {#if note}<span class="note" class:warn={note === warnNote}>{note}</span>{/if}
   <!-- Only while it is armed. Quit is a row in the File menu, and the
        menu shuts behind the click; this is the second half of the
        question, asked where the answer can be seen. -->
@@ -773,8 +890,10 @@
   .path, .summary, .version { color: var(--ink-soft); font-size: 0.8rem; }
   /* Already shortened, and never the reason the header is two lines tall. */
   .path { white-space: nowrap; }
+  .dirty { color: var(--accent); }
   .version { font-variant-numeric: tabular-nums; opacity: 0.75; }
   .note { color: var(--accent); font-size: 0.8rem; }
+  .note.warn { color: var(--bad); }
   .spacer { flex: 1; }
   /* It is on screen only to be answered, and it ends the process. */
   .quit {

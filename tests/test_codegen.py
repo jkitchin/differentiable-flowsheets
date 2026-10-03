@@ -105,6 +105,23 @@ class TestGeneratedScript:
         rebuilt = run_generated(codegen.to_python(fs))
         assert rebuilt.recycles == fs.recycles
 
+    def test_call_time_parameters_survive(self, thermo):
+        """A Splitter's `split_frac` rides on `Unit.params`, not on the
+        operation; a script without it built and then could not solve."""
+        from difflow import Splitter
+
+        fs = Flowsheet(species_order=SPECIES)
+        fs.add_feed("feed", make_stream({"water": 1.0, "ethanol": 0.1},
+                                        T=350.0, P=101325.0))
+        fs.add_unit(Unit("split", Splitter(SPECIES), ["feed"], ["a", "b"],
+                         params={"split_frac": 0.7}))
+
+        source = codegen.to_python(fs)
+        assert "params={'split_frac': 0.7}" in source
+        rebuilt = run_generated(source)
+        assert rebuilt.units[0].params == {"split_frac": 0.7}
+        assert float(rebuilt.solve()["a"]["F_water"]) == pytest.approx(0.7)
+
     def test_the_solve_block_is_optional(self, flowsheet):
         assert "__main__" in codegen.to_python(flowsheet)
         assert "__main__" not in codegen.to_python(flowsheet, include_solve=False)

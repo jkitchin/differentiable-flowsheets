@@ -540,7 +540,16 @@ class _Handler(BaseHTTPRequestHandler):
             if path == "/api/examples/open":
                 return session.open_example(payload.get("key", ""))
             if path == "/api/save":
-                return session.save()
+                return session.save(payload.get("path"),
+                                    overwrite=bool(payload.get("overwrite")))
+            if path == "/api/open":
+                return session.open_file(payload.get("path"))
+            if path == "/api/new":
+                return session.new()
+            if path == "/api/undo":
+                return session.undo()
+            if path == "/api/redo":
+                return session.redo()
             if path == "/api/layout":
                 return session.set_layout(payload.get("nodes", {}))
             if path == "/api/unit":

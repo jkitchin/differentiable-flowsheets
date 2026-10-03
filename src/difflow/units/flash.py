@@ -637,6 +637,9 @@ class Splitter:
     references = ["Seider, Seader, Lewin, Widagdo. Product & Process Design Principles, 4e."]
     parameter_symbols = {}
     parameter_units = {}
+    #: outlets to draw when dropped on a canvas: the count follows
+    #: ``split_frac``, which the return annotation cannot say
+    default_outlets = 2
 
     def __init__(self, species_order: list[str]):
         """Initialize splitter.

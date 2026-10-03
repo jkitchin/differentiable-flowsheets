@@ -33,11 +33,44 @@ entirely.
 
 from __future__ import annotations
 
+import functools
+import math
 import threading
 import types
 from pathlib import Path
 
 from difflow import scripts
+
+
+#: how many edits Undo reaches back through
+UNDO_DEPTH = 100
+
+
+def _undoable(method):
+    """Record the model before `method`, for Undo, if `method` changed it.
+
+    By comparing the whole model before and after rather than by trusting
+    each route to say: a refused edit records nothing, and an edit that
+    lands back where it started is not a step anyone would want to undo.
+    Nested calls (an `add_unit` that runs through `_edit`) record once.
+    """
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        if self._recording:
+            return method(self, *args, **kwargs)
+        with self._lock:
+            self._recording = True
+            try:
+                before = self._state()
+                answer = method(self, *args, **kwargs)
+            finally:
+                self._recording = False
+            if before is not None and self._state() != before:
+                self._undo.append(before)
+                del self._undo[:-UNDO_DEPTH]
+                self._redo.clear()
+            return answer
+    return wrapper
 
 
 def _number(value) -> float | None:
@@ -59,10 +92,17 @@ def _as_number(value, fallback, field: str) -> float:
     """
     if value is None or value == "":
         return float(fallback)
+    # `float(True)` is 1.0 and `float("nan")` is a float: both used to be
+    # accepted, and a NaN feed solved "successfully" to NaN everywhere.
+    if isinstance(value, bool):
+        raise _BadFeed(f"{field} must be a number")
     try:
-        return float(value)
+        number = float(value)
     except (TypeError, ValueError):
         raise _BadFeed(f"{field} must be a number") from None
+    if not math.isfinite(number):
+        raise _BadFeed(f"{field} must be a finite number")
+    return number
 
 
 #: Names the code context may use for the species list, in the order the
@@ -189,11 +229,23 @@ class FlowsheetSession:
             # unbuildable, and it says so on the palette row. `set_species`
             # is how that gets answered.
             self.flowsheet = _empty_flowsheet()
+        # A file saved with an unfinished unit in it opens with its red
+        # node, rather than with a unit that silently cannot run.
+        self._adopt(self.flowsheet, self.bindings, self.context_error)
         # Re-entrant: a console cell runs on the request thread while
         # `console_run` holds this lock, and `session.solve()` -- which the
         # console advertises -- takes it again. A plain Lock deadlocked
         # there, and every edit route after it hung until a restart.
         self._lock = threading.RLock()
+        #: the model before each edit, newest last, and the ones undone
+        self._undo: list[str] = []
+        self._redo: list[str] = []
+        self._recording = False
+        #: the document as it was last read or written, to say whether
+        #: closing the editor now would lose anything. Compared rather
+        #: than flagged by each edit: an edit made from the console goes
+        #: around every route, and a flag set per route would miss it.
+        self._saved = self._state()
 
     # -- the code context ---------------------------------------------
 
@@ -230,6 +282,7 @@ class FlowsheetSession:
             "error": self.context_error,
         }
 
+    @_undoable
     def set_code_context(self, source: str) -> dict:
         """Adopt a snippet from the browser, or say why it will not run.
 
@@ -287,6 +340,7 @@ class FlowsheetSession:
             "editable": not (self.flowsheet is None or self._built()),
         }
 
+    @_undoable
     def set_species(self, names) -> dict:
         """Name the species of a flowsheet that has no units yet.
 
@@ -353,6 +407,7 @@ class FlowsheetSession:
             "unfed": edit.unfed(self.flowsheet),
         }
 
+    @_undoable
     def set_feed(self, name, spec: dict | None = None) -> dict:
         """Declare or change the feed on a stream, and say what it carries.
 
@@ -436,6 +491,7 @@ class FlowsheetSession:
             self.streams = None
         return {"ok": True, "name": name, "T": T, "P": P, "flows": flows}
 
+    @_undoable
     def remove_feed(self, name: str) -> dict:
         """Undeclare a feed, leaving the inlet unfed again.
 
@@ -508,12 +564,42 @@ class FlowsheetSession:
             out[name] = entry
         return out
 
+    def _state(self) -> str | None:
+        """The whole model as one string, or ``None`` if it will not write.
+
+        What a save would put on disk --- units, wiring, feeds, the code
+        context and the stored layout --- and not what `document` serves,
+        which fills in positions nobody chose.
+        """
+        if self.flowsheet is None:
+            return None
+        try:
+            import json
+
+            from difflow import serialize
+
+            return json.dumps(serialize.to_dict(self.flowsheet,
+                                                refs=self.bindings),
+                              default=str)
+        except Exception:
+            return None
+
+    @property
+    def dirty(self) -> bool:
+        """Would quitting now lose an edit?
+
+        A model that stops serializing counts as changed. One that never
+        did (a script whose units hold callables) has no file to lose
+        edits from, so it is not nagged about on every quit.
+        """
+        return self._state() != self._saved
+
     def document(self) -> dict:
         from difflow import serialize
 
         if self.flowsheet is None:
             return {"flowsheet": None, "path": str(self.path or ""),
-                    "source": str(self.source or "")}
+                    "source": str(self.source or ""), "dirty": False}
         document = serialize.to_dict(self.flowsheet, refs=self.bindings)
         document.setdefault("view", {})
         # Auto-layout underneath, stored positions on top. Not "one or the
@@ -535,6 +621,10 @@ class FlowsheetSession:
             # serialized document would be exported to a file and read
             # back as though it were.
             "pending": self.pending_units(),
+            # Whether the header marks the file as edited, and whether the
+            # editor asks before a quit or an example throws the edit away.
+            "dirty": self.dirty,
+            **self.history(),
             # The species control in the header reads these. Carried on the
             # document rather than fetched separately because every edit
             # already reloads it, and an empty flowsheet's species are the
@@ -653,6 +743,7 @@ class FlowsheetSession:
 
     # -- writes -------------------------------------------------------
 
+    @_undoable
     def replace(self, document: dict) -> dict:
         """Adopt a flowsheet sent from the browser.
 
@@ -688,6 +779,10 @@ class FlowsheetSession:
             return {"ok": False, "error": f"no example named {key!r}"}
         answer = self.replace(document)
         self.path = self.source = None
+        self._forget_history()
+        # Nothing to lose yet: the example is one menu click from coming
+        # back exactly as it is.
+        self._saved = self._state()
         return answer
 
     # -- incremental edits --------------------------------------------
@@ -698,6 +793,7 @@ class FlowsheetSession:
     # every unit -- and where a live `thermo` must survive the edit by
     # identity rather than by round-tripping through JSON.
 
+    @_undoable
     def _edit(self, fn, *args, moves_only: bool = False, **kwargs) -> dict:
         """Run one edit under the lock, reporting a refusal as a value.
 
@@ -724,11 +820,14 @@ class FlowsheetSession:
             self.streams = None
         return {"ok": True, **(result or {})}
 
+    @_undoable
     def patch_unit(self, name: str, changes: dict) -> dict:
         """Set parameters, rename, or move one unit.
 
         ``changes`` may carry ``params`` (a partial dict, merged over
-        what the unit has), ``name`` (a rename) and ``position``
+        what the unit has), ``call_params`` (the same, for the arguments
+        passed to the operation on every call --- ``Unit.params``; a
+        ``None`` value removes one), ``name`` (a rename) and ``position``
         (``{"x": .., "y": ..}``), in any combination. Anything else is
         refused by name rather than ignored: an editor that drops an
         edit on the floor is worse than one that rejects it.
@@ -736,11 +835,13 @@ class FlowsheetSession:
         from difflow.gui import edit
 
         def apply() -> dict:
-            unknown = sorted(set(changes) - {"params", "name", "position"})
+            unknown = sorted(set(changes) - {"params", "call_params", "name",
+                                             "position"})
             if unknown:
                 raise edit.EditError(
                     f"cannot patch {', '.join(repr(u) for u in unknown)}; "
-                    "a unit takes 'params', 'name' and 'position'."
+                    "a unit takes 'params', 'call_params', 'name' and "
+                    "'position'."
                 )
             u = edit.unit(self.flowsheet, name)
             params = changes.get("params")
@@ -748,6 +849,11 @@ class FlowsheetSession:
                 if not isinstance(params, dict):
                     raise edit.EditError("'params' must be an object")
                 u.operation = edit.rebuild(u.operation, name, params)
+            call_params = changes.get("call_params")
+            if call_params:
+                u.params = edit.call_params(
+                    u.params, call_params, name,
+                    self._schema(name).get("call_parameters", []))
             new_name = changes.get("name")
             if new_name and new_name != name:
                 self._rename_unit(u, new_name)
@@ -792,6 +898,7 @@ class FlowsheetSession:
         # off the flowsheet, and the coordinate with it.
         self.flowsheet.view.setdefault("nodes", {})[key] = {"x": x, "y": y}
 
+    @_undoable
     def add_unit(self, operation: str, name: str | None = None,
                  position=None, extras: dict | None = None) -> dict:
         """Drop a unit from the palette onto the canvas.
@@ -1178,7 +1285,11 @@ class FlowsheetSession:
         )
 
     def _ports(self, name: str) -> dict:
-        """The port spec of the class behind an existing unit.
+        """The port spec of the class behind an existing unit."""
+        return self._schema(name)["ports"]
+
+    def _schema(self, name: str) -> dict:
+        """The catalog schema of the class behind an existing unit.
 
         An unfinished unit has a stand-in where its operation goes, and
         describing *that* would report a class with no ports at all --- so
@@ -1196,8 +1307,8 @@ class FlowsheetSession:
                 raise edit.EditError(
                     f"{operation.operation!r} is not a registered operation"
                 )
-            return describe_class(info.cls).to_dict()["ports"]
-        return describe_class(type(operation)).to_dict()["ports"]
+            return describe_class(info.cls).to_dict()
+        return describe_class(type(operation)).to_dict()
 
     def rename_stream(self, old: str, new: str) -> dict:
         """Rename one stream everywhere it appears.
@@ -1241,18 +1352,161 @@ class FlowsheetSession:
 
         return self._edit(apply, moves_only=True)
 
-    def save(self) -> dict:
+    def save(self, path: str | None = None, overwrite: bool = False) -> dict:
+        """Write the flowsheet to its file, or to `path` (Save As).
+
+        A new `path` becomes the file from then on, and an existing file
+        there is only written over when `overwrite` says so: the browser
+        asks first, because a typed path is one typo from someone else's
+        flowsheet. Always JSON --- a script is a way in, not a way out.
+        """
         from difflow import serialize
 
         if self.flowsheet is None:
             return {"ok": False, "error": "no flowsheet loaded"}
-        if self.path is None:
-            return {"ok": False, "error": "no path was given on startup"}
+        target = self.path
+        if path is not None:
+            if not isinstance(path, str) or not path.strip():
+                return {"ok": False, "error": "save it where?"}
+            target = Path(path.strip()).expanduser().resolve()
+            if target.suffix.lower() != ".json":
+                target = target.with_name(target.name + ".json")
+            if not target.parent.is_dir():
+                return {"ok": False,
+                        "error": f"there is no folder {str(target.parent)!r}"}
+            if (target.exists() and not overwrite
+                    and target != (self.path and Path(self.path).resolve())):
+                return {"ok": False, "exists": True, "path": str(target),
+                        "error": f"{target.name} already exists"}
+        if target is None:
+            return {"ok": False, "error": "no file yet; use Save As"}
         try:
-            serialize.save(self.flowsheet, self.path, refs=self.bindings)
+            serialize.save(self.flowsheet, target, refs=self.bindings)
         except serialize.SerializationError as exc:
             return {"ok": False, "error": str(exc)}
-        return {"ok": True, "path": str(self.path)}
+        if path is not None:
+            self.path, self.source = target, None
+        self._saved = self._state()
+        return {"ok": True, "path": str(target)}
+
+    def open_file(self, path) -> dict:
+        """Replace the flowsheet with one read from disk, as on startup.
+
+        Built in full before anything is replaced, so a file that will
+        not load leaves the current flowsheet exactly where it was.
+        """
+        import json
+
+        from difflow import serialize
+
+        if not isinstance(path, str) or not path.strip():
+            return {"ok": False, "error": "open which file?"}
+        target = Path(path.strip()).expanduser().resolve()
+        if not target.is_file():
+            return {"ok": False, "error": f"there is no file {str(target)!r}"}
+        script = scripts.is_script(target)
+        try:
+            if script:
+                flowsheet = scripts.load_flowsheet(target)
+                context = (getattr(flowsheet, "view", None) or {}).get(
+                    "code_context") or ""
+                bindings, error = (evaluate_context(context)
+                                   if context.strip() else ({}, None))
+            else:
+                data = json.loads(target.read_text())
+                context = (data.get("view") or {}).get("code_context") or ""
+                bindings, error = (evaluate_context(context)
+                                   if context.strip() else ({}, None))
+                flowsheet = serialize.from_dict(data, refs=bindings)
+        except Exception as exc:
+            return {"ok": False,
+                    "error": f"could not open {target.name}: "
+                             f"{type(exc).__name__}: {exc}"}
+        with self._lock:
+            self._adopt(flowsheet, bindings, error)
+            self.source = target if script else None
+            self.path = scripts.save_target(target) if script else target
+            self._saved = self._state()
+            self._forget_history()
+        return {"ok": True, "path": str(self.path),
+                "source": str(self.source or "")}
+
+    def new(self) -> dict:
+        """Start again from an empty flowsheet, with no file behind it."""
+        with self._lock:
+            self._adopt(_empty_flowsheet(), {}, None)
+            self.path = self.source = None
+            self._saved = self._state()
+            self._forget_history()
+        return {"ok": True}
+
+    def _forget_history(self) -> None:
+        """Undo stops at a flowsheet's own beginning, not at the last one's."""
+        self._undo.clear()
+        self._redo.clear()
+
+    def undo(self) -> dict:
+        """Put the model back as it was before the last edit."""
+        return self._step(self._undo, self._redo, "undo")
+
+    def redo(self) -> dict:
+        """Make the last undone edit again."""
+        return self._step(self._redo, self._undo, "redo")
+
+    def _step(self, source: list, sink: list, verb: str) -> dict:
+        import json
+
+        from difflow import serialize
+
+        with self._lock:
+            if not source:
+                return {"ok": False, "error": f"nothing to {verb}"}
+            current = self._state()
+            data = json.loads(source[-1])
+            context = (data.get("view") or {}).get("code_context") or ""
+            try:
+                # The same snippet keeps the same objects: a live `thermo`
+                # survives an undo of a parameter edit by identity.
+                if context == self._source():
+                    bindings, error = self.bindings, self.context_error
+                else:
+                    bindings, error = (evaluate_context(context)
+                                       if context.strip() else ({}, None))
+                flowsheet = serialize.from_dict(data, refs=bindings)
+            except Exception as exc:
+                return {"ok": False,
+                        "error": f"could not {verb}: {type(exc).__name__}: {exc}"}
+            source.pop()
+            if current is not None:
+                sink.append(current)
+            self._adopt(flowsheet, bindings, error)
+            return {"ok": True, **self.history()}
+
+    def history(self) -> dict:
+        """Whether there is anything to undo or redo, for the Edit menu."""
+        return {"undo": bool(self._undo), "redo": bool(self._redo)}
+
+    def _adopt(self, flowsheet, bindings: dict, context_error) -> None:
+        """Make `flowsheet` the model, and forget what described the last one.
+
+        The unfinished units are read back off the flowsheet: they are on
+        it as `Incomplete` stand-ins, and a file saved with one in it
+        should open with its red node, not with a unit that silently
+        cannot run.
+        """
+        from difflow.incomplete import Incomplete
+
+        self.flowsheet = flowsheet
+        self.bindings, self.context_error = bindings, context_error
+        self.streams = None
+        self.solve_error = None
+        self.delta_vectors = None
+        self.pending = {
+            u.name: {"name": u.name, "operation": u.operation.operation,
+                     "needs": list(u.operation.needs),
+                     "hint": u.operation.hint}
+            for u in flowsheet.units if isinstance(u.operation, Incomplete)
+        }
 
     def solve(self) -> dict:
         """Solve, and report a failure rather than raising at the socket.
@@ -1284,6 +1538,15 @@ class FlowsheetSession:
                 "keeping the wiring it already has."
             )
             return {"ok": False, "error": self.solve_error, "pending": sorted(self.pending)}
+        # A required call argument that was never set raises "missing 1
+        # required positional argument" from inside the solve, naming
+        # neither the unit nor where to set it.
+        missing = self._missing_call_params()
+        if missing:
+            self.solve_error = "; ".join(
+                f"{unit} needs {', '.join(names)}" for unit, names in missing.items()
+            ) + ". Set them under 'call parameters' in the inspector."
+            return {"ok": False, "error": self.solve_error}
         try:
             with self._lock:
                 # The editor renders the verdict itself, in red, from the
@@ -1318,7 +1581,83 @@ class FlowsheetSession:
             # that exists, and saying nothing here would let them be read
             # as being about the one being drawn.
             "pending": sorted(self.pending),
+            "audit": self._audit(streams),
         }
+
+    #: Relative mass-balance gap above which a solve is flagged. Loose on
+    #: purpose: a recycle converged to its tolerance closes to about that
+    #: tolerance, and the case this exists for (a negative reactor volume
+    #: creating 12 % more mass) is nowhere near it.
+    MASS_GAP = 1e-4
+
+    def _audit(self, streams: dict) -> dict:
+        """What a solve that "worked" should still be checked for.
+
+        ``Flowsheet.solve`` returning is not the answer being physical: a
+        CSTR with ``V = -1`` solved to 2 mol/s in and 2.25 out and the
+        editor said "solved". Three checks, each cheap, none of which
+        changes ``ok``: streams holding NaN or infinity, negative flows,
+        and the overall mass balance --- feeds against the streams no unit
+        reads --- when every species has a molar mass in the database.
+        """
+        from difflow.database import get_species_data
+
+        fs = self.flowsheet
+        warnings = []
+        bad = sorted(name for name, stream in streams.items()
+                     if any(not isinstance(v, str) and not math.isfinite(float(v))
+                            for v in stream.values()))
+        if bad:
+            warnings.append(f"non-finite values (NaN or infinity) in "
+                            f"{', '.join(bad)}")
+        negative = sorted(
+            name for name, stream in streams.items() if name not in bad
+            and any(k.startswith("F_") and float(v) < -1e-9 for k, v in stream.items())
+        )
+        if negative:
+            warnings.append(f"negative flows in {', '.join(negative)}")
+
+        order = list(getattr(fs, "species_order", None) or [])
+        mass = None
+        try:
+            mw = {s: float(get_species_data(s).MW) for s in order}
+        except Exception:  # noqa: BLE001 -- a species the database lacks
+            mw = None
+        if mw and not bad:
+            read = {n for u in fs.units for n in u.inlet_names}
+            made = {n for u in fs.units for n in u.outlet_names}
+            products = sorted(made - read - set(fs.recycles))
+
+            def kg(names):
+                return sum(float(streams[n].get(f"F_{s}", 0.0)) * mw[s]
+                           for n in names if n in streams for s in order) / 1000.0
+
+            m_in, m_out = kg(fs.feeds), kg(products)
+            gap = (m_out - m_in) / max(abs(m_in), 1e-300)
+            mass = {"in": m_in, "out": m_out, "relative_gap": gap,
+                    "products": products}
+            if m_in > 0 and abs(gap) > self.MASS_GAP:
+                warnings.append(
+                    f"mass is not conserved: {m_in:.6g} kg/s in, "
+                    f"{m_out:.6g} kg/s out ({gap:+.2%}). Check the unit "
+                    "parameters (a volume or a fraction outside its range) "
+                    "and the reaction stoichiometry."
+                )
+        return {"warnings": warnings, "mass": mass}
+
+    def _missing_call_params(self) -> dict[str, list[str]]:
+        """Required ``__call__`` arguments no unit has a value for."""
+        missing = {}
+        for u in self.flowsheet.units:
+            try:
+                specs = self._schema(u.name).get("call_parameters", [])
+            except Exception:  # noqa: BLE001 -- the solve will say what
+                continue
+            names = [p["name"] for p in specs
+                     if p["required"] and p["name"] not in (u.params or {})]
+            if names:
+                missing[u.name] = names
+        return missing
 
     def _solve_error(self, exc: Exception) -> str:
         """A solve failure, translated where the raw message names nothing.
@@ -1504,6 +1843,7 @@ class FlowsheetSession:
         except Exception:
             return None
 
+    @_undoable
     def console_run(self, source: str) -> dict:
         """Run one cell against the live model.
 

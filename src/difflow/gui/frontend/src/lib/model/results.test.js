@@ -34,6 +34,11 @@ test('total is the sum of the species flows and nothing else', () => {
   assert.equal(total({ T: 350, P: 101325 }), 0)
 })
 
+test('a total with a NaN in it is NaN, not the sum of the rest', () => {
+  assert.ok(Number.isNaN(total({ F_a: 1, F_b: NaN })))
+  assert.ok(Number.isNaN(total({ F_a: 1, F_b: Infinity })))
+})
+
 test('the table has a column per species across every stream', () => {
   const table = streamTable({
     species: ['a'],
