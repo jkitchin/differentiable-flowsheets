@@ -3,7 +3,7 @@
 Every difflow_refinery module that needs a heat of formation, an absolute
 entropy or an ideal-gas heat capacity for reaction thermochemistry reads it
 here -- the reformer, isomerization, alkylation, the FCC regenerator, the
-gas plant's heating values and (after #338) the hydrotreater, hydrocracker
+gas plant's heating values and (since #338) the hydrotreater, hydrocracker
 and residue desulfurizer. Before #339 each kept its own copy, entered from a
 different secondary source, and the copies disagreed (benzene 82.88-83.18,
 cyclohexane -122.08 to -123.13, isopentane -153.7 to -154.5 kJ/mol), so the

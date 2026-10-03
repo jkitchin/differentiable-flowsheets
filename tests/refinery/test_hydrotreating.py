@@ -211,18 +211,45 @@ def test_solve_tear_fixed_point():
 
 
 def test_thermochemistry_pinned_to_model_compounds():
-    # kJ/mol, from the Hf of the `chemicals` tables quoted in kinetics.MODEL_COMPOUNDS
-    np.testing.assert_allclose(np.asarray(hk.HDS_HEAT) / 1e3, [-104.66, -261.35, -157.0, -83.92, -173.06],
-                               atol=0.02)
-    np.testing.assert_allclose(np.asarray(hk.HDN_HEAT) / 1e3, [-238.158, -262.958], atol=1e-3)
-    assert [round(t[0] / 1e3, 2) for t in hk.AROMATIC_THERMO] == [-115.2, -124.6, -205.26]
-    assert hk.AROMATIC_THERMO[2][1] == pytest.approx(298.19 - 269.2 - 3 * 130.7)
-    assert hk.AROMATIC_THERMO[1][1] == pytest.approx(366.22 - 333.1 - 2 * 130.7)
-    assert hk.OLEFIN_HEAT == pytest.approx(-166940.0 + 43500.0)
+    # kJ/mol, 298.15 K, from the shared table (difflow_refinery.thermochemistry, #339/#338)
+    np.testing.assert_allclose(np.asarray(hk.HDS_HEAT) / 1e3,
+                               [-104.83, -261.15, -157.11, -83.368, -172.823], atol=1e-3)
+    np.testing.assert_allclose(np.asarray(hk.HDN_HEAT) / 1e3, [-238.54, -263.34], atol=1e-3)
+    # phenanthrene/THP, naphthalene/tetralin, benzene/cyclohexane
+    np.testing.assert_allclose(np.asarray(hk.AROMATIC_DH298) / 1e3, [-114.8, -123.97, -206.06], atol=1e-3)
+    assert hk.AROMATIC_DH298[2] == pytest.approx(-123130.0 - 82930.0)
+    assert hk.OLEFIN_HEAT == pytest.approx(-166950.0 + 41670.0)
+    assert hk.CRACK_HEAT == pytest.approx(-125650.0 - 83850.0 + 166950.0)
     assert hk.HDS_H2 == (2.0, 4.0, 3.0, 2.6, 3.95)
     assert hk.HDN_H2 == (4.0, 5.0)
     # every model reaction is balanced in hydrogen: H2 per event = (H gained by the HC + H in H2S/NH3)/2
     assert sum(hk.CRACK_GAS_SPLIT.values()) == pytest.approx(1.0)
+
+
+def test_aromatics_equilibrium_is_cp_integrated():
+    """#338: K(T) of every saturation step is the shared table's Cp-integrated
+    ln K (1 bar), not the constant-dH/dS form, which at 350 C is 3.8x too
+    large for benzene/cyclohexane (2.6x, 2.2x for the poly and di steps)."""
+    from difflow_refinery import thermochemistry as tc
+
+    for T in (573.15, 623.15, 693.15):
+        lnK = np.asarray(hk.aromatic_ln_K(T))
+        ref = [float(tc.ln_K(nu, T)) for nu in hk.AROMATIC_REACTIONS]
+        np.testing.assert_allclose(lnK, ref, rtol=0, atol=1e-10)
+        dH = [float(tc.reaction_enthalpy(nu, T)) for nu in hk.AROMATIC_REACTIONS]
+        np.testing.assert_allclose(np.asarray(hk.aromatic_heat(T)), dH, rtol=1e-12)
+    T = 623.15
+    const = np.asarray([-(float(tc.reaction_enthalpy(nu)) - T * float(tc.reaction_entropy(nu))) / (tc.R * T)
+                        for nu in hk.AROMATIC_REACTIONS])
+    ratio = np.exp(const - np.asarray(hk.aromatic_ln_K(T)))
+    np.testing.assert_allclose(ratio, [2.552, 2.180, 3.823], atol=2e-3)
+    # benzene + 3 H2 = cyclohexane at 350 C, 1 bar: ln K = -5.338
+    assert float(hk.aromatic_ln_K(T)[2]) == pytest.approx(-5.3384, abs=1e-4)
+    # traceable, and its van 't Hoff slope is the heat the energy balance uses
+    g = np.asarray(jax.jacfwd(hk.aromatic_ln_K)(T))
+    np.testing.assert_allclose(g, np.asarray(hk.aromatic_heat(T)) / (tc.R * T**2), rtol=1e-12)
+    g2 = np.asarray(jax.jacrev(jax.jit(hk.aromatic_ln_K))(T))
+    np.testing.assert_allclose(g2, g, rtol=1e-12)
 
 
 def test_kinetics_conserve_elements(bed_setup):

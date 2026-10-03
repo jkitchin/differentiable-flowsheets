@@ -137,7 +137,11 @@ in the code.
 heats of formation, entropies and heat capacities from one table,
 `difflow_refinery.thermochemistry` (#339). Each species records its
 source (CODATA, API Technical Data Book, CRC, Yaws, NIST-JANAF and TRC fits)
-and how far it was checked. The hydrotreater moves onto it with #338. See
+and how far it was checked. Since #338 the hydrotreater (and with it the
+hydrocracker's pretreat bed and the residue desulfurizer) reads it too, and its
+aromatics-saturation equilibria are Cp-integrated: the old constant-dH/dS form
+made K 3-5x too large at 300-420 °C. Benzene saturation now agrees with DWSIM
+to 0.016 in ln K and with the reformer exactly. See
 [Thermochemical data](unit-operations-refinery.md#thermochemical-data).
 Moving isomerization onto the table changed its C5/C6 equilibria. The iC5
 share of the C5s at 450 K went from 0.820 to 0.772 (DWSIM on ChemSep data

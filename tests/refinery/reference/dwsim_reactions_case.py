@@ -197,11 +197,11 @@ HDT_REACTIONS = {
     "HDN non-basic: carbazole + 5 H2 = CHB + NH3": (
         {"carbazole": -1, "hydrogen": -5, "cyclohexylbenzene": 1, "ammonia": 1}, "HDN_HEAT[1]"),
     "HDA mono: Bz + 3 H2 = CH": (
-        {"benzene": -1, "hydrogen": -3, "cyclohexane": 1}, "AROMATIC_THERMO[2], CCR_HEAT_PER_H2"),
+        {"benzene": -1, "hydrogen": -3, "cyclohexane": 1}, "aromatic_ln_K/aromatic_heat[2], CCR_HEAT_PER_H2"),
     "HDA di: naphthalene + 2 H2 = tetralin": (
-        {"naphthalene": -1, "hydrogen": -2, "tetralin": 1}, "AROMATIC_THERMO[1]"),
+        {"naphthalene": -1, "hydrogen": -2, "tetralin": 1}, "aromatic_ln_K/aromatic_heat[1]"),
     "HDA poly: phenanthrene + 2 H2 = THP": (
-        {"phenanthrene": -1, "hydrogen": -2, "tetrahydrophenanthrene": 1}, "AROMATIC_THERMO[0]"),
+        {"phenanthrene": -1, "hydrogen": -2, "tetrahydrophenanthrene": 1}, "aromatic_ln_K/aromatic_heat[0]"),
     "olefin: 1-hexene + H2 = nC6": (
         {"1_hexene": -1, "hydrogen": -1, "n_hexane": 1}, "OLEFIN_HEAT"),
     "cracking: nC6 + H2 = nC4 + C2": (
@@ -276,14 +276,17 @@ def reformer_constants() -> dict:
 
 
 def hdt_constants() -> dict:
-    """``MODEL_COMPOUNDS`` and the per-class constants built from them."""
+    """``MODEL_COMPOUNDS`` (the shared table's ``Hf``, ``S0`` and Cp cubic of
+    each model compound) and the per-class constants built from them."""
+    from difflow_refinery import thermochemistry as tc
     from difflow_refinery.hydrotreating import kinetics as k
     from difflow_refinery.residue import kinetics as rk
 
-    return {"model_compounds": {n: {"Hf": v[0], "S": v[1]} for n, v in k.MODEL_COMPOUNDS.items()},
+    return {"model_compounds": {n: {"Hf": v[0], "S": v[1], "cp": list(tc.species(n).cp)}
+                                for n, v in k.MODEL_COMPOUNDS.items()},
             "HDS_HEAT": list(k.HDS_HEAT), "HDS_H2": list(k.HDS_H2),
             "HDN_HEAT": list(k.HDN_HEAT), "HDN_H2": list(k.HDN_H2),
-            "AROMATIC_THERMO": [list(t) for t in k.AROMATIC_THERMO], "HDA_H2": list(k.HDA_H2),
+            "AROMATIC_DH298": list(k.AROMATIC_DH298), "HDA_H2": list(k.HDA_H2),
             "OLEFIN_HEAT": k.OLEFIN_HEAT, "CRACK_HEAT": k.CRACK_HEAT,
             "RESIDUE_S_HEAT": rk.RESIDUE_S_HEAT, "CCR_HEAT_PER_H2": rk.CCR_HEAT_PER_H2,
             "CONVERSION_HEAT": rk.CONVERSION_HEAT}

@@ -568,9 +568,9 @@ checked, K on 1 bar, Cp-integrated), `tc.IdealGasSet(names)` for arrays.
   a third source confirms; Yaws S0; TRC/JANAF/Joback Cp fits. Every override
   has a `note`; never edit a value without its source.
 - No module keeps its own copy: `tests/refinery/test_thermochemistry.py`
-  AST-scans every `difflow_refinery` module (allowlist: hydrotreating's
-  `MODEL_COMPOUNDS` until #338; separation Cp of the gas plant and HP
-  separator). `difflow.database` is core's table, not read by the refinery.
+  AST-scans every `difflow_refinery` module (allowlist: only the
+  separation Cp of the gas plant and HP separator; the hydrotreater moved
+  onto the table in #338). `difflow.database` is core's table, not read by the refinery.
 - Benzothiophene Hf is 166.3 (calorimetric, Sabbah 1979 / Good 1972), not
   ChemSep's 137.0. Moving isomerization onto it moved the C5/C6 equilibria
   (iC5/C5 at 450 K 0.820 -> 0.772); `isom_reference.json` (IDAES) is STALE
@@ -622,7 +622,13 @@ Invariants (do not weaken them):
   `gases=False` or through `res.fractionate(...)` (#328, a TBP sigmoid split).
   `NAPHTHA_HDT_PARAMS` is the illustrative naphtha constant set.
 - Rate constants are ILLUSTRATIVE; thermochemistry is model-compound data from
-  the `chemicals` tables. The Korsten-Hoffmann profile cross-check is NOT done.
+  the shared table (`difflow_refinery.thermochemistry`; `MODEL_COMPOUNDS` is a
+  view). The aromatics K is `aromatic_ln_K(T)` -- Cp-integrated, 1 bar standard
+  state, pH2 in bar -- and its heat `aromatic_heat(T)` at the same T, so energy
+  and equilibrium agree (#338: constant 298 K dH/dS made K 3-5x too large).
+  Irreversible heats are 298 K values; the hydrocracker/residue per-H2
+  saturation heats are `AROMATIC_DH298` (298 K, deliberate). The
+  Korsten-Hoffmann profile cross-check is NOT done.
 
 Docs: `docs/unit-operations-refinery.md` (Hydroprocessing building blocks; The
 hydrotreater). Tests: `tests/refinery/test_hydrotreating.py`.
