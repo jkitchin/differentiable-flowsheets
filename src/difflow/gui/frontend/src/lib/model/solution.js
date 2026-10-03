@@ -69,7 +69,12 @@ export function streamSummary(stream, order = [], theme = 'light') {
   const keys = speciesOf(stream, order)
   const names = keys.map((k) => k.slice(2))
   const F = total(stream)
-  const colors = speciesColors(names, theme)
+  // Colour and fold by place in the FLOWSHEET's order, not this stream's:
+  // a stream that lacks the first species must not shift every other
+  // species' colour down one. Species the order does not name go last.
+  const full = [...(order ?? []), ...names.filter((s) => !(order ?? []).includes(s))]
+  const rank = Object.fromEntries(full.map((s, i) => [s, i]))
+  const colors = speciesColors(full, theme)
   const rows = names.map((s) => {
     const flow = stream[`F_${s}`]
     return {
@@ -84,9 +89,9 @@ export function streamSummary(stream, order = [], theme = 'light') {
   const limit = (SPECIES_COLORS[theme] ?? SPECIES_COLORS.light).length
   const parts = []
   let other = 0
-  rows.forEach((r, i) => {
+  rows.forEach((r) => {
     if (!(r.x > 0)) return
-    if (i < limit) parts.push({ key: `F_${r.species}`, species: r.species, x: r.x, color: r.color })
+    if (rank[r.species] < limit) parts.push({ key: `F_${r.species}`, species: r.species, x: r.x, color: r.color })
     else other += r.x
   })
   // Keyed apart from the species: a species may itself be called

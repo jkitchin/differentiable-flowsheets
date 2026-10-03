@@ -214,3 +214,19 @@ test('a species called "other" does not share a key with the fold', () => {
   assert.equal(s.parts.length, 9)
   assert.equal(new Set(s.parts.map((p) => p.key)).size, s.parts.length)
 })
+
+test('a stream missing a species does not shift the others\' colours', () => {
+  const order = ['A', 'B', 'C']
+  const s = streamSummary({ F_B: 1, F_C: 1 }, order)
+  assert.equal(s.rows[0].color, SPECIES_COLORS.light[1])
+  assert.equal(s.rows[1].color, SPECIES_COLORS.light[2])
+})
+
+test('the fold goes by flowsheet order, not by rank in the stream', () => {
+  const order = Array.from({ length: 10 }, (_, i) => `s${i}`)
+  // s0 absent: s8 is still the ninth species and folds.
+  const stream = Object.fromEntries(order.slice(1).map((s) => [`F_${s}`, 1]))
+  const s = streamSummary(stream, order)
+  assert.ok(!s.parts.some((p) => p.species === 's8'))
+  assert.equal(s.parts.at(-1).key, 'other')
+})
