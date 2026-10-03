@@ -395,6 +395,11 @@ class TestEditing:
         error = json.loads(excinfo.value.read())["error"]
         assert expect in error and "AttributeError" not in error
 
+    def test_a_query_string_does_not_hide_a_route(self, client):
+        status, payload = client.get_json("/api/flowsheet?v=2")
+        assert status == 200 and "flowsheet" in payload
+        status, _ = client.get("/?reload=1")
+        assert status == 200
 
 
 # =============================================================================

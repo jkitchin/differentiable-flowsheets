@@ -489,18 +489,21 @@ class _Handler(BaseHTTPRequestHandler):
             # carries `documentation`, read from the packaging metadata,
             # and a second copy is a second thing to move.
         }
-        handler = routes.get(self.path)
+        # Routed on the path alone. A query string is not part of the
+        # resource -- `/?reload=1` or a cache-busting `?v=` is still the
+        # page -- and matching the raw request line answered both 404.
+        split = urlsplit(self.path)
+        handler = routes.get(split.path)
         if handler is not None:
             return handler()
         # /api/docs/<op>: one operation's rendered docstring. A prefix
         # route rather than a table entry, since the name is the path.
-        if self.path.startswith(DOCS_PREFIX):
-            operation = unquote(urlsplit(self.path).path[len(DOCS_PREFIX):])
+        if split.path.startswith(DOCS_PREFIX):
+            operation = unquote(split.path[len(DOCS_PREFIX):])
             return self._send(self.session.docs(operation))
         # /api/context?kind=&q=&name=&operation=: the assistant's brief.
-        # The only route that takes a query string, because it is the
+        # The only route that READS a query string, because it is the
         # only one whose request is a *question* rather than a resource.
-        split = urlsplit(self.path)
         if split.path == "/api/context":
             query = parse_qs(split.query)
             first = lambda key: (query.get(key) or [""])[0]   # noqa: E731
@@ -510,7 +513,7 @@ class _Handler(BaseHTTPRequestHandler):
                 name=first("name") or None,
                 operation=first("operation") or None,
             ))
-        asset = _static_file(self.path)
+        asset = _static_file(split.path)
         if asset is None:
             return self._send({"error": "not found"}, status=404)
         body, content = asset
@@ -553,7 +556,7 @@ class _Handler(BaseHTTPRequestHandler):
         is an answer about the flowsheet rather than a failure of the
         request. Only a malformed request gets a 4xx.
         """
-        path, session = self.path, self.session
+        path, session = urlsplit(self.path).path, self.session
         unit_path = "/api/unit/"
         feed_path = "/api/feed/"
         stream_path = "/api/stream/"
