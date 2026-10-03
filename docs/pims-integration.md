@@ -164,7 +164,7 @@ offer that itself, because its submodels are not differentiable.
 Writing into a running model, or driving whatever automation surface the
 installed PIMS version exposes. Deferred: it needs a licence and an install to
 scope responsibly. Follow the existing precedent for third-party bridges —
-`difflow.dwsim_import` is a pythonnet-gated prototype, `difflow.pyglenn_import`
+`difflow.dwsim_import` is pythonnet-gated (checked against DWSIM 9.0.5), `difflow.pyglenn_import`
 and `difflow.cantera_import` are optional imports — and keep it behind a lazy
 import so the core path stays dependency-free.
 

@@ -22,6 +22,7 @@ The `difflow_refinery` plugin provides:
 - **The preheat train** (`difflow_refinery.preheat`): tank to furnace inlet. It covers the exchangers, the desalter and the preflash drum, and is solved together with the column whose products and pumparounds heat it (`PreheatedCrudeUnit`). It also provides the Ebert-Panchal fouling rates and a cleaning ranking from one gradient. The palette operations are `Desalter`, `PreflashDrum` and `CrudeUnitWithPreheat`.
 - **`VacuumColumn`** (`difflow_refinery.vacuum`): the vacuum unit, atmospheric residue to LVGO, HVGO, slop and vacuum residue, with contaminants carried per cut. It runs on the crude unit's own pseudo-components, so the CDU residue feeds it directly in a `Flowsheet`.
 - **Correlations** (`difflow_refinery.correlations`): Twu, Riazi-Daubert, Lee-Kesler, Kesler-Lee and Maxwell-Bonnell, each written once, for all three of the above.
+- **Thermochemical data** (`difflow_refinery.thermochemistry`, #339): one table of ideal-gas formation enthalpy, entropy and Cp for every refinery model compound, with per-species provenance, read by every unit with reactions. See [Thermochemical data](#refinery-thermochemistry).
 - **The fluid catalytic cracker** (`difflow_refinery.fcc`): a lumped-kinetics riser (3-, 4- or 5-lump) and a coke-burning regenerator solved together as the unit's heat balance (catalyst circulation and regenerator temperature are unknowns, the riser outlet temperature the spec), with a simplified main fractionator; dry gas, C3/C4 olefin streams, gasoline, LCO and slurry. A library, not a palette operation; its kinetic constants are illustrative. See [The fluid catalytic cracker](#refinery-fcc).
 - **C5/C6 isomerization** (`difflow_refinery.isomerization`): an adiabatic approach-to-equilibrium reactor on ideal-gas thermochemistry, with a shortcut stabilizer and optional DIP and DIH columns. The DIH recycle is converged by Anderson and differentiated implicitly. `isom_block` links the isomerate to a blend pool. The palette operations are `IsomerizationReactor` and `IsomerizationUnit`.
 - **Product blending** (`BlendPool`, `BlendComponent`): gasoline, jet, ULSD and fuel-oil pools with the nonlinear blending rules, signed spec margins and LP back-off. A library for optimisation and planning, not a palette operation.
@@ -947,7 +948,7 @@ feed = FCCFeed.from_characterization(char, rate=50.0,             # kg/s
 unit = FCCUnit(FCCParams(riser_outlet_T=793.15, feed_T=500.0))
 res = unit.solve(feed)
 res["outputs"]["conversion"], res["outputs"]["cat_oil"], res["outputs"]["regenerator_T"]
-# (0.747, 5.82, 1003.9 K) -- with the ILLUSTRATIVE default constants
+# (0.747, 5.82, 1004.1 K) -- with the ILLUSTRATIVE default constants
 res["balances"]          # mass, C, H, S, N, energy: relative errors ~1e-16
 ```
 
@@ -984,7 +985,7 @@ $$
 
 The 3- and 4-lump schemes' combined lumps are mapped onto products by split parameters (`coke_share`, `dry_gas_share`).
 
-**Regenerator** (`difflow_refinery.fcc.regenerator`). A well-mixed bed at `T_rg` burns coke of composition C/H/S/N (coke H `coke_hydrogen`; S at `coke_sulfur_factor` × feed S; `n_to_coke` of the feed N) to CO2, CO, H2O, SO2 and N2. CO/CO2 is specified (`co_co2`, 0 = full burn) or Arthur's primary-product ratio [F7], `CO/CO2 = 10^3.4 exp(-12400/RT)` (R in cal/mol/K) times `arthur_factor`; afterburn is not modelled, so `"arthur"` is a partial-burn model. Air (dry, 20.95 % O2) follows from the flue-gas O2 spec (`flue_o2`, wet mole fraction) -- or `air_rate` is given and the excess O2 is an output. Enthalpies are ideal-gas, `Hf(298.15) + ∫Cp dT` [F10, F11]; coke's enthalpy of formation is zero (elements), so its heat of combustion follows from its H content. The regenerated catalyst leaves clean.
+**Regenerator** (`difflow_refinery.fcc.regenerator`). A well-mixed bed at `T_rg` burns coke of composition C/H/S/N (coke H `coke_hydrogen`; S at `coke_sulfur_factor` × feed S; `n_to_coke` of the feed N) to CO2, CO, H2O, SO2 and N2. CO/CO2 is specified (`co_co2`, 0 = full burn) or Arthur's primary-product ratio [F7], `CO/CO2 = 10^3.4 exp(-12400/RT)` (R in cal/mol/K) times `arthur_factor`; afterburn is not modelled, so `"arthur"` is a partial-burn model. Air (dry, 20.95 % O2) follows from the flue-gas O2 spec (`flue_o2`, wet mole fraction) -- or `air_rate` is given and the excess O2 is an output. Enthalpies are ideal-gas, `Hf(298.15) + ∫Cp dT` [F10, F11], from the refinery's [shared thermochemistry table](#refinery-thermochemistry); coke's enthalpy of formation is zero (elements), so its heat of combustion follows from its H content. The regenerated catalyst leaves clean.
 
 **Heat balance** (`difflow_refinery.fcc.unit`). Unknowns `C/O` and `T_rg`; equations: riser outlet temperature = ROT spec, and regenerator energy in = out. Newton (`optimistix`) from `C/O = 6`, `T_rg = 980 K`; gradients of every output by the implicit function theorem (`optimistix`'s implicit adjoint, forward and reverse mode). The heat balance can have **more than one steady state** (multiplicity is a known property of FCC heat balances); with a very active catalyst the solve can land on a hot, low-circulation one, and `RegeneratorTemperatureWarning` fires above `regenerator_T_max` (760 °C, illustrative) -- the state is reported, not hidden.
 
@@ -1074,8 +1075,8 @@ Tested (`tests/refinery/test_fcc.py`):
 | F7 | Arthur, J.R. "Reactions between carbon and oxygen." *Trans. Faraday Soc.* **1951**, 47, 164--178. doi:10.1039/TF9514700164 | CO/CO2 ratio form | Citation verified (RSC listing; DOI from the RSC article URL). **Constants 10^3.4 and 12400 cal/mol are as quoted in the FCC literature, unverified against the paper.** |
 | F8 | Arbel, A.; Huang, Z.; Rinard, I.H.; Shinnar, R.; Sapre, A.V. "Dynamic and control of fluidized catalytic crackers. 1. Modeling of the current generation of FCC's." *Ind. Eng. Chem. Res.* **1995**, 34(4), 1228--1243. | (cross-check target, not done) | Citation verified (web search). |
 | F9 | McFarlane, R.C.; Reineman, R.C.; Bartee, J.F.; Georgakis, C. "Dynamic simulator for a model IV fluid catalytic cracking unit." *Comput. Chem. Eng.* **1993**, 17(3), 275--300. | (cross-check target, not done) | Citation verified (web search). |
-| F10 | Reid, R.C.; Prausnitz, J.M.; Poling, B.E. *The Properties of Gases and Liquids*, 4th ed.; McGraw-Hill: New York, **1987**; Appendix A. | Ideal-gas Cp of N2, O2, CO2, CO, H2O, SO2 | N2 and CO2 equal the `difflow.database` entries (same source; pinned by test). **O2, CO, H2O, SO2 transcribed for this module, unverified against the book.** |
-| F11 | Cox, J.D.; Wagman, D.D.; Medvedev, V.A. *CODATA Key Values for Thermodynamics*; Hemisphere: New York, **1989**. CO: Chase, M.W. *NIST-JANAF Thermochemical Tables*, 4th ed., *J. Phys. Chem. Ref. Data* Monograph 9, **1998**. | Hf(298.15) of CO2 (-393.51), H2O(g) (-241.826), SO2 (-296.81), CO (-110.53) kJ/mol | Values are the standard tabulated ones, from memory of the tables (unverified against the printed tables in this session); pinned by test. |
+| F10 | Chase, M.W. *NIST-JANAF Thermochemical Tables*, 4th ed., *J. Phys. Chem. Ref. Data* Monograph 9, **1998** (as tabulated in the `chemicals` package; N2 and O2 through the NIST WebBook Shomate fits to them). | Ideal-gas Cp of N2, O2, CO2, CO, H2O, SO2: cubics fitted by this project over 298.15-1500 K, within 1.1 % of the tables | Since #339 (`difflow_refinery.thermochemistry`). Before it, Reid, Prausnitz & Poling 4th ed. cubics, four of them unverified transcriptions; they agree with the JANAF fits to 1.1 % below 1050 K. |
+| F11 | Cox, J.D.; Wagman, D.D.; Medvedev, V.A. *CODATA Key Values for Thermodynamics*; Hemisphere: New York, **1989**. | Hf(298.15) of CO2 (-393.51), H2O(g) (-241.826), SO2 (-296.81), CO (-110.53) kJ/mol | The standard tabulated values; they agree with NIST-JANAF and ATcT 1.112 (as in `chemicals`) within 0.05 kJ/mol. Pinned by test in `test_thermochemistry.py`. |
 | F12 | ASTM D4737, *Standard Test Method for Calculated Cetane Index by Four Variable Equation* (edition unverified). | LCO cetane index | The plugin's existing `cetane_index_d4737`. |
 | F13 | Han, I.-S.; Chung, C.-B. "Dynamic modeling and simulation of a fluidized catalytic cracking process. Part I: Process modeling." *Chem. Eng. Sci.* **2001**, 56(5), 1951--1971. | (riser slip parameters, not used) | Citation verified (web search). |
 | F14 | Sadeghbeigi, R. *Fluid Catalytic Cracking Handbook*, 3rd ed.; Butterworth-Heinemann: Oxford, **2012**. | Orders of magnitude for the illustrative defaults (yield ranges, coke H 6-8 wt%, H2S share of feed S, CCR to coke) | **Not checked in this session (unverified)**; no number is attributed to a specific page. |
@@ -1127,7 +1128,11 @@ characterisation's Tc, Pc, acentric factor and Watson-Nelson Cp. `kij`
 is zero between hydrocarbons. The tabulated nonzero pairs (CO2, H2S and
 N2 with the light paraffins) are recalled from the DECHEMA compilation
 and are marked *verify* in the source. Each component also carries a
-lower heating value, computed from its heat of formation.
+lower heating value, computed from its heat of formation and those of CO2,
+H2O and SO2, all from the [shared thermochemistry
+table](#refinery-thermochemistry) (#339). The ideal-gas Cp cubics of the
+gas plant stay its own: they are separation thermo, and the IDAES and
+DWSIM references are built on them.
 
 `cuts=` keeps only the named cuts of the characterisation, in its own
 order. A naphtha taken off a whole-crude characterisation carries the
@@ -1437,25 +1442,32 @@ cyclohexane, benzene and an inert C7+ lump. Every equilibrium constant
 follows from the species' ideal-gas heats of formation, absolute
 entropies and Cp:
 
-- dHf from Prosen and Rossini (the API Project 44 values, as the NIST WebBook gives them);
-- entropies from Yaws;
-- Cp cubics fitted here to the NIST WebBook gas tables.
+- dHf: API Technical Data Book values;
+- entropies: Yaws;
+- Cp: cubics fitted to the TRC ideal-gas correlation, 298-1000 K.
 
-The module docstring lists the sources one by one. **No test yet compares
-the free energies derived here with a tabulated set.** It matters: 0.5
-kJ/mol in one isomer moves its equilibrium share by about 15 % at 420 K.
+All three are the species' rows of the refinery's [shared thermochemistry
+table](#refinery-thermochemistry) (#339), which records the sources and the
+choices. Before #339 this module kept its own copy: Prosen & Rossini dHf,
+and Cp fitted to the NIST WebBook tables. The C5 and C6 isomer differences
+moved with the change: nC5 → iC5 is -6.99 kJ/mol now against -8.10 before.
+**No test yet compares the free energies derived here with a tabulated
+set.** It matters: 0.5 kJ/mol in one isomer moves its equilibrium share by
+about 15 % at 420 K, and the API TDB and CRC values for the dimethylbutanes
+differ by 1.2-1.3 kJ/mol.
 
 `equilibrium_table(T)` and `family_equilibrium(family, T)` give the
 closed-form isomer equilibrium. The shares within the C6 paraffins are:
 
 | T (C) | nC6 | 2MP | 3MP | 2,3-DMB | 2,2-DMB |
 | --- | --- | --- | --- | --- | --- |
-| 120 | 0.067 | 0.223 | 0.128 | 0.109 | 0.473 |
-| 160 | 0.092 | 0.253 | 0.156 | 0.111 | 0.388 |
-| 200 | 0.117 | 0.273 | 0.178 | 0.110 | 0.322 |
-| 240 | 0.141 | 0.287 | 0.195 | 0.107 | 0.270 |
+| 120 | 0.069 | 0.280 | 0.164 | 0.090 | 0.397 |
+| 160 | 0.092 | 0.303 | 0.190 | 0.091 | 0.324 |
+| 200 | 0.115 | 0.317 | 0.210 | 0.090 | 0.268 |
+| 240 | 0.137 | 0.325 | 0.225 | 0.088 | 0.225 |
 
-The isopentane share falls from 0.86 to 0.78 over the same range. The
+(Before #339: 2,2-DMB 0.473 and 2MP 0.223 at 120 C.) The isopentane share
+falls from 0.82 to 0.73 over the same range (0.86 to 0.78 before #339). The
 branched isomers are favoured cold, which is why the catalysts that run
 coldest make the best isomerate.
 
@@ -1591,10 +1603,19 @@ The total and per-carbon-number balances close to 2e-11 or better.
 
 | Configuration | Paraffinic: RON | Yield (vol) | DIH / DIP duty (MW) | Benzene-rich: RON | Yield (vol) | DIH / DIP duty (MW) |
 | --- | --- | --- | --- | --- | --- | --- |
-| once-through | 82.18 | 0.988 | - | 81.56 | 1.008 | - |
-| DIP | 83.06 | 0.999 | - / 6.96 | 81.13 | 1.007 | - / 5.24 |
-| DIH | 82.81 | 0.992 | 6.92 / - | 82.79 | 1.004 | 6.26 / - |
-| DIP + DIH | 83.47 | | 7.11 / 6.96 | 83.20 | | 6.38 / 5.24 |
+| once-through | 80.98 | 0.992 | - | 80.74 | 1.007 | - |
+| DIP | 81.95 | 0.999 | - / 6.96 | 80.66 | 1.009 | - / 5.24 |
+| DIH | 81.31 | 0.991 | 6.61 / - | 81.61 | 1.004 | 6.20 / - |
+| DIP + DIH | (83.47) | | (7.11 / 6.96) | (83.20) | | (6.38 / 5.24) |
+
+The table is on the [shared thermochemistry](#refinery-thermochemistry)
+(#339), which made the dimethylbutanes 0.7 kJ/mol less stable relative to
+n-hexane and the pentane isomerization 1.1 kJ/mol less exothermic. Octanes
+fell by 0.8-2.2 RON from the pre-#339 values (once-through 82.18 and 81.56,
+DIP 83.06 and 81.13, DIH 82.81 and 82.79). The DIP + DIH row in brackets is
+the pre-#339 run: it was not repeated, because the two-column recycle
+exceeded the memory available where #339 was made. The `T_in` sweep figures
+in the bullets below are also pre-#339.
 
 The volume yield exceeds one on the benzene-rich feed. Saturating benzene
 and adding hydrogen makes a liquid of lower density.
@@ -1605,11 +1626,11 @@ about 12 s the first time and 4 s after that.
 
 What the numbers show:
 
-- **The recycle gain is modest.** The DIH adds 0.6 RON on the paraffinic feed and 1.2 on the benzene-rich one. Licensors usually quote a larger gap between once-through and DIH units (verify). These rate constants and constructed feeds are not fitted to any unit, so neither number should be read as a prediction.
-- **A DIP can lower the octane.** On the benzene-rich feed, taking the isopentane round the reactor leaves less mass to absorb the benzene exotherm. The bed runs hotter (a 91 K rise, against 70 K once through), and the hotter outlet equilibrium favours the less-branched isomers.
+- **The recycle gain is modest.** The DIH adds 0.3 RON on the paraffinic feed and 0.9 on the benzene-rich one (0.6 and 1.2 before #339). Licensors usually quote a larger gap between once-through and DIH units (verify). These rate constants and constructed feeds are not fitted to any unit, so neither number should be read as a prediction.
+- **A DIP can lower the octane.** On the benzene-rich feed, taking the isopentane round the reactor leaves less mass to absorb the benzene exotherm. The bed runs hotter (an 83 K rise, against 65 K once through; 91 and 70 K before #339), and the hotter outlet equilibrium favours the less-branched isomers.
 - **RON has a maximum in `T_in`.** Cold, the bed is short of equilibrium; hot, the equilibrium itself is worse. Once-through on the paraffinic feed, RON is 77.0 at 110 C, 82.5 at 150 C and 80.6 at 190 C. On the benzene-rich feed it peaks near 120 C, at 82.2.
 - **The benzene-rich feed runs away.** At `T_in` of 160 C and above, the exotherm drives hydrocracking, which is itself exothermic and uses hydrogen. The bed then uses up its hydrogen. `IsomerizationHydrogenWarning` fires when the outlet H2/HC falls below 0.05, before the separator flash fails.
-- **The stabilizer spec is not always met.** On the benzene-rich feed with a DIH, the isomerate's RVP is 80 kPa against a 90 kPa spec. The stabilizer keeps every butane and its C5+ alone is below the spec. `stabilizer_c4_recovery` reports this as 1 and `info["stabilizer"]["spec_met"]` as False.
+- **The stabilizer spec is not always met.** On the benzene-rich feed with a DIH, the isomerate's RVP is 79 kPa against a 90 kPa spec (78 kPa once through). The stabilizer keeps every butane and its C5+ alone is below the spec. `stabilizer_c4_recovery` reports this as 1 and `info["stabilizer"]["spec_met"]` as False.
 
 ### Isomerization gotchas
 
@@ -1918,7 +1939,7 @@ Checked (`tests/refinery/test_reforming.py`; flowsheet tests are marked `slow`):
 - `wait_for_ron` reaches a RON target (95 on the lean feed) to 1e-3.
 - The reformate enters a `BlendPool` as a property-mode `BlendComponent`.
 - Implicit gradients of reformate yield, RON, net H2 and first-reactor ΔT with respect to WAIT, separator pressure, H2/HC and naphthene content match central differences to 1e-5 (measured: 1e-7). A full `jax.jacfwd` of those 4x4 plus the eight finite-difference solves takes about eight minutes on one CPU core, mostly compilation of the traced recycle.
-- Thermochemistry: coded `Hf`/`S0` are pinned to their sources; `Hf` agrees with `difflow.database` within 1 kJ/mol for the 16 species both hold; `ln K` is the Gibbs energy; van 't Hoff holds against the coded heats of reaction; a long bed reaches the Gibbs-energy equilibrium.
+- Thermochemistry: `Hf`, `S0` and Cp are the [shared table's](#refinery-thermochemistry) (#339; unchanged by the move), pinned to their sources there; `Hf` agrees with `difflow.database` within 1 kJ/mol for the 16 species both hold; `ln K` is the Gibbs energy; van 't Hoff holds against the coded heats of reaction; a long bed reaches the Gibbs-energy equilibrium.
 
 **Not done, and not claimed:**
 
@@ -1990,7 +2011,7 @@ Two robustness rules (#332):
 
 `HPSeparator(layout)(flows, T, P, comps)` returns `(vapour, liquid, water, FlashResult)`: gases and cut molecules split by the flash, every attribute with its cut, water decanted whole (no free-water VLE).
 
-At 50 °C and 47 bar the default diesel case dissolves 10.7 mol/s of H2 in about 230 mol/s of separator liquid (x_H2 about 0.045); that is the `h2.dissolved` loss.
+At 50 °C and 47 bar the default diesel case dissolves 10.7 mol/s of H2 in about 230 mol/s of separator liquid (x_H2 about 0.045); that is the `h2.dissolved` loss. The flash is checked against DWSIM's PR78 on the same effluent, and the dissolved H2, H2S, NH3 and C1 are tabulated there with what DWSIM's own constants and kij do to them: [Validation against DWSIM: light ends, HP separator and gas plant](#refinery-dwsim-lightends).
 
 (refinery-hydroprocessing-reactor)=
 ### The trickle-bed reactor and the kinetic-model interface
@@ -2077,40 +2098,42 @@ Per cut, on the cut's own attribute concentrations (`c`, mol/m³ of fugacity-equ
 
 | Reaction | Rate | H2 per event | Heat per event (kJ/mol) |
 |---|---|---|---|
-| HDS, class j: S_j + nu_j H2 -> H2S | `f k_j c_Sj h / (1 + K_H2S c_H2S + K_N c_Nbasic)^2` | 2.0, 4.0, 3.0, 2.6, 3.95 | -104.7, -261.4, -157.0, -83.9, -173.1 |
-| HDN, basic / non-basic | `f k_j c_Nj h / (1 + K_H2S c_H2S)` | 4.0, 5.0 | -238.2, -263.0 |
-| poly + 2 H2 <-> di | `f k h (c_A3 - c_A2 / (K3 (pH2/1 bar)^2))` | 2 | -115.2 |
-| di + 2 H2 <-> mono | `f k h (c_A2 - c_A1 / (K2 (pH2/1 bar)^2))` | 2 | -124.6 |
-| mono + 3 H2 <-> naphthene | `f k h (c_A1 - c_Nn / (K1 (pH2/1 bar)^3))` | 3 | -205.3 |
-| olefin + H2 -> paraffin | `f k c_O h` | 1 | -123.4 |
-| cracking leak: molecule + H2 -> lighter molecule + C1--C4 | `f k c_cut` | 1 | -42.7 |
+| HDS, class j: S_j + nu_j H2 -> H2S | `f k_j c_Sj h / (1 + K_H2S c_H2S + K_N c_Nbasic)^2` | 2.0, 4.0, 3.0, 2.6, 3.95 | -104.8, -261.2, -157.1, -83.4, -172.8 |
+| HDN, basic / non-basic | `f k_j c_Nj h / (1 + K_H2S c_H2S)` | 4.0, 5.0 | -238.5, -263.3 |
+| poly + 2 H2 <-> di | `f k h (c_A3 - c_A2 / (K3(T) (pH2/1 bar)^2))` | 2 | dH(T): -114.8 at 25 °C, -124.8 at 350 °C |
+| di + 2 H2 <-> mono | `f k h (c_A2 - c_A1 / (K2(T) (pH2/1 bar)^2))` | 2 | dH(T): -124.0, -132.1 |
+| mono + 3 H2 <-> naphthene | `f k h (c_A1 - c_Nn / (K1(T) (pH2/1 bar)^3))` | 3 | dH(T): -206.1, -219.9 |
+| olefin + H2 -> paraffin | `f k c_O h` | 1 | -125.3 |
+| cracking leak: molecule + H2 -> lighter molecule + C1--C4 | `f k c_cut` | 1 | -42.55 |
 
 Sulfur classes in the order sulfides, thiophenes, benzothiophenes, dibenzothiophenes, hindered (4-/4,6-alkyl) DBTs.
 
 - **HDS** is the Langmuir-Hinshelwood-Hougen-Watson rate with a squared H2S-inhibition denominator, the form of Korsten & Hoffmann (1996) and, with a richer denominator, of Froment, Depauw & Vanrysselberghe (1994) and Vanrysselberghe & Froment (1996). It is first order in each class. A sum of first-order classes with different constants is what gives a lumped total-sulfur rate its apparent order above one. Basic nitrogen adsorbs on the same sites and sits in the denominator. `hds_form="power"` gives the nth-order fallback `f k c_ref,S (c_Sj/c_ref,S)^n h`, with no inhibition.
-- **Aromatics** saturate reversibly, first order, with equilibrium constants `K = exp(-(dH - T dS)/RT)` (pressures in bar) from model-compound thermochemistry. Saturation is exothermic and loses moles of gas, so equilibrium recedes as temperature rises and aromatics pass through a minimum.
+- **Aromatics** saturate reversibly, first order, with equilibrium constants `ln K(T) = -dG(T)/RT` from model-compound thermochemistry, with the heat capacities integrated from 298.15 K to the bed temperature: `aromatic_ln_K(T)`, the shared table's `IdealGasSet.ln_K` (#338). The standard state is the ideal gas at 1 bar, which is why the rate law divides by `(pH2/1 bar)^n`. The heat each step releases is `aromatic_heat(T)`, the same integration, so the energy balance and the equilibrium's van 't Hoff slope (`d ln K/dT = dH(T)/RT²`, tested to 1e-12) agree. Both are pure JAX in `T`. Saturation is exothermic and loses moles of gas, so equilibrium recedes as temperature rises and aromatics pass through a minimum. Until #338 `K` used the 298 K `dH` and `dS` as constants; that made the benzene step's `K` 3.1x, 3.8x and 5.1x too large at 300, 350 and 420 °C (2.6x and 2.2x for the poly and di steps at 350 °C).
 - **H2 stoichiometry** per class is that of a model compound (below). The hydrogen not leaving as H2S or NH3 goes onto the cut (`H += 2 nu - 2` per S, `2 nu - 3` per N). A desulfurized molecule keeps its carbon skeleton; the cut's molecule count does not change. Element balances are exact.
 - **The cracking leak** moves a molecule of cut `i` to the cut whose carbon number per molecule is nearest to `i`'s less the gas fragment's (fixed at construction from the composition), splitting off one C1--C4 molecule in the proportions `CRACK_GAS_SPLIT` (10/15/35/15/25 % C1/C2/C3/iC4/nC4, illustrative), with one H2.
 - **Deactivation** is the `activity` multiplier a(t). It is a differentiable parameter, so `difflow.reconciliation.tracking` can track it from plant data as the drifting parameter that loop is built for (not wired up or tested here).
 
-**Model compounds** behind the stoichiometry, heats and equilibrium (ideal gas, 298 K; formation enthalpies and entropies as tabulated in the `chemicals` package, which transcribes TRC/ATcT/CRC sources -- per-compound primary source unverified):
+**Model compounds** behind the stoichiometry, heats and equilibrium: ideal gas, from the refinery's one [thermochemistry table](#refinery-thermochemistry) (`Hf`, `S0` and Cp of each compound with its source; CODATA for H2, H2S and NH3, API TDB for most organics). The module keeps no copy: `MODEL_COMPOUNDS` is a view of the table. Values at 298.15 K:
 
 | Class | Model reaction | dH (kJ/mol) | dS (J/mol/K) |
 |---|---|---|---|
-| sulfides | diethyl sulfide + 2 H2 -> 2 ethane + H2S | -104.7 | |
-| thiophenes | thiophene + 4 H2 -> n-butane + H2S | -261.4 | |
-| benzothiophenes | benzothiophene + 3 H2 -> ethylbenzene + H2S | -157.0 | |
-| DBTs | 80 % DBT + 2 H2 -> biphenyl + H2S (DDS), 20 % DBT + 5 H2 -> cyclohexylbenzene + H2S (HYD) | -83.9 | |
-| hindered DBTs | 35 % DDS / 65 % HYD, DBT model compounds | -173.1 | |
-| basic N | quinoline + 4 H2 -> propylbenzene + NH3 | -238.2 | |
-| non-basic N | carbazole + 5 H2 -> cyclohexylbenzene + NH3 | -263.0 | |
-| poly -> di | phenanthrene + 2 H2 -> 1,2,3,4-tetrahydrophenanthrene | -115.2 | -228.3 (taken from di; THP entropy not tabulated) |
-| di -> mono | naphthalene + 2 H2 -> tetralin | -124.6 | -228.3 |
-| mono -> naphthene | benzene + 3 H2 -> cyclohexane | -205.3 | -363.1 |
-| olefins | 1-hexene + H2 -> n-hexane | -123.4 | |
-| cracking | n-hexane + H2 -> n-butane + ethane | -42.7 | |
+| sulfides | diethyl sulfide + 2 H2 -> 2 ethane + H2S | -104.8 | |
+| thiophenes | thiophene + 4 H2 -> n-butane + H2S | -261.2 | |
+| benzothiophenes | benzothiophene + 3 H2 -> ethylbenzene + H2S | -157.1 | |
+| DBTs | 80 % DBT + 2 H2 -> biphenyl + H2S (DDS), 20 % DBT + 5 H2 -> cyclohexylbenzene + H2S (HYD) | -83.4 | |
+| hindered DBTs | 35 % DDS / 65 % HYD, DBT model compounds | -172.8 | |
+| basic N | quinoline + 4 H2 -> propylbenzene + NH3 | -238.5 | |
+| non-basic N | carbazole + 5 H2 -> cyclohexylbenzene + NH3 | -263.3 | |
+| poly -> di | phenanthrene + 2 H2 -> 1,2,3,4-tetrahydrophenanthrene | -114.8 | -228.7 (THP's S0 is the table's estimate, phenanthrene + tetralin - naphthalene, so this equals the di step's) |
+| di -> mono | naphthalene + 2 H2 -> tetralin | -124.0 | -228.7 |
+| mono -> naphthene | benzene + 3 H2 -> cyclohexane | -206.1 | -363.9 |
+| olefins | 1-hexene + H2 -> n-hexane | -125.3 | |
+| cracking | n-hexane + H2 -> n-butane + ethane | -42.55 | |
 
-The DDS/HYD route shares of the two DBT classes are illustrative, set by the qualitative finding (Girgis & Gates 1991; Vanrysselberghe & Froment 1996) that CoMo removes DBT mainly by direct desulfurization and 4,6-DMDBT mainly after ring hydrogenation. Heats are gas-phase at 298 K: the heats of vaporisation of the reacting species and the temperature dependence are neglected. Benzene is a more favourable case than an alkylbenzene, so the mono-aromatic equilibrium is if anything too far to the right.
+At 350 °C (1 bar standard state) the three saturation steps have `ln K` = -6.29, -4.36 and -5.34 and release 124.8, 132.1 and 219.9 kJ/mol.
+
+The DDS/HYD route shares of the two DBT classes are illustrative, set by the qualitative finding (Girgis & Gates 1991; Vanrysselberghe & Froment 1996) that CoMo removes DBT mainly by direct desulfurization and 4,6-DMDBT mainly after ring hydrogenation. Heats are gas-phase. The aromatics steps' heats are taken at the bed temperature (with their `K`); the irreversible reactions' are 298 K values, a deliberate simplification -- at 350 °C DWSIM's conversion reactor gives them 3--15 % more heat ([DWSIM comparison](#refinery-dwsim-reactions)). The heats of vaporisation of the reacting species are neglected. Benzene is a more favourable case than an alkylbenzene, so the mono-aromatic equilibrium is if anything too far to the right.
 
 **Where the rate constants come from.** The forms are the literature's. The constants in `HDTKineticParams` (rate constants, activation energies, adsorption constants and enthalpies, H2 orders) are **illustrative**, chosen here so that a straight-run diesel at about 350 °C, LHSV 1 h⁻¹, 50 bar and 300 Nm³/m³ desulfurizes to a few hundred wppm and needs 370--380 °C for ULSD -- the right order of magnitude for a CoMo catalyst. They are not Korsten & Hoffmann's, not Froment's, and not any commercial catalyst's (those are proprietary). With these constants the model gives trends and orders of magnitude. Product sulfur to 10 ppm is predictive only after `activity` and the refractory-class constants are fitted to the unit's own data (`difflow.estimation`).
 
@@ -2250,7 +2273,7 @@ On example 40's naphtha (single bed, stripper feed at 150 °C; the stripper's de
 | 320 °C, 20 bar, 4 h⁻¹, 100 Nm³/m³ | 0.068 | 2.0 | 1.6 | 2.0 |
 | 320 °C, 30 bar, 4 h⁻¹, 100 Nm³/m³, **diesel** constants | 87 | 23 | 3.0 | 4.1 |
 
-(Feed 1072 wppm S. Figures far below 1 wppm only say "removed": the illustrative first-order classes have no refractory tail.) So a reformer feed (below about 0.5 wppm S and N) is reached at 30 bar and LHSV 4 from about 310 °C for sulfur and 320 °C for nitrogen. The charge heater takes 23.6 MW absorbed (27.8 MW fired at 0.85) at 320 °C with no feed/effluent exchanger, and the wild naphtha carries 0.011 kg/s of dissolved gas. The reformer carries the feed's sulfur (#330; `NaphthaFeed.from_hydrotreater` passes the treated product's sulfur, #327) but not its nitrogen, so the nitrogen figures are not seen downstream. Example 40's earlier conditions (60 bar, LHSV 0.7, 400 Nm³/m³), which were what the diesel constants needed under the old phase model, now run away on the diesel constants (the aromatics saturate, the integration does not finish, `converged=False`); on the naphtha set they converge.
+(Feed 1072 wppm S. Figures far below 1 wppm only say "removed": the illustrative first-order classes have no refractory tail. The table was computed before #338 made the aromatics equilibria Cp-integrated and was not recomputed; in example 40's naphtha unit, the 320 °C row's conditions, the change moved the chemical hydrogen from 1.8 to 1.7 Nm³/m³ and the bed rise from 2.3 to 2.1 K, and left S and N where they were.) So a reformer feed (below about 0.5 wppm S and N) is reached at 30 bar and LHSV 4 from about 310 °C for sulfur and 320 °C for nitrogen. The charge heater takes 23.6 MW absorbed (27.8 MW fired at 0.85) at 320 °C with no feed/effluent exchanger, and the wild naphtha carries 0.011 kg/s of dissolved gas. The reformer carries the feed's sulfur (#330; `NaphthaFeed.from_hydrotreater` passes the treated product's sulfur, #327) but not its nitrogen, so the nitrogen figures are not seen downstream. Example 40's earlier conditions (60 bar, LHSV 0.7, 400 Nm³/m³), which were what the diesel constants needed under the old phase model, now run away on the diesel constants (the aromatics saturate, the integration does not finish, `converged=False`); on the naphtha set they converge.
 
 **Where it fails.** At 320 °C, 50 bar, LHSV 0.5 and 150 Nm³/m³ the bed-inlet PR flash does not converge (the mixture is near its critical region; Newton diverges). The unit returns `converged=False` with `flash.residual` about 1e-3 and warns; it used to raise an equinox NaN-in-linear-solve error (`tests/refinery/test_hydrotreating_naphtha.py::test_a_failed_bed_inlet_flash_reports_a_residual_instead_of_raising`, per commit, on the flash itself; `test_a_failed_flash_is_reported_not_raised`, release, on the whole unit).
 
@@ -2334,19 +2357,21 @@ The test crude of the composition section (SG 0.86, 1.8 wt% S, 1500 wppm N, with
 
 | | |
 |---|---|
-| WABT | 351.4 °C; bed rises 13.2 and 7.2 K |
-| product | 241 wppm S, 229 wppm N, SG 0.850, 14.2 vol% aromatics, cetane index 58.4 |
-| yields (mass) | product 98.74 %, wild naphtha 0.39 %, gas (C1--C4, H2S, NH3) 1.21 % |
+| WABT | 350.9 °C; bed rises 12.7 and 6.9 K |
+| product | 258 wppm S, 232 wppm N, SG 0.850, 14.3 vol% aromatics (11.1 mono, 2.3 di, 0.9 poly), cetane index 58.3 |
+| yields (mass) | product 98.72 %, wild naphtha 0.39 %, gas (C1--C4, H2S, NH3) 1.21 % |
 | charge heater | 47.4 MW absorbed, 55.8 MW fired (from a 25 °C feed, no feed/effluent exchanger) |
-| hydrogen | chemical 32.4 Nm³/m³ (192 scf/bbl), makeup 49.7 Nm³/m³; recycle purity 95.1 % |
-| loop | recycle compressor 153 kW; purge 36 mol/s |
-| closure | mass, C, H, S and N to 1e-15 relative; tear residual 4e-14; stripper 2e-12 |
+| hydrogen | chemical 30.5 Nm³/m³ (181 scf/bbl), makeup 47.9 Nm³/m³; recycle purity 95.3 % |
+| loop | recycle compressor 154 kW; purge 36 mol/s |
+| closure | mass, C, H, S and N to 1e-15 relative; tear residual 9e-15; stripper 2e-12 |
+
+Before #338 (equilibrium constants 2--5x too large, see [Thermochemical data](#refinery-thermochemistry)) the same case gave WABT 351.4 °C, 241 wppm S, 14.2 vol% aromatics and 32.4 Nm³/m³ of chemical hydrogen. At a 380 °C bed-1 inlet the difference is larger: 12.1 vol% aromatics (10.4 before), of which 3.0 vol% poly-aromatics (0.9) as the poly step's equilibrium reverses, 31.5 Nm³/m³ of hydrogen (44.5) and a 393.1 °C outlet (400.4).
 
 Compiling the unit takes about 70 s (more on a loaded machine); a solve then takes about 1.7 s, of which the recycle tear is five Newton steps. A reverse-mode gradient of all outputs costs one more compile and 30--140 s.
 
 **Gradients** (`tests/refinery/test_hydrotreating.py::test_gradients_match_central_differences`): product S, chemical H2 consumption and liquid yield with respect to the bed inlet temperature, the pressure, the H2/oil ratio and the 50 % TBP point of the assay, AD against central differences. With plain central differences (steps 0.5 K, 0.5 bar, 3 Nm³/m³) they agree to 1e-5 -- 9e-4, and the larger figures are the differences' own O(h²) truncation; the test compares against Richardson-extrapolated differences at `rtol` 1e-5.
 
-**Trends** (tested): product sulfur falls with inlet temperature and with pressure (H2 partial pressure); chemical H2 consumption rises with temperature; on a bed at 30 bar, total aromatics pass through a minimum between 300 and 480 °C as the saturation equilibrium recedes.
+**Trends** (tested): product sulfur falls with inlet temperature and with pressure (H2 partial pressure); chemical H2 consumption rises with temperature; on a bed at 30 bar, total aromatics pass through a minimum between 300 and 480 °C as the saturation equilibrium recedes. On the test diesel's bed (the trend test) the minimum is at 360 °C; it was at 390 °C before #338, when the equilibrium constants were 2--5x too large.
 
 The numbers come from illustrative rate constants: read them as the shape of the answer, not a prediction for any catalyst.
 
@@ -2362,7 +2387,7 @@ The numbers come from illustrative rate constants: read them as the shape of the
 - the makeup composition is a traced input (`jax.jacfwd` through `theta`), and (release) `d(h2.makeup, recycle purity, product S)/d(makeup purity)` through the whole unit against Richardson differences;
 - the fractionator: shares sum to one, the jet/diesel split closes to 1e-13 and its two products go into the jet and ULSD pools with their sulfur averaging back to the unit's; three products over product and wild naphtha send the dissolved gas to the off-gas; the cut-point gradient of four pool properties against Richardson differences (release);
 - on example 40's naphtha (`tests/refinery/test_hydrotreating_naphtha.py`): balances, `gas.yield` positive and consistent on a feed carrying light ends, the charge heater with a feed/effluent exchanger, positive chemical hydrogen in a vapour bed, the light/heavy naphtha split; the 320 °C / 50 bar / LHSV 0.5 / 150 Nm³/m³ point returning `converged=False` with a warning instead of raising; and (release) `NAPHTHA_HDT_PARAMS` reaching below 0.5 wppm S at 30 bar, 320 °C, LHSV 4;
-- pins: PR fugacity coefficients against difflow's `PengRobinson` (1e-8), the H2/H2S/NH3 Cp polynomials against PPO 5th ed. (0.5 %), every heat of reaction and the aromatic-step entropies against the model-compound table, element conservation of the kinetics at a point, and the power-law fallback.
+- pins: PR fugacity coefficients against difflow's `PengRobinson` (1e-8), the H2/H2S/NH3 Cp polynomials against PPO 5th ed. (0.5 %), every heat of reaction against the shared table, the aromatics `ln K(T)` against `tc.ln_K` (and its distance from the old constant-`dH`/`dS` form at 350 °C), its van 't Hoff slope against the heat the energy balance uses, element conservation of the kinetics at a point, and the power-law fallback.
 
 A crude-unit product carries every cut at some trace level. `Hydrotreater(..., trace=1e-9)` leaves out cuts heavier than the heaviest one above that mole fraction, and reports what that drops as `dropped_mass_fraction` (below 1e-6 on the crude-unit diesel).
 
@@ -2477,7 +2502,7 @@ What the alkylation model adds (`alkylation.species`):
 
 - **Molar mass** from the formula and the IUPAC atomic weights. The database values are rounded to 0.01 g/mol, and with them a mass balance across C5= + iC4 → C9 would close only to about 1e-5.
 - **Standard volumes at 60 °F** by COSTALD (Hankinson & Thomson 1979). The characteristic volumes `V*` and `ω_SRK` are the published fitted parameters. For 2,3,4-TMP, 2,5-DMH and 2,2,5-TMH, which have none, `V*` is fitted to the CRC density at 20 °C. Checked against GPA 2145: propane, isobutane and n-butane come out at 0.5073, 0.5625 and 0.5844 against 0.50736, 0.56293 and 0.58407, and isopentane and n-pentane agree within 0.4 %. Checked against CRC at 20 °C: within 1.5 % for every species with tabulated parameters, the worst being 2,3-DMP at 1.44 %.
-- **Liquid heats of formation**, `Hf(l) = Hf(g) - ΔHvap(298 K)`. `Hf(g)` comes from the database and ΔHvap from CRC. Checked against CRC's own liquid Hf for 1-butene, 2,3-DMP, 2,4-DMP, 2,2,4-TMP and n-dodecane: all within 0.8 kJ/mol.
+- **Liquid heats of formation**, `Hf(l) = Hf(g) - ΔHvap(298 K)`. `Hf(g)` comes from the refinery's [shared thermochemistry table](#refinery-thermochemistry) (#339; API TDB, CRC for 1-butene and 2,3-DMP; before #339 from `difflow.database`, up to 1.4 kJ/mol different), and ΔHvap from CRC. Checked against CRC's own liquid Hf for 1-butene, 2,3-DMP, 2,4-DMP, 2,2,4-TMP and n-dodecane, on CRC's gas basis: all within 0.8 kJ/mol.
 
 ### Alkylation: the reactor
 
@@ -2520,9 +2545,12 @@ Set both to zero to recover the published correlation exactly; a test checks tha
 
 **Heat.** The heat of alkylation comes from Hess's law on the liquid heats of formation at 298.15 K. The temperature dependence of the heat of reaction between 298 K and the reactor is neglected. Values:
 
-- isobutylene + iC4 → 2,2,4-TMP: -67.9 kJ/mol olefin;
-- trans-2-butene: -71.5 kJ/mol;
-- propylene: -86.3 kJ/mol.
+- isobutylene + iC4 → 2,2,4-TMP: -67.1 kJ/mol olefin;
+- trans-2-butene: -70.9 kJ/mol;
+- propylene: -84.9 kJ/mol.
+
+These are route A at the default selectivity. Before #339 they were -67.9,
+-71.5 and -86.3, on `difflow.database`'s gas Hf.
 
 The refrigeration duty is that heat plus the sensible heat of cooling the reactor feed to `T` (Peng-Robinson liquid enthalpy, `CubicThermo`, kij = 0). It is also reported as the isobutane vaporised to remove it (Watson's latent heat from the CRC value at Tb).
 
@@ -2744,7 +2772,7 @@ with `S0` from mass conservation, `int_0^K p(k, K) D(k) dk = 1`. `p(K, K) = 0` (
 
 The cut's critical constants and K-values stay the feed pseudo-component's (as in the hydrotreater): only its atoms, molecule count and the volume model below change.
 
-**Hydrogen and heat.** Hydrogen consumption is the **hydrogen balance** of each event -- H atoms in the products (cuts, gas, H2S, NH3) less those of the parent, halved -- so it follows the conversion and the slate, not a separate correlation. C, S and N are conserved by construction and H through the H2 drawn; `check_element_conservation` is zero to round-off. Heat is per H2: an event making `n` molecules from one breaks `n - 1` C--C bonds, each with one H2 and the heat of n-hexane + H2 -> n-butane + ethane (`SCISSION_HEAT`, -42.7 kJ/mol); the rest of the H2 (saturation of the products, heteroatom removal) releases the benzene + 3 H2 -> cyclohexane heat per H2 (`SATURATION_HEAT_PER_H2`, -68.4 kJ/mol H2). Both are the hydrotreater's model-compound thermochemistry.
+**Hydrogen and heat.** Hydrogen consumption is the **hydrogen balance** of each event -- H atoms in the products (cuts, gas, H2S, NH3) less those of the parent, halved -- so it follows the conversion and the slate, not a separate correlation. C, S and N are conserved by construction and H through the H2 drawn; `check_element_conservation` is zero to round-off. Heat is per H2: an event making `n` molecules from one breaks `n - 1` C--C bonds, each with one H2 and the heat of n-hexane + H2 -> n-butane + ethane (`SCISSION_HEAT`, -42.55 kJ/mol); the rest of the H2 (saturation of the products, heteroatom removal) releases the benzene + 3 H2 -> cyclohexane heat per H2 (`SATURATION_HEAT_PER_H2`, -68.7 kJ/mol H2). Both are 298 K values from the shared [thermochemistry table](#refinery-thermochemistry), a deliberate simplification: the hydrotreater's own aromatics heats are Cp-integrated to the bed temperature since #338, 3--5 % larger at 350--420 °C. The residue desulfurizer's `CCR_HEAT_PER_H2` is the same 298 K value.
 
 **Constants.** Every number in `HCKineticParams` (`k_max`, `E`, `alpha`, `a0`, `a1`, `delta`, `K_N`, `dH_N`, `dKw`, the lump tables) is **illustrative**: chosen here so that the default VGO cracks about 70 % per pass with 380 °C bed inlets (WABT near 395 °C), LHSV 1.5 h⁻¹ and 150 bar, with bed rises of 20--25 K and a middle-distillate-selective slate. Published hydrocracking parameters belong to one catalyst and one feed; a predictive slate needs the yield-distribution parameters fitted to the unit's own test runs (`difflow.estimation`). The commercial yield models (UOP Unicracking, Chevron Lummus ISOCRACKING, Shell, Axens) are proprietary; nothing here is equivalent to them.
 
@@ -2808,22 +2836,24 @@ Feeds: the LVGO + HVGO of a `VacuumColumn` on the idealized atmospheric residue 
 | | light VGO, once-through | light VGO, 60 % UCO recycle | heavy VGO, once-through |
 |---|---|---|---|
 | fresh feed | 45.1 kg/s; 2.91 wt% S, 2214 wppm N | same | 48.5 kg/s; 4.10 wt% S, 2948 wppm N |
-| to the cracker | 947 wppm S, 42.7 wppm N | 844 wppm S, 40.0 wppm N | 315 wppm S, 14.5 wppm N |
-| WABT pretreat / cracking | 394.1 / 395.2 °C | 393.9 / 391.0 °C | 416.8 / 383.4 °C |
-| bed rises, cracking | 19.1, 21.4, 22.0, 23.1, 26.2 K | 13.3, 15.4, 16.2, 17.0, 18.8 K | 28.6, 30.3, 27.9, 26.0, 26.1 K |
-| conversion (370 °C+), per pass / overall | 69.7 / 69.7 % | 46.9 / 68.8 % | 58.2 / 58.2 % |
-| off-gas, LPG (wt%) | 1.07, 1.23 | 1.22, 1.06 | 1.43, 1.85 |
-| light, heavy naphtha (wt%) | 2.55, 10.47 | 2.19, 9.22 | 1.47, 8.01 |
-| kerosene, diesel (wt%) | 24.83, 31.48 | 23.03, 34.09 | 20.05, 27.13 |
-| UCO bleed (wt%) | 28.60 | 29.47 | 39.81 |
-| naphtha / middle distillate | 0.231 | 0.200 | 0.201 |
-| chemical H2 | 278 Nm³/m³ (1649 scf/bbl, 2.69 wt%) | 264 Nm³/m³ (1565 scf/bbl) | 359 Nm³/m³ (2129 scf/bbl) |
-| kerosene SG; diesel SG, cetane index | 0.790; 0.840, 65.5 | 0.790; 0.842, 65.3 | 0.829; 0.882, 47.4 |
-| UCO BMCI | 33.1 | 34.1 | 50.1 |
-| closure (worst of mass, C, H, S, N) | 2e-15 | 3e-12 | 1e-15 |
-| tears | gas 1e-14 | gas 9e-12; UCO 1.8e-10 relative, 13 Anderson passes | gas 3e-13 |
+| to the cracker | 971 wppm S, 43.3 wppm N | 858 wppm S, 40.3 wppm N | 418 wppm S, 17.2 wppm N |
+| WABT pretreat / cracking | 394.3 / 395.5 °C | 394.1 / 391.2 °C | 415.6 / 383.3 °C |
+| bed rises, cracking | 19.6, 22.0, 22.5, 23.5, 26.6 K | 13.6, 15.8, 16.6, 17.4, 19.2 K | 29.9, 30.3, 27.5, 25.6, 25.8 K |
+| conversion (370 °C+), per pass / overall | 70.0 / 70.0 % | 47.2 / 69.1 % | 55.6 / 55.6 % |
+| off-gas, LPG (wt%) | 1.08, 1.24 | 1.22, 1.07 | 1.39, 1.70 |
+| light, heavy naphtha (wt%) | 2.57, 10.54 | 2.21, 9.27 | 1.35, 7.46 |
+| kerosene, diesel (wt%) | 24.96, 31.55 | 23.15, 34.16 | 18.95, 26.40 |
+| UCO bleed (wt%) | 28.31 | 29.21 | 42.35 |
+| naphtha / middle distillate | 0.232 | 0.200 | 0.194 |
+| chemical H2 | 278 Nm³/m³ (1650 scf/bbl, 2.70 wt%) | 264 Nm³/m³ (1567 scf/bbl) | 347 Nm³/m³ (2062 scf/bbl) |
+| kerosene SG; diesel SG, cetane index | 0.790; 0.840, 65.5 | 0.790; 0.842, 65.3 | 0.829; 0.882, 47.3 |
+| UCO BMCI | 33.1 | 34.1 | 50.3 |
+| closure (worst of mass, C, H, S, N) | 4e-15 | 9e-13 | 6e-15 |
+| tears | gas 2e-13 | gas 6e-12; UCO 1.7e-10 relative, 13 Anderson passes | gas 3e-13 |
 
-Read these as the shape of the answer: every cracking constant is illustrative. A few things they show, all of which follow from the model rather than being tuned in: the recycle at the same catalyst and temperature *lowers* the per-pass conversion (a recycle reactor is less efficient than plug flow) and the overall conversion slightly, and buys selectivity -- 2.6 wt% more diesel, less naphtha per middle distillate, less H2; the heavy, aromatic VGO consumes more hydrogen, gives denser, lower-cetane products (its products inherit its lower Watson K through `Kw_feed + dKw`) and a higher-BMCI UCO; its pretreat bed rises 81 K, which a real unit would quench harder (the pretreat quench is a spec).
+Recomputed for #338, which made the pretreat bed's aromatics equilibria Cp-integrated (the cracking bed's `SATURATION_HEAT_PER_H2` is still a 298 K value). On the heavy VGO the pretreat bed saturates less, releases less heat (it rises 78 K against 81) and runs 1.2 K cooler, so the cracker feed keeps more sulfur and nitrogen (418 against 315 wppm S, 17.2 against 14.5 wppm N; organic nitrogen inhibits cracking in the kinetics) and more aromatics: its conversion fell from 58.2 to 55.6 % and its chemical H2 from 359 to 347 Nm³/m³. The light VGO moved by 0.3 % conversion or less.
+
+Read these as the shape of the answer: every cracking constant is illustrative. A few things they show, all of which follow from the model rather than being tuned in: the recycle at the same catalyst and temperature *lowers* the per-pass conversion (a recycle reactor is less efficient than plug flow) and the overall conversion slightly, and buys selectivity -- 2.6 wt% more diesel, less naphtha per middle distillate, less H2; the heavy, aromatic VGO consumes more hydrogen, gives denser, lower-cetane products (its products inherit its lower Watson K through `Kw_feed + dKw`) and a higher-BMCI UCO; its pretreat bed rises 78 K, which a real unit would quench harder (the pretreat quench is a spec).
 
 Compiling a once-through unit takes about 2.5 min and a solve about 7--9 s (the gas tear: 12 substitution passes, then Newton); with the UCO recycle the compile is about 6.5 min and a solve about 40 s. A reverse-mode gradient adds one compile: the once-through gradient test takes about 10 min, the recycle-ratio one about 30 min and 11 GB (its adjoint runs 60 vector-Jacobian products of the loop per cotangent), and both are marked `slow` and `release`.
 
@@ -2978,17 +3008,17 @@ These are the test crude of `examples/35`--`40` (1.8 wt% S, 1500 wppm N, 5 wt% C
 
 | | feed (atm. residue) | desulfurized residue | fuel oil (residue + RDS distillate) |
 |---|---|---|---|
-| S | 3.27 wt% | 0.306 wt% | 0.31 wt% (spec 0.50) |
-| Ni+V | 86 wppm | 16.8 wppm | |
+| S | 3.27 wt% | 0.303 wt% | 0.31 wt% (spec 0.50) |
+| Ni+V | 86 wppm | 16.7 wppm | |
 | CCR | 10.8 wt% | 5.3 wt% | (spec 18) |
 | SG | 0.953 | 0.928 | (spec 0.991) |
-| viscosity at 50 C (estimated) | 225 cSt | 106 cSt | (spec 380) |
+| viscosity at 50 C (estimated) | 225 cSt | 105 cSt | (spec 380) |
 
-WABT is 394.7 C over a total bed rise of 71 K. HDS is 90.7 %, HDM 81.1 %, CCR reduction 51.6 % and 538 C+ conversion 13.1 %. The distillate yield is 1.8 % (at 0.50 wt% S: the fragments inherit their parent's sulfur, so it wants a distillate hydrotreater before the diesel pool). Chemical H2 is 121 Nm³/m³ (1.15 wt%). All balances close to 1e-15.
+WABT is 394.8 C over a total bed rise of 71 K. HDS is 90.8 %, HDM 81.2 %, CCR reduction 51.8 % and 538 C+ conversion 13.1 %. The distillate yield is 1.8 % (at 0.49 wt% S: the fragments inherit their parent's sulfur, so it wants a distillate hydrotreater before the diesel pool). Chemical H2 is 121 Nm³/m³ (1.14 wt%). All balances close to 1e-15. (Before #338 made the hydrotreating aromatics equilibria and heats Cp-integrated: 0.306 wt% S, WABT 394.7 C, HDS 90.7 %, 1.15 wt% H2; the aromatics steps' heats at bed temperature are larger, so the beds run 0.1-0.2 K hotter.)
 
 Over the route, the residue's sulfur equals the fuel oil's plus the H2S to 1e-10, and residue plus treat gas equals fuel oil plus gas.
 
-The gradient of fuel-oil sulfur with respect to the bed-1 inlet temperature is −602 ppm/K, by reverse mode through the beds, the quench mixing, the product grid and the pool. A central difference at h = 0.5 K gives −602.0. The release test holds the two to 0.2 %.
+The gradient of fuel-oil sulfur with respect to the bed-1 inlet temperature is −591.7 ppm/K, by reverse mode through the beds, the quench mixing, the product grid and the pool. A central difference at h = 0.5 K gives −591.4 (−602 before #338). The release test holds the two to 0.2 %.
 
 On the CDU residue of `examples/40` (3.06 wt% S, no Ni+V given), the fuel oil comes out at 0.31 wt% S and 69 cSt, with every spec met (release test).
 
@@ -3005,7 +3035,7 @@ fuel_oil = fuel_oil_blend([rds_res.blend_component("residue"), rds_res.blend_com
                           [rds_res.volume("residue"), rds_res.volume("distillate")])
 ```
 
-The assay there is given 40 wppm Ni+V, so HDM has something to remove. On its 44 500 bbl/d of residue (3.06 wt% S), the desulfurized residue is at 0.335 wt% S, with HDS at 89.9 % and HDM at 79.7 %. The distillate is 12.6 %, at 1760 wppm S, and goes to the fuel oil. The fuel oil makes every VLSFO spec: 0.31 wt% S, 69 cSt at 50 C (estimated), SG 0.920 and 4.8 wt% CCR. The unit is the refinery's largest hydrogen consumer. On the example's hydrogen header it draws its chemical consumption, `rds_res.outputs["h2.chemical"]` (400 of 546 mol/s). That is a lower bound, since the once-through treat gas has no purge or solution losses. Its `outputs["h2s.make"]` carries 79 % of the crude's sulfur in the sulfur table.
+The assay there is given 40 wppm Ni+V, so HDM has something to remove. On its 44 500 bbl/d of residue (3.06 wt% S), the desulfurized residue is at 0.332 wt% S, with HDS at 90.0 % and HDM at 79.8 %. The distillate is 12.6 %, at 1750 wppm S, and goes to the fuel oil. The fuel oil makes every VLSFO spec: 0.31 wt% S, 69 cSt at 50 C (estimated), SG 0.920 and 4.8 wt% CCR. The unit is the refinery's largest hydrogen consumer. On the example's hydrogen header it draws its chemical consumption, `rds_res.outputs["h2.chemical"]` (399 of 540 mol/s). That is a lower bound, since the once-through treat gas has no purge or solution losses. Its `outputs["h2s.make"]` carries 79 % of the crude's sulfur in the sulfur table.
 
 (refinery-residue-references)=
 ### References
@@ -3253,7 +3283,7 @@ These were measured on this 4-core, 15 GB machine while other jobs were running 
 |---|---|---|---|
 | Naphtha hydrotreater alone, d(product S)/d(bed inlet T), `jax.jacrev`, default beds | 227 s | 2.4 s | |
 | The same, `jax.jacfwd`, `ReactorOptions(adjoint="forward")` | 132 s | 1.0 s | |
-| NHT → fractionator → reformer → gasoline pool, 2 inputs × 5 outputs, `method="fwd"`, stages `jit=True` | 487 s (446 s inside example 40, after `jax.clear_caches()`) | 34 s (31 s) | 7.1 GB (the whole process, prototype) |
+| NHT → fractionator → reformer → gasoline pool, 2 inputs × 5 outputs, `method="fwd"`, stages `jit=True` | 487 s (435 s inside example 40, after `jax.clear_caches()`) | 34 s (31 s) | 7.1 GB (the whole process, prototype) |
 | The same, stages not jitted, `vectorize=False` | 671 s | 511 s | 8.6 GB |
 | The same, stages not jitted, `vectorize=True` (plain `jax.jacfwd`) | killed by the out-of-memory killer at 5.6 GB resident, with another 10 GB in use on the machine | | |
 
@@ -3264,7 +3294,7 @@ Two findings come from those rows.
 - **Jit the stages.** The reformer's solve is a `Flowsheet` with a Python-level recycle. Under a transform it switches to its traced path, which is built afresh on every call. Without `jit`, every JVP and every repeated Jacobian traces and compiles the reformer again: in the fourth row, two tangents cost two compiles, and so does the second call. With `Stage(..., jit=True)` the stage is one jitted function. Its derivative is compiled once (most of the 487 s is the reformer's JVP), and a repeated Jacobian costs only its 34 s run.
 - **Memory, not time, is what limits a chain on a machine like this.** Every compiled solve stays resident. Example 40 calls `jax.clear_caches()` before it differentiates, after its central differences, and that keeps the derivative's compile inside the machine.
 
-In example 40 (section 10) the ten entries of that Jacobian agree with central differences at h = 0.25 K to 0.1 % or better. The exception is d(gasoline S)/d(T_NHT), at 0.5 %, which is the truncation error of a sulfur that falls exponentially with temperature. Four central-difference evaluations of the already compiled units took 41 s, against 446 s for the first AD Jacobian. For a single gradient on this machine, finite differences are cheaper. AD pays off in exactness, and for a planner that relinearizes a compiled chain, which costs 31 s per Jacobian after the first.
+In example 40 (section 10) the ten entries of that Jacobian agree with central differences at h = 0.25 K to 0.1 % or better. The exception is d(gasoline S)/d(T_NHT), at 0.5 %, which is the truncation error of a sulfur that falls exponentially with temperature. Four central-difference evaluations of the already compiled units took 38 s, against 435 s for the first AD Jacobian. For a single gradient on this machine, finite differences are cheaper. AD pays off in exactness, and for a planner that relinearizes a compiled chain, which costs 29 s per Jacobian after the first.
 
 ### Gotchas
 
@@ -3275,6 +3305,300 @@ In example 40 (section 10) the ten entries of that Jacobian agree with central d
 Tests: `tests/refinery/test_plant.py` runs per commit, on toy stages with the units' restrictions: a mixed chain fails end to end in both modes, `"chain"` is exact, the methods and `vectorize` agree, and the table names real objects. `tests/refinery/test_plant_chain.py` is a release and slow test (23 min on 4 cores). It runs NHT → fractionator → reformer against central differences, all-forward with `jax.jacfwd`, and the mixed chain by unit Jacobians against it.
 
 ---
+
+(refinery-thermochemistry)=
+## Thermochemical data
+
+Every refinery unit that needs a heat of formation, an absolute entropy or an
+ideal-gas heat capacity for **reaction** thermochemistry reads it from one
+table: `difflow_refinery.thermochemistry` (#339). Before it, the reformer,
+isomerization, alkylation, the FCC regenerator, the gas plant's heating values
+and the hydrotreater each kept a copy, entered from different secondary
+sources, and the copies disagreed: benzene 82.88-83.18 kJ/mol, cyclohexane
+-122.08 to -123.13, isopentane -153.7 to -154.5. So did the heats and the
+equilibria. Benzene saturation in the hydrotreater and naphthene
+dehydrogenation in the reformer are the same reaction run in reverse, and
+they used different data (and the hydrotreater neglected Cp, which made its K
+3-5x too large; #338). Now both read the same row and the same Cp-integrated
+`ln K`. The isomerization unit's C5 equilibrium was 0.06 off what the
+reformer's own data give.
+
+```python
+from difflow_refinery import thermochemistry as tc
+
+tc.Hf("benzene"), tc.S0("benzene"), tc.species("benzene").cp   # J/mol, J/mol/K, cubic
+tc.enthalpy("benzene", 600.0)        # Hf + int Cp dT (J/mol), JAX in T
+tc.entropy("benzene", 600.0, P=1e5)  # S0 + int Cp/T dT - R ln(P/1 bar)
+tc.gibbs("benzene", 600.0)           # H - T S at 1 bar
+nu = {"benzene": -1, "hydrogen": -3, "cyclohexane": 1}
+tc.reaction_enthalpy(nu), tc.ln_K(nu, 623.15)   # element balance checked; K on 1 bar
+
+gas = tc.IdealGasSet(("hydrogen", "benzene", "cyclohexane"))   # a unit's species list
+gas.HF, gas.S0, gas.CP                          # numpy arrays
+gas.enthalpy(T), gas.gibbs(T), gas.ln_K(nu_rows, T)
+```
+
+Each row (`tc.species(key)`, a `FormationData`) records the source of `Hf`,
+`S0` and the Cp cubic, the range the cubic was fitted over, its largest
+deviation from its source, a `status` for `Hf` and a note wherever a choice
+was made. `tc.HF_CROSSCHECK` and `tc.S0_CROSSCHECK` hold every other
+compilation's value. `tests/refinery/test_thermochemistry.py` pins the
+chosen values to their sources. It also enforces the single copy: an AST scan
+of every `difflow_refinery` module fails on a literal `Hf`/`S0` table, on
+formation-data literals passed to a constructor, on a Cp table keyed by
+table species, and on reading `difflow.database`'s `Hf`. It is checked on the
+private copies #339 removed.
+
+### How the values were chosen
+
+No primary source (papers, NIST WebBook, ATcT, JANAF pages) could be opened
+from the environment the table was built in. Values were read from the data
+files of the `chemicals` package (Bell et al., v1.5.2), which transcribe the
+compilations named, and compared across them.
+
+`Hf`, the ideal-gas enthalpy of formation at 298.15 K, follows one rule, so
+that a reaction is computed from one evaluation wherever possible. Isomer and
+ring differences matter more than absolute values.
+
+1. **Elements** (H2, N2, O2): zero.
+2. **H2O, CO, CO2, SO2, H2S, NH3**: CODATA Key Values (Cox, Wagman & Medvedev
+   1989). NIST-JANAF and ATcT agree within 0.1 kJ/mol, except NH3 (ATcT
+   -45.56 against -45.94; JANAF and CRC side with CODATA).
+3. **Organics**: the API Technical Data Book values (the Albahri compilation
+   in `chemicals`). It is the only compilation here that holds every
+   hydrocarbon the units carry, so isomer differences are internally
+   consistent. The reformer has used it since #309, and ChemSep (DWSIM)
+   uses the same C5/C6 paraffin values. ATcT is more accurate where it
+   exists, but covers about a third of the species. Mixing it in would mix
+   evaluations inside one reaction: benzene from ATcT with cyclohexane from
+   API TDB gives a hydrogenation heat of -206.31 kJ/mol, equal to neither
+   consistent set (API TDB -206.06, ATcT -205.26).
+4. **Overrides**: API TDB gives way to CRC where it is absent, or where it
+   differs from CRC by more than 2 kJ/mol and a third source sides with
+   CRC. That covers 2,3-dimethylpentane, cyclohexylbenzene, quinoline and
+   carbazole (the API TDB entries for the last three look like estimates).
+   API TDB stays where the third source sides with it. 2-methylnonane is the
+   case: API TDB is on the homologous series, and CRC is 3.7 kJ/mol off it.
+   Differences of 1-2 kJ/mol stay at API TDB and are recorded. The 2,2- and
+   2,3-dimethylbutane values are such a case: CRC is 1.2 and 1.3 kJ/mol
+   lower, and the C6 equilibrium moves with them.
+5. **No tabulated value**: an estimate from group increments of the same
+   table, marked `estimate` (4,6-DMDBT, 3,3'-dimethylbiphenyl,
+   3-(3-methylcyclohexyl)toluene).
+
+`S0`, the ideal-gas absolute entropy at 298.15 K and 1 bar, comes from Yaws
+(2014) for every organic and from CODATA for the inorganics. Yaws is checked
+against the CRC and WebBook values `chemicals` carries, which agree within
+2.5 J/mol/K. Two entries are rejected, because they are condensed-phase
+magnitudes: benzothiophene (212.76; indole is 328) and carbazole (244.95;
+biphenyl is 391). Those species have no `S0`. Nothing needs one, because HDS
+and HDN are irreversible. The `S0` of 1,2,3,4-tetrahydrophenanthrene is
+estimated as phenanthrene + tetralin - naphthalene. That makes the poly→di
+aromatic-saturation entropy the di→mono one, which is what the hydrotreater
+assumed.
+
+The Cp cubics `a + bT + cT² + dT³` are fitted by this project:
+
+- **Organics** are fitted over 298.15-1000 K to the TRC ideal-gas
+  correlation (Frenkel et al. 1994). The range covers the reformer at about
+  800 K and the hydroprocessing reactors. The reformer's own fits from #309
+  were made the same way and are kept unchanged.
+- **Regenerator gases** (N2, O2, H2O, CO, CO2, SO2) are fitted over
+  298.15-1500 K to NIST-JANAF (Chase 1998).
+- **H2S and NH3** are fitted over 298.15-1000 K to NIST-JANAF.
+- **Joback** group contribution is used where no correlation exists:
+  benzothiophene, DBT, 4,6-DMDBT, cyclohexylbenzene, quinoline, indole,
+  carbazole and one estimated product. On naphthalene, biphenyl and tetralin
+  it is within 1.1-2.9 % of TRC.
+
+Every fitted cubic is within 2 % of its source over its range. Outside the
+range a cubic is an extrapolation, and nothing clips it.
+
+**Benzothiophene (#339): 166.3 kJ/mol.** Two calorimetric determinations
+(combustion plus sublimation) give 166.28 ± 0.48 (Sabbah 1979) and 166.6
+kJ/mol (Good 1972), as the NIST WebBook lists them. They were read through a
+search engine's summary of the WebBook page, because the page itself was
+blocked. CRC and Yaws carry 166.3. ChemSep's 137.0, which DWSIM uses, matches
+no measurement found and is not used. Benzothiophene HDS (+3 H2 →
+ethylbenzene + H2S) therefore releases 52.4 kJ/mol H2. On ChemSep's value it
+would be 42.6.
+
+**Deliberate differences that remain:**
+
+- **`difflow.database`** is difflow core's table, with its own users. Its
+  water `Hf` is the liquid's. No refinery module reads its `Hf`. Where it
+  holds the same ideal-gas species, it agrees with this table within 1.4
+  kJ/mol (tested).
+- **Separation Cp**: the gas plant's `CP_IG` and the hydroprocessing
+  separators' `_CP_IG_GASES` are sensible heat on the Peng-Robinson path.
+  They are not reaction thermochemistry, and the IDAES and DWSIM separation
+  references are built on them. The alkylation unit's fractionation and feed
+  cooling use `difflow.database`'s Cp for the same reason. Its heat of
+  reaction is this table's.
+
+### Numbers that moved
+
+| Where | Before | After | Why |
+| --- | --- | --- | --- |
+| Reformer | -- | -- | it already used these values; bit-identical |
+| Isomerization, nC5 → iC5 dH | -8.10 kJ/mol | -6.99 | Prosen & Rossini (1945) → API TDB (Good 1970's pentanes) |
+| Isomerization, iC5 share of the C5s at 450 K | 0.820 | 0.772 | the same (DWSIM on ChemSep: 0.762) |
+| Isomerization, C6 paraffins at 120 C (nC6 / 2MP / 3MP / 2,3-DMB / 2,2-DMB) | 0.067 / 0.223 / 0.128 / 0.109 / 0.473 | 0.069 / 0.280 / 0.164 / 0.090 / 0.397 | API TDB isomer differences (DMBs 0.67-0.75 kJ/mol less stable, MPs 0.64-0.71 more, relative to nC6); TRC Cp fits |
+| Isomerate RON, paraffinic / benzene-rich feed, 140 C (once-through; DIH) | 82.18 / 81.56; 82.81 / 82.79 | 80.98 / 80.74; 81.31 / 81.61 | fewer dimethylbutanes at equilibrium ([Results](#refinery-isomerization)) |
+| Alkylation, heat of alkylation (route A, kJ/mol olefin): propylene / trans-2-butene / isobutylene | -86.3 / -71.5 / -67.9 | -84.9 / -70.9 / -67.1 | API TDB gas Hf instead of `difflow.database`'s (propylene 19.71 against 20.41; the butenes) |
+| FCC regenerator gases' Cp | RPP 4th ed. cubics | JANAF fits, 298-1500 K | within 0.7 % (O2 1.1 %) below 1050 K; RPP falls 5-16 % low by 1500 K |
+| Gas plant LHV | `difflow.database` Hf, SO2 -296.84, 1-butene -0.63 | this table | under 0.3 % (see the table below) |
+
+Gas-plant lower heating values (kJ/mol), before and after: methane 802.29 →
+802.64, ethane 1428.50 → 1428.65, propylene 1926.42 → 1925.72, isobutane
+2648.97 → 2648.18, 1-butene 2540.71 → 2541.44, isobutylene 2523.44 →
+2524.44, H2S 518.07 → 518.04. The largest change is 0.044 %. The FCC example
+below (light crude VGO, ROT 520 C) moves from conversion 0.7470, C/O 5.824,
+regenerator 1003.94 K to 0.7469, 5.819, 1004.13 K.
+
+### The hydrotreater on the table (#338)
+
+The hydrotreater (and through it the hydrocracker's pretreat bed and the
+residue desulfurizer) reads the table too: `hydrotreating.kinetics` keeps no
+copy (the guard covers it), every heat is `tc.reaction_enthalpy` with the
+element balance checked, and the aromatics equilibria are `tc.ln_K` --
+Cp-integrated -- instead of constant 298 K `dH` and `dS`. Its private copy had
+differed from the table here (every other model compound unchanged):
+
+| Model compound | Hf before (kJ/mol) | Hf table | S° before (J/mol/K) | S° table |
+| --- | --- | --- | --- | --- |
+| `hydrogen` | 0 | 0 | 130.7 | 130.68 |
+| `ammonia` | -45.558 | -45.94 | 192.8 | 192.77 |
+| `benzene` | 83.18 | 82.93 | 269.2 | 269.18 |
+| `cyclohexane` | -122.08 | -123.13 | 298.19 | 297.31 |
+| `naphthalene` | 150.6 | 150.58 | 333.1 | 333.6 |
+| `tetralin` | 26 | 26.61 | 366.22 | 366.22 |
+| `phenanthrene` | 207.5 | 207.1 | 396.01 | 396.01 |
+| `tetrahydrophenanthrene` | 92.3 | 92.3 | -- (di step's dS used) | 428.63 (estimate) |
+| `diethyl_sulfide` | -83.5 | -83.47 | 368.1 | 368.32 |
+| `ethane` | -83.78 | -83.85 | 229.2 | 229.45 |
+| `n_butane` | -125.85 | -125.65 | 304.4 | 304.4 |
+| `benzothiophene` | 166.3 | 166.3 | 212.76 | -- (rejected) |
+| `ethylbenzene` | 29.9 | 29.79 | 360.6 | 361.24 |
+| `biphenyl` | 181.4 | 182.09 | 391.24 | 391.24 |
+| `propylbenzene` | 7.9 | 7.9 | 397.86 | 399.08 |
+| `carbazole` | 200.7 | 200.7 | 244.95 | -- (rejected) |
+| `1_hexene` | -43.5 | -41.67 | 383.84 | 383.84 |
+| `n_hexane` | -166.94 | -166.95 | 388.82 | 388.74 |
+
+(The S° the table rejects were never used: only the saturation steps need an
+entropy.) What moved:
+
+| Where | Before | After | Why |
+| --- | --- | --- | --- |
+| Benzene + 3 H2 = cyclohexane, `ln K` at 300 / 350 / 420 °C (1 bar) | -0.53 / -4.00 / -8.01 | -1.65 / -5.34 / -9.64 | Cp integrated (K was 3.1x, 3.8x, 5.1x too large); DWSIM's ChemSep data give -1.65 / -5.35 / -9.65 |
+| Naphthalene / phenanthrene steps, `ln K` at 350 °C | -3.58 / -5.35 | -4.36 / -6.29 | the same (2.2x, 2.6x) |
+| Saturation heats, 25 °C (poly / di / mono, kJ/mol) | -115.2 / -124.6 / -205.3 | -114.8 / -124.0 / -206.1 | table Hf; and now taken at the bed temperature: -124.8 / -132.1 / -219.9 at 350 °C |
+| HDS heats (kJ/mol S) | -104.7, -261.4, -157.0, -83.9, -173.1 | -104.8, -261.2, -157.1, -83.4, -172.8 | table Hf (biphenyl +0.69, ethane, n-butane) |
+| HDN heats | -238.2, -263.0 | -238.5, -263.3 | NH3 -45.558 -> -45.94 (CODATA) |
+| Olefin / cracking heats | -123.4 / -42.7 | -125.3 / -42.55 | 1-hexene -43.5 -> -41.67 (API TDB) |
+| Hydrocracker / residue saturation heat per H2 | -68.4 | -68.7 kJ/mol H2 | benzene, cyclohexane |
+| Test diesel, 340 °C bed 1 inlet: product aromatics, chemical H2, reactor outlet | 14.21 vol%, 32.39 Nm³/m³, 355.54 °C | 14.28 vol%, 30.48 Nm³/m³, 354.80 °C | see [the results](#refinery-hydrotreater-results) |
+| Test diesel, 380 °C bed 1 inlet | 10.44 vol%, 44.45 Nm³/m³, 400.39 °C | 12.11 vol%, 31.47 Nm³/m³, 393.14 °C | the equilibrium limit binds: poly-aromatics 0.92 -> 3.05 vol% |
+| Example 40, distillate hydrotreater (header makeup) | 8.3 wppm S, 18.5 vol% aromatics, 31.1 Nm³/m³ | 8.9 wppm S, 18.6 vol% aromatics, 29.1 Nm³/m³ | less saturation, less heat (WABT 350.9 -> 350.6 °C) |
+| Example 40, refinery hydrogen | 546 mol/s, 357 from the H2 plant | 540 mol/s, 350 from the H2 plant | ULSD pool 11.8 -> 12.7 ppm S; fuel oil 0.31 wt% S either way |
+| Aromatics minimum, single bed at 30 bar (trend test) | 390 °C | 360 °C | |
+
+### Provenance
+
+Statuses for `Hf`:
+
+- **definition**: an element.
+- **key value**: CODATA.
+- **cross-checked**: an independent compilation (ATcT, CRC or API TDB, other
+  than the chosen one) agrees within 1.5 kJ/mol.
+- **unverified**: no independent agreement, or a choice between sources that
+  disagree; the row's note says which.
+- **estimate**: this project's group-increment construction.
+
+Cp is a cubic fitted to the named source. The max deviation is the largest
+relative difference from that source over the range ("estimate" for Joback,
+which is its own source). The notes behind each choice are in the module
+(`tc.species(key).note`).
+
+| Species | Formula | Hf (kJ/mol) | Hf source | Hf status | S° (J/mol/K) | S° source | Cp | Cp range (K), max dev |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| `hydrogen` | H2 | 0 | element | definition | 130.68 | CODATA | TRC fit (#309) | 298.15-1000, 0.5 % |
+| `nitrogen` | N2 | 0 | element | definition | 191.609 | CODATA | JANAF (Shomate) fit | 298.15-1500, 0.5 % |
+| `oxygen` | O2 | 0 | element | definition | 205.152 | CODATA | JANAF (Shomate) fit | 298.15-1500, 1.1 % |
+| `water` | H2O | -241.826 | CODATA | key value | 188.835 | CODATA | JANAF fit | 298.15-1500, 0.2 % |
+| `carbon_monoxide` | CO | -110.53 | CODATA | key value | 197.66 | CODATA | JANAF fit | 298.15-1500, 0.5 % |
+| `carbon_dioxide` | CO2 | -393.51 | CODATA | key value | 213.785 | CODATA | JANAF fit | 298.15-1500, 0.3 % |
+| `sulfur_dioxide` | O2S | -296.81 | CODATA | key value | 248.223 | CODATA | JANAF fit | 298.15-1500, 0.2 % |
+| `hydrogen_sulfide` | H2S | -20.6 | CODATA | key value | 205.81 | CODATA | JANAF fit | 298.15-1000, 0.0 % |
+| `ammonia` | H3N | -45.94 | CODATA | key value | 192.77 | CODATA | JANAF fit | 298.15-1000, 0.3 % |
+| `methane` | CH4 | -74.52 | API TDB | cross-checked | 186.6 | Yaws | TRC fit (#309) | 298.15-1000, 0.8 % |
+| `ethane` | C2H6 | -83.85 | API TDB | cross-checked | 229.45 | Yaws | TRC fit (#309) | 298.15-1000, 0.8 % |
+| `propane` | C3H8 | -104.69 | API TDB | cross-checked | 270.28 | Yaws | TRC fit (#309) | 298.15-1000, 0.8 % |
+| `isobutane` | C4H10 | -134.99 | API TDB | cross-checked | 295.34 | Yaws | TRC fit (#309) | 298.15-1000, 0.8 % |
+| `n_butane` | C4H10 | -125.65 | API TDB | cross-checked | 304.4 | Yaws | TRC fit (#309) | 298.15-1000, 0.9 % |
+| `isopentane` | C5H12 | -153.7 | API TDB | cross-checked | 343.89 | Yaws | TRC fit (#309) | 298.15-1000, 0.5 % |
+| `n_pentane` | C5H12 | -146.71 | API TDB | cross-checked | 349.25 | Yaws | TRC fit (#309) | 298.15-1000, 0.9 % |
+| `neopentane` | C5H12 | -168.07 | API TDB | cross-checked | 305.99 | Yaws | TRC fit | 298.15-1000, 0.2 % |
+| `n_hexane` | C6H14 | -166.95 | API TDB | cross-checked | 388.74 | Yaws | TRC fit (#309) | 298.15-1000, 1.0 % |
+| `2_methylpentane` | C6H14 | -174.69 | API TDB | cross-checked | 380.69 | Yaws | TRC fit (#309) | 298.15-1000, 0.4 % |
+| `3_methylpentane` | C6H14 | -172.06 | API TDB | cross-checked | 383.04 | Yaws | TRC fit | 298.15-1000, 0.5 % |
+| `2_2_dimethylbutane` | C6H14 | -184.68 | API TDB | cross-checked | 358.22 | Yaws | TRC fit | 298.15-1000, 0.4 % |
+| `2_3_dimethylbutane` | C6H14 | -176.8 | API TDB | cross-checked | 365.94 | Yaws | TRC fit | 298.15-1000, 0.1 % |
+| `n_heptane` | C7H16 | -187.65 | API TDB | cross-checked | 428.23 | Yaws | TRC fit (#309) | 298.15-1000, 1.0 % |
+| `2_methylhexane` | C7H16 | -194.5 | CRC | unverified | 420.52 | Yaws | TRC fit (#309) | 298.15-1000, 0.5 % |
+| `2_3_dimethylpentane` | C7H16 | -198.7 | CRC | unverified | 415.15 | Yaws | TRC fit | 298.15-1000, 0.0 % |
+| `2_4_dimethylpentane` | C7H16 | -201.67 | API TDB | cross-checked | 397.38 | Yaws | TRC fit | 298.15-1000, 0.1 % |
+| `n_octane` | C8H18 | -208.82 | API TDB | cross-checked | 467.05 | Yaws | TRC fit (#309) | 298.15-1000, 1.0 % |
+| `2_methylheptane` | C8H18 | -215.35 | API TDB | cross-checked | 459.34 | Yaws | TRC fit (#309) | 298.15-1000, 0.7 % |
+| `2_2_4_trimethylpentane` | C8H18 | -224.01 | API TDB | cross-checked | 423.11 | Yaws | TRC fit | 298.15-1000, 0.2 % |
+| `2_3_4_trimethylpentane` | C8H18 | -217.32 | API TDB | cross-checked | 428.48 | Yaws | TRC fit | 298.15-1000, 0.3 % |
+| `2_5_dimethylhexane` | C8H18 | -222.51 | API TDB | cross-checked | 442.57 | Yaws | TRC fit | 298.15-1000, 0.3 % |
+| `n_nonane` | C9H20 | -228.86 | API TDB | cross-checked | 507.08 | Yaws | TRC fit (#309) | 298.15-1000, 1.0 % |
+| `2_methyloctane` | C9H20 | -235.85 | API TDB | unverified | 499.16 | Yaws | TRC fit (#309) | 298.15-1000, 0.7 % |
+| `2_2_5_trimethylhexane` | C9H20 | -253.3 | API TDB | unverified | 461.93 | Yaws | TRC fit | 298.15-1000, 0.3 % |
+| `n_decane` | C10H22 | -249.53 | API TDB | cross-checked | 546.36 | Yaws | TRC fit (#309) | 298.15-1000, 1.0 % |
+| `2_methylnonane` | C10H22 | -256.52 | API TDB | unverified | 539.32 | Yaws | TRC fit (#309) | 298.15-1000, 0.6 % |
+| `n_dodecane` | C12H26 | -290.79 | API TDB | cross-checked | 625.21 | Yaws | TRC fit | 298.15-1000, 1.0 % |
+| `ethylene` | C2H4 | 52.28 | API TDB | cross-checked | 219.18 | Yaws | TRC fit | 298.15-1000, 1.4 % |
+| `propylene` | C3H6 | 19.71 | API TDB | cross-checked | 266.71 | Yaws | TRC fit | 298.15-1000, 0.6 % |
+| `1_butene` | C4H8 | 0.1 | CRC | cross-checked | 307.88 | Yaws | TRC fit | 298.15-1000, 0.5 % |
+| `cis_2_butene` | C4H8 | -6.99 | API TDB | cross-checked | 301.17 | Yaws | TRC fit | 298.15-1000, 0.8 % |
+| `trans_2_butene` | C4H8 | -11.17 | API TDB | cross-checked | 296.48 | Yaws | TRC fit | 298.15-1000, 0.6 % |
+| `isobutylene` | C4H8 | -16.9 | API TDB | cross-checked | 293.12 | Yaws | TRC fit | 298.15-1000, 0.4 % |
+| `1_pentene` | C5H10 | -20.92 | API TDB | cross-checked | 347.03 | Yaws | TRC fit | 298.15-1000, 0.8 % |
+| `2_methyl_2_butene` | C5H10 | -42.55 | API TDB | cross-checked | 338.65 | Yaws | TRC fit | 298.15-1000, 0.7 % |
+| `1_hexene` | C6H12 | -41.67 | API TDB | unverified | 383.84 | Yaws | TRC fit | 298.15-1000, 0.8 % |
+| `methylcyclopentane` | C6H12 | -106.69 | API TDB | cross-checked | 339.9 | Yaws | TRC fit (#309) | 298.15-1000, 1.2 % |
+| `cyclohexane` | C6H12 | -123.13 | API TDB | cross-checked | 297.31 | Yaws | TRC fit (#309) | 298.15-1000, 1.4 % |
+| `methylcyclohexane` | C7H14 | -154.77 | API TDB | cross-checked | 343.5 | Yaws | TRC fit (#309) | 298.15-1000, 0.6 % |
+| `ethylcyclohexane` | C8H16 | -171.75 | API TDB | cross-checked | 382.99 | Yaws | TRC fit (#309) | 298.15-1000, 0.6 % |
+| `n_propylcyclohexane` | C9H18 | -193.3 | API TDB | cross-checked | 419.97 | Yaws | TRC fit (#309) | 298.15-1000, 0.6 % |
+| `n_butylcyclohexane` | C10H20 | -213.17 | API TDB | cross-checked | 459.59 | Yaws | TRC fit (#309) | 298.15-1000, 0.7 % |
+| `trans_decalin` | C10H18 | -182.1 | CRC | unverified | 373.89 | Yaws | TRC fit | 298.15-1000, 2.0 % |
+| `benzene` | C6H6 | 82.93 | API TDB | cross-checked | 269.18 | Yaws | TRC fit (#309) | 298.15-1000, 0.4 % |
+| `toluene` | C7H8 | 50.17 | API TDB | cross-checked | 321.08 | Yaws | TRC fit (#309) | 298.15-1000, 0.8 % |
+| `ethylbenzene` | C8H10 | 29.79 | API TDB | cross-checked | 361.24 | Yaws | TRC fit (#309) | 298.15-1000, 0.8 % |
+| `n_propylbenzene` | C9H12 | 7.9 | API TDB | cross-checked | 399.08 | Yaws | TRC fit (#309) | 298.15-1000, 0.8 % |
+| `n_butylbenzene` | C10H14 | -13.14 | API TDB | cross-checked | 440.28 | Yaws | TRC fit (#309) | 298.15-1000, 0.9 % |
+| `cyclohexylbenzene` | C12H16 | -16.7 | CRC | unverified | 429.36 | Yaws | Joback | 298.15-1000, estimate |
+| `tetralin` | C10H12 | 26.61 | API TDB | cross-checked | 366.22 | Yaws | TRC fit | 298.15-1000, 0.5 % |
+| `naphthalene` | C10H8 | 150.58 | API TDB | cross-checked | 333.6 | Yaws | TRC fit | 298.15-1000, 0.6 % |
+| `biphenyl` | C12H10 | 182.09 | API TDB | cross-checked | 391.24 | Yaws | TRC fit | 298.15-1000, 0.4 % |
+| `3_3_dimethylbiphenyl` | C14H14 | 116.57 | estimate | estimate | -- | -- | TRC fit | 298.15-1000, 0.4 % |
+| `methylcyclohexyltoluene` | C14H20 | -81.1 | estimate | estimate | -- | -- | Joback | 298.15-1000, estimate |
+| `phenanthrene` | C14H10 | 207.1 | API TDB | cross-checked | 396.01 | Yaws | TRC fit | 298.15-1000, 0.4 % |
+| `tetrahydrophenanthrene` | C14H14 | 92.3 | NIST (unverified) | unverified | 428.63 | estimate | TRC fit | 298.15-1000, 0.7 % |
+| `diethyl_sulfide` | C4H10S | -83.47 | API TDB | cross-checked | 368.32 | Yaws | TRC fit | 298.15-1000, 0.8 % |
+| `thiophene` | C4H4S | 114.9 | CRC | unverified | 278.81 | Yaws | TRC fit | 298.15-1000, 0.2 % |
+| `benzothiophene` | C8H6S | 166.3 | CRC | unverified | -- | -- | Joback | 298.15-1000, estimate |
+| `dibenzothiophene` | C12H8S | 205.1 | CRC | unverified | -- | -- | Joback | 298.15-1000, estimate |
+| `4_6_dimethyldibenzothiophene` | C14H12S | 139.58 | estimate | estimate | -- | -- | Joback | 298.15-1000, estimate |
+| `pyridine` | C5H5N | 140.16 | API TDB | cross-checked | 282.5 | Yaws | TRC fit | 298.15-1000, 0.8 % |
+| `quinoline` | C9H7N | 200.5 | CRC | unverified | 366.04 | Yaws | Joback | 298.15-1000, estimate |
+| `indole` | C8H7N | 156.6 | API TDB | cross-checked | 328.44 | Yaws | Joback | 298.15-1000, estimate |
+| `carbazole` | C12H9N | 200.7 | CRC | unverified | -- | -- | Joback | 298.15-1000, estimate |
+| `aniline` | C6H7N | 86.86 | API TDB | cross-checked | 319.87 | Yaws | TRC fit | 298.15-1000, 0.2 % |
 
 (refinery-validation)=
 ## Validation
@@ -3440,7 +3764,7 @@ Regenerate (needs IDAES and IPOPT; `--case NAME` redoes one case):
 PYTHONPATH=src:tests python -m refinery.reference.gasplant_generate
 ```
 
-**What this does not validate.** It does not test how well PR with zero kij describes these mixtures. That is the propylene/propane split above all, where the relative volatility is near 1.1 and a small kij moves the trays needed. It does not test the O'Connell efficiency, the GPA 2140 limits, the RVP construction against measured RVPs, or the compressor. Those are tested against their definitions in `test_gasplant.py`, not against a second simulator or plant data.
+**What this does not validate.** It does not test how well PR with zero kij describes these mixtures. That is the propylene/propane split above all, where the relative volatility is near 1.1 and a small kij moves the trays needed. It does not test the O'Connell efficiency, the GPA 2140 limits, the RVP construction against measured RVPs, or the compressor. Those are tested against their definitions in `test_gasplant.py`, not against plant data. DWSIM 9.0.5 has since given the C3/C4 splitter its column-level check, and checked the compressor train and the TVP/RVP implementation (same model), and what DWSIM's own kij do to the splits: [Validation against DWSIM: light ends, HP separator and gas plant](#refinery-dwsim-lightends).
 
 (refinery-isomerization-validation)=
 ### Validation: the isomerization unit
@@ -3468,6 +3792,22 @@ space.
 | Each isomer family alone (C5, C6 paraffins, C6 naphthenes), 400-550 K | closed form `family_equilibrium` | 6.8e-13 (1e-10), per commit |
 | C6 ring: H2, benzene, MCP, CH, n-hexane at 30 bar, 420 and 480 K | the reactor, isothermal, rate constants x 1e4, no cracking | mole fractions 1.4e-15 (1e-10) |
 | Adiabatic: both feeds' reactor charge, 140 C, 30 bar | the reactor, adiabatic, rate constants x 10, LHSV 0.1, no cracking | outlet T 477.023 K (paraffinic) and 522.225 K (benzene-rich), within 1e-6 K; mole fractions 6.9e-14 (1e-10) |
+
+**The reference is stale since #339.** The table above was measured on the
+isomerization constants before #339 moved them onto the [shared
+thermochemistry table](#refinery-thermochemistry). IDAES and IPOPT could not
+be installed where #339 was made (no IPOPT binary was reachable), so
+`isom_reference.json` has not been regenerated. The checks that compare its
+answers with difflow's current constants are marked `xfail(strict=True)`
+until it is (`STALE_SINCE_339` in `test_isomerization_validation_file.py`).
+Once it is regenerated they pass, and the strict marker fails the suite until
+the marker is removed. Meanwhile the same ground is covered without IDAES:
+
+- DWSIM 9.0.5's reactors were run on the new constants
+  ([below](#refinery-dwsim-reactions)).
+- difflow's adiabatic reactor lands on the emulated equilibrium temperature
+  (473.183 and 519.383 K) to 1e-6 K
+  (`test_the_reactor_reaches_the_emulated_adiabatic_equilibrium`).
 
 `test_isomerization_validation.py` (release) runs difflow against the file.
 `test_isomerization_validation_file.py` runs on every commit. It checks
@@ -3499,6 +3839,732 @@ constants against a tabulated free-energy set. It does not test the
 species octanes, which are recalled values marked verify. It does not test
 the rate constants, which are illustrative, or the constructed feeds,
 which are assumed.
+
+(refinery-dwsim-validation)=
+### Validation against DWSIM: setup
+
+[DWSIM](https://dwsim.org) 9.0.5, an open-source process simulator, is the
+second reference simulator for the refinery units, beside IDAES. It is a .NET
+8 application; it is driven from Python through `pythonnet` by the harness
+`tests/refinery/reference/dwsim_session.py`. As with IDAES, DWSIM runs only in
+a **generator** (`tests/refinery/reference/dwsim_*_generate.py`), which writes
+a JSON reference; the tests read the JSON and need neither DWSIM nor .NET.
+
+**Install.** `scripts/install_dwsim.sh [DIR]` reproduces the setup: the DWSIM
+9.0.5 `.deb` from SourceForge (GitHub release downloads are blocked from the
+build box), unpacked with `dpkg-deb -x` (no package install),
+`apt-get install dotnet-runtime-8.0`, `pip install pythonnet`, and a smoke
+load. It prints the `DWSIM_PATH` to export (the directory holding
+`DWSIM.Automation.dll`). pythonnet must load **CoreCLR**, not Mono (its Linux
+default), and only one CLR can be loaded per process, which is one more
+reason DWSIM stays out of the pytest process.
+
+**Generating a reference.**
+
+```bash
+export DWSIM_PATH=.../usr/local/lib/dwsim
+PYTHONPATH=src:tests python -m refinery.reference.dwsim_smoke_generate
+```
+
+The harness in brief (its module docstring has the full API):
+
+| Call | Returns |
+| --- | --- |
+| `DWSIMSession(path=None)` | one DWSIM `Automation3` per process; `.provenance()` records DWSIM, .NET and pythonnet versions |
+| `.flowsheet(package, compounds, hypos, overrides, kij="zero", options, flash_tol=1e-10)` | a `DWSIMFlowsheet` with one stream on the named property package |
+| `DWSIMFlowsheet.flash_tp/flash_ph/flash_pvf/flash_tvf` | phase fractions, compositions, `K`, fugacity coefficients, molar enthalpies (J/mol), densities, Z, and `equilibrium_residual` |
+| `HypoCompound(name, MW, Tc, Pc, omega, cp_ig=..., Tb=..., hvap_tb=...)` | a hypothetical compound on given constants; `HypoCompound.from_gas_components` takes difflow's |
+| `.petroleum_characterization(tbp_K, cum_frac, sg_bulk, ...)` | DWSIM's own distillation-curve characterization, its pseudo-component table |
+| `.bulk_characterization(mw, sg, ...)` | DWSIM's bulk C7+ characterization |
+| `difflow.dwsim_import.DWSIM_NAMES` / `dwsim_name()` | difflow's database names to DWSIM's (all 50 refinery species, checked to exist) |
+
+**What is compared like for like.** A comparison says which of two things it is:
+
+- **(a) Same model, same constants**: every component a DWSIM *hypothetical
+  compound* carrying difflow's MW, Tc, Pc, omega and ideal-gas Cp cubic;
+  DWSIM's binary parameters removed (`kij="zero"`); the package options that
+  are not the textbook model switched off (`EOS_ONLY` for the cubics:
+  liquid density from the EOS instead of Rackett with Peneloux;
+  `IDEAL_RAOULT` for Raoult's law: no Poynting factor, no Henry's law). This
+  tests the implementation.
+- **(b) DWSIM's own data and correlations**: DWSIM's database compounds (by
+  `DWSIM_NAMES`), its kij, its petroleum characterization. This tests the
+  model and the data, and differences there are expected and reported, not
+  tuned away.
+
+**What DWSIM fills in for a hypothetical compound** (read from DWSIM's
+compiled code, `PropertyPackage.AUX_CPi`, `AUX_PVAPi`, `AUX_HVAPi`): the
+ideal-gas Cp is the given polynomial exactly (`OriginalDB = "DWSIM"`, A..E in
+J/mol/K); the vapour pressure is the DIPPR-101 form, which the harness fills
+with the Lee-Kesler correlation on the hypo's Tc, Pc, omega written exactly
+in that form unless one is given (a cubic EOS uses it only to start the
+flash; Raoult's law uses it as the model); the heat of vaporization is
+Watson's `Hvap(Tb) ((1-Tr)/(1-Tbr))^0.375`, `Hvap(Tb)` given or Vetere's
+estimate (DWSIM's own fallback; with neither DWSIM returns zero); the Rackett
+parameter defaults to Pitzer's Zc. DWSIM's *own* petroleum fractions are
+different objects: Cp from the Lee-Kesler correlation on Watson K, Psat from
+Lee-Kesler.
+
+**What DWSIM 9.0.5 offers.** Property packages: Peng-Robinson (PR), PR 1978,
+PRSV2, Soave-Redlich-Kwong, Lee-Kesler-Plöcker, Grayson-Streed, Chao-Seader,
+Raoult's Law, NRTL, UNIQUAC, UNIFAC variants, Wilson, PC-SAFT, GERG-2008,
+CoolProp, IAPWS-IF97, Black Oil and others. Its "PR" is the 1976 form for
+every omega (no 1978 branch), as difflow's gas-plant PR. Its "PR78" switches to
+the 1978 kappa above omega 0.491, as difflow's hydroprocessing PR does, but
+writes the 1976 branch's 1.54226 as 1.5422 (see
+[the HP separator](#refinery-dwsim-lightends)).
+
+**The smoke test** (`dwsim_smoke_generate.py`, `test_dwsim_smoke.py`) proves
+the pattern end to end on the gas plant's PR (`difflow_refinery.gasplant`):
+a light-ends mixture (H2, H2S, C1 to nC5) flashed at four (T, P) points from
+240 K/30 bar to 330 K/35 bar, and a five-cut naphtha (Tb 345 to 465 K, Twu
+constants) with propane and n-butane at two points, all on difflow's
+constants with kij = 0 (comparison (a)). Four differences between the two
+implementations turned up, each found in DWSIM's code and then reproduced in
+the test rather than absorbed into a tolerance:
+
+| Difference | Size | Reproduced, the two agree to |
+| --- | --- | --- |
+| DWSIM's PR uses R = 8.314 (difflow 8.314462618); Z, phi and K do not depend on R, the departure enthalpy and density do | 5.6e-5 relative: up to 2.0 J/mol in a phase enthalpy, 5.6e-5 in density | density 1e-12 relative |
+| DWSIM's fugacity routine writes the log term's 1 ± sqrt 2 and 2 sqrt 2 as 2.414213, -0.414213, 2.828426 | 1.4e-6 in a liquid phi | phi 2.2e-12 relative (vapour and liquid); Z 1e-12 |
+| DWSIM integrates Cp by the midpoint rule, `round(dT/10)` intervals clipped to 10..100 | up to 0.23 J/mol (1e-5 of the ideal-gas enthalpy, naphtha at 410 K) | phase enthalpies 2.3e-8 J/mol |
+| DWSIM's own flash stops short of its equilibrium condition, at loop tolerances of 1e-10 | `max abs(ln(y/x) - ln(phi_L/phi_V))` up to 1.6e-5 (light ends, 280 K) | not reproducible: it bounds the flash comparison |
+
+With all that, difflow's own TP flash lands on DWSIM's to: vapour fraction
+6.5e-6 and phase compositions 1.9e-6 (light ends at 280 K, the point where
+DWSIM's own residual is 1.6e-5); 3.4e-7 and 1.9e-7 on the naphtha. DWSIM's PH
+flash from a TP point's enthalpy returns to its temperature within 1e-6 K.
+Nothing is left unexplained.
+
+**DWSIM's database against difflow's** (comparison (b) for the constants;
+`tests/test_dwsim_import.py`, release, runs the importer against the real
+DWSIM in a subprocess). All 50 mapped species are in DWSIM's ChemSep
+database. Tc agrees to 0.31 %, MW to 0.02 %, Pc to 2.0 % (trans-2-butene)
+and omega to 0.012 (methylcyclopentane), except three known differences,
+kept visible in the test: 2-methyl-2-butene (DWSIM Pc 3.86 MPa against
+difflow's 3.42, omega 0.339 against 0.285) and carbon monoxide (omega 0.045
+against 0.066).
+
+**DWSIM behaviours to know before comparing** (more in the harness
+docstring):
+
+- The default flash tolerance is 1e-4; the harness sets 1e-10, but check
+  `equilibrium_residual` and hold comparisons to a few times it.
+- The default liquid density is Rackett + experimental data with Peneloux
+  translation, not the EOS; "Raoult's Law" has a Poynting factor and Henry's
+  law switched on; Lee-Kesler-Plöcker's kij is multiplicative (a missing one
+  is taken as 1, no interaction). All options
+  in force are recorded in each reference's provenance.
+- DWSIM's PR carries its own kij (H2/propane -0.131, CO2/H2S 0.098, ...).
+- DWSIM's own distillation-curve characterization (its UI's
+  "Petroleum Characterization from Distillation Curves", run headless) reads
+  its bulk-SG field as API gravity (`SG = 141.5/(131.5 + value)`), so an SG
+  typed into the UI targets an SG near 1.07; the harness passes the API
+  equivalent so the target is the SG given. It scales the cut SGs to the
+  bulk SG by **mass**-fraction average. A petroleum fraction's heat of
+  formation comes out on a basis 1000x off DWSIM's database compounds'.
+- The compound list (`AvailableCompounds`) is shared by every flowsheet in
+  the process: `overrides=` edit a per-flowsheet copy; prefix hypo names.
+- Start-up is about 4 s, a flash 2 to 5 ms after the first (0.2 s).
+
+**Fixed alongside:** `difflow.dwsim_import`, a prototype written to DWSIM's
+documented API and never run, now works against DWSIM 9.0.5: the
+"standalone" thermodynamics calculator is inside `DWSIM.Thermodynamics.dll`
+since DWSIM 6, pythonnet has to be pointed at CoreCLR, and the path is
+checked before any .NET runtime starts.
+
+(refinery-dwsim-reactions)=
+### Validation against DWSIM: reaction thermochemistry
+
+DWSIM has no hydrotreater, FCC, reformer or alkylation kinetic model, so what
+is compared is the physics those units rest on: heats of formation and Gibbs
+energies, heats of reaction, equilibria and energy balances. DWSIM 9.0.5's
+equilibrium, Gibbs and conversion reactors do the DWSIM side
+(`tests/refinery/reference/dwsim_reactions_generate.py` writes
+`dwsim_reactions_reference.json`; `dwsim_reactors.py` is the reactor half of
+the harness, `dwsim_reactions_case.py` the cases; the test is
+`tests/refinery/test_dwsim_reactions.py`). Every case is run two ways:
+
+- **(a) `hypo`**: DWSIM's reactors on hypothetical compounds carrying difflow's
+  own H_f, S (entered as G_f), Cp cubic and critical constants. This tests
+  the implementation.
+- **(b) `dwsim`**: DWSIM's database compounds (ChemSep; tetralin from ChEDL
+  Thermo), its formation data and Cp. This tests the data.
+
+The equilibria are ideal-gas on both sides: difflow's isomerization,
+reformer and hydrotreating equilibria are ideal-gas, and DWSIM's Raoult's-law
+package is made one by multiplying every vapour pressure by e^40, so that
+nothing condenses. The reformer bed and the alkylation heats use
+Peng-Robinson.
+
+**How DWSIM computes it** (read from its compiled code, then reproduced in
+`tests/refinery/_dwsim_rx_emulation.py`):
+
+- Both DWSIM reactors take a compound's formation Gibbs energy at T from
+  `PropertyPackage.AUX_DELGF_T`. This is the Gibbs-Helmholtz integral from
+  the database G_f and H_f at 25 C with the compound's own Cp, the same route
+  as difflow's `H - T S`. Two details differ from difflow: the Cp integrals
+  are midpoint-rule quadratures (as in the harness's enthalpies), and
+  `R = 8.314`. For the hypos the emulation reproduces DWSIM's `int Cp dT`,
+  `int Cp/T dT` and G_f(T) to 9e-11 J/mol.
+- DWSIM's reactors divide pressures by **P0 = 101325 Pa**; difflow's
+  equilibrium constants are on 1 bar. For a reaction that changes the moles
+  of gas by dn, K moves by (1.01325)^dn: 4 % for `Bz + 3 H2 = CH`. Which
+  pressure ChemSep's G_f refer to is not stated in DWSIM. On one standard
+  state, DWSIM's database and difflow's reformer data agree on that ln K to
+  0.02.
+- The conversion reactor applies conversions as percentages of the base
+  compound **present when its rank runs**. Its energy balance is a state
+  function, so any reaction set that reaches the same outlet gives the same
+  outlet temperature.
+
+**DWSIM's reactors are checked before they are believed.** An equilibrium
+answer counts only if it is the ideal-gas equilibrium of DWSIM's own numbers,
+to 3e-6 in mole fraction. That means DWSIM's tabulated G_f(T) for database
+compounds, and difflow's constants under DWSIM's conventions for hypos.
+Accepted answers sit at 2.1e-6 or better, most at 1e-8. Of 108 reactor runs
+over 54 isothermal cases, 24 do not pass. All of them are pinned in the test,
+and every case but one (the C6 ring at 480 K on difflow's constants) still has
+a DWSIM answer that does pass:
+
+- **The equilibrium reactor** stops with "Solution led to negative mole
+  fractions" on the isomerization reactor's eight-reaction network (C6 ring,
+  full charge) and on benzene at 300 C and 100 bar, and it fails in
+  adiabatic mode (a flash error). On the constants before #339 it also
+  **silently converged wrong** on the C6 paraffins at 400 K (6.3e-2 off);
+  on the shared table's it does not. Where it converges, it reproduces the
+  emulation to 1e-11.
+- **The Gibbs reactor** (DWSIM's own minimiser; IPOPT is its default, but
+  `libIpopt39` is not in the Linux package and the process aborts) can leave
+  a minor species at zero or at its trace start without an error: MCH at
+  773 K, 2-methylhexane, benzene, naphthalene, and cyclohexane in the C6
+  ring at 480 K on difflow's constants (2e-11 against 7e-6, the paraffins
+  7.7e-4 off; that case has no DWSIM answer); from 5e-6 to 1e-2 off. With
+  inert species and the isomerization skeleton labels (below), it stops
+  short of equilibrium in adiabatic mode (0.1 K on the benzene-rich charge).
+- A first solve raises "invalid initial estimates" unless
+  `InitializeFromPreviousSolution` is off; the harness sets it.
+
+**(a) Implementation: difflow's constants in DWSIM's reactors.**
+
+| Case | difflow | DWSIM (hypo) | Difference, and why |
+| --- | --- | --- | --- |
+| Isomer families (C5, C6 paraffins, C6 naphthenes), 400-550 K | closed form | equilibrium reactor | 1.4e-5 mole fraction: the midpoint-rule Cp integrals. The emulation under DWSIM's conventions gives 4e-8 |
+| C6 ring (H2, Bz, MCP, CH, C6 paraffins), 420 K, 30 bar | the reactor | Gibbs | 5.0e-6: 1 atm, R, quadrature (emulation: 1.9e-6). At 480 K neither DWSIM reactor gives its own equilibrium (above) |
+| Isomerization adiabatic, both charges, 140 C, 30 bar | 473.183 / 519.383 K | 473.183 / 519.466 K (Gibbs) | -0.3 mK / +0.083 K: DWSIM's minimiser with inerts, short of its own equilibrium (emulated DWSIM model: 473.183 / 519.359 K). difflow's reactor lands on the emulated difflow temperature to 1e-6 K (`test_the_reactor_reaches_the_emulated_adiabatic_equilibrium`, while the IDAES reference is stale) |
+| Reformer equilibria (MCH/toluene, MCP/CH/Bz, nC7 dehydrocyclization), 700-773 K, 10-25 bar | ideal-gas K from Gibbs energies | equilibrium reactor | up to 1.1e-3 mole fraction, nearly all the 1 atm standard state (emulation: 1e-11) |
+| Benzene and naphthalene saturation, 300-420 C, 30-100 bar (Cp-integrated since #338; the hypos carry the table's Cp) | `aromatic_ln_K` (ideal-gas equilibrium of the same constants) | equilibrium reactor | up to 5.4e-4 (1 atm and the quadrature; benzene at 420 C, 30 bar) |
+| First reformer bed, rich naphtha, 773.15 K in, 15 bar: the conversion reactor (PR, kij 0) taken to difflow's outlet | 710.6503 K (dT -62.4997 K) | 710.6506 K | 0.3 mK: DWSIM's R in the PR departure and its quadrature |
+| FCC coke burn (C + H2, flue at 2 % O2), 25 C and 700/730 C | `combustion` + `flue_enthalpy` | conversion reactor | reproduced to 1 W in 21-39 MW from the per-species data differences alone |
+
+The reformer bed's composition change is handed to DWSIM as sequential
+conversion reactions through methane (`CxHy + (2x - y/2) H2 = x CH4` for
+every species consumed, the reverse for every species made). DWSIM's outlet
+then reproduces difflow's to 2e-16 in mole flow. The energy balance does not
+depend on the reaction path.
+
+**(b) Data: DWSIM's database against difflow's tables.** All of these are
+pinned at their measured size.
+
+| Quantity | difflow | DWSIM | Cause |
+| --- | --- | --- | --- |
+| iC5 share of the C5s at equilibrium, 450 K | 0.772 | 0.762 | dH(nC5 = iC5): -6.99 kJ/mol (API TDB, the [shared table](#refinery-thermochemistry)) against ChemSep's -6.94. Before #339 the isomerization module used Prosen & Rossini's -8.10 and gave 0.820 |
+| C6 paraffin and naphthene shares, 400-550 K | | | up to 0.0067 (C6P; 0.067 before #339) and 0.048 (C6N): MCP = CH dH -16.4 against ChemSep's -17.1 kJ/mol |
+| Adiabatic isomerization outlet, paraffinic / benzene-rich charge | 473.18 / 519.38 K | 473.19 / 519.58 K | 0.005 and 0.19 K, DWSIM's own convergence (up to 0.11 K) included. Before #339 difflow was 3.83 and 2.65 K hotter (Prosen & Rossini's larger heats of isomerization) |
+| Reformer reactions, 14 of them | | | dH(298 K) within 0.7 kJ/mol (MCP = CH the largest); dH(773 K) within 1.4 kJ/mol; ln K(773 K) within 0.20 on one standard state (nP8 = A8 + 4 H2) |
+| Reformer equilibria, 700-773 K, 10-25 bar | | | within 3.1e-3 mole fraction (MCP/CH split at 700 K) |
+| First reformer bed outlet | 710.65 K | 711.16 K | the bed 0.8 % less endothermic on ChemSep H_f and Cp |
+| HDS of benzothiophene, per mol H2 | -52.3 kJ/mol | -42.6 kJ/mol | benzothiophene H_f: 166.3 kJ/mol (difflow) against ChemSep's 137.0. 166.3 is the calorimetric value: Sabbah (1979) 166.28 ± 0.48 and Good (1972) 166.6 kJ/mol, as listed by the NIST WebBook (read through a search summary; see [Thermochemical data](#refinery-thermochemistry)). ChemSep's matches no measurement found |
+| Other hydroprocessing heats per mol H2 at 25 C (sulfide and thiophene HDS, Bz and naphthalene saturation, 1-hexene, nC6 cracking) | | | within 1.9 kJ/mol (1-hexene saturation the largest) |
+| The same heats at 350 C (DWSIM's conversion reactor) | irreversible reactions: 298 K values, by design; aromatics: at T | 3-15 % more heat than at 298 K | the reactions' dCp. difflow's irreversible per-class heats neglect it (documented); its aromatics heats carry it since #338 and agree within 0.3 kJ/mol (benzene -219.89 against -220.17, naphthalene -132.12 against -132.33) |
+| Benzene + 3 H2 = cyclohexane, ln K, 300 / 350 / 420 C | Cp-integrated (`aromatic_ln_K`, #338) | with Cp | **0.005, 0.009, 0.016** above DWSIM on one standard state; equal to difflow's reformer thermochemistry (one table). Until #338 difflow's hydrotreating K held dH and dS constant and was 2.9x, 3.6x, 4.9x too large (ln K 1.05, 1.29, 1.60 high; 1.12, 1.34, 1.62 on the table's constants) |
+| Benzene / cyclohexane equilibria, 300-420 C, 30-100 bar | the hydrotreater's constants | DWSIM's data, accepted reactor | within 2.1e-4 mole fraction (420 C, 30 bar, 40 % of the benzene left); 5e-6 or less at 300-350 C |
+| Naphthalene + 2 H2 = tetralin | Cp-integrated | not computable | DWSIM's tetralin (ChEDL Thermo) has G_f = 0: ln K about 60, every naphthalene saturated. This step and the poly step (DWSIM has no tetrahydrophenanthrene) are checked as an implementation instead: DWSIM's reactors on difflow's constants (table (a)), and `aromatic_ln_K` against `tc.ln_K` in `test_hydrotreating.py` |
+| Liquid heat of alkylation, 25 C, 7 single-product reactions and difflow's route A for 7 olefins | H_f(g) - CRC Hvap | Peng-Robinson liquid, ChemSep H_f | DWSIM 1.2-5.9 kJ/mol less exothermic (e.g. iC4 + 1-butene to 2,2,4-TMP: -84.8 against -82.7 kJ/mol). Gas-phase H_f account for up to 2.2 kJ/mol (propylene route; 3.7 before #339 put these species on the shared table); the rest is PR's liquid departure against the CRC heats of vaporisation. At 10 C DWSIM gives 0.6-1.0 kJ/mol less again; difflow neglects the temperature |
+| Heat of coke combustion (7 wt% H), 25 C | | | 1.1e-5 (water's H_f, -241.826 against -241.814 kJ/mol) |
+| Coke burn to a 700/730 C flue | | | DWSIM releases 0.007-0.009 % more: difflow's JANAF Cp fits against ChemSep's, all of it, to 1 W (0.05-0.07 % with the RPP cubics `fcc.species` had before #339) |
+
+**What DWSIM 9.0.5 cannot check.** It has no dibenzothiophene,
+cyclohexylbenzene, quinoline, carbazole or tetrahydrophenanthrene, so it
+cannot check the DBT and 4,6-DMDBT HDS heats, either HDN heat, or the
+poly-aromatic step. It has no catalyst. The FCC heat balance's catalyst
+term, the heat of cracking and the regenerator adiabatic temperature are
+therefore not compared; a coke-and-air adiabatic flame is above 2000 K,
+past both sides' Cp fits. DWSIM's own "Graphite" (its "User" table) has a
+constant vapour pressure that cannot be lifted, so coke carbon is a
+hypothetical compound with H_f = 0 (it enters at 25 C and burns completely,
+so nothing else about it matters).
+
+**Unexplained differences: none.** Every (a) difference is reproduced by the
+emulation of DWSIM's conventions, or is DWSIM's own convergence, measured
+against its own model. Every (b) difference traces to a formation enthalpy,
+entropy or Cp in one of the two databases.
+
+Since #339 the reference was regenerated on the shared thermochemistry table
+(isomerization, alkylation and FCC regenerator constants moved; the reformer's
+and the hydrotreater's did not), and again for #338 (the hydrotreater's model
+compounds moved onto the table, and its aromatics hypos carry their Cp). The isomerization and adiabatic gaps to
+ChemSep closed by an order of magnitude, because ChemSep uses the same
+API TDB paraffin values.
+
+Regenerate (DWSIM 9.0.5; about 15 minutes):
+
+```bash
+PYTHONPATH=src:tests python -m refinery.reference.dwsim_reactions_generate
+```
+
+(refinery-dwsim-lightends)=
+### Validation against DWSIM: light ends, HP separator and gas plant
+
+Two references, built on the harness above. Each says which comparison it is:
+**(a)** same model and constants (DWSIM hypothetical compounds on difflow's
+constants and kij, liquid density from the EOS), which tests the
+implementation; **(b)** DWSIM's own compounds and kij, which tests the model.
+
+- `tests/refinery/reference/dwsim_gasplant_generate.py` writes
+  `dwsim_gasplant_reference.json`. It holds three rigorous columns, the wet-gas
+  compressor train and two vapour pressures; the cases are in
+  `dwsim_gasplant_case.py`.
+- `tests/refinery/reference/dwsim_hps_generate.py` writes
+  `dwsim_hps_reference.json`. It holds a solved hydrotreater's reactor effluent
+  flashed at HP-separator conditions; the case is in `dwsim_hps_case.py`.
+- `tests/refinery/reference/dwsim_lightends.py` holds the DWSIM unit operations
+  (column, compressor/cooler/knock-out train, RVP) that the generators use. It
+  adds to the harness and does not change it.
+
+`test_dwsim_gasplant.py` and `test_dwsim_hps.py` hold the comparisons
+(`release`), plus per-commit checks that the files are intact and still
+describe difflow's constants and cases.
+
+```bash
+PYTHONPATH=src:tests python -m refinery.reference.dwsim_gasplant_generate
+PYTHONPATH=src:tests python -m refinery.reference.dwsim_hps_generate   # solves the hydrotreater first (~2 min)
+```
+
+#### Columns (comparison (a))
+
+DWSIM's `DistillationColumn` uses the same layout as the IDAES reference.
+That is a total condenser at the bubble point, equilibrium trays, a kettle
+reboiler and no pressure drop. The reflux and boilup ratios are specified,
+PR with kij = 0, and every component is a hypo on difflow's constants.
+The **C3/C4 splitter converges in DWSIM** (Wang-Henke, 2 s), so the column-level
+check that IDAES's `TrayColumn` could not give (see
+[the gas plant's validation](#refinery-gasplant-validation)) is made here.
+The naphtha splitter adds four Twu pseudo-components (NBP 375 to 465 K) to C4 to C6.
+
+| Case | DWSIM solver | Stage T | L, V profiles | Phase x, y | Products | Duties (plain) | Duties, DWSIM's enthalpy reproduced |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Debutanizer: C3 to nC5, 10 bar, 10 trays, R = 2, boilup 2 | Naphtali-Sandholm | 5.8e-5 K | 3.7e-6 rel | 4.2e-7 | 5.9e-6 rel | 5.2e-5, 5.1e-5 rel | 7e-16 |
+| C3/C4 splitter: C2 to nC4 with propylene, 17 bar, 20 trays, R = 5, boilup 3 | Wang-Henke | 3.5e-5 K | 2.1e-6 rel | 2.1e-7 | 2.1e-6 rel | 5.5e-5, 5.1e-5 rel | 3e-14 |
+| Naphtha splitter: nC4 to nC6 and four cuts, 2.5 bar, 20 trays, R = 1.5, boilup 1.2 | Wang-Henke | 2.0e-4 K | 1.3e-5 rel | 6.2e-6 | 4.2e-5 rel | 5.1e-5, 4.7e-5 rel | 9e-14 |
+
+The K-values at DWSIM's own stage states agree to 1.2e-6 (DWSIM's truncated
+sqrt 2, as in the smoke test). Three things set the size of the rest:
+
+- **DWSIM's column tolerance, not difflow.** The loop tolerance is 1e-9.
+  Wang-Henke closes the component balances only to about 1e-8 (7.8e-9 on
+  the naphtha splitter), and that is the 2e-4 K and 1e-5 level of the
+  naphtha splitter. On the debutanizer, Naphtali-Sandholm closes them to
+  5e-16. There DWSIM agrees with IDAES's column to 6e-5 K, and with difflow
+  to 5.8e-5 K.
+- **The duties are 5e-5 apart, and all of it is understood.** DWSIM's PR
+  uses R = 8.314, and its ideal-gas enthalpy is a midpoint-rule integral
+  (both found by the smoke test). DWSIM's condenser and reboiler duties were
+  recomputed from DWSIM's own stage flows, temperatures and compositions,
+  with difflow's PR plus those two reproduced. They match DWSIM's to
+  1e-13. With difflow's exact enthalpy the 5e-5 comes back
+  (`test_dwsims_duties_are_its_own_enthalpies`).
+- **DWSIM's solvers.** `SolvingMethodName` is matched by substring:
+  "Bubble" is Wang-Henke, "Napthali" (sic) is Naphtali-Sandholm, "Rates" is
+  Burningham-Otto.
+  - Wang-Henke converges the debutanizer, but DWSIM's own post-solve
+    component-balance check then fails it. The check is at
+    `10 * min(loop tolerances)`, and the balance came to 1.8e-8 against 1e-8.
+  - Naphtali-Sandholm had not finished the C3/C4 splitter or the naphtha
+    splitter after four minutes; Wang-Henke takes 2 to 3 s. The reference
+    records which solver ran each case.
+  - Two other things were read from the IL. After a solve,
+    `Stage.Lout`/`Vout`/`Kvalues` are empty; the profiles are the column's
+    `Tf`, `Lf`, `Vf`, `xf`, `yf` and `Kf`. A feed goes whole, both phases,
+    to the stage it is connected to.
+
+**Comparison (b), the same columns on DWSIM's database and kij.** DWSIM
+carries kij for most hydrocarbon pairs, and difflow uses zero for them.
+On the debutanizer DWSIM's kij (propane/n-pentane 0.027, isopentane/n-pentane
+0.060, n-butane/n-pentane 0.017) put more C5 overhead. The isopentane in the
+distillate goes from 3.2 % to 5.3 %, the distillate rate rises 4.1 %, the
+condenser duty rises 6.1 % and the reboiler duty falls 8.3 %. On the C3/C4 splitter (propylene/propane 0.0096,
+propylene/isobutane -0.014, and DWSIM's propylene Tc 364.85 K against 365.6 K)
+the distillate's propylene rises 1.3 points and its isobutane falls from 850 to
+330 ppm, with the duties within 0.2 %. These are model differences, set by
+binary parameters difflow leaves at zero. They are reported, not tuned to.
+
+#### Compressor (comparison (a), and the bug it found)
+
+The case is a wet gas (H2, H2S, C1 to nC6, 100 mol/s) at 1.6 bar and 40 °C. It
+goes through an inlet knock-out, then two stages to 14 bar (75 % isentropic),
+each cooled to 40 °C and knocked out. DWSIM builds it from `Compressor`
+(adiabatic, outlet pressure), `Cooler` and `Vessel`, on difflow's constants and
+difflow's kij (H2S with C1 to C3).
+
+| Quantity | DWSIM | difflow | Agreement |
+| --- | --- | --- | --- |
+| Stage 1 power / discharge T | 389.33 kW / 365.227 K | 389.35 kW / 365.230 K | 5.1e-5 rel / 2.7 mK |
+| Stage 2 power / discharge T | 349.58 kW / 369.567 K | 349.60 kW / 369.570 K | 4.9e-5 rel / 2.8 mK |
+| Gas out / condensate (component flows) | 66.72 / 33.28 mol/s | same | 1.9e-6 / 3.9e-7 rel |
+
+The power and temperature gaps are again R and the midpoint rule. Entropy
+follows the same pattern: DWSIM's mixture entropy is difflow's plus a
+constant 34.12 J/mol/K (another reference state), so isentropic paths agree.
+
+**This comparison found a bug in `GasCompressor`**, now fixed. Its temperature
+solve (`gasplant.units._solve_T`, used for the isentropic and actual discharge
+temperatures) took Newton steps with the slope
+`jax.grad(stop_gradient(fn))`, which is identically zero. Every step divided by
+zero, the clip bounced the temperature between half and twice the guess, and
+the answer was the one final Newton step from wherever the bounce ended.
+
+- On this case that step landed 1.27 K below the isentropic temperature,
+  with the first stage 3.6 % low in power (375.5 kW against 389.3 kW) and
+  1.5 K cold.
+- The existing release test against difflow's own EOS compressor
+  (`rel=5e-3`, `abs=0.5 K`, dry gas, one stage) had not caught it.
+- The slope is now `stop_gradient(grad(fn))`, and
+  `test_gasplant.py::test_solve_T_converges` checks convergence and the
+  implicit derivative.
+- Any gas-plant compressor result computed before this fix moves. That
+  includes example 40's wet-gas compressor; the stored notebook outputs were
+  not re-run.
+
+On DWSIM's compounds and kij (b), difflow's total power is 0.40 % lower and its
+condensate 0.86 % higher than DWSIM's.
+
+#### Vapour pressure
+
+| Liquid | TVP at 100 °F, DWSIM / difflow | D323 RVP, difflow's construction on DWSIM / difflow | DWSIM's own "RVP" | (b) TVP, D323 on DWSIM's data |
+| --- | --- | --- | --- | --- |
+| Debutanizer bottoms (C3 to C5) | 168.37 kPa, 8.6e-7 rel | 166.60 kPa, 8.6e-7 rel | 111.07 kPa (-33 %) | +9.8 %, +10.2 % |
+| Stabilized naphtha (C4 to C6 + 3 cuts) | 51.82 kPa, 1.1e-6 rel | 50.77 kPa, 1.1e-6 rel | 41.76 kPa (-18 %) | (pseudo-components: not run) |
+
+The D323 construction (vapour space four times the liquid's volume at 100 °F)
+was rebuilt on DWSIM's flashes: T-VF flashes, with DWSIM's PR liquid root at
+1 bar for the liquid volume. It agrees with difflow's to 1e-6.
+
+**DWSIM's own RVP is not a reference.** It lives only in the classic Windows
+UI's "Petroleum Cold Flow Properties" utility (`DWSIM.FrmColdProperties.Update1`
+in `DWSIM.exe`). That utility takes the stream package's bubble pressure at
+310.95 K and returns
+`RVP = 6894.76 * 10**((ln(TVP/6894.76) + 12.9728 - 12.82)/2.7738)`. This is a
+correlation on the TVP that mixes a natural log with a power of ten, and it
+equals the TVP only at 2.1 psi. Above that it puts the RVP of any liquid below
+its TVP: 33 % low on the debutanizer bottoms, and so on, even for a pure
+component, whose RVP must equal its vapour pressure. difflow's D323
+construction stays. The TVP agrees, and the correlation is recorded so the
+difference is visible.
+
+#### HP separator (the hydrotreater)
+
+The feed is the reactor effluent of the diesel hydrotreater of
+`test_hydrotreating.py` (crude A, 230 to 370 °C, 50 kg/s, defaults), solved and
+frozen. It is 71 % H2, 1.8 % H2S, 0.07 % NH3, 3.8 % C1, traces of C2 to C4, and
+22.8 % treated cuts (omega 0.23 to 0.79). It is flashed with `pr_flash` at the
+unit's separator (50 °C, 47 bar) and at the corners of 40 to 60 °C by 30 to
+60 bar.
+
+**(a) Same model.** DWSIM's "Peng-Robinson 1978 (PR78)" switches kappa at
+omega 0.491 as difflow's hydroprocessing PR does. DWSIM's plain "PR" uses
+the 1976 kappa for every omega. DWSIM's PR78 code (`ThermoPlugs.PR78`)
+writes the 1976 branch's 1.54226 as **1.5422**. Reproduced, the fugacity
+coefficients at DWSIM's phase compositions agree to 3e-14. Plain, the
+truncation is worth 1.7e-4 in the liquid phi of the cut just below the switch.
+difflow's flash lands on DWSIM's to 4.7e-7 in vapour fraction and 1.7e-6 in
+the liquid composition. DWSIM's own equilibrium residual is up to 2.6e-7.
+
+**What dissolves in the separator liquid** (#333): the fraction of each gas fed
+that leaves in the liquid, from DWSIM.
+
+| T, P | H2 | H2S | NH3 | CH4 | x_H2 in the liquid |
+| --- | --- | --- | --- | --- | --- |
+| 50 °C, 47 bar (the unit) | 1.53 % | 27.7 % | 36.6 % | 6.0 % | 0.044 |
+| 40 °C, 30 bar | 0.94 % | 22.5 % | 31.3 % | 4.2 % | 0.028 |
+| 40 °C, 60 bar | 1.92 % | 35.5 % | 46.2 % | 7.9 % | 0.054 |
+| 60 °C, 30 bar | 0.99 % | 18.0 % | 24.3 % | 3.7 % | 0.029 |
+| 60 °C, 60 bar | 2.02 % | 29.6 % | 38.0 % | 7.2 % | 0.057 |
+
+difflow's `pr_flash` matches these to 3.4e-5 relative (H2) and 6e-6 (the
+others). At the unit's conditions that is the 10.6 mol/s of H2 quoted above.
+
+**(b) What the model choices are worth**, as changes in these fractions:
+
+| Change | H2 | H2S | NH3 | CH4 |
+| --- | --- | --- | --- | --- |
+| 1976 kappa for every omega (DWSIM "PR") instead of the 1978 branch | +1.5 % | 0 to +0.1 % | -0.1 to -0.3 % | +1.0 % |
+| DWSIM's gas constants (H2S omega 0.094 vs 0.09, NH3 0.256 vs 0.253) | 0 | +0.1 to +0.2 % | +0.1 % | 0 |
+| DWSIM's kij instead of difflow's, and no H2S-cut kij (difflow 0.0333) | +0.2 to +0.4 % | **+12 to +15 %** | +0.2 % | +0.4 to +0.7 % |
+
+H2 solubility is robust to these choices; H2S solubility is not. It is set by
+the H2S-cut kij, for which neither side has data. difflow's 0.0333 is ChemSep's
+H2S/n-decane value carried to every cut (`DEFAULT_KIJ_H2S_CUT`), and DWSIM has
+no value for a pseudo-component. Two DWSIM kij stand out and are recorded, not
+adopted: H2/methane +0.026 (difflow -0.0044) and H2/n-butane -0.397. None of
+this is checked against measured solubilities. Both sides are PR, and PR with
+these kij is the model being compared, not validated.
+
+**Harness note.** `DWSIMFlowsheet._set_kij` with an explicit array removes and
+adds pairs in one loop over (i, j). The removal for (j, i) deletes the pair
+just added for (i, j), so every kij comes out zero and the call raises "DWSIM
+did not take the kij". `dwsim_lightends.set_kij` sets the matrix after a
+`kij="zero"` flowsheet instead. The harness itself is left as it is.
+
+(refinery-dwsim-cdu-validation)=
+### Validation against DWSIM: characterization and crude unit
+
+The crude side -- characterization, the column thermodynamics, the
+atmospheric column and the vacuum feed -- against DWSIM 9.0.5, on the
+harness above. Generator `tests/refinery/reference/dwsim_cdu_generate.py`
+(cases in `dwsim_cdu_case.py`, DWSIM unit-operation helpers in
+`dwsim_columns.py`) writes `dwsim_cdu_reference.json`;
+`tests/refinery/test_dwsim_cdu.py` reads it (comparisons `release`; file
+integrity and staleness per commit). Each comparison is labelled **(a)** same
+model and constants (an implementation check) or **(b)** DWSIM's own data and
+correlations (a model check). Every difference below is traced to its cause
+and reproduced in the test, or reported as unexplained.
+
+**DWSIM can represent difflow's crude-column thermodynamics exactly.** A
+DWSIM *hypothetical* compound gets Watson's latent heat with a fixed exponent
+of 0.375. A compound DWSIM treats as a database entry (`IsHYPO = False`,
+`OriginalDB = "DWSIM"`; `FlatCompound` in `dwsim_columns.py`) gets
+`A (1 - Tr)^(B + C Tr + D Tr^2)` instead, which with `B = 0.38` is difflow's
+`ColumnThermo.dhvap`. With DWSIM's ideal-gas Cp polynomial and DIPPR-101
+vapour pressure filled from difflow's constants (Lee-Kesler written exactly
+in that form) and the `IDEAL_RAOULT` options, DWSIM's "Raoult's Law" package
+computes difflow's model on difflow's 28 components.
+
+#### Characterization
+
+The test crude of the CDU validation (volume basis, SG 0.86, three light
+ends) and the heavy crude of the vacuum unit (mass basis, API 20, TBP curve
+stopping at 60 wt % at 565 C, a `HeavyEnd`), through difflow's
+`characterize` and DWSIM's distillation-curve characterization (its UI's
+"Petroleum Characterization from Distillation Curves", run headless) on the
+**same cut temperatures**. Two DWSIM runs: its defaults (Tc, Pc Riazi-Daubert
+1985; MW Winn 1956; omega Lee-Kesler, then fitted to reproduce each cut's
+normal boiling point on PR) against difflow's default (Twu 1984), and its
+closest options to one of difflow's methods (Riazi-Daubert 1985 Tc/Pc, Riazi
+1986 MW, no omega fit) against difflow's `riazi_daubert_1987`.
+
+*(a) The correlations alone*, DWSIM's evaluated at difflow's own (Tb, SG) of
+every cut:
+
+| DWSIM option | difflow | Agreement | Why |
+| --- | --- | --- | --- |
+| Tc, Pc Riazi-Daubert (1985) | `riazi_daubert_1987` | 3e-16 | the same equations |
+| MW Riazi (1986) | `riazi_daubert_1987` MW | 0.50-0.76 % high, reproduced to 1e-15 | DWSIM writes `-7.78 SG` for `-7.78712 SG` in the exponent: a factor `exp(0.00712 SG)` |
+| Tc Lee-Kesler (1976) | `lee_kesler` | 0.012 K | constants rounded in DWSIM's kelvin form |
+| Pc Lee-Kesler (1976) | `lee_kesler` | **9.869x too high** | DWSIM bug: a pressure in bar multiplied by `1e6 * 0.986923` instead of `1e5` |
+| MW Lee-Kesler (1974) | `lee_kesler` MW | **13-180 g/mol off** (negative for the lightest cuts); with one sign flipped, 0.5 g/mol | DWSIM bug: `(1 - 0.80882 SG - 0.02226 SG^2)` for Kesler-Lee's `+ 0.02226 SG^2` |
+| omega Lee-Kesler (1976) | `acentric_factor` | 2e-5 below Tb/Tc = 0.78; up to 0.22 above | difflow switches to Kesler-Lee's (Kw, Tbr) correlation above Tb/Tc = 0.8, as both papers prescribe; DWSIM never does |
+| MW Winn (1956) | Twu (1984) | -21 % to +12 % | a model difference |
+
+Do not use DWSIM's Lee-Kesler Pc or MW options: the first puts every critical
+pressure ten times too high (the omega that follows from it is near 1 for a
+naphtha cut), the second gives negative molecular weights below about 400 K.
+
+*(b) DWSIM's pipeline, step by step.* Each step is reproduced to round-off in
+the test, so every difference from difflow is assigned to one of them:
+
+1. *The TBP curve and a cut's boiling point.* DWSIM fits one 6th-order
+   polynomial T(x) to the whole curve and gives a cut the temperature at its
+   **midpoint** fraction; difflow interpolates the curve monotonically and
+   gives the **mean** temperature over the cut. The polynomial is up to 17 K
+   (test crude) / 23 K (heavy crude) off the curve at a cut's midpoint, and
+   mean against midpoint is up to 10 / 17 K; the two partly cancel, and cut
+   boiling points differ by up to 7.2 / 6.5 K.
+2. *Gravity.* Without an SG curve DWSIM takes each cut's SG from
+   Riazi-Al Sahhaf's `d15(MW)` on a Tb-only MW guess, then scales all of them
+   by one factor so the **mass**-weighted mean is the bulk SG; difflow holds
+   the Watson K constant and recombines the **volume**-weighted SG, light ends
+   included. On the test crude the SGs agree within 3.2 %; on the heavy crude
+   DWSIM's are 5.5-8.1 % higher, because its cuts cover only the curve
+   (1-60 wt %) and are scaled to the gravity of the *whole* crude.
+3. *Molecular weight is computed before the gravities are rescaled*: DWSIM's
+   MW of each cut is its correlation at the unscaled SG (0.3 % / 9 % below the
+   SG the cut ends with), reproduced to 1e-13 in the test.
+4. *Tc, Pc* are the Riazi-Daubert equations at DWSIM's (Tb, rescaled SG), to
+   round-off; omega is Lee-Kesler's, then (default) fitted to DWSIM's PR.
+5. *Ideal-gas Cp* is Lee-Kesler's from Watson K and omega; difflow's is
+   Watson-Nelson's.
+6. *Fractions.* DWSIM's cuts span the curve's first to last point. The heavy
+   crude's 40 wt % above 565 C is in **no pseudo-component**: DWSIM's
+   distillation-curve method cannot extrapolate an open-ended curve, and the
+   residue has to be added by hand (difflow's `HeavyEnd` extends the curve to
+   800 C and lumps the rest).
+
+Per cut, difflow (Twu) / DWSIM (defaults), every fourth cut of the test crude:
+
+| Cut (K) | Tb (K) | SG | MW | Tc (K) | Pc (bar) | omega | Watson K | Cp ig 300 K (J/mol/K) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 312-333 | 322.8 / 322.9 | 0.7075 / 0.6921 | 75.2 / 76.0 | 501.1 / 496.2 | 37.12 / 36.17 | 0.204 / 0.222 | 11.79 / 12.06 | 110 / 100 |
+| 393-413 | 403.2 / 403.5 | 0.7619 / 0.7591 | 114.2 / 118.3 | 589.8 / 589.5 | 27.91 / 27.85 | 0.329 / 0.315 | 11.79 / 11.84 | 167 / 168 |
+| 473-493 | 483.1 / 483.0 | 0.8093 / 0.8089 | 158.7 / 170.9 | 672.8 / 673.6 | 21.91 / 21.52 | 0.464 / 0.464 | 11.79 / 11.80 | 232 / 256 |
+| 553-573 | 563.2 / 563.1 | 0.8517 / 0.8488 | 211.9 / 235.3 | 750.9 / 752.3 | 17.59 / 16.78 | 0.616 / 0.601 | 11.79 / 11.83 | 310 / 359 |
+| 633-653 | 643.1 / 643.2 | 0.8902 / 0.8819 | 276.3 / 311.5 | 825.1 / 826.1 | 14.41 / 13.27 | 0.788 / 0.688 | 11.79 / 11.91 | 404 / 479 |
+| 753-793 | 772.5 / 771.5 | 0.9463 / 0.9260 | 417.7 / 458.5 | 940.8 / 936.6 | 10.81 / 9.39 | 1.078 / 0.981 | 11.79 / 12.05 | 610 / 715 |
+| 973-1123 | 1032.9 / 1040.1 | 1.0425 / 1.0110 | 1005.6 / 859.1 | 1171.2 / 1156.9 | 6.33 / 5.47 | 1.478 / 1.947 | 11.79 / 12.19 | 1469 / 1349 |
+
+and of the heavy crude:
+
+| Cut (K) | Tb (K) | SG | MW | Tc (K) | Pc (bar) | omega | Watson K | Cp ig 300 K (J/mol/K) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 309-333 | 314.8 / 321.3 | 0.7075 / 0.7531 | 71.4 / 75.2 | 493.2 / 507.0 | 39.00 / 43.08 | 0.189 / 0.205 | 11.70 / 11.06 | 103 / 72 |
+| 433-453 | 443.2 / 443.3 | 0.7930 / 0.8567 | 134.7 / 143.3 | 634.0 / 650.6 | 25.13 / 29.69 | 0.388 / 0.320 | 11.70 / 10.83 | 194 / 178 |
+| 553-573 | 563.3 / 563.3 | 0.8589 / 0.9258 | 209.9 / 235.5 | 753.6 / 777.5 | 18.07 / 21.20 | 0.608 / 0.518 | 11.70 / 10.85 | 303 / 312 |
+| 673-698 | 685.6 / 685.6 | 0.9171 / 0.9788 | 312.4 / 356.6 | 866.8 / 897.4 | 13.52 / 15.66 | 0.877 / 0.647 | 11.70 / 10.96 | 450 / 485 |
+| 798-823 | 810.9 / 810.4 | 0.9698 / 1.0230 | 465.5 / 509.2 | 978.4 / 1013.2 | 10.40 / 12.00 | 1.132 / 0.864 | 11.70 / 11.09 | 671 / 710 |
+
+Over all common cuts (DWSIM / difflow - 1): test crude, defaults -- SG -3.2
+to 0 %, MW -15 to +13 %, Tc -1.2 to +0.2 %, Pc -17 to 0 %, omega -13 to
++32 %; Riazi-Daubert options -- MW +0.5 to +6.1 %, Tc -1.9 to 0 %, Pc -17
+to 0 %. Heavy crude, defaults -- SG +5.5 to +8.1 %, MW +1.6 to +14 %, Tc +1.5
+to +3.6 %, Pc +10 to +18 %, omega -27 to +9 %. With matching correlations
+the remaining differences are the curve, the gravity distribution and the
+MW-before-rescaling step, not the correlations.
+
+#### Thermodynamics on the crude
+
+The CDU case's whole crude (742 mol/s, no water).
+
+*(a) Same model and constants* (DWSIM Raoult on difflow's constants):
+
+| Quantity | difflow | DWSIM | Agreement / cause |
+| --- | --- | --- | --- |
+| Psat, ideal-gas Cp, Hvap of each component | -- | -- | 4e-14, exact, exact (unsmoothed Watson); difflow's smoothed latent heat is up to 0.25 % lower within 30 K of Tc |
+| Bubble point, 1 / 2 bar | 351.06 / 383.03 K | same | 3e-13 K |
+| Dew point, 1 / 2 bar | 820.63 / 848.22 K | 820.75 / 848.17 K | +0.126 / -0.055 K: DWSIM's PV flash stops short -- `sum z/K - 1` is -3.3e-3 / +1.3e-3 at its temperature, 1e-12 at difflow's |
+| Vaporized at the coil outlet (586.30 K, flash-zone P) | 0.69623 | same | 6e-13; phase compositions 7e-14 |
+| Enthalpy along the heating path (5 points, 240 C / 6 bar to the coil outlet) | -- | -- | reproduced to 1e-4 J/mol with DWSIM's three conventions |
+| Furnace duty, inlet to coil outlet | 42.405 MW | 42.268 MW | -0.32 %: DWSIM's `P v_L` in the liquid enthalpy 97.37 kW (156 J/mol at the 6 bar inlet), difflow's Watson smoothing 39.31 kW, DWSIM's midpoint-rule ideal-gas enthalpy -0.20 kW; residual < 1 W |
+
+The `P v_L` term (DWSIM's Raoult liquid enthalpy is `H_ig - Hvap + P/rho_L`,
+Rackett density) is a real, small liquid-enthalpy effect that difflow's
+`ColumnThermo` omits: 0.23 % of this furnace duty.
+
+*(b) DWSIM's own models on DWSIM's own characterization* (its default cuts
+plus database propane, n-butane, n-pentane, the same standard-volume split
+and mass flow), against difflow's Raoult/Lee-Kesler on difflow's
+characterization:
+
+| | Bubble 1 / 2 bar (K) | Dew 1 / 2 bar | Vaporized at coil outlet | Furnace duty (MW) |
+| --- | --- | --- | --- | --- |
+| difflow (Raoult, Lee-Kesler Psat, Watson) | 351.06 / 383.03 | 820.63 / 848.22 K | 0.6962 | 42.40 |
+| DWSIM PR | 356.03 / 393.25 | fails | 0.6960 | 42.50 (+0.2 %) |
+| DWSIM Grayson-Streed | 359.32 / 397.92 | fails | 0.6853 | 42.30 (-0.2 %) |
+| DWSIM Lee-Kesler-Plocker | 348.60 / 371.68 (= its Raoult) | fails | 0.7786 | 38.34 (-9.6 %) |
+| DWSIM Raoult's Law | 348.60 / 371.68 | fails | 0.7017 | 27.14 (-36 %) |
+
+PR and Grayson-Streed on DWSIM's characterization land within 0.25 % of
+difflow's furnace duty and 1.1 points of its flash-zone vaporization; their
+bubble points are 5-15 K higher (a bubble point is set by the light ends and
+the lightest cuts, where the two characterizations differ most). What DWSIM gets wrong or cannot
+do here, each pinned in the test:
+
+- **No dew point.** Every package's PV flash at vapour fraction one fails on
+  DWSIM's characterization of the crude ("Unable to calculate PV Flash"), at
+  both pressures.
+- **No latent heat under Raoult's Law.** DWSIM's `AUX_HVAPi` has no branch
+  for a compound whose database is "Petroleum Assay", and returns zero: its
+  Raoult liquid enthalpy for its own fractions is the ideal-gas enthalpy,
+  and the furnace duty is 36 % low.
+- **Stream enthalpies under Grayson-Streed and Lee-Kesler-Plocker are not
+  the package's.** A material stream reports a vapour enthalpy near -1
+  kJ/mol at 513 K for these fractions; `DW_CalcEnthalpy` on the same phases
+  gives the 42.30 / 38.34 MW above, the stream values 15.06 / 11.09 MW. The
+  table uses `DW_CalcEnthalpy` (what DWSIM's column solver calls).
+- **Lee-Kesler-Plocker's bubble point is DWSIM's Raoult bubble point to
+  every digit**, with DWSIM's ideal fallback (`PVFlash_TryIdealCalcOnFailure`)
+  switched off; its TP flashes are not Raoult's. Unexplained.
+
+DWSIM's default `PVFlash_TryIdealCalcOnFailure = True` silently replaces a
+failed PV flash with an ideal one and reports it as the package's answer;
+the generator switches it off everywhere.
+
+#### The vacuum feed
+
+The CDU reference's atmospheric residue at 673 K / 50 and 100 mmHg and 693 K
+/ 75 mmHg: (a) DWSIM Raoult on difflow's constants vaporizes 0.8349, 0.7526,
+0.8501 -- agreement 4e-12; (b) DWSIM PR on the same Tc, Pc and EOS omega
+(kij 0, EOS liquid) vaporizes 4.6-4.7 points more at every point. At vacuum
+flash-zone conditions the heaviest cuts' vapour pressures are an
+extrapolation in both models, and nothing here says which is closer. (The
+vacuum column's own property model, Maxwell-Bonnell, is validated
+separately, [above](#refinery-vacuum-validation).)
+
+#### The atmospheric column
+
+**The CDU case cannot be built in DWSIM.** DWSIM's rigorous column (read
+from its source and confirmed on 9.0.5) has no side strippers and no
+pumparounds -- a "side operation" enum exists, nothing solves it -- and no
+free-water phase: its K-values are one-liquid-phase `DW_CalcKvalue`, and the
+flash option `ImmiscibleWaterOption` does not reach the column solvers, so
+stripping steam would dissolve in the hydrocarbon liquid wherever its
+partial pressure reaches its ideal-solution value (at the CDU case's top
+stage, 39 % water). Side strippers would need separate columns tied to the
+main one by recycles. The largest configuration both can build exactly is
+`COLUMN_A` in `dwsim_cdu_case.py`: the CDU case's main column (26 stages,
+the crude's 28 components on difflow's constants, fed at 600 K on the bottom
+stage, kerosene, diesel and AGO drawn as liquid at stages 9, 16 and 22 at
+fixed molar rates, total condenser, no steam, no reboiler). difflow solves
+it (`test_difflow_solves_the_column_dwsim_could_not`).
+
+**DWSIM 9.0.5 did not solve it in any configuration tried**
+(`COLUMN_A_ATTEMPTS`, recorded in the reference):
+
+| DWSIM configuration | Start | Outcome |
+| --- | --- | --- |
+| "Refluxed absorber" (no reboiler), total condenser, Naphtali-Sandholm | DWSIM's estimates; a linear 380-590 K profile | NaN on the first evaluation |
+| Refluxed absorber, Wang-Henke | linear profile | exception inside the solver |
+| Distillation column, reboiler duty spec 0 (NS / WH) | DWSIM's estimates; a consistent hand profile | NaN at once (NS); convergence error (WH) |
+| Distillation column, bottom-stage temperature spec (below), NS | linear profile | iteration cap after 245 s, error flat at 1.2e17 |
+| the same | difflow's converged T, V, L | iteration cap after 870 s |
+| the same, NS and Wang-Henke | difflow's converged T, V, L and compositions | no answer after 42 / 31 CPU-minutes |
+
+Two of these are DWSIM bugs, read from `NewtonRaphson.vb` and reproduced on a
+five-component column: with a refluxed absorber and a total condenser the
+condenser's vapour is zeroed, the distillate taken as its sum, and the
+condenser rows divide by it (NaN); with a `Heat_Duty` reboiler spec the
+reboiler's energy balance is replaced by `spec_function / spec_value` and
+the duty branch never sets the spec function, so the row is `0/Q` (NaN for
+`Q = 0`, an empty equation otherwise). `DWSIMColumn` therefore builds an
+ordinary distillation column whose "reboiler" is the bottom stage,
+specifies that stage's temperature (a spec the solver handles), and finds by
+secant the temperature at which DWSIM's reboiler duty is zero: at the answer
+every stage satisfies DWSIM's own MESH equations with no heat added.
+
+**What DWSIM does solve, compared** (`COLUMN_SMALL`, comparison (a)): five of
+the crude's cuts (pc03 to pc11 by twos, Tb 363-563 K, 20 mol/s each, 60 %
+vaporized at 1.6 bar), 10 stages, the feed on the bottom stage, a liquid
+side draw of 15 mol/s at stage 5, distillate 30 mol/s, total condenser, no
+reboiler, same model and constants. DWSIM starts from its own estimates.
+
+| Quantity | difflow | DWSIM | Agreement |
+| --- | --- | --- | --- |
+| Stage temperatures (condenser 385.96 K, stages 406.7-470.5 K) | -- | -- | 1.1e-3 K worst; condenser 1.9e-4 K, bottom stage 1.6e-4 K |
+| Liquid and vapour flows | -- | -- | 1.4e-4 relative |
+| Product component flows (distillate, side draw, bottoms; 100 mol/s fed) | -- | -- | 2.3e-4 mol/s |
+| Product TBP 5 % / 95 % | e.g. side draw 372.58 / 504.34 K | -- | 1.1e-3 K |
+| Bottom stage held adiabatic | -- | reboiler duty 0.06 W after 5 solves | -- |
+| Condenser duty | 2.8653 MW | 2.8633 MW | 6.7e-4: DWSIM's enthalpy conventions. difflow's enthalpy on DWSIM's converged state gives difflow's duty to 8e-6; DWSIM's conventions on it (midpoint-rule ideal gas, unsmoothed Watson, `P v_L` with the liquid at its 60 F density) give DWSIM's to 8e-5, the rest being DWSIM's Rackett density |
+
+So DWSIM's column, where it converges, agrees with difflow's to its own
+solver tolerance once its enthalpy conventions are accounted for -- the same
+conventions that set the furnace duty's 0.32 % above. A DWSIM solve of this
+small column takes 20 s to 5 min; the starting solve from DWSIM's own
+estimates is the slow one.
+
+The atmospheric column's other numbers -- the furnace with its overflash
+spec, steam, strippers, pumparounds and the product TBP gaps -- are checked
+against the independent Pyomo/IPOPT column of [the IDAES
+validation](#refinery-validation), which has all of them.
 
 ---
 

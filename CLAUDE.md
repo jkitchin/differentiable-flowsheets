@@ -535,8 +535,9 @@ Examples: `examples/34_vacuum_distillation.ipynb`, `examples/36_crude_to_vacuum.
 (adiabatic beds in diffrax, fired heaters, PR separator, H2 recycle as a
 `Flowsheet` tear, component-split stabilizer). Library, not a palette op.
 - Lumps C6-C10 nP/iP/N/A (+ MCP, H2, C1-C5), each ONE model compound
-  (`species.SPECIES`); thermo from `chemicals` 1.5.2 tables (API TDB Hf, Yaws
-  S0), K from Gibbs energies -- never from a kinetic paper.
+  (`species.SPECIES`); Hf/S0/Cp are the shared `difflow_refinery.thermochemistry`
+  rows (API TDB Hf, Yaws S0, TRC Cp fits), K from Gibbs energies -- never from
+  a kinetic paper.
 - One enthalpy basis: Hf + `CubicThermo` (ideal-gas Cp fit + PR departure).
   Reactor T comes from the conserved enthalpy by Newton, so balances close
   to round-off at any ODE tolerance. Keep it that way.
@@ -553,6 +554,28 @@ Examples: `examples/34_vacuum_distillation.ipynb`, `examples/36_crude_to_vacuum.
 
 Docs: `docs/unit-operations-refinery.md` (Catalytic reforming). Tests:
 `tests/refinery/test_reforming.py` (flowsheet tests `slow`).
+### Thermochemical Data (`difflow_refinery.thermochemistry`, #339)
+
+ONE table of ideal-gas Hf(298), S0(298, 1 bar) and a Cp cubic for every
+refinery model compound (76 species: C1-C12 paraffins and isomers, olefins,
+naphthenes, aromatics, the HDS/HDN model compounds, H2/N2/O2/H2O/CO/CO2/SO2/
+H2S/NH3). `tc.species(k)` -> `FormationData` (`Hf` J/mol, `S0` or None, `cp`,
+`cp_range`, sources, `status`, `note`); `tc.Hf/S0/cp/enthalpy/entropy/gibbs`,
+`tc.reaction_enthalpy/entropy/gibbs/ln_K({species: nu}, T)` (element balance
+checked, K on 1 bar, Cp-integrated), `tc.IdealGasSet(names)` for arrays.
+- Rule: CODATA for inorganics, API TDB for organics (one evaluation, so isomer
+  differences are consistent), CRC only where API TDB is absent or an outlier
+  a third source confirms; Yaws S0; TRC/JANAF/Joback Cp fits. Every override
+  has a `note`; never edit a value without its source.
+- No module keeps its own copy: `tests/refinery/test_thermochemistry.py`
+  AST-scans every `difflow_refinery` module (allowlist: only the
+  separation Cp of the gas plant and HP separator; the hydrotreater moved
+  onto the table in #338). `difflow.database` is core's table, not read by the refinery.
+- Benzothiophene Hf is 166.3 (calorimetric, Sabbah 1979 / Good 1972), not
+  ChemSep's 137.0. Moving isomerization onto it moved the C5/C6 equilibria
+  (iC5/C5 at 450 K 0.820 -> 0.772); `isom_reference.json` (IDAES) is STALE
+  (strict xfail, `STALE_SINCE_339`) until regenerated with IDAES + IPOPT.
+
 ### Hydroprocessing and the Hydrotreater (`difflow_refinery.hydroprocessing`, `.hydrotreating`)
 
 `hydroprocessing/` is kinetics-agnostic and shared (the hydrocracker of #307
@@ -599,7 +622,13 @@ Invariants (do not weaken them):
   `gases=False` or through `res.fractionate(...)` (#328, a TBP sigmoid split).
   `NAPHTHA_HDT_PARAMS` is the illustrative naphtha constant set.
 - Rate constants are ILLUSTRATIVE; thermochemistry is model-compound data from
-  the `chemicals` tables. The Korsten-Hoffmann profile cross-check is NOT done.
+  the shared table (`difflow_refinery.thermochemistry`; `MODEL_COMPOUNDS` is a
+  view). The aromatics K is `aromatic_ln_K(T)` -- Cp-integrated, 1 bar standard
+  state, pH2 in bar -- and its heat `aromatic_heat(T)` at the same T, so energy
+  and equilibrium agree (#338: constant 298 K dH/dS made K 3-5x too large).
+  Irreversible heats are 298 K values; the hydrocracker/residue per-H2
+  saturation heats are `AROMATIC_DH298` (298 K, deliberate). The
+  Korsten-Hoffmann profile cross-check is NOT done.
 
 Docs: `docs/unit-operations-refinery.md` (Hydroprocessing building blocks; The
 hydrotreater). Tests: `tests/refinery/test_hydrotreating.py`.
@@ -1228,6 +1257,7 @@ jax.debug.print("value: {x}", x=value)
 | `src/difflow_power/__init__.py` | Electrical grid plugin exports (AC-OPF) |
 | `src/difflow_refinery/__init__.py` | Refinery plugin exports (crude assay, CDU, VDU, blending, hydrotreating) |
 | `src/difflow_refinery/__init__.py` | Refinery plugin exports (crude assay, CDU, VDU, gas plant, blending) |
+| `src/difflow_refinery/thermochemistry.py` | The one table of ideal-gas Hf, S0, Cp of every refinery model compound, with provenance (#339) |
 | `tests/` | All pytest tests (includes `bio/`, `ree/`, `cc/`, `gas/`, `power/`, `refinery/` subdirs) |
 | `examples/` | Usage examples (Jupyter notebooks) |
 | `jax-tutorials/` | JAX autodiff tutorials |

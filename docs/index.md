@@ -53,7 +53,7 @@ difflow/
 ├── uncertainty.py      # Uncertainty propagation
 ├── cantera_import.py   # Cantera data import
 ├── pyglenn_import.py   # NASA Glenn (pyglenn) thermo import
-├── dwsim_import.py     # DWSIM thermo import (pythonnet, prototype)
+├── dwsim_import.py     # DWSIM thermo import (pythonnet; DWSIM 9.0.5)
 ├── units/              # Unit operations
 │   ├── cstr.py         # CSTR reactors
 │   ├── pfr.py          # PFR reactors

@@ -19,6 +19,8 @@ from __future__ import annotations
 import jax.numpy as jnp
 from jax import Array
 
+from difflow_refinery import thermochemistry
+
 #: IUPAC conventional atomic weights (g/mol): IUPAC CIAAW, "Standard atomic
 #: weights of the elements 2021", Pure Appl. Chem. 2022 (abridged /
 #: conventional values: H 1.008, C 12.011, N 14.007, O 15.999, S 32.06).
@@ -71,33 +73,22 @@ def element_mass_fraction(name: str, element: str) -> float:
 
 MW = {name: molar_mass(name) for name in FORMULA}
 
-#: Ideal-gas heat capacity ``Cp = a + b T + c T^2 + d T^3`` (J/mol/K, T in
-#: K) of the regenerator gases, Reid, Prausnitz & Poling, *The Properties of
-#: Gases and Liquids*, 4th ed. (McGraw-Hill, 1987), Appendix A (stated range
-#: roughly 273-1500 K). N2 and CO2 are the coefficients ``difflow.database``
-#: already carries (same source); O2, CO, H2O and SO2 were transcribed for
-#: this module and are marked (unverified transcription) -- see
-#: ``docs/unit-operations-refinery.md``.
-CP_IG: dict[str, tuple[float, float, float, float]] = {
-    "nitrogen": (31.15, -1.357e-2, 2.680e-5, -1.168e-8),
-    "carbon_dioxide": (19.80, 7.344e-2, -5.602e-5, 1.715e-8),
-    "oxygen": (28.11, -3.680e-6, 1.746e-5, -1.065e-8),         # (unverified transcription)
-    "carbon_monoxide": (30.87, -1.285e-2, 2.789e-5, -1.272e-8),  # (unverified transcription)
-    "water": (32.24, 1.924e-3, 1.055e-5, -3.596e-9),            # (unverified transcription)
-    "sulfur_dioxide": (23.85, 6.699e-2, -4.961e-5, 1.328e-8),   # (unverified transcription)
-}
+#: The regenerator gases (air in, flue gas out).
+REGENERATOR_GASES = ("nitrogen", "oxygen", "carbon_dioxide", "carbon_monoxide", "water",
+                     "sulfur_dioxide")
 
-#: Standard enthalpy of formation at 298.15 K, ideal gas (J/mol): CODATA
-#: Key Values for Thermodynamics (Cox, Wagman & Medvedev, Hemisphere, 1989).
-#: CO is the NIST-JANAF value (Chase 1998), not a CODATA key value.
-HF_298: dict[str, float] = {
-    "nitrogen": 0.0,
-    "oxygen": 0.0,
-    "carbon_dioxide": -393.51e3,
-    "carbon_monoxide": -110.53e3,
-    "water": -241.826e3,
-    "sulfur_dioxide": -296.81e3,
-}
+#: Ideal-gas heat capacity ``Cp = a + b T + c T^2 + d T^3`` (J/mol/K, T in K)
+#: of the regenerator gases, and their ideal-gas enthalpy of formation at
+#: 298.15 K (J/mol): both from the refinery's one thermochemistry table
+#: (:mod:`difflow_refinery.thermochemistry`, #339) -- CODATA key values for
+#: Hf, and cubics fitted over 298.15-1500 K to the NIST-JANAF tables (Chase
+#: 1998), which cover a regenerator at 950-1000 K with room to spare. Before
+#: #339 the Cp were Reid, Prausnitz & Poling (4th ed.) cubics, four of them
+#: unverified transcriptions; they agree with the JANAF fits to 1.1 % (O2;
+#: the rest 0.7 %) up to 1050 K, and fall away from JANAF above 1000 K.
+CP_IG: dict[str, tuple[float, float, float, float]] = {
+    n: thermochemistry.species(n).cp for n in REGENERATOR_GASES}
+HF_298: dict[str, float] = {n: thermochemistry.Hf(n) for n in REGENERATOR_GASES}
 
 T_REF = 298.15
 

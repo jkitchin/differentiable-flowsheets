@@ -36,6 +36,23 @@ REGENERATE = ("difflow's isomerization thermochemistry (or the constructed feeds
               "docs/unit-operations-refinery.md against the new numbers")
 
 
+#: The committed reference was built (difflow 3633b04) on the isomerization
+#: constants as they were BEFORE #339 moved them onto the refinery's shared
+#: thermochemistry table (API TDB dHf, TRC Cp fits instead of Prosen &
+#: Rossini and NIST-table fits). IDAES and IPOPT could not be installed where
+#: #339 was made (no IPOPT binary reachable), so the reference has not been
+#: regenerated: the checks that compare its answers with difflow's current
+#: constants are expected to fail until it is, and ``strict`` makes them fail
+#: loudly once it has been (the marker is then removed with this constant).
+#: The checks that hold whatever the constants (atoms, solve status, heat
+#: sign) still run. DWSIM's hypo runs (test_dwsim_reactions.py) do cover the
+#: new constants in the meantime.
+STALE_SINCE_339 = REF["provenance"]["difflow_commit"].startswith("3633b04")
+stale_339 = pytest.mark.xfail(
+    STALE_SINCE_339, strict=True,
+    reason="isom_reference.json predates #339's thermochemistry table and was not regenerated "
+           "(no IDAES/IPOPT where #339 was made): " + REGENERATE)
+
 def all_solves():
     for fam, rows in REF["families"].items():
         for r in rows:
@@ -71,6 +88,7 @@ class TestNoDrift:
     """The reference holds for the constants it was given. If they move,
     the answer checks would fail for a reason unrelated to the model."""
 
+    @stale_339
     @pytest.mark.parametrize("name", tc.NAMES)
     def test_component_constants_are_the_ones_the_reference_used(self, name):
         s = tc.SPECIES[tc.idx(name)]
@@ -106,6 +124,7 @@ class TestTheReferenceIsSelfConsistent:
         assert cout == pytest.approx(cin, rel=1e-8)
         assert hout == pytest.approx(hin, rel=1e-8)
 
+    @stale_339
     @pytest.mark.parametrize("kind", gen.ADIABATIC["feeds"])
     def test_the_adiabatic_answer_closes_difflows_energy_balance(self, kind):
         """IDAES's adiabatic outlet, priced with difflow's enthalpies: the
@@ -120,6 +139,7 @@ class TestTheReferenceIsSelfConsistent:
         h_out = H(r["flows"], r["T"])
         assert abs(h_out - h_in) < 1e-6 * sum(r["feed"].values()) * 1e3
 
+    @stale_339
     @pytest.mark.parametrize("fam", sorted(tc.FAMILIES))
     def test_the_families_match_the_closed_form(self, fam):
         for r in REF["families"][fam]:

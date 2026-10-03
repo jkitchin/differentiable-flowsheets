@@ -27,8 +27,12 @@ formation behind the heat of alkylation:
   Isobutylene has no CRC entry: Perry's Chemical Engineers' Handbook
   Table 2-150 (C1 = 32614 J/mol, C2 = 0.38073, Tc = 417.9 K) evaluated at
   298.15 K, the value the database's own note uses (edition unverified).
-* **Ideal-gas heat of formation** at 298.15 K: :mod:`difflow.database`
-  (``SpeciesData.Hf``), so there is one copy of it.
+* **Ideal-gas heat of formation** at 298.15 K: the refinery's one
+  thermochemistry table, :mod:`difflow_refinery.thermochemistry` (#339; API
+  Technical Data Book values, CRC for 1-butene and 2,3-dimethylpentane), so
+  there is one copy of it. Before #339 it was :mod:`difflow.database`'s,
+  which differs by up to 0.8 kJ/mol (propylene 20.41 against 19.71; the
+  butenes, 2-methyl-2-butene, n-dodecane).
 
 The liquid heat of formation is ``Hf(l) = Hf(g) - Hvap(298.15 K)`` (Hess's
 law across the vaporisation at 298.15 K), which is what the heat of an
@@ -42,10 +46,11 @@ from functools import lru_cache
 
 import numpy as np
 
-from difflow.database import get_critical_props, get_species_data
+from difflow.database import get_critical_props
 
 # One standard barrel (m^3) and the density of water at 60 F (kg/m^3): the
 # crude unit's own constants, so a barrel here is a barrel there.
+from difflow_refinery import thermochemistry
 from difflow_refinery.column import BARREL
 from difflow_refinery.thermo import RHO_WATER_60F
 
@@ -162,7 +167,8 @@ class AlkySpecies:
         omega: Acentric factor, from :mod:`difflow.database`.
         Pc: Critical pressure (Pa), from :mod:`difflow.database`.
         Tb: Normal boiling point (K), CRC.
-        Hf_gas: Ideal-gas heat of formation at 298.15 K (J/mol), database.
+        Hf_gas: Ideal-gas heat of formation at 298.15 K (J/mol), from
+            :mod:`difflow_refinery.thermochemistry`.
         Hvap298: Enthalpy of vaporisation at 298.15 K (J/mol), CRC.
         v_star: COSTALD characteristic volume (m^3/mol).
         omega_srk: COSTALD acentric factor.
@@ -201,7 +207,6 @@ def species(name: str) -> AlkySpecies:
                        f"{', '.join(ALKYLATION_SPECIES)}")
     n_C, n_H, Tb, hvap, costald, rho20 = _TABLE[name]
     crit = get_critical_props(name)
-    data = get_species_data(name)
     # The molar mass from the formula, not the database's two-decimal value:
     # the reactor conserves atoms exactly, and with rounded molar masses a
     # mass balance would close only to ~1e-5 (C5= + iC4 -> C9 is
@@ -219,7 +224,7 @@ def species(name: str) -> AlkySpecies:
     v60 = costald_volume(T_60F, crit.Tc, v_star, omega_srk)
     sg60 = mw / 1000.0 / v60 / RHO_WATER_60F
     return AlkySpecies(name=name, n_C=n_C, n_H=n_H, MW=mw, Tc=crit.Tc,
-                       Pc=crit.Pc, omega=crit.omega, Tb=Tb, Hf_gas=data.Hf,
+                       Pc=crit.Pc, omega=crit.omega, Tb=Tb, Hf_gas=thermochemistry.Hf(name),
                        Hvap298=hvap, v_star=v_star, omega_srk=omega_srk,
                        v60=v60, sg60=sg60, v_star_fitted=fitted)
 

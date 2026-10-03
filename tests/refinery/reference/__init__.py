@@ -36,4 +36,17 @@ and ``test_vdu_validation_file.py`` read it):
 * :mod:`.vdu_generate` -- solves it from an engineering guess, the two
   model variants, a Murphree case and central differences, and writes the
   file.
+
+DWSIM 9.0.5 is the second reference simulator, driven through pythonnet
+(``scripts/install_dwsim.sh`` installs it; see "Validation against DWSIM:
+setup" in docs/unit-operations-refinery.md):
+
+* :mod:`.dwsim_session` -- the shared harness: a DWSIM session, flowsheets on
+  a named property package with database or hypothetical compounds (on
+  difflow's constants), flashes, DWSIM's own petroleum characterization, and
+  provenance. Imported only by generators; it loads .NET on first use.
+* :mod:`.dwsim_smoke_case` / :mod:`.dwsim_smoke_generate` -- PR flashes of a
+  light-ends mixture and a five-cut naphtha on difflow's constants, written
+  to ``dwsim_smoke_reference.json`` and read by
+  ``tests/refinery/test_dwsim_smoke.py``.
 """

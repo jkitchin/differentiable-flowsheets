@@ -70,3 +70,6 @@ differentiable-flowsheets-ree.pdf
 # Editor front end. The build OUTPUT (src/difflow/gui/static) is committed on
 # purpose -- installing difflow must not need node -- but the toolchain is not.
 src/difflow/gui/frontend/node_modules/
+
+# DWSIM unpacked by scripts/install_dwsim.sh
+.dwsim/

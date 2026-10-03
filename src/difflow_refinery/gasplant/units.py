@@ -561,13 +561,21 @@ def deisobutanizer(components: GasComponents, n_trays: int = 60, feed_tray: int 
 
 def _solve_T(fn, target, T0, n_iter=12):
     """``T`` with ``fn(T) = target``: Newton without gradients, then one
-    frozen-derivative step carrying the implicit derivative."""
+    frozen-derivative step carrying the implicit derivative.
+
+    The Newton slope is ``grad(fn)`` with its RESULT stopped. Taking the
+    gradient of the stopped function instead (``grad(stop_gradient(fn))``,
+    as this did until the DWSIM comparison) is identically zero: every
+    Newton step divided by zero, the clip bounced ``T`` between half and
+    twice its value, and the answer was the single final step -- 1.3 K off
+    the isentropic temperature and 3.6 % off the stage power on the DWSIM
+    case (``tests/refinery/test_dwsim_gasplant.py``)."""
     Ts = jax.lax.stop_gradient(T0)
     tg = jax.lax.stop_gradient(target)
     fs = lambda T: jax.lax.stop_gradient(fn(T))  # noqa: E731
 
     def body(_, T):
-        d = jax.grad(fs)(T)
+        d = jax.lax.stop_gradient(jax.grad(fn)(T))
         return jnp.clip(T - (fs(T) - tg) / d, 0.5 * T, 2.0 * T)
 
     Ts = jax.lax.stop_gradient(jax.lax.fori_loop(0, n_iter, body, Ts))
