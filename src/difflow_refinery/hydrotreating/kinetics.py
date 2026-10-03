@@ -40,18 +40,26 @@ rises). Every rate is per kg of catalyst.
   ``r = f k c_ref,S (c_Sj/c_ref,S)^n h(c_H2)`` with no inhibition.
 * **Aromatics saturation** is first order and reversible; the equilibrium
   constants come from the ideal-gas thermochemistry of model compounds
-  (:data:`AROMATIC_THERMO`), ``K = exp(-(dH - T dS)/(R T))`` with pressures in
-  bar. Saturation is exothermic and loses three or two moles of gas, so the
-  equilibrium recedes with temperature and aromatics pass through a minimum.
+  (:data:`AROMATIC_REACTIONS`), ``ln K(T) = -dG(T)/(R T)`` with ``dG(T)`` the
+  Gibbs energy of reaction with the heat capacities integrated from 298.15 K
+  (:func:`aromatic_ln_K`; #338 -- constant 298 K ``dH`` and ``dS`` made K
+  2.9-4.9x too large at 300-420 C). The standard state is the ideal gas at
+  1 bar, so ``pH2/p0`` is the H2 partial pressure in bar. Saturation is
+  exothermic and loses three or two moles of gas, so the equilibrium recedes
+  with temperature and aromatics pass through a minimum.
 * **H2 stoichiometry** per class (:data:`HDS_H2`, :data:`HDN_H2`) is that of a
   model compound of the class, and the hydrogen not leaving as H2S or NH3
   goes onto the cut (``H += 2 nu - 2`` per sulfur, ``2 nu - 3`` per
   nitrogen). The molecule count of a cut does not change (a desulfurized
   molecule keeps its carbon skeleton). Element balances are exact.
 * **Heats of reaction** per event (:data:`HDS_HEAT`, ...) are ideal-gas
-  reaction enthalpies at 298 K of the same model compounds, so stoichiometry
-  and heat are consistent. They neglect the heats of vaporisation of the
-  reacting species (the bed is mostly liquid) and the temperature dependence.
+  reaction enthalpies of the same model compounds, so stoichiometry and heat
+  are consistent. The aromatics steps' heats are taken at the bed
+  temperature (:func:`aromatic_heat`, the same Cp integration as their K, so
+  the energy balance and the equilibrium's van 't Hoff slope agree); the
+  irreversible reactions' are 298.15 K values (their temperature dependence,
+  3-15 % at 350 C, is neglected). All neglect the heats of vaporisation of
+  the reacting species (the bed is mostly liquid).
 * **The cracking leak** moves a molecule of cut ``i`` to the cut whose carbon
   number per molecule is nearest to ``i``'s less the gas fragment's
   (:attr:`HDTKinetics.crack_targets`, fixed at construction), splitting off
@@ -71,10 +79,11 @@ Where the numbers come from -- read this before trusting a ppm:
   (``difflow.estimation``, or ``difflow.reconciliation.tracking`` for the
   activity as it drifts).
 * The THERMOCHEMISTRY (heats of reaction, equilibrium) is computed from
-  ideal-gas formation enthalpies and entropies of model compounds as
-  tabulated in the ``chemicals`` package (C. Bell et al., which transcribes
-  TRC/ATcT/CRC sources; the per-compound primary source is unverified). The
-  derivations are in the docs and pinned in the tests. Lumping a class of
+  the ideal-gas formation enthalpies, entropies and Cp of model compounds in
+  the refinery's one table, :mod:`difflow_refinery.thermochemistry` (#339:
+  CODATA for the inorganics, API TDB for the organics, each row with its
+  source and status). The derivations are in the docs and pinned in the
+  tests. Lumping a class of
   real molecules to one model compound is the approximation (class (b) of
   the issue's sources table).
 
@@ -103,7 +112,9 @@ References:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from types import MappingProxyType
 
 import jax
 import jax.numpy as jnp
@@ -111,6 +122,7 @@ import numpy as np
 from jax import Array
 
 from difflow.params_mixin import ParamsMixin
+from difflow_refinery import thermochemistry as tc
 from difflow_refinery.composition import NITROGEN_CLASSES, SULFUR_CLASSES
 from difflow_refinery.hydroprocessing.layout import GAS_ELEMENTS, Layout
 from difflow_refinery.hydroprocessing.reactor import Rates, ReactionContext
@@ -133,46 +145,28 @@ HDT_ATTRIBUTE_ELEMENTS: tuple[str | None, ...] = (
     + (None,) * (len(AROMATIC_CLASSES) + 2))
 
 # -----------------------------------------------------------------------------
-# Model-compound thermochemistry (ideal gas, 298.15 K): formation enthalpy
-# (J/mol) and absolute entropy (J/mol/K), as tabulated in the `chemicals`
-# package (Bell et al. 2016-, v1.5.2): Hfg and S0g. Primary sources per
-# compound unverified (see the module docstring).
+# Model-compound thermochemistry: read from the refinery's one table
+# (:mod:`difflow_refinery.thermochemistry`, #339) -- ideal-gas Hf(298.15 K),
+# S0(298.15 K, 1 bar) and the Cp cubic, each with its source. This module
+# keeps no copy of its own (#338; the guard in tests/refinery/
+# test_thermochemistry.py covers it).
 # -----------------------------------------------------------------------------
-MODEL_COMPOUNDS: dict[str, tuple[float, float | None]] = {
-    "hydrogen": (0.0, 130.7),
-    "hydrogen_sulfide": (-20600.0, 205.8),
-    "ammonia": (-45558.0, 192.8),
-    "benzene": (83180.0, 269.2),
-    "cyclohexane": (-122080.0, 298.19),
-    "naphthalene": (150600.0, 333.1),
-    "tetralin": (26000.0, 366.22),
-    "phenanthrene": (207500.0, 396.01),
-    "tetrahydrophenanthrene": (92300.0, None),
-    "diethyl_sulfide": (-83500.0, 368.1),
-    "ethane": (-83780.0, 229.2),
-    "thiophene": (114900.0, 278.8),
-    "n_butane": (-125850.0, 304.4),
-    "benzothiophene": (166300.0, 212.76),
-    "ethylbenzene": (29900.0, 360.6),
-    "dibenzothiophene": (205100.0, None),
-    "biphenyl": (181400.0, 391.24),
-    "cyclohexylbenzene": (-16700.0, 429.36),
-    "quinoline": (200500.0, 366.04),
-    "propylbenzene": (7900.0, 397.86),
-    "carbazole": (200700.0, 244.95),
-    "1_hexene": (-43500.0, 383.84),
-    "n_hexane": (-166940.0, 388.82),
-}
+#: The hydrotreater's model compounds (keys of the shared table).
+MODEL_COMPOUND_NAMES: tuple[str, ...] = (
+    "hydrogen", "hydrogen_sulfide", "ammonia", "benzene", "cyclohexane", "naphthalene",
+    "tetralin", "phenanthrene", "tetrahydrophenanthrene", "diethyl_sulfide", "ethane",
+    "thiophene", "n_butane", "benzothiophene", "ethylbenzene", "dibenzothiophene", "biphenyl",
+    "cyclohexylbenzene", "quinoline", "propylbenzene", "carbazole", "1_hexene", "n_hexane")
+#: ``{name: (Hf J/mol, S0 J/mol/K or None)}`` of the model compounds: a VIEW
+#: of the shared table (``S0`` is None where the table holds no defensible
+#: ideal-gas value), kept for callers that read the old mapping.
+MODEL_COMPOUNDS: Mapping[str, tuple[float, float | None]] = MappingProxyType(
+    {k: (tc.species(k).Hf, tc.species(k).S0) for k in MODEL_COMPOUND_NAMES})
 
 
-def _dH(products: dict, reactants: dict) -> float:
-    H = lambda side: sum(n * MODEL_COMPOUNDS[s][0] for s, n in side.items())
-    return H(products) - H(reactants)
-
-
-def _dS(products: dict, reactants: dict) -> float:
-    S = lambda side: sum(n * MODEL_COMPOUNDS[s][1] for s, n in side.items())
-    return S(products) - S(reactants)
+def _dH(nu: dict) -> float:
+    """Standard enthalpy of reaction at 298.15 K (J/mol), element balance checked."""
+    return float(tc.reaction_enthalpy(nu))
 
 
 #: H2 consumed per sulfur atom removed, by class: diethyl sulfide + 2 H2 ->
@@ -185,40 +179,73 @@ def _dS(products: dict, reactants: dict) -> float:
 #: Vanrysselberghe & Froment 1996) that CoMo removes DBT mainly by direct
 #: desulfurization and 4,6-DMDBT mainly after ring hydrogenation.
 HDS_ROUTE_DDS: tuple[float, ...] = (1.0, 1.0, 1.0, 0.80, 0.35)
-_DH_DBT_DDS = _dH({"biphenyl": 1, "hydrogen_sulfide": 1}, {"dibenzothiophene": 1})
-_DH_DBT_HYD = _dH({"cyclohexylbenzene": 1, "hydrogen_sulfide": 1}, {"dibenzothiophene": 1})
+_DH_DBT_DDS = _dH({"dibenzothiophene": -1, "hydrogen": -2, "biphenyl": 1, "hydrogen_sulfide": 1})
+_DH_DBT_HYD = _dH({"dibenzothiophene": -1, "hydrogen": -5, "cyclohexylbenzene": 1,
+                   "hydrogen_sulfide": 1})
 HDS_H2: tuple[float, ...] = (2.0, 4.0, 3.0, 0.80 * 2 + 0.20 * 5, 0.35 * 2 + 0.65 * 5)
-#: Heat of reaction per sulfur atom removed (J/mol), same model compounds.
+#: Heat of reaction per sulfur atom removed (J/mol), same model compounds, 298.15 K.
 HDS_HEAT: tuple[float, ...] = (
-    _dH({"ethane": 2, "hydrogen_sulfide": 1}, {"diethyl_sulfide": 1}),
-    _dH({"n_butane": 1, "hydrogen_sulfide": 1}, {"thiophene": 1}),
-    _dH({"ethylbenzene": 1, "hydrogen_sulfide": 1}, {"benzothiophene": 1}),
+    _dH({"diethyl_sulfide": -1, "hydrogen": -2, "ethane": 2, "hydrogen_sulfide": 1}),
+    _dH({"thiophene": -1, "hydrogen": -4, "n_butane": 1, "hydrogen_sulfide": 1}),
+    _dH({"benzothiophene": -1, "hydrogen": -3, "ethylbenzene": 1, "hydrogen_sulfide": 1}),
     0.80 * _DH_DBT_DDS + 0.20 * _DH_DBT_HYD,
     0.35 * _DH_DBT_DDS + 0.65 * _DH_DBT_HYD,
 )
 #: H2 per nitrogen atom: basic as quinoline + 4 H2 -> propylbenzene + NH3;
 #: non-basic as carbazole + 5 H2 -> cyclohexylbenzene + NH3.
 HDN_H2: tuple[float, ...] = (4.0, 5.0)
+#: Heat of reaction per nitrogen atom removed (J/mol), 298.15 K.
 HDN_HEAT: tuple[float, ...] = (
-    _dH({"propylbenzene": 1, "ammonia": 1}, {"quinoline": 1}),
-    _dH({"cyclohexylbenzene": 1, "ammonia": 1}, {"carbazole": 1}),
+    _dH({"quinoline": -1, "hydrogen": -4, "propylbenzene": 1, "ammonia": 1}),
+    _dH({"carbazole": -1, "hydrogen": -5, "cyclohexylbenzene": 1, "ammonia": 1}),
 )
-#: Aromatic saturation steps (poly -> di, di -> mono, mono -> naphthene):
-#: H2 per step and the model-compound thermochemistry ``(dH J/mol, dS J/mol/K)``:
-#: phenanthrene + 2 H2 -> 1,2,3,4-tetrahydrophenanthrene (dH; its entropy is
-#: not tabulated, so dS is taken from the di step), naphthalene + 2 H2 ->
-#: tetralin, benzene + 3 H2 -> cyclohexane.
+#: Aromatic saturation steps (poly -> di, di -> mono, mono -> naphthene), as
+#: model-compound reactions: phenanthrene + 2 H2 <-> 1,2,3,4-tetrahydro-
+#: phenanthrene, naphthalene + 2 H2 <-> tetralin, benzene + 3 H2 <->
+#: cyclohexane. Their equilibrium constants and heats are Cp-integrated from
+#: the table at the bed temperature (:func:`aromatic_ln_K`,
+#: :func:`aromatic_heat`), never constant dH and dS (#338).
+AROMATIC_REACTIONS: tuple[Mapping[str, float], ...] = (
+    MappingProxyType({"phenanthrene": -1, "hydrogen": -2, "tetrahydrophenanthrene": 1}),
+    MappingProxyType({"naphthalene": -1, "hydrogen": -2, "tetralin": 1}),
+    MappingProxyType({"benzene": -1, "hydrogen": -3, "cyclohexane": 1}),
+)
+#: H2 per aromatic saturation step.
 HDA_H2: tuple[float, ...] = (2.0, 2.0, 3.0)
-_DS_DI = _dS({"tetralin": 1}, {"naphthalene": 1, "hydrogen": 2})
-AROMATIC_THERMO: tuple[tuple[float, float], ...] = (
-    (_dH({"tetrahydrophenanthrene": 1}, {"phenanthrene": 1}), _DS_DI),
-    (_dH({"tetralin": 1}, {"naphthalene": 1}), _DS_DI),
-    (_dH({"cyclohexane": 1}, {"benzene": 1}), _dS({"cyclohexane": 1}, {"benzene": 1, "hydrogen": 3})),
-)
-#: Olefin saturation, 1-hexene + H2 -> n-hexane.
-OLEFIN_HEAT: float = _dH({"n_hexane": 1}, {"1_hexene": 1})
-#: Cracking leak per event, n-hexane + H2 -> n-butane + ethane.
-CRACK_HEAT: float = _dH({"n_butane": 1, "ethane": 1}, {"n_hexane": 1})
+for _nu, _h2 in zip(AROMATIC_REACTIONS, HDA_H2):
+    tc.check_balance(_nu)
+    assert -_nu["hydrogen"] == _h2
+_AROMATIC_SPECIES: tuple[str, ...] = tuple(dict.fromkeys(k for nu in AROMATIC_REACTIONS for k in nu))
+_AROMATIC_SET = tc.IdealGasSet(_AROMATIC_SPECIES)
+_AROMATIC_NU = np.array([[nu.get(k, 0.0) for k in _AROMATIC_SPECIES] for nu in AROMATIC_REACTIONS],
+                        dtype=float)
+#: Heats of the aromatic saturation steps at 298.15 K (J/mol of reaction):
+#: what the hydrocracker's and the residue desulfurizer's per-H2 saturation
+#: heats are built on. The hydrotreater itself uses :func:`aromatic_heat` at T.
+AROMATIC_DH298: tuple[float, ...] = tuple(_dH(nu) for nu in AROMATIC_REACTIONS)
+
+
+def aromatic_ln_K(T) -> Array:
+    """``ln K`` of the three aromatic saturation steps at ``T`` (K), ``(3,)``.
+
+    Ideal-gas standard state 1 bar (partial pressures in bar), from the
+    shared table's ``Hf``, ``S0`` and Cp integrated from 298.15 K to ``T``
+    (:meth:`~difflow_refinery.thermochemistry.IdealGasSet.ln_K`). Pure ``jnp``
+    in ``T``: traceable and differentiable. Its van 't Hoff slope
+    ``d ln K/dT = dH(T)/(R T^2)`` is :func:`aromatic_heat` exactly.
+    """
+    return _AROMATIC_SET.ln_K(_AROMATIC_NU, T)
+
+
+def aromatic_heat(T) -> Array:
+    """Standard enthalpies of the three aromatic saturation steps at ``T`` (J/mol), ``(3,)``."""
+    return _AROMATIC_SET.reaction_enthalpy(_AROMATIC_NU, T)
+
+
+#: Olefin saturation, 1-hexene + H2 -> n-hexane (298.15 K).
+OLEFIN_HEAT: float = _dH({"1_hexene": -1, "hydrogen": -1, "n_hexane": 1})
+#: Cracking leak per event, n-hexane + H2 -> n-butane + ethane (298.15 K).
+CRACK_HEAT: float = _dH({"n_hexane": -1, "hydrogen": -1, "n_butane": 1, "ethane": 1})
 #: Gas molecule split off per cracking event, by species (mole shares;
 #: ILLUSTRATIVE: a hydrotreater's off-gas is mostly C3-C4).
 CRACK_GAS_SPLIT: dict[str, float] = {
@@ -411,10 +438,9 @@ class HDTKinetics:
 
         # --- aromatics (reversible) -----------------------------------------
         kA = _arr(p.hda_k, p.hda_E, T, Tr) * h2r ** p.hda_h2_order     # (3,)
-        dHs = jnp.asarray([t[0] for t in AROMATIC_THERMO])
-        dSs = jnp.asarray([t[1] for t in AROMATIC_THERMO])
+        dHs = aromatic_heat(T)                                         # (3,) J/mol at T
         nuA = jnp.asarray(HDA_H2)
-        lnK = -(dHs - T * dSs) / (R_GAS * T)
+        lnK = aromatic_ln_K(T)                                         # 1 bar standard state
         lnK_p = lnK + nuA * jnp.log(jnp.maximum(pH2, 1e-30))        # products/reactant at equilibrium
         inv = jnp.exp(-lnK_p)
         a3, a2, a1, nn = (cA[:, ai["A_poly"]], cA[:, ai["A_di"]], cA[:, ai["A_mono"]], cA[:, ai["naphthenes"]])
@@ -477,6 +503,7 @@ def crack_targets(carbon_per_molecule) -> tuple[int, ...]:
 
 
 __all__ = ["AROMATIC_CLASSES", "HDT_ATTRIBUTES", "HDT_ATTRIBUTE_ELEMENTS", "MODEL_COMPOUNDS",
-           "HDS_ROUTE_DDS", "HDS_H2", "HDS_HEAT", "HDN_H2", "HDN_HEAT", "HDA_H2", "AROMATIC_THERMO",
+           "MODEL_COMPOUND_NAMES", "HDS_ROUTE_DDS", "HDS_H2", "HDS_HEAT", "HDN_H2", "HDN_HEAT", "HDA_H2",
+           "AROMATIC_REACTIONS", "AROMATIC_DH298", "aromatic_ln_K", "aromatic_heat",
            "OLEFIN_HEAT", "CRACK_HEAT", "CRACK_GAS_SPLIT", "HDTKineticParams", "NAPHTHA_HDT_PARAMS", "HDTKinetics",
            "crack_targets"]

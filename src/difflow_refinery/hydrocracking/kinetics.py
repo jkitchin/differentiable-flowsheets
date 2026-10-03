@@ -108,11 +108,12 @@ returns zero to round-off.
 **Heat** is per H2 consumed, split into C-C scission and saturation: each
 cracking event that makes ``n`` product molecules from one parent breaks
 ``n - 1`` bonds, each with one H2 and the heat of n-hexane + H2 -> n-butane +
-ethane (:data:`SCISSION_HEAT`, -42.7 kJ/mol, the hydrotreater's cracking-leak
+ethane (:data:`SCISSION_HEAT`, -42.6 kJ/mol, the hydrotreater's cracking-leak
 model reaction); the remaining H2 (saturation of the product, and the
 heteroatom removal) releases the benzene + 3 H2 -> cyclohexane heat per H2
-(:data:`SATURATION_HEAT_PER_H2`, -68.4 kJ/mol H2). Both from the
-model-compound thermochemistry of :mod:`difflow_refinery.hydrotreating.kinetics`.
+(:data:`SATURATION_HEAT_PER_H2`, -68.7 kJ/mol H2). Both at 298.15 K from the
+shared table, :mod:`difflow_refinery.thermochemistry`, through
+:mod:`difflow_refinery.hydrotreating.kinetics`.
 
 References:
     Laxminarasimhan, C.S., Verma, R.P. and Ramachandran, P.A., "Continuous
@@ -149,7 +150,7 @@ from difflow_refinery.hydroprocessing.layout import ATOMIC_MASS, GAS_ELEMENTS, L
 from difflow_refinery.hydroprocessing.reactor import Rates, ReactionContext
 from difflow_refinery.hydrotreating.feed import DEFAULT_AROMATIC_SPLIT, aromatic_split
 from difflow_refinery.hydrotreating.kinetics import (
-    AROMATIC_CLASSES, AROMATIC_THERMO, CRACK_HEAT, HDT_ATTRIBUTE_ELEMENTS, HDT_ATTRIBUTES,
+    AROMATIC_CLASSES, AROMATIC_DH298, CRACK_HEAT, HDT_ATTRIBUTE_ELEMENTS, HDT_ATTRIBUTES,
     HDTKineticParams, HDTKinetics, R_GAS)
 
 jax.config.update("jax_enable_x64", True)
@@ -171,8 +172,12 @@ HCU_GAS_SPLIT: dict[str, float] = {
 #: Heat (J/mol) of one C-C scission with one H2: n-hexane + H2 -> n-butane +
 #: ethane (the hydrotreater's cracking-leak model reaction).
 SCISSION_HEAT: float = CRACK_HEAT
-#: Heat (J per mol H2) of saturation: benzene + 3 H2 -> cyclohexane, per H2.
-SATURATION_HEAT_PER_H2: float = AROMATIC_THERMO[2][0] / 3.0
+#: Heat (J per mol H2) of saturation: benzene + 3 H2 -> cyclohexane, per H2,
+#: at 298.15 K from the shared table. A deliberate simplification: the
+#: hydrotreater's own aromatics heats are Cp-integrated to the bed
+#: temperature (#338), which makes them 3-5 % larger at 350-420 C; this
+#: lumped per-H2 heat is not.
+SATURATION_HEAT_PER_H2: float = AROMATIC_DH298[2] / 3.0
 
 #: Gauss-Legendre nodes per bin of the continuous-lumping quadrature.
 N_QUAD: int = 8

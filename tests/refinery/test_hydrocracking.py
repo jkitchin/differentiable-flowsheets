@@ -144,9 +144,9 @@ def test_heats_pinned_to_model_compounds():
     """Scission: n-hexane + H2 -> n-butane + ethane; saturation: benzene + 3 H2 -> cyclohexane, per H2."""
     H = {k: v[0] for k, v in MODEL_COMPOUNDS.items()}
     assert hck.SCISSION_HEAT == pytest.approx(H["n_butane"] + H["ethane"] - H["n_hexane"], abs=1e-9)
-    assert hck.SCISSION_HEAT / 1e3 == pytest.approx(-42.69, abs=0.01)
+    assert hck.SCISSION_HEAT / 1e3 == pytest.approx(-42.55, abs=0.01)
     assert hck.SATURATION_HEAT_PER_H2 == pytest.approx((H["cyclohexane"] - H["benzene"]) / 3.0, abs=1e-9)
-    assert hck.SATURATION_HEAT_PER_H2 / 1e3 == pytest.approx(-68.42, abs=0.01)
+    assert hck.SATURATION_HEAT_PER_H2 / 1e3 == pytest.approx(-68.69, abs=0.01)
 
 
 def test_gas_split_normalised():

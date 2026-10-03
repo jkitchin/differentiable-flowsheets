@@ -102,7 +102,7 @@ from difflow.params_mixin import ParamsMixin
 from difflow_refinery.hydroprocessing.layout import Layout
 from difflow_refinery.hydroprocessing.reactor import Rates, ReactionContext
 from difflow_refinery.hydrotreating.kinetics import (
-    AROMATIC_THERMO, CRACK_HEAT, HDS_HEAT, HDT_ATTRIBUTE_ELEMENTS, HDT_ATTRIBUTES, R_GAS, HDTKineticParams,
+    AROMATIC_DH298, CRACK_HEAT, HDS_HEAT, HDT_ATTRIBUTE_ELEMENTS, HDT_ATTRIBUTES, R_GAS, HDTKineticParams,
     HDTKinetics)
 
 jax.config.update("jax_enable_x64", True)
@@ -125,8 +125,9 @@ RESIDUE_S_H2: float = 3.0
 RESIDUE_S_HEAT: float = HDS_HEAT[2]
 #: H2 per CCR carbon atom made non-coke-forming (ILLUSTRATIVE, see module docstring).
 CCR_H2: float = 0.5
-#: Heat per mol of H2 in CCR reduction: benzene + 3 H2 -> cyclohexane, per H2.
-CCR_HEAT_PER_H2: float = AROMATIC_THERMO[2][0] / 3.0
+#: Heat per mol of H2 in CCR reduction: benzene + 3 H2 -> cyclohexane, per H2,
+#: at 298.15 K (shared table; not Cp-integrated, a deliberate simplification).
+CCR_HEAT_PER_H2: float = AROMATIC_DH298[2] / 3.0
 #: Heat per C-C bond broken in residue conversion (n-hexane + H2 -> n-butane + ethane).
 CONVERSION_HEAT: float = CRACK_HEAT
 

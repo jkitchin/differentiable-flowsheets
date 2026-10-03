@@ -39,10 +39,6 @@ PRE_339 = "d50001f"
 #: Modules that may still hold their own formation data, and why. Shrinking
 #: this is the point; growing it needs a reason a reviewer accepts.
 ALLOWED = {
-    # The hydrotreater's MODEL_COMPOUNDS (Hf, S0 of its model compounds) is
-    # migrated by #338, which removes this entry. Every species it needs is
-    # already in the table (test_hydrotreating_model_compounds_are_in_the_table).
-    "hydrotreating/kinetics.py": {"MODEL_COMPOUNDS"},
     # Separation thermo, not reaction thermochemistry: the ideal-gas Cp of
     # the Peng-Robinson enthalpy of the gas plant and of the hydroprocessing
     # separators, pinned by the IDAES and DWSIM gas-plant / HP-separator
@@ -251,12 +247,15 @@ class TestNoPrivateCopies:
         assert d["lhv"] == pytest.approx(tc.Hf("hydrogen_sulfide") - tc.Hf("water")
                                          - tc.Hf("sulfur_dioxide"), rel=1e-14)
 
-    def test_hydrotreating_model_compounds_are_in_the_table(self):
-        """What #338 needs: every model compound the hydrotreater uses."""
+    def test_hydrotreating_model_compounds_are_the_table(self):
+        """#338: the hydrotreater's model compounds are read from the table,
+        not copied (its MODEL_COMPOUNDS is a view)."""
         from difflow_refinery.hydrotreating.kinetics import CRACK_GAS_SPLIT, MODEL_COMPOUNDS
 
         for name in list(MODEL_COMPOUNDS) + list(CRACK_GAS_SPLIT):
             assert tc.resolve(name) in tc.TABLE, name
+        for name, (Hf, S0) in MODEL_COMPOUNDS.items():
+            assert Hf == tc.species(name).Hf and S0 == tc.species(name).S0, name
         for name in ("4_6_dimethyldibenzothiophene", "3_3_dimethylbiphenyl",
                      "methylcyclohexyltoluene", "pyridine", "indole", "aniline", "n_pentane",
                      "trans_decalin"):
