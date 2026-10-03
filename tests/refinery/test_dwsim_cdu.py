@@ -658,3 +658,149 @@ class TestVacuumFeedFlash:
             b, _, _ = _rr(th, z, p["T"], p["P"])
             assert 0.044 < p["vapor_fraction"] - b < 0.049, p["T"]
             assert p["equilibrium_residual"] < 1e-7
+
+
+@pytest.mark.release
+def test_dwsim_raoult_gives_its_petroleum_fractions_no_latent_heat():
+    """The cause of DWSIM-Raoult's 36 % low furnace duty: ``AUX_HVAPi``
+    returns zero for a "Petroleum Assay" compound. Under PR, GS and LKP the
+    latent heat comes from the EOS / correlation departure instead, and the
+    function is not used for the enthalpy."""
+    v = OWN["packages"]["RAOULT"]["pf_pure"]
+    for T in ("400.0", "500.0"):
+        assert v[T]["hvap"] == 0.0
+        assert v[T]["cp_ig"] > 100.0 and v[T]["psat"] > 0.0
+
+
+# ---------------------------------------------------------------------------
+# 3. the column
+# ---------------------------------------------------------------------------
+
+COL = REF["column"]
+
+
+class TestColumnRecord:
+    """Per commit: what the file says about DWSIM's column."""
+
+    def test_the_crude_column_attempts_are_recorded(self):
+        assert COL["A_attempts"] == json.loads(json.dumps(dc.COLUMN_A_ATTEMPTS))
+        assert INP["column_small"] == json.loads(json.dumps(dc.COLUMN_SMALL)), REGENERATE
+
+    def test_dwsim_solved_the_small_column_adiabatically(self):
+        s = COL["small"]
+        assert s["converged"] and not s["errors"]
+        assert abs(s["reboiler_duty_W"]) < 1.0
+        assert s["dwsim"]["solver"].startswith("Napthali-Sandholm")
+        assert len(s["outer"]) >= 2
+
+
+@pytest.fixture(scope="module")
+def small():
+    return dc.difflow_small_column(COMP)
+
+
+@pytest.mark.release
+class TestSmallColumnAgainstDWSIM:
+    """:data:`COLUMN_SMALL` (five of the crude's cuts, 10 stages, bottom
+    feed, a liquid side draw, total condenser, no reboiler) solved by both
+    on the same model and constants -- an implementation check of the
+    column. DWSIM's bottom stage is held adiabatic by a secant on its
+    temperature spec (``dwsim_columns.DWSIMColumn``): five DWSIM solves, the
+    last with a reboiler duty of 0.06 W against a 2.86 MW condenser.
+    What is left is DWSIM's enthalpy conventions (``P v_L``, unsmoothed
+    Watson, quadrature), as on the crude above."""
+
+    def test_converged(self, small):
+        r, _ = small
+        assert bool(r.converged)
+
+    def test_stage_temperatures(self, small):
+        """Measured 1.1e-3 K worst (stage 7), condenser 1.9e-4 K, bottom
+        stage 1.6e-4 K."""
+        r, _ = small
+        d = COL["small"]
+        np.testing.assert_allclose(np.asarray(r.T), d["T"][1:], atol=2e-3)
+        assert float(r.T_condenser) == pytest.approx(d["T"][0], abs=5e-4)
+
+    def test_internal_flows(self, small):
+        """1.4e-4 relative. DWSIM's L at a draw stage is what flows on (the
+        draw excluded), difflow's what leaves the tray (included)."""
+        r, _ = small
+        d = COL["small"]
+        L_dw = np.asarray(d["L"][1:]) + np.asarray(d["LSS"][1:])
+        L_dw[-1] = d["L"][-1]                       # the bottoms
+        np.testing.assert_allclose(np.asarray(r.L), L_dw, rtol=3e-4)
+        np.testing.assert_allclose(np.asarray(r.V), d["V"][1:], rtol=3e-4)
+
+    def test_products(self, small):
+        """Component flows of distillate, side draw and bottoms: 2.3e-4
+        mol/s worst (of 100 mol/s fed)."""
+        r, th = small
+        d = COL["small"]["products"]
+        for name in ("naphtha", "sd", "residue"):
+            got = [float(r.products[name][f"F_{n}"]) for n in th.names]
+            np.testing.assert_allclose(got, d[name], atol=5e-4, err_msg=name)
+
+    def test_product_tbp_points(self, small):
+        """TBP 5 % and 95 % of each product (difflow's ``tbp_curve`` on both
+        sides' flows): 1.1e-3 K."""
+        from difflow_refinery.products import tbp_curve
+
+        r, th = small
+        d = COL["small"]["products"]
+        for name in ("naphtha", "sd", "residue"):
+            a = np.asarray(tbp_curve(jnp.asarray([float(r.products[name][f"F_{n}"])
+                                                  for n in th.names]), th, (5.0, 95.0)))
+            b = np.asarray(tbp_curve(jnp.asarray(d[name]), th, (5.0, 95.0)))
+            np.testing.assert_allclose(a, b, atol=2e-3, err_msg=name)
+
+    def test_condenser_duty_and_why_it_differs(self, small):
+        """difflow 2.8653 MW, DWSIM 2.8633 MW: 6.7e-4. difflow's enthalpy on
+        DWSIM's converged state gives difflow's duty to 8e-6 (so the states
+        agree); DWSIM's conventions on the same state -- midpoint-rule ideal
+        gas, unsmoothed Watson, and ``P v_L`` with the liquid at its 60 F
+        density -- give DWSIM's to 8e-5. The rest of that is DWSIM's Rackett
+        density, which the reference does not record."""
+        r, th = small
+        d = COL["small"]
+        q_df = float(r.condenser_duty)
+        assert q_df / d["condenser_duty_W"] - 1 == pytest.approx(6.7e-4, abs=1e-4)
+        idx = [COMP["names"].index(n) for n in dc.COLUMN_SMALL["components"]]
+        cp = np.asarray(COMP["cp_ig"])[idx]
+        A, Tc = np.asarray(COMP["hvap_A"])[idx], np.asarray(COMP["Tc"])[idx]
+        MW, SG = np.asarray(COMP["MW"])[idx], np.asarray(COMP["SG"])[idx]
+        T, P, V, L = (np.asarray(d[k]) for k in ("T", "P", "V", "L"))
+        x, y, D = np.asarray(d["x"]), np.asarray(d["y"]), d["LSS"][0]
+        q_df_on_dw = V[1] * float(y[1] @ np.asarray(th.h_vapor(T[1]))) \
+            - (L[0] + D) * float(x[0] @ np.asarray(th.h_liquid(T[0])))
+        assert q_df_on_dw == pytest.approx(q_df, rel=2e-5)
+        hvap = np.where(T[0] < Tc, A * np.abs(1 - T[0] / Tc) ** 0.38, 0.0)
+        v_l = float(x[0] @ (MW / (SG * 999.016))) / 1000.0           # m3/mol at 60 F
+        h_l = float(x[0] @ (_dwsim_h_ig(cp, T[0]) - hvap)) + P[0] * v_l
+        q_dw = V[1] * float(y[1] @ _dwsim_h_ig(cp, T[1])) - (L[0] + D) * h_l
+        assert q_dw == pytest.approx(d["condenser_duty_W"], rel=1.5e-4)
+
+
+@pytest.mark.release
+def test_difflow_solves_the_column_dwsim_could_not():
+    """:data:`COLUMN_A` -- the CDU crude's 28 components in the main column
+    with side draws -- converges in difflow; DWSIM's attempts are in
+    ``COLUMN_A_ATTEMPTS``."""
+    from difflow_refinery import column as cc
+
+    from .reference import case
+
+    unit, crude, thermo, Vf, flows = dc.difflow_crude()
+    cfg = dc.COLUMN_A
+    feed = dict(unit.feed(case.BPD, T=case.T_FURNACE_IN, P=case.P_FURNACE_IN))
+    feed["T"], feed["P"] = cfg["T_feed"], cfg["P_feed"]
+    specs = (cc.product_rate("naphtha", cfg["distillate"], "mole"),) + tuple(
+        cc.product_rate(n, r, "mole") for n, _, r in cfg["side_draws"])
+    p = cc.CrudeColumnParams(n_stages=cfg["n_stages"], feed_stage=cfg["feed_stage"], specs=specs,
+                             P_top=cfg["P_top"], P_bottom=cfg["P_bottom"],
+                             P_condenser=cfg["P_condenser"],
+                             side_products=tuple(cc.SideProduct(n, s, 0)
+                                                 for n, s, _ in cfg["side_draws"]))
+    r = cc.CrudeColumn(p, thermo).solve(feed)
+    assert bool(r.converged)
+    assert float(r.L[-2]) > 0.05 * sum(flows)          # a wet wash zone: a real answer

@@ -24,8 +24,11 @@ What each section records (the cases are :mod:`.dwsim_cdu_case`):
   on DWSIM's own characterization of the same crude (the test crude's
   default run, plus DWSIM's database propane, n-butane, n-pentane), the same
   points.
-* ``column`` -- :data:`.dwsim_cdu_case.COLUMN_A` in DWSIM's rigorous column
-  (Naphtali-Sandholm) on the same model and constants as difflow.
+* ``column`` -- :data:`.dwsim_cdu_case.COLUMN_SMALL` in DWSIM's rigorous
+  column (Naphtali-Sandholm, bottom stage held adiabatic by a secant) on the
+  same model and constants as difflow, about 17 minutes; and the record of
+  what DWSIM did with the crude column :data:`.dwsim_cdu_case.COLUMN_A`
+  (``COLUMN_A_ATTEMPTS``: nothing that converged).
 * ``vacuum`` -- the CDU residue of ``cdu_reference.json`` flashed at vacuum
   flash-zone conditions on both models.
 
@@ -237,7 +240,7 @@ def run_column(session, comp) -> dict:
     for name, stage, rate in cfg["side_draws"]:
         col.add_side_draw(name, stage, rate)
     col.connect_products()
-    T0, T1 = cfg["T_feed"] - 2.0, cfg["T_feed"] - 4.0
+    T0, T1 = cfg["T_feed"] - 2.0, cfg["T_feed"] - 2.5
     col.specs(cfg["distillate"], T0)
     res = col.solve_adiabatic(T0, T1, duty_tol=1.0)
     res["dwsim"] = col.provenance()

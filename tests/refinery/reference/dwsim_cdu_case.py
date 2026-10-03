@@ -24,9 +24,10 @@ characterization and crude unit"):
    no pumparounds and no free-water phase (``dwsim_columns``), so the CDU
    case of ``case.py`` cannot be built in it. :data:`COLUMN_A` is the
    largest configuration both can build exactly: the main column with liquid
-   side draws, a total condenser, no steam -- solved by both on the same
-   model and constants. The full case's differences are reported, not
-   simulated.
+   side draws, a total condenser, no steam. DWSIM's column solvers did not
+   solve it (:data:`COLUMN_A_ATTEMPTS`); :data:`COLUMN_SMALL`, five of the
+   crude's cuts in a 10-stage column of the same kind, is solved by both on
+   the same model and constants.
 4. **The vacuum feed.** The CDU's atmospheric residue flashed at vacuum
    flash-zone conditions.
 
@@ -125,7 +126,7 @@ COLUMN_A_ATTEMPTS = [
 #: (pc03-pc11 by twos, Tb 363-563 K), 10 stages, the feed (20 mol/s of each,
 #: 60 mol % vaporized at 1.6 bar -- 471.7 K) on the bottom stage, one liquid
 #: side draw, a total condenser, no reboiler; the same model and constants on
-#: both sides. The bottom-stage secant starts 2 and 4 K below the feed.
+#: both sides. The bottom-stage secant starts 2 and 2.5 K below the feed.
 COLUMN_SMALL = {
     "components": ["pc03", "pc05", "pc07", "pc09", "pc11"], "feed_each": 20.0,
     "n_stages": 10, "feed_stage": 10, "T_feed": 471.7135, "P_feed": 1.6e5,

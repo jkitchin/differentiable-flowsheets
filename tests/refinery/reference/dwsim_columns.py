@@ -39,14 +39,14 @@ What it adds
     comparison with the characterization pipeline out of the way.
 
 :class:`DWSIMColumn`
-    A DWSIM rigorous column (``ObjectType.RefluxedAbsorber``: a condenser and
-    no reboiler, which is what an atmospheric crude column is) on a
+    A DWSIM rigorous column with a condenser and an adiabatic bottom stage
+    (what an atmospheric crude column is; see the class for why it is not
+    DWSIM's own "refluxed absorber") on a
     :class:`~.dwsim_session.DWSIMFlowsheet`: feeds on any stage, liquid side
-    draws at fixed molar rates, a total or partial condenser with a
-    distillate (and vapour) rate spec, stage pressures, heat removed on a
-    stage (``InterExchanger`` energy streams), the column solver by name.
-    ``.solve()`` runs DWSIM and returns the stage profile, the products and
-    the duties as plain numbers.
+    draws at fixed molar rates, a total condenser with a distillate rate
+    spec, stage pressures, the column solver by name. ``.solve()`` runs
+    DWSIM and ``.solve_adiabatic()`` holds the bottom stage adiabatic; both
+    return the stage profile, the products and the duties as plain numbers.
 
 What a DWSIM rigorous column can NOT be (read from ``RigorousColumn.vb``,
 DWSIM master, and confirmed against the 9.0.5 assemblies): it has no side
@@ -505,38 +505,50 @@ class DWSIMColumn:
         return out
 
     def solve_adiabatic(self, T0: float, T1: float, duty_tol: float = 10.0,
-                        max_outer: int = 20) -> dict:
+                        max_outer: int = 20, warm_start: bool = False) -> dict:
         """Secant on the bottom-stage temperature spec until DWSIM's reboiler
-        duty is zero to ``duty_tol`` W; each step warm-starts from DWSIM's
-        previous solution. Returns the last :meth:`solve` result plus
-        ``outer`` (the (T, duty) history)."""
-        pts = []
-        Ts = [float(T0), float(T1)]
+        duty is zero to ``duty_tol`` W. Each solve starts from the same
+        estimates (DWSIM's own, or those given) unless ``warm_start``; a
+        solve that fails is retried halfway back to the last temperature
+        that converged (a secant step can leave DWSIM's region of
+        convergence). Returns the last :meth:`solve` result plus ``outer``
+        (the (T, duty) history, failures included)."""
+        good = []
+        T = float(T0)
+        nxt = float(T1)
         res = None
         for k in range(max_outer):
-            T = Ts[k] if k < 2 else None
-            if T is None:
-                (Ta, Qa), (Tb, Qb) = pts[-2], pts[-1]
-                T = Tb - Qb * (Tb - Ta) / (Qb - Qa) if Qb != Qa else Tb + 0.5
-                T = min(max(T, Tb - 15.0), Tb + 15.0)
             with self.session.cwd():
                 self.col.SetReboilerSpec("Temperature", float(T), "K", "")
             res = self.solve()
             if not res["converged"]:
-                pts.append((T, None))
                 self.history.append({"T_bottom": T, "reboiler_duty_W": None,
-                                     "errors": res["errors"]})
-                raise RuntimeError(f"DWSIM column failed at T_bottom={T}: {res['errors']}")
+                                     "errors": [e[:200] for e in res["errors"]],
+                                     "seconds": res["seconds"]})
+                print(f"    outer {k}: T_bottom {T:.6f} K failed ({res['seconds']} s)", flush=True)
+                if not good:
+                    raise RuntimeError(f"DWSIM column failed at T_bottom={T}: {res['errors']}")
+                T = 0.5 * (T + good[-1][0])
+                continue
             Q = res["reboiler_duty_W"]
-            pts.append((T, Q))
+            good.append((T, Q))
             self.history.append({"T_bottom": T, "reboiler_duty_W": Q, "seconds": res["seconds"]})
             print(f"    outer {k}: T_bottom {T:.6f} K, reboiler duty {Q:.3f} W "
                   f"({res['seconds']} s)", flush=True)
             if abs(Q) < duty_tol:
                 break
-            self._warm_start()
+            if len(good) < 2:
+                T = nxt
+            else:
+                (Ta, Qa), (Tb, Qb) = good[-2], good[-1]
+                T = Tb - Qb * (Tb - Ta) / (Qb - Qa) if Qb != Qa else Tb + 0.5
+                T = min(max(T, Tb - 15.0), Tb + 15.0)
+            if warm_start:
+                self._warm_start()
+        else:
+            raise RuntimeError(f"bottom-stage secant did not reach {duty_tol} W: {self.history}")
         res["outer"] = list(self.history)
-        self.spec = dict(getattr(self, "spec", {}), T_bottom=pts[-1][0])
+        self.spec = dict(getattr(self, "spec", {}), T_bottom=good[-1][0])
         return res
 
     def results(self) -> dict:

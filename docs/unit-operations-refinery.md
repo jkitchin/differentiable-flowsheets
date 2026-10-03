@@ -3964,6 +3964,256 @@ just added for (i, j), so every kij comes out zero and the call raises "DWSIM
 did not take the kij". `dwsim_lightends.set_kij` sets the matrix after a
 `kij="zero"` flowsheet instead. The harness itself is left as it is.
 
+(refinery-dwsim-cdu-validation)=
+### Validation against DWSIM: characterization and crude unit
+
+The crude side -- characterization, the column thermodynamics, the
+atmospheric column and the vacuum feed -- against DWSIM 9.0.5, on the
+harness above. Generator `tests/refinery/reference/dwsim_cdu_generate.py`
+(cases in `dwsim_cdu_case.py`, DWSIM unit-operation helpers in
+`dwsim_columns.py`) writes `dwsim_cdu_reference.json`;
+`tests/refinery/test_dwsim_cdu.py` reads it (comparisons `release`; file
+integrity and staleness per commit). Each comparison is labelled **(a)** same
+model and constants (an implementation check) or **(b)** DWSIM's own data and
+correlations (a model check). Every difference below is traced to its cause
+and reproduced in the test, or reported as unexplained.
+
+**DWSIM can represent difflow's crude-column thermodynamics exactly.** A
+DWSIM *hypothetical* compound gets Watson's latent heat with a fixed exponent
+of 0.375. A compound DWSIM treats as a database entry (`IsHYPO = False`,
+`OriginalDB = "DWSIM"`; `FlatCompound` in `dwsim_columns.py`) gets
+`A (1 - Tr)^(B + C Tr + D Tr^2)` instead, which with `B = 0.38` is difflow's
+`ColumnThermo.dhvap`. With DWSIM's ideal-gas Cp polynomial and DIPPR-101
+vapour pressure filled from difflow's constants (Lee-Kesler written exactly
+in that form) and the `IDEAL_RAOULT` options, DWSIM's "Raoult's Law" package
+computes difflow's model on difflow's 28 components.
+
+#### Characterization
+
+The test crude of the CDU validation (volume basis, SG 0.86, three light
+ends) and the heavy crude of the vacuum unit (mass basis, API 20, TBP curve
+stopping at 60 wt % at 565 C, a `HeavyEnd`), through difflow's
+`characterize` and DWSIM's distillation-curve characterization (its UI's
+"Petroleum Characterization from Distillation Curves", run headless) on the
+**same cut temperatures**. Two DWSIM runs: its defaults (Tc, Pc Riazi-Daubert
+1985; MW Winn 1956; omega Lee-Kesler, then fitted to reproduce each cut's
+normal boiling point on PR) against difflow's default (Twu 1984), and its
+closest options to one of difflow's methods (Riazi-Daubert 1985 Tc/Pc, Riazi
+1986 MW, no omega fit) against difflow's `riazi_daubert_1987`.
+
+*(a) The correlations alone*, DWSIM's evaluated at difflow's own (Tb, SG) of
+every cut:
+
+| DWSIM option | difflow | Agreement | Why |
+| --- | --- | --- | --- |
+| Tc, Pc Riazi-Daubert (1985) | `riazi_daubert_1987` | 3e-16 | the same equations |
+| MW Riazi (1986) | `riazi_daubert_1987` MW | 0.50-0.76 % high, reproduced to 1e-15 | DWSIM writes `-7.78 SG` for `-7.78712 SG` in the exponent: a factor `exp(0.00712 SG)` |
+| Tc Lee-Kesler (1976) | `lee_kesler` | 0.012 K | constants rounded in DWSIM's kelvin form |
+| Pc Lee-Kesler (1976) | `lee_kesler` | **9.869x too high** | DWSIM bug: a pressure in bar multiplied by `1e6 * 0.986923` instead of `1e5` |
+| MW Lee-Kesler (1974) | `lee_kesler` MW | **13-180 g/mol off** (negative for the lightest cuts); with one sign flipped, 0.5 g/mol | DWSIM bug: `(1 - 0.80882 SG - 0.02226 SG^2)` for Kesler-Lee's `+ 0.02226 SG^2` |
+| omega Lee-Kesler (1976) | `acentric_factor` | 2e-5 below Tb/Tc = 0.78; up to 0.22 above | difflow switches to Kesler-Lee's (Kw, Tbr) correlation above Tb/Tc = 0.8, as both papers prescribe; DWSIM never does |
+| MW Winn (1956) | Twu (1984) | -21 % to +12 % | a model difference |
+
+Do not use DWSIM's Lee-Kesler Pc or MW options: the first puts every critical
+pressure ten times too high (the omega that follows from it is near 1 for a
+naphtha cut), the second gives negative molecular weights below about 400 K.
+
+*(b) DWSIM's pipeline, step by step.* Each step is reproduced to round-off in
+the test, so every difference from difflow is assigned to one of them:
+
+1. *The TBP curve and a cut's boiling point.* DWSIM fits one 6th-order
+   polynomial T(x) to the whole curve and gives a cut the temperature at its
+   **midpoint** fraction; difflow interpolates the curve monotonically and
+   gives the **mean** temperature over the cut. The polynomial is up to 17 K
+   (test crude) / 23 K (heavy crude) off the curve at a cut's midpoint, and
+   mean against midpoint is up to 10 / 17 K; the two partly cancel, and cut
+   boiling points differ by up to 7.2 / 6.5 K.
+2. *Gravity.* Without an SG curve DWSIM takes each cut's SG from
+   Riazi-Al Sahhaf's `d15(MW)` on a Tb-only MW guess, then scales all of them
+   by one factor so the **mass**-weighted mean is the bulk SG; difflow holds
+   the Watson K constant and recombines the **volume**-weighted SG, light ends
+   included. On the test crude the SGs agree within 3.2 %; on the heavy crude
+   DWSIM's are 5.5-8.1 % higher, because its cuts cover only the curve
+   (1-60 wt %) and are scaled to the gravity of the *whole* crude.
+3. *Molecular weight is computed before the gravities are rescaled*: DWSIM's
+   MW of each cut is its correlation at the unscaled SG (0.3 % / 9 % below the
+   SG the cut ends with), reproduced to 1e-13 in the test.
+4. *Tc, Pc* are the Riazi-Daubert equations at DWSIM's (Tb, rescaled SG), to
+   round-off; omega is Lee-Kesler's, then (default) fitted to DWSIM's PR.
+5. *Ideal-gas Cp* is Lee-Kesler's from Watson K and omega; difflow's is
+   Watson-Nelson's.
+6. *Fractions.* DWSIM's cuts span the curve's first to last point. The heavy
+   crude's 40 wt % above 565 C is in **no pseudo-component**: DWSIM's
+   distillation-curve method cannot extrapolate an open-ended curve, and the
+   residue has to be added by hand (difflow's `HeavyEnd` extends the curve to
+   800 C and lumps the rest).
+
+Per cut, difflow (Twu) / DWSIM (defaults), every fourth cut of the test crude:
+
+| Cut (K) | Tb (K) | SG | MW | Tc (K) | Pc (bar) | omega | Watson K | Cp ig 300 K (J/mol/K) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 312-333 | 322.8 / 322.9 | 0.7075 / 0.6921 | 75.2 / 76.0 | 501.1 / 496.2 | 37.12 / 36.17 | 0.204 / 0.222 | 11.79 / 12.06 | 110 / 100 |
+| 393-413 | 403.2 / 403.5 | 0.7619 / 0.7591 | 114.2 / 118.3 | 589.8 / 589.5 | 27.91 / 27.85 | 0.329 / 0.315 | 11.79 / 11.84 | 167 / 168 |
+| 473-493 | 483.1 / 483.0 | 0.8093 / 0.8089 | 158.7 / 170.9 | 672.8 / 673.6 | 21.91 / 21.52 | 0.464 / 0.464 | 11.79 / 11.80 | 232 / 256 |
+| 553-573 | 563.2 / 563.1 | 0.8517 / 0.8488 | 211.9 / 235.3 | 750.9 / 752.3 | 17.59 / 16.78 | 0.616 / 0.601 | 11.79 / 11.83 | 310 / 359 |
+| 633-653 | 643.1 / 643.2 | 0.8902 / 0.8819 | 276.3 / 311.5 | 825.1 / 826.1 | 14.41 / 13.27 | 0.788 / 0.688 | 11.79 / 11.91 | 404 / 479 |
+| 753-793 | 772.5 / 771.5 | 0.9463 / 0.9260 | 417.7 / 458.5 | 940.8 / 936.6 | 10.81 / 9.39 | 1.078 / 0.981 | 11.79 / 12.05 | 610 / 715 |
+| 973-1123 | 1032.9 / 1040.1 | 1.0425 / 1.0110 | 1005.6 / 859.1 | 1171.2 / 1156.9 | 6.33 / 5.47 | 1.478 / 1.947 | 11.79 / 12.19 | 1469 / 1349 |
+
+and of the heavy crude:
+
+| Cut (K) | Tb (K) | SG | MW | Tc (K) | Pc (bar) | omega | Watson K | Cp ig 300 K (J/mol/K) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 309-333 | 314.8 / 321.3 | 0.7075 / 0.7531 | 71.4 / 75.2 | 493.2 / 507.0 | 39.00 / 43.08 | 0.189 / 0.205 | 11.70 / 11.06 | 103 / 72 |
+| 433-453 | 443.2 / 443.3 | 0.7930 / 0.8567 | 134.7 / 143.3 | 634.0 / 650.6 | 25.13 / 29.69 | 0.388 / 0.320 | 11.70 / 10.83 | 194 / 178 |
+| 553-573 | 563.3 / 563.3 | 0.8589 / 0.9258 | 209.9 / 235.5 | 753.6 / 777.5 | 18.07 / 21.20 | 0.608 / 0.518 | 11.70 / 10.85 | 303 / 312 |
+| 673-698 | 685.6 / 685.6 | 0.9171 / 0.9788 | 312.4 / 356.6 | 866.8 / 897.4 | 13.52 / 15.66 | 0.877 / 0.647 | 11.70 / 10.96 | 450 / 485 |
+| 798-823 | 810.9 / 810.4 | 0.9698 / 1.0230 | 465.5 / 509.2 | 978.4 / 1013.2 | 10.40 / 12.00 | 1.132 / 0.864 | 11.70 / 11.09 | 671 / 710 |
+
+Over all common cuts (DWSIM / difflow - 1): test crude, defaults -- SG -3.2
+to 0 %, MW -15 to +13 %, Tc -1.2 to +0.2 %, Pc -17 to 0 %, omega -13 to
++32 %; Riazi-Daubert options -- MW +0.5 to +6.1 %, Tc -1.9 to 0 %, Pc -17
+to 0 %. Heavy crude, defaults -- SG +5.5 to +8.1 %, MW +1.6 to +14 %, Tc +1.5
+to +3.6 %, Pc +10 to +18 %, omega -27 to +9 %. With matching correlations
+the remaining differences are the curve, the gravity distribution and the
+MW-before-rescaling step, not the correlations.
+
+#### Thermodynamics on the crude
+
+The CDU case's whole crude (742 mol/s, no water).
+
+*(a) Same model and constants* (DWSIM Raoult on difflow's constants):
+
+| Quantity | difflow | DWSIM | Agreement / cause |
+| --- | --- | --- | --- |
+| Psat, ideal-gas Cp, Hvap of each component | -- | -- | 4e-14, exact, exact (unsmoothed Watson); difflow's smoothed latent heat is up to 0.25 % lower within 30 K of Tc |
+| Bubble point, 1 / 2 bar | 351.06 / 383.03 K | same | 3e-13 K |
+| Dew point, 1 / 2 bar | 820.63 / 848.22 K | 820.75 / 848.17 K | +0.126 / -0.055 K: DWSIM's PV flash stops short -- `sum z/K - 1` is -3.3e-3 / +1.3e-3 at its temperature, 1e-12 at difflow's |
+| Vaporized at the coil outlet (586.30 K, flash-zone P) | 0.69623 | same | 6e-13; phase compositions 7e-14 |
+| Enthalpy along the heating path (5 points, 240 C / 6 bar to the coil outlet) | -- | -- | reproduced to 1e-4 J/mol with DWSIM's three conventions |
+| Furnace duty, inlet to coil outlet | 42.405 MW | 42.268 MW | -0.32 %: DWSIM's `P v_L` in the liquid enthalpy 97.37 kW (156 J/mol at the 6 bar inlet), difflow's Watson smoothing 39.31 kW, DWSIM's midpoint-rule ideal-gas enthalpy -0.20 kW; residual < 1 W |
+
+The `P v_L` term (DWSIM's Raoult liquid enthalpy is `H_ig - Hvap + P/rho_L`,
+Rackett density) is a real, small liquid-enthalpy effect that difflow's
+`ColumnThermo` omits: 0.23 % of this furnace duty.
+
+*(b) DWSIM's own models on DWSIM's own characterization* (its default cuts
+plus database propane, n-butane, n-pentane, the same standard-volume split
+and mass flow), against difflow's Raoult/Lee-Kesler on difflow's
+characterization:
+
+| | Bubble 1 / 2 bar (K) | Dew 1 / 2 bar | Vaporized at coil outlet | Furnace duty (MW) |
+| --- | --- | --- | --- | --- |
+| difflow (Raoult, Lee-Kesler Psat, Watson) | 351.06 / 383.03 | 820.63 / 848.22 K | 0.6962 | 42.40 |
+| DWSIM PR | 356.03 / 393.25 | fails | 0.6960 | 42.50 (+0.2 %) |
+| DWSIM Grayson-Streed | 359.32 / 397.92 | fails | 0.6853 | 42.30 (-0.2 %) |
+| DWSIM Lee-Kesler-Plocker | 348.60 / 371.68 (= its Raoult) | fails | 0.7786 | 38.34 (-9.6 %) |
+| DWSIM Raoult's Law | 348.60 / 371.68 | fails | 0.7017 | 27.14 (-36 %) |
+
+PR and Grayson-Streed on DWSIM's characterization land within 0.25 % of
+difflow's furnace duty and 1.1 points of its flash-zone vaporization; their
+bubble points are 5-15 K higher (a bubble point is set by the light ends and
+the lightest cuts, where the two characterizations differ most). What DWSIM gets wrong or cannot
+do here, each pinned in the test:
+
+- **No dew point.** Every package's PV flash at vapour fraction one fails on
+  DWSIM's characterization of the crude ("Unable to calculate PV Flash"), at
+  both pressures.
+- **No latent heat under Raoult's Law.** DWSIM's `AUX_HVAPi` has no branch
+  for a compound whose database is "Petroleum Assay", and returns zero: its
+  Raoult liquid enthalpy for its own fractions is the ideal-gas enthalpy,
+  and the furnace duty is 36 % low.
+- **Stream enthalpies under Grayson-Streed and Lee-Kesler-Plocker are not
+  the package's.** A material stream reports a vapour enthalpy near -1
+  kJ/mol at 513 K for these fractions; `DW_CalcEnthalpy` on the same phases
+  gives the 42.30 / 38.34 MW above, the stream values 15.06 / 11.09 MW. The
+  table uses `DW_CalcEnthalpy` (what DWSIM's column solver calls).
+- **Lee-Kesler-Plocker's bubble point is DWSIM's Raoult bubble point to
+  every digit**, with DWSIM's ideal fallback (`PVFlash_TryIdealCalcOnFailure`)
+  switched off; its TP flashes are not Raoult's. Unexplained.
+
+DWSIM's default `PVFlash_TryIdealCalcOnFailure = True` silently replaces a
+failed PV flash with an ideal one and reports it as the package's answer;
+the generator switches it off everywhere.
+
+#### The vacuum feed
+
+The CDU reference's atmospheric residue at 673 K / 50 and 100 mmHg and 693 K
+/ 75 mmHg: (a) DWSIM Raoult on difflow's constants vaporizes 0.8349, 0.7526,
+0.8501 -- agreement 4e-12; (b) DWSIM PR on the same Tc, Pc and EOS omega
+(kij 0, EOS liquid) vaporizes 4.6-4.7 points more at every point. At vacuum
+flash-zone conditions the heaviest cuts' vapour pressures are an
+extrapolation in both models, and nothing here says which is closer. (The
+vacuum column's own property model, Maxwell-Bonnell, is validated
+separately, [above](#refinery-vacuum-validation).)
+
+#### The atmospheric column
+
+**The CDU case cannot be built in DWSIM.** DWSIM's rigorous column (read
+from its source and confirmed on 9.0.5) has no side strippers and no
+pumparounds -- a "side operation" enum exists, nothing solves it -- and no
+free-water phase: its K-values are one-liquid-phase `DW_CalcKvalue`, and the
+flash option `ImmiscibleWaterOption` does not reach the column solvers, so
+stripping steam would dissolve in the hydrocarbon liquid wherever its
+partial pressure reaches its ideal-solution value (at the CDU case's top
+stage, 39 % water). Side strippers would need separate columns tied to the
+main one by recycles. The largest configuration both can build exactly is
+`COLUMN_A` in `dwsim_cdu_case.py`: the CDU case's main column (26 stages,
+the crude's 28 components on difflow's constants, fed at 600 K on the bottom
+stage, kerosene, diesel and AGO drawn as liquid at stages 9, 16 and 22 at
+fixed molar rates, total condenser, no steam, no reboiler). difflow solves
+it (`test_difflow_solves_the_column_dwsim_could_not`).
+
+**DWSIM 9.0.5 did not solve it in any configuration tried**
+(`COLUMN_A_ATTEMPTS`, recorded in the reference):
+
+| DWSIM configuration | Start | Outcome |
+| --- | --- | --- |
+| "Refluxed absorber" (no reboiler), total condenser, Naphtali-Sandholm | DWSIM's estimates; a linear 380-590 K profile | NaN on the first evaluation |
+| Refluxed absorber, Wang-Henke | linear profile | exception inside the solver |
+| Distillation column, reboiler duty spec 0 (NS / WH) | DWSIM's estimates; a consistent hand profile | NaN at once (NS); convergence error (WH) |
+| Distillation column, bottom-stage temperature spec (below), NS | linear profile | iteration cap after 245 s, error flat at 1.2e17 |
+| the same | difflow's converged T, V, L | iteration cap after 870 s |
+| the same, NS and Wang-Henke | difflow's converged T, V, L and compositions | no answer after 42 / 31 CPU-minutes |
+
+Two of these are DWSIM bugs, read from `NewtonRaphson.vb` and reproduced on a
+five-component column: with a refluxed absorber and a total condenser the
+condenser's vapour is zeroed, the distillate taken as its sum, and the
+condenser rows divide by it (NaN); with a `Heat_Duty` reboiler spec the
+reboiler's energy balance is replaced by `spec_function / spec_value` and
+the duty branch never sets the spec function, so the row is `0/Q` (NaN for
+`Q = 0`, an empty equation otherwise). `DWSIMColumn` therefore builds an
+ordinary distillation column whose "reboiler" is the bottom stage,
+specifies that stage's temperature (a spec the solver handles), and finds by
+secant the temperature at which DWSIM's reboiler duty is zero: at the answer
+every stage satisfies DWSIM's own MESH equations with no heat added.
+
+**What DWSIM does solve, compared** (`COLUMN_SMALL`, comparison (a)): five of
+the crude's cuts (pc03 to pc11 by twos, Tb 363-563 K, 20 mol/s each, 60 %
+vaporized at 1.6 bar), 10 stages, the feed on the bottom stage, a liquid
+side draw of 15 mol/s at stage 5, distillate 30 mol/s, total condenser, no
+reboiler, same model and constants. DWSIM starts from its own estimates.
+
+| Quantity | difflow | DWSIM | Agreement |
+| --- | --- | --- | --- |
+| Stage temperatures (condenser 385.96 K, stages 406.7-470.5 K) | -- | -- | 1.1e-3 K worst; condenser 1.9e-4 K, bottom stage 1.6e-4 K |
+| Liquid and vapour flows | -- | -- | 1.4e-4 relative |
+| Product component flows (distillate, side draw, bottoms; 100 mol/s fed) | -- | -- | 2.3e-4 mol/s |
+| Product TBP 5 % / 95 % | e.g. side draw 372.58 / 504.34 K | -- | 1.1e-3 K |
+| Bottom stage held adiabatic | -- | reboiler duty 0.06 W after 5 solves | -- |
+| Condenser duty | 2.8653 MW | 2.8633 MW | 6.7e-4: DWSIM's enthalpy conventions. difflow's enthalpy on DWSIM's converged state gives difflow's duty to 8e-6; DWSIM's conventions on it (midpoint-rule ideal gas, unsmoothed Watson, `P v_L` with the liquid at its 60 F density) give DWSIM's to 8e-5, the rest being DWSIM's Rackett density |
+
+So DWSIM's column, where it converges, agrees with difflow's to its own
+solver tolerance once its enthalpy conventions are accounted for -- the same
+conventions that set the furnace duty's 0.32 % above. A DWSIM solve of this
+small column takes 20 s to 5 min; the starting solve from DWSIM's own
+estimates is the slow one.
+
+The atmospheric column's other numbers -- the furnace with its overflash
+spec, steam, strippers, pumparounds and the product TBP gaps -- are checked
+against the independent Pyomo/IPOPT column of [the IDAES
+validation](#refinery-validation), which has all of them.
+
 ---
 
 (refinery-limitations)=
