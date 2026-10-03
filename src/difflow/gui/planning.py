@@ -57,7 +57,8 @@ def _bounds(u: Sequence[str], bounds: dict | None, u0) -> tuple[list, list]:
 
 
 def build_block(flowsheet, u: Sequence[str], y: Sequence[str],
-                bounds: dict | None = None, name: str = "flowsheet"):
+                bounds: dict | None = None, name: str = "flowsheet",
+                solve_kwargs: dict | None = None):
     """A planning block over the open flowsheet.
 
     Args:
@@ -67,23 +68,26 @@ def build_block(flowsheet, u: Sequence[str], y: Sequence[str],
         y: output keys, ``"<stream>.<quantity>"``.
         bounds: ``{lever: {"lb": float, "ub": float}}``, partial.
         name: block name, which prefixes every qualified variable.
+        solve_kwargs: passed through to :meth:`Flowsheet.solve`.
 
     Returns:
         A :class:`~difflow.planning.block.Block`.
     """
     from difflow.planning import Block
 
-    probe = Block.from_flowsheet(flowsheet, u=list(u), y=list(y), name=name)
+    probe = Block.from_flowsheet(flowsheet, u=list(u), y=list(y), name=name,
+                                 solve_kwargs=solve_kwargs)
     lb, ub = _bounds(u, bounds, probe.u0)
     return Block.from_flowsheet(flowsheet, u=list(u), y=list(y), name=name,
-                                lb=lb, ub=ub)
+                                lb=lb, ub=ub, solve_kwargs=solve_kwargs)
 
 
 def linearize(flowsheet, u: Sequence[str], y: Sequence[str], *,
               bounds: dict | None = None,
               radius: float = DEFAULT_RADIUS,
               check: bool = False,
-              name: str = "flowsheet") -> tuple[Any, dict]:
+              name: str = "flowsheet",
+              solve_kwargs: dict | None = None) -> tuple[Any, dict]:
     """Linearize, and report it the way the panel needs to show it.
 
     Args:
@@ -94,6 +98,7 @@ def linearize(flowsheet, u: Sequence[str], y: Sequence[str], *,
         radius: trust-region radius, as a fraction of each lever's range.
         check: also verify the AD Jacobian against central differences.
         name: block name.
+        solve_kwargs: passed through to :meth:`Flowsheet.solve`.
 
     Returns:
         ``(delta_vector_set, answer)``. The answer is JSON-safe and
@@ -104,7 +109,7 @@ def linearize(flowsheet, u: Sequence[str], y: Sequence[str], *,
     from difflow.planning.export import DeltaVectorSet
     from difflow.planning.linearize import linearize_block
 
-    block = build_block(flowsheet, u, y, bounds, name)
+    block = build_block(flowsheet, u, y, bounds, name, solve_kwargs)
     lin = linearize_block(block)
     dvs = DeltaVectorSet.from_block(block, lin, radius=radius,
                                     source="difflow.gui")

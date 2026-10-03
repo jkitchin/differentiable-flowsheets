@@ -581,6 +581,8 @@ class _Handler(BaseHTTPRequestHandler):
                                            name=payload.get("name"))
             if path == "/api/species":
                 return session.set_species(payload.get("species"))
+            if path == "/api/solver":
+                return session.set_solver_options(payload)
             # One verb for declaring a feed and for editing one: the
             # browser sends the fields it changed, and a field left out
             # keeps whatever the feed already carried.

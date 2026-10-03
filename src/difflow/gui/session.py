@@ -45,6 +45,43 @@ from difflow import scripts
 #: how many edits Undo reaches back through
 UNDO_DEPTH = 100
 
+#: The recycle solver's options the editor can set, with the defaults of
+#: :meth:`Flowsheet.solve`. Kept on ``view["solver"]``, so they are saved
+#: with the file and undone like any other edit; a key that is absent
+#: means the default.
+SOLVER_DEFAULTS = {
+    "tol": 1e-8,
+    "max_iter": 100,
+    "acceleration": "anderson",
+    "clip_negative_flows": True,
+}
+ACCELERATIONS = ("anderson", "wegstein", "none")
+
+
+def _solver_option(key: str, value):
+    """`value` checked for solver option `key`, or a ``ValueError``."""
+    if key == "tol":
+        if isinstance(value, bool) or not isinstance(value, (int, float)) \
+                or not math.isfinite(value) or value <= 0:
+            raise ValueError("tol must be a positive number")
+        return float(value)
+    if key == "max_iter":
+        if isinstance(value, bool) or not isinstance(value, (int, float)) \
+                or not math.isfinite(value) or value != int(value) or value < 1:
+            raise ValueError("max_iter must be a whole number of at least 1")
+        return int(value)
+    if key == "acceleration":
+        if value not in ACCELERATIONS:
+            raise ValueError(f"acceleration must be one of "
+                             f"{', '.join(ACCELERATIONS)}")
+        return value
+    if key == "clip_negative_flows":
+        if not isinstance(value, bool):
+            raise ValueError("clip_negative_flows must be true or false")
+        return value
+    raise ValueError(f"{key!r} is not a solver option the editor sets "
+                     f"(it sets {', '.join(SOLVER_DEFAULTS)})")
+
 
 def _undoable(method):
     """Record the model before `method`, for Undo, if `method` changed it.
@@ -1546,6 +1583,66 @@ class FlowsheetSession:
             for u in flowsheet.units if isinstance(u.operation, Incomplete)
         }
 
+    def solver_options(self) -> dict:
+        """Every solver option the editor sets, defaults filled in."""
+        stored = {} if self.flowsheet is None else \
+            self.flowsheet.view.get("solver") or {}
+        return {**SOLVER_DEFAULTS, **stored}
+
+    def _solve_kw(self) -> dict:
+        """The stored options, as keyword arguments to ``Flowsheet.solve``.
+
+        Only what was set: a default is left to ``Flowsheet.solve`` itself
+        rather than restated, and a stored value that no longer checks (a
+        file edited by hand) is dropped rather than raised from inside
+        every solve.
+        """
+        stored = {} if self.flowsheet is None else \
+            self.flowsheet.view.get("solver") or {}
+        kw = {}
+        for key, value in stored.items():
+            try:
+                kw[key] = _solver_option(key, value)
+            except ValueError:
+                continue
+        return kw
+
+    @_undoable
+    def set_solver_options(self, options) -> dict:
+        """Set the recycle solver's options; ``None`` restores a default.
+
+        The whole request is checked before any of it is kept, so a bad
+        tolerance does not land the acceleration beside it. The streams
+        are dropped: they were solved under the old options, and a looser
+        tolerance is exactly the change that leaves them looking the same.
+        """
+        if self.flowsheet is None:
+            return {"ok": False, "error": "no flowsheet loaded"}
+        if not isinstance(options, dict):
+            return {"ok": False, "error": "solver options must be an object"}
+        stored = dict(self.flowsheet.view.get("solver") or {})
+        try:
+            for key, value in options.items():
+                if value is None or value == "":
+                    if key not in SOLVER_DEFAULTS:
+                        _solver_option(key, value)   # names the bad key
+                    stored.pop(key, None)
+                else:
+                    stored[key] = _solver_option(key, value)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        with self._lock:
+            # A value equal to the default is not stored: the file then
+            # says only what someone chose.
+            stored = {k: v for k, v in stored.items()
+                      if v != SOLVER_DEFAULTS[k]}
+            if stored:
+                self.flowsheet.view["solver"] = stored
+            else:
+                self.flowsheet.view.pop("solver", None)
+            self.streams = None
+        return {"ok": True, "solver": self.solver_options()}
+
     def solve(self) -> dict:
         """Solve, and report a failure rather than raising at the socket.
 
@@ -1591,7 +1688,8 @@ class FlowsheetSession:
                 # `converged` field below; a ConvergenceWarning on the
                 # server's stderr would say the same thing where nobody
                 # using the editor is looking.
-                streams = self.flowsheet.solve(on_nonconvergence="ignore")
+                streams = self.flowsheet.solve(on_nonconvergence="ignore",
+                                               **self._solve_kw())
         except Exception as exc:
             self.solve_error = self._solve_error(exc)
             return {"ok": False, "error": self.solve_error}
@@ -1614,6 +1712,7 @@ class FlowsheetSession:
             "residual": _number(getattr(fs, "last_solve_residual", None)),
             "tol": _number(getattr(fs, "last_solve_tol", None)),
             "tear_streams": list(getattr(fs, "last_solve_tear_streams", []) or []),
+            "solver": self.solver_options(),
             # What was solved is not what is on the canvas if any of it is
             # still red. The numbers below are right about the flowsheet
             # that exists, and saying nothing here would let them be read
@@ -1758,8 +1857,9 @@ class FlowsheetSession:
                              "stream) or 'target' (reverse, every lever)"}
         try:
             with self._lock:
-                answer = (ad.forward(self.flowsheet, lever) if lever
-                          else ad.reverse(self.flowsheet, target))
+                kw = self._solve_kw()
+                answer = (ad.forward(self.flowsheet, lever, **kw) if lever
+                          else ad.reverse(self.flowsheet, target, **kw))
                 base = self._base_point()
         except Exception as exc:
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
@@ -1776,7 +1876,7 @@ class FlowsheetSession:
         """
         fs = self.flowsheet
         try:
-            fs.solve(on_nonconvergence="ignore")
+            fs.solve(on_nonconvergence="ignore", **self._solve_kw())
         except Exception:
             return {"converged": None, "residual": None, "warning": None}
         converged = fs.last_solve_converged
@@ -1829,7 +1929,7 @@ class FlowsheetSession:
             with self._lock:
                 dvs, answer = planning.linearize(
                     self.flowsheet, u, y, bounds=bounds, radius=radius,
-                    check=check)
+                    check=check, solve_kwargs=self._solve_kw())
                 #: the last linearization, which is what the assistant's
                 #: `planning` brief reads
                 self.delta_vectors = dvs

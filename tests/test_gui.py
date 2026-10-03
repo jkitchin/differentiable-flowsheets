@@ -579,6 +579,9 @@ class TestFiles:
             "iterations": 0, "method": "direct", "residual": 0.0,
             "tol": 1e-08, "tear_streams": [], "pending": [],
             "audit": {"warnings": [], "mass": None},
+            "solver": {"tol": 1e-8, "max_iter": 100,
+                       "acceleration": "anderson",
+                       "clip_negative_flows": True},
         }
         assert session.code()["error"] is None
         assert "Flowsheet(species_order=[]" in session.code()["source"]
@@ -1126,6 +1129,13 @@ class TestAnEmptyEditor:
         answer = empty.post("/api/unit", {"operation": "Mixer"})[1]
         assert answer["ok"], answer
         assert [u.name for u in empty.session.flowsheet.units] == ["mixer"]
+
+    def test_the_solver_options_route(self, empty):
+        status, answer = empty.post("/api/solver", {"max_iter": 7})
+        assert status == 200 and answer["solver"]["max_iter"] == 7
+        flowsheet = empty.get_json("/api/flowsheet")[1]["flowsheet"]
+        assert flowsheet["view"]["solver"] == {"max_iter": 7}
+        assert not empty.post("/api/solver", {"tol": -1})[1]["ok"]
 
     def test_the_code_context_can_name_them_instead(self, empty):
         """`SPECIES` as well as `species_order`, because the starter says so.

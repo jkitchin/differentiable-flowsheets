@@ -10,6 +10,7 @@
   import Palette from './lib/Palette.svelte'
   import Planning from './lib/Planning.svelte'
   import Results from './lib/Results.svelte'
+  import { solverOptions } from './lib/model/solver.js'
   import Species from './lib/Species.svelte'
   import { del, get, patch, post, send } from './lib/api.js'
   import { EXPORTS, exportFlowsheet } from './lib/export.js'
@@ -407,6 +408,13 @@
       note = built(answer,
                    names.length ? `species: ${names.join(', ')}` : 'species cleared')
     }
+    return answer
+  }
+
+  /** The recycle solver's options; stored in the file, so a reload shows them. */
+  async function setSolver(options) {
+    const answer = await edit(() => post('/api/solver', options))
+    if (answer?.ok) note = 'solver options changed: solve again to use them'
     return answer
   }
 
@@ -855,6 +863,8 @@
     levers={pickers}
     sensitivity={sens}
     {busy}
+    solver={doc ? solverOptions(doc.view) : null}
+    onsolver={setSolver}
     onsensitivity={differentiate}
     onclose={() => (showResults = false)}
   />

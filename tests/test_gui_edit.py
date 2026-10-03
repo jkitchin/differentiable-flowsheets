@@ -831,6 +831,63 @@ class TestDerivativesAtAnUnconvergedPoint:
         return f"{stream}.T"
 
 
+class TestSolverOptions:
+    """The recycle solver's options were fixed at their defaults.
+
+    A loop that needed 150 iterations, a looser tolerance or Wegstein in
+    place of Anderson could not be solved from the editor at all.
+    """
+
+    @pytest.fixture
+    def recycle(self):
+        s = FlowsheetSession()
+        assert s.open_example("03_reactor_recycle")["ok"]
+        return s
+
+    def test_the_options_reach_the_solve(self, recycle):
+        assert recycle.set_solver_options({"max_iter": 1})["ok"]
+        answer = recycle.solve()
+        assert answer["ok"] and answer["converged"] is False
+        assert answer["solver"]["max_iter"] == 1
+        assert recycle.set_solver_options(
+            {"max_iter": None, "acceleration": "wegstein", "tol": 1e-6})["ok"]
+        answer = recycle.solve()
+        assert answer["converged"] is True
+        assert answer["tol"] == pytest.approx(1e-6)
+        assert "wegstein" in answer["method"].lower()
+
+    def test_they_are_saved_with_the_file_and_undone(self, recycle):
+        assert recycle.set_solver_options({"tol": 1e-6})["ok"]
+        assert recycle.flowsheet.view["solver"] == {"tol": 1e-6}
+        assert recycle.undo()["ok"]
+        assert "solver" not in recycle.flowsheet.view
+        assert recycle.solver_options()["tol"] == 1e-8
+
+    def test_a_default_is_not_stored(self, recycle):
+        assert recycle.set_solver_options({"acceleration": "anderson"})["ok"]
+        assert "solver" not in recycle.flowsheet.view
+
+    @pytest.mark.parametrize("bad", [
+        {"tol": 0}, {"tol": -1e-6}, {"tol": float("nan")}, {"tol": "1e-6"},
+        {"max_iter": 0}, {"max_iter": 2.5}, {"max_iter": True},
+        {"acceleration": "newton"}, {"clip_negative_flows": "no"},
+        {"damping": 0.5}, ["tol"],
+    ])
+    def test_a_bad_option_is_refused_and_nothing_is_kept(self, recycle, bad):
+        good = {"acceleration": "wegstein"}
+        answer = recycle.set_solver_options(
+            {**good, **bad} if isinstance(bad, dict) else bad)
+        assert not answer["ok"]
+        assert "solver" not in recycle.flowsheet.view
+
+    def test_the_derivatives_use_them_too(self, recycle):
+        assert recycle.set_solver_options({"max_iter": 1})["ok"]
+        lever = recycle.levers()["levers"][0]["key"]
+        answer = recycle.sensitivity(lever=lever)
+        assert answer["ok"], answer
+        assert answer["converged"] is False
+
+
 class TestPendingUnits:
     """A drop that cannot be built yet lands anyway, in red.
 
