@@ -333,7 +333,10 @@
       if (reload) await load()
       return answer
     } catch (e) {
-      error = String(e)
+      // The canvas may already show the change (a drag, a deletion), and
+      // the server may never have had it: say both, and offer Reload.
+      error = `the server did not answer (${e.message ?? e}); ` +
+        'the canvas may not match it'
     } finally {
       busy = false
     }
@@ -769,13 +772,27 @@
   <Palette {catalog} ondrop={(op) => add(op, null)} />
 
   <div class="stage">
-    {#if error}
+    {#if error && !doc}
       <p class="error">{error}</p>
     {:else if !doc}
       <!-- Only before the first fetch answers. An editor opened with no
            file gets an empty flowsheet, not no flowsheet. -->
       <p class="empty">Loading&hellip;</p>
     {:else}
+      {#if error}
+        <!-- A request that failed (a dropped connection, a server that
+             stopped) said nothing about the flowsheet, so the canvas
+             stays: blanking it lost the work on screen for a network
+             blip. The banner offers to fetch the model again. -->
+        <div class="banner" role="alert">
+          <span>{error}</span>
+          <button type="button" onclick={async () => {
+            error = ''
+            try { await load() } catch (e) { error = String(e) }
+          }}>Reload</button>
+          <button type="button" aria-label="Dismiss" onclick={() => (error = '')}>&times;</button>
+        </div>
+      {/if}
       <Canvas
         document={doc}
         positions={doc.view?.nodes ?? null}
@@ -920,7 +937,15 @@
   .stopped h2 { margin: 0; font-size: 1rem; color: var(--ink); }
   .stopped p { margin: 0; font-size: 0.85rem; }
   main { display: flex; flex: 1; min-height: 0; }
-  .stage { flex: 1; min-width: 0; }
+  .stage { flex: 1; min-width: 0; position: relative; }
   .error, .empty { padding: 1.5rem; color: var(--ink-soft); }
   .error { color: var(--bad); }
+  .banner {
+    position: absolute; top: 0.5rem; left: 50%; transform: translateX(-50%);
+    z-index: 5; display: flex; gap: 0.5rem; align-items: center;
+    max-width: calc(100% - 2rem); padding: 0.4rem 0.6rem;
+    background: var(--surface); color: var(--bad);
+    border: 1px solid var(--bad); border-radius: 4px;
+  }
+  .banner span { overflow-wrap: anywhere; }
 </style>
