@@ -236,6 +236,27 @@ class TestWiring:
         answer = session.connect("flash", "liq", "reactor", "mixed")
         assert answer["ok"] is False and "mixer" in answer["error"]
 
+    def test_one_outlet_cannot_feed_two_inlets(self, session):
+        """Each reader would get all of it: material out of nothing."""
+        name = session.add_unit("Mixer")["name"]
+        inlet = edit.unit(session.flowsheet, name).inlet_names[0]
+        answer = session.connect("mixer", "mixed", name, inlet)
+        assert answer["ok"] is False
+        assert "already goes to 'reactor'" in answer["error"]
+        assert "Splitter" in answer["error"]
+        assert inlet in edit.unit(session.flowsheet, name).inlet_names
+
+    def test_a_recycle_destination_is_not_wired_over(self, session):
+        """It renamed the stream the tear fills, so the tear fed nothing."""
+        name = session.add_unit("Mixer")["name"]
+        answer = session.connect(name, edit.unit(session.flowsheet,
+                                                 name).outlet_names[0],
+                                 "mixer", "recycle")
+        assert answer["ok"] is False
+        assert "recycle from 'vap'" in answer["error"]
+        assert session.flowsheet.recycles == {"vap": "recycle"}
+        assert "recycle" in edit.unit(session.flowsheet, "mixer").inlet_names
+
     def test_a_feed_inlet_is_refused(self, session):
         answer = session.connect("flash", "liq", "mixer", "feed")
         assert answer["ok"] is False and "feed" in answer["error"]

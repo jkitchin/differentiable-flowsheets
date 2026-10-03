@@ -645,6 +645,21 @@ def connect(flowsheet, source: str, outlet: str, target: str, inlet: str) -> dic
     if outlet in flowsheet.recycles:
         raise EditError(f"{outlet!r} is already recycled to "
                         f"{flowsheet.recycles[outlet]!r}.")
+    # A stream read by two units is not split between them: each gets all
+    # of it, and the flowsheet makes material out of nothing while the
+    # solve reports success.
+    readers = [u.name for u in flowsheet.units
+               if outlet in u.inlet_names and u.name != target]
+    if readers:
+        raise EditError(f"{outlet!r} already goes to {readers[0]!r}; one "
+                        "outlet feeds one inlet. Put a Splitter in to send "
+                        "it to both.")
+    # The tear's destination is the stream the recycle fills; wiring over
+    # it renamed it out from under the recycle, which then fed nothing.
+    for tear, dest in flowsheet.recycles.items():
+        if dest == inlet:
+            raise EditError(f"{target!r}'s inlet {inlet!r} already takes the "
+                            f"recycle from {tear!r}; disconnect that first.")
 
     if source == target or reaches(flowsheet, target, source):
         # The wire closes a loop, so it is a tear, and the two ends keep
