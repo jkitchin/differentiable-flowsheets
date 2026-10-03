@@ -54,6 +54,12 @@
    * anyway. Compared by text, so any later message is not shown as one.
    */
   let warnNote = $state(null)
+  /**
+   * Likewise for a plain success -- a clean solve, a save. Green, so the
+   * answer you wanted does not arrive in the colour of a caution; every
+   * other note is neutral text.
+   */
+  let okNote = $state(null)
   let selected = $state(null)
   let busy = $state(false)
   let context = $state({ source: '', names: [], error: null })
@@ -536,6 +542,7 @@
             ? `solved, but ${warnings[0]}`
             : `solved: ${Object.keys(answer.streams).length} streams`) + held
         warnNote = answer.converged === false || warnings.length ? note : null
+        okNote = warnNote ? null : note
       } else {
         note = answer.error
       }
@@ -556,7 +563,7 @@
     edit(async () => {
       const answer = await post('/api/save')
       note = answer.ok ? `saved to ${shortPath(answer.path)}` : answer.error
-      if (answer.ok) dirty = false
+      if (answer.ok) { dirty = false; okNote = note }
       return null
     }, { reload: false, stale: false })
 
@@ -584,6 +591,7 @@
         path = answer.path
         source = ''
         dirty = false
+        okNote = note
       } else {
         note = answer.error
       }
@@ -756,7 +764,10 @@
   <Species {species} editable={speciesEditable} {busy} onapply={setSpecies} />
   <span class="summary">{summary}</span>
   <span class="spacer"></span>
-  {#if note}<span class="note" class:warn={note === warnNote}>{note}</span>{/if}
+  <!-- One line, cut short with the whole of it on hover: a long error
+       used to wrap the header to three lines and push the canvas down. -->
+  {#if note}<span class="note" class:warn={note === warnNote}
+    class:ok={note === okNote} title={note}>{note}</span>{/if}
   <!-- Only while it is armed. Quit is a row in the File menu, and the
        menu shuts behind the click; this is the second half of the
        question, asked where the answer can be seen. -->
@@ -923,11 +934,20 @@
   h1 { font-size: 0.95rem; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
   .path, .summary, .version { color: var(--ink-soft); font-size: 0.8rem; }
   /* Already shortened, and never the reason the header is two lines tall. */
-  .path { white-space: nowrap; }
+  .path, .summary { white-space: nowrap; }
   .dirty { color: var(--accent); }
   .version { font-variant-numeric: tabular-nums; opacity: 0.75; }
-  .note { color: var(--accent); font-size: 0.8rem; }
+  .note {
+    color: var(--ink);
+    font-size: 0.8rem;
+    min-width: 0;
+    flex: 0 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   .note.warn { color: var(--bad); }
+  .note.ok { color: var(--good); }
   .spacer { flex: 1; }
   /* It is on screen only to be answered, and it ends the process. */
   .quit {
