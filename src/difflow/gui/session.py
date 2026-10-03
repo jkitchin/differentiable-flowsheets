@@ -1341,10 +1341,22 @@ class FlowsheetSession:
                        if src in touched or dst in touched}
             for src in dropped:
                 del self.flowsheet.recycles[src]
+            # Likewise a feed only this unit read: left, it is a box on
+            # the canvas wired to nothing, feeding a stream nobody reads.
+            # Undo brings it back, composition and all.
+            still_read = {s for other in self.flowsheet.units
+                          for s in other.inlet_names}
+            feeds_dropped = sorted(f for f in self.flowsheet.feeds
+                                   if f in touched and f not in still_read)
+            for f in feeds_dropped:
+                del self.flowsheet.feeds[f]
             nodes = (self.flowsheet.view or {}).get("nodes")
             if isinstance(nodes, dict):
                 nodes.pop(name, None)
-            return {"name": name, "recycles_dropped": dropped}
+                for f in feeds_dropped:
+                    nodes.pop(f"feed:{f}", None)
+            return {"name": name, "recycles_dropped": dropped,
+                    "feeds_dropped": feeds_dropped}
 
         return self._edit(apply)
 

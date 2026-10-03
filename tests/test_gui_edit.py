@@ -237,6 +237,26 @@ class TestAddAndRemove:
         assert answer["ok"] and answer["recycles_dropped"] == {"vap": "recycle"}
         assert session.flowsheet.recycles == {}
 
+    def test_removing_a_unit_drops_the_feed_only_it_read(self, session):
+        """Left behind, it is a feed box wired to nothing."""
+        feed = next(iter(session.flowsheet.feeds))
+        reader = next(u.name for u in session.flowsheet.units
+                      if feed in u.inlet_names)
+        session.set_layout({f"feed:{feed}": {"x": 1, "y": 2}})
+        answer = session.remove_unit(reader)
+        assert answer["ok"] and answer["feeds_dropped"] == [feed]
+        assert feed not in session.flowsheet.feeds
+        assert f"feed:{feed}" not in session.flowsheet.view["nodes"]
+        # and Undo gives it back
+        assert session.undo()["ok"]
+        assert feed in session.flowsheet.feeds
+
+    def test_a_feed_another_unit_reads_is_kept(self, session):
+        before = dict(session.flowsheet.feeds)
+        answer = session.remove_unit("flash")
+        assert answer["feeds_dropped"] == []
+        assert session.flowsheet.feeds == before
+
     def test_removing_a_unit_leaves_the_others(self, session):
         session.remove_unit("flash")
         assert [u.name for u in session.flowsheet.units] == ["mixer", "reactor"]
