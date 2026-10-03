@@ -210,35 +210,41 @@ def run_thermo(session, comp, flows, char_default) -> dict:
 # 3. The column
 # ---------------------------------------------------------------------------
 
-def run_column(session, comp, flows) -> dict:
-    """:data:`.dwsim_cdu_case.COLUMN_A` in DWSIM. The starting point owes
-    nothing to difflow's solution: a linear 380-590 K profile, round-number
-    flows, and bottom-stage temperatures of the feed's and 5 K below it for
-    the secant that holds the bottom stage adiabatic."""
+def run_column(session, comp) -> dict:
+    """:data:`.dwsim_cdu_case.COLUMN_SMALL` in DWSIM's rigorous column, on the
+    same model and constants as difflow. The starting point owes nothing to
+    difflow's solution: DWSIM's own estimates, and bottom-stage temperatures
+    2 and 4 K below the feed's for the secant that holds the bottom stage
+    adiabatic (:meth:`.dwsim_columns.DWSIMColumn.solve_adiabatic`).
+
+    :data:`.dwsim_cdu_case.COLUMN_A` (the CDU crude, 28 components) is not
+    run: no configuration of DWSIM's column solved it
+    (:data:`.dwsim_cdu_case.COLUMN_A_ATTEMPTS`, copied into the file)."""
     from . import dwsim_cdu_case as dc
     from .dwsim_columns import DWSIMColumn, no_ideal_fallback
     from .dwsim_session import IDEAL_RAOULT
 
-    cfg = dc.COLUMN_A
-    n = cfg["n_stages"]
-    fs = no_ideal_fallback(session.flowsheet("RAOULT", hypos=flat_compounds(comp),
+    cfg = dc.COLUMN_SMALL
+    idx = [comp["names"].index(n) for n in cfg["components"]]
+    sub = {k: [comp[k][i] for i in idx] for k in ("names", "MW", "Tc", "Pc", "omega_vp", "Tb",
+                                                  "SG", "cp_ig", "hvap_A")}
+    fs = no_ideal_fallback(session.flowsheet("RAOULT", hypos=flat_compounds(sub),
                                              options=IDEAL_RAOULT))
-    col = DWSIMColumn(fs, n, cfg["P_top"], cfg["P_bottom"], cfg["P_condenser"],
+    col = DWSIMColumn(fs, cfg["n_stages"], cfg["P_top"], cfg["P_bottom"], cfg["P_condenser"],
                       solver="naphtali-sandholm")
-    col.add_feed("CRUDE", cfg["feed_stage"], flows, cfg["T_feed"], cfg["P_feed"])
+    col.add_feed("FEED", cfg["feed_stage"], [cfg["feed_each"]] * len(idx), cfg["T_feed"],
+                 cfg["P_feed"])
     for name, stage, rate in cfg["side_draws"]:
-        col.add_side_draw(name.upper(), stage, rate)
+        col.add_side_draw(name, stage, rate)
     col.connect_products()
-    T0, T1 = cfg["T_feed"], cfg["T_feed"] - 5.0
+    T0, T1 = cfg["T_feed"] - 2.0, cfg["T_feed"] - 4.0
     col.specs(cfg["distillate"], T0)
-    col.estimates(T=[330.0] + [380.0 + 210.0 * (j - 1) / (n - 1) for j in range(1, n + 1)],
-                  V=[1e-10] + [1000.0] * n, L=[500.0] * n + [250.0])
-    res = col.solve_adiabatic(T0, T1, duty_tol=cfg.get("duty_tol_W", 100.0))
+    res = col.solve_adiabatic(T0, T1, duty_tol=1.0)
     res["dwsim"] = col.provenance()
     res["package"] = {k: v for k, v in fs.provenance().items() if k != "constants"}
-    res["products"] = {{"distillate": "naphtha", "bottoms": "residue"}.get(k, k.lower()): v
+    res["products"] = {{"distillate": "naphtha", "bottoms": "residue"}.get(k, k): v
                        for k, v in res.get("products", {}).items()}
-    return {"A": res}
+    return {"small": res, "A_attempts": dc.COLUMN_A_ATTEMPTS}
 
 
 # ---------------------------------------------------------------------------
@@ -333,7 +339,7 @@ def main():
             "inputs": {"components": comp, "feed_flows": [float(v) for v in flows],
                        "difflow_characterization": df_tables,
                        "test_crude": dc.TEST_CRUDE, "heavy_crude": dc.HEAVY_CRUDE,
-                       "column_A": dc.COLUMN_A, "char_runs": dc.DWSIM_CHAR_RUNS,
+                       "column_A": dc.COLUMN_A, "column_small": dc.COLUMN_SMALL, "char_runs": dc.DWSIM_CHAR_RUNS,
                        "bubble_dew_P": list(dc.BUBBLE_DEW_P), "heat_path": dc.HEAT_PATH,
                        "T_cot": dc.T_COT, "P_fz": dc.P_FZ, "vacuum_flash": dc.VACUUM_FLASH,
                        "vacuum_feed_source": "cdu_reference.json layer3 product_flows.residue",
@@ -356,7 +362,7 @@ def main():
         data["vacuum"] = run_vacuum(session, comp, residue)
     if "column" in only:
         print("column (minutes)", flush=True)
-        data["column"] = run_column(session, comp, flows)
+        data["column"] = run_column(session, comp)
     gen = data["provenance"]["generated"]
     sections = dict(old.get("provenance", {}).get("sections_generated", {}))
     sections.update({s: gen for s in only})

@@ -95,6 +95,44 @@ COLUMN_A = {
     "side_draws": [["kero", 9, 100.0], ["diesel", 16, 110.0], ["ago", 22, 25.0]],
 }
 
+#: What DWSIM 9.0.5's rigorous column did with :data:`COLUMN_A` (measured
+#: by hand, recorded here because the runs take tens of minutes each and
+#: none produced an answer; the generator does not repeat them).
+COLUMN_A_ATTEMPTS = [
+    {"configuration": "refluxed absorber (no reboiler), total condenser, Naphtali-Sandholm",
+     "start": "DWSIM's own estimates, then a linear 380-590 K profile",
+     "outcome": "NaN on the first function evaluation ('Error evaluating error functions'), "
+                "470 s / 370 s; reproduced on a 5-component column in 1 s"},
+    {"configuration": "refluxed absorber, Wang-Henke (bubble point)",
+     "start": "linear 380-590 K profile",
+     "outcome": "exception in Solve_Internal ('Sequence contains no elements'), 7 s"},
+    {"configuration": "distillation column, reboiler duty spec 0, Naphtali-Sandholm / Wang-Henke",
+     "start": "DWSIM's own estimates, and a consistent hand profile",
+     "outcome": "NaN at once (NS: the duty-spec row is 0/0); WH 'convergence error' "
+                "(5-component column)"},
+    {"configuration": "distillation column, bottom-stage temperature spec (the secant "
+                      "construction of dwsim_columns.DWSIMColumn), Naphtali-Sandholm",
+     "start": "linear 380-590 K profile, 1000 / 500 mol/s",
+     "outcome": "iteration cap after 245 s, error stuck at 1.2e17 for 1500 Broyden steps"},
+    {"configuration": "the same", "start": "difflow's converged T, V, L profile",
+     "outcome": "iteration cap after 870 s, error stuck at 1.3e17"},
+    {"configuration": "the same, Naphtali-Sandholm and Wang-Henke",
+     "start": "difflow's converged T, V, L AND stage compositions",
+     "outcome": "no answer after 42 / 31 CPU-minutes; stopped"},
+]
+
+#: A column DWSIM's solver does converge: five of the crude's cuts
+#: (pc03-pc11 by twos, Tb 363-563 K), 10 stages, the feed (20 mol/s of each,
+#: 60 mol % vaporized at 1.6 bar -- 471.7 K) on the bottom stage, one liquid
+#: side draw, a total condenser, no reboiler; the same model and constants on
+#: both sides. The bottom-stage secant starts 2 and 4 K below the feed.
+COLUMN_SMALL = {
+    "components": ["pc03", "pc05", "pc07", "pc09", "pc11"], "feed_each": 20.0,
+    "n_stages": 10, "feed_stage": 10, "T_feed": 471.7135, "P_feed": 1.6e5,
+    "P_top": 1.5e5, "P_bottom": 1.6e5, "P_condenser": 1.3e5,
+    "distillate": 30.0, "side_draws": [["sd", 5, 15.0]],
+}
+
 # -- the vacuum feed -------------------------------------------------------
 
 #: Vacuum flash-zone conditions for the atmospheric residue: (T K, P Pa).
@@ -162,6 +200,40 @@ def difflow_characterizations() -> dict:
         out[key] = {m: characterization_table(dr.characterize(a, method=m), m)
                     for m in ("twu", "riazi_daubert_1987")}
     return out
+
+
+def small_thermo(comp: dict):
+    """difflow's ``ColumnThermo`` on the :data:`COLUMN_SMALL` components,
+    from a component table (``case.component_data`` plus ``hvap_A``)."""
+    import jax.numpy as jnp
+
+    from difflow_refinery.thermo import ColumnThermo
+
+    idx = [comp["names"].index(n) for n in COLUMN_SMALL["components"]]
+
+    def a(k):
+        return jnp.asarray([comp[k][i] for i in idx], dtype=float)
+
+    return ColumnThermo(names=tuple(COLUMN_SMALL["components"]), MW=a("MW"), SG=a("SG"),
+                        Tb=a("Tb"), Tc=a("Tc"), Pc=a("Pc"), omega_vp=a("omega_vp"),
+                        hvap_A=a("hvap_A"), cp_ig=a("cp_ig"))
+
+
+def difflow_small_column(comp: dict):
+    """difflow's :class:`CrudeColumn` solve of :data:`COLUMN_SMALL`."""
+    from difflow_refinery import column as cc
+
+    cfg = COLUMN_SMALL
+    th = small_thermo(comp)
+    feed = {f"F_{n}": cfg["feed_each"] for n in th.names}
+    feed.update(T=cfg["T_feed"], P=cfg["P_feed"])
+    specs = (cc.product_rate("naphtha", cfg["distillate"], "mole"),) + tuple(
+        cc.product_rate(n, r, "mole") for n, _, r in cfg["side_draws"])
+    p = cc.CrudeColumnParams(
+        n_stages=cfg["n_stages"], feed_stage=cfg["feed_stage"], specs=specs,
+        P_top=cfg["P_top"], P_bottom=cfg["P_bottom"], P_condenser=cfg["P_condenser"],
+        side_products=tuple(cc.SideProduct(n, s, 0) for n, s, _ in cfg["side_draws"]))
+    return cc.CrudeColumn(p, th).solve(feed), th
 
 
 def difflow_crude():
