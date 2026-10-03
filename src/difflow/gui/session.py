@@ -815,7 +815,15 @@ class FlowsheetSession:
             with self._lock, ref_namespace(self.bindings):
                 result = fn(*args, **kwargs)
         except EditError as exc:
+            # A refusal is raised before anything is assigned, so the
+            # flowsheet -- and the streams solved from it -- are as they were.
             return {"ok": False, "error": str(exc)}
+        except Exception:
+            # Anything else may have left the edit half done. The streams
+            # cannot be trusted to describe what is there now.
+            if not moves_only:
+                self.streams = None
+            raise
         if not moves_only:
             self.streams = None
         return {"ok": True, **(result or {})}
@@ -844,33 +852,49 @@ class FlowsheetSession:
                     "'position'."
                 )
             u = edit.unit(self.flowsheet, name)
+            # Everything is built and checked before anything is assigned.
+            # A patch carrying a good parameter and a taken name used to
+            # change the unit and then report the whole patch as refused,
+            # so the editor showed the old value over a flowsheet that had
+            # the new one -- and kept the last solve's streams beside it.
+            operation, unit_params = u.operation, u.params
             params = changes.get("params")
             if params:
                 if not isinstance(params, dict):
                     raise edit.EditError("'params' must be an object")
-                u.operation = edit.rebuild(u.operation, name, params)
+                operation = edit.rebuild(u.operation, name, params)
             call_params = changes.get("call_params")
             if call_params:
-                u.params = edit.call_params(
+                unit_params = edit.call_params(
                     u.params, call_params, name,
                     self._schema(name).get("call_parameters", []))
             new_name = changes.get("name")
-            if new_name and new_name != name:
-                self._rename_unit(u, new_name)
+            renaming = new_name is not None and new_name != name
+            if renaming:
+                self._check_unit_name(new_name)
             position = changes.get("position")
             if position is not None:
-                self._place(new_name or name, position)
-            return {"name": new_name or name}
+                position = self._position(name, position)
+            u.operation, u.params = operation, unit_params
+            if renaming:
+                self._rename_unit(u, new_name)
+            if position is not None:
+                self.flowsheet.view.setdefault("nodes", {})[
+                    new_name if renaming else name] = position
+            return {"name": new_name if renaming else name}
 
         return self._edit(apply)
 
-    def _rename_unit(self, u, new_name: str) -> None:
+    def _check_unit_name(self, new_name) -> None:
         from difflow.gui import edit
 
         if not isinstance(new_name, str) or not new_name.strip():
             raise edit.EditError("a unit name cannot be empty")
         if any(other.name == new_name for other in self.flowsheet.units):
             raise edit.EditError(f"there is already a unit called {new_name!r}")
+
+    def _rename_unit(self, u, new_name: str) -> None:
+        self._check_unit_name(new_name)
         nodes = (self.flowsheet.view or {}).get("nodes")
         if isinstance(nodes, dict) and u.name in nodes:
             nodes[new_name] = nodes.pop(u.name)
@@ -884,7 +908,7 @@ class FlowsheetSession:
             self.pending[new_name] = entry
         u.name = new_name
 
-    def _place(self, key: str, position) -> None:
+    def _position(self, key: str, position) -> dict:
         from difflow.gui import edit
 
         try:
@@ -893,10 +917,14 @@ class FlowsheetSession:
             raise edit.EditError(
                 f"position for {key!r} must be {{'x': number, 'y': number}}"
             ) from exc
+        return {"x": x, "y": y}
+
+    def _place(self, key: str, position) -> None:
+        position = self._position(key, position)
         # An unfinished unit is on the flowsheet like any other, so its
         # position goes where every other node's does. It used to be held
         # off the flowsheet, and the coordinate with it.
-        self.flowsheet.view.setdefault("nodes", {})[key] = {"x": x, "y": y}
+        self.flowsheet.view.setdefault("nodes", {})[key] = position
 
     @_undoable
     def add_unit(self, operation: str, name: str | None = None,

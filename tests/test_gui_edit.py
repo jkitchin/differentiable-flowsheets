@@ -92,6 +92,38 @@ class TestGraphReading:
 
 
 class TestPatchUnit:
+    def test_a_refused_patch_changes_nothing(self, session):
+        """A good parameter beside a taken name used to land, and the
+        patch was then reported as refused: the editor showed 1.0 over a
+        reactor holding 3.0."""
+        session.solve()
+        answer = session.patch_unit("reactor",
+                                    {"params": {"V": 3.0}, "name": "flash"})
+        assert answer["ok"] is False and "flash" in answer["error"]
+        reactor = edit.unit(session.flowsheet, "reactor")
+        assert float(reactor.operation.params.V) == 1.0
+        assert session.streams is not None
+        assert session.history()["undo"] is False
+
+    def test_a_bad_position_refuses_the_rename_beside_it(self, session):
+        answer = session.patch_unit("reactor",
+                                    {"name": "r1", "position": {"x": "left"}})
+        assert answer["ok"] is False
+        assert [u.name for u in session.flowsheet.units] == [
+            "mixer", "reactor", "flash"]
+
+    def test_an_empty_name_is_refused_not_ignored(self, session):
+        answer = session.patch_unit("reactor", {"name": ""})
+        assert answer["ok"] is False and "empty" in answer["error"]
+
+    def test_an_edit_that_fails_unexpectedly_drops_the_streams(self, session):
+        session.solve()
+        def boom():
+            raise RuntimeError("half done")
+        with pytest.raises(RuntimeError):
+            session._edit(boom)
+        assert session.streams is None
+
     def test_a_parameter_changes(self, session):
         assert session.patch_unit("reactor", {"params": {"V": 3.0}})["ok"]
         reactor = edit.unit(session.flowsheet, "reactor")
