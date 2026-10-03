@@ -52,6 +52,21 @@ def test_an_unknown_example_is_refused_and_changes_nothing():
     assert session.flowsheet is before
 
 
+def test_an_example_that_fails_to_load_keeps_the_open_file(tmp_path, monkeypatch):
+    """A refused example must not forget the file, its undo or its edits."""
+    session = FlowsheetSession(path=tmp_path / "plant.json")
+    session.open_example(KEYS[0])
+    session.path = tmp_path / "plant.json"
+    assert session.set_solver_options({"tol": 1e-6})["ok"]
+    dirty, path = session.dirty, session.path
+    monkeypatch.setattr(examples, "document", lambda key: {"units": "garbage"})
+    answer = session.open_example(KEYS[0])
+    assert answer["ok"] is False
+    assert session.path == path
+    assert session.dirty == dirty
+    assert session.undo()["ok"]
+
+
 def test_the_routes():
     live = Client(FlowsheetSession())
     try:

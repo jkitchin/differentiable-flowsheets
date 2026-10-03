@@ -825,6 +825,10 @@ class FlowsheetSession:
         except KeyError:
             return {"ok": False, "error": f"no example named {key!r}"}
         answer = self.replace(document)
+        if not answer.get("ok"):
+            # The old flowsheet is still the one open: its file, its undo
+            # history and its unsaved changes all stay with it.
+            return answer
         self.path = self.source = None
         self._forget_history()
         # Nothing to lose yet: the example is one menu click from coming
@@ -1633,9 +1637,11 @@ class FlowsheetSession:
             return {"ok": False, "error": str(exc)}
         with self._lock:
             # A value equal to the default is not stored: the file then
-            # says only what someone chose.
+            # says only what someone chose. A key this version does not
+            # know (a file edited by hand, or from a newer difflow) is kept
+            # as found; `_solve_kw` already leaves it out of the solve.
             stored = {k: v for k, v in stored.items()
-                      if v != SOLVER_DEFAULTS[k]}
+                      if k not in SOLVER_DEFAULTS or v != SOLVER_DEFAULTS[k]}
             if stored:
                 self.flowsheet.view["solver"] = stored
             else:

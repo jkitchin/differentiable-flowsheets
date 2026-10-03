@@ -856,6 +856,14 @@ class TestSolverOptions:
         assert answer["tol"] == pytest.approx(1e-6)
         assert "wegstein" in answer["method"].lower()
 
+    def test_an_unknown_stored_key_does_not_break_later_options(self, recycle):
+        """A key from a hand-edited file used to raise KeyError on every set."""
+        recycle.flowsheet.view["solver"] = {"future_option": 3}
+        assert recycle.set_solver_options({"tol": 1e-6})["ok"]
+        assert recycle.flowsheet.view["solver"] == {"future_option": 3,
+                                                    "tol": 1e-6}
+        assert recycle.solve()["ok"]
+
     def test_they_are_saved_with_the_file_and_undone(self, recycle):
         assert recycle.set_solver_options({"tol": 1e-6})["ok"]
         assert recycle.flowsheet.view["solver"] == {"tol": 1e-6}
