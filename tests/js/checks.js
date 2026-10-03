@@ -100,5 +100,16 @@ eq("a duplicate unit name is a problem", T.problems()[0],
 /* --- escaping --- */
 eq("attribute values are escaped", T.esc('a"b<c&d'), "a&quot;b&lt;c&amp;d");
 
+/* --- non-finite values: shown as typed, typed back as the tag --- */
+eq("inf is typed back as the tag", T.toNumber("inf"), {"$float": "inf"});
+eq("-Infinity too", T.toNumber("-Infinity"), {"$float": "-inf"});
+eq("nan too", T.toNumber("NaN"), {"$float": "nan"});
+eq("a number is a number", T.toNumber("2.5"), 2.5);
+eq("a word is not a number", T.toNumber("water"), null);
+eq("an empty part is not zero", T.toNumber(""), null);
+eq("the tag is shown as its text", T.showScalar({"$float": "-inf"}), "-inf");
+eq("a tagged value is a scalar", T.isFloatTag({"$float": "inf"}), true);
+eq("an ordinary object is not", T.isFloatTag({"a": "inf"}), false);
+
 console.log(fails ? "\n" + fails + " FAILED" : "\nall passed");
 process.exit(fails ? 1 : 0);

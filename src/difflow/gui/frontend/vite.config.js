@@ -28,10 +28,14 @@ export default defineConfig({
         entryFileNames: 'app.js',
         // Named for what it is; rollup would otherwise call the WebLLM
         // chunk `app-index.js`, after its entry file.
+        // Fixed names for the lazy chunks, because the built files are
+        // committed: a hashed name would be a new file on every build.
         chunkFileNames: (chunk) =>
           chunk.moduleIds.some((id) => id.includes('@mlc-ai/web-llm'))
             ? 'webllm.js'
-            : 'app-[name].js',
+            : chunk.moduleIds.some((id) => id.includes('@codemirror') || id.includes('@lezer'))
+              ? 'codemirror.js'
+              : 'app-[name].js',
         assetFileNames: 'app.[ext]',
       },
     },

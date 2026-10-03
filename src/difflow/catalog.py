@@ -47,7 +47,7 @@ import typing
 from dataclasses import dataclass, field
 from typing import Any
 
-from difflow.docstrings import attribute_docs
+from difflow.docstrings import attribute_docs, parse_attributes
 from difflow.params_mixin import ParamsMixin
 
 #: module name -> category, for the core unit operations
@@ -83,11 +83,16 @@ class PortSpec(ParamsMixin):
             annotation does not say.
         variadic: whether the operation takes any number of inlets
             (``*inlets``), as a mixer does.
+        default_outlets: how many outlets to start a new unit with when
+            ``n_outlets`` cannot be known (a class's ``default_outlets``
+            attribute). A suggestion for an editor, not a fact about the
+            unit: a Splitter makes one outlet per fraction it is given.
     """
 
     inlets: list[str] = field(default_factory=list)
     n_outlets: int | None = None
     variadic: bool = False
+    default_outlets: int | None = None
 
     @property
     def n_inlets(self) -> int | None:
@@ -153,6 +158,11 @@ class OperationSchema(ParamsMixin):
         constructor_extras: constructor arguments the class requires
             besides its ``Params`` --- a ``thermo``, an ``eos``. These
             are objects, so a front end cannot supply them.
+        call_parameters: arguments ``__call__`` takes besides its
+            streams --- a Splitter's ``split_frac``, a PFR's
+            ``volumetric_flow``. A flowsheet passes them from
+            ``Unit.params`` on every call, so a front end has to offer
+            them or the unit cannot run.
     """
 
     name: str
@@ -171,6 +181,7 @@ class OperationSchema(ParamsMixin):
     parameters: list[ParameterSpec] = field(default_factory=list)
     params_class: str | None = None
     constructor_extras: list[str] = field(default_factory=list)
+    call_parameters: list[ParameterSpec] = field(default_factory=list)
 
     @property
     def is_declarative(self) -> bool:
@@ -223,8 +234,11 @@ class OperationSchema(ParamsMixin):
                 "n_inlets": self.ports.n_inlets,
                 "n_outlets": self.ports.n_outlets,
                 "variadic": self.ports.variadic,
+                "default_outlets": self.ports.default_outlets,
             },
             "parameters": [dataclasses.asdict(p) for p in self.parameters],
+            "call_parameters": [
+                dataclasses.asdict(p) for p in self.call_parameters],
         }
 
 
@@ -322,11 +336,54 @@ def _ports(cls: type) -> PortSpec:
 
     # outlets are the Stream entries of the return tuple; the trailing
     # dict is the info payload every unit returns alongside them
-    return PortSpec(
-        inlets=inlets,
-        n_outlets=_outlet_count(sig.return_annotation),
-        variadic=variadic,
-    )
+    # A return annotation of a bare `tuple` says nothing about how many
+    # streams come back, and the count stays unknown. A class whose count
+    # depends on its arguments (a Splitter makes one outlet per fraction)
+    # can still say what an editor should start with.
+    return PortSpec(inlets=inlets,
+                    n_outlets=_outlet_count(sig.return_annotation),
+                    variadic=variadic,
+                    default_outlets=getattr(cls, "default_outlets", None))
+
+
+def _call_parameters(cls: type) -> list[ParameterSpec]:
+    """The non-stream arguments of ``__call__``.
+
+    These ride on ``Unit.params`` rather than on the operation, and a
+    unit missing a required one raises ``TypeError: missing 1 required
+    positional argument`` at solve time --- so they are reported here
+    for a front end to ask for. Descriptions come from the method's own
+    ``Args:`` section.
+    """
+    call = getattr(cls, "__call__", None)
+    if not inspect.isfunction(call):
+        return []
+    try:
+        sig = inspect.signature(call)
+    except (TypeError, ValueError):
+        return []
+    docs = parse_attributes(call.__doc__)
+    specs = []
+    for name, param in sig.parameters.items():
+        if name == "self" or param.kind in (
+            inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD
+        ):
+            continue
+        if _is_stream(param.annotation):
+            continue
+        has_default = param.default is not inspect.Parameter.empty
+        ann = param.annotation
+        annotation = ("" if ann is inspect.Parameter.empty
+                      else ann.__name__ if isinstance(ann, type) else str(ann))
+        specs.append(ParameterSpec(
+            name=name,
+            type=annotation,
+            default=repr(param.default) if has_default else None,
+            required=not has_default,
+            is_callable=_is_code(annotation),
+            description=docs.get(name),
+        ))
+    return specs
 
 
 def _params_class(cls: type) -> type | None:
@@ -452,6 +509,7 @@ def describe_class(
         parameters=_parameters(params_cls, meta),
         params_class=params_cls.__name__ if params_cls else None,
         constructor_extras=constructor_extras(cls),
+        call_parameters=_call_parameters(cls),
     )
 
 

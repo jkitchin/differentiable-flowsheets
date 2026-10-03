@@ -1,0 +1,249 @@
+{
+  "format_version": 2,
+  "difflow_version": "0.1.0",
+  "species_order": [
+    "acetic_acid",
+    "ethanol",
+    "ethyl_acetate",
+    "water"
+  ],
+  "defaults": {
+    "flow": 0.01,
+    "T": 300.0,
+    "P": 101325.0
+  },
+  "feeds": {
+    "feed": {
+      "F_acetic_acid": 1.0,
+      "F_ethanol": 1.0,
+      "F_ethyl_acetate": 0.0,
+      "F_water": 0.0,
+      "T": 366.0,
+      "P": 101325.0
+    }
+  },
+  "units": [
+    {
+      "name": "mixer",
+      "operation": "Mixer",
+      "params": {},
+      "constructor": {
+        "species_order": [
+          "acetic_acid",
+          "ethanol",
+          "ethyl_acetate",
+          "water"
+        ]
+      },
+      "extra_params": {},
+      "inlets": [
+        "feed",
+        "recycle"
+      ],
+      "outlets": [
+        "mixed"
+      ]
+    },
+    {
+      "name": "reactor",
+      "operation": "CSTR",
+      "params": {
+        "V": 0.5,
+        "rate_fn": {
+          "$callable": {
+            "factory": "mass_action_kinetics",
+            "attr": "rate_fn",
+            "kwargs": {
+              "reactions": [
+                {
+                  "equation": "acetic_acid + ethanol <=> ethyl_acetate + water",
+                  "reactants": {
+                    "acetic_acid": 1.0,
+                    "ethanol": 1.0
+                  },
+                  "products": {
+                    "ethyl_acetate": 1.0,
+                    "water": 1.0
+                  },
+                  "reversible": true,
+                  "K_eq": 4.0,
+                  "rate_params": {
+                    "A": 18.0,
+                    "Ea": 60000.0,
+                    "n": 0.0
+                  }
+                }
+              ],
+              "species_order": [
+                "acetic_acid",
+                "ethanol",
+                "ethyl_acetate",
+                "water"
+              ],
+              "reverse": "equilibrium",
+              "orders": null
+            }
+          }
+        },
+        "stoich": {
+          "$array": [
+            [
+              -1.0
+            ],
+            [
+              -1.0
+            ],
+            [
+              1.0
+            ],
+            [
+              1.0
+            ]
+          ]
+        },
+        "rate_params": {
+          "A": {
+            "$array": [
+              18.0
+            ]
+          },
+          "n": {
+            "$array": [
+              0.0
+            ]
+          },
+          "Ea": {
+            "$array": [
+              60000.0
+            ]
+          },
+          "K_eq": {
+            "$array": [
+              4.0
+            ]
+          },
+          "order_f": {
+            "$array": [
+              [
+                1.0,
+                1.0,
+                0.0,
+                0.0
+              ]
+            ]
+          },
+          "order_r": {
+            "$array": [
+              [
+                0.0,
+                0.0,
+                1.0,
+                1.0
+              ]
+            ]
+          }
+        },
+        "species_order": [
+          "acetic_acid",
+          "ethanol",
+          "ethyl_acetate",
+          "water"
+        ],
+        "dH_rxn": null,
+        "T_damping": 0.3,
+        "molar_density": 17000.0,
+        "eos": null,
+        "reaction_phase": null,
+        "H_mix_fn": null,
+        "K_eq_fn": null,
+        "outlet_volumetric_basis": false
+      },
+      "constructor": {},
+      "extra_params": {},
+      "inlets": [
+        "mixed"
+      ],
+      "outlets": [
+        "effluent"
+      ]
+    },
+    {
+      "name": "flash",
+      "operation": "Flash",
+      "params": {
+        "species_order": [
+          "acetic_acid",
+          "ethanol",
+          "ethyl_acetate",
+          "water"
+        ]
+      },
+      "constructor": {
+        "thermo": {
+          "$ref": "thermo"
+        }
+      },
+      "extra_params": {},
+      "inlets": [
+        "effluent"
+      ],
+      "outlets": [
+        "liquid",
+        "vapor"
+      ]
+    },
+    {
+      "name": "splitter",
+      "operation": "Splitter",
+      "params": {},
+      "constructor": {
+        "species_order": [
+          "acetic_acid",
+          "ethanol",
+          "ethyl_acetate",
+          "water"
+        ]
+      },
+      "extra_params": {
+        "split_frac": 0.7
+      },
+      "inlets": [
+        "liquid"
+      ],
+      "outlets": [
+        "recycled",
+        "purge"
+      ]
+    }
+  ],
+  "recycles": {
+    "recycled": "recycle"
+  },
+  "view": {
+    "code_context": "from difflow import IdealThermo, get_species_data, mass_action_kinetics\n\nspecies = ['acetic_acid', 'ethanol', 'ethyl_acetate', 'water']\nthermo = IdealThermo({n: get_species_data(n) for n in species})\n\n# Fischer esterification: acetic acid + ethanol <=> ethyl acetate + water.\n# Reversible and equilibrium-limited. K_eq = 4 is the classic textbook\n# value for this system, and it caps a 1:1 feed at two-thirds conversion.\n# The forward Arrhenius constants are illustrative -- an acid-catalysed\n# rate of the right order, Ea = 60 kJ/mol -- not a fit to one catalyst.\nkin = mass_action_kinetics([{\n    'equation': 'acetic_acid + ethanol <=> ethyl_acetate + water',\n    'reactants': {'acetic_acid': 1.0, 'ethanol': 1.0},\n    'products': {'ethyl_acetate': 1.0, 'water': 1.0},\n    'reversible': True, 'K_eq': 4.0,\n    'rate_params': {'A': 18.0, 'Ea': 60_000.0, 'n': 0.0}}],\n    species, reverse='equilibrium')\n\n# The flash uses Raoult's law, which knows nothing of the ethyl acetate /\n# ethanol / water azeotropes: read its split as qualitative.\n",
+    "title": "Esterification with recycle",
+    "description": "The acid-rich flash liquid recycled to the reactor, with a purge.",
+    "nodes": {
+      "feed:feed": {
+        "x": 40.0,
+        "y": 40.0
+      },
+      "mixer": {
+        "x": 240.0,
+        "y": 40.0
+      },
+      "reactor": {
+        "x": 460.0,
+        "y": 40.0
+      },
+      "flash": {
+        "x": 680.0,
+        "y": 40.0
+      },
+      "splitter": {
+        "x": 900.0,
+        "y": 180.0
+      }
+    }
+  }
+}

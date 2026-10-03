@@ -33,11 +33,89 @@ entirely.
 
 from __future__ import annotations
 
+import functools
+import math
+import re
 import threading
 import types
 from pathlib import Path
 
 from difflow import scripts
+
+
+#: how many edits Undo reaches back through
+UNDO_DEPTH = 100
+
+#: Node-id prefixes the canvas uses for feeds and products.
+RESERVED_PREFIXES = ("feed:", "product:")
+
+#: The recycle solver's options the editor can set, with the defaults of
+#: :meth:`Flowsheet.solve`. Kept on ``view["solver"]``, so they are saved
+#: with the file and undone like any other edit; a key that is absent
+#: means the default.
+SOLVER_DEFAULTS = {
+    "tol": 1e-8,
+    "max_iter": 100,
+    "acceleration": "anderson",
+    "clip_negative_flows": True,
+}
+ACCELERATIONS = ("anderson", "wegstein", "none")
+
+
+def _solver_option(key: str, value):
+    """`value` checked for solver option `key`, or a ``ValueError``."""
+    if key == "tol":
+        if isinstance(value, bool) or not isinstance(value, (int, float)) \
+                or not math.isfinite(value) or value <= 0:
+            raise ValueError("tol must be a positive number")
+        return float(value)
+    if key == "max_iter":
+        if isinstance(value, bool) or not isinstance(value, (int, float)) \
+                or not math.isfinite(value) or value != int(value) or value < 1:
+            raise ValueError("max_iter must be a whole number of at least 1")
+        return int(value)
+    if key == "acceleration":
+        if value not in ACCELERATIONS:
+            raise ValueError(f"acceleration must be one of "
+                             f"{', '.join(ACCELERATIONS)}")
+        return value
+    if key == "clip_negative_flows":
+        if not isinstance(value, bool):
+            raise ValueError("clip_negative_flows must be true or false")
+        return value
+    raise ValueError(f"{key!r} is not a solver option the editor sets "
+                     f"(it sets {', '.join(SOLVER_DEFAULTS)})")
+
+
+#: What `set_species` accepts as a species name.
+_SPECIES_NAME = re.compile(r"[A-Za-z0-9_]+")
+
+
+def _undoable(method):
+    """Record the model before `method`, for Undo, if `method` changed it.
+
+    By comparing the whole model before and after rather than by trusting
+    each route to say: a refused edit records nothing, and an edit that
+    lands back where it started is not a step anyone would want to undo.
+    Nested calls (an `add_unit` that runs through `_edit`) record once.
+    """
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        if self._recording:
+            return method(self, *args, **kwargs)
+        with self._lock:
+            self._recording = True
+            try:
+                before = self._state()
+                answer = method(self, *args, **kwargs)
+            finally:
+                self._recording = False
+            if before is not None and self._state() != before:
+                self._undo.append(before)
+                del self._undo[:-UNDO_DEPTH]
+                self._redo.clear()
+            return answer
+    return wrapper
 
 
 def _number(value) -> float | None:
@@ -59,10 +137,17 @@ def _as_number(value, fallback, field: str) -> float:
     """
     if value is None or value == "":
         return float(fallback)
+    # `float(True)` is 1.0 and `float("nan")` is a float: both used to be
+    # accepted, and a NaN feed solved "successfully" to NaN everywhere.
+    if isinstance(value, bool):
+        raise _BadFeed(f"{field} must be a number")
     try:
-        return float(value)
+        number = float(value)
     except (TypeError, ValueError):
         raise _BadFeed(f"{field} must be a number") from None
+    if not math.isfinite(number):
+        raise _BadFeed(f"{field} must be a finite number")
+    return number
 
 
 #: Names the code context may use for the species list, in the order the
@@ -89,6 +174,22 @@ def species_from(bindings: dict) -> list[str] | None:
         ):
             return list(value)
     return None
+
+
+def _check_reserved_names(flowsheet) -> None:
+    """Refuse a unit the canvas would take for a feed or a product.
+
+    The canvas keys a feed ``feed:<stream>`` and a product
+    ``product:<stream>``, beside units under their bare names. Renaming
+    refuses such a name; a file or a script could still bring one in, and
+    then deleting the unit would delete a feed.
+    """
+    for u in flowsheet.units:
+        if str(u.name).startswith(RESERVED_PREFIXES):
+            raise ValueError(
+                f"unit {u.name!r}: a unit name cannot begin with "
+                f"{u.name.split(':')[0] + ':'!r}; the canvas uses that for "
+                "feeds and products. Rename it in the file.")
 
 
 def _empty_flowsheet(species: list[str] | None = None):
@@ -189,7 +290,24 @@ class FlowsheetSession:
             # unbuildable, and it says so on the palette row. `set_species`
             # is how that gets answered.
             self.flowsheet = _empty_flowsheet()
-        self._lock = threading.Lock()
+        _check_reserved_names(self.flowsheet)
+        # A file saved with an unfinished unit in it opens with its red
+        # node, rather than with a unit that silently cannot run.
+        self._adopt(self.flowsheet, self.bindings, self.context_error)
+        # Re-entrant: a console cell runs on the request thread while
+        # `console_run` holds this lock, and `session.solve()` -- which the
+        # console advertises -- takes it again. A plain Lock deadlocked
+        # there, and every edit route after it hung until a restart.
+        self._lock = threading.RLock()
+        #: the model before each edit, newest last, and the ones undone
+        self._undo: list[str] = []
+        self._redo: list[str] = []
+        self._recording = False
+        #: the document as it was last read or written, to say whether
+        #: closing the editor now would lose anything. Compared rather
+        #: than flagged by each edit: an edit made from the console goes
+        #: around every route, and a flag set per route would miss it.
+        self._saved = self._state()
 
     # -- the code context ---------------------------------------------
 
@@ -226,6 +344,7 @@ class FlowsheetSession:
             "error": self.context_error,
         }
 
+    @_undoable
     def set_code_context(self, source: str) -> dict:
         """Adopt a snippet from the browser, or say why it will not run.
 
@@ -243,7 +362,7 @@ class FlowsheetSession:
         adopted = None
         with self._lock:
             self.bindings, self.context_error = bindings, None
-            self.streams = None      # the snippet is part of the model
+            self.streams = self.solve_error = None      # the snippet is part of the model
             if source.strip():
                 self.flowsheet.view["code_context"] = source
             else:
@@ -283,6 +402,7 @@ class FlowsheetSession:
             "editable": not (self.flowsheet is None or self._built()),
         }
 
+    @_undoable
     def set_species(self, names) -> dict:
         """Name the species of a flowsheet that has no units yet.
 
@@ -301,10 +421,23 @@ class FlowsheetSession:
         if isinstance(names, str) or not isinstance(names, (list, tuple)):
             return {"ok": False, "error": "species must be a list of names"}
         cleaned, seen = [], set()
+        # A name the flowsheet already has is let through: one loaded from
+        # a file or built in a script may predate the rule, and refusing
+        # it would lock every later species edit on that flowsheet.
+        existing = set(getattr(self.flowsheet, "species_order", None) or [])
         for name in names:
             if not isinstance(name, str) or not name.strip():
                 return {"ok": False, "error": "every species needs a name"}
             text = name.strip()
+            # Letters, digits and underscores, as the database's own names
+            # are (`1_butanol`). A species name is half of every key built
+            # on it -- `F_<species>`, `x_<species>`, `<stream>.F_<species>`
+            # -- and a dot, a space or a dash in it splits those keys in
+            # the wrong place or makes a codegen line that does not parse.
+            if text not in existing and not _SPECIES_NAME.fullmatch(text):
+                return {"ok": False,
+                        "error": f"{text!r} is not a species name: use letters, "
+                                 f"digits and underscores only"}
             if text in seen:
                 return {"ok": False, "error": f"{text} is named twice"}
             seen.add(text)
@@ -322,7 +455,7 @@ class FlowsheetSession:
                              "delete them first, or edit the file",
                 }
             self.flowsheet.species_order = cleaned
-            self.streams = None
+            self.streams = self.solve_error = None
         # `species_order` is the need that blocks the most of the palette,
         # so naming the species is the other edit that can promote a red
         # node. Same reason as in `set_code_context` for doing it here
@@ -349,6 +482,7 @@ class FlowsheetSession:
             "unfed": edit.unfed(self.flowsheet),
         }
 
+    @_undoable
     def set_feed(self, name, spec: dict | None = None) -> dict:
         """Declare or change the feed on a stream, and say what it carries.
 
@@ -429,9 +563,10 @@ class FlowsheetSession:
                 return {"ok": False, "error": str(bad)}
 
             fs.add_feed(name, make_stream(flows=flows, T=T, P=P))
-            self.streams = None
+            self.streams = self.solve_error = None
         return {"ok": True, "name": name, "T": T, "P": P, "flows": flows}
 
+    @_undoable
     def remove_feed(self, name: str) -> dict:
         """Undeclare a feed, leaving the inlet unfed again.
 
@@ -448,7 +583,7 @@ class FlowsheetSession:
                 return {"ok": False,
                         "error": f"no feed called {name!r} (have: {known})"}
             del self.flowsheet.feeds[name]
-            self.streams = None
+            self.streams = self.solve_error = None
         return {"ok": True, "name": name}
 
     # -- reads --------------------------------------------------------
@@ -504,12 +639,42 @@ class FlowsheetSession:
             out[name] = entry
         return out
 
+    def _state(self) -> str | None:
+        """The whole model as one string, or ``None`` if it will not write.
+
+        What a save would put on disk --- units, wiring, feeds, the code
+        context and the stored layout --- and not what `document` serves,
+        which fills in positions nobody chose.
+        """
+        if self.flowsheet is None:
+            return None
+        try:
+            import json
+
+            from difflow import serialize
+
+            return json.dumps(serialize.to_dict(self.flowsheet,
+                                                refs=self.bindings),
+                              default=str)
+        except Exception:
+            return None
+
+    @property
+    def dirty(self) -> bool:
+        """Would quitting now lose an edit?
+
+        A model that stops serializing counts as changed. One that never
+        did (a script whose units hold callables) has no file to lose
+        edits from, so it is not nagged about on every quit.
+        """
+        return self._state() != self._saved
+
     def document(self) -> dict:
         from difflow import serialize
 
         if self.flowsheet is None:
             return {"flowsheet": None, "path": str(self.path or ""),
-                    "source": str(self.source or "")}
+                    "source": str(self.source or ""), "dirty": False}
         document = serialize.to_dict(self.flowsheet, refs=self.bindings)
         document.setdefault("view", {})
         # Auto-layout underneath, stored positions on top. Not "one or the
@@ -531,6 +696,10 @@ class FlowsheetSession:
             # serialized document would be exported to a file and read
             # back as though it were.
             "pending": self.pending_units(),
+            # Whether the header marks the file as edited, and whether the
+            # editor asks before a quit or an example throws the edit away.
+            "dirty": self.dirty,
+            **self.history(),
             # The species control in the header reads these. Carried on the
             # document rather than fetched separately because every edit
             # already reloads it, and an empty flowsheet's species are the
@@ -649,6 +818,7 @@ class FlowsheetSession:
 
     # -- writes -------------------------------------------------------
 
+    @_undoable
     def replace(self, document: dict) -> dict:
         """Adopt a flowsheet sent from the browser.
 
@@ -658,15 +828,52 @@ class FlowsheetSession:
         """
         from difflow import serialize
 
+        if not isinstance(document, dict):
+            return {"ok": False, "error": "a flowsheet must be a JSON object"}
+        # Built in full before anything is replaced. Evaluating the
+        # document's code context straight into the session used to swap
+        # the bindings first, so a document that then failed to build left
+        # the old flowsheet running against the new document's names.
+        try:
+            context = (document.get("view") or {}).get("code_context") or ""
+            bindings, error = (evaluate_context(context)
+                               if context.strip() else ({}, None))
+            flowsheet = serialize.from_dict(document, refs=bindings)
+            _check_reserved_names(flowsheet)
+        except Exception as exc:
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
         with self._lock:
-            self._evaluate((document.get("view") or {}).get("code_context") or "")
-            self.flowsheet = serialize.from_dict(document, refs=self.bindings)
-            self.streams = None
-            # The pending nodes belonged to the flowsheet that was just
-            # replaced. Carrying them over would put a red box for a unit
-            # nobody dropped onto a canvas that has never seen it.
-            self.pending.clear()
+            # `_adopt` rebuilds the pending nodes from the new flowsheet's
+            # own unfinished units: the old ones belonged to a canvas that
+            # is gone.
+            self._adopt(flowsheet, bindings, error)
         return {"ok": True}
+
+    def open_example(self, key: str) -> dict:
+        """Replace the flowsheet with one of :mod:`difflow.gui.examples`.
+
+        The file the editor was opened on is forgotten along with its
+        flowsheet: Save would otherwise write the example over it, which
+        is not what anyone choosing an example from a menu meant. The
+        example can still be written out with File > Flowsheet JSON.
+        """
+        from difflow.gui import examples
+
+        try:
+            document = examples.document(key)
+        except KeyError:
+            return {"ok": False, "error": f"no example named {key!r}"}
+        answer = self.replace(document)
+        if not answer.get("ok"):
+            # The old flowsheet is still the one open: its file, its undo
+            # history and its unsaved changes all stay with it.
+            return answer
+        self.path = self.source = None
+        self._forget_history()
+        # Nothing to lose yet: the example is one menu click from coming
+        # back exactly as it is.
+        self._saved = self._state()
+        return answer
 
     # -- incremental edits --------------------------------------------
     #
@@ -676,6 +883,7 @@ class FlowsheetSession:
     # every unit -- and where a live `thermo` must survive the edit by
     # identity rather than by round-tripping through JSON.
 
+    @_undoable
     def _edit(self, fn, *args, moves_only: bool = False, **kwargs) -> dict:
         """Run one edit under the lock, reporting a refusal as a value.
 
@@ -697,16 +905,27 @@ class FlowsheetSession:
             with self._lock, ref_namespace(self.bindings):
                 result = fn(*args, **kwargs)
         except EditError as exc:
+            # A refusal is raised before anything is assigned, so the
+            # flowsheet -- and the streams solved from it -- are as they were.
             return {"ok": False, "error": str(exc)}
+        except Exception:
+            # Anything else may have left the edit half done. The streams
+            # cannot be trusted to describe what is there now.
+            if not moves_only:
+                self.streams = self.solve_error = None
+            raise
         if not moves_only:
-            self.streams = None
+            self.streams = self.solve_error = None
         return {"ok": True, **(result or {})}
 
+    @_undoable
     def patch_unit(self, name: str, changes: dict) -> dict:
         """Set parameters, rename, or move one unit.
 
         ``changes`` may carry ``params`` (a partial dict, merged over
-        what the unit has), ``name`` (a rename) and ``position``
+        what the unit has), ``call_params`` (the same, for the arguments
+        passed to the operation on every call --- ``Unit.params``; a
+        ``None`` value removes one), ``name`` (a rename) and ``position``
         (``{"x": .., "y": ..}``), in any combination. Anything else is
         refused by name rather than ignored: an editor that drops an
         edit on the floor is worse than one that rejects it.
@@ -714,35 +933,66 @@ class FlowsheetSession:
         from difflow.gui import edit
 
         def apply() -> dict:
-            unknown = sorted(set(changes) - {"params", "name", "position"})
+            unknown = sorted(set(changes) - {"params", "call_params", "name",
+                                             "position"})
             if unknown:
                 raise edit.EditError(
                     f"cannot patch {', '.join(repr(u) for u in unknown)}; "
-                    "a unit takes 'params', 'name' and 'position'."
+                    "a unit takes 'params', 'call_params', 'name' and "
+                    "'position'."
                 )
             u = edit.unit(self.flowsheet, name)
+            # Everything is built and checked before anything is assigned.
+            # A patch carrying a good parameter and a taken name used to
+            # change the unit and then report the whole patch as refused,
+            # so the editor showed the old value over a flowsheet that had
+            # the new one -- and kept the last solve's streams beside it.
+            operation, unit_params = u.operation, u.params
             params = changes.get("params")
             if params:
                 if not isinstance(params, dict):
                     raise edit.EditError("'params' must be an object")
-                u.operation = edit.rebuild(u.operation, name, params)
+                operation = edit.rebuild(u.operation, name, params)
+            call_params = changes.get("call_params")
+            if call_params:
+                unit_params = edit.call_params(
+                    u.params, call_params, name,
+                    self._schema(name).get("call_parameters", []))
             new_name = changes.get("name")
-            if new_name and new_name != name:
-                self._rename_unit(u, new_name)
+            renaming = new_name is not None and new_name != name
+            if renaming:
+                self._check_unit_name(new_name)
             position = changes.get("position")
             if position is not None:
-                self._place(new_name or name, position)
-            return {"name": new_name or name}
+                position = self._position(name, position)
+            u.operation, u.params = operation, unit_params
+            if renaming:
+                self._rename_unit(u, new_name)
+            if position is not None:
+                self.flowsheet.view.setdefault("nodes", {})[
+                    new_name if renaming else name] = position
+            return {"name": new_name if renaming else name}
 
         return self._edit(apply)
 
-    def _rename_unit(self, u, new_name: str) -> None:
+    def _check_unit_name(self, new_name) -> None:
         from difflow.gui import edit
 
         if not isinstance(new_name, str) or not new_name.strip():
             raise edit.EditError("a unit name cannot be empty")
+        # The canvas keys a feed `feed:<stream>` and a product
+        # `product:<stream>`, beside units under their bare names, and the
+        # view's node positions are saved under the same keys. A unit so
+        # named would be taken for the feed: deleting it deletes the feed.
+        if new_name.startswith(RESERVED_PREFIXES):
+            raise edit.EditError(
+                f"a unit name cannot begin with {new_name.split(':')[0] + ':'!r}; "
+                "the canvas uses that for feeds and products")
         if any(other.name == new_name for other in self.flowsheet.units):
             raise edit.EditError(f"there is already a unit called {new_name!r}")
+
+    def _rename_unit(self, u, new_name: str) -> None:
+        self._check_unit_name(new_name)
         nodes = (self.flowsheet.view or {}).get("nodes")
         if isinstance(nodes, dict) and u.name in nodes:
             nodes[new_name] = nodes.pop(u.name)
@@ -756,7 +1006,7 @@ class FlowsheetSession:
             self.pending[new_name] = entry
         u.name = new_name
 
-    def _place(self, key: str, position) -> None:
+    def _position(self, key: str, position) -> dict:
         from difflow.gui import edit
 
         try:
@@ -765,11 +1015,21 @@ class FlowsheetSession:
             raise edit.EditError(
                 f"position for {key!r} must be {{'x': number, 'y': number}}"
             ) from exc
+        # `float("nan")` is a float. A NaN coordinate saved fine and then
+        # failed the file's own JSON (`allow_nan=False`) on the next save,
+        # or put the node nowhere on the canvas.
+        if not (math.isfinite(x) and math.isfinite(y)):
+            raise edit.EditError(f"position for {key!r} must be finite")
+        return {"x": x, "y": y}
+
+    def _place(self, key: str, position) -> None:
+        position = self._position(key, position)
         # An unfinished unit is on the flowsheet like any other, so its
         # position goes where every other node's does. It used to be held
         # off the flowsheet, and the coordinate with it.
-        self.flowsheet.view.setdefault("nodes", {})[key] = {"x": x, "y": y}
+        self.flowsheet.view.setdefault("nodes", {})[key] = position
 
+    @_undoable
     def add_unit(self, operation: str, name: str | None = None,
                  position=None, extras: dict | None = None) -> dict:
         """Drop a unit from the palette onto the canvas.
@@ -800,6 +1060,11 @@ class FlowsheetSession:
                 raise edit.EditError(f"{operation!r} is not a registered operation")
             taken = self._taken()
             unit_name = edit.unique(name or operation.lower(), taken)
+            if name:
+                # The same checks a rename makes: the API and the assistant
+                # can name a unit on the way in, and the canvas cannot tell
+                # a unit called feed:x from the feed.
+                self._check_unit_name(name)
             if name and name in taken:
                 raise edit.EditError(f"there is already a unit called {name!r}")
             override = edit.known_extras(self.flowsheet, info.cls, self.bindings)
@@ -1132,10 +1397,19 @@ class FlowsheetSession:
                        if src in touched or dst in touched}
             for src in dropped:
                 del self.flowsheet.recycles[src]
+            # A feed only this unit read is kept, composition and all: it
+            # is the part of the flowsheet that took typing, and the usual
+            # reason to delete a unit is to put a different one in its
+            # place. Renaming the new unit's inlet onto it attaches it.
+            still_read = {s for other in self.flowsheet.units
+                          for s in other.inlet_names}
+            feeds_unread = sorted(f for f in self.flowsheet.feeds
+                                  if f in touched and f not in still_read)
             nodes = (self.flowsheet.view or {}).get("nodes")
             if isinstance(nodes, dict):
                 nodes.pop(name, None)
-            return {"name": name, "recycles_dropped": dropped}
+            return {"name": name, "recycles_dropped": dropped,
+                    "feeds_unread": feeds_unread}
 
         return self._edit(apply)
 
@@ -1156,7 +1430,11 @@ class FlowsheetSession:
         )
 
     def _ports(self, name: str) -> dict:
-        """The port spec of the class behind an existing unit.
+        """The port spec of the class behind an existing unit."""
+        return self._schema(name)["ports"]
+
+    def _schema(self, name: str) -> dict:
+        """The catalog schema of the class behind an existing unit.
 
         An unfinished unit has a stand-in where its operation goes, and
         describing *that* would report a class with no ports at all --- so
@@ -1174,8 +1452,8 @@ class FlowsheetSession:
                 raise edit.EditError(
                     f"{operation.operation!r} is not a registered operation"
                 )
-            return describe_class(info.cls).to_dict()["ports"]
-        return describe_class(type(operation)).to_dict()["ports"]
+            return describe_class(info.cls).to_dict()
+        return describe_class(type(operation)).to_dict()
 
     def rename_stream(self, old: str, new: str) -> dict:
         """Rename one stream everywhere it appears.
@@ -1183,7 +1461,8 @@ class FlowsheetSession:
         A stream name is the wiring, so this moves feeds, recycle ends,
         every port that reads or writes it and the canvas node all at
         once. Refused if the new name is taken, because that would be a
-        connection wearing a rename's clothes.
+        connection wearing a rename's clothes --- unless it is a feed
+        nothing reads, which an unfed inlet takes over.
         """
         from difflow.gui import edit
 
@@ -1210,27 +1489,250 @@ class FlowsheetSession:
         """Adopt canvas positions. No rebuild, no solve --- coordinates only."""
         from difflow.gui import edit
 
+        from difflow.gui.layout import FEED_PREFIX, PRODUCT_PREFIX
+
         def apply() -> dict:
             if not isinstance(nodes, dict):
                 raise edit.EditError("layout must be an object of {key: {x, y}}")
-            for key, position in nodes.items():
-                self._place(key, position)
-            return {"nodes": len(nodes)}
+            # Every position checked before any is kept, so a bad one
+            # leaves the layout as it was rather than half moved.
+            placed = {key: self._position(key, p) for key, p in nodes.items()}
+            # Only keys the canvas can draw. Anything else was stored and
+            # saved to the file for ever: a node deleted while its drag
+            # was in flight, or any string a caller cared to send.
+            streams = edit.stream_names(self.flowsheet)
+            known = ({u.name for u in self.flowsheet.units}
+                     | {FEED_PREFIX + s for s in streams}
+                     | {PRODUCT_PREFIX + s for s in streams})
+            ignored = sorted(key for key in placed if key not in known)
+            for key, position in placed.items():
+                if key in known:
+                    self._place(key, position)
+            answer = {"nodes": len(placed) - len(ignored)}
+            if ignored:
+                answer["ignored"] = ignored
+            return answer
 
         return self._edit(apply, moves_only=True)
 
-    def save(self) -> dict:
+    def save(self, path: str | None = None, overwrite: bool = False) -> dict:
+        """Write the flowsheet to its file, or to `path` (Save As).
+
+        A new `path` becomes the file from then on, and an existing file
+        there is only written over when `overwrite` says so: the browser
+        asks first, because a typed path is one typo from someone else's
+        flowsheet. Always JSON --- a script is a way in, not a way out.
+        """
         from difflow import serialize
 
         if self.flowsheet is None:
             return {"ok": False, "error": "no flowsheet loaded"}
-        if self.path is None:
-            return {"ok": False, "error": "no path was given on startup"}
+        target = self.path
+        if path is not None:
+            if not isinstance(path, str) or not path.strip():
+                return {"ok": False, "error": "save it where?"}
+            target = Path(path.strip()).expanduser().resolve()
+            if target.suffix.lower() != ".json":
+                target = target.with_name(target.name + ".json")
+            if not target.parent.is_dir():
+                return {"ok": False,
+                        "error": f"there is no folder {str(target.parent)!r}"}
+            if (target.exists() and not overwrite
+                    and target != (self.path and Path(self.path).resolve())):
+                return {"ok": False, "exists": True, "path": str(target),
+                        "error": f"{target.name} already exists"}
+        if target is None:
+            return {"ok": False, "error": "no file yet; use Save As"}
         try:
-            serialize.save(self.flowsheet, self.path, refs=self.bindings)
+            serialize.save(self.flowsheet, target, refs=self.bindings)
         except serialize.SerializationError as exc:
             return {"ok": False, "error": str(exc)}
-        return {"ok": True, "path": str(self.path)}
+        if path is not None:
+            self.path, self.source = target, None
+        self._saved = self._state()
+        return {"ok": True, "path": str(target)}
+
+    def open_file(self, path) -> dict:
+        """Replace the flowsheet with one read from disk, as on startup.
+
+        Built in full before anything is replaced, so a file that will
+        not load leaves the current flowsheet exactly where it was.
+        """
+        import json
+
+        from difflow import serialize
+
+        if not isinstance(path, str) or not path.strip():
+            return {"ok": False, "error": "open which file?"}
+        target = Path(path.strip()).expanduser().resolve()
+        if not target.is_file():
+            return {"ok": False, "error": f"there is no file {str(target)!r}"}
+        script = scripts.is_script(target)
+        try:
+            if script:
+                flowsheet = scripts.load_flowsheet(target)
+                context = (getattr(flowsheet, "view", None) or {}).get(
+                    "code_context") or ""
+                bindings, error = (evaluate_context(context)
+                                   if context.strip() else ({}, None))
+            else:
+                data = json.loads(target.read_text())
+                context = (data.get("view") or {}).get("code_context") or ""
+                bindings, error = (evaluate_context(context)
+                                   if context.strip() else ({}, None))
+                flowsheet = serialize.from_dict(data, refs=bindings)
+            _check_reserved_names(flowsheet)
+        except Exception as exc:
+            return {"ok": False,
+                    "error": f"could not open {target.name}: "
+                             f"{type(exc).__name__}: {exc}"}
+        with self._lock:
+            self._adopt(flowsheet, bindings, error)
+            self.source = target if script else None
+            self.path = scripts.save_target(target) if script else target
+            self._saved = self._state()
+            self._forget_history()
+        return {"ok": True, "path": str(self.path),
+                "source": str(self.source or "")}
+
+    def new(self) -> dict:
+        """Start again from an empty flowsheet, with no file behind it."""
+        with self._lock:
+            self._adopt(_empty_flowsheet(), {}, None)
+            self.path = self.source = None
+            self._saved = self._state()
+            self._forget_history()
+        return {"ok": True}
+
+    def _forget_history(self) -> None:
+        """Undo stops at a flowsheet's own beginning, not at the last one's."""
+        self._undo.clear()
+        self._redo.clear()
+
+    def undo(self) -> dict:
+        """Put the model back as it was before the last edit."""
+        return self._step(self._undo, self._redo, "undo")
+
+    def redo(self) -> dict:
+        """Make the last undone edit again."""
+        return self._step(self._redo, self._undo, "redo")
+
+    def _step(self, source: list, sink: list, verb: str) -> dict:
+        import json
+
+        from difflow import serialize
+
+        with self._lock:
+            if not source:
+                return {"ok": False, "error": f"nothing to {verb}"}
+            current = self._state()
+            data = json.loads(source[-1])
+            context = (data.get("view") or {}).get("code_context") or ""
+            try:
+                # The same snippet keeps the same objects: a live `thermo`
+                # survives an undo of a parameter edit by identity.
+                if context == self._source():
+                    bindings, error = self.bindings, self.context_error
+                else:
+                    bindings, error = (evaluate_context(context)
+                                       if context.strip() else ({}, None))
+                flowsheet = serialize.from_dict(data, refs=bindings)
+            except Exception as exc:
+                return {"ok": False,
+                        "error": f"could not {verb}: {type(exc).__name__}: {exc}"}
+            source.pop()
+            if current is not None:
+                sink.append(current)
+            self._adopt(flowsheet, bindings, error)
+            return {"ok": True, **self.history()}
+
+    def history(self) -> dict:
+        """Whether there is anything to undo or redo, for the Edit menu."""
+        return {"undo": bool(self._undo), "redo": bool(self._redo)}
+
+    def _adopt(self, flowsheet, bindings: dict, context_error) -> None:
+        """Make `flowsheet` the model, and forget what described the last one.
+
+        The unfinished units are read back off the flowsheet: they are on
+        it as `Incomplete` stand-ins, and a file saved with one in it
+        should open with its red node, not with a unit that silently
+        cannot run.
+        """
+        from difflow.incomplete import Incomplete
+
+        self.flowsheet = flowsheet
+        self.bindings, self.context_error = bindings, context_error
+        self.streams = None
+        self.solve_error = None
+        self.delta_vectors = None
+        self.pending = {
+            u.name: {"name": u.name, "operation": u.operation.operation,
+                     "needs": list(u.operation.needs),
+                     "hint": u.operation.hint}
+            for u in flowsheet.units if isinstance(u.operation, Incomplete)
+        }
+
+    def solver_options(self) -> dict:
+        """Every solver option the editor sets, defaults filled in."""
+        stored = {} if self.flowsheet is None else \
+            self.flowsheet.view.get("solver") or {}
+        return {**SOLVER_DEFAULTS, **stored}
+
+    def _solve_kw(self) -> dict:
+        """The stored options, as keyword arguments to ``Flowsheet.solve``.
+
+        Only what was set: a default is left to ``Flowsheet.solve`` itself
+        rather than restated, and a stored value that no longer checks (a
+        file edited by hand) is dropped rather than raised from inside
+        every solve.
+        """
+        stored = {} if self.flowsheet is None else \
+            self.flowsheet.view.get("solver") or {}
+        kw = {}
+        for key, value in stored.items():
+            try:
+                kw[key] = _solver_option(key, value)
+            except ValueError:
+                continue
+        return kw
+
+    @_undoable
+    def set_solver_options(self, options) -> dict:
+        """Set the recycle solver's options; ``None`` restores a default.
+
+        The whole request is checked before any of it is kept, so a bad
+        tolerance does not land the acceleration beside it. The streams
+        are dropped: they were solved under the old options, and a looser
+        tolerance is exactly the change that leaves them looking the same.
+        """
+        if self.flowsheet is None:
+            return {"ok": False, "error": "no flowsheet loaded"}
+        if not isinstance(options, dict):
+            return {"ok": False, "error": "solver options must be an object"}
+        stored = dict(self.flowsheet.view.get("solver") or {})
+        try:
+            for key, value in options.items():
+                if value is None or value == "":
+                    if key not in SOLVER_DEFAULTS:
+                        _solver_option(key, value)   # names the bad key
+                    stored.pop(key, None)
+                else:
+                    stored[key] = _solver_option(key, value)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        with self._lock:
+            # A value equal to the default is not stored: the file then
+            # says only what someone chose. A key this version does not
+            # know (a file edited by hand, or from a newer difflow) is kept
+            # as found; `_solve_kw` already leaves it out of the solve.
+            stored = {k: v for k, v in stored.items()
+                      if k not in SOLVER_DEFAULTS or v != SOLVER_DEFAULTS[k]}
+            if stored:
+                self.flowsheet.view["solver"] = stored
+            else:
+                self.flowsheet.view.pop("solver", None)
+            self.streams = self.solve_error = None
+        return {"ok": True, "solver": self.solver_options()}
 
     def solve(self) -> dict:
         """Solve, and report a failure rather than raising at the socket.
@@ -1262,13 +1764,23 @@ class FlowsheetSession:
                 "keeping the wiring it already has."
             )
             return {"ok": False, "error": self.solve_error, "pending": sorted(self.pending)}
+        # A required call argument that was never set raises "missing 1
+        # required positional argument" from inside the solve, naming
+        # neither the unit nor where to set it.
+        missing = self._missing_call_params()
+        if missing:
+            self.solve_error = "; ".join(
+                f"{unit} needs {', '.join(names)}" for unit, names in missing.items()
+            ) + ". Set them under 'call parameters' in the inspector."
+            return {"ok": False, "error": self.solve_error}
         try:
             with self._lock:
                 # The editor renders the verdict itself, in red, from the
                 # `converged` field below; a ConvergenceWarning on the
                 # server's stderr would say the same thing where nobody
                 # using the editor is looking.
-                streams = self.flowsheet.solve(on_nonconvergence="ignore")
+                streams = self.flowsheet.solve(on_nonconvergence="ignore",
+                                               **self._solve_kw())
         except Exception as exc:
             self.solve_error = self._solve_error(exc)
             return {"ok": False, "error": self.solve_error}
@@ -1291,12 +1803,93 @@ class FlowsheetSession:
             "residual": _number(getattr(fs, "last_solve_residual", None)),
             "tol": _number(getattr(fs, "last_solve_tol", None)),
             "tear_streams": list(getattr(fs, "last_solve_tear_streams", []) or []),
-            # What was solved is not what is on the canvas if any of it is
-            # still red. The numbers below are right about the flowsheet
-            # that exists, and saying nothing here would let them be read
-            # as being about the one being drawn.
-            "pending": sorted(self.pending),
+            "solver": self.solver_options(),
+            "audit": self._audit(streams),
         }
+
+    #: Relative mass-balance gap above which a solve is flagged. Loose on
+    #: purpose: a recycle converged to its tolerance closes to about that
+    #: tolerance, and the case this exists for (a negative reactor volume
+    #: creating 12 % more mass) is nowhere near it.
+    MASS_GAP = 1e-4
+
+    def _audit(self, streams: dict) -> dict:
+        """What a solve that "worked" should still be checked for.
+
+        ``Flowsheet.solve`` returning is not the answer being physical: a
+        CSTR with ``V = -1`` solved to 2 mol/s in and 2.25 out and the
+        editor said "solved". Three checks, each cheap, none of which
+        changes ``ok``: streams holding NaN or infinity, negative flows,
+        and the overall mass balance --- the feeds some unit reads against
+        the streams no unit reads --- when every species has a molar mass
+        in the database. A feed nothing reads is warned about by name.
+        """
+        from difflow.database import get_species_data
+
+        fs = self.flowsheet
+        warnings = []
+        bad = sorted(name for name, stream in streams.items()
+                     if any(not isinstance(v, str) and not math.isfinite(float(v))
+                            for v in stream.values()))
+        if bad:
+            warnings.append(f"non-finite values (NaN or infinity) in "
+                            f"{', '.join(bad)}")
+        negative = sorted(
+            name for name, stream in streams.items() if name not in bad
+            and any(k.startswith("F_") and float(v) < -1e-9 for k, v in stream.items())
+        )
+        if negative:
+            warnings.append(f"negative flows in {', '.join(negative)}")
+
+        idle = sorted(set(fs.feeds) - {n for u in fs.units for n in u.inlet_names})
+        if idle:
+            warnings.append(
+                f"{', '.join(idle)} {'is a feed' if len(idle) == 1 else 'are feeds'}"
+                " no unit reads; drag it onto an inlet, or delete it")
+        order = list(getattr(fs, "species_order", None) or [])
+        mass = None
+        try:
+            mw = {s: float(get_species_data(s).MW) for s in order}
+        except Exception:  # noqa: BLE001 -- a species the database lacks
+            mw = None
+        if mw and not bad:
+            read = {n for u in fs.units for n in u.inlet_names}
+            made = {n for u in fs.units for n in u.outlet_names}
+            products = sorted(made - read - set(fs.recycles))
+
+            def kg(names):
+                return sum(float(streams[n].get(f"F_{s}", 0.0)) * mw[s]
+                           for n in names if n in streams for s in order) / 1000.0
+
+            # A feed nothing reads (kept when its unit was deleted) enters
+            # nothing, so it is not "in"; counted, it read as mass lost.
+            m_in = kg(f for f in fs.feeds if f in read)
+            m_out = kg(products)
+            gap = (m_out - m_in) / max(abs(m_in), 1e-300)
+            mass = {"in": m_in, "out": m_out, "relative_gap": gap,
+                    "products": products}
+            if m_in > 0 and abs(gap) > self.MASS_GAP:
+                warnings.append(
+                    f"mass is not conserved: {m_in:.6g} kg/s in, "
+                    f"{m_out:.6g} kg/s out ({gap:+.2%}). Check the unit "
+                    "parameters (a volume or a fraction outside its range) "
+                    "and the reaction stoichiometry."
+                )
+        return {"warnings": warnings, "mass": mass}
+
+    def _missing_call_params(self) -> dict[str, list[str]]:
+        """Required ``__call__`` arguments no unit has a value for."""
+        missing = {}
+        for u in self.flowsheet.units:
+            try:
+                specs = self._schema(u.name).get("call_parameters", [])
+            except Exception:  # noqa: BLE001 -- the solve will say what
+                continue
+            names = [p["name"] for p in specs
+                     if p["required"] and p["name"] not in (u.params or {})]
+            if names:
+                missing[u.name] = names
+        return missing
 
     def _solve_error(self, exc: Exception) -> str:
         """A solve failure, translated where the raw message names nothing.
@@ -1359,11 +1952,44 @@ class FlowsheetSession:
                              "stream) or 'target' (reverse, every lever)"}
         try:
             with self._lock:
-                answer = (ad.forward(self.flowsheet, lever) if lever
-                          else ad.reverse(self.flowsheet, target))
+                kw = self._solve_kw()
+                answer = (ad.forward(self.flowsheet, lever, **kw) if lever
+                          else ad.reverse(self.flowsheet, target, **kw))
+                base = self._base_point()
         except Exception as exc:
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
-        return {"ok": True, **answer}
+        return {"ok": True, **answer, **base}
+
+    def _base_point(self) -> dict:
+        """Did the flowsheet converge at the point being differentiated?
+
+        The derivative is taken through a traced solve, which keeps no
+        verdict, so the answer is asked of one concrete solve beside it.
+        A Jacobian of a tear that never closed is a derivative of where
+        the iteration stopped, not of the model, and was shown without a
+        word to say so.
+        """
+        fs = self.flowsheet
+        # Unaccelerated, whatever the stored options say: a traced solve
+        # always drops to plain substitution (``Flowsheet.solve`` cannot
+        # branch on a tracer), so that is the iteration the derivative went
+        # through. Asked with Anderson, a loop it closes in ten steps and
+        # substitution does not close in max_iter read as converged.
+        kw = {**self._solve_kw(), "acceleration": "none"}
+        try:
+            fs.solve(on_nonconvergence="ignore", **kw)
+        except Exception:
+            return {"converged": None, "residual": None, "warning": None}
+        converged = fs.last_solve_converged
+        residual = _number(fs.last_solve_residual)
+        warning = None
+        if converged is False:
+            size = "unknown" if residual is None else f"{residual:.3g}"
+            warning = ("the flowsheet did not converge here (tear residual "
+                       f"{size}), so these derivatives are of where "
+                       "the iteration stopped, not of the model")
+        return {"converged": converged, "residual": residual,
+                "warning": warning}
 
     # -- planning ------------------------------------------------------
 
@@ -1399,12 +2025,24 @@ class FlowsheetSession:
         if not u or not y:
             return {"ok": False,
                     "error": "pick at least one lever and one output"}
-        radius = planning.DEFAULT_RADIUS if radius is None else float(radius)
+        # Refused here, by name. A NaN radius made a trust region of NaN
+        # bounds that the LP export wrote out as written, and a negative
+        # one a region with its lower bound above its upper.
+        if radius is None:
+            radius = planning.DEFAULT_RADIUS
+        else:
+            try:
+                radius = float(radius)
+            except (TypeError, ValueError):
+                radius = math.nan
+            if not (math.isfinite(radius) and radius > 0):
+                return {"ok": False,
+                        "error": "the trust-region radius must be a positive number"}
         try:
             with self._lock:
                 dvs, answer = planning.linearize(
                     self.flowsheet, u, y, bounds=bounds, radius=radius,
-                    check=check)
+                    check=check, solve_kwargs=self._solve_kw())
                 #: the last linearization, which is what the assistant's
                 #: `planning` brief reads
                 self.delta_vectors = dvs
@@ -1412,9 +2050,10 @@ class FlowsheetSession:
                     "u": u, "y": y, "bounds": dict(bounds or {}),
                     "radius": radius,
                 }
+                base = self._base_point()
         except Exception as exc:
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
-        return answer
+        return {**answer, **base}
 
     def linearization_files(self, fmt: str) -> dict:
         """The last linearization rendered for download."""
@@ -1482,6 +2121,7 @@ class FlowsheetSession:
         except Exception:
             return None
 
+    @_undoable
     def console_run(self, source: str) -> dict:
         """Run one cell against the live model.
 
@@ -1510,7 +2150,7 @@ class FlowsheetSession:
             after = self._fingerprint()
             changed = before is None or after is None or before != after
             if changed:
-                self.streams = None
+                self.streams = self.solve_error = None
         answer["changed"] = changed
         return answer
 

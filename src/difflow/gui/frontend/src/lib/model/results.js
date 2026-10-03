@@ -17,11 +17,18 @@ export function speciesOf(stream, order) {
   return [...known, ...extra]
 }
 
-/** Total molar flow of a stream. */
+/**
+ * Total molar flow of a stream.
+ *
+ * NaN if any flow is NaN or infinite: skipping those showed a broken
+ * stream's total as the sum of the flows that happened to survive.
+ */
 export function total(stream) {
   let sum = 0
   for (const [k, v] of Object.entries(stream)) {
-    if (k.startsWith('F_') && Number.isFinite(v)) sum += v
+    if (!k.startsWith('F_') || typeof v !== 'number') continue
+    if (!Number.isFinite(v)) return NaN
+    sum += v
   }
   return sum
 }
@@ -35,7 +42,11 @@ export function total(stream) {
  * table missing the column that matters.
  *
  * @param {Object} solve the `/api/solve` answer
- * @returns {{species: string[], rows: Array}}
+ * `phases` says whether any stream carries a phase label. Most units do
+ * not set one, and a column that is blank on every row reads as a
+ * phase that failed to compute.
+ *
+ * @returns {{species: string[], rows: Array, phases: boolean}}
  */
 export function streamTable(solve) {
   const streams = solve?.streams ?? {}
@@ -63,7 +74,7 @@ export function streamTable(solve) {
         F ? (stream[`F_${s}`] ?? 0) / F : null),
     }
   })
-  return { species, rows }
+  return { species, rows, phases: rows.some((row) => row.phase !== null) }
 }
 
 /** Total flow per stream, for badging the canvas edges. */
@@ -150,11 +161,28 @@ export function fmt(value, digits = 4) {
   if (typeof value === 'string') return value
   if (!Number.isFinite(value)) return String(value)
   if (value === 0) return '0'
-  const size = Math.abs(value)
-  if (size >= 1e-3 && size < 1e5) {
-    return String(Number(value.toPrecision(digits)))
-  }
-  return value.toExponential(digits - 1)
+  // Round first, then choose the form: deciding on the unrounded value
+  // printed 99999.7 as "100000" -- six figures, the very thing this is
+  // here to avoid -- because it was under 1e5 until it was rounded.
+  const rounded = Number(value.toPrecision(digits))
+  const size = Math.abs(rounded)
+  if (size >= 1e-3 && size < 1e5) return String(rounded)
+  // "1.013e5", as the docstring always said; JavaScript writes "e+5".
+  return rounded.toExponential(digits - 1).replace('e+', 'e')
+}
+
+/**
+ * The text beside a product's ring: its stream name, and its flow once
+ * there is one.
+ *
+ * A product has no wire, so it has no wire label either -- and the wire
+ * label is where every other stream's name and flow are written. Without
+ * this the one stream a flowsheet exists to make was the one stream the
+ * canvas never named. Same text as a wire's label, so the two read alike.
+ */
+export function productLabel(stream, flows = null) {
+  const flow = flows ? flows[stream] : undefined
+  return flow === undefined ? stream : `${stream}  ${fmt(flow, 3)}`
 }
 
 /**
@@ -168,21 +196,42 @@ export function fmt(value, digits = 4) {
  * from one that goes up), magnitude sets the property, and the
  * stylesheet decides what either looks like.
  *
+ * Width and colour from the solution views (`solution.js`) go the same
+ * way: a class and a custom property, `--w` and `--c`. A wire coloured by
+ * a variable is not also tinted by a sensitivity --- one colour cannot
+ * say two things --- so `colors` wins and the tint is dropped.
+ *
  * @param {Array} edges  edges from `toGraph`
- * @param {{flows?: Object, tints?: Object}} data
+ * @param {{flows?: Object, tints?: Object, widths?: Object, colors?: Object}} data
  */
-export function decorate(edges, { flows = null, tints = null } = {}) {
-  if (!flows && !tints) return edges
+export function decorate(edges, { flows = null, tints = null, widths = null, colors = null } = {}) {
+  if (!flows && !tints && !widths && !colors) return edges
+  if (colors) tints = null
   return edges.map((edge) => {
     const stream = edge.data?.stream
     const flow = flows ? flows[stream] : undefined
     const tint = tints ? tints[stream] : undefined
+    const width = widths ? widths[stream] : undefined
+    const color = colors ? colors[stream] : undefined
     const next = { ...edge }
+    const classes = [edge.class ?? '']
+    const style = []
     if (flow !== undefined) next.label = `${edge.label}  ${fmt(flow, 3)}`
     if (tint !== undefined && tint !== 0) {
-      next.class = `${edge.class} tinted ${tint > 0 ? 'up' : 'down'}`.trim()
-      next.style = `--tint: ${Math.abs(tint).toFixed(3)}`
+      classes.push('tinted', tint > 0 ? 'up' : 'down')
+      style.push(`--tint: ${Math.abs(tint).toFixed(3)}`)
     }
+    if (width !== undefined) {
+      classes.push('sized')
+      style.push(`--w: ${width.toFixed(2)}px`)
+    }
+    if (color !== undefined) {
+      classes.push('colored')
+      style.push(`--c: ${color}`)
+    }
+    const cls = classes.join(' ').trim()
+    if (cls !== (edge.class ?? '')) next.class = cls
+    if (style.length) next.style = style.join('; ')
     return next
   })
 }

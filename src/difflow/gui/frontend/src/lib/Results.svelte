@@ -11,12 +11,15 @@
 -->
 <script>
   import { fmt, streamTable, tornado } from './model/results.js'
+  import { ACCELERATIONS, solverValue } from './model/solver.js'
 
   let {
     solve = null,
     levers = null,
     sensitivity = null,
     busy = false,
+    solver = null,
+    onsolver = () => {},
     onsensitivity = () => {},
     onclose = () => {},
   } = $props()
@@ -46,6 +49,21 @@
     rows.sort((a, b) => Math.abs(b.rel ?? 0) - Math.abs(a.rel ?? 0))
     return rows
   })
+
+  /**
+   * One solver option changed: send it, and let the reload show it.
+   *
+   * A refused value is put back to the one in force. Nothing else would:
+   * the prop did not change, so the field would go on showing a number
+   * the solver is not using.
+   */
+  async function setOption(key, value, field) {
+    const answer = await onsolver({ [key]: solverValue(key, value) })
+    if (!answer?.ok && field && solver) {
+      if (field.type === 'checkbox') field.checked = solver[key]
+      else field.value = String(solver[key])
+    }
+  }
 
   const run = () => {
     if (lever) onsensitivity({ lever })
@@ -84,7 +102,7 @@
   </header>
 
   <div class="body">
-    {#if !solve}
+    {#if !solve && tab !== 'solve'}
       <p class="hint">Nothing solved yet. Press Solve.</p>
 
     {:else if tab === 'streams'}
@@ -98,7 +116,7 @@
             {#each table.species as s (s)}
               <th>{showFractions ? `x_${s}` : `F_${s}`}</th>
             {/each}
-            <th class="name">phase</th>
+            {#if table.phases}<th class="name">phase</th>{/if}
           </tr>
         </thead>
         <tbody>
@@ -111,13 +129,55 @@
               {#each table.species as s, i (s)}
                 <td>{fmt(showFractions ? row.fractions[i] : row.flows[i])}</td>
               {/each}
-              <td class="name soft">{row.phase ?? ''}</td>
+              {#if table.phases}
+                <td class="name soft">{row.phase ?? ''}</td>
+              {/if}
             </tr>
           {/each}
         </tbody>
       </table>
 
     {:else if tab === 'solve'}
+      {#if solver}
+        <!-- Saved with the file. A change drops the streams: they were
+             solved under the old options, and a looser tolerance is
+             exactly the change that leaves them looking the same. -->
+        <fieldset class="solver" disabled={busy}>
+          <legend>recycle solver</legend>
+          <label>
+            <span>tolerance</span>
+            <input type="text" inputmode="decimal" size="8"
+                   value={String(solver.tol)}
+                   onchange={(e) => setOption('tol', e.currentTarget.value,
+                                         e.currentTarget)} />
+          </label>
+          <label>
+            <span>max iterations</span>
+            <input type="text" inputmode="numeric" size="5"
+                   value={String(solver.max_iter)}
+                   onchange={(e) => setOption('max_iter', e.currentTarget.value,
+                                         e.currentTarget)} />
+          </label>
+          <label>
+            <span>acceleration</span>
+            <select value={solver.acceleration}
+                    onchange={(e) => setOption('acceleration', e.currentTarget.value,
+                                         e.currentTarget)}>
+              {#each ACCELERATIONS as a (a)}<option value={a}>{a}</option>{/each}
+            </select>
+          </label>
+          <label class="check">
+            <input type="checkbox" checked={solver.clip_negative_flows}
+                   onchange={(e) => setOption('clip_negative_flows',
+                                              e.currentTarget.checked,
+                                              e.currentTarget)} />
+            <span>clip negative tear flows</span>
+          </label>
+        </fieldset>
+      {/if}
+      {#if !solve}
+        <p class="hint">Nothing solved yet. Press Solve.</p>
+      {:else}
       <dl class="diagnostics">
         <dt>converged</dt>
         <dd class:bad={solve.converged === false}>
@@ -136,11 +196,24 @@
              ? solve.tear_streams.join(', ')
              : 'none — solved in sequence'}</dd>
       </dl>
+      {#each solve.audit?.warnings ?? [] as warning (warning)}
+        <p class="warn">The solve returned, but {warning}.</p>
+      {/each}
+      {#if solve.audit?.mass}
+        <dl class="diagnostics">
+          <dt>mass in</dt><dd>{fmt(solve.audit.mass.in)} kg/s</dd>
+          <dt>mass out</dt>
+          <dd class:bad={Math.abs(solve.audit.mass.relative_gap) > 1e-4}>
+            {fmt(solve.audit.mass.out)} kg/s
+          </dd>
+        </dl>
+      {/if}
       {#if solve.converged === false}
         <p class="warn">
           The tear residual never reached the tolerance. The streams above
           are the last iterate, not a solution.
         </p>
+      {/if}
       {/if}
 
     {:else}
@@ -271,6 +344,21 @@
   .name { text-align: left; font-family: ui-monospace, SFMono-Regular, Menlo,
           monospace; }
   .soft { color: var(--ink-soft); }
+
+  fieldset.solver {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem 1rem;
+    margin: 0.4rem 0;
+    padding: 0.3rem 0.6rem 0.5rem;
+    border: 1px solid var(--grid);
+    border-radius: 4px;
+    font-size: 0.78rem;
+  }
+  fieldset.solver legend { color: var(--ink-soft); padding: 0 0.3rem; }
+  fieldset.solver label { display: flex; align-items: center; gap: 0.35rem; }
+  fieldset.solver span { color: var(--ink-soft); }
 
   dl.diagnostics {
     display: grid;

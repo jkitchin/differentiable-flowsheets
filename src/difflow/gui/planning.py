@@ -11,8 +11,10 @@ writers already know how to render.
 
 Two things are deliberately not here. There is no planner run: the panel
 linearizes, it does not optimize, so there are no prices, no
-constraints and no shadow prices --- and therefore no ``.lp`` or
-``.mps``, which are renderings of an LP that does not exist yet. A
+constraints and no shadow prices. The ``.lp`` and ``.mps`` it writes are
+therefore the *structural* LP --- the model rows ``y = y0 + J (u - u0)``,
+the lever bounds and the trust region --- with a zero objective, for a
+planning engineer to put prices and specs on in their own system. A
 planner run is `difflow plan-export`'s job, and the JSON manifest this
 writes is what that run would consume. And the finite-difference check
 is offered but never implied: it costs ``2 n_u`` solves against the AD
@@ -27,9 +29,9 @@ import tempfile
 from dataclasses import asdict
 from typing import Any, Sequence
 
-#: Formats the editor can hand back. ``lp``/``mps`` are absent on
-#: purpose --- see the module docstring.
-FORMATS = ("json", "csv")
+#: Formats the editor can hand back. ``lp``/``mps`` are the structural LP
+#: only --- see the module docstring --- and need Pyomo.
+FORMATS = ("json", "csv", "lp", "mps")
 
 DEFAULT_RADIUS = 0.3
 
@@ -57,7 +59,8 @@ def _bounds(u: Sequence[str], bounds: dict | None, u0) -> tuple[list, list]:
 
 
 def build_block(flowsheet, u: Sequence[str], y: Sequence[str],
-                bounds: dict | None = None, name: str = "flowsheet"):
+                bounds: dict | None = None, name: str = "flowsheet",
+                solve_kwargs: dict | None = None):
     """A planning block over the open flowsheet.
 
     Args:
@@ -67,23 +70,26 @@ def build_block(flowsheet, u: Sequence[str], y: Sequence[str],
         y: output keys, ``"<stream>.<quantity>"``.
         bounds: ``{lever: {"lb": float, "ub": float}}``, partial.
         name: block name, which prefixes every qualified variable.
+        solve_kwargs: passed through to :meth:`Flowsheet.solve`.
 
     Returns:
         A :class:`~difflow.planning.block.Block`.
     """
     from difflow.planning import Block
 
-    probe = Block.from_flowsheet(flowsheet, u=list(u), y=list(y), name=name)
+    probe = Block.from_flowsheet(flowsheet, u=list(u), y=list(y), name=name,
+                                 solve_kwargs=solve_kwargs)
     lb, ub = _bounds(u, bounds, probe.u0)
     return Block.from_flowsheet(flowsheet, u=list(u), y=list(y), name=name,
-                                lb=lb, ub=ub)
+                                lb=lb, ub=ub, solve_kwargs=solve_kwargs)
 
 
 def linearize(flowsheet, u: Sequence[str], y: Sequence[str], *,
               bounds: dict | None = None,
               radius: float = DEFAULT_RADIUS,
               check: bool = False,
-              name: str = "flowsheet") -> tuple[Any, dict]:
+              name: str = "flowsheet",
+              solve_kwargs: dict | None = None) -> tuple[Any, dict]:
     """Linearize, and report it the way the panel needs to show it.
 
     Args:
@@ -94,6 +100,7 @@ def linearize(flowsheet, u: Sequence[str], y: Sequence[str], *,
         radius: trust-region radius, as a fraction of each lever's range.
         check: also verify the AD Jacobian against central differences.
         name: block name.
+        solve_kwargs: passed through to :meth:`Flowsheet.solve`.
 
     Returns:
         ``(delta_vector_set, answer)``. The answer is JSON-safe and
@@ -104,10 +111,12 @@ def linearize(flowsheet, u: Sequence[str], y: Sequence[str], *,
     from difflow.planning.export import DeltaVectorSet
     from difflow.planning.linearize import linearize_block
 
-    block = build_block(flowsheet, u, y, bounds, name)
+    block = build_block(flowsheet, u, y, bounds, name, solve_kwargs)
     lin = linearize_block(block)
     dvs = DeltaVectorSet.from_block(block, lin, radius=radius,
                                     source="difflow.gui")
+    #: what `.lp` and `.mps` render (see `structural_lp`)
+    dvs.lp_model = structural_lp(block, lin, radius)
 
     notes: dict[str, str] = {}
     try:
@@ -143,6 +152,20 @@ def linearize(flowsheet, u: Sequence[str], y: Sequence[str], *,
     return dvs, answer
 
 
+def structural_lp(block, lin, radius: float):
+    """The linearization as an LP with no objective.
+
+    Every price is zero, so the objective is empty: the rows and bounds
+    are the model and where it is valid, and what is worth what is the
+    planner's to say. Not a plan, and not a stand-in for one.
+    """
+    from difflow.planning import Network
+    from difflow.planning.assemble import build_lp
+
+    return build_lp(Network([block]), {block.name: lin}, prices={},
+                    radius=radius)
+
+
 def files(dvs, fmt: str, stem: str = "flowsheet") -> list[dict]:
     """The export as named text files, ready for the browser to save.
 
@@ -159,15 +182,21 @@ def files(dvs, fmt: str, stem: str = "flowsheet") -> list[dict]:
     Returns:
         ``[{"name": ..., "text": ...}, ...]``.
     """
-    from difflow.planning.export import write_csv, write_json
+    from difflow.planning.export import write_csv, write_json, write_lp, write_mps
 
     if fmt not in FORMATS:
         raise ValueError(f"unknown format {fmt!r}; have {', '.join(FORMATS)}")
     with tempfile.TemporaryDirectory() as scratch:
         if fmt == "json":
             written = [write_json(dvs, os.path.join(scratch, f"{stem}.json"))]
-        else:
+        elif fmt == "csv":
             written = write_csv(dvs, scratch)
+        else:
+            lp_model = getattr(dvs, "lp_model", None)
+            if lp_model is None:
+                raise ValueError(f"no LP to write as .{fmt}: linearize again")
+            writer = write_lp if fmt == "lp" else write_mps
+            written = [writer(lp_model, os.path.join(scratch, f"{stem}.{fmt}"))]
         return [{"name": os.path.basename(path),
                  "text": open(path, encoding="utf-8").read()}
                 for path in written]

@@ -20,11 +20,15 @@
   } from '@xyflow/svelte'
   import '@xyflow/svelte/dist/style.css'
 
+  import StreamCard from './StreamCard.svelte'
+  import UnitCard from './UnitCard.svelte'
+  import WireLegend from './WireLegend.svelte'
   import StreamNode from './nodes/StreamNode.svelte'
   import UnitNode from './nodes/UnitNode.svelte'
   import { connectionWire, deleteRequests, dropPosition } from './model/edit.js'
   import { toGraph, toPositions } from './model/graph.js'
   import { decorate } from './model/results.js'
+  import { colorOptions, colorScale, flowWidths, streamSummary, unitSummary } from './model/solution.js'
 
   let {
     document: doc = null,
@@ -32,10 +36,16 @@
     pending = [],
     flows = null,
     tints = null,
+    // The last good solve, for the hover card and the solution views.
+    solve = null,
+    widthByFlow = false,
+    colorBy = '',
+    oncolorby = () => {},
     catalog = {},
     portLabels = false,
     dark = false,
     onconnect = () => {},
+    onattach = () => {},
     ondeletions = () => {},
     onmove = () => {},
     onadd = () => {},
@@ -61,10 +71,105 @@
   // Rebuilt whenever the served document changes. Positions the user has
   // dragged live on the node objects, so this deliberately re-reads them
   // from `positions` -- the caller decides what the truth is.
+  let theme = $derived(dark ? 'dark' : 'light')
+  let sized = $derived(widthByFlow && solve ? flowWidths(solve) : null)
+  let scale = $derived(colorBy && solve ? colorScale(solve, colorBy, theme) : null)
+
   $effect(() => {
     const graph = toGraph(doc, positions, { catalog, portLabels, pending })
-    nodes = graph.nodes
-    edges = decorate(graph.edges, { flows, tints })
+    // Solved, a port's native tooltip ("leaves the flowsheet as a
+    // product") would open on top of the stream card, which says more.
+    // `flows` too, for the label beside each product's ring.
+    nodes = solve
+      ? graph.nodes.map((n) => ({ ...n, data: { ...n.data, solved: true, flows } }))
+      : graph.nodes
+    edges = decorate(graph.edges, {
+      flows, tints, widths: sized?.widths ?? null, colors: scale?.colors ?? null,
+    })
+  })
+
+  // What is being hovered --- a stream or a unit --- or the stream pinned
+  // by a click, and where the pointer was relative to the canvas. A pinned
+  // card outlives the hover; hovering something else while one is pinned
+  // shows nothing new --- the pin is what the user asked to keep reading.
+  let hover = $state(null)
+  let pinned = $state(null)
+  let dragging = $state(false)
+  let shown = $derived(pinned ?? hover)
+
+  /**
+   * The wire a label belongs to. On a short wire the label covers most of
+   * it, so the label has to answer a hover as the wire would. The library
+   * portals labels out of their edge and gives them no id, but every
+   * label's text is one `decorate` wrote, and one stream feeds one wire.
+   */
+  function labelled(label) {
+    const text = label.textContent.trim()
+    return edges.find((e) => String(e.label ?? '').trim() === text) ?? null
+  }
+
+  const fromEdge = (edge) =>
+    edge ? { kind: 'stream', stream: edge.data?.stream, dest: edge.data?.destStream } : null
+
+  /**
+   * What the element under the pointer stands for, most specific first.
+   *
+   * A port before its unit: a handle is inside its node, and the stream
+   * at a port is what someone pointing at a port wants. That is also the
+   * only way to read a PRODUCT, which has no wire --- the last unit's
+   * outlets are rings on its edge and nothing else. Then a wire's label,
+   * the wire, a feed's box, and last the unit itself.
+   */
+  function target(el) {
+    if (!el?.closest || !surface?.contains(el)) return null
+    const handle = el.closest('.svelte-flow__handle')
+    const id = handle?.getAttribute('data-handleid') ?? ''
+    if (/^(in|out):/.test(id)) return { kind: 'stream', stream: id.slice(id.indexOf(':') + 1) }
+    const label = el.closest('.svelte-flow__edge-label')
+    if (label) return fromEdge(labelled(label))
+    const wire = el.closest('.svelte-flow__edge')
+    if (wire) return fromEdge(edges.find((e) => e.id === wire.getAttribute('data-id')))
+    const node = el.closest('.svelte-flow__node')
+    const nodeId = node?.getAttribute('data-id') ?? ''
+    if (nodeId.startsWith('feed:')) return { kind: 'stream', stream: nodeId.slice(5) }
+    const unit = (doc?.units ?? []).find((u) => u.name === nodeId)
+    if (unit) return { kind: 'unit', unit }
+    return null
+  }
+
+  function place(event, what) {
+    const box = surface.getBoundingClientRect()
+    return { ...what, x: event.clientX - box.left, y: event.clientY - box.top }
+  }
+
+  function over(event) {
+    if (!solve || dragging) return
+    const what = target(event.target)
+    const same = what && hover && what.kind === hover.kind &&
+      (what.kind === 'unit' ? what.unit.name === hover.unit?.name : what.stream === hover.stream)
+    // Moving between the pieces of one thing (a node's label and its
+    // symbol) keeps the card where it opened rather than chasing the cursor.
+    if (what && !same) hover = place(event, what)
+  }
+
+  function out(event) {
+    if (!target(event.relatedTarget)) hover = null
+  }
+
+  /** Clicking a wire or its label pins that stream's card. */
+  function click(event) {
+    if (!solve) return
+    const el = event.target
+    if (!el?.closest?.('.svelte-flow__edge, .svelte-flow__edge-label')) return
+    const what = target(el)
+    if (what?.kind !== 'stream') return
+    pinned = pinned?.stream === what.stream ? null : place(event, what)
+  }
+
+  // A solve that has gone (an edit) takes the cards with it: they would
+  // be describing a flowsheet that no longer exists.
+  $effect(() => {
+    if (!solve) { hover = null; pinned = null }
   })
 
   // The results drawer opens underneath, taking height off the bottom of
@@ -101,6 +206,7 @@
   function connected(connection) {
     const answer = connectionWire(connection)
     if (answer.wire) onconnect(answer.wire)
+    else if (answer.attach) onattach(answer.attach)
     else onrefuse(answer.error)
   }
 
@@ -147,6 +253,9 @@
   class="canvas"
   bind:this={surface}
   role="application"
+  onpointerover={over}
+  onpointerout={out}
+  onclick={click}
   ondragover={(e) => {
     if (readonly) return
     e.preventDefault()
@@ -168,9 +277,11 @@
     deleteKey={readonly ? [] : ['Backspace', 'Delete']}
     onconnect={connected}
     ondelete={deleted}
-    onnodedragstop={() => onmove(toPositions(nodes))}
+    onnodedragstart={() => { dragging = true; hover = null }}
+    onnodedragstop={() => { dragging = false; onmove(toPositions(nodes)) }}
     onnodeclick={({ node }) => onselect(node)}
-    onpaneclick={() => onselect(null)}
+    onpaneclick={() => { pinned = null; onselect(null) }}
+
     onnodecontextmenu={contextMenu}
   >
     <Background variant={BackgroundVariant.Dots} gap={16} size={1} />
@@ -179,10 +290,46 @@
          whole, and it covers the corner a product node lands in. -->
     <Controls showInteractive={!readonly} />
   </SvelteFlow>
+
+  {#if shown?.kind === 'unit' && solve}
+    <UnitCard
+      name={shown.unit.name}
+      operation={shown.unit.operation}
+      summary={unitSummary(shown.unit, solve, theme)}
+      x={shown.x}
+      y={shown.y}
+    />
+  {:else if shown && solve}
+    <StreamCard
+      name={shown.stream}
+      dest={shown.dest}
+      summary={streamSummary(solve.streams?.[shown.stream], solve.species, theme)}
+      x={shown.x}
+      y={shown.y}
+      pinned={!!pinned}
+      hint={shown.dest !== undefined ? 'click the wire to pin' : ''}
+      onclose={() => (pinned = null)}
+    />
+  {/if}
+
+  {#if solve && (colorBy || widthByFlow)}
+    <WireLegend
+      options={colorOptions(solve)}
+      {colorBy}
+      lo={scale?.lo ?? null}
+      hi={scale?.hi ?? null}
+      uniform={scale?.uniform ?? false}
+      peak={sized?.peak ?? null}
+      showWidth={widthByFlow}
+      {theme}
+      onchange={oncolorby}
+      onclose={() => oncolorby('')}
+    />
+  {/if}
 </div>
 
 <style>
-  .canvas { width: 100%; height: 100%; }
+  .canvas { position: relative; width: 100%; height: 100%; }
 
   /* Ports. Small, grey and square-ish rather than the library's blue
      circles: on a drawing whose accent means "this is a recycle" and
@@ -287,6 +434,27 @@
   }
   .canvas :global(.svelte-flow__edge.tinted.down .svelte-flow__edge-path) {
     stroke: var(--accent);
+  }
+
+  /* The solution views. After the tint rules, so a wire sized or
+     coloured by the solve reads as that; a recycle keeps its dashes, which
+     say what kind of stream it is and not what is in it. The hit area is
+     the library's own invisible wide path, so a thin wire is still easy
+     to hover. */
+  .canvas :global(.svelte-flow__edge.sized .svelte-flow__edge-path) {
+    stroke-width: var(--w);
+  }
+  /* A recycle's dashes scale with its width. At a fixed 6-4 a wide
+     dashed wire is a row of squares, which reads as a different line
+     style rather than as the same one drawn heavier. */
+  .canvas :global(.svelte-flow__edge.recycle.sized .svelte-flow__edge-path) {
+    stroke-dasharray: calc(var(--w) * 2.5 + 4px) calc(var(--w) * 1.5 + 3px);
+  }
+  .canvas :global(.svelte-flow__edge.colored .svelte-flow__edge-path) {
+    stroke: var(--c);
+  }
+  .canvas :global(.svelte-flow__edge:hover .svelte-flow__edge-path) {
+    filter: drop-shadow(0 0 2px var(--series));
   }
 
   /* The library's own furniture, in difflow's palette. */

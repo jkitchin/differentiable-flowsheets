@@ -26,6 +26,15 @@ export const TAGGED = {
 }
 
 const NUMERIC = /\b(float|int|Array|Scalar)\b/
+/** Annotations that admit something besides a number (the server's `_LOOSE`). */
+const LOOSE = /\b(str|Any|Callable|object)\b/
+
+/** Whether a declared type is a number and nothing else that can be typed. */
+export const numericType = (type) =>
+  NUMERIC.test(String(type ?? '')) && !LOOSE.test(String(type ?? ''))
+
+/** What was typed into a number field and is not one. */
+export class ParseError extends Error {}
 
 /** The tag on a value, or null if it is plain. */
 export function tagOf(value) {
@@ -57,7 +66,13 @@ export function classify(value, spec = {}) {
   }
   if (typeof value === 'boolean') return { kind: 'boolean', editable: true, text: String(value) }
   if (typeof value === 'number') return { kind: 'number', editable: true, text: String(value) }
-  if (typeof value === 'string') return { kind: 'text', editable: true, text: value }
+  // A number field holding text (a file written by hand, or by an
+  // editor before it checked) is still a number field: offering a text
+  // box is what let 'abc' in to begin with.
+  if (typeof value === 'string') {
+    const kind = numericType(spec.type) ? 'number' : 'text'
+    return { kind, editable: true, text: value }
+  }
   if (Array.isArray(value)) {
     const flat = value.every((v) => typeof v === 'number' || typeof v === 'string')
     return flat
@@ -97,10 +112,14 @@ export function shape(value) {
 /**
  * Turn what was typed back into a value the server will accept.
  *
+ * A number field refuses anything that is not one, by throwing a
+ * {@link ParseError}: sent on as text, a typo was stored and every solve
+ * after it failed far from the field that caused it.
+ *
  * `isFinite`, not `!isNaN`: a field may legitimately hold `Infinity`
  * (`mass_action_kinetics` writes it into `K_eq` for every irreversible
- * reaction), and it travels as the string the server knows how to
- * restore rather than as a number JSON cannot write.
+ * reaction). It is returned as the number; `safe` in api.js tags it
+ * for the wire, which JSON has no literal for.
  */
 export function parse(raw, kind) {
   const text = String(raw).trim()
@@ -108,16 +127,28 @@ export function parse(raw, kind) {
   if (kind === 'list') {
     if (text === '') return []
     const parts = text.split(',').map((p) => p.trim())
-    const numbers = parts.map(Number)
-    // a list of numbers must not arrive as a list of strings
-    return numbers.every((n) => Number.isFinite(n)) ? numbers : parts
+    const numbers = parts.map(number)
+    // a list of numbers must not arrive as a list of strings, and one
+    // holding an Infinity (shown as such) is still a list of numbers
+    return numbers.every((n) => n !== null) ? numbers : parts
   }
   if (text === '') return null
   if (kind === 'number') {
-    const n = Number(text)
-    return Number.isFinite(n) ? n : text
+    const n = number(text)
+    if (n !== null) return n
+    throw new ParseError(`'${text}' is not a number`)
   }
   return text
+}
+
+/** `text` as a number, infinities included; `null` if it is not one. */
+function number(text) {
+  if (text === '') return null
+  const n = Number(text)
+  if (Number.isFinite(n)) return n
+  if (/^\+?(inf|infinity)$/i.test(text)) return Infinity
+  if (/^-(inf|infinity)$/i.test(text)) return -Infinity
+  return null
 }
 
 /** The label for a field: its name, its symbol and its units. */

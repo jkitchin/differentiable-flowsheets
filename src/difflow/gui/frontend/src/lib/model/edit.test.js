@@ -76,12 +76,12 @@ test('nothing at all is not a connection', () => {
   }
 })
 
-test('a drag from a feed says why it is not', () => {
+test('a drag from a feed to anything but an inlet says why it is not', () => {
   const answer = connectionWire({
     source: 'feed:F1', sourceHandle: 'out:F1',
-    target: 'mixer', targetHandle: 'in:feed',
+    target: 'product:out', targetHandle: 'in:out',
   })
-  assert.ok(!answer.wire)
+  assert.ok(!answer.wire && !answer.attach)
   assert.match(answer.error, /feeds and products/)
 })
 
@@ -259,4 +259,17 @@ test('only the nodes that actually moved are sent', () => {
 test('a node the server has never placed counts as moved', () => {
   assert.deepEqual(movedPositions({ a: { x: 1, y: 2 } }, {}), { a: { x: 1, y: 2 } })
   assert.deepEqual(movedPositions({ a: { x: 1, y: 2 } }, null), { a: { x: 1, y: 2 } })
+})
+
+test('a feed dragged onto an inlet hands the feed to that inlet', () => {
+  const answer = connectionWire({
+    source: 'feed:crude', sourceHandle: 'out:crude',
+    target: 'cstr', targetHandle: 'in:cstr_in',
+  })
+  assert.deepEqual(answer, { attach: { stream: 'cstr_in', feed: 'crude' } })
+  // and anything else touching a feed or product node is still refused
+  assert.ok(connectionWire({
+    source: 'cstr', sourceHandle: 'out:out',
+    target: 'product:out', targetHandle: 'in:out',
+  }).error)
 })

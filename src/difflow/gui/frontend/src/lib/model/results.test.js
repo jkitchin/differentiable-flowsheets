@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import { decorate, flowLabels, flowTints, fmt, speciesOf, streamTable,
+import { decorate, flowLabels, flowTints, fmt, productLabel, speciesOf, streamTable,
          tornado, total } from './results.js'
 
 const SOLVE = {
@@ -32,6 +32,11 @@ test('a species the order does not mention is still shown', () => {
 test('total is the sum of the species flows and nothing else', () => {
   assert.equal(total(SOLVE.streams.feed), 1.1)
   assert.equal(total({ T: 350, P: 101325 }), 0)
+})
+
+test('a total with a NaN in it is NaN, not the sum of the rest', () => {
+  assert.ok(Number.isNaN(total({ F_a: 1, F_b: NaN })))
+  assert.ok(Number.isNaN(total({ F_a: 1, F_b: Infinity })))
 })
 
 test('the table has a column per species across every stream', () => {
@@ -94,7 +99,11 @@ test('an empty tornado has no height and does not divide by zero', () => {
 })
 
 test('numbers are readable rather than complete', () => {
-  assert.equal(fmt(101325), '1.013e+5')
+  assert.equal(fmt(101325), '1.013e5')
+  // Rounding decides the form, not the unrounded value.
+  assert.equal(fmt(99999.7), '1.000e5')
+  assert.equal(fmt(-99999.7), '-1.000e5')
+  assert.equal(fmt(0.00099996), '0.001')
   assert.equal(fmt(0.5936974270923778), '0.5937')
   assert.equal(fmt(0), '0')
   assert.equal(fmt(1.0), '1')
@@ -125,4 +134,19 @@ test('decoration adds the flow to the label and a signed tint class', () => {
 test('decoration with nothing to say returns the edges themselves', () => {
   const edges = [{ id: 'a', label: 'liq', class: '', data: { stream: 'liq' } }]
   assert.equal(decorate(edges, {}), edges)
+})
+
+test('the phase column is offered only when some stream has a phase', () => {
+  const streams = { a: { F_water: 1, T: 300, P: 1e5 } }
+  assert.equal(streamTable({ species: ['water'], streams }).phases, false)
+  streams.b = { F_water: 1, T: 300, P: 1e5, phase: 'vapor' }
+  const table = streamTable({ species: ['water'], streams })
+  assert.equal(table.phases, true)
+  assert.deepEqual(table.rows.map((r) => r.phase), [null, 'vapor'])
+})
+
+test('a product is labelled with its name, and its flow once solved', () => {
+  assert.equal(productLabel('liq'), 'liq')
+  assert.equal(productLabel('liq', { vap: 1 }), 'liq')
+  assert.equal(productLabel('liq', { liq: 0.5 }), `liq  ${fmt(0.5, 3)}`)
 })

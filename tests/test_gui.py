@@ -102,9 +102,11 @@ class Client:
         self.server.shutdown()
         self.server.server_close()
 
-    def get(self, path):
+    def get(self, path, headers=None):
+        request = urllib.request.Request(self.base + path,
+                                         headers=headers or {})
         try:
-            with urllib.request.urlopen(self.base + path) as response:
+            with urllib.request.urlopen(request) as response:
                 return response.status, response.read()
         except urllib.error.HTTPError as exc:
             return exc.code, exc.read()
@@ -374,6 +376,31 @@ class TestEditing:
         assert excinfo.value.code == 400
         assert "bad JSON" in json.loads(excinfo.value.read())["error"]
 
+    @pytest.mark.parametrize("raw, expect", [
+        (b"[1, 2]", "JSON object"),
+        (b"3", "JSON object"),
+        (b"null", "JSON object"),
+        (b'{"a": "\xff"}', "not UTF-8"),
+    ])
+    def test_a_body_that_is_not_an_object_is_refused_as_such(self, client, raw, expect):
+        """Said about the request, not as an AttributeError from a route."""
+        request = urllib.request.Request(
+            client.base + "/api/solve", data=raw,
+            headers={"Content-Type": "application/json",
+                     gui.TOKEN_HEADER: client.server.token}, method="POST",
+        )
+        with pytest.raises(urllib.error.HTTPError) as excinfo:
+            urllib.request.urlopen(request)
+        assert excinfo.value.code == 400
+        error = json.loads(excinfo.value.read())["error"]
+        assert expect in error and "AttributeError" not in error
+
+    def test_a_query_string_does_not_hide_a_route(self, client):
+        status, payload = client.get_json("/api/flowsheet?v=2")
+        assert status == 200 and "flowsheet" in payload
+        status, _ = client.get("/?reload=1")
+        assert status == 200
+
 
 # =============================================================================
 # Incremental routes
@@ -512,8 +539,8 @@ class TestNonFiniteFloats:
 
     def test_json_safe_and_restore_are_inverse(self):
         value = {"a": [1.0, float("inf"), -float("inf")], "b": {"c": 2.0}}
-        assert _json_safe(value) == {"a": [1.0, "Infinity", "-Infinity"],
-                                     "b": {"c": 2.0}}
+        assert _json_safe(value) == {
+            "a": [1.0, {"$float": "inf"}, {"$float": "-inf"}], "b": {"c": 2.0}}
         assert _json_restore(_json_safe(value)) == value
 
     def test_nan_survives_the_round_trip(self):
@@ -522,6 +549,18 @@ class TestNonFiniteFloats:
 
     def test_ordinary_strings_are_left_alone(self):
         assert _json_restore({"phase": "vapor"}) == {"phase": "vapor"}
+
+    def test_a_string_that_spells_a_non_finite_float_stays_a_string(self):
+        """It used to be turned into one: a unit or species called NaN
+        arrived as a float."""
+        value = {"name": "NaN", "notes": ["Infinity", "-Infinity"]}
+        assert _json_restore(value) == value
+
+    def test_a_unit_named_nan_can_be_renamed_to_through_the_server(self, client):
+        status, payload = client.send("PATCH", "/api/unit/reactor",
+                                      {"name": "NaN"})
+        assert status == 200 and payload["ok"], payload
+        assert any(u.name == "NaN" for u in client.session.flowsheet.units)
 
 
 # =============================================================================
@@ -546,7 +585,7 @@ class TestFiles:
     def test_save_without_a_path_is_refused_not_raised(self, thermo):
         session = FlowsheetSession(build_flowsheet(thermo))
         result = session.save()
-        assert not result["ok"] and "path" in result["error"]
+        assert not result["ok"] and "Save As" in result["error"]
 
     def test_an_empty_session_is_an_empty_flowsheet(self):
         """Not `None`. See `TestAnEmptyEditor` for why.
@@ -563,7 +602,11 @@ class TestFiles:
         assert session.solve() == {
             "ok": True, "streams": {}, "species": [], "converged": True,
             "iterations": 0, "method": "direct", "residual": 0.0,
-            "tol": 1e-08, "tear_streams": [], "pending": [],
+            "tol": 1e-08, "tear_streams": [],
+            "audit": {"warnings": [], "mass": None},
+            "solver": {"tol": 1e-8, "max_iter": 100,
+                       "acceleration": "anderson",
+                       "clip_negative_flows": True},
         }
         assert session.code()["error"] is None
         assert "Flowsheet(species_order=[]" in session.code()["source"]
@@ -590,6 +633,22 @@ class TestFailureReporting:
         result = FlowsheetSession(fs).solve()
         assert not result["ok"]
         assert result["error"], "a failure must carry a message"
+
+    def test_an_edit_clears_the_last_solve_error(self, thermo):
+        """The assistant's solve brief must not describe a flowsheet that has
+        since been edited."""
+        fs = Flowsheet(species_order=SPECIES)
+        fs.add_feed("feed", make_stream({"water": 1.0}, T=350.0, P=101325.0))
+        fs.add_unit(Unit("heat", Heater(HeaterParams(T_out=360.0)),
+                         ["feed", "recycle"], ["hot"]))
+        fs.add_unit(Unit("flash", Flash(FlashParams(species_order=SPECIES), thermo),
+                         ["hot"], ["liq", "vap"]))
+        fs.add_recycle("liq", "recycle")
+        session = FlowsheetSession(fs)
+        assert not session.solve()["ok"]
+        assert session.solve_error
+        assert session.remove_feed("feed")["ok"]
+        assert session.solve_error is None
 
     def test_an_unregistered_unit_makes_the_code_panel_report(self, thermo):
         class HomeMadeUnit:
@@ -1112,6 +1171,13 @@ class TestAnEmptyEditor:
         assert answer["ok"], answer
         assert [u.name for u in empty.session.flowsheet.units] == ["mixer"]
 
+    def test_the_solver_options_route(self, empty):
+        status, answer = empty.post("/api/solver", {"max_iter": 7})
+        assert status == 200 and answer["solver"]["max_iter"] == 7
+        flowsheet = empty.get_json("/api/flowsheet")[1]["flowsheet"]
+        assert flowsheet["view"]["solver"] == {"max_iter": 7}
+        assert not empty.post("/api/solver", {"tol": -1})[1]["ok"]
+
     def test_the_code_context_can_name_them_instead(self, empty):
         """`SPECIES` as well as `species_order`, because the starter says so.
 
@@ -1530,6 +1596,16 @@ class TestSecurity:
         assert client.get("/api/flowsheet")[0] == 200
         assert client.get("/")[0] == 200
 
+    @pytest.mark.parametrize("path", ["/", "/api/flowsheet", "/api/code-context"])
+    def test_a_rebound_host_name_cannot_read_either(self, client, path):
+        """Rebound, the hostile page is same-origin with the answer: "/"
+        would hand it the token, and the API routes the model."""
+        port = client.server.server_address[1]
+        status, body = client.get(path,
+                                  headers={"Host": f"attacker.example:{port}"})
+        assert status == 403
+        assert client.server.token.encode() not in body
+
 
 # =============================================================================
 # The page's own logic
@@ -1778,6 +1854,51 @@ class TestDocsRendering:
         assert fmt == "rst"
         assert "Stream" in html and "goes in" in html
         assert "difflow.streams" not in html, "`~` abbreviates, as in Sphinx"
+
+    def test_a_link_cannot_carry_script(self):
+        """The panel is put in with {@html}. Raw HTML is already off, but a
+        reST link target is copied into href as written -- a plugin's
+        docstring could otherwise run script in the editor's page."""
+        from difflow.gui import docs
+
+        if not docs.available():
+            pytest.skip("docutils is not installed")
+        for target in ("javascript:alert(1)", "JavaScript:alert(1)",
+                       "data:text/html,x", "vbscript:x"):
+            html, _ = docs.render(f"See `here <{target}>`_.")
+            assert "href" not in html, target
+            assert "here" in html, "the text of the link stays"
+        html, _ = docs.render("See `the book <https://example.org/x>`_.")
+        assert 'href="https://example.org/x"' in html
+        html, _ = docs.render("A <img src=x onerror=alert(1)> tag.")
+        assert "<img" not in html
+
+    def test_an_image_is_not_fetched(self):
+        """A docstring image would be a request the user never made."""
+        from difflow.gui import docs
+
+        if not docs.available():
+            pytest.skip("docutils is not installed")
+        for rst in (".. image:: https://t.example/p.png\n   :alt: a plot",
+                    ".. figure:: //t.example/p.png\n\n   cap",
+                    "x |a| y\n\n.. |a| image:: https://t.example/i.gif",
+                    ".. image:: https://t.example/v.mp4"):
+            html, _ = docs.render(rst)
+            assert "<img" not in html and " src=" not in html, rst
+        html, _ = docs.render(".. image:: https://t.example/p.png\n   :alt: a plot")
+        assert "[a plot]" in html
+
+    def test_an_svg_is_not_pasted_in_from_disk(self, tmp_path):
+        """``:loading: embed`` would inline the file, fetches and all."""
+        from difflow.gui import docs
+
+        if not docs.available():
+            pytest.skip("docutils is not installed")
+        svg = tmp_path / "x.svg"
+        svg.write_text('<svg xmlns="http://www.w3.org/2000/svg">'
+                       '<image href="https://t.example/p.png"/></svg>')
+        html, _ = docs.render(f".. image:: {svg}\n   :loading: embed")
+        assert "<svg" not in html and "t.example" not in html
 
     def test_no_system_messages_reach_the_panel(self):
         """A few docstrings indent in ways docutils reads as a block
@@ -2068,6 +2189,15 @@ class TestPlanning:
             "ok": False, "error": "pick at least one lever and one output"}
         assert session.linearize(["reactor.V"], [])["ok"] is False
 
+    @pytest.mark.parametrize("radius", [float("nan"), float("inf"), -0.1, 0, "wide"])
+    def test_a_radius_that_is_not_a_positive_number_is_refused(self, thermo, radius):
+        """Not linearized into a trust region of NaN or inverted bounds."""
+        session = FlowsheetSession(build_flowsheet(thermo))
+        session.solve()
+        answer = session.linearize(["reactor.V"], ["liq.F_ethanol"], radius=radius)
+        assert answer["ok"] is False and "radius" in answer["error"]
+        assert "planning" not in session.flowsheet.view
+
     def test_a_name_the_flowsheet_does_not_have_is_an_answer(self, thermo):
         session = FlowsheetSession(build_flowsheet(thermo))
         session.solve()
@@ -2114,12 +2244,30 @@ class TestPlanning:
         names = {f["name"] for f in tables["files"]}
         assert "flowsheet_jacobian.csv" in names and "bounds.csv" in names
 
+    @pytest.mark.parametrize("fmt", ["lp", "mps"])
+    def test_the_structural_lp_downloads(self, thermo, fmt):
+        """The model rows and bounds, with nothing to price them."""
+        pytest.importorskip("pyomo")
+        session = FlowsheetSession(build_flowsheet(thermo))
+        session.solve()
+        session.linearize(self.LEVERS, self.OUTPUTS)
+        answer = session.linearization_files(fmt)
+        assert answer["ok"], answer
+        [written] = answer["files"]
+        assert written["name"] == f"flowsheet_delta_vectors.{fmt}"
+        lp = session.delta_vectors.lp_model
+        assert not lp.c.any()             # no prices: an empty objective
+        assert lp.A_eq.shape[0] == len(self.OUTPUTS)
+        text = written["text"]
+        assert ("s.t." in text) if fmt == "lp" else ("ROWS" in text)
+        assert "flowsheet_reactor_V" in text
+
     def test_a_format_that_does_not_exist_is_refused(self, thermo):
         session = FlowsheetSession(build_flowsheet(thermo))
         session.solve()
         session.linearize(self.LEVERS, self.OUTPUTS)
-        answer = session.linearization_files("mps")
-        assert answer["ok"] is False and "mps" in answer["error"]
+        answer = session.linearization_files("xlsx")
+        assert answer["ok"] is False and "xlsx" in answer["error"]
 
     def test_downloading_before_linearizing_says_so(self, thermo):
         assert FlowsheetSession(build_flowsheet(thermo)).linearization_files(
@@ -2254,6 +2402,29 @@ class TestConsole:
         assert session.solve()["ok"]
         assert session.console_run("len(fs.units)")["changed"] is False
         assert session.streams is not None
+
+    def test_a_cell_can_call_the_session_it_advertises(self, thermo):
+        """`session.solve()` from a cell, as CONSOLE_NAMES offers.
+
+        The cell runs while `console_run` holds the session lock, and
+        `solve` takes it again: with a non-reentrant lock that call never
+        returned and every later edit hung. Run in a thread so a
+        regression fails here instead of hanging the suite.
+        """
+        import threading
+
+        session = FlowsheetSession(build_flowsheet(thermo))
+        result = {}
+        worker = threading.Thread(target=lambda: result.update(
+            answer=session.console_run("session.solve()['ok']")), daemon=True)
+        worker.start()
+        worker.join(timeout=120)
+        assert not worker.is_alive(), "console_run deadlocked on session.solve()"
+        assert result["answer"]["error"] is None, result["answer"]["error"]
+        assert result["answer"]["outputs"][-1]["text"] == "True"
+        assert session.streams is not None
+        # and the session still takes edits afterwards
+        assert session.solve()["ok"]
 
     def test_reset_forgets_what_the_console_defined(self, thermo):
         session = FlowsheetSession(build_flowsheet(thermo))
