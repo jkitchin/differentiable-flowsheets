@@ -39,6 +39,16 @@ jobs:
         run: |
           jupyter-book build .
 
+      # The "Ask" docs assistant (docs/ask.md). Its index is written by the
+      # build above; ranking has no exception to throw when it regresses, so
+      # this runs the shipped ask.js over a labelled question set, and checks
+      # that every cited anchor exists in the built pages.
+      - name: Check the docs assistant
+        run: |
+          test -s _build/html/ask-index.json
+          test -s _build/html/_static/ask.js
+          node tests/docs_ask/ask_retrieval.mjs _build/html/ask-index.json
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:

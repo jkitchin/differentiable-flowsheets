@@ -167,15 +167,18 @@ class TestPorts:
         """Guard against the count creeping back up.
 
         What remains is honest: the REE circuits return a dict of named
-        streams, Splitter's width is a call argument, and two entries are
-        model objects with no `__call__` at all.
+        streams, Splitter's width is a call argument, the crude unit's
+        products (with or without its preheat train in front) are whatever
+        side products its column declares (and a gas plant column's
+        likewise), and two
+        entries are model objects with no `__call__` at all.
         """
         unknown = {n for n, s in cat.items() if s.ports.n_outlets is None}
         assert unknown == {
             "ExtractStripCircuit", "ExtractScrubStripCircuit",
             "FullSeparationTrain", "SplitShellCascade",
             "Splitter", "LLEEquilibrium", "TFF",
-        }
+        } | ({"CrudeDistillationUnit", "CrudeUnitWithPreheat", "GasPlantColumn"} & set(cat))
 
 
 # =============================================================================

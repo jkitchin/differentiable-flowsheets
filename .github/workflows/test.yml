@@ -30,8 +30,17 @@ jobs:
   #
   #  * `--splits/--group` then cuts what is left across three jobs, which run
   #    concurrently. Balance comes from `.test_durations`, not from anyone's
-  #    judgement: the three shards hold 993s, 996s and 988s of measured work,
-  #    and came in at 7:12, 6:53 and 6:02.
+  #    judgement -- and those durations are measured HERE, on the runner,
+  #    not on a laptop (#315). A Mac is ~2.3x faster on this suite on
+  #    average but far from uniformly: the crude-unit planning tests are
+  #    ~7x, so Mac numbers put 27 minutes of runner work in one shard and
+  #    8 in another. To re-record, run the suite on CI with
+  #    `--store-durations --durations-path <file>` and upload the file as an
+  #    artifact, once with `-m "not release"` and once with the release
+  #    tier too (publish.yml splits on the same file).
+  #
+  #  * `-n auto` is 2 workers on `ubuntu-latest`, not 4: it counts physical
+  #    cores, and the 4 vCPUs are 2 of them.
   #
   # Three *jobs* and not three pytest invocations in one job: each one re-pays
   # JAX/XLA startup and shares no compiled code with the others, which is dead
@@ -54,13 +63,24 @@ jobs:
   test:
     name: Tests (${{ matrix.python-version }}, shard ${{ matrix.shard }}/3)
     runs-on: ubuntu-latest
-    # A shard is ~7 minutes. 25 is enough headroom for a runner having a bad
-    # day and still short enough to catch a hang, which was the problem with
-    # reading the old 45: at 34 minutes of real work, a cap that meant "this
-    # has hung" and a cap that meant "this is slow today" were the same
-    # number, and run 34425803062 was cancelled at 81% with everything to
-    # that point passing.
-    timeout-minutes: 25
+    # A shard was ~7 minutes when this cap was 25, chosen to be short enough
+    # to catch a hang, which was the problem with reading the old 45: at 34
+    # minutes of real work, a cap that meant "this has hung" and a cap that
+    # meant "this is slow today" were the same number, and run 34425803062
+    # was cancelled at 81% with everything to that point passing.
+    #
+    # After #315 the shards ran 17.7 / 21.6 / 16.6 minutes (run
+    # 36957483515), against 10 / 28 / 10 measured on the runner before it
+    # (the issue saw 16-18 / 20-22 / 6-9) -- on a suite that has grown by
+    # the preheat train and gas plant since. Shard 2 stays the longest: it
+    # holds tests/refinery/test_planning_nonconvergence.py, 776s of runner
+    # time in four tests that cannot be split across workers, which is a
+    # floor for whichever shard holds it. 30 is ~1.4x that
+    # shard: long enough not to fire on a slow runner (the same commit has
+    # measured 3-4 minutes apart), short enough that reaching it means
+    # something is wrong. If a shard creeps toward it, re-record
+    # `.test_durations` (below) before raising it.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -117,10 +137,18 @@ jobs:
       #
       # `-q`, because `-v` from four workers at once interleaves into
       # something nobody reads; a failure still prints its own name.
+      #
+      # `--no-loadscope-reorder` (pytest-xdist >= 3.8) keeps the order
+      # tests/conftest.py gives the work units -- longest recorded duration
+      # first. xdist's own order is by test count, which handed shard 2's
+      # few-test, many-minute refinery files out last, to run alone at the
+      # end (#315). tests/conftest.py also makes the three files that slow
+      # each other down 2-2.5x when overlapped one work unit, so they run
+      # in series on one worker.
       - name: Run tests
         run: |
           python -m pytest tests/ -q --tb=short -m "not release" \
-            -n auto --dist loadfile \
+            -n auto --dist loadfile --no-loadscope-reorder \
             --splits 3 --group ${{ matrix.shard }}
 
   # Verify the package imports with NO optional dependencies installed. The job
@@ -148,10 +176,10 @@ jobs:
       - name: Import every shipped package and resolve the plugins
         run: |
           python -c "
-          import difflow, difflow_bio, difflow_ree, difflow_cc, difflow_gas, difflow_power
+          import difflow, difflow_bio, difflow_ree, difflow_cc, difflow_gas, difflow_power, difflow_refinery
           from importlib.metadata import entry_points
           eps = entry_points(group='difflow.plugins')
-          assert {e.name for e in eps} == {'bio', 'ree', 'cc', 'gas', 'power'}, sorted(e.name for e in eps)
+          assert {e.name for e in eps} == {'bio', 'ree', 'cc', 'gas', 'power', 'refinery'}, sorted(e.name for e in eps)
           for e in eps:
               e.load()
           print('difflow', difflow.__version__, '- all packages import, plugins resolve')

@@ -22,17 +22,19 @@ is for unit operations.
 10. [Large models: what degrades and what does not](#large-models-what-degrades-and-what-does-not)
 11. [Sensitivity of the plan](#sensitivity-of-the-plan)
 12. [Modifier adaptation](#modifier-adaptation)
-13. [Coefficient covariance and back-off](#coefficient-covariance-and-back-off)
-14. [Piecewise-linear blocks and MILP](#piecewise-linear-blocks-and-milp)
-15. [Second-order models: is a delta vector enough?](#second-order-models-is-a-delta-vector-enough)
-16. [Multi-period planning and inventory](#multi-period-planning-and-inventory)
-17. [Solving a quadratic subproblem](#solving-a-quadratic-subproblem)
-18. [Feasibility restoration](#feasibility-restoration)
-19. [Emitting Pyomo](#emitting-pyomo)
-20. [From a flowsheet to a block](#from-a-flowsheet-to-a-block)
-21. [Exporting delta vectors](#exporting-delta-vectors)
-22. [What this module is not](#what-this-module-is-not)
-23. [API summary](#api-summary)
+13. [Which delta vectors are wrong: attribution from plant data](#which-delta-vectors-are-wrong-attribution-from-plant-data)
+14. [Coefficient covariance and back-off](#coefficient-covariance-and-back-off)
+15. [Piecewise-linear blocks and MILP](#piecewise-linear-blocks-and-milp)
+16. [Second-order models: is a delta vector enough?](#second-order-models-is-a-delta-vector-enough)
+17. [Multi-period planning and inventory](#multi-period-planning-and-inventory)
+18. [Solving a quadratic subproblem](#solving-a-quadratic-subproblem)
+19. [Feasibility restoration](#feasibility-restoration)
+20. [Emitting Pyomo](#emitting-pyomo)
+21. [From a flowsheet to a block](#from-a-flowsheet-to-a-block)
+22. [A crude unit as a block](#a-crude-unit-as-a-block)
+23. [Exporting delta vectors](#exporting-delta-vectors)
+24. [What this module is not](#what-this-module-is-not)
+25. [API summary](#api-summary)
 
 ---
 
@@ -288,6 +290,36 @@ provably optimal oracle.
 Back-off (below) is treated as a margin, not a promise: `Spec.violation`
 measures against the stated right-hand side, so eating into the margin is not
 scored as a violation.
+
+### A block that cannot be evaluated
+
+A block with an inner solve has operating points where the solve has no answer.
+A distillation column can dry out, and a flash can lose a phase. The convention
+is that such a block returns **NaN**. The planner treats any non-finite value
+in the network state (`state_is_finite(state)` is false) as a model that cannot
+be evaluated:
+
+- Such a point scores merit `-inf` and violation `+inf` (`planner.score(u)["evaluable"]`
+  is `False`).
+- A proposal there is **rejected** and the radius shrinks. This holds even with
+  `accept_test=False`, because a point that cannot be evaluated cannot be linearised.
+- Restoration never takes such a point as its least-violating one.
+- A start point that cannot be evaluated is an attempt with reason
+  `"start_not_evaluable"`, and any evaluable seed beats it. If no start can be
+  evaluated, `solve()` raises.
+
+This is written down rather than left to IEEE arithmetic. A NaN *merit* already
+fails `rho >= eta_accept`, but the other two cases do not fail on their own:
+
+- A NaN *spec output* scores **zero** violation, because Python's `max(0.0, nan)`
+  is `0.0`. Restoration would then take a failed solve for a feasible point.
+- A NaN output that is neither priced nor in a spec leaves the merit finite. The
+  main loop would accept the point and then try to linearise at it.
+
+The tests are in `tests/test_planning_nonfinite.py`. The crude unit is the worked
+case: [Planning with the crude unit](unit-operations-refinery.md#planning-with-the-crude-unit)
+drives a column into the region where it does not converge and shows the plan
+backing off.
 
 ## Bang-bang levers and vertex seeding
 
@@ -568,6 +600,54 @@ correction from noisy plant data is a fast route to oscillation. When modifiers
 are in force the *corrected* model is the planner's own model, so that — and not
 the uncorrected blocks, and never the plant — is what the acceptance test is
 judged against.
+
+## Which delta vectors are wrong: attribution from plant data
+
+`update_modifiers` takes the plant gradient from a callable. A running plant
+is not a callable; what exists is a history of each block's inputs and some
+of its measured outputs. `attribute_deltas` estimates the modifiers from that
+history and, as importantly, says which of them the history can support:
+
+```python
+from difflow.planning import attribute_deltas
+
+res = attribute_deltas(block, U, {"yield": y_meas}, sigma_y={"yield": 0.05},
+                       t=times, move={"feed": 1.0, "T": 2.0},
+                       sigma_u={"feed": 0.1},             # errors in variables
+                       log_outputs={"impurity": 1e-3})    # relative errors
+print(res.table())
+planner.modifiers[block.name] = res.to_modifiers()        # flagged terms only
+res.exposure(plan)          # level error x shadow price of its model row
+```
+
+For each measured output the residual $r = g(y_{\text{meas}}) -
+g(y_{\text{model}}(u))$ is fitted by weighted least squares on a level, a
+trend, and one slope per input scaled by that input's characteristic move.
+Routine plant data are not a designed experiment, and the fit is built around
+that:
+
+- **Estimability is decided from the design, not the answer.** The scaled
+  slope columns, with level and trend projected out, go through a
+  column-pivoted QR; a slope is estimated only while
+  $|R_{kk}|\cdot\text{materiality} \ge 1.9$. An input the operators held
+  still is reported `not estimable` and left out. Expect most slopes to land
+  there; the level is the reliable part.
+- **Aliases are reported.** Inputs that moved together are only estimable as
+  a combination; a significant estimate that absorbs a held-out input with
+  $|A| > 0.3$ is reported as `combination`, not as a finding about one input.
+- **Standard errors are inflated** by $\sqrt{\phi(1+\rho)/(1-\rho)}$, with
+  $\phi = \max(1, \chi^2/\text{dof})$ and $\rho$ the lag-1 autocorrelation of
+  the residual. Without it, slow drift produces a stream of false flags.
+- **A Picard check separates a wrong delta from a wrong form.** Residual
+  weight along a direction the design barely resolves would need an absurd
+  slope to explain; the output is marked `structural`, and no affine modifier
+  is the fix.
+
+A term is flagged when it is estimable, $|z| > 3$ after inflation, and larger
+than `materiality` (default: one `sigma_y`). The level refers to the latest
+time and to `u_ref`, by default the mean input, where it is not aliased with
+any held-out slope. Outputs that were not measured are listed in
+`res.unobserved`: the data say nothing about them.
 
 ## Coefficient covariance and back-off
 
@@ -936,6 +1016,30 @@ And `check_delta_vectors` is worth running before anything leaves the building:
 it is `2 n_u` extra model evaluations against a Jacobian that costs `min(n_u, n_y)` AD passes, and
 it is the cheapest way to find out that a lever does nothing.
 
+## A crude unit as a block
+
+`difflow_refinery.planning.cdu_block(unit, levers, outputs, rate=, T=, P=)` is a
+ready-made block for a rigorous atmospheric crude column. Its levers and outputs
+are named by meaning, for example `naphtha.yield`, `pa1.duty`, `crude.rate`,
+`kero.tbp95`, `gap.kero_diesel` and `furnace.fired`. They are carried in planner
+units: bbl/d, MW, °C for temperatures, K for temperature differences, and kg/h
+for steam. The units are recorded in `metadata["u_units"]` and `["y_units"]`.
+
+`product_value_block` and `link_cdu` give the downstream half of a
+CDU → product value network. On the 30-stage test column:
+
+- `check_delta_vectors` passes with an error of 5.6e-10 relative to the largest entry.
+- `check_delta_health` is clean on the default outputs.
+- A four-lever plan (crude rate, two yields, overflash) under a kero end-point
+  spec terminates `stationary` in 6 iterations.
+- A fresh column solve at that plan reproduces the planner's state to 4e-15.
+
+The column has operating points where it does not converge, and the block
+returns NaN there; see [A block that cannot be evaluated](#a-block-that-cannot-be-evaluated).
+The details, including why yields are the levers and cut points the outputs, are in
+[Planning with the crude unit](unit-operations-refinery.md#planning-with-the-crude-unit).
+Example: `examples/35_refinery_cdu_planning.ipynb`.
+
 ## Exporting delta vectors
 
 The person who owns the planning model is usually not the person who owns the
@@ -1075,6 +1179,7 @@ you.
 | `plan_sensitivity` | `d(plan)/d(price)`, `d(plan)/d(parameter)` |
 | `price_switch_point` | The finite price at which a bang-bang lever flips |
 | `Modifiers`, `run_modifier_adaptation` | Zeroth- and first-order plant corrections |
+| `attribute_deltas`, `AttributionResult` | Those corrections estimated from plant history, with estimability, aliases and a structural check |
 | `constraint_backoff`, `apply_backoff` | Coefficient covariance to spec margin |
 | `PiecewiseSpec`, `sample_piecewise` | Batched SOS2 piecewise-linear blocks |
 | `gradient_cost_ratio`, `scaling_study` | The AD-versus-perturbation measurement |

@@ -69,6 +69,10 @@ launch_buttons:
 
 # Sphinx configuration
 sphinx:
+  # The "Ask" docs assistant: adds _ext/ask_static/ask.{js,css} to every page
+  # and writes ask-index.json at the site root after the build (docs/ask.md).
+  local_extensions:
+    ask_index: _ext/
   config:
     html_favicon: images/favicon.png
     # Generate anchors for h1-h3 so in-page "[Text](#slug)" TOC links resolve.

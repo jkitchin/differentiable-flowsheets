@@ -14,6 +14,8 @@ parts:
       - file: docs/unit-operations-carbon-capture
       - file: docs/unit-operations-gas
       - file: docs/unit-operations-power
+      - file: docs/unit-operations-refinery
+      - file: docs/refinery-summary
       - file: docs/thermodynamics
       - file: docs/technoeconomics
       - file: docs/parameter-estimation
@@ -31,6 +33,7 @@ parts:
       - file: docs/solvers-and-utilities
       - file: docs/external-solvers
       - file: docs/eo-solver
+      - file: docs/ask
 
   - caption: About Flowsheets
     chapters:

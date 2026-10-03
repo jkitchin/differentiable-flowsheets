@@ -1,0 +1,300 @@
+"""The reformer's species: lumps by carbon number, each a model compound.
+
+The reaction network (:mod:`.kinetics`) runs on lumps by carbon number,
+C6-C10, of four kinds -- normal paraffins ``nP<n>``, iso-paraffins ``iP<n>``,
+naphthenes ``N<n>`` and aromatics ``A<n>`` -- plus methylcyclopentane
+``N5_6`` (the C6 five-ring naphthene, which must isomerize to cyclohexane
+before it can dehydrogenate to benzene), hydrogen and the C1-C5 paraffins the
+cracking reactions make. That is a carbon-number (Krane-type) lumping with the
+paraffins split by branching, because the octane of a paraffin lump depends
+on it more than on anything else.
+
+Every lump is represented by ONE real compound -- its *model compound* -- and
+takes that compound's formula, thermochemistry, critical constants, density
+and octane numbers (:data:`SPECIES`). The choices:
+
+==========  =================  =====================  ===================
+carbon no.  n-paraffin         iso-paraffin           naphthene / aromatic
+==========  =================  =====================  ===================
+C6          n-hexane           2-methylpentane        cyclohexane (+ MCP) / benzene
+C7          n-heptane          2-methylhexane         methylcyclohexane / toluene
+C8          n-octane           2-methylheptane        ethylcyclohexane / ethylbenzene
+C9          n-nonane           2-methyloctane         n-propylcyclohexane / n-propylbenzene
+C10         n-decane           2-methylnonane         n-butylcyclohexane / n-butylbenzene
+==========  =================  =====================  ===================
+
+Each naphthene/aromatic pair shares its side chain, so a dehydrogenation
+equilibrium is the equilibrium of a real reaction (ethylcyclohexane =
+ethylbenzene + 3 H2) rather than of an arbitrary pairing. The cost is that a
+lump's free energy is one isomer's, not that of the equilibrium isomer
+distribution the catalyst actually holds (a C8 aromatic product is mostly
+xylenes, not ethylbenzene). That is the main simplification of the
+thermodynamic layer, and it is stated, not hidden: a lump at internal isomer
+equilibrium would have ``G_lump = -RT ln sum_i exp(-G_i/RT)`` and a lower
+free energy than any one member.
+
+Where the numbers come from (checked as described; "(unverified)" marks
+what was not checked against a primary source):
+
+* Formula, molar mass, ideal-gas ``Hf(298.15 K)``, ideal-gas ``S(298.15 K,
+  1 bar)``, ``Tc``, ``Pc``, ``omega``, ``Tb``, and the ideal-gas Cp
+  correlation behind the cubic fit, were read from the data tables shipped
+  with the ``chemicals`` Python package (C. Bell et al., version 1.5.2),
+  which transcribe the sources named per column below. No primary source
+  could be opened from the environment this was written in (the NIST
+  WebBook and publishers were unreachable); the values were accepted where
+  the independent tables agree, and the agreement is recorded in
+  :data:`HF_CROSSCHECK` and pinned by ``tests/refinery/test_reforming.py``.
+
+  - ``Hf``: API Technical Data Book table ("API_TDB_G" in ``chemicals``)
+    for every species but hydrogen (zero by definition) and 2-methylhexane
+    (no API TDB entry; CRC Handbook value). Cross-checked against the CRC
+    Handbook, ATcT and Yaws tables: they agree to within 1.5 kJ/mol for every
+    species except 2-methylnonane, where the CRC table gives -260.2 kJ/mol
+    against the API TDB's -256.5 (which is right is unverified).
+  - ``S0``: Yaws, *Thermophysical Properties of Chemicals and Hydrocarbons*
+    (William Andrew, 2008) ideal-gas entropy table ("YAWS"), for every
+    species, so the set is internally consistent. Cross-checked against the
+    NIST WebBook values ``chemicals`` carries where it has one (within
+    2.5 J/mol/K, butylbenzene the largest).
+  - ``cp``: a cubic ``a + bT + cT^2 + dT^3`` (J/mol/K) least-squares fit by
+    this project over 298-1000 K to the TRC ideal-gas heat-capacity
+    correlation (Thermodynamics Research Center, as tabulated in
+    ``chemicals.heat_capacity.TRC_gas_data``). The fit reproduces the
+    correlation to 1.4 % or better over that range (cyclohexane the worst).
+  - ``Tc``, ``Pc``, ``omega``, ``Tb``: the first-ranked source in
+    ``chemicals`` (CoolProp's reference EOS for the common species; the IUPAC
+    critical-property review, CRC and PSRK tables for the rest).
+  - ``rho60``: saturated liquid density at 60 F (288.71 K), kg/m^3: the
+    DIPPR-105 equation of Perry's Chemical Engineers' Handbook, 8th ed.,
+    Table 2-32 (as tabulated in ``chemicals``) where it has the species;
+    VDI Heat Atlas PPDS equation for n-propyl- and n-butylcyclohexane;
+    Hankinson-Thomson COSTALD with its fitted characteristic volume for
+    2-methylhexane. For 2-methylheptane, 2-methyloctane and 2-methylnonane
+    no tabulated equation was available and the corresponding-states
+    estimates disagree by 5 %: the values are handbook 20 C densities
+    recalled by this project, raised by 4 kg/m^3 to 60 F (unverified).
+    Hydrogen and methane are supercritical at 60 F and have no liquid
+    density; they never enter a liquid-volume yield.
+
+* ``RON``/``MON``: research and motor octane numbers of the pure compound
+  (ASTM D2699 / D2700). n-Heptane (0) and 2,2,4-trimethylpentane (100) are
+  the primary reference fuels and exact by definition; isooctane is not a
+  lump and appears only as that anchor. Every other value is a pure-compound
+  octane number as compiled by API Research Project 45 (ASTM STP 225,
+  *Knocking Characteristics of Pure Hydrocarbons*, 1958) and widely
+  reproduced, RECALLED by this project and NOT checked against STP 225:
+  all are (unverified). Where no value was recalled -- the C9 and C10
+  paraffins and n-butylcyclohexane -- the number is an EXTRAPOLATION along
+  the homologous series by this project (``octane_source="estimate"``),
+  marked so per species. Pure-compound numbers are not blending numbers; the
+  reformate's octane blends them with the Ethyl RT-70 rule
+  (:func:`difflow_refinery.blending.ethyl_rt70`).
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Literal
+
+import numpy as np
+
+#: Carbon numbers the lumps cover.
+CARBON_NUMBERS: tuple[int, ...] = (6, 7, 8, 9, 10)
+
+#: Light paraffins the cracking reactions make (and that ride in the recycle gas).
+LIGHT_SPECIES: tuple[str, ...] = ("H2", "C1", "C2", "C3", "iC4", "nC4", "iC5", "nC5")
+
+
+@dataclass(frozen=True)
+class ModelCompound:
+    """One reformer species and the real compound that represents it.
+
+    Attributes:
+        key: Species name in the reformer (``"nP7"``, ``"A8"``, ``"H2"``...).
+        compound: Name of the model compound.
+        cas: Its CAS registry number.
+        kind: ``"H2"``, ``"light"``, ``"nP"``, ``"iP"``, ``"N"`` or ``"A"``.
+        carbon, hydrogen: Atoms per molecule.
+        MW: Molar mass (g/mol).
+        Hf: Ideal-gas standard enthalpy of formation at 298.15 K (J/mol).
+        S0: Ideal-gas standard entropy at 298.15 K and 1 bar (J/mol/K).
+        cp: Ideal-gas Cp cubic ``(a, b, c, d)``, J/mol/K, T in K, 298-1000 K.
+        Tc, Pc, omega: Critical temperature (K), pressure (Pa), acentric factor.
+        Tb: Normal boiling point (K).
+        rho60: Liquid density at 60 F (kg/m^3), or ``nan`` when supercritical.
+        RON, MON: Pure-compound research / motor octane numbers.
+        octane_source: ``"reference"`` (a primary reference fuel, exact),
+            ``"recalled"`` (API RP45 value as recalled, unverified) or
+            ``"estimate"`` (extrapolated by this project).
+    """
+
+    key: str
+    compound: str
+    cas: str
+    kind: str
+    carbon: int
+    hydrogen: int
+    MW: float
+    Hf: float
+    S0: float
+    cp: tuple[float, float, float, float]
+    Tc: float
+    Pc: float
+    omega: float
+    Tb: float
+    rho60: float
+    RON: float
+    MON: float
+    octane_source: Literal["reference", "recalled", "estimate"] = "recalled"
+
+
+def _S(key, compound, cas, kind, C, H, MW, Hf, S0, cp, Tc, Pc, omega, Tb, rho60, RON, MON,
+       src="recalled"):
+    return ModelCompound(key, compound, cas, kind, C, H, MW, Hf, S0, cp, Tc, Pc, omega, Tb,
+                         rho60, RON, MON, src)
+
+
+_NAN = float("nan")
+
+#: Every reformer species, in the order of every flow array.
+#: See the module docstring for where each column comes from.
+SPECIES: dict[str, ModelCompound] = {s.key: s for s in [
+    # key  compound            CAS        kind    C  H   MW        Hf        S0      cp (a, b, c, d)                                    Tc       Pc         omega   Tb      rho60  RON    MON
+    _S("H2", "hydrogen", "1333-74-0", "H2", 0, 2, 2.01588, 0.0, 130.68,
+       (27.44, 0.00855236, -1.38696e-05, 8.18211e-09), 33.145, 1296400.0, -0.2190, 20.37, _NAN, _NAN, _NAN),
+    _S("C1", "methane", "74-82-8", "light", 1, 4, 16.04246, -74520.0, 186.60,
+       (24.2384, 0.0207783, 6.75556e-05, -3.99814e-08), 190.564, 4599200.0, 0.0114, 111.67, _NAN, _NAN, _NAN),
+    _S("C2", "ethane", "74-84-0", "light", 2, 6, 30.06904, -83850.0, 229.45,
+       (6.45789, 0.167124, -4.55258e-05, -5.67066e-09), 305.322, 4872200.0, 0.0995, 184.57, 355.0, _NAN, _NAN),
+    _S("C3", "propane", "74-98-6", "light", 3, 8, 44.09562, -104690.0, 270.28,
+       (-4.32175, 0.301515, -0.000148719, 2.58421e-08), 369.890, 4251200.0, 0.1521, 231.04, 505.8, _NAN, _NAN),
+    _S("iC4", "isobutane", "75-28-5", "light", 4, 10, 58.12220, -134990.0, 295.34,
+       (-13.2547, 0.435778, -0.000249866, 5.54883e-08), 407.810, 3629000.0, 0.1840, 261.40, 563.2, 102.1, 97.6),
+    _S("nC4", "n-butane", "106-97-8", "light", 4, 10, 58.12220, -125650.0, 304.40,
+       (-1.92085, 0.38816, -0.000190209, 3.08733e-08), 425.125, 3796000.0, 0.2010, 272.66, 584.3, 93.8, 89.6),
+    _S("iC5", "isopentane", "78-78-4", "light", 5, 12, 72.14878, -153700.0, 343.89,
+       (-9.47212, 0.499944, -0.000253443, 4.88841e-08), 460.350, 3378000.0, 0.2274, 300.98, 626.0, 92.3, 90.3),
+    _S("nC5", "n-pentane", "109-66-0", "light", 5, 12, 72.14878, -146710.0, 349.25,
+       (-4.11219, 0.475647, -0.000218834, 2.81896e-08), 469.700, 3367500.0, 0.2510, 309.21, 631.1, 61.7, 62.6),
+    # C6
+    _S("nP6", "n-hexane", "110-54-3", "nP", 6, 14, 86.17536, -166950.0, 388.74,
+       (-10.8684, 0.597481, -0.000308925, 5.27867e-08), 507.820, 3044100.0, 0.3000, 341.87, 664.4, 24.8, 26.0),
+    _S("iP6", "2-methylpentane", "107-83-5", "iP", 6, 14, 86.17536, -174690.0, 380.69,
+       (-19.4918, 0.644242, -0.000375015, 8.7014e-08), 497.700, 3040000.0, 0.2797, 333.36, 657.0, 73.4, 73.5),
+    _S("N5_6", "methylcyclopentane", "96-37-7", "N", 6, 12, 84.15948, -106690.0, 339.90,
+       (-49.1407, 0.614133, -0.000301819, 3.991e-08), 553.800, 4080000.0, 0.2390, 344.95, 753.2, 91.3, 80.0),
+    _S("N6", "cyclohexane", "110-82-7", "N", 6, 12, 84.15948, -123130.0, 297.31,
+       (-59.2417, 0.630003, -0.000271783, 1.56173e-08), 553.600, 4080500.0, 0.2096, 353.86, 781.5, 83.0, 77.2),
+    _S("A6", "benzene", "71-43-2", "A", 6, 6, 78.11184, 82930.0, 269.18,
+       (-48.1443, 0.547397, -0.000403617, 1.15717e-07), 562.020, 4907277.0, 0.2110, 353.22, 882.4, 102.7, 105.0),
+    # C7
+    _S("nP7", "n-heptane", "142-82-5", "nP", 7, 16, 100.20194, -187650.0, 428.23,
+       (-17.2465, 0.718155, -0.000398277, 7.81453e-08), 540.200, 2735730.0, 0.3490, 371.55, 689.5, 0.0, 0.0,
+       "reference"),
+    _S("iP7", "2-methylhexane", "591-76-4", "iP", 7, 16, 100.20194, -194500.0, 420.52,
+       (-23.1965, 0.749886, -0.00044417, 1.03967e-07), 530.400, 2740000.0, 0.3300, 363.15, 683.0, 42.4, 46.4),
+    _S("N7", "methylcyclohexane", "108-87-2", "N", 7, 14, 98.18606, -154770.0, 343.50,
+       (-59.4426, 0.779575, -0.000453102, 9.73564e-08), 572.200, 3470000.0, 0.2340, 374.01, 774.0, 74.8, 71.1),
+    _S("A7", "toluene", "108-88-3", "A", 7, 8, 92.13842, 50170.0, 321.08,
+       (-45.7735, 0.612717, -0.000413813, 1.07684e-07), 591.750, 4126300.0, 0.2657, 383.75, 872.5, 120.0, 103.5),
+    # C8
+    _S("nP8", "n-octane", "111-65-9", "nP", 8, 18, 114.22852, -208820.0, 467.05,
+       (-21.9528, 0.829387, -0.000471684, 9.5135e-08), 568.740, 2483590.0, 0.3980, 398.79, 710.3, -19.0, -15.0),
+    _S("iP8", "2-methylheptane", "592-27-8", "iP", 8, 18, 114.22852, -215350.0, 459.34,
+       (-29.8136, 0.869951, -0.000527505, 1.23802e-07), 559.700, 2500000.0, 0.3780, 390.75, 702.0, 21.7, 23.8),
+    _S("N8", "ethylcyclohexane", "1678-91-7", "N", 8, 16, 112.21264, -171750.0, 382.99,
+       (-51.4099, 0.857249, -0.000490642, 1.02072e-07), 606.900, 3270000.0, 0.2444, 404.95, 791.8, 45.6, 40.8),
+    _S("A8", "ethylbenzene", "100-41-4", "A", 8, 10, 106.16500, 29790.0, 361.24,
+       (-47.2994, 0.712493, -0.000469658, 1.18049e-07), 617.120, 3622400.0, 0.3050, 409.31, 871.6, 107.4, 97.9),
+    # C9
+    _S("nP9", "n-nonane", "111-84-2", "nP", 9, 20, 128.25510, -228860.0, 507.08,
+       (-26.8245, 0.941338, -0.00054556, 1.11725e-07), 594.550, 2281000.0, 0.4433, 423.91, 724.2, -40.0, -35.0,
+       "estimate"),
+    _S("iP9", "2-methyloctane", "3221-61-2", "iP", 9, 20, 128.25510, -235850.0, 499.16,
+       (-35.2104, 0.984259, -0.00060728, 1.44772e-07), 582.800, 2310000.0, 0.4499, 416.15, 717.0, 0.0, 5.0,
+       "estimate"),
+    _S("N9", "n-propylcyclohexane", "1678-92-8", "N", 9, 18, 126.23922, -193300.0, 419.97,
+       (-54.2228, 0.959797, -0.000550495, 1.12486e-07), 630.800, 2860000.0, 0.3260, 429.86, 797.7, 17.8, 14.0),
+    _S("A9", "n-propylbenzene", "103-65-1", "A", 9, 12, 120.19158, 7900.0, 399.08,
+       (-47.249, 0.814124, -0.000538192, 1.34796e-07), 638.350, 3200000.0, 0.3440, 432.35, 866.7, 111.0, 98.7),
+    # C10
+    _S("nP10", "n-decane", "124-18-5", "nP", 10, 22, 142.28168, -249530.0, 546.36,
+       (-34.0257, 1.06631, -0.00064092, 1.39661e-07), 617.700, 2103000.0, 0.4884, 447.27, 734.9, -50.0, -45.0,
+       "estimate"),
+    _S("iP10", "2-methylnonane", "871-83-0", "iP", 10, 22, 142.28168, -256520.0, 539.32,
+       (-37.3414, 1.08403, -0.000661239, 1.51019e-07), 610.700, 2120000.0, 0.4720, 440.15, 730.0, -10.0, -5.0,
+       "estimate"),
+    _S("N10", "n-butylcyclohexane", "1678-93-9", "N", 10, 20, 140.26580, -213170.0, 459.59,
+       (-57.1935, 1.06263, -0.000611202, 1.23725e-07), 653.100, 2570000.0, 0.3524, 454.05, 802.9, 0.0, 0.0,
+       "estimate"),
+    _S("A10", "n-butylbenzene", "104-51-8", "A", 10, 14, 134.21816, -13140.0, 440.28,
+       (-49.5473, 0.90106, -0.000565273, 1.34063e-07), 660.500, 2890000.0, 0.3920, 456.45, 864.6, 104.4, 94.5),
+]}
+
+#: Species names, in flow-array order.
+NAMES: tuple[str, ...] = tuple(SPECIES)
+N_SPECIES = len(NAMES)
+INDEX: dict[str, int] = {k: i for i, k in enumerate(NAMES)}
+
+#: Ideal-gas Hf (kJ/mol) of the species also in ``difflow.database``, from
+#: each source ``chemicals`` 1.5.2 tabulates (as read when this module was
+#: written) -- the cross-check behind the choice of the API TDB values.
+HF_CROSSCHECK: dict[str, dict[str, float]] = {
+    "C1": {"API_TDB": -74.52, "CRC": -74.6, "ATcT": -74.534},
+    "C3": {"API_TDB": -104.69, "CRC": -103.8, "ATcT": -104.39},
+    "nP6": {"API_TDB": -166.95, "CRC": -166.9, "ATcT": -166.94},
+    "N5_6": {"API_TDB": -106.69, "CRC": -106.2, "YAWS": -106.0},
+    "N6": {"API_TDB": -123.13, "CRC": -123.4, "ATcT": -122.08},
+    "A6": {"API_TDB": 82.93, "CRC": 82.9, "ATcT": 83.18},
+    "A7": {"API_TDB": 50.17, "CRC": 50.5, "ATcT": 50.41},
+    "N7": {"API_TDB": -154.77, "CRC": -154.7, "YAWS": -154.7},
+    "A8": {"API_TDB": 29.79, "CRC": 29.9, "YAWS": 29.9},
+}
+
+
+def kind_of(key: str) -> str:
+    return SPECIES[key].kind
+
+
+def lump(kind: str, n: int) -> str:
+    """Name of the ``kind`` lump with ``n`` carbons (``lump("A", 7) == "A7"``)."""
+    if kind not in ("nP", "iP", "N", "A"):
+        raise ValueError(f"kind must be nP, iP, N or A, not {kind!r}")
+    if n not in CARBON_NUMBERS:
+        raise ValueError(f"carbon number must be in {CARBON_NUMBERS}, not {n}")
+    return f"{kind}{n}"
+
+
+def paraffin(n: int, iso: bool) -> str:
+    """The paraffin species with ``n`` carbons (n <= 3 has no isomer)."""
+    if n == 1:
+        return "C1"
+    if n == 2:
+        return "C2"
+    if n == 3:
+        return "C3"
+    if n in (4, 5):
+        return f"{'i' if iso else 'n'}C{n}"
+    return f"{'iP' if iso else 'nP'}{n}"
+
+
+def array(attr: str) -> np.ndarray:
+    """``(N_SPECIES,)`` array of one attribute of every species."""
+    return np.array([getattr(SPECIES[k], attr) for k in NAMES], dtype=float)
+
+
+#: Element matrix ``(2, N_SPECIES)``: rows carbon, hydrogen atoms.
+ELEMENTS = np.stack([array("carbon"), array("hydrogen")])
+MW = array("MW")
+HF = array("Hf")
+S0 = array("S0")
+CP = np.array([SPECIES[k].cp for k in NAMES], dtype=float)
+TC, PC, OMEGA, TB = array("Tc"), array("Pc"), array("omega"), array("Tb")
+RHO60 = array("rho60")
+RON, MON = array("RON"), array("MON")
+
+#: Species that end up in the C5+ reformate (everything with five carbons or more).
+C5_PLUS = tuple(k for k in NAMES if SPECIES[k].carbon >= 5)
+#: Aromatic species.
+AROMATICS = tuple(k for k in NAMES if SPECIES[k].kind == "A")

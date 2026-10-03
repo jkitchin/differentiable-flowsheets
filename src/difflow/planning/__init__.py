@@ -85,6 +85,10 @@ Beyond the base plan
   under structural mismatch; gradient corrections fix it (Marchetti, Chachuat
   and Bonvin, I&ECR 48(13), 2009, doi:10.1021/ie801352x).  In a delta-base LP
   the delta vectors *are* those gradients.
+* :mod:`difflow.planning.attribution` — estimate those corrections from a
+  history of plant data rather than a plant callable, and report which of
+  them the data can support at all (column-pivoted QR on the design,
+  aliases, autocorrelation-inflated errors, a Picard check for wrong form).
 * :mod:`difflow.planning.backoff` — propagate a reconciled state's covariance
   through ``J`` to get uncertainty on the LP coefficients, and hence a
   principled constraint back-off.  Stale parameters cost feasibility more
@@ -178,12 +182,16 @@ from difflow.planning.modifiers import (
     ModifierAdaptationResult, Modifiers, run_modifier_adaptation,
     update_modifiers,
 )
+from difflow.planning.attribution import (
+    AttributionResult, Coefficient, OutputAttribution, attribute_deltas,
+)
 from difflow.planning.network import Link, Network, NetworkState
 from difflow.planning.piecewise import (
     PiecewiseData, PiecewiseSpec, sample_piecewise,
 )
 from difflow.planning.planner import (
     DeltaBasePlanner, Iteration, PlanResult, TrustRegionOptions,
+    state_is_finite,
 )
 from difflow.planning.sensitivity import (
     PlanSensitivity, plan_sensitivity, price_switch_point,
@@ -248,6 +256,7 @@ __all__ = [
     "trust_region_bounds",
     # Planner
     "DeltaBasePlanner",
+    "state_is_finite",
     "PlanResult",
     "TrustRegionOptions",
     "Iteration",
@@ -269,6 +278,11 @@ __all__ = [
     "update_modifiers",
     "run_modifier_adaptation",
     "ModifierAdaptationResult",
+    # Delta attribution from plant data
+    "attribute_deltas",
+    "AttributionResult",
+    "OutputAttribution",
+    "Coefficient",
     # Back-off
     "constraint_backoff",
     "apply_backoff",

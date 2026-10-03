@@ -301,7 +301,7 @@ def _decode_value(value: Any) -> Any:
 
 #: packages searched when rebuilding a type by name
 _PACKAGES = ("difflow", "difflow_bio", "difflow_ree", "difflow_cc",
-             "difflow_gas", "difflow_power")
+             "difflow_gas", "difflow_power", "difflow_refinery")
 
 
 def _lookup_type(name: str, predicate=None) -> type:

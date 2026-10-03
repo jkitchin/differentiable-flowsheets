@@ -42,7 +42,7 @@ endif
 .PHONY: all notebooks notebooks-force notebooks-bio notebooks-ree notebooks-cc \
         notebooks-bio-force notebooks-ree-force notebooks-cc-force \
         clean test test-release test-slow test-all test-durations book book-clean sync \
-        gui gui-build gui-test convergence
+        gui gui-build gui-test convergence ask-check
 
 all: notebooks
 
@@ -124,8 +124,9 @@ run:
 # loadfile` is not optional -- each worker has its own JAX compilation cache,
 # so splitting a module across workers recompiles the same graphs in each of
 # them and gives most of the win back. Add `-n0` to any of these to get a
-# single process back for --pdb or readable output.
-PYTEST := pytest -n auto --dist loadfile
+# single process back for --pdb or readable output. `--no-loadscope-reorder`
+# keeps tests/conftest.py's longest-first order of the files (#315).
+PYTEST := pytest -n auto --dist loadfile --no-loadscope-reorder
 
 # What you run while working, and what every commit is checked against:
 # everything except the `release` tier, which re-derives physics and numerics
@@ -153,6 +154,12 @@ test-all:
 # breaking. Regenerate when the shards have drifted noticeably apart (the job
 # names carry their numbers) -- serially and with nothing else running on the
 # machine, or the numbers it records are of a loaded box, which takes ~40 min.
+#
+# The committed file is measured on the CI runner, not here (#315): a laptop
+# is faster unevenly enough -- ~2.3x overall, ~7x on the crude-unit planning
+# tests -- that local numbers left one shard at 27 minutes and another at 8.
+# This target is for a NEW test file, whose keys can be measured here and
+# merged in; for a full rebalance, record on CI (see .github/workflows/test.yml).
 test-durations:
 	$(UV_RUN_DEV) pytest tests/ --store-durations
 
@@ -171,9 +178,15 @@ clean:
 	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 	find . -type d -name ".pytest_cache" -exec rm -rf {} + 2>/dev/null || true
 
-# Build jupyter book
+# Build jupyter book. The build also writes _build/html/ask-index.json, the
+# corpus of the "Ask" docs assistant (_ext/ask_index.py, docs/ask.md).
 book:
 	$(UV_RUN_DEV) jupyter-book build .
+
+# Run the shipped ask.js against a labelled question set over the built book
+# (needs node). The deploy workflow runs the same check before publishing.
+ask-check: book
+	node tests/docs_ask/ask_retrieval.mjs _build/html/ask-index.json
 
 # Clean jupyter book build
 book-clean:

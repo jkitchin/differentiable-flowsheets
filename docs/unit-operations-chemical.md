@@ -772,6 +772,24 @@ in turn. The column sweeps it a few times from the feed's own bubble point;
 it settles to under a hundredth of a degree by the third sweep, and the whole
 loop is unrolled, so `jax.grad` runs through it.
 
+**Non-key distribution (Hengstebeck-Geddes).** The keys go where their
+recoveries put them; every other species follows the straight line in
+$(\log\alpha, \log d/b)$ through both keys:
+
+$$\log\frac{d_i}{b_i} = A + C\log\alpha_i,\qquad
+A = \log\left(\frac{d}{b}\right)_{HK},\qquad
+C = \frac{\log(d/b)_{LK} - \log(d/b)_{HK}}{\log\alpha_{LK}}$$
+
+with $\alpha$ relative to the heavy key, so $\alpha_{HK} = 1$ (Geddes, *AIChE
+J.* 4, 389 (1958); Hengstebeck, *Distillation*, Reinhold (1961); page and
+equation numbers unverified). The distillate share $d_i/(d_i + b_i)$ is the
+logistic function of that line, so each species' balance closes exactly.
+Before this was corrected the constants were $A = \log(d/b)_{LK} -
+\log(d/b)_{HK}$ and $C = \log(d/b)_{LK}/\log\alpha_{LK}$, a line that misses
+the heavy key: on a propane/isobutane depropanizer it sent 99.9 % of the
+n-butane overhead. `tests/test_distillation.py::TestShortcutColumnNonKeyDistribution`
+pins the line through both keys.
+
 Two consequences worth knowing, because the old estimate had neither: the end
 temperatures no longer move when you feed the same mixture in hotter, and they
 do move with column pressure.

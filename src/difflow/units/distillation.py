@@ -689,7 +689,20 @@ class ShortcutColumn(ValueKeyed):
         D_total = D_LK + D_HK
         B_total = B_LK + B_HK
 
-        # Distribute other components based on relative volatility
+        # Distribute the non-keys by the Hengstebeck-Geddes equation,
+        # log(d_i/b_i) = A + C log(alpha_i), the straight line in
+        # (log alpha, log d/b) through both keys. alpha is relative to the
+        # heavy key (alpha_HK = 1), so the heavy key fixes the intercept,
+        # A = log(d/b)_HK, and the light key the slope,
+        # C = [log(d/b)_LK - log(d/b)_HK] / log(alpha_LK).
+        # Geddes, AIChE J. 4, 389 (1958); Hengstebeck, Distillation (1961).
+        # Written from the recoveries, so a key absent from the feed still
+        # gives a finite line.
+        log_db_LK = jnp.log(rec_LK / (1 - rec_LK))
+        log_db_HK = jnp.log((1 - rec_HK) / rec_HK)
+        A = log_db_HK
+        C = safe_divide(log_db_LK - log_db_HK, safe_log(alpha_LK))
+
         distillate_flows = {}
         bottoms_flows = {}
 
@@ -701,20 +714,11 @@ class ShortcutColumn(ValueKeyed):
                 distillate_flows[s] = D_HK
                 bottoms_flows[s] = B_HK
             else:
-                # Use Hengstebeck-Geddes equation for distribution
-                # log(d_i/b_i) = A + C * log(alpha_i)
-                # where A and C are determined from key components
-                A = safe_log(safe_divide(D_LK, B_LK) * safe_divide(B_HK, D_HK))
-                C = safe_divide(safe_log(safe_divide(D_LK, B_LK)), safe_log(alpha_LK))
-
-                d_over_b = jnp.exp(A + C * safe_log(alpha[s]))
+                # d/(d+b) = sigmoid(log d/b): in [0, 1] by construction, so
+                # the species balance closes exactly and needs no clip.
                 F_i = feed_flows[s]
-                d_i = F_i * d_over_b / (1 + d_over_b)
-                b_i = F_i - d_i
-
-                d_i_clipped = jnp.clip(d_i, 0.0, F_i)
-                distillate_flows[s] = d_i_clipped
-                bottoms_flows[s] = F_i - d_i_clipped  # Preserves mass balance
+                distillate_flows[s] = F_i * jax.nn.sigmoid(A + C * safe_log(alpha[s]))
+                bottoms_flows[s] = F_i - distillate_flows[s]
                 D_total = D_total + distillate_flows[s]
                 B_total = B_total + bottoms_flows[s]
 
