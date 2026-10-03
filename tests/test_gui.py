@@ -376,6 +376,26 @@ class TestEditing:
         assert excinfo.value.code == 400
         assert "bad JSON" in json.loads(excinfo.value.read())["error"]
 
+    @pytest.mark.parametrize("raw, expect", [
+        (b"[1, 2]", "JSON object"),
+        (b"3", "JSON object"),
+        (b"null", "JSON object"),
+        (b'{"a": "\xff"}', "not UTF-8"),
+    ])
+    def test_a_body_that_is_not_an_object_is_refused_as_such(self, client, raw, expect):
+        """Said about the request, not as an AttributeError from a route."""
+        request = urllib.request.Request(
+            client.base + "/api/solve", data=raw,
+            headers={"Content-Type": "application/json",
+                     gui.TOKEN_HEADER: client.server.token}, method="POST",
+        )
+        with pytest.raises(urllib.error.HTTPError) as excinfo:
+            urllib.request.urlopen(request)
+        assert excinfo.value.code == 400
+        error = json.loads(excinfo.value.read())["error"]
+        assert expect in error and "AttributeError" not in error
+
+
 
 # =============================================================================
 # Incremental routes

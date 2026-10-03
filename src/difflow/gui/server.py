@@ -517,14 +517,33 @@ class _Handler(BaseHTTPRequestHandler):
         self._send(body, content=content)
 
     def _body(self):
-        """The request body as restored JSON, or a 400 already sent."""
-        length = int(self.headers.get("Content-Length") or 0)
+        """The request body as restored JSON, or a 400 already sent.
+
+        Always an object. Every route reads its body as one, so a list or
+        a bare number used to get as far as a route and come back as
+        ``AttributeError: 'list' object has no attribute 'get'`` --- a
+        400 still, but one that blamed the server for the request.
+        """
+        def refuse(error):
+            self._send({"ok": False, "error": error}, 400)
+            return None, True
+
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            return refuse("bad Content-Length")
+        if length < 0:
+            return refuse("bad Content-Length")
         raw = self.rfile.read(length) if length else b"{}"
         try:
-            return _json_restore(json.loads(raw or b"{}")), None
+            body = json.loads(raw or b"{}")
+        except UnicodeDecodeError:
+            return refuse("bad JSON: the body is not UTF-8")
         except json.JSONDecodeError as exc:
-            self._send({"ok": False, "error": f"bad JSON: {exc}"}, 400)
-            return None, True
+            return refuse(f"bad JSON: {exc}")
+        if not isinstance(body, dict):
+            return refuse(f"the body must be a JSON object, not {type(body).__name__}")
+        return _json_restore(body), None
 
     def _dispatch(self, verb: str, payload):
         """The answer to one mutating request, or ``None`` if no route matched.
