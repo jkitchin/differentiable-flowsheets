@@ -156,7 +156,7 @@
       if (event.altKey || event.shiftKey) return
       if (event.key.toLowerCase() === 's') {
         event.preventDefault()
-        if (!busy && path) save()
+        if (!busy) (path ? save() : saveAs())
       } else if (event.key === 'Enter' && !typing(event)) {
         event.preventDefault()
         if (!busy) solve()
@@ -530,6 +530,62 @@
       return null
     }, { reload: false, stale: false })
 
+  /**
+   * Save under a path the user types, and keep editing that file.
+   *
+   * A file already there is replaced only after a second question: the
+   * path is typed, and a typo should cost a dialog, not a flowsheet.
+   */
+  function saveAs() {
+    const where = window.prompt('Save the flowsheet as (a .json path):',
+                                path || 'flowsheet.json')
+    if (!where) return
+    return edit(async () => {
+      let answer = await post('/api/save', { path: where })
+      if (!answer.ok && answer.exists) {
+        if (!window.confirm(`${answer.path} already exists. Replace it?`)) {
+          note = 'not saved'
+          return null
+        }
+        answer = await post('/api/save', { path: where, overwrite: true })
+      }
+      if (answer.ok) {
+        note = `saved to ${shortPath(answer.path)}`
+        path = answer.path
+        source = ''
+        dirty = false
+      } else {
+        note = answer.error
+      }
+      return null
+    }, { reload: false, stale: false })
+  }
+
+  /**
+   * A whole new flowsheet, so everything that described the old one has
+   * to go: the code context, and the palette's flags, which are answered
+   * against its bindings, as well as the canvas.
+   */
+  async function adopted(answer) {
+    selected = null
+    await loadContext()
+    catalog = await get('/api/catalog')
+    return answer
+  }
+
+  function openFile() {
+    const where = window.prompt(
+      'Open a flowsheet (.json) or a difflow script (.py), by path:', '')
+    if (!where || !discard('Open another file')) return
+    return edit(async () => {
+      const answer = await post('/api/open', { path: where })
+      return answer.ok ? adopted(answer) : answer
+    })
+  }
+
+  const newFile = () =>
+    discard('Start a new flowsheet') && edit(async () => adopted(await post('/api/new')))
+
   // The canvas node says what is selected; the document says what it
   // holds and the catalog says what those parameters mean. The inspector
   // needs all three, and they are joined here rather than inside it so
@@ -599,16 +655,14 @@
     actions: {
       save,
       reload: () => edit(load),
-      // A whole new flowsheet, so everything that described the old one
-      // has to go: the code context, and the palette's flags, which are
-      // answered against its bindings, as well as the canvas.
+      // A whole new flowsheet: see `adopted`.
       example: (key) => discard('Open the example') && edit(async () => {
         const answer = await post('/api/examples/open', { key })
-        selected = null
-        await loadContext()
-        catalog = await get('/api/catalog')
-        return answer
+        return answer.ok ? adopted(answer) : answer
       }),
+      saveAs,
+      openFile,
+      newFile,
       export: runExport,
       quit,
       results: () => (showResults = !showResults),

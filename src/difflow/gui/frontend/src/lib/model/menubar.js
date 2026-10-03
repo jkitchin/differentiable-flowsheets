@@ -82,11 +82,32 @@ export function menuBar({
       label: 'File',
       items: [
         {
+          label: 'New',
+          hint: 'an empty flowsheet, with no file behind it',
+          disabled: busy,
+          run: actions.newFile,
+        },
+        {
+          label: 'Open…',
+          hint: 'a flowsheet JSON or a difflow script, by path',
+          disabled: busy,
+          run: actions.openFile,
+        },
+        {
           label: 'Save',
           note: '⌘S',
-          hint: path || 'this editor was opened without a file to save to',
-          disabled: busy || !path,
-          run: actions.save,
+          // With no file yet, Save is Save As rather than a grey row: an
+          // example, or a flowsheet built from nothing, is exactly what
+          // most needs writing down.
+          hint: path || 'no file yet: asks where to save it',
+          disabled: busy,
+          run: path ? actions.save : actions.saveAs,
+        },
+        {
+          label: 'Save as…',
+          hint: 'write it to another file, and keep editing that one',
+          disabled: busy,
+          run: actions.saveAs,
         },
         {
           label: 'Reload',

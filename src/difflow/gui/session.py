@@ -197,6 +197,9 @@ class FlowsheetSession:
             # unbuildable, and it says so on the palette row. `set_species`
             # is how that gets answered.
             self.flowsheet = _empty_flowsheet()
+        # A file saved with an unfinished unit in it opens with its red
+        # node, rather than with a unit that silently cannot run.
+        self._adopt(self.flowsheet, self.bindings, self.context_error)
         # Re-entrant: a console cell runs on the request thread while
         # `console_run` holds this lock, and `session.solve()` -- which the
         # console advertises -- takes it again. A plain Lock deadlocked
@@ -1303,19 +1306,113 @@ class FlowsheetSession:
 
         return self._edit(apply, moves_only=True)
 
-    def save(self) -> dict:
+    def save(self, path: str | None = None, overwrite: bool = False) -> dict:
+        """Write the flowsheet to its file, or to `path` (Save As).
+
+        A new `path` becomes the file from then on, and an existing file
+        there is only written over when `overwrite` says so: the browser
+        asks first, because a typed path is one typo from someone else's
+        flowsheet. Always JSON --- a script is a way in, not a way out.
+        """
         from difflow import serialize
 
         if self.flowsheet is None:
             return {"ok": False, "error": "no flowsheet loaded"}
-        if self.path is None:
-            return {"ok": False, "error": "no path was given on startup"}
+        target = self.path
+        if path is not None:
+            if not isinstance(path, str) or not path.strip():
+                return {"ok": False, "error": "save it where?"}
+            target = Path(path.strip()).expanduser().resolve()
+            if target.suffix.lower() != ".json":
+                target = target.with_name(target.name + ".json")
+            if not target.parent.is_dir():
+                return {"ok": False,
+                        "error": f"there is no folder {str(target.parent)!r}"}
+            if (target.exists() and not overwrite
+                    and target != (self.path and Path(self.path).resolve())):
+                return {"ok": False, "exists": True, "path": str(target),
+                        "error": f"{target.name} already exists"}
+        if target is None:
+            return {"ok": False, "error": "no file yet; use Save As"}
         try:
-            serialize.save(self.flowsheet, self.path, refs=self.bindings)
+            serialize.save(self.flowsheet, target, refs=self.bindings)
         except serialize.SerializationError as exc:
             return {"ok": False, "error": str(exc)}
+        if path is not None:
+            self.path, self.source = target, None
         self._saved = self._state()
-        return {"ok": True, "path": str(self.path)}
+        return {"ok": True, "path": str(target)}
+
+    def open_file(self, path) -> dict:
+        """Replace the flowsheet with one read from disk, as on startup.
+
+        Built in full before anything is replaced, so a file that will
+        not load leaves the current flowsheet exactly where it was.
+        """
+        import json
+
+        from difflow import serialize
+
+        if not isinstance(path, str) or not path.strip():
+            return {"ok": False, "error": "open which file?"}
+        target = Path(path.strip()).expanduser().resolve()
+        if not target.is_file():
+            return {"ok": False, "error": f"there is no file {str(target)!r}"}
+        script = scripts.is_script(target)
+        try:
+            if script:
+                flowsheet = scripts.load_flowsheet(target)
+                context = (getattr(flowsheet, "view", None) or {}).get(
+                    "code_context") or ""
+                bindings, error = (evaluate_context(context)
+                                   if context.strip() else ({}, None))
+            else:
+                data = json.loads(target.read_text())
+                context = (data.get("view") or {}).get("code_context") or ""
+                bindings, error = (evaluate_context(context)
+                                   if context.strip() else ({}, None))
+                flowsheet = serialize.from_dict(data, refs=bindings)
+        except Exception as exc:
+            return {"ok": False,
+                    "error": f"could not open {target.name}: "
+                             f"{type(exc).__name__}: {exc}"}
+        with self._lock:
+            self._adopt(flowsheet, bindings, error)
+            self.source = target if script else None
+            self.path = scripts.save_target(target) if script else target
+            self._saved = self._state()
+        return {"ok": True, "path": str(self.path),
+                "source": str(self.source or "")}
+
+    def new(self) -> dict:
+        """Start again from an empty flowsheet, with no file behind it."""
+        with self._lock:
+            self._adopt(_empty_flowsheet(), {}, None)
+            self.path = self.source = None
+            self._saved = self._state()
+        return {"ok": True}
+
+    def _adopt(self, flowsheet, bindings: dict, context_error) -> None:
+        """Make `flowsheet` the model, and forget what described the last one.
+
+        The unfinished units are read back off the flowsheet: they are on
+        it as `Incomplete` stand-ins, and a file saved with one in it
+        should open with its red node, not with a unit that silently
+        cannot run.
+        """
+        from difflow.incomplete import Incomplete
+
+        self.flowsheet = flowsheet
+        self.bindings, self.context_error = bindings, context_error
+        self.streams = None
+        self.solve_error = None
+        self.delta_vectors = None
+        self.pending = {
+            u.name: {"name": u.name, "operation": u.operation.operation,
+                     "needs": list(u.operation.needs),
+                     "hint": u.operation.hint}
+            for u in flowsheet.units if isinstance(u.operation, Incomplete)
+        }
 
     def solve(self) -> dict:
         """Solve, and report a failure rather than raising at the socket.

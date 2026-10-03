@@ -546,7 +546,7 @@ class TestFiles:
     def test_save_without_a_path_is_refused_not_raised(self, thermo):
         session = FlowsheetSession(build_flowsheet(thermo))
         result = session.save()
-        assert not result["ok"] and "path" in result["error"]
+        assert not result["ok"] and "Save As" in result["error"]
 
     def test_an_empty_session_is_an_empty_flowsheet(self):
         """Not `None`. See `TestAnEmptyEditor` for why.

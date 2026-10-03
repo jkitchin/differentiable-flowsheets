@@ -613,6 +613,80 @@ class TestUnsavedWork:
         assert FlowsheetSession(path=tmp_path / "plant.json").dirty is False
 
 
+class TestFiles:
+    """Save As, Open and New: an example used to be unsaveable."""
+
+    @pytest.fixture
+    def ester(self):
+        s = FlowsheetSession()
+        assert s.open_example("02_reactor_flash")["ok"]
+        return s
+
+    def test_save_as_gives_an_example_a_file(self, ester, tmp_path):
+        answer = ester.save(str(tmp_path / "ester"))
+        assert answer["ok"], answer
+        assert answer["path"].endswith("ester.json")
+        assert ester.path == tmp_path / "ester.json"
+        # and plain Save now goes there
+        ester.patch_unit("reactor", {"params": {"V": 0.7}})
+        assert ester.save()["ok"]
+        assert FlowsheetSession(path=ester.path).flowsheet is not None
+
+    def test_save_as_will_not_write_over_a_file_unasked(self, ester, tmp_path):
+        other = tmp_path / "other.json"
+        other.write_text("{}")
+        answer = ester.save(str(other))
+        assert not answer["ok"] and answer["exists"]
+        assert other.read_text() == "{}"
+        assert ester.save(str(other), overwrite=True)["ok"]
+        assert other.read_text() != "{}"
+
+    def test_save_as_into_a_missing_folder_is_refused(self, ester, tmp_path):
+        answer = ester.save(str(tmp_path / "nowhere" / "x.json"))
+        assert not answer["ok"] and "folder" in answer["error"]
+
+    def test_save_with_no_file_says_save_as(self, ester):
+        assert "Save As" in ester.save()["error"]
+
+    def test_open_reads_a_file_and_is_clean(self, ester, tmp_path):
+        ester.patch_unit("reactor", {"params": {"V": 0.7}})
+        ester.save(str(tmp_path / "a.json"))
+        fresh = FlowsheetSession()
+        answer = fresh.open_file(str(tmp_path / "a.json"))
+        assert answer["ok"], answer
+        assert fresh.path == tmp_path / "a.json"
+        assert fresh.document()["dirty"] is False
+        reactor = edit.unit(fresh.flowsheet, "reactor")
+        assert float(reactor.operation.params.V) == pytest.approx(0.7)
+
+    def test_a_bad_file_leaves_the_flowsheet_alone(self, ester, tmp_path):
+        bad = tmp_path / "bad.json"
+        bad.write_text("{not json")
+        before = ester.flowsheet
+        answer = ester.open_file(str(bad))
+        assert not answer["ok"] and "bad.json" in answer["error"]
+        assert ester.flowsheet is before
+        assert not ester.open_file(str(tmp_path / "missing.json"))["ok"]
+
+    def test_new_is_empty_and_has_no_file(self, ester):
+        assert ester.new()["ok"]
+        assert ester.flowsheet.units == []
+        assert ester.path is None and ester.document()["dirty"] is False
+
+    def test_an_unfinished_unit_survives_a_save_and_open(self, tmp_path):
+        s = FlowsheetSession()
+        s.set_species(["water", "ethanol"])
+        answer = s.add_unit("CSTR")
+        assert answer.get("pending"), answer
+        s.save(str(tmp_path / "half.json"))
+        reopened = FlowsheetSession()
+        assert reopened.open_file(str(tmp_path / "half.json"))["ok"]
+        assert [p["name"] for p in reopened.pending_units()] == [answer["name"]]
+        assert [p["name"] for p in
+                FlowsheetSession(path=tmp_path / "half.json").pending_units()
+                ] == [answer["name"]]
+
+
 class TestPendingUnits:
     """A drop that cannot be built yet lands anyway, in red.
 
