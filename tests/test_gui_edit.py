@@ -179,6 +179,12 @@ class TestPatchUnit:
         assert "reactor" not in nodes
         assert nodes["kettle"] == {"x": 10.0, "y": 20.0}
 
+    @pytest.mark.parametrize("name", ["feed:feed", "product:vapor"])
+    def test_a_name_the_canvas_keys_feeds_by_is_refused(self, session, name):
+        answer = session.patch_unit("reactor", {"name": name})
+        assert answer["ok"] is False and "feeds and products" in answer["error"]
+        assert "reactor" in [u.name for u in session.flowsheet.units]
+
     def test_a_rename_onto_an_existing_name_is_refused(self, session):
         answer = session.patch_unit("reactor", {"name": "flash"})
         assert answer["ok"] is False and "already" in answer["error"]

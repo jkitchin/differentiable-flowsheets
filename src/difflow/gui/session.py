@@ -955,6 +955,14 @@ class FlowsheetSession:
 
         if not isinstance(new_name, str) or not new_name.strip():
             raise edit.EditError("a unit name cannot be empty")
+        # The canvas keys a feed `feed:<stream>` and a product
+        # `product:<stream>`, beside units under their bare names, and the
+        # view's node positions are saved under the same keys. A unit so
+        # named would be taken for the feed: deleting it deletes the feed.
+        if new_name.startswith(("feed:", "product:")):
+            raise edit.EditError(
+                f"a unit name cannot begin with {new_name.split(':')[0] + ':'!r}; "
+                "the canvas uses that for feeds and products")
         if any(other.name == new_name for other in self.flowsheet.units):
             raise edit.EditError(f"there is already a unit called {new_name!r}")
 
