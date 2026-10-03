@@ -21,7 +21,8 @@ and the air rate follows, or the air rate is given and the excess O2 is an
 output. Air is dry, 20.95 mol% O2, the rest lumped as N2.
 
 Energy: enthalpies are ideal-gas, ``Hf(298.15 K) + int Cp dT`` with Cp
-from :data:`~difflow_refinery.fcc.species.CP_IG`. Coke's enthalpy of
+from :data:`~difflow_refinery.fcc.species.CP_IG` (the refinery's shared
+thermochemistry table, :mod:`difflow_refinery.thermochemistry`). Coke's enthalpy of
 formation is taken as zero (graphite, H2, S, N2 elements), so its heat of
 combustion follows from its H content -- the convention the issue asks for.
 The regenerated catalyst leaves clean (no carbon on regenerated catalyst).

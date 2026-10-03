@@ -197,8 +197,8 @@ def isomerization(session, inputs):
                       None, gkw)
             r.update(feed=feed, element_labels=els, element_rows=M, reacting=rn)
             adia[kind] = r
-            # the same charge held at the IDAES/difflow adiabatic temperature
-            T_ad = IDAES_T_AD[kind]
+            # the same charge held at difflow's adiabatic temperature
+            T_ad = difflow_adiabatic_T(consts, feed, rn, M)
             r = _both(factory(which, names), m, rxns(names), F, T_ad, ig.ADIABATIC["P"], T_ad, gkw)
             r.update(feed=feed, T_set=T_ad, reacting=rn)
             iso[kind] = r
@@ -222,9 +222,18 @@ def isomerization(session, inputs):
     return out
 
 
-#: The adiabatic outlet temperatures of the IDAES reference (= difflow's
-#: reactor to 1e-6 K), at which the charges are also run isothermally.
-IDAES_T_AD = {"paraffinic": 477.023118602291, "benzene_rich": 522.22456099641}
+def difflow_adiabatic_T(consts, feed, reacting, element_rows):
+    """difflow's adiabatic equilibrium temperature of a charge (K), at which
+    it is also run isothermally: the emulation under difflow's conventions,
+    which is difflow's reactor (and the IDAES reference, when current) to
+    1e-6 K. Computed, not copied, since #339 moved the constants."""
+    from .. import _dwsim_rx_emulation as em
+    from . import isom_generate as ig
+
+    inert = {k: v for k, v in feed.items() if k not in reacting}
+    T, _ = em.adiabatic(consts, reacting, element_rows, [feed[k] for k in reacting], inert,
+                        ig.ADIABATIC["T_in"], ig.ADIABATIC["P"], em.DIFFLOW)
+    return T
 
 
 def reformer(session, inputs):

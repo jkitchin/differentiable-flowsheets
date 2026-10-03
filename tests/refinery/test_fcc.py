@@ -94,11 +94,24 @@ class TestCitedCoefficients:
         assert sp.HF_298["sulfur_dioxide"] == -296.81e3
         assert sp.HF_298["carbon_monoxide"] == -110.53e3
 
-    def test_n2_co2_cp_match_difflow_database(self):
+    def test_regenerator_gases_are_the_shared_table(self):
+        """CP_IG and HF_298 are views of difflow_refinery.thermochemistry
+        (#339), not copies. The JANAF fits there agree with the Reid,
+        Prausnitz & Poling cubics used before (difflow.database's N2, CO2) to
+        0.7 % over 298-1050 K, the regenerator's range; above 1000 K the RPP
+        cubics fall away from JANAF (N2 9.5 % low at 1500 K)."""
         from difflow.database import get_species_data
+        from difflow_refinery import thermochemistry as tchem
 
+        for name in sp.REGENERATOR_GASES:
+            assert sp.CP_IG[name] == tchem.species(name).cp
+            assert sp.HF_298[name] == tchem.Hf(name)
+            assert tchem.species(name).cp_range == (298.15, 1500.0)
+        T = np.linspace(298.15, 1050.0, 50)
         for name in ("nitrogen", "carbon_dioxide"):
-            assert tuple(sp.CP_IG[name]) == pytest.approx(get_species_data(name).Cp_coeffs)
+            new = sum(c * T**i for i, c in enumerate(sp.CP_IG[name]))
+            old = sum(c * T**i for i, c in enumerate(get_species_data(name).Cp_coeffs))
+            assert np.max(np.abs(new / old - 1.0)) < 0.007, name
 
     def test_atomic_weights_iupac_conventional(self):
         assert sp.ATOMIC_WEIGHT == {"C": 12.011, "H": 1.008, "N": 14.007, "O": 15.999, "S": 32.06}

@@ -140,11 +140,13 @@ class TestReferenceIsCurrent:
 #: (case, which, reactor) whose answer is NOT DWSIM's own equilibrium
 #: (:func:`._dwsim_rx_compare.acceptance`). DWSIM's equilibrium reactor:
 #: "negative mole fractions" on the isomerization ring and benzene at
-#: 573 K/100 bar; a silent non-convergence on the C6 paraffins at 400 K
-#: (6.3e-2 off); naphthalene/tetralin on DWSIM's data, where tetralin's G_f
-#: is missing (zero). DWSIM's Gibbs reactor (DirectMinimization): a minor
-#: species left at zero or at its trace start (MCH at 773 K,
-#: 2-methylhexane, benzene, naphthalene), 5e-6 to 1e-2 off, with no error.
+#: 573 K/100 bar; naphthalene/tetralin on DWSIM's data, where tetralin's G_f
+#: is missing (zero). (Before #339 it also converged silently wrong on the C6
+#: paraffins at 400 K on the hypos; on #339's constants it does not.) DWSIM's
+#: Gibbs reactor (DirectMinimization): a minor species left at zero or at its
+#: trace start (MCH at 773 K, 2-methylhexane, benzene, naphthalene, and
+#: cyclohexane in the C6 ring at 480 K on the hypos), 5e-6 to 1e-2 off, with
+#: no error.
 DWSIM_REACTOR_MISSES = {
     ("aromatics benzene 573.15 K 100 bar", "dwsim", "equilibrium"),
     ("aromatics benzene 573.15 K 30 bar", "dwsim", "gibbs"),
@@ -160,11 +162,11 @@ DWSIM_REACTOR_MISSES = {
     ("aromatics naphthalene 693.15 K 100 bar", "dwsim", "equilibrium"),
     ("aromatics naphthalene 693.15 K 100 bar", "hypo", "gibbs"),
     ("aromatics naphthalene 693.15 K 30 bar", "dwsim", "equilibrium"),
-    ("isom C6P 400 K", "hypo", "equilibrium"),
     ("isom c6_ring 420 K", "dwsim", "equilibrium"),
     ("isom c6_ring 420 K", "hypo", "equilibrium"),
     ("isom c6_ring 480 K", "dwsim", "equilibrium"),
     ("isom c6_ring 480 K", "hypo", "equilibrium"),
+    ("isom c6_ring 480 K", "hypo", "gibbs"),
     ("reformer c7_dehydrocyclization 773.15 K 10 bar", "dwsim", "gibbs"),
     ("reformer c7_dehydrocyclization 773.15 K 25 bar", "dwsim", "gibbs"),
     ("reformer mch_toluene 773.15 K 10 bar", "dwsim", "gibbs"),
@@ -173,6 +175,13 @@ DWSIM_REACTOR_MISSES = {
 }
 
 LABELS = sorted({(lab, w) for lab, w, *_ in cmp._cases()})
+
+#: Cases where NEITHER DWSIM reactor gives its own equilibrium: the C6 ring at
+#: 480 K on difflow's constants (#339's) -- the equilibrium reactor stops on
+#: "negative mole fractions" and the Gibbs reactor leaves cyclohexane at
+#: 2e-11 (its equilibrium is 7e-6) and the paraffins 7.7e-4 off. The ring's
+#: implementation check is the 420 K case.
+NO_DWSIM_ANSWER = {("isom c6_ring 480 K", "hypo")}
 
 
 @pytest.mark.release
@@ -196,12 +205,18 @@ class TestHowDWSIMComputes:
 
     def test_the_emulation_is_difflow(self):
         """Under difflow's conventions the emulation IS difflow: the isomer
-        families (closed form, 1e-12) and the IDAES adiabatic reference,
-        which difflow's reactor matches to 1e-6 K
-        (``test_isomerization_validation.py``)."""
+        families (closed form, 1e-12); the adiabatic temperature the generator
+        ran the charges at; and, while it is current, the IDAES adiabatic
+        reference, which difflow's reactor matches to 1e-6 K
+        (``test_isomerization_validation.py``). It is not current since #339
+        moved the constants (see ``STALE_SINCE_339``);
+        :func:`test_the_reactor_reaches_the_emulated_adiabatic_equilibrium`
+        checks difflow's reactor against the emulation directly meanwhile."""
         from pathlib import Path
 
         from difflow_refinery.isomerization import thermochem as tc
+
+        from .test_isomerization_validation_file import STALE_SINCE_339
 
         K = REF["inputs"]["isom"]
         for fam, names in tc.FAMILIES.items():
@@ -217,18 +232,22 @@ class TestHowDWSIMComputes:
             inert = {k: v for k, v in feed.items() if k not in rn}
             T, _ = em.adiabatic(K, rn, run["element_rows"], [feed[k] for k in rn], inert, 413.15,
                                 30e5, em.DIFFLOW)
-            assert T == pytest.approx(case["T"], abs=1e-7)
+            T_set = REF["isomerization"]["isothermal_at_T_ad"]["hypo"][kind]["T_set"]
+            assert T == pytest.approx(T_set, abs=1e-7)
+            if not STALE_SINCE_339:
+                assert T == pytest.approx(case["T"], abs=1e-7)
 
     def test_which_answers_are_dwsims_own_equilibrium(self):
-        """Every isothermal case has a DWSIM answer that is the equilibrium of
-        DWSIM's own numbers, to 3e-6 (measured 2.1e-6 worst: the C6 ring at
-        420 K on DWSIM's data, Gibbs reactor; the rest 1.8e-6 or better). The
-        misses are exactly :data:`DWSIM_REACTOR_MISSES`."""
+        """Every isothermal case but :data:`NO_DWSIM_ANSWER` has a DWSIM answer
+        that is the equilibrium of DWSIM's own numbers, to 3e-6 (measured
+        2.1e-6 worst: the C6 ring at 420 K on DWSIM's data, Gibbs reactor; the
+        rest 1.9e-6 or better). The misses are exactly
+        :data:`DWSIM_REACTOR_MISSES`."""
         acc = cmp.acceptance()
         assert {k for k, v in acc.items() if not v[0]} == DWSIM_REACTOR_MISSES
         for lab, w in LABELS:
             x, _ = cmp.accepted(lab, w)
-            assert x is not None, (lab, w)
+            assert (x is None) == ((lab, w) in NO_DWSIM_ANSWER), (lab, w)
         assert max(v[1] for v in acc.values() if v[0]) < 2.2e-6
 
 
@@ -236,7 +255,8 @@ class TestHowDWSIMComputes:
 class TestImplementation:
     """(a): DWSIM's reactors on difflow's own constants."""
 
-    @pytest.mark.parametrize("label", [lab for lab, w in LABELS if w == "hypo"])
+    @pytest.mark.parametrize("label", [lab for lab, w in LABELS
+                                       if w == "hypo" and (lab, w) not in NO_DWSIM_ANSWER])
     def test_equilibria(self, label):
         """The accepted DWSIM answer against difflow's. Every difference is
         DWSIM's conventions (midpoint Cp integrals, R, 1 atm): the same
@@ -244,21 +264,21 @@ class TestImplementation:
         against difflow: isomer families 1.6e-5 (quadrature only; no moles
         change), the C6 ring 7e-6; the reformer and aromatics, where moles
         change, up to 1.1e-3 (mostly the 1 atm standard state, (1.01325)^dn
-        on K)."""
+        on K). The hypo answers are #339's constants (the shared table)."""
         x, _ = cmp.accepted(label, "hypo")
         xd, _ = cmp.difflow_equilibrium(label)
         lim = 2.5e-5 if label.startswith("isom") else 1.5e-3
         assert _max_dx(x, xd) < lim
 
     def test_isomerization_adiabatic(self):
-        """DWSIM's adiabatic Gibbs reactor on difflow's constants: 477.032 and
-        522.304 K against difflow's 477.023 and 522.225 K. DWSIM's answer is
-        9 mK and 0.10 K off ITS OWN model (the emulation under DWSIM's
-        conventions: 477.023 and 522.200 K): its minimisation with inert
-        species stops 2e-5 and 1e-4 (mole fraction) short of equilibrium,
-        isothermally too (``isothermal_at_T_ad``)."""
-        for kind, T_df, tol in (("paraffinic", 477.023118602291, 0.02),
-                                ("benzene_rich", 522.22456099641, 0.12)):
+        """DWSIM's adiabatic Gibbs reactor on difflow's constants (#339's):
+        473.1830 and 519.4663 K against difflow's 473.1833 and 519.3828 K.
+        DWSIM's answer is 0.1 mK and 0.107 K off ITS OWN model (the emulation
+        under DWSIM's conventions: 473.1828 and 519.3592 K): its minimisation
+        with inert species stops short of equilibrium, isothermally too
+        (``isothermal_at_T_ad``)."""
+        for kind, T_df, tol in (("paraffinic", 473.18327977231456, 0.02),
+                                ("benzene_rich", 519.3828319462498, 0.12)):
             run = REF["isomerization"]["adiabatic"]["hypo"][kind]["gibbs"]
             assert run["T"] == pytest.approx(T_df, abs=tol)
 
@@ -275,7 +295,7 @@ class TestImplementation:
     def test_fcc_regenerator_closure(self):
         """The coke burn: difflow's heat minus DWSIM's is exactly the formation
         and sensible-heat differences of the flue species (DWSIM's ChemSep
-        against difflow's CODATA/RPP data), to 1 W in 21-39 MW: the reactor
+        against difflow's CODATA/JANAF data), to 1 W in 21-39 MW: the reactor
         bookkeeping agrees, only the data differ."""
         f = REF["inputs"]["fcc"]
         D = rc.FCC_DW
@@ -298,24 +318,27 @@ class TestData:
 
     def test_isomerization_families(self):
         """DWSIM's ChemSep data put isopentane at 0.762 of the C5s at 450 K
-        against difflow's 0.820; the C6 paraffins and naphthenes differ by up
-        to 0.067 and 0.052. Cause: dH of nC5 = iC5 is -6.94 kJ/mol on
-        ChemSep, -8.10 in difflow (Prosen & Rossini); dG(450 K) of 2MP =
-        23DMB 4.57 against 3.22 kJ/mol."""
+        against difflow's 0.772 (0.820 before #339 moved the isomerization
+        unit from Prosen & Rossini's dHf to the shared table's API TDB
+        values: dH of nC5 = iC5 -6.99 kJ/mol now, -8.10 then, -6.94 on
+        ChemSep). The C6 paraffins now differ by up to 0.0067 (0.067
+        before); the C6 naphthenes still by 0.048 (MCP = CH, dH -16.4
+        against ChemSep's -17.1 kJ/mol)."""
         x, _ = cmp.accepted("isom C5 450 K", "dwsim")
         xd, _ = cmp.difflow_equilibrium("isom C5 450 K")
-        assert xd[1] == pytest.approx(0.82001, abs=1e-5)
+        assert xd[1] == pytest.approx(0.77228, abs=1e-5)
         assert x[1] == pytest.approx(0.76239, abs=1e-5)
-        for fam, worst in (("C5", 0.0584), ("C6P", 0.0670), ("C6N", 0.0524)):
+        for fam, worst in (("C5", 0.0106), ("C6P", 0.0067), ("C6N", 0.0477)):
             m = max(_max_dx(cmp.accepted(lab, "dwsim")[0], cmp.difflow_equilibrium(lab)[0])
                     for lab, w in LABELS if w == "dwsim" and lab.startswith(f"isom {fam} "))
             assert m == pytest.approx(worst, abs=2e-4), fam
 
     def test_isomerization_adiabatic(self):
-        """On DWSIM's data the adiabatic outlet is 473.19 and 519.58 K, 3.83
-        and 2.65 K cooler than difflow's: less heat of isomerization (the
-        ChemSep dH above). DWSIM's own convergence (<= 0.1 K) included."""
-        for kind, d in (("paraffinic", -3.83), ("benzene_rich", -2.65)):
+        """On DWSIM's data the adiabatic outlet is 473.19 and 519.58 K: 0.005
+        and 0.19 K from difflow's, DWSIM's own convergence (<= 0.11 K)
+        included. Before #339 difflow was 3.83 and 2.65 K hotter (Prosen &
+        Rossini's larger heats of isomerization)."""
+        for kind, d in (("paraffinic", 0.005), ("benzene_rich", 0.193)):
             T = REF["isomerization"]["adiabatic"]["dwsim"][kind]["gibbs"]["T"]
             T_df = REF["isomerization"]["isothermal_at_T_ad"]["dwsim"][kind]["T_set"]
             assert T - T_df == pytest.approx(d, abs=0.02)
@@ -406,15 +429,16 @@ class TestData:
 
     def test_alkylation_heats(self):
         """Liquid heats of alkylation at 25 C: DWSIM (Peng-Robinson liquid,
-        ChemSep H_f) is 1.4 to 6.2 kJ/mol LESS exothermic than difflow
-        (H_f(g) - CRC Hvap). Of that, the gas-phase H_f differ by up to 3.7
-        kJ/mol (propylene route); the rest is the heats of vaporisation (PR
-        liquid departure against CRC). difflow's reactor heats (route A) are
-        its species table exactly."""
+        ChemSep H_f) is 1.2 to 5.9 kJ/mol LESS exothermic than difflow
+        (H_f(g) - CRC Hvap). Of that, the gas-phase H_f differ by up to 2.3
+        kJ/mol (propylene route; 3.7 before #339 put the alkylation species on
+        the shared table's API TDB values); the rest is the heats of
+        vaporisation (PR liquid departure against CRC). difflow's reactor heats
+        (route A) are its species table exactly."""
         for name, row in cmp.alky_heats().items():
             d_liq = row["dH_liquid_difflow"] - row["dH_liquid_dwsim_298.15"]
-            assert -6.3e3 < d_liq < -1.3e3, (name, d_liq)
-            assert abs(row["dH_gas_difflow"] - row["dH_gas_dwsim"]) < 3.8e3, name
+            assert -5.9e3 < d_liq < -1.2e3, (name, d_liq)
+            assert abs(row["dH_gas_difflow"] - row["dH_gas_dwsim"]) < 2.3e3, name
             assert row["vapor_out_298.15"] == 0.0
             if "difflow_reactor_dH_A" in row:
                 assert row["difflow_reactor_dH_A"] == pytest.approx(row["dH_liquid_difflow"], rel=1e-12)
@@ -422,15 +446,38 @@ class TestData:
     def test_fcc_regenerator(self):
         """Coke (7 wt% H) burnt to 2 % O2: the heat of combustion at 25 C
         agrees to 1.1e-5 (water's H_f, -241.826 against -241.814 kJ/mol);
-        to a 700-730 C flue DWSIM releases 0.05-0.07 % more (RPP Cp fits
-        against ChemSep's)."""
+        to a 700-730 C flue DWSIM releases 0.007-0.009 % more (difflow's JANAF
+        Cp fits against ChemSep's; 0.05-0.07 % with the RPP cubics before
+        #339)."""
         for r_co, rows in cmp.fcc_compare().items():
             a = rows["298.15"]
             assert abs(a["Q_difflow"] - a["Q_dwsim"]) / abs(a["Q_difflow"]) < 2e-5
             for label in ("973.15", "1003.15"):
                 b = rows[label]
                 rel = (b["Q_difflow"] - b["Q_dwsim"]) / abs(b["Q_difflow"])
-                assert 4e-4 < rel < 8e-4, (r_co, label, rel)
+                assert 6e-5 < rel < 1e-4, (r_co, label, rel)
+
+
+@pytest.mark.release
+@pytest.mark.slow
+@pytest.mark.parametrize("kind", ["paraffinic", "benzene_rich"])
+def test_the_reactor_reaches_the_emulated_adiabatic_equilibrium(kind):
+    """difflow's isomerization reactor, adiabatic and taken to equilibrium
+    (as ``test_isomerization_validation.py`` runs it), lands on the
+    temperature the generator computed for it by the emulation under
+    difflow's conventions: the check the IDAES reference makes, without
+    IDAES, while that reference is stale (#339)."""
+    import jax.numpy as jnp
+
+    from difflow_refinery.isomerization import IsomerizationReactor, IsomerizationReactorParams
+    from difflow_refinery.isomerization import thermochem as tc
+
+    run = REF["isomerization"]["isothermal_at_T_ad"]["hypo"][kind]
+    rx = IsomerizationReactor(IsomerizationReactorParams(
+        adiabatic=True, k_scale=10.0, crack_scale=0.0, n_steps=400, LHSV=0.1))
+    F0 = jnp.asarray([run["feed"].get(n, 0.0) for n in tc.NAMES])
+    out = rx.run(F0, 413.15, P=30e5)
+    assert float(out["T"]) == pytest.approx(run["T_set"], abs=1e-6)
 
 
 @pytest.mark.release

@@ -103,6 +103,12 @@ CRC_HF_LIQUID = {
     "1_butene": -20800, "2_3_dimethylpentane": -233100, "2_4_dimethylpentane": -234600,
     "2_2_4_trimethylpentane": -259200, "n_dodecane": -350900,
 }
+#: CRC's ideal-gas Hf(298 K) of the same species, J/mol (same file): the gas
+#: basis CRC's liquid values sit on.
+CRC_HF_GAS = {
+    "1_butene": 100, "2_3_dimethylpentane": -198700, "2_4_dimethylpentane": -201600,
+    "2_2_4_trimethylpentane": -224000, "n_dodecane": -289400,
+}
 
 
 class TestSpecies:
@@ -130,14 +136,23 @@ class TestSpecies:
 
     @pytest.mark.parametrize("name", ALKYLATION_SPECIES)
     def test_gas_heat_of_formation_against_api_tdb(self, name):
-        tol = 5000.0 if name == "2_3_dimethylpentane" else 1500.0   # flagged (unverified)
+        """Since #339 the API TDB value itself (the shared thermochemistry
+        table's rule), but for 1-butene (CRC +0.1 kJ/mol; ATcT -0.03 here)
+        and 2,3-dimethylpentane (CRC -198.7, API TDB -194.1 taken as an
+        outlier; not in the dict)."""
+        tol = 200.0 if name == "1_butene" else 0.0
         assert species(name).Hf_gas == pytest.approx(API_HF_GAS.get(name, species(name).Hf_gas),
                                                      abs=tol)
 
     @pytest.mark.parametrize("name", sorted(CRC_HF_LIQUID))
     def test_liquid_heat_of_formation_against_crc(self, name):
-        """Hf(g) - Hvap(298) (Hess) against CRC's own liquid Hf."""
-        assert species(name).Hf_liquid == pytest.approx(CRC_HF_LIQUID[name], abs=800.0)
+        """Hf(g) - Hvap(298) (Hess) against CRC's own liquid Hf, on CRC's gas
+        basis: since #339 the gas Hf is the shared table's (API TDB for
+        n-dodecane, 1.39 kJ/mol below CRC's), so this checks the heat of
+        vaporisation, which is what the Hess step adds."""
+        s = species(name)
+        on_crc_basis = s.Hf_liquid - (s.Hf_gas - CRC_HF_GAS[name])
+        assert on_crc_basis == pytest.approx(CRC_HF_LIQUID[name], abs=800.0)
 
 
 class TestDatabaseSpecies:

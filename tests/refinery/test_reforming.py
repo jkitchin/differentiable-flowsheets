@@ -84,11 +84,15 @@ class TestSpecies:
         for k, name in pairs.items():
             assert abs(sp.SPECIES[k].Hf - db[name]["Hf"]) < 1.0e3, (k, sp.SPECIES[k].Hf, db[name]["Hf"])
 
-    def test_crosscheck_table_is_within_its_stated_spread(self):
-        for k, vals in sp.HF_CROSSCHECK.items():
-            assert vals["API_TDB"] * 1e3 == sp.SPECIES[k].Hf
-            spread = max(vals.values()) - min(vals.values())
-            assert spread < 1.5, k
+    def test_formation_data_are_the_shared_tables(self):
+        """Hf, S0 and Cp come from difflow_refinery.thermochemistry (#339)."""
+        from difflow_refinery import thermochemistry as tchem
+
+        for k, s in sp.SPECIES.items():
+            row = tchem.species(s.table_key)
+            assert (s.Hf, s.S0, tuple(s.cp)) == (row.Hf, row.S0, row.cp), k
+            want = {"C": s.carbon, "H": s.hydrogen} if s.carbon else {"H": s.hydrogen}
+            assert row.elements == want, k
 
     def test_cp_fits_are_smooth_and_physical(self):
         T = np.linspace(298.15, 1000.0, 50)

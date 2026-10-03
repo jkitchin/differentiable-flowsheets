@@ -93,7 +93,7 @@ delta-base planning ([`difflow.planning`](planning.md)).
 
 | Unit | Main class | In → out | Model | Planning | Validation | Example |
 |---|---|---|---|---|---|---|
-| [C5/C6 isomerization](unit-operations-refinery.md#c5c6-light-naphtha-isomerization) | `IsomerizationReactor`, `IsomerizationUnit` (both on the palette) | light naphtha → isomerate | Adiabatic approach-to-equilibrium bed on ideal-gas thermochemistry; optional deisopentanizer and deisohexanizer recycle | `isom_block` | Equilibrium layer against IDAES `GibbsReactor` ([details](unit-operations-refinery.md#validation-the-isomerization-unit)); thermochemistry and adiabatic equilibrium against DWSIM 9.0.5 ([details](unit-operations-refinery.md#validation-against-dwsim-reaction-thermochemistry)); rate constants illustrative | 39 |
+| [C5/C6 isomerization](unit-operations-refinery.md#c5c6-light-naphtha-isomerization) | `IsomerizationReactor`, `IsomerizationUnit` (both on the palette) | light naphtha → isomerate | Adiabatic approach-to-equilibrium bed on ideal-gas thermochemistry; optional deisopentanizer and deisohexanizer recycle | `isom_block` | Equilibrium layer against IDAES `GibbsReactor` ([details](unit-operations-refinery.md#validation-the-isomerization-unit); stale since #339 moved the constants, pending regeneration); thermochemistry and adiabatic equilibrium against DWSIM 9.0.5 ([details](unit-operations-refinery.md#validation-against-dwsim-reaction-thermochemistry)); rate constants illustrative | 39 |
 | [Hydrotreater](unit-operations-refinery.md#the-hydrotreater) | `Hydrotreater` (library) | naphtha, kerosene or diesel → treated product, wild naphtha, off-gas; optionally jet / diesel (or light / heavy naphtha) | Trickle-bed HDS by sulfur class (LHHW, H2S-inhibited), HDN, aromatics saturation with equilibrium; charge-heater duty; HP separator, H2 recycle, stripper; optional TBP-split product fractionator (`res.fractionate`); diesel and naphtha (`NAPHTHA_HDT_PARAMS`) constant sets | `hdt_block` | Balances and gradients only; no literature cross-check; constants illustrative. Heats of reaction and aromatics-saturation equilibrium against DWSIM 9.0.5 ([details](unit-operations-refinery.md#validation-against-dwsim-reaction-thermochemistry)); hP-separator flash of a solved effluent against DWSIM 9.0.5 PR78 on the same constants, and the dissolved H2/H2S under DWSIM's data ([details](unit-operations-refinery.md#validation-against-dwsim-light-ends-hp-separator-and-gas-plant)) | 40 |
 | [Hydrocracker](unit-operations-refinery.md#the-hydrocracker) | `Hydrocracker` (library) | VGO → LPG, naphtha, kerosene, diesel, unconverted oil | Pretreat bed (hydrotreating kinetics) then cracking bed on continuous lumping or discrete lumps, organic-N inhibition; TBP-split fractionator; UCO recycle | `hcu_block` | Balances and gradients only; no literature cross-check; constants illustrative | — |
 | [Fluid catalytic cracker](unit-operations-refinery.md#the-fluid-catalytic-cracker) | `FCCUnit` (library) | VGO → dry gas, C3, C4, gasoline, LCO, slurry, flue gas | 3-, 4- or 5-lump riser and coke-burning regenerator solved together for the heat balance; TBP-split main fractionator | `fcc_block` | Balances and gradients only; no literature cross-check; constants illustrative ([details](unit-operations-refinery.md#fcc-what-is-tested-and-what-is-not)); regenerator coke-burn heat against DWSIM 9.0.5 ([details](unit-operations-refinery.md#validation-against-dwsim-reaction-thermochemistry)) | — |
@@ -132,6 +132,17 @@ Two kinds of number appear in these units, and they deserve different trust.
 Every citation, equation number or coefficient that could not be checked
 against its source is marked **(unverified)** in the full documentation and
 in the code.
+
+**One set of formation data.** Every unit with reactions takes its ideal-gas
+heats of formation, entropies and heat capacities from one table,
+`difflow_refinery.thermochemistry` (#339). Each species records its
+source (CODATA, API Technical Data Book, CRC, Yaws, NIST-JANAF and TRC fits)
+and how far it was checked. The hydrotreater moves onto it with #338. See
+[Thermochemical data](unit-operations-refinery.md#thermochemical-data).
+Moving isomerization onto the table changed its C5/C6 equilibria. The iC5
+share of the C5s at 450 K went from 0.820 to 0.772 (DWSIM on ChemSep data
+gives 0.762), and its IDAES reference has not yet been regenerated. The
+reformer's numbers did not change.
 
 ---
 
