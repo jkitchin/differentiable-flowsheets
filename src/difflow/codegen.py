@@ -302,9 +302,19 @@ def to_python(
             else:
                 args.append(_render(value, f"{where}.{extra}", imports))
 
+        # `Unit.params` are passed to the operation on every call (a
+        # Splitter's `split_frac`). Leaving them out gave a script that
+        # built and then raised "missing 1 required positional argument".
+        call = ""
+        if unit.params:
+            items = ", ".join(
+                f"{key!r}: {_render(value, f'{where} call parameter {key!r}', imports)}"
+                for key, value in unit.params.items()
+            )
+            call = f", params={{{items}}}"
         body.append(
             f"fs.add_unit(Unit({unit.name!r}, {cls.__name__}({', '.join(args)}), "
-            f"{list(unit.inlet_names)!r}, {list(unit.outlet_names)!r}))"
+            f"{list(unit.inlet_names)!r}, {list(unit.outlet_names)!r}{call}))"
         )
 
     if flowsheet.recycles:
