@@ -557,18 +557,12 @@
       if (answer.ok) {
         showResults = true
         await loadPickers()
-        const held = answer.pending?.length
-          // What was solved is not what is on the canvas. Said here
-          // rather than left to the picture, because the numbers in the
-          // results panel look exactly the same either way.
-          ? ` (${answer.pending.join(', ')} not built, and not in it)`
-          : ''
         const warnings = answer.audit?.warnings ?? []
         note = (answer.converged === false
           ? 'solved, but the tear residual did not reach the tolerance'
           : warnings.length
             ? `solved, but ${warnings[0]}`
-            : `solved: ${Object.keys(answer.streams).length} streams`) + held
+            : `solved: ${Object.keys(answer.streams).length} streams`)
         warnNote = answer.converged === false || warnings.length ? note : null
         okNote = warnNote ? null : note
       } else {

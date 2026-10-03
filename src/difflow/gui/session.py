@@ -1761,11 +1761,6 @@ class FlowsheetSession:
             "tol": _number(getattr(fs, "last_solve_tol", None)),
             "tear_streams": list(getattr(fs, "last_solve_tear_streams", []) or []),
             "solver": self.solver_options(),
-            # What was solved is not what is on the canvas if any of it is
-            # still red. The numbers below are right about the flowsheet
-            # that exists, and saying nothing here would let them be read
-            # as being about the one being drawn.
-            "pending": sorted(self.pending),
             "audit": self._audit(streams),
         }
 

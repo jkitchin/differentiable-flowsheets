@@ -602,7 +602,7 @@ class TestFiles:
         assert session.solve() == {
             "ok": True, "streams": {}, "species": [], "converged": True,
             "iterations": 0, "method": "direct", "residual": 0.0,
-            "tol": 1e-08, "tear_streams": [], "pending": [],
+            "tol": 1e-08, "tear_streams": [],
             "audit": {"warnings": [], "mass": None},
             "solver": {"tol": 1e-8, "max_iter": 100,
                        "acceleration": "anderson",
