@@ -2836,22 +2836,24 @@ Feeds: the LVGO + HVGO of a `VacuumColumn` on the idealized atmospheric residue 
 | | light VGO, once-through | light VGO, 60 % UCO recycle | heavy VGO, once-through |
 |---|---|---|---|
 | fresh feed | 45.1 kg/s; 2.91 wt% S, 2214 wppm N | same | 48.5 kg/s; 4.10 wt% S, 2948 wppm N |
-| to the cracker | 947 wppm S, 42.7 wppm N | 844 wppm S, 40.0 wppm N | 315 wppm S, 14.5 wppm N |
-| WABT pretreat / cracking | 394.1 / 395.2 °C | 393.9 / 391.0 °C | 416.8 / 383.4 °C |
-| bed rises, cracking | 19.1, 21.4, 22.0, 23.1, 26.2 K | 13.3, 15.4, 16.2, 17.0, 18.8 K | 28.6, 30.3, 27.9, 26.0, 26.1 K |
-| conversion (370 °C+), per pass / overall | 69.7 / 69.7 % | 46.9 / 68.8 % | 58.2 / 58.2 % |
-| off-gas, LPG (wt%) | 1.07, 1.23 | 1.22, 1.06 | 1.43, 1.85 |
-| light, heavy naphtha (wt%) | 2.55, 10.47 | 2.19, 9.22 | 1.47, 8.01 |
-| kerosene, diesel (wt%) | 24.83, 31.48 | 23.03, 34.09 | 20.05, 27.13 |
-| UCO bleed (wt%) | 28.60 | 29.47 | 39.81 |
-| naphtha / middle distillate | 0.231 | 0.200 | 0.201 |
-| chemical H2 | 278 Nm³/m³ (1649 scf/bbl, 2.69 wt%) | 264 Nm³/m³ (1565 scf/bbl) | 359 Nm³/m³ (2129 scf/bbl) |
-| kerosene SG; diesel SG, cetane index | 0.790; 0.840, 65.5 | 0.790; 0.842, 65.3 | 0.829; 0.882, 47.4 |
-| UCO BMCI | 33.1 | 34.1 | 50.1 |
-| closure (worst of mass, C, H, S, N) | 2e-15 | 3e-12 | 1e-15 |
-| tears | gas 1e-14 | gas 9e-12; UCO 1.8e-10 relative, 13 Anderson passes | gas 3e-13 |
+| to the cracker | 971 wppm S, 43.3 wppm N | 858 wppm S, 40.3 wppm N | 418 wppm S, 17.2 wppm N |
+| WABT pretreat / cracking | 394.3 / 395.5 °C | 394.1 / 391.2 °C | 415.6 / 383.3 °C |
+| bed rises, cracking | 19.6, 22.0, 22.5, 23.5, 26.6 K | 13.6, 15.8, 16.6, 17.4, 19.2 K | 29.9, 30.3, 27.5, 25.6, 25.8 K |
+| conversion (370 °C+), per pass / overall | 70.0 / 70.0 % | 47.2 / 69.1 % | 55.6 / 55.6 % |
+| off-gas, LPG (wt%) | 1.08, 1.24 | 1.22, 1.07 | 1.39, 1.70 |
+| light, heavy naphtha (wt%) | 2.57, 10.54 | 2.21, 9.27 | 1.35, 7.46 |
+| kerosene, diesel (wt%) | 24.96, 31.55 | 23.15, 34.16 | 18.95, 26.40 |
+| UCO bleed (wt%) | 28.31 | 29.21 | 42.35 |
+| naphtha / middle distillate | 0.232 | 0.200 | 0.194 |
+| chemical H2 | 278 Nm³/m³ (1650 scf/bbl, 2.70 wt%) | 264 Nm³/m³ (1567 scf/bbl) | 347 Nm³/m³ (2062 scf/bbl) |
+| kerosene SG; diesel SG, cetane index | 0.790; 0.840, 65.5 | 0.790; 0.842, 65.3 | 0.829; 0.882, 47.3 |
+| UCO BMCI | 33.1 | 34.1 | 50.3 |
+| closure (worst of mass, C, H, S, N) | 4e-15 | 9e-13 | 6e-15 |
+| tears | gas 2e-13 | gas 6e-12; UCO 1.7e-10 relative, 13 Anderson passes | gas 3e-13 |
 
-Read these as the shape of the answer: every cracking constant is illustrative. A few things they show, all of which follow from the model rather than being tuned in: the recycle at the same catalyst and temperature *lowers* the per-pass conversion (a recycle reactor is less efficient than plug flow) and the overall conversion slightly, and buys selectivity -- 2.6 wt% more diesel, less naphtha per middle distillate, less H2; the heavy, aromatic VGO consumes more hydrogen, gives denser, lower-cetane products (its products inherit its lower Watson K through `Kw_feed + dKw`) and a higher-BMCI UCO; its pretreat bed rises 81 K, which a real unit would quench harder (the pretreat quench is a spec).
+Recomputed for #338, which made the pretreat bed's aromatics equilibria Cp-integrated (the cracking bed's `SATURATION_HEAT_PER_H2` is still a 298 K value). On the heavy VGO the pretreat bed saturates less, releases less heat (it rises 78 K against 81) and runs 1.2 K cooler, so the cracker feed keeps more sulfur and nitrogen (418 against 315 wppm S, 17.2 against 14.5 wppm N; organic nitrogen inhibits cracking in the kinetics) and more aromatics: its conversion fell from 58.2 to 55.6 % and its chemical H2 from 359 to 347 Nm³/m³. The light VGO moved by 0.3 % conversion or less.
+
+Read these as the shape of the answer: every cracking constant is illustrative. A few things they show, all of which follow from the model rather than being tuned in: the recycle at the same catalyst and temperature *lowers* the per-pass conversion (a recycle reactor is less efficient than plug flow) and the overall conversion slightly, and buys selectivity -- 2.6 wt% more diesel, less naphtha per middle distillate, less H2; the heavy, aromatic VGO consumes more hydrogen, gives denser, lower-cetane products (its products inherit its lower Watson K through `Kw_feed + dKw`) and a higher-BMCI UCO; its pretreat bed rises 78 K, which a real unit would quench harder (the pretreat quench is a spec).
 
 Compiling a once-through unit takes about 2.5 min and a solve about 7--9 s (the gas tear: 12 substitution passes, then Newton); with the UCO recycle the compile is about 6.5 min and a solve about 40 s. A reverse-mode gradient adds one compile: the once-through gradient test takes about 10 min, the recycle-ratio one about 30 min and 11 GB (its adjoint runs 60 vector-Jacobian products of the loop per cotangent), and both are marked `slow` and `release`.
 
