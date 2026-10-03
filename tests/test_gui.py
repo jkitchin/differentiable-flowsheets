@@ -2255,6 +2255,29 @@ class TestConsole:
         assert session.console_run("len(fs.units)")["changed"] is False
         assert session.streams is not None
 
+    def test_a_cell_can_call_the_session_it_advertises(self, thermo):
+        """`session.solve()` from a cell, as CONSOLE_NAMES offers.
+
+        The cell runs while `console_run` holds the session lock, and
+        `solve` takes it again: with a non-reentrant lock that call never
+        returned and every later edit hung. Run in a thread so a
+        regression fails here instead of hanging the suite.
+        """
+        import threading
+
+        session = FlowsheetSession(build_flowsheet(thermo))
+        result = {}
+        worker = threading.Thread(target=lambda: result.update(
+            answer=session.console_run("session.solve()['ok']")), daemon=True)
+        worker.start()
+        worker.join(timeout=120)
+        assert not worker.is_alive(), "console_run deadlocked on session.solve()"
+        assert result["answer"]["error"] is None, result["answer"]["error"]
+        assert result["answer"]["outputs"][-1]["text"] == "True"
+        assert session.streams is not None
+        # and the session still takes edits afterwards
+        assert session.solve()["ok"]
+
     def test_reset_forgets_what_the_console_defined(self, thermo):
         session = FlowsheetSession(build_flowsheet(thermo))
         session.console_run("keep = 1")

@@ -189,7 +189,11 @@ class FlowsheetSession:
             # unbuildable, and it says so on the palette row. `set_species`
             # is how that gets answered.
             self.flowsheet = _empty_flowsheet()
-        self._lock = threading.Lock()
+        # Re-entrant: a console cell runs on the request thread while
+        # `console_run` holds this lock, and `session.solve()` -- which the
+        # console advertises -- takes it again. A plain Lock deadlocked
+        # there, and every edit route after it hung until a restart.
+        self._lock = threading.RLock()
 
     # -- the code context ---------------------------------------------
 
