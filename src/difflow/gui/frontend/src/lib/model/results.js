@@ -161,11 +161,14 @@ export function fmt(value, digits = 4) {
   if (typeof value === 'string') return value
   if (!Number.isFinite(value)) return String(value)
   if (value === 0) return '0'
-  const size = Math.abs(value)
-  if (size >= 1e-3 && size < 1e5) {
-    return String(Number(value.toPrecision(digits)))
-  }
-  return value.toExponential(digits - 1)
+  // Round first, then choose the form: deciding on the unrounded value
+  // printed 99999.7 as "100000" -- six figures, the very thing this is
+  // here to avoid -- because it was under 1e5 until it was rounded.
+  const rounded = Number(value.toPrecision(digits))
+  const size = Math.abs(rounded)
+  if (size >= 1e-3 && size < 1e5) return String(rounded)
+  // "1.013e5", as the docstring always said; JavaScript writes "e+5".
+  return rounded.toExponential(digits - 1).replace('e+', 'e')
 }
 
 /**

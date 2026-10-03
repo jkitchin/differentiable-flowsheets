@@ -99,7 +99,11 @@ test('an empty tornado has no height and does not divide by zero', () => {
 })
 
 test('numbers are readable rather than complete', () => {
-  assert.equal(fmt(101325), '1.013e+5')
+  assert.equal(fmt(101325), '1.013e5')
+  // Rounding decides the form, not the unrounded value.
+  assert.equal(fmt(99999.7), '1.000e5')
+  assert.equal(fmt(-99999.7), '-1.000e5')
+  assert.equal(fmt(0.00099996), '0.001')
   assert.equal(fmt(0.5936974270923778), '0.5937')
   assert.equal(fmt(0), '0')
   assert.equal(fmt(1.0), '1')
