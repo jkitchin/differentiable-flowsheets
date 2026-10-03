@@ -144,6 +144,20 @@ export function colorOptions(solve) {
   ]
 }
 
+/**
+ * The colour-by key to use for `solve`, given the one chosen earlier.
+ *
+ * A species key outlives the flowsheet it was chosen on: open another
+ * file and `x:ethanol` names nothing, the legend's select shows its first
+ * row (Temperature) while the wires are coloured by nothing at all. A key
+ * the solve has no row for falls back to temperature, which every solve
+ * has; no key, or no solve yet, is left as it is.
+ */
+export function validColorBy(solve, key) {
+  if (!key || !solve) return key
+  return colorOptions(solve).some((o) => o.key === key) ? key : 'T'
+}
+
 /** One stream's value of a colour-by key, or null where it has none. */
 export function valueOf(stream, key) {
   if (!stream) return null

@@ -20,6 +20,7 @@
   import { menuBar, shortPath } from './lib/model/menubar.js'
   import { keepAlive } from './lib/model/lifetime.js'
   import { flowLabels, flowTints } from './lib/model/results.js'
+  import { validColorBy } from './lib/model/solution.js'
 
   let doc = $state(null)
   let path = $state('')
@@ -93,6 +94,11 @@
   // solve does not clear them; they come back with the next solve.
   let widthByFlow = $state(false)
   let colorBy = $state('')
+  // Kept to a key this solve can colour by (see `validColorBy`).
+  $effect(() => {
+    const valid = validColorBy(result?.ok ? result : null, colorBy)
+    if (valid !== colorBy) colorBy = valid
+  })
   // Which file the File menu is writing out, if any. The menu closed
   // behind the click, so this is what stops a second click from asking
   // for the same file twice while the first is still being drawn.
