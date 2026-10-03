@@ -964,6 +964,11 @@ class FlowsheetSession:
             raise edit.EditError(
                 f"position for {key!r} must be {{'x': number, 'y': number}}"
             ) from exc
+        # `float("nan")` is a float. A NaN coordinate saved fine and then
+        # failed the file's own JSON (`allow_nan=False`) on the next save,
+        # or put the node nowhere on the canvas.
+        if not (math.isfinite(x) and math.isfinite(y)):
+            raise edit.EditError(f"position for {key!r} must be finite")
         return {"x": x, "y": y}
 
     def _place(self, key: str, position) -> None:
@@ -1418,12 +1423,29 @@ class FlowsheetSession:
         """Adopt canvas positions. No rebuild, no solve --- coordinates only."""
         from difflow.gui import edit
 
+        from difflow.gui.layout import FEED_PREFIX, PRODUCT_PREFIX
+
         def apply() -> dict:
             if not isinstance(nodes, dict):
                 raise edit.EditError("layout must be an object of {key: {x, y}}")
-            for key, position in nodes.items():
-                self._place(key, position)
-            return {"nodes": len(nodes)}
+            # Every position checked before any is kept, so a bad one
+            # leaves the layout as it was rather than half moved.
+            placed = {key: self._position(key, p) for key, p in nodes.items()}
+            # Only keys the canvas can draw. Anything else was stored and
+            # saved to the file for ever: a node deleted while its drag
+            # was in flight, or any string a caller cared to send.
+            streams = edit.stream_names(self.flowsheet)
+            known = ({u.name for u in self.flowsheet.units}
+                     | {FEED_PREFIX + s for s in streams}
+                     | {PRODUCT_PREFIX + s for s in streams})
+            ignored = sorted(key for key in placed if key not in known)
+            for key, position in placed.items():
+                if key in known:
+                    self._place(key, position)
+            answer = {"nodes": len(placed) - len(ignored)}
+            if ignored:
+                answer["ignored"] = ignored
+            return answer
 
         return self._edit(apply, moves_only=True)
 

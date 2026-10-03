@@ -344,6 +344,24 @@ class TestLayout:
         assert session.set_layout({"mixer": [1, 2]})["ok"] is False
         assert session.set_layout("nope")["ok"] is False
 
+    @pytest.mark.parametrize("bad", [float("nan"), float("inf"), "nan"])
+    def test_a_non_finite_position_is_refused(self, session, bad):
+        before = dict(session.flowsheet.view.get("nodes", {}))
+        answer = session.set_layout({"mixer": {"x": 1, "y": 2},
+                                     "reactor": {"x": bad, "y": 0}})
+        assert answer["ok"] is False and "finite" in answer["error"]
+        # and nothing was half applied
+        assert session.flowsheet.view.get("nodes", {}) == before
+
+    def test_a_key_the_canvas_cannot_draw_is_not_kept(self, session):
+        answer = session.set_layout({"mixer": {"x": 1, "y": 2},
+                                     "ghost": {"x": 3, "y": 4},
+                                     "feed:nowhere": {"x": 5, "y": 6}})
+        assert answer["ok"] and answer["nodes"] == 1
+        assert answer["ignored"] == ["feed:nowhere", "ghost"]
+        nodes = session.flowsheet.view["nodes"]
+        assert "ghost" not in nodes and "feed:nowhere" not in nodes
+
 
 class TestFeeds:
     """What a stream carries, and what happens when nothing does.
