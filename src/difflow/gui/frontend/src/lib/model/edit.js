@@ -34,11 +34,12 @@ export function parseHandle(handle) {
 /**
  * The wire a connection drag describes, or a reason it is not one.
  *
- * Only unit-to-unit wires are edits. A feed node and a product node are
+ * Unit-to-unit wires are connections. A feed node and a product node are
  * drawn *from* the topology -- they are stream names with nothing on one
- * end, not objects the flowsheet holds -- so dragging one would have to
- * mean something else, and quietly doing nothing is the worst of the
- * available answers.
+ * end, not objects the flowsheet holds -- so dragging one has to mean
+ * something else. From a feed onto an inlet it means "this inlet reads
+ * that feed" (`attach`); anything else is refused, because quietly doing
+ * nothing is the worst of the available answers.
  */
 export function connectionWire(payload) {
   // Both shapes, on purpose. @xyflow hands `onconnect` the `Connection`
@@ -52,6 +53,15 @@ export function connectionWire(payload) {
   const source = parseNodeId(connection?.source)
   const target = parseNodeId(connection?.target)
   if (!source || !target) return { error: 'that is not a connection' }
+  // A feed dragged onto an inlet hands that feed to the inlet: the inlet
+  // is renamed to the feed's stream. It is how a unit put in place of a
+  // deleted one takes over the feed the deleted one read; the server
+  // refuses it unless the feed is idle and the inlet unfed.
+  if (source.kind === 'feed' && target.kind === 'unit') {
+    const inlet = parseHandle(connection.targetHandle)
+    if (!inlet) return { error: 'drag from a port to a port' }
+    return { attach: { stream: inlet, feed: source.name } }
+  }
   if (source.kind !== 'unit' || target.kind !== 'unit') {
     return { error: 'wire one unit to another; feeds and products follow from the topology' }
   }

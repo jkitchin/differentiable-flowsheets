@@ -21,7 +21,8 @@
     onapply = () => {},
     // Cmd-S with a draft not yet applied: apply it, then save. Left to
     // the window's Cmd-S, the flowsheet was saved WITHOUT the text on
-    // screen, and the "saved" note said the opposite.
+    // screen, and the "saved" note said the opposite. Called with null
+    // for a save with nothing to apply.
     onsave = () => {},
     onclose = () => {},
   } = $props()
@@ -32,7 +33,11 @@
     if (!dirty) return       // nothing unapplied: the window's save is right
     event.preventDefault()
     event.stopPropagation()
-    if (!busy) onsave(draft)
+    // Busy (a solve, a console cell): remember the keystroke and save
+    // when it is done. Dropping it said nothing, and the user had every
+    // reason to think the file was saved.
+    if (busy) { saveQueued = true; saveCancelled = false }
+    else onsave(draft)
   }
 
   // Seeded once, at mount, and deliberately so: the panel exists only
@@ -58,6 +63,27 @@
     })
   })
   $effect(() => { if (!dirty) behind = false })
+
+  // The queued Cmd-S (see `keydown`). Declared after the effects that
+  // set `behind`, so in a shared flush it reads their answer.
+  // When it fires: a draft still unapplied is applied and saved; one
+  // applied meanwhile (the Apply request is itself what made the panel
+  // busy) or reverted is just a save, `onsave(null)` -- the keystroke was
+  // stopped, so the window's save never ran. A draft the run left
+  // `behind` (an Open, an Undo) was written against a flowsheet that is
+  // gone: saving it would put the old code into the new file, so the
+  // save is cancelled, and says so.
+  let saveQueued = $state(false)
+  let saveCancelled = $state(false)
+  $effect(() => {
+    if (busy || !saveQueued) return
+    untrack(() => {
+      saveQueued = false
+      if (dirty && behind) saveCancelled = true
+      else onsave(dirty ? draft : null)
+    })
+  })
+  $effect(() => { if (!behind) saveCancelled = false })
 
   const STARTER = `from difflow import IdealThermo, get_species_data, mass_action_kinetics
 
@@ -103,6 +129,11 @@ kin = mass_action_kinetics([{
   </div>
 
   <footer>
+    {#if saveQueued}
+      <p class="names">will apply and save once the current run finishes</p>
+    {:else if saveCancelled}
+      <p class="stale" role="alert">Not saved: the code context changed while the save waited.</p>
+    {/if}
     {#if error}
       <p class="error">{error}</p>
     {:else if names.length}

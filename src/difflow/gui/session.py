@@ -46,6 +46,9 @@ from difflow import scripts
 #: how many edits Undo reaches back through
 UNDO_DEPTH = 100
 
+#: Node-id prefixes the canvas uses for feeds and products.
+RESERVED_PREFIXES = ("feed:", "product:")
+
 #: The recycle solver's options the editor can set, with the defaults of
 #: :meth:`Flowsheet.solve`. Kept on ``view["solver"]``, so they are saved
 #: with the file and undone like any other edit; a key that is absent
@@ -173,6 +176,22 @@ def species_from(bindings: dict) -> list[str] | None:
     return None
 
 
+def _check_reserved_names(flowsheet) -> None:
+    """Refuse a unit the canvas would take for a feed or a product.
+
+    The canvas keys a feed ``feed:<stream>`` and a product
+    ``product:<stream>``, beside units under their bare names. Renaming
+    refuses such a name; a file or a script could still bring one in, and
+    then deleting the unit would delete a feed.
+    """
+    for u in flowsheet.units:
+        if str(u.name).startswith(RESERVED_PREFIXES):
+            raise ValueError(
+                f"unit {u.name!r}: a unit name cannot begin with "
+                f"{u.name.split(':')[0] + ':'!r}; the canvas uses that for "
+                "feeds and products. Rename it in the file.")
+
+
 def _empty_flowsheet(species: list[str] | None = None):
     """A flowsheet with nothing in it, for an editor opened with no file."""
     from difflow import Flowsheet
@@ -271,6 +290,7 @@ class FlowsheetSession:
             # unbuildable, and it says so on the palette row. `set_species`
             # is how that gets answered.
             self.flowsheet = _empty_flowsheet()
+        _check_reserved_names(self.flowsheet)
         # A file saved with an unfinished unit in it opens with its red
         # node, rather than with a unit that silently cannot run.
         self._adopt(self.flowsheet, self.bindings, self.context_error)
@@ -819,6 +839,7 @@ class FlowsheetSession:
             bindings, error = (evaluate_context(context)
                                if context.strip() else ({}, None))
             flowsheet = serialize.from_dict(document, refs=bindings)
+            _check_reserved_names(flowsheet)
         except Exception as exc:
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
         with self._lock:
@@ -963,7 +984,7 @@ class FlowsheetSession:
         # `product:<stream>`, beside units under their bare names, and the
         # view's node positions are saved under the same keys. A unit so
         # named would be taken for the feed: deleting it deletes the feed.
-        if new_name.startswith(("feed:", "product:")):
+        if new_name.startswith(RESERVED_PREFIXES):
             raise edit.EditError(
                 f"a unit name cannot begin with {new_name.split(':')[0] + ':'!r}; "
                 "the canvas uses that for feeds and products")
@@ -1039,6 +1060,11 @@ class FlowsheetSession:
                 raise edit.EditError(f"{operation!r} is not a registered operation")
             taken = self._taken()
             unit_name = edit.unique(name or operation.lower(), taken)
+            if name:
+                # The same checks a rename makes: the API and the assistant
+                # can name a unit on the way in, and the canvas cannot tell
+                # a unit called feed:x from the feed.
+                self._check_unit_name(name)
             if name and name in taken:
                 raise edit.EditError(f"there is already a unit called {name!r}")
             override = edit.known_extras(self.flowsheet, info.cls, self.bindings)
@@ -1371,22 +1397,19 @@ class FlowsheetSession:
                        if src in touched or dst in touched}
             for src in dropped:
                 del self.flowsheet.recycles[src]
-            # Likewise a feed only this unit read: left, it is a box on
-            # the canvas wired to nothing, feeding a stream nobody reads.
-            # Undo brings it back, composition and all.
+            # A feed only this unit read is kept, composition and all: it
+            # is the part of the flowsheet that took typing, and the usual
+            # reason to delete a unit is to put a different one in its
+            # place. Renaming the new unit's inlet onto it attaches it.
             still_read = {s for other in self.flowsheet.units
                           for s in other.inlet_names}
-            feeds_dropped = sorted(f for f in self.flowsheet.feeds
-                                   if f in touched and f not in still_read)
-            for f in feeds_dropped:
-                del self.flowsheet.feeds[f]
+            feeds_unread = sorted(f for f in self.flowsheet.feeds
+                                  if f in touched and f not in still_read)
             nodes = (self.flowsheet.view or {}).get("nodes")
             if isinstance(nodes, dict):
                 nodes.pop(name, None)
-                for f in feeds_dropped:
-                    nodes.pop(f"feed:{f}", None)
             return {"name": name, "recycles_dropped": dropped,
-                    "feeds_dropped": feeds_dropped}
+                    "feeds_unread": feeds_unread}
 
         return self._edit(apply)
 
@@ -1438,7 +1461,8 @@ class FlowsheetSession:
         A stream name is the wiring, so this moves feeds, recycle ends,
         every port that reads or writes it and the canvas node all at
         once. Refused if the new name is taken, because that would be a
-        connection wearing a rename's clothes.
+        connection wearing a rename's clothes --- unless it is a feed
+        nothing reads, which an unfed inlet takes over.
         """
         from difflow.gui import edit
 
@@ -1557,6 +1581,7 @@ class FlowsheetSession:
                 bindings, error = (evaluate_context(context)
                                    if context.strip() else ({}, None))
                 flowsheet = serialize.from_dict(data, refs=bindings)
+            _check_reserved_names(flowsheet)
         except Exception as exc:
             return {"ok": False,
                     "error": f"could not open {target.name}: "
@@ -1795,8 +1820,9 @@ class FlowsheetSession:
         CSTR with ``V = -1`` solved to 2 mol/s in and 2.25 out and the
         editor said "solved". Three checks, each cheap, none of which
         changes ``ok``: streams holding NaN or infinity, negative flows,
-        and the overall mass balance --- feeds against the streams no unit
-        reads --- when every species has a molar mass in the database.
+        and the overall mass balance --- the feeds some unit reads against
+        the streams no unit reads --- when every species has a molar mass
+        in the database. A feed nothing reads is warned about by name.
         """
         from difflow.database import get_species_data
 
@@ -1815,6 +1841,11 @@ class FlowsheetSession:
         if negative:
             warnings.append(f"negative flows in {', '.join(negative)}")
 
+        idle = sorted(set(fs.feeds) - {n for u in fs.units for n in u.inlet_names})
+        if idle:
+            warnings.append(
+                f"{', '.join(idle)} {'is a feed' if len(idle) == 1 else 'are feeds'}"
+                " no unit reads; drag it onto an inlet, or delete it")
         order = list(getattr(fs, "species_order", None) or [])
         mass = None
         try:
@@ -1830,7 +1861,10 @@ class FlowsheetSession:
                 return sum(float(streams[n].get(f"F_{s}", 0.0)) * mw[s]
                            for n in names if n in streams for s in order) / 1000.0
 
-            m_in, m_out = kg(fs.feeds), kg(products)
+            # A feed nothing reads (kept when its unit was deleted) enters
+            # nothing, so it is not "in"; counted, it read as mass lost.
+            m_in = kg(f for f in fs.feeds if f in read)
+            m_out = kg(products)
             gap = (m_out - m_in) / max(abs(m_in), 1e-300)
             mass = {"in": m_in, "out": m_out, "relative_gap": gap,
                     "products": products}
