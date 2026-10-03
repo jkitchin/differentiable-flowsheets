@@ -31,6 +31,9 @@
   // model against what it last read or wrote, so an edit made from the
   // console counts as much as one made on the canvas.
   let dirty = $state(false)
+  // Whether the server has a step to undo or redo, for the Edit menu.
+  let canUndo = $state(false)
+  let canRedo = $state(false)
   // The species list, and whether it can still be changed -- the server
   // answers both with the document, because "can I edit this" is a fact
   // about the flowsheet (has it any units yet?) and not a preference.
@@ -148,12 +151,19 @@
    * saving the flowsheet is what it means wherever it is pressed --- and
    * because the browser's own answer to it, offering to save the page,
    * has never once been what anyone wanted here. Cmd-Enter is guarded:
-   * the console already ends a cell with it.
+   * the console already ends a cell with it. Cmd-Z is guarded too: in a
+   * text field it is the field's own undo, which is the one meant there.
    */
   function hotkey(event) {
     if (menu) return       // the open menu owns the keyboard
     if (event.metaKey || event.ctrlKey) {
-      if (event.altKey || event.shiftKey) return
+      if (event.altKey) return
+      if (event.key.toLowerCase() === 'z' && !typing(event)) {
+        event.preventDefault()
+        if (!busy) event.shiftKey ? redo() : undo()
+        return
+      }
+      if (event.shiftKey) return
       if (event.key.toLowerCase() === 's') {
         event.preventDefault()
         if (!busy) (path ? save() : saveAs())
@@ -176,6 +186,8 @@
     path = payload.path
     source = payload.source ?? ''
     dirty = !!payload.dirty
+    canUndo = !!payload.undo
+    canRedo = !!payload.redo
     species = payload.species ?? []
     speciesEditable = payload.editable !== false
     pending = payload.pending ?? []
@@ -480,7 +492,7 @@
     doc = { ...doc, view: { ...doc.view, nodes: { ...doc.view?.nodes, ...moved } } }
     edit(async () => {
       const answer = await post('/api/layout', { nodes: moved })
-      if (answer?.ok) dirty = true
+      if (answer?.ok) { dirty = true; canUndo = true; canRedo = false }
       return answer
     }, { reload: false, stale: false })
   }
@@ -583,6 +595,23 @@
     })
   }
 
+  /**
+   * One step back or forward through the server's history. The code
+   * context can be part of the step, so it and the palette's flags are
+   * read again along with the canvas.
+   */
+  const step = (verb) =>
+    edit(async () => {
+      const answer = await post(`/api/${verb}`)
+      if (answer.ok) {
+        await loadContext()
+        catalog = await get('/api/catalog')
+      }
+      return answer
+    })
+  const undo = () => step('undo')
+  const redo = () => step('redo')
+
   const newFile = () =>
     discard('Start a new flowsheet') && edit(async () => adopted(await post('/api/new')))
 
@@ -642,6 +671,8 @@
     solved: !!result?.ok,
     widthByFlow,
     colorBy,
+    canUndo,
+    canRedo,
     panels: {
       results: showResults,
       context: showContext,
@@ -662,6 +693,8 @@
       }),
       saveAs,
       openFile,
+      undo,
+      redo,
       newFile,
       export: runExport,
       quit,

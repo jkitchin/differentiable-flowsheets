@@ -687,6 +687,79 @@ class TestFiles:
                 ] == [answer["name"]]
 
 
+class TestUndo:
+    """There was no way back from a deleted unit but retyping it."""
+
+    @pytest.fixture
+    def ester(self):
+        s = FlowsheetSession()
+        assert s.open_example("02_reactor_flash")["ok"]
+        return s
+
+    def V(self, s):
+        return float(edit.unit(s.flowsheet, "reactor").operation.params.V)
+
+    def test_an_example_has_nothing_to_undo(self, ester):
+        assert ester.history() == {"undo": False, "redo": False}
+        assert not ester.undo()["ok"]
+
+    def test_undo_and_redo_a_parameter(self, ester):
+        ester.patch_unit("reactor", {"params": {"V": 0.7}})
+        ester.patch_unit("reactor", {"params": {"V": 0.9}})
+        assert ester.undo()["ok"] and self.V(ester) == pytest.approx(0.7)
+        assert ester.undo()["ok"] and self.V(ester) == pytest.approx(0.5)
+        assert ester.document()["dirty"] is False
+        answer = ester.redo()
+        assert answer == {"ok": True, "undo": True, "redo": True}
+        assert self.V(ester) == pytest.approx(0.7)
+
+    def test_a_deleted_unit_comes_back_wired(self, ester):
+        before = serialize.to_dict(ester.flowsheet)
+        assert ester.remove_unit("flash")["ok"]
+        assert ester.undo()["ok"]
+        assert serialize.to_dict(ester.flowsheet) == before
+
+    def test_a_new_edit_drops_the_redo(self, ester):
+        ester.patch_unit("reactor", {"params": {"V": 0.7}})
+        ester.undo()
+        ester.patch_unit("reactor", {"params": {"V": 0.8}})
+        assert not ester.redo()["ok"]
+
+    def test_a_refused_edit_is_not_a_step(self, ester):
+        assert not ester.patch_unit("reactor", {"params": {"V": "abc"}})["ok"]
+        assert ester.history()["undo"] is False
+
+    def test_one_add_is_one_step(self, ester):
+        n = len(ester.flowsheet.units)
+        assert ester.add_unit("Mixer")["ok"]
+        assert ester.undo()["ok"]
+        assert len(ester.flowsheet.units) == n
+        assert ester.history()["undo"] is False
+
+    def test_feeds_moves_context_and_console_undo(self, ester):
+        feed = next(iter(ester.flowsheet.feeds))
+        T = float(ester.flowsheet.feeds[feed]["T"])
+        ester.set_feed(feed, {"T": T + 10})
+        ester.set_layout({"reactor": {"x": 1.0, "y": 2.0}})
+        ester.set_code_context("X = 1\n")
+        ester.console_run("fs.default_T = 123.0")
+        for _ in range(4):
+            assert ester.undo()["ok"]
+        assert float(ester.flowsheet.feeds[feed]["T"]) == pytest.approx(T)
+        assert ester.document()["dirty"] is False
+
+    def test_opening_another_flowsheet_starts_a_new_history(self, ester):
+        ester.patch_unit("reactor", {"params": {"V": 0.7}})
+        ester.new()
+        assert ester.history() == {"undo": False, "redo": False}
+
+    def test_history_is_bounded(self, ester):
+        from difflow.gui.session import UNDO_DEPTH
+        for i in range(UNDO_DEPTH + 5):
+            ester.set_layout({"reactor": {"x": float(i), "y": 0.0}})
+        assert len(ester._undo) == UNDO_DEPTH
+
+
 class TestPendingUnits:
     """A drop that cannot be built yet lands anyway, in red.
 

@@ -33,12 +33,44 @@ entirely.
 
 from __future__ import annotations
 
+import functools
 import math
 import threading
 import types
 from pathlib import Path
 
 from difflow import scripts
+
+
+#: how many edits Undo reaches back through
+UNDO_DEPTH = 100
+
+
+def _undoable(method):
+    """Record the model before `method`, for Undo, if `method` changed it.
+
+    By comparing the whole model before and after rather than by trusting
+    each route to say: a refused edit records nothing, and an edit that
+    lands back where it started is not a step anyone would want to undo.
+    Nested calls (an `add_unit` that runs through `_edit`) record once.
+    """
+    @functools.wraps(method)
+    def wrapper(self, *args, **kwargs):
+        if self._recording:
+            return method(self, *args, **kwargs)
+        with self._lock:
+            self._recording = True
+            try:
+                before = self._state()
+                answer = method(self, *args, **kwargs)
+            finally:
+                self._recording = False
+            if before is not None and self._state() != before:
+                self._undo.append(before)
+                del self._undo[:-UNDO_DEPTH]
+                self._redo.clear()
+            return answer
+    return wrapper
 
 
 def _number(value) -> float | None:
@@ -205,6 +237,10 @@ class FlowsheetSession:
         # console advertises -- takes it again. A plain Lock deadlocked
         # there, and every edit route after it hung until a restart.
         self._lock = threading.RLock()
+        #: the model before each edit, newest last, and the ones undone
+        self._undo: list[str] = []
+        self._redo: list[str] = []
+        self._recording = False
         #: the document as it was last read or written, to say whether
         #: closing the editor now would lose anything. Compared rather
         #: than flagged by each edit: an edit made from the console goes
@@ -246,6 +282,7 @@ class FlowsheetSession:
             "error": self.context_error,
         }
 
+    @_undoable
     def set_code_context(self, source: str) -> dict:
         """Adopt a snippet from the browser, or say why it will not run.
 
@@ -303,6 +340,7 @@ class FlowsheetSession:
             "editable": not (self.flowsheet is None or self._built()),
         }
 
+    @_undoable
     def set_species(self, names) -> dict:
         """Name the species of a flowsheet that has no units yet.
 
@@ -369,6 +407,7 @@ class FlowsheetSession:
             "unfed": edit.unfed(self.flowsheet),
         }
 
+    @_undoable
     def set_feed(self, name, spec: dict | None = None) -> dict:
         """Declare or change the feed on a stream, and say what it carries.
 
@@ -452,6 +491,7 @@ class FlowsheetSession:
             self.streams = None
         return {"ok": True, "name": name, "T": T, "P": P, "flows": flows}
 
+    @_undoable
     def remove_feed(self, name: str) -> dict:
         """Undeclare a feed, leaving the inlet unfed again.
 
@@ -584,6 +624,7 @@ class FlowsheetSession:
             # Whether the header marks the file as edited, and whether the
             # editor asks before a quit or an example throws the edit away.
             "dirty": self.dirty,
+            **self.history(),
             # The species control in the header reads these. Carried on the
             # document rather than fetched separately because every edit
             # already reloads it, and an empty flowsheet's species are the
@@ -702,6 +743,7 @@ class FlowsheetSession:
 
     # -- writes -------------------------------------------------------
 
+    @_undoable
     def replace(self, document: dict) -> dict:
         """Adopt a flowsheet sent from the browser.
 
@@ -737,6 +779,7 @@ class FlowsheetSession:
             return {"ok": False, "error": f"no example named {key!r}"}
         answer = self.replace(document)
         self.path = self.source = None
+        self._forget_history()
         # Nothing to lose yet: the example is one menu click from coming
         # back exactly as it is.
         self._saved = self._state()
@@ -750,6 +793,7 @@ class FlowsheetSession:
     # every unit -- and where a live `thermo` must survive the edit by
     # identity rather than by round-tripping through JSON.
 
+    @_undoable
     def _edit(self, fn, *args, moves_only: bool = False, **kwargs) -> dict:
         """Run one edit under the lock, reporting a refusal as a value.
 
@@ -776,6 +820,7 @@ class FlowsheetSession:
             self.streams = None
         return {"ok": True, **(result or {})}
 
+    @_undoable
     def patch_unit(self, name: str, changes: dict) -> dict:
         """Set parameters, rename, or move one unit.
 
@@ -853,6 +898,7 @@ class FlowsheetSession:
         # off the flowsheet, and the coordinate with it.
         self.flowsheet.view.setdefault("nodes", {})[key] = {"x": x, "y": y}
 
+    @_undoable
     def add_unit(self, operation: str, name: str | None = None,
                  position=None, extras: dict | None = None) -> dict:
         """Drop a unit from the palette onto the canvas.
@@ -1381,6 +1427,7 @@ class FlowsheetSession:
             self.source = target if script else None
             self.path = scripts.save_target(target) if script else target
             self._saved = self._state()
+            self._forget_history()
         return {"ok": True, "path": str(self.path),
                 "source": str(self.source or "")}
 
@@ -1390,7 +1437,54 @@ class FlowsheetSession:
             self._adopt(_empty_flowsheet(), {}, None)
             self.path = self.source = None
             self._saved = self._state()
+            self._forget_history()
         return {"ok": True}
+
+    def _forget_history(self) -> None:
+        """Undo stops at a flowsheet's own beginning, not at the last one's."""
+        self._undo.clear()
+        self._redo.clear()
+
+    def undo(self) -> dict:
+        """Put the model back as it was before the last edit."""
+        return self._step(self._undo, self._redo, "undo")
+
+    def redo(self) -> dict:
+        """Make the last undone edit again."""
+        return self._step(self._redo, self._undo, "redo")
+
+    def _step(self, source: list, sink: list, verb: str) -> dict:
+        import json
+
+        from difflow import serialize
+
+        with self._lock:
+            if not source:
+                return {"ok": False, "error": f"nothing to {verb}"}
+            current = self._state()
+            data = json.loads(source[-1])
+            context = (data.get("view") or {}).get("code_context") or ""
+            try:
+                # The same snippet keeps the same objects: a live `thermo`
+                # survives an undo of a parameter edit by identity.
+                if context == self._source():
+                    bindings, error = self.bindings, self.context_error
+                else:
+                    bindings, error = (evaluate_context(context)
+                                       if context.strip() else ({}, None))
+                flowsheet = serialize.from_dict(data, refs=bindings)
+            except Exception as exc:
+                return {"ok": False,
+                        "error": f"could not {verb}: {type(exc).__name__}: {exc}"}
+            source.pop()
+            if current is not None:
+                sink.append(current)
+            self._adopt(flowsheet, bindings, error)
+            return {"ok": True, **self.history()}
+
+    def history(self) -> dict:
+        """Whether there is anything to undo or redo, for the Edit menu."""
+        return {"undo": bool(self._undo), "redo": bool(self._redo)}
 
     def _adopt(self, flowsheet, bindings: dict, context_error) -> None:
         """Make `flowsheet` the model, and forget what described the last one.
@@ -1749,6 +1843,7 @@ class FlowsheetSession:
         except Exception:
             return None
 
+    @_undoable
     def console_run(self, source: str) -> dict:
         """Run one cell against the live model.
 

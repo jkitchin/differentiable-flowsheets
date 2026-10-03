@@ -546,6 +546,10 @@ class _Handler(BaseHTTPRequestHandler):
                 return session.open_file(payload.get("path"))
             if path == "/api/new":
                 return session.new()
+            if path == "/api/undo":
+                return session.undo()
+            if path == "/api/redo":
+                return session.redo()
             if path == "/api/layout":
                 return session.set_layout(payload.get("nodes", {}))
             if path == "/api/unit":

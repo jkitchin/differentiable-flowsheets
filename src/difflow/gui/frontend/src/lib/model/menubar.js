@@ -8,7 +8,8 @@
  * toolbar becomes when every panel earns a button: the two that matter
  * on any given day sit in a hedge of the eleven that do not. Here it is
  * four words and one button, and the arrangement is the whole idea ---
- * **File** writes the flowsheet out, **Examples** replaces it with one
+ * **File** writes the flowsheet out, **Edit** takes an edit back,
+ * **Examples** replaces it with one
  * that already works, **View** decides what is on the screen, **Help**
  * leaves the editor, and **Solve** stays a button because it is the verb
  * the editor exists for.
@@ -62,6 +63,8 @@ export function menuBar({
   solved = false,
   widthByFlow = false,
   colorBy = '',
+  canUndo = false,
+  canRedo = false,
   panels = {},
   links = {},
   examples = [],
@@ -126,6 +129,26 @@ export function menuBar({
           hint: 'stop the editor and free the port; it asks once more',
           danger: true,
           run: actions.quit,
+        },
+      ],
+    },
+    {
+      id: 'edit',
+      label: 'Edit',
+      items: [
+        {
+          label: 'Undo',
+          note: '⌘Z',
+          hint: 'put the flowsheet back as it was before the last edit',
+          disabled: busy || !canUndo,
+          run: actions.undo,
+        },
+        {
+          label: 'Redo',
+          note: '⇧⌘Z',
+          hint: 'make the last undone edit again',
+          disabled: busy || !canRedo,
+          run: actions.redo,
         },
       ],
     },
