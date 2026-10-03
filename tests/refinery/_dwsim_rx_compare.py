@@ -215,12 +215,12 @@ def hdt_heats():
 
 def aromatic_equilibria(which: str, conv: dict, kind: str = "equilibrium"):
     """Emulated equilibria on difflow's hydrotreating constants: Hf and S of
-    MODEL_COMPOUNDS, Cp zero (difflow's K has constant dH and dS)."""
+    MODEL_COMPOUNDS and their Cp (difflow's K is Cp-integrated since #338)."""
     r = ref()
     mc = r["inputs"]["hdt"]["model_compounds"]
     from .reference.dwsim_reactions_case import HDT_FORMULA
 
-    consts = {k: {"Hf": v["Hf"], "S": v["S"], "cp": None} for k, v in mc.items() if v["S"] is not None}
+    consts = {k: {"Hf": v["Hf"], "S": v["S"], "cp": v["cp"]} for k, v in mc.items() if v["S"] is not None}
     out = {}
     for name, d in r["hydroprocessing"]["equilibria"].items():
         res = []
@@ -242,8 +242,22 @@ def aromatic_equilibria(which: str, conv: dict, kind: str = "equilibrium"):
 
 
 def difflow_aromatic_lnK(step: int, T: float) -> float:
-    """difflow's hydrotreating ln K (bar) of AROMATIC_THERMO[step]."""
-    dH, dS = ref()["inputs"]["hdt"]["AROMATIC_THERMO"][step]
+    """difflow's hydrotreating ln K (1 bar) of saturation step ``step`` at
+    ``T``: what the rate law uses (Cp-integrated since #338)."""
+    from difflow_refinery.hydrotreating.kinetics import aromatic_ln_K
+
+    return float(aromatic_ln_K(T)[step])
+
+
+def difflow_aromatic_lnK_constant(step: int, T: float) -> float:
+    """The pre-#338 form, on the same (frozen) constants: 298 K dH and dS
+    held constant, Cp neglected. For the record of the gap it closed."""
+    from difflow_refinery.hydrotreating.kinetics import AROMATIC_REACTIONS
+
+    mc = ref()["inputs"]["hdt"]["model_compounds"]
+    nu = AROMATIC_REACTIONS[step]
+    dH = sum(v * mc[k]["Hf"] for k, v in nu.items())
+    dS = sum(v * mc[k]["S"] for k, v in nu.items())
     return -(dH - T * dS) / (em.R_DIFFLOW * T)
 
 
@@ -326,7 +340,7 @@ def _cases():
     K = r["inputs"]["isom"]
     KR = r["inputs"]["reformer"]
     mc = r["inputs"]["hdt"]["model_compounds"]
-    KH = {k: {"Hf": v["Hf"], "S": v["S"], "cp": None} for k, v in mc.items() if v["S"] is not None}
+    KH = {k: {"Hf": v["Hf"], "S": v["S"], "cp": v["cp"]} for k, v in mc.items() if v["S"] is not None}
     for which in ("dwsim", "hypo"):
         m = r["cases"]["ISOM_DW"]
         for fam, names in tc.FAMILIES.items():

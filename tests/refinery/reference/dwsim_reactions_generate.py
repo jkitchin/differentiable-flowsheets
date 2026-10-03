@@ -305,7 +305,7 @@ def hydroprocessing(session, inputs):
         consts = {}
         for k in keys:
             c = session.compound(rc.HDT_DW[k])
-            consts[k] = {"Hf": mc[k]["Hf"], "S": mc[k]["S"], "cp": None,
+            consts[k] = {"Hf": mc[k]["Hf"], "S": mc[k]["S"], "cp": mc[k]["cp"],
                          "formula": rc.HDT_FORMULA[k], "MW": c["MW"],
                          "Tc": c["Tc"], "Pc": c["Pc"], "omega": c["omega"]}
         for which in ("dwsim", "hypo"):
@@ -313,8 +313,8 @@ def hydroprocessing(session, inputs):
             if which == "dwsim":
                 fac = lambda keys=keys: ideal_gas_fs(session, [rc.HDT_DW[k] for k in keys])  # noqa: E731
             else:
-                # difflow's hydrotreating K: constant dH and dS (Cp zero)
-                fac = lambda keys=keys, consts=consts: hypo_ideal_fs(session, consts, keys, S_H2, cp=False)  # noqa: E731
+                # difflow's hydrotreating K: Hf, S0 and the Cp cubic of the shared table (#338)
+                fac = lambda keys=keys, consts=consts: hypo_ideal_fs(session, consts, keys, S_H2)  # noqa: E731
             rows = []
             for T in case["T"]:
                 for P in case["P"]:
