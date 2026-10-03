@@ -31,11 +31,18 @@ Sources of the tables here
 
     Lower heating values are computed from the heats of formation
     (gas, 298 K) by ``LHV = dHf(species) - c dHf(CO2) - h/2 dHf(H2O, g)
-    - s dHf(SO2)``, with CO2 -393.51, H2O(g) -241.826 and SO2 -296.84
-    kJ/mol (NIST-JANAF). Heats of formation are from
-    :mod:`difflow.database` where it has one; hydrogen sulfide -20.6
-    kJ/mol (CODATA, Cox, Wagman & Medvedev 1984) and 1-butene -0.63 kJ/mol
-    (Prosen, Maron & Rossini 1951), both via the NIST WebBook.
+    - s dHf(SO2)``. Every heat of formation, the combustion products'
+    included, is the refinery's one thermochemistry table
+    (:mod:`difflow_refinery.thermochemistry`, #339): API Technical Data Book
+    values for the hydrocarbons, CODATA key values for H2S, CO2, H2O and SO2.
+    Before #339 the hydrocarbons' came from :mod:`difflow.database` (within
+    0.8 kJ/mol), 1-butene was -0.63 kJ/mol (Prosen, Maron & Rossini 1951;
+    now CRC's +0.1) and SO2 -296.84 (now CODATA's -296.81).
+
+    The ideal-gas Cp cubics below are the gas plant's own, deliberately:
+    they are separation thermo (sensible heat on the Peng-Robinson path),
+    pinned by the IDAES and DWSIM gas-plant references, not reaction
+    thermochemistry.
 
 Binary interaction parameters
     :data:`PR_KIJ` holds the nonzero Peng-Robinson ``kij`` used by default.
@@ -59,15 +66,13 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from difflow_refinery import thermochemistry
+
 #: Reference temperature of every enthalpy (K).
 T_REF = 298.15
 #: Gas constant (J/mol/K), as :mod:`difflow.eos` uses it.
 R = 8.314462618
 
-# dHf (J/mol, gas, 298 K) of the combustion products (NIST-JANAF).
-_HF_CO2 = -393510.0
-_HF_H2O_GAS = -241826.0
-_HF_SO2 = -296840.0
 
 #: Ideal-gas Cp cubics for components :mod:`difflow.database` lacks or holds
 #: only as a constant (see module docstring for sources).
@@ -79,15 +84,6 @@ CP_IG: dict[str, tuple[float, float, float, float]] = {
     "hydrogen_sulfide": (31.69, 2.0829e-3, 2.3835e-5, -1.1894e-8),
     "benzene": (-41.768, 0.51126, -3.3693e-4, 7.5704e-8),
     "n_heptane": (16.089, 0.53113, -6.3869e-5, -1.1342e-7),
-}
-
-#: Heats of formation (J/mol, gas, 298 K) for components the database lacks.
-HF_GAS: dict[str, float] = {
-    "hydrogen": 0.0,
-    "nitrogen": 0.0,
-    "hydrogen_sulfide": -20600.0,
-    "1_butene": -630.0,
-    "water": _HF_H2O_GAS,
 }
 
 #: Elemental formula (C, H, S) of the combustible light components.
@@ -184,7 +180,9 @@ def _lhv_light(name: str, hf: float) -> float:
     c, h, s = FORMULA[name]
     if c == 0 and h == 0:
         return 0.0
-    return hf - (c * _HF_CO2 + 0.5 * h * _HF_H2O_GAS + s * _HF_SO2)
+    hf_co2, hf_h2o, hf_so2 = (thermochemistry.Hf(n) for n in
+                              ("carbon_dioxide", "water", "sulfur_dioxide"))
+    return hf - (c * hf_co2 + 0.5 * h * hf_h2o + s * hf_so2)
 
 
 def light_component_data(name: str) -> dict:
@@ -201,11 +199,18 @@ def light_component_data(name: str) -> dict:
     else:
         raise KeyError(f"no ideal-gas Cp cubic for {key!r}; add it to "
                        "difflow_refinery.gasplant.components.CP_IG")
-    hf = HF_GAS.get(key, ideal.get("Hf"))
     if key not in FORMULA:
         raise KeyError(f"no elemental formula for {key!r} (needed for its LHV)")
+    c, h, _ = FORMULA[key]
+    if key in thermochemistry.TABLE:
+        hf = thermochemistry.Hf(key)
+    elif c == 0 and h == 0:
+        hf = 0.0  # inert: no heating value either way
+    else:
+        raise KeyError(f"no heat of formation for {key!r} in "
+                       "difflow_refinery.thermochemistry (needed for its LHV)")
     return dict(name=key, Tc=crit.Tc, Pc=crit.Pc, omega=crit.omega, MW=crit.MW,
-                cp=tuple(cp), lhv=_lhv_light(key, hf if hf is not None else 0.0))
+                cp=tuple(cp), lhv=_lhv_light(key, hf))
 
 
 def default_kij(names: Sequence[str]) -> np.ndarray:

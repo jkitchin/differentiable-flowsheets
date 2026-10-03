@@ -52,7 +52,7 @@ and across the crude-to-vacuum connection.
 """
 
 from difflow_refinery import (column, composition, correlations, gasplant, isomerization, preheat,
-                              products, reforming, vacuum)
+                              products, reforming, thermochemistry, vacuum)
 from difflow_refinery import hydroprocessing, hydrotreating
 from difflow_refinery.assay import (
     CONTAMINANTS,
@@ -247,6 +247,7 @@ __all__ = [
     "fcc",
     "properties",
     "reforming",
+    "thermochemistry",
     "hydroprocessing", "hydrotreating", "hydrocracking", "residue",
     "alkylation",
     "hydrogen",

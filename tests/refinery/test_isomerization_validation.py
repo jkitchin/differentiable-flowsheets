@@ -39,7 +39,10 @@ from difflow_refinery.isomerization import thermochem as tc
 
 jax.config.update("jax_enable_x64", True)
 
-pytestmark = pytest.mark.release
+from .test_isomerization_validation_file import stale_339
+
+# The reference predates #339's constants (see STALE_SINCE_339 there).
+pytestmark = [pytest.mark.release, stale_339]
 
 REF = json.loads((Path(__file__).parent / "reference" / "isom_reference.json").read_text())
 P = REF["cases"]["P"]
