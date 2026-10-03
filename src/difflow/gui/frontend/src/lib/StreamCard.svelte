@@ -51,7 +51,7 @@
            neighbouring hues never share an edge. -->
       <div class="bar" role="img"
            aria-label="composition: {summary.parts.map((p) => `${p.species} ${pct(p.x)}`).join(', ')}">
-        {#each summary.parts as part (part.species)}
+        {#each summary.parts as part (part.key)}
           <span style:flex-grow={part.x} style:background={part.color}
                 title="{part.species} {pct(part.x)}"></span>
         {/each}

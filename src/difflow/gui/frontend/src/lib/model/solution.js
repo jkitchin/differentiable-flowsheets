@@ -86,11 +86,14 @@ export function streamSummary(stream, order = [], theme = 'light') {
   let other = 0
   rows.forEach((r, i) => {
     if (!(r.x > 0)) return
-    if (i < limit) parts.push({ species: r.species, x: r.x, color: r.color })
+    if (i < limit) parts.push({ key: `F_${r.species}`, species: r.species, x: r.x, color: r.color })
     else other += r.x
   })
+  // Keyed apart from the species: a species may itself be called
+  // "other", and two parts under one key throw in a keyed each.
   if (other > 0) {
-    parts.push({ species: 'other', x: other, color: OTHER_COLOR[theme] ?? OTHER_COLOR.light })
+    parts.push({ key: 'other', species: 'other', x: other,
+                 color: OTHER_COLOR[theme] ?? OTHER_COLOR.light })
   }
 
   return {

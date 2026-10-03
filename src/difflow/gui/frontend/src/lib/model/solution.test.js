@@ -206,3 +206,11 @@ test('a stream missing from the solve is listed without numbers', () => {
   assert.equal(unitSummary(null, SOLVE), null)
   assert.equal(unitSummary(FLASH, null), null)
 })
+
+test('a species called "other" does not share a key with the fold', () => {
+  const order = ['other', ...Array.from({ length: 9 }, (_, i) => `s${i}`)]
+  const stream = Object.fromEntries(order.map((s) => [`F_${s}`, 1]))
+  const s = streamSummary(stream, order)
+  assert.equal(s.parts.length, 9)
+  assert.equal(new Set(s.parts.map((p) => p.key)).size, s.parts.length)
+})
