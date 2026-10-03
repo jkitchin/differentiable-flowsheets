@@ -39,7 +39,7 @@
       <thead><tr><th></th><th>T <span class="soft">K</span></th><th>F <span class="soft">mol/s</span></th></tr></thead>
       <tbody>
         {#each summary.inlets as r (r.stream)}
-          <tr class:zero={!r.total}><td>{r.stream}</td><td>{fmt(r.T, 5)}</td><td>{fmt(r.total, 4)}</td></tr>
+          <tr class:zero={r.total === 0}><td>{r.stream}</td><td>{fmt(r.T, 5)}</td><td>{fmt(r.total, 4)}</td></tr>
         {/each}
       </tbody>
     </table>
@@ -49,7 +49,7 @@
       <thead><tr><th></th><th>T <span class="soft">K</span></th><th>F <span class="soft">mol/s</span></th><th>share</th></tr></thead>
       <tbody>
         {#each summary.outlets as r (r.stream)}
-          <tr class:zero={!r.total}>
+          <tr class:zero={r.total === 0}>
             <td>{r.stream}</td><td>{fmt(r.T, 5)}</td><td>{fmt(r.total, 4)}</td><td>{pct(r.share)}</td>
           </tr>
         {/each}

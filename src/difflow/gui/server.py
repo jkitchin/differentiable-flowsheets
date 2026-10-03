@@ -489,18 +489,21 @@ class _Handler(BaseHTTPRequestHandler):
             # carries `documentation`, read from the packaging metadata,
             # and a second copy is a second thing to move.
         }
-        handler = routes.get(self.path)
+        # Routed on the path alone. A query string is not part of the
+        # resource -- `/?reload=1` or a cache-busting `?v=` is still the
+        # page -- and matching the raw request line answered both 404.
+        split = urlsplit(self.path)
+        handler = routes.get(split.path)
         if handler is not None:
             return handler()
         # /api/docs/<op>: one operation's rendered docstring. A prefix
         # route rather than a table entry, since the name is the path.
-        if self.path.startswith(DOCS_PREFIX):
-            operation = unquote(urlsplit(self.path).path[len(DOCS_PREFIX):])
+        if split.path.startswith(DOCS_PREFIX):
+            operation = unquote(split.path[len(DOCS_PREFIX):])
             return self._send(self.session.docs(operation))
         # /api/context?kind=&q=&name=&operation=: the assistant's brief.
-        # The only route that takes a query string, because it is the
+        # The only route that READS a query string, because it is the
         # only one whose request is a *question* rather than a resource.
-        split = urlsplit(self.path)
         if split.path == "/api/context":
             query = parse_qs(split.query)
             first = lambda key: (query.get(key) or [""])[0]   # noqa: E731
@@ -510,21 +513,40 @@ class _Handler(BaseHTTPRequestHandler):
                 name=first("name") or None,
                 operation=first("operation") or None,
             ))
-        asset = _static_file(self.path)
+        asset = _static_file(split.path)
         if asset is None:
             return self._send({"error": "not found"}, status=404)
         body, content = asset
         self._send(body, content=content)
 
     def _body(self):
-        """The request body as restored JSON, or a 400 already sent."""
-        length = int(self.headers.get("Content-Length") or 0)
+        """The request body as restored JSON, or a 400 already sent.
+
+        Always an object. Every route reads its body as one, so a list or
+        a bare number used to get as far as a route and come back as
+        ``AttributeError: 'list' object has no attribute 'get'`` --- a
+        400 still, but one that blamed the server for the request.
+        """
+        def refuse(error):
+            self._send({"ok": False, "error": error}, 400)
+            return None, True
+
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            return refuse("bad Content-Length")
+        if length < 0:
+            return refuse("bad Content-Length")
         raw = self.rfile.read(length) if length else b"{}"
         try:
-            return _json_restore(json.loads(raw or b"{}")), None
+            body = json.loads(raw or b"{}")
+        except UnicodeDecodeError:
+            return refuse("bad JSON: the body is not UTF-8")
         except json.JSONDecodeError as exc:
-            self._send({"ok": False, "error": f"bad JSON: {exc}"}, 400)
-            return None, True
+            return refuse(f"bad JSON: {exc}")
+        if not isinstance(body, dict):
+            return refuse(f"the body must be a JSON object, not {type(body).__name__}")
+        return _json_restore(body), None
 
     def _dispatch(self, verb: str, payload):
         """The answer to one mutating request, or ``None`` if no route matched.
@@ -534,7 +556,7 @@ class _Handler(BaseHTTPRequestHandler):
         is an answer about the flowsheet rather than a failure of the
         request. Only a malformed request gets a 4xx.
         """
-        path, session = self.path, self.session
+        path, session = urlsplit(self.path).path, self.session
         unit_path = "/api/unit/"
         feed_path = "/api/feed/"
         stream_path = "/api/stream/"

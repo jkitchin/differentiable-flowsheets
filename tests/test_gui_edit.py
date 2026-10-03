@@ -179,6 +179,12 @@ class TestPatchUnit:
         assert "reactor" not in nodes
         assert nodes["kettle"] == {"x": 10.0, "y": 20.0}
 
+    @pytest.mark.parametrize("name", ["feed:feed", "product:vapor"])
+    def test_a_name_the_canvas_keys_feeds_by_is_refused(self, session, name):
+        answer = session.patch_unit("reactor", {"name": name})
+        assert answer["ok"] is False and "feeds and products" in answer["error"]
+        assert "reactor" in [u.name for u in session.flowsheet.units]
+
     def test_a_rename_onto_an_existing_name_is_refused(self, session):
         answer = session.patch_unit("reactor", {"name": "flash"})
         assert answer["ok"] is False and "already" in answer["error"]
@@ -236,6 +242,26 @@ class TestAddAndRemove:
         answer = session.remove_unit("flash")
         assert answer["ok"] and answer["recycles_dropped"] == {"vap": "recycle"}
         assert session.flowsheet.recycles == {}
+
+    def test_removing_a_unit_drops_the_feed_only_it_read(self, session):
+        """Left behind, it is a feed box wired to nothing."""
+        feed = next(iter(session.flowsheet.feeds))
+        reader = next(u.name for u in session.flowsheet.units
+                      if feed in u.inlet_names)
+        session.set_layout({f"feed:{feed}": {"x": 1, "y": 2}})
+        answer = session.remove_unit(reader)
+        assert answer["ok"] and answer["feeds_dropped"] == [feed]
+        assert feed not in session.flowsheet.feeds
+        assert f"feed:{feed}" not in session.flowsheet.view["nodes"]
+        # and Undo gives it back
+        assert session.undo()["ok"]
+        assert feed in session.flowsheet.feeds
+
+    def test_a_feed_another_unit_reads_is_kept(self, session):
+        before = dict(session.flowsheet.feeds)
+        answer = session.remove_unit("flash")
+        assert answer["feeds_dropped"] == []
+        assert session.flowsheet.feeds == before
 
     def test_removing_a_unit_leaves_the_others(self, session):
         session.remove_unit("flash")
@@ -343,6 +369,24 @@ class TestLayout:
     def test_nonsense_is_refused(self, session):
         assert session.set_layout({"mixer": [1, 2]})["ok"] is False
         assert session.set_layout("nope")["ok"] is False
+
+    @pytest.mark.parametrize("bad", [float("nan"), float("inf"), "nan"])
+    def test_a_non_finite_position_is_refused(self, session, bad):
+        before = dict(session.flowsheet.view.get("nodes", {}))
+        answer = session.set_layout({"mixer": {"x": 1, "y": 2},
+                                     "reactor": {"x": bad, "y": 0}})
+        assert answer["ok"] is False and "finite" in answer["error"]
+        # and nothing was half applied
+        assert session.flowsheet.view.get("nodes", {}) == before
+
+    def test_a_key_the_canvas_cannot_draw_is_not_kept(self, session):
+        answer = session.set_layout({"mixer": {"x": 1, "y": 2},
+                                     "ghost": {"x": 3, "y": 4},
+                                     "feed:nowhere": {"x": 5, "y": 6}})
+        assert answer["ok"] and answer["nodes"] == 1
+        assert answer["ignored"] == ["feed:nowhere", "ghost"]
+        nodes = session.flowsheet.view["nodes"]
+        assert "ghost" not in nodes and "feed:nowhere" not in nodes
 
 
 class TestFeeds:
@@ -1003,6 +1047,21 @@ class TestPendingUnits:
         assert answer["promoted"] == ["mixer"] and answer["pending"] == []
         assert [u.name for u in empty.flowsheet.units] == ["mixer"]
         assert empty.flowsheet.view["nodes"]["mixer"] == {"x": 3.0, "y": 4.0}
+
+    @pytest.mark.parametrize("name", ["n-butane", "ethyl acetate", "a.b", "x'y"])
+    def test_a_species_name_that_would_split_its_keys_is_refused(self, name):
+        """`<stream>.F_<species>` has to come apart at the right dot."""
+        empty = FlowsheetSession()
+        answer = empty.set_species(["water", name])
+        assert answer["ok"] is False and repr(name) in answer["error"]
+        assert empty.set_species(["water", "1_butanol"])["ok"]
+
+    def test_a_name_the_flowsheet_already_has_is_not_refused(self):
+        """A file from before the rule must still take species edits."""
+        session = FlowsheetSession()
+        session.flowsheet.species_order = ["water", "n-butane"]
+        assert session.set_species(["water", "n-butane", "ethanol"])["ok"]
+        assert session.set_species(["water", "n-butane", "x.y"])["ok"] is False
 
     def test_an_answer_that_only_half_answers_leaves_it_parked(self):
         """And re-asks, so the hint is about what is missing *now*."""

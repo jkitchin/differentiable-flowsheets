@@ -54,8 +54,17 @@
    * anyway. Compared by text, so any later message is not shown as one.
    */
   let warnNote = $state(null)
+  /**
+   * Likewise for a plain success -- a clean solve, a save. Green, so the
+   * answer you wanted does not arrive in the colour of a caution; every
+   * other note is neutral text.
+   */
+  let okNote = $state(null)
   let selected = $state(null)
-  let busy = $state(false)
+  // Edits in flight, counted: a drag's layout post finishing in the middle
+  // of a long solve must not report the editor idle and re-enable Solve.
+  let inflight = $state(0)
+  let busy = $derived(inflight > 0)
   let context = $state({ source: '', names: [], error: null })
   let showContext = $state(false)
   let showScript = $state(false)
@@ -76,6 +85,8 @@
   // about the node that was clicked and that is not state anything else
   // needs --- and because an item's action must not change under it.
   let menu = $state(null)
+  // The menu bar's open menu, if any (bound from MenuBar).
+  let barMenu = $state(null)
   // Drawing preferences. Port names are off because on a wired flowsheet
   // the edge already carries the stream name, so labelling both ends of
   // every arc triples the text on screen to repeat itself; while wiring,
@@ -162,7 +173,9 @@
    * text field it is the field's own undo, which is the one meant there.
    */
   function hotkey(event) {
-    if (menu) return       // the open menu owns the keyboard
+    // An open menu owns the keyboard, the bar's as much as the right-click
+    // one; and a panel that already answered the key has had its say.
+    if (menu || barMenu || event.defaultPrevented) return
     if (event.metaKey || event.ctrlKey) {
       if (event.altKey) return
       if (event.key.toLowerCase() === 'z' && !typing(event)) {
@@ -328,7 +341,7 @@
   async function edit(run, { reload = true, stale = true } = {}) {
     error = ''
     note = ''
-    busy = true
+    inflight += 1
     try {
       const answer = await run()
       if (answer && answer.ok === false) note = answer.error
@@ -336,17 +349,26 @@
       // not a move; the panel has to drop them too, or it goes on
       // describing a flowsheet that no longer exists. The lever list
       // goes with them: its values are the ones the edit just changed.
-      if (stale) { result = null; sens = null; await loadPickers() }
+      // lastSolve goes too: the assistant reads it to decide whether the
+      // question is about a failed solve, and an edit has made it history.
+      if (stale) { result = null; sens = null; lastSolve = null; await loadPickers() }
       if (reload) await load()
       return answer
     } catch (e) {
-      // The canvas may already show the change (a drag, a deletion), and
-      // the server may never have had it: say both, and offer Reload.
-      error = `the server did not answer (${e.message ?? e}); ` +
-        'the canvas may not match it'
+      unreachable(e)
     } finally {
-      busy = false
+      inflight -= 1
     }
+  }
+
+  /**
+   * A request that never got an answer. The canvas may already show the
+   * change (a drag, a deletion), and the server may never have had it:
+   * say both, and offer Reload.
+   */
+  function unreachable(e) {
+    error = `the server did not answer (${e.message ?? e}); ` +
+      'the canvas may not match it'
   }
 
   const connect = (wire) => edit(() => post('/api/connect', wire))
@@ -371,12 +393,18 @@
 
   /** Apply the snippet, then reload: what it defines changes what builds. */
   async function applyContext(source) {
-    const answer = await edit(() => post('/api/code-context', { source }))
-    await loadContext()
-    // The palette's flags are answered against these bindings, so a
-    // `thermo` defined here un-blocks every unit that wanted one. Refetch
-    // rather than reason about which: the server already knows.
-    catalog = await get('/api/catalog')
+    // The follow-up fetches run inside the edit, so a server that drops
+    // between them is reported like any other, not left as an unhandled
+    // rejection with the panel half-updated.
+    const answer = await edit(async () => {
+      const answer = await post('/api/code-context', { source })
+      await loadContext()
+      // The palette's flags are answered against these bindings, so a
+      // `thermo` defined here un-blocks every unit that wanted one. Refetch
+      // rather than reason about which: the server already knows.
+      catalog = await get('/api/catalog')
+      return answer
+    })
     if (answer?.ok) note = built(answer, `${answer.names.length} names defined`)
     return answer
   }
@@ -402,9 +430,12 @@
    * same reason the code context refetches it.
    */
   async function setSpecies(names) {
-    const answer = await edit(() => post('/api/species', { species: names }))
+    const answer = await edit(async () => {
+      const answer = await post('/api/species', { species: names })
+      if (answer?.ok) catalog = await get('/api/catalog')
+      return answer
+    })
     if (answer?.ok) {
-      catalog = await get('/api/catalog')
       note = built(answer,
                    names.length ? `species: ${names.join(', ')}` : 'species cleared')
     }
@@ -489,7 +520,10 @@
   }
 
   async function applyDeletions(requests) {
-    if (!requests.length) return load()   // redraw whatever was taken off
+    if (!requests.length) {   // redraw whatever was taken off
+      try { await load() } catch (e) { unreachable(e) }
+      return
+    }
     await edit(async () => {
       for (const r of requests) {
         const answer = await send(r.method, r.path, r.body)
@@ -523,19 +557,14 @@
       if (answer.ok) {
         showResults = true
         await loadPickers()
-        const held = answer.pending?.length
-          // What was solved is not what is on the canvas. Said here
-          // rather than left to the picture, because the numbers in the
-          // results panel look exactly the same either way.
-          ? ` (${answer.pending.join(', ')} not built, and not in it)`
-          : ''
         const warnings = answer.audit?.warnings ?? []
         note = (answer.converged === false
           ? 'solved, but the tear residual did not reach the tolerance'
           : warnings.length
             ? `solved, but ${warnings[0]}`
-            : `solved: ${Object.keys(answer.streams).length} streams`) + held
+            : `solved: ${Object.keys(answer.streams).length} streams`)
         warnNote = answer.converged === false || warnings.length ? note : null
+        okNote = warnNote ? null : note
       } else {
         note = answer.error
       }
@@ -556,7 +585,7 @@
     edit(async () => {
       const answer = await post('/api/save')
       note = answer.ok ? `saved to ${shortPath(answer.path)}` : answer.error
-      if (answer.ok) dirty = false
+      if (answer.ok) { dirty = false; okNote = note }
       return null
     }, { reload: false, stale: false })
 
@@ -584,6 +613,7 @@
         path = answer.path
         source = ''
         dirty = false
+        okNote = note
       } else {
         note = answer.error
       }
@@ -747,7 +777,7 @@
 <header>
   <h1>difflow</h1>
   {#if about.version}<span class="version">{about.version}</span>{/if}
-  <MenuBar {menus} />
+  <MenuBar {menus} bind:open={barMenu} />
   <span
     class="path"
     title={source ? `${source}\nsaves to ${path}` : path}
@@ -756,7 +786,10 @@
   <Species {species} editable={speciesEditable} {busy} onapply={setSpecies} />
   <span class="summary">{summary}</span>
   <span class="spacer"></span>
-  {#if note}<span class="note" class:warn={note === warnNote}>{note}</span>{/if}
+  <!-- One line, cut short with the whole of it on hover: a long error
+       used to wrap the header to three lines and push the canvas down. -->
+  {#if note}<span class="note" class:warn={note === warnNote}
+    class:ok={note === okNote} title={note}>{note}</span>{/if}
   <!-- Only while it is armed. Quit is a row in the File menu, and the
        menu shuts behind the click; this is the second half of the
        question, asked where the answer can be seen. -->
@@ -907,6 +940,10 @@
     error={context.error ?? ''}
     {busy}
     onapply={applyContext}
+    onsave={async (text) => {
+      const answer = await applyContext(text)
+      if (answer?.ok) await (path ? save() : saveAs())
+    }}
     onclose={() => (showContext = false)}
   />
 {/if}
@@ -923,11 +960,20 @@
   h1 { font-size: 0.95rem; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
   .path, .summary, .version { color: var(--ink-soft); font-size: 0.8rem; }
   /* Already shortened, and never the reason the header is two lines tall. */
-  .path { white-space: nowrap; }
+  .path, .summary { white-space: nowrap; }
   .dirty { color: var(--accent); }
   .version { font-variant-numeric: tabular-nums; opacity: 0.75; }
-  .note { color: var(--accent); font-size: 0.8rem; }
+  .note {
+    color: var(--ink);
+    font-size: 0.8rem;
+    min-width: 0;
+    flex: 0 1 auto;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
   .note.warn { color: var(--bad); }
+  .note.ok { color: var(--good); }
   .spacer { flex: 1; }
   /* It is on screen only to be answered, and it ends the process. */
   .quit {

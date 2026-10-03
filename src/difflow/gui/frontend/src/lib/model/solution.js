@@ -53,6 +53,11 @@ export function speciesColors(order, theme = 'light') {
   return out
 }
 
+/** Whether any species flow on the stream is negative; card and wire agree. */
+function hasNegativeFlow(stream) {
+  return Object.keys(stream).some((k) => k.startsWith('F_') && stream[k] < 0)
+}
+
 /**
  * Everything the hover card says about one stream.
  *
@@ -62,21 +67,34 @@ export function speciesColors(order, theme = 'light') {
  * `rows` lists every species, zeros included --- a stream that carries
  * none of something is a fact worth reading, not an absence to hide.
  *
- * @returns {null | {T, P, phase, total, rows, parts}}
+ * A negative flow (a signed tear, or an iteration stopped part way)
+ * leaves the stream without a composition: the fractions would run past
+ * 100 % and below 0, and a bar drawn from the positive ones would show
+ * a mixture that is not there. `negative` says so, and every `x` is null.
+ *
+ * @returns {null | {T, P, phase, total, negative, rows, parts}}
  */
 export function streamSummary(stream, order = [], theme = 'light') {
   if (!stream) return null
   const keys = speciesOf(stream, order)
   const names = keys.map((k) => k.slice(2))
   const F = total(stream)
-  const colors = speciesColors(names, theme)
+  // Colour and fold by place in the FLOWSHEET's order, not this stream's:
+  // a stream that lacks the first species must not shift every other
+  // species' colour down one. Species the order does not name go last.
+  const full = [...(order ?? []), ...names.filter((s) => !(order ?? []).includes(s))]
+  const rank = Object.fromEntries(full.map((s, i) => [s, i]))
+  const colors = speciesColors(full, theme)
+  const negative = hasNegativeFlow(stream)
   const rows = names.map((s) => {
     const flow = stream[`F_${s}`]
     return {
       species: s,
-      flow: Number.isFinite(flow) ? flow : null,
+      // NaN stays NaN: the card prints it, as the stream table does. A
+      // blank would read as a value nobody computed, not as a failure.
+      flow: typeof flow === 'number' ? flow : null,
       // No composition for a stream with no flow, rather than NaN.
-      x: F > 0 && Number.isFinite(flow) ? flow / F : null,
+      x: F > 0 && !negative && Number.isFinite(flow) ? flow / F : null,
       color: colors[s],
     }
   })
@@ -84,20 +102,24 @@ export function streamSummary(stream, order = [], theme = 'light') {
   const limit = (SPECIES_COLORS[theme] ?? SPECIES_COLORS.light).length
   const parts = []
   let other = 0
-  rows.forEach((r, i) => {
+  rows.forEach((r) => {
     if (!(r.x > 0)) return
-    if (i < limit) parts.push({ species: r.species, x: r.x, color: r.color })
+    if (rank[r.species] < limit) parts.push({ key: `F_${r.species}`, species: r.species, x: r.x, color: r.color })
     else other += r.x
   })
+  // Keyed apart from the species: a species may itself be called
+  // "other", and two parts under one key throw in a keyed each.
   if (other > 0) {
-    parts.push({ species: 'other', x: other, color: OTHER_COLOR[theme] ?? OTHER_COLOR.light })
+    parts.push({ key: 'other', species: 'other', x: other,
+                 color: OTHER_COLOR[theme] ?? OTHER_COLOR.light })
   }
 
   return {
-    T: Number.isFinite(stream.T) ? stream.T : null,
-    P: Number.isFinite(stream.P) ? stream.P : null,
+    T: typeof stream.T === 'number' ? stream.T : null,
+    P: typeof stream.P === 'number' ? stream.P : null,
     phase: typeof stream.phase === 'string' ? stream.phase : null,
     total: F,
+    negative,
     rows,
     parts,
   }
@@ -167,7 +189,8 @@ export function valueOf(stream, key) {
   if (key?.startsWith('x:')) {
     const F = total(stream)
     const flow = stream[`F_${key.slice(2)}`] ?? 0
-    return F > 0 && Number.isFinite(flow) ? flow / F : null
+    // as on the card: a stream with a negative flow has no composition
+    return F > 0 && !hasNegativeFlow(stream) && Number.isFinite(flow) ? flow / F : null
   }
   return null
 }
@@ -211,10 +234,14 @@ export function colorScale(solve, key, theme = 'light') {
   if (!all.length) return { colors: {}, lo: null, hi: null, uniform: false }
   const lo = Math.min(...all)
   const hi = Math.max(...all)
-  const uniform = hi - lo <= 1e-9 * Math.max(Math.abs(lo), Math.abs(hi), 1e-300)
+  // Halved before subtracting: two finite values of opposite sign near
+  // the float limit have a span of Infinity, and every stream would then
+  // sit at the bottom of the ramp.
+  const span = hi / 2 - lo / 2
+  const uniform = span <= 0.5e-9 * Math.max(Math.abs(lo), Math.abs(hi), 1e-300)
   const colors = {}
   for (const [name, v] of Object.entries(values)) {
-    colors[name] = rampAt(uniform ? 0.5 : (v - lo) / (hi - lo), theme)
+    colors[name] = rampAt(uniform ? 0.5 : (v / 2 - lo / 2) / span, theme)
   }
   return { colors, lo, hi, uniform }
 }
@@ -251,8 +278,8 @@ export function unitSummary(unit, solve, theme = 'light') {
     const s = streams[name]
     return {
       stream: name,
-      T: Number.isFinite(s?.T) ? s.T : null,
-      P: Number.isFinite(s?.P) ? s.P : null,
+      T: typeof s?.T === 'number' ? s.T : null,
+      P: typeof s?.P === 'number' ? s.P : null,
       total: s ? total(s) : null,
     }
   })

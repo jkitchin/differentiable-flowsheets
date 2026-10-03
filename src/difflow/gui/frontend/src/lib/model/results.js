@@ -42,7 +42,11 @@ export function total(stream) {
  * table missing the column that matters.
  *
  * @param {Object} solve the `/api/solve` answer
- * @returns {{species: string[], rows: Array}}
+ * `phases` says whether any stream carries a phase label. Most units do
+ * not set one, and a column that is blank on every row reads as a
+ * phase that failed to compute.
+ *
+ * @returns {{species: string[], rows: Array, phases: boolean}}
  */
 export function streamTable(solve) {
   const streams = solve?.streams ?? {}
@@ -70,7 +74,7 @@ export function streamTable(solve) {
         F ? (stream[`F_${s}`] ?? 0) / F : null),
     }
   })
-  return { species, rows }
+  return { species, rows, phases: rows.some((row) => row.phase !== null) }
 }
 
 /** Total flow per stream, for badging the canvas edges. */
@@ -157,11 +161,28 @@ export function fmt(value, digits = 4) {
   if (typeof value === 'string') return value
   if (!Number.isFinite(value)) return String(value)
   if (value === 0) return '0'
-  const size = Math.abs(value)
-  if (size >= 1e-3 && size < 1e5) {
-    return String(Number(value.toPrecision(digits)))
-  }
-  return value.toExponential(digits - 1)
+  // Round first, then choose the form: deciding on the unrounded value
+  // printed 99999.7 as "100000" -- six figures, the very thing this is
+  // here to avoid -- because it was under 1e5 until it was rounded.
+  const rounded = Number(value.toPrecision(digits))
+  const size = Math.abs(rounded)
+  if (size >= 1e-3 && size < 1e5) return String(rounded)
+  // "1.013e5", as the docstring always said; JavaScript writes "e+5".
+  return rounded.toExponential(digits - 1).replace('e+', 'e')
+}
+
+/**
+ * The text beside a product's ring: its stream name, and its flow once
+ * there is one.
+ *
+ * A product has no wire, so it has no wire label either -- and the wire
+ * label is where every other stream's name and flow are written. Without
+ * this the one stream a flowsheet exists to make was the one stream the
+ * canvas never named. Same text as a wire's label, so the two read alike.
+ */
+export function productLabel(stream, flows = null) {
+  const flow = flows ? flows[stream] : undefined
+  return flow === undefined ? stream : `${stream}  ${fmt(flow, 3)}`
 }
 
 /**

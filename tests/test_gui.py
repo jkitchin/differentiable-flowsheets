@@ -376,6 +376,31 @@ class TestEditing:
         assert excinfo.value.code == 400
         assert "bad JSON" in json.loads(excinfo.value.read())["error"]
 
+    @pytest.mark.parametrize("raw, expect", [
+        (b"[1, 2]", "JSON object"),
+        (b"3", "JSON object"),
+        (b"null", "JSON object"),
+        (b'{"a": "\xff"}', "not UTF-8"),
+    ])
+    def test_a_body_that_is_not_an_object_is_refused_as_such(self, client, raw, expect):
+        """Said about the request, not as an AttributeError from a route."""
+        request = urllib.request.Request(
+            client.base + "/api/solve", data=raw,
+            headers={"Content-Type": "application/json",
+                     gui.TOKEN_HEADER: client.server.token}, method="POST",
+        )
+        with pytest.raises(urllib.error.HTTPError) as excinfo:
+            urllib.request.urlopen(request)
+        assert excinfo.value.code == 400
+        error = json.loads(excinfo.value.read())["error"]
+        assert expect in error and "AttributeError" not in error
+
+    def test_a_query_string_does_not_hide_a_route(self, client):
+        status, payload = client.get_json("/api/flowsheet?v=2")
+        assert status == 200 and "flowsheet" in payload
+        status, _ = client.get("/?reload=1")
+        assert status == 200
+
 
 # =============================================================================
 # Incremental routes
@@ -577,7 +602,7 @@ class TestFiles:
         assert session.solve() == {
             "ok": True, "streams": {}, "species": [], "converged": True,
             "iterations": 0, "method": "direct", "residual": 0.0,
-            "tol": 1e-08, "tear_streams": [], "pending": [],
+            "tol": 1e-08, "tear_streams": [],
             "audit": {"warnings": [], "mass": None},
             "solver": {"tol": 1e-8, "max_iter": 100,
                        "acceleration": "anderson",
@@ -608,6 +633,22 @@ class TestFailureReporting:
         result = FlowsheetSession(fs).solve()
         assert not result["ok"]
         assert result["error"], "a failure must carry a message"
+
+    def test_an_edit_clears_the_last_solve_error(self, thermo):
+        """The assistant's solve brief must not describe a flowsheet that has
+        since been edited."""
+        fs = Flowsheet(species_order=SPECIES)
+        fs.add_feed("feed", make_stream({"water": 1.0}, T=350.0, P=101325.0))
+        fs.add_unit(Unit("heat", Heater(HeaterParams(T_out=360.0)),
+                         ["feed", "recycle"], ["hot"]))
+        fs.add_unit(Unit("flash", Flash(FlashParams(species_order=SPECIES), thermo),
+                         ["hot"], ["liq", "vap"]))
+        fs.add_recycle("liq", "recycle")
+        session = FlowsheetSession(fs)
+        assert not session.solve()["ok"]
+        assert session.solve_error
+        assert session.remove_feed("feed")["ok"]
+        assert session.solve_error is None
 
     def test_an_unregistered_unit_makes_the_code_panel_report(self, thermo):
         class HomeMadeUnit:
@@ -1814,6 +1855,24 @@ class TestDocsRendering:
         assert "Stream" in html and "goes in" in html
         assert "difflow.streams" not in html, "`~` abbreviates, as in Sphinx"
 
+    def test_a_link_cannot_carry_script(self):
+        """The panel is put in with {@html}. Raw HTML is already off, but a
+        reST link target is copied into href as written -- a plugin's
+        docstring could otherwise run script in the editor's page."""
+        from difflow.gui import docs
+
+        if not docs.available():
+            pytest.skip("docutils is not installed")
+        for target in ("javascript:alert(1)", "JavaScript:alert(1)",
+                       "data:text/html,x", "vbscript:x"):
+            html, _ = docs.render(f"See `here <{target}>`_.")
+            assert "href" not in html, target
+            assert "here" in html, "the text of the link stays"
+        html, _ = docs.render("See `the book <https://example.org/x>`_.")
+        assert 'href="https://example.org/x"' in html
+        html, _ = docs.render("A <img src=x onerror=alert(1)> tag.")
+        assert "<img" not in html
+
     def test_no_system_messages_reach_the_panel(self):
         """A few docstrings indent in ways docutils reads as a block
         quote. That is difflow's prose to fix, not a red box in the
@@ -2102,6 +2161,15 @@ class TestPlanning:
         assert session.linearize([], ["liq.F_ethanol"]) == {
             "ok": False, "error": "pick at least one lever and one output"}
         assert session.linearize(["reactor.V"], [])["ok"] is False
+
+    @pytest.mark.parametrize("radius", [float("nan"), float("inf"), -0.1, 0, "wide"])
+    def test_a_radius_that_is_not_a_positive_number_is_refused(self, thermo, radius):
+        """Not linearized into a trust region of NaN or inverted bounds."""
+        session = FlowsheetSession(build_flowsheet(thermo))
+        session.solve()
+        answer = session.linearize(["reactor.V"], ["liq.F_ethanol"], radius=radius)
+        assert answer["ok"] is False and "radius" in answer["error"]
+        assert "planning" not in session.flowsheet.view
 
     def test_a_name_the_flowsheet_does_not_have_is_an_answer(self, thermo):
         session = FlowsheetSession(build_flowsheet(thermo))

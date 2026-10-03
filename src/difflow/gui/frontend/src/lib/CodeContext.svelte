@@ -19,8 +19,21 @@
     error = '',
     busy = false,
     onapply = () => {},
+    // Cmd-S with a draft not yet applied: apply it, then save. Left to
+    // the window's Cmd-S, the flowsheet was saved WITHOUT the text on
+    // screen, and the "saved" note said the opposite.
+    onsave = () => {},
     onclose = () => {},
   } = $props()
+
+  function keydown(event) {
+    const mod = event.metaKey || event.ctrlKey
+    if (!mod || event.altKey || event.shiftKey || event.key.toLowerCase() !== 's') return
+    if (!dirty) return       // nothing unapplied: the window's save is right
+    event.preventDefault()
+    event.stopPropagation()
+    if (!busy) onsave(draft)
+  }
 
   // Seeded once, at mount, and deliberately so: the panel exists only
   // while it is open, and the text in it is the user's, not the
@@ -62,7 +75,7 @@ kin = mass_action_kinetics([{
 
 </script>
 
-<section class="context">
+<section class="context" onkeydown={keydown}>
   <header>
     <h2>Code context</h2>
     <p class="hint">

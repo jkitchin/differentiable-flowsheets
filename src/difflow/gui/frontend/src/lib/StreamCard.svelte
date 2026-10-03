@@ -46,12 +46,14 @@
       <dt>F</dt><dd>{fmt(summary.total, 4)} <span class="soft">mol/s</span></dd>
     </dl>
 
-    {#if summary.parts.length}
+    {#if summary.negative}
+      <p class="hint">a negative flow: no composition</p>
+    {:else if summary.parts.length}
       <!-- A 2px surface gap between segments, from the flex gap, so two
            neighbouring hues never share an edge. -->
       <div class="bar" role="img"
            aria-label="composition: {summary.parts.map((p) => `${p.species} ${pct(p.x)}`).join(', ')}">
-        {#each summary.parts as part (part.species)}
+        {#each summary.parts as part (part.key)}
           <span style:flex-grow={part.x} style:background={part.color}
                 title="{part.species} {pct(part.x)}"></span>
         {/each}
@@ -62,7 +64,7 @@
       <thead><tr><th></th><th>x</th><th>F <span class="soft">mol/s</span></th></tr></thead>
       <tbody>
         {#each summary.rows as row (row.species)}
-          <tr class:zero={!row.flow}>
+          <tr class:zero={row.flow === 0}>
             <td><i class="swatch" style:background={row.color}></i>{row.species}</td>
             <td>{pct(row.x)}</td>
             <td>{fmt(row.flow, 4)}</td>

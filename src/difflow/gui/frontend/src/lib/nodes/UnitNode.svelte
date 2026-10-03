@@ -25,6 +25,10 @@
   that you asked for a Flash and the place to find out what it is
   waiting for.
 
+  An outlet nothing reads is a PRODUCT: a ring, with the stream's name
+  (and, solved, its flow) written beside it whether or not port labels
+  are on, since a product has no wire to carry a label.
+
   A port with nothing attached is drawn as a RED DOT. Nothing else says
   so: the canvas draws a box only for a feed someone declared, so an
   unwired port is otherwise just an unremarkable handle at the edge of a
@@ -34,6 +38,7 @@
   import { Handle, Position } from '@xyflow/svelte'
 
   import UnitSymbol from './UnitSymbol.svelte'
+  import { productLabel } from '../model/results.js'
 
   let { data } = $props()
 
@@ -105,7 +110,12 @@
       title={data.solved ? undefined : (why[outlet(data.products, stream)] ?? '')}
       style={`top:${at(i, data.outlets.length)}`}
     />
-    {#if data.portLabels}
+    {#if data.products?.includes(stream)}
+      <!-- Always, not only with port labels on: a product has no wire,
+           so this is the only place its name and flow can be written. -->
+      <span class="port out product" style={`top:${at(i, data.outlets.length)}`}
+        >{productLabel(stream, data.flows)}</span>
+    {:else if data.portLabels}
       <span class="port out" style={`top:${at(i, data.outlets.length)}`}>{stream}</span>
     {/if}
   {/each}
@@ -181,4 +191,5 @@
   }
   .port.in { right: 100%; margin-right: 6px; }
   .port.out { left: 100%; margin-left: 6px; }
+  .port.product { color: var(--good); }
 </style>

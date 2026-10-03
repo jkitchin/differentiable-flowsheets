@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import functools
 import math
+import re
 import threading
 import types
 from pathlib import Path
@@ -81,6 +82,10 @@ def _solver_option(key: str, value):
         return value
     raise ValueError(f"{key!r} is not a solver option the editor sets "
                      f"(it sets {', '.join(SOLVER_DEFAULTS)})")
+
+
+#: What `set_species` accepts as a species name.
+_SPECIES_NAME = re.compile(r"[A-Za-z0-9_]+")
 
 
 def _undoable(method):
@@ -337,7 +342,7 @@ class FlowsheetSession:
         adopted = None
         with self._lock:
             self.bindings, self.context_error = bindings, None
-            self.streams = None      # the snippet is part of the model
+            self.streams = self.solve_error = None      # the snippet is part of the model
             if source.strip():
                 self.flowsheet.view["code_context"] = source
             else:
@@ -396,10 +401,23 @@ class FlowsheetSession:
         if isinstance(names, str) or not isinstance(names, (list, tuple)):
             return {"ok": False, "error": "species must be a list of names"}
         cleaned, seen = [], set()
+        # A name the flowsheet already has is let through: one loaded from
+        # a file or built in a script may predate the rule, and refusing
+        # it would lock every later species edit on that flowsheet.
+        existing = set(getattr(self.flowsheet, "species_order", None) or [])
         for name in names:
             if not isinstance(name, str) or not name.strip():
                 return {"ok": False, "error": "every species needs a name"}
             text = name.strip()
+            # Letters, digits and underscores, as the database's own names
+            # are (`1_butanol`). A species name is half of every key built
+            # on it -- `F_<species>`, `x_<species>`, `<stream>.F_<species>`
+            # -- and a dot, a space or a dash in it splits those keys in
+            # the wrong place or makes a codegen line that does not parse.
+            if text not in existing and not _SPECIES_NAME.fullmatch(text):
+                return {"ok": False,
+                        "error": f"{text!r} is not a species name: use letters, "
+                                 f"digits and underscores only"}
             if text in seen:
                 return {"ok": False, "error": f"{text} is named twice"}
             seen.add(text)
@@ -417,7 +435,7 @@ class FlowsheetSession:
                              "delete them first, or edit the file",
                 }
             self.flowsheet.species_order = cleaned
-            self.streams = None
+            self.streams = self.solve_error = None
         # `species_order` is the need that blocks the most of the palette,
         # so naming the species is the other edit that can promote a red
         # node. Same reason as in `set_code_context` for doing it here
@@ -525,7 +543,7 @@ class FlowsheetSession:
                 return {"ok": False, "error": str(bad)}
 
             fs.add_feed(name, make_stream(flows=flows, T=T, P=P))
-            self.streams = None
+            self.streams = self.solve_error = None
         return {"ok": True, "name": name, "T": T, "P": P, "flows": flows}
 
     @_undoable
@@ -545,7 +563,7 @@ class FlowsheetSession:
                 return {"ok": False,
                         "error": f"no feed called {name!r} (have: {known})"}
             del self.flowsheet.feeds[name]
-            self.streams = None
+            self.streams = self.solve_error = None
         return {"ok": True, "name": name}
 
     # -- reads --------------------------------------------------------
@@ -873,10 +891,10 @@ class FlowsheetSession:
             # Anything else may have left the edit half done. The streams
             # cannot be trusted to describe what is there now.
             if not moves_only:
-                self.streams = None
+                self.streams = self.solve_error = None
             raise
         if not moves_only:
-            self.streams = None
+            self.streams = self.solve_error = None
         return {"ok": True, **(result or {})}
 
     @_undoable
@@ -941,6 +959,14 @@ class FlowsheetSession:
 
         if not isinstance(new_name, str) or not new_name.strip():
             raise edit.EditError("a unit name cannot be empty")
+        # The canvas keys a feed `feed:<stream>` and a product
+        # `product:<stream>`, beside units under their bare names, and the
+        # view's node positions are saved under the same keys. A unit so
+        # named would be taken for the feed: deleting it deletes the feed.
+        if new_name.startswith(("feed:", "product:")):
+            raise edit.EditError(
+                f"a unit name cannot begin with {new_name.split(':')[0] + ':'!r}; "
+                "the canvas uses that for feeds and products")
         if any(other.name == new_name for other in self.flowsheet.units):
             raise edit.EditError(f"there is already a unit called {new_name!r}")
 
@@ -968,6 +994,11 @@ class FlowsheetSession:
             raise edit.EditError(
                 f"position for {key!r} must be {{'x': number, 'y': number}}"
             ) from exc
+        # `float("nan")` is a float. A NaN coordinate saved fine and then
+        # failed the file's own JSON (`allow_nan=False`) on the next save,
+        # or put the node nowhere on the canvas.
+        if not (math.isfinite(x) and math.isfinite(y)):
+            raise edit.EditError(f"position for {key!r} must be finite")
         return {"x": x, "y": y}
 
     def _place(self, key: str, position) -> None:
@@ -1340,10 +1371,22 @@ class FlowsheetSession:
                        if src in touched or dst in touched}
             for src in dropped:
                 del self.flowsheet.recycles[src]
+            # Likewise a feed only this unit read: left, it is a box on
+            # the canvas wired to nothing, feeding a stream nobody reads.
+            # Undo brings it back, composition and all.
+            still_read = {s for other in self.flowsheet.units
+                          for s in other.inlet_names}
+            feeds_dropped = sorted(f for f in self.flowsheet.feeds
+                                   if f in touched and f not in still_read)
+            for f in feeds_dropped:
+                del self.flowsheet.feeds[f]
             nodes = (self.flowsheet.view or {}).get("nodes")
             if isinstance(nodes, dict):
                 nodes.pop(name, None)
-            return {"name": name, "recycles_dropped": dropped}
+                for f in feeds_dropped:
+                    nodes.pop(f"feed:{f}", None)
+            return {"name": name, "recycles_dropped": dropped,
+                    "feeds_dropped": feeds_dropped}
 
         return self._edit(apply)
 
@@ -1422,12 +1465,29 @@ class FlowsheetSession:
         """Adopt canvas positions. No rebuild, no solve --- coordinates only."""
         from difflow.gui import edit
 
+        from difflow.gui.layout import FEED_PREFIX, PRODUCT_PREFIX
+
         def apply() -> dict:
             if not isinstance(nodes, dict):
                 raise edit.EditError("layout must be an object of {key: {x, y}}")
-            for key, position in nodes.items():
-                self._place(key, position)
-            return {"nodes": len(nodes)}
+            # Every position checked before any is kept, so a bad one
+            # leaves the layout as it was rather than half moved.
+            placed = {key: self._position(key, p) for key, p in nodes.items()}
+            # Only keys the canvas can draw. Anything else was stored and
+            # saved to the file for ever: a node deleted while its drag
+            # was in flight, or any string a caller cared to send.
+            streams = edit.stream_names(self.flowsheet)
+            known = ({u.name for u in self.flowsheet.units}
+                     | {FEED_PREFIX + s for s in streams}
+                     | {PRODUCT_PREFIX + s for s in streams})
+            ignored = sorted(key for key in placed if key not in known)
+            for key, position in placed.items():
+                if key in known:
+                    self._place(key, position)
+            answer = {"nodes": len(placed) - len(ignored)}
+            if ignored:
+                answer["ignored"] = ignored
+            return answer
 
         return self._edit(apply, moves_only=True)
 
@@ -1646,7 +1706,7 @@ class FlowsheetSession:
                 self.flowsheet.view["solver"] = stored
             else:
                 self.flowsheet.view.pop("solver", None)
-            self.streams = None
+            self.streams = self.solve_error = None
         return {"ok": True, "solver": self.solver_options()}
 
     def solve(self) -> dict:
@@ -1719,11 +1779,6 @@ class FlowsheetSession:
             "tol": _number(getattr(fs, "last_solve_tol", None)),
             "tear_streams": list(getattr(fs, "last_solve_tear_streams", []) or []),
             "solver": self.solver_options(),
-            # What was solved is not what is on the canvas if any of it is
-            # still red. The numbers below are right about the flowsheet
-            # that exists, and saying nothing here would let them be read
-            # as being about the one being drawn.
-            "pending": sorted(self.pending),
             "audit": self._audit(streams),
         }
 
@@ -1936,7 +1991,19 @@ class FlowsheetSession:
         if not u or not y:
             return {"ok": False,
                     "error": "pick at least one lever and one output"}
-        radius = planning.DEFAULT_RADIUS if radius is None else float(radius)
+        # Refused here, by name. A NaN radius made a trust region of NaN
+        # bounds that the LP export wrote out as written, and a negative
+        # one a region with its lower bound above its upper.
+        if radius is None:
+            radius = planning.DEFAULT_RADIUS
+        else:
+            try:
+                radius = float(radius)
+            except (TypeError, ValueError):
+                radius = math.nan
+            if not (math.isfinite(radius) and radius > 0):
+                return {"ok": False,
+                        "error": "the trust-region radius must be a positive number"}
         try:
             with self._lock:
                 dvs, answer = planning.linearize(
@@ -2049,7 +2116,7 @@ class FlowsheetSession:
             after = self._fingerprint()
             changed = before is None or after is None or before != after
             if changed:
-                self.streams = None
+                self.streams = self.solve_error = None
         answer["changed"] = changed
         return answer
 

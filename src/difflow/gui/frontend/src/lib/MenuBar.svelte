@@ -11,12 +11,13 @@
 <script>
   import ContextMenu from './ContextMenu.svelte'
 
-  let { menus = [] } = $props()
+  // `open` is bindable so the editor's hotkeys can stand aside while a
+  // menu from the bar has the keyboard.
+  let { menus = [], open = $bindable(null) } = $props()
 
   // Which menu is open, and the box of the button it hangs from. The
   // button element is kept too, so closing can give the focus back to
   // where the keyboard user left it.
-  let open = $state(null)
   let current = $derived(menus.find((m) => m.id === open?.id) ?? null)
 
   function show(menu, button) {

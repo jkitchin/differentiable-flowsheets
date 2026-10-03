@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
 
-import { decorate } from './results.js'
+import { decorate, fmt } from './results.js'
 import {
   OTHER_COLOR,
   RAMP,
@@ -205,4 +205,54 @@ test('a stream missing from the solve is listed without numbers', () => {
   close(u.totalIn, 0)
   assert.equal(unitSummary(null, SOLVE), null)
   assert.equal(unitSummary(FLASH, null), null)
+})
+
+test('a species called "other" does not share a key with the fold', () => {
+  const order = ['other', ...Array.from({ length: 9 }, (_, i) => `s${i}`)]
+  const stream = Object.fromEntries(order.map((s) => [`F_${s}`, 1]))
+  const s = streamSummary(stream, order)
+  assert.equal(s.parts.length, 9)
+  assert.equal(new Set(s.parts.map((p) => p.key)).size, s.parts.length)
+})
+
+test('a stream missing a species does not shift the others\' colours', () => {
+  const order = ['A', 'B', 'C']
+  const s = streamSummary({ F_B: 1, F_C: 1 }, order)
+  assert.equal(s.rows[0].color, SPECIES_COLORS.light[1])
+  assert.equal(s.rows[1].color, SPECIES_COLORS.light[2])
+})
+
+test('the fold goes by flowsheet order, not by rank in the stream', () => {
+  const order = Array.from({ length: 10 }, (_, i) => `s${i}`)
+  // s0 absent: s8 is still the ninth species and folds.
+  const stream = Object.fromEntries(order.slice(1).map((s) => [`F_${s}`, 1]))
+  const s = streamSummary(stream, order)
+  assert.ok(!s.parts.some((p) => p.species === 's8'))
+  assert.equal(s.parts.at(-1).key, 'other')
+})
+
+test('a negative flow leaves the stream without a composition', () => {
+  const s = streamSummary({ T: 300, P: 1e5, F_A: 2, F_B: -1 }, ['A', 'B'])
+  assert.equal(s.negative, true)
+  assert.deepEqual(s.parts, [], 'no bar showing A at 200 %')
+  assert.deepEqual(s.rows.map((r) => r.x), [null, null])
+  assert.deepEqual(s.rows.map((r) => r.flow), [2, -1], 'the flows are still shown')
+  assert.equal(streamSummary({ F_A: 1, F_B: 0 }, ['A', 'B']).negative, false)
+  assert.equal(valueOf({ F_A: 2, F_B: -1 }, 'x:A'), null, 'nor a wire colour by it')
+})
+
+test('a span past the float limit still spreads the ramp', () => {
+  const solve = { streams: { a: { T: -1e308 }, b: { T: 0 }, c: { T: 1e308 } } }
+  const scale = colorScale(solve, 'T')
+  assert.equal(scale.uniform, false)
+  assert.equal(new Set(Object.values(scale.colors)).size, 3)
+  assert.equal(scale.colors.b, colorScale({ streams: { a: { T: -1 }, b: { T: 0 }, c: { T: 1 } } }, 'T').colors.b)
+})
+
+test('a NaN is shown as NaN on the cards, as in the stream table', () => {
+  const s = streamSummary({ T: NaN, P: 1e5, F_A: NaN, F_B: 1 }, ['A', 'B'])
+  assert.ok(Number.isNaN(s.T))
+  assert.ok(Number.isNaN(s.rows[0].flow), 'not null, which prints as a blank')
+  assert.ok(Number.isNaN(s.total))
+  assert.equal(fmt(s.rows[0].flow), 'NaN')
 })
