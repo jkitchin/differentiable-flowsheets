@@ -437,6 +437,21 @@ function renderFeeds() {
 }
 
 /* ---- units: wiring and parameters ---------------------------------- */
+/* JSON.stringify writes Infinity and NaN as null, so a non-finite value
+   travels in the serializer's tag, {"$float": "inf"}; a string is never
+   read as one. It is shown as the tag's text and typed back the same way. */
+const isFloatTag = v => v !== null && typeof v === "object" &&
+  !Array.isArray(v) && typeof v["$float"] === "string" &&
+  Object.keys(v).length === 1;
+const showScalar = v => isFloatTag(v) ? v["$float"] : v;
+function toNumber(raw) {
+  const inf = /^([+-]?)(inf|infinity)$/i.exec(raw);
+  if (inf) return {"$float": inf[1] === "-" ? "-inf" : "inf"};
+  if (/^nan$/i.test(raw)) return {"$float": "nan"};
+  const n = Number(raw);
+  return raw !== "" && isFinite(n) ? n : null;
+}
+
 function renderUnits() {
   const el = document.getElementById("units");
   const f = fsheet();
@@ -451,14 +466,16 @@ function renderUnits() {
        be rejected, so they are listed as read-only instead. */
     const byName = {};
     (spec.parameters || []).forEach(p => byName[p.name] = p);
-    const scalar = v => v === null || ["number","string","boolean"].includes(typeof v);
+    const scalar = v => v === null || isFloatTag(v) ||
+      ["number","string","boolean"].includes(typeof v);
     const flatList = v => Array.isArray(v) && v.every(scalar);
     const editable = ([k, v]) => !(byName[k] || {}).is_callable &&
       (scalar(v) || flatList(v));
 
     const rows = Object.entries(u.params).filter(editable).map(([k, v]) => {
       const meta = byName[k] || {};
-      const shown = Array.isArray(v) ? v.join(", ") : (v === null ? "" : v);
+      const shown = Array.isArray(v) ? v.map(showScalar).join(", ")
+        : (v === null ? "" : showScalar(v));
       const blank = shown === "" || (Array.isArray(v) && !v.length);
       /* the description comes from the Params class's own documentation
          (difflow.docstrings), so it is worth showing as a tooltip */
@@ -517,19 +534,15 @@ function renderUnits() {
       const raw = e.target.value.trim();
       if (e.target.dataset.list) {
         const parts = raw === "" ? [] : raw.split(",").map(x => x.trim());
-        const nums = parts.map(Number);
-        /* a list of numbers must not arrive as a list of strings */
+        const nums = parts.map(toNumber);
+        /* a list of numbers must not arrive as a list of strings, and one
+           holding an infinity is still a list of numbers */
         u.params[e.target.dataset.key] =
-          parts.length && nums.every(n => isFinite(n)) ? nums : parts;
+          parts.length && nums.every(n => n !== null) ? nums : parts;
       } else {
-        const n = Number(raw);
-        /* JSON.stringify writes Infinity as null, so an infinite value
-           travels in the serializer's tag; a string is never read as one. */
-        const inf = /^([+-]?)(inf|infinity)$/i.exec(raw);
+        const n = toNumber(raw);
         u.params[e.target.dataset.key] =
-          raw === "" ? null
-          : inf ? {"$float": inf[1] === "-" ? "-inf" : "inf"}
-          : (isFinite(n) ? n : raw);
+          raw === "" ? null : (n === null ? raw : n);
       }
       await push();
       render();

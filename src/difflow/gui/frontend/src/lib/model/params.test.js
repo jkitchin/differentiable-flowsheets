@@ -66,6 +66,11 @@ test('a flat list is editable as text, a nested one is not', () => {
 })
 
 test('a list of numbers does not come back as a list of strings', () => {
+  // shown as 'Infinity, 1' (K_eq of an irreversible reaction), it must
+  // come back as numbers: a string 'Infinity' is never read as one
+  assert.deepEqual(parse('Infinity, 1', 'list'), [Infinity, 1])
+  assert.deepEqual(parse('-inf, 2', 'list'), [-Infinity, 2])
+  assert.deepEqual(parse('1, , 2', 'list'), ['1', '', '2'])
   assert.deepEqual(parse('1, 2.5, 3', 'list'), [1, 2.5, 3])
   assert.deepEqual(parse('water, ethanol', 'list'), ['water', 'ethanol'])
   assert.deepEqual(parse('', 'list'), [])
