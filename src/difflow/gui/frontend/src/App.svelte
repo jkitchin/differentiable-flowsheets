@@ -170,8 +170,9 @@
    * text field it is the field's own undo, which is the one meant there.
    */
   function hotkey(event) {
-    // An open menu owns the keyboard, the bar's as much as the right-click one.
-    if (menu || barMenu) return
+    // An open menu owns the keyboard, the bar's as much as the right-click
+    // one; and a panel that already answered the key has had its say.
+    if (menu || barMenu || event.defaultPrevented) return
     if (event.metaKey || event.ctrlKey) {
       if (event.altKey) return
       if (event.key.toLowerCase() === 'z' && !typing(event)) {
@@ -921,6 +922,10 @@
     error={context.error ?? ''}
     {busy}
     onapply={applyContext}
+    onsave={async (text) => {
+      const answer = await applyContext(text)
+      if (answer?.ok) await (path ? save() : saveAs())
+    }}
     onclose={() => (showContext = false)}
   />
 {/if}
