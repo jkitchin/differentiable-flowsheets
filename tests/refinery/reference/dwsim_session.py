@@ -932,6 +932,9 @@ class DWSIMFlowsheet:
                 break
             if ipcls is not None:
                 break
+        # Remove every stored pair first, then add the given ones: removing
+        # and adding in one pass deletes, on the (j, i) visit, the (i, j)
+        # pair just added, and every kij ends up zero.
         for i, a in enumerate(self.names):
             for j, b in enumerate(self.names):
                 if i == j:
@@ -940,6 +943,8 @@ class DWSIMFlowsheet:
                     for p, q in ((a, b), (b, a)):
                         if st.ContainsKey(p) and st[p].ContainsKey(q):
                             st[p].Remove(q)
+        for i, a in enumerate(self.names):
+            for j, b in enumerate(self.names):
                 if explicit and i < j:
                     if not ip.ContainsKey(a):
                         ip.Add(a, Dictionary[str, ipcls]())
