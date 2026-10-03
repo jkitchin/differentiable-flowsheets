@@ -85,7 +85,9 @@ export function streamSummary(stream, order = [], theme = 'light') {
     const flow = stream[`F_${s}`]
     return {
       species: s,
-      flow: Number.isFinite(flow) ? flow : null,
+      // NaN stays NaN: the card prints it, as the stream table does. A
+      // blank would read as a value nobody computed, not as a failure.
+      flow: typeof flow === 'number' ? flow : null,
       // No composition for a stream with no flow, rather than NaN.
       x: F > 0 && !negative && Number.isFinite(flow) ? flow / F : null,
       color: colors[s],
@@ -108,8 +110,8 @@ export function streamSummary(stream, order = [], theme = 'light') {
   }
 
   return {
-    T: Number.isFinite(stream.T) ? stream.T : null,
-    P: Number.isFinite(stream.P) ? stream.P : null,
+    T: typeof stream.T === 'number' ? stream.T : null,
+    P: typeof stream.P === 'number' ? stream.P : null,
     phase: typeof stream.phase === 'string' ? stream.phase : null,
     total: F,
     negative,
@@ -272,8 +274,8 @@ export function unitSummary(unit, solve, theme = 'light') {
     const s = streams[name]
     return {
       stream: name,
-      T: Number.isFinite(s?.T) ? s.T : null,
-      P: Number.isFinite(s?.P) ? s.P : null,
+      T: typeof s?.T === 'number' ? s.T : null,
+      P: typeof s?.P === 'number' ? s.P : null,
       total: s ? total(s) : null,
     }
   })

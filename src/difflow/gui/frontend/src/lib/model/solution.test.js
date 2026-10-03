@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert'
 import { test } from 'node:test'
 
-import { decorate } from './results.js'
+import { decorate, fmt } from './results.js'
 import {
   OTHER_COLOR,
   RAMP,
@@ -247,4 +247,12 @@ test('a span past the float limit still spreads the ramp', () => {
   assert.equal(scale.uniform, false)
   assert.equal(new Set(Object.values(scale.colors)).size, 3)
   assert.equal(scale.colors.b, colorScale({ streams: { a: { T: -1 }, b: { T: 0 }, c: { T: 1 } } }, 'T').colors.b)
+})
+
+test('a NaN is shown as NaN on the cards, as in the stream table', () => {
+  const s = streamSummary({ T: NaN, P: 1e5, F_A: NaN, F_B: 1 }, ['A', 'B'])
+  assert.ok(Number.isNaN(s.T))
+  assert.ok(Number.isNaN(s.rows[0].flow), 'not null, which prints as a blank')
+  assert.ok(Number.isNaN(s.total))
+  assert.equal(fmt(s.rows[0].flow), 'NaN')
 })

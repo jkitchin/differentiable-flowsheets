@@ -64,7 +64,7 @@
       <thead><tr><th></th><th>x</th><th>F <span class="soft">mol/s</span></th></tr></thead>
       <tbody>
         {#each summary.rows as row (row.species)}
-          <tr class:zero={!row.flow}>
+          <tr class:zero={row.flow === 0}>
             <td><i class="swatch" style:background={row.color}></i>{row.species}</td>
             <td>{pct(row.x)}</td>
             <td>{fmt(row.flow, 4)}</td>
