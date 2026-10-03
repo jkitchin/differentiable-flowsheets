@@ -140,15 +140,17 @@ class TestReferenceIsCurrent:
 #: (case, which, reactor) whose answer is NOT DWSIM's own equilibrium
 #: (:func:`._dwsim_rx_compare.acceptance`). DWSIM's equilibrium reactor:
 #: "negative mole fractions" on the isomerization ring and benzene at
-#: 573 K/100 bar; naphthalene/tetralin on DWSIM's data, where tetralin's G_f
-#: is missing (zero). (Before #339 it also converged silently wrong on the C6
+#: 573 K/100 bar (on both DWSIM's data and difflow's); naphthalene/tetralin on
+#: DWSIM's data, where tetralin's G_f is missing (zero). (Before #339 it also converged silently wrong on the C6
 #: paraffins at 400 K on the hypos; on #339's constants it does not.) DWSIM's
 #: Gibbs reactor (DirectMinimization): a minor species left at zero or at its
 #: trace start (MCH at 773 K, 2-methylhexane, benzene, naphthalene, and
 #: cyclohexane in the C6 ring at 480 K on the hypos), 5e-6 to 1e-2 off, with
-#: no error.
+#: no error. (The aromatics hypos carry difflow's Cp since #338; which Gibbs
+#: runs miss moved with them.)
 DWSIM_REACTOR_MISSES = {
     ("aromatics benzene 573.15 K 100 bar", "dwsim", "equilibrium"),
+    ("aromatics benzene 573.15 K 100 bar", "hypo", "equilibrium"),
     ("aromatics benzene 573.15 K 30 bar", "dwsim", "gibbs"),
     ("aromatics benzene 623.15 K 100 bar", "hypo", "gibbs"),
     ("aromatics benzene 623.15 K 30 bar", "hypo", "gibbs"),
@@ -156,11 +158,9 @@ DWSIM_REACTOR_MISSES = {
     ("aromatics naphthalene 573.15 K 100 bar", "dwsim", "equilibrium"),
     ("aromatics naphthalene 573.15 K 100 bar", "hypo", "gibbs"),
     ("aromatics naphthalene 573.15 K 30 bar", "dwsim", "equilibrium"),
-    ("aromatics naphthalene 573.15 K 30 bar", "hypo", "gibbs"),
     ("aromatics naphthalene 623.15 K 100 bar", "dwsim", "equilibrium"),
     ("aromatics naphthalene 623.15 K 30 bar", "dwsim", "equilibrium"),
     ("aromatics naphthalene 693.15 K 100 bar", "dwsim", "equilibrium"),
-    ("aromatics naphthalene 693.15 K 100 bar", "hypo", "gibbs"),
     ("aromatics naphthalene 693.15 K 30 bar", "dwsim", "equilibrium"),
     ("isom c6_ring 420 K", "dwsim", "equilibrium"),
     ("isom c6_ring 420 K", "hypo", "equilibrium"),
@@ -387,22 +387,34 @@ class TestData:
                 assert abs(d) < 1.9e3, (name, d)
 
     def test_hydroprocessing_heats_at_reactor_temperature(self):
-        """difflow's per-class heats are 298 K values; DWSIM's conversion
-        reactor at 350 C gives every model reaction 3 % to 15 % MORE heat
-        (the reaction's dCp): HDS of thiophene -277 against -262 kJ/mol."""
-        for name, row in cmp.hdt_heats().items():
+        """DWSIM's conversion reactor at 350 C gives every model reaction 3 %
+        to 15 % MORE heat than at 298 K (the reaction's dCp): HDS of thiophene
+        -277 against -262 kJ/mol. difflow's irreversible heats stay 298 K
+        values; its aromatics heats are Cp-integrated to the bed temperature
+        since #338 and agree with DWSIM's at 350 C within 0.3 kJ/mol
+        (benzene -219.89 against -220.17, naphthalene -132.12 against
+        -132.33)."""
+        from difflow_refinery.hydrotreating.kinetics import aromatic_heat
+
+        rows = cmp.hdt_heats()
+        for name, row in rows.items():
             if "missing_in_dwsim" in row:
                 continue
             ratio = row["dHT_dwsim"] / row["dH298_dwsim"]
             assert 1.03 < ratio < 1.16, (name, ratio)
+        dH = np.asarray(aromatic_heat(rc.HDT_T))
+        for step, name in ((2, "HDA mono: Bz + 3 H2 = CH"), (1, "HDA di: naphthalene + 2 H2 = tetralin")):
+            assert rows[name]["T"] == rc.HDT_T
+            assert abs(dH[step] - rows[name]["dHT_dwsim"]) < 300.0, (name, dH[step], rows[name]["dHT_dwsim"])
 
     def test_aromatics_saturation_constant(self):
-        """difflow's hydrotreating K for benzene + 3 H2 = cyclohexane takes dH
-        and dS at 298 K as constant. With heat capacities -- DWSIM's ChemSep
-        data, and difflow's OWN reformer thermochemistry -- ln K is lower by
-        1.05 at 300 C, 1.29 at 350 C, 1.60 at 420 C (K 2.9x, 3.6x, 4.9x too
-        large); those two agree with each other to 0.02 on one standard
-        state."""
+        """#338: difflow's hydrotreating K for benzene + 3 H2 = cyclohexane is
+        Cp-integrated, and agrees with DWSIM's ChemSep data within 0.016 in
+        ln K over 300-420 C on one standard state (0.005, 0.009, 0.016) and
+        with difflow's reformer thermochemistry exactly (one table). The
+        constant-dH/dS form it replaced was 1.12, 1.34, 1.62 above (K 3.1x,
+        3.8x, 5.1x too large on the table's constants; 2.9x-4.9x on the
+        pre-#339 ones)."""
         import jax.numpy as jnp
 
         from difflow_refinery.reforming import species as sp
@@ -410,13 +422,31 @@ class TestData:
 
         v = np.zeros(sp.N_SPECIES)
         v[sp.INDEX["A6"]], v[sp.INDEX["H2"]], v[sp.INDEX["N6"]] = -1, -3, 1
-        for T, gap in ((573.15, 1.05), (623.15, 1.29), (693.15, 1.60)):
+        for T, d_dw, gap in ((573.15, 0.0046, 1.118), (623.15, 0.0088, 1.341), (693.15, 0.0158, 1.622)):
             hdt = cmp.difflow_aromatic_lnK(2, T)
             dw = cmp.dw_reaction({"Benzene": -1, "Hydrogen": -3, "Cyclohexane": 1}, T)["lnK"]
             dw_bar = dw - 3 * np.log(em.P0_DWSIM / em.P0_DIFFLOW)
             ref_ = float(th.ln_K(jnp.asarray(v), T))
             assert abs(dw_bar - ref_) < 0.02
-            assert hdt - ref_ == pytest.approx(gap, abs=0.03)
+            assert hdt == pytest.approx(ref_, abs=1e-12)
+            assert hdt - dw_bar == pytest.approx(d_dw, abs=1e-3)
+            assert abs(hdt - dw_bar) < 0.05                        # the issue's acceptance
+            assert cmp.difflow_aromatic_lnK_constant(2, T) - hdt == pytest.approx(gap, abs=2e-3)
+
+    def test_aromatics_saturation_equilibria_on_dwsims_data(self):
+        """The benzene/cyclohexane equilibrium of DWSIM's own data (its
+        accepted reactor) against difflow's hydrotreating constants, 300-420 C,
+        30-100 bar: within 1.6e-3 in mole fraction since #338 (largest at
+        420 C, 30 bar, where the equilibrium is mid-way). Naphthalene/tetralin
+        cannot be checked this way: DWSIM's tetralin has no G_f (below); that
+        step, and the poly step (no tetrahydrophenanthrene in DWSIM), are
+        checked as an implementation -- DWSIM's reactors on difflow's own
+        constants (:class:`TestImplementation`) -- and against the shared
+        table's ln K in ``test_hydrotreating.py``."""
+        for lab, w in LABELS:
+            if w == "dwsim" and lab.startswith("aromatics benzene"):
+                x, _ = cmp.accepted(lab, "dwsim")
+                assert _max_dx(x, cmp.difflow_equilibrium(lab)[0]) < 1.6e-3, lab
 
     def test_tetralin_has_no_gibbs_energy_in_dwsim(self):
         """DWSIM's 1,2,3,4-tetrahydronaphthalene (ChEDL Thermo) has H_f but
