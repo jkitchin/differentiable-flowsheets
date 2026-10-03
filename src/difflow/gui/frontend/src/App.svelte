@@ -27,6 +27,10 @@
   // `path` is then the JSON beside it that Save writes, which is not
   // the name the user typed and not the name to show them first.
   let source = $state('')
+  // Edits the server holds that no file does. The server compares the
+  // model against what it last read or wrote, so an edit made from the
+  // console counts as much as one made on the canvas.
+  let dirty = $state(false)
   // The species list, and whether it can still be changed -- the server
   // answers both with the document, because "can I edit this" is a fact
   // about the flowsheet (has it any units yet?) and not a preference.
@@ -99,6 +103,13 @@
   let stopped = $state(false)
   let armedTimer = null
   const ASKING = 'click \u201cReally quit?\u201d to stop the editor'
+  const ASKING_DIRTY = 'unsaved edits: click \u201cReally quit?\u201d to stop the editor and lose them'
+
+  /** Go ahead with something that replaces the model, if nothing is lost. */
+  function discard(what) {
+    return !dirty || window.confirm(
+      `The flowsheet has edits that are not saved. ${what} anyway, and lose them?`)
+  }
 
   /** A remembered preference, or the default if there is nothing to read. */
   function remember(key, fallback) {
@@ -164,6 +175,7 @@
     doc = payload.flowsheet
     path = payload.path
     source = payload.source ?? ''
+    dirty = !!payload.dirty
     species = payload.species ?? []
     speciesEditable = payload.editable !== false
     pending = payload.pending ?? []
@@ -263,13 +275,13 @@
   async function quit() {
     if (!quitArmed) {
       quitArmed = true
-      note = ASKING
+      note = dirty ? ASKING_DIRTY : ASKING
       clearTimeout(armedTimer)
       armedTimer = setTimeout(() => {
         quitArmed = false
         // Only our own note: six seconds is long enough for something
         // else to have had something to say.
-        if (note === ASKING) note = ''
+        if (note === ASKING || note === ASKING_DIRTY) note = ''
       }, 6000)
       return
     }
@@ -466,8 +478,11 @@
     // Adopted locally too, so the next reload does not snap the node back
     // to where the document still says it is.
     doc = { ...doc, view: { ...doc.view, nodes: { ...doc.view?.nodes, ...moved } } }
-    edit(() => post('/api/layout', { nodes: moved }),
-         { reload: false, stale: false })
+    edit(async () => {
+      const answer = await post('/api/layout', { nodes: moved })
+      if (answer?.ok) dirty = true
+      return answer
+    }, { reload: false, stale: false })
   }
 
   const solve = () =>
@@ -511,6 +526,7 @@
     edit(async () => {
       const answer = await post('/api/save')
       note = answer.ok ? `saved to ${shortPath(answer.path)}` : answer.error
+      if (answer.ok) dirty = false
       return null
     }, { reload: false, stale: false })
 
@@ -586,7 +602,7 @@
       // A whole new flowsheet, so everything that described the old one
       // has to go: the code context, and the palette's flags, which are
       // answered against its bindings, as well as the canvas.
-      example: (key) => edit(async () => {
+      example: (key) => discard('Open the example') && edit(async () => {
         const answer = await post('/api/examples/open', { key })
         selected = null
         await loadContext()
@@ -615,6 +631,10 @@
 
 <svelte:window
   onkeydown={hotkey}
+  onbeforeunload={(e) => {
+    // Closing the last tab stops the server, and the edits with it.
+    if (dirty && !stopped) { e.preventDefault(); e.returnValue = '' }
+  }}
   onpagehide={(e) => alive.farewell({ persisted: e.persisted })}
   onpageshow={() => { if (!stopped) alive.ping() }}
 />
@@ -626,7 +646,8 @@
   <span
     class="path"
     title={source ? `${source}\nsaves to ${path}` : path}
-  >{shortPath(source || path) || 'no file'}</span>
+  >{shortPath(source || path) || 'no file'}{#if dirty}<span
+      class="dirty" title="edited since it was last saved"> •</span>{/if}</span>
   <Species {species} editable={speciesEditable} {busy} onapply={setSpecies} />
   <span class="summary">{summary}</span>
   <span class="spacer"></span>
@@ -782,6 +803,7 @@
   .path, .summary, .version { color: var(--ink-soft); font-size: 0.8rem; }
   /* Already shortened, and never the reason the header is two lines tall. */
   .path { white-space: nowrap; }
+  .dirty { color: var(--accent); }
   .version { font-variant-numeric: tabular-nums; opacity: 0.75; }
   .note { color: var(--accent); font-size: 0.8rem; }
   .note.warn { color: var(--bad); }

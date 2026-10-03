@@ -568,6 +568,51 @@ class TestSolveAudit:
         assert answer["ok"] and answer["audit"] == {"warnings": [], "mass": None}
 
 
+class TestUnsavedWork:
+    """Quitting, or choosing an example, used to throw edits away unasked."""
+
+    @pytest.fixture
+    def ester(self):
+        s = FlowsheetSession()
+        assert s.open_example("02_reactor_flash")["ok"]
+        return s
+
+    def test_an_example_opens_clean(self, ester):
+        assert ester.document()["dirty"] is False
+
+    @pytest.mark.parametrize("edit_it", [
+        lambda s: s.patch_unit("reactor", {"params": {"V": 0.7}}),
+        lambda s: s.set_layout({"reactor": {"x": 10.0, "y": 20.0}}),
+        lambda s: s.set_code_context("X = 1\n"),
+        lambda s: s.set_feed(next(iter(s.flowsheet.feeds)), {"T": 330.0}),
+        lambda s: s.console_run("fs.units[0].name = 'r2'"),
+    ], ids=["param", "move", "context", "feed", "console"])
+    def test_any_edit_marks_it(self, ester, edit_it):
+        answer = edit_it(ester)
+        assert answer.get("ok", True), answer
+        assert ester.document()["dirty"] is True
+
+    def test_a_refused_edit_does_not(self, ester):
+        assert not ester.patch_unit("reactor", {"params": {"V": "abc"}})["ok"]
+        assert ester.document()["dirty"] is False
+
+    def test_undoing_by_hand_is_clean_again(self, ester):
+        ester.patch_unit("reactor", {"params": {"V": 0.7}})
+        ester.patch_unit("reactor", {"params": {"V": 0.5}})
+        assert ester.document()["dirty"] is False
+
+    def test_saving_clears_it(self, ester, tmp_path):
+        ester.patch_unit("reactor", {"params": {"V": 0.7}})
+        ester.path = tmp_path / "plant.json"
+        assert ester.save()["ok"]
+        assert ester.document()["dirty"] is False
+
+    def test_a_file_opens_clean(self, ester, tmp_path):
+        ester.path = tmp_path / "plant.json"
+        assert ester.save()["ok"]
+        assert FlowsheetSession(path=tmp_path / "plant.json").dirty is False
+
+
 class TestPendingUnits:
     """A drop that cannot be built yet lands anyway, in red.
 

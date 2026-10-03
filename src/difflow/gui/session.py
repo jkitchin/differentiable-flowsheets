@@ -202,6 +202,11 @@ class FlowsheetSession:
         # console advertises -- takes it again. A plain Lock deadlocked
         # there, and every edit route after it hung until a restart.
         self._lock = threading.RLock()
+        #: the document as it was last read or written, to say whether
+        #: closing the editor now would lose anything. Compared rather
+        #: than flagged by each edit: an edit made from the console goes
+        #: around every route, and a flag set per route would miss it.
+        self._saved = self._state()
 
     # -- the code context ---------------------------------------------
 
@@ -516,12 +521,42 @@ class FlowsheetSession:
             out[name] = entry
         return out
 
+    def _state(self) -> str | None:
+        """The whole model as one string, or ``None`` if it will not write.
+
+        What a save would put on disk --- units, wiring, feeds, the code
+        context and the stored layout --- and not what `document` serves,
+        which fills in positions nobody chose.
+        """
+        if self.flowsheet is None:
+            return None
+        try:
+            import json
+
+            from difflow import serialize
+
+            return json.dumps(serialize.to_dict(self.flowsheet,
+                                                refs=self.bindings),
+                              default=str)
+        except Exception:
+            return None
+
+    @property
+    def dirty(self) -> bool:
+        """Would quitting now lose an edit?
+
+        A model that stops serializing counts as changed. One that never
+        did (a script whose units hold callables) has no file to lose
+        edits from, so it is not nagged about on every quit.
+        """
+        return self._state() != self._saved
+
     def document(self) -> dict:
         from difflow import serialize
 
         if self.flowsheet is None:
             return {"flowsheet": None, "path": str(self.path or ""),
-                    "source": str(self.source or "")}
+                    "source": str(self.source or ""), "dirty": False}
         document = serialize.to_dict(self.flowsheet, refs=self.bindings)
         document.setdefault("view", {})
         # Auto-layout underneath, stored positions on top. Not "one or the
@@ -543,6 +578,9 @@ class FlowsheetSession:
             # serialized document would be exported to a file and read
             # back as though it were.
             "pending": self.pending_units(),
+            # Whether the header marks the file as edited, and whether the
+            # editor asks before a quit or an example throws the edit away.
+            "dirty": self.dirty,
             # The species control in the header reads these. Carried on the
             # document rather than fetched separately because every edit
             # already reloads it, and an empty flowsheet's species are the
@@ -696,6 +734,9 @@ class FlowsheetSession:
             return {"ok": False, "error": f"no example named {key!r}"}
         answer = self.replace(document)
         self.path = self.source = None
+        # Nothing to lose yet: the example is one menu click from coming
+        # back exactly as it is.
+        self._saved = self._state()
         return answer
 
     # -- incremental edits --------------------------------------------
@@ -1273,6 +1314,7 @@ class FlowsheetSession:
             serialize.save(self.flowsheet, self.path, refs=self.bindings)
         except serialize.SerializationError as exc:
             return {"ok": False, "error": str(exc)}
+        self._saved = self._state()
         return {"ok": True, "path": str(self.path)}
 
     def solve(self) -> dict:
