@@ -116,6 +116,26 @@ class TestPatchUnit:
         assert answer["ok"] is False
         assert "nope" in answer["error"]
 
+    def test_text_in_a_number_is_refused_and_the_value_kept(self, session):
+        """It used to be stored, and every later solve failed in JAX with
+        an error naming neither the unit nor the field."""
+        answer = session.patch_unit("reactor", {"params": {"V": "abc"}})
+        assert answer["ok"] is False
+        assert "CSTRParams.V" in answer["error"] and "abc" in answer["error"]
+        reactor = edit.unit(session.flowsheet, "reactor")
+        assert float(reactor.operation.params.V) == 1.0
+
+    def test_text_where_text_is_allowed_still_goes_through(self, session):
+        """reaction_phase is `str | None`; the check is for numbers only."""
+        answer = session.patch_unit("reactor",
+                                    {"params": {"reaction_phase": "liquid"}})
+        assert answer["ok"], answer
+
+    def test_text_in_a_numeric_call_parameter_is_refused(self, session):
+        name = session.add_unit("Splitter")["name"]
+        answer = session.patch_unit(name, {"call_params": {"split_frac": "x"}})
+        assert answer["ok"] is False and "split_frac" in answer["error"]
+
     def test_an_unknown_change_key_is_refused_rather_than_ignored(self, session):
         answer = session.patch_unit("reactor", {"colour": "red"})
         assert answer["ok"] is False and "colour" in answer["error"]

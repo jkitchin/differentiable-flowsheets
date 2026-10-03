@@ -19,7 +19,7 @@
   import { del, get, patch, post } from './api.js'
   import { render } from './math.js'
   import { feedEdit, feedFields, feedValues } from './model/feed.js'
-  import { classify, label, parse } from './model/params.js'
+  import { ParseError, classify, label, parse } from './model/params.js'
 
   let {
     node = null,
@@ -41,9 +41,12 @@
   let isUnit = $derived(node?.type === 'unit')
   let isFeed = $derived(node?.type === 'stream' && node.data?.kind === 'feed')
 
+  /** Per field, what was typed and refused before it was sent. */
+  let invalid = $state({})
+
   // Reset whenever the selection changes, so the box never shows the
-  // name of a node that is no longer selected.
-  $effect(() => { draft = node?.data?.label ?? '' })
+  // name of a node that is no longer selected (nor its refusals).
+  $effect(() => { draft = node?.data?.label ?? ''; invalid = {} })
 
   /**
    * The rendered docstring, fetched per operation and kept.
@@ -233,8 +236,22 @@
     onedit(() => del('/api/inlet', { unit: unit.name, stream }))
   }
 
+  const fieldKey = (field) => `${field.call ? 'call' : 'param'}:${field.name}`
+
   function commitParam(field, raw) {
-    const value = parse(raw, field.kind)
+    let value
+    try {
+      value = parse(raw, field.kind)
+    } catch (err) {
+      if (!(err instanceof ParseError)) throw err
+      // Refused here, not sent: the field keeps what the unit holds.
+      invalid = { ...invalid, [fieldKey(field)]: err.message }
+      return
+    }
+    if (fieldKey(field) in invalid) {
+      const { [fieldKey(field)]: _, ...rest } = invalid
+      invalid = rest
+    }
     if (value === field.value) return
     const key = field.call ? 'call_params' : 'params'
     onedit(() =>
@@ -527,8 +544,14 @@
               <input value={field.value === null || field.value === undefined
                               ? '' : field.text}
                      placeholder={field.value === null ? 'not set' : ''}
+                     inputmode={field.kind === 'number' ? 'decimal' : undefined}
+                     aria-invalid={fieldKey(field) in invalid}
+                     class:invalid={fieldKey(field) in invalid}
                      disabled={busy}
                      onchange={(e) => commitParam(field, e.currentTarget.value)} />
+            {/if}
+            {#if invalid[fieldKey(field)]}
+              <span class="refused" role="alert">{invalid[fieldKey(field)]}; nothing was changed.</span>
             {/if}
             {#if field.spec.description}
               <span class="help">{field.spec.description}</span>
@@ -752,6 +775,8 @@
     font-family: var(--mono, ui-monospace, monospace);
     font-size: 0.74rem;
   }
+  .refused { display: block; color: var(--bad); font-size: 0.72rem; margin-top: 0.15rem; }
+  input.invalid { border-color: var(--bad); }
   .help { display: block; color: var(--ink-soft); font-size: 0.72rem; margin-top: 0.15rem; }
 
   .eq { margin: 0.45rem 0; overflow-x: auto; font-size: 0.95rem; }

@@ -20,6 +20,8 @@ socket or knows there is one.
 
 from __future__ import annotations
 
+import re
+
 from difflow.serialize import (
     SerializationError,
     _build_operation,
@@ -379,6 +381,30 @@ def encoded_params(operation, unit_name: str) -> dict:
     }
 
 
+_NUMERIC = re.compile(r"\b(float|int|Array|Scalar)\b")
+_LOOSE = re.compile(r"\b(str|Any|Callable|object)\b")
+
+
+def check_numeric(value, annotation, where: str) -> None:
+    """Refuse text for a field declared as a number.
+
+    A typo in the inspector used to be stored as the string it was: ``V``
+    held ``"abc"``, the edit reported success, and every solve after it
+    failed deep inside JAX with "Only integer scalar arrays can be
+    converted to a scalar index" --- an error that names neither the unit
+    nor the field. Only a field whose annotation is numeric and admits no
+    text is checked; anything looser is left to the unit.
+    """
+    if not isinstance(value, str):
+        return
+    if isinstance(annotation, type):
+        text = annotation.__name__
+    else:
+        text = annotation if isinstance(annotation, str) else repr(annotation)
+    if _NUMERIC.search(text) and not _LOOSE.search(text):
+        raise EditError(f"{where} is a number; {value!r} is not one.")
+
+
 def rebuild(operation, unit_name: str, updates: dict):
     """A copy of ``operation`` with ``updates`` applied to its parameters."""
     import dataclasses
@@ -397,6 +423,10 @@ def rebuild(operation, unit_name: str, updates: dict):
             f"{', '.join(repr(u) for u in unknown)}; it has "
             f"{', '.join(sorted(fields))}."
         )
+    for field in dataclasses.fields(params):
+        if field.name in updates:
+            check_numeric(updates[field.name], field.type,
+                          f"{type(params).__name__}.{field.name}")
     try:
         encoded = encoded_params(operation, unit_name)
     except SerializationError as exc:
@@ -435,6 +465,9 @@ def call_params(current: dict, updates: dict, unit_name: str,
             f"{unit_name!r} is not called with "
             f"{', '.join(repr(u) for u in unknown)}; it takes {takes}."
         )
+    types = {spec["name"]: spec.get("type") or "" for spec in specs}
+    for key, value in updates.items():
+        check_numeric(value, types[key], f"{unit_name}.{key}")
     merged = dict(current or {})
     for key, value in updates.items():
         if value is None:
