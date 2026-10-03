@@ -2128,6 +2128,15 @@ class TestPlanning:
             "ok": False, "error": "pick at least one lever and one output"}
         assert session.linearize(["reactor.V"], [])["ok"] is False
 
+    @pytest.mark.parametrize("radius", [float("nan"), float("inf"), -0.1, 0, "wide"])
+    def test_a_radius_that_is_not_a_positive_number_is_refused(self, thermo, radius):
+        """Not linearized into a trust region of NaN or inverted bounds."""
+        session = FlowsheetSession(build_flowsheet(thermo))
+        session.solve()
+        answer = session.linearize(["reactor.V"], ["liq.F_ethanol"], radius=radius)
+        assert answer["ok"] is False and "radius" in answer["error"]
+        assert "planning" not in session.flowsheet.view
+
     def test_a_name_the_flowsheet_does_not_have_is_an_answer(self, thermo):
         session = FlowsheetSession(build_flowsheet(thermo))
         session.solve()

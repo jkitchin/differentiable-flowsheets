@@ -1924,7 +1924,19 @@ class FlowsheetSession:
         if not u or not y:
             return {"ok": False,
                     "error": "pick at least one lever and one output"}
-        radius = planning.DEFAULT_RADIUS if radius is None else float(radius)
+        # Refused here, by name. A NaN radius made a trust region of NaN
+        # bounds that the LP export wrote out as written, and a negative
+        # one a region with its lower bound above its upper.
+        if radius is None:
+            radius = planning.DEFAULT_RADIUS
+        else:
+            try:
+                radius = float(radius)
+            except (TypeError, ValueError):
+                radius = math.nan
+            if not (math.isfinite(radius) and radius > 0):
+                return {"ok": False,
+                        "error": "the trust-region radius must be a positive number"}
         try:
             with self._lock:
                 dvs, answer = planning.linearize(
