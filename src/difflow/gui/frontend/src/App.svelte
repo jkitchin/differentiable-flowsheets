@@ -82,6 +82,8 @@
   // about the node that was clicked and that is not state anything else
   // needs --- and because an item's action must not change under it.
   let menu = $state(null)
+  // The menu bar's open menu, if any (bound from MenuBar).
+  let barMenu = $state(null)
   // Drawing preferences. Port names are off because on a wired flowsheet
   // the edge already carries the stream name, so labelling both ends of
   // every arc triples the text on screen to repeat itself; while wiring,
@@ -168,7 +170,8 @@
    * text field it is the field's own undo, which is the one meant there.
    */
   function hotkey(event) {
-    if (menu) return       // the open menu owns the keyboard
+    // An open menu owns the keyboard, the bar's as much as the right-click one.
+    if (menu || barMenu) return
     if (event.metaKey || event.ctrlKey) {
       if (event.altKey) return
       if (event.key.toLowerCase() === 'z' && !typing(event)) {
@@ -755,7 +758,7 @@
 <header>
   <h1>difflow</h1>
   {#if about.version}<span class="version">{about.version}</span>{/if}
-  <MenuBar {menus} />
+  <MenuBar {menus} bind:open={barMenu} />
   <span
     class="path"
     title={source ? `${source}\nsaves to ${path}` : path}
