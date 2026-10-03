@@ -531,6 +531,7 @@
       const answer = await post('/api/sensitivity', ask)
       sens = answer.ok ? answer : null
       if (!answer.ok) note = answer.error
+      else if (answer.warning) warnNote = note = answer.warning
       return null
     }, { reload: false, stale: false })
 

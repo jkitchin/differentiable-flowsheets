@@ -1722,9 +1722,35 @@ class FlowsheetSession:
             with self._lock:
                 answer = (ad.forward(self.flowsheet, lever) if lever
                           else ad.reverse(self.flowsheet, target))
+                base = self._base_point()
         except Exception as exc:
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
-        return {"ok": True, **answer}
+        return {"ok": True, **answer, **base}
+
+    def _base_point(self) -> dict:
+        """Did the flowsheet converge at the point being differentiated?
+
+        The derivative is taken through a traced solve, which keeps no
+        verdict, so the answer is asked of one concrete solve beside it.
+        A Jacobian of a tear that never closed is a derivative of where
+        the iteration stopped, not of the model, and was shown without a
+        word to say so.
+        """
+        fs = self.flowsheet
+        try:
+            fs.solve(on_nonconvergence="ignore")
+        except Exception:
+            return {"converged": None, "residual": None, "warning": None}
+        converged = fs.last_solve_converged
+        residual = _number(fs.last_solve_residual)
+        warning = None
+        if converged is False:
+            size = "unknown" if residual is None else f"{residual:.3g}"
+            warning = ("the flowsheet did not converge here (tear residual "
+                       f"{size}), so these derivatives are of where "
+                       "the iteration stopped, not of the model")
+        return {"converged": converged, "residual": residual,
+                "warning": warning}
 
     # -- planning ------------------------------------------------------
 
@@ -1773,9 +1799,10 @@ class FlowsheetSession:
                     "u": u, "y": y, "bounds": dict(bounds or {}),
                     "radius": radius,
                 }
+                base = self._base_point()
         except Exception as exc:
             return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
-        return answer
+        return {**answer, **base}
 
     def linearization_files(self, fmt: str) -> dict:
         """The last linearization rendered for download."""

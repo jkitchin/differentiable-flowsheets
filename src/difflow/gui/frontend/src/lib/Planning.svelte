@@ -195,6 +195,9 @@
           and the downloads appear here.
         </p>
       {:else}
+        {#if result.warning}
+          <p class="verdict bad" role="alert">{result.warning}</p>
+        {/if}
         {#if result.check}
           <p class="verdict" class:bad={!result.check.passed}>
             {verdict(result.check)}

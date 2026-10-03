@@ -760,6 +760,45 @@ class TestUndo:
         assert len(ester._undo) == UNDO_DEPTH
 
 
+class TestDerivativesAtAnUnconvergedPoint:
+    """A Jacobian through a tear that never closed was shown as any other."""
+
+    @pytest.fixture
+    def ester(self):
+        s = FlowsheetSession()
+        assert s.open_example("02_reactor_flash")["ok"]
+        return s
+
+    def test_a_converged_point_says_so(self, ester):
+        answer = ester.sensitivity(lever="reactor.V")
+        assert answer["ok"], answer
+        assert answer["converged"] is True and answer["warning"] is None
+
+    def test_an_unconverged_point_is_flagged(self, ester):
+        fs = ester.flowsheet
+        real = fs.solve
+
+        def stalls(**kw):
+            out = real(**kw)
+            fs.last_solve_converged, fs.last_solve_residual = False, 0.25
+            return out
+
+        fs.solve = stalls
+        answer = ester.sensitivity(lever="reactor.V")
+        assert answer["ok"] and answer["converged"] is False
+        assert "did not converge" in answer["warning"]
+        assert "0.25" in answer["warning"]
+        linear = ester.linearize(["reactor.V"], [self._an_output(ester)])
+        assert linear["ok"], linear
+        assert "did not converge" in linear["warning"]
+
+    @staticmethod
+    def _an_output(session):
+        session.solve()
+        stream = next(iter(session.streams))
+        return f"{stream}.T"
+
+
 class TestPendingUnits:
     """A drop that cannot be built yet lands anyway, in red.
 
