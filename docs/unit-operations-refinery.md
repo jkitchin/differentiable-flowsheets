@@ -2357,13 +2357,15 @@ The test crude of the composition section (SG 0.86, 1.8 wt% S, 1500 wppm N, with
 
 | | |
 |---|---|
-| WABT | 351.4 °C; bed rises 13.2 and 7.2 K |
-| product | 241 wppm S, 229 wppm N, SG 0.850, 14.2 vol% aromatics, cetane index 58.4 |
-| yields (mass) | product 98.74 %, wild naphtha 0.39 %, gas (C1--C4, H2S, NH3) 1.21 % |
+| WABT | 350.9 °C; bed rises 12.7 and 6.9 K |
+| product | 258 wppm S, 232 wppm N, SG 0.850, 14.3 vol% aromatics (11.1 mono, 2.3 di, 0.9 poly), cetane index 58.3 |
+| yields (mass) | product 98.72 %, wild naphtha 0.39 %, gas (C1--C4, H2S, NH3) 1.21 % |
 | charge heater | 47.4 MW absorbed, 55.8 MW fired (from a 25 °C feed, no feed/effluent exchanger) |
-| hydrogen | chemical 32.4 Nm³/m³ (192 scf/bbl), makeup 49.7 Nm³/m³; recycle purity 95.1 % |
-| loop | recycle compressor 153 kW; purge 36 mol/s |
-| closure | mass, C, H, S and N to 1e-15 relative; tear residual 4e-14; stripper 2e-12 |
+| hydrogen | chemical 30.5 Nm³/m³ (181 scf/bbl), makeup 47.9 Nm³/m³; recycle purity 95.3 % |
+| loop | recycle compressor 154 kW; purge 36 mol/s |
+| closure | mass, C, H, S and N to 1e-15 relative; tear residual 9e-15; stripper 2e-12 |
+
+Before #338 (equilibrium constants 2--5x too large, see [Thermochemical data](#refinery-thermochemistry)) the same case gave WABT 351.4 °C, 241 wppm S, 14.2 vol% aromatics and 32.4 Nm³/m³ of chemical hydrogen. At a 380 °C bed-1 inlet the difference is larger: 12.1 vol% aromatics (10.4 before), of which 3.0 vol% poly-aromatics (0.9) as the poly step's equilibrium reverses, 31.5 Nm³/m³ of hydrogen (44.5) and a 393.1 °C outlet (400.4).
 
 Compiling the unit takes about 70 s (more on a loaded machine); a solve then takes about 1.7 s, of which the recycle tear is five Newton steps. A reverse-mode gradient of all outputs costs one more compile and 30--140 s.
 
