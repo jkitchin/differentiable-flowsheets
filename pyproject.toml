@@ -87,8 +87,8 @@ pyglenn = [
     "pyglenn",
 ]
 dwsim = [
-    # DWSIM standalone thermodynamics via pythonnet for difflow.dwsim_import
-    # (also requires a local DWSIM/DTL install providing the thermo DLL)
+    # DWSIM thermodynamics via pythonnet for difflow.dwsim_import (also needs a
+    # DWSIM 9 install and the .NET 8 runtime; see scripts/install_dwsim.sh)
     "pythonnet",
 ]
 bio = [

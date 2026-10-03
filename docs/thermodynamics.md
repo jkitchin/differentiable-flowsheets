@@ -711,7 +711,7 @@ pyglenn supplies **no critical properties** (Tc, Pc, ω), so there is no
 ---
 
 (dwsim-import)=
-## DWSIM Import (prototype)
+## DWSIM Import
 
 **Location**: `difflow/dwsim_import.py`
 
@@ -719,12 +719,18 @@ Import compound constants and ideal-gas heat capacities from
 [DWSIM](https://dwsim.org)'s thermodynamics library. DWSIM is a .NET
 application, so it is reached from Python through
 [`pythonnet`](https://github.com/pythonnet/pythonnet) against
-`DWSIM.Thermodynamics.StandaloneLibrary.dll`:
+`DWSIM.Thermodynamics.dll`, whose `CalculatorInterface.Calculator` is the
+"DTL" calculator (an older `DWSIM.Thermodynamics.StandaloneLibrary.dll` is
+used if that is what the folder holds). Checked against DWSIM 9.0.5 on Linux:
 
 ```bash
-pip install pythonnet          # or:  pip install "difflow[dwsim]"
-# plus a local DWSIM / DTL install providing the standalone thermo DLL
+scripts/install_dwsim.sh        # DWSIM 9.0.5 .deb unpacked, .NET 8 runtime, pythonnet
+export DWSIM_PATH=.../usr/local/lib/dwsim
 ```
+
+DWSIM 9 is a .NET 8 build: pythonnet has to load CoreCLR (`pythonnet.load
+("coreclr")`, which the importer does), not Mono, and only one CLR can be
+loaded in a process, so do not `import clr` before the first import.
 
 ```{important}
 Calls into DWSIM return concrete numbers through the CLR and are **not
@@ -744,11 +750,21 @@ from difflow.dwsim_import import import_species_data, import_critical_props
 from difflow.thermo import IdealThermo, CubicThermo
 from difflow.eos import PengRobinson
 
-names = ["Methane", "Carbon dioxide", "Water"]
-sp   = import_species_data(names, dtl_path=r"C:\DWSIM\DTL")   # or set DWSIM_DTL_PATH
-crit = import_critical_props(names, dtl_path=r"C:\DWSIM\DTL")
+from difflow.dwsim_import import DWSIMBackend, dwsim_name
+
+names = [dwsim_name(n) for n in ("methane", "co2", "water")]   # DWSIM's names
+be   = DWSIMBackend()                     # DWSIM_PATH, or dwsim_path=...; ~2 s to start
+sp   = import_species_data(names, backend=be)
+crit = import_critical_props(names, backend=be)
 thermo = CubicThermo(IdealThermo(sp), PengRobinson(crit))
 ```
+
+`DWSIM_NAMES` maps difflow's database names to DWSIM's for the refinery's
+50 species, every one checked to exist in DWSIM 9.0.5 (all in its ChemSep
+database). `tests/test_dwsim_import.py` (release) imports them from the real
+DWSIM in a subprocess and compares Tc, Pc, omega and MW with
+`difflow.database`; the differences are listed under
+[Validation against DWSIM](unit-operations-refinery.md#refinery-dwsim-validation).
 
 ### What is imported (and DWSIM units)
 
@@ -757,16 +773,15 @@ thermo = CubicThermo(IdealThermo(sp), PengRobinson(crit))
 | `MW` | `Molar_Weight` | kg/kmol ≡ g/mol |
 | `CriticalProperties.Tc/Pc/omega` | `Critical_Temperature`, `Critical_Pressure`, `Acentric_Factor` | K, Pa, — |
 | `Hf` | `IG_Enthalpy_of_Formation_25C` | kJ/kg × MW → J/mol |
-| `Cp_coeffs` | ideal-gas Cp via `AUX_CPi(name, T)` | kJ/kg/K × MW → J/mol/K, then cubic fit |
+| `Cp_coeffs` | ideal-gas Cp via the calculator's `GetCompoundTDepProp(name, "idealGasHeatCapacity", T)` | J/mol/K, then cubic fit |
 | `Hvap_coeffs`, `antoine_coeffs` | estimated from Tb/Tc | — |
 
 ```{note}
-**Prototype.** DWSIM cannot run in difflow's own CI (no .NET runtime), so the
-exact object graph used to read a compound's `ConstantProperties` may need
-adjusting for a given DWSIM version. All DWSIM contact is isolated in
-`DWSIMBackend`; the import logic is backend-agnostic and unit-tested against a
-fake backend. To adapt to your DWSIM build, replace `DWSIMBackend` and pass it
-via `backend=`.
+DWSIM cannot run in difflow's per-commit CI (no .NET runtime). All DWSIM
+contact is isolated in `DWSIMBackend`; the import logic is backend-agnostic
+and unit-tested against a fake backend every commit, and against DWSIM 9.0.5
+itself in the release tier (skipped where DWSIM is not installed). For
+another DWSIM build, replace `DWSIMBackend` and pass it via `backend=`.
 ```
 
 ---

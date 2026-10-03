@@ -3500,6 +3500,136 @@ species octanes, which are recalled values marked verify. It does not test
 the rate constants, which are illustrative, or the constructed feeds,
 which are assumed.
 
+(refinery-dwsim-validation)=
+### Validation against DWSIM: setup
+
+[DWSIM](https://dwsim.org) 9.0.5, an open-source process simulator, is the
+second reference simulator for the refinery units, beside IDAES. It is a .NET
+8 application; it is driven from Python through `pythonnet` by the harness
+`tests/refinery/reference/dwsim_session.py`. As with IDAES, DWSIM runs only in
+a **generator** (`tests/refinery/reference/dwsim_*_generate.py`), which writes
+a JSON reference; the tests read the JSON and need neither DWSIM nor .NET.
+
+**Install.** `scripts/install_dwsim.sh [DIR]` reproduces the setup: the DWSIM
+9.0.5 `.deb` from SourceForge (GitHub release downloads are blocked from the
+build box), unpacked with `dpkg-deb -x` (no package install),
+`apt-get install dotnet-runtime-8.0`, `pip install pythonnet`, and a smoke
+load. It prints the `DWSIM_PATH` to export (the directory holding
+`DWSIM.Automation.dll`). pythonnet must load **CoreCLR**, not Mono (its Linux
+default), and only one CLR can be loaded per process, which is one more
+reason DWSIM stays out of the pytest process.
+
+**Generating a reference.**
+
+```bash
+export DWSIM_PATH=.../usr/local/lib/dwsim
+PYTHONPATH=src:tests python -m refinery.reference.dwsim_smoke_generate
+```
+
+The harness in brief (its module docstring has the full API):
+
+| Call | Returns |
+| --- | --- |
+| `DWSIMSession(path=None)` | one DWSIM `Automation3` per process; `.provenance()` records DWSIM, .NET and pythonnet versions |
+| `.flowsheet(package, compounds, hypos, overrides, kij="zero", options, flash_tol=1e-10)` | a `DWSIMFlowsheet` with one stream on the named property package |
+| `DWSIMFlowsheet.flash_tp/flash_ph/flash_pvf/flash_tvf` | phase fractions, compositions, `K`, fugacity coefficients, molar enthalpies (J/mol), densities, Z, and `equilibrium_residual` |
+| `HypoCompound(name, MW, Tc, Pc, omega, cp_ig=..., Tb=..., hvap_tb=...)` | a hypothetical compound on given constants; `HypoCompound.from_gas_components` takes difflow's |
+| `.petroleum_characterization(tbp_K, cum_frac, sg_bulk, ...)` | DWSIM's own distillation-curve characterization, its pseudo-component table |
+| `.bulk_characterization(mw, sg, ...)` | DWSIM's bulk C7+ characterization |
+| `difflow.dwsim_import.DWSIM_NAMES` / `dwsim_name()` | difflow's database names to DWSIM's (all 50 refinery species, checked to exist) |
+
+**What is compared like for like.** A comparison says which of two things it is:
+
+- **(a) Same model, same constants**: every component a DWSIM *hypothetical
+  compound* carrying difflow's MW, Tc, Pc, omega and ideal-gas Cp cubic;
+  DWSIM's binary parameters removed (`kij="zero"`); the package options that
+  are not the textbook model switched off (`EOS_ONLY` for the cubics:
+  liquid density from the EOS instead of Rackett with Peneloux;
+  `IDEAL_RAOULT` for Raoult's law: no Poynting factor, no Henry's law). This
+  tests the implementation.
+- **(b) DWSIM's own data and correlations**: DWSIM's database compounds (by
+  `DWSIM_NAMES`), its kij, its petroleum characterization. This tests the
+  model and the data, and differences there are expected and reported, not
+  tuned away.
+
+**What DWSIM fills in for a hypothetical compound** (read from DWSIM's
+compiled code, `PropertyPackage.AUX_CPi`, `AUX_PVAPi`, `AUX_HVAPi`): the
+ideal-gas Cp is the given polynomial exactly (`OriginalDB = "DWSIM"`, A..E in
+J/mol/K); the vapour pressure is the DIPPR-101 form, which the harness fills
+with the Lee-Kesler correlation on the hypo's Tc, Pc, omega written exactly
+in that form unless one is given (a cubic EOS uses it only to start the
+flash; Raoult's law uses it as the model); the heat of vaporization is
+Watson's `Hvap(Tb) ((1-Tr)/(1-Tbr))^0.375`, `Hvap(Tb)` given or Vetere's
+estimate (DWSIM's own fallback; with neither DWSIM returns zero); the Rackett
+parameter defaults to Pitzer's Zc. DWSIM's *own* petroleum fractions are
+different objects: Cp from the Lee-Kesler correlation on Watson K, Psat from
+Lee-Kesler.
+
+**What DWSIM 9.0.5 offers.** Property packages: Peng-Robinson (PR), PR 1978,
+PRSV2, Soave-Redlich-Kwong, Lee-Kesler-Plöcker, Grayson-Streed, Chao-Seader,
+Raoult's Law, NRTL, UNIQUAC, UNIFAC variants, Wilson, PC-SAFT, GERG-2008,
+CoolProp, IAPWS-IF97, Black Oil and others. Its PR is the 1976 form for every
+omega (no 1978 branch), as difflow's gas-plant and hydroprocessing PR.
+
+**The smoke test** (`dwsim_smoke_generate.py`, `test_dwsim_smoke.py`) proves
+the pattern end to end on the gas plant's PR (`difflow_refinery.gasplant`):
+a light-ends mixture (H2, H2S, C1 to nC5) flashed at four (T, P) points from
+240 K/30 bar to 330 K/35 bar, and a five-cut naphtha (Tb 345 to 465 K, Twu
+constants) with propane and n-butane at two points, all on difflow's
+constants with kij = 0 (comparison (a)). Four differences between the two
+implementations turned up, each found in DWSIM's code and then reproduced in
+the test rather than absorbed into a tolerance:
+
+| Difference | Size | Reproduced, the two agree to |
+| --- | --- | --- |
+| DWSIM's PR uses R = 8.314 (difflow 8.314462618); Z, phi and K do not depend on R, the departure enthalpy and density do | 5.6e-5 relative: up to 2.0 J/mol in a phase enthalpy, 5.6e-5 in density | density 1e-12 relative |
+| DWSIM's fugacity routine writes the log term's 1 ± sqrt 2 and 2 sqrt 2 as 2.414213, -0.414213, 2.828426 | 1.4e-6 in a liquid phi | phi 2.2e-12 relative (vapour and liquid); Z 1e-12 |
+| DWSIM integrates Cp by the midpoint rule, `round(dT/10)` intervals clipped to 10..100 | up to 0.23 J/mol (1e-5 of the ideal-gas enthalpy, naphtha at 410 K) | phase enthalpies 2.3e-8 J/mol |
+| DWSIM's own flash stops short of its equilibrium condition, at loop tolerances of 1e-10 | `max abs(ln(y/x) - ln(phi_L/phi_V))` up to 1.6e-5 (light ends, 280 K) | not reproducible: it bounds the flash comparison |
+
+With all that, difflow's own TP flash lands on DWSIM's to: vapour fraction
+6.5e-6 and phase compositions 1.9e-6 (light ends at 280 K, the point where
+DWSIM's own residual is 1.6e-5); 3.4e-7 and 1.9e-7 on the naphtha. DWSIM's PH
+flash from a TP point's enthalpy returns to its temperature within 1e-6 K.
+Nothing is left unexplained.
+
+**DWSIM's database against difflow's** (comparison (b) for the constants;
+`tests/test_dwsim_import.py`, release, runs the importer against the real
+DWSIM in a subprocess). All 50 mapped species are in DWSIM's ChemSep
+database. Tc agrees to 0.31 %, MW to 0.02 %, Pc to 2.0 % (trans-2-butene)
+and omega to 0.012 (methylcyclopentane), except three known differences,
+kept visible in the test: 2-methyl-2-butene (DWSIM Pc 3.86 MPa against
+difflow's 3.42, omega 0.339 against 0.285) and carbon monoxide (omega 0.045
+against 0.066).
+
+**DWSIM behaviours to know before comparing** (more in the harness
+docstring):
+
+- The default flash tolerance is 1e-4; the harness sets 1e-10, but check
+  `equilibrium_residual` and hold comparisons to a few times it.
+- The default liquid density is Rackett + experimental data with Peneloux
+  translation, not the EOS; "Raoult's Law" has a Poynting factor and Henry's
+  law switched on; Lee-Kesler-Plöcker's kij is multiplicative (a missing one
+  is taken as 1, no interaction). All options
+  in force are recorded in each reference's provenance.
+- DWSIM's PR carries its own kij (H2/propane -0.131, CO2/H2S 0.098, ...).
+- DWSIM's own distillation-curve characterization (its UI's
+  "Petroleum Characterization from Distillation Curves", run headless) reads
+  its bulk-SG field as API gravity (`SG = 141.5/(131.5 + value)`), so an SG
+  typed into the UI targets an SG near 1.07; the harness passes the API
+  equivalent so the target is the SG given. It scales the cut SGs to the
+  bulk SG by **mass**-fraction average. A petroleum fraction's heat of
+  formation comes out on a basis 1000x off DWSIM's database compounds'.
+- The compound list (`AvailableCompounds`) is shared by every flowsheet in
+  the process: `overrides=` edit a per-flowsheet copy; prefix hypo names.
+- Start-up is about 4 s, a flash 2 to 5 ms after the first (0.2 s).
+
+**Fixed alongside:** `difflow.dwsim_import`, a prototype written to DWSIM's
+documented API and never run, now works against DWSIM 9.0.5: the
+"standalone" thermodynamics calculator is inside `DWSIM.Thermodynamics.dll`
+since DWSIM 6, pythonnet has to be pointed at CoreCLR, and the path is
+checked before any .NET runtime starts.
+
 ---
 
 (refinery-limitations)=
