@@ -1060,6 +1060,11 @@ class FlowsheetSession:
                 raise edit.EditError(f"{operation!r} is not a registered operation")
             taken = self._taken()
             unit_name = edit.unique(name or operation.lower(), taken)
+            if name:
+                # The same checks a rename makes: the API and the assistant
+                # can name a unit on the way in, and the canvas cannot tell
+                # a unit called feed:x from the feed.
+                self._check_unit_name(name)
             if name and name in taken:
                 raise edit.EditError(f"there is already a unit called {name!r}")
             override = edit.known_extras(self.flowsheet, info.cls, self.bindings)
@@ -1815,8 +1820,9 @@ class FlowsheetSession:
         CSTR with ``V = -1`` solved to 2 mol/s in and 2.25 out and the
         editor said "solved". Three checks, each cheap, none of which
         changes ``ok``: streams holding NaN or infinity, negative flows,
-        and the overall mass balance --- feeds against the streams no unit
-        reads --- when every species has a molar mass in the database.
+        and the overall mass balance --- the feeds some unit reads against
+        the streams no unit reads --- when every species has a molar mass
+        in the database. A feed nothing reads is warned about by name.
         """
         from difflow.database import get_species_data
 
@@ -1835,6 +1841,11 @@ class FlowsheetSession:
         if negative:
             warnings.append(f"negative flows in {', '.join(negative)}")
 
+        idle = sorted(set(fs.feeds) - {n for u in fs.units for n in u.inlet_names})
+        if idle:
+            warnings.append(
+                f"{', '.join(idle)} {'is a feed' if len(idle) == 1 else 'are feeds'}"
+                " no unit reads; drag it onto an inlet, or delete it")
         order = list(getattr(fs, "species_order", None) or [])
         mass = None
         try:
@@ -1850,7 +1861,10 @@ class FlowsheetSession:
                 return sum(float(streams[n].get(f"F_{s}", 0.0)) * mw[s]
                            for n in names if n in streams for s in order) / 1000.0
 
-            m_in, m_out = kg(fs.feeds), kg(products)
+            # A feed nothing reads (kept when its unit was deleted) enters
+            # nothing, so it is not "in"; counted, it read as mass lost.
+            m_in = kg(f for f in fs.feeds if f in read)
+            m_out = kg(products)
             gap = (m_out - m_in) / max(abs(m_in), 1e-300)
             mass = {"in": m_in, "out": m_out, "relative_gap": gap,
                     "products": products}

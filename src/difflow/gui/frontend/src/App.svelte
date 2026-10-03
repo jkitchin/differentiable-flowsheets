@@ -946,8 +946,8 @@
     {busy}
     onapply={applyContext}
     onsave={async (text) => {
-      const answer = await applyContext(text)
-      if (answer?.ok) await (path ? save() : saveAs())
+      if (text !== null && !(await applyContext(text))?.ok) return
+      await (path ? save() : saveAs())
     }}
     onclose={() => (showContext = false)}
   />

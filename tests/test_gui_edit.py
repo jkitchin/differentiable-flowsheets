@@ -205,6 +205,10 @@ class TestPatchUnit:
         with pytest.raises(ValueError, match="feeds and products"):
             FlowsheetSession(serialize.from_dict(doc))
 
+    def test_a_unit_named_on_the_way_in_is_checked_too(self, session):
+        answer = session.add_unit("Mixer", name="feed:feed")
+        assert answer["ok"] is False and "feeds and products" in answer["error"]
+
     def test_a_rename_onto_an_existing_name_is_refused(self, session):
         answer = session.patch_unit("reactor", {"name": "flash"})
         assert answer["ok"] is False and "already" in answer["error"]
@@ -300,7 +304,31 @@ class TestAddAndRemove:
         session.add_inlet("mixer")
         new = edit.unit(session.flowsheet, "mixer").inlet_names[-1]
         answer = session.rename_stream(new, feed)
-        assert not answer["ok"] and "already a stream" in answer["error"]
+        assert not answer["ok"] and "already goes to 'mixer'" in answer["error"]
+
+    def test_a_fed_inlet_cannot_take_the_feed(self, session):
+        session.remove_unit("mixer")
+        answer = session.rename_stream("rx", "feed")
+        assert not answer["ok"] and "already has something" in answer["error"]
+
+    def test_an_idle_feed_is_not_counted_as_mass_in(self, session):
+        """It enters nothing: counted, it read as mass lost in the units."""
+        solved = session.solve()
+        # (The fixture's water -> ethanol is not mass-balanced, so the
+        # baseline has its own gap; the idle feed must not change it.)
+        baseline = solved["audit"]["mass"]
+        session.add_inlet("mixer")
+        spare = edit.unit(session.flowsheet, "mixer").inlet_names[-1]
+        session.set_feed(spare, {"flows": {"water": 5.0}})
+        session.flowsheet.units[0].inlet_names.remove(spare)  # its reader gone
+        solved = session.solve()
+        assert solved["ok"]
+        audit = solved["audit"]
+        assert audit["mass"]["in"] == pytest.approx(baseline["in"])
+        assert audit["mass"]["relative_gap"] == pytest.approx(
+            baseline["relative_gap"])
+        assert any("no unit reads" in w for w in audit["warnings"])
+        assert not any(lv["owner"] == spare for lv in session.levers()["levers"])
 
     def test_a_feed_another_unit_reads_is_unaffected(self, session):
         before = dict(session.flowsheet.feeds)

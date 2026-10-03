@@ -96,7 +96,10 @@ def levers(flowsheet) -> list[dict]:
                 "units": units.get(name),
                 "kind": "unit",
             })
+    read = {n for u in flowsheet.units for n in u.inlet_names}
     for feed, stream in (getattr(flowsheet, "feeds", None) or {}).items():
+        if feed not in read:
+            continue  # an idle feed moves nothing: a lever with no effect
         for field, unit in FEED_FIELDS.items():
             value = (
                 sum(float(v) for k, v in stream.items() if k.startswith("F_"))

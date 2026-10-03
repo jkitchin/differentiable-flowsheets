@@ -537,6 +537,16 @@ def rename(flowsheet, old: str, new: str) -> dict:
             f"{new!r} cannot be a stream name: it has to be a Python "
             "identifier, because that is what the exported script calls it."
         )
+    if new in flowsheet.feeds and old in unfed(flowsheet) and \
+            not _attaches_to_idle_feed(flowsheet, old, new):
+        reader = next(u.name for u in flowsheet.units if new in u.inlet_names)
+        raise EditError(f"the feed {new!r} already goes to {reader!r}; one "
+                        "feed feeds one inlet.")
+    if new in flowsheet.feeds and old not in unfed(flowsheet) and \
+            any(old in u.inlet_names for u in flowsheet.units):
+        raise EditError(f"{old!r} already has something feeding it; "
+                        "disconnect it first to give it the feed "
+                        f"{new!r}.")
     if new in names and not _attaches_to_idle_feed(flowsheet, old, new):
         raise EditError(
             f"{new!r} is already a stream. Renaming onto it would join the "

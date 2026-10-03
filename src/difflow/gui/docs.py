@@ -54,6 +54,9 @@ SETTINGS = {
     "input_encoding": "unicode",
     "file_insertion_enabled": False,
     "raw_enabled": False,
+    # An image is a reference, never read from disk and inlined: with
+    # `:loading: embed` docutils would paste an SVG file's markup in.
+    "image_loading": "link",
     "_disable_config": True,
 }
 
@@ -67,6 +70,7 @@ _SCHEME = re.compile(r"^([a-z][a-z0-9+.-]*):")
 _IMG = re.compile(r"<img\b[^>]*>")
 _ALT = re.compile(r'\salt="([^"]*)"')
 _FETCH = re.compile(r'\s(?:src|poster|data)="[^"]*"')
+_SVG = re.compile(r"<svg\b.*?</svg>", re.S | re.I)
 
 _registered = False
 
@@ -156,4 +160,5 @@ def _no_fetches(fragment: str) -> str:
         text = found.group(1) if found else "image"
         return f'<span class="image-alt">[{text}]</span>'
 
+    fragment = _SVG.sub('<span class="image-alt">[image]</span>', fragment)
     return _FETCH.sub("", _IMG.sub(alt, fragment))
