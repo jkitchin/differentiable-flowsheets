@@ -1213,6 +1213,17 @@ the EOS: the liquid in contact with four times its volume of vapour, at
 2. Continuation of every target and efficiency to the user's values.
 3. One implicit-function step.
 
+Each pass is the vacuum column's damped Newton (step caps, Armijo line
+search) with two changes. When the line search fails within ten halvings,
+the step is Levenberg-Marquardt's, `-(J'J + mu diag(J'J))^-1 J'r`, with
+`mu` raised until the residual falls. A stage at the edge of the cubic's
+three-root region can make the Jacobian nearly singular: the C3/C4
+splitter's pass 1 had `cond(J)` near 3e7, its Newton step was 1e9 K long,
+and it ran out its 60 iterations. A trace log flow (under 1e-7 of its feed)
+may also rise to that threshold in one step. The heaviest cut's guess can
+sit e^-600 below its inflow on a light stage, and the vacuum column's +5
+clip then spends a hundred iterations climbing out.
+
 The initial guess comes from the feed. Wilson K-values place the
 temperature profile between the overhead's dew point and the bottoms'
 bubble point. No user initialisation is needed.

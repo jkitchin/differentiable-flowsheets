@@ -41,7 +41,8 @@ Thermodynamics
     composition dependence of the vapor fugacity coefficients otherwise.
 
 Solve
-    Three passes, each a damped Newton (the vacuum column's), then the
+    Three passes, each a damped Newton (the vacuum column's, with a
+    Levenberg-Marquardt fallback: see :meth:`GasColumn.newton`), then the
     implicit-function step:
 
     1. *Easy specs, equilibrium stages.* Each user spec is swapped for one
@@ -666,13 +667,119 @@ class GasColumn(StageColumn):
             x0 = self.pack(ll, lv, T, z, k)
         return x0
 
-    def _trace(self, x, th):
+    def _trace_floor(self, x, th):
+        """The log flow below which an entry of ``x`` is trace (1e-7 of
+        its component's feed); ``-inf`` for the entries that are not flows."""
         C, N = self.C, self.N
         n_log = 2 * N * C
         _, ftot = self.feed_matrix(th)
-        lnf = jnp.tile(jnp.log(ftot), 2 * N)
-        trace = x[:n_log] < lnf + jnp.log(1e-7)
-        return jnp.concatenate([trace, jnp.zeros(x.size - n_log, dtype=bool)])
+        lnf = jnp.tile(jnp.log(ftot), 2 * N) + jnp.log(1e-7)
+        return jnp.concatenate([lnf, jnp.full(x.size - n_log, -jnp.inf)])
+
+    def _trace(self, x, th):
+        return x < self._trace_floor(x, th)
+
+    def newton(self, x0, th):
+        """The vacuum column's damped Newton, with a Levenberg-Marquardt
+        fallback; returns ``(x, J, iterations, max scaled residual)``.
+
+        Each iteration first tries the Newton step under the same caps and
+        Armijo search as :meth:`StageColumn.newton`, and takes it whenever
+        the search succeeds within ten halvings -- so a column that solved
+        before solves through the same iterates. Otherwise the Jacobian is
+        near singular (a stage on the edge of the cubic's three-root region
+        put cond(J) near 3e7 in the C3/C4 splitter's pass 1, and the Newton
+        step was 1e9 K long) and the step is Levenberg-Marquardt's,
+        ``-(J'J + mu diag(J'J))^-1 J'r``, with ``mu`` raised until the merit
+        falls and relaxed after each success. ``J`` is the Jacobian at the
+        returned ``x``, as the implicit step needs.
+        """
+        th = jax.lax.stop_gradient(th)
+        x0 = jax.lax.stop_gradient(x0)
+        R = lambda x: self.residual(x, th)
+        RJ = jax.jacfwd(lambda x: (R(x), R(x)), has_aux=True)
+        caps = self._caps_vector()
+        n = x0.size
+
+        def merit(x):
+            r = R(x)
+            m = 0.5 * jnp.sum(r * r)
+            return jnp.where(jnp.isfinite(m), m, jnp.inf)
+
+        def cond(s):
+            return ~s[4]
+
+        def body(s):
+            x, _, it, _, _, mu = s
+            J, r = RJ(x)
+            rn = jnp.max(jnp.abs(r))
+            done = (rn < self.tol) | (it >= self.max_iter)
+            m0 = 0.5 * jnp.sum(r * r)
+            floor = self._trace_floor(x, th)
+            trace = x < floor
+            cap = jnp.where(trace, jnp.inf, caps)
+            # a trace flow may rise to the trace floor in one step: a heavy
+            # cut's guess can sit e^-600 under its inflow on a light stage,
+            # and the +5 clip alone spends 120 iterations climbing out
+            up = jnp.maximum(5.0, floor - x)
+
+            def step(dx, a):
+                return x + jnp.where(trace, jnp.clip(a * dx, -60.0, up), a * dx)
+
+            def capped(dx):
+                dx = jnp.where(jnp.isfinite(dx), dx, 0.0)
+                a0 = jnp.minimum(1.0, jnp.min(cap / jnp.maximum(jnp.abs(dx), 1e-300)))
+                return dx, a0
+
+            # Newton under the vacuum column's caps and Armijo search
+            dx, a0 = capped(jnp.linalg.solve(J, -r))
+
+            def ls_cond(t):
+                a, m, k = t
+                return (k < 10) & ~(m <= (1.0 - 1e-4 * a) * m0)
+
+            def ls_body(t):
+                a, _, k = t
+                a = 0.5 * a
+                return (a, merit(step(dx, a)), k + 1)
+
+            a, m_n, _ = jax.lax.while_loop(ls_cond, ls_body, (2.0 * a0, jnp.inf, 0))
+            newton_ok = m_n <= (1.0 - 1e-4 * a) * m0
+
+            # Levenberg-Marquardt, with diag(J'J) scaling
+            def lm(mu):
+                H = J.T @ J
+                g = J.T @ r
+                d = jnp.diag(H)
+                d = jnp.where(d > 0, d, 1.0)
+
+                def trial(mu):
+                    dl, al = capped(jnp.linalg.solve(H + mu * jnp.diag(d), -g))
+                    xn = step(dl, al)
+                    return xn, merit(xn)
+
+                def lm_cond(t):
+                    _, m, mu, k = t
+                    return (k < 40) & ~(m < m0)
+
+                def lm_body(t):
+                    _, _, mu, k = t
+                    mu = jnp.where(k == 0, mu, 4.0 * mu)
+                    xn, m = trial(mu)
+                    return (xn, m, mu, k + 1)
+
+                xn, m, mu, _ = jax.lax.while_loop(lm_cond, lm_body, (x, jnp.inf, mu, 0))
+                ok = m < m0
+                return jnp.where(ok, xn, x), jnp.where(ok, jnp.maximum(mu / 3.0, 1e-12), mu)
+
+            xn, mu = jax.lax.cond(newton_ok | done,
+                                  lambda mu: (step(dx, a), mu), lm, mu)
+            xn = jnp.where(done, x, xn)
+            return (xn, J, it + jnp.where(done, 0, 1), rn, done, mu)
+
+        x, J, it, rn, _, _ = jax.lax.while_loop(
+            cond, body, (x0, jnp.zeros((n, n)), 0, jnp.inf, False, jnp.asarray(1e-6)))
+        return x, J, it, rn
 
     # -- solve ---------------------------------------------------------------
 
