@@ -129,8 +129,15 @@ class TestReferenceIsCurrent:
 
         for k, v in REF["cases"].items():
             assert json.loads(json.dumps(getattr(rc, k))) == v, (k, REGENERATE)
-        charges = {k: ig.adiabatic_charge(k) for k in ig.ADIABATIC["feeds"]}
-        assert json.loads(json.dumps(charges)) == REF["inputs"]["isom_cases"]["charges"], REGENERATE
+        # The charges are float sums over JAX output: compare to a few ulp, as
+        # test_isomerization_validation_file does, not bit for bit.
+        charges = REF["inputs"]["isom_cases"]["charges"]
+        assert set(charges) == set(ig.ADIABATIC["feeds"]), REGENERATE
+        for kind, then in charges.items():
+            now = ig.adiabatic_charge(kind)
+            assert set(now) == set(then), REGENERATE
+            for n, v in then.items():
+                assert now[n] == pytest.approx(v, rel=1e-12), REGENERATE
 
 
 # ---------------------------------------------------------------------------

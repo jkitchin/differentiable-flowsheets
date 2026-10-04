@@ -17,16 +17,17 @@ jobs:
   # time the physics is checked end to end. A gate that ran after publishing
   # would not be a gate.
   #
-  # One interpreter and all three shards: the point here is coverage of the
+  # One interpreter and all twelve shards: the point here is coverage of the
   # tier, not of the matrix, which release-tests.yml sweeps nightly.
   full-suite:
-    name: Full suite (shard ${{ matrix.shard }}/3)
+    name: Full suite (shard ${{ matrix.shard }}/12)
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    # Same suite and sharding as release-tests.yml; see the reasoning there.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
 
     steps:
       - uses: actions/checkout@v4
@@ -45,8 +46,8 @@ jobs:
       - name: Run the whole suite
         run: |
           python -m pytest tests/ -q --tb=short \
-            -n auto --dist loadfile --no-loadscope-reorder \
-            --splits 3 --group ${{ matrix.shard }}
+            -n 2 --dist loadfile --no-loadscope-reorder \
+            --splits 12 --group ${{ matrix.shard }}
 
   build:
     name: Build distributions
