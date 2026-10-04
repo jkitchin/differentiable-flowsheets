@@ -258,6 +258,10 @@ class TestRoutes:
         """Otherwise every page load logs a 404 in the console."""
         assert client.get("/favicon.ico")[0] == 200
 
+    def test_the_favicon_the_pages_link_is_served(self, client):
+        status, body = client.get("/favicon.svg")
+        assert status == 200 and body.startswith(b"<svg")
+
     def test_an_unknown_route_is_a_404(self, client):
         assert client.get("/api/nope")[0] == 404
         assert client.post("/api/nope")[0] == 404

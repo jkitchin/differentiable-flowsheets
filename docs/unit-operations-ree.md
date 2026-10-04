@@ -1,5 +1,7 @@
 # Rare Earth Element (REE) Unit Operations
 
+![difflow_ree](../images/plugins/difflow-ree-logo.svg)
+
 This document provides comprehensive documentation for the `difflow_ree` plugin, which provides specialized tools for modeling and optimizing rare earth element solvent extraction processes.
 
 ---

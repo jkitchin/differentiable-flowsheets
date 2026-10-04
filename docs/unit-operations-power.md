@@ -1,5 +1,7 @@
 # Electrical Grid Unit Operations
 
+![difflow_power](../images/plugins/difflow-power-logo.svg)
+
 This document provides comprehensive documentation for the `difflow_power` plugin, which models steady-state electrical transmission and distribution networks as differentiable flowsheets and solves AC optimal power flow problems.
 
 ---
