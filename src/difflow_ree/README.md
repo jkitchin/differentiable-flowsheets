@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="../../images/plugins/difflow-ree-logo.svg" alt="difflow_ree" width="420">
+</p>
+
 # difflow_ree - Rare Earth Element Separation Plugin
 
 A comprehensive plugin for modeling and optimizing rare earth element (REE) solvent extraction processes using JAX-based automatic differentiation.

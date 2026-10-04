@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="../../images/plugins/difflow-power-logo.svg" alt="difflow_power" width="420">
+</p>
+
 # difflow_power — electrical grids as differentiable flowsheets
 
 AC power flow, AC optimal power flow and grid control, built so that

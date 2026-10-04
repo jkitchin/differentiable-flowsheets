@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="../../images/plugins/difflow-bio-logo.svg" alt="difflow_bio" width="420">
+</p>
+
 # difflow_bio - Bio Manufacturing Plugin
 
 A comprehensive plugin for modeling and optimizing biopharmaceutical manufacturing processes using JAX-based automatic differentiation.
