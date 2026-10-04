@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # The whole suite, sharded three ways and run in parallel inside each shard.
+  # The whole suite, sharded four ways and run in parallel inside each shard.
   #
   # Two multipliers, because one is not enough. Run end to end in one process
   # the suite takes 50 minutes, nearly all of it XLA turning traced graphs
@@ -28,7 +28,7 @@ jobs:
   #    thread each changed nothing (215s vs 212s over a six-file sample). It
   #    is the compiler itself.
   #
-  #  * `--splits/--group` then cuts what is left across three jobs, which run
+  #  * `--splits/--group` then cuts what is left across four jobs, which run
   #    concurrently. Balance comes from `.test_durations`, not from anyone's
   #    judgement -- and those durations are measured HERE, on the runner,
   #    not on a laptop (#315). A Mac is ~2.3x faster on this suite on
@@ -42,10 +42,10 @@ jobs:
   #  * `-n auto` is 2 workers on `ubuntu-latest`, not 4: it counts physical
   #    cores, and the 4 vCPUs are 2 of them.
   #
-  # Three *jobs* and not three pytest invocations in one job: each one re-pays
+  # Four *jobs* and not four pytest invocations in one job: each one re-pays
   # JAX/XLA startup and shares no compiled code with the others, which is dead
   # weight when it is serial (the reason core and bio were merged into a single
-  # invocation here) and free when the three run on separate runners.
+  # invocation here) and free when the four run on separate runners.
   #
   # `loadfile`, NOT the default `load`, is what makes the first one pay. A
   # worker has its own compilation cache, so scattering one module's tests
@@ -61,7 +61,7 @@ jobs:
   # minutes. The `slow` marker still exists, and `make test` still skips it,
   # but CI no longer splits on it -- see the marker note in pyproject.toml.
   test:
-    name: Tests (${{ matrix.python-version }}, shard ${{ matrix.shard }}/3)
+    name: Tests (${{ matrix.python-version }}, shard ${{ matrix.shard }}/4)
     runs-on: ubuntu-latest
     # A shard was ~7 minutes when this cap was 25, chosen to be short enough
     # to catch a hang, which was the problem with reading the old 45: at 34
@@ -80,6 +80,11 @@ jobs:
     # measured 3-4 minutes apart), short enough that reaching it means
     # something is wrong. If a shard creeps toward it, re-record
     # `.test_durations` (below) before raising it.
+    #
+    # By 2026-10-04 that was not enough: with durations re-recorded the same
+    # day, three shards ran 18-24 / 26-30 / 16-24 minutes and shard 2 hit the
+    # cap on main (run 37228290967) and on two pull requests. The suite had
+    # grown; the split went to four rather than the cap going up.
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -105,11 +110,12 @@ jobs:
           ${{ fromJSON(github.event_name == 'pull_request'
               && '["3.11"]' || '["3.11", "3.12"]') }}
         # Sharding costs job-minutes and buys wall-clock, and it buys less
-        # of it each time: three shards are ~7 min against the ~14 min of an
-        # unsharded parallel run, where a fourth would save under two more
-        # minutes. If this list changes, `--splits` below has to change with
-        # it -- they are the same number written twice, and nothing checks.
-        shard: [1, 2, 3]
+        # of it each time. Three shards were ~7 min when the suite was
+        # smaller; at ~70 runner-minutes three put one shard at the 30 min
+        # cap, and four bring each to ~18. If this list changes, `--splits`
+        # below has to change with it -- they are the same number written
+        # twice, and nothing checks.
+        shard: [1, 2, 3, 4]
 
     steps:
       - uses: actions/checkout@v4
@@ -149,7 +155,7 @@ jobs:
         run: |
           python -m pytest tests/ -q --tb=short -m "not release" \
             -n auto --dist loadfile --no-loadscope-reorder \
-            --splits 3 --group ${{ matrix.shard }}
+            --splits 4 --group ${{ matrix.shard }}
 
   # Verify the package imports with NO optional dependencies installed. The job
   # this replaces installed ".[dev]" and re-ran the full suite, making it an
