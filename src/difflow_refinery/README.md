@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="../../images/plugins/difflow-refinery-logo.svg" alt="difflow_refinery" width="420">
+</p>
+
 # difflow_refinery: Petroleum Refining as Differentiable Flowsheets
 
 `difflow_refinery` models a refinery from the crude assay to the blended
