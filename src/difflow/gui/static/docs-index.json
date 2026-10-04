@@ -4105,7 +4105,7 @@
    "path": "Bio-Manufacturing Unit Operations",
    "source": "unit-operations-bio.md",
    "targets": [],
-   "text": "This document provides comprehensive documentation for all bio-manufacturing unit operations available in the `difflow_bio` module.\n\n---\n\n(bioreactors)="
+   "text": "![difflow_bio](../images/plugins/difflow-bio-logo.svg)\n\nThis document provides comprehensive documentation for all bio-manufacturing unit operations available in the `difflow_bio` module.\n\n---\n\n(bioreactors)="
   },
   {
    "anchor": "bioreactors",
@@ -4751,7 +4751,7 @@
    "path": "Carbon Capture Unit Operations",
    "source": "unit-operations-carbon-capture.md",
    "targets": [],
-   "text": "This document provides comprehensive documentation for the `difflow_cc` plugin, which provides specialized tools for modeling and optimizing carbon capture processes.\n\n---"
+   "text": "![difflow_cc](../images/plugins/difflow-cc-logo.svg)\n\nThis document provides comprehensive documentation for the `difflow_cc` plugin, which provides specialized tools for modeling and optimizing carbon capture processes.\n\n---"
   },
   {
    "anchor": "overview",
@@ -6395,7 +6395,7 @@
    "path": "Gas Transmission Network Unit Operations",
    "source": "unit-operations-gas.md",
    "targets": [],
-   "text": "This document provides comprehensive documentation for the `difflow_gas` plugin, which models steady-state gas transmission networks as sequential-modular differentiable flowsheets.\n\n---\n\n(gas-overview)="
+   "text": "![difflow_gas](../images/plugins/difflow-gas-logo.svg)\n\nThis document provides comprehensive documentation for the `difflow_gas` plugin, which models steady-state gas transmission networks as sequential-modular differentiable flowsheets.\n\n---\n\n(gas-overview)="
   },
   {
    "anchor": "overview",
@@ -6544,7 +6544,7 @@
    "path": "Electrical Grid Unit Operations",
    "source": "unit-operations-power.md",
    "targets": [],
-   "text": "This document provides comprehensive documentation for the `difflow_power` plugin, which models steady-state electrical transmission and distribution networks as differentiable flowsheets and solves AC optimal power flow problems.\n\n---\n\n(power-overview)="
+   "text": "![difflow_power](../images/plugins/difflow-power-logo.svg)\n\nThis document provides comprehensive documentation for the `difflow_power` plugin, which models steady-state electrical transmission and distribution networks as differentiable flowsheets and solves AC optimal power flow problems.\n\n---\n\n(power-overview)="
   },
   {
    "anchor": "overview",
@@ -6772,7 +6772,7 @@
    "path": "Rare Earth Element (REE) Unit Operations",
    "source": "unit-operations-ree.md",
    "targets": [],
-   "text": "This document provides comprehensive documentation for the `difflow_ree` plugin, which provides specialized tools for modeling and optimizing rare earth element solvent extraction processes.\n\n---"
+   "text": "![difflow_ree](../images/plugins/difflow-ree-logo.svg)\n\nThis document provides comprehensive documentation for the `difflow_ree` plugin, which provides specialized tools for modeling and optimizing rare earth element solvent extraction processes.\n\n---"
   },
   {
    "anchor": "overview",
@@ -7604,7 +7604,7 @@
    "path": "Refinery Unit Operations",
    "source": "unit-operations-refinery.md",
    "targets": [],
-   "text": "This document covers the `difflow_refinery` plugin. It characterises a crude from its assay, separates it in a crude distillation unit (CDU): a fired heater and an atmospheric column, with side strippers, pumparounds and stripping steam. The products are reported the way a refinery reads them: yields, API gravities and TBP ranges. The atmospheric residue goes on to a vacuum distillation unit (VDU), and finished components are blended into products in a nonlinear blending pool.\n\n---\n\n(refinery-overview)="
+   "text": "![difflow_refinery](../images/plugins/difflow-refinery-logo.svg)\n\nThis document covers the `difflow_refinery` plugin. It characterises a crude from its assay, separates it in a crude distillation unit (CDU): a fired heater and an atmospheric column, with side strippers, pumparounds and stripping steam. The products are reported the way a refinery reads them: yields, API gravities and TBP ranges. The atmospheric residue goes on to a vacuum distillation unit (VDU), and finished components are blended into products in a nonlinear blending pool.\n\n---\n\n(refinery-overview)="
   },
   {
    "anchor": "overview",

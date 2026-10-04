@@ -454,8 +454,10 @@ class _Handler(BaseHTTPRequestHandler):
             # length of a rewrite is not a trade worth making.
             "/classic": lambda: self._send(page("classic.html", self.token),
                                            content="text/html"),
-            # answered so the browser does not log a 404 on every load
-            "/favicon.ico": lambda: self._send(b"", content="image/x-icon"),
+            # The pages link ./favicon.svg; this is for a browser that asks
+            # for /favicon.ico anyway, so it gets the icon and not a 404.
+            "/favicon.ico": lambda: self._send(
+                (STATIC / "favicon.svg").read_bytes(), content="image/svg+xml"),
             "/api/catalog": lambda: self._send(self.session.catalog()),
             "/api/flowsheet": lambda: self._send(self.session.document()),
             "/api/code": lambda: self._send(self.session.code()),

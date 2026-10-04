@@ -1,5 +1,7 @@
 # Carbon Capture Unit Operations
 
+![difflow_cc](../images/plugins/difflow-cc-logo.svg)
+
 This document provides comprehensive documentation for the `difflow_cc` plugin, which provides specialized tools for modeling and optimizing carbon capture processes.
 
 ---

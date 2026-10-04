@@ -1,5 +1,7 @@
 # Gas Transmission Network Unit Operations
 
+![difflow_gas](../images/plugins/difflow-gas-logo.svg)
+
 This document provides comprehensive documentation for the `difflow_gas` plugin, which models steady-state gas transmission networks as sequential-modular differentiable flowsheets.
 
 ---
