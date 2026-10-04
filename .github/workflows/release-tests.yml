@@ -22,19 +22,22 @@ concurrency:
 
 jobs:
   full:
-    name: Full suite (${{ matrix.python-version }}, shard ${{ matrix.shard }}/3)
+    name: Full suite (${{ matrix.python-version }}, shard ${{ matrix.shard }}/6)
     runs-on: ubuntu-latest
-    # The release tier is where the expensive numerics live, so a shard here
-    # is longer than in the per-commit workflow. 40 is room for a slow runner
-    # without being so large that a hang sits unnoticed.
+    # The release tier is where the expensive numerics live: with the refinery
+    # `slow` tests the whole suite is ~13,800 s serial (.test_durations), so
+    # six shards, not the per-commit three -- at three a shard ran ~46 min.
+    # The largest of six is ~3,400 s serial, ~28 min on 2 workers. 40 is
+    # room for a slow runner without being so large that a hang sits
+    # unnoticed.
     timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.11", "3.12"]
-        # Same three shards as the Tests workflow, and the same caveat: if
-        # this list changes, `--splits` below changes with it.
-        shard: [1, 2, 3]
+        # Twice the Tests workflow's shards (same durations file). If this
+        # list changes, `--splits` below changes with it.
+        shard: [1, 2, 3, 4, 5, 6]
 
     steps:
       - uses: actions/checkout@v4
@@ -55,4 +58,4 @@ jobs:
         run: |
           python -m pytest tests/ -q --tb=short \
             -n auto --dist loadfile --no-loadscope-reorder \
-            --splits 3 --group ${{ matrix.shard }}
+            --splits 6 --group ${{ matrix.shard }}
