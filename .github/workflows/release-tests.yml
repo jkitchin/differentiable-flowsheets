@@ -27,10 +27,14 @@ jobs:
     # The release tier is where the expensive numerics live: with the refinery
     # `slow` tests the whole suite is ~13,800 s serial (.test_durations), so
     # six shards, not the per-commit three -- at three a shard ran ~46 min.
-    # The largest of six is ~3,400 s serial, ~28 min on 2 workers. 40 is
-    # room for a slow runner without being so large that a hang sits
-    # unnoticed.
-    timeout-minutes: 40
+    # Shards are balanced on .test_durations, but `--dist loadfile` keeps
+    # each file on one worker, so a shard holding a big refinery file runs
+    # at least as long as that file (hydrocracking alone is ~30 min). At 40
+    # minutes three shards were cancelled one test short of finishing; 75
+    # leaves room for that floor and a slow runner, and is still well short
+    # of a hang going unnoticed overnight. Re-measure the durations
+    # (`make test-durations`) when tests are added, or the split drifts.
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:

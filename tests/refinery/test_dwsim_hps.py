@@ -52,6 +52,15 @@ REGENERATE = ("the hydrotreater's separator feed or constants no longer match th
               "refinery.reference.dwsim_hps_generate (needs DWSIM 9.0.5; see scripts/install_dwsim.sh)")
 
 
+# The reference was generated at c2d499b, before #338 moved the hydrotreater
+# onto the shared thermochemistry table and Cp-integrated aromatics equilibria.
+# Its separator feed is no longer the unit's effluent (up to 8 % in a flow).
+# The flash comparisons below still hold -- they flash the FROZEN effluent --
+# but the link back to the hydrotreater is stale until someone with DWSIM
+# regenerates the file, which clears this flag (strict: it then fails loudly).
+STALE_SINCE_338 = REF["provenance"]["difflow_commit"].startswith("c2d499b")
+
+
 def _comps():
     return hc.flash_components_of(EFF)
 
@@ -145,6 +154,9 @@ class TestReferenceIsCurrent:
 
 @pytest.mark.slow
 @pytest.mark.release
+@pytest.mark.xfail(STALE_SINCE_338, strict=True,
+                   reason="dwsim_hps_reference.json predates #338's hydrotreater thermochemistry "
+                          "and was not regenerated (no DWSIM where #338 was made): " + REGENERATE)
 def test_the_effluent_is_the_hydrotreaters():
     eff = hc.effluent()
     assert eff["converged"]

@@ -22,7 +22,8 @@ jobs:
   full-suite:
     name: Full suite (shard ${{ matrix.shard }}/6)
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    # Same suite and sharding as release-tests.yml; see the timeout there.
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
