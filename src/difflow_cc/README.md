@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="../../images/plugins/difflow-cc-logo.svg" alt="difflow_cc" width="420">
+</p>
+
 # difflow_cc - Carbon Capture Plugin
 
 A comprehensive plugin for modeling and optimizing carbon capture processes using JAX-based automatic differentiation.

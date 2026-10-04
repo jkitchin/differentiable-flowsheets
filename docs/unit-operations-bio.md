@@ -1,5 +1,7 @@
 # Bio-Manufacturing Unit Operations
 
+![difflow_bio](../images/plugins/difflow-bio-logo.svg)
+
 This document provides comprehensive documentation for all bio-manufacturing unit operations available in the `difflow_bio` module.
 
 ---

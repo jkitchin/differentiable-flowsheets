@@ -22,19 +22,28 @@ concurrency:
 
 jobs:
   full:
-    name: Full suite (${{ matrix.python-version }}, shard ${{ matrix.shard }}/3)
+    name: Full suite (${{ matrix.python-version }}, shard ${{ matrix.shard }}/12)
     runs-on: ubuntu-latest
-    # The release tier is where the expensive numerics live, so a shard here
-    # is longer than in the per-commit workflow. 40 is room for a slow runner
-    # without being so large that a hang sits unnoticed.
-    timeout-minutes: 40
+    # The release tier is where the expensive numerics live (the refinery
+    # `slow` tests above all). Two constraints set the shape:
+    # - memory: the heavy refinery files (hydrotreating, hydrocracking,
+    #   isomerization, preheat, plant chain) each compile multi-GB JAX
+    #   programs, and four of them at once on a 16 GB runner killed the
+    #   runner outright ("received a shutdown signal"), so two workers;
+    # - time: `--dist loadfile` keeps a file on one worker, so a shard is at
+    #   least as long as its biggest file. At six shards x four workers the
+    #   longest ran 67 min; twelve x two is the same total parallelism.
+    # 90 leaves room for a slow runner and still catches a hang overnight.
+    # Re-measure .test_durations (`make test-durations`) when tests are
+    # added, or the split drifts.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
         python-version: ["3.11", "3.12"]
-        # Same three shards as the Tests workflow, and the same caveat: if
-        # this list changes, `--splits` below changes with it.
-        shard: [1, 2, 3]
+        # Same durations file as the Tests workflow. If this list changes,
+        # `--splits` below changes with it.
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
 
     steps:
       - uses: actions/checkout@v4
@@ -54,5 +63,5 @@ jobs:
       - name: Run the whole suite
         run: |
           python -m pytest tests/ -q --tb=short \
-            -n auto --dist loadfile --no-loadscope-reorder \
-            --splits 3 --group ${{ matrix.shard }}
+            -n 2 --dist loadfile --no-loadscope-reorder \
+            --splits 12 --group ${{ matrix.shard }}

@@ -1,3 +1,5 @@
+<p align="center"><img src="https://raw.githubusercontent.com/jkitchin/differentiable-flowsheets/main/images/difflow-logo.svg" alt="difflow -- Differentiable Flowsheets" width="420"></p>
+
 # difflow
 
 [![Tests](https://github.com/jkitchin/differentiable-flowsheets/actions/workflows/test.yml/badge.svg)](https://github.com/jkitchin/differentiable-flowsheets/actions/workflows/test.yml)
@@ -25,6 +27,19 @@ A JAX-based framework for building and optimizing chemical process flowsheets wi
 - **Bio Manufacturing**: Specialized unit operations for biopharmaceutical processes (bioreactors, chromatography, filtration)
 - **Gas Networks**: Steady-state gas transmission networks with a topology-computed sequential decomposition and differentiable tear solving
 - **Flowsheets Without Code**: A machine-readable catalog of every unit, JSON round trip, Python code generation, a browser-based editor served on `localhost`, and one-file interactive HTML for publishing a model
+
+### Plugins
+
+Six domain plugins ship with difflow:
+
+| | Plugin | Domain |
+|---|---|---|
+| <img src="https://raw.githubusercontent.com/jkitchin/differentiable-flowsheets/main/images/plugins/difflow-bio-icon.svg" alt="" width="24"> | [`difflow_bio`](https://kitchingroup.cheme.cmu.edu/differentiable-flowsheets/docs/unit-operations-bio.html) | Biomanufacturing |
+| <img src="https://raw.githubusercontent.com/jkitchin/differentiable-flowsheets/main/images/plugins/difflow-ree-icon.svg" alt="" width="24"> | [`difflow_ree`](https://kitchingroup.cheme.cmu.edu/differentiable-flowsheets/docs/unit-operations-ree.html) | Rare earth separations |
+| <img src="https://raw.githubusercontent.com/jkitchin/differentiable-flowsheets/main/images/plugins/difflow-cc-icon.svg" alt="" width="24"> | [`difflow_cc`](https://kitchingroup.cheme.cmu.edu/differentiable-flowsheets/docs/unit-operations-carbon-capture.html) | Carbon capture |
+| <img src="https://raw.githubusercontent.com/jkitchin/differentiable-flowsheets/main/images/plugins/difflow-gas-icon.svg" alt="" width="24"> | [`difflow_gas`](https://kitchingroup.cheme.cmu.edu/differentiable-flowsheets/docs/unit-operations-gas.html) | Gas transmission networks |
+| <img src="https://raw.githubusercontent.com/jkitchin/differentiable-flowsheets/main/images/plugins/difflow-power-icon.svg" alt="" width="24"> | [`difflow_power`](https://kitchingroup.cheme.cmu.edu/differentiable-flowsheets/docs/unit-operations-power.html) | Electrical grids |
+| <img src="https://raw.githubusercontent.com/jkitchin/differentiable-flowsheets/main/images/plugins/difflow-refinery-icon.svg" alt="" width="24"> | [`difflow_refinery`](https://kitchingroup.cheme.cmu.edu/differentiable-flowsheets/docs/unit-operations-refinery.html) | Petroleum refining |
 
 ## ⚠️ ALPHA SOFTWARE
 

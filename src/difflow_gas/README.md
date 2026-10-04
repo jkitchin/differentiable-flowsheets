@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="../../images/plugins/difflow-gas-logo.svg" alt="difflow_gas" width="420">
+</p>
+
 # difflow_gas: Gas Transmission Networks as Differentiable Flowsheets
 
 `difflow_gas` models steady-state gas transmission networks as
