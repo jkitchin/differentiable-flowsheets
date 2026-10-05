@@ -83,9 +83,13 @@ jobs:
     #
     # By 2026-10-04 that was not enough: with durations re-recorded the same
     # day, three shards ran 18-24 / 26-30 / 16-24 minutes and shard 2 hit the
-    # cap on main (run 37228290967) and on two pull requests. The suite had
-    # grown; the split went to four rather than the cap going up.
-    timeout-minutes: 30
+    # cap on main (run 37228290967) and on two pull requests. Part of that
+    # was a .test_durations recorded on a Mac (restored to runner numbers);
+    # the rest is growth, so the split went to four. Four shards ran 16 /
+    # 27.5 / 16 / 15 minutes (run 37247376828): the long one holds the
+    # serial planning group, ~22 minutes on one worker however many shards
+    # there are, so the cap is ~1.4x that shard again.
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:

@@ -148,7 +148,7 @@ test-slow:
 test-all:
 	$(UV_RUN_DEV) $(PYTEST) tests/ -v
 
-# Re-measure what CI shards on. `.test_durations` is what balances the three
+# Re-measure what CI shards on. `.test_durations` is what balances the four
 # CI jobs against each other; a test missing from it is estimated at the
 # average, so the balance degrades slowly as tests are added rather than
 # breaking. Regenerate when the shards have drifted noticeably apart (the job
