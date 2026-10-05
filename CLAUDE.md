@@ -31,7 +31,7 @@ make gui-build            # rebuild the editor bundle + docs-index.json
 Markers: `slow` is a cost label (deselected by `make test`); `release` marks
 tests whose subject is the *answer* (physics, FD checks, published
 benchmarks) -- deselected per commit, run by the nightly Full suite workflow.
-CI shards by measured duration (`pytest-split`): 3 shards per commit, 12 for
+CI shards by measured duration (`pytest-split`): 4 shards per commit, 12 for
 the full suite (2 workers each: 4 heavy JAX files at once exhaust a 16 GB runner).
 
 ## Layout

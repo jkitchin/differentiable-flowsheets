@@ -164,15 +164,35 @@ _SERIAL_FILES = frozenset({
 })
 
 
+#: Files that must not be compiling at the same time as each other because
+#: together they exhaust the runner's memory. Full suite shard 6/12 holds all
+#: three and on Python 3.11 lost its runner at 79 min ("The hosted runner lost
+#: communication with the server", the out-of-memory signature); 3.12 passed
+#: the same shard in 42 min against a recorded 24 min of tests, so the two
+#: workers were contending there as well. In series on one worker they take
+#: about 23 min.
+_MEMORY_GROUP = "isomerization"
+_MEMORY_FILES = frozenset({
+    "tests/refinery/test_isomerization.py",
+    "tests/refinery/test_isomerization_dih.py",
+    "tests/refinery/test_isomerization_dih_gradients.py",
+})
+
+
 def _work_unit(nodeid):
-    """The unit ``--dist loadfile`` hands out: the file, or the serial group."""
+    """The unit ``--dist loadfile`` hands out: the file, or its group."""
     path = nodeid.split("::", 1)[0]
-    return _SERIAL_GROUP if path in _SERIAL_FILES else path
+    if path in _SERIAL_FILES:
+        return _SERIAL_GROUP
+    if path in _MEMORY_FILES:
+        return _MEMORY_GROUP
+    return path
 
 
 @pytest.hookimpl(optionalhook=True)
 def pytest_xdist_make_scheduler(config, log):
-    """``--dist loadfile``, with :data:`_SERIAL_FILES` as one work unit."""
+    """``--dist loadfile``, with :data:`_SERIAL_FILES` and
+    :data:`_MEMORY_FILES` each as one work unit."""
     if config.getvalue("dist") != "loadfile":
         return None
     from xdist.scheduler import LoadFileScheduling
