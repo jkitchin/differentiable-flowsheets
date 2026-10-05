@@ -61,7 +61,16 @@ jobs:
 
       # No `-m` filter at all: this is the one place the release tier runs.
       - name: Run the whole suite
+        # pytest-split's duration_based_chunks fills each group until it
+        # reaches total/12, and single tests run up to ~20 min, so the
+        # overshoot piles up and the last group can come out EMPTY (pytest
+        # exit 5, "no tests collected"). The chunks partition the suite, so an
+        # empty tail loses nothing; accept 5 there. Shard 1 always holds
+        # tests, so a run that collects nothing at all still fails on it.
+        # (least_duration balances better but scatters each file over most
+        # shards, recompiling its JAX graphs in every one.)
         run: |
           python -m pytest tests/ -q --tb=short \
             -n 2 --dist loadfile --no-loadscope-reorder \
-            --splits 12 --group ${{ matrix.shard }}
+            --splits 12 --group ${{ matrix.shard }} \
+            || { rc=$?; [ "$rc" -eq 5 ] && [ "${{ matrix.shard }}" -gt 1 ] || exit "$rc"; }
