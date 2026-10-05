@@ -1,0 +1,92 @@
+# Changelog
+
+All notable changes to difflow are recorded here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
+[semantic versioning](https://semver.org) (pre-1.0: a minor bump may break the API).
+
+## [Unreleased]
+
+## [0.2.0] - 2026-10-05
+
+### Breaking
+
+- Python 3.10 is no longer supported; difflow requires Python >= 3.11 (#261).
+
+### Added
+
+- **`difflow_refinery`**, a new plugin for petroleum refining: crude assay
+  characterisation (Twu 1984), differentiable crude and vacuum distillation
+  units, a crude preheat train with a desalter and preflash drum, a saturated gas
+  plant, C5/C6 isomerization (once-through and with DIH/DIP recycle), a
+  hydrotreater, a hydrocracker, an FCC, a reformer, alkylation, a residue
+  desulfurizer, a hydrogen network and a product blending pool with nonlinear
+  blending rules. The crude unit also works as a delta-base planning block. It is
+  validated against independent IDAES, Pyomo/IPOPT and DWSIM 9.0.5 references,
+  and there is a whole-refinery example (`examples/40`)
+  (#296, #299, #300, #302, #303, #316, #317, #319-#322, #324, #335, #336, #345, #351).
+- **`difflow_power`**, a new plugin for electrical grids: AC power flow, DC-OPF
+  and AC-OPF (#205).
+- **`difflow.planning`**: delta-base planning from differentiable flowsheets,
+  with second-order subproblems, feasibility restoration, multi-period inventory,
+  delta-vector health checks, delta attribution estimated from plant history,
+  and Pyomo export (#184, #185, #187, #252, #293).
+- **`difflow.stochastic`**: design under uncertainty by sample average
+  approximation (#236).
+- **`difflow.reconciliation`**: data reconciliation, monitoring over time,
+  pooled parameter estimation, and gating and filtering of parameter updates
+  from plant data (#175, #183, #244).
+- **Flowsheets as data**: kinetics, a unit catalog, JSON serialization and code
+  generation (#182). `Params` field descriptions now appear in the catalog
+  schema (#218).
+- **Local browser editor** (`difflow.gui`): build, wire, rename and edit
+  flowsheets, open Python-script flowsheets, browse example flowsheets, and
+  use a code editor, hover cards and per-unit documentation
+  (#186, #216, #229, #230, #233, #240-#243, #337, #340-#344).
+- **Recycle convergence**: automatic tear-stream selection
+  (`fs.solve(tears="auto")`, `fs.tear_analysis()`), loop-gain and error
+  estimates for the step tolerance (`TearToleranceWarning`,
+  `tol_basis="error"`), a corpus of hard flowsheets for measuring the solver's
+  pass rate, and a working `solve(damping=...)` (#258, #260, #262, #273, #274).
+- The distillation columns now run on a cubic EOS (#214).
+- Heater and Cooler now use a real enthalpy balance (#232).
+- Gas network schematics and a worked model-updating example (#176).
+- REE: a mass-action closure, saponification, a train graph and four analysis
+  modules (#207).
+- An "Ask" docs assistant in the Jupyter Book (#325), a refinery units summary
+  page, and logos for the package and every plugin (#348, #350).
+
+### Fixed
+
+- Distillation: the feed-stage section convention is set in one place, the
+  energy balance uses the feed's thermal condition q, and component balances
+  close on the CMO path (#215, #217, #225). Fixed the Hengstebeck-Geddes non-key
+  split in `ShortcutColumn` (#323).
+- Flowsheet: a recycle starts from the stream being recycled, and a solve that
+  did not converge now says so (#254, #256).
+- CSTR: the molar density that sets residence time now has a name, and the
+  water fallback raises `CSTRDensityWarning` (#234).
+- REE: extraction loading, capacity, mechanism and activity models were
+  corrected (#204). Extractant correlations were refit against named sources
+  (#270, #282, #283, #290). The Kremser two-inlet boundary condition was fixed
+  (#285). The capital estimate is now anchored to disclosed project costs
+  (#272). Several smaller fixes (#275-#280, #287, #289).
+- Solvers: sparsity is derived from the graph instead of defaulting to dense
+  (#209).
+- Fixed eight defects that adversarial testing found across numerics, streams,
+  pytrees, serialization, economics, bio and carbon capture (#292).
+- Fact-checked the example notebooks against the literature (#281, #291).
+
+### Changed
+
+- Physics validation (the `release` test marker) runs nightly and before every
+  publish, instead of on every commit. CI shards the suite by measured test
+  duration (#245, #304, #318, #347, #352, #353).
+- The PyPI wheel check covers all seven packages.
+
+## [0.1.0] - 2026-08-10
+
+First public release.
+
+[Unreleased]: https://github.com/jkitchin/differentiable-flowsheets/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/jkitchin/differentiable-flowsheets/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/jkitchin/differentiable-flowsheets/releases/tag/v0.1.0

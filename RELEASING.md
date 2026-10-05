@@ -1,7 +1,7 @@
 # Releasing difflow
 
 Developer & release guide for **difflow**, the JAX-based differentiable flowsheet
-framework. This distribution (`difflow`) bundles **five** packages that ship together
+framework. This distribution (`difflow`) bundles **seven** packages that ship together
 from one wheel:
 
 | Import package | Role |
@@ -11,6 +11,8 @@ from one wheel:
 | `difflow_ree` | Rare-earth-element extraction plugin |
 | `difflow_cc` | Carbon-capture plugin |
 | `difflow_gas` | Gas-transmission-network plugin |
+| `difflow_power` | Electrical-grid (power flow, OPF) plugin |
+| `difflow_refinery` | Petroleum-refining plugin |
 
 The plugins register via the `difflow.plugins` entry points in `pyproject.toml`.
 
@@ -45,8 +47,7 @@ Notes:
 - On macOS the Makefile forces `JAX_PLATFORM_NAME=cpu` (no GPU support).
 - **No linter/formatter is configured** (no ruff/black/pre-commit). If you adopt one,
   add a lint gate to the pre-flight section below and to CI.
-- **No `CHANGELOG.md` exists yet.** Consider creating one (Keep a Changelog format) so the
-  version step below has a home for release notes.
+- Release notes live in `CHANGELOG.md` (Keep a Changelog format).
 
 ---
 
@@ -54,7 +55,7 @@ Notes:
 
 Work top to bottom.
 
-> **⚠️ Version is duplicated in 5 places — not a single source of truth.** Unlike a
+> **⚠️ Version is duplicated in 6 places — not a single source of truth.** Unlike a
 > single-`version` project, difflow bundles plugins that hard-code their own
 > `__version__`, and `CITATION.cff` carries its own `version`. You **must** bump all of
 > them together (see step 2). `difflow` itself reads its version from installed metadata
@@ -80,7 +81,7 @@ dependency must resolve from a package index.
 - [ ] Latest CI run on `main` is green: `gh run list --branch main --limit 1`
       (the **Tests** workflow, `.github/workflows/test.yml`, runs py3.11/3.12).
 - [ ] Full test suite passes locally: `make test` (= `uv run pytest tests/ -v`).
-      This includes the plugin suites (`tests/bio/`, `tests/ree/`, `tests/cc/`, `tests/gas/`).
+      This includes the plugin suites (`tests/bio/`, `tests/ree/`, `tests/cc/`, `tests/gas/`, `tests/power/`, `tests/refinery/`).
 - [ ] Docs build clean: `make book` (`uv run jupyter-book build .`).
 - [ ] If code feeding the notebooks changed, re-execute and re-commit them:
       `make notebooks` (or `make notebooks-force` to rebuild all).
@@ -88,18 +89,20 @@ dependency must resolve from a package index.
 
 ### 2. Version & metadata
 
-Bump the version per [semver](https://semver.org) in **all four** locations:
+Bump the version per [semver](https://semver.org) in **all** of these locations:
 
 - [ ] `pyproject.toml`: `version = "X.Y.Z"`
-- [ ] `src/difflow_gas/__init__.py` line 48: `__version__ = "X.Y.Z"`
-- [ ] `src/difflow_ree/__init__.py` line 36: `__version__ = "X.Y.Z"`
-- [ ] `src/difflow_cc/__init__.py` line 42: `__version__ = "X.Y.Z"`
+- [ ] `src/difflow_gas/__init__.py`: `__version__ = "X.Y.Z"`
+- [ ] `src/difflow_ree/__init__.py`: `__version__ = "X.Y.Z"`
+- [ ] `src/difflow_cc/__init__.py`: `__version__ = "X.Y.Z"`
+- [ ] `src/difflow_power/__init__.py`: `__version__ = "X.Y.Z"`
 - [ ] `CITATION.cff`: `version: X.Y.Z` **and** `date-released: "YYYY-MM-DD"` (the release
-      date). This is what GitHub's "Cite this repository" button renders.
+      date). Drop the previous release's *version* DOI from `identifiers` (keep the
+      concept DOI); the new version DOI only exists once Zenodo mints it. This is what GitHub's "Cite this repository" button renders.
 - [ ] Sanity-check they all match:
-      `grep -rn "0\.0\.0\|version" pyproject.toml src/difflow_*/__init__.py | grep -i version`
+      `grep -n "^version\|__version__ =\|^version:" pyproject.toml src/difflow_*/__init__.py CITATION.cff`
       (no stray old versions remain).
-- [ ] Update `CHANGELOG.md` (create it if adopting): move `[Unreleased]` entries under the
+- [ ] Update `CHANGELOG.md`: move `[Unreleased]` entries under the
       new version + today's date.
 - [ ] Re-check `README.md` install instructions and extras (`[all]`, `[dev]`, `[examples]`,
       `[visualization]`, `cuda11`/`cuda12`).
@@ -114,13 +117,13 @@ Bump the version per [semver](https://semver.org) in **all four** locations:
 - [ ] `rm -rf dist && uv build` — always wipe first; a stale gitignored `dist/` may exist.
       Produces an sdist + a wheel (backend: **hatchling**).
 - [ ] `uvx twine check dist/*` passes.
-- [ ] Inspect the wheel — it must contain **all five** packages:
-      `python -m zipfile -l dist/difflow-*.whl | grep -E "difflow(_bio|_ree|_cc|_gas)?/__init__.py"`
-      (expect `difflow/`, `difflow_bio/`, `difflow_ree/`, `difflow_cc/`, `difflow_gas/`).
+- [ ] Inspect the wheel — it must contain **all seven** packages:
+      `python -m zipfile -l dist/difflow-*.whl | grep -E "difflow(_bio|_ree|_cc|_gas|_power|_refinery)?/__init__.py"`
+      (expect `difflow/` plus the six `difflow_*` plugin packages).
 - [ ] Smoke test in a clean venv:
       ```bash
       python -m venv /tmp/df && /tmp/df/bin/pip install dist/difflow-*.whl
-      /tmp/df/bin/python -c "import difflow, difflow_bio, difflow_ree, difflow_cc, difflow_gas; print(difflow.__version__)"
+      /tmp/df/bin/python -c "import difflow, difflow_bio, difflow_ree, difflow_cc, difflow_gas, difflow_power, difflow_refinery; print(difflow.__version__)"
       /tmp/df/bin/difflow --help          # the `difflow` console script (report CLI)
       ```
 - [ ] Plugin discovery works — the `difflow.plugins` entry points import and `register()`
@@ -158,7 +161,7 @@ Bump the version per [semver](https://semver.org) in **all four** locations:
 ## PyPI publishing setup (one-time)
 
 `.github/workflows/publish.yml` **already exists**. It builds an sdist + wheel on every
-published GitHub release, runs `twine check`, verifies all five packages made it into the
+published GitHub release, runs `twine check`, verifies all seven packages made it into the
 wheel, and uploads via **OIDC trusted publishing** (no API token is stored in this repo).
 
 Two things still have to be done by hand, in a browser, before the first release.
