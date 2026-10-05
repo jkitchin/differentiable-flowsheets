@@ -81,13 +81,14 @@ jobs:
           python -m pip install --upgrade twine
           twine check dist/*
 
-      - name: Verify all five packages are in the wheel
+      - name: Verify all seven packages are in the wheel
         run: |
           python -m zipfile -l dist/difflow-*.whl > wheel.txt
-          for pkg in difflow difflow_bio difflow_ree difflow_cc difflow_gas; do
+          for pkg in difflow difflow_bio difflow_ree difflow_cc difflow_gas \
+                     difflow_power difflow_refinery; do
             grep -q "^ *$pkg/__init__.py" wheel.txt || { echo "MISSING: $pkg"; exit 1; }
           done
-          echo "All five packages present."
+          echo "All seven packages present."
 
       - name: Upload distributions
         uses: actions/upload-artifact@v4
