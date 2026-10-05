@@ -21,6 +21,13 @@ Invariants encoded in the gas plant (do not weaken them):
   Murphree efficiencies, one implicit step. Pass 1's boilup ratio is at least
   one: from the guess's 5 %-of-feed vapor floor a heavy lean oil gets a few
   percent, and pass 1 never converges (the CDU-naphtha absorber of example 38).
+- `GasColumn.newton` is the vacuum Newton plus a Levenberg-Marquardt step when
+  the Armijo search fails in ten halvings (near-singular J at the edge of the
+  cubic's three-root region: C3/C4 splitter pass 1), and trace log flows may
+  rise to the trace floor in one step (the deisobutanizer's heavy cut started
+  e^-600 low and the +5 clip took 120 iterations). The vacuum column's own
+  `StageColumn.newton` is unchanged. A pseudo-root for the missing phase was
+  tried and is NOT needed: the LM step alone converges both cases.
 - O'Connell is the factories' default tray efficiency; `tray_efficiency=1.0`
   gives theoretical stages. The IDAES cross-check uses 1.0 on both sides.
 - RVP is the D323 construction on the same EOS, never a correlation.
