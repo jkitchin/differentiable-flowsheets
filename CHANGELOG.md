@@ -17,7 +17,9 @@ All notable changes to difflow are recorded here. The format follows
   Newton pass could stall on a near-singular Jacobian (this failed the 0.2.0
   Publish gate, so 0.2.0 never reached PyPI). The guess now eliminates the
   M-matrix without pivoting in logs: every gas plant factory case converges in
-  the same iterations under feed perturbations.
+  the same iterations under feed perturbations. A first pass that still does
+  not converge is retried from guesses at half and twice the guessed reflux
+  (the C3/C4 splitter on an FCC feed needs it).
 
 ## [0.2.0] - 2026-10-05
 

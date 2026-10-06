@@ -36,6 +36,12 @@ Invariants encoded in the gas plant (do not weaken them):
   near-singular J for some feeds (and some CI runners: the 0.2.0 Publish
   gate). `tests/refinery/test_gasplant.py` checks the guess is insensitive
   to a 1e-12 feed perturbation; keep it that way.
+- Pass 1 that does not converge is retried from guesses at half and twice
+  `reflux_guess` (`GasColumn._pass1`); one that converges is never retried, so
+  those columns keep their iterates. With the exact guess the C3/C4 splitter
+  on an FCC feed stalls from reflux 2 every time and converges from 1 or 4
+  (on the LU guess it passed or failed by round-off: 3 of 8 perturbed feeds
+  failed).
 - O'Connell is the factories' default tray efficiency; `tray_efficiency=1.0`
   gives theoretical stages. The IDAES cross-check uses 1.0 on both sides.
 - RVP is the D323 construction on the same EOS, never a correlation.

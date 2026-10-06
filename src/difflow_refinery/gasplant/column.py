@@ -576,8 +576,9 @@ class GasColumn(StageColumn):
 
     # -- initialization ------------------------------------------------------
 
-    def _guess_flows(self, th):
-        """Constant-molar-overflow totals and product split for the guess."""
+    def _guess_flows(self, th, reflux=None):
+        """Constant-molar-overflow totals and product split for the guess
+        (at reflux ratio ``reflux``, default the layout's ``reflux_guess``)."""
         lay, N, C = self.layout, self.N, self.C
         _, ftot = self.feed_matrix(th)
         MW = th["components"].MW
@@ -593,7 +594,7 @@ class GasColumn(StageColumn):
                     jnp.sum(ftot * MW) / Fmol)
         D = jnp.maximum(jnp.sum(D_comp), 1e-3 * Fmol)
         q = 1.0 - th["_feedbeta"]
-        R0 = lay.reflux_guess
+        R0 = lay.reflux_guess if reflux is None else reflux
         Lj, Vj = [None] * N, [None] * N
         draws = [0.0] * N
         for name, s in side.items():
@@ -631,14 +632,14 @@ class GasColumn(StageColumn):
                 Vnext = Vj[j] - sum(F * (1 - qq) for F, qq in feeds_at[j])
         return jnp.stack(Lj), jnp.stack(Vj), D_comp, draws, side
 
-    def initial_guess(self, th):
+    def initial_guess(self, th, reflux=None):
         """Bubble-point (Wang-Henke) passes on Wilson K over CMO flows."""
         lay, N, C = self.layout, self.N, self.C
         knobs = dict(th["knobs"])
         thermo = self.thermo_factory(th["components"])
         fmat, ftot = self.feed_matrix(th)
         P = knobs["top.P"] + knobs["dP"] * jnp.arange(N)
-        L0, V0, D_comp, draws, side = self._guess_flows(th)
+        L0, V0, D_comp, draws, side = self._guess_flows(th, reflux)
         B_comp = ftot - D_comp
 
         # share-route logits from the guessed flows
@@ -827,6 +828,38 @@ class GasColumn(StageColumn):
                         dtype=float).reshape(-1)
         return col_to.pack(ll, lv, T, z, k), knobs
 
+    def _pass1(self, th_s, th1, R):
+        """Pass 1 from the guess at reflux ratio ``R``: easy specs (reflux
+        ``R`` and the guess's boilup), guessed rates in every rate slot the
+        user's specs replace; returns ``(x, iterations, max residual)``."""
+        easy = self.easy
+        x0 = self.initial_guess(th_s, R)
+        L0g, V0g, _, draws, side = self._guess_flows(th_s, R)
+        targets = {}
+        for s in easy.specs:
+            if s.output == "reflux_ratio":
+                targets[s.output] = jnp.asarray(R, dtype=float)
+            elif s.output == "boilup_ratio":
+                # at least one: the guess's vapor floor (5% of the
+                # feed) gives an absorber with a heavy lean oil a
+                # boilup of a few percent, which strips nothing and
+                # leaves pass 1 on a column with no vapor to speak of
+                targets[s.output] = jnp.maximum(V0g[-1] / L0g[-1], 1.0)
+        kn = dict(th1["knobs"])
+        MWbar = th_s["_scale"]["mass"] / th_s["_scale"]["mol"] * 1000.0
+        for slot in self.slot_spec:
+            if slot in easy.slot_spec:
+                continue
+            r = slot[:-len(".rate")]
+            src = next(q.source for q in self.layout.routes if q.name == r)
+            g = side.get(r, draws[src] if src == 0 else 0.3 * L0g[src])
+            kn[slot] = g * MWbar / 1000.0
+        th_e = dict(th1, targets=targets, knobs=kn)
+        x0e, _ = self._transfer(x0, self, th1, easy, th_e)
+        xe, _, it, rn = easy.newton(x0e, th_e)
+        x, _ = self._transfer(xe, easy, th_e, self, th_s)
+        return x, it, rn
+
     def solve(self, th, x0=None):
         """Solve; returns ``(x, iterations, max scaled residual)``.
 
@@ -838,36 +871,23 @@ class GasColumn(StageColumn):
         eta = th_s["eta"]
         th1 = dict(th_s, eta=jnp.ones_like(eta))
         if x0 is None:
-            x0 = self.initial_guess(th_s)
             easy = self.easy
             if easy is not None:
-                # pass 1: the guess's own reflux and boilup, and guessed
-                # rates in every rate slot the user's specs replace
-                L0g, V0g, _, draws, side = self._guess_flows(th_s)
-                targets = {}
-                for s in easy.specs:
-                    if s.output == "reflux_ratio":
-                        targets[s.output] = jnp.asarray(self.layout.reflux_guess)
-                    elif s.output == "boilup_ratio":
-                        # at least one: the guess's vapor floor (5% of the
-                        # feed) gives an absorber with a heavy lean oil a
-                        # boilup of a few percent, which strips nothing and
-                        # leaves pass 1 on a column with no vapor to speak of
-                        targets[s.output] = jnp.maximum(V0g[-1] / L0g[-1], 1.0)
-                kn = dict(th1["knobs"])
-                MWbar = th_s["_scale"]["mass"] / th_s["_scale"]["mol"] * 1000.0
-                for slot in self.slot_spec:
-                    if slot in easy.slot_spec:
-                        continue
-                    r = slot[:-len(".rate")]
-                    src = next(q.source for q in self.layout.routes if q.name == r)
-                    g = side.get(r, draws[src] if src == 0 else 0.3 * L0g[src])
-                    kn[slot] = g * MWbar / 1000.0
-                th_e = dict(th1, targets=targets, knobs=kn)
-                x0e, _ = self._transfer(x0, self, th1, easy, th_e)
-                xe, _, it0, _ = easy.newton(x0e, th_e)
-                x0, knobs_e = self._transfer(xe, easy, th_e, self, th_s)
+                # pass 1 from the guess at the layout's reflux; if it does not
+                # converge, again from guesses at half and twice that reflux
+                # (the C3/C4 splitter on an FCC feed stalls near the cubic's
+                # three-root edge from reflux 2 and converges from 1 or 4).
+                # A pass 1 that converges is never retried.
+                R = self.layout.reflux_guess
+                x0, it0, rn0 = self._pass1(th_s, th1, R)
+                for f in (0.5, 2.0):
+                    x0, it0, rn0 = jax.lax.cond(
+                        rn0 < easy.tol, lambda c: c,
+                        lambda c, f=f: (lambda r: (r[0], c[1] + r[1], r[2]))(
+                            self._pass1(th_s, th1, f * R)),
+                        (x0, it0, rn0))
             else:
+                x0 = self.initial_guess(th_s)
                 it0 = 0
         else:
             it0 = 0
