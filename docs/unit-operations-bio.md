@@ -1156,8 +1156,30 @@ replace the numbers with your own plant's, and load the copy. Every number
 in it is tagged with its source: `[database]` (copied from the resin
 database), `[carried over]` (the value the older functions used) or
 `[placeholder]` (an order-of-magnitude assumption). **Most are placeholders**,
-and the reference result is not a benchmark; calibrating it against a
-published cost-of-goods breakdown is still to be done.
+and the reference result is not a benchmark.
+
+The benchmark is a published process encoded in the same format:
+`difflow_bio/economics/data/petrides2015_mab.yaml`, the large-scale mAb
+process of D. Petrides, *Bioprocess Design and Economics* (Intelligen, 2015,
+section 11.6.3; an improved version is Chapter 11 of Harrison, Todd, Rudge and
+Petrides, *Bioseparations Science and Engineering*, 2nd ed., Oxford University
+Press, 2015). Every number in it is tagged with the page that states it, or
+marked derived or not stated. From the source's stated inputs (a 15,000 L
+fed-batch harvest at about 2 g/L, Protein A, IEX and HIC columns with their
+volumes, capacities, yields, buffer volumes, prices and lifetimes, 80 batches
+a year), `cogs_breakdown` reproduces:
+
+| Quantity | difflow | Source |
+|---|---|---|
+| Product per batch / per year | 19.28 kg / 1,542 kg | 19.3 kg / 1,544 kg |
+| Cycles per batch, Protein A / IEX / HIC | 3.85 / 3.01 / 3.00 | 4 / 3 / 3 (whole cycles) |
+| Protein A / HIC elution buffer per batch | 9,658 / 2,846 L | 10,002 / 2,990 kg (Table 11.15) |
+| Resin replacement | $18.5M/yr | within Consumables, $23.6M/yr (Table 11.17) |
+| Media | $11.2M/yr | within Raw Materials, $16.7M/yr (Table 11.17) |
+
+The source gives labor, facility-dependent, QC and miscellaneous costs only as
+totals, without the inputs behind them, so its total of $84/g is not
+reproduced; those categories are zero in the benchmark file.
 
 `ChromatographyStep.from_resin` builds a step from the resin database
 (capacity derated to 80 % of `q_max`, price and lifetime), and

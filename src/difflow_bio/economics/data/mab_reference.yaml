@@ -14,8 +14,8 @@
 # None of these is a benchmark. Replace them with your own plant's numbers:
 # copy this file, edit it, and load it with
 #     process, basis = difflow_bio.economics.load_cost_model("my_plant.yaml")
-# A published cost-of-goods breakdown to calibrate against is still owed
-# (issue #358).
+# For a published process encoded in the same format, with every number tied
+# to its page, see petrides2015_mab.yaml (tests/bio/test_economics_benchmark.py).
 
 basis:
   media_usd_L:
