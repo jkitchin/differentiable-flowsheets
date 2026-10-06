@@ -1,5 +1,5 @@
 {
- "n_sections": 1078,
+ "n_sections": 1079,
  "sections": [
   {
    "anchor": "agents-the-difflow-mcp-server",
@@ -23,7 +23,7 @@
    "path": "Agents: the `difflow mcp` server > What the tools are",
    "source": "agents.md",
    "targets": [],
-   "text": "Nothing in the tool layer is a hand-written list of units. Operations come\nfrom the plugin registry and the catalog, so a newly installed plugin's units\nare usable at once; libraries that are not unit operations (planning,\nstochastic programming, the refinery reformer and FCC) are found by reading\neach package's `__all__`.\n\n| Group | Tools |\n|---|---|\n| Discovery | `plugin_status`, `list_operations`, `describe_operation`, `list_api`, `describe_api`, `search_species`, `search_docs`, `list_examples` |\n| Sessions | `list_sessions`, `new_session`, `close_session`, `open_example`, `open_file`, `save`, `undo`, `redo`, `get_flowsheet` |\n| Building | `set_species`, `set_code_context`, `add_unit`, `update_unit`, `remove_unit`, `connect`, `disconnect`, `set_feed`, `remove_feed` |\n| Running | `set_solver_options`, `solve`, `get_streams` |\n| Python | `run_python` |\n\nEach tool is annotated as read-only, editing, or running code, so a client can\nask before the last kind. A session holds one flowsheet; every tool takes a\n`session` argument (default `\"main\"`), so a base case and a variant can be\nkept side by side."
+   "text": "Nothing in the tool layer is a hand-written list of units. Operations come\nfrom the plugin registry and the catalog, so a newly installed plugin's units\nare usable at once; libraries that are not unit operations (planning,\nstochastic programming, the refinery reformer and FCC) are found by reading\neach package's `__all__`.\n\n| Group | Tools |\n|---|---|\n| Discovery | `plugin_status`, `list_operations`, `describe_operation`, `list_api`, `describe_api`, `search_species`, `search_docs`, `list_examples` |\n| Sessions | `list_sessions`, `new_session`, `close_session`, `open_example`, `open_file`, `save`, `undo`, `redo`, `get_flowsheet` |\n| Building | `set_species`, `set_code_context`, `add_unit`, `update_unit`, `remove_unit`, `connect`, `disconnect`, `set_feed`, `remove_feed` |\n| Running | `set_solver_options`, `solve`, `get_streams` |\n| Diagnosis | `diagnose`, `converge`, `tear_analysis`, `trace_solve`, `get_unit_info` |\n| Python | `run_python` |\n\nEach tool is annotated as read-only, editing, or running code, so a client can\nask before the last kind. A session holds one flowsheet; every tool takes a\n`session` argument (default `\"main\"`), so a base case and a variant can be\nkept side by side."
   },
   {
    "anchor": "how-a-flowsheet-is-built",
@@ -40,6 +40,14 @@
    "source": "agents.md",
    "targets": [],
    "text": "`solve` returns more than streams, and an answer is good only when it\nconverged **and** its audit is clean:\n\n- `converged`: the recycle verdict.\n- `gain` and `error_estimate`: at loop gain $g$ the error is about $1/(1-g)$\n  times the step `tol` tested (see {doc}`convergence`).\n- `warnings`: what the solve warned about (a `TearToleranceWarning`, a\n  `CSTRDensityWarning`, ...), returned instead of printed.\n- `audit`: non-finite values, negative flows, unread feeds and the overall\n  mass balance.\n\nEvery option of `Flowsheet.solve` that is a setting (tolerance and its basis,\nacceleration, damping, tear choice, clipping) can be set with\n`set_solver_options` or passed to `solve`, and is saved with the flowsheet."
+  },
+  {
+   "anchor": "when-a-solve-fails",
+   "heading": "When a solve fails",
+   "path": "Agents: the `difflow mcp` server > When a solve fails",
+   "source": "agents.md",
+   "targets": [],
+   "text": "`diagnose` checks what can be checked before solving (units still waiting on\nsomething, unfed inlets), solves, and returns findings, most serious first:\na recycle that did not converge together with what its residual history\nsays (diverging, oscillating, creeping, stalled), an error estimate above\n`tol`, clipping, a unit whose own inner solve did not close its balance,\ntear-set problems, audit failures and captured warnings. Each finding names\nthe remedies that address it. The remedies and the symptom cards live in\n`difflow.diagnostics`, the same table the editor's assistant reads.\n\n`converge` tries those remedies on the live flowsheet: the stored settings\nfirst, then Anderson, more iterations, Wegstein, damped substitution, an\nerror-based tolerance, unclipped tears and a cold start. A trial passes only\nwhen it converged **and** is correct: finite, mass conserved, every unit's\ninner solve closed, and the error not far above `tol`. Negative flows are\nreported as a caveat rather than a failure, because a signed tear is negative\nin the right answer. When two trials pass with different products, the\nflowsheet has more than one steady state, and `converge` says so instead of\npicking one.\n\nBy default `converge` changes nothing. With `apply=True` it keeps the first\npassing remedy, but only a *numerics* one, which changes how the fixed point\nis reached and not which one. A remedy that can change the answer (unclipped\ntears, a cold start) is returned as a proposal to apply with\n`set_solver_options`."
   },
   {
    "anchor": "using-the-tools-without-mcp",

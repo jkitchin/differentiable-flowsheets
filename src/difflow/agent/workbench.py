@@ -468,6 +468,84 @@ class Workbench:
             n: {k: (v if isinstance(v, str) else float(v))
                 for k, v in s.streams[n].items()} for n in wanted}})
 
+    # -- diagnosis and convergence -------------------------------------------------
+
+    def diagnose(self, session: str = "main", timeout: float | None = None) -> dict:
+        """Why a flowsheet fails to solve, or why its answer is suspect.
+
+        Checks what can be checked before solving (pending units, unfed
+        inlets), solves with the stored settings, and returns findings,
+        most serious first: non-convergence with what the residual history
+        says (diverging, oscillating, creeping, stalled), an error estimate
+        above tol, clipping, unit inner solves that did not close, tear-set
+        problems, audit failures and captured warnings. Each finding names
+        remedies, described under ``remedies``; try them with converge.
+        """
+        from difflow.agent import doctor
+
+        s, err = self._get(session)
+        if err:
+            return err
+        return self._timed(session, lambda: doctor.diagnose(s), timeout)
+
+    def converge(self, apply: bool = False, budget: int = 8,
+                 session: str = "main", timeout: float | None = None) -> dict:
+        """Search for solver settings that converge the flowsheet correctly.
+
+        Tries the stored settings, then remedies in order (Anderson, more
+        iterations, Wegstein, damped substitution, error-based tolerance,
+        unclipped tears, cold start), stopping after two pass. A trial
+        passes only when it converged AND its audit is clean. If two pass
+        with different products the flowsheet has more than one steady
+        state, and that is reported.
+
+        Args:
+            apply: Keep the first passing remedy in the flowsheet's solver
+                settings, but only a "numerics" one (it changes how the
+                answer is reached, not which answer). A "problem" remedy
+                is returned as a proposal to apply with set_solver_options.
+            budget: Most trials to run.
+        """
+        from difflow.agent import doctor
+
+        s, err = self._get(session)
+        if err:
+            return err
+        return self._timed(
+            session, lambda: doctor.converge(s, apply=apply, budget=budget), timeout)
+
+    def tear_analysis(self, session: str = "main") -> dict:
+        """The flowsheet's cycles, its declared tear streams, the tear sets a
+        heuristic and a minimum search would pick, and any cycle no tear
+        breaks or unit that would run before its inputs exist."""
+        from difflow.agent import doctor
+
+        return self._with(session, doctor.tear_analysis)
+
+    def trace_solve(self, session: str = "main", timeout: float | None = None) -> dict:
+        """Solve and return the tear residual after every iteration, with a
+        reading of it (converged, creeping, oscillating, diverging, stalled)."""
+        from difflow.agent import doctor
+
+        s, err = self._get(session)
+        if err:
+            return err
+        return self._timed(session, lambda: doctor.trace_solve(s), timeout)
+
+    def get_unit_info(self, name: str | None = None, session: str = "main") -> dict:
+        """What units reported about themselves on the last solve (a CSTR's
+        conversion and rates, a flash's vapor fraction and phase, whether
+        each unit's own inner solve closed its balance)."""
+        from difflow.agent import doctor
+
+        return self._with(session, lambda s: doctor.unit_info(s, name))
+
+    def _with(self, session: str, fn) -> dict:
+        s, err = self._get(session)
+        if err:
+            return err
+        return jsonable(fn(s))
+
     # -- Python ---------------------------------------------------------------------
 
     def run_python(self, code: str, session: str = "main",

@@ -42,6 +42,7 @@ each package's `__all__`.
 | Sessions | `list_sessions`, `new_session`, `close_session`, `open_example`, `open_file`, `save`, `undo`, `redo`, `get_flowsheet` |
 | Building | `set_species`, `set_code_context`, `add_unit`, `update_unit`, `remove_unit`, `connect`, `disconnect`, `set_feed`, `remove_feed` |
 | Running | `set_solver_options`, `solve`, `get_streams` |
+| Diagnosis | `diagnose`, `converge`, `tear_analysis`, `trace_solve`, `get_unit_info` |
 | Python | `run_python` |
 
 Each tool is annotated as read-only, editing, or running code, so a client can
@@ -79,6 +80,33 @@ converged **and** its audit is clean:
 Every option of `Flowsheet.solve` that is a setting (tolerance and its basis,
 acceleration, damping, tear choice, clipping) can be set with
 `set_solver_options` or passed to `solve`, and is saved with the flowsheet.
+
+## When a solve fails
+
+`diagnose` checks what can be checked before solving (units still waiting on
+something, unfed inlets), solves, and returns findings, most serious first:
+a recycle that did not converge together with what its residual history
+says (diverging, oscillating, creeping, stalled), an error estimate above
+`tol`, clipping, a unit whose own inner solve did not close its balance,
+tear-set problems, audit failures and captured warnings. Each finding names
+the remedies that address it. The remedies and the symptom cards live in
+`difflow.diagnostics`, the same table the editor's assistant reads.
+
+`converge` tries those remedies on the live flowsheet: the stored settings
+first, then Anderson, more iterations, Wegstein, damped substitution, an
+error-based tolerance, unclipped tears and a cold start. A trial passes only
+when it converged **and** is correct: finite, mass conserved, every unit's
+inner solve closed, and the error not far above `tol`. Negative flows are
+reported as a caveat rather than a failure, because a signed tear is negative
+in the right answer. When two trials pass with different products, the
+flowsheet has more than one steady state, and `converge` says so instead of
+picking one.
+
+By default `converge` changes nothing. With `apply=True` it keeps the first
+passing remedy, but only a *numerics* one, which changes how the fixed point
+is reached and not which one. A remedy that can change the answer (unclipped
+tears, a cold start) is returned as a proposal to apply with
+`set_solver_options`.
 
 ## Using the tools without MCP
 
