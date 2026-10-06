@@ -99,6 +99,40 @@ class TestMabDSPTrain:
             assert isinstance(v, jax.Array)
 
 
+class TestRealisticPurity:
+    """The trains used to report purity 1.0000: CEX removed >= 90% of every
+    impurity, and the TFF steps, with no rejection set for impurities, washed
+    90% of the HCP and aggregate out. With the typical clearances the mAb
+    train lands at the reported end-of-process levels (HCP ~10 ppm against a
+    <100 ppm target; aggregate below 1%)."""
+
+    def test_mab_train_meets_typical_specs_not_perfection(self, harvest):
+        res = mAbDSPTrain(mAbDSPParams(species_order=SPECIES))(harvest)
+        assert 1.0 < float(res["hcp_ppm"]) < 100.0
+        assert 0.001 < float(res["aggregate_fraction"]) < 0.01
+        assert 0.98 < float(res["purity"]) < 0.999
+
+    def test_uf_does_not_clear_impurities(self, harvest):
+        res = mAbDSPTrain(mAbDSPParams(species_order=SPECIES))(
+            harvest, return_intermediates=True)
+        before = res["intermediates"]["proa_eluate"]
+        after = res["intermediates"]["tff1_concentrate"]
+        for s in ("HCP", "aggregates"):
+            assert float(after[f"F_{s}"]) / float(before[f"F_{s}"]) > 0.9
+
+    def test_grad_purity_wrt_cex_aggregate_lrv(self, harvest):
+        def purity(lrv):
+            p = mAbDSPParams(
+                species_order=SPECIES,
+                cex_clearance={"HCP": 0.5, "DNA": 1.0, "aggregates": lrv},
+            )
+            return mAbDSPTrain(p)(harvest)["purity"]
+
+        g = float(jax.grad(purity)(0.7))
+        assert g > 0
+        assert g == pytest.approx(float(central_difference(purity, 0.7)), rel=1e-5)
+
+
 class TestPlatformDSP:
     def test_grad_matches_fd_and_jits(self, harvest):
         def y(cv):

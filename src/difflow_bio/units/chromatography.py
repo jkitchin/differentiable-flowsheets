@@ -149,6 +149,11 @@ class IEXParams(ParamsMixin):
         selectivity: Dict of species -> binding selectivity (0=no binding, 1=strong)
         yield_factor: Recovery yield
         species_order: List of species
+        impurity_clearance: Dict of impurity -> log reduction value (LRV)
+            across the step. An impurity listed here reaches the product
+            as 10**(-LRV) of what was loaded, in either mode, and its
+            selectivity is ignored. Impurities not listed fall back to the
+            selectivity rule. Default: none listed.
     """
     column_volume: float | Array
     mode: Literal["bind_elute", "flow_through"] = "bind_elute"
@@ -158,6 +163,20 @@ class IEXParams(ParamsMixin):
     selectivity: dict = field(default_factory=dict)
     yield_factor: float | Array = 0.90
     species_order: list[str] = None
+    impurity_clearance: dict = field(default_factory=dict)
+
+
+#: Representative impurity clearances (LRV) for the polishing steps of a
+#: platform mAb process, used by the packaged trains. They are not measured
+#: values: they are chosen so that a harvest at ~5% HCP and ~3% aggregate
+#: by mass, after a Protein A step at its defaults, ends near the reported
+#: end-of-process levels: ~10 ppm HCP against a <100 ppm target (Lenhoff &
+#: Herman, BioProcess International, 2023) and aggregate below the usual
+#: <1% target (Evans, PharmTech, 2015). The AEX HCP value matches one
+#: reported flow-through step, 530 to 15 ppm (Liu et al., mAbs 2:480, 2010,
+#: doi:10.4161/mabs.2.5.12645). Replace them with your process's data.
+TYPICAL_CEX_CLEARANCE = {"HCP": 0.5, "DNA": 1.0, "aggregates": 0.7}
+TYPICAL_AEX_CLEARANCE = {"HCP": 1.5, "DNA": 3.0, "aggregates": 0.1}
 
 
 @dataclass(repr=False)
@@ -505,7 +524,13 @@ class IonExchangeChromatography:
             selectivity = p.selectivity.get(species, 0.5)  # Default moderate binding
             selectivity = jnp.asarray(selectivity)
 
-            if p.mode == "bind_elute":
+            if species != p.target_species and species in p.impurity_clearance:
+                # Explicit clearance, either mode: 10**-LRV of the loaded
+                # impurity reaches the product.
+                to_product = mass_loaded * 10.0 ** (-jnp.asarray(p.impurity_clearance[species]))
+                product_flows[species] = to_product
+                waste_flows[species] = mass_unloaded + mass_loaded - to_product
+            elif p.mode == "bind_elute":
                 # High selectivity = binds = goes to product
                 if species == p.target_species:
                     product_flows[species] = mass_loaded * p.yield_factor

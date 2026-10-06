@@ -866,12 +866,42 @@ Ion exchange is used for:
 ```python
 @dataclass
 class IEXParams:
-    column_volume: float   # Column volume (L)
-    q_max: float          # Binding capacity (g/L)
-    type: str             # 'CEX' or 'AEX'
-    mode: str             # 'bind_elute' or 'flow_through'
-    selectivity: Array    # Selectivity factors for species
+    column_volume: float              # Column volume (L)
+    mode: str = "bind_elute"          # 'bind_elute' or 'flow_through'
+    q_max: float = 50.0               # Binding capacity (g/L)
+    K_d: float = 0.5                  # Dissociation constant (g/L)
+    target_species: str = "mAb"
+    selectivity: dict = {}            # species -> binding selectivity (0-1)
+    yield_factor: float = 0.90        # Step recovery of the target
+    impurity_clearance: dict = {}     # impurity -> LRV across the step
 ```
+
+CEX and AEX are the same unit; `mode` and the parameters say which one it
+is. `load_volume` (L) is optional when calling it, and `None` loads the
+whole inlet.
+
+#### Impurity clearance
+
+An impurity listed in `impurity_clearance` reaches the product as
+$10^{-\mathrm{LRV}}$ of what was loaded, in either mode; the rest goes to
+waste. Impurities not listed fall back to a selectivity rule: in
+flow-through mode a fraction `selectivity` binds, and in bind-elute mode
+$s^2 (1 - Y)$ co-elutes with the product. That rule caps carry-over at
+$1 - Y$, so a 90% step would remove at least 90% of every impurity, far
+more than a polishing step removes aggregate. State clearances explicitly
+when purity matters.
+
+`TYPICAL_CEX_CLEARANCE` and `TYPICAL_AEX_CLEARANCE` in the same module are
+the representative values the packaged trains use (CEX: HCP 0.5, DNA 1.0,
+aggregates 0.7; AEX: HCP 1.5, DNA 3.0, aggregates 0.1). They are not
+measured clearances. They are chosen so that a harvest at about 5% HCP
+and 3% aggregate ends near reported end-of-process levels: about 10 ppm
+HCP against a <100 ppm target, and aggregate below the usual 1% target.
+The AEX HCP value matches one reported flow-through step, 530 to 15 ppm
+(Liu et al., *mAbs* 2:480, 2010, doi:10.4161/mabs.2.5.12645). Replace
+them with your own process data. With them, `mAbDSPTrain` reports about
+99.4% purity, 6 ppm HCP and 0.6% aggregate from that harvest, and returns
+`hcp_ppm` and `aggregate_fraction` alongside `purity`.
 
 #### Operating Modes
 

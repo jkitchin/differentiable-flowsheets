@@ -22,6 +22,7 @@ from difflow_bio.units.chromatography import (
     ProteinAChromatography, ProteinAParams,
     IonExchangeChromatography, IEXParams,
     SizeExclusionChromatography, SECParams,
+    TYPICAL_CEX_CLEARANCE, TYPICAL_AEX_CLEARANCE,
 )
 from difflow_bio.units.filtration import (
     Ultrafiltration, UltrafiltrationParams,
@@ -115,6 +116,7 @@ class PlatformDSP:
                     column_volume=params.column_volumes.get("cex", 15.0),
                     mode="bind_elute",
                     target_species=params.target_species,
+                    impurity_clearance=dict(TYPICAL_CEX_CLEARANCE),
                     species_order=params.species_order,
                 ))
             elif step_type == "aex":
@@ -122,6 +124,7 @@ class PlatformDSP:
                     column_volume=params.column_volumes.get("aex", 12.0),
                     mode="flow_through",
                     target_species=params.target_species,
+                    impurity_clearance=dict(TYPICAL_AEX_CLEARANCE),
                     species_order=params.species_order,
                 ))
             else:
@@ -140,7 +143,12 @@ class PlatformDSP:
         # TFF
         self._uf = Ultrafiltration(UltrafiltrationParams(
             membrane_area=params.tff_area,
-            rejection={params.target_species: 0.995},
+            # UF/DF is not credited with impurity clearance: HCP and DNA are retained
+            # like the product, and aggregates, larger than the monomer, slightly
+            # better. Unlisted species default to zero rejection, which washed
+            # 90% of the HCP and aggregates out in the 10x concentration.
+            rejection={params.target_species: 0.995, "HCP": 0.995, "DNA": 0.995,
+                       "aggregates": 0.999},
             species_order=params.species_order,
         ))
 

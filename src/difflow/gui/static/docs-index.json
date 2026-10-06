@@ -1,5 +1,5 @@
 {
- "n_sections": 1078,
+ "n_sections": 1079,
  "sections": [
   {
    "anchor": "agents-the-difflow-mcp-server",
@@ -4685,7 +4685,15 @@
    "path": "Bio-Manufacturing Unit Operations > Chromatography > IonExchangeChromatography > Parameters",
    "source": "unit-operations-bio.md",
    "targets": [],
-   "text": "```python\n@dataclass\nclass IEXParams:\n    column_volume: float   # Column volume (L)\n    q_max: float          # Binding capacity (g/L)\n    type: str             # 'CEX' or 'AEX'\n    mode: str             # 'bind_elute' or 'flow_through'\n    selectivity: Array    # Selectivity factors for species\n```"
+   "text": "```python\n@dataclass\nclass IEXParams:\n    column_volume: float              # Column volume (L)\n    mode: str = \"bind_elute\"          # 'bind_elute' or 'flow_through'\n    q_max: float = 50.0               # Binding capacity (g/L)\n    K_d: float = 0.5                  # Dissociation constant (g/L)\n    target_species: str = \"mAb\"\n    selectivity: dict = {}            # species -> binding selectivity (0-1)\n    yield_factor: float = 0.90        # Step recovery of the target\n    impurity_clearance: dict = {}     # impurity -> LRV across the step\n```\n\nCEX and AEX are the same unit; `mode` and the parameters say which one it\nis. `load_volume` (L) is optional when calling it, and `None` loads the\nwhole inlet."
+  },
+  {
+   "anchor": "impurity-clearance",
+   "heading": "Impurity clearance",
+   "path": "Bio-Manufacturing Unit Operations > Chromatography > IonExchangeChromatography > Impurity clearance",
+   "source": "unit-operations-bio.md",
+   "targets": [],
+   "text": "An impurity listed in `impurity_clearance` reaches the product as\n$10^{-\\mathrm{LRV}}$ of what was loaded, in either mode; the rest goes to\nwaste. Impurities not listed fall back to a selectivity rule: in\nflow-through mode a fraction `selectivity` binds, and in bind-elute mode\n$s^2 (1 - Y)$ co-elutes with the product. That rule caps carry-over at\n$1 - Y$, so a 90% step would remove at least 90% of every impurity, far\nmore than a polishing step removes aggregate. State clearances explicitly\nwhen purity matters.\n\n`TYPICAL_CEX_CLEARANCE` and `TYPICAL_AEX_CLEARANCE` in the same module are\nthe representative values the packaged trains use (CEX: HCP 0.5, DNA 1.0,\naggregates 0.7; AEX: HCP 1.5, DNA 3.0, aggregates 0.1). They are not\nmeasured clearances. They are chosen so that a harvest at about 5% HCP\nand 3% aggregate ends near reported end-of-process levels: about 10 ppm\nHCP against a <100 ppm target, and aggregate below the usual 1% target.\nThe AEX HCP value matches one reported flow-through step, 530 to 15 ppm\n(Liu et al., *mAbs* 2:480, 2010, doi:10.4161/mabs.2.5.12645). Replace\nthem with your own process data. With them, `mAbDSPTrain` reports about\n99.4% purity, 6 ppm HCP and 0.6% aggregate from that harvest, and returns\n`hcp_ppm` and `aggregate_fraction` alongside `purity`."
   },
   {
    "anchor": "operating-modes",
