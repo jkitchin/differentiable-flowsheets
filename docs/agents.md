@@ -8,25 +8,107 @@ editor uses.
 
 ## Installing and connecting
 
-The server needs the MCP SDK, which is an optional extra:
+### Install
+
+The server needs the MCP SDK, which is an optional extra. The `mcp` extra
+first ships in the release after 0.2.2; until then, install from source:
 
 ```bash
+# from PyPI (after 0.2.2)
 pip install "difflow[mcp]"
+
+# from source
+git clone https://github.com/jkitchin/differentiable-flowsheets.git
+cd differentiable-flowsheets
+pip install -e ".[mcp]"
 ```
 
-Register it with Claude Code (or any MCP client that launches a command over
-stdio):
+The install puts a `difflow` command (and `difflow-mcp`, the same thing) on
+the environment's `PATH`. Check it:
+
+```bash
+difflow mcp --help
+```
+
+Without the extra, `difflow mcp` stops with a message naming it. The server
+speaks MCP over stdio: the client starts it as a subprocess and talks to it
+on stdin and stdout, so there is no port to open and nothing to keep
+running between sessions.
+
+### Claude Code
 
 ```bash
 claude mcp add difflow -- difflow mcp
 ```
 
-Two options matter:
+adds it for the current project; `--scope user` makes it available in every
+project, and `--scope project` writes it to `.mcp.json` so the repository
+shares it. `claude mcp list` shows whether it connected, and `/mcp` inside a
+session lists its tools. If difflow lives in a virtual environment Claude
+Code does not start in, give the full path to that environment's command:
+
+```bash
+claude mcp add difflow -- /path/to/venv/bin/difflow mcp
+```
+
+### Claude Desktop and other clients
+
+Any client that launches stdio servers takes the same command. For Claude
+Desktop, add it to `claude_desktop_config.json` (Settings, Developer, Edit
+Config) and restart the app:
+
+```json
+{
+  "mcpServers": {
+    "difflow": {
+      "command": "/path/to/venv/bin/difflow",
+      "args": ["mcp", "--no-exec"]
+    }
+  }
+}
+```
+
+Use the absolute path: a desktop app does not see your shell's `PATH` or
+active environment. `--no-exec` is shown because a desktop client may have no
+other way to run code, and without it the agent can run Python on your
+machine through `run_python` (see the options below).
+
+To try the tools by hand without an agent, the MCP Inspector starts the
+server and lets you call each tool from a browser:
+
+```bash
+npx @modelcontextprotocol/inspector difflow mcp
+```
+
+### Options
 
 | Option | Effect |
 |---|---|
-| `--no-exec` | Leaves out the three tools that run Python: `run_python`, `set_code_context` and `open_file`. Use it for a shared or hosted client. |
+| `--no-exec` | Leaves out the three tools that run Python: `run_python`, `set_code_context` and `open_file`. Use it for a shared or hosted client. Units that need a Python object (a custom rate law, a Peng-Robinson EOS) cannot then be built. |
 | `--timeout S` | Seconds a solve or a Python call may run before the tool returns (default 300). The call keeps running in the background and its session refuses other calls until it ends. A first solve of a large unit can take minutes to compile. |
+
+### A first conversation
+
+Once connected, ask in plain language; the server's instructions and its
+three prompts (`design_flowsheet`, `fix_convergence`, `sensitivity_study`)
+steer the agent through the tools. For example:
+
+- "Open the reactor-recycle example, solve it, and tell me which lever the
+  vapor's ethyl acetate is most sensitive to."
+- "Build a flash drum for an equimolar water and ethanol feed at 362 K and
+  1 atm, and give me the vapor composition."
+- "This flowsheet does not converge. Find out why and fix it."
+- "Maximize 20 times the ethyl acetate in the vapor minus 0.1 times the
+  capital cost over reactor volume between 0.1 and 10 m³."
+
+### Troubleshooting
+
+| Symptom | Cause and fix |
+|---|---|
+| `difflow mcp: difflow mcp needs the MCP SDK` | The `mcp` extra is not installed in the environment the client runs: `pip install "difflow[mcp]"` there. |
+| The client cannot start the server | The command is not on the client's `PATH`; give the absolute path to the environment's `difflow`. |
+| A plugin's units are missing | Ask the agent for `plugin_status`: it lists installed plugins and why any failed to load. An editable install made before a plugin was added needs `pip install -e .` again to register it. |
+| A call returns `timed_out` | A first compile ran past `--timeout`. The work continues; the session answers again when it ends. Raise `--timeout` for large refinery units. |
 
 ## What the tools are
 

@@ -1,5 +1,5 @@
 {
- "n_sections": 1081,
+ "n_sections": 1087,
  "sections": [
   {
    "anchor": "agents-the-difflow-mcp-server",
@@ -10,12 +10,52 @@
    "text": "`difflow mcp` serves difflow's flowsheet tools to an AI agent over the\n[Model Context Protocol](https://modelcontextprotocol.io). An agent connected\nto it can find unit operations, build and edit a flowsheet, solve it, read the\nstreams, and run Python in the same session, with the same engine the browser\neditor uses."
   },
   {
-   "anchor": "installing-and-connecting",
-   "heading": "Installing and connecting",
-   "path": "Agents: the `difflow mcp` server > Installing and connecting",
+   "anchor": "install",
+   "heading": "Install",
+   "path": "Agents: the `difflow mcp` server > Installing and connecting > Install",
    "source": "agents.md",
    "targets": [],
-   "text": "The server needs the MCP SDK, which is an optional extra:\n\n```bash\npip install \"difflow[mcp]\"\n```\n\nRegister it with Claude Code (or any MCP client that launches a command over\nstdio):\n\n```bash\nclaude mcp add difflow -- difflow mcp\n```\n\nTwo options matter:\n\n| Option | Effect |\n|---|---|\n| `--no-exec` | Leaves out the three tools that run Python: `run_python`, `set_code_context` and `open_file`. Use it for a shared or hosted client. |\n| `--timeout S` | Seconds a solve or a Python call may run before the tool returns (default 300). The call keeps running in the background and its session refuses other calls until it ends. A first solve of a large unit can take minutes to compile. |"
+   "text": "The server needs the MCP SDK, which is an optional extra. The `mcp` extra\nfirst ships in the release after 0.2.2; until then, install from source:\n\n```bash\n# from PyPI (after 0.2.2)\npip install \"difflow[mcp]\"\n\n# from source\ngit clone https://github.com/jkitchin/differentiable-flowsheets.git\ncd differentiable-flowsheets\npip install -e \".[mcp]\"\n```\n\nThe install puts a `difflow` command (and `difflow-mcp`, the same thing) on\nthe environment's `PATH`. Check it:\n\n```bash\ndifflow mcp --help\n```\n\nWithout the extra, `difflow mcp` stops with a message naming it. The server\nspeaks MCP over stdio: the client starts it as a subprocess and talks to it\non stdin and stdout, so there is no port to open and nothing to keep\nrunning between sessions."
+  },
+  {
+   "anchor": "claude-code",
+   "heading": "Claude Code",
+   "path": "Agents: the `difflow mcp` server > Installing and connecting > Claude Code",
+   "source": "agents.md",
+   "targets": [],
+   "text": "```bash\nclaude mcp add difflow -- difflow mcp\n```\n\nadds it for the current project; `--scope user` makes it available in every\nproject, and `--scope project` writes it to `.mcp.json` so the repository\nshares it. `claude mcp list` shows whether it connected, and `/mcp` inside a\nsession lists its tools. If difflow lives in a virtual environment Claude\nCode does not start in, give the full path to that environment's command:\n\n```bash\nclaude mcp add difflow -- /path/to/venv/bin/difflow mcp\n```"
+  },
+  {
+   "anchor": "claude-desktop-and-other-clients",
+   "heading": "Claude Desktop and other clients",
+   "path": "Agents: the `difflow mcp` server > Installing and connecting > Claude Desktop and other clients",
+   "source": "agents.md",
+   "targets": [],
+   "text": "Any client that launches stdio servers takes the same command. For Claude\nDesktop, add it to `claude_desktop_config.json` (Settings, Developer, Edit\nConfig) and restart the app:\n\n```json\n{\n  \"mcpServers\": {\n    \"difflow\": {\n      \"command\": \"/path/to/venv/bin/difflow\",\n      \"args\": [\"mcp\", \"--no-exec\"]\n    }\n  }\n}\n```\n\nUse the absolute path: a desktop app does not see your shell's `PATH` or\nactive environment. `--no-exec` is shown because a desktop client may have no\nother way to run code, and without it the agent can run Python on your\nmachine through `run_python` (see the options below).\n\nTo try the tools by hand without an agent, the MCP Inspector starts the\nserver and lets you call each tool from a browser:\n\n```bash\nnpx @modelcontextprotocol/inspector difflow mcp\n```"
+  },
+  {
+   "anchor": "options",
+   "heading": "Options",
+   "path": "Agents: the `difflow mcp` server > Installing and connecting > Options",
+   "source": "agents.md",
+   "targets": [],
+   "text": "| Option | Effect |\n|---|---|\n| `--no-exec` | Leaves out the three tools that run Python: `run_python`, `set_code_context` and `open_file`. Use it for a shared or hosted client. Units that need a Python object (a custom rate law, a Peng-Robinson EOS) cannot then be built. |\n| `--timeout S` | Seconds a solve or a Python call may run before the tool returns (default 300). The call keeps running in the background and its session refuses other calls until it ends. A first solve of a large unit can take minutes to compile. |"
+  },
+  {
+   "anchor": "a-first-conversation",
+   "heading": "A first conversation",
+   "path": "Agents: the `difflow mcp` server > Installing and connecting > A first conversation",
+   "source": "agents.md",
+   "targets": [],
+   "text": "Once connected, ask in plain language; the server's instructions and its\nthree prompts (`design_flowsheet`, `fix_convergence`, `sensitivity_study`)\nsteer the agent through the tools. For example:\n\n- \"Open the reactor-recycle example, solve it, and tell me which lever the\n  vapor's ethyl acetate is most sensitive to.\"\n- \"Build a flash drum for an equimolar water and ethanol feed at 362 K and\n  1 atm, and give me the vapor composition.\"\n- \"This flowsheet does not converge. Find out why and fix it.\"\n- \"Maximize 20 times the ethyl acetate in the vapor minus 0.1 times the\n  capital cost over reactor volume between 0.1 and 10 m\u00b3.\""
+  },
+  {
+   "anchor": "troubleshooting",
+   "heading": "Troubleshooting",
+   "path": "Agents: the `difflow mcp` server > Installing and connecting > Troubleshooting",
+   "source": "agents.md",
+   "targets": [],
+   "text": "| Symptom | Cause and fix |\n|---|---|\n| `difflow mcp: difflow mcp needs the MCP SDK` | The `mcp` extra is not installed in the environment the client runs: `pip install \"difflow[mcp]\"` there. |\n| The client cannot start the server | The command is not on the client's `PATH`; give the absolute path to the environment's `difflow`. |\n| A plugin's units are missing | Ask the agent for `plugin_status`: it lists installed plugins and why any failed to load. An editable install made before a plugin was added needs `pip install -e .` again to register it. |\n| A call returns `timed_out` | A first compile ran past `--timeout`. The work continues; the session answers again when it ends. Raise `--timeout` for large refinery units. |"
   },
   {
    "anchor": "what-the-tools-are",
@@ -1407,7 +1447,15 @@
    "path": "Getting Started > Installation > Dependencies",
    "source": "getting-started.md",
    "targets": [],
-   "text": "Core dependencies are installed automatically:\n\n```\njax>=0.4.0\njaxlib>=0.4.0\nnumpy\npyyaml\n```\n\nFor bio-manufacturing operations:\n\n```bash\npip install -e \".[bio]\"\n```\n\n---"
+   "text": "Core dependencies are installed automatically:\n\n```\njax>=0.4.0\njaxlib>=0.4.0\nnumpy\npyyaml\n```\n\nFor bio-manufacturing operations:\n\n```bash\npip install -e \".[bio]\"\n```"
+  },
+  {
+   "anchor": "using-an-ai-agent",
+   "heading": "Using an AI agent",
+   "path": "Getting Started > Installation > Using an AI agent",
+   "source": "getting-started.md",
+   "targets": [],
+   "text": "difflow can also be driven by an AI agent through its MCP server. Install the\nextra and register the server with your client:\n\n```bash\npip install -e \".[mcp]\"\nclaude mcp add difflow -- difflow mcp\n```\n\nSee {doc}`agents` for other clients, the tools, and troubleshooting.\n\n---"
   },
   {
    "anchor": "your-first-simulation",
