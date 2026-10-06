@@ -159,6 +159,10 @@ from difflow_bio.economics import (
     calculate_cogs,
     calculate_profit,
     cost_per_gram,
+    CostBasis,
+    ProcessSpec,
+    cogs_breakdown,
+    load_cost_model,
 )
 
 # Flowsheets
@@ -324,6 +328,10 @@ __all__ = [
     "calculate_cogs",
     "calculate_profit",
     "cost_per_gram",
+    "CostBasis",
+    "ProcessSpec",
+    "cogs_breakdown",
+    "load_cost_model",
     # Flowsheets
     "mAbDSPTrain",
     "mAbDSPParams",

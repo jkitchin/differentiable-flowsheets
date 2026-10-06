@@ -1,5 +1,5 @@
 {
- "n_sections": 1072,
+ "n_sections": 1074,
  "sections": [
   {
    "anchor": "ask-the-in-browser-docs-assistant",
@@ -4744,6 +4744,22 @@
    "source": "unit-operations-bio.md",
    "targets": [],
    "text": "| Step | Yield | Purity | HCP | DNA |\n|------|-------|--------|-----|-----|\n| Protein A | >95% | >95% | 100-500 ppm | <10 ppb |\n| CEX | >90% | >98% | <50 ppm | <10 ppb |\n| AEX | >95% | >99% | <10 ppm | <1 ppb |\n| Final | >70% overall | >99.5% | <10 ppm | <10 ppb |"
+  },
+  {
+   "anchor": "cost-of-goods",
+   "heading": "Cost of goods",
+   "path": "Bio-Manufacturing Unit Operations > Cost of goods",
+   "source": "unit-operations-bio.md",
+   "targets": [],
+   "text": "`difflow_bio.economics.cogs_breakdown` estimates the annual cost of goods of a\nmAb process step by step, and cost per gram released. The cost follows the\nprocess rather than the batch count alone:\n\n| Item | How it is computed |\n|---|---|\n| Resin | Each chromatography step has its own resin, column volume, capacity and lifetime. Cycles per batch are `load / (DBC x CV)`, at least one, and the resin is replaced every `resin_lifetime_cycles` cycles. |\n| Product mass | The harvest (`working_volume_L x titer_g_L`) runs through the steps in order, each keeping `step_yield` of what it receives, so a step's load depends on everything upstream. |\n| Buffers | Column volumes per cycle for chromatography, litres per m2 for membranes, litres per batch otherwise, each priced from `buffer_usd_L`. |\n| Media | Basal medium, fed-batch feed and seed train, per litre of working volume. |\n| Labor | Fixed support staff, plus operator hours per batch for the upstream train and for each downstream step. |\n| Other | QC per batch, single-use items per step, utilities, liquid waste, maintenance and depreciation on CAPEX. |\n| Failed batches | Batches are charged when started and only `batch_success_rate` of them are released. |\n\nCycles per batch are continuous, `1 + softplus(k (n - 1)) / k` with\n`n = load / (DBC x CV)`, so cost has a derivative with respect to titer,\nbinding capacity, column volume and every yield. `jax.grad` of cost per gram\nwith respect to titer is therefore not just `-cost / titer`: a higher titer\nalso loads the columns harder.\n\n```python\nimport dataclasses\nimport jax\nfrom difflow_bio.economics import load_cost_model, cogs_breakdown\n\nprocess, basis = load_cost_model()          # the shipped reference\nout = cogs_breakdown(process, basis)\nout[\"cost_per_g\"], out[\"steps\"][\"protein_a_capture\"][\"cycles\"]\n\nd_titer = jax.grad(lambda t: cogs_breakdown(\n    dataclasses.replace(process, titer_g_L=t), basis)[\"cost_per_g\"])(5.0)\n```"
+  },
+  {
+   "anchor": "using-your-own-data",
+   "heading": "Using your own data",
+   "path": "Bio-Manufacturing Unit Operations > Cost of goods > Using your own data",
+   "source": "unit-operations-bio.md",
+   "targets": [],
+   "text": "Every price, rate and process specification is data. `load_cost_model(path)`\nreads a YAML or JSON file with a `process` section (bioreactor, batches and\nthe ordered `steps`, each with a `type` of `chromatography`, `filtration` or\n`yield`) and a `basis` section (prices and labor rates). The shipped\n`difflow_bio/economics/data/mab_reference.yaml` is the template: copy it,\nreplace the numbers with your own plant's, and load the copy. Every number\nin it is tagged with its source: `[database]` (copied from the resin\ndatabase), `[carried over]` (the value the older functions used) or\n`[placeholder]` (an order-of-magnitude assumption). **Most are placeholders**,\nand the reference result is not a benchmark; calibrating it against a\npublished cost-of-goods breakdown is still to be done.\n\n`ChromatographyStep.from_resin` builds a step from the resin database\n(capacity derated to 80 % of `q_max`, price and lifetime), and\n`ProcessSpec.from_dict` / `CostBasis.from_dict` build the rest from plain\ndictionaries; unknown keys and unpriced buffers are reported by name.\n\nThe older `estimate_*` functions remain for coarse estimates.\n`estimate_total_opex` now prices each chromatography step with its own resin\n(Protein A capture, then cation and anion exchange) and warns that it is\ndeprecated in favour of `cogs_breakdown`."
   },
   {
    "anchor": "carbon-capture-unit-operations",

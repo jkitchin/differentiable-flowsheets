@@ -1062,3 +1062,62 @@ Harvest (Bioreactor)
 | CEX | >90% | >98% | <50 ppm | <10 ppb |
 | AEX | >95% | >99% | <10 ppm | <1 ppb |
 | Final | >70% overall | >99.5% | <10 ppm | <10 ppb |
+
+## Cost of goods
+
+`difflow_bio.economics.cogs_breakdown` estimates the annual cost of goods of a
+mAb process step by step, and cost per gram released. The cost follows the
+process rather than the batch count alone:
+
+| Item | How it is computed |
+|---|---|
+| Resin | Each chromatography step has its own resin, column volume, capacity and lifetime. Cycles per batch are `load / (DBC x CV)`, at least one, and the resin is replaced every `resin_lifetime_cycles` cycles. |
+| Product mass | The harvest (`working_volume_L x titer_g_L`) runs through the steps in order, each keeping `step_yield` of what it receives, so a step's load depends on everything upstream. |
+| Buffers | Column volumes per cycle for chromatography, litres per m2 for membranes, litres per batch otherwise, each priced from `buffer_usd_L`. |
+| Media | Basal medium, fed-batch feed and seed train, per litre of working volume. |
+| Labor | Fixed support staff, plus operator hours per batch for the upstream train and for each downstream step. |
+| Other | QC per batch, single-use items per step, utilities, liquid waste, maintenance and depreciation on CAPEX. |
+| Failed batches | Batches are charged when started and only `batch_success_rate` of them are released. |
+
+Cycles per batch are continuous, `1 + softplus(k (n - 1)) / k` with
+`n = load / (DBC x CV)`, so cost has a derivative with respect to titer,
+binding capacity, column volume and every yield. `jax.grad` of cost per gram
+with respect to titer is therefore not just `-cost / titer`: a higher titer
+also loads the columns harder.
+
+```python
+import dataclasses
+import jax
+from difflow_bio.economics import load_cost_model, cogs_breakdown
+
+process, basis = load_cost_model()          # the shipped reference
+out = cogs_breakdown(process, basis)
+out["cost_per_g"], out["steps"]["protein_a_capture"]["cycles"]
+
+d_titer = jax.grad(lambda t: cogs_breakdown(
+    dataclasses.replace(process, titer_g_L=t), basis)["cost_per_g"])(5.0)
+```
+
+### Using your own data
+
+Every price, rate and process specification is data. `load_cost_model(path)`
+reads a YAML or JSON file with a `process` section (bioreactor, batches and
+the ordered `steps`, each with a `type` of `chromatography`, `filtration` or
+`yield`) and a `basis` section (prices and labor rates). The shipped
+`difflow_bio/economics/data/mab_reference.yaml` is the template: copy it,
+replace the numbers with your own plant's, and load the copy. Every number
+in it is tagged with its source: `[database]` (copied from the resin
+database), `[carried over]` (the value the older functions used) or
+`[placeholder]` (an order-of-magnitude assumption). **Most are placeholders**,
+and the reference result is not a benchmark; calibrating it against a
+published cost-of-goods breakdown is still to be done.
+
+`ChromatographyStep.from_resin` builds a step from the resin database
+(capacity derated to 80 % of `q_max`, price and lifetime), and
+`ProcessSpec.from_dict` / `CostBasis.from_dict` build the rest from plain
+dictionaries; unknown keys and unpriced buffers are reported by name.
+
+The older `estimate_*` functions remain for coarse estimates.
+`estimate_total_opex` now prices each chromatography step with its own resin
+(Protein A capture, then cation and anion exchange) and warns that it is
+deprecated in favour of `cogs_breakdown`.

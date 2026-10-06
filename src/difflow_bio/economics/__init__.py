@@ -1,5 +1,12 @@
 """Economics module for biopharmaceutical manufacturing.
 
+The cost-of-goods model is :func:`cogs_breakdown`: each chromatography step
+has its own resin and its cycles follow the product load, labor follows the
+batches and steps, and buffers, QC, single-use items and failed batches are
+counted. Prices and the process come from data (:func:`load_cost_model` on a
+YAML or JSON file; ``data/mab_reference.yaml`` is the annotated template).
+The older ``estimate_*`` functions remain for coarse estimates.
+
 Provides cost estimation for:
 - Capital expenditures (CAPEX): equipment, facilities
 - Operating expenditures (OPEX): consumables, labor, utilities
@@ -12,6 +19,18 @@ References:
         DSP cost benchmarking.
 """
 
+from difflow_bio.economics.cogs import (
+    CATEGORIES,
+    REFERENCE,
+    ChromatographyStep,
+    CostBasis,
+    FiltrationStep,
+    ProcessSpec,
+    YieldStep,
+    cogs_breakdown,
+    cycles_per_batch,
+    load_cost_model,
+)
 from difflow_bio.economics.costs import (
     # Cost dataclasses
     ConsumableCosts,
@@ -37,6 +56,17 @@ from difflow_bio.economics.costs import (
 )
 
 __all__ = [
+    # Step-by-step cost of goods (#358)
+    "CATEGORIES",
+    "REFERENCE",
+    "ChromatographyStep",
+    "CostBasis",
+    "FiltrationStep",
+    "ProcessSpec",
+    "YieldStep",
+    "cogs_breakdown",
+    "cycles_per_batch",
+    "load_cost_model",
     # Dataclasses
     "ConsumableCosts",
     "EquipmentCosts",
