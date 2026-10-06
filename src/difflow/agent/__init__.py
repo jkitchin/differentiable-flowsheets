@@ -54,6 +54,18 @@ TOOLS: dict[str, str] = {
     "tear_analysis": "read",
     "trace_solve": "read",
     "get_unit_info": "read",
+    # analysis
+    "levers": "read",
+    "define_quantity": "edit",
+    "remove_quantity": "edit",
+    "list_quantities": "read",
+    "evaluate": "read",
+    "sensitivity": "read",
+    "sweep": "read",
+    "optimize": "edit",
+    "uncertainty": "read",
+    "linearize": "edit",
+    "report": "read",
     # Python
     "run_python": "exec",
 }

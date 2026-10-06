@@ -43,6 +43,7 @@ each package's `__all__`.
 | Building | `set_species`, `set_code_context`, `add_unit`, `update_unit`, `remove_unit`, `connect`, `disconnect`, `set_feed`, `remove_feed` |
 | Running | `set_solver_options`, `solve`, `get_streams` |
 | Diagnosis | `diagnose`, `converge`, `tear_analysis`, `trace_solve`, `get_unit_info` |
+| Analysis | `levers`, `define_quantity`, `remove_quantity`, `list_quantities`, `evaluate`, `sensitivity`, `sweep`, `optimize`, `uncertainty`, `linearize`, `report` |
 | Python | `run_python` |
 
 Each tool is annotated as read-only, editing, or running code, so a client can
@@ -107,6 +108,44 @@ passing remedy, but only a *numerics* one, which changes how the fixed point
 is reached and not which one. A remedy that can change the answer (unclipped
 tears, a cold start) is returned as a proposal to apply with
 `set_solver_options`.
+
+## Objectives as expressions
+
+Analysis in difflow takes functions, and a function cannot cross an MCP
+boundary, so the analysis tools take *expressions*: strings compiled to JAX
+functions of the solved flowsheet, which differentiate exactly as the same
+function written in Python would.
+
+```text
+vapor.F_ethyl_acetate / vapor.total_flow
+20.0 * vapor.F_ethyl_acetate - 0.5 * reactor.V - 1.0 * feed.total_flow
+```
+
+An expression may use `<stream>.<quantity>` (`T`, `P`, `total_flow`,
+`F_<species>`), `<unit>.<param>` (the value at the point evaluated, so it
+follows a lever), named quantities, `+ - * / **`, numbers, `exp log log10 sqrt
+abs min max`, and `econ.<function>` for the functions of `difflow.economics`.
+It is parsed against a whitelist and never evaluated as Python.
+`define_quantity` names an expression (`purity`, `revenue`, `capex`) for reuse
+in others; quantities are saved with the flowsheet.
+
+Levers are what `levers` lists: `"<unit>.<param>"` and
+`"feed:<stream>.<field>"`. With them:
+
+- `sensitivity` ranks every lever by its elasticity, d ln y / d ln u, from
+  one reverse pass through the converged solve;
+- `sweep` solves along one lever and reports outputs and convergence at each
+  point;
+- `optimize` minimizes or maximizes an expression over bounded levers with
+  constraints, using SLSQP with exact gradients, and with `apply=True` writes
+  the optimum into the flowsheet (undoably);
+- `uncertainty` propagates independent normal uncertainty in levers to an
+  output, linearly from the gradient with each lever's share of the variance,
+  and by Monte Carlo when `samples` is set;
+- `linearize` builds the delta vectors of an LP planning model
+  (see {doc}`planning`), and `report` the flowsheet's self-documenting report.
+
+Every result that rests on a solve carries that solve's convergence verdict.
 
 ## Using the tools without MCP
 

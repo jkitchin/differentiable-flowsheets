@@ -546,6 +546,121 @@ class Workbench:
             return err
         return jsonable(fn(s))
 
+    # -- analysis ----------------------------------------------------------------------
+    #
+    # Expressions name <stream>.<quantity> (T, P, total_flow, F_<species>),
+    # <unit>.<param>, named quantities, and econ.<function> from
+    # difflow.economics; levers are "<unit>.<param>" or "feed:<stream>.<field>".
+
+    def _analysis(self, session: str, function: str, timeout: float | None, **kw) -> dict:
+        from difflow.agent import analysis
+        from difflow.agent.expressions import ExpressionError
+
+        s, err = self._get(session)
+        if err:
+            return err
+
+        def run():
+            try:
+                return getattr(analysis, function)(s, **kw)
+            except ExpressionError as exc:
+                return {"ok": False, "error": str(exc)}
+
+        return self._timed(session, run, timeout)
+
+    def levers(self, session: str = "main") -> dict:
+        """Every scalar parameter a derivative or optimizer can move, with its
+        current value and units: "<unit>.<param>" and "feed:<stream>.<field>"."""
+        return self._analysis(session, "levers", None)
+
+    def define_quantity(self, name: str, expression: str,
+                        session: str = "main") -> dict:
+        """Name an expression for reuse in others and in objectives, e.g.
+        name="revenue", expression="12.0 * product.F_B". Saved with the
+        flowsheet.
+
+        Expressions use <stream>.<quantity> (T, P, total_flow, F_<species>),
+        <unit>.<param>, other named quantities, + - * / **, numbers,
+        exp log log10 sqrt abs min max, and econ.<function> from
+        difflow.economics.
+        """
+        return self._analysis(session, "define_quantity", None,
+                              name=name, expression=expression)
+
+    def remove_quantity(self, name: str, session: str = "main") -> dict:
+        """Delete a named quantity."""
+        return self._analysis(session, "remove_quantity", None, name=name)
+
+    def list_quantities(self, session: str = "main") -> dict:
+        """The named quantities defined on this flowsheet."""
+        return self._analysis(session, "list_quantities", None)
+
+    def evaluate(self, expressions: list[str], session: str = "main",
+                 timeout: float | None = None) -> dict:
+        """Values of expressions at the last solve (solving first if needed),
+        e.g. ["vapor.F_ethyl_acetate / vapor.total_flow", "revenue"]."""
+        return self._analysis(session, "evaluate_expressions", timeout,
+                              expressions=expressions)
+
+    def sensitivity(self, of: str, wrt: list[str] | None = None,
+                    session: str = "main", timeout: float | None = None) -> dict:
+        """Exact derivatives of an expression with respect to levers, in one
+        reverse pass through the converged solve, ranked by elasticity
+        (d ln y / d ln u). All scalar levers when wrt is omitted."""
+        return self._analysis(session, "sensitivity", timeout, of=of, wrt=wrt)
+
+    def sweep(self, lever: str, outputs: list[str],
+              values: list[float] | None = None, lo: float | None = None,
+              hi: float | None = None, n: int = 11, session: str = "main",
+              timeout: float | None = None) -> dict:
+        """Solve at each value of one lever (given values, or n points from lo
+        to hi) and report the output expressions and convergence at each."""
+        return self._analysis(session, "sweep", timeout, lever=lever,
+                              outputs=outputs, values=values, lo=lo, hi=hi, n=n)
+
+    def optimize(self, objective: str, levers: dict, constraints: list[dict] | None = None,
+                 maximize: bool = False, max_iter: int = 50, apply: bool = False,
+                 session: str = "main", timeout: float | None = None) -> dict:
+        """Minimize (or maximize) an expression over levers with bounds, using
+        SLSQP with exact gradients through the solve.
+
+        Args:
+            objective: An expression, e.g. "-revenue + cost".
+            levers: {lever: [lower, upper]}, e.g. {"reactor.V": [0.1, 5.0]}.
+            constraints: [{"expression": ..., "lb": ..., "ub": ...}].
+            apply: Write the optimum into the flowsheet when it succeeded.
+        """
+        return self._analysis(session, "optimize", timeout, objective=objective,
+                              levers=levers, constraints=constraints,
+                              maximize=maximize, max_iter=max_iter, apply=apply)
+
+    def uncertainty(self, output: str, uncertain: dict, samples: int = 0,
+                    session: str = "main", timeout: float | None = None) -> dict:
+        """Standard deviation of an output from independent normal uncertainty
+        in levers ({lever: std}): linear propagation from the gradient, with
+        each lever's share of the variance, and Monte Carlo over `samples`
+        solves when asked."""
+        return self._analysis(session, "uncertainty", timeout, output=output,
+                              uncertain=uncertain, samples=samples)
+
+    def linearize(self, u: list[str], y: list[str], radius: float | None = None,
+                  check: bool = False, session: str = "main",
+                  timeout: float | None = None) -> dict:
+        """Delta vectors (the Jacobian of outputs y in <stream>.<quantity> form
+        with respect to levers u) for an LP planning model, with a health
+        check; check=True verifies them against re-solves."""
+        s, err = self._get(session)
+        if err:
+            return err
+        return self._timed(session, lambda: s.linearize(u, y, radius=radius,
+                                                        check=check), timeout)
+
+    def report(self, format: str = "markdown", session: str = "main",
+               timeout: float | None = None) -> dict:
+        """The flowsheet's report: topology, unit parameters with units and
+        equations, results and balance checks ("markdown" or "json")."""
+        return self._analysis(session, "report", timeout, format=format)
+
     # -- Python ---------------------------------------------------------------------
 
     def run_python(self, code: str, session: str = "main",

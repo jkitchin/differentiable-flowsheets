@@ -321,6 +321,23 @@ Deferred: changing the tear set as a remedy (with declared recycles it means
 rewiring, so it is reported by =tear_analysis= rather than tried); EO and
 pounce feasibility as remedies.
 
+** Phase 3 (branch =claude/mcp-phase3=)
+
+Done: the expression language (=difflow.agent.expressions=: an =ast=
+whitelist over streams, unit parameters, named quantities saved in
+=view["quantities"]=, and =econ.<function>= from =difflow.economics= by
+introspection) and the tools =levers=, =define_quantity=,
+=remove_quantity=, =list_quantities=, =evaluate=, =sensitivity=, =sweep=,
+=optimize= (SLSQP with JAX gradients, constraints, =apply=), =uncertainty=
+(linear with variance shares, optional Monte Carlo), =linearize= and
+=report=. All use the session's solver settings rather than
+=make_objective_fn='s defaults. Tests check an expression's gradient against
+the hand-written function's and against finite differences.
+
+Deferred: unit info in expressions (=heater.Q=) needs the solve to return
+unit info under tracing; until then a duty is reachable only through
+=run_python=.
+
 * Evaluation
 
 Beyond unit tests, an agent-level eval: a set of tasks phrased the way a user
