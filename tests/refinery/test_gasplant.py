@@ -383,6 +383,45 @@ def test_factory_converges_from_default_initialization(which, feed_kind):
     assert 0.3 < eta[1] < 1.0
 
 
+def test_log_mmatrix_solve_matches_lu_and_resolves_tiny_flows():
+    from difflow_refinery.gasplant.column import _log_mmatrix_solve
+
+    rng = np.random.default_rng(1)
+    C, N = 3, 12
+    M = -rng.uniform(0, 1, (C, N, N)) * (rng.uniform(size=(C, N, N)) < 0.4)
+    for c in range(C):
+        np.fill_diagonal(M[c], 0.0)
+        np.fill_diagonal(M[c], -M[c].sum(axis=0) + rng.uniform(0.1, 1.0, N))
+    f = rng.uniform(0.0, 1.0, (C, N)) + 1e-3
+    ref = np.log(np.linalg.solve(M, f[..., None])[..., 0])
+    np.testing.assert_allclose(_log_mmatrix_solve(jnp.asarray(M), jnp.asarray(f)), ref,
+                               atol=1e-12)
+    # x_i = a x_(i+1), fed at the bottom: x_i = a^(N-1-i), down to e^-1100,
+    # far under what an LU solve (or even a float) resolves
+    a = np.exp(-100.0)
+    S = np.eye(N)[None].copy()
+    S[0, np.arange(N - 1), np.arange(1, N)] = -a
+    fb = np.full((1, N), 0.0)
+    fb[0, -1] = 1.0
+    got = np.asarray(_log_mmatrix_solve(jnp.asarray(S), jnp.asarray(fb)))[0]
+    np.testing.assert_allclose(got, -100.0 * np.arange(N - 1, -1, -1), atol=1e-9)
+
+
+def test_initial_guess_is_insensitive_to_round_off_in_the_feed():
+    # the deisobutanizer's heavy cut sits ~e^-600 under its feed at the top:
+    # an LU solve put round-off there, a 1e-12 change of a feed moved those
+    # log flows by hundreds, and pass 1 stalled for some feeds (0.2.0's
+    # Publish gate failed on a CI runner's rounding)
+    params, feeds = factory_case("deisobutanizer", "sr")
+    col = GasPlantColumn(params)
+    rng = np.random.default_rng(0)
+    nudged = [{k: (v * (1 + 1e-12 * rng.standard_normal()) if k.startswith("F_") else v)
+               for k, v in f.items()} for f in feeds]
+    gc = col.column
+    x0, x1 = (np.asarray(gc.initial_guess(gc.prepare(col.theta(*fs)))) for fs in (feeds, nudged))
+    assert np.abs(x1 - x0).max() < 1e-6
+
+
 @pytest.mark.release
 @pytest.mark.slow
 def test_deethanizer_with_a_lean_oil_a_hundred_times_the_gas():
