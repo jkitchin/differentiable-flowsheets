@@ -122,11 +122,12 @@ class ViralClearanceTrain:
 
         output = make_stream(out_flows, feed["T"], feed["P"])
 
+        # Values stay JAX arrays so the train can be traced (#360).
         info = {
-            "lrv": float(lrv),
-            "recovery": float(recovery),
-            "pH": float(p.low_pH_value),
-            "hold_time_min": float(p.low_pH_hold_time),
+            "lrv": lrv,
+            "recovery": recovery,
+            "pH": p.low_pH_value,
+            "hold_time_min": p.low_pH_hold_time,
         }
 
         return output, info
@@ -163,13 +164,14 @@ class ViralClearanceTrain:
 
         virus_size = virus_sizes.get(target_virus, 25.0)
 
-        # Size-based LRV
-        if virus_size > p.vf_membrane_pore_nm * 1.5:
-            lrv = 6.0  # Complete removal
-        elif virus_size > p.vf_membrane_pore_nm:
-            lrv = 4.0 + 2.0 * (virus_size / p.vf_membrane_pore_nm - 1.0)
-        else:
-            lrv = 2.0 * (virus_size / p.vf_membrane_pore_nm)
+        # Size-based LRV. jnp.where, not if/elif: the pore size may be a
+        # traced value (#360).
+        ratio = virus_size / p.vf_membrane_pore_nm
+        lrv = jnp.where(
+            ratio > 1.5,
+            6.0,  # Complete removal
+            jnp.where(ratio > 1.0, 4.0 + 2.0 * (ratio - 1.0), 2.0 * ratio),
+        )
 
         lrv = jnp.clip(lrv, 0.0, 6.0)
 
@@ -188,10 +190,10 @@ class ViralClearanceTrain:
         output = make_stream(out_flows, feed["T"], feed["P"])
 
         info = {
-            "lrv": float(lrv),
-            "recovery": float(recovery),
-            "pore_size_nm": float(p.vf_membrane_pore_nm),
-            "area_m2": float(p.vf_area_m2),
+            "lrv": lrv,
+            "recovery": recovery,
+            "pore_size_nm": p.vf_membrane_pore_nm,
+            "area_m2": p.vf_area_m2,
         }
 
         return output, info
@@ -214,7 +216,7 @@ class ViralClearanceTrain:
         target = p.target_species
 
         feed_flows = get_flows(feed)
-        product_in = float(feed_flows.get(target, 0.0))
+        product_in = feed_flows.get(target, 0.0)
 
         # Step 1: Low pH inactivation
         post_low_ph, low_ph_info = self.low_ph_inactivation(feed)
@@ -224,7 +226,7 @@ class ViralClearanceTrain:
 
         # Calculate totals
         final_flows = get_flows(post_vf)
-        product_out = float(final_flows.get(target, 0.0))
+        product_out = final_flows.get(target, 0.0)
         overall_recovery = safe_divide(product_out, product_in)
 
         total_lrv = low_ph_info["lrv"] + vf_info["lrv"]
@@ -233,7 +235,7 @@ class ViralClearanceTrain:
             "product": post_vf,
             "overall_recovery": overall_recovery,
             "total_lrv": total_lrv,
-            "meets_target": total_lrv >= float(p.target_lrv),
+            "meets_target": total_lrv >= p.target_lrv,
             "lrv_breakdown": {
                 "low_pH": low_ph_info["lrv"],
                 "nanofiltration": vf_info["lrv"],

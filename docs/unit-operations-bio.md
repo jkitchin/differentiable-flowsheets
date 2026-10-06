@@ -168,6 +168,7 @@ class FedBatchParams:
     kinetic_params: dict   # Parameters for kinetic function
     k_d: float = 0.0       # Death rate constant (1/h)
     m_s: float = 0.0       # Maintenance coefficient (g/g/h)
+    K_m: float = 0.05      # Half-saturation of maintenance uptake (g/L)
     alpha: float = 0.0     # Growth-associated product formation (g/g)
     beta: float = 0.0      # Non-growth-associated product formation (g/g/h)
     species_order: list = ["cells", "substrate", "product"]
@@ -192,13 +193,19 @@ $$\frac{dV}{dt} = F(t)$$
 
 **Cell Balance**:
 
-$$\frac{d(VX)}{dt} = V(\mu - k_d)X$$
-
-Or: $\frac{dX}{dt} = (\mu - k_d - D)X$ where $D = F/V$
+$$\frac{d(VX)}{dt} = V(\mu - k_d)X - V m_s Y_{X/S} (1 - \phi) X$$
 
 **Substrate Balance**:
 
-$$\frac{d(VS)}{dt} = F \cdot S_f - V\left(\frac{\mu X}{Y_{X/S}} + m_s X\right)$$
+$$\frac{d(VS)}{dt} = F \cdot S_f - V\left(\frac{\mu X}{Y_{X/S}} + m_s \phi X\right), \qquad \phi = \frac{S}{K_m + S}$$
+
+**Maintenance under starvation**: maintenance draws on substrate while
+there is any ($\phi \approx 1$ for $S \gg K_m$) and on biomass when it
+runs out, at the endogenous decay rate $b = m_s Y_{X/S}$ (Pirt, 1965).
+Without the $\phi$ factor, uptake would continue at $m_s X$ after the
+substrate is gone and drive $S$ negative while product kept
+accumulating. `info["S_min"]` reports the lowest substrate concentration
+reached, so a starved run is visible.
 
 **Product Balance**:
 
@@ -234,11 +241,12 @@ def exponential_feed(t):
 
 # Run simulation
 outlet, info = bioreactor(
-    t_span=(0.0, 72.0),  # hours
     X0=0.5,              # Initial cell concentration (g/L)
     S0=20.0,             # Initial substrate (g/L)
-    feed_profile=exponential_feed,
-    S_f=200.0            # Feed substrate concentration
+    P0=0.0,              # Initial product (g/L)
+    t_final=72.0,        # hours
+    feed_rate_fn=exponential_feed,
+    S_feed=200.0,        # Feed substrate concentration (g/L)
 )
 print(f"Final cell concentration: {info['X_final']:.2f} g/L")
 print(f"Final product: {info['P_final']:.2f} g/L")
@@ -738,28 +746,36 @@ Protein A chromatography provides:
 ```python
 @dataclass
 class ProteinAParams:
-    column_volume: float   # Column volume (L)
-    q_max: float          # Maximum binding capacity (g/L resin)
-    K_d: float            # Dissociation constant (M)
-    flow_rate: float      # Operating flow rate (CV/h)
-    residence_time: float # Column residence time (min)
+    column_volume: float          # Column volume (L)
+    q_max: float = 35.0           # Maximum binding capacity (g/L resin)
+    K_d: float = 0.1              # Dissociation constant (g/L)
+    target_species: str = "mAb"
+    yield_factor: float = 0.95    # Elution yield (0-1)
+    impurity_clearance: dict      # impurity -> LRV, default HCP 2, DNA 3, cells 4
+    k_ads: float | None = None    # Adsorption rate (1/min), for kinetic DBC
+    n_plates: float | None = None # Plate count, for elution pool volume
+    elution_cv: float = 2.0       # Elution retention volume (CV)
 ```
 
 #### Inputs
 
 | Parameter | Type | Units | Description |
 |-----------|------|-------|-------------|
-| `load` | Stream | - | Feed stream with mAb |
-| `load_volume` | float | CV | Load volume in column volumes |
+| `inlet` | Stream | - | Feed stream with mAb (component flows as mass) |
+| `load_volume` | float or None | L | Volume of feed loaded. `None` (default) loads the whole inlet; the column capacity, $DBC \cdot V_{column}$, then limits what binds and the excess breaks through |
+| `feed_volume` | float | L | Total feed volume, so `load_volume / feed_volume` is the fraction loaded |
 
 #### Outputs
 
 | Parameter | Type | Units | Description |
 |-----------|------|-------|-------------|
-| `eluate` | Stream | - | Purified mAb |
-| `info['recovery']` | float | - | Step recovery |
+| `product` | Stream | - | Elution pool (purified mAb) |
+| `waste` | Stream | - | Flow-through, wash and column losses |
+| `info['yield']` | float | - | Eluted / loaded target |
 | `info['purity']` | float | - | Product purity |
-| `info['HCP_LRV']` | float | - | HCP log reduction value |
+| `info['mass_loaded']`, `info['mass_bound']` | float | mass | Target loaded and bound (bound is capped by capacity) |
+| `info['capacity_utilization']` | float | - | Bound mass / column capacity |
+| `info['impurity_clearance']` | dict | LRV | Clearance applied per impurity |
 | `info['DNA_LRV']` | float | - | DNA log reduction value |
 | `info['DBC']` | float | g/L | Dynamic binding capacity |
 
@@ -804,20 +820,21 @@ $$LRV = \log_{10}\left(\frac{C_{in}}{C_{out}}\right)$$
 ```python
 from difflow_bio.units.chromatography import ProteinAChromatography, ProteinAParams
 
+from difflow import make_stream
+
 params = ProteinAParams(
     column_volume=10.0,    # L
     q_max=35.0,            # g/L (typical for MabSelect)
-    K_d=1e-8,              # M (very tight binding)
-    flow_rate=2.0,         # CV/h
-    residence_time=6.0     # min
 )
 
 protein_a = ProteinAChromatography(params)
-load = make_stream({'mAb': 5.0, 'HCP': 5.0, 'DNA': 0.1}, T=298.0, P=101325.0)
+load = make_stream({'mAb': 250.0, 'HCP': 5.0, 'DNA': 0.1}, T=298.0, P=101325.0)
 
-eluate, info = protein_a(load, load_volume=25)  # 25 CV = 250 L
-print(f"Recovery: {info['recovery']:.2%}")
-print(f"HCP clearance: {info['HCP_LRV']:.1f} LRV")
+# Load the whole batch: 250 g of mAb on a 10 L column (346.5 g capacity)
+(eluate, waste), info = protein_a(load)
+print(f"Yield: {float(info['yield']):.2%}")
+print(f"Capacity used: {float(info['capacity_utilization']):.0%}")
+print(f"HCP clearance: {info['impurity_clearance']['HCP']:.1f} LRV")
 ```
 
 ---
@@ -849,12 +866,42 @@ Ion exchange is used for:
 ```python
 @dataclass
 class IEXParams:
-    column_volume: float   # Column volume (L)
-    q_max: float          # Binding capacity (g/L)
-    type: str             # 'CEX' or 'AEX'
-    mode: str             # 'bind_elute' or 'flow_through'
-    selectivity: Array    # Selectivity factors for species
+    column_volume: float              # Column volume (L)
+    mode: str = "bind_elute"          # 'bind_elute' or 'flow_through'
+    q_max: float = 50.0               # Binding capacity (g/L)
+    K_d: float = 0.5                  # Dissociation constant (g/L)
+    target_species: str = "mAb"
+    selectivity: dict = {}            # species -> binding selectivity (0-1)
+    yield_factor: float = 0.90        # Step recovery of the target
+    impurity_clearance: dict = {}     # impurity -> LRV across the step
 ```
+
+CEX and AEX are the same unit; `mode` and the parameters say which one it
+is. `load_volume` (L) is optional when calling it, and `None` loads the
+whole inlet.
+
+#### Impurity clearance
+
+An impurity listed in `impurity_clearance` reaches the product as
+$10^{-\mathrm{LRV}}$ of what was loaded, in either mode; the rest goes to
+waste. Impurities not listed fall back to a selectivity rule: in
+flow-through mode a fraction `selectivity` binds, and in bind-elute mode
+$s^2 (1 - Y)$ co-elutes with the product. That rule caps carry-over at
+$1 - Y$, so a 90% step would remove at least 90% of every impurity, far
+more than a polishing step removes aggregate. State clearances explicitly
+when purity matters.
+
+`TYPICAL_CEX_CLEARANCE` and `TYPICAL_AEX_CLEARANCE` in the same module are
+the representative values the packaged trains use (CEX: HCP 0.5, DNA 1.0,
+aggregates 0.7; AEX: HCP 1.5, DNA 3.0, aggregates 0.1). They are not
+measured clearances. They are chosen so that a harvest at about 5% HCP
+and 3% aggregate ends near reported end-of-process levels: about 10 ppm
+HCP against a <100 ppm target, and aggregate below the usual 1% target.
+The AEX HCP value matches one reported flow-through step, 530 to 15 ppm
+(Liu et al., *mAbs* 2:480, 2010, doi:10.4161/mabs.2.5.12645). Replace
+them with your own process data. With them, `mAbDSPTrain` reports about
+99.4% purity, 6 ppm HCP and 0.6% aggregate from that harvest, and returns
+`hcp_ppm` and `aggregate_fraction` alongside `purity`.
 
 #### Operating Modes
 
