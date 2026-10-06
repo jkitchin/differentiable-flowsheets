@@ -298,6 +298,45 @@ class TestGradientsThroughDiffrax:
         assert jnp.isfinite(grad)
 
 
+class TestJitAndVmap:
+    """Issue #361: integrate_diffrax must trace under jit and vmap.
+
+    The solver statistics used to be converted with int(), which raises
+    ConcretizationTypeError on a tracer and so made every diffrax
+    integration impossible to jit or vmap.
+    """
+
+    def test_jit_through_integrate_diffrax(self):
+        def y_final(k):
+            return integrate_diffrax(
+                lambda t, y: -k * y, jnp.array([1.0]), (0.0, 1.0)
+            ).y_final[0]
+
+        assert float(jax.jit(y_final)(2.0)) == pytest.approx(
+            float(jnp.exp(-2.0)), rel=1e-5
+        )
+
+    def test_vmap_and_jit_grad(self):
+        def y_final(k):
+            return integrate_diffrax(
+                lambda t, y: -k * y, jnp.array([1.0]), (0.0, 1.0)
+            ).y_final[0]
+
+        ks = jnp.array([0.5, 1.0, 2.0])
+        assert jnp.allclose(jax.vmap(y_final)(ks), jnp.exp(-ks), rtol=1e-5)
+        # d/dk exp(-k) = -exp(-k)
+        assert float(jax.jit(jax.grad(y_final))(1.0)) == pytest.approx(
+            float(-jnp.exp(-1.0)), rel=1e-4
+        )
+
+    def test_stats_are_arrays_and_counted(self):
+        result = integrate_diffrax(
+            lambda t, y: -y, jnp.array([1.0]), (0.0, 1.0)
+        )
+        assert int(result.info.n_steps) > 0
+        assert int(result.info.n_eval) >= int(result.info.n_steps)
+
+
 # =============================================================================
 # Example 5: Flowsheet with Diffrax
 # =============================================================================
