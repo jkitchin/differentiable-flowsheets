@@ -38,7 +38,10 @@ Invariants encoded in the gas plant (do not weaken them):
   to a 1e-12 feed perturbation; keep it that way.
 - Pass 1 that does not converge is retried from guesses at half and twice
   `reflux_guess` (`GasColumn._pass1`); one that converges is never retried, so
-  those columns keep their iterates. With the exact guess the C3/C4 splitter
+  those columns keep their iterates. The retries are ONE `lax.while_loop` over
+  the refluxes, so `_pass1` is traced once: a `lax.cond` per retry (0.2.1)
+  compiled three copies, grew every jit/jacfwd through a column by a quarter
+  (DIH `jacfwd` 10.7 -> 13.3 GB) and ran a Publish-gate runner out of memory. With the exact guess the C3/C4 splitter
   on an FCC feed stalls from reflux 2 every time and converges from 1 or 4
   (on the LU guess it passed or failed by round-off: 3 of 8 perturbed feeds
   failed).

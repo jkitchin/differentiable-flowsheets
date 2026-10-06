@@ -39,7 +39,7 @@ References:
     Baker RW (2012). Membrane Technology and Applications, 3rd ed.
 """
 
-__version__ = "0.2.1"
+__version__ = "0.2.2"
 
 # =============================================================================
 # Database Access
