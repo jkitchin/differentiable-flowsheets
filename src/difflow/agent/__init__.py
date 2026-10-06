@@ -24,6 +24,7 @@ TOOLS: dict[str, str] = {
     "search_species": "read",
     "search_docs": "read",
     "list_examples": "read",
+    "plugin_guide": "read",
     # sessions
     "list_sessions": "read",
     "new_session": "edit",
@@ -48,6 +49,24 @@ TOOLS: dict[str, str] = {
     "set_solver_options": "edit",
     "solve": "edit",
     "get_streams": "read",
+    # diagnosis and convergence
+    "diagnose": "read",
+    "converge": "edit",
+    "tear_analysis": "read",
+    "trace_solve": "read",
+    "get_unit_info": "read",
+    # analysis
+    "levers": "read",
+    "define_quantity": "edit",
+    "remove_quantity": "edit",
+    "list_quantities": "read",
+    "evaluate": "read",
+    "sensitivity": "read",
+    "sweep": "read",
+    "optimize": "edit",
+    "uncertainty": "read",
+    "linearize": "edit",
+    "report": "read",
     # Python
     "run_python": "exec",
 }

@@ -47,6 +47,11 @@ class FlashParams(ParamsMixin):
             raise ValueError("species_order contains duplicate species names")
 
 
+
+#: Relative component-balance residual above which a flash's inner solve is
+#: reported as not converged (``info["converged"]``).
+INNER_BALANCE_TOL = 1e-6
+
 class Flash:
     """Flash separator with TP specification.
 
@@ -221,8 +226,17 @@ class Flash:
             jnp.where(dew_check < 1.0, 2, 0),
         )
 
+        # Component balance of the streams actually returned. Rachford-Rice
+        # runs without a convergence check and y is clipped and renormalised
+        # afterwards, so a failed solve shows up here and nowhere else; a
+        # single-phase answer (V_frac at 0 or 1) closes it exactly.
+        balance_residual = jnp.max(jnp.abs(L * x + V * y - F_total * z)) / \
+            jnp.maximum(F_total, 1e-30)
+
         # Build info dict
         info = {
+            "balance_residual": balance_residual,
+            "converged": balance_residual < INNER_BALANCE_TOL,
             "V_frac": V_frac,
             "K": {s: K[i] for i, s in enumerate(p.species_order)},
             "x": {s: x[i] for i, s in enumerate(p.species_order)},
