@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "difflow"
-version = "0.2.0"
+version = "0.2.1"
 description = "Differentiable flowsheet framework for chemical processes"
 readme = "README.md"
 requires-python = ">=3.11"

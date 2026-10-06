@@ -6,6 +6,19 @@ All notable changes to difflow are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-05
+
+### Fixed
+
+- Gas plant columns: the initial guess solved its component balances by an LU
+  solve, which returns round-off for a heavy cut at the top of a long
+  column (true ~e^-600). A 1e-12 change of a feed, or a different CPU's
+  rounding, moved those log flows by hundreds and the deisobutanizer's first
+  Newton pass could stall on a near-singular Jacobian (this failed the 0.2.0
+  Publish gate, so 0.2.0 never reached PyPI). The guess now eliminates the
+  M-matrix without pivoting in logs: every gas plant factory case converges in
+  the same iterations under feed perturbations.
+
 ## [0.2.0] - 2026-10-05
 
 ### Breaking
@@ -87,6 +100,7 @@ All notable changes to difflow are recorded here. The format follows
 
 First public release.
 
-[Unreleased]: https://github.com/jkitchin/differentiable-flowsheets/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/jkitchin/differentiable-flowsheets/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/jkitchin/differentiable-flowsheets/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/jkitchin/differentiable-flowsheets/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/jkitchin/differentiable-flowsheets/releases/tag/v0.1.0

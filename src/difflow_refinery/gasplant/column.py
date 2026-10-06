@@ -82,6 +82,44 @@ RVP_VL_RATIO = 4.0
 #: Floor on every component's feed, relative to the column's total feed
 #: (see :meth:`GasColumn.feed_flows`).
 FEED_FLOOR = 1e-30
+#: Floor on an initial-guess log flow (1e-300).
+_LOG_TINY = -690.7755278982137
+
+
+def _log_mmatrix_solve(M, f):
+    """``log(M^-1 f)`` for a batch of M-matrices and non-negative ``f``.
+
+    ``M`` is ``(C, N, N)`` with a positive diagonal and non-positive
+    off-diagonals, column diagonally dominant (the initial guess's component
+    balances), and ``f`` is ``(C, N)``. Gaussian elimination without pivoting
+    keeps every off-diagonal of such a matrix non-positive, so eliminating the
+    right-hand side and back-substituting only ever ADD non-negative terms:
+    done in logs, a heavy cut's flow at the top of a long column comes out as
+    e^-600 to full relative accuracy instead of as the round-off of an LU
+    solve (which a 1e-12 change of a feed moved by hundreds in the log, and
+    with it the whole first Newton pass).
+    """
+    C, N, _ = M.shape
+    idx = jnp.arange(N)
+    logneg = lambda a: jnp.log(jnp.maximum(-a, 0.0))
+
+    def elim(k, s):
+        U, d = s
+        piv = U[:, k, k]
+        m = jnp.where(idx > k, U[:, :, k] / piv[:, None], 0.0)          # (C, N) <= 0
+        U = U - m[:, :, None] * U[:, k, None, :]
+        d = jnp.logaddexp(d, logneg(m) + d[:, k, None])
+        return U, d
+
+    U, d = jax.lax.fori_loop(0, N, elim, (M, jnp.log(f)))
+
+    def back(j, x):
+        i = N - 1 - j
+        terms = jnp.where(idx > i, logneg(U[:, i, :]) + x, -jnp.inf)    # (C, N)
+        xi = jnp.logaddexp(d[:, i], jax.nn.logsumexp(terms, axis=1)) - jnp.log(U[:, i, i])
+        return x.at[:, i].set(xi)
+
+    return jax.lax.fori_loop(0, N, back, jnp.full((C, N), -jnp.inf))
 
 
 @dataclass(frozen=True)
@@ -638,18 +676,16 @@ class GasColumn(StageColumn):
             for r in lay.routes:
                 if r.dest is not None:
                     M = M.at[:, r.dest, r.source].add(-weights[r.name])
-            l = jnp.linalg.solve(M, fmat.T[..., None])[..., 0].T  # (N, C)
-            l = jnp.maximum(l, 1e-300)
-            return l, A * l
+            ll = _log_mmatrix_solve(M, fmat.T).T                 # (N, C)
+            lv = jnp.log(A) + ll
+            ll, lv = jnp.maximum(ll, _LOG_TINY), jnp.maximum(lv, _LOG_TINY)
+            return ll, lv
 
         for _ in range(6):
-            l, v = sweep(T)
-            Tn = wilson_bubble_T(thermo, l, P)
+            ll, _ = sweep(T)
+            Tn = wilson_bubble_T(thermo, jnp.exp(ll), P)
             T = jnp.clip(Tn, T - 30.0, T + 30.0)
-        l, v = sweep(T)
-        # normalise each stage to its CMO totals (the linear solve with fixed
-        # routing conserves components, not the CMO profile)
-        ll, lv = jnp.log(l), jnp.log(jnp.maximum(v, 1e-300))
+        ll, lv = sweep(T)
         # freed knobs start from their own values, freed duties at zero; then
         # a freed condenser or reboiler duty is set where its stage's energy
         # balance closes on the guess

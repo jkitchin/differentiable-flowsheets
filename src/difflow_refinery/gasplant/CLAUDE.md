@@ -28,6 +28,14 @@ Invariants encoded in the gas plant (do not weaken them):
   e^-600 low and the +5 clip took 120 iterations). The vacuum column's own
   `StageColumn.newton` is unchanged. A pseudo-root for the missing phase was
   tried and is NOT needed: the LM step alone converges both cases.
+- The initial guess solves its component balances (M-matrices) by
+  elimination WITHOUT pivoting in logs (`_log_mmatrix_solve`), never by
+  `jnp.linalg.solve`: an LU solve returns round-off for a heavy cut at the
+  top of a long column (true e^-600), a 1e-12 change of a feed moved those
+  log flows by hundreds, and the deisobutanizer's pass 1 then stalled on a
+  near-singular J for some feeds (and some CI runners: the 0.2.0 Publish
+  gate). `tests/refinery/test_gasplant.py` checks the guess is insensitive
+  to a 1e-12 feed perturbation; keep it that way.
 - O'Connell is the factories' default tray efficiency; `tray_efficiency=1.0`
   gives theoretical stages. The IDAES cross-check uses 1.0 on both sides.
 - RVP is the D323 construction on the same EOS, never a correlation.
