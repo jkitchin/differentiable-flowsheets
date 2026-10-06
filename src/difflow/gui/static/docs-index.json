@@ -1,5 +1,5 @@
 {
- "n_sections": 1082,
+ "n_sections": 1088,
  "sections": [
   {
    "anchor": "agents-the-difflow-mcp-server",
@@ -10,12 +10,52 @@
    "text": "`difflow mcp` serves difflow's flowsheet tools to an AI agent over the\n[Model Context Protocol](https://modelcontextprotocol.io). An agent connected\nto it can find unit operations, build and edit a flowsheet, solve it, read the\nstreams, and run Python in the same session, with the same engine the browser\neditor uses."
   },
   {
-   "anchor": "installing-and-connecting",
-   "heading": "Installing and connecting",
-   "path": "Agents: the `difflow mcp` server > Installing and connecting",
+   "anchor": "install",
+   "heading": "Install",
+   "path": "Agents: the `difflow mcp` server > Installing and connecting > Install",
    "source": "agents.md",
    "targets": [],
-   "text": "The server needs the MCP SDK, which is an optional extra:\n\n```bash\npip install \"difflow[mcp]\"\n```\n\nRegister it with Claude Code (or any MCP client that launches a command over\nstdio):\n\n```bash\nclaude mcp add difflow -- difflow mcp\n```\n\nTwo options matter:\n\n| Option | Effect |\n|---|---|\n| `--no-exec` | Leaves out the three tools that run Python: `run_python`, `set_code_context` and `open_file`. Use it for a shared or hosted client. |\n| `--timeout S` | Seconds a solve or a Python call may run before the tool returns (default 300). The call keeps running in the background and its session refuses other calls until it ends. A first solve of a large unit can take minutes to compile. |"
+   "text": "The server needs the MCP SDK, which is an optional extra. The `mcp` extra\nfirst ships in the release after 0.2.2; until then, install from source:\n\n```bash\n# from PyPI (after 0.2.2)\npip install \"difflow[mcp]\"\n\n# from source\ngit clone https://github.com/jkitchin/differentiable-flowsheets.git\ncd differentiable-flowsheets\npip install -e \".[mcp]\"\n```\n\nThe install puts a `difflow` command (and `difflow-mcp`, the same thing) on\nthe environment's `PATH`. Check it:\n\n```bash\ndifflow mcp --help\n```\n\nWithout the extra, `difflow mcp` stops with a message naming it. The server\nspeaks MCP over stdio: the client starts it as a subprocess and talks to it\non stdin and stdout, so there is no port to open and nothing to keep\nrunning between sessions."
+  },
+  {
+   "anchor": "claude-code",
+   "heading": "Claude Code",
+   "path": "Agents: the `difflow mcp` server > Installing and connecting > Claude Code",
+   "source": "agents.md",
+   "targets": [],
+   "text": "```bash\nclaude mcp add difflow -- difflow mcp\n```\n\nadds it for the current project; `--scope user` makes it available in every\nproject, and `--scope project` writes it to `.mcp.json` so the repository\nshares it. `claude mcp list` shows whether it connected, and `/mcp` inside a\nsession lists its tools. If difflow lives in a virtual environment Claude\nCode does not start in, give the full path to that environment's command:\n\n```bash\nclaude mcp add difflow -- /path/to/venv/bin/difflow mcp\n```"
+  },
+  {
+   "anchor": "claude-desktop-and-other-clients",
+   "heading": "Claude Desktop and other clients",
+   "path": "Agents: the `difflow mcp` server > Installing and connecting > Claude Desktop and other clients",
+   "source": "agents.md",
+   "targets": [],
+   "text": "Any client that launches stdio servers takes the same command. For Claude\nDesktop, add it to `claude_desktop_config.json` (Settings, Developer, Edit\nConfig) and restart the app:\n\n```json\n{\n  \"mcpServers\": {\n    \"difflow\": {\n      \"command\": \"/path/to/venv/bin/difflow\",\n      \"args\": [\"mcp\", \"--no-exec\"]\n    }\n  }\n}\n```\n\nUse the absolute path: a desktop app does not see your shell's `PATH` or\nactive environment. `--no-exec` is shown because a desktop client may have no\nother way to run code, and without it the agent can run Python on your\nmachine through `run_python` (see the options below).\n\nTo try the tools by hand without an agent, the MCP Inspector starts the\nserver and lets you call each tool from a browser:\n\n```bash\nnpx @modelcontextprotocol/inspector difflow mcp\n```"
+  },
+  {
+   "anchor": "options",
+   "heading": "Options",
+   "path": "Agents: the `difflow mcp` server > Installing and connecting > Options",
+   "source": "agents.md",
+   "targets": [],
+   "text": "| Option | Effect |\n|---|---|\n| `--no-exec` | Leaves out the three tools that run Python: `run_python`, `set_code_context` and `open_file`. Use it for a shared or hosted client. Units that need a Python object (a custom rate law, a Peng-Robinson EOS) cannot then be built. |\n| `--timeout S` | Seconds a solve or a Python call may run before the tool returns (default 300). The call keeps running in the background and its session refuses other calls until it ends. A first solve of a large unit can take minutes to compile. |"
+  },
+  {
+   "anchor": "a-first-conversation",
+   "heading": "A first conversation",
+   "path": "Agents: the `difflow mcp` server > Installing and connecting > A first conversation",
+   "source": "agents.md",
+   "targets": [],
+   "text": "Once connected, ask in plain language; the server's instructions and its\nthree prompts (`design_flowsheet`, `fix_convergence`, `sensitivity_study`)\nsteer the agent through the tools. For example:\n\n- \"Open the reactor-recycle example, solve it, and tell me which lever the\n  vapor's ethyl acetate is most sensitive to.\"\n- \"Build a flash drum for an equimolar water and ethanol feed at 362 K and\n  1 atm, and give me the vapor composition.\"\n- \"This flowsheet does not converge. Find out why and fix it.\"\n- \"Maximize 20 times the ethyl acetate in the vapor minus 0.1 times the\n  capital cost over reactor volume between 0.1 and 10 m\u00b3.\""
+  },
+  {
+   "anchor": "troubleshooting",
+   "heading": "Troubleshooting",
+   "path": "Agents: the `difflow mcp` server > Installing and connecting > Troubleshooting",
+   "source": "agents.md",
+   "targets": [],
+   "text": "| Symptom | Cause and fix |\n|---|---|\n| `difflow mcp: difflow mcp needs the MCP SDK` | The `mcp` extra is not installed in the environment the client runs: `pip install \"difflow[mcp]\"` there. |\n| The client cannot start the server | The command is not on the client's `PATH`; give the absolute path to the environment's `difflow`. |\n| A plugin's units are missing | Ask the agent for `plugin_status`: it lists installed plugins and why any failed to load. An editable install made before a plugin was added needs `pip install -e .` again to register it. |\n| A call returns `timed_out` | A first compile ran past `--timeout`. The work continues; the session answers again when it ends. Raise `--timeout` for large refinery units. |"
   },
   {
    "anchor": "what-the-tools-are",
@@ -23,7 +63,7 @@
    "path": "Agents: the `difflow mcp` server > What the tools are",
    "source": "agents.md",
    "targets": [],
-   "text": "Nothing in the tool layer is a hand-written list of units. Operations come\nfrom the plugin registry and the catalog, so a newly installed plugin's units\nare usable at once; libraries that are not unit operations (planning,\nstochastic programming, the refinery reformer and FCC) are found by reading\neach package's `__all__`.\n\n| Group | Tools |\n|---|---|\n| Discovery | `plugin_status`, `plugin_guide`, `list_operations`, `describe_operation`, `list_api`, `describe_api`, `search_species`, `search_docs`, `list_examples` |\n| Sessions | `list_sessions`, `new_session`, `close_session`, `open_example`, `open_file`, `save`, `open_in_editor`, `undo`, `redo`, `get_flowsheet` |\n| Building | `set_species`, `set_code_context`, `add_unit`, `update_unit`, `remove_unit`, `connect`, `disconnect`, `set_feed`, `remove_feed` |\n| Running | `set_solver_options`, `solve`, `get_streams` |\n| Diagnosis | `diagnose`, `converge`, `tear_analysis`, `trace_solve`, `get_unit_info` |\n| Analysis | `levers`, `define_quantity`, `remove_quantity`, `list_quantities`, `evaluate`, `sensitivity`, `sweep`, `optimize`, `uncertainty`, `linearize`, `report` |\n| Python | `run_python` |\n\nEach tool is annotated as read-only, editing, or running code, so a client can\nask before the last kind. A tool that can run long (a solve, a search, Python)\nsends a progress notification every few seconds while it works, so a client\nwaiting on a first compile knows the call is alive. The server also offers\nthree prompts, `design_flowsheet`, `fix_convergence` and `sensitivity_study`,\nas starting points for those workflows.\n\n`open_in_editor` saves the flowsheet and opens it in the browser editor, so a\nperson can see what an agent built. The editor runs on the saved file in its\nown process; its edits reach the agent's session when `open_file` reads the\nfile again. A session holds one flowsheet; every tool takes a\n`session` argument (default `\"main\"`), so a base case and a variant can be\nkept side by side."
+   "text": "Nothing in the tool layer is a hand-written list of units. Operations come\nfrom the plugin registry and the catalog, so a newly installed plugin's units\nare usable at once; libraries that are not unit operations (planning,\nstochastic programming, the refinery reformer and FCC) are found by reading\neach package's `__all__`.\n\n| Group | Tools |\n|---|---|\n| Discovery | `plugin_status`, `plugin_guide`, `list_operations`, `describe_operation`, `list_api`, `describe_api`, `search_species`, `search_docs`, `list_examples` |\n| Sessions | `list_sessions`, `new_session`, `close_session`, `open_example`, `open_file`, `save`, `open_in_editor`, `undo`, `redo`, `get_flowsheet` |\n| Building | `set_species`, `set_code_context`, `add_unit`, `update_unit`, `remove_unit`, `connect`, `disconnect`, `set_feed`, `remove_feed` |\n| Running | `set_solver_options`, `solve`, `get_streams` |\n| Diagnosis | `diagnose`, `converge`, `tear_analysis`, `trace_solve`, `get_unit_info` |\n| Analysis | `levers`, `define_quantity`, `remove_quantity`, `list_quantities`, `evaluate`, `sensitivity`, `sweep`, `optimize`, `uncertainty`, `linearize`, `tea`, `report` |\n| Python | `run_python` |\n\nEach tool is annotated as read-only, editing, or running code, so a client can\nask before the last kind. A tool that can run long (a solve, a search, Python)\nsends a progress notification every few seconds while it works, so a client\nwaiting on a first compile knows the call is alive. The server also offers\nthree prompts, `design_flowsheet`, `fix_convergence` and `sensitivity_study`,\nas starting points for those workflows.\n\n`open_in_editor` saves the flowsheet and opens it in the browser editor, so a\nperson can see what an agent built. The editor runs on the saved file in its\nown process; its edits reach the agent's session when `open_file` reads the\nfile again. A session holds one flowsheet; every tool takes a\n`session` argument (default `\"main\"`), so a base case and a variant can be\nkept side by side."
   },
   {
    "anchor": "how-a-flowsheet-is-built",
@@ -55,7 +95,7 @@
    "path": "Agents: the `difflow mcp` server > Objectives as expressions",
    "source": "agents.md",
    "targets": [],
-   "text": "Analysis in difflow takes functions, and a function cannot cross an MCP\nboundary, so the analysis tools take *expressions*: strings compiled to JAX\nfunctions of the solved flowsheet, which differentiate exactly as the same\nfunction written in Python would.\n\n```text\nvapor.F_ethyl_acetate / vapor.total_flow\n20.0 * vapor.F_ethyl_acetate - 0.5 * reactor.V - 1.0 * feed.total_flow\n```\n\nAn expression may use `<stream>.<quantity>` (`T`, `P`, `total_flow`,\n`F_<species>`), `<unit>.<param>` (the value at the point evaluated, so it\nfollows a lever), named quantities, `+ - * / **`, numbers, `exp log log10 sqrt\nabs min max`, and `econ.<function>` for the functions of `difflow.economics`.\nIt is parsed against a whitelist and never evaluated as Python.\n`define_quantity` names an expression (`purity`, `revenue`, `capex`) for reuse\nin others; quantities are saved with the flowsheet.\n\nLevers are what `levers` lists: `\"<unit>.<param>\"` and\n`\"feed:<stream>.<field>\"`. With them:\n\n- `sensitivity` ranks every lever by its elasticity, d ln y / d ln u, from\n  one reverse pass through the converged solve;\n- `sweep` solves along one lever and reports outputs and convergence at each\n  point;\n- `optimize` minimizes or maximizes an expression over bounded levers with\n  constraints, using SLSQP with exact gradients, and with `apply=True` writes\n  the optimum into the flowsheet (undoably);\n- `uncertainty` propagates independent normal uncertainty in levers to an\n  output, linearly from the gradient with each lever's share of the variance,\n  and by Monte Carlo when `samples` is set;\n- `linearize` builds the delta vectors of an LP planning model\n  (see {doc}`planning`), and `report` the flowsheet's self-documenting report.\n\nEvery result that rests on a solve carries that solve's convergence verdict."
+   "text": "Analysis in difflow takes functions, and a function cannot cross an MCP\nboundary, so the analysis tools take *expressions*: strings compiled to JAX\nfunctions of the solved flowsheet, which differentiate exactly as the same\nfunction written in Python would.\n\n```text\nvapor.F_ethyl_acetate / vapor.total_flow\n20.0 * vapor.F_ethyl_acetate - 0.5 * reactor.V - 1.0 * feed.total_flow\n```\n\nAn expression may use `<stream>.<quantity>` (`T`, `P`, `total_flow`,\n`F_<species>`), `<unit>.<param>` (the value at the point evaluated, so it\nfollows a lever), named quantities, `+ - * / **`, numbers, `exp log log10 sqrt\nabs min max`, and `econ.<function>` for the functions of `difflow.economics`.\nIt is parsed against a whitelist and never evaluated as Python.\n`define_quantity` names an expression (`purity`, `revenue`, `capex`) for reuse\nin others; quantities are saved with the flowsheet.\n\nLevers are what `levers` lists: `\"<unit>.<param>\"` and\n`\"feed:<stream>.<field>\"`. With them:\n\n- `sensitivity` ranks every lever by its elasticity, d ln y / d ln u, from\n  one reverse pass through the converged solve;\n- `sweep` solves along one lever and reports outputs and convergence at each\n  point;\n- `optimize` minimizes or maximizes an expression over bounded levers with\n  constraints, using SLSQP with exact gradients, and with `apply=True` writes\n  the optimum into the flowsheet (undoably);\n- `uncertainty` propagates independent normal uncertainty in levers to an\n  output, linearly from the gradient with each lever's share of the variance,\n  and by Monte Carlo when `samples` is set;\n- `linearize` builds the delta vectors of an LP planning model\n  (see {doc}`planning`), and `report` the flowsheet's self-documenting report.\n\nEvery result that rests on a solve carries that solve's convergence verdict.\n\n`tea` prices the flowsheet's capital from cost bases the units declare\nthemselves: a unit class may name a correlation in\n`difflow.economics.capital` and the parameter that sizes it (a CSTR is a\njacketed vessel sized by `V`). Units with no basis are listed as uncosted\nrather than given a size nobody chose, and a size outside a correlation's\nrange is flagged. The result is also written as two named quantities,\n`purchased_equipment` and `capex`, so an objective such as\n`-revenue + 0.1 * capex` trades capital against the process with exact\ngradients."
   },
   {
    "anchor": "what-each-plugin-adds",
@@ -1407,7 +1447,15 @@
    "path": "Getting Started > Installation > Dependencies",
    "source": "getting-started.md",
    "targets": [],
-   "text": "Core dependencies are installed automatically:\n\n```\njax>=0.4.0\njaxlib>=0.4.0\nnumpy\npyyaml\n```\n\nFor bio-manufacturing operations:\n\n```bash\npip install -e \".[bio]\"\n```\n\n---"
+   "text": "Core dependencies are installed automatically:\n\n```\njax>=0.4.0\njaxlib>=0.4.0\nnumpy\npyyaml\n```\n\nFor bio-manufacturing operations:\n\n```bash\npip install -e \".[bio]\"\n```"
+  },
+  {
+   "anchor": "using-an-ai-agent",
+   "heading": "Using an AI agent",
+   "path": "Getting Started > Installation > Using an AI agent",
+   "source": "getting-started.md",
+   "targets": [],
+   "text": "difflow can also be driven by an AI agent through its MCP server. Install the\nextra and register the server with your client:\n\n```bash\npip install -e \".[mcp]\"\nclaude mcp add difflow -- difflow mcp\n```\n\nSee {doc}`agents` for other clients, the tools, and troubleshooting.\n\n---"
   },
   {
    "anchor": "your-first-simulation",

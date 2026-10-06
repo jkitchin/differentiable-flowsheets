@@ -369,6 +369,22 @@ PreflashDrum, TSAUnit, TVSAUnit, VSAUnit, TearSplit); phase 5 (units declare
 a cost basis, a generated =tea= tool); a shared live session between the
 editor and the agent.
 
+** Phase 5 (branch =claude/mcp-phase5=)
+
+Done: =cost_basis= in the report metadata contract (a =CostParams= table and
+key in =difflow.economics.capital= and the =Params= field that sizes the
+unit), carried by the catalog; declared on CSTR, PFR, GasPFR,
+FedBatchReactor and SemiBatchReactor, the core units with a sizing parameter
+a correlation takes. =tea= prices every declared unit (equal to
+=reactor_cost= to 1e-12), flags sizes outside a correlation's range, lists
+the rest as uncosted, and defines =purchased_equipment= and =capex= as
+differentiable quantities.
+
+Still open: heat exchangers carry =UA=, not area, so pricing them needs a
+heat-transfer coefficient the model does not have; flash drums and columns
+need sizing models (residence time, flooding) before a correlation applies;
+operating cost from duties waits on unit info in expressions.
+
 * Evaluation
 
 Beyond unit tests, an agent-level eval: a set of tasks phrased the way a user

@@ -44,6 +44,18 @@ For bio-manufacturing operations:
 pip install -e ".[bio]"
 ```
 
+### Using an AI agent
+
+difflow can also be driven by an AI agent through its MCP server. Install the
+extra and register the server with your client:
+
+```bash
+pip install -e ".[mcp]"
+claude mcp add difflow -- difflow mcp
+```
+
+See {doc}`agents` for other clients, the tools, and troubleshooting.
+
 ---
 
 ## Quick Start
