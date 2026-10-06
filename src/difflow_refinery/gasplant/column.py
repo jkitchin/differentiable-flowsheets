@@ -877,15 +877,23 @@ class GasColumn(StageColumn):
                 # converge, again from guesses at half and twice that reflux
                 # (the C3/C4 splitter on an FCC feed stalls near the cubic's
                 # three-root edge from reflux 2 and converges from 1 or 4).
-                # A pass 1 that converges is never retried.
-                R = self.layout.reflux_guess
-                x0, it0, rn0 = self._pass1(th_s, th1, R)
-                for f in (0.5, 2.0):
-                    x0, it0, rn0 = jax.lax.cond(
-                        rn0 < easy.tol, lambda c: c,
-                        lambda c, f=f: (lambda r: (r[0], c[1] + r[1], r[2]))(
-                            self._pass1(th_s, th1, f * R)),
-                        (x0, it0, rn0))
+                # A pass 1 that converges is never retried. One while_loop
+                # over the refluxes, so _pass1 is traced once: a cond per
+                # retry compiled three copies of it, and a jacfwd through
+                # the isomerization DIH grew by 2.6 GB (to 13 GB).
+                refluxes = self.layout.reflux_guess * jnp.asarray([1.0, 0.5, 2.0])
+                shape = jax.eval_shape(self._pass1, th_s, th1, refluxes[0])
+
+                def retry(c):
+                    k, _, it, _ = c
+                    x, it_k, rn = self._pass1(th_s, th1, refluxes[k])
+                    return k + 1, x, it + it_k, rn
+
+                _, x0, it0, _ = jax.lax.while_loop(
+                    lambda c: (c[0] < refluxes.size) & ~(c[3] < easy.tol), retry,
+                    (0, jnp.zeros(shape[0].shape, shape[0].dtype),
+                     jnp.zeros(shape[1].shape, shape[1].dtype),
+                     jnp.full(shape[2].shape, jnp.inf, shape[2].dtype)))
             else:
                 x0 = self.initial_guess(th_s)
                 it0 = 0

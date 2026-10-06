@@ -313,6 +313,42 @@ class IsomerizationUnit:
         F_in = F.at[ih].set(self.params.H2_HC * hc)
         return F_in, F_in[ih] - F[ih]
 
+    def _pass_jit(self, fresh, recycle, T_in, LHSV):
+        """:meth:`_pass`, compiled once per unit and recycle-or-not.
+
+        Every caller -- each Anderson iteration of :meth:`solve`, and each
+        ``jacfwd``/``jvp`` of :meth:`outputs` -- goes through here. Eager,
+        a pass re-dispatches the reactor and its gas-plant columns op by
+        op (about 5 s each, plus a 37 s first trace); the DIH gradient test
+        made seven solves that way and took 28 minutes. The streams go in
+        as their arrays (flows, T, P) and the result's non-array leaves
+        (phase labels, Python constants) are kept outside the trace.
+        """
+        key = recycle is None
+        cache = self.__dict__.setdefault("_pass_cache", {})
+        if key not in cache:
+            static = {}
+
+            def arrays(Ff, Tf, Pf, rec, T_in, LHSV):
+                r = None if rec is None else stream_of(*rec)
+                leaves, tree = jax.tree_util.tree_flatten(
+                    self._pass(stream_of(Ff, Tf, Pf), r, T_in, LHSV))
+                dyn = [isinstance(x, jax.Array) for x in leaves]
+                static["tree"], static["dyn"] = tree, dyn
+                static["leaves"] = [None if d else x for x, d in zip(leaves, dyn)]
+                return [x for x, d in zip(leaves, dyn) if d]
+
+            cache[key] = (jax.jit(arrays), static)
+        fn, static = cache[key]
+        rec = None if recycle is None else (hydrocarbon_flows(recycle),
+                                            jnp.asarray(recycle["T"], dtype=float),
+                                            jnp.asarray(recycle["P"], dtype=float))
+        out = iter(fn(hydrocarbon_flows(fresh), jnp.asarray(fresh["T"], dtype=float),
+                      jnp.asarray(fresh["P"], dtype=float), rec,
+                      jnp.asarray(T_in, dtype=float), jnp.asarray(LHSV, dtype=float)))
+        leaves = [next(out) if d else x for x, d in zip(static["leaves"], static["dyn"])]
+        return jax.tree_util.tree_unflatten(static["tree"], leaves)
+
     def _pass(self, fresh, recycle, T_in, LHSV):
         """One pass of the flowsheet, recycle given. Pure JAX."""
         p = self.params
@@ -360,7 +396,7 @@ class IsomerizationUnit:
         self._last_info = {}
 
         def loop(recycle):
-            st, info = self._pass(fresh, recycle, T_in, LHSV)
+            st, info = self._pass_jit(fresh, recycle, T_in, LHSV)
             self._last_info = (st, info)
             side = st["side_draw"]
             return stream_of(hydrocarbon_flows(side), side["T"], side["P"])
@@ -391,7 +427,7 @@ class IsomerizationUnit:
         LHSV = p.reactor.LHSV if LHSV is None else LHSV
         fresh = stream_of(hydrocarbon_flows(fresh), fresh["T"], fresh["P"])
         if not self.has_dih:
-            st, info = self._pass(fresh, None, T_in, LHSV)
+            st, info = self._pass_jit(fresh, None, T_in, LHSV)
             self._check_hydrogen(info)
             return {"streams": st, "info": info, "recycle": None,
                     "loop": {"converged": True, "iterations": 0, "residual": 0.0}}
@@ -405,7 +441,7 @@ class IsomerizationUnit:
         out = fs.solve(tear_initial={"recycle": guess}, tol=p.tol, max_iter=p.max_iter,
                        acceleration="anderson", on_nonconvergence="warn")
         x = hydrocarbon_flows(out["side_draw"])
-        st, info = self._pass(fresh, stream_of(x, out["side_draw"]["T"], p.dih_P),
+        st, info = self._pass_jit(fresh, stream_of(x, out["side_draw"]["T"], p.dih_P),
                               T_in, LHSV)
         self._check_hydrogen(info)
         loop = {"converged": fs.last_solve_converged, "iterations": fs.last_solve_iterations,
@@ -537,7 +573,7 @@ class IsomerizationUnit:
         def direct(T_in, LHSV, x6, recycle):
             f = feed_of(x6)
             rec = None if recycle is None else stream_of(recycle, 340.0, unit.params.dih_P)
-            st, info = unit._pass(f, rec, T_in, LHSV)
+            st, info = unit._pass_jit(f, rec, T_in, LHSV)
             y = unit.output_vector(f, {"streams": st, "info": info})
             g = hydrocarbon_flows(st["side_draw"]) if unit.has_dih else None
             return y, g
@@ -561,13 +597,15 @@ class IsomerizationUnit:
         def f_loop_jvp(primals, tangents):
             T_in, LHSV, x6 = primals
             y, x = primal(T_in, LHSV, x6)
-            # the tear Jacobian G_x, by forward mode at the solution
-            Gx = jax.jacfwd(lambda r: direct(T_in, LHSV, x6, r)[1])(x)
-            # Y_u du and G_u du in one jvp, then the loop's response
-            _, (Yu, Gu) = jax.jvp(lambda a, b, c: direct(a, b, c, x),
-                                  (T_in, LHSV, x6), tangents)
+            # one linearization of a pass at the solution, reused for the
+            # tear Jacobian G_x, for Y_u du and G_u du, and for the loop's
+            # response (three separate jvps compiled the pass three times)
+            _, lin = jax.linearize(direct, T_in, LHSV, x6, x)
+            zu = jnp.zeros_like(T_in)
+            Gx = jax.vmap(lambda e: lin(zu, zu, zu, e)[1])(jnp.eye(x.size)).T
+            Yu, Gu = lin(*tangents, jnp.zeros_like(x))
             dx = jnp.linalg.solve(jnp.eye(x.size) - Gx, Gu)
-            _, Yx = jax.jvp(lambda r: direct(T_in, LHSV, x6, r)[0], (x,), (dx,))
+            Yx = lin(zu, zu, zu, dx)[0]
             return y, Yu + Yx
 
         return f_loop

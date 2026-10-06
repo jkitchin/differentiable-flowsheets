@@ -6,6 +6,23 @@ All notable changes to difflow are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-10-05
+
+### Fixed
+
+- Gas plant columns: 0.2.1's retry of a non-converging first pass compiled
+  that pass three times (a `lax.cond` per retry). Every jit or `jacfwd`
+  through a gas plant column grew by about a quarter -- a `jacfwd` through
+  the isomerization DIH went from 10.7 to 13.3 GB -- and the shard of the
+  Publish gate holding the DIH tests ran its runner out of memory, so 0.2.1
+  never reached PyPI. The retries are now one `while_loop` that traces the
+  pass once; same refluxes, same answers.
+- C5/C6 isomerization: one pass of the DIH recycle is jitted (it ran eagerly,
+  op by op, on every Anderson iteration and every `jvp`), and its implicit
+  derivative linearizes the pass once instead of compiling three `jvp`s. A
+  recycle solve went from about 390 s to 17 s; a `jacfwd` through the unit
+  from 213 s and 13.3 GB to 103 s and 7.1 GB.
+
 ## [0.2.1] - 2026-10-05
 
 ### Fixed
@@ -102,7 +119,8 @@ All notable changes to difflow are recorded here. The format follows
 
 First public release.
 
-[Unreleased]: https://github.com/jkitchin/differentiable-flowsheets/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/jkitchin/differentiable-flowsheets/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/jkitchin/differentiable-flowsheets/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/jkitchin/differentiable-flowsheets/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/jkitchin/differentiable-flowsheets/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/jkitchin/differentiable-flowsheets/releases/tag/v0.1.0

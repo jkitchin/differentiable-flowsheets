@@ -3,7 +3,8 @@
 ``release`` and ``slow``: one ``jax.jacfwd`` through the converged recycle
 (the tear Jacobian at the solution, by forward mode, then the implicit
 function theorem in :meth:`IsomerizationUnit.outputs`) and six warm-started
-re-solves for the differences -- about eight minutes. The paraffinic feed
+re-solves for the differences -- about five minutes, most of it compiling
+(one pass is jitted: eager, the file took 28). The paraffinic feed
 only, to keep this file inside a CI shard; the benzene-rich feed was run
 the same way when the unit was built and agreed to 4.4e-6 relative on every
 entry (the PR for #311 lists the numbers).
