@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import dataclasses
 import inspect
+import re
 import typing
 from dataclasses import dataclass, field
 from typing import Any
@@ -87,12 +88,17 @@ class PortSpec(ParamsMixin):
             ``n_outlets`` cannot be known (a class's ``default_outlets``
             attribute). A suggestion for an editor, not a fact about the
             unit: a Splitter makes one outlet per fraction it is given.
+        outlet_roles: what each outlet is, in order (``["liquid",
+            "vapor"]``), or ``None`` when the unit does not say. A class's
+            ``outlet_roles`` attribute, else the names its ``__call__``
+            docstring gives the returned streams.
     """
 
     inlets: list[str] = field(default_factory=list)
     n_outlets: int | None = None
     variadic: bool = False
     default_outlets: int | None = None
+    outlet_roles: list[str] | None = None
 
     @property
     def n_inlets(self) -> int | None:
@@ -235,6 +241,8 @@ class OperationSchema(ParamsMixin):
                 "n_outlets": self.ports.n_outlets,
                 "variadic": self.ports.variadic,
                 "default_outlets": self.ports.default_outlets,
+                "outlet_roles": (None if self.ports.outlet_roles is None
+                                 else list(self.ports.outlet_roles)),
             },
             "parameters": [dataclasses.asdict(p) for p in self.parameters],
             "call_parameters": [
@@ -340,10 +348,72 @@ def _ports(cls: type) -> PortSpec:
     # streams come back, and the count stays unknown. A class whose count
     # depends on its arguments (a Splitter makes one outlet per fraction)
     # can still say what an editor should start with.
+    n_outlets = _outlet_count(sig.return_annotation)
     return PortSpec(inlets=inlets,
-                    n_outlets=_outlet_count(sig.return_annotation),
+                    n_outlets=n_outlets,
                     variadic=variadic,
-                    default_outlets=getattr(cls, "default_outlets", None))
+                    default_outlets=getattr(cls, "default_outlets", None),
+                    outlet_roles=_outlet_roles(cls, n_outlets))
+
+
+#: a docstring line naming one returned value: ``liquid: Liquid outlet``
+_RETURNED = re.compile(r"^(\s*)([A-Za-z_]\w*)\s*:\s")
+#: the one-line tuple form: ``(organic_out, spent_aqueous, info)``
+_RETURNED_TUPLE = re.compile(r"\(\s*([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)+)\s*,?\s*\)")
+
+
+def _outlet_roles(cls: type, n_outlets: int | None) -> list[str] | None:
+    """What each outlet is, from the class or from its ``__call__`` docstring.
+
+    The ports are positional (``outlet_names`` order is the contract), so a
+    unit's outlets are ``flash_out`` and ``flash_out2`` and nothing in the
+    names says which is the vapor. Most units already say it, in the Returns
+    section of ``__call__``; read there, so the catalog cannot drift from
+    the documentation. Only an exact count is trusted: a docstring naming
+    a different number of streams than the signature returns is ignored.
+    """
+    declared = getattr(cls, "outlet_roles", None)
+    if declared is not None:
+        return list(declared)
+    if not n_outlets:
+        return None
+    for doc in (inspect.getdoc(cls.__call__), inspect.getdoc(cls)):
+        names = _returned_names(doc or "")
+        if len(names) == n_outlets:
+            return names
+    return None
+
+
+def _returned_names(doc: str) -> list[str]:
+    """The non-info values a docstring says are returned, in order.
+
+    Two forms: a Returns section with one ``name: description`` line per
+    value, and an inline tuple after the word Returns (``Returns
+    ``(residue, product, info)``.``).
+    """
+    lines = doc.splitlines()
+    start = next((i + 1 for i, line in enumerate(lines)
+                  if line.strip().rstrip(":") == "Returns"), None)
+    names: list[str] = []
+    if start is not None:
+        indent = None
+        for line in lines[start:]:
+            if line.strip() and not line.startswith(" ") and names:
+                break
+            match = _RETURNED.match(line)
+            if not match:
+                continue
+            depth = len(match.group(1))
+            if indent is None:
+                indent = depth
+            if depth == indent:
+                names.append(match.group(2))
+    if not names:
+        at = doc.find("Returns")
+        tup = _RETURNED_TUPLE.search(doc[at:at + 300]) if at >= 0 else None
+        if tup:
+            names = [n.strip() for n in tup.group(1).split(",")]
+    return [n for n in names if n != "info"]
 
 
 def _call_parameters(cls: type) -> list[ParameterSpec]:

@@ -79,14 +79,8 @@ def build_server(workbench: Workbench | None = None, *, allow_exec: bool = True,
         if kind == "exec" and not allow_exec:
             continue
         method = getattr(wb, name)
-
-        # A plain function with the method's signature and docstring: the
-        # SDK builds the input schema from the one and the description
-        # from the other.
-        @functools.wraps(method)
-        def tool(*args, __method=method, **kwargs):
-            return __method(*args, **kwargs)
-
+        tool = _with_progress(name, method) if _is_long(method) else \
+            _plain(method)
         server.tool(
             name=name,
             annotations=ToolAnnotations(
@@ -98,7 +92,125 @@ def build_server(workbench: Workbench | None = None, *, allow_exec: bool = True,
             structured_output=False,
         )(tool)
     _register_plugin_tools(server, wb, allow_exec, ToolAnnotations)
+    _register_prompts(server)
     return server
+
+
+def _register_prompts(server) -> None:
+    """Workflows a client can offer as one-click starting points."""
+
+    @server.prompt(name="design_flowsheet",
+                   description="Build and solve a flowsheet from a process description")
+    def design_flowsheet(description: str) -> str:
+        return (
+            f"Build this process as a difflow flowsheet and solve it:\n\n{description}\n\n"
+            "Find each operation with list_operations and read it with "
+            "describe_operation before adding it; check species with "
+            "search_species and set them first. Supply objects a unit needs "
+            "(thermo, rate laws) through set_code_context using the starter "
+            "code describe_operation returns. Wire outlets to inlets with "
+            "connect (outlet_roles says which outlet is which), put a feed on "
+            "every unfed inlet, then solve. Report the result only if it "
+            "converged and its audit is clean; otherwise run diagnose.")
+
+    @server.prompt(name="fix_convergence",
+                   description="Find out why a flowsheet does not converge, and fix it")
+    def fix_convergence(session: str = "main") -> str:
+        return (
+            f"The flowsheet in session {session!r} does not solve correctly. "
+            "Run diagnose and read the findings in order. Then run converge "
+            "(without apply) and compare the trials. Apply a numerics remedy "
+            "with converge(apply=True) only if one passed; propose any problem "
+            "remedy, a tear change or a model change to the user with the "
+            "evidence rather than making it. If two trials disagree on the "
+            "products, report the multiple steady states.")
+
+    @server.prompt(name="sensitivity_study",
+                   description="Rank what an output responds to, and by how much")
+    def sensitivity_study(output: str, session: str = "main") -> str:
+        return (
+            f"In session {session!r}, study what {output!r} responds to. "
+            "Solve and confirm convergence, define the output as a named "
+            "quantity if it is reused, run sensitivity over all levers, and "
+            "sweep the two levers with the largest elasticities over a "
+            "sensible range to check the derivative holds beyond the point. "
+            "Report elasticities with units and the convergence at every point.")
+
+
+#: seconds between progress notifications during a long call
+HEARTBEAT = 5.0
+
+
+def _is_long(method) -> bool:
+    """A tool that can run long is one that takes a timeout."""
+    import inspect
+
+    return "timeout" in inspect.signature(method).parameters
+
+
+def _plain(method):
+    """A function with the method's signature and docstring: the SDK builds
+    the input schema from the one and the description from the other."""
+    @functools.wraps(method)
+    def tool(*args, __method=method, **kwargs):
+        return __method(*args, **kwargs)
+
+    return tool
+
+
+def _with_progress(name: str, method):
+    """An async tool that runs ``method`` on a worker thread and sends a
+    progress notification every :data:`HEARTBEAT` seconds until it ends.
+
+    A first solve of a large unit can compile for minutes; without these a
+    client sees nothing and may give up on a call that is working. The
+    notifications go out only when the client asked for them (sent a
+    progress token).
+    """
+    import inspect
+    import time
+    import typing
+
+    import anyio
+    import anyio.to_thread
+    from mcp.server.mcpserver import Context
+
+    hints = typing.get_type_hints(method)
+
+    async def tool(ctx: Context, **kwargs):
+        done = anyio.Event()
+        start = time.monotonic()
+
+        async def heartbeat():
+            while not done.is_set():
+                with anyio.move_on_after(HEARTBEAT):
+                    await done.wait()
+                if not done.is_set():
+                    elapsed = time.monotonic() - start
+                    try:
+                        await ctx.report_progress(
+                            elapsed, None, f"{name}: still running ({elapsed:.0f} s)")
+                    except Exception:  # noqa: BLE001 -- progress is best effort
+                        pass
+
+        async with anyio.create_task_group() as group:
+            group.start_soon(heartbeat)
+            try:
+                result = await anyio.to_thread.run_sync(
+                    functools.partial(method, **kwargs))
+            finally:
+                done.set()
+        return result
+
+    signature = inspect.signature(method)
+    ctx_param = inspect.Parameter("ctx", inspect.Parameter.KEYWORD_ONLY,
+                                  annotation=Context)
+    tool.__name__ = name
+    tool.__doc__ = method.__doc__
+    tool.__signature__ = signature.replace(
+        parameters=list(signature.parameters.values()) + [ctx_param])
+    tool.__annotations__ = {**hints, "ctx": Context}
+    return tool
 
 
 def _register_plugin_tools(server, wb: Workbench, allow_exec: bool,

@@ -354,6 +354,21 @@ Deferred: a gas tool needs a bundled network (none ships; networks are built
 in Python); refinery tools for the library units (reformer, FCC) would wrap
 their own call conventions.
 
+** Polish (branch =claude/mcp-polish=)
+
+Done: outlet roles in the catalog (=PortSpec.outlet_roles=), read from each
+unit's =__call__= or class docstring (a Returns section, or an inline tuple),
+or an =outlet_roles= class attribute; 32 of 41 multi-outlet operations name
+theirs, and =add_unit= and =get_flowsheet= report them. Progress
+notifications for every tool that takes a timeout. Prompts:
+=design_flowsheet=, =fix_convergence=, =sensitivity_study=. =open_in_editor=.
+
+Still open: nine plugin units name no outlets in their docstrings
+(AmineTreater, Desalter, DiscStackCentrifuge, FlowSplit, IsomerizationUnit,
+PreflashDrum, TSAUnit, TVSAUnit, VSAUnit, TearSplit); phase 5 (units declare
+a cost basis, a generated =tea= tool); a shared live session between the
+editor and the agent.
+
 * Evaluation
 
 Beyond unit tests, an agent-level eval: a set of tasks phrased the way a user
