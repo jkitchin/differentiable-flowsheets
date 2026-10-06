@@ -4611,7 +4611,7 @@
    "path": "Bio-Manufacturing Unit Operations > Chromatography > ProteinAChromatography > Parameters",
    "source": "unit-operations-bio.md",
    "targets": [],
-   "text": "```python\n@dataclass\nclass ProteinAParams:\n    column_volume: float   # Column volume (L)\n    q_max: float          # Maximum binding capacity (g/L resin)\n    K_d: float            # Dissociation constant (M)\n    flow_rate: float      # Operating flow rate (CV/h)\n    residence_time: float # Column residence time (min)\n```"
+   "text": "```python\n@dataclass\nclass ProteinAParams:\n    column_volume: float          # Column volume (L)\n    q_max: float = 35.0           # Maximum binding capacity (g/L resin)\n    K_d: float = 0.1              # Dissociation constant (g/L)\n    target_species: str = \"mAb\"\n    yield_factor: float = 0.95    # Elution yield (0-1)\n    impurity_clearance: dict      # impurity -> LRV, default HCP 2, DNA 3, cells 4\n    k_ads: float | None = None    # Adsorption rate (1/min), for kinetic DBC\n    n_plates: float | None = None # Plate count, for elution pool volume\n    elution_cv: float = 2.0       # Elution retention volume (CV)\n```"
   },
   {
    "anchor": "inputs",
@@ -4619,7 +4619,7 @@
    "path": "Bio-Manufacturing Unit Operations > Chromatography > ProteinAChromatography > Inputs",
    "source": "unit-operations-bio.md",
    "targets": [],
-   "text": "| Parameter | Type | Units | Description |\n|-----------|------|-------|-------------|\n| `load` | Stream | - | Feed stream with mAb |\n| `load_volume` | float | CV | Load volume in column volumes |"
+   "text": "| Parameter | Type | Units | Description |\n|-----------|------|-------|-------------|\n| `inlet` | Stream | - | Feed stream with mAb (component flows as mass) |\n| `load_volume` | float or None | L | Volume of feed loaded. `None` (default) loads the whole inlet; the column capacity, $DBC \\cdot V_{column}$, then limits what binds and the excess breaks through |\n| `feed_volume` | float | L | Total feed volume, so `load_volume / feed_volume` is the fraction loaded |"
   },
   {
    "anchor": "outputs",
@@ -4627,7 +4627,7 @@
    "path": "Bio-Manufacturing Unit Operations > Chromatography > ProteinAChromatography > Outputs",
    "source": "unit-operations-bio.md",
    "targets": [],
-   "text": "| Parameter | Type | Units | Description |\n|-----------|------|-------|-------------|\n| `eluate` | Stream | - | Purified mAb |\n| `info['recovery']` | float | - | Step recovery |\n| `info['purity']` | float | - | Product purity |\n| `info['HCP_LRV']` | float | - | HCP log reduction value |\n| `info['DNA_LRV']` | float | - | DNA log reduction value |\n| `info['DBC']` | float | g/L | Dynamic binding capacity |"
+   "text": "| Parameter | Type | Units | Description |\n|-----------|------|-------|-------------|\n| `product` | Stream | - | Elution pool (purified mAb) |\n| `waste` | Stream | - | Flow-through, wash and column losses |\n| `info['yield']` | float | - | Eluted / loaded target |\n| `info['purity']` | float | - | Product purity |\n| `info['mass_loaded']`, `info['mass_bound']` | float | mass | Target loaded and bound (bound is capped by capacity) |\n| `info['capacity_utilization']` | float | - | Bound mass / column capacity |\n| `info['impurity_clearance']` | dict | LRV | Clearance applied per impurity |\n| `info['DNA_LRV']` | float | - | DNA log reduction value |\n| `info['DBC']` | float | g/L | Dynamic binding capacity |"
   },
   {
    "anchor": "process-steps",
@@ -4651,7 +4651,7 @@
    "path": "Bio-Manufacturing Unit Operations > Chromatography > ProteinAChromatography > Example Usage",
    "source": "unit-operations-bio.md",
    "targets": [],
-   "text": "```python\nfrom difflow_bio.units.chromatography import ProteinAChromatography, ProteinAParams\n\nparams = ProteinAParams(\n    column_volume=10.0,    # L\n    q_max=35.0,            # g/L (typical for MabSelect)\n    K_d=1e-8,              # M (very tight binding)\n    flow_rate=2.0,         # CV/h\n    residence_time=6.0     # min\n)\n\nprotein_a = ProteinAChromatography(params)\nload = make_stream({'mAb': 5.0, 'HCP': 5.0, 'DNA': 0.1}, T=298.0, P=101325.0)\n\neluate, info = protein_a(load, load_volume=25)  # 25 CV = 250 L\nprint(f\"Recovery: {info['recovery']:.2%}\")\nprint(f\"HCP clearance: {info['HCP_LRV']:.1f} LRV\")\n```\n\n---\n\n(ionexchangechromatography)="
+   "text": "```python\nfrom difflow_bio.units.chromatography import ProteinAChromatography, ProteinAParams\n\nfrom difflow import make_stream\n\nparams = ProteinAParams(\n    column_volume=10.0,    # L\n    q_max=35.0,            # g/L (typical for MabSelect)\n)\n\nprotein_a = ProteinAChromatography(params)\nload = make_stream({'mAb': 250.0, 'HCP': 5.0, 'DNA': 0.1}, T=298.0, P=101325.0)\n\n# Load the whole batch: 250 g of mAb on a 10 L column (346.5 g capacity)\n(eluate, waste), info = protein_a(load)\nprint(f\"Yield: {float(info['yield']):.2%}\")\nprint(f\"Capacity used: {float(info['capacity_utilization']):.0%}\")\nprint(f\"HCP clearance: {info['impurity_clearance']['HCP']:.1f} LRV\")\n```\n\n---\n\n(ionexchangechromatography)="
   },
   {
    "anchor": "ionexchangechromatography",

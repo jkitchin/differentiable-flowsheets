@@ -252,7 +252,7 @@ class ProteinAChromatography:
     def __call__(
         self,
         inlet: Stream,
-        load_volume: float | Array,
+        load_volume: float | Array | None = None,
         breakthrough_limit: float | Array = 0.01,
         feed_volume: float | Array = None,
         load_flow_rate: float | Array = None,
@@ -262,7 +262,10 @@ class ProteinAChromatography:
 
         Args:
             inlet: Feed stream (concentrated harvest)
-            load_volume: Volume of feed to load (L)
+            load_volume: Volume of feed to load (L). None (the default)
+                loads the entire inlet, which is what a train processing a
+                whole batch wants; the column capacity then limits how much
+                binds, and any excess breaks through to waste.
             breakthrough_limit: Acceptable breakthrough fraction (0-1)
             feed_volume: Total volume of feed stream (L). If provided, used to
                 calculate concentration. If None, assumes load_volume/total_flow
@@ -296,7 +299,9 @@ class ProteinAChromatography:
         # volume larger than the feed volume otherwise loads more of the
         # target than the feed contains, and the column reports mass it was
         # never given -- loading 20 L of an 11.1 L feed closed 8 mol/s out.
-        if feed_volume is not None:
+        if load_volume is None:
+            target_mass_loaded = target_flow
+        elif feed_volume is not None:
             # Proper calculation: concentration = mass/volume, then mass = conc * load_vol
             # load_fraction = load_volume / feed_volume
             load_fraction = jnp.clip(
@@ -337,7 +342,9 @@ class ProteinAChromatography:
         target_eluted = target_bound * p.yield_factor
 
         # Calculate load fraction for mass balance
-        if feed_volume is not None:
+        if load_volume is None:
+            _load_frac = jnp.asarray(1.0)
+        elif feed_volume is not None:
             _load_frac = jnp.asarray(load_volume) / jnp.asarray(feed_volume)
         else:
             _load_frac = jnp.asarray(load_volume) / total_flow
@@ -465,13 +472,14 @@ class IonExchangeChromatography:
     def __call__(
         self,
         inlet: Stream,
-        load_volume: float | Array,
+        load_volume: float | Array | None = None,
     ) -> tuple[tuple[Stream, Stream], dict[str, Array]]:
         """Run ion exchange chromatography.
 
         Args:
             inlet: Feed stream
-            load_volume: Volume loaded (L)
+            load_volume: Volume loaded (L). None (the default) loads the
+                entire inlet.
 
         Returns:
             (product, waste): Product and waste streams
@@ -481,8 +489,12 @@ class IonExchangeChromatography:
         inlet_flows = get_flows(inlet)
         total_flow = sum(inlet_flows.values())
 
-        # Load fraction (clip to [0,1] for mass balance safety)
-        load_frac = jnp.clip(jnp.asarray(load_volume) / total_flow, 0.0, 1.0)
+        # Load fraction (clip to [0,1] for mass balance safety); None loads
+        # the whole inlet.
+        if load_volume is None:
+            load_frac = jnp.asarray(1.0)
+        else:
+            load_frac = jnp.clip(jnp.asarray(load_volume) / total_flow, 0.0, 1.0)
 
         product_flows = {}
         waste_flows = {}
@@ -577,13 +589,14 @@ class SizeExclusionChromatography:
     def __call__(
         self,
         inlet: Stream,
-        load_volume: float | Array,
+        load_volume: float | Array | None = None,
     ) -> tuple[tuple[Stream, Stream, Stream], dict[str, Array]]:
         """Run size exclusion chromatography.
 
         Args:
             inlet: Feed stream
-            load_volume: Volume loaded (L)
+            load_volume: Volume loaded (L). None (the default) loads the
+                entire inlet.
 
         Returns:
             (product, aggregates, fragments): Three fractions
@@ -593,8 +606,12 @@ class SizeExclusionChromatography:
         inlet_flows = get_flows(inlet)
         total_flow = sum(inlet_flows.values())
 
-        # Load fraction (clip to [0,1] for mass balance safety)
-        load_frac = jnp.clip(jnp.asarray(load_volume) / total_flow, 0.0, 1.0)
+        # Load fraction (clip to [0,1] for mass balance safety); None loads
+        # the whole inlet.
+        if load_volume is None:
+            load_frac = jnp.asarray(1.0)
+        else:
+            load_frac = jnp.clip(jnp.asarray(load_volume) / total_flow, 0.0, 1.0)
 
         product_flows = {}
         aggregate_flows = {}

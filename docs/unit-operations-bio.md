@@ -746,28 +746,36 @@ Protein A chromatography provides:
 ```python
 @dataclass
 class ProteinAParams:
-    column_volume: float   # Column volume (L)
-    q_max: float          # Maximum binding capacity (g/L resin)
-    K_d: float            # Dissociation constant (M)
-    flow_rate: float      # Operating flow rate (CV/h)
-    residence_time: float # Column residence time (min)
+    column_volume: float          # Column volume (L)
+    q_max: float = 35.0           # Maximum binding capacity (g/L resin)
+    K_d: float = 0.1              # Dissociation constant (g/L)
+    target_species: str = "mAb"
+    yield_factor: float = 0.95    # Elution yield (0-1)
+    impurity_clearance: dict      # impurity -> LRV, default HCP 2, DNA 3, cells 4
+    k_ads: float | None = None    # Adsorption rate (1/min), for kinetic DBC
+    n_plates: float | None = None # Plate count, for elution pool volume
+    elution_cv: float = 2.0       # Elution retention volume (CV)
 ```
 
 #### Inputs
 
 | Parameter | Type | Units | Description |
 |-----------|------|-------|-------------|
-| `load` | Stream | - | Feed stream with mAb |
-| `load_volume` | float | CV | Load volume in column volumes |
+| `inlet` | Stream | - | Feed stream with mAb (component flows as mass) |
+| `load_volume` | float or None | L | Volume of feed loaded. `None` (default) loads the whole inlet; the column capacity, $DBC \cdot V_{column}$, then limits what binds and the excess breaks through |
+| `feed_volume` | float | L | Total feed volume, so `load_volume / feed_volume` is the fraction loaded |
 
 #### Outputs
 
 | Parameter | Type | Units | Description |
 |-----------|------|-------|-------------|
-| `eluate` | Stream | - | Purified mAb |
-| `info['recovery']` | float | - | Step recovery |
+| `product` | Stream | - | Elution pool (purified mAb) |
+| `waste` | Stream | - | Flow-through, wash and column losses |
+| `info['yield']` | float | - | Eluted / loaded target |
 | `info['purity']` | float | - | Product purity |
-| `info['HCP_LRV']` | float | - | HCP log reduction value |
+| `info['mass_loaded']`, `info['mass_bound']` | float | mass | Target loaded and bound (bound is capped by capacity) |
+| `info['capacity_utilization']` | float | - | Bound mass / column capacity |
+| `info['impurity_clearance']` | dict | LRV | Clearance applied per impurity |
 | `info['DNA_LRV']` | float | - | DNA log reduction value |
 | `info['DBC']` | float | g/L | Dynamic binding capacity |
 
@@ -812,20 +820,21 @@ $$LRV = \log_{10}\left(\frac{C_{in}}{C_{out}}\right)$$
 ```python
 from difflow_bio.units.chromatography import ProteinAChromatography, ProteinAParams
 
+from difflow import make_stream
+
 params = ProteinAParams(
     column_volume=10.0,    # L
     q_max=35.0,            # g/L (typical for MabSelect)
-    K_d=1e-8,              # M (very tight binding)
-    flow_rate=2.0,         # CV/h
-    residence_time=6.0     # min
 )
 
 protein_a = ProteinAChromatography(params)
-load = make_stream({'mAb': 5.0, 'HCP': 5.0, 'DNA': 0.1}, T=298.0, P=101325.0)
+load = make_stream({'mAb': 250.0, 'HCP': 5.0, 'DNA': 0.1}, T=298.0, P=101325.0)
 
-eluate, info = protein_a(load, load_volume=25)  # 25 CV = 250 L
-print(f"Recovery: {info['recovery']:.2%}")
-print(f"HCP clearance: {info['HCP_LRV']:.1f} LRV")
+# Load the whole batch: 250 g of mAb on a 10 L column (346.5 g capacity)
+(eluate, waste), info = protein_a(load)
+print(f"Yield: {float(info['yield']):.2%}")
+print(f"Capacity used: {float(info['capacity_utilization']):.0%}")
+print(f"HCP clearance: {info['impurity_clearance']['HCP']:.1f} LRV")
 ```
 
 ---

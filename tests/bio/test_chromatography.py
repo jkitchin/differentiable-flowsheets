@@ -429,3 +429,28 @@ class TestSECResolutionOverlap:
                         + float(get_flows(aggregates).get(s, 0.0))
                         + float(get_flows(fragments).get(s, 0.0)))
             assert mass_out == pytest.approx(mass_in, rel=1e-6)
+
+
+class TestLoadWholeInlet:
+    """load_volume=None loads the entire inlet (used by the DSP trains)."""
+
+    @staticmethod
+    def _feed():
+        from difflow import make_stream
+        return make_stream({"mAb": 100.0, "HCP": 5.0}, 298.15, 101325.0)
+
+    def test_protein_a_none_loads_everything(self):
+        p = ProteinAParams(column_volume=10.0, q_max=35.0, target_species="mAb",
+                           species_order=["mAb", "HCP"])
+        _, info = ProteinAChromatography(p)(self._feed())
+        assert float(info["mass_loaded"]) == pytest.approx(100.0)
+        # same as loading the full feed volume explicitly
+        _, ref = ProteinAChromatography(p)(self._feed(), load_volume=5.0, feed_volume=5.0)
+        assert float(info["mass_eluted"]) == pytest.approx(float(ref["mass_eluted"]))
+
+    def test_iex_none_matches_full_legacy_load(self):
+        p = IEXParams(column_volume=10.0, mode="bind_elute", target_species="mAb",
+                      species_order=["mAb", "HCP"])
+        (prod, _), _ = IonExchangeChromatography(p)(self._feed())
+        (ref, _), _ = IonExchangeChromatography(p)(self._feed(), load_volume=1e6)
+        assert float(prod["F_mAb"]) == pytest.approx(float(ref["F_mAb"]))

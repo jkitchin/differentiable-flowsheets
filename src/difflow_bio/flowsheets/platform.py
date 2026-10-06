@@ -172,12 +172,13 @@ class PlatformDSP:
         # Run each step
         for step_name, step_unit in self._steps:
             if hasattr(step_unit, '__call__'):
-                # Chromatography units require load_volume; use column volume
-                load_vol = p.column_volumes.get(step_name, 10.0)
-                result = step_unit(current_stream, load_volume=load_vol)
+                # Load the whole stream: the column volume sets capacity,
+                # not how much of the feed is processed.
+                result = step_unit(current_stream)
                 if isinstance(result, tuple):
-                    # Chromatography returns ((product, waste), info)
-                    (current_stream, _waste), _info = result
+                    # Chromatography returns ((product, *side streams), info);
+                    # SEC has two side streams (aggregates, fragments).
+                    current_stream = result[0][0]
                 else:
                     current_stream = result
 

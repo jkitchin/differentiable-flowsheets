@@ -5,6 +5,11 @@ fully differentiable, but converted their results with float() (and the
 virus filter branched on a traced comparison with if/elif), so jax.grad,
 jit and vmap all raised. These tests take gradients through each train and
 check them against central finite differences.
+
+The trains also used to pass each column's volume as its *load volume*, so
+only about a tenth of the batch was ever loaded and the overall yield came
+out near 7%, growing linearly with column size. Each step now loads the
+whole batch and the column volume sets its capacity.
 """
 
 import jax
@@ -38,12 +43,36 @@ def central_difference(f, x, h=1e-5):
 
 class TestMabDSPTrain:
     def test_grad_overall_yield_matches_fd(self, harvest):
+        # A 2 L Protein A column is capacity-limited for 100 g of mAb, so
+        # the yield depends on its volume.
         def y(cv):
             p = mAbDSPParams(species_order=SPECIES, proa_column_volume=cv)
             return mAbDSPTrain(p)(harvest)["overall_yield"]
 
-        assert float(jax.grad(y)(10.0)) == pytest.approx(
-            float(central_difference(y, 10.0)), rel=1e-6
+        g = float(jax.grad(y)(2.0))
+        assert g > 0
+        assert g == pytest.approx(float(central_difference(y, 2.0)), rel=1e-6)
+
+    def test_whole_batch_is_loaded(self, harvest):
+        # An ample column loses only its elution yield; the overall yield
+        # no longer scales with column volume.
+        def run(cv):
+            p = mAbDSPParams(species_order=SPECIES, proa_column_volume=cv)
+            return mAbDSPTrain(p)(harvest)
+
+        r10, r20 = run(10.0), run(20.0)
+        assert float(r10["step_yields"]["proa"]) == pytest.approx(0.95)
+        assert float(r10["overall_yield"]) == pytest.approx(
+            float(r20["overall_yield"])
+        )
+        assert float(r10["overall_yield"]) > 0.75
+
+    def test_undersized_column_is_capacity_limited(self, harvest):
+        # 1 L at q_max 35 g/L, 1% breakthrough limit: 34.65 g binds of 100 g
+        p = mAbDSPParams(species_order=SPECIES, proa_column_volume=1.0)
+        res = mAbDSPTrain(p)(harvest)
+        assert float(res["step_yields"]["proa"]) == pytest.approx(
+            35.0 * 0.99 * 1.0 * 0.95 / 100.0
         )
 
     def test_grad_purity_matches_fd(self, harvest):
@@ -60,8 +89,8 @@ class TestMabDSPTrain:
             p = mAbDSPParams(species_order=SPECIES, proa_column_volume=cv)
             return mAbDSPTrain(p)(harvest)["overall_yield"]
 
-        assert float(jax.jit(y)(10.0)) == pytest.approx(float(y(10.0)))
-        cvs = jnp.array([5.0, 10.0, 20.0])
+        assert float(jax.jit(y)(2.0)) == pytest.approx(float(y(2.0)))
+        cvs = jnp.array([1.0, 2.0, 20.0])
         assert jnp.allclose(jax.vmap(y)(cvs), jnp.array([y(c) for c in cvs]))
 
     def test_step_yields_are_arrays(self, harvest):
@@ -79,10 +108,19 @@ class TestPlatformDSP:
             )
             return PlatformDSP(p)(harvest)["overall_yield"]
 
-        assert float(jax.grad(y)(10.0)) == pytest.approx(
-            float(central_difference(y, 10.0)), rel=1e-6
+        g = float(jax.grad(y)(2.0))     # capacity-limited capture column
+        assert g > 0
+        assert g == pytest.approx(float(central_difference(y, 2.0)), rel=1e-6)
+        assert float(jax.jit(y)(2.0)) == pytest.approx(float(y(2.0)))
+
+    def test_with_sec_step(self, harvest):
+        # SEC returns three streams; the train used to unpack two and raise.
+        p = PlatformDSPParams(
+            species_order=SPECIES, target_species="mAb", include_sec=True,
         )
-        assert float(jax.jit(y)(10.0)) == pytest.approx(float(y(10.0)))
+        res = PlatformDSP(p)(harvest)
+        assert float(res["step_yields"]["sec"]) == pytest.approx(0.95)
+        assert float(res["step_yields"]["capture"]) == pytest.approx(0.95)
 
 
 class TestViralClearanceTrain:
