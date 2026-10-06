@@ -212,21 +212,20 @@ class mAbDSPTrain:
         mab_out = final_flows.get(target, 0.0)
         overall_yield = safe_divide(mab_out, mab_in)
 
-        # Purity (mAb as fraction of total protein)
+        # Purity (mAb as fraction of total protein). Values stay JAX arrays
+        # so the train can be differentiated, jitted and vmapped (#360).
         total_protein = sum(
-            float(final_flows.get(s, 0.0))
-            for s in [target, "HCP", "aggregates"]
-            if s in final_flows or s == target
+            final_flows.get(s, 0.0) for s in (target, "HCP", "aggregates")
         )
-        purity = safe_divide(float(mab_out), total_protein)
+        purity = safe_divide(mab_out, total_protein)
 
         result = {
             "product": final_product,
-            "overall_yield": float(overall_yield),
+            "overall_yield": overall_yield,
             "step_yields": {
-                "proa": float(proa_yield),
-                "cex": float(cex_yield),
-                "aex": float(aex_yield),
+                "proa": proa_yield,
+                "cex": cex_yield,
+                "aex": aex_yield,
             },
             "purity": purity,
         }
@@ -242,6 +241,9 @@ class mAbDSPTrain:
         batches_per_year: int = 50,
     ) -> dict:
         """Calculate annual resin usage.
+
+        A reporting helper: cycle counts are integers (ceil), so this is
+        not differentiable and is not meant to be traced.
 
         Args:
             harvest: Harvest stream

@@ -162,7 +162,8 @@ class PlatformDSP:
         target = p.target_species
 
         feed_flows = get_flows(feed)
-        product_in = float(feed_flows.get(target, 0.0))
+        # Values stay JAX arrays so the train can be traced (#360).
+        product_in = feed_flows.get(target, 0.0)
 
         intermediates = {"feed": feed}
         step_yields = {}
@@ -181,9 +182,9 @@ class PlatformDSP:
                     current_stream = result
 
             current_flows = get_flows(current_stream)
-            current_product = float(current_flows.get(target, 0.0))
+            current_product = current_flows.get(target, 0.0)
             prev_flows = get_flows(intermediates.get(list(intermediates.keys())[-1], feed))
-            prev_product = float(prev_flows.get(target, 0.0))
+            prev_product = prev_flows.get(target, 0.0)
 
             step_yields[step_name] = safe_divide(current_product, prev_product)
             intermediates[step_name] = current_stream
@@ -193,7 +194,7 @@ class PlatformDSP:
         final_flows = get_flows(final_product)
 
         # Calculate overall metrics
-        product_out = float(final_flows.get(target, 0.0))
+        product_out = final_flows.get(target, 0.0)
         overall_yield = safe_divide(product_out, product_in)
 
         result = {
