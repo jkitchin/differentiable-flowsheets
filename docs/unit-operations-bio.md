@@ -168,6 +168,7 @@ class FedBatchParams:
     kinetic_params: dict   # Parameters for kinetic function
     k_d: float = 0.0       # Death rate constant (1/h)
     m_s: float = 0.0       # Maintenance coefficient (g/g/h)
+    K_m: float = 0.05      # Half-saturation of maintenance uptake (g/L)
     alpha: float = 0.0     # Growth-associated product formation (g/g)
     beta: float = 0.0      # Non-growth-associated product formation (g/g/h)
     species_order: list = ["cells", "substrate", "product"]
@@ -192,13 +193,19 @@ $$\frac{dV}{dt} = F(t)$$
 
 **Cell Balance**:
 
-$$\frac{d(VX)}{dt} = V(\mu - k_d)X$$
-
-Or: $\frac{dX}{dt} = (\mu - k_d - D)X$ where $D = F/V$
+$$\frac{d(VX)}{dt} = V(\mu - k_d)X - V m_s Y_{X/S} (1 - \phi) X$$
 
 **Substrate Balance**:
 
-$$\frac{d(VS)}{dt} = F \cdot S_f - V\left(\frac{\mu X}{Y_{X/S}} + m_s X\right)$$
+$$\frac{d(VS)}{dt} = F \cdot S_f - V\left(\frac{\mu X}{Y_{X/S}} + m_s \phi X\right), \qquad \phi = \frac{S}{K_m + S}$$
+
+**Maintenance under starvation**: maintenance draws on substrate while
+there is any ($\phi \approx 1$ for $S \gg K_m$) and on biomass when it
+runs out, at the endogenous decay rate $b = m_s Y_{X/S}$ (Pirt, 1965).
+Without the $\phi$ factor, uptake would continue at $m_s X$ after the
+substrate is gone and drive $S$ negative while product kept
+accumulating. `info["S_min"]` reports the lowest substrate concentration
+reached, so a starved run is visible.
 
 **Product Balance**:
 
@@ -234,11 +241,12 @@ def exponential_feed(t):
 
 # Run simulation
 outlet, info = bioreactor(
-    t_span=(0.0, 72.0),  # hours
     X0=0.5,              # Initial cell concentration (g/L)
     S0=20.0,             # Initial substrate (g/L)
-    feed_profile=exponential_feed,
-    S_f=200.0            # Feed substrate concentration
+    P0=0.0,              # Initial product (g/L)
+    t_final=72.0,        # hours
+    feed_rate_fn=exponential_feed,
+    S_feed=200.0,        # Feed substrate concentration (g/L)
 )
 print(f"Final cell concentration: {info['X_final']:.2f} g/L")
 print(f"Final product: {info['P_final']:.2f} g/L")

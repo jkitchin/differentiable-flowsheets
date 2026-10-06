@@ -259,6 +259,61 @@ class TestFedBatchTransforms:
             assert float(b) == pytest.approx(float(self._final_titer(r)), rel=1e-8)
 
 
+class TestFedBatchStarvation:
+    """Issue #362: maintenance cannot consume substrate that is not there.
+
+    A batch with maintenance runs out of substrate. Uptake used to stay at
+    m_s*X, driving S to about -5 g/L on the diffrax path while the product
+    kept accumulating. Maintenance now tapers as S/(K_m + S) and the unmet
+    share burns biomass.
+    """
+
+    @staticmethod
+    def _params(**kw):
+        base = dict(
+            V0=1000.0, Y_xs=0.4, kinetic_fn=substrate_inhibition_kinetics,
+            kinetic_params={"mu_max": 0.03, "K_s": 0.5, "K_i": 10.0},
+            k_d=0.001, m_s=0.02, beta=0.006,
+        )
+        base.update(kw)
+        return FedBatchParams(**base)
+
+    def _batch(self, solver, **kw):
+        return FedBatchBioreactor(self._params(**kw))(
+            X0=0.2, S0=6.0, P0=0.0, t_final=336.0, solver=solver, n_steps=336,
+        )[1]
+
+    @pytest.mark.parametrize("solver", ["diffrax", "rk4"])
+    def test_substrate_stays_non_negative(self, solver):
+        info = self._batch(solver)
+        assert float(jnp.min(info["S"])) > -1e-6
+        assert float(info["S_min"]) == pytest.approx(float(jnp.min(info["S"])))
+
+    def test_solvers_agree_through_starvation(self):
+        # Before the fix the two disagreed: RK4 clamped S, diffrax did not.
+        a, b = self._batch("diffrax"), self._batch("rk4")
+        assert float(a["P_final"]) == pytest.approx(float(b["P_final"]), rel=1e-3)
+        assert float(a["X_final"]) == pytest.approx(float(b["X_final"]), rel=1e-3)
+
+    def test_starvation_burns_biomass(self):
+        info = self._batch("diffrax")
+        # the culture grows, runs out, and then decays faster than k_d alone
+        x_peak = float(jnp.max(info["X"]))
+        assert float(info["X_final"]) < 0.5 * x_peak
+
+    def test_no_maintenance_is_unchanged(self):
+        # with m_s = 0 the new terms vanish identically
+        info = self._batch("diffrax", m_s=0.0, K_m=1.0)
+        ref = self._batch("diffrax", m_s=0.0, K_m=0.05)
+        assert float(info["P_final"]) == pytest.approx(float(ref["P_final"]), rel=1e-12)
+
+    def test_gradient_finite_through_starvation(self):
+        def p_final(m_s):
+            return self._batch("diffrax", m_s=m_s)["P_final"]
+        g = jax.grad(p_final)(0.02)
+        assert jnp.isfinite(g) and float(g) < 0   # more maintenance, less product
+
+
 class TestFedBatchOxygenCoupling:
     """Issue #101: fed-batch growth coupled to oxygen transfer (OTR)."""
 
