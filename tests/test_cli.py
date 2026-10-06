@@ -84,7 +84,7 @@ class TestDispatch:
         assert cli.main(["frobnicate"]) == 2
         err = capsys.readouterr().err
         assert "no such command or file" in err
-        assert "gui, plan-export, report" in err
+        assert "gui, mcp, plan-export, report" in err
 
 
 class TestHelp:
