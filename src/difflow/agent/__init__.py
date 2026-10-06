@@ -68,6 +68,7 @@ TOOLS: dict[str, str] = {
     "uncertainty": "read",
     "linearize": "edit",
     "report": "read",
+    "tea": "edit",
     # Python
     "run_python": "exec",
 }

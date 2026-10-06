@@ -27,6 +27,7 @@ A JAX-based framework for building and optimizing chemical process flowsheets wi
 - **Bio Manufacturing**: Specialized unit operations for biopharmaceutical processes (bioreactors, chromatography, filtration)
 - **Gas Networks**: Steady-state gas transmission networks with a topology-computed sequential decomposition and differentiable tear solving
 - **Flowsheets Without Code**: A machine-readable catalog of every unit, JSON round trip, Python code generation, a browser-based editor served on `localhost`, and one-file interactive HTML for publishing a model
+- **Agent Tools (MCP)**: `difflow mcp` serves difflow to AI agents over the Model Context Protocol: build, solve, diagnose and converge flowsheets, and run sensitivity, optimization, uncertainty and cost studies from plain-language requests
 
 ### Plugins
 
@@ -57,6 +58,17 @@ We regularly run all of the notebooks to ensure they run without errors, and rev
 
 We actually anticipate that Claude Code is used when using this library (See [CLAUDE.md](https://github.com/jkitchin/differentiable-flowsheets/blob/main/CLAUDE.md)). The library is large enough that it would take a long time to learn all the capabilities in addition to learning the nuances of differentiable programming. This repo provides all the information Claude needs to help you translate your flowsheet ideas into differentiable programs.
 
+## Using difflow with an AI agent (MCP)
+
+difflow includes an [MCP](https://modelcontextprotocol.io) server, so an AI agent such as Claude Code or Claude Desktop can use it directly: find unit operations, build and solve flowsheets, explain why a solve fails and search for settings that converge it, and run sensitivity, optimization, uncertainty and capital-cost studies, all with exact derivatives through the solve.
+
+```bash
+pip install "difflow[mcp]"     # from source until the release after 0.2.2: pip install -e ".[mcp]"
+claude mcp add difflow -- difflow mcp
+```
+
+Then ask in plain language, for example "build a flash drum for an equimolar water and ethanol feed at 362 K and tell me the vapor composition", or "this flowsheet does not converge; find out why". The server discovers operations and plugins from the installed code, so new units are available without changes to it. `difflow mcp --no-exec` leaves out the tools that run Python, for shared or desktop clients. Setup for Claude Desktop and other clients, the full tool list and troubleshooting are in the [agent documentation](https://kitchingroup.cheme.cmu.edu/differentiable-flowsheets/docs/agents.html).
+
 ## Installation
 
 ```bash
@@ -65,6 +77,9 @@ pip install difflow
 
 # With examples and tutorials (includes matplotlib, jupyter)
 pip install "difflow[examples]"
+
+# The MCP server for AI agents (see "Using difflow with an AI agent")
+pip install "difflow[mcp]"
 
 # Everything
 pip install "difflow[all]"

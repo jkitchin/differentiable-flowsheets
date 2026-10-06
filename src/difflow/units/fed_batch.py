@@ -109,6 +109,9 @@ class FedBatchReactor:
     ]
     parameter_symbols = {"V0": "V_0", "dH_rxn": r"\Delta H_{r,j}"}
     parameter_units = {"V0": "m^3", "stoich": "-", "dH_rxn": "J/mol"}
+    #: Priced as a batch vessel from its initial volume (Turton et al. power
+    #: law in difflow.economics.capital); see the cost_basis contract.
+    cost_basis = {"table": "REACTOR_COSTS", "type": "batch_reactor", "size": "V0"}
     numerical_method = "Adaptive ODE integration (diffrax) or lax.scan/RK4 of (V, n_i, T) over time."
 
     def __init__(

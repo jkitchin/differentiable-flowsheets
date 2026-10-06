@@ -326,3 +326,76 @@ def report(session, format: str = "markdown") -> dict:
     from difflow.report import to_markdown
 
     return {"ok": True, "format": "markdown", "report": to_markdown(built)}
+
+
+def tea(session, target_year: int | None = None, lang_factor: float = 4.74,
+        working_capital_fraction: float = 0.15, define: bool = True) -> dict:
+    """Capital cost from each unit's declared cost basis.
+
+    A unit is priced only when its class declares a ``cost_basis`` (a
+    correlation in :mod:`difflow.economics.capital` and the parameter that
+    sizes it); every other unit is listed as uncosted rather than given a
+    size nobody chose. With ``define`` the result is also written as named
+    quantities, ``purchased_equipment`` and ``capex``, built from
+    ``econ.equipment_cost_continuous`` over the sizing parameters, so an
+    objective can trade capital against the process with exact gradients.
+    """
+    from difflow.catalog import describe_operation
+    from difflow.economics import capital
+    from difflow.economics.indices import DEFAULT_CURRENT_YEAR, get_cepci
+
+    from difflow.agent.workbench import _registered_name
+
+    year = int(target_year or DEFAULT_CURRENT_YEAR)
+    fs = session.flowsheet
+    costed, uncosted, terms = [], [], []
+    for unit in fs.units:
+        operation = _registered_name(unit)
+        basis = None
+        if operation is not None:
+            try:
+                basis = describe_operation(operation).cost_basis
+            except KeyError:
+                basis = None
+        if not basis:
+            uncosted.append({"unit": unit.name, "operation": operation})
+            continue
+        table = getattr(capital, basis["table"])
+        cp = table[basis["type"]]
+        params = getattr(unit.operation, "params", None)
+        size = getattr(params, basis["size"], None) if params is not None else None
+        if size is None:
+            size = (unit.params or {}).get(basis["size"])
+        size = float(size)
+        ratio = float(get_cepci(year) / get_cepci(cp.base_year))
+        cost = (cp.a + cp.b * size ** cp.n) * ratio
+        costed.append({
+            "unit": unit.name, "operation": operation, "correlation":
+            f"{basis['table']}[{basis['type']!r}]", "size": size,
+            "size_parameter": basis["size"], "size_units": cp.S_units,
+            "purchased_cost": cost, "in_range": cp.S_min <= size <= cp.S_max,
+            "valid_range": [cp.S_min, cp.S_max], "base_year": cp.base_year,
+        })
+        terms.append(f"econ.equipment_cost_continuous({unit.name}.{basis['size']}, "
+                     f"{cp.a!r}, {cp.b!r}, {cp.n!r}, {ratio!r})")
+    purchased = sum(c["purchased_cost"] for c in costed)
+    multiplier = lang_factor * (1.0 + working_capital_fraction)
+    out = {
+        "ok": True, "year": year, "units": costed, "uncosted": uncosted,
+        "purchased_equipment": purchased,
+        "fixed_capital": purchased * lang_factor,
+        "total_capital_investment": purchased * multiplier,
+        "lang_factor": lang_factor, "working_capital_fraction": working_capital_fraction,
+        "warnings": [f"{c['unit']}: size {c['size']:g} {c['size_units']} is outside the "
+                     f"correlation's range {c['valid_range']}" for c in costed
+                     if not c["in_range"]],
+        "note": "purchased cost by a power law (Turton et al.) escalated by CEPCI; "
+                "total capital = purchased x Lang factor x (1 + working capital). "
+                "Uncosted units declare no cost basis and are not in the total.",
+    }
+    if define and terms:
+        quantities = Quantities(fs)
+        quantities.define("purchased_equipment", " + ".join(terms))
+        quantities.define("capex", f"purchased_equipment * {multiplier!r}")
+        out["quantities"] = ["purchased_equipment", "capex"]
+    return out
