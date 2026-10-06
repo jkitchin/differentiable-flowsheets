@@ -48,6 +48,12 @@ TOOLS: dict[str, str] = {
     "set_solver_options": "edit",
     "solve": "edit",
     "get_streams": "read",
+    # diagnosis and convergence
+    "diagnose": "read",
+    "converge": "edit",
+    "tear_analysis": "read",
+    "trace_solve": "read",
+    "get_unit_info": "read",
     # Python
     "run_python": "exec",
 }

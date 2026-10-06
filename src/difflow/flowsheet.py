@@ -234,6 +234,18 @@ def _parse_outlets(result: Any, unit: "Unit") -> dict[str, Stream]:
     raise ValueError(f"Unexpected output from {unit.name}: {len(result)} items")
 
 
+def _unit_info(result: Any, unit: "Unit") -> dict | None:
+    """The info dict in a unit's result, read the way :func:`_parse_outlets`
+    reads the streams: a tuple as long as the outlets is all streams."""
+    if not isinstance(result, tuple) or len(result) == len(unit.outlet_names):
+        return None
+    if len(result) == 2 and isinstance(result[1], dict):
+        return result[1]
+    if len(result) == len(unit.outlet_names) + 1 and isinstance(result[-1], dict):
+        return result[-1]
+    return None
+
+
 def _initialized_outlets(result: Any, unit: "Unit") -> dict[str, Stream]:
     """Name the streams a unit's ``initialize()`` returned.
 
@@ -363,6 +375,17 @@ class Flowsheet:
         #: path, which does not clip at all (#263), and zero on an
         #: accelerated solve whose iterates all stayed non-negative.
         self.last_solve_clip_active: int = 0
+        #: the tear residual (max abs change) after each iteration of the
+        #: last solve, in order, across any tol_basis="error" retries.
+        #: ``None`` when the iteration was optimistix's fixed point
+        #: (``acceleration="none"`` or a traced solve), which keeps no
+        #: history; empty for a recycle-free solve.
+        self.last_solve_history: list[float] | None = None
+        #: unit name -> the info dict its operation returned on the last
+        #: concrete evaluation of the last solve (the error probe's pass at
+        #: the solution, or the final iteration). A unit returning no info
+        #: is absent; nothing is recorded while tracing.
+        self.last_solve_unit_info: dict[str, dict] = {}
 
     def add_feed(self, name: str, stream: Stream) -> None:
         """Add a feed stream to the flowsheet.
@@ -606,6 +629,9 @@ class Flowsheet:
                 "them there is nothing to test against."
             )
 
+        self.last_solve_history = []
+        self.last_solve_unit_info = {}
+
         if tears != "declared" and not self.recycles:
             return self._solve_auto_torn(
                 "heuristic" if tears == "auto" else tears,
@@ -699,6 +725,7 @@ class Flowsheet:
                 # inside the map that optx.fixed_point implicitly
                 # differentiates.  The argument, and the gradient it
                 # breaks, are in solve's docstring.
+                self.last_solve_history = None    # optx keeps no history
                 streams = self._solve_with_recycle_damped(
                     tear_streams, tol_step, max_iter, damping
                 )
@@ -1221,6 +1248,7 @@ class Flowsheet:
             inlets = [streams[name] for name in unit.inlet_names]
             result = unit.operation(*inlets, **unit.params)
             streams.update(_parse_outlets(result, unit))
+            self._record_unit_info(result, unit)
 
         return streams
 
@@ -1431,6 +1459,8 @@ class Flowsheet:
             residual = jnp.max(jnp.abs(g_curr - x_prev))
             res = _concrete(residual)
             self.last_solve_residual = res
+            if res is not None and self.last_solve_history is not None:
+                self.last_solve_history.append(res)
             if res is None:
                 # A traced residual cannot be compared, so the loop simply
                 # runs to max_iter.  There is no verdict to report either:
@@ -1527,6 +1557,8 @@ class Flowsheet:
             residual = jnp.max(jnp.abs(g_curr - x_curr))
             res = _concrete(residual)
             self.last_solve_residual = res
+            if res is not None and self.last_solve_history is not None:
+                self.last_solve_history.append(res)
             if res is None:
                 # See _solve_with_wegstein: no concrete residual, no verdict.
                 self.last_solve_converged = None
@@ -1786,8 +1818,21 @@ class Flowsheet:
             inlets = [streams[name] for name in unit.inlet_names]
             result = unit.operation(*inlets, **unit.params)
             streams.update(_parse_outlets(result, unit))
+            self._record_unit_info(result, unit)
 
         return streams
+
+    def _record_unit_info(self, result: Any, unit: "Unit") -> None:
+        """Keep the info dict a unit returned, when it holds numbers.
+
+        ``_parse_outlets`` takes the streams and drops the rest, which is
+        where a unit says how its own inner solve went. Under tracing the
+        dict holds tracers that must not outlive the trace, so nothing is
+        kept then.
+        """
+        info = _unit_info(result, unit)
+        if info is not None and not _has_tracer(info):
+            self.last_solve_unit_info[unit.name] = info
 
     def _streams_to_array(self, streams: dict[str, Stream]) -> Array:
         """Convert dictionary of streams to a flat array."""

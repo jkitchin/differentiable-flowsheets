@@ -304,6 +304,23 @@ roles (a Flash's outlets are =flash_out= and =flash_out2=, and nothing says
 which is the vapor); MCP progress notifications for long solves are not
 sent yet.
 
+** Phase 2 (branch =claude/mcp-phase2=)
+
+Done: core changes 2, 3, 4 and 6. =Flowsheet.last_solve_history= (the
+residual per iteration on the Anderson and Wegstein paths; =None= on the
+optimistix fixed point) and =last_solve_unit_info= (kept only when concrete).
+CSTR and Flash report =balance_residual= and =converged= for their own solve,
+checked on the outlet actually returned; the session audit flags a unit whose
+balance did not close. =difflow.diagnostics= holds the symptom cards (the
+editor's =TROUBLESHOOTING= now reads them), the remedy table, the history
+classifier and =solve_findings=. Tools: =diagnose=, =converge=,
+=tear_analysis=, =trace_solve=, =get_unit_info=. =converge= finds a passing
+setting for all eleven corpus cases from the default settings.
+
+Deferred: changing the tear set as a remedy (with declared recycles it means
+rewiring, so it is reported by =tear_analysis= rather than tried); EO and
+pounce feasibility as remedies.
+
 * Evaluation
 
 Beyond unit tests, an agent-level eval: a set of tasks phrased the way a user

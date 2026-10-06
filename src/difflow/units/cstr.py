@@ -49,6 +49,11 @@ RateFunction = Callable[[dict[str, Array], Array, dict], Array]
 Params = dict[str, Any]
 
 
+#: Relative material-balance residual above which a CSTR's inner solve is
+#: reported as not converged (``info["converged"]``).
+INNER_BALANCE_TOL = 1e-6
+
+
 class CSTRDensityWarning(UserWarning):
     """The reactor's concentration basis fell back to an assumed molar density.
 
@@ -434,11 +439,24 @@ class CSTR:
             for species in p.species_order
         }
 
+        # The material balance at the outlet actually returned. The inner
+        # Newton solve runs with throw=False and its outlet is clipped at
+        # zero, so a failed solve would otherwise come back looking like an
+        # answer; checked here, after the fact, it covers every mode and the
+        # clip as well as the solve.
+        F_in_vec = jnp.array([inlet_flows[s] for s in p.species_order])
+        F_out_vec = jnp.array([outlet_flows[s] for s in p.species_order])
+        imbalance = F_out_vec - (F_in_vec + p.V * (p.stoich @ jnp.atleast_1d(rates)))
+        balance_residual = jnp.max(jnp.abs(imbalance)) / jnp.maximum(
+            jnp.sum(jnp.abs(F_in_vec)), 1e-30)
+
         info = {
             "Q": Q,
             "rates": rates,
             "conversion": conversion,
             "molar_density": jnp.asarray(density),
+            "balance_residual": balance_residual,
+            "converged": balance_residual < INNER_BALANCE_TOL,
         }
 
         # Heat of mixing diagnostic (#77)
