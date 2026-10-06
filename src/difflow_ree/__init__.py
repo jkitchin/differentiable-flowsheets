@@ -34,7 +34,7 @@ Quick Start:
     >>> circuit = ExtractStripCircuit(params)
 """
 
-__version__ = "0.2.2"
+__version__ = "0.3.0"
 
 # =============================================================================
 # Database Access

@@ -15,7 +15,7 @@
    "path": "Agents: the `difflow mcp` server > Installing and connecting > Install",
    "source": "agents.md",
    "targets": [],
-   "text": "The server needs the MCP SDK, which is an optional extra. The `mcp` extra\nfirst ships in the release after 0.2.2; until then, install from source:\n\n```bash\n# from PyPI (after 0.2.2)\npip install \"difflow[mcp]\"\n\n# from source\ngit clone https://github.com/jkitchin/differentiable-flowsheets.git\ncd differentiable-flowsheets\npip install -e \".[mcp]\"\n```\n\nThe install puts a `difflow` command (and `difflow-mcp`, the same thing) on\nthe environment's `PATH`. Check it:\n\n```bash\ndifflow mcp --help\n```\n\nWithout the extra, `difflow mcp` stops with a message naming it. The server\nspeaks MCP over stdio: the client starts it as a subprocess and talks to it\non stdin and stdout, so there is no port to open and nothing to keep\nrunning between sessions."
+   "text": "The server needs the MCP SDK, which is an optional extra (difflow 0.3.0 or\nlater):\n\n```bash\n# from PyPI\npip install \"difflow[mcp]\"\n\n# from source\ngit clone https://github.com/jkitchin/differentiable-flowsheets.git\ncd differentiable-flowsheets\npip install -e \".[mcp]\"\n```\n\nThe install puts a `difflow` command (and `difflow-mcp`, the same thing) on\nthe environment's `PATH`. Check it:\n\n```bash\ndifflow mcp --help\n```\n\nWithout the extra, `difflow mcp` stops with a message naming it. The server\nspeaks MCP over stdio: the client starts it as a subprocess and talks to it\non stdin and stdout, so there is no port to open and nothing to keep\nrunning between sessions."
   },
   {
    "anchor": "claude-code",

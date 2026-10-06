@@ -63,7 +63,7 @@ We actually anticipate that Claude Code is used when using this library (See [CL
 difflow includes an [MCP](https://modelcontextprotocol.io) server, so an AI agent such as Claude Code or Claude Desktop can use it directly: find unit operations, build and solve flowsheets, explain why a solve fails and search for settings that converge it, and run sensitivity, optimization, uncertainty and capital-cost studies, all with exact derivatives through the solve.
 
 ```bash
-pip install "difflow[mcp]"     # from source until the release after 0.2.2: pip install -e ".[mcp]"
+pip install "difflow[mcp]"     # 0.3.0 or later
 claude mcp add difflow -- difflow mcp
 ```
 
