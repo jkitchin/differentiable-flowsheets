@@ -39,7 +39,7 @@ each package's `__all__`.
 | Group | Tools |
 |---|---|
 | Discovery | `plugin_status`, `plugin_guide`, `list_operations`, `describe_operation`, `list_api`, `describe_api`, `search_species`, `search_docs`, `list_examples` |
-| Sessions | `list_sessions`, `new_session`, `close_session`, `open_example`, `open_file`, `save`, `undo`, `redo`, `get_flowsheet` |
+| Sessions | `list_sessions`, `new_session`, `close_session`, `open_example`, `open_file`, `save`, `open_in_editor`, `undo`, `redo`, `get_flowsheet` |
 | Building | `set_species`, `set_code_context`, `add_unit`, `update_unit`, `remove_unit`, `connect`, `disconnect`, `set_feed`, `remove_feed` |
 | Running | `set_solver_options`, `solve`, `get_streams` |
 | Diagnosis | `diagnose`, `converge`, `tear_analysis`, `trace_solve`, `get_unit_info` |
@@ -47,14 +47,25 @@ each package's `__all__`.
 | Python | `run_python` |
 
 Each tool is annotated as read-only, editing, or running code, so a client can
-ask before the last kind. A session holds one flowsheet; every tool takes a
+ask before the last kind. A tool that can run long (a solve, a search, Python)
+sends a progress notification every few seconds while it works, so a client
+waiting on a first compile knows the call is alive. The server also offers
+three prompts, `design_flowsheet`, `fix_convergence` and `sensitivity_study`,
+as starting points for those workflows.
+
+`open_in_editor` saves the flowsheet and opens it in the browser editor, so a
+person can see what an agent built. The editor runs on the saved file in its
+own process; its edits reach the agent's session when `open_file` reads the
+file again. A session holds one flowsheet; every tool takes a
 `session` argument (default `"main"`), so a base case and a variant can be
 kept side by side.
 
 ## How a flowsheet is built
 
 Ports are stream names, and a stream's name is its wiring. `add_unit` places a
-unit with its own stream name on every port; `connect` joins one unit's outlet
+unit with its own stream name on every port, and says what each outlet is
+(`outlet_roles`: which is the vapor, which the distillate), read from the
+unit's own documentation; `connect` joins one unit's outlet
 stream to another's inlet stream, and a connection that closes a loop becomes
 a recycle without being declared. `set_feed` puts a feed on an inlet nothing
 else supplies, and `get_flowsheet` lists the inlets still waiting for one.

@@ -293,6 +293,51 @@ class Workbench:
         """Write the flowsheet as JSON (to its own path when none is given)."""
         return self._call(session, "save", path, overwrite)
 
+    def open_in_editor(self, path: str | None = None, port: int | None = None,
+                       browser: bool = True, session: str = "main") -> dict:
+        """Save the flowsheet and open it in difflow's browser editor, so a
+        person can see and change what was built.
+
+        The editor works on the saved file in its own process: edits made
+        there reach this session only when the file is opened again with
+        open_file.
+
+        Args:
+            path: Where to save; the session's own file when omitted.
+            port: Port for the editor; a free one when omitted.
+            browser: Open a browser tab (false just starts the server).
+        """
+        import socket
+        import subprocess
+        import sys
+
+        s, err = self._get(session)
+        if err:
+            return err
+        target = path or (None if s.path is None else str(s.path))
+        if target is None:
+            return {"ok": False, "error": "the flowsheet has no file yet; give a path"}
+        saved = jsonable(s.save(target, overwrite=path is None or
+                                (s.path is not None and str(s.path) == str(path))))
+        if not saved.get("ok"):
+            return saved
+        if port is None:
+            with socket.socket() as probe:
+                probe.bind(("127.0.0.1", 0))
+                port = probe.getsockname()[1]
+        command = [sys.executable, "-m", "difflow.gui", saved["path"],
+                   "--port", str(port)]
+        if not browser:
+            command.append("--no-browser")
+        editor = subprocess.Popen(command, stdin=subprocess.DEVNULL,
+                                  stdout=subprocess.DEVNULL,
+                                  stderr=subprocess.DEVNULL,
+                                  start_new_session=True)
+        return {"ok": True, "url": f"http://127.0.0.1:{port}/", "path": saved["path"],
+                "pid": editor.pid,
+                "note": "edits in the editor reach this session only after "
+                        "open_file reloads the saved file"}
+
     def undo(self, session: str = "main") -> dict:
         """Undo the last change to the flowsheet."""
         return self._call(session, "undo")
@@ -326,6 +371,8 @@ class Workbench:
             "units": [{
                 "name": u["name"], "operation": u["operation"],
                 "inlets": u.get("inlets"), "outlets": u.get("outlets"),
+                **({"outlet_roles": r} if (r := _roles(u["operation"],
+                                                       u.get("outlets") or [])) else {}),
                 "params": {k: _brief(v) for k, v in (u.get("params") or {}).items()},
                 **({"call_params": u["extra_params"]} if u.get("extra_params") else {}),
             } for u in sheet.get("units", [])],
@@ -378,6 +425,10 @@ class Workbench:
         if err:
             return err
         added = jsonable(s.add_unit(operation, name, extras=extras))
+        if added.get("ok"):
+            roles = _roles(operation, added.get("outlets") or [])
+            if roles:
+                added["outlet_roles"] = roles
         if not added.get("ok") or not params or added.get("pending"):
             return added
         patched = jsonable(s.patch_unit(added["name"], {"params": _decode(params)}))
@@ -718,6 +769,19 @@ class Workbench:
         if err:
             return err
         return self._timed(session, lambda: s.console_run(code), timeout)
+
+
+def _roles(operation: str, outlets: list[str]) -> dict[str, str] | None:
+    """``{outlet stream: role}`` from the catalog, when the unit says."""
+    from difflow.catalog import describe_operation
+
+    try:
+        roles = describe_operation(operation).ports.outlet_roles
+    except Exception:  # noqa: BLE001 -- an unregistered operation says nothing
+        return None
+    if not roles or len(roles) != len(outlets):
+        return None
+    return dict(zip(outlets, roles))
 
 
 def _brief(value):
