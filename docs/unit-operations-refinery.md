@@ -1229,7 +1229,11 @@ temperature profile between the overhead's dew point and the bottoms'
 bubble point. No user initialisation is needed.
 
 (refinery-gascompressor)=
+(op-wetgascompressor)=
 ### GasCompressor
+
+Registered as the operation `WetGasCompressor`; `GasCompressor` in the
+catalog is the core unit.
 
 The wet-gas compressor has `n_stages` isentropic stages at equal
 pressure ratios. Each stage's work is the isentropic enthalpy rise

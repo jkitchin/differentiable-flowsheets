@@ -332,8 +332,11 @@ def register(registry):
                     "debutanizer, C3/C4 splitter, deisobutanizer",
         plugin="difflow_refinery",
     )
+    # Not "GasCompressor": that name is the core difflow.units unit, and a
+    # second registration under it replaced the core one for every user
+    # with this plugin installed.
     registry.register(
-        name="GasCompressor",
+        name="WetGasCompressor",
         cls=GasCompressor,
         category="refinery",
         description="Wet-gas compressor: isentropic stages with intercoolers "

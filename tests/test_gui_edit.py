@@ -575,7 +575,7 @@ class TestFeeds:
         answer = session.solve()
         assert answer["ok"] is False
         assert "nothing feeds 'feed'" in answer["error"]
-        assert "give it a feed" in answer["error"]
+        assert "give it a feed" in answer["error"].lower()
 
     def test_a_feed_survives_the_round_trip_through_the_document(self, session):
         session.set_feed("feed", {"T": 333.0, "P": 2.0e5,
@@ -998,7 +998,10 @@ class TestSolverOptions:
         {"tol": 0}, {"tol": -1e-6}, {"tol": float("nan")}, {"tol": "1e-6"},
         {"max_iter": 0}, {"max_iter": 2.5}, {"max_iter": True},
         {"acceleration": "newton"}, {"clip_negative_flows": "no"},
-        {"damping": 0.5}, ["tol"],
+        {"damping": 0}, {"damping": "0.5"}, {"anderson_depth": 0},
+        {"tears": "random"}, {"tol_basis": "residual"}, {"error_probe": -1},
+        {"use_initialization": 1}, {"tol_basis": "error", "error_probe": 0},
+        {"future_option": 3}, ["tol"],
     ])
     def test_a_bad_option_is_refused_and_nothing_is_kept(self, recycle, bad):
         good = {"acceleration": "wegstein"}
@@ -1006,6 +1009,34 @@ class TestSolverOptions:
             {**good, **bad} if isinstance(bad, dict) else bad)
         assert not answer["ok"]
         assert "solver" not in recycle.flowsheet.view
+
+    def test_every_solve_option_reaches_the_solve(self, recycle):
+        """The editor's four were not all of them: damping, tear choice and
+        the error basis are what a hard loop actually needs."""
+        assert recycle.set_solver_options(
+            {"acceleration": "none", "damping": 0.5, "max_iter": 400,
+             "tol_basis": "error"})["ok"]
+        assert recycle.flowsheet.view["solver"] == {
+            "acceleration": "none", "damping": 0.5, "max_iter": 400,
+            "tol_basis": "error"}
+        answer = recycle.solve()
+        assert answer["ok"] and answer["converged"] is True
+        assert answer["solver"]["damping"] == 0.5
+
+    def test_the_gain_and_the_hidden_error_are_returned(self):
+        """At gain 0.99 the error is about 100x the step `tol` tested, and
+        the TearToleranceWarning that says so went to stderr, unseen."""
+        from difflow.convergence import get_case
+
+        session = FlowsheetSession(flowsheet=get_case("high_gain_recycle").build())
+        assert session.set_solver_options(
+            {"tol": 1e-6, "acceleration": "none", "max_iter": 5000})["ok"]
+        answer = session.solve()
+        assert answer["ok"] and answer["converged"] is True
+        assert answer["gain"] == pytest.approx(0.99, abs=1e-3)
+        assert answer["error_estimate"] > 10 * answer["residual"]
+        categories = [w["category"] for w in answer["warnings"]]
+        assert categories.count("TearToleranceWarning") == 1
 
     def test_the_derivatives_use_them_too(self, recycle):
         assert recycle.set_solver_options({"max_iter": 1})["ok"]

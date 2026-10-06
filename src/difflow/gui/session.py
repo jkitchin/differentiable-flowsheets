@@ -38,6 +38,7 @@ import math
 import re
 import threading
 import types
+import warnings
 from pathlib import Path
 
 from difflow import scripts
@@ -49,42 +50,73 @@ UNDO_DEPTH = 100
 #: Node-id prefixes the canvas uses for feeds and products.
 RESERVED_PREFIXES = ("feed:", "product:")
 
-#: The recycle solver's options the editor can set, with the defaults of
+#: The recycle solver's options a session can set, with the defaults of
 #: :meth:`Flowsheet.solve`. Kept on ``view["solver"]``, so they are saved
 #: with the file and undone like any other edit; a key that is absent
-#: means the default.
+#: means the default. Every keyword of ``solve`` is here except
+#: ``tear_initial`` (streams, not a setting) and ``on_nonconvergence``
+#: (the session reports the verdict itself).
 SOLVER_DEFAULTS = {
     "tol": 1e-8,
     "max_iter": 100,
     "acceleration": "anderson",
     "clip_negative_flows": True,
+    "damping": 1.0,
+    "anderson_depth": 5,
+    "use_initialization": True,
+    "tears": "declared",
+    "error_probe": 2,
+    "tol_basis": "step",
 }
 ACCELERATIONS = ("anderson", "wegstein", "none")
+TEAR_CHOICES = ("declared", "auto", "heuristic", "minimum")
+TOL_BASES = ("step", "error")
+
+
+def _whole(key: str, value, least: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) \
+            or not math.isfinite(value) or value != int(value) or value < least:
+        raise ValueError(f"{key} must be a whole number of at least {least}")
+    return int(value)
+
+
+def _positive(key: str, value) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) \
+            or not math.isfinite(value) or value <= 0:
+        raise ValueError(f"{key} must be a positive number")
+    return float(value)
+
+
+def _choice(key: str, value, choices) -> str:
+    if value not in choices:
+        raise ValueError(f"{key} must be one of {', '.join(choices)}")
+    return value
+
+
+def _flag(key: str, value) -> bool:
+    if not isinstance(value, bool):
+        raise ValueError(f"{key} must be true or false")
+    return value
 
 
 def _solver_option(key: str, value):
     """`value` checked for solver option `key`, or a ``ValueError``."""
-    if key == "tol":
-        if isinstance(value, bool) or not isinstance(value, (int, float)) \
-                or not math.isfinite(value) or value <= 0:
-            raise ValueError("tol must be a positive number")
-        return float(value)
-    if key == "max_iter":
-        if isinstance(value, bool) or not isinstance(value, (int, float)) \
-                or not math.isfinite(value) or value != int(value) or value < 1:
-            raise ValueError("max_iter must be a whole number of at least 1")
-        return int(value)
+    if key in ("tol", "damping"):
+        return _positive(key, value)
+    if key in ("max_iter", "anderson_depth"):
+        return _whole(key, value, 1)
+    if key == "error_probe":
+        return _whole(key, value, 0)
     if key == "acceleration":
-        if value not in ACCELERATIONS:
-            raise ValueError(f"acceleration must be one of "
-                             f"{', '.join(ACCELERATIONS)}")
-        return value
-    if key == "clip_negative_flows":
-        if not isinstance(value, bool):
-            raise ValueError("clip_negative_flows must be true or false")
-        return value
-    raise ValueError(f"{key!r} is not a solver option the editor sets "
-                     f"(it sets {', '.join(SOLVER_DEFAULTS)})")
+        return _choice(key, value, ACCELERATIONS)
+    if key == "tears":
+        return _choice(key, value, TEAR_CHOICES)
+    if key == "tol_basis":
+        return _choice(key, value, TOL_BASES)
+    if key in ("clip_negative_flows", "use_initialization"):
+        return _flag(key, value)
+    raise ValueError(f"{key!r} is not a solver option "
+                     f"(the options are {', '.join(SOLVER_DEFAULTS)})")
 
 
 #: What `set_species` accepts as a species name.
@@ -121,6 +153,17 @@ def _undoable(method):
 def _number(value) -> float | None:
     """A float for the wire, or ``None`` --- including for a JAX scalar."""
     return None if value is None else float(value)
+
+
+def _recorded(caught) -> list[dict]:
+    """Warnings recorded during a solve, once each, as ``{category, message}``."""
+    seen, out = set(), []
+    for w in caught or ():
+        item = (w.category.__name__, str(w.message))
+        if item not in seen:
+            seen.add(item)
+            out.append({"category": item[0], "message": item[1]})
+    return out
 
 
 class _BadFeed(ValueError):
@@ -1124,8 +1167,8 @@ class FlowsheetSession:
                 # `needs` being empty promises a clean answer and not a
                 # successful one.
                 raise edit.EditError(
-                    f"{operation} refused the parameters a palette drop "
-                    f"can supply: {exc}"
+                    f"{operation} refused the parameters it can be given "
+                    f"without a code context: {exc}"
                 ) from exc
             ports = describe_class(info.cls).to_dict()["ports"]
             inlets, outlets = edit.default_ports(
@@ -1352,9 +1395,10 @@ class FlowsheetSession:
         # Sending the reader to a Python panel to write a list of names is
         # the wrong instruction when there is a box in the header for it.
         if "species_order" in unmet:
-            return (f"{operation} needs the species. Name them in the header "
-                    f"-- or define species_order (or SPECIES) in the code "
-                    f"context -- and this node builds itself.")
+            return (f"{operation} needs the species. Set the flowsheet's "
+                    f"species (in the editor, the box in its header) -- or "
+                    f"define species_order (or SPECIES) in the code context "
+                    f"-- and this unit builds itself.")
         # Not "and drop the unit again": the node is still on the canvas,
         # and answering what it asks for promotes it where it stands.
         # Telling the reader to repeat a gesture they have already made
@@ -1720,6 +1764,11 @@ class FlowsheetSession:
                     stored[key] = _solver_option(key, value)
         except ValueError as exc:
             return {"ok": False, "error": str(exc)}
+        merged = {**SOLVER_DEFAULTS, **stored}
+        if merged["tol_basis"] == "error" and merged["error_probe"] < 1:
+            # Flowsheet.solve refuses the pair; say so here, where it was set.
+            return {"ok": False, "error": 'tol_basis "error" needs error_probe '
+                    "of at least 1: the error is measured by those passes"}
         with self._lock:
             # A value equal to the default is not stored: the file then
             # says only what someone chose. A key this version does not
@@ -1771,19 +1820,23 @@ class FlowsheetSession:
         if missing:
             self.solve_error = "; ".join(
                 f"{unit} needs {', '.join(names)}" for unit, names in missing.items()
-            ) + ". Set them under 'call parameters' in the inspector."
+            ) + ". Set them as the unit's call parameters."
             return {"ok": False, "error": self.solve_error}
+        caught = []
         try:
-            with self._lock:
-                # The editor renders the verdict itself, in red, from the
-                # `converged` field below; a ConvergenceWarning on the
-                # server's stderr would say the same thing where nobody
-                # using the editor is looking.
+            with self._lock, warnings.catch_warnings(record=True) as caught:
+                # Recorded, not printed: a TearToleranceWarning or a
+                # CSTRDensityWarning on the server's stderr is somewhere
+                # nobody using the editor or an agent is looking. The
+                # verdict itself is the `converged` field below, which is
+                # why non-convergence is "ignore" rather than a warning.
+                warnings.simplefilter("always")
                 streams = self.flowsheet.solve(on_nonconvergence="ignore",
                                                **self._solve_kw())
         except Exception as exc:
             self.solve_error = self._solve_error(exc)
-            return {"ok": False, "error": self.solve_error}
+            return {"ok": False, "error": self.solve_error,
+                    "warnings": _recorded(caught)}
         self.streams = streams
         self.solve_error = None
         fs = self.flowsheet
@@ -1803,6 +1856,12 @@ class FlowsheetSession:
             "residual": _number(getattr(fs, "last_solve_residual", None)),
             "tol": _number(getattr(fs, "last_solve_tol", None)),
             "tear_streams": list(getattr(fs, "last_solve_tear_streams", []) or []),
+            # The loop gain and the error it implies: at gain g the error
+            # is about 1/(1-g) times the step that `tol` tested.
+            "gain": _number(getattr(fs, "last_solve_gain", None)),
+            "error_estimate": _number(getattr(fs, "last_solve_error_estimate", None)),
+            "clip_active": getattr(fs, "last_solve_clip_active", None),
+            "warnings": _recorded(caught),
             "solver": self.solver_options(),
             "audit": self._audit(streams),
         }
@@ -1845,7 +1904,7 @@ class FlowsheetSession:
         if idle:
             warnings.append(
                 f"{', '.join(idle)} {'is a feed' if len(idle) == 1 else 'are feeds'}"
-                " no unit reads; drag it onto an inlet, or delete it")
+                " no unit reads; connect it to an inlet, or remove it")
         order = list(getattr(fs, "species_order", None) or [])
         mass = None
         try:
@@ -1907,8 +1966,8 @@ class FlowsheetSession:
         if isinstance(exc, KeyError) and exc.args:
             missing = exc.args[0]
             if missing in edit.unfed(self.flowsheet):
-                return (f"nothing feeds {missing!r}. Select it on the canvas "
-                        "and give it a feed, or wire a unit's outlet into it.")
+                return (f"nothing feeds {missing!r}. Give it a feed, or "
+                        "connect a unit's outlet to it.")
         return f"{type(exc).__name__}: {exc}"
 
     # -- derivatives ---------------------------------------------------

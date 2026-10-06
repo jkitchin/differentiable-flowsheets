@@ -1,6 +1,54 @@
 {
- "n_sections": 1074,
+ "n_sections": 1080,
  "sections": [
+  {
+   "anchor": "agents-the-difflow-mcp-server",
+   "heading": "Agents: the `difflow mcp` server",
+   "path": "Agents: the `difflow mcp` server",
+   "source": "agents.md",
+   "targets": [],
+   "text": "`difflow mcp` serves difflow's flowsheet tools to an AI agent over the\n[Model Context Protocol](https://modelcontextprotocol.io). An agent connected\nto it can find unit operations, build and edit a flowsheet, solve it, read the\nstreams, and run Python in the same session, with the same engine the browser\neditor uses."
+  },
+  {
+   "anchor": "installing-and-connecting",
+   "heading": "Installing and connecting",
+   "path": "Agents: the `difflow mcp` server > Installing and connecting",
+   "source": "agents.md",
+   "targets": [],
+   "text": "The server needs the MCP SDK, which is an optional extra:\n\n```bash\npip install \"difflow[mcp]\"\n```\n\nRegister it with Claude Code (or any MCP client that launches a command over\nstdio):\n\n```bash\nclaude mcp add difflow -- difflow mcp\n```\n\nTwo options matter:\n\n| Option | Effect |\n|---|---|\n| `--no-exec` | Leaves out the three tools that run Python: `run_python`, `set_code_context` and `open_file`. Use it for a shared or hosted client. |\n| `--timeout S` | Seconds a solve or a Python call may run before the tool returns (default 300). The call keeps running in the background and its session refuses other calls until it ends. A first solve of a large unit can take minutes to compile. |"
+  },
+  {
+   "anchor": "what-the-tools-are",
+   "heading": "What the tools are",
+   "path": "Agents: the `difflow mcp` server > What the tools are",
+   "source": "agents.md",
+   "targets": [],
+   "text": "Nothing in the tool layer is a hand-written list of units. Operations come\nfrom the plugin registry and the catalog, so a newly installed plugin's units\nare usable at once; libraries that are not unit operations (planning,\nstochastic programming, the refinery reformer and FCC) are found by reading\neach package's `__all__`.\n\n| Group | Tools |\n|---|---|\n| Discovery | `plugin_status`, `list_operations`, `describe_operation`, `list_api`, `describe_api`, `search_species`, `search_docs`, `list_examples` |\n| Sessions | `list_sessions`, `new_session`, `close_session`, `open_example`, `open_file`, `save`, `undo`, `redo`, `get_flowsheet` |\n| Building | `set_species`, `set_code_context`, `add_unit`, `update_unit`, `remove_unit`, `connect`, `disconnect`, `set_feed`, `remove_feed` |\n| Running | `set_solver_options`, `solve`, `get_streams` |\n| Python | `run_python` |\n\nEach tool is annotated as read-only, editing, or running code, so a client can\nask before the last kind. A session holds one flowsheet; every tool takes a\n`session` argument (default `\"main\"`), so a base case and a variant can be\nkept side by side."
+  },
+  {
+   "anchor": "how-a-flowsheet-is-built",
+   "heading": "How a flowsheet is built",
+   "path": "Agents: the `difflow mcp` server > How a flowsheet is built",
+   "source": "agents.md",
+   "targets": [],
+   "text": "Ports are stream names, and a stream's name is its wiring. `add_unit` places a\nunit with its own stream name on every port; `connect` joins one unit's outlet\nstream to another's inlet stream, and a connection that closes a loop becomes\na recycle without being declared. `set_feed` puts a feed on an inlet nothing\nelse supplies, and `get_flowsheet` lists the inlets still waiting for one.\n\nUnits that need objects rather than numbers (a thermo or EOS object, a rate\nlaw) get them from the *code context*, a Python snippet saved with the\nflowsheet. `describe_operation` reports what a unit still needs in the current\nsession and returns starter code that supplies it. A unit added before its\nneeds are met is placed as *pending* and builds itself once they are."
+  },
+  {
+   "anchor": "reading-a-solve",
+   "heading": "Reading a solve",
+   "path": "Agents: the `difflow mcp` server > Reading a solve",
+   "source": "agents.md",
+   "targets": [],
+   "text": "`solve` returns more than streams, and an answer is good only when it\nconverged **and** its audit is clean:\n\n- `converged`: the recycle verdict.\n- `gain` and `error_estimate`: at loop gain $g$ the error is about $1/(1-g)$\n  times the step `tol` tested (see {doc}`convergence`).\n- `warnings`: what the solve warned about (a `TearToleranceWarning`, a\n  `CSTRDensityWarning`, ...), returned instead of printed.\n- `audit`: non-finite values, negative flows, unread feeds and the overall\n  mass balance.\n\nEvery option of `Flowsheet.solve` that is a setting (tolerance and its basis,\nacceleration, damping, tear choice, clipping) can be set with\n`set_solver_options` or passed to `solve`, and is saved with the flowsheet."
+  },
+  {
+   "anchor": "using-the-tools-without-mcp",
+   "heading": "Using the tools without MCP",
+   "path": "Agents: the `difflow mcp` server > Using the tools without MCP",
+   "source": "agents.md",
+   "targets": [],
+   "text": "The tools are methods of `difflow.agent.Workbench`, which does not need the\nSDK:\n\n```python\nfrom difflow.agent import Workbench\n\nwb = Workbench()\nwb.open_example(\"03_reactor_recycle\")\nanswer = wb.solve()\nanswer[\"converged\"], answer[\"gain\"]\n```"
+  },
   {
    "anchor": "ask-the-in-browser-docs-assistant",
    "heading": "Ask: the in-browser docs assistant",
@@ -7986,9 +8034,10 @@
    "path": "Refinery Unit Operations > The saturated gas plant > GasCompressor",
    "source": "unit-operations-refinery.md",
    "targets": [
-    "refinery-gascompressor"
+    "refinery-gascompressor",
+    "op-wetgascompressor"
    ],
-   "text": "The wet-gas compressor has `n_stages` isentropic stages at equal\npressure ratios. Each stage's work is the isentropic enthalpy rise\ndivided by `efficiency`. An aftercooler and knockout drum follow each\nstage. The condensate from all the drums leaves as one liquid stream,\nwhich in a gas plant joins the absorber feed. `info` reports:\n\n- `power` (W);\n- `stage_power`;\n- `discharge_T`;\n- the stage pressure `ratio`.\n\nSurge, choke and the compressor map are out of scope.\n\n(refinery-aminetreater)="
+   "text": "Registered as the operation `WetGasCompressor`; `GasCompressor` in the\ncatalog is the core unit.\n\nThe wet-gas compressor has `n_stages` isentropic stages at equal\npressure ratios. Each stage's work is the isentropic enthalpy rise\ndivided by `efficiency`. An aftercooler and knockout drum follow each\nstage. The condensate from all the drums leaves as one liquid stream,\nwhich in a gas plant joins the absorber feed. `info` reports:\n\n- `power` (W);\n- `stage_power`;\n- `discharge_T`;\n- the stage pressure `ratio`.\n\nSurge, choke and the compressor map are out of scope.\n\n(refinery-aminetreater)="
   },
   {
    "anchor": "aminetreater",
