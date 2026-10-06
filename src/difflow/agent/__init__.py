@@ -32,6 +32,7 @@ TOOLS: dict[str, str] = {
     "open_example": "edit",
     "open_file": "exec",
     "save": "edit",
+    "open_in_editor": "edit",
     "undo": "edit",
     "redo": "edit",
     "get_flowsheet": "read",
