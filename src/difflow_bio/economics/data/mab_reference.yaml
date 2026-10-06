@@ -1,0 +1,119 @@
+# Reference cost basis and process for a fed-batch mAb platform.
+#
+# PROVENANCE. Every number below carries a comment saying where it came from.
+# Three kinds of source appear:
+#   [database]     copied from difflow_bio.database (resin capacity, lifetime and
+#                  price; the capacity and lifetime entries cite vendor data
+#                  sheets there, the prices are list-price estimates with no
+#                  published source)
+#   [carried over] the value difflow_bio.economics used before this file existed,
+#                  kept so results do not jump; not independently sourced
+#   [placeholder]  an order-of-magnitude assumption for a 2000 L fed-batch mAb
+#                  process, NOT a published or measured value
+#
+# None of these is a benchmark. Replace them with your own plant's numbers:
+# copy this file, edit it, and load it with
+#     process, basis = difflow_bio.economics.load_cost_model("my_plant.yaml")
+# For a published process encoded in the same format, with every number tied
+# to its page, see petrides2015_mab.yaml (tests/bio/test_economics_benchmark.py).
+
+basis:
+  media_usd_L:
+    basal: 80.0          # [carried over] ConsumableCosts.media CHO_chemically_defined
+    feed: 200.0          # [carried over] ConsumableCosts.media feed_concentrate
+    seed: 80.0           # [placeholder] seed train on the basal medium price
+  buffer_usd_L:
+    equilibration: 8.0   # [carried over] ConsumableCosts.buffers
+    wash: 6.0            # [carried over] ConsumableCosts.buffers
+    elution: 15.0        # [carried over] ConsumableCosts.buffers
+    CIP_NaOH: 3.0        # [carried over] ConsumableCosts.buffers
+    PBS: 5.0             # [carried over] ConsumableCosts.buffers
+    WFI: 0.5             # [carried over] ConsumableCosts.buffers / OperatingCosts.wfi_rate
+  labor_rate_usd_h: 75.0             # [carried over] OperatingCosts.labor_rate (loaded rate)
+  hours_per_fte_year: 2000.0         # [carried over] estimate_labor_cost default
+  support_fte: 20.0                  # [placeholder] QA, QC, supervision, engineering: fixed staff
+  operator_hours_per_bioreactor_batch: 120.0  # [placeholder] seed train, inoculation, monitoring, harvest
+  operator_hours_per_step_batch: 24.0         # [placeholder] set-up, run and clean-down per DSP step
+  qc_usd_per_batch: 50000.0          # [placeholder] lot release testing per batch attempted
+  utilities_usd_per_L_batch: 5.05    # [carried over] 0.5 kWh/L x $0.10/kWh + 10 L WFI/L x $0.50/L
+  waste_usd_L: 2.0                   # [carried over] OperatingCosts.waste_disposal_rate
+  maintenance_fraction: 0.05         # [carried over] OperatingCosts.maintenance_factor (of CAPEX per year)
+
+process:
+  working_volume_L: 2000.0     # [placeholder] one 2000 L single-use production bioreactor
+  titer_g_L: 5.0               # [placeholder] a current fed-batch CHO titer
+  batches_per_year: 24.0       # [placeholder]
+  batch_success_rate: 0.95     # [placeholder] fraction of batches released
+  basal_media_L_per_L: 1.0     # [placeholder] initial fill, per L working volume
+  feed_L_per_L: 0.3            # [carried over] feed_volume_fraction default
+  seed_media_L_per_L: 0.1      # [placeholder] seed train media per L production volume
+  bioreactor_single_use_usd_per_batch: 2500.0  # [carried over] ConsumableCosts.bags 2000L
+  steps:
+    - type: yield
+      name: harvest
+      step_yield: 0.95                   # [placeholder] centrifugation + depth filtration recovery
+      single_use_usd_per_batch: 15000.0  # [placeholder] depth filter train and bags
+    - type: chromatography
+      name: protein_a_capture
+      resin: MabSelect_SuRe
+      column_volume_L: 100.0             # [placeholder]
+      dynamic_binding_capacity_g_L: 28.0 # [database] q_max 35 g/L x 0.8, the derating mAbDSPTrain uses
+      step_yield: 0.95                   # [placeholder]
+      resin_cost_usd_L: 15000.0          # [database] list-price estimate
+      resin_lifetime_cycles: 200.0       # [database] MabSelect_SuRe cycles
+      buffer_cv:                          # [placeholder] column volumes per cycle
+        equilibration: 5.0
+        wash: 5.0
+        elution: 3.0
+        CIP_NaOH: 3.0
+      single_use_usd_per_batch: 2000.0   # [placeholder] bags and assemblies
+    - type: yield
+      name: viral_inactivation
+      step_yield: 0.98                   # [placeholder] low-pH hold
+      buffer_L_per_batch:
+        PBS: 200.0                       # [placeholder] titrant and neutralization
+    - type: chromatography
+      name: cation_exchange
+      resin: Capto_S_ImpAct
+      column_volume_L: 80.0              # [placeholder]
+      dynamic_binding_capacity_g_L: 68.0 # [database] q_max 85 g/L x 0.8
+      step_yield: 0.92                   # [placeholder]
+      resin_cost_usd_L: 5000.0           # [database] list-price estimate
+      resin_lifetime_cycles: 300.0       # [database] Capto_S_ImpAct cycles
+      buffer_cv:
+        equilibration: 5.0               # [placeholder]
+        wash: 5.0                        # [placeholder]
+        elution: 10.0                    # [placeholder] gradient elution
+        CIP_NaOH: 3.0                    # [placeholder]
+      single_use_usd_per_batch: 2000.0   # [placeholder]
+    - type: chromatography
+      name: anion_exchange_flow_through
+      resin: Capto_Q
+      column_volume_L: 40.0              # [placeholder]
+      dynamic_binding_capacity_g_L: 150.0  # [placeholder] mAb load per L in flow-through mode, not a binding capacity
+      step_yield: 0.95                   # [placeholder]
+      resin_cost_usd_L: 4500.0           # [database] list-price estimate
+      resin_lifetime_cycles: 300.0       # [database] Capto_Q cycles
+      buffer_cv:
+        equilibration: 5.0               # [placeholder]
+        wash: 3.0                        # [placeholder]
+        CIP_NaOH: 3.0                    # [placeholder]
+      single_use_usd_per_batch: 2000.0   # [placeholder]
+    - type: filtration
+      name: virus_filtration
+      membrane: Viresolve_Pro
+      area_m2: 4.0                       # [placeholder]
+      step_yield: 0.97                   # [placeholder]
+      membrane_cost_usd_m2: 2000.0       # [carried over] ConsumableCosts.membranes Viresolve_Pro
+      lifetime_batches: 1.0              # [placeholder] virus filters are single use
+      single_use_usd_per_batch: 1000.0   # [placeholder]
+    - type: filtration
+      name: uf_df
+      membrane: Pellicon_3_30kDa
+      area_m2: 20.0                      # [placeholder]
+      step_yield: 0.97                   # [placeholder]
+      membrane_cost_usd_m2: 400.0        # [carried over] ConsumableCosts.membranes Pellicon_3_30kDa
+      lifetime_batches: 100.0            # [carried over] estimate_membrane_cost default lifetime
+      buffer_L_per_m2:
+        PBS: 50.0                        # [placeholder] diafiltration volumes per m2
+      single_use_usd_per_batch: 1000.0   # [placeholder]

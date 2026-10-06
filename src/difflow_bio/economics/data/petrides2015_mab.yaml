@@ -1,0 +1,95 @@
+# Benchmark: the large-scale monoclonal antibody process of Petrides (2015).
+#
+# SOURCE. D. Petrides, "Bioprocess Design and Economics", Intelligen, Inc.,
+# March 2015, section 11.6.3, "THERAPEUTIC MONOCLONAL ANTIBODY PRODUCTION",
+# pp. 11-63 to 11-71, Tables 11.15 to 11.17:
+#   https://www.intelligen.com/wp-content/uploads/2020/05/BioProcessDesignAndEconomics_March_2015.pdf
+# The document states that an improved version is Chapter 11 of Harrison,
+# Todd, Rudge and Petrides, Bioseparations Science and Engineering, 2nd ed.,
+# Oxford University Press (2015). The numbers here are from the Intelligen
+# document; the book's may differ.
+#
+# PROVENANCE TAGS.
+#   [stated p.N]   a number the source states, on page 11-N
+#   [derived]      computed from stated numbers, with the arithmetic shown
+#   [not stated]   the source gives no value; set to zero so it adds nothing,
+#                  and the category is not part of the benchmark
+#
+# WHAT THIS BENCHMARKS. The quantities the source's stated inputs fix: product
+# per batch and per year, cycles per batch of each column, elution buffer
+# volumes (Table 11.15), resin replacement cost (inside Consumables, Table
+# 11.17) and media cost (inside Raw Materials, Table 11.17). The source gives
+# labor, facility-dependent, QC and miscellaneous costs only as totals, not
+# the inputs behind them, so those are not reproduced and are zero here.
+# tests/bio/test_economics_benchmark.py holds the comparisons.
+
+basis:
+  media_usd_L:
+    basal: 9.3358        # [derived] serum-free media 466.79 kg/batch (Table 11.15) x $300/kg (p.68, assumption 5) / 15,000 L broth (p.65)
+    feed: 0.0            # [stated p.64] half the media is fed during the run; its cost is in the basal figure, which is per batch
+    seed: 0.0            # [not stated] inoculum media is 232.82 kg/batch (Table 11.15) but its price is not given
+  buffer_usd_L:
+    elution: 0.15        # [stated p.68] WFI at $0.15/L; the buffer chemicals' prices are not stated, so this is a lower bound
+    equilibration_wash_regeneration: 0.15  # [stated p.68] WFI only, as above
+  labor_rate_usd_h: 0.0              # [not stated] labor is given only as a total ($18.89M/yr, Table 11.17)
+  hours_per_fte_year: 2000.0         # [not stated] unused here (no labor inputs); the CostBasis default
+  support_fte: 0.0                   # [not stated]
+  operator_hours_per_bioreactor_batch: 0.0  # [not stated]
+  operator_hours_per_step_batch: 0.0        # [not stated]
+  qc_usd_per_batch: 0.0              # [not stated] Lab/QC/QA is given only as a total ($4.45M/yr)
+  utilities_usd_per_L_batch: 0.0     # [not stated] in Miscellaneous ($5.47M/yr)
+  waste_usd_L: 0.0                   # [not stated] in Miscellaneous
+  maintenance_fraction: 0.0          # [not stated] in Facility-Dependent ($60.54M/yr)
+
+process:
+  working_volume_L: 15000.0    # [stated p.65] "volume of broth generated per bioreactor batch is approximately 15,000 L"
+  titer_g_L: 2.0333            # [derived] 30.5 kg product per batch (p.65) / 15,000 L; the source rounds it to "approximately 2 g/L"
+  batches_per_year: 80.0       # [stated p.66] four bioreactor trains, "80 batches per year"
+  batch_success_rate: 1.0      # [stated p.66] 80 batches and 1,544 kg/yr imply every batch is released
+  basal_media_L_per_L: 1.0     # [derived] media priced per litre of broth above
+  feed_L_per_L: 0.0            # [derived] see basis.media_usd_L.feed
+  seed_media_L_per_L: 0.0      # [not stated] see basis.media_usd_L.seed
+  bioreactor_single_use_usd_per_batch: 0.0  # [not stated]
+  steps:
+    - type: yield
+      name: disc_stack_centrifuge
+      step_yield: 0.95                   # [stated p.65] "roughly 5% of MAb is lost in the solids waste stream"
+    - type: chromatography
+      name: protein_a
+      resin: Protein A (C-101)
+      column_volume_L: 502.0             # [stated p.65] "requires a resin volume of 502 L"
+      dynamic_binding_capacity_g_L: 15.0 # [stated p.65] "resin binding capacity is 15 g of product per L of resin"
+      step_yield: 0.90                   # [stated p.65] "recovery yield of 90%"
+      resin_cost_usd_L: 6000.0           # [stated p.68] "$6000/L ... for columns C-101"
+      resin_lifetime_cycles: 60.0        # [stated p.69] "every 60, 50, and 50 cycles for columns C-101, C-102, and C-103"
+      buffer_cv:
+        elution: 5.0                     # [stated p.65] "its volume is equal to 5 column volumes (CVs)"
+        equilibration_wash_regeneration: 14.0  # [stated p.65] "column equilibration, wash and regeneration is 14 CVs"
+    - type: yield
+      name: uf_df_1
+      step_yield: 0.97                   # [stated p.65] "The product yield is 97%"; membrane (21 m2, $400/m2) lifetime not stated, so not costed
+    - type: chromatography
+      name: iex
+      resin: IEX (C-102)
+      column_volume_L: 210.0             # [stated p.65] "requires a resin volume of 210 L"
+      dynamic_binding_capacity_g_L: 40.0 # [stated p.65] "binding capacity is 40 g of product per L of resin"
+      step_yield: 0.90                   # [stated p.65] "MAb yield of 90%"
+      resin_cost_usd_L: 1200.0           # [stated p.68] "$1200/L ... C-102"
+      resin_lifetime_cycles: 50.0        # [stated p.69] "every 60, 50, and 50 cycles for columns C-101, C-102, and C-103"
+      buffer_cv:
+        elution: 5.0                     # [stated p.65] gradient elution, "a volume of 5 CVs"
+        equilibration_wash_regeneration: 16.0  # [stated p.65] "equilibration, wash, regeneration and rinse is 16 CVs"
+    - type: chromatography
+      name: hic
+      resin: HIC (C-103)
+      column_volume_L: 190.0             # [stated p.66] "requires a resin volume of 190 L"
+      dynamic_binding_capacity_g_L: 40.0 # [stated p.65] "the resin binding capacity is 40 g of product per L of resin"
+      step_yield: 0.90                   # [stated p.66] "recovery yield of 90%"
+      resin_cost_usd_L: 2050.0           # [stated p.68] "$2050/L for columns ... C-103"
+      resin_lifetime_cycles: 50.0        # [stated p.69] "every 60, 50, and 50 cycles for columns C-101, C-102, and C-103"
+      buffer_cv:
+        elution: 5.0                     # [stated p.65] "its volume is equal to 5 CVs"
+        equilibration_wash_regeneration: 12.0  # [stated p.66] "equilibration, wash and regeneration is 12 CVs"
+    - type: yield
+      name: unstated_losses
+      step_yield: 0.94079                # [derived] overall yield 63.2% (p.66) / product of the stated step yields 0.95 x 0.90 x 0.97 x 0.90 x 0.90 = 0.67177; losses in the filters, viral inactivation and final UF/DF, whose yields the source does not give

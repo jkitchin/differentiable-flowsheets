@@ -451,6 +451,11 @@ def estimate_utilities_cost(
     return electricity + wfi
 
 
+#: resins :func:`estimate_total_opex` assumes for the chromatography steps,
+#: in order: capture, then the polishing steps
+DEFAULT_TRAIN_RESINS = ("MabSelect_SuRe", "Capto_S_ImpAct", "Capto_Q")
+
+
 def estimate_total_opex(
     annual_batches: int,
     bioreactor_volume_L: float,
@@ -458,27 +463,46 @@ def estimate_total_opex(
     n_chromatography_steps: int = 3,
     tff_area_m2: float = 10.0,
     capex: float = 0.0,
+    resins: tuple[str, ...] | None = None,
 ) -> dict[str, float]:
-    """Estimate total annual operating cost.
+    """Estimate total annual operating cost (coarse; prefer cogs_breakdown).
+
+    Deprecated in favour of :func:`difflow_bio.economics.cogs_breakdown`,
+    in which resin cycles follow the product load, labor follows the batches
+    and steps, and buffers, QC and failed batches are counted (#358). This
+    function keeps its signature; each chromatography step is now priced
+    with its own resin (Protein A capture, then cation and anion exchange
+    by default) at that resin's lifetime, where all of them used to be
+    priced as Protein A.
 
     Args:
         annual_batches: Number of batches per year
         bioreactor_volume_L: Bioreactor volume (L)
-        column_volume_L: Average column volume (L)
+        column_volume_L: Column volume of each step (L)
         n_chromatography_steps: Number of chromatography steps
         tff_area_m2: TFF membrane area (m2)
         capex: Total CAPEX for maintenance calculation
+        resins: Resin per step; defaults to :data:`DEFAULT_TRAIN_RESINS`,
+            the last repeated for steps beyond three.
 
     Returns:
         Dictionary of OPEX components
     """
-    # Consumables
-    # Assume Protein A is the capture resin
-    resin = estimate_resin_cost(
-        "MabSelect_SuRe",
-        column_volume_L,
-        annual_batches,
-    ) * n_chromatography_steps
+    import warnings
+
+    from difflow_bio.database import get_resin
+
+    warnings.warn(
+        "estimate_total_opex is a coarse model (fixed labor, one cycle per "
+        "batch, no buffers); use difflow_bio.economics.cogs_breakdown",
+        DeprecationWarning, stacklevel=2)
+    chosen = tuple(resins or DEFAULT_TRAIN_RESINS)
+    chosen = tuple(chosen[min(i, len(chosen) - 1)]
+                   for i in range(n_chromatography_steps))
+    resin = sum(
+        estimate_resin_cost(name, column_volume_L, annual_batches,
+                            resin_lifetime_cycles=get_resin(name).cycles)
+        for name in chosen)
 
     membrane = estimate_membrane_cost(
         "Pellicon_3_30kDa",
@@ -550,13 +574,17 @@ def cost_per_gram(
 
     Returns:
         Dictionary with cost breakdown per gram
+
+    Deprecated: titer and yield change only the denominator here, so its
+    derivative with respect to either is trivially ``-cost/x``. Use
+    :func:`difflow_bio.economics.cogs_breakdown` (#358).
     """
     # Annual production
     harvest_per_batch = bioreactor_volume_L * titer_g_L
     product_per_batch = harvest_per_batch * yield_overall
     annual_production = product_per_batch * annual_batches
 
-    # Get OPEX estimate
+    # Get OPEX estimate (its DeprecationWarning points at the replacement)
     opex = estimate_total_opex(
         annual_batches,
         bioreactor_volume_L,
