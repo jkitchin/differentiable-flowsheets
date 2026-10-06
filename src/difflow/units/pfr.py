@@ -151,6 +151,9 @@ class PFR:
         "atol": "-",
         "n_save_points": "-",
     }
+    #: Priced as a purchased vessel from its volume (Turton et al. power law
+    #: in difflow.economics.capital); see the cost_basis metadata contract.
+    cost_basis = {"table": "REACTOR_COSTS", "type": "pfr_tube", "size": "V"}
     numerical_method = (
         "Adaptive ODE integration via diffrax (Tsit5/Kvaerno5) over the volume domain."
     )
@@ -747,6 +750,9 @@ class GasPFR:
         "atol": "-",
         "n_save_points": "-",
     }
+    #: Priced as a purchased vessel from its volume (Turton et al. power law
+    #: in difflow.economics.capital); see the cost_basis metadata contract.
+    cost_basis = {"table": "REACTOR_COSTS", "type": "pfr_tube", "size": "V"}
     numerical_method = "Adaptive diffrax ODE integration over V with coupled (F, T, P) state."
 
     def __init__(

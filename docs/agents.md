@@ -43,7 +43,7 @@ each package's `__all__`.
 | Building | `set_species`, `set_code_context`, `add_unit`, `update_unit`, `remove_unit`, `connect`, `disconnect`, `set_feed`, `remove_feed` |
 | Running | `set_solver_options`, `solve`, `get_streams` |
 | Diagnosis | `diagnose`, `converge`, `tear_analysis`, `trace_solve`, `get_unit_info` |
-| Analysis | `levers`, `define_quantity`, `remove_quantity`, `list_quantities`, `evaluate`, `sensitivity`, `sweep`, `optimize`, `uncertainty`, `linearize`, `report` |
+| Analysis | `levers`, `define_quantity`, `remove_quantity`, `list_quantities`, `evaluate`, `sensitivity`, `sweep`, `optimize`, `uncertainty`, `linearize`, `tea`, `report` |
 | Python | `run_python` |
 
 Each tool is annotated as read-only, editing, or running code, so a client can
@@ -157,6 +157,16 @@ Levers are what `levers` lists: `"<unit>.<param>"` and
   (see {doc}`planning`), and `report` the flowsheet's self-documenting report.
 
 Every result that rests on a solve carries that solve's convergence verdict.
+
+`tea` prices the flowsheet's capital from cost bases the units declare
+themselves: a unit class may name a correlation in
+`difflow.economics.capital` and the parameter that sizes it (a CSTR is a
+jacketed vessel sized by `V`). Units with no basis are listed as uncosted
+rather than given a size nobody chose, and a size outside a correlation's
+range is flagged. The result is also written as two named quantities,
+`purchased_equipment` and `capex`, so an objective such as
+`-revenue + 0.1 * capex` trades capital against the process with exact
+gradients.
 
 ## What each plugin adds
 

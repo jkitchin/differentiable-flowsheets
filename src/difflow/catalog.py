@@ -158,6 +158,8 @@ class OperationSchema(ParamsMixin):
         assumptions: what the model takes for granted.
         references: where the model comes from.
         numerical_method: how it is solved, in a sentence.
+        cost_basis: how to price it (see :mod:`difflow.report.metadata`),
+            or ``None`` when no correlation can be sized from what it knows.
         ports: stream connectivity.
         parameters: the ``Params`` fields.
         params_class: name of the ``Params`` dataclass, if one was found.
@@ -183,6 +185,7 @@ class OperationSchema(ParamsMixin):
     assumptions: list[str] = field(default_factory=list)
     references: list[str] = field(default_factory=list)
     numerical_method: str | None = None
+    cost_basis: dict | None = None
     ports: PortSpec = field(default_factory=PortSpec)
     parameters: list[ParameterSpec] = field(default_factory=list)
     params_class: str | None = None
@@ -231,6 +234,7 @@ class OperationSchema(ParamsMixin):
             "assumptions": list(self.assumptions),
             "references": list(self.references),
             "numerical_method": self.numerical_method,
+            "cost_basis": self.cost_basis,
             "params_class": self.params_class,
             "declarative": self.is_declarative,
             "constructor_extras": list(self.constructor_extras),
@@ -575,6 +579,7 @@ def describe_class(
         assumptions=list(meta.assumptions),
         references=list(meta.references),
         numerical_method=meta.numerical_method,
+        cost_basis=getattr(meta, "cost_basis", None),
         ports=_ports(cls),
         parameters=_parameters(params_cls, meta),
         params_class=params_cls.__name__ if params_cls else None,

@@ -11,6 +11,10 @@ self-documenting:
 - ``parameter_symbols``: dict mapping ``Params`` field name -> LaTeX symbol
 - ``parameter_units``: dict mapping ``Params`` field name -> unit string
 - ``numerical_method``: short description of the numerical method used
+- ``cost_basis``: how to price the unit, ``{"table": <a CostParams table in
+  difflow.economics.capital>, "type": <a key in it>, "size": <the Params
+  field that sizes it, in the table's units>}``; absent when no correlation
+  can be sized from what the unit knows
 
 All fields are optional. :func:`get_metadata` returns a :class:`UnitMetadata`
 for any class, falling back to docstring parsing for equations when the
@@ -47,6 +51,7 @@ class UnitMetadata:
     parameter_symbols: dict[str, str] = field(default_factory=dict)
     parameter_units: dict[str, str] = field(default_factory=dict)
     numerical_method: str | None = None
+    cost_basis: dict | None = None
 
 
 _EQ_HEADERS = ("Key equations:", "Governing equations:", "Equations:")
@@ -139,6 +144,7 @@ def get_metadata(cls: type) -> UnitMetadata:
     parameter_symbols = dict(getattr(cls, "parameter_symbols", {}) or {})
     parameter_units = dict(getattr(cls, "parameter_units", {}) or {})
     numerical_method = getattr(cls, "numerical_method", None)
+    cost_basis = getattr(cls, "cost_basis", None)
 
     # Fallbacks: pull from class docstring, then module docstring.
     if not equations:
@@ -169,6 +175,7 @@ def get_metadata(cls: type) -> UnitMetadata:
         parameter_symbols=parameter_symbols,
         parameter_units=parameter_units,
         numerical_method=numerical_method,
+        cost_basis=dict(cost_basis) if cost_basis else None,
     )
 
 

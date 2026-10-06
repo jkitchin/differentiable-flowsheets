@@ -745,6 +745,24 @@ class Workbench:
         return self._timed(session, lambda: s.linearize(u, y, radius=radius,
                                                         check=check), timeout)
 
+    def tea(self, target_year: int | None = None, lang_factor: float = 4.74,
+            working_capital_fraction: float = 0.15, define: bool = True,
+            session: str = "main") -> dict:
+        """Capital cost of the flowsheet from each unit's declared cost basis.
+
+        Units whose class declares a correlation and the parameter that
+        sizes it are priced (purchased cost escalated by CEPCI, flagged when
+        the size is outside the correlation's range); the rest are listed as
+        uncosted. Total capital = purchased x Lang factor x (1 + working
+        capital). With define, also names the quantities
+        purchased_equipment and capex as expressions over the sizing
+        parameters, so optimize can use "capex" with exact gradients.
+        """
+        return self._analysis(session, "tea", None, target_year=target_year,
+                              lang_factor=lang_factor,
+                              working_capital_fraction=working_capital_fraction,
+                              define=define)
+
     def report(self, format: str = "markdown", session: str = "main",
                timeout: float | None = None) -> dict:
         """The flowsheet's report: topology, unit parameters with units and
@@ -769,6 +787,15 @@ class Workbench:
         if err:
             return err
         return self._timed(session, lambda: s.console_run(code), timeout)
+
+
+def _registered_name(unit) -> str | None:
+    """The registry name of a unit's operation class, if registered."""
+    from difflow.plugins import registry
+
+    cls = type(unit.operation)
+    return next((n for n, info in registry.list_operations().items()
+                 if info.cls is cls), None)
 
 
 def _roles(operation: str, outlets: list[str]) -> dict[str, str] | None:
