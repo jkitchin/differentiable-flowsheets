@@ -22,6 +22,9 @@ identifiers:
   - type: doi
     value: 10.5281/zenodo.21881034
     description: Concept DOI resolving to the latest version of difflow
+  - type: doi
+    value: 10.5281/zenodo.23177918
+    description: Version DOI for difflow 0.2.2
 license: MIT
 repository-code: "https://github.com/jkitchin/differentiable-flowsheets"
 url: "https://github.com/jkitchin/differentiable-flowsheets"
