@@ -133,6 +133,12 @@ solvers = [
     # asdex never published a 3.10 wheel, which is what the marker was for.
     "asdex>=0.5",
 ]
+mcp = [
+    # difflow.mcp: `difflow mcp` serves difflow.agent's tools to an agent
+    # over stdio. Only difflow/mcp/server.py imports it; mcp 2 renamed
+    # FastMCP to MCPServer, which is what that file is written against.
+    "mcp>=2,<3",
+]
 cuda12 = [
     "jax[cuda12]>=0.4.0",
 ]
@@ -140,7 +146,7 @@ cuda11 = [
     "jax[cuda11_local]>=0.4.0",
 ]
 all = [
-    "difflow[dev,examples,visualization,bio,ree,cc,gas,power,refinery,solvers]",
+    "difflow[dev,examples,visualization,bio,ree,cc,gas,power,refinery,solvers,mcp]",
 ]
 
 [project.urls]
@@ -160,6 +166,7 @@ refinery = "difflow_refinery:register"
 [project.scripts]
 difflow = "difflow.cli:main"
 difflow-gui = "difflow.gui.server:main"
+difflow-mcp = "difflow.mcp.server:main"
 
 [tool.hatch.build]
 # No notebooks in either artifact. They are committed pre-executed with plot

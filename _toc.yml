@@ -34,6 +34,7 @@ parts:
       - file: docs/external-solvers
       - file: docs/eo-solver
       - file: docs/ask
+      - file: docs/agents
 
   - caption: About Flowsheets
     chapters:

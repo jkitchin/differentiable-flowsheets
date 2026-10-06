@@ -69,25 +69,19 @@ growing with it:
 """
 
 from difflow.gui import console, sensitivity
-from difflow.gui.server import (
-    DEFAULT_PORT,
-    DOCS_PREFIX,
-    HOST,
-    LOCAL_HOSTS,
-    NON_FINITE,
-    STATIC,
-    TOKEN_HEADER,
-    TOKEN_META,
-    main,
-    make_server,
-    mint_token,
-    page,
-    serve,
-)
-# The wire encoding is private, but it moved modules in the split and callers
-# reached for it at ``difflow.gui``; keep that name pointing at it.
-from difflow.gui.server import _json_restore, _json_safe  # noqa: F401
 from difflow.gui.session import FlowsheetSession, evaluate_context
+
+#: Names that live in ``server.py``, imported on first use. The session is
+#: the engine for more than the browser (``difflow mcp`` drives it over
+#: stdio), and importing it should not bring in ``http.server`` and
+#: ``webbrowser`` for a front end that never opens a socket. The wire
+#: encoding (``_json_safe``/``_json_restore``) is private, but it moved
+#: modules in the split and callers reached for it here, so it stays.
+_SERVER_NAMES = frozenset({
+    "DEFAULT_PORT", "DOCS_PREFIX", "HOST", "LOCAL_HOSTS", "NON_FINITE",
+    "STATIC", "TOKEN_HEADER", "TOKEN_META", "main", "make_server",
+    "mint_token", "page", "serve", "_json_restore", "_json_safe",
+})
 
 __all__ = [
     "DEFAULT_PORT",
@@ -111,11 +105,16 @@ __all__ = [
 
 
 def __getattr__(name: str):
-    """Keep ``gui._PAGE`` working now that the page lives on disk.
+    """The server's names on first use, and ``gui._PAGE``.
 
-    Reads it fresh, which is what a caller reaching for the served markup
-    wants; the old module constant was fixed at import.
+    ``_PAGE`` is read fresh now that the page lives on disk, which is what
+    a caller reaching for the served markup wants; the old module constant
+    was fixed at import.
     """
+    if name in _SERVER_NAMES:
+        from difflow.gui import server
+
+        return getattr(server, name)
     if name == "_PAGE":
-        return page()
+        return __getattr__("page")()
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

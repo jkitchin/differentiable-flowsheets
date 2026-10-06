@@ -1,0 +1,369 @@
+#+title: Agentic support for difflow: an MCP server
+#+date: 2026-10-06
+
+* Goal
+
+Give an agent (Claude Code, Claude Desktop, any MCP client) the same reach
+over difflow that a person has in the browser editor and a Python session
+combined: find the right operations, build and edit a flowsheet, run it, read
+the results, take derivatives, optimize, and, when a solve fails, work out why
+and get it to converge. The server runs over stdio, lives in the user's own
+environment, and discovers what difflow can do at startup instead of carrying
+a hand-written list that drifts.
+
+* What already exists (and what is missing)
+
+Most of the engine is already written, for the editor. =FlowsheetSession=
+(=gui/session.py=) holds a live =Flowsheet= plus JSON snapshots, has undo and
+redo, and every method returns a plain dict with =ok= instead of raising. Its
+operations cover the whole editing loop (=add_unit=, =patch_unit=, =connect=,
+=set_feed=, =set_species=, =set_code_context=), the analyses the editor shows
+(=solve=, =levers=, =sensitivity=, =linearize=), files and examples, and a
+Python console. Nothing in it depends on the HTTP layer; =server.py= is a thin
+router over it, so the MCP layer would be a second router.
+
+Discovery is derived from the code already. The registry (=plugins.py=) loads
+plugins from the =difflow.plugins= entry point, and =catalog.describe_operation=
+builds a JSON schema per operation from the =Params= dataclass, the =__call__=
+signature, the docstrings and the report metadata. =FlowsheetSession.catalog()=
+adds what each operation still =needs= against the current code context, and
+=boilerplate.snippet= writes the Python that supplies it. =serialize= gives a
+flowsheet a JSON form (with =$callable= for =mass_action_kinetics= rate laws and
+=$ref= for objects bound in the code context), and =codegen= turns it back into
+a script. =docs_index= is a stdlib TF-IDF search over 1072 sections of the book
+that ships in the wheel, and =context.pack= already assembles model-aware
+briefs for an LLM.
+
+On the solver side, =Flowsheet.solve= records a final-state snapshot
+(=last_solve_converged=, =residual=, =iterations=, =method=, =gain=,
+=error_estimate=, =clip_active=, =tear_streams=), =tear_analysis()= reports
+cycles, uncovered loops and calculation-order problems, and the convergence
+corpus (=convergence.py=) has eleven hard cases plus =run_case=, which is a
+settings sweep with a "converged AND correct" verdict.
+
+The gaps that matter for an agent:
+
+- Analysis libraries (planning, stochastic, estimation, reconciliation,
+  flexibility, operability, economics, uncertainty) and the refinery libraries
+  that are deliberately not palette operations (reformer, FCC, hydrocracking,
+  alkylation) are not discoverable except by reading =__all__=.
+- Almost every analysis takes a callable (an objective, a model function), and
+  a callable cannot cross an MCP boundary.
+- No iteration history is kept, so "is it oscillating or creeping?" can only
+  be inferred from the gain estimate.
+- Per-unit info dicts (CSTR conversion, flash phase flags, column balance
+  error) are discarded by the flowsheet during a solve.
+- The CSTR and isothermal Flash inner solves never check their own
+  convergence (=throw=False=, result unchecked, outlet clipped at zero), so a
+  failed inner solve looks like a plausible answer.
+- Remedies for non-convergence are prose (=docs/convergence.md=, the
+  =TROUBLESHOOTING= cards in =context.py=), not something a tool can apply.
+- The session exposes only four solver options (tol, max_iter, acceleration,
+  clip) of the eleven =solve= takes, and returns neither gain, error estimate
+  nor captured warnings.
+- Some session messages talk to a person at a canvas ("select it on the
+  canvas", "the inspector").
+
+Two defects turned up while surveying, and both affect discovery directly. The
+installed editable metadata lists five plugins and omits refinery, so the
+registry has 87 operations and no refinery units until a reinstall. The
+refinery package also registers =GasCompressor=, the same name as the core
+unit, and the registry overwrites a duplicate with only a log message.
+
+* Design
+
+** Where it lives and how it starts
+
+Inside difflow, in two layers (see Decisions): SDK-free tool functions in
+=difflow.agent= and a thin MCP adapter in =difflow/mcp/server.py=, behind an
+optional extra (=pip install difflow[mcp]=, pulling the official =mcp= Python
+SDK), so it is versioned with the library it describes. It starts as =difflow mcp= (a fourth subcommand in
+=cli.py=) and as a =difflow-mcp= script, over stdio by default. A Claude Code
+user registers it with =claude mcp add difflow -- difflow mcp=.
+
+The editor session stays where it is: moving it would drag the ten modules
+it uses (=edit=, =sensitivity=, =console=, =context=, ...) out of
+=difflow.gui= for no gain. The coupling was only that =difflow/gui/__init__.py=
+imported the HTTP server eagerly; it now imports the server's names on first
+use, so =difflow.agent= loads the session without =http.server= or
+=webbrowser=, and the two front ends share one engine. User-facing strings that assume a canvas become
+neutral or take the surface as a parameter.
+
+One server process holds several named sessions (a dict of
+=FlowsheetSession=), so an agent can keep a base case and a variant side by
+side. The process is long-lived on purpose: JAX compile caches stay warm
+across calls, which matters when a refinery unit takes seconds to minutes to
+compile the first time.
+
+** Dynamic discovery in three tiers
+
+The tool list itself stays small and fixed (about thirty tools). What is
+dynamic is the content those tools serve and validate against. Generating one
+tool per operation would put 87 to 100 schemas into the agent's context before
+it has asked anything, and the list would change with every plugin.
+
+1. *Operations* come from the registry and catalog at call time:
+   =list_operations(category, plugin, query)= and =describe_operation(name)=
+   return the =OperationSchema= plus the session-specific =needs=, a docs URL,
+   and the boilerplate to satisfy the needs. =add_unit= validates parameter
+   names and types against the same schema, so a new plugin unit is usable
+   the moment it is installed.
+2. *Libraries* come from introspection: =list_api(package)= walks the
+   =__all__= of =difflow= and of every plugin package found through the entry
+   point, and returns names, kinds, signatures and the first docstring
+   paragraph (=inspect= plus =docstrings.py=); =describe_api(qualname)= gives
+   the full signature and docstring. This is how an agent finds
+   =CatalyticReformer= or =solve_saa= without anyone listing them.
+3. *Python* is the escape hatch for whatever has no declarative form (a
+   custom =rate_fn=, a Peng-Robinson EOS, an analysis the tools do not wrap):
+   =set_code_context= and =run_python= reuse the session's code context and
+   console, with the live =fs=, =streams=, =jax= and =difflow= in scope.
+
+Startup also reports plugin health: which entry points loaded, which failed
+and why, and any duplicate operation names. The editable-install and
+=GasCompressor= problems above would then be visible to the agent instead of
+silent.
+
+** Objectives without callables
+
+Analysis needs functions; the MCP boundary carries data. The bridge is a small
+expression language over the output vocabulary the editor already uses
+(=stream.T=, =stream.P=, =stream.total_flow=, =stream.F_<species>=) and the
+lever vocabulary (=unit.param=, =feed:stream.field=). An objective is a string
+such as ="vapor.F_ethyl_acetate / feed.F_ethanol"= or
+="-(product.F_A * 12.0 - feed.total_flow * 1.5)"=, parsed with =ast= against
+a whitelist (arithmetic, comparisons, =min=, =max=, =exp=, =log=, =sqrt=,
+=sum=) and compiled to a JAX function of the streams, then lifted to the
+parameter space by =Flowsheet.make_objective_fn=. Constraints are the same
+expressions with a bound. That one adapter feeds sensitivity, optimization,
+sweeps, uncertainty and planning. Anything it cannot express goes through
+=run_python=.
+
+** Solver awareness
+
+=solver_capabilities(session)= is generated rather than written: the
+=Flowsheet.solve= signature and its documented options and defaults
+(=inspect= plus the docstring), which units in this flowsheet provide
+=eo_residuals= and which fall back to finite differences, whether the
+optional back ends are importable (pounce for =as_nlp=, discopt for
+=as_residual=), and plugin solvers relevant to the units present (the gas
+network's damped differentiable tear solve, power flow's Newton and the JAX
+interior-point OPF, the refinery's =solve_tear=). =solve= exposes every option
+=Flowsheet.solve= takes, plus =solve_eo=, and returns the full snapshot:
+convergence, residual, iterations, method, gain, error estimate, clip
+activity, tear streams, captured Python warnings (=TearToleranceWarning=,
+=ConvergenceWarning=, =CSTRDensityWarning=, the refinery convergence
+warnings), the editor's audit (non-finite values, negative flows, idle feeds,
+mass-balance gap) and, after the core change below, per-unit inner-solve
+status.
+
+** Debugging and convergence
+
+Two tools, one that explains and one that acts.
+
+=diagnose(session)= returns findings in the shape of =planning.health=
+(=Finding(kind, severity, detail, unit, variable, value)=), from four passes:
+
+1. *Preflight:* pending units and their needs, unfed inlets, placeholder
+   parameters still at the 1.0 the editor inserts, species missing from the
+   database, the 55500 mol/m^3 CSTR density fallback, a tear set that leaves
+   cycles uncovered or units out of order (=tear_analysis=).
+2. *Solve evidence:* the snapshot and warnings above, and an iteration history
+   (core change below) classified as converged, creeping (gain near 1),
+   oscillating (negative gain), diverging (|gain| > 1), stalled, or NaN.
+3. *Physics:* "converged AND correct". Mass balance closure, negative or
+   non-finite flows, inner unit solves that did not converge, and the
+   step-versus-error gap at the measured gain.
+4. *Exceptions:* a raise is mapped to a symptom card. The existing
+   =TROUBLESHOOTING= cards (tracer conversion, concretization, NaN, singular
+   Jacobian) become structured data with triggers and remedies, and the
+   "nothing feeds X" translation generalizes.
+
+=converge(session, budget, apply=False)= runs a remedy ladder chosen by the
+diagnosis, in the spirit of =run_case=: Anderson, then Wegstein for phase
+coupling, damped substitution for oscillation, =clip_negative_flows=False= for
+a signed tear, =tol_basis="error"= for a high-gain loop, an alternative tear
+set from =select_tear_streams(method="minimum")=, a warm start from the best
+iterate, =solve_eo=, and finally an =as_nlp= feasibility solve through pounce
+when it is installed. Each attempt is judged "converged AND correct", never by
+the solver's flag alone, and the result is a table of what was tried, what
+happened and why. By default the user's model is left alone and the tool
+reports the settings that worked; =apply=True= applies numerics-only fixes and
+nothing else (see Decisions). This follows the project rules: no
+loosened tolerances to make a symptom go away, and tears remain the user's
+call.
+
+The remedy table is code (=difflow.convergence.REMEDIES= or similar),
+generated from the same knowledge as =docs/convergence.md=, so the docs, the
+editor's troubleshooting cards and the MCP draw on one source.
+
+** Tool surface (first cut)
+
+| Group     | Tools                                                                                                                      |
+|-----------+----------------------------------------------------------------------------------------------------------------------------|
+| Discover  | =list_operations=, =describe_operation=, =list_api=, =describe_api=, =search_species=, =search_docs=, =list_examples=       |
+| Session   | =new_session=, =open=, =save=, =list_sessions=, =undo=, =redo=, =get_flowsheet= (JSON or Python), =diagram= (SVG/PNG)        |
+| Build     | =set_species=, =set_code_context=, =add_unit=, =update_unit=, =remove_unit=, =connect=, =disconnect=, =set_feed=, =define_reactions= |
+| Run       | =solver_capabilities=, =solve=, =solve_eo=, =get_streams=, =get_unit_info=                                                    |
+| Debug     | =diagnose=, =converge=, =tear_analysis=, =trace_solve=                                                                        |
+| Analyze   | =levers=, =sensitivity=, =sweep=, =optimize=, =uncertainty=, =linearize=/=plan_export=, =report=                               |
+| Escape    | =run_python=                                                                                                                 |
+
+Resources serve read-only context: =difflow://catalog/{op}=,
+=difflow://session/{id}/flowsheet= (the =context.pack= brief, with a larger
+budget than the 2600 tokens sized for a local 3B model),
+=difflow://docs/{anchor}=, and the convergence guide. Prompts package common
+workflows: "design a flowsheet from a description", "get this flowsheet to
+converge", "run a sensitivity study".
+
+Results are JSON with units and are kept small: long stream tables are
+summarized with a pointer to the full data, and figures come back as MCP
+image content (the editor's SVG diagram, matplotlib plots for sweeps).
+
+** Working alongside the editor
+
+The MCP and the editor read and write the same JSON, so =open_in_editor=
+saves the session and starts =difflow gui= on it, letting a person see what
+the agent built. A later step is a shared live session, in which the editor
+attaches to the MCP process's session and shows the agent's edits as they
+happen.
+
+** Safety and long calls
+
+=run_python=, =set_code_context= and opening a =.py= file all execute code.
+They are on by default and contained as described under Decisions. Solves can run long on the first compile, so calls report MCP
+progress, take a =timeout=, and run in a worker thread. A JAX computation
+cannot be interrupted, so a timeout abandons the result rather than stopping
+the work; a subprocess worker that can be killed is a later option if this
+turns out to matter.
+
+* Changes needed in core first
+
+These are fixes to difflow itself, not workarounds in the MCP:
+
+1. Decouple =FlowsheetSession= from the HTTP server (lazy =difflow.gui=
+   imports); neutral messages.
+2. =Flowsheet.solve(..., record_history=True)= keeps per-iteration residuals
+   (and optionally gain) in the Wegstein, Anderson and substitution loops.
+3. Keep per-unit info from the last solve (=last_solve_unit_info=), and adopt
+   a uniform =converged= / =residual= key convention in info dicts.
+4. CSTR and isothermal Flash check their inner =optx= results and report them
+   (and warn, as the refinery units already do), instead of clipping silently.
+5. Expose all =solve= options and the full snapshot (gain, error estimate,
+   clip activity, captured warnings) through the session.
+6. Structured remedies and symptom cards in one module, used by the docs, the
+   editor and the MCP.
+7. Registry: refuse or namespace duplicate operation names (=GasCompressor=),
+   and report plugin load failures instead of logging them.
+8. Reinstall the editable package so the refinery entry point is registered.
+
+* Phases
+
+1. *Groundwork:* core changes 1, 5, 7 and 8; the =difflow mcp= skeleton with
+   discovery, session, build, =solve=, =search_docs= and =run_python=; tests
+   that drive the tool functions directly and through the SDK's in-memory
+   client. Exit: an agent can build and solve the three editor examples from a
+   text description.
+2. *Diagnosis and convergence:* core changes 2, 3, 4 and 6; =diagnose=,
+   =converge=, =trace_solve=. Exit: starting from deliberately bad settings,
+   =converge= passes every case in the convergence corpus that some setting
+   can pass, and reports the rest honestly.
+3. *Analysis:* the expression language; =sensitivity=, =sweep=, =optimize=,
+   =uncertainty=, =linearize=, =report=. Exit: the notebooks for sensitivity,
+   optimization and uncertainty (02, 03, 06) can be reproduced through tools.
+4. *Plugins in depth:* a =difflow.agent= entry point through which a plugin
+   contributes its own agent support (examples, symptom cards and remedies,
+   a solver-capability description, extra tools where its model is not a
+   unit flowsheet), discovered at startup like its units. Then the three
+   plugins that break the generic tools' assumptions: gas (signed flows,
+   its own damped tear solve, residual verification), power (a network
+   model with power flow and a JAX interior-point OPF, not a unit
+   flowsheet) and refinery (library-only units, minute-long compiles, its
+   own convergence warnings and info conventions). bio, cc and REE fit the
+   generic tools and need only examples and starter code.
+5. *Cost metadata:* units declare a cost basis in the report metadata; a
+   =tea= tool generated from the catalog.
+6. *Polish:* the editor link, a Claude Code skill that teaches the workflow
+   (when to use =converge= versus =run_python=, the lever and output
+   vocabulary), and a docs chapter.
+
+* Status
+
+** Phase 1 (branch =claude/mcp-phase1=)
+
+Done: core changes 1, 5, 7 and 8; =difflow.agent= (30 tools: discovery,
+sessions, building, solving, =run_python=) and the =difflow mcp= stdio
+adapter over mcp 2.x; tests that rebuild the three editor examples from
+tool calls alone and match the shipped answers, and that drive the server
+through the SDK's in-process client. The registry now refuses a second
+class under a taken name; the refinery wet-gas compressor is registered as
+=WetGasCompressor=.
+
+Found along the way, for later phases: the catalog does not name outlet
+roles (a Flash's outlets are =flash_out= and =flash_out2=, and nothing says
+which is the vapor); MCP progress notifications for long solves are not
+sent yet.
+
+* Evaluation
+
+Beyond unit tests, an agent-level eval: a set of tasks phrased the way a user
+would phrase them ("build a CSTR with a flash and a 90% recycle and tell me
+the purge rate", "this flowsheet does not converge, fix it", "which feed
+variable matters most for product purity"), each with a checkable answer. The
+convergence corpus supplies the debugging tasks with ground truth already
+attached, and the notebooks supply the analysis tasks.
+
+* Decisions (2026-10-06)
+
+** Code execution: on by default, contained
+
+=run_python=, =set_code_context= and opening a =.py= file are the only three
+paths that execute code, and they stay on by default: without them the agent
+cannot build units that need a callable or a constructor object (custom
+kinetics, Peng-Robinson thermo), and in Claude Code over stdio they grant
+nothing the agent's shell does not. Containment:
+
+- The three tools carry non-read-only MCP annotations, so clients ask before
+  calling them and they can be allowed or denied by name.
+- =difflow mcp --no-exec= removes them (Claude Desktop, shared or hosted use).
+- Tool descriptions steer to structured tools first (=solve=, not
+  =fs.solve()=), so diagnostics and undo are kept.
+- Model-changing code is recorded into the code context, so =codegen=
+  reproduces it.
+- The console gains a timeout; a cell that exceeds it is abandoned and the
+  session reported busy rather than hung.
+
+** Packaging: in core, two layers
+
+The tools are plain functions in an SDK-free module (=difflow.agent=) that take
+and return JSON-able dicts and are tested directly. One thin adapter
+(=difflow/mcp/server.py=) registers them with the MCP SDK and owns transport,
+progress and annotations, so SDK churn is confined to one file. Installed with
+=pip install difflow[mcp]=; the SDK is imported lazily and a missing install
+raises an =ImportError= that names the extra, as the solver bridges do.
+Started with =difflow mcp=.
+
+** =converge=: numerics only, on request
+
+By default =converge= reports and changes nothing. With =apply=True= it applies
+only numerics-only fixes, which change how the fixed point is reached and not
+which one: acceleration method, damping, iteration limit, a tighter tolerance
+(=tol_basis="error"=). Changes that alter the problem or can select a
+different steady state (tear set, =clip_negative_flows=, initial guess or warm
+start, switching to EO or a pounce feasibility solve) and any looser tolerance
+are returned as proposals: the exact edit call to make. Applied changes go on
+the undo stack and into the solver settings with a note of what was tried.
+When two remedies converge to different steady states, that is reported as a
+finding with both answers. There is no session-wide auto-apply preference.
+
+** Economics: staged hybrid
+
+Phase 3 extends the expression language to unit parameters and unit info
+(=reactor.V=, =heater.Q=, which needs core change 3), exposes the scalar
+functions of =difflow.economics= inside expressions by introspection, and adds
+named quantities (=define_quantity("capex", ...)=) stored and saved with the
+session, so =optimize(objective="-npv")= is differentiable end to end. The root
+fix comes later: units declare their cost basis (correlation, size variable,
+duty) in the report metadata alongside equations and assumptions, the catalog
+picks it up, and a structured, assumption-labelled =tea= tool is generated from
+the catalog rather than from a table maintained in the MCP layer.

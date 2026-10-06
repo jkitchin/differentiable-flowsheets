@@ -133,14 +133,22 @@ class OperationRegistry:
             The registered class (for use as decorator)
 
         Raises:
-            ValueError: If name is already registered
+            ValueError: If name is already registered to a different class.
+                Registering the same class again is a no-op re-registration
+                (a forced plugin reload does that); a different class under
+                the same name would silently replace the first for everyone
+                with both installed, and a flowsheet saved against one would
+                load as the other.
         """
         if name in self._operations:
             existing = self._operations[name]
-            logger.warning(
-                f"Operation '{name}' already registered by {existing.plugin}. "
-                f"Overwriting with version from {plugin}."
-            )
+            if existing.cls is not cls:
+                raise ValueError(
+                    f"Operation {name!r} is already registered by "
+                    f"{existing.plugin} ({existing.cls.__module__}."
+                    f"{existing.cls.__qualname__}); {plugin} cannot register "
+                    f"{cls.__module__}.{cls.__qualname__} under the same name."
+                )
 
         self._operations[name] = OperationInfo(
             name=name,
@@ -245,6 +253,9 @@ def register_operation(
 
 _plugins_loaded = False
 
+#: plugin name -> why it failed to load, from the last :func:`load_plugins`
+plugin_errors: dict[str, str] = {}
+
 
 def load_plugins(force: bool = False) -> dict[str, list[str]]:
     """Load all installed difflow plugins.
@@ -263,6 +274,7 @@ def load_plugins(force: bool = False) -> dict[str, list[str]]:
         return {}
 
     loaded = {}
+    plugin_errors.clear()
 
     # Python 3.10+ style entry points
     try:
@@ -291,10 +303,36 @@ def load_plugins(force: bool = False) -> dict[str, list[str]]:
             logger.info(f"Plugin {ep.name} registered {len(new_ops)} operations")
 
         except Exception as e:
+            # Kept as well as logged: a plugin that failed is otherwise
+            # indistinguishable from one that is not installed, and an
+            # operation missing from the catalog says nothing about why.
+            plugin_errors[ep.name] = f"{type(e).__name__}: {e}"
             logger.error(f"Failed to load plugin {ep.name}: {e}")
 
     _plugins_loaded = True
     return loaded
+
+
+def plugin_status() -> dict[str, Any]:
+    """Which plugins are installed, which loaded, and why any did not.
+
+    Loads them first if nothing has. The registry alone cannot answer this:
+    an operation that is missing could belong to a plugin that is not
+    installed, one whose entry point is stale, or one that raised on import.
+
+    Returns:
+        ``{"installed": [...], "loaded": {plugin: [operations]},
+        "errors": {plugin: message}}``.
+    """
+    load_plugins()
+    loaded: dict[str, list[str]] = {}
+    for info in registry._operations.values():
+        loaded.setdefault(info.plugin, []).append(info.name)
+    return {
+        "installed": sorted(discover_plugins()),
+        "loaded": {k: sorted(v) for k, v in sorted(loaded.items())},
+        "errors": dict(plugin_errors),
+    }
 
 
 def discover_plugins() -> list[str]:

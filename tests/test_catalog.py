@@ -85,6 +85,39 @@ class TestCoreRegistration:
         count = register_core_operations(registry)
         assert count == len(registry.list_operations()) == len(core_operations())
 
+    def test_the_gas_compressor_name_clash_is_resolved(self, cat):
+        """difflow_refinery's wet-gas compressor took the core unit's name.
+
+        The registry overwrote with a log line, so with the refinery
+        plugin installed `GasCompressor` in a saved flowsheet loaded as a
+        different class.
+        """
+        assert cat["GasCompressor"].plugin == "core"
+        assert cat["WetGasCompressor"].plugin == "difflow_refinery"
+
+    def test_a_second_class_under_a_taken_name_is_refused(self):
+        registry = OperationRegistry()
+        registry.register("Thing", int, plugin="one")
+        with pytest.raises(ValueError, match="already registered by one"):
+            registry.register("Thing", float, plugin="two")
+        assert registry.get("Thing") is int
+
+    def test_registering_the_same_class_again_is_harmless(self):
+        """A forced plugin reload registers every class a second time."""
+        registry = OperationRegistry()
+        registry.register("Thing", int, plugin="one")
+        registry.register("Thing", int, plugin="one")
+        assert registry.get("Thing") is int
+
+    def test_plugin_status_names_every_installed_plugin(self):
+        from difflow.plugins import plugin_status
+
+        status = plugin_status()
+        assert set(status["installed"]) >= {"bio", "cc", "gas", "power",
+                                            "ree", "refinery"}
+        assert status["errors"] == {}
+        assert "CSTR" in status["loaded"]["core"]
+
 
 # =============================================================================
 # Ports

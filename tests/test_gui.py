@@ -607,10 +607,15 @@ class TestFiles:
             "ok": True, "streams": {}, "species": [], "converged": True,
             "iterations": 0, "method": "direct", "residual": 0.0,
             "tol": 1e-08, "tear_streams": [],
+            "gain": None, "error_estimate": 0.0, "clip_active": 0,
+            "warnings": [],
             "audit": {"warnings": [], "mass": None},
             "solver": {"tol": 1e-8, "max_iter": 100,
                        "acceleration": "anderson",
-                       "clip_negative_flows": True},
+                       "clip_negative_flows": True, "damping": 1.0,
+                       "anderson_depth": 5, "use_initialization": True,
+                       "tears": "declared", "error_probe": 2,
+                       "tol_basis": "step"},
         }
         assert session.code()["error"] is None
         assert "Flowsheet(species_order=[]" in session.code()["source"]

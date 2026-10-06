@@ -41,7 +41,8 @@ src/difflow/           core: streams, thermo, eos, database, flowsheet,
                        units/, dynamic/, economics/, uncertainty, convergence,
                        planning/, stochastic/, reconciliation/, catalog,
                        docstrings, serialize, codegen, kinetics, publish,
-                       gui/ (local browser editor; static/ is a committed build)
+                       gui/ (local browser editor; static/ is a committed build),
+                       agent/ (tools for agents, SDK-free) + mcp/ (`difflow mcp`)
 src/difflow_bio/       bioreactors, filtration, chromatography
 src/difflow_ree/       rare earth solvent extraction
 src/difflow_cc/        carbon capture (amine, membrane, adsorption, DAC)

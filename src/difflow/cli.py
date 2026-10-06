@@ -10,6 +10,7 @@ now::
     difflow gui plant.json --port 9000   # ...on a flowsheet, on a port
     difflow report model.py --format html -o report.html
     difflow plan-export model.py -u reactor.V --format csv -o tables/
+    difflow mcp                          # tools for an agent, over stdio
 
 A bare ``difflow`` opens the editor rather than printing usage. It is
 the one subcommand with nothing to say on stdout, the one a new user
@@ -36,6 +37,7 @@ COMMANDS = {
     "gui": ("difflow.gui.server", "main"),
     "report": ("difflow.report.cli", "main"),
     "plan-export": ("difflow.planning.cli", "main"),
+    "mcp": ("difflow.mcp.server", "main"),
 }
 
 USAGE = """\
@@ -47,6 +49,7 @@ commands:
   gui           open the editor in a browser (the default)
   report        run a script and write its flowsheet report
   plan-export   linearize a model and write delta vectors for a planner
+  mcp           serve the flowsheet tools to an agent over stdio (MCP)
 
   difflow <command> --help   for that command's own options
 

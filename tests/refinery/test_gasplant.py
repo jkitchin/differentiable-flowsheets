@@ -224,7 +224,7 @@ class TestValidation:
                 names.append(name)
 
         dr.register(Reg())
-        assert {"GasPlantColumn", "GasCompressor", "AmineTreater"} <= set(names)
+        assert {"GasPlantColumn", "WetGasCompressor", "AmineTreater"} <= set(names)
 
 
 class TestAmine:
