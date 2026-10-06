@@ -97,7 +97,47 @@ def build_server(workbench: Workbench | None = None, *, allow_exec: bool = True,
             ),
             structured_output=False,
         )(tool)
+    _register_plugin_tools(server, wb, allow_exec, ToolAnnotations)
     return server
+
+
+def _register_plugin_tools(server, wb: Workbench, allow_exec: bool,
+                           ToolAnnotations) -> None:
+    """Serve each plugin's own tools as ``<plugin>_<name>``.
+
+    A plugin tool is ``function(workbench, **arguments)``; what the client
+    sees is the signature after ``workbench``, so the schema comes from the
+    plugin's own type hints and the description from its docstring.
+    """
+    import inspect
+
+    from difflow.agent import plugins
+
+    for name, (_, tool) in sorted(plugins.tools().items()):
+        if tool.kind == "exec" and not allow_exec:
+            continue
+        signature = inspect.signature(tool.function)
+        params = list(signature.parameters.values())[1:]
+
+        def call(*, __name=name, **kwargs):
+            return wb.plugin_tool(__name, **kwargs)
+
+        call.__name__ = name
+        call.__doc__ = tool.function.__doc__
+        call.__signature__ = signature.replace(parameters=params)
+        call.__annotations__ = {k: v for k, v in tool.function.__annotations__.items()
+                                if k != "workbench"}
+        call.__module__ = tool.function.__module__
+        server.tool(
+            name=name,
+            annotations=ToolAnnotations(
+                readOnlyHint=tool.kind == "read",
+                destructiveHint=tool.kind == "exec",
+                idempotentHint=tool.kind == "read",
+                openWorldHint=False,
+            ),
+            structured_output=False,
+        )(call)
 
 
 def main(argv: list[str] | None = None) -> int:

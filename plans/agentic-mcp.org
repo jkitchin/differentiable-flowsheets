@@ -338,6 +338,22 @@ Deferred: unit info in expressions (=heater.Q=) needs the solve to return
 unit info under tracing; until then a duty is reachable only through
 =run_python=.
 
+** Phase 4 (branch =claude/mcp-phase4=)
+
+Done: the =difflow.agent= entry point and =difflow.agent.plugins=
+(=AgentSupport=, =PluginTool=, a loader that reports failures instead of
+raising); =plugin_guide=; plugin symptom cards matched by =diagnose= against
+errors and captured warning classes; plugin tools served as
+=<plugin>_<name>= with schemas from their own signatures. Support modules for
+all six plugins: power has =power_flow= and =power_opf= (checked against
+MATPOWER: case14 losses 13.393 MW, case9 AC-OPF 5296.69 $/h, LMPs agreeing
+with =jax.grad= to 1e-12); gas and refinery have solver notes and symptom
+cards; bio, cc and REE have build guidance.
+
+Deferred: a gas tool needs a bundled network (none ships; networks are built
+in Python); refinery tools for the library units (reformer, FCC) would wrap
+their own call conventions.
+
 * Evaluation
 
 Beyond unit tests, an agent-level eval: a set of tasks phrased the way a user

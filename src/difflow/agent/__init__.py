@@ -24,6 +24,7 @@ TOOLS: dict[str, str] = {
     "search_species": "read",
     "search_docs": "read",
     "list_examples": "read",
+    "plugin_guide": "read",
     # sessions
     "list_sessions": "read",
     "new_session": "edit",

@@ -38,7 +38,7 @@ each package's `__all__`.
 
 | Group | Tools |
 |---|---|
-| Discovery | `plugin_status`, `list_operations`, `describe_operation`, `list_api`, `describe_api`, `search_species`, `search_docs`, `list_examples` |
+| Discovery | `plugin_status`, `plugin_guide`, `list_operations`, `describe_operation`, `list_api`, `describe_api`, `search_species`, `search_docs`, `list_examples` |
 | Sessions | `list_sessions`, `new_session`, `close_session`, `open_example`, `open_file`, `save`, `undo`, `redo`, `get_flowsheet` |
 | Building | `set_species`, `set_code_context`, `add_unit`, `update_unit`, `remove_unit`, `connect`, `disconnect`, `set_feed`, `remove_feed` |
 | Running | `set_solver_options`, `solve`, `get_streams` |
@@ -146,6 +146,29 @@ Levers are what `levers` lists: `"<unit>.<param>"` and
   (see {doc}`planning`), and `report` the flowsheet's self-documenting report.
 
 Every result that rests on a solve carries that solve's convergence verdict.
+
+## What each plugin adds
+
+A plugin registers its unit operations through the `difflow.plugins` entry
+point and its agent support through `difflow.agent`, whose target returns a
+`difflow.agent.plugins.AgentSupport`: a summary of what it models, notes on
+its own solvers, symptom cards that `diagnose` matches alongside the core
+ones, and extra tools, served as `<plugin>_<name>`. Core names no plugin, so a
+new plugin brings its own support.
+
+`plugin_guide` lists the guides and shows one. Of the installed plugins:
+
+| Plugin | What its support adds |
+|---|---|
+| power | `power_flow` and `power_opf` (AC or DC) on the benchmark cases or a MATPOWER case as JSON, with LMPs checked against `jax.grad` of the optimal cost |
+| gas | signed flows (`clip_negative_flows=False`), damping, and a card that reads negative flows as direction rather than error |
+| refinery | library-only units and how to reach them, compile times, and cards keyed to each unit's convergence warning |
+| bio, cc, ree | what each unit needs before it can be built (a growth model, a solvent, an extractant) and the plugin's limits |
+
+```toml
+[project.entry-points."difflow.agent"]
+power = "difflow_power.agent:support"
+```
 
 ## Using the tools without MCP
 

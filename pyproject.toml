@@ -163,6 +163,15 @@ gas = "difflow_gas:register"
 power = "difflow_power:register"
 refinery = "difflow_refinery:register"
 
+[project.entry-points."difflow.agent"]
+# What each plugin adds to the agent tools (difflow.agent.plugins).
+bio = "difflow_bio.agent:support"
+ree = "difflow_ree.agent:support"
+cc = "difflow_cc.agent:support"
+gas = "difflow_gas.agent:support"
+power = "difflow_power.agent:support"
+refinery = "difflow_refinery.agent:support"
+
 [project.scripts]
 difflow = "difflow.cli:main"
 difflow-gui = "difflow.gui.server:main"
