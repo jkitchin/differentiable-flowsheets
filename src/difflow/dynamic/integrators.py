@@ -83,14 +83,15 @@ class IntegrationInfo(NamedTuple):
     """Information about the integration process.
 
     Attributes:
-        n_steps: Number of steps taken
-        n_eval: Number of derivative evaluations
+        n_steps: Number of steps taken. A JAX array for the diffrax
+            backend, so the integration can be jitted and vmapped.
+        n_eval: Number of derivative evaluations (likewise).
         success: Whether integration completed successfully
         message: Status message
     """
-    n_steps: int
-    n_eval: int
-    success: bool
+    n_steps: int | Array
+    n_eval: int | Array
+    success: bool | Array
     message: str
 
 

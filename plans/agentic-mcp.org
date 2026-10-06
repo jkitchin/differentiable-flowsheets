@@ -304,6 +304,56 @@ roles (a Flash's outlets are =flash_out= and =flash_out2=, and nothing says
 which is the vapor); MCP progress notifications for long solves are not
 sent yet.
 
+** Phase 2 (branch =claude/mcp-phase2=)
+
+Done: core changes 2, 3, 4 and 6. =Flowsheet.last_solve_history= (the
+residual per iteration on the Anderson and Wegstein paths; =None= on the
+optimistix fixed point) and =last_solve_unit_info= (kept only when concrete).
+CSTR and Flash report =balance_residual= and =converged= for their own solve,
+checked on the outlet actually returned; the session audit flags a unit whose
+balance did not close. =difflow.diagnostics= holds the symptom cards (the
+editor's =TROUBLESHOOTING= now reads them), the remedy table, the history
+classifier and =solve_findings=. Tools: =diagnose=, =converge=,
+=tear_analysis=, =trace_solve=, =get_unit_info=. =converge= finds a passing
+setting for all eleven corpus cases from the default settings.
+
+Deferred: changing the tear set as a remedy (with declared recycles it means
+rewiring, so it is reported by =tear_analysis= rather than tried); EO and
+pounce feasibility as remedies.
+
+** Phase 3 (branch =claude/mcp-phase3=)
+
+Done: the expression language (=difflow.agent.expressions=: an =ast=
+whitelist over streams, unit parameters, named quantities saved in
+=view["quantities"]=, and =econ.<function>= from =difflow.economics= by
+introspection) and the tools =levers=, =define_quantity=,
+=remove_quantity=, =list_quantities=, =evaluate=, =sensitivity=, =sweep=,
+=optimize= (SLSQP with JAX gradients, constraints, =apply=), =uncertainty=
+(linear with variance shares, optional Monte Carlo), =linearize= and
+=report=. All use the session's solver settings rather than
+=make_objective_fn='s defaults. Tests check an expression's gradient against
+the hand-written function's and against finite differences.
+
+Deferred: unit info in expressions (=heater.Q=) needs the solve to return
+unit info under tracing; until then a duty is reachable only through
+=run_python=.
+
+** Phase 4 (branch =claude/mcp-phase4=)
+
+Done: the =difflow.agent= entry point and =difflow.agent.plugins=
+(=AgentSupport=, =PluginTool=, a loader that reports failures instead of
+raising); =plugin_guide=; plugin symptom cards matched by =diagnose= against
+errors and captured warning classes; plugin tools served as
+=<plugin>_<name>= with schemas from their own signatures. Support modules for
+all six plugins: power has =power_flow= and =power_opf= (checked against
+MATPOWER: case14 losses 13.393 MW, case9 AC-OPF 5296.69 $/h, LMPs agreeing
+with =jax.grad= to 1e-12); gas and refinery have solver notes and symptom
+cards; bio, cc and REE have build guidance.
+
+Deferred: a gas tool needs a bundled network (none ships; networks are built
+in Python); refinery tools for the library units (reformer, FCC) would wrap
+their own call conventions.
+
 * Evaluation
 
 Beyond unit tests, an agent-level eval: a set of tasks phrased the way a user

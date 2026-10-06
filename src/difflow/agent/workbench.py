@@ -197,6 +197,45 @@ class Workbench:
         their text and URL."""
         return jsonable(discovery.search_docs(query, limit))
 
+    def plugin_guide(self, plugin: str | None = None) -> dict:
+        """What an installed plugin models, how to build with it, its own
+        solvers and their settings, its failure patterns, and its extra
+        tools. Without a plugin name, lists the plugins that provide a guide."""
+        from difflow.agent import plugins
+
+        support, errors = plugins.load()
+        if plugin is None:
+            return {"ok": True, "plugins": {
+                name: {"summary": sup.summary.split("\n\n")[0],
+                       "tools": [f"{name}_{t}" for t in sup.tools]}
+                for name, sup in sorted(support.items())}, "errors": errors}
+        sup = support.get(plugin.removeprefix("difflow_"))
+        if sup is None:
+            return {"ok": False, "error": f"no guide for {plugin!r} "
+                    f"(guides: {', '.join(sorted(support)) or 'none'})"
+                    + (f"; failed to load: {errors}" if errors else "")}
+        return {"ok": True, "plugin": sup.plugin, "summary": sup.summary,
+                "solver_notes": sup.solver_notes,
+                "symptoms": [{"title": s.title, "text": s.text,
+                              "triggers": list(s.triggers)} for s in sup.symptoms],
+                "tools": {f"{sup.plugin}_{n}": (t.function.__doc__ or "").strip()
+                          .split("\n\n")[0] for n, t in sup.tools.items()}}
+
+    def plugin_tool(self, name: str, **arguments) -> dict:
+        """Call a plugin tool by its served name (``<plugin>_<tool>``)."""
+        from difflow.agent import plugins
+
+        found = plugins.tools().get(name)
+        if found is None:
+            return {"ok": False, "error": f"no plugin tool {name!r}"}
+        _, tool = found
+        if tool.kind == "exec" and not self.allow_exec:
+            return self._no_exec()
+        try:
+            return jsonable(tool.function(self, **arguments))
+        except Exception as exc:  # noqa: BLE001 -- an answer, not a crash
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
     def list_examples(self) -> dict:
         """Example flowsheets that open_example can load."""
         return jsonable(discovery.list_examples())
@@ -467,6 +506,199 @@ class Workbench:
         return jsonable({"ok": True, "streams": {
             n: {k: (v if isinstance(v, str) else float(v))
                 for k, v in s.streams[n].items()} for n in wanted}})
+
+    # -- diagnosis and convergence -------------------------------------------------
+
+    def diagnose(self, session: str = "main", timeout: float | None = None) -> dict:
+        """Why a flowsheet fails to solve, or why its answer is suspect.
+
+        Checks what can be checked before solving (pending units, unfed
+        inlets), solves with the stored settings, and returns findings,
+        most serious first: non-convergence with what the residual history
+        says (diverging, oscillating, creeping, stalled), an error estimate
+        above tol, clipping, unit inner solves that did not close, tear-set
+        problems, audit failures and captured warnings. Each finding names
+        remedies, described under ``remedies``; try them with converge.
+        """
+        from difflow.agent import doctor
+
+        s, err = self._get(session)
+        if err:
+            return err
+        return self._timed(session, lambda: doctor.diagnose(s), timeout)
+
+    def converge(self, apply: bool = False, budget: int = 8,
+                 session: str = "main", timeout: float | None = None) -> dict:
+        """Search for solver settings that converge the flowsheet correctly.
+
+        Tries the stored settings, then remedies in order (Anderson, more
+        iterations, Wegstein, damped substitution, error-based tolerance,
+        unclipped tears, cold start), stopping after two pass. A trial
+        passes only when it converged AND its audit is clean. If two pass
+        with different products the flowsheet has more than one steady
+        state, and that is reported.
+
+        Args:
+            apply: Keep the first passing remedy in the flowsheet's solver
+                settings, but only a "numerics" one (it changes how the
+                answer is reached, not which answer). A "problem" remedy
+                is returned as a proposal to apply with set_solver_options.
+            budget: Most trials to run.
+        """
+        from difflow.agent import doctor
+
+        s, err = self._get(session)
+        if err:
+            return err
+        return self._timed(
+            session, lambda: doctor.converge(s, apply=apply, budget=budget), timeout)
+
+    def tear_analysis(self, session: str = "main") -> dict:
+        """The flowsheet's cycles, its declared tear streams, the tear sets a
+        heuristic and a minimum search would pick, and any cycle no tear
+        breaks or unit that would run before its inputs exist."""
+        from difflow.agent import doctor
+
+        return self._with(session, doctor.tear_analysis)
+
+    def trace_solve(self, session: str = "main", timeout: float | None = None) -> dict:
+        """Solve and return the tear residual after every iteration, with a
+        reading of it (converged, creeping, oscillating, diverging, stalled)."""
+        from difflow.agent import doctor
+
+        s, err = self._get(session)
+        if err:
+            return err
+        return self._timed(session, lambda: doctor.trace_solve(s), timeout)
+
+    def get_unit_info(self, name: str | None = None, session: str = "main") -> dict:
+        """What units reported about themselves on the last solve (a CSTR's
+        conversion and rates, a flash's vapor fraction and phase, whether
+        each unit's own inner solve closed its balance)."""
+        from difflow.agent import doctor
+
+        return self._with(session, lambda s: doctor.unit_info(s, name))
+
+    def _with(self, session: str, fn) -> dict:
+        s, err = self._get(session)
+        if err:
+            return err
+        return jsonable(fn(s))
+
+    # -- analysis ----------------------------------------------------------------------
+    #
+    # Expressions name <stream>.<quantity> (T, P, total_flow, F_<species>),
+    # <unit>.<param>, named quantities, and econ.<function> from
+    # difflow.economics; levers are "<unit>.<param>" or "feed:<stream>.<field>".
+
+    def _analysis(self, session: str, function: str, timeout: float | None, **kw) -> dict:
+        from difflow.agent import analysis
+        from difflow.agent.expressions import ExpressionError
+
+        s, err = self._get(session)
+        if err:
+            return err
+
+        def run():
+            try:
+                return getattr(analysis, function)(s, **kw)
+            except ExpressionError as exc:
+                return {"ok": False, "error": str(exc)}
+
+        return self._timed(session, run, timeout)
+
+    def levers(self, session: str = "main") -> dict:
+        """Every scalar parameter a derivative or optimizer can move, with its
+        current value and units: "<unit>.<param>" and "feed:<stream>.<field>"."""
+        return self._analysis(session, "levers", None)
+
+    def define_quantity(self, name: str, expression: str,
+                        session: str = "main") -> dict:
+        """Name an expression for reuse in others and in objectives, e.g.
+        name="revenue", expression="12.0 * product.F_B". Saved with the
+        flowsheet.
+
+        Expressions use <stream>.<quantity> (T, P, total_flow, F_<species>),
+        <unit>.<param>, other named quantities, + - * / **, numbers,
+        exp log log10 sqrt abs min max, and econ.<function> from
+        difflow.economics.
+        """
+        return self._analysis(session, "define_quantity", None,
+                              name=name, expression=expression)
+
+    def remove_quantity(self, name: str, session: str = "main") -> dict:
+        """Delete a named quantity."""
+        return self._analysis(session, "remove_quantity", None, name=name)
+
+    def list_quantities(self, session: str = "main") -> dict:
+        """The named quantities defined on this flowsheet."""
+        return self._analysis(session, "list_quantities", None)
+
+    def evaluate(self, expressions: list[str], session: str = "main",
+                 timeout: float | None = None) -> dict:
+        """Values of expressions at the last solve (solving first if needed),
+        e.g. ["vapor.F_ethyl_acetate / vapor.total_flow", "revenue"]."""
+        return self._analysis(session, "evaluate_expressions", timeout,
+                              expressions=expressions)
+
+    def sensitivity(self, of: str, wrt: list[str] | None = None,
+                    session: str = "main", timeout: float | None = None) -> dict:
+        """Exact derivatives of an expression with respect to levers, in one
+        reverse pass through the converged solve, ranked by elasticity
+        (d ln y / d ln u). All scalar levers when wrt is omitted."""
+        return self._analysis(session, "sensitivity", timeout, of=of, wrt=wrt)
+
+    def sweep(self, lever: str, outputs: list[str],
+              values: list[float] | None = None, lo: float | None = None,
+              hi: float | None = None, n: int = 11, session: str = "main",
+              timeout: float | None = None) -> dict:
+        """Solve at each value of one lever (given values, or n points from lo
+        to hi) and report the output expressions and convergence at each."""
+        return self._analysis(session, "sweep", timeout, lever=lever,
+                              outputs=outputs, values=values, lo=lo, hi=hi, n=n)
+
+    def optimize(self, objective: str, levers: dict, constraints: list[dict] | None = None,
+                 maximize: bool = False, max_iter: int = 50, apply: bool = False,
+                 session: str = "main", timeout: float | None = None) -> dict:
+        """Minimize (or maximize) an expression over levers with bounds, using
+        SLSQP with exact gradients through the solve.
+
+        Args:
+            objective: An expression, e.g. "-revenue + cost".
+            levers: {lever: [lower, upper]}, e.g. {"reactor.V": [0.1, 5.0]}.
+            constraints: [{"expression": ..., "lb": ..., "ub": ...}].
+            apply: Write the optimum into the flowsheet when it succeeded.
+        """
+        return self._analysis(session, "optimize", timeout, objective=objective,
+                              levers=levers, constraints=constraints,
+                              maximize=maximize, max_iter=max_iter, apply=apply)
+
+    def uncertainty(self, output: str, uncertain: dict, samples: int = 0,
+                    session: str = "main", timeout: float | None = None) -> dict:
+        """Standard deviation of an output from independent normal uncertainty
+        in levers ({lever: std}): linear propagation from the gradient, with
+        each lever's share of the variance, and Monte Carlo over `samples`
+        solves when asked."""
+        return self._analysis(session, "uncertainty", timeout, output=output,
+                              uncertain=uncertain, samples=samples)
+
+    def linearize(self, u: list[str], y: list[str], radius: float | None = None,
+                  check: bool = False, session: str = "main",
+                  timeout: float | None = None) -> dict:
+        """Delta vectors (the Jacobian of outputs y in <stream>.<quantity> form
+        with respect to levers u) for an LP planning model, with a health
+        check; check=True verifies them against re-solves."""
+        s, err = self._get(session)
+        if err:
+            return err
+        return self._timed(session, lambda: s.linearize(u, y, radius=radius,
+                                                        check=check), timeout)
+
+    def report(self, format: str = "markdown", session: str = "main",
+               timeout: float | None = None) -> dict:
+        """The flowsheet's report: topology, unit parameters with units and
+        equations, results and balance checks ("markdown" or "json")."""
+        return self._analysis(session, "report", timeout, format=format)
 
     # -- Python ---------------------------------------------------------------------
 

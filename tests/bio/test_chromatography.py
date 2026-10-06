@@ -429,3 +429,61 @@ class TestSECResolutionOverlap:
                         + float(get_flows(aggregates).get(s, 0.0))
                         + float(get_flows(fragments).get(s, 0.0)))
             assert mass_out == pytest.approx(mass_in, rel=1e-6)
+
+
+class TestLoadWholeInlet:
+    """load_volume=None loads the entire inlet (used by the DSP trains)."""
+
+    @staticmethod
+    def _feed():
+        from difflow import make_stream
+        return make_stream({"mAb": 100.0, "HCP": 5.0}, 298.15, 101325.0)
+
+    def test_protein_a_none_loads_everything(self):
+        p = ProteinAParams(column_volume=10.0, q_max=35.0, target_species="mAb",
+                           species_order=["mAb", "HCP"])
+        _, info = ProteinAChromatography(p)(self._feed())
+        assert float(info["mass_loaded"]) == pytest.approx(100.0)
+        # same as loading the full feed volume explicitly
+        _, ref = ProteinAChromatography(p)(self._feed(), load_volume=5.0, feed_volume=5.0)
+        assert float(info["mass_eluted"]) == pytest.approx(float(ref["mass_eluted"]))
+
+    def test_iex_none_matches_full_legacy_load(self):
+        p = IEXParams(column_volume=10.0, mode="bind_elute", target_species="mAb",
+                      species_order=["mAb", "HCP"])
+        (prod, _), _ = IonExchangeChromatography(p)(self._feed())
+        (ref, _), _ = IonExchangeChromatography(p)(self._feed(), load_volume=1e6)
+        assert float(prod["F_mAb"]) == pytest.approx(float(ref["F_mAb"]))
+
+
+class TestIEXImpurityClearance:
+    """impurity_clearance gives an explicit LRV per impurity, in both modes.
+
+    The bind-elute selectivity rule lets at most (1 - yield) of an impurity
+    reach the product, so a 90% step removed >= 90% of everything and the
+    packaged trains reported purity of 1.0000.
+    """
+
+    @staticmethod
+    def _run(mode, clearance):
+        from difflow import make_stream
+        feed = make_stream({"mAb": 100.0, "HCP": 1.0, "aggregates": 3.0}, 298.15, 101325.0)
+        p = IEXParams(column_volume=10.0, mode=mode, target_species="mAb",
+                      impurity_clearance=clearance)
+        (prod, waste), _ = IonExchangeChromatography(p)(feed)
+        return prod, waste
+
+    @pytest.mark.parametrize("mode", ["bind_elute", "flow_through"])
+    def test_lrv_sets_carryover(self, mode):
+        prod, waste = self._run(mode, {"aggregates": 0.7, "HCP": 1.0})
+        assert float(prod["F_aggregates"]) == pytest.approx(3.0 * 10 ** -0.7)
+        assert float(prod["F_HCP"]) == pytest.approx(0.1)
+        # mass balance
+        assert float(prod["F_aggregates"] + waste["F_aggregates"]) == pytest.approx(3.0)
+        # the target is untouched by impurity clearance
+        assert float(prod["F_mAb"]) == pytest.approx(90.0)
+
+    def test_unlisted_impurity_keeps_selectivity_rule(self):
+        listed, _ = self._run("flow_through", {"HCP": 1.0})
+        legacy, _ = self._run("flow_through", {})
+        assert float(listed["F_aggregates"]) == pytest.approx(float(legacy["F_aggregates"]))

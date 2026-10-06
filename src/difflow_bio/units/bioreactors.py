@@ -479,6 +479,11 @@ class FedBatchParams(ParamsMixin):
         kinetic_params: Parameters for kinetic function
         k_d: Death rate constant (1/h)
         m_s: Maintenance coefficient (g/g/h)
+        K_m: Half-saturation constant of maintenance uptake (g/L). As
+            substrate runs out, uptake for maintenance falls as
+            S/(K_m + S) and the unmet share is supplied by burning
+            biomass, so substrate cannot be consumed below zero. Matters
+            only near starvation.
         alpha: Growth-associated product formation (g/g)
         beta: Non-growth-associated product formation (g/g/h)
         species_order: Species names for stream output
@@ -490,6 +495,7 @@ class FedBatchParams(ParamsMixin):
     kinetic_params: dict
     k_d: float | Array = 0.0
     m_s: float | Array = 0.0
+    K_m: float | Array = 0.05
     alpha: float | Array = 0.0
     beta: float | Array = 0.0
     species_order: list[str] = field(default_factory=lambda: ["cells", "substrate", "product"])
@@ -521,9 +527,12 @@ class FedBatchBioreactor:
 
     Simulates batch or fed-batch cultivation by integrating ODEs:
         dV/dt = F(t)
-        d(VX)/dt = μ*V*X - k_d*V*X
-        d(VS)/dt = F*S_f - μ*V*X/Y_xs - m_s*V*X
+        d(VX)/dt = μ*V*X - k_d*V*X - m_s*Y_xs*(1 - φ)*V*X
+        d(VS)/dt = F*S_f - μ*V*X/Y_xs - m_s*φ*V*X
         d(VP)/dt = (α*μ + β)*V*X
+    with φ = S/(K_m + S). Maintenance draws on substrate while there is
+    any (φ ≈ 1) and on biomass when it runs out (endogenous metabolism,
+    decay rate b = m_s*Y_xs), so substrate never goes negative.
 
     Integration methods:
     - "diffrax" (default): Adaptive step-size with Tsit5 solver
@@ -537,17 +546,20 @@ class FedBatchBioreactor:
     symbol = "Fed-Batch Bioreactor"
     equations = [
         r"\frac{dV}{dt} = F(t)",
-        r"\frac{d(VX)}{dt} = (\mu - k_d)\,V X",
-        r"\frac{d(VS)}{dt} = F(t)\,S_f - \mu V X / Y_{xs} - m_s V X",
+        r"\frac{d(VX)}{dt} = (\mu - k_d)\,V X - m_s Y_{xs} (1 - \phi)\,V X",
+        r"\frac{d(VS)}{dt} = F(t)\,S_f - \mu V X / Y_{xs} - m_s \phi\,V X",
+        r"\phi = S / (K_m + S)",
         r"\frac{d(VP)}{dt} = (\alpha\,\mu + \beta)\,V X",
     ]
     assumptions = [
         "Perfectly mixed liquid phase with time-varying volume.",
         "Single growth-limiting substrate and one lumped product.",
         "Isothermal, constant-pH operation.",
+        "Maintenance is met from substrate while it lasts and from biomass (endogenous metabolism) when it runs out.",
     ]
     references = [
         "Bailey, J.E., Ollis, D.F. Biochemical Engineering Fundamentals, 2e, McGraw-Hill, 1986.",
+        "Pirt, S.J. (1965). The maintenance energy of bacteria in growing cultures. Proc. R. Soc. Lond. B 163:224.",
         "Shuler, M.L., Kargi, F. Bioprocess Engineering: Basic Concepts, 2e, Prentice Hall, 2002.",
     ]
     parameter_symbols = {
@@ -555,6 +567,7 @@ class FedBatchBioreactor:
         "Y_xs": "Y_{xs}",
         "k_d": "k_d",
         "m_s": "m_s",
+        "K_m": "K_m",
         "alpha": r"\alpha",
         "beta": r"\beta",
     }
@@ -563,6 +576,7 @@ class FedBatchBioreactor:
         "Y_xs": "g/g",
         "k_d": "1/h",
         "m_s": "g/g/h",
+        "K_m": "g/L",
         "alpha": "g/g",
         "beta": "g/g/h",
         "kLa": "1/h",
@@ -627,6 +641,8 @@ class FedBatchBioreactor:
                 - 'P': Product concentration profile (g/L)
                 - 'V': Volume profile (L)
                 - 'mu': Growth rate profile (1/h)
+                - 'S_min': Lowest substrate concentration on the saved
+                  grid (g/L); near zero means the culture starved
                 - 'solver': Solver used
         """
         p = self.params
@@ -661,6 +677,7 @@ class FedBatchBioreactor:
         Y_xs = jnp.asarray(p.Y_xs)
         k_d = jnp.asarray(p.k_d)
         m_s = jnp.asarray(p.m_s)
+        K_m = jnp.asarray(p.K_m)
         alpha = jnp.asarray(p.alpha)
         beta = jnp.asarray(p.beta)
         S_f = jnp.asarray(S_feed)
@@ -699,9 +716,14 @@ class FedBatchBioreactor:
                 OTR = kLa * (C_O2_star - C_O2)          # g O2/L/h
                 dVO2_dt = V * (OTR - OUR)               # feed O2 ~ 0
 
+            # Maintenance comes from substrate while there is any and from
+            # biomass (endogenous metabolism) when it runs out (#362).
+            # Uncapped uptake drove S negative under starvation.
+            phi = S / (K_m + S)
+
             dV_dt = F
-            dVX_dt = mu * V * X - k_d * V * X
-            dVS_dt = F * S_f - mu * V * X / Y_xs - m_s * V * X
+            dVX_dt = mu * V * X - k_d * V * X - m_s * Y_xs * (1.0 - phi) * V * X
+            dVS_dt = F * S_f - mu * V * X / Y_xs - m_s * phi * V * X
             dVP_dt = (alpha * mu + beta) * V * X
 
             if oxygen_active:
@@ -802,6 +824,7 @@ class FedBatchBioreactor:
             "V_final": V_final,
             "X_final": X_final,
             "S_final": S_final,
+            "S_min": jnp.min(S_profile),
             "P_final": P_final,
             "solver": solver_used,
         }

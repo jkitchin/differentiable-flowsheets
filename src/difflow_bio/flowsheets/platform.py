@@ -22,6 +22,7 @@ from difflow_bio.units.chromatography import (
     ProteinAChromatography, ProteinAParams,
     IonExchangeChromatography, IEXParams,
     SizeExclusionChromatography, SECParams,
+    TYPICAL_CEX_CLEARANCE, TYPICAL_AEX_CLEARANCE,
 )
 from difflow_bio.units.filtration import (
     Ultrafiltration, UltrafiltrationParams,
@@ -115,6 +116,7 @@ class PlatformDSP:
                     column_volume=params.column_volumes.get("cex", 15.0),
                     mode="bind_elute",
                     target_species=params.target_species,
+                    impurity_clearance=dict(TYPICAL_CEX_CLEARANCE),
                     species_order=params.species_order,
                 ))
             elif step_type == "aex":
@@ -122,6 +124,7 @@ class PlatformDSP:
                     column_volume=params.column_volumes.get("aex", 12.0),
                     mode="flow_through",
                     target_species=params.target_species,
+                    impurity_clearance=dict(TYPICAL_AEX_CLEARANCE),
                     species_order=params.species_order,
                 ))
             else:
@@ -140,7 +143,12 @@ class PlatformDSP:
         # TFF
         self._uf = Ultrafiltration(UltrafiltrationParams(
             membrane_area=params.tff_area,
-            rejection={params.target_species: 0.995},
+            # UF/DF is not credited with impurity clearance: HCP and DNA are retained
+            # like the product, and aggregates, larger than the monomer, slightly
+            # better. Unlisted species default to zero rejection, which washed
+            # 90% of the HCP and aggregates out in the 10x concentration.
+            rejection={params.target_species: 0.995, "HCP": 0.995, "DNA": 0.995,
+                       "aggregates": 0.999},
             species_order=params.species_order,
         ))
 
@@ -162,7 +170,8 @@ class PlatformDSP:
         target = p.target_species
 
         feed_flows = get_flows(feed)
-        product_in = float(feed_flows.get(target, 0.0))
+        # Values stay JAX arrays so the train can be traced (#360).
+        product_in = feed_flows.get(target, 0.0)
 
         intermediates = {"feed": feed}
         step_yields = {}
@@ -171,19 +180,20 @@ class PlatformDSP:
         # Run each step
         for step_name, step_unit in self._steps:
             if hasattr(step_unit, '__call__'):
-                # Chromatography units require load_volume; use column volume
-                load_vol = p.column_volumes.get(step_name, 10.0)
-                result = step_unit(current_stream, load_volume=load_vol)
+                # Load the whole stream: the column volume sets capacity,
+                # not how much of the feed is processed.
+                result = step_unit(current_stream)
                 if isinstance(result, tuple):
-                    # Chromatography returns ((product, waste), info)
-                    (current_stream, _waste), _info = result
+                    # Chromatography returns ((product, *side streams), info);
+                    # SEC has two side streams (aggregates, fragments).
+                    current_stream = result[0][0]
                 else:
                     current_stream = result
 
             current_flows = get_flows(current_stream)
-            current_product = float(current_flows.get(target, 0.0))
+            current_product = current_flows.get(target, 0.0)
             prev_flows = get_flows(intermediates.get(list(intermediates.keys())[-1], feed))
-            prev_product = float(prev_flows.get(target, 0.0))
+            prev_product = prev_flows.get(target, 0.0)
 
             step_yields[step_name] = safe_divide(current_product, prev_product)
             intermediates[step_name] = current_stream
@@ -193,7 +203,7 @@ class PlatformDSP:
         final_flows = get_flows(final_product)
 
         # Calculate overall metrics
-        product_out = float(final_flows.get(target, 0.0))
+        product_out = final_flows.get(target, 0.0)
         overall_yield = safe_divide(product_out, product_in)
 
         result = {

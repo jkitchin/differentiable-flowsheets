@@ -38,10 +38,12 @@ each package's `__all__`.
 
 | Group | Tools |
 |---|---|
-| Discovery | `plugin_status`, `list_operations`, `describe_operation`, `list_api`, `describe_api`, `search_species`, `search_docs`, `list_examples` |
+| Discovery | `plugin_status`, `plugin_guide`, `list_operations`, `describe_operation`, `list_api`, `describe_api`, `search_species`, `search_docs`, `list_examples` |
 | Sessions | `list_sessions`, `new_session`, `close_session`, `open_example`, `open_file`, `save`, `undo`, `redo`, `get_flowsheet` |
 | Building | `set_species`, `set_code_context`, `add_unit`, `update_unit`, `remove_unit`, `connect`, `disconnect`, `set_feed`, `remove_feed` |
 | Running | `set_solver_options`, `solve`, `get_streams` |
+| Diagnosis | `diagnose`, `converge`, `tear_analysis`, `trace_solve`, `get_unit_info` |
+| Analysis | `levers`, `define_quantity`, `remove_quantity`, `list_quantities`, `evaluate`, `sensitivity`, `sweep`, `optimize`, `uncertainty`, `linearize`, `report` |
 | Python | `run_python` |
 
 Each tool is annotated as read-only, editing, or running code, so a client can
@@ -79,6 +81,94 @@ converged **and** its audit is clean:
 Every option of `Flowsheet.solve` that is a setting (tolerance and its basis,
 acceleration, damping, tear choice, clipping) can be set with
 `set_solver_options` or passed to `solve`, and is saved with the flowsheet.
+
+## When a solve fails
+
+`diagnose` checks what can be checked before solving (units still waiting on
+something, unfed inlets), solves, and returns findings, most serious first:
+a recycle that did not converge together with what its residual history
+says (diverging, oscillating, creeping, stalled), an error estimate above
+`tol`, clipping, a unit whose own inner solve did not close its balance,
+tear-set problems, audit failures and captured warnings. Each finding names
+the remedies that address it. The remedies and the symptom cards live in
+`difflow.diagnostics`, the same table the editor's assistant reads.
+
+`converge` tries those remedies on the live flowsheet: the stored settings
+first, then Anderson, more iterations, Wegstein, damped substitution, an
+error-based tolerance, unclipped tears and a cold start. A trial passes only
+when it converged **and** is correct: finite, mass conserved, every unit's
+inner solve closed, and the error not far above `tol`. Negative flows are
+reported as a caveat rather than a failure, because a signed tear is negative
+in the right answer. When two trials pass with different products, the
+flowsheet has more than one steady state, and `converge` says so instead of
+picking one.
+
+By default `converge` changes nothing. With `apply=True` it keeps the first
+passing remedy, but only a *numerics* one, which changes how the fixed point
+is reached and not which one. A remedy that can change the answer (unclipped
+tears, a cold start) is returned as a proposal to apply with
+`set_solver_options`.
+
+## Objectives as expressions
+
+Analysis in difflow takes functions, and a function cannot cross an MCP
+boundary, so the analysis tools take *expressions*: strings compiled to JAX
+functions of the solved flowsheet, which differentiate exactly as the same
+function written in Python would.
+
+```text
+vapor.F_ethyl_acetate / vapor.total_flow
+20.0 * vapor.F_ethyl_acetate - 0.5 * reactor.V - 1.0 * feed.total_flow
+```
+
+An expression may use `<stream>.<quantity>` (`T`, `P`, `total_flow`,
+`F_<species>`), `<unit>.<param>` (the value at the point evaluated, so it
+follows a lever), named quantities, `+ - * / **`, numbers, `exp log log10 sqrt
+abs min max`, and `econ.<function>` for the functions of `difflow.economics`.
+It is parsed against a whitelist and never evaluated as Python.
+`define_quantity` names an expression (`purity`, `revenue`, `capex`) for reuse
+in others; quantities are saved with the flowsheet.
+
+Levers are what `levers` lists: `"<unit>.<param>"` and
+`"feed:<stream>.<field>"`. With them:
+
+- `sensitivity` ranks every lever by its elasticity, d ln y / d ln u, from
+  one reverse pass through the converged solve;
+- `sweep` solves along one lever and reports outputs and convergence at each
+  point;
+- `optimize` minimizes or maximizes an expression over bounded levers with
+  constraints, using SLSQP with exact gradients, and with `apply=True` writes
+  the optimum into the flowsheet (undoably);
+- `uncertainty` propagates independent normal uncertainty in levers to an
+  output, linearly from the gradient with each lever's share of the variance,
+  and by Monte Carlo when `samples` is set;
+- `linearize` builds the delta vectors of an LP planning model
+  (see {doc}`planning`), and `report` the flowsheet's self-documenting report.
+
+Every result that rests on a solve carries that solve's convergence verdict.
+
+## What each plugin adds
+
+A plugin registers its unit operations through the `difflow.plugins` entry
+point and its agent support through `difflow.agent`, whose target returns a
+`difflow.agent.plugins.AgentSupport`: a summary of what it models, notes on
+its own solvers, symptom cards that `diagnose` matches alongside the core
+ones, and extra tools, served as `<plugin>_<name>`. Core names no plugin, so a
+new plugin brings its own support.
+
+`plugin_guide` lists the guides and shows one. Of the installed plugins:
+
+| Plugin | What its support adds |
+|---|---|
+| power | `power_flow` and `power_opf` (AC or DC) on the benchmark cases or a MATPOWER case as JSON, with LMPs checked against `jax.grad` of the optimal cost |
+| gas | signed flows (`clip_negative_flows=False`), damping, and a card that reads negative flows as direction rather than error |
+| refinery | library-only units and how to reach them, compile times, and cards keyed to each unit's convergence warning |
+| bio, cc, ree | what each unit needs before it can be built (a growth model, a solvent, an extractant) and the plugin's limits |
+
+```toml
+[project.entry-points."difflow.agent"]
+power = "difflow_power.agent:support"
+```
 
 ## Using the tools without MCP
 

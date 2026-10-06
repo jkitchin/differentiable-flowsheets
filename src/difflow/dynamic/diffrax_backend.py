@@ -281,11 +281,14 @@ def integrate_diffrax(
         y=ys,
     )
 
-    # Build info
+    # Build info. The counts stay JAX arrays: under jit or vmap they are
+    # tracers, and int() on one raises ConcretizationTypeError.
     stats = solution.stats
     info = IntegrationInfo(
-        n_steps=int(stats.get("num_steps", 0)),
-        n_eval=int(stats.get("num_accepted_steps", 0) + stats.get("num_rejected_steps", 0)),
+        n_steps=jnp.asarray(stats.get("num_steps", 0)),
+        n_eval=jnp.asarray(
+            stats.get("num_accepted_steps", 0) + stats.get("num_rejected_steps", 0)
+        ),
         success=solution.result == diffrax.RESULTS.successful,
         message=f"diffrax:{solver} - {solution.result}",
     )

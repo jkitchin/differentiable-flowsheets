@@ -35,7 +35,7 @@ With TFF for concentration/buffer exchange between steps.
 All operations are fully differentiable using JAX.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from difflow.params_mixin import ParamsMixin
 import jax.numpy as jnp
@@ -45,6 +45,7 @@ from difflow.streams import Stream, make_stream, get_flows
 from difflow_bio.units.chromatography import (
     ProteinAChromatography, ProteinAParams,
     IonExchangeChromatography, IEXParams,
+    TYPICAL_CEX_CLEARANCE, TYPICAL_AEX_CLEARANCE,
 )
 from difflow_bio.units.filtration import TFF
 from difflow.numerics import safe_divide
@@ -64,6 +65,10 @@ class mAbDSPParams(ParamsMixin):
         aex_column_volume: AEX column volume (L)
         tff_area: TFF membrane area (m²)
         concentration_factor: Target concentration factor
+        cex_clearance: CEX impurity -> LRV. Defaults to
+            TYPICAL_CEX_CLEARANCE, representative values, not measured ones.
+        aex_clearance: AEX impurity -> LRV. Defaults to
+            TYPICAL_AEX_CLEARANCE.
     """
     species_order: list[str] = None
     target_species: str = "mAb"
@@ -80,6 +85,8 @@ class mAbDSPParams(ParamsMixin):
     tff_area: float | Array = 5.0
     concentration_factor: float | Array = 10.0
     final_concentration_g_L: float | Array = 100.0
+    cex_clearance: dict = field(default_factory=lambda: dict(TYPICAL_CEX_CLEARANCE))
+    aex_clearance: dict = field(default_factory=lambda: dict(TYPICAL_AEX_CLEARANCE))
 
 
 class mAbDSPTrain:
@@ -128,6 +135,7 @@ class mAbDSPTrain:
             target_species=params.target_species,
             yield_factor=params.cex_yield,
             selectivity={params.target_species: 1.0, "aggregates": 0.3},
+            impurity_clearance=params.cex_clearance,
             species_order=params.species_order,
         ))
 
@@ -138,6 +146,7 @@ class mAbDSPTrain:
             target_species=params.target_species,
             yield_factor=params.aex_yield,
             selectivity={params.target_species: 0.0, "HCP": 0.9, "DNA": 1.0},
+            impurity_clearance=params.aex_clearance,
             species_order=params.species_order,
         ))
 
@@ -145,7 +154,12 @@ class mAbDSPTrain:
         self._tff = TFF(
             membrane_area=params.tff_area,
             MWCO=30.0,
-            rejection={params.target_species: 0.995},
+            # UF/DF is not credited with impurity clearance: HCP and DNA are retained
+            # like the product, and aggregates, larger than the monomer, slightly
+            # better. Unlisted species default to zero rejection, which washed
+            # 90% of the HCP and aggregates out in the 10x concentration.
+            rejection={params.target_species: 0.995, "HCP": 0.995, "DNA": 0.995,
+                       "aggregates": 0.999},
         )
 
     def __call__(
@@ -175,8 +189,9 @@ class mAbDSPTrain:
 
         intermediates = {"harvest": harvest}
 
-        # Step 1: Protein A capture
-        (proa_eluate, proa_waste), proa_info = self._proa(harvest, load_volume=p.proa_column_volume)
+        # Step 1: Protein A capture. Each column loads the whole batch; the
+        # column volume sets its capacity, not how much of the feed it sees.
+        (proa_eluate, proa_waste), proa_info = self._proa(harvest)
         proa_flows = get_flows(proa_eluate)
         proa_yield = safe_divide(proa_flows.get(target, 0.0), mab_in)
         intermediates["proa_eluate"] = proa_eluate
@@ -189,13 +204,13 @@ class mAbDSPTrain:
         intermediates["tff1_concentrate"] = tff1_out
 
         # Step 3: CEX polish
-        (cex_eluate, cex_waste), cex_info = self._cex(tff1_out, load_volume=p.cex_column_volume)
+        (cex_eluate, cex_waste), cex_info = self._cex(tff1_out)
         cex_flows = get_flows(cex_eluate)
         cex_yield = safe_divide(cex_flows.get(target, 0.0), proa_flows.get(target, 0.0))
         intermediates["cex_eluate"] = cex_eluate
 
         # Step 4: AEX flow-through polish
-        (aex_product, aex_bound), aex_info = self._aex(cex_eluate, load_volume=p.aex_column_volume)
+        (aex_product, aex_bound), aex_info = self._aex(cex_eluate)
         aex_flows = get_flows(aex_product)
         aex_yield = safe_divide(aex_flows.get(target, 0.0), cex_flows.get(target, 0.0))
         intermediates["aex_product"] = aex_product
@@ -212,23 +227,26 @@ class mAbDSPTrain:
         mab_out = final_flows.get(target, 0.0)
         overall_yield = safe_divide(mab_out, mab_in)
 
-        # Purity (mAb as fraction of total protein)
+        # Purity (mAb as fraction of total protein). Values stay JAX arrays
+        # so the train can be differentiated, jitted and vmapped (#360).
         total_protein = sum(
-            float(final_flows.get(s, 0.0))
-            for s in [target, "HCP", "aggregates"]
-            if s in final_flows or s == target
+            final_flows.get(s, 0.0) for s in (target, "HCP", "aggregates")
         )
-        purity = safe_divide(float(mab_out), total_protein)
+        purity = safe_divide(mab_out, total_protein)
+        aggregates_out = final_flows.get("aggregates", 0.0)
 
         result = {
             "product": final_product,
-            "overall_yield": float(overall_yield),
+            "overall_yield": overall_yield,
             "step_yields": {
-                "proa": float(proa_yield),
-                "cex": float(cex_yield),
-                "aex": float(aex_yield),
+                "proa": proa_yield,
+                "cex": cex_yield,
+                "aex": aex_yield,
             },
             "purity": purity,
+            # The two numbers a drug substance specification is written in
+            "hcp_ppm": 1e6 * safe_divide(final_flows.get("HCP", 0.0), mab_out),
+            "aggregate_fraction": safe_divide(aggregates_out, mab_out + aggregates_out),
         }
 
         if return_intermediates:
@@ -242,6 +260,9 @@ class mAbDSPTrain:
         batches_per_year: int = 50,
     ) -> dict:
         """Calculate annual resin usage.
+
+        A reporting helper: cycle counts are integers (ceil), so this is
+        not differentiable and is not meant to be traced.
 
         Args:
             harvest: Harvest stream

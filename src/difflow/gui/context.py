@@ -46,6 +46,8 @@ shown, so a thin answer has a visible cause.
 
 from __future__ import annotations
 
+from difflow.diagnostics import SYMPTOMS as _SYMPTOMS
+
 from dataclasses import dataclass, field
 
 #: Tokens a pack is allowed. Four characters to the token is the usual
@@ -65,64 +67,11 @@ SYSTEM = (
 )
 
 #: Symptom cards. Each is ``(name, triggers, text)``; a card is included
-#: when one of its triggers appears in the error or the diagnostics. The
-#: text is difflow's own troubleshooting prose --- the failures below are
-#: the ones this codebase actually produces, and a general-purpose model
-#: guesses at every one of them.
-TROUBLESHOOTING: tuple[tuple[str, tuple[str, ...], str], ...] = (
-    (
-        "The recycle did not converge",
-        ("converged", "max_iter", "residual"),
-        "A sequential-modular solve tears the recycle streams and "
-        "iterates. `converged=False` means it stopped at `max_iter` "
-        "with the residual still above `tol`; the numbers it returns "
-        "look like an answer and are not one. What helps, in order: "
-        "raise `max_iter`; switch `acceleration` to 'anderson' or "
-        "'wegstein' (direct substitution converges linearly and a loop "
-        "gain near 1 makes that arbitrarily slow); damp the tear map "
-        "with `acceleration='none', damping=0.3`; give the tear stream a "
-        "better initial guess with `tear_initial`. A residual that "
-        "*rises* is a loop gain above 1, which damping fixes and "
-        "iterations do not.",
-    ),
-    (
-        "TracerArrayConversionError",
-        ("TracerArrayConversionError", "TracerBoolConversionError"),
-        "A JAX tracer reached Python control flow -- `if x > 0:`, "
-        "`float(x)`, `int(x)`, or a numpy call on a traced array. Use "
-        "`jnp.where`, `jax.lax.cond`, `jax.lax.switch` or "
-        "`jax.lax.fori_loop` instead. Inside a flowsheet this is almost "
-        "always a `rate_fn` or a property correlation branching on a "
-        "value rather than selecting with `jnp.where`.",
-    ),
-    (
-        "ConcretizationError",
-        ("ConcretizationError",),
-        "Something needed a concrete value from an abstract one -- a "
-        "shape, a loop bound, or a Python `bool`. Shapes must be static: "
-        "they cannot depend on traced values. If the value is only a "
-        "diagnostic, read it outside the trace.",
-    ),
-    (
-        "NaN in the result or the gradient",
-        ("nan", "NaN"),
-        "The usual sources are `log(0)`, `sqrt` of a negative, `0/0`, "
-        "and `x**y` at `x=0`. A forward pass can be finite while the "
-        "gradient is not -- `sqrt(x)` at `x=0` is 0 with an infinite "
-        "derivative. Add an epsilon, clip the argument, or use a safe "
-        "form. `jax.config.update('jax_debug_nans', True)` stops at the "
-        "first one.",
-    ),
-    (
-        "Singular or ill-conditioned solve",
-        ("singular", "LinAlgError", "condition", "rank"),
-        "An equation-oriented or Newton solve hit a Jacobian it cannot "
-        "invert. Usually a variable that nothing determines (an unset "
-        "spec) or two rows saying the same thing (a redundant spec). "
-        "Count equations against unknowns before reaching for a "
-        "different solver.",
-    ),
-)
+#: when one of its triggers appears in the error or the diagnostics. They
+#: are :data:`difflow.diagnostics.SYMPTOMS`, the one place difflow keeps
+#: what its own failures mean, shared with the agent tools.
+TROUBLESHOOTING: tuple[tuple[str, tuple[str, ...], str], ...] = tuple(
+    (s.title, s.triggers, s.text) for s in _SYMPTOMS)
 
 
 # ---------------------------------------------------------------------

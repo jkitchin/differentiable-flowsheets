@@ -149,6 +149,11 @@ class IEXParams(ParamsMixin):
         selectivity: Dict of species -> binding selectivity (0=no binding, 1=strong)
         yield_factor: Recovery yield
         species_order: List of species
+        impurity_clearance: Dict of impurity -> log reduction value (LRV)
+            across the step. An impurity listed here reaches the product
+            as 10**(-LRV) of what was loaded, in either mode, and its
+            selectivity is ignored. Impurities not listed fall back to the
+            selectivity rule. Default: none listed.
     """
     column_volume: float | Array
     mode: Literal["bind_elute", "flow_through"] = "bind_elute"
@@ -158,6 +163,20 @@ class IEXParams(ParamsMixin):
     selectivity: dict = field(default_factory=dict)
     yield_factor: float | Array = 0.90
     species_order: list[str] = None
+    impurity_clearance: dict = field(default_factory=dict)
+
+
+#: Representative impurity clearances (LRV) for the polishing steps of a
+#: platform mAb process, used by the packaged trains. They are not measured
+#: values: they are chosen so that a harvest at ~5% HCP and ~3% aggregate
+#: by mass, after a Protein A step at its defaults, ends near the reported
+#: end-of-process levels: ~10 ppm HCP against a <100 ppm target (Lenhoff &
+#: Herman, BioProcess International, 2023) and aggregate below the usual
+#: <1% target (Evans, PharmTech, 2015). The AEX HCP value matches one
+#: reported flow-through step, 530 to 15 ppm (Liu et al., mAbs 2:480, 2010,
+#: doi:10.4161/mabs.2.5.12645). Replace them with your process's data.
+TYPICAL_CEX_CLEARANCE = {"HCP": 0.5, "DNA": 1.0, "aggregates": 0.7}
+TYPICAL_AEX_CLEARANCE = {"HCP": 1.5, "DNA": 3.0, "aggregates": 0.1}
 
 
 @dataclass(repr=False)
@@ -252,7 +271,7 @@ class ProteinAChromatography:
     def __call__(
         self,
         inlet: Stream,
-        load_volume: float | Array,
+        load_volume: float | Array | None = None,
         breakthrough_limit: float | Array = 0.01,
         feed_volume: float | Array = None,
         load_flow_rate: float | Array = None,
@@ -262,7 +281,10 @@ class ProteinAChromatography:
 
         Args:
             inlet: Feed stream (concentrated harvest)
-            load_volume: Volume of feed to load (L)
+            load_volume: Volume of feed to load (L). None (the default)
+                loads the entire inlet, which is what a train processing a
+                whole batch wants; the column capacity then limits how much
+                binds, and any excess breaks through to waste.
             breakthrough_limit: Acceptable breakthrough fraction (0-1)
             feed_volume: Total volume of feed stream (L). If provided, used to
                 calculate concentration. If None, assumes load_volume/total_flow
@@ -296,7 +318,9 @@ class ProteinAChromatography:
         # volume larger than the feed volume otherwise loads more of the
         # target than the feed contains, and the column reports mass it was
         # never given -- loading 20 L of an 11.1 L feed closed 8 mol/s out.
-        if feed_volume is not None:
+        if load_volume is None:
+            target_mass_loaded = target_flow
+        elif feed_volume is not None:
             # Proper calculation: concentration = mass/volume, then mass = conc * load_vol
             # load_fraction = load_volume / feed_volume
             load_fraction = jnp.clip(
@@ -337,7 +361,9 @@ class ProteinAChromatography:
         target_eluted = target_bound * p.yield_factor
 
         # Calculate load fraction for mass balance
-        if feed_volume is not None:
+        if load_volume is None:
+            _load_frac = jnp.asarray(1.0)
+        elif feed_volume is not None:
             _load_frac = jnp.asarray(load_volume) / jnp.asarray(feed_volume)
         else:
             _load_frac = jnp.asarray(load_volume) / total_flow
@@ -465,13 +491,14 @@ class IonExchangeChromatography:
     def __call__(
         self,
         inlet: Stream,
-        load_volume: float | Array,
+        load_volume: float | Array | None = None,
     ) -> tuple[tuple[Stream, Stream], dict[str, Array]]:
         """Run ion exchange chromatography.
 
         Args:
             inlet: Feed stream
-            load_volume: Volume loaded (L)
+            load_volume: Volume loaded (L). None (the default) loads the
+                entire inlet.
 
         Returns:
             (product, waste): Product and waste streams
@@ -481,8 +508,12 @@ class IonExchangeChromatography:
         inlet_flows = get_flows(inlet)
         total_flow = sum(inlet_flows.values())
 
-        # Load fraction (clip to [0,1] for mass balance safety)
-        load_frac = jnp.clip(jnp.asarray(load_volume) / total_flow, 0.0, 1.0)
+        # Load fraction (clip to [0,1] for mass balance safety); None loads
+        # the whole inlet.
+        if load_volume is None:
+            load_frac = jnp.asarray(1.0)
+        else:
+            load_frac = jnp.clip(jnp.asarray(load_volume) / total_flow, 0.0, 1.0)
 
         product_flows = {}
         waste_flows = {}
@@ -493,7 +524,13 @@ class IonExchangeChromatography:
             selectivity = p.selectivity.get(species, 0.5)  # Default moderate binding
             selectivity = jnp.asarray(selectivity)
 
-            if p.mode == "bind_elute":
+            if species != p.target_species and species in p.impurity_clearance:
+                # Explicit clearance, either mode: 10**-LRV of the loaded
+                # impurity reaches the product.
+                to_product = mass_loaded * 10.0 ** (-jnp.asarray(p.impurity_clearance[species]))
+                product_flows[species] = to_product
+                waste_flows[species] = mass_unloaded + mass_loaded - to_product
+            elif p.mode == "bind_elute":
                 # High selectivity = binds = goes to product
                 if species == p.target_species:
                     product_flows[species] = mass_loaded * p.yield_factor
@@ -577,13 +614,14 @@ class SizeExclusionChromatography:
     def __call__(
         self,
         inlet: Stream,
-        load_volume: float | Array,
+        load_volume: float | Array | None = None,
     ) -> tuple[tuple[Stream, Stream, Stream], dict[str, Array]]:
         """Run size exclusion chromatography.
 
         Args:
             inlet: Feed stream
-            load_volume: Volume loaded (L)
+            load_volume: Volume loaded (L). None (the default) loads the
+                entire inlet.
 
         Returns:
             (product, aggregates, fragments): Three fractions
@@ -593,8 +631,12 @@ class SizeExclusionChromatography:
         inlet_flows = get_flows(inlet)
         total_flow = sum(inlet_flows.values())
 
-        # Load fraction (clip to [0,1] for mass balance safety)
-        load_frac = jnp.clip(jnp.asarray(load_volume) / total_flow, 0.0, 1.0)
+        # Load fraction (clip to [0,1] for mass balance safety); None loads
+        # the whole inlet.
+        if load_volume is None:
+            load_frac = jnp.asarray(1.0)
+        else:
+            load_frac = jnp.clip(jnp.asarray(load_volume) / total_flow, 0.0, 1.0)
 
         product_flows = {}
         aggregate_flows = {}

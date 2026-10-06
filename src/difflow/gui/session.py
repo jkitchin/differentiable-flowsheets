@@ -1899,6 +1899,15 @@ class FlowsheetSession:
         )
         if negative:
             warnings.append(f"negative flows in {', '.join(negative)}")
+        # A unit whose own inner solve did not close its balance returns an
+        # outlet that is not a solution of the unit, however well the
+        # recycle around it converged.
+        for unit, info in (getattr(fs, "last_solve_unit_info", None) or {}).items():
+            ok = info.get("converged") if isinstance(info, dict) else None
+            if ok is not None and not bool(ok):
+                warnings.append(f"{unit}'s own solve did not close its balance "
+                                f"(relative residual "
+                                f"{float(info.get('balance_residual', float('nan'))):.3g})")
 
         idle = sorted(set(fs.feeds) - {n for u in fs.units for n in u.inlet_names})
         if idle:

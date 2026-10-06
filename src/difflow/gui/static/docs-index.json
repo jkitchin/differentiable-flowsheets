@@ -1,5 +1,5 @@
 {
- "n_sections": 1080,
+ "n_sections": 1084,
  "sections": [
   {
    "anchor": "agents-the-difflow-mcp-server",
@@ -23,7 +23,7 @@
    "path": "Agents: the `difflow mcp` server > What the tools are",
    "source": "agents.md",
    "targets": [],
-   "text": "Nothing in the tool layer is a hand-written list of units. Operations come\nfrom the plugin registry and the catalog, so a newly installed plugin's units\nare usable at once; libraries that are not unit operations (planning,\nstochastic programming, the refinery reformer and FCC) are found by reading\neach package's `__all__`.\n\n| Group | Tools |\n|---|---|\n| Discovery | `plugin_status`, `list_operations`, `describe_operation`, `list_api`, `describe_api`, `search_species`, `search_docs`, `list_examples` |\n| Sessions | `list_sessions`, `new_session`, `close_session`, `open_example`, `open_file`, `save`, `undo`, `redo`, `get_flowsheet` |\n| Building | `set_species`, `set_code_context`, `add_unit`, `update_unit`, `remove_unit`, `connect`, `disconnect`, `set_feed`, `remove_feed` |\n| Running | `set_solver_options`, `solve`, `get_streams` |\n| Python | `run_python` |\n\nEach tool is annotated as read-only, editing, or running code, so a client can\nask before the last kind. A session holds one flowsheet; every tool takes a\n`session` argument (default `\"main\"`), so a base case and a variant can be\nkept side by side."
+   "text": "Nothing in the tool layer is a hand-written list of units. Operations come\nfrom the plugin registry and the catalog, so a newly installed plugin's units\nare usable at once; libraries that are not unit operations (planning,\nstochastic programming, the refinery reformer and FCC) are found by reading\neach package's `__all__`.\n\n| Group | Tools |\n|---|---|\n| Discovery | `plugin_status`, `plugin_guide`, `list_operations`, `describe_operation`, `list_api`, `describe_api`, `search_species`, `search_docs`, `list_examples` |\n| Sessions | `list_sessions`, `new_session`, `close_session`, `open_example`, `open_file`, `save`, `undo`, `redo`, `get_flowsheet` |\n| Building | `set_species`, `set_code_context`, `add_unit`, `update_unit`, `remove_unit`, `connect`, `disconnect`, `set_feed`, `remove_feed` |\n| Running | `set_solver_options`, `solve`, `get_streams` |\n| Diagnosis | `diagnose`, `converge`, `tear_analysis`, `trace_solve`, `get_unit_info` |\n| Analysis | `levers`, `define_quantity`, `remove_quantity`, `list_quantities`, `evaluate`, `sensitivity`, `sweep`, `optimize`, `uncertainty`, `linearize`, `report` |\n| Python | `run_python` |\n\nEach tool is annotated as read-only, editing, or running code, so a client can\nask before the last kind. A session holds one flowsheet; every tool takes a\n`session` argument (default `\"main\"`), so a base case and a variant can be\nkept side by side."
   },
   {
    "anchor": "how-a-flowsheet-is-built",
@@ -40,6 +40,30 @@
    "source": "agents.md",
    "targets": [],
    "text": "`solve` returns more than streams, and an answer is good only when it\nconverged **and** its audit is clean:\n\n- `converged`: the recycle verdict.\n- `gain` and `error_estimate`: at loop gain $g$ the error is about $1/(1-g)$\n  times the step `tol` tested (see {doc}`convergence`).\n- `warnings`: what the solve warned about (a `TearToleranceWarning`, a\n  `CSTRDensityWarning`, ...), returned instead of printed.\n- `audit`: non-finite values, negative flows, unread feeds and the overall\n  mass balance.\n\nEvery option of `Flowsheet.solve` that is a setting (tolerance and its basis,\nacceleration, damping, tear choice, clipping) can be set with\n`set_solver_options` or passed to `solve`, and is saved with the flowsheet."
+  },
+  {
+   "anchor": "when-a-solve-fails",
+   "heading": "When a solve fails",
+   "path": "Agents: the `difflow mcp` server > When a solve fails",
+   "source": "agents.md",
+   "targets": [],
+   "text": "`diagnose` checks what can be checked before solving (units still waiting on\nsomething, unfed inlets), solves, and returns findings, most serious first:\na recycle that did not converge together with what its residual history\nsays (diverging, oscillating, creeping, stalled), an error estimate above\n`tol`, clipping, a unit whose own inner solve did not close its balance,\ntear-set problems, audit failures and captured warnings. Each finding names\nthe remedies that address it. The remedies and the symptom cards live in\n`difflow.diagnostics`, the same table the editor's assistant reads.\n\n`converge` tries those remedies on the live flowsheet: the stored settings\nfirst, then Anderson, more iterations, Wegstein, damped substitution, an\nerror-based tolerance, unclipped tears and a cold start. A trial passes only\nwhen it converged **and** is correct: finite, mass conserved, every unit's\ninner solve closed, and the error not far above `tol`. Negative flows are\nreported as a caveat rather than a failure, because a signed tear is negative\nin the right answer. When two trials pass with different products, the\nflowsheet has more than one steady state, and `converge` says so instead of\npicking one.\n\nBy default `converge` changes nothing. With `apply=True` it keeps the first\npassing remedy, but only a *numerics* one, which changes how the fixed point\nis reached and not which one. A remedy that can change the answer (unclipped\ntears, a cold start) is returned as a proposal to apply with\n`set_solver_options`."
+  },
+  {
+   "anchor": "objectives-as-expressions",
+   "heading": "Objectives as expressions",
+   "path": "Agents: the `difflow mcp` server > Objectives as expressions",
+   "source": "agents.md",
+   "targets": [],
+   "text": "Analysis in difflow takes functions, and a function cannot cross an MCP\nboundary, so the analysis tools take *expressions*: strings compiled to JAX\nfunctions of the solved flowsheet, which differentiate exactly as the same\nfunction written in Python would.\n\n```text\nvapor.F_ethyl_acetate / vapor.total_flow\n20.0 * vapor.F_ethyl_acetate - 0.5 * reactor.V - 1.0 * feed.total_flow\n```\n\nAn expression may use `<stream>.<quantity>` (`T`, `P`, `total_flow`,\n`F_<species>`), `<unit>.<param>` (the value at the point evaluated, so it\nfollows a lever), named quantities, `+ - * / **`, numbers, `exp log log10 sqrt\nabs min max`, and `econ.<function>` for the functions of `difflow.economics`.\nIt is parsed against a whitelist and never evaluated as Python.\n`define_quantity` names an expression (`purity`, `revenue`, `capex`) for reuse\nin others; quantities are saved with the flowsheet.\n\nLevers are what `levers` lists: `\"<unit>.<param>\"` and\n`\"feed:<stream>.<field>\"`. With them:\n\n- `sensitivity` ranks every lever by its elasticity, d ln y / d ln u, from\n  one reverse pass through the converged solve;\n- `sweep` solves along one lever and reports outputs and convergence at each\n  point;\n- `optimize` minimizes or maximizes an expression over bounded levers with\n  constraints, using SLSQP with exact gradients, and with `apply=True` writes\n  the optimum into the flowsheet (undoably);\n- `uncertainty` propagates independent normal uncertainty in levers to an\n  output, linearly from the gradient with each lever's share of the variance,\n  and by Monte Carlo when `samples` is set;\n- `linearize` builds the delta vectors of an LP planning model\n  (see {doc}`planning`), and `report` the flowsheet's self-documenting report.\n\nEvery result that rests on a solve carries that solve's convergence verdict."
+  },
+  {
+   "anchor": "what-each-plugin-adds",
+   "heading": "What each plugin adds",
+   "path": "Agents: the `difflow mcp` server > What each plugin adds",
+   "source": "agents.md",
+   "targets": [],
+   "text": "A plugin registers its unit operations through the `difflow.plugins` entry\npoint and its agent support through `difflow.agent`, whose target returns a\n`difflow.agent.plugins.AgentSupport`: a summary of what it models, notes on\nits own solvers, symptom cards that `diagnose` matches alongside the core\nones, and extra tools, served as `<plugin>_<name>`. Core names no plugin, so a\nnew plugin brings its own support.\n\n`plugin_guide` lists the guides and shows one. Of the installed plugins:\n\n| Plugin | What its support adds |\n|---|---|\n| power | `power_flow` and `power_opf` (AC or DC) on the benchmark cases or a MATPOWER case as JSON, with LMPs checked against `jax.grad` of the optimal cost |\n| gas | signed flows (`clip_negative_flows=False`), damping, and a card that reads negative flows as direction rather than error |\n| refinery | library-only units and how to reach them, compile times, and cards keyed to each unit's convergence warning |\n| bio, cc, ree | what each unit needs before it can be built (a growth model, a solvent, an extractant) and the plugin's limits |\n\n```toml\n[project.entry-points.\"difflow.agent\"]\npower = \"difflow_power.agent:support\"\n```"
   },
   {
    "anchor": "using-the-tools-without-mcp",
@@ -4255,7 +4279,7 @@
    "path": "Bio-Manufacturing Unit Operations > Bioreactors > FedBatchBioreactor > Parameters",
    "source": "unit-operations-bio.md",
    "targets": [],
-   "text": "```python\n@dataclass\nclass FedBatchParams:\n    V0: float              # Initial volume (L)\n    Y_xs: float            # Yield coefficient (g cells / g substrate)\n    kinetic_fn: Callable   # Growth kinetics function\n    kinetic_params: dict   # Parameters for kinetic function\n    k_d: float = 0.0       # Death rate constant (1/h)\n    m_s: float = 0.0       # Maintenance coefficient (g/g/h)\n    alpha: float = 0.0     # Growth-associated product formation (g/g)\n    beta: float = 0.0      # Non-growth-associated product formation (g/g/h)\n    species_order: list = [\"cells\", \"substrate\", \"product\"]\n```\n\n**Integration**: Uses diffrax (adaptive Tsit5 by default) or RK4 fallback"
+   "text": "```python\n@dataclass\nclass FedBatchParams:\n    V0: float              # Initial volume (L)\n    Y_xs: float            # Yield coefficient (g cells / g substrate)\n    kinetic_fn: Callable   # Growth kinetics function\n    kinetic_params: dict   # Parameters for kinetic function\n    k_d: float = 0.0       # Death rate constant (1/h)\n    m_s: float = 0.0       # Maintenance coefficient (g/g/h)\n    K_m: float = 0.05      # Half-saturation of maintenance uptake (g/L)\n    alpha: float = 0.0     # Growth-associated product formation (g/g)\n    beta: float = 0.0      # Non-growth-associated product formation (g/g/h)\n    species_order: list = [\"cells\", \"substrate\", \"product\"]\n```\n\n**Integration**: Uses diffrax (adaptive Tsit5 by default) or RK4 fallback"
   },
   {
    "anchor": "inputs",
@@ -4271,7 +4295,7 @@
    "path": "Bio-Manufacturing Unit Operations > Bioreactors > FedBatchBioreactor > Governing Equations",
    "source": "unit-operations-bio.md",
    "targets": [],
-   "text": "**Volume Change**:\n\n$$\\frac{dV}{dt} = F(t)$$\n\n**Cell Balance**:\n\n$$\\frac{d(VX)}{dt} = V(\\mu - k_d)X$$\n\nOr: $\\frac{dX}{dt} = (\\mu - k_d - D)X$ where $D = F/V$\n\n**Substrate Balance**:\n\n$$\\frac{d(VS)}{dt} = F \\cdot S_f - V\\left(\\frac{\\mu X}{Y_{X/S}} + m_s X\\right)$$\n\n**Product Balance**:\n\n$$\\frac{d(VP)}{dt} = V(\\alpha \\mu + \\beta)X$$\n\n**Common Feed Strategies**:\n\n1. **Constant Feed**: $F(t) = F_0$\n2. **Exponential Feed**: $F(t) = F_0 e^{\\mu_{set} t}$ to maintain constant $\\mu$\n3. **Feedback Control**: Adjust F based on measured substrate or DO"
+   "text": "**Volume Change**:\n\n$$\\frac{dV}{dt} = F(t)$$\n\n**Cell Balance**:\n\n$$\\frac{d(VX)}{dt} = V(\\mu - k_d)X - V m_s Y_{X/S} (1 - \\phi) X$$\n\n**Substrate Balance**:\n\n$$\\frac{d(VS)}{dt} = F \\cdot S_f - V\\left(\\frac{\\mu X}{Y_{X/S}} + m_s \\phi X\\right), \\qquad \\phi = \\frac{S}{K_m + S}$$\n\n**Maintenance under starvation**: maintenance draws on substrate while\nthere is any ($\\phi \\approx 1$ for $S \\gg K_m$) and on biomass when it\nruns out, at the endogenous decay rate $b = m_s Y_{X/S}$ (Pirt, 1965).\nWithout the $\\phi$ factor, uptake would continue at $m_s X$ after the\nsubstrate is gone and drive $S$ negative while product kept\naccumulating. `info[\"S_min\"]` reports the lowest substrate concentration\nreached, so a starved run is visible.\n\n**Product Balance**:\n\n$$\\frac{d(VP)}{dt} = V(\\alpha \\mu + \\beta)X$$\n\n**Common Feed Strategies**:\n\n1. **Constant Feed**: $F(t) = F_0$\n2. **Exponential Feed**: $F(t) = F_0 e^{\\mu_{set} t}$ to maintain constant $\\mu$\n3. **Feedback Control**: Adjust F based on measured substrate or DO"
   },
   {
    "anchor": "example-usage",
@@ -4279,7 +4303,7 @@
    "path": "Bio-Manufacturing Unit Operations > Bioreactors > FedBatchBioreactor > Example Usage",
    "source": "unit-operations-bio.md",
    "targets": [],
-   "text": "```python\nfrom difflow_bio.units.bioreactors import FedBatchBioreactor, FedBatchParams, monod_kinetics\nimport jax.numpy as jnp\n\nparams = FedBatchParams(\n    V0=5.0,            # Initial volume (L)\n    Y_xs=0.5,          # Yield coefficient\n    kinetic_fn=monod_kinetics,\n    kinetic_params={'mu_max': 0.4, 'K_s': 0.5},\n    k_d=0.01,          # Death rate\n    alpha=0.1,         # Growth-associated product formation\n    beta=0.02          # Non-growth-associated product formation\n)\n\nbioreactor = FedBatchBioreactor(params)\n\n# Exponential feed to maintain mu = 0.1/h\ndef exponential_feed(t):\n    return 0.1 * jnp.exp(0.1 * t)\n\n# Run simulation\noutlet, info = bioreactor(\n    t_span=(0.0, 72.0),  # hours\n    X0=0.5,              # Initial cell concentration (g/L)\n    S0=20.0,             # Initial substrate (g/L)\n    feed_profile=exponential_feed,\n    S_f=200.0            # Feed substrate concentration\n)\nprint(f\"Final cell concentration: {info['X_final']:.2f} g/L\")\nprint(f\"Final product: {info['P_final']:.2f} g/L\")\n```\n\n---\n\n(kinetic-models)="
+   "text": "```python\nfrom difflow_bio.units.bioreactors import FedBatchBioreactor, FedBatchParams, monod_kinetics\nimport jax.numpy as jnp\n\nparams = FedBatchParams(\n    V0=5.0,            # Initial volume (L)\n    Y_xs=0.5,          # Yield coefficient\n    kinetic_fn=monod_kinetics,\n    kinetic_params={'mu_max': 0.4, 'K_s': 0.5},\n    k_d=0.01,          # Death rate\n    alpha=0.1,         # Growth-associated product formation\n    beta=0.02          # Non-growth-associated product formation\n)\n\nbioreactor = FedBatchBioreactor(params)\n\n# Exponential feed to maintain mu = 0.1/h\ndef exponential_feed(t):\n    return 0.1 * jnp.exp(0.1 * t)\n\n# Run simulation\noutlet, info = bioreactor(\n    X0=0.5,              # Initial cell concentration (g/L)\n    S0=20.0,             # Initial substrate (g/L)\n    P0=0.0,              # Initial product (g/L)\n    t_final=72.0,        # hours\n    feed_rate_fn=exponential_feed,\n    S_feed=200.0,        # Feed substrate concentration (g/L)\n)\nprint(f\"Final cell concentration: {info['X_final']:.2f} g/L\")\nprint(f\"Final product: {info['P_final']:.2f} g/L\")\n```\n\n---\n\n(kinetic-models)="
   },
   {
    "anchor": "kinetic-models",
@@ -4611,7 +4635,7 @@
    "path": "Bio-Manufacturing Unit Operations > Chromatography > ProteinAChromatography > Parameters",
    "source": "unit-operations-bio.md",
    "targets": [],
-   "text": "```python\n@dataclass\nclass ProteinAParams:\n    column_volume: float   # Column volume (L)\n    q_max: float          # Maximum binding capacity (g/L resin)\n    K_d: float            # Dissociation constant (M)\n    flow_rate: float      # Operating flow rate (CV/h)\n    residence_time: float # Column residence time (min)\n```"
+   "text": "```python\n@dataclass\nclass ProteinAParams:\n    column_volume: float          # Column volume (L)\n    q_max: float = 35.0           # Maximum binding capacity (g/L resin)\n    K_d: float = 0.1              # Dissociation constant (g/L)\n    target_species: str = \"mAb\"\n    yield_factor: float = 0.95    # Elution yield (0-1)\n    impurity_clearance: dict      # impurity -> LRV, default HCP 2, DNA 3, cells 4\n    k_ads: float | None = None    # Adsorption rate (1/min), for kinetic DBC\n    n_plates: float | None = None # Plate count, for elution pool volume\n    elution_cv: float = 2.0       # Elution retention volume (CV)\n```"
   },
   {
    "anchor": "inputs",
@@ -4619,7 +4643,7 @@
    "path": "Bio-Manufacturing Unit Operations > Chromatography > ProteinAChromatography > Inputs",
    "source": "unit-operations-bio.md",
    "targets": [],
-   "text": "| Parameter | Type | Units | Description |\n|-----------|------|-------|-------------|\n| `load` | Stream | - | Feed stream with mAb |\n| `load_volume` | float | CV | Load volume in column volumes |"
+   "text": "| Parameter | Type | Units | Description |\n|-----------|------|-------|-------------|\n| `inlet` | Stream | - | Feed stream with mAb (component flows as mass) |\n| `load_volume` | float or None | L | Volume of feed loaded. `None` (default) loads the whole inlet; the column capacity, $DBC \\cdot V_{column}$, then limits what binds and the excess breaks through |\n| `feed_volume` | float | L | Total feed volume, so `load_volume / feed_volume` is the fraction loaded |"
   },
   {
    "anchor": "outputs",
@@ -4627,7 +4651,7 @@
    "path": "Bio-Manufacturing Unit Operations > Chromatography > ProteinAChromatography > Outputs",
    "source": "unit-operations-bio.md",
    "targets": [],
-   "text": "| Parameter | Type | Units | Description |\n|-----------|------|-------|-------------|\n| `eluate` | Stream | - | Purified mAb |\n| `info['recovery']` | float | - | Step recovery |\n| `info['purity']` | float | - | Product purity |\n| `info['HCP_LRV']` | float | - | HCP log reduction value |\n| `info['DNA_LRV']` | float | - | DNA log reduction value |\n| `info['DBC']` | float | g/L | Dynamic binding capacity |"
+   "text": "| Parameter | Type | Units | Description |\n|-----------|------|-------|-------------|\n| `product` | Stream | - | Elution pool (purified mAb) |\n| `waste` | Stream | - | Flow-through, wash and column losses |\n| `info['yield']` | float | - | Eluted / loaded target |\n| `info['purity']` | float | - | Product purity |\n| `info['mass_loaded']`, `info['mass_bound']` | float | mass | Target loaded and bound (bound is capped by capacity) |\n| `info['capacity_utilization']` | float | - | Bound mass / column capacity |\n| `info['impurity_clearance']` | dict | LRV | Clearance applied per impurity |\n| `info['DNA_LRV']` | float | - | DNA log reduction value |\n| `info['DBC']` | float | g/L | Dynamic binding capacity |"
   },
   {
    "anchor": "process-steps",
@@ -4651,7 +4675,7 @@
    "path": "Bio-Manufacturing Unit Operations > Chromatography > ProteinAChromatography > Example Usage",
    "source": "unit-operations-bio.md",
    "targets": [],
-   "text": "```python\nfrom difflow_bio.units.chromatography import ProteinAChromatography, ProteinAParams\n\nparams = ProteinAParams(\n    column_volume=10.0,    # L\n    q_max=35.0,            # g/L (typical for MabSelect)\n    K_d=1e-8,              # M (very tight binding)\n    flow_rate=2.0,         # CV/h\n    residence_time=6.0     # min\n)\n\nprotein_a = ProteinAChromatography(params)\nload = make_stream({'mAb': 5.0, 'HCP': 5.0, 'DNA': 0.1}, T=298.0, P=101325.0)\n\neluate, info = protein_a(load, load_volume=25)  # 25 CV = 250 L\nprint(f\"Recovery: {info['recovery']:.2%}\")\nprint(f\"HCP clearance: {info['HCP_LRV']:.1f} LRV\")\n```\n\n---\n\n(ionexchangechromatography)="
+   "text": "```python\nfrom difflow_bio.units.chromatography import ProteinAChromatography, ProteinAParams\n\nfrom difflow import make_stream\n\nparams = ProteinAParams(\n    column_volume=10.0,    # L\n    q_max=35.0,            # g/L (typical for MabSelect)\n)\n\nprotein_a = ProteinAChromatography(params)\nload = make_stream({'mAb': 250.0, 'HCP': 5.0, 'DNA': 0.1}, T=298.0, P=101325.0)\n\n# Load the whole batch: 250 g of mAb on a 10 L column (346.5 g capacity)\n(eluate, waste), info = protein_a(load)\nprint(f\"Yield: {float(info['yield']):.2%}\")\nprint(f\"Capacity used: {float(info['capacity_utilization']):.0%}\")\nprint(f\"HCP clearance: {info['impurity_clearance']['HCP']:.1f} LRV\")\n```\n\n---\n\n(ionexchangechromatography)="
   },
   {
    "anchor": "ionexchangechromatography",
@@ -4685,7 +4709,15 @@
    "path": "Bio-Manufacturing Unit Operations > Chromatography > IonExchangeChromatography > Parameters",
    "source": "unit-operations-bio.md",
    "targets": [],
-   "text": "```python\n@dataclass\nclass IEXParams:\n    column_volume: float   # Column volume (L)\n    q_max: float          # Binding capacity (g/L)\n    type: str             # 'CEX' or 'AEX'\n    mode: str             # 'bind_elute' or 'flow_through'\n    selectivity: Array    # Selectivity factors for species\n```"
+   "text": "```python\n@dataclass\nclass IEXParams:\n    column_volume: float              # Column volume (L)\n    mode: str = \"bind_elute\"          # 'bind_elute' or 'flow_through'\n    q_max: float = 50.0               # Binding capacity (g/L)\n    K_d: float = 0.5                  # Dissociation constant (g/L)\n    target_species: str = \"mAb\"\n    selectivity: dict = {}            # species -> binding selectivity (0-1)\n    yield_factor: float = 0.90        # Step recovery of the target\n    impurity_clearance: dict = {}     # impurity -> LRV across the step\n```\n\nCEX and AEX are the same unit; `mode` and the parameters say which one it\nis. `load_volume` (L) is optional when calling it, and `None` loads the\nwhole inlet."
+  },
+  {
+   "anchor": "impurity-clearance",
+   "heading": "Impurity clearance",
+   "path": "Bio-Manufacturing Unit Operations > Chromatography > IonExchangeChromatography > Impurity clearance",
+   "source": "unit-operations-bio.md",
+   "targets": [],
+   "text": "An impurity listed in `impurity_clearance` reaches the product as\n$10^{-\\mathrm{LRV}}$ of what was loaded, in either mode; the rest goes to\nwaste. Impurities not listed fall back to a selectivity rule: in\nflow-through mode a fraction `selectivity` binds, and in bind-elute mode\n$s^2 (1 - Y)$ co-elutes with the product. That rule caps carry-over at\n$1 - Y$, so a 90% step would remove at least 90% of every impurity, far\nmore than a polishing step removes aggregate. State clearances explicitly\nwhen purity matters.\n\n`TYPICAL_CEX_CLEARANCE` and `TYPICAL_AEX_CLEARANCE` in the same module are\nthe representative values the packaged trains use (CEX: HCP 0.5, DNA 1.0,\naggregates 0.7; AEX: HCP 1.5, DNA 3.0, aggregates 0.1). They are not\nmeasured clearances. They are chosen so that a harvest at about 5% HCP\nand 3% aggregate ends near reported end-of-process levels: about 10 ppm\nHCP against a <100 ppm target, and aggregate below the usual 1% target.\nThe AEX HCP value matches one reported flow-through step, 530 to 15 ppm\n(Liu et al., *mAbs* 2:480, 2010, doi:10.4161/mabs.2.5.12645). Replace\nthem with your own process data. With them, `mAbDSPTrain` reports about\n99.4% purity, 6 ppm HCP and 0.6% aggregate from that harvest, and returns\n`hcp_ppm` and `aggregate_fraction` alongside `purity`."
   },
   {
    "anchor": "operating-modes",
