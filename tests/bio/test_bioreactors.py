@@ -232,6 +232,33 @@ class TestFedBatchBioreactor:
         assert float(grad_X0) > 0
 
 
+class TestFedBatchTransforms:
+    """Issue #361: a fed-batch solve must jit and vmap, not only grad."""
+
+    @staticmethod
+    def _final_titer(rate):
+        params = FedBatchParams(
+            V0=1000.0, Y_xs=0.4, kinetic_fn=monod_kinetics,
+            kinetic_params={"mu_max": 0.03, "K_s": 0.5}, beta=0.006,
+        )
+        _, info = FedBatchBioreactor(params)(
+            X0=0.2, S0=6.0, P0=0.0, t_final=336.0,
+            feed_rate_fn=lambda t: rate, S_feed=200.0,
+        )
+        return info["P_final"]
+
+    def test_jit_grad_matches_eager_grad(self):
+        eager = jax.grad(self._final_titer)(1.0)
+        jitted = jax.jit(jax.grad(self._final_titer))(1.0)
+        assert float(jitted) == pytest.approx(float(eager), rel=1e-8)
+
+    def test_vmap_over_feed_rates(self):
+        rates = jnp.array([0.5, 1.0, 1.5])
+        batched = jax.jit(jax.vmap(self._final_titer))(rates)
+        for r, b in zip(rates, batched):
+            assert float(b) == pytest.approx(float(self._final_titer(r)), rel=1e-8)
+
+
 class TestFedBatchOxygenCoupling:
     """Issue #101: fed-batch growth coupled to oxygen transfer (OTR)."""
 
