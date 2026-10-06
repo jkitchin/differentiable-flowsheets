@@ -197,6 +197,45 @@ class Workbench:
         their text and URL."""
         return jsonable(discovery.search_docs(query, limit))
 
+    def plugin_guide(self, plugin: str | None = None) -> dict:
+        """What an installed plugin models, how to build with it, its own
+        solvers and their settings, its failure patterns, and its extra
+        tools. Without a plugin name, lists the plugins that provide a guide."""
+        from difflow.agent import plugins
+
+        support, errors = plugins.load()
+        if plugin is None:
+            return {"ok": True, "plugins": {
+                name: {"summary": sup.summary.split("\n\n")[0],
+                       "tools": [f"{name}_{t}" for t in sup.tools]}
+                for name, sup in sorted(support.items())}, "errors": errors}
+        sup = support.get(plugin.removeprefix("difflow_"))
+        if sup is None:
+            return {"ok": False, "error": f"no guide for {plugin!r} "
+                    f"(guides: {', '.join(sorted(support)) or 'none'})"
+                    + (f"; failed to load: {errors}" if errors else "")}
+        return {"ok": True, "plugin": sup.plugin, "summary": sup.summary,
+                "solver_notes": sup.solver_notes,
+                "symptoms": [{"title": s.title, "text": s.text,
+                              "triggers": list(s.triggers)} for s in sup.symptoms],
+                "tools": {f"{sup.plugin}_{n}": (t.function.__doc__ or "").strip()
+                          .split("\n\n")[0] for n, t in sup.tools.items()}}
+
+    def plugin_tool(self, name: str, **arguments) -> dict:
+        """Call a plugin tool by its served name (``<plugin>_<tool>``)."""
+        from difflow.agent import plugins
+
+        found = plugins.tools().get(name)
+        if found is None:
+            return {"ok": False, "error": f"no plugin tool {name!r}"}
+        _, tool = found
+        if tool.kind == "exec" and not self.allow_exec:
+            return self._no_exec()
+        try:
+            return jsonable(tool.function(self, **arguments))
+        except Exception as exc:  # noqa: BLE001 -- an answer, not a crash
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
     def list_examples(self) -> dict:
         """Example flowsheets that open_example can load."""
         return jsonable(discovery.list_examples())

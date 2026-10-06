@@ -29,8 +29,11 @@ async def tools_of(server) -> dict:
 
 
 def test_every_tool_is_served_with_its_kind():
+    from difflow.agent import plugins
+
     tools = run(tools_of(build_server()))
-    assert set(tools) == set(TOOLS)
+    # The core tools plus whatever installed plugins contribute.
+    assert set(tools) == set(TOOLS) | set(plugins.tools())
     for name, kind in TOOLS.items():
         hints = tools[name].annotations
         assert hints.read_only_hint is (kind == "read"), name

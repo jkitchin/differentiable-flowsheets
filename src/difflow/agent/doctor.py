@@ -56,8 +56,13 @@ def _preflight(session) -> list[Finding]:
 
 
 def _symptom_findings(text: str) -> list[Finding]:
+    """Core and plugin symptom cards whose triggers occur in ``text``."""
+    from difflow.agent import plugins
+
+    cards = matching_symptoms(text) + [s for s in plugins.symptoms() if s.matches(text)]
     return [Finding("symptom", "info", f"{s.title}: {s.text}",
-                    remedies=s.remedies) for s in matching_symptoms(text)]
+                    remedies=tuple(r for r in s.remedies if r in REMEDIES))
+            for s in cards]
 
 
 def diagnose(session) -> dict:
@@ -81,9 +86,14 @@ def diagnose(session) -> dict:
                 continue          # already a finding from solve_findings
             found.append(Finding("audit", "error" if "mass" in text or "non-finite"
                                  in text else "warning", text))
+        seen = set()
         for w in answer.get("warnings", []):
-            found.append(Finding("warning", "warning",
-                                 f"{w['category']}: {w['message']}"))
+            text = f"{w['category']}: {w['message']}"
+            found.append(Finding("warning", "warning", text))
+            for card in _symptom_findings(w["category"]):
+                if card.detail not in seen:
+                    seen.add(card.detail)
+                    found.append(card)
     names = sorted({r for f in found for r in f.remedies})
     return {
         "ok": True,
