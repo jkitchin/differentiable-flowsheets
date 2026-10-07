@@ -23,6 +23,7 @@ __all__ = [
     "henry_constant",
     "co2_equilibrium_pressure",
     "co2_loading",
+    "equilibrium_loading",
     "AmineVLE",
     "AmineVLEParams",
 ]
@@ -207,6 +208,67 @@ def co2_loading(
     sol = optx.root_find(residual, solver, alpha_init, args=None)
 
     return jnp.clip(sol.value, 0.0, alpha_max)
+
+
+def equilibrium_loading(
+    P_CO2: Array | float,
+    T: Array | float,
+    solvent: str,
+) -> Array:
+    """Invert the Kent-Eisenberg correlation robustly for the loading.
+
+    Solves ``co2_equilibrium_pressure(alpha, T) = P_CO2`` for ``alpha`` on
+    the whole physical range ``(0, 0.99 * alpha_max)``. The residual
+    ``ln P(alpha) - ln P_CO2`` is strictly increasing in ``alpha``, so a
+    fixed-length bisection always brackets the root (``co2_loading``'s
+    Newton start at ``P/1e6`` can leave the branch at stripper pressures).
+    The converged value is then passed through one Newton step taken from a
+    ``stop_gradient`` copy, which leaves the value unchanged and gives the
+    exact implicit-function derivative with respect to ``P_CO2`` and ``T``.
+
+    Args:
+        P_CO2: CO2 partial pressure (Pa), > 0.
+        T: Temperature (K).
+        solvent: Solvent name.
+
+    Returns:
+        Equilibrium CO2 loading (mol CO2 / mol amine), saturating at
+        ``0.99 * alpha_max`` where the correlation itself saturates.
+
+    Example:
+        >>> a = equilibrium_loading(24e3, 393.15, "MEA")   # ~0.17
+    """
+    import jax
+    P_CO2 = jnp.asarray(P_CO2, dtype=float)
+    T = jnp.asarray(T, dtype=float)
+    s = get_solvent(solvent)
+    alpha_max = s.loading_capacity
+    dH = s.heat_of_absorption * 1000.0
+    # Same constants as co2_equilibrium_pressure (K0, n=2, m=1.5).
+    ln_K = jnp.log(2.7e16) - dH / (R * T)
+    target = jnp.log(jnp.maximum(P_CO2, 1e-30)) - ln_K
+
+    def resid(u):
+        return (2.0 * jnp.log(alpha_max * u + 1e-10)
+                - 1.5 * jnp.log(1.0 - u) - target)
+
+    lo0 = jnp.zeros_like(target)
+    hi0 = jnp.full_like(target, 0.99)
+
+    def body(_, bounds):
+        lo, hi = bounds
+        mid = 0.5 * (lo + hi)
+        above = resid(mid) > 0.0
+        return jnp.where(above, lo, mid), jnp.where(above, mid, hi)
+
+    lo, hi = jax.lax.fori_loop(
+        0, 80, body, (jax.lax.stop_gradient(lo0), jax.lax.stop_gradient(hi0)))
+    u0 = jax.lax.stop_gradient(0.5 * (lo + hi))
+    # Implicit-derivative step: value-neutral at the root, exact first
+    # derivatives through `target` (i.e. P_CO2 and T).
+    dres = 2.0 * alpha_max / (alpha_max * u0 + 1e-10) + 1.5 / (1.0 - u0)
+    u = u0 - (resid(u0) - jax.lax.stop_gradient(resid(u0))) / dres
+    return alpha_max * jnp.clip(u, 0.0, 0.99)
 
 
 # =============================================================================

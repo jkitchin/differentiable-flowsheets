@@ -25,7 +25,8 @@ from difflow.streams import Stream, make_stream, get_flows, total_flow
 from difflow.params_mixin import ParamsMixin
 from difflow.numerics import safe_divide
 from difflow_cc.database import get_solvent
-from difflow_cc.equilibrium.vle import AmineVLE
+from difflow.flowsheet import _concrete
+from difflow_cc.equilibrium.vle import AmineVLE, equilibrium_loading
 
 
 # =============================================================================
@@ -42,8 +43,12 @@ class StripperParams(ParamsMixin):
         T_reboiler: Reboiler temperature (K)
         P_stripper: Operating pressure (Pa)
         reflux_ratio: Condenser reflux ratio
-        target_lean_loading: Target lean solvent loading (mol CO2/mol amine)
-        reboiler_duty: Fixed reboiler duty (W), if None calculated from target
+        target_lean_loading: Target lean solvent loading (mol CO2/mol amine).
+            The achieved lean loading is never below the equilibrium loading
+            at the reboiler (set by T_reboiler and P_stripper).
+        reboiler_duty: Available reboiler duty (W). When given, CO2 stripping
+            is limited to what this duty can supply after the sensible heat;
+            if None, the duty is calculated from the achieved lean loading.
 
     Notes:
         The stripper model calculates:
@@ -192,26 +197,19 @@ class AmineStripper:
             T_feed = rich_solvent.get("T", 313.15)
         T_feed = jnp.asarray(T_feed)
 
-        # Calculate equilibrium at reboiler conditions
-        # At high T, P_CO2_eq is high, driving CO2 out
-        P_CO2_eq_lean = self._vle.equilibrium_pressure(target_lean, T_reboiler)
+        # Audit C7: a reboiler colder than the rich solvent cannot strip and
+        # gave a negative sensible heat. Reject it when the values are
+        # concrete; under tracing it is reported through info["feasible"].
+        T_rich_in = jnp.asarray(rich_solvent.get("T", 313.15))
+        T_reb_c, T_rich_c = _concrete(T_reboiler), _concrete(T_rich_in)
+        if T_reb_c is not None and T_rich_c is not None and T_reb_c < T_rich_c:
+            raise ValueError(
+                f"T_reboiler ({T_reb_c:.2f} K) is below the rich solvent "
+                f"temperature ({T_rich_c:.2f} K); the stripper cannot "
+                "regenerate the solvent."
+            )
+        feasible = T_reboiler >= T_rich_in
 
-        # Simplified stripping model: lean loading depends on stages and energy
-        # More stages and higher reboiler duty -> lower (better) lean loading
-        # At minimum stages/energy, lean loading approaches rich loading
-        n_stages = jnp.asarray(p.n_stages)
-        # Stripping efficiency: fraction of possible stripping achieved
-        # Approaches 1.0 with many stages, 0.0 with few
-        strip_efficiency = 1.0 - jnp.exp(-0.3 * n_stages)
-        lean_loading = rich_loading - strip_efficiency * (rich_loading - target_lean)
-        lean_loading = jnp.clip(lean_loading, target_lean, rich_loading)
-
-        # CO2 stripped = rich CO2 - lean CO2
-        # Lean CO2 in liquid = F_amine * lean_loading
-        F_CO2_lean = F_amine * lean_loading
-        F_CO2_stripped = jnp.maximum(F_CO2_absorbed - F_CO2_lean, 0.0)
-
-        # Energy calculations
         # 1. Sensible heat
         # Cp ~ 4000 J/(kg·K) for amine solution
         Cp_solvent = 4000.0  # J/(kg·K)
@@ -223,22 +221,58 @@ class AmineStripper:
         m_water = F_H2O * MW_water / 1000  # kg/s
         m_total = m_amine + m_water
 
-        # Rich solvent enters at absorber temperature, is preheated by cross-exchanger
-        T_rich_in = jnp.asarray(rich_solvent.get("T", 313.15))
-        # Cross-exchanger heats rich solvent to within approach of reboiler temp
-        # But cannot heat above what the lean solvent can provide
+        # Rich solvent enters at absorber temperature, is preheated by
+        # cross-exchanger to within the approach of the reboiler temperature,
+        # never above what the lean solvent can provide.
         T_after_hx = jnp.maximum(T_rich_in, T_reboiler - p.cross_exchanger_approach)
-        dT_sensible = T_reboiler - T_after_hx
+        dT_sensible = jnp.maximum(T_reboiler - T_after_hx, 0.0)
         Q_sensible = m_total * Cp_solvent * dT_sensible  # W
 
-        # 2. Heat of reaction (desorption)
+        # Reboiler equilibrium (audit C7). The lean loading used to be
+        # rich - eff*(rich - target) whatever T_reboiler, P_stripper or a
+        # specified duty were, so a 300 K reboiler stripped like a 450 K one.
+        # The lowest loading the reboiler can reach is the one in
+        # equilibrium with the CO2 partial pressure of its vapour, which is
+        # the column pressure less the water vapour pressure over the
+        # solution (Raoult, x_w * Psat(T_reb)). Higher T_reb or lower
+        # P_stripper lowers that floor; below the floor nothing strips.
+        x_w = safe_divide(F_H2O, F_H2O + F_amine)
+        T_C = T_reboiler - 273.15
+        # Antoine constants for water, 99-374 C range (Dean's Handbook).
+        P_sat_w = jnp.power(10.0, 8.14019 - 1810.94 / (244.485 + T_C)) * 133.322
+        P_CO2_reb = jnp.maximum(P_stripper - x_w * P_sat_w, 1.0)  # Pa
+        alpha_eq = equilibrium_loading(P_CO2_reb, T_reboiler, p.solvent)
+
+        # The design target cannot go below the equilibrium floor.
+        lean_floor = jnp.maximum(target_lean, alpha_eq)
+
+        # Stage-limited approach to the floor: more stages strip closer.
+        n_stages = jnp.asarray(p.n_stages)
+        strip_efficiency = 1.0 - jnp.exp(-0.3 * n_stages)
+        lean_loading = rich_loading - strip_efficiency * (rich_loading - lean_floor)
+        lean_loading = jnp.minimum(lean_loading, rich_loading)
+
+        # Per-mole stripping energy: desorption plus stripping steam.
         dH_absorption = self._solvent_data.heat_of_absorption * 1000  # J/mol
+        dH_vap_water = 40650  # J/mol
+        steam_ratio = 2.0  # mol H2O per mol CO2 (typical MEA at 120 C)
+        q_per_mol = dH_absorption + steam_ratio * dH_vap_water
+
+        F_CO2_stripped = jnp.maximum(F_amine * (rich_loading - lean_loading), 0.0)
+        if p.reboiler_duty is not None:
+            # A specified duty (audit C7: it was ignored) limits stripping to
+            # what is left after the sensible heat.
+            Q_spec = jnp.asarray(p.reboiler_duty)
+            F_by_duty = jnp.maximum(Q_spec - Q_sensible, 0.0) / q_per_mol
+            F_CO2_stripped = jnp.minimum(F_CO2_stripped, F_by_duty)
+            lean_loading = rich_loading - safe_divide(F_CO2_stripped, F_amine)
+
+        F_CO2_lean = F_CO2_absorbed - F_CO2_stripped
+
+        # 2. Heat of reaction (desorption)
         Q_reaction = F_CO2_stripped * dH_absorption  # W
 
         # 3. Heat of vaporization (stripping steam)
-        # Typical steam ratio for MEA at 120°C is 1.5-3.0 mol H2O/mol CO2
-        dH_vap_water = 40650  # J/mol
-        steam_ratio = 2.0  # mol H2O per mol CO2
         F_steam = F_CO2_stripped * steam_ratio
         Q_vaporization = F_steam * dH_vap_water  # W
 
@@ -295,6 +329,9 @@ class AmineStripper:
             "CO2_purity": CO2_purity,
             "T_reboiler": T_reboiler,
             "T_feed": T_feed,
+            "equilibrium_lean_loading": alpha_eq,
+            "P_CO2_reboiler": P_CO2_reb,
+            "feasible": feasible,
         }
 
         return lean_solvent, co2_product, info

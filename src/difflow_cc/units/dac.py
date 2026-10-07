@@ -29,6 +29,7 @@ __all__ = [
     "dac_cost_estimate",
 ]
 
+import math
 from dataclasses import dataclass
 from typing import Literal
 
@@ -43,6 +44,15 @@ from difflow_cc.database import get_adsorbent
 
 # Constants
 CO2_AMBIENT = 420e-6  # 420 ppm
+# Largest fraction of the CO2 in the processed air a solid-sorbent contactor
+# retains: beds are switched at breakthrough, so some CO2 always slips.
+MAX_CAPTURE_FRACTION = 0.95
+# Liquid-DAC contactor transfer-unit model (see LiquidSolventDAC): L/G
+# (kg/kg) at which the packing is ~63 % wetted, and the volumetric gas-film
+# coefficient (1/s) calibrated to 75 % capture at the default 8 m depth,
+# 1.5 m/s and L/G = 2.
+LIQ_DAC_LG_WET = 0.5
+LIQ_DAC_KGA = math.log(4.0) / ((1.0 - math.exp(-2.0 / LIQ_DAC_LG_WET)) * 8.0 / 1.5)
 MW_CO2 = 44.01  # g/mol
 R = 8.314  # J/(mol·K)
 
@@ -80,6 +90,22 @@ class DACParams(ParamsMixin):
     cycle_time_des: float = 900.0  # 15 min
     ambient_humidity: float = 0.5
 
+    def __post_init__(self):
+        """Reject a desorption step colder than adsorption (concrete values).
+
+        Such a "swing" regenerates nothing and gave a negative sensible heat
+        (and a specific duty of 0.54 GJ/t) in the audit.
+        """
+        try:
+            T_ads, T_des = float(self.T_adsorption), float(self.T_desorption)
+        except Exception:  # traced values: nothing to check here
+            return
+        if T_des <= T_ads:
+            raise ValueError(
+                f"T_desorption ({T_des} K) must exceed T_adsorption "
+                f"({T_ads} K) for a temperature swing."
+            )
+
 
 @dataclass(repr=False)
 class LiquidDACParams(ParamsMixin):
@@ -89,9 +115,11 @@ class LiquidDACParams(ParamsMixin):
         solvent: Solvent type ('KOH', 'NaOH')
         n_contactors: Number of air contactors
         contactor_diameter: Contactor diameter (m)
-        contactor_height: Contactor height (m)
+        contactor_height: Packing depth along the air path (m); sets the
+            number of gas-film transfer units with air_velocity
         air_velocity: Air velocity in contactor (m/s)
-        L_G_ratio: Liquid to gas ratio (kg/kg)
+        L_G_ratio: Liquid to gas ratio (kg/kg); wets the packing (zero
+            liquid captures nothing)
         calciner_temperature: Calciner temperature (K)
     """
     solvent: str = "KOH"
@@ -99,7 +127,7 @@ class LiquidDACParams(ParamsMixin):
     contactor_diameter: float | Array = 10.0  # m
     contactor_height: float | Array = 8.0  # m
     air_velocity: float | Array = 1.5  # m/s
-    L_G_ratio: float = 2.0  # kg liquid/kg air
+    L_G_ratio: float | Array = 2.0  # kg liquid/kg air
     calciner_temperature: float | Array = 1173.15  # K (900°C)
 
 
@@ -163,30 +191,56 @@ class SolidSorbentDAC:
     ) -> tuple[Stream, dict]:
         """Capture CO2 from ambient air.
 
+        Capture is the smaller of the sorbent-limited rate (bed mass x
+        working capacity / cycle time) and ``MAX_CAPTURE_FRACTION`` of the
+        CO2 in the processed air.
+
         Args:
-            ambient_air: Optional air stream (if None, uses ambient)
-            T_ambient: Ambient temperature (K)
-            P_ambient: Ambient pressure (Pa)
+            ambient_air: Optional air stream, the plant's time-averaged air
+                feed. Its total flow, CO2 flow, T and P are used. If None,
+                the air flow comes from ``air_velocity * cross_section`` per
+                unit over the adsorption part of the cycle, at 420 ppm CO2.
+            T_ambient: Ambient temperature (K), used when no stream is given.
+            P_ambient: Ambient pressure (Pa), used when no stream is given.
 
         Returns:
             co2_product: Captured CO2 stream
-            info: Performance metrics
+            info: Performance metrics, including ``CO2_feed_mol_s``,
+                ``CO2_slip_mol_s`` and ``sorbent_utilization`` (captured /
+                sorbent-limited rate; < 1 means the air, not the bed, limits).
         """
         p = self.params
 
-        T_ambient = jnp.asarray(T_ambient)
-        P_ambient = jnp.asarray(P_ambient)
-
-        # Air flow per contactor
-        air_velocity = jnp.asarray(p.air_velocity)
         cross_section = jnp.asarray(p.cross_section)
-        V_air = air_velocity * cross_section  # m³/s per unit
+        cycle_time = p.cycle_time_ads + p.cycle_time_des  # s
+        # Fraction of the cycle each unit spends adsorbing (taking air).
+        duty_fraction = p.cycle_time_ads / cycle_time
 
-        # Molar air flow (ideal gas)
-        n_air = V_air * P_ambient / (R * T_ambient)  # mol/s
-
-        # CO2 in air
-        n_CO2_in = n_air * CO2_AMBIENT  # mol/s
+        if ambient_air is None:
+            T_ambient = jnp.asarray(T_ambient)
+            P_ambient = jnp.asarray(P_ambient)
+            # Air flow per contactor from the face velocity.
+            air_velocity = jnp.asarray(p.air_velocity)
+            V_air = air_velocity * cross_section  # m³/s per unit
+            n_air = V_air * P_ambient / (R * T_ambient)  # mol/s per unit
+            y_CO2 = jnp.asarray(CO2_AMBIENT)
+            # Time-averaged air (and CO2) the plant actually processes.
+            n_air_processed = p.n_units * n_air * duty_fraction
+            n_CO2_feed = n_air_processed * y_CO2
+            air_flows = None
+        else:
+            # Audit C1: the supplied air stream used to be ignored. It is
+            # now the plant's (time-averaged) air feed: its flow, CO2
+            # content, T and P set what can be captured.
+            air_flows = get_flows(ambient_air)
+            n_air_processed = total_flow(ambient_air)
+            n_CO2_feed = jnp.asarray(air_flows.get("CO2", 0.0))
+            y_CO2 = safe_divide(n_CO2_feed, n_air_processed)
+            T_ambient = jnp.asarray(ambient_air.get("T", T_ambient))
+            P_ambient = jnp.asarray(ambient_air.get("P", P_ambient))
+            # Implied per-unit volumetric flow while adsorbing (for fans).
+            n_air = n_air_processed / (p.n_units * duty_fraction)
+            V_air = n_air * R * T_ambient / P_ambient
 
         # Sorbent properties
         sorbent = self._sorbent
@@ -195,7 +249,7 @@ class SolidSorbentDAC:
         isotherm = sorbent.isotherms.get("CO2")
         if isotherm:
             # Calculate loadings
-            P_CO2_ads = CO2_AMBIENT * P_ambient
+            P_CO2_ads = y_CO2 * P_ambient
             P_CO2_des = CO2_AMBIENT * jnp.asarray(p.P_desorption) * 0.1  # Lower in desorption
 
             # Simplified working capacity
@@ -222,24 +276,22 @@ class SolidSorbentDAC:
         # CO2 captured per cycle
         CO2_per_cycle = sorbent_mass * working_capacity  # mol per unit
 
-        # Cycle time
-        cycle_time = p.cycle_time_ads + p.cycle_time_des  # s
+        # Sorbent-limited capture rate. CO2_per_cycle (mol) is taken up
+        # during one adsorption phase; the time-averaged rate per unit is
+        # CO2_per_cycle / cycle_time (already accounts for desorption time).
+        sorbent_rate_unit = CO2_per_cycle / cycle_time  # mol/s per unit
+        sorbent_capacity_rate = p.n_units * sorbent_rate_unit  # mol/s
 
-        # Duty fraction: fraction of cycle spent adsorbing
-        duty_fraction = p.cycle_time_ads / cycle_time
-
-        # Total capture with multiple units
-        # CO2_per_cycle (mol) is captured during one full adsorption phase.
-        # Time-averaged rate per unit = CO2_per_cycle / cycle_time (already
-        # accounts for idle desorption time). No extra duty_fraction needed.
-        capture_rate_unit = CO2_per_cycle / cycle_time  # mol/s per unit
-        total_capture = p.n_units * capture_rate_unit  # mol/s
-
-        # Capture efficiency (fraction of CO2 in processed air)
-        air_processed = p.n_units * n_air * duty_fraction
-        CO2_available = air_processed * CO2_AMBIENT
-        capture_efficiency = safe_divide(total_capture, CO2_available)
-        capture_efficiency = jnp.clip(capture_efficiency, 0.0, 0.95)
+        # Audit C1: the capture used to be the sorbent rate alone, 106.2
+        # mol/s from air carrying 6.87 mol/s, with only the reported
+        # efficiency clipped to 0.95. Capture is the smaller of what the
+        # sorbent can take and what the air brings in; MAX_CAPTURE_FRACTION
+        # accounts for breakthrough before the bed is switched.
+        feed_limit = MAX_CAPTURE_FRACTION * n_CO2_feed
+        total_capture = jnp.minimum(sorbent_capacity_rate, feed_limit)
+        capture_rate_unit = total_capture / p.n_units
+        capture_efficiency = safe_divide(total_capture, n_CO2_feed)
+        sorbent_utilization = safe_divide(total_capture, sorbent_capacity_rate)
 
         # Energy requirements
         # Heat of adsorption
@@ -290,6 +342,10 @@ class SolidSorbentDAC:
             "CO2_captured_kg_s": CO2_mass_rate,
             "CO2_captured_tonne_yr": CO2_mass_rate * 3600 * 8760 / 1000,
             "capture_efficiency": capture_efficiency,
+            "CO2_feed_mol_s": n_CO2_feed,
+            "CO2_slip_mol_s": n_CO2_feed - total_capture,
+            "sorbent_capacity_rate_mol_s": sorbent_capacity_rate,
+            "sorbent_utilization": sorbent_utilization,
             "working_capacity": working_capacity,
             "sorbent_mass_per_unit": sorbent_mass,
             "total_sorbent_mass": sorbent_mass * p.n_units,
@@ -395,9 +451,21 @@ class LiquidSolventDAC:
         n_air = V_air_total * P_ambient / (R * T_ambient)  # mol/s
         n_CO2_in = n_air * CO2_AMBIENT  # mol/s
 
-        # Capture efficiency (typically 70-80% for liquid systems)
-        # Limited by mass transfer and equilibrium
-        capture_eff = 0.75
+        # Audit C8: capture was a constant 0.75, even with no liquid (L/G =
+        # 0). It now follows a gas-film transfer-unit model over the packing
+        # depth (contactor_height, taken along the air path):
+        #   eta = 1 - exp(-NTU),  NTU = k_ga * f_wet * depth / velocity,
+        #   f_wet = 1 - exp(-L_G / LIQ_DAC_LG_WET)
+        # so capture rises with depth and liquid wetting and falls with air
+        # velocity, and is zero without liquid. k_ga is calibrated so the
+        # default contactor (8 m, 1.5 m/s, L/G 2) captures 75 %, the
+        # Carbon Engineering design point (~74.5 % at 7 m, 1.4 m/s; Keith et
+        # al. 2018, Joule 2:1573).
+        L_G_mass = jnp.asarray(p.L_G_ratio)
+        f_wet = 1.0 - jnp.exp(-L_G_mass / LIQ_DAC_LG_WET)
+        NTU = (LIQ_DAC_KGA * f_wet * jnp.asarray(p.contactor_height)
+               / jnp.asarray(p.air_velocity))
+        capture_eff = 1.0 - jnp.exp(-NTU)
         n_CO2_captured = n_CO2_in * capture_eff
 
         # Energy requirements
@@ -406,7 +474,6 @@ class LiquidSolventDAC:
         fan_power = V_air_total * dP_contactor / 0.7  # W
 
         # 2. Liquid circulation
-        L_G_mass = p.L_G_ratio
         rho_air = P_ambient * 0.029 / (R * T_ambient)  # kg/m³
         m_air = V_air_total * rho_air  # kg/s
         m_liquid = m_air * L_G_mass  # kg/s

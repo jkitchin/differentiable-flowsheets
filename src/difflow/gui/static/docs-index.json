@@ -4929,7 +4929,7 @@
    "targets": [
     "amine-solvents"
    ],
-   "text": "Access amine solvent properties using the database functions:\n\n```python\nfrom difflow_cc import get_solvent, list_solvents\n\n# List available solvents\nprint(list_solvents())\n# ['MEA', 'DEA', 'MDEA', 'PZ', 'AMP', 'K2CO3', 'KOH']\n\n# Get solvent properties\nmea = get_solvent(\"MEA\")\nprint(f\"Heat of absorption: {mea.heat_of_absorption} kJ/mol\")\nprint(f\"Molecular weight: {mea.molecular_weight} g/mol\")\n```"
+   "text": "Access amine solvent properties using the database functions:\n\n```python\nfrom difflow_cc import get_solvent, list_solvents\n\n# List available solvents\nprint(list_solvents())\n\n# Get solvent properties\nmea = get_solvent(\"MEA\")\nprint(f\"Heat of absorption: {mea.heat_of_absorption} kJ/mol\")\nprint(f\"Molecular weight: {mea.MW} g/mol\")\n```"
   },
   {
    "anchor": "available-solvent-properties",
@@ -4937,7 +4937,7 @@
    "path": "Carbon Capture Unit Operations > Database and Properties > Amine Solvents > Available Solvent Properties",
    "source": "unit-operations-carbon-capture.md",
    "targets": [],
-   "text": "| Property | Description | Units |\n|----------|-------------|-------|\n| `molecular_weight` | Molecular mass | g/mol |\n| `heat_of_absorption` | Heat released on CO2 absorption | kJ/mol CO2 |\n| `reaction_order` | Reaction order with CO2 | - |\n| `activation_energy` | Activation energy | kJ/mol |\n| `pre_exponential` | Pre-exponential factor | varies |\n| `loading_capacity` | Maximum CO2 loading | mol CO2/mol amine |"
+   "text": "| Property | Description | Units |\n|----------|-------------|-------|\n| `MW` | Molecular mass | g/mol |\n| `density` | Solution density | kg/m^3 |\n| `heat_of_absorption` | Heat released on CO2 absorption | kJ/mol CO2 |\n| `loading_capacity` | Maximum CO2 loading | mol CO2/mol amine |\n| `kinetics` | Rate-constant data (see `reaction_rate_constant`) | varies |\n| `regen_temperature`, `regen_energy` | Typical regeneration conditions | K, GJ/t |"
   },
   {
    "anchor": "solvent-comparison",
@@ -4955,7 +4955,7 @@
    "targets": [
     "adsorbent-materials"
    ],
-   "text": "```python\nfrom difflow_cc import get_adsorbent, list_adsorbents\n\nprint(list_adsorbents())\n# ['Zeolite13X', 'ZeoliteNaY', 'Mg-MOF-74', 'SIFSIX-3-Ni',\n#  'Activated_Carbon', 'Amine_Silica', 'MIL-101-Cr', 'Solid_Sorbent_DAC']\n\nzeolite = get_adsorbent(\"Zeolite13X\")\nprint(f\"CO2 capacity: {zeolite.capacity_co2} mol/kg\")\nprint(f\"Heat of adsorption: {zeolite.heat_of_adsorption} kJ/mol\")\n```"
+   "text": "```python\nfrom difflow_cc import get_adsorbent, list_adsorbents\n\nprint(list_adsorbents())\n# ['Zeolite_13X', 'Zeolite_5A', 'Mg_MOF_74', 'CALF_20', 'ZIF_8',\n#  'AC_Coconut', 'AC_Nitrogen_Doped', 'PEI_Silica', 'TEPA_Alumina']\n\nzeolite = get_adsorbent(\"Zeolite_13X\")\nprint(f\"CO2 capacity: {zeolite.CO2_capacity} mol/kg\")\nprint(f\"Heat of adsorption: {zeolite.heat_of_adsorption} kJ/mol\")\n```"
   },
   {
    "anchor": "adsorbent-comparison",
@@ -4973,7 +4973,7 @@
    "targets": [
     "membrane-materials"
    ],
-   "text": "```python\nfrom difflow_cc import get_membrane, list_membranes\n\nprint(list_membranes())\n# ['Polyimide', 'Polysulfone', 'PDMS', 'PIM-1', 'Pebax',\n#  'MMM_ZIF8', 'FTM_Glycine', 'Cellulose_Acetate', 'TR_Polymer']\n\npim1 = get_membrane(\"PIM-1\")\nprint(f\"CO2 permeability: {pim1.permeability_co2} Barrer\")\nprint(f\"CO2/N2 selectivity: {pim1.selectivity_co2_n2}\")\n```"
+   "text": "```python\nfrom difflow_cc import get_membrane, list_membranes\n\nprint(list_membranes())\n# ['Matrimid', 'PDMS', 'Cellulose_Acetate', 'PIM_1', 'ZIF8_Matrimid',\n#  'MOF74_Polymer', 'PVAm_Carrier', 'IL_SIL_Membrane', 'CMS', 'Zeolite_DDR']\n\npim1 = get_membrane(\"PIM_1\")\nprint(f\"CO2 permeability: {pim1.permeability['CO2']} Barrer\")\nprint(f\"CO2/N2 selectivity: {pim1.selectivity['CO2_N2']}\")\n```"
   },
   {
    "anchor": "membrane-comparison",
@@ -4999,7 +4999,7 @@
    "targets": [
     "vapor-liquid-equilibrium"
    ],
-   "text": "Model CO2-amine vapor-liquid equilibrium:\n\n```python\nfrom difflow_cc import AmineVLE, co2_loading, co2_equilibrium_pressure\n\n# Create VLE model for MEA\nvle = AmineVLE(solvent=\"MEA\", concentration=30.0)  # 30 wt%\n\n# Calculate CO2 loading at given conditions\nloading = vle.get_loading(T=313.15, P_co2=10000.0)  # 10 kPa CO2\nprint(f\"CO2 loading: {loading:.3f} mol/mol\")\n\n# Calculate equilibrium CO2 pressure at given loading\nP_eq = vle.get_pressure(T=393.15, loading=0.4)\nprint(f\"Equilibrium CO2 pressure: {P_eq:.0f} Pa\")\n```"
+   "text": "Model CO2-amine vapor-liquid equilibrium:\n\n```python\nfrom difflow_cc import AmineVLE, co2_loading, co2_equilibrium_pressure\n\nfrom difflow_cc.equilibrium.vle import equilibrium_loading\n\n# VLE model for MEA (C_amine in mol/m^3, ~30 wt%)\nvle = AmineVLE(\"MEA\", C_amine=5000.0)\n\n# Equilibrium CO2 pressure at a given loading\nP_eq = vle.equilibrium_pressure(loading=0.4, T=393.15)\nprint(f\"Equilibrium CO2 pressure: {float(P_eq):.0f} Pa\")\n\n# Loading in equilibrium with a CO2 partial pressure (robust inversion,\n# used by the stripper's reboiler model)\nloading = equilibrium_loading(10000.0, 313.15, \"MEA\")  # 10 kPa CO2\nprint(f\"CO2 loading: {float(loading):.3f} mol/mol\")\n```"
   },
   {
    "anchor": "equilibrium-model",
@@ -5007,7 +5007,7 @@
    "path": "Carbon Capture Unit Operations > Equilibrium Models > Vapor-Liquid Equilibrium > Equilibrium Model",
    "source": "unit-operations-carbon-capture.md",
    "targets": [],
-   "text": "The CO2 partial pressure over loaded amine follows a modified Kent-Eisenberg model:\n\n$$P_{CO_2} = K_H \\cdot \\alpha \\cdot \\exp\\left(\\frac{-\\Delta H_{abs}}{R}\\left(\\frac{1}{T} - \\frac{1}{T_{ref}}\\right)\\right) \\cdot f(\\alpha)$$\n\nWhere:\n- $\\alpha$: CO2 loading (mol CO2/mol amine)\n- $K_H$: Henry's constant\n- $\\Delta H_{abs}$: Heat of absorption\n- $f(\\alpha)$: Loading correction function"
+   "text": "The CO2 partial pressure over loaded amine follows a Kent-Eisenberg type correlation:\n\n$$P_{CO_2} = K_0 \\exp\\left(\\frac{-\\Delta H_{abs}}{RT}\\right) \\frac{\\alpha^2}{(1 - \\alpha/\\alpha_{max})^{1.5}}$$\n\nWhere:\n- $\\alpha$: CO2 loading (mol CO2/mol amine), $\\alpha_{max}$ the solvent's capacity\n- $\\Delta H_{abs}$: Heat of absorption\n- $K_0$: calibrated to 1 kPa at $\\alpha = 0.4$, 313 K for 30 wt% MEA"
   },
   {
    "anchor": "adsorption-isotherms",
@@ -5015,7 +5015,7 @@
    "path": "Carbon Capture Unit Operations > Equilibrium Models > Adsorption Isotherms",
    "source": "unit-operations-carbon-capture.md",
    "targets": [],
-   "text": "Multiple isotherm models are available:\n\n```python\nfrom difflow_cc import langmuir, sips, toth, dual_site_langmuir\n\n# Langmuir isotherm\nq = langmuir(P=100000.0, q_max=5.0, b=0.001)\n\n# Sips isotherm (Freundlich-Langmuir)\nq = sips(P=100000.0, q_max=5.0, b=0.001, n=0.8)\n\n# Toth isotherm\nq = toth(P=100000.0, q_max=5.0, b=0.001, t=0.7)\n\n# Dual-site Langmuir\nq = dual_site_langmuir(P=100000.0, q1=3.0, b1=0.01, q2=2.0, b2=0.0001)\n```"
+   "text": "Multiple isotherm models are available:\n\n```python\nfrom difflow_cc import langmuir, sips, toth, dual_site_langmuir\n\n# Langmuir isotherm (q_sat in mol/kg, b in 1/Pa)\nq = langmuir(P=100000.0, q_sat=5.0, b=0.001)\n\n# Sips isotherm (Freundlich-Langmuir)\nq = sips(P=100000.0, q_sat=5.0, b=0.001, n=0.8)\n\n# Toth isotherm\nq = toth(P=100000.0, q_sat=5.0, b=0.001, t=0.7)\n\n# Dual-site Langmuir\nq = dual_site_langmuir(P=100000.0, q1=3.0, b1=0.01, q2=2.0, b2=0.0001)\n```"
   },
   {
    "anchor": "temperature-dependent-isotherms",
@@ -5023,7 +5023,7 @@
    "path": "Carbon Capture Unit Operations > Equilibrium Models > Adsorption Isotherms > Temperature-Dependent Isotherms",
    "source": "unit-operations-carbon-capture.md",
    "targets": [],
-   "text": "```python\nfrom difflow_cc import langmuir_T, get_isotherm\n\n# Temperature-dependent Langmuir\nq = langmuir_T(P=100000.0, T=298.15, q_max=5.0, b0=0.001, dH=-36000.0)\n\n# Get isotherm for specific adsorbent\nisotherm = get_isotherm(\"Zeolite13X\")\nq = isotherm(P=100000.0, T=298.15)\n```"
+   "text": "```python\nfrom difflow_cc import langmuir_T, get_isotherm\n\n# Temperature-dependent Langmuir: b = b0 exp(Q / (R T)), Q the heat of\n# adsorption (J/mol, positive)\nq = langmuir_T(P=100000.0, T=298.15, q_sat=5.0, b0=1e-9, Q=36000.0)\n\n# Fitted isotherm for a database adsorbent (CO2 by default)\nisotherm = get_isotherm(\"Zeolite_13X\")\nq = isotherm(100000.0, 298.15)   # (P, T)\n```"
   },
   {
    "anchor": "working-capacity",
@@ -5031,7 +5031,7 @@
    "path": "Carbon Capture Unit Operations > Equilibrium Models > Adsorption Isotherms > Working Capacity",
    "source": "unit-operations-carbon-capture.md",
    "targets": [],
-   "text": "```python\nfrom difflow_cc import working_capacity_PSA, working_capacity_TSA\n\n# PSA working capacity\nwc_psa = working_capacity_PSA(\n    isotherm_fn=langmuir,\n    P_ads=500000.0,    # 5 bar adsorption\n    P_des=100000.0,    # 1 bar desorption\n    T=298.15,\n    params={'q_max': 5.0, 'b': 0.001}\n)\n\n# TSA working capacity\nwc_tsa = working_capacity_TSA(\n    isotherm_fn=langmuir_T,\n    T_ads=298.15,      # 25\u00b0C adsorption\n    T_des=423.15,      # 150\u00b0C desorption\n    P=100000.0,\n    params={'q_max': 5.0, 'b0': 0.001, 'dH': -36000.0}\n)\n```\n\n(solubility-models)="
+   "text": "```python\nfrom difflow_cc import working_capacity_PSA, working_capacity_TSA, get_isotherm\n\nisotherm = get_isotherm(\"Zeolite_13X\")\n\n# PSA working capacity: q(P_ads, T) - q(P_des, T)\nwc_psa = working_capacity_PSA(isotherm, P_ads=500000.0, P_des=100000.0, T=298.15)\n\n# TSA working capacity: q(P, T_ads) - q(P, T_des)\nwc_tsa = working_capacity_TSA(isotherm, P=15000.0, T_ads=298.15, T_des=423.15)\nprint(f\"PSA {float(wc_psa):.2f}, TSA {float(wc_tsa):.2f} mol/kg\")\n```\n\n(solubility-models)="
   },
   {
    "anchor": "solubility-models",
@@ -5041,7 +5041,7 @@
    "targets": [
     "solubility-models"
    ],
-   "text": "```python\nfrom difflow_cc import co2_physical_solubility, diffusivity_co2_amine\n\n# CO2 physical solubility in water\nH = co2_physical_solubility(T=298.15)  # mol/(m\u00b3\u00b7Pa)\n\n# CO2 diffusivity in amine solution\nD = diffusivity_co2_amine(T=313.15, amine_conc=30.0)  # m\u00b2/s\n```\n\n---\n\n(kinetics-models)="
+   "text": "```python\nfrom difflow_cc import co2_physical_solubility, diffusivity_co2_amine\n\n# CO2 physical solubility in water\nH = co2_physical_solubility(T=298.15)\n\n# CO2 diffusivity in amine solution (C_amine in mol/m^3)\nD = diffusivity_co2_amine(T=313.15, solvent=\"MEA\", C_amine=5000.0)  # m\u00b2/s\n```\n\n---\n\n(kinetics-models)="
   },
   {
    "anchor": "kinetics-models",
@@ -5061,7 +5061,7 @@
    "targets": [
     "reaction-kinetics"
    ],
-   "text": "Model CO2-amine reaction rates:\n\n```python\nfrom difflow_cc import reaction_rate_constant, enhancement_factor, hatta_number\n\n# Second-order rate constant for MEA\nk2 = reaction_rate_constant(\n    solvent=\"MEA\",\n    T=313.15,\n)\nprint(f\"Rate constant: {k2:.0f} m\u00b3/(mol\u00b7s)\")\n\n# Hatta number (reaction vs. diffusion)\nHa = hatta_number(\n    k2=k2,\n    amine_conc=5000.0,  # mol/m\u00b3\n    D_co2=1.5e-9,       # m\u00b2/s\n    k_L=1e-4,           # m/s\n)\nprint(f\"Hatta number: {Ha:.1f}\")\n\n# Enhancement factor\nE = enhancement_factor(Ha=Ha, E_inf=100.0)\nprint(f\"Enhancement factor: {E:.1f}\")\n```"
+   "text": "Model CO2-amine reaction rates:\n\n```python\nfrom difflow_cc import reaction_rate_constant, enhancement_factor, hatta_number\n\n# Second-order rate constant for MEA\nk2 = reaction_rate_constant(T=313.15, solvent=\"MEA\")\nprint(f\"Rate constant: {float(k2):.0f} L/(mol\u00b7s)\")\n\n# Hatta number (reaction vs. diffusion); C_amine in mol/m^3, kL in m/s\nHa = hatta_number(T=313.15, solvent=\"MEA\", C_amine=5000.0, kL=1e-4)\nprint(f\"Hatta number: {float(Ha):.1f}\")\n\n# Enhancement factor (regime chosen automatically)\nE = enhancement_factor(T=313.15, solvent=\"MEA\", C_amine=5000.0, kL=1e-4)\nprint(f\"Enhancement factor: {float(E):.1f}\")\n```"
   },
   {
    "anchor": "governing-equations",
@@ -5079,7 +5079,7 @@
    "targets": [
     "mass-transfer"
    ],
-   "text": "```python\nfrom difflow_cc import gas_film_coefficient, liquid_film_coefficient, overall_mass_transfer\n\n# Gas-side mass transfer coefficient\nk_G = gas_film_coefficient(\n    v_gas=1.0,        # m/s superficial velocity\n    d_pack=0.05,      # m packing diameter\n    D_gas=1.5e-5,     # m\u00b2/s gas diffusivity\n)\n\n# Liquid-side coefficient\nk_L = liquid_film_coefficient(\n    v_liq=0.01,       # m/s liquid velocity\n    d_pack=0.05,\n    D_liq=1.5e-9,\n)\n\n# Overall coefficient\nK_G = overall_mass_transfer(k_G=k_G, k_L=k_L, E=E, H=H)\n```\n\n---"
+   "text": "```python\nfrom difflow_cc import gas_film_coefficient, liquid_film_coefficient, overall_mass_transfer\n\nfrom difflow_cc import henry_constant\n\n# Gas-side mass transfer coefficient (Onda)\nk_G = gas_film_coefficient(\n    u_G=1.0,          # m/s superficial gas velocity\n    d_p=0.05,         # m packing nominal diameter\n    mu_G=1.8e-5,      # Pa\u00b7s\n    rho_G=1.1,        # kg/m^3\n    D_G=1.5e-5,       # m\u00b2/s\n    a_p=250.0,        # m\u00b2/m\u00b3 packing specific area\n)\n\n# Liquid-side coefficient\nk_L = liquid_film_coefficient(\n    u_L=0.01,         # m/s superficial liquid velocity\n    d_p=0.05,\n    mu_L=2e-3,        # Pa\u00b7s\n    rho_L=1010.0,     # kg/m^3\n    D_L=1.5e-9,       # m\u00b2/s\n    a_p=250.0,\n)\n\n# Overall gas-side coefficient (H: Henry's constant, P: total pressure)\nH_CO2 = henry_constant(313.15, \"MEA\")\nK_G = overall_mass_transfer(k_G=k_G, k_L=k_L, E=E, H=H_CO2, P=101325.0)\n```\n\n---"
   },
   {
    "anchor": "unit-operations",
@@ -5105,7 +5105,7 @@
    "path": "Carbon Capture Unit Operations > Unit Operations > AmineAbsorber > Parameters",
    "source": "unit-operations-carbon-capture.md",
    "targets": [],
-   "text": "```python\n@dataclass\nclass AbsorberParams:\n    solvent: str = \"MEA\"           # Solvent type\n    concentration: float = 30.0    # Solvent concentration (wt%)\n    n_stages: int = 10             # Number of equilibrium stages\n    stage_efficiency: float = 0.25 # Murphree efficiency\n    lean_loading: float = 0.2      # Inlet solvent loading (mol/mol)\n    L_G_ratio: float = 3.0         # Liquid-to-gas molar ratio\n```"
+   "text": "```python\n@dataclass\nclass AbsorberParams:\n    solvent: str                   # Solvent name, e.g. \"MEA\"\n    n_stages: int = 10             # Number of theoretical stages\n    solvent_conc: float = 30.0     # Amine concentration (wt%)\n    L_G_ratio: float = 3.0         # Liquid-to-gas molar ratio\n    T_gas_in: float = 313.15       # K\n    T_liquid_in: float = 313.15    # K (operating temperature)\n    P_absorber: float = 101325.0   # Pa\n    stage_efficiency: float = 0.25 # Murphree efficiency\n    lean_loading: float = 0.2      # Lean loading (mol CO2/mol amine)\n    model_water_transfer: bool = False\n```\n\n`L_G_ratio`, `solvent_conc` and `lean_loading` build the lean solvent\nwhen none is passed. A `solvent_in` stream (species `Amine`, `H2O`,\n`CO2_absorbed`), such as the stripper's lean outlet, overrides them: its\nflows set the amine and water rates, the lean loading and therefore L/G."
   },
   {
    "anchor": "inputs",
@@ -5113,7 +5113,7 @@
    "path": "Carbon Capture Unit Operations > Unit Operations > AmineAbsorber > Inputs",
    "source": "unit-operations-carbon-capture.md",
    "targets": [],
-   "text": "| Parameter | Type | Units | Description |\n|-----------|------|-------|-------------|\n| `gas_in` | Stream | - | Inlet flue gas |\n| `solvent_in` | Stream | - | Lean solvent stream |\n| `T` | float | K | Operating temperature |\n| `P` | float | Pa | Operating pressure |"
+   "text": "| Parameter | Type | Units | Description |\n|-----------|------|-------|-------------|\n| `gas_in` | Stream | - | Inlet flue gas |\n| `solvent_in` | Stream, optional | - | Lean solvent (`Amine`, `H2O`, `CO2_absorbed`) |\n| `T_op` | float, optional | K | Operating temperature (default `T_liquid_in`) |"
   },
   {
    "anchor": "outputs",
@@ -5121,7 +5121,7 @@
    "path": "Carbon Capture Unit Operations > Unit Operations > AmineAbsorber > Outputs",
    "source": "unit-operations-carbon-capture.md",
    "targets": [],
-   "text": "| Parameter | Type | Units | Description |\n|-----------|------|-------|-------------|\n| `gas_out` | Stream | - | Treated gas |\n| `solvent_out` | Stream | - | Rich solvent |\n| `info['capture_rate']` | float | - | CO2 capture efficiency |\n| `info['rich_loading']` | float | mol/mol | Rich solvent loading |\n| `info['profiles']` | dict | - | Stage-by-stage profiles |"
+   "text": "| Parameter | Type | Units | Description |\n|-----------|------|-------|-------------|\n| `gas_out` | Stream | - | Treated gas |\n| `solvent_out` | Stream | - | Rich solvent; `CO2_absorbed` is the TOTAL CO2 it holds (lean + captured) |\n| `info['capture_efficiency']` | float | - | CO2 capture fraction |\n| `info['CO2_captured']` | float | mol/s | CO2 moved from gas to liquid |\n| `info['rich_loading']`, `info['lean_loading']` | float | mol/mol | Solvent loadings |\n| `info['absorption_factor']` | float | - | Kremser $A = L/(mG)$ |\n| `info['n_stages_effective']` | float | - | Equilibrium stages after Murphree efficiency |\n\nThe Kremser form holds for every absorption factor: when $A < 1$ the\ncolumn cannot capture more than the fraction $A$ however many stages it\nhas, which is what slow, low-capacity solvents such as MDEA show at\nflue-gas conditions."
   },
   {
    "anchor": "example-usage",
@@ -5129,7 +5129,7 @@
    "path": "Carbon Capture Unit Operations > Unit Operations > AmineAbsorber > Example Usage",
    "source": "unit-operations-carbon-capture.md",
    "targets": [],
-   "text": "```python\nfrom difflow_cc import AmineAbsorber, AbsorberParams\nfrom difflow import make_stream\n\nparams = AbsorberParams(\n    solvent=\"MEA\",\n    concentration=30.0,\n    n_stages=15,\n    stage_efficiency=0.25,\n    lean_loading=0.2,\n)\nabsorber = AmineAbsorber(params)\n\n# Create streams\nflue_gas = make_stream(\n    {'N2': 0.75, 'CO2': 0.12, 'H2O': 0.08, 'O2': 0.05},\n    T=313.15, P=101325.0\n)\nlean_solvent = make_stream(\n    {'MEA': 0.3, 'H2O': 0.7, 'CO2': 0.06},  # 20% loading\n    T=313.15, P=101325.0\n)\n\n# Run absorber\ngas_out, rich_solvent, info = absorber(flue_gas, lean_solvent, L_G=3.0)\n\nprint(f\"CO2 capture rate: {info['capture_rate']:.1%}\")\nprint(f\"Rich loading: {info['rich_loading']:.3f} mol/mol\")\n```\n\n---\n\n(aminestripper)="
+   "text": "```python\nfrom difflow_cc import AmineAbsorber, AbsorberParams\nfrom difflow import make_stream\n\nparams = AbsorberParams(\n    solvent=\"MEA\",\n    solvent_conc=30.0,\n    n_stages=15,\n    stage_efficiency=0.25,\n    lean_loading=0.2,\n    L_G_ratio=3.0,\n)\nabsorber = AmineAbsorber(params)\n\nflue_gas = make_stream(\n    {'N2': 75.0, 'CO2': 12.0, 'H2O': 8.0, 'O2': 5.0},\n    T=313.15, P=101325.0\n)\n\ngas_out, rich_solvent, info = absorber(flue_gas)\n\nprint(f\"CO2 capture: {float(info['capture_efficiency']):.1%}\")\nprint(f\"Rich loading: {float(info['rich_loading']):.3f} mol/mol\")\n```\n\n---\n\n(aminestripper)="
   },
   {
    "anchor": "aminestripper",
@@ -5147,7 +5147,7 @@
    "path": "Carbon Capture Unit Operations > Unit Operations > AmineStripper > Parameters",
    "source": "unit-operations-carbon-capture.md",
    "targets": [],
-   "text": "```python\n@dataclass\nclass StripperParams:\n    solvent: str = \"MEA\"\n    n_stages: int = 8\n    stage_efficiency: float = 0.3\n    reboiler_duty: float = None     # kW, or calculated from loading\n    condenser_temperature: float = 313.15  # K\n```"
+   "text": "```python\n@dataclass\nclass StripperParams:\n    solvent: str                         # Solvent name\n    n_stages: int = 8\n    T_reboiler: float = 393.15           # K\n    P_stripper: float = 200000.0         # Pa\n    reflux_ratio: float = 0.3\n    target_lean_loading: float = 0.2     # mol CO2/mol amine\n    reboiler_duty: float = None          # W; if set, limits stripping\n    cross_exchanger_approach: float = 10.0  # K\n```\n\nThe lean loading cannot go below the loading in equilibrium with the\nreboiler vapour: the CO2 partial pressure there is the column pressure\nless the water vapour pressure over the solution, $P_{CO_2} = P -\nx_w P^{sat}_w(T_{reb})$, inverted through the solvent's VLE. A hotter\nreboiler or a lower column pressure therefore strips deeper; a reboiler\ncolder than the rich solvent is rejected. A specified `reboiler_duty`\ncaps the CO2 that can be released after the sensible heat is paid."
   },
   {
    "anchor": "key-outputs",
@@ -5155,7 +5155,7 @@
    "path": "Carbon Capture Unit Operations > Unit Operations > AmineStripper > Key Outputs",
    "source": "unit-operations-carbon-capture.md",
    "targets": [],
-   "text": "| Parameter | Description | Units |\n|-----------|-------------|-------|\n| `lean_solvent` | Regenerated solvent | Stream |\n| `co2_product` | CO2 product stream | Stream |\n| `info['regeneration_energy']` | Specific regen. energy | MJ/kg CO2 |\n| `info['lean_loading']` | Lean solvent loading | mol/mol |"
+   "text": "| Parameter | Description | Units |\n|-----------|-------------|-------|\n| `lean_solvent` | Regenerated solvent (`CO2_absorbed` = CO2 left in it) | Stream |\n| `co2_product` | CO2 product stream | Stream |\n| `info['specific_energy']` | Specific regeneration energy | GJ/t CO2 |\n| `info['lean_loading']` | Achieved lean loading | mol/mol |\n| `info['equilibrium_lean_loading']` | Reboiler equilibrium floor | mol/mol |"
   },
   {
    "anchor": "example-usage",
@@ -5163,7 +5163,7 @@
    "path": "Carbon Capture Unit Operations > Unit Operations > AmineStripper > Example Usage",
    "source": "unit-operations-carbon-capture.md",
    "targets": [],
-   "text": "```python\nfrom difflow_cc import AmineStripper, StripperParams\n\nparams = StripperParams(\n    solvent=\"MEA\",\n    n_stages=10,\n    reboiler_duty=4000.0,  # kW\n)\nstripper = AmineStripper(params)\n\nlean_solvent, co2_product, info = stripper(rich_solvent, T_reboiler=393.15)\n\nprint(f\"Regen. energy: {info['regeneration_energy']:.2f} MJ/kg CO2\")\nprint(f\"Lean loading: {info['lean_loading']:.3f} mol/mol\")\n```\n\n---\n\n(membraneseparator)="
+   "text": "```python\nfrom difflow_cc import AmineStripper, StripperParams\n\nparams = StripperParams(solvent=\"MEA\", n_stages=10, T_reboiler=393.15)\nstripper = AmineStripper(params)\n\n# rich_solvent from the absorber example above\nlean_solvent, co2_product, info = stripper(rich_solvent)\n\nprint(f\"Regen. energy: {float(info['specific_energy']):.2f} GJ/t CO2\")\nprint(f\"Lean loading: {float(info['lean_loading']):.3f} mol/mol\")\n```\n\nFeeding `lean_solvent` back to `absorber(flue_gas, lean_solvent)` closes\nthe solvent loop: the absorber then uses the stripper's amine, water and\nlean loading, and at steady state the CO2 captured equals the CO2\nstripped (water lost with the product needs make-up).\n\n---\n\n(membraneseparator)="
   },
   {
    "anchor": "membraneseparator",
@@ -5181,7 +5181,7 @@
    "path": "Carbon Capture Unit Operations > Unit Operations > MembraneSeparator > Parameters",
    "source": "unit-operations-carbon-capture.md",
    "targets": [],
-   "text": "```python\n@dataclass\nclass MembraneParams:\n    membrane_type: str                  # Name from list_membranes()\n    area: float = 1000.0                # m^2\n    thickness: float = None             # micrometres; None uses the database default\n    pressure_ratio: float = 10.0        # Feed/permeate pressure\n    T_operation: float = 298.15         # K\n    feed_pressure: float = 1000000.0    # Pa\n    permeate_pressure: float = None     # Pa; from the ratio if None\n    stage_cut_target: float = None      # If set, the area is adjusted to hit it\n```"
+   "text": "```python\n@dataclass\nclass MembraneParams:\n    membrane_type: str                  # Name from list_membranes()\n    area: float = 1000.0                # m^2\n    thickness: float = None             # micrometres; None uses the database default\n    pressure_ratio: float = 10.0        # Feed/permeate pressure\n    T_operation: float = 298.15         # K\n    feed_pressure: float = None         # Pa; None uses the feed stream's P\n    permeate_pressure: float = None     # Pa; from the ratio if None\n    stage_cut_target: float = None      # If set, the area is solved to hit it\n```\n\n`pressure_ratio` must exceed 1 (and an explicit permeate pressure must be\nbelow the feed pressure); otherwise nothing can permeate and the\nparameters are rejected."
   },
   {
    "anchor": "governing-equations",
@@ -5189,7 +5189,7 @@
    "path": "Carbon Capture Unit Operations > Unit Operations > MembraneSeparator > Governing Equations",
    "source": "unit-operations-carbon-capture.md",
    "targets": [],
-   "text": "**Permeate Flux** (solution-diffusion):\n\n$$J_i = \\frac{P_i}{\\delta} (p_{i,feed} - p_{i,perm})$$\n\nWhere:\n- $P_i$: Permeability of species i (Barrer)\n- $\\delta$: Membrane thickness (m)\n- $p$: Partial pressures\n\n**Selectivity**:\n\n$$\\alpha_{ij} = \\frac{P_i}{P_j}$$\n\n**Stage Cut**:\n\n$$\\theta = \\frac{F_{permeate}}{F_{feed}}$$"
+   "text": "**Permeate Flux** (solution-diffusion):\n\n$$J_i = \\frac{P_i}{\\delta} (p_{i,feed} - p_{i,perm})$$\n\nWhere:\n- $P_i$: Permeability of species i (Barrer)\n- $\\delta$: Membrane thickness (m)\n- $p$: Partial pressures\n\n**Selectivity**:\n\n$$\\alpha_{ij} = \\frac{P_i}{P_j}$$\n\n**Stage Cut**:\n\n$$\\theta = \\frac{F_{permeate}}{F_{feed}}$$\n\n**Complete mixing.** Both sides are taken as well mixed, so the\nretentate composition $x_i$ is the one the membrane sees and every\nspecies obeys\n\n$$F_{perm,i} = A\\,Q_i\\,(x_i P_{feed} - y_i P_{perm})$$\n\nwith $y_i$ the permeate composition. The closure $\\sum_i y_i = 1$ is\nsolved exactly for the stage cut (or, with `stage_cut_target`, for the\narea), so no species ever permeates against its partial-pressure\ngradient and every retentate flow stays non-negative. With enough area\neverything permeates and the permeate tends to the feed composition."
   },
   {
    "anchor": "example-usage",
@@ -5197,7 +5197,7 @@
    "path": "Carbon Capture Unit Operations > Unit Operations > MembraneSeparator > Example Usage",
    "source": "unit-operations-carbon-capture.md",
    "targets": [],
-   "text": "```python\nfrom difflow_cc import MembraneSeparator, MembraneParams\n\nparams = MembraneParams(\n    membrane_type=\"PIM_1\",     # a name from list_membranes()\n    area=200.0,\n    thickness=1.0,             # micrometres\n    pressure_ratio=10.0,\n)\nmembrane = MembraneSeparator(params)\n\nflue_gas = make_stream({'N2': 85.0, 'CO2': 15.0}, T=298.15, P=1000000.0)\n\nretentate, permeate, info = membrane(flue_gas)\n\nprint(f\"Stage cut: {float(info['stage_cut']):.2%}\")       # 15.70%\nprint(f\"CO2 purity: {float(info['CO2_purity']):.1%}\")     # 81.5%\nprint(f\"CO2 recovery: {float(info['CO2_recovery']):.1%}\") # 85.2%\n```\n\n---\n\n(multistagemembrane)="
+   "text": "```python\nfrom difflow import make_stream\nfrom difflow_cc import MembraneSeparator, MembraneParams\n\nparams = MembraneParams(\n    membrane_type=\"PIM_1\",     # a name from list_membranes()\n    area=200.0,\n    thickness=1.0,             # micrometres\n    pressure_ratio=10.0,\n)\nmembrane = MembraneSeparator(params)\n\n# Feed at 10 bar; the feed side runs at the stream's pressure\nflue_gas = make_stream({'N2': 85.0, 'CO2': 15.0}, T=298.15, P=1000000.0)\n\nretentate, permeate, info = membrane(flue_gas)\n\nprint(f\"Stage cut: {float(info['stage_cut']):.2%}\")       # 11.74%\nprint(f\"CO2 purity: {float(info['CO2_purity']):.1%}\")     # 55.0%\nprint(f\"CO2 recovery: {float(info['CO2_recovery']):.1%}\") # 43.0%\n\n# Or fix the stage cut and let the unit solve for the area\n_, _, cut = MembraneSeparator(MembraneParams(\n    membrane_type=\"PIM_1\", thickness=1.0, stage_cut_target=0.2))(flue_gas)\nprint(f\"Area for a 20% cut: {float(cut['area_used']):.0f} m^2\")\n```\n\n---\n\n(multistagemembrane)="
   },
   {
    "anchor": "multistagemembrane",
@@ -5207,7 +5207,7 @@
    "targets": [
     "multistagemembrane"
    ],
-   "text": "**Location**: `difflow_cc/units/membrane.py`\n\n**Class**: `MultistageMembrane`\n\n**Description**: A cascade of `MembraneSeparator` stages, in series or with the second stage's permeate taken as the product."
+   "text": "**Location**: `difflow_cc/units/membrane.py`\n\n**Class**: `MultistageMembrane`\n\n**Description**: A cascade of `MembraneSeparator` stages, in series or as a two-stage enriching cascade with recycle."
   },
   {
    "anchor": "process-role",
@@ -5215,7 +5215,7 @@
    "path": "Carbon Capture Unit Operations > Unit Operations > MultistageMembrane > Process Role",
    "source": "unit-operations-carbon-capture.md",
    "targets": [],
-   "text": "One membrane stage cannot be both selective and complete. Its purity is\nset by the selectivity and the pressure ratio, its recovery by the area,\nand pushing the area up to capture the last of the CO2 drags the permeate\ncomposition back towards the feed: the single PIM-1 stage of the previous\nsection gives 81.5% purity at 85% recovery over 200 m^2, and over\n5000 m^2 the same stage reaches 99% recovery at 17% purity --- barely a\nseparation at all. Staging is the way out, and which way you stage\ndepends on which of the two you need:\n\n- **`series`** --- each stage treats the previous *retentate*, and the\n  permeates are pooled. Recovery rises (every stage gets another chance at\n  the CO2 the last one missed) and the pooled purity falls, because the\n  later stages are working on an increasingly CO2-lean gas.\n- **`permeate_recycle`** --- the second stage treats the first stage's\n  *permeate*, and its permeate is the product. Purity rises (the CO2 is\n  enriched twice) and recovery falls."
+   "text": "One membrane stage cannot be both selective and complete. Its purity is\nset by the selectivity and the pressure ratio, its recovery by the area,\nand pushing the area up to capture the last of the CO2 drags the permeate\ncomposition back towards the feed: the single PIM-1 stage of the previous\nsection gives 55% purity at 43% recovery over 200 m^2, 31% purity at 81%\nrecovery over 1000 m^2, and over 5000 m^2 it permeates essentially the\nwhole feed (15% CO2) --- no separation at all. Staging is the way out,\nand which way you stage depends on which of the two you need:\n\n- **`series`** --- each stage treats the previous *retentate*, and the\n  permeates are pooled. Recovery rises (every stage gets another chance at\n  the CO2 the last one missed) and the pooled purity falls, because the\n  later stages are working on an increasingly CO2-lean gas.\n- **`permeate_recycle`** --- the stage-1 permeate is recompressed to the\n  feed pressure and enriched in stage 2, whose permeate is the product;\n  the stage-2 retentate is recycled to the stage-1 inlet and the loop is\n  converged (`info['recycle_residual']`). Purity rises (the CO2 is\n  enriched twice) and recovery falls. This layout is two stages by\n  definition; other `n_stages` are rejected."
   },
   {
    "anchor": "parameters",
@@ -5223,7 +5223,7 @@
    "path": "Carbon Capture Unit Operations > Unit Operations > MultistageMembrane > Parameters",
    "source": "unit-operations-carbon-capture.md",
    "targets": [],
-   "text": "The constructor takes a `MembraneParams` (the same one\n`MembraneSeparator` takes, with `area` read **per stage**) plus the\ncascade's own two arguments:\n\n```python\nMultistageMembrane(params, n_stages=2, configuration=\"series\")\n#                          ^ stages     ^ \"series\" | \"permeate_recycle\"\n```"
+   "text": "The constructor takes a `MembraneParams` (the same one\n`MembraneSeparator` takes, with `area` read **per stage**) plus the\ncascade's own arguments:\n\n```python\nMultistageMembrane(params, n_stages=2, configuration=\"series\",\n                   recycle_iterations=100, stage_params=None)\n#  stage_params: optional list of MembraneParams, one per stage\n```\n\nStage 2 of `permeate_recycle` sees only the stage-1 permeate, a small\nfraction of the feed, so on the same area it permeates nearly all of\nit and enriches nothing; give it its own, smaller area through\n`stage_params`."
   },
   {
    "anchor": "inputs-and-outputs",
@@ -5231,7 +5231,7 @@
    "path": "Carbon Capture Unit Operations > Unit Operations > MultistageMembrane > Inputs and Outputs",
    "source": "unit-operations-carbon-capture.md",
    "targets": [],
-   "text": "| Parameter | Type | Units | Description |\n|-----------|------|-------|-------------|\n| `feed` | Stream | - | Feed gas |\n| `retentate` | Stream | - | Final treated gas |\n| `permeate` | Stream | - | Final CO2 product |\n| `info['overall_CO2_recovery']` | float | - | CO2 to the product, as a fraction of the feed's |\n| `info['overall_CO2_purity']` | float | - | CO2 mole fraction of the product |\n| `info['stage_info']` | list | - | Each stage's own `MembraneSeparator` info dict |"
+   "text": "| Parameter | Type | Units | Description |\n|-----------|------|-------|-------------|\n| `feed` | Stream | - | Feed gas |\n| `retentate` | Stream | - | Final treated gas |\n| `permeate` | Stream | - | Final CO2 product |\n| `info['overall_CO2_recovery']` | float | - | CO2 to the product, as a fraction of the feed's |\n| `info['overall_CO2_purity']` | float | - | CO2 mole fraction of the product |\n| `info['stage_info']` | list | - | Each stage's own `MembraneSeparator` info dict |\n| `info['recycle_residual']` | float | - | `permeate_recycle` only: final relative change of the recycle |"
   },
   {
    "anchor": "governing-equations",
@@ -5239,7 +5239,7 @@
    "path": "Carbon Capture Unit Operations > Unit Operations > MultistageMembrane > Governing Equations",
    "source": "unit-operations-carbon-capture.md",
    "targets": [],
-   "text": "There is no new physics here --- each stage is the solution-diffusion\nmodel of `MembraneSeparator`. What the cascade adds is the composition of\nstage cuts, which for stages in series is\n\n$$\\theta_{overall} = 1 - \\prod_k (1 - \\theta_k)$$\n\nand a pooled product purity\n\n$$y_{CO_2} = \\frac{\\sum_k \\dot{n}_{CO_2,k}^{perm}}{\\sum_k \\dot{n}_k^{perm}}$$"
+   "text": "There is no new physics here --- each stage is the complete-mixing\nsolution-diffusion model of `MembraneSeparator`. What the cascade adds is\nthe composition of stage cuts, which for stages in series is\n\n$$\\theta_{overall} = 1 - \\prod_k (1 - \\theta_k)$$\n\nand a pooled product purity\n\n$$y_{CO_2} = \\frac{\\sum_k \\dot{n}_{CO_2,k}^{perm}}{\\sum_k \\dot{n}_k^{perm}}$$"
   },
   {
    "anchor": "example-usage",
@@ -5247,7 +5247,7 @@
    "path": "Carbon Capture Unit Operations > Unit Operations > MultistageMembrane > Example Usage",
    "source": "unit-operations-carbon-capture.md",
    "targets": [],
-   "text": "```python\nfrom difflow import make_stream\nfrom difflow_cc import MembraneSeparator, MultistageMembrane, MembraneParams\n\nparams = MembraneParams(membrane_type=\"PIM_1\", area=200.0,\n                        thickness=1.0, pressure_ratio=10.0)\nflue_gas = make_stream({'N2': 85.0, 'CO2': 15.0}, T=298.15, P=10e5)\n\n_, _, one = MembraneSeparator(params)(flue_gas)\n_, _, ser = MultistageMembrane(params, 2, \"series\")(flue_gas)\n_, _, rec = MultistageMembrane(params, 2, \"permeate_recycle\")(flue_gas)\n\n#                  purity   recovery\n# single stage      0.815     0.852\n# series            0.671     0.949   <- recovery bought with purity\n# permeate_recycle  0.927     0.844   <- purity bought with recovery\n```"
+   "text": "```python\nfrom difflow import make_stream\nfrom difflow_cc import MembraneSeparator, MultistageMembrane, MembraneParams\n\nparams = MembraneParams(membrane_type=\"Matrimid\", area=2000.0, pressure_ratio=10.0)\nstage2 = MembraneParams(membrane_type=\"Matrimid\", area=200.0, pressure_ratio=10.0)\nflue_gas = make_stream({'N2': 85.0, 'CO2': 15.0}, T=298.15, P=10e5)\n\n_, _, one = MembraneSeparator(params)(flue_gas)\n_, _, ser = MultistageMembrane(params, 2, \"series\")(flue_gas)\n_, _, rec = MultistageMembrane(params, 2, \"permeate_recycle\",\n                               stage_params=[params, stage2])(flue_gas)\n\n#                  purity   recovery\n# single stage      0.666     0.241\n# series            0.629     0.414   <- recovery bought with purity\n# permeate_recycle  0.957     0.167   <- purity bought with recovery\n```"
   },
   {
    "anchor": "design-considerations",
@@ -5255,7 +5255,7 @@
    "path": "Carbon Capture Unit Operations > Unit Operations > MultistageMembrane > Design Considerations",
    "source": "unit-operations-carbon-capture.md",
    "targets": [],
-   "text": "- **`permeate_recycle` does not iterate a recycle.** The second stage's\n  retentate would physically return to the first stage's inlet; the\n  implementation accounts for it in the mass balance but does not converge\n  the loop, so the reported recovery is a lower bound on a truly\n  recycled design. Build the loop with a `Flowsheet` recycle when that\n  difference matters.\n- **Compression is not included.** `pressure_ratio` is a membrane\n  parameter, not a compressor; the duty that sustains it belongs to a\n  `CompressionTrain` ([CO2 Compression](#co2-compression)), and in a\n  cascade it is paid per stage.\n\n---\n\n(adsorption-units)="
+   "text": "- **Compression is not included in the duty.** `pressure_ratio` is a\n  membrane parameter, not a compressor; the duty that sustains it\n  belongs to a `CompressionTrain` ([CO2 Compression](#co2-compression)).\n  `permeate_recycle` reports the interstage recompression it assumes in\n  `info['interstage_compression']`.\n\n---\n\n(adsorption-units)="
   },
   {
    "anchor": "adsorption-units",
@@ -5281,7 +5281,7 @@
    "path": "Carbon Capture Unit Operations > Unit Operations > Adsorption Units > The quantity all four compute",
    "source": "unit-operations-carbon-capture.md",
    "targets": [],
-   "text": "Every variant reduces to a **working capacity** --- the difference\nbetween what the adsorbent holds at adsorption conditions and what it\nstill holds at regeneration conditions:\n\n$$q(P, T) = \\frac{q_{max} b(T) P}{1 + b(T) P}, \\qquad\nb(T) = b_0 \\exp\\left(\\frac{-\\Delta H_{ads}}{RT}\\right)$$\n\n$$\\Delta q_{working} = q(P_{ads}, T_{ads}) - q(P_{des}, T_{des})$$\n\nwith recovery following from a mass balance over one cycle:\n\n$$\\text{recovery} = \\frac{\\Delta q_{working}\\, m_{bed}}\n{\\dot{n}_{CO_2,feed}\\, t_{cycle}}$$\n\nThis is an equilibrium, lumped-capacity model: no intra-particle\ndiffusion, no breakthrough profile, no bed dynamics. It sizes beds and\ncompares technologies; it does not replace a cycle simulation. Two\nconsequences worth knowing before reading its numbers:\n\n- **Recovery is capped at 95% of the feed CO2.** A bed large enough to\n  clear more than that is reporting the cap, not a result.\n- **Purity comes from the adsorbent's selectivity and the swing**, not\n  from a breakthrough calculation: it is\n  `s' / (s' + 1)` with `s'` the selectivity scaled by the swing ratio.\n  That is a reasonable ranking of adsorbents and a poor prediction of a\n  real product stream.\n\n(psaunit)="
+   "text": "Every variant reduces to a **working capacity** --- the difference\nbetween what the adsorbent holds at adsorption conditions and what it\nstill holds at regeneration conditions:\n\n$$q(P, T) = \\frac{q_{max} b(T) P}{1 + b(T) P}, \\qquad\nb(T) = b_0 \\exp\\left(\\frac{-\\Delta H_{ads}}{RT}\\right)$$\n\n$$\\Delta q_{working} = q(P_{ads}, T_{ads}) - q(P_{des}, T_{des})$$\n\nwith recovery following from the ratio of what the beds can take to\nwhat the feed brings, through an unused-bed (mass-transfer-zone)\nsaturation:\n\n$$\\phi = \\frac{\\Delta q_{working}\\, m_{bed}\\, n_{beds}}\n{\\dot{n}_{CO_2,feed}\\, t_{cycle}}, \\qquad\n\\text{recovery} = R_{max}\\left(1 - e^{-\\phi/R_{max}}\\right),\n\\quad R_{max} = 0.95$$\n\nA small bed is capacity-limited (recovery $\\approx \\phi$); an oversized\none approaches $R_{max}$, so bed mass, number of beds and step times\nalways move the answer.\n\nThis is an equilibrium, lumped-capacity model: no intra-particle\ndiffusion, no breakthrough profile, no bed dynamics. It sizes beds and\ncompares technologies; it does not replace a cycle simulation. Two\nconsequences worth knowing before reading its numbers:\n\n- **Recovery saturates towards 95% of the feed CO2** (blowdown and\n  breakthrough losses); `info['capacity_ratio']` is $\\phi$, and values\n  well above 1 mean the bed is oversized.\n- **Every species is conserved.** The co-adsorbed impurity implied by\n  the purity correlation is drawn from all non-CO2 species in proportion\n  to their feed; the offgas is the rest. `info['purity']` is the product\n  stream's actual CO2 fraction.\n- **Infeasible points are flagged, not hidden.** With no working\n  capacity (a TSA with `T_desorption <= T_adsorption`, or a dilute feed\n  against too shallow a vacuum) the product is empty, `info['purity']`\n  is 0 and `info['feasible']` is False.\n- **Purity comes from the adsorbent's selectivity and the swing**, not\n  from a breakthrough calculation: it is\n  `s' / (s' + 1)` with `s'` the selectivity scaled by the swing ratio.\n  That is a reasonable ranking of adsorbents and a poor prediction of a\n  real product stream.\n\n(psaunit)="
   },
   {
    "anchor": "psaunit",
@@ -5329,7 +5329,7 @@
    "path": "Carbon Capture Unit Operations > Unit Operations > Adsorption Units > Example Usage",
    "source": "unit-operations-carbon-capture.md",
    "targets": [],
-   "text": "```python\nfrom difflow import make_stream\nfrom difflow_cc import PSAUnit, VSAUnit, AdsorptionParams\n\nflue_gas = make_stream({'N2': 85.0, 'CO2': 15.0}, T=298.15, P=500000.0)\n\npsa = PSAUnit(AdsorptionParams(\n    adsorbent=\"Zeolite_13X\",     # a name from list_adsorbents()\n    cycle_type=\"PSA\",\n    bed_mass=5000.0,\n    n_beds=4,\n    P_adsorption=500000.0,\n    P_desorption=100000.0,\n))\n\nproduct, offgas, info = psa(flue_gas)\n\nprint(f\"CO2 purity:   {float(info['purity']):.1%}\")          # 99.3%\nprint(f\"CO2 recovery: {float(info['recovery']):.1%}\")        # 60.7%\nprint(f\"Productivity: {float(info['productivity']):.2f} \"    # 1.64\n      f\"mol CO2/(kg.h)\")\nprint(f\"Working cap.: {float(info['working_capacity']):.3f} mol/kg\")\n```\n\nThe same feed at ambient pressure through a `VSAUnit`\n(`P_adsorption=101325`, `P_desorption=10000`) reaches 95% recovery with a\n4.6x larger working capacity --- the comparison the four classes exist to\nmake, and the reason `cycle_type` is a parameter rather than the class\nname doing the work.\n\n---\n\n(heat-integration)="
+   "text": "```python\nfrom difflow import make_stream\nfrom difflow_cc import PSAUnit, VSAUnit, AdsorptionParams\n\nflue_gas = make_stream({'N2': 85.0, 'CO2': 15.0}, T=298.15, P=500000.0)\n\npsa = PSAUnit(AdsorptionParams(\n    adsorbent=\"Zeolite_13X\",     # a name from list_adsorbents()\n    cycle_type=\"PSA\",\n    bed_mass=5000.0,\n    n_beds=4,\n    P_adsorption=500000.0,\n    P_desorption=100000.0,\n))\n\nproduct, offgas, info = psa(flue_gas)\n\nprint(f\"CO2 purity:   {float(info['purity']):.1%}\")          # 99.3%\nprint(f\"CO2 recovery: {float(info['recovery']):.1%}\")        # 44.8%\nprint(f\"Productivity: {float(info['productivity']):.2f} \"    # 1.64\n      f\"mol CO2/(kg.h)\")\nprint(f\"Working cap.: {float(info['working_capacity']):.3f} mol/kg\")\n```\n\nThe same feed at ambient pressure through a `VSAUnit`\n(`P_adsorption=101325`, `P_desorption=10000`) reaches 84% recovery with a\n3.4x larger working capacity --- the comparison the four classes exist to\nmake, and the reason `cycle_type` is a parameter rather than the class\nname doing the work.\n\n---\n\n(heat-integration)="
   },
   {
    "anchor": "heat-integration",
@@ -5339,7 +5339,7 @@
    "targets": [
     "heat-integration"
    ],
-   "text": "**Location**: `difflow_cc/units/heat_integration.py`\n\nEfficient heat recovery is critical for minimizing energy penalty:\n\n```python\nfrom difflow_cc import LeanRichExchanger, LeanRichExchangerParams\n\nparams = LeanRichExchangerParams(\n    approach_temperature=10.0,  # K minimum approach\n    effectiveness=0.85,\n)\nexchanger = LeanRichExchanger(params)\n\n# Heat exchange between rich and lean solvent\nlean_hot, rich_cold, info = exchanger(lean_cold, rich_hot)\n\nprint(f\"Duty: {info['duty']/1e6:.2f} MW\")\nprint(f\"Energy saved: {info['energy_saved']:.1%}\")\n```\n\n---\n\n(co2-compression)="
+   "text": "**Location**: `difflow_cc/units/heat_integration.py`\n\nEfficient heat recovery is critical for minimizing energy penalty:\n\n```python\nfrom difflow import make_stream\nfrom difflow_cc import LeanRichExchanger, LeanRichExchangerParams\n\nparams = LeanRichExchangerParams(\n    min_approach=10.0,      # K minimum approach\n    effectiveness=0.85,\n)\nexchanger = LeanRichExchanger(params)\n\nlean_hot = make_stream({\"H2O\": 200.0}, T=393.15, P=2e5)    # from stripper\nrich_cold = make_stream({\"H2O\": 100.0}, T=313.15, P=2e5)   # from absorber\n\nlean_cold, rich_hot, info = exchanger(lean_hot, rich_cold)\n\nprint(f\"Duty: {float(info['Q'])/1e6:.3f} MW\")\nprint(f\"Effectiveness achieved: {float(info['effectiveness']):.2f}\")\nprint(f\"Heat recovery fraction: {float(info['heat_recovery_fraction']):.1%}\")\n```\n\nOne duty serves both sides: the minimum approach caps it at\n$C_{min}(\\Delta T_{in} - \\Delta T_{min})$, both outlet temperatures\nfollow from it, and `info['effectiveness']` reports what was achieved\n(below the requested value when the approach binds).\n\n---\n\n(co2-compression)="
   },
   {
    "anchor": "co2-compression",
@@ -5349,7 +5349,7 @@
    "targets": [
     "co2-compression"
    ],
-   "text": "**Location**: `difflow_cc/units/compression.py`\n\nCO2 must be compressed to pipeline or sequestration pressure:\n\n```python\nfrom difflow_cc import CompressionTrain, CompressionTrainParams\n\nparams = CompressionTrainParams(\n    n_stages=4,\n    P_inlet=101325.0,         # 1 atm\n    P_outlet=15000000.0,      # 150 bar (supercritical)\n    eta_polytropic=0.85,\n    intercooling_T=313.15,    # 40\u00b0C\n)\ncompressor = CompressionTrain(params)\n\nco2_stream = make_stream({'CO2': 1.0}, T=313.15, P=101325.0)\n\ncompressed, info = compressor(co2_stream)\n\nprint(f\"Total power: {info['total_power']/1e6:.2f} MW\")\nprint(f\"Specific power: {info['specific_power']:.0f} kJ/kg CO2\")\n```\n\n---\n\n(direct-air-capture)="
+   "text": "**Location**: `difflow_cc/units/compression.py`\n\nCO2 must be compressed to pipeline or sequestration pressure:\n\n```python\nfrom difflow_cc import CompressionTrain, CompressionTrainParams\n\nfrom difflow import make_stream\n\nparams = CompressionTrainParams(\n    n_stages=4,\n    P_outlet=15000000.0,      # 150 bar (supercritical)\n    eta_isentropic=0.80,\n    T_intercool=313.15,       # 40\u00b0C\n)\ncompressor = CompressionTrain(params)\n\n# The train compresses from the inlet stream's pressure (here 1 atm).\nco2_stream = make_stream({'CO2': 100.0}, T=313.15, P=101325.0)\n\ncompressed, info = compressor(co2_stream)\n\nprint(f\"Outlet: {float(compressed['P'])/1e5:.0f} bar\")\nprint(f\"Total power: {float(info['total_power'])/1e6:.2f} MW\")\nprint(f\"Specific power: {float(info['specific_power']):.0f} kJ/kg CO2\")\n```\n\n---\n\n(direct-air-capture)="
   },
   {
    "anchor": "direct-air-capture",
@@ -5359,7 +5359,7 @@
    "targets": [
     "direct-air-capture"
    ],
-   "text": "**Location**: `difflow_cc/units/dac.py`\n\nModel direct air capture systems:\n\n```python\nfrom difflow_cc import SolidSorbentDAC, DACParams\n\nparams = DACParams(\n    adsorbent=\"Solid_Sorbent_DAC\",\n    contactor_area=10000.0,    # m\u00b2 of contactor\n    T_ads=298.15,\n    T_des=373.15,\n    cycle_time=3600.0,         # 1 hour cycle\n)\ndac = SolidSorbentDAC(params)\n\nair = make_stream({'N2': 0.78, 'O2': 0.21, 'CO2': 0.0004}, T=298.15, P=101325.0)\n\nco2_product, air_out, info = dac(air)\n\nprint(f\"Capture rate: {info['capture_rate']:.1f} kg CO2/day\")\nprint(f\"Energy: {info['energy_per_tonne']:.0f} GJ/tonne CO2\")\n```\n\n---"
+   "text": "**Location**: `difflow_cc/units/dac.py`\n\nModel direct air capture systems:\n\n```python\nfrom difflow import make_stream\nfrom difflow_cc import SolidSorbentDAC, DACParams, LiquidSolventDAC, LiquidDACParams\n\nparams = DACParams(\n    sorbent=\"PEI_Silica\",\n    cross_section=100.0,       # m\u00b2 face area per contactor\n    n_units=4,\n    T_adsorption=298.15,\n    T_desorption=373.15,\n    cycle_time_ads=1800.0,     # s\n    cycle_time_des=900.0,      # s\n)\ndac = SolidSorbentDAC(params)\n\n# Time-averaged air feed to the plant (mol/s); capture can never exceed\n# the CO2 it carries.\nair = make_stream({'N2': 12800.0, 'O2': 3440.0, 'CO2': 6.9}, T=298.15, P=101325.0)\n\nco2_product, info = dac(air)\n\nprint(f\"Captured: {float(info['CO2_captured_tonne_yr']):.0f} t CO2/yr\")\nprint(f\"Capture efficiency: {float(info['capture_efficiency']):.1%}\")\nprint(f\"Sorbent utilization: {float(info['sorbent_utilization']):.1%}\")\nprint(f\"Thermal: {float(info['specific_thermal_GJ_tonne']):.1f} GJ/t CO2\")\n\n# Liquid (KOH) DAC: capture from transfer units over the packing depth\n_, liq = LiquidSolventDAC(LiquidDACParams(contactor_height=8.0, L_G_ratio=2.0))()\nprint(f\"Liquid DAC capture: {float(liq['capture_efficiency']):.1%}\")\n```\n\nSolid-sorbent capture is the smaller of what the beds can take (sorbent\nmass x working capacity / cycle time) and 95% of the CO2 in the processed\nair; without an `ambient_air` stream the air flow is `air_velocity x\ncross_section` per unit at 420 ppm. Liquid-solvent capture is\n$1 - e^{-NTU}$ with NTU from the packing depth (`contactor_height`), the\nair velocity and the liquid wetting (`L_G_ratio`), calibrated to 75% at\nthe default 8 m, 1.5 m/s, L/G = 2 design point; with no liquid nothing is\ncaptured.\n\n---"
   },
   {
    "anchor": "economics",
@@ -5367,7 +5367,7 @@
    "path": "Carbon Capture Unit Operations > Economics",
    "source": "unit-operations-carbon-capture.md",
    "targets": [],
-   "text": "**Location**: `difflow_cc/economics/`\n\nComprehensive economic analysis:\n\n```python\nfrom difflow_cc import (\n    levelized_cost_capture,\n    cost_of_co2_avoided,\n    EconomicParams,\n)\n\nparams = EconomicParams(\n    capacity_factor=0.85,\n    plant_lifetime=25,          # years\n    discount_rate=0.08,\n    co2_captured=1000000.0,     # tonnes/year\n)\n\n# Capital costs\nfrom difflow_cc import absorber_cost, stripper_cost, installed_cost\n\ncapex_absorber = absorber_cost(diameter=10.0, height=30.0)\ncapex_stripper = stripper_cost(diameter=8.0, height=25.0)\ntotal_capex = installed_cost(capex_absorber + capex_stripper)\n\n# Operating costs\nfrom difflow_cc import steam_cost, electricity_cost, total_operating_cost\n\nopex = total_operating_cost(\n    steam_consumption=3.5,      # GJ/tonne CO2\n    electricity=150.0,          # kWh/tonne CO2\n    solvent_makeup=1.5,         # kg/tonne CO2\n)\n\n# Levelized cost\nlcoc = levelized_cost_capture(\n    capex=total_capex,\n    opex_annual=opex * params.co2_captured,\n    co2_annual=params.co2_captured,\n    lifetime=params.plant_lifetime,\n    discount_rate=params.discount_rate,\n)\nprint(f\"Levelized cost: ${lcoc:.1f}/tonne CO2\")\n\n# Cost of CO2 avoided\ncca = cost_of_co2_avoided(\n    lcoc=lcoc,\n    reference_emission=0.4,    # tonne CO2/MWh\n    capture_emission=0.04,     # tonne CO2/MWh with capture\n)\nprint(f\"Cost avoided: ${cca:.1f}/tonne CO2\")\n```\n\n---\n\n(degradation-models)="
+   "text": "**Location**: `difflow_cc/economics/`\n\nComprehensive economic analysis:\n\n```python\nfrom difflow_cc import (\n    absorber_cost, stripper_cost, installed_cost,\n    total_operating_cost, levelized_cost_capture, cost_of_co2_avoided,\n    EconomicParams,\n)\n\nparams = EconomicParams(\n    capacity_factor=0.85,\n    lifetime=25,               # years\n    discount_rate=0.08,\n)\nCO2_rate = 1.0e6 * 1e6 / 44.01 / (8760 * 3600 * 0.85)   # mol/s for ~1 Mt/yr\n\n# Capital costs (USD)\nequipment = (absorber_cost(diameter=10.0, height=30.0)\n             + stripper_cost(diameter=8.0, height=25.0,\n                             reboiler_duty=150e6, condenser_duty=60e6))\ncapex = installed_cost(equipment)[\"total_overnight_cost\"]\n\n# Operating costs (USD/yr); duties in W, CO2 in mol/s\nopex = total_operating_cost(\n    steam_duty=150e6,\n    electricity=20e6,\n    cooling_duty=120e6,\n    CO2_captured=CO2_rate,\n    capital_cost=capex,\n)[\"total_opex\"]\n\n# Levelized cost ($/t CO2)\nlcoc = levelized_cost_capture(capex, opex, CO2_rate, params)\nprint(f\"Levelized cost: ${float(lcoc['total_cost_per_tonne']):.1f}/tonne CO2\")\n\n# Cost of CO2 avoided\ncca = cost_of_co2_avoided(\n    capture_cost_per_tonne=lcoc[\"total_cost_per_tonne\"],\n    reference_emissions=0.80,     # t CO2/MWh without capture\n    capture_emissions=0.10,       # t CO2/MWh with capture\n    reference_energy=4.0e6,       # MWh/yr without capture\n    capture_energy=3.0e6,         # MWh/yr after the energy penalty\n)\nprint(f\"Cost avoided: ${float(cca):.1f}/tonne CO2\")\n```\n\n---\n\n(degradation-models)="
   },
   {
    "anchor": "degradation-models",
@@ -5387,7 +5387,7 @@
    "targets": [
     "amine-degradation"
    ],
-   "text": "```python\nfrom difflow_cc import (\n    oxidative_degradation_rate,\n    thermal_degradation_rate,\n    total_amine_loss,\n    solvent_lifetime,\n)\n\n# Oxidative degradation (from O2 in flue gas)\nr_ox = oxidative_degradation_rate(\n    T=313.15,\n    O2_concentration=0.05,     # 5% O2\n    amine=\"MEA\",\n)\n\n# Thermal degradation\nr_th = thermal_degradation_rate(\n    T=393.15,                   # Reboiler temperature\n    loading=0.4,\n    amine=\"MEA\",\n)\n\n# Total loss\nloss = total_amine_loss(r_ox, r_th, solvent_inventory=100000.0)\nprint(f\"Amine loss: {loss:.1f} kg/day\")\n\n# Solvent lifetime\nlifetime = solvent_lifetime(loss, solvent_inventory=100000.0)\nprint(f\"Solvent lifetime: {lifetime:.0f} days\")\n```\n\n(adsorbent-degradation)="
+   "text": "Each model takes a parameter set describing the solvent and its service\nconditions:\n\n```python\nfrom difflow_cc import (\n    AmineDegradationParams,\n    oxidative_degradation_rate,\n    thermal_degradation_rate,\n    total_amine_loss,\n    solvent_lifetime,\n)\n\ndeg = AmineDegradationParams(\n    solvent=\"MEA\",\n    O2_concentration=0.05,     # 5% O2 in the flue gas\n    T_absorber=313.15,\n    T_stripper=393.15,         # reboiler temperature\n    CO2_loading=0.4,\n)\n\nr_ox = oxidative_degradation_rate(313.15, deg)   # absorber conditions\nr_th = thermal_degradation_rate(393.15, deg)     # stripper conditions\n\nloss = total_amine_loss(deg)\nprint(f\"Amine loss: {float(loss['total_kg_m3_yr']):.1f} kg/m^3/yr\")\nprint(f\"Solvent lifetime: {float(solvent_lifetime(deg)):.1f} years\")\n```\n\n(adsorbent-degradation)="
   },
   {
    "anchor": "adsorbent-degradation",
@@ -5397,7 +5397,7 @@
    "targets": [
     "adsorbent-degradation"
    ],
-   "text": "```python\nfrom difflow_cc import capacity_fade, adsorbent_lifetime\n\n# Capacity fade over cycles\nfade = capacity_fade(\n    n_cycles=10000,\n    T_max=423.15,\n    humidity=0.1,\n)\nprint(f\"Capacity fade: {fade:.1%}\")\n\n# Adsorbent lifetime\nlifetime = adsorbent_lifetime(\n    cycles_per_day=48,\n    acceptable_fade=0.2,\n)\nprint(f\"Adsorbent lifetime: {lifetime:.0f} days\")\n```\n\n(membrane-aging)="
+   "text": "```python\nfrom difflow_cc import AdsorbentDegradationParams, capacity_fade, adsorbent_lifetime\n\nads = AdsorbentDegradationParams(\n    material_type=\"amine_silica\",\n    T_desorption=373.15,\n    humidity=0.1,\n    cycles_per_day=48.0,\n)\n\nfade = capacity_fade(8760.0, ads)            # after one year of operation\nprint(f\"Capacity fade: {float(fade['capacity_loss_percent']):.1f}%\")\n\nlifetime_h = adsorbent_lifetime(ads, min_capacity_fraction=0.8)\nprint(f\"Adsorbent lifetime: {float(lifetime_h) / 24:.0f} days\")\n```\n\n(membrane-aging)="
   },
   {
    "anchor": "membrane-aging",
@@ -5407,7 +5407,7 @@
    "targets": [
     "membrane-aging"
    ],
-   "text": "```python\nfrom difflow_cc import physical_aging, plasticization, membrane_lifetime\n\n# Physical aging (glassy polymers)\nperm_loss = physical_aging(\n    time_hours=8760,           # 1 year\n    T=298.15,\n)\n\n# Plasticization from CO2\nperm_change = plasticization(\n    P_co2=500000.0,            # 5 bar CO2\n    membrane=\"Polyimide\",\n)\n\nlifetime = membrane_lifetime(\n    perm_loss_rate=0.05,       # 5%/year\n    acceptable_loss=0.3,\n)\nprint(f\"Membrane lifetime: {lifetime:.1f} years\")\n```\n\n---"
+   "text": "```python\nfrom difflow_cc import (\n    MembraneAgingParams, physical_aging, plasticization, membrane_lifetime,\n)\n\nmem = MembraneAgingParams(membrane_type=\"glassy\", T_operating=298.15)\n\n# Physical aging (glassy polymers): permeance fraction after one year\nremaining = physical_aging(1.0, mem)\n\n# Plasticization from CO2 partial pressure\nplast = plasticization(500000.0, mem)       # 5 bar CO2\nprint(f\"Plasticized: {bool(plast['is_plasticized'])}\")\n\nlifetime = membrane_lifetime(mem, min_permeance_fraction=0.7)\nprint(f\"Membrane lifetime: {float(lifetime):.1f} years\")\n```\n\n---"
   },
   {
    "anchor": "example-1-complete-amine-capture-plant",
@@ -5415,7 +5415,7 @@
    "path": "Carbon Capture Unit Operations > Examples > Example 1: Complete Amine Capture Plant",
    "source": "unit-operations-carbon-capture.md",
    "targets": [],
-   "text": "```python\nfrom difflow_cc import (\n    AmineAbsorber, AbsorberParams,\n    AmineStripper, StripperParams,\n    LeanRichExchanger, LeanRichExchangerParams,\n    CompressionTrain, CompressionTrainParams,\n)\nfrom difflow import make_stream, Flowsheet\n\n# Create units\nabsorber = AmineAbsorber(AbsorberParams(n_stages=15))\nstripper = AmineStripper(StripperParams(n_stages=10))\nexchanger = LeanRichExchanger(LeanRichExchangerParams())\ncompressor = CompressionTrain(CompressionTrainParams(n_stages=4))\n\n# Build flowsheet\nfs = Flowsheet()\nfs.add_unit('absorber', absorber)\nfs.add_unit('exchanger', exchanger)\nfs.add_unit('stripper', stripper)\nfs.add_unit('compressor', compressor)\n\n# Connect streams\nfs.connect('absorber', 'exchanger', stream='rich_solvent')\nfs.connect('exchanger', 'stripper', stream='rich_solvent')\nfs.connect('stripper', 'exchanger', stream='lean_solvent')\nfs.connect('exchanger', 'absorber', stream='lean_solvent')\nfs.connect('stripper', 'compressor', stream='co2')\n\n# Solve\nresults = fs.solve(flue_gas)\nprint(f\"Net capture: {results['capture_efficiency']:.1%}\")\nprint(f\"Energy penalty: {results['energy_penalty']:.1f} MJ/kg CO2\")\n```"
+   "text": "The absorber, stripper and lean/rich exchanger close on the solvent: the\nstripper's lean outlet is the absorber's `solvent_in`. A few\nsuccessive-substitution passes (or a `Flowsheet` recycle) converge the\nloop, after which CO2 captured equals CO2 stripped.\n\n```python\nimport jax\njax.config.update(\"jax_enable_x64\", True)\nfrom difflow import make_stream\nfrom difflow.streams import get_flows\nfrom difflow_cc import (\n    AmineAbsorber, AbsorberParams,\n    AmineStripper, StripperParams,\n    LeanRichExchanger, LeanRichExchangerParams,\n    CompressionTrain, CompressionTrainParams,\n)\n\nflue_gas = make_stream({\"CO2\": 13.0, \"N2\": 87.0}, T=313.15, P=101325.0)\nabsorber = AmineAbsorber(AbsorberParams(solvent=\"MEA\", n_stages=15,\n                                        L_G_ratio=3.5, lean_loading=0.25))\nstripper = AmineStripper(StripperParams(solvent=\"MEA\", n_stages=10))\nexchanger = LeanRichExchanger(LeanRichExchangerParams())\ncompressor = CompressionTrain(CompressionTrainParams(n_stages=4))\n\n@jax.jit\ndef loop_pass(rich):\n    _, rich_hot, _ = exchanger(make_stream(get_flows(rich), 393.15, 2e5), rich)\n    lean, co2, s_info = stripper(rich_hot)\n    lean_flows = dict(get_flows(lean))\n    lean_flows[\"H2O\"] = lean_flows[\"H2O\"] + get_flows(co2)[\"H2O\"]  # make-up water\n    lean = make_stream(lean_flows, T=313.15, P=101325.0)\n    gas_out, rich, a_info = absorber(flue_gas, lean)\n    return rich, (co2, s_info, a_info)\n\n_, rich, _ = absorber(flue_gas)\nfor _ in range(200):\n    rich, (co2, s_info, a_info) = loop_pass(rich)\n\ncompressed, c_info = compressor(co2)\nprint(f\"Capture: {float(a_info['capture_efficiency']):.1%}\")\nprint(f\"Captured {float(a_info['CO2_captured']):.3f} = stripped \"\n      f\"{float(s_info['CO2_stripped']):.3f} mol/s\")\nprint(f\"Regeneration: {float(s_info['specific_energy']):.2f} GJ/t CO2\")\nprint(f\"Compression: {float(c_info['total_power'])/1e3:.0f} kW\")\n```"
   },
   {
    "anchor": "example-2-gradient-based-optimization",
@@ -5423,7 +5423,7 @@
    "path": "Carbon Capture Unit Operations > Examples > Example 2: Gradient-Based Optimization",
    "source": "unit-operations-carbon-capture.md",
    "targets": [],
-   "text": "```python\nimport jax\nimport jax.numpy as jnp\nfrom difflow_cc import AmineAbsorber, AbsorberParams\n\ndef capture_cost(params):\n    \"\"\"Minimize cost per tonne CO2 captured.\"\"\"\n    n_stages, L_G_ratio = params\n\n    absorber_params = AbsorberParams(\n        n_stages=int(n_stages),\n        L_G_ratio=L_G_ratio,\n    )\n    absorber = AmineAbsorber(absorber_params)\n\n    gas_out, rich, info = absorber(flue_gas, lean_solvent)\n\n    # Cost function: capital + operating\n    capex = n_stages * 100000.0  # $/stage\n    opex = L_G_ratio * 50.0      # $/mol solvent\n    co2_captured = info['capture_rate'] * 100.0  # tonnes/h\n\n    return (capex/8760 + opex) / co2_captured\n\n# Compute gradients\ngrad_fn = jax.grad(capture_cost)\nparams = jnp.array([10.0, 3.0])\ngradients = grad_fn(params)\nprint(f\"Gradients: d/d(n_stages)={gradients[0]:.2f}, d/d(L_G)={gradients[1]:.2f}\")\n```"
+   "text": "```python\nimport jax\nimport jax.numpy as jnp\nfrom difflow import make_stream\nfrom difflow_cc import AmineAbsorber, AbsorberParams\n\nflue_gas = make_stream({\"CO2\": 13.0, \"N2\": 87.0}, T=313.15, P=101325.0)\n\ndef capture_cost(x):\n    \"\"\"Cost per mol CO2 captured (illustrative weights).\"\"\"\n    n_stages, L_G_ratio = x\n    absorber = AmineAbsorber(AbsorberParams(\n        solvent=\"MEA\", n_stages=n_stages, L_G_ratio=L_G_ratio))\n    _, _, info = absorber(flue_gas)\n\n    capex = n_stages * 1.0      # per stage\n    opex = L_G_ratio * 2.0      # per unit solvent circulation\n    return (capex + opex) / info[\"CO2_captured\"]\n\ngradients = jax.grad(capture_cost)(jnp.array([10.0, 3.0]))\nprint(f\"d/d(n_stages)={float(gradients[0]):.4f}, d/d(L_G)={float(gradients[1]):.4f}\")\n```"
   },
   {
    "anchor": "example-3-technology-comparison",
@@ -5431,7 +5431,7 @@
    "path": "Carbon Capture Unit Operations > Examples > Example 3: Technology Comparison",
    "source": "unit-operations-carbon-capture.md",
    "targets": [],
-   "text": "```python\nfrom difflow_cc import (\n    AmineAbsorber, AbsorberParams,\n    MembraneSeparator, MembraneParams,\n    PSAUnit, AdsorptionParams,\n    levelized_cost_capture,\n)\n\ntechnologies = {\n    'Amine (MEA)': AmineAbsorber(AbsorberParams()),\n    'Membrane (PIM-1)': MembraneSeparator(MembraneParams(membrane_type='PIM-1')),\n    'PSA (13X)': PSAUnit(AdsorptionParams()),\n}\n\nfor name, unit in technologies.items():\n    result = unit(flue_gas)\n    lcoc = levelized_cost_capture(result['capex'], result['opex'], result['co2_annual'])\n    print(f\"{name}: Capture={result['capture']:.1%}, Cost=${lcoc:.0f}/tonne\")\n```\n\n---"
+   "text": "```python\nfrom difflow import make_stream\nfrom difflow_cc import (\n    AmineAbsorber, AbsorberParams,\n    MembraneSeparator, MembraneParams,\n    VSAUnit, AdsorptionParams,\n)\n\nflue_gas = make_stream({\"CO2\": 15.0, \"N2\": 85.0}, T=313.15, P=101325.0)\ncompressed_gas = make_stream({\"CO2\": 15.0, \"N2\": 85.0}, T=313.15, P=10e5)\n\n_, _, amine = AmineAbsorber(AbsorberParams(solvent=\"MEA\"))(flue_gas)\n_, _, mem = MembraneSeparator(MembraneParams(membrane_type=\"PIM_1\", area=200.0,\n                                             thickness=1.0))(compressed_gas)\n_, _, vsa = VSAUnit(AdsorptionParams(adsorbent=\"Zeolite_13X\", cycle_type=\"VSA\",\n                                     bed_mass=5000.0, n_beds=4))(flue_gas)\n\nprint(f\"Amine (MEA):      capture {float(amine['capture_efficiency']):.1%}\")\nprint(f\"Membrane (PIM-1): recovery {float(mem['CO2_recovery']):.1%}, \"\n      f\"purity {float(mem['CO2_purity']):.1%}\")\nprint(f\"VSA (13X):        recovery {float(vsa['recovery']):.1%}, \"\n      f\"purity {float(vsa['purity']):.1%}\")\n```\n\n---"
   },
   {
    "anchor": "see-also",

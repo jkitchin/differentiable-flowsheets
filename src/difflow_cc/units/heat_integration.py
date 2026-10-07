@@ -315,21 +315,25 @@ class LeanRichExchanger:
                                         1 - C_r * jnp.exp(-NTU * (1 - C_r)))
             effectiveness = jnp.clip(effectiveness, 0.0, 0.95)
 
-        # Maximum heat transfer
-        Q_max = C_min * (T_lean_in - T_rich_in)
-        Q = effectiveness * Q_max
+        # Maximum heat transfer (signed: positive from lean to rich)
+        dT_in = T_lean_in - T_rich_in
+        Q_max = C_min * dT_in
+        Q_eff = effectiveness * Q_max
 
-        # Outlet temperatures
+        # Minimum approach. Audit C12/(c): the two outlet temperatures used to
+        # be clipped independently and Q then recomputed from the lean side
+        # only, so the rich side received a different duty (262.5 vs 285 kW
+        # at effectiveness 0.95; lean 200 / rich 100 mol/s destroyed 45 kW).
+        # In counter-current flow the approach binds at the C_min end, where
+        # it caps the duty at C_min (|dT_in| - dT_min); both outlets are then
+        # computed from that one duty.
+        min_approach = jnp.asarray(p.min_approach)
+        Q_cap = C_min * jnp.maximum(jnp.abs(dT_in) - min_approach, 0.0)
+        Q = jnp.sign(dT_in) * jnp.minimum(jnp.abs(Q_eff), Q_cap)
+        effectiveness = safe_divide(Q, Q_max)
+
         T_lean_out = T_lean_in - safe_divide(Q, C_lean)
         T_rich_out = T_rich_in + safe_divide(Q, C_rich)
-
-        # Enforce minimum approach
-        min_approach = jnp.asarray(p.min_approach)
-        T_rich_out = jnp.minimum(T_rich_out, T_lean_in - min_approach)
-        T_lean_out = jnp.maximum(T_lean_out, T_rich_in + min_approach)
-
-        # Recalculate Q
-        Q = C_lean * (T_lean_in - T_lean_out)
 
         # Heat recovery fraction (of stripper reboiler duty estimate)
         # Reboiler heats rich from T_rich_out to T_reboiler (~120°C)
