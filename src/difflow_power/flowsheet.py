@@ -89,11 +89,15 @@ from difflow_power.physics import branch_admittances
 from difflow_power.streams import SPECIES, from_complex, power_stream
 from difflow_power.units import (
     BranchParams,
+    GeneratorInject,
+    GeneratorParams,
     LadderClose,
     LadderCloseParams,
     LoadDraw,
     LoadParams,
     SeriesBranch,
+    ShuntDraw,
+    ShuntParams,
     SlackSource,
     SlackSourceParams,
 )
@@ -443,12 +447,23 @@ def build_ladder_flowsheet(
 
     The assembled flowsheet is::
 
-        infeed (tear) -> SlackSource -> [SeriesBranch -> LoadDraw] x N
+        infeed (tear) -> SlackSource -> [root bus draws]
+                      -> [SeriesBranch -> bus draws] x N
                       -> LadderClose(end, infeed) -> infeed_next
         recycle: infeed_next -> infeed
 
+    where a bus's draws are, in order, a :class:`LoadDraw` for its
+    aggregated demand, a :class:`ShuntDraw` for its shunt (when it has
+    one) and a :class:`GeneratorInject` per generator on it. Every bus,
+    the root included, gets them: the network's whole injection set is
+    in the flowsheet, the same set :class:`RadialFeederFlowsheet` and
+    Newton solve, so the converged infeed is the root bus's total
+    generation (what Newton reports as the slack output when the slack
+    is the only generator there).
+
     At convergence the leftover power at the open end of the ladder is
-    zero: everything pushed in has been consumed by loads and losses.
+    zero: everything pushed in has been consumed by loads, shunts and
+    losses, net of distributed generation.
     :class:`~difflow_power.units.nodes.LadderClose` is what makes that
     the fixed point rather than the leftover simply equalling the
     infeed.
@@ -459,13 +474,20 @@ def build_ladder_flowsheet(
 
     Returns:
         ``(flowsheet, order)`` --- the flowsheet, and the bus order the
-        ladder follows.
+        ladder follows. Stream ``bus_<id>`` is what leaves bus ``<id>``
+        down the chain, after the bus's own draws, carrying the bus
+        voltage.
 
     Raises:
         ValueError: if the network branches. Use
             :class:`RadialFeederFlowsheet` for a branching feeder;
             representing a split sequentially needs a tear per lateral,
             which the sweep avoids entirely.
+        ValueError: if a bus other than the root is a PV bus. A
+            sequential chain has no unit that holds a downstream
+            voltage; its generator would enter as a fixed injection and
+            the voltage would come out wrong while the solve reported
+            convergence.
 
     Example:
         >>> import difflow_power as dp
@@ -483,12 +505,71 @@ def build_ladder_flowsheet(
             "whose sweep handles branching with no extra tears."
         )
 
+    pv = [b for b in tree.order[1:] if network.buses[b].kind == "pv"]
+    if pv:
+        raise ValueError(
+            f"buses {pv} are PV buses; a ladder flowsheet has no unit "
+            "that regulates a downstream bus voltage. Make them PQ "
+            "(PowerNetwork.with_kinds) to treat the generators as fixed "
+            "injections, or use difflow_power.powerflow.solve_power_flow."
+        )
+
     fs = Flowsheet(
         list(SPECIES), default_flow=0.0, default_T=0.0, default_P=1.0
     )
     base = network.base_mva
     pd, qd = network.load_arrays_pu()
     index = network.bus_index
+
+    def add_bus_draws(bus: str, arriving: str) -> str:
+        """Chain a bus's load, shunt and generators onto ``arriving``.
+
+        Every injection at the bus has to be here. The builder used to
+        place only a LoadDraw at non-root buses, so a root load, every
+        shunt and every distributed generator were silently left out
+        while the solve still reported convergence (audit, 2026-10:
+        0.8 MW root load -> infeed 0.800 MW low; a shunt -> 0.195 MW and
+        1.6e-3 pu off; a 0.5 MW DG -> 0.533 MW and 7.4e-3 pu off).
+        """
+        draws: list[tuple[str, Any]] = []
+        if bus == tree.root:
+            # The root's own generation IS the infeed (the tear), as in
+            # RadialFeederFlowsheet._injection, so only its demand and
+            # shunt are drawn here.
+            gens = []
+        else:
+            gens = [
+                (gid, g) for gid, g in network.generators.items()
+                if g.bus == bus
+            ]
+        p, q = float(pd[index[bus]]), float(qd[index[bus]])
+        # Always a LoadDraw (zero when the bus has no demand) so every
+        # bus, the root included, has its ``bus_<id>`` stream.
+        draws.append((f"load_{bus}", LoadDraw(LoadParams(p, q))))
+        sh = network.buses[bus]
+        if sh.g_shunt_mw != 0.0 or sh.b_shunt_mvar != 0.0:
+            draws.append((
+                f"shunt_{bus}",
+                ShuntDraw(ShuntParams(sh.g_shunt_mw / base,
+                                      sh.b_shunt_mvar / base)),
+            ))
+        for gid, g in gens:
+            draws.append((
+                f"gen_{gid}",
+                GeneratorInject(GeneratorParams(
+                    g.p_mw / base, g.q_mvar / base, tuple(g.cost), base
+                )),
+            ))
+        current = arriving
+        for i, (name, op) in enumerate(draws):
+            out = (
+                bus_stream_name(bus) if i == len(draws) - 1
+                else f"{bus_stream_name(bus)}_{name}"
+            )
+            fs.add_unit(Unit(name=name, operation=op,
+                             inlet_names=[current], outlet_names=[out]))
+            current = out
+        return current
 
     fs.add_feed("infeed", power_stream(0.0, 0.0, 1.0, 0.0))
     source = network.buses[tree.root]
@@ -499,20 +580,28 @@ def build_ladder_flowsheet(
                 SlackSourceParams(source.vm_setpoint, source.va_reference)
             ),
             inlet_names=["infeed"],
-            outlet_names=[bus_stream_name(tree.root)],
+            outlet_names=[f"src_{tree.root}_out"],
         )
     )
+    previous = add_bus_draws(tree.root, f"src_{tree.root}_out")
 
-    previous = bus_stream_name(tree.root)
     for bus in tree.order[1:]:
         _, branch_id, reversed_ = tree.parent[bus]
         br = network.branches[branch_id]
         params = BranchParams(br.r, br.x, br.b, br.g, br.tap, br.shift)
         if reversed_:
             # The chain runs against the branch's stored direction, so
-            # the tap sits at the far end; inverting the ratio moves it.
+            # the tap sits at the chain's far end. Moving an ideal
+            # tau:1 transformer across the pi model inverts the ratio
+            # AND refers the impedance through it: swapping the 2x2
+            # block's ends is reproduced exactly by tap 1/tau, shift
+            # -theta, z tau^2 and charging /tau^2. Inverting the ratio
+            # alone (the old code) left a reversed 1.05 tap 0.0043 MW
+            # and 1.9e-3 pu off (audit, 2026-10).
+            tau2 = br.tap * br.tap
             params = BranchParams(
-                br.r, br.x, br.b, br.g, 1.0 / br.tap, -br.shift
+                br.r * tau2, br.x * tau2, br.b / tau2, br.g / tau2,
+                1.0 / br.tap, -br.shift,
             )
         arrival = f"{branch_stream_name(branch_id)}_out"
         fs.add_unit(
@@ -523,17 +612,7 @@ def build_ladder_flowsheet(
                 outlet_names=[arrival],
             )
         )
-        fs.add_unit(
-            Unit(
-                name=f"load_{bus}",
-                operation=LoadDraw(
-                    LoadParams(float(pd[index[bus]]), float(qd[index[bus]]))
-                ),
-                inlet_names=[arrival],
-                outlet_names=[bus_stream_name(bus)],
-            )
-        )
-        previous = bus_stream_name(bus)
+        previous = add_bus_draws(bus, arrival)
 
     fs.add_unit(
         Unit(

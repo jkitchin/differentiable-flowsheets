@@ -169,7 +169,11 @@ class PreheatTrainParams(ParamsMixin):
             are those (the desalter first).
         desalter: :class:`DesalterParams`, needed if the path has one.
         drum: :class:`PreflashDrumParams`, needed if the path has one.
-        tank_water: BS&W of the tank crude (standard-volume fraction).
+        tank_water: BS&W of the tank crude (standard-volume fraction). Free
+            water a caller passes with the crude (``water=`` on
+            :meth:`PreheatTrain.solve`, the inlet stream's ``F_water`` on
+            :class:`~difflow_refinery.preheat.ops.CrudeUnitWithPreheat`) is
+            added to it.
         P_crude: Crude-side pressure up to the drum (Pa), and to the furnace
             inlet without one.
         P_furnace: Crude-side pressure after the drum, the drum liquid's
@@ -364,7 +368,7 @@ class PreheatTrain:
 
     # ------------------------------------------------------------------
 
-    def _args(self, f, T_tank, hot: dict, th=None, params=None) -> dict:
+    def _args(self, f, T_tank, hot: dict, th=None, params=None, water=0.0) -> dict:
         p = self.params if params is None else params
         th = self.thermo if th is None else th
         missing = [s for s in self.sources if s not in hot]
@@ -375,7 +379,10 @@ class PreheatTrain:
             "thermo": th,
             "f": f,
             "T_tank": jnp.asarray(T_tank, dtype=float),
-            "fw": _water_moles(th, f, jnp.asarray(p.tank_water, dtype=float)),
+            # BS&W plus the water the crude arrives with (mol/s): replacing
+            # the latter by the BS&W dropped it (audit, 2026-10).
+            "fw": (_water_moles(th, f, jnp.asarray(p.tank_water, dtype=float))
+                   + jnp.asarray(water, dtype=float)),
             "hot_f": [jnp.asarray(hot[s][0], dtype=float) for s in self.sources],
             "hot_T": [jnp.asarray(hot[s][1], dtype=float) for s in self.sources],
             "UA": {e.name: e.UA for e in p.exchangers},
@@ -560,7 +567,8 @@ class PreheatTrain:
     # ------------------------------------------------------------------
 
     def solve(self, f, T_tank, hot: dict, thermo: ColumnThermo | None = None,
-              params: PreheatTrainParams | None = None, z0=None) -> PreheatTrainResult:
+              params: PreheatTrainParams | None = None, z0=None,
+              water=0.0) -> PreheatTrainResult:
         """Solve the train.
 
         Args:
@@ -571,10 +579,12 @@ class PreheatTrain:
                 same structure (exchangers, hot streams, path); its numbers
                 may be JAX tracers.
             z0: Starting unknowns (a previous result's ``z``).
+            water: Free water arriving with the crude (mol/s), on top of
+                the ``tank_water`` BS&W.
         """
         if params is not None and _plan(params) != self.plan:
             raise ValueError("params must have the same structure as the train's own")
-        a = self._args(f, T_tank, hot, thermo, params)
+        a = self._args(f, T_tank, hot, thermo, params, water)
         if self._jit is None:
             self._jit = jax.jit(self._core)
         return self._jit(a, z0)

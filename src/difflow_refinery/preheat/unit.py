@@ -57,7 +57,8 @@ class PreheatedUnitResult:
         column: The column's :class:`~difflow_refinery.column.CrudeColumnResult`.
         train: The train's :class:`~difflow_refinery.preheat.train.PreheatTrainResult`.
         properties: Product properties (yields relative to the tank crude).
-        feed: The tank crude (a stream dict, hydrocarbons only).
+        feed: The tank crude (a stream dict); ``F_water`` is the water that
+            entered with it (the ``tank_water`` BS&W plus any passed in).
         furnace_inlet_T: Crude temperature into the furnace (K).
         fired_duty: Fuel fired in the furnace (W).
         absorbed_duty: Heat the crude takes up in the furnace (W).
@@ -211,13 +212,14 @@ class PreheatedCrudeUnit:
         s = crude.stream(rate, T=300.0, P=1e5, basis=basis)
         return jnp.stack([jnp.asarray(s[f"F_{n}"], dtype=float) for n in crude.names])
 
-    def _inputs(self, f, T_tank, thermo, column: CrudeColumnParams | None, train: PreheatTrainParams | None):
+    def _inputs(self, f, T_tank, thermo, column: CrudeColumnParams | None,
+                train: PreheatTrainParams | None, water=0.0):
         th = thermo
         tr_params = self.train_params if train is None else train
         if train is not None and (train.drum is None) != (self.train_params.drum is None):
             raise ValueError("train params must have the same structure as the unit's")
         dummy = {s: (jnp.zeros(th.n_components), jnp.asarray(400.0)) for s in self.train.sources}
-        a = self.train._args(f, T_tank, dummy, th, train)
+        a = self.train._args(f, T_tank, dummy, th, train, water)
         col = self.column
         if column is not None:
             column = self._column_params(column, tr_params)
@@ -336,7 +338,8 @@ class PreheatedCrudeUnit:
 
     def solve(self, rate, T_tank, basis: Literal["volume", "mass", "mole", "bpd"] = "bpd",
               assay: Assay | None = None, column: CrudeColumnParams | None = None,
-              train: PreheatTrainParams | None = None, flows=None) -> PreheatedUnitResult:
+              train: PreheatTrainParams | None = None, flows=None,
+              water=0.0) -> PreheatedUnitResult:
         """Solve the unit.
 
         Args:
@@ -351,6 +354,9 @@ class PreheatedCrudeUnit:
             flows: The tank crude's hydrocarbon flows (mol/s), one per
                 component, in place of ``rate``/``basis`` -- the flowsheet
                 operation's inlet.
+            water: Free water arriving with the crude (mol/s), added to the
+                train's ``tank_water`` BS&W -- the flowsheet operation's
+                inlet ``F_water``.
         """
         if assay is None:
             crude, thermo = self.crude, self.thermo
@@ -361,12 +367,15 @@ class PreheatedCrudeUnit:
                                  "it needs the unit's light ends")
             thermo = ColumnThermo.from_characterization(crude)
         f = self.tank_flows(rate, basis, crude) if flows is None else jnp.asarray(flows, dtype=float)
-        c, a = self._inputs(f, jnp.asarray(T_tank, dtype=float), thermo, column, train)
+        c, a = self._inputs(f, jnp.asarray(T_tank, dtype=float), thermo, column, train, water)
         if self._jit is None:
             self._jit = jax.jit(self._core)
         x, col, tr, cargs, tear, iters = self._jit(c, a)
         feed = {f"F_{n}": f[i] for i, n in enumerate(thermo.names)}
-        feed.update(T=jnp.asarray(T_tank, dtype=float), P=a["P_crude"])
+        # The water that actually entered (BS&W plus any passed in), so
+        # balances() counts what the train saw rather than recomputing the
+        # BS&W alone.
+        feed.update(F_water=a["fw"], T=jnp.asarray(T_tank, dtype=float), P=a["P_crude"])
         props = prod.product_properties(col.products, thermo, feed)
         conv = col.converged & tr.converged & (tear <= 100.0 * self.tol)
         return PreheatedUnitResult(
@@ -397,7 +406,10 @@ class PreheatedCrudeUnit:
         th, col, tr = self.thermo, result.column, result.train
         p = self.column_params
         f_tank = jnp.stack([result.feed[f"F_{n}"] for n in th.names])
-        fw_tank = self.train._args(f_tank, result.feed["T"], {s: (f_tank, 400.0) for s in self.train.sources})["fw"]
+        # The water that entered with the crude, as solve() recorded it;
+        # recomputing it from the BS&W missed water passed in with the
+        # stream (audit, 2026-10).
+        fw_tank = result.feed["F_water"]
         steam = jnp.asarray(p.bottom_steam) + sum(jnp.asarray(s.steam) for s in p.side_products
                                                   if s.stripper_stages > 0)
         a = self.train._args(f_tank, result.feed["T"], {s: (f_tank, 400.0) for s in self.train.sources})
