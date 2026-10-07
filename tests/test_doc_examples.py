@@ -65,6 +65,7 @@ SLOW = {
     "docs/streams-and-flowsheets.md", "docs/unit-operations-chemical.md",
     "docs/unit-operations-ree.md", "docs/dynamic-modeling.md",
     "docs/getting-started.md", "docs/thermodynamics.md",
+    "docs/unit-operations-refinery.md", "README.md",
 }
 
 

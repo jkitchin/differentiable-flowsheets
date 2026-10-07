@@ -8,6 +8,23 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Breaking
 
+- Open-issue sweep (#373, #374, #376, #377, #378, #379, #380, #381). REE: the
+  organic phase flow is the diluent volume alone (the extractant entry is a
+  moles-per-volume charge), so a stated O/A of 1 runs at 1 and not 1 +
+  `extractant_conc`; the loading capacity is counted in the concentration
+  basis (`Extractant.basis_units_per_ree`, 3 dimers per REE for D2EHPA, PC88A
+  and Cyanex 272), doubling it; `ExtractScrubStripParams.recycle_scrub_liquor`
+  closes the scrub-liquor loop with a tear, and `GroupSeparator` /
+  `FullSeparationTrain` recycle by default. Carbon capture: `AmineStripper`
+  models the overhead condenser (`steam_ratio`, `T_condenser`; `reflux_ratio`
+  is deprecated and ignored), and the amine and adsorbent degradation defaults
+  are recalibrated. Pinned numbers moved with these. Also: `PlatformDSPParams.
+  uf_concentration_factor`, `RadialFeederFlowsheet` refuses downstream PV
+  buses, DIP feed hydrogen bypasses the column, SEC bypasses unloaded
+  material to the product, the REE palette wrappers run under `jit`/`grad`,
+  `tests/conftest.py` imports difflow (xdist deadlock), and
+  `tests/test_doc_examples.py` runs every documentation example.
+
 - Flowsheets read a unit's result with one shared reader that tells a Stream
   from an info dict by its keys and understands `((S, S), info)`; a unit that
   returns a different number of streams than it has outlets now raises

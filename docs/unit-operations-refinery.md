@@ -2148,6 +2148,7 @@ Why steam in the feed line: a separator liquid with its gases taken out is a sub
 
 `difflow_refinery.hydrotreating.Hydrotreater` is a distillate hydrotreater -- naphtha, kerosene or diesel, straight-run or cracked -- on the shared building blocks: adiabatic trickle beds with quench, effluent cooler and HP separator, recycle-gas loop with amine scrubber, purge, compressor and makeup, product steam stripper and overhead drum. It is a library, not a palette operation (like the blend pool).
 
+<!-- doc-test: skip: hydrotreater solve takes minutes -->
 ```python
 import difflow_refinery as dr
 from difflow_refinery.hydrotreating import Hydrotreater, HydrotreaterParams, straight_run_cut
@@ -2335,6 +2336,7 @@ The unit runs a naphtha as it is (example 40's stabilised naphtha: C3--C5 light 
 
 `NAPHTHA_HDT_PARAMS` is an **illustrative** naphtha set: the diesel constants with HDS of the sulfide, thiophene and benzothiophene classes ten times faster (in a naphtha those are mercaptans, light sulfides and alkylthiophenes; the reactivity order of Girgis & Gates 1991, the factor chosen here), HDN a hundred times faster, and every aromatics-saturation step ten times slower (a CoMo naphtha catalyst at 20--35 bar passes benzene largely unsaturated). It is not any catalyst's.
 
+<!-- doc-test: skip: fragment, needs the characterization and naphtha feed of example 40 -->
 ```python
 from difflow_refinery.hydrotreating import NAPHTHA_HDT_PARAMS
 nht = Hydrotreater(char, naphtha, HydrotreaterParams(
@@ -2794,6 +2796,7 @@ Any `OUTPUT_UNITS` name can be an output. The `alkylate.bpd`, `alkylate.RON`, `a
 
 `difflow_refinery.hydrocracking.Hydrocracker` is a single-stage, series-flow VGO hydrocracker on the shared hydroprocessing building blocks ([above](#refinery-hydroprocessing-layout)): a pretreat reactor (the hydrotreating kinetics with a VGO parameter set), a cracking reactor (a new kinetic model plugged into the same `TrickleBedReactor`), effluent cooler and HP separator, the recycle-gas loop (knock-out, amine, purge, compressor, makeup to an H2/oil spec), a product fractionator, and an optional recycle of unconverted oil (UCO) to the cracking reactor. Like the hydrotreater it is a library, not a palette operation.
 
+<!-- doc-test: skip: hydrocracker solve takes minutes and needs VDU LVGO/HVGO products -->
 ```python
 import difflow_refinery as dr
 from difflow_refinery.hydrocracking import Hydrocracker, HydrocrackerParams
@@ -2995,7 +2998,7 @@ import difflow_refinery as dr
 from difflow_refinery.residue import ResidueDesulfurizer, RDSParams, fuel_oil_blend
 
 char = dr.characterize(assay, composition=True)     # sulfur, CCR and Ni+V per cut; the #305 composition is required
-residue = cdu.products["residue"]                     # or residue.atmospheric_residue_cut(char, kg_s)
+residue = cdu.last_result.products["residue"]                     # or residue.atmospheric_residue_cut(char, kg_s)
 rds = ResidueDesulfurizer(char, residue, RDSParams(T_in=(373.0 + 273.15,)))
 res = rds.solve(residue)
 print(res.table())
@@ -3111,6 +3114,7 @@ On the CDU residue of `examples/40` (3.06 wt% S, no Ni+V given), the fuel oil co
 
 `examples/40_refinery_flowsheet.ipynb` sends the crude unit's atmospheric residue through the desulfurizer to the fuel-oil pool:
 
+<!-- doc-test: skip: fragment: `P` is the product dict of the hydrogen-header example -->
 ```python
 from difflow_refinery.residue import ResidueDesulfurizer, fuel_oil_blend
 rds = ResidueDesulfurizer(char, P["residue"])
@@ -3158,6 +3162,7 @@ balanced header and the purity each consumer receives, and
 `close_hydrotreater_loop` feeds that purity back into the hydrotreaters. A
 library, not a palette operation.
 
+<!-- doc-test: skip: fragment: needs a solved reformer `ref` and hydrotreaters -->
 ```python
 import difflow_refinery.hydrogen as h2
 
@@ -3304,6 +3309,7 @@ superstructure optimisation; the HDT's traced makeup composition (see AD mode).
 
 The library units (hydrotreater, reformer, residue desulfurizer, FCC, hydrocracker and the rest) are Python objects with a `solve`, and the adapters between them are pure JAX: `gas_plant_feed`, `HydrotreaterResult.fractionate`, `NaphthaFeed.from_hydrotreater`, `fuel_oil_blend` and the hydrogen network. So a chain of units, such as CDU → hydrotreater → reformer → gasoline pool, is a Python function, and it has an exact derivative. What needs care is the AD mode, because the units do not all support the same one. `difflow_refinery.plant` (#334) handles that, and deliberately does no more. It is a small module, not a framework, and a library, not a palette operation.
 
+<!-- doc-test: skip: fragment: needs solved hydrotreater and reformer units -->
 ```python
 from difflow_refinery.plant import Chain, Stage, central_difference
 
@@ -3408,6 +3414,7 @@ they used different data (and the hydrotreater neglected Cp, which made its K
 reformer's own data give.
 
 ```python
+import numpy as np
 from difflow_refinery import thermochemistry as tc
 
 tc.Hf("benzene"), tc.S0("benzene"), tc.species("benzene").cp   # J/mol, J/mol/K, cubic
@@ -3419,6 +3426,7 @@ tc.reaction_enthalpy(nu), tc.ln_K(nu, 623.15)   # element balance checked; K on 
 
 gas = tc.IdealGasSet(("hydrogen", "benzene", "cyclohexane"))   # a unit's species list
 gas.HF, gas.S0, gas.CP                          # numpy arrays
+T, nu_rows = 600.0, np.array([[-3.0, -1.0, 1.0]])   # H2, benzene, cyclohexane
 gas.enthalpy(T), gas.gibbs(T), gas.ln_K(nu_rows, T)
 ```
 
