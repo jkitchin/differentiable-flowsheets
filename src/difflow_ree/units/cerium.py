@@ -185,8 +185,12 @@ class CeriumOxidizer:
         F_Ce_oxidized = F_Ce_in * actual_conversion
         F_Ce_remaining = F_Ce_in * (1 - actual_conversion)
 
-        # Other REE pass through unchanged
-        filtrate_flows = {"H2O": feed_flows.get("H2O", 1.0)}
+        # Other REE pass through unchanged, and so does every non-REE
+        # species: the filtrate used to be rebuilt as {H2O, elements}, so
+        # acid and impurity metals in the feed left through no outlet (2026
+        # conservation audit, c).
+        filtrate_flows = {k: jnp.asarray(v) for k, v in feed_flows.items()
+                          if k not in p.elements}
         for elem in p.elements:
             if elem == "Ce":
                 filtrate_flows[elem] = jnp.maximum(F_Ce_remaining, 0.0)

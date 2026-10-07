@@ -22,6 +22,7 @@ from difflow.numerics import safe_divide
 from difflow.params_mixin import ParamsMixin
 from difflow.streams import Stream, make_stream, get_flows
 from difflow_ree.equilibrium.distribution import REEDistribution
+from difflow_ree.units.carry import carry_through
 from difflow_ree.units.kremser import kremser_two_inlet
 from difflow_ree.units.stripping import acid_consumption
 
@@ -172,13 +173,13 @@ class REEScrubber:
     diagnostics and changes no flow (#288).
 
     Note:
-        The outlets are rebuilt from ``{extractant, diluent} | elements``
-        plus the aqueous carrier, so ``elements`` must name every REE present
-        in either inlet: an REE that is not tracked is dropped from both
-        outlets and the section does not conserve it. The same is true of any
-        other species carried along (a second extractant such as TBP, a
-        modifier, the strip acid). ``info["dropped_species"]`` reports what
-        was left behind.
+        ``elements`` must name every REE present in either inlet: an REE
+        that is not tracked is dropped from both outlets and the section
+        does not conserve it; ``info["dropped_species"]`` reports it. Any
+        other species (a saponification counter-ion such as ``Na_org``, a
+        second extractant, a modifier, acid in the scrub liquor) does not
+        partition in this model and leaves with the phase it came in
+        (2026 conservation audit, b).
 
     Example:
         >>> params = ScrubberParams(
@@ -257,10 +258,9 @@ class REEScrubber:
         Returns:
             scrub_liquor: Aqueous outlet (contains scrubbed impurities)
             scrubbed_organic: Organic outlet (purified, target REE retained)
-            info: Scrubbing diagnostics, including ``dropped_species``: inlet
-                species that appear in neither outlet because they are
-                neither the extractant, the diluent, the aqueous carrier nor
-                one of ``elements`` (#288).
+            info: Scrubbing diagnostics, including ``dropped_species``: REE
+                on an inlet that are not in ``elements`` and so appear in
+                neither outlet (#288). Non-REE species pass through.
         """
         p = self.params
         pH = pH if pH is not None else p.pH
@@ -335,6 +335,12 @@ class REEScrubber:
             jnp.maximum(h_plus_remaining, 1e-30) / jnp.maximum(F_scrub, 1e-30)
         )
 
+        # Spectators leave with the phase they came in (audit b); an
+        # untracked REE is reported instead (#288).
+        dropped_species = tuple(sorted(
+            set(carry_through(scrubbed_org_flows, org_flows, p.elements))
+            | set(carry_through(scrub_liquor_flows, scrub_flows, p.elements))))
+
         P = loaded_organic["P"]
         scrub_liquor = make_stream(scrub_liquor_flows, T, P)
         scrubbed_organic = make_stream(scrubbed_org_flows, T, P)
@@ -347,15 +353,6 @@ class REEScrubber:
                 target_retained[elem] = 1.0 - jnp.asarray(eff["fraction_scrubbed"])
             else:
                 impurity_removed[elem] = jnp.asarray(eff["fraction_scrubbed"])
-
-        # (#288) Everything that is neither a tracked element nor a carrier
-        # is dropped when the outlets are rebuilt above, and mass is not
-        # conserved across the section for it. Report it rather than leaving
-        # the user to notice the shortfall downstream.
-        kept = set(scrub_liquor_flows) | set(scrubbed_org_flows)
-        dropped_species = tuple(
-            sorted((set(org_flows) | set(scrub_flows)) - kept)
-        )
 
         info = {
             "n_stages": n_stages,

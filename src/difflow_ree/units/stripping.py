@@ -20,6 +20,7 @@ from difflow.numerics import safe_divide, safe_log
 from difflow.params_mixin import ParamsMixin
 from difflow.streams import Stream, make_stream, get_flows
 from difflow_ree.equilibrium.distribution import REEDistribution
+from difflow_ree.units.carry import carry_through
 from difflow_ree.units.kremser import kremser_two_inlet
 
 
@@ -254,6 +255,14 @@ class REEStripper:
                 "recovery": 1 - frac_in_org,
             }
 
+        # Spectators (a saponification counter-ion such as Na_org, acid in
+        # the strip liquor) leave with the phase they came in; they used to
+        # be dropped (2026 conservation audit, b). An untracked REE is
+        # reported, not carried.
+        dropped_species = tuple(sorted(
+            set(carry_through(barren_org_flows, org_flows, p.elements))
+            | set(carry_through(product_flows, strip_flows, p.elements))))
+
         P = loaded_organic["P"]
         product = make_stream(product_flows, T, P)
         barren_organic = make_stream(barren_org_flows, T, P)
@@ -284,6 +293,8 @@ class REEStripper:
             "D_values": D_values,
             "strip_efficiency": strip_efficiency,
             "overall_recovery": overall_recovery,
+            # REE on an inlet that are not in ``elements`` (not conserved).
+            "dropped_species": dropped_species,
         }
 
         return product, barren_organic, info

@@ -325,11 +325,18 @@ class ExtractScrubStripModule(REEModule):
         from difflow_ree.units.scrubbing import REEScrubber, ScrubberParams
         from difflow_ree.units.stripping import REEStripper, StripperParams
 
+        from difflow_ree.equilibrium.schema import ALL_COUNTER_ION_CHARGES
+
         self.params = params
         self.T = T
         elements = tuple(params.elements)
         aqueous_species = AQUEOUS_CARRIER + elements
-        organic_species = (params.extractant, params.diluent) + elements
+        # The organic carries a saponification counter-ion (Na_org, ...)
+        # through all three sections unchanged; declaring it lets a
+        # SaponificationModule's organic outlet feed the solvent inlet
+        # without allow_species_loss (2026 conservation audit, b).
+        organic_species = (params.extractant, params.diluent) + elements + tuple(
+            f"{ion}_org" for ion in ALL_COUNTER_ION_CHARGES)
 
         super().__init__(
             name,
@@ -706,8 +713,11 @@ class SplitShellModule(REEModule):
             })
             streams.append(make_stream(flows, T, P))
 
-        raff = {"H2O": jnp.asarray(
-            get_flows(feed).get("H2O", 1.0), dtype=jnp.float64)}
+        # Every non-REE feed species leaves in the raffinate; it used to be
+        # rebuilt as {H2O, elements}, dropping acid and impurity metals
+        # (2026 conservation audit, c).
+        raff = {k: jnp.asarray(v, dtype=jnp.float64)
+                for k, v in get_flows(feed).items() if k not in p.elements}
         raff.update({
             e: jnp.asarray(v, dtype=jnp.float64)
             for e, v in result["products"]["raffinate"]["flows"].items()
@@ -1018,11 +1028,18 @@ class SaponificationModule(REEModule):
         # organic_counter_ion / counter_ion are None for an unsaponified
         # system, so they are filtered rather than declared as a None port
         # species.
+        from difflow_ree.equilibrium.schema import ALL_COUNTER_ION_CHARGES
+
         organic_species = tuple(
             s for s in
             (params.extractant, params.diluent, schema.organic_counter_ion)
             if s
         ) + elements
+        # Other counter-ions on the organic pass through untouched, as they
+        # do through ExtractScrubStripModule (2026 conservation audit, b).
+        organic_species += tuple(
+            k for k in (f"{ion}_org" for ion in ALL_COUNTER_ION_CHARGES)
+            if k not in organic_species)
         aqueous_species = (
             AQUEOUS_CARRIER
             + tuple(s for s in (schema.counter_ion, "OH") if s)
