@@ -761,3 +761,73 @@ class TestCustomExtractants:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+class TestGroupSeparation:
+    """GroupSeparator sends each group to its own product (#371 follow-up).
+
+    It used to pass on only the scrub liquor and drop the raffinate, run a
+    circuit for an empty group, and sit each section at a fixed fraction of
+    the extractant's window that, after the #270 refit, extracted the light
+    REE and could not strip the heavy: the "heavy" product was light REE and
+    the heavies stayed on the solvent.
+    """
+
+    ELEMENTS = ("La", "Ce", "Pr", "Nd", "Sm", "Eu", "Gd", "Tb", "Dy", "Y")
+    GROUPS = {"light_REE": ("La", "Ce", "Pr", "Nd"), "middle_REE": ("Sm", "Eu"),
+              "heavy_REE": ("Gd", "Tb", "Dy", "Y")}
+
+    @staticmethod
+    def _train(elements, flows):
+        from difflow.streams import make_stream
+        from difflow_ree.flowsheets.full_train import (
+            FullSeparationTrain,
+            SeparationTrainParams,
+        )
+
+        train = FullSeparationTrain(SeparationTrainParams(elements=elements))
+        feed = make_stream(flows={"H2O": 55.5, **flows}, T=298.15, P=101325.0)
+        return train(feed)
+
+    def test_each_group_reaches_its_own_product(self):
+        from difflow.streams import get_flows
+
+        flows = {"La": .0125, "Ce": .0175, "Pr": .0025, "Nd": .0075, "Sm": .002,
+                 "Eu": .0005, "Gd": .0015, "Tb": .0005, "Dy": .0015, "Y": .004}
+        result = self._train(self.ELEMENTS, flows)
+        for product, group in self.GROUPS.items():
+            f = get_flows(result["products"][product])
+            total = sum(float(f.get(e, 0.0)) for e in self.ELEMENTS)
+            assert sum(float(f.get(e, 0.0)) for e in group) / total > 0.9, product
+        balance = result["mass_balance"]
+        assert float(balance["closure"]) == pytest.approx(1.0, abs=1e-9)
+        assert float(balance["recovery"]) == pytest.approx(1.0, abs=1e-3)
+
+    def test_a_light_only_feed_is_all_light(self):
+        from difflow.streams import get_flows
+
+        elements = ("La", "Ce", "Pr", "Nd")
+        result = self._train(elements, {"La": .015, "Ce": .025, "Pr": .0025, "Nd": .0075})
+        for product in ("middle_REE", "heavy_REE"):
+            f = get_flows(result["products"][product])
+            assert sum(float(f.get(e, 0.0)) for e in elements) == 0.0
+        assert float(result["mass_balance"]["closure"]) == pytest.approx(1.0)
+
+    def test_sections_sit_at_their_cuts(self):
+        """D x (O/A) crosses the section's cut at the chosen pH."""
+        import math
+        import warnings
+
+        from difflow_ree.flowsheets.full_train import GroupSeparator
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            sep = GroupSeparator(elements=self.ELEMENTS)
+            heavy = sep.operating_pH["heavy_circuit"]
+            assert heavy["stripping"] < heavy["scrubbing"] < heavy["extraction"]
+            D = sep._distribution.get_D_all(pH=heavy["extraction"])
+            cut = math.sqrt(float(D["Gd"]) * float(D["Eu"]))
+            assert cut == pytest.approx(1.0, rel=1e-6)
+            D_strip = sep._distribution.get_D_all(pH=heavy["stripping"])
+            assert max(float(D_strip[e]) for e in ("Gd", "Tb", "Dy", "Y")) == \
+                pytest.approx(sep.CUT_D["stripping"], rel=1e-6)

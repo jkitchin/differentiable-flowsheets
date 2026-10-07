@@ -940,9 +940,8 @@ those resolve to something other than their own duty name, on purpose:
   shared `b = 3` makes `D_i/D_j` pH-independent); what it buys is that the `D`
   values quoted alongside the verdict are ones the coefficients were fitted for.
 
-`FullSeparationTrain`'s four internal pH values are fractions of the record's
-window rather than absolute numbers, for the same reason; see
-{ref}`groupseparator`.
+`FullSeparationTrain`'s internal pH values are read off the record's own `D`
+curves rather than fixed, for the same reason; see {ref}`groupseparator`.
 
 (separation-factors)=
 ### Separation Factors
@@ -2322,34 +2321,58 @@ series, so heavies, middles and lights can be taken apart at a cost per
 stage that individual separation cannot match. Almost every real plant
 does this first and separates individual elements only within a group.
 
-Two circuits do it:
+Two circuits do it, each splitting its feed at a boundary between two
+groups:
 
-1. **Heavy circuit** --- extract at the middle of the extractant's fitted
-   pH window, then scrub a quarter of the way up it. The heavies (Gd, Tb,
-   Dy, Y) have the highest $D$ and stay in the organic through the scrub,
-   so they leave in the strip product; the lights and middles are rejected
-   into the scrub liquor.
-2. **Middle circuit** --- the first circuit's scrub liquor is the feed.
-   Extract higher (five eighths up the window) and scrub higher (three
-   eighths): the middles (Sm, Eu) report to the product, the lights
-   (La, Ce, Pr, Nd) to the scrub liquor.
+1. **Heavy circuit**: separates the heavies (Gd, Tb, Dy, Y) from everything
+   else. They leave in the strip product. The rest leave in the raffinate
+   (not extracted) and the scrub liquor (co-extracted, then washed back).
+2. **Middle circuit**: takes the heavy circuit's raffinate plus scrub
+   liquor as its feed and separates the middles (Sm, Eu, to its product)
+   from the lights (La, Ce, Pr, Nd, to its raffinate plus scrub liquor).
 
-The four pH values are **fractions of the record's own
-`valid_ph_range`**, not literals (#270): on D2EHPA's refitted `[0, 2]`
-that is 1.00 / 0.50 / 1.25 / 0.75, and on `naphthenic_acid`'s `[4.0, 5.0]`
-it is 4.50 / 4.25 / 4.625 / 4.375. What is fixed is the *ordering* --- the
-middle circuit always runs above the heavy circuit, and each scrub always
-below its own extraction --- which is the part the group cut depends on.
-A literal would have put three of the five records outside the pH range
-their coefficients were fitted over.
+A circuit whose target group has no element in the feed is skipped, and its
+product is empty. Each circuit's solvent leaves through the barren organic,
+and any REE still on it is reported as `info["solvent_holdup"]`. In a plant
+that REE recycles with the solvent, so it is neither product nor loss.
+`FullSeparationTrain` counts it in its mass balance: `closure` includes it
+and `recovery` does not.
 
-Where the boundaries fall is set by those four pH values, and they are
-**fixed inside the unit**, along with the stage counts: `GroupSeparator`
-takes the element groups and the chemistry, not the operating point. To
-move a boundary --- or to optimize it, which both circuits being
-differentiable makes possible --- build the two
-[`ExtractScrubStripCircuit`](#extractscrubstripcircuit)s yourself with
-the pH values as parameters.
+**Where each section runs.** An element moves to the other phase of a
+section when $D \cdot (O/A)$ crosses one. A section therefore separates two
+groups only at a pH where that crossing falls between them, that is between
+the least extractable target and the most extractable element to reject.
+`GroupSeparator` reads each circuit's three pH values off the extractant's
+own `D` curves (stored as `operating_pH`):
+
+| Section | Condition | Boundary |
+|---|---|---|
+| extraction | geometric mean of $D$ for the boundary pair $= 1$ (O/A 1) | lightest target, heaviest rejected |
+| scrubbing | the same mean $= 0.2$ (scrub/organic 0.2) | same pair |
+| stripping | the largest target $D = 0.05$ ($D \cdot$ O/A $= 0.1$ at strip O/A 2) | most strongly held target |
+
+On D2EHPA this gives extraction at pH −0.20, scrubbing at −0.43 and
+stripping at −1.17 for the heavy circuit, and 0.13 / −0.10 / −0.57 for the
+middle circuit. Both circuits run in roughly 1 to 2 M acid, and the heavies
+strip only from strong acid, as they do in practice. These pH values lie
+below the window the D2EHPA coefficients were fitted over (`[0, 2]`), and
+the distribution model says so with an extrapolation warning rather than
+clamping the pH. An extractant whose `D` does not move with pH (a solvating
+extractant such as TBP, driven by nitrate) has no pH cut, and the sections
+fall back to fixed fractions of its window.
+
+The pH values used to be fixed fractions of the window (#270). After the
+D2EHPA refit those no longer sat between the groups. The heavy circuit
+extracted the lights at $D \geq 10$, and stripping at the bottom of the
+window left the heavies on the solvent at $D \sim 100$. The "heavy"
+product was light REE, and the heavies never came off. The circuit also
+passed on only its scrub liquor, dropping the raffinate where most of the
+light REE goes.
+
+The stage counts are fixed inside the unit. To move a boundary, or to
+optimize it (both circuits are differentiable, so this is possible), build
+the two [`ExtractScrubStripCircuit`](#extractscrubstripcircuit)s yourself
+with the pH values as parameters.
 
 ```python
 from difflow_ree import GroupSeparator
