@@ -763,7 +763,7 @@ class ProteinAParams:
 |-----------|------|-------|-------------|
 | `inlet` | Stream | - | Feed stream with mAb (component flows as mass) |
 | `load_volume` | float or None | L | Volume of feed loaded. `None` (default) loads the whole inlet; the column capacity, $DBC \cdot V_{column}$, then limits what binds and the excess breaks through |
-| `feed_volume` | float | L | Total feed volume, so `load_volume / feed_volume` is the fraction loaded |
+| `feed_volume` | float | L | Total feed volume, so `load_volume / feed_volume` is the fraction loaded. Required with `load_volume` (the stream carries amounts, not a volume; a `ValueError` says so). With it, the capacity uses the Langmuir loading at the feed concentration, $q_{max} C/(K_d + C)$ |
 
 #### Outputs
 
@@ -771,7 +771,7 @@ class ProteinAParams:
 |-----------|------|-------|-------------|
 | `product` | Stream | - | Elution pool (purified mAb) |
 | `waste` | Stream | - | Flow-through, wash and column losses |
-| `info['yield']` | float | - | Eluted / loaded target |
+| `info['yield']` | float | - | Target in the product / target in the inlet (feed not loaded counts as lost) |
 | `info['purity']` | float | - | Product purity |
 | `info['mass_loaded']`, `info['mass_bound']` | float | mass | Target loaded and bound (bound is capped by capacity) |
 | `info['capacity_utilization']` | float | - | Bound mass / column capacity |
@@ -878,7 +878,14 @@ class IEXParams:
 
 CEX and AEX are the same unit; `mode` and the parameters say which one it
 is. `load_volume` (L) is optional when calling it, and `None` loads the
-whole inlet.
+whole inlet; a partial load needs `feed_volume` (L) as well. The column
+holds at most $q \cdot V_{column}$, with $q = q_{max} C / (K_d + C)$ when the
+feed concentration is known (`feed_concentration`, or the amount over
+`feed_volume`) and $q = q_{max}$ otherwise. In bind-elute mode target beyond
+that capacity breaks through to waste; in flow-through mode the impurity
+binding is scaled down to fit it. `info['yield']` is the target in the
+product over the target in the inlet, and `info['capacity']` reports the
+capacity used.
 
 #### Impurity clearance
 
