@@ -42,3 +42,15 @@ the root CLAUDE.md, which keeps only what every session needs).
   so a distribution can be put on D and differentiated through. Passed through by
   `REEExtractorParams`, `MixerSettlerParams`, `ScrubberParams`, `StripperParams`.
   `n_stages` is likewise a continuous, traceable decision (Kremser is `E**(N+1)`)
+- Operating points (2026 audit): a circuit section pH left `None`
+  (`ExtractStripParams`, `ExtractScrubStripParams`, `GroupSeparator`,
+  `SplitShellParams` with `product_groups`) comes from
+  `equilibrium/operating_points.cut_pHs`, the D x (O/A) = 1 / 10 / 0.1 cut
+  at the phase ratios the units really run at (`circuit_phase_ratios`, which
+  counts extractant moles as organic flow; whether it should is open, R5).
+  Do NOT go back to window fractions (`default_pH`) for circuits: they left
+  99.8 % of the Y on a D2EHPA solvent. Strip cuts for heavy REE on D2EHPA lie
+  below the fitted window; the warning is the policy, never clamp.
+  `StripperParams.pH=None` means `-log10(acid_conc)`; TBP strips at
+  `strip_nitrate_conc`. Sections carry non-REE species through
+  (`units/carry.py`); precipitators are reagent-capped.
