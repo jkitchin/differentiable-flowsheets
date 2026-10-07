@@ -23,6 +23,7 @@ __all__ = [
     "net_efficiency_with_capture",
     "flue_gas_composition",
     "flue_gas_flow_rate",
+    "fuel_power_input",
 ]
 
 from dataclasses import dataclass
@@ -131,6 +132,27 @@ def flue_gas_composition(
     return compositions.get(plant_type, compositions["coal_supercritical"])
 
 
+def fuel_power_input(params: PowerPlantParams) -> Array:
+    """Fuel heat input (MW, LHV) consistent with the net efficiency.
+
+    ``net_efficiency`` is net power over fuel input, and net power is
+    ``gross_power * (1 - auxiliary_fraction)``, so
+
+        fuel = gross * (1 - aux) / net_efficiency.
+
+    Args:
+        params: Power plant parameters.
+
+    Returns:
+        Fuel heat input (MW).
+
+    Example:
+        >>> fuel_power_input(PowerPlantParams())   # 500*0.93/0.40 = 1162.5
+    """
+    gross = jnp.asarray(params.gross_power)
+    return gross * (1 - params.auxiliary_fraction) / jnp.asarray(params.net_efficiency)
+
+
 def flue_gas_flow_rate(
     params: PowerPlantParams,
 ) -> Array:
@@ -142,11 +164,9 @@ def flue_gas_flow_rate(
     Returns:
         Flue gas molar flow rate (mol/s)
     """
-    gross_power = jnp.asarray(params.gross_power) * 1e6  # W
-    efficiency = jnp.asarray(params.net_efficiency)
-
-    # Fuel energy input
-    fuel_power = gross_power / efficiency  # W
+    # Fuel energy input (W). Audit (d): this divided GROSS power by the NET
+    # efficiency, overstating fuel (and flue gas) by 1/(1 - aux fraction).
+    fuel_power = fuel_power_input(params) * 1e6  # W
 
     # Fuel mass flow
     fuel_flow = fuel_power / (params.fuel_heating_value * 1e6)  # kg/s
@@ -288,7 +308,6 @@ def net_efficiency_with_capture(
         Net efficiency with capture (fraction)
     """
     gross_power = jnp.asarray(params.gross_power)
-    base_efficiency = jnp.asarray(params.net_efficiency)
 
     # Base net power
     base_net = gross_power * (1 - params.auxiliary_fraction)
@@ -299,8 +318,9 @@ def net_efficiency_with_capture(
     # New net power
     new_net = base_net - total_penalty
 
-    # Fuel input unchanged
-    fuel_power = gross_power / base_efficiency
+    # Fuel input unchanged. Audit (d): it was gross / net_efficiency, so with
+    # zero capture load the plant reported 0.372 against its own 0.400.
+    fuel_power = fuel_power_input(params)
 
     # New efficiency
     new_efficiency = new_net / fuel_power
