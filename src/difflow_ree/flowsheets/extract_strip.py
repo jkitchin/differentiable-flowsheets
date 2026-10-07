@@ -183,6 +183,7 @@ class ExtractStripCircuit:
         "solvent_to_feed_ratio": "-",
         "strip_to_solvent_ratio": "-",
         "nitrate_conc": "mol/L",
+        "strip_nitrate_conc": "mol/L",  # audit R8
         "capacity_sharpness": "-",
     }
 
