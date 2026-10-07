@@ -671,12 +671,14 @@ class SplitShellModule(REEModule):
         result = self.cascade(feed, solvent, T)
 
         solvent_flows = get_flows(solvent)
+        # Every non-REE solvent species (extractant, diluent, a counter-ion)
+        # is carrier; the REE it carries are partitioned by the cascade.
         carrier = {
-            p.extractant: jnp.asarray(
-                solvent_flows.get(p.extractant, 0.0), dtype=jnp.float64),
-            p.diluent: jnp.asarray(
-                solvent_flows.get(p.diluent, 0.0), dtype=jnp.float64),
+            k: jnp.asarray(v, dtype=jnp.float64)
+            for k, v in solvent_flows.items() if k not in p.elements
         }
+        carrier.setdefault(p.extractant, jnp.asarray(0.0, dtype=jnp.float64))
+        carrier.setdefault(p.diluent, jnp.asarray(0.0, dtype=jnp.float64))
 
         # Split the organic carrier across the side-draws rather than giving
         # each the whole inlet flow: copying it per port emitted n_products
