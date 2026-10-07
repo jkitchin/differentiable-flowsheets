@@ -259,6 +259,14 @@ class TestPorts:
         zero = sorted(n for n, s in cat.items() if s.ports.n_outlets == 0)
         assert zero == []
 
+    def test_concentrations_are_not_an_inlet(self, cat):
+        """``C0`` was annotated exactly as the Stream alias, so the catalog
+        drew the fed-batch reactors an inlet the code reads bare species
+        keys from (audit of the core outlets)."""
+        for name in ("FedBatchReactor", "SemiBatchReactor"):
+            assert cat[name].ports.inlets == [], name
+            assert "C0" in {p.name for p in cat[name].call_parameters}, name
+
 
 # =============================================================================
 # Parameters

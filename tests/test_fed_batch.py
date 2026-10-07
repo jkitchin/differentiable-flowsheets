@@ -568,3 +568,36 @@ class TestOptimalFeedProfile:
         V_final = float(info["V_final"])
         # Allow 5% overshoot due to finite penalty weight
         assert V_final <= V_max * 1.05
+
+
+class TestInAFlowsheet:
+    """``C0`` is a call parameter, not an inlet (audit of the core outlets).
+
+    It was annotated ``dict[str, Array | float]``, which is exactly the
+    Stream alias, so the catalog drew the reactor an inlet; a stream wired
+    there has ``F_A``, ``T`` and ``P`` keys where the code reads ``A``.
+    """
+
+    def test_the_catalog_draws_no_inlet(self):
+        from difflow.catalog import describe_class
+
+        for cls in (FedBatchReactor, SemiBatchReactor):
+            assert "C0" not in describe_class(cls).ports.inlets
+
+    def test_a_unit_with_no_inlets_solves(self):
+        from difflow.flowsheet import Flowsheet, Unit
+
+        def rate_fn(c, T, p):
+            return jnp.array([p["k"] * c["A"]])
+
+        op = FedBatchReactor(FedBatchParams(
+            V0=1.0, rate_fn=rate_fn, stoich=jnp.array([[-1.0], [1.0]]),
+            rate_params={"k": 0.1}, species_order=["A", "B"]))
+        fs = Flowsheet(species_order=["A", "B"])
+        fs.add_unit(Unit("fb", op, [], ["out"], {
+            "C0": {"A": 1000.0, "B": 0.0}, "T0": 350.0, "P": 101325.0,
+            "t_final": 10.0}))
+        out = fs.solve()["out"]
+        # first order, k t = 1: a fraction exp(-1) of A is left
+        A, B = float(out["F_A"]), float(out["F_B"])
+        assert A / (A + B) == pytest.approx(float(jnp.exp(-1.0)), rel=1e-4)
