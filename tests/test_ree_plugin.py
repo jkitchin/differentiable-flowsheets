@@ -818,16 +818,27 @@ class TestGroupSeparation:
         import math
         import warnings
 
+        from difflow_ree.equilibrium.operating_points import (
+            CUT_FACTOR, circuit_phase_ratios)
         from difflow_ree.flowsheets.full_train import GroupSeparator
 
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             sep = GroupSeparator(elements=self.ELEMENTS)
             heavy = sep.operating_pH["heavy_circuit"]
+            p = sep._heavy_circuit.params
+            # The O/A each section really runs at (the cut is placed on it).
+            oa = circuit_phase_ratios(p.solvent_to_feed_ratio,
+                                      p.scrub_to_solvent_ratio,
+                                      p.strip_to_solvent_ratio,
+                                      p.extractant_conc)
             assert heavy["stripping"] < heavy["scrubbing"] < heavy["extraction"]
             D = sep._distribution.get_D_all(pH=heavy["extraction"])
-            cut = math.sqrt(float(D["Gd"]) * float(D["Eu"]))
-            assert cut == pytest.approx(1.0, rel=1e-6)
+            cut = math.sqrt(float(D["Gd"]) * float(D["Eu"])) * oa["extraction"]
+            assert cut == pytest.approx(CUT_FACTOR["extraction"], rel=1e-6)
+            D = sep._distribution.get_D_all(pH=heavy["scrubbing"])
+            cut = math.sqrt(float(D["Gd"]) * float(D["Eu"])) * oa["scrubbing"]
+            assert cut == pytest.approx(CUT_FACTOR["scrubbing"], rel=1e-6)
             D_strip = sep._distribution.get_D_all(pH=heavy["stripping"])
-            assert max(float(D_strip[e]) for e in ("Gd", "Tb", "Dy", "Y")) == \
-                pytest.approx(sep.CUT_D["stripping"], rel=1e-6)
+            assert max(float(D_strip[e]) for e in ("Gd", "Tb", "Dy", "Y")) \
+                * oa["stripping"] == pytest.approx(CUT_FACTOR["stripping"], rel=1e-6)

@@ -40,11 +40,14 @@ class ExtractStripParams(ParamsMixin):
         n_extraction_stages: Number of extraction stages
         n_stripping_stages: Number of stripping stages
         extraction_pH: pH in extraction section. None (the default) resolves
-            to the extractant record's own default extraction pH -- the top of
-            its fitted validity window -- through
-            :func:`difflow_ree.database.default_pH` (#270).
+            to the pH where the least extractable element has
+            ``D * (O/A) = 10``, read off the extractant's D curves
+            (:func:`difflow_ree.equilibrium.operating_points.cut_pHs`).
         stripping_pH: pH in stripping section. None (the default) resolves to
-            the bottom of that same window.
+            the pH where the most strongly held element has
+            ``D * (O/A) = 0.1``. For D2EHPA and the heavy REE this is below
+            the fitted window (strong acid), and the distribution model warns
+            about the extrapolation when the section runs.
         extractant_conc: Extractant concentration (M)
         solvent_to_feed_ratio: Organic/aqueous ratio in extraction
         strip_to_solvent_ratio: Strip acid/organic ratio
@@ -63,12 +66,9 @@ class ExtractStripParams(ParamsMixin):
     diluent: str = "kerosene"
     n_extraction_stages: int = 10
     n_stripping_stages: int = 5
-    # (#270) None means "read it off the extractant record": the top of the
-    # fitted validity window for the extract, the bottom for the strip. The
-    # literals these replaced -- 3.5 and 0.5 -- were chosen against D2EHPA's
-    # pre-refit hand-tuned coefficients. Against the refitted ones this
-    # circuit extracted at 1.5 pH units of extrapolation and then tried to
-    # strip at a pH where D(Nd) is still 3.7, and returned a 24% recovery.
+    # None means "read it off the D curves" (see __post_init__). The literals
+    # 3.5 / 0.5 were pre-#270; the window fractions that replaced them (#270)
+    # stripped at a pH where the heavy REE stayed on the solvent (audit R1).
     extraction_pH: float | None = None
     stripping_pH: float | None = None
     extractant_conc: float = 0.5
@@ -79,13 +79,39 @@ class ExtractStripParams(ParamsMixin):
     capacity_sharpness: int = 8  # see REEExtractorParams (#193)
 
     def __post_init__(self):
-        """Resolve the pH defaults the extractant record owns (#270)."""
-        from difflow_ree.database import default_pH
+        """Resolve unset pHs from the D curves of this circuit's elements.
 
-        if self.extraction_pH is None:
-            self.extraction_pH = default_pH(self.extractant, "extraction")
-        if self.stripping_pH is None:
-            self.stripping_pH = default_pH(self.extractant, "stripping")
+        A pH left as None is read off the extractant's ``D`` curves for the
+        elements this circuit carries, at the phase ratios its units really
+        run at (:mod:`difflow_ree.equilibrium.operating_points`): extraction
+        where the least extractable element has ``D * (O/A) = 10``, stripping
+        where the most strongly held one has ``D * (O/A) = 0.1``. The window
+        fractions of :func:`~difflow_ree.database.default_pH` (#270) used
+        before left 67 % of the Sm and 99.8 % of the Y on the barren organic
+        of a default D2EHPA circuit (2026 operating-point audit, R1). A pH
+        the caller gives is kept as given. An extractant whose ``D`` does not
+        move with pH (TBP) keeps the window default, which then has no effect
+        on ``D``.
+        """
+        from difflow_ree.database import default_pH
+        from difflow_ree.equilibrium.operating_points import (
+            circuit_phase_ratios, cut_pHs)
+
+        if self.extraction_pH is None or self.stripping_pH is None:
+            ratios = circuit_phase_ratios(
+                self.solvent_to_feed_ratio, None, self.strip_to_solvent_ratio,
+                self.extractant_conc)
+            cuts = cut_pHs(
+                self.extractant, tuple(self.elements),
+                extraction_OA=ratios["extraction"], strip_OA=ratios["stripping"],
+                extractant_conc=self.extractant_conc,
+                nitrate_conc=self.nitrate_conc, mechanism=self.mechanism)
+            if self.extraction_pH is None:
+                self.extraction_pH = (cuts.extraction if cuts is not None
+                                      else default_pH(self.extractant, "extraction"))
+            if self.stripping_pH is None:
+                self.stripping_pH = (cuts.stripping if cuts is not None
+                                     else default_pH(self.extractant, "stripping"))
 
 
 class ExtractStripCircuit:
@@ -329,59 +355,106 @@ def design_extract_strip(
     feed_composition: dict[str, float],
     extractant: str,
     target_recovery: float = 0.99,
-    extraction_pH: float | None = None,  # (#270) record's own; see default_pH
+    extraction_pH: float | None = None,
     nitrate_conc: float | None = None,
     mechanism: str | None = None,
+    stripping_pH: float | None = None,
+    max_extraction_stages: int = 40,
+    max_stripping_stages: int = 20,
 ) -> ExtractStripParams:
-    """Design extract-strip circuit for given feed.
+    """Design an extract-strip circuit that meets a recovery target.
+
+    The pHs come off the extractant's D curves for the feed's elements
+    (:func:`difflow_ree.equilibrium.operating_points.cut_pHs`), and both stage
+    counts are sized from the D values at those pHs through the same Kremser
+    fractions the units evaluate, at the phase ratios the units really run at.
+    The smallest total stage count whose predicted overall recovery (product
+    over feed, feed-weighted) meets ``target_recovery`` is returned.
+
+    This replaced a design that read the extraction pH off the window
+    fraction, sized only the extraction and set ``n_strip = max(3, n_ext //
+    2)`` whatever the strip D (2026 operating-point audit, R1). On D2EHPA it
+    returned 3/3 stages at a strip pH where the heavy REE stayed on the
+    solvent.
 
     Args:
-        feed_composition: Element flows in feed (mol/s)
-        extractant: Extractant to use
-        target_recovery: Target recovery fraction
-        extraction_pH: Operating pH. None reads the extractant record's own
-            default extraction pH; see :func:`difflow_ree.database.default_pH`.
-        nitrate_conc: Aqueous nitrate concentration (M), required for solvating
-            extractants such as TBP (#195)
-        mechanism: Explicit mechanism override; see REEDistribution (#195)
+        feed_composition: Element flows in feed (mol/s); only the ratios matter.
+        extractant: Extractant to use.
+        target_recovery: Target overall recovery fraction into the product.
+        extraction_pH: Operating pH; None reads it off the D curves.
+        nitrate_conc: Aqueous nitrate concentration (M), required for
+            solvating extractants such as TBP (#195).
+        mechanism: Explicit mechanism override; see REEDistribution (#195).
+        stripping_pH: Strip pH; None reads it off the D curves.
+        max_extraction_stages: Largest extraction stage count searched.
+        max_stripping_stages: Largest stripping stage count searched.
 
     Returns:
-        Recommended ExtractStripParams
+        ExtractStripParams with the pHs and stage counts.
+
+    Warns:
+        UserWarning: If no stage count up to the maxima meets the target (the
+            best design found is returned).
+
+    Example:
+        >>> p = design_extract_strip({"Nd": 0.01, "Dy": 0.001}, "PC88A")
+        >>> p.n_extraction_stages >= 1
+        True
     """
-    from difflow_ree.equilibrium.distribution import REEDistribution, stages_kremser
+    import warnings
+
+    import numpy as np
+
+    from difflow_ree.equilibrium.distribution import REEDistribution
+    from difflow_ree.equilibrium.operating_points import (
+        kremser_fraction, section_factors)
 
     elements = tuple(feed_composition.keys())
+    # Resolve the pHs the way the circuit would (the cut rule), keeping any
+    # the caller gave.
+    template = ExtractStripParams(
+        extractant=extractant, elements=elements,
+        extraction_pH=extraction_pH, stripping_pH=stripping_pH,
+        nitrate_conc=nitrate_conc, mechanism=mechanism)
+    from difflow_ree.equilibrium.operating_points import circuit_phase_ratios
 
-    if extraction_pH is None:
-        from difflow_ree.database import default_pH
-
-        extraction_pH = default_pH(extractant, "extraction")
-
-    # Get D values at operating pH
+    oa = circuit_phase_ratios(template.solvent_to_feed_ratio, None,
+                              template.strip_to_solvent_ratio,
+                              template.extractant_conc)
     dist = REEDistribution(
-        extractant=extractant,
-        elements=elements,
-        nitrate_conc=nitrate_conc,  # see #195
-        mechanism=mechanism,  # see #195
-    )
-    D_values = dist.get_D_all(extraction_pH)
+        extractant, elements, concentration=template.extractant_conc,
+        nitrate_conc=nitrate_conc, mechanism=mechanism,
+        on_out_of_range="ignore")
+    E = section_factors(dist, elements, [template.extraction_pH], oa["extraction"])[0]
+    S = 1.0 / section_factors(dist, elements, [template.stripping_pH], oa["stripping"])[0]
+    f = np.array([float(feed_composition[e]) for e in elements])
+    f = f / f.sum()
 
-    # Find element with lowest D (hardest to extract)
-    min_D = min(float(D_values[e]) for e in elements)
-
-    # Calculate stages needed for target recovery
-    # Assume S/F = 1.0
-    n_ext = int(stages_kremser(min_D, 1.0, target_recovery)) + 2  # Safety margin
-
-    # Stripping at low pH, D << 1, fewer stages needed
-    n_strip = max(3, n_ext // 2)
+    n_ext = np.arange(1, max_extraction_stages + 1)
+    n_str = np.arange(1, max_stripping_stages + 1)
+    extracted = 1.0 - kremser_fraction(E[None, :], n_ext[:, None])   # (Ne, el)
+    stripped = 1.0 - kremser_fraction(S[None, :], n_str[:, None])    # (Ns, el)
+    recovery = np.einsum("ae,be,e->ab", extracted, stripped, f)
+    total = n_ext[:, None] + n_str[None, :]
+    ok = recovery >= target_recovery
+    if ok.any():
+        cost = np.where(ok, total, np.iinfo(int).max)
+        i, j = np.unravel_index(np.argmin(cost), cost.shape)
+    else:
+        i, j = np.unravel_index(np.argmax(recovery), recovery.shape)
+        warnings.warn(
+            f"design_extract_strip: no design up to {max_extraction_stages} + "
+            f"{max_stripping_stages} stages reaches recovery {target_recovery} "
+            f"on {extractant}; the best found predicts {recovery[i, j]:.4f}.",
+            UserWarning, stacklevel=2)
 
     return ExtractStripParams(
         extractant=extractant,
         elements=elements,
-        n_extraction_stages=n_ext,
-        n_stripping_stages=n_strip,
-        extraction_pH=extraction_pH,
+        n_extraction_stages=int(n_ext[i]),
+        n_stripping_stages=int(n_str[j]),
+        extraction_pH=template.extraction_pH,
+        stripping_pH=template.stripping_pH,
         nitrate_conc=nitrate_conc,  # see #195
         mechanism=mechanism,  # see #195
     )
