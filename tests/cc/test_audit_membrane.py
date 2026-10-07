@@ -100,6 +100,16 @@ class TestPermeateRecycle:
         assert float(info["recycle_residual"]) < 1e-8
         for sp, f in get_flows(feed).items():
             assert float(get_flows(ret)[sp] + get_flows(perm)[sp]) == pytest.approx(float(f), rel=1e-8)
+        # A smaller stage 2 (stage_params) enriches far more than the shared
+        # area, which permeates nearly all of the stage-1 permeate.
+        p1 = MembraneParams(membrane_type="Matrimid", area=2000.0)
+        p2 = MembraneParams(membrane_type="Matrimid", area=200.0)
+        feed15 = make_stream({"CO2": 15.0, "N2": 85.0}, T=298.15, P=1e6)
+        sized = MultistageMembrane(p1, 2, "permeate_recycle", stage_params=[p1, p2])(feed15)[2]
+        same = MultistageMembrane(p1, 2, "permeate_recycle")(feed15)[2]
+        assert float(sized["overall_CO2_purity"]) > float(same["overall_CO2_purity"]) + 0.2
+        with pytest.raises(ValueError, match="stage_params"):
+            MultistageMembrane(p1, 2, "series", stage_params=[p1])
         # Stage 2 enriches: product purer than a single stage.
         single = MembraneSeparator(MembraneParams(membrane_type="Matrimid", area=500.0))(feed)[2]
         assert float(info["overall_CO2_purity"]) > float(single["CO2_purity"])

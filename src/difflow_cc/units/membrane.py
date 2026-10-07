@@ -543,6 +543,7 @@ class MultistageMembrane:
         n_stages: int = 2,
         configuration: Literal["series", "permeate_recycle"] = "series",
         recycle_iterations: int = 100,
+        stage_params: list[MembraneParams] | None = None,
     ):
         """Initialize multi-stage membrane.
 
@@ -555,6 +556,10 @@ class MultistageMembrane:
                 stage-1 permeate; its retentate is recycled to stage 1).
             recycle_iterations: Successive-substitution passes used to
                 converge the 'permeate_recycle' loop.
+            stage_params: Optional per-stage parameters (one per stage),
+                e.g. a smaller second stage in 'permeate_recycle': with one
+                shared ``params`` that stage sees only the stage-1 permeate
+                on the same area and tends to permeate all of it.
 
         Raises:
             ValueError: unknown configuration, or 'permeate_recycle' with
@@ -576,7 +581,14 @@ class MultistageMembrane:
         self.params = params
         self.n_stages = n_stages
         self.configuration = configuration
-        self._stages = [MembraneSeparator(params) for _ in range(n_stages)]
+        if stage_params is None:
+            stage_params = [params] * n_stages
+        elif len(stage_params) != n_stages:
+            raise ValueError(
+                f"stage_params has {len(stage_params)} entries for "
+                f"n_stages={n_stages}"
+            )
+        self._stages = [MembraneSeparator(sp) for sp in stage_params]
 
     def __call__(
         self,
