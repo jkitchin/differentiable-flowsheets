@@ -224,7 +224,8 @@ class AmineAbsorber:
             info: Dict with operation details:
                 - capture_efficiency: CO2 removal fraction
                 - rich_loading: Rich solvent loading
-                - n_stages_actual: Actual stages used
+                - n_stages: Stages specified
+                - n_stages_effective: Stages after the efficiency correction
                 - absorption_factor: A = L*m / G
         """
         p = self.params
