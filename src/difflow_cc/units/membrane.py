@@ -29,12 +29,14 @@ __all__ = [
 from dataclasses import dataclass
 from typing import Literal
 
+import jax
 import jax.numpy as jnp
 from jax import Array
 
 from difflow.streams import Stream, make_stream, get_flows, total_flow
 from difflow.params_mixin import ParamsMixin
 from difflow.numerics import safe_divide
+from difflow.flowsheet import _concrete
 from difflow_cc.database import get_membrane, Membrane
 
 
@@ -75,7 +77,8 @@ class MembraneParams(ParamsMixin):
         thickness: Membrane thickness (μm), None uses database default
         pressure_ratio: Feed/permeate pressure ratio
         T_operation: Operating temperature (K)
-        feed_pressure: Feed pressure (Pa)
+        feed_pressure: Feed-side pressure (Pa); None (default) uses the
+            feed stream pressure
         permeate_pressure: Permeate pressure (Pa), calculated if None
 
     Notes:
@@ -93,17 +96,137 @@ class MembraneParams(ParamsMixin):
     thickness: float | Array | None = None  # μm (uses default if None)
     pressure_ratio: float | Array = 10.0
     T_operation: float | Array = 298.15  # K
-    feed_pressure: float | Array = 1000000.0  # Pa (10 bar)
+    feed_pressure: float | Array | None = None  # Pa (None: feed stream P)
     permeate_pressure: float | Array | None = None  # Pa
 
     # Stage cut control
     stage_cut_target: float | Array | None = None  # If set, adjusts area
 
+    def __post_init__(self):
+        """Reject pressure ratios and stage cuts that cannot operate.
+
+        Only concrete values are checked (traced values pass through).
+        """
+        try:
+            ratio = float(self.pressure_ratio)
+        except Exception:
+            ratio = None
+        if ratio is not None and ratio <= 1.0:
+            # Audit C5: ratios <= 1 were accepted and still "separated".
+            raise ValueError(
+                f"pressure_ratio must exceed 1 (feed/permeate), got {ratio}"
+            )
+        if self.stage_cut_target is not None:
+            try:
+                cut = float(self.stage_cut_target)
+            except Exception:
+                cut = None
+            if cut is not None and not 0.0 < cut < 1.0:
+                raise ValueError(
+                    f"stage_cut_target must be in (0, 1), got {cut}"
+                )
 
 
+# =============================================================================
+# Complete-mixing solver
+# =============================================================================
+
+def _permeate_composition(t, F_i, Q, area, P_h, P_l):
+    """Permeate mole fractions of a complete-mixing stage.
+
+    With retentate fraction ``t = D/F`` (so stage cut ``1 - t``), the
+    species balance ``(1-t) F y_i = A Q_i (x_i P_h - y_i P_l)`` with
+    ``x_i = (F_i - (1-t) F y_i) / (t F)`` solves to
+
+        y_i = A Q_i z_i P_h / (F t (1-t) + A Q_i ((1-t) P_h + t P_l)),
+
+    where ``z_i`` is the feed mole fraction. The physical ``t`` is the one
+    where the ``y_i`` sum to one.
+
+    Args:
+        t: Retentate fraction in [0, 1].
+        F_i: Feed flows (n,).
+        Q: Permeances (n,), mol/(m2 s Pa).
+        area: Membrane area (m2).
+        P_h: Feed-side pressure (Pa).
+        P_l: Permeate-side pressure (Pa).
+
+    Returns:
+        Permeate mole fractions (n,).
+    """
+    F = jnp.sum(F_i)
+    z = F_i / F
+    aq = area * Q
+    denom = F * t * (1.0 - t) + aq * ((1.0 - t) * P_h + t * P_l)
+    return aq * z * P_h / jnp.maximum(denom, 1e-300)
 
 
+def _bisect_increasing(fn, lo, hi, n_iter=100):
+    """Root of a function negative left / positive right of it, by bisection.
 
+    Args:
+        fn: Scalar function.
+        lo, hi: Bracket.
+        n_iter: Number of halvings.
+
+    Returns:
+        Converged abscissa (no gradient; see ``_implicit_step``).
+    """
+    def body(_, b):
+        a, c = b
+        m = 0.5 * (a + c)
+        neg = fn(m) < 0.0
+        return jnp.where(neg, m, a), jnp.where(neg, c, m)
+
+    a, c = jax.lax.fori_loop(0, n_iter, body,
+                             (jnp.asarray(lo, float), jnp.asarray(hi, float)))
+    return jax.lax.stop_gradient(0.5 * (a + c))
+
+
+def _implicit_step(fn, u0):
+    """Value-neutral Newton step from a stop-gradient root ``u0``.
+
+    Gives the exact implicit-function first derivative of the root with
+    respect to whatever ``fn`` closes over.
+    """
+    d = jax.lax.stop_gradient(jax.grad(fn)(u0))
+    d = jnp.where(jnp.abs(d) > 1e-300, d, 1.0)
+    r = fn(u0)
+    return u0 - (r - jax.lax.stop_gradient(r)) / d
+
+
+def _solve_retentate_fraction(F_i, Q, area, P_h, P_l):
+    """Retentate fraction ``t`` of a complete-mixing stage of given area.
+
+    ``g(t) = sum_i y_i(t) - 1`` is convex with ``g(0) = 0`` and
+    ``g(1) = (P_h/P_l) * (permeable feed fraction) - 1``, so it has at most
+    one root in (0, 1): ``g < 0`` left of it, ``> 0`` right. If ``g >= 0``
+    throughout, the area is large enough to permeate everything (t -> 0);
+    if ``g < 0`` throughout, nothing can permeate (t = 1).
+    """
+    def g(t):
+        return jnp.sum(_permeate_composition(t, F_i, Q, area, P_h, P_l)) - 1.0
+
+    t0 = _bisect_increasing(g, 0.0, 1.0)
+    return jnp.clip(_implicit_step(g, t0), 0.0, 1.0)
+
+
+def _solve_area_for_cut(F_i, Q, P_h, P_l, t):
+    """Area at which a complete-mixing stage has retentate fraction ``t``.
+
+    At fixed ``t`` in (0, 1), ``sum_i y_i`` rises monotonically with area
+    from 0 to ``1 / ((1-t) + t P_l/P_h) * (permeable fraction)``, so the
+    root in ``s = ln(A / A_ref)`` is bracketed whenever the cut is reachable.
+    """
+    F = jnp.sum(F_i)
+    A_ref = F / (jnp.max(Q) * P_h)  # area of ~one transfer unit
+
+    def h(s):
+        A = A_ref * jnp.exp(s)
+        return jnp.sum(_permeate_composition(t, F_i, Q, A, P_h, P_l)) - 1.0
+
+    s0 = _bisect_increasing(h, -60.0, 60.0)
+    return A_ref * jnp.exp(_implicit_step(h, s0))
 # =============================================================================
 # Membrane Separator
 # =============================================================================
@@ -241,13 +364,15 @@ class MembraneSeparator:
         """
         p = self.params
         T = jnp.asarray(p.T_operation)
-        area = jnp.asarray(p.area)
 
-        # Pressures
+        # Pressures. Audit C5: the feed stream's pressure used to be ignored
+        # (a 1 bar feed separated like a 10 bar one); it is now the default.
         if P_feed is not None:
             P_feed = jnp.asarray(P_feed)
-        else:
+        elif p.feed_pressure is not None:
             P_feed = jnp.asarray(p.feed_pressure)
+        else:
+            P_feed = jnp.asarray(feed["P"])
 
         if P_permeate is not None:
             P_permeate = jnp.asarray(P_permeate)
@@ -256,111 +381,55 @@ class MembraneSeparator:
         else:
             P_permeate = P_feed / jnp.asarray(p.pressure_ratio)
 
-        # Get feed composition
+        P_h_c, P_l_c = _concrete(P_feed), _concrete(P_permeate)
+        if P_h_c is not None and P_l_c is not None and P_l_c >= P_h_c:
+            raise ValueError(
+                f"Permeate pressure ({P_l_c} Pa) must be below the feed "
+                f"pressure ({P_h_c} Pa): with no transmembrane pressure "
+                "ratio above 1 nothing permeates."
+            )
+
         feed_flows = get_flows(feed)
-        F_total = total_flow(feed)
+        species = list(feed_flows)
+        F_i = jnp.stack([jnp.asarray(feed_flows[s], dtype=float) for s in species])
+        F_total = jnp.sum(F_i)
+        permeances = {s: self._permeance(s, T) for s in species}
+        Q = jnp.stack([jnp.asarray(permeances[s], dtype=float) for s in species])
 
-        # Calculate mole fractions
-        x_feed = {sp: flow / F_total for sp, flow in feed_flows.items()}
+        # Audit C5: the old model fixed the permeate CO2 fraction from the
+        # feed-composition selectivity formula, split the rest over the other
+        # species by feed fraction, and capped each species at 99 % of its
+        # feed. That broke the solution-diffusion model it states (Matrimid:
+        # 99 % CO2 recovery at 0.72 purity with a retentate CO2 partial
+        # pressure of 1.16 kPa against 72 kPa in the permeate). It is
+        # replaced by the complete-mixing (both sides well mixed) model
+        # solved exactly: for every species
+        #     F_perm,i = A Q_i (x_i P_feed - y_i P_permeate),
+        # with x the retentate and y the permeate composition, which keeps
+        # every driving force non-negative and every retentate flow >= 0.
+        if p.stage_cut_target is not None:
+            # Documented behaviour: the area is adjusted to hit the cut.
+            t = 1.0 - jnp.asarray(p.stage_cut_target)
+            area = _solve_area_for_cut(F_i, Q, P_feed, P_permeate, t)
+        else:
+            area = jnp.asarray(p.area)
+            t = _solve_retentate_fraction(F_i, Q, area, P_feed, P_permeate)
 
-        # Get CO2/N2 selectivity for the perfect-mixing permeate composition model.
-        # For CO2, use the Baker (2004) perfect-mixing formula:
-        #   y_p,CO2 = alpha * y_f,CO2 / (1 + (alpha - 1) * y_f,CO2)
-        # For all other species the permeate mole fractions are determined by
-        # flux ratios: J_i / sum(J_j), where
-        #   J_i = Q_i * (p_i,feed - p_i,permeate)
-        # We solve this via the two-step approach:
-        #   1. Compute the CO2 permeate mole fraction analytically from
-        #      the perfect-mixing selectivity equation.
-        #   2. For every other species, compute its flux using
-        #      J_i = Q_i * (x_i*P_feed - y_i,perm*P_permeate) where
-        #      y_i,perm is estimated from flux ratios, starting with the
-        #      feed-pressure-only driving force as a first estimate.
+        y = _permeate_composition(t, F_i, Q, area, P_feed, P_permeate)
+        F_perm_i = (1.0 - t) * F_total * y
+        F_perm_i = jnp.minimum(F_perm_i, F_i)  # round-off only
+        F_ret_i = F_i - F_perm_i
 
-        mem = self._membrane_data
-        alpha = mem.selectivity.get("CO2_N2", 1.0)
-        alpha = jnp.asarray(alpha)
+        permeate_flows = {s: F_perm_i[k] for k, s in enumerate(species)}
+        retentate_flows = {s: F_ret_i[k] for k, s in enumerate(species)}
+        F_perm_total = jnp.sum(F_perm_i)
+        stage_cut = safe_divide(F_perm_total, F_total)
 
-        # Permeate CO2 mole fraction from the perfect-mixing equation
-        y_CO2_feed = x_feed.get("CO2", jnp.array(0.0))
-        y_CO2_perm = alpha * y_CO2_feed / (1.0 + (alpha - 1.0) * y_CO2_feed)
-        # Pressure ratio limits maximum permeate enrichment
-        pressure_ratio_val = P_feed / P_permeate
-        y_CO2_perm = jnp.minimum(y_CO2_perm, y_CO2_feed * pressure_ratio_val)
-        y_CO2_perm = jnp.clip(y_CO2_perm, 0.0, 0.999)
-
-        # Build permeate mole fractions for all species.
-        # For CO2 use the analytic result; for others scale the remaining
-        # permeate fraction by their feed mole fraction (first-order estimate).
-        y_CO2_non = 1.0 - y_CO2_perm  # permeate fraction available for non-CO2
-        y_feed_non_total = 1.0 - y_CO2_feed  # feed fraction that is not CO2
-
-        y_perm = {}
-        for species in x_feed:
-            if species == "CO2":
-                y_perm[species] = y_CO2_perm
-            else:
-                # Distribute remaining permeate mole fraction in proportion
-                # to the non-CO2 feed mole fractions.
-                y_perm[species] = safe_divide(
-                    x_feed[species] * y_CO2_non, y_feed_non_total
-                )
-
-        # Calculate fluxes using the solution-diffusion driving force:
-        #   J_i = Q_i * (p_i,feed - p_i,permeate)
-        fluxes = {}
-        permeances = {}
-        for species, x_i in x_feed.items():
-            Q_i = self._permeance(species, T)  # mol/(m²·s·Pa)
-            permeances[species] = Q_i
-
-            p_i_feed = x_i * P_feed
-            p_i_perm = y_perm[species] * P_permeate
-
-            # Driving force must be non-negative; clip protects against
-            # numerical noise that could briefly invert sign.
-            driving_force = jnp.maximum(p_i_feed - p_i_perm, 0.0)
-            J_i = Q_i * driving_force
-            fluxes[species] = J_i
-
-        # Total flux
-        J_total = sum(fluxes.values())
-
-        # Permeate flow
-        F_permeate_total = J_total * area
-
-        # Stage cut
-        stage_cut = safe_divide(F_permeate_total, F_total)
-        stage_cut = jnp.clip(stage_cut, 0.0, 0.95)  # Physical limit
-
-        # Permeate composition (from perfect-mixing model)
-        permeate_flows = {}
-        retentate_flows = {}
-
-        for species, flow in feed_flows.items():
-            # Use perfect-mixing model compositions for consistency
-            F_perm = F_permeate_total * y_perm[species]
-            F_perm = jnp.minimum(F_perm, flow * 0.99)  # Can't permeate more than feed
-
-            permeate_flows[species] = F_perm
-            retentate_flows[species] = flow - F_perm
-
-        # Recalculate total permeate after per-species capping
-        F_perm_total_actual = sum(permeate_flows.values())
-
-        # Update stage cut to reflect actual permeate flow
-        stage_cut = safe_divide(F_perm_total_actual, F_total)
-        stage_cut = jnp.clip(stage_cut, 0.0, 0.95)
-
-        # Calculate performance metrics
         F_CO2_feed = feed_flows.get("CO2", jnp.array(0.0))
         F_CO2_perm = permeate_flows.get("CO2", jnp.array(0.0))
-        F_perm_total = sum(permeate_flows.values())
-
         CO2_recovery = safe_divide(F_CO2_perm, F_CO2_feed)
         CO2_purity = safe_divide(F_CO2_perm, F_perm_total)
 
-        # Create output streams
         retentate = make_stream(retentate_flows, T, P_feed)
         permeate = make_stream(permeate_flows, T, P_permeate)
 
@@ -372,6 +441,8 @@ class MembraneSeparator:
             "retentate_flow": F_total - F_perm_total,
             "area_used": area,
             "pressure_ratio": P_feed / P_permeate,
+            "P_feed": P_feed,
+            "P_permeate": P_permeate,
             "permeances": permeances,
         }
 
@@ -393,31 +464,37 @@ class MembraneSeparator:
         """
         p = self.params
         T = jnp.asarray(p.T_operation)
-        P_feed = jnp.asarray(p.feed_pressure)
-        P_permeate = P_feed / jnp.asarray(p.pressure_ratio)
+        if p.feed_pressure is not None:
+            P_feed = jnp.asarray(p.feed_pressure)
+        else:
+            P_feed = jnp.asarray(feed["P"])
+        if p.permeate_pressure is not None:
+            P_permeate = jnp.asarray(p.permeate_pressure)
+        else:
+            P_permeate = P_feed / jnp.asarray(p.pressure_ratio)
 
         recovery = jnp.asarray(CO2_recovery_target)
 
-        # Get CO2 feed
         feed_flows = get_flows(feed)
-        F_CO2 = feed_flows.get("CO2", jnp.array(0.0))
-        F_total = total_flow(feed)
-        x_CO2 = F_CO2 / F_total
+        species = list(feed_flows)
+        F_i = jnp.stack([jnp.asarray(feed_flows[s], dtype=float) for s in species])
+        Q = jnp.stack([jnp.asarray(self._permeance(s, T), dtype=float)
+                       for s in species])
+        k = species.index("CO2")
+        F = jnp.sum(F_i)
+        A_ref = F / (jnp.max(Q) * P_feed)
 
-        # CO2 permeance
-        Q_CO2 = self._permeance("CO2", T)
+        # Same complete-mixing model as __call__ (audit C5); CO2 recovery
+        # rises monotonically with area from 0 to 1, so the root in
+        # s = ln(A / A_ref) is bracketed.
+        def h(s):
+            A = A_ref * jnp.exp(s)
+            t = _solve_retentate_fraction(F_i, Q, A, P_feed, P_permeate)
+            y = _permeate_composition(t, F_i, Q, A, P_feed, P_permeate)
+            return (1.0 - t) * F * y[k] / F_i[k] - recovery
 
-        # Required CO2 flux
-        F_CO2_perm = F_CO2 * recovery
-
-        # Approximate driving force
-        p_CO2_feed = x_CO2 * P_feed
-        driving_force = p_CO2_feed * 0.8  # Approximate average
-
-        # Area = F / (Q * ΔP)
-        area = safe_divide(F_CO2_perm, Q_CO2 * driving_force)
-
-        return area
+        s0 = _bisect_increasing(h, -60.0, 60.0, n_iter=80)
+        return A_ref * jnp.exp(_implicit_step(h, s0))
 
 
 # =============================================================================
@@ -464,15 +541,38 @@ class MultistageMembrane:
         self,
         params: MembraneParams,
         n_stages: int = 2,
-        configuration: Literal["series", "permeate_recycle"] = "series"
+        configuration: Literal["series", "permeate_recycle"] = "series",
+        recycle_iterations: int = 100,
     ):
         """Initialize multi-stage membrane.
 
         Args:
             params: Base membrane parameters (area is per stage)
-            n_stages: Number of stages
-            configuration: 'series' or 'permeate_recycle'
+            n_stages: Number of stages. 'permeate_recycle' is a two-stage
+                layout and accepts only ``n_stages=2``.
+            configuration: 'series' (each stage treats the previous
+                retentate) or 'permeate_recycle' (stage 2 enriches the
+                stage-1 permeate; its retentate is recycled to stage 1).
+            recycle_iterations: Successive-substitution passes used to
+                converge the 'permeate_recycle' loop.
+
+        Raises:
+            ValueError: unknown configuration, or 'permeate_recycle' with
+                ``n_stages != 2`` (audit (e): it silently ran 2 stages).
         """
+        if configuration not in ("series", "permeate_recycle"):
+            raise ValueError(
+                f"configuration must be 'series' or 'permeate_recycle', "
+                f"got {configuration!r}"
+            )
+        if configuration == "permeate_recycle" and n_stages != 2:
+            raise ValueError(
+                "configuration='permeate_recycle' is a two-stage cascade; "
+                f"got n_stages={n_stages}. Use n_stages=2 or 'series'."
+            )
+        if n_stages < 1:
+            raise ValueError(f"n_stages must be >= 1, got {n_stages}")
+        self.recycle_iterations = int(recycle_iterations)
         self.params = params
         self.n_stages = n_stages
         self.configuration = configuration
@@ -548,44 +648,56 @@ class MultistageMembrane:
         self,
         feed: Stream,
     ) -> tuple[Stream, Stream, dict]:
-        """Permeate recycle: stage 2 permeate recycled to stage 1.
+        """Two-stage enriching cascade with stage-2 retentate recycle.
 
-        This is a simplified implementation without full convergence.
-        For rigorous modeling, iterative solution would be needed.
+        Stage 1 treats feed + recycle; its permeate is recompressed to the
+        stage-1 feed pressure and fed to stage 2, whose permeate is the
+        product and whose retentate is recycled to the stage-1 inlet (Merkel
+        et al. 2010). Audit (e): this used to skip the recycle (it summed
+        the two retentates) and always ran two stages while reporting the
+        requested count; the recycle is now converged by successive
+        substitution over a fixed iteration count (differentiable by
+        unrolling) and the residual is reported.
         """
-        # Stage 1: feed + recycle
-        ret_1, perm_1, info_1 = self._stages[0](feed)
+        stage1, stage2 = self._stages
+        feed_flows = get_flows(feed)
+        species = list(feed_flows)
+        F_feed = jnp.stack([jnp.asarray(feed_flows[s], dtype=float) for s in species])
+        T_feed = feed["T"]
+        P1 = self.params.feed_pressure
+        P1 = jnp.asarray(feed["P"] if P1 is None else P1)
 
-        # Stage 2: operates on stage 1 permeate
-        ret_2, perm_2, info_2 = self._stages[1](perm_1)
+        def run(rec):
+            mixed = make_stream({s: F_feed[k] + rec[k] for k, s in enumerate(species)},
+                                T_feed, P1)
+            ret_1, perm_1, info_1 = stage1(mixed, P_feed=P1)
+            ret_2, perm_2, info_2 = stage2(perm_1, P_feed=P1)
+            f2 = get_flows(ret_2)
+            new_rec = jnp.stack([jnp.asarray(f2.get(s, 0.0)) for s in species])
+            return new_rec, (ret_1, perm_1, perm_2, info_1, info_2)
 
-        # In full implementation, ret_2 would be recycled to stage 1 inlet
-        # Simplified: ignore recycle for differentiability
+        rec = jax.lax.fori_loop(
+            0, self.recycle_iterations, lambda _, r: run(r)[0], jnp.zeros_like(F_feed))
+        new_rec, (ret_1, perm_1, perm_2, info_1, info_2) = run(rec)
+        residual = jnp.max(jnp.abs(new_rec - rec)) / jnp.maximum(jnp.sum(F_feed), 1e-300)
 
-        # Final permeate is stage 2 permeate (highest purity)
+        final_retentate = ret_1
         final_permeate = perm_2
 
-        # Combine retentates: ret_1 from feed, ret_2 from perm_1 processing
-        # Mass balance: feed = ret_1 + perm_1 = ret_1 + (ret_2 + perm_2)
-        ret_1_flows = get_flows(ret_1)
-        ret_2_flows = get_flows(ret_2)
-        combined_ret_flows = {}
-        for species in set(list(ret_1_flows.keys()) + list(ret_2_flows.keys())):
-            combined_ret_flows[species] = ret_1_flows.get(species, 0.0) + ret_2_flows.get(species, 0.0)
-        final_retentate = make_stream(combined_ret_flows, ret_1["T"], ret_1["P"])
-
-        # Metrics
-        feed_flows = get_flows(feed)
         perm_flows = get_flows(final_permeate)
         F_CO2_feed = feed_flows.get("CO2", jnp.array(0.0))
         F_CO2_perm = perm_flows.get("CO2", jnp.array(0.0))
         F_perm_total = total_flow(final_permeate)
 
         overall_info = {
-            "n_stages": self.n_stages,
+            "n_stages": 2,
             "configuration": self.configuration,
             "overall_CO2_recovery": safe_divide(F_CO2_perm, F_CO2_feed),
             "overall_CO2_purity": safe_divide(F_CO2_perm, F_perm_total),
+            "recycle_flow": jnp.sum(new_rec),
+            "recycle_residual": residual,
+            "interstage_compression": {"from_Pa": perm_1["P"], "to_Pa": P1,
+                                       "flow": total_flow(perm_1)},
             "stage_info": [info_1, info_2],
         }
 

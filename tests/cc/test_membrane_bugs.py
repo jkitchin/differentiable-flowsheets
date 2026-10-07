@@ -110,47 +110,49 @@ class TestBug139PermeateRecycleMassBalance:
 
 
 class TestBug143PerfectMixingConsistency:
-    """Bug #143: Permeate composition should match perfect-mixing model."""
+    """Bug #143: outlets must satisfy the complete-mixing equations.
+
+    The earlier form of these tests pinned the permeate CO2 fraction to the
+    feed-composition selectivity formula and the N2:O2 permeate ratio to the
+    feed ratio. Both are what the carbon-capture audit (C5) found wrong:
+    they ignore depletion of the retentate and the species' permeances, and
+    produced reversed CO2 driving forces. The tests now check the
+    solution-diffusion balance itself for every species.
+    """
+
+    @staticmethod
+    def _check_flux_balance(membrane, feed, params):
+        retentate, permeate, info = membrane(feed)
+        ret, perm = get_flows(retentate), get_flows(permeate)
+        R = float(total_flow(retentate))
+        V = float(total_flow(permeate))
+        P_h, P_l = float(retentate["P"]), float(permeate["P"])
+        for sp in get_flows(feed):
+            Q = float(info["permeances"][sp])
+            x = float(ret[sp]) / R
+            y = float(perm[sp]) / V
+            flux = params.area * Q * (x * P_h - y * P_l)
+            assert x * P_h - y * P_l >= 0.0
+            assert float(perm[sp]) == pytest.approx(flux, rel=1e-8), sp
+        return info
 
     def test_co2_purity_matches_perfect_mixing(self):
-        """CO2 purity in permeate should be consistent with perfect-mixing equation."""
+        """Per-species flux equals A Q_i (x_i P_feed - y_i P_permeate)."""
         params = MembraneParams(
             membrane_type="Matrimid",
             area=500.0,
             pressure_ratio=10.0,
             feed_pressure=1000000.0,
         )
-        membrane = MembraneSeparator(params)
-        feed = _flue_gas_feed()
-
-        retentate, permeate, info = membrane(feed)
-
-        # Compute expected CO2 purity from perfect-mixing model
+        info = self._check_flux_balance(MembraneSeparator(params), _flue_gas_feed(), params)
+        # Purity is below the zero-cut selectivity limit, which assumes an
+        # undepleted retentate.
         from difflow_cc.database import get_membrane
-        mem_data = get_membrane("Matrimid")
-        alpha = mem_data.selectivity.get("CO2_N2", 1.0)
-        y_CO2_feed = 1.0 / 10.0  # 10% CO2
-
-        y_CO2_perm_expected = alpha * y_CO2_feed / (1.0 + (alpha - 1.0) * y_CO2_feed)
-
-        # Apply pressure ratio limit (bug #144 fix)
-        P_feed = 1000000.0
-        P_perm = P_feed / 10.0
-        pressure_ratio = P_feed / P_perm
-        y_CO2_perm_expected = min(y_CO2_perm_expected, y_CO2_feed * pressure_ratio)
-        y_CO2_perm_expected = min(max(y_CO2_perm_expected, 0.0), 0.999)
-
-        # Actual CO2 purity
-        actual_purity = float(info["CO2_purity"])
-
-        # Should be close to perfect-mixing prediction
-        # (not exact due to per-species capping, but close)
-        assert actual_purity == pytest.approx(y_CO2_perm_expected, rel=0.05), (
-            f"CO2 purity {actual_purity} doesn't match perfect-mixing {y_CO2_perm_expected}"
-        )
+        alpha = get_membrane("Matrimid").selectivity["CO2_N2"]
+        assert float(info["CO2_purity"]) < alpha * 0.1 / (1.0 + (alpha - 1.0) * 0.1)
 
     def test_non_co2_species_scale_correctly(self):
-        """Non-CO2 species in permeate should be proportional to feed fractions."""
+        """O2 permeates faster than N2 relative to feed (higher permeance)."""
         params = MembraneParams(
             membrane_type="Matrimid",
             area=200.0,
@@ -158,28 +160,16 @@ class TestBug143PerfectMixingConsistency:
             feed_pressure=1000000.0,
         )
         membrane = MembraneSeparator(params)
-
-        # Feed with multiple non-CO2 species
         feed = make_stream(
             flows={"CO2": 1.0, "N2": 7.0, "O2": 2.0},
             T=298.15,
             P=1000000.0,
         )
-
-        retentate, permeate, info = membrane(feed)
-
-        perm_flows = get_flows(permeate)
-        # N2 and O2 should be in proportion to their feed mole fractions
-        # (both are non-CO2, so they share the remaining permeate fraction)
-        F_N2_perm = float(perm_flows.get("N2", 0.0))
-        F_O2_perm = float(perm_flows.get("O2", 0.0))
-
-        # Feed ratio N2:O2 = 7:2 = 3.5
-        if F_O2_perm > 0:
-            ratio = F_N2_perm / F_O2_perm
-            assert ratio == pytest.approx(7.0 / 2.0, rel=0.1), (
-                f"N2/O2 permeate ratio {ratio} doesn't match feed ratio 3.5"
-            )
+        info = self._check_flux_balance(membrane, feed, params)
+        _, permeate, _ = membrane(feed)
+        perm = get_flows(permeate)
+        if float(info["permeances"]["O2"]) > float(info["permeances"]["N2"]):
+            assert float(perm["N2"]) / float(perm["O2"]) < 7.0 / 2.0
 
 
 class TestBug144PressureRatioLimit:
@@ -303,8 +293,12 @@ class TestBug150TotalFlowConsistency:
         )
 
     def test_large_area_with_capping(self):
-        """With very large membrane area, per-species capping should activate."""
-        # Use very large area to force high permeation and trigger capping
+        """With a very large area the stage approaches total permeation.
+
+        The old ad-hoc 99 %-of-feed cap is gone (audit C5): with complete
+        mixing and enough area every species permeates, so the limit is the
+        feed itself and the retentate never goes negative.
+        """
         params = MembraneParams(
             membrane_type="Matrimid",
             area=50000.0,
@@ -316,15 +310,16 @@ class TestBug150TotalFlowConsistency:
 
         retentate, permeate, info = membrane(feed)
 
-        # Even with large area, no species should exceed 99% of feed
         feed_flows = get_flows(feed)
         perm_flows = get_flows(permeate)
+        ret_flows = get_flows(retentate)
         for species in feed_flows:
             f_feed = float(feed_flows[species])
             f_perm = float(perm_flows.get(species, 0.0))
-            assert f_perm <= f_feed * 0.99 + 1e-10, (
-                f"{species}: perm={f_perm} exceeds 99% of feed={f_feed}"
-            )
+            assert 0.0 <= f_perm <= f_feed
+            assert float(ret_flows[species]) >= 0.0
+            assert f_perm + float(ret_flows[species]) == pytest.approx(f_feed)
+        assert float(info["stage_cut"]) > 0.99
 
         # Total flow should still be consistent
         species_sum = sum(float(v) for v in perm_flows.values())
