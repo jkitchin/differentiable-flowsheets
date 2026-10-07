@@ -308,6 +308,15 @@ def _split_result(
                 "streams (dicts of T, P and F_* flows), optionally followed "
                 "by an info dict." + hint
             )
+    # An info outlet: a unit wired with one outlet more than it returns
+    # streams, and an info dict to put there, carries its info on that
+    # last outlet so the solve hands it back with the streams. The
+    # refinery alkylation unit and its columns are wired this way
+    # (``["effluent", "reactor_info"]``) and read ``streams["<name>_info"]``
+    # after the solve; the old zip-by-length parser allowed it, and the
+    # strict count below must not take it away.
+    if info is not None and len(streams) + 1 == len(outlet_names):
+        return tuple(streams) + (info,), info
     if len(streams) != len(outlet_names):
         raise ValueError(
             f"Unit {unit_name!r} has {len(outlet_names)} outlets "

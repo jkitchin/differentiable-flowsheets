@@ -95,6 +95,20 @@ class TestSplitResult:
         with pytest.raises(ValueError, match="3 outlets"):
             _split_result((_s(), _s()), ["a", "b", "c"])
 
+    def test_an_info_outlet_carries_the_info(self):
+        """One outlet more than streams, with an info dict: the info rides
+        on the last outlet. The refinery alkylation unit and its columns
+        are wired this way and read ``streams["<unit>_info"]`` after the
+        solve (CI failure on the first audit-fix run)."""
+        s1, s2, info = _s(1.0), _s(2.0), {"converged": True}
+        streams, got = _split_result((s1, s2, info), ["a", "b", "a_info"])
+        assert streams == (s1, s2, info) and got is info
+        nested, _ = _split_result(((s1, s2), info), ["a", "b", "a_info"])
+        assert nested == (s1, s2, info)
+        # one outlet too many without an info dict is still an error
+        with pytest.raises(ValueError, match="3 outlets"):
+            _split_result((s1, s2), ["a", "b", "a_info"])
+
     def test_a_results_dict_raises_and_names_the_way_out(self):
         with pytest.raises(ValueError, match="results dict is not a stream"):
             _split_result({"product": _s(), "recovery": 0.9}, ["product"])
