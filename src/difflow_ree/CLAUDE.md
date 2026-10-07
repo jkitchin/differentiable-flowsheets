@@ -8,6 +8,11 @@ the root CLAUDE.md, which keeps only what every session needs).
 - Unit operations: `REEExtractor`, `REEMixerSettler`, `REEScrubber`, `REEStripper`
 - Precipitation: `OxalatePrecipitator`, `CarbonatePrecipitator`, `HydroxidePrecipitator`
 - Flowsheets: `ExtractStripCircuit`, `ExtractScrubStripCircuit`, `SplitShellCascade`, `FullSeparationTrain`
+  return ONE results dict, so the palette registers stream-returning wrappers
+  under their names (`flowsheets/palette.py`: `ExtractStripUnit`, ...). Keep
+  the circuits' dict return (callers read it by key) and keep the palette
+  pointing at the wrappers: a results dict wired as a unit went downstream as
+  a "stream" (KeyError 'T'), and `_split_result` now refuses it.
 - Database: 15 REE elements (the 14 stable lanthanides -- no Pm -- plus Y), 5 extractant systems (D2EHPA, PC88A,
   Cyanex 272, TBP, naphthenic acid). Coverage is UNEVEN and `ext_db.coverage()`
   reports it: only naphthenic_acid has coefficients for all fifteen; the other

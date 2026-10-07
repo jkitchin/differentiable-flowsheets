@@ -2206,6 +2206,27 @@ print(f"pH range for Dy/La separation: {min_pH:.1f} - {max_pH:.1f}")
 (flowsheet-templates)=
 ## Flowsheet Templates
 
+Each circuit below returns one results dict: its outlet streams under
+named keys beside recovery, purity and mass-balance figures. That suits a
+script, not a flowsheet, which maps a unit's return value onto its outlets
+by position. So the palette entries under these four names are
+stream-returning wrappers from `difflow_ree.flowsheets.palette`, taking
+the same `Params` and running the circuit unchanged:
+
+| Palette name | Class | Inlets | Outlets, in order |
+|---|---|---|---|
+| `ExtractStripCircuit` | `ExtractStripUnit` | `feed` | `raffinate`, `product`, `barren_organic` |
+| `ExtractScrubStripCircuit` | `ExtractScrubStripUnit` | `feed` | `raffinate`, `scrub_liquor`, `product`, `barren_organic` |
+| `SplitShellCascade` | `SplitShellUnit` | `feed`, `solvent` | `product_1..n` (organic), `raffinate` (aqueous) |
+| `FullSeparationTrain` | `SeparationTrainUnit` | `feed` | `light_REE`, `middle_REE`, `heavy_REE` (or `ce_depleted` without group separation), then `CeO2` when cerium removal runs |
+
+The rest of the results dict comes back as the unit's `info`. Wiring a
+circuit class itself into a `Flowsheet` raises a `ValueError` naming
+these wrappers, rather than passing the dict downstream as a stream.
+Like the circuits, the wrappers compute their metrics with Python
+`float` and cannot be traced; for a traced train with the organic loop
+closed, use the [modules](#separation-trains).
+
 (extractstripcircuit)=
 ### ExtractStripCircuit
 

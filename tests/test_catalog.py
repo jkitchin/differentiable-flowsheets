@@ -217,16 +217,16 @@ class TestPorts:
     def test_the_ports_left_unknown_are_the_ones_that_cannot_be_known(self, cat):
         """Guard against the count creeping back up.
 
-        What remains is honest: the REE circuits return a dict of named
-        streams, Splitter's width is a call argument, the crude unit's
-        products (with or without its preheat train in front) are whatever
-        side products its column declares (and a gas plant column's
-        likewise), and two
-        entries are model objects with no `__call__` at all.
+        What remains is honest: a split-shell cascade has one side-draw
+        per section of its ``split_points`` and a separation train one
+        product per step its parameters switch on, Splitter's width is a
+        call argument, the crude unit's products (with or without its
+        preheat train in front) are whatever side products its column
+        declares (and a gas plant column's likewise), and two entries are
+        model objects with no `__call__` at all.
         """
         unknown = {n for n, s in cat.items() if s.ports.n_outlets is None}
         assert unknown == {
-            "ExtractStripCircuit", "ExtractScrubStripCircuit",
             "FullSeparationTrain", "SplitShellCascade",
             "Splitter", "LLEEquilibrium", "TFF",
         } | ({"CrudeDistillationUnit", "CrudeUnitWithPreheat", "GasPlantColumn"} & set(cat))
@@ -266,6 +266,22 @@ class TestPorts:
         for name in ("FedBatchReactor", "SemiBatchReactor"):
             assert cat[name].ports.inlets == [], name
             assert "C0" in {p.name for p in cat[name].call_parameters}, name
+
+    @pytest.mark.parametrize("name,inlets,roles", [
+        ("ExtractStripCircuit", ["feed"],
+         ["raffinate", "product", "barren_organic"]),
+        ("ExtractScrubStripCircuit", ["feed"],
+         ["raffinate", "scrub_liquor", "product", "barren_organic"]),
+    ])
+    def test_the_ree_circuits_have_stream_outlets(self, cat, name, inlets, roles):
+        """The circuits return one results dict; the palette registers
+        stream-returning entries under their names."""
+        if name not in cat:
+            pytest.skip("difflow_ree is not installed")
+        ports = cat[name].ports
+        assert ports.inlets == inlets
+        assert ports.n_outlets == len(roles)
+        assert ports.outlet_roles == roles
 
 
 # =============================================================================

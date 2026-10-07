@@ -227,6 +227,12 @@ from difflow_ree.flowsheets import (
     SeparationTrainParams,
     GroupSeparator,
 )
+from difflow_ree.flowsheets.palette import (
+    ExtractStripUnit,
+    ExtractScrubStripUnit,
+    SplitShellUnit,
+    SeparationTrainUnit,
+)
 
 # =============================================================================
 # Economics
@@ -391,10 +397,14 @@ def register(registry):
         plugin="difflow_ree",
     )
 
-    # Register flowsheet templates
+    # Register flowsheet templates. The palette names are the circuits',
+    # the classes are their stream-returning palette entries: the circuits
+    # return one results dict, which a flowsheet handed downstream as if it
+    # were a stream (audit of the core outlets). The circuits stay the
+    # library API for a script that reads the results by key.
     registry.register(
         name="ExtractStripCircuit",
-        cls=ExtractStripCircuit,
+        cls=ExtractStripUnit,
         category="ree_flowsheets",
         description="Basic 2-section extract-strip circuit",
         plugin="difflow_ree",
@@ -402,7 +412,7 @@ def register(registry):
 
     registry.register(
         name="ExtractScrubStripCircuit",
-        cls=ExtractScrubStripCircuit,
+        cls=ExtractScrubStripUnit,
         category="ree_flowsheets",
         description="Industrial 3-section extract-scrub-strip circuit",
         plugin="difflow_ree",
@@ -410,7 +420,7 @@ def register(registry):
 
     registry.register(
         name="SplitShellCascade",
-        cls=SplitShellCascade,
+        cls=SplitShellUnit,
         category="ree_flowsheets",
         description="Multi-product split-shell cascade design",
         plugin="difflow_ree",
@@ -418,7 +428,7 @@ def register(registry):
 
     registry.register(
         name="FullSeparationTrain",
-        cls=FullSeparationTrain,
+        cls=SeparationTrainUnit,
         category="ree_flowsheets",
         description="Complete REE separation train",
         plugin="difflow_ree",
@@ -631,6 +641,11 @@ __all__ = [
     "FullSeparationTrain",
     "SeparationTrainParams",
     "GroupSeparator",
+    # Palette entries for the circuits: stream outlets, for a flowsheet
+    "ExtractStripUnit",
+    "ExtractScrubStripUnit",
+    "SplitShellUnit",
+    "SeparationTrainUnit",
     # Economics
     "REEPricing",
     "ReagentCosts",
