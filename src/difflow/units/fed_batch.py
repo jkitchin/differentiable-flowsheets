@@ -17,7 +17,8 @@ where:
 All calculations are JAX-compatible for automatic differentiation.
 """
 
-from typing import Callable, Literal, Any
+from collections.abc import Mapping
+from typing import Callable, Literal, Any, TypeAlias
 from dataclasses import dataclass
 
 from difflow.params_mixin import ParamsMixin
@@ -47,6 +48,14 @@ FeedProfile = Callable[[Array], Array]  # t -> F(t)
 
 # Type alias for parameters
 Params = dict[str, Any]
+
+#: Concentrations by bare species name (mol/m^3), e.g. ``{"A": 1000.0}``.
+#: Deliberately NOT spelled ``dict[str, Array | float]``: that is exactly
+#: the :data:`~difflow.streams.Stream` alias, so the catalog read ``C0`` as
+#: an inlet stream, while the code reads bare species keys from it, which
+#: a Stream (``F_A``, ``T``, ``P``) does not have (audit of the core
+#: outlets).
+Concentrations: TypeAlias = Mapping[str, Array | float]
 
 
 @dataclass(repr=False)
@@ -136,7 +145,7 @@ class FedBatchReactor:
 
     def __call__(
         self,
-        C0: dict[str, Array | float],
+        C0: Concentrations,
         T0: Array | float,
         P: Array | float,
         t_final: Array | float,

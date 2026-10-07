@@ -409,6 +409,34 @@ class TestCoupledSmall:
         np.testing.assert_allclose(named["residue"]["T"], r.train.hot_outlet_T["residue"])
         np.testing.assert_allclose(named["brine"]["F_water"], r.train.desalter["brine"])
 
+    def test_inlet_water_is_not_discarded(self, small_unit):
+        """Audit (2026-10): the operation replaced the stream's water by the
+        train's tank_water BS&W, so 0 and 50 mol/s of inlet water gave the
+        same outlets and balances() (which recomputed the BS&W) still closed.
+        The stream's water now joins the BS&W."""
+        op, feed, r = small_unit
+        extra = 50.0
+        wet = dict(feed, F_water=extra)
+        out = op(wet)
+        rw = op.last_result
+        assert bool(rw.converged)
+        named = dict(zip(op.outlet_names, out))
+        # The desalter holds the desalted crude's water at its spec, so the
+        # extra water leaves in the brine.
+        np.testing.assert_allclose(named["brine"]["F_water"],
+                                   r.train.desalter["brine"] + extra, rtol=1e-10)
+        # Every water outlet, against everything that brought water in.
+        p = op.unit.column_params
+        steam = float(p.bottom_steam) + sum(float(s.steam) for s in p.side_products
+                                            if s.stripper_stages > 0)
+        w_in = float(r.feed["F_water"]) + extra + float(rw.train.desalter["wash_water"]) + steam
+        w_out = sum(float(s["F_water"]) for s in out)
+        assert w_out == pytest.approx(w_in, rel=1e-10)
+        b = op.unit.balances(rw)
+        assert float(b["water"][0]) == pytest.approx(w_in, rel=1e-10)
+        for k, (_, _, rel) in b.items():
+            assert abs(float(rel)) < 1e-8, k
+
     def test_planning_block(self, small_unit):
         from difflow_refinery.column import BARREL
         from difflow_refinery.planning import available_levers, cdu_block

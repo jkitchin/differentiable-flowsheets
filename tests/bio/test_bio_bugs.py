@@ -274,7 +274,7 @@ class TestChromatographyMassBalance:
         )
         col = IonExchangeChromatography(params)
         total_flow = sum(get_flows(feed).values())
-        (product, waste), info = col(feed, load_volume=total_flow)
+        (product, waste), info = col(feed)
 
         product_flows = get_flows(product)
         waste_flows = get_flows(waste)
@@ -308,7 +308,7 @@ class TestChromatographyMassBalance:
         )
         col = SizeExclusionChromatography(params)
         total_flow = sum(get_flows(feed).values())
-        (product, aggregates, fragments), info = col(feed, load_volume=total_flow)
+        (product, aggregates, fragments), info = col(feed)
 
         product_flows = get_flows(product)
         agg_flows = get_flows(aggregates)

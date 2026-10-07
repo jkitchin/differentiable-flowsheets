@@ -31,26 +31,28 @@ Continuous bioreactors are used for:
 ```python
 @dataclass
 class BioreactorParams:
-    volume: float           # Reactor volume (m³)
-    mu_max: float          # Maximum specific growth rate (1/h)
-    K_s: float             # Monod substrate saturation constant (g/L)
+    V: float               # Reactor volume (L)
     Y_xs: float            # Biomass yield on substrate (g cell/g substrate)
-    Y_px: float            # Product yield on biomass (g product/g cell)
+    kinetic_fn: Callable   # Growth kinetics mu(S, params) or mu(S, X, params)
+    kinetic_params: dict   # Passed to kinetic_fn, e.g. {"mu_max": 0.4, "K_s": 0.5}
     k_d: float = 0.0       # Cell death rate (1/h)
     m_s: float = 0.0       # Maintenance coefficient (g substrate/g cell/h)
     alpha: float = 0.0     # Growth-associated product formation (g/g)
     beta: float = 0.0      # Non-growth-associated product formation (g/g/h)
-    K_i: float = None      # Substrate inhibition constant (g/L)
-    K_p: float = None      # Product inhibition constant (g/L)
+    species_order: list = ["cells", "substrate", "product"]
 ```
+
+The growth law is the `kinetic_fn`: `monod_kinetics` reads `mu_max` and
+`K_s` from `kinetic_params`, and the inhibition models
+(`substrate_inhibition_kinetics`, ...) read their own constants from the same dict.
 
 #### Inputs
 
 | Parameter | Type | Units | Description |
 |-----------|------|-------|-------------|
-| `inlet` | Stream | - | Feed stream with substrate concentration |
+| `inlet` | Stream | - | Feed stream; its `substrate` entry is the feed substrate concentration $S_f$ |
 | `D` | float | 1/h | Dilution rate (F/V) |
-| `S_f` | float | g/L | Feed substrate concentration |
+| `F` | float | L/h | Volumetric feed rate, used when `D` is None ($D = F/V$) |
 
 #### Outputs
 
@@ -118,22 +120,25 @@ $$D_{opt} = \mu_{max} \left(1 - \sqrt{\frac{K_s}{K_s + S_f}}\right)$$
 #### Example Usage
 
 ```python
-from difflow_bio.units.bioreactors import ContinuousBioreactor, BioreactorParams
+from difflow.streams import make_stream
+from difflow_bio.units.bioreactors import (
+    BioreactorParams, ContinuousBioreactor, monod_kinetics)
 
 params = BioreactorParams(
-    volume=10.0,        # m³
-    mu_max=0.4,         # 1/h
-    K_s=0.5,            # g/L
-    Y_xs=0.5,           # g/g
-    Y_px=0.1,           # g/g
+    V=10.0,                                       # L
+    Y_xs=0.5,                                     # g/g
+    kinetic_fn=monod_kinetics,
+    kinetic_params={"mu_max": 0.4, "K_s": 0.5},   # 1/h, g/L
     alpha=0.05,         # growth-associated
-    beta=0.01           # non-growth-associated
+    beta=0.01,          # non-growth-associated
+    species_order=["cells", "substrate", "product"],
 )
 
 bioreactor = ContinuousBioreactor(params)
+# S_f = 50 g/L is the substrate entry of the feed, not a call argument
 feed = make_stream({'substrate': 50.0, 'cells': 0.0, 'product': 0.0}, T=310.0, P=101325.0)
 
-outlet, info = bioreactor(feed, D=0.2, S_f=50.0)
+outlet, info = bioreactor(feed, D=0.2)
 print(f"Cell concentration: {info['X']:.2f} g/L")
 print(f"Productivity: {info['productivity']:.3f} g/L/h")
 ```
@@ -266,7 +271,7 @@ $$\mu = \mu_{max} \frac{S}{K_s + S}$$
 ```python
 from difflow_bio.units.bioreactors import monod_kinetics
 
-mu = monod_kinetics(S=5.0, mu_max=0.4, K_s=0.5)
+mu = monod_kinetics(5.0, {"mu_max": 0.4, "K_s": 0.5})
 ```
 
 #### Substrate Inhibition (Andrews/Haldane)
@@ -276,7 +281,7 @@ $$\mu = \mu_{max} \frac{S}{K_s + S + S^2/K_i}$$
 ```python
 from difflow_bio.units.bioreactors import substrate_inhibition_kinetics
 
-mu = substrate_inhibition_kinetics(S=5.0, mu_max=0.4, K_s=0.5, K_i=50.0)
+mu = substrate_inhibition_kinetics(5.0, {"mu_max": 0.4, "K_s": 0.5, "K_i": 50.0})
 ```
 
 #### Product Inhibition
@@ -286,7 +291,8 @@ $$\mu = \mu_{max} \frac{S}{K_s + S} \left(1 - \frac{P}{P_{max}}\right)^n$$
 ```python
 from difflow_bio.units.bioreactors import product_inhibition_kinetics
 
-mu = product_inhibition_kinetics(S=5.0, P=10.0, mu_max=0.4, K_s=0.5, P_max=100.0, n=1)
+mu = product_inhibition_kinetics(
+    5.0, 10.0, {"mu_max": 0.4, "K_s": 0.5, "P_max": 100.0, "n": 1})
 ```
 
 #### Contois Kinetics (High Cell Density)
@@ -296,7 +302,7 @@ $$\mu = \mu_{max} \frac{S}{K_{sX} X + S}$$
 ```python
 from difflow_bio.units.bioreactors import contois_kinetics
 
-mu = contois_kinetics(S=5.0, X=50.0, mu_max=0.4, K_sx=0.1)
+mu = contois_kinetics(5.0, 50.0, {"mu_max": 0.4, "K_s": 0.1})   # K_s is K_sX here
 ```
 
 #### Utility Functions
@@ -306,13 +312,17 @@ from difflow_bio.units.bioreactors import (
     dilution_rate,
     residence_time,
     optimal_dilution_rate,
-    washout_dilution_rate,
-    productivity
 )
 
 D = dilution_rate(F=100.0, V=500.0)  # 0.2 1/h
-tau = residence_time(V=500.0, F=100.0)  # 5 h
-D_opt = optimal_dilution_rate(mu_max=0.4, K_s=0.5, S_f=50.0)
+tau = residence_time(D)  # 5 h
+D_opt = optimal_dilution_rate({"mu_max": 0.4, "K_s": 0.5, "S_f": 50.0})
+```
+
+The washout dilution rate is a method of the reactor,
+`ContinuousBioreactor.washout_dilution_rate()`.
+
+```python
 ```
 
 ---
@@ -342,13 +352,18 @@ Centrifugation is used for:
 ```python
 @dataclass
 class CentrifugeParams:
-    sigma: float           # Sigma factor (equivalent settling area, m²)
-    efficiency: float      # Separation efficiency (0-1)
-    particle_diameter: float  # Mean particle diameter (m)
-    particle_density: float   # Particle density (kg/m³)
-    fluid_density: float      # Fluid density (kg/m³)
-    fluid_viscosity: float    # Fluid dynamic viscosity (Pa·s)
+    sigma: float                    # Sigma factor (equivalent settling area, m²)
+    efficiency: float = 0.7         # Separation efficiency (0-1)
+    species_order: list = None
+    cell_species: str = "cells"
+    lysis_threshold_g: float = None # RCF above which cells lyse (x g)
+    lysis_coefficient: float = 0.0  # Lysed fraction per unit RCF above threshold
+    lysate_species: str = "lysate"
 ```
+
+The particle and fluid properties are call arguments, not parameters:
+`d_particle` (m), `rho_particle` and `rho_fluid` (kg/m³), `viscosity`
+(Pa·s), plus `concentrate_fraction` and `rcf`.
 
 #### Inputs
 
@@ -363,8 +378,13 @@ class CentrifugeParams:
 |-----------|------|-------|-------------|
 | `concentrate` | Stream | - | Concentrated cells/solids |
 | `supernatant` | Stream | - | Clarified liquid |
-| `info['recovery']` | float | - | Cell/particle recovery |
-| `info['clarity']` | float | - | Supernatant clarity |
+| `info['cell_recovery']` | float | - | Fraction of the cells sent to the concentrate |
+| `info['separation_efficiency']` | float | - | Sigma-theory capture efficiency |
+| `info['stokes_velocity']` | float | m/s | Settling velocity of the mean particle |
+| `info['critical_diameter']` | float | m | Particle size captured at 50% efficiency at this throughput |
+| `info['Q_critical']` | float | m³/s | Sigma-theory critical throughput, $2 v_s \Sigma$ |
+| `info['concentration_factor']` | float | - | Cell concentration, concentrate over feed |
+| `info['lysis_fraction']`, `info['lysate_released']` | float | - | Shear lysis (zero unless `lysis_threshold_g` is set) |
 
 #### Governing Equations
 
@@ -410,22 +430,21 @@ Where N is rotational speed (rev/s).
 #### Example Usage
 
 ```python
+from difflow.streams import make_stream
 from difflow_bio.units.centrifuge import Centrifuge, CentrifugeParams
 
-params = CentrifugeParams(
-    sigma=5000.0,           # m²
-    efficiency=0.95,
-    particle_diameter=5e-6,  # 5 μm cells
-    particle_density=1050.0, # kg/m³
-    fluid_density=1000.0,    # kg/m³
-    fluid_viscosity=0.001    # Pa·s
-)
+params = CentrifugeParams(sigma=5000.0, efficiency=0.95)   # m², -
 
 centrifuge = Centrifuge(params)
 feed = make_stream({'cells': 50.0, 'broth': 950.0}, T=298.0, P=101325.0)
 
-concentrate, supernatant, info = centrifuge(feed, Q=0.001)  # 1 L/s = 3.6 m³/h
-print(f"Cell recovery: {info['recovery']:.2%}")
+# particle and fluid properties are call arguments
+concentrate, supernatant, info = centrifuge(
+    feed, Q=0.001,              # 1 L/s = 3.6 m³/h
+    d_particle=5e-6,            # 5 μm cells
+    rho_particle=1050.0, rho_fluid=1000.0, viscosity=0.001,
+)
+print(f"Cell recovery: {info['cell_recovery']:.2%}")
 ```
 
 ---
@@ -530,19 +549,35 @@ Ultrafiltration is used for:
 ```python
 @dataclass
 class UltrafiltrationParams:
-    MWCO: float            # Molecular weight cutoff (Da)
-    membrane_area: float   # Membrane area (m²)
-    TMP: float            # Transmembrane pressure (Pa)
-    flux_coefficient: float  # Clean water flux coefficient
-    concentration_factor: float  # Target concentration factor
+    membrane_area: float           # Membrane area (m²); sets the process time only
+    MWCO: float = 30.0             # Molecular weight cutoff (kDa), rejected at 90%
+    rejection: dict = {}           # species -> R, overrides the MWCO-derived value
+    molecular_weights: dict = {}   # species -> MW (kDa), overrides the tables
+    Lp: float = 50.0               # Permeability (L/m²/h/bar)
+    k_mass: float = 5e-6           # Mass transfer coefficient (m/s)
+    sigma: float = 1000.0          # Osmotic pressure coefficient (Pa·m³/kg)
+    fouling_coefficient: float = 0.0  # Flux decline per L permeate (1/L)
+    species_order: list = None
 ```
+
+Each species' rejection is its entry in `rejection` if there is one, and
+otherwise follows the MWCO against its molecular weight, looked up in
+`molecular_weights`, then `difflow_bio.database.BIO_SPECIES_MW_KDA`
+(mAb 150 kDa, aggregates 300, fragments 50, HCP 50, DNA 330, and small
+solutes; representative values), then the core species database. A species
+with no molecular weight anywhere passes freely ($R = 0$), the right default
+for buffer components. `membrane_area` does not change the split (sieving is
+per unit area); given `feed_volume` (L) in the call, the unit reports
+`info['process_time_h']`, the permeate volume over flux times area.
 
 #### Inputs
 
 | Parameter | Type | Units | Description |
 |-----------|------|-------|-------------|
 | `inlet` | Stream | - | Feed stream |
-| `CF` | float | - | Concentration factor (optional override) |
+| `concentration_factor` | float | - | Volume concentration factor (required) |
+| `TMP` | float | bar | Transmembrane pressure (default 1.0) |
+| `mode` | str | - | `"batch"` (default) or `"continuous"` |
 
 #### Outputs
 
@@ -551,7 +586,13 @@ class UltrafiltrationParams:
 | `retentate` | Stream | - | Concentrated product |
 | `permeate` | Stream | - | Permeate (removed species) |
 | `info['flux']` | float | LMH | Permeate flux (L/m²/h) |
-| `info['rejection']` | Array | - | Rejection coefficient per species |
+| `info['recovery']` | dict | - | Fraction of each species kept in the retentate |
+| `info['concentration_factor']`, `info['volume_reduction']`, `info['retentate_volume_fraction']` | float | - | Volume bookkeeping |
+| `info['fouling_factor']` | float | - | Flux decline from fouling (1 when off) |
+| `info['rejection']` | dict | - | Rejection used for each species: the `rejection` override, else the MWCO-derived value |
+
+The call returns `((retentate, permeate), info)`: the two streams are
+nested in a tuple of their own.
 
 #### Governing Equations
 
@@ -571,9 +612,13 @@ Where:
 
 $$R_i = 1 - \frac{C_{i,permeate}}{C_{i,retentate}}$$
 
-For a sharp MWCO:
-- Species with $MW > MWCO$: $R \approx 1$ (fully retained)
-- Species with $MW < MWCO$: $R \approx 0$ (freely permeating)
+From the MWCO (`rejection_from_mw`), a logistic sieving curve in
+$\ln MW$ with $R = 0.9$ at the cutoff, the nominal rating:
+
+$$R = \left[1 + \tfrac{1}{9}\left(\frac{MW}{MWCO}\right)^{-3}\right]^{-1}$$
+
+so a solute five times the cutoff (a 150 kDa mAb on a 30 kDa membrane) is
+rejected at more than 99.9% and a small solute passes freely.
 
 **Concentration Factor**:
 
@@ -603,21 +648,21 @@ Where $C_g$ is the gel concentration (limiting).
 #### Example Usage
 
 ```python
+from difflow.streams import make_stream
 from difflow_bio.units.filtration import Ultrafiltration, UltrafiltrationParams
 
 params = UltrafiltrationParams(
-    MWCO=30000,          # 30 kDa
-    membrane_area=5.0,    # m²
-    TMP=200000,          # 2 bar
-    flux_coefficient=100, # LMH/bar
-    concentration_factor=10
+    membrane_area=5.0,                       # m²
+    MWCO=30.0,                               # kDa
+    rejection={"mAb": 0.999, "HCP": 0.5},    # buffer passes freely
+    Lp=100.0,                                # LMH/bar
 )
 
 uf = Ultrafiltration(params)
 feed = make_stream({'mAb': 2.0, 'HCP': 0.5, 'buffer': 997.5}, T=298.0, P=101325.0)
 
-retentate, permeate, info = uf(feed)
-print(f"mAb concentration: {retentate['mAb']:.1f} g/L")
+(retentate, permeate), info = uf(feed, concentration_factor=10.0, TMP=2.0)
+print(f"mAb in retentate: {retentate['F_mAb']:.3f}")
 print(f"Flux: {info['flux']:.1f} LMH")
 ```
 
@@ -644,10 +689,24 @@ Diafiltration is used for:
 
 ```python
 @dataclass
-class DiafiltrationParams(UltrafiltrationParams):
-    diavolumes: float      # Number of diavolumes
-    mode: str = 'constant_volume'  # 'constant_volume' or 'discontinuous'
+class DiafiltrationParams:
+    membrane_area: float           # Membrane area (m²); sets the process time only
+    MWCO: float = 30.0             # kDa; rejection as for Ultrafiltration
+    rejection: dict = {}
+    molecular_weights: dict = {}
+    Lp: float = 50.0
+    k_mass: float = 5e-6
+    sigma: float = 1000.0
+    fouling_coefficient: float = 0.0
 ```
+
+The call is `df(inlet, buffer, n_diavolumes=None, TMP=1.0, feed_volume=None)`
+and returns `((retentate, permeate), info)`. With `n_diavolumes=None` the
+buffer stream is the buffer fed: it enters the balance and sets
+$N_{DV}$ = buffer / inlet (amounts as the volume proxy). With
+`n_diavolumes` given, only the buffer's composition is used, scaled to
+$N_{DV}$ times the inlet, and `info['buffer_consumed']` is the buffer that
+entered, so retentate + permeate = inlet + buffer consumed for every species.
 
 #### Governing Equations
 
@@ -662,6 +721,12 @@ $$\frac{C}{C_0} = \exp(-N_{DV}(1-R))$$
 For freely permeating species ($R = 0$):
 
 $$\frac{C}{C_0} = \exp(-N_{DV})$$
+
+**Buffer wash-in** of a species fed at $C_b$ with sieving $s = 1 - R$:
+
+$$\frac{C}{C_b} = \frac{1 - \exp(-s N_{DV})}{s}$$
+
+which tends to $N_{DV}$ (everything added stays) as $R \to 1$.
 
 **Required Diavolumes** for target removal:
 
@@ -680,20 +745,16 @@ $$N_{DV} = -\frac{\ln(C/C_0)}{1-R}$$
 ```python
 from difflow_bio.units.filtration import Diafiltration, DiafiltrationParams
 
-params = DiafiltrationParams(
-    MWCO=30000,
-    membrane_area=5.0,
-    TMP=150000,
-    diavolumes=5,
-    mode='constant_volume'
-)
+params = DiafiltrationParams(MWCO=30.0, membrane_area=5.0)  # 30 kDa
 
 df = Diafiltration(params)
 feed = make_stream({'mAb': 10.0, 'salt': 150.0, 'buffer': 840.0}, T=298.0, P=101325.0)
-new_buffer = make_stream({'salt': 0.0, 'new_buffer': 1000.0}, T=298.0, P=101325.0)
+new_buffer = make_stream({'new_buffer': 5000.0}, T=298.0, P=101325.0)  # 5 diavolumes
 
-retentate, permeate, info = df(feed, buffer=new_buffer)
-print(f"Salt removal: {1 - retentate['salt']/feed['salt']:.1%}")
+(retentate, permeate), info = df(feed, new_buffer)
+print(f"Diavolumes: {float(info['n_diavolumes']):.1f}")
+print(f"Salt removal: {1 - float(retentate['F_salt'] / feed['F_salt']):.1%}")
+print(f"mAb kept: {float(retentate['F_mAb']) / 10.0:.2%}")
 ```
 
 ---
@@ -718,6 +779,10 @@ print(f"Salt removal: {1 - retentate['salt']/feed['salt']:.1%}")
 1. **Concentration**: UF mode to reduce volume
 2. **Diafiltration**: Buffer exchange at constant volume
 3. **UF/DF Sequence**: Concentrate → Diafiltrate → Final concentration
+
+`TFF.uf_df_uf(inlet, buffer, CF_initial, n_diavolumes, CF_final)` returns
+`((product, uf1_permeate, df_permeate, uf2_permeate), info)`; the four
+streams sum to the inlet plus `info['buffer_consumed']` for every species.
 
 ---
 
@@ -763,7 +828,7 @@ class ProteinAParams:
 |-----------|------|-------|-------------|
 | `inlet` | Stream | - | Feed stream with mAb (component flows as mass) |
 | `load_volume` | float or None | L | Volume of feed loaded. `None` (default) loads the whole inlet; the column capacity, $DBC \cdot V_{column}$, then limits what binds and the excess breaks through |
-| `feed_volume` | float | L | Total feed volume, so `load_volume / feed_volume` is the fraction loaded |
+| `feed_volume` | float | L | Total feed volume, so `load_volume / feed_volume` is the fraction loaded. Required with `load_volume` (the stream carries amounts, not a volume; a `ValueError` says so). With it, the capacity uses the Langmuir loading at the feed concentration, $q_{max} C/(K_d + C)$ |
 
 #### Outputs
 
@@ -771,12 +836,11 @@ class ProteinAParams:
 |-----------|------|-------|-------------|
 | `product` | Stream | - | Elution pool (purified mAb) |
 | `waste` | Stream | - | Flow-through, wash and column losses |
-| `info['yield']` | float | - | Eluted / loaded target |
+| `info['yield']` | float | - | Target in the product / target in the inlet (feed not loaded counts as lost) |
 | `info['purity']` | float | - | Product purity |
 | `info['mass_loaded']`, `info['mass_bound']` | float | mass | Target loaded and bound (bound is capped by capacity) |
 | `info['capacity_utilization']` | float | - | Bound mass / column capacity |
 | `info['impurity_clearance']` | dict | LRV | Clearance applied per impurity |
-| `info['DNA_LRV']` | float | - | DNA log reduction value |
 | `info['DBC']` | float | g/L | Dynamic binding capacity |
 
 #### Process Steps
@@ -878,7 +942,14 @@ class IEXParams:
 
 CEX and AEX are the same unit; `mode` and the parameters say which one it
 is. `load_volume` (L) is optional when calling it, and `None` loads the
-whole inlet.
+whole inlet; a partial load needs `feed_volume` (L) as well. The column
+holds at most $q \cdot V_{column}$, with $q = q_{max} C / (K_d + C)$ when the
+feed concentration is known (`feed_concentration`, or the amount over
+`feed_volume`) and $q = q_{max}$ otherwise. In bind-elute mode target beyond
+that capacity breaks through to waste; in flow-through mode the impurity
+binding is scaled down to fit it. `info['yield']` is the target in the
+product over the target in the inlet, and `info['capacity']` reports the
+capacity used.
 
 #### Impurity clearance
 

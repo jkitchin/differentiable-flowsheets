@@ -217,19 +217,71 @@ class TestPorts:
     def test_the_ports_left_unknown_are_the_ones_that_cannot_be_known(self, cat):
         """Guard against the count creeping back up.
 
-        What remains is honest: the REE circuits return a dict of named
-        streams, Splitter's width is a call argument, the crude unit's
-        products (with or without its preheat train in front) are whatever
-        side products its column declares (and a gas plant column's
-        likewise), and two
-        entries are model objects with no `__call__` at all.
+        What remains is honest: a split-shell cascade has one side-draw
+        per section of its ``split_points`` and a separation train one
+        product per step its parameters switch on, Splitter's width is a
+        call argument, the crude unit's products (with or without its
+        preheat train in front) are whatever side products its column
+        declares (and a gas plant column's likewise), and two entries are
+        model objects with no `__call__` at all.
         """
         unknown = {n for n, s in cat.items() if s.ports.n_outlets is None}
         assert unknown == {
-            "ExtractStripCircuit", "ExtractScrubStripCircuit",
             "FullSeparationTrain", "SplitShellCascade",
             "Splitter", "LLEEquilibrium", "TFF",
         } | ({"CrudeDistillationUnit", "CrudeUnitWithPreheat", "GasPlantColumn"} & set(cat))
+
+    @pytest.mark.parametrize("name,n_outlets", [
+        ("Ultrafiltration", 2),
+        ("Diafiltration", 2),
+        ("ProteinAChromatography", 2),
+        ("IonExchangeChromatography", 2),
+        ("SizeExclusionChromatography", 3),
+        ("PowerSplit", 2),
+        ("BranchFlow", 2),
+    ])
+    def test_a_nested_return_counts_its_inner_streams(self, cat, name, n_outlets):
+        """``tuple[tuple[Stream, Stream], dict]`` used to count as zero.
+
+        Only top-level entries were looked at, so seven units had no
+        outlets at all and an editor drew one (audit of the core outlets).
+        """
+        if name not in cat:
+            pytest.skip(f"{name}'s plugin is not installed")
+        assert cat[name].ports.n_outlets == n_outlets
+
+    def test_no_operation_that_returns_streams_has_zero_outlets(self, cat):
+        """The guard above checks None; a zero is a silent miscount.
+
+        Every registered operation with a ``__call__`` returns at least
+        one stream, so a count of zero is always a reading error.
+        """
+        zero = sorted(n for n, s in cat.items() if s.ports.n_outlets == 0)
+        assert zero == []
+
+    def test_concentrations_are_not_an_inlet(self, cat):
+        """``C0`` was annotated exactly as the Stream alias, so the catalog
+        drew the fed-batch reactors an inlet the code reads bare species
+        keys from (audit of the core outlets)."""
+        for name in ("FedBatchReactor", "SemiBatchReactor"):
+            assert cat[name].ports.inlets == [], name
+            assert "C0" in {p.name for p in cat[name].call_parameters}, name
+
+    @pytest.mark.parametrize("name,inlets,roles", [
+        ("ExtractStripCircuit", ["feed"],
+         ["raffinate", "product", "barren_organic"]),
+        ("ExtractScrubStripCircuit", ["feed"],
+         ["raffinate", "scrub_liquor", "product", "barren_organic"]),
+    ])
+    def test_the_ree_circuits_have_stream_outlets(self, cat, name, inlets, roles):
+        """The circuits return one results dict; the palette registers
+        stream-returning entries under their names."""
+        if name not in cat:
+            pytest.skip("difflow_ree is not installed")
+        ports = cat[name].ports
+        assert ports.inlets == inlets
+        assert ports.n_outlets == len(roles)
+        assert ports.outlet_roles == roles
 
 
 # =============================================================================

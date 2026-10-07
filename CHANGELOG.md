@@ -6,6 +6,57 @@ All notable changes to difflow are recorded here. The format follows
 
 ## [Unreleased]
 
+### Breaking
+
+- Flowsheets read a unit's result with one shared reader that tells a Stream
+  from an info dict by its keys and understands `((S, S), info)`; a unit that
+  returns a different number of streams than it has outlets now raises
+  instead of dropping the extras. The catalog counts streams inside a nested
+  leading tuple, so Ultrafiltration, Diafiltration, the three chromatography
+  units, PowerSplit and BranchFlow have their real outlet counts (was 0).
+  `FedBatchReactor`/`SemiBatchReactor` no longer list `C0` as an inlet.
+- REE circuits pick any section pH left unset from the extractant's own D
+  curves (extraction, scrub and strip each at their cut for the circuit's
+  elements and targets), replacing fixed fractions of the fitted window that
+  no longer separated after the #270 refit; the design helpers size stages
+  from the actual D. `REEStripper`'s `acid_conc` sets the strip pH; TBP
+  circuits strip at their own `strip_nitrate_conc`; FullSeparationTrain runs
+  its cerium oxidizer at the oxidizer's temperature (Ce removal 8% -> 81%).
+  The ExtractStrip, ExtractScrubStrip, SplitShell and SeparationTrain palette
+  operations return streams. Precipitators are limited by the reagent fed and
+  pass non-REE species through.
+- Carbon capture: `AmineAbsorber` capture is bounded by the absorption factor
+  (A < 1 gave near-total capture) and uses `solvent_in` when given; the rich
+  solvent carries total CO2. `MembraneSeparator` solves the per-species flux
+  balance and `feed_pressure` defaults to the stream's; `CompressionTrain`
+  compresses from the stream pressure (`P_inlet` defaults to None).
+  `SolidSorbentDAC` capture is bounded by the air fed.
+- `IsomerizationUnit` refuses feed species it does not model and keeps feed
+  H2 above its target; `CrudeUnitWithPreheat` adds the inlet stream's water to
+  the tank water; `build_ladder_flowsheet` carries root loads, shunts,
+  generators and reversed taps.
+
+- `Ultrafiltration`/`Diafiltration` set each species' rejection from the MWCO
+  and its molecular weight (new `difflow_bio.database.BIO_SPECIES_MW_KDA`,
+  `molecular_weights` parameter); with no `rejection` given they passed a
+  150 kDa mAb freely. `rejection_from_mw` puts R = 0.9 at the cutoff (was
+  0.5). `Diafiltration`'s buffer stream is the buffer consumed when
+  `n_diavolumes` is omitted (now optional); with it given, the scaled buffer
+  is `info['buffer_consumed']`. `TFF.uf_df_uf` returns
+  `((product, perm1, perm2, perm3), info)`.
+- Chromatography: `load_volume` needs `feed_volume` (it was divided by the
+  stream amount), and `info['yield']` is product out over product in.
+  `IonExchangeChromatography` uses `column_volume`, `q_max` and `K_d` as a
+  binding capacity; Protein A uses `K_d` when the feed concentration is known.
+- `mAbDSPTrain`, `PlatformDSP` and `ViralClearanceTrain` return every outlet
+  in `side_streams`, so product + side streams = feed. `mAbDSPTrain` step
+  yields are against each step's own inlet (adds `tff1`, `tff2`) and its
+  final TFF concentration factor is a volume ratio. `PlatformDSP` rejects
+  `capture_type="mmc"` and polish steps other than cex/aex, and
+  `include_viral_filtration` adds a virus filtration step (default on, 0.97
+  recovery). `ViralClearanceTrain` step methods return `((kept, lost), info)`
+  and low-pH recovery no longer exceeds 0.98.
+
 ## [0.3.0] - 2026-10-06
 
 ### Breaking

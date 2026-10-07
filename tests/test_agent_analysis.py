@@ -97,12 +97,17 @@ class TestDerivatives:
 
 
 class TestOptimizeAndUncertainty:
+    # An SLSQP run is dozens of solves with gradients; under a loaded xdist
+    # run it can pass the Workbench's 300 s default and come back as a
+    # timeout ({"ok": False, "timed_out": True}), which is not what these
+    # tests are about, so they give it room.
     def test_a_bounded_optimum_meets_its_constraint(self):
         bench = Workbench()
         bench.open_example("03_reactor_recycle")
         profit = "20.0 * vapor.F_ethyl_acetate - 0.5 * reactor.V"
         answer = bench.optimize(profit, {"reactor.V": [0.05, 5.0]}, maximize=True,
-                                constraints=[{"expression": PURITY, "ub": 0.33}])
+                                constraints=[{"expression": PURITY, "ub": 0.33}],
+                                timeout=3600)
         assert answer["success"], answer["message"]
         assert answer["constraints"][0]["value"] <= 0.33 + 1e-6
         assert answer["value"] > 20.0 * 0.2554 - 0.25     # better than the start
@@ -111,7 +116,8 @@ class TestOptimizeAndUncertainty:
         bench = Workbench()
         bench.open_example("03_reactor_recycle")
         answer = bench.optimize("-vapor.F_ethyl_acetate + 0.1 * reactor.V",
-                                {"reactor.V": [0.05, 5.0]}, apply=True)
+                                {"reactor.V": [0.05, 5.0]}, apply=True,
+                                timeout=3600)
         assert answer["applied"] == ["reactor.V"]
         assert bench.evaluate(["reactor.V"])["values"]["reactor.V"] == \
             pytest.approx(answer["levers"]["reactor.V"])

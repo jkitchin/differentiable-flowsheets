@@ -622,7 +622,7 @@ The preflash drum alone. It is built from `PreflashDrumUnitParams` (`assay`, `dr
 
 ### CrudeUnitWithPreheat
 
-The whole coupled unit (`PreheatedCrudeUnit`) as a flowsheet operation. It is built from `CrudeUnitWithPreheatParams` (`assay`, `column`, `train`, ...) and called with the tank crude (`op.feed(95_000, T=300.0)`). Its outlets are the column's products, then `"brine"` (with a desalter) and `"drum_water"` (with a drum). A product cooled in the train leaves at the train's outlet temperature, not the column's. `op.last_result` holds the full `PreheatedUnitResult`. The nested train params (exchangers, hot streams, desalter, drum) are plain dataclasses, so the unit round-trips through `difflow.serialize`.
+The whole coupled unit (`PreheatedCrudeUnit`) as a flowsheet operation. It is built from `CrudeUnitWithPreheatParams` (`assay`, `column`, `train`, ...) and called with the tank crude (`op.feed(95_000, T=300.0)`). Its water is the train's `tank_water` BS&W plus the inlet stream's own `F_water` (`op.feed` makes a stream with none). Its outlets are the column's products, then `"brine"` (with a desalter) and `"drum_water"` (with a drum). A product cooled in the train leaves at the train's outlet temperature, not the column's. `op.last_result` holds the full `PreheatedUnitResult`. The nested train params (exchangers, hot streams, desalter, drum) are plain dataclasses, so the unit round-trips through `difflow.serialize`.
 
 ---
 
@@ -1560,7 +1560,8 @@ not have.
 
 The unit around the reactor:
 
-- **Hydrogen is once-through.** The charge is made up to `H2_HC` with pure hydrogen, and what is left leaves in the off-gas. There is no recycle-gas compressor.
+- **Hydrogen is once-through.** The charge is made up to `H2_HC` with pure hydrogen, and what is left leaves in the off-gas. There is no recycle-gas compressor. Hydrogen in the feed counts towards the target; above it the make-up is zero and the excess goes through the reactor with the charge (`info["H2_HC_charge"]` reports the ratio the bed saw).
+- **The feed carries only the sixteen reactor species.** Any other `F_` key (water included) raises `ValueError`, as the `IsomerizationReactor` does; it is never dropped.
 - **The product separator** is one equilibrium stage at `separator_T` (a 1-tray `GasPlantColumn`). The effluent cooler is a specification and its duty is not reported.
 - **The stabilizer is a shortcut, not a tray column.** Hydrogen, ethane and propane go overhead, the pentanes and heavier stay in the bottoms. The fraction of the butanes kept is solved so that the bottoms meet `stabilizer_rvp`. A rigorous stabilizer on the gas-plant column was tried in three layouts. None converged reliably over the compositions the DIH recycle produces, so no stabilizer duty is reported.
 - **The DIP and DIH** are `GasPlantColumn` splitters: the gas plant's Peng-Robinson MESH model on the sixteen species. The DIH has a side draw at `dih_side_tray`, at the rate `dih_side_draw`.

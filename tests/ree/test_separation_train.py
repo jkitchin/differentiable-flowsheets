@@ -597,7 +597,9 @@ def test_regeneration_bleed_removes_the_accumulated_residue():
         ))
         train.add_feed("leach", feed, "sep.feed")
         train.connect("sep.barren_organic", "sap.organic")
-        train.connect("sap.organic", "sep.solvent", allow_species_loss=True)
+        # The counter-ion now rides through the circuit (audit b), so the
+        # loop closes without allow_species_loss.
+        train.connect("sap.organic", "sep.solvent")
         assert train.validate() == ["sep", "sap"]
 
         result = train.solve()

@@ -553,12 +553,12 @@ def _parse_unit_result(
 ) -> dict[str, Stream]:
     """Parse the return value of a unit operation into named streams.
 
-    Handles the various return patterns:
-    - Single stream (dict)
-    - (stream, info) tuple
-    - (stream1, stream2, info) tuple
-    - (stream1, stream2) tuple
-    - Multiple streams matching outlet_names
+    Delegates to :func:`difflow.flowsheet._split_result`, the one reader
+    of unit results, so the equation-oriented solver and the sequential
+    solve cannot disagree about a shape. This used to be its own copy,
+    which (like the sequential one) checked an exact length before the
+    nested ``((S1, S2), info)`` shape and told streams from info by a
+    ``"T"`` key that an info dict may carry too.
 
     Args:
         result: Return value from unit.__call__
@@ -566,39 +566,11 @@ def _parse_unit_result(
 
     Returns:
         Dictionary mapping outlet names to streams
+
+    Raises:
+        ValueError: The result does not hold one stream per outlet.
     """
-    if isinstance(result, dict) and "T" in result:
-        # Single stream returned directly
-        return {outlet_names[0]: result}
+    from difflow.flowsheet import _split_result
 
-    if isinstance(result, tuple):
-        if len(result) == len(outlet_names):
-            # Exact match: each element is an outlet stream
-            return dict(zip(outlet_names, result))
-        elif len(result) == 2 and isinstance(result[1], dict) and "T" not in result[1]:
-            # (stream, info) pattern - info dict without T key
-            stream = result[0]
-            if isinstance(stream, dict) and "T" in stream:
-                return {outlet_names[0]: stream}
-            elif isinstance(stream, tuple):
-                return dict(zip(outlet_names, stream))
-        elif len(result) == len(outlet_names) + 1:
-            # Multiple streams + info dict at end
-            if isinstance(result[-1], dict) and "T" not in result[-1]:
-                return dict(zip(outlet_names, result[:-1]))
-
-    # Last resort: try treating all non-dict-info items as streams
-    streams = {}
-    stream_idx = 0
-    for item in (result if isinstance(result, tuple) else (result,)):
-        if isinstance(item, dict) and "T" in item and stream_idx < len(outlet_names):
-            streams[outlet_names[stream_idx]] = item
-            stream_idx += 1
-
-    if len(streams) == len(outlet_names):
-        return streams
-
-    raise ValueError(
-        f"Could not parse unit result with {len(outlet_names)} outlets: "
-        f"got {type(result)}"
-    )
+    streams, _ = _split_result(result, outlet_names)
+    return dict(zip(outlet_names, streams))

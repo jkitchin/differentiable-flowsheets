@@ -207,43 +207,152 @@ def _update_feed_stream(stream: Stream, updates: dict[str, Any]) -> Stream:
     return new
 
 
+_STREAM_SCALAR_KEYS = frozenset({"T", "P", "phase"})
+
+
+def _is_stream(x: Any) -> bool:
+    """Whether a value a unit returned is a stream rather than an info dict.
+
+    A :data:`~difflow.streams.Stream` is itself a ``dict``, so
+    ``isinstance(x, dict)`` cannot tell an outlet from the info payload
+    that rides beside it: a unit returning ``(S, S)`` with no info had
+    its second stream taken for info whenever the outlet count was off
+    (audit of the outlet parsing). A stream is a dict carrying ``T`` and
+    ``P`` and nothing else but ``F_*`` flows and an optional ``phase``
+    label; an info dict that happens to report a ``T`` is still not one.
+
+    Args:
+        x: Any value.
+
+    Returns:
+        True when ``x`` is a stream.
+
+    Example:
+        >>> _is_stream({"F_A": 1.0, "T": 300.0, "P": 1e5})
+        True
+        >>> _is_stream({"T": 300.0, "P": 1e5, "duty": 2.0})
+        False
+    """
+    if not isinstance(x, dict) or "T" not in x or "P" not in x:
+        return False
+    return all(
+        isinstance(k, str) and (k in _STREAM_SCALAR_KEYS or k.startswith("F_"))
+        for k in x
+    )
+
+
+def _is_info(x: Any) -> bool:
+    """A mapping that is not a stream: a unit's info payload."""
+    return isinstance(x, dict) and not _is_stream(x)
+
+
+def _split_result(
+    result: Any, outlet_names: list[str], unit_name: str = "unit"
+) -> tuple[tuple, dict | None]:
+    """Split a unit's return value into its streams and its info dict.
+
+    Every place that reads a unit's result goes through here (the
+    sequential solve, the optimistix fixed-point path, the info
+    recorder, the equation-oriented solver), so they cannot disagree
+    about a shape; there used to be four copies, and they did. The
+    shapes are a single stream, ``(S1, ..., Sn)``,
+    ``(S1, ..., Sn, info)``, and ``((S1, ..., Sn), info)``.
+
+    The nested shape is recognised FIRST. Checking ``len(result) ==
+    len(outlet_names)`` before it handed a two-outlet Ultrafiltration
+    its ``(retentate, permeate)`` tuple as the first outlet and its info
+    dict as the second, and a one-outlet wiring silently dropped a
+    stream.
+
+    Args:
+        result: What the unit's ``__call__`` returned.
+        outlet_names: The unit's outlet stream names, in order.
+        unit_name: Used in the error message.
+
+    Returns:
+        ``(streams, info)``: the streams in ``__call__`` order and the
+        info dict, or None when the unit returned none.
+
+    Raises:
+        ValueError: A non-stream mapping (a results dict) or a non-dict
+            sits where a stream belongs, or the unit returned a different
+            number of streams than it has outlets (a stream left over
+            used to be dropped without a word).
+
+    Example:
+        >>> s = {"F_A": 1.0, "T": 300.0, "P": 1e5}
+        >>> _split_result(((s, s), {"k": 1}), ["a", "b"])[1]
+        {'k': 1}
+    """
+    if not isinstance(result, tuple):
+        streams, info = (result,), None
+    elif (len(result) == 2 and isinstance(result[0], tuple)
+          and _is_info(result[1])):
+        streams, info = result[0], result[1]
+    elif len(result) >= 2 and _is_info(result[-1]):
+        streams, info = result[:-1], result[-1]
+    else:
+        streams, info = result, None
+
+    for item in streams:
+        if not _is_stream(item):
+            if isinstance(item, dict):
+                what = f"a mapping with keys {sorted(map(str, item))[:8]}"
+                hint = _RESULTS_HINT
+            else:
+                what = f"a {type(item).__name__}"
+                hint = ""
+            raise ValueError(
+                f"Unit {unit_name!r} returned {what} where an outlet stream "
+                "belongs. A unit operation in a flowsheet must return "
+                "streams (dicts of T, P and F_* flows), optionally followed "
+                "by an info dict." + hint
+            )
+    # An info outlet: a unit wired with one outlet more than it returns
+    # streams, and an info dict to put there, carries its info on that
+    # last outlet so the solve hands it back with the streams. The
+    # refinery alkylation unit and its columns are wired this way
+    # (``["effluent", "reactor_info"]``) and read ``streams["<name>_info"]``
+    # after the solve; the old zip-by-length parser allowed it, and the
+    # strict count below must not take it away.
+    if info is not None and len(streams) + 1 == len(outlet_names):
+        return tuple(streams) + (info,), info
+    if len(streams) != len(outlet_names):
+        raise ValueError(
+            f"Unit {unit_name!r} has {len(outlet_names)} outlets "
+            f"{list(outlet_names)} but returned {len(streams)} stream(s)."
+        )
+    return tuple(streams), info
+
+
+#: the hint added when a unit hands back a results dict instead of streams
+_RESULTS_HINT = (
+    " A results dict is not a stream: wire a stream-returning wrapper "
+    "instead (for the REE circuits, the palette entries ExtractStripUnit, "
+    "ExtractScrubStripUnit, SplitShellUnit and SeparationTrainUnit in "
+    "difflow_ree, or the modules in difflow_ree.flowsheets.modules)."
+)
+
+
 def _parse_outlets(result: Any, unit: "Unit") -> dict[str, Stream]:
     """Name the streams a unit returned.
 
     A unit operation may hand back a single stream, a tuple of streams, a
-    tuple of streams with an info dict on the end, or ``(streams, info)``.
-    The mapping onto names is positional in every one of those shapes,
-    which is what makes the order of ``outlet_names`` part of a unit's
-    contract rather than a detail of how it was written down.
+    tuple of streams with an info dict on the end, or ``(streams, info)``
+    (see :func:`_split_result`). The mapping onto names is positional in
+    every one of those shapes, which is what makes the order of
+    ``outlet_names`` part of a unit's contract rather than a detail of
+    how it was written down.
     """
-    if not isinstance(result, tuple):
-        return {unit.outlet_names[0]: result}
-
-    if len(result) == len(unit.outlet_names):
-        return dict(zip(unit.outlet_names, result))
-
-    if len(result) == 2 and isinstance(result[1], dict):
-        outputs = result[0]
-        if isinstance(outputs, tuple):
-            return dict(zip(unit.outlet_names, outputs))
-        return {unit.outlet_names[0]: outputs}
-
-    if len(result) == len(unit.outlet_names) + 1:
-        return dict(zip(unit.outlet_names, result[:-1]))
-
-    raise ValueError(f"Unexpected output from {unit.name}: {len(result)} items")
+    streams, _ = _split_result(result, unit.outlet_names, unit.name)
+    return dict(zip(unit.outlet_names, streams))
 
 
 def _unit_info(result: Any, unit: "Unit") -> dict | None:
-    """The info dict in a unit's result, read the way :func:`_parse_outlets`
-    reads the streams: a tuple as long as the outlets is all streams."""
-    if not isinstance(result, tuple) or len(result) == len(unit.outlet_names):
-        return None
-    if len(result) == 2 and isinstance(result[1], dict):
-        return result[1]
-    if len(result) == len(unit.outlet_names) + 1 and isinstance(result[-1], dict):
-        return result[-1]
-    return None
+    """The info dict in a unit's result, read by the same
+    :func:`_split_result` that :func:`_parse_outlets` reads the streams
+    with, so the two cannot disagree about which entry is which."""
+    return _split_result(result, unit.outlet_names, unit.name)[1]
 
 
 def _initialized_outlets(result: Any, unit: "Unit") -> dict[str, Stream]:
@@ -1300,25 +1409,7 @@ class Flowsheet:
                 inlets = [streams[name] for name in unit.inlet_names]
                 result = unit.operation(*inlets, **unit.params)
 
-                # Parse outputs (same logic as _solve_sequential)
-                if isinstance(result, tuple):
-                    if len(result) == len(unit.outlet_names):
-                        for name, stream in zip(unit.outlet_names, result):
-                            streams[name] = stream
-                    elif len(result) == 2 and isinstance(result[1], dict):
-                        outputs = result[0]
-                        if isinstance(outputs, dict):
-                            streams[unit.outlet_names[0]] = outputs
-                        elif isinstance(outputs, tuple):
-                            for name, stream in zip(unit.outlet_names, outputs):
-                                streams[name] = stream
-                        else:
-                            streams[unit.outlet_names[0]] = outputs
-                    elif len(result) == len(unit.outlet_names) + 1:
-                        for name, stream in zip(unit.outlet_names, result[:-1]):
-                            streams[name] = stream
-                else:
-                    streams[unit.outlet_names[0]] = result
+                streams.update(_parse_outlets(result, unit))
 
             # Extract new tear stream values (recycle sources)
             new_tear = {}
@@ -1388,24 +1479,7 @@ class Flowsheet:
             inlets = [streams[name] for name in unit.inlet_names]
             result = unit.operation(*inlets, **unit.params)
 
-            if isinstance(result, tuple):
-                if len(result) == len(unit.outlet_names):
-                    for name, stream in zip(unit.outlet_names, result):
-                        streams[name] = stream
-                elif len(result) == 2 and isinstance(result[1], dict):
-                    outputs = result[0]
-                    if isinstance(outputs, dict):
-                        streams[unit.outlet_names[0]] = outputs
-                    elif isinstance(outputs, tuple):
-                        for name, stream in zip(unit.outlet_names, outputs):
-                            streams[name] = stream
-                    else:
-                        streams[unit.outlet_names[0]] = outputs
-                elif len(result) == len(unit.outlet_names) + 1:
-                    for name, stream in zip(unit.outlet_names, result[:-1]):
-                        streams[name] = stream
-            else:
-                streams[unit.outlet_names[0]] = result
+            streams.update(_parse_outlets(result, unit))
 
         return streams
 

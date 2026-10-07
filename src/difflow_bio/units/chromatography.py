@@ -141,10 +141,16 @@ class IEXParams(ParamsMixin):
     """Parameters for ion exchange chromatography.
 
     Attributes:
-        column_volume: Column volume (L)
+        column_volume: Column volume (L); with the binding capacity it
+            limits what the column holds (q x column_volume).
         mode: "bind_elute" or "flow_through"
-        q_max: Maximum binding capacity (g/L)
-        K_d: Dissociation constant (g/L)
+        q_max: Maximum binding capacity (g/L resin). In bind-elute mode
+            target beyond the capacity breaks through to waste; in
+            flow-through mode impurity binding is capped by it.
+        K_d: Dissociation constant (g/L) of the Langmuir isotherm,
+            q = q_max C / (K_d + C); used when the call is given the feed
+            concentration or volume, otherwise the feed is taken as
+            saturating (q = q_max).
         target_species: Target protein species
         selectivity: Dict of species -> binding selectivity (0=no binding, 1=strong)
         yield_factor: Recovery yield
@@ -208,6 +214,46 @@ class SECParams(ParamsMixin):
     # so lower resolution (more band broadening) gives poorer separation.
     # When False, the legacy fixed 5% overlap is used (backward compatible).
     use_resolution_overlap: bool = False
+
+
+def _load_fraction(load_volume, feed_volume, unit: str) -> Array:
+    """Fraction of the inlet loaded onto a column, in [0, 1].
+
+    ``load_volume`` is a volume (L), and the stream carries amounts, not a
+    volume, so the fraction needs the feed volume too. Bio audit C11: without
+    ``feed_volume`` the columns divided the load volume by the stream's total
+    amount (L / g), so 10 L "loaded" 49.75% of a 20.1 g feed.
+
+    Args:
+        load_volume: Volume loaded (L), or None to load the whole inlet.
+        feed_volume: Volume of the inlet (L).
+        unit: Unit name for the error message.
+
+    Returns:
+        Loaded fraction of every species in the inlet.
+
+    Raises:
+        ValueError: When ``load_volume`` is given without ``feed_volume``.
+    """
+    if load_volume is None:
+        return jnp.asarray(1.0)
+    if feed_volume is None:
+        raise ValueError(
+            f"{unit}: load_volume is a volume (L) and the inlet stream carries "
+            "amounts, not a volume, so the loaded fraction needs the feed "
+            "volume too: pass feed_volume (L), or omit load_volume to load "
+            "the whole inlet."
+        )
+    return jnp.clip(jnp.asarray(load_volume) / jnp.asarray(feed_volume), 0.0, 1.0)
+
+
+def _feed_concentration(feed_concentration, amount, feed_volume):
+    """Feed concentration (g/L) if known, else None (saturating feed)."""
+    if feed_concentration is not None:
+        return jnp.asarray(feed_concentration)
+    if feed_volume is not None:
+        return safe_divide(amount, jnp.asarray(feed_volume))
+    return None
 
 
 # =============================================================================
@@ -286,22 +332,25 @@ class ProteinAChromatography:
                 whole batch wants; the column capacity then limits how much
                 binds, and any excess breaks through to waste.
             breakthrough_limit: Acceptable breakthrough fraction (0-1)
-            feed_volume: Total volume of feed stream (L). If provided, used to
-                calculate concentration. If None, assumes load_volume/total_flow
-                gives the mass fraction loaded.
+            feed_volume: Total volume of the feed stream (L). Required with
+                ``load_volume``: the loaded fraction is
+                ``load_volume / feed_volume``.
             load_flow_rate: Volumetric load flow rate (L/min). When provided
                 together with ``params.k_ads``, the dynamic binding capacity is
                 computed from the column residence time (t_r = CV / Q) so DBC
                 decreases at high flow rate (#100). If None, the static
                 q_max-based DBC is used (backward compatible).
-            feed_concentration: Target concentration in the feed (g/L), used by
-                the kinetic DBC isotherm term. If None, a saturating feed is
-                assumed (q_eq -> q_max).
+            feed_concentration: Target concentration in the feed (g/L), used
+                in the Langmuir isotherm (with ``K_d``) for the binding
+                capacity. If None it is the target amount over
+                ``feed_volume`` when that is given; with neither, a
+                saturating feed is assumed (q_eq -> q_max).
 
         Returns:
             (product, waste): Product (elution) and waste (FT + wash) streams
             info: Dictionary with:
-                - 'yield': Product recovery
+                - 'yield': Target in the product / target in the inlet
+                  (unloaded feed counts as lost)
                 - 'purity': Product purity
                 - 'DBC': Dynamic binding capacity used
                 - 'impurity_clearance': LRV for each impurity
@@ -309,29 +358,14 @@ class ProteinAChromatography:
         p = self.params
         inlet_flows = get_flows(inlet)
 
-        total_flow = sum(inlet_flows.values())
         target_flow = inlet_flows.get(p.target_species, jnp.array(0.0))
 
-        # Mass loaded calculation. The fraction is clipped to [0, 1] here for
-        # the same reason it is clipped in the mass balance below, and as the
-        # ion-exchange and size-exclusion columns already clip theirs: a load
-        # volume larger than the feed volume otherwise loads more of the
-        # target than the feed contains, and the column reports mass it was
-        # never given -- loading 20 L of an 11.1 L feed closed 8 mol/s out.
-        if load_volume is None:
-            target_mass_loaded = target_flow
-        elif feed_volume is not None:
-            # Proper calculation: concentration = mass/volume, then mass = conc * load_vol
-            # load_fraction = load_volume / feed_volume
-            load_fraction = jnp.clip(
-                jnp.asarray(load_volume) / jnp.asarray(feed_volume), 0.0, 1.0
-            )
-            target_mass_loaded = target_flow * load_fraction
-        else:
-            # Legacy: assume flows represent concentrations (g/L) and total_flow is volume
-            target_mass_loaded = target_flow * jnp.clip(
-                jnp.asarray(load_volume) / total_flow, 0.0, 1.0
-            )
+        # Loaded fraction, clipped to [0, 1]: a load volume larger than the
+        # feed volume otherwise loads more of the target than the feed
+        # contains (loading 20 L of an 11.1 L feed closed 8 mol/s out). It
+        # needs the feed volume (bio audit C11; see _load_fraction).
+        _load_frac = _load_fraction(load_volume, feed_volume, "ProteinAChromatography")
+        target_mass_loaded = target_flow * _load_frac
 
         # Dynamic binding capacity.
         # Kinetic model (#100): when an adsorption rate constant and a load
@@ -349,8 +383,14 @@ class ProteinAChromatography:
             )
         else:
             residence_time = None
-            # DBC = q_max at low breakthrough
-            DBC = p.q_max * (1.0 - breakthrough_limit)
+            # Static capacity at low breakthrough: the Langmuir loading at
+            # the feed concentration when that is known (from
+            # feed_concentration, or the target amount over feed_volume),
+            # else a saturating feed (q -> q_max). K_d did nothing on this
+            # path before (bio audit C10).
+            C_feed = _feed_concentration(feed_concentration, target_flow, feed_volume)
+            q_eq = p.q_max if C_feed is None else langmuir_isotherm(C_feed, p.q_max, p.K_d)
+            DBC = q_eq * (1.0 - breakthrough_limit)
         max_binding = DBC * p.column_volume
 
         # Actual bound mass (limited by capacity)
@@ -359,15 +399,6 @@ class ProteinAChromatography:
 
         # Elution recovery
         target_eluted = target_bound * p.yield_factor
-
-        # Calculate load fraction for mass balance
-        if load_volume is None:
-            _load_frac = jnp.asarray(1.0)
-        elif feed_volume is not None:
-            _load_frac = jnp.asarray(load_volume) / jnp.asarray(feed_volume)
-        else:
-            _load_frac = jnp.asarray(load_volume) / total_flow
-        _load_frac = jnp.clip(_load_frac, 0.0, 1.0)
 
         # Calculate product stream (elution pool)
         product_flows = {p.target_species: target_eluted}
@@ -400,11 +431,14 @@ class ProteinAChromatography:
         product_total = sum(product_flows.values())
         purity = jnp.where(product_total > 0, target_eluted / product_total, jnp.array(1.0))
 
-        # Calculate yield
-        yield_val = jnp.where(target_mass_loaded > 0, target_eluted / target_mass_loaded, jnp.array(0.0))
+        # Yield is product out over product IN, not over what was loaded:
+        # the unloaded feed goes to waste, and a step yield that ignores it
+        # reported 0.95 while 4.73 of 10 g reached the product (bio audit C11).
+        yield_val = safe_divide(target_eluted, target_flow)
 
         info = {
             "yield": yield_val,
+            "load_fraction": _load_frac,
             "purity": purity,
             "DBC": DBC,
             "mass_loaded": target_mass_loaded,
@@ -492,83 +526,128 @@ class IonExchangeChromatography:
         self,
         inlet: Stream,
         load_volume: float | Array | None = None,
+        feed_volume: float | Array = None,
+        feed_concentration: float | Array = None,
     ) -> tuple[tuple[Stream, Stream], dict[str, Array]]:
         """Run ion exchange chromatography.
+
+        The column has a finite capacity, q x ``column_volume``, with q from
+        the Langmuir isotherm ``q_max C / (K_d + C)`` at the feed
+        concentration C when that is known (``feed_concentration``, or the
+        amount over ``feed_volume``), else ``q_max`` (a saturating feed).
+        In bind-elute mode the target binds up to that capacity and the
+        excess breaks through to waste; in flow-through mode the impurities
+        the column would hold are scaled down together when their total
+        exceeds it, and the excess stays in the product.
 
         Args:
             inlet: Feed stream
             load_volume: Volume loaded (L). None (the default) loads the
-                entire inlet.
+                entire inlet. Needs ``feed_volume``.
+            feed_volume: Volume of the inlet (L); the loaded fraction is
+                ``load_volume / feed_volume``.
+            feed_concentration: Concentration (g/L) of what binds (the
+                target in bind-elute mode, the bound impurities in total in
+                flow-through mode), for the isotherm.
 
         Returns:
             (product, waste): Product and waste streams
-            info: Operation details
+            info: Operation details; 'yield' is the target in the product
+            over the target in the inlet.
+
+        Raises:
+            ValueError: ``load_volume`` without ``feed_volume``.
         """
         p = self.params
         inlet_flows = get_flows(inlet)
-        total_flow = sum(inlet_flows.values())
 
-        # Load fraction (clip to [0,1] for mass balance safety); None loads
-        # the whole inlet.
-        if load_volume is None:
-            load_frac = jnp.asarray(1.0)
-        else:
-            load_frac = jnp.clip(jnp.asarray(load_volume) / total_flow, 0.0, 1.0)
+        # Loaded fraction, a volume ratio (bio audit C11: this divided the
+        # load volume in L by the stream's total amount).
+        load_frac = _load_fraction(load_volume, feed_volume, "IonExchangeChromatography")
 
         product_flows = {}
         waste_flows = {}
 
+        # Bio audit C10: column_volume, q_max and K_d were documented and
+        # ignored, so a 1 mL column processed any load. They now set a
+        # capacity (see the docstring).
+        def capacity(bound_amount):
+            C = _feed_concentration(feed_concentration, bound_amount, feed_volume)
+            q = p.q_max if C is None else langmuir_isotherm(C, p.q_max, p.K_d)
+            return q * p.column_volume
+
+        target = p.target_species
+        target_in = inlet_flows.get(target, jnp.array(0.0))
+        target_loaded = target_in * load_frac
+
+        if p.mode == "bind_elute":
+            cap = capacity(target_in)
+            target_bound = jnp.minimum(target_loaded, cap)
+            bound_demand = target_loaded
+            scale = jnp.asarray(1.0)
+        else:  # flow_through: the impurities bind
+            cap = None
+            demand = {}
+            for species, flow in inlet_flows.items():
+                if species == target:
+                    continue
+                loaded = flow * load_frac
+                if species in p.impurity_clearance:
+                    lrv = jnp.asarray(p.impurity_clearance[species])
+                    demand[species] = loaded * (1.0 - 10.0 ** (-lrv))
+                else:
+                    demand[species] = loaded * jnp.asarray(p.selectivity.get(species, 0.5))
+            bound_demand = sum(demand.values()) if demand else jnp.asarray(0.0)
+            cap = capacity(sum(inlet_flows[s] for s in demand) if demand else jnp.asarray(0.0))
+            # Every bound impurity shares the capacity in proportion to what
+            # it would bind; at or below capacity this is exactly 1.
+            scale = jnp.minimum(1.0, cap / jnp.maximum(bound_demand, 1e-300))
+            target_bound = jnp.asarray(0.0)
+
         for species, flow in inlet_flows.items():
             mass_loaded = flow * load_frac
             mass_unloaded = flow - mass_loaded
-            selectivity = p.selectivity.get(species, 0.5)  # Default moderate binding
-            selectivity = jnp.asarray(selectivity)
 
-            if species != p.target_species and species in p.impurity_clearance:
-                # Explicit clearance, either mode: 10**-LRV of the loaded
-                # impurity reaches the product.
+            if species == target:
+                if p.mode == "bind_elute":
+                    # Bound target elutes at yield_factor; the breakthrough
+                    # beyond capacity and the unloaded feed go to waste.
+                    product_flows[species] = target_bound * p.yield_factor
+                else:
+                    product_flows[species] = mass_loaded * p.yield_factor
+                waste_flows[species] = flow - product_flows[species]
+            elif p.mode == "flow_through":
+                to_waste = demand[species] * scale
+                product_flows[species] = mass_loaded - to_waste
+                waste_flows[species] = mass_unloaded + to_waste
+            elif species in p.impurity_clearance:
+                # Explicit clearance: 10**-LRV of the loaded impurity
+                # reaches the product.
                 to_product = mass_loaded * 10.0 ** (-jnp.asarray(p.impurity_clearance[species]))
                 product_flows[species] = to_product
                 waste_flows[species] = mass_unloaded + mass_loaded - to_product
-            elif p.mode == "bind_elute":
-                # High selectivity = binds = goes to product
-                if species == p.target_species:
-                    product_flows[species] = mass_loaded * p.yield_factor
-                    waste_flows[species] = mass_unloaded + mass_loaded * (1.0 - p.yield_factor)
-                else:
-                    # Impurities: high selectivity = retained = waste
-                    # low selectivity = flow through = waste
-                    # Intermediate = some in product
-                    # Impurity leakage into product: low selectivity = flows through (waste)
-                    # high selectivity = co-elutes with target (product contamination)
-                    # Use sigmoid transition: leakage ~ selectivity^2 (binds = co-elutes)
-                    to_product = mass_loaded * jnp.power(selectivity, 2) * (1.0 - p.yield_factor)
-                    product_flows[species] = to_product
-                    waste_flows[species] = mass_unloaded + mass_loaded - to_product
-
-            else:  # flow_through
-                # Target flows through (product), impurities bind (waste)
-                if species == p.target_species:
-                    product_flows[species] = mass_loaded * p.yield_factor
-                    waste_flows[species] = mass_unloaded + mass_loaded * (1.0 - p.yield_factor)
-                else:
-                    # High selectivity = binds = waste
-                    to_waste = mass_loaded * selectivity
-                    product_flows[species] = mass_loaded - to_waste
-                    waste_flows[species] = mass_unloaded + to_waste
+            else:
+                # Bind-elute impurity leakage: a strongly binding impurity
+                # co-elutes with the target, leakage ~ selectivity^2.
+                selectivity = jnp.asarray(p.selectivity.get(species, 0.5))
+                to_product = mass_loaded * jnp.power(selectivity, 2) * (1.0 - p.yield_factor)
+                product_flows[species] = to_product
+                waste_flows[species] = mass_unloaded + mass_loaded - to_product
 
         product = make_stream(product_flows, inlet["T"], inlet["P"])
         waste = make_stream(waste_flows, inlet["T"], inlet["P"])
 
-        # Calculate metrics
-        target_in = inlet_flows.get(p.target_species, jnp.array(1.0)) * load_frac
-        target_out = product_flows.get(p.target_species, jnp.array(0.0))
+        target_out = product_flows.get(target, jnp.array(0.0))
         product_total = sum(product_flows.values())
 
         info = {
-            "yield": jnp.where(target_in > 0, target_out / target_in, jnp.array(0.0)),
+            # Product out over product IN (bio audit C11), not over the load.
+            "yield": safe_divide(target_out, target_in),
             "purity": jnp.where(product_total > 0, target_out / product_total, jnp.array(1.0)),
             "mode": p.mode,
+            "load_fraction": load_frac,
+            "capacity": cap,
+            "capacity_utilization": jnp.minimum(bound_demand, cap) / cap,
         }
 
         return (product, waste), info
@@ -615,28 +694,31 @@ class SizeExclusionChromatography:
         self,
         inlet: Stream,
         load_volume: float | Array | None = None,
+        feed_volume: float | Array = None,
     ) -> tuple[tuple[Stream, Stream, Stream], dict[str, Array]]:
         """Run size exclusion chromatography.
 
         Args:
             inlet: Feed stream
             load_volume: Volume loaded (L). None (the default) loads the
-                entire inlet.
+                entire inlet. Needs ``feed_volume``.
+            feed_volume: Volume of the inlet (L); the loaded fraction is
+                ``load_volume / feed_volume``.
 
         Returns:
             (product, aggregates, fragments): Three fractions
-            info: Operation details
+            info: Operation details; 'yield' is the target in the product
+            over the target in the inlet.
+
+        Raises:
+            ValueError: ``load_volume`` without ``feed_volume``.
         """
         p = self.params
         inlet_flows = get_flows(inlet)
-        total_flow = sum(inlet_flows.values())
 
-        # Load fraction (clip to [0,1] for mass balance safety); None loads
-        # the whole inlet.
-        if load_volume is None:
-            load_frac = jnp.asarray(1.0)
-        else:
-            load_frac = jnp.clip(jnp.asarray(load_volume) / total_flow, 0.0, 1.0)
+        # Load fraction, a volume ratio (bio audit C11: this divided the
+        # load volume in L by the stream's total amount).
+        load_frac = _load_fraction(load_volume, feed_volume, "SizeExclusionChromatography")
 
         product_flows = {}
         aggregate_flows = {}
@@ -682,15 +764,19 @@ class SizeExclusionChromatography:
         fragments = make_stream(fragment_flows, inlet["T"], inlet["P"])
 
         # Metrics
-        target_in = inlet_flows.get(p.target_species, jnp.array(1.0)) * load_frac
+        # Yield and removal against what came IN (bio audit C11): measured
+        # against the loaded amount, the unloaded target that is routed to
+        # the product pool pushed the yield above 1 on a partial load.
+        target_in = inlet_flows.get(p.target_species, jnp.array(0.0))
         target_out = product_flows.get(p.target_species, jnp.array(0.0))
         product_total = sum(product_flows.values())
 
-        aggregate_in = inlet_flows.get(p.aggregate_species, jnp.array(0.0)) * load_frac
+        aggregate_in = inlet_flows.get(p.aggregate_species, jnp.array(0.0))
         aggregate_removed = 1.0 - safe_divide(product_flows.get(p.aggregate_species, jnp.array(0.0)), aggregate_in)
 
         info = {
-            "yield": jnp.where(target_in > 0, target_out / target_in, jnp.array(0.0)),
+            "yield": safe_divide(target_out, target_in),
+            "load_fraction": load_frac,
             "purity": jnp.where(product_total > 0, target_out / product_total, jnp.array(1.0)),
             "aggregate_removal": aggregate_removed,
             "resolution": jnp.asarray(p.resolution),

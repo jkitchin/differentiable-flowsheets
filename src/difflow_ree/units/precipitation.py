@@ -61,6 +61,70 @@ PKsp_HYDROXIDE = {
 
 
 # =============================================================================
+# Shared accounting (2026 conservation and operating-point audits)
+# =============================================================================
+#
+# Three defects shared the precipitators. (1) Conversion scaled with
+# sqrt(excess) and nothing capped it by the reagent fed, so 0.5x oxalate
+# precipitated 70.5 % of the REE, which needs 0.127 mol oxalate against 0.090
+# supplied. (2) The filtrate was rebuilt as {H2O, elements}: every other feed
+# species (HCl, HNO3, Fe, ...), the excess reagent and the precipitant's water
+# left through no outlet. (3) The hydroxide route never read its precipitant
+# at all. Each is fixed here once, for all three routes.
+
+#: Base species a hydroxide precipitant may carry: name -> (cation left in
+#: solution when its OH- is consumed, or None).
+HYDROXIDE_BASES = {"NaOH": "Na", "KOH": "K", "NH4OH": "NH4", "OH": None}
+
+#: Strong acids neutralised by base before any hydroxide precipitates:
+#: name -> (anion left in solution, protons per formula unit).
+STRONG_ACIDS = {"HCl": ("Cl", 1), "HNO3": ("NO3", 1), "H2SO4": ("SO4", 2)}
+
+#: Litres per mole of water, to put a pH on a concentration scale.
+_L_PER_MOL_WATER = 0.018015
+
+
+def _require_pKsp(table: dict, elements, route: str, table_name: str) -> None:
+    """Raise if ``table`` lacks a solubility product for any element.
+
+    The tables cover the ten elements the extractant records do; Ho, Er, Tm,
+    Yb and Lu used to fail later with a bare ``KeyError``. No values are
+    invented for them: measured constants have to be added to the table.
+    """
+    missing = [e for e in elements if e not in table]
+    if missing:
+        raise ValueError(
+            f"No {route} solubility product (pKsp) for {missing}: "
+            f"{table_name} covers {sorted(table)}. Add measured values to "
+            f"difflow_ree.units.precipitation.{table_name} (with a source) "
+            f"before precipitating these elements."
+        )
+
+
+def _non_ree(flows: dict, elements, exclude=()) -> dict:
+    """Every species in ``flows`` that is not an element or in ``exclude``."""
+    return {k: jnp.asarray(v) for k, v in flows.items()
+            if k not in elements and k not in exclude}
+
+
+def _add(target: dict, extra: dict) -> dict:
+    """Sum ``extra`` into ``target`` species by species."""
+    for k, v in extra.items():
+        target[k] = target[k] + v if k in target else v
+    return target
+
+
+def _reagent_scale(demand, supply):
+    """Fraction of the unconstrained precipitation the reagent allows.
+
+    1 when ``supply`` covers ``demand``, ``supply / demand`` when it does not,
+    so no route precipitates more REE than its reagent can bind.
+    """
+    return jnp.minimum(1.0, safe_divide(jnp.maximum(supply, 0.0),
+                                        jnp.maximum(demand, 1e-300)))
+
+
+# =============================================================================
 # Precipitator Parameters
 # =============================================================================
 
@@ -136,6 +200,7 @@ class OxalatePrecipitator:
         Args:
             params: Precipitator parameters
         """
+        _require_pKsp(PKsp_OXALATE, params.elements, "oxalate", "PKsp_OXALATE")
         self.params = params
         self._db = get_ree_database()
 
@@ -158,8 +223,12 @@ class OxalatePrecipitator:
                 the filtrate.
 
         Returns:
-            filtrate: Aqueous filtrate (depleted in REE)
-            solid: Solid product stream (precipitated REE as oxalate)
+            filtrate: Aqueous filtrate (depleted in REE). Carries every
+                non-REE species of both inlets (the precipitant's water and
+                the unreacted oxalate included).
+            solid: Solid product stream: the precipitated REE and the
+                oxalate bound with them (1.5 per REE, under the reagent's
+                own species name).
             info: Precipitation diagnostics
         """
         p = self.params
@@ -170,9 +239,11 @@ class OxalatePrecipitator:
         precip_flows = get_flows(precipitant)
 
         # Oxalic acid flow (C2O4 = oxalate)
-        F_oxalate = precip_flows.get("C2O4", precip_flows.get("oxalic_acid", 0.0))
+        reagent = "C2O4" if "C2O4" in precip_flows else (
+            "oxalic_acid" if "oxalic_acid" in precip_flows else "C2O4")
+        F_oxalate = jnp.asarray(precip_flows.get(reagent, 0.0))
 
-        filtrate_flows = {"H2O": feed_flows.get("H2O", 1.0)}
+        filtrate_flows = {}
         solid_flows = {}
         precipitation_data = {}
 
@@ -203,14 +274,22 @@ class OxalatePrecipitator:
             jnp.maximum(total_ree, 1e-30),
         )
 
+        conversions = {}
+        for elem in p.elements:
+            conversion = base_conversions[elem]
+            # Co-precipitation / common-ion boost toward complete capture.
+            conversion = conversion + p.coprecipitation_factor * (1.0 - conversion) * bulk_extent
+            conversions[elem] = jnp.clip(conversion, 0.0, 0.9999)
+
+        # No more REE than the oxalate fed can bind (1.5 C2O4 per REE).
+        demand = 1.5 * sum(jnp.asarray(feed_flows.get(e, 0.0)) * conversions[e]
+                           for e in p.elements)
+        scale = _reagent_scale(demand, F_oxalate)
+
         for elem in p.elements:
             F_in = jnp.asarray(feed_flows.get(elem, 0.0))
             pKsp = PKsp_OXALATE[elem]
-            conversion = base_conversions[elem]
-
-            # Co-precipitation / common-ion boost toward complete capture.
-            conversion = conversion + p.coprecipitation_factor * (1.0 - conversion) * bulk_extent
-            conversion = jnp.clip(conversion, 0.0, 0.9999)
+            conversion = conversions[elem] * scale
 
             F_precipitated = F_in * conversion
             F_filtrate = F_in * (1 - conversion)
@@ -224,6 +303,15 @@ class OxalatePrecipitator:
                 "precipitated_mol_s": F_precipitated,
             }
 
+        # Everything else passes through; the reagent splits into what the
+        # solid binds and what is left in solution.
+        total_solid = sum(solid_flows[e] for e in p.elements)
+        bound = 1.5 * total_solid
+        _add(filtrate_flows, _non_ree(feed_flows, p.elements))
+        _add(filtrate_flows, _non_ree(precip_flows, p.elements, exclude=(reagent,)))
+        _add(filtrate_flows, {reagent: jnp.maximum(F_oxalate - bound, 0.0)})
+        solid_flows[reagent] = jnp.minimum(bound, F_oxalate)
+
         P = feed["P"]
         filtrate = make_stream(filtrate_flows, T, P)
 
@@ -231,7 +319,6 @@ class OxalatePrecipitator:
         solid = make_stream(solid_flows, T, P)
 
         # Calculate solid composition
-        total_solid = sum(solid_flows[e] for e in p.elements)
         solid_composition = {
             e: safe_divide(solid_flows[e], total_solid)
             for e in p.elements
@@ -240,6 +327,9 @@ class OxalatePrecipitator:
         info = {
             "precipitant": "oxalate",
             "excess_ratio": actual_excess,
+            # Fraction of the unconstrained precipitation the oxalate fed
+            # allows; below 1 the route is reagent-limited.
+            "reagent_scale": scale,
             "precipitation_data": precipitation_data,
             "total_precipitated": total_solid,
             "solid_composition": solid_composition,
@@ -303,6 +393,7 @@ class CarbonatePrecipitator:
         Args:
             params: Precipitator parameters
         """
+        _require_pKsp(PKsp_CARBONATE, params.elements, "carbonate", "PKsp_CARBONATE")
         self.params = params
         self._db = get_ree_database()
 
@@ -320,8 +411,12 @@ class CarbonatePrecipitator:
             T: Temperature (K)
 
         Returns:
-            filtrate: Aqueous filtrate
-            solid: Solid product stream (precipitated REE as carbonate)
+            filtrate: Aqueous filtrate. Carries every non-REE species of both
+                inlets (the precipitant's water and the unreacted carbonate
+                included).
+            solid: Solid product stream: the precipitated REE and the
+                carbonate bound with them (1.5 per REE, under the reagent's
+                own species name).
             info: Precipitation diagnostics
         """
         p = self.params
@@ -331,9 +426,11 @@ class CarbonatePrecipitator:
         feed_flows = get_flows(feed)
         precip_flows = get_flows(precipitant)
 
-        F_carbonate = precip_flows.get("CO3", precip_flows.get("carbonate", 0.0))
+        reagent = "CO3" if "CO3" in precip_flows else (
+            "carbonate" if "carbonate" in precip_flows else "CO3")
+        F_carbonate = jnp.asarray(precip_flows.get(reagent, 0.0))
 
-        filtrate_flows = {"H2O": feed_flows.get("H2O", 1.0)}
+        filtrate_flows = {}
         solid_flows = {}
         precipitation_data = {}
 
@@ -341,16 +438,24 @@ class CarbonatePrecipitator:
         required_carbonate = 1.5 * total_ree
         actual_excess = safe_divide(F_carbonate, required_carbonate)
 
+        conversions = {}
         for elem in p.elements:
-            F_in = jnp.asarray(feed_flows.get(elem, 0.0))
-
             pKsp = PKsp_CARBONATE[elem]
             base_conversion = 1 - jnp.power(10.0, -pKsp/12)
             conversion = jnp.minimum(
                 base_conversion * jnp.sqrt(actual_excess),
                 p.target_conversion
             )
-            conversion = jnp.clip(conversion, 0.0, 0.9999)
+            conversions[elem] = jnp.clip(conversion, 0.0, 0.9999)
+        # No more REE than the carbonate fed can bind (1.5 CO3 per REE).
+        demand = 1.5 * sum(jnp.asarray(feed_flows.get(e, 0.0)) * conversions[e]
+                           for e in p.elements)
+        scale = _reagent_scale(demand, F_carbonate)
+
+        for elem in p.elements:
+            F_in = jnp.asarray(feed_flows.get(elem, 0.0))
+            pKsp = PKsp_CARBONATE[elem]
+            conversion = conversions[elem] * scale
 
             F_precipitated = F_in * conversion
             F_filtrate = F_in * (1 - conversion)
@@ -363,17 +468,23 @@ class CarbonatePrecipitator:
                 "conversion": conversion,
             }
 
+        total_solid = sum(solid_flows[e] for e in p.elements)
+        bound = 1.5 * total_solid
+        _add(filtrate_flows, _non_ree(feed_flows, p.elements))
+        _add(filtrate_flows, _non_ree(precip_flows, p.elements, exclude=(reagent,)))
+        _add(filtrate_flows, {reagent: jnp.maximum(F_carbonate - bound, 0.0)})
+        solid_flows[reagent] = jnp.minimum(bound, F_carbonate)
+
         P = feed["P"]
         filtrate = make_stream(filtrate_flows, T, P)
 
         # Create solid stream (precipitate at same T, P as filtrate)
         solid = make_stream(solid_flows, T, P)
 
-        total_solid = sum(solid_flows[e] for e in p.elements)
-
         info = {
             "precipitant": "carbonate",
             "excess_ratio": actual_excess,
+            "reagent_scale": scale,
             "precipitation_data": precipitation_data,
             "total_precipitated": total_solid,
             "product_formula": "REE2(CO3)3",
@@ -426,6 +537,7 @@ class HydroxidePrecipitator:
         Args:
             params: Precipitator parameters
         """
+        _require_pKsp(PKsp_HYDROXIDE, params.elements, "hydroxide", "PKsp_HYDROXIDE")
         self.params = params
         self._db = get_ree_database()
 
@@ -440,14 +552,29 @@ class HydroxidePrecipitator:
 
         Args:
             feed: Aqueous REE solution
-            precipitant: Base solution (NaOH or NH4OH)
-            pH: Target pH for precipitation
+            precipitant: Base solution. Its hydroxide is the species in
+                :data:`HYDROXIDE_BASES` (NaOH, KOH, NH4OH, or bare OH).
+            pH: Setpoint pH the base is dosed to
             T: Temperature (K)
 
+        The setpoint pH fixes how much of each REE is above its hydroxide
+        solubility. The base supplied then has to pay for it: it first
+        neutralises the strong acid in either inlet (:data:`STRONG_ACIDS`),
+        then binds 3 OH- per REE precipitated, and when it runs short the
+        precipitation is scaled down to what it can pay for. The base used
+        to be ignored, so 0 and 0.36 mol NaOH both precipitated 99.5 %
+        (2026 operating-point audit, R10).
+
         Returns:
-            filtrate: Aqueous filtrate
-            solid: Solid product stream (precipitated REE as hydroxide)
-            info: Precipitation diagnostics
+            filtrate: Aqueous filtrate. Carries every non-REE species of both
+                inlets: unconsumed base and acid, the cation of consumed base
+                (Na, K, NH4), the anion of neutralised acid (Cl, NO3, SO4),
+                and the water, including what neutralisation makes.
+            solid: Solid product stream: the precipitated REE and the OH
+                bound with them (3 per REE).
+            info: Precipitation diagnostics. ``pH_final`` is the setpoint
+                when the base reaches it, and otherwise the pH of the net
+                acid/base balance on a molar (mol/L) basis.
         """
         p = self.params
         T = T if T is not None else p.temperature
@@ -455,8 +582,10 @@ class HydroxidePrecipitator:
         pH = jnp.asarray(pH)
 
         feed_flows = get_flows(feed)
+        precip_flows = get_flows(precipitant)
+        zero = jnp.asarray(0.0)
 
-        filtrate_flows = {"H2O": feed_flows.get("H2O", 1.0)}
+        filtrate_flows = {}
         solid_flows = {}
         precipitation_data = {}
 
@@ -468,6 +597,7 @@ class HydroxidePrecipitator:
         pOH = pKw - pH
         OH_conc = jnp.power(10.0, -pOH)
 
+        conversions = {}
         for elem in p.elements:
             F_in = jnp.asarray(feed_flows.get(elem, 0.0))
 
@@ -494,20 +624,56 @@ class HydroxidePrecipitator:
                 jnp.minimum(1 - 1/S, p.target_conversion),
                 0.0
             )
-            conversion = jnp.clip(conversion, 0.0, 0.9999)
-
-            F_precipitated = F_in * conversion
-            F_filtrate = F_in * (1 - conversion)
-
-            filtrate_flows[elem] = jnp.maximum(F_filtrate, 0.0)
-            solid_flows[elem] = jnp.maximum(F_precipitated, 0.0)
+            conversions[elem] = jnp.clip(conversion, 0.0, 0.9999)
 
             precipitation_data[elem] = {
                 "pKsp": pKsp,
                 "supersaturation": S,
-                "conversion": conversion,
                 "precipitation_pH": 14 + safe_log(jnp.power(safe_divide(Ksp, c_feed), 1/3)) / jnp.log(10.0),
             }
+
+        # Base supplied and acid it must neutralise first, from both inlets.
+        both = _add(dict(_non_ree(feed_flows, p.elements)),
+                    _non_ree(precip_flows, p.elements))
+        base = {k: both[k] for k in HYDROXIDE_BASES if k in both}
+        acid = {k: both[k] for k in STRONG_ACIDS if k in both}
+        OH_supply = sum(base.values(), zero)
+        H_acid = sum((STRONG_ACIDS[k][1] * v for k, v in acid.items()), zero)
+        H_neutralised = jnp.minimum(H_acid, OH_supply)
+
+        # No more REE than the base left after neutralisation can pay for.
+        demand = 3.0 * sum(jnp.asarray(feed_flows.get(e, 0.0)) * conversions[e]
+                           for e in p.elements)
+        scale = _reagent_scale(demand, OH_supply - H_neutralised)
+
+        for elem in p.elements:
+            F_in = jnp.asarray(feed_flows.get(elem, 0.0))
+            conversion = conversions[elem] * scale
+            F_precipitated = F_in * conversion
+            filtrate_flows[elem] = jnp.maximum(F_in * (1 - conversion), 0.0)
+            solid_flows[elem] = jnp.maximum(F_precipitated, 0.0)
+            precipitation_data[elem]["conversion"] = conversion
+
+        total_solid = sum(solid_flows[e] for e in p.elements)
+        OH_consumed = 3.0 * total_solid
+
+        # Species accounting. Consumed base is drawn from each base species in
+        # proportion; its cation stays in solution. Neutralised acid is drawn
+        # the same way; its anion stays and its protons become water.
+        others = {k: v for k, v in both.items() if k not in base and k not in acid}
+        _add(filtrate_flows, others)
+        used = OH_consumed + H_neutralised
+        for k, v in base.items():
+            take = v * safe_divide(used, jnp.maximum(OH_supply, 1e-300))
+            _add(filtrate_flows, {k: v - take})
+            if HYDROXIDE_BASES[k] is not None:
+                _add(filtrate_flows, {HYDROXIDE_BASES[k]: take})
+        for k, v in acid.items():
+            take = v * safe_divide(H_neutralised, jnp.maximum(H_acid, 1e-300))
+            anion, n_H = STRONG_ACIDS[k]
+            _add(filtrate_flows, {k: v - take, anion: take})
+        _add(filtrate_flows, {"H2O": H_neutralised})
+        solid_flows["OH"] = OH_consumed
 
         P = feed["P"]
         filtrate = make_stream(filtrate_flows, T, P)
@@ -515,16 +681,27 @@ class HydroxidePrecipitator:
         # Create solid stream (precipitate at same T, P as filtrate)
         solid = make_stream(solid_flows, T, P)
 
-        total_solid = sum(solid_flows[e] for e in p.elements)
-
         # Filtrate pH after precipitation (#116). Each RE(OH)3 formed consumes
-        # 3 OH-; depleting hydroxide lowers the filtrate pH below the target.
-        V = jnp.asarray(feed_flows.get("H2O", 1.0))  # volume/flow basis
-        OH_consumed = 3.0 * total_solid
-        OH_final = jnp.maximum(OH_conc * V - OH_consumed, 0.0)
-        OH_conc_final = safe_divide(OH_final, V)
-        pOH_final = -jnp.log10(jnp.maximum(OH_conc_final, 1e-30))
-        pH_final = pKw - pOH_final
+        # 3 OH-. The old balance started from the free OH- at the setpoint
+        # alone (1e-5 M at pH 9), so any real precipitation drove it to zero
+        # and reported pH -16 (audit R10). It now balances the base supplied
+        # against the acid and the OH- bound: when the excess reaches the
+        # setpoint the setpoint holds; otherwise the net excess (base or
+        # acid) sets the pH, through [OH-] - [H+] = n with [OH-][H+] = Kw.
+        V_L = jnp.maximum(
+            _L_PER_MOL_WATER * (jnp.asarray(feed_flows.get("H2O", 0.0))
+                                + jnp.asarray(precip_flows.get("H2O", 0.0))),
+            1e-300)
+        n = (OH_supply - H_acid - OH_consumed) / V_L
+        Kw = jnp.power(10.0, -pKw)
+        # Root of [OH-]^2 - n [OH-] - Kw = 0, in the form that does not
+        # cancel: for an acid excess (n < 0) n + sqrt(n^2 + 4 Kw) loses ~4
+        # digits, so use the conjugate 2 Kw / (sqrt(n^2 + 4 Kw) - n).
+        root = jnp.sqrt(n * n + 4.0 * Kw)
+        OH_eq = jnp.where(n >= 0, 0.5 * (n + root),
+                          2.0 * Kw / jnp.maximum(root - n, 1e-300))
+        pH_balance = pKw + jnp.log10(jnp.maximum(OH_eq, 1e-300))
+        pH_final = jnp.minimum(pH, pH_balance)
 
         info = {
             "precipitant": "hydroxide",
@@ -534,6 +711,9 @@ class HydroxidePrecipitator:
             "product_formula": "REE(OH)3",
             # Post-precipitation filtrate chemistry (#116)
             "OH_consumed": OH_consumed,
+            "OH_supplied": OH_supply,
+            "acid_neutralised": H_neutralised,
+            "reagent_scale": scale,
             "pH_final": pH_final,
         }
 

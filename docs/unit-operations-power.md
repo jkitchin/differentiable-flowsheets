@@ -266,10 +266,13 @@ It is exact, not an approximation: charging, bus shunts and taps all go through 
 `build_ladder_flowsheet` assembles a genuine `difflow.Flowsheet` for a non-branching feeder out of the unit operations, with the substation infeed as the single tear:
 
 ```
-infeed (tear) -> SlackSource -> [SeriesBranch -> LoadDraw] x N
+infeed (tear) -> SlackSource -> [root bus draws]
+              -> [SeriesBranch -> bus draws] x N
               -> LadderClose(end, infeed) -> infeed_next
 recycle: infeed_next -> infeed
 ```
+
+A bus's draws are its `LoadDraw`, a `ShuntDraw` when it has a shunt and a `GeneratorInject` per generator on it (the root's generation is the infeed itself), so the ladder carries the same injections as `RadialFeederFlowsheet` and Newton. A branch stored against the chain direction has its tap moved to the chain's from end with the impedance referred through it. A PV bus downstream of the root is refused: no unit in the chain regulates a downstream voltage.
 
 `LadderClose` is what makes the fixed point `leftover = 0` rather than `leftover = infeed`; the correction `infeed_next = infeed − leftover` is close to an exact Newton step and converges in about four Anderson iterations.
 

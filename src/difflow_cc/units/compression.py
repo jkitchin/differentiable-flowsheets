@@ -29,6 +29,7 @@ __all__ = [
     "is_supercritical",
 ]
 
+import math
 from dataclasses import dataclass
 from typing import Literal
 
@@ -38,6 +39,7 @@ from jax import Array
 from difflow.streams import Stream, make_stream, get_flows, total_flow
 from difflow.params_mixin import ParamsMixin
 from difflow.numerics import safe_divide
+from difflow.flowsheet import _concrete
 from difflow.eos import PengRobinson, CriticalProperties
 
 
@@ -105,7 +107,9 @@ class CompressionTrainParams(ParamsMixin):
     """Parameters for multi-stage compression train.
 
     Attributes:
-        P_inlet: Inlet pressure (Pa)
+        P_inlet: Optional check value for the inlet pressure (Pa). The
+            train always compresses from the inlet stream pressure; a
+            P_inlet that disagrees with it raises ValueError.
         P_outlet: Target outlet pressure (Pa)
         n_stages: Number of compression stages (None = auto-calculate)
         max_pressure_ratio: Maximum pressure ratio per stage
@@ -116,7 +120,7 @@ class CompressionTrainParams(ParamsMixin):
         use_pump: Use pump for supercritical stage
         pump_efficiency: Pump efficiency
     """
-    P_inlet: float | Array = 200000.0  # Pa (2 bar)
+    P_inlet: float | Array | None = None  # Pa; None: inlet stream P
     P_outlet: float | Array = 15000000.0  # Pa (150 bar)
     n_stages: int | None = None
     max_pressure_ratio: float = 3.5
@@ -563,7 +567,22 @@ class CompressionTrain:
         """
         p = self.params
 
-        P_in = jnp.asarray(p.P_inlet)
+        # Audit C12: the stage ratios came from params.P_inlet (default 2 bar)
+        # whatever the stream carried, so a 1 atm feed left at 74 bar instead
+        # of 150. The inlet stream's pressure is used; a P_inlet that
+        # disagrees with it is an error rather than a silent miscompression.
+        P_in = jnp.asarray(inlet["P"])
+        P_in_c = _concrete(P_in)
+        if p.P_inlet is not None:
+            P_param_c = _concrete(p.P_inlet)
+            if (P_in_c is not None and P_param_c is not None
+                    and abs(P_in_c - P_param_c) > 1e-6 * max(abs(P_param_c), 1.0)):
+                raise ValueError(
+                    f"CompressionTrainParams.P_inlet ({P_param_c} Pa) does not "
+                    f"match the inlet stream pressure ({P_in_c} Pa); the "
+                    "train compresses from the stream pressure. Drop P_inlet "
+                    "or make them agree."
+                )
         P_out_target = jnp.asarray(p.P_outlet)
 
         # Calculate number of stages
@@ -573,8 +592,16 @@ class CompressionTrain:
         if p.n_stages is not None:
             n_stages = p.n_stages
         else:
-            # Calculate minimum stages needed
-            n_stages = max(1, int(float(jnp.ceil(jnp.log(total_ratio) / jnp.log(max_pr)))))
+            # Calculate minimum stages needed (a Python int: it sets the loop)
+            P_for_count = P_in_c if P_in_c is not None else _concrete(p.P_inlet)
+            P_out_c = _concrete(P_out_target)
+            if P_for_count is None or P_out_c is None:
+                raise ValueError(
+                    "n_stages=None needs concrete inlet/outlet pressures to "
+                    "count stages; set CompressionTrainParams.n_stages when "
+                    "differentiating with respect to a pressure."
+                )
+            n_stages = max(1, math.ceil(math.log(P_out_c / P_for_count) / math.log(max_pr)))
 
         # Equal pressure ratio per stage
         pr_per_stage = jnp.power(total_ratio, 1.0 / n_stages)

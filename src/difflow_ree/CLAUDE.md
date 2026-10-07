@@ -8,6 +8,11 @@ the root CLAUDE.md, which keeps only what every session needs).
 - Unit operations: `REEExtractor`, `REEMixerSettler`, `REEScrubber`, `REEStripper`
 - Precipitation: `OxalatePrecipitator`, `CarbonatePrecipitator`, `HydroxidePrecipitator`
 - Flowsheets: `ExtractStripCircuit`, `ExtractScrubStripCircuit`, `SplitShellCascade`, `FullSeparationTrain`
+  return ONE results dict, so the palette registers stream-returning wrappers
+  under their names (`flowsheets/palette.py`: `ExtractStripUnit`, ...). Keep
+  the circuits' dict return (callers read it by key) and keep the palette
+  pointing at the wrappers: a results dict wired as a unit went downstream as
+  a "stream" (KeyError 'T'), and `_split_result` now refuses it.
 - Database: 15 REE elements (the 14 stable lanthanides -- no Pm -- plus Y), 5 extractant systems (D2EHPA, PC88A,
   Cyanex 272, TBP, naphthenic acid). Coverage is UNEVEN and `ext_db.coverage()`
   reports it: only naphthenic_acid has coefficients for all fifteen; the other
@@ -42,3 +47,15 @@ the root CLAUDE.md, which keeps only what every session needs).
   so a distribution can be put on D and differentiated through. Passed through by
   `REEExtractorParams`, `MixerSettlerParams`, `ScrubberParams`, `StripperParams`.
   `n_stages` is likewise a continuous, traceable decision (Kremser is `E**(N+1)`)
+- Operating points (2026 audit): a circuit section pH left `None`
+  (`ExtractStripParams`, `ExtractScrubStripParams`, `GroupSeparator`,
+  `SplitShellParams` with `product_groups`) comes from
+  `equilibrium/operating_points.cut_pHs`, the D x (O/A) = 1 / 10 / 0.1 cut
+  at the phase ratios the units really run at (`circuit_phase_ratios`, which
+  counts extractant moles as organic flow; whether it should is open, R5).
+  Do NOT go back to window fractions (`default_pH`) for circuits: they left
+  99.8 % of the Y on a D2EHPA solvent. Strip cuts for heavy REE on D2EHPA lie
+  below the fitted window; the warning is the policy, never clamp.
+  `StripperParams.pH=None` means `-log10(acid_conc)`; TBP strips at
+  `strip_nitrate_conc`. Sections carry non-REE species through
+  (`units/carry.py`); precipitators are reagent-capped.

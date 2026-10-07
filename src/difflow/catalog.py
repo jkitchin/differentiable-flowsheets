@@ -300,11 +300,24 @@ def _split_top_level(text: str) -> list[str]:
 
 
 def _outlet_count(ret: Any) -> int | None:
-    """Number of leading ``Stream`` entries in a return annotation."""
+    """Number of ``Stream`` entries in a return annotation.
+
+    Two tuple shapes carry outlets: the flat ``tuple[Stream, Stream,
+    dict]`` and the nested ``tuple[tuple[Stream, Stream], dict]`` that
+    the bio filtration and chromatography units and the power splits
+    return. The nested one used to count as zero outlets (only top-level
+    entries were looked at), and an editor drew one outlet for a unit
+    with two or three (audit of the outlet parsing).
+    """
     if ret is inspect.Signature.empty:
         return None
     args = typing.get_args(ret)
     if args:
+        head = args[0]
+        if typing.get_origin(head) is tuple:
+            inner = typing.get_args(head)
+            if any(_is_stream(a) for a in inner):
+                return sum(1 for a in inner if _is_stream(a))
         return sum(1 for a in args if _is_stream(a))
     # a lone stream, as the gas units return: one outlet, no info payload
     if _is_stream(ret):
@@ -312,7 +325,12 @@ def _outlet_count(ret: Any) -> int | None:
     # a string annotation, e.g. "tuple[Stream, dict]"
     text = str(ret).strip().strip("'\"")
     if text.startswith("tuple[") and text.endswith("]"):
-        return sum(1 for p in _split_top_level(text[6:-1]) if _is_stream(p))
+        parts = _split_top_level(text[6:-1])
+        if parts and parts[0].startswith("tuple[") and parts[0].endswith("]"):
+            inner = _split_top_level(parts[0][6:-1])
+            if any(_is_stream(p) for p in inner):
+                return sum(1 for p in inner if _is_stream(p))
+        return sum(1 for p in parts if _is_stream(p))
     return None
 
 

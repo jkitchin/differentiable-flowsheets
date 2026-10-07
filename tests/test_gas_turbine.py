@@ -12,6 +12,7 @@ from difflow.combustion import (
     IdealGasThermo,
     CYCLE_SPECIES,
     AIR_COMPOSITION,
+    lhv_mass,
     lhv_molar,
     o2_demand,
     co2_per_mol,
@@ -54,6 +55,19 @@ class TestCombustionData:
         """Diluent CO2 passes through: 1 CO2 out, 0 O2 demanded (not combustion)."""
         assert float(o2_demand({"carbon_dioxide": 1.0})) == pytest.approx(0.0)
         assert float(co2_per_mol({"carbon_dioxide": 1.0})) == pytest.approx(1.0)
+
+    def test_a_stream_reads_the_same_as_a_bare_composition(self):
+        """A Stream's keys are ``F_<species>``; reading it by bare name
+        matched nothing, so ``lhv_molar(stream)`` was 0.0, ``o2_demand``
+        0.0 and ``lhv_mass`` NaN (audit of the core outlets)."""
+        bare = {"methane": 0.9, "ethane": 0.05, "nitrogen": 0.05}
+        stream = make_stream(bare, 300.0, P_ATM)
+        for fn in (lhv_molar, lhv_mass, o2_demand, co2_per_mol, h2o_per_mol):
+            from_stream, from_dict = float(fn(stream)), float(fn(bare))
+            assert from_stream == pytest.approx(from_dict, rel=1e-12), fn.__name__
+            assert from_stream > 0.0, fn.__name__
+        assert float(lhv_molar(stream)) == pytest.approx(
+            0.9 * 802.6e3 + 0.05 * float(lhv_molar({"ethane": 1.0})))
 
     def test_air_heat_capacity(self):
         """Ideal-gas air Cp ~ 29.1 J/mol/K near ambient."""

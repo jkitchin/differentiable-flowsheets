@@ -20,6 +20,7 @@ from difflow.numerics import safe_divide, safe_log
 from difflow.params_mixin import ParamsMixin
 from difflow.streams import Stream, make_stream, get_flows
 from difflow_ree.equilibrium.distribution import REEDistribution
+from difflow_ree.units.carry import carry_through
 from difflow_ree.units.kremser import kremser_two_inlet
 
 
@@ -32,10 +33,19 @@ class StripperParams(ParamsMixin):
         extractant: Extractant name
         elements: REE elements to track
         diluent: Organic diluent name (e.g., "kerosene", "n-dodecane")
-        pH: Strip solution pH (very low, typically < 1)
+        pH: Strip solution pH (very low, typically < 1). None (the default)
+            resolves to the pH the strip acid sets, ``-log10(acid_conc)`` on
+            the concentration scale the correlations use.
         extractant_conc: Extractant concentration (M)
-        acid_type: Type of strip acid
-        acid_conc: Acid concentration (M)
+        acid_type: Type of strip acid. Each is counted as supplying one free
+            proton per formula unit: HCl and HNO3 are fully dissociated, and
+            the second proton of H2SO4 (pKa2 about 2) is essentially bound in
+            a strong strip acid.
+        acid_conc: Strip acid concentration (M). It sets the strip pH when
+            ``pH`` is None. None (the default) means 4 M when ``pH`` is also
+            None, and otherwise is filled in from ``pH`` as ``10**-pH`` so
+            ``info["acid_conc"]`` reports the acid the pH implies. Giving
+            both with different meanings raises.
         nitrate_conc: Aqueous nitrate concentration (M), required for solvating
             extractants such as TBP whose D is nitrate- rather than pH-driven
             (#195). For an HNO3 strip this is the nitrate the acid supplies.
@@ -54,28 +64,50 @@ class StripperParams(ParamsMixin):
     extractant: str
     elements: tuple[str, ...]
     diluent: str = "kerosene"
-    # (#270) None means "the extractant record's own default stripping pH",
-    # the bottom of its fitted validity window -- the lowest pH the
-    # coefficients can speak to, which is the most stripping condition on
-    # record. The literal 0.5 it replaced was chosen against D2EHPA's
-    # pre-refit coefficients; against the refitted ones D(Nd) there is 3.7,
-    # so it was not a strip at all.
+    # None means "the pH the strip acid sets", -log10(acid_conc). It used to
+    # be the bottom of the record's fitted window (#270) while acid_conc
+    # (4 M) was reported and never read, so the acid named had no effect on
+    # the strip (2026 operating-point audit, R9).
     pH: float | Array | None = None
     extractant_conc: float = 0.5
     acid_type: Literal["HCl", "H2SO4", "HNO3"] = "HCl"
-    acid_conc: float = 4.0  # M
+    acid_conc: float | None = None  # M; sets pH when pH is None
     nitrate_conc: float | None = None  # see #195
     mechanism: str | None = None  # see #195
     # Per-element log10(D) coefficient overrides, possibly traced; passed to
     # REEDistribution. The supported way to put uncertainty on D.
     coefficient_overrides: dict | None = None
 
-    def __post_init__(self):
-        """Resolve a pH default that the extractant record owns (#270)."""
-        if self.pH is None:
-            from difflow_ree.database import default_pH
+    #: Strip acid concentration (M) when neither pH nor acid_conc is given.
+    DEFAULT_ACID_CONC = 4.0
 
-            self.pH = default_pH(self.extractant, "stripping")
+    def __post_init__(self):
+        """Tie the strip pH to the strip acid (audit R9)."""
+        import math
+
+        if self.acid_conc is not None and not self.acid_conc > 0:
+            raise ValueError(f"acid_conc must be positive, got {self.acid_conc}")
+        if self.pH is None:
+            if self.acid_conc is None:
+                self.acid_conc = self.DEFAULT_ACID_CONC
+            self.pH = -math.log10(self.acid_conc)
+        elif self.acid_conc is None:
+            try:
+                self.acid_conc = 10.0 ** (-float(self.pH))
+            except TypeError:  # a traced pH: leave the acid unreported
+                pass
+        else:
+            try:
+                implied = -math.log10(self.acid_conc)
+                given = float(self.pH)
+            except TypeError:
+                return
+            if abs(implied - given) > 1e-9:
+                raise ValueError(
+                    f"StripperParams got pH={given:g} and acid_conc="
+                    f"{self.acid_conc:g} M, which sets pH {implied:g}. Give "
+                    f"one of them: the acid concentration sets the strip pH "
+                    f"(audit R9).")
 
 
 class REEStripper:
@@ -223,6 +255,14 @@ class REEStripper:
                 "recovery": 1 - frac_in_org,
             }
 
+        # Spectators (a saponification counter-ion such as Na_org, acid in
+        # the strip liquor) leave with the phase they came in; they used to
+        # be dropped (2026 conservation audit, b). An untracked REE is
+        # reported, not carried.
+        dropped_species = tuple(sorted(
+            set(carry_through(barren_org_flows, org_flows, p.elements))
+            | set(carry_through(product_flows, strip_flows, p.elements))))
+
         P = loaded_organic["P"]
         product = make_stream(product_flows, T, P)
         barren_organic = make_stream(barren_org_flows, T, P)
@@ -247,10 +287,14 @@ class REEStripper:
             "pH": pH,
             "T": T,
             "acid_type": p.acid_type,
-            "acid_conc": p.acid_conc,
+            # The acid the strip pH implies (audit R9): a call-time pH
+            # overrides the params, and with it the acid.
+            "acid_conc": jnp.power(10.0, -pH),
             "D_values": D_values,
             "strip_efficiency": strip_efficiency,
             "overall_recovery": overall_recovery,
+            # REE on an inlet that are not in ``elements`` (not conserved).
+            "dropped_species": dropped_species,
         }
 
         return product, barren_organic, info

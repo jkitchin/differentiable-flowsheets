@@ -233,6 +233,47 @@ class TestOnceThrough:
         assert float(out["dih_duty"]) == 0.0 and float(out["dip_duty"]) == 0.0
 
 
+class TestFeedIsConserved:
+    """Audit (2026-10): the unit rebuilt its feed through
+    ``hydrocarbon_flows``, which silently dropped any species it does not
+    model, and it overwrote the charge hydrogen with the H2_HC target,
+    destroying feed hydrogen above it (a negative make-up that balances()
+    added back, so it reported closure). The feed is now refused when it
+    carries an unmodelled species, and feed hydrogen counts towards the
+    target with the make-up floored at zero."""
+
+    @pytest.mark.parametrize("extra", ["F_water", "F_n_heptane_extra"])
+    def test_an_unmodelled_feed_species_is_refused(self, once_through, extra):
+        unit, feed = once_through[:2]
+        bad = dict(feed, **{extra: 2.0})
+        with pytest.raises(ValueError, match="not isomerization species"):
+            unit(bad)
+        with pytest.raises(ValueError, match="not isomerization species"):
+            unit.balances(bad, {"streams": once_through[-1]["streams"],
+                                "info": once_through[-1]})
+        with pytest.raises(ValueError, match="not isomerization species"):
+            unit.outputs(bad, T_BASE, unit.params.reactor.LHSV)
+
+    def test_feed_hydrogen_above_the_target_is_kept(self, once_through):
+        unit, feed = once_through[:2]
+        ih = tc.idx("hydrogen")
+        F = hydrocarbon_flows(feed)
+        rich = dict(feed, F_hydrogen=5.0 * jnp.sum(F))     # far above H2_HC = 0.3
+        iso, gas, info = unit(rich)
+        Ff = flows_of(rich)
+        # No make-up is needed, and none is taken away.
+        assert float(info["H2_makeup"]) == 0.0
+        assert float(info["streams"]["charge"]["F_hydrogen"]) == pytest.approx(
+            float(Ff[ih]), rel=1e-14)
+        assert float(info["H2_HC_charge"]) > unit.params.H2_HC
+        # Closure counted independently of balances(): fresh in, products out.
+        m_in = float(jnp.dot(Ff, tc.MW))
+        m_out = float(jnp.dot(hydrocarbon_flows(iso) + hydrocarbon_flows(gas), tc.MW))
+        assert m_out == pytest.approx(m_in, rel=1e-10)
+        b = unit.balances(rich, {"streams": info["streams"], "info": info})
+        assert abs(float(b["mass"])) < 1e-10
+
+
 class TestPlanningBlock:
     """Wiring only: the block's names, units and bounds, and its link into a
     gasoline pool. Its delta vectors are a release check below."""
