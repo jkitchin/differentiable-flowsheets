@@ -35,6 +35,7 @@ from difflow_ree.equilibrium.distribution import (
     get_distribution_coefficients,
     get_separation_factor,
     SaponifiedCorrelationWarning,
+    SeparationFactorFlatWarning,
 )
 from difflow_ree.equilibrium.free_extractant import (
     ExtractantCapacityWarning,
@@ -126,6 +127,7 @@ __all__ = [
     "get_distribution_coefficients",
     "get_separation_factor",
     "SaponifiedCorrelationWarning",
+    "SeparationFactorFlatWarning",
     "ExtractantCapacityWarning",
     "FreeExtractantConvergenceWarning",
     "FreeExtractantResult",

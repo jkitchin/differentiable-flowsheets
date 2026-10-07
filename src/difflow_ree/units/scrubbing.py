@@ -383,59 +383,115 @@ def optimal_scrub_pH(
     target_element: str,
     impurity_element: str,
     min_target_retention: float = 0.95,
-    pH_range: tuple[float, float] = (1.0, 4.0),
+    pH_range: tuple[float, float] | None = None,
     n_points: int = 50,
     nitrate_conc: float | None = None,
     mechanism: str | None = None,
+    n_stages: int | float = 5,
+    phase_ratio: float = 7.5,
 ) -> tuple[float, float, float]:
-    """Find optimal scrub pH for separation.
+    """The scrub pH that removes the most impurity while keeping the target.
 
-    Finds pH that maximizes impurity removal while retaining target.
+    Lowering the scrub pH lowers every ``D``, so the scrub returns more of
+    both elements to the aqueous. The best pH is therefore the LOWEST one at
+    which the target is still retained to ``min_target_retention``, with the
+    retention computed for a counter-current scrub of ``n_stages`` stages at
+    ``O/A = phase_ratio`` through the same Kremser fraction the scrubber
+    evaluates. It is found on a grid of ``n_points`` and then refined.
 
-    Note:
-        Only meaningful for a cation-exchange extractant. A solvating
-        extractant's D is nitrate- rather than pH-driven (#195), so the scan is
-        flat in pH and the returned pH carries no information.
+    This replaced an objective, ``D_target / (D_impurity + 0.01)``, that
+    rises without bound with pH: it always returned the top of the range (pH
+    4 on D2EHPA, where D(Nd) is 1.6e11, so nothing is scrubbed), never read
+    ``min_target_retention``, and for naphthenic acid, whose window starts at
+    pH 4, silently returned 1.0 (2026 operating-point audit, R3).
 
     Args:
-        extractant: Extractant name
-        target_element: Element to keep in organic
-        impurity_element: Element to remove
-        min_target_retention: Minimum fraction of target to retain
-        pH_range: pH range to search
-        n_points: Number of evaluation points
-        nitrate_conc: Aqueous nitrate concentration (M), required for solvating
-            extractants (#195)
-        mechanism: Explicit mechanism override; see REEDistribution (#195)
+        extractant: Extractant name.
+        target_element: Element to keep in the organic.
+        impurity_element: Element to remove.
+        min_target_retention: Minimum fraction of the target the scrub must
+            leave on the organic.
+        pH_range: pH range to search. None (the default) is the record's
+            fitted window.
+        n_points: Number of grid points before refinement.
+        nitrate_conc: Aqueous nitrate concentration (M), required for
+            solvating extractants (#195).
+        mechanism: Explicit mechanism override; see REEDistribution (#195).
+        n_stages: Scrub stages the retention is computed for.
+        phase_ratio: Scrub ``O/A``. The default, 7.5, is what an
+            ``ExtractScrubStripCircuit`` scrub runs at with its default
+            ratios (see
+            :func:`difflow_ree.equilibrium.operating_points.circuit_phase_ratios`).
 
     Returns:
-        Tuple of (optimal_pH, target_D, impurity_D)
+        Tuple of ``(pH, target_D, impurity_D)``.
+
+    Warns:
+        UserWarning: If no pH in the range retains the target to
+            ``min_target_retention`` (the top of the range is returned), or
+            if ``D`` does not move with pH (a solvating extractant; the bottom
+            of the range is returned and the pH carries no information).
+
+    Example:
+        >>> pH, D_nd, D_la = optimal_scrub_pH("D2EHPA", "Nd", "La")
+        >>> D_nd > D_la
+        True
     """
+    import numpy as np
+
+    from difflow_ree.equilibrium.operating_points import (
+        is_pH_driven, kremser_fraction, section_factors)
+
     dist = REEDistribution(
         extractant=extractant,
         elements=(target_element, impurity_element),
         nitrate_conc=nitrate_conc,
         mechanism=mechanism,
     )
+    if pH_range is None:
+        pH_range = tuple(dist._ext_data.valid_ph_range)
+    lo, hi = float(pH_range[0]), float(pH_range[1])
+    # Report a range outside the window once, then search quietly.
+    dist._check_ph_range(jnp.asarray([lo, hi]))
+    quiet = REEDistribution(
+        extractant=extractant,
+        elements=(target_element, impurity_element),
+        nitrate_conc=nitrate_conc,
+        mechanism=mechanism,
+        on_out_of_range="ignore",
+    )
 
-    best_pH = pH_range[0]
-    best_ratio = 0.0
+    def result(pH):
+        D = quiet.get_D_all(pH=float(pH))
+        return float(pH), float(D[target_element]), float(D[impurity_element])
 
-    for pH in jnp.linspace(pH_range[0], pH_range[1], n_points):
-        D_target = float(dist.get_D(target_element, pH))
-        D_impurity = float(dist.get_D(impurity_element, pH))
+    if not is_pH_driven(quiet, (target_element, impurity_element)):
+        warnings.warn(
+            f"D on {extractant!r} does not depend on pH, so no scrub pH is "
+            f"better than another; returning the bottom of the range.",
+            UserWarning, stacklevel=2)
+        return result(lo)
 
-        # Want high D for target (stays in organic)
-        # Want low D for impurity (goes to aqueous)
-        # Ratio = D_target / D_impurity should be maximized
+    def retention(pHs):
+        factor = section_factors(quiet, (target_element,), pHs, phase_ratio)[:, 0]
+        return kremser_fraction(1.0 / factor, n_stages)
 
-        if D_target > 1.0:  # Target should stay in organic
-            ratio = D_target / (D_impurity + 0.01)
-            if ratio > best_ratio:
-                best_ratio = ratio
-                best_pH = float(pH)
-
-    D_target_opt = float(dist.get_D(target_element, best_pH))
-    D_impurity_opt = float(dist.get_D(impurity_element, best_pH))
-
-    return best_pH, D_target_opt, D_impurity_opt
+    grid = np.linspace(lo, hi, n_points)
+    ok = retention(grid) >= min_target_retention
+    if not ok.any():
+        warnings.warn(
+            f"No scrub pH in [{lo:g}, {hi:g}] retains {min_target_retention:g} "
+            f"of {target_element} on {extractant!r} with {n_stages} stages at "
+            f"O/A {phase_ratio:g}; returning the top of the range, where "
+            f"retention is {float(retention(np.array([hi]))[0]):.3f}.",
+            UserWarning, stacklevel=2)
+        return result(hi)
+    k = int(np.argmax(ok))  # retention rises with pH: first feasible point
+    if k == 0:
+        return result(lo)
+    a, b = grid[k - 1], grid[k]
+    for _ in range(4):
+        sub = np.linspace(a, b, 101)
+        j = int(np.argmax(retention(sub) >= min_target_retention))
+        a, b = sub[max(j - 1, 0)], sub[j]
+    return result(b)

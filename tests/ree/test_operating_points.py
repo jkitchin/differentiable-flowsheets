@@ -173,3 +173,52 @@ class TestDesign:
         """An unused separation-factor lookup raised KeyError here."""
         p = design_extract_scrub_strip(COMP, HEAVY, "naphthenic_acid")
         assert p.extractant == "naphthenic_acid"
+
+
+class TestScans:
+    """optimal_pH_for_separation and optimal_scrub_pH (audit R3)."""
+
+    @pytest.mark.parametrize("ext", ["D2EHPA", "PC88A", "Cyanex272", "naphthenic_acid"])
+    def test_flat_SF_returns_the_cut_inside_the_window_and_says_so(self, ext):
+        """Before: argmax of 5e-15 noise, e.g. 4.879 for Cyanex272 (window
+        [1.5, 3.5]) and 1.121 for naphthenic acid (D ~ 1e-10)."""
+        from difflow_ree.equilibrium.distribution import SeparationFactorFlatWarning
+
+        d = REEDistribution(ext, ("Pr", "Nd"))
+        with pytest.warns(SeparationFactorFlatWarning, match="does not depend on pH"):
+            pH, sf = d.optimal_pH_for_separation("Nd", "Pr")
+        lo, hi = d._ext_data.valid_ph_range
+        assert lo <= pH <= hi
+        assert sf == pytest.approx(float(d.get_separation_factor("Nd", "Pr", 1.0)))
+        q = REEDistribution(ext, ("Pr", "Nd"), on_out_of_range="ignore")
+        cut = pH_where(q, ("Nd", "Pr"), 1.0)
+        assert pH == pytest.approx(min(max(cut, lo), hi))
+
+    def test_scrub_pH_honours_the_retention(self):
+        """Before: always the top of (1, 4) -- pH 4, D(Nd) = 1.6e11."""
+        from difflow_ree.units.scrubbing import optimal_scrub_pH
+
+        for keep in (0.9, 0.99):
+            pH, D_t, D_i = optimal_scrub_pH("D2EHPA", "Nd", "La",
+                                            min_target_retention=keep)
+            assert 0.0 <= pH <= 2.0
+            S = 1.0 / (D_t * 7.5)
+            assert float(kremser_fraction(S, 5)) == pytest.approx(keep, abs=1e-6)
+            assert D_i < D_t
+        # Asking to keep more of the target costs impurity removal: higher pH.
+        assert optimal_scrub_pH("D2EHPA", "Nd", "La", 0.99)[0] > \
+            optimal_scrub_pH("D2EHPA", "Nd", "La", 0.9)[0]
+
+    def test_scrub_pH_for_naphthenic_is_in_its_window(self):
+        """Before: silently 1.0, three units below the window."""
+        from difflow_ree.units.scrubbing import optimal_scrub_pH
+
+        pH, _, _ = optimal_scrub_pH("naphthenic_acid", "Nd", "La")
+        assert 4.0 <= pH <= 5.0
+
+    def test_unreachable_retention_warns(self):
+        from difflow_ree.units.scrubbing import optimal_scrub_pH
+
+        with pytest.warns(UserWarning, match="No scrub pH"):
+            optimal_scrub_pH("naphthenic_acid", "Nd", "La",
+                             min_target_retention=0.999999, n_stages=1)

@@ -89,6 +89,16 @@ def _concrete_bounds(value) -> tuple[float, float] | None:
 # Distribution Coefficient Model
 # =============================================================================
 
+class SeparationFactorFlatWarning(UserWarning):
+    """A separation factor that does not move with pH has no optimal pH.
+
+    Raised by :meth:`REEDistribution.optimal_pH_for_separation` when the
+    scan is flat, which it is on every acidic record in the database (one
+    shared slope ``b = 3``): the pH it then returns is the extraction cut for
+    the pair, not an SF maximum (2026 operating-point audit, R3).
+    """
+
+
 class SaponifiedCorrelationWarning(UserWarning):
     """A correlation fitted to a saponified system is being driven by pH.
 
@@ -1162,29 +1172,83 @@ class REEDistribution:
         self,
         element1: str,
         element2: str,
-        pH_range: tuple[float, float] = (1.0, 5.0),
+        pH_range: tuple[float, float] | None = None,
         n_points: int = 100,
         T: float = 298.15,
+        phase_ratio: float = 1.0,
     ) -> tuple[float, float]:
-        """Find pH that maximizes separation factor.
+        """Operating pH for separating two elements, and the SF there.
+
+        When the separation factor genuinely varies with pH (a record with a
+        curvature term, or different slopes), the pH of the largest SF in
+        ``pH_range`` is returned. When it does not (every acidic record in
+        the database has the shared slope ``b = 3`` and no curvature, so
+        ``SF = 10**(a1 - a2)`` at every pH), there is no SF maximum to find:
+        the scan used to return the argmax of floating-point noise (spread
+        5e-15), for example pH 4.88 for Cyanex272, outside its window, and
+        1.12 for naphthenic acid, where D is 1e-10 (2026 operating-point
+        audit, R3). In that case the pH returned is the cut: where the pair's
+        geometric-mean ``D * phase_ratio`` is one, so element1 goes to the
+        organic and element2 stays in the aqueous
+        (:func:`difflow_ree.equilibrium.operating_points.pH_where`), moved to
+        the nearest end of ``pH_range`` if it falls outside, and a
+        :class:`SeparationFactorFlatWarning` says so.
 
         Args:
-            element1: Target element (to extract)
-            element2: Impurity element (to reject)
-            pH_range: pH range to search
-            n_points: Number of evaluation points
-            T: Temperature (K)
+            element1: Target element (to extract).
+            element2: Impurity element (to reject).
+            pH_range: pH range to search. None (the default) is the record's
+                fitted window, ``valid_ph_range``; the old default ``(1, 5)``
+                lay outside two of the four acidic windows.
+            n_points: Number of evaluation points for the SF scan.
+            T: Temperature (K).
+            phase_ratio: ``O/A`` the cut is placed at (used only when SF is
+                flat in pH).
 
         Returns:
-            Tuple of (optimal_pH, max_SF)
+            Tuple of ``(pH, SF at that pH)``.
+
+        Warns:
+            SeparationFactorFlatWarning: When SF does not depend on pH.
+
+        Example:
+            >>> import warnings
+            >>> d = REEDistribution("PC88A", ("Pr", "Nd"))
+            >>> with warnings.catch_warnings():
+            ...     warnings.simplefilter("ignore")
+            ...     pH, sf = d.optimal_pH_for_separation("Nd", "Pr")
+            >>> 0.1 <= pH <= 2.5
+            True
         """
-        pH_values = jnp.linspace(pH_range[0], pH_range[1], n_points)
-        SF_values = jnp.array([
+        from difflow_ree.equilibrium.operating_points import pH_where
+
+        if pH_range is None:
+            pH_range = tuple(self._ext_data.valid_ph_range)
+        lo, hi = float(pH_range[0]), float(pH_range[1])
+        pH_values = np.linspace(lo, hi, n_points)
+        SF_values = np.array([
             float(self.get_separation_factor(element1, element2, pH, T))
             for pH in pH_values
         ])
-        max_idx = jnp.argmax(SF_values)
-        return float(pH_values[max_idx]), float(SF_values[max_idx])
+        spread = (SF_values.max() - SF_values.min()) / max(abs(SF_values.max()), 1e-300)
+        if spread > 1e-9:
+            k = int(np.argmax(SF_values))
+            return float(pH_values[k]), float(SF_values[k])
+
+        quiet = dataclasses_replace(self, on_out_of_range="ignore")
+        cut = pH_where(quiet, (element1, element2), 1.0, phase_ratio)
+        pH = min(max(cut, lo), hi)
+        moved = "" if pH == cut else (
+            f" The cut, pH {cut:.3g}, is outside the range [{lo:g}, {hi:g}] "
+            f"and was moved to its nearest end.")
+        warnings.warn(
+            f"The {element1}/{element2} separation factor on "
+            f"{self.extractant!r} does not depend on pH (relative spread "
+            f"{spread:.1e} over [{lo:g}, {hi:g}]): the returned pH {pH:.3g} "
+            f"is the cut where their geometric-mean D * (O/A) = 1 at O/A "
+            f"{phase_ratio:g}, not an SF maximum.{moved}",
+            SeparationFactorFlatWarning, stacklevel=2)
+        return float(pH), float(self.get_separation_factor(element1, element2, pH, T))
 
 
 # =============================================================================
