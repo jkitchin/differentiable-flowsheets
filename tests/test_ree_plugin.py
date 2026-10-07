@@ -208,6 +208,66 @@ class TestUnitOperations:
         # Should have high precipitation
         assert info["total_precipitated"] > 0.1
 
+    def test_cerium_oxidizer_registers_its_solid_outlet(self):
+        """The CeO2 solid is an outlet, so a flowsheet can place the unit (#371).
+
+        It used to come back as a bare dict: the catalog counted one
+        outlet from the annotation, the call returned three items, and
+        every flowsheet holding the unit failed to solve.
+        """
+        from difflow.catalog import catalog
+        from difflow.flowsheet import Unit, _parse_outlets
+        from difflow.streams import get_flows, make_stream
+        from difflow_ree import CeriumOxidizer, CeriumOxidizerParams
+
+        ports = catalog()["CeriumOxidizer"].ports
+        assert ports.n_outlets == 2
+        assert list(ports.outlet_roles) == ["filtrate", "solid"]
+
+        elements = ("La", "Ce", "Nd")
+        oxidizer = CeriumOxidizer(CeriumOxidizerParams(elements=elements))
+        feed = make_stream(flows={"H2O": 10.0, "La": 0.1, "Ce": 0.2, "Nd": 0.05},
+                           T=298.15, P=101325.0)
+        unit = Unit("ce_ox", oxidizer, ["feed"], ["filtrate", "ceo2"])
+        outlets = _parse_outlets(oxidizer(feed), unit)
+
+        ce_in = 0.2
+        ce_out = (float(get_flows(outlets["filtrate"])["Ce"])
+                  + float(get_flows(outlets["ceo2"])["Ce"]))
+        assert ce_out == pytest.approx(ce_in)
+        assert float(get_flows(outlets["ceo2"])["Ce"]) > 0.0
+
+    def test_separation_train_counts_stream_products_in_its_balance(self):
+        """A Stream is a dict, so the balance must read F_<element> keys (#371).
+
+        It tested ``isinstance(product, dict)`` and read bare element keys,
+        which counted every stream product as zero; with the CeO2 solid now a
+        Stream too, the closure read exactly 0.
+        """
+        from difflow.streams import get_flows, make_stream
+        from difflow_ree.flowsheets.full_train import (
+            FullSeparationTrain,
+            SeparationTrainParams,
+        )
+
+        elements = ("La", "Ce", "Pr", "Nd")
+        train = FullSeparationTrain(SeparationTrainParams(elements=elements))
+        feed = make_stream(flows={"H2O": 10.0, "La": 0.3, "Ce": 0.5, "Pr": 0.05,
+                                  "Nd": 0.15}, T=298.15, P=101325.0)
+        result = train(feed)
+
+        def ree(stream):
+            flows = get_flows(stream)
+            return sum(float(flows.get(e, 0.0)) for e in elements)
+
+        products = result["products"]
+        assert result["mass_balance"]["total_out"] == pytest.approx(
+            sum(ree(p) for p in products.values()))
+        assert result["mass_balance"]["total_out"] > ree(products["CeO2"])
+        # The oxidizer itself conserves the REE it is fed
+        assert ree(products["CeO2"]) + ree(result["intermediates"]["ce_depleted"]) \
+            == pytest.approx(ree(feed))
+
 
 class TestFlowsheets:
     """Test flowsheet templates."""

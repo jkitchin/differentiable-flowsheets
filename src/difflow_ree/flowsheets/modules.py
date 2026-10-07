@@ -791,14 +791,11 @@ class CeriumOxidationModule(REEModule):
             T: Temperature (K); None uses the module default.
 
         Returns:
-            ``(filtrate, ceo2, info)``. The solid, which the unit returns
-            as a bare flow dict, is lifted to a Stream so it can travel on
-            a port like anything else.
+            ``(filtrate, ceo2, info)``, the solid already a Stream so it
+            can travel on a port like anything else.
         """
         T = jnp.asarray(self.T if T is None else T, dtype=jnp.float64)
-        filtrate, solid_flows, info = self.oxidizer(feed, T)
-        solid = make_stream(solid_flows, T, feed["P"])
-        return filtrate, solid, info
+        return self.oxidizer(feed, T)
 
 
 # =====================================================================

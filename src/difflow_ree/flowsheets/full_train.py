@@ -359,11 +359,13 @@ class FullSeparationTrain:
 
         total_out = 0.0
         for product_name, product in results["products"].items():
-            if isinstance(product, dict):  # Solid product
-                total_out += sum(float(product.get(e, 0.0)) for e in self.params.elements)
-            else:  # Stream
-                prod_flows = get_flows(product)
-                total_out += sum(float(prod_flows.get(e, 0.0)) for e in self.params.elements)
+            # A Stream is a dict too, so the type cannot tell a stream from a
+            # bare flow dict; the keys can. Streams carry F_<element>, a bare
+            # flow dict carries the element names themselves. Testing the type
+            # sent every product down the bare-dict branch and counted every
+            # stream as zero (#371).
+            prod_flows = get_flows(product) or product
+            total_out += sum(float(prod_flows.get(e, 0.0)) for e in self.params.elements)
 
         results["mass_balance"] = {
             "total_in": total_in,

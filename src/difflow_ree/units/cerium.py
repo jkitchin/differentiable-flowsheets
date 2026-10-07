@@ -110,7 +110,7 @@ class CeriumOxidizer:
         feed: Stream,
         T: Array | float | None = None,
         pH: Array | float | None = None,
-    ) -> tuple[Stream, dict, dict]:
+    ) -> tuple[Stream, Stream, dict]:
         """Perform cerium oxidation and precipitation.
 
         Args:
@@ -120,7 +120,7 @@ class CeriumOxidizer:
 
         Returns:
             filtrate: Ce-depleted REE solution
-            solid: CeO₂ precipitate (mol Ce/s)
+            solid: CeO₂ precipitate as a stream (F_Ce in mol Ce/s)
             info: Process diagnostics
         """
         p = self.params
@@ -182,6 +182,9 @@ class CeriumOxidizer:
 
         P = feed["P"]
         filtrate = make_stream(filtrate_flows, T, P)
+        # A Stream, not a bare dict, so the catalog counts it as an
+        # outlet like the precipitators' solid (#371)
+        solid = make_stream(solid_flows, T, P)
 
         # Calculate Ce removal efficiency
         total_ree_in = sum(float(feed_flows.get(e, 0.0)) for e in p.elements)
@@ -222,7 +225,7 @@ class CeriumOxidizer:
             "oxidant_excess": p.oxidant_excess,
         }
 
-        return filtrate, solid_flows, info
+        return filtrate, solid, info
 
 
 # =============================================================================
