@@ -25,6 +25,7 @@ where:
 from dataclasses import dataclass, field
 
 from difflow.params_mixin import ParamsMixin
+import jax
 import jax.numpy as jnp
 from jax import Array, lax
 
@@ -41,10 +42,23 @@ class UltrafiltrationParams(ParamsMixin):
     """Parameters for ultrafiltration.
 
     Attributes:
-        membrane_area: Membrane area (m²)
-        MWCO: Molecular weight cutoff (kDa)
-        rejection: Dict of species name -> rejection coefficient (0-1)
-                  Species not listed assumed to have R=0 (fully permeable)
+        membrane_area: Membrane area (m²). Sets the processing time reported
+            when the call is given ``feed_volume``
+            (``info['process_time_h']`` = permeate volume / (flux x area)).
+            The species split does not depend on it: sieving coefficients
+            are per unit area, so a smaller membrane reaches the same
+            concentration factor, only more slowly.
+        MWCO: Molecular weight cutoff (kDa), the molecular weight rejected
+            at 90% (the manufacturers' nominal rating). Sets the rejection
+            of every species not listed in ``rejection`` from its molecular
+            weight (:func:`rejection_from_mw`).
+        rejection: Dict of species name -> rejection coefficient (0-1).
+            Overrides the MWCO-derived value for the species listed.
+        molecular_weights: Dict of species name -> molecular weight (kDa),
+            consulted before :data:`difflow_bio.database.BIO_SPECIES_MW_KDA`
+            and the core species database. A species found in none of
+            them, and not in ``rejection``, is treated as freely permeable
+            (R = 0), the right default for buffer components.
         Lp: Membrane permeability (L/m²/h/bar), optional
         k_mass: Mass transfer coefficient for concentration polarization (m/s).
                 Controls the build-up of solute at the membrane wall.
@@ -66,6 +80,7 @@ class UltrafiltrationParams(ParamsMixin):
     # CRC Press, 1998, Ch. 4). Default 0 disables it (backward compatible).
     fouling_coefficient: float | Array = 0.0  # per unit permeate volume (1/L)
     species_order: list[str] = None
+    molecular_weights: dict = field(default_factory=dict)
 
 
 @dataclass(repr=False)
@@ -73,9 +88,15 @@ class DiafiltrationParams(ParamsMixin):
     """Parameters for diafiltration (buffer exchange).
 
     Attributes:
-        membrane_area: Membrane area (m²)
-        MWCO: Molecular weight cutoff (kDa)
-        rejection: Dict of species -> rejection coefficient
+        membrane_area: Membrane area (m²). Sets the processing time reported
+            when the call is given ``feed_volume``; the exchange itself
+            depends on the diavolumes, not the area.
+        MWCO: Molecular weight cutoff (kDa, rejected at 90%). Sets the
+            rejection of species not listed in ``rejection``.
+        rejection: Dict of species -> rejection coefficient, overriding
+            the MWCO-derived value.
+        molecular_weights: Dict of species -> molecular weight (kDa); see
+            :class:`UltrafiltrationParams`.
         Lp: Membrane permeability (L/m²/h/bar)
         k_mass: Mass transfer coefficient for concentration polarization (m/s).
                 Controls the build-up of solute at the membrane wall.
@@ -93,6 +114,45 @@ class DiafiltrationParams(ParamsMixin):
     sigma: float | Array = 1000.0  # Pa·m³/kg, osmotic pressure coefficient
     fouling_coefficient: float | Array = 0.0  # per unit permeate volume (1/L)
     species_order: list[str] = None
+    molecular_weights: dict = field(default_factory=dict)
+
+
+def species_rejection(params, species: str) -> Array:
+    """Rejection coefficient a membrane applies to one species.
+
+    An explicit ``params.rejection`` entry wins; otherwise the rejection
+    follows the membrane MWCO against the species' molecular weight
+    (``params.molecular_weights``, then the bio and core species tables).
+    A species with no molecular weight anywhere is freely permeable.
+
+    Bio audit C4: the units used ``rejection.get(species, 0.0)``, so with the
+    default empty ``rejection`` every species, the 150 kDa mAb included,
+    passed a 30 kDa membrane: UF at CF 5 put 8 of 10 g of mAb in the permeate
+    and 5 diavolumes of DF washed out 9.93 of 10 g.
+
+    Args:
+        params: ``UltrafiltrationParams`` or ``DiafiltrationParams``.
+        species: Species name.
+
+    Returns:
+        Rejection coefficient in [0, 1].
+    """
+    if species in params.rejection:
+        return jnp.asarray(params.rejection[species])
+    mws = params.molecular_weights or {}
+    if species in mws:
+        mw = mws[species]
+    else:
+        from difflow_bio.database import get_species_mw_kda
+        mw = get_species_mw_kda(species)
+    if mw is None:
+        return jnp.asarray(0.0)
+    return rejection_from_mw(jnp.asarray(mw), jnp.asarray(params.MWCO))
+
+
+def _process_time_h(permeate_volume_L, flux_LMH, area_m2):
+    """Hours to pass ``permeate_volume_L`` at ``flux_LMH`` through ``area_m2``."""
+    return safe_divide(permeate_volume_L, flux_LMH * area_m2)
 
 
 # =============================================================================
@@ -126,7 +186,7 @@ class Ultrafiltration:
     parameter_symbols = {"membrane_area": "A", "MWCO": r"\mathrm{MWCO}", "Lp": "L_p"}
     parameter_units = {
         "membrane_area": "m^2",
-        "MWCO": "Da",
+        "MWCO": "kDa",
         "Lp": "L/m^2/h/bar",
         "k_mass": "m/s",
         "sigma": "Pa*m^3/kg",
@@ -149,6 +209,7 @@ class Ultrafiltration:
         TMP: float | Array = 1.0,
         mode: str = "batch",
         feed_concentration: float | Array = None,
+        feed_volume: float | Array = None,
     ) -> tuple[tuple[Stream, Stream], dict[str, Array]]:
         """Perform ultrafiltration.
 
@@ -164,13 +225,20 @@ class Ultrafiltration:
                 the solution concentrates (concentration-polarization feedback,
                 #99). When None, the linearized polarization factor is used
                 (backward compatible).
+            feed_volume: Feed volume (L). When given, the permeate volume
+                and the processing time at the computed flux over
+                ``membrane_area`` are reported. The stream carries amounts,
+                not a volume, so the time cannot be computed without it.
 
         Returns:
             (retentate, permeate): Tuple of outlet streams
             info: Dictionary with:
                 - 'flux': Permeate flux (L/m²/h)
-                - 'recovery': Product recovery in retentate
+                - 'recovery': Per-species fraction kept in the retentate
+                - 'rejection': Per-species rejection coefficient used
                 - 'volume_reduction': V_permeate / V_feed
+                - 'process_time_h', 'permeate_volume_L': only with
+                  ``feed_volume``
         """
         p = self.params
         inlet_flows = get_flows(inlet)
@@ -225,13 +293,15 @@ class Ultrafiltration:
             delta_pi_bar = None
             J = Lp_eff * TMP / polarization_factor  # L/m²/h (effective flux)
 
-        # Split species based on rejection
+        # Split species based on rejection: explicit, else from the MWCO
+        # against the species' molecular weight (bio audit C4).
         retentate_flows = {}
         permeate_flows = {}
+        rejection = {}
 
         for species, flow in inlet_flows.items():
-            R = p.rejection.get(species, 0.0)  # Default: fully permeable
-            R = jnp.asarray(R)
+            R = species_rejection(p, species)
+            rejection[species] = R
 
             if mode == "batch":
                 # Batch concentration with constant rejection R:
@@ -253,22 +323,30 @@ class Ultrafiltration:
         retentate = make_stream(retentate_flows, inlet["T"], inlet["P"])
         permeate = make_stream(permeate_flows, inlet["T"], inlet["P"])
 
-        # Calculate recovery for species with R > 0
-        recovery = {}
-        for species, R in p.rejection.items():
-            if species in inlet_flows:
-                recovery[species] = retentate_flows[species] / inlet_flows[species]
+        # Retentate recovery of every species (each now has a rejection).
+        recovery = {
+            species: safe_divide(retentate_flows[species], flow)
+            for species, flow in inlet_flows.items()
+        }
 
         info = {
             "flux": J,
             "concentration_factor": CF,
             "volume_reduction": volume_reduction,
             "recovery": recovery,
+            "rejection": rejection,
             "retentate_volume_fraction": retentate_volume_frac,
             "fouling_factor": fouling_factor,
+            "membrane_area": jnp.asarray(p.membrane_area),
         }
         if delta_pi_bar is not None:
             info["osmotic_pressure_bar"] = delta_pi_bar
+        if feed_volume is not None:
+            # The area sets how long the batch takes, not the split.
+            permeate_volume_L = jnp.asarray(feed_volume) * permeate_volume_frac
+            info["permeate_volume_L"] = permeate_volume_L
+            info["process_time_h"] = _process_time_h(
+                permeate_volume_L, J, jnp.asarray(p.membrane_area))
 
         return (retentate, permeate), info
 
@@ -299,7 +377,7 @@ class Diafiltration:
     parameter_symbols = {"membrane_area": "A", "MWCO": r"\mathrm{MWCO}"}
     parameter_units = {
         "membrane_area": "m^2",
-        "MWCO": "Da",
+        "MWCO": "kDa",
         "Lp": "L/m^2/h/bar",
         "k_mass": "m/s",
         "sigma": "Pa*m^3/kg",
@@ -319,29 +397,59 @@ class Diafiltration:
         self,
         inlet: Stream,
         buffer: Stream,
-        n_diavolumes: float | Array,
+        n_diavolumes: float | Array | None = None,
         TMP: float | Array = 1.0,
+        feed_volume: float | Array = None,
     ) -> tuple[tuple[Stream, Stream], dict[str, Array]]:
         """Perform constant-volume diafiltration.
 
         Args:
-            inlet: Feed stream (retentate side)
-            buffer: Buffer stream composition (concentrations)
-            n_diavolumes: Number of diavolumes (total buffer volume / initial volume)
-            TMP: Transmembrane pressure (bar)
+            inlet: Feed stream (retentate side).
+            buffer: Diafiltration buffer. With ``n_diavolumes=None`` (the
+                default) this is the buffer actually fed: its flows enter
+                the balance and set the diavolumes, N = total buffer /
+                total inlet (the same amount-as-volume proxy the unit uses
+                for the retentate). With ``n_diavolumes`` given, only its
+                composition is used and it is scaled to N x the inlet; the
+                buffer that entered is then reported as
+                ``info['buffer_consumed']`` so the balance can be closed.
+            n_diavolumes: Number of diavolumes (buffer volume / retentate
+                volume), or None to take it from the buffer stream.
+            TMP: Transmembrane pressure (bar).
+            feed_volume: Retentate volume (L). When given, the permeate
+                volume and the processing time over ``membrane_area`` are
+                reported.
 
         Returns:
-            (retentate, permeate): Tuple of outlet streams
-            info: Dictionary with exchange efficiency for each species
+            (retentate, permeate): Tuple of outlet streams. Retentate +
+            permeate = inlet + ``info['buffer_consumed']`` for every
+            species.
+            info: Dictionary with the flux, diavolumes, per-species
+            exchange efficiency and rejection, and the buffer consumed.
+
+        Example:
+            >>> df = Diafiltration(DiafiltrationParams(membrane_area=1.0))
+            >>> (ret, perm), info = df(feed, buffer)  # N from the buffer
         """
         p = self.params
         inlet_flows = get_flows(inlet)
         buffer_flows = get_flows(buffer)
 
-        n_dv = jnp.asarray(n_diavolumes)
-
         # Total volume (sum of flows as proxy)
         V_initial = sum(inlet_flows.values())
+        total_buffer_flow = sum(buffer_flows.values())
+
+        # Bio audit C4: the buffer stream entered only as a composition, so
+        # 100 units of buffer fed became 5 x 110 = 550 units in the balance
+        # and the flowsheet's buffer stream never closed. Now the buffer fed
+        # is the buffer consumed unless the caller fixes N explicitly.
+        if n_diavolumes is None:
+            n_dv = safe_divide(total_buffer_flow, V_initial)
+            scale = jnp.asarray(1.0)
+        else:
+            n_dv = jnp.asarray(n_diavolumes)
+            scale = n_dv * V_initial / jnp.maximum(total_buffer_flow, 1e-30)
+        buffer_added = {s: f * scale for s, f in buffer_flows.items()}
 
         # Permeate flux with concentration polarization correction (film model).
         #
@@ -356,84 +464,55 @@ class Diafiltration:
         polarization_factor = 1.0 + Lp_SI * p.sigma / p.k_mass
         J = Lp_eff * TMP / polarization_factor  # L/m²/h (effective flux)
 
-        # For CVD: C/C_0 = exp(-n_dv * (1-R)) for species being washed out
-        # Buffer species: C = C_buffer * (1 - exp(-n_dv * (1-R)))
-
+        # Constant-volume diafiltration, per diavolume N and sieving
+        # coefficient s = 1 - R:  dC/dN = C_buffer - s C.  Hence
+        #   initial solute kept:  M_0 exp(-s N)
+        #   buffer solute kept:   C_buffer V (1 - exp(-s N)) / s
+        #                       = buffer_added (1 - exp(-x)) / x,  x = s N.
+        # The second form is continuous through R -> 1 (all added solute
+        # stays); the old code used (1 - exp(-x)) without the 1/s and
+        # switched to "all retained" at R = 0.99, a jump in R.
+        species_all = list(inlet_flows) + [s for s in buffer_flows if s not in inlet_flows]
         retentate_flows = {}
-        permeate_flows = {}  # Total permeate over diafiltration
-
-        # Calculate total permeate volume = n_dv * V_initial
-        permeate_volume = n_dv * V_initial
-
-        for species, flow in inlet_flows.items():
-            R = p.rejection.get(species, 0.0)
-            R = jnp.asarray(R)
-
-            # Fraction remaining after diafiltration
-            remaining_frac = jnp.exp(-n_dv * (1.0 - R))
-
-            # Initial contribution remaining
-            from_initial = flow * remaining_frac
-
-            # Buffer contribution (if species is in buffer)
-            # Buffer is added at constant concentration C_buffer over N diavolumes.
-            # At constant volume V, the steady-state wash-in gives:
-            #   C_from_buffer = C_buffer * (1 - exp(-N*(1-R)))
-            # So the mass from buffer retained in the retentate is:
-            #   from_buffer = C_buffer * V * (1 - exp(-N*(1-R)))
-            #               = (buffer_added / n_dv) * (1 - remaining_frac)
-            total_buffer_flow = sum(buffer_flows.values())
-            buffer_species_frac = buffer_flows.get(species, jnp.array(0.0)) / jnp.maximum(total_buffer_flow, 1e-10)
-            buffer_added = buffer_species_frac * n_dv * V_initial
-            # For R < 1: from_buffer = (buffer_added / n_dv) * (1 - remaining_frac)
-            # For R ~ 1 (fully retained): all added buffer stays, from_buffer = buffer_added
-            from_buffer = jnp.where(
-                R < 0.99,
-                (buffer_added / jnp.maximum(n_dv, 1e-10)) * (1.0 - remaining_frac),
-                buffer_added,
-            )
-
-            retentate_flows[species] = from_initial + from_buffer
-
-            # Permeate is what left
-            total_in = flow + buffer_added
-            permeate_flows[species] = jnp.maximum(total_in - retentate_flows[species], 0.0)
-
-        # Add any buffer-only species
-        for species, buffer_flow in buffer_flows.items():
-            if species not in inlet_flows:
-                R = p.rejection.get(species, 0.0)
-                R = jnp.asarray(R)
-                remaining_frac = jnp.exp(-n_dv * (1.0 - R))
-
-                total_buffer_flow = sum(buffer_flows.values())
-                buffer_species_frac = buffer_flow / jnp.maximum(total_buffer_flow, 1e-10)
-                buffer_added = buffer_species_frac * n_dv * V_initial
-                from_buffer = jnp.where(
-                    R < 0.99,
-                    (buffer_added / jnp.maximum(n_dv, 1e-10)) * (1.0 - remaining_frac),
-                    buffer_added,
-                )
-
-                retentate_flows[species] = from_buffer
-                permeate_flows[species] = buffer_added - from_buffer
+        permeate_flows = {}
+        rejection = {}
+        exchange_efficiency = {}
+        for species in species_all:
+            flow = inlet_flows.get(species, jnp.asarray(0.0))
+            added = buffer_added.get(species, jnp.asarray(0.0))
+            R = species_rejection(p, species)
+            rejection[species] = R
+            x = n_dv * (1.0 - R)
+            remaining_frac = jnp.exp(-x)
+            big = x > 1e-8
+            x_safe = jnp.where(big, x, 1.0)
+            wash_in = jnp.where(big, -jnp.expm1(-x_safe) / x_safe, 1.0 - 0.5 * x)
+            retentate_flows[species] = flow * remaining_frac + added * wash_in
+            # Exact complement, so retentate + permeate = inlet + buffer.
+            permeate_flows[species] = flow * (1.0 - remaining_frac) + added * (1.0 - wash_in)
+            if species in inlet_flows:
+                exchange_efficiency[species] = 1.0 - remaining_frac
 
         retentate = make_stream(retentate_flows, inlet["T"], inlet["P"])
         permeate = make_stream(permeate_flows, inlet["T"], inlet["P"])
-
-        # Exchange efficiency: fraction of original species removed
-        exchange_efficiency = {}
-        for species in inlet_flows:
-            R = p.rejection.get(species, 0.0)
-            exchange_efficiency[species] = 1.0 - jnp.exp(-n_dv * (1.0 - R))
 
         info = {
             "flux": J,
             "n_diavolumes": n_dv,
             "exchange_efficiency": exchange_efficiency,
+            "rejection": rejection,
             "buffer_volume_added": n_dv * V_initial,
+            "buffer_consumed": make_stream(
+                {s: buffer_added[s] for s in buffer_flows}, buffer["T"], buffer["P"]
+            ),
             "fouling_factor": fouling_factor,
+            "membrane_area": jnp.asarray(p.membrane_area),
         }
+        if feed_volume is not None:
+            permeate_volume_L = n_dv * jnp.asarray(feed_volume)
+            info["permeate_volume_L"] = permeate_volume_L
+            info["process_time_h"] = _process_time_h(
+                permeate_volume_L, J, jnp.asarray(p.membrane_area))
 
         return (retentate, permeate), info
 
@@ -463,7 +542,7 @@ class TFF:
     ]
     references = ["Zeman, L.J., Zydney, A.L. Microfiltration and Ultrafiltration, Marcel Dekker, 1996."]
     parameter_symbols = {"MWCO": r"\mathrm{MWCO}", "Lp": "L_p"}
-    parameter_units = {"MWCO": "Da", "Lp": "L/m^2/h/bar"}
+    parameter_units = {"MWCO": "kDa", "Lp": "L/m^2/h/bar"}
     numerical_method = "Sequential composition of UF + CVD + UF models."
 
     def __init__(
@@ -475,13 +554,18 @@ class TFF:
         k_mass: float | Array = 5e-6,
         sigma: float | Array = 1000.0,
         fouling_coefficient: float | Array = 0.0,
+        molecular_weights: dict = None,
     ):
         """Initialize TFF system.
 
         Args:
-            membrane_area: Membrane area (m²)
-            MWCO: Molecular weight cutoff (kDa)
+            membrane_area: Membrane area (m²); sets the processing times
+                the stages report when given a feed volume.
+            MWCO: Molecular weight cutoff (kDa, rejected at 90%); sets the
+                rejection of species not listed in ``rejection``.
             rejection: Dict of species -> rejection coefficient
+            molecular_weights: Dict of species -> molecular weight (kDa),
+                forwarded to both stages.
             Lp: Membrane permeability (L/m²/h/bar)
             k_mass: Mass transfer coefficient (m/s) for concentration
                 polarization. Forwarded to the UF and DF stages (#99).
@@ -492,6 +576,7 @@ class TFF:
                 stages.
         """
         rejection = rejection or {}
+        molecular_weights = molecular_weights or {}
 
         # Keep the arguments, not just what was built from them. TFF is a
         # composition of two stages and holds no Params of its own, so
@@ -507,6 +592,7 @@ class TFF:
         self.k_mass = k_mass
         self.sigma = sigma
         self.fouling_coefficient = fouling_coefficient
+        self.molecular_weights = molecular_weights
 
         self.uf = Ultrafiltration(UltrafiltrationParams(
             membrane_area=membrane_area,
@@ -516,6 +602,7 @@ class TFF:
             k_mass=k_mass,
             sigma=sigma,
             fouling_coefficient=fouling_coefficient,
+            molecular_weights=molecular_weights,
         ))
 
         self.df = Diafiltration(DiafiltrationParams(
@@ -526,6 +613,7 @@ class TFF:
             k_mass=k_mass,
             sigma=sigma,
             fouling_coefficient=fouling_coefficient,
+            molecular_weights=molecular_weights,
         ))
 
     def concentrate(
@@ -533,6 +621,7 @@ class TFF:
         inlet: Stream,
         concentration_factor: float | Array,
         TMP: float | Array = 1.0,
+        feed_volume: float | Array = None,
     ) -> tuple[tuple[Stream, Stream], dict]:
         """Concentrate feed by ultrafiltration.
 
@@ -540,26 +629,30 @@ class TFF:
             inlet: Feed stream
             concentration_factor: Target CF
             TMP: Transmembrane pressure (bar)
+            feed_volume: Feed volume (L); when given, the processing time
+                over the membrane area is reported.
 
         Returns:
             (retentate, permeate): Outlet streams
             info: Operation details
         """
-        return self.uf(inlet, concentration_factor, TMP)
+        return self.uf(inlet, concentration_factor, TMP, feed_volume=feed_volume)
 
     def diafilter(
         self,
         inlet: Stream,
         buffer: Stream,
-        n_diavolumes: float | Array,
+        n_diavolumes: float | Array | None = None,
         TMP: float | Array = 1.0,
     ) -> tuple[tuple[Stream, Stream], dict]:
         """Exchange buffer by diafiltration.
 
         Args:
             inlet: Feed stream
-            buffer: Buffer composition
-            n_diavolumes: Number of diavolumes
+            buffer: Buffer fed (or its composition when ``n_diavolumes``
+                is given); see :meth:`Diafiltration.__call__`
+            n_diavolumes: Number of diavolumes, or None to take it from
+                the buffer stream
             TMP: Transmembrane pressure (bar)
 
         Returns:
@@ -576,7 +669,7 @@ class TFF:
         n_diavolumes: float | Array,
         CF_final: float | Array,
         TMP: float | Array = 1.0,
-    ) -> tuple[Stream, dict]:
+    ) -> tuple[tuple[Stream, Stream, Stream, Stream], dict]:
         """Complete UF/DF/UF process.
 
         Standard process:
@@ -586,15 +679,24 @@ class TFF:
 
         Args:
             inlet: Feed stream
-            buffer: Buffer for diafiltration
+            buffer: Buffer composition for diafiltration (scaled to
+                ``n_diavolumes``; what entered is ``info['buffer_consumed']``)
             CF_initial: Initial concentration factor
             n_diavolumes: Diavolumes for buffer exchange
             CF_final: Final concentration factor
             TMP: Transmembrane pressure
 
         Returns:
-            final_retentate: Final product stream
+            (final_retentate, uf1_permeate, df_permeate, uf2_permeate):
+                the product and the three permeates, so that their sum
+                equals ``inlet`` + ``info['buffer_consumed']`` species by
+                species. Only the retentate used to be returned and the
+                permeates, with the product they carry, were dropped
+                (bio audit (d): 3.59 of 100 g mAb).
             info: Aggregate information from all steps
+
+        Example:
+            >>> (product, p1, p2, p3), info = tff.uf_df_uf(feed, buffer, 2.0, 5.0, 5.0)
         """
         # Step 1: Initial concentration
         (ret1, perm1), info1 = self.uf(inlet, CF_initial, TMP)
@@ -611,9 +713,10 @@ class TFF:
             "step3_uf": info3,
             "total_CF": CF_initial * CF_final,
             "n_diavolumes": n_diavolumes,
+            "buffer_consumed": info2["buffer_consumed"],
         }
 
-        return ret3, info
+        return (ret3, perm1, perm2, perm3), info
 
 
 # =============================================================================
@@ -690,10 +793,19 @@ def rejection_from_mw(
 ) -> Array:
     """Estimate rejection coefficient from molecular weight.
 
-    Uses sigmoid approximation:
-    R = 1 / (1 + exp(-k*(log(MW) - log(MWCO))))
+    Logistic sieving curve in log molecular weight, anchored so that a
+    solute AT the cutoff is rejected at 90%, which is how membrane makers
+    rate a nominal MWCO (Cheryan, Ultrafiltration and Microfiltration
+    Handbook, 1998, Ch. 3):
 
-    where k controls steepness (typically ~2-4)
+    R = 1 / (1 + exp(-k*(log(MW) - log(MWCO))) / 9)
+
+    With k = 3 a solute five times the cutoff is rejected at >99.9%, the
+    basis of the usual rule of choosing an MWCO 3 to 5 times below the
+    product's molecular weight, and a small solute (< 1 kDa on a 30 kDa
+    membrane) passes freely. The curve used to put R = 0.5 at the MWCO,
+    which left a 150 kDa mAb at R = 0.992 on a 30 kDa membrane and lost
+    ~4% of it over five diavolumes (bio audit C4).
 
     Args:
         MW: Molecular weight (Da or kDa, consistent with MWCO)
@@ -701,7 +813,11 @@ def rejection_from_mw(
 
     Returns:
         Estimated rejection coefficient (0-1)
+
+    Example:
+        >>> round(float(rejection_from_mw(30.0, 30.0)), 3)
+        0.9
     """
     k = 3.0  # Steepness factor
     log_ratio = jnp.log(MW) - jnp.log(MWCO)
-    return 1.0 / (1.0 + jnp.exp(-k * log_ratio))
+    return jax.nn.sigmoid(k * log_ratio + jnp.log(9.0))

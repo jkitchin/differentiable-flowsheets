@@ -33,6 +33,9 @@ __all__ = [
     "BioMembraneDatabase",
     "get_bio_membrane",
     "list_bio_membranes",
+    # Species molecular weights
+    "BIO_SPECIES_MW_KDA",
+    "get_species_mw_kda",
     # JAX accessors
     "get_kinetic_params_array",
     "get_resin_capacity_array",
@@ -670,6 +673,64 @@ class BioMembraneDatabase:
             name for name, m in self._membranes.items()
             if m.membrane_type == membrane_type
         ]
+
+
+# =============================================================================
+# Species molecular weights (membrane sieving)
+# =============================================================================
+
+#: Molecular weight (kDa) of the species names the bio trains use. The
+#: Ultrafiltration and Diafiltration units read it to set each species'
+#: rejection from the membrane MWCO (bio audit C4: with no molecular weight
+#: every unlisted species, the mAb included, passed the membrane freely).
+#: The macromolecules are REPRESENTATIVE values, not measurements of one
+#: product: an IgG is ~150 kDa; "aggregates" is the smallest aggregate, the
+#: dimer (300 kDa); "fragments" a Fab/Fc-sized 50 kDa piece; host cell
+#: protein is a population spanning roughly 10 to 200 kDa and is represented
+#: by a 50 kDa member; host cell DNA after clarification is fragments of a
+#: few hundred base pairs, taken as 500 bp at ~660 Da/bp (330 kDa). The small
+#: solutes are formula weights. Override per unit with the ``molecular_weights``
+#: parameter, or set the rejection itself with ``rejection``.
+BIO_SPECIES_MW_KDA = {
+    "mAb": 150.0,
+    "IgG": 150.0,
+    "aggregates": 300.0,
+    "aggregate": 300.0,
+    "fragments": 50.0,
+    "HCP": 50.0,
+    "DNA": 330.0,
+    "glucose": 0.180,
+    "glutamine": 0.146,
+    "glutamate": 0.147,
+    "lactate": 0.089,
+    "NaCl": 0.058,
+}
+
+
+def get_species_mw_kda(name: str) -> float | None:
+    """Molecular weight of a species in kDa, or None when it is unknown.
+
+    Looks in :data:`BIO_SPECIES_MW_KDA` first, then in the core difflow
+    species database (whose ``MW`` is in g/mol), so ``water``, ``H2O`` or
+    ``ammonia`` resolve too.
+
+    Args:
+        name: Species name as it appears in the stream.
+
+    Returns:
+        Molecular weight in kDa, or None when neither table has the species.
+
+    Example:
+        >>> get_species_mw_kda("mAb")
+        150.0
+    """
+    if name in BIO_SPECIES_MW_KDA:
+        return BIO_SPECIES_MW_KDA[name]
+    try:
+        from difflow.database import get_species_data
+        return float(get_species_data(name).MW) / 1000.0
+    except KeyError:
+        return None
 
 
 # =============================================================================
