@@ -125,6 +125,58 @@ class TestAbsorberUsesSolventIn:
             float(get_flows(gas_out)["CO2"]) + float(get_flows(prod)["CO2"]), rel=1e-6)
 
 
+class TestStripperOverheadCondenser:
+    """#378: the condenser returns reflux; the CO2 product is nearly dry."""
+
+    @pytest.fixture
+    def run(self):
+        rich = make_stream({"H2O": 70.0, "Amine": 30.0, "CO2_absorbed": 12.0},
+                           T=313.15, P=101325.0)
+
+        def go(**kw):
+            st = AmineStripper(StripperParams(solvent="MEA", **kw))
+            return rich, st(rich)
+        return go
+
+    def test_product_is_nearly_dry(self, run):
+        _, (lean, prod, info) = run()
+        assert float(info["CO2_purity"]) > 0.95
+        f = get_flows(prod)
+        assert float(f["H2O"]) / float(f["CO2"]) < 0.06
+
+    def test_solvent_water_is_conserved_apart_from_saturation(self, run):
+        rich, (lean, prod, info) = run()
+        w_in = float(get_flows(rich)["H2O"])
+        w_out = float(get_flows(lean)["H2O"]) + float(get_flows(prod)["H2O"])
+        assert w_out == pytest.approx(w_in, rel=1e-12)
+        assert float(get_flows(lean)["H2O"]) > 0.99 * w_in
+
+    def test_colder_condenser_dries_the_product(self, run):
+        _, (_, _, warm) = run(T_condenser=323.15)
+        _, (_, _, cold) = run(T_condenser=303.15)
+        assert float(cold["CO2_purity"]) > float(warm["CO2_purity"])
+
+    def test_reboiler_duty_still_pays_for_the_stripping_steam(self, run):
+        _, (_, _, info) = run(steam_ratio=3.0)
+        _, (_, _, base) = run()
+        assert float(info["reboiler_duty"]) > float(base["reboiler_duty"])
+
+    def test_loop_closes_without_make_up_water(self):
+        gas = make_stream({"CO2": 13.0, "N2": 87.0}, T=313.15, P=101325.0)
+        ab = AmineAbsorber(AbsorberParams(solvent="MEA", n_stages=15,
+                                          L_G_ratio=3.5, lean_loading=0.25))
+        st = AmineStripper(StripperParams(solvent="MEA", n_stages=10))
+        _, rich, _ = ab(gas)
+        water = []
+        for _ in range(40):
+            lean, prod, sinfo = st(rich)
+            lean = make_stream(dict(get_flows(lean)), T=313.15, P=101325.0)
+            gas_out, rich, ainfo = ab(gas, lean)
+            water.append(float(get_flows(lean)["H2O"]))
+        # the circulating water drifts only by what leaves in the product
+        assert water[-1] > 0.9 * water[0]
+
+
 class TestStripperReboilerConditions:
     """C7: lean loading follows the reboiler equilibrium."""
 

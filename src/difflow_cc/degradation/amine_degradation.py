@@ -71,31 +71,42 @@ class AmineDegradationParams(ParamsMixin):
 
 # Kinetic parameters for degradation (Arrhenius form)
 # k = A * exp(-Ea/RT)
+#
+# The pre-exponentials are calibrated so that the DEFAULT operating point
+# (30 wt%, 40 C absorber at 5 % O2, 120 C stripper, 1 ppm Fe, 8000 h/yr)
+# loses a plausible fraction of its amine inventory per year (#376): about
+# 60 %/yr for MEA, 40 % DEA, 23 % AMP, 11 % MDEA and 9 % PZ, oxidation
+# dominant (Rochelle 2009; Sexton & Rochelle 2011; Davis & Rochelle 2009;
+# Lepaumier 2009: typical amine consumption ~0.3-2 kg/t CO2 captured, i.e.
+# tens of percent of inventory per year). The earlier constants gave ~1900x
+# the inventory per year for MEA. ``tests/cc/test_degradation_rates.py``
+# pins the annual fractions. The rates are per-pathway and not strictly the
+# same order, so ``A`` carries different units for each pathway.
 DEGRADATION_KINETICS = {
     "MEA": {
-        "oxidative": {"A": 1.0e8, "Ea": 65000},  # 1/s, J/mol
-        "thermal": {"A": 1.0e12, "Ea": 130000},
-        "CO2_induced": {"A": 1.0e6, "Ea": 80000},
+        "oxidative": {"A": 3.1e4, "Ea": 65000},  # 1/s, J/mol
+        "thermal": {"A": 3.1e8, "Ea": 130000},
+        "CO2_induced": {"A": 4.2e2, "Ea": 80000},
     },
     "DEA": {
-        "oxidative": {"A": 5.0e7, "Ea": 60000},
-        "thermal": {"A": 5.0e11, "Ea": 125000},
-        "CO2_induced": {"A": 5.0e5, "Ea": 75000},
+        "oxidative": {"A": 3.0e3, "Ea": 60000},
+        "thermal": {"A": 7.7e7, "Ea": 125000},
+        "CO2_induced": {"A": 6.1e1, "Ea": 75000},
     },
     "MDEA": {
-        "oxidative": {"A": 1.0e7, "Ea": 55000},  # More stable
-        "thermal": {"A": 1.0e10, "Ea": 140000},  # Very stable thermally
-        "CO2_induced": {"A": 1.0e4, "Ea": 70000},  # Low (no carbamate)
+        "oxidative": {"A": 1.5e2, "Ea": 55000},  # More stable
+        "thermal": {"A": 2.2e8, "Ea": 140000},  # Very stable thermally
+        "CO2_induced": {"A": 3.3e0, "Ea": 70000},  # Low (no carbamate)
     },
     "PZ": {
-        "oxidative": {"A": 2.0e7, "Ea": 58000},
-        "thermal": {"A": 2.0e13, "Ea": 145000},  # Very stable
-        "CO2_induced": {"A": 1.0e5, "Ea": 85000},
+        "oxidative": {"A": 3.8e2, "Ea": 58000},
+        "thermal": {"A": 3.6e9, "Ea": 145000},  # Very stable
+        "CO2_induced": {"A": 6.5e1, "Ea": 85000},
     },
     "AMP": {
-        "oxidative": {"A": 3.0e7, "Ea": 62000},
-        "thermal": {"A": 5.0e11, "Ea": 135000},
-        "CO2_induced": {"A": 2.0e4, "Ea": 72000},  # Low (hindered)
+        "oxidative": {"A": 4.4e3, "Ea": 62000},
+        "thermal": {"A": 3.5e8, "Ea": 135000},
+        "CO2_induced": {"A": 6.1e0, "Ea": 72000},  # Low (hindered)
     },
 }
 

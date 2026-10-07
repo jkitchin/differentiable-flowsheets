@@ -393,7 +393,8 @@ class StripperParams:
     solvent: str
     T_reboiler: float              # Reboiler temperature (K)
     P_stripper: float              # Stripper pressure (Pa)
-    reflux_ratio: float = 0.3     # Condenser reflux
+    steam_ratio: float = 2.0      # Stripping steam, mol H2O / mol CO2
+    T_condenser: float = 313.15   # Overhead condenser outlet (K); reflux returned
     reboiler_duty: float | None = None  # If specified, overrides T calc
 ```
 

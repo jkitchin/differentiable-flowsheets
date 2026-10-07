@@ -13,13 +13,17 @@ jax.config.update("jax_enable_x64", True)
 
 
 class TestStripperCondenserDuty:
-    """Issue #149: condenser duty reported and usable as a cooling utility."""
+    """Issue #149: condenser duty reported and usable as a cooling utility.
 
-    def _run(self, reflux_ratio=0.3):
+    #378: the condenser returns the steam it condenses as reflux, so the
+    duty follows the steam ratio and the condenser temperature.
+    """
+
+    def _run(self, **kw):
         from difflow_cc import StripperParams, AmineStripper
         params = StripperParams(
             solvent="MEA", T_reboiler=393.15,
-            target_lean_loading=0.2, reflux_ratio=reflux_ratio,
+            target_lean_loading=0.2, **kw,
         )
         rich = make_stream(
             flows={"H2O": 25.0, "Amine": 5.0, "CO2_absorbed": 2.0},
@@ -35,15 +39,23 @@ class TestStripperCondenserDuty:
             float(info["Q_condenser"]), rel=1e-9)
         assert float(info["condenser_cooling_duty"]) > 0.0
 
-    def test_condenser_duty_scales_with_reflux(self):
-        _, _, lo = self._run(reflux_ratio=0.2)
-        _, _, hi = self._run(reflux_ratio=0.6)
+    def test_condenser_duty_scales_with_steam_ratio(self):
+        _, _, lo = self._run(steam_ratio=1.5)
+        _, _, hi = self._run(steam_ratio=3.0)
         assert float(hi["condenser_cooling_duty"]) > float(lo["condenser_cooling_duty"])
 
-    def test_condenser_duty_is_fraction_of_vaporization(self):
-        _, _, info = self._run(reflux_ratio=0.3)
+    def test_condenser_duty_is_the_latent_heat_of_the_reflux(self):
+        _, _, info = self._run()
         assert float(info["Q_condenser"]) == pytest.approx(
-            0.3 * float(info["Q_vaporization"]), rel=1e-9)
+            40650.0 * float(info["H2O_reflux"]), rel=1e-9)
+        # nearly all the stripping steam condenses
+        assert float(info["Q_condenser"]) > 0.9 * float(info["Q_vaporization"])
+
+    def test_reflux_ratio_is_deprecated_and_ignored(self):
+        with pytest.warns(DeprecationWarning, match="reflux_ratio"):
+            _, _, old = self._run(reflux_ratio=0.6)
+        _, _, new = self._run()
+        assert float(old["Q_condenser"]) == float(new["Q_condenser"])
 
 
 class TestAbsorberWaterTransfer:
