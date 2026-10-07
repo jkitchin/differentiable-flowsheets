@@ -103,13 +103,17 @@ class TestCoprecipitation:
 
     def _run(self, factor):
         from difflow_ree.units.precipitation import OxalatePrecipitator, PrecipitatorParams
+        # Conversions below 1 from a target_conversion ceiling, with oxalate
+        # in excess. Sub-stoichiometric oxalate used to be the way to get
+        # them, but the oxalate fed now caps the total precipitated (audit
+        # R10), so there co-precipitation can only redistribute it.
         params = PrecipitatorParams(
             elements=("La", "Dy"), coprecipitation_factor=factor,
+            target_conversion=0.6,
         )
         precip = OxalatePrecipitator(params)
         feed = make_stream({"H2O": 1.0, "La": 0.5, "Dy": 0.5}, T=298.15, P=101325.0)
-        # Sub-stoichiometric oxalate so conversions are below 1
-        oxalic = make_stream({"C2O4": 0.3}, T=298.15, P=101325.0)
+        oxalic = make_stream({"C2O4": 2.0}, T=298.15, P=101325.0)
         return precip(feed, oxalic)
 
     def test_backward_compat_factor_zero(self):
@@ -128,9 +132,10 @@ class TestCoprecipitation:
         from difflow_ree.units.precipitation import OxalatePrecipitator, PrecipitatorParams
 
         def recovered(factor):
-            params = PrecipitatorParams(elements=("La", "Dy"), coprecipitation_factor=factor)
+            params = PrecipitatorParams(elements=("La", "Dy"), coprecipitation_factor=factor,
+                                        target_conversion=0.6)
             feed = make_stream({"H2O": 1.0, "La": 0.5, "Dy": 0.5}, T=298.15, P=101325.0)
-            oxalic = make_stream({"C2O4": 0.3}, T=298.15, P=101325.0)
+            oxalic = make_stream({"C2O4": 2.0}, T=298.15, P=101325.0)
             _, _, info = OxalatePrecipitator(params)(feed, oxalic)
             return info["total_precipitated"]
 
