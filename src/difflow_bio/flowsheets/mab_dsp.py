@@ -60,11 +60,25 @@ class mAbDSPParams(ParamsMixin):
         target_species: Name of mAb species
         proa_column_volume: Protein A column volume (L)
         proa_q_max: Protein A binding capacity (g/L)
-        cex_column_volume: CEX column volume (L)
+        cex_column_volume: CEX column volume (L); with cex_q_max it caps
+            the mAb the column binds, and it sets the CEX pool volume.
         cex_q_max: CEX binding capacity (g/L)
-        aex_column_volume: AEX column volume (L)
-        tff_area: TFF membrane area (m²)
-        concentration_factor: Target concentration factor
+        aex_column_volume: AEX column volume (L); with aex_q_max it caps
+            the impurity the flow-through column can hold.
+        aex_q_max: AEX binding capacity (g/L)
+        tff_area: TFF membrane area (m²). Sets the TFF processing times
+            reported in ``tff_process_time_h``; the split does not depend
+            on it.
+        concentration_factor: Concentration factor of the post-Protein A
+            TFF step
+        final_concentration_g_L: mAb concentration the final TFF step
+            concentrates the AEX pool to (g/L)
+        proa_elution_cv: Protein A elution pool, in column volumes
+            (5 CV, Petrides 2015 sec. 11.6.3, p. 65); the first TFF's
+            feed volume.
+        cex_elution_cv: CEX gradient elution pool, in column volumes
+            (5 CV, same source); the AEX load and pool volume, so the
+            final TFF's feed volume.
         cex_clearance: CEX impurity -> LRV. Defaults to
             TYPICAL_CEX_CLEARANCE, representative values, not measured ones.
         aex_clearance: AEX impurity -> LRV. Defaults to
@@ -81,10 +95,13 @@ class mAbDSPParams(ParamsMixin):
     cex_K_d: float | Array = 0.5
     cex_yield: float | Array = 0.90
     aex_column_volume: float | Array = 15.0
+    aex_q_max: float | Array = 50.0
     aex_yield: float | Array = 0.95
     tff_area: float | Array = 5.0
     concentration_factor: float | Array = 10.0
     final_concentration_g_L: float | Array = 100.0
+    proa_elution_cv: float | Array = 5.0
+    cex_elution_cv: float | Array = 5.0
     cex_clearance: dict = field(default_factory=lambda: dict(TYPICAL_CEX_CLEARANCE))
     aex_clearance: dict = field(default_factory=lambda: dict(TYPICAL_AEX_CLEARANCE))
 
@@ -142,6 +159,7 @@ class mAbDSPTrain:
         # AEX final polish (flow-through)
         self._aex = IonExchangeChromatography(IEXParams(
             column_volume=params.aex_column_volume,
+            q_max=params.aex_q_max,
             mode="flow_through",
             target_species=params.target_species,
             yield_factor=params.aex_yield,
@@ -169,6 +187,13 @@ class mAbDSPTrain:
     ) -> dict:
         """Run complete DSP train.
 
+        Stream amounts are taken as grams per batch. Volumes, which the
+        streams do not carry, come from the columns: the Protein A and CEX
+        elution pools are ``proa_elution_cv`` and ``cex_elution_cv`` column
+        volumes, and the AEX flow-through pool is taken equal to its load
+        (the CEX pool). The final TFF concentrates the AEX pool to
+        ``final_concentration_g_L``.
+
         Args:
             harvest: Clarified harvest stream
             return_intermediates: Return streams from each step
@@ -176,55 +201,72 @@ class mAbDSPTrain:
         Returns:
             Dictionary with:
             - product: Final product stream
+            - side_streams: Every other outlet (``proa_waste``,
+              ``tff1_permeate``, ``cex_waste``, ``aex_bound``,
+              ``tff2_permeate``); product + side streams = harvest for
+              every species.
             - overall_yield: Overall mAb yield
-            - step_yields: Yield from each step
-            - purity: Final product purity (optional)
+            - step_yields: Each step's mAb out over its own mAb in
+              (``proa``, ``tff1``, ``cex``, ``aex``, ``tff2``)
+            - purity, hcp_ppm, aggregate_fraction
+            - final_concentration_g_L, final_tff_concentration_factor
+            - tff_process_time_h: hours per TFF step at the computed flux
+              over ``tff_area``
             - intermediates: Intermediate streams (if requested)
+
+        Example:
+            >>> res = mAbDSPTrain(mAbDSPParams(species_order=SP))(harvest)
+            >>> res["product"], res["side_streams"]["proa_waste"]
         """
         p = self.params
         target = p.target_species
 
-        harvest_flows = get_flows(harvest)
-        mab_in = harvest_flows.get(target, 0.0)
+        def amount(stream):
+            return get_flows(stream).get(target, jnp.asarray(0.0))
 
+        mab_in = amount(harvest)
         intermediates = {"harvest": harvest}
 
         # Step 1: Protein A capture. Each column loads the whole batch; the
         # column volume sets its capacity, not how much of the feed it sees.
         (proa_eluate, proa_waste), proa_info = self._proa(harvest)
-        proa_flows = get_flows(proa_eluate)
-        proa_yield = safe_divide(proa_flows.get(target, 0.0), mab_in)
         intermediates["proa_eluate"] = proa_eluate
+        proa_pool_L = p.proa_elution_cv * p.proa_column_volume
 
         # Step 2: TFF concentration (post-ProA)
-        (tff1_out, _tff1_perm), tff1_info = self._tff.concentrate(
+        (tff1_out, tff1_perm), tff1_info = self._tff.concentrate(
             proa_eluate,
             concentration_factor=p.concentration_factor,
+            feed_volume=proa_pool_L,
         )
         intermediates["tff1_concentrate"] = tff1_out
 
         # Step 3: CEX polish
         (cex_eluate, cex_waste), cex_info = self._cex(tff1_out)
-        cex_flows = get_flows(cex_eluate)
-        cex_yield = safe_divide(cex_flows.get(target, 0.0), proa_flows.get(target, 0.0))
         intermediates["cex_eluate"] = cex_eluate
+        cex_pool_L = p.cex_elution_cv * p.cex_column_volume
 
         # Step 4: AEX flow-through polish
         (aex_product, aex_bound), aex_info = self._aex(cex_eluate)
-        aex_flows = get_flows(aex_product)
-        aex_yield = safe_divide(aex_flows.get(target, 0.0), cex_flows.get(target, 0.0))
         intermediates["aex_product"] = aex_product
 
-        # Step 5: Final TFF formulation
-        (final_product, _tff2_perm), tff2_info = self._tff.concentrate(
+        # Step 5: Final TFF formulation. Bio audit (a): the concentration
+        # factor was final_concentration_g_L / mAb amount, g/L over g, so
+        # a 1000 g harvest got CF = 0.12. CF is a volume ratio: the AEX
+        # pool volume over the volume that holds its mAb at the target
+        # concentration; a pool already above the target is not diluted.
+        target_volume_L = safe_divide(amount(aex_product), p.final_concentration_g_L)
+        cf_final = jnp.maximum(safe_divide(cex_pool_L, target_volume_L), 1.0)
+        (final_product, tff2_perm), tff2_info = self._tff.concentrate(
             aex_product,
-            concentration_factor=safe_divide(p.final_concentration_g_L, aex_flows.get(target, 1.0)),
+            concentration_factor=cf_final,
+            feed_volume=cex_pool_L,
         )
         intermediates["final_product"] = final_product
 
         # Calculate overall metrics
         final_flows = get_flows(final_product)
-        mab_out = final_flows.get(target, 0.0)
+        mab_out = amount(final_product)
         overall_yield = safe_divide(mab_out, mab_in)
 
         # Purity (mAb as fraction of total protein). Values stay JAX arrays
@@ -237,16 +279,36 @@ class mAbDSPTrain:
 
         result = {
             "product": final_product,
+            # Bio audit (a): these five outlets were computed and dropped,
+            # with 19.8% of a 100 g harvest and all the cleared impurity.
+            "side_streams": {
+                "proa_waste": proa_waste,
+                "tff1_permeate": tff1_perm,
+                "cex_waste": cex_waste,
+                "aex_bound": aex_bound,
+                "tff2_permeate": tff2_perm,
+            },
             "overall_yield": overall_yield,
+            # Each step against its own inlet (bio audit (a): cex was taken
+            # against the ProA eluate, absorbing the TFF1 loss, and the
+            # final TFF loss appeared in no step).
             "step_yields": {
-                "proa": proa_yield,
-                "cex": cex_yield,
-                "aex": aex_yield,
+                "proa": safe_divide(amount(proa_eluate), mab_in),
+                "tff1": safe_divide(amount(tff1_out), amount(proa_eluate)),
+                "cex": safe_divide(amount(cex_eluate), amount(tff1_out)),
+                "aex": safe_divide(amount(aex_product), amount(cex_eluate)),
+                "tff2": safe_divide(mab_out, amount(aex_product)),
             },
             "purity": purity,
             # The two numbers a drug substance specification is written in
             "hcp_ppm": 1e6 * safe_divide(final_flows.get("HCP", 0.0), mab_out),
             "aggregate_fraction": safe_divide(aggregates_out, mab_out + aggregates_out),
+            "final_tff_concentration_factor": cf_final,
+            "final_concentration_g_L": safe_divide(mab_out, cex_pool_L / cf_final),
+            "tff_process_time_h": {
+                "tff1": tff1_info["process_time_h"],
+                "tff2": tff2_info["process_time_h"],
+            },
         }
 
         if return_intermediates:

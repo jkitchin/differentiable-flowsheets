@@ -6,6 +6,29 @@ All notable changes to difflow are recorded here. The format follows
 
 ## [Unreleased]
 
+### Breaking
+
+- `Ultrafiltration`/`Diafiltration` set each species' rejection from the MWCO
+  and its molecular weight (new `difflow_bio.database.BIO_SPECIES_MW_KDA`,
+  `molecular_weights` parameter); with no `rejection` given they passed a
+  150 kDa mAb freely. `rejection_from_mw` puts R = 0.9 at the cutoff (was
+  0.5). `Diafiltration`'s buffer stream is the buffer consumed when
+  `n_diavolumes` is omitted (now optional); with it given, the scaled buffer
+  is `info['buffer_consumed']`. `TFF.uf_df_uf` returns
+  `((product, perm1, perm2, perm3), info)`.
+- Chromatography: `load_volume` needs `feed_volume` (it was divided by the
+  stream amount), and `info['yield']` is product out over product in.
+  `IonExchangeChromatography` uses `column_volume`, `q_max` and `K_d` as a
+  binding capacity; Protein A uses `K_d` when the feed concentration is known.
+- `mAbDSPTrain`, `PlatformDSP` and `ViralClearanceTrain` return every outlet
+  in `side_streams`, so product + side streams = feed. `mAbDSPTrain` step
+  yields are against each step's own inlet (adds `tff1`, `tff2`) and its
+  final TFF concentration factor is a volume ratio. `PlatformDSP` rejects
+  `capture_type="mmc"` and polish steps other than cex/aex, and
+  `include_viral_filtration` adds a virus filtration step (default on, 0.97
+  recovery). `ViralClearanceTrain` step methods return `((kept, lost), info)`
+  and low-pH recovery no longer exceeds 0.98.
+
 ## [0.3.0] - 2026-10-06
 
 ### Breaking

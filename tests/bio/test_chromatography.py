@@ -87,7 +87,7 @@ class TestProteinAChromatography:
             T=300.0, P=101325.0
         )
 
-        (product, waste), info = proa(feed, load_volume=10.0)
+        (product, waste), info = proa(feed)
 
         prod_flows = get_flows(product)
 
@@ -106,7 +106,7 @@ class TestProteinAChromatography:
             T=300.0, P=101325.0
         )
 
-        (product, waste), info = proa(feed, load_volume=10.0)
+        (product, waste), info = proa(feed)
 
         prod_flows = get_flows(product)
         waste_flows = get_flows(waste)
@@ -132,7 +132,7 @@ class TestProteinAChromatography:
             T=300.0, P=101325.0
         )
 
-        (product, waste), info = proa(feed, load_volume=10.0)
+        (product, waste), info = proa(feed)
 
         prod_flows = get_flows(product)
         waste_flows = get_flows(waste)
@@ -157,7 +157,7 @@ class TestProteinAChromatography:
             )
             proa = ProteinAChromatography(params)
             feed = make_stream({"mAb": 10.0, "HCP": 100.0}, T=300.0, P=101325.0)
-            (product, _), info = proa(feed, load_volume=10.0)
+            (product, _), info = proa(feed)
             return product["F_mAb"]
 
         grad_CV = jax.grad(mab_yield)(jnp.array(1.0))
@@ -205,7 +205,7 @@ class TestIonExchangeChromatography:
             T=300.0, P=101325.0
         )
 
-        (product, waste), info = iex(feed, load_volume=10.0)
+        (product, waste), info = iex(feed)
 
         # mAb should be in product
         assert float(info["yield"]) > 0.8
@@ -226,7 +226,7 @@ class TestIonExchangeChromatography:
 
         feed = make_stream({"mAb": 10.0, "HCP": 1.0}, T=300.0, P=101325.0)
 
-        (product, waste), info = iex(feed, load_volume=10.0)
+        (product, waste), info = iex(feed)
 
         prod_flows = get_flows(product)
         waste_flows = get_flows(waste)
@@ -264,7 +264,7 @@ class TestSizeExclusionChromatography:
             T=300.0, P=101325.0
         )
 
-        (product, aggregates, fragments), info = sec(feed, load_volume=10.0)
+        (product, aggregates, fragments), info = sec(feed)
 
         prod_flows = get_flows(product)
         agg_flows = get_flows(aggregates)
@@ -289,7 +289,7 @@ class TestSizeExclusionChromatography:
             T=300.0, P=101325.0
         )
 
-        (product, aggregates, fragments), info = sec(feed, load_volume=10.0)
+        (product, aggregates, fragments), info = sec(feed)
 
         # Aggregate removal should be > 90%
         assert float(info["aggregate_removal"]) > 0.9
@@ -304,7 +304,7 @@ class TestSizeExclusionChromatography:
         )
 
         total_flow = sum(get_flows(feed).values())
-        (product, aggregates, fragments), info = sec(feed, load_volume=total_flow)
+        (product, aggregates, fragments), info = sec(feed)
 
         feed_flows = get_flows(feed)
 
@@ -334,7 +334,7 @@ class TestProteinADynamicBindingCapacity:
         """Without k_ads/flow, DBC is the static q_max fraction."""
         col = self._col(k_ads=None)
         feed = make_stream({"mAb": 10.0, "HCP": 1.0}, T=300.0, P=101325.0)
-        (product, waste), info = col(feed, load_volume=5.0)
+        (product, waste), info = col(feed)
         assert float(info["DBC"]) == pytest.approx(35.0 * 0.99, rel=1e-6)
         assert "residence_time" not in info
 
@@ -342,8 +342,8 @@ class TestProteinADynamicBindingCapacity:
         """Higher load flow rate -> shorter residence -> lower DBC (#100)."""
         col = self._col(k_ads=0.5)  # 1/min
         feed = make_stream({"mAb": 10.0, "HCP": 1.0}, T=300.0, P=101325.0)
-        (_, _), info_slow = col(feed, load_volume=5.0, load_flow_rate=0.1)  # tr=10 min
-        (_, _), info_fast = col(feed, load_volume=5.0, load_flow_rate=2.0)  # tr=0.5 min
+        (_, _), info_slow = col(feed, load_flow_rate=0.1)  # tr=10 min
+        (_, _), info_fast = col(feed, load_flow_rate=2.0)  # tr=0.5 min
         assert float(info_slow["DBC"]) > float(info_fast["DBC"])
         assert float(info_fast["residence_time"]) == pytest.approx(0.5, rel=1e-6)
 
@@ -353,7 +353,7 @@ class TestProteinADynamicBindingCapacity:
         feed = make_stream({"mAb": 10.0}, T=300.0, P=101325.0)
 
         def dbc(q):
-            (_, _), info = col(feed, load_volume=5.0, load_flow_rate=q)
+            (_, _), info = col(feed, load_flow_rate=q)
             return info["DBC"]
 
         g = jax.grad(dbc)(0.5)
@@ -367,7 +367,7 @@ class TestProteinAElutionPool:
     def test_no_pool_volume_backward_compat(self):
         col = ProteinAChromatography(ProteinAParams(column_volume=1.0))
         feed = make_stream({"mAb": 10.0}, T=300.0, P=101325.0)
-        (_, _), info = col(feed, load_volume=5.0)
+        (_, _), info = col(feed)
         assert "elution_pool_volume" not in info
 
     def test_pool_volume_and_concentration(self):
@@ -375,7 +375,7 @@ class TestProteinAElutionPool:
             column_volume=2.0, n_plates=400.0, elution_cv=2.0,
         ))
         feed = make_stream({"mAb": 10.0}, T=300.0, P=101325.0)
-        (_, _), info = col(feed, load_volume=5.0)
+        (_, _), info = col(feed)
         # w = 4 * (2 CV * 2 L) / sqrt(400) = 4*4/20 = 0.8 L
         assert float(info["elution_pool_volume"]) == pytest.approx(0.8, rel=1e-6)
         assert float(info["product_concentration"]) == pytest.approx(
@@ -386,8 +386,8 @@ class TestProteinAElutionPool:
         feed = make_stream({"mAb": 10.0}, T=300.0, P=101325.0)
         low = ProteinAChromatography(ProteinAParams(column_volume=1.0, n_plates=100.0))
         high = ProteinAChromatography(ProteinAParams(column_volume=1.0, n_plates=900.0))
-        (_, _), info_low = low(feed, load_volume=5.0)
-        (_, _), info_high = high(feed, load_volume=5.0)
+        (_, _), info_low = low(feed)
+        (_, _), info_high = high(feed)
         assert float(info_high["elution_pool_volume"]) < float(info_low["elution_pool_volume"])
 
 
@@ -405,24 +405,24 @@ class TestSECResolutionOverlap:
         """Default path keeps the fixed 5% overlap."""
         sec = self._sec(resolution=1.5, use_overlap=False)
         feed = make_stream({"mAb": 95.0, "aggregates": 5.0}, T=300.0, P=101325.0)
-        (product, _, _), info = sec(feed, load_volume=100.0)
+        (product, _, _), info = sec(feed)
         assert float(info["peak_overlap"]) == pytest.approx(0.05, rel=1e-6)
 
     def test_higher_resolution_less_overlap(self):
         """Better resolution -> less aggregate carryover into product (#156)."""
         feed = make_stream({"mAb": 95.0, "aggregates": 5.0}, T=300.0, P=101325.0)
-        (_, _, _), lo = self._sec(1.0, True)(feed, load_volume=100.0)
-        (_, _, _), hi = self._sec(2.0, True)(feed, load_volume=100.0)
+        (_, _, _), lo = self._sec(1.0, True)(feed)
+        (_, _, _), hi = self._sec(2.0, True)(feed)
         assert float(hi["peak_overlap"]) < float(lo["peak_overlap"])
         # Baseline resolution (Rs=1.5) gives ~0.13% overlap
-        (_, _, _), base = self._sec(1.5, True)(feed, load_volume=100.0)
+        (_, _, _), base = self._sec(1.5, True)(feed)
         assert float(base["peak_overlap"]) == pytest.approx(0.00134, abs=5e-4)
 
     def test_mass_balance_with_resolution_overlap(self):
         sec = self._sec(resolution=1.2, use_overlap=True)
         feed = make_stream({"mAb": 95.0, "aggregates": 3.0, "fragments": 2.0}, T=300.0, P=101325.0)
         total = sum(get_flows(feed).values())
-        (product, aggregates, fragments), _ = sec(feed, load_volume=total)
+        (product, aggregates, fragments), _ = sec(feed)
         for s in get_flows(feed):
             mass_in = float(get_flows(feed)[s])
             mass_out = (float(get_flows(product).get(s, 0.0))
@@ -448,11 +448,14 @@ class TestLoadWholeInlet:
         _, ref = ProteinAChromatography(p)(self._feed(), load_volume=5.0, feed_volume=5.0)
         assert float(info["mass_eluted"]) == pytest.approx(float(ref["mass_eluted"]))
 
-    def test_iex_none_matches_full_legacy_load(self):
+    def test_iex_none_matches_full_load(self):
         p = IEXParams(column_volume=10.0, mode="bind_elute", target_species="mAb",
                       species_order=["mAb", "HCP"])
         (prod, _), _ = IonExchangeChromatography(p)(self._feed())
-        (ref, _), _ = IonExchangeChromatography(p)(self._feed(), load_volume=1e6)
+        # The whole feed volume loaded; feed_volume large enough that the
+        # Langmuir capacity at C = 100 g / 1e3 L still exceeds the load.
+        (ref, _), _ = IonExchangeChromatography(p)(self._feed(), load_volume=1e3,
+                                                   feed_volume=1e3, feed_concentration=1e3)
         assert float(prod["F_mAb"]) == pytest.approx(float(ref["F_mAb"]))
 
 
@@ -487,3 +490,111 @@ class TestIEXImpurityClearance:
         listed, _ = self._run("flow_through", {"HCP": 1.0})
         legacy, _ = self._run("flow_through", {})
         assert float(listed["F_aggregates"]) == pytest.approx(float(legacy["F_aggregates"]))
+
+
+class TestLoadingUnitsAndYield:
+    """Bio audit C11: load_volume (L) was divided by the stream amount (g).
+
+    Loading 10 L of a 20.1 g Protein A feed loaded 49.75% of it, and the
+    reported yield, 0.95, was over the loaded mass while 4.73 of 10 g mAb
+    reached the product.
+    """
+
+    @staticmethod
+    def _feed():
+        return make_stream({"mAb": 10.0, "HCP": 10.0, "DNA": 0.1}, T=300.0, P=101325.0)
+
+    @pytest.mark.parametrize("unit", ["proa", "iex", "sec"])
+    def test_load_volume_without_feed_volume_raises(self, unit):
+        col = {
+            "proa": lambda: ProteinAChromatography(ProteinAParams(column_volume=1.0)),
+            "iex": lambda: IonExchangeChromatography(IEXParams(column_volume=1.0)),
+            "sec": lambda: SizeExclusionChromatography(SECParams(column_volume=1.0)),
+        }[unit]()
+        with pytest.raises(ValueError, match="feed_volume"):
+            col(self._feed(), load_volume=10.0)
+
+    def test_proa_yield_is_product_out_over_product_in(self):
+        col = ProteinAChromatography(ProteinAParams(column_volume=1.0))
+        (prod, _), info = col(self._feed(), load_volume=5.0, feed_volume=10.0)
+        assert float(info["load_fraction"]) == pytest.approx(0.5)
+        assert float(info["yield"]) == pytest.approx(float(prod["F_mAb"]) / 10.0, rel=1e-12)
+        assert float(info["yield"]) == pytest.approx(0.5 * 0.95, rel=1e-12)
+
+    def test_iex_yield_is_product_out_over_product_in(self):
+        col = IonExchangeChromatography(IEXParams(column_volume=1.0))
+        (prod, _), info = col(self._feed(), load_volume=5.0, feed_volume=10.0)
+        assert float(info["yield"]) == pytest.approx(float(prod["F_mAb"]) / 10.0, rel=1e-12)
+        assert float(info["yield"]) == pytest.approx(0.5 * 0.90, rel=1e-12)
+
+    def test_sec_partial_load_yield_not_above_one(self):
+        col = SizeExclusionChromatography(SECParams(column_volume=1.0))
+        feed = make_stream({"mAb": 95.0, "aggregates": 5.0}, T=300.0, P=101325.0)
+        (prod, _, _), info = col(feed, load_volume=5.0, feed_volume=10.0)
+        assert float(info["yield"]) == pytest.approx(float(prod["F_mAb"]) / 95.0, rel=1e-12)
+        assert float(info["yield"]) <= 1.0
+
+
+class TestIEXCapacity:
+    """Bio audit C10: IEX ignored column_volume, q_max and K_d."""
+
+    @staticmethod
+    def _feed():
+        return make_stream({"mAb": 100.0, "HCP": 5.0}, T=300.0, P=101325.0)
+
+    def test_bind_elute_capacity_limits_target(self):
+        # 0.5 L x 50 g/L = 25 g of capacity for 100 g of mAb
+        col = IonExchangeChromatography(IEXParams(column_volume=0.5, q_max=50.0, yield_factor=0.9))
+        (prod, waste), info = col(self._feed())
+        assert float(info["capacity"]) == pytest.approx(25.0)
+        assert float(prod["F_mAb"]) == pytest.approx(25.0 * 0.9, rel=1e-12)
+        assert float(prod["F_mAb"]) + float(waste["F_mAb"]) == pytest.approx(100.0, rel=1e-12)
+
+    def test_column_volume_and_q_max_move_the_product(self):
+        small = IonExchangeChromatography(IEXParams(column_volume=0.5, q_max=50.0))
+        big = IonExchangeChromatography(IEXParams(column_volume=5.0, q_max=50.0))
+        low_q = IonExchangeChromatography(IEXParams(column_volume=5.0, q_max=5.0))
+        (ps, _), _ = small(self._feed())
+        (pb, _), _ = big(self._feed())
+        (pq, _), _ = low_q(self._feed())
+        assert float(ps["F_mAb"]) < float(pb["F_mAb"])
+        assert float(pq["F_mAb"]) < float(pb["F_mAb"])
+
+    def test_k_d_sets_capacity_through_the_isotherm(self):
+        # C = 100 g / 100 L = 1 g/L; q = 50 * 1 / (K_d + 1)
+        for K_d in (0.5, 4.0):
+            col = IonExchangeChromatography(IEXParams(column_volume=1.0, q_max=50.0, K_d=K_d))
+            (_, _), info = col(self._feed(), feed_volume=100.0)
+            assert float(info["capacity"]) == pytest.approx(50.0 / (K_d + 1.0), rel=1e-12)
+
+    def test_flow_through_capacity_caps_impurity_binding(self):
+        feed = make_stream({"mAb": 100.0, "HCP": 20.0}, T=300.0, P=101325.0)
+        p = dict(mode="flow_through", selectivity={"HCP": 1.0}, q_max=10.0)
+        (big, _), _ = IonExchangeChromatography(IEXParams(column_volume=10.0, **p))(feed)
+        (small, bw), _ = IonExchangeChromatography(IEXParams(column_volume=0.5, **p))(feed)
+        assert float(big["F_HCP"]) == pytest.approx(0.0, abs=1e-12)
+        # 0.5 L x 10 g/L = 5 g bound, 15 g of HCP left in the product
+        assert float(small["F_HCP"]) == pytest.approx(15.0, rel=1e-12)
+        assert float(bw["F_HCP"]) == pytest.approx(5.0, rel=1e-12)
+
+    def test_capacity_is_differentiable(self):
+        def out(cv):
+            col = IonExchangeChromatography(IEXParams(column_volume=cv, q_max=50.0))
+            (prod, _), _ = col(self._feed())
+            return prod["F_mAb"]
+        g = jax.grad(out)(jnp.asarray(0.5))
+        assert float(g) == pytest.approx(50.0 * 0.9, rel=1e-12)
+
+
+class TestProteinAKd:
+    """Bio audit C10: Protein A's K_d did nothing on the static-capacity path."""
+
+    def test_k_d_with_feed_volume(self):
+        feed = make_stream({"mAb": 100.0}, T=300.0, P=101325.0)
+        caps = []
+        for K_d in (0.1, 10.0):
+            col = ProteinAChromatography(ProteinAParams(column_volume=1.0, q_max=35.0, K_d=K_d))
+            (_, _), info = col(feed, feed_volume=100.0)  # C = 1 g/L
+            caps.append(float(info["DBC"]))
+            assert caps[-1] == pytest.approx(35.0 * 1.0 / (K_d + 1.0) * 0.99, rel=1e-12)
+        assert caps[1] < caps[0]

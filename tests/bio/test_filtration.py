@@ -32,9 +32,18 @@ class TestRejectionFromMW:
         assert float(R) < 0.1
 
     def test_at_mwco(self):
-        """At MWCO, rejection should be ~50%."""
+        """At the MWCO, rejection is 90%, the nominal-rating definition.
+
+        The curve used to give 0.5 here, which treated a 30 kDa membrane as
+        letting half of a 30 kDa solute through and left a 150 kDa mAb at
+        R = 0.992 (bio audit C4).
+        """
         R = rejection_from_mw(MW=30.0, MWCO=30.0)
-        assert 0.3 < float(R) < 0.7
+        assert float(R) == pytest.approx(0.9, rel=1e-12)
+
+    def test_five_times_mwco_is_held(self):
+        """The 3 to 5x selection rule: 5 x MWCO is rejected at > 99.9%."""
+        assert float(rejection_from_mw(MW=150.0, MWCO=30.0)) > 0.999
 
 
 class TestDiavolumesRequired:
@@ -214,7 +223,7 @@ class TestTFF:
             T=300.0, P=101325.0
         )
 
-        final_product, info = tff.uf_df_uf(
+        (final_product, *_permeates), info = tff.uf_df_uf(
             feed,
             buffer,
             CF_initial=2.0,
@@ -288,3 +297,136 @@ class TestMembraneFoulingFluxDecline:
         (_, _), hi = uf(feed, concentration_factor=10.0, TMP=1.0)  # more permeate
         assert float(hi["fouling_factor"]) > float(lo["fouling_factor"])
         assert float(hi["flux"]) < float(lo["flux"])
+
+
+class TestMembraneRetentionFollowsMWCO:
+    """Bio audit C4: with no ``rejection`` given, the membranes passed the mAb.
+
+    ``rejection`` defaulted to {} and an unlisted species to R = 0, so a
+    30 kDa UF at CF 5 put 8 of 10 g of a 150 kDa mAb in the permeate and
+    5 diavolumes of DF washed out 9.93 of 10 g; MWCO did nothing.
+    """
+
+    @staticmethod
+    def _uf_feed():
+        return make_stream({"mAb": 10.0, "HCP": 1.0, "buffer_salt": 100.0},
+                           T=300.0, P=101325.0)
+
+    def test_uf_retains_mab_by_default(self):
+        uf = Ultrafiltration(UltrafiltrationParams(membrane_area=1.0))
+        (ret, perm), info = uf(self._uf_feed(), concentration_factor=5.0)
+        assert float(ret["F_mAb"]) / 10.0 > 0.99
+        # The buffer salt (no molecular weight anywhere) still passes freely.
+        assert float(ret["F_buffer_salt"]) == pytest.approx(20.0, rel=1e-9)
+        assert float(info["rejection"]["mAb"]) > 0.999
+
+    def test_df_retains_mab_by_default(self):
+        df = Diafiltration(DiafiltrationParams(membrane_area=1.0))
+        feed = make_stream({"mAb": 10.0, "old_buffer": 100.0}, T=300.0, P=101325.0)
+        buf = make_stream({"new_buffer": 550.0}, T=300.0, P=101325.0)
+        (ret, perm), info = df(feed, buf)
+        assert float(ret["F_mAb"]) / 10.0 > 0.99
+        assert float(ret["F_old_buffer"]) < 0.01 * 100.0
+
+    def test_mwco_moves_the_split(self):
+        """A membrane far above the mAb's size passes it; far below holds it."""
+        feed = self._uf_feed()
+        (tight, _), _ = Ultrafiltration(UltrafiltrationParams(membrane_area=1.0, MWCO=10.0))(
+            feed, concentration_factor=5.0)
+        (loose, _), _ = Ultrafiltration(UltrafiltrationParams(membrane_area=1.0, MWCO=1000.0))(
+            feed, concentration_factor=5.0)
+        assert float(tight["F_mAb"]) > 9.99
+        assert float(loose["F_mAb"]) < 3.0
+
+    def test_explicit_rejection_still_overrides(self):
+        uf = Ultrafiltration(UltrafiltrationParams(membrane_area=1.0, rejection={"mAb": 0.0}))
+        (ret, _), _ = uf(self._uf_feed(), concentration_factor=5.0)
+        assert float(ret["F_mAb"]) == pytest.approx(2.0, rel=1e-9)
+
+    def test_molecular_weights_parameter(self):
+        uf = Ultrafiltration(UltrafiltrationParams(
+            membrane_area=1.0, molecular_weights={"buffer_salt": 500.0}))
+        (ret, _), _ = uf(self._uf_feed(), concentration_factor=5.0)
+        assert float(ret["F_buffer_salt"]) > 99.0
+
+    def test_membrane_area_sets_process_time(self):
+        feed = self._uf_feed()
+        (_, _), big = Ultrafiltration(UltrafiltrationParams(membrane_area=1.0))(
+            feed, concentration_factor=5.0, feed_volume=100.0)
+        (_, _), small = Ultrafiltration(UltrafiltrationParams(membrane_area=0.1))(
+            feed, concentration_factor=5.0, feed_volume=100.0)
+        assert float(small["process_time_h"]) == pytest.approx(
+            10.0 * float(big["process_time_h"]), rel=1e-12)
+        # 80 L of permeate at the reported flux through 1 m^2
+        assert float(big["process_time_h"]) == pytest.approx(
+            80.0 / float(big["flux"]), rel=1e-12)
+
+    def test_retention_is_differentiable_in_mwco(self):
+        def kept(mwco):
+            uf = Ultrafiltration(UltrafiltrationParams(membrane_area=1.0, MWCO=mwco))
+            (ret, _), _ = uf(self._uf_feed(), concentration_factor=5.0)
+            return ret["F_mAb"]
+        g = jax.grad(kept)(jnp.asarray(100.0))
+        assert jnp.isfinite(g) and float(g) < 0.0
+
+
+class TestDiafiltrationBufferBalance:
+    """Bio audit C4: the DF buffer stream entered only as a composition.
+
+    100 units of buffer fed became 5 x 110 = 550 in the balance; now the
+    buffer fed is the buffer consumed unless N is fixed explicitly.
+    """
+
+    @staticmethod
+    def _run(**kw):
+        df = Diafiltration(DiafiltrationParams(membrane_area=1.0))
+        feed = make_stream({"mAb": 10.0, "old_buffer": 100.0}, T=300.0, P=101325.0)
+        buf = make_stream({"new_buffer": 220.0}, T=300.0, P=101325.0)
+        (ret, perm), info = df(feed, buf, **kw)
+        return feed, buf, ret, perm, info
+
+    def test_buffer_stream_closes_the_balance(self):
+        feed, buf, ret, perm, info = self._run()
+        assert float(info["n_diavolumes"]) == pytest.approx(2.0, rel=1e-12)
+        for s in ("mAb", "old_buffer", "new_buffer"):
+            fin = float(get_flows(feed).get(s, 0.0)) + float(get_flows(buf).get(s, 0.0))
+            fout = float(get_flows(ret)[s]) + float(get_flows(perm)[s])
+            assert fout == pytest.approx(fin, rel=1e-12), s
+
+    def test_explicit_diavolumes_reports_buffer_consumed(self):
+        feed, buf, ret, perm, info = self._run(n_diavolumes=5.0)
+        consumed = get_flows(info["buffer_consumed"])
+        assert float(consumed["new_buffer"]) == pytest.approx(550.0, rel=1e-12)
+        for s in ("mAb", "old_buffer", "new_buffer"):
+            fin = float(get_flows(feed).get(s, 0.0)) + float(consumed.get(s, 0.0))
+            fout = float(get_flows(ret)[s]) + float(get_flows(perm)[s])
+            assert fout == pytest.approx(fin, rel=1e-12), s
+
+    def test_retained_buffer_species_wash_in_is_continuous_in_R(self):
+        """C_buf V (1 - exp(-sN))/s, continuous through R -> 1 (no jump at 0.99)."""
+        import math
+        feed = make_stream({"mAb": 10.0}, T=300.0, P=101325.0)
+        buf = make_stream({"excipient": 50.0}, T=300.0, P=101325.0)
+        for R in (0.985, 0.995):
+            df = Diafiltration(DiafiltrationParams(
+                membrane_area=1.0, rejection={"mAb": 1.0, "excipient": R}))
+            (ret, _), _ = df(feed, buf)
+            x = (1.0 - R) * 5.0  # N = 50 / 10
+            assert float(ret["F_excipient"]) == pytest.approx(
+                50.0 * (1 - math.exp(-x)) / x, rel=1e-10)
+
+
+class TestTFFReturnsPermeates:
+    """Bio audit (d): uf_df_uf dropped its three permeates and the mAb in them."""
+
+    def test_outputs_close_against_inlet_and_buffer(self):
+        t = TFF(membrane_area=5.0, rejection={"mAb": 0.995})
+        feed = make_stream({"mAb": 100.0, "H2O": 1000.0}, 298.15, 101325.0)
+        buf = make_stream({"H2O": 100.0}, 298.15, 101325.0)
+        (ret, p1, p2, p3), info = t.uf_df_uf(feed, buf, 5.0, 5.0, 2.0)
+        consumed = get_flows(info["buffer_consumed"])
+        for s in ("mAb", "H2O"):
+            fin = float(get_flows(feed)[s]) + float(consumed.get(s, 0.0))
+            fout = sum(float(get_flows(x)[s]) for x in (ret, p1, p2, p3))
+            assert fout == pytest.approx(fin, rel=1e-12), s
+        assert sum(float(x["F_mAb"]) for x in (p1, p2, p3)) > 3.0
