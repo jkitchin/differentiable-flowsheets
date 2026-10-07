@@ -34,6 +34,80 @@ from difflow_cc.equilibrium.vle import AmineVLE
 
 
 # =============================================================================
+# Kremser helpers
+# =============================================================================
+
+# |A - 1| below which the A -> 1 limits are used. The general formulas lose
+# about eps/|A-1| relative accuracy, i.e. ~1e-10 here, and the limits are
+# accurate to O(N |A-1|) ~ 1e-5 for N ~ 10.
+_A_NEAR_ONE = 1e-6
+
+
+def _stage_ratio(eta: Array, A: Array) -> Array:
+    """Murphree-to-equilibrium stage ratio ``ln(1 + eta (A-1)) / ln A``.
+
+    Valid for every ``A > 0``: for ``A < 1`` numerator and denominator are
+    both negative and the ratio is still in ``(0, 1]`` for ``eta`` in
+    ``(0, 1]``. At ``A = 1`` the ratio tends to ``eta``.
+
+    Audit C2: the old form floored ``ln A`` at ``+1e-10``, so for ``A < 1``
+    the ratio became a huge negative number, ``A**(N_eff+1)`` exploded and
+    the column reported near-total capture (MDEA, A = 0.0017: 97.3 %; AMP,
+    A = 0.106: 99.9 %) although a Kremser column cannot capture more than
+    the fraction ``A`` when ``A < 1``.
+
+    Args:
+        eta: Murphree stage efficiency in [0, 1].
+        A: Absorption factor (> 0).
+
+    Returns:
+        Effective-stage ratio (dimensionless).
+    """
+    A = jnp.maximum(A, 1e-300)
+    near = jnp.abs(A - 1.0) < _A_NEAR_ONE
+    # Double-where: evaluate the general branch at a safe A so its gradient
+    # is finite when the A -> 1 limit is selected.
+    A_s = jnp.where(near, 2.0, A)
+    general = jnp.log1p(eta * (A_s - 1.0)) / jnp.log(A_s)
+    return jnp.where(near, eta, general)
+
+
+def _effective_stages(n_stages: Array, eta: Array, A: Array) -> Array:
+    """Equilibrium stages equivalent to ``n_stages`` Murphree stages.
+
+    Args:
+        n_stages: Actual (Murphree) stage count.
+        eta: Murphree efficiency.
+        A: Absorption factor.
+
+    Returns:
+        Effective equilibrium stage count.
+    """
+    return n_stages * _stage_ratio(eta, A)
+
+
+def _kremser_unabsorbed(A: Array, N: Array) -> Array:
+    """Kremser fraction of solute left in the gas, any ``A > 0``.
+
+    ``phi = (A - 1) / (A**(N+1) - 1)``, which for ``A < 1`` equals
+    ``(1 - A) / (1 - A**(N+1))`` and tends to ``1 - A`` as ``N -> inf``;
+    at ``A = 1`` the limit is ``1 / (N + 1)``.
+
+    Args:
+        A: Absorption factor (> 0).
+        N: Equilibrium stage count.
+
+    Returns:
+        Fraction of inlet solute not absorbed.
+    """
+    A = jnp.maximum(A, 1e-300)
+    near = jnp.abs(A - 1.0) < _A_NEAR_ONE
+    A_s = jnp.where(near, 2.0, A)
+    general = (A_s - 1.0) / (jnp.power(A_s, N + 1.0) - 1.0)
+    return jnp.where(near, 1.0 / (N + 1.0), general)
+
+
+# =============================================================================
 # Absorber Parameters
 # =============================================================================
 
@@ -215,17 +289,27 @@ class AmineAbsorber:
 
         Args:
             gas_in: Inlet gas stream (must contain F_CO2, F_N2 or other inerts)
-            solvent_in: Inlet lean solvent (optional, created if not provided)
+            solvent_in: Inlet lean solvent with ``Amine``, ``H2O`` and
+                ``CO2_absorbed`` flows (e.g. the stripper's lean outlet).
+                When given, its flows set the amine and water rates, the lean
+                loading (``CO2_absorbed / Amine``) and hence L/G; the
+                ``L_G_ratio``, ``solvent_conc`` and ``lean_loading`` params
+                are then not used. When omitted the lean solvent is built
+                from those params.
             T_op: Operating temperature (K), defaults to T_liquid_in
 
         Returns:
             gas_out: Treated gas stream
-            solvent_out: Rich solvent stream
+            solvent_out: Rich solvent stream. Its ``CO2_absorbed`` flow is
+                the total CO2 in the solvent (lean + captured).
             info: Dict with operation details:
                 - capture_efficiency: CO2 removal fraction
-                - rich_loading: Rich solvent loading
-                - n_stages_actual: Actual stages used
-                - absorption_factor: A = L*m / G
+                - CO2_captured: CO2 moved from gas to liquid (mol/s)
+                - rich_loading, lean_loading: loadings (mol CO2/mol amine)
+                - n_stages: theoretical stages specified
+                - n_stages_effective: stages after Murphree efficiency
+                - absorption_factor: A = L / (m G)
+                - L_G_ratio: liquid/gas molar ratio actually used
         """
         p = self.params
         T_op = T_op if T_op is not None else p.T_liquid_in
@@ -242,20 +326,47 @@ class AmineAbsorber:
         rho_solvent = self._solvent_data.density
         C_amine = (p.solvent_conc / 100) * rho_solvent * 1000 / MW_amine  # mol/m³
 
-        # Liquid flow rate from L/G ratio
-        L_G = jnp.asarray(p.L_G_ratio)
-        F_liquid = L_G * F_total_gas  # mol/s total liquid
+        if solvent_in is None:
+            # Liquid built from the design parameters: L/G, wt% and
+            # lean loading.
+            L_G = jnp.asarray(p.L_G_ratio)
+            F_liquid = L_G * F_total_gas  # mol/s amine + water
 
-        # Moles of amine in liquid
-        # Convert wt% to mole fraction, then apply to total liquid flow
-        MW_water = 18.0
-        w = p.solvent_conc / 100  # weight fraction
-        x_amine = (w / MW_amine) / (w / MW_amine + (1 - w) / MW_water)
-        F_amine = F_liquid * x_amine
+            # Convert wt% to mole fraction, then apply to total liquid flow
+            MW_water = 18.0
+            w = p.solvent_conc / 100  # weight fraction
+            x_amine = (w / MW_amine) / (w / MW_amine + (1 - w) / MW_water)
+            F_amine = F_liquid * x_amine
+            F_H2O_liq_in = F_liquid * (1 - x_amine)
+            lean_loading = jnp.asarray(p.lean_loading)
+            F_CO2_liq_in = lean_loading * F_amine
+            extra_liq = {}
+        else:
+            # Audit C3/(a): the solvent actually fed used to be ignored and
+            # the liquid rebuilt from L/G and lean_loading, so an
+            # absorber-stripper recycle could never close (carbon 20.95 in
+            # vs 13.00 out). The fed stream now sets the amine, water and
+            # CO2 (hence lean loading and L/G); the params only apply when
+            # no solvent is supplied.
+            liq = get_flows(solvent_in)
+            if "Amine" not in liq:
+                raise ValueError(
+                    "solvent_in must carry an 'Amine' flow (and usually "
+                    "'H2O' and 'CO2_absorbed'); got species "
+                    f"{sorted(liq)}"
+                )
+            F_amine = jnp.asarray(liq["Amine"])
+            F_H2O_liq_in = jnp.asarray(liq.get("H2O", 0.0))
+            F_CO2_liq_in = jnp.asarray(liq.get("CO2_absorbed", 0.0))
+            extra_liq = {k: v for k, v in liq.items()
+                         if k not in ("Amine", "H2O", "CO2_absorbed")}
+            F_liquid = F_amine + F_H2O_liq_in
+            L_G = safe_divide(F_liquid, F_total_gas)
+            x_amine = safe_divide(F_amine, F_liquid)
+            lean_loading = safe_divide(F_CO2_liq_in, F_amine)
 
         # VLE slope (m = dP_CO2/d_loading at operating conditions)
         # For simplified model, linearize around lean loading
-        lean_loading = jnp.asarray(p.lean_loading)
         P_eq_lean = self._vle.equilibrium_pressure(lean_loading, T_op)
 
         # Approximate slope by finite difference
@@ -275,20 +386,11 @@ class AmineAbsorber:
         n_stages = jnp.asarray(p.n_stages)
         eta = jnp.asarray(p.stage_efficiency)
 
-        # Convert Murphree efficiency to effective stages via O'Connell correlation
-        # N_eff = ln(1 + eta*(A-1)) / ln(A) * N  (for each stage)
-        # Simplified: effective stages account for incomplete mixing per stage
-        N_eff = n_stages * jnp.log(1.0 + eta * (A - 1.0)) / jnp.maximum(jnp.log(A), 1e-10)
-
-        # Fraction of CO2 remaining in gas
-        # phi = (A - 1) / (A^(N+1) - 1) for counter-current
-        A_Np1 = jnp.power(A, N_eff + 1)
-        phi = jnp.where(
-            jnp.abs(A - 1.0) < 1e-6,
-            1.0 / (N_eff + 1),
-            safe_divide(A - 1.0, A_Np1 - 1.0)
-        )
-        phi = jnp.clip(phi, 0.001, 0.999)
+        N_eff = _effective_stages(n_stages, eta, A)
+        # Capture is capped at 99.9 % (model range), but no floor on it: an
+        # upper clip of 0.999 on phi used to grant 0.1 % capture even when
+        # A << 0.001 (audit C2).
+        phi = jnp.clip(_kremser_unabsorbed(A, N_eff), 0.001, 1.0)
 
         # CO2 in outlet gas
         F_CO2_out = F_CO2_in * phi
@@ -299,7 +401,11 @@ class AmineAbsorber:
 
         # Rich loading
         rich_loading = lean_loading + safe_divide(F_CO2_absorbed, F_amine)
-        rich_loading = jnp.clip(rich_loading, 0.0, self._solvent_data.loading_capacity)
+        # A fed solvent may already sit above capacity; never let the clip
+        # turn absorption into desorption.
+        rich_loading = jnp.clip(
+            rich_loading, lean_loading,
+            jnp.maximum(self._solvent_data.loading_capacity, lean_loading))
         # Back-correct absorbed CO2 to match clipped loading
         F_CO2_absorbed = (rich_loading - lean_loading) * F_amine
         F_CO2_out = F_CO2_in - F_CO2_absorbed
@@ -317,7 +423,7 @@ class AmineAbsorber:
         # Water evaporation into the treated gas (#151). The treated gas leaves
         # saturated with water at the operating temperature; the evaporated
         # water is drawn from the rich solvent so the water balance closes.
-        solvent_H2O = F_liquid * (1 - x_amine)
+        solvent_H2O = F_H2O_liq_in
         net_water_evaporated = jnp.asarray(0.0)
         if p.model_water_transfer:
             # Water saturation pressure via the Antoine equation
@@ -335,12 +441,17 @@ class AmineAbsorber:
 
         gas_out = make_stream(gas_out_flows, T_op, P_total)
 
-        # Rich solvent
-        # x_amine is the mole fraction of amine in solvent (computed above)
+        # Rich solvent. "CO2_absorbed" is the TOTAL CO2 held by the solvent
+        # (lean CO2 carried in + CO2 captured here), the same convention the
+        # stripper reads (rich loading = CO2_absorbed / Amine) and writes on
+        # its lean outlet. Audit C3: it used to carry only the increment, so
+        # the stripper saw loading 0.30 instead of 0.50 and stripped 3.06
+        # mol/s of the 10.09 captured; the loop could not balance.
         solvent_out_flows = {
+            **extra_liq,
             "H2O": solvent_H2O,
             "Amine": F_amine,
-            "CO2_absorbed": F_CO2_absorbed,
+            "CO2_absorbed": F_CO2_liq_in + F_CO2_absorbed,
         }
         solvent_out = make_stream(solvent_out_flows, T_op, P_total)
 
@@ -416,12 +527,16 @@ class AmineAbsorber:
         # N+1 = log((A-1)/phi + 1) / log(A)
         eta = jnp.asarray(p.stage_efficiency)
 
-        numerator = safe_divide(A - 1, phi) + 1
-        N_eff = safe_divide(safe_log(numerator), safe_log(A)) - 1
-        # Invert the O'Connell correlation: N_eff = N * ln(1 + eta*(A-1)) / ln(A)
-        # Solving for N: N = N_eff * ln(A) / ln(1 + eta*(A-1))
-        N = N_eff * safe_divide(
-            safe_log(A), safe_log(1.0 + eta * (A - 1.0))
-        )
+        # Valid for A < 1 too (audit C2): both logs are then negative. For
+        # A < 1 a target capture >= A is unreachable with any number of
+        # stages (numerator <= 0); return inf rather than a fake count.
+        near = jnp.abs(A - 1.0) < _A_NEAR_ONE
+        A_s = jnp.where(near, 2.0, A)
+        numerator = (A_s - 1.0) / phi + 1.0
+        feasible = numerator > 0.0
+        num_s = jnp.where(feasible, numerator, 2.0)
+        N_eq = jnp.where(near, 1.0 / phi - 1.0,
+                         jnp.log(num_s) / jnp.log(A_s) - 1.0)
+        N = N_eq / _stage_ratio(eta, A)
 
-        return jnp.maximum(N, 1.0)
+        return jnp.where(feasible | near, jnp.maximum(N, 1.0), jnp.inf)
