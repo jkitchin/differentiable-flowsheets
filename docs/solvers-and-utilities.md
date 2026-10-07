@@ -74,29 +74,30 @@ $$\|x^{(k+1)} - x^{(k)}\| < \epsilon$$
 **Example**: Solving recycle loop
 
 ```python
+import jax.numpy as jnp
 import optimistix as optx
 
+fresh_feed = 1.0          # mol/s of A
+reactor_params = {'conversion': 0.6, 'recycle_fraction': 0.9}
+
 def recycle_update(recycle_flow, args):
-    feed, reactor_params = args
+    feed, p = args
 
     # Mix fresh feed with recycle
-    mixed = combine_streams(feed, make_stream({'A': recycle_flow}, T=350.0, P=101325.0))
+    mixed = feed + recycle_flow
 
-    # Run reactor
-    outlet, _ = reactor(mixed)
-
-    # Flash and get recycle composition
-    liquid, _, info = flash(outlet)
+    # Reactor: unconverted A leaves, a fraction of it is recycled
+    unconverted = mixed * (1.0 - p['conversion'])
 
     # Return new recycle flow (converges when input = output)
-    return liquid['F_A'] * 0.2  # 20% recycle
+    return p['recycle_fraction'] * unconverted
 
 # Solve for steady-state recycle flow
 solver = optx.FixedPointIteration(rtol=1e-6, atol=1e-6)
 solution = optx.fixed_point(
     fn=recycle_update,
     solver=solver,
-    y0=0.1,  # Initial guess
+    y0=jnp.asarray(0.1),  # Initial guess
     args=(fresh_feed, reactor_params),
     max_steps=100
 )
@@ -146,7 +147,16 @@ Where $J = \frac{\partial g}{\partial x}$ is the Jacobian, computed automaticall
 **Example**: Bubble point temperature
 
 ```python
+import jax.numpy as jnp
 import optimistix as optx
+
+# Mole fractions, pressure and a simple K-value model (illustrative constants)
+liquid_composition = jnp.array([0.4, 0.6])
+pressure = 101325.0
+A, B = jnp.array([10.8, 11.5]), jnp.array([2800.0, 3700.0])
+
+def K_values_func(T):
+    return jnp.exp(A - B / T) * 1e5 / pressure
 
 def bubble_residual(T, args):
     x, P, K_func = args
@@ -158,7 +168,7 @@ solver = optx.Newton(rtol=1e-8, atol=1e-8)
 solution = optx.root_find(
     fn=bubble_residual,
     solver=solver,
-    y0=350.0,
+    y0=jnp.asarray(350.0),
     args=(liquid_composition, pressure, K_values_func),
     max_steps=50
 )
@@ -277,20 +287,22 @@ def integrate_ode(y0, t_span, derivative_fn, args):
 First-order Taylor expansion for uncertainty propagation.
 
 ```python
+import jax
+import jax.numpy as jnp
 from difflow.uncertainty import linear_propagation
 
-# Define model and uncertainties
+# Define model and uncertainties: models take a dict of parameters
 def model(params):
-    reactor_T, feed_flow = params
-    inlet = make_stream({'A': feed_flow}, T=reactor_T, P=101325.0)
-    outlet, info = reactor(inlet)
-    return info['conversion']
+    # First-order reaction in a CSTR: conversion = k*tau / (1 + k*tau)
+    k = 1e5 * jnp.exp(-6000.0 / params['T'])
+    tau = 10.0 / params['F']
+    return k * tau / (1.0 + k * tau)
 
-nominal = jnp.array([350.0, 1.0])  # [T, F]
-uncertainties = jnp.array([5.0, 0.05])  # Standard deviations
+nominal = {'T': 350.0, 'F': 1.0}
+uncertainties = {'T': 5.0, 'F': 0.05}  # 1-sigma
 
-# Propagate uncertainty
-mean, std = linear_propagation(model, nominal, uncertainties)
+# Propagate uncertainty (returns output, std and a sensitivity dict)
+mean, std, info = linear_propagation(model, nominal, uncertainties)
 print(f"Conversion: {mean:.4f} +/- {std:.4f}")
 ```
 
@@ -324,18 +336,18 @@ Sampling-based uncertainty propagation.
 from difflow.uncertainty import monte_carlo_propagation
 
 # Monte Carlo analysis
-results = monte_carlo_propagation(
+mean, std, info = monte_carlo_propagation(
     model=model,
-    nominal=nominal,
+    nominal_params=nominal,
     uncertainties=uncertainties,
     n_samples=10000,
     distribution='normal'  # or 'uniform'
 )
 
-print(f"Mean: {results['mean']:.4f}")
-print(f"Std: {results['std']:.4f}")
-print(f"5th percentile: {results['p5']:.4f}")
-print(f"95th percentile: {results['p95']:.4f}")
+print(f"Mean: {float(mean):.4f}")
+print(f"Std: {float(std):.4f}")
+print(f"2.5th percentile: {info['p2.5']:.4f}")
+print(f"97.5th percentile: {info['p97.5']:.4f}")
 ```
 
 **Algorithm**:
@@ -349,14 +361,14 @@ print(f"95th percentile: {results['p95']:.4f}")
 import jax.numpy as jnp
 from jax import vmap, random
 
-def monte_carlo_propagation(model, nominal, uncertainties, n_samples, key=None):
+def monte_carlo_sketch(model, nominal, uncertainties, n_samples, key=None):
     if key is None:
         key = random.PRNGKey(0)
 
     # Generate samples
     samples = nominal + uncertainties * random.normal(key, shape=(n_samples, len(nominal)))
 
-    # Vectorized model evaluation
+    # Vectorized model evaluation (model takes an array here)
     outputs = vmap(model)(samples)
 
     return {
@@ -383,13 +395,12 @@ from difflow.uncertainty import sensitivity_analysis
 # Compute sensitivities
 sensitivities = sensitivity_analysis(
     model=model,
-    nominal=nominal,
-    uncertainties=uncertainties,
-    param_names=['T_reactor', 'F_feed']
+    nominal_params=nominal,
+    param_ranges={'T': (340.0, 360.0), 'F': (0.8, 1.2)},  # optional; default +/-20%
 )
 
 for name, sens in sensitivities.items():
-    print(f"{name}: sensitivity = {sens['gradient']:.4f}, contribution = {sens['contribution']:.1%}")
+    print(f"{name}: gradient = {float(sens['gradient']):.4f}, elasticity = {float(sens['elasticity']):.4f}")
 ```
 
 **Sensitivity Metrics**:
@@ -413,15 +424,18 @@ from difflow.uncertainty import sobol_indices
 # Compute Sobol indices
 indices = sobol_indices(
     model=model,
-    nominal=nominal,
-    uncertainties=uncertainties,
-    n_samples=10000,
-    param_names=['T_reactor', 'F_feed']
+    param_bounds={'T': (340.0, 360.0), 'F': (0.8, 1.2)},
+    n_samples=1024,
 )
 
 for name, idx in indices.items():
-    print(f"{name}: S1 = {idx['first_order']:.3f}, ST = {idx['total']:.3f}")
+    print(f"{name}: S1 = {idx['S1']:.3f} (normalized {idx['S1_normalized']:.3f})")
 ```
+
+`sobol_indices` returns first-order indices only (`S1`, `S1_normalized`,
+`bounds`); the total-order index below is the definition, not something the
+function computes. For production-grade total-order indices use a dedicated
+package such as SALib.
 
 **Theory**:
 
@@ -456,11 +470,9 @@ cov_input = jnp.array([
     [2.0, 0.01]    # Cov(F,T) = 2, Var(F) = 0.01
 ])
 
-# Jacobian at nominal point
-jacobian = jax.jacobian(model)(nominal)
-
-# Propagate covariance
-cov_output = propagate_covariance(jacobian, cov_input)
+# Propagate covariance (the Jacobian is computed internally)
+output, cov_output, jacobian = propagate_covariance(
+    model, nominal, cov_input, param_order=['T', 'F'])
 ```
 
 **Equation**:
@@ -490,28 +502,30 @@ Optimistix handles implicit differentiation automatically. When you use `optx.fi
 ```python
 import optimistix as optx
 import jax
+import jax.numpy as jnp
 
 def optimize_with_gradients(params):
     """Example showing automatic gradient computation through solver."""
 
     def my_fixed_point(x, args):
         # Fixed-point function that depends on params
-        return some_function(x, args, params)
+        return params['a'] * jnp.cos(x) + args
 
     solver = optx.FixedPointIteration(rtol=1e-8, atol=1e-8)
     solution = optx.fixed_point(
         fn=my_fixed_point,
         solver=solver,
-        y0=initial_guess,
-        args=args,
+        y0=jnp.asarray(0.5),
+        args=0.1,
         max_steps=100
     )
 
     # The solution is differentiable w.r.t. params
-    return loss_function(solution.value)
+    return solution.value ** 2
 
 # Gradients computed via implicit differentiation
 grad_fn = jax.grad(optimize_with_gradients)
+params = {'a': jnp.asarray(0.4)}
 gradients = grad_fn(params)
 ```
 
@@ -536,23 +550,27 @@ If gradient computation fails while the forward solve succeeds, consider using f
 ### Numerical Helpers
 
 ```python
-from difflow.utils import (
+import jax.numpy as jnp
+from difflow.numerics import (
     safe_divide,
     safe_log,
     safe_sqrt,
-    clip_positive,
+    safe_exp,
     smooth_max,
-    smooth_min
+    smooth_min,
+    smooth_clamp,
 )
 
+a, b = jnp.array(2.0), jnp.array(0.0)
+
 # Safe operations (avoid NaN/Inf)
-x = safe_divide(a, b, default=0.0)  # Returns default if b ≈ 0
-y = safe_log(x, min_val=1e-10)      # Clips x to avoid log(0)
-z = safe_sqrt(x)                     # Clips x to avoid sqrt(negative)
+x = safe_divide(a, b)               # Uses eps (1e-10) in place of a zero denominator
+y = safe_log(jnp.array(0.0))        # Clips x to avoid log(0)
+z = safe_sqrt(jnp.array(-1.0))      # Clips x to avoid sqrt(negative)
 
 # Smooth approximations (differentiable)
-max_val = smooth_max(a, b, alpha=10.0)  # Softmax approximation
-min_val = smooth_min(a, b, alpha=10.0)  # Softmin approximation
+max_val = smooth_max(a, b, alpha=10.0)  # Log-sum-exp approximation
+min_val = smooth_min(a, b, alpha=10.0)  # Log-sum-exp approximation
 ```
 
 ### Smooth Approximations
@@ -570,53 +588,9 @@ $$|x|_\epsilon \approx \sqrt{x^2 + \epsilon^2}$$
 **Smooth ReLU**:
 $$\text{softplus}(x) = \frac{1}{\beta} \log(1 + e^{\beta x})$$
 
-### Unit Conversions
-
-```python
-from difflow.utils import (
-    celsius_to_kelvin,
-    kelvin_to_celsius,
-    bar_to_pascal,
-    pascal_to_bar,
-    psi_to_pascal,
-    pascal_to_psi,
-    kg_to_mol,
-    mol_to_kg
-)
-
-# Temperature
-T_K = celsius_to_kelvin(25.0)  # 298.15 K
-T_C = kelvin_to_celsius(350.0)  # 76.85 °C
-
-# Pressure
-P_Pa = bar_to_pascal(10.0)      # 1,000,000 Pa
-P_bar = pascal_to_bar(101325.0) # 1.01325 bar
-
-# Mass/molar
-n = kg_to_mol(1.0, MW=32.04)    # 31.21 mol (for methanol)
-m = mol_to_kg(100.0, MW=32.04)  # 3.204 kg
-```
-
-### Thermodynamic Helpers
-
-```python
-from difflow.utils import (
-    ideal_gas_density,
-    ideal_gas_volume,
-    reynolds_number,
-    prandtl_number,
-    nusselt_correlation
-)
-
-# Ideal gas calculations
-rho = ideal_gas_density(T=300.0, P=101325.0, MW=28.97)  # kg/m³
-V = ideal_gas_volume(n=1.0, T=300.0, P=101325.0)        # m³
-
-# Dimensionless numbers
-Re = reynolds_number(rho=1000, v=1.0, D=0.1, mu=0.001)
-Pr = prandtl_number(Cp=4180, mu=0.001, k=0.6)
-Nu = nusselt_correlation(Re=10000, Pr=7, correlation='dittus_boelter')
-```
+Unit conversions are deliberately not wrapped in helper functions: difflow
+works in SI throughout (K, Pa, mol, kg, J), and thermodynamic properties come
+from `difflow.thermo` and `difflow.eos`.
 
 ---
 
@@ -642,27 +616,33 @@ Nu = nusselt_correlation(Re=10000, Pr=7, correlation='dittus_boelter')
 ### Uncertainty Analysis Workflow
 
 ```python
+import jax.numpy as jnp
+from difflow.uncertainty import (
+    linear_propagation, sensitivity_analysis, monte_carlo_propagation, sobol_indices,
+)
+
 # 1. Define model
 def process_model(params):
-    T, P, F = params
     # ... process simulation ...
-    return outputs
+    return params['F'] * jnp.exp(-1000.0 / params['T']) * (params['P'] / 101325.0)
 
 # 2. Identify uncertain parameters
-nominal = jnp.array([350.0, 101325.0, 1.0])
-uncertainties = jnp.array([10.0, 5000.0, 0.1])
+nominal = {'T': 350.0, 'P': 101325.0, 'F': 1.0}
+uncertainties = {'T': 10.0, 'P': 5000.0, 'F': 0.1}
 
 # 3. Quick screening with linear propagation
-mean, std = linear_propagation(process_model, nominal, uncertainties)
+mean, std, info = linear_propagation(process_model, nominal, uncertainties)
 
 # 4. Identify important parameters with sensitivity analysis
-sens = sensitivity_analysis(process_model, nominal, uncertainties)
+sens = sensitivity_analysis(process_model, nominal)
 
 # 5. Detailed analysis on key parameters with Monte Carlo
-results = monte_carlo_propagation(process_model, nominal, uncertainties, n_samples=10000)
+mc_mean, mc_std, mc_info = monte_carlo_propagation(
+    process_model, nominal, uncertainties, n_samples=10000)
 
 # 6. Global sensitivity with Sobol indices (if needed)
-sobol = sobol_indices(process_model, nominal, uncertainties, n_samples=50000)
+bounds = {k: (v - 2 * uncertainties[k], v + 2 * uncertainties[k]) for k, v in nominal.items()}
+sobol = sobol_indices(process_model, bounds, n_samples=1024)
 ```
 
 ### Debugging Numerical Issues

@@ -81,40 +81,45 @@ Column performance:
 ## Quick Start
 
 ```python
+import jax
+from difflow import make_stream
 from difflow_bio import (
     ContinuousBioreactor, BioreactorParams,
     monod_kinetics, optimal_dilution_rate,
     ProteinAChromatography, ProteinAParams,
-    Ultrafiltration, UltrafiltrationParams,
 )
 
 # Create a chemostat bioreactor
+kinetics = {"mu_max": 0.4, "K_s": 0.1}      # 1/h, g/L
 params = BioreactorParams(
-    V=1000.0,  # 1000 L working volume
-    mu_max=0.4,  # 1/h
-    Ks=0.1,  # g/L
-    Yxs=0.5,  # g biomass / g substrate
+    V=1000.0,                               # 1000 L working volume
+    Y_xs=0.5,                               # g biomass / g substrate
+    kinetic_fn=monod_kinetics,
+    kinetic_params=kinetics,
 )
 bioreactor = ContinuousBioreactor(params)
 
 # Calculate optimal dilution rate
-D_opt = optimal_dilution_rate(params.mu_max, params.Ks, S_in=10.0)
+D_opt = optimal_dilution_rate({**kinetics, "S_f": 10.0})
 
-# Run bioreactor
-outlet = bioreactor(feed_stream, D=D_opt)
+# Run bioreactor (the feed's substrate entry is the feed concentration, g/L)
+feed = make_stream({"cells": 0.0, "substrate": 10.0, "product": 0.0}, T=310.0, P=101325.0)
+outlet, info = bioreactor(feed, D=D_opt)
 
 # Protein A capture step
-pA_params = ProteinAParams(
-    column_volume=5.0,  # L
-    binding_capacity=35.0,  # g/L resin
-    flow_rate=2.0,  # CV/h
-)
-capture = ProteinAChromatography(pA_params)
-eluate = capture(harvest)
+capture = ProteinAChromatography(ProteinAParams(
+    column_volume=5.0,   # L
+    q_max=35.0,          # g/L resin
+))
+harvest = make_stream({"mAb": 100.0, "HCP": 5.0}, T=298.0, P=101325.0)
+(eluate, waste), cinfo = capture(harvest)
 
 # All operations support automatic differentiation
-from jax import grad
-d_yield_d_flow = grad(lambda flow: mab_yield(flow))(2.0)
+def mab_yield(load):
+    stream = make_stream({"mAb": load, "HCP": 5.0}, T=298.0, P=101325.0)
+    return capture(stream)[1]["yield"]
+
+d_yield_d_load = jax.grad(mab_yield)(100.0)
 ```
 
 ## Key Features

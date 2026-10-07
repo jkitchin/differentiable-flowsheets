@@ -28,6 +28,7 @@ Continuous bioreactors are used for:
 
 #### Parameters
 
+<!-- doc-test: skip: field listing of a library dataclass, not a runnable example -->
 ```python
 @dataclass
 class BioreactorParams:
@@ -164,6 +165,7 @@ Fed-batch bioreactors are used for:
 
 #### Parameters
 
+<!-- doc-test: skip: field listing of a library dataclass, not a runnable example -->
 ```python
 @dataclass
 class FedBatchParams:
@@ -349,6 +351,7 @@ Centrifugation is used for:
 
 #### Parameters
 
+<!-- doc-test: skip: field listing of a library dataclass, not a runnable example -->
 ```python
 @dataclass
 class CentrifugeParams:
@@ -460,6 +463,7 @@ print(f"Cell recovery: {info['cell_recovery']:.2%}")
 
 #### Parameters
 
+<!-- doc-test: skip: field listing of a library dataclass, not a runnable example -->
 ```python
 @dataclass
 class DiscStackParams:
@@ -489,7 +493,7 @@ params = DiscStackParams(
     n_discs=100,
     r_inner=0.05,    # 5 cm
     r_outer=0.15,    # 15 cm
-    cone_angle=0.785, # 45 degrees
+    half_angle=0.785, # 45 degrees
     rpm=7000
 )
 
@@ -510,13 +514,13 @@ from difflow_bio.units.centrifuge import (
 )
 
 # Calculate Stokes velocity
-v_s = stokes_velocity(d_p=5e-6, rho_p=1050, rho_f=1000, mu=0.001)
+v_s = stokes_velocity(d=5e-6, rho_p=1050, rho_f=1000, mu=0.001)
 
 # Calculate Sigma for disc stack
-sigma = disc_stack_sigma(n_discs=100, r_i=0.05, r_o=0.15, theta=0.785, omega=733.0)
+sigma = disc_stack_sigma(n_discs=100, r_inner=0.05, r_outer=0.15, half_angle=0.785, rpm=7000.0)
 
 # Scale-up calculation
-Q2 = centrifuge_scale_up(Q1=1.0, Sigma1=1000, Sigma2=10000)
+Q2 = centrifuge_scale_up(sigma_1=1000.0, Q_1=1.0, sigma_2=10000.0)
 
 # G-force
 G = g_force(rpm=7000, r=0.15)  # ~7900 G
@@ -546,6 +550,7 @@ Ultrafiltration is used for:
 
 #### Parameters
 
+<!-- doc-test: skip: field listing of a library dataclass, not a runnable example -->
 ```python
 @dataclass
 class UltrafiltrationParams:
@@ -687,6 +692,7 @@ Diafiltration is used for:
 
 #### Parameters
 
+<!-- doc-test: skip: field listing of a library dataclass, not a runnable example -->
 ```python
 @dataclass
 class DiafiltrationParams:
@@ -808,6 +814,7 @@ Protein A chromatography provides:
 
 #### Parameters
 
+<!-- doc-test: skip: field listing of a library dataclass, not a runnable example -->
 ```python
 @dataclass
 class ProteinAParams:
@@ -927,6 +934,7 @@ Ion exchange is used for:
 
 #### Parameters
 
+<!-- doc-test: skip: field listing of a library dataclass, not a runnable example -->
 ```python
 @dataclass
 class IEXParams:
@@ -1022,6 +1030,7 @@ SEC is used for:
 
 #### Parameters
 
+<!-- doc-test: skip: field listing of a library dataclass, not a runnable example -->
 ```python
 @dataclass
 class SECParams:
@@ -1101,10 +1110,10 @@ from difflow_bio.units.chromatography import (
 )
 
 # Dynamic binding capacity at 10% breakthrough
-DBC = dynamic_binding_capacity(q_max=35.0, C=5.0, K_d=0.5, RT=6.0)
+DBC = dynamic_binding_capacity(q_max=35.0, C_feed=5.0, K_d=0.5, residence_time=6.0, k_ads=1.0)
 
 # Column productivity
-P = column_productivity(DBC=30.0, cycle_time=4.0)  # g/L/h
+P = column_productivity(DBC=30.0, column_volume=1.0, cycle_time=4.0)  # g/L/h
 
 # Resolution between peaks
 Rs = resolution(t_R1=10.0, t_R2=12.0, w1=0.5, w2=0.6)

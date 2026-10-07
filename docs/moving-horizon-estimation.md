@@ -109,7 +109,7 @@ available by name:
 ```python
 from difflow.mhe import StateSpaceModel
 
-model = StateSpaceModel.from_ode(
+ode_model = StateSpaceModel.from_ode(
     lambda t, x, u, theta: -theta["k"] * x,     # dx/dt
     lambda x, u, theta: x,                      # y = x
     n_x=1, n_y=1, dt=0.5,
@@ -135,7 +135,8 @@ became available. An estimator running at `now` may use every record with
 ```python
 assay = Measurement(time=1.0, values={"Nd_org": 0.31}, sigma={"Nd_org": 0.004},
                     reported=7.0, label="shift assay")
-window, not_yet = build_window(times, records, y_names=[...], now=7.0)
+times = np.arange(10.0)
+late_window, not_yet = build_window(times, [assay], y_names=["Nd_org"], now=7.0)
 ```
 
 Placing that assay against the *current* state is not a small error: it asserts
@@ -157,15 +158,17 @@ the grid — including one older than the window, whose information now lives in
 the arrival cost — is *returned* rather than silently misplaced:
 
 ```python
-window, dropped = build_window(times, records, y_names=names, now=t_now)
+names, t_now = ["Nd_org"], 7.0
+late_window, dropped = build_window(times, [assay], y_names=names, now=t_now)
 if dropped:
     print(f"{len(dropped)} record(s) not placed")
-print(window.summary())     # per-channel sampling counts, and the delays seen
+print(late_window.summary())     # per-channel sampling counts, and the delays seen
 ```
 
 ## The extended Kalman filter
 
 ```python
+x0, P0, q = jnp.array([1.0, 0.5]), 0.1 * jnp.eye(2), jnp.array([0.02, 0.02])
 run = run_ekf(model, window, x0=x0, P0=P0, process_std=q)
 run.final.x, run.final.std, run.innovations
 ```
@@ -222,6 +225,8 @@ construction, so check it; raise `constraint_weight` if it is not small enough.
 
 ```python
 model = linear_model(A, C, lb=0.0)          # a concentration
+problem = MHEProblem(model, ArrivalCost.diagonal(jnp.array([1.0, 0.0]), 0.5),
+                     process_std=jnp.array([0.02, 0.02]))
 res = solve_mhe(problem, window)
 assert res.max_violation < 1e-3
 ```
@@ -239,18 +244,32 @@ them as a random walk, $p_{k+1} = p_k + w^p_k$:
 ```python
 from difflow.mhe import augment_parameters, run_mhe
 
+# A campaign of 20 noisy readings of c, which relaxes towards 1.0
+rng = np.random.default_rng(0)
+c, ys = 0.5, []
+for k in range(20):
+    c = 0.8 * c + 0.2
+    ys.append(c + 0.01 * rng.standard_normal())
+campaign, _ = build_window(
+    np.arange(20.0),
+    [Measurement(time=float(k), values=[y], sigma=[0.01]) for k, y in enumerate(ys)],
+    y_names=["yc"],
+)
+
 base = StateSpaceModel(f=lambda x, u, w, th: th["a"] * x + 0.1 + w,
                        h=lambda x, u, th: x,
                        n_x=1, n_y=1, x_names=["c"], y_names=["yc"])
 model = augment_parameters(base, ["a"], lb=0.0, ub=1.0)
 
-run = run_mhe(model, record, horizon=8,
-              process_std=jnp.array([1e-4, 3e-3]),   # state, then parameter
+q = jnp.array([1e-4, 3e-3])                          # state, then parameter
+x0 = jnp.array([0.5, 0.95])
+P0 = jnp.diag(jnp.array([0.05, 0.05])**2)
+run = run_mhe(model, campaign, horizon=8, process_std=q,
               theta={"a": 0.0},                      # overwritten by the estimate
-              x0=jnp.array([0.5, 0.95]), P0=jnp.diag(jnp.array([0.05, 0.05])**2))
+              x0=x0, P0=P0)
 
 run.parameters["a"]          # the estimated drift, shape (N + 1,)
-run.windows[-1].parameters   # {'a': 0.758} -- the current estimate
+run.windows[-1].parameters   # {'a': ...} -- the current estimate
 ```
 
 The process-noise standard deviation on $w^p$ is the tuning knob and a modelling
@@ -270,9 +289,12 @@ solve, not by inspecting a NaN afterwards. `check_observability` returns the ran
 of the window observability matrix taken along the trajectory:
 
 ```python
-report = check_observability(model, window, x_now)
-report.observable            # False
-report.unobservable          # ['stage_efficiency']
+from difflow.mhe import check_observability
+
+x_now = x0                   # linearise about the current best estimate
+report = check_observability(model, campaign, x_now, theta={"a": 0.0})
+report.observable            # True here; False if a direction is unseen
+report.unobservable          # names of the unseen directions (empty here)
 report.raise_if_unobservable()
 print(report.summary())
 ```
@@ -307,7 +329,8 @@ say *where* a large objective came from.
 ## Sliding a horizon over a campaign
 
 ```python
-run = run_mhe(model, record, horizon=12, process_std=q, x0=x0, P0=P0)
+run = run_mhe(model, campaign, horizon=12, process_std=q, theta={"a": 0.0},
+              x0=x0, P0=P0)
 run.x            # the estimate of x_j made at time j, shape (N + 1, n_x)
 run.source       # 'ekf' before the first full window, 'mhe' after
 run.ekf          # the filter over the same record, as the baseline
@@ -335,6 +358,7 @@ implicit differentiation.
 floats — so it composes:
 
 ```python
+import jax
 from dataclasses import replace
 from difflow.mhe import estimate
 
@@ -354,6 +378,7 @@ a link in a larger differentiable chain rather than the end of one.
 `difflow.planning.update_modifiers` accepts as its `theta` override — so the
 current estimate goes straight into the modifier-adaptation loop, no adapter:
 
+<!-- doc-test: skip: needs a planning Block, u_plan and plant_fn from the user's own model -->
 ```python
 from difflow.planning import update_modifiers
 mods = update_modifiers(block, u_plan, plant_fn,
@@ -398,7 +423,8 @@ larger `max_steps` or looser `rtol`/`atol`, while `singular` means the
 window itself is ill-posed and a bigger budget will not help it.
 
 ```python
-run = run_mhe(model, window, horizon=6, process_std=q_std, x0=x0, P0=P0)
+run = run_mhe(model, campaign, horizon=6, process_std=q, theta={"a": 0.0},
+              x0=x0, P0=P0)
 if not run.converged:
     print(run.failures)     # [(3, 'nonlinear_max_steps_reached'), ...]
 ```

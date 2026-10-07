@@ -74,7 +74,18 @@ The module will not guess which you mean. State it.
 ## Quick start
 
 ```python
+import jax.numpy as jnp
 import difflow.stochastic as st
+
+# A toy stand-in for a solvent-extraction circuit: (x, u, theta) -> outputs.
+def circuit(x, u, theta):
+    sep = 1.0 - jnp.exp(-0.3 * x["n_stages"] * (theta["a_Nd"] - theta["a_Dy"]) * u["pH"])
+    purity = 0.8 + 0.2 * sep
+    profit = 100.0 * purity - 2.0 * x["n_stages"] - 0.5 * x["solvent"]
+    return {"profit": profit, "purity": purity}
+
+mean = jnp.array([1.5, 0.5])                       # fitted a_Nd, a_Dy
+Sigma = jnp.array([[0.04, 0.01], [0.01, 0.02]])    # their covariance
 
 scen = st.ScenarioSet.from_covariance(
     ["a_Nd", "a_Dy"], mean, Sigma, n=256, seed=0)

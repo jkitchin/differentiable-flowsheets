@@ -177,10 +177,13 @@ print(f"dF_B/dV = {dFB_dV:.4f} mol/s per m³")
 ```python
 from difflow import PFR, PFRParams, GasPFR, GasPFRParams
 
+# rate_fn, stoich and inlet are those of the Quick Start
+params = {"A": jnp.array(1e6), "Ea": jnp.array(50000.0)}   # rate_fn's parameters
+
 # Liquid-phase PFR
 pfr = PFR(PFRParams(V=2.0, rate_fn=rate_fn, stoich=stoich,
                     rate_params=params, species_order=["A", "B"]))
-outlet, info = pfr(inlet, T_spec=350.0)
+outlet, info = pfr(inlet, volumetric_flow=0.01, T_spec=350.0)   # m³/s
 
 # Gas-phase with pressure drop (A → 2B, mole increase)
 gas_pfr = GasPFR(GasPFRParams(V=1.0, rate_fn=rate_fn, stoich=stoich,
@@ -232,6 +235,10 @@ cascade = MultistageCascade(CascadeParams(
     flow_config="counter_current",
 ))
 
+feed_stream = make_stream({"La": 1.0, "Nd": 1.0, "Dy": 0.5, "H2O": 50.0, "Organic": 0.0},
+                          T=298.15, P=101325.0)
+solvent_stream = make_stream({"La": 0.0, "Nd": 0.0, "Dy": 0.0, "H2O": 0.0, "Organic": 50.0},
+                             T=298.15, P=101325.0)
 raffinate, extract, info = cascade(feed_stream, solvent_stream)
 ```
 
@@ -259,17 +266,17 @@ params = FedBatchParams(
     stoich=jnp.array([[-1.0], [-1.0], [1.0]]),  # A + B → C
     rate_params={"k0": jnp.array(1e6), "Ea": jnp.array(50000.0)},
     species_order=["A", "B", "C"],
-    t_final=jnp.array(3600.0),      # Batch time (s)
-    n_steps=100,
 )
 reactor = FedBatchReactor(params)
 
-# Feed profile: constant feed rate
-feed = make_stream({"A": 0.0, "B": 1.0, "C": 0.0}, T=300.0, P=101325.0)
+# Initial charge (mol/m³) and a constant feed of B (mol/m³) at 0.001 m³/s
+C0 = {"A": 1000.0, "B": 0.0, "C": 0.0}
 def feed_rate(t): return jnp.array(0.001)  # m³/s
 
-final, info = reactor(initial_charge, feed, feed_rate, T_spec=350.0)
-# info contains: conversion, profiles (t, V, C, T), yield
+final, info = reactor(C0, T0=350.0, P=101325.0, t_final=3600.0,
+                      feed_rate_fn=feed_rate,
+                      feed_composition={"A": 0.0, "B": 1000.0, "C": 0.0}, feed_T=350.0)
+# info contains the time profiles: t, V, C, T
 ```
 
 ### Distillation Columns
@@ -282,19 +289,24 @@ final, info = reactor(initial_charge, feed, feed_rate, T_spec=350.0)
   - Supports partial/total condenser and reboiler
 
 ```python
-from difflow import ShortcutColumn, ShortcutColumnParams
+from difflow import ShortcutColumn, ShortcutColumnParams, IdealThermo
+from difflow.database import get_species_data
 
+names = ["benzene", "toluene", "ethylbenzene"]
+aromatics = IdealThermo({s: get_species_data(s) for s in names})
 params = ShortcutColumnParams(
-    species_order=["benzene", "toluene", "xylene"],
+    species_order=names,
     light_key="benzene",
     heavy_key="toluene",
     x_D_LK=0.99,    # 99% benzene recovery in distillate
     x_B_HK=0.99,    # 99% toluene recovery in bottoms
 )
-column = ShortcutColumn(params, thermo=thermo)
+column = ShortcutColumn(params, thermo=aromatics)
 
-distillate, bottoms, info = column(feed, R_ratio=1.5, q=1.0)
-# info contains: N_min, R_min, N_actual, condenser_duty, reboiler_duty
+feed = make_stream({"benzene": 40.0, "toluene": 35.0, "ethylbenzene": 25.0},
+                   T=370.0, P=101325.0)
+distillate, bottoms, info = column(feed, R=3.0, q=1.0)
+# info contains: N_min, R_min, N, N_feed, Q_condenser, Q_reboiler, ...
 ```
 
 ### Heat Exchangers
@@ -314,6 +326,11 @@ from difflow import (
     CounterCurrentHX, HeatExchangerParams,
     design_heat_exchanger,
 )
+
+# Streams of the Quick Start's species A and B (mol/s)
+cold_feed = make_stream({"A": 10.0, "B": 5.0}, T=300.0, P=101325.0)
+hot_stream = make_stream({"A": 10.0, "B": 5.0}, T=450.0, P=101325.0)
+cold_stream = make_stream({"A": 10.0, "B": 5.0}, T=300.0, P=101325.0)
 
 # Single-stream heater with steam
 heater = Heater(HeaterParams(T_out=400.0, Cp=75.0))
@@ -354,22 +371,23 @@ The `difflow_bio` plugin provides specialized unit operations for biopharmaceuti
 
 ```python
 from difflow_bio import (
-    ContinuousBioreactor, ContinuousBioreactorParams,
-    FedBatchBioreactor, FedBatchBioreactorParams,
+    ContinuousBioreactor, BioreactorParams,
+    FedBatchBioreactor, FedBatchParams,
     monod_kinetics,
 )
 
 # Create a continuous bioreactor (chemostat)
-params = ContinuousBioreactorParams(
-    V=jnp.array(1000.0),           # Volume (L)
-    mu_max=jnp.array(0.3),         # Maximum specific growth rate (1/h)
-    Ks=jnp.array(0.5),             # Monod constant (g/L)
-    Yxs=jnp.array(0.5),            # Biomass yield
-    Yps=jnp.array(0.1),            # Product yield
-    D=jnp.array(0.1),              # Dilution rate (1/h)
+params = BioreactorParams(
+    V=1000.0,                                      # Volume (L)
+    Y_xs=0.5,                                      # Biomass yield (g/g)
+    kinetic_fn=monod_kinetics,
+    kinetic_params={"mu_max": 0.3, "K_s": 0.5},    # 1/h, g/L
+    alpha=0.1,                                     # Growth-associated product yield
 )
 bioreactor = ContinuousBioreactor(params)
-outlet = bioreactor(feed_stream)
+feed_stream = make_stream({"cells": 0.0, "substrate": 20.0, "product": 0.0},
+                          T=310.0, P=101325.0)
+outlet, info = bioreactor(feed_stream, D=0.1)        # D: dilution rate (1/h)
 ```
 
 ### Downstream Processing
@@ -382,28 +400,27 @@ outlet = bioreactor(feed_stream)
 
 ```python
 from difflow_bio import (
-    DiscStackCentrifuge, CentrifugeParams,
-    Ultrafiltration, UFParams,
-    ProteinAChromatography, ProAParams,
+    DiscStackCentrifuge, DiscStackParams,
+    Ultrafiltration, UltrafiltrationParams,
+    ProteinAChromatography, ProteinAParams,
 )
 
-# Disc-stack centrifuge for cell removal
-centrifuge = DiscStackCentrifuge(CentrifugeParams(
-    sigma=jnp.array(5000.0),       # Sigma factor (m²)
-    cell_diameter=jnp.array(15e-6), # Cell diameter (m)
+# Disc-stack centrifuge for cell removal (Sigma from the disc geometry)
+centrifuge = DiscStackCentrifuge(DiscStackParams(
+    n_discs=100, r_outer=0.15, r_inner=0.05,   # m
+    rpm=7000.0,
 ))
 
 # Protein A capture
-proa = ProteinAChromatography(ProAParams(
-    column_volume=jnp.array(10.0),  # CV (L)
-    binding_capacity=jnp.array(40.0), # g mAb / L resin
-    yield_factor=jnp.array(0.95),
+proa = ProteinAChromatography(ProteinAParams(
+    column_volume=10.0,    # CV (L)
+    q_max=40.0,            # g mAb / L resin
+    yield_factor=0.95,
 ))
 
-# Ultrafiltration for concentration
-uf = Ultrafiltration(UFParams(
-    membrane_area=jnp.array(1.0),   # m²
-    concentration_factor=jnp.array(10.0),
+# Ultrafiltration for concentration (the concentration factor is a call argument)
+uf = Ultrafiltration(UltrafiltrationParams(
+    membrane_area=1.0,     # m²
 ))
 ```
 
@@ -495,6 +512,7 @@ simulator's degrees of freedom (product rates, pumparound duties,
 overflash), and every yield or duty has an implicit-function gradient with
 respect to the specs, the feed and the assay.
 
+<!-- doc-test: skip: needs an assay and a spec set; the runnable version is in docs/unit-operations-refinery.md -->
 ```python
 import difflow_refinery as dr
 
@@ -535,6 +553,7 @@ per component. The CDU runs on it, and the VDU's components are
 directly in a `Flowsheet`. The balance closes, and gradients cross the
 connection:
 
+<!-- doc-test: skip: needs a HeavyEnd assay and CDU column params; see docs/unit-operations-refinery.md -->
 ```python
 char = dr.characterize(assay)                        # assay has heavy_end=dr.HeavyEnd()
 cdu = dr.CrudeDistillationUnit(dr.CrudeDistillationUnitParams(assay=assay, column=params))
@@ -557,7 +576,18 @@ every component property, and it reports signed spec margins with a
 smooth-violation option.
 
 ```python
-from difflow_refinery import BlendPool
+from difflow_refinery import BlendComponent, BlendPool
+
+reformate = BlendComponent.from_properties(
+    "reformate", SG=0.80, RON=98.0, MON=88.0, RVP_psi=3.5, S_ppm=1.0,
+    olefins_vol=1.0, aromatics_vol=65.0)
+alkylate = BlendComponent.from_properties(
+    "alkylate", SG=0.70, RON=95.0, MON=93.0, RVP_psi=4.5, S_ppm=5.0,
+    olefins_vol=0.5, aromatics_vol=0.5)
+butane = BlendComponent.from_properties(
+    "butane", SG=0.58, RON=93.0, MON=90.0, RVP_psi=52.0, S_ppm=10.0,
+    olefins_vol=0.5, aromatics_vol=0.0)
+components, recipe = [reformate, alkylate, butane], [0.45, 0.50, 0.05]   # volume fractions
 
 pool = BlendPool("gasoline")            # RON, MON, RVP, S specs
 res = pool(components, recipe)          # properties, margins, product stream
@@ -589,6 +619,12 @@ estimates sharper than the raw measurements:
 ```python
 from difflow.reconciliation import reconcile, global_test, measurement_test
 
+# a splitter with three metered flows that do not close: F1 = F2 + F3
+names = ["F1", "F2", "F3"]
+residual_fn = lambda x, params: jnp.array([x[0] - x[1] - x[2]])
+y = jnp.array([100.0, 60.0, 38.0])          # measured, kg/s
+sigma = jnp.array([1.0, 1.0, 1.0])
+
 res = reconcile(residual_fn, y, sigma, names=names)
 print(res.summary())           # measured vs reconciled, with standard errors
 global_test(res)               # is the data set consistent with the model?
@@ -614,6 +650,7 @@ variable at a time, which costs `O(n)` evaluations. A flowsheet is a pure
 function with its flash and recycle solves embedded, so `jax.jacobian`
 returns the same reduced Jacobian for a cost independent of `n`:
 
+<!-- doc-test: skip: fragment: `ngl` and `power` are Blocks built in docs/planning.md -->
 ```python
 from difflow.planning import Block, Network, DeltaBasePlanner
 
@@ -647,6 +684,7 @@ correlations, scheduling) are explicitly out of scope. See
 - Polynomial Cp correlations
 - Watson correlation for heat of vaporization
 
+<!-- doc-test: skip: signature template with placeholder coefficients -->
 ```python
 SpeciesData(
     name="species_name",
@@ -670,8 +708,8 @@ from difflow import PengRobinson, SRK, CriticalProperties, flash_TP_eos
 
 # Define critical properties
 props = {
-    "methane": CriticalProperties(Tc=190.6, Pc=4.6e6, omega=0.011),
-    "ethane": CriticalProperties(Tc=305.3, Pc=4.87e6, omega=0.099),
+    "methane": CriticalProperties("methane", Tc=190.6, Pc=4.6e6, omega=0.011),
+    "ethane": CriticalProperties("ethane", Tc=305.3, Pc=4.87e6, omega=0.099),
 }
 
 # Create EOS
@@ -679,13 +717,13 @@ eos = PengRobinson(props)
 # or: eos = SRK(props)
 
 # Compressibility factor
-z = eos.compressibility_factor(T=300.0, P=1e6, z=[0.7, 0.3], phase="vapor")
+z = eos.solve_Z(T=300.0, P=1e6, y=jnp.array([0.7, 0.3]), phase="vapor")
 
 # Fugacity coefficients
-phi = eos.fugacity_coefficient(T=300.0, P=1e6, z=[0.7, 0.3], phase="vapor")
+phi = eos.fugacity_coefficient(T=300.0, P=1e6, y=jnp.array([0.7, 0.3]), phase="vapor")
 
 # Flash calculation
-V_frac, x, y, K = flash_TP_eos(eos, z=[0.5, 0.5], T=250.0, P=2e6)
+V_frac, x, y = flash_TP_eos(eos, z=jnp.array([0.5, 0.5]), T=250.0, P=2e6)
 ```
 
 ### Property Database
@@ -846,7 +884,7 @@ uncertainties = {'k0': 1e5, 'Ea': 2000.0, 'T': 5.0, 'tau': 10.0}
 # Linear (Jacobian-based) propagation - fast, first-order approximation
 mean, std, info = linear_propagation(reactor_model, nominal, uncertainties)
 print(f"Conversion: {mean:.3f} ± {std:.3f}")
-print(f"Variance contributions: {info['variance_contributions']}")
+print(f"Variance by input: {info['variance']}")
 
 # Monte Carlo propagation - handles non-linear models
 mean_mc, std_mc, info_mc = monte_carlo_propagation(
@@ -868,23 +906,26 @@ Available functions:
 ## Flowsheets with Recycles
 
 ```python
-from difflow import Flowsheet, make_stream
-from difflow.solvers import fixed_point_solve
+from difflow import (Flowsheet, Unit, make_stream, IdealThermo, CSTR, CSTRParams,
+                     Mixer, Splitter, mass_action_kinetics)
+from difflow.database import get_species_data
 
-# Define flowsheet iteration
-def flowsheet_step(recycle_arr, args):
-    # Unpack recycle, run units, return new recycle
-    ...
-    return new_recycle_arr
+# n-hexane -> 2-methylpentane in a CSTR, 80 % of the effluent recycled
+species = ["n_hexane", "2_methylpentane"]
+thermo = IdealThermo({s: get_species_data(s) for s in species})
+kin = mass_action_kinetics(
+    [{"reactants": {species[0]: 1.0}, "products": {species[1]: 1.0},
+      "rate_params": {"A": 0.05}}], species_order=species)
+reactor = CSTR(CSTRParams(V=1.0, molar_density=10.0, **kin.params_kwargs()), thermo)
 
-# Solve recycle loop
-recycle = fixed_point_solve(
-    flowsheet_step,
-    initial_guess,
-    args,
-    max_iter=100,
-    damping=0.5,
-)
+fs = Flowsheet(species_order=species)
+fs.add_feed("fresh", make_stream({species[0]: 1.0, species[1]: 0.0}, T=340.0, P=101325.0))
+fs.add_unit(Unit("mixer", Mixer(species, thermo), ["fresh", "recycle"], ["reactor_feed"]))
+fs.add_unit(Unit("reactor", reactor, ["reactor_feed"], ["effluent"], params={"T_spec": 340.0}))
+fs.add_unit(Unit("split", Splitter(species), ["effluent"], ["recycle", "product"],
+                 params={"split_frac": 0.8}))
+fs.add_recycle("recycle", "recycle")        # tear the splitter outlet
+streams = fs.solve(tol=1e-8)
 ```
 
 ## Building Flowsheets Without Code
@@ -946,6 +987,7 @@ difflow gui --port 9000 --no-browser
 python -m difflow.gui plant.json          # where the console script is not on PATH
 ```
 
+<!-- doc-test: skip: starts a local web server -->
 ```python
 from difflow import gui
 gui.serve(fs, path="plant.json")          # on a flowsheet you already have
@@ -973,7 +1015,7 @@ from difflow import publish, SweepAxis
 publish(
     fs,
     axes=[SweepAxis("reactor.V", 0.5, 5.0, n=21, label="Reactor volume", units="m³")],
-    outputs={"conversion": lambda streams: 1 - streams["out"]["F_A"] / 1.0},
+    outputs={"isomer_out": lambda streams: streams["product"]["F_2_methylpentane"]},
     path="model.html",
 )
 ```
@@ -1097,6 +1139,16 @@ Connect multiple dynamic units for multi-unit transient simulation:
 ```python
 from difflow.dynamic import DynamicFlowsheet, DynamicCSTR, DynamicTank
 
+def rate_fn(C, T, params):                       # A -> B, first order
+    k = params["k0"] * jnp.exp(-params["Ea"] / (8.314 * T))
+    return jnp.array([k * C["A"]])
+
+stoich = jnp.array([[-1.0], [1.0]])
+cstr = DynamicCSTR(volume=1.0, rate_fn=rate_fn, stoich=stoich, species_order=["A", "B"],
+                   rate_params={"k0": 1e6, "Ea": 50000.0}, name="reactor")
+tank = DynamicTank(max_volume=10.0, species_order=["A", "B"], name="storage")
+inlet_stream = make_stream({"A": 1.0, "B": 0.0}, T=350.0, P=101325.0)
+
 # Build flowsheet
 fs = DynamicFlowsheet(species_order=["A", "B"])
 fs.add_feed("feed", inlet_stream)
@@ -1104,7 +1156,7 @@ fs.add_unit(cstr, inlet_names=["feed"], outlet_names=["reactor_out"])
 fs.add_unit(tank, inlet_names=["reactor_out"], outlet_names=["product"])
 
 # Simulate entire flowsheet
-result = fs.simulate(t_span=(0.0, 1000.0), method="RK4")
+result = fs.simulate(t_span=(0.0, 1000.0), method="RK4", n_steps=500)
 ```
 
 ### DAE (Differential-Algebraic Equations)
@@ -1118,9 +1170,10 @@ from difflow.dynamic import DynamicFlashDrum, integrate_dae
 flash = DynamicFlashDrum(
     volume=1.0,
     species_order=["A", "B"],
-    K_values={"A": 2.0, "B": 0.5},  # K = y/x
+    K_func=lambda T: jnp.array([2.0, 0.5]),  # K = y/x for (A, B)
 )
 
+feed = make_stream({"A": 0.5, "B": 0.5}, T=350.0, P=101325.0)
 result = integrate_dae(
     flash,
     inputs={"inlet": feed},
@@ -1141,6 +1194,11 @@ pip install diffrax  # Optional dependency
 
 ```python
 from difflow.dynamic import integrate
+
+# A stiff linear system, dy/dt = -1000 (y - cos t)
+stiff_ode = lambda t, y: -1000.0 * (y - jnp.cos(t))
+y0 = jnp.array([0.0])
+t_span = (0.0, 1.0)
 
 # Use diffrax solvers via method string
 result = integrate(

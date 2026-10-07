@@ -107,21 +107,26 @@ thermo = IdealThermo(species_data)
 inlet = make_stream({'A': 1.0, 'B': 0.0}, T=350.0, P=101325.0)
 
 # Define CSTR parameters
+def rate_fn(C, T, rp):
+    k = rp['k_ref'] * jnp.exp(-rp['E_a'] / 8.314 * (1.0 / T - 1.0 / rp['T_ref']))
+    return jnp.array([k * C['A']])
+
 params = CSTRParams(
-    volume=1.0,  # m³
-    stoichiometry=jnp.array([[-1.0], [1.0]]),  # A -> B
-    k_ref=0.1,
-    E_a=50000.0,
-    T_ref=350.0,
-    dH_rxn=jnp.array([-50000.0])
+    V=1.0,  # m³
+    rate_fn=rate_fn,
+    stoich=jnp.array([[-1.0], [1.0]]),  # A -> B
+    rate_params={'k_ref': 0.1, 'E_a': 50000.0, 'T_ref': 350.0},
+    species_order=['A', 'B'],
+    dH_rxn=jnp.array([-50000.0]),
+    molar_density=10.0,  # mol/m³, sets the concentration basis
 )
 
 # Create and run CSTR
-cstr = CSTR(params, thermo, species_order=['A', 'B'])
+cstr = CSTR(params, thermo)
 outlet, info = cstr(inlet, T_spec=350.0)
 
-print(f"Conversion: {info['conversion']:.2%}")
-print(f"Heat duty: {info['Q']:.2f} W")
+print(f"Conversion: {float(info['conversion']['A']):.2%}")
+print(f"Heat duty: {float(info['Q']):.2f} W")
 ```
 
 ## Design Philosophy
@@ -133,8 +138,8 @@ Every calculation in Difflow is designed to be compatible with JAX automatic dif
 ```python
 import jax
 
-# Gradient of outlet temperature with respect to inlet temperature
-grad_fn = jax.grad(lambda T_in: cstr(make_stream({'A': 1.0}, T=T_in, P=101325.0))[0]['T'])
+# Gradient of product flow with respect to reactor temperature
+grad_fn = jax.grad(lambda T_in: cstr(make_stream({'A': 1.0, 'B': 0.0}, T=T_in, P=101325.0), T_spec=T_in)[0]['F_B'])
 sensitivity = grad_fn(350.0)
 ```
 
@@ -143,7 +148,7 @@ sensitivity = grad_fn(350.0)
 All unit operations follow the same calling convention:
 
 ```python
-outlet, info = unit_operation(inlet, **operating_params)
+outlet, info = cstr(inlet, T_spec=350.0)  # any unit: (inlet, **operating_params)
 ```
 
 Where:

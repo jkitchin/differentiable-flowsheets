@@ -35,6 +35,27 @@ so the first thing to do is read the message it already wrote: it names the tear
 streams, the residual reached, the tolerance, the iteration count and the method
 that ran. Then work down this list.
 
+The snippets on this page share one small loop to run against: a single recycle
+whose tear is named `tear`, with loop gain 0.97 on a magnitude of about `1e-6`
+(the corpus case `trace_recycle`).
+
+```python
+from difflow import Flowsheet, Unit, make_stream
+from difflow.streams import get_flows
+
+
+def loop(feed, tear):
+    f, t = get_flows(feed), get_flows(tear)
+    return make_stream({"A": f["A"] * 1e-6 + t["A"] * 0.97}, feed["T"], feed["P"])
+
+
+fs = Flowsheet(["A"], default_flow=0.01)
+fs.add_feed("feed", make_stream({"A": 1.0}, 300.0, 101325.0))
+fs.add_unit(Unit("loop", loop, ["feed", "tear"], ["loop_out"]))
+fs.add_unit(Unit("out", lambda s: s, ["loop_out"], ["product"]))
+fs.add_recycle("loop_out", "tear")
+```
+
 1. **Is it actually diverging, or just slow?** Compare
    `fs.last_solve_residual` against `fs.last_solve_tol`. A residual a factor of
    two or three above tolerance after `max_iter` iterations is a loop that needs
@@ -152,7 +173,7 @@ at `default_flow`, at `default_T` and `default_P`. Those three are constructor
 arguments:
 
 ```python
-fs = Flowsheet(["A", "B"], default_flow=1e-6, default_T=350.0, default_P=2e5)
+fs_small = Flowsheet(["A", "B"], default_flow=1e-6, default_T=350.0, default_P=2e5)
 ```
 
 Under tracing the guessing pass is skipped entirely and the default stream is
@@ -508,6 +529,9 @@ tracer in any feed or unit parameter, it **replaces the requested acceleration
 with the `optimistix` fixed point** and records that it did:
 
 ```python
+import jax
+
+
 def objective(feed_F):
     fs.feeds["feed"] = make_stream({"A": feed_F}, 300.0, 1e5)
     return fs.solve(tol=1e-10, max_iter=200)["loop_out"]["F_A"]
@@ -515,6 +539,8 @@ def objective(feed_F):
 gradient = jax.grad(objective)(1.0)
 fs.last_solve_method     # 'fixed_point (traced)'
 fs.last_solve_converged  # None -- the residual was a tracer
+
+fs.feeds["feed"] = make_stream({"A": 1.0}, 300.0, 101325.0)   # undo the traced feed
 ```
 
 Three consequences worth knowing before differentiating through a flowsheet:
@@ -756,6 +782,7 @@ How often any of this actually works is a measurement, and
 hard flowsheets and runs each one across every acceleration and every
 initialization strategy:
 
+<!-- doc-test: skip: the full 99-solve grid takes several minutes -->
 ```python
 from difflow.convergence import run_benchmark
 
@@ -767,6 +794,8 @@ The full grid is 99 solves and takes several minutes, most of it JAX
 compilation. Narrow it while iterating:
 
 ```python
+from difflow.convergence import run_benchmark
+
 report = run_benchmark(cases=["high_gain_recycle"], accelerations=("anderson",))
 ```
 

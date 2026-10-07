@@ -74,6 +74,7 @@ Least squares smears a gross error across neighbouring measurements, so identifi
 
 ### `reconcile`
 
+<!-- doc-test: skip: signature listing, not runnable code -->
 ```python
 def reconcile(
     residual_fn,                    # F(x, params) -> (m,) Array
@@ -100,6 +101,7 @@ def reconcile(
 
 ### Other entry points
 
+<!-- doc-test: skip: signature listing, not runnable code -->
 ```python
 classify(residual_fn, x, sigma, *, scaling, names=None) -> StructureReport
 reconciled_covariance(residual_fn, x, sigma, *, scaling) -> Array
@@ -154,8 +156,13 @@ res.std["bottom"]                                # and its standard error
 Ask for one unknown too many and the problem is diagnosed rather than silently failing:
 
 ```python
+from difflow.reconciliation import ReconciliationStructureError
+
 sigma = jnp.array([2.0, jnp.inf, jnp.inf])
-reconcile(balance, y, sigma, names=["feed", "top", "bottom"])
+try:
+    reconcile(balance, y, sigma, names=["feed", "top", "bottom"])
+except ReconciliationStructureError as err:
+    print(err)
 # ReconciliationStructureError: reconciliation problem is not solvable:
 # 1 unmeasured variable(s) cannot be determined from the constraints.
 # Unobservable: top, bottom. ...
@@ -173,13 +180,32 @@ reconcile(balance, y, sigma, names=["feed", "top", "bottom"])
 import jax
 import difflow_gas as dg
 
+# A small looped network: src -> a -> (compressor) -> b -> c/d, with a cycle
+RATIOS = {"cs1": 1.2}
+net = dg.GasNetwork(
+    arcs={"p1": ("src", "a", "pipe"), "cs1": ("a", "b", "compressor"),
+          "p2": ("b", "c", "pipe"), "p3": ("b", "d", "pipe"),
+          "p4": ("c", "d", "pipe")},
+    beta={aid: dg.weymouth_beta(length_m=L, diameter_m=0.6, roughness_m=1e-4)
+          for aid, L in [("p1", 20e3), ("p2", 40e3), ("p3", 60e3), ("p4", 80e3)]},
+    supply_kg_s={"src": 120.0, "c": -50.0, "d": -70.0},
+    pressure_bounds_bar={n: (30.0, 80.0) for n in ["src", "a", "b", "c", "d"]},
+)
+fs, dec = dg.build_network_flowsheet(net, root="src", p_slack_pa=60.0e5, ratios=RATIOS)
+streams = fs.solve(tol=1e-12, max_iter=500)
+p_true = dg.verify.node_pressures_bar(streams, dec)       # the simulated truth
+q_true = dg.verify.arc_flows_kg_s(streams, dec)
+
 layout = dg.gas_state_layout(net, efficiency_arcs=["p3"])   # estimate fouling
+x_true = layout.pack(p_true, q_true, net.supply_kg_s, {"eta_p3": 1.0})
 sigma  = dg.measurement_sigma(layout)                       # meter accuracies
 y      = dg.perturb(x_true, sigma, jax.random.PRNGKey(0))   # simulated data
 
 res = dg.reconcile_network(net, y, sigma, layout, ratios={"cs1": 1.2})
 p_bar, q_kg_s, supply = dg.reconciled_values(res, layout)
-dg.verify.residuals_from_values(p_bar, q_kg_s, net).ok      # True
+# the reconciliation was free to move the nominations, so check against those
+net_rec = dg.GasNetwork(arcs=net.arcs, beta=net.beta, supply_kg_s=supply)
+dg.verify.residuals_from_values(p_bar, q_kg_s, net_rec).ok  # True
 ```
 
 `dg.monitor_network` and `dg.reconcile_network_multi` are the campaign-scale versions of the same call, and take the same `(network, ..., layout, ratios=...)` arguments. All three fill in `names` and `unmeasured_scale` from the layout, so a gas reconciliation never has to restate them.
@@ -201,7 +227,13 @@ The practical discipline is two clocks: reconcile routinely with parameters **fi
 ```python
 import difflow_gas as dg
 
-mon = dg.monitor_network(net, daily_measurements, sigma, layout, ratios=RATIOS)
+layout0 = dg.gas_state_layout(net)               # the plain layout, no eta
+sigma0 = dg.measurement_sigma(layout0)
+x0_true = layout0.pack(p_true, q_true, net.supply_kg_s)
+daily_measurements = [dg.perturb(x0_true, sigma0, jax.random.PRNGKey(k))
+                      for k in range(6)]         # six days of simulated data
+
+mon = dg.monitor_network(net, daily_measurements, sigma0, layout0, ratios=RATIOS)
 mon.statistic          # the chi-squared series, shape (n_days,)
 mon.suspects           # who the measurement test blamed each day
 mon.diagnose(window=15)
@@ -219,7 +251,11 @@ A data set whose problem cannot be posed at all records `failed` on its step rat
 One day's data gives a noisy parameter estimate, so pool a window. `reconcile_multi` gives each data set its own copy of the plant state while the variables in `shared` appear **once**, estimated from all of them in a single solve:
 
 ```python
+from difflow.reconciliation import global_test
+
 layout = dg.gas_state_layout(net, efficiency_arcs=["p3"])   # carries eta
+sigma = dg.measurement_sigma(layout)
+plain_layout, week_of_data = layout0, daily_measurements
 window = [layout.embed(y, plain_layout) for y in week_of_data]
 
 res = dg.reconcile_network_multi(
@@ -253,15 +289,21 @@ from difflow.reconciliation import (
     TrackerState, drift_std_from_time_constant, track_parameters,
 )
 
+def F(x, params):
+    """The network residuals, with the tracked parameter passed through `params`."""
+    return dg.residuals.network_residuals(
+        x, net, layout0, ratios=RATIOS, efficiencies={"p3": params["eta"]},
+    )
+
 run = track_parameters(
-    F, daily_measurements, sigma,
+    F, daily_measurements, sigma0,
     state=TrackerState.initial(["eta"], [1.0], std=[0.02]),
     drift_std=drift_std_from_time_constant(0.05, 30.0),   # 5% over a month
-    names=layout.names,
+    names=layout0.names, unmeasured_scale=layout0.default_scale,
 )
 
-run.final.as_params()      # {'eta': 0.71} -- feeds a model, a Block, an LP
-run.final.std              # {'eta': 0.0088}
+run.final.as_params()      # {'eta': ...} -- feeds a model, a Block, an LP
+run.final.std              # {'eta': ...}
 print(run.summary())
 ```
 

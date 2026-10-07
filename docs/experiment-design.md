@@ -72,9 +72,25 @@ matrix. You can pass `require_identifiable=False` to inspect a degenerate case
 deliberately; you then get infinite standard errors, which is the honest answer.
 
 ```python
+import jax.numpy as jnp
 from difflow.estimation import (
     Experiment, check_identifiability, design_experiments, predicted_covariance,
 )
+
+# A toy extraction model: distribution coefficient D(T, pH) splits 0.1 mol/L
+def model_fn(theta, exp):
+    T, pH = exp.inputs['T'], exp.inputs['pH']
+    lnD = theta['lnK'] - theta['dH'] * (1 / T - 1 / 298.0) / 8.314 + theta['n'] * pH
+    D = jnp.exp(lnD)
+    return {'C_aq': 0.1 / (1 + D), 'C_org': 0.1 * D / (1 + D)}
+
+theta = {'lnK': -4.0, 'dH': 2.0e4, 'n': 1.5}
+candidates = [
+    Experiment.candidate({'T': T, 'pH': pH}, measures=['C_aq', 'C_org'],
+                         uncertainties={'C_aq': 1e-4, 'C_org': 1e-4})
+    for T in (298.0, 318.0, 338.0)
+    for pH in (1.0, 2.0, 3.0, 4.0)
+]
 
 report = check_identifiability(model_fn, theta, candidates)   # 1. structural
 print(report.summary())
@@ -110,7 +126,7 @@ to 1.0 for any output with no stated uncertainty.
 ## Structural identifiability
 
 ```python
-report = check_identifiability(model_fn, theta, experiments, param_names=None,
+report = check_identifiability(model_fn, theta, candidates, param_names=None,
                                rank_tol=None, scale='theta')
 ```
 
@@ -142,7 +158,8 @@ Two classic failures, both detected:
 def product(theta, exp):     # A and B only ever appear as A*B
     return {'y': theta['A'] * theta['B'] * exp.inputs['x']}
 
-report = check_identifiability(product, {'A': 2.0, 'B': 3.0}, pool)
+line_pool = [Experiment.candidate({'x': x}, ['y']) for x in (1.0, 2.0, 3.0)]
+report = check_identifiability(product, {'A': 2.0, 'B': 3.0}, line_pool)
 report.identifiable        # False
 report.unidentifiable      # ['A', 'B']
 report.combinations        # ['- 0.707*A + 0.707*B ~ 0']
@@ -160,7 +177,9 @@ with $\Sigma_i$ the diagonal measurement-error covariance built from each
 experiment's `uncertainties`.
 
 ```python
-fim = fisher_information(model_fn, theta, experiments, prior_fim=None)
+from difflow.estimation import fisher_information
+
+fim = fisher_information(model_fn, theta, candidates[:6], prior_fim=None)
 ```
 
 Two properties do all the work:
@@ -229,7 +248,7 @@ why the loop is *design → run → refit → design again*.
 ## Predicted confidence intervals
 
 ```python
-ci = predicted_covariance(model_fn, theta, proposed_campaign, alpha=0.05)
+ci = predicted_covariance(model_fn, theta, design.selected, alpha=0.05)
 ci.std_errors, ci.ci_lower, ci.ci_upper, ci.correlation
 ```
 

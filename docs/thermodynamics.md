@@ -101,6 +101,7 @@ ethanol = SpeciesData(
 
 The main class for ideal thermodynamic calculations.
 
+<!-- doc-test: skip: signature listing, redefines the class -->
 ```python
 from difflow.thermo import IdealThermo
 
@@ -117,11 +118,13 @@ class IdealThermo:
 #### Initialization
 
 ```python
-species_data = {
-    'methanol': SpeciesData(...),
-    'water': SpeciesData(...),
-    'DME': SpeciesData(...)
-}
+from difflow.thermo import IdealThermo
+from difflow.database import get_species_data
+
+# SpeciesData(name, MW, Cp_coeffs, Hvap_coeffs, antoine_coeffs, ...) per species;
+# here taken from the built-in database
+species_data = {s: get_species_data(s)
+                for s in ['methanol', 'ethanol', 'water', 'dimethyl_ether']}
 
 thermo = IdealThermo(species_data)
 ```
@@ -246,6 +249,7 @@ Cubic equations of state provide more accurate thermodynamic predictions for non
 
 ### Critical Properties
 
+<!-- doc-test: skip: signature listing, redefines the class -->
 ```python
 from difflow.eos import CriticalProperties
 
@@ -271,7 +275,7 @@ Measures deviation from simple fluid behavior:
 The Peng-Robinson equation of state (1976) is widely used for hydrocarbon systems.
 
 ```python
-from difflow.eos import PengRobinson, EOSParams
+from difflow.eos import PengRobinson, CriticalProperties
 
 # Initialize with species critical properties
 critical_props = {
@@ -319,17 +323,24 @@ Where $k_{ij}$ is the binary interaction parameter (default = 0).
 #### Methods
 
 ```python
-# Compressibility factor
-Z = pr.compressibility_factor(V=0.001, T=300.0, P=1e6)
+import jax.numpy as jnp
+from difflow.eos import flash_TP_eos
 
-# Fugacity coefficient
-phi = pr.fugacity_coefficient(y={'methane': 0.7, 'ethane': 0.3}, T=300.0, P=1e6)
+# Compositions are arrays in pr.species_order (here methane, ethane)
+y = jnp.array([0.7, 0.3])
 
-# K-values from fugacity
-K = pr.K_value(species='methane', T=300.0, P=1e6, x=x, y=y)
+# Compressibility factor (largest root = vapor, smallest = liquid)
+Z = pr.solve_Z(T=300.0, P=1e6, y=y, phase='vapor')
 
-# VLE flash calculation
-V_frac, x, y = pr.flash_TP(z={'methane': 0.5, 'ethane': 0.5}, T=250.0, P=2e6)
+# Fugacity coefficients of every species
+phi = pr.fugacity_coefficient(T=300.0, P=1e6, y=y, phase='vapor')
+
+# K-values from fugacity, given liquid and vapor compositions
+x = jnp.array([0.4, 0.6])
+K = pr.K_values(T=250.0, P=2e6, x=x, y=y)
+
+# VLE flash calculation: vapor fraction, liquid and vapor compositions
+V_frac, x, y = flash_TP_eos(pr, z=jnp.array([0.5, 0.5]), T=250.0, P=2e6)
 ```
 
 #### Fugacity Calculation
@@ -392,16 +403,19 @@ $$m = 0.480 + 1.574\omega - 0.176\omega^2$$
 Flash calculations determine phase split at specified T and P.
 
 ```python
-# TP Flash using PR EOS
-V_frac, x, y = pr.flash_TP(
-    z={'methane': 0.3, 'ethane': 0.3, 'propane': 0.4},
-    T=250.0,
-    P=1.5e6
-)
+import jax.numpy as jnp
+from difflow.eos import PengRobinson, flash_TP_eos
+from difflow.database import get_critical_props
 
-print(f"Vapor fraction: {V_frac:.3f}")
-print(f"Liquid composition: {x}")
-print(f"Vapor composition: {y}")
+names = ['methane', 'ethane', 'propane']
+pr3 = PengRobinson({n: get_critical_props(n) for n in names})
+
+# TP Flash using PR EOS (compositions are arrays in species order)
+V_frac, x, y = flash_TP_eos(pr3, z=jnp.array([0.3, 0.3, 0.4]), T=250.0, P=1.5e6)
+
+print(f"Vapor fraction: {float(V_frac):.3f}")
+print(f"Liquid composition: {dict(zip(names, map(float, x)))}")
+print(f"Vapor composition: {dict(zip(names, map(float, y)))}")
 ```
 
 #### Algorithm
@@ -432,6 +446,14 @@ the EOS fugacity coefficients rather than from Raoult's law:
 $$K_i = \frac{\hat\phi_i^L(T, P, x)}{\hat\phi_i^V(T, P, y)}$$
 
 ```python
+from difflow.thermo import CubicThermo
+
+names = ['propane', 'n_butane']
+sp = {n: get_species_data(n) for n in names}
+crit = {n: get_critical_props(n) for n in names}
+x = jnp.array([0.5, 0.5])
+y = jnp.array([0.8, 0.2])
+
 thermo = CubicThermo(IdealThermo(sp), PengRobinson(crit))
 
 K = thermo.K_values_array(T=380.0, P=10e5, x=x, y=y)  # both compositions known
@@ -550,8 +572,8 @@ print(info)
 species_list = list_species()
 
 # Get groups of species
-alkanes = get_alkanes()  # ['methane', 'ethane', ..., 'decane']
-btex = get_btex()        # ['benzene', 'toluene', 'ethylbenzene', 'xylene']
+alkanes = get_alkanes()  # {'methane': ..., 'ethane': ..., ...}
+btex = get_btex()        # CriticalProperties for the BTEX aromatics
 solvents = get_common_solvents()
 ```
 
@@ -585,6 +607,7 @@ Import thermodynamic data from Cantera YAML mechanism files without requiring Ca
 (importing-mechanisms)=
 ### Importing Mechanisms
 
+<!-- doc-test: skip: needs a Cantera YAML mechanism file (gri30.yaml) -->
 ```python
 from difflow.cantera_import import (
     import_species_data,
@@ -656,6 +679,7 @@ pyglenn's `ThermochemicalCalculator` at runtime. Because its
 `import_species_data` / `list_available_species` names mirror the Cantera ones,
 it is exposed as a **namespace** rather than flattened into `difflow`:
 
+<!-- doc-test: skip: needs the optional pyglenn package -->
 ```python
 from difflow.pyglenn_import import import_species_data, list_available_species
 from difflow.thermo import IdealThermo
@@ -745,6 +769,7 @@ Because DWSIM has critical constants (unlike pyglenn), it feeds **both**
 `SpeciesData` and `CriticalProperties`, so it can build a full EOS/`CubicThermo`
 on its own:
 
+<!-- doc-test: skip: needs a DWSIM installation (.NET runtime) -->
 ```python
 from difflow.dwsim_import import import_species_data, import_critical_props
 from difflow.thermo import IdealThermo, CubicThermo
@@ -793,27 +818,27 @@ another DWSIM build, replace `DWSIMBackend` and pass it via `backend=`.
 ```python
 from difflow.thermo import IdealThermo
 from difflow.database import get_species_data
-from difflow.units.flash import Flash
+from difflow.units.flash import Flash, FlashParams
 from difflow.streams import make_stream
 
 # Build thermo model from database
-species_names = ['benzene', 'toluene', 'xylene']
+species_names = ['benzene', 'toluene', 'ethylbenzene']
 species_data = {name: get_species_data(name) for name in species_names}
 thermo = IdealThermo(species_data)
 
 # Create feed stream
 feed = make_stream(
-    {'benzene': 0.4, 'toluene': 0.35, 'xylene': 0.25},
+    {'benzene': 0.4, 'toluene': 0.35, 'ethylbenzene': 0.25},
     T=380.0,  # K
     P=101325.0  # Pa
 )
 
 # Flash calculation
-flash = Flash(thermo, species_names)
+flash = Flash(FlashParams(species_order=species_names), thermo)
 liquid, vapor, info = flash(feed)
 
-print(f"Vapor fraction: {info['V_frac']:.3f}")
-print(f"K-values: {info['K_values']}")
+print(f"Vapor fraction: {float(info['V_frac']):.3f}")
+print(f"K-values: {info['K']}")
 ```
 
 ### High-Pressure Flash with PR EOS
@@ -823,17 +848,20 @@ from difflow.eos import PengRobinson
 from difflow.database import get_critical_props
 
 # Build PR model from database
-species_names = ['methane', 'ethane', 'propane', 'n-butane']
+species_names = ['methane', 'ethane', 'propane', 'n_butane']
 critical_props = {name: get_critical_props(name) for name in species_names}
 pr = PengRobinson(critical_props)
 
 # High-pressure flash
-z = {'methane': 0.5, 'ethane': 0.3, 'propane': 0.15, 'n-butane': 0.05}
-V_frac, x, y = pr.flash_TP(z, T=250.0, P=3.0e6)  # 30 bar
+import jax.numpy as jnp
+from difflow.eos import flash_TP_eos
 
-print(f"Vapor fraction: {V_frac:.3f}")
-print(f"Liquid methane: {x['methane']:.4f}")
-print(f"Vapor methane: {y['methane']:.4f}")
+z = jnp.array([0.5, 0.3, 0.15, 0.05])  # in species_names order
+V_frac, x, y = flash_TP_eos(pr, z, T=250.0, P=3.0e6)  # 30 bar
+
+print(f"Vapor fraction: {float(V_frac):.3f}")
+print(f"Liquid methane: {float(x[0]):.4f}")
+print(f"Vapor methane: {float(y[0]):.4f}")
 ```
 
 ### Sensitivity Analysis with Automatic Differentiation

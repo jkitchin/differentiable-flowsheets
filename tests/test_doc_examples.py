@@ -56,7 +56,25 @@ def test_extract_blocks_honours_skip_marker():
     assert extract_blocks(text) == [(3, "x = 1\n", False), (7, "boom\n", True)]
 
 
-@pytest.mark.parametrize("path", FILES, ids=lambda p: str(p.relative_to(ROOT)))
+#: Pages whose blocks cost over a minute between them (recycle solves, JAX
+#: traces, MILPs); ``make test`` deselects them with ``-m 'not slow'`` and
+#: the full suite runs them.
+SLOW = {
+    "docs/convergence.md", "docs/data-reconciliation.md",
+    "docs/moving-horizon-estimation.md", "docs/planning.md",
+    "docs/streams-and-flowsheets.md", "docs/unit-operations-chemical.md",
+    "docs/unit-operations-ree.md", "docs/dynamic-modeling.md",
+    "docs/getting-started.md", "docs/thermodynamics.md",
+}
+
+
+def _case(path: Path):
+    rel = str(path.relative_to(ROOT))
+    marks = [pytest.mark.slow] if rel in SLOW else []
+    return pytest.param(path, id=rel, marks=marks)
+
+
+@pytest.mark.parametrize("path", [_case(f) for f in FILES])
 def test_doc_python_blocks_run(path, tmp_path, monkeypatch):
     import matplotlib
 

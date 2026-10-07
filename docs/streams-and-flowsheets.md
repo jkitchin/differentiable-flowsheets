@@ -72,10 +72,19 @@ def process_stream(stream):
     total = stream['F_methane'] + stream['F_ethane'] + stream['F_propane']
     return total
 
-# Gradient through stream operations
+# Gradient through stream operations: a first-order A -> B CSTR
+from difflow.units.cstr import CSTR, CSTRParams
+
+def rate_fn(C, T, rp):
+    return jnp.array([rp['k0'] * jnp.exp(-rp['Ea'] / 8.314 * (1.0 / T - 1.0 / 350.0)) * C['A']])
+
+reactor = CSTR(CSTRParams(V=1.0, rate_fn=rate_fn, stoich=jnp.array([[-1.0], [1.0]]),
+                          rate_params={'k0': 0.1, 'Ea': 50000.0},
+                          species_order=['A', 'B'], molar_density=10.0))
+
 def objective(inlet_T):
-    stream = make_stream({'A': 1.0}, T=inlet_T, P=101325.0)
-    outlet, _ = reactor(stream)
+    stream = make_stream({'A': 1.0, 'B': 0.0}, T=inlet_T, P=101325.0)
+    outlet, _ = reactor(stream, T_spec=inlet_T)
     return outlet['F_B']
 
 grad_fn = jax.grad(objective)
@@ -178,6 +187,7 @@ Temperature and pressure are preserved.
 
 The `Flowsheet` class manages sequential modular process simulation.
 
+<!-- doc-test: skip: signature listing, redefines the class -->
 ```python
 from difflow.flowsheet import Flowsheet, Unit
 
@@ -196,6 +206,7 @@ class Flowsheet:
 
 ### Unit Definition
 
+<!-- doc-test: skip: signature listing, redefines the class -->
 ```python
 from dataclasses import dataclass
 from typing import Callable, List, Dict, Any
@@ -212,20 +223,43 @@ class Unit:
 ### Building a Flowsheet
 
 ```python
+import jax.numpy as jnp
 from difflow.flowsheet import Flowsheet, Unit
-from difflow.units.cstr import CSTR
-from difflow.units.flash import Flash, Mixer
+from difflow.streams import make_stream
+from difflow.thermo import IdealThermo
+from difflow.database import get_species_data
+from difflow.kinetics import mass_action_kinetics
+from difflow.units.cstr import CSTR, CSTRParams
+from difflow.units.flash import Flash, FlashParams, Mixer, Splitter
+
+# Isomerisation n-hexane -> 2-methylpentane
+species = ['n_hexane', '2_methylpentane']
+thermo = IdealThermo({s: get_species_data(s) for s in species})
+
+# Declarative mass-action kinetics (data, so the flowsheet can be serialized later)
+kin = mass_action_kinetics(
+    [{'reactants': {species[0]: 1.0}, 'products': {species[1]: 1.0},
+      'rate_params': {'A': 0.05}}],            # k = 0.05 1/s
+    species_order=species,
+)
+reactor_params = CSTRParams(V=1.0, molar_density=10.0, **kin.params_kwargs())
+feed = make_stream({species[0]: 1.0, species[1]: 0.0}, T=340.0, P=101325.0)
+
+mixer = Mixer(species, thermo)
+reactor = CSTR(reactor_params, thermo)
+flash = Flash(FlashParams(species_order=species), thermo)
+splitter = Splitter(species)
 
 # Initialize flowsheet
-fs = Flowsheet()
+fs = Flowsheet(species_order=species)
 
 # Add feed streams
-fs.add_feed('fresh_feed', make_stream({'A': 1.0, 'B': 0.0}, T=350.0, P=101325.0))
+fs.add_feed('fresh_feed', feed)
 
 # Add mixer (combines fresh feed and recycle)
 fs.add_unit(Unit(
     name='mixer',
-    operation=Mixer(thermo, species),
+    operation=mixer,
     inlet_names=['fresh_feed', 'recycle'],
     outlet_names=['reactor_feed'],
     params={}
@@ -234,32 +268,32 @@ fs.add_unit(Unit(
 # Add reactor
 fs.add_unit(Unit(
     name='reactor',
-    operation=CSTR(reactor_params, thermo, species),
+    operation=reactor,
     inlet_names=['reactor_feed'],
     outlet_names=['reactor_effluent'],
-    params={'T_spec': 380.0}
+    params={'T_spec': 340.0}
 ))
 
-# Add flash drum
+# Add flash drum (Flash returns liquid, then vapor)
 fs.add_unit(Unit(
     name='flash',
-    operation=Flash(thermo, species),
+    operation=flash,
     inlet_names=['reactor_effluent'],
-    outlet_names=['vapor_product', 'liquid'],
-    params={}
+    outlet_names=['liquid', 'vapor_product'],
+    params={'T': 337.0}
 ))
 
 # Add splitter for recycle
 fs.add_unit(Unit(
     name='splitter',
-    operation=Splitter(),
+    operation=splitter,
     inlet_names=['liquid'],
-    outlet_names=['liquid_product', 'recycle'],
-    params={'fractions': [0.8, 0.2]}
+    outlet_names=['recycle', 'liquid_product'],
+    params={'split_frac': 0.8}   # fraction to the first outlet
 ))
 
 # Define recycle connection
-fs.add_recycle(source='recycle', dest='mixer')
+fs.add_recycle(source='recycle', dest='recycle')   # same name: the splitter outlet feeds the mixer inlet
 
 # Solve flowsheet
 results = fs.solve(tol=1e-6, max_iter=50)
@@ -316,6 +350,9 @@ unit:
 print(fs.tear_analysis())
 ```
 
+For a variant of the flowsheet above in which the splitter also sends a stream
+`short` straight back to the mixer, the report reads:
+
 ```text
 Tear analysis: 2 recycle loop(s)
   loop: mixer -> reactor -> splitter -> flash -> mixer
@@ -347,14 +384,14 @@ a unit order that needs a tear it does not have.
 `solve(tears="auto")` fills the gap when no recycle has been declared:
 
 ```python
-fs = Flowsheet(["A", "B"])
-fs.add_feed("feed", feed)
-fs.add_unit(Unit("mixer", mixer, ["feed", "recycle"], ["mixed"]))
-fs.add_unit(Unit("reactor", reactor, ["mixed"], ["rx_out"]))
-fs.add_unit(Unit("splitter", splitter, ["rx_out"], ["product", "recycle"]))
+auto_fs = Flowsheet(species)
+auto_fs.add_feed("feed", feed)
+auto_fs.add_unit(Unit("mixer", mixer, ["feed", "recycle"], ["mixed"]))
+auto_fs.add_unit(Unit("reactor", reactor, ["mixed"], ["rx_out"], {"T_spec": 340.0}))
+auto_fs.add_unit(Unit("splitter", splitter, ["rx_out"], ["product", "recycle"], {"split_frac": 0.7}))
 
-streams = fs.solve(tears="auto")     # no add_recycle anywhere
-fs.last_solve_tear_streams           # -> ['mixed'], what it chose
+streams = auto_fs.solve(tears="auto")     # no add_recycle anywhere
+auto_fs.last_solve_tear_streams           # -> ['mixed'], what it chose
 ```
 
 Two strategies, and `tears=` names them: `"auto"` (`"heuristic"`) takes one
@@ -500,13 +537,18 @@ This is implemented using JAX custom VJP rules, enabling gradient computation th
 import jax
 
 # Gradient through flowsheet
-def flowsheet_objective(feed_T):
-    fs.feeds['fresh_feed'] = make_stream({'A': 1.0}, T=feed_T, P=101325.0)
-    results = fs.solve()
-    return results['product']['F_B']
+def flowsheet_objective(feed_flow):
+    original = fs.feeds['fresh_feed']
+    fs.feeds['fresh_feed'] = make_stream({species[0]: feed_flow, species[1]: 0.0},
+                                         T=340.0, P=101325.0)
+    try:
+        results = fs.solve()
+    finally:
+        fs.feeds['fresh_feed'] = original   # do not leave a tracer in the flowsheet
+    return results['liquid_product'][f'F_{species[1]}']
 
 grad_fn = jax.grad(flowsheet_objective)
-sensitivity = grad_fn(350.0)
+sensitivity = grad_fn(1.0)   # d(product B) / d(fresh feed flow)
 ```
 
 ---
@@ -520,10 +562,10 @@ sensitivity = grad_fn(350.0)
 Difflow uses a plugin system for extensibility:
 
 ```python
-from difflow.plugins import OperationRegistry, UnitOperation
+from difflow.plugins import register_operation, UnitOperation
 
-# Register a new operation
-@OperationRegistry.register(
+# Register a new operation (adds it to the global ``registry``)
+@register_operation(
     name='my_reactor',
     category='reactors',
     description='Custom reactor model'
@@ -531,6 +573,7 @@ from difflow.plugins import OperationRegistry, UnitOperation
 class MyReactor:
     def __call__(self, inlet, **params):
         # Custom reactor logic
+        outlet, info = dict(inlet), {}
         return outlet, info
 ```
 
@@ -563,16 +606,16 @@ class MultiInletOperation(Protocol):
 ### Using the Registry
 
 ```python
-from difflow.plugins import OperationRegistry
+from difflow.plugins import registry
 
-# List available operations
-operations = OperationRegistry.list_operations()
+# List available operations (name -> OperationInfo)
+operations = registry.list_operations()
 
 # Get operation by name
-CSTR = OperationRegistry.get('cstr')
+CSTR = registry.get('CSTR')
 
 # List operations by category
-reactors = OperationRegistry.list_by_category('reactors')
+reactors = registry.list_operations(category='reactors')
 ```
 
 ### Loading Plugins
@@ -601,11 +644,11 @@ The `difflow_bio` package is automatically registered as a plugin:
 
 ```python
 # After loading plugins, bio operations are available:
-from difflow.plugins import OperationRegistry
+from difflow.plugins import registry
 
-bioreactor = OperationRegistry.get('continuous_bioreactor')
-centrifuge = OperationRegistry.get('disc_stack_centrifuge')
-protein_a = OperationRegistry.get('protein_a_chromatography')
+bioreactor = registry.get('ContinuousBioreactor')
+centrifuge = registry.get('DiscStackCentrifuge')
+protein_a = registry.get('ProteinAChromatography')
 ```
 
 ---
@@ -653,6 +696,7 @@ That is deliberate. A file that silently lost a reactor's rate law would reload 
 About half the core units need a `thermo` or `eos` object in the constructor, not just a `Params`. `IdealThermo` is written and rebuilt automatically. Anything else is refused on write, and can be supplied on load instead:
 
 ```python
+my_thermo = thermo   # any property package, e.g. a CubicThermo
 fs2 = serialize.load("plant.json", extras={"flash": {"thermo": my_thermo}})
 ```
 
@@ -663,9 +707,11 @@ fs2 = serialize.load("plant.json", extras={"flash": {"thermo": my_thermo}})
 Most units are constructed as `Unit(Params(...), thermo)`, but a substantial minority take their numbers as plain constructor arguments and build the `Params` themselves — `Compressor(ratio)`, `FlowSplit(w)`, `GasPipe(beta)`, and most of the gas plugin. Those numbers are written under `params`, because that is where the built unit keeps them, and they are passed straight back to the constructor on load. Nothing extra is needed:
 
 ```python
-fs = Flowsheet(species_order=["CH4"])
-fs.add_unit(Unit("boost", Compressor(ratio=1.3), ["a"], ["b"]))
-serialize.from_json(serialize.to_json(fs))   # ratio comes back as 1.3
+from difflow_gas import Compressor
+
+gas_fs = Flowsheet(species_order=["CH4"])
+gas_fs.add_unit(Unit("boost", Compressor(ratio=1.3), ["a"], ["b"]))
+serialize.from_json(serialize.to_json(gas_fs))   # ratio comes back as 1.3
 ```
 
 An argument that is *not* data — `Mixer(species_order)`, a `thermo` — still travels under `constructor`, and the two channels compose: `CompressorBoost(ratio, direction)` carries `ratio` by the first road and `direction` by the second.
@@ -689,6 +735,7 @@ The two together close the loop. A graphical editor you can only enter is worse 
 
 The output is laid out to be read and edited — imports, then thermodynamics, then kinetics, then the flowsheet:
 
+<!-- doc-test: skip: illustrative generated-script output (contains `...` placeholders) -->
 ```python
 """Flowsheet generated by difflow 0.1.0.
 
@@ -761,6 +808,7 @@ Units are *not* read from the prose. They come from the class's `parameter_units
 
 Where a field needs to say something different from its docstring, its metadata still wins:
 
+<!-- doc-test: skip: dataclass-field fragment, not standalone -->
 ```python
 P: float = field(default=101325.0, metadata={"description": "..."})
 ```
@@ -829,6 +877,7 @@ difflow gui: plant.py raised while building the flowsheet: FileNotFoundError: as
 
 or from Python, on a flowsheet you already have:
 
+<!-- doc-test: skip: starts the GUI server (binds a port) -->
 ```python
 from difflow import gui
 
@@ -1238,6 +1287,7 @@ plus whatever the code context defines, so a `thermo` object built there is a na
 
 **That `fs` is live is the whole point.** A REPL over a deepcopy would answer questions about a model nobody is looking at. Edit a parameter in a cell and the server refingerprints the document, notices, drops the stale solve, and tells the page to redraw — the canvas follows the prompt. It is also what makes the panel difflow's rather than any editor's: `jax.grad` at the prompt differentiates through the recycle tear solve of the flowsheet you are looking at.
 
+<!-- doc-test: skip: interactive console transcript -->
 ```python
 >>> import jax
 >>> f = lambda V: fs._apply_params({'reactor.V': V}).solve()['liq']['F_ethanol']
@@ -1282,13 +1332,18 @@ A hook that raises is reported where its output would have been, rather than tak
 ```python
 from difflow import publish, SweepAxis
 
+axes = [
+    SweepAxis("reactor.V", 0.5, 5.0, n=5, label="Reactor volume", units="m³"),
+    SweepAxis("feed:fresh_feed.F_n_hexane", 0.5, 1.5, n=3, label="Feed rate", units="mol/s"),
+]
+outputs = {"conversion": lambda streams: 1 - (streams["liquid_product"]["F_n_hexane"]
+                                              + streams["vapor_product"]["F_n_hexane"])
+                                    / streams["fresh_feed"]["F_n_hexane"]}
+
 publish(
     fs,
-    axes=[
-        SweepAxis("reactor.V", 0.5, 5.0, n=21, label="Reactor volume", units="m³"),
-        SweepAxis("heater.T_out", 320.0, 400.0, n=9, label="Inlet temperature", units="K"),
-    ],
-    outputs={"conversion": lambda streams: 1 - streams["out"]["F_A"] / 1.0},
+    axes=axes,
+    outputs=outputs,
     path="model.html",
     title="Reactor sizing",
 )
@@ -1322,7 +1377,7 @@ The arithmetic the page runs — interpolation between solved points, and the ex
 from difflow import sweep
 
 result = sweep(fs, axes, outputs)
-result.values["conversion"]      # shape (21, 9)
+result.values["conversion"]      # shape (5, 3)
 result.gradients["conversion"]   # d(conversion)/d(axis), same shape per axis
 ```
 
@@ -1343,6 +1398,7 @@ result.gradients["conversion"]   # d(conversion)/d(axis), same shape per axis
 
 ### Flowsheet Organization
 
+<!-- doc-test: skip: ordering sketch with placeholder unit names -->
 ```python
 # Good: Logical unit ordering
 fs.add_unit(mixer)      # 1. Combine feeds
@@ -1381,11 +1437,17 @@ The full decision tree is in
 ```python
 # Use JIT compilation for repeated evaluations
 @jax.jit
-def evaluate_flowsheet(feed_conditions):
-    fs.feeds['fresh_feed'] = make_stream(feed_conditions)
-    return fs.solve()
+def evaluate_flowsheet(feed_flow):
+    original = fs.feeds['fresh_feed']
+    fs.feeds['fresh_feed'] = make_stream({species[0]: feed_flow, species[1]: 0.0},
+                                         T=340.0, P=101325.0)
+    try:
+        streams = fs.solve()
+    finally:
+        fs.feeds['fresh_feed'] = original
+    return streams['liquid_product'][f'F_{species[1]}']
 
 # Vectorize over multiple cases
-cases = [{'A': 1.0, 'B': 0.0}, {'A': 0.8, 'B': 0.2}, ...]
+cases = jnp.array([0.8, 1.0, 1.2])
 results = jax.vmap(evaluate_flowsheet)(cases)
 ```

@@ -119,9 +119,12 @@ The state is packed by `PowerStateLayout`:
 ```python
 from difflow_power import power_state_layout, power_flow_residuals
 import jax
+import difflow_power as dp
 
+net = dp.cases.case9()
 layout = power_state_layout(net)
-x = layout.pack(vm, va, pg, qg)
+sol = dp.solve_power_flow(net)
+x = sol.x                      # or layout.pack(vm, va, pg, qg)
 r = power_flow_residuals(x, net, layout)
 A = jax.jacobian(power_flow_residuals)(x, net, layout)   # constraint Jacobian
 ```
@@ -229,9 +232,12 @@ The gradient is of the *barrier* solution at the final `μ`, which differs from 
 Three assumptions — negligible resistance, flat voltages, small angles — turn the AC equations into a linear model. It is a severe approximation and an indispensable one: it is what wholesale markets clear on, and what makes contingency screening over thousands of outages tractable.
 
 ```python
+import jax.numpy as jnp
+
 dc = dp.solve_dcopf(net)         # a convex QP, same interior-point solver
 H  = dp.ptdf(net)                # (n_branch, n_bus) shift factors
 L  = dp.lodf(net)                # (n_branch, n_branch) outage factors
+base_flows = jnp.array([f for f, _ in dp.solve_power_flow(net).branch_mw.values()])  # from-end MW
 after = dp.contingency_flows(net, base_flows)
 ```
 
@@ -401,6 +407,7 @@ iterations on.
 Power systems have a long tradition of hand-derived sensitivity factors. Each is a derivative of a solved state, and each is one `jax.jacobian` call here — not a reimplementation of the classical formula, but the derivative itself, so it cannot drift out of step with the model.
 
 ```python
+x = dp.solve_power_flow(net).x
 dp.demand_sensitivity(net)        # d(state)/d(load) -- includes voltages
 dp.branch_flow_sensitivity(net)   # AC injection shift factors
 dp.loss_sensitivity(net)          # marginal loss factors
@@ -420,7 +427,13 @@ These differentiate a **power flow**, where setpoints hold and the slack absorbs
 Power system state estimation and chemical process data reconciliation are the same computation: a weighted least-squares distance from noisy measurements, minimised subject to a model's equations, with bad data found by looking for a residual too large to be noise. So `difflow_power.estimation` is a thin layer over `difflow.reconciliation`, not a reimplementation.
 
 ```python
+import jax
+
 layout = dp.power_state_layout(net, demand_buses=net.bus_ids)
+u = dp.solve_power_flow(net)
+st = u.layout.unpack_arrays(u.x, net)
+pd, qd = net.load_arrays_pu()
+x_true = layout.pack(st.vm, st.va, st.pg, st.qg, pd, qd)
 sigma  = dp.measurement_sigma(layout, overrides={"va_7": 0.001})   # a PMU
 y      = dp.perturb(x_true, sigma, jax.random.PRNGKey(0))
 est    = dp.estimate_state(net, y, sigma, layout)

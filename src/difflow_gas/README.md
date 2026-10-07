@@ -128,6 +128,7 @@ A sequential solve satisfies most equations by construction; the
 meaningful check evaluates ALL equation-oriented residuals on the
 solved state, exactly as a simultaneous NLP would pose them:
 
+<!-- doc-test: skip: fragment, needs a solved GasLib network (streams, network, dec) -->
 ```python
 rep = difflow_gas.residual_report(streams, network, dec,
                                   cv_drops_bar={"cv_1": 2.0})

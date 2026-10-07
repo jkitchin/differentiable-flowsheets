@@ -315,6 +315,7 @@ K_G = overall_mass_transfer(k_G=k_G, k_L=k_L, E=E, H=H_CO2, P=101325.0)
 
 #### Parameters
 
+<!-- doc-test: skip: field listing of a library dataclass, not a runnable example -->
 ```python
 @dataclass
 class AbsorberParams:
@@ -400,6 +401,7 @@ print(f"Rich loading: {float(info['rich_loading']):.3f} mol/mol")
 
 #### Parameters
 
+<!-- doc-test: skip: field listing of a library dataclass, not a runnable example -->
 ```python
 @dataclass
 class StripperParams:
@@ -407,7 +409,8 @@ class StripperParams:
     n_stages: int = 8
     T_reboiler: float = 393.15           # K
     P_stripper: float = 200000.0         # Pa
-    reflux_ratio: float = 0.3
+    steam_ratio: float = 2.0             # mol H2O stripped per mol CO2
+    T_condenser: float = 313.15          # K, overhead condenser outlet
     target_lean_loading: float = 0.2     # mol CO2/mol amine
     reboiler_duty: float = None          # W; if set, limits stripping
     cross_exchanger_approach: float = 10.0  # K
@@ -420,6 +423,13 @@ x_w P^{sat}_w(T_{reb})$, inverted through the solvent's VLE. A hotter
 reboiler or a lower column pressure therefore strips deeper; a reboiler
 colder than the rich solvent is rejected. A specified `reboiler_duty`
 caps the CO2 that can be released after the sensible heat is paid.
+
+The overhead condenser returns the steam it condenses to the column as
+reflux. The CO2 product leaves saturated with water at `T_condenser` and
+the column pressure (about 96 % CO2 at 2 bar and 40 C) and the solvent
+keeps its water, so an absorber-stripper loop needs no make-up water for
+the stripping steam. The achieved reflux (mol condensate per mol CO2) is
+`info["reflux_ratio"]`; the old `reflux_ratio` input is ignored.
 
 #### Key Outputs
 
@@ -464,6 +474,7 @@ stripped (water lost with the product needs make-up).
 
 #### Parameters
 
+<!-- doc-test: skip: field listing of a library dataclass, not a runnable example -->
 ```python
 @dataclass
 class MembraneParams:
@@ -580,6 +591,7 @@ The constructor takes a `MembraneParams` (the same one
 `MembraneSeparator` takes, with `area` read **per stage**) plus the
 cascade's own arguments:
 
+<!-- doc-test: skip: constructor signature listing, params undefined -->
 ```python
 MultistageMembrane(params, n_stages=2, configuration="series",
                    recycle_iterations=100, stage_params=None)
@@ -665,6 +677,7 @@ the cycle pays for.
 
 #### Parameters
 
+<!-- doc-test: skip: field listing of a library dataclass, not a runnable example -->
 ```python
 @dataclass
 class AdsorptionParams:

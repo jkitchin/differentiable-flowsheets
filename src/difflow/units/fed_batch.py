@@ -318,7 +318,7 @@ class FedBatchReactor:
             result = integrate_diffrax(
                 diffrax_rhs,
                 y0,
-                t_span=(0.0, float(t_final)),
+                t_span=(0.0, t_final),
                 solver=diffrax_solver,
                 rtol=rtol,
                 atol=atol,

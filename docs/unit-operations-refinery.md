@@ -72,7 +72,7 @@ assay = Assay(
     light_ends={"propane": 0.005, "n_butane": 0.01, "n_pentane": 0.015},
 )
 crude = characterize(assay)          # default cut points, Twu critical properties
-crude.names, crude.Tb, crude.sg, crude.volume_fraction
+crude.names, crude.Tb, crude.SG, crude.volume_fraction
 ```
 
 - **Interpolation:** the curve is interpolated monotonically (PCHIP).
@@ -131,8 +131,12 @@ comp = char.composition                                # a cm.Composition
 comp.hc_type          # (n, 4) vol fractions: paraffins, naphthenes, aromatics, olefins
 comp.hydrogen         # (n,) mass fraction
 comp.sulfur_classes   # (n, 5) mass fraction of S in each class
+stream = char.stream(total=100.0, T=300.0, P=101325.0)   # kg/s of crude
 comp.of_stream(stream).as_dict()   # aromatics_vol, hydrogen_wt, S_<class>_wt, N_basic_wppm, ...
+```
 
+<!-- doc-test: skip: needs a solved column (`result`, built in the column section below) -->
+```python
 props = dr.product_properties(result.products, thermo, feed, composition=comp)
 props["diesel"].composition.aromatics, props["diesel"].composition.sulfur_classes_wt
 ```
@@ -173,6 +177,12 @@ Derived: `sulfur_classes` = `sulfur[:, None] * sulfur_split`, and likewise `nitr
 **Measured data overrides the estimate cut by cut.** `CutData(values, T=None, extrapolate="estimate")` holds either per-cut values (`n_cuts` entries, residue lump included, NaN where nothing was measured) or a curve over boiling point that is interpolated at each cut's Tb. For a curve, the default `extrapolate="estimate"` gives cuts outside the measured range the correlation, because a naphtha PIONA says nothing about the gas oil. `"flat"` holds the end values, as the contaminant curves do.
 
 ```python
+import jax.numpy as jnp
+
+n20_per_cut = jnp.full(char.n_cuts, jnp.nan)             # nothing measured here
+T_anchor_K = [323.15, 523.15, 723.15]
+basic_share = [0.25, 0.30, 0.33]
+shares_k_by_5 = [[0.8, 0.2, 0, 0, 0], [0.4, 0.25, 0.35, 0, 0], [0.3, 0, 0.15, 0.3, 0.25]]
 data = cm.CompositionData(
     hc_types=cm.CutData({"paraffins": [0.55, 0.45], "naphthenes": [0.30, 0.33],
                          "aromatics": [0.15, 0.22]}, T=[340.0, 450.0]),   # PIONA of the naphtha
@@ -291,20 +301,33 @@ An atmospheric crude column is a main column with no reboiler:
 - **Pumparounds** draw liquid, cool it outside the column and return it higher up. They remove heat part-way up, and so set the internal reflux in each section.
 
 ```python
-from difflow_refinery import ColumnThermo, column as cc
+import jax.numpy as jnp
+import difflow_refinery as dr
+from difflow_refinery import Assay, ColumnThermo, characterize, column as cc
 
+# the test crude, 95 000 bbl/d at 240 C and 6 bar into the furnace
+assay = Assay([0, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 100],
+              [t + 273.15 for t in (-10, 60, 95, 150, 205, 260, 315, 370, 430, 500, 600, 680, 850)],
+              sg=0.86, light_ends={"propane": 0.5, "n_butane": 1.0, "n_pentane": 1.5})
+crude = characterize(assay)
 thermo = ColumnThermo.from_characterization(crude)
+kg_s = 95_000 * cc.BARREL / 86400.0 * float(crude.bulk_sg) * 999.016
+feed = crude.stream(kg_s, T=273.15 + 240, P=6e5, basis="mass")
+Vf = float(thermo.std_volume(jnp.stack([jnp.asarray(feed[f"F_{n}"]) for n in thermo.names])))
+
 params = cc.CrudeColumnParams(
     n_stages=30, feed_stage=27, P_top=1.5e5, P_bottom=1.9e5, P_condenser=1.3e5,
-    bottom_steam=..., steam_T=533.15,               # steam in mol/s
-    side_products=(cc.SideProduct("kero", 9, 4, steam=...),
-                   cc.SideProduct("diesel", 16, 4, steam=...),
-                   cc.SideProduct("ago", 22, 3, steam=...)),
+    bottom_steam=150.0, steam_T=533.15,             # steam in mol/s
+    side_products=(cc.SideProduct("kero", 9, 4, steam=40.0),
+                   cc.SideProduct("diesel", 16, 4, steam=40.0),
+                   cc.SideProduct("ago", 22, 3, steam=20.0)),
     pumparounds=(cc.Pumparound("pa1", 12, 10), cc.Pumparound("pa2", 19, 17)),
-    specs=(cc.product_rate("naphtha", ...), cc.product_rate("kero", ...),
-           cc.product_rate("diesel", ...), cc.product_rate("ago", ...),
+    specs=(cc.product_rate("naphtha", 0.20 * Vf), cc.product_rate("kero", 0.11 * Vf),
+           cc.product_rate("diesel", 0.17 * Vf), cc.product_rate("ago", 0.05 * Vf),
            cc.pumparound_duty("pa1", 15e6), cc.pumparound_delta_t("pa1", 60.0),
-           cc.pumparound_duty("pa2", 20e6), cc.pumparound_delta_t("pa2", 60.0)),
+           cc.pumparound_duty("pa2", 20e6), cc.pumparound_delta_t("pa2", 60.0),
+           cc.overflash(0.05)),                     # closes the furnace
+    furnace=cc.Furnace(efficiency=0.85),
 )
 col = cc.CrudeColumn(params, thermo)
 col.degrees_of_freedom()
@@ -403,11 +426,12 @@ On the test crude, a 30-stage column with three side strippers, two pumparounds 
 `solve` takes `assay=` (same light ends and cut points) and `params=` (same layout), so derivatives with respect to the assay and the specs are a `jax.grad` of a function that calls it:
 
 ```python
+import dataclasses
 import jax
 
 def residue_api(sg):
-    a = dr.Assay([0, 30, 70, 100], [320.0, 480.0, 640.0, 900.0], sg=sg)
-    return unit.solve(1.0, T=480.0, P=4e5, basis="mole", assay=a).properties["residue"].api
+    a = dataclasses.replace(assay, sg=sg)     # same light ends and cut points
+    return unit.solve(95_000, T=273.15 + 240, P=6e5, assay=a).properties["residue"].api
 
 jax.grad(residue_api)(0.85)
 ```
@@ -416,17 +440,19 @@ jax.grad(residue_api)(0.85)
 
 `difflow_refinery.planning.cdu_block` wraps a `CrudeUnit` as a `difflow.planning.Block`. Its delta vectors are the column's own derivatives, taken by AD through the Newton solve, and the trust-region planner refreshes them every cycle (see [Delta-base planning](planning.md)). The full walk-through is `examples/35_refinery_cdu_planning.ipynb`.
 
+<!-- doc-test: skip: planner solve takes minutes -->
 ```python
 from difflow_refinery.planning import available_levers, cdu_block, link_cdu, product_value_block
 from difflow.planning import DeltaBasePlanner, Network, check_delta_vectors
 from difflow.planning.lp import Spec
 
 cdu = cdu_block(unit, ["crude.rate", "naphtha.yield", "kero.yield", "overflash"],
-                ["kero.bpd", "kero.tbp95", "gap.kero_diesel", "furnace.fired", ...],
+                ["kero.bpd", "kero.tbp95", "gap.kero_diesel", "furnace.fired",
+                 "naphtha.bpd", "diesel.bpd", "ago.bpd", "residue.bpd"],   # what `value` prices
                 rate=95_000, T=273.15 + 240, P=6e5,          # the base point, as for unit.solve
-                bounds={"kero.yield": (0.08, 0.15), ...})
+                bounds={"kero.yield": (0.08, 0.15)})
 check_delta_vectors(cdu)["passed"]                           # AD against central differences
-value = product_value_block({"naphtha": 70.0, "kero": 95.0, ...})   # $/bbl
+value = product_value_block({"naphtha": 70.0, "kero": 95.0, "diesel": 90.0, "ago": 75.0, "residue": 55.0})   # $/bbl
 net = Network([cdu, value], link_cdu(cdu, value))
 plan = DeltaBasePlanner(net, prices={"value.revenue": 1.0, "cdu.crude.rate": -65.0,
                                      "cdu.furnace.fired": -700.0},
@@ -506,15 +532,29 @@ The train and the column are coupled both ways:
 
 `PreheatedCrudeUnit` solves the two together:
 
+<!-- doc-test: skip: coupled preheat solve takes minutes -->
 ```python
 import difflow_refinery as dr
 
+import dataclasses
+
+# the column of the previous section, with each pumparound given as a rate and a
+# return temperature (the train sets the latter; the spec's value only starts the loop)
+specs = tuple(sp for sp in params.specs if not sp.kind.startswith("pa_")) + (
+    cc.pumparound_rate("pa1", 0.5 * Vf), cc.pumparound_return_temperature("pa1", 400.0),
+    cc.pumparound_rate("pa2", 0.6 * Vf), cc.pumparound_return_temperature("pa2", 470.0))
+column_params = dataclasses.replace(params, specs=specs)
+
 tp = dr.PreheatTrainParams(
-    exchangers=(dr.PreheatExchanger("E1", U=350.0, area=300.0), ..., dr.PreheatExchanger("E8", 350.0, 1200.0, Rf=2e-4)),
-    hot_streams=(dr.HotStream("residue", ("E8", "E7", "E2")), dr.HotStream("pa2", ("E6",)), ...),
+    exchangers=tuple(dr.PreheatExchanger(n, 350.0, A, Rf=2e-4 if n == "E8" else 0.0)
+                     for n, A in dict(E1=300, E2=1200, E3=1500, E4=600,
+                                      E5=300, E6=1500, E7=1500, E8=1200).items()),
+    hot_streams=(dr.HotStream("residue", ("E8", "E7", "E2")), dr.HotStream("pa2", ("E6",)),
+                 dr.HotStream("ago", ("E5",)), dr.HotStream("diesel", ("E4",)),
+                 dr.HotStream("pa1", ("E3",)), dr.HotStream("kero", ("E1",))),
     crude_path=("E1", "E2", "E3", "desalter", "E4", "E5", "preflash", "E6", "E7", "E8"),
     desalter=dr.DesalterParams(), drum=dr.PreflashDrumParams(P=3e5))
-unit = dr.PreheatedCrudeUnit(assay, column_params, tp)
+unit = dr.PreheatedCrudeUnit(assay, column_params, tp)   # replaces the bare CrudeUnit above
 res = unit.solve(95_000, T_tank=300.0)          # bbl/d from the tank
 res.furnace_inlet_T, res.fired_duty, res.preflash_vapor
 unit.balances(res)                               # tank to products: mass, water, energy
@@ -848,9 +888,10 @@ the reverse question, for example what furnace temperature a given HVGO end
 point costs:
 
 ```python
+vparams = dr.VacuumColumnParams(components=char.components)
 specs = dr.default_vacuum_specs() + (
     dr.StageSpec("hvgo.T95", 570.0 + 273.15, replaces="furnace.T"),)
-vdu = dr.VacuumColumn(params.update(specs=specs))
+vdu = dr.VacuumColumn(vparams.update(specs=specs))
 ```
 
 **Outputs** (`info["outputs"]`, SI units) include every stage `T` and `P`,
@@ -1115,7 +1156,11 @@ cuts = dr.characterize(dr.Assay([0, 50, 100], [360., 400., 470.], sg=0.74),
 comps = gas_components(["hydrogen_sulfide", "ethane", "propane", "isobutane",
                         "n_butane", "isopentane", "n_pentane", "n_hexane"], pseudo=cuts)
 col = GasPlantColumn(debutanizer(comps, naphtha_rvp=80e3))
-lpg, naphtha, info = col(feed)        # feed = {"F_propane": ..., "T": ..., "P": ...}
+weights = {"ethane": 0.2, "propane": 8, "isobutane": 5, "n_butane": 12, "isopentane": 10,
+           "n_pentane": 12, "n_hexane": 20, "pc02": 18, "pc03": 15, "hydrogen_sulfide": 0.05}
+gas_feed = {f"F_{n}": float(weights.get(n, 0.0)) for n in comps.names}   # mol/s
+gas_feed.update(T=380.0, P=12e5)
+lpg, naphtha, info = col(gas_feed)
 info["outputs"]["reboiler.duty"], info["outputs"]["bottoms.rvp"]
 ```
 
@@ -1284,7 +1329,9 @@ The outputs are in planner units (C, kPa, MW, kg/h, kmol/h).
 Non-convergence is masked to NaN, as in `cdu_block`.
 
 ```python
-blk = gasplant_block(col, [feed], ["distillate.x.C5+", "bottoms.rvp", "top.P", "feed.mol"],
+from difflow_refinery.gasplant import gasplant_block
+
+blk = gasplant_block(col, [gas_feed], ["distillate.x.C5+", "bottoms.rvp", "top.P", "feed.mol"],
                      outputs=["reboiler.duty", "condenser.duty", "distillate.rate"])
 ```
 
@@ -1343,11 +1390,13 @@ naphtha carries. `gas_plant_feed` (#326) is the bridge:
 
 ```python
 from difflow_refinery.gasplant import gas_plant_feed
-gp = gas_plant_feed(cdu.products, char,
+# the total condenser of the test column makes no offgas; with a partial condenser use
+# streams=("offgas", "naphtha") and, say, h2s={"offgas": 0.02}
+gp = gas_plant_feed(cdu.last_result.products, char,
                     ["hydrogen_sulfide", "ethane", "propane", "isobutane",
                      "n_butane", "isopentane", "n_pentane"],
-                    min_fraction=1e-3, h2s={"offgas": 0.02}, T=313.15, P=1.3e5)
-comps, offgas, naphtha = gp.components, gp["offgas"], gp["naphtha"]
+                    streams=("naphtha",), min_fraction=1e-3, T=313.15, P=1.3e5)
+comps, naphtha = gp.components, gp["naphtha"]
 print(gp.summary())
 ```
 

@@ -103,8 +103,18 @@ import jax.numpy as jnp
 from difflow.planning import Block, Network, DeltaBasePlanner
 
 def ngl_outputs(u):
-    ...   # any pure JAX callable: a flowsheet, a unit, an analytic model
+    # any pure JAX callable: a flowsheet, a unit, an analytic model
+    recovery, T_cold, split = u
+    ngl_c2 = 12.0 * recovery * jnp.exp(-(T_cold - 218.0) / 60.0)
+    residue_F = 90.0 - 20.0 * recovery + 0.4 * (T_cold - 218.0)
+    T_colfeed = T_cold + 14.0 * (1.0 - split) + 6.0 * (recovery - 0.5)
     return jnp.array([ngl_c2, residue_F, T_colfeed])
+
+def power_outputs(u):
+    fuel_F, alloc = u
+    burned = alloc * fuel_F
+    power = 0.4 * burned * (1.0 - 0.3 * jnp.exp(-burned / 40.0))
+    return jnp.array([power, 0.048 * burned])
 
 ngl = Block(name="ngl", fn=ngl_outputs,
             u_names=["ethane_recovery", "T_coldbox", "split"],
@@ -117,17 +127,16 @@ pwr = Block(name="power", fn=power_outputs,
 
 net = Network([ngl, pwr], links=[("ngl.residue_F", "power.fuel_F")])
 
-planner = DeltaBasePlanner(
-    net,
-    prices={"ngl.NGL_C2": 9.0, "power.Power": 55.0},   # linear in y: an LP
-    specs=[("ngl.T_colfeed", "<=", 236.0)],
-    radius=0.3,                                        # fraction of range
-)
+prices = {"ngl.NGL_C2": 9.0, "power.Power": 55.0}      # linear in y: an LP
+specs = [("ngl.T_colfeed", "<=", 236.0)]
+
+planner = DeltaBasePlanner(net, prices=prices, specs=specs,
+                           radius=0.3)                 # fraction of range
 
 res = planner.solve()
 res.plan                              # optimal decisions
 res.delta_vectors                     # the J blocks actually used
-res.pyomo_model                       # the emitted Pyomo model
+# res.pyomo_model                     # the emitted Pyomo model (needs pyomo)
 res.plan_sensitivity(wrt="prices")    # d(plan)/d(price)
 print(res.summary())
 ```
@@ -189,6 +198,7 @@ s.t.     y_b - J_b u_b  =  y0_b - J_b u0_b             model rows: the delta vec
 ```
 
 ```python
+state = res.state                    # the nonlinear network state at the plan
 lp = planner.build_lp(planner.linearize(state), state, radius=0.25)
 print(lp.as_text())          # or, after a solve, res.lp_model.as_text()
 ```
@@ -208,11 +218,18 @@ from difflow.planning import (
     draw_trust_region,
 )
 
-draw_chain(state.as_dict(), prices=problem.prices, specs=problem.specs)
-draw_planning_network(net, prices=problem.prices, specs=problem.specs)
-draw_delta_vectors(linearize_block(ngl), block=ngl)
-draw_taylor_model(ngl, "T_coldbox", "residue_F", radius=0.25)
-draw_trust_region(result, decisions=("q.x", "q.y"))
+from difflow.planning import linearize_block
+from difflow.planning.chain import two_plant_chain, ngl_block
+
+problem = two_plant_chain()              # the reference chain behind draw_chain
+chain_state = problem.network.evaluate(problem.network.decision_start())
+chain_ngl = ngl_block()
+
+draw_chain(chain_state.as_dict(), prices=problem.prices, specs=problem.specs)
+draw_planning_network(problem.network, prices=problem.prices, specs=problem.specs)
+draw_delta_vectors(linearize_block(chain_ngl), block=chain_ngl)
+draw_taylor_model(chain_ngl, "T_coldbox", "residue_F", radius=0.25)
+draw_trust_region(res, decisions=("ngl.ethane_recovery", "ngl.T_coldbox"))
 ```
 
 | Drawing | Shows |
@@ -243,8 +260,8 @@ the region where any Taylor model is valid, and the LP confidently returns a
 plan the real model does not support:
 
 ```python
-guarded   = DeltaBasePlanner(net, prices=..., radius=0.3).solve()
-unguarded = DeltaBasePlanner(net, prices=..., radius=0.3,
+guarded   = DeltaBasePlanner(net, prices=prices, specs=specs, radius=0.3).solve()
+unguarded = DeltaBasePlanner(net, prices=prices, specs=specs, radius=0.3,
                              accept_test=False).solve()
 guarded.converged      # True  — reaches the optimum
 unguarded.converged    # False — oscillates, rho < 0 on alternate steps
@@ -275,7 +292,7 @@ feasible point to report. But **realised economics are scored against the
 nonlinear model**, never against the LP's own prediction:
 
 ```python
-scored = planner.score(decisions)
+scored = planner.score(res.decisions)
 scored["objective"]         # priced objective from the real blocks
 scored["violations"]        # per-spec violation from the real blocks
 scored["merit"]             # objective less the violation charge
@@ -341,7 +358,7 @@ question is where it switches:
 
 ```python
 from difflow.planning import price_switch_point
-price_switch_point(planner, "power.Power", 5.0, 60.0)["price"]
+price_switch_point(planner, "power.Power", 5.0, 60.0, tol=1.0)["price"]
 ```
 
 ## Phase boundaries
@@ -355,6 +372,7 @@ numbers keep coming — which is exactly why the planner has to say something.
 Give a block a `phase_fn` and the planner warns when a proposal crosses a
 regime:
 
+<!-- doc-test: skip: template; `info` is the flash result computed inside the user's own block -->
 ```python
 Block(..., phase_fn=lambda u, th: jnp.atleast_1d(info["V_frac"]),
       phase_names=("V_frac",), phase_bounds=(0.0, 1.0))
@@ -587,12 +605,19 @@ added straight onto $J$ and the LP needs no change:
 ```python
 from difflow.planning import run_modifier_adaptation
 
-res = run_modifier_adaptation(planner, {"reactor": real_reactor})
-res.plant_objective
-print(res.summary())
+# The "plant": same inputs and outputs as the model block, but a different form
+def real_ngl(u):
+    return ngl_outputs(u) * jnp.array([0.85, 1.0, 1.0]) + jnp.array([0.0, 2.0, 0.0])
+
+plant = {"ngl": real_ngl}
+ma_planner = DeltaBasePlanner(net, prices=prices, specs=specs, radius=0.3)
+ma = run_modifier_adaptation(ma_planner, plant, max_iter=6)
+ma.history[-1]["plant_objective"]
+print(ma.plan)
 
 # The comparison the method exists for:
-run_modifier_adaptation(planner, plant, use_gradients=False)   # model's optimum
+ma0_planner = DeltaBasePlanner(net, prices=prices, specs=specs, radius=0.3)
+run_modifier_adaptation(ma0_planner, plant, use_gradients=False, max_iter=6)   # model's optimum
 ```
 
 Both modifiers are first-order filtered, because an unfiltered gradient
@@ -611,13 +636,28 @@ history and, as importantly, says which of them the history can support:
 ```python
 from difflow.planning import attribute_deltas
 
-res = attribute_deltas(block, U, {"yield": y_meas}, sigma_y={"yield": 0.05},
-                       t=times, move={"feed": 1.0, "T": 2.0},
-                       sigma_u={"feed": 0.1},             # errors in variables
-                       log_outputs={"impurity": 1e-3})    # relative errors
-print(res.table())
-planner.modifiers[block.name] = res.to_modifiers()        # flagged terms only
-res.exposure(plan)          # level error x shadow price of its model row
+import numpy as np
+from difflow.planning import attribute_deltas
+
+# Routine plant history for the "ngl" block: inputs wander a little, and the
+# plant sits 0.5 mol/s above what the model predicts for NGL_C2.
+rng = np.random.default_rng(0)
+n = 60
+times = np.arange(n, dtype=float)
+U = np.asarray(ngl.u0) + rng.normal(size=(n, 3)) * [0.03, 1.0, 0.05]
+Y = np.array([ngl_outputs(jnp.asarray(u)) for u in U])
+c2_meas = Y[:, 0] + 0.5 + rng.normal(scale=0.05, size=n)
+resid_meas = Y[:, 1] * (1.0 + rng.normal(scale=0.01, size=n))
+
+att = attribute_deltas(ngl, U, {"NGL_C2": c2_meas, "residue_F": resid_meas},
+                       sigma_y={"NGL_C2": 0.05, "residue_F": 0.01},
+                       t=times,
+                       move={"ethane_recovery": 0.1, "T_coldbox": 2.0, "split": 0.1},
+                       sigma_u={"T_coldbox": 0.1},        # errors in variables
+                       log_outputs={"residue_F": 1e-3})   # relative errors
+print(att.table())
+ma_planner.modifiers[ngl.name] = att.to_modifiers()       # flagged terms only
+att.exposure(res)           # level error x shadow price of its model row
 ```
 
 For each measured output the residual $r = g(y_{\text{meas}}) -
@@ -663,12 +703,18 @@ on the wrong side of it. The remedy is a back-off sized by the propagated
 uncertainty, $\kappa\sigma$ with $\sigma^2 = g^{\mathsf T}\Sigma_\theta g$:
 
 ```python
+import jax.numpy as jnp
 from difflow.planning import constraint_backoff, apply_backoff
 
-found = constraint_backoff(planner, res.decisions, theta_covariance,
-                           ["ngl.UA", "ngl.eta"], kappa=2.0)
+# The blocks carry parameters (theta); here the reference chain's NGL block.
+chain_planner = problem.planner(radius=0.25)
+theta_covariance = jnp.diag(jnp.array([0.05, 0.03]) ** 2)   # from a fit
+
+found = constraint_backoff(chain_planner, problem.network.decision_start(),
+                           theta_covariance, ["ngl.feed_scale", "ngl.colfeed_rise"],
+                           kappa=2.0)
 print(found.summary())
-planner.specs = apply_backoff(planner.specs, found)
+chain_planner.specs = apply_backoff(chain_planner.specs, found)
 ```
 
 This is a thin layer over `difflow.uncertainty.propagate_covariance`. No
@@ -685,12 +731,12 @@ Jacobian too.
 ```python
 from difflow.planning import PiecewiseSpec
 
-planner = DeltaBasePlanner(net, prices=..., radius=0.1,
-                           piecewise=[PiecewiseSpec("ngl", "T_coldbox",
-                                                    n_points=31)])
-res = planner.solve()
-res.lp_model.integer_cols     # the SOS2 interval binaries
-res.lp_model.sos2_sets        # emitted natively when you export to Pyomo
+pw_planner = DeltaBasePlanner(net, prices=prices, specs=specs, radius=0.1,
+                              piecewise=[PiecewiseSpec("ngl", "T_coldbox",
+                                                       n_points=9)])
+pw_res = pw_planner.solve()
+pw_res.lp_model.integer_cols     # the SOS2 interval binaries
+pw_res.lp_model.sos2_sets        # emitted natively when you export to Pyomo
 ```
 
 The response to the distinguished variable is piecewise-linear and *exact* at
@@ -733,7 +779,8 @@ returning a number**.
 ```python
 from difflow.planning import check_model_order
 
-rep = check_model_order(block, "cost", radius=0.2, sense="min")
+block = ngl      # any Block; here the quick-start NGL block
+rep = check_model_order(block, "residue_F", radius=0.2, sense="min")
 print(rep.summary())
 rep.recommended        # 'linear' or 'quadratic'
 rep.improvement        # error-reduction factor, inf when exact
@@ -760,7 +807,7 @@ one output:
 
 ```python
 from difflow.planning import block_curvature
-curv = block_curvature(block, {"NGL_C2": 12.0, "Power": 40.0})
+curv = block_curvature(block, {"NGL_C2": 12.0, "residue_F": -1.0})
 curv.convex_for("max")
 ```
 
@@ -782,6 +829,8 @@ only *cycles*, so a forward link from one period's tank level to the next is an
 ordinary DAG edge:
 
 ```python
+links = []
+t = 1
 links.append((f"tank@t{t-1}.level_out", f"tank@t{t}.level_in"))
 ```
 
@@ -815,8 +864,8 @@ Measuring the curvature is one thing; using it is another. `model_order`
 switches the subproblem from an LP to a QP:
 
 ```python
-planner = DeltaBasePlanner(net, prices=..., specs=..., sense="min",
-                           model_order="quadratic")
+qp_planner = DeltaBasePlanner(net, prices=prices, specs=specs, sense="max",
+                              model_order="quadratic")
 ```
 
 | | | |
@@ -865,9 +914,11 @@ honest — the trust region, and an acceptance test against the caller's own
 nonlinear blocks — and `qp.convexification` records every block it touched:
 
 ```python
-lp, qp = planner.build_subproblem(lins, state, radius)
+lins = qp_planner.linearize(state)
+lp, qp = qp_planner.build_subproblem(lins, state, radius=0.25)
 qp.convexified                       # did anything have to be clipped?
-qp.convexification["ngl"].summary()  # '3 of 5 eigenvalues clipped (worst -1.28e+03)'
+for name, report in qp.convexification.items():
+    print(name, report.summary())    # e.g. '3 of 5 eigenvalues clipped (worst -1.28e+03)'
 ```
 
 Use `"auto"` to refuse the compromise instead: it takes curvature only where
@@ -956,6 +1007,7 @@ through `scipy.optimize.linprog`. What `difflow.planning` does not own is a
 modelling language. `LPModel.to_pyomo()` emits a `ConcreteModel` so the plan
 composes with the existing Pyomo/IDAES ecosystem instead of competing with it:
 
+<!-- doc-test: skip: needs the optional pyomo package and a cbc solver binary -->
 ```python
 model = res.pyomo_model          # or res.lp_model.to_pyomo()
 import pyomo.environ as pyo
@@ -985,13 +1037,41 @@ plant — implicitly differentiated through the recycle tear solve and every inn
 unit solve.
 
 ```python
+import jax.numpy as jnp
+from difflow import (CSTR, CSTRParams, Flowsheet, IdealThermo, Mixer,
+                     SpeciesData, Splitter, Unit, make_stream)
 from difflow.planning import Block, check_delta_vectors
+
+# A small flowsheet with a recycle: feed + recycle -> mixer -> CSTR -> splitter
+thermo = IdealThermo({
+    s: SpeciesData(s, MW=100.0, Cp_coeffs=(75.0, 0.0, 0.0, 0.0),
+                   Hvap_coeffs=(35000.0, 0.38, 500.0),
+                   antoine_coeffs=(10.0, 3000.0, -50.0))
+    for s in ("A", "B")})
+
+def rate_fn(C, T, params):
+    return jnp.array([params["A"] * jnp.exp(-params["Ea"] / (8.314 * T)) * C["A"]])
+
+cstr = CSTR(CSTRParams(V=jnp.array(1.5), rate_fn=rate_fn,
+                       stoich=jnp.array([[-1.0], [+1.0]]),
+                       rate_params={"A": jnp.array(1e6), "Ea": jnp.array(50000.0)},
+                       species_order=["A", "B"]),
+            thermo=thermo, mode="isothermal")
+
+fs = Flowsheet(species_order=["A", "B"], default_flow=1.0)
+fs.add_feed("feed", make_stream({"A": 10.0, "B": 0.0}, T=300.0, P=101325.0))
+fs.add_unit(Unit("mix", Mixer(["A", "B"]), ["feed", "recycle"], ["mixed"]))
+fs.add_unit(Unit("reactor", cstr, ["mixed"], ["product"], params={"T_spec": 350.0}))
+fs.add_unit(Unit("split", Splitter(["A", "B"]), ["product"], ["purge", "recycled"],
+                 params={"split_frac": 0.5}))
+fs.add_recycle("recycled", "recycle")
 
 blk = Block.from_flowsheet(
     fs,
     u=["reactor.V", "feed:feed.total_flow"],   # levers
     y=["purge.F_B", "purge.total_flow"],       # outputs
-    name="plant", lb=[0.5, 5.0], ub=[5.0, 20.0])
+    name="plant", lb=[0.5, 5.0], ub=[5.0, 20.0],
+    solve_kwargs={"tol": 1e-10, "max_iter": 200})
 
 check_delta_vectors(blk)["passed"]             # AD vs central differences
 ```
@@ -1052,13 +1132,17 @@ and several renderers over it — the same "structured IR plus renderers" shape 
 from difflow.planning import (DeltaVectorSet, write_json, write_csv,
                               write_lp, write_mps, write_iterations_csv)
 
-res = DeltaBasePlanner(net, prices, specs=specs).solve()
+res = DeltaBasePlanner(net, prices=prices, specs=specs).solve()
 dvs = DeltaVectorSet.from_result(res)
 
 write_json(dvs, "plan.json")            # the lossless manifest
 write_csv(dvs, "tables/")               # one shift-vector table per block
-write_mps(res.lp_model, "plan.mps")     # the assembled LP itself
 write_iterations_csv(res, "iters.csv")  # the trust-region audit trail
+```
+
+<!-- doc-test: skip: write_lp / write_mps go through Pyomo, an optional dependency -->
+```python
+write_mps(res.lp_model, "plan.mps")     # the assembled LP itself
 ```
 
 The IR exists because the numbers alone are not enough. A Jacobian entry means
