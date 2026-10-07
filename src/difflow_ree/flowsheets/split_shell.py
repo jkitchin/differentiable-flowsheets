@@ -270,9 +270,9 @@ class SplitShellCascade:
         solvent_flows = get_flows(solvent)
 
         F_aq = feed_flows.get("H2O", 1.0)
-        F_extractant = solvent_flows.get(p.extractant, 0.0)
-        F_diluent = solvent_flows.get(p.diluent, 1.0)
-        F_org = F_extractant + F_diluent
+        # Organic carrier flow = the diluent's; the extractant entry is a
+        # moles-per-volume charge, not a volume (#373).
+        F_org = solvent_flows.get(p.diluent, 1.0)
 
         # Each section at its own pH (audit R7): from product_groups cuts at
         # this O/A, from section_pHs, or one pH for all.

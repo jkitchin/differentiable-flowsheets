@@ -272,7 +272,9 @@ class REEScrubber:
 
         F_extractant = org_flows.get(p.extractant, 0.0)
         F_diluent = org_flows.get(p.diluent, 1.0)
-        F_org = F_extractant + F_diluent
+        # The organic carrier flow is the diluent's; the extractant entry is
+        # a charge, not a volume (#373).
+        F_org = F_diluent
         F_scrub = scrub_flows.get("H2O", 1.0)
 
         # Get D values at scrub pH (lower than extraction)

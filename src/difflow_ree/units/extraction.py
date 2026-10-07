@@ -183,8 +183,9 @@ def _phase_flows(
 
     One definition shared by :class:`REEExtractor` and
     :class:`REEMixerSettler` so the two cannot disagree (#192). The organic
-    phase is the extractant plus the diluent; everything else (water, acid,
-    dissolved REE, spectators) is aqueous. Using only ``H2O`` for the aqueous
+    phase is the diluent; everything else (water, acid,
+    dissolved REE, spectators) is aqueous. The extractant entry is a charge
+    in moles per unit organic volume and counts toward neither flow (#373). Using only ``H2O`` for the aqueous
     flow underestimates it for the concentrated leach liquors this package
     targets, and a silent ``1.0`` default for a missing phase hides a
     mis-specified stream behind a plausible-looking number, so a phase that is
@@ -208,7 +209,7 @@ def _phase_flows(
         stream_name: Name used in the error message
 
     Returns:
-        (F_aq, F_org): Total aqueous and total organic molar flows. A phase
+        (F_aq, F_org): Total aqueous and organic (diluent) carrier flows. A phase
         with no contributing species (and not in ``require``) returns 0.
 
     Raises:
@@ -217,7 +218,13 @@ def _phase_flows(
             flow.
     """
     organic_species = {extractant, diluent}
-    org_keys = [k for k in flows if k in organic_species]
+    # The organic carrier flow is the diluent's, a volume flow like the
+    # aqueous one. The extractant entry is a moles-per-volume charge
+    # (``extractant_conc * F_org``), not a volume, so adding it to the
+    # carrier made the phase ratio depend on the extractant concentration
+    # (an O/A of 1 ran at 1.5 with 0.5 M; #373). It belongs to neither phase
+    # sum: it is neither aqueous nor an organic carrier.
+    org_keys = [k for k in flows if k == diluent]
     aq_keys = [k for k in flows if k not in organic_species]
 
     present = sorted(flows)
@@ -229,8 +236,9 @@ def _phase_flows(
         )
     if "organic" in require and not org_keys:
         raise ValueError(
-            f"{stream_name} has no organic phase: neither the extractant "
-            f"'{extractant}' nor the diluent '{diluent}' is present. "
+            f"{stream_name} has no organic phase: the diluent "
+            f"'{diluent}' is not present (the extractant '{extractant}' is a "
+            f"charge in moles per volume, not a carrier). "
             f"Species present: {present}."
         )
 
@@ -659,7 +667,7 @@ class REEExtractor:
         solvent_flows = get_flows(solvent)
 
         # Get aqueous and organic carrier flows from the one shared
-        # definition (#192): organic = extractant + diluent, aqueous =
+        # definition (#192): organic = diluent, aqueous =
         # everything else. Raises rather than defaulting when a phase is
         # missing from the stream it is required in.
         F_aq, _ = _phase_flows(

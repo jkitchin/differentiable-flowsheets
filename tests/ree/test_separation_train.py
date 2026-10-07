@@ -550,9 +550,14 @@ def test_imperfect_stripping_degrades_raffinate_purity():
     # raffinate, not less -- purity drops further and the impurity ratio
     # grows. open_purity is unmoved because the open loop feeds the
     # extractor clean solvent, the case the fix reduces to exactly.
-    assert open_purity == pytest.approx(0.99276, abs=2e-4)
-    assert closed_purity == pytest.approx(0.90547, abs=2e-4)
-    assert closed_impurity / open_impurity == pytest.approx(14.88, rel=0.02)
+    #
+    # Refreshed with #373: the organic flow is the diluent volume alone, so
+    # the stated O/A of 1 is the O/A the cascade runs at (it ran at 1 +
+    # extractant_conc before, a larger extraction factor). The earlier pins
+    # were 0.99276 / 0.90547 / 14.88.
+    assert open_purity == pytest.approx(0.99450, abs=2e-4)
+    assert closed_purity == pytest.approx(0.90072, abs=2e-4)
+    assert closed_impurity / open_impurity == pytest.approx(20.50, rel=0.02)
 
 
 def test_the_degradation_comes_from_the_residue_not_from_the_loop():
@@ -712,14 +717,14 @@ def test_hydraulic_and_phase_ratio_limits_are_reported_when_declared():
 
     full = _ess_module(limits=OperatingLimits(
         third_phase_loading=0.65, max_loading=1.0,
-        hydraulic_capacity=200.0, min_phase_ratio=0.2, max_phase_ratio=5.0,
+        hydraulic_capacity=150.0, min_phase_ratio=0.2, max_phase_ratio=5.0,
     ))
     constraints = full.constraints(full(feed, full.fresh_solvent(feed))[4])
     assert set(constraints.names) == {
         "sep.third_phase", "sep.loading", "sep.hydraulic",
         "sep.phase_ratio_min", "sep.phase_ratio_max",
     }
-    # 250 mol/s of two-phase throughput against a 200 mol/s settler.
+    # 200 mol/s of two-phase throughput against a 150 mol/s settler.
     assert float(constraints["sep.hydraulic"].margin) < 0.0
     assert not constraints.feasible
 

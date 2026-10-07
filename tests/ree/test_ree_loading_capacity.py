@@ -144,7 +144,7 @@ class TestIssue189_DimensionlessLoading:
                 self._free_fraction_multiplier(
                     info, elements,
                     F_aq=sum(feed_flows.values()),
-                    F_org=1.0 + diluent_flow,
+                    F_org=diluent_flow,
                 )
             )
             thetas.append(float(info["theta_solvent"]))
@@ -182,7 +182,7 @@ class TestIssue189_DimensionlessLoading:
             assert float(info["theta_solvent"]) == 0.0
             mult = self._free_fraction_multiplier(
                 info, elements,
-                F_aq=sum(feed_flows.values()), F_org=6.0,
+                F_aq=sum(feed_flows.values()), F_org=5.0,
             )
             assert mult == pytest.approx(1.0, rel=1e-12), (
                 f"a clean solvent picked up a loading correction "
@@ -555,7 +555,8 @@ class TestIssue192_PhaseFlows:
         flows = {"H2O": 10.0, "Nd": 3.0, "Fe": 1.5, "D2EHPA": 1.0, "kerosene": 5.0}
         F_aq, F_org = _phase_flows(flows, "D2EHPA", "kerosene")
         assert float(F_aq) == pytest.approx(14.5)
-        assert float(F_org) == pytest.approx(6.0)
+        # the organic carrier flow is the diluent's; the extractant is a charge (#373)
+        assert float(F_org) == pytest.approx(5.0)
 
     def test_missing_organic_phase_raises(self):
         """A solvent with no extractant and no diluent is an error, not 1.0."""
@@ -914,7 +915,7 @@ class TestIssue190_SingleDepletionCorrection:
             theta = 1.0 - free_fraction
 
             F_aq = sum(feed_flows.values())
-            F_org = self.F_EXTRACTANT + 5.0
+            F_org = 5.0     # diluent only (#373)
             # Apparent D from the outlet split (a ratio of concentrations,
             # expressed with the phase flows)
             D_app = (F_org_ree / F_org) / ((F_aq_ree / F_aq) + 1e-300)
@@ -1251,7 +1252,7 @@ class TestZeroFlowPhases:
             "D2EHPA", "kerosene",
         )
         assert float(F_aq) == pytest.approx(1e-200)
-        assert float(F_org) == pytest.approx(6e-200)
+        assert float(F_org) == pytest.approx(5e-200)
 
     def test_mixer_settler_third_phase_needs_the_extractant_flow(self):
         """#192/#193: loading is mol REE per mol extractant, so say how much.
@@ -1441,7 +1442,7 @@ class TestIssue286_NoLoadingCorrectionWithoutIsotherm:
             ("Nd",),
         )
         F_aq = F_aq_water + 1.0  # _phase_flows counts the feed's own REE (#192)
-        F_org = F_org_extractant + F_org_diluent
+        F_org = F_org_diluent      # the extractant is a charge, not a volume (#373)
         return raffinate, extract, F_aq, F_org
 
     @pytest.mark.parametrize("include_loading", [False, True])
