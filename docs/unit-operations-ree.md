@@ -928,12 +928,23 @@ pH-driven reads.
 
 Every params class that carried a pH literal now carries `None`:
 `REEExtractorParams`, `MixerSettlerParams`, `ScrubberParams`, `StripperParams`,
-`ExtractStripParams`, `ExtractScrubStripParams`, `SplitShellParams`. Two of
-those resolve to something other than their own duty name, on purpose:
+`ExtractStripParams`, `ExtractScrubStripParams`, `SplitShellParams`. The single
+units resolve it from the window as above, with one exception: an unset
+`StripperParams.pH` is set by the strip acid, `-log10(acid_conc)` (4 M HCl by
+default, pH -0.60). The window fractions were not good enough for the
+circuits. Stripping at the bottom of D2EHPA's window left 67 % of the Sm and
+99.8 % of the Y on the barren organic of a default `ExtractStripCircuit`, so
+`ExtractStripParams` and `ExtractScrubStripParams` now read their unset pHs
+off the `D` curves instead; see {ref}`circuit-operating-points`. Two of the
+remaining classes resolve to something other than their own duty name, on
+purpose:
 
-* `SplitShellParams.pH` takes the **scrubbing** default. A split-shell cascade
-  fractionates only where `D` straddles 1; at D2EHPA's extraction default both
-  La and Dy are quantitatively extracted and the cascade separates nothing.
+* `SplitShellParams.pH` takes the **scrubbing** default when no
+  `product_groups` are given. A split-shell cascade fractionates only where `D`
+  straddles 1; at D2EHPA's extraction default both La and Dy are
+  quantitatively extracted and the cascade separates nothing. With
+  `product_groups`, each section gets its own cut instead; see
+  {ref}`splitshellcascade`.
 * The screening functions (`separation_factor`, `screen_separation`) take the
   record's **`reference_pH`** --- the condition #268 declares every derived
   constant at. The separation factor does not depend on the choice anyway (one
@@ -954,14 +965,33 @@ from difflow_ree import REEDistribution
 dist = REEDistribution(extractant="PC88A", elements=("Nd", "Pr"))
 
 # Separation factor at pH 1.0 (with one shared slope b = 3 the answer is
-# 10**(a_Nd - a_Pr) = 1.6998 at every pH; see #270)
+# 10**(a_Nd - a_Pr) = 2.14 at every pH; see #270)
 SF = dist.get_separation_factor("Nd", "Pr", pH=1.0)
 print(f"SF(Nd/Pr) = {SF:.2f}")
 
-# Find optimal pH for separation
-opt_pH, max_SF = dist.optimal_pH_for_separation("Nd", "Pr", pH_range=(0.1, 2.5))
-print(f"Optimal pH: {opt_pH:.2f}, Max SF: {max_SF:.2f}")
+# An operating pH for the pair. The search range defaults to the record's
+# fitted window ([0.1, 2.5] for PC88A).
+opt_pH, SF = dist.optimal_pH_for_separation("Nd", "Pr")
+print(f"Operating pH: {opt_pH:.2f}, SF: {SF:.2f}")   # 1.08, 2.14
 ```
+
+Because every acidic record has the same pH slope for every element, the
+separation factor does not depend on pH, and there is no SF maximum to find.
+`optimal_pH_for_separation` used to return the argmax of the floating-point
+noise in a flat scan (pH 4.88 for Cyanex272, outside its window; 1.12 for
+naphthenic acid, where `D` is about 1e-10). When the scan is flat it now
+returns the pair's extraction cut instead, the pH where the geometric mean of
+their `D * (O/A)` is one (`phase_ratio`, default 1), kept inside the search
+range, and raises a `SeparationFactorFlatWarning` that says so. For a record
+whose SF does move with pH it still returns the SF maximum.
+
+`difflow_ree.units.scrubbing.optimal_scrub_pH(extractant, target, impurity,
+min_target_retention=0.95)` returns the lowest pH in the window at which a
+counter-current scrub (`n_stages=5`, `phase_ratio=7.5`, the
+`ExtractScrubStripCircuit` defaults) still keeps `min_target_retention` of the
+target on the organic: the lowest pH removes the most impurity. It used to
+maximise `D_t / (D_i + 0.01)`, which grows without bound with pH, so it always
+returned the top of its range and never read `min_target_retention`.
 
 #### The tabulated factors are derived from the same correlations
 
@@ -2075,12 +2105,13 @@ arguments the scrubber does read:
 Setting it raises `ScrubTypeDeprecationWarning`; drop the argument.
 
 ```{note}
-The outlets are rebuilt from `{extractant, diluent} | elements` plus the
-aqueous carrier, so `elements` must name **every** REE present in either
-inlet. An untracked REE --- or any other species carried along, a second
-extractant such as TBP, a modifier, the strip acid --- is dropped from both
-outlets and the section does not conserve it. `info["dropped_species"]` lists
-what was left behind.
+`elements` must name **every** REE present in either inlet. An untracked REE
+is dropped from both outlets and the section does not conserve it;
+`info["dropped_species"]` lists it. Any other species (a saponification
+counter-ion such as `Na_org`, a second extractant, a modifier, acid in the
+scrub liquor) does not partition in this model and leaves with the phase it
+came in. The same holds for `REEStripper`. Both used to drop these species
+too, so a saponified solvent lost its counter-ion in the scrub.
 ```
 
 (reestripper)=
@@ -2097,10 +2128,19 @@ params = StripperParams(
     n_stages=5,
     extractant="D2EHPA",
     elements=("Nd", "Dy"),
-    pH=0.5,  # Strong acid for complete stripping
+    acid_conc=4.0,  # M strip acid; sets the strip pH to -log10(4) = -0.60
 )
 stripper = REEStripper(params)
 ```
+
+The strip acid sets the strip pH. With `pH` unset, `acid_conc` (4 M by
+default) gives `pH = -log10(acid_conc)`, counting one free proton per formula
+unit of HCl, HNO3 or H2SO4. Give `pH` instead and `acid_conc` is filled in as
+`10**-pH`; give both with different meanings and the constructor raises.
+`acid_conc` used to be reported and never read, so 0.01 M and 8 M acid
+stripped identically. Stripping Dy from D2EHPA needs strong acid; the pH it
+takes is below D2EHPA's fitted window, and the distribution model warns about
+the extrapolation.
 
 (ceriumoxidizer)=
 ### CeriumOxidizer
@@ -2123,6 +2163,17 @@ class CeriumOxidizerParams:
     temperature: float = 353.15  # 80°C typical
     ce_conversion: float = 0.95
 ```
+
+The conversion is a screening model, `ce_conversion` x pH factor x
+temperature factor x oxidant efficiency. The pH factor is 0 at pH 6 and 1 at
+pH 8 and above (pH 8 is the documented operating point, where Ce(III) is
+precipitated as the hydroxide that air oxidises); the temperature factor is 1
+at 353.15 K; the oxidant efficiencies are air 0.85, H2O2 0.95, NaOCl 0.98 and
+electrolytic 0.99. So `ce_conversion` is the conversion at the reference
+conditions with an ideal oxidant, and the defaults give 0.95 x 0.85 = 0.81.
+The pH ramp used to run to pH 10, so the documented default pH scored 0.5 and
+the unit converted 40 % against a stated 95 %. Every non-REE species in the
+feed (acid, impurity metals) passes through to the filtrate.
 
 #### Usage
 
@@ -2148,6 +2199,18 @@ print(f"CeO2 produced: {info['ceo2_mass_kg_s']:.4f} kg/s")
 
 (precipitation-operations)=
 ## Precipitation Operations
+
+All three precipitators share three rules. Precipitation is capped by the
+reagent supplied: no more REE than the oxalate or carbonate fed can bind (1.5
+per REE), or than the base fed can pay for (3 OH- per REE, after it has
+neutralised any HCl, HNO3 or H2SO4 present). Every non-REE species of both
+inlets leaves in the filtrate, including the precipitant's water and its
+unreacted excess; the bound reagent leaves in the solid. And an element with
+no solubility product in the tables (Ho, Er, Tm, Yb, Lu) raises a
+`ValueError` naming it when the unit is built; no constants are invented for
+them. Before these rules, 0.5x oxalate precipitated 70.5 % of the REE, the
+filtrate lost every species but water and REE, and the hydroxide route never
+read its precipitant.
 
 (oxalateprecipitator)=
 ### OxalatePrecipitator
@@ -2193,8 +2256,11 @@ from difflow_ree import HydroxidePrecipitator, PrecipitatorParams
 params = PrecipitatorParams(elements=("La", "Ce", "Nd", "Dy"))
 precipitator = HydroxidePrecipitator(params)
 
-# pH-selective precipitation
+# pH-selective precipitation: the setpoint pH decides how much of each REE is
+# above its hydroxide solubility, and the NaOH supplied has to pay for it
 filtrate, solid, info = precipitator(feed, naoh_solution, pH=8.5)
+info["reagent_scale"]   # < 1 when the base ran short
+info["pH_final"]        # the setpoint, or the pH of the net acid/base excess
 
 # Find selective precipitation pH range
 min_pH, max_pH = precipitator.selective_precipitation_pH("Dy", "La")
@@ -2222,6 +2288,12 @@ print(f"pH range for Dy/La separation: {min_pH:.1f} - {max_pH:.1f}")
       ↓                     ↓
   Raffinate            Strip Acid
 ```
+
+With its pHs unset it extracts where every element has `D * (O/A) >= 10`
+and strips where every element has `D * (O/A) <= 0.1`; see
+{ref}`circuit-operating-points`. `design_extract_strip(feed_composition,
+extractant, target_recovery=0.99)` returns params at those pHs with both
+stage counts sized from the actual `D` to meet the recovery.
 
 (extractscrubstripcircuit)=
 ### ExtractScrubStripCircuit
@@ -2251,15 +2323,16 @@ class ExtractScrubStripParams:
     n_extraction_stages: int = 10
     n_scrubbing_stages: int = 5
     n_stripping_stages: int = 5
-    # None on all three: the extractant record's own defaults, from its
-    # fitted validity window -- top for extraction, a quarter up for
-    # scrubbing, bottom for stripping (#270).
+    # None on any of the three: read off the D curves for these elements
+    # and targets (see "Where the circuits operate" below).
     extraction_pH: float | None = None
     scrubbing_pH: float | None = None   # lower pH rejects light REE
     stripping_pH: float | None = None
     solvent_to_feed_ratio: float = 1.0
     scrub_to_solvent_ratio: float = 0.2
     strip_to_solvent_ratio: float = 0.5
+    nitrate_conc: float | None = None        # solvating extractants (TBP)
+    strip_nitrate_conc: float | None = None  # TBP: min(nitrate_conc, 1 M)
 ```
 
 #### Usage
@@ -2275,33 +2348,137 @@ params = ExtractScrubStripParams(
     n_extraction_stages=10,
     n_scrubbing_stages=5,
     n_stripping_stages=5,
-    # Leave the three pH values unset and the D2EHPA record supplies
-    # 2.0 / 0.5 / 0.0 -- the top, quarter point and bottom of its
-    # refitted [0, 2] window.
+    # Leave the three pH values unset and they are read off D2EHPA's D
+    # curves for the Nd / Ce boundary: 0.34 / 0.10 / -1.02.
 )
 circuit = ExtractScrubStripCircuit(params)
 
-# Create feed
+# A leach liquor of about 0.09 M REE: 55.5 mol of water is one litre.
 feed = make_stream({
-    "H2O": 1.0,
-    "La": 0.10,
-    "Ce": 0.20,
-    "Nd": 0.15,
-    "Dy": 0.05,
+    "H2O": 55.5,
+    "La": 0.025,
+    "Ce": 0.045,
+    "Nd": 0.015,
+    "Dy": 0.002,
 }, T=298.15, P=101325.0)
 
 # Run circuit
 results = circuit(feed)
 
-print(f"Target purity: {results['target_purity']:.1%}")
+print(f"Target purity: {results['target_purity']:.1%}")   # 98.9%
 for elem, recovery in results['target_recovery'].items():
-    print(f"{elem} recovery: {recovery:.1%}")
+    print(f"{elem} recovery: {recovery:.1%}")             # Nd 59.4%, Dy 99.8%
 ```
+
+Concentration matters. The extractor caps the organic loading at the
+extractant's capacity (one REE per `monomers_per_ree` extractant), so a feed
+written as `{"H2O": 1.0, "La": 0.10, ...}`, which is several molar in REE,
+saturates the solvent at any pH and sends most of the feed to the raffinate.
+That was this example until the operating-point audit: purity 39 %, with 83 %
+of the feed in the raffinate.
+
+The Nd recovery is the price of a scrub that is not refluxed. The circuit
+sends its scrub liquor out rather than back to the extraction section, so
+the Nd it washes off with the Ce is lost; the stage counts and pHs trade that
+loss against purity. `design_extract_scrub_strip` makes that trade for you:
+
+```python
+from difflow_ree.flowsheets.extract_scrub_strip import design_extract_scrub_strip
+
+params = design_extract_scrub_strip(
+    {"La": 0.025, "Ce": 0.045, "Nd": 0.015, "Dy": 0.002},
+    target_elements=("Nd", "Dy"), extractant="D2EHPA",
+    target_purity=0.95, target_recovery=0.75,
+)
+# 3 / 9 / 2 stages, extraction at pH 0.34 and scrub at 0.20; in simulation
+# 95.8 % purity, Nd 76.2 % and Dy 99.0 % recovery
+```
+
+It searches the extraction and scrubbing pH around their cuts and all three
+stage counts, predicting each candidate with the same Kremser fractions the
+units evaluate, and returns the smallest total stage count that meets both
+targets; it warns and returns its best attempt when none does. It does not
+model the loading limiter, so it holds for feeds well below the solvent's
+capacity.
+
+(circuit-operating-points)=
+#### Where the circuits operate
+
+An element moves to the other phase of a counter-current section when its
+factor `D * (O/A)` crosses one. A section therefore separates two groups only
+at a pH where that crossing falls between them, and it extracts or strips
+everything only where every element is well to one side. Any section pH left
+as `None` in `ExtractStripParams` or `ExtractScrubStripParams` is read off the
+extractant's `D` curves with that rule
+(`difflow_ree.equilibrium.operating_points.cut_pHs`):
+
+| Section | Condition |
+|---|---|
+| extraction, with targets | geometric-mean `D * (O/A)` of the boundary pair is 1; the pair is the least extractable target and the most extractable non-target |
+| scrubbing, with targets | the same pair's mean `D` equals the scrub aqueous/organic ratio |
+| extraction, no targets | the least extractable element has `D * (O/A) = 10` |
+| stripping | the most strongly held target (every element, without targets) has `D * (O/A) = 0.1` |
+
+The phase ratios are the ones the units actually run at: the units count the
+extractant moles as organic flow, so at the defaults the extraction runs at
+O/A 1.5, the scrub at 7.5 and the strip at 3. An extractant whose `D` does
+not move with pH (TBP) has no pH cut and keeps the window defaults; a TBP
+circuit instead strips at its own `strip_nitrate_conc`, by default
+`min(nitrate_conc, 1 M)`, the bottom of the 1 to 6 M window the TBP record
+documents. A pH you give is used as given.
+
+These used to be fixed fractions of the extractant's fitted window (#270).
+After the refit they did not sit between the groups: a D2EHPA
+`ExtractScrubStripCircuit` with targets Gd/Tb/Dy/Y scrubbed at pH 0.5 and
+stripped at 0, and returned a product of 0.09 % target purity and 0.2 % Y
+recovery. At the cuts it returns 99.6 % purity and 97.5 % Y recovery.
+Stripping the heavy REE from D2EHPA needs strong acid, so the strip cut lies
+below D2EHPA's fitted window and the distribution model warns about the
+extrapolation instead of clamping the pH. When the targets are not the more
+extractable group (no single pH extracts them and rejects the rest), an
+`OperatingPointWarning` says so.
 
 (splitshellcascade)=
 ### SplitShellCascade
 
 **Description**: Multi-product split-shell cascade for producing multiple pure REE streams.
+
+The aqueous passes the sections in order (`split_points` divide `n_stages`
+into them) and each section's organic extract is a product; the raffinate is
+what is left. The solvent enters at the raffinate end, so REE it already
+carries enter the last section as its organic inlet, and the mass balance
+counts feed plus solvent. `split_points` must be strictly increasing and each
+in `[1, n_stages - 1]`.
+
+```python
+from difflow.streams import make_stream
+from difflow_ree.flowsheets.split_shell import SplitShellCascade, SplitShellParams
+
+comp = dict(La=0.025, Ce=0.045, Pr=0.005, Nd=0.015, Sm=0.002, Eu=0.0005,
+            Gd=0.001, Tb=0.0002, Dy=0.0005, Y=0.002)
+params = SplitShellParams(
+    extractant="D2EHPA", elements=tuple(comp), n_stages=20, split_points=(10,),
+    product_groups={"heavy": ("Gd", "Tb", "Dy", "Y"), "middle": ("Sm", "Eu"),
+                    "light": ("La", "Ce", "Pr", "Nd")},
+)
+feed = make_stream({"H2O": 55.5, **comp}, 298.15, 101325.0)
+solvent = make_stream({"kerosene": 55.5, "D2EHPA": 27.75}, 298.15, 101325.0)
+result = SplitShellCascade(params)(feed, solvent)
+result["section_pHs"]          # (-0.26, 0.07): one cut per section
+result["products"]["product_1"]["flows"]   # the heavies
+```
+
+`product_groups` lists one group per section in the order the aqueous meets
+them, most extractable first, optionally with one more for the raffinate.
+With groups and no `pH`, each section runs at its own cut at the cascade's
+actual O/A: where the mean `D * (O/A)` of its least extractable member and the
+most extractable element still to come is one. Above, more than 95 % of each
+heavy leaves in `product_1` and the lights leave in the raffinate. The middle
+product stays impure: a section with no scrub cannot reject the light REE it
+co-extracts. Without groups every section shares one pH (`pH`, or the
+record's scrubbing default) and the cascade makes one useful split;
+`section_pHs` sets the pHs explicitly. `product_groups` used to be stored and
+never read.
 
 ---
 
@@ -2342,17 +2519,19 @@ and `recovery` does not.
 section when $D \cdot (O/A)$ crosses one. A section therefore separates two
 groups only at a pH where that crossing falls between them, that is between
 the least extractable target and the most extractable element to reject.
-`GroupSeparator` reads each circuit's three pH values off the extractant's
-own `D` curves (stored as `operating_pH`):
+`GroupSeparator` leaves each circuit's pHs unset, so each
+`ExtractScrubStripCircuit` reads them off the extractant's own `D` curves for
+its group boundary (see {ref}`circuit-operating-points`); the chosen values
+are stored as `operating_pH`:
 
 | Section | Condition | Boundary |
 |---|---|---|
-| extraction | geometric mean of $D$ for the boundary pair $= 1$ (O/A 1) | lightest target, heaviest rejected |
-| scrubbing | the same mean $= 0.2$ (scrub/organic 0.2) | same pair |
-| stripping | the largest target $D = 0.05$ ($D \cdot$ O/A $= 0.1$ at strip O/A 2) | most strongly held target |
+| extraction | geometric mean of $D \cdot$ O/A for the boundary pair $= 1$ (O/A 1.5) | lightest target, heaviest rejected |
+| scrubbing | the same mean $D$ equals the scrub aqueous/organic ratio (O/A 7.5) | same pair |
+| stripping | the largest target $D \cdot$ O/A $= 0.1$ (strip O/A 3) | most strongly held target |
 
-On D2EHPA this gives extraction at pH −0.20, scrubbing at −0.43 and
-stripping at −1.17 for the heavy circuit, and 0.13 / −0.10 / −0.57 for the
+On D2EHPA this gives extraction at pH −0.26, scrubbing at −0.49 and
+stripping at −1.22 for the heavy circuit, and 0.07 / −0.16 / −0.63 for the
 middle circuit. Both circuits run in roughly 1 to 2 M acid, and the heavies
 strip only from strong acid, as they do in practice. These pH values lie
 below the window the D2EHPA coefficients were fitted over (`[0, 2]`), and
@@ -2421,7 +2600,11 @@ feed ──▶ CeriumOxidizer ──▶ GroupSeparator ──┬──▶ light 
 Cerium comes first because it is the one element with an easy handle:
 oxidised to Ce(IV) it precipitates as CeO2 and leaves the circuit
 entirely, and since bastnasite feeds are often half cerium, removing it
-ahead of the extraction shrinks everything downstream.
+ahead of the extraction shrinks everything downstream. The oxidizer runs at
+its own temperature (80 °C) and pH 8, and removes 81 % of the Ce at its
+defaults; the train's `T` is the solvent-extraction temperature and is not
+passed to it. It used to be, and at 298.15 K the oxidizer's Arrhenius factor
+cut a default train's Ce removal to 8 %.
 
 #### Parameters
 
@@ -2454,7 +2637,8 @@ A single dict, not a tuple of streams:
 | `products` | `"CeO2"`, `"light_REE"`, `"middle_REE"`, `"heavy_REE"` --- whichever steps ran |
 | `intermediates` | `"ce_depleted"`, the feed to group separation |
 | `info` | `"ce_removal"` and `"group_separation"`, each step's own info |
-| `mass_balance` | `total_in`, `total_out` and their ratio, `closure` |
+| `holdup` | `"solvent"`: REE left on the stripped solvent |
+| `mass_balance` | `total_in`, `total_out`, `holdup`, `closure` (products plus holdup over feed) and `recovery` (products over feed) |
 
 ```python
 from difflow_ree import FullSeparationTrain, SeparationTrainParams
@@ -2465,16 +2649,12 @@ train = FullSeparationTrain(SeparationTrainParams(
     group_separation=True,
 ))
 results = train(feed)
-results["mass_balance"]["closure"]      # REE into named products / REE in
+results["mass_balance"]["closure"]      # (products + holdup) / REE in
 ```
 
-`closure` is **not** a mass-balance check. It is the REE in the named
-products divided by the REE in the feed, and the two circuits' raffinates
-are not among the products --- so on a feed whose extraction is
-incomplete it reads well below 1 (0.03 on the assay above, where most of
-the feed leaves in the heavy circuit's raffinate). Read it as an overall
-recovery indicator, and look at each circuit's own
-`info[...]["mass_balance"]` to check that nothing was lost.
+`closure` is the mass-balance check: every outlet, the products and the REE
+held up on the stripped solvent, over the feed, which should be 1.
+`recovery` leaves the holdup out.
 
 `difflow_ree.flowsheets.full_train.design_separation_train(feed_analysis,
 target_products, ...)` returns a recommended `SeparationTrainParams` for
@@ -2559,14 +2739,17 @@ from difflow_ree.flowsheets import (
     OperatingLimits, SeparationTrain,
 )
 
-feed = make_stream({"H2O": 100.0, "La": 3.0, "Dy": 3.0}, 298.15, 101325.0)
+# A concentrated La/Nd liquor, deliberately run near the solvent's capacity.
+feed = make_stream({"H2O": 100.0, "La": 3.0, "Nd": 3.0}, 298.15, 101325.0)
 
+# Cyanex 272: its fitted window [1.5, 3.5] holds the whole circuit. The strip
+# is deliberately one stage, so the solvent comes back loaded.
 sep = ExtractScrubStripModule("sep", ExtractScrubStripParams(
-    extractant="D2EHPA", elements=("La", "Dy"), target_elements=("Dy",),
+    extractant="Cyanex272", elements=("La", "Nd"), target_elements=("Nd",),
     n_extraction_stages=10, n_scrubbing_stages=2, n_stripping_stages=1,
-    extraction_pH=2.4, scrubbing_pH=2.3, stripping_pH=2.3,
-    solvent_to_feed_ratio=1.0, scrub_to_solvent_ratio=0.1,
-    strip_to_solvent_ratio=0.5,
+    extraction_pH=2.4, scrubbing_pH=2.3, stripping_pH=1.9,
+    extractant_conc=0.3, solvent_to_feed_ratio=1.0,
+    scrub_to_solvent_ratio=0.1, strip_to_solvent_ratio=0.5,
 ), limits=OperatingLimits(third_phase_loading=0.65))
 
 train = SeparationTrain("nd_circuit")
@@ -2590,18 +2773,22 @@ literally the assumption the closed loop exists to test.
 The open loop is not a small approximation. For the circuit above,
 solved both ways:
 
-| | raffinate La purity | Dy in raffinate (mol/s) | organic loading θ |
+| | raffinate La purity | Nd in raffinate (mol/s) | loaded-organic θ |
 |---|---|---|---|
-| open loop (fresh solvent every pass) | 0.9903 | 0.0293 | 0.357 |
-| closed loop | 0.9414 | 0.1866 | 0.575 |
+| open loop (fresh solvent every pass) | 0.9928 | 0.0186 | 0.685 |
+| closed loop | 0.9055 | 0.2772 | 0.819 |
 
-Six times the impurity, and five percentage points of product purity,
-from one edge. The mechanism is the one #202 names: the barren organic
-still carries Dy, that Dy occupies extractant, the free-extractant
-fraction and hence the extraction factor fall, and more Dy leaks past
-the extraction section into the La raffinate. Strip the solvent properly
-(`stripping_pH=1.5, n_stripping_stages=4`) and the two answers coincide
-to 1e-9 — the difference is the residue, not the tearing.
+Fifteen times the impurity, and nine percentage points of raffinate
+purity, from one edge. The mechanism is the one #202 names: the barren
+organic still carries Nd, that Nd occupies extractant, the
+free-extractant fraction and hence the extraction factor fall, and more
+Nd leaks past the extraction section into the La raffinate. Strip the
+solvent properly (`stripping_pH=1.5, n_stripping_stages=6`) and the two
+answers coincide to 1e-9: the difference is the residue, not the
+tearing. These are the numbers `tests/ree/test_separation_train.py`
+pins. This example used to run La/Dy on D2EHPA at pH 2.4 / 2.3 / 2.3,
+outside D2EHPA's fitted window of [0, 2], where the strip stripped
+nothing; its table predated the #270 refit.
 
 The loop conserves every component to machine precision: what leaves the
 stripper equals what enters the extractor, and the extractant and
@@ -3029,28 +3216,36 @@ from difflow_ree import (
 )
 from difflow.streams import make_stream
 
-# Analyze separation factors
+# The separation factor is 2.14 at every pH (one shared slope); the pH
+# returned is the Nd/Pr extraction cut, with a warning saying so.
 dist = REEDistribution(extractant="PC88A", elements=("Pr", "Nd"))
-opt_pH, max_SF = dist.optimal_pH_for_separation("Nd", "Pr")
-print(f"Optimal pH for Nd/Pr: {opt_pH:.2f}, SF = {max_SF:.2f}")
+cut_pH, SF = dist.optimal_pH_for_separation("Nd", "Pr")
+print(f"Nd/Pr cut at pH {cut_pH:.2f}, SF = {SF:.2f}")   # 1.08, 2.14
 
-# Design separation circuit
+# Leave the pHs unset: the circuit cuts at the Nd/Pr boundary itself.
 params = ExtractScrubStripParams(
     extractant="PC88A",
     elements=("Pr", "Nd"),
     target_elements=("Nd",),
-    extraction_pH=opt_pH,
-    scrubbing_pH=opt_pH - 1.0,
 )
 circuit = ExtractScrubStripCircuit(params)
 
-# Run separation
-feed = make_stream({"H2O": 1.0, "Pr": 0.3, "Nd": 0.7}, T=298.15, P=101325.0)
+# 0.1 M REE (55.5 mol of water is one litre)
+feed = make_stream({"H2O": 55.5, "Pr": 0.03, "Nd": 0.07}, T=298.15, P=101325.0)
 results = circuit(feed)
 
-print(f"Nd purity: {results['product_purity']['Nd']:.1%}")
-print(f"Nd recovery: {results['target_recovery']['Nd']:.1%}")
+print(f"Nd purity: {results['product_purity']['Nd']:.1%}")      # 95.8%
+print(f"Nd recovery: {results['target_recovery']['Nd']:.1%}")   # 35.0%
 ```
+
+At a separation factor of 2.1 a single pass without reflux buys purity with
+recovery: the scrub that removes the Pr removes Nd too, and this circuit does
+not return its scrub liquor. `design_extract_scrub_strip({"Pr": 0.03, "Nd":
+0.07}, ("Nd",), "PC88A", target_purity=0.97, target_recovery=0.30)` meets
+both (97.3 % / 30.4 %); ask for 90 % purity at 50 % recovery and it warns that
+no design in its search reaches it. Plants separate Nd from Pr with refluxed
+cascades of many tens of stages. This example used to run at a total REE
+concentration of 1 M, where the solvent saturated and Nd recovery was 8 %.
 
 ### Example 2: Cerium Removal from Bastnasite
 

@@ -195,7 +195,7 @@ class TestScans:
         assert pH == pytest.approx(min(max(cut, lo), hi))
 
     def test_scrub_pH_honours_the_retention(self):
-        """Before: always the top of (1, 4) -- pH 4, D(Nd) = 1.6e11."""
+        """Before: always the top of (1, 4): pH 4, where D(Nd) = 1.6e11."""
         from difflow_ree.units.scrubbing import optimal_scrub_pH
 
         for keep in (0.9, 0.99):
