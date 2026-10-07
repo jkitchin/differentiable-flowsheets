@@ -70,29 +70,28 @@ Jupyter notebook tutorials demonstrating usage.
 ## Quick Start
 
 ```python
-from difflow_cc import (
-    get_solvent, get_adsorbent,
-    AmineAbsorber, AbsorberParams,
-    PSAUnit, AdsorptionParams,
-    levelized_cost_capture,
-)
+import jax
+jax.config.update("jax_enable_x64", True)
+from difflow.streams import make_stream
+from difflow_cc import get_solvent, AmineAbsorber, AbsorberParams
 
 # Get MEA solvent properties
 mea = get_solvent('MEA')
 print(f"Heat of absorption: {mea.heat_of_absorption} kJ/mol")
 
-# Create amine absorber
-params = AbsorberParams(
-    solvent='MEA',
-    n_stages=10,
-    solvent_flow=100.0,  # mol/s
-)
+# Amine absorber: 10 stages, liquid/gas molar ratio 3
+flue_gas = make_stream({"CO2": 13.0, "N2": 87.0}, T=313.15, P=101325.0)
+params = AbsorberParams(solvent='MEA', n_stages=10, L_G_ratio=3.0)
 absorber = AmineAbsorber(params)
-rich_solvent, clean_gas = absorber(flue_gas, lean_solvent)
+treated_gas, rich_solvent, info = absorber(flue_gas)
+print(f"Capture: {float(info['capture_efficiency']):.1%}")
 
 # All operations support automatic differentiation
-from jax import grad
-d_capture_d_flow = grad(lambda flow: capture_rate(flow))(100.0)
+def capture(L_G):
+    p = AbsorberParams(solvent='MEA', n_stages=10, L_G_ratio=L_G)
+    return AmineAbsorber(p)(flue_gas)[2]['capture_efficiency']
+
+d_capture_d_LG = jax.grad(capture)(3.0)
 ```
 
 ## Key Features
