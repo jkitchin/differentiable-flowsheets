@@ -386,7 +386,12 @@ class FullSeparationTrain:
 
         # Step 1: Ce removal
         if self._ce_oxidizer is not None:
-            ce_depleted, ceo2_solid, ce_info = self._ce_oxidizer(current_stream, T)
+            # The oxidizer runs at its own temperature (80 C). Passing the
+            # train T (298.15 K, the solvent-extraction temperature) through
+            # used to override it, and the Arrhenius factor cut the Ce
+            # removal of a default train to 8 % (2026 operating-point audit,
+            # R4).
+            ce_depleted, ceo2_solid, ce_info = self._ce_oxidizer(current_stream)
             results["products"]["CeO2"] = ceo2_solid
             results["info"]["ce_removal"] = ce_info
             current_stream = ce_depleted

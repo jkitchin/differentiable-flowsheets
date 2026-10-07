@@ -37,9 +37,18 @@ class CeriumOxidizerParams(ParamsMixin):
         elements: All REE elements to track
         oxidant: Oxidizing agent (air, H2O2, NaOCl, electrolytic)
         oxidant_excess: Molar excess of oxidant
-        pH: Operating pH (higher pH favors oxidation)
-        temperature: Operating temperature (K)
-        ce_conversion: Target Ce³⁺ → Ce⁴⁺ conversion
+        pH: Operating pH (higher pH favors oxidation). The pH factor rises
+            linearly from 0 at pH 6 to 1 at pH 8 and stays 1 above: pH 8, the
+            documented operating point, is where Ce(III) is precipitated as
+            the hydroxide that air oxidises, so the default sits at full
+            effect.
+        temperature: Operating temperature (K). The temperature factor is 1
+            at 353.15 K (80 C, the documented typical temperature).
+        ce_conversion: Ce³⁺ → Ce⁴⁺ conversion at the reference conditions
+            (pH >= 8, 353.15 K) with an ideal oxidant. Each oxidant's
+            efficiency factor scales it (air 0.85, H2O2 0.95, NaOCl 0.98,
+            electrolytic 0.99), so the defaults give 0.95 x 0.85 = 0.81.
+            These factors are a screening model, not fitted kinetics.
     """
     elements: tuple[str, ...]
     oxidant: Literal["air", "H2O2", "NaOCl", "electrolytic"] = "air"
@@ -76,7 +85,10 @@ class CeriumOxidizer:
         r"E^0(\mathrm{Ce}^{4+}/\mathrm{Ce}^{3+}) = +1.72\,\mathrm{V}\quad\text{(acidic)},\quad +0.60\,\mathrm{V}\quad\text{(alkaline)}",
     ]
     assumptions = [
-        "Alkaline conditions (pH ~ 8) favor Ce(III) -> Ce(IV) transition.",
+        "Alkaline conditions (pH ~ 8) favor Ce(III) -> Ce(IV) transition; "
+        "the pH factor is 1 at pH >= 8 and 0 at pH <= 6.",
+        "Conversion = ce_conversion x pH factor x temperature factor x "
+        "oxidant efficiency; a screening model, not fitted kinetics.",
         "Oxidant excess and conversion are user-specified.",
         "Other REE(III) remain in solution (selective oxidation).",
     ]
@@ -144,8 +156,12 @@ class CeriumOxidizer:
 
         # pH effect: oxidation potential increases with pH
         # E = E° - 0.059 × pH
-        # At pH 8, Ce oxidation is thermodynamically favorable
-        pH_factor = jnp.clip((pH - 6) / 4, 0.0, 1.0)  # 0 at pH 6, 1 at pH 10
+        # At pH 8, Ce oxidation is thermodynamically favorable. The ramp
+        # used to run to pH 10, so the documented "favourable" default pH 8
+        # gave a factor of 0.5 and the unit converted 40 % of the Ce at its
+        # own defaults against a stated 95 % (2026 operating-point audit,
+        # R4). Full effect is now reached at the documented operating pH.
+        pH_factor = jnp.clip((pH - 6) / 2, 0.0, 1.0)  # 0 at pH 6, 1 at pH 8
 
         # Temperature effect (Arrhenius-like)
         T_ref = 353.15  # 80°C
