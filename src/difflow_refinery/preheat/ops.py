@@ -310,8 +310,9 @@ class CrudeUnitWithPreheat:
     """Crude unit from the tank: preheat train, desalter, preflash drum, furnace, column.
 
     The inlet is the tank crude (``F_<component>`` and ``T``, the tank
-    temperature; its water is the train's ``tank_water`` BS&W, not the
-    stream's). The outlets are the column's products, as
+    temperature). Its water is the train's ``tank_water`` BS&W plus the
+    stream's own ``F_water``, if it carries any (:meth:`feed` makes a
+    stream with none, so the BS&W alone). The outlets are the column's products, as
     :class:`~difflow_refinery.unit.CrudeDistillationUnit` names them, then
     ``"brine"`` with a desalter and ``"drum_water"`` with a preflash drum.
     Products the train cools leave at the train's outlet temperature.
@@ -367,8 +368,12 @@ class CrudeUnitWithPreheat:
 
     def solve(self, feed: dict):
         """The full :class:`~difflow_refinery.preheat.unit.PreheatedUnitResult`."""
-        f, _ = _flows(feed, self.unit.thermo)
-        return self.unit.solve(jnp.sum(f), feed["T"], basis="mole", flows=f)
+        # The stream's water joins the BS&W; it used to be discarded, so a
+        # wet inlet left the unit with the same outlets as a dry one and the
+        # flowsheet lost the water (audit, 2026-10: 0 and 50 mol/s gave
+        # identical outlets).
+        f, fw = _flows(feed, self.unit.thermo)
+        return self.unit.solve(jnp.sum(f), feed["T"], basis="mole", flows=f, water=fw)
 
     def __call__(self, feed: Stream) -> tuple:
         res = self.solve(feed)

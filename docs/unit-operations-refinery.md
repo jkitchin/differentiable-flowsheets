@@ -622,7 +622,7 @@ The preflash drum alone. It is built from `PreflashDrumUnitParams` (`assay`, `dr
 
 ### CrudeUnitWithPreheat
 
-The whole coupled unit (`PreheatedCrudeUnit`) as a flowsheet operation. It is built from `CrudeUnitWithPreheatParams` (`assay`, `column`, `train`, ...) and called with the tank crude (`op.feed(95_000, T=300.0)`). Its outlets are the column's products, then `"brine"` (with a desalter) and `"drum_water"` (with a drum). A product cooled in the train leaves at the train's outlet temperature, not the column's. `op.last_result` holds the full `PreheatedUnitResult`. The nested train params (exchangers, hot streams, desalter, drum) are plain dataclasses, so the unit round-trips through `difflow.serialize`.
+The whole coupled unit (`PreheatedCrudeUnit`) as a flowsheet operation. It is built from `CrudeUnitWithPreheatParams` (`assay`, `column`, `train`, ...) and called with the tank crude (`op.feed(95_000, T=300.0)`). Its water is the train's `tank_water` BS&W plus the inlet stream's own `F_water` (`op.feed` makes a stream with none). Its outlets are the column's products, then `"brine"` (with a desalter) and `"drum_water"` (with a drum). A product cooled in the train leaves at the train's outlet temperature, not the column's. `op.last_result` holds the full `PreheatedUnitResult`. The nested train params (exchangers, hot streams, desalter, drum) are plain dataclasses, so the unit round-trips through `difflow.serialize`.
 
 ---
 
