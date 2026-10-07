@@ -276,7 +276,11 @@ class SplitShellCascade:
 
         # Each section at its own pH (audit R7): from product_groups cuts at
         # this O/A, from section_pHs, or one pH for all.
-        section_pHs = p.resolve_section_pHs(float(F_org) / float(F_aq))
+        # The phase ratio is only needed to cut pHs from product_groups; with
+        # explicit pHs nothing is concretised and the cascade traces.
+        needs_ratio = p.section_pHs is None and p.pH is None
+        section_pHs = p.resolve_section_pHs(
+            float(F_org) / float(F_aq) if needs_ratio else 1.0)
         D_sections = [self._distribution.get_D_all(jnp.asarray(ph), T)
                       for ph in section_pHs]
         D_values = D_sections[0]
@@ -340,8 +344,8 @@ class SplitShellCascade:
 
         # Mass balance: everything that entered, feed AND solvent.
         feed_total = {
-            elem: jnp.asarray(float(feed_flows.get(elem, 0.0))
-                              + float(solvent_flows.get(elem, 0.0)))
+            elem: (jnp.asarray(feed_flows.get(elem, 0.0))
+                   + jnp.asarray(solvent_flows.get(elem, 0.0)))
             for elem in p.elements
         }
         product_total = {

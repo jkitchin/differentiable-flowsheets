@@ -275,15 +275,15 @@ class ExtractStripCircuit:
 
         # Calculate overall recovery
         product_flows = get_flows(product)
-        total_feed = sum(float(feed_flows.get(e, 0.0)) for e in p.elements)
-        total_product = sum(float(product_flows.get(e, 0.0)) for e in p.elements)
+        total_feed = sum(jnp.asarray(feed_flows.get(e, 0.0)) for e in p.elements)
+        total_product = sum(jnp.asarray(product_flows.get(e, 0.0)) for e in p.elements)
         overall_recovery = safe_divide(total_product, total_feed)
 
         # Element-wise recovery
         element_recovery = {}
         for elem in p.elements:
-            f_in = float(feed_flows.get(elem, 0.0))
-            f_out = float(product_flows.get(elem, 0.0))
+            f_in = jnp.asarray(feed_flows.get(elem, 0.0))
+            f_out = jnp.asarray(product_flows.get(elem, 0.0))
             element_recovery[elem] = safe_divide(f_out, f_in)
 
         # Mass balance verification. Every stream that leaves the circuit
@@ -293,14 +293,14 @@ class ExtractStripCircuit:
         raff_flows = get_flows(raffinate)
         barren_flows = get_flows(barren_org)
         feed_total = {
-            elem: jnp.asarray(float(feed_flows.get(elem, 0.0)))
+            elem: jnp.asarray(jnp.asarray(feed_flows.get(elem, 0.0)))
             for elem in p.elements
         }
         product_total = {
             elem: (
-                float(product_flows.get(elem, 0.0))
-                + float(raff_flows.get(elem, 0.0))
-                + float(barren_flows.get(elem, 0.0))
+                jnp.asarray(product_flows.get(elem, 0.0))
+                + jnp.asarray(raff_flows.get(elem, 0.0))
+                + jnp.asarray(barren_flows.get(elem, 0.0))
             )
             for elem in p.elements
         }

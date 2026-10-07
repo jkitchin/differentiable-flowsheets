@@ -62,6 +62,10 @@ class SeparationTrainParams(ParamsMixin):
             mechanisms.
         capacity_sharpness: Sharpness k of the smooth loading limiters in each
             circuit's extraction section; see REEExtractorParams (#193).
+        recycle_scrub_liquor: Recycle each group circuit's scrub liquor to its
+            extraction feed (default True, #377). Without the reflux the
+            scrub liquor carries co-extracted heavies on to the light
+            product (63 % of the Gd of the default train).
     """
     elements: tuple[str, ...] = ("La", "Ce", "Pr", "Nd", "Sm", "Eu", "Gd", "Tb", "Dy", "Y")
     extractant: str = "D2EHPA"
@@ -73,6 +77,7 @@ class SeparationTrainParams(ParamsMixin):
     nitrate_conc: float | None = None  # see #195
     mechanism: str | None = None  # see #195
     capacity_sharpness: int = 8  # see REEExtractorParams (#193)
+    recycle_scrub_liquor: bool = True  # see #377
     target_purities: dict = field(default_factory=lambda: {
         "Nd": 0.99,
         "Dy": 0.99,
@@ -120,6 +125,7 @@ class GroupSeparator:
         nitrate_conc: float | None = None,
         mechanism: str | None = None,
         capacity_sharpness: int = 8,
+        recycle_scrub_liquor: bool = True,
     ):
         """Initialize separator.
 
@@ -135,7 +141,13 @@ class GroupSeparator:
             mechanism: Explicit mechanism override; see REEDistribution (#195)
             capacity_sharpness: Sharpness k of the extraction sections' smooth
                 loading limiters; see REEExtractorParams (#193)
+            recycle_scrub_liquor: Return each circuit's scrub liquor to its
+                extraction feed, as plants do (#377). The liquor carries the
+                co-extracted heavies; passed on to the next group it put 63 %
+                of the default train's Gd into the light product. Solved as a
+                closed loop with a tear stream inside each circuit.
         """
+        self.recycle_scrub_liquor = recycle_scrub_liquor
         self.elements = elements
         self.extractant = extractant
         self.diluent = diluent
@@ -180,6 +192,7 @@ class GroupSeparator:
             nitrate_conc=nitrate_conc,  # see #195
             mechanism=mechanism,  # see #195
             capacity_sharpness=capacity_sharpness,  # see #193
+            recycle_scrub_liquor=recycle_scrub_liquor,  # see #377
         ))
 
         # Circuit 2: Separate middle from light, on circuit 1's non-heavy
@@ -197,6 +210,7 @@ class GroupSeparator:
             nitrate_conc=nitrate_conc,  # see #195
             mechanism=mechanism,  # see #195
             capacity_sharpness=capacity_sharpness,  # see #193
+            recycle_scrub_liquor=recycle_scrub_liquor,  # see #377
         ))
 
         def _pHs(circuit):
@@ -242,6 +256,10 @@ class GroupSeparator:
                 return None, stream
             results = circuit(stream, T)
             losses.append(results["barren_organic"])
+            if circuit.params.recycle_scrub_liquor:
+                # The liquor went back to the circuit's own extraction feed
+                # (#377); only the raffinate is rejected downstream.
+                return results, results["raffinate"]
             return results, combine_streams(results["raffinate"],
                                             results["scrub_liquor"])
 
@@ -286,7 +304,7 @@ class GroupSeparator:
         flows = get_flows(stream)
         total = sum(flows.get(e, 0.0) for e in self.elements)
         return {
-            e: safe_divide(float(flows.get(e, 0.0)), float(total))
+            e: safe_divide(jnp.asarray(flows.get(e, 0.0)), jnp.asarray(total))
             for e in self.elements
         }
 
@@ -355,6 +373,7 @@ class FullSeparationTrain:
                 nitrate_conc=params.nitrate_conc,  # see #195
                 mechanism=params.mechanism,  # see #195
                 capacity_sharpness=params.capacity_sharpness,  # see #193
+                recycle_scrub_liquor=params.recycle_scrub_liquor,  # see #377
             )
         else:
             self._group_separator = None
@@ -408,7 +427,7 @@ class FullSeparationTrain:
 
         # Calculate overall mass balance
         feed_flows = get_flows(feed)
-        total_in = sum(float(feed_flows.get(e, 0.0)) for e in self.params.elements)
+        total_in = sum(jnp.asarray(feed_flows.get(e, 0.0)) for e in self.params.elements)
 
         total_out = 0.0
         for product_name, product in results["products"].items():
@@ -418,8 +437,8 @@ class FullSeparationTrain:
             # sent every product down the bare-dict branch and counted every
             # stream as zero (#371).
             prod_flows = get_flows(product) or product
-            total_out += sum(float(prod_flows.get(e, 0.0)) for e in self.params.elements)
-        holdup = sum(float(get_flows(stream).get(e, 0.0))
+            total_out += sum(jnp.asarray(prod_flows.get(e, 0.0)) for e in self.params.elements)
+        holdup = sum(jnp.asarray(get_flows(stream).get(e, 0.0))
                      for stream in results["holdup"].values()
                      for e in self.params.elements)
 

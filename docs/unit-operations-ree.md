@@ -2387,7 +2387,21 @@ class ExtractScrubStripParams:
     strip_to_solvent_ratio: float = 0.5
     nitrate_conc: float | None = None        # solvating extractants (TBP)
     strip_nitrate_conc: float | None = None  # TBP: min(nitrate_conc, 1 M)
+    recycle_scrub_liquor: bool = False       # return the scrub liquor to the extraction feed
+    recycle_tol: float = 1e-10
+    recycle_max_iter: int = 500
 ```
+
+With `recycle_scrub_liquor=True` the scrub liquor, which carries the
+co-extracted non-targets and some target, is mixed back into the extraction
+feed, as in a plant (#377). The loop is closed with a tear stream and solved as
+a fixed point (`results["recycle"]` reports `converged`, `iterations` and the
+residual; the liquor in `results["scrub_liquor"]` is then internal, not an
+outlet, and the mass balance does not count it). It gives the extraction
+section reflux, which lifts the purity and recovery ceiling of the stand-alone
+circuit. The group separator and `FullSeparationTrain` recycle by default
+(`recycle_scrub_liquor=True`), which stops the default train sending 63 % of
+the Gd to the light product.
 
 #### Usage
 
@@ -2677,6 +2691,7 @@ class SeparationTrainParams:
     nitrate_conc: float = None            # Required for solvating extractants
     mechanism: str = None                 # Overrides the extractant's default
     capacity_sharpness: int = 8
+    recycle_scrub_liquor: bool = True     # each group circuit refluxes its scrub liquor (#377)
     target_purities: dict = {"Nd": 0.99, "Dy": 0.99, "Y": 0.95}
 ```
 
@@ -2725,9 +2740,9 @@ high-value element (Nd, Pr, Eu, Tb) is a target.
 over connectivity, `individual_separation=True` is accepted but not yet
 implemented, and the `barren_organic` each circuit returns is not
 recycled, so every circuit assumes its solvent comes back perfectly
-stripped. `mass_balance` calls `float()` on its totals, which makes it a
-reporting convenience: it cannot be differentiated through and it will
-fail under `jax.jit`.
+stripped. The circuits and the palette wrappers (`ExtractStripUnit`,
+`ExtractScrubStripUnit`, `SplitShellUnit`, `SeparationTrainUnit`) are
+traceable: they run under `jax.jit` and `jax.grad` (#381).
 
 For a train whose topology *is* data --- modules plus a connectivity map,
 with the organic loop actually closed --- use
