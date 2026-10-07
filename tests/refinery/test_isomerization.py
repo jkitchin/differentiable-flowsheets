@@ -273,6 +273,23 @@ class TestFeedIsConserved:
         b = unit.balances(rich, {"streams": info["streams"], "info": info})
         assert abs(float(b["mass"])) < 1e-10
 
+    def test_dip_feed_hydrogen_bypasses_the_column(self):
+        # #381: with DIP, fresh-feed hydrogen went through the column and out
+        # its overhead into the isomerate. It now bypasses to the charge.
+        unit = IsomerizationUnit(IsomerizationUnitParams(configuration="dip"))
+        feed = constructed_feed("paraffinic", 10.0)
+        rich = dict(feed, F_hydrogen=0.5 * float(jnp.sum(hydrocarbon_flows(feed))))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            iso, gas, info = unit(rich)
+        st = info["streams"]
+        assert abs(float(st["dip_overhead"]["F_hydrogen"])) < 1e-12
+        assert float(st["charge"]["F_hydrogen"]) == pytest.approx(
+            float(flows_of(rich)[tc.idx("hydrogen")]), rel=1e-12)
+        assert float(info["H2_makeup"]) == 0.0
+        b = unit.balances(rich, {"streams": st, "info": info})
+        assert abs(float(b["mass"])) < 1e-8
+
 
 class TestPlanningBlock:
     """Wiring only: the block's names, units and bounds, and its link into a

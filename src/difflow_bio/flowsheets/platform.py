@@ -64,6 +64,8 @@ class PlatformDSPParams(ParamsMixin):
         tff_area: UF membrane area (m²). Sets the UF processing time
             reported when the call is given ``uf_feed_volume_L``; the split
             does not depend on it.
+        uf_concentration_factor: Volume concentration factor of the final
+            UF step (default 10).
         target_yield: Overall yield the process is expected to reach;
             reported as ``meets_target_yield``.
     """
@@ -80,6 +82,7 @@ class PlatformDSPParams(ParamsMixin):
         "sec": 5.0,
     })
     tff_area: float | Array = 5.0
+    uf_concentration_factor: float | Array = 10.0
     target_yield: float | Array = 0.70
 
 
@@ -251,7 +254,8 @@ class PlatformDSP:
 
         # Final UF concentration
         (final_product, permeate), uf_info = self._uf(
-            current_stream, concentration_factor=10.0, feed_volume=uf_feed_volume_L)
+            current_stream, concentration_factor=p.uf_concentration_factor,
+            feed_volume=uf_feed_volume_L)
         side_streams["uf_permeate"] = permeate
         step_yields["uf"] = safe_divide(amount(final_product), amount(current_stream))
 
