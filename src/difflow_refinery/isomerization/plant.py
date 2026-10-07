@@ -19,7 +19,15 @@ Four configurations (:data:`CONFIGURATIONS`), all on the same pieces:
 The hydrogen is once-through: the reactor charge is made up to
 ``H2_HC`` moles of hydrogen per mole of hydrocarbon with pure hydrogen
 and what is left leaves in the off-gas (separator vapor plus stabilizer
-overhead), as in a unit with no recycle-gas compressor. The reactor
+overhead), as in a unit with no recycle-gas compressor. Hydrogen the
+feed already carries counts towards that target; where it exceeds it,
+the make-up is zero and the excess rides through the reactor with the
+charge (``info["H2_HC_charge"]`` is then above ``H2_HC``).
+
+The feed must carry only the reactor's species (:data:`.thermochem.NAMES`,
+as :func:`.reactor.flows_of` and the registered ``IsomerizationReactor``
+require); any other ``F_`` key, water included, is refused rather than
+dropped. Dry the feed, or route what the unit does not model round it. The reactor
 effluent is cooled to ``separator_T`` (the effluent cooler is a
 specification, its duty is not reported) and flashed at ``separator_P``.
 
@@ -69,7 +77,8 @@ from difflow_refinery.gasplant.products import reid_vapor_pressure
 from difflow_refinery.isomerization import thermochem as tc
 from difflow_refinery.isomerization.feed import hydrocarbon_flows, with_nc6_fraction
 from difflow_refinery.isomerization.reactor import (
-    NU, IsomerizationReactor, IsomerizationReactorParams, carbon_number_flows, stream_of)
+    NU, IsomerizationReactor, IsomerizationReactorParams, carbon_number_flows, flows_of,
+    stream_of)
 
 #: The flowsheet configurations.
 CONFIGURATIONS = ("once_through", "dip", "dih", "dip_dih")
@@ -310,8 +319,15 @@ class IsomerizationUnit:
         F = sum(hydrocarbon_flows(s) for s in hc_streams)
         ih = tc.idx("hydrogen")
         hc = jnp.sum(F) - F[ih]
-        F_in = F.at[ih].set(self.params.H2_HC * hc)
-        return F_in, F_in[ih] - F[ih]
+        # Make-up tops the charge up to H2_HC and never takes hydrogen
+        # away: setting the charge H2 to the target outright destroyed any
+        # feed hydrogen above it and reported a negative make-up (audit,
+        # 2026-10: 630.2 mol/s H2 in the feed gave make-up -592.4 mol/s and
+        # 11270.5 g/s in vs 10076.2 g/s out, while balances() added the
+        # negative make-up back and reported closure).
+        H2_charge = jnp.maximum(F[ih], self.params.H2_HC * hc)
+        F_in = F.at[ih].set(H2_charge)
+        return F_in, H2_charge - F[ih]
 
     def _pass_jit(self, fresh, recycle, T_in, LHSV):
         """:meth:`_pass`, compiled once per unit and recycle-or-not.
@@ -367,6 +383,8 @@ class IsomerizationUnit:
         info["reactor"] = res["info"]
         info["reactor_extents"] = res["extents"]
         info["H2_makeup"] = makeup
+        info["H2_HC_charge"] = F_in[tc.idx("hydrogen")] / (
+            jnp.sum(F_in) - F_in[tc.idx("hydrogen")])
         st["effluent"] = stream_of(res["F"], res["T"], res["P"])
         sep_vap, sep_liq, info["separator"] = self.separator(
             stream_of(res["F"], p.separator_T, self._separator_P()))
@@ -425,7 +443,11 @@ class IsomerizationUnit:
         p = self.params
         T_in = p.T_in if T_in is None else T_in
         LHSV = p.reactor.LHSV if LHSV is None else LHSV
-        fresh = stream_of(hydrocarbon_flows(fresh), fresh["T"], fresh["P"])
+        # flows_of refuses a species the unit does not model; rebuilding the
+        # feed through hydrocarbon_flows dropped it silently (audit, 2026-10:
+        # 2 mol/s water and 1 mol/s of an unknown species vanished in all
+        # configurations, and balances() never saw them).
+        fresh = stream_of(flows_of(fresh), fresh["T"], fresh["P"])
         if not self.has_dih:
             st, info = self._pass_jit(fresh, None, T_in, LHSV)
             self._check_hydrogen(info)
@@ -532,7 +554,7 @@ class IsomerizationUnit:
         or cracked. In: fresh feed and make-up hydrogen; out: isomerate and
         off-gas."""
         st, info = res["streams"], res["info"]
-        Ff = hydrocarbon_flows(fresh)
+        Ff = flows_of(fresh)    # the feed as given: refuses what solve() would
         Fh = jnp.zeros_like(Ff).at[tc.idx("hydrogen")].set(info["H2_makeup"])
         Fout = hydrocarbon_flows(st["isomerate"]) + hydrocarbon_flows(st["offgas"])
         m_in = jnp.dot(Ff + Fh, tc.MW)
@@ -558,7 +580,7 @@ class IsomerizationUnit:
         stream) warm-starts that loop, e.g. from ``last_solve["recycle"]``
         of a nearby point.
         """
-        fresh = stream_of(hydrocarbon_flows(fresh), fresh["T"], fresh["P"])
+        fresh = stream_of(flows_of(fresh), fresh["T"], fresh["P"])
         use_x6 = x_nc6 is not None
         x6 = jnp.asarray(x_nc6 if use_x6 else 0.0, dtype=float)
         return self._outputs_fn(fresh, use_x6, recycle_guess)(jnp.asarray(T_in, dtype=float),

@@ -1560,7 +1560,8 @@ not have.
 
 The unit around the reactor:
 
-- **Hydrogen is once-through.** The charge is made up to `H2_HC` with pure hydrogen, and what is left leaves in the off-gas. There is no recycle-gas compressor.
+- **Hydrogen is once-through.** The charge is made up to `H2_HC` with pure hydrogen, and what is left leaves in the off-gas. There is no recycle-gas compressor. Hydrogen in the feed counts towards the target; above it the make-up is zero and the excess goes through the reactor with the charge (`info["H2_HC_charge"]` reports the ratio the bed saw).
+- **The feed carries only the sixteen reactor species.** Any other `F_` key (water included) raises `ValueError`, as the `IsomerizationReactor` does; it is never dropped.
 - **The product separator** is one equilibrium stage at `separator_T` (a 1-tray `GasPlantColumn`). The effluent cooler is a specification and its duty is not reported.
 - **The stabilizer is a shortcut, not a tray column.** Hydrogen, ethane and propane go overhead, the pentanes and heavier stay in the bottoms. The fraction of the butanes kept is solved so that the bottoms meet `stabilizer_rvp`. A rigorous stabilizer on the gas-plant column was tried in three layouts. None converged reliably over the compositions the DIH recycle produces, so no stabilizer duty is reported.
 - **The DIP and DIH** are `GasPlantColumn` splitters: the gas plant's Peng-Robinson MESH model on the sixteen species. The DIH has a side draw at `dih_side_tray`, at the rate `dih_side_draw`.
