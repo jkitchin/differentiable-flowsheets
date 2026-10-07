@@ -29,8 +29,9 @@ from jax import Array
 
 from difflow.numerics import safe_divide
 from difflow.params_mixin import ParamsMixin
-from difflow.streams import Stream, make_stream, get_flows
+from difflow.streams import Stream, combine_streams, make_stream, get_flows
 from difflow_ree.database import get_extractant
+from difflow_ree.equilibrium.distribution import REEDistribution
 from difflow_ree.units.cerium import CeriumOxidizer, CeriumOxidizerParams
 from difflow_ree.units.extraction import REEExtractor, REEExtractorParams
 from difflow_ree.flowsheets.extract_scrub_strip import (
@@ -139,59 +140,77 @@ class GroupSeparator:
         self.elements = elements
         self.extractant = extractant
         self.diluent = diluent
-        self.light_elements = light_elements
-        self.middle_elements = middle_elements
-        self.heavy_elements = heavy_elements
+        # Only the members of each group that are in the feed: a circuit
+        # run for a group with nothing in it still extracts at its pH, and
+        # whatever it extracts would be reported as that group's product.
+        self.light_elements = tuple(e for e in light_elements if e in elements)
+        self.middle_elements = tuple(e for e in middle_elements if e in elements)
+        self.heavy_elements = tuple(e for e in heavy_elements if e in elements)
         self.nitrate_conc = nitrate_conc
         self.mechanism = mechanism
         self.capacity_sharpness = capacity_sharpness
 
-        # (#270) The two circuits used to be pinned to literal pH values --
-        # 3.0/2.0 and 3.5/2.5 -- chosen when D2EHPA's coefficients were
-        # HAND_TUNED over an assumed window of [1, 5]. The refit against named
-        # sources moved that window to [0.0, 2.0], and Cyanex272's to
-        # [1.5, 3.5], so no literal is inside both. What the literals really
-        # encoded is where in the record's own window each section sits, so
-        # that is what is written down now: the same four fractions of the
-        # window, which reproduce 3.0/2.0/3.5/2.5 exactly on the old [1, 5]
-        # and follow the coefficients wherever a later refit puts them.
-        # Circuit 2 runs higher than circuit 1 because middle-from-light is a
-        # separation between two elements that are both harder to extract.
+        # Where each section runs. An element leaves for the other phase of a
+        # section when D * (O/A) crosses one, so a section separates two
+        # groups only at a pH where that crossing falls between them: between
+        # the lightest target and the heaviest element it must reject. These
+        # pHs used to be fixed fractions of the extractant's fitted window
+        # (#270). After the refit moved D2EHPA's window to [0, 2] they no
+        # longer sat between the groups -- circuit 1 extracted the light REE
+        # at D >= 10, and stripping at the bottom of the window left the heavy
+        # REE on the solvent at D ~ 100 -- so the "heavy" product was light
+        # REE and the heavies never came off. Reading them off the D curves
+        # puts every section at its cut, wherever a refit moves the curves.
         lo, hi = get_extractant(extractant).valid_ph_range
         span = hi - lo
-        c1_extraction_pH = lo + 0.500 * span
-        c1_scrubbing_pH = lo + 0.250 * span
-        c2_extraction_pH = lo + 0.625 * span
-        c2_scrubbing_pH = lo + 0.375 * span
+        self._distribution = REEDistribution(
+            extractant, elements, nitrate_conc=nitrate_conc,
+            mechanism=mechanism, on_out_of_range="ignore")
+        heavy_rest = tuple(e for e in elements if e not in self.heavy_elements)
+        c1 = self._cut_pHs(self.heavy_elements, heavy_rest,
+                           fallback=(lo + 0.500 * span, lo + 0.250 * span, lo))
+        c2 = self._cut_pHs(self.middle_elements, self.light_elements,
+                           fallback=(lo + 0.625 * span, lo + 0.375 * span, lo))
+        c1_extraction_pH, c1_scrubbing_pH, c1_stripping_pH = c1
+        c2_extraction_pH, c2_scrubbing_pH, c2_stripping_pH = c2
+        self.operating_pH = {
+            "heavy_circuit": dict(zip(("extraction", "scrubbing", "stripping"), c1)),
+            "middle_circuit": dict(zip(("extraction", "scrubbing", "stripping"), c2)),
+        }
 
-        # Circuit 1: Separate heavy from light+middle
-        self._heavy_circuit = ExtractScrubStripCircuit(ExtractScrubStripParams(
+        # Circuit 1: Separate heavy from light+middle (skipped without heavies)
+        self._heavy_circuit = None if not self.heavy_elements else \
+            ExtractScrubStripCircuit(ExtractScrubStripParams(
             extractant=extractant,
             elements=elements,
-            target_elements=heavy_elements,
+            target_elements=self.heavy_elements,
             diluent=diluent,
             n_extraction_stages=10,
             n_scrubbing_stages=8,
             n_stripping_stages=5,
-            extraction_pH=c1_extraction_pH,  # All extract
-            scrubbing_pH=c1_scrubbing_pH,    # Reject light+middle
+            extraction_pH=c1_extraction_pH,  # the heavy / rest cut
+            scrubbing_pH=c1_scrubbing_pH,    # wash co-extracted light + middle
+            stripping_pH=c1_stripping_pH,    # strip every heavy
             nitrate_conc=nitrate_conc,  # see #195
             mechanism=mechanism,  # see #195
             capacity_sharpness=capacity_sharpness,  # see #193
         ))
 
-        # Circuit 2: Separate middle from light (on Circuit 1 scrub liquor)
-        light_middle = light_elements + middle_elements
-        self._middle_circuit = ExtractScrubStripCircuit(ExtractScrubStripParams(
+        # Circuit 2: Separate middle from light, on circuit 1's non-heavy
+        # outlets (skipped without middles)
+        light_middle = tuple(e for e in elements if e not in self.heavy_elements)
+        self._middle_circuit = None if not self.middle_elements else \
+            ExtractScrubStripCircuit(ExtractScrubStripParams(
             extractant=extractant,
             elements=light_middle,
-            target_elements=middle_elements,
+            target_elements=self.middle_elements,
             diluent=diluent,
             n_extraction_stages=10,
             n_scrubbing_stages=6,
             n_stripping_stages=5,
             extraction_pH=c2_extraction_pH,
             scrubbing_pH=c2_scrubbing_pH,
+            stripping_pH=c2_stripping_pH,
             nitrate_conc=nitrate_conc,  # see #195
             mechanism=mechanism,  # see #195
             capacity_sharpness=capacity_sharpness,  # see #193
@@ -214,19 +233,37 @@ class GroupSeparator:
             heavy: Heavy REE stream (Gd, Tb, Dy, Y)
             info: Separation details
         """
-        # Circuit 1: Extract heavy, reject light+middle
-        results1 = self._heavy_circuit(feed, T)
-        heavy = results1["product"]  # Heavy REE product
-        light_middle_stream = results1["scrub_liquor"]  # Contains light + middle
+        # Each circuit has four outlets. What it does not extract leaves in
+        # the raffinate, what scrubbing returns to the aqueous leaves in the
+        # scrub liquor, the targets leave in the product, and what stripping
+        # leaves on the solvent stays on the barren organic. The rejected
+        # stream passed on is raffinate + scrub liquor: it used to be the
+        # scrub liquor alone, which dropped the raffinate -- where most of
+        # the light REE goes -- on the floor (#371 follow-up).
+        losses = []
 
-        # Circuit 2: Extract middle, reject light
-        results2 = self._middle_circuit(light_middle_stream, T)
-        middle = results2["product"]  # Middle REE product
-        light = results2["scrub_liquor"]  # Light REE
+        def run(circuit, stream):
+            if circuit is None:
+                return None, stream
+            results = circuit(stream, T)
+            losses.append(results["barren_organic"])
+            return results, combine_streams(results["raffinate"],
+                                            results["scrub_liquor"])
+
+        # Circuit 1: extract heavy, reject light + middle
+        results1, light_middle_stream = run(self._heavy_circuit, feed)
+        heavy = results1["product"] if results1 else self._empty_like(feed)
+
+        # Circuit 2: extract middle, reject light
+        results2, light = run(self._middle_circuit, light_middle_stream)
+        middle = results2["product"] if results2 else self._empty_like(feed)
 
         info = {
             "heavy_circuit": results1,
             "middle_circuit": results2,
+            # REE still on the stripped solvent: not a product, not lost
+            # either (in a plant it recycles with the solvent).
+            "solvent_holdup": self._ree_only(losses, feed),
             "group_compositions": {
                 "light": self._get_composition(light),
                 "middle": self._get_composition(middle),
@@ -235,6 +272,70 @@ class GroupSeparator:
         }
 
         return light, middle, heavy, info
+
+    #: D x (O/A) at the boundary of each section: the extraction cut (O/A
+    #: 1), the scrub cut (scrub/organic 0.2, the circuit's default ratio) and
+    #: the strip, where the most strongly held target must come off with
+    #: D x (O/A) = 0.1 at the circuit's strip O/A of 2.
+    CUT_D = {"extraction": 1.0, "scrubbing": 0.2, "stripping": 0.05}
+
+    def _pH_where(self, elements: tuple[str, ...], D_target: float,
+                  how: str = "mean") -> float:
+        """The pH at which D of ``elements`` (their geometric mean, or the
+        largest) equals ``D_target``, by bisection; D rises with pH."""
+        import math
+
+        def log_D(pH):
+            D = self._distribution.get_D_all(pH=pH)
+            logs = [math.log10(max(float(D[e]), 1e-300)) for e in elements]
+            return max(logs) if how == "max" else sum(logs) / len(logs)
+
+        target = math.log10(D_target)
+        a, b = -4.0, 10.0
+        for _ in range(80):
+            m = 0.5 * (a + b)
+            if log_D(m) < target:
+                a = m
+            else:
+                b = m
+        return 0.5 * (a + b)
+
+    def _cut_pHs(self, targets: tuple[str, ...], rejected: tuple[str, ...],
+                 fallback: tuple[float, float, float]) -> tuple[float, float, float]:
+        """Extraction, scrubbing and stripping pH for one circuit.
+
+        The boundary pair is the least extractable target and the most
+        extractable element to reject; each section sits where their mean D
+        meets that section's cut. A D that does not move with pH (a
+        solvating extractant such as TBP, driven by nitrate) has no pH cut,
+        and the window fractions are kept.
+        """
+        if not targets or not rejected:
+            return fallback
+        D_lo = self._distribution.get_D_all(pH=0.0)
+        D_hi = self._distribution.get_D_all(pH=2.0)
+        if all(abs(float(D_hi[e]) - float(D_lo[e])) <= 1e-12 * max(abs(float(D_lo[e])), 1.0)
+               for e in targets + rejected):
+            return fallback
+        weakest_target = min(targets, key=lambda e: float(D_hi[e]))
+        strongest_rejected = max(rejected, key=lambda e: float(D_hi[e]))
+        pair = (weakest_target, strongest_rejected)
+        return (self._pH_where(pair, self.CUT_D["extraction"]),
+                self._pH_where(pair, self.CUT_D["scrubbing"]),
+                self._pH_where(targets, self.CUT_D["stripping"], how="max"))
+
+    def _empty_like(self, feed: Stream) -> Stream:
+        """A stream at the feed's conditions carrying no REE."""
+        return make_stream({e: 0.0 for e in self.elements}, feed["T"], feed["P"])
+
+    def _ree_only(self, streams: list[Stream], feed: Stream) -> Stream:
+        """The REE in ``streams``, summed, as one stream."""
+        total = {e: 0.0 for e in self.elements}
+        for stream in streams:
+            flows = get_flows(stream)
+            for e in self.elements:
+                total[e] = total[e] + flows.get(e, 0.0)
+        return make_stream(total, feed["T"], feed["P"])
 
     def _get_composition(self, stream: Stream) -> dict[str, float]:
         """Get REE composition of stream."""
@@ -331,6 +432,8 @@ class FullSeparationTrain:
         results = {
             "feed": feed,
             "products": {},
+            # REE on the stripped solvent: neither product nor lost
+            "holdup": {},
             "intermediates": {},
             "info": {},
         }
@@ -352,6 +455,7 @@ class FullSeparationTrain:
             results["products"]["middle_REE"] = middle
             results["products"]["heavy_REE"] = heavy
             results["info"]["group_separation"] = group_info
+            results["holdup"] = {"solvent": group_info["solvent_holdup"]}
 
         # Calculate overall mass balance
         feed_flows = get_flows(feed)
@@ -359,16 +463,25 @@ class FullSeparationTrain:
 
         total_out = 0.0
         for product_name, product in results["products"].items():
-            if isinstance(product, dict):  # Solid product
-                total_out += sum(float(product.get(e, 0.0)) for e in self.params.elements)
-            else:  # Stream
-                prod_flows = get_flows(product)
-                total_out += sum(float(prod_flows.get(e, 0.0)) for e in self.params.elements)
+            # A Stream is a dict too, so the type cannot tell a stream from a
+            # bare flow dict; the keys can. Streams carry F_<element>, a bare
+            # flow dict carries the element names themselves. Testing the type
+            # sent every product down the bare-dict branch and counted every
+            # stream as zero (#371).
+            prod_flows = get_flows(product) or product
+            total_out += sum(float(prod_flows.get(e, 0.0)) for e in self.params.elements)
+        holdup = sum(float(get_flows(stream).get(e, 0.0))
+                     for stream in results["holdup"].values()
+                     for e in self.params.elements)
 
+        # closure: every outlet accounted for, products and holdup (should be
+        # 1); recovery: the share of the feed that reaches a product.
         results["mass_balance"] = {
             "total_in": total_in,
             "total_out": total_out,
-            "closure": safe_divide(total_out, total_in),
+            "holdup": holdup,
+            "closure": safe_divide(total_out + holdup, total_in),
+            "recovery": safe_divide(total_out, total_in),
         }
 
         return results
