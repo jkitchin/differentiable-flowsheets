@@ -589,10 +589,10 @@ per unit area); given `feed_volume` (L) in the call, the unit reports
 | `info['recovery']` | dict | - | Fraction of each species kept in the retentate |
 | `info['concentration_factor']`, `info['volume_reduction']`, `info['retentate_volume_fraction']` | float | - | Volume bookkeeping |
 | `info['fouling_factor']` | float | - | Flux decline from fouling (1 when off) |
+| `info['rejection']` | dict | - | Rejection used for each species: the `rejection` override, else the MWCO-derived value |
 
 The call returns `((retentate, permeate), info)`: the two streams are
-nested in a tuple of their own. The rejection coefficients are inputs
-(`params.rejection`), not outputs.
+nested in a tuple of their own.
 
 #### Governing Equations
 
