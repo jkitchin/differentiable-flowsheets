@@ -59,7 +59,7 @@ print(list_ree_elements())
 # Get element properties
 nd = get_element("Nd")
 print(f"Atomic weight: {nd.atomic_weight}")
-print(f"Ionic radius: {nd.ionic_radius} pm")
+print(f"Ionic radius: {nd.ionic_radius_pm} pm")
 print(f"Price: ${nd.price_usd_kg}/kg")
 ```
 
@@ -68,7 +68,7 @@ print(f"Price: ${nd.price_usd_kg}/kg")
 | Property | Description | Units |
 |----------|-------------|-------|
 | `atomic_weight` | Atomic mass | g/mol |
-| `ionic_radius` | Ionic radius (3+) | pm |
+| `ionic_radius_pm` | Ionic radius (3+) | pm |
 | `price_usd_kg` | Market price | USD/kg |
 | `oxide_mw` | Oxide molecular weight | g/mol |
 | `oxide_formula` | Oxide formula | - |
@@ -132,7 +132,12 @@ the distribution is constructed**, with all of the missing elements at once and
 the coverage that does exist beside them:
 
 ```python
-REEDistribution(extractant="D2EHPA", elements=("Y", "Ho", "Er", "Tm", "Yb", "Lu"))
+from difflow_ree import REEDistribution
+
+try:
+    REEDistribution(extractant="D2EHPA", elements=("Y", "Ho", "Er", "Tm", "Yb", "Lu"))
+except ValueError as err:
+    print(err)
 # ValueError: Extractant 'D2EHPA' has no coefficients for Ho, Er, Tm, Yb, Lu
 # (mechanism='cation_exchange') ... It covers: La, Ce, Pr, Nd, Sm, Eu, Gd, Tb, Dy, Y.
 ```
@@ -236,6 +241,7 @@ Three things are deliberate about the shape:
 - **No shipped record carries the block.** The mechanism exists so a record
   measured on a saponified system has somewhere to put its real correlation.
 
+<!-- doc-test: skip: needs a hypothetical saponified record "MySaponified" -->
 ```python
 dist = REEDistribution(extractant="MySaponified", elements=("Sm", "Nd"))
 dist.get_D("Nd", counter_ion_conc=0.5)          # needs [M+]
@@ -631,8 +637,11 @@ being precise about which is which, because only the second is a medium check:
 from difflow_ree import REEDistribution
 
 # Detected: TBP requires nitrate, chloride supplies none.
-REEDistribution(extractant="TBP", elements=("Nd",),
-                nitrate_conc=3.0, medium="chloride")   # ValueError
+try:
+    REEDistribution(extractant="TBP", elements=("Nd",),
+                    nitrate_conc=3.0, medium="chloride")
+except ValueError as err:
+    print("refused:", str(err)[:60])
 
 REEDistribution(extractant="TBP", elements=("Nd",),
                 nitrate_conc=3.0, medium="nitrate")    # fine
@@ -1014,6 +1023,8 @@ declares *which* pairs to report and *at what conditions*, and the values come
 from the same `get_separation_factor` as the code above:
 
 ```python
+from difflow_ree.database import get_sf_database
+
 sf_db = get_sf_database()
 data = sf_db.get("PC88A")
 data.conditions            # {'pH': 1.33, 'temperature_K': 298, 'concentration_M': 0.5}
@@ -1778,6 +1789,7 @@ sodium complexation with the medium anion.
 
 #### Parameters
 
+<!-- doc-test: skip: Params signature listing, not runnable code -->
 ```python
 @dataclass
 class REEExtractorParams:
@@ -1873,21 +1885,26 @@ Loading is always a **dimensionless fraction**,
 
 $$\theta = \frac{m \, n_{\mathrm{REE,org}}}{n_{\mathrm{HA}}}$$
 
-with $m$ the extractant monomer equivalents bound per REE, read from the
-extraction mechanism declared in `data/extractants.yaml`
-(`Extractant.monomers_per_ree`). It is 6 for the acidic organophosphorus
-extractants, which are declared as three dimers, and 3 for TBP. The capacity is
-$1/m$ mol REE per mol extractant, and the free-extractant exponent in
-`LoadingIsotherm.apparent_D` is the same $m$, so the two cannot disagree.
+with $m$ the extractant units bound per REE, counted on the same basis as the
+extractant concentration and flow, read from the extraction mechanism declared
+in `data/extractants.yaml` (`Extractant.basis_units_per_ree`). It is 3 for the
+acidic organophosphorus extractants, which are declared as three dimers (so
+`extractant_conc = 0.5` is 0.5 M *dimer*, 1.0 M nominal), and 3 for TBP.
+The capacity is $1/m$ mol REE per mol extractant, and the free-extractant
+exponent in `LoadingIsotherm.apparent_D` is the same $m$, so the two cannot
+disagree. (`Extractant.monomers_per_ree`, 6 for the dimers, is the monomer
+count; it is not the divisor of a dimer-basis concentration. Dividing by it
+halved the capacity until #374: 0.5 M dimer extracted at most 0.081 M REE per
+litre of feed instead of 0.167 M.)
 
 :::{warning}
 This changed exported API. `LoadingIsotherm.max_loading` was a constructor
 field defaulting to 0.33; it is now a read-only property equal to $1/m$, so
 `LoadingIsotherm(max_loading=0.33)` raises `TypeError` — pass `m=3.0` instead,
-and note that the acidic organophosphorus extractants now derive $m=6$, halving
-the capacity the old literal claimed. The `"stoichiometry"` and `"max_loading"`
+and note that the acidic organophosphorus extractants derive $m=3$ (three
+dimers), 1/3 mol REE per mol dimer, as the old literal 0.33 roughly claimed. The `"stoichiometry"` and `"max_loading"`
 keys were removed from the public `EXTRACTANT_CAPACITIES` dict (read
-`get_extractant(name).monomers_per_ree` instead; since #268 that object is no
+`get_extractant(name).basis_units_per_ree` instead; since #268 that object is no
 longer a `dict` at all but a mapping deriving its values on access), and
 `loading_correction()`
 now raises the free fraction to `isotherm.m` rather than a literal 3 against a
@@ -2000,6 +2017,7 @@ an optimizer is far away and needs a gentler surface.
 The REE flowsheet Params (`ExtractStripParams` and friends) do not yet expose
 `capacity_sharpness`; reach it through the extractor they build:
 
+<!-- doc-test: skip: fragment, needs a built REE flowsheet circuit -->
 ```python
 circuit._extractor.params = circuit._extractor.params.update(
     capacity_sharpness=16)
@@ -2019,6 +2037,7 @@ $10^{-11}$ mol/s).
 
 **Description**: Single mixer-settler stage for REE extraction with efficiency factor.
 
+<!-- doc-test: skip: Params signature listing, not runnable code -->
 ```python
 @dataclass
 class MixerSettlerParams:
@@ -2078,8 +2097,13 @@ wrong: a name that is not in `elements` labels nothing, which reads like "the
 scrub retained none of the target", so it raises instead.
 
 ```python
-ScrubberParams(n_stages=5, extractant="D2EHPA",
-               elements=("La", "Nd"), target_elements=("Y",))
+from difflow_ree import ScrubberParams
+
+try:
+    ScrubberParams(n_stages=5, extractant="D2EHPA",
+                   elements=("La", "Nd"), target_elements=("Y",))
+except ValueError as err:
+    print(err)
 # ValueError: target_elements ['Y'] are not in elements ('La', 'Nd')
 ```
 
@@ -2153,6 +2177,7 @@ Cerium is unique among lanthanides because it can be oxidized from Ce³⁺ to Ce
 
 #### Parameters
 
+<!-- doc-test: skip: Params signature listing, not runnable code -->
 ```python
 @dataclass
 class CeriumOxidizerParams:
@@ -2220,6 +2245,7 @@ read its precipitant.
 **Reaction**: 2REE³⁺ + 3C₂O₄²⁻ → REE₂(C₂O₄)₃↓
 
 ```python
+from difflow.streams import make_stream
 from difflow_ree import OxalatePrecipitator, PrecipitatorParams
 
 params = PrecipitatorParams(
@@ -2230,6 +2256,8 @@ params = PrecipitatorParams(
 precipitator = OxalatePrecipitator(params)
 
 # Feed is stripped REE solution, precipitant is oxalic acid
+feed = make_stream({"H2O": 55.5, "Nd": 0.10, "Dy": 0.02}, 298.15, 101325.0)
+oxalic_acid = make_stream({"H2O": 10.0, "C2O4": 0.25}, 298.15, 101325.0)
 filtrate, solid, info = precipitator(feed, oxalic_acid)
 
 print(f"Total precipitated: {info['total_precipitated']:.4f} mol/s")
@@ -2255,6 +2283,10 @@ from difflow_ree import HydroxidePrecipitator, PrecipitatorParams
 
 params = PrecipitatorParams(elements=("La", "Ce", "Nd", "Dy"))
 precipitator = HydroxidePrecipitator(params)
+
+feed = make_stream({"H2O": 55.5, "La": 0.05, "Ce": 0.05, "Nd": 0.05, "Dy": 0.02},
+                   298.15, 101325.0)
+naoh_solution = make_stream({"H2O": 10.0, "OH": 0.8}, 298.15, 101325.0)
 
 # pH-selective precipitation: the setpoint pH decides how much of each REE is
 # above its hydroxide solubility, and the NaOH supplied has to pay for it
@@ -2335,6 +2367,7 @@ stage counts sized from the actual `D` to meet the recovery.
 
 #### Parameters
 
+<!-- doc-test: skip: Params signature listing, not runnable code -->
 ```python
 @dataclass
 class ExtractScrubStripParams:
@@ -2392,7 +2425,7 @@ for elem, recovery in results['target_recovery'].items():
 ```
 
 Concentration matters. The extractor caps the organic loading at the
-extractant's capacity (one REE per `monomers_per_ree` extractant), so a feed
+extractant's capacity (one REE per `basis_units_per_ree` extractant units), so a feed
 written as `{"H2O": 1.0, "La": 0.10, ...}`, which is several molar in REE,
 saturates the solvent at any pH and sends most of the feed to the raffinate.
 That was this example until the operating-point audit: purity 39 %, with 83 %
@@ -2440,9 +2473,10 @@ extractant's `D` curves with that rule
 | extraction, no targets | the least extractable element has `D * (O/A) = 10` |
 | stripping | the most strongly held target (every element, without targets) has `D * (O/A) = 0.1` |
 
-The phase ratios are the ones the units actually run at: the units count the
-extractant moles as organic flow, so at the defaults the extraction runs at
-O/A 1.5, the scrub at 7.5 and the strip at 3. An extractant whose `D` does
+The phase ratios are the ones the units actually run at: the organic flow is
+the diluent volume (the extractant entry is a moles-per-volume charge and does
+not count, #373), so at the defaults the extraction runs at O/A 1, the scrub
+at 5 and the strip at 2, whatever the extractant concentration. An extractant whose `D` does
 not move with pH (TBP) has no pH cut and keeps the window defaults; a TBP
 circuit instead strips at its own `strip_nitrate_conc`, by default
 `min(nitrate_conc, 1 M)`, the bottom of the 1 to 6 M window the TBP record
@@ -2547,12 +2581,12 @@ are stored as `operating_pH`:
 
 | Section | Condition | Boundary |
 |---|---|---|
-| extraction | geometric mean of $D \cdot$ O/A for the boundary pair $= 1$ (O/A 1.5) | lightest target, heaviest rejected |
-| scrubbing | the same mean $D$ equals the scrub aqueous/organic ratio (O/A 7.5) | same pair |
-| stripping | the largest target $D \cdot$ O/A $= 0.1$ (strip O/A 3) | most strongly held target |
+| extraction | geometric mean of $D \cdot$ O/A for the boundary pair $= 1$ (O/A 1) | lightest target, heaviest rejected |
+| scrubbing | the same mean $D$ equals the scrub aqueous/organic ratio (O/A 5) | same pair |
+| stripping | the largest target $D \cdot$ O/A $= 0.1$ (strip O/A 2) | most strongly held target |
 
-On D2EHPA this gives extraction at pH −0.26, scrubbing at −0.49 and
-stripping at −1.22 for the heavy circuit, and 0.07 / −0.16 / −0.63 for the
+On D2EHPA this gives extraction at pH −0.20, scrubbing at −0.43 and
+stripping at −1.17 for the heavy circuit, and 0.13 / −0.10 / −0.57 for the
 middle circuit. Both circuits run in roughly 1 to 2 M acid, and the heavies
 strip only from strong acid, as they do in practice. These pH values lie
 below the window the D2EHPA coefficients were fitted over (`[0, 2]`), and
@@ -2629,6 +2663,7 @@ cut a default train's Ce removal to 8 %.
 
 #### Parameters
 
+<!-- doc-test: skip: Params signature listing, not runnable code -->
 ```python
 @dataclass
 class SeparationTrainParams:
@@ -2740,6 +2775,7 @@ liquid phases are `difflow.streams.Stream`, so nothing in
 That is what `difflow_ree.flowsheets.ports.Port` adds, and it is what
 lets a wrong connection be refused:
 
+<!-- doc-test: skip: fragment; illustrates a deliberately refused connection on a built train -->
 ```python
 train.connect("sep.barren_organic", "sep.feed")
 # PortMismatchError: phase mismatch: sep.barren_organic carries the
@@ -2921,6 +2957,7 @@ convergence diagnostics as Python floats and therefore cannot be traced.
 same order, same tear set — through `optimistix.fixed_point`, and gets
 implicit differentiation through the converged loop:
 
+<!-- doc-test: skip: fragment; objective is defined in the surrounding discussion, not here -->
 ```python
 jax.grad(objective)(0.5)   # finite through the closed organic loop
 ```
@@ -2966,8 +3003,11 @@ ho = create_custom_element(
     price_usd_kg=60.0,      # approximate market price
 )
 
-# Register with the database
+# Register with the database. Ho already ships in the built-in table, so
+# set the shipped record aside first (restored at the end of this section).
 db = get_ree_database()
+shipped_ho = db.get("Ho")
+db.remove_element("Ho")
 db.add_element("Ho", ho)
 
 # Now Ho is available alongside built-in elements
@@ -2978,6 +3018,9 @@ print(db.list_by_group("heavy"))     # [..., 'Ho']
 Elements can also be updated or removed:
 
 ```python
+from dataclasses import replace
+
+updated_ho = replace(ho, price_usd_kg=65.0)  # corrected data
 db.update_element("Ho", updated_ho)  # replace with corrected data
 db.remove_element("Ho")              # remove entirely
 ```
@@ -3019,7 +3062,11 @@ If you need to correct values, remove and re-add:
 
 ```python
 ext_db.remove_element_from_extractant("PC88A", "Ho")
-ext_db.add_element_to_extractant("PC88A", "Ho", ...)
+ext_db.add_element_to_extractant(
+    "PC88A", "Ho",
+    ph_coefficients={"a": -6.20, "b": 2.95, "c": 0.010},  # corrected values
+    temperature_coefficient=-2350,
+)
 ```
 
 (adding-separation-factors)=
@@ -3085,9 +3132,12 @@ ho = create_custom_element(
     melting_point=1734, group="heavy", oxide_formula="Ho2O3",
     oxide_mw=377.86, price_usd_kg=60.0,
 )
-get_ree_database().add_element("Ho", ho)
+ree_db = get_ree_database()
+ree_db.add_element("Ho", ho)
 
-# 2. Add extraction coefficients (from your literature source)
+# 2. Add extraction coefficients (from your literature source). The sections
+# above already added Ho data to the shared database, so clear it first.
+get_extractant_database().remove_element_from_extractant("PC88A", "Ho")
 get_extractant_database().add_element_to_extractant(
     "PC88A", "Ho",
     ph_coefficients={"a": -6.15, "b": 2.95, "c": 0.010},
@@ -3096,6 +3146,8 @@ get_extractant_database().add_element_to_extractant(
 
 # 3. Add separation factor data
 sf_db = get_sf_database()
+for pair in ("Ho_Dy", "Y_Ho", "Ho_Nd"):   # added by the examples above
+    sf_db.remove_pair("PC88A", pair)
 sf_db.add_pair("PC88A", "Ho_Dy", 1.4, stages_99=20)
 sf_db.add_pair("PC88A", "Ho_Gd", 2.5, adjacent=False)
 
@@ -3106,6 +3158,18 @@ dist = REEDistribution(
 )
 D_ho = dist.get_D("Ho", pH=2.0, T=298.15)   # inside PC88A's [0.1, 2.5]
 print(f"D(Ho) at pH 2.0: {D_ho:.2f}")
+```
+
+The database objects are process-wide singletons, so put back what the two
+Holmium examples changed if you carry on in the same session:
+
+```python
+get_extractant_database().remove_element_from_extractant("PC88A", "Ho")
+sf_db.remove_pair("PC88A", "Ho_Dy")
+sf_db.remove_pair("PC88A", "Ho_Gd")
+sf_db.remove_separation_factors("MyExtractant")
+ree_db.remove_element("Ho")
+ree_db.add_element("Ho", shipped_ho)
 ```
 
 ---
@@ -3303,38 +3367,32 @@ print(f"Ce in filtrate: {info['ce_fraction_out']:.1%}")
 
 ### Example 3: Gradient-Based Optimization
 
+The extractor is differentiable with respect to its operating pH. (The
+`ExtractScrubStripCircuit` reports its diagnostics as Python floats, so
+differentiate the individual units, or use a flowsheet's
+`solve_differentiable()` as described above.)
+
 ```python
 import jax
-import jax.numpy as jnp
-from difflow_ree import ExtractScrubStripCircuit, ExtractScrubStripParams
-from difflow.streams import make_stream
+from difflow_ree import REEExtractor, REEExtractorParams
+from difflow.streams import make_stream, get_flows
 
-def separation_objective(pH_values):
-    """Objective: maximize Nd purity × recovery."""
-    extraction_pH, scrubbing_pH = pH_values
+feed = make_stream({"H2O": 1.0, "La": 0.3, "Ce": 0.4, "Nd": 0.3}, T=298.15, P=101325.0)
+solvent = make_stream({"D2EHPA": 0.2, "kerosene": 1.0}, T=298.15, P=101325.0)
 
-    params = ExtractScrubStripParams(
-        extractant="D2EHPA",
-        elements=("La", "Ce", "Nd"),
-        target_elements=("Nd",),
-        extraction_pH=extraction_pH,
-        scrubbing_pH=scrubbing_pH,
-    )
-    circuit = ExtractScrubStripCircuit(params)
-
-    feed = make_stream({"H2O": 1.0, "La": 0.3, "Ce": 0.4, "Nd": 0.3}, T=298.15, P=101325.0)
-    results = circuit(feed)
-
-    purity = results['product_purity']['Nd']
-    recovery = results['target_recovery']['Nd']
-
+def separation_objective(pH):
+    """Objective: maximize Nd purity x recovery in the loaded organic."""
+    params = REEExtractorParams(n_stages=5, extractant="D2EHPA",
+                                elements=("La", "Ce", "Nd"), pH=pH)
+    raffinate, loaded, info = REEExtractor(params)(feed, solvent)
+    org = get_flows(loaded)
+    recovery = org["Nd"] / 0.3
+    purity = org["Nd"] / (org["La"] + org["Ce"] + org["Nd"])
     return -(purity * recovery)  # Negative for minimization
 
-# Compute gradients
+# Compute the gradient with respect to the extraction pH
 grad_fn = jax.grad(separation_objective)
-pH_init = jnp.array([3.5, 2.0])
-gradients = grad_fn(pH_init)
-print(f"Gradients: d/d(ext_pH) = {gradients[0]:.4f}, d/d(scrub_pH) = {gradients[1]:.4f}")
+print(f"d(objective)/d(pH) = {grad_fn(0.5):.4f}")
 ```
 
 ---

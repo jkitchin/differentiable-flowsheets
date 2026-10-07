@@ -775,9 +775,26 @@ class Extractant:
         return self.stoichiometry_extractant * per_species
 
     @property
+    def basis_units_per_ree(self) -> float:
+        """Extractant units, on the record's own concentration basis, bound
+        per mol REE: 3 (dimers) for D2EHPA, PC88A and Cyanex 272, 3
+        (molecules) for TBP.
+
+        Extractant concentrations and flows in this plugin (``extractant_conc``,
+        the extractant entry of a solvent stream, ``reference_concentration``)
+        are on that basis, so ``[HA]_0 / basis_units_per_ree`` is the capacity
+        in mol REE. Dividing by :attr:`monomers_per_ree` instead halved it for
+        the dimeric extractants (#374: 0.5 M dimer extracted at most 0.081 M
+        REE instead of 0.167 M). :attr:`monomers_per_ree` stays the monomer
+        count, for counter-ion bookkeeping.
+        """
+        return float(self.stoichiometry_extractant)
+
+    @property
     def max_loading(self) -> float:
-        """Maximum REE loading capacity (mol REE per mol extractant)."""
-        return 1.0 / self.monomers_per_ree
+        """Maximum REE loading capacity (mol REE per mol extractant, counted
+        on the record's concentration basis; 1/3 for D2EHPA's dimers)."""
+        return 1.0 / self.basis_units_per_ree
 
     # ------------------------------------------------------------------
     # Record-derived operating pH defaults (#270)
@@ -1563,11 +1580,13 @@ def create_custom_extractant(
             (D2EHPA, PC88A, Cyanex 272) are DIMERIC in aliphatic diluents:
             their ``stoichiometry_extractant = 3`` counts three dimers, i.e.
             six monomer equivalents per REE, so
-            :attr:`Extractant.monomers_per_ree` is 6 and
-            :attr:`Extractant.max_loading` is 1/6. Leaving this at
-            ``"monomer"`` for such an extractant reports 3 and 1/3 instead --
-            a factor-of-two capacity error, which is exactly the bug #191 was
-            filed about. Pass ``stoichiometry_basis="dimer"`` whenever the
+            :attr:`Extractant.monomers_per_ree` is 6 while the loading limit
+            on the concentration basis (dimers) is
+            :attr:`Extractant.basis_units_per_ree` = 3 and
+            :attr:`Extractant.max_loading` = 1/3. Leaving this at
+            ``"monomer"`` for such an extractant reports a monomer
+            stoichiometry that mis-counts the counter-ions released (#191).
+            Pass ``stoichiometry_basis="dimer"`` whenever the
             custom extractant is a dimerizing acid.
         valid_ph_range: Valid pH range as (min, max), default (1.0, 5.0)
         valid_temp_range: Valid temperature range in K as (min, max), default (283, 333)

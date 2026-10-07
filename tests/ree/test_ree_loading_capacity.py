@@ -149,9 +149,10 @@ class TestIssue189_DimensionlessLoading:
             )
             thetas.append(float(info["theta_solvent"]))
 
-        # theta is m * F_REE / F_extractant = 6 * 0.05 / 1.0, diluent-free
+        # theta is m * F_REE / F_extractant = 3 * 0.05 / 1.0, diluent-free
+        # (m counts dimers, the basis of the extractant flow; #374)
         for theta in thetas:
-            assert theta == pytest.approx(0.3, rel=1e-12)
+            assert theta == pytest.approx(0.15, rel=1e-12)
         for mult in multipliers:
             assert mult == pytest.approx(multipliers[0], rel=1e-12), (
                 f"the loading correction moved with the diluent flow: "
@@ -377,8 +378,13 @@ class TestIssue191_Stoichiometry:
                 f"{stoich.get('basis', 'monomer')}(s) = {expected}"
             )
             # 0.33 was the pre-#191 literal for every acidic extractant; the
-            # YAML says 3 dimers, i.e. 1/6.
-            assert ext.max_loading == pytest.approx(1.0 / expected, rel=1e-15)
+            # YAML says 3 dimers. The loading limit is counted on the
+            # concentration basis (dimers), so 1/3 mol REE per mol dimer
+            # (#374); the monomer count stays 6.
+            assert ext.basis_units_per_ree == pytest.approx(
+                stoich["extractant_molecules"], rel=1e-15)
+            assert ext.max_loading == pytest.approx(
+                1.0 / stoich["extractant_molecules"], rel=1e-15)
             checked += 1
 
         assert checked >= 4, "expected at least the four YAML extractants"
@@ -388,9 +394,9 @@ class TestIssue191_Stoichiometry:
         for name in list_extractants():
             ext = get_extractant(name)
             iso = get_loading_isotherm(name, 0.5)
-            assert iso.m == ext.monomers_per_ree, (
+            assert iso.m == ext.basis_units_per_ree, (
                 f"{name}: isotherm exponent {iso.m} != "
-                f"monomers_per_ree {ext.monomers_per_ree}"
+                f"basis_units_per_ree {ext.basis_units_per_ree}"
             )
             assert iso.max_loading == pytest.approx(ext.max_loading, rel=1e-15)
 
@@ -398,8 +404,9 @@ class TestIssue191_Stoichiometry:
         """The acidic extractants are declared as 3 dimers = 6 monomers."""
         for name in ("D2EHPA", "PC88A", "Cyanex272"):
             assert get_extractant(name).monomers_per_ree == 6.0
+            # on the concentration (dimer) basis: 3 dimers per REE (#374)
             assert get_loading_isotherm(name, 0.5).max_loading == pytest.approx(
-                1.0 / 6.0
+                1.0 / 3.0
             )
         # TBP is a solvating extractant declared on a monomer basis
         assert get_extractant("TBP").monomers_per_ree == 3.0
@@ -1171,9 +1178,9 @@ class TestIssue193_SmoothEnteringSolventLoading:
             {"D2EHPA": 1.0, "kerosene": 5.0, "Nd": 0.05},
             ("Nd",),
         )
-        assert float(info["theta_solvent"]) == pytest.approx(0.3, rel=1e-12)
+        assert float(info["theta_solvent"]) == pytest.approx(0.15, rel=1e-12)
         assert float(info["free_fraction_in"]) == pytest.approx(
-            float(_smooth_free_fraction(0.3, 8.0)), rel=1e-12
+            float(_smooth_free_fraction(0.15, 8.0)), rel=1e-12
         )
 
     def test_soft_saturation_degenerate_inputs_are_finite(self):
@@ -1334,17 +1341,20 @@ class TestChangedPublicAPI:
         the point below.
         """
         iso = get_loading_isotherm("D2EHPA", 0.5)
-        assert iso.m == 6.0
-        assert iso.max_ree_conc == pytest.approx(0.5 / 6.0)
+        assert iso.m == 3.0     # three dimers on the 0.5 M dimer basis (#374)
+        assert iso.max_ree_conc == pytest.approx(0.5 / 3.0)
 
         c_org = {"Nd": 0.0413}
         theta = 0.0413 / iso.max_ree_conc
         expected = 10.0 * (1.0 - theta) ** iso.m
         out = loading_correction({"Nd": 10.0}, c_org, iso)
         assert float(out["Nd"]) == pytest.approx(expected, rel=1e-12)
-        # The pre-#191 form, for the record: (1 - 0.0413/0.165)**3 * 10
+        # The pre-#191 form, for the record: (1 - 0.0413/0.165)**3 * 10.
+        # #191 moved it by 25.6x (monomer count 6); #374 put the count back
+        # on the dimer basis of the charge, so it is within 1 % of the
+        # original 0.33 literal again (3 dimers is 1/3, not 0.33).
         old = 10.0 * (1.0 - 0.0413 / (0.33 * 0.5)) ** 3
-        assert old / float(out["Nd"]) == pytest.approx(25.59, rel=1e-3)
+        assert old / float(out["Nd"]) == pytest.approx(0.99005, rel=1e-3)
 
     def test_loading_correction_is_multiplicative_and_shared(self):
         """Total loading, one factor, applied to every element's D."""

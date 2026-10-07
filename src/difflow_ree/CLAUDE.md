@@ -23,13 +23,15 @@ the root CLAUDE.md, which keeps only what every session needs).
   scalar root through optimistix (implicit diff, so gradients survive). Total
   overpredicts D where the cascade works hardest -- 1.34x at the naphthenic
   anchor. `check_loading_capacity` / `implied_loading_fraction` reject a
-  loading past `1/monomers_per_ree`, which a total-basis correlation returns a
+  loading past `1/basis_units_per_ree` (3 dimers for D2EHPA, on the same dimer
+  basis as `extractant_conc` -- NOT `monomers_per_ree` = 6, which halved the
+  capacity until #374), which a total-basis correlation returns a
   finite D for. Do NOT compose with `LoadingIsotherm.apparent_D`: that caps
   the answer, this changes the input (#190/#204's double count).
 - Langmuir constants are DERIVED (#268): `typical_K_L` was a second extractant
   table hand-synced with the YAML, and three of four entries matched the
   coefficients at NO pH (rms log10 residual 0.62/0.85/0.92 at best fit). Now
-  `K_L = D(reference)/q_max` computed on access; `EXTRACTANT_CAPACITIES` is a
+  `K_L = D(reference)/q_max` (`q_max = [HA]_ref / basis_units_per_ree`) computed on access; `EXTRACTANT_CAPACITIES` is a
   derived Mapping, not a dict. Every record declares its basis:
   `reference_concentration` plus `reference_pH` (cation exchange) or
   `reference_nitrate` (solvating). A missing extractant was already tested for;
@@ -51,8 +53,11 @@ the root CLAUDE.md, which keeps only what every session needs).
   (`ExtractStripParams`, `ExtractScrubStripParams`, `GroupSeparator`,
   `SplitShellParams` with `product_groups`) comes from
   `equilibrium/operating_points.cut_pHs`, the D x (O/A) = 1 / 10 / 0.1 cut
-  at the phase ratios the units really run at (`circuit_phase_ratios`, which
-  counts extractant moles as organic flow; whether it should is open, R5).
+  at the phase ratios the units really run at (`circuit_phase_ratios`). The
+  organic carrier flow is the DILUENT volume only (#373): the extractant entry
+  of a solvent stream is a moles-per-volume charge, and counting it made a
+  stated O/A of 1 run at 1.5 with 0.5 M. `_phase_flows` therefore keys the
+  organic phase on the diluent.
   Do NOT go back to window fractions (`default_pH`) for circuits: they left
   99.8 % of the Y on a D2EHPA solvent. Strip cuts for heavy REE on D2EHPA lie
   below the fitted window; the warning is the policy, never clamp.

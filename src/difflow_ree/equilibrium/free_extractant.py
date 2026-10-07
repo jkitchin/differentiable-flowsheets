@@ -136,7 +136,7 @@ def implied_loading_fraction(
     """Fraction of the charged extractant that a given organic loading uses.
 
     Args:
-        extractant: Name or record; only its ``monomers_per_ree`` is read.
+        extractant: Name or record; only its ``basis_units_per_ree`` is read.
         c_org: Organic-phase REE concentration (M).
         extractant_conc: Total extractant charged (M), same basis as the
             record's ``reference_concentration``.
@@ -145,7 +145,7 @@ def implied_loading_fraction(
         ``m c_org / [HA]_total``. Above 1.0 the loading is impossible, not
         merely high.
     """
-    m = _record(extractant).monomers_per_ree
+    m = _record(extractant).basis_units_per_ree
     return m * jnp.asarray(c_org) / jnp.asarray(extractant_conc)
 
 
@@ -195,7 +195,7 @@ def check_loading_capacity(
     record = _record(extractant)
     message = (
         f"Organic loading is {worst:.1%} of {record.name}'s stoichiometric "
-        f"capacity: {record.monomers_per_ree:g} extractant monomers are bound "
+        f"capacity: {record.basis_units_per_ree:g} extractant units are bound "
         f"per mol REE, so holding this much REE needs more extractant than is "
         f"charged. The free extractant [HA]_0 - m c_org is NEGATIVE, and the "
         "correlation's log10([HA]) is undefined there -- a correlation written "
@@ -295,7 +295,7 @@ def solve_free_extractant(
         raise ValueError(
             f"Extractant concentration must be positive, got {total}."
         )
-    m = record.monomers_per_ree
+    m = record.basis_units_per_ree
     c_aq = jnp.asarray(c_aq)
 
     # D at the record's own reference concentration: the concentration term is

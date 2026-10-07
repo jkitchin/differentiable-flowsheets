@@ -943,7 +943,9 @@ class TestCustomExtractantStoichiometryBasis:
         ext = self._make(stoichiometry_basis="dimer")
         assert ext.stoichiometry_basis == "dimer"
         assert ext.monomers_per_ree == 6
-        assert ext.max_loading == pytest.approx(1.0 / 6.0)
+        # capacity is counted on the concentration basis (dimers): 1/3 (#374)
+        assert ext.basis_units_per_ree == 3
+        assert ext.max_loading == pytest.approx(1.0 / 3.0)
 
     @pytest.mark.release
     def test_it_agrees_with_the_built_in_acidic_extractants(self):
