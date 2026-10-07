@@ -81,6 +81,17 @@ class ExtractScrubStripParams(ParamsMixin):
             REEDistribution ("cation_exchange" / "solvating"). None takes the
             mechanism from the extractant record (#195). Threaded to all
             three sections, so a circuit never mixes mechanisms.
+        strip_nitrate_conc: Aqueous nitrate concentration (M) in the
+            stripping section. For a solvating extractant (TBP) the strip is
+            what lowers the nitrate, so None (the default) resolves to
+            ``min(nitrate_conc, DEFAULT_STRIP_NITRATE)``, 1 M: the bottom of
+            the 1-6 M window the TBP coefficients are documented for (see the
+            TBP record in ``extractants.yaml``). A water strip goes lower
+            still, but below 1 M the correlation is extrapolated. For a
+            cation-exchange extractant nitrate does not enter ``D`` and None
+            resolves to ``nitrate_conc``. One nitrate used to reach every
+            section, so a TBP circuit's strip D equalled its extraction D and
+            nothing stripped (2026 operating-point audit, R8).
         capacity_sharpness: Sharpness k of the extraction section's smooth
             loading limiters; see REEExtractorParams (#193).
     """
@@ -103,12 +114,27 @@ class ExtractScrubStripParams(ParamsMixin):
     scrub_to_solvent_ratio: float = 0.2
     strip_to_solvent_ratio: float = 0.5
     nitrate_conc: float | None = None  # see #195
+    strip_nitrate_conc: float | None = None  # audit R8
+
+    #: Default strip nitrate (M) for a solvating extractant (audit R8).
+    DEFAULT_STRIP_NITRATE = 1.0
     mechanism: str | None = None  # see #195
     capacity_sharpness: int = 8  # see REEExtractorParams (#193)
 
     def __post_init__(self):
         """Resolve the record's pH defaults (#270); check the labels (#288)."""
         from difflow_ree.database import default_pH
+
+        # (audit R8) A solvating extractant strips by lowering the nitrate;
+        # one nitrate for every section made strip D equal extraction D.
+        if self.strip_nitrate_conc is None:
+            from difflow_ree.database import get_extractant
+
+            solvating = (self.mechanism or get_extractant(self.extractant).mechanism) == "solvating"
+            self.strip_nitrate_conc = (
+                min(self.nitrate_conc, self.DEFAULT_STRIP_NITRATE)
+                if solvating and self.nitrate_conc is not None
+                else self.nitrate_conc)
 
         if isinstance(self.target_elements, str):
             raise TypeError(
@@ -249,7 +275,7 @@ class ExtractScrubStripCircuit:
             diluent=params.diluent,
             pH=params.stripping_pH,
             extractant_conc=params.extractant_conc,
-            nitrate_conc=params.nitrate_conc,  # see #195
+            nitrate_conc=params.strip_nitrate_conc,  # audit R8
             mechanism=params.mechanism,  # see #195
         ))
 

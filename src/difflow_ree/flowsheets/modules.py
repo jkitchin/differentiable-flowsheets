@@ -384,7 +384,7 @@ class ExtractScrubStripModule(REEModule):
             diluent=params.diluent,
             pH=params.stripping_pH,
             extractant_conc=params.extractant_conc,
-            nitrate_conc=params.nitrate_conc,
+            nitrate_conc=params.strip_nitrate_conc,  # audit R8
             mechanism=params.mechanism,
         ))
         self.wrapped_classes = (REEExtractor, REEScrubber, REEStripper)
