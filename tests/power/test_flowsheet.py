@@ -209,3 +209,78 @@ def test_a_branching_feeder_is_not_a_ladder():
 def test_stream_names_are_stable():
     assert dp.bus_stream_name("n1") == "bus_n1"
     assert dp.branch_stream_name("t0") == "branch_t0"
+
+
+# -- every injection is in the ladder (audit, 2026-10) ----------------------
+#
+# The builder used to place a LoadDraw per non-root bus and nothing else:
+# a root-bus load, every shunt and every non-slack generator were dropped,
+# and a tapped branch stored against the chain kept its impedance
+# unreferred, all while the solve reported convergence. Each variant below
+# failed by the amount in its comment; RadialFeederFlowsheet and Newton
+# agree on all of them to 1e-12.
+
+
+def _ladder_variant(variant):
+    from difflow_power.network import Branch, Generator, Load
+
+    net = ladder_network()
+    buses, branches = dict(net.buses), dict(net.branches)
+    gens, loads = dict(net.generators), dict(net.loads)
+    if variant == "root_load":          # infeed was 0.800 MW low
+        loads["d0"] = Load("s", 0.80, 0.30)
+    elif variant == "shunt":            # 0.195 MW, 1.6e-3 pu off
+        buses["n3"] = replace(buses["n3"], g_shunt_mw=0.2, b_shunt_mvar=0.3)
+    elif variant == "root_shunt":
+        buses["s"] = replace(buses["s"], g_shunt_mw=0.1, b_shunt_mvar=-0.2)
+    elif variant == "dg":               # 0.533 MW, 7.4e-3 pu off
+        gens["pv"] = Generator("n3", 0.0, 1.0, 0.0, 0.0, cost=(0.0,),
+                               p_mw=0.5, q_mvar=0.1)
+    elif variant == "tap_reversed":     # 0.0043 MW, 1.9e-3 pu off
+        branches["t1"] = Branch("n2", "n1", 0.045, 0.050, 0.02, tap=1.05,
+                                shift=0.03)
+    return PowerNetwork(name="ladder-" + variant, base_mva=net.base_mva,
+                        buses=buses, branches=branches, generators=gens,
+                        loads=loads)
+
+
+@pytest.mark.parametrize(
+    "variant", ["root_load", "shunt", "root_shunt", "dg", "tap_reversed"]
+)
+def test_ladder_flowsheet_carries_every_injection(variant):
+    net = _ladder_variant(variant)
+    flowsheet, order = build_ladder_flowsheet(net)
+    streams = flowsheet.solve(
+        tear_initial={"infeed": power_stream(0.35, 0.14, 1.02, 0.0)},
+        tol=1e-13, max_iter=100, clip_negative_flows=False,
+    )
+    assert flowsheet.last_solve_converged
+    sweep = RadialFeederFlowsheet(net).solve()
+    reference = dp.solve_power_flow(net)
+    for bus in order:
+        for slot in ("P", "T"):         # voltage magnitude and angle
+            assert float(streams[f"bus_{bus}"][slot]) == pytest.approx(
+                float(sweep[f"bus_{bus}"][slot]), abs=1e-9
+            )
+    # The infeed is the slack's whole output, root load and shunt included.
+    assert float(streams["infeed"]["F_P"]) * net.base_mva == pytest.approx(
+        reference.pg_mw["sub"], abs=1e-7
+    )
+    assert float(streams["infeed"]["F_Q"]) * net.base_mva == pytest.approx(
+        reference.qg_mvar["sub"], abs=1e-7
+    )
+
+
+def test_ladder_flowsheet_refuses_a_downstream_pv_bus():
+    from difflow_power.network import Generator
+
+    net = ladder_network()
+    gens = dict(net.generators)
+    gens["pv"] = Generator("n3", 0.0, 1.0, -1.0, 1.0, p_mw=0.5)
+    pv_net = PowerNetwork(
+        name="ladder-pv", base_mva=net.base_mva,
+        buses={**net.buses, "n3": replace(net.buses["n3"], kind="pv")},
+        branches=net.branches, generators=gens, loads=net.loads,
+    )
+    with pytest.raises(ValueError, match="PV buses"):
+        build_ladder_flowsheet(pv_net)
