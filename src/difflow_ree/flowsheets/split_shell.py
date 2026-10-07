@@ -29,6 +29,7 @@ from difflow.numerics import safe_divide
 from difflow.params_mixin import ParamsMixin
 from difflow.streams import Stream, make_stream, get_flows
 from difflow_ree.equilibrium.distribution import REEDistribution
+from difflow_ree.units.kremser import kremser_two_inlet
 
 
 @dataclass(repr=False)
@@ -40,15 +41,30 @@ class SplitShellParams(ParamsMixin):
         elements: All REE elements
         diluent: Organic diluent name (e.g., "kerosene", "n-dodecane")
         n_stages: Total number of stages
-        split_points: Stage numbers where products are withdrawn
-        product_groups: Element groups for each product
-        pH: Operating pH. None (the default) resolves through
-            :func:`difflow_ree.database.default_pH` to the extractant record's
-            own scrubbing pH -- a quarter of the way up its fitted validity
-            window (#270). A split-shell cascade withdraws different element
-            groups at different stages, which only happens where D straddles
-            one across the element set; at the top of the window every element
-            is quantitatively extracted and every product is the feed.
+        split_points: Stage numbers where products are withdrawn. Strictly
+            increasing, each in ``[1, n_stages - 1]``; anything else is
+            rejected (a duplicate or out-of-range split used to run extra
+            stages and report reversed stage ranges, audit a).
+        product_groups: Element groups, one per cascade section in the order
+            the aqueous meets them (most extractable first), optionally with
+            one more group for the raffinate. When given and neither ``pH``
+            nor ``section_pHs`` is, each section runs at its own pH, read off
+            the D curves at the cascade's actual O/A when it is called: the
+            pH where the geometric-mean ``D * (O/A)`` of the boundary pair
+            (the section's least extractable member, the most extractable
+            element still to come) is one, or, for a final group with no
+            raffinate group after it, where its least extractable member has
+            ``D * (O/A) = 10`` (:mod:`difflow_ree.equilibrium.operating_points`).
+            This field used to be stored and never read, so every section ran
+            at one pH and the cascade made one useful split (audit R7).
+        pH: Operating pH for every section. None (the default) uses the
+            ``product_groups`` cuts when groups are given, and otherwise
+            resolves through :func:`difflow_ree.database.default_pH` to the
+            extractant record's own scrubbing pH -- a quarter of the way up
+            its fitted validity window (#270). One pH puts one D crossing in
+            the cascade, so without groups expect one useful split.
+        section_pHs: Explicit pH per section (``len(split_points) + 1``
+            values); overrides both of the above.
         extractant_conc: Extractant concentration
         nitrate_conc: Aqueous nitrate concentration (M), required for solvating
             extractants such as TBP whose D is nitrate- rather than pH-driven
@@ -73,32 +89,84 @@ class SplitShellParams(ParamsMixin):
     solvent_to_feed_ratio: float = 1.0
     nitrate_conc: float | None = None  # see #195
     mechanism: str | None = None  # see #195
+    section_pHs: tuple[float, ...] | None = None  # audit R7
 
     def __post_init__(self):
-        """Resolve a pH default that the extractant record owns (#270)."""
-        if self.pH is None:
+        """Check the splits and groups; resolve the pH default (#270, R7)."""
+        self.split_points = tuple(int(sp) for sp in self.split_points)
+        sp = self.split_points
+        if any(b <= a for a, b in zip(sp, sp[1:])) or \
+                any(not 1 <= x <= self.n_stages - 1 for x in sp):
+            raise ValueError(
+                f"split_points {sp} must be strictly increasing and each in "
+                f"[1, n_stages - 1] = [1, {self.n_stages - 1}]: a duplicate "
+                f"makes an empty section and a split at or past n_stages runs "
+                f"stages the cascade does not have.")
+        n_sections = len(sp) + 1
+        if self.section_pHs is not None:
+            self.section_pHs = tuple(float(x) for x in self.section_pHs)
+            if len(self.section_pHs) != n_sections:
+                raise ValueError(
+                    f"section_pHs has {len(self.section_pHs)} values for "
+                    f"{n_sections} sections.")
+        if self.product_groups is not None:
+            groups = {k: tuple(v) for k, v in dict(self.product_groups).items()}
+            unknown = sorted({e for g in groups.values() for e in g}
+                             - set(self.elements))
+            if unknown:
+                raise ValueError(
+                    f"product_groups name {unknown}, which are not in "
+                    f"elements {tuple(self.elements)}.")
+            if len(groups) not in (n_sections, n_sections + 1):
+                raise ValueError(
+                    f"product_groups has {len(groups)} groups for "
+                    f"{n_sections} sections: give one per section, or one "
+                    f"more for the raffinate.")
+            self.product_groups = groups
+        if self.pH is None and (self.product_groups is None
+                                or self.section_pHs is not None):
             from difflow_ree.database import default_pH
 
             self.pH = default_pH(self.extractant, "scrubbing")
 
+    def resolve_section_pHs(self, phase_ratio: float) -> tuple[float, ...]:
+        """The pH of every section at the cascade's ``O/A``.
 
-def _kremser_fraction_extracted(E, n_stages):
-    """Kremser equation: fraction extracted in n_stages counter-current stages.
+        Args:
+            phase_ratio: ``F_org / F_aq`` as the cascade computes it.
 
-    Args:
-        E: Extraction factor D * (F_org / F_aq)
-        n_stages: Number of stages in section
+        Returns:
+            One pH per section; see ``product_groups`` for the rule.
+        """
+        n_sections = len(self.split_points) + 1
+        if self.section_pHs is not None:
+            return self.section_pHs
+        if self.pH is not None:
+            return (float(self.pH),) * n_sections
+        from difflow_ree.equilibrium.distribution import REEDistribution
+        from difflow_ree.equilibrium.operating_points import CUT_FACTOR, pH_where
 
-    Returns:
-        Fraction of solute extracted into organic phase
-    """
-    E_Np1 = jnp.power(E, n_stages + 1)
-    frac_extracted = jnp.where(
-        jnp.abs(E - 1.0) < 1e-6,
-        n_stages / (n_stages + 1.0),
-        safe_divide(E_Np1 - E, E_Np1 - 1.0),
-    )
-    return jnp.clip(frac_extracted, 0.0, 1.0)
+        dist = REEDistribution(
+            self.extractant, tuple(self.elements),
+            concentration=self.extractant_conc,
+            nitrate_conc=self.nitrate_conc, mechanism=self.mechanism,
+            on_out_of_range="ignore")
+        lo, hi = dist._ext_data.valid_ph_range
+        D_mid = dist.get_D_all(pH=0.5 * (lo + hi))
+        groups = list(self.product_groups.values())
+        pHs = []
+        for k in range(n_sections):
+            group = groups[k]
+            later = tuple(e for g in groups[k + 1:] for e in g)
+            weakest = min(group, key=lambda e: float(D_mid[e]))
+            if later:
+                strongest = max(later, key=lambda e: float(D_mid[e]))
+                pHs.append(pH_where(dist, (weakest, strongest),
+                                    CUT_FACTOR["extraction"], phase_ratio))
+            else:
+                pHs.append(pH_where(dist, (weakest,),
+                                    CUT_FACTOR["bulk_extraction"], phase_ratio))
+        return tuple(pHs)
 
 
 class SplitShellCascade:
@@ -107,9 +175,10 @@ class SplitShellCascade:
     Produces multiple REE products by withdrawing streams
     at different points along a counter-current cascade.
 
-    The cascade is solved using a fixed-point iteration: each section
-    receives the raffinate from the previous section as its aqueous feed.
-    Iteration continues until the inter-stage flows converge.
+    Each section receives the raffinate of the previous one as its aqueous
+    feed and is solved once, in order, with the two-inlet Kremser equation.
+    With ``product_groups`` each section runs at the pH that cuts its group
+    from the rest (audit R7).
 
     Example:
         >>> params = SplitShellParams(
@@ -142,6 +211,7 @@ class SplitShellCascade:
         "n_stages": "-",
         "split_points": "-",
         "pH": "-",
+        "section_pHs": "-",  # audit R7
         "extractant_conc": "mol/L",
         "solvent_to_feed_ratio": "-",
         "nitrate_conc": "mol/L",
@@ -179,25 +249,22 @@ class SplitShellCascade:
         through all sections as a single stream; after extracting material
         from each section it is collected as the product for that section.
 
-        Fixed-point iteration is used so that the organic loading entering
-        each section is self-consistent with the aqueous composition leaving
-        that section.  In practice, because the sections share a single
-        counter-current organic stream the iteration converges in a small
-        number of steps.
+        Each section is solved once, in order, since its aqueous inlet is
+        the previous section's raffinate. REE carried in on the solvent
+        enter the last section, where the solvent enters.
 
         Args:
             feed: Aqueous feed
             solvent: Organic solvent
             T: Temperature (K)
-            max_iter: Maximum fixed-point iterations
-            tol: Convergence tolerance on element flows (mol/s)
+            max_iter: Unused; kept for compatibility (one pass suffices).
+            tol: Unused; kept for compatibility.
 
         Returns:
             Dictionary with products and stage profiles
         """
         p = self.params
         T = jnp.asarray(T)
-        pH = jnp.asarray(p.pH)
 
         feed_flows = get_flows(feed)
         solvent_flows = get_flows(solvent)
@@ -207,118 +274,60 @@ class SplitShellCascade:
         F_diluent = solvent_flows.get(p.diluent, 1.0)
         F_org = F_extractant + F_diluent
 
-        # Get D values (constant throughout the cascade)
-        D_values = self._distribution.get_D_all(pH, T)
+        # Each section at its own pH (audit R7): from product_groups cuts at
+        # this O/A, from section_pHs, or one pH for all.
+        section_pHs = p.resolve_section_pHs(float(F_org) / float(F_aq))
+        D_sections = [self._distribution.get_D_all(jnp.asarray(ph), T)
+                      for ph in section_pHs]
+        D_values = D_sections[0]
 
-        # Section boundaries: list of (start_stage, end_stage) tuples
+        # Section sizes from the (validated, strictly increasing) splits.
         n_total = p.n_stages
-        splits = sorted(p.split_points) + [n_total]
+        splits = list(p.split_points) + [n_total]
         n_sections = len(splits)
         section_stages = []
         stage_start = 0
         for split_stage in splits:
-            n_section = split_stage - stage_start
-            section_stages.append(max(n_section, 1))
+            section_stages.append(split_stage - stage_start)
             stage_start = split_stage
 
         # ----------------------------------------------------------------
-        # Fixed-point iteration over inter-stage flows
+        # The aqueous passes the sections in order; section k's organic
+        # extract is product k. The solvent enters counter-currently at the
+        # raffinate end, so REE it already carries enter the LAST section
+        # as its organic inlet and are partitioned there (two-inlet
+        # Kremser): what the aqueous takes back leaves in the raffinate,
+        # the rest with that section's product. Solvent REE used to be
+        # ignored while the closure still read 1.0 (audit a).
         #
-        # State: for each element, the aqueous flow entering each section.
-        # Section 0 always receives the original feed.
-        # Section k (k>0) receives the raffinate of section k-1.
-        # ----------------------------------------------------------------
-
-        # Initialise: assume equal partition across sections
-        # section_aq_in[k][elem] = aqueous flow of elem entering section k
-        section_aq_in = []
-        for k in range(n_sections):
-            if k == 0:
-                section_aq_in.append({
-                    elem: float(feed_flows.get(elem, 0.0))
-                    for elem in p.elements
-                })
-            else:
-                # Start with zero -- will be updated in first iteration
-                section_aq_in.append({elem: 0.0 for elem in p.elements})
-
-        for _iter in range(max_iter):
-            prev_aq_in = [dict(s) for s in section_aq_in]
-
-            # Forward pass: section 0 → section n_sections-1
-            for k in range(n_sections):
-                n_sec = section_stages[k]
-                for elem in p.elements:
-                    D = float(D_values[elem])
-                    E = D * F_org / F_aq
-                    F_in = section_aq_in[k][elem]
-
-                    frac_ext = float(_kremser_fraction_extracted(
-                        jnp.asarray(E), jnp.asarray(float(n_sec))
-                    ))
-
-                    F_raffinate = F_in * (1.0 - frac_ext)
-
-                    # Aqueous feed to next section is raffinate of this one
-                    if k + 1 < n_sections:
-                        section_aq_in[k + 1][elem] = F_raffinate
-
-            # Check convergence: max change in any inter-section flow
-            converged = True
-            for k in range(1, n_sections):
-                for elem in p.elements:
-                    delta = abs(
-                        section_aq_in[k][elem] - prev_aq_in[k][elem]
-                    )
-                    if delta > tol:
-                        converged = False
-                        break
-                if not converged:
-                    break
-
-            if converged:
-                break
-
-        # ----------------------------------------------------------------
-        # Collect results: compute extracted (organic) flows per section
-        # and the final aqueous raffinate.
-        #
-        # Physical convention:
-        #   product_1 ... product_n  : organic extracts from each section
-        #   raffinate                : final aqueous stream (unextracted)
-        #
-        # Mass balance:
-        #   sum(product_k[elem]) + raffinate[elem] = feed[elem]
+        # The sections are solved in one sequential pass: each one's
+        # aqueous inlet is the previous one's raffinate, which is known, so
+        # the fixed-point iteration this replaced always converged on its
+        # second pass. ``converged_in_iter`` is kept and reports 1.
         # ----------------------------------------------------------------
         products = {}
+        aq = {elem: jnp.asarray(feed_flows.get(elem, 0.0)) for elem in p.elements}
         stage_start = 0
-
         for i, (split_stage, n_sec) in enumerate(zip(splits, section_stages)):
+            last = i == n_sections - 1
             section_flows = {}
-            raffinate_flows = {}
             for elem in p.elements:
-                D = float(D_values[elem])
-                E = D * F_org / F_aq
-                F_in = section_aq_in[i][elem]
-
-                frac_ext = float(_kremser_fraction_extracted(
-                    jnp.asarray(E), jnp.asarray(float(n_sec))
-                ))
-                section_flows[elem] = F_in * frac_ext          # organic
-                raffinate_flows[elem] = F_in * (1.0 - frac_ext)  # remaining aqueous
-
-            product_name = f"product_{i + 1}"
-            products[product_name] = {
+                D = D_sections[i][elem]
+                F_org_in = jnp.asarray(solvent_flows.get(elem, 0.0)) if last else 0.0
+                F_raff, F_ext = kremser_two_inlet(
+                    D, F_aq, F_org, aq[elem], F_org_in, float(n_sec))
+                section_flows[elem] = F_ext
+                aq[elem] = F_raff
+            products[f"product_{i + 1}"] = {
                 "stage_range": (stage_start, split_stage),
                 "flows": section_flows,
+                "pH": section_pHs[i],
             }
-
             stage_start = split_stage
 
-        # Final aqueous raffinate: unextracted remainder from the last section
         products["raffinate"] = {
             "stage_range": (splits[-1], splits[-1]),
-            "flows": raffinate_flows,
+            "flows": dict(aq),
         }
 
         # Calculate product compositions
@@ -329,9 +338,10 @@ class SplitShellCascade:
                 for elem, flow in prod["flows"].items()
             }
 
-        # Mass balance verification
+        # Mass balance: everything that entered, feed AND solvent.
         feed_total = {
-            elem: jnp.asarray(float(feed_flows.get(elem, 0.0)))
+            elem: jnp.asarray(float(feed_flows.get(elem, 0.0))
+                              + float(solvent_flows.get(elem, 0.0)))
             for elem in p.elements
         }
         product_total = {
@@ -348,9 +358,10 @@ class SplitShellCascade:
         return {
             "products": products,
             "D_values": D_values,
+            "section_pHs": section_pHs,
             "n_stages": n_total,
             "split_points": list(p.split_points),
-            "converged_in_iter": _iter + 1,
+            "converged_in_iter": 1,
             "mass_balance": {
                 "feed": feed_total,
                 "product": product_total,

@@ -30,7 +30,6 @@ from jax import Array
 from difflow.numerics import safe_divide
 from difflow.params_mixin import ParamsMixin
 from difflow.streams import Stream, combine_streams, make_stream, get_flows
-from difflow_ree.database import get_extractant
 from difflow_ree.equilibrium.distribution import REEDistribution
 from difflow_ree.units.cerium import CeriumOxidizer, CeriumOxidizerParams
 from difflow_ree.units.extraction import REEExtractor, REEExtractorParams
@@ -159,38 +158,25 @@ class GroupSeparator:
         # longer sat between the groups -- circuit 1 extracted the light REE
         # at D >= 10, and stripping at the bottom of the window left the heavy
         # REE on the solvent at D ~ 100 -- so the "heavy" product was light
-        # REE and the heavies never came off. Reading them off the D curves
-        # puts every section at its cut, wherever a refit moves the curves.
-        lo, hi = get_extractant(extractant).valid_ph_range
-        span = hi - lo
+        # REE and the heavies never came off. The circuits now resolve every
+        # pH left as None from the D curves themselves, at the phase ratios
+        # their units run at (difflow_ree.equilibrium.operating_points, the
+        # shared form of the cut logic #372 put here), so this class leaves
+        # them None and reads back what they chose.
         self._distribution = REEDistribution(
             extractant, elements, nitrate_conc=nitrate_conc,
             mechanism=mechanism, on_out_of_range="ignore")
-        heavy_rest = tuple(e for e in elements if e not in self.heavy_elements)
-        c1 = self._cut_pHs(self.heavy_elements, heavy_rest,
-                           fallback=(lo + 0.500 * span, lo + 0.250 * span, lo))
-        c2 = self._cut_pHs(self.middle_elements, self.light_elements,
-                           fallback=(lo + 0.625 * span, lo + 0.375 * span, lo))
-        c1_extraction_pH, c1_scrubbing_pH, c1_stripping_pH = c1
-        c2_extraction_pH, c2_scrubbing_pH, c2_stripping_pH = c2
-        self.operating_pH = {
-            "heavy_circuit": dict(zip(("extraction", "scrubbing", "stripping"), c1)),
-            "middle_circuit": dict(zip(("extraction", "scrubbing", "stripping"), c2)),
-        }
 
         # Circuit 1: Separate heavy from light+middle (skipped without heavies)
         self._heavy_circuit = None if not self.heavy_elements else \
             ExtractScrubStripCircuit(ExtractScrubStripParams(
             extractant=extractant,
             elements=elements,
-            target_elements=self.heavy_elements,
+            target_elements=self.heavy_elements,  # sets the heavy / rest cut
             diluent=diluent,
             n_extraction_stages=10,
             n_scrubbing_stages=8,
             n_stripping_stages=5,
-            extraction_pH=c1_extraction_pH,  # the heavy / rest cut
-            scrubbing_pH=c1_scrubbing_pH,    # wash co-extracted light + middle
-            stripping_pH=c1_stripping_pH,    # strip every heavy
             nitrate_conc=nitrate_conc,  # see #195
             mechanism=mechanism,  # see #195
             capacity_sharpness=capacity_sharpness,  # see #193
@@ -203,18 +189,27 @@ class GroupSeparator:
             ExtractScrubStripCircuit(ExtractScrubStripParams(
             extractant=extractant,
             elements=light_middle,
-            target_elements=self.middle_elements,
+            target_elements=self.middle_elements,  # sets the middle / light cut
             diluent=diluent,
             n_extraction_stages=10,
             n_scrubbing_stages=6,
             n_stripping_stages=5,
-            extraction_pH=c2_extraction_pH,
-            scrubbing_pH=c2_scrubbing_pH,
-            stripping_pH=c2_stripping_pH,
             nitrate_conc=nitrate_conc,  # see #195
             mechanism=mechanism,  # see #195
             capacity_sharpness=capacity_sharpness,  # see #193
         ))
+
+        def _pHs(circuit):
+            if circuit is None:
+                return None
+            p = circuit.params
+            return {"extraction": p.extraction_pH, "scrubbing": p.scrubbing_pH,
+                    "stripping": p.stripping_pH}
+
+        self.operating_pH = {
+            "heavy_circuit": _pHs(self._heavy_circuit),
+            "middle_circuit": _pHs(self._middle_circuit),
+        }
 
     def __call__(
         self,
@@ -272,57 +267,6 @@ class GroupSeparator:
         }
 
         return light, middle, heavy, info
-
-    #: D x (O/A) at the boundary of each section: the extraction cut (O/A
-    #: 1), the scrub cut (scrub/organic 0.2, the circuit's default ratio) and
-    #: the strip, where the most strongly held target must come off with
-    #: D x (O/A) = 0.1 at the circuit's strip O/A of 2.
-    CUT_D = {"extraction": 1.0, "scrubbing": 0.2, "stripping": 0.05}
-
-    def _pH_where(self, elements: tuple[str, ...], D_target: float,
-                  how: str = "mean") -> float:
-        """The pH at which D of ``elements`` (their geometric mean, or the
-        largest) equals ``D_target``, by bisection; D rises with pH."""
-        import math
-
-        def log_D(pH):
-            D = self._distribution.get_D_all(pH=pH)
-            logs = [math.log10(max(float(D[e]), 1e-300)) for e in elements]
-            return max(logs) if how == "max" else sum(logs) / len(logs)
-
-        target = math.log10(D_target)
-        a, b = -4.0, 10.0
-        for _ in range(80):
-            m = 0.5 * (a + b)
-            if log_D(m) < target:
-                a = m
-            else:
-                b = m
-        return 0.5 * (a + b)
-
-    def _cut_pHs(self, targets: tuple[str, ...], rejected: tuple[str, ...],
-                 fallback: tuple[float, float, float]) -> tuple[float, float, float]:
-        """Extraction, scrubbing and stripping pH for one circuit.
-
-        The boundary pair is the least extractable target and the most
-        extractable element to reject; each section sits where their mean D
-        meets that section's cut. A D that does not move with pH (a
-        solvating extractant such as TBP, driven by nitrate) has no pH cut,
-        and the window fractions are kept.
-        """
-        if not targets or not rejected:
-            return fallback
-        D_lo = self._distribution.get_D_all(pH=0.0)
-        D_hi = self._distribution.get_D_all(pH=2.0)
-        if all(abs(float(D_hi[e]) - float(D_lo[e])) <= 1e-12 * max(abs(float(D_lo[e])), 1.0)
-               for e in targets + rejected):
-            return fallback
-        weakest_target = min(targets, key=lambda e: float(D_hi[e]))
-        strongest_rejected = max(rejected, key=lambda e: float(D_hi[e]))
-        pair = (weakest_target, strongest_rejected)
-        return (self._pH_where(pair, self.CUT_D["extraction"]),
-                self._pH_where(pair, self.CUT_D["scrubbing"]),
-                self._pH_where(targets, self.CUT_D["stripping"], how="max"))
 
     def _empty_like(self, feed: Stream) -> Stream:
         """A stream at the feed's conditions carrying no REE."""
@@ -442,7 +386,12 @@ class FullSeparationTrain:
 
         # Step 1: Ce removal
         if self._ce_oxidizer is not None:
-            ce_depleted, ceo2_solid, ce_info = self._ce_oxidizer(current_stream, T)
+            # The oxidizer runs at its own temperature (80 C). Passing the
+            # train T (298.15 K, the solvent-extraction temperature) through
+            # used to override it, and the Arrhenius factor cut the Ce
+            # removal of a default train to 8 % (2026 operating-point audit,
+            # R4).
+            ce_depleted, ceo2_solid, ce_info = self._ce_oxidizer(current_stream)
             results["products"]["CeO2"] = ceo2_solid
             results["info"]["ce_removal"] = ce_info
             current_stream = ce_depleted

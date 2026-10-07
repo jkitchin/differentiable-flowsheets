@@ -42,26 +42,33 @@ class ExtractScrubStripParams(ParamsMixin):
     Attributes:
         extractant: Extractant name
         elements: All REE elements to track
-        target_elements: Elements counted as the product. REPORTING ONLY
-            (#288): the three sections are driven by their pH values, stage
-            counts and phase ratios, and every element in ``elements`` goes
-            through the same equations whatever is listed here. It selects
-            which elements ``target_recovery``, ``target_purity`` and
-            ``impurity_rejection`` are computed over. Must be a subset of
+        target_elements: Elements counted as the product. The three sections
+            are driven by their pH values, stage counts and phase ratios, and
+            every element in ``elements`` goes through the same equations
+            whatever is listed here (#288). It selects which elements
+            ``target_recovery``, ``target_purity`` and ``impurity_rejection``
+            are computed over, and, for any section pH left as None, which
+            boundary that pH is cut at (2026 operating-point audit, R1); with
+            every pH given it moves no flow. Must be a subset of
             ``elements``.
         diluent: Organic diluent name (e.g., "kerosene", "n-dodecane")
         n_extraction_stages: Number of extraction stages
         n_scrubbing_stages: Number of scrubbing stages
         n_stripping_stages: Number of stripping stages
-        extraction_pH: pH in extraction section. None (the default) resolves
-            to the extractant record's own default extraction pH -- the top of
-            its fitted validity window -- through
-            :func:`difflow_ree.database.default_pH` (#270).
-        scrubbing_pH: pH in scrubbing section. None resolves to a quarter of
-            the way up that window, where the light REE the extract picked up
-            have D below one and the heavy REE do not.
-        stripping_pH: pH in stripping section. None resolves to the bottom of
-            the window.
+        extraction_pH: pH in extraction section. None (the default) is read
+            off the extractant's D curves
+            (:func:`difflow_ree.equilibrium.operating_points.cut_pHs`): with
+            targets, where the geometric-mean ``D * (O/A)`` of the boundary
+            pair (least extractable target, most extractable non-target) is
+            one; without, where every element has ``D * (O/A) >= 10``.
+        scrubbing_pH: pH in scrubbing section. None resolves to where the
+            boundary pair's mean ``D`` equals the scrub aqueous/organic ratio
+            (the extraction pH when there are no targets).
+        stripping_pH: pH in stripping section. None resolves to where the
+            most strongly held target (every element, without targets) has
+            ``D * (O/A) = 0.1``. Heavy REE on D2EHPA need strong acid, below
+            the fitted window; the distribution warns about the
+            extrapolation when the section runs.
         extractant_conc: Extractant concentration (M)
         solvent_to_feed_ratio: O/A in extraction
         scrub_to_solvent_ratio: Scrub/O ratio
@@ -74,6 +81,17 @@ class ExtractScrubStripParams(ParamsMixin):
             REEDistribution ("cation_exchange" / "solvating"). None takes the
             mechanism from the extractant record (#195). Threaded to all
             three sections, so a circuit never mixes mechanisms.
+        strip_nitrate_conc: Aqueous nitrate concentration (M) in the
+            stripping section. For a solvating extractant (TBP) the strip is
+            what lowers the nitrate, so None (the default) resolves to
+            ``min(nitrate_conc, DEFAULT_STRIP_NITRATE)``, 1 M: the bottom of
+            the 1-6 M window the TBP coefficients are documented for (see the
+            TBP record in ``extractants.yaml``). A water strip goes lower
+            still, but below 1 M the correlation is extrapolated. For a
+            cation-exchange extractant nitrate does not enter ``D`` and None
+            resolves to ``nitrate_conc``. One nitrate used to reach every
+            section, so a TBP circuit's strip D equalled its extraction D and
+            nothing stripped (2026 operating-point audit, R8).
         capacity_sharpness: Sharpness k of the extraction section's smooth
             loading limiters; see REEExtractorParams (#193).
     """
@@ -84,12 +102,10 @@ class ExtractScrubStripParams(ParamsMixin):
     n_extraction_stages: int = 10
     n_scrubbing_stages: int = 5
     n_stripping_stages: int = 5
-    # (#270) None means "read it off the extractant record": the top of the
-    # fitted validity window for the extract, a quarter of the way up for the
-    # scrub, the bottom for the strip. The literals these replaced -- 3.5,
-    # 2.0, 0.5 -- were set against D2EHPA's pre-refit hand-tuned coefficients
-    # and all three sit outside the refitted window of [0.0, 2.0] or on the
-    # wrong side of a crossover it moved.
+    # None means "read it off the D curves for these targets" (see
+    # __post_init__). The literals 3.5 / 2.0 / 0.5 were pre-#270; the window
+    # fractions that replaced them (#270) did not sit between the groups
+    # (audit R1).
     extraction_pH: float | None = None
     scrubbing_pH: float | None = None
     stripping_pH: float | None = None
@@ -98,12 +114,27 @@ class ExtractScrubStripParams(ParamsMixin):
     scrub_to_solvent_ratio: float = 0.2
     strip_to_solvent_ratio: float = 0.5
     nitrate_conc: float | None = None  # see #195
+    strip_nitrate_conc: float | None = None  # audit R8
+
+    #: Default strip nitrate (M) for a solvating extractant (audit R8).
+    DEFAULT_STRIP_NITRATE = 1.0
     mechanism: str | None = None  # see #195
     capacity_sharpness: int = 8  # see REEExtractorParams (#193)
 
     def __post_init__(self):
         """Resolve the record's pH defaults (#270); check the labels (#288)."""
         from difflow_ree.database import default_pH
+
+        # (audit R8) A solvating extractant strips by lowering the nitrate;
+        # one nitrate for every section made strip D equal extraction D.
+        if self.strip_nitrate_conc is None:
+            from difflow_ree.database import get_extractant
+
+            solvating = (self.mechanism or get_extractant(self.extractant).mechanism) == "solvating"
+            self.strip_nitrate_conc = (
+                min(self.nitrate_conc, self.DEFAULT_STRIP_NITRATE)
+                if solvating and self.nitrate_conc is not None
+                else self.nitrate_conc)
 
         if isinstance(self.target_elements, str):
             raise TypeError(
@@ -123,12 +154,31 @@ class ExtractScrubStripParams(ParamsMixin):
                 "target_elements."
             )
 
-        if self.extraction_pH is None:
-            self.extraction_pH = default_pH(self.extractant, "extraction")
-        if self.scrubbing_pH is None:
-            self.scrubbing_pH = default_pH(self.extractant, "scrubbing")
-        if self.stripping_pH is None:
-            self.stripping_pH = default_pH(self.extractant, "stripping")
+        # Unset pHs come off the D curves for this circuit's own elements
+        # and targets, at the phase ratios its units really run at (2026
+        # operating-point audit, R1). The window fractions of default_pH
+        # (#270) used before scrubbed at a pH that removed only part of the
+        # La/Ce/Nd and stripped at one that left the heavies on the solvent:
+        # targets Gd/Tb/Dy/Y on D2EHPA gave a product of 0.09 % target
+        # purity and 0.2 % Y recovery. A pH the caller gives is kept.
+        if None in (self.extraction_pH, self.scrubbing_pH, self.stripping_pH):
+            from difflow_ree.equilibrium.operating_points import (
+                circuit_phase_ratios, cut_pHs)
+
+            ratios = circuit_phase_ratios(
+                self.solvent_to_feed_ratio, self.scrub_to_solvent_ratio,
+                self.strip_to_solvent_ratio, self.extractant_conc)
+            cuts = cut_pHs(
+                self.extractant, tuple(self.elements), self.target_elements,
+                extraction_OA=ratios["extraction"],
+                scrub_OA=ratios["scrubbing"], strip_OA=ratios["stripping"],
+                extractant_conc=self.extractant_conc,
+                nitrate_conc=self.nitrate_conc, mechanism=self.mechanism)
+            for duty in ("extraction", "scrubbing", "stripping"):
+                if getattr(self, f"{duty}_pH") is None:
+                    value = (getattr(cuts, duty) if cuts is not None
+                             else default_pH(self.extractant, duty))
+                    setattr(self, f"{duty}_pH", value)
 
 
 class ExtractScrubStripCircuit:
@@ -180,6 +230,7 @@ class ExtractScrubStripCircuit:
         "scrub_to_solvent_ratio": "-",
         "strip_to_solvent_ratio": "-",
         "nitrate_conc": "mol/L",
+        "strip_nitrate_conc": "mol/L",  # audit R8
         "capacity_sharpness": "-",
     }
 
@@ -225,7 +276,7 @@ class ExtractScrubStripCircuit:
             diluent=params.diluent,
             pH=params.stripping_pH,
             extractant_conc=params.extractant_conc,
-            nitrate_conc=params.nitrate_conc,  # see #195
+            nitrate_conc=params.strip_nitrate_conc,  # audit R8
             mechanism=params.mechanism,  # see #195
         ))
 
@@ -407,58 +458,150 @@ def design_extract_scrub_strip(
     target_recovery: float = 0.90,
     nitrate_conc: float | None = None,
     mechanism: str | None = None,
+    max_extraction_stages: int = 30,
+    max_scrubbing_stages: int = 30,
+    max_stripping_stages: int = 20,
+    pH_search: float = 1.0,
+    pH_step: float = 0.1,
 ) -> ExtractScrubStripParams:
-    """Design 3-section circuit for given separation.
+    """Design a 3-section circuit that meets purity and recovery targets.
+
+    Starts from the cut pHs for the target/rest boundary
+    (:func:`difflow_ree.equilibrium.operating_points.cut_pHs`) and searches
+    the extraction and scrubbing pH within ``pH_search`` of their cuts, and
+    the three stage counts, for the smallest total stage count whose predicted
+    product meets both targets. Every target element must reach
+    ``target_recovery`` (the circuit reports recovery per element), and the
+    target share of the product must reach ``target_purity``. The prediction
+    uses the D values at each candidate pH through the same Kremser fractions
+    the units evaluate, at the phase ratios the units really run at; it does
+    not model the extraction section's loading limiter, so it holds for a
+    feed well below the solvent's capacity.
+
+    The circuit does not reflux the scrub liquor, so target REE scrubbed back
+    to the aqueous are lost: the search trades scrub pH against extraction pH
+    to balance that loss against purity. The strip pH is held at its cut and
+    its stage count sized so each target strips to within a tenth of the
+    allowed recovery loss.
+
+    This replaced a design that returned 10/5/5 stages at the window-fraction
+    pHs whatever the targets, and raised ``KeyError`` for naphthenic acid
+    from a separation-factor lookup it never used (2026 operating-point
+    audit, R1).
 
     Args:
-        feed_composition: Element flows in feed (mol/s)
-        target_elements: Elements to recover
-        extractant: Extractant to use
-        target_purity: Target product purity
-        target_recovery: Target recovery of target elements
-        nitrate_conc: Aqueous nitrate concentration (M), required for solvating
-            extractants such as TBP (#195)
-        mechanism: Explicit mechanism override; see REEDistribution (#195)
+        feed_composition: Element flows in feed (mol/s); only the ratios matter.
+        target_elements: Elements to recover.
+        extractant: Extractant to use.
+        target_purity: Target product purity (target share of the product).
+        target_recovery: Target recovery of every target element.
+        nitrate_conc: Aqueous nitrate concentration (M), required for
+            solvating extractants such as TBP (#195).
+        mechanism: Explicit mechanism override; see REEDistribution (#195).
+        max_extraction_stages: Largest extraction stage count searched.
+        max_scrubbing_stages: Largest scrubbing stage count searched.
+        max_stripping_stages: Largest stripping stage count searched.
+        pH_search: Half-width of the pH search around each cut.
+        pH_step: pH grid step.
 
     Returns:
-        Recommended ExtractScrubStripParams
+        ExtractScrubStripParams with the pHs and stage counts.
+
+    Warns:
+        UserWarning: If no design in the search meets both targets; the
+            design with the best worst-case ratio of achieved to required is
+            returned.
+
+    Example:
+        >>> p = design_extract_scrub_strip(
+        ...     {"Nd": 0.01, "Dy": 0.001}, ("Dy",), "PC88A")
+        >>> p.target_elements
+        ('Dy',)
     """
+    import warnings
+
+    import numpy as np
+
     from difflow_ree.equilibrium.distribution import REEDistribution
-    from difflow_ree.database import get_sf_database
+    from difflow_ree.equilibrium.operating_points import (
+        circuit_phase_ratios, is_pH_driven, kremser_fraction, section_factors)
 
     elements = tuple(feed_composition.keys())
+    target_elements = tuple(target_elements)
+    template = ExtractScrubStripParams(
+        extractant=extractant, elements=elements,
+        target_elements=target_elements,
+        nitrate_conc=nitrate_conc, mechanism=mechanism)
+    oa = circuit_phase_ratios(
+        template.solvent_to_feed_ratio, template.scrub_to_solvent_ratio,
+        template.strip_to_solvent_ratio, template.extractant_conc)
+    dist = REEDistribution(
+        extractant, elements, concentration=template.extractant_conc,
+        nitrate_conc=nitrate_conc, mechanism=mechanism,
+        on_out_of_range="ignore")
 
-    # Get separation factors
-    sf_db = get_sf_database()
-    sf_data = sf_db.get(extractant)
+    offsets = np.round(np.arange(-pH_search, pH_search + 0.5 * pH_step, pH_step), 10)
+    if not is_pH_driven(dist, elements):
+        offsets = np.zeros(1)  # no pH lever (a solvating extractant)
+    ext_pHs = template.extraction_pH + offsets
+    scr_pHs = template.scrubbing_pH + offsets
 
-    # Determine key separation (between target and impurity)
-    impurity_elements = [e for e in elements if e not in target_elements]
+    f = np.array([float(feed_composition[e]) for e in elements])
+    is_t = np.array([e in target_elements for e in elements])
 
-    # Estimate stages based on separation factors
-    # More stages needed for lower SF
-    n_extraction = 10  # Default
-    n_scrubbing = 5  # Default
-    n_stripping = 5
+    # Strip: at its cut, sized so each target strips to (1 - loss/10).
+    S_strip = 1.0 / section_factors(dist, elements, [template.stripping_pH],
+                                    oa["stripping"])[0]
+    n_str_all = np.arange(1, max_stripping_stages + 1)
+    stripped_all = 1.0 - kremser_fraction(S_strip[None, :], n_str_all[:, None])
+    need = 1.0 - 0.1 * (1.0 - target_recovery)
+    good = (stripped_all[:, is_t] >= need).all(axis=1)
+    j = int(np.argmax(good)) if good.any() else len(n_str_all) - 1
+    n_strip = int(n_str_all[j])
+    stripped = stripped_all[j]                                       # (el,)
 
-    # Extraction pH - want all REE to extract - and scrubbing pH - want to
-    # reject light REE, keep heavy - both come off the extractant record
-    # (#270), because the window they have to sit in is a property of the
-    # coefficients and differs by a decade and a half between records.
-    from difflow_ree.database import default_pH
+    n_ext = np.arange(1, max_extraction_stages + 1)
+    n_scr = np.arange(0, max_scrubbing_stages + 1)
+    E = section_factors(dist, elements, ext_pHs, oa["extraction"])     # (pe, el)
+    S = 1.0 / section_factors(dist, elements, scr_pHs, oa["scrubbing"])  # (ps, el)
+    extracted = 1.0 - kremser_fraction(E[:, None, :], n_ext[None, :, None])  # (pe, Ne, el)
+    retained = kremser_fraction(S[:, None, :], n_scr[None, :, None])         # (ps, Ns, el)
+    # product fraction of each element: (pe, Ne, ps, Ns, el)
+    frac = (extracted[:, :, None, None, :] * retained[None, None, :, :, :]
+            * stripped)
+    recovery = frac[..., is_t].min(axis=-1)
+    product = frac * f
+    purity = product[..., is_t].sum(axis=-1) / np.maximum(product.sum(axis=-1), 1e-300)
 
-    extraction_pH = default_pH(extractant, "extraction")
-    scrubbing_pH = default_pH(extractant, "scrubbing")
+    total = n_ext[None, :, None, None] + n_scr[None, None, None, :]
+    distance = (np.abs(offsets)[:, None, None, None]
+                + np.abs(offsets)[None, None, :, None])
+    ok = (recovery >= target_recovery) & (purity >= target_purity)
+    if ok.any():
+        # fewest stages, then nearest the cuts
+        score = np.where(ok, total + 1e-3 * distance, np.inf)
+        idx = np.unravel_index(np.argmin(score), score.shape)
+    else:
+        merit = np.minimum(recovery / target_recovery, purity / target_purity)
+        idx = np.unravel_index(np.argmax(merit), merit.shape)
+        warnings.warn(
+            f"design_extract_scrub_strip: no design within the search meets "
+            f"purity {target_purity} and recovery {target_recovery} for "
+            f"{target_elements} on {extractant}; the best found predicts "
+            f"purity {purity[idx]:.4f} and minimum target recovery "
+            f"{recovery[idx]:.4f}.", UserWarning, stacklevel=2)
+    ie, ne, isc, ns = idx
 
     return ExtractScrubStripParams(
         extractant=extractant,
         elements=elements,
         target_elements=target_elements,
-        n_extraction_stages=n_extraction,
-        n_scrubbing_stages=n_scrubbing,
-        n_stripping_stages=n_stripping,
-        extraction_pH=extraction_pH,
-        scrubbing_pH=scrubbing_pH,
+        n_extraction_stages=int(n_ext[ne]),
+        n_scrubbing_stages=int(n_scr[ns]),
+        n_stripping_stages=n_strip,
+        extraction_pH=float(ext_pHs[ie]),
+        scrubbing_pH=float(scr_pHs[isc]),
+        stripping_pH=template.stripping_pH,
         nitrate_conc=nitrate_conc,  # see #195
         mechanism=mechanism,  # see #195
     )
