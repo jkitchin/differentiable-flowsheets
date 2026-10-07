@@ -1476,6 +1476,7 @@ fresh feed -> [DIP] -> reactor -> separator -> stabilizer -> [DIH] -> isomerate
                 +-> isomerate       +-> off-gas  +-> off-gas  +-> back to the reactor
 ```
 
+<!-- doc-test: skip: isomerization solve with recycle takes minutes -->
 ```python
 from difflow_refinery.isomerization import (
     IsomerizationUnit, IsomerizationUnitParams, IsomerizationReactorParams, constructed_feed)
@@ -1647,6 +1648,7 @@ Python loop.
 `isomerate_V` lever of `BlendPool.as_block`, so the blend component must be
 named `"isomerate"`:
 
+<!-- doc-test: skip: fragment: continues the isomerization example above, which is skipped -->
 ```python
 from difflow.planning import Network
 from difflow_refinery.blending import BlendPool
@@ -1724,10 +1726,19 @@ from difflow_refinery import BlendComponent, BlendPool
 reformate = BlendComponent.from_properties(
     "reformate", SG=0.80, RON=98.0, MON=88.0, RVP_psi=3.5, S_ppm=1.0,
     olefins_vol=1.0, aromatics_vol=65.0)
-# ... fcc, alkylate, butane likewise
+fcc = BlendComponent.from_properties(
+    "fcc", SG=0.74, RON=92.0, MON=80.0, RVP_psi=6.0, S_ppm=20.0,
+    olefins_vol=25.0, aromatics_vol=30.0)
+alkylate = BlendComponent.from_properties(
+    "alkylate", SG=0.70, RON=95.0, MON=93.0, RVP_psi=4.5, S_ppm=5.0,
+    olefins_vol=0.5, aromatics_vol=0.5)
+butane = BlendComponent.from_properties(
+    "butane", SG=0.58, RON=93.0, MON=90.0, RVP_psi=52.0, S_ppm=10.0,
+    olefins_vol=0.5, aromatics_vol=0.0)
+components, recipe = [reformate, fcc, alkylate, butane], [0.35, 0.35, 0.25, 0.05]
 
 pool = BlendPool("gasoline")                 # default specs: RON, MON, RVP, S
-res = pool([reformate, fcc, alkylate, butane], recipe=[0.35, 0.35, 0.25, 0.05])
+res = pool(components, recipe=recipe)
 res.properties["MON"], res.margins["MON >= 82"]
 
 pool.linear_blend_error(components, recipe)  # nonlinear minus linear-by-volume
@@ -1761,6 +1772,7 @@ Recipes can be given as `basis="volume_fraction"` (the default), `"volume_flow"`
 
 `difflow_refinery.properties` (#330) estimates the properties a stream does not carry, and `from_stream` uses them whenever no measured value is given. `estimate=True` (default) estimates every property the characterization has the inputs for, `estimate=False` none (the pre-#330 behaviour), and a list names the ones wanted.
 
+<!-- doc-test: skip: fragment: needs a characterization and product streams (jet_stream, residue, light_naphtha) from a crude unit -->
 ```python
 from difflow_refinery import BlendComponent, BlendCharacterization, properties
 
@@ -1857,6 +1869,7 @@ For products of the crude and vacuum units, use `BlendCharacterization.from_char
 
 `difflow_refinery.reforming` (#309) is a semi-regenerative catalytic reformer: hydrotreated heavy naphtha to reformate and hydrogen over three (or any number of) adiabatic reactors with fired interstage heaters, a high-pressure separator, hydrogen-rich recycle gas and a stabilizer. It is a `difflow.Flowsheet` with the recycle gas as its tear. Every output is differentiable in the reactor inlet temperatures (or WAIT), separator pressure, H2/HC ratio, space velocity and the naphtha's composition.
 
+<!-- doc-test: skip: reformer solve takes minutes -->
 ```python
 from difflow_refinery.reforming import CatalyticReformer, ReformerParams, lean_naphtha
 
@@ -2304,6 +2317,7 @@ the FCC main fractionator's logistic step generalised to `n` products. The share
 - `fr.products[name]` is an `F_<product_char.names>` stream, straight into `BlendComponent.from_stream(name, stream, fr.char)`; `fr.rates` is kg/s per product.
 - Cut points and width are traceable: `jax.grad` of a pool property with respect to a cut point is exact, checked against Richardson-extrapolated central differences at 1e-5 (release test).
 
+<!-- doc-test: skip: fragment: needs a solved hydrocracker result `res` from the section above -->
 ```python
 fr = res.fractionate(cut_points=(240 + 273.15,), products=("jet", "diesel"))
 jet = BlendPool("jet")([BlendComponent.from_stream("jet", fr.products["jet"], fr.char,
@@ -2364,6 +2378,7 @@ Both read their input through `gasplant.hydroprocessed.resolve_product(source, p
 
 Methane and ethane map to `C1` and `C2`. H2, H2S and NH3 dissolved in a wild naphtha are refused unless `drop_gases=True`; you can also fractionate them off first, since a fractionator sends them to its off-gas. The iso/normal and MCP/cyclohexane splits are `from_characterization`'s **illustrative** defaults. The feed is differentiable in the flows and in the grid's arrays.
 
+<!-- doc-test: skip: fragment: needs a solved naphtha hydrotreater `nht_res` -->
 ```python
 fr = nht_res.fractionate(cut_points=(85 + 273.15,), products=("light_naphtha", "heavy_naphtha"),
                          feeds=("product", "wild_naphtha"))
@@ -2389,6 +2404,7 @@ The table is built by `product_components(grid, gases=)` and holds three kinds o
 
 **A splitter takes no dissolved gas.** Example 40's wild naphtha carries 0.31 mol/s H2, 0.26 mol/s H2S and 0.07 mol/s C1 in about 240 mol/s, which a total condenser has no outlet for. With them in the feed, a 12-tray splitter on product plus wild naphtha does not converge (NaN after 300 iterations). Without them, it converges in about 20 iterations. In a refinery these gases leave before the splitter, in a stabilizer or the stripper's overhead drum. Pass `drop_gases=True`, or keep them and run a column that has somewhere to send them, such as a partial-condenser stabilizer.
 
+<!-- doc-test: skip: fragment: needs a solved naphtha hydrotreater `nht_res` -->
 ```python
 feed = hydroprocessed_feed(nht_res, ("product", "wild_naphtha"), T=100 + 273.15, P=4e5,
                            drop_gases=True)
@@ -2512,6 +2528,7 @@ res = unit.solve(al.c3c4_olefin_feed())         # or al.combine_feeds(fcc_c3, fc
 res.outputs["alkylate.MON"], res.outputs["dib.reboiler"]
 alkylate = res.alkylate_component(S_ppm=5.0)    # a BlendComponent for BlendPool
 
+feed = al.c3c4_olefin_feed()
 blk = al.alky_block(unit, feed, levers=["io_ratio", "reactor.T", "acid_strength"])
 al.solve_process_gms()                          # the Bracken-McCormick problem, profit 1161.3366
 ```
