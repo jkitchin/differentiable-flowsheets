@@ -40,6 +40,7 @@ from jax import Array
 
 from difflow.database import get_species_data
 from difflow.numerics import safe_log
+from difflow.streams import get_flows
 
 R_GAS = 8.314462618  # J/mol/K
 T_REF = 298.15       # K
@@ -227,8 +228,17 @@ def _fuel_arrays(components: tuple[str, ...]):
 
 
 def _fuel_x(fuel, components: tuple[str, ...]) -> Array:
-    """Normalized fuel composition array in ``components`` order."""
+    """Normalized fuel composition array in ``components`` order.
+
+    ``fuel`` is a difflow Stream (``F_<species>`` flows plus ``T``/``P``),
+    a bare ``{species: amount}`` dict, or an array in ``components``
+    order. A Stream used to be read by bare species name, which matches
+    none of its ``F_`` keys, so ``lhv_molar(stream)`` came back 0.0 and
+    ``lhv_mass(stream)`` NaN (audit of the core outlets).
+    """
     if isinstance(fuel, dict):
+        if any(isinstance(k, str) and k.startswith("F_") for k in fuel):
+            fuel = get_flows(fuel)
         x = jnp.asarray([fuel.get(c, 0.0) for c in components])
     else:
         x = jnp.asarray(fuel)
