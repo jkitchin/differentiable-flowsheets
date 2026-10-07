@@ -231,6 +231,34 @@ class TestPorts:
             "Splitter", "LLEEquilibrium", "TFF",
         } | ({"CrudeDistillationUnit", "CrudeUnitWithPreheat", "GasPlantColumn"} & set(cat))
 
+    @pytest.mark.parametrize("name,n_outlets", [
+        ("Ultrafiltration", 2),
+        ("Diafiltration", 2),
+        ("ProteinAChromatography", 2),
+        ("IonExchangeChromatography", 2),
+        ("SizeExclusionChromatography", 3),
+        ("PowerSplit", 2),
+        ("BranchFlow", 2),
+    ])
+    def test_a_nested_return_counts_its_inner_streams(self, cat, name, n_outlets):
+        """``tuple[tuple[Stream, Stream], dict]`` used to count as zero.
+
+        Only top-level entries were looked at, so seven units had no
+        outlets at all and an editor drew one (audit of the core outlets).
+        """
+        if name not in cat:
+            pytest.skip(f"{name}'s plugin is not installed")
+        assert cat[name].ports.n_outlets == n_outlets
+
+    def test_no_operation_that_returns_streams_has_zero_outlets(self, cat):
+        """The guard above checks None; a zero is a silent miscount.
+
+        Every registered operation with a ``__call__`` returns at least
+        one stream, so a count of zero is always a reading error.
+        """
+        zero = sorted(n for n, s in cat.items() if s.ports.n_outlets == 0)
+        assert zero == []
+
 
 # =============================================================================
 # Parameters
