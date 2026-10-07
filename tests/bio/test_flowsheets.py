@@ -191,3 +191,137 @@ class TestViralClearanceTrain:
 
         # in the partial-retention regime d(LRV)/d(pore) = -2 * 22 / pore^2
         assert float(jax.grad(lrv)(20.0)) == pytest.approx(-2.0 * 22.0 / 400.0)
+
+    @pytest.mark.parametrize("ph, expected", [(2.0, 0.964), (3.6, 0.98), (5.6, 0.98), (7.0, 0.98)])
+    def test_low_ph_recovery_bounded(self, harvest, ph, expected):
+        """Bio audit C9: 0.98 - 0.01*(3.6 - pH) gave 1.014 at pH 7."""
+        train = ViralClearanceTrain(ViralClearanceParams(species_order=SPECIES, low_pH_value=ph))
+        (out, loss), info = train.low_ph_inactivation(harvest)
+        assert float(info["recovery"]) == pytest.approx(expected, rel=1e-12)
+        assert float(out["F_mAb"]) <= 100.0
+        assert float(loss["F_mAb"]) >= 0.0
+
+    def test_vf_area_sets_reported_loading(self, harvest):
+        """Bio audit C9: vf_area had no effect; it now sets the loading."""
+        _, a = ViralClearanceTrain(ViralClearanceParams(vf_area_m2=1.0)).virus_filtration(harvest)
+        _, b = ViralClearanceTrain(ViralClearanceParams(vf_area_m2=2.0)).virus_filtration(harvest)
+        assert float(a["loading_g_per_m2"]) == pytest.approx(100.0)
+        assert float(b["loading_g_per_m2"]) == pytest.approx(50.0)
+
+
+def _assert_closes(feed, result):
+    """product + every side stream = feed, species by species."""
+    from difflow.streams import get_flows
+    outs = [result["product"], *result["side_streams"].values()]
+    for s, f in get_flows(feed).items():
+        total = sum(float(get_flows(o).get(s, 0.0)) for o in outs)
+        assert total == pytest.approx(float(f), rel=1e-10, abs=1e-12), s
+
+
+class TestTrainsClose:
+    """Bio audit (a)-(c): the trains returned only `product`, dropping the
+    inner outlets (19.8% of a 100 g harvest in mAbDSPTrain) and the
+    impurity every step cleared."""
+
+    @pytest.mark.parametrize("scale", [1.0, 10.0])
+    def test_mab_dsp(self, scale):
+        harvest = make_stream({"mAb": 100.0 * scale, "HCP": 5.0, "DNA": 0.5,
+                               "aggregates": 3.0}, 298.15, 101325.0)
+        res = mAbDSPTrain(mAbDSPParams(species_order=SPECIES))(harvest)
+        assert set(res["side_streams"]) == {
+            "proa_waste", "tff1_permeate", "cex_waste", "aex_bound", "tff2_permeate"}
+        _assert_closes(harvest, res)
+
+    @pytest.mark.parametrize("kw", [{}, {"include_sec": True}, {"capture_type": "cex"},
+                                    {"polish_steps": ["cex", "aex", "aex"]},
+                                    {"include_viral_filtration": False}])
+    def test_platform(self, harvest, kw):
+        p = PlatformDSPParams(species_order=SPECIES, target_species="mAb", **kw)
+        _assert_closes(harvest, PlatformDSP(p)(harvest))
+
+    def test_viral_clearance(self, harvest):
+        res = ViralClearanceTrain(ViralClearanceParams(species_order=SPECIES))(harvest)
+        _assert_closes(harvest, res)
+        assert float(res["side_streams"]["low_pH_loss"]["F_mAb"]) == pytest.approx(2.0)
+
+
+class TestMabStepYields:
+    """Bio audit (a): every step's yield is against its own inlet."""
+
+    def test_step_yields_multiply_to_overall(self, harvest):
+        res = mAbDSPTrain(mAbDSPParams(species_order=SPECIES))(harvest)
+        sy = res["step_yields"]
+        assert set(sy) == {"proa", "tff1", "cex", "aex", "tff2"}
+        # the CEX step is its own yield_factor, not CEX x TFF1 (0.8897)
+        assert float(sy["cex"]) == pytest.approx(0.90, rel=1e-12)
+        prod = 1.0
+        for v in sy.values():
+            prod *= float(v)
+        assert prod == pytest.approx(float(res["overall_yield"]), rel=1e-12)
+
+    @pytest.mark.parametrize("scale", [1.0, 10.0])
+    def test_final_cf_is_a_volume_ratio(self, scale):
+        """CF was final_concentration_g_L / mAb (g/L over g): 0.12 at 1000 g."""
+        harvest = make_stream({"mAb": 100.0 * scale, "HCP": 5.0, "DNA": 0.5,
+                               "aggregates": 3.0}, 298.15, 101325.0)
+        p = mAbDSPParams(species_order=SPECIES, proa_column_volume=10.0 * scale,
+                         cex_column_volume=20.0 * scale)
+        res = mAbDSPTrain(p)(harvest, return_intermediates=True)
+        aex_mab = float(res["intermediates"]["aex_product"]["F_mAb"])
+        pool_L = 5.0 * 20.0 * scale
+        assert float(res["final_tff_concentration_factor"]) == pytest.approx(
+            pool_L / (aex_mab / 100.0), rel=1e-12)
+        assert float(res["final_tff_concentration_factor"]) > 1.0
+        # the product ends near the target; UF rejection 0.995 loses ~2.4%
+        assert 95.0 < float(res["final_concentration_g_L"]) <= 100.0
+
+    def test_tff_area_sets_process_time(self, harvest):
+        a = mAbDSPTrain(mAbDSPParams(species_order=SPECIES, tff_area=5.0))(harvest)
+        b = mAbDSPTrain(mAbDSPParams(species_order=SPECIES, tff_area=10.0))(harvest)
+        for k in ("tff1", "tff2"):
+            assert float(a["tff_process_time_h"][k]) == pytest.approx(
+                2.0 * float(b["tff_process_time_h"][k]), rel=1e-12)
+
+    def test_aex_column_volume_caps_impurity_binding(self, harvest):
+        big = mAbDSPTrain(mAbDSPParams(species_order=SPECIES))(harvest)
+        tiny = mAbDSPTrain(mAbDSPParams(species_order=SPECIES, aex_column_volume=1e-4))(harvest)
+        assert float(tiny["hcp_ppm"]) > 5.0 * float(big["hcp_ppm"])
+
+
+class TestPlatformOptions:
+    """Bio audit (b) and C10: options that did nothing or did the wrong thing."""
+
+    def test_mmc_capture_rejected(self):
+        with pytest.raises(ValueError, match="mmc"):
+            PlatformDSP(PlatformDSPParams(species_order=SPECIES, capture_type="mmc"))
+
+    def test_unsupported_polish_rejected(self):
+        with pytest.raises(ValueError, match="hic"):
+            PlatformDSP(PlatformDSPParams(species_order=SPECIES, polish_steps=["cex", "hic"]))
+
+    def test_include_viral_filtration_toggles_the_step(self, harvest):
+        on = PlatformDSP(PlatformDSPParams(species_order=SPECIES, target_species="mAb"))
+        off = PlatformDSP(PlatformDSPParams(species_order=SPECIES, target_species="mAb",
+                                            include_viral_filtration=False))
+        assert "viral_filtration" in on.list_steps()
+        assert "viral_filtration" not in off.list_steps()
+        r_on, r_off = on(harvest), off(harvest)
+        assert float(r_on["step_yields"]["viral_filtration"]) == pytest.approx(0.97)
+        assert float(r_on["overall_yield"]) == pytest.approx(
+            0.97 * float(r_off["overall_yield"]), rel=1e-12)
+        assert "viral_filtration_lrv" in r_on
+
+    def test_target_yield_is_reported(self, harvest):
+        lo = PlatformDSP(PlatformDSPParams(species_order=SPECIES, target_species="mAb",
+                                           target_yield=0.5))(harvest)
+        hi = PlatformDSP(PlatformDSPParams(species_order=SPECIES, target_species="mAb",
+                                           target_yield=0.99))(harvest)
+        assert bool(lo["meets_target_yield"]) and not bool(hi["meets_target_yield"])
+
+    def test_tff_area_sets_uf_time(self, harvest):
+        a = PlatformDSP(PlatformDSPParams(species_order=SPECIES, target_species="mAb",
+                                          tff_area=5.0))(harvest, uf_feed_volume_L=50.0)
+        b = PlatformDSP(PlatformDSPParams(species_order=SPECIES, target_species="mAb",
+                                          tff_area=10.0))(harvest, uf_feed_volume_L=50.0)
+        assert float(a["uf_process_time_h"]) == pytest.approx(
+            2.0 * float(b["uf_process_time_h"]), rel=1e-12)

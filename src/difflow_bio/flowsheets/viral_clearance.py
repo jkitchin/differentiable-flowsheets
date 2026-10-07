@@ -20,6 +20,33 @@ from difflow.streams import Stream, make_stream, get_flows
 from difflow.numerics import safe_divide
 
 
+def _split_target(feed: Stream, target: str, recovery) -> tuple[Stream, Stream]:
+    """Split ``feed`` into (kept, lost): ``recovery`` of the target is kept.
+
+    Other species pass with the product. The lost stream carries every
+    species (zeros but the target) so the two outlets have the same keys.
+
+    Args:
+        feed: Inlet stream.
+        target: Product species name.
+        recovery: Fraction of the target kept, in [0, 1].
+
+    Returns:
+        (kept, lost) streams with kept + lost = feed.
+    """
+    flows = get_flows(feed)
+    kept, lost = {}, {}
+    for species, flow in flows.items():
+        if species == target:
+            kept[species] = flow * recovery
+            lost[species] = flow - kept[species]
+        else:
+            kept[species] = flow
+            lost[species] = jnp.zeros_like(jnp.asarray(flow, dtype=float))
+    return (make_stream(kept, feed["T"], feed["P"]),
+            make_stream(lost, feed["T"], feed["P"]))
+
+
 @dataclass(repr=False)
 class ViralClearanceParams(ParamsMixin):
     """Parameters for viral clearance train.
@@ -30,7 +57,10 @@ class ViralClearanceParams(ParamsMixin):
         low_pH_hold_time: Low pH hold duration (min)
         low_pH_value: pH for viral inactivation
         vf_membrane_pore_nm: Virus filter pore size (nm)
-        vf_area_m2: Virus filter area (m²)
+        vf_area_m2: Virus filter area (m²). Sizing only: it sets the
+            reported mass loading (``info['loading_g_per_m2']``, product
+            per m² of filter) for comparison with a filter's rated
+            capacity. The model's recovery and LRV do not depend on it.
         target_lrv: Target total log reduction value
     """
     species_order: list[str] = None
@@ -81,7 +111,7 @@ class ViralClearanceTrain:
         self,
         feed: Stream,
         target_virus: str = "MuLV",
-    ) -> tuple[Stream, dict]:
+    ) -> tuple[tuple[Stream, Stream], dict]:
         """Perform low pH viral inactivation.
 
         Low pH (3.5-3.7) denatures enveloped virus proteins,
@@ -92,7 +122,8 @@ class ViralClearanceTrain:
             target_virus: Virus model for LRV calculation
 
         Returns:
-            Tuple of (output stream, inactivation info)
+            ((output, loss), info): the held product, the product lost in
+            the hold (so output + loss = feed), and inactivation info.
         """
         p = self.params
 
@@ -108,19 +139,16 @@ class ViralClearanceTrain:
 
         lrv = base_lrv * ph_factor * time_factor
 
-        # Product recovery (typically >95% at optimized conditions)
-        recovery = 0.98 - 0.01 * (3.6 - p.low_pH_value)  # Slight loss at lower pH
+        # Product recovery: 98% at the reference pH 3.6, falling by one point
+        # per pH unit below it (acid-induced aggregation and precipitation
+        # grow as the pH drops). Above pH 3.6 the hold is milder, but no
+        # hold returns more than goes in, so recovery stays on the 98%
+        # plateau (handling losses), and it is never negative. Bio audit
+        # C9: the unbounded line gave 1.014 at pH 7, creating product.
+        pH = jnp.asarray(p.low_pH_value)
+        recovery = jnp.clip(0.98 - 0.01 * jnp.maximum(3.6 - pH, 0.0), 0.0, 1.0)
 
-        # Create output stream with reduced product
-        feed_flows = get_flows(feed)
-        out_flows = {}
-        for species, flow in feed_flows.items():
-            if species == p.target_species:
-                out_flows[species] = flow * recovery
-            else:
-                out_flows[species] = flow
-
-        output = make_stream(out_flows, feed["T"], feed["P"])
+        output, loss = _split_target(feed, p.target_species, recovery)
 
         # Values stay JAX arrays so the train can be traced (#360).
         info = {
@@ -130,13 +158,13 @@ class ViralClearanceTrain:
             "hold_time_min": p.low_pH_hold_time,
         }
 
-        return output, info
+        return (output, loss), info
 
     def virus_filtration(
         self,
         feed: Stream,
         target_virus: str = "PPV",
-    ) -> tuple[Stream, dict]:
+    ) -> tuple[tuple[Stream, Stream], dict]:
         """Perform nanofiltration for virus removal.
 
         20nm filters provide size-based removal of:
@@ -148,7 +176,9 @@ class ViralClearanceTrain:
             target_virus: Virus model for LRV calculation
 
         Returns:
-            Tuple of (output stream, filtration info)
+            ((output, loss), info): the filtrate, the product held up in
+            the filter (output + loss = feed), and filtration info,
+            including the mass loading per m² of ``vf_area_m2``.
         """
         p = self.params
 
@@ -178,25 +208,21 @@ class ViralClearanceTrain:
         # Recovery (typically 95-99%)
         recovery = 0.97
 
-        # Create output stream
-        feed_flows = get_flows(feed)
-        out_flows = {}
-        for species, flow in feed_flows.items():
-            if species == p.target_species:
-                out_flows[species] = flow * recovery
-            else:
-                out_flows[species] = flow
+        output, loss = _split_target(feed, p.target_species, recovery)
 
-        output = make_stream(out_flows, feed["T"], feed["P"])
-
+        # The area does not enter recovery or LRV in this model (bio audit
+        # C9 found it had no effect and was undocumented); it sizes the
+        # filter, so report the product loading it implies.
+        product_in = get_flows(feed).get(p.target_species, jnp.asarray(0.0))
         info = {
             "lrv": lrv,
             "recovery": recovery,
             "pore_size_nm": p.vf_membrane_pore_nm,
             "area_m2": p.vf_area_m2,
+            "loading_g_per_m2": safe_divide(product_in, jnp.asarray(p.vf_area_m2)),
         }
 
-        return output, info
+        return (output, loss), info
 
     def __call__(
         self,
@@ -210,7 +236,9 @@ class ViralClearanceTrain:
             return_details: Return detailed step information
 
         Returns:
-            Dictionary with product, LRV totals, and step details
+            Dictionary with product, LRV totals, step details, and
+            ``side_streams`` (the product lost in each step), so that
+            product + side streams = feed for every species.
         """
         p = self.params
         target = p.target_species
@@ -219,10 +247,10 @@ class ViralClearanceTrain:
         product_in = feed_flows.get(target, 0.0)
 
         # Step 1: Low pH inactivation
-        post_low_ph, low_ph_info = self.low_ph_inactivation(feed)
+        (post_low_ph, low_ph_loss), low_ph_info = self.low_ph_inactivation(feed)
 
         # Step 2: Virus filtration
-        post_vf, vf_info = self.virus_filtration(post_low_ph)
+        (post_vf, vf_loss), vf_info = self.virus_filtration(post_low_ph)
 
         # Calculate totals
         final_flows = get_flows(post_vf)
@@ -233,6 +261,10 @@ class ViralClearanceTrain:
 
         result = {
             "product": post_vf,
+            "side_streams": {
+                "low_pH_loss": low_ph_loss,
+                "virus_filtration_loss": vf_loss,
+            },
             "overall_recovery": overall_recovery,
             "total_lrv": total_lrv,
             "meets_target": total_lrv >= p.target_lrv,
