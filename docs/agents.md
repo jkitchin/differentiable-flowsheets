@@ -10,11 +10,11 @@ editor uses.
 
 ### Install
 
-The server needs the MCP SDK, which is an optional extra. The `mcp` extra
-first ships in the release after 0.2.2; until then, install from source:
+The server needs the MCP SDK, which is an optional extra (difflow 0.3.0 or
+later):
 
 ```bash
-# from PyPI (after 0.2.2)
+# from PyPI
 pip install "difflow[mcp]"
 
 # from source

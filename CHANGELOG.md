@@ -6,6 +6,92 @@ All notable changes to difflow are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-06
+
+### Breaking
+
+- The operation registry refuses a second class under a name that is already
+  registered (`ValueError`), as its docstring always said; it used to log a
+  warning and overwrite. The refinery wet-gas compressor, which silently
+  replaced the core `GasCompressor` whenever the refinery plugin was installed,
+  is registered as `WetGasCompressor` (the class is still
+  `difflow_refinery.GasCompressor`) (#359).
+- `FedBatchBioreactor`: with `m_s > 0`, maintenance uptake now tapers as
+  `S/(K_m + S)` near substrate exhaustion (new `FedBatchParams.K_m`, default
+  0.05 g/L), so results with maintenance change slightly (about 5% at
+  S = 1 g/L) (#362, #366).
+- `mAbDSPTrain` and `PlatformDSP` load the whole batch onto each column, with
+  the column volume acting as a capacity; they used to load one column volume
+  of the harvest, which gave yields of a few percent. Purity is now realistic
+  (99.4% for the mAb train, not 1.0000) (#360, #366).
+- `difflow_bio.economics.estimate_total_opex` prices each chromatography step
+  with its own resin (it priced all of them as Protein A), and it and
+  `cost_per_gram` emit a `DeprecationWarning` pointing to `cogs_breakdown`
+  (#358, #363).
+
+### Added
+
+- **`difflow mcp`**, an MCP server that lets an AI agent (Claude Code, Claude
+  Desktop or any stdio MCP client) use difflow: install with
+  `pip install "difflow[mcp]"` and register with
+  `claude mcp add difflow -- difflow mcp`. The tools are plain Python in
+  `difflow.agent` (`Workbench`), with a thin adapter in `difflow.mcp` over the
+  MCP SDK 2.x. See `docs/agents.md` (#359, #364, #365, #367, #368, #369).
+  - Discovery from the installed code, with no hand-written lists: operations
+    from the registry and catalog, library APIs from each package's `__all__`,
+    species, documentation search, examples and plugin status.
+  - Building and solving: named sessions, units with parameters in one call,
+    wiring (a loop closes as a recycle), feeds, every solver option, and solve
+    results with the loop gain, error estimate and captured warnings.
+  - `diagnose` and `converge`: findings with remedies, and a remedy search
+    judged "converged AND correct" that applies only numerics remedies and only
+    when asked, reports multiple steady states, and passes every case of the
+    convergence corpus.
+  - An expression language for objectives (`vapor.F_x / vapor.total_flow`),
+    named quantities, and `sensitivity`, `sweep`, `optimize`, `uncertainty`,
+    `linearize`, `tea` and `report`.
+  - Each plugin contributes its own agent support through a `difflow.agent`
+    entry point; `power_flow` and `power_opf` reproduce MATPOWER's benchmarks.
+  - Progress notifications for long calls, three workflow prompts, and
+    `open_in_editor`. `--no-exec` leaves out the tools that run Python.
+- `Flowsheet.last_solve_history` (the tear residual per iteration on the
+  Anderson and Wegstein paths) and `Flowsheet.last_solve_unit_info` (each
+  unit's info dict from the last concrete evaluation) (#364).
+- CSTR and Flash report `balance_residual` and `converged` for their own inner
+  solves; the editor's solve audit flags a unit whose balance did not close
+  (#364).
+- `difflow.diagnostics`: symptom cards, a remedy table, a residual-history
+  classifier and `solve_findings`, shared by the editor and the agent tools
+  (#364).
+- The catalog says what each outlet is (`PortSpec.outlet_roles`), read from the
+  unit's docstring (#368), and units may declare a `cost_basis` that the
+  catalog carries (#369).
+- `difflow.plugins.plugin_status()` reports installed plugins and why any failed
+  to load (#359).
+- `difflow_bio.economics.cogs_breakdown`: cost of goods by category and step,
+  with per-step resins, cycles from load / (DBC x CV), labor from batches and
+  steps, buffers, media, QC, single-use items and failed batches, all from data
+  (`load_cost_model`, YAML or JSON). Benchmarked against the published mAb
+  process of Petrides (Intelligen, 2015, section 11.6.3) in
+  `data/petrides2015_mab.yaml` (#358, #363).
+
+### Changed
+
+- The editor's session exposes every setting of `Flowsheet.solve` (not just
+  four) and returns the gain, error estimate, clipping and warnings with a
+  solve; its messages no longer assume a canvas. `difflow.gui` imports the HTTP
+  server lazily (#359).
+
+### Fixed
+
+- diffrax integrations can be jitted and vmapped (`int()` on solver statistics)
+  (#361, #366).
+- Fed-batch substrate no longer goes negative under starvation; the diffrax and
+  RK4 paths agree (#362, #366).
+- `mAbDSPTrain`, `PlatformDSP` and `ViralClearanceTrain` are differentiable
+  (they converted results with `float()`), and `PlatformDSP(include_sec=True)`
+  no longer raises (#360, #366).
+
 ## [0.2.2] - 2026-10-05
 
 ### Fixed
