@@ -40,6 +40,7 @@ The system is solved using `optimistix.root_find` with a Newton solver. JAX comp
 
 ### `Flowsheet.solve_eo()`
 
+<!-- doc-test: skip: signature listing, not runnable code -->
 ```python
 def solve_eo(
     self,
@@ -61,6 +62,13 @@ Solve the flowsheet using the EO approach. Returns a dictionary of all streams. 
 ### `EOSolver`
 
 ```python
+from difflow import EOSolver, Flowsheet, Heater, HeaterParams, Unit, make_stream
+
+flowsheet = Flowsheet(species_order=["A", "B"])
+flowsheet.add_feed("feed", make_stream({"A": 5.0, "B": 5.0}, T=300.0, P=101325.0))
+flowsheet.add_unit(Unit("heater", Heater(HeaterParams(T_out=400.0)),
+                        ["feed"], ["hot_out"]))
+
 solver = EOSolver(flowsheet)
 result = solver.solve(use_sm_init=True, tol=1e-8)
 ```
@@ -73,6 +81,7 @@ Direct access to the EO solver with convergence diagnostics.
 
 ### `EOSolveResult`
 
+<!-- doc-test: skip: dataclass field listing, not runnable code -->
 ```python
 @dataclass
 class EOSolveResult:
@@ -86,6 +95,12 @@ class EOSolveResult:
 ### `EOStateLayout`
 
 ```python
+from difflow import EOStateLayout, make_stream
+
+streams_dict = {
+    "s1": make_stream({"A": 1.0, "B": 2.0}, T=300.0, P=101325.0),
+    "s2": make_stream({"A": 0.5, "B": 0.5}, T=350.0, P=101325.0),
+}
 layout = EOStateLayout(species_order=["A", "B"], stream_names=["s1", "s2"])
 x = layout.pack(streams_dict)
 streams = layout.unpack(x)
@@ -100,7 +115,14 @@ them -- a counter-current equilibrium section, for instance. This is the
 section-scope entry point for those:
 
 ```python
+import jax.numpy as jnp
 from difflow.eo_solver import solve_residual_system
+
+def residual_fn(z, args):          # solve z**2 = a for each component
+    return z**2 - args
+
+z0 = jnp.array([1.0, 1.0])
+args = jnp.array([2.0, 9.0])
 
 z, residual_norm, feasible = solve_residual_system(
     residual_fn,          # (z, args) -> r, same shape as z; JAX-traceable

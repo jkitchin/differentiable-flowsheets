@@ -72,7 +72,7 @@ assay = Assay(
     light_ends={"propane": 0.005, "n_butane": 0.01, "n_pentane": 0.015},
 )
 crude = characterize(assay)          # default cut points, Twu critical properties
-crude.names, crude.Tb, crude.sg, crude.volume_fraction
+crude.names, crude.Tb, crude.SG, crude.volume_fraction
 ```
 
 - **Interpolation:** the curve is interpolated monotonically (PCHIP).
@@ -131,8 +131,12 @@ comp = char.composition                                # a cm.Composition
 comp.hc_type          # (n, 4) vol fractions: paraffins, naphthenes, aromatics, olefins
 comp.hydrogen         # (n,) mass fraction
 comp.sulfur_classes   # (n, 5) mass fraction of S in each class
+stream = char.stream(total=100.0, T=300.0, P=101325.0)   # kg/s of crude
 comp.of_stream(stream).as_dict()   # aromatics_vol, hydrogen_wt, S_<class>_wt, N_basic_wppm, ...
+```
 
+<!-- doc-test: skip: needs a solved column (`result`, built in the column section below) -->
+```python
 props = dr.product_properties(result.products, thermo, feed, composition=comp)
 props["diesel"].composition.aromatics, props["diesel"].composition.sulfur_classes_wt
 ```
@@ -173,6 +177,12 @@ Derived: `sulfur_classes` = `sulfur[:, None] * sulfur_split`, and likewise `nitr
 **Measured data overrides the estimate cut by cut.** `CutData(values, T=None, extrapolate="estimate")` holds either per-cut values (`n_cuts` entries, residue lump included, NaN where nothing was measured) or a curve over boiling point that is interpolated at each cut's Tb. For a curve, the default `extrapolate="estimate"` gives cuts outside the measured range the correlation, because a naphtha PIONA says nothing about the gas oil. `"flat"` holds the end values, as the contaminant curves do.
 
 ```python
+import jax.numpy as jnp
+
+n20_per_cut = jnp.full(char.n_cuts, jnp.nan)             # nothing measured here
+T_anchor_K = [323.15, 523.15, 723.15]
+basic_share = [0.25, 0.30, 0.33]
+shares_k_by_5 = [[0.8, 0.2, 0, 0, 0], [0.4, 0.25, 0.35, 0, 0], [0.3, 0, 0.15, 0.3, 0.25]]
 data = cm.CompositionData(
     hc_types=cm.CutData({"paraffins": [0.55, 0.45], "naphthenes": [0.30, 0.33],
                          "aromatics": [0.15, 0.22]}, T=[340.0, 450.0]),   # PIONA of the naphtha
@@ -291,20 +301,33 @@ An atmospheric crude column is a main column with no reboiler:
 - **Pumparounds** draw liquid, cool it outside the column and return it higher up. They remove heat part-way up, and so set the internal reflux in each section.
 
 ```python
-from difflow_refinery import ColumnThermo, column as cc
+import jax.numpy as jnp
+import difflow_refinery as dr
+from difflow_refinery import Assay, ColumnThermo, characterize, column as cc
 
+# the test crude, 95 000 bbl/d at 240 C and 6 bar into the furnace
+assay = Assay([0, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 100],
+              [t + 273.15 for t in (-10, 60, 95, 150, 205, 260, 315, 370, 430, 500, 600, 680, 850)],
+              sg=0.86, light_ends={"propane": 0.5, "n_butane": 1.0, "n_pentane": 1.5})
+crude = characterize(assay)
 thermo = ColumnThermo.from_characterization(crude)
+kg_s = 95_000 * cc.BARREL / 86400.0 * float(crude.bulk_sg) * 999.016
+feed = crude.stream(kg_s, T=273.15 + 240, P=6e5, basis="mass")
+Vf = float(thermo.std_volume(jnp.stack([jnp.asarray(feed[f"F_{n}"]) for n in thermo.names])))
+
 params = cc.CrudeColumnParams(
     n_stages=30, feed_stage=27, P_top=1.5e5, P_bottom=1.9e5, P_condenser=1.3e5,
-    bottom_steam=..., steam_T=533.15,               # steam in mol/s
-    side_products=(cc.SideProduct("kero", 9, 4, steam=...),
-                   cc.SideProduct("diesel", 16, 4, steam=...),
-                   cc.SideProduct("ago", 22, 3, steam=...)),
+    bottom_steam=150.0, steam_T=533.15,             # steam in mol/s
+    side_products=(cc.SideProduct("kero", 9, 4, steam=40.0),
+                   cc.SideProduct("diesel", 16, 4, steam=40.0),
+                   cc.SideProduct("ago", 22, 3, steam=20.0)),
     pumparounds=(cc.Pumparound("pa1", 12, 10), cc.Pumparound("pa2", 19, 17)),
-    specs=(cc.product_rate("naphtha", ...), cc.product_rate("kero", ...),
-           cc.product_rate("diesel", ...), cc.product_rate("ago", ...),
+    specs=(cc.product_rate("naphtha", 0.20 * Vf), cc.product_rate("kero", 0.11 * Vf),
+           cc.product_rate("diesel", 0.17 * Vf), cc.product_rate("ago", 0.05 * Vf),
            cc.pumparound_duty("pa1", 15e6), cc.pumparound_delta_t("pa1", 60.0),
-           cc.pumparound_duty("pa2", 20e6), cc.pumparound_delta_t("pa2", 60.0)),
+           cc.pumparound_duty("pa2", 20e6), cc.pumparound_delta_t("pa2", 60.0),
+           cc.overflash(0.05)),                     # closes the furnace
+    furnace=cc.Furnace(efficiency=0.85),
 )
 col = cc.CrudeColumn(params, thermo)
 col.degrees_of_freedom()
@@ -403,11 +426,12 @@ On the test crude, a 30-stage column with three side strippers, two pumparounds 
 `solve` takes `assay=` (same light ends and cut points) and `params=` (same layout), so derivatives with respect to the assay and the specs are a `jax.grad` of a function that calls it:
 
 ```python
+import dataclasses
 import jax
 
 def residue_api(sg):
-    a = dr.Assay([0, 30, 70, 100], [320.0, 480.0, 640.0, 900.0], sg=sg)
-    return unit.solve(1.0, T=480.0, P=4e5, basis="mole", assay=a).properties["residue"].api
+    a = dataclasses.replace(assay, sg=sg)     # same light ends and cut points
+    return unit.solve(95_000, T=273.15 + 240, P=6e5, assay=a).properties["residue"].api
 
 jax.grad(residue_api)(0.85)
 ```
@@ -416,17 +440,19 @@ jax.grad(residue_api)(0.85)
 
 `difflow_refinery.planning.cdu_block` wraps a `CrudeUnit` as a `difflow.planning.Block`. Its delta vectors are the column's own derivatives, taken by AD through the Newton solve, and the trust-region planner refreshes them every cycle (see [Delta-base planning](planning.md)). The full walk-through is `examples/35_refinery_cdu_planning.ipynb`.
 
+<!-- doc-test: skip: planner solve takes minutes -->
 ```python
 from difflow_refinery.planning import available_levers, cdu_block, link_cdu, product_value_block
 from difflow.planning import DeltaBasePlanner, Network, check_delta_vectors
 from difflow.planning.lp import Spec
 
 cdu = cdu_block(unit, ["crude.rate", "naphtha.yield", "kero.yield", "overflash"],
-                ["kero.bpd", "kero.tbp95", "gap.kero_diesel", "furnace.fired", ...],
+                ["kero.bpd", "kero.tbp95", "gap.kero_diesel", "furnace.fired",
+                 "naphtha.bpd", "diesel.bpd", "ago.bpd", "residue.bpd"],   # what `value` prices
                 rate=95_000, T=273.15 + 240, P=6e5,          # the base point, as for unit.solve
-                bounds={"kero.yield": (0.08, 0.15), ...})
+                bounds={"kero.yield": (0.08, 0.15)})
 check_delta_vectors(cdu)["passed"]                           # AD against central differences
-value = product_value_block({"naphtha": 70.0, "kero": 95.0, ...})   # $/bbl
+value = product_value_block({"naphtha": 70.0, "kero": 95.0, "diesel": 90.0, "ago": 75.0, "residue": 55.0})   # $/bbl
 net = Network([cdu, value], link_cdu(cdu, value))
 plan = DeltaBasePlanner(net, prices={"value.revenue": 1.0, "cdu.crude.rate": -65.0,
                                      "cdu.furnace.fired": -700.0},
@@ -506,15 +532,29 @@ The train and the column are coupled both ways:
 
 `PreheatedCrudeUnit` solves the two together:
 
+<!-- doc-test: skip: coupled preheat solve takes minutes -->
 ```python
 import difflow_refinery as dr
 
+import dataclasses
+
+# the column of the previous section, with each pumparound given as a rate and a
+# return temperature (the train sets the latter; the spec's value only starts the loop)
+specs = tuple(sp for sp in params.specs if not sp.kind.startswith("pa_")) + (
+    cc.pumparound_rate("pa1", 0.5 * Vf), cc.pumparound_return_temperature("pa1", 400.0),
+    cc.pumparound_rate("pa2", 0.6 * Vf), cc.pumparound_return_temperature("pa2", 470.0))
+column_params = dataclasses.replace(params, specs=specs)
+
 tp = dr.PreheatTrainParams(
-    exchangers=(dr.PreheatExchanger("E1", U=350.0, area=300.0), ..., dr.PreheatExchanger("E8", 350.0, 1200.0, Rf=2e-4)),
-    hot_streams=(dr.HotStream("residue", ("E8", "E7", "E2")), dr.HotStream("pa2", ("E6",)), ...),
+    exchangers=tuple(dr.PreheatExchanger(n, 350.0, A, Rf=2e-4 if n == "E8" else 0.0)
+                     for n, A in dict(E1=300, E2=1200, E3=1500, E4=600,
+                                      E5=300, E6=1500, E7=1500, E8=1200).items()),
+    hot_streams=(dr.HotStream("residue", ("E8", "E7", "E2")), dr.HotStream("pa2", ("E6",)),
+                 dr.HotStream("ago", ("E5",)), dr.HotStream("diesel", ("E4",)),
+                 dr.HotStream("pa1", ("E3",)), dr.HotStream("kero", ("E1",))),
     crude_path=("E1", "E2", "E3", "desalter", "E4", "E5", "preflash", "E6", "E7", "E8"),
     desalter=dr.DesalterParams(), drum=dr.PreflashDrumParams(P=3e5))
-unit = dr.PreheatedCrudeUnit(assay, column_params, tp)
+unit = dr.PreheatedCrudeUnit(assay, column_params, tp)   # replaces the bare CrudeUnit above
 res = unit.solve(95_000, T_tank=300.0)          # bbl/d from the tank
 res.furnace_inlet_T, res.fired_duty, res.preflash_vapor
 unit.balances(res)                               # tank to products: mass, water, energy
@@ -848,9 +888,10 @@ the reverse question, for example what furnace temperature a given HVGO end
 point costs:
 
 ```python
+vparams = dr.VacuumColumnParams(components=char.components)
 specs = dr.default_vacuum_specs() + (
     dr.StageSpec("hvgo.T95", 570.0 + 273.15, replaces="furnace.T"),)
-vdu = dr.VacuumColumn(params.update(specs=specs))
+vdu = dr.VacuumColumn(vparams.update(specs=specs))
 ```
 
 **Outputs** (`info["outputs"]`, SI units) include every stage `T` and `P`,
@@ -1115,7 +1156,11 @@ cuts = dr.characterize(dr.Assay([0, 50, 100], [360., 400., 470.], sg=0.74),
 comps = gas_components(["hydrogen_sulfide", "ethane", "propane", "isobutane",
                         "n_butane", "isopentane", "n_pentane", "n_hexane"], pseudo=cuts)
 col = GasPlantColumn(debutanizer(comps, naphtha_rvp=80e3))
-lpg, naphtha, info = col(feed)        # feed = {"F_propane": ..., "T": ..., "P": ...}
+weights = {"ethane": 0.2, "propane": 8, "isobutane": 5, "n_butane": 12, "isopentane": 10,
+           "n_pentane": 12, "n_hexane": 20, "pc02": 18, "pc03": 15, "hydrogen_sulfide": 0.05}
+gas_feed = {f"F_{n}": float(weights.get(n, 0.0)) for n in comps.names}   # mol/s
+gas_feed.update(T=380.0, P=12e5)
+lpg, naphtha, info = col(gas_feed)
 info["outputs"]["reboiler.duty"], info["outputs"]["bottoms.rvp"]
 ```
 
@@ -1284,7 +1329,9 @@ The outputs are in planner units (C, kPa, MW, kg/h, kmol/h).
 Non-convergence is masked to NaN, as in `cdu_block`.
 
 ```python
-blk = gasplant_block(col, [feed], ["distillate.x.C5+", "bottoms.rvp", "top.P", "feed.mol"],
+from difflow_refinery.gasplant import gasplant_block
+
+blk = gasplant_block(col, [gas_feed], ["distillate.x.C5+", "bottoms.rvp", "top.P", "feed.mol"],
                      outputs=["reboiler.duty", "condenser.duty", "distillate.rate"])
 ```
 
@@ -1343,11 +1390,13 @@ naphtha carries. `gas_plant_feed` (#326) is the bridge:
 
 ```python
 from difflow_refinery.gasplant import gas_plant_feed
-gp = gas_plant_feed(cdu.products, char,
+# the total condenser of the test column makes no offgas; with a partial condenser use
+# streams=("offgas", "naphtha") and, say, h2s={"offgas": 0.02}
+gp = gas_plant_feed(cdu.last_result.products, char,
                     ["hydrogen_sulfide", "ethane", "propane", "isobutane",
                      "n_butane", "isopentane", "n_pentane"],
-                    min_fraction=1e-3, h2s={"offgas": 0.02}, T=313.15, P=1.3e5)
-comps, offgas, naphtha = gp.components, gp["offgas"], gp["naphtha"]
+                    streams=("naphtha",), min_fraction=1e-3, T=313.15, P=1.3e5)
+comps, naphtha = gp.components, gp["naphtha"]
 print(gp.summary())
 ```
 
@@ -1427,6 +1476,7 @@ fresh feed -> [DIP] -> reactor -> separator -> stabilizer -> [DIH] -> isomerate
                 +-> isomerate       +-> off-gas  +-> off-gas  +-> back to the reactor
 ```
 
+<!-- doc-test: skip: isomerization solve with recycle takes minutes -->
 ```python
 from difflow_refinery.isomerization import (
     IsomerizationUnit, IsomerizationUnitParams, IsomerizationReactorParams, constructed_feed)
@@ -1598,6 +1648,7 @@ Python loop.
 `isomerate_V` lever of `BlendPool.as_block`, so the blend component must be
 named `"isomerate"`:
 
+<!-- doc-test: skip: fragment: continues the isomerization example above, which is skipped -->
 ```python
 from difflow.planning import Network
 from difflow_refinery.blending import BlendPool
@@ -1675,10 +1726,19 @@ from difflow_refinery import BlendComponent, BlendPool
 reformate = BlendComponent.from_properties(
     "reformate", SG=0.80, RON=98.0, MON=88.0, RVP_psi=3.5, S_ppm=1.0,
     olefins_vol=1.0, aromatics_vol=65.0)
-# ... fcc, alkylate, butane likewise
+fcc = BlendComponent.from_properties(
+    "fcc", SG=0.74, RON=92.0, MON=80.0, RVP_psi=6.0, S_ppm=20.0,
+    olefins_vol=25.0, aromatics_vol=30.0)
+alkylate = BlendComponent.from_properties(
+    "alkylate", SG=0.70, RON=95.0, MON=93.0, RVP_psi=4.5, S_ppm=5.0,
+    olefins_vol=0.5, aromatics_vol=0.5)
+butane = BlendComponent.from_properties(
+    "butane", SG=0.58, RON=93.0, MON=90.0, RVP_psi=52.0, S_ppm=10.0,
+    olefins_vol=0.5, aromatics_vol=0.0)
+components, recipe = [reformate, fcc, alkylate, butane], [0.35, 0.35, 0.25, 0.05]
 
 pool = BlendPool("gasoline")                 # default specs: RON, MON, RVP, S
-res = pool([reformate, fcc, alkylate, butane], recipe=[0.35, 0.35, 0.25, 0.05])
+res = pool(components, recipe=recipe)
 res.properties["MON"], res.margins["MON >= 82"]
 
 pool.linear_blend_error(components, recipe)  # nonlinear minus linear-by-volume
@@ -1712,6 +1772,7 @@ Recipes can be given as `basis="volume_fraction"` (the default), `"volume_flow"`
 
 `difflow_refinery.properties` (#330) estimates the properties a stream does not carry, and `from_stream` uses them whenever no measured value is given. `estimate=True` (default) estimates every property the characterization has the inputs for, `estimate=False` none (the pre-#330 behaviour), and a list names the ones wanted.
 
+<!-- doc-test: skip: fragment: needs a characterization and product streams (jet_stream, residue, light_naphtha) from a crude unit -->
 ```python
 from difflow_refinery import BlendComponent, BlendCharacterization, properties
 
@@ -1808,6 +1869,7 @@ For products of the crude and vacuum units, use `BlendCharacterization.from_char
 
 `difflow_refinery.reforming` (#309) is a semi-regenerative catalytic reformer: hydrotreated heavy naphtha to reformate and hydrogen over three (or any number of) adiabatic reactors with fired interstage heaters, a high-pressure separator, hydrogen-rich recycle gas and a stabilizer. It is a `difflow.Flowsheet` with the recycle gas as its tear. Every output is differentiable in the reactor inlet temperatures (or WAIT), separator pressure, H2/HC ratio, space velocity and the naphtha's composition.
 
+<!-- doc-test: skip: reformer solve takes minutes -->
 ```python
 from difflow_refinery.reforming import CatalyticReformer, ReformerParams, lean_naphtha
 
@@ -2086,6 +2148,7 @@ Why steam in the feed line: a separator liquid with its gases taken out is a sub
 
 `difflow_refinery.hydrotreating.Hydrotreater` is a distillate hydrotreater -- naphtha, kerosene or diesel, straight-run or cracked -- on the shared building blocks: adiabatic trickle beds with quench, effluent cooler and HP separator, recycle-gas loop with amine scrubber, purge, compressor and makeup, product steam stripper and overhead drum. It is a library, not a palette operation (like the blend pool).
 
+<!-- doc-test: skip: hydrotreater solve takes minutes -->
 ```python
 import difflow_refinery as dr
 from difflow_refinery.hydrotreating import Hydrotreater, HydrotreaterParams, straight_run_cut
@@ -2255,6 +2318,7 @@ the FCC main fractionator's logistic step generalised to `n` products. The share
 - `fr.products[name]` is an `F_<product_char.names>` stream, straight into `BlendComponent.from_stream(name, stream, fr.char)`; `fr.rates` is kg/s per product.
 - Cut points and width are traceable: `jax.grad` of a pool property with respect to a cut point is exact, checked against Richardson-extrapolated central differences at 1e-5 (release test).
 
+<!-- doc-test: skip: fragment: needs a solved hydrocracker result `res` from the section above -->
 ```python
 fr = res.fractionate(cut_points=(240 + 273.15,), products=("jet", "diesel"))
 jet = BlendPool("jet")([BlendComponent.from_stream("jet", fr.products["jet"], fr.char,
@@ -2272,6 +2336,7 @@ The unit runs a naphtha as it is (example 40's stabilised naphtha: C3--C5 light 
 
 `NAPHTHA_HDT_PARAMS` is an **illustrative** naphtha set: the diesel constants with HDS of the sulfide, thiophene and benzothiophene classes ten times faster (in a naphtha those are mercaptans, light sulfides and alkylthiophenes; the reactivity order of Girgis & Gates 1991, the factor chosen here), HDN a hundred times faster, and every aromatics-saturation step ten times slower (a CoMo naphtha catalyst at 20--35 bar passes benzene largely unsaturated). It is not any catalyst's.
 
+<!-- doc-test: skip: fragment, needs the characterization and naphtha feed of example 40 -->
 ```python
 from difflow_refinery.hydrotreating import NAPHTHA_HDT_PARAMS
 nht = Hydrotreater(char, naphtha, HydrotreaterParams(
@@ -2315,6 +2380,7 @@ Both read their input through `gasplant.hydroprocessed.resolve_product(source, p
 
 Methane and ethane map to `C1` and `C2`. H2, H2S and NH3 dissolved in a wild naphtha are refused unless `drop_gases=True`; you can also fractionate them off first, since a fractionator sends them to its off-gas. The iso/normal and MCP/cyclohexane splits are `from_characterization`'s **illustrative** defaults. The feed is differentiable in the flows and in the grid's arrays.
 
+<!-- doc-test: skip: fragment: needs a solved naphtha hydrotreater `nht_res` -->
 ```python
 fr = nht_res.fractionate(cut_points=(85 + 273.15,), products=("light_naphtha", "heavy_naphtha"),
                          feeds=("product", "wild_naphtha"))
@@ -2340,6 +2406,7 @@ The table is built by `product_components(grid, gases=)` and holds three kinds o
 
 **A splitter takes no dissolved gas.** Example 40's wild naphtha carries 0.31 mol/s H2, 0.26 mol/s H2S and 0.07 mol/s C1 in about 240 mol/s, which a total condenser has no outlet for. With them in the feed, a 12-tray splitter on product plus wild naphtha does not converge (NaN after 300 iterations). Without them, it converges in about 20 iterations. In a refinery these gases leave before the splitter, in a stabilizer or the stripper's overhead drum. Pass `drop_gases=True`, or keep them and run a column that has somewhere to send them, such as a partial-condenser stabilizer.
 
+<!-- doc-test: skip: fragment: needs a solved naphtha hydrotreater `nht_res` -->
 ```python
 feed = hydroprocessed_feed(nht_res, ("product", "wild_naphtha"), T=100 + 273.15, P=4e5,
                            drop_gases=True)
@@ -2463,6 +2530,7 @@ res = unit.solve(al.c3c4_olefin_feed())         # or al.combine_feeds(fcc_c3, fc
 res.outputs["alkylate.MON"], res.outputs["dib.reboiler"]
 alkylate = res.alkylate_component(S_ppm=5.0)    # a BlendComponent for BlendPool
 
+feed = al.c3c4_olefin_feed()
 blk = al.alky_block(unit, feed, levers=["io_ratio", "reactor.T", "acid_strength"])
 al.solve_process_gms()                          # the Bracken-McCormick problem, profit 1161.3366
 ```
@@ -2728,6 +2796,7 @@ Any `OUTPUT_UNITS` name can be an output. The `alkylate.bpd`, `alkylate.RON`, `a
 
 `difflow_refinery.hydrocracking.Hydrocracker` is a single-stage, series-flow VGO hydrocracker on the shared hydroprocessing building blocks ([above](#refinery-hydroprocessing-layout)): a pretreat reactor (the hydrotreating kinetics with a VGO parameter set), a cracking reactor (a new kinetic model plugged into the same `TrickleBedReactor`), effluent cooler and HP separator, the recycle-gas loop (knock-out, amine, purge, compressor, makeup to an H2/oil spec), a product fractionator, and an optional recycle of unconverted oil (UCO) to the cracking reactor. Like the hydrotreater it is a library, not a palette operation.
 
+<!-- doc-test: skip: hydrocracker solve takes minutes and needs VDU LVGO/HVGO products -->
 ```python
 import difflow_refinery as dr
 from difflow_refinery.hydrocracking import Hydrocracker, HydrocrackerParams
@@ -2929,7 +2998,7 @@ import difflow_refinery as dr
 from difflow_refinery.residue import ResidueDesulfurizer, RDSParams, fuel_oil_blend
 
 char = dr.characterize(assay, composition=True)     # sulfur, CCR and Ni+V per cut; the #305 composition is required
-residue = cdu.products["residue"]                     # or residue.atmospheric_residue_cut(char, kg_s)
+residue = cdu.last_result.products["residue"]                     # or residue.atmospheric_residue_cut(char, kg_s)
 rds = ResidueDesulfurizer(char, residue, RDSParams(T_in=(373.0 + 273.15,)))
 res = rds.solve(residue)
 print(res.table())
@@ -3045,6 +3114,7 @@ On the CDU residue of `examples/40` (3.06 wt% S, no Ni+V given), the fuel oil co
 
 `examples/40_refinery_flowsheet.ipynb` sends the crude unit's atmospheric residue through the desulfurizer to the fuel-oil pool:
 
+<!-- doc-test: skip: fragment: `P` is the product dict of the hydrogen-header example -->
 ```python
 from difflow_refinery.residue import ResidueDesulfurizer, fuel_oil_blend
 rds = ResidueDesulfurizer(char, P["residue"])
@@ -3092,6 +3162,7 @@ balanced header and the purity each consumer receives, and
 `close_hydrotreater_loop` feeds that purity back into the hydrotreaters. A
 library, not a palette operation.
 
+<!-- doc-test: skip: fragment: needs a solved reformer `ref` and hydrotreaters -->
 ```python
 import difflow_refinery.hydrogen as h2
 
@@ -3238,6 +3309,7 @@ superstructure optimisation; the HDT's traced makeup composition (see AD mode).
 
 The library units (hydrotreater, reformer, residue desulfurizer, FCC, hydrocracker and the rest) are Python objects with a `solve`, and the adapters between them are pure JAX: `gas_plant_feed`, `HydrotreaterResult.fractionate`, `NaphthaFeed.from_hydrotreater`, `fuel_oil_blend` and the hydrogen network. So a chain of units, such as CDU → hydrotreater → reformer → gasoline pool, is a Python function, and it has an exact derivative. What needs care is the AD mode, because the units do not all support the same one. `difflow_refinery.plant` (#334) handles that, and deliberately does no more. It is a small module, not a framework, and a library, not a palette operation.
 
+<!-- doc-test: skip: fragment: needs solved hydrotreater and reformer units -->
 ```python
 from difflow_refinery.plant import Chain, Stage, central_difference
 
@@ -3342,6 +3414,7 @@ they used different data (and the hydrotreater neglected Cp, which made its K
 reformer's own data give.
 
 ```python
+import numpy as np
 from difflow_refinery import thermochemistry as tc
 
 tc.Hf("benzene"), tc.S0("benzene"), tc.species("benzene").cp   # J/mol, J/mol/K, cubic
@@ -3353,6 +3426,7 @@ tc.reaction_enthalpy(nu), tc.ln_K(nu, 623.15)   # element balance checked; K on 
 
 gas = tc.IdealGasSet(("hydrogen", "benzene", "cyclohexane"))   # a unit's species list
 gas.HF, gas.S0, gas.CP                          # numpy arrays
+T, nu_rows = 600.0, np.array([[-3.0, -1.0, 1.0]])   # H2, benzene, cyclohexane
 gas.enthalpy(T), gas.gibbs(T), gas.ln_K(nu_rows, T)
 ```
 

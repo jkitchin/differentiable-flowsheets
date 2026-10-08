@@ -63,30 +63,41 @@ class AdsorbentDegradationParams(ParamsMixin):
     initial_capacity: float = 4.0  # mol/kg
 
 
-# Stability parameters by material type
+# Stability parameters by material type.
+#
+# Calibrated (#376) so that the default operating point (48 cycles/day,
+# 298 -> 423 K, 50 % RH, 50 ppm NOx, 8000 h) loses a plausible share of its
+# capacity in a year: ~5 % for zeolite and carbon, ~15-20 % for MOF and
+# ~30 % for amine-silica (Choi 2009; Sayari 2011; Hedin 2010: >1e4 TSA
+# cycles with a few percent fade for zeolite 13X and carbons, tens of
+# percent per year for supported amines and MOFs). The earlier per-cycle
+# values (1e-4 for zeolite) lost 100 % of the capacity in one year.
+#   thermal_stability: capacity retained per cycle for a 100 K swing
+#   hydrothermal_k:    1/h per unit relative humidity at 373 K
+#   SO2_sensitivity:   1/ppm per 1000 h (NOx is a tenth of it)
 STABILITY_PARAMS = {
     "zeolite": {
-        "thermal_stability": 0.9999,  # Very stable per cycle
-        "hydrothermal_k": 1e-6,  # Low sensitivity
-        "SO2_sensitivity": 0.01,  # ppm^-1 per 1000 cycles
+        "thermal_stability": 0.999999,
+        "hydrothermal_k": 1e-6,
+        "SO2_sensitivity": 0.0005,
         "max_T": 673,  # K
     },
     "MOF": {
-        "thermal_stability": 0.9995,
-        "hydrothermal_k": 1e-4,  # More sensitive
-        "SO2_sensitivity": 0.1,
+        "thermal_stability": 0.999997,
+        "hydrothermal_k": 1e-5,
+        "SO2_sensitivity": 0.001,
         "max_T": 523,
     },
     "carbon": {
-        "thermal_stability": 0.9998,
-        "hydrothermal_k": 5e-6,
-        "SO2_sensitivity": 0.001,  # Resistant
+        "thermal_stability": 0.999999,
+        "hydrothermal_k": 2e-6,
+        "SO2_sensitivity": 0.0002,  # Resistant
         "max_T": 573,
     },
     "amine_silica": {
-        "thermal_stability": 0.999,
-        "hydrothermal_k": 5e-5,
-        "SO2_sensitivity": 0.5,  # Very sensitive
+        "thermal_stability": 0.999998,
+        "hydrothermal_k": 1e-5,
+        "SO2_sensitivity": 0.003,  # Most sensitive
         "max_T": 393,  # Limited by amine stability
     },
 }

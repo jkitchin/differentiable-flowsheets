@@ -16,6 +16,7 @@ __all__ = [
     "AmineStripper",
 ]
 
+import warnings
 from dataclasses import dataclass
 
 import jax.numpy as jnp
@@ -42,7 +43,18 @@ class StripperParams(ParamsMixin):
         n_stages: Number of theoretical stages
         T_reboiler: Reboiler temperature (K)
         P_stripper: Operating pressure (Pa)
-        reflux_ratio: Condenser reflux ratio
+        steam_ratio: Stripping steam generated in the reboiler (mol H2O per
+            mol CO2 stripped, ~2 for MEA at 120 C). Sets the reboiler duty.
+        T_condenser: Overhead condenser outlet temperature (K). The CO2
+            product leaves saturated with water at this temperature and
+            the column pressure; all the rest of the steam condenses and
+            is returned to the column as reflux.
+        reflux_ratio: Deprecated and ignored. The condenser's reflux is a
+            result of the steam ratio and the condenser temperature
+            (``info["reflux_ratio"]``, mol condensate per mol CO2 product),
+            not an input; it used to be a fraction of the steam sent on
+            with the CO2, which left the product ~42 % pure and drained
+            the solvent's water (#378).
         target_lean_loading: Target lean solvent loading (mol CO2/mol amine).
             The achieved lean loading is never below the equilibrium loading
             at the reboiler (set by T_reboiler and P_stripper).
@@ -66,12 +78,24 @@ class StripperParams(ParamsMixin):
     n_stages: int | float | Array = 8
     T_reboiler: float | Array = 393.15  # K (120°C)
     P_stripper: float | Array = 200000.0  # Pa (2 bar)
-    reflux_ratio: float | Array = 0.3
+    steam_ratio: float | Array = 2.0
+    T_condenser: float | Array = 313.15  # K (40°C)
+    reflux_ratio: float | Array | None = None  # deprecated, ignored
     target_lean_loading: float | Array = 0.2  # mol CO2/mol amine
     reboiler_duty: float | Array | None = None  # W
 
     # Heat integration
     cross_exchanger_approach: float = 10.0  # K
+
+    def __post_init__(self):
+        if self.reflux_ratio is not None:
+            warnings.warn(
+                "StripperParams.reflux_ratio is ignored: the overhead "
+                "condenser now returns all the steam it condenses as reflux "
+                "(see steam_ratio and T_condenser; the achieved ratio is "
+                "info['reflux_ratio']).",
+                DeprecationWarning, stacklevel=3,
+            )
 
 
 
@@ -125,6 +149,7 @@ class AmineStripper:
     assumptions = [
         "Reboiler duty covers sensible, reaction and stripping steam contributions.",
         "Column pressure is specified; steam is released at the reboiler.",
+        "Overhead condenser returns all condensate as reflux; the CO2 product is water-saturated at T_condenser.",
         "Amine loading-enthalpy correlation from the selected solvent database entry.",
     ]
     references = [
@@ -141,6 +166,8 @@ class AmineStripper:
         "n_stages": "-",
         "T_reboiler": "K",
         "P_stripper": "Pa",
+        "steam_ratio": "mol H2O / mol CO2",
+        "T_condenser": "K",
         "reflux_ratio": "-",
         "target_lean_loading": "mol CO2 / mol amine",
         "reboiler_duty": "W",
@@ -255,7 +282,7 @@ class AmineStripper:
         # Per-mole stripping energy: desorption plus stripping steam.
         dH_absorption = self._solvent_data.heat_of_absorption * 1000  # J/mol
         dH_vap_water = 40650  # J/mol
-        steam_ratio = 2.0  # mol H2O per mol CO2 (typical MEA at 120 C)
+        steam_ratio = jnp.asarray(p.steam_ratio)  # mol H2O per mol CO2
         q_per_mol = dH_absorption + steam_ratio * dH_vap_water
 
         F_CO2_stripped = jnp.maximum(F_amine * (rich_loading - lean_loading), 0.0)
@@ -276,11 +303,21 @@ class AmineStripper:
         F_steam = F_CO2_stripped * steam_ratio
         Q_vaporization = F_steam * dH_vap_water  # W
 
-        # Condenser recovers some steam. This is a cooling-utility requirement
-        # at the top of the stripper: the reflux fraction of the stripping
-        # steam is condensed and returned (#149).
-        reflux = jnp.asarray(p.reflux_ratio)
-        Q_condenser = Q_vaporization * reflux
+        # Overhead condenser (#378). The steam leaves the column with the CO2
+        # and is cooled to T_condenser; the CO2 product leaves saturated with
+        # water at that temperature and the column pressure, and everything
+        # else condenses and goes back to the top of the column as reflux.
+        # The solvent therefore keeps its water (less the little that leaves
+        # in the product) and the product is nearly dry.
+        T_condenser = jnp.asarray(p.T_condenser)
+        T_cond_C = T_condenser - 273.15
+        # Antoine constants for water, 1-100 C range.
+        P_sat_cond = jnp.power(10.0, 8.07131 - 1730.63 / (233.426 + T_cond_C)) * 133.322
+        y_w = jnp.clip(safe_divide(P_sat_cond, P_stripper), 0.0, 0.99)
+        F_H2O_sat = F_CO2_stripped * safe_divide(y_w, 1.0 - y_w)
+        F_H2O_product = jnp.minimum(F_H2O_sat, F_steam)
+        F_reflux = F_steam - F_H2O_product
+        Q_condenser = F_reflux * dH_vap_water  # W, latent heat of the reflux
 
         # Total reboiler duty
         Q_reboiler = Q_sensible + Q_reaction + Q_vaporization
@@ -290,23 +327,20 @@ class AmineStripper:
         m_CO2_tonnes = F_CO2_stripped * 44 / 1e6  # tonnes/s
         specific_energy = safe_divide(Q_reboiler, m_CO2_tonnes) / 1e9  # GJ/tonne
 
-        # CO2 product purity (after condenser)
-        # Most water condenses, leaving >95% CO2
+        # CO2 product purity (after the condenser): water-saturated CO2
         F_CO2_product = F_CO2_stripped
-        F_H2O_product = F_steam * (1 - reflux)  # Some water passes through
         CO2_purity = safe_divide(F_CO2_product, F_CO2_product + F_H2O_product)
 
         # Create output streams
         # Lean solvent
         lean_flows = {
-            "H2O": jnp.maximum(0.0, F_H2O - F_steam * (1 - reflux)),
+            "H2O": jnp.maximum(0.0, F_H2O - F_H2O_product),  # reflux returned
             "Amine": F_amine,
             "CO2_absorbed": F_CO2_lean,
         }
         lean_solvent = make_stream(lean_flows, T_reboiler, P_stripper)
 
         # CO2 product
-        T_condenser = 313.15  # K (40°C after condensing)
         co2_flows = {
             "CO2": F_CO2_product,
             "H2O": F_H2O_product,
@@ -318,6 +352,8 @@ class AmineStripper:
             "Q_sensible": Q_sensible,
             "Q_reaction": Q_reaction,
             "Q_vaporization": Q_vaporization,
+            "reflux_ratio": safe_divide(F_reflux, F_CO2_product),
+            "H2O_reflux": F_reflux,
             "Q_condenser": Q_condenser,
             # Cooling-utility requirement for the overhead condenser (#149),
             # exposed explicitly for utility sizing / techno-economics.

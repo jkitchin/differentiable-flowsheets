@@ -505,7 +505,10 @@ def test_imperfect_stripping_degrades_raffinate_purity():
     carries consumes free extractant, the extraction factor falls, and
     more Nd leaks into the La raffinate.
     """
-    feed = _feed()
+    # 6 mol/s of each REE: the capacity of 0.5 M dimer is 1/3 mol REE per
+    # mol (3 dimers per REE; #374), twice what it was counted at, so the
+    # feed doubles to keep the circuit near saturation as the test intends.
+    feed = _feed(6.0, 6.0)
     module = _ess_module()
 
     # Open loop: exactly what ExtractScrubStripCircuit does today.
@@ -550,9 +553,15 @@ def test_imperfect_stripping_degrades_raffinate_purity():
     # raffinate, not less -- purity drops further and the impurity ratio
     # grows. open_purity is unmoved because the open loop feeds the
     # extractor clean solvent, the case the fix reduces to exactly.
-    assert open_purity == pytest.approx(0.99276, abs=2e-4)
-    assert closed_purity == pytest.approx(0.90547, abs=2e-4)
-    assert closed_impurity / open_impurity == pytest.approx(14.88, rel=0.02)
+    #
+    # Refreshed with #373 and #374: the organic flow is the diluent volume
+    # alone, so the stated O/A of 1 is the O/A the cascade runs at (it ran at
+    # 1 + extractant_conc before, a larger extraction factor), and the
+    # loading capacity is counted in dimers (twice the old capacity, so the
+    # feed above doubles). The earlier pins were 0.99276 / 0.90547 / 14.88.
+    assert open_purity == pytest.approx(0.99477, abs=2e-4)
+    assert closed_purity == pytest.approx(0.89909, abs=2e-4)
+    assert closed_impurity / open_impurity == pytest.approx(21.91, rel=0.02)
 
 
 def test_the_degradation_comes_from_the_residue_not_from_the_loop():
@@ -676,7 +685,7 @@ def test_a_design_past_third_phase_onset_is_reported_as_violating():
     An open loop hides the constraint violation as well as the purity
     loss (#202).
     """
-    feed = _feed(1.5, 1.5)
+    feed = _feed(3.0, 3.0)      # doubled with the capacity (#374)
     limits = OperatingLimits(third_phase_loading=0.40)
     module = _ess_module(limits=limits)
 
@@ -712,14 +721,14 @@ def test_hydraulic_and_phase_ratio_limits_are_reported_when_declared():
 
     full = _ess_module(limits=OperatingLimits(
         third_phase_loading=0.65, max_loading=1.0,
-        hydraulic_capacity=200.0, min_phase_ratio=0.2, max_phase_ratio=5.0,
+        hydraulic_capacity=150.0, min_phase_ratio=0.2, max_phase_ratio=5.0,
     ))
     constraints = full.constraints(full(feed, full.fresh_solvent(feed))[4])
     assert set(constraints.names) == {
         "sep.third_phase", "sep.loading", "sep.hydraulic",
         "sep.phase_ratio_min", "sep.phase_ratio_max",
     }
-    # 250 mol/s of two-phase throughput against a 200 mol/s settler.
+    # 200 mol/s of two-phase throughput against a 150 mol/s settler.
     assert float(constraints["sep.hydraulic"].margin) < 0.0
     assert not constraints.feasible
 
@@ -1039,14 +1048,16 @@ def test_capacity_bounds_total_organic_loading_not_just_the_increment():
     from difflow_ree.units.extraction import REEExtractor, REEExtractorParams
     from difflow_ree.database import get_extractant
 
-    m = get_extractant("D2EHPA").monomers_per_ree
+    m = get_extractant("D2EHPA").basis_units_per_ree     # 3 dimers (#374)
     extractor = REEExtractor(REEExtractorParams(
         n_stages=5, extractant="D2EHPA", elements=("Nd", "Dy"), pH=1.5))
-    feed = make_stream({"H2O": 10.0, "Nd": 0.3, "Dy": 0.3}, 298.15, 101325.0)
+    # Doubled with the capacity (1/3 mol REE per mol dimer, #374) so the
+    # entering load and the feed still exceed it.
+    feed = make_stream({"H2O": 10.0, "Nd": 0.6, "Dy": 0.6}, 298.15, 101325.0)
     capacity = 1.0 / m
 
     loaded = make_stream(
-        {"D2EHPA": 1.0, "kerosene": 5.0, "Nd": 0.10, "Dy": 0.10},
+        {"D2EHPA": 1.0, "kerosene": 5.0, "Nd": 0.20, "Dy": 0.20},
         298.15, 101325.0)
     raffinate, extract, info = extractor(feed, loaded)
 

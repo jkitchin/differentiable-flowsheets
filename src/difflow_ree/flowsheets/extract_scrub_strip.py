@@ -94,6 +94,19 @@ class ExtractScrubStripParams(ParamsMixin):
             nothing stripped (2026 operating-point audit, R8).
         capacity_sharpness: Sharpness k of the extraction section's smooth
             loading limiters; see REEExtractorParams (#193).
+        recycle_scrub_liquor: Return the scrub liquor to the extraction feed,
+            as plants do (#377). The scrub liquor carries the co-extracted
+            non-targets (and, in a heavy circuit, some heavies) that the
+            scrub took off the organic; sent on as a product it caps the
+            purity and recovery the circuit can reach, and recycled it
+            gives the extraction section reflux. The loop is closed with a
+            tear stream and solved by successive substitution
+            (``results["recycle"]`` reports the iterations); the results'
+            ``scrub_liquor`` is then the converged internal recycle, not an
+            outlet. Off by default for a stand-alone circuit.
+        recycle_tol: Convergence tolerance on the recycled REE flows,
+            relative to the feed's total REE.
+        recycle_max_iter: Iteration limit of the recycle solve.
     """
     extractant: str
     elements: tuple[str, ...]
@@ -120,6 +133,9 @@ class ExtractScrubStripParams(ParamsMixin):
     DEFAULT_STRIP_NITRATE = 1.0
     mechanism: str | None = None  # see #195
     capacity_sharpness: int = 8  # see REEExtractorParams (#193)
+    recycle_scrub_liquor: bool = False  # see #377
+    recycle_tol: float = 1e-10
+    recycle_max_iter: int = 500
 
     def __post_init__(self):
         """Resolve the record's pH defaults (#270); check the labels (#288)."""
@@ -232,6 +248,8 @@ class ExtractScrubStripCircuit:
         "nitrate_conc": "mol/L",
         "strip_nitrate_conc": "mol/L",  # audit R8
         "capacity_sharpness": "-",
+        "recycle_tol": "-",       # relative to the feed's total REE (#377)
+        "recycle_max_iter": "-",
     }
 
     def __init__(self, params: ExtractScrubStripParams):
@@ -280,6 +298,13 @@ class ExtractScrubStripCircuit:
             mechanism=params.mechanism,  # see #195
         ))
 
+    def _mix_with_recycle(self, feed: Stream, tear: dict) -> Stream:
+        """The fresh feed plus the recycled scrub liquor (water and REE)."""
+        flows = dict(get_flows(feed))
+        for species, value in tear.items():
+            flows[species] = flows.get(species, 0.0) + value
+        return make_stream(flows, feed["T"], feed["P"])
+
     def __call__(
         self,
         feed: Stream,
@@ -317,34 +342,99 @@ class ExtractScrubStripCircuit:
             solvent_flows[elem] = 0.0
         solvent = make_stream(solvent_flows, T, feed["P"])
 
-        # EXTRACTION
-        raffinate, loaded_org, ext_info = self._extractor(
-            feed, solvent, T, pH=p.extraction_pH
-        )
+        def sweep(feed_in):
+            """One pass of extraction, scrubbing and stripping on ``feed_in``."""
+            raffinate, loaded_org, ext_info = self._extractor(
+                feed_in, solvent, T, pH=p.extraction_pH
+            )
 
-        # Create scrub solution
-        F_scrub = F_org * p.scrub_to_solvent_ratio
-        scrub_flows = {"H2O": F_scrub}
-        for elem in p.elements:
-            scrub_flows[elem] = 0.0
-        scrub_soln = make_stream(scrub_flows, T, feed["P"])
+            # Create scrub solution
+            F_scrub = F_org * p.scrub_to_solvent_ratio
+            scrub_flows = {"H2O": F_scrub}
+            for elem in p.elements:
+                scrub_flows[elem] = 0.0
+            scrub_soln = make_stream(scrub_flows, T, feed["P"])
 
-        # SCRUBBING
-        scrub_liquor, scrubbed_org, scrub_info = self._scrubber(
-            loaded_org, scrub_soln, T, pH=p.scrubbing_pH
-        )
+            scrub_liquor, scrubbed_org, scrub_info = self._scrubber(
+                loaded_org, scrub_soln, T, pH=p.scrubbing_pH
+            )
 
-        # Create strip acid
-        F_strip = F_org * p.strip_to_solvent_ratio
-        strip_flows = {"H2O": F_strip}
-        for elem in p.elements:
-            strip_flows[elem] = 0.0
-        strip_acid = make_stream(strip_flows, T, feed["P"])
+            # Create strip acid
+            F_strip = F_org * p.strip_to_solvent_ratio
+            strip_flows = {"H2O": F_strip}
+            for elem in p.elements:
+                strip_flows[elem] = 0.0
+            strip_acid = make_stream(strip_flows, T, feed["P"])
 
-        # STRIPPING
-        product, barren_org, strip_info = self._stripper(
-            scrubbed_org, strip_acid, T, pH=p.stripping_pH
-        )
+            product, barren_org, strip_info = self._stripper(
+                scrubbed_org, strip_acid, T, pH=p.stripping_pH
+            )
+            return (raffinate, ext_info, scrub_liquor, scrub_info,
+                    product, barren_org, strip_info)
+
+        recycle_info = None
+        if not p.recycle_scrub_liquor:
+            (raffinate, ext_info, scrub_liquor, scrub_info,
+             product, barren_org, strip_info) = sweep(feed)
+        else:
+            # Tear on the scrub liquor (#377): the extraction section sees
+            # the fresh feed plus the liquor the scrub returned last pass.
+            # optimistix' fixed point, as the flowsheet recycles use, so the
+            # circuit stays traceable (jit, jacobian: implicit
+            # differentiation at the converged liquor). Everything in the
+            # liquor goes back: water, REE and any spectator species the
+            # sections carry.
+            import optimistix as optx
+            from difflow.flowsheet import _concrete
+
+            first = sweep(self._mix_with_recycle(
+                feed, {"H2O": 0.0, **{e: 0.0 for e in p.elements}}))
+            keys = tuple(get_flows(first[2]))
+
+            def pack(stream):
+                liquor = get_flows(stream)
+                return jnp.stack([jnp.asarray(liquor.get(k, 0.0)) for k in keys])
+
+            def one_pass(tear_arr, _):
+                out = sweep(self._mix_with_recycle(
+                    feed, dict(zip(keys, tear_arr))))
+                return pack(out[2])
+
+            # Newton on g(x) - x, not substitution. A scrub recycle is a
+            # high-gain loop, and substitution stops on the STEP: the error
+            # left is ~1/(1-g) times larger and stays in the circuit as
+            # unbalanced REE (the train's closure read 0.9999999987). Newton
+            # converges quadratically on this small tear (one entry per
+            # species) and optimistix differentiates it implicitly.
+            tol = float(p.recycle_tol)
+            sol = optx.root_find(
+                lambda x, a: one_pass(x, a) - x, optx.Newton(rtol=tol, atol=tol),
+                pack(first[2]), max_steps=int(p.recycle_max_iter), throw=False)
+            tear_arr = sol.value
+            (raffinate, ext_info, scrub_liquor, scrub_info,
+             product, barren_org, strip_info) = sweep(self._mix_with_recycle(
+                feed, dict(zip(keys, tear_arr))))
+            ree_idx = [keys.index(e) for e in p.elements if e in keys]
+            feed_ree = sum(jnp.asarray(feed_flows.get(e, 0.0)) for e in p.elements)
+            change = jnp.max(jnp.abs(
+                (pack(scrub_liquor) - tear_arr)[jnp.asarray(ree_idx)]
+            )) / jnp.maximum(feed_ree, 1e-300)
+            converged = sol.result == optx.RESULTS.successful
+            c_conv, c_steps = _concrete(converged), _concrete(sol.stats["num_steps"])
+            if c_conv is not None and not c_conv:
+                import warnings
+                warnings.warn(
+                    f"scrub-liquor recycle did not converge in {c_steps} "
+                    f"iterations (change {float(change):.2e} of the feed's "
+                    "REE); the results are the last iterate.",
+                    RuntimeWarning, stacklevel=2)
+            recycle_info = {
+                "converged": bool(c_conv) if c_conv is not None else converged,
+                "iterations": int(c_steps) if c_steps is not None else sol.stats["num_steps"],
+                "residual": change,
+                "scrub_liquor_ree": {e: tear_arr[keys.index(e)] for e in p.elements
+                                      if e in keys},
+            }
 
         # Calculate metrics
         product_flows = get_flows(product)
@@ -354,15 +444,15 @@ class ExtractScrubStripCircuit:
         # Target element recovery
         target_recovery = {}
         for elem in p.target_elements:
-            f_in = float(feed_flows.get(elem, 0.0))
-            f_out = float(product_flows.get(elem, 0.0))
+            f_in = jnp.asarray(feed_flows.get(elem, 0.0))
+            f_out = jnp.asarray(product_flows.get(elem, 0.0))
             target_recovery[elem] = safe_divide(f_out, f_in)
 
         # Product purity (mole fraction)
-        total_product_ree = sum(float(product_flows.get(e, 0.0)) for e in p.elements)
+        total_product_ree = sum(jnp.asarray(product_flows.get(e, 0.0)) for e in p.elements)
         product_purity = {}
         for elem in p.elements:
-            product_purity[elem] = safe_divide(float(product_flows.get(elem, 0.0)), total_product_ree)
+            product_purity[elem] = safe_divide(jnp.asarray(product_flows.get(elem, 0.0)), total_product_ree)
 
         # Target purity (sum of target elements)
         target_purity = sum(product_purity.get(e, 0.0) for e in p.target_elements)
@@ -371,23 +461,26 @@ class ExtractScrubStripCircuit:
         impurity_elements = [e for e in p.elements if e not in p.target_elements]
         impurity_rejection = {}
         for elem in impurity_elements:
-            f_in = float(feed_flows.get(elem, 0.0))
-            f_product = float(product_flows.get(elem, 0.0))
+            f_in = jnp.asarray(feed_flows.get(elem, 0.0))
+            f_product = jnp.asarray(product_flows.get(elem, 0.0))
             impurity_rejection[elem] = 1 - safe_divide(f_product, f_in)
 
         # Mass balance verification. The barren organic is an outlet too:
         # REE left on the stripped solvent is not lost mass.
         barren_flows = get_flows(barren_org)
         feed_total = {
-            elem: jnp.asarray(float(feed_flows.get(elem, 0.0)))
+            elem: jnp.asarray(feed_flows.get(elem, 0.0))
             for elem in p.elements
         }
+        # A recycled scrub liquor goes back to the extraction feed, so it is
+        # not an outlet (#377).
+        scrub_out = 0.0 if p.recycle_scrub_liquor else 1.0
         output_total = {
             elem: (
-                float(raff_flows.get(elem, 0.0))
-                + float(scrub_flows.get(elem, 0.0))
-                + float(product_flows.get(elem, 0.0))
-                + float(barren_flows.get(elem, 0.0))
+                jnp.asarray(raff_flows.get(elem, 0.0))
+                + scrub_out * jnp.asarray(scrub_flows.get(elem, 0.0))
+                + jnp.asarray(product_flows.get(elem, 0.0))
+                + jnp.asarray(barren_flows.get(elem, 0.0))
             )
             for elem in p.elements
         }
@@ -408,6 +501,7 @@ class ExtractScrubStripCircuit:
             "extraction_info": ext_info,
             "scrubbing_info": scrub_info,
             "stripping_info": strip_info,
+            "recycle": recycle_info,
             "mass_balance": {
                 "feed": feed_total,
                 "output": output_total,
@@ -433,12 +527,13 @@ class ExtractScrubStripCircuit:
 
         balance = {}
         for elem in self.params.elements:
-            f_in = float(feed_flows.get(elem, 0.0))
+            f_in = jnp.asarray(feed_flows.get(elem, 0.0))
+            scrub_out = 0.0 if self.params.recycle_scrub_liquor else 1.0
             f_out = (
-                float(raff_flows.get(elem, 0.0)) +
-                float(scrub_flows.get(elem, 0.0)) +
-                float(product_flows.get(elem, 0.0)) +
-                float(barren_flows.get(elem, 0.0))
+                jnp.asarray(raff_flows.get(elem, 0.0)) +
+                scrub_out * jnp.asarray(scrub_flows.get(elem, 0.0)) +
+                jnp.asarray(product_flows.get(elem, 0.0)) +
+                jnp.asarray(barren_flows.get(elem, 0.0))
             )
             closure = safe_divide(f_out, f_in)
             balance[elem] = {

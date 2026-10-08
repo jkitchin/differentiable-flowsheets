@@ -370,9 +370,18 @@ class IsomerizationUnit:
         p = self.params
         st, info = {}, {}
         if self.has_dip:
-            dip_ovhd, dip_btms, info["dip"] = self.dip(dict(fresh, P=p.dip_P + 0.5e5))
+            # Hydrogen in the fresh feed does not go through the DIP: it is
+            # a column for the liquid hydrocarbons, and hydrogen sent
+            # through it left with the overhead, into the isomerate (#381).
+            # It bypasses the column to the reactor charge instead, where
+            # it counts against the make-up.
+            ih = tc.idx("hydrogen")
+            F_fresh = hydrocarbon_flows(fresh)
+            fresh_h2 = jnp.zeros_like(F_fresh).at[ih].set(F_fresh[ih])
+            dip_feed = stream_of(F_fresh.at[ih].set(0.0), fresh["T"], p.dip_P + 0.5e5)
+            dip_ovhd, dip_btms, info["dip"] = self.dip(dip_feed)
             st.update(dip_overhead=dip_ovhd, dip_bottoms=dip_btms)
-            to_reactor = [dip_btms]
+            to_reactor = [dip_btms, stream_of(fresh_h2, fresh["T"], fresh["P"])]
         else:
             to_reactor = [fresh]
         if self.has_dih:

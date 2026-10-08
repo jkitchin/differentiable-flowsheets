@@ -94,7 +94,8 @@ def test_the_concentration_exponent_is_masons_not_the_cube(rec):
     assert slope == pytest.approx(rec.concentration_exponent, abs=0.03)
     assert abs(slope - 3.0) > 0.5
     # the capacity still comes from the stoichiometry, not the exponent
-    assert rec.max_loading == pytest.approx(1.0 / 6.0)
+    # (three dimers per REE, counted on the dimer concentration basis; #374)
+    assert rec.max_loading == pytest.approx(1.0 / 3.0)
 
 
 def test_x95s_kerosene_la_point_is_met_without_being_fitted(rec):

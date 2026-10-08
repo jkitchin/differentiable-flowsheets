@@ -50,7 +50,7 @@ class TestTheTableIsDerived:
             concentration=conc,
             **{k: v for k, v in driving.items() if k != "pH"},
         )
-        q_max = conc / record.monomers_per_ree
+        q_max = conc / record.basis_units_per_ree
         for element, K_L in stored.items():
             expected = float(dist.get_D(element, **driving)) / q_max
             assert K_L == pytest.approx(expected, rel=1e-9), element
@@ -84,7 +84,7 @@ class TestItCannotDriftAgain:
             record = get_extractant("PC88A")
             dist = REEDistribution(extractant="PC88A", elements=("Ho",),
                                    concentration=record.reference_concentration)
-            q_max = record.reference_concentration / record.monomers_per_ree
+            q_max = record.reference_concentration / record.basis_units_per_ree
             assert fresh["Ho"] == pytest.approx(
                 float(dist.get_D("Ho", pH=record.reference_pH)) / q_max,
                 rel=1e-9)

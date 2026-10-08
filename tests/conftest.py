@@ -54,6 +54,19 @@ import os
 import jax
 import pytest
 
+# Load difflow in whichever process imports this file, the xdist controller
+# included. When a worker reports a warning raised by a difflow class
+# (CSTRDensityWarning, ...), the controller imports the warning's module to
+# rebuild it; two such reports at once import ``difflow`` from two threads
+# and deadlock on the module lock. Having it loaded first avoids the import.
+import difflow  # noqa: F401
+import difflow_bio  # noqa: F401
+import difflow_cc  # noqa: F401
+import difflow_gas  # noqa: F401
+import difflow_power  # noqa: F401
+import difflow_ree  # noqa: F401
+import difflow_refinery  # noqa: F401
+
 #: The kernel's ceiling on mapped sections per process, ``vm.max_map_count``.
 #: 65530 is the kernel default and what this budget was first measured
 #: against, but distributions and CI images raise it: GitHub's

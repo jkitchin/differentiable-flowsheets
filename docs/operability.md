@@ -110,10 +110,17 @@ thumb is stated against.
 Three constructors:
 
 ```python
-Scaling(u_span=[...], y_span=[...], d_span=[...])       # the honest one
-Scaling.from_bounds(u_lb, u_ub, y_tol, d_lb, d_ub)      # from operating bounds
-Scaling.from_block(planning_block, y_tol=[...])         # reuse a planning Block
-Scaling.unscaled(n_u, n_y)                              # the recorded refusal
+import jax.numpy as jnp
+from difflow.planning import Block
+
+Scaling(u_span=[1.0, 1.0], y_span=[0.01, 0.01], d_span=[0.5])   # the honest one
+Scaling.from_bounds([0.0, 0.0], [1.0, 1.0], [0.01, 0.01],       # from operating bounds
+                    d_lb=[-0.5], d_ub=[0.5])
+planning_block = Block("column", lambda u: jnp.array([u[0] - u[1], u[0] + u[1]]),
+                       u_names=["L", "V"], y_names=["x_D", "x_B"],
+                       lb=[0.0, 0.0], ub=[1.0, 1.0])
+Scaling.from_block(planning_block, y_tol=[0.01, 0.01])          # reuse a planning Block
+Scaling.unscaled(2, 2)                                          # the recorded refusal
 ```
 
 `Scaling.unscaled` is the explicit opt-out — use it only when the variables are
@@ -227,6 +234,32 @@ differentiated, so what comes back is the *converged* steady-state gain, not a
 gain through one Newton iteration.
 
 ```python
+import jax.numpy as jnp
+from difflow import (CSTR, CSTRParams, IdealThermo, SpeciesData, get_flows,
+                     make_stream)
+from difflow.units.flash import Flash, FlashParams
+from difflow.operability import Scaling, screen
+
+thermo = IdealThermo({
+    "Light": SpeciesData(name="Light", MW=72.0, Cp_coeffs=(120.0, 0.0, 0.0, 0.0),
+                         Hvap_coeffs=(26000.0, 0.38, 470.0),
+                         antoine_coeffs=(10.422, 1687.537, -38.44), Hf=0.0),
+    "Heavy": SpeciesData(name="Heavy", MW=114.0, Cp_coeffs=(190.0, 0.0, 0.0, 0.0),
+                         Hvap_coeffs=(35000.0, 0.38, 570.0),
+                         antoine_coeffs=(10.186, 2004.68, -60.53), Hf=0.0),
+})
+
+def rate_fn(C, T, params):
+    k = params["A"] * jnp.exp(-params["Ea"] / (8.314 * T))
+    return jnp.array([k * C["Light"]])
+
+cstr = CSTR(CSTRParams(V=jnp.asarray(2.0), rate_fn=rate_fn,
+                       stoich=jnp.array([[-1.0], [1.0]]),
+                       rate_params={"A": jnp.array(1e3), "Ea": jnp.array(50000.0)},
+                       species_order=["Light", "Heavy"]),
+            thermo=thermo, mode="isothermal")
+flash = Flash(FlashParams(species_order=["Light", "Heavy"]), thermo=thermo)
+
 def fn(u, d):
     inlet = make_stream({"Light": d[0], "Heavy": 0.1}, T=320.0, P=101325.0)
     reacted, _ = cstr(inlet, T_spec=u[0])          # inner steady-state solve
@@ -275,18 +308,27 @@ controllability term can go straight into an economic objective:
 ```python
 import jax
 
+u0, d0 = jnp.array([350.0, 380.0]), jnp.array([10.0])
+w = 10.0
+profit = lambda design: -0.01 * design ** 2      # stand-in economics
+
+def build_flowsheet(design):                     # design = a reactor volume scale
+    return lambda u, d: fn(u, d) * design
+
 def objective(design):
     rep = screen(build_flowsheet(design), u0, d0, scaling=sc)
     penalty = jax.nn.relu(1.0 - rep.msv)          # want sigma_min >= 1
     return -profit(design) + w * penalty ** 2
 
 grad_obj = jax.grad(objective)     # differentiates *through* the SVD
+grad_obj(jnp.asarray(1.0))
 ```
 
 and a whole batch of candidate designs can be screened at once, because the
 report is a pytree:
 
 ```python
+U = jnp.array([[350.0, 380.0], [345.0, 375.0], [355.0, 385.0]])   # candidate operating points
 reports = jax.jit(jax.vmap(lambda u: screen(fn, u, d0, scaling=sc)))(U)
 reports.msv.shape        # (n_candidates,)
 ```

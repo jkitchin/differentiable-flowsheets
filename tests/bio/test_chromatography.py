@@ -598,3 +598,25 @@ class TestProteinAKd:
             caps.append(float(info["DBC"]))
             assert caps[-1] == pytest.approx(35.0 * 1.0 / (K_d + 1.0) * 0.99, rel=1e-12)
         assert caps[1] < caps[0]
+
+
+class TestSECPartialLoad:
+    """What was never loaded onto the column stays in the product pool (#381)."""
+
+    def test_unloaded_aggregates_and_fragments_bypass_to_product(self):
+        feed = make_stream(
+            {"mAb": jnp.array(8.0), "aggregates": jnp.array(1.0), "fragments": jnp.array(1.0)},
+            T=jnp.array(300.0), P=jnp.array(101325.0),
+        )
+        col = SizeExclusionChromatography(SECParams(
+            column_volume=1.0, target_species="mAb",
+            aggregate_species="aggregates", fragment_species="fragments",
+            yield_factor=0.95, use_resolution_overlap=False,
+        ))
+        (prod, agg, frag), _ = col(feed, load_volume=0.5, feed_volume=1.0)
+        # Half the aggregates were never loaded: they are in the product,
+        # and only the loaded half (less 5% overlap) reaches the aggregate fraction.
+        assert float(get_flows(prod)["aggregates"]) == pytest.approx(0.5 + 0.5 * 0.05)
+        assert float(get_flows(agg)["aggregates"]) == pytest.approx(0.5 * 0.95)
+        assert float(get_flows(prod)["fragments"]) == pytest.approx(0.5 + 0.5 * 0.05)
+        assert float(get_flows(frag).get("fragments", 0.0)) == pytest.approx(0.5 * 0.95)

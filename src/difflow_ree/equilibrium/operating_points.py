@@ -83,14 +83,14 @@ def circuit_phase_ratios(
     """The ``O/A`` each section of a circuit actually runs at.
 
     The circuits build their solvent as ``{diluent: F_org, extractant:
-    extractant_conc * F_org}`` with ``F_org = F_aq * solvent_to_feed_ratio``,
-    and the units count the extractant moles as organic flow, so the
-    extraction ``O/A`` is ``solvent_to_feed_ratio * (1 + extractant_conc)``.
-    The scrub and strip make-up flows are sized from the diluent flow alone,
-    so their ``O/A`` is ``(1 + extractant_conc) / ratio``. Whether the
-    extractant moles should count as organic flow at all is an open modelling
-    question (the audit's R5); this function reports what the units do today
-    so that a cut computed from it lands where the section really operates.
+    extractant_conc * F_org}`` with ``F_org = F_aq * solvent_to_feed_ratio``.
+    The organic carrier flow is the diluent's, a volume like the aqueous
+    flow; the extractant entry is a charge in moles per unit volume and does
+    not count (#373, it used to add ``extractant_conc`` to the organic flow,
+    so a stated O/A of 1 ran at 1.5 with 0.5 M extractant). The extraction
+    ``O/A`` is ``solvent_to_feed_ratio`` and the scrub and strip ``O/A`` are
+    the reciprocals of their A/O ratios, whatever the extractant
+    concentration. ``extractant_conc`` is kept in the signature for callers.
 
     Args:
         solvent_to_feed_ratio: Circuit ``solvent_to_feed_ratio``.
@@ -104,13 +104,12 @@ def circuit_phase_ratios(
 
     Example:
         >>> circuit_phase_ratios(1.0, 0.2, 0.5, 0.5)["stripping"]
-        3.0
+        2.0
     """
-    org = 1.0 + extractant_conc
     return {
-        "extraction": solvent_to_feed_ratio * org,
-        "scrubbing": None if not scrub_to_solvent_ratio else org / scrub_to_solvent_ratio,
-        "stripping": org / strip_to_solvent_ratio,
+        "extraction": solvent_to_feed_ratio,
+        "scrubbing": None if not scrub_to_solvent_ratio else 1.0 / scrub_to_solvent_ratio,
+        "stripping": 1.0 / strip_to_solvent_ratio,
     }
 
 

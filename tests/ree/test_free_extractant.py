@@ -164,7 +164,7 @@ class TestTheBalanceCloses:
         assert g == pytest.approx(fd, rel=1e-4)
 
     def test_a_dimeric_record_uses_its_own_stoichiometry(self):
-        """m is monomers_per_ree, which is 6 for the dimeric extractants."""
+        """m is basis_units_per_ree: 3 dimers on the dimer concentration basis (#374)."""
         dist = REEDistribution(extractant="D2EHPA", elements=("Nd",),
                                concentration=0.5)
         # (#270) pH 1.0, inside D2EHPA's refitted window of [0.0, 2.0].
@@ -172,7 +172,7 @@ class TestTheBalanceCloses:
         # any pH; the probe just has to be one the coefficients cover.
         r = solve_free_extractant(dist, "Nd", 0.01, pH=1.0)
         assert float(r.free_extractant) == pytest.approx(
-            0.5 - 6.0 * float(r.c_org), rel=1e-8)
+            0.5 - 3.0 * float(r.c_org), rel=1e-8)
 
 
 class TestTheImpossibleLoading:

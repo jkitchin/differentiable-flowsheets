@@ -660,6 +660,11 @@ class SizeExclusionChromatography:
     - Large molecules (aggregates) elute first
     - Target protein elutes at intermediate time
     - Small molecules (fragments) elute last
+
+    Only the loaded fraction is separated. Whatever was never loaded onto
+    the column (``load_volume`` below ``feed_volume``) bypasses it and stays
+    in the product pool, whichever species it is: the target, the
+    aggregates and the fragments are treated alike.
     """
 
     symbol = "SEC"
@@ -744,14 +749,16 @@ class SizeExclusionChromatography:
                 fragment_flows[species] = mass_loaded * (1.0 - p.yield_factor) * 0.7
 
             elif species == p.aggregate_species:
-                # Aggregates - mostly to aggregate fraction; overlap into product
-                aggregate_flows[species] = mass_unloaded + mass_loaded * (1.0 - overlap)
-                product_flows[species] = mass_loaded * overlap
+                # Aggregates - the loaded part mostly to the aggregate
+                # fraction, with overlap into product. What was never
+                # loaded was not separated and stays in the product pool.
+                aggregate_flows[species] = mass_loaded * (1.0 - overlap)
+                product_flows[species] = mass_unloaded + mass_loaded * overlap
 
             elif species == p.fragment_species:
-                # Fragments - mostly to fragment fraction; overlap into product
-                fragment_flows[species] = mass_unloaded + mass_loaded * (1.0 - overlap)
-                product_flows[species] = mass_loaded * overlap
+                # Fragments - as for aggregates: unloaded stays in the product
+                fragment_flows[species] = mass_loaded * (1.0 - overlap)
+                product_flows[species] = mass_unloaded + mass_loaded * overlap
 
             else:
                 # Other species - distribute based on assumed size; unloaded to product

@@ -49,14 +49,16 @@ class LoadingIsotherm:
        for those extractants relative to any pre-#191 result.
 
     Attributes:
-        m: Extractant monomer equivalents bound per mol REE. The database
-            value is 6.0 for the acidic organophosphorus extractants
-            (3 dimers) and 3.0 for TBP; the default here is the monomer
-            stoichiometry 3.0.
+        m: Extractant units bound per mol REE, counted on the same basis as
+            ``extractant_conc`` and the solvent's extractant flow (#374). The
+            database value is 3.0 for the acidic organophosphorus
+            extractants (three DIMERS, 0.5 M dimer being the nominal charge)
+            and 3.0 for TBP. It was 6.0 (monomer equivalents) between #191
+            and #374, which halved the capacity of every dimeric extractant.
         K_L: Langmuir constant (L/mol)
         extractant_conc: Extractant concentration (M)
     """
-    m: float = 3.0  # monomer equivalents per REE; max_loading = 1/m (#191)
+    m: float = 3.0  # extractant units (record basis) per REE; max_loading = 1/m (#191, #374)
     K_L: float = 10.0  # Langmuir constant
     extractant_conc: float = 0.5  # M
 
@@ -338,7 +340,7 @@ def competitive_langmuir(
 # So they are computed, at the record's own declared reference conditions:
 #
 #     q = q_max K_L c  and  q = D c  in the trace limit, so
-#     K_L = D(reference) / q_max,   q_max = [HA]_ref / monomers_per_ree
+#     K_L = D(reference) / q_max,   q_max = [HA]_ref / basis_units_per_ree
 #
 # The mapping below still reads like the dict it replaces --- indexing,
 # iteration and ``.items()`` all work --- so call sites did not have to
@@ -355,7 +357,7 @@ def typical_K_L(
     is ``q = q_max K_L c``, and the distribution ratio gives ``q = D c``.  So
 
         K_L = D(reference conditions) / q_max,
-        q_max = [HA]_ref / monomers_per_ree
+        q_max = [HA]_ref / basis_units_per_ree
 
     with the reference conditions the ones the record declares:
     ``reference_concentration`` together with ``reference_pH`` for a cation
@@ -417,7 +419,7 @@ def typical_K_L(
         extractant=extractant, elements=elements, concentration=conc,
         **{k: v for k, v in driving.items() if k != "pH"},
     )
-    q_max = conc / record.monomers_per_ree
+    q_max = conc / record.basis_units_per_ree
     return {
         element: float(dist.get_D(element, **driving)) / q_max
         for element in elements
@@ -469,7 +471,7 @@ class _DerivedCapacities(Mapping):
             record.reference_concentration,
             record.reference_pH,
             record.reference_nitrate,
-            record.monomers_per_ree,
+            record.basis_units_per_ree,
             tuple(sorted(
                 (element, astuple(coefficients))
                 for element, coefficients in block.items()
@@ -530,7 +532,7 @@ def get_loading_isotherm(
     avg_K_L = sum(data["typical_K_L"].values()) / len(data["typical_K_L"])
 
     return LoadingIsotherm(
-        m=get_extractant(extractant).monomers_per_ree,
+        m=get_extractant(extractant).basis_units_per_ree,
         K_L=avg_K_L,
         extractant_conc=concentration,
     )

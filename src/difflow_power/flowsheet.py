@@ -188,6 +188,14 @@ class RadialFeederFlowsheet:
         network: a radial network.
         root: the bus to sweep from; defaults to the slack bus.
 
+    Raises:
+        ValueError: a bus other than the root is a PV bus. The sweep has
+            nothing that regulates a downstream bus voltage, so it would
+            treat that bus's generators as fixed injections without
+            saying so. Make them PQ (``PowerNetwork.with_kinds``) to ask
+            for that on purpose, or use
+            :func:`difflow_power.powerflow.solve_power_flow`.
+
     Example:
         >>> import difflow_power as dp
         >>> fs = dp.RadialFeederFlowsheet(dp.cases.radial_feeder())
@@ -199,6 +207,14 @@ class RadialFeederFlowsheet:
     def __init__(self, network: PowerNetwork, root: str | None = None):
         self.network = network
         self.tree = feeder_tree(network, root)
+        pv = [b for b in self.tree.order[1:] if network.buses[b].kind == "pv"]
+        if pv:
+            raise ValueError(
+                f"buses {pv} are PV buses; a radial sweep has no unit "
+                "that regulates a downstream bus voltage. Make them PQ "
+                "(PowerNetwork.with_kinds) to treat the generators as fixed "
+                "injections, or use difflow_power.powerflow.solve_power_flow."
+            )
         self._blocks = {
             bid: branch_admittances(
                 br.r, br.x, br.b, br.tap, br.shift, br.g

@@ -463,10 +463,9 @@ class ExtractScrubStripModule(REEModule):
         P = feed["P"]
 
         solvent_flows = get_flows(solvent)
-        F_org = (
-            jnp.asarray(solvent_flows.get(p.extractant, 0.0), dtype=jnp.float64)
-            + jnp.asarray(solvent_flows.get(p.diluent, 0.0), dtype=jnp.float64)
-        )
+        # The organic carrier flow is the diluent's (#373): the extractant
+        # entry is a moles-per-volume charge, not a volume.
+        F_org = jnp.asarray(solvent_flows.get(p.diluent, 0.0), dtype=jnp.float64)
         F_aq = jnp.asarray(
             get_flows(feed).get("H2O", 1.0), dtype=jnp.float64
         )

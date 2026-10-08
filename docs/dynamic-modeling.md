@@ -101,6 +101,9 @@ print(f"State history: {result.trajectory.y.shape}")
 ### Integration Options
 
 ```python
+y0 = jnp.array([1.0])
+t_span = (0.0, 10.0)
+
 # Fixed-step methods (RK4, Euler)
 result = integrate(f, y0, t_span, method="RK4", n_steps=1000)
 
@@ -183,11 +186,10 @@ from difflow.dynamic import DynamicTank
 tank = DynamicTank(
     max_volume=10.0,              # Maximum volume (m³)
     species_order=["A", "B"],
-    initial_volume=1.0,           # Starting volume
     name="storage",
 )
 
-# State variables: [V, n_A, n_B] (volume + moles)
+# State variables: [V, n_A, n_B] (volume + moles; V starts at 1 m³)
 ```
 
 ### Using integrate_unit()
@@ -223,18 +225,18 @@ print(f"Final B: {n_B_final:.4f} mol")
 Define state variables with metadata:
 
 ```python
-from difflow.dynamic import StateVar, StateSpec, StateCategory
+from difflow.dynamic import StateVar, StateSpec
 
 # Manual specification
 spec = StateSpec([
-    StateVar("n_A", StateCategory.MOLES, "mol", bounds=(0, None)),
-    StateVar("n_B", StateCategory.MOLES, "mol", bounds=(0, None)),
-    StateVar("T", StateCategory.TEMPERATURE, "K", bounds=(200, 600)),
+    StateVar("n_A", "moles", "mol", bounds=(0, None)),
+    StateVar("n_B", "moles", "mol", bounds=(0, None)),
+    StateVar("T", "temperature", "K", bounds=(200, 600)),
 ])
 
 print(f"State dimension: {spec.n_states}")
 print(f"State names: {spec.names}")
-print(f"Index of T: {spec.index('T')}")
+print(f"Index of T: {spec.get_index('T')}")
 ```
 
 ### Factory Functions
@@ -273,12 +275,12 @@ from difflow.dynamic import StateVector
 spec = molar_states(["A", "B"]) + thermal_state()
 y = jnp.array([1.0, 0.5, 350.0])
 
-state = StateVector(spec, y)
+state = StateVector(y, spec)
 print(f"n_A = {state['n_A']}")
 print(f"T = {state['T']}")
 
 # Or use spec directly
-idx_A = spec.index("n_A")
+idx_A = spec.get_index("n_A")
 n_A = y[idx_A]
 ```
 
@@ -300,7 +302,7 @@ cstr = DynamicCSTR(
     rate_fn=rate_fn,
     stoich=stoich,
     species_order=["A", "B"],
-    rate_params={"k": 0.1},
+    rate_params={"k0": 1e6, "Ea": 50000.0},
     name="reactor",
 )
 
@@ -332,8 +334,8 @@ result = fs.simulate(t_span=(0.0, 1000.0), method="RK4", n_steps=500)
 print(f"Final state: {result.y_final}")
 
 # Per-unit states
-reactor_state = result.get_unit_state("reactor")
-tank_state = result.get_unit_state("storage")
+reactor_state = result.unit_state_at("reactor")
+tank_state = result.unit_state_at("storage")
 
 # Trajectory
 print(f"Time points: {result.trajectory.t.shape}")
@@ -350,9 +352,8 @@ print(f"Product stream: {streams['product']}")
 def feed_schedule(t):
     """Feed rate doubles after t=500."""
     base = make_stream({"A": 1.0, "B": 0.0}, T=350.0, P=101325.0)
-    if t > 500:
-        return {k: v * 2 for k, v in base.items()}
-    return base
+    scale = jnp.where(t > 500, 2.0, 1.0)  # traced t: use jnp.where, not `if`
+    return {k: (v * scale if k.startswith("F_") else v) for k, v in base.items()}
 
 fs.add_feed("feed", feed_schedule)  # Pass function instead of stream
 ```
@@ -417,7 +418,7 @@ from difflow.dynamic import DynamicFlashDrum, integrate_dae
 flash = DynamicFlashDrum(
     volume=1.0,
     species_order=["A", "B"],
-    K_values={"A": 2.0, "B": 0.5},  # Vapor-liquid K-values
+    K_func=lambda T: jnp.array([2.0, 0.5]),  # K-values (A, B) vs. temperature
     name="flash",
 )
 
@@ -455,17 +456,17 @@ z_solution, info = newton_solve(residual, z0, tol=1e-8, max_iter=50)
 
 print(f"Solution: {z_solution}")
 print(f"Converged: {info['converged']}")
-print(f"Iterations: {info['iterations']}")
+print(f"Residual norm: {jnp.linalg.norm(residual(z_solution)):.2e}")
 ```
 
 ### DAE Integration Methods
 
 ```python
 # Euler method (simpler, may need smaller steps)
-result = integrate_dae(unit, inputs, t_span, method="Euler", n_steps=1000)
+result = integrate_dae(flash, {"inlet": inlet}, (0.0, 100.0), method="Euler", n_steps=1000)
 
 # RK4 method (more accurate)
-result = integrate_dae(unit, inputs, t_span, method="RK4", n_steps=200)
+result = integrate_dae(flash, {"inlet": inlet}, (0.0, 100.0), method="RK4", n_steps=200)
 ```
 
 ---
@@ -558,7 +559,7 @@ For more control:
 from difflow.dynamic import integrate_diffrax
 
 result = integrate_diffrax(
-    f, y0, t_span,
+    f, y0, (0.0, 100.0),
     solver="tsit5",
     rtol=1e-5,
     atol=1e-7,
@@ -613,14 +614,15 @@ grad_k = jax.grad(simulate_with_params)(jnp.array(0.1))
 ```python
 from difflow.dynamic import sensitivity_analysis
 
-def model(params):
-    k, Ea = params["k"], params["Ea"]
-    # ... simulation ...
-    return final_conversion
+def f_p(t, y, params):
+    """dy/dt with an explicit parameter array (here the decay rate k)."""
+    return -params[0] * y
 
-nominal = {"k": 1e6, "Ea": 50000.0}
-sens = sensitivity_analysis(model, nominal)
-# Returns gradients and normalized sensitivities
+k_nominal = jnp.array([0.5])
+result, sens = sensitivity_analysis(
+    f_p, jnp.array([1.0]), k_nominal, (0.0, 10.0), method="RK4", n_steps=100,
+)
+# sens = d y_final / d params (Jacobian, shape (n_states, n_params))
 ```
 
 ### Using integrate_with_grad

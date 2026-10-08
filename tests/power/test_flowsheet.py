@@ -284,3 +284,8 @@ def test_ladder_flowsheet_refuses_a_downstream_pv_bus():
     )
     with pytest.raises(ValueError, match="PV buses"):
         build_ladder_flowsheet(pv_net)
+    # The radial sweep refuses it too (#381) ...
+    with pytest.raises(ValueError, match="PV buses"):
+        RadialFeederFlowsheet(pv_net)
+    # ... and runs once the bus is made PQ on purpose.
+    RadialFeederFlowsheet(pv_net.with_kinds({"n3": "pq"})).solve()

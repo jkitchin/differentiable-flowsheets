@@ -114,15 +114,27 @@ choosing the *next* experiment.
 The fitting API then follows a simple fit → quantify → diagnose pattern:
 
 ```python
-from difflow.estimation import Estimator
+import jax.numpy as jnp
+from difflow.estimation import Estimator, Experiment
 
-# model_fn(theta, inputs) -> predicted outputs (must be JAX-differentiable)
+# model_fn(theta, experiment) -> predicted outputs (must be JAX-differentiable)
+def model_fn(theta, exp):
+    return {'y': theta['k'] * jnp.exp(-theta['b'] * exp.inputs['t'])}
+
+param_names = ['k', 'b']
+param_bounds = {'k': (0.0, 10.0), 'b': (0.0, 5.0)}
+theta_init = {'k': 1.0, 'b': 0.5}
+experiments = [
+    Experiment(inputs={'t': t}, observed={'y': 2.0 * float(jnp.exp(-0.7 * t)) + 0.01 * (-1) ** i})
+    for i, t in enumerate([0.0, 0.5, 1.0, 1.5, 2.0, 3.0])
+]
+
 est = Estimator(model_fn, param_names, param_bounds)
 
 result = est.fit(experiments, theta_init)           # fit parameters
 ci = est.confidence_intervals(result, experiments)  # Fisher-information CIs
 diag = est.diagnostics(result, experiments)         # R², RMSE, AIC, BIC
-bs = est.bootstrap(result, experiments)             # bootstrap uncertainty
+bs = est.bootstrap(result, experiments, n_bootstrap=20)  # bootstrap uncertainty
 
 print(est.summary(result, experiments))
 ```
@@ -140,7 +152,7 @@ it is silently wrong in exactly the case where weighting mattered:
 ```python
 result = est.fit(experiments, theta_init, objective='wsse')
 ci = est.confidence_intervals(result, experiments, objective='wsse')
-bs = est.bootstrap(result, experiments, objective='wsse')
+bs = est.bootstrap(result, experiments, n_bootstrap=20, objective='wsse')
 print(est.summary(result, experiments, objective='wsse'))
 ```
 

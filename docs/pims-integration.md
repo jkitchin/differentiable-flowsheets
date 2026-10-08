@@ -118,6 +118,7 @@ Ordered by how much works without an Aspen licence.
 writes them as `write_json`, `write_csv`, `write_lp` and `write_mps`. PIMS
 becomes a fifth writer:
 
+<!-- doc-test: skip: signature of a proposed (unimplemented) writer, not runnable code -->
 ```python
 write_pims(dvs: DeltaVectorSet, mapping: PIMSMapping, path) -> None
 ```
@@ -220,6 +221,7 @@ differentiable there — and must never be exported silently.
 
 Illustrative, not settled; the table layout in Phase 0 will move it.
 
+<!-- doc-test: skip: API sketch for a proposed module (difflow.planning.pims) that does not exist yet -->
 ```python
 from difflow.planning import Block, linearize_block
 from difflow.planning.export import DeltaVectorSet

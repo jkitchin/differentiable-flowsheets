@@ -221,6 +221,8 @@ def monte_carlo_propagation(
 
     # Return scalar if output is scalar
     if output_mean.size == 1:
+        for key in percentiles:
+            info[key] = float(info[key][0])
         return float(output_mean[0]), float(output_std[0]), info
 
     return output_mean, output_std, info

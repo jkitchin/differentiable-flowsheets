@@ -138,6 +138,8 @@ The mechanism is carried by the extractant record and decides which correlation
 drives `D` (#195). TBP therefore requires a `nitrate_conc`:
 
 ```python
+from difflow_ree import REEDistribution
+
 REEDistribution(
     extractant="TBP", elements=("Nd",), nitrate_conc=3.0, concentration=1.1
 )

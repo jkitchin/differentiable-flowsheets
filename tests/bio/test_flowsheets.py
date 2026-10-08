@@ -156,6 +156,21 @@ class TestPlatformDSP:
         assert float(res["step_yields"]["sec"]) == pytest.approx(0.95)
         assert float(res["step_yields"]["capture"]) == pytest.approx(0.95)
 
+    def test_uf_concentration_factor_is_a_parameter(self, harvest):
+        # Was fixed at 10 inside the call (#381).
+        def product_amount(cf):
+            p = PlatformDSPParams(
+                species_order=SPECIES, target_species="mAb",
+                uf_concentration_factor=cf,
+            )
+            return PlatformDSP(p)(harvest)["step_yields"]["uf"]
+
+        assert float(product_amount(10.0)) != pytest.approx(float(product_amount(4.0)))
+        default = PlatformDSP(
+            PlatformDSPParams(species_order=SPECIES, target_species="mAb")
+        )(harvest)["step_yields"]["uf"]
+        assert float(default) == pytest.approx(float(product_amount(10.0)))
+
 
 class TestViralClearanceTrain:
     def test_grad_lrv_wrt_ph_matches_fd(self, harvest):

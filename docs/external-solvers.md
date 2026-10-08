@@ -178,6 +178,7 @@ train in `examples/27_pounce_optimization.ipynb` does hit it and slices
 
 ## The flat NLP view
 
+<!-- doc-test: skip: needs optional asdex and pounce-solver, and a user-built flowsheet with a reactor and product stream -->
 ```python
 from difflow.solvers import as_nlp, Decision, solve_with_pounce
 
@@ -224,6 +225,7 @@ Decisions and parameters name where their value goes:
 The `unit:` prefix may be dropped. For anything the grammar cannot reach, pass a
 builder callable instead of a `Flowsheet`:
 
+<!-- doc-test: skip: illustrative template (make_flowsheet and specs are the user's own) -->
 ```python
 def build(values):
     fs = make_flowsheet()
@@ -269,6 +271,7 @@ Declare `parameters=` and the objective and constraints become `f(x, p)` and
 `solve(p, x0)` is differentiable with respect to `p` by the implicit-function
 rule on the KKT system:
 
+<!-- doc-test: skip: needs optional asdex and pounce-solver, and a user-built flowsheet -->
 ```python
 from difflow.solvers import Parameter, differentiable_problem
 
@@ -291,7 +294,13 @@ the shape it does.
 ## The residual view
 
 ```python
+from difflow import Flowsheet, Heater, HeaterParams, Unit, make_stream
 from difflow.solvers import as_residual
+
+flowsheet = Flowsheet(species_order=["A", "B"])
+flowsheet.add_feed("feed", make_stream({"A": 5.0, "B": 5.0}, T=300.0, P=101325.0))
+flowsheet.add_unit(Unit("heater", Heater(HeaterParams(T_out=400.0)),
+                        ["feed"], ["hot_out"]))
 
 view = as_residual(flowsheet)     # u = feed streams, v = every other stream
 view(view.u0, view.v0)            # -> residual vector, ~0 at the solution
@@ -312,11 +321,18 @@ view.n_unknowns, view.u_names, view.v_names
   Pass `z0=` and `args=`; this routes to `residual_from_system`.
 
 ```python
+import jax.numpy as jnp
 from difflow.solvers import residual_from_system
 
-residual_fn, _ = make_section_residual(network, n_stages=4)
-view = residual_from_system(residual_fn, z0=guess, args=args,
+# Any r(z, args); for a counter-current section this is what
+# make_section_residual(network, n_stages=4) returns.
+def residual_fn(z, args):
+    return z**2 - args["feed_totals"] * args["k"]
+
+args = {"feed_totals": jnp.array([2.0, 9.0]), "k": jnp.array(1.0)}
+view = residual_from_system(residual_fn, z0=jnp.array([1.0, 1.0]), args=args,
                             u_keys=["feed_totals"])
+view.u_names
 ```
 
 `u_keys` names the subset of `args` the outer model varies; everything else is
@@ -401,6 +417,7 @@ decompose:
 `as_implicit` enforces the integrality half at **build** time rather than letting
 you discover it at solve time, after the model is already written:
 
+<!-- doc-test: skip: needs the optional discopt package, and a user-built flowsheet -->
 ```python
 import discopt.modeling as dm
 from difflow.solvers import as_implicit

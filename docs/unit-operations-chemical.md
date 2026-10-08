@@ -26,16 +26,20 @@ CSTRs are widely used in chemical processes for:
 
 #### Parameters
 
+<!-- doc-test: skip: field listing (a class sketch), not an executable example -->
 ```python
 @dataclass
 class CSTRParams:
-    volume: float          # Reactor volume (m³)
-    stoichiometry: Array   # Stoichiometric matrix [n_species × n_reactions]
-    k_ref: float           # Rate constant at reference temperature (1/s for 1st order)
-    E_a: float             # Activation energy (J/mol)
-    T_ref: float           # Reference temperature for k_ref (K)
-    dH_rxn: Array          # Heat of reaction for each reaction (J/mol)
-    order: int = 1         # Reaction order (default: 1)
+    V: float               # Reactor volume (m³)
+    rate_fn: Callable      # Rate function: rate_fn(C, T, rate_params) -> r  [n_reactions]
+    stoich: Array          # Stoichiometric matrix [n_species × n_reactions]
+    rate_params: dict      # Parameters passed to rate_fn (k_ref, E_a, ...)
+    species_order: list    # Species names, in the row order of `stoich`
+    dH_rxn: Array = None   # Heat of reaction for each reaction (J/mol)
+    molar_density: float = None  # Constant molar density (mol/m³), see below
+    eos: Any = None        # Cubic EOS for the reaction-phase density
+    reaction_phase: str = None   # 'liquid' or 'vapor' (required with eos)
+    T_damping: float = ... # Damping on the adiabatic/duty temperature solve
 ```
 
 #### Inputs
@@ -54,13 +58,15 @@ class CSTRParams:
 | `outlet` | Stream | - | Outlet stream |
 | `info['Q']` | float | W | Heat duty (positive = heating) |
 | `info['rates']` | Array | mol/m³/s | Reaction rates |
-| `info['conversion']` | float | - | Conversion of limiting reactant |
+| `info['conversion']` | dict | - | Conversion of each species |
 
 #### Operating Modes
 
-1. **Isothermal** (`T_spec` provided): Outlet temperature is fixed, heat duty calculated
-2. **Adiabatic** (no `T_spec` or `Q_spec`): Q = 0, outlet temperature calculated
-3. **Specified Duty** (`Q_spec` provided): Heat duty fixed, outlet temperature calculated
+The mode is chosen when the unit is built (`CSTR(params, thermo, mode=...)`):
+
+1. **Isothermal** (`mode='isothermal'`, `T_spec` given at call time): Outlet temperature is fixed, heat duty calculated
+2. **Adiabatic** (`mode='adiabatic'`): Q = 0, outlet temperature calculated
+3. **Specified Duty** (`mode='specified_duty'`, `Q_spec` given at call time): Heat duty fixed, outlet temperature calculated
 
 #### Governing Equations
 
@@ -102,31 +108,44 @@ $$X = \frac{F_{A,in} - F_{A,out}}{F_{A,in}}$$
 #### Example Usage
 
 ```python
-from difflow.units.cstr import CSTR, CSTRParams
-from difflow.streams import make_stream
-from difflow.thermo import IdealThermo
+from difflow import CSTR, CSTRParams, IdealThermo, SpeciesData, make_stream
 import jax.numpy as jnp
 
+# Two-species thermodynamics (liquid Cp, Antoine and Hvap constants)
+species_data = {
+    n: SpeciesData(n, MW=100.0, Cp_coeffs=(150.0, 0.0, 0.0, 0.0),
+                   Hvap_coeffs=(35000.0, 0.38, 600.0),
+                   antoine_coeffs=(10.0, 3000.0, -50.0))
+    for n in ('A', 'B')
+}
+thermo = IdealThermo(species_data)
+
 # A -> B (first-order, exothermic)
+def rate_fn(C, T, p):
+    k = p['k_ref'] * jnp.exp(p['E_a'] / 8.314 * (1 / p['T_ref'] - 1 / T))
+    return jnp.array([k * C['A']])
+
 params = CSTRParams(
-    volume=2.0,  # m³
-    stoichiometry=jnp.array([[-1.0], [1.0]]),  # A -> B
-    k_ref=0.1,   # 1/s at 350 K
-    E_a=50000.0, # J/mol
-    T_ref=350.0, # K
-    dH_rxn=jnp.array([-80000.0])  # J/mol (exothermic)
+    V=2.0,  # m³
+    rate_fn=rate_fn,
+    stoich=jnp.array([[-1.0], [1.0]]),  # A -> B
+    rate_params={'k_ref': 1e-3, 'E_a': 50000.0, 'T_ref': 350.0},  # 1/s at 350 K
+    species_order=['A', 'B'],
+    dH_rxn=jnp.array([-80000.0]),  # J/mol (exothermic)
+    molar_density=1000.0,  # mol/m³
 )
 
-cstr = CSTR(params, thermo, species_order=['A', 'B'])
 inlet = make_stream({'A': 1.0, 'B': 0.0}, T=350.0, P=101325.0)
 
-# Isothermal operation
+# Isothermal operation: the mode is set on the unit
+cstr = CSTR(params, thermo, mode='isothermal')
 outlet, info = cstr(inlet, T_spec=350.0)
-print(f"Conversion: {info['conversion']:.2%}")
+print(f"Conversion of A: {info['conversion']['A']:.2%}")
 print(f"Heat duty: {info['Q']:.2f} W")
 
 # Adiabatic operation
-outlet_adiab, info_adiab = cstr(inlet)
+cstr_adiab = CSTR(params, thermo, mode='adiabatic')
+outlet_adiab, info_adiab = cstr_adiab(inlet)
 print(f"Outlet temperature: {outlet_adiab['T']:.1f} K")
 ```
 
@@ -161,8 +180,11 @@ three; `info['molar_density']` then reports the density that flow implies.
 from difflow.eos import PengRobinson
 from difflow.database import get_critical_props
 
+species = ['propane', 'n-butane']
 eos = PengRobinson({c: get_critical_props(c) for c in species})
-params = CSTRParams(..., eos=eos, reaction_phase='liquid')
+params_eos = CSTRParams(V=2.0, rate_fn=lambda C, T, p: jnp.array([p['k'] * C['propane']]),
+                        stoich=jnp.array([[-1.0], [1.0]]), rate_params={'k': 1e-3},
+                        species_order=species, eos=eos, reaction_phase='liquid')
 ```
 
 #### Design Considerations
@@ -193,6 +215,7 @@ PFRs are preferred for:
 
 #### Parameters
 
+<!-- doc-test: skip: field listing (a class sketch), not an executable example -->
 ```python
 @dataclass
 class PFRParams:
@@ -202,6 +225,7 @@ class PFRParams:
     rate_params: dict      # Parameters passed to rate_fn
     species_order: list    # List of species names
     dH_rxn: Array = None   # Heat of reaction (J/mol), required for non-isothermal
+    dP_dV: float = None    # Pressure gradient along the reactor (Pa/m³), optional
     rtol: float = 1e-6     # Relative tolerance for ODE solver
     atol: float = 1e-8     # Absolute tolerance for ODE solver
     n_save_points: int = 101  # Points to save in profile output
@@ -220,10 +244,10 @@ class PFRParams:
 | Parameter | Type | Units | Description |
 |-----------|------|-------|-------------|
 | `outlet` | Stream | - | Outlet stream |
-| `info['conversion']` | float | - | Conversion of limiting reactant |
-| `info['V_profile']` | Array | m³ | Volume along reactor |
-| `info['F_profile']` | Array | mol/s | Molar flows along reactor |
-| `info['T_profile']` | Array | K | Temperature along reactor |
+| `info['conversion']` | dict | - | Conversion of each species |
+| `info['profiles']['V']` | Array | m³ | Volume along reactor |
+| `info['profiles']['F']` | Array | mol/s | Molar flows along reactor, `[n_save_points, n_species]` |
+| `info['profiles']['T']` | Array | K | Temperature along reactor |
 
 #### Governing Equations
 
@@ -241,19 +265,20 @@ $$\frac{dT}{dV} = \frac{-\sum_j r_j \Delta H_{rxn,j}}{F_{total} C_{p,mix}}$$
 
 ```python
 from difflow.units.pfr import PFR, PFRParams
+from difflow import make_stream
 import jax.numpy as jnp
 
 # Define rate function: A -> B (first-order)
-def rate_fn(C, T, params):
+def pfr_rate_fn(C, T, params):
     """Rate function: r = k * C_A with Arrhenius temperature dependence."""
     k_ref, E_a, T_ref = params['k_ref'], params['E_a'], params['T_ref']
     R = 8.314
     k = k_ref * jnp.exp(E_a / R * (1/T_ref - 1/T))
     return jnp.array([k * C['A']])
 
-params = PFRParams(
-    V=5.0,
-    rate_fn=rate_fn,
+pfr_params = PFRParams(
+    V=0.005,
+    rate_fn=pfr_rate_fn,
     stoich=jnp.array([[-1.0], [1.0]]),  # A -> B
     rate_params={'k_ref': 0.5, 'E_a': 60000.0, 'T_ref': 400.0},
     species_order=['A', 'B'],
@@ -261,13 +286,14 @@ params = PFRParams(
     n_save_points=201
 )
 
-pfr = PFR(params, thermo)
-inlet = make_stream({'A': 2.0, 'B': 0.0}, T=400.0, P=200000.0)
-outlet, info = pfr(inlet, Q=0.001)  # Q = volumetric flow rate
+pfr = PFR(pfr_params, thermo)
+pfr_inlet = make_stream({'A': 2.0, 'B': 0.0}, T=400.0, P=200000.0)
+outlet, info = pfr(pfr_inlet, volumetric_flow=0.001)  # m³/s
 
 # Plot conversion profile
 import matplotlib.pyplot as plt
-plt.plot(info['V_profile'], 1 - info['F_profile'][:, 0] / inlet['F_A'])
+prof = info['profiles']
+plt.plot(prof['V'], 1 - prof['F'][:, 0] / pfr_inlet['F_A'])
 plt.xlabel('Volume (m³)')
 plt.ylabel('Conversion')
 ```
@@ -287,13 +313,12 @@ plt.ylabel('Conversion')
 
 #### Additional Parameters
 
+<!-- doc-test: skip: field listing (a class sketch), not an executable example -->
 ```python
 @dataclass
 class GasPFRParams(PFRParams):
-    alpha: float           # Pressure drop parameter (1/m³)
-    diameter: float        # Reactor diameter (m)
-    void_fraction: float   # Bed void fraction (for packed beds)
-    particle_diameter: float  # Catalyst particle diameter (m)
+    alpha: float           # Pressure drop parameter (1/m³); fold the Ergun
+                           # terms (diameter, void fraction, particle size) into it
 ```
 
 #### Additional Equations
@@ -316,7 +341,7 @@ Additional outputs compared to PFR:
 
 | Parameter | Type | Units | Description |
 |-----------|------|-------|-------------|
-| `info['P_profile']` | Array | Pa | Pressure along reactor |
+| `info['profiles']['P']` | Array | Pa | Pressure along reactor |
 | `info['pressure_drop']` | float | Pa | Total pressure drop |
 
 ---
@@ -340,6 +365,7 @@ Fed-batch reactors are used for:
 
 #### Parameters
 
+<!-- doc-test: skip: field listing (a class sketch), not an executable example -->
 ```python
 @dataclass
 class FedBatchParams:
@@ -380,13 +406,28 @@ $$\frac{d(V \rho C_p T)}{dt} = F_{in} \rho_{in} C_{p,in} T_{in} + V \sum_j r_j (
 #### Utility Functions
 
 ```python
-from difflow.units.fed_batch import batch_time_for_conversion, optimal_feed_profile
+from difflow.units.fed_batch import (
+    FedBatchParams, batch_time_for_conversion, optimal_feed_profile,
+)
 
-# Calculate batch time for target conversion
-t_batch = batch_time_for_conversion(params, target_X=0.95)
+fb_params = FedBatchParams(
+    V0=1.0,
+    rate_fn=lambda C, T, p: jnp.array([p['k'] * C['A']]),
+    stoich=jnp.array([[-1.0], [1.0]]),     # A -> B
+    rate_params={'k': 1e-3},
+    species_order=['A', 'B'],
+)
+C0 = {'A': 1000.0, 'B': 0.0}               # mol/m³
 
-# Generate optimal feed profile (minimize batch time)
-feed_profile = optimal_feed_profile(params, constraints={'max_T': 400.0})
+# Calculate batch time for target conversion (here 95 % of A)
+t_batch = batch_time_for_conversion(fb_params, C0, 350.0, 'A', 0.95)
+
+# Generate an optimal piecewise-constant feed profile (maximize product B)
+feed_fn, t_opt = optimal_feed_profile(
+    'max_yield', fb_params, C0, 350.0, 'B',
+    feed_composition={'A': 2000.0, 'B': 0.0}, V_max=2.0, t_max=3600.0,
+    n_intervals=4, n_sim_steps=50,
+)
 ```
 
 ---
@@ -409,7 +450,7 @@ nothing but its display symbol:
 ```python
 from difflow.units.fed_batch import SemiBatchReactor, FedBatchParams
 
-reactor = SemiBatchReactor(params, thermo, mode="isothermal")   # params: FedBatchParams
+reactor = SemiBatchReactor(fb_params, thermo, mode="isothermal")   # fb_params: FedBatchParams
 ```
 
 Everything in [FedBatchReactor](#fedbatchreactor) --- parameters, feed
@@ -442,6 +483,7 @@ cstr = CSTR(CSTRParams(V=1.5, **kin.params_kwargs()))
 
 The dictionary format is exactly what [`import_reactions`](thermodynamics.md) returns from a Cantera YAML file, so a published mechanism goes straight into a reactor:
 
+<!-- doc-test: skip: needs a Cantera mechanism file (mech.yaml) on disk -->
 ```python
 from difflow import import_reactions
 
@@ -497,6 +539,7 @@ Flash drums are used for:
 
 #### Parameters
 
+<!-- doc-test: skip: field listing (a class sketch), not an executable example -->
 ```python
 @dataclass
 class FlashParams:
@@ -567,10 +610,13 @@ $$F z_i = L x_i + V y_i$$
 Uses Raoult's law K-values from IdealThermo. Suitable for ideal or near-ideal mixtures.
 
 ```python
+from difflow import IdealThermo, make_stream
+from difflow.database import get_species_data
 from difflow.units.flash import Flash, FlashParams
 
+thermo = IdealThermo({n: get_species_data(n) for n in ['methane', 'ethane', 'propane']})
 flash = Flash(FlashParams(species_order=['methane', 'ethane', 'propane']), thermo)
-feed = make_stream({'methane': 0.5, 'ethane': 0.3, 'propane': 0.2}, T=300.0, P=500000.0)
+feed = make_stream({'methane': 0.5, 'ethane': 0.3, 'propane': 0.2}, T=200.0, P=500000.0)
 
 liquid, vapor, info = flash(feed)
 print(f"Vapor fraction: {info['V_frac']:.3f}")
@@ -608,10 +654,11 @@ Performs adiabatic flash at constant pressure and enthalpy. Solves for flash tem
 ```python
 from difflow.units.flash import PHFlash, FlashParams
 
-ph_flash = PHFlash(FlashParams(species_order=['Light', 'Heavy']), thermo)
+thermo_lh = IdealThermo({n: get_species_data(n) for n in ['n_pentane', 'n_heptane']})
+ph_flash = PHFlash(FlashParams(species_order=['n_pentane', 'n_heptane']), thermo_lh)
 
 # Hot liquid feed, flash to lower pressure
-feed = make_stream({'Light': 50.0, 'Heavy': 50.0}, T=380.0, P=101325.0)
+feed = make_stream({'n_pentane': 50.0, 'n_heptane': 50.0}, T=380.0, P=101325.0)
 liquid, vapor, info = ph_flash(feed, P=30000.0)
 
 print(f"Flash temperature: {info['T_flash']:.1f} K")
@@ -623,8 +670,8 @@ print(f"Vapor fraction: {info['V_frac']:.3f}")
 The `Flash` class provides methods for calculating phase boundaries:
 
 ```python
-flash = Flash(FlashParams(species_order=['Light', 'Heavy']), thermo)
-feed = make_stream({'Light': 50.0, 'Heavy': 50.0}, T=350.0, P=50000.0)
+flash = Flash(FlashParams(species_order=['n_pentane', 'n_heptane']), thermo_lh)
+feed = make_stream({'n_pentane': 50.0, 'n_heptane': 50.0}, T=350.0, P=50000.0)
 
 # Pressure calculations (at specified T)
 P_bubble = flash.bubble_point_pressure(feed, T=350.0)  # First bubble forms
@@ -665,11 +712,12 @@ $$T_{out} = \frac{\sum_k F_k C_{p,k} T_k}{\sum_k F_k C_{p,k}}$$
 ```python
 from difflow.units.flash import Mixer
 
-mixer = Mixer(thermo, species_order=['A', 'B', 'C'])
-stream1 = make_stream({'A': 1.0, 'B': 0.5}, T=350.0, P=101325.0)
-stream2 = make_stream({'B': 0.3, 'C': 0.2}, T=360.0, P=101325.0)
+mixer = Mixer(['A', 'B', 'C'])   # optional: thermo=..., phase='liquid'
+stream1 = make_stream({'A': 1.0, 'B': 0.5, 'C': 0.0}, T=350.0, P=101325.0)
+stream2 = make_stream({'A': 0.0, 'B': 0.3, 'C': 0.2}, T=360.0, P=101325.0)
 
-outlet, info = mixer([stream1, stream2])
+# Streams are passed as separate arguments; each carries every species
+outlet, info = mixer(stream1, stream2)
 ```
 
 ---
@@ -695,11 +743,11 @@ All outlet streams have the same composition and temperature as the inlet.
 ```python
 from difflow.units.flash import Splitter
 
-splitter = Splitter()
+splitter = Splitter(species_order=['A', 'B'])
 inlet = make_stream({'A': 1.0, 'B': 0.5}, T=350.0, P=101325.0)
 
 # Split into 3 streams: 50%, 30%, 20%
-outlets, info = splitter(inlet, fractions=[0.5, 0.3, 0.2])
+out1, out2, out3, info = splitter(inlet, split_frac=[0.5, 0.3, 0.2])
 ```
 
 ---
@@ -724,6 +772,7 @@ Shortcut methods are used for:
 
 #### Parameters
 
+<!-- doc-test: skip: field listing (a class sketch), not an executable example -->
 ```python
 @dataclass
 class ShortcutColumnParams:
@@ -741,6 +790,7 @@ distillate's actual light-key mole fraction comes back in `info["x_D"]`.
 The reflux ratio is not a parameter — it is an argument to the call, along with
 the column pressure and the feed quality:
 
+<!-- doc-test: skip: call fragment; the column and feed are built in Example Usage below -->
 ```python
 distillate, bottoms, info = column(feed, R=3.0, P=101325.0, q=1.0)
 ```
@@ -918,6 +968,7 @@ composition.
 
 #### Parameters
 
+<!-- doc-test: skip: field listing (a class sketch), not an executable example -->
 ```python
 @dataclass
 class DistillationColumnParams:
@@ -985,6 +1036,7 @@ silently solved as a total condenser.
 The reflux ratio and the product split are arguments to the call, not
 parameters — give exactly one of `D_spec` or `B_spec`:
 
+<!-- doc-test: skip: call fragment; the column is built in the examples below -->
 ```python
 distillate, bottoms, info = column(feed, R=2.0, B_spec=40.0)
 ```
@@ -1218,6 +1270,7 @@ component material balances — see [Solver Paths](#solver-paths) above.
 
 #### Parameters
 
+<!-- doc-test: skip: field listing (a class sketch), not an executable example -->
 ```python
 @dataclass
 class HeaterParams:
@@ -1281,7 +1334,12 @@ inverting the enthalpy.
 #### Example Usage
 
 ```python
+from difflow import IdealThermo, make_stream
+from difflow.database import get_species_data
 from difflow.units.heat_exchanger import Heater, HeaterParams
+
+thermo = IdealThermo({'water': get_species_data('water')})
+inlet = make_stream({'water': 10.0}, T=300.0, P=101325.0)
 
 # Specified duty
 heater = Heater(HeaterParams(duty=50000.0, Cp=75.0))
@@ -1318,7 +1376,9 @@ Same as Heater, including both energy models and the `DefaultCpWarning`
 fallback, with the duty sign reversed: `Q > 0` means heat removed.
 
 ```python
-cooler = Cooler(CoolerParams(T_out=320.0), thermo=thermo)
+from difflow.units.heat_exchanger import Cooler, CoolerParams
+
+cooler = Cooler(CoolerParams(T_out=280.0), thermo=thermo)
 outlet, info = cooler(inlet)
 ```
 
@@ -1341,13 +1401,18 @@ Counter-current heat exchangers are preferred for:
 
 #### Parameters
 
+<!-- doc-test: skip: field listing (a class sketch), not an executable example -->
 ```python
 @dataclass
 class HeatExchangerParams:
-    mode: str              # 'design' or 'rating'
-    UA: float = None       # Overall HTC × Area (W/K) for rating
-    approach: float = 10.0 # Minimum approach temperature (K) for design
+    UA: float = None       # Overall HTC × Area (W/K)
+    Cp_hot: float = None   # Hot side heat capacity (J/mol·K), default 75
+    Cp_cold: float = None  # Cold side heat capacity (J/mol·K), default 75
+    min_approach: float = 10.0  # Minimum temperature approach (K)
 ```
+
+`CounterCurrentHX(params)` takes only the parameters: there is no thermo
+object and no species list, and `UA` can be overridden per call.
 
 #### Inputs
 
@@ -1364,7 +1429,7 @@ class HeatExchangerParams:
 | `cold_outlet` | Stream | - | Cold fluid outlet |
 | `info['Q']` | float | W | Heat duty transferred |
 | `info['LMTD']` | float | K | Log mean temperature difference |
-| `info['UA']` | float | W/K | Required UA (design mode) |
+| `info['UA']` | float | W/K | UA used for the rating |
 
 #### Governing Equations
 
@@ -1400,11 +1465,7 @@ Where:
 ```python
 from difflow.units.heat_exchanger import CounterCurrentHX, HeatExchangerParams
 
-hx = CounterCurrentHX(
-    HeatExchangerParams(mode='rating', UA=5000.0),
-    thermo,
-    species_order=['A', 'B']
-)
+hx = CounterCurrentHX(HeatExchangerParams(UA=50.0, Cp_hot=75.0, Cp_cold=75.0))
 
 hot_in = make_stream({'A': 1.0}, T=450.0, P=101325.0)
 cold_in = make_stream({'B': 0.8}, T=300.0, P=101325.0)
@@ -1460,6 +1521,7 @@ Cross-flow heat exchangers are used for:
 
 #### Parameters
 
+<!-- doc-test: skip: signature listing (a class sketch), not an executable example -->
 ```python
 @dataclass
 class HeatExchangerParams:
@@ -1592,6 +1654,7 @@ counter-current double-pipe or a 1-1 arrangement).
 
 #### Parameters
 
+<!-- doc-test: skip: field listing (a class sketch), not an executable example -->
 ```python
 @dataclass
 class ShellAndTubeHXParams:
@@ -1695,6 +1758,7 @@ single-phase service where the two agree.
 
 #### Parameters
 
+<!-- doc-test: skip: field listing (a class sketch), not an executable example -->
 ```python
 @dataclass
 class EnthalpyHXParams:
@@ -1815,7 +1879,9 @@ eps_co = effectiveness_co_current(NTU=2.0, Cr=0.5)
 eps_cross = effectiveness_crossflow_both_unmixed(NTU=2.0, Cr=0.5)
 
 # Design for specified duty
-UA, area = design_heat_exchanger(Q=100000, LMTD=30, U=500)
+design = design_heat_exchanger(Q=100000.0, T_hot_in=400.0, T_hot_out=350.0,
+                               T_cold_in=300.0, T_cold_out=340.0, U=500.0)
+design['UA'], design['A'], design['LMTD']   # W/K, m², K
 ```
 
 ---
@@ -1854,6 +1920,7 @@ code context binds them.
 
 #### Parameters
 
+<!-- doc-test: skip: field listing (a class sketch), not an executable example -->
 ```python
 @dataclass
 class LLEEquilibrium:
@@ -1930,6 +1997,7 @@ LLE is used for:
 
 #### Parameters
 
+<!-- doc-test: skip: field listing (a class sketch), not an executable example -->
 ```python
 @dataclass
 class CascadeParams:
@@ -2011,6 +2079,7 @@ print(info['profiles'].keys())  # stage profiles: x, y, carrier_transfer, ...
 
 ```python
 from difflow.units.lle import (
+    DistributionCoeffs,
     get_K_values,
     nrtl_activity_coefficients,
     uniquac_activity_coefficients,
@@ -2019,14 +2088,15 @@ from difflow.units.lle import (
     stages_for_recovery
 )
 
-# Estimate K-values from activity coefficients
-K = get_K_values(gamma_extract, gamma_raffinate, x_eq)
+# Distribution coefficients at a temperature (tabulated K0 at Tref)
+coeffs = DistributionCoeffs(species=("acetic_acid",), K0=(2.5,))
+K = get_K_values(coeffs, 298.15)["acetic_acid"]
 
-# Calculate minimum solvent for given recovery
-S_min = minimum_solvent_ratio(K, target_recovery=0.95)
+# Minimum solvent-to-feed ratio for a given recovery
+S_min = minimum_solvent_ratio(K, recovery=0.95)
 
-# Estimate stages needed
-N = stages_for_recovery(K, S/F, target_recovery=0.99)
+# Stages needed (Kremser) at an actual solvent-to-feed ratio above the minimum
+N = stages_for_recovery(K, 1.5 * S_min, recovery=0.95)
 ```
 
 ---
