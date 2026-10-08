@@ -82,30 +82,37 @@ class TestBug139PermeateRecycleMassBalance:
             )
 
     def test_retentate_includes_stage2_retentate(self):
-        """Retentate should be larger than stage 1 retentate alone."""
-        params = MembraneParams(
-            membrane_type="Matrimid",
-            area=500.0,
-            pressure_ratio=10.0,
-            feed_pressure=1000000.0,
-        )
-        cascade = MultistageMembrane(
-            params, n_stages=2, configuration="permeate_recycle"
-        )
+        """Stage 2's retentate comes back through stage 1, so it leaves in
+        the cascade retentate: more than stage 1 retentates from the feed.
+
+        Uses a smaller second stage so the recycle is real. With one shared
+        500 m2 area the exact flux model has stage 2 permeate essentially
+        all of its small feed, the recycle is ~1e-9 mol/s, and the old strict
+        comparison against stage 1 alone came down to the last bit (it
+        passed on Python 3.11 and failed on 3.12).
+        """
+        stage_1 = MembraneParams(membrane_type="Matrimid", area=2000.0,
+                                 pressure_ratio=10.0, feed_pressure=1000000.0)
+        stage_2 = MembraneParams(membrane_type="Matrimid", area=200.0,
+                                 pressure_ratio=10.0, feed_pressure=1000000.0)
+        cascade = MultistageMembrane(stage_1, n_stages=2,
+                                     configuration="permeate_recycle",
+                                     stage_params=[stage_1, stage_2])
         feed = _flue_gas_feed()
 
         retentate, permeate, info = cascade(feed)
+        ret_alone, _, _ = MembraneSeparator(stage_1)(feed)
 
-        # Stage 1 alone
-        stage1 = MembraneSeparator(params)
-        ret_1, perm_1, _ = stage1(feed)
-
-        # The combined retentate should be greater than stage 1 retentate alone
-        # because it includes stage 2 retentate
+        recycle = float(info["recycle_flow"])
+        assert recycle > 0.1
+        assert float(info["recycle_residual"]) < 1e-8
+        # the recycle leaves through the retentate: the cascade retentate
+        # exceeds stage 1 alone by a clear margin, not a rounding difference
         F_combined = float(total_flow(retentate))
-        F_stage1_only = float(total_flow(ret_1))
-        assert F_combined > F_stage1_only, (
-            f"Combined retentate ({F_combined}) should exceed stage 1 retentate ({F_stage1_only})"
+        F_stage1_only = float(total_flow(ret_alone))
+        assert F_combined - F_stage1_only > 0.1 * recycle, (
+            f"Combined retentate ({F_combined}) should exceed stage 1 "
+            f"retentate ({F_stage1_only})"
         )
 
 
