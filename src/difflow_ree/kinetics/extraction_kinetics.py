@@ -47,7 +47,9 @@ def forward_extraction_rate(
 
     Args:
         C_aq: Aqueous REE concentration (M)
-        C_extractant: Extractant concentration (M)
+        C_extractant: Extractant concentration (M), on the basis the rate
+            constant was fitted on (the plugin's units use the record basis:
+            dimer for D2EHPA, PC88A and Cyanex272; #374)
         k_f: Forward rate constant
         n: Reaction order w.r.t. extractant
 
@@ -105,7 +107,9 @@ def net_extraction_rate(
     Args:
         C_aq: Aqueous REE concentration (M)
         C_org: Organic REE concentration (M)
-        C_extractant: Extractant concentration (M)
+        C_extractant: Extractant concentration (M), on the basis the rate
+            constant was fitted on (the plugin's units use the record basis:
+            dimer for D2EHPA, PC88A and Cyanex272; #374)
         C_H: H+ concentration (M)
         k_f: Forward rate constant
         k_r: Reverse rate constant
@@ -173,7 +177,9 @@ class ExtractionKineticsParams(ParamsMixin):
         k_f: Forward rate constant (1/s or M^-n/s)
         k_r: Reverse rate constant (1/s or M^-n/s)
         n: Reaction order w.r.t. extractant/H+
-        C_extractant: Extractant concentration (M)
+        C_extractant: Extractant concentration (M), on the basis the rate
+            constant was fitted on (the plugin's units use the record basis:
+            dimer for D2EHPA, PC88A and Cyanex272; #374)
         E_a: Activation energy (J/mol)
         T_ref: Reference temperature (K)
     """

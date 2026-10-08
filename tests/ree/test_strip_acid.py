@@ -36,8 +36,9 @@ def test_acid_conc_sets_the_pH():
 
 def test_stronger_acid_strips_more():
     weak, _ = _strip(acid_conc=0.01)
-    strong, info = _strip(acid_conc=8.0)
-    assert float(info["acid_conc"]) == pytest.approx(8.0)
+    # 6 M, the default max_strip_acid; 8 M is refused now (see below).
+    strong, info = _strip(acid_conc=6.0)
+    assert float(info["acid_conc"]) == pytest.approx(6.0)
     assert float(strong["Y"]) > float(weak["Y"])
     assert float(strong["Dy"]) > 10 * float(weak["Dy"])
 

@@ -53,7 +53,9 @@ def oxidative_degradation_rate(
     dC/dt = -k_ox * C * exp(-E_a/R * (1/T - 1/T_ref))
 
     Args:
-        C_extractant: Extractant concentration (M)
+        C_extractant: Extractant concentration (M), on the basis the rate
+            constant was fitted on (the plugin's units use the record basis:
+            dimer for D2EHPA, PC88A and Cyanex272; #374)
         T: Temperature (K)
         k_ox: Oxidation rate constant at T_ref (1/h)
         E_a: Activation energy (J/mol)
@@ -89,7 +91,9 @@ def hydrolytic_degradation_rate(
     Acid-catalyzed hydrolysis of extractant.
 
     Args:
-        C_extractant: Extractant concentration (M)
+        C_extractant: Extractant concentration (M), on the basis the rate
+            constant was fitted on (the plugin's units use the record basis:
+            dimer for D2EHPA, PC88A and Cyanex272; #374)
         C_H2O: Water content in organic (M)
         T: Temperature (K)
         k_hyd: Hydrolysis rate constant (1/M/h)
@@ -133,7 +137,9 @@ def solubility_loss_rate(
     Args:
         Q_org: Organic flow rate (L/h)
         Q_aq: Aqueous flow rate (L/h)
-        C_extractant: Extractant concentration (M)
+        C_extractant: Extractant concentration (M), on the basis the rate
+            constant was fitted on (the plugin's units use the record basis:
+            dimer for D2EHPA, PC88A and Cyanex272; #374)
         S_extractant: Solubility in aqueous (M)
 
     Returns:
@@ -170,7 +176,9 @@ def total_degradation_rate(
     """Calculate total degradation rate from all pathways.
 
     Args:
-        C_extractant: Extractant concentration (M)
+        C_extractant: Extractant concentration (M), on the basis the rate
+            constant was fitted on (the plugin's units use the record basis:
+            dimer for D2EHPA, PC88A and Cyanex272; #374)
         T: Temperature (K)
         k_ox: Oxidation rate constant (1/h)
         k_hyd: Hydrolysis rate constant (1/M/h)

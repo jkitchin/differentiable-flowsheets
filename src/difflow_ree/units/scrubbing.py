@@ -70,7 +70,12 @@ class ScrubberParams(ParamsMixin):
             organic is ``pH`` (and ``n_stages`` and the phase ratio).
         diluent: Organic diluent name (e.g., "kerosene", "n-dodecane")
         pH: Scrub solution pH (lower pH strips more)
-        extractant_conc: Extractant concentration (M)
+        extractant_conc: Extractant concentration in the organic (M), on the
+            extractant record's own basis: DIMER for the dimeric D2EHPA, PC88A
+            and Cyanex272 (0.5 M dimer = 1.0 M formal), molecules (monomer) for
+            TBP and naphthenic acid. The loading capacity is this divided by
+            ``Extractant.basis_units_per_ree`` (3 for every shipped record;
+            #374).
         scrub_type: DEPRECATED and ignored (#288). It never entered the
             calculation and there is nothing for it to select; see
             :class:`ScrubTypeDeprecationWarning`. Setting it warns.

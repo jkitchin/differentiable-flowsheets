@@ -244,9 +244,12 @@ class ReactionNetwork(ValueKeyed):
         extractant_basis: ``"dimer"`` or ``"monomer"``.
         monomers_per_component: Extractant monomers in one mole of the
             extractant component (2 for a dimer basis, 1 for a monomer
-            basis). A solvent stream declares its extractant as a *monomer*
-            molar flow, so this is the divisor that converts it to the
-            component basis.
+            basis). A solvent stream on the mass-action schema declares its
+            extractant as a *monomer* (formal) molar flow, so this is the
+            divisor that converts it to the component basis. The plugin's
+            units state theirs on the record basis (dimer for D2EHPA);
+            ``REEExtractor(model="mass_action")`` converts at the boundary
+            (#374).
         components: Expanded component rows, in tableau column order.
         species: Expanded species rows, in tableau row order.
         nu: ``(n_species, n_components)`` float64 stoichiometric matrix.
@@ -894,7 +897,10 @@ def log_K_from_correlation(
 
     The reference free concentrations are the proton at ``calibration_pH``,
     the extractant at ``extractant_conc`` converted to the component basis,
-    and the anion at ``anion_conc``.
+    and the anion at ``anion_conc``. The correlation is evaluated at that
+    same component-basis concentration, which for the shipped records is the
+    record's own basis (the two are checked equal below), so ``D_corr`` and
+    the closure describe the same solvent (#374).
 
     Args:
         template: Network template name or object.
@@ -915,8 +921,13 @@ def log_K_from_correlation(
             ``valid_ph_range``, which #270 narrowed considerably for D2EHPA
             and Cyanex272.
         T: Reference temperature (K).
-        extractant_conc: Total extractant concentration (M, monomer basis).
-            None uses the record's ``typical_concentration``.
+        extractant_conc: Total extractant concentration (M) on the FORMAL
+            (monomer) basis: 1.0 M D2EHPA monomer is 0.5 M dimer, the
+            ``extractant_conc = 0.5`` of a unit or circuit. Convert a unit's
+            record-basis charge with
+            :attr:`~difflow_ree.database.Extractant.monomers_per_basis_unit`
+            (#374). None uses the record's ``typical_concentration``,
+            converted to the monomer basis.
         anion_conc: Reference free anion concentration (M). Only enters for
             networks whose complex contains the anion (solvating, anion
             exchange); it is exactly cancelled for cation exchange, where the
@@ -939,7 +950,7 @@ def log_K_from_correlation(
         ...     "cation_exchange_dimer", ("Nd",), "D2EHPA", calibration_pH=0.82
         ... )
         >>> round(K["Nd"], 3)
-        -7.454
+        0.108
     """
     from difflow_ree.equilibrium.distribution import REEDistribution
 
@@ -962,7 +973,10 @@ def log_K_from_correlation(
     if monomers_per_component is None:
         monomers_per_component = 2.0 if template.extractant_basis == "dimer" else 1.0
     if extractant_conc is None:
-        extractant_conc = ext.typical_concentration
+        # typical_concentration is on the record's basis (dimer for D2EHPA);
+        # this function's extractant_conc is formal monomer (#374).
+        extractant_conc = (ext.typical_concentration
+                           * ext.monomers_per_basis_unit)
     if calibration_pH is None:
         # The record's own declared basis, which is where everything else
         # derived from the correlation is evaluated (#268). Before #270 this
@@ -979,10 +993,17 @@ def log_K_from_correlation(
         monomers_per_component=monomers_per_component,
     )
 
+    # The correlation's ``concentration`` is on the extractant record's basis
+    # (dimer for D2EHPA), the same basis as the network's extractant
+    # component, so it is the reference component concentration below. It
+    # used to be handed the formal (monomer) charge unconverted, which put
+    # D_corr at twice the dimer concentration the closure then ran at:
+    # D2EHPA's K came out 2**2.38 = 5.2x too large (#374).
+    ref_extractant = float(extractant_conc) / monomers_per_component
     dist = REEDistribution(
         extractant=extractant,
         elements=tuple(elements),
-        concentration=extractant_conc,
+        concentration=ref_extractant,
         **distribution_kwargs,
     )
 
@@ -990,7 +1011,7 @@ def log_K_from_correlation(
     ref = np.ones(net.n_components, dtype=np.float64)
     ref[net.proton_index] = 10.0 ** (-float(calibration_pH))
     ref[net.anion_index] = float(anion_conc)
-    ref[net.extractant_index] = float(extractant_conc) / monomers_per_component
+    ref[net.extractant_index] = ref_extractant
     if net.counter_ion_index is not None:
         ref[net.counter_ion_index] = 1.0
     log_ref = np.log10(ref)
@@ -1131,7 +1152,10 @@ def cation_exchange_network(
         calibration_pH: Reference pH for the calibration. None uses the
             record's ``reference_pH``; see :func:`log_K_from_correlation`.
         T: Reference temperature (K).
-        extractant_conc: Total extractant concentration (M, monomer basis).
+        extractant_conc: Total extractant concentration (M) on the FORMAL
+            (monomer) basis (0.5 M D2EHPA dimer = 1.0 M here); see
+            :func:`log_K_from_correlation` (#374). None uses the record's
+            ``typical_concentration``, converted to the monomer basis.
         log10_K: Measured constants, keyed by element symbol (and by species
             name for a saponified network's counter-ion salt). Supplying these
             bypasses the calibration entirely and is what a user with real
@@ -1156,7 +1180,9 @@ def cation_exchange_network(
     )
     ext = get_extractant(extractant)
     if extractant_conc is None:
-        extractant_conc = ext.typical_concentration
+        # Record basis -> formal monomer basis (#374).
+        extractant_conc = (ext.typical_concentration
+                           * ext.monomers_per_basis_unit)
     # A nitrate-requiring extractant's correlation is driven by the salting
     # anion, so it cannot be evaluated without one (#195).
     if ext.requires_nitrate and "nitrate_conc" not in distribution_kwargs:

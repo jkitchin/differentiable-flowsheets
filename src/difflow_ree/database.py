@@ -791,6 +791,22 @@ class Extractant:
         return float(self.stoichiometry_extractant)
 
     @property
+    def monomers_per_basis_unit(self) -> float:
+        """Extractant monomers (formal molecules) in one unit of the record's
+        concentration basis: 2 for the dimeric D2EHPA, PC88A and Cyanex 272,
+        1 for TBP and naphthenic acid.
+
+        The plugin's units, circuits and correlations state ``extractant_conc``
+        on the record's own basis (0.5 M D2EHPA is 0.5 M dimer = 1.0 M
+        formal), while the mass-action layer
+        (:mod:`difflow_ree.equilibrium.mass_action`,
+        :mod:`difflow_ree.equilibrium.network`) states it on the formal
+        monomer basis. Multiply by this to go from the first to the second
+        (#374). Derived from the declared stoichiometry, never hard-coded.
+        """
+        return self.monomers_per_ree / self.basis_units_per_ree
+
+    @property
     def max_loading(self) -> float:
         """Maximum REE loading capacity (mol REE per mol extractant, counted
         on the record's concentration basis; 1/3 for D2EHPA's dimers)."""

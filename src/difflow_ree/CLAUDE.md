@@ -28,6 +28,14 @@ the root CLAUDE.md, which keeps only what every session needs).
   capacity until #374), which a total-basis correlation returns a
   finite D for. Do NOT compose with `LoadingIsotherm.apparent_D`: that caps
   the answer, this changes the input (#190/#204's double count).
+- Extractant basis (#374, kept): `extractant_conc`, solvent-stream
+  extractant flows and the correlations are on the RECORD basis (dimer for
+  D2EHPA/PC88A/Cyanex272: 0.5 M dimer = 1.0 M formal). The mass-action layer
+  (`MassActionParams`, `log_K_from_correlation`, schema streams) is FORMAL
+  monomer. Convert with `Extractant.monomers_per_basis_unit`, never a
+  literal 2; `REEExtractor(model="mass_action")` converts params and the
+  solvent stream, and the mass-action layer converts back before calling
+  `REEDistribution`. Unconverted, the closure saw half the extractant.
 - Langmuir constants are DERIVED (#268): `typical_K_L` was a second extractant
   table hand-synced with the YAML, and three of four entries matched the
   coefficients at NO pH (rms log10 residual 0.62/0.85/0.92 at best fit). Now
@@ -60,7 +68,14 @@ the root CLAUDE.md, which keeps only what every session needs).
   organic phase on the diluent.
   Do NOT go back to window fractions (`default_pH`) for circuits: they left
   99.8 % of the Y on a D2EHPA solvent. Strip cuts for heavy REE on D2EHPA lie
-  below the fitted window; the warning is the policy, never clamp.
+  below the fitted window (pH -1.17, 14.6 M). A strip pH the CODE chooses
+  is floored at `-log10(max_strip_acid)` (default 6 M, pH -0.78): the strip
+  runs there, `results["strip_retained"]` / the train's solvent holdup say
+  what stays on the solvent, design helpers add strip stages at the floor
+  and raise `StripAcidLimitWarning` when that cannot meet the target, and
+  `StripperParams` refuses an `acid_conc` above it when deriving the pH. A
+  pH the CALLER passes is never clamped. Stopgap until D2EHPA is refitted
+  to strong acid (#384).
   `StripperParams.pH=None` means `-log10(acid_conc)`; TBP strips at
   `strip_nitrate_conc`. Sections carry non-REE species through
   (`units/carry.py`); precipitators are reagent-capped.

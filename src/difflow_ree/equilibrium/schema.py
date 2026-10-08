@@ -26,11 +26,16 @@ Key conventions, which are the existing plugin conventions made explicit:
   phase it is in is a property of the stream, not of the key: the symbol in an
   aqueous stream is dissolved ``RE3+``, the same symbol in an organic stream is
   the loaded complex. This is what ``REEExtractor`` has always done.
-- ``extractant`` is the **total** extractant molar flow on a **monomer**
-  basis, free plus bound, exactly as ``REEExtractor``'s capacity calculation
-  reads it. The reaction network converts to its own basis using
-  ``monomers_per_component`` (2 for the dimeric acidic organophosphorus
-  extractants).
+- ``extractant`` is the **total** extractant molar flow on the formal
+  **monomer** basis, free plus bound. The reaction network converts to its
+  own basis using ``monomers_per_component`` (2 for the dimeric acidic
+  organophosphorus extractants). This is NOT the basis of the plugin's
+  units and circuits, whose solvent streams and ``extractant_conc`` are on
+  the extractant record's basis (dimer for D2EHPA, PC88A and Cyanex 272:
+  0.5 M dimer = 1.0 M formal) because the correlations and the loading
+  capacity are (#374). ``REEExtractor(model="mass_action")`` converts at
+  that boundary with
+  :attr:`~difflow_ree.database.Extractant.monomers_per_basis_unit`.
 - ``H`` is free acid in the aqueous phase, ``H_org`` co-extracted acid in the
   organic phase.
 - ``Na`` is the aqueous counter-ion and ``Na_org`` (#197) is the counter-ion

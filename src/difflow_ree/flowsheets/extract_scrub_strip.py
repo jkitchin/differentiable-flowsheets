@@ -30,6 +30,8 @@ from jax import Array
 from difflow.numerics import safe_divide
 from difflow.params_mixin import ParamsMixin
 from difflow.streams import Stream, make_stream, get_flows
+from difflow_ree.equilibrium.operating_points import MAX_STRIP_ACID
+from difflow_ree.flowsheets.extract_strip import _strip_retained
 from difflow_ree.units.extraction import REEExtractor, REEExtractorParams
 from difflow_ree.units.scrubbing import REEScrubber, ScrubberParams
 from difflow_ree.units.stripping import REEStripper, StripperParams
@@ -69,7 +71,12 @@ class ExtractScrubStripParams(ParamsMixin):
             ``D * (O/A) = 0.1``. Heavy REE on D2EHPA need strong acid, below
             the fitted window; the distribution warns about the
             extrapolation when the section runs.
-        extractant_conc: Extractant concentration (M)
+        extractant_conc: Extractant concentration in the organic (M), on the
+            extractant record's own basis: DIMER for the dimeric D2EHPA, PC88A
+            and Cyanex272 (0.5 M dimer = 1.0 M formal), molecules (monomer) for
+            TBP and naphthenic acid. The loading capacity is this divided by
+            ``Extractant.basis_units_per_ree`` (3 for every shipped record;
+            #374).
         solvent_to_feed_ratio: O/A in extraction
         scrub_to_solvent_ratio: Scrub/O ratio
         strip_to_solvent_ratio: Strip/O ratio
@@ -107,6 +114,13 @@ class ExtractScrubStripParams(ParamsMixin):
         recycle_tol: Convergence tolerance on the recycled REE flows,
             relative to the feed's total REE.
         recycle_max_iter: Iteration limit of the recycle solve.
+        max_strip_acid: Strongest strip liquor (M H+) a stripping pH left
+            as None may call for; default 6 M, pH -0.78 on the concentration
+            scale. When the cut needs stronger acid (heavy REE on D2EHPA:
+            about 15 M) the strip runs at ``-log10(max_strip_acid)`` and a
+            :class:`~difflow_ree.equilibrium.operating_points.StripAcidLimitWarning`
+            reports what the strip stages leave on the barren organic. None
+            sets no floor. A stripping_pH you give is used as given.
     """
     extractant: str
     elements: tuple[str, ...]
@@ -136,6 +150,8 @@ class ExtractScrubStripParams(ParamsMixin):
     recycle_scrub_liquor: bool = False  # see #377
     recycle_tol: float = 1e-10
     recycle_max_iter: int = 500
+    # Strip acid floor for a pH the cut rule chooses; see operating_points.
+    max_strip_acid: float | None = MAX_STRIP_ACID
 
     def __post_init__(self):
         """Resolve the record's pH defaults (#270); check the labels (#288)."""
@@ -179,7 +195,7 @@ class ExtractScrubStripParams(ParamsMixin):
         # purity and 0.2 % Y recovery. A pH the caller gives is kept.
         if None in (self.extraction_pH, self.scrubbing_pH, self.stripping_pH):
             from difflow_ree.equilibrium.operating_points import (
-                circuit_phase_ratios, cut_pHs)
+                circuit_phase_ratios, cut_pHs, report_strip_floor)
 
             ratios = circuit_phase_ratios(
                 self.solvent_to_feed_ratio, self.scrub_to_solvent_ratio,
@@ -189,12 +205,23 @@ class ExtractScrubStripParams(ParamsMixin):
                 extraction_OA=ratios["extraction"],
                 scrub_OA=ratios["scrubbing"], strip_OA=ratios["stripping"],
                 extractant_conc=self.extractant_conc,
-                nitrate_conc=self.nitrate_conc, mechanism=self.mechanism)
+                nitrate_conc=self.nitrate_conc, mechanism=self.mechanism,
+                max_strip_acid=self.max_strip_acid)
+            strip_was_unset = self.stripping_pH is None
             for duty in ("extraction", "scrubbing", "stripping"):
                 if getattr(self, f"{duty}_pH") is None:
                     value = (getattr(cuts, duty) if cuts is not None
                              else default_pH(self.extractant, duty))
                     setattr(self, f"{duty}_pH", value)
+            # The acid floor binds only on a strip pH chosen here, never on
+            # one the caller gave; say what it leaves on the solvent.
+            if strip_was_unset and cuts is not None and cuts.strip_acid_limited:
+                report_strip_floor(
+                    self.extractant, cuts, ratios["stripping"],
+                    self.n_stripping_stages, self.max_strip_acid,
+                    "ExtractScrubStripParams",
+                    extractant_conc=self.extractant_conc,
+                    nitrate_conc=self.nitrate_conc, mechanism=self.mechanism)
 
 
 class ExtractScrubStripCircuit:
@@ -250,6 +277,7 @@ class ExtractScrubStripCircuit:
         "capacity_sharpness": "-",
         "recycle_tol": "-",       # relative to the feed's total REE (#377)
         "recycle_max_iter": "-",
+        "max_strip_acid": "mol/L",
     }
 
     def __init__(self, params: ExtractScrubStripParams):
@@ -324,6 +352,8 @@ class ExtractScrubStripCircuit:
             - barren_organic: Stripped organic (for recycle)
             - target_recovery: Recovery of target elements
             - product_purity: Purity of each element in product
+            - strip_retained: Fraction of each element entering the strip
+              that leaves on the barren organic
             - section_info: Details from each section
         """
         p = self.params
@@ -494,6 +524,7 @@ class ExtractScrubStripCircuit:
             "scrub_liquor": scrub_liquor,
             "product": product,
             "barren_organic": barren_org,
+            "strip_retained": _strip_retained(product, barren_org, p.elements),
             "target_recovery": target_recovery,
             "product_purity": product_purity,
             "target_purity": target_purity,
@@ -558,6 +589,7 @@ def design_extract_scrub_strip(
     max_stripping_stages: int = 20,
     pH_search: float = 1.0,
     pH_step: float = 0.1,
+    max_strip_acid: float | None = MAX_STRIP_ACID,
 ) -> ExtractScrubStripParams:
     """Design a 3-section circuit that meets purity and recovery targets.
 
@@ -577,7 +609,10 @@ def design_extract_scrub_strip(
     to the aqueous are lost: the search trades scrub pH against extraction pH
     to balance that loss against purity. The strip pH is held at its cut and
     its stage count sized so each target strips to within a tenth of the
-    allowed recovery loss.
+    allowed recovery loss. When the cut needs acid stronger than
+    ``max_strip_acid`` the strip is held at ``-log10(max_strip_acid)``
+    instead and the stage count is sized there by the same Kremser
+    fractions, so a weaker strip is made up with stages where it can be.
 
     This replaced a design that returned 10/5/5 stages at the window-fraction
     pHs whatever the targets, and raised ``KeyError`` for naphthenic acid
@@ -598,6 +633,9 @@ def design_extract_scrub_strip(
         max_stripping_stages: Largest stripping stage count searched.
         pH_search: Half-width of the pH search around each cut.
         pH_step: pH grid step.
+        max_strip_acid: Strongest strip liquor (M H+) the strip cut may call
+            for (default 6 M). When it needs more the strip is held at
+            ``-log10(max_strip_acid)`` and its stages are sized there. None sets no floor.
 
     Returns:
         ExtractScrubStripParams with the pHs and stage counts.
@@ -606,6 +644,10 @@ def design_extract_scrub_strip(
         UserWarning: If no design in the search meets both targets; the
             design with the best worst-case ratio of achieved to required is
             returned.
+        StripAcidLimitWarning: If the strip is held at the acid floor and no
+            strip stage count up to ``max_stripping_stages`` strips every
+            target to the required fraction there; the message gives what
+            stays on the barren organic.
 
     Example:
         >>> p = design_extract_scrub_strip(
@@ -619,14 +661,21 @@ def design_extract_scrub_strip(
 
     from difflow_ree.equilibrium.distribution import REEDistribution
     from difflow_ree.equilibrium.operating_points import (
-        circuit_phase_ratios, is_pH_driven, kremser_fraction, section_factors)
+        StripAcidLimitWarning, circuit_phase_ratios, cut_pHs, is_pH_driven,
+        kremser_fraction, section_factors, strip_retention,
+        warn_strip_acid_limited)
 
     elements = tuple(feed_composition.keys())
     target_elements = tuple(target_elements)
-    template = ExtractScrubStripParams(
-        extractant=extractant, elements=elements,
-        target_elements=target_elements,
-        nitrate_conc=nitrate_conc, mechanism=mechanism)
+    # The template's own floor warning is for its default strip stage count;
+    # the strip is sized below and warned about for the count chosen.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", StripAcidLimitWarning)
+        template = ExtractScrubStripParams(
+            extractant=extractant, elements=elements,
+            target_elements=target_elements,
+            nitrate_conc=nitrate_conc, mechanism=mechanism,
+            max_strip_acid=max_strip_acid)
     oa = circuit_phase_ratios(
         template.solvent_to_feed_ratio, template.scrub_to_solvent_ratio,
         template.strip_to_solvent_ratio, template.extractant_conc)
@@ -654,6 +703,22 @@ def design_extract_scrub_strip(
     j = int(np.argmax(good)) if good.any() else len(n_str_all) - 1
     n_strip = int(n_str_all[j])
     stripped = stripped_all[j]                                       # (el,)
+    if not good.any():
+        cuts = cut_pHs(
+            extractant, elements, target_elements,
+            extraction_OA=oa["extraction"], scrub_OA=oa["scrubbing"],
+            strip_OA=oa["stripping"], extractant_conc=template.extractant_conc,
+            nitrate_conc=nitrate_conc, mechanism=mechanism, distribution=dist,
+            max_strip_acid=max_strip_acid)
+        if cuts is not None and cuts.strip_acid_limited:
+            warn_strip_acid_limited(
+                extractant, cuts,
+                strip_retention(dist, cuts.strip_elements, cuts.stripping,
+                                oa["stripping"], n_strip),
+                n_strip, max_strip_acid,
+                f"design_extract_scrub_strip (no strip up to "
+                f"{max_stripping_stages} stages strips every target to "
+                f"{need:.4g})", stacklevel=2)
 
     n_ext = np.arange(1, max_extraction_stages + 1)
     n_scr = np.arange(0, max_scrubbing_stages + 1)
@@ -699,4 +764,5 @@ def design_extract_scrub_strip(
         stripping_pH=template.stripping_pH,
         nitrate_conc=nitrate_conc,  # see #195
         mechanism=mechanism,  # see #195
+        max_strip_acid=max_strip_acid,
     )

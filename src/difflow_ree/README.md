@@ -183,6 +183,13 @@ therefore `dict | None`.
 > The 0.5 M `extractant_conc` default is a cation-exchange default and knocks
 > TBP's `D` down 8x; TBP is run at ~30% v/v = 1.1 M.
 
+`extractant_conc` (units, circuits, `REEDistribution`'s `concentration`, the
+extractant entry of a solvent stream) is on the extractant record's own basis:
+DIMER for D2EHPA, PC88A and Cyanex272 (0.5 M dimer = 1.0 M formal), the
+molecule for TBP and naphthenic acid (#374). The mass-action layer works on the
+formal monomer basis; `Extractant.monomers_per_basis_unit` converts, and
+`REEExtractor(model="mass_action")` does it for you.
+
 `pH` is on the concentration scale and `ionic_strength=None` (no activity
 correction, a conditional constant at the operating ionic strength) is the
 default and the right choice for a concentrated liquor (#194). When an ionic

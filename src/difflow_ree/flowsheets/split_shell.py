@@ -65,7 +65,12 @@ class SplitShellParams(ParamsMixin):
             the cascade, so without groups expect one useful split.
         section_pHs: Explicit pH per section (``len(split_points) + 1``
             values); overrides both of the above.
-        extractant_conc: Extractant concentration
+        extractant_conc: Extractant concentration in the organic (M), on the
+            extractant record's own basis: DIMER for the dimeric D2EHPA, PC88A
+            and Cyanex272 (0.5 M dimer = 1.0 M formal), molecules (monomer) for
+            TBP and naphthenic acid. The loading capacity is this divided by
+            ``Extractant.basis_units_per_ree`` (3 for every shipped record;
+            #374).
         nitrate_conc: Aqueous nitrate concentration (M), required for solvating
             extractants such as TBP whose D is nitrate- rather than pH-driven
             (#195)

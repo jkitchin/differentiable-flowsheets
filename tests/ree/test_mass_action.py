@@ -365,8 +365,10 @@ def test_log_K_from_correlation_inverts_the_dilute_limit_algebraically():
         "cation_exchange_dimer", ("Nd",), "D2EHPA",
         calibration_pH=CAL_PH, extractant_conc=0.5,
     )
+    # 0.5 M formal (monomer) is 0.25 M dimer, the basis the D2EHPA
+    # correlation takes; it used to be evaluated at 0.5 M dimer (#374).
     dist = REEDistribution(
-        extractant="D2EHPA", elements=("Nd",), concentration=0.5
+        extractant="D2EHPA", elements=("Nd",), concentration=0.25
     )
     expected = (
         float(np.log10(float(dist.get_D("Nd", CAL_PH))))
@@ -452,8 +454,10 @@ def test_dilute_limit_reduces_to_correlation():
     # Genuinely dilute: the extractant is essentially untouched.
     assert float(info["theta"][0]) < 1e-6
 
+    # The section's 0.5 M is formal monomer: 0.25 M dimer, the correlation's
+    # basis (#374).
     dist = REEDistribution(
-        extractant="D2EHPA", elements=elements, concentration=0.5
+        extractant="D2EHPA", elements=elements, concentration=0.25
     )
     for el in elements:
         D_closed = float(info["D"][el])
@@ -472,8 +476,8 @@ def test_dilute_limit_discrepancy_is_the_released_protons():
     """
     elements = ("Nd",)
     acid = CAL_ACID
-    dist = REEDistribution(
-        extractant="D2EHPA", elements=elements, concentration=0.5
+    dist = REEDistribution(  # 0.5 M monomer = 0.25 M dimer (#374)
+        extractant="D2EHPA", elements=elements, concentration=0.25
     )
     D_corr = float(dist.get_D("Nd", CAL_PH))
 
@@ -507,8 +511,8 @@ def test_departure_from_the_correlation_is_the_predicted_ph_slope():
     """
     ext = get_extractant("D2EHPA")
     coeffs = ext.ph_coefficients["Nd"]
-    dist = REEDistribution(
-        extractant="D2EHPA", elements=("Nd",), concentration=0.5
+    dist = REEDistribution(  # 0.5 M monomer = 0.25 M dimer (#374)
+        extractant="D2EHPA", elements=("Nd",), concentration=0.25
     )
     cal = CAL_PH
     for pH in (0.2, 0.35, 0.65, 0.8):
@@ -568,10 +572,12 @@ def test_extractant_concentration_dependence_of_closure_and_correlation():
     )
     _, _, info_recal = recalibrated(feed, solvent)
 
+    # The sections' 0.5 and 1.0 M are formal monomer; the correlation takes
+    # dimer, 0.25 and 0.5 M (#374).
     d05 = REEDistribution(extractant="D2EHPA", elements=elements,
-                          concentration=0.5)
+                          concentration=0.25)
     d10 = REEDistribution(extractant="D2EHPA", elements=elements,
-                          concentration=1.0)
+                          concentration=0.5)
     for el in elements:
         assert float(d10.get_D(el, CAL_PH) / d05.get_D(el, CAL_PH)) == pytest.approx(
             2.0 ** n, rel=1e-12
@@ -638,8 +644,12 @@ def test_conservation_survives_a_deliberately_crippled_solve():
     than read off an unconverged aqueous phase. This is what separates
     "conserved to machine precision" from "conserved to the tolerance".
     """
+    # Five stages, not three: with the closure calibrated at the dimer charge
+    # it runs at (#374) the three-stage start is close enough that one bare
+    # Newton step reaches a residual of 0.72, and the point here is a solve
+    # that is plainly NOT converged.
     section = make_section(
-        elements=("Nd", "Dy"), n_stages=3,
+        elements=("Nd", "Dy"), n_stages=5,
         n_globalize_steps=0, inner_tol=1e-1, feasible_tol=1.0, max_steps=1,
     )
     feed, solvent = streams(section, {"Nd": 0.02, "Dy": 0.02}, acid=CAL_ACID)

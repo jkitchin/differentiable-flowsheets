@@ -8,6 +8,33 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Breaking
 
+- REE strip acid floor (stopgap for #384). A strip pH the code chooses from
+  the D curves is floored at `-log10(max_strip_acid)`, default 6 M (pH
+  -0.78), on `ExtractStripParams`, `ExtractScrubStripParams`,
+  `GroupSeparator`, `SeparationTrainParams`, `design_extract_strip` and
+  `design_extract_scrub_strip`. The cut put heavy-REE stripping on D2EHPA at
+  pH -1.17 (14.6 M H+), beyond any real strip liquor and 1.2 pH units below
+  the fitted window. At the floor the strip leaves REE on the solvent, now
+  reported as `results["strip_retained"]` and the train's solvent holdup
+  (default D2EHPA Gd/Tb/Dy/Y circuit: Y recovery 97.5 % -> 63.6 %, 34.7 % of
+  the Y entering the strip stays on the barren organic; default train
+  recovery 1.000 -> 0.972); the design helpers add strip stages at the floor
+  (Nd/Dy: 2 -> 4) and raise `StripAcidLimitWarning` when no stage count meets
+  the target. `StripperParams` refuses an `acid_conc` above
+  `max_strip_acid` when it sets the pH. A pH you pass is never clamped;
+  `max_strip_acid=None` restores the unbounded cut.
+- REE extractant basis (closes #374, which kept the dimer basis): every
+  extractant concentration is documented on the record's own basis (dimer
+  for D2EHPA, PC88A, Cyanex272: 0.5 M dimer = 1.0 M formal; the molecule for
+  TBP and naphthenic acid), and the boundary to the mass-action layer (formal
+  monomer) now converts with the new `Extractant.monomers_per_basis_unit`.
+  `log_K_from_correlation` / `MassActionSection` evaluated the correlation at
+  the monomer number as if it were dimer (D2EHPA's K 2**2.38 too large,
+  Cyanex272's 8x), and `REEExtractor(model="mass_action")` passed its
+  record-basis `extractant_conc` and solvent stream unconverted (the closure
+  saw half the extractant: twice the loading, half the free extractant).
+  Mass-action numbers calibrated from the correlation move accordingly.
+
 - Open-issue sweep (#373, #374, #376, #377, #378, #379, #380, #381). REE: the
   organic phase flow is the diluent volume alone (the extractant entry is a
   moles-per-volume charge), so a stated O/A of 1 runs at 1 and not 1 +

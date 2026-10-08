@@ -97,6 +97,34 @@ print(f"Reference concentration: {d2ehpa.reference_concentration} M")
 | TBP | Tri-n-butyl phosphate | Ce separation, nuclear | 10/15 — La–Dy, Y |
 | naphthenic_acid | Naphthenic acid (saponified) | Y purification, full series | **15/15** |
 
+(extractant-basis)=
+### Extractant concentration basis
+
+Every `extractant_conc` of a unit, module or circuit, the `concentration` of
+`REEDistribution`, and the extractant entry of a solvent stream are on the
+**extractant record's own basis** (#374, which kept this basis):
+
+| Extractant | Basis | `extractant_conc = 0.5` means |
+|---|---|---|
+| D2EHPA, PC88A, Cyanex272 | dimer, `(HA)2` | 0.5 M dimer = 1.0 M formal |
+| TBP | molecule (monomer) | 0.5 M TBP |
+| naphthenic_acid | molecule (monomer) | 0.5 M HA |
+
+The record states it as `stoichiometry.basis` in `data/extractants.yaml`; its
+`reference_concentration` and fitted coefficients are on the same basis. The
+loading capacity is `extractant_conc / Extractant.basis_units_per_ree` (3 for
+every shipped record), so 0.5 M D2EHPA holds at most 0.167 M REE.
+
+The mass-action layer (`MassActionParams`, `log_K_from_correlation`,
+`cation_exchange_network`, `REEStreamSchema` streams) works on the **formal
+monomer** basis instead: 1.0 M there is the 0.5 M dimer above.
+`Extractant.monomers_per_basis_unit` (2 for the dimeric records, 1 otherwise)
+converts, and `REEExtractor(model="mass_action")` applies it to both
+`extractant_conc` and the solvent stream, so one solvent is the same solvent
+at both levels. Before #374 neither boundary converted: the closure saw half a
+D2EHPA solvent's extractant, and calibrated its constants against the
+correlation at twice the dimer charge it then ran at.
+
 (element-coverage)=
 ### Which elements an extractant covers
 
@@ -574,7 +602,9 @@ equilibrium constants; or Y at any acidity other than S1's 0.2 N.
 
 ```{warning}
 **`extractant_conc = 0.5` is meaningless for TBP.** Every Params class in
-difflow_ree defaults to 0.5 M, which is a cation-exchange default. TBP's
+difflow_ree defaults to 0.5 M, which is a cation-exchange default (0.5 M dimer
+for D2EHPA; TBP's basis is the molecule, see
+[the concentration basis](#extractant-basis)). TBP's
 `reference_concentration` is 1.0 M and its `concentration_exponent` is 3.0, so
 0.5 M multiplies every `D` by $(0.5/1.0)^3 = 0.125$ — an 8x reduction, giving
 $D_\mathrm{La} = 0.0029$ and $D_\mathrm{Nd} = 0.0091$. TBP is normally run at
@@ -1348,6 +1378,8 @@ section = MassActionSection(params)
 feed = section.schema.make_aqueous(
     {"Nd": 0.02, "Dy": 0.02}, acid=0.02, water=55.0
 )
+# Extractant flow on the FORMAL monomer basis of this layer: 0.5 mol/s at
+# 1 L/s is 0.25 M D2EHPA dimer (see "Extractant concentration basis", #374).
 solvent = section.schema.make_organic(0.5, diluent_flow=4.0)
 
 raffinate, extract, info = section(feed, solvent)
@@ -1394,8 +1426,9 @@ hidden behind the shared interface.
 **State width.** The closed model reads and writes an acid, counter-ion and
 anion balance the correlation ignores. The vocabulary is declared once as a
 superset in `difflow_ree.equilibrium.schema.REEStreamSchema` -- rare earths by
-element, `H`, `Na`/`NH4`/`K`, `Cl`/`NO3`/`SO4`, water, extractant total (on a
-**monomer** basis, free plus bound), loaded organic by element, co-extracted
+element, `H`, `Na`/`NH4`/`K`, `Cl`/`NO3`/`SO4`, water, extractant total (on the
+formal **monomer** basis, free plus bound; a unit's solvent is on the record's
+dimer basis and `REEExtractor` converts it, #374), loaded organic by element, co-extracted
 acid, water in organic, and `T`. The correlation path passes through what it
 does not use, as it always has.
 
@@ -1468,7 +1501,8 @@ identically and the two levels now agree at every pH, not just at one.
 | Claim | Measured |
 |---|---|
 | Reduces to the correlation in the dilute limit | With rare-earth totals at `1e-6` of the free acid, `D` agrees with `REEDistribution.get_D` to better than **2e-5 relative**. What is left is not model error: it is the pH shift from the protons the trace extraction releases, and it scales exactly linearly with the dilution (a ten-fold more dilute feed gives a ten-fold smaller disagreement). |
-| Independent check of the `[HA]` dependence | The correlation applies `n * log10(C/C_ref)` with `n = 3`; the closed model never sees `n` and gets the same dependence from three dimers in the tableau plus a free-extractant balance. Doubling the extractant moves both by exactly 8. |
+| Independent check of the `[HA]` dependence | The correlation applies `n * log10(C/C_ref)` (`n = 2.38`, measured, for D2EHPA since #283); the closed model never sees `n` and gets an ideal cube from three dimers in the tableau plus a free-extractant balance. Doubling the extractant moves the closure by exactly 8 and the correlation by 5.2; calibrated at its own charge the closure reproduces the correlation. |
+| One solvent, one basis | The same record-basis solvent through `REEExtractor` at both levels gives the same `D` and split (to the dilute-limit agreement above), the same free extractant and the same loading fraction (#374). |
 | Every component conserved | To **machine precision** (`< 1e-15` relative), including the proton component, and including under a deliberately unconverged solve. |
 | Gradients | `jax.test_util.check_grads` passes through the implicit solve; analytic and central-difference gradients agree to `1e-6` relative. `log10 K` is traced, so extractant selection is differentiable. |
 | `jit` / `vmap` | Both work; a failing solve under `vmap` returns `feasible=False` rather than raising. |
@@ -1799,7 +1833,8 @@ class REEExtractorParams:
     pH: float | None = None    # Operating pH; None = the extractant record's
                                # own default extraction pH, the top of its
                                # fitted validity window (#270)
-    extractant_conc: float = 0.5  # Extractant concentration (M)
+    extractant_conc: float = 0.5  # M, record basis: 0.5 M D2EHPA dimer
+                                  # = 1.0 M formal (#374)
     nitrate_conc: float | None = None  # M; required for solvating extractants
     include_loading: bool = True  # Account for extractant loading capacity
     capacity_sharpness: int = 8   # Sharpness of the smooth loading limiters
@@ -2166,6 +2201,12 @@ stripped identically. Stripping Dy from D2EHPA needs strong acid; the pH it
 takes is below D2EHPA's fitted window, and the distribution model warns about
 the extrapolation.
 
+An `acid_conc` that sets the pH may not exceed `max_strip_acid` (default
+6 M, about the strongest HCl/HNO3 strip used in practice; concentrated HCl is
+~12 M): a stronger one raises rather than being capped, because capping would
+run a different strip from the one named. Raise `max_strip_acid` (or set it
+to None) if the liquor is real. An explicit `pH` is never limited.
+
 (ceriumoxidizer)=
 ### CeriumOxidizer
 
@@ -2507,6 +2548,38 @@ extrapolation instead of clamping the pH. When the targets are not the more
 extractable group (no single pH extracts them and rejects the rest), an
 `OperatingPointWarning` says so.
 
+(strip-acid-floor)=
+#### The strip acid floor
+
+For the heavies on D2EHPA the cut is pH -1.17, 14.6 M H+ on the plugin's
+concentration scale: beyond any real strip liquor (concentrated HCl is about
+12 M, and plants strip the heavies with 4 to 6 M) and 1.2 pH units below the
+`[0, 2]` window the coefficients were fitted over. So a strip pH the code
+chooses is floored at `-log10(max_strip_acid)`, with `max_strip_acid = 6 M`
+by default (pH -0.78), on `ExtractStripParams`, `ExtractScrubStripParams`,
+`GroupSeparator`, `SeparationTrainParams` and the two design functions.
+
+| D2EHPA, targets Gd/Tb/Dy/Y | strip pH | Y recovery | Y left on the barren organic |
+|---|---|---|---|
+| the cut (`max_strip_acid=None`) | -1.17 (14.6 M) | 97.5 % | 0 |
+| the 6 M floor (default) | -0.78 | 63.6 % | 34.7 % of the Y entering the strip |
+
+What the floor leaves on the solvent is reported, not hidden: the circuits
+return `results["strip_retained"]` (the fraction of each element entering the
+strip that leaves on the barren organic), a `FullSeparationTrain` counts it as
+solvent holdup, and the params raise a `StripAcidLimitWarning` naming the
+elements held. `design_extract_strip` and `design_extract_scrub_strip` size
+the strip at the floor with the same Kremser fractions, so where an element
+still strips there (`D * O/A < 1`, as Dy does) they add strip stages
+instead (Nd/Dy: 4 strip stages at the floor against 2 at the cut, same
+99 % recovery); where it does not (Y), no stage count can, and they warn
+with `StripAcidLimitWarning`. PC88A (cut pH -0.47, 2.9 M) and Cyanex272
+(0.59) cut inside the limit and are unchanged.
+
+A `stripping_pH` you pass is used as given, below the floor or not. The floor
+is a stopgap: what is missing is D2EHPA distribution data down to strong acid
+(#384).
+
 (splitshellcascade)=
 ### SplitShellCascade
 
@@ -2602,7 +2675,10 @@ are stored as `operating_pH`:
 On D2EHPA this gives extraction at pH −0.20, scrubbing at −0.43 and
 stripping at −1.17 for the heavy circuit, and 0.13 / −0.10 / −0.57 for the
 middle circuit. Both circuits run in roughly 1 to 2 M acid, and the heavies
-strip only from strong acid, as they do in practice. These pH values lie
+strip only from strong acid, as they do in practice. The heavy strip's −1.17
+is 14.6 M acid, so it runs at the 6 M `max_strip_acid` floor, pH −0.78,
+instead and warns; what it leaves on the solvent (mostly Y) is the
+`solvent_holdup` (see [the strip acid floor](#strip-acid-floor)). These pH values lie
 below the window the D2EHPA coefficients were fitted over (`[0, 2]`), and
 the distribution model says so with an extrapolation warning rather than
 clamping the pH. An extractant whose `D` does not move with pH (a solvating

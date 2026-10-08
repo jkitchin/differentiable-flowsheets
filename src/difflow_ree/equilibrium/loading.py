@@ -56,7 +56,12 @@ class LoadingIsotherm:
             and 3.0 for TBP. It was 6.0 (monomer equivalents) between #191
             and #374, which halved the capacity of every dimeric extractant.
         K_L: Langmuir constant (L/mol)
-        extractant_conc: Extractant concentration (M)
+        extractant_conc: Extractant concentration in the organic (M), on the
+            extractant record's own basis: DIMER for the dimeric D2EHPA, PC88A
+            and Cyanex272 (0.5 M dimer = 1.0 M formal), molecules (monomer) for
+            TBP and naphthenic acid. The loading capacity is this divided by
+            ``Extractant.basis_units_per_ree`` (3 for every shipped record;
+            #374).
     """
     m: float = 3.0  # extractant units (record basis) per REE; max_loading = 1/m (#191, #374)
     K_L: float = 10.0  # Langmuir constant
@@ -517,7 +522,12 @@ def get_loading_isotherm(
 
     Args:
         extractant: Extractant name
-        concentration: Extractant concentration (M)
+        concentration: Extractant concentration in the organic (M), on the
+            extractant record's own basis: DIMER for the dimeric D2EHPA, PC88A
+            and Cyanex272 (0.5 M dimer = 1.0 M formal), molecules (monomer) for
+            TBP and naphthenic acid. The loading capacity is this divided by
+            ``Extractant.basis_units_per_ree`` (3 for every shipped record;
+            #374).
 
     Returns:
         LoadingIsotherm instance
