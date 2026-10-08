@@ -896,15 +896,25 @@ class CSTR:
     ) -> Array:
         """Compute residuals for the EO solver.
 
-        Residuals for isothermal CSTR:
+        Residuals:
             F_out_i - F_in_i - V * sum_j(stoich_ij * r_j) = 0  (n_species)
-            T_out - T_spec = 0                                   (1)
+            energy row                                           (1)
             P_out - P_in = 0                                     (1)
+
+        The energy row is ``T_out - T_spec`` for an isothermal reactor. In the
+        adiabatic and specified_duty modes it is the energy balance the
+        sequential solve closes,
+        ``H_out - H_in + V sum_j r_j dH_rxn_j + H_mix - Q = 0`` (``Q = 0`` when
+        adiabatic), with the enthalpies taken exactly as ``__call__`` takes
+        them: in the reaction phase at reactor pressure when the reactor has
+        an EOS (so a CubicThermo carries its PR departure), else the legacy
+        liquid basis. It is divided by the outlet heat capacity rate, putting
+        it in K.
 
         Args:
             inlets: List of inlet streams (expects 1 inlet)
             outlets: List of outlet streams (expects 1 outlet)
-            **kwargs: Optional T_spec, volumetric_flow overrides
+            **kwargs: Optional T_spec, Q_spec, volumetric_flow overrides
 
         Returns:
             Flat array of residuals, length n_species + 2
@@ -934,14 +944,7 @@ class CSTR:
             volumetric_flow = total_molar / eo_density
         volumetric_flow = jnp.asarray(volumetric_flow)
 
-        # Temperature for rate computation
-        T_spec = kwargs.get('T_spec')
-        if self.mode == "isothermal":
-            T_out = outlet["T"]
-            T_target = jnp.asarray(T_spec) if T_spec is not None else inlet["T"]
-        else:
-            T_out = outlet["T"]
-            T_target = T_out  # Non-isothermal: T is solved for
+        T_out = outlet["T"]
 
         # Outlet concentrations from outlet flows
         F_out = jnp.array([outlet_flows[s] for s in p.species_order])
@@ -958,8 +961,30 @@ class CSTR:
         F_in = jnp.array([inlet_flows[s] for s in p.species_order])
         mat_resid = F_out - (F_in + p.V * p.stoich @ rates)
 
-        # Temperature residual
-        T_resid = jnp.atleast_1d(outlet["T"] - T_target)
+        if self.mode == "isothermal":
+            T_spec = kwargs.get('T_spec')
+            T_target = jnp.asarray(T_spec) if T_spec is not None else inlet["T"]
+            T_resid = jnp.atleast_1d(T_out - T_target)
+        else:
+            if self.mode == "adiabatic":
+                Q = jnp.asarray(0.0)
+            else:
+                Q_spec = kwargs.get('Q_spec')
+                if Q_spec is None:
+                    raise ValueError("Q_spec required for specified_duty mode")
+                Q = jnp.asarray(Q_spec)
+            # Q_heat = H_out - H_in + Q_rxn + H_mix, as _compute_heat_duty
+            # writes it; that is the heat the reactor must take in.
+            Q_heat = self._compute_heat_duty(inlet, outlet_flows, T_out, rates)
+            scale = jnp.maximum(
+                jnp.sum(F_out_safe) * self.thermo.Cp_mix(
+                    {s: F_out_safe[i] / jnp.sum(F_out_safe)
+                     for i, s in enumerate(p.species_order)},
+                    T_out,
+                ),
+                1e-30,
+            )
+            T_resid = jnp.atleast_1d((Q_heat - Q) / scale)
 
         # Pressure residual
         P_resid = jnp.atleast_1d(outlet["P"] - inlet["P"])

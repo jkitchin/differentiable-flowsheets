@@ -1286,6 +1286,84 @@ class EnthalpyCounterCurrentHX:
         }
         return hot_outlet, cold_outlet, info
 
+    def eo_residuals(
+        self,
+        inlets: list[Stream],
+        outlets: list[Stream],
+        UA: Array | float | None = None,
+        **kwargs,
+    ) -> Array:
+        """Compute residuals for the EO solver.
+
+        Residuals, per side (hot first, then cold):
+            F_out_i - F_in_i = 0                                (n_species)
+            energy balance = 0                                  (1)
+            P_out - P_in = 0                                    (1)
+
+        with the energy rows
+
+            hot:  H_h(T_h,in) - H_h(T_h,out) - UA * LMTD = 0
+            cold: H_c(T_c,out) - H_c(T_c,in) - UA * LMTD = 0
+
+        ``LMTD`` is the same approach-safe
+        :func:`log_mean_temperature_difference` of
+        ``(T_h,in - T_c,out, T_h,out - T_c,in)`` that ``__call__`` uses, and the
+        enthalpies are the thermo's ``stream_enthalpy_flash`` at each inlet
+        pressure, so the roots are the sequential unit's. The duty is
+        eliminated rather than carried as an unknown, and the damped fixed
+        point on Q and the per-side enthalpy inversions of ``__call__`` become
+        these two algebraic rows. Each is divided by that side's heat capacity
+        rate, putting it in K alongside the temperature rows of other units.
+
+        Args:
+            inlets: [hot_inlet, cold_inlet]
+            outlets: [hot_outlet, cold_outlet]
+            UA: Optional UA override (W/K), as in ``__call__``.
+
+        Returns:
+            Flat residual array, length 2 * (n_species + 2)
+        """
+        p = self.params
+        if p.UA is None and UA is None:
+            raise ValueError("UA must be specified")
+        UA_val = jnp.asarray(UA if UA is not None else p.UA)
+
+        hot_in, cold_in = inlets
+        hot_out, cold_out = outlets
+        H = self.thermo.stream_enthalpy_flash
+
+        T_hot_in, T_hot_out = hot_in["T"], hot_out["T"]
+        T_cold_in, T_cold_out = cold_in["T"], cold_out["T"]
+        LMTD = log_mean_temperature_difference(
+            T_hot_in - T_cold_out, T_hot_out - T_cold_in
+        )
+        Q = UA_val * LMTD
+
+        hot_flows = get_flows(hot_in)
+        cold_flows = get_flows(cold_in)
+        P_hot = hot_in["P"]
+        P_cold = cold_in["P"]
+        hot_energy = (
+            H(hot_flows, T_hot_in, P_hot) - H(hot_flows, T_hot_out, P_hot) - Q
+        ) / _enthalpy_scale(self.thermo, hot_flows, T_hot_in)
+        cold_energy = (
+            H(cold_flows, T_cold_out, P_cold) - H(cold_flows, T_cold_in, P_cold) - Q
+        ) / _enthalpy_scale(self.thermo, cold_flows, T_cold_in)
+
+        resid = []
+        for inlet, outlet, energy in (
+            (hot_in, hot_out, hot_energy),
+            (cold_in, cold_out, cold_energy),
+        ):
+            in_flows = get_flows(inlet)
+            out_flows = get_flows(outlet)
+            for s in get_species(inlet):
+                resid.append(jnp.atleast_1d(out_flows[s] - in_flows[s]))
+            resid.append(jnp.atleast_1d(energy))
+            resid.append(jnp.atleast_1d(outlet["P"] - inlet["P"]))
+
+        return jnp.concatenate(resid)
+
 
 class CoCurrentHX:
     """Co-current (parallel flow) heat exchanger.

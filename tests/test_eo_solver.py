@@ -484,3 +484,190 @@ class TestEOFromSMInit:
 
         assert result.converged
         assert result.residual_norm < 1e-8
+
+
+# =============================================================================
+# Cubic-EOS units: EOSFlash, EnthalpyCounterCurrentHX, non-isothermal CSTR (#389)
+# =============================================================================
+
+from functools import lru_cache
+
+from difflow.eos import CriticalProperties, PengRobinson
+from difflow.thermo import CubicThermo
+from difflow.units.flash import EOSFlash, EOSFlashParams
+from difflow.units.heat_exchanger import EnthalpyCounterCurrentHX, EnthalpyHXParams
+
+C4_SPECIES = ["propane", "butane", "isobutane"]
+C4_P = 8e5
+
+
+@lru_cache(maxsize=None)
+def _c4_eos_and_thermo():
+    """PR EOS and CubicThermo for propane / n-butane / isobutane.
+
+    Memoized: the units' JIT caches key on the thermo identity, so sharing
+    one object compiles each solve once across the tests here.
+    """
+    species = {
+        "propane": SpeciesData(name="propane", MW=44.10, Cp_coeffs=(73.0, 0.0, 0.0, 0.0),
+                               Hvap_coeffs=(18000.0, 0.38, 369.8),
+                               antoine_coeffs=(13.72, 1872.5, -25.16)),
+        "butane": SpeciesData(name="butane", MW=58.12, Cp_coeffs=(98.0, 0.0, 0.0, 0.0),
+                              Hvap_coeffs=(22000.0, 0.38, 425.1),
+                              antoine_coeffs=(13.98, 2292.4, -27.86)),
+        "isobutane": SpeciesData(name="isobutane", MW=58.12, Cp_coeffs=(96.0, 0.0, 0.0, 0.0),
+                                 Hvap_coeffs=(21000.0, 0.38, 407.8),
+                                 antoine_coeffs=(13.82, 2181.8, -24.28)),
+    }
+    crit = {
+        "propane": CriticalProperties(name="propane", Tc=369.8, Pc=4.25e6, omega=0.152, MW=44.10),
+        "butane": CriticalProperties(name="butane", Tc=425.1, Pc=3.80e6, omega=0.200, MW=58.12),
+        "isobutane": CriticalProperties(name="isobutane", Tc=407.8, Pc=3.64e6, omega=0.184, MW=58.12),
+    }
+    eos = PengRobinson(crit)
+    return eos, CubicThermo(IdealThermo(species), eos)
+
+
+def _isomerization_cstr():
+    """Adiabatic vapor-phase n-butane -> isobutane CSTR on the PR EOS."""
+    eos, thermo = _c4_eos_and_thermo()
+
+    def rate_fn(C, T, p):
+        return jnp.array([p["k0"] * jnp.exp(-p["Ea"] / (8.314 * T)) * C["butane"]])
+
+    params = CSTRParams(
+        V=0.5, rate_fn=rate_fn, stoich=jnp.array([[0.0], [-1.0], [1.0]]),
+        rate_params={"k0": 2e3, "Ea": 40000.0}, species_order=C4_SPECIES,
+        dH_rxn=jnp.array([-8000.0]), eos=eos, reaction_phase="vapor",
+    )
+    return CSTR(params, thermo=thermo, mode="adiabatic")
+
+
+def _c4_stream(T, flows=(0.5, 1.0, 0.1)):
+    return make_stream(dict(zip(C4_SPECIES, flows)), T=T, P=C4_P)
+
+
+class TestEOSFlashResiduals:
+    """EOSFlash.eo_residuals vanishes at the sequential flash, in every regime."""
+
+    @pytest.mark.parametrize("T", [325.0, 300.0, 400.0])  # two-phase, liquid, vapor
+    def test_zero_at_sm_solution_with_regular_jacobian(self, T):
+        eos, _ = _c4_eos_and_thermo()
+        flash = EOSFlash(EOSFlashParams(species_order=C4_SPECIES), eos)
+        feed = _c4_stream(T)
+        liq, vap, _ = flash(feed)
+
+        layout = EOStateLayout(C4_SPECIES, ["liq", "vap"])
+
+        def r(x):
+            s = layout.unpack(x)
+            return flash.eo_residuals([feed], [s["liq"], s["vap"]])
+
+        x = layout.pack({"liq": liq, "vap": vap})
+        assert r(x).shape == x.shape
+        assert float(jnp.max(jnp.abs(r(x)))) < 1e-6
+        J = jax.jacfwd(r)(x)
+        assert bool(jnp.all(jnp.isfinite(J)))
+        # Regular in every regime: the single-phase rows pin the empty
+        # phase instead of leaving its composition undetermined.
+        assert float(jnp.linalg.cond(J)) < 1e12
+
+
+class TestCSTRNonIsothermalResiduals:
+    """The adiabatic CSTR's EO energy row is its energy balance (#389).
+
+    It used to be ``T_out - T_out``: identically zero, so an adiabatic or
+    specified-duty reactor had no energy equation in EO form at all.
+    """
+
+    def test_energy_row_vanishes_at_sm_solution_and_depends_on_T(self):
+        cstr = _isomerization_cstr()
+        feed = _c4_stream(460.0)
+        out, _ = cstr(feed)
+
+        layout = EOStateLayout(C4_SPECIES, ["out"])
+
+        def r(x):
+            return cstr.eo_residuals([feed], [layout.unpack(x)["out"]])
+
+        x = layout.pack({"out": out})
+        res = r(x)
+        i_T = len(C4_SPECIES)
+        assert float(jnp.max(jnp.abs(res[:i_T]))) < 1e-8
+        # The energy row is in K. The sequential solve closes T with a fixed
+        # point at rtol=1e-6 (~5e-4 K at 511 K), so that is all its answer
+        # can satisfy; the EO solve itself drives this row to ~1e-13.
+        assert abs(float(res[i_T])) < 1e-2
+        J = jax.jacfwd(r)(x)
+        assert float(J[i_T, i_T]) != 0.0
+        assert float(jnp.linalg.cond(J)) < 1e12
+
+
+@pytest.mark.slow
+class TestEnthalpyHXResiduals:
+    def test_zero_at_sm_solution(self):
+        _, thermo = _c4_eos_and_thermo()
+        hx = EnthalpyCounterCurrentHX(EnthalpyHXParams(UA=150.0), thermo)
+        hot, cold = _c4_stream(510.0), _c4_stream(340.0)
+        hot_out, cold_out, _ = hx(hot, cold)
+
+        layout = EOStateLayout(C4_SPECIES, ["h", "c"])
+
+        def r(x):
+            s = layout.unpack(x)
+            return hx.eo_residuals([hot, cold], [s["h"], s["c"]])
+
+        x = layout.pack({"h": hot_out, "c": cold_out})
+        # The sequential unit converges Q to atol=1e-3 W, so its answer
+        # satisfies the K-scaled energy rows to about that over C.
+        assert float(jnp.max(jnp.abs(r(x)))) < 1e-3
+        assert float(jnp.linalg.cond(jax.jacfwd(r)(x))) < 1e12
+
+
+@pytest.mark.slow
+class TestCubicEOSFlowsheetIsOpenEquation:
+    """FEHE + heater + adiabatic PR CSTR + cooler + EOSFlash solves EO (#389)."""
+
+    def _flowsheet(self):
+        eos, thermo = _c4_eos_and_thermo()
+        fs = Flowsheet(species_order=C4_SPECIES)
+        fs.add_feed("feed", _c4_stream(340.0))
+        fs.add_unit(Unit("fehe", EnthalpyCounterCurrentHX(EnthalpyHXParams(UA=150.0), thermo),
+                         ["rx_out", "feed"], ["hot_out", "preheated"]))
+        fs.add_unit(Unit("heater", Heater(HeaterParams(T_out=460.0), thermo),
+                         ["preheated"], ["rx_in"]))
+        fs.add_unit(Unit("reactor", _isomerization_cstr(), ["rx_in"], ["rx_out"]))
+        fs.add_unit(Unit("cooler", Cooler(CoolerParams(T_out=320.0), thermo),
+                         ["hot_out"], ["cooled"]))
+        fs.add_unit(Unit("flash", EOSFlash(EOSFlashParams(species_order=C4_SPECIES), eos),
+                         ["cooled"], ["liq", "vap"]))
+        fs.add_recycle("rx_out", "rx_out")
+        return fs
+
+    def test_as_residual_accepts_and_solve_eo_matches_solve(self, monkeypatch):
+        from difflow import eo_solver
+        from difflow.solvers import as_residual
+
+        fs = self._flowsheet()
+        view = as_residual(fs)  # require_eo_residuals must not refuse it
+        assert view.n_unknowns == len(EOSolver(fs).layout.stream_names) * (len(C4_SPECIES) + 2)
+
+        sm = fs.solve(tol=1e-9, max_iter=200)
+
+        def no_fallback(*a, **k):
+            raise AssertionError("EO residual took the forward-run fallback")
+
+        monkeypatch.setattr(eo_solver, "_parse_unit_result", no_fallback)
+        result = EOSolver(fs).solve(tol=1e-8)
+        assert result.converged
+        assert result.residual_norm < 1e-8
+
+        # The flash split is two-phase here, so this also checks the
+        # fugacity rows, not just the single-phase ones.
+        assert float(result.streams["liq"]["F_propane"]) > 0.01
+        assert float(result.streams["vap"]["F_propane"]) > 0.01
+        for name in ["preheated", "rx_out", "hot_out", "liq", "vap"]:
+            for key, val in sm[name].items():
+                assert float(result.streams[name][key]) == pytest.approx(
+                    float(val), rel=1e-4, abs=1e-4
+                ), f"{name}[{key}]"

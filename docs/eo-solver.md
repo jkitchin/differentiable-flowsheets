@@ -32,6 +32,22 @@ Each unit operation provides an `eo_residuals(inlets, outlets)` method that retu
 - Phase equilibrium: $F_{vap,i} L_{total} - K_i F_{liq,i} V_{total} = 0$
 - Temperature and pressure specifications for both outlet phases
 
+**Example — EOSFlash (cubic EOS):** the same balances and T/P rows, with the
+phase-split rows chosen by a Michelsen stability test on the *feed* (the one
+the sequential flash uses, held off the tape with `stop_gradient`):
+- two-phase: fugacity equality $x_i \hat\varphi_i^L(x) - y_i \hat\varphi_i^V(y) = 0$, with $x = F_{liq}/L$, $y = F_{vap}/V$
+- liquid only: $F_{vap,i} = 0$; vapor only: $F_{liq,i} = 0$
+
+The choice depends only on the inlet, so the residual is smooth within a phase
+regime and its Jacobian stays regular when one phase is absent.
+
+**Example — EnthalpyCounterCurrentHX:** per side, flows and pressure pass
+through and the energy row is the enthalpy balance with the duty eliminated,
+$H_h(T_{h,in}) - H_h(T_{h,out}) - UA\,\mathrm{LMTD} = 0$ and
+$H_c(T_{c,out}) - H_c(T_{c,in}) - UA\,\mathrm{LMTD} = 0$, using the thermo's
+`stream_enthalpy_flash`. A non-isothermal CSTR's energy row is likewise its
+enthalpy balance, $H_{out} - H_{in} + V\sum_j r_j \Delta H_j + H_{mix} - Q = 0$.
+
 ### Newton's Method
 
 The system is solved using `optimistix.root_find` with a Newton solver. JAX computes the Jacobian automatically via automatic differentiation. The implicit function theorem provides gradients through the converged solution.

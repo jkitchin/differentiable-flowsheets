@@ -345,8 +345,8 @@ argument for `discopt.modeling.implicit`.
 
 ### Units without an equation-oriented form
 
-Only units with `eo_residuals` (CSTR, Flash, Mixer, Splitter, the heat
-exchangers) can be exposed. `require_eo_residuals(fs)` refuses the rest up front
+Only units with `eo_residuals` (CSTR in every mode, Flash, EOSFlash, Mixer,
+Splitter, Heater, Cooler, EnthalpyCounterCurrentHX) can be exposed. `require_eo_residuals(fs)` refuses the rest up front
 with the offending unit names. It has to: `EOSolver._build_residual_fn`'s
 fallback branch for units without `eo_residuals` reads a bare name `feed_names`
 that is a local of `EOSolver.__init__` and neither a closure cell nor a module
