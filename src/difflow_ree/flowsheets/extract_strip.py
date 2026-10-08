@@ -120,8 +120,22 @@ class ExtractStripParams(ParamsMixin):
     DEFAULT_STRIP_NITRATE = 1.0
     mechanism: str | None = None  # see #195
     capacity_sharpness: int = 8  # see REEExtractorParams (#193)
+    no_data: str = "warn"  # "nan" / "raise": see REEDistribution (#384)
     # Strip acid floor for a pH the cut rule chooses; see operating_points.
     max_strip_acid: float | None = MAX_STRIP_ACID
+
+    def _cut_elements(self) -> tuple[str, ...]:
+        """The elements the cut rule reads D for.
+
+        With ``no_data="nan"`` an element the extractant has no coefficients
+        for has no D to cut on, so the pHs are read off the elements that do
+        have data (#384); otherwise every element, as before.
+        """
+        if self.no_data != "nan":
+            return tuple(self.elements)
+        from difflow_ree.database import get_extractant
+        _, block = get_extractant(self.extractant).coefficient_block(self.mechanism)
+        return tuple(e for e in self.elements if e in (block or {}))
 
     def __post_init__(self):
         """Resolve unset pHs from the D curves of this circuit's elements.
@@ -160,7 +174,7 @@ class ExtractStripParams(ParamsMixin):
                 self.solvent_to_feed_ratio, None, self.strip_to_solvent_ratio,
                 self.extractant_conc)
             cuts = cut_pHs(
-                self.extractant, tuple(self.elements),
+                self.extractant, self._cut_elements(),
                 extraction_OA=ratios["extraction"], strip_OA=ratios["stripping"],
                 extractant_conc=self.extractant_conc,
                 nitrate_conc=self.nitrate_conc, mechanism=self.mechanism,
@@ -248,6 +262,7 @@ class ExtractStripCircuit:
             nitrate_conc=params.nitrate_conc,  # see #195
             mechanism=params.mechanism,  # see #195
             capacity_sharpness=params.capacity_sharpness,  # see #193
+            no_data=params.no_data,  # see #384
         ))
 
         # Create stripping section
@@ -260,6 +275,7 @@ class ExtractStripCircuit:
             extractant_conc=params.extractant_conc,
             nitrate_conc=params.strip_nitrate_conc,  # audit R8
             mechanism=params.mechanism,  # see #195
+            no_data=params.no_data,  # see #384
         ))
 
     def __call__(

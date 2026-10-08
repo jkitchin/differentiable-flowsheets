@@ -147,11 +147,30 @@ class ExtractScrubStripParams(ParamsMixin):
     DEFAULT_STRIP_NITRATE = 1.0
     mechanism: str | None = None  # see #195
     capacity_sharpness: int = 8  # see REEExtractorParams (#193)
+    no_data: str = "warn"  # "nan" / "raise": see REEDistribution (#384)
     recycle_scrub_liquor: bool = False  # see #377
     recycle_tol: float = 1e-10
     recycle_max_iter: int = 500
     # Strip acid floor for a pH the cut rule chooses; see operating_points.
     max_strip_acid: float | None = MAX_STRIP_ACID
+
+    def _cut_elements(self) -> tuple[str, ...]:
+        """The elements the cut rule reads D for.
+
+        With ``no_data="nan"`` an element the extractant has no coefficients
+        for has no D to cut on, so the pHs are read off the elements that do
+        have data (#384); otherwise every element, as before.
+        """
+        if self.no_data != "nan":
+            return tuple(self.elements)
+        from difflow_ree.database import get_extractant
+        _, block = get_extractant(self.extractant).coefficient_block(self.mechanism)
+        return tuple(e for e in self.elements if e in (block or {}))
+
+    def _cut_targets(self) -> tuple[str, ...]:
+        """``target_elements`` that have data (see :meth:`_cut_elements`)."""
+        have = set(self._cut_elements())
+        return tuple(e for e in self.target_elements if e in have)
 
     def __post_init__(self):
         """Resolve the record's pH defaults (#270); check the labels (#288)."""
@@ -201,7 +220,7 @@ class ExtractScrubStripParams(ParamsMixin):
                 self.solvent_to_feed_ratio, self.scrub_to_solvent_ratio,
                 self.strip_to_solvent_ratio, self.extractant_conc)
             cuts = cut_pHs(
-                self.extractant, tuple(self.elements), self.target_elements,
+                self.extractant, self._cut_elements(), self._cut_targets(),
                 extraction_OA=ratios["extraction"],
                 scrub_OA=ratios["scrubbing"], strip_OA=ratios["stripping"],
                 extractant_conc=self.extractant_conc,
@@ -299,6 +318,7 @@ class ExtractScrubStripCircuit:
             nitrate_conc=params.nitrate_conc,  # see #195
             mechanism=params.mechanism,  # see #195
             capacity_sharpness=params.capacity_sharpness,  # see #193
+            no_data=params.no_data,  # see #384
         ))
 
         # Scrubbing section
@@ -312,6 +332,7 @@ class ExtractScrubStripCircuit:
             extractant_conc=params.extractant_conc,
             nitrate_conc=params.nitrate_conc,  # see #195
             mechanism=params.mechanism,  # see #195
+            no_data=params.no_data,  # see #384
         ))
 
         # Stripping section
@@ -324,6 +345,7 @@ class ExtractScrubStripCircuit:
             extractant_conc=params.extractant_conc,
             nitrate_conc=params.strip_nitrate_conc,  # audit R8
             mechanism=params.mechanism,  # see #195
+            no_data=params.no_data,  # see #384
         ))
 
     def _mix_with_recycle(self, feed: Stream, tear: dict) -> Stream:

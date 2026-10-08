@@ -57,6 +57,7 @@ from difflow_ree.equilibrium.speciation import (
 
 # How an out-of-range / not-applicable activity correction is reported (#194).
 OutOfRangeAction = Literal["warn", "raise", "ignore"]
+NoDataAction = Literal["warn", "nan", "raise"]
 
 
 def _concrete_bounds(value) -> tuple[float, float] | None:
@@ -229,6 +230,22 @@ class REEDistribution:
             regardless; pH is deliberately **not** clamped, because silently
             relocating a flowsheet's operating point is a worse failure than
             an out-of-range number the caller can see.
+        no_data: What to do for an element the record has no data for
+            (#384). Two kinds of element: one with no coefficients at all
+            (Ho to Lu on D2EHPA, #269), and one the record lists in
+            ``unmeasured_outside_window`` (D2EHPA: Gd, Tb, Dy, Y), whose
+            correlation outside ``valid_ph_range`` is an extrapolated line,
+            not a measurement. ``"warn"`` (default) is the behaviour before
+            this option: the first kind is refused at construction, the
+            second is extrapolated with the :attr:`on_out_of_range` report.
+            ``"nan"`` is for looking things up: ``get_D`` answers NaN for
+            both kinds. NaN is never filtered, so a calculation that uses it
+            returns NaN, which is the sign that it asked for something there
+            is no data for. ``"raise"`` makes the second kind an error as
+            well (a ValueError from ``get_D`` for a concrete pH outside the
+            window; under tracing, where no value can be inspected, it
+            answers NaN instead of a number). Elements with data are
+            untouched in every mode.
         extrapolate_activity_model: Opt in to feeding the activity model an
             ionic strength beyond its documented validity range, reproducing raw
             (and, above 1.94 M for Davies, sign-inverted) coefficients. Default
@@ -276,6 +293,7 @@ class REEDistribution:
     mechanism: str | None = None  # None -> take from the record (#195)
     activity_model: str = "davies"  # see ACTIVITY_MODELS (#194)
     on_out_of_range: OutOfRangeAction = "warn"  # (#194)
+    no_data: NoDataAction = "warn"  # (#384)
     extrapolate_activity_model: bool = False  # (#194) opt in to raw Davies
     # Per-element correlation-coefficient overrides, possibly traced. See the
     # class docstring; this is the supported way to put an uncertainty
@@ -310,6 +328,10 @@ class REEDistribution:
                 "implemented because difflow_ree does not carry their "
                 "ion-interaction parameters (#194)."
             )
+        if self.no_data not in ("warn", "nan", "raise"):
+            raise ValueError(
+                f"no_data must be 'warn', 'nan' or 'raise', got "
+                f"{self.no_data!r}.")
         if self.on_out_of_range not in ("warn", "raise", "ignore"):
             raise ValueError(
                 f"on_out_of_range must be 'warn', 'raise' or 'ignore', got "
@@ -442,6 +464,19 @@ class REEDistribution:
                     "the record (#195)."
                 )
 
+    def has_data(self, element: str) -> bool:
+        """Whether the active mechanism's block has coefficients for ``element``.
+
+        Args:
+            element: REE symbol.
+
+        Returns:
+            False for an element the record cannot compute a ``D`` for at
+            all (Ho to Lu on D2EHPA, #269); see ``no_data``.
+        """
+        _, block = self._ext_data.coefficient_block(self.mechanism)
+        return element in (block or {})
+
     def _check_element_coverage(self) -> None:
         """Refuse an element this extractant has no coefficients for (#269).
 
@@ -468,6 +503,10 @@ class REEDistribution:
         block = block or {}
         missing = [e for e in self.elements if e not in block]
         if not missing:
+            return
+        if self.no_data == "nan":
+            # (#384) NaN, not a refusal: ``get_D`` answers NaN for these. A
+            # calculation that uses the NaN returns NaN.
             return
         covered = ", ".join(block) or "(none)"
         raise ValueError(
@@ -1023,6 +1062,10 @@ class REEDistribution:
                 block.
         """
         T = jnp.asarray(T)
+        if self.no_data == "nan" and not self.has_data(element):
+            # (#384) No coefficients for this element: no number.
+            ref = jnp.asarray(pH if pH is not None else 0.0)
+            return jnp.full(jnp.broadcast_shapes(ref.shape, T.shape), jnp.nan)
         coeffs = self._coefficients(element)
 
         if self.mechanism == "solvating":
@@ -1061,6 +1104,23 @@ class REEDistribution:
             self._check_ph_range(pH)  # (#262) validity report, no clamp
             pH = jnp.asarray(pH)
             log_D = coeffs.a + coeffs.b * pH + coeffs.c * pH**2
+            if (self.no_data != "warn"
+                    and element in self._ext_data.unmeasured_outside_window):
+                # (#384) Outside the fitted window this element is a straight
+                # line, not data.
+                lo, hi = self._ext_data.valid_ph_range
+                if self.no_data == "raise":
+                    bounds = _concrete_bounds(pH)
+                    if bounds is not None and (bounds[0] < lo or bounds[1] > hi):
+                        raise ValueError(
+                            f"{self.extractant} has no data for {element} at "
+                            f"pH {bounds[0]:g} to {bounds[1]:g}: it was "
+                            f"measured (or read off a measured series) only "
+                            f"within pH [{lo:g}, {hi:g}], and outside it the "
+                            "correlation is an extrapolated line. Stay inside "
+                            "the window, supply measured coefficients, or use "
+                            "no_data='warn' to extrapolate knowingly (#384).")
+                log_D = jnp.where((pH >= lo) & (pH <= hi), log_D, jnp.nan)
 
         # Temperature correction
         T_ref = 298.15

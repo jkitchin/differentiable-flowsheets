@@ -173,6 +173,20 @@ except ValueError as err:
 It used to be a `KeyError` from mid-solve, raised while iterating stages and
 naming one element at a time.
 
+To look an element up without being refused, ask for `no_data="nan"`: `get_D`
+answers NaN for an element with no coefficients, and also for the heavies the
+record only extrapolates below its fitted pH window (`unmeasured_outside_window`:
+Gd, Tb, Dy and Y on D2EHPA, where heavy-REE stripping has to run, #384).
+`no_data="raise"` makes that second case an error. A NaN is never filtered
+downstream, so a calculation that uses one returns NaN. The default, `"warn"`,
+is the behaviour above.
+
+```python
+d = REEDistribution(extractant="D2EHPA", elements=("Nd", "Dy", "Ho"), no_data="nan")
+print(float(d.get_D("Nd", 1.0)), float(d.get_D("Dy", -0.8)), float(d.get_D("Ho", 1.0)))
+# a number, nan (below the window), nan (no coefficients)
+```
+
 Those five are not an arbitrary example. **Yttrium purification is Y against Ho,
 Er, Tm, Yb and Lu** — Y(III)'s 90.0 pm ionic radius sits between Ho's 90.1 and
 Er's 89.0, which is exactly why they are what it has to be told apart from. A

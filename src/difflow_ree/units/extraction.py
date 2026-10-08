@@ -339,6 +339,10 @@ class REEExtractorParams(ParamsMixin):
             through the extractor they build,
             ``circuit._extractor.params = circuit._extractor.params.update(
             capacity_sharpness=16)``.
+        no_data: What to do for an element the extractant has no data for
+            (#384): ``"warn"`` (default, as before), ``"nan"`` (D is NaN, and the
+            NaN propagates into whatever uses it) or ``"raise"``; see
+            :class:`~difflow_ree.equilibrium.distribution.REEDistribution`.
         coefficient_overrides: Per-element replacements for the tabulated
             log10(D) correlation coefficients, ``{element: {"a": ...}}``,
             passed straight to
@@ -365,6 +369,7 @@ class REEExtractorParams(ParamsMixin):
     # Per-element log10(D) coefficient overrides, possibly traced; passed to
     # REEDistribution. The supported way to put uncertainty on D.
     coefficient_overrides: dict | None = None
+    no_data: str = "warn"  # "nan" / "raise": see REEDistribution (#384)
 
     # -- Closed mass-action model (#196) ---------------------------------
     # See EXTRACTOR_MODELS and the class docstring of REEExtractor. These are
@@ -543,6 +548,7 @@ class REEExtractor:
             nitrate_conc=params.nitrate_conc,
             mechanism=params.mechanism,
             coefficient_overrides=params.coefficient_overrides,
+            no_data=params.no_data,
         )
         if params.include_loading:
             self._isotherm = get_loading_isotherm(
@@ -970,6 +976,10 @@ class MixerSettlerParams(ParamsMixin):
         mixer_residence_time: Mixer residence time (s)
         settler_residence_time: Settler residence time (s)
         stage_efficiency: Murphree stage efficiency (0-1)
+        no_data: What to do for an element the extractant has no data for
+            (#384): ``"warn"`` (default, as before), ``"nan"`` (D is NaN, and the
+            NaN propagates into whatever uses it) or ``"raise"``; see
+            :class:`~difflow_ree.equilibrium.distribution.REEDistribution`.
         coefficient_overrides: Per-element replacements for the tabulated
             log10(D) correlation coefficients, ``{element: {"a": ...}}``,
             passed straight to
@@ -1015,6 +1025,7 @@ class MixerSettlerParams(ParamsMixin):
     # Per-element log10(D) coefficient overrides, possibly traced; passed to
     # REEDistribution. The supported way to put uncertainty on D.
     coefficient_overrides: dict | None = None
+    no_data: str = "warn"  # "nan" / "raise": see REEDistribution (#384)
 
     def __post_init__(self):
         """Resolve a pH default that the extractant record owns (#270)."""
@@ -1083,6 +1094,7 @@ class REEMixerSettler:
             nitrate_conc=params.nitrate_conc,
             mechanism=params.mechanism,
             coefficient_overrides=params.coefficient_overrides,
+            no_data=params.no_data,
         )
 
     def __call__(

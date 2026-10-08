@@ -67,6 +67,10 @@ class StripperParams(ParamsMixin):
         mechanism: Explicit extraction-mechanism override passed to
             REEDistribution ("cation_exchange" / "solvating"). None takes the
             mechanism from the extractant record (#195).
+        no_data: What to do for an element the extractant has no data for
+            (#384): ``"warn"`` (default, as before), ``"nan"`` (D is NaN, and the
+            NaN propagates into whatever uses it) or ``"raise"``; see
+            :class:`~difflow_ree.equilibrium.distribution.REEDistribution`.
         coefficient_overrides: Per-element replacements for the tabulated
             log10(D) correlation coefficients, ``{element: {"a": ...}}``,
             passed straight to
@@ -92,6 +96,7 @@ class StripperParams(ParamsMixin):
     # Per-element log10(D) coefficient overrides, possibly traced; passed to
     # REEDistribution. The supported way to put uncertainty on D.
     coefficient_overrides: dict | None = None
+    no_data: str = "warn"  # "nan" / "raise": see REEDistribution (#384)
     # The acid acid_conc may name when it sets the pH; see Attributes.
     max_strip_acid: float | None = MAX_STRIP_ACID
 
@@ -207,6 +212,7 @@ class REEStripper:
             nitrate_conc=params.nitrate_conc,
             mechanism=params.mechanism,
             coefficient_overrides=params.coefficient_overrides,
+            no_data=params.no_data,
         )
 
     def __call__(

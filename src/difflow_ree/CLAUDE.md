@@ -82,6 +82,18 @@ the root CLAUDE.md, which keeps only what every session needs).
   `StripperParams` refuses an `acid_conc` above it when deriving the pH. A
   pH the CALLER passes is never clamped. Stopgap until D2EHPA is refitted
   to strong acid (#384).
+  No data is not a number (#384): `REEDistribution(..., no_data=)` (threaded
+  as `no_data=` through the unit and circuit params) is `"warn"` (default:
+  refuse an element with no coefficients, extrapolate the rest with a
+  warning), `"nan"` (`get_D` answers NaN for an element with no
+  coefficients -- Ho-Lu on D2EHPA, #269 -- and for the record's
+  `unmeasured_outside_window` elements, D2EHPA Gd/Tb/Dy/Y, below
+  `valid_ph_range`) or `"raise"` (those heavies raise outside the window). A
+  NaN is NEVER filtered: a calculation that uses it returns NaN for what
+  shares a limiter with it, which is the signal that it asked for something
+  with no data. Do not add a `nan_to_num` to hide it. Add an element to
+  `unmeasured_outside_window` only when its correlation outside the window
+  is an extrapolation, not a measurement.
   `StripperParams.pH=None` means `-log10(acid_conc)`; TBP strips at
   `strip_nitrate_conc`. Sections carry non-REE species through
   (`units/carry.py`); precipitators are reagent-capped.
