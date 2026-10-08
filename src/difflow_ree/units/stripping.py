@@ -20,6 +20,7 @@ from difflow.numerics import safe_divide, safe_log
 from difflow.params_mixin import ParamsMixin
 from difflow.streams import Stream, make_stream, get_flows
 from difflow_ree.equilibrium.distribution import REEDistribution
+from difflow_ree.equilibrium.operating_points import MAX_STRIP_ACID
 from difflow_ree.units.carry import carry_through
 from difflow_ree.units.kremser import kremser_two_inlet
 
@@ -50,7 +51,16 @@ class StripperParams(ParamsMixin):
             ``pH`` is None. None (the default) means 4 M when ``pH`` is also
             None, and otherwise is filled in from ``pH`` as ``10**-pH`` so
             ``info["acid_conc"]`` reports the acid the pH implies. Giving
-            both with different meanings raises.
+            both with different meanings raises, and so does an
+            ``acid_conc`` above ``max_strip_acid`` when it is what sets the
+            pH.
+        max_strip_acid: Strongest strip liquor (M) ``acid_conc`` may name
+            when it sets the strip pH; default 6 M, the same limit the
+            circuits put on a strip pH they choose
+            (:data:`difflow_ree.equilibrium.operating_points.MAX_STRIP_ACID`).
+            None sets no limit. An explicit ``pH`` is not limited: the
+            plugin never clamps a pH the caller gives, it only refuses an
+            acid it will not make.
         nitrate_conc: Aqueous nitrate concentration (M), required for solvating
             extractants such as TBP whose D is nitrate- rather than pH-driven
             (#195). For an HNO3 strip this is the nitrate the acid supplies.
@@ -82,6 +92,8 @@ class StripperParams(ParamsMixin):
     # Per-element log10(D) coefficient overrides, possibly traced; passed to
     # REEDistribution. The supported way to put uncertainty on D.
     coefficient_overrides: dict | None = None
+    # The acid acid_conc may name when it sets the pH; see Attributes.
+    max_strip_acid: float | None = MAX_STRIP_ACID
 
     #: Strip acid concentration (M) when neither pH nor acid_conc is given.
     DEFAULT_ACID_CONC = 4.0
@@ -92,9 +104,25 @@ class StripperParams(ParamsMixin):
 
         if self.acid_conc is not None and not self.acid_conc > 0:
             raise ValueError(f"acid_conc must be positive, got {self.acid_conc}")
+        if self.max_strip_acid is not None and not self.max_strip_acid > 0:
+            raise ValueError(
+                f"max_strip_acid must be positive or None, got "
+                f"{self.max_strip_acid}")
         if self.pH is None:
             if self.acid_conc is None:
                 self.acid_conc = self.DEFAULT_ACID_CONC
+            # An acid stronger than the limit is refused, not capped: capping
+            # would run a different strip from the one named, and the
+            # circuits only ever choose acid within it.
+            if (self.max_strip_acid is not None
+                    and self.acid_conc > self.max_strip_acid):
+                raise ValueError(
+                    f"StripperParams got acid_conc={self.acid_conc:g} M, "
+                    f"stronger than max_strip_acid={self.max_strip_acid:g} M "
+                    f"(concentrated HCl is about 12 M; plants strip heavy REE "
+                    f"with 4-6 M). Raise max_strip_acid if the liquor is "
+                    f"real, or give pH directly (an explicit pH is never "
+                    f"limited).")
             self.pH = -math.log10(self.acid_conc)
         elif self.acid_conc is None:
             try:
@@ -161,6 +189,7 @@ class REEStripper:
         "extractant_conc": "mol/L",
         "acid_conc": "mol/L",
         "nitrate_conc": "mol/L",
+        "max_strip_acid": "mol/L",
     }
     numerical_method = "Kremser applied in the stripping direction with acid-loading boundary."
 

@@ -794,14 +794,27 @@ class TestGroupSeparation:
 
         flows = {"La": .0125, "Ce": .0175, "Pr": .0025, "Nd": .0075, "Sm": .002,
                  "Eu": .0005, "Gd": .0015, "Tb": .0005, "Dy": .0015, "Y": .004}
-        result = self._train(self.ELEMENTS, flows)
+        from difflow_ree.equilibrium.operating_points import StripAcidLimitWarning
+
+        # The heavy strip on D2EHPA needs ~15 M acid by the cut rule; it runs
+        # at the 6 M max_strip_acid instead and says so.
+        with pytest.warns(StripAcidLimitWarning, match="Y"):
+            result = self._train(self.ELEMENTS, flows)
         for product, group in self.GROUPS.items():
             f = get_flows(result["products"][product])
             total = sum(float(f.get(e, 0.0)) for e in self.ELEMENTS)
             assert sum(float(f.get(e, 0.0)) for e in group) / total > 0.9, product
         balance = result["mass_balance"]
         assert float(balance["closure"]) == pytest.approx(1.0, abs=1e-9)
-        assert float(balance["recovery"]) == pytest.approx(1.0, abs=1e-3)
+        # What the floored strip leaves is held on the solvent, not lost:
+        # 2.8 % of the feed REE (it was ~0 with the ~15 M strip), Y nearly
+        # all of it.
+        total_in = sum(flows.values())
+        held = float(balance["holdup"]) / total_in
+        assert float(balance["recovery"]) == pytest.approx(1.0 - held, abs=1e-9)
+        assert 0.01 < held < 0.05
+        solvent = get_flows(result["holdup"]["solvent"])
+        assert float(solvent["Y"]) > 0.9 * float(balance["holdup"])
 
     def test_a_light_only_feed_is_all_light(self):
         from difflow.streams import get_flows
@@ -839,6 +852,9 @@ class TestGroupSeparation:
             D = sep._distribution.get_D_all(pH=heavy["scrubbing"])
             cut = math.sqrt(float(D["Gd"]) * float(D["Eu"])) * oa["scrubbing"]
             assert cut == pytest.approx(CUT_FACTOR["scrubbing"], rel=1e-6)
+            # The strip cut for the heavies needs ~15 M acid; the section
+            # sits at the 6 M max_strip_acid floor instead, never below it.
+            assert heavy["stripping"] == pytest.approx(-math.log10(6.0), abs=1e-12)
             D_strip = sep._distribution.get_D_all(pH=heavy["stripping"])
             assert max(float(D_strip[e]) for e in ("Gd", "Tb", "Dy", "Y")) \
-                * oa["stripping"] == pytest.approx(CUT_FACTOR["stripping"], rel=1e-6)
+                * oa["stripping"] > CUT_FACTOR["stripping"]

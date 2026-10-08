@@ -31,6 +31,7 @@ from difflow.numerics import safe_divide
 from difflow.params_mixin import ParamsMixin
 from difflow.streams import Stream, combine_streams, make_stream, get_flows
 from difflow_ree.equilibrium.distribution import REEDistribution
+from difflow_ree.equilibrium.operating_points import MAX_STRIP_ACID
 from difflow_ree.units.cerium import CeriumOxidizer, CeriumOxidizerParams
 from difflow_ree.units.extraction import REEExtractor, REEExtractorParams
 from difflow_ree.flowsheets.extract_scrub_strip import (
@@ -66,6 +67,8 @@ class SeparationTrainParams(ParamsMixin):
             extraction feed (default True, #377). Without the reflux the
             scrub liquor carries co-extracted heavies on to the light
             product (63 % of the Gd of the default train).
+        max_strip_acid: Strongest strip liquor (M H+) a group circuit's
+            strip may call for (default 6 M); None sets no floor; see GroupSeparator.
     """
     elements: tuple[str, ...] = ("La", "Ce", "Pr", "Nd", "Sm", "Eu", "Gd", "Tb", "Dy", "Y")
     extractant: str = "D2EHPA"
@@ -78,6 +81,8 @@ class SeparationTrainParams(ParamsMixin):
     mechanism: str | None = None  # see #195
     capacity_sharpness: int = 8  # see REEExtractorParams (#193)
     recycle_scrub_liquor: bool = True  # see #377
+    # Strip acid floor for the strip pHs the cut rule chooses.
+    max_strip_acid: float | None = MAX_STRIP_ACID
     target_purities: dict = field(default_factory=lambda: {
         "Nd": 0.99,
         "Dy": 0.99,
@@ -126,6 +131,7 @@ class GroupSeparator:
         mechanism: str | None = None,
         capacity_sharpness: int = 8,
         recycle_scrub_liquor: bool = True,
+        max_strip_acid: float | None = MAX_STRIP_ACID,
     ):
         """Initialize separator.
 
@@ -146,6 +152,11 @@ class GroupSeparator:
                 co-extracted heavies; passed on to the next group it put 63 %
                 of the default train's Gd into the light product. Solved as a
                 closed loop with a tear stream inside each circuit.
+            max_strip_acid: Strongest strip liquor (M H+) either circuit's
+                strip may call for. The heavy strip on D2EHPA needs about
+                15 M by the cut rule; it runs at this floor instead, warns
+                (StripAcidLimitWarning), and what stays on the solvent is
+                reported in ``info["solvent_holdup"]``. None sets no floor.
         """
         self.recycle_scrub_liquor = recycle_scrub_liquor
         self.elements = elements
@@ -160,6 +171,7 @@ class GroupSeparator:
         self.nitrate_conc = nitrate_conc
         self.mechanism = mechanism
         self.capacity_sharpness = capacity_sharpness
+        self.max_strip_acid = max_strip_acid
 
         # Where each section runs. An element leaves for the other phase of a
         # section when D * (O/A) crosses one, so a section separates two
@@ -193,6 +205,7 @@ class GroupSeparator:
             mechanism=mechanism,  # see #195
             capacity_sharpness=capacity_sharpness,  # see #193
             recycle_scrub_liquor=recycle_scrub_liquor,  # see #377
+            max_strip_acid=max_strip_acid,
         ))
 
         # Circuit 2: Separate middle from light, on circuit 1's non-heavy
@@ -211,6 +224,7 @@ class GroupSeparator:
             mechanism=mechanism,  # see #195
             capacity_sharpness=capacity_sharpness,  # see #193
             recycle_scrub_liquor=recycle_scrub_liquor,  # see #377
+            max_strip_acid=max_strip_acid,
         ))
 
         def _pHs(circuit):
@@ -336,7 +350,8 @@ class FullSeparationTrain:
     ]
     references = ["Xie, F., Zhang, T.A., Dreisinger, D., Doyle, F. Miner. Eng., 56, 10 (2014)."]
     parameter_symbols = {}
-    parameter_units = {"nitrate_conc": "mol/L", "capacity_sharpness": "-"}
+    parameter_units = {"nitrate_conc": "mol/L", "capacity_sharpness": "-",
+                       "max_strip_acid": "mol/L"}
 
     def __init__(self, params: SeparationTrainParams):
         """Initialize separation train.
@@ -374,6 +389,7 @@ class FullSeparationTrain:
                 mechanism=params.mechanism,  # see #195
                 capacity_sharpness=params.capacity_sharpness,  # see #193
                 recycle_scrub_liquor=params.recycle_scrub_liquor,  # see #377
+                max_strip_acid=params.max_strip_acid,
             )
         else:
             self._group_separator = None

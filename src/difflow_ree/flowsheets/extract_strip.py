@@ -25,8 +25,24 @@ from jax import Array
 from difflow.numerics import safe_divide
 from difflow.params_mixin import ParamsMixin
 from difflow.streams import Stream, make_stream, get_flows
+from difflow_ree.equilibrium.operating_points import MAX_STRIP_ACID
 from difflow_ree.units.extraction import REEExtractor, REEExtractorParams
 from difflow_ree.units.stripping import REEStripper, StripperParams
+
+
+def _strip_retained(product: Stream, barren: Stream, elements) -> dict:
+    """Fraction of each element entering a strip that stays on the organic.
+
+    What a strip held at the acid floor leaves on the barren organic is the
+    number to look at, so the circuits report it rather than leaving it to be
+    recomputed. The circuits' strip liquor enters free of REE, so what
+    entered the strip is what left it, product plus barren organic.
+    """
+    f_p, f_b = get_flows(product), get_flows(barren)
+    return {e: safe_divide(jnp.asarray(f_b.get(e, 0.0)),
+                           jnp.asarray(f_p.get(e, 0.0))
+                           + jnp.asarray(f_b.get(e, 0.0)))
+            for e in elements}
 
 
 @dataclass(repr=False)
@@ -76,6 +92,13 @@ class ExtractStripParams(ParamsMixin):
             nothing stripped (2026 operating-point audit, R8).
         capacity_sharpness: Sharpness k of the extraction section's smooth
             loading limiters; see REEExtractorParams (#193).
+        max_strip_acid: Strongest strip liquor (M H+) a stripping pH left
+            as None may call for; default 6 M, pH -0.78 on the concentration
+            scale. When the cut needs stronger acid (heavy REE on D2EHPA:
+            about 15 M) the strip runs at ``-log10(max_strip_acid)`` and a
+            :class:`~difflow_ree.equilibrium.operating_points.StripAcidLimitWarning`
+            reports what the strip stages leave on the barren organic. None
+            sets no floor. A stripping_pH you give is used as given.
     """
     extractant: str
     elements: tuple[str, ...]
@@ -97,6 +120,8 @@ class ExtractStripParams(ParamsMixin):
     DEFAULT_STRIP_NITRATE = 1.0
     mechanism: str | None = None  # see #195
     capacity_sharpness: int = 8  # see REEExtractorParams (#193)
+    # Strip acid floor for a pH the cut rule chooses; see operating_points.
+    max_strip_acid: float | None = MAX_STRIP_ACID
 
     def __post_init__(self):
         """Resolve unset pHs from the D curves of this circuit's elements.
@@ -111,7 +136,9 @@ class ExtractStripParams(ParamsMixin):
         of a default D2EHPA circuit (2026 operating-point audit, R1). A pH
         the caller gives is kept as given. An extractant whose ``D`` does not
         move with pH (TBP) keeps the window default, which then has no effect
-        on ``D``.
+        on ``D``. A strip cut that needs acid stronger than
+        ``max_strip_acid`` runs at the acid floor and warns
+        (:class:`~difflow_ree.equilibrium.operating_points.StripAcidLimitWarning`).
         """
         from difflow_ree.database import default_pH
 
@@ -126,7 +153,7 @@ class ExtractStripParams(ParamsMixin):
                 if solvating and self.nitrate_conc is not None
                 else self.nitrate_conc)
         from difflow_ree.equilibrium.operating_points import (
-            circuit_phase_ratios, cut_pHs)
+            circuit_phase_ratios, cut_pHs, report_strip_floor)
 
         if self.extraction_pH is None or self.stripping_pH is None:
             ratios = circuit_phase_ratios(
@@ -136,13 +163,22 @@ class ExtractStripParams(ParamsMixin):
                 self.extractant, tuple(self.elements),
                 extraction_OA=ratios["extraction"], strip_OA=ratios["stripping"],
                 extractant_conc=self.extractant_conc,
-                nitrate_conc=self.nitrate_conc, mechanism=self.mechanism)
+                nitrate_conc=self.nitrate_conc, mechanism=self.mechanism,
+                max_strip_acid=self.max_strip_acid)
             if self.extraction_pH is None:
                 self.extraction_pH = (cuts.extraction if cuts is not None
                                       else default_pH(self.extractant, "extraction"))
             if self.stripping_pH is None:
                 self.stripping_pH = (cuts.stripping if cuts is not None
                                      else default_pH(self.extractant, "stripping"))
+                if cuts is not None and cuts.strip_acid_limited:
+                    report_strip_floor(
+                        self.extractant, cuts, ratios["stripping"],
+                        self.n_stripping_stages, self.max_strip_acid,
+                        "ExtractStripParams",
+                        extractant_conc=self.extractant_conc,
+                        nitrate_conc=self.nitrate_conc,
+                        mechanism=self.mechanism)
 
 
 class ExtractStripCircuit:
@@ -190,6 +226,7 @@ class ExtractStripCircuit:
         "nitrate_conc": "mol/L",
         "strip_nitrate_conc": "mol/L",  # audit R8
         "capacity_sharpness": "-",
+        "max_strip_acid": "mol/L",
     }
 
     def __init__(self, params: ExtractStripParams):
@@ -242,6 +279,8 @@ class ExtractStripCircuit:
             - product: REE product solution from stripping
             - barren_organic: Stripped organic (for recycle)
             - recovery: Overall REE recovery
+            - strip_retained: Fraction of each element entering the strip
+              that leaves on the barren organic
             - extraction_info: Extraction section details
             - stripping_info: Stripping section details
         """
@@ -319,6 +358,7 @@ class ExtractStripCircuit:
             "product": product,
             "barren_organic": barren_org,
             "recovery": overall_recovery,
+            "strip_retained": _strip_retained(product, barren_org, p.elements),
             "element_recovery": element_recovery,
             "extraction_info": ext_info,
             "stripping_info": strip_info,
@@ -393,6 +433,7 @@ def design_extract_strip(
     stripping_pH: float | None = None,
     max_extraction_stages: int = 40,
     max_stripping_stages: int = 20,
+    max_strip_acid: float | None = MAX_STRIP_ACID,
 ) -> ExtractStripParams:
     """Design an extract-strip circuit that meets a recovery target.
 
@@ -420,6 +461,11 @@ def design_extract_strip(
         stripping_pH: Strip pH; None reads it off the D curves.
         max_extraction_stages: Largest extraction stage count searched.
         max_stripping_stages: Largest stripping stage count searched.
+        max_strip_acid: Strongest strip liquor (M H+) a strip pH read off
+            the D curves may call for. When the cut needs more, the strip
+            runs at ``-log10(max_strip_acid)`` and the search adds strip
+            stages there; whether that can reach the target is what the
+            Kremser fractions say. None sets no floor.
 
     Returns:
         ExtractStripParams with the pHs and stage counts.
@@ -427,6 +473,9 @@ def design_extract_strip(
     Warns:
         UserWarning: If no stage count up to the maxima meets the target (the
             best design found is returned).
+        StripAcidLimitWarning: The same condition, when the strip is held at
+            the acid floor: the message gives what the chosen strip leaves on
+            the barren organic.
 
     Example:
         >>> p = design_extract_strip({"Nd": 0.01, "Dy": 0.001}, "PC88A")
@@ -441,13 +490,21 @@ def design_extract_strip(
     from difflow_ree.equilibrium.operating_points import (
         kremser_fraction, section_factors)
 
+    from difflow_ree.equilibrium.operating_points import (
+        StripAcidLimitWarning, cut_pHs, strip_retention,
+        warn_strip_acid_limited)
+
     elements = tuple(feed_composition.keys())
     # Resolve the pHs the way the circuit would (the cut rule), keeping any
-    # the caller gave.
-    template = ExtractStripParams(
-        extractant=extractant, elements=elements,
-        extraction_pH=extraction_pH, stripping_pH=stripping_pH,
-        nitrate_conc=nitrate_conc, mechanism=mechanism)
+    # the caller gave. The template's own floor warning is for its default
+    # stage count; this function sizes the strip and warns for that instead.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", StripAcidLimitWarning)
+        template = ExtractStripParams(
+            extractant=extractant, elements=elements,
+            extraction_pH=extraction_pH, stripping_pH=stripping_pH,
+            nitrate_conc=nitrate_conc, mechanism=mechanism,
+            max_strip_acid=max_strip_acid)
     from difflow_ree.equilibrium.operating_points import circuit_phase_ratios
 
     oa = circuit_phase_ratios(template.solvent_to_feed_ratio, None,
@@ -474,11 +531,30 @@ def design_extract_strip(
         i, j = np.unravel_index(np.argmin(cost), cost.shape)
     else:
         i, j = np.unravel_index(np.argmax(recovery), recovery.shape)
-        warnings.warn(
-            f"design_extract_strip: no design up to {max_extraction_stages} + "
-            f"{max_stripping_stages} stages reaches recovery {target_recovery} "
-            f"on {extractant}; the best found predicts {recovery[i, j]:.4f}.",
-            UserWarning, stacklevel=2)
+        cuts = None
+        if stripping_pH is None:
+            cuts = cut_pHs(
+                extractant, elements, extraction_OA=oa["extraction"],
+                strip_OA=oa["stripping"],
+                extractant_conc=template.extractant_conc,
+                nitrate_conc=nitrate_conc, mechanism=mechanism,
+                distribution=dist, max_strip_acid=max_strip_acid)
+        if cuts is not None and cuts.strip_acid_limited:
+            # The strip is held at the acid floor and no stage count there
+            # strips what the cut wanted: report what it leaves behind.
+            warn_strip_acid_limited(
+                extractant, cuts,
+                strip_retention(dist, cuts.strip_elements, cuts.stripping,
+                                oa["stripping"], int(n_str[j])),
+                int(n_str[j]), max_strip_acid,
+                f"design_extract_strip (best recovery {recovery[i, j]:.4f} "
+                f"against {target_recovery})", stacklevel=2)
+        else:
+            warnings.warn(
+                f"design_extract_strip: no design up to {max_extraction_stages} + "
+                f"{max_stripping_stages} stages reaches recovery {target_recovery} "
+                f"on {extractant}; the best found predicts {recovery[i, j]:.4f}.",
+                UserWarning, stacklevel=2)
 
     return ExtractStripParams(
         extractant=extractant,
@@ -489,4 +565,5 @@ def design_extract_strip(
         stripping_pH=template.stripping_pH,
         nitrate_conc=nitrate_conc,  # see #195
         mechanism=mechanism,  # see #195
+        max_strip_acid=max_strip_acid,
     )

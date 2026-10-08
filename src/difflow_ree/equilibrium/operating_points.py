@@ -47,6 +47,19 @@ over; the distribution model reports that extrapolation when the section
 runs, which is the same policy :meth:`REEDistribution._check_ph_range`
 applies everywhere else (clamping would silently relocate an operating
 point).
+
+One bound IS applied, to strip pHs this module chooses and only to those:
+the strip liquor cannot be stronger than ``max_strip_acid`` (default
+:data:`MAX_STRIP_ACID`, 6 M, pH ``-log10(6) = -0.78`` on the concentration
+scale the correlations use). The cut rule put heavy-REE stripping on D2EHPA
+at pH -1.17 (14.6 M H+ at strip O/A 2), beyond any real strip liquor and more
+than a pH unit outside the [0, 2] window the coefficients were fitted over.
+When the cut asks for stronger acid the strip runs at the floor,
+:class:`OperatingPHs` says so (``strip_acid_limited``, ``strip_cut``),
+:func:`strip_retention` gives what the Kremser solve leaves on the barren
+organic there, and the circuits and design helpers warn with
+:class:`StripAcidLimitWarning`. This is a stopgap until D2EHPA is refitted
+down to strong acid (#384). A pH the caller gives is never floored.
 """
 
 from __future__ import annotations
@@ -68,10 +81,44 @@ CUT_FACTOR = {
 PH_BRACKET = (-4.0, 10.0)
 
 
+#: Strongest strip liquor (M H+) a strip pH chosen by the cut rule may call
+#: for. 6 M is about the strongest HCl/HNO3 strip used in practice; the
+#: plugin's pH is -log10 of the proton concentration, so the floor is
+#: pH -0.778.
+MAX_STRIP_ACID = 6.0
+
+
 class OperatingPointWarning(UserWarning):
     """The requested split has no clean pH cut (for example the targets are
     not the more extractable group, so no single pH extracts them and rejects
     the rest)."""
+
+
+class StripAcidLimitWarning(UserWarning):
+    """A strip chosen by the cut rule needs acid stronger than
+    ``max_strip_acid``, so it runs at the acid floor and leaves REE on the
+    barren organic (or a design cannot reach its target there)."""
+
+
+def strip_pH_floor(max_strip_acid: float = MAX_STRIP_ACID) -> float:
+    """The lowest strip pH the cut rule may choose: ``-log10(max_strip_acid)``.
+
+    Args:
+        max_strip_acid: Strongest strip liquor allowed (M H+).
+
+    Returns:
+        The pH floor on the concentration scale.
+
+    Raises:
+        ValueError: If ``max_strip_acid`` is not positive.
+
+    Example:
+        >>> round(strip_pH_floor(6.0), 3)
+        -0.778
+    """
+    if not max_strip_acid > 0:
+        raise ValueError(f"max_strip_acid must be positive, got {max_strip_acid}")
+    return -math.log10(max_strip_acid)
 
 
 def circuit_phase_ratios(
@@ -211,6 +258,12 @@ class OperatingPHs:
             and strip everything).
         boundary: The boundary pair ``(least extractable target, most
             extractable rejected)``, or None for ``"bulk"``.
+        strip_acid_limited: True when the strip cut needed acid stronger
+            than ``max_strip_acid`` and ``stripping`` is the acid floor.
+        strip_cut: The strip pH the cut rule asked for, before the floor
+            (equal to ``stripping`` when the floor did not bind).
+        strip_elements: The elements the strip cut was placed on (the
+            targets, or every element for ``"bulk"``).
     """
 
     extraction: float
@@ -218,6 +271,9 @@ class OperatingPHs:
     stripping: float
     basis: str
     boundary: tuple[str, str] | None = None
+    strip_acid_limited: bool = False
+    strip_cut: float | None = None
+    strip_elements: tuple[str, ...] = ()
 
     def as_dict(self) -> dict[str, float]:
         """``{"extraction": ..., "scrubbing": ..., "stripping": ...}``."""
@@ -237,6 +293,7 @@ def cut_pHs(
     nitrate_conc: float | None = None,
     mechanism: str | None = None,
     distribution=None,
+    max_strip_acid: float | None = MAX_STRIP_ACID,
 ) -> OperatingPHs | None:
     """Extraction, scrubbing and stripping pH from the ``D`` curves.
 
@@ -266,6 +323,9 @@ def cut_pHs(
         mechanism: Mechanism override; see ``REEDistribution``.
         distribution: An existing ``REEDistribution`` to reuse (it must cover
             ``elements``); None builds one.
+        max_strip_acid: Strongest strip liquor (M H+) the strip may call for;
+            a strip cut below ``-log10(max_strip_acid)`` is raised to it and
+            flagged (``strip_acid_limited``). None applies no floor.
 
     Returns:
         :class:`OperatingPHs`, or None when ``D`` does not move with pH (the
@@ -298,13 +358,23 @@ def cut_pHs(
     if not is_pH_driven(distribution, elements):
         return None
 
+    floor = None if max_strip_acid is None else strip_pH_floor(max_strip_acid)
+
+    def floored(strip, strip_elements):
+        # The acid floor applies to this strip pH because the code chose it;
+        # a caller's explicit pH never comes through here.
+        limited = floor is not None and strip < floor
+        return dict(stripping=floor if limited else strip,
+                    strip_acid_limited=bool(limited), strip_cut=strip,
+                    strip_elements=tuple(strip_elements))
+
     rejected = tuple(e for e in elements if e not in targets)
     if not targets or not rejected:
         ext = pH_where(distribution, elements, CUT_FACTOR["bulk_extraction"],
                        extraction_OA, how="min")
         strip = pH_where(distribution, elements, CUT_FACTOR["stripping"],
                          strip_OA, how="max")
-        return OperatingPHs(ext, ext, strip, "bulk")
+        return OperatingPHs(ext, ext, basis="bulk", **floored(strip, elements))
 
     if scrub_OA is None:
         raise ValueError("a boundary cut needs scrub_OA")
@@ -324,14 +394,112 @@ def cut_pHs(
             f"placed on that pair anyway.",
             OperatingPointWarning, stacklevel=2)
     pair = (weakest_target, strongest_rejected)
+    strip = pH_where(distribution, targets, CUT_FACTOR["stripping"], strip_OA,
+                     how="max")
     return OperatingPHs(
         pH_where(distribution, pair, CUT_FACTOR["extraction"], extraction_OA),
         pH_where(distribution, pair, CUT_FACTOR["scrubbing"], scrub_OA),
-        pH_where(distribution, targets, CUT_FACTOR["stripping"], strip_OA,
-                 how="max"),
-        "cut",
-        pair,
+        basis="cut",
+        boundary=pair,
+        **floored(strip, targets),
     )
+
+
+def strip_retention(distribution, elements, pH: float, strip_OA: float,
+                    n_stages) -> dict[str, float]:
+    """Fraction of each element a counter-current strip leaves on the organic.
+
+    The Kremser fraction ``(S - 1) / (S**(N+1) - 1)`` with ``S = 1 / (D O/A)``,
+    the same one :class:`~difflow_ree.units.stripping.REEStripper` evaluates
+    for a strip liquor that enters clean. Below ``S = 1`` no stage count
+    strips the element: the fraction tends to ``1 - S``.
+
+    Args:
+        distribution: An ``REEDistribution`` covering ``elements``.
+        elements: Elements to report.
+        pH: Strip pH.
+        strip_OA: Strip ``O/A``.
+        n_stages: Strip stage count.
+
+    Returns:
+        ``{element: fraction left on the barren organic}``.
+    """
+    factors = section_factors(distribution, tuple(elements), [pH], strip_OA)[0]
+    left = kremser_fraction(1.0 / factors, n_stages)
+    return {e: float(f) for e, f in zip(elements, left)}
+
+
+def warn_strip_acid_limited(extractant: str, cuts: OperatingPHs,
+                            retention: dict[str, float], n_stages,
+                            max_strip_acid: float, where: str,
+                            stacklevel: int = 3) -> None:
+    """Report a strip held at the acid floor (:class:`StripAcidLimitWarning`).
+
+    Args:
+        extractant: Extractant name, for the message.
+        cuts: The :class:`OperatingPHs` whose strip was floored.
+        retention: :func:`strip_retention` at the floor.
+        n_stages: The strip stage count the retention is for.
+        max_strip_acid: The acid limit (M).
+        where: What is reporting, for the message.
+        stacklevel: Passed to :func:`warnings.warn`.
+    """
+    from difflow_ree.database import get_extractant
+
+    worst = max(retention, key=retention.get)
+    held = ", ".join(f"{e} {100 * f:.3g} %" for e, f in retention.items()
+                     if f > 1e-3) or "none above 0.1 %"
+    # Say so only when it is true: a floor set high enough can sit inside
+    # the window even when the cut does not.
+    lo = get_extractant(extractant).valid_ph_range[0]
+    window = (f" Both pHs are below the fitted window of the {extractant} "
+              f"coefficients (pH >= {lo:g}), so these are extrapolations."
+              if cuts.stripping < lo else "")
+    warnings.warn(
+        f"{where}: stripping {', '.join(cuts.strip_elements)} from "
+        f"{extractant} needs pH {cuts.strip_cut:.2f} "
+        f"({10 ** -cuts.strip_cut:.3g} M H+), stronger than max_strip_acid "
+        f"= {max_strip_acid:g} M, so the strip runs at pH "
+        f"{cuts.stripping:.2f}. With {n_stages:g} strip stages the barren "
+        f"organic keeps {held} (worst: {worst}).{window} Give stripping_pH "
+        f"explicitly, or raise max_strip_acid, to override.",
+        StripAcidLimitWarning, stacklevel=stacklevel)
+
+
+def report_strip_floor(extractant: str, cuts: OperatingPHs, strip_OA: float,
+                       n_stages, max_strip_acid: float, where: str, *,
+                       extractant_conc: float = 1.0,
+                       nitrate_conc: float | None = None,
+                       mechanism: str | None = None,
+                       stacklevel: int = 4) -> dict[str, float]:
+    """Retention at a floored strip, warned about; what the circuits call.
+
+    Args:
+        extractant: Extractant name.
+        cuts: :class:`OperatingPHs` with ``strip_acid_limited`` set.
+        strip_OA: Strip ``O/A``.
+        n_stages: Strip stage count.
+        max_strip_acid: The acid limit (M).
+        where: What is reporting, for the message.
+        extractant_conc: Extractant concentration on the record basis (M).
+        nitrate_conc: Aqueous nitrate (M).
+        mechanism: Mechanism override.
+        stacklevel: Passed to :func:`warnings.warn`.
+
+    Returns:
+        :func:`strip_retention` for ``cuts.strip_elements`` at the floor.
+    """
+    from difflow_ree.equilibrium.distribution import REEDistribution
+
+    dist = REEDistribution(extractant, cuts.strip_elements,
+                           concentration=extractant_conc,
+                           nitrate_conc=nitrate_conc, mechanism=mechanism,
+                           on_out_of_range="ignore")
+    retention = strip_retention(dist, cuts.strip_elements, cuts.stripping,
+                                strip_OA, n_stages)
+    warn_strip_acid_limited(extractant, cuts, retention, n_stages,
+                            max_strip_acid, where, stacklevel=stacklevel)
+    return retention
 
 
 def kremser_fraction(factor, n_stages):

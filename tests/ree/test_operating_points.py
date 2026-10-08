@@ -66,9 +66,13 @@ class TestCutRule:
 
     def test_boundary_cut(self):
         oa = circuit_phase_ratios(1.0, 0.2, 0.5, 0.5)
+        # The cut itself, without the strip acid floor (max_strip_acid=None);
+        # test_strip_acid_floor.py covers the floor.
         ph = cut_pHs("D2EHPA", ELS, HEAVY, extraction_OA=oa["extraction"],
-                     scrub_OA=oa["scrubbing"], strip_OA=oa["stripping"])
+                     scrub_OA=oa["scrubbing"], strip_OA=oa["stripping"],
+                     max_strip_acid=None)
         assert ph.basis == "cut" and ph.boundary == ("Gd", "Eu")
+        assert not ph.strip_acid_limited and ph.strip_cut == ph.stripping
         d = REEDistribution("D2EHPA", ELS, on_out_of_range="ignore")
         for duty in ("extraction", "scrubbing"):
             D = d.get_D_all(pH=getattr(ph, duty))
@@ -103,20 +107,32 @@ class TestCutRule:
 
 
 class TestCircuitDefaults:
-    @pytest.mark.parametrize("ext", ["D2EHPA", "PC88A", "Cyanex272"])
-    def test_extract_strip_leaves_nothing_on_the_solvent(self, ext):
-        """Before: D2EHPA left Sm 0.67 ... Y 0.998 on the barren organic."""
-        r = ExtractStripCircuit(ExtractStripParams(extractant=ext, elements=ELS))(_feed())
+    @pytest.mark.parametrize("ext,acid", [
+        ("D2EHPA", None), ("PC88A", 6.0), ("Cyanex272", 6.0)])
+    def test_extract_strip_leaves_nothing_on_the_solvent(self, ext, acid):
+        """Before: D2EHPA left Sm 0.67 ... Y 0.998 on the barren organic.
+
+        The cut rule strips everything wherever it puts the strip. PC88A and
+        Cyanex272 put it within the 6 M default max_strip_acid; D2EHPA needs
+        ~15 M for the Y, so this is the cut without the floor (None), and
+        test_strip_acid_floor.py covers what the floor leaves behind.
+        """
+        r = ExtractStripCircuit(ExtractStripParams(
+            extractant=ext, elements=ELS, max_strip_acid=acid))(_feed())
         barren = get_flows(r["barren_organic"])
         for e in ELS:
             assert float(barren[e]) / COMP[e] < 1e-3, e
         assert float(r["recovery"]) > 0.99
 
-    @pytest.mark.parametrize("ext", ["D2EHPA", "PC88A"])
-    def test_scrub_circuit_separates_the_heavies(self, ext):
-        """Before: purity 0.0009, Y recovery 0.002 on D2EHPA."""
+    @pytest.mark.parametrize("ext,acid", [("D2EHPA", None), ("PC88A", 6.0)])
+    def test_scrub_circuit_separates_the_heavies(self, ext, acid):
+        """Before: purity 0.0009, Y recovery 0.002 on D2EHPA.
+
+        D2EHPA without the strip acid floor (see the extract-strip test).
+        """
         r = ExtractScrubStripCircuit(ExtractScrubStripParams(
-            extractant=ext, elements=ELS, target_elements=HEAVY))(_feed())
+            extractant=ext, elements=ELS, target_elements=HEAVY,
+            max_strip_acid=acid))(_feed())
         assert float(r["target_purity"]) > 0.99
         assert float(r["target_recovery"]["Y"]) > 0.95
 
@@ -144,17 +160,19 @@ class TestDesign:
                                     stripping_pH=easy.stripping_pH + 0.5)
         assert hard.n_stripping_stages > easy.n_stripping_stages
 
-    @pytest.mark.parametrize("ext,purity,recovery", [
-        ("D2EHPA", 0.90, 0.80),
-        ("PC88A", 0.90, 0.80),
-        ("PC88A", 0.95, 0.80),
+    @pytest.mark.parametrize("ext,purity,recovery,acid", [
+        # D2EHPA strips the Y only past 6 M; without the floor it designs.
+        ("D2EHPA", 0.90, 0.80, None),
+        ("PC88A", 0.90, 0.80, 6.0),
+        ("PC88A", 0.95, 0.80, 6.0),
     ])
-    def test_scrub_design_meets_its_targets(self, ext, purity, recovery):
+    def test_scrub_design_meets_its_targets(self, ext, purity, recovery, acid):
         with warnings.catch_warnings():
             warnings.simplefilter("error", UserWarning)
             warnings.filterwarnings("ignore", message=".*outside the validity")
             p = design_extract_scrub_strip(COMP, HEAVY, ext, target_purity=purity,
-                                           target_recovery=recovery)
+                                           target_recovery=recovery,
+                                           max_strip_acid=acid)
         r = ExtractScrubStripCircuit(p)(_feed())
         assert float(r["target_purity"]) >= purity
         assert min(float(v) for v in r["target_recovery"].values()) >= recovery

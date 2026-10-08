@@ -68,7 +68,14 @@ the root CLAUDE.md, which keeps only what every session needs).
   organic phase on the diluent.
   Do NOT go back to window fractions (`default_pH`) for circuits: they left
   99.8 % of the Y on a D2EHPA solvent. Strip cuts for heavy REE on D2EHPA lie
-  below the fitted window; the warning is the policy, never clamp.
+  below the fitted window (pH -1.17, 14.6 M). A strip pH the CODE chooses
+  is floored at `-log10(max_strip_acid)` (default 6 M, pH -0.78): the strip
+  runs there, `results["strip_retained"]` / the train's solvent holdup say
+  what stays on the solvent, design helpers add strip stages at the floor
+  and raise `StripAcidLimitWarning` when that cannot meet the target, and
+  `StripperParams` refuses an `acid_conc` above it when deriving the pH. A
+  pH the CALLER passes is never clamped. Stopgap until D2EHPA is refitted
+  to strong acid (#384).
   `StripperParams.pH=None` means `-log10(acid_conc)`; TBP strips at
   `strip_nitrate_conc`. Sections carry non-REE species through
   (`units/carry.py`); precipitators are reagent-capped.

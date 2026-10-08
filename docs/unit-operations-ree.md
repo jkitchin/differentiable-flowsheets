@@ -2201,6 +2201,12 @@ stripped identically. Stripping Dy from D2EHPA needs strong acid; the pH it
 takes is below D2EHPA's fitted window, and the distribution model warns about
 the extrapolation.
 
+An `acid_conc` that sets the pH may not exceed `max_strip_acid` (default
+6 M, about the strongest HCl/HNO3 strip used in practice; concentrated HCl is
+~12 M): a stronger one raises rather than being capped, because capping would
+run a different strip from the one named. Raise `max_strip_acid` (or set it
+to None) if the liquor is real. An explicit `pH` is never limited.
+
 (ceriumoxidizer)=
 ### CeriumOxidizer
 
@@ -2542,6 +2548,38 @@ extrapolation instead of clamping the pH. When the targets are not the more
 extractable group (no single pH extracts them and rejects the rest), an
 `OperatingPointWarning` says so.
 
+(strip-acid-floor)=
+#### The strip acid floor
+
+For the heavies on D2EHPA the cut is pH -1.17, 14.6 M H+ on the plugin's
+concentration scale: beyond any real strip liquor (concentrated HCl is about
+12 M, and plants strip the heavies with 4 to 6 M) and 1.2 pH units below the
+`[0, 2]` window the coefficients were fitted over. So a strip pH the code
+chooses is floored at `-log10(max_strip_acid)`, with `max_strip_acid = 6 M`
+by default (pH -0.78), on `ExtractStripParams`, `ExtractScrubStripParams`,
+`GroupSeparator`, `SeparationTrainParams` and the two design functions.
+
+| D2EHPA, targets Gd/Tb/Dy/Y | strip pH | Y recovery | Y left on the barren organic |
+|---|---|---|---|
+| the cut (`max_strip_acid=None`) | -1.17 (14.6 M) | 97.5 % | 0 |
+| the 6 M floor (default) | -0.78 | 63.6 % | 34.7 % of the Y entering the strip |
+
+What the floor leaves on the solvent is reported, not hidden: the circuits
+return `results["strip_retained"]` (the fraction of each element entering the
+strip that leaves on the barren organic), a `FullSeparationTrain` counts it as
+solvent holdup, and the params raise a `StripAcidLimitWarning` naming the
+elements held. `design_extract_strip` and `design_extract_scrub_strip` size
+the strip at the floor with the same Kremser fractions, so where an element
+still strips there (`D * O/A < 1`, as Dy does) they add strip stages
+instead (Nd/Dy: 4 strip stages at the floor against 2 at the cut, same
+99 % recovery); where it does not (Y), no stage count can, and they warn
+with `StripAcidLimitWarning`. PC88A (cut pH -0.47, 2.9 M) and Cyanex272
+(0.59) cut inside the limit and are unchanged.
+
+A `stripping_pH` you pass is used as given, below the floor or not. The floor
+is a stopgap: what is missing is D2EHPA distribution data down to strong acid
+(#384).
+
 (splitshellcascade)=
 ### SplitShellCascade
 
@@ -2637,7 +2675,10 @@ are stored as `operating_pH`:
 On D2EHPA this gives extraction at pH −0.20, scrubbing at −0.43 and
 stripping at −1.17 for the heavy circuit, and 0.13 / −0.10 / −0.57 for the
 middle circuit. Both circuits run in roughly 1 to 2 M acid, and the heavies
-strip only from strong acid, as they do in practice. These pH values lie
+strip only from strong acid, as they do in practice. The heavy strip's −1.17
+is 14.6 M acid, so it runs at the 6 M `max_strip_acid` floor, pH −0.78,
+instead and warns; what it leaves on the solvent (mostly Y) is the
+`solvent_holdup` (see [the strip acid floor](#strip-acid-floor)). These pH values lie
 below the window the D2EHPA coefficients were fitted over (`[0, 2]`), and
 the distribution model says so with an extrapolation warning rather than
 clamping the pH. An extractant whose `D` does not move with pH (a solvating
