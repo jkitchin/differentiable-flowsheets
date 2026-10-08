@@ -86,13 +86,19 @@ def test_doc_python_blocks_run(path, tmp_path, monkeypatch):
     # global registry, that operation leaked into every later test in the
     # worker: the catalog, doc-link and report-metadata tests then found an
     # undocumented operation with no equations. Put the registry back.
-    from difflow.plugins import registry
+    # Load the plugins FIRST, so the snapshot holds them. Restoring a
+    # snapshot taken before they loaded threw them away while the module's
+    # "already loaded" flag stayed True, so every later test in the worker
+    # (and later pages) found Compressor, GasPipe, CeriumOxidizer ... missing.
+    # The flag is restored with the registry for the same reason.
+    import difflow.plugins as plugins
+    from difflow.plugins import load_plugins, registry
 
-    saved = (dict(registry._operations),
-             {k: list(v) for k, v in registry._categories.items()})
-    monkeypatch.setattr(registry, "_operations", saved[0].copy())
+    load_plugins()
+    monkeypatch.setattr(plugins, "_plugins_loaded", plugins._plugins_loaded)
+    monkeypatch.setattr(registry, "_operations", dict(registry._operations))
     monkeypatch.setattr(registry, "_categories",
-                        {k: list(v) for k, v in saved[1].items()})
+                        {k: list(v) for k, v in registry._categories.items()})
     ns: dict = {"__name__": "__doc_example__"}
     failures = []
     for line, src, skipped in extract_blocks(path.read_text()):
