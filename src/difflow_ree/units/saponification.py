@@ -211,10 +211,19 @@ class Saponifier:
             get_base(params.base) if params.base is not None
             else base_for_counter_ion(params.counter_ion)
         )
+        ext = get_extractant(params.extractant)
+        # The basis boundary (#386, #374). A stream's extractant flow is on
+        # the record's own basis (dimer for D2EHPA, PC88A and Cyanex 272:
+        # 0.5 M dimer = 1.0 M formal; molecule for TBP and naphthenic acid),
+        # like every other unit and circuit stream in the plugin. The
+        # equivalents are counted on the formal monomer basis, so the flow is
+        # multiplied by the monomers in one basis unit first. Reading it as
+        # formal monomer counted half the exchangeable equivalents of a
+        # dimeric extractant fed from an extract-scrub-strip module.
+        self.monomers_per_basis_unit = ext.monomers_per_basis_unit
         if params.monomers_per_component is not None:
             self.monomers_per_component = float(params.monomers_per_component)
         else:
-            ext = get_extractant(params.extractant)
             self.monomers_per_component = (
                 2.0 if ext.stoichiometry_basis == "dimer" else 1.0
             )
@@ -228,15 +237,46 @@ class Saponifier:
             organic: Organic stream.
 
         Returns:
-            ``F_ext / m``: one equivalent per extractant component, which for
-            a dimeric extractant is one per dimer, matching the single proton
-            the dimer releases into the extracted complex.
+            One equivalent per extractant component, which for a dimeric
+            extractant is one per dimer, matching the single proton the dimer
+            releases into the extracted complex. The stream's extractant flow
+            is on the record's basis (dimers for D2EHPA), so for the dimeric
+            extractants this is the flow itself: the formal monomer flow
+            ``F_ext * monomers_per_basis_unit`` over ``monomers_per_component``
+            (#386).
         """
         f_ext = jnp.asarray(
             get_flows(organic).get(self.schema.extractant, 0.0),
             dtype=jnp.float64,
         )
-        return f_ext / self.monomers_per_component
+        return f_ext * self.monomers_per_basis_unit / self.monomers_per_component
+
+    def to_formal_basis(self, organic: Stream) -> Stream:
+        """The stream with its extractant flow on the formal monomer basis.
+
+        This unit's streams carry the extractant on the record's own basis
+        (dimers for D2EHPA); the mass-action layer, including
+        :class:`~difflow_ree.equilibrium.saponification.SaponifiedSection`,
+        reads the schema's formal monomer basis. Pass the saponified solvent
+        through here to hand it to that layer (#386). For a monomer-basis
+        extractant (TBP, naphthenic acid) it is the identity.
+
+        Args:
+            organic: A stream on the record's basis, e.g. this unit's
+                ``organic_out``.
+
+        Returns:
+            A new stream, the extractant flow times
+            ``monomers_per_basis_unit``.
+        """
+        flows = dict(get_flows(organic))
+        key = self.schema.extractant
+        if key in flows:
+            flows[key] = (
+                jnp.asarray(flows[key], dtype=jnp.float64)
+                * self.monomers_per_basis_unit
+            )
+        return make_stream(flows, organic["T"], organic["P"])
 
     def inlet_counter_ion(self, organic: Stream) -> Array:
         """Counter-ion already bound to the inlet organic (mol/s).
@@ -288,7 +328,9 @@ class Saponifier:
 
         Args:
             organic: Organic stream entering the saponifier. Its extractant
-                key carries the **total** extractant on a monomer basis.
+                key carries the **total** extractant on the extractant
+                record's own basis (dimers for D2EHPA, PC88A and Cyanex
+                272), as the extract-scrub-strip modules write it (#386).
             base_flow: Reagent dosing (mol/s). None doses exactly
                 :meth:`base_requirement`, which is the "set the degree" mode;
                 pass a value to run the unit in the "this is what the pumps

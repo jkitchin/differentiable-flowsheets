@@ -8,6 +8,13 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Breaking
 
+- `Saponifier` reads a solvent stream's extractant on the record's own basis
+  (dimers for D2EHPA, PC88A and Cyanex 272) and converts with
+  `Extractant.monomers_per_basis_unit`, so it counts the same exchangeable
+  equivalents as the extractor charge (it counted half on a dimeric extractant
+  fed from an extract-scrub-strip module; #386). `Saponifier.to_formal_basis`
+  hands its output to the formal-monomer `SaponifiedSection`.
+
 - REE strip acid floor (stopgap for #384). A strip pH the code chooses from
   the D curves is floored at `-log10(max_strip_acid)`, default 6 M (pH
   -0.78), on `ExtractStripParams`, `ExtractScrubStripParams`,

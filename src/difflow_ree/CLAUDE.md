@@ -36,6 +36,12 @@ the root CLAUDE.md, which keeps only what every session needs).
   literal 2; `REEExtractor(model="mass_action")` converts params and the
   solvent stream, and the mass-action layer converts back before calling
   `REEDistribution`. Unconverted, the closure saw half the extractant.
+  The `Saponifier` (a unit) reads its stream's extractant on the record basis
+  too and converts with `monomers_per_basis_unit` (#386): equivalents =
+  `F_ext * monomers_per_basis_unit / monomers_per_component`, i.e. the dimer
+  count itself for D2EHPA. `SaponifiedSection` is the equilibrium layer and
+  stays FORMAL; hand it the saponified solvent through
+  `Saponifier.to_formal_basis`.
 - Langmuir constants are DERIVED (#268): `typical_K_L` was a second extractant
   table hand-synced with the YAML, and three of four entries matched the
   coefficients at NO pH (rms log10 residual 0.62/0.85/0.92 at best fit). Now
