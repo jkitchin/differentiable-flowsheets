@@ -179,7 +179,12 @@ class REEDistribution:
     Attributes:
         extractant: Name of extractant (D2EHPA, PC88A, Cyanex272, TBP)
         elements: List of REE symbols to include
-        concentration: Extractant concentration (M)
+        concentration: Extractant concentration in the organic (M), on the
+            extractant record's own basis: DIMER for the dimeric D2EHPA, PC88A
+            and Cyanex272 (0.5 M dimer = 1.0 M formal), molecules (monomer) for
+            TBP and naphthenic acid. The loading capacity is this divided by
+            ``Extractant.basis_units_per_ree`` (3 for every shipped record;
+            #374).
         nitrate_conc: Aqueous nitrate concentration (M). Required for
             solvating extractants such as TBP, whose distribution ratio is
             driven by the salting anion rather than by pH (#195). Ignored by
@@ -1274,7 +1279,12 @@ def get_distribution_coefficient(
         pH: Solution pH (concentration scale); required for cation exchange,
             ignored for solvating extractants
         T: Temperature (K)
-        concentration: Extractant concentration (M)
+        concentration: Extractant concentration in the organic (M), on the
+            extractant record's own basis: DIMER for the dimeric D2EHPA, PC88A
+            and Cyanex272 (0.5 M dimer = 1.0 M formal), molecules (monomer) for
+            TBP and naphthenic acid. The loading capacity is this divided by
+            ``Extractant.basis_units_per_ree`` (3 for every shipped record;
+            #374).
         nitrate_conc: Aqueous nitrate concentration (M), required for solvating
             extractants such as TBP (#195)
         mechanism: Explicit mechanism override; see :class:`REEDistribution`
@@ -1316,7 +1326,12 @@ def get_distribution_coefficients(
         pH: Solution pH (concentration scale); see
             :func:`get_distribution_coefficient`
         T: Temperature (K)
-        concentration: Extractant concentration (M)
+        concentration: Extractant concentration in the organic (M), on the
+            extractant record's own basis: DIMER for the dimeric D2EHPA, PC88A
+            and Cyanex272 (0.5 M dimer = 1.0 M formal), molecules (monomer) for
+            TBP and naphthenic acid. The loading capacity is this divided by
+            ``Extractant.basis_units_per_ree`` (3 for every shipped record;
+            #374).
         nitrate_conc: Aqueous nitrate concentration (M), required for solvating
             extractants such as TBP (#195)
         mechanism: Explicit mechanism override; see :class:`REEDistribution`
@@ -1358,7 +1373,12 @@ def get_separation_factor(
         pH: Solution pH (concentration scale); see
             :func:`get_distribution_coefficient`
         T: Temperature (K)
-        concentration: Extractant concentration (M)
+        concentration: Extractant concentration in the organic (M), on the
+            extractant record's own basis: DIMER for the dimeric D2EHPA, PC88A
+            and Cyanex272 (0.5 M dimer = 1.0 M formal), molecules (monomer) for
+            TBP and naphthenic acid. The loading capacity is this divided by
+            ``Extractant.basis_units_per_ree`` (3 for every shipped record;
+            #374).
         nitrate_conc: Aqueous nitrate concentration (M), required for solvating
             extractants such as TBP (#195)
         mechanism: Explicit mechanism override; see :class:`REEDistribution`

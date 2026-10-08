@@ -97,7 +97,12 @@ def circuit_phase_ratios(
         scrub_to_solvent_ratio: Circuit ``scrub_to_solvent_ratio``, or None
             for a circuit without a scrub.
         strip_to_solvent_ratio: Circuit ``strip_to_solvent_ratio``.
-        extractant_conc: Extractant concentration (M).
+        extractant_conc: Extractant concentration in the organic (M), on the
+            extractant record's own basis: DIMER for the dimeric D2EHPA, PC88A
+            and Cyanex272 (0.5 M dimer = 1.0 M formal), molecules (monomer) for
+            TBP and naphthenic acid. The loading capacity is this divided by
+            ``Extractant.basis_units_per_ree`` (3 for every shipped record;
+            #374).
 
     Returns:
         ``{"extraction": O/A, "scrubbing": O/A or None, "stripping": O/A}``.
@@ -251,7 +256,12 @@ def cut_pHs(
             :func:`circuit_phase_ratios`).
         strip_OA: Stripping ``O/A``.
         scrub_OA: Scrubbing ``O/A``; needed only for a boundary cut.
-        extractant_conc: Extractant concentration (M); ``D`` depends on it.
+        extractant_conc: Extractant concentration in the organic (M), on the
+            extractant record's own basis: DIMER for the dimeric D2EHPA, PC88A
+            and Cyanex272 (0.5 M dimer = 1.0 M formal), molecules (monomer) for
+            TBP and naphthenic acid. The loading capacity is this divided by
+            ``Extractant.basis_units_per_ree`` (3 for every shipped record;
+            #374). ``D`` depends on it.
         nitrate_conc: Aqueous nitrate (M), for a solvating extractant.
         mechanism: Mechanism override; see ``REEDistribution``.
         distribution: An existing ``REEDistribution`` to reuse (it must cover

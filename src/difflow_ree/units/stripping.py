@@ -36,7 +36,12 @@ class StripperParams(ParamsMixin):
         pH: Strip solution pH (very low, typically < 1). None (the default)
             resolves to the pH the strip acid sets, ``-log10(acid_conc)`` on
             the concentration scale the correlations use.
-        extractant_conc: Extractant concentration (M)
+        extractant_conc: Extractant concentration in the organic (M), on the
+            extractant record's own basis: DIMER for the dimeric D2EHPA, PC88A
+            and Cyanex272 (0.5 M dimer = 1.0 M formal), molecules (monomer) for
+            TBP and naphthenic acid. The loading capacity is this divided by
+            ``Extractant.basis_units_per_ree`` (3 for every shipped record;
+            #374).
         acid_type: Type of strip acid. Each is counted as supplying one free
             proton per formula unit: HCl and HNO3 are fully dissociated, and
             the second proton of H2SO4 (pKa2 about 2) is essentially bound in

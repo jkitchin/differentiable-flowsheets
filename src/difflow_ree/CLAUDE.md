@@ -28,6 +28,14 @@ the root CLAUDE.md, which keeps only what every session needs).
   capacity until #374), which a total-basis correlation returns a
   finite D for. Do NOT compose with `LoadingIsotherm.apparent_D`: that caps
   the answer, this changes the input (#190/#204's double count).
+- Extractant basis (#374, kept): `extractant_conc`, solvent-stream
+  extractant flows and the correlations are on the RECORD basis (dimer for
+  D2EHPA/PC88A/Cyanex272: 0.5 M dimer = 1.0 M formal). The mass-action layer
+  (`MassActionParams`, `log_K_from_correlation`, schema streams) is FORMAL
+  monomer. Convert with `Extractant.monomers_per_basis_unit`, never a
+  literal 2; `REEExtractor(model="mass_action")` converts params and the
+  solvent stream, and the mass-action layer converts back before calling
+  `REEDistribution`. Unconverted, the closure saw half the extractant.
 - Langmuir constants are DERIVED (#268): `typical_K_L` was a second extractant
   table hand-synced with the YAML, and three of four entries matched the
   coefficients at NO pH (rms log10 residual 0.62/0.85/0.92 at best fit). Now

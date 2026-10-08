@@ -48,7 +48,12 @@ class ExtractStripParams(ParamsMixin):
             ``D * (O/A) = 0.1``. For D2EHPA and the heavy REE this is below
             the fitted window (strong acid), and the distribution model warns
             about the extrapolation when the section runs.
-        extractant_conc: Extractant concentration (M)
+        extractant_conc: Extractant concentration in the organic (M), on the
+            extractant record's own basis: DIMER for the dimeric D2EHPA, PC88A
+            and Cyanex272 (0.5 M dimer = 1.0 M formal), molecules (monomer) for
+            TBP and naphthenic acid. The loading capacity is this divided by
+            ``Extractant.basis_units_per_ree`` (3 for every shipped record;
+            #374).
         solvent_to_feed_ratio: Organic/aqueous ratio in extraction
         strip_to_solvent_ratio: Strip acid/organic ratio
         nitrate_conc: Aqueous nitrate concentration (M), required for solvating

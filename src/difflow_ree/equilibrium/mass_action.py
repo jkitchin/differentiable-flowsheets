@@ -333,8 +333,10 @@ def organic_component_totals(
 ) -> Array:
     """Component totals (mol/s) carried by an organic stream.
 
-    The organic stream declares its **total** extractant on a monomer basis
-    and its loaded rare earths by element symbol. The loaded complexes are
+    The organic stream declares its **total** extractant on the formal
+    monomer basis (the schema's convention; a unit-level stream on the
+    record's dimer basis is converted by ``REEExtractor`` before it gets
+    here, #374) and its loaded rare earths by element symbol. The loaded complexes are
     read through the tableau, so a recycled loaded solvent correctly brings a
     *negative* proton component into the section -- three per trivalent ion,
     the protons it took up during stripping.
@@ -1042,8 +1044,14 @@ class MassActionParams(ParamsMixin):
         diluent: Organic diluent species key.
         counter_ion: Aqueous counter-ion key, or None.
         anion: Aqueous anion key.
-        extractant_conc: Total extractant concentration (M, monomer basis).
-            Used for the calibration and for the starting point.
+        extractant_conc: Total extractant concentration (M) on the FORMAL
+            (monomer) basis, the basis this layer and its stream schema
+            work on: 1.0 here is the 0.5 M dimer D2EHPA that a unit or
+            circuit calls ``extractant_conc = 0.5``. Used for the
+            calibration and for the starting point. ``REEExtractor(model=
+            "mass_action")`` converts its record-basis charge with
+            :attr:`~difflow_ree.database.Extractant.monomers_per_basis_unit`
+            before handing it over (#374).
         aqueous_volumetric_flow: Aqueous volumetric flow (L/s). Concentrations
             are molar, so the closed model needs volumes where the
             correlation needed only a flow ratio. There is no defensible way
@@ -1277,10 +1285,16 @@ class MassActionSection:
                 f"anion-exchange complex, the stoichiometry) corrected (#196)."
             )
 
+        # The correlation that starts (and is compared against) the closure
+        # takes its concentration on the record's basis, the network's
+        # component basis; params.extractant_conc is formal monomer. Handing
+        # it over unconverted evaluated D2EHPA's D at twice the dimer charge
+        # the section runs at (#374).
         self._distribution = REEDistribution(
             extractant=params.extractant,
             elements=tuple(params.elements),
-            concentration=params.extractant_conc,
+            concentration=(params.extractant_conc
+                           / self.network.monomers_per_component),
             **dist_kwargs,
         )
 

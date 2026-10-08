@@ -612,9 +612,14 @@ def test_the_organic_absorbs_an_aqueous_acid_perturbation():
     assert bool(lo_p[2]["feasible"]) and bool(hi_p[2]["feasible"])
 
     # The unsaponified network has no conjugate base to spend, so the acid
-    # stays in the aqueous phase: measured 0.895 of it, against 0.010.
+    # stays in the aqueous phase: measured 0.634 of it, against 0.010. The
+    # rest is not buffered: it pushes extracted Dy back, which releases
+    # fewer protons. It read 0.895 before #374, when the closure was
+    # calibrated against the correlation at twice the dimer charge it ran
+    # at, so Cyanex272's K was 2**3 too large and the Dy that the acid now
+    # displaces sat further from the cut.
     plain_protons = (float(hi_p[0]["F_H"]) - float(lo_p[0]["F_H"])) / delta
-    assert plain_protons > 0.8
+    assert plain_protons > 0.6
     assert plain_protons / sap_protons > 20.0
 
 

@@ -280,7 +280,12 @@ class REEExtractorParams(ParamsMixin):
         elements: REE elements to track
         diluent: Organic diluent name (e.g., "kerosene", "n-dodecane")
         pH: Operating pH (typically 1-5 for REE extraction)
-        extractant_conc: Extractant concentration (M)
+        extractant_conc: Extractant concentration in the organic (M), on the
+            extractant record's own basis: DIMER for the dimeric D2EHPA, PC88A
+            and Cyanex272 (0.5 M dimer = 1.0 M formal), molecules (monomer) for
+            TBP and naphthenic acid. The loading capacity is this divided by
+            ``Extractant.basis_units_per_ree`` (3 for every shipped record;
+            #374).
         include_loading: Whether to account for extractant loading
         include_speciation: Whether to account for aqueous speciation
         speciation_medium: Aqueous medium type for speciation
@@ -467,6 +472,12 @@ class REEExtractor:
     :func:`difflow_ree.equilibrium.mass_action.base_addition_for_pH` to map a
     pH-specified design onto the closed model's inputs.
 
+    The extractant basis is the same at both levels from the caller's side:
+    ``extractant_conc`` and the solvent's extractant flow are on the
+    record's basis (dimer for D2EHPA, PC88A, Cyanex272), and the closed
+    level converts them to the formal monomer basis the mass-action layer
+    works on, and the extract's extractant flow back (#374).
+
     Example:
         >>> params = REEExtractorParams(
         ...     n_stages=10,
@@ -554,10 +565,19 @@ class REEExtractor:
         # than on the first call.
         self._section = None
         if params.model == "mass_action":
+            from difflow_ree.database import get_extractant
             from difflow_ree.equilibrium.mass_action import (
                 MassActionParams,
                 MassActionSection,
             )
+            # The basis boundary (#374). This unit, its streams and the
+            # correlation state the extractant on the record's basis (dimer
+            # for D2EHPA: 0.5 M dimer = 1.0 M formal); the mass-action layer
+            # states it on the formal monomer basis. Converting here, from the
+            # record's declared stoichiometry, is what makes one solvent the
+            # same solvent at both levels.
+            self._monomers_per_unit = get_extractant(
+                params.extractant).monomers_per_basis_unit
             self._section = MassActionSection(MassActionParams(
                 n_stages=int(params.n_stages),
                 extractant=params.extractant,
@@ -567,7 +587,7 @@ class REEExtractor:
                 diluent=params.diluent,
                 counter_ion=params.counter_ion,
                 anion=params.anion,
-                extractant_conc=params.extractant_conc,
+                extractant_conc=params.extractant_conc * self._monomers_per_unit,
                 # The correlation's operating pH becomes the CALIBRATION pH
                 # here; the operating pH is an output (#196).
                 calibration_pH=float(params.pH),
@@ -648,9 +668,24 @@ class REEExtractor:
                     "(#196). params.pH is used as the constant-calibration "
                     "pH for the equilibrium constants."
                 )
-            return self._section(
-                feed, solvent, T=T, base_addition=base_addition
+            # The solvent's extractant flow is on the record basis like the
+            # rest of this unit; the section's schema reads it as formal
+            # monomer (#374). Without this a D2EHPA solvent reached the
+            # closure with half its extractant, so its loading and
+            # free-extractant figures were twice and half the correlation's.
+            key = f"F_{p.extractant}"
+            m = self._monomers_per_unit
+            formal = dict(solvent)
+            if key in formal:
+                formal[key] = jnp.asarray(formal[key]) * m
+            raffinate, extract, info = self._section(
+                feed, formal, T=T, base_addition=base_addition
             )
+            # Hand the extract back on this unit's (record) basis.
+            if key in extract:
+                extract = dict(extract)
+                extract[key] = jnp.asarray(extract[key]) / m
+            return raffinate, extract, info
         if base_addition is not None:
             raise ValueError(
                 "base_addition is only meaningful for "
@@ -926,7 +961,12 @@ class MixerSettlerParams(ParamsMixin):
             validity window -- through
             :func:`difflow_ree.database.default_pH`. It used to be a literal
             3.0, which the #270 refit put outside D2EHPA's window entirely.
-        extractant_conc: Extractant concentration (M)
+        extractant_conc: Extractant concentration in the organic (M), on the
+            extractant record's own basis: DIMER for the dimeric D2EHPA, PC88A
+            and Cyanex272 (0.5 M dimer = 1.0 M formal), molecules (monomer) for
+            TBP and naphthenic acid. The loading capacity is this divided by
+            ``Extractant.basis_units_per_ree`` (3 for every shipped record;
+            #374).
         mixer_residence_time: Mixer residence time (s)
         settler_residence_time: Settler residence time (s)
         stage_efficiency: Murphree stage efficiency (0-1)

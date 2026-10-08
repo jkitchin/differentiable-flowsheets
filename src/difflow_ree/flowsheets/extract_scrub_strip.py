@@ -69,7 +69,12 @@ class ExtractScrubStripParams(ParamsMixin):
             ``D * (O/A) = 0.1``. Heavy REE on D2EHPA need strong acid, below
             the fitted window; the distribution warns about the
             extrapolation when the section runs.
-        extractant_conc: Extractant concentration (M)
+        extractant_conc: Extractant concentration in the organic (M), on the
+            extractant record's own basis: DIMER for the dimeric D2EHPA, PC88A
+            and Cyanex272 (0.5 M dimer = 1.0 M formal), molecules (monomer) for
+            TBP and naphthenic acid. The loading capacity is this divided by
+            ``Extractant.basis_units_per_ree`` (3 for every shipped record;
+            #374).
         solvent_to_feed_ratio: O/A in extraction
         scrub_to_solvent_ratio: Scrub/O ratio
         strip_to_solvent_ratio: Strip/O ratio
