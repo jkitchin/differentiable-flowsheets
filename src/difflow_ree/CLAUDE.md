@@ -36,6 +36,12 @@ the root CLAUDE.md, which keeps only what every session needs).
   literal 2; `REEExtractor(model="mass_action")` converts params and the
   solvent stream, and the mass-action layer converts back before calling
   `REEDistribution`. Unconverted, the closure saw half the extractant.
+  The `Saponifier` (a unit) reads its stream's extractant on the record basis
+  too and converts with `monomers_per_basis_unit` (#386): equivalents =
+  `F_ext * monomers_per_basis_unit / monomers_per_component`, i.e. the dimer
+  count itself for D2EHPA. `SaponifiedSection` is the equilibrium layer and
+  stays FORMAL; hand it the saponified solvent through
+  `Saponifier.to_formal_basis`.
 - Langmuir constants are DERIVED (#268): `typical_K_L` was a second extractant
   table hand-synced with the YAML, and three of four entries matched the
   coefficients at NO pH (rms log10 residual 0.62/0.85/0.92 at best fit). Now
@@ -76,6 +82,18 @@ the root CLAUDE.md, which keeps only what every session needs).
   `StripperParams` refuses an `acid_conc` above it when deriving the pH. A
   pH the CALLER passes is never clamped. Stopgap until D2EHPA is refitted
   to strong acid (#384).
+  No data is not a number (#384): `REEDistribution(..., no_data=)` (threaded
+  as `no_data=` through the unit and circuit params) is `"warn"` (default:
+  refuse an element with no coefficients, extrapolate the rest with a
+  warning), `"nan"` (`get_D` answers NaN for an element with no
+  coefficients -- Ho-Lu on D2EHPA, #269 -- and for the record's
+  `unmeasured_outside_window` elements, D2EHPA Gd/Tb/Dy/Y, below
+  `valid_ph_range`) or `"raise"` (those heavies raise outside the window). A
+  NaN is NEVER filtered: a calculation that uses it returns NaN for what
+  shares a limiter with it, which is the signal that it asked for something
+  with no data. Do not add a `nan_to_num` to hide it. Add an element to
+  `unmeasured_outside_window` only when its correlation outside the window
+  is an extrapolation, not a measurement.
   `StripperParams.pH=None` means `-log10(acid_conc)`; TBP strips at
   `strip_nitrate_conc`. Sections carry non-REE species through
   (`units/carry.py`); precipitators are reagent-capped.

@@ -8,6 +8,21 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Breaking
 
+- `REEDistribution(no_data=...)`, threaded as `no_data=` through the REE unit
+  and circuit params, says so when there is no data (#384): `"nan"` answers
+  NaN for an element with no coefficients (Ho to Lu on D2EHPA, #269) and for
+  the elements a record lists in the new `unmeasured_outside_window` (D2EHPA:
+  Gd, Tb, Dy, Y) below the fitted pH window, which is where heavy-REE
+  stripping has to run; `"raise"` makes the latter an error. A NaN is not
+  filtered by anything downstream, so a calculation that uses it returns NaN.
+  The default `"warn"` is the previous behaviour.
+- `Saponifier` reads a solvent stream's extractant on the record's own basis
+  (dimers for D2EHPA, PC88A and Cyanex 272) and converts with
+  `Extractant.monomers_per_basis_unit`, so it counts the same exchangeable
+  equivalents as the extractor charge (it counted half on a dimeric extractant
+  fed from an extract-scrub-strip module; #386). `Saponifier.to_formal_basis`
+  hands its output to the formal-monomer `SaponifiedSection`.
+
 - REE strip acid floor (stopgap for #384). A strip pH the code chooses from
   the D curves is floored at `-log10(max_strip_acid)`, default 6 M (pH
   -0.78), on `ExtractStripParams`, `ExtractScrubStripParams`,

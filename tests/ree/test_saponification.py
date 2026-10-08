@@ -34,7 +34,7 @@ from jax.test_util import check_grads
 
 jax.config.update("jax_enable_x64", True)
 
-from difflow.streams import get_flows
+from difflow.streams import get_flows, make_stream
 from difflow_ree.database import (
     SAPONIFICATION_COUNTER_IONS,
     create_custom_extractant,
@@ -690,11 +690,22 @@ def test_the_degree_is_an_output_of_the_section_not_a_parameter():
 # 8. The Saponifier unit
 # =============================================================================
 
+def _solvent(unit, **kw):
+    """The solvent of ``F_EXT`` formal extractant, on the record's basis.
+
+    The unit's streams carry the extractant on the extractant record's own
+    basis (0.25 dimers = 0.5 formal monomers for D2EHPA and Cyanex 272, #386).
+    """
+    return unit.schema.make_organic(
+        F_EXT / unit.monomers_per_basis_unit, diluent_flow=4.0, **kw
+    )
+
+
 def test_saponifier_sets_the_degree_and_conserves_the_base():
     """The reagent duty is tracked, not assumed (#197)."""
     params = SaponifierParams(extractant="D2EHPA", saponification_degree=0.35)
     unit = Saponifier(params)
-    organic = unit.schema.make_organic(F_EXT, diluent_flow=4.0)
+    organic = _solvent(unit)
     out, spent, info = unit(organic)
 
     assert float(info["saponification_degree"]) == pytest.approx(0.35)
@@ -712,7 +723,7 @@ def test_saponifier_sets_the_degree_and_conserves_the_base():
     # Water is produced one for one with the neutralized protons.
     assert float(info["water_produced"]) == pytest.approx(0.0875)
     # The extractant itself is untouched.
-    assert float(out["F_D2EHPA"]) == pytest.approx(F_EXT)
+    assert float(out["F_D2EHPA"]) == pytest.approx(F_EXT / 2.0)
 
 
 def test_saponifier_conserves_base_that_does_not_reach_the_organic():
@@ -720,7 +731,7 @@ def test_saponifier_conserves_base_that_does_not_reach_the_organic():
     unit = Saponifier(SaponifierParams(
         extractant="D2EHPA", saponification_degree=0.35, base_utilization=0.8,
     ))
-    organic = unit.schema.make_organic(F_EXT, diluent_flow=4.0)
+    organic = _solvent(unit)
     out, spent, info = unit(organic)
 
     assert float(info["saponification_degree"]) == pytest.approx(0.35)
@@ -737,9 +748,7 @@ def test_saponifier_credits_a_partially_saponified_recycle():
     unit = Saponifier(SaponifierParams(
         extractant="D2EHPA", saponification_degree=0.35,
     ))
-    organic = unit.schema.make_organic(
-        F_EXT, diluent_flow=4.0, counter_ion=0.03
-    )
+    organic = _solvent(unit, counter_ion=0.03)
     out, _, info = unit(organic)
     assert float(info["saponification_degree_in"]) == pytest.approx(0.03 / 0.25)
     assert float(info["base_flow"]) == pytest.approx(0.0875 - 0.03)
@@ -752,7 +761,7 @@ def test_saponifier_cannot_neutralize_past_the_extractant_inventory():
     unit = Saponifier(SaponifierParams(
         extractant="D2EHPA", saponification_degree=1.0,
     ))
-    organic = unit.schema.make_organic(F_EXT, diluent_flow=4.0)
+    organic = _solvent(unit)
     out, spent, info = unit(organic, base_flow=0.5)
     assert float(info["saponification_degree"]) == pytest.approx(1.0)
     assert float(info["base_equivalents_transferred"]) == pytest.approx(0.25)
@@ -771,7 +780,7 @@ def test_saponifier_picks_the_right_reagent(counter_ion, base, eq_per_mole):
         counter_ion=counter_ion,
     ))
     assert unit.base.name == base
-    organic = unit.schema.make_organic(F_EXT, diluent_flow=4.0)
+    organic = _solvent(unit)
     out, _, info = unit(organic)
     assert float(info["base_flow"]) == pytest.approx(0.0875 / eq_per_mole)
     # The organic key carries moles of counter-ion, not of equivalents.
@@ -787,8 +796,9 @@ def test_saponifier_and_section_compose_into_a_reagent_duty():
         saponification_degree=0.4,
     ))
     section = saponified_section(n_stages=6, degree=0.4)
-    organic = unit.schema.make_organic(F_EXT, diluent_flow=4.0)
+    organic = _solvent(unit)
     solvent, _, sap_info = unit(organic)
+    solvent = unit.to_formal_basis(solvent)   # hand it to the mass-action layer
 
     feed = make_feed(section)
     _, extract, info = section(feed, solvent)
@@ -936,7 +946,7 @@ def test_base_flow_is_differentiable_through_the_saponifier():
     unit = Saponifier(SaponifierParams(
         extractant="D2EHPA", saponification_degree=0.35,
     ))
-    organic = unit.schema.make_organic(F_EXT, diluent_flow=4.0)
+    organic = _solvent(unit)
 
     def degree(base_flow):
         _, _, info = unit(organic, base_flow=base_flow)
@@ -993,3 +1003,66 @@ def test_the_schema_carries_the_organic_counter_ion():
     # An unsaponified organic stream is exactly what it always was.
     plain = schema.make_organic(F_EXT, diluent_flow=4.0)
     assert "Na_org" not in get_flows(plain)
+
+
+# =============================================================================
+# 10. One solvent, one basis across the saponification boundary (#386)
+# =============================================================================
+
+@pytest.mark.parametrize("name", ["D2EHPA", "PC88A", "Cyanex272"])
+def test_a_solvent_loop_through_saponification_counts_the_extractor_charge(name):
+    """The equivalents counted equal the equivalents the extractor charged.
+
+    The circuits write the solvent's extractant flow on the record's basis,
+    ``extractant_conc * F_org`` (0.5 M DIMER = 1.0 M formal). The saponifier
+    used to read that flow as formal monomer, so it counted half the
+    exchangeable equivalents of a dimeric extractant fed from an
+    extract-scrub-strip module.
+    """
+    from difflow_ree.flowsheets.extract_scrub_strip import (
+        ExtractScrubStripCircuit, ExtractScrubStripParams)
+
+    ext = get_extractant(name)
+    conc, F_org = 0.5, 2.0
+    # The extractor's own charge, on its (record) basis ...
+    charge = conc * F_org
+    # ... which is this many formal monomers, hence this many equivalents
+    # (one per extractant component: one per dimer).
+    formal = charge * ext.monomers_per_basis_unit
+    expected_eq = formal / (2.0 if ext.stoichiometry_basis == "dimer" else 1.0)
+
+    unit = Saponifier(SaponifierParams(extractant=name, saponification_degree=0.4))
+    solvent = unit.schema.make_organic(charge, diluent_flow=F_org)
+    assert float(unit.extractant_equivalents(solvent)) == pytest.approx(expected_eq)
+    # for the dimeric extractants that is the dimer count itself
+    assert float(unit.extractant_equivalents(solvent)) == pytest.approx(charge)
+
+    out, spent, info = unit(solvent)
+    assert float(info["extractant_equivalents"]) == pytest.approx(expected_eq)
+    assert float(info["base_equivalents_transferred"]) == pytest.approx(0.4 * expected_eq)
+    assert float(info["saponification_degree"]) == pytest.approx(0.4)
+
+    # Recycled around the loop it counts the same again: the saponifier does
+    # not change the extractant it was handed.
+    again = unit(out)[2]
+    assert float(again["extractant_equivalents"]) == pytest.approx(expected_eq)
+
+    # Handed to the mass-action layer the stream is the formal-monomer one.
+    assert float(unit.to_formal_basis(out)["F_" + name]) == pytest.approx(formal)
+
+    # And the circuit that produces the solvent writes exactly this basis.
+    circuit = ExtractScrubStripCircuit(ExtractScrubStripParams(
+        extractant=name, elements=("Nd", "Dy"), target_elements=("Dy",),
+        extractant_conc=conc))
+    feed = make_stream({"H2O": F_org, "Nd": 0.01, "Dy": 0.01}, 298.15, 101325.0)
+    barren = get_flows(circuit(feed)["barren_organic"])
+    assert float(barren[name]) == pytest.approx(conc * F_org)
+    assert float(unit.extractant_equivalents(
+        make_stream(dict(barren), 298.15, 101325.0))) == pytest.approx(
+            conc * F_org * ext.monomers_per_basis_unit
+            / unit.monomers_per_component)
+
+
+def test_a_monomer_basis_extractant_is_unchanged_by_the_conversion():
+    """Naphthenic acid is stated per molecule: the boundary is the identity."""
+    assert get_extractant("naphthenic_acid").monomers_per_basis_unit == 1.0

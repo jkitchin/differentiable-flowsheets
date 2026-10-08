@@ -473,6 +473,16 @@ extractants:
     # the two charges, which is why textbook pH50 figures quoted at low
     # charge sit a pH unit above this record's reference.
     valid_ph_range: [0.0, 2.0]
+
+    # NO DATA BELOW THE WINDOW FOR THE HEAVIES (#384). Heavy-REE stripping
+    # needs D at strong acid (the cut rule puts it at pH -1.17, 14.6 M H+),
+    # and nothing in the sources reaches there: Y is measured only over
+    # pH -0.02 to 1.15 (M76 Fig. 2.1), Tb sits on P57's marker at 0.5 M HCl,
+    # Gd and Dy are read off P57's line, and Ho to Lu have no coefficients at
+    # all (#269). Outside the window these elements are an extrapolation of a
+    # straight line, not data. With REEDistribution(no_data="nan") they
+    # return NaN there, and so do Ho-Lu anywhere.
+    unmeasured_outside_window: [Gd, Tb, Dy, Y]
     # The equilibrium pH of X95's La point (0.8175), which set the level
     # until #283 and is now its held-out check. Kept because it sits inside
     # M76's measured support (pH -0.02 to 1.15) and because moving it would
@@ -2158,6 +2168,13 @@ provenance:
               correlation is the wrong equation. M76 measures slope 3 down
               to pH -0.02, so 0.0 is where this record stops rather than a
               measured bound."}
+    - {pattern: "extractants.D2EHPA.unmeasured_outside_window", source: CONV,
+       note: "A list of element symbols, not a number: the heavies whose D
+              outside valid_ph_range is an extrapolated line rather than a
+              measurement (Y is measured only over pH -0.02 to 1.15, Tb sits
+              on P57's marker at 0.5 M HCl, Gd and Dy are read off P57's
+              line). A bookkeeping flag for REEDistribution(no_data=...)
+              (#384), not a fact about the world."}
     - {pattern: "extractants.D2EHPA.reference_pH",         source: X95,
        locus: "Q1 Table 2.6, p. 213",
        note: "0.82, the equilibrium pH of X95's La point, recovered from the

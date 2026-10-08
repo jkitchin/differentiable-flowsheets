@@ -458,6 +458,11 @@ class Extractant:
     # variable is not pH -- a solvating extractant states
     # ``reference_nitrate`` instead.
     reference_pH: float | None = None
+    # Elements whose D is NOT measured outside ``valid_ph_range`` (#384): the
+    # record's correlation reaches them only by extrapolating a shape, or by
+    # a sibling's level, so a caller who asks for a number there where there
+    # is no data can have NaN instead (``REEDistribution(no_data="nan")``).
+    unmeasured_outside_window: tuple[str, ...] = ()
     # Optional degradation / thermo properties (#119), user-supplied with
     # citation; default None (no fabricated values). Solvent degradation rate
     # in 1/h; heats of extraction/scrubbing/stripping in kJ/mol.
@@ -966,6 +971,8 @@ class ExtractantDatabase:
                 heat_of_stripping=props.get("heat_of_stripping"),
                 # Mechanism and solvating-extraction data (#195)
                 reference_pH=props.get("reference_pH"),
+                unmeasured_outside_window=tuple(
+                    props.get("unmeasured_outside_window", ())),
                 mechanism=props.get("mechanism"),
                 nitrate_coefficients=nitrate_coeffs,
                 reference_nitrate=props.get("reference_nitrate"),
