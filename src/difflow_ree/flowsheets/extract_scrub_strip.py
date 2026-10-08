@@ -248,6 +248,8 @@ class ExtractScrubStripCircuit:
         "nitrate_conc": "mol/L",
         "strip_nitrate_conc": "mol/L",  # audit R8
         "capacity_sharpness": "-",
+        "recycle_tol": "-",       # relative to the feed's total REE (#377)
+        "recycle_max_iter": "-",
     }
 
     def __init__(self, params: ExtractScrubStripParams):
@@ -398,9 +400,15 @@ class ExtractScrubStripCircuit:
                     feed, dict(zip(keys, tear_arr))))
                 return pack(out[2])
 
+            # Newton on g(x) - x, not substitution. A scrub recycle is a
+            # high-gain loop, and substitution stops on the STEP: the error
+            # left is ~1/(1-g) times larger and stays in the circuit as
+            # unbalanced REE (the train's closure read 0.9999999987). Newton
+            # converges quadratically on this small tear (one entry per
+            # species) and optimistix differentiates it implicitly.
             tol = float(p.recycle_tol)
-            sol = optx.fixed_point(
-                one_pass, optx.FixedPointIteration(rtol=tol, atol=tol),
+            sol = optx.root_find(
+                lambda x, a: one_pass(x, a) - x, optx.Newton(rtol=tol, atol=tol),
                 pack(first[2]), max_steps=int(p.recycle_max_iter), throw=False)
             tear_arr = sol.value
             (raffinate, ext_info, scrub_liquor, scrub_info,

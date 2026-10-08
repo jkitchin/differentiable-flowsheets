@@ -81,6 +81,18 @@ def test_doc_python_blocks_run(path, tmp_path, monkeypatch):
 
     matplotlib.use("Agg")
     monkeypatch.chdir(tmp_path)
+    # Examples run in this process, and some of them register operations
+    # (the plugin-architecture page registers "my_reactor"). Left in the
+    # global registry, that operation leaked into every later test in the
+    # worker: the catalog, doc-link and report-metadata tests then found an
+    # undocumented operation with no equations. Put the registry back.
+    from difflow.plugins import registry
+
+    saved = (dict(registry._operations),
+             {k: list(v) for k, v in registry._categories.items()})
+    monkeypatch.setattr(registry, "_operations", saved[0].copy())
+    monkeypatch.setattr(registry, "_categories",
+                        {k: list(v) for k, v in saved[1].items()})
     ns: dict = {"__name__": "__doc_example__"}
     failures = []
     for line, src, skipped in extract_blocks(path.read_text()):
