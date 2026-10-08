@@ -913,6 +913,79 @@ for _name, _note in _ALKYLATION_NOTES.items():
 del _name, _note
 
 
+# Hydrotreating species (issue #391): H2, H2S and thiophene, the three every
+# HDS model needs. Hf and the ideal-gas Cp cubic are those of
+# difflow_refinery.thermochemistry (the one formation table, #339), copied
+# rather than imported because the core must not import a plugin;
+# tests/refinery/test_thermochemistry.py::TestCoreDatabaseAgrees fails if the
+# two drift apart. Thiophene's critical constants, the Hvap at Tb and the
+# Antoine sets were read from the data tables of the `chemicals` package
+# (C. Bell et al., v1.5.2), as for the refinery isomers above.
+_HDS_CRITICAL = {
+    # Tc = 579.4 K: CRC (IUPAC 580.0, NIST WebBook 579.56, Yaws 579.35).
+    # Pc = 5.70 MPa: IUPAC, CRC and NIST WebBook (Yaws 5.69).
+    # omega = 0.200: PSRK (Horstmann et al. 2005); Yaws 0.197.
+    "thiophene": (579.4, 5.70e6, 0.200, 84.136),
+}
+_HDS_IDEAL = {
+    "hydrogen": {
+        "MW": 2.016,
+        "Cp": (27.44, 0.00855236, -1.38696e-05, 8.18211e-09),
+        # H2 is supercritical (Tc = 33.19 K) at every process temperature, so
+        # these two fields carry no meaning there: they are the real
+        # cryogenic data, kept so the entry is not a placeholder. Hvap: CRC,
+        # 0.900 kJ/mol at Tb = 20.39 K; Watson clips Tr at 0.999, so above Tc
+        # it is a constant ~94 J/mol that cancels in every enthalpy
+        # difference. Antoine: Poling-Prausnitz-O'Connell 5e, valid
+        # 10.25-22.82 K only; above that it is an extrapolation whose one use
+        # is to make Raoult's K for H2 large, as a non-condensable's should be.
+        "Hvap": (900.0, 0.38, 33.19),
+        "Hvap_T": 20.39,
+        "antoine": (7.93954, 66.7954, 2.5),
+        "T_antoine_min": 10.25,
+        "T_antoine_max": 22.82,
+        "Hf": 0.0,
+    },
+    "hydrogen_sulfide": {
+        "MW": 34.08,
+        "Cp": (32.04997, 0.0007138444, 2.527715e-05, -1.226284e-08),
+        # Hvap: CRC, 18.67 kJ/mol at Tb = 213.6 K. Antoine: PPO 5e,
+        # 185.51-227.2 K. Supercritical above Tc = 373.5 K.
+        "Hvap": (18670.0, 0.38, 373.5),
+        "Hvap_T": 213.6,
+        "antoine": (9.22882, 806.933, -21.76),
+        "T_antoine_min": 185.51,
+        "T_antoine_max": 227.2,
+        "Hf": -20600.0,
+    },
+    "thiophene": {
+        "MW": 84.136,
+        "Cp": (-31.77668, 0.4575949, -0.0003987942, 1.347712e-07),
+        # Hvap: CRC, 31.48 kJ/mol at Tb = 357.15 K. Antoine: PPO 5e,
+        # 267.2-381.16 K.
+        "Hvap": (31480.0, 0.38, 579.4),
+        "Hvap_T": 357.15,
+        "antoine": (9.08416, 1246.02, -51.8),
+        "T_antoine_min": 267.2,
+        "T_antoine_max": 381.16,
+        "Hf": 114900.0,
+    },
+}
+_HDS_SOURCE = (
+    "Hf and ideal-gas Cp: difflow_refinery.thermochemistry (H2: element, "
+    "Cp TRC; H2S: CODATA, Cp JANAF; thiophene: CRC 114.9 kJ/mol, Cp TRC). "
+    "Tc, Pc, omega, Hvap, Antoine: CRC Handbook, IUPAC, PSRK (Horstmann et "
+    "al. 2005) and Poling-Prausnitz-O'Connell 5e App. A, as tabulated in the "
+    "chemicals package v1.5.2 (details in database.py). H2 Hvap and Antoine "
+    "are cryogenic data with no meaning at process temperatures."
+)
+_CRITICAL_DATA.update(_HDS_CRITICAL)
+_IDEAL_THERMO_DATA.update(_HDS_IDEAL)
+for _name in _HDS_IDEAL:
+    SOURCE_CITATIONS[_name] = _HDS_SOURCE
+del _name
+
+
 def get_species_data(name: str) -> SpeciesData:
     """Get SpeciesData for ideal thermodynamics by name.
 
