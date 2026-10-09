@@ -521,22 +521,73 @@ def _enthalpy_scale(thermo, flows, T) -> Array:
     return jnp.maximum(F_total * Cp, EPS_DIVISION)
 
 
+#: Lowest temperature (K) the bracket of :func:`invert_monotone_T` may reach.
+_T_FLOOR = 20.0
+
+
+def invert_monotone_T(H_of_T, H_target, T_guess, scale, n_expand: int = 9):
+    """Find T with ``H_of_T(T) == H_target`` for an increasing ``H_of_T``.
+
+    A stream's enthalpy is monotone in T but only piecewise smooth: across a
+    two-phase window its slope jumps from the sensible heat capacity to the
+    latent heat spread over a few kelvin, an order of magnitude more.
+    Newton from the inlet temperature overshoots that window, is thrown back,
+    and with ``throw=False`` comes back with an arbitrary answer -- a
+    heating duty returned as a temperature *below* the inlet. Monotonicity
+    makes a bracketed solve safe instead: the bracket ``T_guess +- w`` is
+    widened (``w = 10, 20, 40, ... K``, floored at 20 K) until it contains
+    the target, then bisected. ``optimistix.root_find`` still differentiates
+    the converged root by the implicit function theorem.
+
+    Args:
+        H_of_T: ``T -> H`` (W), increasing.
+        H_target: Target enthalpy (W).
+        T_guess: Centre of the initial bracket (K).
+        scale: Heat capacity rate (W/K) dividing the residual, so the
+            tolerance is in K.
+        n_expand: Bracket doublings allowed (9 reaches +-2560 K).
+
+    Returns:
+        The temperature (K).
+    """
+    def resid(T, _):
+        return (H_of_T(T) - H_target) / scale
+
+    def width(k):
+        return 10.0 * 2.0 ** k
+
+    def unbracketed(k):
+        lo = jnp.maximum(T_guess - width(k), _T_FLOOR)
+        hi = T_guess + width(k)
+        return (resid(lo, None) > 0.0) | (resid(hi, None) < 0.0)
+
+    k = jax.lax.while_loop(
+        lambda k: (k < n_expand) & unbracketed(k), lambda k: k + 1, jnp.asarray(0)
+    )
+    k = jax.lax.stop_gradient(k)
+    lower = jnp.maximum(T_guess - width(k), _T_FLOOR)
+    upper = T_guess + width(k)
+    sol = optx.root_find(
+        resid, optx.Bisection(rtol=1e-12, atol=1e-9, flip=False),
+        jnp.clip(T_guess, lower, upper), args=None,
+        options={"lower": jax.lax.stop_gradient(lower),
+                 "upper": jax.lax.stop_gradient(upper)},
+        max_steps=200, throw=False,
+    )
+    return sol.value
+
+
 @partial(jax.jit, static_argnames=("thermo", "phase"))
 def _invert_enthalpy_T(thermo, flows, H_target, P, T_guess, phase):
     """Find T with ``stream_enthalpy_of(...) == H_target``.
 
-    Enthalpy is monotone in T, so a Newton solve on it is well posed; going
-    through optimistix keeps the result differentiable by the implicit
-    function theorem rather than through the iteration.
+    Enthalpy is monotone in T, so the bracketed solve of
+    :func:`invert_monotone_T` is safe even across a phase change.
     """
-    def resid(T, _):
-        return stream_enthalpy_of(thermo, flows, T, P, phase) - H_target
-
-    solver = optx.Newton(rtol=1e-9, atol=1e-4)
-    sol = optx.root_find(
-        resid, solver, T_guess, args=None, max_steps=50, throw=False
+    return invert_monotone_T(
+        lambda T: stream_enthalpy_of(thermo, flows, T, P, phase),
+        H_target, T_guess, _enthalpy_scale(thermo, flows, T_guess),
     )
-    return sol.value
 
 
 @partial(jax.jit, static_argnames=("thermo", "phase", "heating", "damping",
@@ -1162,14 +1213,10 @@ def _enthalpy_hx_core(
     H_cold_in = thermo.stream_enthalpy_flash(cold_flows, T_cold_in, P_cold)
 
     def invert_T(flows, H_target, P, T_guess):
-        def resid(T, _):
-            return thermo.stream_enthalpy_flash(flows, T, P) - H_target
-
-        solver = optx.Newton(rtol=1e-9, atol=1e-4)
-        sol = optx.root_find(
-            resid, solver, T_guess, args=None, max_steps=50, throw=False
+        return invert_monotone_T(
+            lambda T: thermo.stream_enthalpy_flash(flows, T, P),
+            H_target, T_guess, _enthalpy_scale(thermo, flows, T_guess),
         )
-        return sol.value
 
     def outlets_from_Q(Q):
         T_hot_out = invert_T(hot_flows, H_hot_in - Q, P_hot, T_hot_in)
@@ -1213,8 +1260,9 @@ class EnthalpyCounterCurrentHX:
     (e.g. IDAES's) through phase change, where a constant-Cp model cannot.
 
     The coupled system (Q, T_hot_out, T_cold_out) is solved by a damped fixed
-    point on Q, with a 1-D enthalpy inversion per side (enthalpy is monotone in
-    T). All solves are optimistix root finds, so the unit is differentiable
+    point on Q, with a bracketed 1-D enthalpy inversion per side (enthalpy is
+    monotone in T, but its slope jumps across a two-phase window, which a
+    plain Newton inversion does not survive). All solves are optimistix root finds, so the unit is differentiable
     through the converged result via the implicit function theorem.
 
     The thermo must provide ``stream_enthalpy_flash(flows, T, P)``.

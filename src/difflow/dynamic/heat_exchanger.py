@@ -34,11 +34,14 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 from jax import Array
-import optimistix as optx
 
 from difflow.streams import Stream, get_flows
 from difflow.dynamic.state import StateSpec, StateVar
-from difflow.units.heat_exchanger import log_mean_temperature_difference
+from difflow.units.heat_exchanger import (
+    _enthalpy_scale,
+    invert_monotone_T,
+    log_mean_temperature_difference,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -53,14 +56,15 @@ from difflow.units.heat_exchanger import log_mean_temperature_difference
 # flowsheet or a session-scoped test fixture provides -- hits the cache.
 # ---------------------------------------------------------------------------
 def _invert_T(thermo, flows, H_target, P, T_guess):
-    """Find T with stream_enthalpy_flash(flows, T, P) = H_target (monotone)."""
+    """Find T with stream_enthalpy_flash(flows, T, P) = H_target (monotone).
 
-    def resid(T, _):
-        return thermo.stream_enthalpy_flash(flows, T, P) - H_target
-
-    solver = optx.Newton(rtol=1e-9, atol=1e-4)
-    sol = optx.root_find(resid, solver, T_guess, args=None, max_steps=50, throw=False)
-    return sol.value
+    Bracketed (see :func:`~difflow.units.heat_exchanger.invert_monotone_T`):
+    a Newton inversion fails when the target lies in a two-phase window.
+    """
+    return invert_monotone_T(
+        lambda T: thermo.stream_enthalpy_flash(flows, T, P),
+        H_target, T_guess, _enthalpy_scale(thermo, flows, T_guess),
+    )
 
 
 @partial(jax.jit, static_argnames=("thermo",))
