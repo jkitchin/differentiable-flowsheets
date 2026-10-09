@@ -63,6 +63,7 @@ from difflow.solvers.pounce_bridge import (
     bound_sensitivities,
     differentiable_problem,
     optimize_flowsheet,
+    pounce_problem,
     solve_with_pounce,
 )
 from difflow.solvers.residual import (
@@ -97,6 +98,7 @@ __all__ = [
     "SparsityPatternError",
     "SparsityDetectionError",
     # pounce
+    "pounce_problem",
     "solve_with_pounce",
     "optimize_flowsheet",
     "differentiable_problem",

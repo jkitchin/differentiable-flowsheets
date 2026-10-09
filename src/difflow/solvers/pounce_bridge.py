@@ -55,6 +55,7 @@ from difflow.streams import Stream
 
 __all__ = [
     "FlowsheetOptimum",
+    "pounce_problem",
     "solve_with_pounce",
     "optimize_flowsheet",
     "differentiable_problem",
@@ -87,6 +88,75 @@ def _patterns(bounds: Bounds, jac_pattern, hess_pattern):
     return jac, hess
 
 
+def pounce_problem(
+    f: Callable,
+    g: Callable,
+    bounds: Bounds,
+    *,
+    options: dict | None = None,
+    sparse: bool = False,
+    jac_pattern=None,
+    hess_pattern=None,
+):
+    """Build the configured ``pounce`` Problem for an :func:`as_nlp` problem.
+
+    This is the expensive step: the first ``solve`` traces and compiles the
+    residual and its derivatives, which for a flowsheet that nests EOS solves
+    dominates everything else (tens of seconds against ~0.1 s for a later
+    solve of the same Problem). **Callers that solve more than once --
+    optimization outer loops, scenario sweeps, re-solves after a parameter
+    change, warm-time benchmarks -- should build once and call
+    ``problem.solve(x0=...)`` repeatedly.** :func:`solve_with_pounce` builds a
+    fresh Problem per call.
+
+    The pattern guarantee of :func:`solve_with_pounce` holds here too: both
+    patterns are always supplied, never probed.
+
+    Args:
+        f: Objective ``f(x)``.
+        g: Constraint body ``g(x)``.
+        bounds: The :class:`~difflow.solvers.nlp.Bounds` from ``as_nlp``.
+        options: pounce options, e.g. ``{"tol": 1e-8}``. ``print_level``
+            defaults to 0.
+        sparse: Use CPR-style colored AD; see :func:`solve_with_pounce`.
+        jac_pattern: Override for ``bounds.jac_pattern``.
+        hess_pattern: Override for ``bounds.hess_pattern``.
+
+    Returns:
+        A ``pounce.Problem``; ``problem.solve(x0=...)`` returns ``(x, info)``.
+
+    Raises:
+        ImportError: If pounce is not installed (PyPI name ``pounce-solver``).
+        SparsityDetectionError: If a pattern is missing.
+
+    Example:
+        >>> f, g, bd = as_nlp(fs, decisions, specs, objective=cost)  # doctest: +SKIP
+        >>> problem = pounce_problem(f, g, bd, options={"tol": 1e-9})  # doctest: +SKIP
+        >>> for x0 in starts:                                        # doctest: +SKIP
+        ...     x, info = problem.solve(x0=x0)    # compiled once
+    """
+    pj = require("pounce.jax")
+    jac, hess = _patterns(bounds, jac_pattern, hess_pattern)
+    problem = pj.from_jax(
+        f,
+        g,
+        n=bounds.n,
+        m=bounds.m,
+        lb=np.asarray(bounds.lb),
+        ub=np.asarray(bounds.ub),
+        cl=np.asarray(bounds.cl),
+        cu=np.asarray(bounds.cu),
+        sparse=sparse,
+        jac_pattern=jac,
+        hess_pattern=hess,
+    )
+    opts = {"print_level": 0}
+    opts.update(options or {})
+    for key, value in opts.items():
+        problem.add_option(key, value)
+    return problem
+
+
 def solve_with_pounce(
     f: Callable,
     g: Callable,
@@ -99,6 +169,11 @@ def solve_with_pounce(
     hess_pattern=None,
 ) -> tuple[np.ndarray, dict]:
     """Solve an :func:`~difflow.solvers.nlp.as_nlp` problem with pounce.
+
+    A thin wrapper over :func:`pounce_problem` that builds the Problem, solves
+    once and discards it. **Every call pays the full JAX trace and compile
+    again.** If you solve the same problem more than once, build it once with
+    :func:`pounce_problem` and call ``problem.solve(x0=...)`` repeatedly.
 
     Args:
         f: Objective ``f(x)``.
@@ -127,25 +202,10 @@ def solve_with_pounce(
         >>> f, g, bd = as_nlp(fs, decisions, specs, objective=profit)  # doctest: +SKIP
         >>> x, info = solve_with_pounce(f, g, bd, options={"tol": 1e-9})  # doctest: +SKIP
     """
-    pj = require("pounce.jax")
-    jac, hess = _patterns(bounds, jac_pattern, hess_pattern)
-    problem = pj.from_jax(
-        f,
-        g,
-        n=bounds.n,
-        m=bounds.m,
-        lb=np.asarray(bounds.lb),
-        ub=np.asarray(bounds.ub),
-        cl=np.asarray(bounds.cl),
-        cu=np.asarray(bounds.cu),
-        sparse=sparse,
-        jac_pattern=jac,
-        hess_pattern=hess,
+    problem = pounce_problem(
+        f, g, bounds, options=options, sparse=sparse,
+        jac_pattern=jac_pattern, hess_pattern=hess_pattern,
     )
-    opts = {"print_level": 0}
-    opts.update(options or {})
-    for key, value in opts.items():
-        problem.add_option(key, value)
     start = np.asarray(bounds.x0 if x0 is None else x0, dtype=float)
     return problem.solve(x0=start)
 

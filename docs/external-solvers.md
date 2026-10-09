@@ -195,6 +195,13 @@ f, g, bounds = as_nlp(
 x, info = solve_with_pounce(f, g, bounds, options={"tol": 1e-9})
 ```
 
+`solve_with_pounce` builds a fresh pounce Problem on every call, so every call
+pays the full JAX trace and compile (tens of seconds when units nest EOS
+solves; about 0.1 s for a later solve of an already-built Problem). To solve
+more than once -- an outer loop, a scenario sweep, a re-solve after a
+parameter change -- build once with `pounce_problem(f, g, bounds, options=...)`
+and call `problem.solve(x0=...)` repeatedly.
+
 The variable vector is
 
 ```

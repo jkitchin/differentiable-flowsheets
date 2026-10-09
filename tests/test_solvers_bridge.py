@@ -1246,3 +1246,75 @@ def test_unpack_reports_feed_decisions_at_their_optimized_values():
     # The un-moved decision is untouched, and non-feed streams still come from
     # the layout rather than being overwritten.
     assert float(dvals["unit:reactor.params.V"]) == pytest.approx(bd.x0[0])
+
+
+# =============================================================================
+# pounce_problem: build once, solve many (#394)
+# =============================================================================
+
+
+def test_require_message_drops_the_differ_clause_when_names_match(monkeypatch):
+    import difflow.solvers._lazy as lazy
+
+    monkeypatch.setattr(lazy.importlib, "import_module",
+                        lambda m: (_ for _ in ()).throw(ImportError(m)))
+    with pytest.raises(ImportError) as same:
+        lazy.require("asdex")
+    assert "not 'asdex'" not in str(same.value)
+    assert "'asdex'" in str(same.value)
+    with pytest.raises(ImportError) as differ:
+        lazy.require("pounce.jax")
+    assert "'pounce-solver', not 'pounce'" in str(differ.value)
+
+
+def test_solve_with_pounce_is_a_wrapper_over_pounce_problem(monkeypatch):
+    """One Problem per pounce_problem call; solve_with_pounce solves it once."""
+    import difflow.solvers.pounce_bridge as pb
+
+    built, solved, opts = [], [], {}
+
+    class FakeProblem:
+        def add_option(self, k, v):
+            opts[k] = v
+
+        def solve(self, x0):
+            solved.append(x0)
+            return x0, {}
+
+    class FakePJ:
+        @staticmethod
+        def from_jax(*a, **kw):
+            built.append(kw)
+            return FakeProblem()
+
+    monkeypatch.setattr(pb, "require", lambda name: FakePJ)
+    from types import SimpleNamespace
+
+    bd = SimpleNamespace(
+        n=2, m=1, lb=np.zeros(2), ub=np.ones(2), cl=np.zeros(1), cu=np.ones(1),
+        x0=np.full(2, 0.5), jac_pattern=([0, 0], [0, 1]),
+        hess_pattern=([0, 1], [0, 1]),
+    )
+    f = g = None
+
+    problem = pb.pounce_problem(f, g, bd, options={"tol": 1e-9})
+    problem.solve(x0=bd.x0)
+    problem.solve(x0=bd.x0)
+    assert len(built) == 1 and len(solved) == 2
+    assert built[0]["jac_pattern"] is not None and built[0]["hess_pattern"] is not None
+    assert opts == {"print_level": 0, "tol": 1e-9}
+
+    pb.solve_with_pounce(f, g, bd)
+    assert len(built) == 2 and len(solved) == 3
+
+
+@needs_pounce
+@needs_asdex
+def test_pounce_problem_solves_repeatedly():
+    from difflow.solvers import pounce_problem
+
+    f, g, bd = free_T_problem()
+    problem = pounce_problem(f, g, bd, options={"tol": 1e-9})
+    for _ in range(2):
+        _x, info = problem.solve(x0=np.asarray(bd.x0))
+        assert info["status_msg"] == "Solve_Succeeded"

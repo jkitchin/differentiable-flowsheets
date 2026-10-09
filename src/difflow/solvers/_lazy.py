@@ -46,13 +46,18 @@ def require(module: str) -> ModuleType:
         >>> problem = pj.from_jax(f, g, n=3, m=1)  # doctest: +SKIP
     """
     dist, install = _PYPI_NAMES.get(module, (module, module))
+    root = module.split(".")[0]
+    names = (
+        f"The PyPI distribution is {dist!r}"
+        if dist == root
+        else f"The PyPI distribution is {dist!r}, not {root!r}"
+    )
     try:
         return importlib.import_module(module)
     except ImportError as exc:  # pragma: no cover - exercised by the skip marks
         raise ImportError(
             f"difflow.solvers needs {module!r}, which is not installed. "
-            f"The PyPI distribution is {dist!r}, not {module.split('.')[0]!r} "
-            f"if those differ: `pip install {install}`."
+            f"{names}: `pip install {install}`."
         ) from exc
 
 
