@@ -1065,12 +1065,6 @@ class TestInstantaneousUnitTimeAndArgs:
             return {"outlet": {**inputs["inlet"], "T": args["T0"] + args["rate"] * t}}
 
         fs = _one_unit_fs(InstantaneousUnit(fn=fn))
-        fs.add_unit(
-            DynamicCSTR(volume=1.0, rate_fn=lambda c, T, p: p["k"] * c["A"],
-                        stoich={"A": -1, "B": 1}, species_order=["A", "B"],
-                        rate_params={"k": 0.1}, molar_density=55500.0, name="r"),
-            inlets={"inlet": "out"}, outlets={"outlet": "prod"},
-        )
 
         def final_T(rate):
             args = {"T0": jnp.array(300.0), "rate": rate}
