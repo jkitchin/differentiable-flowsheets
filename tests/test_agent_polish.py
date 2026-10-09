@@ -63,7 +63,10 @@ def test_a_session_without_a_file_needs_a_path():
 class TestServer:
     @pytest.fixture(autouse=True)
     def _mcp(self):
-        pytest.importorskip("mcp")
+        pytest.importorskip(
+            "mcp.server.mcpserver",
+            reason="difflow.mcp is written against mcp 2 (MCPServer); the installed mcp is older or absent",
+        )
 
     def test_long_tools_send_progress_and_hide_the_context(self, monkeypatch):
         from mcp import Client

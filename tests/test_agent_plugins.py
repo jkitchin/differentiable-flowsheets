@@ -80,7 +80,10 @@ class TestPowerTools:
 
 
 def test_plugin_tools_are_served():
-    pytest.importorskip("mcp")
+    pytest.importorskip(
+        "mcp.server.mcpserver",
+        reason="difflow.mcp is written against mcp 2 (MCPServer); the installed mcp is older or absent",
+    )
     import asyncio
 
     from mcp import Client

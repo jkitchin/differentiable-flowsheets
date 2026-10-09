@@ -11,7 +11,10 @@ import json
 
 import pytest
 
-pytest.importorskip("mcp")
+pytest.importorskip(
+    "mcp.server.mcpserver",
+    reason="difflow.mcp is written against mcp 2 (MCPServer); the installed mcp is older or absent",
+)
 
 from mcp import Client  # noqa: E402
 
