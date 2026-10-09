@@ -92,6 +92,9 @@ class DynamicEOSFlash:
     parameter_units = {"P": "Pa", "tau_liquid": "s", "tau_vapor": "s"}
     numerical_method = "ODE in species holdup; EOS TP flash (flash_TP_eos) each RHS eval."
 
+    #: Output port names, in the order ``outputs()`` returns them.
+    output_ports = ("liquid", "vapor")
+
     def __init__(
         self,
         eos,

@@ -73,3 +73,6 @@ src/difflow/gui/frontend/node_modules/
 
 # DWSIM unpacked by scripts/install_dwsim.sh
 .dwsim/
+
+# Personal org notes (review TODOs); kept locally, not in the repo
+readme.org

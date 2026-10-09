@@ -358,6 +358,70 @@ def feed_schedule(t):
 fs.add_feed("feed", feed_schedule)  # Pass function instead of stream
 ```
 
+### Disturbances as Integrator Args
+
+A feed written `(t, args)` reads the `args` passed to `simulate`. Those args,
+and `params`, go to the integrator as its own `args` rather than being closed
+over, so with a diffrax method one compiled right-hand side serves every
+scenario, and `jax.grad` with respect to a disturbance does not retrace. Make
+the values you vary JAX arrays (a Python float is static).
+
+```python
+def feed_step(t, args):
+    scale = 1.0 + args["step"] * (t > args["t_step"])
+    return make_stream({"A": scale, "B": 0.0}, T=350.0, P=101325.0)
+
+fs_args = DynamicFlowsheet(species_order=["A", "B"])
+fs_args.add_feed("feed", feed_step)
+fs_args.add_unit(cstr, inlets={"inlet": "feed"}, outlets={"outlet": "reactor_out"})
+for step in (0.1, 0.2, 0.5):  # compiles once
+    result = fs_args.simulate((0.0, 1000.0), method="diffrax:tsit5",
+                              args={"step": jnp.array(step), "t_step": jnp.array(500.0)})
+```
+
+`integrate(f, y0, t_span, method, args=...)` does the same for a bare
+`f(t, y, args)`.
+
+### Ports, Stateless Units and Feed-Effluent Loops
+
+Units read fixed port names (`"inlet"` for a CSTR, `"hot"`/`"cold"` for
+`DynamicCounterCurrentHX`, `"feed"` for `DynamicEOSFlash`). Wire them to
+freely named streams with `inlets=`/`outlets=` maps of `{port: stream}`.
+A unit with no holdup worth a state (a trim heater or cooler at a setpoint, a
+mixer) goes in as an `InstantaneousUnit`, which wraps a steady-state unit
+operation, or a function `fn(inputs, params) -> {port: Stream}`, with zero
+states.
+
+<!-- doc-test: skip: needs a CubicThermo, an EOS and an adiabatic CSTR built elsewhere -->
+```python
+from difflow import Heater, HeaterParams, Cooler, CoolerParams
+from difflow.dynamic import (DynamicCounterCurrentHX, DynamicEOSFlash,
+                             InstantaneousUnit)
+
+fs = DynamicFlowsheet(species_order=species)
+fs.add_feed("naphtha", feed)
+fs.add_unit(DynamicCounterCurrentHX(150.0, thermo, name="fehe"),
+            inlets={"hot": "effluent", "cold": "naphtha"},
+            outlets={"hot_out": "eff_cooled", "cold_out": "preheated"})
+fs.add_unit(InstantaneousUnit(Heater(HeaterParams(T_out=460.0), thermo), name="trim"),
+            inlets={"inlet": "preheated"}, outlets={"outlet": "rx_in"})
+fs.add_unit(reactor, inlets={"inlet": "rx_in"}, outlets={"outlet": "effluent"})
+fs.add_unit(InstantaneousUnit(Cooler(CoolerParams(T_out=320.0), thermo), name="cooler"),
+            inlets={"inlet": "eff_cooled"}, outlets={"outlet": "cooled"})
+fs.add_unit(DynamicEOSFlash(eos, species, P=8e5, name="sep"),
+            inlets={"feed": "cooled"}, outlets={"liquid": "liq", "vapor": "vap"})
+```
+
+The exchanger's cold outlet feeds the heater, the heater the reactor, and the
+reactor the exchanger's hot inlet: a cycle through the units' outputs within
+one right-hand-side call. It is well posed because each exchanger outlet reads
+its duty state and its own side's inlet only. A unit declares that with
+`output_dependencies = {"cold_out": ("cold",), ...}` and implements
+`partial_outputs`, and the flowsheet orders the evaluation from stream
+availability (cold side, heater, reactor, then hot side) instead of insertion
+order. A cycle that no declared dependency breaks raises `ValueError`
+("Algebraic loop ...") naming the units and streams.
+
 ### Manual Derivative Access
 
 For custom integration or analysis:

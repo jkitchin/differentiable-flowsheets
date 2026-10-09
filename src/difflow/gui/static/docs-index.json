@@ -1,5 +1,5 @@
 {
- "n_sections": 1091,
+ "n_sections": 1093,
  "sections": [
   {
    "anchor": "agents-the-difflow-mcp-server",
@@ -682,6 +682,22 @@
    "text": "```python\n# Define feed as function of time\ndef feed_schedule(t):\n    \"\"\"Feed rate doubles after t=500.\"\"\"\n    base = make_stream({\"A\": 1.0, \"B\": 0.0}, T=350.0, P=101325.0)\n    scale = jnp.where(t > 500, 2.0, 1.0)  # traced t: use jnp.where, not `if`\n    return {k: (v * scale if k.startswith(\"F_\") else v) for k, v in base.items()}\n\nfs.add_feed(\"feed\", feed_schedule)  # Pass function instead of stream\n```"
   },
   {
+   "anchor": "disturbances-as-integrator-args",
+   "heading": "Disturbances as Integrator Args",
+   "path": "Dynamic Modeling > Dynamic Flowsheets > Disturbances as Integrator Args",
+   "source": "dynamic-modeling.md",
+   "targets": [],
+   "text": "A feed written `(t, args)` reads the `args` passed to `simulate`. Those args,\nand `params`, go to the integrator as its own `args` rather than being closed\nover, so with a diffrax method one compiled right-hand side serves every\nscenario, and `jax.grad` with respect to a disturbance does not retrace. Make\nthe values you vary JAX arrays (a Python float is static).\n\n```python\ndef feed_step(t, args):\n    scale = 1.0 + args[\"step\"] * (t > args[\"t_step\"])\n    return make_stream({\"A\": scale, \"B\": 0.0}, T=350.0, P=101325.0)\n\nfs_args = DynamicFlowsheet(species_order=[\"A\", \"B\"])\nfs_args.add_feed(\"feed\", feed_step)\nfs_args.add_unit(cstr, inlets={\"inlet\": \"feed\"}, outlets={\"outlet\": \"reactor_out\"})\nfor step in (0.1, 0.2, 0.5):  # compiles once\n    result = fs_args.simulate((0.0, 1000.0), method=\"diffrax:tsit5\",\n                              args={\"step\": jnp.array(step), \"t_step\": jnp.array(500.0)})\n```\n\n`integrate(f, y0, t_span, method, args=...)` does the same for a bare\n`f(t, y, args)`."
+  },
+  {
+   "anchor": "ports-stateless-units-and-feed-effluent-loops",
+   "heading": "Ports, Stateless Units and Feed-Effluent Loops",
+   "path": "Dynamic Modeling > Dynamic Flowsheets > Ports, Stateless Units and Feed-Effluent Loops",
+   "source": "dynamic-modeling.md",
+   "targets": [],
+   "text": "Units read fixed port names (`\"inlet\"` for a CSTR, `\"hot\"`/`\"cold\"` for\n`DynamicCounterCurrentHX`, `\"feed\"` for `DynamicEOSFlash`). Wire them to\nfreely named streams with `inlets=`/`outlets=` maps of `{port: stream}`.\nA unit with no holdup worth a state (a trim heater or cooler at a setpoint, a\nmixer) goes in as an `InstantaneousUnit`, which wraps a steady-state unit\noperation, or a function `fn(inputs, params) -> {port: Stream}`, with zero\nstates.\n\n<!-- doc-test: skip: needs a CubicThermo, an EOS and an adiabatic CSTR built elsewhere -->\n```python\nfrom difflow import Heater, HeaterParams, Cooler, CoolerParams\nfrom difflow.dynamic import (DynamicCounterCurrentHX, DynamicEOSFlash,\n                             InstantaneousUnit)\n\nfs = DynamicFlowsheet(species_order=species)\nfs.add_feed(\"naphtha\", feed)\nfs.add_unit(DynamicCounterCurrentHX(150.0, thermo, name=\"fehe\"),\n            inlets={\"hot\": \"effluent\", \"cold\": \"naphtha\"},\n            outlets={\"hot_out\": \"eff_cooled\", \"cold_out\": \"preheated\"})\nfs.add_unit(InstantaneousUnit(Heater(HeaterParams(T_out=460.0), thermo), name=\"trim\"),\n            inlets={\"inlet\": \"preheated\"}, outlets={\"outlet\": \"rx_in\"})\nfs.add_unit(reactor, inlets={\"inlet\": \"rx_in\"}, outlets={\"outlet\": \"effluent\"})\nfs.add_unit(InstantaneousUnit(Cooler(CoolerParams(T_out=320.0), thermo), name=\"cooler\"),\n            inlets={\"inlet\": \"eff_cooled\"}, outlets={\"outlet\": \"cooled\"})\nfs.add_unit(DynamicEOSFlash(eos, species, P=8e5, name=\"sep\"),\n            inlets={\"feed\": \"cooled\"}, outlets={\"liquid\": \"liq\", \"vapor\": \"vap\"})\n```\n\nThe exchanger's cold outlet feeds the heater, the heater the reactor, and the\nreactor the exchanger's hot inlet: a cycle through the units' outputs within\none right-hand-side call. It is well posed because each exchanger outlet reads\nits duty state and its own side's inlet only. A unit declares that with\n`output_dependencies = {\"cold_out\": (\"cold\",), ...}` and implements\n`partial_outputs`, and the flowsheet orders the evaluation from stream\navailability (cold side, heater, reactor, then hot side) instead of insertion\norder. A cycle that no declared dependency breaks raises `ValueError`\n(\"Algebraic loop ...\") naming the units and streams."
+  },
+  {
    "anchor": "manual-derivative-access",
    "heading": "Manual Derivative Access",
    "path": "Dynamic Modeling > Dynamic Flowsheets > Manual Derivative Access",
@@ -887,7 +903,7 @@
    "path": "Equation-Oriented (EO) Solver > Mathematical Formulation > Residual Assembly",
    "source": "eo-solver.md",
    "targets": [],
-   "text": "Each unit operation provides an `eo_residuals(inlets, outlets)` method that returns a vector of residuals. For the system to be square, the total number of residuals must equal the total number of unknowns.\n\n**Example \u2014 CSTR (isothermal):**\n- Material balance: $F_{out,i} - F_{in,i} - V \\sum_j \\nu_{ij} r_j = 0$ for each species\n- Temperature: $T_{out} - T_{spec} = 0$\n- Pressure: $P_{out} - P_{in} = 0$\n\n**Example \u2014 Flash separator:**\n- Material balance: $F_{in,i} - F_{liq,i} - F_{vap,i} = 0$\n- Phase equilibrium: $F_{vap,i} L_{total} - K_i F_{liq,i} V_{total} = 0$\n- Temperature and pressure specifications for both outlet phases"
+   "text": "Each unit operation provides an `eo_residuals(inlets, outlets)` method that returns a vector of residuals. For the system to be square, the total number of residuals must equal the total number of unknowns.\n\n**Example \u2014 CSTR (isothermal):**\n- Material balance: $F_{out,i} - F_{in,i} - V \\sum_j \\nu_{ij} r_j = 0$ for each species\n- Temperature: $T_{out} - T_{spec} = 0$\n- Pressure: $P_{out} - P_{in} = 0$\n\n**Example \u2014 Flash separator:**\n- Material balance: $F_{in,i} - F_{liq,i} - F_{vap,i} = 0$\n- Phase equilibrium: $F_{vap,i} L_{total} - K_i F_{liq,i} V_{total} = 0$\n- Temperature and pressure specifications for both outlet phases\n\n**Example \u2014 EOSFlash (cubic EOS):** the same balances and T/P rows, with the\nphase-split rows chosen by a Michelsen stability test on the *feed* (the one\nthe sequential flash uses, held off the tape with `stop_gradient`):\n- two-phase: fugacity equality $x_i \\hat\\varphi_i^L(x) - y_i \\hat\\varphi_i^V(y) = 0$, with $x = F_{liq}/L$, $y = F_{vap}/V$\n- liquid only: $F_{vap,i} = 0$; vapor only: $F_{liq,i} = 0$\n\nThe choice depends only on the inlet, so the residual is smooth within a phase\nregime and its Jacobian stays regular when one phase is absent.\n\n**Example \u2014 EnthalpyCounterCurrentHX:** per side, flows and pressure pass\nthrough and the energy row is the enthalpy balance with the duty eliminated,\n$H_h(T_{h,in}) - H_h(T_{h,out}) - UA\\,\\mathrm{LMTD} = 0$ and\n$H_c(T_{c,out}) - H_c(T_{c,in}) - UA\\,\\mathrm{LMTD} = 0$, using the thermo's\n`stream_enthalpy_flash`. A non-isothermal CSTR's energy row is likewise its\nenthalpy balance, $H_{out} - H_{in} + V\\sum_j r_j \\Delta H_j + H_{mix} - Q = 0$."
   },
   {
    "anchor": "newtons-method",
@@ -1255,7 +1271,7 @@
    "path": "External solvers: pounce and discopt > The residual view > Units without an equation-oriented form",
    "source": "external-solvers.md",
    "targets": [],
-   "text": "Only units with `eo_residuals` (CSTR, Flash, Mixer, Splitter, the heat\nexchangers) can be exposed. `require_eo_residuals(fs)` refuses the rest up front\nwith the offending unit names. It has to: `EOSolver._build_residual_fn`'s\nfallback branch for units without `eo_residuals` reads a bare name `feed_names`\nthat is a local of `EOSolver.__init__` and neither a closure cell nor a module\nglobal, so it raises `NameError: name 'feed_names' is not defined` from inside a\nJAX trace with no indication of which unit caused it.\n\n---"
+   "text": "Only units with `eo_residuals` (CSTR in every mode, Flash, EOSFlash, Mixer,\nSplitter, Heater, Cooler, EnthalpyCounterCurrentHX) can be exposed. `require_eo_residuals(fs)` refuses the rest up front\nwith the offending unit names. It has to: `EOSolver._build_residual_fn`'s\nfallback branch for units without `eo_residuals` reads a bare name `feed_names`\nthat is a local of `EOSolver.__init__` and neither a closure cell nor a module\nglobal, so it raises `NameError: name 'feed_names' is not defined` from inside a\nJAX trace with no indication of which unit caused it.\n\n---"
   },
   {
    "anchor": "the-restriction-a-difflow-block-in-discopt-is-local-nlp-only",

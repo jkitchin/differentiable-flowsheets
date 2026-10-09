@@ -193,6 +193,7 @@ def integrate_diffrax(
     bounds: tuple[Array, Array] | None = None,
     dtmin: float | None = None,
     dtmax: float | None = None,
+    args: Any = None,
     **kwargs,
 ) -> IntegrationResult:
     """Integrate ODE using diffrax.
@@ -210,6 +211,11 @@ def integrate_diffrax(
         dense: Whether to use dense output interpolation
         bounds: Optional (lower, upper) arrays for post-integration state
             clipping. Applied to the trajectory and final state.
+        args: Optional pytree. When given, ``f`` is ``f(t, y, args)`` and is
+            used as the diffrax vector field directly, with ``args`` passed to
+            ``diffeqsolve``. A solve compiles once per ``f`` (pass the same
+            function object each time, e.g. a method or a module-level
+            function) and is reused for every ``args`` of the same structure.
         **kwargs: Additional arguments passed to diffeqsolve
 
     Returns:
@@ -223,11 +229,16 @@ def integrate_diffrax(
     t0, t1 = t_span
     y0 = jnp.asarray(y0)
 
-    # Create ODE term
-    def vector_field(t, y, args):
-        return f(t, y)
+    # Create ODE term. With args, f already has diffrax's (t, y, args)
+    # signature and is used as is: wrapping it in a fresh closure here would
+    # make every call a new function to diffeqsolve's jit and recompile.
+    if args is None:
+        def vector_field(t, y, args):
+            return f(t, y)
 
-    term = diffrax.ODETerm(vector_field)
+        term = diffrax.ODETerm(vector_field)
+    else:
+        term = diffrax.ODETerm(f)
 
     # Get solver
     solver_obj = _get_solver(solver)
@@ -263,6 +274,7 @@ def integrate_diffrax(
         stepsize_controller=stepsize_controller,
         saveat=saveat_obj,
         max_steps=max_steps,
+        args=args,
         **kwargs,
     )
 
