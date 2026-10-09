@@ -274,7 +274,15 @@ def get_critical_props(name: str) -> CriticalProperties:
 
 # Format: name -> {
 #     "MW": molecular weight (g/mol),
-#     "Cp": (a, b, c, d) for Cp = a + bT + cT² + dT³ (J/mol/K),
+#     "Cp_ig": (a, b, c, d) for the IDEAL-GAS Cp = a + bT + cT² + dT³
+#         (J/mol/K); required, and what CubicThermo reads (SpeciesData
+#         .Cp_vapor_coeffs).
+#     "Cp": the LIQUID heat capacity near 298 K, same form; optional. What
+#         IdealThermo integrates for liquid enthalpy (SpeciesData.Cp_coeffs).
+#         Left out where there is no liquid at ambient conditions (methane,
+#         N2, O2, ethylene, ...): Cp_coeffs then falls back to "Cp_ig".
+#         The two differ by a factor of 2-3 for water and the alcohols, so
+#         they are never one field (issue #393).
 #     "Hvap": (H_ref, n, Tc) and "Hvap_T": T_ref -- the MEASURED heat of
 #         vaporization H_ref (J/mol) at T_ref (K), normally the normal boiling
 #         point. `get_species_data` turns it into Watson's prefactor,
@@ -303,7 +311,7 @@ _IDEAL_THERMO_DATA = {
         # Ideal-gas Cp cubic (Reid, Prausnitz & Poling 4th ed., App. A);
         # reproduces the former room-T constant (29.0) to ~1% at 298 K but is
         # accurate over the 50-1000 K span needed for cryogenic duties.
-        "Cp": (31.15, -1.357e-2, 2.680e-5, -1.168e-8),
+        "Cp_ig": (31.15, -1.357e-2, 2.680e-5, -1.168e-8),
         "Hvap": (5577.0, 0.38, 126.2),
         "Hvap_T": 77.34,
         "antoine": (8.61, 255.68, -6.6),
@@ -311,7 +319,8 @@ _IDEAL_THERMO_DATA = {
     },
     "oxygen": {
         "MW": 32.00,
-        "Cp": (29.4, 0.0, 0.0, 0.0),
+        # Ideal-gas Cp: cubic least-squares fit (250-800 K, max error 0.1%) to the Poling, Prausnitz & O'Connell 5th ed. (2001) Appendix A Cp/R quartic.
+        "Cp_ig": (29.3183, -0.00735043, 3.10953e-05, -1.86327e-08),
         "Hvap": (6820.0, 0.38, 154.6),
         "Hvap_T": 90.2,
         "antoine": (8.68, 319.01, -6.45),
@@ -320,7 +329,7 @@ _IDEAL_THERMO_DATA = {
     "carbon_dioxide": {
         "MW": 44.01,
         # Ideal-gas Cp cubic (Reid, Prausnitz & Poling 4th ed., App. A).
-        "Cp": (19.80, 7.344e-2, -5.602e-5, 1.715e-8),
+        "Cp_ig": (19.80, 7.344e-2, -5.602e-5, 1.715e-8),
         # CO2 sublimes at 1 atm, so no normal boiling point: anchored at the
         # triple point instead, 15.42 kJ/mol at 216.59 K (NIST WebBook fluid
         # tables, Span-Wagner EOS). The former 16.7 kJ/mol was a
@@ -332,7 +341,8 @@ _IDEAL_THERMO_DATA = {
     },
     "ammonia": {
         "MW": 17.03,
-        "Cp": (35.0, 0.0, 0.0, 0.0),
+        # Ideal-gas Cp: cubic least-squares fit (250-800 K, max error 0.2%) to the Poling, Prausnitz & O'Connell 5th ed. (2001) Appendix A Cp/R quartic.
+        "Cp_ig": (31.567, -0.0028806, 6.93064e-05, -4.3892e-08),
         "Hvap": (23350.0, 0.38, 405.4),
         "Hvap_T": 239.82,
         "antoine": (10.20, 1596.49, -28.16),
@@ -343,7 +353,7 @@ _IDEAL_THERMO_DATA = {
     "methane": {
         "MW": 16.04,
         # Ideal-gas Cp cubic (Reid, Prausnitz & Poling 4th ed., App. A).
-        "Cp": (19.25, 5.213e-2, 1.197e-5, -1.132e-8),
+        "Cp_ig": (19.25, 5.213e-2, 1.197e-5, -1.132e-8),
         "Hvap": (8180.0, 0.38, 190.6),
         "Hvap_T": 111.67,
         "antoine": (8.68, 405.42, -26.09),
@@ -352,7 +362,7 @@ _IDEAL_THERMO_DATA = {
     "ethane": {
         "MW": 30.07,
         # Ideal-gas Cp cubic (Reid, Prausnitz & Poling 4th ed., App. A).
-        "Cp": (5.409, 1.781e-1, -6.938e-5, 8.713e-9),
+        "Cp_ig": (5.409, 1.781e-1, -6.938e-5, 8.713e-9),
         "Hvap": (14690.0, 0.38, 305.3),
         "Hvap_T": 184.6,
         "antoine": (9.04, 663.70, -16.47),
@@ -361,7 +371,7 @@ _IDEAL_THERMO_DATA = {
     "propane": {
         "MW": 44.10,
         # Ideal-gas Cp cubic (Reid, Prausnitz & Poling 4th ed., App. A).
-        "Cp": (-4.224, 3.063e-1, -1.586e-4, 3.215e-8),
+        "Cp_ig": (-4.224, 3.063e-1, -1.586e-4, 3.215e-8),
         "Hvap": (19040.0, 0.38, 369.8),
         "Hvap_T": 231.1,
         "antoine": (9.10, 803.81, -26.11),
@@ -370,7 +380,7 @@ _IDEAL_THERMO_DATA = {
     "n_butane": {
         "MW": 58.12,
         # Ideal-gas Cp cubic (Reid, Prausnitz & Poling 4th ed., App. A).
-        "Cp": (9.487, 3.313e-1, -1.108e-4, -2.822e-9),
+        "Cp_ig": (9.487, 3.313e-1, -1.108e-4, -2.822e-9),
         "Hvap": (22390.0, 0.38, 425.1),
         "Hvap_T": 273.0,
         "antoine": (9.05, 935.86, -34.42),
@@ -379,7 +389,7 @@ _IDEAL_THERMO_DATA = {
     "n_pentane": {
         "MW": 72.15,
         # Ideal-gas Cp cubic (Reid, Prausnitz & Poling 4th ed., App. A).
-        "Cp": (-3.626, 4.873e-1, -2.580e-4, 5.305e-8),
+        "Cp_ig": (-3.626, 4.873e-1, -2.580e-4, 5.305e-8),
         "Hvap": (25790.0, 0.38, 469.7),
         "Hvap_T": 309.2,
         "antoine": (9.02, 1075.78, -40.45),
@@ -388,7 +398,7 @@ _IDEAL_THERMO_DATA = {
     "n_hexane": {
         "MW": 86.18,
         # Ideal-gas Cp cubic (Reid, Prausnitz & Poling 4th ed., App. A).
-        "Cp": (-4.413, 5.820e-1, -3.119e-4, 6.494e-8),
+        "Cp_ig": (-4.413, 5.820e-1, -3.119e-4, 6.494e-8),
         "Hvap": (28850.0, 0.38, 507.6),
         "Hvap_T": 341.9,
         "antoine": (9.00266, 1171.530, -48.784),
@@ -396,7 +406,10 @@ _IDEAL_THERMO_DATA = {
     },
     "n_heptane": {
         "MW": 100.20,
-        "Cp": (166.0, 0.0, 0.0, 0.0),
+        # Ideal-gas Cp: cubic least-squares fit (250-800 K, max error 0.5%) to the Poling, Prausnitz & O'Connell 5th ed. (2001) Appendix A Cp/R quartic.
+        "Cp_ig": (42.6329, 0.362966, 0.000263218, -3.11709e-07),
+        # Liquid Cp at 298 K, Poling 5th ed. Table A: 225.0 J/mol/K.
+        "Cp": (225.0, 0.0, 0.0, 0.0),
         "Hvap": (31770.0, 0.38, 540.2),
         "Hvap_T": 371.5,
         "antoine": (9.02832, 1268.636, -56.199),
@@ -404,7 +417,10 @@ _IDEAL_THERMO_DATA = {
     },
     "n_octane": {
         "MW": 114.23,
-        "Cp": (189.0, 0.0, 0.0, 0.0),
+        # Ideal-gas Cp: cubic least-squares fit (250-800 K, max error 0.5%) to the Poling, Prausnitz & O'Connell 5th ed. (2001) Appendix A Cp/R quartic.
+        "Cp_ig": (46.6923, 0.420985, 0.000291251, -3.55776e-07),
+        # Liquid Cp at 298 K, Poling 5th ed. Table A: 254.2 J/mol/K.
+        "Cp": (254.2, 0.0, 0.0, 0.0),
         "Hvap": (34410.0, 0.38, 568.7),
         "Hvap_T": 398.7,
         "antoine": (9.04867, 1355.126, -63.633),
@@ -417,7 +433,7 @@ _IDEAL_THERMO_DATA = {
     "isobutane": {
         "MW": 58.12,
         # Ideal-gas Cp cubic (Reid, Prausnitz & Poling 4th ed., App. A).
-        "Cp": (-1.390, 3.847e-1, -1.846e-4, 2.895e-8),
+        "Cp_ig": (-1.390, 3.847e-1, -1.846e-4, 2.895e-8),
         # Watson Hvap interpolated between propane and n-butane (approximate).
         "Hvap": (21300.0, 0.38, 407.8),
         "Hvap_T": 262.0,
@@ -429,7 +445,7 @@ _IDEAL_THERMO_DATA = {
     "isopentane": {
         "MW": 72.15,
         # Ideal-gas Cp cubic (Reid, Prausnitz & Poling 4th ed., App. A).
-        "Cp": (-9.525, 5.066e-1, -2.729e-4, 5.723e-8),
+        "Cp_ig": (-9.525, 5.066e-1, -2.729e-4, 5.723e-8),
         # Watson Hvap interpolated between n-butane and n-pentane (approximate).
         "Hvap": (24700.0, 0.38, 460.4),
         "Hvap_T": 301.1,
@@ -449,7 +465,7 @@ _IDEAL_THERMO_DATA = {
     # used here; its fitted range is recorded in T_antoine_min/max.
     "1_pentene": {
         "MW": 70.13,
-        "Cp": (-4.7482e-01, 4.2488e-01, -2.0783e-04, 2.9140e-08),
+        "Cp_ig": (-4.7482e-01, 4.2488e-01, -2.0783e-04, 2.9140e-08),
         "Hvap": (37641.0, 0.38, 464.8),
         "antoine": (8.96914, 1044.01, -39.7),
         "Hf": -21100.0,
@@ -458,7 +474,7 @@ _IDEAL_THERMO_DATA = {
     },
     "2_methyl_2_butene": {
         "MW": 70.13,
-        "Cp": (-5.2007, 4.3102e-01, -2.2737e-04, 4.6403e-08),
+        "Cp_ig": (-5.2007, 4.3102e-01, -2.2737e-04, 4.6403e-08),
         "Hvap": (39786.0, 0.38, 470.0),
         "antoine": (9.09149, 1124.33, -36.52),
         "Hf": -41700.0,
@@ -467,7 +483,7 @@ _IDEAL_THERMO_DATA = {
     },
     "2_2_4_trimethylpentane": {
         "MW": 114.23,
-        "Cp": (-23.936, 8.4297e-01, -4.6936e-04, 1.0446e-07),
+        "Cp_ig": (-23.936, 8.4297e-01, -4.6936e-04, 1.0446e-07),
         "Hvap": (47745.0, 0.38, 543.8),
         "antoine": (8.93646, 1257.85, -52.383),
         "Hf": -224000.0,
@@ -476,7 +492,7 @@ _IDEAL_THERMO_DATA = {
     },
     "2_3_4_trimethylpentane": {
         "MW": 114.23,
-        "Cp": (-30.448, 9.0998e-01, -6.0879e-04, 1.7711e-07),
+        "Cp_ig": (-30.448, 9.0998e-01, -6.0879e-04, 1.7711e-07),
         "Hvap": (50052.0, 0.38, 566.4),
         "antoine": (8.977, 1314.31, -55.669),
         "Hf": -217300.0,
@@ -485,7 +501,7 @@ _IDEAL_THERMO_DATA = {
     },
     "2_5_dimethylhexane": {
         "MW": 114.23,
-        "Cp": (-30.405, 8.6874e-01, -5.2198e-04, 1.2478e-07),
+        "Cp_ig": (-30.405, 8.6874e-01, -5.2198e-04, 1.2478e-07),
         "Hvap": (51098.0, 0.38, 550.0),
         "antoine": (8.98112, 1285.47, -58.902),
         "Hf": -222500.0,
@@ -496,7 +512,8 @@ _IDEAL_THERMO_DATA = {
     # Alkenes
     "ethylene": {
         "MW": 28.05,
-        "Cp": (43.0, 0.0, 0.0, 0.0),
+        # Ideal-gas Cp: cubic least-squares fit (250-800 K, max error 0.6%) to the Poling, Prausnitz & O'Connell 5th ed. (2001) Appendix A Cp/R quartic.
+        "Cp_ig": (22.9868, 0.0331137, 0.00015057, -1.2105e-07),
         "Hvap": (13540.0, 0.38, 282.3),
         "Hvap_T": 169.0,
         "antoine": (9.08, 595.42, -15.09),
@@ -504,7 +521,8 @@ _IDEAL_THERMO_DATA = {
     },
     "propylene": {
         "MW": 42.08,
-        "Cp": (64.0, 0.0, 0.0, 0.0),
+        # Ideal-gas Cp: cubic least-squares fit (250-800 K, max error 0.4%) to the Poling, Prausnitz & O'Connell 5th ed. (2001) Appendix A Cp/R quartic.
+        "Cp_ig": (20.8685, 0.128863, 8.86068e-05, -1.01328e-07),
         "Hvap": (18420.0, 0.38, 365.6),
         "Hvap_T": 225.6,
         "antoine": (9.10, 786.00, -25.52),
@@ -523,7 +541,7 @@ _IDEAL_THERMO_DATA = {
     # Rossini, J. Res. NBS 46, 106 (1951).
     "cis_2_butene": {
         "MW": 56.106,
-        "Cp": (29.245, 0.11883, 2.4322e-4, -2.1312e-7),
+        "Cp_ig": (29.245, 0.11883, 2.4322e-4, -2.1312e-7),
         "Hvap": (34248.0, 0.38, 435.75),
         "antoine": (8.98744, 957.06, -36.504),
         "Hf": -7700.0,
@@ -532,7 +550,7 @@ _IDEAL_THERMO_DATA = {
     },
     "trans_2_butene": {
         "MW": 56.106,
-        "Cp": (35.445, 0.14124, 1.6382e-4, -1.5586e-7),
+        "Cp_ig": (35.445, 0.14124, 1.6382e-4, -1.5586e-7),
         "Hvap": (33472.0, 0.38, 428.61),
         "antoine": (9.0436, 982.166, -30.775),
         "Hf": -10800.0,
@@ -541,7 +559,7 @@ _IDEAL_THERMO_DATA = {
     },
     "isobutylene": {
         "MW": 56.106,
-        "Cp": (23.064, 0.21696, 3.1111e-5, -8.2884e-8),
+        "Cp_ig": (23.064, 0.21696, 3.1111e-5, -8.2884e-8),
         "Hvap": (32837.0, 0.38, 418.09),
         "antoine": (8.64709, 799.055, -46.615),
         "Hf": -17900.0,
@@ -564,7 +582,7 @@ _IDEAL_THERMO_DATA = {
     # (1946) for the naphthenes, as the NIST WebBook gives them.
     "2_methylpentane": {
         "MW": 86.177,
-        "Cp": (-6.882, 0.57438, -2.5124e-4, 1.6512e-8),
+        "Cp_ig": (-6.882, 0.57438, -2.5124e-4, 1.6512e-8),
         "Hvap": (42344.0, 0.38, 497.7),
         "antoine": (8.9640, 1135.41, -46.578),
         "Hf": -174300.0,
@@ -573,7 +591,7 @@ _IDEAL_THERMO_DATA = {
     },
     "3_methylpentane": {
         "MW": 86.177,
-        "Cp": (-4.5919, 0.54702, -2.0104e-4, -1.1154e-8),
+        "Cp_ig": (-4.5919, 0.54702, -2.0104e-4, -1.1154e-8),
         "Hvap": (42553.0, 0.38, 504.6),
         "antoine": (8.97377, 1152.368, -46.021),
         "Hf": -171600.0,
@@ -582,7 +600,7 @@ _IDEAL_THERMO_DATA = {
     },
     "2_2_dimethylbutane": {
         "MW": 86.177,
-        "Cp": (-3.1491, 0.54281, -1.8902e-4, -6.8825e-9),
+        "Cp_ig": (-3.1491, 0.54281, -1.8902e-4, -6.8825e-9),
         "Hvap": (39577.0, 0.38, 489.0),
         "antoine": (8.87973, 1081.176, -43.807),
         "Hf": -185600.0,
@@ -591,7 +609,7 @@ _IDEAL_THERMO_DATA = {
     },
     "2_3_dimethylbutane": {
         "MW": 86.177,
-        "Cp": (-20.012, 0.6334, -3.5449e-4, 8.1562e-8),
+        "Cp_ig": (-20.012, 0.6334, -3.5449e-4, 8.1562e-8),
         "Hvap": (41104.0, 0.38, 500.0),
         "antoine": (8.93473, 1127.187, -44.2),
         "Hf": -177800.0,
@@ -600,7 +618,7 @@ _IDEAL_THERMO_DATA = {
     },
     "methylcyclopentane": {
         "MW": 84.161,
-        "Cp": (-35.499, 0.53993, -1.5819e-4, -5.2279e-8),
+        "Cp_ig": (-35.499, 0.53993, -1.5819e-4, -5.2279e-8),
         "Hvap": (43295.0, 0.38, 532.7),
         "antoine": (8.98773, 1186.059, -47.108),
         "Hf": -106700.0,
@@ -609,7 +627,7 @@ _IDEAL_THERMO_DATA = {
     },
     "cyclohexane": {
         "MW": 84.161,
-        "Cp": (-30.506, 0.46222, 3.0128e-5, -1.5954e-7),
+        "Cp_ig": (-30.506, 0.46222, 3.0128e-5, -1.5954e-7),
         "Hvap": (44401.0, 0.38, 553.8),
         "antoine": (8.96988, 1203.526, -50.287),
         "Hf": -123100.0,
@@ -620,6 +638,9 @@ _IDEAL_THERMO_DATA = {
     # Aromatics
     "benzene": {
         "MW": 78.11,
+        # Ideal-gas Cp: cubic least-squares fit (250-800 K, max error 1.2%) to the Poling, Prausnitz & O'Connell 5th ed. (2001) Appendix A Cp/R quartic.
+        "Cp_ig": (-10.1815, 0.296606, 0.000108136, -2.09159e-07),
+        # Liquid Cp near 298 K (constant).
         "Cp": (136.0, 0.0, 0.0, 0.0),
         "Hvap": (30720.0, 0.38, 562.0),
         "Hvap_T": 353.3,
@@ -630,6 +651,9 @@ _IDEAL_THERMO_DATA = {
     },
     "toluene": {
         "MW": 92.14,
+        # Ideal-gas Cp: cubic least-squares fit (250-800 K, max error 0.9%) to the Poling, Prausnitz & O'Connell 5th ed. (2001) Appendix A Cp/R quartic.
+        "Cp_ig": (-4.93911, 0.354613, 9.60085e-05, -2.08693e-07),
+        # Liquid Cp near 298 K (constant).
         "Cp": (157.0, 0.0, 0.0, 0.0),
         "Hvap": (33180.0, 0.38, 591.8),
         "Hvap_T": 383.8,
@@ -638,6 +662,9 @@ _IDEAL_THERMO_DATA = {
     },
     "ethylbenzene": {
         "MW": 106.17,
+        # Ideal-gas Cp: cubic least-squares fit (250-800 K, max error 0.7%) to the Poling, Prausnitz & O'Connell 5th ed. (2001) Appendix A Cp/R quartic.
+        "Cp_ig": (-0.242239, 0.421222, 9.42296e-05, -2.25946e-07),
+        # Liquid Cp near 298 K (constant).
         "Cp": (183.0, 0.0, 0.0, 0.0),
         "Hvap": (35570.0, 0.38, 617.2),
         "Hvap_T": 409.3,
@@ -646,6 +673,9 @@ _IDEAL_THERMO_DATA = {
     },
     "styrene": {
         "MW": 104.15,
+        # Ideal-gas Cp: Joback & Reid (1987) group contribution (Poling et al. 5th ed. ch. 3), cubic as published (118.9 J/mol/K at 298 K, 3% below NIST's 122).
+        "Cp_ig": (-41.28, 0.6649, -0.0004655, 1.269e-07),
+        # Liquid Cp near 298 K (constant).
         "Cp": (182.0, 0.0, 0.0, 0.0),
         "Hvap": (36820.0, 0.38, 636.0),
         "Hvap_T": 419.0,
@@ -656,6 +686,9 @@ _IDEAL_THERMO_DATA = {
     # Alcohols
     "methanol": {
         "MW": 32.04,
+        # Ideal-gas Cp: cubic least-squares fit (250-800 K, max error 0.4%) to the Poling, Prausnitz & O'Connell 5th ed. (2001) Appendix A Cp/R quartic.
+        "Cp_ig": (31.7923, 0.00679435, 0.000147624, -1.01395e-07),
+        # Liquid Cp near 298 K (constant).
         "Cp": (81.0, 0.0, 0.0, 0.0),
         "Hvap": (35210.0, 0.38, 512.6),
         "Hvap_T": 337.8,
@@ -666,6 +699,9 @@ _IDEAL_THERMO_DATA = {
     },
     "ethanol": {
         "MW": 46.07,
+        # Ideal-gas Cp: cubic least-squares fit (250-800 K, max error 0.4%) to the Poling, Prausnitz & O'Connell 5th ed. (2001) Appendix A Cp/R quartic.
+        "Cp_ig": (23.6027, 0.118707, 0.000106913, -1.15197e-07),
+        # Liquid Cp near 298 K (constant).
         "Cp": (112.0, 0.0, 0.0, 0.0),
         "Hvap": (38560.0, 0.38, 513.9),
         "Hvap_T": 351.5,
@@ -676,6 +712,9 @@ _IDEAL_THERMO_DATA = {
     },
     "1_propanol": {
         "MW": 60.10,
+        # Ideal-gas Cp: cubic least-squares fit (250-800 K, max error 0.4%) to the Poling, Prausnitz & O'Connell 5th ed. (2001) Appendix A Cp/R quartic.
+        "Cp_ig": (23.6695, 0.190514, 0.000100385, -1.31984e-07),
+        # Liquid Cp near 298 K (constant).
         "Cp": (144.0, 0.0, 0.0, 0.0),
         "Hvap": (41440.0, 0.38, 536.8),
         "Hvap_T": 370.3,
@@ -684,6 +723,9 @@ _IDEAL_THERMO_DATA = {
     },
     "2_propanol": {
         "MW": 60.10,
+        # Ideal-gas Cp: cubic least-squares fit (250-800 K, max error 0.3%) to the Poling, Prausnitz & O'Connell 5th ed. (2001) Appendix A Cp/R quartic.
+        "Cp_ig": (15.4575, 0.264236, -3.24956e-05, -6.44121e-08),
+        # Liquid Cp near 298 K (constant).
         "Cp": (155.0, 0.0, 0.0, 0.0),
         "Hvap": (39850.0, 0.38, 508.3),
         "Hvap_T": 355.5,
@@ -692,6 +734,9 @@ _IDEAL_THERMO_DATA = {
     },
     "1_butanol": {
         "MW": 74.12,
+        # Ideal-gas Cp: cubic least-squares fit (250-800 K, max error 0.4%) to the Poling, Prausnitz & O'Connell 5th ed. (2001) Appendix A Cp/R quartic.
+        "Cp_ig": (18.5077, 0.299634, 4.63292e-05, -1.31003e-07),
+        # Liquid Cp near 298 K (constant).
         "Cp": (177.0, 0.0, 0.0, 0.0),
         "Hvap": (43290.0, 0.38, 563.1),
         "Hvap_T": 390.6,
@@ -702,6 +747,9 @@ _IDEAL_THERMO_DATA = {
     # Ketones
     "acetone": {
         "MW": 58.08,
+        # Ideal-gas Cp: cubic least-squares fit (250-800 K, max error 0.4%) to the Poling, Prausnitz & O'Connell 5th ed. (2001) Appendix A Cp/R quartic.
+        "Cp_ig": (29.4649, 0.127866, 0.000116622, -1.2041e-07),
+        # Liquid Cp near 298 K (constant).
         "Cp": (125.0, 0.0, 0.0, 0.0),
         "Hvap": (29100.0, 0.38, 508.2),
         "Hvap_T": 329.3,
@@ -714,7 +762,8 @@ _IDEAL_THERMO_DATA = {
     # Ethers
     "dimethyl_ether": {
         "MW": 46.07,
-        "Cp": (65.0, 0.0, 0.0, 0.0),
+        # Ideal-gas Cp: cubic least-squares fit (250-800 K, max error 0.2%) to the Poling, Prausnitz & O'Connell 5th ed. (2001) Appendix A Cp/R quartic.
+        "Cp_ig": (30.0773, 0.104655, 7.19138e-05, -7.38989e-08),
         "Hvap": (21510.0, 0.38, 400.1),
         "Hvap_T": 248.2,
         "antoine": (9.21, 987.31, -25.18),
@@ -722,6 +771,9 @@ _IDEAL_THERMO_DATA = {
     },
     "diethyl_ether": {
         "MW": 74.12,
+        # Ideal-gas Cp: cubic least-squares fit (250-800 K, max error 0.1%) to the Poling, Prausnitz & O'Connell 5th ed. (2001) Appendix A Cp/R quartic.
+        "Cp_ig": (41.7122, 0.282224, -6.33997e-05, -1.24551e-08),
+        # Liquid Cp near 298 K (constant).
         "Cp": (172.0, 0.0, 0.0, 0.0),
         "Hvap": (26520.0, 0.38, 466.7),
         "Hvap_T": 307.7,
@@ -732,6 +784,9 @@ _IDEAL_THERMO_DATA = {
     # Acids
     "formic_acid": {
         "MW": 46.03,
+        # Ideal-gas Cp: cubic least-squares fit (250-800 K, max error 0.3%) to the Poling, Prausnitz & O'Connell 5th ed. (2001) Appendix A Cp/R quartic.
+        "Cp_ig": (23.607, 0.0837068, 7.76682e-05, -7.47304e-08),
+        # Liquid Cp near 298 K (constant).
         "Cp": (99.0, 0.0, 0.0, 0.0),
         "Hvap": (22690.0, 0.38, 588.0),
         "Hvap_T": 373.9,
@@ -740,6 +795,9 @@ _IDEAL_THERMO_DATA = {
     },
     "acetic_acid": {
         "MW": 60.05,
+        # Ideal-gas Cp: cubic least-squares fit (250-800 K, max error 0.6%) to the Poling, Prausnitz & O'Connell 5th ed. (2001) Appendix A Cp/R quartic.
+        "Cp_ig": (19.6041, 0.127073, 0.000102988, -1.21408e-07),
+        # Liquid Cp near 298 K (constant).
         "Cp": (124.0, 0.0, 0.0, 0.0),
         # Anchored at 25 C, not the boiling point: the vapor is mostly dimer,
         # so the calorimetric value at 391 K (23.7 kJ/mol) is to a dimerised
@@ -754,6 +812,9 @@ _IDEAL_THERMO_DATA = {
     # Esters
     "ethyl_acetate": {
         "MW": 88.106,
+        # Ideal-gas Cp: cubic least-squares fit (250-800 K, max error 0.6%) to the Poling, Prausnitz & O'Connell 5th ed. (2001) Appendix A Cp/R quartic.
+        "Cp_ig": (56.1119, 0.129273, 0.000292231, -2.60916e-07),
+        # Liquid Cp near 298 K (constant).
         "Cp": (168.94, 0.0, 0.0, 0.0),  # liquid, 298.15 K (Pintos, Bravo et al. 1988)
         # 31.94 kJ/mol at 350.3 K (Majer & Svoboda 1985); with n = 0.38 it
         # gives 35.3 kJ/mol at 298 K (NIST: 35 +/- 2).
@@ -770,6 +831,9 @@ _IDEAL_THERMO_DATA = {
     # Water
     "water": {
         "MW": 18.015,
+        # Ideal-gas Cp: cubic least-squares fit (250-800 K, max error 0.2%) to the Poling, Prausnitz & O'Connell 5th ed. (2001) Appendix A Cp/R quartic.
+        "Cp_ig": (33.4944, -0.00809187, 3.34442e-05, -1.96886e-08),
+        # Liquid Cp near 298 K (constant).
         "Cp": (75.3, 0.0, 0.0, 0.0),  # Liquid at 25°C
         "Hvap": (40660.0, 0.38, 647.1),
         "Hvap_T": 373.12,
@@ -782,6 +846,9 @@ _IDEAL_THERMO_DATA = {
     # Halogenated
     "chloroform": {
         "MW": 119.38,
+        # Ideal-gas Cp: cubic least-squares fit (250-800 K, max error 0.1%) to the Poling, Prausnitz & O'Connell 5th ed. (2001) Appendix A Cp/R quartic.
+        "Cp_ig": (21.903, 0.20011, -0.000205687, 8.05422e-08),
+        # Liquid Cp near 298 K (constant).
         "Cp": (114.0, 0.0, 0.0, 0.0),
         "Hvap": (29240.0, 0.38, 536.4),
         "Hvap_T": 334.3,
@@ -790,6 +857,9 @@ _IDEAL_THERMO_DATA = {
     },
     "carbon_tetrachloride": {
         "MW": 153.82,
+        # Ideal-gas Cp: cubic least-squares fit (250-800 K, max error 0.2%) to the Poling, Prausnitz & O'Connell 5th ed. (2001) Appendix A Cp/R quartic.
+        "Cp_ig": (29.4036, 0.274006, -0.000363663, 1.70563e-07),
+        # Liquid Cp near 298 K (constant).
         "Cp": (131.0, 0.0, 0.0, 0.0),
         "Hvap": (29820.0, 0.38, 556.4),
         "Hvap_T": 349.8,
@@ -841,7 +911,7 @@ _ALKYLATION_CRITICAL = {
 _ALKYLATION_IDEAL = {
     "1_butene": {
         "MW": 56.11,
-        "Cp": (2.6419, 3.2085e-01, -1.4671e-04, 1.9026e-08),
+        "Cp_ig": (2.6419, 3.2085e-01, -1.4671e-04, 1.9026e-08),
         "Hvap": (32410.0, 0.38, 419.5),
         "antoine": (8.9178, 908.8, -34.61),
         "Hf": 100.0,
@@ -850,7 +920,7 @@ _ALKYLATION_IDEAL = {
     },
     "2_3_dimethylpentane": {
         "MW": 100.20,
-        "Cp": (-35.121, 7.9476e-01, -5.0099e-04, 1.3257e-07),
+        "Cp_ig": (-35.121, 7.9476e-01, -5.0099e-04, 1.3257e-07),
         "Hvap": (46715.0, 0.38, 537.3),
         "antoine": (8.98066, 1238.986, -51.208),
         "Hf": -198700.0,
@@ -859,7 +929,7 @@ _ALKYLATION_IDEAL = {
     },
     "2_4_dimethylpentane": {
         "MW": 100.20,
-        "Cp": (-23.801, 7.9644e-01, -5.2659e-04, 1.4802e-07),
+        "Cp_ig": (-23.801, 7.9644e-01, -5.2659e-04, 1.4802e-07),
         "Hvap": (45580.0, 0.38, 519.8),
         "antoine": (8.95442, 1193.612, -51.343),
         "Hf": -201600.0,
@@ -868,7 +938,7 @@ _ALKYLATION_IDEAL = {
     },
     "2_2_5_trimethylhexane": {
         "MW": 128.26,
-        "Cp": (-35.917, 9.7760e-01, -5.7667e-04, 1.3805e-07),
+        "Cp_ig": (-35.917, 9.7760e-01, -5.7667e-04, 1.3805e-07),
         "Hvap": (52981.0, 0.38, 569.8),
         "antoine": (8.97372, 1332.86, -61.34),
         "Hf": -253300.0,
@@ -877,7 +947,7 @@ _ALKYLATION_IDEAL = {
     },
     "n_dodecane": {
         "MW": 170.34,
-        "Cp": (-15.412, 1.1537, -5.8026e-04, 7.2305e-08),
+        "Cp_ig": (-15.412, 1.1537, -5.8026e-04, 7.2305e-08),
         "Hvap": (73982.0, 0.38, 658.0),
         "antoine": (9.12285, 1639.27, -91.31),
         "Hf": -289400.0,
@@ -930,7 +1000,7 @@ _HDS_CRITICAL = {
 _HDS_IDEAL = {
     "hydrogen": {
         "MW": 2.016,
-        "Cp": (27.44, 0.00855236, -1.38696e-05, 8.18211e-09),
+        "Cp_ig": (27.44, 0.00855236, -1.38696e-05, 8.18211e-09),
         # H2 is supercritical (Tc = 33.19 K) at every process temperature, so
         # these two fields carry no meaning there: they are the real
         # cryogenic data, kept so the entry is not a placeholder. Hvap: CRC,
@@ -948,7 +1018,7 @@ _HDS_IDEAL = {
     },
     "hydrogen_sulfide": {
         "MW": 34.08,
-        "Cp": (32.04997, 0.0007138444, 2.527715e-05, -1.226284e-08),
+        "Cp_ig": (32.04997, 0.0007138444, 2.527715e-05, -1.226284e-08),
         # Hvap: CRC, 18.67 kJ/mol at Tb = 213.6 K. Antoine: PPO 5e,
         # 185.51-227.2 K. Supercritical above Tc = 373.5 K.
         "Hvap": (18670.0, 0.38, 373.5),
@@ -960,7 +1030,7 @@ _HDS_IDEAL = {
     },
     "thiophene": {
         "MW": 84.136,
-        "Cp": (-31.77668, 0.4575949, -0.0003987942, 1.347712e-07),
+        "Cp_ig": (-31.77668, 0.4575949, -0.0003987942, 1.347712e-07),
         # Hvap: CRC, 31.48 kJ/mol at Tb = 357.15 K. Antoine: PPO 5e,
         # 267.2-381.16 K.
         "Hvap": (31480.0, 0.38, 579.4),
@@ -1015,7 +1085,11 @@ def get_species_data(name: str) -> SpeciesData:
     return SpeciesData(
         name=key,
         MW=d["MW"],
-        Cp_coeffs=d["Cp"],
+        # "Cp" is the liquid heat capacity where one is known; a species with
+        # no liquid at ambient conditions (methane, N2, ...) has only "Cp_ig",
+        # which then also serves IdealThermo's liquid path.
+        Cp_coeffs=d.get("Cp", d["Cp_ig"]),
+        Cp_vapor_coeffs=d["Cp_ig"],
         # Without "Hvap_T" the entry already holds Watson's prefactor A (the
         # refinery species, which back-solved A from a measured dHvap at Tb).
         Hvap_coeffs=(watson_coeffs(*d["Hvap"], d["Hvap_T"]) if "Hvap_T" in d

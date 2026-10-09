@@ -392,6 +392,23 @@ mixer) goes in as an `InstantaneousUnit`, which wraps a steady-state unit
 operation, or a function `fn(inputs, params) -> {port: Stream}`, with zero
 states.
 
+A setpoint that moves with time takes `t`, chosen by the callable's arity
+(as `add_feed` tells `(t)` from `(t, args)`): `fn(t, inputs, params)`, or a
+`call_params` callable `v(t, params)`. Add `args` as a last parameter --
+`fn(t, inputs, params, args)`, `v(t, params, args)` -- to read the pytree given
+to `simulate(args=...)`, the same one `(t, args)` feeds read. **Put
+time-varying disturbances in `args`** (a feed step and a setpoint ramp then
+share one dict); `params` is for design parameters.
+
+<!-- doc-test: skip: needs a CubicThermo built elsewhere -->
+```python
+def ramp(t, params, args):
+    return args["T0"] + (args["T1"] - args["T0"]) * jnp.clip((t - args["t0"]) / args["dur"], 0.0, 1.0)
+
+trim = InstantaneousUnit(Cooler(CoolerParams(T_out=320.0), thermo),
+                         call_params={"T_out": ramp}, name="trim")
+```
+
 <!-- doc-test: skip: needs a CubicThermo, an EOS and an adiabatic CSTR built elsewhere -->
 ```python
 from difflow import Heater, HeaterParams, Cooler, CoolerParams

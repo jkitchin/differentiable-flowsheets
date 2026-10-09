@@ -25,7 +25,7 @@ The fuel-hydrocarbon (and N2, CO2) ideal-gas Cp cubics are reused from
 (O2, H2O vapor, Ar) that the NGL work did not need are defined locally here.
 Defining H2O's *vapor* Cp locally also avoids the database's ``water`` record,
 whose ``Cp_coeffs`` is the *liquid* heat capacity used for aqueous/distillation
-models.
+models (the database's ideal-gas field is ``Cp_vapor_coeffs``).
 
 Units: Cp in J/mol/K (``Cp = a + b*T + c*T**2 + d*T**3``); LHV in J/mol; molar
 mass in kg/mol. Reference state 298.15 K, 101325 Pa.
@@ -68,7 +68,8 @@ def cp_coeffs(species: str) -> tuple[float, float, float, float]:
     """
     if species in _CYCLE_CP:
         return _CYCLE_CP[species]
-    return get_species_data(species).Cp_coeffs
+    data = get_species_data(species)
+    return data.Cp_vapor_coeffs if data.Cp_vapor_coeffs is not None else data.Cp_coeffs
 
 
 # Molar masses (kg/mol) for the cycle and fuel species.

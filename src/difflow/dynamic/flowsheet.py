@@ -610,7 +610,10 @@ class DynamicFlowsheet:
                 ) if entry.n_states else jnp.zeros(0)
             y = unit_states[entry.name]
             if ports is None or len(inputs) == len(entry.inlet_ports):
-                outputs = entry.unit.outputs(t, y, inputs, params)
+                if getattr(entry.unit, "wants_args", False):
+                    outputs = entry.unit.outputs(t, y, inputs, params, args)
+                else:
+                    outputs = entry.unit.outputs(t, y, inputs, params)
             else:
                 outputs = entry.unit.partial_outputs(t, y, inputs, params)
             self._store_outputs(entry, outputs, ports, streams)
@@ -736,7 +739,10 @@ class DynamicFlowsheet:
                 scanned for zero crossings of each event's condition and the
                 detected crossings are returned on
                 ``DynamicFlowsheetResult.events`` (#130).
-            args: Optional pytree handed to every ``(t, args)`` feed. It and
+            args: Optional pytree handed to every ``(t, args)`` feed and to
+                every :class:`InstantaneousUnit` whose function or
+                ``call_params`` take it: the one place for time-varying
+                disturbances (``params`` is for design parameters). It and
                 ``params`` are passed to the integrator as its ``args``
                 rather than closed over, so with a diffrax method one compiled
                 right-hand side serves every scenario (a new disturbance is a

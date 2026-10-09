@@ -194,8 +194,8 @@ def light_component_data(name: str) -> dict:
     ideal = _IDEAL_THERMO_DATA.get(key, {})
     if key in CP_IG:
         cp = CP_IG[key]
-    elif "Cp" in ideal and any(ideal["Cp"][1:]):
-        cp = ideal["Cp"]
+    elif "Cp_ig" in ideal and any(ideal["Cp_ig"][1:]):
+        cp = ideal["Cp_ig"]
     else:
         raise KeyError(f"no ideal-gas Cp cubic for {key!r}; add it to "
                        "difflow_refinery.gasplant.components.CP_IG")

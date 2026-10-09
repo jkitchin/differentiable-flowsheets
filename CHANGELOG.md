@@ -8,6 +8,26 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Breaking
 
+- **Core database heat capacities moved; results change (#393).** Every
+  species now carries an explicit ideal-gas Cp cubic (`SpeciesData
+  .Cp_vapor_coeffs`; Poling, Prausnitz & O'Connell 5th ed. Cp/R quartic,
+  cubic-fitted over 250-800 K, within 1.2%; styrene by Joback) in addition
+  to the liquid Cp (`Cp_coeffs`, where a liquid exists at ambient).
+  `CubicThermo` and the entropy integral `IdealThermo.S_ig_T` read the
+  ideal-gas field (new `IdealThermo.Cp_ig`, `Cp_mix_ig`, `H_ig`,
+  `stream_enthalpy_ig`); `IdealThermo` keeps integrating the liquid one. This
+  moves numbers: a `CubicThermo` flowsheet with water or an alcohol used a
+  liquid Cp (water 75.3, methanol 81.0) as its ideal-gas Cp (about 33.6 and
+  44), now fixed, and the 24 species that were still constants (n-heptane,
+  n-octane, benzene, toluene, ...) are temperature dependent, so n-heptane at
+  600 K gains about 40%. On `IdealThermo`, n-heptane and n-octane liquid Cp
+  are now 225 and 254 (they held ideal-gas 166 and 189), and the species
+  #172 gave ideal-gas cubics (C1-C6, N2, CO2, ...) keep that cubic for
+  liquid enthalpy too (no ambient liquid exists). Data that stores the
+  ideal-gas Cp in `Cp_coeffs` with no `Cp_vapor_coeffs` (the Cantera, DWSIM
+  and PyGLenN importers) is unchanged. Downstream models with IDAES or other
+  reference data on these species need that data regenerated.
+
 - `REEDistribution(no_data=...)`, threaded as `no_data=` through the REE unit
   and circuit params, says so when there is no data (#384): `"nan"` answers
   NaN for an element with no coefficients (Ho to Lu on D2EHPA, #269) and for
@@ -115,6 +135,29 @@ All notable changes to difflow are recorded here. The format follows
   `include_viral_filtration` adds a virus filtration step (default on, 0.97
   recovery). `ViralClearanceTrain` step methods return `((kept, lost), info)`
   and low-pH recovery no longer exceeds 0.98.
+
+### Added
+
+- `difflow.solvers.pounce_problem` builds the configured pounce Problem once
+  so repeated solves reuse the compiled residual and Jacobian (about 0.1 s
+  against 30 s on a nested-EOS flowsheet, #394). `solve_with_pounce` is now a
+  thin wrapper over it and still rebuilds on every call; its docstring and
+  `docs/external-solvers.md` say so.
+- `InstantaneousUnit` sees time and the integrator `args` (#396): an `fn`
+  taking `(t, inputs, params)` or `(t, inputs, params, args)`, and
+  `call_params` callables taking `(t, params)` or `(t, params, args)`, chosen
+  by arity (the 2-argument `fn` and 1-argument callable forms are unchanged).
+  `DynamicFlowsheet.simulate(args=...)` is documented as the one place for
+  time-varying disturbances, read by feeds and units alike.
+
+### Fixed
+
+- A thermo or EOS object built inside `jax.jit` no longer gets a value key
+  (#395): its derived arrays are tracers, and a later equal-valued eager
+  object hit a cache entry holding dead tracers (`UnexpectedTracerError`).
+  It falls back to identity, a missed cache rather than a wrong hit.
+- The missing-dependency message names the PyPI distribution only as
+  different from the import name when it is (`asdex`, #394).
 
 ## [0.3.0] - 2026-10-06
 
