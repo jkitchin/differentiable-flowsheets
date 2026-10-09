@@ -1073,6 +1073,108 @@ class EOSFlash:
 
         return liquid, vapor, info
 
+    # =========================================================================
+    # Equation-Oriented Interface
+    # =========================================================================
+
+    def eo_residuals(
+        self,
+        inlets: list[Stream],
+        outlets: list[Stream],
+        **kwargs,
+    ) -> Array:
+        """Compute residuals for the EO solver.
+
+        For a TP flash with 1 inlet and 2 outlets (liquid, vapor):
+            Material balance: F_in_i - F_liq_i - F_vap_i = 0        (n_species)
+            Phase split:                                             (n_species)
+                two-phase:     x_i phi_L_i(x) - y_i phi_V_i(y) = 0  (fugacity equality)
+                liquid only:   F_vap_i = 0
+                vapor only:    F_liq_i = 0
+            T_liq - T_flash = 0, T_vap - T_flash = 0                 (2)
+            P_liq - P_flash = 0, P_vap - P_flash = 0                 (2)
+
+        Total: 2*n_species + 4 residuals for 2*(n_species + 2) unknowns.
+
+        The compositions are ``x = F_liq / L`` and ``y = F_vap / V``, so the
+        summations hold by construction and fugacity equality plus the
+        component balances fix the split. Fugacity equality is written as
+        ``x_i phi_L_i - y_i phi_V_i`` rather than in logs so a species absent
+        from the feed still gives a well-posed row.
+
+        Which rows apply is decided the way the sequential flash decides it:
+        by the Michelsen stability test on the *feed* (z, T, P), under
+        ``stop_gradient``. The choice depends only on the inlet, never on the
+        outlet unknowns, so within a phase regime the residual is smooth and
+        its Jacobian is nonsingular -- in the single-phase regime fugacity
+        equality would otherwise leave the absent phase's composition
+        undetermined. The switch moves where the sequential flash's does, so
+        ``solve_eo`` and ``solve`` agree on both sides of a phase boundary.
+
+        Args:
+            inlets: List of inlet streams (expects 1 inlet)
+            outlets: List of outlet streams (expects 2: [liquid, vapor])
+            **kwargs: Optional T, P overrides for flash conditions
+
+        Returns:
+            Flat array of residuals, length 2*n_species + 4
+        """
+        from difflow.eos import _phase_stability
+
+        p = self.params
+        inlet = inlets[0]
+        liquid = outlets[0]
+        vapor = outlets[1]
+
+        T_flash = kwargs.get('T')
+        T_flash = jnp.asarray(T_flash) if T_flash is not None else inlet["T"]
+        P_flash = kwargs.get('P')
+        P_flash = jnp.asarray(P_flash) if P_flash is not None else inlet["P"]
+
+        inlet_flows = get_flows(inlet)
+        liquid_flows = get_flows(liquid)
+        vapor_flows = get_flows(vapor)
+
+        F_in = jnp.array([inlet_flows[s] for s in p.species_order])
+        F_liq = jnp.array([liquid_flows[s] for s in p.species_order])
+        F_vap = jnp.array([vapor_flows[s] for s in p.species_order])
+
+        mat_resid = F_in - F_liq - F_vap
+
+        # Phase regime from the feed, as flash_TP_eos decides it. A boolean
+        # carries no derivative, so the test is kept off the tape.
+        sg = jax.lax.stop_gradient
+        z = sg(safe_divide(F_in, jnp.sum(F_in)))
+        two_phase, feed_is_vapor = _phase_stability(
+            self.eos, z, sg(T_flash), sg(P_flash), self.k_ij
+        )
+
+        # Compositions. In a single-phase regime one phase is empty; both
+        # fugacity rows are then evaluated at the feed composition so the
+        # unselected branch stays finite under jacobian (a NaN there would
+        # survive the jnp.where below as NaN * 0).
+        L = jnp.sum(F_liq)
+        V = jnp.sum(F_vap)
+        x = jnp.where(two_phase, F_liq / jnp.where(two_phase, L, 1.0), z)
+        y = jnp.where(two_phase, F_vap / jnp.where(two_phase, V, 1.0), z)
+        phi_L = self.eos.fugacity_coefficient(T_flash, P_flash, x, "liquid", self.k_ij)
+        phi_V = self.eos.fugacity_coefficient(T_flash, P_flash, y, "vapor", self.k_ij)
+        fug_resid = x * phi_L - y * phi_V
+
+        single_resid = jnp.where(feed_is_vapor, F_liq, F_vap)
+        split_resid = jnp.where(two_phase, fug_resid, single_resid)
+
+        T_liq_resid = jnp.atleast_1d(liquid["T"] - T_flash)
+        T_vap_resid = jnp.atleast_1d(vapor["T"] - T_flash)
+        P_liq_resid = jnp.atleast_1d(liquid["P"] - P_flash)
+        P_vap_resid = jnp.atleast_1d(vapor["P"] - P_flash)
+
+        return jnp.concatenate([
+            mat_resid, split_resid,
+            T_liq_resid, T_vap_resid,
+            P_liq_resid, P_vap_resid,
+        ])
+
 
 # =============================================================================
 # PHFlash - Isenthalpic Flash (Constant P and H)

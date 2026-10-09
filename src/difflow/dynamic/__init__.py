@@ -177,6 +177,9 @@ from difflow.dynamic.heat_exchanger import DynamicCounterCurrentHX
 # Dynamic EOS flash
 from difflow.dynamic.flash import DynamicEOSFlash
 
+# Stateless units in a dynamic flowsheet
+from difflow.dynamic.instantaneous import InstantaneousUnit
+
 # Diffrax backend (optional)
 try:
     from difflow.dynamic.diffrax_backend import (
@@ -232,6 +235,7 @@ from difflow.dynamic.dae import (
 )
 
 __all__ = [
+    "InstantaneousUnit",
     # State
     "StateVar",
     "StateSpec",

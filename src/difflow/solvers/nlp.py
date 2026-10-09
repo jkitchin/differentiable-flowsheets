@@ -546,8 +546,9 @@ def require_eo_residuals(fs: Flowsheet) -> None:
         raise TypeError(
             f"units {bad} have no eo_residuals method, so the flowsheet has no "
             "equation-oriented form and cannot be turned into a flat NLP or a "
-            "residual. Units with an EO interface today: CSTR, Flash, Mixer, "
-            "Splitter, and the heat exchangers. (EOSolver's fallback branch for "
+            "residual. Units with an EO interface today: CSTR (every mode), "
+            "Flash, EOSFlash, Mixer, Splitter, Heater, Cooler and "
+            "EnthalpyCounterCurrentHX. (EOSolver's fallback branch for "
             "units without eo_residuals raises NameError on a bare 'feed_names' "
             "and is unusable; this check exists to report that up front rather "
             "than from inside a JAX trace.)"

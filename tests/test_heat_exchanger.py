@@ -883,3 +883,67 @@ class TestUtilityExchangerThermoHeavy:
         # dQ/dT_out is the stream's heat capacity rate: positive, and larger
         # than the 150 W/K a constant 75 J/mol/K would give.
         assert float(g) > 150.0
+
+
+@pytest.mark.slow
+class TestEnthalpyHXThroughBoiling:
+    """The cold side boils inside the exchanger.
+
+    The per-side enthalpy inversion used to be a Newton solve from the inlet
+    temperature. A boiling side's enthalpy is monotone but its slope jumps by
+    an order of magnitude across the two-phase window, and Newton came back
+    with a cold outlet of 245 K from a 300 K inlet -- a heating duty that
+    cooled the stream -- with ``throw=False`` hiding it. The inversion is
+    now bracketed.
+    """
+
+    def _case(self):
+        from tests.c4_system import C4_P, _c4_eos_and_thermo
+
+        _, thermo = _c4_eos_and_thermo()
+        hot = make_stream({"propane": 0.5, "butane": 0.0906, "isobutane": 1.0094},
+                          T=511.6, P=C4_P)
+        # Liquid at 300 K; bubble ~320 K, dew ~331 K at 8 bar.
+        cold = make_stream({"propane": 0.5, "butane": 1.0, "isobutane": 0.1},
+                           T=300.0, P=C4_P)
+        return thermo, hot, cold
+
+    def test_energy_balance_closes_and_cold_side_heats(self):
+        thermo, hot, cold = self._case()
+        hx = EnthalpyCounterCurrentHX(EnthalpyHXParams(UA=150.0), thermo)
+        hot_out, cold_out, info = hx(hot, cold)
+        H = thermo.stream_enthalpy_flash
+        P = hot["P"]
+        Q = float(info["Q"])
+        dH_hot = float(H(get_flows(hot), hot["T"], P) - H(get_flows(hot), hot_out["T"], P))
+        dH_cold = float(H(get_flows(cold), cold_out["T"], P) - H(get_flows(cold), cold["T"], P))
+        assert dH_hot == pytest.approx(Q, rel=1e-8)
+        assert dH_cold == pytest.approx(Q, rel=1e-8)
+        # Ends inside the two-phase window, and heated, not cooled.
+        assert 320.0 < float(cold_out["T"]) < 331.0
+        # And it is the root of the independent EO residual (#389).
+        assert float(jnp.max(jnp.abs(hx.eo_residuals([hot, cold], [hot_out, cold_out])))) < 1e-3
+
+    def test_inversion_lands_in_the_two_phase_window(self):
+        from difflow.units.heat_exchanger import _invert_enthalpy_T
+
+        thermo, _, cold = self._case()
+        flows = get_flows(cold)
+        H0 = thermo.stream_enthalpy_flash(flows, 300.0, cold["P"])
+        for Q in (5e3, 2e4, 3e4, 5e4):
+            T = _invert_enthalpy_T(thermo, flows, H0 + Q, cold["P"], jnp.array(300.0), None)
+            H = thermo.stream_enthalpy_flash(flows, T, cold["P"])
+            assert float(H - H0) == pytest.approx(Q, rel=1e-8), Q
+            assert float(T) > 300.0
+
+    @pytest.mark.release
+    def test_gradient_matches_finite_difference(self):
+        thermo, hot, cold = self._case()
+
+        def T_cold_out(UA):
+            return EnthalpyCounterCurrentHX(EnthalpyHXParams(UA=UA), thermo)(hot, cold)[1]["T"]
+
+        g = jax.grad(T_cold_out)(jnp.array(150.0))
+        eps = 1e-3
+        fd = (T_cold_out(150.0 + eps) - T_cold_out(150.0 - eps)) / (2 * eps)
+        assert float(g) == pytest.approx(float(fd), rel=1e-4)

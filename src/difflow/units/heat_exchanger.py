@@ -521,22 +521,73 @@ def _enthalpy_scale(thermo, flows, T) -> Array:
     return jnp.maximum(F_total * Cp, EPS_DIVISION)
 
 
+#: Lowest temperature (K) the bracket of :func:`invert_monotone_T` may reach.
+_T_FLOOR = 20.0
+
+
+def invert_monotone_T(H_of_T, H_target, T_guess, scale, n_expand: int = 9):
+    """Find T with ``H_of_T(T) == H_target`` for an increasing ``H_of_T``.
+
+    A stream's enthalpy is monotone in T but only piecewise smooth: across a
+    two-phase window its slope jumps from the sensible heat capacity to the
+    latent heat spread over a few kelvin, an order of magnitude more.
+    Newton from the inlet temperature overshoots that window, is thrown back,
+    and with ``throw=False`` comes back with an arbitrary answer -- a
+    heating duty returned as a temperature *below* the inlet. Monotonicity
+    makes a bracketed solve safe instead: the bracket ``T_guess +- w`` is
+    widened (``w = 10, 20, 40, ... K``, floored at 20 K) until it contains
+    the target, then bisected. ``optimistix.root_find`` still differentiates
+    the converged root by the implicit function theorem.
+
+    Args:
+        H_of_T: ``T -> H`` (W), increasing.
+        H_target: Target enthalpy (W).
+        T_guess: Centre of the initial bracket (K).
+        scale: Heat capacity rate (W/K) dividing the residual, so the
+            tolerance is in K.
+        n_expand: Bracket doublings allowed (9 reaches +-2560 K).
+
+    Returns:
+        The temperature (K).
+    """
+    def resid(T, _):
+        return (H_of_T(T) - H_target) / scale
+
+    def width(k):
+        return 10.0 * 2.0 ** k
+
+    def unbracketed(k):
+        lo = jnp.maximum(T_guess - width(k), _T_FLOOR)
+        hi = T_guess + width(k)
+        return (resid(lo, None) > 0.0) | (resid(hi, None) < 0.0)
+
+    k = jax.lax.while_loop(
+        lambda k: (k < n_expand) & unbracketed(k), lambda k: k + 1, jnp.asarray(0)
+    )
+    k = jax.lax.stop_gradient(k)
+    lower = jnp.maximum(T_guess - width(k), _T_FLOOR)
+    upper = T_guess + width(k)
+    sol = optx.root_find(
+        resid, optx.Bisection(rtol=1e-12, atol=1e-9, flip=False),
+        jnp.clip(T_guess, lower, upper), args=None,
+        options={"lower": jax.lax.stop_gradient(lower),
+                 "upper": jax.lax.stop_gradient(upper)},
+        max_steps=200, throw=False,
+    )
+    return sol.value
+
+
 @partial(jax.jit, static_argnames=("thermo", "phase"))
 def _invert_enthalpy_T(thermo, flows, H_target, P, T_guess, phase):
     """Find T with ``stream_enthalpy_of(...) == H_target``.
 
-    Enthalpy is monotone in T, so a Newton solve on it is well posed; going
-    through optimistix keeps the result differentiable by the implicit
-    function theorem rather than through the iteration.
+    Enthalpy is monotone in T, so the bracketed solve of
+    :func:`invert_monotone_T` is safe even across a phase change.
     """
-    def resid(T, _):
-        return stream_enthalpy_of(thermo, flows, T, P, phase) - H_target
-
-    solver = optx.Newton(rtol=1e-9, atol=1e-4)
-    sol = optx.root_find(
-        resid, solver, T_guess, args=None, max_steps=50, throw=False
+    return invert_monotone_T(
+        lambda T: stream_enthalpy_of(thermo, flows, T, P, phase),
+        H_target, T_guess, _enthalpy_scale(thermo, flows, T_guess),
     )
-    return sol.value
 
 
 @partial(jax.jit, static_argnames=("thermo", "phase", "heating", "damping",
@@ -1162,14 +1213,10 @@ def _enthalpy_hx_core(
     H_cold_in = thermo.stream_enthalpy_flash(cold_flows, T_cold_in, P_cold)
 
     def invert_T(flows, H_target, P, T_guess):
-        def resid(T, _):
-            return thermo.stream_enthalpy_flash(flows, T, P) - H_target
-
-        solver = optx.Newton(rtol=1e-9, atol=1e-4)
-        sol = optx.root_find(
-            resid, solver, T_guess, args=None, max_steps=50, throw=False
+        return invert_monotone_T(
+            lambda T: thermo.stream_enthalpy_flash(flows, T, P),
+            H_target, T_guess, _enthalpy_scale(thermo, flows, T_guess),
         )
-        return sol.value
 
     def outlets_from_Q(Q):
         T_hot_out = invert_T(hot_flows, H_hot_in - Q, P_hot, T_hot_in)
@@ -1213,8 +1260,9 @@ class EnthalpyCounterCurrentHX:
     (e.g. IDAES's) through phase change, where a constant-Cp model cannot.
 
     The coupled system (Q, T_hot_out, T_cold_out) is solved by a damped fixed
-    point on Q, with a 1-D enthalpy inversion per side (enthalpy is monotone in
-    T). All solves are optimistix root finds, so the unit is differentiable
+    point on Q, with a bracketed 1-D enthalpy inversion per side (enthalpy is
+    monotone in T, but its slope jumps across a two-phase window, which a
+    plain Newton inversion does not survive). All solves are optimistix root finds, so the unit is differentiable
     through the converged result via the implicit function theorem.
 
     The thermo must provide ``stream_enthalpy_flash(flows, T, P)``.
@@ -1285,6 +1333,84 @@ class EnthalpyCounterCurrentHX:
             "flow_arrangement": "counter_current_enthalpy",
         }
         return hot_outlet, cold_outlet, info
+
+    def eo_residuals(
+        self,
+        inlets: list[Stream],
+        outlets: list[Stream],
+        UA: Array | float | None = None,
+        **kwargs,
+    ) -> Array:
+        """Compute residuals for the EO solver.
+
+        Residuals, per side (hot first, then cold):
+            F_out_i - F_in_i = 0                                (n_species)
+            energy balance = 0                                  (1)
+            P_out - P_in = 0                                    (1)
+
+        with the energy rows
+
+            hot:  H_h(T_h,in) - H_h(T_h,out) - UA * LMTD = 0
+            cold: H_c(T_c,out) - H_c(T_c,in) - UA * LMTD = 0
+
+        ``LMTD`` is the same approach-safe
+        :func:`log_mean_temperature_difference` of
+        ``(T_h,in - T_c,out, T_h,out - T_c,in)`` that ``__call__`` uses, and the
+        enthalpies are the thermo's ``stream_enthalpy_flash`` at each inlet
+        pressure, so the roots are the sequential unit's. The duty is
+        eliminated rather than carried as an unknown, and the damped fixed
+        point on Q and the per-side enthalpy inversions of ``__call__`` become
+        these two algebraic rows. Each is divided by that side's heat capacity
+        rate, putting it in K alongside the temperature rows of other units.
+
+        Args:
+            inlets: [hot_inlet, cold_inlet]
+            outlets: [hot_outlet, cold_outlet]
+            UA: Optional UA override (W/K), as in ``__call__``.
+
+        Returns:
+            Flat residual array, length 2 * (n_species + 2)
+        """
+        p = self.params
+        if p.UA is None and UA is None:
+            raise ValueError("UA must be specified")
+        UA_val = jnp.asarray(UA if UA is not None else p.UA)
+
+        hot_in, cold_in = inlets
+        hot_out, cold_out = outlets
+        H = self.thermo.stream_enthalpy_flash
+
+        T_hot_in, T_hot_out = hot_in["T"], hot_out["T"]
+        T_cold_in, T_cold_out = cold_in["T"], cold_out["T"]
+        LMTD = log_mean_temperature_difference(
+            T_hot_in - T_cold_out, T_hot_out - T_cold_in
+        )
+        Q = UA_val * LMTD
+
+        hot_flows = get_flows(hot_in)
+        cold_flows = get_flows(cold_in)
+        P_hot = hot_in["P"]
+        P_cold = cold_in["P"]
+        hot_energy = (
+            H(hot_flows, T_hot_in, P_hot) - H(hot_flows, T_hot_out, P_hot) - Q
+        ) / _enthalpy_scale(self.thermo, hot_flows, T_hot_in)
+        cold_energy = (
+            H(cold_flows, T_cold_out, P_cold) - H(cold_flows, T_cold_in, P_cold) - Q
+        ) / _enthalpy_scale(self.thermo, cold_flows, T_cold_in)
+
+        resid = []
+        for inlet, outlet, energy in (
+            (hot_in, hot_out, hot_energy),
+            (cold_in, cold_out, cold_energy),
+        ):
+            in_flows = get_flows(inlet)
+            out_flows = get_flows(outlet)
+            for s in get_species(inlet):
+                resid.append(jnp.atleast_1d(out_flows[s] - in_flows[s]))
+            resid.append(jnp.atleast_1d(energy))
+            resid.append(jnp.atleast_1d(outlet["P"] - inlet["P"]))
+
+        return jnp.concatenate(resid)
 
 
 class CoCurrentHX:

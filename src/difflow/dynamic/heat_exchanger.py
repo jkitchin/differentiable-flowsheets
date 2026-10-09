@@ -34,11 +34,14 @@ from functools import partial
 import jax
 import jax.numpy as jnp
 from jax import Array
-import optimistix as optx
 
 from difflow.streams import Stream, get_flows
 from difflow.dynamic.state import StateSpec, StateVar
-from difflow.units.heat_exchanger import log_mean_temperature_difference
+from difflow.units.heat_exchanger import (
+    _enthalpy_scale,
+    invert_monotone_T,
+    log_mean_temperature_difference,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -53,14 +56,15 @@ from difflow.units.heat_exchanger import log_mean_temperature_difference
 # flowsheet or a session-scoped test fixture provides -- hits the cache.
 # ---------------------------------------------------------------------------
 def _invert_T(thermo, flows, H_target, P, T_guess):
-    """Find T with stream_enthalpy_flash(flows, T, P) = H_target (monotone)."""
+    """Find T with stream_enthalpy_flash(flows, T, P) = H_target (monotone).
 
-    def resid(T, _):
-        return thermo.stream_enthalpy_flash(flows, T, P) - H_target
-
-    solver = optx.Newton(rtol=1e-9, atol=1e-4)
-    sol = optx.root_find(resid, solver, T_guess, args=None, max_steps=50, throw=False)
-    return sol.value
+    Bracketed (see :func:`~difflow.units.heat_exchanger.invert_monotone_T`):
+    a Newton inversion fails when the target lies in a two-phase window.
+    """
+    return invert_monotone_T(
+        lambda T: thermo.stream_enthalpy_flash(flows, T, P),
+        H_target, T_guess, _enthalpy_scale(thermo, flows, T_guess),
+    )
 
 
 @partial(jax.jit, static_argnames=("thermo",))
@@ -93,6 +97,12 @@ class DynamicCounterCurrentHX:
     Inputs (``inputs`` dict): ``"hot"`` and ``"cold"`` inlet streams.
     Outputs: ``{"hot_out": Stream, "cold_out": Stream}``.
 
+    Each outlet reads only its own side's inlet (the duty is a state), which
+    ``output_dependencies`` declares and ``partial_outputs`` implements. A
+    :class:`~difflow.dynamic.flowsheet.DynamicFlowsheet` uses that to
+    evaluate a feed-effluent loop -- cold outlet, then heater and reactor,
+    then the hot side -- inside one right-hand-side call.
+
     The thermo object must provide ``stream_enthalpy_flash(flows, T, P)`` (e.g.
     :class:`difflow.thermo.CubicThermo`), so the energy balance sees the real,
     temperature-dependent heat capacity including any latent heat as a side
@@ -116,6 +126,11 @@ class DynamicCounterCurrentHX:
     parameter_symbols = {"UA": "UA", "tau": r"\tau"}
     parameter_units = {"UA": "W/K", "tau": "s"}
     numerical_method = "First-order ODE in duty Q; per-side 1-D enthalpy inversion (optimistix Newton) each RHS eval."
+
+    #: Output port names, in the order ``outputs()`` returns them.
+    output_ports = ("hot_out", "cold_out")
+    #: Each outlet depends on the duty state and its own side's inlet only.
+    output_dependencies = {"hot_out": ("hot",), "cold_out": ("cold",)}
 
     def __init__(self, UA, thermo, tau: float | Array = 30.0, name: str = "hx"):
         """Initialize the dynamic exchanger.
@@ -196,6 +211,15 @@ class DynamicCounterCurrentHX:
         cold_out = dict(cold)
         cold_out["T"] = T_cold_out
         return {"hot_out": hot_out, "cold_out": cold_out}
+
+    def partial_outputs(self, t: Array, state: Array, inputs: dict[str, Stream], params=None) -> dict[str, Stream]:
+        """The outlets whose own inlet is in ``inputs`` (see ``output_dependencies``)."""
+        out = {}
+        if "hot" in inputs:
+            out["hot_out"] = self.hot_outlet(state, inputs["hot"])
+        if "cold" in inputs:
+            out["cold_out"] = self.cold_outlet(state, inputs["cold"])
+        return out
 
     def initial_state(self, inputs: dict[str, Stream], params=None) -> Array:
         """Cold start: zero duty (no heat transferred yet)."""

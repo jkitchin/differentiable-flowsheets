@@ -532,3 +532,21 @@ class TestAPI:
         with pytest.raises(ValueError, match="S0"):
             tc.IdealGasSet(["benzothiophene"]).gibbs(T)
         assert gas.ELEMENTS["C"].tolist() == [0.0, 6.0, 6.0]
+
+
+class TestCoreDatabaseAgrees:
+    """The core database's HDS species carry this table's Hf and Cp (#391).
+
+    ``difflow.database`` copies them because the core may not import a
+    plugin; this is what keeps the copy from drifting.
+    """
+
+    @pytest.mark.parametrize("key", ["hydrogen", "hydrogen_sulfide", "thiophene"])
+    def test_hf_cp_and_mw_match(self, key):
+        from difflow.database import get_species_data
+
+        d = get_species_data(key)
+        row = tc.species(key)
+        assert d.Hf == row.Hf
+        assert tuple(d.Cp_coeffs) == tuple(row.cp)
+        assert d.MW == pytest.approx(row.MW, abs=0.01)

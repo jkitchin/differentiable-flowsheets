@@ -127,9 +127,9 @@ class TestGetSpeciesInfo:
 
     def test_info_critical_only(self):
         """Test species with only critical properties."""
-        info = get_species_info("hydrogen")
+        info = get_species_info("helium")
         assert "critical" in info
-        # hydrogen may not have ideal thermo data
+        assert "ideal_thermo" not in info
 
     def test_info_not_found(self):
         """Test error for unknown species."""
@@ -440,3 +440,42 @@ class TestC6Isomers:
         eos = PengRobinson({n: get_critical_props(n) for n in names})
         K = eos.K_values_wilson(340.0, 1e5)
         assert all(K[i] > K[i + 1] for i in range(len(names) - 1))
+
+
+class TestHydrotreatingSpecies:
+    """H2, H2S and thiophene are in both databases (#391)."""
+
+    @pytest.mark.parametrize("name", ["hydrogen", "hydrogen_sulfide", "thiophene"])
+    def test_present_in_both(self, name):
+        from difflow.database import get_critical_props, get_species_data
+
+        assert get_species_data(name).name == name
+        assert get_critical_props(name).Tc > 0
+
+    def test_thiophene_critical_properties(self):
+        from difflow.database import get_critical_props
+
+        c = get_critical_props("thiophene")
+        assert c.Tc == pytest.approx(579.4)
+        assert c.Pc == pytest.approx(5.70e6)
+        assert c.omega == pytest.approx(0.200)
+
+    @pytest.mark.parametrize("name, Tb, Hvap", [
+        ("hydrogen", 20.39, 900.0),
+        ("hydrogen_sulfide", 213.6, 18670.0),
+        ("thiophene", 357.15, 31480.0),
+    ])
+    def test_antoine_and_watson_hit_the_normal_boiling_point(self, name, Tb, Hvap):
+        from difflow.database import get_species_data
+        from difflow.thermo import IdealThermo
+
+        thermo = IdealThermo({name: get_species_data(name)})
+        assert float(thermo.Psat(name, Tb)) == pytest.approx(101325.0, rel=0.05)
+        assert float(thermo.Hvap(name, Tb)) == pytest.approx(Hvap, rel=1e-9)
+
+    def test_formation_enthalpies(self):
+        from difflow.database import get_species_data
+
+        assert get_species_data("hydrogen").Hf == 0.0
+        assert get_species_data("hydrogen_sulfide").Hf == -20600.0
+        assert get_species_data("thiophene").Hf == 114900.0
