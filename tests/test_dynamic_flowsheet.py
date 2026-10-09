@@ -734,3 +734,263 @@ class TestExistingUnitIntegration:
 
         result = fs.simulate(t_span=(0.0, 100.0), method="RK4", n_steps=50)
         assert jnp.all(jnp.isfinite(result.y_final))
+
+
+# =============================================================================
+# Port maps, stateless units, algebraic loops, integrator args (#390)
+# =============================================================================
+
+from difflow.dynamic import InstantaneousUnit, integrate
+
+
+class _LagHX:
+    """Toy counter-current exchanger: duty Q relaxes to UA * (T_hot - T_cold).
+
+    Each outlet reads only its own side's inlet, like DynamicCounterCurrentHX,
+    so a loop through it can be ordered.
+    """
+
+    output_ports = ("hot_out", "cold_out")
+    output_dependencies = {"hot_out": ("hot",), "cold_out": ("cold",)}
+
+    def __init__(self, UA=1.0, C=10.0, tau=5.0, name="hx"):
+        self.UA, self.C, self.tau, self.name = UA, C, tau, name
+
+    def state_spec(self):
+        return StateSpec([StateVar("Q", "generic", "W", "duty")])
+
+    def initial_state(self, inputs, params=None):
+        return jnp.zeros(1)
+
+    def _side(self, stream, dT):
+        out = dict(stream)
+        out["T"] = stream["T"] + dT
+        return out
+
+    def partial_outputs(self, t, state, inputs, params=None):
+        out = {}
+        if "hot" in inputs:
+            out["hot_out"] = self._side(inputs["hot"], -state[0] / self.C)
+        if "cold" in inputs:
+            out["cold_out"] = self._side(inputs["cold"], state[0] / self.C)
+        return out
+
+    def outputs(self, t, state, inputs, params=None):
+        return self.partial_outputs(t, state, inputs, params)
+
+    def derivatives(self, t, state, inputs, params=None):
+        target = self.UA * (inputs["hot"]["T"] - inputs["cold"]["T"])
+        return jnp.atleast_1d((target - state[0]) / self.tau)
+
+
+def _duty_limited_heater(T_set, Q_max, C=10.0):
+    """Stateless heater: setpoint, unless that needs more than Q_max."""
+    def fn(inputs, params):
+        s = inputs["inlet"]
+        out = dict(s)
+        out["T"] = jnp.minimum(T_set, s["T"] + Q_max / C)
+        return {"outlet": out}
+    return InstantaneousUnit(fn=fn, name="heater")
+
+
+def _feed_effluent_loop(heater, hx=None):
+    """feed -> HX cold -> heater -> HX hot -> product: a loop through outputs()."""
+    fs = DynamicFlowsheet(species_order=["A", "B"])
+    fs.add_feed("feed", make_stream({"A": 1.0, "B": 0.0}, T=300.0, P=101325.0))
+    fs.add_unit(hx or _LagHX(), inlets={"hot": "hot_feed", "cold": "feed"},
+                outlets={"hot_out": "product", "cold_out": "preheated"})
+    fs.add_unit(heater, inlets={"inlet": "preheated"}, outlets={"outlet": "hot_feed"})
+    return fs
+
+
+class TestPortMaps:
+    def test_two_units_with_the_same_port_names(self, simple_rate_fn, stoich_A_to_B, feed_stream):
+        """Ports are wired to freely named streams, so two CSTRs coexist."""
+        def cstr(name):
+            return DynamicCSTR(volume=1.0, rate_fn=simple_rate_fn, stoich=stoich_A_to_B,
+                               species_order=["A", "B"], rate_params={"k": 0.1}, name=name)
+
+        fs = DynamicFlowsheet(species_order=["A", "B"])
+        fs.add_feed("fresh", feed_stream)
+        fs.add_unit(cstr("r1"), inlets={"inlet": "fresh"}, outlets={"outlet": "mid"})
+        fs.add_unit(cstr("r2"), inlets={"inlet": "mid"}, outlets={"outlet": "out"})
+        streams = fs.outputs(jnp.array(0.0), fs.initial_state())
+        assert {"fresh", "mid", "out"} <= set(streams)
+
+    def test_dict_in_the_positional_slot_is_a_port_map(self, simple_cstr, feed_stream):
+        fs = DynamicFlowsheet(species_order=["A", "B"])
+        fs.add_feed("fresh", feed_stream)
+        fs.add_unit(simple_cstr, {"inlet": "fresh"}, {"outlet": "product"})
+        assert fs.units[0].inlet_names == ["fresh"]
+        assert fs.units[0].outlet_names == ["product"]
+
+    def test_unknown_output_port_is_reported(self, simple_cstr, feed_stream):
+        fs = DynamicFlowsheet(species_order=["A", "B"])
+        fs.add_feed("fresh", feed_stream)
+        fs.add_unit(simple_cstr, inlets={"inlet": "fresh"}, outlets={"nope": "product"})
+        with pytest.raises(ValueError, match="no output 'nope'"):
+            fs.initial_state()
+
+
+class TestStatelessAndLoops:
+    def test_instantaneous_unit_has_no_state(self):
+        fs = _feed_effluent_loop(_duty_limited_heater(T_set=400.0, Q_max=1e6))
+        assert fs.n_states == 1  # only the exchanger's duty
+
+    def test_loop_is_ordered_by_declared_dependencies(self):
+        fs = _feed_effluent_loop(_duty_limited_heater(T_set=400.0, Q_max=1e6))
+        plan = [(e.name, None if p is None else set(p)) for e, p in fs._evaluation_plan()]
+        assert plan == [("hx", {"cold_out"}), ("heater", {"outlet"}), ("hx", {"hot_out"})]
+
+    def test_duty_limited_loop_reaches_its_analytic_steady_state(self):
+        """With the heater at its duty limit, T_h = T_c + Q_max/C and
+        Q = UA (T_h - T_feed) close the loop in closed form."""
+        UA, C, Q_max, T_feed = 1.0, 10.0, 50.0, 300.0
+        fs = _feed_effluent_loop(_duty_limited_heater(T_set=1000.0, Q_max=Q_max),
+                                 _LagHX(UA=UA, C=C))
+        r = fs.simulate((0.0, 200.0), method="RK4", n_steps=400)
+        Q = float(r.y_final[0])
+        # T_hot_in = T_feed + Q/C + Q_max/C, and Q = UA (T_hot_in - T_feed)
+        Q_exact = UA * Q_max / C / (1.0 - UA / C)
+        assert Q == pytest.approx(Q_exact, rel=1e-6)
+        s = fs.outputs(jnp.array(200.0), r.y_final)
+        assert float(s["hot_feed"]["T"]) == pytest.approx(T_feed + (Q_exact + Q_max) / C, rel=1e-6)
+
+    def test_unbreakable_algebraic_loop_raises(self):
+        class Opaque(_LagHX):
+            output_dependencies = None
+
+        fs = _feed_effluent_loop(_duty_limited_heater(T_set=400.0, Q_max=1e6), Opaque())
+        with pytest.raises(ValueError, match="Algebraic loop"):
+            fs.initial_state()
+
+
+class TestIntegratorArgs:
+    def test_integrate_passes_args(self):
+        for method in ("RK4", "Euler", "RK45", "diffrax:tsit5"):
+            steps = {} if method.startswith("diffrax") else {"n_steps": 5000}
+            r = integrate(lambda t, y, a: -a["k"] * y, jnp.array([1.0]), (0.0, 1.0),
+                          method, args={"k": jnp.array(2.0)}, **steps)
+            assert float(r.y_final[0]) == pytest.approx(float(jnp.exp(-2.0)), rel=2e-3), method
+
+    def _flowsheet_with_args_feed(self, simple_cstr):
+        def feed(t, args):
+            return make_stream({"A": args["F"], "B": 0.0}, T=350.0, P=101325.0)
+
+        fs = DynamicFlowsheet(species_order=["A", "B"])
+        fs.add_feed("fresh", feed)
+        fs.add_unit(simple_cstr, inlets={"inlet": "fresh"}, outlets={"outlet": "product"})
+        return fs
+
+    def test_scenarios_share_one_compiled_rhs(self, simple_cstr):
+        """A new disturbance is a new args value, not a recompile."""
+        fs = self._flowsheet_with_args_feed(simple_cstr)
+        y0 = fs.initial_state(args={"F": jnp.array(1.0)})
+        traces = []
+        original = fs.derivatives
+
+        def counting(*a, **k):
+            traces.append(1)
+            return original(*a, **k)
+
+        fs.derivatives = counting
+        finals = []
+        for F in (1.0, 2.0, 3.0):
+            r = fs.simulate((0.0, 50.0), y0=y0, method="diffrax:tsit5",
+                            args={"F": jnp.array(F)})
+            finals.append(float(r.y_final[0]))
+        n_after_first = len(traces)
+        assert len(set(finals)) == 3
+        fs.simulate((0.0, 50.0), y0=y0, method="diffrax:tsit5", args={"F": jnp.array(4.0)})
+        assert len(traces) == n_after_first  # no retrace
+
+    def test_grad_with_respect_to_a_disturbance(self, simple_cstr):
+        fs = self._flowsheet_with_args_feed(simple_cstr)
+        y0 = fs.initial_state(args={"F": jnp.array(1.0)})
+
+        def holdup_A(F):
+            r = fs.simulate((0.0, 20.0), y0=y0, method="diffrax:tsit5", args={"F": F})
+            return r.y_final[0]
+
+        g = jax.grad(holdup_A)(jnp.array(1.0))
+        eps = 1e-4
+        fd = (holdup_A(jnp.array(1.0 + eps)) - holdup_A(jnp.array(1.0 - eps))) / (2 * eps)
+        assert float(g) == pytest.approx(float(fd), rel=1e-4)
+
+    def test_one_argument_feed_still_works(self, simple_cstr):
+        fs = DynamicFlowsheet(species_order=["A", "B"])
+        fs.add_feed("fresh", lambda t, scale=2.0: make_stream({"A": scale, "B": 0.0}, T=350.0, P=101325.0))
+        fs.add_unit(simple_cstr, inlets={"inlet": "fresh"}, outlets={"outlet": "product"})
+        s = fs.outputs(jnp.array(0.0), fs.initial_state())
+        assert float(s["fresh"]["F_A"]) == 2.0
+
+
+@pytest.mark.slow
+@pytest.mark.release
+class TestCubicEOSFeedEffluentFlowsheet:
+    """The #390 acceptance case: a dynamic flowsheet of difflow's own units.
+
+    FEHE (DynamicCounterCurrentHX) + stateless trim heater + adiabatic PR CSTR
+    + stateless trim cooler + DynamicEOSFlash, with freely named streams and a
+    feed read from integrator args. The FEHE -> heater -> reactor -> FEHE
+    cycle is evaluated through the exchanger's declared dependencies. Its
+    long-time limit is the steady-state flowsheet of test_eo_solver (#389).
+    """
+
+    def test_long_time_limit_matches_the_steady_state_flowsheet(self):
+        from difflow import (Cooler, CoolerParams, Flowsheet, Heater, HeaterParams,
+                             Unit)
+        from difflow.dynamic import DynamicCounterCurrentHX, DynamicEOSFlash
+        from difflow.units.flash import EOSFlash, EOSFlashParams
+        from difflow.units.heat_exchanger import (EnthalpyCounterCurrentHX,
+                                                  EnthalpyHXParams)
+        from tests.c4_system import (C4_P, C4_SPECIES, _c4_eos_and_thermo, _c4_stream,
+                                     _isomerization_cstr)
+
+        eos, thermo = _c4_eos_and_thermo()
+
+        def feed(t, args):
+            s = args["scale"]
+            return make_stream({"propane": 0.5 * s, "butane": 1.0 * s,
+                                "isobutane": 0.1 * s}, T=340.0, P=C4_P)
+
+        fs = DynamicFlowsheet(species_order=C4_SPECIES)
+        fs.add_feed("naphtha", feed)
+        fs.add_unit(DynamicCounterCurrentHX(150.0, thermo, tau=30.0, name="fehe"),
+                    inlets={"hot": "effluent", "cold": "naphtha"},
+                    outlets={"hot_out": "eff_cooled", "cold_out": "preheated"})
+        fs.add_unit(InstantaneousUnit(Heater(HeaterParams(T_out=460.0), thermo), name="trim"),
+                    inlets={"inlet": "preheated"}, outlets={"outlet": "rx_in"})
+        fs.add_unit(_isomerization_cstr(), name="reactor",
+                    inlets={"inlet": "rx_in"}, outlets={"outlet": "effluent"})
+        fs.add_unit(InstantaneousUnit(Cooler(CoolerParams(T_out=320.0), thermo), name="cooler"),
+                    inlets={"inlet": "eff_cooled"}, outlets={"outlet": "cooled"})
+        fs.add_unit(DynamicEOSFlash(eos, C4_SPECIES, P=C4_P, name="sep"),
+                    inlets={"feed": "cooled"}, outlets={"liquid": "liq", "vapor": "vap"})
+
+        args = {"scale": jnp.array(1.0)}
+        r = fs.simulate((0.0, 3000.0), method="diffrax:kvaerno5", args=args,
+                        rtol=1e-8, atol=1e-8)
+        assert bool(r.info.success)
+        assert float(jnp.max(jnp.abs(
+            fs.derivatives(jnp.array(3000.0), r.y_final, None, args)))) < 1e-8
+        dyn = fs.outputs(jnp.array(3000.0), r.y_final, None, args)
+
+        ss = Flowsheet(species_order=C4_SPECIES)
+        ss.add_feed("naphtha", _c4_stream(340.0))
+        ss.add_unit(Unit("fehe", EnthalpyCounterCurrentHX(EnthalpyHXParams(UA=150.0), thermo),
+                         ["effluent", "naphtha"], ["eff_cooled", "preheated"]))
+        ss.add_unit(Unit("trim", Heater(HeaterParams(T_out=460.0), thermo),
+                         ["preheated"], ["rx_in"]))
+        ss.add_unit(Unit("reactor", _isomerization_cstr(), ["rx_in"], ["effluent"]))
+        ss.add_unit(Unit("cooler", Cooler(CoolerParams(T_out=320.0), thermo),
+                         ["eff_cooled"], ["cooled"]))
+        ss.add_unit(Unit("sep", EOSFlash(EOSFlashParams(species_order=C4_SPECIES), eos),
+                         ["cooled"], ["liq", "vap"]))
+        ss.add_recycle("effluent", "effluent")
+        steady = ss.solve_eo(tol=1e-8)
+
+        for name in ["preheated", "effluent", "eff_cooled", "liq", "vap"]:
+            for key, val in steady[name].items():
+                assert float(dyn[name][key]) == pytest.approx(float(val), rel=1e-6, abs=1e-7), \
+                    f"{name}[{key}]"

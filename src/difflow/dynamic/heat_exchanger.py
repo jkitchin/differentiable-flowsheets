@@ -93,6 +93,12 @@ class DynamicCounterCurrentHX:
     Inputs (``inputs`` dict): ``"hot"`` and ``"cold"`` inlet streams.
     Outputs: ``{"hot_out": Stream, "cold_out": Stream}``.
 
+    Each outlet reads only its own side's inlet (the duty is a state), which
+    ``output_dependencies`` declares and ``partial_outputs`` implements. A
+    :class:`~difflow.dynamic.flowsheet.DynamicFlowsheet` uses that to
+    evaluate a feed-effluent loop -- cold outlet, then heater and reactor,
+    then the hot side -- inside one right-hand-side call.
+
     The thermo object must provide ``stream_enthalpy_flash(flows, T, P)`` (e.g.
     :class:`difflow.thermo.CubicThermo`), so the energy balance sees the real,
     temperature-dependent heat capacity including any latent heat as a side
@@ -116,6 +122,11 @@ class DynamicCounterCurrentHX:
     parameter_symbols = {"UA": "UA", "tau": r"\tau"}
     parameter_units = {"UA": "W/K", "tau": "s"}
     numerical_method = "First-order ODE in duty Q; per-side 1-D enthalpy inversion (optimistix Newton) each RHS eval."
+
+    #: Output port names, in the order ``outputs()`` returns them.
+    output_ports = ("hot_out", "cold_out")
+    #: Each outlet depends on the duty state and its own side's inlet only.
+    output_dependencies = {"hot_out": ("hot",), "cold_out": ("cold",)}
 
     def __init__(self, UA, thermo, tau: float | Array = 30.0, name: str = "hx"):
         """Initialize the dynamic exchanger.
@@ -196,6 +207,15 @@ class DynamicCounterCurrentHX:
         cold_out = dict(cold)
         cold_out["T"] = T_cold_out
         return {"hot_out": hot_out, "cold_out": cold_out}
+
+    def partial_outputs(self, t: Array, state: Array, inputs: dict[str, Stream], params=None) -> dict[str, Stream]:
+        """The outlets whose own inlet is in ``inputs`` (see ``output_dependencies``)."""
+        out = {}
+        if "hot" in inputs:
+            out["hot_out"] = self.hot_outlet(state, inputs["hot"])
+        if "cold" in inputs:
+            out["cold_out"] = self.cold_outlet(state, inputs["cold"])
+        return out
 
     def initial_state(self, inputs: dict[str, Stream], params=None) -> Array:
         """Cold start: zero duty (no heat transferred yet)."""

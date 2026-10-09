@@ -519,6 +519,7 @@ def integrate(
     y0: Array,
     t_span: tuple[float, float],
     method: Method | str = "RK4",
+    args: Any = None,
     **kwargs,
 ) -> IntegrationResult:
     """Unified interface for ODE integration.
@@ -538,6 +539,13 @@ def integrate(
               - "diffrax:dopri5" - Dormand-Prince 5(4)
               - "diffrax:tsit5" - Tsitouras 5(4) (recommended)
               - "diffrax:kvaerno5" - Implicit for stiff systems
+        args: Optional pytree. When given, ``f`` is called as
+            ``f(t, y, args)``. With a diffrax method it is diffrax's own
+            ``args``: traced rather than closed over, so a fixed ``f`` compiles
+            once and every new ``args`` value (a disturbance, a parameter)
+            reuses that compilation, and ``jax.grad`` with respect to it does
+            not retrace. The built-in RK4/RK45/Euler loops pass it through to
+            ``f`` but are not themselves cached across calls.
         **kwargs: Method-specific arguments
 
     Returns:
@@ -552,6 +560,29 @@ def integrate(
         # Using diffrax with specific solver
         >>> result = integrate(f, y0, t_span, "diffrax:dopri5", rtol=1e-6)
     """
+    # Handle diffrax methods first: they take args natively.
+    if isinstance(method, str) and (method == "diffrax" or method.startswith("diffrax:")):
+        from difflow.dynamic.diffrax_backend import integrate_diffrax, HAS_DIFFRAX
+
+        if not HAS_DIFFRAX:
+            raise ImportError(
+                "diffrax is required for this method. Install with: pip install diffrax"
+            )
+
+        # Parse solver name from method string
+        if ":" in method:
+            solver = method.split(":", 1)[1]
+        else:
+            solver = "tsit5"  # Default diffrax solver
+
+        return integrate_diffrax(f, y0, t_span, solver=solver, args=args, **kwargs)
+
+    if args is not None:
+        f_args = f
+
+        def f(t, y):
+            return f_args(t, y, args)
+
     # Handle auto method selection
     if method == "auto":
         stiffness = estimate_stiffness(f, jnp.asarray(y0), t_span[0])
@@ -579,23 +610,6 @@ def integrate(
             message=f"auto -> {method} (stiffness_ratio={stiffness['stiffness_ratio']:.1f})",
         )
         return result
-
-    # Handle diffrax methods
-    if isinstance(method, str) and (method == "diffrax" or method.startswith("diffrax:")):
-        from difflow.dynamic.diffrax_backend import integrate_diffrax, HAS_DIFFRAX
-
-        if not HAS_DIFFRAX:
-            raise ImportError(
-                "diffrax is required for this method. Install with: pip install diffrax"
-            )
-
-        # Parse solver name from method string
-        if ":" in method:
-            solver = method.split(":", 1)[1]
-        else:
-            solver = "tsit5"  # Default diffrax solver
-
-        return integrate_diffrax(f, y0, t_span, solver=solver, **kwargs)
 
     bounds = kwargs.pop("bounds", None)
 

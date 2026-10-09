@@ -1,5 +1,5 @@
 {
- "n_sections": 1091,
+ "n_sections": 1093,
  "sections": [
   {
    "anchor": "agents-the-difflow-mcp-server",
@@ -680,6 +680,22 @@
    "source": "dynamic-modeling.md",
    "targets": [],
    "text": "```python\n# Define feed as function of time\ndef feed_schedule(t):\n    \"\"\"Feed rate doubles after t=500.\"\"\"\n    base = make_stream({\"A\": 1.0, \"B\": 0.0}, T=350.0, P=101325.0)\n    scale = jnp.where(t > 500, 2.0, 1.0)  # traced t: use jnp.where, not `if`\n    return {k: (v * scale if k.startswith(\"F_\") else v) for k, v in base.items()}\n\nfs.add_feed(\"feed\", feed_schedule)  # Pass function instead of stream\n```"
+  },
+  {
+   "anchor": "disturbances-as-integrator-args",
+   "heading": "Disturbances as Integrator Args",
+   "path": "Dynamic Modeling > Dynamic Flowsheets > Disturbances as Integrator Args",
+   "source": "dynamic-modeling.md",
+   "targets": [],
+   "text": "A feed written `(t, args)` reads the `args` passed to `simulate`. Those args,\nand `params`, go to the integrator as its own `args` rather than being closed\nover, so with a diffrax method one compiled right-hand side serves every\nscenario, and `jax.grad` with respect to a disturbance does not retrace. Make\nthe values you vary JAX arrays (a Python float is static).\n\n```python\ndef feed_step(t, args):\n    scale = 1.0 + args[\"step\"] * (t > args[\"t_step\"])\n    return make_stream({\"A\": scale, \"B\": 0.0}, T=350.0, P=101325.0)\n\nfs_args = DynamicFlowsheet(species_order=[\"A\", \"B\"])\nfs_args.add_feed(\"feed\", feed_step)\nfs_args.add_unit(cstr, inlets={\"inlet\": \"feed\"}, outlets={\"outlet\": \"reactor_out\"})\nfor step in (0.1, 0.2, 0.5):  # compiles once\n    result = fs_args.simulate((0.0, 1000.0), method=\"diffrax:tsit5\",\n                              args={\"step\": jnp.array(step), \"t_step\": jnp.array(500.0)})\n```\n\n`integrate(f, y0, t_span, method, args=...)` does the same for a bare\n`f(t, y, args)`."
+  },
+  {
+   "anchor": "ports-stateless-units-and-feed-effluent-loops",
+   "heading": "Ports, Stateless Units and Feed-Effluent Loops",
+   "path": "Dynamic Modeling > Dynamic Flowsheets > Ports, Stateless Units and Feed-Effluent Loops",
+   "source": "dynamic-modeling.md",
+   "targets": [],
+   "text": "Units read fixed port names (`\"inlet\"` for a CSTR, `\"hot\"`/`\"cold\"` for\n`DynamicCounterCurrentHX`, `\"feed\"` for `DynamicEOSFlash`). Wire them to\nfreely named streams with `inlets=`/`outlets=` maps of `{port: stream}`.\nA unit with no holdup worth a state (a trim heater or cooler at a setpoint, a\nmixer) goes in as an `InstantaneousUnit`, which wraps a steady-state unit\noperation, or a function `fn(inputs, params) -> {port: Stream}`, with zero\nstates.\n\n<!-- doc-test: skip: needs a CubicThermo, an EOS and an adiabatic CSTR built elsewhere -->\n```python\nfrom difflow import Heater, HeaterParams, Cooler, CoolerParams\nfrom difflow.dynamic import (DynamicCounterCurrentHX, DynamicEOSFlash,\n                             InstantaneousUnit)\n\nfs = DynamicFlowsheet(species_order=species)\nfs.add_feed(\"naphtha\", feed)\nfs.add_unit(DynamicCounterCurrentHX(150.0, thermo, name=\"fehe\"),\n            inlets={\"hot\": \"effluent\", \"cold\": \"naphtha\"},\n            outlets={\"hot_out\": \"eff_cooled\", \"cold_out\": \"preheated\"})\nfs.add_unit(InstantaneousUnit(Heater(HeaterParams(T_out=460.0), thermo), name=\"trim\"),\n            inlets={\"inlet\": \"preheated\"}, outlets={\"outlet\": \"rx_in\"})\nfs.add_unit(reactor, inlets={\"inlet\": \"rx_in\"}, outlets={\"outlet\": \"effluent\"})\nfs.add_unit(InstantaneousUnit(Cooler(CoolerParams(T_out=320.0), thermo), name=\"cooler\"),\n            inlets={\"inlet\": \"eff_cooled\"}, outlets={\"outlet\": \"cooled\"})\nfs.add_unit(DynamicEOSFlash(eos, species, P=8e5, name=\"sep\"),\n            inlets={\"feed\": \"cooled\"}, outlets={\"liquid\": \"liq\", \"vapor\": \"vap\"})\n```\n\nThe exchanger's cold outlet feeds the heater, the heater the reactor, and the\nreactor the exchanger's hot inlet: a cycle through the units' outputs within\none right-hand-side call. It is well posed because each exchanger outlet reads\nits duty state and its own side's inlet only. A unit declares that with\n`output_dependencies = {\"cold_out\": (\"cold\",), ...}` and implements\n`partial_outputs`, and the flowsheet orders the evaluation from stream\navailability (cold side, heater, reactor, then hot side) instead of insertion\norder. A cycle that no declared dependency breaks raises `ValueError`\n(\"Algebraic loop ...\") naming the units and streams."
   },
   {
    "anchor": "manual-derivative-access",
