@@ -133,6 +133,74 @@ class TestCapitalCosts:
         assert econ.MATERIAL_FACTORS["titanium"] > econ.MATERIAL_FACTORS["stainless_316"]
 
 
+class TestPublishedCorrelations:
+    """The cost tables reproduce the books they cite (#420)."""
+
+    TABLES = ["REACTOR_COSTS", "VESSEL_COSTS", "HEAT_EXCHANGER_COSTS",
+              "COLUMN_COSTS", "PUMP_COSTS", "COMPRESSOR_COSTS", "SEPARATOR_COSTS"]
+    YEAR = {"Turton": 2001, "Towler": 2010, "Seider": 2013}
+
+    def entries(self):
+        from difflow.economics import capital
+        for t in self.TABLES:
+            for k, p in getattr(capital, t).items():
+                yield f"{t}[{k}]", p
+
+    def test_every_entry_cites_a_source_on_its_own_basis_year(self):
+        for name, p in self.entries():
+            book = p.source.split()[0]
+            assert book in self.YEAR, name
+            assert p.base_year == self.YEAR[book], name
+            assert p.form == ("log_quadratic" if book == "Turton" else "power_law"), name
+
+    def test_turton_floating_head_at_100_m2(self):
+        # Turton 5e Table A.1: K = 4.8306, -0.8509, 0.3187 -> 10**4.4036 in 2001
+        from difflow.economics.indices import escalate_cost
+        expected = 10 ** (4.8306 - 0.8509 * 2 + 0.3187 * 4)
+        assert expected == pytest.approx(25328, abs=1)
+        got = econ.heat_exchanger_cost(100.0, "shell_tube_floating", target_year=2001)
+        assert float(got) == pytest.approx(expected, rel=1e-12)
+        later = econ.heat_exchanger_cost(100.0, "shell_tube_floating", target_year=2023)
+        assert float(later) == pytest.approx(float(escalate_cost(expected, 2001, 2023)))
+
+    def test_towler_centrifugal_compressor(self):
+        expected = 580000 + 20000 * 1000.0 ** 0.6
+        got = econ.compressor_cost(1000.0, "centrifugal", target_year=2010)
+        assert float(got) == pytest.approx(expected, rel=1e-12)
+
+    def test_costs_rise_and_are_differentiable_over_each_range(self):
+        for name, p in self.entries():
+            sizes = jnp.geomspace(p.S_min, p.S_max, 7)
+            sizes = sizes[jax.vmap(p.exponent)(sizes) > 0]
+            c = jax.vmap(lambda s: econ.equipment_cost(s, p))(sizes)
+            assert bool(jnp.all(jnp.diff(c) > 0)), name
+            g = jax.vmap(jax.grad(lambda s: econ.equipment_cost(s, p)))(sizes)
+            assert bool(jnp.all(jnp.isfinite(g))), name
+
+    def test_the_floating_head_minimum_is_the_books_and_is_flagged(self):
+        # K2 < 0: Turton's curve bottoms out at 10**(-K2 / 2 K3) = 21.6 m2,
+        # inside its 10-1000 m2 range. Kept as published; validation flags it.
+        from difflow.economics.capital import HEAT_EXCHANGER_COSTS, validate_cost_params
+        p = HEAT_EXCHANGER_COSTS["shell_tube_floating"]
+        s_min_cost = 10 ** (-p.b / (2 * p.n))
+        assert s_min_cost == pytest.approx(21.6, abs=0.05)
+        assert float(p.exponent(s_min_cost)) == pytest.approx(0.0, abs=1e-12)
+        report = validate_cost_params(p, 15.0)
+        assert report["size_in_range"] and not report["exponent_valid"]
+        assert report["exponent"] < 0
+
+    def test_local_exponent_is_dlnC_dlnS(self):
+        for name, p in self.entries():
+            s = (p.S_min * p.S_max) ** 0.5
+            e = jax.grad(lambda x: jnp.log(p.base_cost(jnp.exp(x))))(jnp.log(s))
+            assert float(p.exponent(s)) == pytest.approx(float(e), rel=1e-9), name
+
+    def test_log_quadratic_function_is_differentiable_in_its_coefficients(self):
+        from jax.test_util import check_grads
+        check_grads(econ.equipment_cost_log_quadratic,
+                    (50.0, 4.3247, -0.3030, 0.1634, 1.5), order=1, modes=["rev"])
+
+
 class TestUtilityCosts:
     """Tests for utility costs module."""
 

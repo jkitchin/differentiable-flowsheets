@@ -58,69 +58,103 @@ difflow/economics/
 
 ### Equipment Cost Correlations
 
-Equipment costs follow power-law correlations:
+Each table entry is a `CostParams` in one of two published forms. Turton et al.
+(Table A.1, 2001 dollars) use
+
+$$\log_{10} C = K_1 + K_2 \log_{10} S + K_3 (\log_{10} S)^2$$
+
+and Towler & Sinnott (Table 7.2, 2010 dollars) and Seider et al. (2013 dollars)
+use
 
 $$C = a + b \cdot S^n$$
 
-Where:
-- $C$: Equipment cost ($)
-- $S$: Size parameter (characteristic dimension)
-- $a, b, n$: Correlation parameters
+Here $C$ is the purchased cost of carbon-steel, near-ambient-pressure equipment
+in the entry's `base_year` dollars, and $S$ is its size. `equipment_cost`
+evaluates whichever form the entry names and escalates by CEPCI. Both forms are
+differentiable in $S$.
 
 ```python
 from typing import NamedTuple
 from difflow.economics.capital import CostParams
 
 class CostParams(NamedTuple):
-    a: float       # Fixed cost ($)
-    b: float       # Scaling coefficient ($)
-    n: float       # Scaling exponent
+    a: float       # Fixed cost ($), or K1
+    b: float       # Scaling coefficient, or K2
+    n: float       # Scaling exponent, or K3
     S_min: float   # Minimum valid size
     S_max: float   # Maximum valid size
     S_units: str   # Size units
     base_year: int # Cost basis year
+    form: str = "power_law"   # or "log_quadratic"
+    source: str = ""          # citation
 ```
+
+`CostParams.base_cost(S)` gives the cost in base-year dollars.
+`CostParams.exponent(S)` gives the local scaling exponent $d\ln C/d\ln S$.
 
 ### Equipment Cost Databases
 
-#### Reactors
+The coefficients below are generated from `difflow.economics.capital`. Some
+entries borrow the nearest published row, and their `source` says so. For
+example, `pfr_tube` uses Turton's jacketed non-agitated reactor and
+`centrifugal_multistage` uses the single centrifugal-pump row.
+`packing_structured` is Seider's *installed* cost.
+
+Turton's floating-head exchanger has $K_2 < 0$. Its cost therefore has a minimum
+at $S = 10^{-K_2/2K_3} \approx 21.6$ m², inside the 10–1000 m² range, and
+falls as area grows below that point. The coefficients are kept as published.
+An area optimizer working below about 22 m² will move toward the minimum, and
+`validate_cost_params` flags this region through its negative local exponent.
+
+| Table | Entry | Form | a/K1, b/K2, n/K3 | Valid size | Base year | Source |
+|---|---|---|---|---|---|---|
+| `REACTOR_COSTS` | `cstr_jacketed` | log_quadratic | 4.1052, 0.532, -0.0005 | 0.1–35 m³ | 2001 | Turton et al. 5e Table A.1: jacketed agitated reactor |
+| `REACTOR_COSTS` | `cstr_coil` | log_quadratic | 4.1052, 0.532, -0.0005 | 0.1–35 m³ | 2001 | Turton et al. 5e Table A.1: jacketed agitated reactor (no separate coil row) |
+| `REACTOR_COSTS` | `pfr_tube` | log_quadratic | 3.3496, 0.7235, 0.0025 | 5–45 m³ | 2001 | Turton et al. 5e Table A.1: jacketed non-agitated reactor (proxy for a tubular reactor) |
+| `REACTOR_COSTS` | `batch_reactor` | log_quadratic | 4.5587, 0.2986, 0.002 | 1–15 m³ | 2001 | Turton et al. 5e Table A.1: autoclave |
+| `VESSEL_COSTS` | `pressure_vessel_vertical` | log_quadratic | 3.4974, 0.4485, 0.1074 | 0.3–520 m³ | 2001 | Turton et al. 5e Table A.1: vertical process vessel |
+| `VESSEL_COSTS` | `pressure_vessel_horizontal` | log_quadratic | 3.5565, 0.3776, 0.0905 | 0.1–628 m³ | 2001 | Turton et al. 5e Table A.1: horizontal process vessel |
+| `VESSEL_COSTS` | `storage_tank_atmospheric` | log_quadratic | 4.8509, -0.3973, 0.1445 | 90–30000 m³ | 2001 | Turton et al. 5e Table A.1: API fixed-roof tank |
+| `VESSEL_COSTS` | `flash_drum` | log_quadratic | 3.4974, 0.4485, 0.1074 | 0.3–520 m³ | 2001 | Turton et al. 5e Table A.1: vertical process vessel |
+| `HEAT_EXCHANGER_COSTS` | `shell_tube_floating` | log_quadratic | 4.8306, -0.8509, 0.3187 | 10–1000 m² | 2001 | Turton et al. 5e Table A.1: floating head |
+| `HEAT_EXCHANGER_COSTS` | `shell_tube_fixed` | log_quadratic | 4.3247, -0.303, 0.1634 | 10–1000 m² | 2001 | Turton et al. 5e Table A.1: fixed tube sheet |
+| `HEAT_EXCHANGER_COSTS` | `shell_tube_utube` | log_quadratic | 4.1884, -0.2503, 0.1974 | 10–1000 m² | 2001 | Turton et al. 5e Table A.1: U-tube |
+| `HEAT_EXCHANGER_COSTS` | `double_pipe` | log_quadratic | 3.3444, 0.2745, -0.0472 | 1–10 m² | 2001 | Turton et al. 5e Table A.1: double pipe |
+| `HEAT_EXCHANGER_COSTS` | `plate_frame` | log_quadratic | 4.6656, -0.1557, 0.1547 | 10–1000 m² | 2001 | Turton et al. 5e Table A.1: flat plate |
+| `HEAT_EXCHANGER_COSTS` | `air_cooler` | log_quadratic | 4.0336, 0.2341, 0.0497 | 10–10000 m² | 2001 | Turton et al. 5e Table A.1: air cooler |
+| `COLUMN_COSTS` | `tray_column_shell` | log_quadratic | 3.4974, 0.4485, 0.1074 | 0.3–520 m³ | 2001 | Turton et al. 5e Table A.1: tower (tray and packed) |
+| `COLUMN_COSTS` | `packed_column_shell` | log_quadratic | 3.4974, 0.4485, 0.1074 | 0.3–520 m³ | 2001 | Turton et al. 5e Table A.1: tower (tray and packed) |
+| `COLUMN_COSTS` | `sieve_tray` | log_quadratic | 2.9949, 0.4465, 0.3961 | 0.07–12.3 m² (per tray) | 2001 | Turton et al. 5e Table A.1: sieve trays |
+| `COLUMN_COSTS` | `valve_tray` | log_quadratic | 3.3322, 0.4838, 0.3434 | 0.7–10.5 m² (per tray) | 2001 | Turton et al. 5e Table A.1: valve trays |
+| `COLUMN_COSTS` | `packing_random` | log_quadratic | 2.4493, 0.9744, 0.0055 | 0.03–628 m³ | 2001 | Turton et al. 5e Table A.1: loose packing |
+| `COLUMN_COSTS` | `packing_structured` | power_law | 0, 10065, 1 | 0.1–100 m³ | 2013 | Seider et al. 4e Sec. 16.5: corrugated-sheet stainless, $285/ft³ INSTALLED, very approximate |
+| `PUMP_COSTS` | `centrifugal_single` | log_quadratic | 3.3892, 0.0536, 0.1538 | 1–300 kW | 2001 | Turton et al. 5e Table A.1: centrifugal pump |
+| `PUMP_COSTS` | `centrifugal_multistage` | log_quadratic | 3.3892, 0.0536, 0.1538 | 1–300 kW | 2001 | Turton et al. 5e Table A.1: centrifugal pump (one row covers all centrifugal pumps) |
+| `PUMP_COSTS` | `reciprocating` | log_quadratic | 3.8696, 0.3161, 0.122 | 0.1–200 kW | 2001 | Turton et al. 5e Table A.1: reciprocating pump |
+| `PUMP_COSTS` | `gear` | log_quadratic | 3.4771, 0.135, 0.1438 | 1–100 kW | 2001 | Turton et al. 5e Table A.1: positive displacement pump |
+| `COMPRESSOR_COSTS` | `centrifugal` | power_law | 580000, 20000, 0.6 | 75–30000 kW | 2010 | Towler & Sinnott 2e Table 7.2: centrifugal compressor, driver power |
+| `COMPRESSOR_COSTS` | `reciprocating` | power_law | 260000, 2700, 0.75 | 93–16800 kW | 2010 | Towler & Sinnott 2e Table 7.2: reciprocating compressor, driver power |
+| `COMPRESSOR_COSTS` | `screw` | log_quadratic | 5.0355, -1.8002, 0.8253 | 18–950 kW | 2001 | Turton et al. 5e Table A.1: rotary compressor, fluid power |
+| `SEPARATOR_COSTS` | `mixer_settler` | log_quadratic | 4.7116, 0.4479, 0.0004 | 0.04–60 m³ | 2001 | Turton et al. 5e Table A.1: mixer/settler |
+| `SEPARATOR_COSTS` | `centrifuge_disk` | power_law | 57000, 480000, 0.7 | 0.26–0.49 m (bowl diameter) | 2010 | Towler & Sinnott 2e Table 7.2: high-speed disk centrifuge |
+| `SEPARATOR_COSTS` | `filter_rotary` | log_quadratic | 4.8123, 0.2858, 0.042 | 0.9–300 m² | 2001 | Turton et al. 5e Table A.1: disc and drum filter |
+| `SEPARATOR_COSTS` | `extraction_column` | log_quadratic | 3.4974, 0.4485, 0.1074 | 0.3–520 m³ | 2001 | Turton et al. 5e Table A.1: tower shell (column internals not included) |
+
+Outside the valid size range a correlation is an extrapolation.
+`validate_cost_params(params, size)` flags that case. It also flags a local
+exponent outside 0.3–1.2.
 
 ```python
-from difflow.economics.capital import REACTOR_COSTS, CostParams
-
-# Entries have the form CostParams(a, b, n, S_min, S_max, S_units, base_year)
-REACTOR_COSTS = {
-    'cstr_jacketed': CostParams(17400, 79.0, 0.85, 0.1, 100.0, 'm³', 2019),
-    'cstr_coil': CostParams(14000, 68.0, 0.85, 0.1, 100.0, 'm³', 2019),
-    'pfr_tube': CostParams(3000, 1200.0, 0.65, 0.01, 10.0, 'm³', 2019),
-    'batch_reactor': CostParams(25000, 95.0, 0.85, 0.5, 50.0, 'm³', 2019),
-}
-```
-
-**Size Parameter**: Reactor volume (m³)
-
-**Example**:
-```python
-from difflow.economics.capital import reactor_cost
+from difflow.economics.capital import reactor_cost, heat_exchanger_cost
 
 cost = reactor_cost(volume=10.0, reactor_type='cstr_jacketed')
-# Returns ~$24,000 for 10 m³ jacketed CSTR (escalated to the default target year)
+# ~$90,000 for a 10 m³ jacketed agitated reactor (escalated to the default target year)
+
+cost = heat_exchanger_cost(area=50.0, hx_type='shell_tube_floating')
+# ~$42,000 for a 50 m² floating-head exchanger
 ```
 
-#### Pressure Vessels
-
-```python
-from difflow.economics.capital import CostParams, vessel_cost
-
-VESSEL_COSTS = {
-    'pressure_vessel_vertical': CostParams(8000, 380.0, 0.72, 0.1, 200.0, 'm³', 2019),
-    'pressure_vessel_horizontal': CostParams(7000, 350.0, 0.72, 0.1, 200.0, 'm³', 2019),
-    'storage_tank_atmospheric': CostParams(5000, 180.0, 0.65, 1.0, 10000.0, 'm³', 2019),
-    'flash_drum': CostParams(6500, 320.0, 0.70, 0.1, 50.0, 'm³', 2019),
-}
-```
-
-**Pressure Adjustment**:
+**Pressure Adjustment** (vessels):
 
 $$F_P = \frac{(P - 1)(D + 2t)}{2SE - 1.2(P-1)} + 1$$
 
@@ -132,55 +166,18 @@ Where:
 - $E$: Weld efficiency
 
 ```python
-from difflow.economics.capital import pressure_factor_vessel
+from difflow.economics.capital import pressure_factor_vessel, vessel_cost
 
-F_p = pressure_factor_vessel(pressure=20.0, diameter=2.0)  # ~1.15 for 20 barg
+F_p = pressure_factor_vessel(pressure=20.0, diameter=2.0)
 base_cost = vessel_cost(volume=5.0, vessel_type='pressure_vessel_vertical')
 cost_adj = base_cost * F_p
 ```
 
-#### Heat Exchangers
+Column shells and their internals are costed separately and added:
 
 ```python
-HEAT_EXCHANGER_COSTS = {
-    'shell_tube_floating': CostParams(11000, 340.0, 0.60, 10.0, 1000.0, 'm²', 2019),
-    'shell_tube_fixed': CostParams(8500, 280.0, 0.60, 10.0, 1000.0, 'm²', 2019),
-    'shell_tube_utube': CostParams(9000, 300.0, 0.60, 10.0, 1000.0, 'm²', 2019),
-    'double_pipe': CostParams(1500, 120.0, 0.65, 1.0, 50.0, 'm²', 2019),
-    'plate_frame': CostParams(3000, 80.0, 0.70, 5.0, 500.0, 'm²', 2019),
-    'air_cooler': CostParams(15000, 180.0, 0.65, 20.0, 2000.0, 'm²', 2019),
-}
-```
-
-**Size Parameter**: Heat transfer area (m²)
-
-```python
-from difflow.economics.capital import heat_exchanger_cost
-
-cost = heat_exchanger_cost(area=50.0, hx_type='shell_tube_floating')
-```
-
-#### Distillation Columns
-
-```python
-COLUMN_COSTS = {
-    'tray_column_shell': CostParams(15000, 68.0, 0.85, 0.5, 100.0, 'm³', 2019),
-    'packed_column_shell': CostParams(12000, 58.0, 0.85, 0.5, 100.0, 'm³', 2019),
-    'sieve_tray': CostParams(200, 450.0, 0.60, 0.5, 5.0, 'm² (per tray)', 2019),
-    'valve_tray': CostParams(300, 500.0, 0.60, 0.5, 5.0, 'm² (per tray)', 2019),
-    'packing_random': CostParams(0, 800.0, 1.0, 0.1, 100.0, 'm³', 2019),
-    'packing_structured': CostParams(0, 3000.0, 1.0, 0.1, 100.0, 'm³', 2019),
-}
-```
-
-**Size Parameter**: Column shell volume (m³). Trays (sieve/valve, sized by
-tray area in m²) and packing (sized by packed volume in m³) are costed
-separately and added to the shell cost.
-
-```python
-from difflow.economics.capital import column_cost
-
 import math
+from difflow.economics.capital import column_cost
 
 # Column shell + internals: 2 m diameter x 20 m tall, 30 sieve trays
 D, H, n_trays = 2.0, 20.0, 30
@@ -189,25 +186,6 @@ tray_area = math.pi * D**2 / 4
 cost = (column_cost(volume=shell_volume, column_type='tray_column_shell')
         + n_trays * column_cost(volume=tray_area, column_type='sieve_tray'))
 ```
-
-#### Pumps and Compressors
-
-```python
-PUMP_COSTS = {
-    'centrifugal_single': CostParams(3500, 320.0, 0.55, 0.5, 100.0, 'kW', 2019),
-    'centrifugal_multistage': CostParams(6000, 410.0, 0.55, 1.0, 500.0, 'kW', 2019),
-    'reciprocating': CostParams(8000, 680.0, 0.50, 1.0, 200.0, 'kW', 2019),
-    'gear': CostParams(2500, 250.0, 0.60, 0.1, 50.0, 'kW', 2019),
-}
-
-COMPRESSOR_COSTS = {
-    'centrifugal': CostParams(50000, 1800.0, 0.65, 100.0, 10000.0, 'kW', 2019),
-    'reciprocating': CostParams(25000, 2200.0, 0.60, 10.0, 1000.0, 'kW', 2019),
-    'screw': CostParams(15000, 1400.0, 0.65, 50.0, 3000.0, 'kW', 2019),
-}
-```
-
-**Size Parameter**: Power (kW)
 
 ```python
 from difflow.economics.capital import pump_cost, compressor_cost
@@ -1235,16 +1213,16 @@ for i in range(100):
 
 ## Summary Tables
 
-### Typical Equipment Costs (2019 basis)
+### Typical Equipment Costs (purchased, default target year)
 
 | Equipment | Size | Approximate Cost |
 |-----------|------|------------------|
-| CSTR (jacketed) | 10 m³ | $90,000 |
-| PFR | 5 m³ | $55,000 |
-| Shell-tube HX | 50 m² | $60,000 |
-| Distillation column | 2 m dia × 20 m | $250,000 |
-| Centrifugal pump | 10 kW | $15,000 |
-| Centrifugal compressor | 500 kW | $400,000 |
+| CSTR (jacketed, agitated) | 10 m³ | $90,000 |
+| PFR (jacketed vessel proxy) | 5 m³ | $15,000 |
+| Shell-tube HX (floating head) | 50 m² | $42,000 |
+| Distillation column, 30 sieve trays | 2 m dia × 20 m | $220,000 |
+| Centrifugal pump | 10 kW | $8,000 |
+| Centrifugal compressor | 500 kW driver | $2,100,000 |
 
 ### Utility Cost Summary (2019 basis)
 

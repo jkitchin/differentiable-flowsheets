@@ -52,6 +52,10 @@ _MAX_TOLERANCE_TIGHTENINGS = 3
 _TOLERANCE_WARNING_AMPLIFICATION = 10.0
 
 
+class _UndetectedTracer(Exception):
+    """Raised by an accelerated tear loop whose residual turned out traced."""
+
+
 class ConvergenceWarning(UserWarning):
     """A recycle solve returned without meeting its tolerance.
 
@@ -838,16 +842,27 @@ class Flowsheet:
                 streams = self._solve_with_recycle_damped(
                     tear_streams, tol_step, max_iter, damping
                 )
-            elif acceleration == "wegstein":
-                streams = self._solve_with_wegstein(
-                    tear_streams, tol_step, max_iter,
-                    clip_negative_flows=clip_negative_flows,
-                )
             else:
-                streams = self._solve_with_anderson(
-                    tear_streams, tol_step, max_iter, anderson_depth,
-                    clip_negative_flows=clip_negative_flows,
-                )
+                try:
+                    if acceleration == "wegstein":
+                        streams = self._solve_with_wegstein(
+                            tear_streams, tol_step, max_iter,
+                            clip_negative_flows=clip_negative_flows,
+                        )
+                    else:
+                        streams = self._solve_with_anderson(
+                            tear_streams, tol_step, max_iter, anderson_depth,
+                            clip_negative_flows=clip_negative_flows,
+                        )
+                except _UndetectedTracer:
+                    # Same fallback as the _is_traced branch above, for a
+                    # tracer that only showed up once the units ran.
+                    acceleration = "none"
+                    self.last_solve_method = "fixed_point (traced)"
+                    self.last_solve_history = None
+                    streams = self._solve_with_recycle_damped(
+                        tear_streams, tol_step, max_iter, damping
+                    )
 
             # The tolerance reported is the one the caller asked for, not
             # the internal step test a retry is running against.
@@ -1082,6 +1097,8 @@ class Flowsheet:
         if _has_tracer(self.feeds):
             return True
         for unit in self.units:
+            if _has_tracer([v for v in unit.params.values() if not callable(v)]):
+                return True
             params = getattr(unit.operation, "params", None)
             if params is None or not is_dataclass(params):
                 continue
@@ -1536,11 +1553,12 @@ class Flowsheet:
             if res is not None and self.last_solve_history is not None:
                 self.last_solve_history.append(res)
             if res is None:
-                # A traced residual cannot be compared, so the loop simply
-                # runs to max_iter.  There is no verdict to report either:
-                # None says "unavailable", which is what keeps the
-                # non-convergence warning quiet under jax.grad / jit.
-                self.last_solve_converged = None
+                # A tracer reached the loop that _is_traced did not see (a
+                # closure, say).  Unrolling this loop under jax.grad
+                # differentiates the acceleration, whose least-squares
+                # step is 0/0 once the iterates agree: a silent NaN.
+                # solve() catches this and reruns on the fixed-point path.
+                raise _UndetectedTracer
             elif res < tol:
                 self.last_solve_iterations = iteration
                 self.last_solve_converged = True
@@ -1634,8 +1652,7 @@ class Flowsheet:
             if res is not None and self.last_solve_history is not None:
                 self.last_solve_history.append(res)
             if res is None:
-                # See _solve_with_wegstein: no concrete residual, no verdict.
-                self.last_solve_converged = None
+                raise _UndetectedTracer       # see _solve_with_wegstein
             elif res < tol:
                 self.last_solve_iterations = iteration
                 self.last_solve_converged = True

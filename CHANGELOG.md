@@ -25,6 +25,27 @@ All notable changes to difflow are recorded here. The format follows
   F = Q/(UA LMTD_cc). `EnthalpyCounterCurrentHX` solves Q by bisection on
   [0, Q_max] (the damped fixed point diverged at high NTU; `damping` is
   now unused).
+- **Equipment cost tables re-sourced; capital costs change (#420).** Every
+  entry in `difflow.economics.capital` carried a "2019" label and `a + b S^n`
+  coefficients with no traceable source. Below 100 m2 they were 2-2.5x below
+  Turton's heat-exchanger curve, and 6.6x below it at 1000 m2. Each entry now
+  holds the published correlation on its own basis year and names its
+  `source`:
+  - Turton 5e Table A.1, `log10 C = K1 + K2 log10 S + K3 (log10 S)^2`, 2001;
+  - Towler & Sinnott Table 7.2, `a + b S^n`, 2010;
+  - Seider, 2013.
+
+  `CostParams` gains `form`, `source`, `base_cost()` and `exponent()`.
+  `validate_cost_params` checks the local exponent, and there is a new
+  differentiable `equipment_cost_log_quadratic`, which `tea()` writes for
+  Turton entries. Size bases changed:
+  - compressors are sized on driver power (Towler) or fluid power (screw,
+    Turton);
+  - `centrifuge_disk` is sized on bowl diameter in m;
+  - `packing_structured` is Seider's installed cost.
+
+  `cooling_water_cost` documents that `delta_T` does not affect a per-GJ
+  price.
 
 - **Core database heat capacities moved; results change (#393).** Every
   species now carries an explicit ideal-gas Cp cubic (`SpeciesData
@@ -196,6 +217,15 @@ All notable changes to difflow are recorded here. The format follows
   time-varying disturbances, read by feeds and units alike.
 
 ### Fixed
+
+- **NaN gradient through an accelerated recycle whose parameter hid in a
+  closure.** `Flowsheet.solve` routes a traced solve to the optimistix fixed
+  point, but `_is_traced` checked only the feeds. A tracer captured in a
+  unit's closure, or passed through `Unit(params=...)`, therefore went to the
+  Python Anderson/Wegstein loop. There the unrolled step is 0/0 under
+  `jax.grad`, and the gradient came back NaN. `_is_traced` now also checks
+  unit params. A loop that still finds a traced residual falls back to the
+  traced fixed point instead of returning NaN.
 
 - A thermo or EOS object built inside `jax.jit` no longer gets a value key
   (#395): its derived arrays are tracers, and a later equal-valued eager

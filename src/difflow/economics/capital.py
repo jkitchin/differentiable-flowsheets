@@ -1,19 +1,32 @@
 """Capital cost estimation for process equipment.
 
-This module provides differentiable cost correlations for common chemical
-process equipment. All functions are JAX-compatible for gradient-based
-optimization.
+This module provides differentiable purchased-cost correlations for common
+chemical process equipment. All functions are JAX-compatible for
+gradient-based optimization.
 
-Cost correlations follow the general form:
-    C = a + b * S^n
+Each table entry is a :class:`CostParams` in one of two published forms:
 
-Where:
-    C = purchased equipment cost ($)
-    S = size/capacity parameter
-    a, b, n = correlation constants
+- ``"log_quadratic"`` (Turton et al.)::
 
-Reference: Turton et al., "Analysis, Synthesis, and Design of Chemical Processes"
-           Seider et al., "Product and Process Design Principles"
+      log10 C = K1 + K2 log10 S + K3 (log10 S)**2     (a, b, n hold K1, K2, K3)
+
+- ``"power_law"`` (Towler & Sinnott; Seider et al.)::
+
+      C = a + b S**n
+
+``C`` is the purchased cost in ``base_year`` dollars, escalated by CEPCI.
+These are carbon-steel, near-ambient-pressure costs. Use
+:func:`bare_module_cost` and the pressure factors for anything else.
+
+References:
+    Turton, Shaeiwitz, Bhattacharyya and Whiting, *Analysis, Synthesis, and
+    Design of Chemical Processes*, 5th ed. (2018), Table A.1 (2001 basis).
+    Towler and Sinnott, *Chemical Engineering Design*, 2nd ed. (2012),
+    Table 7.2 (January 2010 US Gulf Coast basis).
+    Seider et al., *Product and Process Design Principles*, 4th ed. (2016),
+    Section 16.5 (2013 basis).
+The coefficients were checked against openpytea's transcription of these
+tables (``cost_correlations.csv``, openpytea.readthedocs.io).
 """
 
 import jax.numpy as jnp
@@ -29,161 +42,213 @@ from .indices import escalate_cost, DEFAULT_BASE_YEAR, DEFAULT_CURRENT_YEAR
 # =============================================================================
 
 class CostParams(NamedTuple):
-    """Parameters for power-law cost correlation: C = a + b * S^n"""
-    a: float  # Fixed cost component ($)
-    b: float  # Scaling coefficient
-    n: float  # Scaling exponent (typically 0.5-0.8)
+    """One purchased-cost correlation.
+
+    For ``form="power_law"``, ``C = a + b * S**n``. For
+    ``form="log_quadratic"``, ``log10 C = a + b log10 S + n (log10 S)**2``,
+    where a, b and n are Turton's K1, K2 and K3. ``C`` is in ``base_year``
+    dollars.
+    """
+    a: float  # Fixed cost ($), or K1
+    b: float  # Scaling coefficient, or K2
+    n: float  # Scaling exponent, or K3
     S_min: float  # Minimum size for correlation validity
     S_max: float  # Maximum size for correlation validity
     S_units: str  # Units of size parameter
     base_year: int  # Year of cost basis
+    form: str = "power_law"  # "power_law" | "log_quadratic"
+    source: str = ""  # Citation for the coefficients
+
+    def base_cost(self, size: Array) -> Array:
+        """Purchased cost in ``base_year`` dollars (differentiable in size)."""
+        if self.form == "log_quadratic":
+            return equipment_cost_log_quadratic(size, self.a, self.b, self.n)
+        return self.a + self.b * jnp.power(size, self.n)
+
+    def exponent(self, size: Array) -> Array:
+        """Local scaling exponent d ln C / d ln S at ``size``."""
+        if self.form == "log_quadratic":
+            return self.b + 2.0 * self.n * jnp.log10(size)
+        return self.b * self.n * jnp.power(size, self.n) / self.base_cost(size)
 
 
-# Equipment cost parameters (2019 basis from Turton et al.)
-# Format: (a, b, n, S_min, S_max, units, year)
+TURTON = "Turton et al. 5e Table A.1"
+TOWLER = "Towler & Sinnott 2e Table 7.2"
+SEIDER = "Seider et al. 4e Sec. 16.5"
 
 REACTOR_COSTS = {
     "cstr_jacketed": CostParams(
-        a=17400, b=79.0, n=0.85,
-        S_min=0.1, S_max=100.0, S_units="m³", base_year=2019
+        a=4.1052, b=0.532, n=-0.0005, S_min=0.1, S_max=35.0, S_units="m³",
+        base_year=2001, form="log_quadratic",
+        source=TURTON + ': jacketed agitated reactor',
     ),
     "cstr_coil": CostParams(
-        a=14000, b=68.0, n=0.85,
-        S_min=0.1, S_max=100.0, S_units="m³", base_year=2019
+        a=4.1052, b=0.532, n=-0.0005, S_min=0.1, S_max=35.0, S_units="m³",
+        base_year=2001, form="log_quadratic",
+        source=TURTON + ': jacketed agitated reactor (no separate coil row)',
     ),
     "pfr_tube": CostParams(
-        a=3000, b=1200.0, n=0.65,
-        S_min=0.01, S_max=10.0, S_units="m³", base_year=2019
+        a=3.3496, b=0.7235, n=0.0025, S_min=5.0, S_max=45.0, S_units="m³",
+        base_year=2001, form="log_quadratic",
+        source=TURTON + ': jacketed non-agitated reactor (proxy for a tubular reactor)',
     ),
     "batch_reactor": CostParams(
-        a=25000, b=95.0, n=0.85,
-        S_min=0.5, S_max=50.0, S_units="m³", base_year=2019
+        a=4.5587, b=0.2986, n=0.002, S_min=1.0, S_max=15.0, S_units="m³",
+        base_year=2001, form="log_quadratic",
+        source=TURTON + ': autoclave',
     ),
 }
 
 VESSEL_COSTS = {
     "pressure_vessel_vertical": CostParams(
-        a=8000, b=380.0, n=0.72,
-        S_min=0.1, S_max=200.0, S_units="m³", base_year=2019
+        a=3.4974, b=0.4485, n=0.1074, S_min=0.3, S_max=520.0, S_units="m³",
+        base_year=2001, form="log_quadratic",
+        source=TURTON + ': vertical process vessel',
     ),
     "pressure_vessel_horizontal": CostParams(
-        a=7000, b=350.0, n=0.72,
-        S_min=0.1, S_max=200.0, S_units="m³", base_year=2019
+        a=3.5565, b=0.3776, n=0.0905, S_min=0.1, S_max=628.0, S_units="m³",
+        base_year=2001, form="log_quadratic",
+        source=TURTON + ': horizontal process vessel',
     ),
     "storage_tank_atmospheric": CostParams(
-        a=5000, b=180.0, n=0.65,
-        S_min=1.0, S_max=10000.0, S_units="m³", base_year=2019
+        a=4.8509, b=-0.3973, n=0.1445, S_min=90.0, S_max=30000.0, S_units="m³",
+        base_year=2001, form="log_quadratic",
+        source=TURTON + ': API fixed-roof tank',
     ),
     "flash_drum": CostParams(
-        a=6500, b=320.0, n=0.70,
-        S_min=0.1, S_max=50.0, S_units="m³", base_year=2019
+        a=3.4974, b=0.4485, n=0.1074, S_min=0.3, S_max=520.0, S_units="m³",
+        base_year=2001, form="log_quadratic",
+        source=TURTON + ': vertical process vessel',
     ),
 }
 
 HEAT_EXCHANGER_COSTS = {
     "shell_tube_floating": CostParams(
-        a=11000, b=340.0, n=0.60,
-        S_min=10.0, S_max=1000.0, S_units="m²", base_year=2019
+        a=4.8306, b=-0.8509, n=0.3187, S_min=10.0, S_max=1000.0, S_units="m²",
+        base_year=2001, form="log_quadratic",
+        source=TURTON + ': floating head',
     ),
     "shell_tube_fixed": CostParams(
-        a=8500, b=280.0, n=0.60,
-        S_min=10.0, S_max=1000.0, S_units="m²", base_year=2019
+        a=4.3247, b=-0.303, n=0.1634, S_min=10.0, S_max=1000.0, S_units="m²",
+        base_year=2001, form="log_quadratic",
+        source=TURTON + ': fixed tube sheet',
     ),
     "shell_tube_utube": CostParams(
-        a=9000, b=300.0, n=0.60,
-        S_min=10.0, S_max=1000.0, S_units="m²", base_year=2019
+        a=4.1884, b=-0.2503, n=0.1974, S_min=10.0, S_max=1000.0, S_units="m²",
+        base_year=2001, form="log_quadratic",
+        source=TURTON + ': U-tube',
     ),
     "double_pipe": CostParams(
-        a=1500, b=120.0, n=0.65,
-        S_min=1.0, S_max=50.0, S_units="m²", base_year=2019
+        a=3.3444, b=0.2745, n=-0.0472, S_min=1.0, S_max=10.0, S_units="m²",
+        base_year=2001, form="log_quadratic",
+        source=TURTON + ': double pipe',
     ),
     "plate_frame": CostParams(
-        a=3000, b=80.0, n=0.70,
-        S_min=5.0, S_max=500.0, S_units="m²", base_year=2019
+        a=4.6656, b=-0.1557, n=0.1547, S_min=10.0, S_max=1000.0, S_units="m²",
+        base_year=2001, form="log_quadratic",
+        source=TURTON + ': flat plate',
     ),
     "air_cooler": CostParams(
-        a=15000, b=180.0, n=0.65,
-        S_min=20.0, S_max=2000.0, S_units="m²", base_year=2019
+        a=4.0336, b=0.2341, n=0.0497, S_min=10.0, S_max=10000.0, S_units="m²",
+        base_year=2001, form="log_quadratic",
+        source=TURTON + ': air cooler',
     ),
 }
 
 COLUMN_COSTS = {
     "tray_column_shell": CostParams(
-        a=15000, b=68.0, n=0.85,
-        S_min=0.5, S_max=100.0, S_units="m³", base_year=2019
+        a=3.4974, b=0.4485, n=0.1074, S_min=0.3, S_max=520.0, S_units="m³",
+        base_year=2001, form="log_quadratic",
+        source=TURTON + ': tower (tray and packed)',
     ),
     "packed_column_shell": CostParams(
-        a=12000, b=58.0, n=0.85,
-        S_min=0.5, S_max=100.0, S_units="m³", base_year=2019
+        a=3.4974, b=0.4485, n=0.1074, S_min=0.3, S_max=520.0, S_units="m³",
+        base_year=2001, form="log_quadratic",
+        source=TURTON + ': tower (tray and packed)',
     ),
     "sieve_tray": CostParams(
-        a=200, b=450.0, n=0.60,
-        S_min=0.5, S_max=5.0, S_units="m² (per tray)", base_year=2019
+        a=2.9949, b=0.4465, n=0.3961, S_min=0.07, S_max=12.3, S_units="m² (per tray)",
+        base_year=2001, form="log_quadratic",
+        source=TURTON + ': sieve trays',
     ),
     "valve_tray": CostParams(
-        a=300, b=500.0, n=0.60,
-        S_min=0.5, S_max=5.0, S_units="m² (per tray)", base_year=2019
+        a=3.3322, b=0.4838, n=0.3434, S_min=0.7, S_max=10.5, S_units="m² (per tray)",
+        base_year=2001, form="log_quadratic",
+        source=TURTON + ': valve trays',
     ),
     "packing_random": CostParams(
-        a=0, b=800.0, n=1.0,
-        S_min=0.1, S_max=100.0, S_units="m³", base_year=2019
+        a=2.4493, b=0.9744, n=0.0055, S_min=0.03, S_max=628.0, S_units="m³",
+        base_year=2001, form="log_quadratic",
+        source=TURTON + ': loose packing',
     ),
     "packing_structured": CostParams(
-        a=0, b=3000.0, n=1.0,
-        S_min=0.1, S_max=100.0, S_units="m³", base_year=2019
+        a=0.0, b=10065.0, n=1.0, S_min=0.1, S_max=100.0, S_units="m³",
+        base_year=2013,
+        source=SEIDER + ': corrugated-sheet stainless, $285/ft³ INSTALLED, very approximate',
     ),
 }
 
 PUMP_COSTS = {
     "centrifugal_single": CostParams(
-        a=3500, b=320.0, n=0.55,
-        S_min=0.5, S_max=100.0, S_units="kW", base_year=2019
+        a=3.3892, b=0.0536, n=0.1538, S_min=1.0, S_max=300.0, S_units="kW",
+        base_year=2001, form="log_quadratic",
+        source=TURTON + ': centrifugal pump',
     ),
     "centrifugal_multistage": CostParams(
-        a=6000, b=410.0, n=0.55,
-        S_min=1.0, S_max=500.0, S_units="kW", base_year=2019
+        a=3.3892, b=0.0536, n=0.1538, S_min=1.0, S_max=300.0, S_units="kW",
+        base_year=2001, form="log_quadratic",
+        source=TURTON + ': centrifugal pump (one row covers all centrifugal pumps)',
     ),
     "reciprocating": CostParams(
-        a=8000, b=680.0, n=0.50,
-        S_min=1.0, S_max=200.0, S_units="kW", base_year=2019
+        a=3.8696, b=0.3161, n=0.122, S_min=0.1, S_max=200.0, S_units="kW",
+        base_year=2001, form="log_quadratic",
+        source=TURTON + ': reciprocating pump',
     ),
     "gear": CostParams(
-        a=2500, b=250.0, n=0.60,
-        S_min=0.1, S_max=50.0, S_units="kW", base_year=2019
+        a=3.4771, b=0.135, n=0.1438, S_min=1.0, S_max=100.0, S_units="kW",
+        base_year=2001, form="log_quadratic",
+        source=TURTON + ': positive displacement pump',
     ),
 }
 
 COMPRESSOR_COSTS = {
     "centrifugal": CostParams(
-        a=50000, b=1800.0, n=0.65,
-        S_min=100.0, S_max=10000.0, S_units="kW", base_year=2019
+        a=580000.0, b=20000.0, n=0.6, S_min=75.0, S_max=30000.0, S_units="kW",
+        base_year=2010,
+        source=TOWLER + ': centrifugal compressor, driver power',
     ),
     "reciprocating": CostParams(
-        a=25000, b=2200.0, n=0.60,
-        S_min=10.0, S_max=1000.0, S_units="kW", base_year=2019
+        a=260000.0, b=2700.0, n=0.75, S_min=93.0, S_max=16800.0, S_units="kW",
+        base_year=2010,
+        source=TOWLER + ': reciprocating compressor, driver power',
     ),
     "screw": CostParams(
-        a=15000, b=1400.0, n=0.65,
-        S_min=50.0, S_max=3000.0, S_units="kW", base_year=2019
+        a=5.0355, b=-1.8002, n=0.8253, S_min=18.0, S_max=950.0, S_units="kW",
+        base_year=2001, form="log_quadratic",
+        source=TURTON + ': rotary compressor, fluid power',
     ),
 }
 
 SEPARATOR_COSTS = {
     "mixer_settler": CostParams(
-        a=8000, b=250.0, n=0.75,
-        S_min=0.1, S_max=50.0, S_units="m³", base_year=2019
+        a=4.7116, b=0.4479, n=0.0004, S_min=0.04, S_max=60.0, S_units="m³",
+        base_year=2001, form="log_quadratic",
+        source=TURTON + ': mixer/settler',
     ),
     "centrifuge_disk": CostParams(
-        a=30000, b=15000.0, n=0.45,
-        S_min=0.01, S_max=5.0, S_units="m³/s", base_year=2019
+        a=57000.0, b=480000.0, n=0.7, S_min=0.26, S_max=0.49, S_units="m (bowl diameter)",
+        base_year=2010,
+        source=TOWLER + ': high-speed disk centrifuge',
     ),
     "filter_rotary": CostParams(
-        a=20000, b=5000.0, n=0.60,
-        S_min=1.0, S_max=100.0, S_units="m²", base_year=2019
+        a=4.8123, b=0.2858, n=0.042, S_min=0.9, S_max=300.0, S_units="m²",
+        base_year=2001, form="log_quadratic",
+        source=TURTON + ': disc and drum filter',
     ),
     "extraction_column": CostParams(
-        a=18000, b=72.0, n=0.85,
-        S_min=0.5, S_max=100.0, S_units="m³", base_year=2019
+        a=3.4974, b=0.4485, n=0.1074, S_min=0.3, S_max=520.0, S_units="m³",
+        base_year=2001, form="log_quadratic",
+        source=TURTON + ': tower shell (column internals not included)',
     ),
 }
 
@@ -204,16 +269,22 @@ def validate_cost_params(params: CostParams, size: float | Array) -> dict:
 
     Returns:
         Dictionary with validation flags:
-        - 'exponent_valid': Whether n is in typical [0.3, 1.2] range
+        - 'exponent_valid': Whether the scaling exponent is in the typical
+          [0.3, 1.2] range
         - 'size_in_range': Whether size is within S_min to S_max
-        - 'exponent': The scaling exponent
+        - 'exponent': The scaling exponent: ``n`` for a power law, the local
+          exponent ``K2 + 2 K3 log10 S`` for a log-quadratic correlation
         - 'size_range': (S_min, S_max)
     """
     size_val = float(size) if hasattr(size, '__float__') else size
+    if params.form == "log_quadratic":
+        exponent = float(params.exponent(size_val))
+    else:
+        exponent = params.n
     return {
-        'exponent_valid': VALID_EXPONENT_RANGE[0] <= params.n <= VALID_EXPONENT_RANGE[1],
+        'exponent_valid': VALID_EXPONENT_RANGE[0] <= exponent <= VALID_EXPONENT_RANGE[1],
         'size_in_range': params.S_min <= size_val <= params.S_max,
-        'exponent': params.n,
+        'exponent': exponent,
         'size_range': (params.S_min, params.S_max),
     }
 
@@ -223,9 +294,10 @@ def equipment_cost(
     params: CostParams,
     target_year: int = DEFAULT_CURRENT_YEAR,
 ) -> Array:
-    """Calculate purchased equipment cost using power-law correlation.
+    """Calculate purchased equipment cost from a cost correlation.
 
-    C = (a + b * S^n) * (CEPCI_target / CEPCI_base)
+    C = C_base(S) * (CEPCI_target / CEPCI_base), where C_base is the
+    power-law or log-quadratic form named by ``params.form``.
 
     Args:
         size: Equipment size/capacity parameter
@@ -235,8 +307,7 @@ def equipment_cost(
     Returns:
         Purchased equipment cost in target year dollars
     """
-    base_cost = params.a + params.b * jnp.power(size, params.n)
-    return escalate_cost(base_cost, params.base_year, target_year)
+    return escalate_cost(params.base_cost(size), params.base_year, target_year)
 
 
 def equipment_cost_continuous(
@@ -261,6 +332,35 @@ def equipment_cost_continuous(
         Equipment cost
     """
     return (a + b * jnp.power(size, n)) * cepci_ratio
+
+
+def equipment_cost_log_quadratic(
+    size: Array,
+    K1: Array,
+    K2: Array,
+    K3: Array,
+    cepci_ratio: Array = jnp.array(1.0),
+) -> Array:
+    """Turton's purchased-cost form, differentiable in every argument.
+
+    log10 C = K1 + K2 log10 S + K3 (log10 S)**2
+
+    Args:
+        size: Equipment size/capacity
+        K1, K2, K3: Coefficients (Turton et al., Table A.1)
+        cepci_ratio: Cost escalation ratio (CEPCI_target/CEPCI_base)
+
+    Returns:
+        Equipment cost
+
+    Example:
+        Floating-head exchanger, 100 m2, in 2001 dollars:
+
+        >>> round(float(equipment_cost_log_quadratic(100.0, 4.8306, -0.8509, 0.3187)))
+        25328
+    """
+    x = jnp.log10(size)
+    return jnp.power(10.0, K1 + K2 * x + K3 * x * x) * cepci_ratio
 
 
 # =============================================================================
@@ -338,7 +438,7 @@ def pump_cost(
     """Calculate pump purchased equipment cost.
 
     Args:
-        power: Pump power (kW)
+        power: Pump shaft power (kW)
         pump_type: Type of pump (see PUMP_COSTS)
         target_year: Cost basis year
 
@@ -359,7 +459,8 @@ def compressor_cost(
     """Calculate compressor purchased equipment cost.
 
     Args:
-        power: Compressor power (kW)
+        power: Compressor power (kW): driver power for centrifugal and
+            reciprocating, fluid power for screw (see each entry's ``source``)
         compressor_type: Type of compressor (see COMPRESSOR_COSTS)
         target_year: Cost basis year
 
@@ -380,7 +481,8 @@ def column_cost(
     """Calculate column shell purchased equipment cost.
 
     Args:
-        volume: Column shell volume (m³)
+        volume: Column shell volume (m³); tray area per tray (m²) for
+            ``sieve_tray``/``valve_tray``
         column_type: Type of column (see COLUMN_COSTS)
         target_year: Cost basis year
 
@@ -401,7 +503,9 @@ def separator_cost(
     """Calculate separator purchased equipment cost.
 
     Args:
-        size: Size parameter (m³ for settlers, m²/s for centrifuges, etc.)
+        size: Size parameter: m³ for a mixer-settler or extraction column,
+            bowl diameter in m for a disk centrifuge, filter area in m² for a
+            rotary filter (see ``S_units`` on each entry)
         separator_type: Type of separator (see SEPARATOR_COSTS)
         target_year: Cost basis year
 

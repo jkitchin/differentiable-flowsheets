@@ -337,7 +337,8 @@ def tea(session, target_year: int | None = None, lang_factor: float = 4.74,
     sizes it); every other unit is listed as uncosted rather than given a
     size nobody chose. With ``define`` the result is also written as named
     quantities, ``purchased_equipment`` and ``capex``, built from
-    ``econ.equipment_cost_continuous`` over the sizing parameters, so an
+    ``econ.equipment_cost_continuous`` (or ``econ.equipment_cost_log_quadratic``
+    for a Turton correlation) over the sizing parameters, so an
     objective can trade capital against the process with exact gradients.
     """
     from difflow.catalog import describe_operation
@@ -368,15 +369,18 @@ def tea(session, target_year: int | None = None, lang_factor: float = 4.74,
             size = (unit.params or {}).get(basis["size"])
         size = float(size)
         ratio = float(get_cepci(year) / get_cepci(cp.base_year))
-        cost = (cp.a + cp.b * size ** cp.n) * ratio
+        cost = float(cp.base_cost(size)) * ratio
         costed.append({
             "unit": unit.name, "operation": operation, "correlation":
             f"{basis['table']}[{basis['type']!r}]", "size": size,
             "size_parameter": basis["size"], "size_units": cp.S_units,
             "purchased_cost": cost, "in_range": cp.S_min <= size <= cp.S_max,
             "valid_range": [cp.S_min, cp.S_max], "base_year": cp.base_year,
+            "source": cp.source,
         })
-        terms.append(f"econ.equipment_cost_continuous({unit.name}.{basis['size']}, "
+        fn = ("equipment_cost_log_quadratic" if cp.form == "log_quadratic"
+              else "equipment_cost_continuous")
+        terms.append(f"econ.{fn}({unit.name}.{basis['size']}, "
                      f"{cp.a!r}, {cp.b!r}, {cp.n!r}, {ratio!r})")
     purchased = sum(c["purchased_cost"] for c in costed)
     multiplier = lang_factor * (1.0 + working_capital_fraction)
@@ -389,7 +393,8 @@ def tea(session, target_year: int | None = None, lang_factor: float = 4.74,
         "warnings": [f"{c['unit']}: size {c['size']:g} {c['size_units']} is outside the "
                      f"correlation's range {c['valid_range']}" for c in costed
                      if not c["in_range"]],
-        "note": "purchased cost by a power law (Turton et al.) escalated by CEPCI; "
+        "note": "purchased cost from each unit's published correlation (see 'source') "
+                "escalated by CEPCI; "
                 "total capital = purchased x Lang factor x (1 + working capital). "
                 "Uncosted units declare no cost basis and are not in the total.",
     }
