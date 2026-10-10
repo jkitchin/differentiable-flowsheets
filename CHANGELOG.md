@@ -326,6 +326,10 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Fixed
 
+- `CubicThermo` treats a species absent from a stream as zero flow, as
+  `IdealThermo` already did. A condenser whose vapour listed only n-pentane
+  against a water-only coolant raised a bare `KeyError: 'water'` from
+  `stream_enthalpy_flash`; a species the EOS does not model still raises.
 - **NaN gradient through an accelerated recycle whose parameter hid in a
   closure.** `Flowsheet.solve` routes a traced solve to the optimistix fixed
   point, but `_is_traced` checked only the feeds. A tracer captured in a

@@ -721,6 +721,23 @@ class TestEnthalpyCounterCurrentHX:
         assert float(g) > 0.0
 
 
+class TestCubicThermoAbsentSpecies:
+    """A stream need not list every EOS species (a condenser's vapour has no
+    coolant); it used to raise a bare KeyError from stream_enthalpy_flash."""
+
+    def test_absent_species_is_zero_flow(self):
+        thermo = _propane_butane_cubic_thermo()
+        for f in (thermo.stream_enthalpy_flash, thermo.stream_entropy_flash):
+            assert float(f({"propane": 1.0}, 350.0, 3e5)) == pytest.approx(
+                float(f({"propane": 1.0, "butane": 0.0}, 350.0, 3e5)), rel=1e-12)
+        assert float(thermo.stream_enthalpy({"butane": 2.0}, 400.0, 3e5)) == pytest.approx(
+            float(thermo.stream_enthalpy({"propane": 0.0, "butane": 2.0}, 400.0, 3e5)), rel=1e-12)
+
+    def test_unknown_species_raises(self):
+        with pytest.raises(KeyError):
+            _propane_butane_cubic_thermo().stream_enthalpy_flash({"benzene": 1.0}, 350.0, 3e5)
+
+
 class TestDefaultCpWarning:
     """The constant-Cp fallback announces itself instead of returning a
     confident wrong duty (issue #226)."""

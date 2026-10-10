@@ -549,6 +549,19 @@ class CubicThermo(ValueKeyed):
     def species_order(self) -> list[str]:
         return self.ideal.species_order
 
+    def _flow_vector(self, flows: dict[str, Array | float]) -> Array:
+        """Molar flows in EOS species order; an absent species has zero flow.
+
+        Matches :class:`IdealThermo`, which sums over the stream's own keys, so
+        a condenser's vapour need not list the coolant. A species the EOS does
+        not model is an error, not a silent zero.
+        """
+        order = self.eos.species_order
+        unknown = sorted(set(flows) - set(order))
+        if unknown:
+            raise KeyError(f"species {unknown} not in the EOS species {list(order)}")
+        return jnp.array([jnp.asarray(flows.get(s, 0.0), dtype=jnp.float64) for s in order])
+
     def Cp_mix(
         self,
         mole_fracs: dict[str, Array | float],
@@ -721,7 +734,7 @@ class CubicThermo(ValueKeyed):
             return H_ideal
 
         order = self.eos.species_order
-        F = jnp.array([flows[s] for s in order])
+        F = self._flow_vector(flows)
         F_total = jnp.sum(F)
         y = F / jnp.maximum(F_total, 1e-30)
         h_dep = self.eos.enthalpy_departure(T, P, y, phase)
@@ -763,7 +776,7 @@ class CubicThermo(ValueKeyed):
 
         H_ideal = self.ideal.stream_enthalpy_ig(flows, T)
         order = self.eos.species_order
-        F = jnp.array([flows[s] for s in order])
+        F = self._flow_vector(flows)
         F_total = jnp.sum(F)
         z = F / jnp.maximum(F_total, 1e-30)
 
@@ -792,7 +805,7 @@ class CubicThermo(ValueKeyed):
         :meth:`stream_entropy` and :meth:`stream_entropy_flash`.
         """
         order = self.eos.species_order
-        F = jnp.array([flows[s] for s in order])
+        F = self._flow_vector(flows)
         F_total = jnp.sum(F)
         z = F / jnp.maximum(F_total, 1e-30)
 
@@ -829,7 +842,7 @@ class CubicThermo(ValueKeyed):
         """
         if P is None:
             order = self.eos.species_order
-            F = jnp.array([flows[s] for s in order])
+            F = self._flow_vector(flows)
             F_total = jnp.sum(F)
             z = F / jnp.maximum(F_total, 1e-30)
             s_T = jnp.sum(jnp.array([z[i] * self.ideal.S_ig_T(s, T)
