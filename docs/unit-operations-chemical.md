@@ -2418,10 +2418,21 @@ $\Delta P_A(xQ)=\Delta P_B((1-x)Q)$.
 
 ```python
 import jax.numpy as jnp, optimistix as optx
+from difflow import Pipe, PipeParams, make_stream
+
+RHO, MU, MW = 998.2, 1.002e-3, 18.015          # water at 20 C
+def stream_with_flow(Q):                        # Q in m^3/s
+    return make_stream({"W": Q * RHO / (MW * 1e-3)}, 293.15, 3e5)
+
+pipe_a = Pipe(PipeParams(L=80.0, D=0.0525, rho=RHO, mu=MU, MW=MW))
+pipe_b = Pipe(PipeParams(L=150.0, D=0.0409, rho=RHO, mu=MU, MW=MW,
+                         fittings={"globe_valve": 1}))
+Q_total = 6e-3
 
 dP = lambda pipe, Q: pipe(stream_with_flow(Q))[1]["dP"]
 res = lambda x, _: dP(pipe_a, x * Q_total) - dP(pipe_b, (1 - x) * Q_total)
 x = optx.root_find(res, optx.Newton(rtol=1e-12, atol=1e-10), jnp.asarray(0.5)).value
+print(f"branch A carries {float(x):.1%} of the flow")
 ```
 
 Both branches then have equal ΔP, the flows sum to the total, and the split is
