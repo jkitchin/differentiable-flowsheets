@@ -1966,6 +1966,9 @@ form; `k_wall=jnp.inf` removes it.
 import jax
 from difflow import heat_transfer as ht, CounterCurrentHX, HeatExchangerParams
 
+rho, mu, Cp, k = 998.0, 1.0e-3, 4180.0, 0.60    # water, tube side (SI)
+h_shell, area = 2000.0, 12.0                    # shell-side h (W/m^2/K), area (m^2)
+
 def U_outer(v, D_i=0.0229):
     Re = ht.reynolds(rho, v, D_i, mu)
     h_i = ht.internal_h(Re, ht.prandtl(Cp, mu, k), k, D_i, L=4.0)
@@ -2990,7 +2993,9 @@ Like `Pipe`, liquid density is an explicit input; see the design note under
 from difflow import (CentrifugalPump, CentrifugalPumpParams, Pipe, PipeParams,
                      fit_pump_curve, operating_point, system_curve)
 
-h = fit_pump_curve(Q_data, H_data, order=2)           # vendor points, m^3/s and m
+Q_data = [0.0, 0.01, 0.02, 0.03, 0.04]                # vendor points, m^3/s
+H_data = [38.0, 36.5, 32.0, 24.5, 14.0]               # head, m (illustrative)
+h = fit_pump_curve(Q_data, H_data, order=2)
 pump = CentrifugalPump(CentrifugalPumpParams(
     head_coeffs=h, rho=998.2, eta_max=0.72, Q_bep=0.020,
     npshr_coeffs=[1.5, 0.0, 2.5e3], N_ref=1750.0, D_ref=0.25, MW=18.015))
