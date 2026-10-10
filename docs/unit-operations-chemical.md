@@ -1967,8 +1967,9 @@ differentiable, so `jax.grad` flows through to the exchanger).
 
 Rohsenow's $C_{sf}$ defaults to 0.013 (water on polished copper/platinum),
 recalled from memory of Incropera Table 10.1: check it for real work. Not
-implemented: annular fins, tube banks (Zukauskas), the Kern/Bell-Delaware
-shell-side method (#403), radiation, transient conduction.
+implemented: annular fins, tube banks (Zukauskas), the Bell-Delaware
+shell-side method (Kern is in [`difflow.shell_and_tube`](#shell-and-tube-design)),
+radiation, transient conduction.
 
 **What is validated (and what is not).** No textbook worked-example number is
 quoted, because none could be reproduced with confidence. Each correlation is
@@ -2010,6 +2011,160 @@ value):
 | Ammonia condenser, water in tubes | 800-1400 |
 | Alcohol condenser, water in tubes | 250-700 |
 | Finned tube, water in tubes, air in cross flow | 25-50 |
+
+(shell-and-tube-design)=
+### ShellAndTubeDesign
+
+**Location**: `difflow/shell_and_tube.py` (a library, **not** a palette
+operation: it takes mass flows and explicit properties and returns a geometry,
+like `difflow.heat_transfer`; `examples/46_shell_and_tube_design.ipynb`)
+
+**Description**: Sizes a 1-2N shell-and-tube exchanger. `ShellAndTubeDesign(params)(hot, cold, Q=...)`
+(or `T_hot_out=` / `T_cold_out=`; streams are `{"T": K, "m_dot": kg/s}`)
+assumes `U`, gets the area from $Q=UAF\,\mathrm{LMTD}$, builds the geometry,
+computes the tube-side film coefficient (`heat_transfer.internal_h`, Gnielinski
+with `fluids.friction_factor`), the shell-side one by the Kern method, and
+a new `U` from `heat_transfer.overall_U` with fouling, and iterates to a fixed
+point with `optimistix.fixed_point`, so the area and everything derived from it
+are differentiable (implicit-function-theorem gradients) in baffle spacing,
+tube velocity, passes, flows, fouling and properties.
+
+**Equations**
+
+$$A=\frac{Q}{U\,F\,\mathrm{LMTD}_{cc}},\qquad
+\frac1{U_o}=\frac1{h_o}+R_{fo}+\frac{d_o\ln(d_o/d_i)}{2k_w}+R_{fi}\frac{d_o}{d_i}+\frac{d_o}{d_ih_i}$$
+
+Kern shell side (segmental baffles, 25 % cut; Kern 1950, Coulson & Richardson
+Vol 6 Eqs. 12.21-12.26):
+
+$$D_e=\frac{1.10}{d_o}\left(P_t^2-0.917\,d_o^2\right)\ (\triangle),\quad
+D_e=\frac{1.27}{d_o}\left(P_t^2-0.785\,d_o^2\right)\ (\square),\quad
+A_s=\frac{(P_t-d_o)D_sl_B}{P_t},\quad G_s=\frac{\dot m_s}{A_s}$$
+
+$$\mathrm{Nu}_s=\frac{h_oD_e}{k}=0.36\,\mathrm{Re}_s^{0.55}\mathrm{Pr}^{1/3}\Big(\frac{\mu}{\mu_w}\Big)^{0.14},\qquad
+\Delta P_s=f_s\frac{D_s}{D_e}\frac{L}{l_B}\frac{\rho u_s^2}{2}\Big(\frac{\mu}{\mu_w}\Big)^{-0.14},\quad f_s=e^{0.576-0.19\ln\mathrm{Re}_s}$$
+
+($L/l_B$ is the number of baffle crossings, $N_b+1$; $f_s=8j_f$ of the
+Coulson & Richardson chart.) Tube side:
+
+$$\Delta P_t=N_p\Big(f\frac{L}{d_i}+4\Big)\frac{\rho v^2}{2},\qquad v=\frac{\dot m\,N_p}{\rho\,N_t\,\pi d_i^2/4}$$
+
+($f$ Darcy from `fluids.friction_factor`; 4 velocity heads per pass for the
+return, Coulson & Richardson use 2.5.) Geometry: $D_b=d_o(N_t/K_1)^{1/n_1}$
+(`bundle_diameter`, C&R Table 12.4 constants for $P_t=1.25d_o$), shell
+$D_s=D_b+$ `shell_clearance`; `tube_count(shell_ID, ...)` is the Kakac form
+$N_t=\mathrm{CTP}\,(\pi/4)D_s^2/(\mathrm{CL}\,P_t^2)$. $F$ is the Bowman 1-2N
+factor of `lmtd_correction_factor`; `effectiveness_shell_and_tube` is the same
+thing in $\varepsilon$-NTU form.
+
+| Function / class | Purpose |
+|---|---|
+| `equivalent_diameter`, `kern_shell_side`, `kern_shell_pressure_drop`, `kern_friction_factor` | Kern shell side: $D_e,A_s,G_s,\mathrm{Re}_s,h_o,\Delta P_s$ |
+| `tube_side_pressure_drop` | friction (`fluids.friction_factor`) plus return losses per pass |
+| `tube_count`, `bundle_diameter` | continuous tube-count and bundle-diameter correlations; `BUNDLE_CONSTANTS`, `BWG_WALL_THICKNESS`, `TEMA_TUBE_PITCH`, `tube_inside_diameter` data |
+| `ShellAndTubeDesignParams`, `ShellAndTubeDesign` | the design loop; `.rate(...)` re-rates a given geometry |
+| `round_design` | integer tube count, standard passes, baffle spacing and shell ID for building |
+
+```python
+import jax
+from difflow import shell_and_tube as st
+
+p = st.ShellAndTubeDesignParams(
+    tube_OD=0.01905, tube_ID=0.01483, tube_side="cold",
+    rho_hot=780.0, mu_hot=4e-4, k_hot=0.13, Cp_hot=2200.0,      # properties are inputs
+    rho_cold=830.0, mu_cold=2.9e-3, k_cold=0.13, Cp_cold=2050.0,
+    tube_velocity=1.5, tube_length=None, R_fi=1e-4, R_fo=1e-4,
+    dP_tube_max=7e4, dP_shell_max=7e4)
+design = st.ShellAndTubeDesign(p)
+hot, cold = {"T": 473.0, "m_dot": 5.0}, {"T": 303.0, "m_dot": 18.0}
+r = design(hot, cold, T_hot_out=373.0)            # U, area, n_tubes, shell_ID, dP_tube, dP_shell, F, flags
+dA = jax.grad(lambda lB, v: design(hot, cold, T_hot_out=373.0, baffle_spacing=lB,
+                                   tube_velocity=v, warn=False)["area"], argnums=(0, 1))(0.25, 1.2)
+geom = st.round_design(r)                         # buildable geometry ...
+rated = design.rate(hot, cold, **geom)            # ... and its re-rating
+```
+
+**Two modes for the free geometry.** With `tube_length` the tube count follows from the
+area; with `tube_velocity` the tube count follows from the flow and the tube length
+from the area. The baffle spacing is `baffle_spacing` (m) or `baffle_spacing_ratio`
+times the shell ID. Any of these, `n_tube_passes`, `tube_OD`, `tube_ID`,
+`pitch_ratio`, `k_wall` and the fouling resistances can be passed as call
+overrides, traced or not, to differentiate with respect to them.
+
+**Warnings and flags.** The result carries `F_too_low` (`F < 0.75`),
+`dP_tube_exceeded` / `dP_shell_exceeded` (against `dP_tube_max` / `dP_shell_max`),
+`converged` and `tube_laminar`; each also raises a `UserWarning` for concrete
+values (not under `jit`/`grad`).
+
+**Non-unique fixed point.** With a fixed tube length, more area means more
+tubes, slower tube flow and a lower $h_i$: positive feedback, so the loop can
+have a second, large-area, laminar solution. In the test case a start at
+$U\le100$ lands on 211 m$^2$ at $\mathrm{Re}_t\approx1500$, against 13 m$^2$ at
+$\mathrm{Re}_t\approx23000$ from any typical start. It is a genuine root of the
+same equations; `tube_laminar` and a warning flag it, and fixing
+`tube_velocity` removes the feedback.
+
+**Integer quantities.** Tube count, tube passes and the number of baffles are
+continuous in the design (`n_baffles` $=L/l_B-1$; passes interpolate the
+$K_1,n_1$ and CTP tables linearly in $\ln N_p$ / $N_p$, a smoothing choice, not a
+published correlation) so that `jax.grad` and gradient-based optimizers work.
+To build the result: `round_design(result)` rounds the tube count **up**, the
+passes to the nearest standard even count (1, 2, 4, 6, 8), the baffle spacing
+**down** and the shell ID **up** to a step (illustrative, not TEMA), and
+`design.rate(hot, cold, **geometry)` re-rates that geometry. Rounding changes
+the velocities, $h_i$, $h_o$ and both pressure drops, so re-check the duty margin and the
+limits after rounding; in the example notebook the rounded 7 m, 54-tube,
+single-pass design re-rates to 1.01 times the target duty.
+
+**Phase change (simple mode).** `hot_isothermal=True` (condensing) or
+`cold_isothermal=True` (boiling) makes that side isothermal ($F=1$), and `shell_h`
+supplies its film coefficient: a number, or a callable of the geometry dict
+(`tube_OD`, `n_tubes`, `tube_length`, `shell_ID`, `area`), e.g. built on
+`heat_transfer.nusselt_film_condensation` or the boiling correlations.
+Shell-side $\Delta P$ is then not modelled (reported as 0). Desuperheating and
+subcooling zones are not split out; for a rigorous two-phase *rating* use
+`EnthalpyCounterCurrentHX`.
+
+**Design and rating agree.** `design.rate(...)` for the designed geometry returns the
+design duty to 1e-8, and `ShellAndTubeHX(UA=U*A, ...)` returns the same duty
+and outlet temperatures (`tests/test_shell_and_tube.py`). Making that true required
+two fixes to the existing rating code (see the changelog): `lmtd_correction_factor`
+returned its $R=1$ value for every $|R-1|>0.075$, and `ShellAndTubeHX` took
+$Q=F\,Q_{cc}(UA)$, a few percent off $Q=UAF\,\mathrm{LMTD}$; it now uses the exact
+1-2N (and $n$-shell) effectiveness `effectiveness_shell_and_tube`.
+
+**What is validated (and what is not).**
+
+* **Not reproduced: the classic Kern kerosene-crude example** (Kern 1950;
+  Coulson & Richardson Vol 6, Ch. 12 worked examples). The inputs and the
+  printed answers could not be reproduced from memory with confidence and no copy of
+  either book was available, so no agreement with them is claimed. The issue's
+  criterion "within 5 % of the textbook example" is therefore **open**: it needs
+  someone with the book to enter the example's inputs and compare
+  (`tests/test_shell_and_tube.py` has a hand-calculation harness that takes
+  the same arguments).
+* Checked: every Kern equation ($D_e$, $A_s$, $G_s$, $\mathrm{Re}_s$, $h_o$, $\Delta P_s$) and the
+  tube-side equations (velocity, Re, Gnielinski $h_i$ with a brentq-solved
+  Colebrook factor, friction and return $\Delta P$) against a plain-Python hand
+  calculation (1e-12 to 1e-6); the whole loop against an independent plain-Python
+  re-implementation with substitution on $U$ (2e-6, both modes); $F$
+  against the closed form; the effectiveness against $Q=UAF\,\mathrm{LMTD}$
+  solved by brentq; gradients by `check_grads` and central finite differences.
+* **Recalled from memory and not verified against the books:** the Kern
+  constants (0.36, 0.55 for $\mathrm{Nu}$; 0.576, 0.19 for $f_s$, a fit to Kern's chart, not
+  the chart), the $D_e$ rounded constants (1.10/0.917/1.27/0.785 are checked
+  against the exact pitch-cell hydraulic diameters to 3 %), the $K_1,n_1$ bundle
+  constants (sanity-banded against a brute-force tube-lattice count, 15 %), the
+  CTP/CL tube-count constants, the BWG wall table and the TEMA pitch table.
+  Kern ignores leakage and bypass streams (Bell-Delaware, out of scope,
+  handles them): treat it as a screening-level method; its accuracy was not
+  assessed here.
+
+**References**: Kern, D.Q. (1950), *Process Heat Transfer*, McGraw-Hill;
+Coulson & Richardson, *Chemical Engineering* Vol. 6 (Sinnott), Ch. 12;
+Kakac, Liu & Pramuanjaroenkij, *Heat Exchangers: Selection, Rating, and Thermal
+Design*; Bowman, Mueller & Nagle, Trans. ASME 62 (1940) 283; Kays & London,
+*Compact Heat Exchangers*; Gnielinski, Int. Chem. Eng. 16 (1976) 359.
 
 ---
 

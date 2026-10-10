@@ -166,6 +166,7 @@ from difflow.units.heat_exchanger import (
     size_heat_exchanger,
 )
 from difflow.units.pipe import Pipe, PipeParams
+from difflow import shell_and_tube  # library (not a palette unit): Kern design, see docs
 from difflow.units.eos_units import (
     Turboexpander,
     TurboexpanderParams,

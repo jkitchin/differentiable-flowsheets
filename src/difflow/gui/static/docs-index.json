@@ -1,5 +1,5 @@
 {
- "n_sections": 1100,
+ "n_sections": 1101,
  "sections": [
   {
    "anchor": "agents-the-difflow-mcp-server",
@@ -6326,6 +6326,16 @@
     "heat-transfer-module"
    ],
    "text": "The exchangers above take `U` or `UA` as a number. `difflow.heat_transfer`\n(pure JAX functions, SI, differentiable, **not** a palette operation) computes\nthat number from geometry, flow and fluid properties. Properties are inputs\n(`k`, `mu`, `Cp`, `rho`), as in [`difflow.fluids`](#fluids-module), which also\nsupplies the Darcy friction factor Gnielinski needs. Everything is traced:\n`jax.grad` of `U` with respect to tube velocity or diameter works, which is\nwhat the velocity and insulation-thickness optimizations use\n(`examples/45_heat_transfer_coefficients.ipynb`).\n\n| Group | Functions |\n|---|---|\n| Dimensionless groups | `reynolds`, `prandtl`, `nusselt_to_h`, `grashof`, `rayleigh` |\n| Conduction | `slab_resistance`, `cylinder_resistance`, `sphere_resistance`, `composite_wall`, `critical_insulation_radius`, `fin_efficiency_straight` |\n| Tube side | `sieder_tate_laminar`, `dittus_boelter`, `sieder_tate`, `gnielinski`, `internal_nusselt`, `internal_h` |\n| External flow | `churchill_bernstein` (cylinder), `flat_plate_nusselt` |\n| Natural convection | `churchill_chu_vertical_plate`, `churchill_chu_horizontal_cylinder` |\n| Phase change | `nusselt_film_condensation`, `rohsenow_heat_flux`, `rohsenow_superheat`, `mostinski`, `critical_heat_flux` |\n| Overall | `overall_U`, `FOULING_RESISTANCES`, `TYPICAL_U_RANGES`, `typical_U_range` |\n\n**Tube side.** `internal_h(Re, Pr, k, D, L=None, mu_ratio=1, rel_roughness=0,\nmethod=\"gnielinski\", heating=True, boundary=\"T\")` returns $h=\\mathrm{Nu}\\,k/D$:"
+  },
+  {
+   "anchor": "shellandtubedesign",
+   "heading": "ShellAndTubeDesign",
+   "path": "Chemical Unit Operations > Heat Exchangers > ShellAndTubeDesign",
+   "source": "unit-operations-chemical.md",
+   "targets": [
+    "shell-and-tube-design"
+   ],
+   "text": "**Location**: `difflow/shell_and_tube.py` (a library, **not** a palette\noperation: it takes mass flows and explicit properties and returns a geometry,\nlike `difflow.heat_transfer`; `examples/46_shell_and_tube_design.ipynb`)\n\n**Description**: Sizes a 1-2N shell-and-tube exchanger. `ShellAndTubeDesign(params)(hot, cold, Q=...)`\n(or `T_hot_out=` / `T_cold_out=`; streams are `{\"T\": K, \"m_dot\": kg/s}`)\nassumes `U`, gets the area from $Q=UAF\\,\\mathrm{LMTD}$, builds the geometry,\ncomputes the tube-side film coefficient (`heat_transfer.internal_h`, Gnielinski\nwith `fluids.friction_factor`), the shell-side one by the Kern method, and\na new `U` from `heat_transfer.overall_U` with fouling, and iterates to a fixed\npoint with `optimistix.fixed_point`, so the area and everything derived from it\nare differentiable (implicit-function-theorem gradients) in baffle spacing,\ntube velocity, passes, flows, fouling and properties.\n\n**Equations**\n\n$$A=\\frac{Q}{U\\,F\\,\\mathrm{LMTD}_{cc}},\\qquad\n\\frac1{U_o}=\\frac1{h_o}+R_{fo}+\\frac{d_o\\ln(d_o/d_i)}{2k_w}+R_{fi}\\frac{d_o}{d_i}+\\frac{d_o}{d_ih_i}$$\n\nKern shell side (segmental baffles, 25 % cut; Kern 1950, Coulson & Richardson\nVol 6 Eqs. 12.21-12.26):\n\n$$D_e=\\frac{1.10}{d_o}\\left(P_t^2-0.917\\,d_o^2\\right)\\ (\\triangle),\\quad\nD_e=\\frac{1.27}{d_o}\\left(P_t^2-0.785\\,d_o^2\\right)\\ (\\square),\\quad\nA_s=\\frac{(P_t-d_o)D_sl_B}{P_t},\\quad G_s=\\frac{\\dot m_s}{A_s}$$\n\n$$\\mathrm{Nu}_s=\\frac{h_oD_e}{k}=0.36\\,\\mathrm{Re}_s^{0.55}\\mathrm{Pr}^{1/3}\\Big(\\frac{\\mu}{\\mu_w}\\Big)^{0.14},\\qquad\n\\Delta P_s=f_s\\frac{D_s}{D_e}\\frac{L}{l_B}\\frac{\\rho u_s^2}{2}\\Big(\\frac{\\mu}{\\mu_w}\\Big)^{-0.14},\\quad f_s=e^{0.576-0.19\\ln\\mathrm{Re}_s}$$\n\n($L/l_B$ is the number of baffle crossings, $N_b+1$; $f_s=8j_f$ of the\nCoulson & Richardson chart.) Tube side:\n\n$$\\Delta P_t=N_p\\Big(f\\frac{L}{d_i}+4\\Big)\\frac{\\rho v^2}{2},\\qquad v=\\frac{\\dot m\\,N_p}{\\rho\\,N_t\\,\\pi d_i^2/4}$$\n\n($f$ Darcy from `fluids.friction_factor`; 4 velocity heads per pass for the\nreturn, Coulson & Richardson use 2.5.) Geometry: $D_b=d_o(N_t/K_1)^{1/n_1}$\n(`bundle_diameter`, C&R Table 12.4 constants for $P_t=1.25d_o$), shell\n$D_s=D_b+$ `shell_clearance`; `tube_count(shell_ID, ...)` is the Kakac form\n$N_t=\\mathrm{CTP}\\,(\\pi/4)D_s^2/(\\mathrm{CL}\\,P_t^2)$. $F$ is the Bowman 1-2N\nfactor of `lmtd_correction_factor`; `effectiveness_shell_and_tube` is the same\nthing in $\\varepsilon$-NTU form."
   },
   {
    "anchor": "lleequilibrium",
