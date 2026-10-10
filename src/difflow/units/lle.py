@@ -123,6 +123,10 @@ class NRTLParams(NamedTuple):
     b: Array  # (n, n) matrix of temperature coefficients
     alpha: Array  # (n, n) non-randomness parameters
 
+    def gamma(self, x: Array, T: Array) -> Array:
+        """Activity coefficients (the ``ActivityModel`` protocol adapter)."""
+        return nrtl_activity_coefficients(x, T, self)
+
 
 def nrtl_activity_coefficients(
     x: Array,
@@ -191,6 +195,10 @@ class UNIQUACParams(NamedTuple):
     a: Array  # (n, n) interaction parameter matrix
     b: Array  # (n, n) temperature coefficients
     z: float = 10.0  # Coordination number
+
+    def gamma(self, x: Array, T: Array) -> Array:
+        """Activity coefficients (the ``ActivityModel`` protocol adapter)."""
+        return uniquac_activity_coefficients(x, T, self)
 
 
 def uniquac_activity_coefficients(

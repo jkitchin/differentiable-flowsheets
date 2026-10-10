@@ -1,5 +1,5 @@
 {
- "n_sections": 1093,
+ "n_sections": 1099,
  "sections": [
   {
    "anchor": "agents-the-difflow-mcp-server",
@@ -3964,13 +3964,53 @@
    "text": "`CubicThermo` exposes the same K-value interface as `IdealThermo`, built from\nthe EOS fugacity coefficients rather than from Raoult's law:\n\n$$K_i = \\frac{\\hat\\phi_i^L(T, P, x)}{\\hat\\phi_i^V(T, P, y)}$$\n\n```python\nfrom difflow.thermo import CubicThermo\n\nnames = ['propane', 'n_butane']\nsp = {n: get_species_data(n) for n in names}\ncrit = {n: get_critical_props(n) for n in names}\nx = jnp.array([0.5, 0.5])\ny = jnp.array([0.8, 0.2])\n\nthermo = CubicThermo(IdealThermo(sp), PengRobinson(crit))\n\nK = thermo.K_values_array(T=380.0, P=10e5, x=x, y=y)  # both compositions known\nK = thermo.K_values_array(T=380.0, P=10e5, x=x)       # bubble-point K at x\nK = thermo.K_values_array(T=380.0, P=10e5)            # no composition: Raoult\nK = thermo.K_values(T=380.0, P=10e5, x=x)             # same, as a dict\n```\n\nThat is what lets a unit written against `IdealThermo`'s interface \u2014 the\nrigorous [`DistillationColumn`](unit-operations-chemical.md) \u2014 run on\nPeng-Robinson without changing the unit.\n\nTwo properties of these K-values shape how they are used:\n\n**They depend on composition.** $K_i$ is a fixed point, not a formula. Pass\nwhichever compositions you have; whichever you omit is filled in by a bounded\nsuccessive substitution ($y = Kx$ renormalised, or $x = y/K$) from a\ncomposition-free starting estimate, which is the standard bubble- or dew-point\nK calculation. Pass both when you already have a consistent pair \u2014 that is a\nsingle evaluation with no inner loop.\n\n**They only exist inside the two-root window.** The EOS gives a two-phase K\nonly where its cubic has two distinct roots at this $(T, P, x)$. Away from the\nbubble point \u2014 a subcooled liquid, a superheated vapor \u2014 there is one root,\nboth phases take it, and $K_i$ comes back identically 1. That is the EOS\ncorrectly reporting a single phase, but it makes $\\sum_i K_i x_i - 1$ a flat\nzero, which a root finder reads as converged wherever it is standing. A\nbubble-point solve on these K-values therefore needs to start inside the window\nand be able to retreat if a step leaves it; see the two-pass solve in\n`difflow.units.distillation._bubble_T`."
   },
   {
-   "anchor": "species-database",
-   "heading": "Species Database",
-   "path": "Thermodynamics > Species Database",
+   "anchor": "activity-coefficient-models",
+   "heading": "Activity-Coefficient Models",
+   "path": "Thermodynamics > Activity-Coefficient Models",
    "source": "thermodynamics.md",
    "targets": [
     "species-database"
    ],
+   "text": "Non-ideal liquids use the modified Raoult's law $y_i P = x_i \\gamma_i(x,T) P_i^{sat}(T)$.\nAn activity model is any pytree with a `gamma(x, T)` method (the\n`difflow.activity.ActivityModel` protocol; a plain callable `f(x, T)` also works),\nand `difflow.activity_gamma(model, x, T)` dispatches on it. `Flash`,\n`txy`, `pxy`, `xy_curve` and `find_azeotrope` all take one through\n`activity_model=`. The existing `NRTLParams` and `UNIQUACParams` (see\n[LLE](unit-operations-chemical.md)) implement `gamma` as adapters over their\nfunctions, so earlier code is unchanged.\n\n| Model | Class | Species | Parameters | Predicts LLE? |\n|-------|-------|---------|------------|---------------|\n| NRTL | `NRTLParams` | n | $a_{ij}, b_{ij}, \\alpha_{ij}$ | yes |\n| UNIQUAC | `UNIQUACParams` | n | $r, q, a_{ij}, b_{ij}$ | yes |\n| Wilson | `WilsonParams` | n | $V_i$, $\\lambda_{ij}-\\lambda_{ii}$ (J/mol) | **no** |\n| Margules (two-/three-suffix) | `MargulesParams` | 2 | $A_{12}, A_{21}$ | yes |\n| van Laar | `VanLaarParams` | 2 | $A_{12}, A_{21}$ | yes |"
+  },
+  {
+   "anchor": "wilson",
+   "heading": "Wilson",
+   "path": "Thermodynamics > Activity-Coefficient Models > Wilson",
+   "source": "thermodynamics.md",
+   "targets": [],
+   "text": "$$\\Lambda_{ij} = \\frac{V_j}{V_i}\\exp\\!\\left(-\\frac{\\lambda_{ij}-\\lambda_{ii}}{RT}\\right),\\qquad\n\\ln\\gamma_i = 1 - \\ln\\sum_j x_j\\Lambda_{ij} - \\sum_k \\frac{x_k\\Lambda_{ki}}{\\sum_j x_j\\Lambda_{kj}}$$\n\nWilson's equation **cannot predict liquid-liquid splitting**: its Gibbs energy of\nmixing is convex for every parameter set, so it describes one liquid phase. Use\nNRTL or UNIQUAC (or Margules / van Laar) for partially miscible systems."
+  },
+  {
+   "anchor": "margules-and-van-laar",
+   "heading": "Margules and van Laar",
+   "path": "Thermodynamics > Activity-Coefficient Models > Margules and van Laar",
+   "source": "thermodynamics.md",
+   "targets": [],
+   "text": "Binary, dimensionless and temperature independent; $A_{12}=\\ln\\gamma_1^\\infty$,\n$A_{21}=\\ln\\gamma_2^\\infty$.\n\n$$\\text{Margules (3-suffix):}\\quad \\ln\\gamma_1 = x_2^2\\,[A_{12}+2(A_{21}-A_{12})x_1],\\quad\n\\ln\\gamma_2 = x_1^2\\,[A_{21}+2(A_{12}-A_{21})x_2]$$\n\n$A_{12}=A_{21}=A$ is the two-suffix form $\\ln\\gamma_1 = A x_2^2$\n(`MargulesParams.two_suffix`).\n\n$$\\text{van Laar:}\\quad \\ln\\gamma_1 = \\frac{A_{12}A_{21}^2x_2^2}{(A_{12}x_1+A_{21}x_2)^2},\\quad\n\\ln\\gamma_2 = \\frac{A_{21}A_{12}^2x_1^2}{(A_{12}x_1+A_{21}x_2)^2}$$\n\n(the textbook form $A_{12}(1+A_{12}x_1/A_{21}x_2)^{-2}$, rewritten so that the\npure-component limits are finite; $A_{12}$ and $A_{21}$ must share a sign).\n\n```python\nimport jax.numpy as jnp\nfrom difflow import WilsonParams, MargulesParams, VanLaarParams, activity_gamma\n\nx = jnp.array([0.4, 0.6])\nwilson = WilsonParams.binary((\"methanol\", \"water\"), [40.73e-6, 18.07e-6], 667.0, 1981.0)\nprint(activity_gamma(wilson, x, 340.0))\nprint(activity_gamma(MargulesParams.two_suffix((\"a\", \"b\"), 1.0), x, 300.0))\nprint(activity_gamma(VanLaarParams((\"a\", \"b\"), 1.6798, 0.9227), x, 300.0))\n```\n\nValidation, stated precisely (see `tests/test_phase_diagrams.py`): closed forms are\nchecked against hand-computed values, the Gibbs-Duhem equation and the\ninfinite-dilution identities; ethanol-water NRTL reproduces the azeotrope\n(x = 0.893, 351.29 K vs. the experimental 0.894, 351.3 K); the Wilson parameters\nabove were **regressed** to the 1 atm methanol-water Txy table (Perry's) and the\ntest checks the model reproduces it to 0.3 K and 0.01 in $y$. No textbook worked\nexample is reproduced to three figures.\n\n**References**: Wilson, J. Am. Chem. Soc. 86, 127 (1964); van Laar, Z. Phys. Chem.\n72, 723 (1910); Margules, Sitzungsber. Akad. Wiss. Wien 104, 1243 (1895); Prausnitz,\nLichtenthaler, de Azevedo, *Molecular Thermodynamics of Fluid-Phase Equilibria*,\n3e, Ch. 6-7; Smith, Van Ness, Abbott, 7e, Ch. 12."
+  },
+  {
+   "anchor": "phase-diagrams",
+   "heading": "Phase Diagrams",
+   "path": "Thermodynamics > Phase Diagrams",
+   "source": "thermodynamics.md",
+   "targets": [],
+   "text": "`difflow.phase_diagrams` returns the curves used to read and teach phase\nbehaviour. All are JAX and differentiable; bubble temperatures are Newton root\nfinds with implicit differentiation. The vapor is ideal (low pressure) and the\nvapor pressures are the thermo object's Antoine equations.\n\n| Function | Returns |\n|----------|---------|\n| `txy(thermo, species, P, n=51, activity_model=None)` | `dict(x, y, T)`: bubble $T(x)$, $y$ from the K-values |\n| `pxy(thermo, species, T, n=51, activity_model=None)` | `dict(x, y, P)` |\n| `xy_curve(thermo, species, P, n=51, activity_model=None)` | `dict(x, y, T, alpha)`: $\\alpha(x)=K_1/K_2$ |\n| `find_azeotrope(thermo, species, P=..., T=..., activity_model=None)` | `dict(found, x, T, P)`; NaN (masked, no Python branch) if none |\n| `ternary_lle(lle_model, T, n_tie=15)` | `dict(binodal, tie_lines, plait)` by isoactivity continuation |\n\n`ternary_lle` takes an `LLEEquilibrium` (NRTL/UNIQUAC) or any three-species\nactivity model; species 0 and 1 are the partially miscible pair, species 2 the\nsolute. It solves a type-I system by continuation from the binary edge to the\nplait point and is not differentiated.\n\n```python\nfrom difflow import txy, xy_curve, find_azeotrope, IdealThermo\nfrom difflow.database import get_species_data\n\nthermo = IdealThermo({n: get_species_data(n) for n in (\"benzene\", \"toluene\")})\nd = txy(thermo, [\"benzene\", \"toluene\"], 101325.0)\nprint(float(d[\"T\"][0]), float(d[\"T\"][-1]))     # toluene / benzene boiling points\na = xy_curve(thermo, [\"benzene\", \"toluene\"], 101325.0)\nprint(float(a[\"alpha\"].mean()))                # about 2.5\nprint(bool(find_azeotrope(thermo, [\"benzene\", \"toluene\"], P=101325.0)[\"found\"]))\n```\n\nThe benzene-toluene end points agree with the normal boiling points (353.24 K,\n383.78 K) to 0.1 K, and $\\bar\\alpha\\approx 2.49$ (2.35 at the toluene end, 2.60\nat the benzene end)."
+  },
+  {
+   "anchor": "plot-helpers",
+   "heading": "Plot helpers",
+   "path": "Thermodynamics > Phase Diagrams > Plot helpers",
+   "source": "thermodynamics.md",
+   "targets": [],
+   "text": "`difflow.visualization` (matplotlib, optional) provides `plot_txy`, `plot_pxy`,\n`plot_xy` (with the dotted 45 degree line) and `plot_ternary` (equilateral or\nright-triangle coordinates, binodal, tie lines, plait point). Colour is never the\nonly cue: bubble and dew curves differ in line style and marker.\n\n```python\nimport matplotlib\nmatplotlib.use(\"Agg\")\nfrom difflow.visualization import plot_txy\n\nax = plot_txy(d)\n```\n\n---"
+  },
+  {
+   "anchor": "species-database",
+   "heading": "Species Database",
+   "path": "Thermodynamics > Species Database",
+   "source": "thermodynamics.md",
+   "targets": [],
    "text": "**Location**: `difflow/database.py`\n\n(available-species)="
   },
   {
@@ -4201,7 +4241,7 @@
    "path": "Thermodynamics > Best Practices > Model Selection",
    "source": "thermodynamics.md",
    "targets": [],
-   "text": "| Scenario | Recommended Model |\n|----------|-------------------|\n| Low pressure, ideal mixtures | Ideal Thermo |\n| High pressure (> 10 bar) | PR or SRK EOS |\n| Hydrocarbons | PR EOS |\n| Polar/non-polar mixtures | PR + Binary k_ij |\n| Highly polar (water, alcohols) | Activity coefficient models* |\n\n*Activity coefficient models (NRTL, UNIQUAC) available in LLE module."
+   "text": "| Scenario | Recommended Model |\n|----------|-------------------|\n| Low pressure, ideal mixtures | Ideal Thermo |\n| High pressure (> 10 bar) | PR or SRK EOS |\n| Hydrocarbons | PR EOS |\n| Polar/non-polar mixtures | PR + Binary k_ij |\n| Highly polar (water, alcohols) | Activity coefficient models* |\n\n*Activity coefficient models (NRTL, UNIQUAC, Wilson, Margules, van Laar): see [Activity-Coefficient Models](#activity-coefficient-models) and `Flash(activity_model=...)`."
   },
   {
    "anchor": "temperature-ranges",
@@ -5789,7 +5829,15 @@
    "path": "Chemical Unit Operations > Separators > Flash Drum > Flash Classes > Flash (Ideal)",
    "source": "unit-operations-chemical.md",
    "targets": [],
-   "text": "Uses Raoult's law K-values from IdealThermo. Suitable for ideal or near-ideal mixtures.\n\n```python\nfrom difflow import IdealThermo, make_stream\nfrom difflow.database import get_species_data\nfrom difflow.units.flash import Flash, FlashParams\n\nthermo = IdealThermo({n: get_species_data(n) for n in ['methane', 'ethane', 'propane']})\nflash = Flash(FlashParams(species_order=['methane', 'ethane', 'propane']), thermo)\nfeed = make_stream({'methane': 0.5, 'ethane': 0.3, 'propane': 0.2}, T=200.0, P=500000.0)\n\nliquid, vapor, info = flash(feed)\nprint(f\"Vapor fraction: {info['V_frac']:.3f}\")\n```\n\n(eosflash)="
+   "text": "Uses Raoult's law K-values from IdealThermo. Suitable for ideal or near-ideal mixtures.\n\n```python\nfrom difflow import IdealThermo, make_stream\nfrom difflow.database import get_species_data\nfrom difflow.units.flash import Flash, FlashParams\n\nthermo = IdealThermo({n: get_species_data(n) for n in ['methane', 'ethane', 'propane']})\nflash = Flash(FlashParams(species_order=['methane', 'ethane', 'propane']), thermo)\nfeed = make_stream({'methane': 0.5, 'ethane': 0.3, 'propane': 0.2}, T=200.0, P=500000.0)\n\nliquid, vapor, info = flash(feed)\nprint(f\"Vapor fraction: {info['V_frac']:.3f}\")\n```"
+  },
+  {
+   "anchor": "flash-with-an-activity-model-non-ideal-liquid",
+   "heading": "Flash with an activity model (non-ideal liquid)",
+   "path": "Chemical Unit Operations > Separators > Flash Drum > Flash Classes > Flash with an activity model (non-ideal liquid)",
+   "source": "unit-operations-chemical.md",
+   "targets": [],
+   "text": "With `activity_model=` the K-values follow the modified Raoult's law\n$K_i = \\gamma_i(x,T)\\,P_i^{sat}(T)/P$, which captures azeotropes. The argument is\nany **activity model**: an object with a `gamma(x, T)` method (the\n`difflow.activity.ActivityModel` protocol). `NRTLParams`, `UNIQUACParams`,\n`WilsonParams`, `MargulesParams` and `VanLaarParams` all qualify (Margules and\nvan Laar are binary; Wilson cannot predict liquid-liquid splitting). `species`\nof the model must match `species_order`. The NRTL path is unchanged. See\n[Activity-Coefficient Models](thermodynamics.md#activity-coefficient-models) and,\nfor Txy/Pxy/xy diagrams, [Phase Diagrams](thermodynamics.md#phase-diagrams).\n\n```python\nfrom difflow import WilsonParams\n\nwilson = WilsonParams.binary((\"methanol\", \"water\"), [40.73e-6, 18.07e-6], 667.0, 1981.0)\nth = IdealThermo({n: get_species_data(n) for n in (\"methanol\", \"water\")})\nf = Flash(FlashParams(species_order=[\"methanol\", \"water\"]), th, activity_model=wilson)\nfeed = make_stream({\"methanol\": 0.5, \"water\": 0.5}, T=345.0, P=101325.0)\nliquid, vapor, info = f(feed)\nprint(f\"Vapor fraction: {float(info['V_frac']):.3f}\")\n```\n\n(eosflash)="
   },
   {
    "anchor": "eosflash-non-ideal",

@@ -42,7 +42,19 @@ from difflow.visualization.flowsheet_viz import (
     visualize_flowsheet,
 )
 
+from difflow.visualization.phase_diagrams import (
+    plot_txy,
+    plot_pxy,
+    plot_xy,
+    plot_ternary,
+)
+
 __all__ = [
+    # Phase diagrams (matplotlib)
+    "plot_txy",
+    "plot_pxy",
+    "plot_xy",
+    "plot_ternary",
     # Main visualizer
     "FlowsheetVisualizer",
     "visualize_flowsheet",

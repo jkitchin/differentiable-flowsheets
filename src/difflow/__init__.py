@@ -118,6 +118,21 @@ from difflow.units.flash import (
     Mixer,
     Splitter,
 )
+from difflow.activity import (
+    ActivityModel,
+    activity_gamma,
+    WilsonParams,
+    MargulesParams,
+    VanLaarParams,
+)
+from difflow.phase_diagrams import (
+    bubble_T,
+    txy,
+    pxy,
+    xy_curve,
+    find_azeotrope,
+    ternary_lle,
+)
 from difflow.units.lle import (
     MultistageCascade,
     CascadeParams,
@@ -437,6 +452,17 @@ __all__ = [
     "NRTLParams",
     "UNIQUACParams",
     "nrtl_activity_coefficients",
+    "ActivityModel",
+    "activity_gamma",
+    "WilsonParams",
+    "MargulesParams",
+    "VanLaarParams",
+    "bubble_T",
+    "txy",
+    "pxy",
+    "xy_curve",
+    "find_azeotrope",
+    "ternary_lle",
     "uniquac_activity_coefficients",
     "get_K_values",
     "separation_factor",
