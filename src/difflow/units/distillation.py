@@ -2171,29 +2171,35 @@ def minimum_reflux_ratio(
     alpha: Array,
     q: Array = 1.0,
 ) -> Array:
-    """Estimate minimum reflux using simplified Underwood.
+    """Minimum reflux of a pseudo-binary split at constant relative volatility.
 
-    For binary system:
-    R_min = (1/(alpha-1)) * [x_D_LK/(z_LK) - alpha*(1-x_D_LK)/(1-z_LK)]
+    The pinch of the McCabe-Thiele diagram: the q-line meets the equilibrium
+    curve ``y = alpha x / (1 + (alpha - 1) x)`` and the rectifying line
+    through ``(x_D, x_D)`` and that point has the minimum slope. For a
+    saturated-liquid feed (``q = 1``) this is the closed form
+    ``(1/(alpha-1)) [x_D/z - alpha (1-x_D)/(1-z)]``. It is routed through
+    :func:`difflow.staged.minimum_reflux`, so ``q`` is honoured (a vapor feed
+    needs more reflux, a subcooled feed less).
+
+    Changed in #424: ``q`` used to be accepted and ignored (every feed was
+    treated as saturated liquid), and the result was floored at 0.1; the floor
+    is gone, so a value below 0.1 (or below 0, an ``x_D`` below the pinch) is
+    returned as computed. ``z_HK`` is not used (the feed is taken as
+    ``z_HK = 1 - z_LK``, pseudo-binary).
 
     Args:
         z_LK: Feed mole fraction of light key
-        z_HK: Feed mole fraction of heavy key
+        z_HK: Feed mole fraction of heavy key (unused; ``1 - z_LK``)
         x_D_LK: Distillate mole fraction of light key
         alpha: Relative volatility
-        q: Feed quality
+        q: Feed quality (1 saturated liquid, 0 saturated vapor)
 
     Returns:
         Minimum reflux ratio
     """
-    q = jnp.asarray(q)
+    from difflow.staged import constant_alpha, minimum_reflux
 
-    # Simplified for pseudo-binary
-    term1 = safe_divide(x_D_LK, z_LK)
-    term2 = safe_divide(alpha * (1 - x_D_LK), 1 - z_LK)
-    R_min = safe_divide(term1 - term2, alpha - 1)
-
-    return jnp.maximum(R_min, 0.1)
+    return minimum_reflux(constant_alpha(alpha), z_LK, q, x_D_LK)
 
 
 def gilliland_stages(

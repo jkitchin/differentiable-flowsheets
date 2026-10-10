@@ -983,6 +983,17 @@ Relative volatility is a method on the column, not a free function
 components from the column's parameters — and, on a `CubicThermo`, the phase
 composition.
 
+`minimum_reflux_ratio` honours the feed quality `q` (1 saturated liquid, 0
+saturated vapor, above 1 subcooled): since #424 it is the McCabe-Thiele pinch
+of a constant-alpha curve, computed by `difflow.staged.minimum_reflux`. It
+used to accept `q` and ignore it, and to floor the answer at 0.1; neither is
+true now (a result below 0.1, or below 0 for an `x_D` the curve cannot reach,
+is returned as is). `z_HK` is unused: the feed is `1 - z_LK`. The column
+itself (`ShortcutColumn`) uses the Underwood root directly and was not
+affected. For a curved equilibrium line (tangent pinch) use
+`difflow.staged.minimum_reflux` with a tabulated curve, see
+[Graphical Staged Design](#graphical-staged-design).
+
 ---
 
 ### DistillationColumn (Rigorous)
@@ -1282,6 +1293,143 @@ print(f"Duties:     {float(info['Q_condenser'])/1e6:.2f} / "
 Pass `use_mesh=False` for the faster constant-molar-overflow solution, which
 skips the energy-balance correction to the internal flows but solves the same
 component material balances — see [Solver Paths](#solver-paths) above.
+
+---
+
+## Graphical Staged Design
+
+**Location**: `difflow/staged.py` (a library of functions; not a palette
+operation, because it designs a column rather than transforming a stream).
+
+`difflow.staged` is the generic equilibrium-stage graphics and algebra for a
+binary (or pseudo-binary) cascade: operating lines, the q-line, a smooth
+McCabe-Thiele stepper with a **fractional, differentiable stage count**,
+minimum reflux from the pinch, total reflux, Kremser, and a plot helper. The
+same stepper serves distillation, absorption/stripping and immiscible
+extraction: it takes any equilibrium curve and any pair of straight operating
+lines.
+
+Lines are `(a, b, c)` arrays meaning `a x + b y = c` (never slope-intercept,
+so the vertical q-line at `q = 1` needs no special case). A curve is an
+`EquilibriumCurve` pytree built by `constant_alpha(alpha)`,
+`linear_equilibrium(m)` or `tabulated(x, y)` (monotone PCHIP, C1, with an
+inverse; `xy_curve` output goes straight in); `curve.with_efficiency(E)` adds a
+Murphree vapor efficiency.
+
+### McCabe–Thiele
+
+Benzene–toluene at constant alpha 2.5 (an illustration, not a published
+example): `z = 0.4`, `x_D = 0.95`, `x_B = 0.05`, saturated-liquid feed.
+
+```python
+import jax
+import jax.numpy as jnp
+from difflow import staged as S
+
+alpha, z, xD, xB = 2.5, 0.4, 0.95, 0.05
+curve = S.constant_alpha(alpha)
+R_min = S.minimum_reflux(curve, z, 1.0, xD)        # 1.4444
+N_min = S.total_reflux_stages(curve, xD, xB)       # 6.4269 (Fenske)
+
+def column(R, q=1.0):
+    return S.mccabe_thiele(curve, S.rectifying_line(R, xD),
+                           S.stripping_line(R, xD, xB, z, q), xD, xB,
+                           q_line=S.q_line(q, z))
+
+res = column(1.5 * R_min)
+print(float(R_min), float(N_min))
+print(float(res["N"]), float(res["feed_stage"]))   # 11.72 stages, feed on 6
+dNdR = jax.grad(lambda R: column(R)["N"])(1.5 * R_min)
+print(float(dNdR))                                 # negative and finite
+```
+
+`mccabe_thiele` steps from the top with a fixed-length `lax.scan`: from
+`x_{k-1}` the operating line gives `y_k`, and the curve gives
+`x_k = x*(y_k)`; steps past the bottom are masked, not branched on. The
+result holds `N`, `N_rect`, `N_strip`, a fractional `feed_stage`, the
+staircase vertices, and a soft `pinched` flag.
+
+**The fractional-stage convention.** Stage `k` is credited the fraction of
+its step needed to reach `x_B`: whole stages count 1, stages past the end
+0, and the crossing stage counts the linear interpolation in `x` between
+its two compositions (`fraction="linear"`, the textbook "fraction of a
+stage"). `fraction="log"` assumes geometric steps (exact for straight lines,
+so it reproduces Kremser) and `"log_ratio"` the same in `x/(1-x)` (exact
+Fenske). The count is continuous in every input but only piecewise smooth:
+its derivative jumps where one more whole stage is needed, and `dN/dR`
+depends on the convention, so state it with the answer. The optimal-feed
+switch is a sigmoid in `x` of width `feed_width`. A reboiler is the last stage;
+with `partial_condenser=True` the first stage is the condenser and
+`N_column = N - 1`. With open steam, build the bottom line with
+`stripping_line(..., open_steam=True)` (through `(x_B, 0)`). A subcooled feed
+is `q > 1`. Specifying a feed stage *earlier* than the optimal one
+extends the stripping line into a region where it lies above the curve; the
+stepper does not guard against that.
+
+**Pinches.** `minimum_reflux` takes the largest chord slope
+`(x_D - y*(x))/(x_D - x)` from `(x_D, x_D)` to the curve over
+`[x_q, x_D)`, `x_q` being where the q-line meets the curve. A constant-alpha
+curve is concave, so that is the feed-line pinch (the closed form
+`R_min = (x_D - y_f)/(y_f - z)` at `q = 1`); a curved curve such as
+ethanol–water has an interior maximiser, the **tangent pinch**, with no special
+case. The maximiser is found with a stop-gradient search and the value
+re-evaluated there, so `jax.grad` follows the envelope theorem. The result is
+not floored. `minimum_solvent_ratio(curve, x_in, x_out, y_in)` is the same
+construction for absorption and extraction.
+
+```python
+import numpy as np
+from difflow import staged as S
+
+# A synthetic curve whose volatility falls from 10 to 1 with x (like
+# ethanol-water up to its azeotrope, but not data for it): the chord from
+# (x_D, x_D) touches it in the interior, so R_min exceeds the feed-line value.
+x = np.linspace(0.0, 1.0, 81)
+alpha_x = 1.0 + 9.0 * (1.0 - x) ** 4
+r = alpha_x * x / (1.0 - x + 1e-300)
+y = r / (1.0 + r)
+y[-1] = 1.0
+curve = S.tabulated(x, y)
+z, xD = 0.1, 0.7
+R_min = S.minimum_reflux(curve, z, 1.0, xD)
+y_feed = curve(z)
+R_feed = (xD - y_feed) / (y_feed - z)
+print(round(float(R_min), 3), round(float(R_feed), 3))   # 1.059 0.796: tangent pinch governs
+```
+
+### Kremser
+
+`kremser_fraction(A, N)` is the recovery of `N` counter-current stages at
+absorption (or extraction) factor `A = L/(m V)`, and `kremser_stages(A, f)`
+the inverse, `N = ln((A - f)/(1 - f))/ln A - 1`. Both hold for any `A > 0`
+(for `A < 1` the recovery tends to `A`, and `kremser_stages` returns `inf`
+for `f >= A`) and join smoothly across `A = 1` with a Taylor blend, not a
+hard branch, so the gradient is continuous there. They are re-exported from
+`difflow.units.lle` and `difflow_ree`; `difflow_ree.stages_kremser` is a
+wrapper on them (it used to return 1.0 for every input; see the CHANGELOG; it keeps its floor at one stage).
+
+```python
+from difflow.staged import kremser_stages, kremser_fraction
+
+print([round(float(kremser_stages(E, 0.99)), 2) for E in (1.5, 2.0, 5.0)])  # [8.7, 5.66, 2.72]
+print(float(kremser_fraction(1.0, 3.0)))   # 0.75, the A -> 1 limit N/(N+1)
+```
+
+The worked notebook is `examples/48_mccabe_thiele_staged.ipynb` (stepper vs
+`DistillationColumn`, optimum `R/R_min` by gradient).
+
+**What was and was not verified.** `tests/test_staged.py` checks the stepper
+against a plain-Python staircase, `minimum_reflux` against the closed-form
+pinch at any `q` and (for the tangent pinch) against SciPy PCHIP on a dense
+grid, `total_reflux_stages` against Fenske, the stepper against Kremser at
+straight lines, and the Murphree efficiency against the Lewis relation
+`E_OG = ln(1 + E_MV(lambda - 1))/ln(lambda)` (overall efficiency
+`E_OG = N_equilibrium/N_actual`). The wex12-1 numbers are the issue's own
+hand calculation. **No published textbook example (Geankoplis, McCabe–Smith–
+Harriott, Wankat) was reproduced**: the worked-example inputs and printed
+answers were not available, so no agreement is claimed. Out of scope:
+Ponchon–Savarit, multicomponent graphical methods, side draws and a second
+feed.
 
 ---
 

@@ -41,6 +41,7 @@ import numpy as np
 from jax import Array
 
 from difflow.numerics import safe_divide
+from difflow.staged import kremser_fraction, kremser_stages  # noqa: F401  (re-exported)
 from difflow_ree.database import (
     get_extractant_database,
     get_extractant,
@@ -1560,9 +1561,17 @@ def stages_kremser(
     S_F: Array | float,
     recovery: float = 0.99,
 ) -> Array:
-    """Calculate number of stages using Kremser equation.
+    """Number of stages from the Kremser equation (counter-current extraction).
 
-    For counter-current extraction.
+    A thin wrapper on :func:`difflow.staged.kremser_stages` with the
+    extraction factor ``E = D * S/F``:
+    ``N = ln((E - R)/(1 - R))/ln E - 1``. Fixed in #424: the previous form
+    ``ln((R(E-1)+1)/E)/ln E`` was negative for every ``E > 1`` and its
+    floor returned 1.0 for every input. Valid for any ``E > 0`` (``E = 1``
+    is the limit ``R/(1-R)``; ``E < 1`` needs ``R < E``, else ``inf``). Still
+    floored at one stage, like ``difflow.units.lle.stages_for_recovery``
+    (a cascade has at least one stage); the unfloored, fractional value is
+    :func:`difflow.staged.kremser_stages`.
 
     Args:
         D: Distribution coefficient
@@ -1572,25 +1581,7 @@ def stages_kremser(
     Returns:
         Number of theoretical stages
     """
-    D = jnp.asarray(D)
-    S_F = jnp.asarray(S_F)
-
-    # Extraction factor E = D * S/F
-    E = D * S_F
-
-    # Kremser equation
-    # Recovery = (E^(N+1) - E) / (E^(N+1) - 1)
-    # Solving for N:
-    # N = log((recovery*(E-1) + 1) / E) / log(E) - 1
-
-    # Handle E ≈ 1 case
-    N = jnp.where(
-        jnp.abs(E - 1.0) < 1e-6,
-        recovery / (1 - recovery),  # Limit as E → 1
-        jnp.log((recovery * (E - 1) + 1) / E) / jnp.log(E)
-    )
-
-    return jnp.maximum(N, 1.0)
+    return jnp.maximum(kremser_stages(jnp.asarray(D) * jnp.asarray(S_F), recovery), 1.0)
 
 
 def stages_fenske(

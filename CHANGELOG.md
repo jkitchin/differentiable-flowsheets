@@ -8,6 +8,19 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Breaking
 
+- **`minimum_reflux_ratio` honours `q`; `stages_kremser` fixed (#424).**
+  `difflow.units.distillation.minimum_reflux_ratio` accepted `q` and ignored
+  it (every feed was a saturated liquid) and floored the result at 0.1. It now
+  returns the McCabe-Thiele pinch of a constant-alpha curve at that `q`
+  (`difflow.staged.minimum_reflux`) and is not floored; a vapor feed returns
+  a larger value than before, a subcooled one a smaller. `q = 1` agrees with
+  the old closed form except where that was floored. `ShortcutColumn` was not
+  affected. `difflow_ree.stages_kremser` computed `ln((R(E-1)+1)/E)/ln E`,
+  negative for every `E > 1`, so its floor returned 1.0 for every input
+  (E = 1.5, 2, 5 at 99 % recovery now give 8.70, 5.66, 2.72); it is now a
+  wrapper on `difflow.staged.kremser_stages` (still floored at one stage;
+  the core function is not).
+
 - **Cubic EOS liquid root near 1 bar; results change (#417).**
   `PengRobinson`/`SRK` clamped every root at Z >= 0.01, which replaced the
   liquid root of water, benzene, heptane, pentane... near atmospheric
@@ -179,6 +192,25 @@ All notable changes to difflow are recorded here. The format follows
   and low-pH recovery no longer exceeds 0.98.
 
 ### Added
+
+- **`difflow.staged`: McCabe-Thiele stepper, pinches and Kremser (#424).**
+  A library (not a palette unit) of graphical equilibrium-stage design.
+  Operating lines as `(a, b, c)` (`operating_line`, `rectifying_line`,
+  `stripping_line` incl. open steam, `stripping_line_from_boilup`,
+  `q_line` for any `q` including 1, `feed_intersection`, `to_ratio`),
+  `EquilibriumCurve` (`constant_alpha`, `linear_equilibrium`, `tabulated` with
+  monotone PCHIP and an inverse, optional Murphree efficiency),
+  `mccabe_thiele` (a `lax.scan` stepper with a fractional, differentiable
+  stage count, optimal or specified feed stage, partial condenser),
+  `minimum_reflux` (feed-line and tangent pinch, not floored),
+  `total_reflux_stages` / `minimum_stages` (Fenske at constant alpha),
+  `minimum_solvent_ratio` for a curved equilibrium line, and
+  `kremser_fraction` / `kremser_stages` (any `A > 0`, smooth through
+  `A = 1`; re-exported from `difflow.units.lle` and `difflow_ree`). Plot
+  helper `difflow.visualization.plot_mccabe_thiele`. Verified against hand
+  loops, closed forms, SciPy PCHIP and the Lewis relation; no published
+  textbook example is reproduced (see the docs). Example notebook
+  `examples/48_mccabe_thiele_staged.ipynb`.
 
 - **Phase-diagram helpers and Wilson / Margules / van Laar activity models
   (#398).** `difflow.activity` defines the `ActivityModel` protocol (a

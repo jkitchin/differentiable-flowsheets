@@ -19,6 +19,7 @@ from jax import Array, lax
 from difflow.streams import Stream, get_flows, make_stream
 from difflow.params_mixin import ParamsMixin
 from difflow.numerics import safe_divide
+from difflow.staged import kremser_fraction, kremser_stages  # noqa: F401  (re-exported)
 
 
 # =============================================================================

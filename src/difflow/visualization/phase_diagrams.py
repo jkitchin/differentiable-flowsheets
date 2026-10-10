@@ -135,3 +135,71 @@ def plot_ternary(data: dict, ax=None, coords: str = "equilateral",
     ax.axis("off")
     ax.legend(loc="upper left")
     return ax
+
+
+def plot_mccabe_thiele(result: dict, curve, top_line=None, bottom_line=None,
+                       q_line=None, ax=None, number_stages: bool = True):
+    """Plot a McCabe-Thiele diagram from :func:`difflow.staged.mccabe_thiele`.
+
+    Draws the equilibrium curve (solid, black), the 45 degree line (dotted),
+    the rectifying/top line (dashed), the stripping/bottom line
+    (dash-dotted), the q-line (long dashes, grey), the staircase (thin
+    solid, blue) with the stages numbered, and the feed stage as a larger
+    square marker. Colour is never the only cue.
+
+    Args:
+        result: Output of ``mccabe_thiele``.
+        curve: The :class:`~difflow.staged.EquilibriumCurve` stepped on.
+        top_line, bottom_line, q_line: Optional ``(a, b, c)`` lines to draw.
+        ax: Optional matplotlib axes.
+        number_stages: Number each stage at its equilibrium point.
+
+    Returns:
+        The matplotlib axes.
+    """
+    import jax.numpy as jnp
+    from difflow import staged
+
+    ax = _ax(ax)
+    credit = np.asarray(result["credit"])
+    n = int(np.sum(credit > 0))
+    xs = np.asarray(result["x"])
+    ys = np.asarray(result["y"])
+    xmax = float(max(1.0, np.max(xs[: n + 1]))) if n else 1.0
+    grid = jnp.linspace(0.0, xmax, 201)
+    ax.plot(np.asarray(grid), np.asarray(curve.ideal()(grid)), "-", color="k", label="equilibrium")
+    ax.plot([0, xmax], [0, xmax], ":", color="0.4", label="y = x")
+
+    def draw(line, style, color, label):
+        if line is None:
+            return
+        line = np.asarray(line)
+        if abs(line[1]) < 1e-14:     # vertical
+            ax.plot([line[2] / line[0]] * 2, [0, xmax], linestyle=style, color=color, label=label)
+        else:
+            g = np.linspace(0.0, xmax, 2)
+            ax.plot(g, (line[2] - line[0] * g) / line[1], linestyle=style, color=color, label=label)
+
+    draw(top_line, "--", "tab:red", "top operating line")
+    draw(bottom_line, "-.", "tab:green", "bottom operating line")
+    draw(q_line, (0, (8, 3)), "0.5", "q-line")
+    xv = np.asarray(result["x_vertices"])[: 3 * n]
+    yv = np.asarray(result["y_vertices"])[: 3 * n]
+    x_path = np.concatenate([[xs[0]], xv])
+    y_path = np.concatenate([[ys[0] if n else xs[0]], yv])
+    ax.plot(x_path, y_path, "-", color="tab:blue", lw=1.0, label="stages")
+    if number_stages:
+        for k in range(n):
+            ax.annotate(str(k + 1), (xs[k + 1], ys[k]), textcoords="offset points",
+                        xytext=(3, 3), fontsize=7, color="tab:blue")
+    fs = float(result["feed_stage"])
+    if np.isfinite(fs) and 1 <= round(fs) <= n:
+        k = int(round(fs)) - 1
+        ax.plot([xs[k + 1]], [ys[k]], "s", color="tab:blue", ms=7, mfc="none", label="feed stage")
+    ax.set_xlabel("liquid mole fraction x")
+    ax.set_ylabel("vapor mole fraction y")
+    ax.set_xlim(0, xmax)
+    ax.set_ylim(0, xmax)
+    ax.set_aspect("equal")
+    ax.legend(fontsize=7)
+    return ax

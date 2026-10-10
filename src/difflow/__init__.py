@@ -135,6 +135,7 @@ from difflow.activity import (
     MargulesParams,
     VanLaarParams,
 )
+from difflow import staged  # noqa: F401  (difflow.staged: McCabe-Thiele, Kremser)
 from difflow.phase_diagrams import (
     bubble_T,
     txy,
