@@ -2230,6 +2230,183 @@ residue, product, info = sep(feed)   # info: {"Q", "H_in", "H_out"}
 
 ---
 
+## Liquid Pipe Flow
+
+Incompressible (liquid) flow in pipes: Darcy-Weisbach friction with a
+Colebrook/Churchill friction factor, fittings, elevation head and
+differential-pressure flow meters. The functions live in
+[`difflow.fluids`](#fluids-module) (JAX, SI, differentiable) and the unit
+operation is [`Pipe`](#op-pipe). Gas pipes are a different model
+(Weymouth, `difflow_gas`); compressible flow, two-phase flow, non-Newtonian
+fluids and transients are out of scope.
+
+(op-pipe)=
+### Pipe
+
+A run of pipe with fittings and an elevation change. The outlet pressure is
+
+$$
+P_\mathrm{out} = P_\mathrm{in} - f\frac{L}{D}\frac{\rho v^2}{2}
+ - \sum_j n_j K_j \frac{\rho v^2}{2} - \rho g\,\Delta z ,
+\qquad v = \frac{4Q}{\pi D^2},\quad Q = \frac{\dot m}{\rho}
+$$
+
+Temperature and molar flows pass through unchanged.
+
+| Parameter | Unit | Meaning |
+|-----------|------|---------|
+| `L` | m | straight pipe length |
+| `D` | m | inside diameter |
+| `rho` | kg/m³ | liquid density: a number or a callable of the inlet stream |
+| `mu` | Pa s | liquid viscosity: a number or a callable of the inlet stream |
+| `roughness` | m | absolute roughness, default 4.6e-5 (commercial steel) |
+| `dz` | m | elevation gain, positive uphill |
+| `fittings` | – | `{name: count}` using the K table below, or a total K |
+| `friction_method` | – | `"colebrook"` (default), `"churchill"`, `"haaland"`, `"swamee_jain"` |
+| `MW` | g/mol | molar mass (number or `{species: MW}`) to turn molar into mass flow; omit if a `thermo` is passed |
+
+**Design decision: liquid properties are explicit.** Core `SpeciesData` has no
+liquid density or viscosity, so `rho` and `mu` are *inputs*, as numbers or as
+callables of the stream (for example a correlation in `T`). Putting
+Rackett/DIPPR-105 density and Andrade/DIPPR-101 viscosity into `SpeciesData`
+(with mixing rules) would also serve heat-transfer correlations and pump models
+and is left to a separate issue.
+
+```python
+import jax
+from difflow import Pipe, PipeParams, make_stream
+
+# 3 L/s of water at 20 C through 100 m of 2-in Sch 40 commercial steel
+water = make_stream({"W": 0.003 * 998.2 / 0.018015}, T=293.15, P=3e5)
+
+def dP(D):
+    pipe = Pipe(PipeParams(L=100.0, D=D, rho=998.2, mu=1.002e-3, MW=18.015,
+                           fittings={"elbow_90_standard": 4, "gate_valve": 1}))
+    outlet, info = pipe(water)
+    return info["dP"]
+
+outlet, info = Pipe(PipeParams(L=100.0, D=0.0525, rho=998.2, mu=1.002e-3,
+                               MW=18.015))(water)
+info["v"], info["Re"], info["f"]      # 1.386 m/s, 7.25e4, 0.02254
+info["dP_friction"]                    # 41.1 kPa
+jax.grad(dP)(0.0525)                   # d(dP)/dD, Pa/m: economic diameter optimization
+```
+
+`info` carries `Q`, `v`, `Re`, `f`, `K_total`, `dP_friction`, `dP_minor`,
+`dP_static`, `dP` (the sum) and `head_loss` (friction plus minor loss, m of
+fluid). `Pipe.eo_residuals` gives `n_species + 2` rows (flows, temperature and
+the pressure balance) so the unit works in the [EO solver](eo-solver.md). The
+example notebook `examples/41_liquid_pipe_flow.ipynb` regenerates the Moody
+chart and finds the economic pipe diameter with `jax.grad`.
+
+(fluids-module)=
+### Friction Factor Methods
+
+`difflow.fluids.friction_factor(Re, rel_roughness, method)` returns the
+**Darcy** factor (Fanning = Darcy/4).
+
+| Method | Form | Notes |
+|--------|------|-------|
+| `"colebrook"` | implicit Colebrook-White, $1/\sqrt f=-2\log_{10}\!\left(\frac{\varepsilon/D}{3.7}+\frac{2.51}{\mathrm{Re}\sqrt f}\right)$ | Newton iteration (8 steps) from the Haaland estimate; gradients by the implicit function theorem; blended with 64/Re |
+| `"churchill"` | Churchill (1977), one explicit expression | valid laminar, transition and turbulent; no blend |
+| `"haaland"` | $1/\sqrt f=-1.8\log_{10}\!\left[(\varepsilon/D/3.7)^{1.11}+6.9/\mathrm{Re}\right]$ | explicit; blended with 64/Re |
+| `"swamee_jain"` | $f=0.25/\log_{10}^2\!\left[\varepsilon/D/3.7+5.74/\mathrm{Re}^{0.9}\right]$ | explicit; blended with 64/Re |
+
+**Laminar-turbulent blend.** For the Colebrook, Haaland and Swamee-Jain methods
+$f=(1-w)\,64/\mathrm{Re}+w f_\mathrm{turb}$, with $w$ a C² smootherstep of
+$\ln\mathrm{Re}$ between Re = 2100 and 4000 (a sigmoid in log Re with compact
+support: exactly 0 below 2100, exactly 1 above 4000). Below 2100 the result is
+*exactly* 64/Re. No Python `if` is involved, so `jit`, `vmap` and `grad` all
+work, and the gradients are finite across the transition (tested at Re = 1e3,
+2300, 4000 and 1e5 against `check_grads`). In 2100 < Re < 4000 real flow is
+intermittent and no correlation is accurate: the blend is a smooth
+interpolation, not a transition model.
+
+**What was verified, and how** (`tests/test_fluids.py`):
+
+- Colebrook agrees with an independent bracketing solution of the same
+  equation (scipy `brentq`) to 1e-10 over Re 4e3-1e8, ε/D 0-0.05.
+- Its limits are Prandtl's smooth-pipe law and the von Kármán fully-rough law.
+- Moody-chart spot values (smooth: 0.0309, 0.0180, 0.0116 at Re = 1e4, 1e5, 1e6;
+  fully rough: 0.0716, 0.0380, 0.0196 at ε/D = 0.05, 0.01, 0.001) are matched
+  to 1 % (chart reading precision).
+- Colebrook vs Churchill: within 2.2 % for Re ≥ 1e4 and 1.5 % for Re ≥ 1e5 over
+  ε/D 0-0.05; the worst case is 3.1 % at Re = 4000, ε/D = 0.01. Haaland is
+  within 1.4 % and Swamee-Jain within 3.1 % of Colebrook. The 1-2 % agreement
+  holds in the fully turbulent range, not right at the onset of turbulence.
+
+Also in the module: `reynolds_number`, `hydraulic_diameter` (4A/P),
+`darcy_pressure_drop`, `minor_loss`, `fully_rough_friction_factor` and the L/D
+helper `equivalent_length(K, D, f)` = K D / f.
+
+### Fitting Loss Coefficients
+
+`difflow.fluids.FITTINGS` maps a name to a loss coefficient. Entries of kind
+`LD` are Crane's equivalent-length form, $K=(L/D)\,f_T$, where $f_T$ is the
+*fully rough* friction factor of the connected pipe
+(`fully_rough_friction_factor(ε/D)`), so $K$ scales with pipe size and stays
+differentiable in $D$. Entries of kind `K` are constants. For a 2-in Sch 40
+steel pipe the von Kármán formula gives $f_T=0.0190$, the value Crane tabulates
+for 2-in pipe.
+
+| Name | Kind | Value | Source |
+|------|------|-------|--------|
+| `elbow_90_standard` | LD | 30 | Crane TP-410: 90° standard elbow, K = 30 f_T |
+| `elbow_90_long_radius` | LD | 14 | Crane TP-410: 90° bend r/d = 1.5, K = 14 f_T |
+| `elbow_45_standard` | LD | 16 | Crane TP-410: 45° standard elbow, K = 16 f_T |
+| `return_bend_180` | LD | 50 | Crane TP-410: 180° close return bend, K = 50 f_T |
+| `tee_through` | LD | 20 | Crane TP-410: tee, flow through run, K = 20 f_T |
+| `tee_branch` | LD | 60 | Crane TP-410: tee, flow through branch, K = 60 f_T |
+| `gate_valve` | LD | 8 | Crane TP-410: gate valve, fully open, K = 8 f_T |
+| `globe_valve` | LD | 340 | Crane TP-410: globe valve, fully open, K = 340 f_T |
+| `angle_valve` | LD | 150 | Crane TP-410: angle valve, fully open, K = 150 f_T |
+| `ball_valve` | LD | 3 | Crane TP-410: ball valve, fully open, K = 3 f_T |
+| `check_valve_swing` | LD | 50 | Crane TP-410: swing check valve, fully open |
+| `entrance_sharp` | K | 0.5 | Crane TP-410: sharp-edged flush entrance (also Perry's 9e Sec. 6) |
+| `entrance_rounded` | K | 0.04 | Crane TP-410: well-rounded entrance, r/d ≥ 0.15 |
+| `exit` | K | 1.0 | Crane TP-410: exit into a large volume |
+
+Source: Crane Co., *Flow of Fluids Through Valves, Fittings, and Pipe*,
+Technical Paper 410; the same tables are reprinted in Perry's *Chemical
+Engineers' Handbook* (Sec. 6). **Provenance caveat:** these numbers were
+transcribed from the widely reprinted tables and were not machine-checked
+against the TP-410 scan; confirm against your edition for tight designs.
+Published K-values for fittings are good to about ±25 % at best (the swing
+check in particular is quoted differently in different editions).
+
+### Flow Meters
+
+`orifice_flow(dP, D_pipe, d_orifice, rho, Cd=0.61)` and
+`venturi_flow(dP, D_pipe, d_throat, rho, Cd=0.98)` return the volumetric flow
+$Q=C_d\frac{\pi}{4}d^2\sqrt{\frac{2\,\Delta P}{\rho\,(1-\beta^4)}}$,
+$\beta=d/D$. The inverse forms `orifice_dp(Q, ...)` and `venturi_dp(Q, ...)`
+give the differential pressure for a known flow. The discharge coefficients
+are the usual textbook constants (0.61 sharp-edged orifice at high Re; about
+0.98 for a Venturi); ISO 5167 gives $C_d$ as a function of β, Re and tap
+geometry, so pass that value when accuracy matters. Incompressible only, no
+expansibility factor.
+
+### Pipe Networks: Parallel Branches
+
+A full network solver is out of scope (`difflow_gas` covers gas networks), but a
+parallel pair between two nodes is a one-unknown root find with the existing
+solvers: the fraction $x$ of the flow in branch A satisfies
+$\Delta P_A(xQ)=\Delta P_B((1-x)Q)$.
+
+```python
+import jax.numpy as jnp, optimistix as optx
+
+dP = lambda pipe, Q: pipe(stream_with_flow(Q))[1]["dP"]
+res = lambda x, _: dP(pipe_a, x * Q_total) - dP(pipe_b, (1 - x) * Q_total)
+x = optx.root_find(res, optx.Newton(rtol=1e-12, atol=1e-10), jnp.asarray(0.5)).value
+```
+
+Both branches then have equal ΔP, the flows sum to the total, and the split is
+differentiable by the implicit function theorem (`tests/test_pipe.py::
+TestParallelBranches`).
+
+---
+
 ## Combustion & Gas-Turbine Units
 
 These units model a **Brayton cycle** working fluid — air and combustion gas at

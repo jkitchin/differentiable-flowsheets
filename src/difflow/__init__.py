@@ -76,6 +76,7 @@ from difflow.cantera_import import (
 # the Cantera names. Usage: difflow.pyglenn_import.import_species_data([...]),
 # difflow.dwsim_import.import_critical_props([...]). Both underlying tools are
 # optional dependencies, imported lazily inside the adapters' functions.
+from difflow import fluids
 from difflow import pyglenn_import
 from difflow import dwsim_import
 from difflow.params_mixin import ParamsMixin
@@ -163,6 +164,7 @@ from difflow.units.heat_exchanger import (
     design_heat_exchanger,
     size_heat_exchanger,
 )
+from difflow.units.pipe import Pipe, PipeParams
 from difflow.units.eos_units import (
     Turboexpander,
     TurboexpanderParams,
@@ -475,6 +477,8 @@ __all__ = [
     "Compressor",
     "CompressorParams",
     "JTValve",
+    "Pipe",
+    "PipeParams",
     "JTValveParams",
     "ComponentSeparator",
     "ComponentSeparatorParams",

@@ -61,6 +61,7 @@ CORE_CATEGORIES = {
     "heat_exchanger": "heat_transfer",
     "lle": "extraction",
     "eos_units": "pressure_change",
+    "pipe": "pressure_change",
     "gas_turbine": "power",
 }
 
