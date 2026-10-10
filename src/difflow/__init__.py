@@ -55,6 +55,14 @@ from difflow.database import (
     track_database_access,
     DatabaseAccessTracker,
 )
+from difflow.liquid_properties import (
+    get_liquid_properties,
+    liquid_density,
+    liquid_molar_density,
+    liquid_viscosity,
+    liquid_thermal_conductivity,
+    stream_liquid_properties,
+)
 from difflow.base_database import BaseDatabase
 from difflow.uncertainty import (
     linear_propagation,
@@ -76,6 +84,7 @@ from difflow.cantera_import import (
 # the Cantera names. Usage: difflow.pyglenn_import.import_species_data([...]),
 # difflow.dwsim_import.import_critical_props([...]). Both underlying tools are
 # optional dependencies, imported lazily inside the adapters' functions.
+from difflow import fluids
 from difflow import pyglenn_import
 from difflow import dwsim_import
 from difflow.params_mixin import ParamsMixin
@@ -117,6 +126,21 @@ from difflow.units.flash import (
     PHFlash,
     Mixer,
     Splitter,
+)
+from difflow.activity import (
+    ActivityModel,
+    activity_gamma,
+    WilsonParams,
+    MargulesParams,
+    VanLaarParams,
+)
+from difflow.phase_diagrams import (
+    bubble_T,
+    txy,
+    pxy,
+    xy_curve,
+    find_azeotrope,
+    ternary_lle,
 )
 from difflow.units.lle import (
     MultistageCascade,
@@ -163,6 +187,7 @@ from difflow.units.heat_exchanger import (
     design_heat_exchanger,
     size_heat_exchanger,
 )
+from difflow.units.pipe import Pipe, PipeParams
 from difflow.units.eos_units import (
     Turboexpander,
     TurboexpanderParams,
@@ -387,6 +412,13 @@ __all__ = [
     "track_database_access",
     "DatabaseAccessTracker",
     "BaseDatabase",
+    # Liquid properties
+    "get_liquid_properties",
+    "liquid_density",
+    "liquid_molar_density",
+    "liquid_viscosity",
+    "liquid_thermal_conductivity",
+    "stream_liquid_properties",
     # Uncertainty Propagation
     "linear_propagation",
     "monte_carlo_propagation",
@@ -437,6 +469,17 @@ __all__ = [
     "NRTLParams",
     "UNIQUACParams",
     "nrtl_activity_coefficients",
+    "ActivityModel",
+    "activity_gamma",
+    "WilsonParams",
+    "MargulesParams",
+    "VanLaarParams",
+    "bubble_T",
+    "txy",
+    "pxy",
+    "xy_curve",
+    "find_azeotrope",
+    "ternary_lle",
     "uniquac_activity_coefficients",
     "get_K_values",
     "separation_factor",
@@ -475,6 +518,8 @@ __all__ = [
     "Compressor",
     "CompressorParams",
     "JTValve",
+    "Pipe",
+    "PipeParams",
     "JTValveParams",
     "ComponentSeparator",
     "ComponentSeparatorParams",

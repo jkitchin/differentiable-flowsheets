@@ -1,5 +1,5 @@
 {
- "n_sections": 1093,
+ "n_sections": 1106,
  "sections": [
   {
    "anchor": "agents-the-difflow-mcp-server",
@@ -3964,13 +3964,53 @@
    "text": "`CubicThermo` exposes the same K-value interface as `IdealThermo`, built from\nthe EOS fugacity coefficients rather than from Raoult's law:\n\n$$K_i = \\frac{\\hat\\phi_i^L(T, P, x)}{\\hat\\phi_i^V(T, P, y)}$$\n\n```python\nfrom difflow.thermo import CubicThermo\n\nnames = ['propane', 'n_butane']\nsp = {n: get_species_data(n) for n in names}\ncrit = {n: get_critical_props(n) for n in names}\nx = jnp.array([0.5, 0.5])\ny = jnp.array([0.8, 0.2])\n\nthermo = CubicThermo(IdealThermo(sp), PengRobinson(crit))\n\nK = thermo.K_values_array(T=380.0, P=10e5, x=x, y=y)  # both compositions known\nK = thermo.K_values_array(T=380.0, P=10e5, x=x)       # bubble-point K at x\nK = thermo.K_values_array(T=380.0, P=10e5)            # no composition: Raoult\nK = thermo.K_values(T=380.0, P=10e5, x=x)             # same, as a dict\n```\n\nThat is what lets a unit written against `IdealThermo`'s interface \u2014 the\nrigorous [`DistillationColumn`](unit-operations-chemical.md) \u2014 run on\nPeng-Robinson without changing the unit.\n\nTwo properties of these K-values shape how they are used:\n\n**They depend on composition.** $K_i$ is a fixed point, not a formula. Pass\nwhichever compositions you have; whichever you omit is filled in by a bounded\nsuccessive substitution ($y = Kx$ renormalised, or $x = y/K$) from a\ncomposition-free starting estimate, which is the standard bubble- or dew-point\nK calculation. Pass both when you already have a consistent pair \u2014 that is a\nsingle evaluation with no inner loop.\n\n**They only exist inside the two-root window.** The EOS gives a two-phase K\nonly where its cubic has two distinct roots at this $(T, P, x)$. Away from the\nbubble point \u2014 a subcooled liquid, a superheated vapor \u2014 there is one root,\nboth phases take it, and $K_i$ comes back identically 1. That is the EOS\ncorrectly reporting a single phase, but it makes $\\sum_i K_i x_i - 1$ a flat\nzero, which a root finder reads as converged wherever it is standing. A\nbubble-point solve on these K-values therefore needs to start inside the window\nand be able to retreat if a step leaves it; see the two-pass solve in\n`difflow.units.distillation._bubble_T`."
   },
   {
-   "anchor": "species-database",
-   "heading": "Species Database",
-   "path": "Thermodynamics > Species Database",
+   "anchor": "activity-coefficient-models",
+   "heading": "Activity-Coefficient Models",
+   "path": "Thermodynamics > Activity-Coefficient Models",
    "source": "thermodynamics.md",
    "targets": [
     "species-database"
    ],
+   "text": "Non-ideal liquids use the modified Raoult's law $y_i P = x_i \\gamma_i(x,T) P_i^{sat}(T)$.\nAn activity model is any pytree with a `gamma(x, T)` method (the\n`difflow.activity.ActivityModel` protocol; a plain callable `f(x, T)` also works),\nand `difflow.activity_gamma(model, x, T)` dispatches on it. `Flash`,\n`txy`, `pxy`, `xy_curve` and `find_azeotrope` all take one through\n`activity_model=`. The existing `NRTLParams` and `UNIQUACParams` (see\n[LLE](unit-operations-chemical.md)) implement `gamma` as adapters over their\nfunctions, so earlier code is unchanged.\n\n| Model | Class | Species | Parameters | Predicts LLE? |\n|-------|-------|---------|------------|---------------|\n| NRTL | `NRTLParams` | n | $a_{ij}, b_{ij}, \\alpha_{ij}$ | yes |\n| UNIQUAC | `UNIQUACParams` | n | $r, q, a_{ij}, b_{ij}$ | yes |\n| Wilson | `WilsonParams` | n | $V_i$, $\\lambda_{ij}-\\lambda_{ii}$ (J/mol) | **no** |\n| Margules (two-/three-suffix) | `MargulesParams` | 2 | $A_{12}, A_{21}$ | yes |\n| van Laar | `VanLaarParams` | 2 | $A_{12}, A_{21}$ | yes |"
+  },
+  {
+   "anchor": "wilson",
+   "heading": "Wilson",
+   "path": "Thermodynamics > Activity-Coefficient Models > Wilson",
+   "source": "thermodynamics.md",
+   "targets": [],
+   "text": "$$\\Lambda_{ij} = \\frac{V_j}{V_i}\\exp\\!\\left(-\\frac{\\lambda_{ij}-\\lambda_{ii}}{RT}\\right),\\qquad\n\\ln\\gamma_i = 1 - \\ln\\sum_j x_j\\Lambda_{ij} - \\sum_k \\frac{x_k\\Lambda_{ki}}{\\sum_j x_j\\Lambda_{kj}}$$\n\nWilson's equation **cannot predict liquid-liquid splitting**: its Gibbs energy of\nmixing is convex for every parameter set, so it describes one liquid phase. Use\nNRTL or UNIQUAC (or Margules / van Laar) for partially miscible systems."
+  },
+  {
+   "anchor": "margules-and-van-laar",
+   "heading": "Margules and van Laar",
+   "path": "Thermodynamics > Activity-Coefficient Models > Margules and van Laar",
+   "source": "thermodynamics.md",
+   "targets": [],
+   "text": "Binary, dimensionless and temperature independent; $A_{12}=\\ln\\gamma_1^\\infty$,\n$A_{21}=\\ln\\gamma_2^\\infty$.\n\n$$\\text{Margules (3-suffix):}\\quad \\ln\\gamma_1 = x_2^2\\,[A_{12}+2(A_{21}-A_{12})x_1],\\quad\n\\ln\\gamma_2 = x_1^2\\,[A_{21}+2(A_{12}-A_{21})x_2]$$\n\n$A_{12}=A_{21}=A$ is the two-suffix form $\\ln\\gamma_1 = A x_2^2$\n(`MargulesParams.two_suffix`).\n\n$$\\text{van Laar:}\\quad \\ln\\gamma_1 = \\frac{A_{12}A_{21}^2x_2^2}{(A_{12}x_1+A_{21}x_2)^2},\\quad\n\\ln\\gamma_2 = \\frac{A_{21}A_{12}^2x_1^2}{(A_{12}x_1+A_{21}x_2)^2}$$\n\n(the textbook form $A_{12}(1+A_{12}x_1/A_{21}x_2)^{-2}$, rewritten so that the\npure-component limits are finite; $A_{12}$ and $A_{21}$ must share a sign).\n\n```python\nimport jax.numpy as jnp\nfrom difflow import WilsonParams, MargulesParams, VanLaarParams, activity_gamma\n\nx = jnp.array([0.4, 0.6])\nwilson = WilsonParams.binary((\"methanol\", \"water\"), [40.73e-6, 18.07e-6], 667.0, 1981.0)\nprint(activity_gamma(wilson, x, 340.0))\nprint(activity_gamma(MargulesParams.two_suffix((\"a\", \"b\"), 1.0), x, 300.0))\nprint(activity_gamma(VanLaarParams((\"a\", \"b\"), 1.6798, 0.9227), x, 300.0))\n```\n\nValidation, stated precisely (see `tests/test_phase_diagrams.py`): closed forms are\nchecked against hand-computed values, the Gibbs-Duhem equation and the\ninfinite-dilution identities; ethanol-water NRTL reproduces the azeotrope\n(x = 0.893, 351.29 K vs. the experimental 0.894, 351.3 K); the Wilson parameters\nabove were **regressed** to the 1 atm methanol-water Txy table (Perry's) and the\ntest checks the model reproduces it to 0.3 K and 0.01 in $y$. No textbook worked\nexample is reproduced to three figures.\n\n**References**: Wilson, J. Am. Chem. Soc. 86, 127 (1964); van Laar, Z. Phys. Chem.\n72, 723 (1910); Margules, Sitzungsber. Akad. Wiss. Wien 104, 1243 (1895); Prausnitz,\nLichtenthaler, de Azevedo, *Molecular Thermodynamics of Fluid-Phase Equilibria*,\n3e, Ch. 6-7; Smith, Van Ness, Abbott, 7e, Ch. 12."
+  },
+  {
+   "anchor": "phase-diagrams",
+   "heading": "Phase Diagrams",
+   "path": "Thermodynamics > Phase Diagrams",
+   "source": "thermodynamics.md",
+   "targets": [],
+   "text": "`difflow.phase_diagrams` returns the curves used to read and teach phase\nbehaviour. All are JAX and differentiable; bubble temperatures are Newton root\nfinds with implicit differentiation. The vapor is ideal (low pressure) and the\nvapor pressures are the thermo object's Antoine equations.\n\n| Function | Returns |\n|----------|---------|\n| `txy(thermo, species, P, n=51, activity_model=None)` | `dict(x, y, T)`: bubble $T(x)$, $y$ from the K-values |\n| `pxy(thermo, species, T, n=51, activity_model=None)` | `dict(x, y, P)` |\n| `xy_curve(thermo, species, P, n=51, activity_model=None)` | `dict(x, y, T, alpha)`: $\\alpha(x)=K_1/K_2$ |\n| `find_azeotrope(thermo, species, P=..., T=..., activity_model=None)` | `dict(found, x, T, P)`; NaN (masked, no Python branch) if none |\n| `ternary_lle(lle_model, T, n_tie=15)` | `dict(binodal, tie_lines, plait)` by isoactivity continuation |\n\n`ternary_lle` takes an `LLEEquilibrium` (NRTL/UNIQUAC) or any three-species\nactivity model; species 0 and 1 are the partially miscible pair, species 2 the\nsolute. It solves a type-I system by continuation from the binary edge to the\nplait point and is not differentiated.\n\n```python\nfrom difflow import txy, xy_curve, find_azeotrope, IdealThermo\nfrom difflow.database import get_species_data\n\nthermo = IdealThermo({n: get_species_data(n) for n in (\"benzene\", \"toluene\")})\nd = txy(thermo, [\"benzene\", \"toluene\"], 101325.0)\nprint(float(d[\"T\"][0]), float(d[\"T\"][-1]))     # toluene / benzene boiling points\na = xy_curve(thermo, [\"benzene\", \"toluene\"], 101325.0)\nprint(float(a[\"alpha\"].mean()))                # about 2.5\nprint(bool(find_azeotrope(thermo, [\"benzene\", \"toluene\"], P=101325.0)[\"found\"]))\n```\n\nThe benzene-toluene end points agree with the normal boiling points (353.24 K,\n383.78 K) to 0.1 K, and $\\bar\\alpha\\approx 2.49$ (2.35 at the toluene end, 2.60\nat the benzene end)."
+  },
+  {
+   "anchor": "plot-helpers",
+   "heading": "Plot helpers",
+   "path": "Thermodynamics > Phase Diagrams > Plot helpers",
+   "source": "thermodynamics.md",
+   "targets": [],
+   "text": "`difflow.visualization` (matplotlib, optional) provides `plot_txy`, `plot_pxy`,\n`plot_xy` (with the dotted 45 degree line) and `plot_ternary` (equilateral or\nright-triangle coordinates, binodal, tie lines, plait point). Colour is never the\nonly cue: bubble and dew curves differ in line style and marker.\n\n```python\nimport matplotlib\nmatplotlib.use(\"Agg\")\nfrom difflow.visualization import plot_txy\n\nax = plot_txy(d)\n```\n\n---"
+  },
+  {
+   "anchor": "species-database",
+   "heading": "Species Database",
+   "path": "Thermodynamics > Species Database",
+   "source": "thermodynamics.md",
+   "targets": [],
    "text": "**Location**: `difflow/database.py`\n\n(available-species)="
   },
   {
@@ -4079,7 +4119,17 @@
    "path": "Thermodynamics > Species Database > Database Contents Example",
    "source": "thermodynamics.md",
    "targets": [],
-   "text": "```python\n# Methanol data in database\n{\n    'name': 'methanol',\n    'MW': 32.04,\n    'Tc': 512.6,  # K\n    'Pc': 8.09e6,  # Pa\n    'omega': 0.566,\n    'Cp_coeffs': (21.15, 7.092e-2, 2.587e-5, -2.852e-8),\n    'Hvap_coeffs': (45050.0, 0.4065, 512.6),\n    'antoine_coeffs': (10.2044, 1582.91, -33.50),\n    'Hf': -200940.0,  # J/mol\n    'Tref': 298.15\n}\n```\n\n---\n\n(cantera-import)="
+   "text": "```python\n# Methanol data in database\n{\n    'name': 'methanol',\n    'MW': 32.04,\n    'Tc': 512.6,  # K\n    'Pc': 8.09e6,  # Pa\n    'omega': 0.566,\n    'Cp_coeffs': (21.15, 7.092e-2, 2.587e-5, -2.852e-8),\n    'Hvap_coeffs': (45050.0, 0.4065, 512.6),\n    'antoine_coeffs': (10.2044, 1582.91, -33.50),\n    'Hf': -200940.0,  # J/mol\n    'Tref': 298.15\n}\n```\n\n---\n\n(liquid-properties)="
+  },
+  {
+   "anchor": "liquid-properties",
+   "heading": "Liquid Properties",
+   "path": "Thermodynamics > Liquid Properties",
+   "source": "thermodynamics.md",
+   "targets": [
+    "liquid-properties"
+   ],
+   "text": "**Location**: `difflow/liquid_properties.py`\n\nLiquid density, viscosity and thermal conductivity for every species in the\ndatabase, written in JAX so they differentiate and `jit` like the rest of\ndifflow. Pipe flow, film coefficients and evaporators need them.\n\n```python\nfrom difflow import (liquid_density, liquid_viscosity,\n                     liquid_thermal_conductivity, stream_liquid_properties,\n                     make_stream)\n\nliquid_density(\"water\", 298.15)               # 997.0 kg/m^3\nliquid_viscosity(\"toluene\", 320.0)            # Pa s\nliquid_thermal_conductivity(\"ethanol\", 300.0) # W/m/K\n\ns = make_stream({\"water\": 8.0, \"methanol\": 2.0}, T=300.0, P=1e5)\nstream_liquid_properties(s)   # {'rho', 'rho_molar', 'mu', 'k', 'Q'}\n```\n\nMixtures (`mixture_liquid_density`, `mixture_liquid_viscosity`,\n`mixture_liquid_thermal_conductivity` in `difflow.liquid_properties`) use\nsimple rules:\n- density: ideal mixing of molar volumes;\n- viscosity: ln \u03bc = \u03a3 x\u1d62 ln \u03bc\u1d62;\n- thermal conductivity: DIPPR 9H.\n\nAll three neglect interactions. For aqueous and hydrogen-bonding mixtures,\ntreat them as estimates.\n\n**Sources.** The coefficients are generated by\n`scripts/generate_liquid_properties.py` into `_liquid_property_data.py`.\ndifflow does not need `chemicals` or CoolProp at runtime. For each property,\nthe generator picks the source that agreed best with CoolProp:\n\n| Property | First choice | Then | Estimate if neither table has it |\n|---|---|---|---|\n| Density | VDI Heat Atlas PPDS (60 species) | Perry's 8e, DIPPR 105 (9) | Rackett / Yamada-Gunn (4) |\n| Viscosity | Perry's 8e, DIPPR 101 (66) | VDI-PPDS, PPDS9 (3) | Orrick-Erbar (4) |\n| Thermal conductivity | Perry's 8e, DIPPR 100 (66) | VDI-PPDS (3) | Sato-Riedel (4) |\n\n- Both tables come from the `chemicals` package (MIT).\n- Heavy water is in neither table. Its three correlations are fitted to\n  CoolProp.\n- The four estimated species are 2,2,5-trimethylhexane,\n  2,3,4-trimethylpentane, 2,4-dimethylpentane and 2,5-dimethylhexane. On\n  branched isomers that the tables do cover, the estimates are off by:\n  - density: 1\u20133%;\n  - viscosity: up to 25%;\n  - thermal conductivity: up to 27%.\n\n`liquid_property_source(name, prop)` returns the citation for any\ncorrelation, and the report layer records liquid lookups with the kind\n`\"liquid\"`."
   },
   {
    "anchor": "cantera-import",
@@ -4201,7 +4251,7 @@
    "path": "Thermodynamics > Best Practices > Model Selection",
    "source": "thermodynamics.md",
    "targets": [],
-   "text": "| Scenario | Recommended Model |\n|----------|-------------------|\n| Low pressure, ideal mixtures | Ideal Thermo |\n| High pressure (> 10 bar) | PR or SRK EOS |\n| Hydrocarbons | PR EOS |\n| Polar/non-polar mixtures | PR + Binary k_ij |\n| Highly polar (water, alcohols) | Activity coefficient models* |\n\n*Activity coefficient models (NRTL, UNIQUAC) available in LLE module."
+   "text": "| Scenario | Recommended Model |\n|----------|-------------------|\n| Low pressure, ideal mixtures | Ideal Thermo |\n| High pressure (> 10 bar) | PR or SRK EOS |\n| Hydrocarbons | PR EOS |\n| Polar/non-polar mixtures | PR + Binary k_ij |\n| Highly polar (water, alcohols) | Activity coefficient models* |\n\n*Activity coefficient models (NRTL, UNIQUAC, Wilson, Margules, van Laar): see [Activity-Coefficient Models](#activity-coefficient-models) and `Flash(activity_model=...)`."
   },
   {
    "anchor": "temperature-ranges",
@@ -5789,7 +5839,15 @@
    "path": "Chemical Unit Operations > Separators > Flash Drum > Flash Classes > Flash (Ideal)",
    "source": "unit-operations-chemical.md",
    "targets": [],
-   "text": "Uses Raoult's law K-values from IdealThermo. Suitable for ideal or near-ideal mixtures.\n\n```python\nfrom difflow import IdealThermo, make_stream\nfrom difflow.database import get_species_data\nfrom difflow.units.flash import Flash, FlashParams\n\nthermo = IdealThermo({n: get_species_data(n) for n in ['methane', 'ethane', 'propane']})\nflash = Flash(FlashParams(species_order=['methane', 'ethane', 'propane']), thermo)\nfeed = make_stream({'methane': 0.5, 'ethane': 0.3, 'propane': 0.2}, T=200.0, P=500000.0)\n\nliquid, vapor, info = flash(feed)\nprint(f\"Vapor fraction: {info['V_frac']:.3f}\")\n```\n\n(eosflash)="
+   "text": "Uses Raoult's law K-values from IdealThermo. Suitable for ideal or near-ideal mixtures.\n\n```python\nfrom difflow import IdealThermo, make_stream\nfrom difflow.database import get_species_data\nfrom difflow.units.flash import Flash, FlashParams\n\nthermo = IdealThermo({n: get_species_data(n) for n in ['methane', 'ethane', 'propane']})\nflash = Flash(FlashParams(species_order=['methane', 'ethane', 'propane']), thermo)\nfeed = make_stream({'methane': 0.5, 'ethane': 0.3, 'propane': 0.2}, T=200.0, P=500000.0)\n\nliquid, vapor, info = flash(feed)\nprint(f\"Vapor fraction: {info['V_frac']:.3f}\")\n```"
+  },
+  {
+   "anchor": "flash-with-an-activity-model-non-ideal-liquid",
+   "heading": "Flash with an activity model (non-ideal liquid)",
+   "path": "Chemical Unit Operations > Separators > Flash Drum > Flash Classes > Flash with an activity model (non-ideal liquid)",
+   "source": "unit-operations-chemical.md",
+   "targets": [],
+   "text": "With `activity_model=` the K-values follow the modified Raoult's law\n$K_i = \\gamma_i(x,T)\\,P_i^{sat}(T)/P$, which captures azeotropes. The argument is\nany **activity model**: an object with a `gamma(x, T)` method (the\n`difflow.activity.ActivityModel` protocol). `NRTLParams`, `UNIQUACParams`,\n`WilsonParams`, `MargulesParams` and `VanLaarParams` all qualify (Margules and\nvan Laar are binary; Wilson cannot predict liquid-liquid splitting). `species`\nof the model must match `species_order`. The NRTL path is unchanged. See\n[Activity-Coefficient Models](thermodynamics.md#activity-coefficient-models) and,\nfor Txy/Pxy/xy diagrams, [Phase Diagrams](thermodynamics.md#phase-diagrams).\n\n```python\nfrom difflow import WilsonParams\n\nwilson = WilsonParams.binary((\"methanol\", \"water\"), [40.73e-6, 18.07e-6], 667.0, 1981.0)\nth = IdealThermo({n: get_species_data(n) for n in (\"methanol\", \"water\")})\nf = Flash(FlashParams(species_order=[\"methanol\", \"water\"]), th, activity_model=wilson)\nfeed = make_stream({\"methanol\": 0.5, \"water\": 0.5}, T=345.0, P=101325.0)\nliquid, vapor, info = f(feed)\nprint(f\"Vapor fraction: {float(info['V_frac']):.3f}\")\n```\n\n(eosflash)="
   },
   {
    "anchor": "eosflash-non-ideal",
@@ -6468,6 +6526,58 @@
    "source": "unit-operations-chemical.md",
    "targets": [],
    "text": "A black-box separator surrogate: each component is split to the product stream\nby a fixed recovery, the complement going to the residue. Both products inherit\nthe inlet T and P, and the reported duty `Q` is the enthalpy imbalance needed to\nhold both at the inlet temperature. Useful as a column stand-in when only the\nrecovery specification is known.\n\n```python\nrec = {\"propane\": 0.95, \"n_butane\": 0.99}   # heavies to product\nsep = ComponentSeparator(\n    ComponentSeparatorParams(recovery_to_product=rec, default_recovery=0.0),\n    thermo,\n)\nresidue, product, info = sep(feed)   # info: {\"Q\", \"H_in\", \"H_out\"}\n```\n\n---"
+  },
+  {
+   "anchor": "liquid-pipe-flow",
+   "heading": "Liquid Pipe Flow",
+   "path": "Chemical Unit Operations > Liquid Pipe Flow",
+   "source": "unit-operations-chemical.md",
+   "targets": [],
+   "text": "Incompressible (liquid) flow in pipes: Darcy-Weisbach friction with a\nColebrook/Churchill friction factor, fittings, elevation head and\ndifferential-pressure flow meters. The functions live in\n[`difflow.fluids`](#fluids-module) (JAX, SI, differentiable) and the unit\noperation is [`Pipe`](#op-pipe). Gas pipes are a different model\n(Weymouth, `difflow_gas`); compressible flow, two-phase flow, non-Newtonian\nfluids and transients are out of scope.\n\n(op-pipe)="
+  },
+  {
+   "anchor": "pipe",
+   "heading": "Pipe",
+   "path": "Chemical Unit Operations > Liquid Pipe Flow > Pipe",
+   "source": "unit-operations-chemical.md",
+   "targets": [
+    "op-pipe"
+   ],
+   "text": "A run of pipe with fittings and an elevation change. The outlet pressure is\n\n$$\nP_\\mathrm{out} = P_\\mathrm{in} - f\\frac{L}{D}\\frac{\\rho v^2}{2}\n - \\sum_j n_j K_j \\frac{\\rho v^2}{2} - \\rho g\\,\\Delta z ,\n\\qquad v = \\frac{4Q}{\\pi D^2},\\quad Q = \\frac{\\dot m}{\\rho}\n$$\n\nTemperature and molar flows pass through unchanged.\n\n| Parameter | Unit | Meaning |\n|-----------|------|---------|\n| `L` | m | straight pipe length |\n| `D` | m | inside diameter |\n| `rho` | kg/m\u00b3 | liquid density: a number or a callable of the inlet stream |\n| `mu` | Pa s | liquid viscosity: a number or a callable of the inlet stream |\n| `roughness` | m | absolute roughness, default 4.6e-5 (commercial steel) |\n| `dz` | m | elevation gain, positive uphill |\n| `fittings` | \u2013 | `{name: count}` using the K table below, or a total K |\n| `friction_method` | \u2013 | `\"colebrook\"` (default), `\"churchill\"`, `\"haaland\"`, `\"swamee_jain\"` |\n| `MW` | g/mol | molar mass (number or `{species: MW}`) to turn molar into mass flow; omit if a `thermo` is passed |\n\n**Design decision: liquid properties are explicit.** Core `SpeciesData` has no\nliquid density or viscosity, so `rho` and `mu` are *inputs*, as numbers or as\ncallables of the stream (for example a correlation in `T`). Putting\nRackett/DIPPR-105 density and Andrade/DIPPR-101 viscosity into `SpeciesData`\n(with mixing rules) would also serve heat-transfer correlations and pump models\nand is left to a separate issue.\n\n```python\nimport jax\nfrom difflow import Pipe, PipeParams, make_stream\n\n# 3 L/s of water at 20 C through 100 m of 2-in Sch 40 commercial steel\nwater = make_stream({\"W\": 0.003 * 998.2 / 0.018015}, T=293.15, P=3e5)\n\ndef dP(D):\n    pipe = Pipe(PipeParams(L=100.0, D=D, rho=998.2, mu=1.002e-3, MW=18.015,\n                           fittings={\"elbow_90_standard\": 4, \"gate_valve\": 1}))\n    outlet, info = pipe(water)\n    return info[\"dP\"]\n\noutlet, info = Pipe(PipeParams(L=100.0, D=0.0525, rho=998.2, mu=1.002e-3,\n                               MW=18.015))(water)\ninfo[\"v\"], info[\"Re\"], info[\"f\"]      # 1.386 m/s, 7.25e4, 0.02254\ninfo[\"dP_friction\"]                    # 41.1 kPa\njax.grad(dP)(0.0525)                   # d(dP)/dD, Pa/m: economic diameter optimization\n```"
+  },
+  {
+   "anchor": "friction-factor-methods",
+   "heading": "Friction Factor Methods",
+   "path": "Chemical Unit Operations > Liquid Pipe Flow > Friction Factor Methods",
+   "source": "unit-operations-chemical.md",
+   "targets": [
+    "fluids-module"
+   ],
+   "text": "`difflow.fluids.friction_factor(Re, rel_roughness, method)` returns the\n**Darcy** factor (Fanning = Darcy/4).\n\n| Method | Form | Notes |\n|--------|------|-------|\n| `\"colebrook\"` | implicit Colebrook-White, $1/\\sqrt f=-2\\log_{10}\\!\\left(\\frac{\\varepsilon/D}{3.7}+\\frac{2.51}{\\mathrm{Re}\\sqrt f}\\right)$ | Newton iteration (8 steps) from the Haaland estimate; gradients by the implicit function theorem; blended with 64/Re |\n| `\"churchill\"` | Churchill (1977), one explicit expression | valid laminar, transition and turbulent; no blend |\n| `\"haaland\"` | $1/\\sqrt f=-1.8\\log_{10}\\!\\left[(\\varepsilon/D/3.7)^{1.11}+6.9/\\mathrm{Re}\\right]$ | explicit; blended with 64/Re |\n| `\"swamee_jain\"` | $f=0.25/\\log_{10}^2\\!\\left[\\varepsilon/D/3.7+5.74/\\mathrm{Re}^{0.9}\\right]$ | explicit; blended with 64/Re |\n\n**Laminar-turbulent blend.** For the Colebrook, Haaland and Swamee-Jain methods\n$f=(1-w)\\,64/\\mathrm{Re}+w f_\\mathrm{turb}$, with $w$ a C\u00b2 smootherstep of\n$\\ln\\mathrm{Re}$ between Re = 2100 and 4000 (a sigmoid in log Re with compact\nsupport: exactly 0 below 2100, exactly 1 above 4000). Below 2100 the result is\n*exactly* 64/Re. No Python `if` is involved, so `jit`, `vmap` and `grad` all\nwork, and the gradients are finite across the transition (tested at Re = 1e3,\n2300, 4000 and 1e5 against `check_grads`). In 2100 < Re < 4000 real flow is\nintermittent and no correlation is accurate: the blend is a smooth\ninterpolation, not a transition model.\n\n**What was verified, and how** (`tests/test_fluids.py`):\n\n- Colebrook agrees with an independent bracketing solution of the same\n  equation (scipy `brentq`) to 1e-10 over Re 4e3-1e8, \u03b5/D 0-0.05.\n- Its limits are Prandtl's smooth-pipe law and the von K\u00e1rm\u00e1n fully-rough law.\n- Moody-chart spot values (smooth: 0.0309, 0.0180, 0.0116 at Re = 1e4, 1e5, 1e6;\n  fully rough: 0.0716, 0.0380, 0.0196 at \u03b5/D = 0.05, 0.01, 0.001) are matched\n  to 1 % (chart reading precision).\n- Colebrook vs Churchill: within 2.2 % for Re \u2265 1e4 and 1.5 % for Re \u2265 1e5 over\n  \u03b5/D 0-0.05; the worst case is 3.1 % at Re = 4000, \u03b5/D = 0.01. Haaland is\n  within 1.4 % and Swamee-Jain within 3.1 % of Colebrook. The 1-2 % agreement\n  holds in the fully turbulent range, not right at the onset of turbulence."
+  },
+  {
+   "anchor": "fitting-loss-coefficients",
+   "heading": "Fitting Loss Coefficients",
+   "path": "Chemical Unit Operations > Liquid Pipe Flow > Fitting Loss Coefficients",
+   "source": "unit-operations-chemical.md",
+   "targets": [],
+   "text": "`difflow.fluids.FITTINGS` maps a name to a loss coefficient. Entries of kind\n`LD` are Crane's equivalent-length form, $K=(L/D)\\,f_T$, where $f_T$ is the\n*fully rough* friction factor of the connected pipe\n(`fully_rough_friction_factor(\u03b5/D)`), so $K$ scales with pipe size and stays\ndifferentiable in $D$. Entries of kind `K` are constants. For a 2-in Sch 40\nsteel pipe the von K\u00e1rm\u00e1n formula gives $f_T=0.0190$, the value Crane tabulates\nfor 2-in pipe.\n\n| Name | Kind | Value | Source |\n|------|------|-------|--------|\n| `elbow_90_standard` | LD | 30 | Crane TP-410: 90\u00b0 standard elbow, K = 30 f_T |\n| `elbow_90_long_radius` | LD | 14 | Crane TP-410: 90\u00b0 bend r/d = 1.5, K = 14 f_T |\n| `elbow_45_standard` | LD | 16 | Crane TP-410: 45\u00b0 standard elbow, K = 16 f_T |\n| `return_bend_180` | LD | 50 | Crane TP-410: 180\u00b0 close return bend, K = 50 f_T |\n| `tee_through` | LD | 20 | Crane TP-410: tee, flow through run, K = 20 f_T |\n| `tee_branch` | LD | 60 | Crane TP-410: tee, flow through branch, K = 60 f_T |\n| `gate_valve` | LD | 8 | Crane TP-410: gate valve, fully open, K = 8 f_T |\n| `globe_valve` | LD | 340 | Crane TP-410: globe valve, fully open, K = 340 f_T |\n| `angle_valve` | LD | 150 | Crane TP-410: angle valve, fully open, K = 150 f_T |\n| `ball_valve` | LD | 3 | Crane TP-410: ball valve, fully open, K = 3 f_T |\n| `check_valve_swing` | LD | 50 | Crane TP-410: swing check valve, fully open |\n| `entrance_sharp` | K | 0.5 | Crane TP-410: sharp-edged flush entrance (also Perry's 9e Sec. 6) |\n| `entrance_rounded` | K | 0.04 | Crane TP-410: well-rounded entrance, r/d \u2265 0.15 |\n| `exit` | K | 1.0 | Crane TP-410: exit into a large volume |\n\nSource: Crane Co., *Flow of Fluids Through Valves, Fittings, and Pipe*,\nTechnical Paper 410; the same tables are reprinted in Perry's *Chemical\nEngineers' Handbook* (Sec. 6). **Provenance caveat:** these numbers were\ntranscribed from the widely reprinted tables and were not machine-checked\nagainst the TP-410 scan; confirm against your edition for tight designs.\nPublished K-values for fittings are good to about \u00b125 % at best (the swing\ncheck in particular is quoted differently in different editions)."
+  },
+  {
+   "anchor": "flow-meters",
+   "heading": "Flow Meters",
+   "path": "Chemical Unit Operations > Liquid Pipe Flow > Flow Meters",
+   "source": "unit-operations-chemical.md",
+   "targets": [],
+   "text": "`orifice_flow(dP, D_pipe, d_orifice, rho, Cd=0.61)` and\n`venturi_flow(dP, D_pipe, d_throat, rho, Cd=0.98)` return the volumetric flow\n$Q=C_d\\frac{\\pi}{4}d^2\\sqrt{\\frac{2\\,\\Delta P}{\\rho\\,(1-\\beta^4)}}$,\n$\\beta=d/D$. The inverse forms `orifice_dp(Q, ...)` and `venturi_dp(Q, ...)`\ngive the differential pressure for a known flow. The discharge coefficients\nare the usual textbook constants (0.61 sharp-edged orifice at high Re; about\n0.98 for a Venturi); ISO 5167 gives $C_d$ as a function of \u03b2, Re and tap\ngeometry, so pass that value when accuracy matters. Incompressible only, no\nexpansibility factor."
+  },
+  {
+   "anchor": "pipe-networks-parallel-branches",
+   "heading": "Pipe Networks: Parallel Branches",
+   "path": "Chemical Unit Operations > Liquid Pipe Flow > Pipe Networks: Parallel Branches",
+   "source": "unit-operations-chemical.md",
+   "targets": [],
+   "text": "A full network solver is out of scope (`difflow_gas` covers gas networks), but a\nparallel pair between two nodes is a one-unknown root find with the existing\nsolvers: the fraction $x$ of the flow in branch A satisfies\n$\\Delta P_A(xQ)=\\Delta P_B((1-x)Q)$.\n\n```python\nimport jax.numpy as jnp, optimistix as optx\nfrom difflow import Pipe, PipeParams, make_stream\n\nRHO, MU, MW = 998.2, 1.002e-3, 18.015          # water at 20 C\ndef stream_with_flow(Q):                        # Q in m^3/s\n    return make_stream({\"W\": Q * RHO / (MW * 1e-3)}, 293.15, 3e5)\n\npipe_a = Pipe(PipeParams(L=80.0, D=0.0525, rho=RHO, mu=MU, MW=MW))\npipe_b = Pipe(PipeParams(L=150.0, D=0.0409, rho=RHO, mu=MU, MW=MW,\n                         fittings={\"globe_valve\": 1}))\nQ_total = 6e-3\n\ndP = lambda pipe, Q: pipe(stream_with_flow(Q))[1][\"dP\"]\nres = lambda x, _: dP(pipe_a, x * Q_total) - dP(pipe_b, (1 - x) * Q_total)\nx = optx.root_find(res, optx.Newton(rtol=1e-12, atol=1e-10), jnp.asarray(0.5)).value\nprint(f\"branch A carries {float(x):.1%} of the flow\")\n```\n\nBoth branches then have equal \u0394P, the flows sum to the total, and the split is\ndifferentiable by the implicit function theorem (`tests/test_pipe.py::\nTestParallelBranches`).\n\n---"
   },
   {
    "anchor": "combustion-gas-turbine-units",

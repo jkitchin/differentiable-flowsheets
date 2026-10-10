@@ -10,6 +10,7 @@ Core unit operations:
 - ShortcutColumn/DistillationColumn: Distillation
 - Heater/Cooler: Single-stream heat exchange with utility
 - CounterCurrentHX/CoCurrentHX: Two-stream heat exchangers
+- Pipe: Incompressible Darcy-Weisbach pipe with fittings (see difflow.fluids)
 
 For bio manufacturing operations (bioreactors, centrifuge, filtration,
 chromatography), use the difflow_bio plugin:
@@ -111,6 +112,7 @@ from difflow.units.gas_turbine import (
     brayton_cycle,
     make_cycle_thermo,
 )
+from difflow.units.pipe import Pipe, PipeParams
 
 __all__ = [
     # Base classes and helpers
@@ -187,6 +189,9 @@ __all__ = [
     "effectiveness_co_current",
     "design_heat_exchanger",
     "size_heat_exchanger",
+    # Liquid pipe flow
+    "Pipe",
+    "PipeParams",
     # EOS-consistent process units
     "Turboexpander",
     "TurboexpanderParams",

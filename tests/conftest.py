@@ -192,9 +192,22 @@ _MEMORY_FILES = frozenset({
 })
 
 
+#: Files whose tests are independent and long enough that one worker running
+#: the whole file sets the shard's length: each test is its own work unit.
+#: tests/test_doc_examples.py runs every document's code blocks, ~23 runner
+#: minutes in all (the refinery page and README alone ~5 each), and as one
+#: unit it was the tail that pushed per-commit shard 4 past its 40 min cap.
+_SPLIT_FILES = frozenset({
+    "tests/test_doc_examples.py",
+})
+
+
 def _work_unit(nodeid):
-    """The unit ``--dist loadfile`` hands out: the file, or its group."""
+    """The unit ``--dist loadfile`` hands out: the file, its group, or (for
+    :data:`_SPLIT_FILES`) the test."""
     path = nodeid.split("::", 1)[0]
+    if path in _SPLIT_FILES:
+        return nodeid
     if path in _SERIAL_FILES:
         return _SERIAL_GROUP
     if path in _MEMORY_FILES:
@@ -205,7 +218,8 @@ def _work_unit(nodeid):
 @pytest.hookimpl(optionalhook=True)
 def pytest_xdist_make_scheduler(config, log):
     """``--dist loadfile``, with :data:`_SERIAL_FILES` and
-    :data:`_MEMORY_FILES` each as one work unit."""
+    :data:`_MEMORY_FILES` each as one work unit and :data:`_SPLIT_FILES`
+    one unit per test."""
     if config.getvalue("dist") != "loadfile":
         return None
     from xdist.scheduler import LoadFileScheduling

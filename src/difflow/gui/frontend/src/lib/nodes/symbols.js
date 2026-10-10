@@ -427,6 +427,7 @@ export const OPERATION_SYMBOLS = {
   EOSCompressor: 'compressor',
   Turboexpander: 'turbine',
   JTValve: 'valve',
+  Pipe: 'pipe',
 
   // power island
   Combustor: 'combustor',

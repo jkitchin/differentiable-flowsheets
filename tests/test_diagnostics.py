@@ -154,20 +154,40 @@ class TestDiagnose:
         assert trace["history"]
 
 
+# Only Wegstein converges phase_coupled_flash, so an unbudgeted converge
+# runs the whole ladder (~50 s on a laptop, ~160 s on a CI runner) and four
+# tests doing it were most of a CI shard. The default acceleration is
+# already Anderson, so the ladder skips it and Wegstein is the second trial
+# (current, wegstein): budget=2 reaches the same verdict. One
+# applied run serves every per-commit assertion about it, and the full-ladder
+# run is the release tier's.
+PCF_BUDGET = 2
+
+
+@pytest.fixture(scope="module")
+def pcf_applied():
+    wb = bench("phase_coupled_flash")
+    return wb, wb.converge(apply=True, budget=PCF_BUDGET, timeout=3600)
+
+
 class TestConverge:
-    @pytest.mark.parametrize("case", [c.name for c in CORPUS])
+    @pytest.mark.parametrize("case", [
+        pytest.param(c.name, marks=pytest.mark.release)
+        if c.name == "phase_coupled_flash" else c.name for c in CORPUS])
     def test_every_corpus_case_gets_a_passing_setting(self, case):
         answer = bench(case).converge(timeout=3600)
         assert answer["passed"], [(t["remedy"], t["problems"]) for t in answer["trials"]]
 
-    def test_the_known_remedy_is_found(self):
+    def test_the_known_remedy_is_found(self, pcf_applied):
         """The corpus records that only Wegstein solves this one."""
-        answer = bench("phase_coupled_flash").converge(timeout=3600)
+        _, answer = pcf_applied
+        assert answer["passed"]
+        assert [(t["remedy"], t["passed"]) for t in answer["trials"]] == [
+            ("current", False), ("wegstein", True)]
         assert answer["best"]["remedy"] == "wegstein"
 
-    def test_apply_keeps_a_numerics_remedy_and_it_is_undoable(self):
-        wb = bench("phase_coupled_flash")
-        answer = wb.converge(apply=True, timeout=3600)
+    def test_apply_keeps_a_numerics_remedy_and_it_is_undoable(self, pcf_applied):
+        wb, answer = pcf_applied
         assert answer["applied"] == "wegstein"
         assert wb.sessions["main"].flowsheet.view["solver"] == {"acceleration": "wegstein"}
         assert wb.solve()["converged"] is True
@@ -185,9 +205,14 @@ class TestConverge:
         assert wb.sessions["main"].solver_options()["max_iter"] == 3
 
     def test_without_apply_the_settings_are_untouched(self):
-        wb = bench("phase_coupled_flash")
-        wb.converge()
-        assert "solver" not in wb.sessions["main"].flowsheet.view
+        wb = Workbench()
+        wb.open_example("03_reactor_recycle")
+        assert wb.set_solver_options({"acceleration": "none", "max_iter": 3})["ok"]
+        answer = wb.converge(timeout=3600)
+        assert answer["passed"] and answer["best"]["remedy"] != "current"
+        assert answer["applied"] is None
+        assert wb.sessions["main"].solver_options()["max_iter"] == 3
+        assert wb.sessions["main"].solver_options()["acceleration"] == "none"
 
     def test_a_signed_answer_passes_with_a_caveat(self):
         """Negative flows qualify an answer; they do not refute it."""

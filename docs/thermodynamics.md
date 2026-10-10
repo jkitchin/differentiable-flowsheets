@@ -495,6 +495,128 @@ iteration outside the window.
 ---
 
 (species-database)=
+## Activity-Coefficient Models
+
+Non-ideal liquids use the modified Raoult's law $y_i P = x_i \gamma_i(x,T) P_i^{sat}(T)$.
+An activity model is any pytree with a `gamma(x, T)` method (the
+`difflow.activity.ActivityModel` protocol; a plain callable `f(x, T)` also works),
+and `difflow.activity_gamma(model, x, T)` dispatches on it. `Flash`,
+`txy`, `pxy`, `xy_curve` and `find_azeotrope` all take one through
+`activity_model=`. The existing `NRTLParams` and `UNIQUACParams` (see
+[LLE](unit-operations-chemical.md)) implement `gamma` as adapters over their
+functions, so earlier code is unchanged.
+
+| Model | Class | Species | Parameters | Predicts LLE? |
+|-------|-------|---------|------------|---------------|
+| NRTL | `NRTLParams` | n | $a_{ij}, b_{ij}, \alpha_{ij}$ | yes |
+| UNIQUAC | `UNIQUACParams` | n | $r, q, a_{ij}, b_{ij}$ | yes |
+| Wilson | `WilsonParams` | n | $V_i$, $\lambda_{ij}-\lambda_{ii}$ (J/mol) | **no** |
+| Margules (two-/three-suffix) | `MargulesParams` | 2 | $A_{12}, A_{21}$ | yes |
+| van Laar | `VanLaarParams` | 2 | $A_{12}, A_{21}$ | yes |
+
+### Wilson
+
+$$\Lambda_{ij} = \frac{V_j}{V_i}\exp\!\left(-\frac{\lambda_{ij}-\lambda_{ii}}{RT}\right),\qquad
+\ln\gamma_i = 1 - \ln\sum_j x_j\Lambda_{ij} - \sum_k \frac{x_k\Lambda_{ki}}{\sum_j x_j\Lambda_{kj}}$$
+
+Wilson's equation **cannot predict liquid-liquid splitting**: its Gibbs energy of
+mixing is convex for every parameter set, so it describes one liquid phase. Use
+NRTL or UNIQUAC (or Margules / van Laar) for partially miscible systems.
+
+### Margules and van Laar
+
+Binary, dimensionless and temperature independent; $A_{12}=\ln\gamma_1^\infty$,
+$A_{21}=\ln\gamma_2^\infty$.
+
+$$\text{Margules (3-suffix):}\quad \ln\gamma_1 = x_2^2\,[A_{12}+2(A_{21}-A_{12})x_1],\quad
+\ln\gamma_2 = x_1^2\,[A_{21}+2(A_{12}-A_{21})x_2]$$
+
+$A_{12}=A_{21}=A$ is the two-suffix form $\ln\gamma_1 = A x_2^2$
+(`MargulesParams.two_suffix`).
+
+$$\text{van Laar:}\quad \ln\gamma_1 = \frac{A_{12}A_{21}^2x_2^2}{(A_{12}x_1+A_{21}x_2)^2},\quad
+\ln\gamma_2 = \frac{A_{21}A_{12}^2x_1^2}{(A_{12}x_1+A_{21}x_2)^2}$$
+
+(the textbook form $A_{12}(1+A_{12}x_1/A_{21}x_2)^{-2}$, rewritten so that the
+pure-component limits are finite; $A_{12}$ and $A_{21}$ must share a sign).
+
+```python
+import jax.numpy as jnp
+from difflow import WilsonParams, MargulesParams, VanLaarParams, activity_gamma
+
+x = jnp.array([0.4, 0.6])
+wilson = WilsonParams.binary(("methanol", "water"), [40.73e-6, 18.07e-6], 667.0, 1981.0)
+print(activity_gamma(wilson, x, 340.0))
+print(activity_gamma(MargulesParams.two_suffix(("a", "b"), 1.0), x, 300.0))
+print(activity_gamma(VanLaarParams(("a", "b"), 1.6798, 0.9227), x, 300.0))
+```
+
+Validation, stated precisely (see `tests/test_phase_diagrams.py`): closed forms are
+checked against hand-computed values, the Gibbs-Duhem equation and the
+infinite-dilution identities; ethanol-water NRTL reproduces the azeotrope
+(x = 0.893, 351.29 K vs. the experimental 0.894, 351.3 K); the Wilson parameters
+above were **regressed** to the 1 atm methanol-water Txy table (Perry's) and the
+test checks the model reproduces it to 0.3 K and 0.01 in $y$. No textbook worked
+example is reproduced to three figures.
+
+**References**: Wilson, J. Am. Chem. Soc. 86, 127 (1964); van Laar, Z. Phys. Chem.
+72, 723 (1910); Margules, Sitzungsber. Akad. Wiss. Wien 104, 1243 (1895); Prausnitz,
+Lichtenthaler, de Azevedo, *Molecular Thermodynamics of Fluid-Phase Equilibria*,
+3e, Ch. 6-7; Smith, Van Ness, Abbott, 7e, Ch. 12.
+
+## Phase Diagrams
+
+`difflow.phase_diagrams` returns the curves used to read and teach phase
+behaviour. All are JAX and differentiable; bubble temperatures are Newton root
+finds with implicit differentiation. The vapor is ideal (low pressure) and the
+vapor pressures are the thermo object's Antoine equations.
+
+| Function | Returns |
+|----------|---------|
+| `txy(thermo, species, P, n=51, activity_model=None)` | `dict(x, y, T)`: bubble $T(x)$, $y$ from the K-values |
+| `pxy(thermo, species, T, n=51, activity_model=None)` | `dict(x, y, P)` |
+| `xy_curve(thermo, species, P, n=51, activity_model=None)` | `dict(x, y, T, alpha)`: $\alpha(x)=K_1/K_2$ |
+| `find_azeotrope(thermo, species, P=..., T=..., activity_model=None)` | `dict(found, x, T, P)`; NaN (masked, no Python branch) if none |
+| `ternary_lle(lle_model, T, n_tie=15)` | `dict(binodal, tie_lines, plait)` by isoactivity continuation |
+
+`ternary_lle` takes an `LLEEquilibrium` (NRTL/UNIQUAC) or any three-species
+activity model; species 0 and 1 are the partially miscible pair, species 2 the
+solute. It solves a type-I system by continuation from the binary edge to the
+plait point and is not differentiated.
+
+```python
+from difflow import txy, xy_curve, find_azeotrope, IdealThermo
+from difflow.database import get_species_data
+
+thermo = IdealThermo({n: get_species_data(n) for n in ("benzene", "toluene")})
+d = txy(thermo, ["benzene", "toluene"], 101325.0)
+print(float(d["T"][0]), float(d["T"][-1]))     # toluene / benzene boiling points
+a = xy_curve(thermo, ["benzene", "toluene"], 101325.0)
+print(float(a["alpha"].mean()))                # about 2.5
+print(bool(find_azeotrope(thermo, ["benzene", "toluene"], P=101325.0)["found"]))
+```
+
+The benzene-toluene end points agree with the normal boiling points (353.24 K,
+383.78 K) to 0.1 K, and $\bar\alpha\approx 2.49$ (2.35 at the toluene end, 2.60
+at the benzene end).
+
+### Plot helpers
+
+`difflow.visualization` (matplotlib, optional) provides `plot_txy`, `plot_pxy`,
+`plot_xy` (with the dotted 45 degree line) and `plot_ternary` (equilateral or
+right-triangle coordinates, binodal, tie lines, plait point). Colour is never the
+only cue: bubble and dew curves differ in line style and marker.
+
+```python
+import matplotlib
+matplotlib.use("Agg")
+from difflow.visualization import plot_txy
+
+ax = plot_txy(d)
+```
+
+---
+
 ## Species Database
 
 **Location**: `difflow/database.py`
@@ -594,6 +716,82 @@ solvents = get_common_solvents()
     'Tref': 298.15
 }
 ```
+
+---
+
+(liquid-properties)=
+## Liquid Properties
+
+**Location**: `difflow/liquid_properties.py`
+
+Liquid density, viscosity and thermal conductivity for every species in the
+database, written in JAX so they differentiate and `jit` like the rest of
+difflow. Pipe flow, film coefficients and evaporators need them.
+
+```python
+from difflow import (liquid_density, liquid_viscosity,
+                     liquid_thermal_conductivity, stream_liquid_properties,
+                     make_stream)
+
+liquid_density("water", 298.15)               # 997.0 kg/m^3
+liquid_viscosity("toluene", 320.0)            # Pa s
+liquid_thermal_conductivity("ethanol", 300.0) # W/m/K
+
+s = make_stream({"water": 8.0, "methanol": 2.0}, T=300.0, P=1e5)
+stream_liquid_properties(s)   # {'rho', 'rho_molar', 'mu', 'k', 'Q'}
+```
+
+Mixtures (`mixture_liquid_density`, `mixture_liquid_viscosity`,
+`mixture_liquid_thermal_conductivity` in `difflow.liquid_properties`) use
+simple rules:
+- density: ideal mixing of molar volumes;
+- viscosity: ln μ = Σ xᵢ ln μᵢ;
+- thermal conductivity: DIPPR 9H.
+
+All three neglect interactions. For aqueous and hydrogen-bonding mixtures,
+treat them as estimates.
+
+**Sources.** The coefficients are generated by
+`scripts/generate_liquid_properties.py` into `_liquid_property_data.py`.
+difflow does not need `chemicals` or CoolProp at runtime. For each property,
+the generator picks the source that agreed best with CoolProp:
+
+| Property | First choice | Then | Estimate if neither table has it |
+|---|---|---|---|
+| Density | VDI Heat Atlas PPDS (60 species) | Perry's 8e, DIPPR 105 (9) | Rackett / Yamada-Gunn (4) |
+| Viscosity | Perry's 8e, DIPPR 101 (66) | VDI-PPDS, PPDS9 (3) | Orrick-Erbar (4) |
+| Thermal conductivity | Perry's 8e, DIPPR 100 (66) | VDI-PPDS (3) | Sato-Riedel (4) |
+
+- Both tables come from the `chemicals` package (MIT).
+- Heavy water is in neither table. Its three correlations are fitted to
+  CoolProp.
+- The four estimated species are 2,2,5-trimethylhexane,
+  2,3,4-trimethylpentane, 2,4-dimethylpentane and 2,5-dimethylhexane. On
+  branched isomers that the tables do cover, the estimates are off by:
+  - density: 1–3%;
+  - viscosity: up to 25%;
+  - thermal conductivity: up to 27%.
+
+`liquid_property_source(name, prop)` returns the citation for any
+correlation, and the report layer records liquid lookups with the kind
+`"liquid"`.
+
+Against CoolProp's saturated liquid, across the 46 species it covers, the
+worst errors are:
+- density: 2.2%;
+- viscosity: 20%;
+- thermal conductivity: 18%.
+
+There is one exception. For the viscosity of n-pentane, isopentane and
+dimethyl ether at low temperature, the two tables agree with each other but
+not with CoolProp.
+
+**Temperature range.** Each correlation stores Tmin and Tmax, and
+`check_liquid_range(name, T)` reports them. A concrete temperature outside the
+range raises `LiquidRangeWarning`. The value returned is still the
+correlation's: it is never clipped, so the gradient stays smooth.
+`range_stated=False` marks a range the source does not give, which is
+assumed. Under `jit` or `grad` the check is skipped.
 
 ---
 
@@ -902,7 +1100,7 @@ print(f"d(P_eth/P_wat)/dT at 350K: {sensitivity:.6f}")
 | Polar/non-polar mixtures | PR + Binary k_ij |
 | Highly polar (water, alcohols) | Activity coefficient models* |
 
-*Activity coefficient models (NRTL, UNIQUAC) available in LLE module.
+*Activity coefficient models (NRTL, UNIQUAC, Wilson, Margules, van Laar): see [Activity-Coefficient Models](#activity-coefficient-models) and `Flash(activity_model=...)`.
 
 ### Temperature Ranges
 
