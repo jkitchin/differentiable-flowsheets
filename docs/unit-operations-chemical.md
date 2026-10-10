@@ -1911,6 +1911,133 @@ design = design_heat_exchanger(Q=100000.0, T_hot_in=400.0, T_hot_out=350.0,
 design['UA'], design['A'], design['LMTD']   # W/K, m², K
 ```
 
+(heat-transfer-module)=
+### Heat-Transfer Coefficients
+
+The exchangers above take `U` or `UA` as a number. `difflow.heat_transfer`
+(pure JAX functions, SI, differentiable, **not** a palette operation) computes
+that number from geometry, flow and fluid properties. Properties are inputs
+(`k`, `mu`, `Cp`, `rho`), as in [`difflow.fluids`](#fluids-module), which also
+supplies the Darcy friction factor Gnielinski needs. Everything is traced:
+`jax.grad` of `U` with respect to tube velocity or diameter works, which is
+what the velocity and insulation-thickness optimizations use
+(`examples/45_heat_transfer_coefficients.ipynb`).
+
+| Group | Functions |
+|---|---|
+| Dimensionless groups | `reynolds`, `prandtl`, `nusselt_to_h`, `grashof`, `rayleigh` |
+| Conduction | `slab_resistance`, `cylinder_resistance`, `sphere_resistance`, `composite_wall`, `critical_insulation_radius`, `fin_efficiency_straight` |
+| Tube side | `sieder_tate_laminar`, `dittus_boelter`, `sieder_tate`, `gnielinski`, `internal_nusselt`, `internal_h` |
+| External flow | `churchill_bernstein` (cylinder), `flat_plate_nusselt` |
+| Natural convection | `churchill_chu_vertical_plate`, `churchill_chu_horizontal_cylinder` |
+| Phase change | `nusselt_film_condensation`, `rohsenow_heat_flux`, `rohsenow_superheat`, `mostinski`, `critical_heat_flux` |
+| Overall | `overall_U`, `FOULING_RESISTANCES`, `TYPICAL_U_RANGES`, `typical_U_range` |
+
+**Tube side.** `internal_h(Re, Pr, k, D, L=None, mu_ratio=1, rel_roughness=0,
+method="gnielinski", heating=True, boundary="T")` returns $h=\mathrm{Nu}\,k/D$:
+
+* $\mathrm{Re}\le2300$: fully developed $\mathrm{Nu}=3.66$ (constant wall
+  temperature) or $4.36$ (`boundary="q"`, constant flux); with `L` given, the
+  Sieder-Tate entry form $1.86(\mathrm{Re\,Pr}\,D/L)^{1/3}(\mu_b/\mu_w)^{0.14}$
+  joined to it as $(\mathrm{Nu}_{fd}^3+\mathrm{Nu}_{en}^3)^{1/3}$ (a smooth
+  combination chosen here, not a published correlation).
+* $\mathrm{Re}\ge4000$: Gnielinski
+  $\mathrm{Nu}=\frac{(f/8)(\mathrm{Re}-1000)\mathrm{Pr}}{1+12.7\sqrt{f/8}\,(\mathrm{Pr}^{2/3}-1)}$
+  with $f$ from `fluids.friction_factor`, or `dittus_boelter`
+  ($0.023\,\mathrm{Re}^{0.8}\mathrm{Pr}^{0.4/0.3}$) or `sieder_tate`
+  ($0.027\,\mathrm{Re}^{0.8}\mathrm{Pr}^{1/3}(\mu_b/\mu_w)^{0.14}$).
+* 2300 to 4000: a C2 smootherstep in $\ln\mathrm{Re}$ between the two. There is
+  no Python branching, so `Re` may be traced; $h$ and its first two derivatives
+  are continuous across the whole range, and the gradient is exactly zero
+  where the blend starts. Real transitional flow is intermittent and no
+  correlation is accurate there; the blend is a smooth interpolation, not a
+  model of transition.
+
+**Overall U.** `overall_U(h_i, h_o, D_i, D_o, k_wall, R_fi=0, R_fo=0,
+basis="outer")`:
+
+$$\frac1{U_o}=\frac1{h_o}+R_{f,o}+\frac{D_o\ln(D_o/D_i)}{2k}+R_{f,i}\frac{D_o}{D_i}+\frac{D_o}{D_i\,h_i}$$
+
+and the same referred to the inner area with `basis="inner"`
+($U_oA_o=U_iA_i$). Wall conduction uses `cylinder_resistance`'s logarithmic
+form; `k_wall=jnp.inf` removes it.
+
+```python
+import jax
+from difflow import heat_transfer as ht, CounterCurrentHX, HeatExchangerParams
+
+def U_outer(v, D_i=0.0229):
+    Re = ht.reynolds(rho, v, D_i, mu)
+    h_i = ht.internal_h(Re, ht.prandtl(Cp, mu, k), k, D_i, L=4.0)
+    return ht.overall_U(h_i, h_shell, D_i, D_i + 0.0025, 16.0, R_fi=1e-4)
+
+dU_dv = jax.grad(U_outer)(1.5)                 # W/m^2/K per (m/s)
+UA = U_outer(1.5) * area                       # a plain number for the exchanger
+hx = CounterCurrentHX(HeatExchangerParams(UA=UA, Cp_hot=75.3, Cp_cold=75.3))
+```
+
+The exchangers still take a float (or array) `U`/`UA`; a callable `U(hot, cold,
+params)` is **not** implemented -- compute `U` first, as above (it is already
+differentiable, so `jax.grad` flows through to the exchanger).
+
+**Other correlations.**
+
+| Function | Correlation | Source (Incropera & DeWitt, *Fundamentals of Heat and Mass Transfer*) |
+|---|---|---|
+| `churchill_bernstein` | cylinder in cross flow, all $\mathrm{Re\,Pr}>0.2$ | Eq. 7.57 |
+| `flat_plate_nusselt` | $0.664\mathrm{Re}^{1/2}\mathrm{Pr}^{1/3}$; $0.037\mathrm{Re}^{4/5}\mathrm{Pr}^{1/3}$; mixed $(0.037\mathrm{Re}^{4/5}-871)\mathrm{Pr}^{1/3}$ joined smoothly over $\mathrm{Re}_L$ 5e5-5.5e5 | Eqs. 7.31, 7.41, 7.38 |
+| `churchill_chu_*` | vertical plate, horizontal cylinder, all Ra | Eqs. 9.26, 9.34 |
+| `nusselt_film_condensation` | $h=C[g\rho_l(\rho_l-\rho_v)k_l^3h_{fg}'/(\mu_l\,\Delta T\,L)]^{1/4}$, $C=0.943$ plate, $0.729$ horizontal tube, $h_{fg}'=h_{fg}+0.68C_p\Delta T$; $N$ tubes in a column $h_N=h_1N^{-1/4}$ | Eqs. 10.26, 10.40, 10.42 |
+| `rohsenow_heat_flux`, `rohsenow_superheat` | $q''=\mu_lh_{fg}[g(\rho_l-\rho_v)/\sigma]^{1/2}[C_p\Delta T_e/(C_{sf}h_{fg}\mathrm{Pr}^n)]^3$ and its closed-form inverse | Eq. 10.5 |
+| `mostinski` | $h=0.00417\,P_c^{0.69}q^{0.7}F_p$ ($P_c$ in kPa) | Mostinski (1963); recalled, see below |
+| `critical_heat_flux` | Zuber, $C\,h_{fg}\rho_v^{1/2}[\sigma g(\rho_l-\rho_v)]^{1/4}$, $C=\pi/24$ | Eq. 10.7 (constant is a parameter) |
+
+Rohsenow's $C_{sf}$ defaults to 0.013 (water on polished copper/platinum),
+recalled from memory of Incropera Table 10.1: check it for real work. Not
+implemented: annular fins, tube banks (Zukauskas), the Kern/Bell-Delaware
+shell-side method (#403), radiation, transient conduction.
+
+**What is validated (and what is not).** No textbook worked-example number is
+quoted, because none could be reproduced with confidence. Each correlation is
+checked against an independent hand/NumPy evaluation of the stated formula
+(1e-10 or better). Where a derivation exists the constant itself is checked:
+Nusselt's 0.943 against a numerical integral of the film-thickness solution,
+the cylinder resistance against numerical integration of Fourier's law, the
+fin efficiency against the exact convecting-tip solution, the critical
+insulation radius as the stationary maximum of the heat loss. Looser checks
+are labelled sanity bands in `tests/test_heat_transfer.py`: Gnielinski vs
+Dittus-Boelter within 20% at Re 1e4 to 1e5; Mostinski vs Rohsenow within 30%
+for water at 1 atm; Zuber's water CHF within 5% of the commonly quoted 1.1
+MW/m². The published shell-and-tube `overall_U` example and the textbook
+steam and Rohsenow examples are **not** reproduced; `overall_U` is checked
+against the series-resistance network, its limits and $U_oA_o=U_iA_i$.
+
+**Typical fouling resistances** (`FOULING_RESISTANCES`, m² K/W; transcribed
+from memory of Incropera Table 11.1, which cites TEMA; **not verified**, use
+your own standard for design):
+
+| Service | $R_f$ |
+|---|---|
+| Seawater, below 50 °C | 0.0001 |
+| Seawater, above 50 °C | 0.0002 |
+| Treated boiler feedwater, above 50 °C | 0.0002 |
+| Fuel oil | 0.0009 |
+| Refrigerating liquids | 0.0002 |
+| Steam, oil-free | 0.0001 |
+
+**Typical overall U** (`TYPICAL_U_RANGES`, W/m²/K; from memory of Incropera
+Table 11.2, **not verified**; a sanity band for a computed `U`, not a design
+value):
+
+| Service | U range |
+|---|---|
+| Water to water | 850-1700 |
+| Water to oil | 100-350 |
+| Steam condenser, water in tubes | 1000-6000 |
+| Ammonia condenser, water in tubes | 800-1400 |
+| Alcohol condenser, water in tubes | 250-700 |
+| Finned tube, water in tubes, air in cross flow | 25-50 |
+
 ---
 
 ## Liquid-Liquid Extraction

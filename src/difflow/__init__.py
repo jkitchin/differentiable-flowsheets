@@ -85,6 +85,7 @@ from difflow.cantera_import import (
 # difflow.dwsim_import.import_critical_props([...]). Both underlying tools are
 # optional dependencies, imported lazily inside the adapters' functions.
 from difflow import fluids
+from difflow import heat_transfer
 from difflow import pyglenn_import
 from difflow import dwsim_import
 from difflow.params_mixin import ParamsMixin

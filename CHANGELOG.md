@@ -169,6 +169,30 @@ All notable changes to difflow are recorded here. The format follows
   The vendor curve in tests and notebook is illustrative, not a published
   datasheet; the operating point is verified against an independent
   numpy/scipy calculation rather than a textbook figure.
+- **Heat-transfer coefficients (#402).** New `difflow.heat_transfer` (pure JAX
+  functions, SI, differentiable; not a palette unit): `reynolds`, `prandtl`,
+  `grashof`, `rayleigh`, `nusselt_to_h`; conduction (`slab_`/`cylinder_`/
+  `sphere_resistance`, `composite_wall`, `critical_insulation_radius`,
+  `fin_efficiency_straight`); tube-side `dittus_boelter`, `sieder_tate`,
+  `sieder_tate_laminar`, `gnielinski` (takes the Darcy factor from
+  `difflow.fluids.friction_factor`) and the dispatcher `internal_h` /
+  `internal_nusselt` with a C2 laminar-transition-turbulent blend over Re
+  2300-4000 and no Python branching on Re; `churchill_bernstein`,
+  `flat_plate_nusselt`, Churchill-Chu natural convection; Nusselt film
+  condensation (plate, tube, n-tube column), Rohsenow boiling (flux and closed
+  form inverse), `mostinski`, Zuber `critical_heat_flux`; and
+  `overall_U(h_i, h_o, D_i, D_o, k_wall, R_fi, R_fo, basis)`. Docs section
+  "Heat-Transfer Coefficients" in `unit-operations-chemical.md`, tests in
+  `tests/test_heat_transfer.py` and `examples/45_heat_transfer_coefficients.ipynb`
+  (U to `CounterCurrentHX`, optimal tube velocity with `difflow.economics`;
+  its prices are illustrative placeholders). Validation is against
+  independent evaluations of the stated formulas and derivations (Nusselt's
+  0.943, fin, cylinder resistance), **not** textbook worked-example numbers,
+  which were not reproduced; the `FOULING_RESISTANCES` and `TYPICAL_U_RANGES`
+  tables, the Rohsenow `C_sf` default and the Mostinski constants are from
+  memory and flagged unverified. Not done: callable `U`/`UA` on the exchangers
+  (compute `U` and pass the number), annular fins, tube banks, Kern /
+  Bell-Delaware (#403).
 
 - **Liquid pipe flow (#399).** New `difflow.fluids` (JAX, SI, differentiable):
   `reynolds_number`, `hydraulic_diameter`, the Darcy `friction_factor` by
