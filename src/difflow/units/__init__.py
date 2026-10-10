@@ -9,8 +9,11 @@ Core unit operations:
 - MultistageCascade: Liquid-liquid extraction
 - ShortcutColumn/DistillationColumn: Distillation
 - Heater/Cooler: Single-stream heat exchange with utility
+- Evaporator/MultiEffectEvaporator/MechanicalVaporRecompression: concentration of
+  a non-volatile solute with boiling-point rise
 - CounterCurrentHX/CoCurrentHX: Two-stream heat exchangers
 - Pipe: Incompressible Darcy-Weisbach pipe with fittings (see difflow.fluids)
+- CentrifugalPump: pump curves, affinity laws, NPSH, system curve, operating point
 
 For bio manufacturing operations (bioreactors, centrifuge, filtration,
 chromatography), use the difflow_bio plugin:
@@ -88,8 +91,24 @@ from difflow.units.heat_exchanger import (
     log_mean_temperature_difference,
     effectiveness_counter_current,
     effectiveness_co_current,
+    effectiveness_shell_and_tube,
     design_heat_exchanger,
     size_heat_exchanger,
+)
+from difflow.units.evaporator import (
+    Evaporator,
+    EvaporatorParams,
+    MultiEffectEvaporator,
+    MultiEffectEvaporatorParams,
+    MechanicalVaporRecompression,
+    MVRParams,
+    UnverifiedDataWarning,
+    boiling_point_rise,
+    water_saturation_pressure,
+    water_saturation_temperature,
+    water_latent_heat,
+    water_liquid_enthalpy,
+    water_vapor_enthalpy,
 )
 from difflow.units.eos_units import (
     Turboexpander,
@@ -113,6 +132,16 @@ from difflow.units.gas_turbine import (
     make_cycle_thermo,
 )
 from difflow.units.pipe import Pipe, PipeParams
+from difflow.units.pump import (
+    CentrifugalPump,
+    CentrifugalPumpParams,
+    fit_pump_curve,
+    npsh_available,
+    operating_point,
+    pumps_in_parallel,
+    pumps_in_series,
+    system_curve,
+)
 
 __all__ = [
     # Base classes and helpers
@@ -170,6 +199,20 @@ __all__ = [
     "minimum_reflux_ratio",
     "gilliland_stages",
     "column_diameter",
+    # Evaporators
+    "Evaporator",
+    "EvaporatorParams",
+    "MultiEffectEvaporator",
+    "MultiEffectEvaporatorParams",
+    "MechanicalVaporRecompression",
+    "MVRParams",
+    "UnverifiedDataWarning",
+    "boiling_point_rise",
+    "water_saturation_pressure",
+    "water_saturation_temperature",
+    "water_latent_heat",
+    "water_liquid_enthalpy",
+    "water_vapor_enthalpy",
     # Heat Exchangers
     "DefaultCpWarning",
     "Heater",
@@ -187,11 +230,20 @@ __all__ = [
     "log_mean_temperature_difference",
     "effectiveness_counter_current",
     "effectiveness_co_current",
+    "effectiveness_shell_and_tube",
     "design_heat_exchanger",
     "size_heat_exchanger",
     # Liquid pipe flow
     "Pipe",
     "PipeParams",
+    "CentrifugalPump",
+    "CentrifugalPumpParams",
+    "fit_pump_curve",
+    "npsh_available",
+    "operating_point",
+    "pumps_in_parallel",
+    "pumps_in_series",
+    "system_curve",
     # EOS-consistent process units
     "Turboexpander",
     "TurboexpanderParams",

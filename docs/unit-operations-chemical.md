@@ -317,9 +317,13 @@ plt.ylabel('Conversion')
 ```python
 @dataclass
 class GasPFRParams(PFRParams):
-    alpha: float           # Pressure drop parameter (1/m³); fold the Ergun
-                           # terms (diameter, void fraction, particle size) into it
+    alpha: float           # Pressure drop parameter (Pa/m³); or give the physical
+                           # bed instead: d_p, voidage, mu, rho_gas, u_s0, bed_area
 ```
+
+Instead of a lumped `alpha`, pass `d_p`, `voidage`, `mu`, `rho_gas`, `u_s0`,
+`bed_area` (and optionally `sphericity`) and $\alpha$ is computed from the full
+Ergun equation; see [Particles and Beds](particles-ergun).
 
 #### Additional Equations
 
@@ -1907,6 +1911,502 @@ design = design_heat_exchanger(Q=100000.0, T_hot_in=400.0, T_hot_out=350.0,
 design['UA'], design['A'], design['LMTD']   # W/K, m², K
 ```
 
+(heat-transfer-module)=
+### Heat-Transfer Coefficients
+
+The exchangers above take `U` or `UA` as a number. `difflow.heat_transfer`
+(pure JAX functions, SI, differentiable, **not** a palette operation) computes
+that number from geometry, flow and fluid properties. Properties are inputs
+(`k`, `mu`, `Cp`, `rho`), as in [`difflow.fluids`](#fluids-module), which also
+supplies the Darcy friction factor Gnielinski needs. Everything is traced:
+`jax.grad` of `U` with respect to tube velocity or diameter works, which is
+what the velocity and insulation-thickness optimizations use
+(`examples/45_heat_transfer_coefficients.ipynb`).
+
+| Group | Functions |
+|---|---|
+| Dimensionless groups | `reynolds`, `prandtl`, `nusselt_to_h`, `grashof`, `rayleigh` |
+| Conduction | `slab_resistance`, `cylinder_resistance`, `sphere_resistance`, `composite_wall`, `critical_insulation_radius`, `fin_efficiency_straight` |
+| Tube side | `sieder_tate_laminar`, `dittus_boelter`, `sieder_tate`, `gnielinski`, `internal_nusselt`, `internal_h` |
+| External flow | `churchill_bernstein` (cylinder), `flat_plate_nusselt` |
+| Natural convection | `churchill_chu_vertical_plate`, `churchill_chu_horizontal_cylinder` |
+| Phase change | `nusselt_film_condensation`, `rohsenow_heat_flux`, `rohsenow_superheat`, `mostinski`, `critical_heat_flux` |
+| Overall | `overall_U`, `FOULING_RESISTANCES`, `TYPICAL_U_RANGES`, `typical_U_range` |
+
+**Tube side.** `internal_h(Re, Pr, k, D, L=None, mu_ratio=1, rel_roughness=0,
+method="gnielinski", heating=True, boundary="T")` returns $h=\mathrm{Nu}\,k/D$:
+
+* $\mathrm{Re}\le2300$: fully developed $\mathrm{Nu}=3.66$ (constant wall
+  temperature) or $4.36$ (`boundary="q"`, constant flux); with `L` given, the
+  Sieder-Tate entry form $1.86(\mathrm{Re\,Pr}\,D/L)^{1/3}(\mu_b/\mu_w)^{0.14}$
+  joined to it as $(\mathrm{Nu}_{fd}^3+\mathrm{Nu}_{en}^3)^{1/3}$ (a smooth
+  combination chosen here, not a published correlation).
+* $\mathrm{Re}\ge4000$: Gnielinski
+  $\mathrm{Nu}=\frac{(f/8)(\mathrm{Re}-1000)\mathrm{Pr}}{1+12.7\sqrt{f/8}\,(\mathrm{Pr}^{2/3}-1)}$
+  with $f$ from `fluids.friction_factor`, or `dittus_boelter`
+  ($0.023\,\mathrm{Re}^{0.8}\mathrm{Pr}^{0.4/0.3}$) or `sieder_tate`
+  ($0.027\,\mathrm{Re}^{0.8}\mathrm{Pr}^{1/3}(\mu_b/\mu_w)^{0.14}$).
+* 2300 to 4000: a C2 smootherstep in $\ln\mathrm{Re}$ between the two. There is
+  no Python branching, so `Re` may be traced; $h$ and its first two derivatives
+  are continuous across the whole range, and the gradient is exactly zero
+  where the blend starts. Real transitional flow is intermittent and no
+  correlation is accurate there; the blend is a smooth interpolation, not a
+  model of transition.
+
+**Overall U.** `overall_U(h_i, h_o, D_i, D_o, k_wall, R_fi=0, R_fo=0,
+basis="outer")`:
+
+$$\frac1{U_o}=\frac1{h_o}+R_{f,o}+\frac{D_o\ln(D_o/D_i)}{2k}+R_{f,i}\frac{D_o}{D_i}+\frac{D_o}{D_i\,h_i}$$
+
+and the same referred to the inner area with `basis="inner"`
+($U_oA_o=U_iA_i$). Wall conduction uses `cylinder_resistance`'s logarithmic
+form; `k_wall=jnp.inf` removes it.
+
+```python
+import jax
+from difflow import heat_transfer as ht, CounterCurrentHX, HeatExchangerParams
+
+rho, mu, Cp, k = 998.0, 1.0e-3, 4180.0, 0.60    # water, tube side (SI)
+h_shell, area = 2000.0, 12.0                    # shell-side h (W/m^2/K), area (m^2)
+
+def U_outer(v, D_i=0.0229):
+    Re = ht.reynolds(rho, v, D_i, mu)
+    h_i = ht.internal_h(Re, ht.prandtl(Cp, mu, k), k, D_i, L=4.0)
+    return ht.overall_U(h_i, h_shell, D_i, D_i + 0.0025, 16.0, R_fi=1e-4)
+
+dU_dv = jax.grad(U_outer)(1.5)                 # W/m^2/K per (m/s)
+UA = U_outer(1.5) * area                       # a plain number for the exchanger
+hx = CounterCurrentHX(HeatExchangerParams(UA=UA, Cp_hot=75.3, Cp_cold=75.3))
+```
+
+The exchangers still take a float (or array) `U`/`UA`; a callable `U(hot, cold,
+params)` is **not** implemented -- compute `U` first, as above (it is already
+differentiable, so `jax.grad` flows through to the exchanger).
+
+**Other correlations.**
+
+| Function | Correlation | Source (Incropera & DeWitt, *Fundamentals of Heat and Mass Transfer*) |
+|---|---|---|
+| `churchill_bernstein` | cylinder in cross flow, all $\mathrm{Re\,Pr}>0.2$ | Eq. 7.57 |
+| `flat_plate_nusselt` | $0.664\mathrm{Re}^{1/2}\mathrm{Pr}^{1/3}$; $0.037\mathrm{Re}^{4/5}\mathrm{Pr}^{1/3}$; mixed $(0.037\mathrm{Re}^{4/5}-871)\mathrm{Pr}^{1/3}$ joined smoothly over $\mathrm{Re}_L$ 5e5-5.5e5 | Eqs. 7.31, 7.41, 7.38 |
+| `churchill_chu_*` | vertical plate, horizontal cylinder, all Ra | Eqs. 9.26, 9.34 |
+| `nusselt_film_condensation` | $h=C[g\rho_l(\rho_l-\rho_v)k_l^3h_{fg}'/(\mu_l\,\Delta T\,L)]^{1/4}$, $C=0.943$ plate, $0.729$ horizontal tube, $h_{fg}'=h_{fg}+0.68C_p\Delta T$; $N$ tubes in a column $h_N=h_1N^{-1/4}$ | Eqs. 10.26, 10.40, 10.42 |
+| `rohsenow_heat_flux`, `rohsenow_superheat` | $q''=\mu_lh_{fg}[g(\rho_l-\rho_v)/\sigma]^{1/2}[C_p\Delta T_e/(C_{sf}h_{fg}\mathrm{Pr}^n)]^3$ and its closed-form inverse | Eq. 10.5 |
+| `mostinski` | $h=0.00417\,P_c^{0.69}q^{0.7}F_p$ ($P_c$ in kPa) | Mostinski (1963); recalled, see below |
+| `critical_heat_flux` | Zuber, $C\,h_{fg}\rho_v^{1/2}[\sigma g(\rho_l-\rho_v)]^{1/4}$, $C=\pi/24$ | Eq. 10.7 (constant is a parameter) |
+
+Rohsenow's $C_{sf}$ defaults to 0.013 (water on polished copper/platinum),
+recalled from memory of Incropera Table 10.1: check it for real work. Not
+implemented: annular fins, tube banks (Zukauskas), the Bell-Delaware
+shell-side method (Kern is in [`difflow.shell_and_tube`](#shell-and-tube-design)),
+radiation, transient conduction.
+
+**What is validated (and what is not).** No textbook worked-example number is
+quoted, because none could be reproduced with confidence. Each correlation is
+checked against an independent hand/NumPy evaluation of the stated formula
+(1e-10 or better). Where a derivation exists the constant itself is checked:
+Nusselt's 0.943 against a numerical integral of the film-thickness solution,
+the cylinder resistance against numerical integration of Fourier's law, the
+fin efficiency against the exact convecting-tip solution, the critical
+insulation radius as the stationary maximum of the heat loss. Looser checks
+are labelled sanity bands in `tests/test_heat_transfer.py`: Gnielinski vs
+Dittus-Boelter within 20% at Re 1e4 to 1e5; Mostinski vs Rohsenow within 30%
+for water at 1 atm; Zuber's water CHF within 5% of the commonly quoted 1.1
+MW/m². The published shell-and-tube `overall_U` example and the textbook
+steam and Rohsenow examples are **not** reproduced; `overall_U` is checked
+against the series-resistance network, its limits and $U_oA_o=U_iA_i$.
+
+**Typical fouling resistances** (`FOULING_RESISTANCES`, m² K/W; transcribed
+from memory of Incropera Table 11.1, which cites TEMA; **not verified**, use
+your own standard for design):
+
+| Service | $R_f$ |
+|---|---|
+| Seawater, below 50 °C | 0.0001 |
+| Seawater, above 50 °C | 0.0002 |
+| Treated boiler feedwater, above 50 °C | 0.0002 |
+| Fuel oil | 0.0009 |
+| Refrigerating liquids | 0.0002 |
+| Steam, oil-free | 0.0001 |
+
+**Typical overall U** (`TYPICAL_U_RANGES`, W/m²/K; from memory of Incropera
+Table 11.2, **not verified**; a sanity band for a computed `U`, not a design
+value):
+
+| Service | U range |
+|---|---|
+| Water to water | 850-1700 |
+| Water to oil | 100-350 |
+| Steam condenser, water in tubes | 1000-6000 |
+| Ammonia condenser, water in tubes | 800-1400 |
+| Alcohol condenser, water in tubes | 250-700 |
+| Finned tube, water in tubes, air in cross flow | 25-50 |
+
+(shell-and-tube-design)=
+### ShellAndTubeDesign
+
+**Location**: `difflow/shell_and_tube.py` (a library, **not** a palette
+operation: it takes mass flows and explicit properties and returns a geometry,
+like `difflow.heat_transfer`; `examples/46_shell_and_tube_design.ipynb`)
+
+**Description**: Sizes a 1-2N shell-and-tube exchanger. `ShellAndTubeDesign(params)(hot, cold, Q=...)`
+(or `T_hot_out=` / `T_cold_out=`; streams are `{"T": K, "m_dot": kg/s}`)
+assumes `U`, gets the area from $Q=UAF\,\mathrm{LMTD}$, builds the geometry,
+computes the tube-side film coefficient (`heat_transfer.internal_h`, Gnielinski
+with `fluids.friction_factor`), the shell-side one by the Kern method, and
+a new `U` from `heat_transfer.overall_U` with fouling, and iterates to a fixed
+point with `optimistix.fixed_point`, so the area and everything derived from it
+are differentiable (implicit-function-theorem gradients) in baffle spacing,
+tube velocity, passes, flows, fouling and properties.
+
+**Equations**
+
+$$A=\frac{Q}{U\,F\,\mathrm{LMTD}_{cc}},\qquad
+\frac1{U_o}=\frac1{h_o}+R_{fo}+\frac{d_o\ln(d_o/d_i)}{2k_w}+R_{fi}\frac{d_o}{d_i}+\frac{d_o}{d_ih_i}$$
+
+Kern shell side (segmental baffles, 25 % cut; Kern 1950, Coulson & Richardson
+Vol 6 Eqs. 12.21-12.26):
+
+$$D_e=\frac{1.10}{d_o}\left(P_t^2-0.917\,d_o^2\right)\ (\triangle),\quad
+D_e=\frac{1.27}{d_o}\left(P_t^2-0.785\,d_o^2\right)\ (\square),\quad
+A_s=\frac{(P_t-d_o)D_sl_B}{P_t},\quad G_s=\frac{\dot m_s}{A_s}$$
+
+$$\mathrm{Nu}_s=\frac{h_oD_e}{k}=0.36\,\mathrm{Re}_s^{0.55}\mathrm{Pr}^{1/3}\Big(\frac{\mu}{\mu_w}\Big)^{0.14},\qquad
+\Delta P_s=f_s\frac{D_s}{D_e}\frac{L}{l_B}\frac{\rho u_s^2}{2}\Big(\frac{\mu}{\mu_w}\Big)^{-0.14},\quad f_s=e^{0.576-0.19\ln\mathrm{Re}_s}$$
+
+($L/l_B$ is the number of baffle crossings, $N_b+1$; $f_s=8j_f$ of the
+Coulson & Richardson chart.) Tube side:
+
+$$\Delta P_t=N_p\Big(f\frac{L}{d_i}+4\Big)\frac{\rho v^2}{2},\qquad v=\frac{\dot m\,N_p}{\rho\,N_t\,\pi d_i^2/4}$$
+
+($f$ Darcy from `fluids.friction_factor`; 4 velocity heads per pass for the
+return, Coulson & Richardson use 2.5.) Geometry: $D_b=d_o(N_t/K_1)^{1/n_1}$
+(`bundle_diameter`, C&R Table 12.4 constants for $P_t=1.25d_o$), shell
+$D_s=D_b+$ `shell_clearance`; `tube_count(shell_ID, ...)` is the Kakac form
+$N_t=\mathrm{CTP}\,(\pi/4)D_s^2/(\mathrm{CL}\,P_t^2)$. $F$ is the Bowman 1-2N
+factor of `lmtd_correction_factor`; `effectiveness_shell_and_tube` is the same
+thing in $\varepsilon$-NTU form.
+
+| Function / class | Purpose |
+|---|---|
+| `equivalent_diameter`, `kern_shell_side`, `kern_shell_pressure_drop`, `kern_friction_factor` | Kern shell side: $D_e,A_s,G_s,\mathrm{Re}_s,h_o,\Delta P_s$ |
+| `tube_side_pressure_drop` | friction (`fluids.friction_factor`) plus return losses per pass |
+| `tube_count`, `bundle_diameter` | continuous tube-count and bundle-diameter correlations; `BUNDLE_CONSTANTS`, `BWG_WALL_THICKNESS`, `TEMA_TUBE_PITCH`, `tube_inside_diameter` data |
+| `ShellAndTubeDesignParams`, `ShellAndTubeDesign` | the design loop; `.rate(...)` re-rates a given geometry |
+| `round_design` | integer tube count, standard passes, baffle spacing and shell ID for building |
+
+```python
+import jax
+from difflow import shell_and_tube as st
+
+p = st.ShellAndTubeDesignParams(
+    tube_OD=0.01905, tube_ID=0.01483, tube_side="cold",
+    rho_hot=780.0, mu_hot=4e-4, k_hot=0.13, Cp_hot=2200.0,      # properties are inputs
+    rho_cold=830.0, mu_cold=2.9e-3, k_cold=0.13, Cp_cold=2050.0,
+    tube_velocity=1.5, tube_length=None, R_fi=1e-4, R_fo=1e-4,
+    dP_tube_max=7e4, dP_shell_max=7e4)
+design = st.ShellAndTubeDesign(p)
+hot, cold = {"T": 473.0, "m_dot": 5.0}, {"T": 303.0, "m_dot": 18.0}
+r = design(hot, cold, T_hot_out=373.0)            # U, area, n_tubes, shell_ID, dP_tube, dP_shell, F, flags
+dA = jax.grad(lambda lB, v: design(hot, cold, T_hot_out=373.0, baffle_spacing=lB,
+                                   tube_velocity=v, warn=False)["area"], argnums=(0, 1))(0.25, 1.2)
+geom = st.round_design(r)                         # buildable geometry ...
+rated = design.rate(hot, cold, **geom)            # ... and its re-rating
+```
+
+**Two modes for the free geometry.** With `tube_length` the tube count follows from the
+area; with `tube_velocity` the tube count follows from the flow and the tube length
+from the area. The baffle spacing is `baffle_spacing` (m) or `baffle_spacing_ratio`
+times the shell ID. Any of these, `n_tube_passes`, `tube_OD`, `tube_ID`,
+`pitch_ratio`, `k_wall` and the fouling resistances can be passed as call
+overrides, traced or not, to differentiate with respect to them.
+
+**Warnings and flags.** The result carries `F_too_low` (`F < 0.75`),
+`dP_tube_exceeded` / `dP_shell_exceeded` (against `dP_tube_max` / `dP_shell_max`),
+`converged` and `tube_laminar`; each also raises a `UserWarning` for concrete
+values (not under `jit`/`grad`).
+
+**Non-unique fixed point.** With a fixed tube length, more area means more
+tubes, slower tube flow and a lower $h_i$: positive feedback, so the loop can
+have a second, large-area, laminar solution. In the test case a start at
+$U\le100$ lands on 211 m$^2$ at $\mathrm{Re}_t\approx1500$, against 13 m$^2$ at
+$\mathrm{Re}_t\approx23000$ from any typical start. It is a genuine root of the
+same equations; `tube_laminar` and a warning flag it, and fixing
+`tube_velocity` removes the feedback.
+
+**Integer quantities.** Tube count, tube passes and the number of baffles are
+continuous in the design (`n_baffles` $=L/l_B-1$; passes interpolate the
+$K_1,n_1$ and CTP tables linearly in $\ln N_p$ / $N_p$, a smoothing choice, not a
+published correlation) so that `jax.grad` and gradient-based optimizers work.
+To build the result: `round_design(result)` rounds the tube count **up**, the
+passes to the nearest standard even count (1, 2, 4, 6, 8), the baffle spacing
+**down** and the shell ID **up** to a step (illustrative, not TEMA), and
+`design.rate(hot, cold, **geometry)` re-rates that geometry. Rounding changes
+the velocities, $h_i$, $h_o$ and both pressure drops, so re-check the duty margin and the
+limits after rounding; in the example notebook the rounded 7 m, 54-tube,
+single-pass design re-rates to 1.01 times the target duty.
+
+**Phase change (simple mode).** `hot_isothermal=True` (condensing) or
+`cold_isothermal=True` (boiling) makes that side isothermal ($F=1$), and `shell_h`
+supplies its film coefficient: a number, or a callable of the geometry dict
+(`tube_OD`, `n_tubes`, `tube_length`, `shell_ID`, `area`), e.g. built on
+`heat_transfer.nusselt_film_condensation` or the boiling correlations.
+Shell-side $\Delta P$ is then not modelled (reported as 0). Desuperheating and
+subcooling zones are not split out; for a rigorous two-phase *rating* use
+`EnthalpyCounterCurrentHX`.
+
+**Design and rating agree.** `design.rate(...)` for the designed geometry returns the
+design duty to 1e-8, and `ShellAndTubeHX(UA=U*A, ...)` returns the same duty
+and outlet temperatures (`tests/test_shell_and_tube.py`). Making that true required
+two fixes to the existing rating code (see the changelog): `lmtd_correction_factor`
+returned its $R=1$ value for every $|R-1|>0.075$, and `ShellAndTubeHX` took
+$Q=F\,Q_{cc}(UA)$, a few percent off $Q=UAF\,\mathrm{LMTD}$; it now uses the exact
+1-2N (and $n$-shell) effectiveness `effectiveness_shell_and_tube`.
+
+**What is validated (and what is not).**
+
+* **Not reproduced: the classic Kern kerosene-crude example** (Kern 1950;
+  Coulson & Richardson Vol 6, Ch. 12 worked examples). The inputs and the
+  printed answers could not be reproduced from memory with confidence and no copy of
+  either book was available, so no agreement with them is claimed. The issue's
+  criterion "within 5 % of the textbook example" is therefore **open**: it needs
+  someone with the book to enter the example's inputs and compare
+  (`tests/test_shell_and_tube.py` has a hand-calculation harness that takes
+  the same arguments).
+* Checked: every Kern equation ($D_e$, $A_s$, $G_s$, $\mathrm{Re}_s$, $h_o$, $\Delta P_s$) and the
+  tube-side equations (velocity, Re, Gnielinski $h_i$ with a brentq-solved
+  Colebrook factor, friction and return $\Delta P$) against a plain-Python hand
+  calculation (1e-12 to 1e-6); the whole loop against an independent plain-Python
+  re-implementation with substitution on $U$ (2e-6, both modes); $F$
+  against the closed form; the effectiveness against $Q=UAF\,\mathrm{LMTD}$
+  solved by brentq; gradients by `check_grads` and central finite differences.
+* **Recalled from memory and not verified against the books:** the Kern
+  constants (0.36, 0.55 for $\mathrm{Nu}$; 0.576, 0.19 for $f_s$, a fit to Kern's chart, not
+  the chart), the $D_e$ rounded constants (1.10/0.917/1.27/0.785 are checked
+  against the exact pitch-cell hydraulic diameters to 3 %), the $K_1,n_1$ bundle
+  constants (sanity-banded against a brute-force tube-lattice count, 15 %), the
+  CTP/CL tube-count constants, the BWG wall table and the TEMA pitch table.
+  Kern ignores leakage and bypass streams (Bell-Delaware, out of scope,
+  handles them): treat it as a screening-level method; its accuracy was not
+  assessed here.
+
+**References**: Kern, D.Q. (1950), *Process Heat Transfer*, McGraw-Hill;
+Coulson & Richardson, *Chemical Engineering* Vol. 6 (Sinnott), Ch. 12;
+Kakac, Liu & Pramuanjaroenkij, *Heat Exchangers: Selection, Rating, and Thermal
+Design*; Bowman, Mueller & Nagle, Trans. ASME 62 (1940) 283; Kays & London,
+*Compact Heat Exchangers*; Gnielinski, Int. Chem. Eng. 16 (1976) 359.
+
+---
+
+(evaporators)=
+## Evaporators
+
+An evaporator concentrates a solution of a **non-volatile solute** by boiling
+off the solvent (water) with steam: caustic, sugar, pulp liquor, brine,
+pharma concentrates. What separates it from a `Heater` followed by a `Flash`
+is that the solute raises the boiling point, the heat goes through a surface
+with a given `U` and area, and in a multiple-effect train the vapor of one
+effect is the heating medium of the next. Source: `difflow/units/evaporator.py`.
+
+**How the solute is represented.** The solute is an ordinary difflow species in
+the stream (`F_NaOH`, in mol/s) whose **vapor flow is exactly zero**: the vapor
+outlet carries the same species keys with the solute at `0.0`. That is the
+difflow-native form of "vapor pressure zero" and needs no special case anywhere
+(nothing divides by a vapor pressure or a vapor flow, so gradients stay finite).
+The alternative, a mass-fraction field riding on the stream, would not survive a
+`Mixer` or a `Splitter`. Mass fractions are computed from the molar flows and
+the `solute_MW` on the params; `x` is always the **solute mass fraction**.
+
+**Steam properties** are self-contained correlations in the module
+(IAPWS-IF97 region-4 for `Psat(T)`/`Tsat(P)`, fits for `h_f` and `h_fg` valid
+20-200 C), not the `IdealThermo` Antoine/Watson water entry, whose latent heat is
+too coarse for a steam economy.
+
+**Boiling-point rise** (`bpr_model`, or `boiling_point_rise(x, P, model)`):
+
+| Model | What it is | Status |
+|-------|------------|--------|
+| `ideal` | Raoult's law with unit activity: the solution boils where `x_w Psat(T) = P`; `vant_hoff_i` counts particles per solute | exact for the ideal solution |
+| `colligative` | `dT = R Tw^2 i m / lambda`, the dilute limit | exact in the limit |
+| `duhring` | your own lines `T_soln = a(x) + b(x) T_water` (`duhring_x/a/b`) | your data |
+| `polynomial` | BPR in K as a polynomial in `x` (`bpr_coeffs`) | your data |
+| `naoh`, `nacl` | built-in 1 atm tables turned into Duhring lines | **unverified, see below** |
+| `sucrose` | `1.78 x + 6.22 x^2` K (Geankoplis Ex. 8.4-1) | **recalled, unverified** |
+| callable | `Evaporator(params, bpr_fn=f)`, `f(x, T_water, P) -> K` | yours |
+
+```{warning}
+The built-in `naoh`, `nacl` and `sucrose` data are **approximate recollections,
+not transcriptions of the Duhring chart** (McCabe/Perry). Only a couple of
+anchor points per table are firm (NaOH 50 wt % boiling near 143 C at 1 atm; the
+saturated NaCl solution near 108.7 C). Selecting one raises
+`UnverifiedDataWarning`. The acceptance criterion "NaOH BPR matches the cited
+chart values" is therefore **not met**: read your chart and pass it through
+`duhring=` or `bpr_fn`. The tabulated models are piecewise linear in `x`.
+```
+
+**Solution enthalpy** is a Cp mixing rule by default
+(`(1-x) h_f(T) + x Cp_solute (T - 273.15)`, no heat of dilution); give
+`cp_coeffs` (a polynomial in `x`) or `Evaporator(params, enthalpy_fn=f)`,
+`f(T, x) -> J/kg`, for a heat of dilution or an enthalpy-concentration chart
+(NaOH is the classic case). The vapor leaves at the solution temperature,
+superheated by the BPR (`Cp_vapor`), and condensate leaves saturated.
+
+### Evaporator
+
+**Location**: `difflow/units/evaporator.py`
+
+**Class**: `Evaporator(params, *, bpr_fn=None, enthalpy_fn=None)`; call
+`concentrate, vapor, info = evap(feed, steam=None)`.
+
+<!-- doc-test: skip: field listing (a class sketch), not an executable example -->
+```python
+@dataclass
+class EvaporatorParams:
+    solute_species: list[str]   # non-volatile species names (required)
+    solute_MW: list[float]      # their molar masses, g/mol (required)
+    solvent: str = "water"
+    U: float = 2000.0           # W/m^2/K
+    A: float = None             # m^2   -> rating
+    x_product: float = None     # kg/kg -> design (exactly one of A, x_product)
+    P_vapor_space: float = 101325.0
+    steam_P: float = None       # Pa (or steam_T, K, or pass a steam stream)
+    bpr_model: str = "ideal"    # see the table above
+    vant_hoff_i: float = 1.0
+    ...                         # bpr_coeffs, duhring_*, Cp_solute, cp_coeffs, Cp_vapor
+```
+
+Two modes, as for `design_heat_exchanger`: **design** (`x_product` given: steam,
+vapor, duty and the required area in closed form) and **rating** (`A` given:
+the product concentration is solved, differentiably).
+
+#### Governing Equations
+
+$$x_F F = x_P L,\quad V = F - L,\quad T = T_{sat}(P_v) + \mathrm{BPR}(x_P, P_v)$$
+
+$$Q = L h_L(T, x_P) + V H_V - F h_F,\qquad H_V = h_g(T_w) + c_{p,v}(T - T_w)$$
+
+$$S \lambda_s = Q,\qquad Q = U A (T_s - T),\qquad \text{economy} = V / S$$
+
+`info` holds `steam` (kg/s), `steam_economy` (vapor/steam), `Q`, `T_soln`, `BPR`,
+`A`, `x_product`, `V`, `L`, `driving_force`, and two closure residuals,
+`energy_balance_error` and `mass_balance_error`.
+
+```python
+from difflow import make_stream
+from difflow.units import Evaporator, EvaporatorParams
+
+# 10 kg/s of 10 wt % NaOH, concentrated to 30 wt % at 30 kPa with 300 kPa steam
+feed = make_stream({"water": 9000 / 18.015, "NaOH": 1000 / 40.0}, T=330.0, P=2e5)
+params = EvaporatorParams(
+    solute_species=["NaOH"], solute_MW=[40.0], U=1500.0, x_product=0.30,
+    P_vapor_space=30e3, steam_P=300e3, bpr_model="ideal", vant_hoff_i=2.0,
+)
+concentrate, vapor, info = Evaporator(params)(feed)
+float(info["steam"]), float(info["steam_economy"]), float(info["A"]), float(info["BPR"])
+
+# Rating the same vessel: give the area, get the concentration back
+rating = EvaporatorParams(
+    solute_species=["NaOH"], solute_MW=[40.0], U=1500.0, A=float(info["A"]),
+    P_vapor_space=30e3, steam_P=300e3, bpr_model="ideal", vant_hoff_i=2.0,
+)
+_, _, back = Evaporator(rating)(feed)
+float(back["x_product"])          # 0.30
+```
+
+### MultiEffectEvaporator
+
+**Location**: `difflow/units/evaporator.py`
+
+**Class**: `MultiEffectEvaporator(params, *, bpr_fn=None, enthalpy_fn=None)`; call
+`concentrate, vapor, info = mee(feed, steam=None)`.
+
+N effects; the vapor of effect *i* heats effect *i+1*, effect 1 gets the live
+steam and the last effect vents at `P_vapor_space`. Per-effect `U` (a list, or one
+value for all). Feed arrangements `feed="forward" | "backward" | "parallel"`.
+
+* **Design, equal areas** (`x_product` given): the intermediate effect
+  temperatures, the steam rate, the vapor flows and one common area `A` are
+  solved so that every effect has the same area, as one Newton solve
+  (`optimistix`) of the stacked energy balances, rate equations and the overall
+  solute balance (the textbook iteration, done simultaneously). It is
+  differentiable with respect to `U`, the feed and the steam pressure by the
+  implicit function theorem. For parallel feed the feed split is solved too.
+* **Rating** (`A` list given): areas fixed, the product concentration follows.
+  Parallel feed uses `feed_split` (default equal).
+
+`MultiEffectEvaporator` with `n_effects=1` agrees with `Evaporator`. `info` has
+per-effect `T`, `T_water`, `P`, `BPR`, `V`, `A`, `Q`, `x` (index 0 is effect 1),
+the overall `steam`, `steam_economy` (total vapor / steam), `total_area`,
+`converged`, `residual_norm` and the closure residuals. The vapor in effect
+*i+1*'s steam chest carries the superheat that the BPR of effect *i* puts into
+it; condensate leaves each chest saturated.
+
+```python
+from difflow.units import MultiEffectEvaporator, MultiEffectEvaporatorParams
+
+mee_params = MultiEffectEvaporatorParams(
+    solute_species=["NaOH"], solute_MW=[40.0], n_effects=3, feed="forward",
+    U=[2500.0, 2000.0, 1500.0], x_product=0.30, P_vapor_space=30e3,
+    steam_P=300e3, bpr_model="ideal", vant_hoff_i=2.0,
+)
+concentrate, vapor, info = MultiEffectEvaporator(mee_params)(feed)
+print("converged:", bool(info["converged"]))
+print("steam economy:", round(float(info["steam_economy"]), 2))
+print("areas (m^2):", [round(float(a), 1) for a in info["A"]])
+print("effect T (K):", [round(float(t), 1) for t in info["T"]])
+```
+
+### MechanicalVaporRecompression
+
+**Location**: `difflow/units/evaporator.py`
+
+**Class**: `MechanicalVaporRecompression(params)`; call
+`concentrate, condensate, info = mvr(feed)`.
+
+A single effect whose own vapor is compressed (ideal-gas steam, isentropic,
+efficiency `eta`, ratio `gamma`) until it condenses `dT_drive` above the boiling
+solution and heats the same surface. Design mode (`x_product` given). `info`
+reports the compressor work `W_compressor` against the steam it saves
+(`steam_without_mvr`, `steam_makeup`, `steam_saved` when `steam_P` is given). The
+compression is an ideal-gas calculation, not the EOS `Compressor`; real-gas
+steam deviates by a few percent of the work at these pressures.
+
+```python
+from difflow.units import MechanicalVaporRecompression, MVRParams
+
+mvr = MechanicalVaporRecompression(MVRParams(
+    solute_species=["NaOH"], solute_MW=[40.0], U=1500.0, x_product=0.30,
+    P_vapor_space=101325.0, dT_drive=10.0, eta=0.75, steam_P=300e3,
+    bpr_model="ideal", vant_hoff_i=2.0,
+))
+_, condensate, m = mvr(feed)
+print("compressor work (kW):", round(float(m["W_compressor"]) / 1e3, 1))
+print("steam saved (kg/s):", round(float(m["steam_saved"]), 2))
+```
+
+### What was and was not verified
+
+* **Verified** (`tests/test_evaporator.py`): mass and energy closure; agreement
+  with an independent NumPy/SciPy re-implementation of the same equations (own
+  steam properties, `fsolve`); `MultiEffectEvaporator(n_effects=1)` equals
+  `Evaporator`; steam economy rises with N and stays near 0.8-1.0 N for a
+  water-like, preheated feed; design-then-rate round trips; `check_grads`
+  (order 1, reverse) of steam rate and area with respect to `U`, feed
+  concentration and steam pressure, single and multiple effect.
+* **Steam properties**: `Psat`/`Tsat` are the IAPWS-IF97 equations; `h_f` and
+  `h_fg` are fits to eight steam-table points recalled from a standard table
+  (not regenerated from IAPWS), within about 0.1 % over 20-200 C.
+* **NOT verified**: no textbook worked example is claimed to be reproduced to
+  2-3 %. The Geankoplis Example 8.4-1 inputs (as recalled) run, and
+  `tests/test_evaporator.py` pins them as a regression value, but the book's
+  printed answers were not available to compare with. The NaOH, NaCl and
+  sucrose BPR data are unverified (above). Nothing here models fouling,
+  hydraulics, entrainment, or crystallization.
+
+For an economics pass use `heat_exchanger_cost(area)` and
+`steam_cost_from_duty`; the optimal-number-of-effects study is in
+`examples/47_evaporators.ipynb`.
+
 ---
 
 ## Liquid-Liquid Extraction
@@ -2441,6 +2941,125 @@ TestParallelBranches`).
 
 ---
 
+## Centrifugal Pumps
+
+A centrifugal pump model with performance curves: the pump raises the pressure
+of a liquid by $\rho g H(Q)$, the curves scale with speed and impeller diameter
+by the affinity laws, NPSH available is checked against NPSH required, and
+`operating_point` answers "what flow will this pump deliver into this system?"
+The system curve is built from [`Pipe`](#op-pipe) runs, so friction and fittings
+come from [`difflow.fluids`](#fluids-module). Positive-displacement pumps, pump
+transients and multiphase pumps are out of scope.
+
+(op-centrifugalpump)=
+### CentrifugalPump
+
+$$
+H(Q) = h_0 + h_1 Q + h_2 Q^2, \qquad
+\eta(Q) = \eta_{\max}\Bigl(1-\bigl(\tfrac{Q-Q_\mathrm{bep}}{Q_\mathrm{bep}}\bigr)^2\Bigr), \qquad
+P_\mathrm{shaft} = \frac{\rho g Q H}{\eta}
+$$
+
+$$
+Q \propto N D, \quad H \propto N^2 D^2, \quad P \propto N^3 D^3, \qquad
+\mathrm{NPSH}_a = \frac{P_s - P_\mathrm{sat}}{\rho g} + \frac{v_s^2}{2g} + z_s - h_{f,s}
+$$
+
+In the default (flow-given) mode the inlet stream fixes $Q=\dot m/\rho$ and the
+outlet is $P_\mathrm{in}+\rho g H(Q)$; temperature and molar flows pass through
+(or, with `cp`, the liquid warms by the dissipated shaft work).
+
+| Parameter | Unit | Meaning |
+|-----------|------|---------|
+| `head_coeffs` | m, m/(m³/s), … | ascending polynomial coefficients of $H(Q)$ at the reference speed and diameter (see `fit_pump_curve`) |
+| `rho` | kg/m³ | liquid density: a number or a callable of the inlet stream |
+| `eta_coeffs` or `eta_max` + `Q_bep` | –, m³/s | efficiency polynomial, or the BEP-centred parabola |
+| `npshr_coeffs` | m, … | polynomial of required NPSH (optional) |
+| `N_ref`, `D_ref` | rpm, m | speed and impeller diameter the curves belong to |
+| `N`, `D` | rpm, m | operating speed and diameter (default: the references) |
+| `motor_efficiency` | – | `electric_power = shaft_power / motor_efficiency` |
+| `MW` | g/mol | molar mass (number or `{species: MW}`); omit if a `thermo` is passed |
+| `Psat` | Pa | vapour pressure for NPSHa (number or callable); otherwise `thermo.Psat(species, T)` |
+| `D_suction` | m | suction nozzle diameter for the velocity head in NPSHa |
+| `cp` | J/kg/K | liquid heat capacity; enables the temperature rise |
+
+`info` holds `Q`, `head`, `efficiency`, `hydraulic_power`, `shaft_power`,
+`electric_power` (W) and, when the curves and a vapour pressure are given,
+`NPSHr`, `NPSHa` and `npsh_margin = NPSHa - NPSHr` (negative: cavitation risk).
+Like `Pipe`, liquid density is an explicit input; see the design note under
+[Pipe](#op-pipe).
+
+```python
+from difflow import (CentrifugalPump, CentrifugalPumpParams, Pipe, PipeParams,
+                     fit_pump_curve, operating_point, system_curve)
+
+Q_data = [0.0, 0.01, 0.02, 0.03, 0.04]                # vendor points, m^3/s
+H_data = [38.0, 36.5, 32.0, 24.5, 14.0]               # head, m (illustrative)
+h = fit_pump_curve(Q_data, H_data, order=2)
+pump = CentrifugalPump(CentrifugalPumpParams(
+    head_coeffs=h, rho=998.2, eta_max=0.72, Q_bep=0.020,
+    npshr_coeffs=[1.5, 0.0, 2.5e3], N_ref=1750.0, D_ref=0.25, MW=18.015))
+
+line = Pipe(PipeParams(L=400.0, D=0.1023, rho=998.2, mu=1.002e-3, MW=18.015, fittings=5.3))
+sys_ = system_curve(12.0, line)                       # 12 m static lift + friction
+Q_star = operating_point(pump, sys_)                  # m^3/s; differentiable
+```
+
+**Helpers.**
+
+- `system_curve(static_head, *pipes, delta_P=None, rho=None)` gives
+  $H_\mathrm{sys}(Q)=\Delta z+\Delta P/\rho g+\sum_i (h_{f,i}(Q)+\mathrm{dz}_i)$. Pipe `dz`
+  is included, so put elevation either in the pipes or in `static_head`.
+- `operating_point(pump, system)` solves $H_\mathrm{pump}(Q)=H_\mathrm{sys}(Q)$ by
+  Newton started from the pump's zero-head flow. Gradients with respect to
+  pump and system parameters (`D`, `N`, pipe diameter, ...) use the implicit
+  function theorem, not the iterations. It has no meaningful answer when the
+  shutoff head is below the static head.
+- `pumps_in_series(*pumps)` adds heads at equal flow; `pumps_in_parallel(*pumps)`
+  adds flows at equal head (a small Newton solve for the branch flows,
+  `.split(Q)`). Both return curves usable by `operating_point`.
+- `npsh_available(P_suction, Psat, rho, v, z_suction, losses)`.
+- `pump.curve` is a `difflow.units.pump.PumpCurve` (`head`, `efficiency`, `npshr`,
+  `shaft_power` at the operating `N` and `D`); build one directly from
+  coefficients to study a pump without a stream.
+- Flow meters (`orifice_flow` and its inverse `orifice_dp`) are in
+  [`difflow.fluids`](#fluids-module).
+
+**Affinity laws and static head.** Doubling $N$ doubles $Q^*$ only when the
+system curve is pure friction ($H_\mathrm{sys}\propto Q^2$, no static head),
+because then the whole intersection scales. With a static lift the system
+curve does not scale, so $Q^*$ does not follow $N$; the tests check both
+(`tests/test_pump.py::TestAffinityLaws`).
+
+**Verification, honestly stated.** The transfer-pump test (12 m lift, 400 m of
+4-in Sch 40 steel, fittings $K=5.3$, water at 20 °C) uses an *illustrative*
+vendor curve, not a published datasheet or textbook figure; textbook pump
+examples (McCabe & Smith, Geankoplis, Crane) are read off a printed curve and
+are not reproduced from memory. The operating point is checked instead against
+an independent calculation (`numpy.polyfit` for the curve and `scipy.optimize.brentq`
+for both the Colebrook-White friction factor and the pump/system intersection,
+no difflow code), agreeing to $10^{-6}$ relative, well inside the 2 % the
+issue asked for. That validates the implementation, not the vendor data.
+The NPSH test uses 95 °C water with steam-table properties
+(P_sat = 84.55 kPa, ρ = 961.9 kg/m³; NPSHa = 1.78 m against an NPSHr of 2.5 m at 20 L/s).
+
+**Relation to the carbon-capture `Pump`.** `difflow_cc.Pump` is a different
+model: dense-phase CO₂ pumped to a *fixed outlet pressure* with a constant
+efficiency, density from the CO₂ EOS ($W=\dot V\,\Delta P/\eta$). It has no curve,
+speed or NPSH and cannot say what flow results. It was deliberately **not**
+rewritten to delegate to `CentrifugalPump`: its density comes from an EOS rather
+than an input, and its specification (outlet pressure) is the inverse of the
+curve-driven one. Use `Pump` for CO₂ compression-train duty and `CentrifugalPump`
+for liquid transfer and for sizing against a system.
+
+The example notebook `examples/43_centrifugal_pump.ipynb` plots the pump and
+system curves with the operating point, speed and trim changes, series/parallel
+operation and NPSH margin, and picks the pipe diameter with a VFD-speed
+constraint by gradient-based optimisation of `pump_cost` + piping +
+`pump_electricity_cost`.
+
+---
+
 ## Combustion & Gas-Turbine Units
 
 These units model a **Brayton cycle** working fluid — air and combustion gas at
@@ -2521,6 +3140,115 @@ fuel_comp = {"methane": 0.95, "ethane": 0.03, "propane": 0.01,
 result = brayton_cycle(fuel_comp, BraytonCycleParams(combined_cycle=True))
 # result: {"eta_thermal", "eta_gt_only", "work_net", "air_fuel_molar", ...}
 ```
+
+---
+
+## Particles and Beds
+
+**Location**: `difflow/particles.py` (pure JAX functions in SI units; not unit
+operations, so they have no palette entry). They are the building blocks for
+adsorbers, catalytic beds, settlers, cyclones and filters.
+
+(particles-drag)=
+### Drag and terminal velocity
+
+`drag_coefficient(Re_p, sphericity, method)` is smooth across the Stokes,
+intermediate and Newton regimes and tends to $24/Re_p$ as $Re_p \to 0$:
+
+| `method` | Correlation | Range |
+|----------|-------------|-------|
+| `"haider_levenspiel"` (default) | Haider & Levenspiel (1989), sphericity-dependent | $Re < 2.6\times10^5$, $\phi$ 0.5-1 |
+| `"turton_levenspiel"` | Turton & Levenspiel (1986), spheres | $Re < 2.6\times10^5$ |
+| `"schiller_naumann"` | Schiller & Naumann (1933), floored at 0.44 | $Re < 800$ then Newton plateau |
+
+`terminal_velocity(d_p, rho_p, rho_f, mu, sphericity)` solves the force balance
+$C_D(Re)\,Re^2 = \tfrac43 Ar$ by a Newton root find in $\ln Re$, started from the
+explicit Haider-Levenspiel dimensionless velocity, and differentiates it by
+implicit differentiation. `hindered_settling_velocity(v_t, voidage, n, Re_t)` is
+Richardson & Zaki (1954), $u = v_t\varepsilon^n$ with $n$ from $Re_t$ when not given.
+
+```python
+from difflow.particles import terminal_velocity, drag_coefficient
+import jax
+
+d = 1e-3                                           # 1 mm sand grain in water
+v = terminal_velocity(d, 2650.0, 998.0, 1.0e-3)
+dv_dd = jax.grad(terminal_velocity)(d, 2650.0, 998.0, 1.0e-3)
+print(f"v_t = {float(v):.3f} m/s, dv/dd = {float(dv_dd):.1f} 1/s")
+print(f"C_D(Re=1e-4)*Re/24 = {float(drag_coefficient(1e-4))*1e-4/24:.4f}")
+```
+
+(particles-ergun)=
+### Packed-bed pressure drop (Ergun)
+
+`ergun_pressure_gradient(u_s, d_p, voidage, rho, mu, sphericity)` returns
+$(\Delta P/L,\ \text{info})$ with the full Ergun (1952) equation
+
+$$\frac{\Delta P}{L} = 150\frac{(1-\varepsilon)^2}{\varepsilon^3}\frac{\mu u_s}{(\phi d_p)^2}
++ 1.75\frac{1-\varepsilon}{\varepsilon^3}\frac{\rho u_s^2}{\phi d_p}$$
+
+and `info['viscous']` (Blake-Kozeny), `info['inertial']` (Burke-Plummer),
+`info['Re_bed']`. `kozeny_carman(...)` is the laminar limit with the Kozeny
+constant $k_0$ (prefactor $36k_0 = 180$), the piece to reuse for filter-cake
+resistance.
+
+```python
+from difflow.particles import ergun_pressure_gradient
+
+# 3 mm spheres, eps = 0.4, air, u = 1 m/s: 1687.5 + 6562.5 Pa/m by hand
+dpdl, info = ergun_pressure_gradient(1.0, 3e-3, 0.4, 1.2, 1.8e-5)
+print(float(dpdl), float(info["viscous"]), float(info["inertial"]))
+```
+
+**GasPFR.** `GasPFRParams` accepts either the lumped `alpha` (Pa/m$^3$) or the
+physical bed (`d_p`, `voidage`, `mu`, `rho_gas`, `u_s0`, `bed_area`,
+`sphericity`); in the second case $\alpha = (\Delta P/L)_0/A_c$ is computed from
+the Ergun equation at the inlet (`ergun_alpha`, `params.effective_alpha`).
+Supplying both is an error.
+
+(particles-fluidization)=
+### Fluidization
+
+`minimum_fluidization_velocity(d_p, rho_p, rho_f, mu, voidage_mf, sphericity,
+method)` equates the Ergun gradient to the bed weight per volume. In terms of
+$Ar = d_p^3\rho_f(\rho_p-\rho_f)g/\mu^2$ it is a quadratic in $Re_{mf}$,
+
+$$Ar = \frac{150(1-\varepsilon_{mf})}{\phi^2\varepsilon_{mf}^3}Re_{mf}
++ \frac{1.75}{\phi\varepsilon_{mf}^3}Re_{mf}^2,$$
+
+solved in closed form (`method="ergun"`); `method="wen_yu"` is the Wen & Yu (1966)
+correlation $Re_{mf} = \sqrt{33.7^2 + 0.0408\,Ar} - 33.7$. `bed_expansion(u, u_t, n)`
+gives the Richardson-Zaki voidage $(u/u_t)^{1/n}$ and height
+$H_{mf}(1-\varepsilon_{mf})/(1-\varepsilon)$ (a homogeneous-expansion model; it
+is anchored at $u_t$, so use it well above $u_{mf}$).
+`fluidization_window(...)` returns $(u_{mf}, u_t)$; above $u_t$ particles are
+entrained. `geldart_group(d_p, rho_p, rho_f)` returns A/B/C/D from approximate
+Geldart (1973) boundaries; it is **not differentiable** and not jit-able.
+
+```python
+from difflow.particles import fluidization_window, geldart_group
+
+u_mf, u_t = fluidization_window(300e-6, 2600.0, 1.2, 1.8e-5, 0.45, 0.8)
+print(f"u_mf = {float(u_mf):.3f} m/s, u_t = {float(u_t):.2f} m/s,",
+      geldart_group(300e-6, 2600.0, 1.2))
+```
+
+**What is verified** (`tests/test_particles.py`): the Stokes limit; the Ergun
+equation against hand arithmetic; $u_{mf}$ against the Ergun residual and an
+independent `scipy` root find; terminal velocity against an independent
+`scipy.optimize.brentq` solve of the force balance in the Stokes, intermediate
+and Newton regimes; mutual agreement of the two sphere drag fits within 8 %;
+`check_grads` (reverse mode) across all regimes. No textbook worked-example number
+is reproduced from memory; compare against Perry's or McCabe/Geankoplis tables
+before relying on a result to better than the correlation scatter (typically
+5-10 %). The Richardson-Zaki exponent is piecewise (jumps of at most about 2 %
+at $Re_t = 0.2, 1, 500$).
+
+**References**: Haider & Levenspiel, *Powder Technol.* 58, 63 (1989); Turton &
+Levenspiel, *Powder Technol.* 47, 83 (1986); Ergun, *Chem. Eng. Prog.* 48(2), 89
+(1952); Wen & Yu, *AIChE J.* 12, 610 (1966); Richardson & Zaki, *Trans. Inst.
+Chem. Eng.* 32, 35 (1954); Kunii & Levenspiel, *Fluidization Engineering*, 2nd
+ed. (1991); Geldart, *Powder Technol.* 7, 285 (1973).
 
 ---
 

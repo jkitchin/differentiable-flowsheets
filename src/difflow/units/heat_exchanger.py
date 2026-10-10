@@ -183,6 +183,46 @@ def effectiveness_counter_current(NTU: Array, Cr: Array) -> Array:
     return jnp.clip(eps, 0.0, 1.0)
 
 
+def effectiveness_shell_and_tube(NTU: Array, Cr: Array, n_shells: int = 1) -> Array:
+    """Effectiveness of ``n_shells`` 1-2N shell-and-tube shells in series.
+
+    One shell (one shell pass, two or more even tube passes; Kays & London,
+    Incropera Eq. 11.30)::
+
+        eps_1 = 2 / (1 + Cr + s (1 + e)/(1 - e)),  s = sqrt(1 + Cr^2),  e = exp(-NTU s)
+
+    and for ``n`` shells in series, each with ``NTU / n`` (Kays & London)::
+
+        eps_n = (r^n - 1)/(r^n - Cr),  r = (1 - eps_1 Cr)/(1 - eps_1)
+
+    (``n eps_1 / (1 + (n - 1) eps_1)`` at ``Cr = 1``). This is exactly
+    ``Q = U A F LMTD`` with the Bowman F of :func:`lmtd_correction_factor`
+    (checked in ``tests/test_shell_and_tube.py``).
+
+    Args:
+        NTU: Total ``UA / C_min``.
+        Cr: ``C_min / C_max``.
+        n_shells: Number of shells in series (Python int).
+
+    Returns:
+        Effectiveness in (0, 1).
+    """
+    NTU = jnp.maximum(jnp.asarray(NTU, dtype=jnp.float64), 1e-12)
+    Cr = jnp.asarray(Cr, dtype=jnp.float64)
+    n = int(n_shells)
+    s = jnp.sqrt(1.0 + Cr**2)
+    e = jnp.exp(-(NTU / n) * s)
+    eps1 = 2.0 / (1.0 + Cr + s * (1.0 + e) / (1.0 - e))
+    if n == 1:
+        return eps1
+    r = safe_divide(1.0 - eps1 * Cr, 1.0 - eps1)
+    rn = r**n
+    near_one = jnp.abs(1.0 - Cr) < 1e-8
+    general = (rn - 1.0) / jnp.where(near_one, 1.0, rn - Cr)
+    balanced = n * eps1 / (1.0 + (n - 1.0) * eps1)
+    return jnp.where(near_one, balanced, general)
+
+
 def effectiveness_co_current(NTU: Array, Cr: Array) -> Array:
     """Effectiveness for co-current (parallel flow) heat exchanger.
 
@@ -1793,7 +1833,10 @@ def lmtd_correction_factor(
     # Smooth blend near R = 1
     blend_width = 0.05
     t = jnp.abs(R - 1.0) / blend_width
-    blend = jnp.clip(3 * t**2 - 2 * t**3, 0.0, 1.0)
+    # Smoothstep inside |R - 1| < blend_width, exactly 1 outside it. (The raw
+    # cubic is negative for t > 1.5 and clips to 0, which used to return the
+    # R = 1 value for every R beyond 1 +/- 0.075 -- see #403.)
+    blend = jnp.where(t > 1.0, 1.0, jnp.clip(3 * t**2 - 2 * t**3, 0.0, 1.0))
 
     F = blend * F_general + (1.0 - blend) * F_balanced
 
@@ -1902,28 +1945,20 @@ class ShellAndTubeHX:
         UA_val = UA if UA is not None else p.UA
         UA_val = jnp.asarray(UA_val)
 
-        # Use effectiveness-NTU for counter-current to get Q
         NTU = UA_val / C_min
-        eps_cc = effectiveness_counter_current(NTU, Cr)
-
         driving_force = T_hot_in - T_cold_in
         Q_max = C_min * driving_force
 
-        # Compute outlet temperatures from counter-current effectiveness
-        T_hot_out_cc = T_hot_in - eps_cc * Q_max / C_hot
-        T_cold_out_cc = T_cold_in + eps_cc * Q_max / C_cold
+        # Exact 1-2N effectiveness (n shells in series), so that
+        # Q = UA F LMTD with F recomputed from the resulting terminal
+        # temperatures. (Previously Q = F * Q_countercurrent(UA), which
+        # under-predicted Q by a few percent; see #403.)
+        eps = effectiveness_shell_and_tube(NTU, Cr, p.n_shell_passes)
+        Q = eps * Q_max
 
-        # Compute R and P for F-correction
-        dT_hot = T_hot_in - T_hot_out_cc
-        dT_cold = T_cold_out_cc - T_cold_in
-        R_param = safe_divide(dT_hot, jnp.maximum(dT_cold, 1e-10))
-        P_param = safe_divide(dT_cold, jnp.maximum(T_hot_in - T_cold_in, 1e-10))
-
-        # Compute F-correction factor
+        R_param = safe_divide(Q / C_hot, jnp.maximum(Q / C_cold, 1e-10))
+        P_param = safe_divide(Q / C_cold, jnp.maximum(driving_force, 1e-10))
         F_corr = lmtd_correction_factor(R_param, P_param, p.n_shell_passes)
-
-        # Apply F-correction: effective Q = F * Q_counter_current
-        Q = F_corr * eps_cc * Q_max
 
         # Outlet temperatures
         T_hot_out = T_hot_in - Q / C_hot
@@ -1946,7 +1981,7 @@ class ShellAndTubeHX:
             "R": R_param,
             "P_param": P_param,
             "LMTD": LMTD,
-            "effectiveness": eps_cc * F_corr,
+            "effectiveness": eps,
             "NTU": NTU,
             "Cr": Cr,
             "T_hot_in": T_hot_in,
