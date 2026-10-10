@@ -9,6 +9,8 @@ Core unit operations:
 - MultistageCascade: Liquid-liquid extraction
 - ShortcutColumn/DistillationColumn: Distillation
 - Heater/Cooler: Single-stream heat exchange with utility
+- Evaporator/MultiEffectEvaporator/MechanicalVaporRecompression: concentration of
+  a non-volatile solute with boiling-point rise
 - CounterCurrentHX/CoCurrentHX: Two-stream heat exchangers
 
 For bio manufacturing operations (bioreactors, centrifuge, filtration,
@@ -90,6 +92,21 @@ from difflow.units.heat_exchanger import (
     design_heat_exchanger,
     size_heat_exchanger,
 )
+from difflow.units.evaporator import (
+    Evaporator,
+    EvaporatorParams,
+    MultiEffectEvaporator,
+    MultiEffectEvaporatorParams,
+    MechanicalVaporRecompression,
+    MVRParams,
+    UnverifiedDataWarning,
+    boiling_point_rise,
+    water_saturation_pressure,
+    water_saturation_temperature,
+    water_latent_heat,
+    water_liquid_enthalpy,
+    water_vapor_enthalpy,
+)
 from difflow.units.eos_units import (
     Turboexpander,
     TurboexpanderParams,
@@ -168,6 +185,20 @@ __all__ = [
     "minimum_reflux_ratio",
     "gilliland_stages",
     "column_diameter",
+    # Evaporators
+    "Evaporator",
+    "EvaporatorParams",
+    "MultiEffectEvaporator",
+    "MultiEffectEvaporatorParams",
+    "MechanicalVaporRecompression",
+    "MVRParams",
+    "UnverifiedDataWarning",
+    "boiling_point_rise",
+    "water_saturation_pressure",
+    "water_saturation_temperature",
+    "water_latent_heat",
+    "water_liquid_enthalpy",
+    "water_vapor_enthalpy",
     # Heat Exchangers
     "DefaultCpWarning",
     "Heater",

@@ -138,6 +138,30 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **Evaporators (#404).** `Evaporator` (single effect, rating by area or design
+  by product concentration), `MultiEffectEvaporator` (forward, backward and
+  parallel feed; equal-area design solved as one Newton system, or rating with
+  given areas; per-effect `U`) and `MechanicalVaporRecompression` (ideal-gas
+  isentropic compression, compressor work against steam saved), in
+  `difflow/units/evaporator.py`. Each returns `(concentrate, vapor, info)` with
+  steam rate, steam economy, per-effect T, P, BPR, vapor, area and Q, and
+  closure residuals; `info` is differentiable with respect to `U`, the feed and
+  the steam pressure (implicit gradients through `optimistix`). The
+  non-volatile solute is an ordinary stream species whose vapor flow is exactly
+  zero. `boiling_point_rise` offers Raoult (`ideal`), `colligative`, user
+  Duhring lines, polynomial, callable and built-in `naoh`/`nacl`/`sucrose`
+  models, plus `bpr_fn=` and `enthalpy_fn=` hooks (heat of dilution). Water
+  saturation uses IAPWS-IF97; the enthalpy fits are to recalled steam-table
+  points. **Not verified**: the built-in NaOH, NaCl and sucrose BPR data are
+  approximate recollections (they raise `UnverifiedDataWarning`), and no
+  textbook worked example is claimed to be reproduced. Registered in the
+  palette under a new `evaporation` category with its own symbol (GUI bundle
+  rebuilt), documented in `docs/unit-operations-chemical.md`, example notebook
+  `examples/47_evaporators.ipynb` (optimal number of effects, with illustrative
+  placeholder prices). No evaporator cost curve was added to
+  `economics/capital.py` (no citable constants at hand); use
+  `heat_exchanger_cost` as a stand-in.
+
 - `difflow.solvers.pounce_problem` builds the configured pounce Problem once
   so repeated solves reuse the compiled residual and Jacobian (about 0.1 s
   against 30 s on a nested-EOS flowsheet, #394). `solve_with_pounce` is now a
