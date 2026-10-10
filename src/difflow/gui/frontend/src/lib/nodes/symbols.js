@@ -100,6 +100,18 @@ export const SYMBOLS = {
     ],
   },
 
+  /** A calandria vessel: steam-heated tube bundle low, vapour dome above. */
+  evaporator: {
+    label: 'evaporator',
+    shapes: [
+      ['rect', { x: 14, y: 5, width: 20, height: 30, rx: 6 }],
+      ['line', { x1: 14, y1: 20, x2: 34, y2: 20 }],
+      ['path', { d: 'M18 24h12M18 28h12M18 32h12', fill: 'none' }],
+      ['line', { x1: 24, y1: 1, x2: 24, y2: 5 }],
+      ['line', { x1: 24, y1: 35, x2: 24, y2: 39 }],
+    ],
+  },
+
   /** Heat in: the exchanger circle with the arrow pointing at it. */
   heater: {
     label: 'heater',
@@ -252,6 +264,17 @@ export const SYMBOLS = {
       ['line', { x1: 11, y1: 14, x2: 11, y2: 26 }],
       ['line', { x1: 37, y1: 14, x2: 37, y2: 26 }],
       ['path', { d: 'M26 16l5 4-5 4', fill: 'none' }],
+    ],
+  },
+
+  /** A centrifugal pump: a casing circle with the discharge nozzle on top. */
+  pump: {
+    label: 'pump',
+    shapes: [
+      ['circle', { cx: 22, cy: 23, r: 12 }],
+      ['line', { x1: 22, y1: 11, x2: 22, y2: 5 }],
+      ['line', { x1: 22, y1: 5, x2: 42, y2: 5 }],
+      ['path', { d: 'M22 11L33 23M22 35L33 23', fill: 'none' }],
     ],
   },
 
@@ -423,11 +446,17 @@ export const OPERATION_SYMBOLS = {
   ShellAndTubeHX: 'heat_exchanger',
   EnthalpyCounterCurrentHX: 'heat_exchanger',
 
+  // evaporation
+  Evaporator: 'evaporator',
+  MultiEffectEvaporator: 'evaporator',
+  MechanicalVaporRecompression: 'evaporator',
+
   // pressure
   EOSCompressor: 'compressor',
   Turboexpander: 'turbine',
   JTValve: 'valve',
   Pipe: 'pipe',
+  CentrifugalPump: 'pump',
 
   // power island
   Combustor: 'combustor',
@@ -509,6 +538,7 @@ export const CATEGORY_SYMBOLS = {
   filtration: 'membrane',
   chromatography: 'chromatography',
   heat_transfer: 'heat_exchanger',
+  evaporation: 'evaporator',
   pressure_change: 'compressor',
   power: 'turbine',
   gas_network: 'pipe',

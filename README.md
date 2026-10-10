@@ -1044,6 +1044,7 @@ Jupyter notebooks are in the `examples/` directory:
 | `05_technoeconomic_analysis.ipynb` | Comprehensive TEA with profit optimization |
 | `06_uncertainty_propagation.ipynb` | Uncertainty propagation and sensitivity analysis |
 | `07_heat_exchangers.ipynb` | Heat exchanger design, rating, and optimization |
+| `47_evaporators.ipynb` | Single/multiple-effect evaporators, MVR, optimal number of effects |
 | `10_dynamic_modeling.ipynb` | Dynamic simulation, DAE systems, diffrax backend |
 
 ```bash

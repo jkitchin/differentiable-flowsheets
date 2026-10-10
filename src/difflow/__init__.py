@@ -85,6 +85,7 @@ from difflow.cantera_import import (
 # difflow.dwsim_import.import_critical_props([...]). Both underlying tools are
 # optional dependencies, imported lazily inside the adapters' functions.
 from difflow import fluids
+from difflow import heat_transfer
 from difflow import pyglenn_import
 from difflow import dwsim_import
 from difflow.params_mixin import ParamsMixin
@@ -168,6 +169,16 @@ from difflow.units.distillation import (
     gilliland_stages,
     column_diameter,
 )
+from difflow.units.evaporator import (
+    Evaporator,
+    EvaporatorParams,
+    MultiEffectEvaporator,
+    MultiEffectEvaporatorParams,
+    MechanicalVaporRecompression,
+    MVRParams,
+    UnverifiedDataWarning,
+    boiling_point_rise,
+)
 from difflow.units.heat_exchanger import (
     DefaultCpWarning,
     Heater,
@@ -188,6 +199,17 @@ from difflow.units.heat_exchanger import (
     size_heat_exchanger,
 )
 from difflow.units.pipe import Pipe, PipeParams
+from difflow.units.pump import (
+    CentrifugalPump,
+    CentrifugalPumpParams,
+    fit_pump_curve,
+    npsh_available,
+    operating_point,
+    pumps_in_parallel,
+    pumps_in_series,
+    system_curve,
+)
+from difflow import shell_and_tube  # library (not a palette unit): Kern design, see docs
 from difflow.units.eos_units import (
     Turboexpander,
     TurboexpanderParams,
@@ -494,6 +516,15 @@ __all__ = [
     "minimum_reflux_ratio",
     "gilliland_stages",
     "column_diameter",
+    # Unit operations - Evaporators
+    "Evaporator",
+    "EvaporatorParams",
+    "MultiEffectEvaporator",
+    "MultiEffectEvaporatorParams",
+    "MechanicalVaporRecompression",
+    "MVRParams",
+    "UnverifiedDataWarning",
+    "boiling_point_rise",
     # Unit operations - Heat Exchangers
     "DefaultCpWarning",
     "Heater",
@@ -520,6 +551,14 @@ __all__ = [
     "JTValve",
     "Pipe",
     "PipeParams",
+    "CentrifugalPump",
+    "CentrifugalPumpParams",
+    "fit_pump_curve",
+    "npsh_available",
+    "operating_point",
+    "pumps_in_parallel",
+    "pumps_in_series",
+    "system_curve",
     "JTValveParams",
     "ComponentSeparator",
     "ComponentSeparatorParams",
