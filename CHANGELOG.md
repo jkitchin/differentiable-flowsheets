@@ -6,6 +6,23 @@ All notable changes to difflow are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Shell-and-tube sizing and phase-change warning for the heat-exchanger
+  helpers (#422).** `design_heat_exchanger` and `size_heat_exchanger` accept
+  `flow_config="shell_and_tube"` with `n_shell_passes`, size with
+  `A = Q/(U F LMTD)` (the sizer inverts the exact 1-2N effectiveness) and
+  return `F` (1 for the other configurations). `LowCorrectionFactorWarning`
+  when `F < 0.75` or `F = 0` (duty past the per-shell limit: `A = inf`, add
+  shells); skipped for traced values. An unknown `flow_config` now raises
+  `ValueError` (it used to be treated as co-current). The constant-Cp units
+  (`CounterCurrentHX`, `CoCurrentHX`, `CrossFlowHX`, `ShellAndTubeHX`,
+  `Heater`/`Cooler` without a thermo) emit `PhaseChangeWarning` when a
+  stream's temperature span crosses a database species' boiling point at the
+  stream pressure (Antoine inversion, species at least 1% of the flow, concrete
+  values only, so `jit`/`grad` are unaffected) and point to
+  `EnthalpyCounterCurrentHX`.
+
 ### Breaking
 
 - **Cubic EOS liquid root near 1 bar; results change (#417).**
