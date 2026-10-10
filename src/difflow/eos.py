@@ -357,7 +357,7 @@ class PengRobinson(ValueKeyed):
         self.params = self._compute_params()
         # Keyed on what it was built from, not on the arrays that came out of
         # it -- those can be tracers, and are a pure function of these anyway.
-        self._set_value_key(species_data, k_ij)
+        self._set_value_key(species_data, k_ij, derived=self.params)
 
     @property
     def species_order(self) -> list[str]:
@@ -895,7 +895,7 @@ class SRK(ValueKeyed):
         self.params = self._compute_params()
         # Keyed on what it was built from, not on the arrays that came out of
         # it -- those can be tracers, and are a pure function of these anyway.
-        self._set_value_key(species_data, k_ij)
+        self._set_value_key(species_data, k_ij, derived=self.params)
 
     @property
     def species_order(self) -> list[str]:

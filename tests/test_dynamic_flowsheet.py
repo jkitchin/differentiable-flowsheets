@@ -994,3 +994,80 @@ class TestCubicEOSFeedEffluentFlowsheet:
             for key, val in steady[name].items():
                 assert float(dyn[name][key]) == pytest.approx(float(val), rel=1e-6, abs=1e-7), \
                     f"{name}[{key}]"
+
+
+# =============================================================================
+# InstantaneousUnit sees t and args (#396)
+# =============================================================================
+
+
+def _outlet_T(fs, t, args=None):
+    streams = fs.outputs(jnp.asarray(t), fs.initial_state(None, args), None, args)
+    return float(streams["out"]["T"])
+
+
+def _one_unit_fs(unit, args_feed=None):
+    fs = DynamicFlowsheet(species_order=["A", "B"])
+    fs.add_feed("feed", make_stream({"A": 1.0, "B": 0.0}, T=300.0, P=101325.0))
+    fs.add_unit(unit, inlets={"inlet": "feed"}, outlets={"outlet": "out"})
+    return fs
+
+
+class TestInstantaneousUnitTimeAndArgs:
+    def test_fn_with_t(self):
+        def fn(t, inputs, params):
+            return {"outlet": {**inputs["inlet"], "T": 300.0 + 10.0 * t}}
+
+        fs = _one_unit_fs(InstantaneousUnit(fn=fn, name="ramp"))
+        assert _outlet_T(fs, 0.0) == pytest.approx(300.0)
+        assert _outlet_T(fs, 5.0) == pytest.approx(350.0)
+
+    def test_fn_with_t_and_args_shares_one_channel_with_feeds(self):
+        def fn(t, inputs, params, args):
+            return {"outlet": {**inputs["inlet"], "T": args["T0"] + args["rate"] * t}}
+
+        fs = DynamicFlowsheet(species_order=["A", "B"])
+        fs.add_feed(
+            "feed",
+            lambda t, args: make_stream({"A": 1.0, "B": 0.0}, T=args["T_feed"], P=101325.0),
+        )
+        fs.add_unit(InstantaneousUnit(fn=fn, name="u"),
+                    inlets={"inlet": "feed"}, outlets={"outlet": "out"})
+        args = {"T0": jnp.array(400.0), "rate": jnp.array(2.0), "T_feed": jnp.array(310.0)}
+        streams = fs.outputs(jnp.array(10.0), fs.initial_state(None, args), None, args)
+        assert float(streams["feed"]["T"]) == pytest.approx(310.0)
+        assert float(streams["out"]["T"]) == pytest.approx(420.0)
+
+    def test_legacy_two_argument_fn_unchanged(self):
+        def fn(inputs, params):
+            return {"outlet": {**inputs["inlet"], "T": 333.0}}
+
+        assert _outlet_T(_one_unit_fs(InstantaneousUnit(fn=fn)), 1.0) == pytest.approx(333.0)
+
+    def test_call_params_callable_sees_t_and_args(self):
+        class Op:
+            def __call__(self, inlet, T_out):
+                return {**inlet, "T": T_out}
+
+        def by_t(t, params):
+            return 300.0 + t
+
+        def by_args(t, params, args):
+            return args["T1"] - 1.0 * t
+
+        fs = _one_unit_fs(InstantaneousUnit(Op(), call_params={"T_out": by_t}))
+        assert _outlet_T(fs, 7.0) == pytest.approx(307.0)
+        fs = _one_unit_fs(InstantaneousUnit(Op(), call_params={"T_out": by_args}))
+        assert _outlet_T(fs, 7.0, {"T1": jnp.array(400.0)}) == pytest.approx(393.0)
+
+    def test_simulate_with_one_args_dict_and_gradient(self):
+        def fn(t, inputs, params, args):
+            return {"outlet": {**inputs["inlet"], "T": args["T0"] + args["rate"] * t}}
+
+        fs = _one_unit_fs(InstantaneousUnit(fn=fn))
+
+        def final_T(rate):
+            args = {"T0": jnp.array(300.0), "rate": rate}
+            return fs.outputs(jnp.array(4.0), fs.initial_state(None, args), None, args)["out"]["T"]
+
+        assert float(jax.grad(final_T)(jnp.array(2.0))) == pytest.approx(4.0)

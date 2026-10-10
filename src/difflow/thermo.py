@@ -71,16 +71,25 @@ class SpeciesData(NamedTuple):
         name: Species identifier
         MW: Molecular weight (g/mol)
         Cp_coeffs: Liquid heat capacity coefficients [a, b, c, d] for
-                   Cp = a + b*T + c*T^2 + d*T^3 (J/mol/K)
+                   Cp = a + b*T + c*T^2 + d*T^3 (J/mol/K). :class:`IdealThermo`
+                   integrates this for liquid (and, via ``Hvap``, vapor)
+                   enthalpy. For a species with no liquid at ambient
+                   conditions (methane, N2, ...) the database stores the
+                   ideal-gas cubic here, as there is nothing else to store.
         Hvap_coeffs: Heat of vaporization coefficients [A, n, Tc] for
                      Hvap = A * (1 - T/Tc)^n (J/mol)
         antoine_coeffs: Antoine equation coefficients [A, B, C] for
                         log10(Psat/Pa) = A - B/(T + C) where T in K
         Hf: Standard heat of formation (J/mol) at 298.15 K
         Tref: Reference temperature for Hf (K), default 298.15
-        Cp_vapor_coeffs: Vapor heat capacity coefficients [a, b, c, d] for
-                         Cp = a + b*T + c*T^2 + d*T^3 (J/mol/K).
-                         If None, falls back to Cp_coeffs (liquid).
+        Cp_vapor_coeffs: **Ideal-gas** heat capacity coefficients [a, b, c, d]
+                         for Cp = a + b*T + c*T^2 + d*T^3 (J/mol/K). This is
+                         the field :class:`CubicThermo` (and every ideal-gas
+                         enthalpy/entropy) reads; see
+                         :meth:`IdealThermo.Cp_ig`. If None, falls back to
+                         Cp_coeffs, which is right only when that already
+                         holds the ideal-gas Cp (the Cantera, DWSIM and
+                         PyGLenN importers store it there).
         T_antoine_min: Minimum valid temperature for Antoine equation (K)
         T_antoine_max: Maximum valid temperature for Antoine equation (K)
     """
@@ -150,6 +159,56 @@ class IdealThermo(ValueKeyed):
             a, b, c, d = data.Cp_coeffs
         return _compute_cp_poly(jnp.asarray(T), a, b, c, d)
 
+    def _ig_coeffs(self, species: str) -> tuple[float, float, float, float]:
+        """Ideal-gas Cp cubic: ``Cp_vapor_coeffs``, else ``Cp_coeffs``."""
+        data = self.species[species]
+        if data.Cp_vapor_coeffs is not None:
+            return tuple(data.Cp_vapor_coeffs)
+        return tuple(data.Cp_coeffs)
+
+    def Cp_ig(self, species: str, T: Array | float) -> Array:
+        """Ideal-gas heat capacity of a pure species (J/mol/K).
+
+        Reads ``Cp_vapor_coeffs`` (falling back to ``Cp_coeffs`` when that is
+        unset). This is the Cp a cubic-EOS property package adds its departure
+        function to, as distinct from the liquid :meth:`Cp`.
+        """
+        a, b, c, d = self._ig_coeffs(species)
+        return _compute_cp_poly(jnp.asarray(T), a, b, c, d)
+
+    def Cp_mix_ig(
+        self,
+        mole_fracs: dict[str, Array | float],
+        T: Array | float,
+    ) -> Array:
+        """Ideal-gas mixture heat capacity (J/mol/K); see :meth:`Cp_ig`."""
+        Cp_total = jnp.zeros(())
+        for species, x in mole_fracs.items():
+            Cp_total = Cp_total + x * self.Cp_ig(species, T)
+        return Cp_total
+
+    def H_ig(self, species: str, T: Array | float) -> Array:
+        """Ideal-gas sensible enthalpy ``integral(Cp_ig, Tref -> T)`` (J/mol).
+
+        No heat of vaporization: the ideal gas at ``Tref`` is the zero, so a
+        cubic EOS departure supplies all of the real-fluid and phase-change
+        correction.
+        """
+        data = self.species[species]
+        a, b, c, d = self._ig_coeffs(species)
+        return _compute_enthalpy_integral(
+            jnp.asarray(T), jnp.asarray(data.Tref), a, b, c, d
+        )
+
+    def stream_enthalpy_ig(
+        self, flows: dict[str, Array | float], T: Array | float
+    ) -> Array:
+        """Total ideal-gas sensible enthalpy flow (W) of a stream."""
+        H_total = jnp.zeros(())
+        for species, F in flows.items():
+            H_total = H_total + F * self.H_ig(species, T)
+        return H_total
+
     def Cp_mix(
         self,
         mole_fracs: dict[str, Array | float],
@@ -217,8 +276,7 @@ class IdealThermo(ValueKeyed):
             integral(Cp/T dT) = a ln(T/Tref) + b (T - Tref)
                                 + c/2 (T^2 - Tref^2) + d/3 (T^3 - Tref^3)
 
-        for Cp = a + bT + cT^2 + dT^3 (the same ``Cp_coeffs`` used for the
-        ideal-gas sensible enthalpy). The per-species reference entropy s_i^0 is
+        for Cp = a + bT + cT^2 + dT^3 with the ideal-gas Cp (:meth:`Cp_ig`). The per-species reference entropy s_i^0 is
         not included; it cancels in any constant-composition process change (an
         expander, valve, cooler or compressor), which is what the entropy is used
         for here. The pressure (-R ln(P/Pref)) and mixing (-R sum y ln y) terms
@@ -234,7 +292,7 @@ class IdealThermo(ValueKeyed):
         data = self.species[species]
         T_arr = jnp.asarray(T)
         Tref = jnp.asarray(data.Tref)
-        a, b, c, d = data.Cp_coeffs
+        a, b, c, d = self._ig_coeffs(species)
         return (
             a * safe_log(T_arr / Tref)
             + b * (T_arr - Tref)
@@ -460,19 +518,19 @@ class CubicThermo(ValueKeyed):
     """Peng-Robinson-consistent enthalpy: ideal-gas sensible + EOS departure.
 
     Wraps an :class:`IdealThermo` (for the ideal-gas sensible enthalpy, using
-    the constant ideal-gas Cp already in the species data) and a cubic EOS
+    the ideal-gas Cp in the species data, ``Cp_vapor_coeffs``) and a cubic EOS
     (for the enthalpy departure ``H - H_ideal_gas``). This mirrors the way a
     cubic-EOS property package (e.g. IDAES's Generic framework) builds every
     unit's enthalpy as ideal-gas + departure, so difflow's reactor and
     heat-exchanger energy balances become consistent with such a tool rather
     than relying on difflow's Watson-Hvap liquid/vapor enthalpy split.
 
-    The ideal-gas sensible part is taken from ``IdealThermo`` via its
-    ``phase="liquid"`` path, which is the bare ``integral(Cp, Tref -> T)`` with
-    no heat-of-vaporization term. That is exactly the ideal-gas sensible
-    enthalpy when ``Cp_coeffs`` holds the ideal-gas Cp (as difflow's database
-    does for these components); the EOS departure then supplies the entire
-    real-gas / phase-change correction, so both phases share one reference.
+    The ideal-gas sensible part is ``IdealThermo.stream_enthalpy_ig``, the bare
+    ``integral(Cp_ig, Tref -> T)`` with no heat-of-vaporization term, where
+    ``Cp_ig`` is ``SpeciesData.Cp_vapor_coeffs`` (``Cp_coeffs`` when that is
+    unset). The liquid ``Cp_coeffs`` that :class:`IdealThermo` integrates is
+    never read here; the EOS departure supplies the entire real-gas /
+    phase-change correction, so both phases share one reference.
 
     ``stream_enthalpy`` keeps ``IdealThermo``'s calling convention but adds an
     optional ``P``: the departure is pressure-dependent, so a caller must pass
@@ -504,7 +562,7 @@ class CubicThermo(ValueKeyed):
         balance, not by this Cp; the EOS departure's contribution to the true
         Cp therefore does not need to appear here.
         """
-        return self.ideal.Cp_mix(mole_fracs, T)
+        return self.ideal.Cp_mix_ig(mole_fracs, T)
 
     # ------------------------------------------------------------------
     # VLE K-values
@@ -657,9 +715,8 @@ class CubicThermo(ValueKeyed):
         Returns:
             Total enthalpy flow (J/s = W).
         """
-        # Ideal-gas sensible part (constant-Cp integral, no Hvap): IdealThermo's
-        # "liquid" path is exactly integral(Cp, Tref -> T) for this data.
-        H_ideal = self.ideal.stream_enthalpy(flows, T, phase="liquid")
+        # Ideal-gas sensible part, integral(Cp_ig, Tref -> T) with no Hvap.
+        H_ideal = self.ideal.stream_enthalpy_ig(flows, T)
         if P is None:
             return H_ideal
 
@@ -704,7 +761,7 @@ class CubicThermo(ValueKeyed):
         """
         from difflow.eos import flash_TP_eos
 
-        H_ideal = self.ideal.stream_enthalpy(flows, T, phase="liquid")
+        H_ideal = self.ideal.stream_enthalpy_ig(flows, T)
         order = self.eos.species_order
         F = jnp.array([flows[s] for s in order])
         F_total = jnp.sum(F)

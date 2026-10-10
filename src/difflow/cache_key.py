@@ -17,6 +17,13 @@ taken from the constructor's arguments and never from the arrays, which is
 also what keeps it working under tracing: an array field may be a tracer,
 and a tracer has no value to hash.
 
+One exception to "pure function of those inputs": an object constructed
+*inside* a ``jax.jit`` trace has tracer-valued derived arrays even from
+Python-float inputs. Caching a jitted core against it would leave dead
+tracers in an entry that an equal-valued eager object then hits
+(``UnexpectedTracerError``). ``_set_value_key(..., derived=arrays)`` drops
+the key to identity when any derived array is a tracer.
+
 Where a key cannot be built -- an EOS handed a raw ``k_ij`` array, a params
 object holding a tracer, a callable field -- :func:`static_key` says so by
 returning :data:`NO_KEY`, and :class:`ValueKeyed` falls back to identity.
@@ -31,6 +38,7 @@ compiled for its old contents.
 from dataclasses import fields, is_dataclass
 from typing import Any, Hashable
 
+import jax
 import numpy as np
 
 #: Returned by :func:`static_key` for anything that has no value key.
@@ -85,6 +93,19 @@ def static_key(value: Any) -> Hashable:
     return NO_KEY
 
 
+def _has_tracer(obj: Any) -> bool:
+    """True if any array reachable from ``obj`` is a ``jax.core.Tracer``."""
+    if isinstance(obj, jax.core.Tracer):
+        return True
+    if is_dataclass(obj) and not isinstance(obj, type):
+        return any(_has_tracer(getattr(obj, f.name)) for f in fields(obj))
+    if isinstance(obj, dict):
+        return any(_has_tracer(v) for v in obj.values())
+    if isinstance(obj, (tuple, list)):
+        return any(_has_tracer(v) for v in obj)
+    return False
+
+
 class ValueKeyed:
     """Mixin: compare and hash by construction inputs, not by identity.
 
@@ -95,8 +116,18 @@ class ValueKeyed:
 
     _value_key: Any = NO_KEY
 
-    def _set_value_key(self, *parts: Any) -> None:
+    def _set_value_key(self, *parts: Any, derived: Any = None) -> None:
+        """Set the key from ``parts``.
+
+        ``derived`` is whatever the constructor computed from them (the EOS
+        parameter arrays). Built inside an outer ``jax.jit`` those are tracers
+        of that trace even though the inputs are Python floats, and a jitted
+        core traced against them would be cached under the value key with
+        dead tracers closed over. So any tracer in ``derived`` means identity.
+        """
         key = static_key(parts)
+        if derived is not None and _has_tracer(derived):
+            key = NO_KEY
         # object.__setattr__, so a frozen dataclass can set it from
         # __post_init__ without tripping FrozenInstanceError.
         object.__setattr__(self, "_value_key", NO_KEY if key is NO_KEY else key)
