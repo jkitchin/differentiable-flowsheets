@@ -182,6 +182,8 @@ from difflow.units.evaporator import (
 )
 from difflow.units.heat_exchanger import (
     DefaultCpWarning,
+    LowCorrectionFactorWarning,
+    PhaseChangeWarning,
     Heater,
     HeaterParams,
     Cooler,
@@ -529,6 +531,8 @@ __all__ = [
     "boiling_point_rise",
     # Unit operations - Heat Exchangers
     "DefaultCpWarning",
+    "LowCorrectionFactorWarning",
+    "PhaseChangeWarning",
     "Heater",
     "HeaterParams",
     "Cooler",

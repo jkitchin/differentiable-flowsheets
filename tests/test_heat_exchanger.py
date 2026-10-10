@@ -15,6 +15,8 @@ from difflow.thermo import IdealThermo, CubicThermo, SpeciesData
 from difflow.units.heat_exchanger import (
     DEFAULT_CP,
     DefaultCpWarning,
+    LowCorrectionFactorWarning,
+    PhaseChangeWarning,
     Heater,
     HeaterParams,
     Cooler,
@@ -1070,3 +1072,200 @@ class TestClosedFormValues:
                     modes=["fwd", "rev"])
         check_grads(lambda c: effectiveness_crossflow_both_unmixed(1.5, c), (0.6,), order=1,
                     modes=["rev"])
+
+
+# crude 30 -> 110 C heated by residue 160 -> 70 C (the cross a single 1-2 shell cannot make)
+_CROSS = dict(Q=1.0e6, T_hot_in=433.15, T_hot_out=343.15, T_cold_in=303.15, T_cold_out=383.15, U=300.0)
+
+
+class TestShellAndTubeSizing:
+    """flow_config="shell_and_tube" in design_heat_exchanger / size_heat_exchanger (#422)."""
+
+    def test_design_area_is_Q_over_U_F_LMTD(self):
+        r = design_heat_exchanger(**_CROSS, flow_config="shell_and_tube", n_shell_passes=2)
+        F = float(lmtd_correction_factor(90.0 / 80.0, 80.0 / 130.0, 2))
+        assert float(r["F"]) == pytest.approx(F, rel=1e-12)
+        assert 0.75 < F < 1.0
+        assert float(r["A"]) == pytest.approx(1e6 / (300.0 * F * float(r["LMTD"])), rel=1e-12)
+        cc = design_heat_exchanger(**_CROSS)
+        assert float(cc["F"]) == 1.0
+        assert float(r["A"]) == pytest.approx(float(cc["A"]) / F, rel=1e-12)
+
+    def test_design_past_the_per_shell_limit_is_infinite_with_a_warning(self):
+        with pytest.warns(LowCorrectionFactorWarning, match="more shells"):
+            r = design_heat_exchanger(**_CROSS, flow_config="shell_and_tube", n_shell_passes=1)
+        assert float(r["F"]) == 0.0
+        assert np.isinf(float(r["A"])) and np.isinf(float(r["UA"]))
+
+    def test_design_warns_below_the_design_floor(self):
+        # R = 1, P = 0.55: inside the one-shell limit (0.586) but F is low
+        args = dict(Q=1e6, T_hot_in=400.0, T_hot_out=345.0, T_cold_in=300.0, T_cold_out=355.0, U=300.0)
+        F = float(lmtd_correction_factor(1.0, 0.55, 1))
+        assert 0.0 < F < 0.75
+        with pytest.warns(LowCorrectionFactorWarning, match="design floor"):
+            r = design_heat_exchanger(**args, flow_config="shell_and_tube")
+        assert float(r["F"]) == pytest.approx(F, rel=1e-9)
+
+    def test_no_warning_for_a_good_design(self):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            design_heat_exchanger(**_CROSS, flow_config="shell_and_tube", n_shell_passes=2)
+            design_heat_exchanger(**_CROSS)
+
+    def test_design_agrees_with_rating(self):
+        """The UA the design returns, rated by ShellAndTubeHX, gives the same terminal temperatures."""
+        N = 2
+        r = design_heat_exchanger(**_CROSS, flow_config="shell_and_tube", n_shell_passes=N)
+        C_h, C_c = 1e6 / 90.0, 1e6 / 80.0
+        hot = make_stream({"water": C_h / 75.0}, T=433.15, P=2e5)
+        cold = make_stream({"water": C_c / 75.0}, T=303.15, P=2e5)
+        hx = ShellAndTubeHX(ShellAndTubeHXParams(UA=r["UA"], Cp_hot=75.0, Cp_cold=75.0, n_shell_passes=N))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", PhaseChangeWarning)
+            h, c, info = hx(hot, cold)
+        assert float(info["Q"]) == pytest.approx(1e6, rel=1e-8)
+        assert float(h["T"]) == pytest.approx(343.15, abs=1e-6)
+        assert float(c["T"]) == pytest.approx(383.15, abs=1e-6)
+        assert float(info["F_correction"]) == pytest.approx(float(r["F"]), rel=1e-8)
+
+    @pytest.mark.parametrize("N", [1, 2, 3])
+    @pytest.mark.parametrize("Cr", [0.3, 0.5, 1.0])
+    @pytest.mark.filterwarnings("ignore::difflow.units.heat_exchanger.LowCorrectionFactorWarning")
+    def test_size_inverts_the_rating(self, N, Cr):
+        C_h = 1000.0
+        C_c = C_h / Cr
+        T_hi, T_ci = 420.0, 300.0
+        UA = 1500.0
+        hot = make_stream({"water": C_h / 75.0}, T=T_hi, P=2e5)
+        cold = make_stream({"water": C_c / 75.0}, T=T_ci, P=2e5)
+        hx = ShellAndTubeHX(ShellAndTubeHXParams(UA=UA, Cp_hot=75.0, Cp_cold=75.0, n_shell_passes=N))
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", PhaseChangeWarning)
+            _, _, info = hx(hot, cold)
+        sized = size_heat_exchanger(info["Q"], T_hi, T_ci, C_h, C_c, 100.0,
+                                    flow_config="shell_and_tube", n_shell_passes=N)
+        assert float(sized["UA"]) == pytest.approx(UA, rel=1e-6)
+        assert float(sized["A"]) == pytest.approx(UA / 100.0, rel=1e-6)
+        assert float(sized["F"]) == pytest.approx(float(info["F_correction"]), rel=1e-5)
+
+    def test_size_past_the_limit(self):
+        # a one-shell unit cannot exceed eps_max = 2/(1 + Cr + sqrt(1 + Cr^2))
+        Cr = 0.5
+        eps_max = 2.0 / (1.0 + Cr + np.sqrt(1.0 + Cr**2))
+        Q = (eps_max + 0.02) * 1000.0 * 100.0
+        with pytest.warns(LowCorrectionFactorWarning):
+            r = size_heat_exchanger(Q, 400.0, 300.0, 1000.0, 2000.0, 100.0,
+                                    flow_config="shell_and_tube", n_shell_passes=1)
+        assert float(r["F"]) == 0.0 and np.isinf(float(r["A"]))
+        # two shells reach it
+        r2 = size_heat_exchanger(Q, 400.0, 300.0, 1000.0, 2000.0, 100.0,
+                                 flow_config="shell_and_tube", n_shell_passes=2)
+        assert np.isfinite(float(r2["A"])) and float(r2["F"]) > 0.0
+
+    def test_other_configs_report_F_one(self):
+        for cfg in ("counter_current", "co_current"):
+            r = size_heat_exchanger(5e4, 400.0, 300.0, 1000.0, 1500.0, 100.0, flow_config=cfg)
+            assert float(r["F"]) == 1.0
+
+    def test_unknown_flow_config_raises(self):
+        with pytest.raises(ValueError, match="flow_config"):
+            design_heat_exchanger(**_CROSS, flow_config="cross_flow")
+        with pytest.raises(ValueError, match="flow_config"):
+            size_heat_exchanger(5e4, 400.0, 300.0, 1000.0, 1500.0, 100.0, flow_config="nope")
+
+    def test_jit_and_gradients(self):
+        f = jax.jit(lambda Q, U: design_heat_exchanger(
+            Q, 433.15, 343.15, 303.15, 383.15, U, "shell_and_tube", 2)["A"])
+        assert np.isfinite(float(f(1e6, 300.0)))
+        dA_dU = jax.grad(f, argnums=1)(1e6, 300.0)
+        assert float(dA_dU) == pytest.approx(-float(f(1e6, 300.0)) / 300.0, rel=1e-9)
+        check_grads(lambda Q: design_heat_exchanger(
+            Q, 433.15, 343.15, 303.15, 383.15, 300.0, "shell_and_tube", 2)["A"],
+            (1e6,), order=1, modes=["rev"], rtol=1e-4, atol=1e-6, eps=1.0)
+        g = jax.grad(lambda Q: size_heat_exchanger(
+            Q, 420.0, 300.0, 1000.0, 1500.0, 100.0, "shell_and_tube", 2)["A"])(5e4)
+        assert np.isfinite(float(g)) and float(g) > 0.0
+
+    @pytest.mark.filterwarnings("ignore::difflow.units.heat_exchanger.LowCorrectionFactorWarning")
+    def test_infeasible_design_has_finite_gradient_wrt_U(self):
+        g = jax.grad(lambda U: design_heat_exchanger(
+            1e6, 433.15, 343.15, 303.15, 383.15, U, "shell_and_tube", 1)["UA"])(300.0)
+        assert np.isfinite(float(g))
+
+
+class TestPhaseChangeWarning:
+    """Constant-Cp units warn when the temperature span crosses a boiling point (#422)."""
+
+    def _pentane_vs_water(self):
+        hot = make_stream({"n_pentane": 10.0}, T=340.0, P=1.5e5)
+        cold = make_stream({"water": 200.0}, T=293.0, P=1e5)
+        return hot, cold
+
+    @pytest.mark.parametrize("cls,params", [
+        (CounterCurrentHX, lambda: HeatExchangerParams(UA=2e4, Cp_hot=120.0, Cp_cold=75.3)),
+        (CoCurrentHX, lambda: HeatExchangerParams(UA=2e4, Cp_hot=120.0, Cp_cold=75.3)),
+        (CrossFlowHX, lambda: HeatExchangerParams(UA=2e4, Cp_hot=120.0, Cp_cold=75.3)),
+        (ShellAndTubeHX, lambda: ShellAndTubeHXParams(UA=2e4, Cp_hot=120.0, Cp_cold=75.3)),
+    ])
+    def test_condensing_pentane_warns(self, cls, params):
+        hot, cold = self._pentane_vs_water()
+        with pytest.warns(PhaseChangeWarning, match=r"n_pentane \(boils at 320\.\d K at 1\.5 bar\)") as rec:
+            cls(params())(hot, cold)
+        assert "EnthalpyCounterCurrentHX" in str(rec[0].message)
+        assert "hot side" in str(rec[0].message)
+
+    def test_single_phase_service_is_silent(self):
+        hot = make_stream({"water": 10.0}, T=360.0, P=2e5)   # stays liquid at 2 bar (Tb 393 K)
+        cold = make_stream({"water": 20.0}, T=300.0, P=2e5)
+        hx = CounterCurrentHX(HeatExchangerParams(UA=500.0, Cp_hot=75.3, Cp_cold=75.3))
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            hx(hot, cold)
+
+    def test_pressure_moves_the_boiling_point(self):
+        # water 360 -> 330 K: boils at 373 K at 1 atm (no cross) but 333... use 0.3 bar: Tb ~ 342 K
+        cold = make_stream({"water": 200.0}, T=290.0, P=1e5)
+        hx = CounterCurrentHX(HeatExchangerParams(UA=500.0, Cp_hot=75.3, Cp_cold=75.3))
+        hot_low = make_stream({"water": 10.0}, T=360.0, P=0.3e5)
+        with pytest.warns(PhaseChangeWarning, match="water"):
+            hx(hot_low, cold)
+
+    def test_trace_component_is_ignored(self):
+        hot = make_stream({"water": 10.0, "n_pentane": 1e-4}, T=340.0, P=1.5e5)
+        cold = make_stream({"water": 200.0}, T=293.0, P=1e5)
+        hx = CounterCurrentHX(HeatExchangerParams(UA=2e4, Cp_hot=120.0, Cp_cold=75.3))
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", PhaseChangeWarning)
+            hx(hot, cold)
+
+    def test_unknown_species_is_silent(self):
+        hot = make_stream({"mystery": 10.0}, T=500.0, P=1e5)
+        cold = make_stream({"mystery": 10.0}, T=300.0, P=1e5)
+        hx = CounterCurrentHX(HeatExchangerParams(UA=500.0, Cp_hot=100.0, Cp_cold=100.0))
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", PhaseChangeWarning)
+            hx(hot, cold)
+
+    def test_jit_and_grad_are_unaffected(self):
+        hot, cold = self._pentane_vs_water()
+        hx = CounterCurrentHX(HeatExchangerParams(UA=2e4, Cp_hot=120.0, Cp_cold=75.3))
+
+        def Q(T):
+            _, _, info = hx(dict(hot, T=T), cold)
+            return info["Q"]
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", PhaseChangeWarning)   # a tracer must never warn
+            assert np.isfinite(float(jax.jit(Q)(340.0)))
+            assert np.isfinite(float(jax.grad(Q)(340.0)))
+
+    def test_cooler_without_thermo_warns_and_with_thermo_does_not(self):
+        hot = make_stream({"n_pentane": 10.0}, T=340.0, P=1.5e5)
+        c = Cooler(CoolerParams(T_out=300.0, Cp=120.0))
+        with pytest.warns(PhaseChangeWarning, match="Cooler"):
+            c(hot)
+
+    def test_enthalpy_hx_does_not_warn(self):
+        import inspect
+        src = inspect.getsource(EnthalpyCounterCurrentHX.__call__)
+        assert "_warn_phase_change" not in src

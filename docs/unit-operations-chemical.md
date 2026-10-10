@@ -2057,7 +2057,37 @@ eps_cross = effectiveness_crossflow_both_unmixed(NTU=2.0, Cr=0.5)
 design = design_heat_exchanger(Q=100000.0, T_hot_in=400.0, T_hot_out=350.0,
                                T_cold_in=300.0, T_cold_out=340.0, U=500.0)
 design['UA'], design['A'], design['LMTD']   # W/K, m², K
+
+# A 1-2N shell-and-tube: A = Q / (U F LMTD), F from `lmtd_correction_factor`
+st = design_heat_exchanger(Q=100000.0, T_hot_in=400.0, T_hot_out=350.0,
+                           T_cold_in=300.0, T_cold_out=340.0, U=500.0,
+                           flow_config="shell_and_tube", n_shell_passes=2)
+st['F'], st['A']
 ```
+
+`design_heat_exchanger` and `size_heat_exchanger` take `flow_config` =
+`"counter_current"`, `"co_current"` or `"shell_and_tube"` (with
+`n_shell_passes`, shells in series); any other value raises `ValueError`.
+The result always carries `F` (1 for the pure flow configurations). For a
+shell-and-tube, `size_heat_exchanger` inverts the exact 1-2N effectiveness.
+A `LowCorrectionFactorWarning` is issued when `F < 0.75` (the usual design
+floor) or `F = 0`, which means the duty is past what that many shells can
+deliver at any area (`A` is `inf`); add shells. The warning is skipped for
+traced values, so the functions stay `jit`/`grad` safe: read `F` from the
+result there.
+
+**Phase change in the constant-Cp units.** `CounterCurrentHX`, `CoCurrentHX`,
+`CrossFlowHX`, `ShellAndTubeHX` and `Heater`/`Cooler` without a `thermo` carry
+no latent heat, so a condensing or vaporising stream is badly mis-rated
+(pentane vapour condensing against cooling water comes out 5.5-fold low).
+They now raise a `PhaseChangeWarning` when a stream's inlet-to-outlet
+temperature span crosses the boiling point, at the stream pressure, of a
+database species making up at least 1% of its flow, and point to
+`EnthalpyCounterCurrentHX`. The boiling point is the Antoine equation
+inverted (species without Antoine coefficients, or a result outside the
+equation's range, are not checked). It is an advisory that runs only on
+concrete values, never under `jit`/`grad`, so it cannot change a result or a
+gradient; silence it with `warnings.simplefilter("ignore", PhaseChangeWarning)`.
 
 (heat-transfer-module)=
 ### Heat-Transfer Coefficients
