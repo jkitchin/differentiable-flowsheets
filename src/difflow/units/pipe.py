@@ -61,6 +61,43 @@ class PipeParams(ParamsMixin):
     MW: dict | float | None = None
 
 
+def evaluate_property(value, stream: Stream | None = None) -> Array:
+    """Liquid property as a float64 array: a number, or a callable of the stream."""
+    if callable(value):
+        if stream is None:
+            raise ValueError("a callable liquid property needs a stream to be evaluated on")
+        value = value(stream)
+    return jnp.asarray(value, dtype=jnp.float64)
+
+
+def stream_mass_flow(inlet: Stream, MW=None, thermo=None) -> Array:
+    """Mass flow (kg/s) of a stream from molar flows and molar masses.
+
+    Args:
+        inlet: Stream with molar flows (mol/s).
+        MW: Molar mass (g/mol): a number, or ``{species: MW}``; None to use
+            ``thermo.species[s].MW``.
+        thermo: Object with a ``species`` map of ``SpeciesData`` (used when
+            ``MW`` is None).
+
+    Returns:
+        Mass flow (kg/s).
+    """
+    flows = get_flows(inlet)
+    if MW is None:
+        if thermo is None or not hasattr(thermo, "species"):
+            raise ValueError(
+                "A molar mass is needed to turn molar flow into mass flow: "
+                "set MW=... (g/mol, or {species: MW}) or pass a thermo."
+            )
+        MW = {s: thermo.species[s].MW for s in flows}
+    total = 0.0
+    for s in get_species(inlet):
+        mw = MW[s] if isinstance(MW, dict) else MW
+        total = total + flows[s] * mw
+    return total * 1e-3
+
+
 class Pipe:
     """Incompressible Darcy-Weisbach pipe with fittings and elevation change.
 
@@ -114,25 +151,11 @@ class Pipe:
     # ------------------------------------------------------------------
     def _mass_flow(self, inlet: Stream) -> Array:
         """Mass flow (kg/s) of the inlet stream."""
-        p = self.params
-        flows = get_flows(inlet)
-        MW = p.MW
-        if MW is None:
-            if self.thermo is None or not hasattr(self.thermo, "species"):
-                raise ValueError(
-                    "Pipe needs a molar mass to turn molar flow into mass flow: "
-                    "set PipeParams(MW=...) (g/mol, or {species: MW}) or pass a thermo."
-                )
-            MW = {s: self.thermo.species[s].MW for s in flows}
-        total = 0.0
-        for s in get_species(inlet):
-            mw = MW[s] if isinstance(MW, dict) else MW
-            total = total + flows[s] * mw
-        return total * 1e-3
+        return stream_mass_flow(inlet, self.params.MW, self.thermo)
 
     @staticmethod
     def _property(value, inlet: Stream) -> Array:
-        return jnp.asarray(value(inlet) if callable(value) else value, dtype=jnp.float64)
+        return evaluate_property(value, inlet)
 
     def _K_total(self, rel_roughness: Array) -> Array:
         fit = self.params.fittings
@@ -145,12 +168,29 @@ class Pipe:
             return K
         return jnp.asarray(fit, dtype=jnp.float64)
 
+    def hydraulics_at_flow(self, Q: Array | float, inlet: Stream | None = None) -> dict:
+        """Hydraulics at a given volumetric flow ``Q`` (m^3/s).
+
+        Same quantities as ``info`` from ``__call__``. ``inlet`` is only needed
+        when ``rho`` or ``mu`` are callables of the stream. Used by
+        :func:`difflow.units.pump.system_curve`.
+        """
+        p = self.params
+        D = jnp.asarray(p.D, dtype=jnp.float64)
+        rho = evaluate_property(p.rho, inlet)
+        mu = evaluate_property(p.mu, inlet)
+        Q = jnp.asarray(Q, dtype=jnp.float64)
+        return self._hydraulics_Q(Q, rho, mu, D)
+
     def _hydraulics(self, inlet: Stream) -> dict:
         p = self.params
         D = jnp.asarray(p.D, dtype=jnp.float64)
         rho = self._property(p.rho, inlet)
         mu = self._property(p.mu, inlet)
-        Q = self._mass_flow(inlet) / rho
+        return self._hydraulics_Q(self._mass_flow(inlet) / rho, rho, mu, D)
+
+    def _hydraulics_Q(self, Q: Array, rho: Array, mu: Array, D: Array) -> dict:
+        p = self.params
         v = Q / (jnp.pi / 4.0 * D**2)
         rel = jnp.asarray(p.roughness, dtype=jnp.float64) / D
         Re = fluids.reynolds_number(rho, v, D, mu)
@@ -207,4 +247,4 @@ class Pipe:
         return jnp.concatenate(resid)
 
 
-__all__ = ["Pipe", "PipeParams", "STEEL_ROUGHNESS"]
+__all__ = ["Pipe", "PipeParams", "STEEL_ROUGHNESS", "evaluate_property", "stream_mass_flow"]

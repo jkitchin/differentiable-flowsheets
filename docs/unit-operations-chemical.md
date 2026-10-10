@@ -2441,6 +2441,123 @@ TestParallelBranches`).
 
 ---
 
+## Centrifugal Pumps
+
+A centrifugal pump model with performance curves: the pump raises the pressure
+of a liquid by $\rho g H(Q)$, the curves scale with speed and impeller diameter
+by the affinity laws, NPSH available is checked against NPSH required, and
+`operating_point` answers "what flow will this pump deliver into this system?"
+The system curve is built from [`Pipe`](#op-pipe) runs, so friction and fittings
+come from [`difflow.fluids`](#fluids-module). Positive-displacement pumps, pump
+transients and multiphase pumps are out of scope.
+
+(op-centrifugalpump)=
+### CentrifugalPump
+
+$$
+H(Q) = h_0 + h_1 Q + h_2 Q^2, \qquad
+\eta(Q) = \eta_{\max}\Bigl(1-\bigl(\tfrac{Q-Q_\mathrm{bep}}{Q_\mathrm{bep}}\bigr)^2\Bigr), \qquad
+P_\mathrm{shaft} = \frac{\rho g Q H}{\eta}
+$$
+
+$$
+Q \propto N D, \quad H \propto N^2 D^2, \quad P \propto N^3 D^3, \qquad
+\mathrm{NPSH}_a = \frac{P_s - P_\mathrm{sat}}{\rho g} + \frac{v_s^2}{2g} + z_s - h_{f,s}
+$$
+
+In the default (flow-given) mode the inlet stream fixes $Q=\dot m/\rho$ and the
+outlet is $P_\mathrm{in}+\rho g H(Q)$; temperature and molar flows pass through
+(or, with `cp`, the liquid warms by the dissipated shaft work).
+
+| Parameter | Unit | Meaning |
+|-----------|------|---------|
+| `head_coeffs` | m, m/(m³/s), … | ascending polynomial coefficients of $H(Q)$ at the reference speed and diameter (see `fit_pump_curve`) |
+| `rho` | kg/m³ | liquid density: a number or a callable of the inlet stream |
+| `eta_coeffs` or `eta_max` + `Q_bep` | –, m³/s | efficiency polynomial, or the BEP-centred parabola |
+| `npshr_coeffs` | m, … | polynomial of required NPSH (optional) |
+| `N_ref`, `D_ref` | rpm, m | speed and impeller diameter the curves belong to |
+| `N`, `D` | rpm, m | operating speed and diameter (default: the references) |
+| `motor_efficiency` | – | `electric_power = shaft_power / motor_efficiency` |
+| `MW` | g/mol | molar mass (number or `{species: MW}`); omit if a `thermo` is passed |
+| `Psat` | Pa | vapour pressure for NPSHa (number or callable); otherwise `thermo.Psat(species, T)` |
+| `D_suction` | m | suction nozzle diameter for the velocity head in NPSHa |
+| `cp` | J/kg/K | liquid heat capacity; enables the temperature rise |
+
+`info` holds `Q`, `head`, `efficiency`, `hydraulic_power`, `shaft_power`,
+`electric_power` (W) and, when the curves and a vapour pressure are given,
+`NPSHr`, `NPSHa` and `npsh_margin = NPSHa - NPSHr` (negative: cavitation risk).
+Like `Pipe`, liquid density is an explicit input; see the design note under
+[Pipe](#op-pipe).
+
+```python
+from difflow import (CentrifugalPump, CentrifugalPumpParams, Pipe, PipeParams,
+                     fit_pump_curve, operating_point, system_curve)
+
+h = fit_pump_curve(Q_data, H_data, order=2)           # vendor points, m^3/s and m
+pump = CentrifugalPump(CentrifugalPumpParams(
+    head_coeffs=h, rho=998.2, eta_max=0.72, Q_bep=0.020,
+    npshr_coeffs=[1.5, 0.0, 2.5e3], N_ref=1750.0, D_ref=0.25, MW=18.015))
+
+line = Pipe(PipeParams(L=400.0, D=0.1023, rho=998.2, mu=1.002e-3, MW=18.015, fittings=5.3))
+sys_ = system_curve(12.0, line)                       # 12 m static lift + friction
+Q_star = operating_point(pump, sys_)                  # m^3/s; differentiable
+```
+
+**Helpers.**
+
+- `system_curve(static_head, *pipes, delta_P=None, rho=None)` gives
+  $H_\mathrm{sys}(Q)=\Delta z+\Delta P/\rho g+\sum_i (h_{f,i}(Q)+\mathrm{dz}_i)$. Pipe `dz`
+  is included, so put elevation either in the pipes or in `static_head`.
+- `operating_point(pump, system)` solves $H_\mathrm{pump}(Q)=H_\mathrm{sys}(Q)$ by
+  Newton started from the pump's zero-head flow. Gradients with respect to
+  pump and system parameters (`D`, `N`, pipe diameter, ...) use the implicit
+  function theorem, not the iterations. It has no meaningful answer when the
+  shutoff head is below the static head.
+- `pumps_in_series(*pumps)` adds heads at equal flow; `pumps_in_parallel(*pumps)`
+  adds flows at equal head (a small Newton solve for the branch flows,
+  `.split(Q)`). Both return curves usable by `operating_point`.
+- `npsh_available(P_suction, Psat, rho, v, z_suction, losses)`.
+- `pump.curve` is a `difflow.units.pump.PumpCurve` (`head`, `efficiency`, `npshr`,
+  `shaft_power` at the operating `N` and `D`); build one directly from
+  coefficients to study a pump without a stream.
+- Flow meters (`orifice_flow` and its inverse `orifice_dp`) are in
+  [`difflow.fluids`](#fluids-module).
+
+**Affinity laws and static head.** Doubling $N$ doubles $Q^*$ only when the
+system curve is pure friction ($H_\mathrm{sys}\propto Q^2$, no static head),
+because then the whole intersection scales. With a static lift the system
+curve does not scale, so $Q^*$ does not follow $N$; the tests check both
+(`tests/test_pump.py::TestAffinityLaws`).
+
+**Verification, honestly stated.** The transfer-pump test (12 m lift, 400 m of
+4-in Sch 40 steel, fittings $K=5.3$, water at 20 °C) uses an *illustrative*
+vendor curve, not a published datasheet or textbook figure; textbook pump
+examples (McCabe & Smith, Geankoplis, Crane) are read off a printed curve and
+are not reproduced from memory. The operating point is checked instead against
+an independent calculation (`numpy.polyfit` for the curve and `scipy.optimize.brentq`
+for both the Colebrook-White friction factor and the pump/system intersection,
+no difflow code), agreeing to $10^{-6}$ relative, well inside the 2 % the
+issue asked for. That validates the implementation, not the vendor data.
+The NPSH test uses 95 °C water with steam-table properties
+(P_sat = 84.55 kPa, ρ = 961.9 kg/m³; NPSHa = 1.78 m against an NPSHr of 2.5 m at 20 L/s).
+
+**Relation to the carbon-capture `Pump`.** `difflow_cc.Pump` is a different
+model: dense-phase CO₂ pumped to a *fixed outlet pressure* with a constant
+efficiency, density from the CO₂ EOS ($W=\dot V\,\Delta P/\eta$). It has no curve,
+speed or NPSH and cannot say what flow results. It was deliberately **not**
+rewritten to delegate to `CentrifugalPump`: its density comes from an EOS rather
+than an input, and its specification (outlet pressure) is the inverse of the
+curve-driven one. Use `Pump` for CO₂ compression-train duty and `CentrifugalPump`
+for liquid transfer and for sizing against a system.
+
+The example notebook `examples/43_centrifugal_pump.ipynb` plots the pump and
+system curves with the operating point, speed and trim changes, series/parallel
+operation and NPSH margin, and picks the pipe diameter with a VFD-speed
+constraint by gradient-based optimisation of `pump_cost` + piping +
+`pump_electricity_cost`.
+
+---
+
 ## Combustion & Gas-Turbine Units
 
 These units model a **Brayton cycle** working fluid — air and combustion gas at

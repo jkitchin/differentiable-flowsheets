@@ -11,6 +11,7 @@ Core unit operations:
 - Heater/Cooler: Single-stream heat exchange with utility
 - CounterCurrentHX/CoCurrentHX: Two-stream heat exchangers
 - Pipe: Incompressible Darcy-Weisbach pipe with fittings (see difflow.fluids)
+- CentrifugalPump: pump curves, affinity laws, NPSH, system curve, operating point
 
 For bio manufacturing operations (bioreactors, centrifuge, filtration,
 chromatography), use the difflow_bio plugin:
@@ -113,6 +114,16 @@ from difflow.units.gas_turbine import (
     make_cycle_thermo,
 )
 from difflow.units.pipe import Pipe, PipeParams
+from difflow.units.pump import (
+    CentrifugalPump,
+    CentrifugalPumpParams,
+    fit_pump_curve,
+    npsh_available,
+    operating_point,
+    pumps_in_parallel,
+    pumps_in_series,
+    system_curve,
+)
 
 __all__ = [
     # Base classes and helpers
@@ -192,6 +203,14 @@ __all__ = [
     # Liquid pipe flow
     "Pipe",
     "PipeParams",
+    "CentrifugalPump",
+    "CentrifugalPumpParams",
+    "fit_pump_curve",
+    "npsh_available",
+    "operating_point",
+    "pumps_in_parallel",
+    "pumps_in_series",
+    "system_curve",
     # EOS-consistent process units
     "Turboexpander",
     "TurboexpanderParams",
