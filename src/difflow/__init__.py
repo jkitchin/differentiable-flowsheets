@@ -55,6 +55,14 @@ from difflow.database import (
     track_database_access,
     DatabaseAccessTracker,
 )
+from difflow.liquid_properties import (
+    get_liquid_properties,
+    liquid_density,
+    liquid_molar_density,
+    liquid_viscosity,
+    liquid_thermal_conductivity,
+    stream_liquid_properties,
+)
 from difflow.base_database import BaseDatabase
 from difflow.uncertainty import (
     linear_propagation,
@@ -387,6 +395,13 @@ __all__ = [
     "track_database_access",
     "DatabaseAccessTracker",
     "BaseDatabase",
+    # Liquid properties
+    "get_liquid_properties",
+    "liquid_density",
+    "liquid_molar_density",
+    "liquid_viscosity",
+    "liquid_thermal_conductivity",
+    "stream_liquid_properties",
     # Uncertainty Propagation
     "linear_propagation",
     "monte_carlo_propagation",
