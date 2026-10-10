@@ -165,6 +165,16 @@ from difflow.units.heat_exchanger import (
     size_heat_exchanger,
 )
 from difflow.units.pipe import Pipe, PipeParams
+from difflow.units.pump import (
+    CentrifugalPump,
+    CentrifugalPumpParams,
+    fit_pump_curve,
+    npsh_available,
+    operating_point,
+    pumps_in_parallel,
+    pumps_in_series,
+    system_curve,
+)
 from difflow.units.eos_units import (
     Turboexpander,
     TurboexpanderParams,
@@ -479,6 +489,14 @@ __all__ = [
     "JTValve",
     "Pipe",
     "PipeParams",
+    "CentrifugalPump",
+    "CentrifugalPumpParams",
+    "fit_pump_curve",
+    "npsh_available",
+    "operating_point",
+    "pumps_in_parallel",
+    "pumps_in_series",
+    "system_curve",
     "JTValveParams",
     "ComponentSeparator",
     "ComponentSeparatorParams",

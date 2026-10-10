@@ -62,6 +62,7 @@ CORE_CATEGORIES = {
     "lle": "extraction",
     "eos_units": "pressure_change",
     "pipe": "pressure_change",
+    "pump": "pressure_change",
     "gas_turbine": "power",
 }
 

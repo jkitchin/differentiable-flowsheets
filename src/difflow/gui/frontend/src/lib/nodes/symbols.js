@@ -255,6 +255,17 @@ export const SYMBOLS = {
     ],
   },
 
+  /** A centrifugal pump: a casing circle with the discharge nozzle on top. */
+  pump: {
+    label: 'pump',
+    shapes: [
+      ['circle', { cx: 22, cy: 23, r: 12 }],
+      ['line', { x1: 22, y1: 11, x2: 22, y2: 5 }],
+      ['line', { x1: 22, y1: 5, x2: 42, y2: 5 }],
+      ['path', { d: 'M22 11L33 23M22 35L33 23', fill: 'none' }],
+    ],
+  },
+
   /** Streams in, one out. */
   mixer: {
     label: 'mixer',
@@ -428,6 +439,7 @@ export const OPERATION_SYMBOLS = {
   Turboexpander: 'turbine',
   JTValve: 'valve',
   Pipe: 'pipe',
+  CentrifugalPump: 'pump',
 
   // power island
   Combustor: 'combustor',

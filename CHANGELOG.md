@@ -138,6 +138,28 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **Centrifugal pump (#400).** New `CentrifugalPump` / `CentrifugalPumpParams`
+  unit (`difflow.units.pump`): polynomial head curve, BEP-centred or
+  polynomial efficiency, `NPSHr` curve, affinity-law scaling for operating
+  speed `N` and impeller diameter `D` (Q ~ N D, H ~ N^2 D^2, P ~ N^3 D^3),
+  outlet `P = P_in + rho g H(Q)`, `info` with head, efficiency, shaft and
+  electric power, `NPSHr`, `NPSHa` and `npsh_margin`, optional temperature
+  rise (`cp`) and `eo_residuals`. Helpers: `PumpCurve`, `fit_pump_curve`,
+  `npsh_available`, `pumps_in_series` / `pumps_in_parallel` (combined curves),
+  `system_curve(static_head, *pipes)` built from `Pipe` runs, and
+  `operating_point(pump, system)` solving the pump/system intersection with
+  implicit-function-theorem gradients (w.r.t. D, N, pipe diameter, ...).
+  Liquid `rho` is an explicit input, as for `Pipe`. `Pipe` gained
+  `hydraulics_at_flow(Q)`, and `evaluate_property` / `stream_mass_flow` helpers
+  that the pump shares. GUI palette symbol, docs (`### CentrifugalPump`, with
+  a cross-reference to the CO2 `difflow_cc.Pump`, which is intentionally left
+  as a separate fixed-outlet-pressure model), tests and
+  `examples/42_centrifugal_pump.ipynb` (operating point, affinity laws,
+  series/parallel, NPSH, economic pipe diameter with a VFD-speed constraint).
+  The vendor curve in tests and notebook is illustrative, not a published
+  datasheet; the operating point is verified against an independent
+  numpy/scipy calculation rather than a textbook figure.
+
 - **Liquid pipe flow (#399).** New `difflow.fluids` (JAX, SI, differentiable):
   `reynolds_number`, `hydraulic_diameter`, the Darcy `friction_factor` by
   Colebrook-White (Newton solve, implicit-function-theorem gradients),

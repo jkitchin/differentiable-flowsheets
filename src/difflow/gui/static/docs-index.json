@@ -1,5 +1,5 @@
 {
- "n_sections": 1099,
+ "n_sections": 1101,
  "sections": [
   {
    "anchor": "agents-the-difflow-mcp-server",
@@ -4903,7 +4903,7 @@
    "path": "Carbon Capture Unit Operations > Overview",
    "source": "unit-operations-carbon-capture.md",
    "targets": [],
-   "text": "The `difflow_cc` plugin provides:\n\n- **Amine-based absorption**: MEA, DEA, MDEA, piperazine, amino acids\n- **Membrane separation**: Polymeric, mixed-matrix, facilitated transport\n- **Adsorption systems**: PSA, TSA, VSA, TVSA with various adsorbents\n- **Direct Air Capture (DAC)**: Solid sorbent and liquid solvent systems\n- **Economic analysis**: CAPEX, OPEX, levelized cost of capture\n- **Degradation models**: Amine, adsorbent, and membrane aging\n\nAll models are fully differentiable using JAX, enabling gradient-based optimization, sensitivity analysis, and integration with machine learning.\n\n---"
+   "text": "The `difflow_cc` plugin provides:\n\n- **Amine-based absorption**: MEA, DEA, MDEA, piperazine, amino acids\n- **Membrane separation**: Polymeric, mixed-matrix, facilitated transport\n- **Adsorption systems**: PSA, TSA, VSA, TVSA with various adsorbents\n- **Direct Air Capture (DAC)**: Solid sorbent and liquid solvent systems\n- **Economic analysis**: CAPEX, OPEX, levelized cost of capture\n- **Degradation models**: Amine, adsorbent, and membrane aging\n\nAll models are fully differentiable using JAX, enabling gradient-based optimization, sensitivity analysis, and integration with machine learning.\n\n---\n\n```{note}\n`Pump` (dense-phase CO2 to a fixed outlet pressure, `W = V dP / eta`) is not the\ncore [`CentrifugalPump`](#op-centrifugalpump), which has head/efficiency/NPSH\ncurves, affinity laws and an operating point against a system curve. They\nanswer different questions and are kept separate; see that section for the\nreasoning.\n```"
   },
   {
    "anchor": "installation",
@@ -6520,6 +6520,24 @@
    "source": "unit-operations-chemical.md",
    "targets": [],
    "text": "A full network solver is out of scope (`difflow_gas` covers gas networks), but a\nparallel pair between two nodes is a one-unknown root find with the existing\nsolvers: the fraction $x$ of the flow in branch A satisfies\n$\\Delta P_A(xQ)=\\Delta P_B((1-x)Q)$.\n\n```python\nimport jax.numpy as jnp, optimistix as optx\n\ndP = lambda pipe, Q: pipe(stream_with_flow(Q))[1][\"dP\"]\nres = lambda x, _: dP(pipe_a, x * Q_total) - dP(pipe_b, (1 - x) * Q_total)\nx = optx.root_find(res, optx.Newton(rtol=1e-12, atol=1e-10), jnp.asarray(0.5)).value\n```\n\nBoth branches then have equal \u0394P, the flows sum to the total, and the split is\ndifferentiable by the implicit function theorem (`tests/test_pipe.py::\nTestParallelBranches`).\n\n---"
+  },
+  {
+   "anchor": "centrifugal-pumps",
+   "heading": "Centrifugal Pumps",
+   "path": "Chemical Unit Operations > Centrifugal Pumps",
+   "source": "unit-operations-chemical.md",
+   "targets": [],
+   "text": "A centrifugal pump model with performance curves: the pump raises the pressure\nof a liquid by $\\rho g H(Q)$, the curves scale with speed and impeller diameter\nby the affinity laws, NPSH available is checked against NPSH required, and\n`operating_point` answers \"what flow will this pump deliver into this system?\"\nThe system curve is built from [`Pipe`](#op-pipe) runs, so friction and fittings\ncome from [`difflow.fluids`](#fluids-module). Positive-displacement pumps, pump\ntransients and multiphase pumps are out of scope.\n\n(op-centrifugalpump)="
+  },
+  {
+   "anchor": "centrifugalpump",
+   "heading": "CentrifugalPump",
+   "path": "Chemical Unit Operations > Centrifugal Pumps > CentrifugalPump",
+   "source": "unit-operations-chemical.md",
+   "targets": [
+    "op-centrifugalpump"
+   ],
+   "text": "$$\nH(Q) = h_0 + h_1 Q + h_2 Q^2, \\qquad\n\\eta(Q) = \\eta_{\\max}\\Bigl(1-\\bigl(\\tfrac{Q-Q_\\mathrm{bep}}{Q_\\mathrm{bep}}\\bigr)^2\\Bigr), \\qquad\nP_\\mathrm{shaft} = \\frac{\\rho g Q H}{\\eta}\n$$\n\n$$\nQ \\propto N D, \\quad H \\propto N^2 D^2, \\quad P \\propto N^3 D^3, \\qquad\n\\mathrm{NPSH}_a = \\frac{P_s - P_\\mathrm{sat}}{\\rho g} + \\frac{v_s^2}{2g} + z_s - h_{f,s}\n$$\n\nIn the default (flow-given) mode the inlet stream fixes $Q=\\dot m/\\rho$ and the\noutlet is $P_\\mathrm{in}+\\rho g H(Q)$; temperature and molar flows pass through\n(or, with `cp`, the liquid warms by the dissipated shaft work).\n\n| Parameter | Unit | Meaning |\n|-----------|------|---------|\n| `head_coeffs` | m, m/(m\u00b3/s), \u2026 | ascending polynomial coefficients of $H(Q)$ at the reference speed and diameter (see `fit_pump_curve`) |\n| `rho` | kg/m\u00b3 | liquid density: a number or a callable of the inlet stream |\n| `eta_coeffs` or `eta_max` + `Q_bep` | \u2013, m\u00b3/s | efficiency polynomial, or the BEP-centred parabola |\n| `npshr_coeffs` | m, \u2026 | polynomial of required NPSH (optional) |\n| `N_ref`, `D_ref` | rpm, m | speed and impeller diameter the curves belong to |\n| `N`, `D` | rpm, m | operating speed and diameter (default: the references) |\n| `motor_efficiency` | \u2013 | `electric_power = shaft_power / motor_efficiency` |\n| `MW` | g/mol | molar mass (number or `{species: MW}`); omit if a `thermo` is passed |\n| `Psat` | Pa | vapour pressure for NPSHa (number or callable); otherwise `thermo.Psat(species, T)` |\n| `D_suction` | m | suction nozzle diameter for the velocity head in NPSHa |\n| `cp` | J/kg/K | liquid heat capacity; enables the temperature rise |\n\n`info` holds `Q`, `head`, `efficiency`, `hydraulic_power`, `shaft_power`,\n`electric_power` (W) and, when the curves and a vapour pressure are given,\n`NPSHr`, `NPSHa` and `npsh_margin = NPSHa - NPSHr` (negative: cavitation risk).\nLike `Pipe`, liquid density is an explicit input; see the design note under\n[Pipe](#op-pipe).\n\n```python\nfrom difflow import (CentrifugalPump, CentrifugalPumpParams, Pipe, PipeParams,\n                     fit_pump_curve, operating_point, system_curve)\n\nh = fit_pump_curve(Q_data, H_data, order=2)           # vendor points, m^3/s and m\npump = CentrifugalPump(CentrifugalPumpParams(\n    head_coeffs=h, rho=998.2, eta_max=0.72, Q_bep=0.020,\n    npshr_coeffs=[1.5, 0.0, 2.5e3], N_ref=1750.0, D_ref=0.25, MW=18.015))"
   },
   {
    "anchor": "combustion-gas-turbine-units",
