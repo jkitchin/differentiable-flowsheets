@@ -1560,36 +1560,51 @@ def stages_kremser(
     S_F: Array | float,
     recovery: float = 0.99,
 ) -> Array:
-    """Calculate number of stages using Kremser equation.
+    """Number of counter-current stages for a recovery, from Kremser.
 
-    For counter-current extraction.
+    With extraction factor ``E = D * S/F`` and a solute-free solvent, the
+    fraction extracted in ``N`` ideal stages is
+
+        recovery = (E^(N+1) - E) / (E^(N+1) - 1),
+
+    so ``E^(N+1) = (E - recovery) / (1 - recovery)`` and
+
+        N = ln((E - recovery) / (1 - recovery)) / ln(E) - 1,
+
+    with the limit ``N = recovery / (1 - recovery)`` at ``E = 1``.
+    Infinitely many stages recover at most ``min(E, 1)``, so a recovery of
+    ``E`` or more with ``E < 1`` is unreachable and returns ``inf``.
+
+    The result is floored at 1 stage (see :func:`stages_fenske` for an
+    unfloored lower bound).
 
     Args:
         D: Distribution coefficient
         S_F: Solvent-to-feed ratio
-        recovery: Desired recovery fraction
+        recovery: Desired recovery fraction, in (0, 1)
 
     Returns:
-        Number of theoretical stages
-    """
-    D = jnp.asarray(D)
-    S_F = jnp.asarray(S_F)
+        Number of theoretical stages (continuous; ``inf`` if unreachable)
 
-    # Extraction factor E = D * S/F
+    Example:
+        >>> float(stages_kremser(2.0, 1.0, 0.9))  # E = 2: 2^(N+1) = 11
+        2.4594316186372978
+    """
+    D = jnp.asarray(D, dtype=float)
+    S_F = jnp.asarray(S_F, dtype=float)
     E = D * S_F
 
-    # Kremser equation
-    # Recovery = (E^(N+1) - E) / (E^(N+1) - 1)
-    # Solving for N:
-    # N = log((recovery*(E-1) + 1) / E) / log(E) - 1
+    near_one = jnp.abs(E - 1.0) < 1e-6
+    reachable = E > recovery
+    ok = reachable & ~near_one
+    # Safe placeholders keep both jnp.where branches finite (and their
+    # gradients NaN-free) where the other branch is selected.
+    E_safe = jnp.where(ok, E, 2.0)
+    arg = jnp.where(ok, (E_safe - recovery) / (1.0 - recovery), 3.0)
+    N_kremser = jnp.log(arg) / jnp.log(E_safe) - 1.0
 
-    # Handle E ≈ 1 case
-    N = jnp.where(
-        jnp.abs(E - 1.0) < 1e-6,
-        recovery / (1 - recovery),  # Limit as E → 1
-        jnp.log((recovery * (E - 1) + 1) / E) / jnp.log(E)
-    )
-
+    N = jnp.where(near_one, recovery / (1.0 - recovery), N_kremser)
+    N = jnp.where(reachable | near_one, N, jnp.inf)
     return jnp.maximum(N, 1.0)
 
 
