@@ -76,6 +76,8 @@ from difflow.units.distillation import (
 )
 from difflow.units.heat_exchanger import (
     DefaultCpWarning,
+    LowCorrectionFactorWarning,
+    PhaseChangeWarning,
     Heater,
     HeaterParams,
     Cooler,
@@ -215,6 +217,8 @@ __all__ = [
     "water_vapor_enthalpy",
     # Heat Exchangers
     "DefaultCpWarning",
+    "LowCorrectionFactorWarning",
+    "PhaseChangeWarning",
     "Heater",
     "HeaterParams",
     "Cooler",

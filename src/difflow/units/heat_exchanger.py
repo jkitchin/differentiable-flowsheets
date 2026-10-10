@@ -459,6 +459,93 @@ def resolve_Cp(
     return DEFAULT_CP
 
 
+class PhaseChangeWarning(UserWarning):
+    """A constant-Cp heat exchanger is being used across a boiling point.
+
+    The constant-Cp units (:class:`CounterCurrentHX`, :class:`CoCurrentHX`,
+    :class:`CrossFlowHX`, :class:`ShellAndTubeHX`, and :class:`Heater` /
+    :class:`Cooler` without a thermo) carry no latent heat, so a stream that
+    condenses or vaporises is under-predicted by a large factor (pentane
+    condensing against cooling water: 5.5-fold). Use
+    :class:`EnthalpyCounterCurrentHX`, or give a Heater/Cooler a ``thermo``.
+
+    The check is an advisory and only runs on concrete values (never under
+    ``jit``/``grad``). Silence it with ``warnings.simplefilter("ignore",
+    PhaseChangeWarning)`` when the crossing is a trace component.
+    """
+
+
+#: Species whose mole fraction is below this are not checked for phase change.
+_PHASE_CHECK_MIN_FRACTION = 0.01
+
+
+def _normal_boiling_temperature(name: str, P: float) -> float | None:
+    """Boiling temperature (K) of a database species at ``P`` (Pa), or None.
+
+    Inverts the species' Antoine equation, ``T = B/(A - log10 P) - C``, and
+    returns None when the species is not in the database, has no Antoine
+    coefficients, or the result lies outside the equation's stated range.
+    """
+    from difflow.database import get_species_info
+
+    try:
+        thermo = get_species_info(name).get("ideal_thermo")
+    except KeyError:
+        return None
+    if not thermo or "antoine" not in thermo:
+        return None
+    A, B, C = thermo["antoine"]
+    denom = A - float(jnp.log10(P))
+    if denom <= 0.0:
+        return None
+    Tb = B / denom - C
+    lo = thermo.get("T_antoine_min")
+    hi = thermo.get("T_antoine_max")
+    if (lo is not None and Tb < lo) or (hi is not None and Tb > hi):
+        return None
+    return float(Tb)
+
+
+def _warn_phase_change(inlet: Stream, T_out, where: str, stacklevel: int = 3) -> None:
+    """Warn if a constant-Cp stream's temperature span crosses a boiling point.
+
+    Looks at the inlet and outlet temperatures of the stream and, for each
+    database species holding at least 1% of its flow, at the boiling point
+    at the stream pressure. Skipped silently for anything that is not a
+    concrete number (a traced value inside ``jit`` / ``grad``), so it never
+    changes what the unit computes or how it differentiates.
+    """
+    try:
+        T_in = float(inlet["T"])
+        T_o = float(T_out)
+        P = float(inlet.get("P", 101325.0))
+        flows = {k: float(v) for k, v in get_flows(inlet).items()}
+    except Exception:
+        return
+    total = sum(flows.values())
+    if not total > 0.0 or not P > 0.0:
+        return
+    lo, hi = min(T_in, T_o), max(T_in, T_o)
+    crossed = []
+    for species, F in flows.items():
+        if F / total < _PHASE_CHECK_MIN_FRACTION:
+            continue
+        Tb = _normal_boiling_temperature(species, P)
+        if Tb is not None and lo < Tb < hi:
+            crossed.append(f"{species} (boils at {Tb:.1f} K at {P / 1e5:.3g} bar)")
+    if crossed:
+        warnings.warn(
+            f"{where}: the temperature changes from {T_in:.1f} K to {T_o:.1f} K, "
+            f"across the boiling point of {', '.join(crossed)}. This unit uses "
+            f"a constant Cp and carries no latent heat, so a stream that "
+            f"condenses or vaporises is badly mis-rated (a condensing pentane "
+            f"vapour comes out 5.5-fold low). Use EnthalpyCounterCurrentHX, "
+            f"or give a Heater/Cooler a thermo.",
+            PhaseChangeWarning,
+            stacklevel=stacklevel,
+        )
+
+
 def stream_enthalpy_of(thermo, flows, T, P, phase: str | None = None) -> Array:
     """Total stream enthalpy (W) from a thermo object.
 
@@ -787,6 +874,8 @@ class _UtilityExchanger:
 
         outlet = dict(inlet)
         outlet["T"] = T_out_calc
+        if self.thermo is None:
+            _warn_phase_change(inlet, T_out_calc, type(self).__name__)
 
         info = {
             "Q": Q,
@@ -1165,6 +1254,9 @@ class CounterCurrentHX:
             "Cr_near_one": Cr > 0.95,
         }
 
+        _warn_phase_change(hot_inlet, T_hot_out, f"{type(self).__name__} hot side")
+        _warn_phase_change(cold_inlet, T_cold_out, f"{type(self).__name__} cold side")
+
         return hot_outlet, cold_outlet, info
 
 
@@ -1532,6 +1624,9 @@ class CoCurrentHX:
             "Cr_near_one": Cr > 0.95,
         }
 
+        _warn_phase_change(hot_inlet, T_hot_out, f"{type(self).__name__} hot side")
+        _warn_phase_change(cold_inlet, T_cold_out, f"{type(self).__name__} cold side")
+
         return hot_outlet, cold_outlet, info
 
 
@@ -1709,6 +1804,9 @@ class CrossFlowHX:
             "NTU_very_high": NTU > 10.0,
             "Cr_near_one": Cr > 0.95,
         }
+
+        _warn_phase_change(hot_inlet, T_hot_out, f"{type(self).__name__} hot side")
+        _warn_phase_change(cold_inlet, T_cold_out, f"{type(self).__name__} cold side")
 
         return hot_outlet, cold_outlet, info
 
@@ -2012,12 +2110,67 @@ class ShellAndTubeHX:
             "n_shell_passes": p.n_shell_passes,
         }
 
+        _warn_phase_change(hot_inlet, T_hot_out, f"{type(self).__name__} hot side")
+        _warn_phase_change(cold_inlet, T_cold_out, f"{type(self).__name__} cold side")
+
         return hot_outlet, cold_outlet, info
 
 
 # =============================================================================
 # Design Functions
 # =============================================================================
+
+
+class LowCorrectionFactorWarning(UserWarning):
+    """A 1-2N shell-and-tube design has a poor or impossible LMTD factor.
+
+    Raised by :func:`design_heat_exchanger` and :func:`size_heat_exchanger`
+    with ``flow_config="shell_and_tube"`` when ``F < 0.75`` (the usual design
+    floor: the exchanger is working too hard against its temperature cross) or
+    ``F == 0`` (the duty is past what ``n_shell_passes`` shells can deliver at
+    any area, so it needs more shells or a different arrangement).
+    """
+
+
+#: Usual lower design limit on the LMTD correction factor.
+F_DESIGN_MIN = 0.75
+
+
+def _shell_and_tube_F(Q, T_hot_in, T_hot_out, T_cold_in, T_cold_out, n_shell_passes):
+    """(F, LMTD_cc) for a 1-2N exchanger from its four terminal temperatures."""
+    dT_hot = T_hot_in - T_hot_out
+    dT_cold = T_cold_out - T_cold_in
+    R = safe_divide(dT_hot, jnp.maximum(dT_cold, 1e-10))
+    P = safe_divide(dT_cold, jnp.maximum(T_hot_in - T_cold_in, 1e-10))
+    F = lmtd_correction_factor(R, P, n_shell_passes)
+    LMTD_cc = log_mean_temperature_difference(T_hot_in - T_cold_out, T_hot_out - T_cold_in)
+    return F, LMTD_cc
+
+
+def _warn_correction_factor(F, n_shell_passes: int, where: str, stacklevel: int = 3) -> None:
+    """Warn on a low or zero F; silent for traced values (jit/grad)."""
+    try:
+        Fv = float(F)
+    except Exception:
+        return
+    if Fv == 0.0:
+        warnings.warn(
+            f"{where}: F = 0. The duty is past what {n_shell_passes} shell pass"
+            f"{'es' if n_shell_passes != 1 else ''} can deliver at any area "
+            f"(the temperature cross is too large), so the exchanger needs more "
+            f"shells in series or a different arrangement.",
+            LowCorrectionFactorWarning,
+            stacklevel=stacklevel,
+        )
+    elif Fv < F_DESIGN_MIN:
+        warnings.warn(
+            f"{where}: F = {Fv:.3f} is below the usual design floor of "
+            f"{F_DESIGN_MIN}; the exchanger is working hard against its "
+            f"temperature cross and the area is sensitive to small errors. "
+            f"Consider more shells in series.",
+            LowCorrectionFactorWarning,
+            stacklevel=stacklevel,
+        )
 
 
 def design_heat_exchanger(
@@ -2028,10 +2181,14 @@ def design_heat_exchanger(
     T_cold_out: Array,
     U: Array,
     flow_config: str = "counter_current",
+    n_shell_passes: int = 1,
 ) -> dict[str, Array]:
     """Design a heat exchanger given temperatures and duty.
 
-    Calculates required area from LMTD method.
+    Calculates required area from the LMTD method. For
+    ``flow_config="shell_and_tube"`` the counter-current LMTD is multiplied
+    by the 1-2N correction factor ``F`` (:func:`lmtd_correction_factor`), so
+    ``A = Q / (U F LMTD)``.
 
     Args:
         Q: Heat duty (W)
@@ -2040,32 +2197,86 @@ def design_heat_exchanger(
         T_cold_in: Cold inlet temperature (K)
         T_cold_out: Cold outlet temperature (K)
         U: Overall heat transfer coefficient (W/m²·K)
-        flow_config: "counter_current" or "co_current"
+        flow_config: "counter_current", "co_current" or "shell_and_tube"
+        n_shell_passes: Shells in series, for ``flow_config="shell_and_tube"``
+            (a Python int; ignored otherwise).
 
     Returns:
         Dictionary with:
-        - 'A': Required area (m²)
-        - 'LMTD': Log mean temperature difference (K)
+        - 'A': Required area (m²); ``inf`` when ``F = 0``
+        - 'LMTD': Log mean temperature difference (K), counter-current basis
+          for "shell_and_tube" (before F)
         - 'UA': UA value (W/K)
+        - 'F': LMTD correction factor (1 for the pure flow configurations)
+
+    For "shell_and_tube" a :class:`LowCorrectionFactorWarning` is issued when
+    ``F < 0.75`` or ``F = 0`` (the duty is past the per-shell limit, so more
+    shells are needed). The warning is skipped for traced values, so the
+    function stays ``jit``/``grad`` safe; read ``F`` from the result there.
+
+    Raises:
+        ValueError: For an unknown ``flow_config``.
     """
-    if flow_config == "counter_current":
+    if flow_config == "counter_current" or flow_config == "shell_and_tube":
         dT1 = T_hot_in - T_cold_out
         dT2 = T_hot_out - T_cold_in
-    else:  # co_current
+    elif flow_config == "co_current":
         dT1 = T_hot_in - T_cold_in
         dT2 = T_hot_out - T_cold_out
+    else:
+        raise ValueError(
+            f"flow_config must be 'counter_current', 'co_current' or "
+            f"'shell_and_tube', got {flow_config!r}"
+        )
 
     LMTD = log_mean_temperature_difference(dT1, dT2)
-    UA = Q / LMTD
+
+    if flow_config == "shell_and_tube":
+        F, _ = _shell_and_tube_F(Q, T_hot_in, T_hot_out, T_cold_in, T_cold_out, n_shell_passes)
+        _warn_correction_factor(F, n_shell_passes, "design_heat_exchanger")
+        feasible = F > 0.0
+        UA = jnp.where(feasible, Q / (jnp.where(feasible, F, 1.0) * LMTD), jnp.inf)
+    else:
+        F = jnp.ones_like(jnp.asarray(LMTD))
+        UA = Q / LMTD
     A = UA / U
 
     return {
         "A": A,
         "LMTD": LMTD,
         "UA": UA,
+        "F": F,
         "dT1": dT1,
         "dT2": dT2,
     }
+
+
+def _ntu_shell_and_tube(eps: Array, Cr: Array, n_shell_passes: int) -> Array:
+    """Exact inverse of :func:`effectiveness_shell_and_tube` (NTU of the whole unit).
+
+    Undo the N-shell series relation for the single-shell effectiveness
+    ``eps_1``, then invert the single-shell formula
+    ``eps_1 = 2 / [1 + Cr + s coth(NTU_1 s / 2)]``, ``s = sqrt(1 + Cr^2)``, so
+    ``NTU = N NTU_1`` with ``NTU_1 = ln((y + 1)/(y - 1)) / s`` and
+    ``y = (2/eps_1 - 1 - Cr)/s``. ``y <= 1`` means ``eps`` is above the
+    asymptote ``2/(1 + Cr + s)`` that N shells can reach, and the answer is
+    ``inf``.
+    """
+    N = int(n_shell_passes)
+    a = safe_divide(1.0 - eps * Cr, 1.0 - eps)
+    r = jnp.maximum(a, 1.0) ** (1.0 / N)
+    eps1_general = safe_divide(r - 1.0, r - Cr)
+    eps1_balanced = eps / (N - (N - 1.0) * eps)
+    # general form ill-conditioned only within ~1e-4 of Cr = 1
+    t = jnp.abs(1.0 - Cr) / 1e-4
+    w = jnp.where(t > 1, 1.0, jnp.clip(3 * t**2 - 2 * t**3, 0.0, 1.0))
+    eps1 = jnp.maximum(w * eps1_general + (1.0 - w) * eps1_balanced, 1e-12)
+    s = jnp.sqrt(1.0 + Cr**2)
+    y = (2.0 / eps1 - 1.0 - Cr) / s
+    feasible = y > 1.0 + 1e-12
+    y_safe = jnp.where(feasible, y, 2.0)
+    NTU1 = jnp.log((y_safe + 1.0) / (y_safe - 1.0)) / s
+    return jnp.where(feasible, N * NTU1, jnp.inf)
 
 
 def size_heat_exchanger(
@@ -2076,6 +2287,7 @@ def size_heat_exchanger(
     C_cold: Array,
     U: Array,
     flow_config: str = "counter_current",
+    n_shell_passes: int = 1,
 ) -> dict[str, Array]:
     """Size a heat exchanger given heat capacity rates.
 
@@ -2089,10 +2301,22 @@ def size_heat_exchanger(
         C_hot: Hot side heat capacity rate (W/K)
         C_cold: Cold side heat capacity rate (W/K)
         U: Overall heat transfer coefficient (W/m²·K)
-        flow_config: "counter_current" or "co_current"
+        flow_config: "counter_current", "co_current" or "shell_and_tube"
+        n_shell_passes: Shells in series, for ``flow_config="shell_and_tube"``
+            (a Python int; ignored otherwise).
 
     Returns:
-        Dictionary with A, UA, NTU, effectiveness, and temperature crossing flag
+        Dictionary with A, UA, NTU, effectiveness, temperature crossing flag
+        and ``F`` (the LMTD correction factor, 1 unless "shell_and_tube").
+
+    For "shell_and_tube" the effectiveness of :func:`effectiveness_shell_and_tube`
+    is inverted exactly; when ``Q`` is past what ``n_shell_passes`` shells can
+    deliver (``eps`` above the single-pass asymptote) ``NTU``, ``UA`` and ``A``
+    are ``inf``, ``F = 0`` and a :class:`LowCorrectionFactorWarning` is issued
+    (also for ``F < 0.75``; skipped for traced values).
+
+    Raises:
+        ValueError: For an unknown ``flow_config``.
     """
     # Ensure positive heat capacity rates
     C_hot = jnp.maximum(C_hot, 1e-10)
@@ -2124,12 +2348,19 @@ def size_heat_exchanger(
         # Smooth blending
         blend_weight = jax.nn.sigmoid((1.0 - Cr - CR_BLEND_WIDTH) / (CR_BLEND_WIDTH / 3))
         NTU = blend_weight * NTU_general + (1.0 - blend_weight) * NTU_balanced
-    else:
+    elif flow_config == "shell_and_tube":
+        NTU = _ntu_shell_and_tube(eps, Cr, n_shell_passes)
+    elif flow_config == "co_current":
         # For co-current: NTU = -ln(1 - eps(1+Cr)) / (1 + Cr)
         # This formula is well-behaved since (1 + Cr) >= 1
         one_plus_Cr = 1.0 + Cr
         log_arg = jnp.maximum(1.0 - eps * one_plus_Cr, 1e-10)
         NTU = -jnp.log(log_arg) / one_plus_Cr
+    else:
+        raise ValueError(
+            f"flow_config must be 'counter_current', 'co_current' or "
+            f"'shell_and_tube', got {flow_config!r}"
+        )
 
     # Ensure NTU is positive
     NTU = jnp.maximum(NTU, 0.0)
@@ -2141,12 +2372,23 @@ def size_heat_exchanger(
     T_hot_out = T_hot_in - Q / C_hot
     T_cold_out = T_cold_in + Q / C_cold
 
+    if flow_config == "shell_and_tube":
+        # F = Q / (UA LMTD_cc); zero when the duty is unreachable (UA = inf)
+        LMTD_cc = log_mean_temperature_difference(
+            T_hot_in - T_cold_out, T_hot_out - T_cold_in)
+        finite = jnp.isfinite(UA)
+        F = jnp.where(finite, safe_divide(Q, jnp.where(finite, UA, 1.0) * LMTD_cc), 0.0)
+        _warn_correction_factor(F, n_shell_passes, "size_heat_exchanger")
+    else:
+        F = jnp.ones_like(jnp.asarray(UA))
+
     return {
         "A": A,
         "UA": UA,
         "NTU": NTU,
         "effectiveness": eps,
         "Cr": Cr,
+        "F": F,
         "T_hot_out": T_hot_out,
         "T_cold_out": T_cold_out,
         "driving_force": driving_force,
