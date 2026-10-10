@@ -2,10 +2,9 @@
 
 What "validated" means here -- please read before trusting a number.
 
-**The Kern kerosene-crude example (Kern 1950 Ex. 7.x / Coulson & Richardson
-Vol 6 Ch. 12 worked examples) is NOT reproduced.** Its inputs and printed
-answers could not be recalled with confidence, and a fabricated textbook
-number is worse than none; no test here asserts one. What is checked instead:
+**Kern's kerosene-crude rating (Kern 1950, Example 7.3) is reproduced** in
+``TestKernExample73`` from its inputs and chart readings as transcribed by
+the FOSSEE project (see that class). Also checked:
 
 * every Kern equation (``D_e``, ``A_s``, ``G_s``, ``Re_s``, ``h_o`` and the
   shell ``dP``) and the tube-side equations (velocity, Reynolds number,
@@ -25,10 +24,11 @@ number is worse than none; no test here asserts one. What is checked instead:
 * gradients: ``check_grads`` of the area with respect to baffle spacing and
   tube velocity (through the ``optx.fixed_point``), and against finite
   differences;
-* the Kern constants (0.36, 0.55, 0.576, 0.19), the ``Db`` constants
-  (``K1``, ``n1``) and the tube-count constants were **recalled from memory**
-  and are only sanity-banded here (against a brute-force tube-lattice count);
-  they are NOT verified against the books.
+* the Kern constants (0.36, 0.55, 0.576, 0.19) agree with Kern's chart
+  readings in Example 7.3 (to 3 percent); the ``Db`` constants (``K1``,
+  ``n1``) and the tube-count constants were **recalled from memory** and are
+  only sanity-banded here (against a brute-force tube-lattice count); they are
+  NOT verified against the books.
 """
 
 import math
@@ -674,3 +674,78 @@ class TestMetadata:
         p = make_params()
         assert p["tube_OD"] == DO and "tube_ID" in p
         assert p.update(tube_length=6.0).tube_length == 6.0
+
+
+# ---------------------------------------------------------------------------
+# Published worked example: Kern (1950), Example 7.3
+# ---------------------------------------------------------------------------
+# Inputs and Kern's chart readings as transcribed in the FOSSEE Python notebook
+# of Kern's Chapter 7 (tbc-python.fossee.in, "Process Heat Transfer by D. Q.
+# Kern", Chapter 7, Example 7.3); the notebook's own printed outputs carry
+# Python 2 integer-division bugs and are NOT used. Kerosene (shell) 43 800 lb/h,
+# 390 -> 200 F; crude (tubes) 149 000 lb/h, 100 -> 170 F; 21.25 in shell,
+# 158 tubes 1 in OD 13 BWG (ID 0.81 in), 16 ft, 1.25 in square pitch, 4 passes,
+# baffles 5 in. Tolerances are chart-reading tolerances, not loosened fits.
+# The U_C, R_d and dP references are recomputed from Kern's chart readings
+# (j_H, f); Kern's printed totals in the book itself were not checked.
+
+FT, INCH, LBH, CP = 0.3048, 0.0254, 0.45359237 / 3600, 1e-3
+BTU_FT_F, U_ENG = 1.730735, 5.678263       # W/m/K and W/m^2/K per Btu/h ft (F) [ft^2]
+
+
+class TestKernExample73:
+    Ds, lB, pt, do = 21.25 * INCH, 5 * INCH, 1.25 * INCH, 1.0 * INCH
+    m_s, mu_s, muw_s, k_s, cp_s = 43800 * LBH, 0.40 * CP, 0.56 * CP, 0.0765 * BTU_FT_F, 0.59 * 4186.8
+    m_t, mu_t, muw_t, k_t, cp_t = 149000 * LBH, 3.6 * CP, 1.5 * CP, 0.077 * BTU_FT_F, 0.49 * 4186.8
+
+    def shell(self):
+        return st.kern_shell_side(self.m_s, 730.0, self.mu_s, self.k_s, self.cp_s, self.Ds, self.do,
+                                  self.pt, self.lB, "square", mu_wall=self.muw_s)
+
+    def test_tube_inside_diameter_13_bwg(self):
+        assert st.tube_inside_diameter(self.do, 13) == pytest.approx(0.81 * INCH, rel=1e-12)
+
+    def test_equivalent_diameters(self):
+        assert float(st.equivalent_diameter(self.pt, self.do, "square")) / INCH == pytest.approx(0.99, rel=0.005)
+        # Example 7.1: 3/4 in tubes on 1 in square pitch, De = 0.95 in
+        assert float(st.equivalent_diameter(INCH, 0.75 * INCH, "square")) / INCH == pytest.approx(0.95, rel=0.005)
+
+    def test_shell_flow_area_mass_velocity_reynolds(self):
+        r = self.shell()
+        assert float(r["As"]) / FT**2 == pytest.approx(0.1476, rel=1e-3)
+        assert float(r["Gs"]) / (LBH / FT**2) == pytest.approx(296809.0, rel=1e-3)
+        assert float(r["Re"]) == pytest.approx(25296.0, rel=0.005)   # Kern used De = 0.99 in
+
+    def test_shell_jH_and_friction_vs_chart(self):
+        r = self.shell()
+        jH = float(r["Nu"] / r["Pr"] ** (1 / 3) / (self.mu_s / self.muw_s) ** 0.14)
+        assert jH == pytest.approx(93.0, rel=0.03)                    # chart reading 93
+        f = float(st.kern_friction_factor(r["Re"])) / 144.0           # Kern's ft^2/in^2
+        assert f == pytest.approx(0.00175, rel=0.04)                   # chart reading 0.00175
+
+    def test_clean_coefficient_and_dirt_factor(self):
+        """U_C from Kern's chart readings (tube jH = 31, shell jH = 93) vs difflow."""
+        Pr_t, Pr_s = self.cp_t * self.mu_t / self.k_t, self.cp_s * self.mu_s / self.k_s
+        di = 0.81 * INCH
+        hi_chart = 31 * self.k_t / di * Pr_t ** (1 / 3) * (self.mu_t / self.muw_t) ** 0.14
+        ho_chart = 93 * self.k_s / (0.99 * INCH) * Pr_s ** (1 / 3) * (self.mu_s / self.muw_s) ** 0.14
+        Uc_chart = 1 / (1 / ho_chart + self.do / (di * hi_chart))
+        tube = st.tube_side_pressure_drop(self.m_t, 830.0, self.mu_t, 158, 4, di, 16 * FT)
+        hi = ht.internal_h(tube["Re"], Pr_t, self.k_t, di, L=4 * 16 * FT, mu_ratio=self.mu_t / self.muw_t)
+        Uc = float(ht.overall_U(hi, self.shell()["h_o"], di, self.do, k_wall=1e12))
+        assert Uc == pytest.approx(Uc_chart, rel=0.03)
+        # duty with Kern's balance (cp 0.605), area 158 pi do L, F from the formula
+        Q = self.m_s * 0.605 * 4186.8 * 190 * 5 / 9
+        F = float(lmtd_correction_factor(190 / 70, 70 / 290, 1))
+        lmtd = (220 - 100) / math.log(220 / 100) * 5 / 9
+        UD = Q / (158 * math.pi * self.do * 16 * FT * F * lmtd)
+        Rd = (1 / UD - 1 / Uc) * U_ENG
+        assert Rd > 0.003                                              # Kern: satisfactory
+        assert Rd == pytest.approx(0.0035, abs=0.0005)                 # 0.0035 with chart readings
+
+    def test_pressure_drops(self):
+        dPs = st.kern_shell_pressure_drop(self.m_s, 730.0, self.mu_s, self.Ds, self.do, self.pt, self.lB,
+                                          16 * FT, "square", mu_wall=self.muw_s)
+        assert float(dPs["dP"]) / 6894.757 == pytest.approx(3.5, rel=0.06)      # 38.4 vs Kern's 38 crossings
+        tube = st.tube_side_pressure_drop(self.m_t, 830.0, self.mu_t, 158, 4, 0.81 * INCH, 16 * FT)
+        assert float(tube["dP"]) / 6894.757 == pytest.approx(9.0, rel=0.05)
