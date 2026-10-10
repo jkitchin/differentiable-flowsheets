@@ -228,7 +228,10 @@ def cooling_water_cost(
 
     Args:
         duty: Cooling duty (W, positive = cooling required)
-        delta_T: Temperature rise of cooling water (K)
+        delta_T: Temperature rise of cooling water (K). Does not change the
+            cost: ``prices.cooling_water`` is per GJ removed, which already
+            assumes a typical rise. Kept for symmetry with
+            :func:`cooling_water_flowrate`, where it sets the flow.
         prices: Utility prices
 
     Returns:

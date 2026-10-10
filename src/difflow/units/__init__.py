@@ -227,10 +227,10 @@ __all__ = [
     "ShellAndTubeHX",
     "ShellAndTubeHXParams",
     "lmtd_correction_factor",
+    "effectiveness_shell_and_tube",
     "log_mean_temperature_difference",
     "effectiveness_counter_current",
     "effectiveness_co_current",
-    "effectiveness_shell_and_tube",
     "design_heat_exchanger",
     "size_heat_exchanger",
     # Liquid pipe flow

@@ -8,6 +8,48 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Breaking
 
+- **Cubic EOS liquid root near 1 bar; results change (#417).**
+  `PengRobinson`/`SRK` clamped every root at Z >= 0.01, which replaced the
+  liquid root of water, benzene, heptane, pentane... near atmospheric
+  pressure (true Z ~ 0.001-0.007). Liquid density, liquid fugacity, the
+  `flash_TP_eos` phase split (cold liquid water at 3 bar flashed to vapor)
+  and `CubicThermo.stream_enthalpy_flash` were wrong there. The bound is now
+  the co-volume, Z > B. Cases above ~5 bar or near critical are unchanged.
+- **Heat-exchanger formulas corrected; results change (#418).**
+  `lmtd_correction_factor` used the R = 1 limit for every R (F = 0.969 for
+  R = 2, P = 0.3; exact 0.883) and the multi-shell P conversion failed at
+  R = 1; `effectiveness_crossflow_both_unmixed` returned the counter-current
+  value; the Cmax/Cmin-mixed cross-flow forms blended toward NTU/(1+NTU)
+  near Cr = 1 (15% high). `ShellAndTubeHX` now rates with the exact 1-2N
+  effectiveness (new `effectiveness_shell_and_tube`) and reports
+  F = Q/(UA LMTD_cc). `EnthalpyCounterCurrentHX` solves Q by bisection on
+  [0, Q_max] (the damped fixed point diverged at high NTU; `damping` is
+  now unused). Past the per-shell limit P_max = 2/(R + 1 + sqrt(R^2 + 1)),
+  a temperature cross too large for the shell count, `lmtd_correction_factor`
+  returns F = 0 (the infinite-area limit). Its log clamps used to return a
+  plausible-looking value (F = 0.11 at R = 1.125, P = 0.615).
+- **Equipment cost tables re-sourced; capital costs change (#420).** Every
+  entry in `difflow.economics.capital` carried a "2019" label and `a + b S^n`
+  coefficients with no traceable source. Below 100 m2 they were 2-2.5x below
+  Turton's heat-exchanger curve, and 6.6x below it at 1000 m2. Each entry now
+  holds the published correlation on its own basis year and names its
+  `source`:
+  - Turton 5e Table A.1, `log10 C = K1 + K2 log10 S + K3 (log10 S)^2`, 2001;
+  - Towler & Sinnott Table 7.2, `a + b S^n`, 2010;
+  - Seider, 2013.
+
+  `CostParams` gains `form`, `source`, `base_cost()` and `exponent()`.
+  `validate_cost_params` checks the local exponent, and there is a new
+  differentiable `equipment_cost_log_quadratic`, which `tea()` writes for
+  Turton entries. Size bases changed:
+  - compressors are sized on driver power (Towler) or fluid power (screw,
+    Turton);
+  - `centrifuge_disk` is sized on bowl diameter in m;
+  - `packing_structured` is Seider's installed cost.
+
+  `cooling_water_cost` documents that `delta_T` does not affect a per-GJ
+  price.
+
 - **Core database heat capacities moved; results change (#393).** Every
   species now carries an explicit ideal-gas Cp cubic (`SpeciesData
   .Cp_vapor_coeffs`; Poling, Prausnitz & O'Connell 5th ed. Cp/R quartic,
@@ -283,6 +325,19 @@ All notable changes to difflow are recorded here. The format follows
   time-varying disturbances, read by feeds and units alike.
 
 ### Fixed
+
+- `CubicThermo` treats a species absent from a stream as zero flow, as
+  `IdealThermo` already did. A condenser whose vapour listed only n-pentane
+  against a water-only coolant raised a bare `KeyError: 'water'` from
+  `stream_enthalpy_flash`; a species the EOS does not model still raises.
+- **NaN gradient through an accelerated recycle whose parameter hid in a
+  closure.** `Flowsheet.solve` routes a traced solve to the optimistix fixed
+  point, but `_is_traced` checked only the feeds. A tracer captured in a
+  unit's closure, or passed through `Unit(params=...)`, therefore went to the
+  Python Anderson/Wegstein loop. There the unrolled step is 0/0 under
+  `jax.grad`, and the gradient came back NaN. `_is_traced` now also checks
+  unit params. A loop that still finds a traced residual falls back to the
+  traced fixed point instead of returning NaN.
 
 - `lmtd_correction_factor` returned its `R = 1` value for every `R` beyond
   1 +/- 0.075 (the blend weight was a cubic that clipped to 0 instead of

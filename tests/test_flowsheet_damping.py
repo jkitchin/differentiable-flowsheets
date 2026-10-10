@@ -236,3 +236,58 @@ class TestTheTracedPath:
             warnings.simplefilter("ignore", ConvergenceWarning)
             undamped = jax.jit(lambda F: objective(F, 1.0))(1.0)
         assert abs(float(undamped)) > 1e30   # the same solve, undamped
+
+
+class Scaled:
+    """``g(x) = F + k x / (1 + k)``, ``k`` closed over; ``x* = F (1 + k)``.
+
+    The traced value lives in the operation's closure, where ``_is_traced``
+    cannot look. The accelerated loops used to run to ``max_iter`` on it and
+    hand ``jax.grad`` an unrolled Anderson step, which is 0/0 once the
+    iterates agree: a NaN gradient with no warning.
+    """
+
+    def __init__(self, k):
+        self.k = k
+
+    def __call__(self, feed, tear):
+        return make_stream(
+            {"A": feed["F_A"] + self.k * tear["F_A"] / (1.0 + self.k)},
+            feed["T"],
+            feed["P"],
+        )
+
+
+class TestATracerTheDetectorMisses:
+    """dx*/dk = F, exactly; the gradient must come from the fixed point."""
+
+    @pytest.mark.parametrize("acceleration", ["anderson", "wegstein"])
+    def test_closure(self, acceleration):
+        fs_box = {}
+
+        def objective(k):
+            fs = _loop(Scaled(k))
+            fs_box["fs"] = fs
+            return fs.solve(acceleration=acceleration, tol=1e-12,
+                            tear_initial=GUESS)["loop_out"]["F_A"]
+
+        assert float(objective(2.0)) == pytest.approx(3.0, rel=1e-9)
+        g = jax.grad(objective)(2.0)
+        assert fs_box["fs"].last_solve_method == "fixed_point (traced)"
+        assert float(g) == pytest.approx(1.0, rel=1e-6)
+
+    def test_unit_params_dict(self):
+        def op(feed, tear, k=1.0):
+            return Scaled(k)(feed, tear)
+
+        def objective(k):
+            fs = Flowsheet(species_order=["A"], default_flow=0.0)
+            fs.add_feed("feed", make_stream({"A": 1.0}, 300.0, 1e5))
+            fs.add_unit(Unit("loop", op, ["feed", "tear"], ["loop_out"],
+                             params={"k": k}))
+            fs.add_recycle("loop_out", "tear")
+            out = fs.solve(tol=1e-12, tear_initial=GUESS)["loop_out"]["F_A"]
+            assert fs.last_solve_method == "fixed_point (traced)"
+            return out
+
+        assert float(jax.grad(objective)(2.0)) == pytest.approx(1.0, rel=1e-6)

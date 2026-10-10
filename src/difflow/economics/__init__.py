@@ -62,6 +62,7 @@ from .capital import (
     # Core functions
     equipment_cost,
     equipment_cost_continuous,
+    equipment_cost_log_quadratic,
     # Equipment-specific functions
     reactor_cost,
     vessel_cost,
@@ -217,6 +218,7 @@ __all__ = [
     # Capital - Functions
     "equipment_cost",
     "equipment_cost_continuous",
+    "equipment_cost_log_quadratic",
     "reactor_cost",
     "vessel_cost",
     "heat_exchanger_cost",

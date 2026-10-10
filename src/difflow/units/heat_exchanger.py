@@ -183,46 +183,6 @@ def effectiveness_counter_current(NTU: Array, Cr: Array) -> Array:
     return jnp.clip(eps, 0.0, 1.0)
 
 
-def effectiveness_shell_and_tube(NTU: Array, Cr: Array, n_shells: int = 1) -> Array:
-    """Effectiveness of ``n_shells`` 1-2N shell-and-tube shells in series.
-
-    One shell (one shell pass, two or more even tube passes; Kays & London,
-    Incropera Eq. 11.30)::
-
-        eps_1 = 2 / (1 + Cr + s (1 + e)/(1 - e)),  s = sqrt(1 + Cr^2),  e = exp(-NTU s)
-
-    and for ``n`` shells in series, each with ``NTU / n`` (Kays & London)::
-
-        eps_n = (r^n - 1)/(r^n - Cr),  r = (1 - eps_1 Cr)/(1 - eps_1)
-
-    (``n eps_1 / (1 + (n - 1) eps_1)`` at ``Cr = 1``). This is exactly
-    ``Q = U A F LMTD`` with the Bowman F of :func:`lmtd_correction_factor`
-    (checked in ``tests/test_shell_and_tube.py``).
-
-    Args:
-        NTU: Total ``UA / C_min``.
-        Cr: ``C_min / C_max``.
-        n_shells: Number of shells in series (Python int).
-
-    Returns:
-        Effectiveness in (0, 1).
-    """
-    NTU = jnp.maximum(jnp.asarray(NTU, dtype=jnp.float64), 1e-12)
-    Cr = jnp.asarray(Cr, dtype=jnp.float64)
-    n = int(n_shells)
-    s = jnp.sqrt(1.0 + Cr**2)
-    e = jnp.exp(-(NTU / n) * s)
-    eps1 = 2.0 / (1.0 + Cr + s * (1.0 + e) / (1.0 - e))
-    if n == 1:
-        return eps1
-    r = safe_divide(1.0 - eps1 * Cr, 1.0 - eps1)
-    rn = r**n
-    near_one = jnp.abs(1.0 - Cr) < 1e-8
-    general = (rn - 1.0) / jnp.where(near_one, 1.0, rn - Cr)
-    balanced = n * eps1 / (1.0 + (n - 1.0) * eps1)
-    return jnp.where(near_one, balanced, general)
-
-
 def effectiveness_co_current(NTU: Array, Cr: Array) -> Array:
     """Effectiveness for co-current (parallel flow) heat exchanger.
 
@@ -285,6 +245,7 @@ def effectiveness_crossflow_both_unmixed(NTU: Array, Cr: Array) -> Array:
     blend_threshold = 0.01
     t = Cr / blend_threshold
     blend = jnp.clip(3 * t**2 - 2 * t**3, 0.0, 1.0)
+    blend = jnp.where(t > 1, 1.0, blend)
 
     eps = blend * eps_general + (1.0 - blend) * eps_limit
 
@@ -305,7 +266,7 @@ def effectiveness_crossflow_cmax_mixed(NTU: Array, Cr: Array) -> Array:
 
     Formula: ε = (1/Cr) * [1 - exp(-Cr*(1 - exp(-NTU)))]
 
-    When Cr = 1 (balanced flow), this reduces to ε = NTU/(1+NTU).
+    When Cr = 1 (balanced flow): ε = 1 - exp(-(1 - exp(-NTU))).
 
     Args:
         NTU: Number of transfer units (UA/Cmin)
@@ -319,20 +280,11 @@ def effectiveness_crossflow_cmax_mixed(NTU: Array, Cr: Array) -> Array:
 
     # General formula: ε = (1/Cr) * [1 - exp(-Cr*(1 - exp(-NTU)))]
     inner_exp = jnp.exp(-NTU_safe)
-    outer_exp = jnp.exp(-Cr_safe * (1.0 - inner_exp))
-    eps_general = (1.0 / Cr_safe) * (1.0 - outer_exp)
+    eps_general = -jnp.expm1(-Cr_safe * (1.0 - inner_exp)) / Cr_safe
 
-    # Balanced case (Cr = 1): ε = NTU / (1 + NTU)
-    eps_balanced = NTU_safe / (1.0 + NTU_safe)
-
-    # Smooth blending near Cr = 1
-    threshold = CR_BLEND_WIDTH
-    x = jnp.abs(1.0 - Cr)
-    t = x / threshold
-    blend = jnp.clip(3 * t**2 - 2 * t**3, 0.0, 1.0)
-    blend = jnp.where(t > 1, 1.0, blend)
-
-    eps = blend * eps_general + (1.0 - blend) * eps_balanced
+    # Regular at Cr = 1, so no blend there (a blend toward the counter-current
+    # limit NTU/(1+NTU) made eps 15% high near Cr = 1; issue #418).
+    eps = eps_general
 
     return jnp.clip(eps, 0.0, 1.0)
 
@@ -346,7 +298,7 @@ def effectiveness_crossflow_cmin_mixed(NTU: Array, Cr: Array) -> Array:
 
     Formula: ε = 1 - exp[-(1/Cr)*(1 - exp(-Cr*NTU))]
 
-    When Cr = 1, this reduces to ε = NTU/(1+NTU).
+    When Cr = 1: ε = 1 - exp(-(1 - exp(-NTU))).
     When Cr → 0, this approaches ε → 1 - exp(-NTU).
 
     Args:
@@ -360,21 +312,12 @@ def effectiveness_crossflow_cmin_mixed(NTU: Array, Cr: Array) -> Array:
     Cr_safe = jnp.maximum(Cr, 1e-10)
 
     # General formula: ε = 1 - exp[-(1/Cr)*(1 - exp(-Cr*NTU))]
-    inner_exp = jnp.exp(-Cr_safe * NTU_safe)
-    exponent = -(1.0 / Cr_safe) * (1.0 - inner_exp)
+    exponent = jnp.expm1(-Cr_safe * NTU_safe) / Cr_safe
     eps_general = 1.0 - jnp.exp(exponent)
 
-    # Balanced case (Cr = 1): ε = NTU / (1 + NTU)
-    eps_balanced = NTU_safe / (1.0 + NTU_safe)
-
-    # Smooth blending near Cr = 1
-    threshold = CR_BLEND_WIDTH
-    x = jnp.abs(1.0 - Cr)
-    t = x / threshold
-    blend = jnp.clip(3 * t**2 - 2 * t**3, 0.0, 1.0)
-    blend = jnp.where(t > 1, 1.0, blend)
-
-    eps = blend * eps_general + (1.0 - blend) * eps_balanced
+    # Regular at Cr = 1, so no blend there (a blend toward the counter-current
+    # limit NTU/(1+NTU) made eps 15% high near Cr = 1; issue #418).
+    eps = eps_general
 
     return jnp.clip(eps, 0.0, 1.0)
 
@@ -1063,6 +1006,9 @@ class HeatExchangerParams(ParamsMixin):
             enthalpy balance.
         Cp_cold: Cold side heat capacity (J/mol·K). Same fallback as Cp_hot.
         min_approach: Minimum temperature approach (K). For design mode.
+
+    Only the capacity rate C = F·Cp (W/K) enters the calculation, so a mass
+    basis works too: flows in kg/s with Cp in J/kg·K give the same result.
     """
     UA: Array | float | None = None
     Cp_hot: float | None = None
@@ -1228,8 +1174,9 @@ class EnthalpyHXParams(ParamsMixin):
 
     Attributes:
         UA: Overall heat transfer coefficient x area (W/K).
-        max_iter: Max iterations for the outer Q fixed point.
-        damping: Damping factor for the Q update (0 < d <= 1).
+        max_iter: Max bisection steps for the outer Q solve (at least 100).
+        damping: Unused; kept for compatibility (the outer solve was a damped
+            fixed point before issue #418 and is now a bracketed bisection).
     """
     UA: Array | float | None = None
     max_iter: int = 80
@@ -1263,22 +1210,31 @@ def _enthalpy_hx_core(
         T_cold_out = invert_T(cold_flows, H_cold_in + Q, P_cold, T_cold_in)
         return T_hot_out, T_cold_out
 
-    def q_iteration(Q, _):
-        T_hot_out, T_cold_out = outlets_from_Q(Q)
-        dT1 = T_hot_in - T_cold_out
-        dT2 = T_hot_out - T_cold_in
-        LMTD = log_mean_temperature_difference(dT1, dT2)
-        Q_new = UA_val * LMTD
-        return (1.0 - damping) * Q + damping * Q_new
+    # Q is bounded by the duty that brings either outlet to the other inlet's
+    # temperature. On [0, Q_max] the residual Q - UA*LMTD(Q) is strictly
+    # increasing (both terminal differences shrink as Q grows), negative at 0
+    # and positive at Q_max, so a bracketed bisection on q = Q/Q_max always
+    # finds the unique root. (A damped substitution Q <- UA*LMTD(Q) from
+    # 0.5*UA*dT started above Q_max at high NTU, drove the hot outlet below the
+    # cold inlet and diverged; issue #418.)
+    Q_max = jnp.maximum(jnp.minimum(
+        H_hot_in - thermo.stream_enthalpy_flash(hot_flows, T_cold_in, P_hot),
+        thermo.stream_enthalpy_flash(cold_flows, T_hot_in, P_cold) - H_cold_in,
+    ), 1e-12)
 
-    driving = jnp.maximum(T_hot_in - T_cold_in, MIN_DELTA_T)
-    Q0 = 0.5 * UA_val * driving
+    def resid(q, _):
+        T_hot_out, T_cold_out = outlets_from_Q(q * Q_max)
+        LMTD = log_mean_temperature_difference(
+            T_hot_in - T_cold_out, T_hot_out - T_cold_in)
+        return (q * Q_max - UA_val * LMTD) / Q_max
 
-    solver = optx.FixedPointIteration(rtol=1e-7, atol=1e-3)
-    sol = optx.fixed_point(
-        q_iteration, solver, Q0, args=None, max_steps=max_iter, throw=False
+    sol = optx.root_find(
+        resid, optx.Bisection(rtol=1e-10, atol=1e-10, flip=False),
+        jnp.asarray(0.5), args=None,
+        options={"lower": jnp.asarray(0.0), "upper": jnp.asarray(1.0)},
+        max_steps=max(max_iter, 100), throw=False,
     )
-    Q = sol.value
+    Q = sol.value * Q_max
 
     T_hot_out, T_cold_out = outlets_from_Q(Q)
     dT1 = T_hot_in - T_cold_out
@@ -1299,8 +1255,8 @@ class EnthalpyCounterCurrentHX:
     vaporizes or condenses -- and matches an equation-oriented HeatExchanger
     (e.g. IDAES's) through phase change, where a constant-Cp model cannot.
 
-    The coupled system (Q, T_hot_out, T_cold_out) is solved by a damped fixed
-    point on Q, with a bracketed 1-D enthalpy inversion per side (enthalpy is
+    The coupled system (Q, T_hot_out, T_cold_out) is solved by a bracketed
+    bisection on Q within [0, Q_max], with a bracketed 1-D enthalpy inversion per side (enthalpy is
     monotone in T, but its slope jumps across a two-phase window, which a
     plain Newton inversion does not survive). All solves are optimistix root finds, so the unit is differentiable
     through the converged result via the implicit function theorem.
@@ -1321,7 +1277,7 @@ class EnthalpyCounterCurrentHX:
     references = ["Incropera, DeWitt, Bergman. Fundamentals of Heat and Mass Transfer, 7e, Ch. 11."]
     parameter_symbols = {"UA": "UA"}
     parameter_units = {"UA": "W/K", "max_iter": "-", "damping": "-"}
-    numerical_method = "Damped fixed point on Q with per-side 1-D enthalpy inversion."
+    numerical_method = "Bracketed bisection on Q in [0, Q_max] with per-side 1-D enthalpy inversion."
 
     def __init__(self, params: EnthalpyHXParams, thermo):
         self.params = params
@@ -1762,6 +1718,49 @@ class CrossFlowHX:
 # =============================================================================
 
 
+def effectiveness_shell_and_tube(
+    NTU: Array,
+    Cr: Array,
+    n_shell_passes: int = 1,
+) -> Array:
+    """Effectiveness of a TEMA E shell with 2, 4, ... tube passes per shell.
+
+    One shell (NTU_1 = NTU/N per shell)::
+
+        ε_1 = 2 / [1 + Cr + sqrt(1 + Cr²) coth(NTU_1 sqrt(1 + Cr²) / 2)]
+
+    N shells in series (counter-current between shells)::
+
+        ε = (a - 1)/(a - Cr),  a = [(1 - ε_1 Cr)/(1 - ε_1)]^N   (Cr < 1)
+        ε = N ε_1 / (1 + (N - 1) ε_1)                          (Cr = 1)
+
+    Args:
+        NTU: Number of transfer units of the whole exchanger (UA/Cmin).
+        Cr: Heat capacity ratio Cmin/Cmax, in [0, 1].
+        n_shell_passes: Number of shells in series, N.
+
+    Returns:
+        Effectiveness in [0, 1).
+
+    Reference: Incropera, DeWitt, Bergman, Fundamentals of Heat and Mass
+    Transfer, 7e, Table 11.3.
+    """
+    N = n_shell_passes
+    NTU1 = jnp.maximum(NTU, 1e-12) / N
+    s = jnp.sqrt(1.0 + Cr**2)
+    eps1 = 2.0 / (1.0 + Cr + s / jnp.tanh(NTU1 * s / 2.0))
+    if N == 1:
+        return eps1
+    a = (safe_divide(1.0 - eps1 * Cr, 1.0 - eps1)) ** N
+    eps_general = safe_divide(a - 1.0, a - Cr)
+    eps_balanced = N * eps1 / (1.0 + (N - 1) * eps1)
+    # the general form is ill-conditioned only within ~1e-4 of Cr = 1; a wider
+    # band would mix in the Cr = 1 limit where it is not the answer
+    t = jnp.abs(1.0 - Cr) / 1e-4
+    w = jnp.where(t > 1, 1.0, jnp.clip(3 * t**2 - 2 * t**3, 0.0, 1.0))
+    return w * eps_general + (1.0 - w) * eps_balanced
+
+
 def lmtd_correction_factor(
     R: Array,
     P: Array,
@@ -1782,20 +1781,32 @@ def lmtd_correction_factor(
         n_shell_passes: Number of shell passes (default 1)
 
     Returns:
-        F-correction factor (0 < F <= 1)
+        F-correction factor (0 <= F <= 1). It is 0 where no 1-2N exchanger
+        with ``n_shell_passes`` shells reaches ``P`` (a temperature cross too
+        large for that many shells): the limit of F as the area goes to
+        infinity. Add shell passes there; a small positive F never means
+        "feasible but poor".
     """
     R = jnp.asarray(R, dtype=jnp.float64)
     P = jnp.asarray(P, dtype=jnp.float64)
+    # R*P = (Th_in - Th_out)/(Th_in - Tc_in) >= 1 means the hot stream leaves
+    # colder than the cold inlet: no exchanger does that
+    overall_ok = R * P < 1.0
 
     # For multi-shell-pass, adjust P
     # P_eff for n shell passes: P_1 = ((1 - (R*P - 1)/(P - 1))^(1/n) - 1) / ...
     # Simplified: use single-shell formula with adjusted P for n > 1
     if n_shell_passes > 1:
-        # Adjust P for multiple shell passes
-        # P_n to P_1 conversion
+        # P_N (overall) to P_1 (per shell): P_1 = (1 - X)/(R - X) with
+        # X = ((1 - R P)/(1 - P))^(1/N); at R = 1, P_1 = P/(N - (N - 1) P).
+        N = n_shell_passes
         ratio = safe_divide(1.0 - R * P, 1.0 - P)
-        ratio_n = ratio ** (1.0 / n_shell_passes)
-        P = safe_divide(1.0 - ratio_n, R - ratio_n)
+        ratio_n = jnp.maximum(ratio, 1e-12) ** (1.0 / N)
+        P_general = safe_divide(1.0 - ratio_n, R - ratio_n)
+        P_balanced = P / (N - (N - 1) * P)
+        tN = jnp.abs(R - 1.0) / 1e-4
+        wN = jnp.where(tN > 1, 1.0, jnp.clip(3 * tN**2 - 2 * tN**3, 0.0, 1.0))
+        P = wN * P_general + (1.0 - wN) * P_balanced
 
     # Clamp P to avoid singularities at boundaries
     P = jnp.clip(P, 1e-6, 1.0 - 1e-6)
@@ -1831,16 +1842,20 @@ def lmtd_correction_factor(
     )
 
     # Smooth blend near R = 1
-    blend_width = 0.05
+    # narrow: the general form is accurate to ~1e-12 for |R - 1| > 1e-4, and a
+    # wider band mixes in the R = 1 limit where it is not the answer
+    blend_width = 1e-4
     t = jnp.abs(R - 1.0) / blend_width
-    # Smoothstep inside |R - 1| < blend_width, exactly 1 outside it. (The raw
-    # cubic is negative for t > 1.5 and clips to 0, which used to return the
-    # R = 1 value for every R beyond 1 +/- 0.075 -- see #403.)
-    blend = jnp.where(t > 1.0, 1.0, jnp.clip(3 * t**2 - 2 * t**3, 0.0, 1.0))
+    blend = jnp.clip(3 * t**2 - 2 * t**3, 0.0, 1.0)
+    blend = jnp.where(t > 1, 1.0, blend)  # issue #418: without it every R used the R=1 limit
 
     F = blend * F_general + (1.0 - blend) * F_balanced
 
-    return jnp.clip(F, 0.0, 1.0)
+    # Past P_max = 2/(R + 1 + sqrt(R^2 + 1)) per shell the log argument is
+    # negative; the clamps above would return a plausible-looking F (0.11 at
+    # R = 1.125, P = 0.615), so report the infeasible design as F = 0
+    feasible = overall_ok & (A_plus > 0.0)   # A_plus == A2 at R = 1
+    return jnp.where(feasible, jnp.clip(F, 0.0, 1.0), 0.0)
 
 
 @dataclass(repr=False)
@@ -1898,7 +1913,7 @@ class ShellAndTubeHX:
         "min_approach": "K",
         "n_shell_passes": "-",
     }
-    numerical_method = "Counter-current LMTD with closed-form F-correction factor."
+    numerical_method = "Closed-form 1-2N (TEMA E) effectiveness; F reported as Q/(UA LMTD_cc)."
 
     def __init__(self, params: ShellAndTubeHXParams):
         self.params = params
@@ -1945,24 +1960,28 @@ class ShellAndTubeHX:
         UA_val = UA if UA is not None else p.UA
         UA_val = jnp.asarray(UA_val)
 
+        # Exact 1-2N effectiveness (issue #418: F(R,P) times the counter-current
+        # effectiveness is not the 1-2N rating, and at high NTU the
+        # counter-current outlets are not reachable by a 1-2 shell at all).
         NTU = UA_val / C_min
+        eps = effectiveness_shell_and_tube(NTU, Cr, p.n_shell_passes)
+
         driving_force = T_hot_in - T_cold_in
         Q_max = C_min * driving_force
-
-        # Exact 1-2N effectiveness (n shells in series), so that
-        # Q = UA F LMTD with F recomputed from the resulting terminal
-        # temperatures. (Previously Q = F * Q_countercurrent(UA), which
-        # under-predicted Q by a few percent; see #403.)
-        eps = effectiveness_shell_and_tube(NTU, Cr, p.n_shell_passes)
         Q = eps * Q_max
 
-        R_param = safe_divide(Q / C_hot, jnp.maximum(Q / C_cold, 1e-10))
-        P_param = safe_divide(Q / C_cold, jnp.maximum(driving_force, 1e-10))
-        F_corr = lmtd_correction_factor(R_param, P_param, p.n_shell_passes)
-
-        # Outlet temperatures
         T_hot_out = T_hot_in - Q / C_hot
         T_cold_out = T_cold_in + Q / C_cold
+
+        # R and P at the actual terminal temperatures; F follows from
+        # Q = UA F LMTD_cc as a diagnostic.
+        dT_hot = T_hot_in - T_hot_out
+        dT_cold = T_cold_out - T_cold_in
+        R_param = safe_divide(dT_hot, jnp.maximum(dT_cold, 1e-10))
+        P_param = safe_divide(dT_cold, jnp.maximum(driving_force, 1e-10))
+        LMTD_cc = log_mean_temperature_difference(
+            T_hot_in - T_cold_out, T_hot_out - T_cold_in)
+        F_corr = safe_divide(Q, UA_val * LMTD_cc)
 
         hot_outlet = dict(hot_inlet)
         hot_outlet["T"] = T_hot_out

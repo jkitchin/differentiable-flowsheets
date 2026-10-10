@@ -81,80 +81,6 @@ def _compute_cubic_coeffs_srk(A: Array, B: Array) -> tuple[Array, Array, Array]:
 
 
 @jax.jit
-def _solve_cubic_cardano(
-    c2: Array,
-    c1: Array,
-    c0: Array,
-    select_vapor: bool = True,
-) -> Array:
-    """JIT-compiled cubic equation solver using Cardano's formula.
-
-    Args:
-        c2, c1, c0: Cubic equation coefficients for x³ + c2*x² + c1*x + c0 = 0
-        select_vapor: If True, returns largest positive root; else smallest positive
-
-    Returns:
-        Selected root (compressibility factor Z)
-    """
-    # Reduce to depressed cubic: t³ + pt + q = 0 where x = t - c2/3
-    p = c1 - c2**2 / 3
-    q = c0 - c1 * c2 / 3 + 2 * c2**3 / 27
-
-    # Discriminant
-    disc = (q/2)**2 + (p/3)**3
-
-    def one_real_root(disc_p_q):
-        """Case: disc > 0, one real root."""
-        disc, p, q = disc_p_q
-        sqrt_disc = jnp.sqrt(jnp.maximum(disc, 0.0))
-        u = jnp.cbrt(-q/2 + sqrt_disc)
-        v = jnp.cbrt(-q/2 - sqrt_disc)
-        t = u + v
-        return t - c2/3
-
-    def three_real_roots(disc_p_q):
-        """Case: disc <= 0, three real roots."""
-        disc, p, q = disc_p_q
-        # Use trigonometric solution with safe operations
-        r = jnp.sqrt(jnp.maximum(-p**3 / 27, EPS_ARCCOS))
-        arg = jnp.clip(-q / (2 * r + EPS_ARCCOS), -1.0, 1.0)
-        theta = jnp.arccos(arg)
-
-        # Three roots
-        cbrt_r = jnp.cbrt(r)
-        t1 = 2 * cbrt_r * jnp.cos(theta / 3)
-        t2 = 2 * cbrt_r * jnp.cos((theta + 2*jnp.pi) / 3)
-        t3 = 2 * cbrt_r * jnp.cos((theta + 4*jnp.pi) / 3)
-
-        x1 = t1 - c2/3
-        x2 = t2 - c2/3
-        x3 = t3 - c2/3
-
-        roots = jnp.array([x1, x2, x3])
-        positive_mask = roots > 0
-
-        # Select appropriate root based on phase
-        vapor_roots = jnp.where(positive_mask, roots, -jnp.inf)
-        liquid_roots = jnp.where(positive_mask, roots, jnp.inf)
-
-        return lax.cond(
-            select_vapor,
-            lambda _: jnp.max(vapor_roots),
-            lambda _: jnp.min(liquid_roots),
-            None,
-        )
-
-    Z = lax.cond(
-        disc > 0,
-        one_real_root,
-        three_real_roots,
-        (disc, p, q),
-    )
-
-    return jnp.maximum(Z, 0.01)
-
-
-@jax.jit
 def _compute_fugacity_pr(
     T: Array,
     P: Array,
@@ -519,9 +445,10 @@ class PengRobinson(ValueKeyed):
             Compressibility factor Z
         """
         c2, c1, c0 = self.compressibility_cubic(T, P, y, k_ij)
+        B = self.b_mix(y) * P / (R * T)
 
         # Solve cubic using Cardano's formula (JAX-compatible)
-        Z = self._solve_cubic(c2, c1, c0, phase)
+        Z = self._solve_cubic(c2, c1, c0, phase, Z_min=B)
 
         return Z
 
@@ -531,6 +458,7 @@ class PengRobinson(ValueKeyed):
         c1: Array,
         c0: Array,
         phase: str,
+        Z_min: Array = 0.0,
     ) -> Array:
         """Solve cubic equation x³ + c2*x² + c1*x + c0 = 0.
 
@@ -595,9 +523,9 @@ class PengRobinson(ValueKeyed):
             (disc, p, q),
         )
 
-        # Ensure physical bounds (Z > B for liquid, Z > 0)
-        b_m = self.b_mix(jnp.ones(self.n_species) / self.n_species)  # Approximate
-        return jnp.maximum(Z, 0.01)
+        # Physical bound: Z > B (the co-volume). A fixed floor such as 0.01
+        # replaced the liquid root of most liquids near 1 bar (issue #417).
+        return jnp.maximum(Z, Z_min * (1.0 + 1e-8))
 
     def fugacity_coefficient(
         self,
@@ -1019,8 +947,8 @@ class SRK(ValueKeyed):
     ) -> Array:
         """Solve for compressibility factor Z."""
         c2, c1, c0 = self.compressibility_cubic(T, P, y, k_ij)
-        Z = self._solve_cubic(c2, c1, c0, phase)
-        return Z
+        B = self.b_mix(y) * P / (R * T)
+        return self._solve_cubic(c2, c1, c0, phase, Z_min=B)
 
     def _solve_cubic(
         self,
@@ -1028,6 +956,7 @@ class SRK(ValueKeyed):
         c1: Array,
         c0: Array,
         phase: str,
+        Z_min: Array = 0.0,
     ) -> Array:
         """Solve cubic equation x³ + c2*x² + c1*x + c0 = 0."""
         # Same approach as PR
@@ -1074,7 +1003,8 @@ class SRK(ValueKeyed):
             (disc, p, q),
         )
 
-        return jnp.maximum(Z, 0.01)
+        # Physical bound: Z > B (the co-volume), not a fixed floor (issue #417).
+        return jnp.maximum(Z, Z_min * (1.0 + 1e-8))
 
     def fugacity_coefficient(
         self,

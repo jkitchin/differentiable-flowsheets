@@ -246,7 +246,7 @@ class CSTR:
         "T_damping": "-",
         "molar_density": "mol/m^3",
     }
-    #: Priced as a purchased vessel from its volume (Turton et al. power law
+    #: Priced as a purchased vessel from its volume (Turton et al. correlation
     #: in difflow.economics.capital); see the cost_basis metadata contract.
     cost_basis = {"table": "REACTOR_COSTS", "type": "cstr_jacketed", "size": "V"}
     numerical_method = (
