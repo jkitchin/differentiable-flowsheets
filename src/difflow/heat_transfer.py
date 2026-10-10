@@ -420,7 +420,10 @@ def internal_nusselt(
         Re: Reynolds number (-).
         Pr: Prandtl number (-).
         D_over_L: Diameter over length, or None for fully developed laminar flow.
-        mu_ratio: Bulk over wall viscosity ``mu_b / mu_w`` (-).
+        mu_ratio: Bulk over wall viscosity ``mu_b / mu_w`` (-). Used by the
+            laminar entry term and by ``method="sieder_tate"``; Gnielinski and
+            Dittus-Boelter, as published, have no viscosity correction and
+            ignore it.
         rel_roughness: Relative roughness for the Gnielinski friction factor.
         method: Turbulent correlation (Python string).
         heating: Dittus-Boelter exponent selector (True: heating).
@@ -480,7 +483,8 @@ def internal_h(
         k: Fluid thermal conductivity (W/m/K).
         D: Tube inside diameter (m).
         L: Tube length (m) for the laminar entry effect, or None.
-        mu_ratio: Bulk over wall viscosity (-).
+        mu_ratio: Bulk over wall viscosity (-); ignored by Gnielinski and
+            Dittus-Boelter (see :func:`internal_nusselt`).
         rel_roughness: Relative roughness ``eps / D`` (-).
         method: ``"gnielinski"``, ``"dittus_boelter"`` or ``"sieder_tate"``.
         heating: True if the fluid is being heated.

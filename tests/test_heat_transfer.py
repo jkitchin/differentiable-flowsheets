@@ -2,9 +2,9 @@
 
 What "validated" means here -- please read before trusting a number.
 
-No Incropera/Bergman or Cengel *worked-example number* is quoted: none could
-be reproduced from memory with confidence, and a fabricated textbook value is
-worse than none. Instead:
+Published worked examples (NPTEL Module 8, Cengel Chapter 10, a Mostinski
+example) are recomputed in ``TestPublishedExamples``, each with its source.
+Besides those:
 
 * every correlation is compared with an **independent re-implementation of the
   stated formula** written out in plain NumPy/SciPy in this file (hand
@@ -413,6 +413,50 @@ class TestBoiling:
 
 
 # -- overall U -----------------------------------------------------------------
+
+class TestPublishedExamples:
+    """Worked examples published in textbooks and course notes, recomputed.
+
+    * NPTEL, "Heat and Mass Transfer" (IIT), Module 8 solved problems
+      (archive.nptel.ac.in/content/storage2/courses/112108149/pdf/M8/WE_M8.pdf),
+      Incropera-style property values.
+    * Cengel, *Heat and Mass Transfer: A Practical Approach*, Chapter 10,
+      Examples 10-1, 10-2, 10-6, 10-7, as transcribed by the FOSSEE project
+      (tbc-python.fossee.in).
+    * Mostinski: the water example of the open-source ``ht`` library
+      (``ht.boiling_nucleic.Montinsky``, citing Rohsenow's *Handbook of Heat
+      Transfer*): 1 atm, Pc = 22 048 321 Pa, dTe = 4.3 K -> h = 1185.05.
+    """
+
+    water = dict(mu_l=279e-6, h_fg=2257e3, rho_l=957.9, rho_v=0.5955, sigma=58.9e-3, Cp_l=4217.0, Pr_l=1.76)
+
+    def test_nptel_rohsenow_and_chf_water(self):
+        assert float(ht.rohsenow_heat_flux(15.0, **self.water, C_sf=0.013)) == pytest.approx(4.619e5, rel=0.005)
+        assert float(ht.critical_heat_flux(2257e3, 0.5955, 957.9, 58.9e-3, C=0.149)) == pytest.approx(1.26e6, rel=0.005)
+
+    def test_nptel_fluorocarbon_superheat_and_chf(self):
+        fc = dict(mu_l=440e-6, h_fg=84400.0, rho_l=1619.2, rho_v=13.4, sigma=8.1e-3, Cp_l=1100.0, Pr_l=9.01)
+        assert float(ht.rohsenow_superheat(5e4, **fc, C_sf=0.005, n=1.7)) == pytest.approx(15.9, rel=0.005)
+        assert float(ht.critical_heat_flux(84400.0, 13.4, 1619.2, 8.1e-3, C=0.149)) == pytest.approx(1.55e5, rel=0.005)
+
+    def test_nptel_overall_U_brass_tube(self):
+        assert float(ht.overall_U(5200.0, 6800.0, 0.0165, 0.019, 110.0)) == pytest.approx(2627.0, rel=1e-3)
+
+    def test_cengel_boiling_pan_and_chf(self):
+        c = dict(mu_l=0.282e-3, h_fg=2257e3, rho_l=957.9, rho_v=0.6, sigma=0.0589, Cp_l=4217.0, Pr_l=1.75)
+        Q = float(ht.rohsenow_heat_flux(8.0, **c, C_sf=0.013)) * np.pi * 0.3**2 / 4
+        assert Q == pytest.approx(5095.1, rel=1e-3)                                # Ex. 10-1
+        assert float(ht.critical_heat_flux(2257e3, 0.6, 957.9, 0.0589, C=0.12)) == pytest.approx(1.0174e6, rel=1e-3)
+
+    def test_cengel_horizontal_tube_condensation(self):
+        args = (0.623, 994.0, 0.05, 0.720e-3, 2407e3, 4178.0, 10.0, 0.03)
+        assert float(ht.nusselt_film_condensation(*args)) == pytest.approx(9294.7, rel=1e-3)             # Ex. 10-6
+        assert float(ht.nusselt_film_condensation(*args, n_tubes=3)) == pytest.approx(7062.4, rel=1e-3)  # Ex. 10-7
+
+    def test_mostinski_water_example(self):
+        h = 1185.0509770292663
+        assert float(ht.mostinski(h * 4.3, 22048.321, 101.325)) == pytest.approx(h, rel=1e-9)
+
 
 class TestOverallU:
     D_i, D_o, k_w = 0.0229, 0.0254, 16.0
