@@ -671,7 +671,18 @@ class GasPFRParams(ParamsMixin):
         species_order: List of species names in order matching stoich rows
         dH_rxn: Heats of reaction (J/mol) for each reaction, shape (n_reactions,).
                 Negative for exothermic. Required for non-isothermal operation.
-        alpha: Pressure drop parameter (Pa/m^3). If None, no pressure drop.
+        alpha: Pressure drop parameter (Pa/m^3). If None, no pressure drop
+               (unless the physical bed parameters below are given).
+        d_p: Particle diameter (m). With ``voidage``, ``mu``, ``rho_gas``,
+             ``u_s0`` and ``bed_area`` set, alpha is computed from the full
+             Ergun equation (``difflow.particles.ergun_alpha``) instead of
+             being supplied. Giving both alpha and d_p is an error.
+        voidage: Bed void fraction (-).
+        mu: Gas viscosity (Pa s).
+        rho_gas: Inlet gas density (kg/m^3).
+        u_s0: Inlet superficial velocity (m/s).
+        bed_area: Bed cross-sectional area (m^2).
+        sphericity: Particle sphericity (-).
         rtol: Relative tolerance for ODE solver (default 1e-6)
         atol: Absolute tolerance for ODE solver (default 1e-8)
         n_save_points: Number of points to save in profile output (default 101)
@@ -686,9 +697,25 @@ class GasPFRParams(ParamsMixin):
     rtol: float = 1e-6
     atol: float = 1e-8
     n_save_points: int = 101
+    d_p: float | Array | None = None
+    voidage: float | Array | None = None
+    mu: float | Array | None = None
+    rho_gas: float | Array | None = None
+    u_s0: float | Array | None = None
+    bed_area: float | Array | None = None
+    sphericity: float | Array = 1.0
 
     def __post_init__(self):
         """Validate parameter consistency."""
+        bed = (self.d_p, self.voidage, self.mu, self.rho_gas, self.u_s0, self.bed_area)
+        if self.d_p is not None:
+            if self.alpha is not None:
+                raise ValueError("give either alpha or the physical bed parameters, not both")
+            if any(b is None for b in bed):
+                raise ValueError(
+                    "physical bed path needs d_p, voidage, mu, rho_gas, u_s0 and bed_area"
+                )
+
         n_species = len(self.species_order)
         if self.stoich.shape[0] != n_species:
             raise ValueError(
@@ -702,6 +729,23 @@ class GasPFRParams(ParamsMixin):
                     f"dH_rxn has {self.dH_rxn.shape[0]} values "
                     f"but stoich has {n_reactions} reactions"
                 )
+
+    @property
+    def effective_alpha(self):
+        """Pressure-drop coefficient (Pa/m^3): ``alpha``, or Ergun's from the bed.
+
+        When ``d_p`` is given, alpha is computed on demand by
+        :func:`difflow.particles.ergun_alpha` (so ``update(d_p=...)`` stays
+        consistent and differentiable); otherwise it is ``alpha`` (0 if None).
+        """
+        if self.d_p is not None:
+            from difflow.particles import ergun_alpha
+
+            return ergun_alpha(
+                self.u_s0, self.d_p, self.voidage, self.rho_gas, self.mu,
+                self.bed_area, self.sphericity,
+            )
+        return self.alpha if self.alpha is not None else 0.0
 
 
 class GasPFR:
@@ -746,6 +790,13 @@ class GasPFR:
         "stoich": "-",
         "dH_rxn": "J/mol",
         "alpha": "Pa/m^3",
+        "d_p": "m",
+        "voidage": "-",
+        "mu": "Pa*s",
+        "rho_gas": "kg/m^3",
+        "u_s0": "m/s",
+        "bed_area": "m^2",
+        "sphericity": "-",
         "rtol": "-",
         "atol": "-",
         "n_save_points": "-",
@@ -873,7 +924,7 @@ class GasPFR:
         species_order = p.species_order
         stoich = p.stoich
         rate_params = p.rate_params
-        alpha = p.alpha if p.alpha is not None else 0.0
+        alpha = p.effective_alpha
         T0 = T  # For isothermal, T = T0
 
         def vector_field(V, state, args):
@@ -974,7 +1025,7 @@ class GasPFR:
         stoich = p.stoich
         rate_params = p.rate_params
         dH_rxn = p.dH_rxn
-        alpha = p.alpha if p.alpha is not None else 0.0
+        alpha = p.effective_alpha
         thermo = self.thermo
         n_species = len(species_order)
 
