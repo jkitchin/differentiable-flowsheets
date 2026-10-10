@@ -138,6 +138,33 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **Phase-diagram helpers and Wilson / Margules / van Laar activity models
+  (#398).** `difflow.activity` defines the `ActivityModel` protocol (a
+  `gamma(x, T)` method; `activity_gamma` dispatches) with `WilsonParams`,
+  `MargulesParams` (two-/three-suffix) and `VanLaarParams`; `NRTLParams` and
+  `UNIQUACParams` gained `gamma` adapters, and `Flash(activity_model=...)` now
+  accepts any of them (NRTL results unchanged). `difflow.phase_diagrams` adds
+  `txy`, `pxy`, `xy_curve`, `find_azeotrope` (masked, no Python branch on
+  traced values) and `ternary_lle`; `difflow.visualization` adds `plot_txy`,
+  `plot_pxy`, `plot_xy`, `plot_ternary`. Example notebook
+  `examples/41_phase_diagrams.ipynb`. UNIFAC is a follow-up.
+- **Liquid pipe flow (#399).** New `difflow.fluids` (JAX, SI, differentiable):
+  `reynolds_number`, `hydraulic_diameter`, the Darcy `friction_factor` by
+  Colebrook-White (Newton solve, implicit-function-theorem gradients),
+  Churchill, Haaland or Swamee-Jain with a C2 laminar blend (exactly 64/Re
+  below Re 2100), `darcy_pressure_drop`, `minor_loss`, a `FITTINGS` table of
+  Crane TP-410 K / L/D values with `fitting_K` and `equivalent_length`, and
+  `orifice_flow`/`orifice_dp`/`venturi_flow`/`venturi_dp`. New `Pipe` /
+  `PipeParams` unit (`L`, `D`, `roughness`, `dz`, `fittings`,
+  `friction_method`; liquid `rho` and `mu` are explicit numbers or callables of
+  the stream, molar mass via `MW` or a `thermo`) with `info` (`v`, `Re`, `f`,
+  `dP_friction`, `dP_minor`, `dP_static`, `head_loss`), `eo_residuals`, GUI
+  palette symbol, docs (`### Pipe`, friction methods, K table) and
+  `examples/41_liquid_pipe_flow.ipynb` (Moody chart, economic diameter). The
+  K-values were transcribed from the Crane/Perry's reprints, not checked against
+  the TP-410 scan; the notebook's $/m piping cost is an illustrative
+  placeholder, not a cited correlation.
+
 - `difflow.solvers.pounce_problem` builds the configured pounce Problem once
   so repeated solves reuse the compiled residual and Jacobian (about 0.1 s
   against 30 s on a nested-EOS flowsheet, #394). `solve_with_pounce` is now a

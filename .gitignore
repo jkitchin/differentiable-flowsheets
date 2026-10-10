@@ -76,3 +76,6 @@ src/difflow/gui/frontend/node_modules/
 
 # Personal org notes (review TODOs); kept locally, not in the repo
 readme.org
+
+# Course books (each is its own repo)
+books/
