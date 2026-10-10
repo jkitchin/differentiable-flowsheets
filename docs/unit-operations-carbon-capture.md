@@ -21,6 +21,14 @@ All models are fully differentiable using JAX, enabling gradient-based optimizat
 
 ---
 
+```{note}
+`Pump` (dense-phase CO2 to a fixed outlet pressure, `W = V dP / eta`) is not the
+core [`CentrifugalPump`](#op-centrifugalpump), which has head/efficiency/NPSH
+curves, affinity laws and an operating point against a system curve. They
+answer different questions and are kept separate; see that section for the
+reasoning.
+```
+
 ## Installation
 
 The carbon capture plugin is included as an optional dependency:

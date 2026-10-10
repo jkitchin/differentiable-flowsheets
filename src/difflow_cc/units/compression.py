@@ -434,6 +434,10 @@ class Pump:
     """Pump for supercritical/liquid CO2.
 
     More efficient than compression for dense-phase CO2.
+
+    Fixed-outlet-pressure model (``W = V dP / eta``). For a pump with a head
+    curve, affinity laws, NPSH and an operating point against a system curve,
+    see :class:`difflow.CentrifugalPump`.
     """
 
     symbol = "CO2 Pump"

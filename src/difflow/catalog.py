@@ -59,9 +59,11 @@ CORE_CATEGORIES = {
     "flash": "separations",
     "distillation": "distillation",
     "heat_exchanger": "heat_transfer",
+    "evaporator": "evaporation",
     "lle": "extraction",
     "eos_units": "pressure_change",
     "pipe": "pressure_change",
+    "pump": "pressure_change",
     "gas_turbine": "power",
 }
 
