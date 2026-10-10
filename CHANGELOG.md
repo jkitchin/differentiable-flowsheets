@@ -138,6 +138,21 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- `difflow.particles` (#401): pure JAX functions for flow past particles and
+  through beds. `drag_coefficient` (Haider-Levenspiel 1989, Turton-Levenspiel
+  1986, Schiller-Naumann), `terminal_velocity` (implicit root find in ln Re,
+  implicit differentiation), `hindered_settling_velocity` and
+  `richardson_zaki_exponent`, `ergun_pressure_gradient` (viscous and inertial
+  terms in `info`), `kozeny_carman`, `minimum_fluidization_velocity` (Ergun
+  quadratic or Wen-Yu), `bed_expansion`, `fluidization_window`, and
+  `geldart_group` (approximate boundaries; not differentiable). Verified
+  against first principles and independent scipy solves, not against copied
+  textbook tables (see `docs/unit-operations-chemical.md`). `GasPFRParams`
+  also accepts a physical bed (`d_p`, `voidage`, `mu`, `rho_gas`, `u_s0`,
+  `bed_area`, `sphericity`) from which alpha is computed by the Ergun
+  equation (`effective_alpha`); the lumped `alpha` input is unchanged.
+  Example notebook `examples/44_particles_and_beds.ipynb`.
+
 - `difflow.solvers.pounce_problem` builds the configured pounce Problem once
   so repeated solves reuse the compiled residual and Jacobian (about 0.1 s
   against 30 s on a nested-EOS flowsheet, #394). `solve_with_pounce` is now a

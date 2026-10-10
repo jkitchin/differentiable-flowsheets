@@ -317,9 +317,13 @@ plt.ylabel('Conversion')
 ```python
 @dataclass
 class GasPFRParams(PFRParams):
-    alpha: float           # Pressure drop parameter (1/m³); fold the Ergun
-                           # terms (diameter, void fraction, particle size) into it
+    alpha: float           # Pressure drop parameter (Pa/m³); or give the physical
+                           # bed instead: d_p, voidage, mu, rho_gas, u_s0, bed_area
 ```
+
+Instead of a lumped `alpha`, pass `d_p`, `voidage`, `mu`, `rho_gas`, `u_s0`,
+`bed_area` (and optionally `sphericity`) and $\alpha$ is computed from the full
+Ergun equation; see [Particles and Beds](particles-ergun).
 
 #### Additional Equations
 
@@ -2310,6 +2314,115 @@ fuel_comp = {"methane": 0.95, "ethane": 0.03, "propane": 0.01,
 result = brayton_cycle(fuel_comp, BraytonCycleParams(combined_cycle=True))
 # result: {"eta_thermal", "eta_gt_only", "work_net", "air_fuel_molar", ...}
 ```
+
+---
+
+## Particles and Beds
+
+**Location**: `difflow/particles.py` (pure JAX functions in SI units; not unit
+operations, so they have no palette entry). They are the building blocks for
+adsorbers, catalytic beds, settlers, cyclones and filters.
+
+(particles-drag)=
+### Drag and terminal velocity
+
+`drag_coefficient(Re_p, sphericity, method)` is smooth across the Stokes,
+intermediate and Newton regimes and tends to $24/Re_p$ as $Re_p \to 0$:
+
+| `method` | Correlation | Range |
+|----------|-------------|-------|
+| `"haider_levenspiel"` (default) | Haider & Levenspiel (1989), sphericity-dependent | $Re < 2.6\times10^5$, $\phi$ 0.5-1 |
+| `"turton_levenspiel"` | Turton & Levenspiel (1986), spheres | $Re < 2.6\times10^5$ |
+| `"schiller_naumann"` | Schiller & Naumann (1933), floored at 0.44 | $Re < 800$ then Newton plateau |
+
+`terminal_velocity(d_p, rho_p, rho_f, mu, sphericity)` solves the force balance
+$C_D(Re)\,Re^2 = \tfrac43 Ar$ by a Newton root find in $\ln Re$, started from the
+explicit Haider-Levenspiel dimensionless velocity, and differentiates it by
+implicit differentiation. `hindered_settling_velocity(v_t, voidage, n, Re_t)` is
+Richardson & Zaki (1954), $u = v_t\varepsilon^n$ with $n$ from $Re_t$ when not given.
+
+```python
+from difflow.particles import terminal_velocity, drag_coefficient
+import jax
+
+d = 1e-3                                           # 1 mm sand grain in water
+v = terminal_velocity(d, 2650.0, 998.0, 1.0e-3)
+dv_dd = jax.grad(terminal_velocity)(d, 2650.0, 998.0, 1.0e-3)
+print(f"v_t = {float(v):.3f} m/s, dv/dd = {float(dv_dd):.1f} 1/s")
+print(f"C_D(Re=1e-4)*Re/24 = {float(drag_coefficient(1e-4))*1e-4/24:.4f}")
+```
+
+(particles-ergun)=
+### Packed-bed pressure drop (Ergun)
+
+`ergun_pressure_gradient(u_s, d_p, voidage, rho, mu, sphericity)` returns
+$(\Delta P/L,\ \text{info})$ with the full Ergun (1952) equation
+
+$$\frac{\Delta P}{L} = 150\frac{(1-\varepsilon)^2}{\varepsilon^3}\frac{\mu u_s}{(\phi d_p)^2}
++ 1.75\frac{1-\varepsilon}{\varepsilon^3}\frac{\rho u_s^2}{\phi d_p}$$
+
+and `info['viscous']` (Blake-Kozeny), `info['inertial']` (Burke-Plummer),
+`info['Re_bed']`. `kozeny_carman(...)` is the laminar limit with the Kozeny
+constant $k_0$ (prefactor $36k_0 = 180$), the piece to reuse for filter-cake
+resistance.
+
+```python
+from difflow.particles import ergun_pressure_gradient
+
+# 3 mm spheres, eps = 0.4, air, u = 1 m/s: 1687.5 + 6562.5 Pa/m by hand
+dpdl, info = ergun_pressure_gradient(1.0, 3e-3, 0.4, 1.2, 1.8e-5)
+print(float(dpdl), float(info["viscous"]), float(info["inertial"]))
+```
+
+**GasPFR.** `GasPFRParams` accepts either the lumped `alpha` (Pa/m$^3$) or the
+physical bed (`d_p`, `voidage`, `mu`, `rho_gas`, `u_s0`, `bed_area`,
+`sphericity`); in the second case $\alpha = (\Delta P/L)_0/A_c$ is computed from
+the Ergun equation at the inlet (`ergun_alpha`, `params.effective_alpha`).
+Supplying both is an error.
+
+(particles-fluidization)=
+### Fluidization
+
+`minimum_fluidization_velocity(d_p, rho_p, rho_f, mu, voidage_mf, sphericity,
+method)` equates the Ergun gradient to the bed weight per volume. In terms of
+$Ar = d_p^3\rho_f(\rho_p-\rho_f)g/\mu^2$ it is a quadratic in $Re_{mf}$,
+
+$$Ar = \frac{150(1-\varepsilon_{mf})}{\phi^2\varepsilon_{mf}^3}Re_{mf}
++ \frac{1.75}{\phi\varepsilon_{mf}^3}Re_{mf}^2,$$
+
+solved in closed form (`method="ergun"`); `method="wen_yu"` is the Wen & Yu (1966)
+correlation $Re_{mf} = \sqrt{33.7^2 + 0.0408\,Ar} - 33.7$. `bed_expansion(u, u_t, n)`
+gives the Richardson-Zaki voidage $(u/u_t)^{1/n}$ and height
+$H_{mf}(1-\varepsilon_{mf})/(1-\varepsilon)$ (a homogeneous-expansion model; it
+is anchored at $u_t$, so use it well above $u_{mf}$).
+`fluidization_window(...)` returns $(u_{mf}, u_t)$; above $u_t$ particles are
+entrained. `geldart_group(d_p, rho_p, rho_f)` returns A/B/C/D from approximate
+Geldart (1973) boundaries; it is **not differentiable** and not jit-able.
+
+```python
+from difflow.particles import fluidization_window, geldart_group
+
+u_mf, u_t = fluidization_window(300e-6, 2600.0, 1.2, 1.8e-5, 0.45, 0.8)
+print(f"u_mf = {float(u_mf):.3f} m/s, u_t = {float(u_t):.2f} m/s,",
+      geldart_group(300e-6, 2600.0, 1.2))
+```
+
+**What is verified** (`tests/test_particles.py`): the Stokes limit; the Ergun
+equation against hand arithmetic; $u_{mf}$ against the Ergun residual and an
+independent `scipy` root find; terminal velocity against an independent
+`scipy.optimize.brentq` solve of the force balance in the Stokes, intermediate
+and Newton regimes; mutual agreement of the two sphere drag fits within 8 %;
+`check_grads` (reverse mode) across all regimes. No textbook worked-example number
+is reproduced from memory; compare against Perry's or McCabe/Geankoplis tables
+before relying on a result to better than the correlation scatter (typically
+5-10 %). The Richardson-Zaki exponent is piecewise (jumps of at most about 2 %
+at $Re_t = 0.2, 1, 500$).
+
+**References**: Haider & Levenspiel, *Powder Technol.* 58, 63 (1989); Turton &
+Levenspiel, *Powder Technol.* 47, 83 (1986); Ergun, *Chem. Eng. Prog.* 48(2), 89
+(1952); Wen & Yu, *AIChE J.* 12, 610 (1966); Richardson & Zaki, *Trans. Inst.
+Chem. Eng.* 32, 35 (1954); Kunii & Levenspiel, *Fluidization Engineering*, 2nd
+ed. (1991); Geldart, *Powder Technol.* 7, 285 (1973).
 
 ---
 
