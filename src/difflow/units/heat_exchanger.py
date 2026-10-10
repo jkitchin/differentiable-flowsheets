@@ -1006,6 +1006,9 @@ class HeatExchangerParams(ParamsMixin):
             enthalpy balance.
         Cp_cold: Cold side heat capacity (J/mol·K). Same fallback as Cp_hot.
         min_approach: Minimum temperature approach (K). For design mode.
+
+    Only the capacity rate C = F·Cp (W/K) enters the calculation, so a mass
+    basis works too: flows in kg/s with Cp in J/kg·K give the same result.
     """
     UA: Array | float | None = None
     Cp_hot: float | None = None
