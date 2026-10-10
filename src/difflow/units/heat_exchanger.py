@@ -1778,10 +1778,17 @@ def lmtd_correction_factor(
         n_shell_passes: Number of shell passes (default 1)
 
     Returns:
-        F-correction factor (0 < F <= 1)
+        F-correction factor (0 <= F <= 1). It is 0 where no 1-2N exchanger
+        with ``n_shell_passes`` shells reaches ``P`` (a temperature cross too
+        large for that many shells): the limit of F as the area goes to
+        infinity. Add shell passes there; a small positive F never means
+        "feasible but poor".
     """
     R = jnp.asarray(R, dtype=jnp.float64)
     P = jnp.asarray(P, dtype=jnp.float64)
+    # R*P = (Th_in - Th_out)/(Th_in - Tc_in) >= 1 means the hot stream leaves
+    # colder than the cold inlet: no exchanger does that
+    overall_ok = R * P < 1.0
 
     # For multi-shell-pass, adjust P
     # P_eff for n shell passes: P_1 = ((1 - (R*P - 1)/(P - 1))^(1/n) - 1) / ...
@@ -1841,7 +1848,11 @@ def lmtd_correction_factor(
 
     F = blend * F_general + (1.0 - blend) * F_balanced
 
-    return jnp.clip(F, 0.0, 1.0)
+    # Past P_max = 2/(R + 1 + sqrt(R^2 + 1)) per shell the log argument is
+    # negative; the clamps above would return a plausible-looking F (0.11 at
+    # R = 1.125, P = 0.615), so report the infeasible design as F = 0
+    feasible = overall_ok & (A_plus > 0.0)   # A_plus == A2 at R = 1
+    return jnp.where(feasible, jnp.clip(F, 0.0, 1.0), 0.0)
 
 
 @dataclass(repr=False)

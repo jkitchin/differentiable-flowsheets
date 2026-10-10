@@ -997,6 +997,21 @@ class TestClosedFormValues:
     def test_F_gradient_is_not_zero(self):
         assert float(jax.grad(lambda R: lmtd_correction_factor(R, 0.3))(2.0)) < -0.05
 
+    @pytest.mark.parametrize("R", [0.5, 1.0, 1.125, 3.0])
+    def test_F_is_zero_past_the_one_shell_limit(self, R):
+        # crude 30 -> 110 C on residue 160 -> 70 C (R = 1.125, P = 0.615) is a
+        # cross one shell cannot make; the log clamps used to return F = 0.11
+        P_max = 2 / (R + 1 + np.sqrt(R**2 + 1))
+        assert float(lmtd_correction_factor(R, 1.02 * P_max)) == 0.0
+        assert float(lmtd_correction_factor(R, 0.98 * P_max)) > 0.0
+        g = jax.grad(lambda P: lmtd_correction_factor(R, P))(1.02 * P_max)
+        assert np.isfinite(float(g))
+
+    def test_F_two_shells_make_the_cross(self):
+        R, P = 90 / 80, 80 / 130
+        assert float(lmtd_correction_factor(R, P)) == 0.0
+        assert float(lmtd_correction_factor(R, P, 2)) == pytest.approx(0.8266, abs=1e-4)
+
     @pytest.mark.parametrize("NTU", [0.5, 2.0, 4.0])
     @pytest.mark.parametrize("Cr", [1e-9, 0.5, 0.97, 1.0])
     @pytest.mark.parametrize("N", [1, 2, 3])

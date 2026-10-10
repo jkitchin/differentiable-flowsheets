@@ -24,7 +24,10 @@ All notable changes to difflow are recorded here. The format follows
   effectiveness (new `effectiveness_shell_and_tube`) and reports
   F = Q/(UA LMTD_cc). `EnthalpyCounterCurrentHX` solves Q by bisection on
   [0, Q_max] (the damped fixed point diverged at high NTU; `damping` is
-  now unused).
+  now unused). Past the per-shell limit P_max = 2/(R + 1 + sqrt(R^2 + 1)),
+  a temperature cross too large for the shell count, `lmtd_correction_factor`
+  returns F = 0 (the infinite-area limit). Its log clamps used to return a
+  plausible-looking value (F = 0.11 at R = 1.125, P = 0.615).
 - **Equipment cost tables re-sourced; capital costs change (#420).** Every
   entry in `difflow.economics.capital` carried a "2019" label and `a + b S^n`
   coefficients with no traceable source. Below 100 m2 they were 2-2.5x below
