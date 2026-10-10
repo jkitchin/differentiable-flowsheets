@@ -59,18 +59,19 @@ _ext/                  Sphinx extension for the book's "Ask" assistant
 ## Key concepts
 
 ```python
-from difflow import CSTR, CSTRParams, create_experiment_stream
+from difflow import CSTR, CSTRParams, make_stream
 import jax.numpy as jnp
 
-inlet = create_experiment_stream(conditions={'T': 350.0, 'P': 101325.0},
-                                 species=['A', 'B'], molar_flows=[1.0, 0.5])
+inlet = make_stream({'A': 1.0, 'B': 0.5}, T=350.0, P=101325.0)  # mol/s, K, Pa -> {'F_A', 'F_B', 'T', 'P'}
 
-def rate_fn(c, T, p):
-    return p['k'] * jnp.exp(-p['Ea'] / (8.314 * T)) * c['A']
+def rate_fn(c, T, p):                     # -> array of rates, one per reaction (mol/m^3/s)
+    return jnp.array([p['k'] * jnp.exp(-p['Ea'] / (8.314 * T)) * c['A']])
 
-params = CSTRParams(V=1.0, rate_fn=rate_fn, stoich={'A': -1, 'B': 1},
+params = CSTRParams(V=1.0, rate_fn=rate_fn,
+                    stoich=jnp.array([[-1.0], [1.0]]),  # (n_species, n_reactions)
+                    rate_params={'k': 1e3, 'Ea': 4e4}, species_order=['A', 'B'],
                     molar_density=55500.0)
-outlet = CSTR(params)(inlet)
+outlet, info = CSTR(params)(inlet)        # info: rates, conversion, converged, ...
 params['V']; 'V' in params; params.update(V=2.0)   # ParamsMixin: dict-like, functional
 ```
 
