@@ -2319,7 +2319,7 @@ jax.grad(dP)(0.0525)                   # d(dP)/dD, Pa/m: economic diameter optim
 `dP_static`, `dP` (the sum) and `head_loss` (friction plus minor loss, m of
 fluid). `Pipe.eo_residuals` gives `n_species + 2` rows (flows, temperature and
 the pressure balance) so the unit works in the [EO solver](eo-solver.md). The
-example notebook `examples/41_liquid_pipe_flow.ipynb` regenerates the Moody
+example notebook `examples/42_liquid_pipe_flow.ipynb` regenerates the Moody
 chart and finds the economic pipe diameter with `jax.grad`.
 
 (fluids-module)=

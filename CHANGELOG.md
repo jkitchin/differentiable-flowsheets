@@ -160,7 +160,7 @@ All notable changes to difflow are recorded here. The format follows
   the stream, molar mass via `MW` or a `thermo`) with `info` (`v`, `Re`, `f`,
   `dP_friction`, `dP_minor`, `dP_static`, `head_loss`), `eo_residuals`, GUI
   palette symbol, docs (`### Pipe`, friction methods, K table) and
-  `examples/41_liquid_pipe_flow.ipynb` (Moody chart, economic diameter). The
+  `examples/42_liquid_pipe_flow.ipynb` (Moody chart, economic diameter). The
   K-values were transcribed from the Crane/Perry's reprints, not checked against
   the TP-410 scan; the notebook's $/m piping cost is an illustrative
   placeholder, not a cited correlation.
