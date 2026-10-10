@@ -2195,6 +2195,217 @@ Design*; Bowman, Mueller & Nagle, Trans. ASME 62 (1940) 283; Kays & London,
 
 ---
 
+(evaporators)=
+## Evaporators
+
+An evaporator concentrates a solution of a **non-volatile solute** by boiling
+off the solvent (water) with steam: caustic, sugar, pulp liquor, brine,
+pharma concentrates. What separates it from a `Heater` followed by a `Flash`
+is that the solute raises the boiling point, the heat goes through a surface
+with a given `U` and area, and in a multiple-effect train the vapor of one
+effect is the heating medium of the next. Source: `difflow/units/evaporator.py`.
+
+**How the solute is represented.** The solute is an ordinary difflow species in
+the stream (`F_NaOH`, in mol/s) whose **vapor flow is exactly zero**: the vapor
+outlet carries the same species keys with the solute at `0.0`. That is the
+difflow-native form of "vapor pressure zero" and needs no special case anywhere
+(nothing divides by a vapor pressure or a vapor flow, so gradients stay finite).
+The alternative, a mass-fraction field riding on the stream, would not survive a
+`Mixer` or a `Splitter`. Mass fractions are computed from the molar flows and
+the `solute_MW` on the params; `x` is always the **solute mass fraction**.
+
+**Steam properties** are self-contained correlations in the module
+(IAPWS-IF97 region-4 for `Psat(T)`/`Tsat(P)`, fits for `h_f` and `h_fg` valid
+20-200 C), not the `IdealThermo` Antoine/Watson water entry, whose latent heat is
+too coarse for a steam economy.
+
+**Boiling-point rise** (`bpr_model`, or `boiling_point_rise(x, P, model)`):
+
+| Model | What it is | Status |
+|-------|------------|--------|
+| `ideal` | Raoult's law with unit activity: the solution boils where `x_w Psat(T) = P`; `vant_hoff_i` counts particles per solute | exact for the ideal solution |
+| `colligative` | `dT = R Tw^2 i m / lambda`, the dilute limit | exact in the limit |
+| `duhring` | your own lines `T_soln = a(x) + b(x) T_water` (`duhring_x/a/b`) | your data |
+| `polynomial` | BPR in K as a polynomial in `x` (`bpr_coeffs`) | your data |
+| `naoh`, `nacl` | built-in 1 atm tables turned into Duhring lines | **unverified, see below** |
+| `sucrose` | `1.78 x + 6.22 x^2` K (Geankoplis Ex. 8.4-1) | **recalled, unverified** |
+| callable | `Evaporator(params, bpr_fn=f)`, `f(x, T_water, P) -> K` | yours |
+
+```{warning}
+The built-in `naoh`, `nacl` and `sucrose` data are **approximate recollections,
+not transcriptions of the Duhring chart** (McCabe/Perry). Only a couple of
+anchor points per table are firm (NaOH 50 wt % boiling near 143 C at 1 atm; the
+saturated NaCl solution near 108.7 C). Selecting one raises
+`UnverifiedDataWarning`. The acceptance criterion "NaOH BPR matches the cited
+chart values" is therefore **not met**: read your chart and pass it through
+`duhring=` or `bpr_fn`. The tabulated models are piecewise linear in `x`.
+```
+
+**Solution enthalpy** is a Cp mixing rule by default
+(`(1-x) h_f(T) + x Cp_solute (T - 273.15)`, no heat of dilution); give
+`cp_coeffs` (a polynomial in `x`) or `Evaporator(params, enthalpy_fn=f)`,
+`f(T, x) -> J/kg`, for a heat of dilution or an enthalpy-concentration chart
+(NaOH is the classic case). The vapor leaves at the solution temperature,
+superheated by the BPR (`Cp_vapor`), and condensate leaves saturated.
+
+### Evaporator
+
+**Location**: `difflow/units/evaporator.py`
+
+**Class**: `Evaporator(params, *, bpr_fn=None, enthalpy_fn=None)`; call
+`concentrate, vapor, info = evap(feed, steam=None)`.
+
+<!-- doc-test: skip: field listing (a class sketch), not an executable example -->
+```python
+@dataclass
+class EvaporatorParams:
+    solute_species: list[str]   # non-volatile species names (required)
+    solute_MW: list[float]      # their molar masses, g/mol (required)
+    solvent: str = "water"
+    U: float = 2000.0           # W/m^2/K
+    A: float = None             # m^2   -> rating
+    x_product: float = None     # kg/kg -> design (exactly one of A, x_product)
+    P_vapor_space: float = 101325.0
+    steam_P: float = None       # Pa (or steam_T, K, or pass a steam stream)
+    bpr_model: str = "ideal"    # see the table above
+    vant_hoff_i: float = 1.0
+    ...                         # bpr_coeffs, duhring_*, Cp_solute, cp_coeffs, Cp_vapor
+```
+
+Two modes, as for `design_heat_exchanger`: **design** (`x_product` given: steam,
+vapor, duty and the required area in closed form) and **rating** (`A` given:
+the product concentration is solved, differentiably).
+
+#### Governing Equations
+
+$$x_F F = x_P L,\quad V = F - L,\quad T = T_{sat}(P_v) + \mathrm{BPR}(x_P, P_v)$$
+
+$$Q = L h_L(T, x_P) + V H_V - F h_F,\qquad H_V = h_g(T_w) + c_{p,v}(T - T_w)$$
+
+$$S \lambda_s = Q,\qquad Q = U A (T_s - T),\qquad \text{economy} = V / S$$
+
+`info` holds `steam` (kg/s), `steam_economy` (vapor/steam), `Q`, `T_soln`, `BPR`,
+`A`, `x_product`, `V`, `L`, `driving_force`, and two closure residuals,
+`energy_balance_error` and `mass_balance_error`.
+
+```python
+from difflow import make_stream
+from difflow.units import Evaporator, EvaporatorParams
+
+# 10 kg/s of 10 wt % NaOH, concentrated to 30 wt % at 30 kPa with 300 kPa steam
+feed = make_stream({"water": 9000 / 18.015, "NaOH": 1000 / 40.0}, T=330.0, P=2e5)
+params = EvaporatorParams(
+    solute_species=["NaOH"], solute_MW=[40.0], U=1500.0, x_product=0.30,
+    P_vapor_space=30e3, steam_P=300e3, bpr_model="ideal", vant_hoff_i=2.0,
+)
+concentrate, vapor, info = Evaporator(params)(feed)
+float(info["steam"]), float(info["steam_economy"]), float(info["A"]), float(info["BPR"])
+
+# Rating the same vessel: give the area, get the concentration back
+rating = EvaporatorParams(
+    solute_species=["NaOH"], solute_MW=[40.0], U=1500.0, A=float(info["A"]),
+    P_vapor_space=30e3, steam_P=300e3, bpr_model="ideal", vant_hoff_i=2.0,
+)
+_, _, back = Evaporator(rating)(feed)
+float(back["x_product"])          # 0.30
+```
+
+### MultiEffectEvaporator
+
+**Location**: `difflow/units/evaporator.py`
+
+**Class**: `MultiEffectEvaporator(params, *, bpr_fn=None, enthalpy_fn=None)`; call
+`concentrate, vapor, info = mee(feed, steam=None)`.
+
+N effects; the vapor of effect *i* heats effect *i+1*, effect 1 gets the live
+steam and the last effect vents at `P_vapor_space`. Per-effect `U` (a list, or one
+value for all). Feed arrangements `feed="forward" | "backward" | "parallel"`.
+
+* **Design, equal areas** (`x_product` given): the intermediate effect
+  temperatures, the steam rate, the vapor flows and one common area `A` are
+  solved so that every effect has the same area, as one Newton solve
+  (`optimistix`) of the stacked energy balances, rate equations and the overall
+  solute balance (the textbook iteration, done simultaneously). It is
+  differentiable with respect to `U`, the feed and the steam pressure by the
+  implicit function theorem. For parallel feed the feed split is solved too.
+* **Rating** (`A` list given): areas fixed, the product concentration follows.
+  Parallel feed uses `feed_split` (default equal).
+
+`MultiEffectEvaporator` with `n_effects=1` agrees with `Evaporator`. `info` has
+per-effect `T`, `T_water`, `P`, `BPR`, `V`, `A`, `Q`, `x` (index 0 is effect 1),
+the overall `steam`, `steam_economy` (total vapor / steam), `total_area`,
+`converged`, `residual_norm` and the closure residuals. The vapor in effect
+*i+1*'s steam chest carries the superheat that the BPR of effect *i* puts into
+it; condensate leaves each chest saturated.
+
+```python
+from difflow.units import MultiEffectEvaporator, MultiEffectEvaporatorParams
+
+mee_params = MultiEffectEvaporatorParams(
+    solute_species=["NaOH"], solute_MW=[40.0], n_effects=3, feed="forward",
+    U=[2500.0, 2000.0, 1500.0], x_product=0.30, P_vapor_space=30e3,
+    steam_P=300e3, bpr_model="ideal", vant_hoff_i=2.0,
+)
+concentrate, vapor, info = MultiEffectEvaporator(mee_params)(feed)
+print("converged:", bool(info["converged"]))
+print("steam economy:", round(float(info["steam_economy"]), 2))
+print("areas (m^2):", [round(float(a), 1) for a in info["A"]])
+print("effect T (K):", [round(float(t), 1) for t in info["T"]])
+```
+
+### MechanicalVaporRecompression
+
+**Location**: `difflow/units/evaporator.py`
+
+**Class**: `MechanicalVaporRecompression(params)`; call
+`concentrate, condensate, info = mvr(feed)`.
+
+A single effect whose own vapor is compressed (ideal-gas steam, isentropic,
+efficiency `eta`, ratio `gamma`) until it condenses `dT_drive` above the boiling
+solution and heats the same surface. Design mode (`x_product` given). `info`
+reports the compressor work `W_compressor` against the steam it saves
+(`steam_without_mvr`, `steam_makeup`, `steam_saved` when `steam_P` is given). The
+compression is an ideal-gas calculation, not the EOS `Compressor`; real-gas
+steam deviates by a few percent of the work at these pressures.
+
+```python
+from difflow.units import MechanicalVaporRecompression, MVRParams
+
+mvr = MechanicalVaporRecompression(MVRParams(
+    solute_species=["NaOH"], solute_MW=[40.0], U=1500.0, x_product=0.30,
+    P_vapor_space=101325.0, dT_drive=10.0, eta=0.75, steam_P=300e3,
+    bpr_model="ideal", vant_hoff_i=2.0,
+))
+_, condensate, m = mvr(feed)
+print("compressor work (kW):", round(float(m["W_compressor"]) / 1e3, 1))
+print("steam saved (kg/s):", round(float(m["steam_saved"]), 2))
+```
+
+### What was and was not verified
+
+* **Verified** (`tests/test_evaporator.py`): mass and energy closure; agreement
+  with an independent NumPy/SciPy re-implementation of the same equations (own
+  steam properties, `fsolve`); `MultiEffectEvaporator(n_effects=1)` equals
+  `Evaporator`; steam economy rises with N and stays near 0.8-1.0 N for a
+  water-like, preheated feed; design-then-rate round trips; `check_grads`
+  (order 1, reverse) of steam rate and area with respect to `U`, feed
+  concentration and steam pressure, single and multiple effect.
+* **Steam properties**: `Psat`/`Tsat` are the IAPWS-IF97 equations; `h_f` and
+  `h_fg` are fits to eight steam-table points recalled from a standard table
+  (not regenerated from IAPWS), within about 0.1 % over 20-200 C.
+* **NOT verified**: no textbook worked example is claimed to be reproduced to
+  2-3 %. The Geankoplis Example 8.4-1 inputs (as recalled) run, and
+  `tests/test_evaporator.py` pins them as a regression value, but the book's
+  printed answers were not available to compare with. The NaOH, NaCl and
+  sucrose BPR data are unverified (above). Nothing here models fouling,
+  hydraulics, entrainment, or crystallization.
+
+For an economics pass use `heat_exchanger_cost(area)` and
+`steam_cost_from_duty`; the optimal-number-of-effects study is in
+`examples/47_evaporators.ipynb`.
+
+---
+
 ## Liquid-Liquid Extraction
 
 ### LLEEquilibrium

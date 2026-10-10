@@ -169,6 +169,16 @@ from difflow.units.distillation import (
     gilliland_stages,
     column_diameter,
 )
+from difflow.units.evaporator import (
+    Evaporator,
+    EvaporatorParams,
+    MultiEffectEvaporator,
+    MultiEffectEvaporatorParams,
+    MechanicalVaporRecompression,
+    MVRParams,
+    UnverifiedDataWarning,
+    boiling_point_rise,
+)
 from difflow.units.heat_exchanger import (
     DefaultCpWarning,
     Heater,
@@ -506,6 +516,15 @@ __all__ = [
     "minimum_reflux_ratio",
     "gilliland_stages",
     "column_diameter",
+    # Unit operations - Evaporators
+    "Evaporator",
+    "EvaporatorParams",
+    "MultiEffectEvaporator",
+    "MultiEffectEvaporatorParams",
+    "MechanicalVaporRecompression",
+    "MVRParams",
+    "UnverifiedDataWarning",
+    "boiling_point_rise",
     # Unit operations - Heat Exchangers
     "DefaultCpWarning",
     "Heater",

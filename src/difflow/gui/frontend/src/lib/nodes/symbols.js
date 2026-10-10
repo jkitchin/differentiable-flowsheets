@@ -100,6 +100,18 @@ export const SYMBOLS = {
     ],
   },
 
+  /** A calandria vessel: steam-heated tube bundle low, vapour dome above. */
+  evaporator: {
+    label: 'evaporator',
+    shapes: [
+      ['rect', { x: 14, y: 5, width: 20, height: 30, rx: 6 }],
+      ['line', { x1: 14, y1: 20, x2: 34, y2: 20 }],
+      ['path', { d: 'M18 24h12M18 28h12M18 32h12', fill: 'none' }],
+      ['line', { x1: 24, y1: 1, x2: 24, y2: 5 }],
+      ['line', { x1: 24, y1: 35, x2: 24, y2: 39 }],
+    ],
+  },
+
   /** Heat in: the exchanger circle with the arrow pointing at it. */
   heater: {
     label: 'heater',
@@ -434,6 +446,11 @@ export const OPERATION_SYMBOLS = {
   ShellAndTubeHX: 'heat_exchanger',
   EnthalpyCounterCurrentHX: 'heat_exchanger',
 
+  // evaporation
+  Evaporator: 'evaporator',
+  MultiEffectEvaporator: 'evaporator',
+  MechanicalVaporRecompression: 'evaporator',
+
   // pressure
   EOSCompressor: 'compressor',
   Turboexpander: 'turbine',
@@ -521,6 +538,7 @@ export const CATEGORY_SYMBOLS = {
   filtration: 'membrane',
   chromatography: 'chromatography',
   heat_transfer: 'heat_exchanger',
+  evaporation: 'evaporator',
   pressure_change: 'compressor',
   power: 'turbine',
   gas_network: 'pipe',
