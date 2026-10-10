@@ -22,6 +22,7 @@ from typing import Callable, Literal
 from dataclasses import dataclass
 from functools import partial
 import jax
+import numpy as np
 import jax.numpy as jnp
 from jax import Array, lax
 
@@ -55,6 +56,11 @@ _SEED_T_FLOOR = 20.0
 # volatilities are evaluated at the product bubble points, and the products
 # come from the volatilities.
 _SHORTCUT_END_T_ITERS = 3
+
+# Murphree efficiency homotopy (E = 1 -> target): a fixed number of steps, each
+# with a fixed number of bubble-point iterations, so the loop is static.
+_HOMOTOPY_STEPS = 4
+_HOMOTOPY_ITERS = 10
 
 
 def _mixture_molar_enthalpy(
@@ -1134,8 +1140,17 @@ class DistillationColumnParams(ParamsMixin):
             (``V[feed_stage] = V_rect``). ``_is_rectifying_cut`` is the single
             definition; both the CMO sweep and the MESH flow initialisation
             read the boundary from it.
-        condenser_type: 'total' or 'partial'. Only 'total' is implemented;
-            'partial' is rejected rather than silently treated as total.
+        condenser_type: ``'total'`` or ``'partial'``. A total condenser
+            condenses all of the top tray's vapour: the distillate is a
+            saturated liquid with the composition of that vapour. A partial
+            condenser is an **extra equilibrium stage outside** ``n_stages``:
+            its vapour is the distillate (``y_D = K(T_c) x_R``), its liquid is
+            the reflux ``x_R``, and ``T_c`` is the dew point of ``y_D``. The
+            profiles in ``info`` keep their ``n_stages`` rows (so nothing
+            shifts when the condenser type changes); the condenser is
+            reported separately and ``info['n_equilibrium_stages']`` counts
+            it. ``'mixed'`` (vapour plus liquid distillate) is not
+            implemented and is rejected.
         P: Column pressure (Pa). One pressure for the whole column -- there is
             no tray pressure drop.
         q: Feed thermal condition: the liquid fraction of the feed
@@ -1152,6 +1167,16 @@ class DistillationColumnParams(ParamsMixin):
             enthalpy clamps the mixture to [0, 1] --- the departure from
             saturation is carried by ``T_feed`` and must not be counted a
             second time (see :func:`_feed_molar_enthalpy`).
+        stage_efficiency: Murphree **vapour** efficiency, a scalar or an
+            ``(n_stages,)`` array (same name and 0-1 convention as
+            ``CascadeParams.stage_efficiency`` in :mod:`difflow.units.lle`).
+            ``y_j = y_{j-1} + E_j (K_j x_j - y_{j-1})`` with ``y_{j-1}`` the
+            actual vapour entering stage ``j``. The reboiler (stage 0) and the
+            partial condenser are equilibrium stages and always use 1,
+            whatever is given for stage 0. ``1.0`` (default) is the
+            equilibrium-stage column, and reproduces the results this class
+            gave before the option existed. Differentiable in ``E``. Must be
+            non-negative.
     """
     species_order: list[str]
     n_stages: int
@@ -1159,16 +1184,30 @@ class DistillationColumnParams(ParamsMixin):
     condenser_type: Literal["total", "partial"] = "total"
     P: float = 101325.0
     q: float = 1.0  # Feed thermal condition (1.0 = saturated liquid, 0.0 = saturated vapor)
+    stage_efficiency: float | Array = 1.0  # Murphree vapour efficiency (scalar or (n_stages,))
 
     def __post_init__(self):
-        if self.condenser_type != "total":
+        if self.condenser_type == "mixed":
             raise NotImplementedError(
-                f"condenser_type={self.condenser_type!r} is not implemented; "
-                "the MESH solver models a total condenser (the distillate has "
-                "the composition of the top tray's vapor and leaves as a "
-                "saturated liquid). A partial condenser would be an extra "
-                "equilibrium stage with a vapor product."
+                "condenser_type='mixed' (vapour plus liquid distillate) is not "
+                "implemented; use 'total' or 'partial'."
             )
+        if self.condenser_type not in ("total", "partial"):
+            raise ValueError(
+                f"condenser_type must be 'total' or 'partial', got "
+                f"{self.condenser_type!r}"
+            )
+        try:
+            eff = np.asarray(self.stage_efficiency, dtype=float)
+        except Exception:        # a tracer: values are checked by the caller
+            return
+        if eff.ndim > 1 or (eff.ndim == 1 and eff.shape[0] != self.n_stages):
+            raise ValueError(
+                "stage_efficiency must be a scalar or have shape "
+                f"(n_stages,) = ({self.n_stages},), got {eff.shape}"
+            )
+        if np.any(eff < 0.0):
+            raise ValueError("stage_efficiency must be non-negative")
 
 
 class DistillationColumn(ValueKeyed):
@@ -1184,9 +1223,10 @@ class DistillationColumn(ValueKeyed):
     ``_is_rectifying_cut`` says which section each stage's flows belong to.
 
     Assumptions:
-    - Equilibrium stages
+    - Equilibrium stages, or Murphree vapour efficiency ``stage_efficiency``
     - No pressure drop between stages
-    - Total condenser
+    - Total condenser, or a partial condenser (an extra equilibrium stage
+      outside ``n_stages`` with a vapour distillate)
     - Constant molar overflow (CMO) for the initial solution
 
     All calculations are JAX-compatible for automatic differentiation.
@@ -1198,9 +1238,12 @@ class DistillationColumn(ValueKeyed):
         r"\text{E: } y_{i,n} = K_i(T_n, P)\, x_{i,n}",
         r"\text{S: } \sum_i x_{i,n} = 1,\quad \sum_i y_{i,n} = 1",
         r"\text{H: } L_{n+1} h_{n+1} + V_{n-1} H_{n-1} + F_n h_{F,n} - (L_n + U_n) h_n - (V_n + W_n) H_n \pm Q_n = 0",
+        r"\text{Murphree: } y_{i,n} = y_{i,n-1} + E_{MV,n}\,(K_i x_{i,n} - y_{i,n-1})",
+        r"\text{Partial condenser: } (R+1) D\, y_{i,N} = D\, y_{D,i} + R D\, x_{R,i},\quad y_{D,i} = K_i(T_c) x_{R,i}",
     ]
     assumptions = [
-        "Equilibrium stages (Murphree efficiency implicitly 1; can be modified).",
+        "Equilibrium stages, or Murphree vapour efficiency stage_efficiency (default 1; the reboiler and a partial condenser are always equilibrium stages).",
+        "Total condenser (distillate = saturated liquid of the top-tray vapour) or partial condenser (an extra equilibrium stage outside n_stages: vapour distillate, liquid reflux, T_c = dew point of the distillate).",
         "Constant molar overflow for initialization.",
         "No pressure drop between stages.",
     ]
@@ -1208,18 +1251,22 @@ class DistillationColumn(ValueKeyed):
         "King, C.J. Separation Processes, 2e, McGraw-Hill, 1980.",
         "Kister, H.Z. Distillation Design, McGraw-Hill, 1992.",
         "Seader, Henley, Roper. Separation Process Principles, 3e.",
+        "Murphree, E.V. Ind. Eng. Chem. 17 (1925) 747 (vapour efficiency).",
+        "Lewis, W.K. Ind. Eng. Chem. 14 (1922) 492 (overall vs Murphree efficiency).",
     ]
     parameter_symbols = {
         "n_stages": "N",
         "feed_stage": "n_F",
         "P": "P",
         "q": "q",
+        "stage_efficiency": "E_{MV}",
     }
     parameter_units = {
         "n_stages": "-",
         "feed_stage": "-",
         "P": "Pa",
         "q": "-",
+        "stage_efficiency": "-",
     }
     numerical_method = "MESH stage-by-stage with bubble-point method and simultaneous Newton update on T profile."
 
@@ -1474,6 +1521,317 @@ class DistillationColumn(ValueKeyed):
 
         return x_new, y_new, T_new
 
+    # ------------------------------------------------------------------
+    # Murphree efficiency and partial condenser
+    # ------------------------------------------------------------------
+
+    def _murphree(self) -> tuple[Array, bool]:
+        """Per-stage Murphree vapour efficiency and whether it is all 1.
+
+        Returns:
+            (E, is_unity): ``E`` has shape ``(n_stages,)`` with the reboiler
+            forced to 1 (it is an equilibrium stage). ``is_unity`` is a
+            *Python* bool, true only when the efficiency is concrete and equal
+            to 1 on every stage; a traced efficiency (a gradient with respect
+            to it) is never unity, so it takes the general path. Static, so it
+            selects a code path without branching on a traced value.
+        """
+        p = self.params
+        n = p.n_stages
+        eff = p.stage_efficiency
+        try:
+            unity = bool(np.all(np.asarray(eff, dtype=float) == 1.0))
+        except Exception:        # tracer
+            unity = False
+        E = jnp.broadcast_to(jnp.asarray(eff, dtype=float), (n,))
+        return E.at[0].set(1.0), unity
+
+    @staticmethod
+    def _inv2(a: Array, b: Array, c: Array, d: Array):
+        """Inverse of the 2x2 matrix ``[[a, b], [c, d]]`` (entries, any batch)."""
+        det = a * d - b * c
+        det = jnp.where(jnp.abs(det) > 1e-30, det, jnp.sign(det + 1e-60) * 1e-30)
+        return d / det, -b / det, -c / det, a / det
+
+    def _general_step(
+        self,
+        x: Array,
+        T: Array,
+        L: Array,
+        V: Array,
+        F_vec: Array,
+        z: Array,
+        reflux_term: Array,
+        E: Array,
+    ) -> tuple[Array, Array, Array]:
+        """Wang-Henke step with Murphree vapour efficiency, any stage count.
+
+        Works on ``m`` stages (the trays and reboiler, plus the partial
+        condenser as the last row when there is one). The unknowns on stage
+        ``j`` are the pair ``(x_j, y_j)`` and the two equations are the
+        component balance and the Murphree relation
+
+            L_{j+1} x_{j+1} + V_{j-1} y_{j-1} + F_j z - L_j x_j - V_j y_j = 0
+            y_j - (1 - E_j) y_{j-1} - E_j K_j x_j = 0
+
+        a block-tridiagonal system with 2x2 blocks, solved for every species
+        at once by block Thomas elimination. Eliminating ``y`` instead would
+        divide by ``E`` and fail at ``E = 0``; the block form does not.
+        Because the balances are solved exactly, summing them telescopes to
+        ``D y_D + B x_B = F z`` just as in the equilibrium-stage step.
+
+        Args:
+            x: (m, nc) current liquid compositions (K-values are evaluated at
+                these and at ``T``, lagged one iteration).
+            T: (m,) stage temperatures (K).
+            L: (m,) liquid flow leaving each stage downward (mol/s); the last
+                entry is the reflux when the last row is a partial condenser,
+                and ignored for a total condenser.
+            V: (m,) vapour flow leaving each stage upward (mol/s).
+            F_vec: (m,) feed entering each stage (mol/s).
+            z: (nc,) feed mole fractions.
+            reflux_term: (nc,) component flow entering the top row from outside
+                (``R D x_D`` for a total condenser, zeros for a partial one).
+            E: (m,) Murphree efficiencies (stage 0 and a condenser row are 1).
+
+        Returns:
+            (x, y, T): updated liquid compositions, actual vapour compositions
+            (after the Murphree recursion) and temperatures.
+        """
+        p = self.params
+        m = x.shape[0]
+        nc = self.n_species
+        P = jnp.asarray(p.P)
+
+        _, K = lax.scan(
+            lambda _, a: (None, self.thermo.K_values_array(a[1], P, a[0])),
+            None, (x, T),
+        )  # (m, nc)
+
+        V_prev = jnp.concatenate([jnp.zeros(1), V[:-1]])
+        L_next = jnp.concatenate([L[1:], jnp.zeros(1)])
+        rhs1 = -F_vec[:, None] * z[None, :]
+        rhs1 = rhs1.at[-1].add(-reflux_term)
+
+        def fwd(carry, inp):
+            G1, G2, gy = carry                       # Gamma_{j-1} column, g_y
+            L_j, V_j, Vp, Lc, E_j, K_j, r1 = inp
+            M11 = -L_j - Vp * G2
+            M12 = -V_j * jnp.ones_like(G2)
+            M21 = -E_j * K_j + (1.0 - E_j) * G2
+            M22 = jnp.ones_like(G2)
+            i11, i12, i21, i22 = self._inv2(M11, M12, M21, M22)
+            s1 = r1 - Vp * gy
+            s2 = (1.0 - E_j) * gy
+            gx_new = i11 * s1 + i12 * s2
+            gy_new = i21 * s1 + i22 * s2
+            G1n = i11 * Lc
+            G2n = i21 * Lc
+            return (G1n, G2n, gy_new), (G1n, gx_new)
+
+        zero = jnp.zeros(nc)
+        _, (G1, gx) = lax.scan(
+            fwd, (zero, zero, zero),
+            (L, V, V_prev, L_next, E, K, rhs1),
+        )
+
+        def back(x_next, inp):
+            G1_j, gx_j = inp
+            x_j = gx_j - G1_j * x_next
+            return x_j, x_j
+
+        _, x_rev = lax.scan(back, zero, (G1[::-1], gx[::-1]))
+        x_new = x_rev[::-1]
+
+        x_new = jnp.maximum(x_new, 1e-10)
+        x_new = x_new / jnp.sum(x_new, axis=1, keepdims=True)
+
+        _, T_new = lax.scan(
+            lambda _, a: (None, self._bubble_point_T(a[0], P, a[1])[0]),
+            None, (x_new, T),
+        )
+        _, K_new = lax.scan(
+            lambda _, a: (None, self.thermo.K_values_array(a[1], P, a[0])),
+            None, (x_new, T_new),
+        )
+        y_eq = K_new * x_new
+        y_eq = y_eq / jnp.maximum(jnp.sum(y_eq, axis=1, keepdims=True), 1e-10)
+
+        # Murphree recursion from the reboiler up: the vapour entering a stage
+        # is the actual vapour that left the one below.
+        def vapour(y_prev, inp):
+            ye, E_j = inp
+            y_j = (1.0 - E_j) * y_prev + E_j * ye
+            return y_j, y_j
+
+        _, y_rest = lax.scan(vapour, y_eq[0], (y_eq[1:], E[1:]))
+        y_new = jnp.concatenate([y_eq[0][None], y_rest], axis=0)
+        return x_new, y_new, T_new
+
+    def _step(
+        self,
+        x: Array,
+        y: Array,
+        T: Array,
+        L: Array,
+        V: Array,
+        F_vec: Array,
+        z: Array,
+        R: Array,
+        D: Array,
+        E: Array,
+        legacy: bool,
+    ) -> tuple[Array, Array, Array]:
+        """One bubble-point step for whichever column this is.
+
+        ``legacy`` (static) is the total-condenser, all-equilibrium column and
+        calls :meth:`_bubble_point_step` untouched, so the default column is
+        exactly what it was before efficiency and the partial condenser
+        existed. Otherwise the general block step runs on the trays plus, for
+        a partial condenser, one more equilibrium row.
+
+        Args:
+            x, y, T: current compositions and temperatures, ``m`` rows
+                (``m = n_stages``, or ``n_stages + 1`` with a partial condenser).
+            L, V, F_vec: (n_stages,) flow profiles (the condenser row is added
+                here).
+            z: (nc,) feed composition.
+            R: Reflux ratio.
+            D: Distillate flow (mol/s).
+            E: (n_stages,) Murphree efficiencies.
+            legacy: Use the original equilibrium-stage step.
+
+        Returns:
+            (x, y, T) updated, ``m`` rows each.
+        """
+        if legacy:
+            return self._bubble_point_step(y[-1], x, T, L, V, F_vec, z, R, D)
+        if self.params.condenser_type == "partial":
+            one = jnp.ones(1)
+            Lx = jnp.concatenate([L, (R * D)[None]])
+            Vx = jnp.concatenate([V, jnp.asarray(D)[None]])
+            Fx = jnp.concatenate([F_vec, jnp.zeros(1)])
+            Ex = jnp.concatenate([E, one])
+            reflux = jnp.zeros(self.n_species)
+        else:
+            Lx, Vx, Fx, Ex = L, V, F_vec, E
+            reflux = R * D * y[-1]
+        return self._general_step(x, T, Lx, Vx, Fx, z, reflux, Ex)
+
+    def _separation_measure(
+        self, z: Array, T_ref: Array, x_D: Array, x_B: Array
+    ) -> Array:
+        """ln of the key separation factor between the light and heavy end.
+
+        The keys are the most and the least volatile species at ``T_ref`` (the
+        feed bubble point): ``S = (x_D,a / x_D,b) / (x_B,a / x_B,b)``. A
+        Fenske-style measure of how much separation a column delivers; the
+        ratio of two of them is :meth:`_cmo_full`'s efficiency equivalent.
+        """
+        P = jnp.asarray(self.params.P)
+        K = self.thermo.K_values_array(T_ref, P, z)
+        a = jnp.argmax(K)
+        b = jnp.argmin(K)
+        tiny = 1e-300
+        num = jnp.log(jnp.maximum(x_D[a], tiny)) - jnp.log(jnp.maximum(x_D[b], tiny))
+        den = jnp.log(jnp.maximum(x_B[a], tiny)) - jnp.log(jnp.maximum(x_B[b], tiny))
+        return num - den
+
+    def _cmo_full(
+        self,
+        feed_flows: dict[str, Array],
+        F_total: Array,
+        R: Array,
+        D: Array,
+        T_feed: Array,
+        n_iter: int = 30,
+    ) -> tuple[Array, Array, Array, Array]:
+        """CMO solve returning every row, partial condenser included.
+
+        Same iteration as :meth:`_solve_constant_molar_overflow`, which wraps
+        this and returns the ``n_stages`` tray rows only. With a partial
+        condenser there are ``n_stages + 1`` rows and the last one is the
+        condenser (``x`` the reflux, ``y`` the distillate vapour, ``T`` its
+        temperature).
+
+        With a Murphree efficiency below 1 the iteration is a homotopy in
+        ``E``: converge at ``E = 1``, then step ``E`` to its target in a
+        fixed number of steps (``_HOMOTOPY_STEPS``), then iterate at the
+        target. Fixed counts, so nothing branches on a traced value.
+
+        Returns:
+            (x, y, T, eff): rows as above and ``eff``, the ratio of the key
+            separation factor's logarithm to that of the same column at
+            ``E = 1`` (1 when ``E`` is 1). A Fenske-style *proxy* for the
+            equivalent-theoretical-stage over actual-stage ratio.
+        """
+        p = self.params
+        n = p.n_stages
+        partial_cond = p.condenser_type == "partial"
+        m = n + (1 if partial_cond else 0)
+        P = jnp.asarray(p.P)
+        E, unity = self._murphree()
+        legacy = unity and not partial_cond
+
+        B = F_total - D
+        z = jnp.array([feed_flows[s] / F_total for s in p.species_order])
+        F_vec = jnp.zeros(n).at[p.feed_stage].set(F_total)
+        L, V = self._cmo_flows(F_total, R, D)
+
+        T_bp_feed, y_flash = self._bubble_point_T(z, P, T_guess=jnp.asarray(T_feed))
+        x_D_init = jnp.clip(y_flash, 1e-6, 1.0 - 1e-6)
+        x_D_init = x_D_init / jnp.sum(x_D_init)
+        x_B_init = (F_total * z - D * x_D_init) / jnp.maximum(B, 1e-10)
+        x_B_init = jnp.clip(x_B_init, 1e-6, 1.0 - 1e-6)
+        x_B_init = x_B_init / jnp.sum(x_B_init)
+
+        frac = jnp.linspace(0.0, 1.0, m)
+        x_init = frac[:, None] * x_D_init[None, :] + (1.0 - frac[:, None]) * x_B_init[None, :]
+        T_init = jnp.full(m, T_bp_feed)
+
+        def init_y(_, x_j):
+            K_j = self.thermo.K_values_array(T_bp_feed, P, x_j)
+            yx_j = K_j * x_j
+            return None, yx_j / jnp.maximum(jnp.sum(yx_j), 1e-10)
+
+        _, y_init = lax.scan(init_y, None, x_init)
+
+        def run(carry, E_k, n_it):
+            def one_iteration(c, _):
+                return self._step(*c, L, V, F_vec, z, R, D, E_k, legacy), None
+            c, _ = lax.scan(one_iteration, carry, None, length=n_it)
+            return c
+
+        carry = (x_init, y_init, T_init)
+        if legacy:
+            x_f, y_f, T_f = run(carry, E, n_iter)
+            return x_f, y_f, T_f, jnp.asarray(1.0)
+
+        ones = jnp.ones(n)
+        carry = run(carry, ones, n_iter)
+        ref = carry
+        if not unity:
+            for k in range(1, _HOMOTOPY_STEPS + 1):
+                E_k = 1.0 + (E - 1.0) * (k / _HOMOTOPY_STEPS)
+                carry = run(carry, E_k, _HOMOTOPY_ITERS)
+            carry = run(carry, E, n_iter)
+
+        def products(c):
+            x_c, y_c, _ = c
+            top = y_c[n] if partial_cond else y_c[-1]
+            return top, x_c[0]
+
+        if unity:
+            eff = jnp.asarray(1.0)
+        else:
+            xD_a, xB_a = products(carry)
+            xD_r, xB_r = products(ref)
+            s_act = self._separation_measure(z, T_bp_feed, xD_a, xB_a)
+            s_ref = self._separation_measure(z, T_bp_feed, xD_r, xB_r)
+            eff = s_act / jnp.where(jnp.abs(s_ref) > 1e-12, s_ref, 1e-12)
+        x_f, y_f, T_f = carry
+        return x_f, y_f, T_f, eff
+
     def _solve_constant_molar_overflow(
         self,
         feed_flows: dict[str, Array],
@@ -1493,7 +1851,10 @@ class DistillationColumn(ValueKeyed):
         still closes the per-species material balance over the column.
 
         Stage numbering: j=0 is reboiler (bottom), j=n-1 is top stage.
-        Total condenser assumed: x_D = y_{top} (vapor from top stage).
+        With a total condenser the reflux and distillate are the vapour of the
+        top stage (x_D = y_top). With a partial condenser see
+        :meth:`_cmo_full`, which returns the condenser row too; this method
+        returns the ``n_stages`` tray rows only.
 
         Args:
             feed_flows: Feed molar flows by species
@@ -1507,60 +1868,9 @@ class DistillationColumn(ValueKeyed):
             (x, y, T): Liquid compositions, vapor compositions, temperatures
                        All have shape (n_stages, n_species) or (n_stages,)
         """
-        p = self.params
-        n = p.n_stages
-        P = jnp.asarray(p.P)
-
-        B = F_total - D
-        z = jnp.array([feed_flows[s] / F_total for s in p.species_order])
-
-        # Feed enters on a single stage; flows are fixed by the CMO assumption.
-        F_vec = jnp.zeros(n).at[p.feed_stage].set(F_total)
-        L, V = self._cmo_flows(F_total, R, D)
-
-        # Initial guess: one-stage flash of the feed enriches the distillate
-        # estimate, and the overall balance gives the matching bottoms.
-        T_bp_feed, y_flash = self._bubble_point_T(
-            z, P, T_guess=jnp.asarray(T_feed)
-        )
-        x_D_init = jnp.clip(y_flash, 1e-6, 1.0 - 1e-6)
-        x_D_init = x_D_init / jnp.sum(x_D_init)
-
-        x_B_init = (F_total * z - D * x_D_init) / jnp.maximum(B, 1e-10)
-        x_B_init = jnp.clip(x_B_init, 1e-6, 1.0 - 1e-6)
-        x_B_init = x_B_init / jnp.sum(x_B_init)
-
-        # Linear composition profile: reboiler (j=0) -> top (j=n-1)
-        frac = jnp.linspace(0.0, 1.0, n)
-        x_init = frac[:, None] * x_D_init[None, :] + (1.0 - frac[:, None]) * x_B_init[None, :]
-
-        # Start every stage at the feed bubble point: tracks the mixture and
-        # the column pressure instead of assuming an ambient-organic value.
-        T_init = jnp.full(n, T_bp_feed)
-
-        # Stage vapor compositions from equilibrium at the initial profile.
-        # The liquid composition goes into K too: an EOS K-value depends on it,
-        # a Raoult K-value ignores it.
-        def init_y(_, x_j):
-            K_j = self.thermo.K_values_array(T_bp_feed, P, x_j)
-            yx_j = K_j * x_j
-            return None, yx_j / jnp.maximum(jnp.sum(yx_j), 1e-10)
-
-        _, y_init = lax.scan(init_y, None, x_init)
-
-        def one_iteration(carry, _):
-            x, y, T = carry
-            # Total condenser: the reflux carries the composition of the vapor
-            # leaving the top stage.
-            return self._bubble_point_step(
-                y[-1], x, T, L, V, F_vec, z, R, D
-            ), None
-
-        (x_final, y_final, T_final), _ = lax.scan(
-            one_iteration, (x_init, y_init, T_init), None, length=n_iter
-        )
-
-        return x_final, y_final, T_final
+        n = self.params.n_stages
+        x, y, T, _ = self._cmo_full(feed_flows, F_total, R, D, T_feed, n_iter)
+        return x[:n], y[:n], T[:n]
 
     def _molar_enthalpy(
         self,
@@ -1740,6 +2050,53 @@ class DistillationColumn(ValueKeyed):
 
         return Q_condenser, Q_reboiler
 
+    def _compute_duties_partial(
+        self,
+        x_profile: Array,
+        y_profile: Array,
+        T_profile: Array,
+        y_D: Array,
+        x_R: Array,
+        T_condenser: Array,
+        F_total: Array,
+        z: dict[str, Array],
+        T_feed: Array,
+        R: Array,
+        D: Array,
+        B: Array,
+        V_top: Array | None = None,
+    ) -> tuple[Array, Array]:
+        """Condenser and reboiler duties with a partial condenser.
+
+        The vapour ``V_top = (R + 1) D`` leaves the top tray with its actual
+        composition and splits in the condenser stage into the vapour
+        distillate ``D`` (``y_D``, enthalpy ``H_D``) and the reflux ``R D``
+        (``x_R``, saturated liquid ``h_R``, both at ``T_c``):
+
+            Q_cond = D H_D + R D h_R - V_top H_top          (< 0)
+            Q_reb  = D H_D + B h_B - Q_cond - F h_F
+
+        the second from the overall balance, with ``h_F`` at the column's
+        ``q`` as in :meth:`_compute_duties`. The condenser duty is "on the
+        partial basis": it removes the latent heat of the reflux only, not of
+        the vapour distillate.
+
+        Returns:
+            (Q_condenser, Q_reboiler) in J/s.
+        """
+        p = self.params
+        h_all, H_all = self._compute_stage_enthalpies(x_profile, y_profile, T_profile)
+        H_top = H_all[-1]
+        h_B = h_all[0]
+        H_D = self._molar_enthalpy(y_D, T_condenser, 'vapor')
+        h_R = self._molar_enthalpy(x_R, T_condenser, 'liquid')
+        V_top_flow = V_top if V_top is not None else (R + 1) * D
+        Q_condenser = D * H_D + R * D * h_R - V_top_flow * H_top
+        z_arr = jnp.array([z[s] for s in p.species_order])
+        h_F = self._feed_enthalpy(z_arr, jnp.asarray(T_feed))
+        Q_reboiler = D * H_D + B * h_B - Q_condenser - F_total * h_F
+        return Q_condenser, Q_reboiler
+
     def _solve_mesh(
         self,
         feed_flows: dict[str, Array],
@@ -1750,6 +2107,23 @@ class DistillationColumn(ValueKeyed):
         n_iter: int = 20,
         cmo_iter: int = 30,
     ) -> tuple[Array, Array, Array, Array, Array]:
+        """MESH solve; the ``n_stages`` tray rows only (see :meth:`_mesh_full`)."""
+        n = self.params.n_stages
+        x, y, T, L, V, _ = self._mesh_full(
+            feed_flows, F_total, R, D, T_feed, n_iter=n_iter, cmo_iter=cmo_iter
+        )
+        return x[:n], y[:n], T[:n], L, V
+
+    def _mesh_full(
+        self,
+        feed_flows: dict[str, Array],
+        F_total: Array,
+        R: Array,
+        D: Array,
+        T_feed: Array,
+        n_iter: int = 20,
+        cmo_iter: int = 30,
+    ) -> tuple[Array, Array, Array, Array, Array, Array]:
         """Rigorous MESH solver using Wang-Henke bubble-point method.
 
         Starts from a CMO warm start and iterates using:
@@ -1767,11 +2141,14 @@ class DistillationColumn(ValueKeyed):
             cmo_iter: Number of CMO iterations for the warm start
 
         Returns:
-            x: (n, nc) liquid mole fractions
-            y: (n, nc) vapor mole fractions
-            T: (n,) stage temperatures
+            x: (m, nc) liquid mole fractions; ``m = n_stages``, plus one row
+                for a partial condenser (its reflux)
+            y: (m, nc) vapor mole fractions (the condenser row is the
+                distillate vapour)
+            T: (m,) stage temperatures
             L: (n,) liquid flows leaving each stage downward (mol/s)
             V: (n,) vapor flows leaving each stage upward (mol/s)
+            eff: Murphree efficiency equivalent (see :meth:`_cmo_full`)
 
         Example:
             12-stage heptane / ethylbenzene column at 1 atm, feed stage 6,
@@ -1803,8 +2180,13 @@ class DistillationColumn(ValueKeyed):
         # Feed flow vector: nonzero only at feed stage
         F_vec = jnp.zeros(n).at[p.feed_stage].set(F_total)
 
-        # CMO warm start (component balances already closed)
-        x_init, y_init, T_init = self._solve_constant_molar_overflow(
+        E, unity = self._murphree()
+        partial_cond = p.condenser_type == "partial"
+        legacy = unity and not partial_cond
+
+        # CMO warm start (component balances already closed); with an
+        # efficiency below 1 it already went through the E = 1 -> E homotopy.
+        x_init, y_init, T_init, eff = self._cmo_full(
             feed_flows, F_total, R, D, T_feed, n_iter=cmo_iter
         )
 
@@ -1817,12 +2199,18 @@ class DistillationColumn(ValueKeyed):
             # 1-5. Component balances at the current flows, then the
             # bubble-point temperature and vapor-composition update.  Total
             # condenser: the reflux carries the top-stage vapor composition.
-            x_new, y_new, T_new = self._bubble_point_step(
-                y[-1], x, T, L, V, F_vec, z, R, D
+            x_new, y_new, T_new = self._step(
+                x, y, T, L, V, F_vec, z, R, D, E, legacy
             )
 
-            # 6. Energy balance update to obtain L/V profiles
+            # 6. Energy balance update to obtain L/V profiles. The sweep runs
+            # over the trays only; a partial condenser's row (index n) just
+            # supplies the reflux enthalpy below. The vapour compositions are
+            # the actual (Murphree) ones.
             h_all, H_all = self._compute_stage_enthalpies(x_new, y_new, T_new)
+            h_cond = h_all[n:]
+            h_all = h_all[:n]
+            H_all = H_all[:n]
 
             # Feed enthalpy at the column's thermal condition: q moles of
             # liquid and (1 - q) of vapour, both at the feed temperature. A
@@ -1836,8 +2224,13 @@ class DistillationColumn(ValueKeyed):
             # top stage subcooled, and the top stage has to boil some of it.
             # Evaluating it at the top stage temperature instead would credit
             # the balance with heat the condenser has already removed.
-            T_cond = self._condenser_T(y_new[-1], P, T_guess=T_new[-1])
-            h_reflux = self._molar_enthalpy(y_new[-1], T_cond, 'liquid')
+            if partial_cond:
+                # Partial condenser: the reflux is the condenser stage's own
+                # liquid, at the condenser temperature.
+                h_reflux = h_cond[0]
+            else:
+                T_cond = self._condenser_T(y_new[-1], P, T_guess=T_new[-1])
+                h_reflux = self._molar_enthalpy(y_new[-1], T_cond, 'liquid')
 
             # Top-down energy balance sweep from stage n-1 down to stage 1
             def eb_step(carry, stage_j):
@@ -1896,7 +2289,7 @@ class DistillationColumn(ValueKeyed):
             None,
             length=n_iter,
         )
-        return x_f, y_f, T_f, L_f, V_f
+        return x_f, y_f, T_f, L_f, V_f, eff
 
     def __call__(
         self,
@@ -1947,8 +2340,10 @@ class DistillationColumn(ValueKeyed):
 
         Returns:
             distillate: Distillate stream, at the condenser temperature --
-                the bubble point of the distillate, which is below the top
-                stage temperature (see :meth:`_condenser_T`)
+                for a total condenser the bubble point of the distillate,
+                which is below the top stage temperature (see
+                :meth:`_condenser_T`); for a partial condenser the vapour
+                distillate at its dew point
             bottoms: Bottoms stream, at the reboiler temperature
             info: Dictionary with:
                 - 'T_profile': Stage temperatures
@@ -1964,6 +2359,23 @@ class DistillationColumn(ValueKeyed):
                   D x_D,i + B x_B,i - F z_i (mol/s), in species_order
                 - 'balance_error_rel': max |balance_error| / F_total, a single
                   number a caller can compare against a tolerance
+                - 'n_equilibrium_stages': ``n_stages``, plus one for a partial
+                  condenser
+                - 'overall_efficiency_equiv': ratio of the logarithm of the
+                  light/heavy key separation factor (keys = most and least
+                  volatile species at the feed bubble point) to that of the
+                  same column at ``E = 1``. 1 at ``E = 1``. A Fenske-style
+                  proxy for equivalent theoretical stages / actual stages (for
+                  comparison with O'Connell), not that ratio itself. On the
+                  MESH path it is the CMO warm start's value.
+                With a partial condenser (profiles still have ``n_stages``
+                rows) also:
+                - 'y_D': distillate vapour composition (the condenser's vapour)
+                - 'x_R': reflux composition (the condenser's liquid)
+                  ``T_condenser`` is then the dew point of ``y_D`` and
+                  ``Q_condenser`` the duty on the partial basis (reflux latent
+                  heat only). The distillate stream is that vapour at
+                  ``T_condenser``.
                 When use_mesh=True, also includes:
                 - 'L_profile': (n,) liquid flows leaving each stage (mol/s)
                 - 'V_profile': (n,) vapor flows leaving each stage (mol/s)
@@ -2013,94 +2425,94 @@ class DistillationColumn(ValueKeyed):
         # Feed mole fractions for duty calculation
         z = {s: feed_flows[s] / F_total for s in p.species_order}
 
+        n = p.n_stages
+        partial_cond = p.condenser_type == "partial"
+        P_col = jnp.asarray(p.P)
+
         if use_mesh:
             # Rigorous MESH solver (Wang-Henke bubble-point method)
-            x_profile, y_profile, T_profile, L_profile, V_profile = self._solve_mesh(
+            x_full, y_full, T_full, L_profile, V_profile, eff = self._mesh_full(
                 feed_flows, F_total, R, D, T_feed,
                 n_iter=mesh_iter, cmo_iter=cmo_iter,
             )
-
-            # Total condenser: distillate composition = vapor from top stage
-            x_D = {s: y_profile[-1, i] for i, s in enumerate(p.species_order)}
-            x_B = {s: x_profile[0, i] for i, s in enumerate(p.species_order)}
-
-            distillate_flows = {s: D * x_D[s] for s in p.species_order}
-            bottoms_flows = {s: B * x_B[s] for s in p.species_order}
-
-            # A total condenser delivers the distillate as a saturated liquid
-            # at its own bubble point, which is below the top stage
-            # temperature (see _condenser_T).
-            T_condenser = self._condenser_T(
-                y_profile[-1], jnp.asarray(p.P), T_guess=T_profile[-1]
+        else:
+            # Constant molar overflow (CMO) solver: same component
+            # balances as MESH, L/V frozen at their CMO values
+            x_full, y_full, T_full, eff = self._cmo_full(
+                feed_flows, F_total, R, D, T_feed, n_iter=cmo_iter
             )
 
-            distillate = make_stream(distillate_flows, T_condenser, p.P)
-            bottoms = make_stream(bottoms_flows, T_profile[0], p.P)
+        # The profiles in info are the n_stages tray rows. A partial
+        # condenser is one more row (index n), reported on its own.
+        x_profile, y_profile, T_profile = x_full[:n], y_full[:n], T_full[:n]
 
-            # Compute duties with actual V profile from MESH
+        if partial_cond:
+            # Distillate = the condenser stage's vapour, at its temperature
+            # (the dew point of that vapour); reflux = its liquid.
+            y_D = y_full[n]
+            x_R = x_full[n]
+            T_condenser = T_full[n]
+        else:
+            # Total condenser: distillate composition = vapor from top stage,
+            # delivered as a saturated liquid at its own bubble point, which
+            # is below the top stage temperature (see _condenser_T).
+            y_D = y_profile[-1]
+            T_condenser = self._condenser_T(
+                y_profile[-1], P_col, T_guess=T_profile[-1]
+            )
+
+        x_D = {s: y_D[i] for i, s in enumerate(p.species_order)}
+        x_B = {s: x_profile[0, i] for i, s in enumerate(p.species_order)}
+        distillate_flows = {s: D * x_D[s] for s in p.species_order}
+        bottoms_flows = {s: B * x_B[s] for s in p.species_order}
+
+        distillate = make_stream(distillate_flows, T_condenser, p.P)
+        bottoms = make_stream(bottoms_flows, T_profile[0], p.P)
+
+        V_top = V_profile[-1] if use_mesh else None
+        if partial_cond:
+            Q_condenser, Q_reboiler = self._compute_duties_partial(
+                x_profile, y_profile, T_profile, y_D, x_R, T_condenser,
+                F_total, z, T_feed, R, D, B, V_top=V_top,
+            )
+        elif use_mesh:
+            # Duties with the actual V profile from MESH
             Q_condenser, Q_reboiler = self._compute_duties(
                 x_profile, y_profile, T_profile,
                 F_total, z, T_feed, R, D, B,
                 V_top=V_profile[-1], V_bot=V_profile[0],
                 T_condenser=T_condenser,
             )
-
-            info = {
-                "T_profile": T_profile,
-                "x_profile": x_profile,
-                "y_profile": y_profile,
-                "L_profile": L_profile,
-                "V_profile": V_profile,
-                "D": D,
-                "B": B,
-                "T_condenser": T_condenser,
-                "T_reboiler": T_profile[0],
-                "Q_condenser": Q_condenser,
-                "Q_reboiler": Q_reboiler,
-            }
         else:
-            # Constant molar overflow (CMO) solver: same component
-            # balances as MESH, L/V frozen at their CMO values
-            x_profile, y_profile, T_profile = self._solve_constant_molar_overflow(
-                feed_flows, F_total, R, D, T_feed, n_iter=cmo_iter
-            )
-
-            # Total condenser: distillate = vapor leaving top stage
-            x_D = {s: y_profile[-1, i] for i, s in enumerate(p.species_order)}
-
-            # Reboiler (bottom stage, index 0)
-            x_B = {s: x_profile[0, i] for i, s in enumerate(p.species_order)}
-
-            distillate_flows = {s: D * x_D[s] for s in p.species_order}
-            bottoms_flows = {s: B * x_B[s] for s in p.species_order}
-
-            T_condenser = self._condenser_T(
-                y_profile[-1], jnp.asarray(p.P), T_guess=T_profile[-1]
-            )
-
-            distillate = make_stream(distillate_flows, T_condenser, p.P)
-            bottoms = make_stream(bottoms_flows, T_profile[0], p.P)
-
-            # Compute duties with CMO vapor flow estimates
+            # Duties with CMO vapor flow estimates
             Q_condenser, Q_reboiler = self._compute_duties(
                 x_profile, y_profile, T_profile,
                 F_total, z, T_feed, R, D, B,
                 T_condenser=T_condenser,
             )
 
-            info = {
-                "T_profile": T_profile,
-                "x_profile": x_profile,
-                "y_profile": y_profile,
-                "L_rect": R * D,
-                "V_rect": (R + 1) * D,
-                "D": D,
-                "B": B,
-                "T_condenser": T_condenser,
-                "T_reboiler": T_profile[0],
-                "Q_condenser": Q_condenser,
-                "Q_reboiler": Q_reboiler,
-            }
+        info = {
+            "T_profile": T_profile,
+            "x_profile": x_profile,
+            "y_profile": y_profile,
+            "D": D,
+            "B": B,
+            "T_condenser": T_condenser,
+            "T_reboiler": T_profile[0],
+            "Q_condenser": Q_condenser,
+            "Q_reboiler": Q_reboiler,
+            "n_equilibrium_stages": n + (1 if partial_cond else 0),
+            "overall_efficiency_equiv": eff,
+        }
+        if use_mesh:
+            info["L_profile"] = L_profile
+            info["V_profile"] = V_profile
+        else:
+            info["L_rect"] = R * D
+            info["V_rect"] = (R + 1) * D
+        if partial_cond:
+            info["y_D"] = y_D
+            info["x_R"] = x_R
 
         # Component balance closure.  Both solvers satisfy the per-species
         # balances only to within their iteration count, so report the residual

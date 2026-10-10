@@ -1013,9 +1013,10 @@ class DistillationColumnParams:
     species_order: list[str]     # Species names; sets array ordering
     n_stages: int                # Equilibrium stages: the trays plus the reboiler
     feed_stage: int              # Zero-based stage index from the bottom
-    condenser_type: str = 'total'  # Only 'total' is implemented
+    condenser_type: str = 'total'  # 'total' or 'partial' (an extra equilibrium stage)
     P: float = 101325.0          # One pressure for the whole column
     q: float = 1.0               # Feed quality (1 = saturated liquid)
+    stage_efficiency: float | Array = 1.0  # Murphree vapour efficiency, scalar or (n_stages,)
 ```
 
 **Stage numbering is zero-based from the bottom**: stage 0 is the reboiler,
@@ -1068,8 +1069,90 @@ all-liquid feed below its bubble point, with the subcooling carried by
 `T_feed`. Forming `1.3 h^L - 0.3 H^V` would subtract three tenths of a latent
 heat that is not there, and count the departure from saturation twice.
 
-`condenser_type='partial'` raises `NotImplementedError` rather than being
-silently solved as a total condenser.
+#### Partial condenser and Murphree efficiency
+
+**`condenser_type='partial'`** makes the condenser an equilibrium stage at the
+column pressure, **outside** `n_stages`. Its vapour is the distillate and its
+liquid is the reflux:
+
+$$(R+1)\,D\,y_{i,top} = D\,y_{D,i} + R\,D\,x_{R,i},\qquad
+y_{D,i} = K_i(T_c)\,x_{R,i},\qquad \sum_i x_{R,i} = 1$$
+
+so $T_c$ is the **dew point of $y_D$** (and the bubble point of $x_R$). The
+condenser is one more row of the same tridiagonal system, so the summed
+balances still telescope to $D y_D + B x_B = F z$. Stage counting: the profiles
+in `info` keep their `n_stages` rows (nothing shifts when you switch the
+condenser type), the condenser is reported separately as `info['y_D']`,
+`info['x_R']` and `info['T_condenser']`, and `info['n_equilibrium_stages']`
+is `n_stages + 1`. The distillate stream is the vapour at `T_condenser`.
+`Q_condenser` is the duty on the partial basis: it removes the latent heat of
+the reflux only, not of the vapour distillate. Under CMO a partial condenser
+on `N` stages is exactly a total condenser on `N + 1` stages. A mixed
+(vapour + liquid distillate) condenser, `condenser_type='mixed'`, is not
+implemented and raises `NotImplementedError`; there is no separate condenser
+pressure (`P_condenser`) either, the column has one `P`.
+
+**`stage_efficiency`** is a Murphree *vapour* efficiency, a scalar or an
+`(n_stages,)` array (the name and the 0-1 convention of
+`CascadeParams.stage_efficiency` in the LLE unit):
+
+$$y_{i,j} = y_{i,j-1} + E_j\,\bigl(K_{i,j}\,x_{i,j} - y_{i,j-1}\bigr)$$
+
+with $y_{j-1}$ the *actual* vapour leaving the stage below. The reboiler
+(stage 0) and a partial condenser are equilibrium stages, so their $E$ is 1
+whatever is given for stage 0. The default $E = 1$ reproduces the previous
+results **bit for bit** (it takes the original code path). The MESH energy
+balance uses the actual vapour compositions. Each iteration solves the balance
+and the Murphree relation together as a block-tridiagonal system (so it is
+well posed at $E = 0$, where the trays do nothing and the column is a flash
+at the reboiler), and the iteration is a fixed-count homotopy: converge at
+$E = 1$, step $E$ to its target in four steps, iterate at the target. It is
+differentiable in $E$ (scalar or one element of the array), in $R$, and on both
+solver paths. `info['overall_efficiency_equiv']` is a *Fenske-style proxy* for
+equivalent theoretical stages over actual stages: the ratio of
+$\ln$ of the light/heavy key separation factor (keys = most and least volatile
+species at the feed bubble point) to the same column's at $E = 1$. It is not
+the theoretical-stage ratio itself and is meant as a trend to compare with an
+O'Connell estimate.
+
+What was checked, and against what:
+
+- Constant-$\alpha$ binary under CMO (`use_mesh=False`) with $E = 0.7$,
+  total and partial condenser: the tray liquids equal those of
+  `difflow.staged.mccabe_thiele` on the pseudo-equilibrium curve to 1e-10
+  (observed ~1e-15), and the component balance closes to 1e-12 at
+  `cmo_iter=400`.
+- $E \to 0$ against an independent flash with vapour fraction $D/F$.
+- Partial vs total on $N + 1$ stages (CMO), distillate dew point against an
+  independent root find, `check_grads` on the CMO and MESH paths.
+- **Not checked** against a published worked example (Wankat, Seader): their
+  inputs and printed answers were not available, so no agreement with a
+  textbook number is claimed. The depropanizer test (ethane to n-pentane on
+  Peng-Robinson at 17 bar, 20 stages, partial condenser) uses an illustrative
+  feed, not the book's wex13-1 data: it checks convergence and closure only.
+
+```python
+from difflow import IdealThermo, make_stream
+from difflow.database import get_species_data
+from difflow.units.distillation import DistillationColumn, DistillationColumnParams
+
+names = ['benzene', 'toluene']
+thermo = IdealThermo({s: get_species_data(s) for s in names})
+feed = make_stream({'benzene': 50.0, 'toluene': 50.0}, T=365.0, P=101325.0)
+
+for cond, eff in [('total', 1.0), ('partial', 1.0), ('total', 0.7)]:
+    column = DistillationColumn(
+        DistillationColumnParams(species_order=names, n_stages=10, feed_stage=5,
+                                 condenser_type=cond, stage_efficiency=eff),
+        thermo=thermo,
+    )
+    distillate, bottoms, info = column(feed, R=2.5, D_spec=50.0, use_mesh=False,
+                                       cmo_iter=100)
+    print(f"{cond:7s} E={eff}: x_D(benzene) = "
+          f"{float(distillate['F_benzene'] / 50.0):.4f}, "
+          f"T_cond = {float(info['T_condenser']):.1f} K, "
+          f"equilibrium stages = {int(info['n_equilibrium_stages'])}")
+```
 
 The reflux ratio and the product split are arguments to the call, not
 parameters — give exactly one of `D_spec` or `B_spec`:
@@ -1257,6 +1340,9 @@ of asserted.
 | `info['L_rect']`, `info['V_rect']` | float | mol/s | Rectifying flows — `use_mesh=False` only |
 | `info['balance_error']` | (nc,) array | mol/s | Component balance residual $D_i + B_i - F_i$ |
 | `info['balance_error_rel']` | float | - | `max abs(balance_error) / F_total` |
+| `info['n_equilibrium_stages']` | int | - | `n_stages`, plus one for a partial condenser |
+| `info['overall_efficiency_equiv']` | float | - | Fenske-style efficiency proxy (1 at $E = 1$), see above |
+| `info['y_D']`, `info['x_R']` | (nc,) array | - | Partial condenser only: vapour distillate and reflux compositions |
 
 #### Example Usage
 

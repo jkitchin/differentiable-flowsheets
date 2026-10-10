@@ -1693,3 +1693,315 @@ class TestRigorousColumnComponentBalance:
             # the residual sits near 1e-3 and more sweeps barely move it.
             # That is the case the reported diagnostic exists for.
             assert float(info["balance_error_rel"]) < 2e-3
+
+
+# =============================================================================
+# Partial condenser and Murphree vapour efficiency (issue #425)
+# =============================================================================
+
+
+def _constant_alpha_thermo(alpha=2.5):
+    """Two species with identical Antoine B, C: K_lk / K_hk = alpha exactly.
+
+    ``log10 Psat = A - B/(T + C)`` with a common ``B`` and ``C`` and ``A``
+    differing by ``log10(alpha)`` gives a constant relative volatility at every
+    temperature, so a CMO column on it is a McCabe-Thiele problem.
+    """
+    import numpy as np
+
+    A = 13.82
+    common = dict(MW=78.0, Cp_coeffs=(136.0, 0.0, 0.0, 0.0),
+                  Hvap_coeffs=(33900.0, 0.38, 562.0))
+    return IdealThermo({
+        "lk": SpeciesData(name="lk", antoine_coeffs=(A + np.log10(alpha), 2788.0, -52.36), **common),
+        "hk": SpeciesData(name="hk", antoine_coeffs=(A, 2788.0, -52.36), **common),
+    })
+
+
+ALPHA = 2.5
+
+
+@pytest.fixture(scope="module")
+def alpha_thermo():
+    return _constant_alpha_thermo(ALPHA)
+
+
+def _alpha_column(thermo, n=6, feed_stage=3, **kw):
+    return DistillationColumn(
+        DistillationColumnParams(species_order=["lk", "hk"], n_stages=n,
+                                 feed_stage=feed_stage, **kw),
+        thermo,
+    )
+
+
+def _alpha_feed():
+    return make_stream({"lk": 0.5, "hk": 0.5}, T=370.0, P=101325.0)
+
+
+def _dew_T(thermo, species, y, P):
+    """Independent dew point: bisection on sum(y_i / K_i(T)) = 1."""
+    import numpy as np
+
+    y = np.asarray(y)
+    lo, hi = 250.0, 600.0
+    for _ in range(80):
+        mid = 0.5 * (lo + hi)
+        K = np.asarray(thermo.K_values_array(mid, P))
+        # sum(y/K) falls as T rises: above 1 means too cold
+        if float(np.sum(y / K)) > 1.0:
+            lo = mid
+        else:
+            hi = mid
+    return 0.5 * (lo + hi)
+
+
+class TestPartialCondenser:
+    """``condenser_type='partial'``: an extra equilibrium stage, vapour distillate."""
+
+    @pytest.mark.parametrize("use_mesh", [False, True])
+    def test_equilibrium_balance_and_dew_point(self, benzene_toluene_thermo, use_mesh):
+        P = 101325.0
+        col = DistillationColumn(
+            DistillationColumnParams(species_order=["benzene", "toluene"], n_stages=8,
+                                     feed_stage=4, condenser_type="partial", P=P),
+            benzene_toluene_thermo,
+        )
+        feed = make_stream({"benzene": 0.5, "toluene": 0.5}, T=365.0, P=P)
+        dist, bot, info = col(feed, R=2.0, D_spec=0.45, use_mesh=use_mesh,
+                              mesh_iter=40, cmo_iter=300)
+        y_D, x_R, T_c = info["y_D"], info["x_R"], info["T_condenser"]
+        K = benzene_toluene_thermo.K_values_array(T_c, P)
+        # y_D and x_R are in equilibrium at T_condenser, both normalised
+        assert jnp.allclose(y_D, K * x_R, atol=1e-8)
+        assert float(jnp.sum(y_D)) == pytest.approx(1.0, abs=1e-10)
+        assert float(jnp.sum(x_R)) == pytest.approx(1.0, abs=1e-10)
+        # T_condenser is the dew point of the distillate (independent root find)
+        assert float(T_c) == pytest.approx(
+            _dew_T(benzene_toluene_thermo, ["benzene", "toluene"], y_D, P), abs=1e-6)
+        # the distillate stream is that vapour, at that temperature
+        assert float(dist["T"]) == pytest.approx(float(T_c))
+        assert float(dist["F_benzene"]) == pytest.approx(0.45 * float(y_D[0]), rel=1e-12)
+        # overall component balance
+        assert float(info["balance_error_rel"]) < 1e-8
+        assert float(jnp.max(jnp.abs(info["balance_error"]))) < 1e-8
+        # the condenser is outside n_stages: profiles do not gain a row
+        assert info["x_profile"].shape == (8, 2)
+        assert int(info["n_equilibrium_stages"]) == 9
+        # partial-basis condenser duty removes the reflux's latent heat only
+        assert float(info["Q_condenser"]) < 0.0 < float(info["Q_reboiler"])
+
+    def test_total_condenser_reports_n_stages_and_no_y_D(self, alpha_thermo):
+        _, _, info = _alpha_column(alpha_thermo)(_alpha_feed(), R=2.5, D_spec=0.5, use_mesh=False)
+        assert int(info["n_equilibrium_stages"]) == 6
+        assert "y_D" not in info
+        assert float(info["overall_efficiency_equiv"]) == 1.0
+
+    def test_partial_N_matches_total_N_plus_one_on_cmo(self, alpha_thermo):
+        """A partial condenser is one more equilibrium stage (exact under CMO).
+
+        The condenser row balance ``V y_top = D y_D + R D x_R`` with
+        ``y_D = K x_R`` is the balance of the top stage of a total-condenser
+        column with one more stage, so the products coincide.
+        """
+        feed = _alpha_feed()
+        _, _, ip = _alpha_column(alpha_thermo, n=6, condenser_type="partial")(
+            feed, R=2.5, D_spec=0.5, use_mesh=False, cmo_iter=300)
+        _, _, it = _alpha_column(alpha_thermo, n=7, condenser_type="total")(
+            feed, R=2.5, D_spec=0.5, use_mesh=False, cmo_iter=300)
+        assert jnp.allclose(ip["y_D"], it["y_profile"][-1], atol=1e-9)
+        assert jnp.allclose(ip["x_profile"][0], it["x_profile"][0], atol=1e-9)
+        # and a partial condenser really separates more than the same trays
+        # behind a total one
+        _, _, i6 = _alpha_column(alpha_thermo, n=6)(feed, R=2.5, D_spec=0.5,
+                                                    use_mesh=False, cmo_iter=300)
+        assert float(ip["y_D"][0]) > float(i6["y_profile"][-1, 0])
+
+    def test_rejections(self, alpha_thermo):
+        with pytest.raises(NotImplementedError, match="mixed"):
+            DistillationColumnParams(species_order=["lk", "hk"], n_stages=4,
+                                     feed_stage=2, condenser_type="mixed")
+        with pytest.raises(ValueError):
+            DistillationColumnParams(species_order=["lk", "hk"], n_stages=4,
+                                     feed_stage=2, condenser_type="bogus")
+
+
+class TestMurphreeEfficiency:
+    """``stage_efficiency``: Murphree vapour efficiency, scalar or per stage."""
+
+    def test_unity_is_the_default_exactly(self, alpha_thermo):
+        """E = 1 (scalar or array) takes the original code path: identical."""
+        feed = _alpha_feed()
+        for mesh in (False, True):
+            base = _alpha_column(alpha_thermo)(feed, R=2.5, D_spec=0.5, use_mesh=mesh)
+            for eff in (1.0, jnp.ones(6)):
+                other = _alpha_column(alpha_thermo, stage_efficiency=eff)(
+                    feed, R=2.5, D_spec=0.5, use_mesh=mesh)
+                for k in ("T_profile", "x_profile", "y_profile", "Q_reboiler", "Q_condenser"):
+                    assert jnp.array_equal(base[2][k], other[2][k]), k
+                assert float(other[0]["F_lk"]) == float(base[0]["F_lk"])
+
+    def test_reboiler_efficiency_is_ignored(self, alpha_thermo):
+        """Stage 0 is an equilibrium stage: its entry in the array is forced to 1."""
+        feed = _alpha_feed()
+        a = _alpha_column(alpha_thermo, stage_efficiency=jnp.full(6, 0.7))(
+            feed, R=2.5, D_spec=0.5, use_mesh=False)
+        b = _alpha_column(alpha_thermo, stage_efficiency=jnp.full(6, 0.7).at[0].set(0.2))(
+            feed, R=2.5, D_spec=0.5, use_mesh=False)
+        assert jnp.array_equal(a[2]["x_profile"], b[2]["x_profile"])
+
+    @pytest.mark.parametrize("cond", ["total", "partial"])
+    def test_matches_mccabe_thiele_pseudo_equilibrium(self, alpha_thermo, cond):
+        """E_MV = 0.7 on a constant-alpha CMO binary reproduces the stepper.
+
+        ``difflow.staged.mccabe_thiele`` steps the pseudo-equilibrium curve
+        ``y = y_op + E (y* - y_op)`` from the top. Given the column's own
+        distillate (and, for a partial condenser, its condenser liquid
+        ``x_R``, since the stepper applies E to every stage and the condenser
+        is an E = 1 stage), the tray liquids must be the stepper's, which is
+        the Murphree recursion solved with a different algorithm.
+        """
+        from difflow import staged
+
+        n, f, R, E = 10, 5, 2.5, 0.7
+        col = _alpha_column(alpha_thermo, n=n, feed_stage=f, stage_efficiency=E,
+                            condenser_type=cond)
+        _, _, info = col(_alpha_feed(), R=R, D_spec=0.5, use_mesh=False, cmo_iter=400)
+        assert float(info["balance_error_rel"]) < 1e-12
+        xp = info["x_profile"][:, 0]
+        part = cond == "partial"
+        x_D = float(info["y_D"][0]) if part else float(info["y_profile"][-1, 0])
+        x_top = float(info["x_R"][0]) if part else x_D
+        x_B = float(xp[0])
+        if part:   # the condenser stage itself is the equilibrium curve
+            assert x_D == pytest.approx(float(staged.constant_alpha(ALPHA)(x_top)), abs=1e-12)
+        rect = staged.rectifying_line(R, x_D)
+        strip = staged.stripping_line(R, x_D, x_B, 0.5, 1.0)
+        curve = staged.constant_alpha(ALPHA).with_efficiency(E)
+        r = staged.mccabe_thiele(curve, rect, strip, x_top, x_B, mode="specified",
+                                 feed_stage=n - f, n_max=n)
+        # stepper stage k is column stage n - k
+        assert jnp.allclose(r["x"][1:n], xp[::-1][: n - 1], atol=1e-10)
+
+    @pytest.mark.parametrize("cond", ["total", "partial"])
+    def test_separation_falls_monotonically_and_E_zero_is_a_flash(self, alpha_thermo, cond):
+        """Less efficient trays separate less; at E = 0 the column is a flash.
+
+        With every tray at E = 0 only the reboiler is an equilibrium stage, so
+        the products are those of a single flash with vapour fraction D/F
+        (checked against an independent bisection on the constant-alpha
+        flash), and nothing is NaN. The partial condenser adds a stage on top
+        of that, so for it the limit is two stages (not tested here).
+        """
+        feed = _alpha_feed()
+        D = 0.5
+        prev = None
+        for E in (1.0, 0.8, 0.6, 0.4, 0.2, 0.05, 0.0):
+            _, _, i = _alpha_column(alpha_thermo, stage_efficiency=E, condenser_type=cond)(
+                feed, R=2.5, D_spec=D, use_mesh=False, cmo_iter=60)
+            assert all(bool(jnp.all(jnp.isfinite(v))) for v in
+                       (i["x_profile"], i["y_profile"], i["T_profile"], i["Q_reboiler"]))
+            top = float((i["y_D"] if cond == "partial" else i["y_profile"][-1])[0])
+            if prev is not None:
+                assert top < prev
+            prev = top
+            eq = float(i["overall_efficiency_equiv"])
+            assert 0.0 <= eq <= 1.0 + 1e-9
+        if cond == "total":
+            # independent flash: D y(x) + B x = F z, y = a x / (1 + (a-1) x)
+            lo, hi = 0.0, 1.0
+            for _ in range(100):
+                x = 0.5 * (lo + hi)
+                y = ALPHA * x / (1 + (ALPHA - 1) * x)
+                lo, hi = (x, hi) if D * y + (1 - D) * x < 0.5 else (lo, x)
+            assert top == pytest.approx(ALPHA * x / (1 + (ALPHA - 1) * x), abs=1e-6)
+
+    def test_efficiency_equivalent_is_between_zero_and_one(self, alpha_thermo):
+        """The Fenske-style proxy falls with E and is 1 at E = 1 (see docs)."""
+        feed = _alpha_feed()
+        vals = []
+        for E in (1.0, 0.7, 0.4):
+            _, _, i = _alpha_column(alpha_thermo, stage_efficiency=E)(
+                feed, R=2.5, D_spec=0.5, use_mesh=False, cmo_iter=60)
+            vals.append(float(i["overall_efficiency_equiv"]))
+        assert vals[0] == 1.0 and vals[0] > vals[1] > vals[2] > 0.0
+
+    @pytest.mark.parametrize("cond", ["total", "partial"])
+    def test_mesh_balances_close_with_low_efficiency(self, alpha_thermo, cond):
+        _, _, i = _alpha_column(alpha_thermo, stage_efficiency=0.3, condenser_type=cond)(
+            _alpha_feed(), R=2.5, D_spec=0.5, use_mesh=True, mesh_iter=20, cmo_iter=60)
+        assert float(i["balance_error_rel"]) < 1e-5
+
+    def test_validation(self):
+        kw = dict(species_order=["lk", "hk"], n_stages=4, feed_stage=2)
+        with pytest.raises(ValueError):
+            DistillationColumnParams(**kw, stage_efficiency=jnp.ones(3))
+        with pytest.raises(ValueError):
+            DistillationColumnParams(**kw, stage_efficiency=-0.1)
+
+    @pytest.mark.parametrize("cond", ["total", "partial"])
+    @pytest.mark.parametrize("use_mesh", [False, pytest.param(True, marks=pytest.mark.slow)])
+    def test_gradients(self, alpha_thermo, cond, use_mesh):
+        """check_grads (order 1, rev) of x_D[LK] and Q_reboiler wrt E and R.
+
+        E as a scalar and as one element of an array; R as the reflux ratio.
+        """
+        from jax.test_util import check_grads
+
+        feed = _alpha_feed()
+
+        def f(E, R, idx=None):
+            eff = E if idx is None else jnp.full(6, 0.8).at[idx].set(E)
+            col = _alpha_column(alpha_thermo, stage_efficiency=eff, condenser_type=cond)
+            d, _, i = col(feed, R=R, D_spec=0.5, use_mesh=use_mesh,
+                          mesh_iter=6, cmo_iter=15)
+            return jnp.stack([d["F_lk"] / 0.5, i["Q_reboiler"] / 1e4])
+
+        kw = dict(order=1, modes=["rev"], atol=1e-4, rtol=1e-4)
+        check_grads(lambda E: f(E, 2.5), (0.7,), **kw)
+        check_grads(lambda E: f(E, 2.5, 2), (0.7,), **kw)
+        check_grads(lambda R: f(0.7, R), (2.5,), **kw)
+        g = jax.grad(lambda E: f(E, 2.5)[0])(0.7)
+        assert float(g) > 0.0      # more efficient trays -> purer distillate
+
+
+@pytest.mark.slow
+class TestDepropanizerPartialCondenser:
+    """wex13-1 style depropanizer: C2..nC5 on Peng-Robinson, partial condenser.
+
+    The feed, pressure, stage count and reflux are illustrative -- the book's
+    numbers for wex13-1 were not available, so this checks that the problem
+    converges and balances close, not agreement with a published answer.
+    """
+
+    SPECIES = ["ethane", "propane", "isobutane", "n_butane", "isopentane", "n_pentane"]
+
+    @pytest.fixture(scope="class")
+    def setup(self):
+        from difflow.database import get_critical_props, get_species_data
+        from difflow.eos import PengRobinson
+        from difflow.thermo import CubicThermo
+
+        ideal = IdealThermo({s: get_species_data(s) for s in self.SPECIES})
+        thermo = CubicThermo(ideal, PengRobinson({s: get_critical_props(s) for s in self.SPECIES}))
+        P = 17e5
+        feed = make_stream(dict(zip(self.SPECIES, [5.0, 30.0, 15.0, 20.0, 15.0, 15.0])),
+                           T=340.0, P=P)
+        return thermo, feed, P
+
+    @pytest.mark.parametrize("use_mesh", [False, True])
+    def test_converges_and_balances(self, setup, use_mesh):
+        thermo, feed, P = setup
+        col = DistillationColumn(
+            DistillationColumnParams(species_order=self.SPECIES, n_stages=20, feed_stage=10,
+                                     condenser_type="partial", P=P), thermo)
+        dist, bot, info = col(feed, R=2.0, D_spec=36.0, use_mesh=use_mesh)
+        assert float(info["balance_error_rel"]) < 1e-6
+        assert float(jnp.sum(info["y_D"])) == pytest.approx(1.0, abs=1e-8)
+        for v in (info["x_profile"], info["T_profile"], info["Q_reboiler"], info["T_condenser"]):
+            assert bool(jnp.all(jnp.isfinite(v)))
+        # propane and ethane go overhead, the C5s stay down
+        assert float(info["y_D"][1]) > 0.7
+        assert float(bot["F_n_pentane"]) > 0.99 * 15.0
+        # the vapour distillate leaves at the dew point of y_D, which is
+        # warmer than the bubble point a total condenser would reach
+        assert 300.0 < float(info["T_condenser"]) < float(info["T_profile"][-1]) + 1e-6

@@ -8,6 +8,25 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **`DistillationColumn`: partial condenser and Murphree vapour efficiency
+  (#425).** `condenser_type="partial"` makes the condenser an equilibrium stage
+  outside `n_stages` (vapour distillate `y_D = K(T_c) x_R` at its dew point,
+  liquid reflux `x_R`), as one more row of the tridiagonal system so the
+  balances still telescope; `info` gains `y_D`, `x_R`, `n_equilibrium_stages`
+  and a partial-basis `Q_condenser`. `stage_efficiency` (scalar or
+  `(n_stages,)`, same name as `CascadeParams.stage_efficiency`) is a Murphree
+  vapour efficiency solved as a block-tridiagonal system (well posed at
+  `E = 0`) with a fixed-count `E = 1 -> E` homotopy; the reboiler is always an
+  equilibrium stage. Differentiable in `E` and `R` on the CMO and MESH paths.
+  `info["overall_efficiency_equiv"]` is a Fenske-style separation proxy, not a
+  theoretical-stage ratio. `stage_efficiency=1.0` (default) with a total
+  condenser takes the original code path and reproduces previous results
+  exactly. Checked against `difflow.staged.mccabe_thiele`, an independent
+  flash and `check_grads`; no textbook example numbers are claimed.
+  **Changed:** `condenser_type="partial"` no longer raises
+  `NotImplementedError`, and an unknown `condenser_type` is now a
+  `ValueError` (`"mixed"` still raises `NotImplementedError`).
+
 - **Shell-and-tube sizing and phase-change warning for the heat-exchanger
   helpers (#422).** `design_heat_exchanger` and `size_heat_exchanger` accept
   `flow_config="shell_and_tube"` with `n_shell_passes`, size with
