@@ -89,6 +89,7 @@ from difflow.units.heat_exchanger import (
     log_mean_temperature_difference,
     effectiveness_counter_current,
     effectiveness_co_current,
+    effectiveness_shell_and_tube,
     design_heat_exchanger,
     size_heat_exchanger,
 )
@@ -198,6 +199,7 @@ __all__ = [
     "log_mean_temperature_difference",
     "effectiveness_counter_current",
     "effectiveness_co_current",
+    "effectiveness_shell_and_tube",
     "design_heat_exchanger",
     "size_heat_exchanger",
     # Liquid pipe flow

@@ -169,6 +169,28 @@ All notable changes to difflow are recorded here. The format follows
   The vendor curve in tests and notebook is illustrative, not a published
   datasheet; the operating point is verified against an independent
   numpy/scipy calculation rather than a textbook figure.
+- **Shell-and-tube design (#403).** New `difflow.shell_and_tube` (JAX, SI,
+  differentiable; a library, not a palette unit): the Kern shell side
+  (`equivalent_diameter`, `kern_shell_side`, `kern_shell_pressure_drop`),
+  `tube_side_pressure_drop` (friction from `fluids.friction_factor` plus return
+  losses), continuous `tube_count` and `bundle_diameter`, BWG / TEMA tables,
+  and `ShellAndTubeDesign`, which iterates `U` (area from `Q/(U F LMTD)`,
+  geometry, `heat_transfer.internal_h` and Kern films, `overall_U` with
+  fouling) as an `optx.fixed_point`, so the area is differentiable in baffle
+  spacing, tube velocity, passes, flows, fouling and properties. Returns the
+  geometry, `U`, area, both `dP`, `F` and flags (`F < 0.75`, `dP` limits,
+  convergence, laminar tubes), with a simple isothermal mode for a condensing
+  or boiling side, `rate()` to re-rate a geometry and `round_design()` to
+  turn the continuous tube count, passes and baffle spacing into a buildable
+  one. Docs (`### ShellAndTubeDesign`), tests and example notebook 46
+  (gradient-based cost minimisation; placeholder prices). **The Kern
+  kerosene-crude textbook example is not reproduced** and the Kern constants,
+  bundle-diameter constants and tube tables are recalled from memory and
+  unverified; the docs and tests say what was and was not checked. The `U`
+  fixed point is not unique with a fixed tube length (a second, large-area
+  laminar solution exists); it is flagged.
+- `effectiveness_shell_and_tube(NTU, Cr, n_shells)`: exact 1-2N effectiveness
+  for one or several shells in series.
 - **Heat-transfer coefficients (#402).** New `difflow.heat_transfer` (pure JAX
   functions, SI, differentiable; not a palette unit): `reynolds`, `prandtl`,
   `grashof`, `rayleigh`, `nusselt_to_h`; conduction (`slab_`/`cylinder_`/
@@ -239,6 +261,14 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Fixed
 
+- `lmtd_correction_factor` returned its `R = 1` value for every `R` beyond
+  1 +/- 0.075 (the blend weight was a cubic that clipped to 0 instead of
+  saturating at 1), e.g. F = 0.969 for both R = 0.5 and R = 2 at P = 0.3 where
+  the Bowman formula gives 0.987 and 0.883 (#403).
+- `ShellAndTubeHX` computed `Q = F * Q_counter-current(UA)`, which is not
+  `Q = UA F LMTD` and under-predicted the duty by a few percent (3 % in the
+  #403 test case). It now uses the exact 1-2N (and n-shell) effectiveness.
+  Results of existing `ShellAndTubeHX` flowsheets change accordingly (#403).
 - A thermo or EOS object built inside `jax.jit` no longer gets a value key
   (#395): its derived arrays are tracers, and a later equal-valued eager
   object hit a cache entry holding dead tracers (`UnexpectedTracerError`).

@@ -199,6 +199,7 @@ from difflow.units.pump import (
     pumps_in_series,
     system_curve,
 )
+from difflow import shell_and_tube  # library (not a palette unit): Kern design, see docs
 from difflow.units.eos_units import (
     Turboexpander,
     TurboexpanderParams,

@@ -31,7 +31,7 @@ Contents
   :data:`TYPICAL_U_RANGES`, :func:`typical_U_range`
 
 Not included (out of scope or optional, see ``docs``): annular fins, tube banks
-(Zukauskas), the Kern / Bell-Delaware shell-side method, radiation, transient
+(Zukauskas), the Bell-Delaware shell-side method (Kern is in :mod:`difflow.shell_and_tube`), radiation, transient
 conduction.
 
 Example:
