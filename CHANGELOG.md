@@ -138,6 +138,16 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **Phase-diagram helpers and Wilson / Margules / van Laar activity models
+  (#398).** `difflow.activity` defines the `ActivityModel` protocol (a
+  `gamma(x, T)` method; `activity_gamma` dispatches) with `WilsonParams`,
+  `MargulesParams` (two-/three-suffix) and `VanLaarParams`; `NRTLParams` and
+  `UNIQUACParams` gained `gamma` adapters, and `Flash(activity_model=...)` now
+  accepts any of them (NRTL results unchanged). `difflow.phase_diagrams` adds
+  `txy`, `pxy`, `xy_curve`, `find_azeotrope` (masked, no Python branch on
+  traced values) and `ternary_lle`; `difflow.visualization` adds `plot_txy`,
+  `plot_pxy`, `plot_xy`, `plot_ternary`. Example notebook
+  `examples/41_phase_diagrams.ipynb`. UNIFAC is a follow-up.
 - `difflow.solvers.pounce_problem` builds the configured pounce Problem once
   so repeated solves reuse the compiled residual and Jacobian (about 0.1 s
   against 30 s on a nested-EOS flowsheet, #394). `solve_with_pounce` is now a

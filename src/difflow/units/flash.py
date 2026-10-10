@@ -101,8 +101,11 @@ class Flash:
             k_ij: Binary interaction parameters for EOS (n x n matrix).
                 Ignored when ``eos`` is None.
             activity_model: Optional liquid-phase activity-coefficient model
-                (an :class:`~difflow.units.lle.NRTLParams` whose ``species``
-                match ``params.species_order``). When provided (and no EOS),
+                implementing the :class:`~difflow.activity.ActivityModel`
+                protocol (a ``gamma(x, T)`` method): ``NRTLParams``,
+                ``UNIQUACParams``, ``WilsonParams``, ``MargulesParams`` or
+                ``VanLaarParams``, with ``species`` matching
+                ``params.species_order``. When provided (and no EOS),
                 K-values follow the modified Raoult's law
                 ``K_i = gamma_i(x, T) * Psat_i / P`` so non-ideal liquid
                 behavior — including azeotropes — is captured (#90).
@@ -154,7 +157,7 @@ class Flash:
         elif self.activity_model is not None:
             # --- Activity-coefficient (gamma-phi) path: modified Raoult's law
             # K_i = gamma_i(x, T) * Psat_i / P, capturing azeotropes (#90). ---
-            from difflow.units.lle import nrtl_activity_coefficients
+            from difflow.activity import activity_gamma
             # Ideal K = Psat/P; gamma multiplies it.
             K_ideal = jnp.clip(self.thermo.K_values_array(T, P), K_MIN, K_MAX)
 
@@ -163,7 +166,7 @@ class Flash:
             x_iter = z
             V_frac = jnp.asarray(0.5)
             for _ in range(30):
-                gamma = nrtl_activity_coefficients(x_iter, T, self.activity_model)
+                gamma = activity_gamma(self.activity_model, x_iter, T)
                 K = jnp.clip(gamma * K_ideal, K_MIN, K_MAX)
                 bubble_check = jnp.sum(z * K)
                 dew_check = jnp.sum(z / K)
@@ -172,7 +175,7 @@ class Flash:
                 x_iter = x_new / jnp.sum(x_new)
 
             x = x_iter
-            gamma = nrtl_activity_coefficients(x, T, self.activity_model)
+            gamma = activity_gamma(self.activity_model, x, T)
             K = jnp.clip(gamma * K_ideal, K_MIN, K_MAX)
             y = jnp.where(
                 V_frac > 1e-10,

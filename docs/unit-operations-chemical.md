@@ -622,6 +622,29 @@ liquid, vapor, info = flash(feed)
 print(f"Vapor fraction: {info['V_frac']:.3f}")
 ```
 
+##### Flash with an activity model (non-ideal liquid)
+
+With `activity_model=` the K-values follow the modified Raoult's law
+$K_i = \gamma_i(x,T)\,P_i^{sat}(T)/P$, which captures azeotropes. The argument is
+any **activity model**: an object with a `gamma(x, T)` method (the
+`difflow.activity.ActivityModel` protocol). `NRTLParams`, `UNIQUACParams`,
+`WilsonParams`, `MargulesParams` and `VanLaarParams` all qualify (Margules and
+van Laar are binary; Wilson cannot predict liquid-liquid splitting). `species`
+of the model must match `species_order`. The NRTL path is unchanged. See
+[Activity-Coefficient Models](thermodynamics.md#activity-coefficient-models) and,
+for Txy/Pxy/xy diagrams, [Phase Diagrams](thermodynamics.md#phase-diagrams).
+
+```python
+from difflow import WilsonParams
+
+wilson = WilsonParams.binary(("methanol", "water"), [40.73e-6, 18.07e-6], 667.0, 1981.0)
+th = IdealThermo({n: get_species_data(n) for n in ("methanol", "water")})
+f = Flash(FlashParams(species_order=["methanol", "water"]), th, activity_model=wilson)
+feed = make_stream({"methanol": 0.5, "water": 0.5}, T=345.0, P=101325.0)
+liquid, vapor, info = f(feed)
+print(f"Vapor fraction: {float(info['V_frac']):.3f}")
+```
+
 (eosflash)=
 ##### EOSFlash (Non-Ideal)
 
