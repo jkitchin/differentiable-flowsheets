@@ -8,6 +8,24 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Breaking
 
+- **Cubic EOS liquid root near 1 bar; results change (#417).**
+  `PengRobinson`/`SRK` clamped every root at Z >= 0.01, which replaced the
+  liquid root of water, benzene, heptane, pentane... near atmospheric
+  pressure (true Z ~ 0.001-0.007). Liquid density, liquid fugacity, the
+  `flash_TP_eos` phase split (cold liquid water at 3 bar flashed to vapor)
+  and `CubicThermo.stream_enthalpy_flash` were wrong there. The bound is now
+  the co-volume, Z > B. Cases above ~5 bar or near critical are unchanged.
+- **Heat-exchanger formulas corrected; results change (#418).**
+  `lmtd_correction_factor` used the R = 1 limit for every R (F = 0.969 for
+  R = 2, P = 0.3; exact 0.883) and the multi-shell P conversion failed at
+  R = 1; `effectiveness_crossflow_both_unmixed` returned the counter-current
+  value; the Cmax/Cmin-mixed cross-flow forms blended toward NTU/(1+NTU)
+  near Cr = 1 (15% high). `ShellAndTubeHX` now rates with the exact 1-2N
+  effectiveness (new `effectiveness_shell_and_tube`) and reports
+  F = Q/(UA LMTD_cc). `EnthalpyCounterCurrentHX` solves Q by bisection on
+  [0, Q_max] (the damped fixed point diverged at high NTU; `damping` is
+  now unused).
+
 - **Core database heat capacities moved; results change (#393).** Every
   species now carries an explicit ideal-gas Cp cubic (`SpeciesData
   .Cp_vapor_coeffs`; Poling, Prausnitz & O'Connell 5th ed. Cp/R quartic,

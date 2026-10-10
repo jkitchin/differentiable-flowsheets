@@ -596,3 +596,43 @@ class TestCubicThermo:
             lambda T: cubic.stream_entropy_flash(flows, T, jnp.array(8e5))
         )(jnp.array(320.0))
         assert jnp.isfinite(g)
+
+
+class TestLiquidRootNearAtmospheric:
+    """The liquid root is the smallest root of the cubic, however small (#417).
+
+    A fixed floor of Z = 0.01 once replaced it for water, benzene, heptane,
+    pentane near 1 bar (true Z ~ 0.001-0.007), which made the liquid
+    fugacity and density wrong and flashed cold liquid water to vapor.
+    """
+
+    CASES = [("water", 300.0, 1e5), ("n_heptane", 300.0, 1e5),
+             ("benzene", 300.0, 1e5), ("n_pentane", 300.0, 1.5e5),
+             ("propane", 250.0, 5e5)]
+
+    @pytest.mark.parametrize("eos_cls", ["PengRobinson", "SRK"])
+    @pytest.mark.parametrize("name,T,P", CASES)
+    def test_root_matches_numpy(self, eos_cls, name, T, P):
+        import numpy as np
+        import difflow.eos as eos_mod
+        from difflow.database import get_critical_props
+        eos = getattr(eos_mod, eos_cls)({name: get_critical_props(name)})
+        z = jnp.array([1.0])
+        c2, c1, c0 = eos.compressibility_cubic(T, P, z)
+        roots = [r.real for r in np.roots([1.0, float(c2), float(c1), float(c0)])
+                 if abs(r.imag) < 1e-12 and r.real > 0]
+        assert float(eos.solve_Z(T, P, z, "liquid")) == pytest.approx(min(roots), rel=1e-9)
+        assert float(eos.solve_Z(T, P, z, "vapor")) == pytest.approx(max(roots), rel=1e-9)
+
+    def test_water_liquid_density_and_flash(self):
+        from difflow.database import get_critical_props
+        from difflow.eos import flash_TP_eos
+        eos = PengRobinson({"water": get_critical_props("water")})
+        z = jnp.array([1.0])
+        # PR overpredicts water's molar volume (~47,000 vs 55,300 mol/m^3)
+        # but is nowhere near the 4,009 the Z floor gave.
+        assert 4.5e4 < float(eos.density(300.0, 1e5, z, "liquid")) < 5.0e4
+        # water at 3 bar boils at 406.7 K: liquid below, vapor above
+        assert float(flash_TP_eos(eos, z, 320.0, 3e5)[0]) == 0.0
+        assert float(flash_TP_eos(eos, z, 400.0, 3e5)[0]) == 0.0
+        assert float(flash_TP_eos(eos, z, 415.0, 3e5)[0]) == 1.0

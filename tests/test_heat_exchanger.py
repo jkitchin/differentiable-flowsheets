@@ -6,6 +6,7 @@ from functools import lru_cache
 import pytest
 import jax
 import jax.numpy as jnp
+import numpy as np
 
 from difflow import make_stream
 from difflow.streams import get_flows
@@ -31,9 +32,14 @@ from difflow.units.heat_exchanger import (
     effectiveness_crossflow_cmax_mixed,
     effectiveness_crossflow_cmin_mixed,
     effectiveness_crossflow_both_mixed,
+    effectiveness_shell_and_tube,
+    lmtd_correction_factor,
+    ShellAndTubeHX,
+    ShellAndTubeHXParams,
     design_heat_exchanger,
     size_heat_exchanger,
 )
+from jax.test_util import check_grads
 
 
 class TestLMTD:
@@ -339,14 +345,15 @@ class TestCrossFlowEffectiveness:
         NTU = jnp.array(2.0)
         Cr = jnp.array(1.0)
 
-        # All mixed configurations should give same result for Cr=1
+        # At Cr = 1 the Cmax-mixed and Cmin-mixed formulas coincide:
+        # eps = 1 - exp(-(1 - exp(-NTU))) = 0.5788 at NTU = 2. (Not the
+        # counter-current NTU/(1+NTU) = 0.667, which they once blended to; #418.)
         eps_cmax = effectiveness_crossflow_cmax_mixed(NTU, Cr)
         eps_cmin = effectiveness_crossflow_cmin_mixed(NTU, Cr)
 
-        # Should be close to NTU/(1+NTU)
-        expected = NTU / (1.0 + NTU)
-        assert float(eps_cmax) == pytest.approx(float(expected), rel=0.05)
-        assert float(eps_cmin) == pytest.approx(float(expected), rel=0.05)
+        expected = 1.0 - np.exp(-(1.0 - np.exp(-2.0)))
+        assert float(eps_cmax) == pytest.approx(expected, rel=1e-12)
+        assert float(eps_cmin) == pytest.approx(expected, rel=1e-12)
 
 
 class TestCrossFlowHX:
@@ -947,3 +954,87 @@ class TestEnthalpyHXThroughBoiling:
         eps = 1e-3
         fd = (T_cold_out(150.0 + eps) - T_cold_out(150.0 - eps)) / (2 * eps)
         assert float(g) == pytest.approx(float(fd), rel=1e-4)
+
+
+class TestClosedFormValues:
+    """Every effectiveness and F against its textbook closed form (issue #418).
+
+    Incropera, DeWitt, Bergman 7e Table 11.3; Bowman, Mueller, Nagle (1940).
+    The old tests checked only ranges and monotonicity, which let a blend
+    that silently replaced the formula pass for years.
+    """
+
+    @staticmethod
+    def eps_shell(NTU, Cr, N):
+        s = np.sqrt(1 + Cr**2)
+        e1 = 2 / (1 + Cr + s / np.tanh(NTU / N * s / 2))
+        if Cr == 1:
+            return N * e1 / (1 + (N - 1) * e1)
+        a = ((1 - e1 * Cr) / (1 - e1)) ** N
+        return (a - 1) / (a - Cr)
+
+    @staticmethod
+    def F_1_2(R, P):
+        s = np.sqrt(R**2 + 1)
+        return s * np.log((1 - P) / (1 - R * P)) / (
+            (R - 1) * np.log((2 - P * (R + 1 - s)) / (2 - P * (R + 1 + s))))
+
+    @pytest.mark.parametrize("R,P", [(2.0, 0.3), (0.5, 0.6), (3.0, 0.25),
+                                     (1.03, 0.4), (0.98, 0.5), (1.5, 0.3)])
+    def test_F_one_shell(self, R, P):
+        assert float(lmtd_correction_factor(R, P)) == pytest.approx(
+            self.F_1_2(R, P), rel=1e-6)
+
+    def test_F_symmetry_and_balanced_limit(self):
+        # F(R, P) = F(1/R, P R), and at R = 1 the L'Hopital limit
+        assert float(lmtd_correction_factor(2.0, 0.3)) == pytest.approx(
+            float(lmtd_correction_factor(0.5, 0.6)), rel=1e-9)
+        P = 0.5
+        F1 = P * np.sqrt(2) / ((1 - P) * np.log((2 - P * (2 - np.sqrt(2)))
+                                                / (2 - P * (2 + np.sqrt(2)))))
+        assert float(lmtd_correction_factor(1.0, P)) == pytest.approx(F1, rel=1e-9)
+
+    def test_F_gradient_is_not_zero(self):
+        assert float(jax.grad(lambda R: lmtd_correction_factor(R, 0.3))(2.0)) < -0.05
+
+    @pytest.mark.parametrize("NTU", [0.5, 2.0, 4.0])
+    @pytest.mark.parametrize("Cr", [1e-9, 0.5, 0.97, 1.0])
+    @pytest.mark.parametrize("N", [1, 2, 3])
+    def test_shell_and_tube_effectiveness(self, NTU, Cr, N):
+        assert float(effectiveness_shell_and_tube(NTU, Cr, N)) == pytest.approx(
+            self.eps_shell(NTU, Cr, N), rel=2e-6)
+
+    def test_crossflow_both_unmixed_is_not_counter_current(self):
+        NTU, Cr = 1.5, 0.6
+        expected = 1 - np.exp(NTU**0.22 / Cr * (np.exp(-Cr * NTU**0.78) - 1))
+        eps = float(effectiveness_crossflow_both_unmixed(NTU, Cr))
+        assert eps == pytest.approx(expected, rel=1e-12)
+        assert eps < float(effectiveness_counter_current(NTU, Cr)) - 0.02
+
+    @pytest.mark.parametrize("Cr", [1e-6, 0.5, 0.97, 1.0])
+    def test_crossflow_mixed(self, Cr):
+        NTU = 1.5
+        cmax = (1 / Cr) * (1 - np.exp(-Cr * (1 - np.exp(-NTU))))
+        cmin = 1 - np.exp(-(1 / Cr) * (1 - np.exp(-Cr * NTU)))
+        assert float(effectiveness_crossflow_cmax_mixed(NTU, Cr)) == pytest.approx(cmax, rel=1e-9)
+        assert float(effectiveness_crossflow_cmin_mixed(NTU, Cr)) == pytest.approx(cmin, rel=1e-9)
+
+    @pytest.mark.parametrize("UA,N", [(500.0, 1), (3000.0, 1), (1500.0, 2), (3000.0, 2)])
+    def test_shell_and_tube_hx_rating(self, UA, N):
+        """Q is the exact 1-2N rating, and the reported F is F(R, P, N)."""
+        hot = make_stream({"water": 10.0}, T=420.0, P=2e5)
+        cold = make_stream({"water": 20.0}, T=300.0, P=2e5)
+        hx = ShellAndTubeHX(ShellAndTubeHXParams(UA=UA, Cp_hot=75.0, Cp_cold=75.0,
+                                                 n_shell_passes=N))
+        _, _, info = hx(hot, cold)
+        assert float(info["Q"]) == pytest.approx(
+            self.eps_shell(UA / 750.0, 0.5, N) * 750.0 * 120.0, rel=1e-9)
+        assert float(info["F_correction"]) == pytest.approx(
+            float(lmtd_correction_factor(info["R"], info["P_param"], N)), rel=1e-6)
+
+    def test_gradients(self):
+        check_grads(lambda R: lmtd_correction_factor(R, 0.3, 2), (2.0,), order=1, modes=["rev"])
+        check_grads(lambda n: effectiveness_shell_and_tube(n, 0.5, 2), (1.5,), order=1,
+                    modes=["fwd", "rev"])
+        check_grads(lambda c: effectiveness_crossflow_both_unmixed(1.5, c), (0.6,), order=1,
+                    modes=["rev"])
