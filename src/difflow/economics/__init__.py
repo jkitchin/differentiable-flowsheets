@@ -189,6 +189,14 @@ from .profitability import (
     npv_objective,
 )
 
+# Pipe insulation: installed cost and economic thickness
+from .insulation import (
+    insulation_volume_per_length,
+    insulation_installed_cost,
+    insulation_annual_cost,
+    economic_insulation_thickness,
+)
+
 __all__ = [
     "CostRangeWarning",
     # Indices
@@ -312,4 +320,8 @@ __all__ = [
     "npv_sensitivity",
     "profit_objective",
     "npv_objective",
+    "insulation_volume_per_length",
+    "insulation_installed_cost",
+    "insulation_annual_cost",
+    "economic_insulation_thickness",
 ]

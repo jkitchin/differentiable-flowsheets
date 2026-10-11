@@ -9,6 +9,7 @@ This document provides comprehensive documentation for the technoeconomic analys
    - [Equipment Cost Correlations](#equipment-cost-correlations)
    - [Installation Factors](#installation-factors)
    - [Total Capital Investment](#total-capital-investment)
+   - [Pipe Insulation](#pipe-insulation)
 3. [Utility Costs](#utility-costs)
    - [Steam](#steam)
    - [Cooling Water](#cooling-water)
@@ -41,7 +42,8 @@ difflow/economics/
 ├── utilities.py     # Utility cost models
 ├── opex.py          # Operating cost calculations
 ├── profitability.py # Financial metrics (NPV, IRR, MSP)
-└── indices.py       # Cost index escalation (CEPCI)
+├── indices.py       # Cost index escalation (CEPCI)
+└── insulation.py    # Pipe insulation cost and economic thickness
 ```
 
 **Key Features**:
@@ -315,6 +317,20 @@ print(f"Fixed capital: ${result.fixed_capital_investment:,.0f}")
 print(f"Working capital: ${result.working_capital:,.0f}")
 print(f"Total capital: ${result.total_capital_investment:,.0f}")
 ```
+
+### Pipe Insulation
+
+**Location**: `difflow/economics/insulation.py`
+
+`insulation_installed_cost(D_o, thickness, cost_per_m3, cost_per_m2=0,
+cost_per_m=0, base_year=None, target_year=None)` is the installed cost per metre
+of pipe, linear in the insulated volume $\pi t(D_o+t)$ with optional cladding-area
+and per-metre terms, escalated by CEPCI when both years are given.
+`economic_insulation_thickness(...)` minimises the annualised insulation cost
+(capital recovery factor) plus the cost of the heat lost
+(`heat_transfer.insulated_pipe_heat_loss`), and is differentiable in every input.
+The unit cost is a **required input with no default**: no published coefficient
+could be checked (see [Economic insulation thickness](unit-operations-chemical.md#heat-transfer-insulation)).
 
 ---
 
