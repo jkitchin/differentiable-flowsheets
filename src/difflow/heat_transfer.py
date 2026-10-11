@@ -6,9 +6,9 @@ works, including through the laminar-transition-turbulent blend. Nothing here
 is a palette unit; the heat exchangers (:mod:`difflow.units.heat_exchanger`)
 still take ``U`` / ``UA`` as numbers, and these functions compute the number.
 
-Liquid and gas properties are *inputs* (core ``SpeciesData`` has no liquid
-thermal conductivity or viscosity): every function takes ``k``, ``mu``,
-``Cp`` and ``rho`` explicitly, as :mod:`difflow.fluids` does.
+Liquid and gas properties are *inputs*: every function takes ``k``, ``mu``,
+``Cp`` and ``rho`` explicitly, as :mod:`difflow.fluids` does. Look them up
+with :mod:`difflow.liquid_properties` or :mod:`difflow.gas_properties`.
 
 Contents
 --------
@@ -27,12 +27,24 @@ Contents
 * Phase change: :func:`nusselt_film_condensation`,
   :func:`rohsenow_heat_flux`, :func:`rohsenow_superheat`, :func:`mostinski`,
   :func:`critical_heat_flux`
+* Annulus: :func:`annulus_nusselt` (laminar, Incropera Table 8.2)
 * Overall coefficient: :func:`overall_U`, :data:`FOULING_RESISTANCES`,
-  :data:`TYPICAL_U_RANGES`, :func:`typical_U_range`
+  :data:`FOULING_RESISTANCE_RANGES`, :data:`TYPICAL_U_RANGES`,
+  :func:`typical_U_range`
+* Radiation: :data:`STEFAN_BOLTZMANN`, :func:`blackbody_emissive_power`,
+  :func:`radiation_h`, :func:`net_radiation`, :func:`two_surface_radiation`
+* Lumped-capacitance transients: :func:`biot_number`,
+  :func:`lumped_time_constant`, :func:`lumped_temperature`,
+  :func:`lumped_heating_time`
+
+Gas properties for the dimensionless groups are in :mod:`difflow.gas_properties`
+(air, N2, O2, CO2, CH4, H2, steam, ...) and liquid ones in
+:mod:`difflow.liquid_properties`.
 
 Not included (out of scope or optional, see ``docs``): annular fins, tube banks
-(Zukauskas), the Bell-Delaware shell-side method (Kern is in :mod:`difflow.shell_and_tube`), radiation, transient
-conduction.
+(Zukauskas), the Bell-Delaware shell-side method (Kern is in :mod:`difflow.shell_and_tube`),
+multi-dimensional transient conduction (Heisler charts), agitated-vessel
+(jacket) coefficients.
 
 Example:
     >>> from difflow.heat_transfer import internal_h, overall_U
@@ -58,8 +70,9 @@ GRAVITY = fluids.GRAVITY
 #: Fully developed laminar Nusselt number in a circular tube, uniform wall
 #: temperature (Incropera & DeWitt Eq. 8.55).
 NU_LAMINAR_TW = 3.66
-#: Same, uniform wall heat flux (Incropera & DeWitt Eq. 8.53).
-NU_LAMINAR_QS = 4.36
+#: Same, uniform wall heat flux (Incropera & DeWitt Eq. 8.53): exactly 48/11
+#: = 4.3636 (the book rounds it to 4.36).
+NU_LAMINAR_QS = 48.0 / 11.0
 
 #: Reynolds numbers bounding the laminar-turbulent blend in tubes. Below
 #: ``RE_LAMINAR`` the result is purely laminar, above ``RE_TURBULENT`` purely
@@ -409,7 +422,7 @@ def internal_nusselt(
     """Nusselt number in a circular tube, laminar through turbulent, smooth in Re.
 
     * Laminar (``Re <= 2300``): fully developed ``Nu = 3.66`` (``boundary="T"``,
-      constant wall temperature) or ``4.36`` (``"q"``, constant flux). If
+      constant wall temperature) or ``48/11 = 4.364`` (``"q"``, constant flux). If
       ``D_over_L`` is given, the entry-region
       :func:`sieder_tate_laminar` is joined by a smooth asymptotic combination
       ``Nu = (Nu_fd^3 + Nu_entry^3)^(1/3)`` (Churchill-Usagi; *not* a published
@@ -888,25 +901,88 @@ def overall_U(
     return 1.0 / inv
 
 
-#: Typical fouling resistances ``R_f`` (m^2 K/W). **Transcribed from memory of
-#: Incropera & DeWitt Table 11.1 (which cites the TEMA standards) and NOT
-#: re-checked against the book or TEMA**; treat as order-of-magnitude placeholders
-#: and replace with the values of your own standard for design work.
+#: Typical fouling resistances ``R_f`` (m^2 K/W), one value per service.
+#:
+#: * The first six entries plus ``treated_boiler_feedwater_below_50C`` and
+#:   ``river_water_below_50C`` are Incropera & DeWitt, *Fundamentals of Heat
+#:   and Mass Transfer*, Table 11.1 (from TEMA). The six were checked against
+#:   the table while the unit-operations book was written.
+#: * The rest are Sinnott, *Coulson & Richardson's Chemical Engineering*
+#:   Vol. 6, 4th ed., Table 12.2. That table lists fouling
+#:   *coefficients* as ranges; the value here is the larger (conservative)
+#:   resistance of the range, and :data:`FOULING_RESISTANCE_RANGES` has both
+#:   ends. (Its "steam, oil-free" row prints 0.0025; the coefficient,
+#:   4000-10000 W/m^2/K, makes it 0.00025.)
+#:
+#: Not included: crude oil by temperature and velocity, and lube oil. These
+#: are TEMA RGP-T-2.4 entries, and no copy of that table could be checked.
+#: ``heavy_hydrocarbons`` (0.0005) is the nearest Sinnott entry. Use your own
+#: standard for design.
 FOULING_RESISTANCES: dict[str, float] = {
+    # Incropera & DeWitt Table 11.1
     "seawater_below_50C": 0.0001,
     "seawater_above_50C": 0.0002,
+    "treated_boiler_feedwater_below_50C": 0.0001,
     "treated_boiler_feedwater_above_50C": 0.0002,
+    "river_water_below_50C": 0.001,
     "fuel_oil": 0.0009,
     "refrigerating_liquids": 0.0002,
     "steam_oil_free": 0.0001,
+    # Sinnott (Coulson & Richardson Vol. 6) Table 12.2, larger end of the range
+    "river_water": 0.0003,
+    "sea_water": 0.001,
+    "cooling_tower_water": 0.0003,
+    "town_water_soft": 0.0003,
+    "town_water_hard": 0.001,
+    "steam_condensate": 0.00067,
+    "steam_oil_traces": 0.0005,
+    "refrigerated_brine": 0.0003,
+    "aqueous_salt_solutions": 0.0003,
+    "air_and_industrial_gases": 0.0002,
+    "flue_gases": 0.0005,
+    "organic_vapours": 0.0002,
+    "organic_liquids": 0.0002,
+    "light_hydrocarbons": 0.0002,
+    "heavy_hydrocarbons": 0.0005,
+    "boiling_organics": 0.0004,
+    "condensing_organics": 0.0002,
+    "heat_transfer_fluids": 0.0002,
 }
 
-#: Typical overall U ranges ``(low, high)`` in W/m^2/K by service. **Transcribed
-#: from memory of Incropera & DeWitt Table 11.2 and NOT re-checked**; use only
-#: as a sanity band for a computed U.
+#: ``(low, high)`` fouling resistance (m^2 K/W) where the source gives a range
+#: (Incropera Table 11.1 river water; Sinnott Table 12.2). Single-valued
+#: entries of :data:`FOULING_RESISTANCES` have ``low == high``.
+FOULING_RESISTANCE_RANGES: dict[str, tuple[float, float]] = {
+    **{k: (v, v) for k, v in FOULING_RESISTANCES.items()},
+    "river_water_below_50C": (0.0002, 0.001),
+    "river_water": (0.0001, 0.0003),
+    "sea_water": (0.0003, 0.001),
+    "cooling_tower_water": (0.00017, 0.0003),
+    "town_water_soft": (0.0002, 0.0003),
+    "town_water_hard": (0.0005, 0.001),
+    "steam_condensate": (0.0002, 0.00067),
+    "steam_oil_traces": (0.0002, 0.0005),
+    "refrigerated_brine": (0.0002, 0.0003),
+    "aqueous_salt_solutions": (0.0002, 0.0003),
+    "air_and_industrial_gases": (0.0001, 0.0002),
+    "flue_gases": (0.0002, 0.0005),
+}
+
+#: Source of each :data:`FOULING_RESISTANCES` entry.
+FOULING_SOURCES: dict[str, str] = {
+    k: ("Incropera & DeWitt, Fundamentals of Heat and Mass Transfer, Table 11.1"
+        if i < 8 else
+        "Sinnott, Coulson & Richardson's Chemical Engineering Vol. 6, 4th ed., Table 12.2")
+    for i, k in enumerate(FOULING_RESISTANCES)
+}
+
+#: Typical overall U ranges ``(low, high)`` in W/m^2/K by service, from
+#: Incropera & DeWitt Table 11.2 (checked against the table while the
+#: unit-operations book was written; water-to-oil corrected from 100 to 110).
+#: Use only as a sanity band for a computed U.
 TYPICAL_U_RANGES: dict[str, tuple[float, float]] = {
     "water_to_water": (850.0, 1700.0),
-    "water_to_oil": (100.0, 350.0),
+    "water_to_oil": (110.0, 350.0),
     "steam_condenser_water_in_tubes": (1000.0, 6000.0),
     "ammonia_condenser_water_in_tubes": (800.0, 1400.0),
     "alcohol_condenser_water_in_tubes": (250.0, 700.0),
@@ -932,6 +1008,258 @@ def typical_U_range(service: str) -> tuple[float, float]:
         raise KeyError(f"Unknown service {service!r}; use one of {sorted(TYPICAL_U_RANGES)}") from None
 
 
+# ----------------------------------------------------------------------
+# Laminar annulus
+# ----------------------------------------------------------------------
+#: Incropera & DeWitt Table 8.2: fully developed laminar flow in a concentric
+#: annulus with one surface insulated and the other at constant temperature
+#: (after Kays & Perkins). Columns ``Di/Do``, ``Nu_i`` (inner surface heated),
+#: ``Nu_o`` (outer surface heated); Nu based on ``D_h = Do - Di``. The values
+#: were reproduced independently, to +-0.01, by a finite-difference solution
+#: of the Graetz eigenproblem (``tests/test_heat_transfer.py::TestAnnulus``).
+ANNULUS_NUSSELT_TABLE = (
+    (0.0, float("nan"), 3.66),
+    (0.05, 17.46, 4.06),
+    (0.10, 11.56, 4.11),
+    (0.25, 7.37, 4.23),
+    (0.50, 5.74, 4.43),
+    (1.00, 4.86, 4.86),
+)
+
+
+def annulus_nusselt(Di_over_Do: Array | float, surface: str = "inner") -> Array:
+    """Fully developed laminar Nusselt number in a concentric annulus.
+
+    Linear interpolation in Incropera & DeWitt Table 8.2 (one surface at
+    constant temperature, the other insulated), as Incropera's Example 11.1
+    does (``Nu_i = 5.63`` at ``Di/Do = 0.56``). Use it with the hydraulic
+    diameter ``D_h = Do - Di``: ``h = Nu k / D_h``.
+
+    For **turbulent** flow in an annulus, use the tube correlations
+    (:func:`internal_nusselt`, Gnielinski or Dittus-Boelter) with
+    ``Re`` and ``Nu`` based on ``D_h`` (Incropera Sec. 8.7). Laminar flow is
+    where the annulus needs its own numbers.
+
+    Args:
+        Di_over_Do: Inner over outer diameter, 0-1 (``"inner"``: 0.05-1;
+            below 0.05 the inner value is held at 17.46, and it diverges as
+            Di/Do -> 0).
+        surface: ``"inner"`` (inner tube heated or cooled, outer insulated:
+            a double-pipe exchanger's annulus) or ``"outer"``.
+
+    Returns:
+        Nu based on ``D_h`` (-). Piecewise linear in ``Di/Do``, so the
+        gradient jumps at the table points.
+
+    Example:
+        >>> round(float(annulus_nusselt(0.56, "inner")), 2)   # Incropera Ex 11.1
+        5.63
+    """
+    if surface not in ("inner", "outer"):
+        raise ValueError(f"surface must be 'inner' or 'outer', got {surface!r}")
+    r = _f64(Di_over_Do)
+    tab = ANNULUS_NUSSELT_TABLE if surface == "outer" else ANNULUS_NUSSELT_TABLE[1:]
+    xs = jnp.asarray([row[0] for row in tab])
+    ys = jnp.asarray([row[1] if surface == "inner" else row[2] for row in tab])
+    return jnp.interp(r, xs, ys)
+
+
+# ----------------------------------------------------------------------
+# Radiation
+# ----------------------------------------------------------------------
+#: Stefan-Boltzmann constant (W/m^2/K^4), CODATA 2018 (exact in the 2019 SI).
+STEFAN_BOLTZMANN = 5.670374419e-8
+
+
+def blackbody_emissive_power(T: Array | float) -> Array:
+    """Blackbody emissive power ``E_b = sigma T^4`` (W/m^2).
+
+    Args:
+        T: Absolute temperature (K).
+
+    Returns:
+        E_b (W/m^2).
+    """
+    return STEFAN_BOLTZMANN * _f64(T) ** 4
+
+
+def radiation_h(Ts: Array | float, Tsur: Array | float, emissivity: Array | float) -> Array:
+    """Linearized radiation coefficient ``h_r = eps sigma (Ts + Tsur)(Ts^2 + Tsur^2)``.
+
+    For a small gray surface in large isothermal surroundings,
+    ``q'' = h_r (Ts - Tsur)`` exactly (Incropera & DeWitt Eq. 1.9), so ``h_r``
+    adds in parallel with a convection coefficient.
+
+    Args:
+        Ts: Surface temperature (K).
+        Tsur: Surroundings temperature (K).
+        emissivity: Surface emissivity (0-1).
+
+    Returns:
+        h_r (W/m^2/K).
+
+    Example:
+        >>> round(float(radiation_h(438.15, 296.15, 0.85)), 1)
+        9.9
+    """
+    Ts, Tsur = _f64(Ts), _f64(Tsur)
+    return _f64(emissivity) * STEFAN_BOLTZMANN * (Ts + Tsur) * (Ts**2 + Tsur**2)
+
+
+def net_radiation(
+    Ts: Array | float, Tsur: Array | float, emissivity: Array | float, area: Array | float = 1.0
+) -> Array:
+    """Net radiation from a small gray body to large surroundings (W).
+
+    ``q = eps A sigma (Ts^4 - Tsur^4)`` (Incropera & DeWitt Eq. 1.7): the
+    surroundings are large and isothermal (so their emissivity drops out) and
+    the body does not see itself (convex surface).
+
+    Args:
+        Ts: Surface temperature (K).
+        Tsur: Surroundings temperature (K).
+        emissivity: Surface emissivity (0-1).
+        area: Radiating area (m^2); per unit length for a cylinder, ``pi D``.
+
+    Returns:
+        q (W, or W/m with a per-length area); positive when the surface loses heat.
+
+    Example:
+        >>> import math
+        >>> round(float(net_radiation(438.15, 296.15, 0.85, math.pi * 0.1)))  # Incropera Ex 9.4
+        442
+    """
+    return _f64(emissivity) * _f64(area) * STEFAN_BOLTZMANN * (_f64(Ts) ** 4 - _f64(Tsur) ** 4)
+
+
+def two_surface_radiation(
+    T1: Array | float,
+    T2: Array | float,
+    eps1: Array | float,
+    eps2: Array | float,
+    A1: Array | float,
+    A2: Array | float | None = None,
+    F12: Array | float = 1.0,
+) -> Array:
+    """Net radiation exchange in a two-surface gray, diffuse enclosure (W).
+
+    ``q12 = sigma (T1^4 - T2^4) / [(1 - eps1)/(eps1 A1) + 1/(A1 F12)
+    + (1 - eps2)/(eps2 A2)]`` (Incropera & DeWitt Sec. 13.3, two-surface enclosure). Special cases:
+
+    * large parallel plates: ``A1 = A2 = A``, ``F12 = 1``;
+    * long concentric cylinders or concentric spheres: ``F12 = 1``,
+      ``A2 = A1 r2/r1`` (cylinders) or ``A1 (r2/r1)^2`` (spheres);
+    * small convex body in a large cavity: ``A2=None`` (``A2 -> inf``),
+      ``F12 = 1``, which reduces to :func:`net_radiation`.
+
+    Args:
+        T1, T2: Surface temperatures (K).
+        eps1, eps2: Emissivities (0-1).
+        A1: Area of surface 1 (m^2).
+        A2: Area of surface 2 (m^2); None for an enclosing surface much larger than A1.
+        F12: View factor from 1 to 2.
+
+    Returns:
+        q12 (W), positive from 1 to 2.
+    """
+    A1, eps1, eps2 = _f64(A1), _f64(eps1), _f64(eps2)
+    R = (1.0 - eps1) / (eps1 * A1) + 1.0 / (A1 * _f64(F12))
+    if A2 is not None:
+        R = R + (1.0 - eps2) / (eps2 * _f64(A2))
+    return STEFAN_BOLTZMANN * (_f64(T1) ** 4 - _f64(T2) ** 4) / R
+
+
+# ----------------------------------------------------------------------
+# Lumped capacitance (transient)
+# ----------------------------------------------------------------------
+def biot_number(h: Array | float, L_c: Array | float, k: Array | float) -> Array:
+    """Biot number ``Bi = h L_c / k`` (-).
+
+    The lumped-capacitance model (uniform temperature in the solid) is good
+    to about 5 % when ``Bi < 0.1`` with ``L_c = V / A_s`` (Incropera & DeWitt
+    Eq. 5.10).
+
+    Args:
+        h: Surface heat-transfer coefficient (W/m^2/K).
+        L_c: Characteristic length ``V / A_s`` (m).
+        k: Solid thermal conductivity (W/m/K).
+
+    Returns:
+        Bi (-).
+    """
+    return _f64(h) * _f64(L_c) / _f64(k)
+
+
+def lumped_time_constant(m_cp: Array | float, UA: Array | float) -> Array:
+    """Thermal time constant ``tau = m cp / (U A)`` (s).
+
+    Args:
+        m_cp: Heat capacity of the lumped body ``m cp`` (J/K), e.g.
+            ``rho V c`` for a solid or the batch contents of a vessel.
+        UA: Overall conductance to the surroundings or heating medium (W/K).
+
+    Returns:
+        tau (s).
+    """
+    return _f64(m_cp) / _f64(UA)
+
+
+def lumped_temperature(
+    t: Array | float, T0: Array | float, T_inf: Array | float, m_cp: Array | float, UA: Array | float
+) -> Array:
+    """Temperature of a lumped body after time ``t`` (K).
+
+    ``(T - T_inf) / (T0 - T_inf) = exp(-t / tau)`` with ``tau = m cp / UA``
+    (Incropera & DeWitt Eq. 5.6). The same equation governs a well-mixed batch
+    heated through a jacket or coil at a constant medium temperature
+    ``T_inf`` (condensing steam), with ``UA`` the jacket's overall conductance.
+
+    Args:
+        t: Time (s).
+        T0: Initial temperature (K).
+        T_inf: Surroundings / heating-medium temperature (K).
+        m_cp: Heat capacity ``m cp`` (J/K).
+        UA: Conductance ``U A`` (W/K).
+
+    Returns:
+        T(t) (K).
+    """
+    return _f64(T_inf) + (_f64(T0) - _f64(T_inf)) * jnp.exp(-_f64(t) / lumped_time_constant(m_cp, UA))
+
+
+def lumped_heating_time(
+    m: Array | float,
+    cp: Array | float,
+    UA: Array | float,
+    T_st: Array | float,
+    T0: Array | float,
+    T: Array | float,
+) -> Array:
+    """Time for a lumped body or batch to go from ``T0`` to ``T`` (s).
+
+    ``t = (m cp / UA) ln[(T_st - T0) / (T_st - T)]``, the inverse of
+    :func:`lumped_temperature`. Heating (``T0 < T < T_st``) and cooling
+    (``T_st < T < T0``) both work; ``T`` must lie between ``T0`` and ``T_st``.
+
+    Args:
+        m: Mass (kg).
+        cp: Specific heat capacity (J/kg/K).
+        UA: Overall conductance (W/K).
+        T_st: Heating/cooling medium temperature (K), e.g. jacket steam.
+        T0: Initial temperature (K).
+        T: Target temperature (K).
+
+    Returns:
+        t (s).
+
+    Example:
+        >>> # 1000 kg of water, UA = 2 kW/K, steam at 120 C, 20 C -> 80 C
+        >>> round(float(lumped_heating_time(1000.0, 4180.0, 2000.0, 393.15, 293.15, 353.15)))
+        1915
+    """
+    return _f64(m) * _f64(cp) / _f64(UA) * jnp.log((_f64(T_st) - _f64(T0)) / (_f64(T_st) - _f64(T)))
+
+
 __all__ = [
     "GRAVITY",
     "NU_LAMINAR_TW",
@@ -939,7 +1267,11 @@ __all__ = [
     "RE_LAMINAR",
     "RE_TURBULENT",
     "FOULING_RESISTANCES",
+    "FOULING_RESISTANCE_RANGES",
+    "FOULING_SOURCES",
     "TYPICAL_U_RANGES",
+    "ANNULUS_NUSSELT_TABLE",
+    "STEFAN_BOLTZMANN",
     "reynolds",
     "prandtl",
     "nusselt_to_h",
@@ -970,4 +1302,13 @@ __all__ = [
     "critical_heat_flux",
     "overall_U",
     "typical_U_range",
+    "annulus_nusselt",
+    "blackbody_emissive_power",
+    "radiation_h",
+    "net_radiation",
+    "two_surface_radiation",
+    "biot_number",
+    "lumped_time_constant",
+    "lumped_temperature",
+    "lumped_heating_time",
 ]

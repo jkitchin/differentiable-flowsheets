@@ -2532,13 +2532,17 @@ what the velocity and insulation-thickness optimizations use
 | Natural convection | `churchill_chu_vertical_plate`, `churchill_chu_horizontal_cylinder` |
 | Phase change | `nusselt_film_condensation`, `rohsenow_heat_flux`, `rohsenow_superheat`, `mostinski`, `critical_heat_flux` |
 | Fouling | `difflow.fouling` (see [Threshold Fouling](#threshold-fouling)) |
-| Overall | `overall_U`, `FOULING_RESISTANCES`, `TYPICAL_U_RANGES`, `typical_U_range` |
+| Annulus (laminar) | `annulus_nusselt` |
+| Radiation | `STEFAN_BOLTZMANN`, `blackbody_emissive_power`, `radiation_h`, `net_radiation`, `two_surface_radiation` |
+| Lumped transients | `biot_number`, `lumped_time_constant`, `lumped_temperature`, `lumped_heating_time` |
+| Overall | `overall_U`, `FOULING_RESISTANCES`, `FOULING_RESISTANCE_RANGES`, `FOULING_SOURCES`, `TYPICAL_U_RANGES`, `typical_U_range` |
+| Properties | [`difflow.gas_properties`](#gas-properties) (air and common gases), `difflow.liquid_properties` |
 
 **Tube side.** `internal_h(Re, Pr, k, D, L=None, mu_ratio=1, rel_roughness=0,
 method="gnielinski", heating=True, boundary="T")` returns $h=\mathrm{Nu}\,k/D$:
 
 * $\mathrm{Re}\le2300$: fully developed $\mathrm{Nu}=3.66$ (constant wall
-  temperature) or $4.36$ (`boundary="q"`, constant flux); with `L` given, the
+  temperature) or $48/11=4.364$ (`boundary="q"`, constant flux); with `L` given, the
   Sieder-Tate entry form $1.86(\mathrm{Re\,Pr}\,D/L)^{1/3}(\mu_b/\mu_w)^{0.14}$
   joined to it as $(\mathrm{Nu}_{fd}^3+\mathrm{Nu}_{en}^3)^{1/3}$ (a smooth
   combination chosen here, not a published correlation).
@@ -2631,7 +2635,68 @@ Rohsenow's $C_{sf}$ defaults to 0.013 (water on polished copper/platinum),
 recalled from memory of Incropera Table 10.1: check it for real work. Not
 implemented: annular fins, tube banks (Zukauskas), the Bell-Delaware
 shell-side method (Kern is in [`difflow.shell_and_tube`](#shell-and-tube-design)),
-radiation, transient conduction.
+multi-dimensional transient conduction (Heisler charts), and agitated-vessel
+or jacket-side coefficients (no checkable source for the impeller constants).
+
+(annulus-nusselt)=
+#### Laminar annulus: `annulus_nusselt`
+
+`annulus_nusselt(Di_over_Do, surface="inner")` interpolates Incropera &
+DeWitt Table 8.2 linearly: fully developed laminar flow, one surface at
+constant temperature and the other insulated, Nu based on
+$D_h=D_o-D_i$. Incropera's Example 11.1 interpolates the same way
+($\mathrm{Nu}_i=5.63$ at $D_i/D_o=0.56$; the test checks it).
+
+| $D_i/D_o$ | 0 | 0.05 | 0.10 | 0.25 | 0.50 | 1.00 |
+|---|---|---|---|---|---|---|
+| $\mathrm{Nu}_i$ | -- | 17.46 | 11.56 | 7.37 | 5.74 | 4.86 |
+| $\mathrm{Nu}_o$ | 3.66 | 4.06 | 4.11 | 4.23 | 4.43 | 4.86 |
+
+The table is reproduced to within 1% by a finite-difference solution of the
+Graetz eigenproblem in the test suite. Below $D_i/D_o=0.05$ the inner value
+is held at 17.46; it diverges as the inner tube shrinks. For **turbulent**
+flow in an annulus use `internal_nusselt`/`internal_h` with Re and the
+diameter set to $D_h$ (Incropera Sec. 8.7).
+
+(radiation-helpers)=
+#### Radiation
+
+* `net_radiation(Ts, Tsur, emissivity, area=1)` is
+  $q=\varepsilon A\sigma(T_s^4-T_{sur}^4)$, for a small gray body in large
+  surroundings (Incropera Eq. 1.7). Incropera Ex 9.4, a 100 mm pipe at 165 °C
+  with $\varepsilon=0.85$ in a room at 23 °C, gives 442 W/m.
+* `radiation_h(Ts, Tsur, emissivity)` is
+  $h_r=\varepsilon\sigma(T_s+T_{sur})(T_s^2+T_{sur}^2)$. It is exact, so
+  $h_r(T_s-T_{sur})$ equals `net_radiation`, and it adds to a convection $h$
+  in parallel.
+* `two_surface_radiation(T1, T2, eps1, eps2, A1, A2=None, F12=1)` gives the
+  gray, diffuse two-surface enclosure
+  $q_{12}=\sigma(T_1^4-T_2^4)/[(1-\varepsilon_1)/(\varepsilon_1A_1)+1/(A_1F_{12})+(1-\varepsilon_2)/(\varepsilon_2A_2)]$
+  (Incropera Sec. 13.3). It covers parallel plates, concentric cylinders and
+  spheres. `A2=None` means a large enclosure.
+* `blackbody_emissive_power(T)` is $\sigma T^4$, with
+  `STEFAN_BOLTZMANN` $=5.670374419\times10^{-8}$ (CODATA 2018).
+
+(lumped-capacitance)=
+#### Lumped capacitance and batch heating
+
+The same equation, $(T-T_\infty)/(T_0-T_\infty)=e^{-t/\tau}$ with
+$\tau=mc_p/UA$ (Incropera Eq. 5.6), governs two cases: a small solid with
+$\mathrm{Bi}=hL_c/k<0.1$ and $L_c=V/A_s$, and a well-mixed batch heated
+through a jacket or coil from a medium at constant temperature.
+
+* `biot_number(h, L_c, k)`
+* `lumped_time_constant(m_cp, UA)`
+* `lumped_temperature(t, T0, T_inf, m_cp, UA)`
+* `lumped_heating_time(m, cp, UA, T_st, T0, T)` computes
+  $t=(mc_p/UA)\ln[(T_{st}-T_0)/(T_{st}-T)]$. It handles heating and cooling.
+
+The tests check these against `scipy.integrate.solve_ivp`.
+
+```python
+from difflow import heat_transfer as ht
+t = ht.lumped_heating_time(1000.0, 4180.0, 2000.0, 393.15, 293.15, 353.15)  # ~1915 s
+```
 
 **What is validated (and what is not).** No textbook worked-example number is
 quoted, because none could be reproduced with confidence. Each correlation is
@@ -2648,31 +2713,93 @@ MW/m². The published shell-and-tube `overall_U` example and the textbook
 steam and Rohsenow examples are **not** reproduced; `overall_U` is checked
 against the series-resistance network, its limits and $U_oA_o=U_iA_i$.
 
-**Typical fouling resistances** (`FOULING_RESISTANCES`, m² K/W; transcribed
-from memory of Incropera Table 11.1, which cites TEMA; **not verified**, use
-your own standard for design):
+**Typical fouling resistances** (`FOULING_RESISTANCES`, m² K/W). Each entry
+names its source in `FOULING_SOURCES`, and `FOULING_RESISTANCE_RANGES` holds
+`(low, high)` where the source gives a range. The first block is Incropera &
+DeWitt Table 11.1, which cites TEMA; it was checked against the table while
+the unit-operations book was written. The second block is Sinnott, *Coulson &
+Richardson's Chemical Engineering* Vol. 6 (4th ed.), Table 12.2. That table
+gives coefficient ranges, and the float stored here is the conservative
+(larger-resistance) end. Crude oil by temperature and lube oil (TEMA
+RGP-T-2.4) are **not included** because no copy of the TEMA table could be
+checked. `heavy_hydrocarbons` is the nearest entry. Use your own standard for
+design.
 
-| Service | $R_f$ |
+| Service (Incropera Table 11.1) | $R_f$ |
 |---|---|
 | Seawater, below 50 °C | 0.0001 |
 | Seawater, above 50 °C | 0.0002 |
+| Treated boiler feedwater, below 50 °C | 0.0001 |
 | Treated boiler feedwater, above 50 °C | 0.0002 |
+| River water, below 50 °C | 0.0002-0.001 (stored: 0.001) |
 | Fuel oil | 0.0009 |
 | Refrigerating liquids | 0.0002 |
 | Steam, oil-free | 0.0001 |
 
-**Typical overall U** (`TYPICAL_U_RANGES`, W/m²/K; from memory of Incropera
-Table 11.2, **not verified**; a sanity band for a computed `U`, not a design
-value):
+| Service (Sinnott Table 12.2; key) | $R_f$ range |
+|---|---|
+| River water (`river_water`) | 0.0001-0.0003 |
+| Sea water (`sea_water`) | 0.0003-0.001 |
+| Cooling (tower) water (`cooling_tower_water`) | 0.00017-0.0003 |
+| Town water, soft / hard | 0.0002-0.0003 / 0.0005-0.001 |
+| Steam condensate | 0.0002-0.00067 |
+| Steam, oil traces | 0.0002-0.0005 |
+| Refrigerated brine; aqueous salt solutions | 0.0002-0.0003 |
+| Air and industrial gases | 0.0001-0.0002 |
+| Flue gases | 0.0002-0.0005 |
+| Organic vapours / liquids; light hydrocarbons; condensing organics; heat-transfer fluids | 0.0002 |
+| Heavy hydrocarbons | 0.0005 |
+| Boiling organics | 0.0004 |
+
+**Typical overall U** (`TYPICAL_U_RANGES`, W/m²/K). These are Incropera
+Table 11.2, checked against the table while the unit-operations book was
+written; water-to-oil was corrected from 100-350 to 110-350. Use them as a
+sanity band for a computed `U`, not as a design value.
 
 | Service | U range |
 |---|---|
 | Water to water | 850-1700 |
-| Water to oil | 100-350 |
+| Water to oil | 110-350 |
 | Steam condenser, water in tubes | 1000-6000 |
 | Ammonia condenser, water in tubes | 800-1400 |
 | Alcohol condenser, water in tubes | 250-700 |
 | Finned tube, water in tubes, air in cross flow | 25-50 |
+
+(gas-properties)=
+### Gas Transport Properties
+
+`difflow.gas_properties` covers low-pressure (ideal-gas) transport and heat
+capacity for air, N2, O2, CO2, CO, CH4, H2, Ar, He and H2O (steam). It is a
+pure-JAX library, not a palette operation, and is differentiable in T.
+
+| Function | Returns |
+|---|---|
+| `gas_viscosity(name, T)` | μ (Pa s) |
+| `gas_thermal_conductivity(name, T)` | k (W/m/K) |
+| `gas_heat_capacity(name, T)` | $c_p$ (J/kg/K) |
+| `gas_prandtl(name, T)` | Pr |
+| `gas_density(name, T, P=101325)`, `gas_kinematic_viscosity` | ideal-gas ρ, ν |
+| `gas_transport_properties(name, T, P)` | dict: mu, k, cp, Pr, rho, nu, alpha |
+| `gas_property_range(name, prop)`, `list_gas_species()` | validity range, names |
+| `sutherland_viscosity(T, gas=None, *, mu0, T0, S)`, `sutherland_conductivity` | Sutherland's law (White's constants for air, Ar, N2, O2 in `SUTHERLAND`) |
+
+Each property is a fit $\ln y=\sum a_i[\ln(T/300)]^i$: cubic for μ and k,
+quintic for $c_p$. The fits are made by `scripts/fit_gas_transport.py` to the
+NIST Chemistry WebBook fluid tables at 1 atm (`tests/reference/nist_gases_1atm/`).
+They match every NIST point to 0.2% (μ), 0.55% (k) and 0.15% ($c_p$) over each
+gas's stored range. Air μ and k come from the Engineering ToolBox air tables,
+and air $c_p$ is the mass-weighted N2/O2/Ar NIST mixture. Outside a fit's
+range the value is extrapolated and a `GasRangeWarning` is raised (on
+concrete values only). Air at 300 K gives μ = 18.46 µPa s, k = 26.4 mW/m/K
+and Pr = 0.704, against Incropera Table A.4 values of 18.46, 26.3 and 0.707.
+These properties are for gases at low pressure only; there is no pressure
+correction for dense gases.
+
+```python
+from difflow.gas_properties import gas_transport_properties
+p = gas_transport_properties("air", 350.0)   # film temperature
+p["mu"], p["k"], p["Pr"], p["nu"]
+```
 
 (shell-and-tube-design)=
 ### ShellAndTubeDesign

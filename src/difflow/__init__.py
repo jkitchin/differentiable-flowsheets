@@ -63,6 +63,12 @@ from difflow.liquid_properties import (
     liquid_thermal_conductivity,
     stream_liquid_properties,
 )
+from difflow.gas_properties import (
+    gas_viscosity,
+    gas_thermal_conductivity,
+    gas_heat_capacity,
+    gas_prandtl,
+)
 from difflow.base_database import BaseDatabase
 from difflow.uncertainty import (
     linear_propagation,
@@ -86,6 +92,7 @@ from difflow.cantera_import import (
 # optional dependencies, imported lazily inside the adapters' functions.
 from difflow import fluids
 from difflow import heat_transfer
+from difflow import gas_properties
 from difflow import pyglenn_import
 from difflow import dwsim_import
 from difflow.params_mixin import ParamsMixin
@@ -549,6 +556,10 @@ __all__ = [
     "liquid_viscosity",
     "liquid_thermal_conductivity",
     "stream_liquid_properties",
+    "gas_viscosity",
+    "gas_thermal_conductivity",
+    "gas_heat_capacity",
+    "gas_prandtl",
     # Uncertainty Propagation
     "linear_propagation",
     "monte_carlo_propagation",
