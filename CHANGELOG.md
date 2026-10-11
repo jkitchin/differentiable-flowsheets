@@ -841,6 +841,14 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Fixed
 
+- **Ideal-thermo `PHFlash` could not flash a pure liquid into its two-phase region.** The Newton on T cannot land
+  on a boiling point, where the flashed enthalpy jumps by the latent heat; saturated water let down from 180 C,
+  12 bar to 1.5 bar came back at the 150 K clip with `V_frac = 0`. The ideal path now brackets T by bisection
+  on `T_bounds` over the exact (unsmoothed) Rachford-Rice split, applies the lever rule at a jump (111.2 C,
+  12.6 % vapour; steam tables 111.4 C, 13.3 %), and attaches implicit-function gradients (the Clausius-Clapeyron
+  slope at a jump). `info` gains `residual`; an unbracketed solve warns `EOSUnitConvergenceWarning`; `T_guess`
+  is ignored. Test `tests/test_flash.py::TestPHFlashPureComponent`.
+
 - **`flash_TP_eos` labelled a single-root compressed liquid as vapor (#442).** A stable feed was called vapor
   when its lower-Gibbs root was the "vapor" root; above the bubble point of a liquid the cubic has one real root,
   so both selectors return it and the label was wrong. CH4/C3H8 (z = 0.2/0.8, PR) at 277.6 K gave V = 1 for every

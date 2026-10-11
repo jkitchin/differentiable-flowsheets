@@ -721,8 +721,15 @@ liquid, vapor, info = flash(feed)
 
 Performs adiabatic flash at constant pressure and enthalpy. Solves for flash temperature.
 
-With an `IdealThermo` (ideal K-values) it solves the Rachford-Rice energy
-balance as before. With a `CubicThermo` it calls `flash_PH_eos` (see
+With an `IdealThermo` (ideal K-values) the inlet is taken as liquid at its own
+T, and the outlet T comes from a bracketed bisection on `T_bounds` over the
+exact (unsmoothed) Rachford-Rice split, so there is no guess and no wrong root
+(`T_guess` is ignored). A pure component let down into its two-phase region
+lands on its boiling point with the lever-rule vapour fraction: saturated
+water at 180 °C let down to 1.5 bar gives 111.2 °C and 12.6 % vapour (steam
+tables: 111.4 °C, 13.3 %). The old Newton on T returned the 150 K clip with
+no vapour. `info` carries `residual` and `converged`, and an unbracketed solve
+warns `EOSUnitConvergenceWarning`. With a `CubicThermo` it calls `flash_PH_eos` (see
 [EOS units](#eos-units)): the inlet enthalpy is the EOS enthalpy at the inlet
 T and P, and the split uses the EOS liquid and vapour compositions. `info` then
 also carries `x`, `y`, `residual` and `converged`, and `T_bounds=(100, 1000)`

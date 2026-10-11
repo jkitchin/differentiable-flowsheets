@@ -1355,7 +1355,12 @@ class PHFlash:
     Two thermodynamic paths:
 
     - :class:`~difflow.thermo.IdealThermo`: ideal-K (Raoult) inner flash, the
-      inlet enthalpy taken as liquid, Newton on T (the original path).
+      inlet enthalpy taken as liquid at the inlet T, and a bracketed bisection
+      on ``T_bounds`` for the outlet T. A pure component that lands inside its
+      two-phase region comes back at its boiling point with the lever-rule
+      vapour fraction (the old Newton on T could not land there: it returned
+      saturated water let down from 180 C to 1.5 bar at the 150 K clip with
+      ``V_frac = 0``).
     - :class:`~difflow.thermo.CubicThermo`: a rigorous cubic-EOS PH flash
       (:func:`difflow.units.eos_units.flash_PH_eos`). The inlet enthalpy is the
       two-phase EOS enthalpy at the inlet (T, P); the outlet temperature comes
@@ -1377,7 +1382,8 @@ class PHFlash:
     references = ["Smith, Van Ness, Abbott. Introduction to Chemical Engineering Thermodynamics, 7e."]
     parameter_symbols = {}
     parameter_units = {}
-    numerical_method = "Outer 1D Newton on T enforcing H(T,P) = H_in, inner TP flash at each trial T."
+    numerical_method = ("Bracketed bisection on T enforcing H(T,P) = H_in, inner TP flash at each trial T; "
+                        "lever rule at a pure-component jump; implicit-function gradients.")
 
     def __init__(
         self,
@@ -1406,8 +1412,9 @@ class PHFlash:
         Args:
             inlet: Feed stream
             P: Flash pressure (Pa). If None, uses inlet P.
-            T_guess: Initial temperature guess (K); ideal path only.
-            T_bounds: (T_min, T_max) bracket (K) of the cubic-EOS path.
+            T_guess: Ignored (kept for backward compatibility); both paths
+                bracket the temperature with ``T_bounds``.
+            T_bounds: (T_min, T_max) bracket (K) of the temperature search.
 
         Returns:
             liquid: Liquid outlet stream
@@ -1423,64 +1430,158 @@ class PHFlash:
         if isinstance(self.thermo, CubicThermo):
             return self._eos_ph_flash(inlet, P_flash, T_bounds)
 
-        # Get feed flows and compute inlet enthalpy
+        return self._ideal_ph_flash(inlet, P_flash, T_bounds)
+
+    def _exact_split(self, z, T, P):
+        """Unsmoothed Raoult TP split ``(V, x, y)`` at (T, P).
+
+        Single phase where ``sum z K <= 1`` (liquid) or ``sum z / K <= 1``
+        (vapour), otherwise the Rachford-Rice root found by bisection on
+        [0, 1] with its implicit derivative attached. Unlike
+        :meth:`Flash._solve_flash` there is no sigmoid blend at the phase
+        boundaries, so a pure component's split jumps exactly at its boiling
+        point, which the (P, H) bisection needs to see.
+        """
+        sg = jax.lax.stop_gradient
+        K = jnp.clip(jnp.array([self.thermo.K_value(s, T, P) for s in self.params.species_order]),
+                     K_MIN, K_MAX)
+        bub, dew = jnp.sum(z * K), jnp.sum(z / K)
+
+        def rr(V, K_):
+            return jnp.sum(z * (K_ - 1.0) / (1.0 + V * (K_ - 1.0)))
+
+        Kc = sg(K)
+
+        def body(_, ab):
+            a, b = ab
+            m = 0.5 * (a + b)
+            pos = rr(m, Kc) > 0.0      # rr falls with V: root lies above m
+            return jnp.where(pos, m, a), jnp.where(pos, b, m)
+
+        a, b = jax.lax.fori_loop(0, 60, body, (jnp.asarray(0.0), jnp.asarray(1.0)))
+        V_s = 0.5 * (a + b)
+        val = rr(V_s, K)
+        dV = sg(jax.grad(rr)(V_s, Kc))
+        dV = jnp.where(jnp.abs(dV) > 0.0, dV, -1.0)
+        V_rr = V_s - (val - sg(val)) / dV
+        V = jnp.where(bub <= 1.0, 0.0, jnp.where(dew <= 1.0, 1.0, V_rr))
+        x = z / (1.0 + V * (K - 1.0))
+        x = x / jnp.sum(x)
+        y = K * x
+        y = y / jnp.sum(y)
+        return V, x, y
+
+    def _split_enthalpy(self, F_tot, z, T, P):
+        """Total outlet enthalpy (W) of the unsmoothed split, and the split."""
+        V, x, y = self._exact_split(z, T, P)
+        order = self.params.species_order
+        H_L = self.thermo.stream_enthalpy(
+            {s: F_tot * (1.0 - V) * x[i] for i, s in enumerate(order)}, T, phase="liquid")
+        H_V = self.thermo.stream_enthalpy(
+            {s: F_tot * V * y[i] for i, s in enumerate(order)}, T, phase="vapor")
+        return H_L + H_V, (V, x, y)
+
+    def _ideal_ph_flash(self, inlet, P_flash, T_bounds):
+        """Ideal-K (P, H) flash: bracketed bisection plus the lever rule.
+
+        At fixed P the outlet enthalpy of the Raoult split rises monotonically
+        with T, so T is found by bisection on ``T_bounds`` (no guess, no wrong
+        root). A mixture's flashed enthalpy is continuous in T and the
+        bisection lands on the root. A pure component's enthalpy *jumps* by the
+        latent heat at its boiling point: the bisection then converges on the
+        jump and the vapour fraction comes from the lever rule,
+        ``beta = (H_in - H_L(T)) / (H_V(T) - H_L(T))``. The derivative is
+        attached by the implicit function theorem on the energy balance, or on
+        the bubble condition ``ln sum z_i K_i = 0`` at a jump (so ``dT/dP``
+        inside a pure fluid's two-phase region is the Clausius-Clapeyron slope).
+        The split is the exact Rachford-Rice one, without the sigmoid blend
+        :class:`Flash` applies within a few per cent of the bubble and dew
+        points.
+        """
+        p = self.params
+        order = p.species_order
+        sg = jax.lax.stop_gradient
         inlet_flows = get_flows(inlet)
+        flows = {s: inlet_flows[s] for s in order}
         T_in = inlet["T"]
+        # Inlet enthalpy: the feed is taken as liquid at its own T (a
+        # pressurized liquid let down through a valve, the usual PH flash).
+        H_inlet = self.thermo.stream_enthalpy(flows, T_in, phase="liquid")
+        F_vec = jnp.array([flows[s] for s in order])
+        F_tot = jnp.sum(F_vec)
+        z = F_vec / jnp.maximum(F_tot, 1e-30)
 
-        # Inlet enthalpy (assume liquid feed for simplicity)
-        H_inlet = self.thermo.stream_enthalpy(
-            {s: inlet_flows[s] for s in p.species_order},
-            T_in,
-            phase="liquid"
-        )
+        F_c, z_c = sg(F_tot), sg(z)
+        P_c, H_c = sg(jnp.asarray(P_flash, dtype=float)), sg(H_inlet)
+        lo, hi = float(T_bounds[0]), float(T_bounds[1])
 
-        # Define enthalpy residual function
-        def H_residual(T, args):
-            P_op, H_target = args
+        def r(T):
+            return self._split_enthalpy(F_c, z_c, T, P_c)[0] - H_c
 
-            # Perform TP flash at trial temperature
-            liquid, vapor, _ = self._tp_flash(inlet, T=T, P=P_op)
+        r_lo, r_hi = r(jnp.asarray(lo)), r(jnp.asarray(hi))
+        bracketed = (r_lo <= 0.0) & (r_hi >= 0.0)
 
-            # Get outlet flows
-            liquid_flows = get_flows(liquid)
-            vapor_flows = get_flows(vapor)
+        def body(_, ab):
+            a, b = ab
+            m = 0.5 * (a + b)
+            below = r(m) < 0.0
+            return jnp.where(below, m, a), jnp.where(below, b, m)
 
-            # Calculate outlet enthalpy
-            H_liquid = self.thermo.stream_enthalpy(
-                {s: liquid_flows[s] for s in p.species_order},
-                T,
-                phase="liquid"
-            )
-            H_vapor = self.thermo.stream_enthalpy(
-                {s: vapor_flows[s] for s in p.species_order},
-                T,
-                phase="vapor"
-            )
-            H_outlet = H_liquid + H_vapor
+        a, b = jax.lax.fori_loop(0, 60, body, (jnp.asarray(lo), jnp.asarray(hi)))
+        T_s = jnp.where(r_lo > 0.0, lo, jnp.where(r_hi < 0.0, hi, 0.5 * (a + b)))
+        scale = jnp.abs(H_c) + F_c * 8.314462618 * T_s
+        jump = bracketed & (jnp.abs(r(T_s)) > 1e-7 * scale)
 
-            return H_outlet - H_target
+        def g_balance(T):
+            return self._split_enthalpy(F_tot, z, T, P_flash)[0] - H_inlet
 
-        # Solve for flash temperature
-        # Use inlet T as initial guess if T_guess not specified sensibly
-        T0 = jnp.where(T_guess > 0, jnp.array(T_guess), T_in)
-        solver = optx.Newton(rtol=1e-6, atol=1e-6)
-        args = (P_flash, H_inlet)
-        sol = optx.root_find(H_residual, solver, T0, args=args, max_steps=100, throw=False)
+        def g_sat(T):
+            K = jnp.array([self.thermo.K_value(s, T, P_flash) for s in order])
+            return jnp.log(jnp.sum(z * K))
 
-        # Clip to reasonable temperature bounds
-        T_flash = jnp.clip(sol.value, 150.0, 700.0)
+        def attach(g):
+            val = g(T_s)
+            dgdT = sg(jax.grad(g)(T_s))
+            dgdT = jnp.where(jnp.abs(dgdT) > 0.0, dgdT, 1.0)
+            return T_s - (val - sg(val)) / dgdT
 
-        # Final flash at converged temperature
-        liquid, vapor, flash_info = self._tp_flash(inlet, T=T_flash, P=P_flash)
+        T = jnp.where(jump, attach(g_sat), attach(g_balance))
+        T = jnp.where(bracketed, T, T_s)
 
-        # Add PH-specific info
-        flash_info["T_flash"] = T_flash
-        flash_info["H_inlet"] = H_inlet
-        flash_info["T_inlet"] = T_in
-        flash_info["P_flash"] = P_flash
-        flash_info["converged"] = sol.result == optx.RESULTS.successful
-
-        return liquid, vapor, flash_info
+        H_out, (V, x, y) = self._split_enthalpy(F_tot, z, T, P_flash)
+        # Lever rule at a jump, on the phase enthalpies of the feed composition.
+        h_L = self.thermo.stream_enthalpy(flows, T, phase="liquid")
+        h_V = self.thermo.stream_enthalpy(flows, T, phase="vapor")
+        dH = jnp.where(jnp.abs(h_V - h_L) > 1e-12, h_V - h_L, 1e-12)
+        beta = jnp.where(jump, jnp.clip((H_inlet - h_L) / dH, 0.0, 1.0), V)
+        x = jnp.where(jump, z, x)
+        y = jnp.where(jump, z, y)
+        H_out = jnp.where(jump, h_L + beta * dH, H_out)
+        L_flow, V_flow = (1.0 - beta) * F_tot, beta * F_tot
+        liquid = make_stream({s: L_flow * x[i] for i, s in enumerate(order)}, T, P_flash)
+        vapor = make_stream({s: V_flow * y[i] for i, s in enumerate(order)}, T, P_flash)
+        K = jnp.clip(jnp.array([self.thermo.K_value(s, T, P_flash) for s in order]), K_MIN, K_MAX)
+        residual = H_out - H_inlet
+        info = {
+            "V_frac": beta,
+            "K": {s: K[i] for i, s in enumerate(order)},
+            "x": {s: x[i] for i, s in enumerate(order)},
+            "y": {s: y[i] for i, s in enumerate(order)},
+            "L": L_flow,
+            "V": V_flow,
+            "bubble_check": jnp.sum(z * K),
+            "dew_check": jnp.sum(z / K),
+            "T_flash": T,
+            "T_out": T,
+            "H_inlet": H_inlet,
+            "T_inlet": T_in,
+            "P_flash": P_flash,
+            "residual": residual,
+            "converged": bracketed & (jnp.abs(sg(residual)) <= 1e-7 * scale),
+        }
+        from difflow.units.eos_units import _warn_unconverged
+        _warn_unconverged("PHFlash", info)
+        return liquid, vapor, info
 
     def _eos_ph_flash(self, inlet, P_flash, T_bounds):
         """Cubic-EOS PH flash (``CubicThermo`` path of :meth:`__call__`)."""
