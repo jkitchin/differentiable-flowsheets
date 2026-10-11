@@ -63,6 +63,7 @@ CORE_CATEGORIES = {
     "heat_exchanger": "heat_transfer",
     "evaporator": "evaporation",
     "lle": "extraction",
+    "leaching": "extraction",
     "eos_units": "pressure_change",
     "pipe": "pressure_change",
     "pump": "pressure_change",

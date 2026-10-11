@@ -8,6 +8,22 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **`Leacher`: countercurrent leaching and washing (#430, part 1).** New palette
+  unit in `difflow.units.leaching` (category `extraction`, mass flows in kg/s):
+  ideal-stage solid-liquid cascade with constant-solution, constant-solvent or
+  tabulated variable underflow. Constant underflow is a closed form (first stage
+  separate when the feed solids carry a different solution amount) with a
+  continuous, differentiable stage count and a smooth `r = L/V = 1` limit;
+  variable underflow is a fixed-iteration Newton solve of the stage balances
+  (integer stages). `recovery` with `design="stages"` returns N in closed form,
+  with `design="solvent"` scales the solvent stream (implicit-gradient
+  bisection). Library helpers `washing_recovery`, `washing_stages` (the Kremser
+  form in the wash ratio) and `tabulate_underflow`. `stage_efficiency` is an
+  overall efficiency (ideal stages = E x n_stages). No textbook worked example is
+  reproduced (inputs not retrievable); the tests use an independent dense
+  linear-system assembly, the closed washing form, a SciPy solve and
+  `check_grads`. The variable-underflow table in the docs is synthetic.
+
 - **`difflow.units.column_design`: column hardware (#429).** New core library
   module (no palette entry): `flow_parameter`, `fair_capacity_factor`,
   `flooding_velocity`, `tray_column_diameter` (Fair flooding, `fraction_flood`,

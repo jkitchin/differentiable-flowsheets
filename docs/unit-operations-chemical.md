@@ -3246,6 +3246,174 @@ $$H = HTU \times NTU$$
 
 ---
 
+## Leaching and Washing
+
+### Leacher
+
+**Location**: `difflow/units/leaching.py`
+
+**Class**: `Leacher`
+
+**Description**: Countercurrent solid-liquid extraction (leaching) and washing with constant or tabulated underflow, as a cascade of ideal stages.
+
+#### Process Role
+
+Sugar from beet cossettes, oil from seeds, metal from ore, and the washing of
+a precipitate or a thickener underflow are all the same cascade: the solids
+move one way and carry some solution with them (the *underflow*), the
+solvent moves the other way (the *overflow*), and in every ideal stage the
+solution held by the solids has the composition of the overflow that leaves
+it. The unit has two inlets, `solids_feed` and `solvent`, and two outlets,
+`underflow` and `overflow`. **Flows are mass flows (kg/s)**: an inert solid
+has no molar mass, so the `F_<species>` entries of this unit's streams are
+kg/s.
+
+Three underflow laws are available:
+
+- `"constant_solution"`: every stage's underflow holds `underflow` kg of
+  *solution* per kg of inert;
+- `"constant_solvent"`: it holds `underflow` kg of *solvent* per kg of inert
+  (the solution then grows as it gets richer; on a solute-per-solvent basis it
+  is the same linear cascade);
+- `"variable"`: a table of solution per kg inert against solute mass fraction
+  (`underflow_y`, `underflow_s`), the oilseed case. `tabulate_underflow` samples
+  a correlation into the tables.
+
+`n_stages` is a real number for the two constant laws (the closed form is
+smooth in it, so the stage count is an ordinary design variable); the variable
+law is a stage-by-stage solve and needs an integer.
+
+#### Parameters
+
+<!-- doc-test: skip: field listing (a class sketch), not an executable example -->
+```python
+@dataclass
+class LeacherParams:
+    inert_species: str          # the solid carrier ("pulp", "meal")
+    solute: str                 # what is leached out
+    solvent: str                # the leaching or wash liquid
+    n_stages: float = 3.0       # ideal stages (continuous for constant underflow)
+    underflow_model: str = "constant_solution"  # | "constant_solvent" | "variable"
+    underflow: float = 1.0      # kg solution (or solvent) per kg inert
+    underflow_y: list = None    # variable underflow table: solute mass fraction
+    underflow_s: list = None    # ... and kg solution per kg inert
+    stage_efficiency: float = 1.0  # overall: ideal stages = E * n_stages
+    recovery: float = None      # design target: fraction of feed solute to the overflow
+    design: str = "rating"      # | "stages" (solve N) | "solvent" (scale the solvent)
+```
+
+#### Governing Equations
+
+With $B$ kg/s of inert, $L_n$ the solution in the underflow leaving stage $n$,
+$V_n$ the overflow leaving stage $n$, $y_n$ the solute mass fraction of both
+leaving stage $n$, $L_0$, $m_0$ the solution and solute that come in with the
+solids, and $V = V_{N+1}$ the fresh solvent, the balances across any cut are
+
+$$V_{n+1} - L_n = V_1 - L_0, \qquad
+V_{n+1}\,y_{n+1} - L_n\,y_n = V_1\,y_1 - m_0 = D .$$
+
+For a constant underflow ($L_n = L = Bu$ for $n \ge 1$) the first stage is
+special: $V_{2} = \dots = V_{N+1} = V$ but $V_1 = V + L_0 - L$, which differs
+from $V$ unless the feed solids already carry the underflow solution
+($L_0 = L$). With $r = L/V$,
+
+$$y_{n+1} = r\,y_n + \frac{D}{V}, \qquad
+y_{N+1} = r^{N} y_1 + \frac{D}{V}\,\frac{r^{N}-1}{r-1}, \qquad
+y_1 = \frac{D + m_0}{V_1},$$
+
+which fixes $D$ in closed form. For pure washing ($L_0 = L$, solute-free wash
+liquid) the fraction of the solute left in the underflow is
+
+$$\frac{m_N}{m_0} = \frac{1-w}{1-w^{N+1}}, \qquad w = \frac{V}{L},$$
+
+so the fraction washed out is the Kremser form. `washing_recovery(w, N)` and
+`washing_stages(w, recovery)` are these two (with the $w \to 1$ limit
+$N/(N+1)$); for $w<1$ the removal tends to $w$, not to 1.
+
+For the variable underflow the $N$ balances $V_{n+1}y_{n+1}-L_ny_n-D=0$ with
+$L_n = B\,s(y_n)$ are nonlinear in $y$; the unit solves them by Newton's
+method with a fixed number of iterations (a fixed-size linear solve per step,
+seeded by the constant-underflow solution), so the result can be jitted and
+differentiated.
+
+#### Design Modes
+
+`recovery` is the fraction of the feed solute that ends in the overflow, net
+of any solute that came in with the solvent. With `design="stages"` the
+stage count is solved for (closed form, real-valued, `NaN` with
+`info["feasible"] == False` when the recovery cannot be reached at that
+solvent rate); with `design="solvent"` the solvent stream is scaled
+(composition fixed) until the recovery is met at the given `n_stages`
+(bisection with implicit gradients). `info` reports the recovery, the washing
+efficiency, the per-stage compositions for an integer stage count, the
+solution-to-inert ratios, `converged` and `feasible`.
+
+#### Example Usage
+
+```python
+from difflow import make_stream, Leacher, LeacherParams
+from difflow import washing_recovery, washing_stages
+
+# 100 kg/s of pulp carrying 200 kg/s of sugar solution (10 % sugar), washed
+# with 150 kg/s of water; the underflow holds 2 kg solution per kg pulp.
+feed = make_stream({"pulp": 100.0, "sugar": 20.0, "water": 180.0}, T=300.0, P=1e5)
+water = make_stream({"water": 150.0}, T=300.0, P=1e5)
+
+leacher = Leacher(LeacherParams("pulp", "sugar", "water", n_stages=3.0, underflow=2.0))
+underflow, overflow, info = leacher(feed, water)
+print(f"recovery {float(info['recovery']):.4f}")          # recovery 0.6343
+print(f"liquor {float(info['y_overflow']):.4f} mass fraction")  # liquor 0.0846 mass fraction
+
+# This is a pure wash (the feed holds as much solution as the underflow does),
+# so the closed form of the washing helpers must agree.
+w = 150.0 / 200.0
+assert abs(float(washing_recovery(w, 3.0)) - float(info["recovery"])) < 1e-12
+
+# Design: stages for 95 % recovery with 240 kg/s of water (w = 1.2) ...
+big = make_stream({"water": 240.0}, T=300.0, P=1e5)
+design = Leacher(LeacherParams("pulp", "sugar", "water", underflow=2.0,
+                               recovery=0.95, design="stages"))
+_, _, info = design(feed, big)
+print(f"stages {float(info['n_stages']):.3f}")            # stages 7.827
+print(f"check  {float(washing_stages(1.2, 0.95)):.3f}")   # check  7.827
+
+# ... or the water rate that reaches 95 % in 3 stages
+sized = Leacher(LeacherParams("pulp", "sugar", "water", n_stages=3.0, underflow=2.0,
+                              recovery=0.95, design="solvent"))
+_, _, info = sized(feed, water)
+print(f"water {float(info['solvent_rate']):.1f} kg/s")    # water 452.9 kg/s
+
+# Variable underflow (a synthetic, oilseed-like table): 3 stages
+var = Leacher(LeacherParams("pulp", "sugar", "water", n_stages=3,
+                            underflow_model="variable",
+                            underflow_y=[0.0, 0.1, 0.2, 0.4],
+                            underflow_s=[1.5, 1.8, 2.2, 3.0]))
+_, _, info = var(feed, water)
+print(f"recovery {float(info['recovery']):.4f}")          # recovery 0.7688
+```
+
+Gradients of the recovery with respect to the solvent rate, the stage count
+and the underflow ratio are ordinary `jax.grad` calls, so the solvent-to-solids
+ratio and the stage count that minimise a solvent-recovery cost can be found
+by gradient descent.
+
+#### Limits
+
+Ideal stages: the solute is fully dissolved and in equilibrium with the
+solution (no mass-transfer rate limit and no adsorption on the solids;
+diffusion-controlled leaching kinetics is out of scope). One solute, one
+solvent and one inert (other species in the streams are ignored), a common
+inert flow in every stage, isothermal. `stage_efficiency` is an overall
+efficiency: the number of ideal stages is $E \cdot n_{stages}$. The unit is
+checked against an independent dense-linear-system assembly of the stage
+balances, the closed washing form and a SciPy solve of the variable-underflow
+balances (`tests/test_leaching.py`); no published textbook example is
+reproduced (the McCabe-Smith-Harriott and Geankoplis worked examples named in
+the issue could not be retrieved, so no agreement with them is claimed), and
+the variable-underflow table above is synthetic.
+
+---
+
 ## Pressure-Change & EOS-Consistent Units
 
 These units close energy balances on the **cubic-EOS enthalpy and entropy**

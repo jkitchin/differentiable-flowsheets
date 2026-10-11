@@ -437,6 +437,7 @@ export const OPERATION_SYMBOLS = {
   Stripper: 'packed_column',
   ShortcutColumn: 'column',
   MultistageCascade: 'column',
+  Leacher: 'train',
   DifferentialContactor: 'packed_column',
   LLEEquilibrium: 'stirred_tank',
 

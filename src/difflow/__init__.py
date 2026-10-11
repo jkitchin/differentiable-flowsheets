@@ -161,6 +161,13 @@ from difflow.units.lle import (
     minimum_solvent_ratio,
     stages_for_recovery,
 )
+from difflow.units.leaching import (
+    Leacher,
+    LeacherParams,
+    tabulate_underflow,
+    washing_recovery,
+    washing_stages,
+)
 from difflow.units.absorption import (
     Absorber,
     AbsorptionParams,
@@ -525,6 +532,12 @@ __all__ = [
     "separation_factor",
     "minimum_solvent_ratio",
     "stages_for_recovery",
+    # Leaching and washing
+    "Leacher",
+    "LeacherParams",
+    "tabulate_underflow",
+    "washing_recovery",
+    "washing_stages",
     # Unit operations - Absorption and stripping
     "Absorber",
     "AbsorptionParams",
