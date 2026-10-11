@@ -740,11 +740,22 @@ All notable changes to difflow are recorded here. The format follows
   iterations, unchanged); jitted evaluation 5 C from the stored tear **18.6 then 6.6** (63 then 23 passes); jit
   compile+first 51.6 then 45.5; jitted evaluation from its own tear 0.5 then 0.6; `jacfwd` compile+first 340.6 then
   322.0; `jacfwd` warm at +5 C **52.3 then 39.9**. Primal results and the Jacobian agree to every printed digit.
-  **Not solved:** the Jacobian stays expensive. Profiling one tear map `g` (31 tear entries): one primal pass 0.27 s
-  (27.8 s compile), one forward-mode tangent 1.5 s (71 s compile), the dense 31-tangent Jacobian that optimistix's
-  implicit rule materialises 28 s (107 s compile); the three diffrax bed integrators under `ForwardMode` dominate, not
-  the iteration count. A matrix-free GMRES in the implicit rule was tried and was no better (warm 51.9 s, compile
-  457.6 s), so it was not kept.
+  **The Jacobian half (second commit).** The first measurement above left `jacfwd` at 40-52 s warm, and profiling
+  showed why: not the iteration count but the dense tear Jacobian the implicit rule materialises (one forward-mode
+  tangent per tear entry, 31 here), and a tangent through the three diffrax beds cost 1.5 s against 0.27 s for a pass,
+  because every right-hand-side evaluation solved the bed temperature from the enthalpy with eight unrolled Newton
+  steps and the tangent went through all eight. `reforming.thermo.temperature_from_enthalpy` is now a `custom_jvp`
+  carrying the implicit-function derivative (primal unchanged; derivative matches the unrolled one to 5e-15 in
+  forward and reverse mode). Measured on one tear map `g` (before then after, seconds): one tangent warm 1.53 then
+  0.52; dense 31-tangent Jacobian warm 28.0 then 1.7; compile of that Jacobian 107 then 75.
+  Reformer end to end (same machine): `jacfwd` warm at +5 C, 1 lever, **52.3 (original code) / 39.9 (traced Anderson
+  only) then 12.3** (jit eval of the same point 7.4 in that run, so the Jacobian costs about 0.7 of a primal solve);
+  `jacfwd` compile+first 340.6 / 322.0 then 250.9; 2 levers (WAIT, H2/HC; measured after only): jit eval 9.8,
+  `jacfwd` warm 11.8, compile+first 235.5. Jacobians are identical to every printed digit. Tried and dropped: a
+  matrix-free GMRES in the implicit rule (warm 51.9, compile 457.6; the tear Jacobian needs about 13 Krylov steps
+  for 1e-10), and a `fori_loop` Newton (no compile gain, slower warm). **Still slow:** compile of the differentiated
+  reformer is 4 minutes (primal map 28 s, tangent 60 s, vmapped Jacobian 75 s, plus the loop); a persistent JAX
+  compilation cache is the remedy for repeat processes.
 
 - `CubicThermo` treats a species absent from a stream as zero flow, as
   `IdealThermo` already did. A condenser whose vapour listed only n-pentane

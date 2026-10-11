@@ -14,7 +14,9 @@ the root CLAUDE.md, which keeps only what every session needs).
   a kinetic paper.
 - One enthalpy basis: Hf + `CubicThermo` (ideal-gas Cp fit + PR departure).
   Reactor T comes from the conserved enthalpy by Newton, so balances close
-  to round-off at any ODE tolerance. Keep it that way.
+  to round-off at any ODE tolerance. Keep it that way. Its derivative is the
+  implicit one (`custom_jvp`, #440): differentiating the unrolled steps made
+  a bed tangent 3x dearer and the reformer's Jacobian 5x slower.
 - Beds use `diffrax.ForwardMode`: differentiate a reformer with `jax.jacfwd`
   (the recycle's implicit fixed point needs JVPs), warm-start with
   `tear_initial=res.tear`.

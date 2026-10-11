@@ -627,14 +627,23 @@ assert abs(value - 20.0) < 1e-6
 assert abs(jax.jacfwd(lambda F: objective(F, "anderson"))(1.0) - 20.0) < 1e-6
 ```
 
-Limits, measured on the catalytic reformer (4-core x86 machine, see the
-changelog): the primal solve is shorter (23 passes against 63 for plain
-substitution, a jitted evaluation 5 C from the stored tear 6.6 s against 18.6 s),
-but the *Jacobian* is not much cheaper. Its cost is the dense tear Jacobian that
-`optimistix`'s implicit rule materialises (one forward-mode tangent through the
-three diffrax bed integrators per tear entry, 31 of them), not the iteration
-count. A matrix-free GMRES in the implicit rule was tried and was no faster.
-Reverse mode through a unit that uses `diffrax.ForwardMode` is unavailable
+Limits, measured on the catalytic reformer (4-core Xeon, see the changelog): the
+primal solve is shorter (23 passes against 63 for plain substitution, a jitted
+evaluation 5 C from the stored tear 6.6 s against 18.6 s). The *Jacobian* was
+not, at first, and the iteration count was not why: `optimistix`'s implicit rule
+materialises the dense tear Jacobian (one forward-mode tangent per tear entry,
+31 here), and a tangent through the three diffrax bed integrators cost 1.5 s
+against 0.27 s for a pass, because every right-hand-side evaluation solved the
+bed temperature from the enthalpy by eight nested Newton steps and the tangent
+went through all eight. `temperature_from_enthalpy` now carries the implicit
+derivative of that solve (same primal, derivative equal to 1e-14), which took a
+tangent to 0.5 s and the dense 31-tangent Jacobian from 28 s to 1.7 s. If a unit
+of yours has an inner solve of its own, give it a `custom_jvp` with the implicit
+rule for the same reason. A matrix-free GMRES in the implicit rule was tried
+and was no faster (it needs about 13 applications to reach 1e-10 on this
+Jacobian). Compile time of the differentiated function stays minutes, not
+seconds; `jax.config.update("jax_compilation_cache_dir", ...)` removes it on
+the second process. Reverse mode through a unit that uses `diffrax.ForwardMode` is unavailable
 whatever the solver.
 
 The same rule explains a related gotcha: never record a solve diagnostic with a
