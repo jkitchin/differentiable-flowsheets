@@ -680,6 +680,14 @@ liquid, vapor, info = flash(feed)
 
 Performs adiabatic flash at constant pressure and enthalpy. Solves for flash temperature.
 
+With an `IdealThermo` (ideal K-values) it solves the Rachford-Rice energy
+balance as before. With a `CubicThermo` it calls `flash_PH_eos` (see
+[EOS units](#eos-units)): the inlet enthalpy is the EOS enthalpy at the inlet
+T and P, and the split uses the EOS liquid and vapour compositions. `info` then
+also carries `x`, `y`, `residual` and `converged`, and `T_bounds=(100, 1000)`
+can be passed to the call. This path handles a pure component, where the flash
+lands on $T_\mathrm{sat}$ with a lever-rule vapour fraction.
+
 ```python
 from difflow.units.flash import PHFlash, FlashParams
 
@@ -3731,6 +3739,7 @@ the variable-underflow table above is synthetic.
 
 ---
 
+(eos-units)=
 ## Pressure-Change & EOS-Consistent Units
 
 These units close energy balances on the **cubic-EOS enthalpy and entropy**
@@ -3738,10 +3747,30 @@ These units close energy balances on the **cubic-EOS enthalpy and entropy**
 constant-Cp models, so they are correct for real gases and near-cryogenic /
 gas-processing service (expander plants, NGL recovery, refrigeration). Each
 takes a [`CubicThermo`](thermodynamics.md) built from an `IdealThermo` (for the
-ideal-gas Cp) and a `PengRobinson`/`SRK` EOS. All internal temperature solves
-use `optimistix` root finds on the two-phase enthalpy/entropy, so every outlet
-temperature, duty and shaft work is differentiable with respect to feed
-conditions, discharge pressures and efficiencies.
+ideal-gas Cp) and a `PengRobinson`/`SRK` EOS.
+
+**Outlet temperature solves.** Every outlet temperature comes from a (P, H) or
+(P, S) flash, also public as `flash_PH_eos(thermo, flows, P, H, T_bounds)` and
+`flash_PS_eos(thermo, flows, P, S, T_bounds)`. The flash bisects on $T$ inside
+`T_bounds` (default 100--1000 K) with the two-phase, stability-tested EOS
+enthalpy or entropy, so it cannot wander outside the bracket. For a pure
+component, $H(T)$ and $S(T)$ jump by the latent heat at $T_\mathrm{sat}$. When the
+target falls in that jump the outlet is at $T_\mathrm{sat}$ and the vapour
+fraction comes from the lever rule. Gradients are attached by the implicit
+function theorem. In a single phase the balance residual supplies them; inside
+a pure-component dome the saturation condition does, so $dT/dP$ is the
+Clausius-Clapeyron slope. Every outlet temperature, duty, shaft work and vapour
+fraction is differentiable with respect to feed conditions, discharge pressures
+and efficiencies.
+
+The flash returns `T`, `vapor_fraction`, `x`, `y`, `H`, `S`, `residual`,
+`bracketed` and `converged`. The units copy `vapor_fraction`, `x`, `y`,
+`residual` and `converged` into their `info`. A target outside `T_bounds`
+returns `converged=False` and raises `EOSUnitConvergenceWarning` (when the
+values are concrete), instead of a silently wrong temperature. The outlet
+*stream* holds only flows, T and P, so the vapour fraction of a two-phase
+outlet is read from `info["vapor_fraction"]`; send the stream through a
+`PHFlash` with the same thermo to split it.
 
 ```python
 from difflow import (
@@ -3774,12 +3803,15 @@ H_\text{out} = H_\text{in} + \eta\,(H_\text{isen} - H_\text{in})$$
 
 The extracted shaft work is $W = H_\text{in} - H_\text{out} > 0$. Both enthalpy
 and entropy are two-phase aware, so an expander whose outlet partly condenses
-(common in cryogenic service) is handled correctly.
+(common in cryogenic service) is handled correctly. For example, methane
+expanded from 300 K and 100 bar to 10 bar has $T_\text{isen}=152.1$ K, a few
+kelvin above its dew point.
 
 ```python
 exp = Turboexpander(TurboexpanderParams(P_out=20e5, eta_isentropic=0.80), thermo)
 outlet, info = exp(feed)
-# info: {"W", "T_isen", "T_out", "H_in", "H_out"}
+# info: W, T_isen, T_out, H_in, H_out, vapor_fraction, vapor_fraction_isen,
+#       x, y, residual, residual_isen, converged
 ```
 
 ### EOSCompressor
@@ -3810,11 +3842,13 @@ constant across the pressure drop and solves for the outlet temperature,
 $H(T_\text{out}, P_\text{out}) = H(T_\text{in}, P_\text{in})$. On a real gas this
 produces the Joule-Thomson temperature change that an ideal-gas or ideal-K valve
 misses. Because no work is extracted, the same pressure drop cools **less** than
-a turboexpander.
+a turboexpander. A letdown into the two-phase region lands on the bubble/dew
+curve (at $T_\mathrm{sat}$ for a pure component), with the liquid fraction in
+`info["vapor_fraction"]`.
 
 ```python
 valve = JTValve(JTValveParams(P_out=20e5), thermo)
-outlet, info = valve(feed)   # info: {"T_out", "H"}
+outlet, info = valve(feed)   # info: T_out, H, vapor_fraction, x, y, residual, converged
 ```
 
 ### ComponentSeparator
@@ -4031,21 +4065,33 @@ the path: nozzles and relief devices, isothermal gas lines and adiabatic
 (Fanno) ducts. It assumes constant $\gamma=C_p/C_v$ and molar mass `MW`
 (kg/mol); friction factors are **Darcy** factors, as in `difflow.fluids`. For an
 isothermal line $\mathrm{Re}=GD/\mu$ is constant along the pipe, so $f$ is one
-call to `fluids.friction_factor`. JAX, SI and differentiable throughout.
+call to `fluids.friction_factor`. Functions that use $RT/M$ take an optional
+compressibility factor `Z` (default 1), which replaces it with $ZRT/M$ for a
+real gas at a representative state. JAX, SI and differentiable throughout.
 
 | Function | Relation |
 |----------|----------|
-| `speed_of_sound(T, MW, gamma)`, `mach_number(v, T, MW, gamma)` | $c=\sqrt{\gamma RT/M}$, $\mathrm{Ma}=v/c$ |
+| `speed_of_sound(T, MW, gamma, Z)`, `mach_number(v, T, MW, gamma, Z)` | $c=\sqrt{\gamma ZRT/M}$, $\mathrm{Ma}=v/c$ |
 | `stagnation_ratios(M, gamma)` | isentropic $T_0/T$, $P_0/P$, $\rho_0/\rho$ |
 | `critical_pressure_ratio(gamma)` | $P^*/P_0=(2/(\gamma+1))^{\gamma/(\gamma-1)}$ (0.528 for air) |
 | `choked_mass_flux(P0, T0, MW, gamma)` | $G^*=P_0\sqrt{\gamma M/(RT_0)}\,(2/(\gamma+1))^{(\gamma+1)/(2(\gamma-1))}$ |
 | `nozzle_mass_flow(P0, T0, P_back, area, MW, gamma, Cd)` | isentropic converging nozzle, subsonic or choked |
-| `isothermal_pipe_mass_flux(P1, P2, T, L, D, f, MW)` | $P_1^2-P_2^2=G^2\frac{RT}{M}\left[\frac{fL}{D}+2\ln\frac{P_1}{P_2}\right]$ |
-| `isothermal_outlet_pressure(G, P1, T, L, D, f, MW, gamma)` | the same equation solved for $P_2$, with the choking check |
+| `nozzle_flow(P0, T0, P_back, area, MW, gamma, Cd)` | the same flow plus `choked`, `P_throat`, `mach_throat` |
+| `isothermal_pipe_mass_flux(P1, P2, T, L, D, f, MW, Z)` | $P_1^2-P_2^2=G^2\frac{ZRT}{M}\left[\frac{fL}{D}+2\ln\frac{P_1}{P_2}\right]$ |
+| `isothermal_pipe_flow(P1, P2, T, L, D, roughness, mu, MW, Z, method)` | the same equation with $f(\mathrm{Re})$ solved simultaneously: `G`, `m_dot`, `f`, `Re` |
+| `isothermal_outlet_pressure(G, P1, T, L, D, f, MW, gamma, Z)` | the same equation solved for $P_2$, with the choking check |
+| `isothermal_distance(P, G, P1, T, D, f, MW, Z)` | closed-form distance $x(P)$ at which the pressure has fallen to $P$ |
+| `isothermal_pressure_profile(x, G, P1, T, D, f, MW, gamma, Z)` | $P(x)$ at an array of positions (choking flagged) |
+| `isothermal_limit_mach(gamma)` | isothermal choking Mach number $1/\sqrt\gamma$ (0.845 for air) |
 | `fanno_parameter(M, gamma)`, `fanno_ratios(M, gamma)` | $fL^*/D$ and $P/P^*$, $T/T^*$, $P_0/P_0^*$ |
 | `adiabatic_outlet_mach(M1, fL_D, gamma)` | outlet Mach, $P_2/P_1$, $T_2/T_1$ of a subsonic adiabatic duct |
+| `polytropic_exponent(eta_p, gamma, compression)` | $n$ from $\frac{n-1}{n}=\frac{\gamma-1}{\gamma\,\eta_p}$ (compression) or $\frac{(\gamma-1)\eta_p}{\gamma}$ (expansion) |
+| `isentropic_efficiency_from_polytropic(r, eta_p, gamma, compression)` | $\eta_s=\dfrac{r^{(\gamma-1)/\gamma}-1}{r^{(\gamma-1)/(\gamma\eta_p)}-1}$ for compression |
+| `polytropic_efficiency_from_isentropic(r, eta_s, gamma, compression)` | the inverse |
+| `optimal_stage_ratios(P_in, P_out, n_stages)` | equal per-stage ratios $(P_\mathrm{out}/P_\mathrm{in})^{1/N}$ (minimum work with intercooling to the inlet temperature) |
 
-**Choking.** `nozzle_mass_flow` holds $P_\mathrm{back}/P_0$ at no less than the
+**Choking.** `nozzle_flow` reports `choked` (true when $P_\mathrm{back}/P_0$
+is at or below the critical ratio). `nozzle_mass_flow` holds $P_\mathrm{back}/P_0$ at no less than the
 critical ratio. The isentropic flux has its maximum there, so the clamp is
 continuous with a continuous first derivative, and `jax.grad` with respect to
 the back pressure is exactly 0 in choked flow. An isothermal line chokes when
@@ -4058,7 +4104,20 @@ would be lower than the one requested.
 **Solvers and gradients.** The two outlet solvers bracket the subsonic root
 (between the choke point and the inlet) and bisect in log space. A final
 Newton step on the stopped root attaches implicit-function-theorem gradients
-with respect to every input.
+with respect to every input. `isothermal_pipe_flow` iterates $f$ and $G$ to a
+fixed point (Colebrook, or `method="swamee_jain"`) and attaches the same kind
+of implicit gradient.
+
+**Polytropic efficiency and staging.** The polytropic efficiency of a stage is
+the small-stage efficiency, so it does not depend on the pressure ratio. The
+isentropic efficiency of a compressor with fixed $\eta_p$ falls as the ratio
+rises (for air, with $\eta_p=0.80$: 0.780 at $r=2$, 0.759 at $r=4$, 0.729 at
+$r=10$). For an expander it rises. `polytropic_exponent` returns $n$ itself, so
+the exponent in $T_2/T_1=r^{(n-1)/n}$ is `1 - 1/n`. `optimal_stage_ratios`
+splits a compression into $N$ equal ratios, which minimises total work for an
+ideal gas intercooled to the inlet temperature with equal stage efficiencies.
+These are ideal-gas relations; the EOS `Compressor`/`Turboexpander` units in
+`difflow.units.eos_units` integrate the real-gas entropy instead.
 
 **What was verified** (`tests/test_compressible.py`):
 
@@ -4070,10 +4129,19 @@ with respect to every input.
 - `nozzle_mass_flow` is continuous at the critical ratio, equals
   $\rho^*c^*A$ when choked, and tends to the Bernoulli flow
   $A\sqrt{2\rho\Delta P}$ at small pressure drop.
+- `isothermal_distance` agrees with `isothermal_outlet_pressure` at every
+  point, `isothermal_pipe_flow` satisfies both the pressure equation and
+  Colebrook at its answer, and `Z` enters exactly as a scaling of $RT/M$.
+- The polytropic relations invert one another, reduce to $\eta_s=\eta_p$ as
+  $r\to1$, and match the closed form above. Gradients of all the new
+  functions pass `check_grads`.
 
 ```python
 from difflow import fluids
-from difflow.compressible import isothermal_pipe_mass_flux, nozzle_mass_flow
+from difflow.compressible import (
+    isothermal_pipe_flow, isothermal_pipe_mass_flux, nozzle_flow,
+    isentropic_efficiency_from_polytropic, optimal_stage_ratios,
+)
 
 # 50 km natural-gas line, 0.5 m ID, 60 -> 40 bar at 288 K
 D, mu, MW = 0.5, 1.1e-5, 0.0175
@@ -4081,8 +4149,17 @@ G = isothermal_pipe_mass_flux(60e5, 40e5, 288.0, 5e4, D, 0.012, MW)
 f = fluids.friction_factor(G * D / mu, 4.6e-5 / D)   # check the assumed f
 print(float(G) * 3.1416 * D**2 / 4, "kg/s;  f =", float(f))
 
+# ... or solve G and f(Re) together
+res = isothermal_pipe_flow(60e5, 40e5, 288.0, 5e4, D, 4.6e-5, mu, MW)
+print(float(res.m_dot), "kg/s;  f =", float(res.f))
+
 # air from a 10 bar vessel through a 1 cm^2 nozzle: choked
-print(float(nozzle_mass_flow(10e5, 300.0, 1e5, 1e-4, 0.02897, 1.4, Cd=0.97)), "kg/s")
+noz = nozzle_flow(10e5, 300.0, 1e5, 1e-4, 0.02897, 1.4, Cd=0.97)
+print(float(noz.m_dot), "kg/s; choked:", bool(noz.choked))
+
+# 1 -> 30 bar in three intercooled stages at eta_p = 0.80
+r = optimal_stage_ratios(1e5, 30e5, 3)
+print(r, isentropic_efficiency_from_polytropic(r[0], 0.80, 1.4))
 ```
 
 ---

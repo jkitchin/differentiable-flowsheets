@@ -8,6 +8,23 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **Compressible flow, compressors, expanders, valves (book Ch. 5 gaps).**
+  (1) EOS `Turboexpander`/`Compressor`/`JTValve` solve the outlet temperature with a bracketed (P, S)/(P, H) flash,
+  also public as `flash_PS_eos`/`flash_PH_eos`. Two-phase, pure-component jump handled by the lever rule. Implicit
+  gradients use the saturation condition inside a dome. The old unbracketed Newton gave methane 300 K, 100 -> 10 bar
+  `T_isen = 261.5 K` (true 152.1 K) with negative work, and JT letdowns into the dome returned the 100 K bound, all
+  unflagged. `info` gains `vapor_fraction`, `x`, `y`, `residual` and `converged`; an unbracketed solve warns
+  `EOSUnitConvergenceWarning`. (2) `PHFlash` with a `CubicThermo` uses `flash_PH_eos`. (3) `difflow.compressible`:
+  `Z` keyword on `speed_of_sound`, `mach_number`, `isothermal_pipe_mass_flux` and `isothermal_outlet_pressure`;
+  new `nozzle_flow` (with `choked`), `isothermal_pipe_flow` (G and Colebrook f together), `isothermal_distance`,
+  `isothermal_pressure_profile`, `isothermal_limit_mach`, `polytropic_exponent`,
+  `isentropic_efficiency_from_polytropic`, `polytropic_efficiency_from_isentropic` and `optimal_stage_ratios`.
+  (4) `difflow_gas.isothermal_pipe_beta` (alias `weymouth_beta`) is jnp and differentiable, with
+  `friction="nikuradse" | "colebrook" | "weymouth"`. **It now returns a JAX scalar, not a Python float.** The
+  docs say it is the isothermal pipe law without the acceleration term. (5) `equipment_cost` warns
+  `difflow.economics.CostRangeWarning` for a concrete size outside the entry's stored `S_min`..`S_max`.
+  Tests `tests/test_eos_units_two_phase.py`, `tests/test_compressible.py`, `tests/gas/test_physics.py`,
+  `tests/test_economics.py`.
 - **Shell-and-tube gaps (#435).** (1) `ShellAndTubeDesignParams.shell_h` callables now receive the wall state of the
   current `U` iterate (`q_flux`, `T_wall`, `dT_film`, `T_shell`, `T_tube`, `area_total`, besides the geometry keys),
   closed inside the existing `optimistix.fixed_point` (and on the heat flux in `rate()`), so condensing and boiling
