@@ -110,6 +110,9 @@ MW_DRY_AIR = MW_WATER / EPS
 #: Names of the state keys, in the order :func:`state` fills them
 STATE_KEYS = ("T", "W", "RH", "T_wb", "T_dp", "h", "v", "P", "p_w", "W_sat", "mu")
 
+#: Cap (K) on the seed of the wet-bulb / adiabatic-saturation Newton solves (below the boiling point at 1 atm)
+_T_SEED_MAX = 350.0
+
 _INPUTS = ("T", "W", "RH", "T_wb", "T_dp", "h")
 
 
@@ -319,8 +322,10 @@ def wet_bulb_temperature(T: Array | float, W: Array | float, P: Array | float = 
     def res(Ts, T_, W_, P_, le_):
         return _wb_residual(Ts, T_, W_, P_, le_, over_ice)
 
-    # a fog (W > W_s) has no wet bulb below the dry bulb; the seed keeps the iteration finite there
-    return _newton(res, T, T, W, P, lewis)
+    # a fog (W > W_s) has no wet bulb below the dry bulb; the seed keeps the iteration finite there.
+    # The seed is capped at _T_SEED_MAX: W_s(T) diverges at the boiling point of water at P (and is
+    # negative above it), so a seed at the dry bulb of hot air (a dryer's 100-200 C) gave NaN.
+    return _newton(res, jnp.minimum(T, _T_SEED_MAX), T, W, P, lewis)
 
 
 def adiabatic_saturation_temperature(T: Array | float, W: Array | float, P: Array | float = P_ATM,
@@ -338,7 +343,7 @@ def adiabatic_saturation_temperature(T: Array | float, W: Array | float, P: Arra
         h_target = saturation_enthalpy(Ts, P_, over_ice) - (Ws - W_) * condensed_enthalpy(Ts, over_ice)
         return (humid_enthalpy(T_, W_) - h_target) / humid_heat(W_)
 
-    return _newton(res, T, T, W, P)
+    return _newton(res, jnp.minimum(T, _T_SEED_MAX), T, W, P)
 
 
 # =============================================================================

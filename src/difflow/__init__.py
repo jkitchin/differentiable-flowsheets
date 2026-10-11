@@ -180,6 +180,21 @@ from difflow.units.absorption import (
     minimum_stripping_gas_rate,
     solute_free_operating_line,
 )
+from difflow.units.dryer import (
+    Dryer,
+    DryerParams,
+    constant_drying_rate,
+    drying_periods,
+    drying_rate_curve,
+    drying_time,
+    dry_basis,
+    equilibrium_moisture,
+    free_moisture,
+    heat_transfer_coefficient_tray,
+    solids_moisture,
+    water_activity,
+    wet_basis,
+)
 from difflow.units.cooling_tower import (
     CoolingTower,
     CoolingTowerParams,
@@ -564,6 +579,20 @@ __all__ = [
     "CoolingTowerParams",
     "maximum_L_over_G",
     "merkel_number",
+    # Unit operations - Drying
+    "Dryer",
+    "DryerParams",
+    "constant_drying_rate",
+    "dry_basis",
+    "drying_periods",
+    "drying_rate_curve",
+    "drying_time",
+    "equilibrium_moisture",
+    "free_moisture",
+    "heat_transfer_coefficient_tray",
+    "solids_moisture",
+    "water_activity",
+    "wet_basis",
     # Unit operations - Distillation
     "ShortcutColumn",
     "ShortcutColumnParams",

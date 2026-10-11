@@ -126,6 +126,19 @@ export const SYMBOLS = {
     ],
   },
 
+  /** A rotary dryer: inclined drum on trunnions, feed chute and discharge. */
+  dryer: {
+    label: 'dryer',
+    shapes: [
+      ['path', { d: 'M8 16l32 2v12l-32 2z' }],
+      ['path', { d: 'M14 17v14M22 18v12M30 19v10', fill: 'none' }],
+      ['line', { x1: 4, y1: 8, x2: 12, y2: 14 }],
+      ['line', { x1: 36, y1: 34, x2: 44, y2: 40 }],
+      ['line', { x1: 14, y1: 38, x2: 14, y2: 34 }],
+      ['line', { x1: 32, y1: 38, x2: 32, y2: 34 }],
+    ],
+  },
+
   /** Heat in: the exchanger circle with the arrow pointing at it. */
   heater: {
     label: 'heater',
@@ -472,6 +485,9 @@ export const OPERATION_SYMBOLS = {
   // humidification
   CoolingTower: 'cooling_tower',
 
+  // drying
+  Dryer: 'dryer',
+
   // pressure
   EOSCompressor: 'compressor',
   Turboexpander: 'turbine',
@@ -560,6 +576,7 @@ export const CATEGORY_SYMBOLS = {
   chromatography: 'chromatography',
   heat_transfer: 'heat_exchanger',
   evaporation: 'evaporator',
+  drying: 'dryer',
   pressure_change: 'compressor',
   power: 'turbine',
   gas_network: 'pipe',

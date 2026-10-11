@@ -8,6 +8,33 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **`Dryer` unit and the drying library (#432).** `difflow.units.dryer` (category `drying`, GUI symbol `dryer`):
+  moisture bookkeeping (`dry_basis`, `wet_basis`, `free_moisture`, `solids_moisture`), equilibrium-moisture
+  isotherms `equilibrium_moisture` / `water_activity` (GAB, BET, PCHIP table or a callable; closed-form inverse for
+  GAB/BET; optional Arrhenius `Hc`/`Hk` temperature dependence; parameters are data, none built in),
+  `constant_drying_rate` (`h (T - T_wb)/lambda` or `k_W (W_s - W)`), `heat_transfer_coefficient_tray`,
+  `drying_rate_curve`, and `drying_time` / `drying_periods` across the constant- and falling-rate periods
+  (linear falling rate in closed form, or a tabulated rate curve integrated segment by segment). The
+  constant/falling switch at `X_c` is a **softplus** of width `(X_c - X_eq)/sharpness` (default 200), so the time is
+  differentiable in `X_c`, the endpoints, the rate and the loading with no Python `if`; `sharpness -> inf`
+  recovers the piecewise answer. `Dryer` is a batch tray dryer (drying time from `load`/`area`, or the moisture
+  reached in a given time, cycle time and tray area for a throughput) and a continuous countercurrent or
+  cocurrent dryer (water and humid-enthalpy balances closing to rounding, exhaust dew-point margin and
+  `supersaturated` flag, product-temperature margin against `max_solids_T`, energy per kg of water, thermal
+  efficiency, residence time with `solids_per_area`, entrained `fines` split). Streams: air is the
+  `difflow.psychrometrics` stream; solids carry `F_solid` (dry-solid pseudo-species, mol/s, numerically kg/s with
+  the default `solid_molar_mass=1`) and `F_H2O` (mol/s). **Not implemented:** the three-zone McCabe rotary-dryer
+  length, the Fick-diffusion falling-rate series, deep-bed humidity profiles. **Unverified:** no Geankoplis or
+  McCabe drying example was reproduced (the issue's numbers are from recollection and could not be recalled with
+  confidence), the tray correlations `h = 0.0204 G^0.8` / `1.17 G^0.37` are typed from memory, and no GAB data of a
+  real material is included; the tests use closed-form, numerical-integral, balance and independent-NumPy/SciPy
+  oracles instead. Docs: `## Drying` in `docs/unit-operations-chemical.md`; notebook `examples/56_drying.ipynb`.
+  **Behaviour change (bug fix):** `psychrometrics.wet_bulb_temperature` and `adiabatic_saturation_temperature`
+  started their Newton solve at the dry-bulb temperature, where `W_s` diverges at and is negative above the boiling
+  point at `P`, so air above about 100 C at 1 atm (a dryer's inlet) gave NaN wet bulbs (and `state(...)["T_wb"]`);
+  the seed is now capped at 350 K. Results below 350 K are unchanged; hot air now returns the correct wet bulb.
+  `W_sat` and `mu` of a state above the boiling point remain meaningless (negative); `RH`, `T_dp` and `h` are fine.
+
 - **`difflow.psychrometrics`, `difflow.water` and the `CoolingTower` unit (#431).**
   `difflow.psychrometrics` (library): ideal-gas humid air with the ASHRAE constants,
   `state(T=, W=, RH=, T_wb=, T_dp=, h=, P=)` from any two independent properties (closed form

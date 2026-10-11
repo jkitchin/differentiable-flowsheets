@@ -4812,6 +4812,288 @@ respect to the fill size). Use `species_order=["H2O"]` for a water-only loop.
 $T_{in}$, $T_{out}$ and the wet bulb, rating `T_out` with respect to $KaV/L$,
 the pinch limit with respect to the wet bulb, and the whole recycle loop.
 
+---
+
+## Drying
+
+Convective drying removes the water a solid holds into a stream of hot, dry air.
+Two things set the design: **how fast** the solid gives up its water (the drying
+curve, a time for a batch tray and a residence time for a continuous dryer) and
+**what the air can carry** (the water and enthalpy balances, bounded by the dew
+point of the exhaust). `difflow` provides the drying-time and isotherm functions
+as a library and the `Dryer` unit that applies them to the humid-air streams of
+`difflow.psychrometrics`.
+
+### Drying-Time Functions
+
+**Location**: `difflow/units/dryer.py`
+
+**Functions**: `dry_basis`, `wet_basis`, `free_moisture`, `solids_moisture`,
+`equilibrium_moisture`, `water_activity`, `constant_drying_rate`,
+`heat_transfer_coefficient_tray`, `drying_rate_curve`, `drying_periods`,
+`drying_time`
+
+Moisture is on the **dry basis**, $X$ kg water per kg bone-dry solid
+(`dry_basis(w)` and `wet_basis(X)` convert); the *equilibrium moisture* $X^*$ is
+what the solid holds in air of relative humidity $a_w$, and the *free moisture*
+$X - X^*$ is what can be removed. `equilibrium_moisture(a_w, T, model, params)`
+takes a GAB isotherm
+$X = X_m C K a_w / [(1 - K a_w)(1 - K a_w + C K a_w)]$, a BET isotherm (GAB
+with $K = 1$), a monotone table or a callable; the parameters are data you
+supply (none are built in), and `water_activity` is the inverse (closed form for
+GAB and BET).
+
+The drying rate $R$ (kg water per m$^2$ of surface per s) of a solid with
+loading $L_s/A$ (kg dry solid per m$^2$) is constant at
+$R_c = h\,(T - T_{wb})/\lambda_{wb}$ while the surface is wet
+(`constant_drying_rate`; the wet bulb comes from `difflow.psychrometrics`, the
+coefficient $h$ from `difflow.heat_transfer` or the tray correlation
+`heat_transfer_coefficient_tray(G, flow)`), and falls linearly in the free
+moisture once $X$ drops below the critical moisture $X_c$:
+
+$$t = \frac{L_s}{A\,R_c}\left[(X_1 - X_c) + (X_c - X^*)\ln\frac{X_c - X^*}{X_2 - X^*}\right]$$
+
+(`drying_time`; `falling="integral"` replaces the logarithm by
+$(L_s/A)\int dX/R$ over a tabulated rate curve, and `drying_periods` returns the
+two periods separately). The Fick-diffusion series for a slab is not implemented.
+
+**The smooth switch.** Which terms apply depends on where $X_c$ falls relative
+to $X_1$ and $X_2$: $X_1 > X_c > X_2$, falling only ($X_1 < X_c$) and constant
+only ($X_2 > X_c$). The function is one expression with no `if`: with the
+softplus $\mathrm{sp}(z) = s\ln(1 + e^{z/s})$ the constant range is
+$\mathrm{sp}(X_1 - X_c) - \mathrm{sp}(X_2 - X_c)$ and the falling period runs
+from $X_a = X_1 - \mathrm{sp}(X_1 - X_c)$ to
+$X_b = X_a - \mathrm{sp}(X_a - X_2)$. The width is $s = (X_c - X^*)/\texttt{sharpness}$
+(default 200), so the result is within $e^{-200|X - X_c|/(X_c - X^*)}$ of the exact
+piecewise answer away from the corner; exactly at the corner ($X_1 = X_c$) the
+first-order offsets of the two periods cancel and the error is second order in $s$
+(about $5\times10^{-6}$ of the time on the tests' problem). Larger `sharpness`
+recovers the piecewise time, and the
+gradient with respect to $X_c$, $X_1$, $X_2$, $X^*$, $R_c$ and $L_s/A$ exists
+everywhere.
+
+```python
+import math
+import jax
+from difflow import drying_time, equilibrium_moisture, water_activity
+
+# drying time (hours): X1 = 0.35 -> X2 = 0.10, critical 0.20, equilibrium 0.05 (kg/kg dry solid)
+X1, X2, Xc, Xe = 0.35, 0.10, 0.20, 0.05
+Rc, LsA = 2.78e-4, 25.0              # kg/m^2/s, kg dry solid/m^2
+t = drying_time(X1, X2, Xc, Xe, Rc, LsA)
+exact = LsA / Rc * ((X1 - Xc) + (Xc - Xe) * math.log((Xc - Xe) / (X2 - Xe)))
+print(f"t = {float(t) / 3600:.4f} h  (closed form {exact / 3600:.4f} h)")
+
+# the critical moisture is a smooth regime boundary: dt/dXc and dt/dRc
+dXc, dRc = jax.grad(drying_time, argnums=(2, 4))(X1, X2, Xc, Xe, Rc, LsA)
+print(f"dt/dXc = {float(dXc) / 3600:.1f} h per kg/kg,  dt/dRc = {float(dRc) / 3600:.3e} h per (kg/m^2/s)")
+
+# a GAB isotherm (illustrative parameters, NOT those of a real material) and its inverse
+gab = {"X_m": 0.07, "C": 10.0, "K": 0.85}
+X = equilibrium_moisture(0.5, 300.0, "gab", gab)
+print(f"X_eq(a_w = 0.5) = {float(X):.4f}, back to a_w = {float(water_activity(X, 300.0, 'gab', gab)):.3f}")
+```
+
+The numbers are an invented illustration, not a published example: the
+Geankoplis (Ch. 9) and McCabe, Smith & Harriott (Ch. 24) drying examples were
+not reproduced (their inputs could not be recalled with confidence), so the
+tests check the closed forms against a numerical $\int dX/R$ of the same
+piecewise rate curve instead. The tray correlations in
+`heat_transfer_coefficient_tray`, $h = 0.0204\,G^{0.8}$ (parallel flow) and
+$h = 1.17\,G^{0.37}$ (perpendicular), with $G$ in kg/m$^2$/h and $h$ in W/m$^2$/K,
+are typed from memory and **unverified**; check them against the book.
+
+(op-dryer)=
+### Dryer
+
+**Location**: `difflow/units/dryer.py`
+
+**Class**: `Dryer`
+
+**Description**: Tray (batch) or continuous (countercurrent or cocurrent)
+convective dryer with air balances.
+
+#### Process Role
+
+Two inlets (`wet_solids`, `air_in`) and two outlets (`dry_solids`, `air_out`).
+
+**Streams.** Air is the humid-air stream of `difflow.psychrometrics`
+(`F_H2O`, `F_air`, `T`, `P`, mol/s). Solids are a stream with a dry-solid
+pseudo-species `F_solid` and `F_H2O`, **both in mol/s**: the dry solid has no
+molar mass, so `solid_molar_mass` (kg/mol, default 1) converts, and with the
+default `F_solid` is numerically kg/s of dry solid while `F_H2O` is mol/s like
+every other water stream (the moisture is $X = F_{H_2O} M_w / (F_{solid} M_s)$).
+This differs from `Leacher`, whose flows are all kg/s. Any species of `air_in`
+beyond `H2O` is counted as dry air and passed through.
+
+**Batch** (`mode="batch"`): a tray dryer. The air at the inlet state flows over
+a tray of loading $L_s/A$ = `load`/`area` at the constant rate
+$R_c$ (`R_c`, or `h`, or `air_mass_velocity` through the tray correlation); the
+unit returns the drying time to `product_moisture` (or the moisture reached in
+`residence_time`), the cycle time with `turnaround_time`, the tray `area_required` for
+the stream's throughput, and the exhaust air from the water and enthalpy balances
+over the drying step (the air flow is the flow while the fan runs; the humidity
+rise across the trays is assumed small and is reported). **Continuous**: the
+overall water balance
+$G\,(W_{out} - W_{in}) = L_s\,(X_{in} - X_{out})$ and the enthalpy balance in
+humid-air and solids enthalpy fix the exhaust state; the solids leave at
+$T_{s,out} = T_a - (T_a - T_{wb})\,R(X_{out})/R_c$ evaluated in the air at their
+exit end (the inlet air for countercurrent, the outlet air for cocurrent, which
+is solved by bisection with an implicit gradient). With `solids_per_area` the
+unit also reports the required residence time, taking the constant rate in the air
+at the wet end of the dryer, so countercurrent is slower on the constant rate but
+hotter at the product end.
+
+`info` carries the time or residence time, the constant/falling split, the
+exhaust state, the dew-point margin (exhaust dry bulb minus its dew point, with a
+`supersaturated` flag), the product-temperature margin against `max_solids_T`, the
+heat duty `Q_air` of heating the air from `T_ambient`, `energy_per_kg` water
+evaporated, `thermal_efficiency`, balance residuals recomputed from the streams, and
+for the continuous dryer `fines` (the fraction `entrainment` of the dry solids
+split off at the product moisture and temperature; a downstream cyclone takes it
+from there).
+
+```python
+from difflow import Dryer, DryerParams
+from difflow.psychrometrics import air_stream_from_state, state, MW_WATER
+
+K = 273.15
+air = air_stream_from_state(state(T=100.0 + K, W=0.01), 10.0)        # 10 kg/s dry air at 100 C
+wet = {"F_solid": 0.5, "F_H2O": 0.5 * 0.30 / MW_WATER, "T": 300.0, "P": 101325.0}   # 0.5 kg/s dry, X = 0.30
+
+for flow in ("countercurrent", "cocurrent"):
+    dryer = Dryer(DryerParams(mode="continuous", flow=flow, X_c=0.15, X_eq=0.02, product_moisture=0.05,
+                              h=60.0, solids_per_area=10.0, max_solids_T=340.0))
+    dry, exhaust, info = dryer(wet, air)
+    print(f"{flow:15s} exhaust {float(info['T_air_out']) - K:5.1f} C, product {float(info['T_solids_out']) - K:5.1f} C "
+          f"(margin {float(info['solids_T_margin']):6.1f} K), dew-point margin {float(info['dew_point_margin']):.1f} K, "
+          f"residence {float(info['residence_time_required']) / 60:.0f} min, "
+          f"{float(info['energy_per_kg']) / 1e6:.2f} MJ/kg water")
+```
+
+A tray dryer: the time to dry a load, and how it responds to the air (the
+gradients are exact, through the wet-bulb solve and the smooth switch):
+
+```python
+import jax
+from difflow import Dryer, DryerParams
+from difflow.psychrometrics import air_stream_from_state, state, MW_WATER
+
+K = 273.15
+wet = {"F_solid": 0.01, "F_H2O": 0.01 * 0.35 / MW_WATER, "T": 295.0, "P": 101325.0}
+
+def drying_time(T_air, air_velocity):
+    tray = Dryer(DryerParams(mode="batch", X_c=0.20, X_eq=0.05, product_moisture=0.10,
+                             air_mass_velocity=air_velocity, load=12.5, area=0.5))
+    air = air_stream_from_state(state(T=T_air, W=0.01), 0.5)
+    return tray(wet, air)[2]["drying_time"]
+
+t = drying_time(70.0 + K, 1.0)
+dT, dG = jax.grad(drying_time, argnums=(0, 1))(70.0 + K, 1.0)
+print(f"drying time {float(t) / 3600:.2f} h; d(time)/dT = {float(dT) / 3600:.3f} h/K, "
+      f"d(time)/d(air mass velocity) = {float(dG) / 3600:.2f} h per kg/m^2/s")
+```
+
+**Design with gradients.** A countercurrent dryer of fixed size (residence time
+4000 s) must dry the solids to the spec. For each inlet temperature the air flow that
+just does it is solved for (with an implicit-function gradient); hotter air needs
+less of it, so the energy per kg of water falls with the temperature until the
+product reaches `max_solids_T`, which is added to the objective as a soft constraint.
+The optimum is found by bisection on the sign of the exact gradient:
+
+```python
+import jax
+from difflow import Dryer, DryerParams
+from difflow.psychrometrics import air_stream_from_state, state, MW_WATER
+from difflow.staged import _solve_monotone
+
+K = 273.15
+wet = {"F_solid": 0.5, "F_H2O": 0.5 * 0.30 / MW_WATER, "T": 300.0, "P": 101325.0}
+T_max, t_avail = 350.0, 4000.0
+dryer = Dryer(DryerParams(mode="continuous", flow="countercurrent", X_c=0.15, X_eq=0.02,
+                          product_moisture=0.05, h=60.0, solids_per_area=10.0, max_solids_T=T_max))
+
+def run(T, G):
+    return dryer(wet, air_stream_from_state(state(T=T, W=0.01), G))[2]
+
+def air_flow(T):                      # the air flow (kg/s) that dries the solids in t_avail
+    return _solve_monotone(lambda G: run(T, G)["residence_time_required"] - t_avail, 4.0, 60.0)
+
+def objective(T):                     # MJ/kg water + a soft limit on the product temperature
+    info = run(T, air_flow(T))
+    return info["energy_per_kg"] / 1e6 + 5.0 * jax.nn.softplus((info["T_solids_out"] - T_max) / 0.1)
+
+grad = jax.jit(jax.grad(objective))
+lo, hi = 350.0, 420.0
+for _ in range(20):
+    T = 0.5 * (lo + hi)
+    lo, hi = (T, hi) if grad(T) < 0.0 else (lo, T)
+T = 0.5 * (lo + hi)
+info = run(T, air_flow(T))
+print(f"inlet {T - K:.1f} C with {float(air_flow(T)):.1f} kg/s of air: product {float(info['T_solids_out']) - K:.1f} C "
+      f"(limit {T_max - K:.1f} C), {float(info['energy_per_kg']) / 1e6:.2f} MJ/kg water")
+```
+
+#### Parameters
+
+<!-- doc-test: skip: field listing (a class sketch), not an executable example -->
+```python
+@dataclass
+class DryerParams:
+    mode: str = "batch"                # | "continuous"
+    flow: str = "countercurrent"       # | "cocurrent" (continuous)
+    X_c: float = 0.2                   # critical moisture, kg/kg dry solid
+    X_eq: float = None                 # equilibrium moisture (else from the isotherm at the air RH, else 0)
+    isotherm_model: str = None         # "gab" | "bet" | "table"
+    isotherm_params: list = None       # [X_m, C, K] | [X_m, C] | [[a_w...], [X...]]
+    R_c: float = None                  # constant rate, kg/m^2/s (else h (T - T_wb)/lambda)
+    h: float = None                    # W/m^2/K (else from air_mass_velocity)
+    air_mass_velocity: float = None    # kg/m^2/s, tray correlation
+    tray_flow: str = "parallel"        # | "perpendicular"
+    falling: str = "linear"            # | "integral" (with rate_curve = [[X...], [R/R_c...]])
+    rate_curve: list = None
+    sharpness: float = 200.0           # smooth-switch sharpness
+    product_moisture: float = None     # spec, kg/kg dry solid
+    residence_time: float = None       # s, instead of product_moisture
+    load: float = None                 # kg dry solid per batch (batch)
+    area: float = None                 # m^2 (batch); or solids_per_area
+    solids_per_area: float = None      # Ls/A, kg/m^2 (continuous: reports the residence time)
+    turnaround_time: float = 0.0       # s
+    solid_species: str = "solid"       # stream key F_<name>
+    solid_molar_mass: float = 1.0      # kg/mol (1: F_solid is kg/s)
+    solids_cp: float = 1500.0          # J/kg/K
+    cp_water: float = 4186.0
+    max_solids_T: float = None         # K, reported as a margin
+    heat_loss: float = 0.0             # W, used when adiabatic=False
+    adiabatic: bool = True
+    T_ambient: float = 293.15          # K, reference of the energy per kg and efficiency
+    entrainment: float = 0.0           # fraction of the dry solids carried out as fines (continuous)
+    lewis: float = 1.0
+```
+
+#### Equations and Assumptions
+
+- Constant-rate period at the wet-bulb temperature, heat-transfer limited (no
+  radiation or conduction from the tray); a falling rate linear in the free
+  moisture, or a tabulated relative rate curve; the constant/falling switch is
+  smooth (above).
+- Batch: air at the inlet state over the whole tray. The solids stream's flow is
+  the throughput and passes through; the exhaust flows are those of the drying step.
+- Continuous: the product-temperature estimate above; no heat of wetting; constant
+  solid and liquid-water specific heats; air out must stay above its dew point
+  (reported, not enforced).
+- Not implemented: the three-zone (preheat, constant-rate, falling-rate) rotary-dryer
+  sizing of McCabe, the Fick-diffusion series, deep-bed humidity profiles, spray
+  drying, fluid-bed hydrodynamics.
+- `psychrometrics.wet_bulb_temperature` now starts its Newton solve below the boiling
+  point, so it works for the 100-200 C air of a dryer (it returned NaN before).
+
+**Gradients.** Drying time, energy per kg, the exhaust and product temperatures are
+differentiable with respect to the air temperature, humidity and flow, the air
+velocity (through $h$), $X_c$ and the load.
+
+---
+
 ## Summary Tables
 
 ### Reactor Comparison

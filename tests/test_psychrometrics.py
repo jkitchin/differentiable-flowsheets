@@ -429,3 +429,23 @@ class TestGradients:
                 return state(**kw)["T"]
 
             check_grads(f, (1.0,), order=1, modes=["rev"], rtol=1e-5, atol=1e-8)
+
+
+class TestHotAirWetBulb:
+    """Wet bulb above the boiling point of water at P (a dryer's 100-200 C air): the Newton seed must stay below it."""
+
+    @pytest.mark.parametrize("T,W", [(373.15, 0.01), (423.15, 0.01), (473.15, 0.05)])
+    def test_wet_bulb_of_hot_air_is_finite_and_satisfies_the_balance(self, T, W):
+        from scipy import optimize
+
+        Twb = float(wet_bulb_temperature(T, W))
+        assert 280.0 < Twb < 345.0
+
+        def res(Ts):
+            pws = float(ps.saturation_pressure(Ts))
+            Ws = 0.621945 * pws / (101325.0 - pws)
+            return (T - Ts) * (1006.0 + W * 1860.0) - (Ws - W) * (2501e3 + (1860.0 - 4186.0) * (Ts - 273.15))
+
+        assert Twb == pytest.approx(optimize.brentq(res, 250.0, 372.0, xtol=1e-12), abs=1e-8)
+        # the adiabatic-saturation temperature is the same state for this model
+        assert float(adiabatic_saturation_temperature(T, W)) == pytest.approx(Twb, abs=1e-6)
