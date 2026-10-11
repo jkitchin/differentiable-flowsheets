@@ -321,9 +321,11 @@ class GasPFRParams(PFRParams):
                            # bed instead: d_p, voidage, mu, rho_gas, u_s0, bed_area
 ```
 
-Instead of a lumped `alpha`, pass `d_p`, `voidage`, `mu`, `rho_gas`, `u_s0`,
-`bed_area` (and optionally `sphericity`) and $\alpha$ is computed from the full
-Ergun equation; see [Particles and Beds](particles-ergun).
+Instead of a lumped `alpha`, pass `d_p`, `voidage`, `mu`, `rho_gas`,
+`bed_area` (and optionally `u_s0` and `sphericity`) and $\alpha$ is computed from the full
+Ergun equation; see [Particles and Beds](particles-ergun). Leave `u_s0=None` to
+take the superficial velocity from the inlet stream ($Q_0/A_c$); a given `u_s0`
+that differs from the stream's by more than 1 % raises `GasPFRBedWarning`.
 
 #### Additional Equations
 
@@ -3840,9 +3842,10 @@ Incompressible (liquid) flow in pipes: Darcy-Weisbach friction with a
 Colebrook/Churchill friction factor, fittings, elevation head and
 differential-pressure flow meters. The functions live in
 [`difflow.fluids`](#fluids-module) (JAX, SI, differentiable) and the unit
-operation is [`Pipe`](#op-pipe). Gas pipes are a different model
-(Weymouth, `difflow_gas`); compressible flow, two-phase flow, non-Newtonian
-fluids and transients are out of scope.
+operation is [`Pipe`](#op-pipe). Compressible gas flow (nozzles, isothermal
+and adiabatic lines) is in [`difflow.compressible`](#compressible-module), and
+gas networks are in `difflow_gas`. Two-phase flow, non-Newtonian fluids and
+transients are out of scope.
 
 (op-pipe)=
 ### Pipe
@@ -4019,6 +4022,68 @@ print(f"branch A carries {float(x):.1%} of the flow")
 Both branches then have equal ΔP, the flows sum to the total, and the split is
 differentiable by the implicit function theorem (`tests/test_pipe.py::
 TestParallelBranches`).
+
+(compressible-module)=
+## Compressible Gas Flow
+
+`difflow.compressible` covers ideal-gas flow where the density changes along
+the path: nozzles and relief devices, isothermal gas lines and adiabatic
+(Fanno) ducts. It assumes constant $\gamma=C_p/C_v$ and molar mass `MW`
+(kg/mol); friction factors are **Darcy** factors, as in `difflow.fluids`. For an
+isothermal line $\mathrm{Re}=GD/\mu$ is constant along the pipe, so $f$ is one
+call to `fluids.friction_factor`. JAX, SI and differentiable throughout.
+
+| Function | Relation |
+|----------|----------|
+| `speed_of_sound(T, MW, gamma)`, `mach_number(v, T, MW, gamma)` | $c=\sqrt{\gamma RT/M}$, $\mathrm{Ma}=v/c$ |
+| `stagnation_ratios(M, gamma)` | isentropic $T_0/T$, $P_0/P$, $\rho_0/\rho$ |
+| `critical_pressure_ratio(gamma)` | $P^*/P_0=(2/(\gamma+1))^{\gamma/(\gamma-1)}$ (0.528 for air) |
+| `choked_mass_flux(P0, T0, MW, gamma)` | $G^*=P_0\sqrt{\gamma M/(RT_0)}\,(2/(\gamma+1))^{(\gamma+1)/(2(\gamma-1))}$ |
+| `nozzle_mass_flow(P0, T0, P_back, area, MW, gamma, Cd)` | isentropic converging nozzle, subsonic or choked |
+| `isothermal_pipe_mass_flux(P1, P2, T, L, D, f, MW)` | $P_1^2-P_2^2=G^2\frac{RT}{M}\left[\frac{fL}{D}+2\ln\frac{P_1}{P_2}\right]$ |
+| `isothermal_outlet_pressure(G, P1, T, L, D, f, MW, gamma)` | the same equation solved for $P_2$, with the choking check |
+| `fanno_parameter(M, gamma)`, `fanno_ratios(M, gamma)` | $fL^*/D$ and $P/P^*$, $T/T^*$, $P_0/P_0^*$ |
+| `adiabatic_outlet_mach(M1, fL_D, gamma)` | outlet Mach, $P_2/P_1$, $T_2/T_1$ of a subsonic adiabatic duct |
+
+**Choking.** `nozzle_mass_flow` holds $P_\mathrm{back}/P_0$ at no less than the
+critical ratio. The isentropic flux has its maximum there, so the clamp is
+continuous with a continuous first derivative, and `jax.grad` with respect to
+the back pressure is exactly 0 in choked flow. An isothermal line chokes when
+its exit velocity reaches $\sqrt{RT/M}$ (Mach $1/\sqrt\gamma$, not 1). Past
+that, `isothermal_outlet_pressure` returns `choked=True` and $P_2$ at the choke
+pressure; `adiabatic_outlet_mach` returns `choked=True` and $M_2=1$ when
+$fL/D$ exceeds $fL^*/D$ at the inlet Mach number. In both cases the real flow
+would be lower than the one requested.
+
+**Solvers and gradients.** The two outlet solvers bracket the subsonic root
+(between the choke point and the inlet) and bisect in log space. A final
+Newton step on the stopped root attaches implicit-function-theorem gradients
+with respect to every input.
+
+**What was verified** (`tests/test_compressible.py`):
+
+- The isothermal equation and the Fanno relations agree with an independent
+  `solve_ivp` integration of the differential momentum balance, to 1e-6 or
+  better. This includes a short, high-velocity line where the acceleration term
+  matters.
+- $dP_2/dD$ agrees with finite differences of that integration.
+- `nozzle_mass_flow` is continuous at the critical ratio, equals
+  $\rho^*c^*A$ when choked, and tends to the Bernoulli flow
+  $A\sqrt{2\rho\Delta P}$ at small pressure drop.
+
+```python
+from difflow import fluids
+from difflow.compressible import isothermal_pipe_mass_flux, nozzle_mass_flow
+
+# 50 km natural-gas line, 0.5 m ID, 60 -> 40 bar at 288 K
+D, mu, MW = 0.5, 1.1e-5, 0.0175
+G = isothermal_pipe_mass_flux(60e5, 40e5, 288.0, 5e4, D, 0.012, MW)
+f = fluids.friction_factor(G * D / mu, 4.6e-5 / D)   # check the assumed f
+print(float(G) * 3.1416 * D**2 / 4, "kg/s;  f =", float(f))
+
+# air from a 10 bar vessel through a 1 cm^2 nozzle: choked
+print(float(nozzle_mass_flow(10e5, 300.0, 1e5, 1e-4, 0.02897, 1.4, Cd=0.97)), "kg/s")
+```
 
 ---
 
@@ -4271,7 +4336,10 @@ $$\frac{\Delta P}{L} = 150\frac{(1-\varepsilon)^2}{\varepsilon^3}\frac{\mu u_s}{
 + 1.75\frac{1-\varepsilon}{\varepsilon^3}\frac{\rho u_s^2}{\phi d_p}$$
 
 and `info['viscous']` (Blake-Kozeny), `info['inertial']` (Burke-Plummer),
-`info['Re_bed']`. `kozeny_carman(...)` is the laminar limit with the Kozeny
+`info['Re_bed']`. `D_bed=` applies the Mehta & Hawley (1969) wall correction for
+narrow beds ($D/d_p \lesssim 10$): $M = 1 + 2\phi d_p/[3D(1-\varepsilon)]$
+multiplies the viscous term by $M^2$ and the inertial term by $M$
+(`info['wall_factor']`). `kozeny_carman(...)` is the laminar limit with the Kozeny
 constant $k_0$ (prefactor $36k_0 = 180$), the piece to reuse for filter-cake
 resistance.
 
@@ -4284,10 +4352,12 @@ print(float(dpdl), float(info["viscous"]), float(info["inertial"]))
 ```
 
 **GasPFR.** `GasPFRParams` accepts either the lumped `alpha` (Pa/m$^3$) or the
-physical bed (`d_p`, `voidage`, `mu`, `rho_gas`, `u_s0`, `bed_area`,
+physical bed (`d_p`, `voidage`, `mu`, `rho_gas`, `bed_area`, optional `u_s0`,
 `sphericity`); in the second case $\alpha = (\Delta P/L)_0/A_c$ is computed from
-the Ergun equation at the inlet (`ergun_alpha`, `params.effective_alpha`).
-Supplying both is an error.
+the Ergun equation at the inlet (`ergun_alpha`, `params.alpha_for(Q0)`, or
+`params.effective_alpha` when `u_s0` is given). With `u_s0=None` the velocity is
+$Q_0/A_c$ from the inlet stream; a given `u_s0` is checked against it
+(`GasPFRBedWarning` above 1 %). Supplying both `alpha` and the bed is an error.
 
 (particles-fluidization)=
 ### Fluidization
@@ -4302,11 +4372,21 @@ $$Ar = \frac{150(1-\varepsilon_{mf})}{\phi^2\varepsilon_{mf}^3}Re_{mf}
 solved in closed form (`method="ergun"`); `method="wen_yu"` is the Wen & Yu (1966)
 correlation $Re_{mf} = \sqrt{33.7^2 + 0.0408\,Ar} - 33.7$. `bed_expansion(u, u_t, n)`
 gives the Richardson-Zaki voidage $(u/u_t)^{1/n}$ and height
-$H_{mf}(1-\varepsilon_{mf})/(1-\varepsilon)$ (a homogeneous-expansion model; it
-is anchored at $u_t$, so use it well above $u_{mf}$).
+$H_{mf}(1-\varepsilon_{mf})/(1-\varepsilon)$ (a homogeneous-expansion model). By
+default the line is anchored at $u_t$, which can give $\varepsilon < \varepsilon_{mf}$
+(a bed shorter than $H_{mf}$) just above $u_{mf}$; pass `u_mf=` to anchor it at
+$(u_{mf}, \varepsilon_{mf})$ instead, $\varepsilon = \min[\varepsilon_{mf}(u/u_{mf})^{1/n}, 1]$.
 `fluidization_window(...)` returns $(u_{mf}, u_t)$; above $u_t$ particles are
-entrained. `geldart_group(d_p, rho_p, rho_f)` returns A/B/C/D from approximate
-Geldart (1973) boundaries; it is **not differentiable** and not jit-able.
+entrained.
+
+`minimum_bubbling_velocity(d_p, rho_f, mu, fines_fraction)` is the Abrahamsen &
+Geldart (1980) correlation $u_{mb} = 2.07\,e^{0.716F}d_p\rho_f^{0.06}/\mu^{0.347}$
+(gas beds; $F$ is the mass fraction below 45 µm). `geldart_group(d_p, rho_p, rho_f,
+mu, fines_fraction)` returns A/B/C/D: C below 20 µm, D above
+Grace's (1986) B/D line $Ar > 1.45\times10^5$, and otherwise A when
+$u_{mb}/u_{mf} > 1$ (the bed expands before it bubbles), with $u_{mf}$ from the
+Baeyens & Geldart (1974) correlation. This is the sloping A/B boundary, so FCC
+catalyst (60 µm, 1500 kg/m³) is group A. It is **not differentiable** and not jit-able.
 
 ```python
 from difflow.particles import fluidization_window, geldart_group

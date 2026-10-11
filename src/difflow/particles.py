@@ -7,7 +7,8 @@ Building blocks for adsorbers, catalytic beds, settlers, cyclones and filters:
 - packed beds: :func:`ergun_pressure_gradient`, :func:`kozeny_carman`,
   :func:`ergun_alpha` (the lumped coefficient ``GasPFR`` uses);
 - fluidization: :func:`minimum_fluidization_velocity`, :func:`bed_expansion`,
-  :func:`fluidization_window`, :func:`geldart_group` (not differentiable).
+  :func:`fluidization_window`, :func:`minimum_bubbling_velocity`,
+  :func:`geldart_group` (not differentiable).
 
 These are plain functions, not unit operations: they are not registered in
 the GUI palette. The units that apply them are in
@@ -29,6 +30,11 @@ Sources
 - Richardson, J. F. and Zaki, W. N., Trans. Inst. Chem. Eng., 32, 35-53 (1954).
 - Kunii, D. and Levenspiel, O., Fluidization Engineering, 2nd ed. (1991).
 - Geldart, D., Powder Technol., 7, 285-292 (1973).
+- Baeyens, J. and Geldart, D., Chem. Eng. Sci., 29, 255-265 (1974): u_mf.
+- Abrahamsen, A. R. and Geldart, D., Powder Technol., 26, 35-46 (1980):
+  minimum bubbling velocity and the A/B boundary.
+- Mehta, D. and Hawley, M. C., Ind. Eng. Chem. Process Des. Dev., 8, 280-282
+  (1969): wall correction to the Ergun equation.
 """
 
 from __future__ import annotations
@@ -273,6 +279,7 @@ def ergun_pressure_gradient(
     rho: Array | float,
     mu: Array | float,
     sphericity: Array | float = 1.0,
+    D_bed: Array | float | None = None,
 ) -> tuple[Array, dict[str, Array]]:
     r"""Packed-bed pressure gradient by the full Ergun (1952) equation.
 
@@ -289,12 +296,20 @@ def ergun_pressure_gradient(
         rho: Fluid density (kg/m^3).
         mu: Fluid viscosity (Pa s).
         sphericity: Particle sphericity (-).
+        D_bed: Bed (column) diameter (m). If given, the Mehta-Hawley (1969)
+            wall correction is applied: the wall adds wetted surface, so with
+            ``M = 1 + 2 phi d_p / (3 D_bed (1 - eps))`` the viscous term is
+            multiplied by ``M^2`` and the inertial term by ``M``. It matters
+            for ``D_bed / d_p`` below about 10 (laboratory and pilot columns);
+            it tends to 1 for a wide bed. None (default) is the
+            unbounded-bed equation.
 
     Returns:
         ``(dP_dL, info)``: pressure drop per unit length (Pa/m, positive in
         the flow direction) and ``info`` with ``viscous`` (Blake-Kozeny term,
-        Pa/m), ``inertial`` (Burke-Plummer term, Pa/m) and ``Re_bed``
-        (``rho u_s phi d_p / (mu (1-eps))``).
+        Pa/m), ``inertial`` (Burke-Plummer term, Pa/m), ``Re_bed``
+        (``rho u_s phi d_p / (mu (1-eps))``) and ``wall_factor`` (``M``, 1
+        without ``D_bed``).
 
     Example:
         >>> from difflow.particles import ergun_pressure_gradient
@@ -304,12 +319,14 @@ def ergun_pressure_gradient(
     """
     eps = jnp.asarray(voidage)
     dp_eff = sphericity * d_p
-    viscous = 150.0 * (1.0 - eps) ** 2 / eps**3 * mu * u_s / dp_eff**2
-    inertial = 1.75 * (1.0 - eps) / eps**3 * rho * u_s * u_s / dp_eff
+    M = jnp.asarray(1.0) if D_bed is None else 1.0 + 2.0 * dp_eff / (3.0 * D_bed * (1.0 - eps))
+    viscous = 150.0 * M**2 * (1.0 - eps) ** 2 / eps**3 * mu * u_s / dp_eff**2
+    inertial = 1.75 * M * (1.0 - eps) / eps**3 * rho * u_s * u_s / dp_eff
     info = {
         "viscous": viscous,
         "inertial": inertial,
         "Re_bed": rho * u_s * dp_eff / (mu * (1.0 - eps)),
+        "wall_factor": M,
     }
     return viscous + inertial, info
 
@@ -449,6 +466,7 @@ def bed_expansion(
     Re_t: Array | float | None = None,
     voidage_mf: Array | float = 0.45,
     H_mf: Array | float = 1.0,
+    u_mf: Array | float | None = None,
 ) -> tuple[Array, Array]:
     r"""Fluidized-bed voidage and height from Richardson-Zaki.
 
@@ -456,9 +474,16 @@ def bed_expansion(
     and, with a fixed solids inventory,
     :math:`H = H_{mf}(1-\varepsilon_{mf})/(1-\varepsilon)`. This is the
     homogeneous (particulate) expansion; gas beds with bubbles
-    expand differently. The Richardson-Zaki line is anchored at ``u_t``, so
-    the voidage it gives at ``u_mf`` need not equal ``voidage_mf``; the height
-    ratio is then only meaningful well above ``u_mf``.
+    expand differently.
+
+    By default the Richardson-Zaki line is anchored at ``u_t``, so the
+    voidage it gives at ``u_mf`` need not equal ``voidage_mf``: just above
+    ``u_mf`` it can predict a bed *shorter* than the settled one, and the height
+    is only meaningful well above ``u_mf``. Pass ``u_mf`` to anchor the line at
+    ``(u_mf, voidage_mf)`` instead, :math:`\varepsilon = \varepsilon_{mf}
+    (u/u_{mf})^{1/n}` (capped at 1). This keeps the Richardson-Zaki slope
+    but makes the height exactly ``H_mf`` at ``u_mf``, which is the usual
+    engineering fix when no measured intercept is available.
 
     Args:
         u: Superficial velocity (m/s).
@@ -467,13 +492,19 @@ def bed_expansion(
         Re_t: Terminal Reynolds number (needed if ``n`` is None).
         voidage_mf: Voidage at minimum fluidization (-).
         H_mf: Bed height at minimum fluidization (m).
+        u_mf: Minimum fluidization velocity (m/s). If given, the line is
+            anchored at ``(u_mf, voidage_mf)`` instead of ``(u_t, 1)``.
 
     Returns:
         ``(voidage, height)``.
     """
     if n is None:
         n = richardson_zaki_exponent(_require(Re_t))
-    eps = (jnp.asarray(u, dtype=float) / u_t) ** (1.0 / n)
+    u = jnp.asarray(u, dtype=float)
+    if u_mf is None:
+        eps = (u / u_t) ** (1.0 / n)
+    else:
+        eps = jnp.minimum(voidage_mf * (u / u_mf) ** (1.0 / n), 1.0)
     return eps, H_mf * (1.0 - voidage_mf) / (1.0 - eps)
 
 
@@ -507,31 +538,104 @@ def fluidization_window(
     return u_mf, u_t
 
 
-def geldart_group(d_p: float, rho_p: float, rho_f: float) -> str:
-    """Approximate Geldart (1973) powder group: ``"A"``, ``"B"``, ``"C"`` or ``"D"``.
+def minimum_bubbling_velocity(
+    d_p: Array | float,
+    rho_f: Array | float,
+    mu: Array | float,
+    fines_fraction: Array | float = 0.0,
+) -> Array:
+    r"""Minimum bubbling velocity of a gas-fluidized powder (Abrahamsen-Geldart, 1980).
 
-    NOT differentiable and not jit-able (returns a Python string from
-    concrete numbers). The boundaries are the commonly quoted approximations
-    of Geldart's chart, not an exact digitization: C below 20 micron; A
-    below 100 micron with density difference under 1400 kg/m^3; D above
-    the line ``d_p [micron] * (rho_p - rho_f)^0.934 = 1e6``
-    (``rho`` in kg/m^3); B otherwise. Treat results near a boundary as
-    indicative only.
+    .. math::
+        u_{mb} = 2.07\,e^{0.716 F}\,\frac{d_p\,\rho_g^{0.06}}{\mu^{0.347}}
+
+    in SI units, with ``F`` the mass fraction of powder finer than 45 micron.
+    Between ``u_mf`` and ``u_mb`` a Group A powder expands homogeneously; for
+    Group B powders ``u_mb <= u_mf`` and bubbles appear as soon as the bed
+    fluidizes. A correlation of experiments on powders of about 20-72 micron
+    (mean); use it as an estimate.
 
     Args:
-        d_p: Particle diameter (m).
+        d_p: Mean (surface-volume) particle diameter (m).
+        rho_f: Gas density (kg/m^3).
+        mu: Gas viscosity (Pa s).
+        fines_fraction: Mass fraction finer than 45 micron (-).
+
+    Returns:
+        ``u_mb`` (m/s).
+    """
+    return 2.07 * jnp.exp(0.716 * jnp.asarray(fines_fraction)) * d_p * jnp.asarray(rho_f) ** 0.06 / jnp.asarray(mu) ** 0.347
+
+
+def _baeyens_geldart_umf(d_p, drho, rho_f, mu, g=G_STD):
+    """Baeyens-Geldart (1974) u_mf, the correlation the A/B criterion was built with."""
+    return (drho * g) ** 0.934 * d_p**1.8 / (1111.0 * mu**0.87 * rho_f**0.066)
+
+
+def geldart_group(
+    d_p: float,
+    rho_p: float,
+    rho_f: float,
+    mu: float = 1.8e-5,
+    fines_fraction: float = 0.0,
+) -> str:
+    """Geldart (1973) powder group: ``"A"``, ``"B"``, ``"C"`` or ``"D"``.
+
+    NOT differentiable and not jit-able (returns a Python string from
+    concrete numbers). The boundaries:
+
+    * **C/A**: 20 micron, the commonly quoted approximation of Geldart's chart.
+    * **A/B**: ``u_mb / u_mf = 1`` (Geldart's own definition of the boundary:
+      Group A beds expand without bubbling between ``u_mf`` and ``u_mb``), with
+      :func:`minimum_bubbling_velocity` and the Baeyens-Geldart ``u_mf``. In SI
+      units the ratio is
+      ``2300 rho_f^0.126 mu^0.523 exp(0.716 F) / (d_p^0.8 (g (rho_p - rho_f))^0.934)``.
+      It is a sloping line on the log-log chart: FCC catalyst (60 micron,
+      1500 kg/m^3) is A and 200 micron sand is B.
+    * **B/D**: Archimedes number ``Ar = d_p^3 rho_f (rho_p - rho_f) g / mu^2
+      = 1.45e5`` (Grace, 1986, Can. J. Chem. Eng. 64, 353), about 1.1 mm
+      for sand in ambient air.
+
+    Treat results near a boundary as indicative only; the A/B line depends on
+    the gas (through ``rho_f`` and ``mu``) and the fines content.
+
+    Args:
+        d_p: Mean particle diameter (m).
         rho_p: Particle density (kg/m^3).
         rho_f: Fluid density (kg/m^3).
+        mu: Gas viscosity (Pa s); default air at ambient conditions.
+        fines_fraction: Mass fraction finer than 45 micron (-).
 
     Returns:
         One of ``"A"``, ``"B"``, ``"C"``, ``"D"``.
     """
-    d_um = float(d_p) * 1e6
-    drho = float(rho_p) - float(rho_f)
+    d_p, rho_f, mu = float(d_p), float(rho_f), float(mu)
+    d_um = d_p * 1e6
+    drho = float(rho_p) - rho_f
     if d_um < 20.0:
         return "C"
-    if d_um * drho**0.934 > 1.0e6:
+    if d_p**3 * rho_f * drho * G_STD / mu**2 > 1.45e5:
         return "D"
-    if d_um < 100.0 and drho < 1400.0:
-        return "A"
-    return "B"
+    ratio = float(minimum_bubbling_velocity(d_p, rho_f, mu, fines_fraction)) / _baeyens_geldart_umf(
+        d_p, drho, rho_f, mu
+    )
+    return "A" if ratio > 1.0 else "B"
+
+
+__all__ = [
+    "G_STD",
+    "drag_coefficient",
+    "archimedes_number",
+    "terminal_reynolds",
+    "terminal_velocity",
+    "hindered_settling_velocity",
+    "richardson_zaki_exponent",
+    "ergun_pressure_gradient",
+    "kozeny_carman",
+    "ergun_alpha",
+    "minimum_fluidization_velocity",
+    "bed_expansion",
+    "fluidization_window",
+    "minimum_bubbling_velocity",
+    "geldart_group",
+]
