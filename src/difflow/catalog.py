@@ -65,6 +65,7 @@ CORE_CATEGORIES = {
     "cooling_tower": "heat_transfer",
     "dryer": "drying",
     "crystallizer": "crystallization",
+    "mechanical": "mechanical",
     "lle": "extraction",
     "leaching": "extraction",
     "eos_units": "pressure_change",

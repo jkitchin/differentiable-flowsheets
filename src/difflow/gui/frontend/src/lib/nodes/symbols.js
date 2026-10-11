@@ -151,6 +151,44 @@ export const SYMBOLS = {
     ],
   },
 
+  /** A thickener / settler: a shallow tank with a conical floor, a rake and the solids drawn off below. */
+  settler: {
+    label: 'settler',
+    shapes: [
+      ['path', { d: 'M5 10h38v14l-19 8-19-8z' }],
+      ['line', { x1: 24, y1: 3, x2: 24, y2: 22 }],
+      ['line', { x1: 10, y1: 21, x2: 38, y2: 21 }],
+      ['path', { d: 'M8 26l16 6 16-6v-2l-16 6-16-6z', ...WASH }],
+      ['line', { x1: 24, y1: 32, x2: 24, y2: 38 }],
+    ],
+  },
+
+  /** A cake filter: a filter-press frame with the plates, a cake band and the filtrate drain. */
+  cake_filter: {
+    label: 'cake filter',
+    shapes: [
+      ['rect', { x: 6, y: 8, width: 36, height: 22, rx: 1 }],
+      ['line', { x1: 15, y1: 8, x2: 15, y2: 30 }],
+      ['line', { x1: 24, y1: 8, x2: 24, y2: 30 }],
+      ['line', { x1: 33, y1: 8, x2: 33, y2: 30 }],
+      ['rect', { x: 16, y: 10, width: 7, height: 18, ...WASH }],
+      ['rect', { x: 25, y: 10, width: 7, height: 18, ...WASH }],
+      ['line', { x1: 24, y1: 30, x2: 24, y2: 38 }],
+    ],
+  },
+
+  /** A gas cyclone: a cylinder over a cone, tangential inlet, a vortex-finder tube and the dust leg. */
+  cyclone: {
+    label: 'cyclone',
+    shapes: [
+      ['path', { d: 'M14 10h20v12l-7 14h-6l-7-14z' }],
+      ['line', { x1: 24, y1: 2, x2: 24, y2: 18 }],
+      ['line', { x1: 4, y1: 13, x2: 14, y2: 13 }],
+      ['polyline', { points: '19,24 24,27 29,24' }],
+      ['line', { x1: 24, y1: 36, x2: 24, y2: 40 }],
+    ],
+  },
+
   /** Heat in: the exchanger circle with the arrow pointing at it. */
   heater: {
     label: 'heater',
@@ -503,6 +541,11 @@ export const OPERATION_SYMBOLS = {
   // crystallization
   Crystallizer: 'crystallizer',
 
+  // mechanical separations
+  Settler: 'settler',
+  CakeFilter: 'cake_filter',
+  Cyclone: 'cyclone',
+
   // pressure
   EOSCompressor: 'compressor',
   Turboexpander: 'turbine',
@@ -593,6 +636,7 @@ export const CATEGORY_SYMBOLS = {
   evaporation: 'evaporator',
   drying: 'dryer',
   crystallization: 'crystallizer',
+  mechanical: 'separator',
   pressure_change: 'compressor',
   power: 'turbine',
   gas_network: 'pipe',

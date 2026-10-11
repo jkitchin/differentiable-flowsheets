@@ -4075,6 +4075,8 @@ result = brayton_cycle(fuel_comp, BraytonCycleParams(combined_cycle=True))
 **Location**: `difflow/particles.py` (pure JAX functions in SI units; not unit
 operations, so they have no palette entry). They are the building blocks for
 adsorbers, catalytic beds, settlers, cyclones and filters.
+The units that apply them to settling, filtration and gas cleaning are in
+[Mechanical Separations](#op-settler) (`Settler`, `CakeFilter`, `Cyclone`).
 
 (particles-drag)=
 ### Drag and terminal velocity
@@ -4176,6 +4178,363 @@ Levenspiel, *Powder Technol.* 47, 83 (1986); Ergun, *Chem. Eng. Prog.* 48(2), 89
 (1952); Wen & Yu, *AIChE J.* 12, 610 (1966); Richardson & Zaki, *Trans. Inst.
 Chem. Eng.* 32, 35 (1954); Kunii & Levenspiel, *Fluidization Engineering*, 2nd
 ed. (1991); Geldart, *Powder Technol.* 7, 285 (1973).
+
+---
+
+## Mechanical Separations
+
+**Location**: `difflow/units/mechanical.py` (the `Settler`, `CakeFilter` and `Cyclone` units and the
+pure-JAX library functions behind them, SI units, differentiable). Palette category: `mechanical`
+(one module, one category, like `extraction`; the neighbouring per-unit categories `drying` and
+`crystallization` each hold one unit).
+
+These are the particle-scale separations of a solids-handling train: gravity settling and
+thickening, cake filtration and gas cyclones. The single-particle physics (terminal velocity,
+Richardson-Zaki hindered settling, Kozeny-Carman permeability) is in [Particles and Beds](#particles-drag)
+(`difflow/particles.py`); these units apply it. **Centrifuges** (Sigma theory for a tubular bowl or a
+disc stack, `Centrifuge` and `DiscStackCentrifuge`) are in `difflow_bio` and are documented in
+[unit-operations-bio](unit-operations-bio.md#centrifuge); they are not repeated here.
+
+**Streams.** mol/s, K, Pa. A solid is the pseudo-species `F_<solid_species>` (default `F_solid`) with
+`solid_molar_mass` in kg/mol (default 1), so `F_solid` is numerically **kg/s** of dry solid. This is the
+convention of the `Dryer` (its `info["fines"]` stream), so a dryer's product, fines and a cyclone's dust
+connect without a conversion. Every non-solid species is a liquid-phase (or gas-phase, for the cyclone)
+species and rides with the fluid. A particle size distribution is **a unit parameter** (fixed size bins),
+not a stream property.
+
+**What is and is not verified.** No published worked example (Geankoplis Ch. 14, McCabe, Smith & Harriott
+Ch. 29-30, Coulson & Richardson Vol. 2, Cooper & Alley Ch. 4) was reproduced: the issue calls those numbers
+"unverified, from recollection" and none could be recalled with confidence. All data below are synthetic
+and labelled illustrative. The tests check the closed forms against independent oracles (a NumPy grid
+maximum, an analytic Coe-Clevenger area, a batch curve generated *from* a known settling law,
+`scipy` quadrature and scalar optimization, hand calculations) and `check_grads`. The Lapple/Shepherd-Lapple
+constants (K = 16, the standard proportions, the Stairmand set) are typed from memory and flagged
+**unverified** in the code.
+
+(op-settler)=
+### Settler
+
+**Location**: `difflow/units/mechanical.py`
+
+**Class**: `Settler`
+
+**Description**: A gravity settler, either an overflow-rate clarifier (Hazen) or a continuous thickener
+sized by Coe-Clevenger, Kynch or Talmage-Fitch, from tabulated flux data, a batch interface-height
+curve or the particle model (`terminal_velocity` with Richardson-Zaki hindered settling).
+
+#### Process Role
+
+`Settler(params)(feed) -> (overflow, underflow, info)`. The underflow is the slurry at the specified
+`underflow_concentration` $C_u$ (kg solid per m$^3$ slurry); the overflow the clarified liquid plus any solid
+not captured. Design mode (`area=None`) returns the required area times `safety_factor`; with an `area` it
+rates it (`info["area_ratio"]`).
+
+#### Thickener area
+
+With the feed solids rate $F_s$, the Coe-Clevenger area is set by the concentration between feed and
+underflow with the smallest solids flux:
+
+$$A = F_s \max_{C_0\le C\le C_u}\;\frac{1/C - 1/C_u}{v(C)}$$
+
+Kynch's limiting-flux form $G_L = \min_C C v/(1 - C/C_u)$, $A = F_s/G_L$ is the same expression, and
+`solids_flux(C, v, u)` is the total flux $C(v + u)$. **The maximum is a smooth log-sum-exp** over a fixed
+concentration grid (`lse_max`, temperature $\tau = \overline{|a|}/\text{sharpness}$): it never
+under-predicts and is within $\tau\ln N$ of the grid maximum (default `sharpness=1000`, 100 grid points:
+under 0.5 %), so the area is differentiable in $C_u$, $Q_0$ and the settling-curve parameters, and
+`sharpness` $\to\infty$ recovers the grid maximum.
+
+*Particle model.* $v(C) = v_t(1 - C/\rho_p)^n$ with $v_t$ from `terminal_velocity` and the Richardson-Zaki
+exponent $n$. **The exponent is piecewise in $Re_t$ (jumps of up to about 2 %): pass
+`richardson_zaki_n` explicitly when optimizing over particle size**; `None` selects the piecewise value.
+
+*Batch test.* `kynch_construction(t, z, C0)` returns the flux curve of one interface-height test: the tangent
+at $(t, z)$ has slope $-v$ and meets $t=0$ at $z_i = z + v t$, where the concentration is
+$C = C_0 z_0/z_i$. `thickener_area_talmage_fitch` reads the underflow time $t_u$ from the tangent that meets
+$z_u = C_0 z_0/C_u$ latest and takes $A = Q_0 t_u/z_0$; on the same tangent nodes this is algebraically the
+Coe-Clevenger area (the tests verify the identity, which holds exactly in the sharpness limit). Slopes are
+PCHIP derivatives of the data (monotone, exact on straight segments); the test must be at or below the feed
+concentration, and a compression zone is part of the data, not modelled.
+
+*Overflow rate.* The design particle $d_p$ sets $A = SF\,Q_o/v_t(d_p)$; each size bin $d_i$ is captured in the
+proportion $\min(1, v_{t,i}/v_o)$ (a smooth minimum, width $10^{-4}$).
+
+```python
+import jax.numpy as jnp
+from difflow import Settler, SettlerParams, thickener_area_coe_clevenger
+
+# SYNTHETIC settling data (illustrative): v(C) = v0 (C0/C)^2, whose Coe-Clevenger maximum is at C_u/2
+# and whose area is Q0 C_u / (4 v0 C0) in closed form.
+Q0, C0, Cu, v0 = 0.20, 20.0, 100.0, 2.0e-4
+C = jnp.linspace(C0, Cu, 400)
+A = thickener_area_coe_clevenger(Q0, C0, Cu, C, v0 * (C0 / C) ** 2, 1e6)
+print(f"smooth-max area {float(A):.2f} m^2, analytic {Q0 * Cu / (4 * v0 * C0):.2f} m^2")
+
+# the particle-model route: a 25 micron solid in water, Richardson-Zaki exponent fixed at 4.65
+params = SettlerParams(underflow_concentration=300.0, d_p=25e-6, rho_p=2650.0, richardson_zaki_n=4.65,
+                       safety_factor=1.25)
+feed = {"F_solid": 5.0, "F_H2O": 50000.0 / 18.015, "T": 300.0, "P": 101325.0}   # 5 kg/s solid, 50 kg/s water
+overflow, underflow, info = Settler(params)(feed)
+print(f"required area {float(info['area_required']):.1f} m^2, design area {float(info['area']):.1f} m^2")
+print(f"underflow {float(underflow['F_solid']):.2f} kg/s solid at {300.0:.0f} kg/m^3, "
+      f"overflow {float(overflow['F_H2O'] * 18.015 / 1000.0):.2f} kg/s water")
+```
+
+#### Parameters
+
+<!-- doc-test: skip: field listing (a class sketch), not an executable example -->
+```python
+@dataclass
+class SettlerParams:
+    underflow_concentration: float      # C_u, kg solid / m^3 slurry
+    method: str = "coe_clevenger"       # "overflow_rate" | "coe_clevenger" | "talmage_fitch" | "kynch"
+    C_data: list = None                 # kg/m^3, ascending
+    v_data: list = None                 # m/s
+    t_data: list = None                 # s, batch curve
+    z_data: list = None                 # m
+    batch_C0: float = None              # kg/m^3 of the batch test
+    d_p: float = None                   # m (design particle, or the particle model)
+    rho_p: float = 2650.0               # kg/m^3
+    liquid_density: float = 998.0       # kg/m^3
+    viscosity: float = 1.0e-3           # Pa s
+    sphericity: float = 1.0
+    richardson_zaki_n: float = None     # None: piecewise in Re_t
+    d_bins: list = None                 # m, overflow-rate capture
+    mass_fractions: list = None
+    capture: float = 1.0                # fraction of solids to the underflow (thickener methods)
+    safety_factor: float = 1.0
+    area: float = None                  # m^2 (rating); None designs
+    sharpness: float = 1000.0
+    n_grid: int = 100
+    solid_species: str = "solid"        # F_<solid_species>, kg/s with solid_molar_mass = 1
+    solid_molar_mass: float = 1.0       # kg/mol
+    liquid_species: str = "H2O"
+    liquid_MW: float = 18.015           # g/mol
+```
+
+**Limitations**: a thickener short of area is reported (`area_ratio`), not modelled; compression, rakes,
+flocculation and scale-up factors are the user's `safety_factor`. The overflow rate of the clarifier is
+based on the liquid overflow with full capture; the outlet flows then follow from the computed capture and
+close the balance.
+
+**Sources**: Coe & Clevenger, *Trans. AIME* 55, 356 (1916); Kynch, *Trans. Faraday Soc.* 48, 166 (1952);
+Talmage & Fitch, *Ind. Eng. Chem.* 47, 38 (1955); McCabe, Smith & Harriott Ch. 29; Coulson & Richardson
+Vol. 2 Ch. 5 (formulas recalled, no worked example reproduced).
+
+(op-cakefilter)=
+### CakeFilter
+
+**Location**: `difflow/units/mechanical.py`
+
+**Class**: `CakeFilter`
+
+**Description**: Cake filtration by Ruth's equation at constant pressure, as a batch filter (press, leaf)
+with wash and downtime or a rotary drum, designed or rated, with the throughput-maximizing cycle.
+
+#### Process Role
+
+`CakeFilter(params)(slurry) -> (cake, filtrate, info)`. The cake carries all the solid and `cake_moisture`
+kg of liquid per kg dry cake (every non-solid species in the liquid's proportion); the filtrate is the rest.
+The wash liquor is not a stream: `info` reports the wash volume and time, and `cake_moisture` is the
+post-wash value. For the rotary drum `info["area_for_cost"]` is the drum area for
+`SEPARATOR_COSTS["filter_rotary"]` (no cost entry is added here).
+
+#### Ruth's equation
+
+At constant pressure, with $V$ the filtrate volume,
+
+$$\frac{t}{V} = \frac{K_p}{2}\,V + B,\qquad K_p = \frac{\mu\,\alpha\,c_s}{A^2\,\Delta P},\quad B = \frac{\mu R_m}{A\,\Delta P}$$
+
+$c_s = \rho_f w/(1 - m w)$ is the mass of cake solids per volume of filtrate (`cake_solids_per_filtrate`;
+the unit computes it from the stream and `cake_moisture` by a mass balance). The volume is the positive root
+in the cancellation-safe form $V = 2t/(B + \sqrt{B^2 + 2K_p t})$ (`filtrate_volume`), exact at $B=0$ and at
+$K_p \to 0$. At constant rate $q$ the pressure rises as
+$\Delta P = (\mu q/A)(\alpha c_s q t/A + R_m)$ (`ruth_constant_rate`, inverse `time_to_pressure`).
+`fit_ruth(t, V, A, dP, mu, c_s)` is the **Ruth plot**: a least-squares line of $t/V$ against $V$, slope
+$K_p/2$ and intercept $B$, returning $\alpha$ and $R_m$. The specific resistance can also come from
+`compressible_cake` ($\alpha = \alpha_0 \Delta P^s$) or `specific_cake_resistance`
+($36 k_0 (1-\varepsilon)/(\varepsilon^3\rho_p(\phi d_p)^2)$, the Kozeny-Carman form of
+`particles.kozeny_carman`).
+
+#### The batch cycle and its optimum
+
+A batch cycle is filtration, wash and downtime. The wash volume is $rV$ at $\phi$ times the final filtration
+rate (`wash_time`; $\phi = 1$ is the standard assumption, plate-and-frame washing is often taken as
+$\phi = 1/4$), so the throughput is $V/(t_f + t_w + t_d)$ (`cycle_throughput`, differentiable in $t_f$).
+In terms of $V$ the cycle is $T(V) = \tfrac{K_p}{2}(1 + 2r/\phi)V^2 + B(1 + r/\phi)V + t_d$ and the optimum
+$T = V\,T'$ gives $\tfrac{K_p}{2}(1 + 2r/\phi)V^2 = t_d$, **independent of $B$**. With no medium
+resistance and no wash the optimum filtration time equals the downtime, $t_f = t_d$
+(`optimal_cycle`; a user wash function `t_wash_fn(V)` is solved by a bracketed bisection with implicit
+gradients). `CakeFilterParams(optimize_cycle=True)` rates a given area at its optimal cycle.
+
+**Design and rating.** With `area=None` the unit sizes the filter so that a cycle of `cycle_time` (batch:
+filtration + wash + downtime; rotary: one drum revolution) passes the feed, in closed form (a quadratic in
+$1/A$). With an `area` it rates the cycle (`filtration_time`, or `cycle_time` and `submergence` for the
+drum) and reports `throughput`, `solids_capacity` and `utilization` (feed over capacity; the streams follow
+the feed). In rotary mode the cake forms during the submerged fraction $\psi$ of the revolution, so
+$t_f = \psi\,T_c$.
+
+```python
+import jax
+import jax.numpy as jnp
+from difflow import (CakeFilter, CakeFilterParams, fit_ruth, ruth_constants, ruth_constant_pressure,
+                     cycle_throughput, optimal_cycle)
+
+# SYNTHETIC constant-pressure data (illustrative): the Ruth plot recovers alpha and R_m
+A, dP, mu, c_s = 0.0439, 267e3, 1.0e-3, 23.5
+K_p, B = ruth_constants(A, dP, mu, 3.0e10, c_s, 6.0e9)
+V = jnp.linspace(0.05, 1.0, 12) * 1e-3
+t = ruth_constant_pressure(V, K_p, B)
+fit = fit_ruth(t, V, A=A, dP=dP, mu=mu, c_s=c_s)
+print(f"alpha = {float(fit['alpha']):.3e} m/kg, R_m = {float(fit['R_m']):.3e} 1/m")
+
+# the optimal filtration time by gradient: d(throughput)/d(t_f) = 0 at the optimum
+K_p, B, t_d, r = 15.0, 3.0, 700.0, 0.2
+opt = optimal_cycle(K_p, B, t_d, wash_ratio=r)
+g = jax.grad(cycle_throughput)(opt["t_f"], K_p, B, t_d, r)
+print(f"optimal t_f = {float(opt['t_f']):.1f} s, cycle {float(opt['t_cycle']):.1f} s, "
+      f"gradient there {float(g):.1e}")
+
+# the unit: size a press for 2 kg/s of solid in 40 kg/s of liquid, one cycle per hour
+feed = {"F_solid": 2.0, "F_H2O": 40000.0 / 18.015, "T": 300.0, "P": 200000.0}
+p = CakeFilterParams(delta_P=3e5, alpha=1e11, R_m=1e10, cake_moisture=0.4, cycle_time=3600.0,
+                     downtime=600.0, wash_ratio=0.1)
+cake, filtrate, info = CakeFilter(p)(feed)
+print(f"area {float(info['area']):.1f} m^2, filtration {float(info['t_filtration']):.0f} s, "
+      f"wash {float(info['t_wash']):.0f} s, cake {float(info['cake_mass_per_cycle']):.0f} kg per cycle")
+```
+
+#### Parameters
+
+<!-- doc-test: skip: field listing (a class sketch), not an executable example -->
+```python
+@dataclass
+class CakeFilterParams:
+    delta_P: float                      # Pa
+    mode: str = "batch"                 # "batch" | "rotary"
+    area: float = None                  # m^2 (rating); None designs from cycle_time
+    alpha: float = None                 # m/kg ... or alpha0 (+ s), or d_p (+ voidage, rho_p)
+    alpha0: float = None
+    s: float = 0.0
+    d_p: float = None
+    voidage: float = None
+    rho_p: float = None
+    sphericity: float = 1.0
+    k0: float = 5.0
+    R_m: float = 0.0                    # 1/m
+    viscosity: float = 1.0e-3           # Pa s
+    liquid_density: float = 998.0       # kg/m^3
+    cake_moisture: float = 0.0          # kg liquid / kg dry cake
+    filtration_time: float = None       # s, batch rating
+    optimize_cycle: bool = False
+    cycle_time: float = None            # s: total cycle (batch design) or revolution (rotary)
+    wash_ratio: float = 0.0             # wash volume / filtrate volume
+    wash_rate_factor: float = 1.0       # wash rate / final filtration rate
+    downtime: float = 0.0               # s
+    submergence: float = 0.3            # rotary
+    solid_species: str = "solid"
+    solid_molar_mass: float = 1.0       # kg/mol
+    liquid_species: str = "H2O"
+    liquid_MW: float = 18.015           # g/mol
+```
+
+**Limitations**: constant pressure, no medium blinding; a compressible cake uses $\alpha$ at the filtration
+$\Delta P$; the rotary drum has no wash or dewatering arc in its time budget; streams are time-averaged.
+For the filter-press cycle exercise (wex21-2) the structure is `optimal_cycle` with a wash and `CakeFilter`
+for the area; the published example was not reproduced.
+
+**Sources**: Ruth, *Ind. Eng. Chem.* 27, 708 (1935); Geankoplis Sec. 14.2; McCabe, Smith & Harriott Ch. 30
+(formulas recalled, no worked example reproduced).
+
+(op-cyclone)=
+### Cyclone
+
+**Location**: `difflow/units/mechanical.py`
+
+**Class**: `Cyclone`
+
+**Description**: A gas cyclone with the Lapple cut size and grade-efficiency curve, standard geometries and
+the Shepherd-Lapple pressure drop, for a fixed set of particle size bins.
+
+#### Process Role
+
+`Cyclone(params)(gas_with_solids) -> (clean_gas, solids, info)`. The inlet is a gas stream (mol/s per gas
+species) that also carries the dust as `F_<solid_species>` (kg/s with the default molar mass), the same
+convention as the dryer's fines. `solids` is the collected dust; `clean_gas` the gas and the dust that
+escapes. The size distribution is the parameters `d_bins` and `mass_fractions`.
+
+#### Lapple theory
+
+With the inlet velocity $v_i = Q/(HW)$, the effective number of turns $N_e = (L_b + L_c/2)/H$ (6 for the
+standard Lapple proportions) and the gas viscosity $\mu$,
+
+$$d_{50} = \left[\frac{9\mu W}{2\pi N_e v_i(\rho_p - \rho_g)}\right]^{1/2},\qquad
+\eta(d) = \frac{1}{1 + (d_{50}/d)^2},\qquad \Delta P = K\,\frac{HW}{D_e^2}\,\frac{\rho_g v_i^2}{2}$$
+
+The overall efficiency is $\sum_i w_i\,\eta(d_i)$ over the bins, differentiable in $D$, the gas flow and
+$\rho_p$. $d_{50}\propto v_i^{-1/2}$, so efficiency rises with flow at fixed $D$ (the pressure drop rises as
+$v_i^2$). **Unverified, typed from memory:** $K = 16$ (`K_pressure`), the Lapple proportions
+$H = D/2$, $W = D/4$, $D_e = D/2$, $S = D/8$, $L_b = L_c = 2D$, $J = D/4$ and the Stairmand
+high-efficiency set (`CYCLONE_GEOMETRIES`); `geometry="custom"` with `ratios` takes your own, and
+`delta_P_velocity_heads` replaces the Shepherd-Lapple form by a number of inlet velocity heads. Mass-loading
+effects and re-entrainment are not modelled.
+
+#### Dryer exhaust (wex21-3)
+
+`Dryer(DryerParams(entrainment=f))` puts the fraction $f$ of the dry solids in `info["fines"]` (a solids
+stream, `F_solid` in kg/s) and **not** in `air_out` (the psychrometric `dry_air_flow` counts every non-water
+`F_*` as dry air). The hand-off is explicit: `dust_laden_gas(air_out, info["fines"])` merges them (the
+fines' water becomes vapor) into a cyclone inlet. A `Flowsheet` cannot route `info`, so this step is plain
+Python.
+
+```python
+from difflow import Cyclone, CycloneParams, Dryer, DryerParams, dust_laden_gas
+from difflow.psychrometrics import MW_WATER, air_stream_from_state, state
+
+# SYNTHETIC dryer and dust (illustrative numbers, not a textbook example)
+wet = {"F_solid": 0.5, "F_H2O": 0.5 * 0.30 / MW_WATER, "T": 300.0, "P": 101325.0}
+air = air_stream_from_state(state(T=373.15, W=0.01), 10.0)
+dryer = Dryer(DryerParams(mode="continuous", X_c=0.15, X_eq=0.02, product_moisture=0.05, h=60.0,
+                          solids_per_area=10.0, max_solids_T=340.0, entrainment=0.05))
+dry, air_out, dinfo = dryer(wet, air)
+inlet = dust_laden_gas(air_out, dinfo["fines"])
+
+cyc = Cyclone(CycloneParams(D=2.0, rho_p=1500.0, gas_MW=28.5,
+                            d_bins=[2e-6, 5e-6, 10e-6, 20e-6, 50e-6],
+                            mass_fractions=[0.1, 0.2, 0.3, 0.3, 0.1]))
+clean, dust, info = cyc(inlet)
+print(f"d50 = {float(info['d50']) * 1e6:.1f} um, overall efficiency {float(info['overall_efficiency']):.3f}, "
+      f"dP = {float(info['delta_P']):.0f} Pa, v_i = {float(info['inlet_velocity']):.1f} m/s")
+print(f"dry solid out: product {float(dry['F_solid']):.4f} + collected {float(dust['F_solid']):.4f} "
+      f"+ escaping {float(clean['F_solid']):.4f} = {float(dry['F_solid'] + dust['F_solid'] + clean['F_solid']):.4f} kg/s")
+```
+
+#### Parameters
+
+<!-- doc-test: skip: field listing (a class sketch), not an executable example -->
+```python
+@dataclass
+class CycloneParams:
+    D: float                            # body diameter, m
+    rho_p: float                        # kg/m^3
+    d_bins: list                        # m, fixed-length size bins
+    mass_fractions: list                # normalized to 1
+    geometry: str = "lapple"            # "lapple" | "stairmand_he" | "custom"
+    ratios: list = None                 # [H, W, D_e, S, L_b, L_c, J] / D for "custom"
+    n_turns: float = None               # N_e; None: (L_b + L_c/2) / H
+    gas_MW: float = 28.96               # g/mol
+    viscosity: float = 1.8e-5           # Pa s
+    K_pressure: float = 16.0            # Shepherd-Lapple (unverified)
+    delta_P_velocity_heads: float = None
+    solid_species: str = "solid"
+    solid_molar_mass: float = 1.0       # kg/mol
+```
+
+**Not included**: hydrocyclones, electrostatic precipitators and bag filters, screening and size
+reduction, and any cost correlation (none is cited here, so no cyclone or thickener entry was added to
+`economics/capital.py`).
+
+**Sources**: Lapple, *Chem. Eng.* 58(5), 144 (1951); Shepherd & Lapple, *Ind. Eng. Chem.* 31, 972 (1939);
+Cooper & Alley Ch. 4; Coulson & Richardson Vol. 2 Ch. 1 (recalled; constants unverified).
 
 ---
 

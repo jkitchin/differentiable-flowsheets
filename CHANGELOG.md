@@ -8,6 +8,40 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **`Settler`, `CakeFilter` and `Cyclone` units and the mechanical-separation library (#434).**
+  `difflow.units.mechanical` (one module, catalog category `mechanical`, GUI symbols `settler`, `cake_filter`,
+  `cyclone`). *Settler*: methods `overflow_rate` (Hazen clarifier, capture `min(1, v_t/v_o)` per size bin with a smooth
+  minimum), `coe_clevenger` (flux data `C_data`/`v_data`, or the particle model `terminal_velocity` x Richardson-Zaki
+  `(1 - C/rho_p)^n`), `kynch` and `talmage_fitch` (a batch interface-height curve). Library: `solids_flux`,
+  `batch_flux_curve`, `thickener_area_coe_clevenger`, `kynch_construction`, `thickener_area_kynch`,
+  `thickener_area_talmage_fitch`, `lse_max` (the **smooth maximum**: log-sum-exp with temperature
+  `mean|a|/sharpness`, never under-predicts, within `ln(N)/sharpness` of the grid maximum; default sharpness 1000),
+  `overflow_rate_area`/`overflow_rate_capture`. The Richardson-Zaki exponent is piecewise in `Re_t`; pass
+  `richardson_zaki_n` to avoid the jumps when optimizing over size. *CakeFilter*: Ruth constant pressure
+  (`ruth_constants`, `ruth_constant_pressure`, cancellation-safe `filtrate_volume`, `filtrate_rate`), constant rate
+  (`ruth_constant_rate`, `time_to_pressure`), `fit_ruth` (the Ruth plot: K_p, B, alpha, R_m), `compressible_cake`,
+  `specific_cake_resistance` (Kozeny-Carman, consistent with `particles.kozeny_carman`),
+  `cake_solids_per_filtrate`, `wash_time`, `cycle_throughput` (differentiable in `t_f`), `optimal_cycle` (closed form
+  `K_p/2 (1 + 2r/phi) V^2 = t_down`, independent of B; a bracketed implicit-gradient solve for a user wash function),
+  `filter_area_for_cycle`; the unit has `batch` (design from `cycle_time`, or rating with `filtration_time` /
+  `optimize_cycle`) and `rotary` (drum, submergence fraction) modes and reports `area_for_cost`. *Cyclone*: Lapple
+  `lapple_cut_size`, `lapple_efficiency`, `overall_efficiency` over fixed size bins, `lapple_turns`,
+  `cyclone_geometry` (Lapple, Stairmand HE, custom ratios), Shepherd-Lapple `cyclone_pressure_drop`. **Solids
+  convention:** `F_<solid_species>` in kg/s (`solid_molar_mass` 1 kg/mol), as the `Dryer` fines stream. **Dryer to
+  Cyclone:** a `Dryer`'s fines are in `info["fines"]` (not in `air_out`); the documented hand-off is
+  `Cyclone(...)(dust_laden_gas(air_out, info["fines"]))` in Python (a `Flowsheet` cannot route `info`), tested.
+  Docs `## Mechanical Separations` (`### Settler`, `### CakeFilter`, `### Cyclone`, with a pointer to the `difflow_bio`
+  centrifuges), notebook 58, `particles.py` docstring updated, tests. No existing behaviour changed (`difflow.numerics`
+  already exports `smooth_max`/`smooth_min`, so the new log-sum-exp maximum is exported as `lse_max`).
+  **Not implemented / skipped:** cost entries for cyclones and thickeners (no correlation could be cited with
+  confidence, so none was added to `economics/capital.py`), a wash-water inlet (wash volume and time are reported),
+  a wash or dewatering arc for the rotary drum, thickener compression and rakes, cyclone mass-loading effects,
+  hydrocyclones, screening, precipitators and bag filters. **Unverified/not reproduced:** no Geankoplis,
+  McCabe, Coulson & Richardson or Cooper & Alley worked example was reproduced (numbers "from recollection"), so the
+  tests use independent oracles (`scipy` quadrature and scalar optimization, a NumPy grid maximum, the analytic
+  Coe-Clevenger area of `v = v0 (C0/C)^2`, a batch curve generated from a known `v(C)` as the envelope of its
+  tangents, hand calculations, `check_grads`); the Lapple constants (K = 16, the standard proportions, the Stairmand
+  set) are typed from memory and flagged unverified; all data are synthetic and labelled illustrative.
 - **`Crystallizer` unit and the crystallization library (#433).** `difflow.units.crystallizer` (catalog category
   `crystallization`, one category for the unit as `evaporation` and `drying` are for theirs; GUI symbol `crystallizer`):
   `Solubility` pytree (polynomial in degrees C, van 't Hoff `ln c = A + B/T`, or PCHIP table; kg solute per kg
