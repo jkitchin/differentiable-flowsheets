@@ -317,6 +317,7 @@ from difflow.units.pump import (
     system_curve,
 )
 from difflow import shell_and_tube  # library (not a palette unit): Kern design, see docs
+from difflow import fouling  # library: Ebert-Panchal threshold fouling model
 from difflow.units.eos_units import (
     Turboexpander,
     TurboexpanderParams,

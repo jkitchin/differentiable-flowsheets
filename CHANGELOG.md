@@ -8,6 +8,34 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **Shell-and-tube gaps (#435).** (1) `ShellAndTubeDesignParams.shell_h` callables now receive the wall state of the
+  current `U` iterate (`q_flux`, `T_wall`, `dT_film`, `T_shell`, `T_tube`, `area_total`, besides the geometry keys),
+  closed inside the existing `optimistix.fixed_point` (and on the heat flux in `rate()`), so condensing and boiling
+  coefficients need no outer loop on the film dT; still differentiable. A callable that reads only the old keys is
+  unchanged. (2) `internal_nusselt`/`internal_h(..., viscosity_correction=True)` and
+  `ShellAndTubeDesignParams(tube_viscosity_correction=True)` multiply the Gnielinski / Dittus-Boelter value by
+  `(mu_b/mu_w)^n`, `n = 0.11` heating, `0.25` cooling (`VISCOSITY_EXPONENT_HEATING/COOLING`). **The exponents are from
+  memory (Petukhov / VDI form) and unverified**, so the factor is OFF by default; nothing changes unless it is asked
+  for. (4) `difflow.fouling`: the Ebert-Panchal threshold model in core (`ebert_panchal_rate`, `wall_shear_stress`,
+  `film_temperature`, `threshold_wall_shear`, `threshold_film_temperature`, `fouling_time`, `integrate_fouling`),
+  user-supplied constants, differentiable, equal to the refinery plugin's `fouling_rate` for the same constants (that
+  plugin is untouched). The deposition form and the 0.55 film weight are recalled, not re-checked against the paper;
+  constants in docs and tests are illustrative. (6) `ShellAndTubeDesignParams.n_shell_passes` (shells in series, default
+  1): `F = lmtd_correction_factor(R, P, N)`, per-shell geometry, total `area`/`UA`/pressure drops, `rate()` uses the
+  N-shell effectiveness; a cross one shell cannot make (`F = 0`) is sizable with two. New result keys `n_shell_passes`,
+  `area_per_shell`, `q_flux`. (7) Result flags `shell_laminar` (`Re_s < 2e3`), `shell_Re_out_of_range` (outside Kern's
+  `2e3 < Re_s < 1e6`, constants `KERN_RE_MIN/MAX`) and `F_zero`, with warnings for concrete values only (silent under
+  `jit`/`grad`); an `F = 0` or `F < 0.75` design now warns with `LowCorrectionFactorWarning` (a `UserWarning`).
+  Docs (`### ShellAndTubeDesign`, `### Threshold Fouling`, heat-transfer section), tests
+  `tests/test_shell_and_tube_gaps.py` and `tests/test_fouling.py`.
+  **Not implemented:** (3) Palen's bundle correction for boiling CHF (no sourced form or constants; the limitation of
+  the single-surface Zuber value is documented in `critical_heat_flux` and the docs). **Not verified:** (5) the `K1`/`n1`
+  and CTP/CL constants stay unverified (an independent recollection of the triangular-pitch rows agrees with the code,
+  which is memory against memory, not a check against Sinnott Table 12.4).
+  **Numerical results:** unchanged for every existing call with defaults (`n_shell_passes=1`, no viscosity correction,
+  geometry-only `shell_h`). Behaviour changes: the `F < 0.75` warning is now a `LowCorrectionFactorWarning` with new
+  wording, and a design whose Kern `Re_s` is outside 2e3 to 1e6 now warns (the value itself is unchanged).
+
 - **`Settler`, `CakeFilter` and `Cyclone` units and the mechanical-separation library (#434).**
   `difflow.units.mechanical` (one module, catalog category `mechanical`, GUI symbols `settler`, `cake_filter`,
   `cyclone`). *Settler*: methods `overflow_rate` (Hazen clarifier, capture `min(1, v_t/v_o)` per size bin with a smooth

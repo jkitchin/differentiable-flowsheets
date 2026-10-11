@@ -2529,6 +2529,7 @@ what the velocity and insulation-thickness optimizations use
 | External flow | `churchill_bernstein` (cylinder), `flat_plate_nusselt` |
 | Natural convection | `churchill_chu_vertical_plate`, `churchill_chu_horizontal_cylinder` |
 | Phase change | `nusselt_film_condensation`, `rohsenow_heat_flux`, `rohsenow_superheat`, `mostinski`, `critical_heat_flux` |
+| Fouling | `difflow.fouling` (see [Threshold Fouling](#threshold-fouling)) |
 | Overall | `overall_U`, `FOULING_RESISTANCES`, `TYPICAL_U_RANGES`, `typical_U_range` |
 
 **Tube side.** `internal_h(Re, Pr, k, D, L=None, mu_ratio=1, rel_roughness=0,
@@ -2550,6 +2551,30 @@ method="gnielinski", heating=True, boundary="T")` returns $h=\mathrm{Nu}\,k/D$:
   where the blend starts. Real transitional flow is intermittent and no
   correlation is accurate there; the blend is a smooth interpolation, not a
   model of transition.
+
+**Viscosity correction (opt-in, exponents unverified).** As published,
+Gnielinski and Dittus-Boelter carry no wall-viscosity factor, so by default
+`mu_ratio` has no effect on a turbulent tube side (it enters the laminar entry
+term and `sieder_tate` only). `internal_h(..., viscosity_correction=True)` (and
+`ShellAndTubeDesignParams(tube_viscosity_correction=True)`) multiplies the
+Gnielinski or Dittus-Boelter value by $(\mu_b/\mu_w)^n$, with $n=0.11$ when the
+fluid is heated and $0.25$ when it is cooled (`VISCOSITY_EXPONENT_HEATING`,
+`VISCOSITY_EXPONENT_COOLING`): the liquid form usually attributed to Petukhov
+(the VDI Heat Atlas / Gnielinski variant is $(\mathrm{Pr}/\mathrm{Pr}_w)^{0.11}$;
+the viscosity ratio stands in for it here). **These exponents are from memory
+and were not checked against Petukhov, Gnielinski or the VDI Heat Atlas**, which is
+why the factor is off by default and no existing result changes. Check them
+before a real design. `sieder_tate` already has its own 0.14 factor and gets no
+second one.
+
+```python
+from difflow import heat_transfer as ht
+
+Re, Pr = 2.0e4, 6.0                                  # illustrative
+base = ht.internal_nusselt(Re, Pr, mu_ratio=1.5)     # default: mu_ratio ignored (turbulent)
+corr = ht.internal_nusselt(Re, Pr, mu_ratio=1.5, heating=True, viscosity_correction=True)
+float(corr / base)                                   # 1.5**0.11
+```
 
 **Overall U.** `overall_U(h_i, h_o, D_i, D_o, k_wall, R_fi=0, R_fo=0,
 basis="outer")`:
@@ -2592,6 +2617,13 @@ differentiable, so `jax.grad` flows through to the exchanger).
 | `rohsenow_heat_flux`, `rohsenow_superheat` | $q''=\mu_lh_{fg}[g(\rho_l-\rho_v)/\sigma]^{1/2}[C_p\Delta T_e/(C_{sf}h_{fg}\mathrm{Pr}^n)]^3$ and its closed-form inverse | Eq. 10.5 |
 | `mostinski` | $h=0.00417\,P_c^{0.69}q^{0.7}F_p$ ($P_c$ in kPa) | Mostinski (1963); recalled, see below |
 | `critical_heat_flux` | Zuber, $C\,h_{fg}\rho_v^{1/2}[\sigma g(\rho_l-\rho_v)]^{1/4}$, $C=\pi/24$ | Eq. 10.7 (constant is a parameter) |
+
+**Limitation: `critical_heat_flux` is the single-surface value.** A tube
+bundle (kettle reboiler) has a lower critical flux because vapour from the
+lower tubes blankets the upper ones; the published correction is Palen's
+bundle factor. It is **not implemented**: its form and constants could not be
+checked against a source and none were invented. Treat the Zuber value as an
+upper bound for a bundle and derate it with a sourced bundle correction.
 
 Rohsenow's $C_{sf}$ defaults to 0.013 (water on polished copper/platinum),
 recalled from memory of Incropera Table 10.1: check it for real work. Not
@@ -2719,10 +2751,45 @@ times the shell ID. Any of these, `n_tube_passes`, `tube_OD`, `tube_ID`,
 `pitch_ratio`, `k_wall` and the fouling resistances can be passed as call
 overrides, traced or not, to differentiate with respect to them.
 
-**Warnings and flags.** The result carries `F_too_low` (`F < 0.75`),
-`dP_tube_exceeded` / `dP_shell_exceeded` (against `dP_tube_max` / `dP_shell_max`),
-`converged` and `tube_laminar`; each also raises a `UserWarning` for concrete
-values (not under `jit`/`grad`).
+**Warnings and flags.** The result carries `F_too_low` (`F < 0.75`), `F_zero`
+(`F = 0`), `dP_tube_exceeded` / `dP_shell_exceeded` (against `dP_tube_max` /
+`dP_shell_max`), `converged`, `tube_laminar` (`Re_tube < 2300`), `shell_laminar`
+(`Re_shell < 2000`, below the range of Kern's power law) and
+`shell_Re_out_of_range` (outside $2\times10^3<\mathrm{Re}_s<10^6$, where the
+Kern coefficient is an extrapolation). Each also raises a warning for concrete
+values (never under `jit`/`grad`). A low or zero $F$ raises
+`LowCorrectionFactorWarning` (a `UserWarning` from `difflow.units.heat_exchanger`,
+the class the HX design functions use); $F=0$ is the infinite-area limit of
+`lmtd_correction_factor` (a temperature cross these shells cannot make, issue
+\#419), so the area is `inf` and the other warnings are suppressed.
+
+**Shells in series.** `n_shell_passes=N` (default 1) puts $N$ identical shells in
+series, each carrying the full flow of both streams, with
+$F=$ `lmtd_correction_factor(R, P, N)`. A cross that one shell cannot make
+($F=0$) becomes feasible with two. `area`, `UA` and the pressure drops are
+totals over the shells; `n_tubes`, `tube_length`, `shell_ID`, `bundle_ID` and
+`baffle_spacing` are per shell (`area_per_shell` is reported), and
+`round_design` and `rate` work on that per-shell geometry with the same
+`n_shell_passes`.
+
+```python
+import warnings
+from difflow import shell_and_tube as st
+
+def params(N):
+    return st.ShellAndTubeDesignParams(
+        tube_OD=0.01905, tube_ID=0.01483, rho_hot=780.0, mu_hot=4e-4, k_hot=0.13, Cp_hot=2050.0,
+        rho_cold=830.0, mu_cold=2.9e-3, k_cold=0.13, Cp_cold=2050.0,   # illustrative properties
+        tube_velocity=1.2, tube_length=None, n_shell_passes=N)
+
+hot, cold = {"T": 340.0, "m_dot": 5.0}, {"T": 300.0, "m_dot": 5.0}   # hot 340 -> 316 K, cold 300 -> 324 K
+Q = 5.0 * 2050.0 * 24.0
+with warnings.catch_warnings(record=True) as w:
+    warnings.simplefilter("always")
+    one = st.ShellAndTubeDesign(params(1))(hot, cold, Q=Q)     # F = 0: LowCorrectionFactorWarning
+two = st.ShellAndTubeDesign(params(2))(hot, cold, Q=Q, warn=False)
+float(one["F"]), bool(one["F_zero"]), float(two["F"]), float(two["area"])   # 0, True, F > 0, finite area
+```
 
 **Non-unique fixed point.** With a fixed tube length, more area means more
 tubes, slower tube flow and a lower $h_i$: positive feedback, so the loop can
@@ -2746,10 +2813,38 @@ single-pass design re-rates to 1.01 times the target duty.
 
 **Phase change (simple mode).** `hot_isothermal=True` (condensing) or
 `cold_isothermal=True` (boiling) makes that side isothermal ($F=1$), and `shell_h`
-supplies its film coefficient: a number, or a callable of the geometry dict
-(`tube_OD`, `n_tubes`, `tube_length`, `shell_ID`, `area`), e.g. built on
-`heat_transfer.nusselt_film_condensation` or the boiling correlations.
-Shell-side $\Delta P$ is then not modelled (reported as 0). Desuperheating and
+supplies its film coefficient: a number, or a callable of a dict, e.g. built on
+`heat_transfer.nusselt_film_condensation` or the boiling correlations. The dict has
+the geometry (`tube_OD`, `n_tubes`, `tube_length`, `shell_ID`, `area` per shell,
+`area_total`) **and the wall state from the current $U$ iterate**: `q_flux`
+($Q/A$), `T_wall` (the shell-side film's wall surface, outside any shell-side
+fouling), `dT_film` ($|T_{shell}-T_{wall}|$), `T_shell` and `T_tube` (mean bulk
+temperatures). The wall temperature is $T_{wall}=T_{tube,eff}\pm q''R_{chain}$ with
+the tube-side film, its fouling, the wall and the shell fouling in $R_{chain}$, and
+the tube-side temperature chosen so that $q''=U\,F\,\mathrm{LMTD}$; the loop is
+closed inside the same `optimistix.fixed_point` as $U$ (and, for a callable, in
+`rate()` on the heat flux), so at convergence $T_{shell}-T_{wall}=q''/h_o$ and the
+design needs no outer loop on $\Delta T_{film}$, and is still differentiable. A
+callable that reads only the geometry keys is unaffected by the extra keys.
+Shell-side $\Delta P$ is then not modelled (reported as 0).
+
+```python
+import jax.numpy as jnp
+from difflow import heat_transfer as ht, shell_and_tube as st
+
+def shell_h(g):                    # condensing steam on a column of horizontal tubes (illustrative properties)
+    return ht.nusselt_film_condensation(k_l=0.6, rho_l=960.0, rho_v=0.6, mu_l=2.8e-4, h_fg=2.26e6,
+                                        Cp_l=4216.0, dT=g["dT_film"], L=g["tube_OD"],
+                                        n_tubes=jnp.sqrt(g["n_tubes"]))
+
+p = st.ShellAndTubeDesignParams(
+    tube_OD=0.01905, tube_ID=0.01483, rho_hot=960.0, mu_hot=2.8e-4, k_hot=0.6, Cp_hot=4216.0,
+    rho_cold=830.0, mu_cold=2.9e-3, k_cold=0.13, Cp_cold=2050.0, tube_length=3.0,
+    hot_isothermal=True, shell_h=shell_h, tol=1e-13, R_fi=1e-4, R_fo=1e-4)
+r = st.ShellAndTubeDesign(p)({"T": 373.15, "m_dot": 1.0}, {"T": 303.0, "m_dot": 18.0}, Q=6.0e5)
+float(r["q_flux"] / r["h_o"]), float(r["area"])     # the film dT the loop settled on, and the area
+```
+ Desuperheating and
 subcooling zones are not split out; for a rigorous two-phase *rating* use
 `EnthalpyCounterCurrentHX`.
 
@@ -2778,6 +2873,16 @@ $Q=F\,Q_{cc}(UA)$, a few percent off $Q=UAF\,\mathrm{LMTD}$; it now uses the exa
   re-implementation with substitution on $U$ (2e-6, both modes); $F$
   against the closed form; the effectiveness against $Q=UAF\,\mathrm{LMTD}$
   solved by brentq; gradients by `check_grads` and central finite differences.
+* **Item list of issue \#435.** Wall-state `shell_h`, the optional viscosity
+  correction, the core fouling model, shells in series, the shell-`Re` flag and
+  the $F=0$ warning are implemented and tested (`tests/test_shell_and_tube_gaps.py`,
+  `tests/test_fouling.py`); the viscosity exponents are unverified (above). The
+  Palen bundle factor for boiling CHF is **not** implemented (no sourced
+  constants), and the $K_1,n_1$ and tube-count constants remain **unverified**: a
+  pass in the issue's work compared the triangular-pitch rows with an independent
+  recollection (1 pass 0.319/2.142, 2 passes 0.249/2.207, 4 passes 0.175/2.285,
+  6 passes 0.0743/2.499, 8 passes 0.0365/2.675), which agrees, but that is memory
+  against memory, not a check against Sinnott's Table 12.4.
 * **Recalled from memory and not verified against the books:** the Kern
   constants (0.36, 0.55 for $\mathrm{Nu}$; 0.576, 0.19 for $f_s$, a fit to Kern's chart, not
   the chart), the $D_e$ rounded constants (1.10/0.917/1.27/0.785 are checked
@@ -2793,6 +2898,55 @@ Coulson & Richardson, *Chemical Engineering* Vol. 6 (Sinnott), Ch. 12;
 Kakac, Liu & Pramuanjaroenkij, *Heat Exchangers: Selection, Rating, and Thermal
 Design*; Bowman, Mueller & Nagle, Trans. ASME 62 (1940) 283; Kays & London,
 *Compact Heat Exchangers*; Gnielinski, Int. Chem. Eng. 16 (1976) 359.
+
+### Threshold Fouling
+
+**Location**: `difflow/fouling.py` (a library of pure JAX functions, **not** a palette
+operation; the core counterpart of the crude-preheat fouling model in
+`difflow_refinery.preheat.fouling`, which is unchanged and has its own illustrative
+constants).
+
+**Description**: The Ebert-Panchal threshold model: deposition is Arrhenius in the
+film temperature, removal goes with the wall shear stress, and below the
+threshold a surface does not foul.
+
+$$\frac{dR_f}{dt}=\alpha\,\mathrm{Re}^{-0.66}\mathrm{Pr}^{-0.33}\,e^{-E/(RT_{film})}-\gamma\,\tau_w,
+\qquad \tau_w=\frac f8\rho v^2$$
+
+$\alpha$, $\gamma$ and $E$ are **user-supplied and fluid-specific** (no defaults),
+fitted to plant or slip-stream data; **every number in the example below is
+illustrative**, chosen for the arithmetic, not for any fluid. The $0.55$ film
+weight of `film_temperature` is the refinery plugin's convention, unverified, and
+the form of the equation is recalled from the literature (Ebert and Panchal, 1995)
+and not re-checked against the paper. For the same constants `ebert_panchal_rate`
+returns the refinery function's value (a test, skipped when the plugin is not
+installed).
+
+| Function | Purpose |
+|---|---|
+| `ebert_panchal_rate(Re, Pr, T_film, tau_w, alpha, gamma, E, beta=-0.66, floor_at_zero=False)` | $dR_f/dt$ (m$^2$ K/W/s); negative below the threshold |
+| `wall_shear_stress(f, rho, v)` | $\tau_w=f\rho v^2/8$ from the Darcy factor |
+| `film_temperature(T_bulk, T_wall)` | $T_b+0.55(T_w-T_b)$ |
+| `threshold_wall_shear`, `threshold_film_temperature` | the shear (Pa) or film temperature (K) at which the rate is zero |
+| `fouling_time(R_target, rate, R_f0=0)` | time to a target resistance at a constant rate (`inf` if the rate is not positive) |
+| `integrate_fouling(rate_fn, t_end, R_f0, n_steps)` | RK4 integration of a rate that depends on $R_f$; differentiable in whatever `rate_fn` closes over |
+
+```python
+import jax
+from difflow import fluids, fouling
+
+alpha, gamma, E = 2.0e-3, 4.0e-13, 48.0e3     # ILLUSTRATIVE constants, not fitted to any fluid
+rho, mu, D, Pr = 800.0, 5.0e-3, 0.02, 10.0    # illustrative tube-side properties
+
+def rate(v, T_film=600.0):
+    Re = fluids.reynolds_number(rho, v, D, mu)
+    tau = fouling.wall_shear_stress(fluids.friction_factor(Re, 0.0), rho, v)
+    return fouling.ebert_panchal_rate(Re, Pr, T_film, tau, alpha, gamma, E)
+
+r = rate(1.0)                                  # m^2 K/W per s
+days = fouling.fouling_time(3.0e-4, r) / 86400.0
+drdv = jax.grad(rate)(1.0)                     # d(rate)/d(velocity): faster flow, less fouling
+```
 
 ---
 
