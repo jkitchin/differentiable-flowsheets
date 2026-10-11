@@ -279,10 +279,18 @@ enthalpy is neglected. `K_depends_on_composition` is `True`; called without
 runs on ethanol-water:
 
 ```python
-from difflow import ActivityThermo, NRTLParams
-th = ActivityThermo(ideal, nrtl)            # ideal: IdealThermo for ethanol, water
+import jax.numpy as jnp
+from difflow import ActivityThermo, IdealThermo, NRTLParams
+from difflow.database import get_species_data
+
+ideal = IdealThermo({sp: get_species_data(sp) for sp in ("ethanol", "water")})
+nrtl = NRTLParams(("ethanol", "water"),
+                  a=jnp.array([[0.0, -0.8009], [3.4578, 0.0]]),
+                  b=jnp.array([[0.0, 246.18], [-586.0809, 0.0]]),
+                  alpha=jnp.array([[0.0, 0.3], [0.3, 0.0]]))
+th = ActivityThermo(ideal, nrtl)
 K = th.K_values_array(355.0, 101325.0, jnp.array([0.2, 0.8]))
-col = DistillationColumn(params, th)        # CMO or MESH, unchanged
+# DistillationColumn(params, th) then runs on CMO or MESH, unchanged
 ```
 
 #### Bubble Point and Dew Point
