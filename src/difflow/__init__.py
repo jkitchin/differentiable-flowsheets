@@ -37,7 +37,7 @@ from difflow.streams import (
     scale_stream,
 )
 from difflow.thermo import (
-    IdealThermo, CubicThermo, SpeciesData,
+    IdealThermo, CubicThermo, ActivityThermo, SpeciesData,
     AntoineRangeWarning, BubbleDewConvergenceWarning,
 )
 from difflow.eos import (
@@ -553,6 +553,7 @@ __all__ = [
     # Thermodynamics - Ideal
     "IdealThermo",
     "CubicThermo",
+    "ActivityThermo",
     "SpeciesData",
     "AntoineRangeWarning",
     "BubbleDewConvergenceWarning",

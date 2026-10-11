@@ -1688,7 +1688,12 @@ its derivative jumps where one more whole stage is needed, and `dN/dR`
 depends on the convention, so state it with the answer. The optimal-feed
 switch is a sigmoid in `x` of width `feed_width`. A reboiler is the last stage;
 with `partial_condenser=True` the first stage is the condenser and
-`N_column = N - 1`. With open steam, build the bottom line with
+`N_column = N - 1`. With a Murphree efficiency on the curve,
+`reboiler_equilibrium=True` steps the trays to the pseudo-equilibrium curve
+but draws the last step (the reboiler) to the true curve, the textbook
+convention and the one `DistillationColumn` uses (its reboiler is always an
+equilibrium stage); the default applies $E$ to every step. `N` can jump by a
+fraction of a stage where the reboiler changes index. With open steam, build the bottom line with
 `stripping_line(..., open_steam=True)` (through `(x_B, 0)`). A subcooled feed
 is `q > 1`. Specifying a feed stage *earlier* than the optimal one
 extends the stripping line into a region where it lies above the curve; the

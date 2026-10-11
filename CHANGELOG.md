@@ -8,6 +8,13 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **`ActivityThermo` and an equilibrium reboiler in the McCabe-Thiele stepper (book Ch. 12 gaps).**
+  (1) `difflow.ActivityThermo(ideal, activity_model)` gives modified-Raoult K-values
+  `gamma_i(x, T) Psat_i / P` with the wrapped `IdealThermo`'s enthalpies, so `DistillationColumn` (CMO and MESH)
+  runs on a nonideal liquid such as ethanol-water; before, it took only `IdealThermo` (Raoult) or `CubicThermo`.
+  (2) `staged.mccabe_thiele(..., reboiler_equilibrium=True)` treats the last stage as an equilibrium stage when the
+  curve carries a Murphree efficiency, matching `DistillationColumn` and the textbook construction; the default still
+  applies `E` to every step. Tests `tests/test_activity_thermo.py`, `tests/test_staged.py`.
 - **`OperatingPointWarning`.** `operating_point` warns on a concrete negative `Q*` (no forward-flow operating
   point, e.g. a valveless parallel pair with a weak pump running backwards) or an unconverged Newton solve; silent
   under `jit`/`grad`. `PipeCavitationWarning` is exported from `difflow`. Test `tests/test_pump.py`.
