@@ -8,6 +8,11 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **`phase_identification_parameter` (book Ch. 11 gap).** `difflow.eos.phase_identification_parameter(eos, T, P,
+  y, phase)` is the Venkatarathnam-Oellrich parameter Pi (Pi > 1 liquid-like), from autodiff derivatives of the
+  cubic's P(T, V). `flash_TP_eos` uses it to label a stable feed (see Fixed, #442). Test
+  `tests/test_eos.py::TestPhaseIdentification`.
+
 - **`OperatingPointWarning`.** `operating_point` warns on a concrete negative `Q*` (no forward-flow operating
   point, e.g. a valveless parallel pair with a weak pump running backwards) or an unconverged Newton solve; silent
   under `jit`/`grad`. `PipeCavitationWarning` is exported from `difflow`. Test `tests/test_pump.py`.
@@ -830,6 +835,14 @@ All notable changes to difflow are recorded here. The format follows
   and low-pH recovery no longer exceeds 0.98.
 
 ### Fixed
+
+- **`flash_TP_eos` labelled a single-root compressed liquid as vapor (#442).** A stable feed was called vapor
+  when its lower-Gibbs root was the "vapor" root; above the bubble point of a liquid the cubic has one real root,
+  so both selectors return it and the label was wrong. CH4/C3H8 (z = 0.2/0.8, PR) at 277.6 K gave V = 1 for every
+  P above its 33.4 bar bubble point, with V jumping from 0.04 at 30 bar to 1. The stable phase is now liquid when
+  the phase identification parameter Pi > 1 and T is below the Kay's-rule pseudo-critical temperature, vapor
+  otherwise; V now falls continuously to 0 at the bubble point. Affects `EOSFlash`, `Flash(eos=...)` and
+  everything that calls `flash_TP_eos`. Test `tests/test_eos.py::TestPhaseIdentification`.
 
 - **`plan_sensitivity` reported half the elastic penalty as a shadow price.**
   The stationarity gradient that the multipliers are solved from included
