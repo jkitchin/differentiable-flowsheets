@@ -27,7 +27,8 @@ Contents
 * Kern method: :func:`equivalent_diameter`, :func:`kern_shell_side`,
   :func:`kern_shell_pressure_drop`
 * Tube side: :func:`tube_side_pressure_drop`
-* Design: :class:`ShellAndTubeDesignParams`, :class:`ShellAndTubeDesign`,
+* Design (one shell or ``n_shell_passes`` shells in series):
+  :class:`ShellAndTubeDesignParams`, :class:`ShellAndTubeDesign`,
   :func:`difflow.units.heat_exchanger.effectiveness_shell_and_tube`, :func:`round_design`
 
 **Verification status** is stated in ``docs`` and ``tests/test_shell_and_tube.py``.
@@ -65,6 +66,7 @@ from difflow import fluids
 from difflow import heat_transfer as ht
 from difflow.params_mixin import ParamsMixin
 from difflow.units.heat_exchanger import (
+    _warn_correction_factor,
     effectiveness_shell_and_tube,
     lmtd_correction_factor,
     log_mean_temperature_difference,
@@ -84,6 +86,11 @@ LAYOUTS = ("triangular", "square")
 #: Kern's chart reading ``j_H = 93`` at ``Re_s = 25 300`` to 2 percent.
 KERN_NU_COEFFICIENT = 0.36
 KERN_NU_EXPONENT = 0.55
+#: Stated range of the Kern shell-side power law (``2e3 < Re_s < 1e6``);
+#: :class:`ShellAndTubeDesign` flags and warns outside it (``shell_laminar``,
+#: ``shell_Re_out_of_range``).
+KERN_RE_MIN = 2.0e3
+KERN_RE_MAX = 1.0e6
 #: Kern shell-side friction factor ``f = exp(a - b ln Re)`` with ``a = 0.576``,
 #: ``b = 0.19`` (a widely quoted fit to Kern's Fig. 29 for 25 percent cut
 #: baffles, ``400 < Re < 1e6``), dimensionless so that
@@ -505,14 +512,31 @@ class ShellAndTubeDesignParams(ParamsMixin):
         hot_isothermal: True for a condensing hot side (T_out = T_in, F = 1).
         cold_isothermal: True for a boiling cold side.
         shell_h: ``None`` for Kern, a number (W/m^2/K) or a callable ``shell_h(geom)``
-            (``geom`` is a dict with ``tube_OD``, ``n_tubes``, ``tube_length``, ``shell_ID``,
-            ``area``) for a phase-change shell side. Shell dP is then zero (not modelled).
+            for a phase-change shell side. ``geom`` is a dict with ``tube_OD``, ``n_tubes``,
+            ``tube_length``, ``shell_ID``, ``area`` (all per shell) and ``area_total``, plus the
+            wall state computed from the current ``U`` iterate: ``q_flux`` (``Q/A``, W/m^2),
+            ``T_wall`` (K, the wall surface the shell-side film sees, outside any shell-side
+            fouling layer), ``dT_film`` (``|T_shell - T_wall|``, K, floored at 1e-6),
+            ``T_shell`` and ``T_tube`` (mean bulk temperatures, K). The wall state is closed
+            inside the ``U`` fixed point, so a condensing (``nusselt_film_condensation``) or
+            boiling (``rohsenow_superheat``, ``mostinski``) coefficient may depend on it. A callable
+            that reads only the geometry keys is unaffected by the extra keys. Shell dP is
+            zero (not modelled).
         dP_tube_max: Tube-side pressure-drop limit (Pa), for the warning flag.
         dP_shell_max: Shell-side pressure-drop limit (Pa).
         U_guess: Starting overall coefficient (W/m^2/K).
         damping: Damping of the fixed-point map (1 is plain substitution).
         tol: Relative tolerance of the fixed point.
         max_iter: Maximum fixed-point steps.
+        n_shell_passes: Number of shells in series (``N``, a Python int, default 1). The
+            duty is split over ``N`` identical shells, each carrying the full flow of both
+            streams (so a temperature cross one shell cannot make, ``F = 0``, becomes
+            feasible); ``F`` is ``lmtd_correction_factor(R, P, N)``. Geometry outputs
+            (``n_tubes``, ``tube_length``, ``shell_ID``, ``baffle_spacing``) are PER SHELL;
+            ``area``, ``UA`` and the pressure drops are totals over the ``N`` shells.
+        tube_viscosity_correction: True to apply the optional ``(mu/mu_w)^n`` factor to the
+            tube-side Gnielinski coefficient (needs ``mu_wall_*``). The exponents
+            (0.11 heating / 0.25 cooling) are **from memory and unverified**; off by default.
     """
 
     tube_OD: float
@@ -549,10 +573,19 @@ class ShellAndTubeDesignParams(ParamsMixin):
     damping: float = 0.6
     tol: float = 1e-10
     max_iter: int = 200
+    n_shell_passes: int = 1
+    tube_viscosity_correction: bool = False
 
 
 class ShellAndTubeDesign:
     """Size a 1-2N shell-and-tube exchanger by iterating the overall coefficient.
+
+    ``params.n_shell_passes = N`` puts ``N`` identical shells in series (see
+    :class:`ShellAndTubeDesignParams`): ``F`` comes from
+    ``lmtd_correction_factor(R, P, N)``, the area is split evenly, and each
+    shell is sized for the full flows. A duty whose temperature cross no single
+    shell can make has ``F = 0`` (the infinite-area limit, issue #419) and a
+    ``LowCorrectionFactorWarning``; add shells.
 
     ``design(hot_in, cold_in, Q=...)`` (or ``T_hot_out=`` / ``T_cold_out=``)
     solves the fixed point ``U = overall_U(h_i(A(U)), h_o(A(U)))`` for the
@@ -586,9 +619,9 @@ class ShellAndTubeDesign:
         r"\Delta P_t = N_p\left(f\frac{L}{d_i} + 4\right)\frac{\rho v^2}{2},\qquad D_b = d_o\left(\frac{N_t}{K_1}\right)^{1/n_1}",
     ]
     assumptions = [
-        "1-2N exchanger (one shell pass, even tube passes): F from the Bowman/Underwood formula; countercurrent LMTD basis.",
+        "1-2N exchanger, N shells in series (n_shell_passes, default 1; even tube passes): F from the Bowman/Underwood formula with N shells; countercurrent LMTD basis.",
         "Single-phase Newtonian liquids (or gases) with constant properties on each side, evaluated by the caller; a condensing or boiling side is the isothermal mode.",
-        "Kern shell side: segmental baffles (25 percent cut), no leakage or bypass streams, Re 2e3 to 1e6 (extrapolated outside).",
+        "Kern shell side: segmental baffles (25 percent cut), no leakage or bypass streams, Re 2e3 to 1e6 (extrapolated outside, with a shell_laminar / shell_Re_out_of_range flag and a warning).",
         "Tube side: Gnielinski / laminar blend of difflow.heat_transfer.internal_h, Darcy friction from difflow.fluids.friction_factor, 4 velocity heads per pass for the return.",
         "Tube count, passes and baffle count are continuous in the design; the geometry must be rounded and re-rated (round_design, rate) before it is built.",
         "Bundle diameter from the Coulson & Richardson constants for pitch 1.25 d_o; shell diameter = bundle + a fixed clearance.",
@@ -649,7 +682,7 @@ class ShellAndTubeDesign:
         else:
             R = (Th - Tho) / jnp.maximum(Tco - Tc, 1e-12)
             P = (Tco - Tc) / jnp.maximum(Th - Tc, 1e-12)
-            F = lmtd_correction_factor(R, P, 1)
+            F = lmtd_correction_factor(R, P, p.n_shell_passes)
 
         def pick(name):
             return over[name] if over.get(name) is not None else getattr(p, name)
@@ -682,30 +715,39 @@ class ShellAndTubeDesign:
         return a
 
     def _geometry(self, A, a):
-        """Geometry for an area ``A`` (m^2): tube count, length, shell, baffles."""
+        """Geometry for a TOTAL area ``A`` (m^2): per-shell tube count, length, shell, baffles."""
         p = self.params
         do, di, Np = a["tube_OD"], a["tube_ID"], a["n_passes"]
+        A_shell = A / p.n_shell_passes
         if a["v"] is not None:
             per_pass = a["m_t"] / (a["rho_t"] * a["v"] * jnp.pi / 4.0 * di**2)
             Nt = Np * per_pass
-            L = A / (jnp.pi * do * Nt)
+            L = A_shell / (jnp.pi * do * Nt)
         else:
             L = a["L"]
-            Nt = A / (jnp.pi * do * L)
+            Nt = A_shell / (jnp.pi * do * L)
         Db = bundle_diameter(Nt, do, Np, p.layout)
         Ds = Db + a["clearance"]
         lB = a["bs_ratio"] * Ds if a["lB"] is None else a["lB"]
-        return {"n_tubes": Nt, "tube_length": L, "bundle_ID": Db, "shell_ID": Ds, "baffle_spacing": lB, "area": A}
+        return {"n_tubes": Nt, "tube_length": L, "bundle_ID": Db, "shell_ID": Ds, "baffle_spacing": lB,
+                "area": A_shell, "area_total": A}
 
-    def _film_and_U(self, g, a):
-        """Film coefficients, U and pressure drops for a geometry dict ``g``."""
+    def _film_and_U(self, g, a, thermal):
+        """Film coefficients, U and pressure drops for a (per-shell) geometry dict ``g``.
+
+        ``thermal`` carries the heat flux ``q`` (W/m^2, outer area), the mean hot and cold
+        bulk temperatures and the effective mean temperature difference ``dT_mean = F LMTD``
+        (``q = U dT_mean``); they give the wall state handed to a callable ``shell_h``.
+        """
         p = self.params
+        N = p.n_shell_passes
         do, di, Np = a["tube_OD"], a["tube_ID"], a["n_passes"]
         tube = tube_side_pressure_drop(a["m_t"], a["rho_t"], a["mu_t"], g["n_tubes"], Np, di, g["tube_length"], a["roughness"])
         Pr_t = ht.prandtl(a["Cp_t"], a["mu_t"], a["k_t"])
         mu_ratio = 1.0 if a["mu_wt"] is None else a["mu_t"] / _f64(a["mu_wt"])
         h_i = ht.internal_h(tube["Re"], Pr_t, a["k_t"], di, L=g["tube_length"] * Np, mu_ratio=mu_ratio,
-                            rel_roughness=a["roughness"] / di, heating=(p.tube_side == "cold"))
+                            rel_roughness=a["roughness"] / di, heating=(p.tube_side == "cold"),
+                            viscosity_correction=p.tube_viscosity_correction)
         if p.shell_h is None:
             shell = kern_shell_side(a["m_s"], a["rho_s"], a["mu_s"], a["k_s"], a["Cp_s"], g["shell_ID"], do,
                                     a["pitch"], g["baffle_spacing"], p.layout, a["mu_ws"])
@@ -713,17 +755,50 @@ class ShellAndTubeDesign:
             dPs = kern_shell_pressure_drop(a["m_s"], a["rho_s"], a["mu_s"], g["shell_ID"], do, a["pitch"],
                                            g["baffle_spacing"], g["tube_length"], p.layout, a["mu_ws"])
         else:
-            h_o = p.shell_h({"tube_OD": do, "n_tubes": g["n_tubes"], "tube_length": g["tube_length"],
-                             "shell_ID": g["shell_ID"], "area": g["area"]}) if callable(p.shell_h) else _f64(p.shell_h)
+            if callable(p.shell_h):
+                tube_hot = p.tube_side == "hot"
+                T_tube = thermal["T_hot"] if tube_hot else thermal["T_cold"]
+                T_shell = thermal["T_cold"] if tube_hot else thermal["T_hot"]
+                sign = -1.0 if tube_hot else 1.0   # shell hotter than tube: wall below the shell fluid
+                R_chain = (do / (di * h_i) + a["R_fi"] * do / di + do * jnp.log(do / di) / (2.0 * a["k_wall"])
+                           + a["R_fo"])
+                # tube-side temperature that makes q = U (T_shell - T_tube_eff) hold with the mean
+                # difference F LMTD; the wall then sits q R_chain from it, so at the fixed point
+                # T_shell - T_wall = q / h_o exactly
+                T_tube_eff = T_shell - sign * thermal["dT_mean"]
+                T_wall = T_tube_eff + sign * thermal["q"] * R_chain
+                h_o = p.shell_h({"tube_OD": do, "n_tubes": g["n_tubes"], "tube_length": g["tube_length"],
+                                 "shell_ID": g["shell_ID"], "area": g["area"], "area_total": g["area_total"],
+                                 "q_flux": thermal["q"], "T_wall": T_wall,
+                                 "dT_film": jnp.maximum(sign * (T_shell - T_wall), 1e-6),
+                                 "T_shell": T_shell, "T_tube": T_tube})
+            else:
+                h_o = _f64(p.shell_h)
             shell = {"Re": jnp.asarray(jnp.nan), "us": jnp.asarray(jnp.nan), "De": jnp.asarray(jnp.nan)}
             dPs = {"dP": jnp.asarray(0.0)}
         U = ht.overall_U(h_i, h_o, di, do, a["k_wall"], a["R_fi"], a["R_fo"], "outer")
-        return U, {"h_i": h_i, "h_o": _f64(h_o), "tube": tube, "shell": shell, "dP_shell": dPs["dP"]}
+        return U, {"h_i": h_i, "h_o": _f64(h_o), "tube": tube, "shell": shell, "dP_shell": N * dPs["dP"],
+                   "dP_tube": N * tube["dP"]}
+
+    @staticmethod
+    def _design_thermal(A, a):
+        return {"q": a["Q"] / A, "T_hot": 0.5 * (a["T_hot_in"] + a["T_hot_out"]),
+                "T_cold": 0.5 * (a["T_cold_in"] + a["T_cold_out"]), "dT_mean": a["F"] * a["lmtd"]}
+
+    def _mean_dT(self, Th, Tho, Tc, Tco):
+        """``F LMTD`` for given terminal temperatures (F = 1 with an isothermal side)."""
+        p = self.params
+        lmtd = log_mean_temperature_difference(Th - Tco, Tho - Tc)
+        if p.hot_isothermal or p.cold_isothermal:
+            return lmtd
+        R = (Th - Tho) / jnp.maximum(Tco - Tc, 1e-12)
+        P = (Tco - Tc) / jnp.maximum(Th - Tc, 1e-12)
+        return lmtd_correction_factor(R, P, p.n_shell_passes) * lmtd
 
     def _U_map(self, U, a):
         A = a["Q"] / (U * a["F"] * a["lmtd"])
         g = self._geometry(A, a)
-        U_new, _ = self._film_and_U(g, a)
+        U_new, _ = self._film_and_U(g, a, self._design_thermal(A, a))
         p = self.params
         return (1.0 - p.damping) * U + p.damping * U_new
 
@@ -745,22 +820,30 @@ class ShellAndTubeDesign:
             Q: Duty (W), or give exactly one of the next two.
             T_hot_out: Hot outlet temperature (K).
             T_cold_out: Cold outlet temperature (K).
-            warn: Emit ``UserWarning`` for ``F < 0.75``, exceeded pressure-drop limits
-                or an unconverged iteration (only when the values are concrete).
+            warn: Emit warnings for ``F < 0.75`` or ``F = 0``
+                (:class:`~difflow.units.heat_exchanger.LowCorrectionFactorWarning`, a
+                ``UserWarning``), exceeded pressure-drop limits, an unconverged iteration,
+                a laminar tube side and a shell-side ``Re`` outside the Kern range (only when
+                the values are concrete; silent under ``jit`` / ``grad``).
             **overrides: Replacement values for ``tube_velocity``, ``tube_length``,
                 ``baffle_spacing``, ``n_tube_passes``, ``tube_OD``, ``tube_ID``,
                 ``pitch_ratio``, ``k_wall``, ``R_fi``, ``R_fo``. These may be traced:
                 differentiate the result with respect to them.
 
         Returns:
-            Dict with ``Q``, ``U``, ``area``, ``UA``, ``F``, ``LMTD``, the four
+            Dict with ``Q``, ``U``, ``area`` (total), ``UA``, ``F``, ``LMTD``, the four
             temperatures, ``n_tubes``, ``tube_length``, ``shell_ID``,
-            ``bundle_ID``, ``baffle_spacing``, ``n_baffles`` (``L/l_B - 1``),
-            ``n_tube_passes``, ``tube_velocity``, ``h_i``, ``h_o``,
-            ``Re_tube``, ``Re_shell``, ``dP_tube``, ``dP_shell`` (Pa),
+            ``bundle_ID``, ``baffle_spacing`` (all per shell), ``n_baffles``
+            (``L/l_B - 1``), ``n_tube_passes``, ``n_shell_passes``,
+            ``area_per_shell``, ``q_flux`` (``Q/A``), ``tube_velocity``, ``h_i``,
+            ``h_o``, ``Re_tube``, ``Re_shell`` (NaN with a ``shell_h``),
+            ``dP_tube``, ``dP_shell`` (Pa, totals over the shells),
             ``U_residual`` (relative fixed-point residual), flags
-            ``converged``, ``F_too_low``, ``tube_laminar`` (``Re_tube < 2300``),
-            ``dP_tube_exceeded`` and ``dP_shell_exceeded``.
+            ``converged``, ``F_too_low``, ``F_zero`` (``F = 0``: infeasible with this
+            many shells), ``tube_laminar`` (``Re_tube < 2300``), ``shell_laminar``
+            (``Re_shell < 2e3``, below the Kern range), ``shell_Re_out_of_range``
+            (outside ``2e3 < Re_s < 1e6``), ``dP_tube_exceeded`` and
+            ``dP_shell_exceeded``.
 
         Raises:
             ValueError: Not exactly one of ``Q``/``T_*_out``; neither
@@ -782,7 +865,7 @@ class ShellAndTubeDesign:
         U = sol.value
         A = a["Q"] / (U * a["F"] * a["lmtd"])
         g = self._geometry(A, a)
-        U_check, d = self._film_and_U(g, a)
+        U_check, d = self._film_and_U(g, a, self._design_thermal(A, a))
         resid = jnp.abs(U_check - U) / U
         out = {
             "Q": a["Q"], "U": U, "area": A, "UA": U * A, "F": a["F"], "LMTD": a["lmtd"], "R": a["R"], "P": a["P"],
@@ -791,13 +874,17 @@ class ShellAndTubeDesign:
             "n_tubes": g["n_tubes"], "tube_length": g["tube_length"], "shell_ID": g["shell_ID"],
             "bundle_ID": g["bundle_ID"], "baffle_spacing": g["baffle_spacing"],
             "n_baffles": g["tube_length"] / g["baffle_spacing"] - 1.0, "n_tube_passes": a["n_passes"],
+            "n_shell_passes": p.n_shell_passes, "area_per_shell": g["area"], "q_flux": a["Q"] / A,
             "tube_velocity": d["tube"]["v"], "h_i": d["h_i"], "h_o": d["h_o"],
             "Re_tube": d["tube"]["Re"], "Re_shell": d["shell"]["Re"],
-            "dP_tube": d["tube"]["dP"], "dP_shell": d["dP_shell"], "U_residual": resid,
+            "dP_tube": d["dP_tube"], "dP_shell": d["dP_shell"], "U_residual": resid,
         }
         out["converged"] = resid < 1e-6
         out["tube_laminar"] = out["Re_tube"] < ht.RE_LAMINAR
         out["F_too_low"] = out["F"] < 0.75
+        out["F_zero"] = out["F"] == 0.0
+        out["shell_laminar"] = out["Re_shell"] < KERN_RE_MIN
+        out["shell_Re_out_of_range"] = (out["Re_shell"] < KERN_RE_MIN) | (out["Re_shell"] > KERN_RE_MAX)
         out["dP_tube_exceeded"] = out["dP_tube"] > p.dP_tube_max
         out["dP_shell_exceeded"] = out["dP_shell"] > p.dP_shell_max
         if warn:
@@ -806,12 +893,15 @@ class ShellAndTubeDesign:
 
     @staticmethod
     def _warn(out):
-        keys = ("F", "dP_tube", "dP_shell", "Re_tube", "U_residual")
+        keys = ("F", "dP_tube", "dP_shell", "Re_tube", "Re_shell", "U_residual")
         if any(isinstance(out[k], jax.core.Tracer) for k in keys):
             return  # under jit / grad: no concrete values to warn about
         if bool(out["F_too_low"]):
-            warnings.warn(f"LMTD correction factor F = {float(out['F']):.3f} < 0.75: use more shells in series "
-                          "or a different layout.", UserWarning, stacklevel=3)
+            # LowCorrectionFactorWarning covers F = 0 (infinite-area limit, #419) and 0 < F < 0.75
+            _warn_correction_factor(out["F"], int(out["n_shell_passes"]),
+                                    "ShellAndTubeDesign LMTD correction factor", stacklevel=4)
+        if bool(out["F_zero"]):
+            return  # area, geometry and the other checks are meaningless at F = 0
         if bool(out["dP_tube_exceeded"]):
             warnings.warn(f"tube-side pressure drop {float(out['dP_tube']):.4g} Pa exceeds the limit.",
                           UserWarning, stacklevel=3)
@@ -820,6 +910,11 @@ class ShellAndTubeDesign:
                           UserWarning, stacklevel=3)
         if not bool(out["converged"]):
             warnings.warn(f"U iteration did not converge (relative residual {float(out['U_residual']):.2e}).",
+                          UserWarning, stacklevel=3)
+        if bool(out["shell_Re_out_of_range"]):
+            where = "below" if bool(out["shell_laminar"]) else "above"
+            warnings.warn(f"shell-side Re = {float(out['Re_shell']):.0f} is {where} the range of Kern's correlation "
+                          f"({KERN_RE_MIN:.0e} < Re < {KERN_RE_MAX:.0e}); h_o is an extrapolation.",
                           UserWarning, stacklevel=3)
         if bool(out["tube_laminar"]):
             warnings.warn(f"tube-side Re = {float(out['Re_tube']):.0f} < 2300: the iteration may have settled on the "
@@ -842,8 +937,12 @@ class ShellAndTubeDesign:
 
         Computes ``h_i``, ``h_o``, ``U`` (or uses the ``U`` supplied), the area
         ``pi d_o N_t L``, ``UA``, then the outlet temperatures and duty from the
-        1-2N effectiveness :func:`difflow.units.heat_exchanger.effectiveness_shell_and_tube` (an isothermal side
-        has ``Cr = 0``). Also returns both pressure drops and the area margin
+        1-2N effectiveness :func:`difflow.units.heat_exchanger.effectiveness_shell_and_tube` for
+        ``params.n_shell_passes`` shells in series (an isothermal side has ``Cr = 0``).
+        ``n_tubes``, ``tube_length``, ``shell_ID`` and ``baffle_spacing`` are PER SHELL (as
+        returned by the design); ``area``, ``UA`` and the pressure drops are totals. With a
+        callable ``shell_h`` the wall state it receives is closed on the duty (a fixed point
+        on the heat flux). Also returns both pressure drops and the area margin
         relative to a duty-fixed requirement is left to the caller
         (``area / A_required - 1``).
 
@@ -862,33 +961,51 @@ class ShellAndTubeDesign:
             ``h_i``, ``h_o``, ``dP_tube``, ``dP_shell``, ``effectiveness``, ``NTU``, ``F``.
         """
         p = self.params
+        N = p.n_shell_passes
         Th, Tc = _f64(hot_in["T"]), _f64(cold_in["T"])
         a = self._args(hot_in, cold_in, 1.0, None, None, {"tube_velocity": None})
         a["n_passes"] = _f64(p.n_tube_passes if n_tube_passes is None else n_tube_passes)
         a["v"] = None
         Nt = _f64(n_tubes)
         L = _f64(tube_length)
-        area = jnp.pi * a["tube_OD"] * Nt * L
+        area_shell = jnp.pi * a["tube_OD"] * Nt * L
+        area = N * area_shell
         g = {"n_tubes": Nt, "tube_length": L, "shell_ID": _f64(shell_ID), "baffle_spacing": _f64(baffle_spacing),
-             "area": area}
-        U_corr, d = self._film_and_U(g, a)
-        Uuse = U_corr if U is None else _f64(U)
-        Ch = _f64(hot_in["m_dot"]) * _f64(p.Cp_hot)
-        Cc = _f64(cold_in["m_dot"]) * _f64(p.Cp_cold)
-        if p.hot_isothermal:
-            Ch = jnp.asarray(1e30)
-        if p.cold_isothermal:
-            Cc = jnp.asarray(1e30)
+             "area": area_shell, "area_total": area}
+        Ch_real = _f64(hot_in["m_dot"]) * _f64(p.Cp_hot)
+        Cc_real = _f64(cold_in["m_dot"]) * _f64(p.Cp_cold)
+        Ch = jnp.asarray(1e30) if p.hot_isothermal else Ch_real
+        Cc = jnp.asarray(1e30) if p.cold_isothermal else Cc_real
         Cmin, Cmax = jnp.minimum(Ch, Cc), jnp.maximum(Ch, Cc)
-        NTU = Uuse * area / Cmin
-        eps = effectiveness_shell_and_tube(NTU, Cmin / Cmax, 1)
-        Q = eps * Cmin * (Th - Tc)
-        Tho = Th if p.hot_isothermal else Th - Q / Ch
-        Tco = Tc if p.cold_isothermal else Tc + Q / Cc
+
+        def step(q):
+            """One pass: wall flux ``q`` -> film coefficients, U, duty -> new flux."""
+            Qg = q * area
+            Tho = Th if p.hot_isothermal else Th - Qg / Ch_real
+            Tco = Tc if p.cold_isothermal else Tc + Qg / Cc_real
+            thermal = {"q": q, "T_hot": 0.5 * (Th + Tho), "T_cold": 0.5 * (Tc + Tco),
+                       "dT_mean": self._mean_dT(Th, Tho, Tc, Tco)}
+            U_corr, d = self._film_and_U(g, a, thermal)
+            Uuse = U_corr if U is None else _f64(U)
+            NTU = Uuse * area / Cmin
+            eps = effectiveness_shell_and_tube(NTU, Cmin / Cmax, N)
+            Q = eps * Cmin * (Th - Tc)
+            return Q / area, (Q, U_corr, d, Uuse, NTU, eps)
+
+        q0, _ = step(_f64(0.0))
+        if callable(p.shell_h):
+            # the wall state depends on the duty, which depends on U: close the loop on the flux
+            def qmap(q, _):
+                return (1.0 - p.damping) * q + p.damping * step(q)[0]
+            solver = optx.FixedPointIteration(rtol=p.tol, atol=1e-8)
+            q0 = optx.fixed_point(qmap, solver, q0, max_steps=p.max_iter, throw=False).value
+        q_flux, (Q, U_corr, d, Uuse, NTU, eps) = step(q0)
+        Tho = Th if p.hot_isothermal else Th - Q / Ch_real
+        Tco = Tc if p.cold_isothermal else Tc + Q / Cc_real
         return {
             "Q": Q, "T_hot_out": Tho, "T_cold_out": Tco, "U": Uuse, "U_correlation": U_corr, "area": area,
-            "UA": Uuse * area, "h_i": d["h_i"], "h_o": d["h_o"], "dP_tube": d["tube"]["dP"],
-            "dP_shell": d["dP_shell"], "effectiveness": eps, "NTU": NTU,
+            "UA": Uuse * area, "h_i": d["h_i"], "h_o": d["h_o"], "dP_tube": d["dP_tube"],
+            "dP_shell": d["dP_shell"], "effectiveness": eps, "NTU": NTU, "q_flux": q_flux,
         }
 
 
@@ -935,6 +1052,8 @@ __all__ = [
     "TEMA_TUBE_PITCH",
     "KERN_NU_COEFFICIENT",
     "KERN_NU_EXPONENT",
+    "KERN_RE_MIN",
+    "KERN_RE_MAX",
     "KERN_FRICTION_A",
     "KERN_FRICTION_B",
     "STANDARD_TUBE_PASSES",

@@ -382,6 +382,18 @@ def gnielinski(Re: Array | float, Pr: Array | float, f: Array | float) -> Array:
 _TURBULENT_METHODS = ("gnielinski", "dittus_boelter", "sieder_tate")
 _BOUNDARIES = ("T", "q")
 
+#: Exponents ``n`` of the optional property-ratio factor ``(mu_b/mu_w)^n`` on the
+#: Gnielinski and Dittus-Boelter turbulent Nusselt numbers (liquids): 0.11 when
+#: the fluid is heated, 0.25 when it is cooled (the Petukhov form; the VDI Heat
+#: Atlas / Gnielinski form is ``(Pr/Pr_w)^0.11``). **FROM MEMORY, UNVERIFIED**:
+#: written from recollection of the published form, not checked against
+#: Petukhov, Gnielinski or the VDI Heat Atlas. Check them before a real design;
+#: that is why the factor is opt-in (``viscosity_correction=True``). The factor
+#: uses the viscosity ratio as a stand-in for ``Pr/Pr_w`` (``Cp`` and ``k``
+#: taken constant across the film).
+VISCOSITY_EXPONENT_HEATING = 0.11
+VISCOSITY_EXPONENT_COOLING = 0.25
+
 
 def internal_nusselt(
     Re: Array | float,
@@ -392,6 +404,7 @@ def internal_nusselt(
     method: str = "gnielinski",
     heating: bool | Array = True,
     boundary: str = "T",
+    viscosity_correction: bool = False,
 ) -> Array:
     """Nusselt number in a circular tube, laminar through turbulent, smooth in Re.
 
@@ -405,6 +418,15 @@ def internal_nusselt(
     * Turbulent (``Re >= 4000``): ``method`` is ``"gnielinski"`` (friction factor
       from :func:`difflow.fluids.friction_factor`, Colebrook), ``"dittus_boelter"``
       or ``"sieder_tate"`` (``mu_ratio`` applies to the latter).
+    * Optional viscosity correction (``viscosity_correction=True``): the
+      Gnielinski and Dittus-Boelter turbulent values are multiplied by
+      ``mu_ratio^n``, ``n = 0.11`` (``heating``) or ``0.25`` (cooling), the
+      liquid form of Petukhov (Gnielinski / VDI: ``(Pr/Pr_w)^0.11``).
+      **The exponents are from memory and unverified**
+      (:data:`VISCOSITY_EXPONENT_HEATING`); the factor is off by default so
+      that no result changes silently. ``"sieder_tate"`` already carries its
+      own 0.14 factor and gets no second one. ``mu_ratio**n`` is smooth, so the
+      correction is differentiable.
     * Between 2300 and 4000 the two are blended by a C2 smootherstep of
       ``ln Re`` (zero first and second derivative at both ends; compare the
       linear interpolation of Gnielinski / VDI). Both branches are evaluated
@@ -423,11 +445,13 @@ def internal_nusselt(
         mu_ratio: Bulk over wall viscosity ``mu_b / mu_w`` (-). Used by the
             laminar entry term and by ``method="sieder_tate"``; Gnielinski and
             Dittus-Boelter, as published, have no viscosity correction and
-            ignore it.
+            ignore it unless ``viscosity_correction`` is True.
         rel_roughness: Relative roughness for the Gnielinski friction factor.
         method: Turbulent correlation (Python string).
         heating: Dittus-Boelter exponent selector (True: heating).
         boundary: ``"T"`` or ``"q"`` laminar fully developed value.
+        viscosity_correction: True to apply ``mu_ratio^n`` to the Gnielinski /
+            Dittus-Boelter turbulent value (exponents unverified, see above).
 
     Returns:
         Nusselt number based on the tube diameter (-).
@@ -459,6 +483,10 @@ def internal_nusselt(
     else:
         Nu_turb = sieder_tate(Re_t, Pr, mu_ratio)
 
+    if viscosity_correction and method != "sieder_tate":
+        n = jnp.where(jnp.asarray(heating), VISCOSITY_EXPONENT_HEATING, VISCOSITY_EXPONENT_COOLING)
+        Nu_turb = Nu_turb * _f64(mu_ratio) ** n
+
     w = _smooth_weight(Re, RE_LAMINAR, RE_TURBULENT)
     return (1.0 - w) * Nu_lam + w * Nu_turb
 
@@ -474,6 +502,7 @@ def internal_h(
     method: str = "gnielinski",
     heating: bool | Array = True,
     boundary: str = "T",
+    viscosity_correction: bool = False,
 ) -> Array:
     """Tube-side film coefficient ``h = Nu k / D`` (W/m^2/K); see :func:`internal_nusselt`.
 
@@ -489,12 +518,15 @@ def internal_h(
         method: ``"gnielinski"``, ``"dittus_boelter"`` or ``"sieder_tate"``.
         heating: True if the fluid is being heated.
         boundary: ``"T"`` (constant wall temperature) or ``"q"`` (constant flux).
+        viscosity_correction: Apply the optional ``mu_ratio^n`` factor to the
+            Gnielinski / Dittus-Boelter value (unverified exponents).
 
     Returns:
         Heat-transfer coefficient (W/m^2/K).
     """
     D_over_L = None if L is None else _f64(D) / _f64(L)
-    Nu = internal_nusselt(Re, Pr, D_over_L, mu_ratio, rel_roughness, method, heating, boundary)
+    Nu = internal_nusselt(Re, Pr, D_over_L, mu_ratio, rel_roughness, method, heating, boundary,
+                          viscosity_correction)
     return nusselt_to_h(Nu, k, D)
 
 
@@ -772,6 +804,13 @@ def critical_heat_flux(
     original constant was 0.149 and some texts quote that instead, so ``C``
     is a parameter).
 
+    **Single-surface value only.** Tube bundles (kettle reboilers) have a
+    lower critical flux than this because vapour from the lower tubes blankets
+    the upper ones. The published bundle factor (Palen's) is NOT implemented:
+    its form and constants could not be checked against a source, so none was
+    invented. Treat this as an upper bound for a bundle and derate by a
+    sourced bundle correction before a real reboiler design.
+
     Args:
         h_fg: Latent heat (J/kg).
         rho_v: Vapour density (kg/m^3).
@@ -912,6 +951,8 @@ __all__ = [
     "composite_wall",
     "critical_insulation_radius",
     "fin_efficiency_straight",
+    "VISCOSITY_EXPONENT_HEATING",
+    "VISCOSITY_EXPONENT_COOLING",
     "sieder_tate_laminar",
     "dittus_boelter",
     "sieder_tate",
