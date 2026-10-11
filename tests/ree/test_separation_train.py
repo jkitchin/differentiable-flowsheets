@@ -1079,3 +1079,40 @@ def test_capacity_bounds_total_organic_loading_not_just_the_increment():
     fresh_organic = sum(
         float(get_flows(extractor(feed, fresh)[1])[e]) for e in ("Nd", "Dy"))
     assert fresh_organic <= capacity + 1e-12
+
+
+def test_stages_kremser_inverts_the_kremser_recovery():
+    """N from stages_kremser gives back the recovery asked for.
+
+    stages_kremser solved E^(N+1) = (r(E-1)+1)/E, whose log is negative for
+    every r < 1, so the floor at 1 returned 1.0 for every input.
+    """
+    for D, S_F in ((2.0, 1.0), (10.0, 1.0), (3.0, 2.0), (0.5, 1.0), (1.5, 0.9)):
+        E = D * S_F
+        for recovery in (0.3, 0.45, 0.9, 0.99, 0.9999):
+            if E < 1.0 and recovery >= E:
+                continue
+            N = float(stages_kremser(D, S_F, recovery))
+            if N > 1.0:  # above the floor the recovery round-trips
+                remaining = _kremser_fraction_remaining(E, N)
+                assert 1.0 - remaining == pytest.approx(recovery, rel=1e-10)
+    # E = 2, 90%: 2^(N+1) = (2 - 0.9)/0.1 = 11, N = log2(11) - 1
+    assert float(stages_kremser(2.0, 1.0, 0.9)) == pytest.approx(math.log2(11) - 1)
+    # more recovery needs more stages
+    assert float(stages_kremser(10.0, 1.0, 0.9999)) > float(stages_kremser(10.0, 1.0, 0.99))
+
+
+def test_stages_kremser_limits():
+    """E = 1 limit, unreachable recoveries and gradients."""
+    # E = 1: the fraction remaining is 1/(N+1), so N = r/(1-r)
+    assert float(stages_kremser(1.0, 1.0, 0.9)) == pytest.approx(9.0)
+    # continuous through E = 1
+    assert float(stages_kremser(1.0 + 1e-4, 1.0, 0.9)) == pytest.approx(9.0, rel=1e-3)
+    # E < 1 recovers at most E with infinitely many stages
+    assert math.isinf(float(stages_kremser(0.5, 1.0, 0.6)))
+    # finite derivative, matching finite differences
+    g = float(jax.grad(lambda d: stages_kremser(d, 1.0, 0.99))(10.0))
+    h = 1e-6
+    fd = (float(stages_kremser(10.0 + h, 1.0, 0.99)) - float(stages_kremser(10.0 - h, 1.0, 0.99))) / (2 * h)
+    assert g == pytest.approx(fd, rel=1e-6)
+    assert g < 0  # a larger D needs fewer stages
