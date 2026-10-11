@@ -95,3 +95,54 @@ def test_smoothed_power_is_differentiable_at_zero():
     g = jax.grad(lambda q: smoothed_power_w(q, 1.3))(0.0)
     assert jnp.isfinite(g)
     assert float(g) == pytest.approx(0.0, abs=1e-12)  # even function
+
+
+# ---------------------------------------------------------------------------
+# isothermal_pipe_beta (G05-5): jnp, differentiable, honest friction options
+# ---------------------------------------------------------------------------
+
+from difflow_gas.physics import isothermal_pipe_beta, weymouth_friction  # noqa: E402
+
+
+def test_weymouth_beta_is_the_isothermal_pipe_beta_alias():
+    assert weymouth_beta is isothermal_pipe_beta
+    assert isothermal_pipe_beta(1000.0, 0.5, 1e-4, 283.15, 18.0) == pytest.approx(
+        83808537.60334712, rel=1e-12
+    )
+
+
+def test_pipe_beta_differentiable_in_length_diameter_roughness():
+    import jax
+    from jax.test_util import check_grads
+
+    def f(L_km, D, eps_um):  # O(1) arguments for the finite differences
+        return isothermal_pipe_beta(L_km * 1e3, D, eps_um * 1e-6, 288.15, 16.04, 0.851) / 1e6
+
+    check_grads(f, (50.0, 0.6, 45.0), order=1, modes=["rev"], eps=1e-4)
+    g = jax.grad(f, argnums=(0, 1, 2))(50.0, 0.6, 45.0)
+    assert float(g[0]) > 0 and float(g[1]) < 0 and float(g[2]) > 0
+
+
+def test_friction_laws_book_oracles():
+    """wex05-1: 0.6 m, 45 um, 121.54 kg/s methane, mu 1.2e-5 Pa s."""
+    from difflow_gas.physics import R_UNIVERSAL
+
+    pref = 16.0 * 50e3 * (R_UNIVERSAL / 16.04) * 288.15 * 0.851 / (jnp.pi**2 * 0.6**5)
+    nik = isothermal_pipe_beta(50e3, 0.6, 45e-6, 288.15, 16.04, 0.851)
+    assert float(nik / pref) == pytest.approx(0.011347, abs=2e-6)
+    cb = isothermal_pipe_beta(50e3, 0.6, 45e-6, 288.15, 16.04, 0.851,
+                              friction="colebrook", mass_flow_kg_s=121.54,
+                              viscosity_pa_s=1.2e-5)
+    assert float(cb / pref) == pytest.approx(0.011461, abs=2e-6)
+    wy = isothermal_pipe_beta(50e3, 0.6, 45e-6, 288.15, 16.04, 0.851,
+                              friction="weymouth")
+    # 0.032 / d_in^(1/3), d_in = 0.6/0.0254 = 23.62 in
+    assert float(wy / pref) == pytest.approx(0.032 / (0.6 / 0.0254) ** (1 / 3), rel=1e-12)
+    assert float(weymouth_friction(0.6)) == pytest.approx(0.011153, abs=1e-6)
+
+
+def test_pipe_beta_rejects_bad_friction_inputs():
+    with pytest.raises(ValueError):
+        isothermal_pipe_beta(1e3, 0.5, 1e-4, friction="panhandle")
+    with pytest.raises(ValueError):
+        isothermal_pipe_beta(1e3, 0.5, 1e-4, friction="colebrook")

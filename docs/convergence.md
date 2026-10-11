@@ -176,6 +176,19 @@ arguments:
 fs_small = Flowsheet(["A", "B"], default_flow=1e-6, default_T=350.0, default_P=2e5)
 ```
 
+`default_T` and `default_P` default to `None`, which means **inferred**: a tear
+with no better guess starts at the highest pressure and the flow-weighted mean
+temperature of the other inlets of the unit it feeds, when those are known
+before the loop is entered (a feed, or a unit upstream of every tear). The
+recycle of a 50 bar methanol loop therefore starts at 50 bar, not at 1 atm. That
+matters for more than speed: a `Mixer` leaves at its *lowest* inlet pressure, so a
+tear started at 1 atm drags the mixer outlet to 1 atm, the loop carries that
+pressure back to the tear, and the solve converges to the wrong pressure (and a
+derivative $\partial P/\partial P_{feed}$ of zero). Only when nothing is known
+upstream do the old 300 K and 101325 Pa apply. Passing a number pins it, as
+before; the guess carries no gradient either way (`stop_gradient`), since a
+converged loop's derivative does not depend on where it started.
+
 Under tracing the guessing pass is skipped entirely and the default stream is
 used, because a best-effort pass that catches exceptions has no business running
 over tracers — and the initial guess cannot affect a gradient that comes from
@@ -412,6 +425,16 @@ fs.last_solve_gain            # 0.97
 fs.last_solve_error_estimate  # 3.0e-07  -- the error, which did not
 ```
 
+When the probe has nothing to measure, because the accelerated solve (Anderson
+usually) left the residual at round-off, the gain comes instead from the tear
+map's Jacobian at the solution: `last_solve_gain` is its dominant eigenvalue
+(one `jax.jacfwd` of the tear map, skipped for tears of more than 400
+variables; a variable the loop only carries through unchanged, such as a tear
+temperature no unit touches, is left out, since its eigenvalue of exactly 1 is
+neutral rather than slow), and the error estimate is zero, which at round-off
+it is. So the
+gain is reported after every acceleration method, not only after the slow ones.
+
 Three details worth knowing, because each is a way an estimator like this goes
 wrong:
 
@@ -553,11 +576,17 @@ Three consequences worth knowing before differentiating through a flowsheet:
   The unnamed default stays plain substitution under tracing, so a loop that
   needs Anderson to converge in 100 iterations eagerly may need many more under
   `grad` unless `acceleration="anderson"` is passed.
-- **You lose the convergence verdict.** There is no concrete residual to judge,
-  so `last_solve_converged` is `None` and the solve stays silent whatever
-  `on_nonconvergence` says — guessing would either raise inside a gradient or
-  warn on a solve that was fine. Check convergence eagerly, at the same
-  parameter values, before trusting a gradient.
+- **The convergence verdict arrives at run time.** There is no concrete
+  residual at trace time, so `last_solve_converged` is `None`. The check is
+  instead compiled into the computation (`jax.debug.callback`): when the traced
+  fixed point stops short of `tol`, a `ConvergenceWarning` saying the values
+  *and gradients* are wrong is issued as the gradient is evaluated. It stays a
+  warning with `on_nonconvergence="raise"` too, since an exception inside a
+  gradient would make the flowsheet undifferentiable; turn it into an error
+  with `warnings.simplefilter("error", ConvergenceWarning)` if you want one.
+  `on_nonconvergence="ignore"` compiles no check. Implicit differentiation
+  assumes a converged loop, so an unconverged one silently gave a wrong
+  derivative before this check existed. Raise `max_iter` when it fires.
 - **You lose the feed-propagation guess.** The initialization pass catches
   exceptions, which has no business running over tracers, so a traced solve
   starts from the flowsheet default stream unless you pass `tear_initial`.
@@ -703,7 +732,7 @@ converged:
 | `last_solve_acceleration` | what accelerated the solve: `"anderson"`, `"wegstein"` or `"none"`. Under tracing `last_solve_method` is `"fixed_point (traced)"` and this says whether the traced solver was accelerated |
 | `last_solve_tear_streams` | the tear (recycle destination) names |
 | `last_solve_clip_active` | iterations on which `clip_negative_flows` actually moved the proposed iterate; always `0` on the unaccelerated path, which does not clip |
-| `last_solve_gain` | measured signed gain of the tear map at the solution, or `None` where there was nothing to measure |
+| `last_solve_gain` | measured signed gain of the tear map at the solution (from the probe passes, or the dominant eigenvalue of the tear Jacobian when the residual is at round-off), or `None` on a traced or recycle-free solve |
 | `last_solve_error_estimate` | measured error left in the tear — the number `tol` reads as if it were |
 
 The tri-state `last_solve_converged` is the one to test against `is False`

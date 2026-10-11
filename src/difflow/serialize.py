@@ -560,10 +560,14 @@ def to_dict(flowsheet, registry=None) -> dict:
         "format_version": FORMAT_VERSION,
         "difflow_version": __version__,
         "species_order": list(flowsheet.species_order),
+        # T/P are written only when pinned: an absent key reads back as
+        # None, which keeps the tear guess inferred (Flowsheet.__init__).
         "defaults": {
             "flow": float(flowsheet.default_flow),
-            "T": float(flowsheet.default_T),
-            "P": float(flowsheet.default_P),
+            **({} if getattr(flowsheet, "infer_tear_T", False)
+               else {"T": float(flowsheet.default_T)}),
+            **({} if getattr(flowsheet, "infer_tear_P", False)
+               else {"P": float(flowsheet.default_P)}),
         },
         "feeds": {
             name: _encode_stream(stream, name)
@@ -613,8 +617,8 @@ def from_dict(data: dict, registry=None, extras: dict | None = None):
     flowsheet = Flowsheet(
         species_order=list(data["species_order"]),
         default_flow=defaults.get("flow", 0.01),
-        default_T=defaults.get("T", 300.0),
-        default_P=defaults.get("P", 101325.0),
+        default_T=defaults.get("T"),
+        default_P=defaults.get("P"),
     )
 
     for name, stream in data.get("feeds", {}).items():

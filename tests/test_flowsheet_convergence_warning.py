@@ -163,12 +163,15 @@ class TestConverged:
 class TestUnderTracing:
     """No concrete residual means no verdict -- and no guessing."""
 
-    def test_grad_through_a_short_solve_is_silent(self):
+    def test_grad_through_a_short_solve_warns_but_never_raises(self):
         """The traced path routes to optimistix and cannot judge itself.
 
         ``max_iter`` here is far too small to converge, which is exactly
         the case that must not raise: a ConvergenceError inside a
-        gradient would make the flowsheet undifferentiable.
+        gradient would make the flowsheet undifferentiable. It must not be
+        silent either (gaps-ch01 #2): implicit differentiation at a point
+        that is not a fixed point gives a wrong gradient, so the run-time
+        check warns, even with ``on_nonconvergence="raise"``.
         """
         def objective(feed_flow):
             fs = _slow_loop()
@@ -177,8 +180,7 @@ class TestUnderTracing:
                                on_nonconvergence="raise")
             return streams["loop_out"]["F_A"]
 
-        with warnings.catch_warnings():
-            warnings.simplefilter("error", ConvergenceWarning)
+        with pytest.warns(ConvergenceWarning, match="GRADIENTS"):
             value = jax.grad(objective)(1.0)
         assert jnp.isfinite(value)
 

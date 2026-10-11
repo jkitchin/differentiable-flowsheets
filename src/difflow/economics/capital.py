@@ -29,12 +29,50 @@ The coefficients were checked against openpytea's transcription of these
 tables (``cost_correlations.csv``, openpytea.readthedocs.io).
 """
 
+import warnings
+
 import jax.numpy as jnp
+import numpy as np
 from jax import Array
 from typing import NamedTuple, Optional
 from dataclasses import dataclass, replace, fields, asdict as dc_asdict
 
 from .indices import escalate_cost, DEFAULT_BASE_YEAR, DEFAULT_CURRENT_YEAR
+
+
+class CostRangeWarning(UserWarning):
+    """A cost correlation was evaluated outside its stated size range.
+
+    Every :class:`CostParams` stores the size range its source fitted
+    (``S_min``..``S_max``). Outside it the power law or log-quadratic is an
+    extrapolation, and the log-quadratic form in particular can bend the
+    wrong way. :func:`equipment_cost` raises this warning for a concrete size
+    outside the range; the cost is still returned (and is differentiable).
+    Under ``jit``/``grad`` the size is traced and no check is made.
+    """
+
+
+def _check_size_range(size, params) -> None:
+    """Warn (CostRangeWarning) if a concrete ``size`` is outside the range."""
+    if params.S_min is None or params.S_max is None:
+        return
+    try:
+        s = np.asarray(size, dtype=float)
+    except Exception:  # traced value: nothing to check
+        return
+    if s.size == 0:
+        return
+    lo, hi = float(np.min(s)), float(np.max(s))
+    if lo < params.S_min or hi > params.S_max:
+        bad = lo if lo < params.S_min else hi
+        src = f" ({params.source})" if params.source else ""
+        warnings.warn(
+            f"size {bad:g} {params.S_units} is outside the correlation's valid "
+            f"range [{params.S_min:g}, {params.S_max:g}] {params.S_units}{src}; "
+            "the cost is an extrapolation",
+            CostRangeWarning,
+            stacklevel=3,
+        )
 
 
 # =============================================================================
@@ -306,7 +344,13 @@ def equipment_cost(
 
     Returns:
         Purchased equipment cost in target year dollars
+
+    Warns:
+        CostRangeWarning: if a concrete ``size`` lies outside
+        ``[params.S_min, params.S_max]``. The extrapolated cost is still
+        returned; traced sizes (under ``jit``/``grad``) are not checked.
     """
+    _check_size_range(size, params)
     return escalate_cost(params.base_cost(size), params.base_year, target_year)
 
 

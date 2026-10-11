@@ -274,14 +274,19 @@ class TestPhaseBoundary:
         codes = classify_phase(np.array([-0.1, 0.0, 0.4, 1.0, 1.2]), (0.0, 1.0))
         npt.assert_array_equal(codes, [0, 0, 1, 1, 2])
 
+    # The cold-box gas (75 % methane) bubbles at ~196 K at 40 bar on Raoult's
+    # law (198.5 K on Peng-Robinson), below the block's 218-244 K design
+    # envelope: inside the envelope it is two-phase throughout. These points
+    # straddle the real bubble point, which earlier tests put at ~224-240 K
+    # only because the old methane Antoine constants were ~2.3x too low.
     def test_crossing_raises_the_warning(self):
         blk = chain_mod.ngl_block()
-        lin = linearize_block(blk, jnp.array([0.7, 224.0, 0.4, 4.0e6]))
+        lin = linearize_block(blk, jnp.array([0.7, 190.0, 0.4, 4.0e6]))
         assert int(np.asarray(lin.phase_code)[0]) == 0  # subcooled liquid
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             messages = check_phase_transition(
-                blk, lin, jnp.array([0.7, 240.0, 0.4, 4.0e6]))
+                blk, lin, jnp.array([0.7, 205.0, 0.4, 4.0e6]))
         assert len(messages) == 1
         assert any(w.category is PhaseBoundaryWarning for w in caught)
         assert "phase boundary" in messages[0]
@@ -295,7 +300,9 @@ class TestPhaseBoundary:
     def test_phase_boundary_warning_from_planner(self):
         """Acceptance criterion 4, through the planner's own machinery."""
         blk = chain_mod.ngl_block()
-        blk.u0 = jnp.array([0.7, 222.0, 0.4, 4.0e6])
+        # Open the cold-box envelope down past the bubble point (see above).
+        blk.lb = blk.lb.at[1].set(185.0)
+        blk.u0 = jnp.array([0.7, 190.0, 0.4, 4.0e6])
         net = Network([blk])
         # Refrigeration is a cost, so the LP wants a warmer cold box — which
         # walks the block out of the subcooled branch it was linearised on.
@@ -304,7 +311,7 @@ class TestPhaseBoundary:
             vertex_seeding=False)
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            result = planner.solve(u0=jnp.array([0.7, 222.0, 0.4, 4.0e6]))
+            result = planner.solve(u0=jnp.array([0.7, 190.0, 0.4, 4.0e6]))
         assert any(w.category is PhaseBoundaryWarning for w in caught)
         assert result.phase_warnings
 
@@ -569,6 +576,34 @@ class TestPlanSensitivity:
         npt.assert_allclose(result.decisions, [2.0], atol=1e-4)
         sens = result.plan_sensitivity(wrt="prices")
         assert "c.load" in sens.active_constraints
+        # One more unit of load allows 1/3 more of `a`, worth 1/3.
+        npt.assert_allclose(abs(sens.multipliers["c.load"]), 1.0 / 3.0,
+                            rtol=1e-6)
+
+    @pytest.mark.parametrize("penalty", [10.0, 1e4])
+    def test_elastic_spec_exactly_at_its_bound_reports_its_shadow_price(
+            self, penalty):
+        # Regression (notebook 30, section 8): an elastic spec that the plan
+        # meets EXACTLY sits on the kink of its penalty, relu(v - rhs) at 0,
+        # where JAX's subgradient is 0.5.  Kept in the stationarity
+        # gradient, it leaked penalty/2 into the multiplier: 4999.64 $/h per
+        # K reported against a re-solved 0.35.  The shadow price must not
+        # depend on the elastic penalty at all.
+        blk = Block(name="c", fn=lambda u: jnp.array([u[0] - 0.05 * u[0] ** 2, u[0]]),
+                    u_names=["a"], y_names=["profit", "load"],
+                    lb=[0.0], ub=[10.0], u0=[1.0])
+        planner = DeltaBasePlanner(
+            Network([blk]), prices={"c.profit": 1.0},
+            specs=[Spec("c.load", "<=", 4.0, name="load", penalty=penalty)],
+            radius=0.5)
+        result = planner.solve()
+        load = float(result.state.values["c.load"])
+        assert load == 4.0, "the regression needs the spec met exactly"
+        sens = result.plan_sensitivity(wrt="prices")
+        assert sens.active_constraints == ["load"]
+        # d(a - a^2/20)/da at a = 4 is 0.6.
+        npt.assert_allclose(abs(sens.multipliers["load"]), 0.6, rtol=1e-6)
+        assert sens.stationarity_residual < 1e-9
 
     def test_price_switch_point_brackets_the_corner(self):
         def fn(u):

@@ -8,6 +8,8 @@ cycles the run actually took.
 """
 
 import matplotlib
+import warnings
+
 import pytest
 
 matplotlib.use("Agg")           # no display in CI; must precede pyplot
@@ -146,7 +148,12 @@ class TestDrawTrustRegion:
             assert rho in text
 
     def test_accepts_decisions_by_name(self, problem):
-        with pytest.warns(PhaseBoundaryWarning):
+        # The cold box is two-phase across the whole NGL envelope (it bubbles
+        # at ~196 K at 40 bar), so this run crosses no phase boundary; the
+        # PhaseBoundaryWarning it used to expect came from the old methane
+        # Antoine constants, which put a spurious bubble point inside it.
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", PhaseBoundaryWarning)
             result = problem.planner(radius=0.25).solve()
         ax = draw_trust_region(result, grid=5,
                                decisions=("power.alloc",

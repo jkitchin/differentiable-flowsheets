@@ -11,7 +11,7 @@ This document provides comprehensive documentation for the `difflow_gas` plugin,
 
 The `difflow_gas` plugin provides:
 
-- **Physics**: squared-pressure Weymouth pipe law, resistors, Nikuradse friction, adiabatic compressor power (plain and NLP-smoothed), GasLib unit conversions
+- **Physics**: the squared-pressure isothermal pipe law `p_from^2 - p_to^2 = beta q|q|` (`isothermal_pipe_beta`; `weymouth_beta` is its historical alias), resistors, a choice of friction law (`friction="nikuradse"` fully rough, the default and the GasLib benchmark form; `"colebrook"` at the line's Reynolds number; `"weymouth"`, Weymouth's diameter-only correlation `lambda = 0.032/d_in^(1/3)`), adiabatic compressor power (plain and NLP-smoothed), GasLib unit conversions. All coefficients are `jax.numpy` and differentiable in length, diameter, roughness, temperature, molar mass and Z. The pipe law omits the kinetic-energy term `2 ln(p_from/p_to)` of the full isothermal line equation; that is negligible against `lambda L/D` for transmission lines, and `difflow.compressible.isothermal_outlet_pressure` keeps it when it is not. "Weymouth" in the GasLib literature names the squared-pressure form, not Weymouth's friction factor.
 - **A parser-agnostic network model** (`GasNetwork`) covering pipes, compressor stations, open valves, control valves, resistors, and short pipes
 - **A topology-driven sequential decomposition** (`decompose`): the tear set and unit schedule of a meshed network are computed from the graph, not derived by hand
 - **Unit operations** for both computed and hand-built decompositions

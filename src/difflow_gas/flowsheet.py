@@ -135,12 +135,7 @@ class GasNetworkFlowsheet(Flowsheet):
     def _apply_params(self, params: dict) -> "GasNetworkFlowsheet":
         """Like Flowsheet._apply_params but preserving this subclass."""
         base = super()._apply_params(params)
-        new_fs = GasNetworkFlowsheet(
-            self.species_order,
-            default_flow=self.default_flow,
-            default_T=self.default_T,
-            default_P=self.default_P,
-        )
+        new_fs = GasNetworkFlowsheet(self.species_order, **self._default_kwargs())
         new_fs.feeds = base.feeds
         new_fs.recycles = base.recycles
         new_fs.units = base.units

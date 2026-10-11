@@ -6,7 +6,17 @@ correlation forms and units, and issue #406 for how the sources were
 chosen.
 """
 
-SOURCES = {'coolprop_fit': 'Fitted by difflow to CoolProp 8.0.0 saturated-liquid values '
+SOURCES = {'iapws': 'IAPWS R12-08, viscosity of ordinary water (Huber et al., J. '
+          'Phys. Chem. Ref. Data 38, 101 (2009)), with mu_2 = 1, on the '
+          'saturated-liquid density of IAPWS SR1-86(1992) (Wagner & Pruss, '
+          'J. Phys. Chem. Ref. Data 22, 783 (1993))',
+ 'nist_water_fit': 'Quartic in T fitted by difflow to NIST WebBook (SRD 69) '
+                   'saturated-liquid water thermal conductivity, 273.16-630 '
+                   'K, weighted by 1/k (IAPWS 2011: Huber et al., J. Phys. '
+                   'Chem. Ref. Data 41, 033102 (2012)); max deviation 0.24 %; '
+                   'data in '
+                   'tests/reference/nist_water_saturated_liquid.csv',
+ 'coolprop_fit': 'Fitted by difflow to CoolProp 8.0.0 saturated-liquid values '
                  'for HeavyWater (Herrig et al., J. Phys. Chem. Ref. Data 47, '
                  '043102 (2018); transport: IAPWS R16-17 / R17-20)',
  'orrick_erbar': 'Estimate: Orrick-Erbar group contribution (Poling, '
@@ -2022,16 +2032,20 @@ LIQUID_DATA = {'1_butanol': {'CAS': '71-36-3',
            'Tm': 273.15,
            'k': {'Tmax': 633.15,
                  'Tmin': 273.16,
-                 'coeffs': [-0.432, 0.0057255, -8.078e-06, 1.861e-09, 0.0],
+                 'coeffs': [-1.7078242545933877,
+                            0.01756900516095559,
+                            -4.80179817040206e-05,
+                            5.981637700525281e-08,
+                            -3.055687992694107e-11],
                  'form': 'DIPPR100',
                  'range_stated': True,
-                 'source': 'perry_8e'},
-           'mu': {'Tmax': 646.15,
+                 'source': 'nist_water_fit'},
+           'mu': {'Tmax': 640.0,
                   'Tmin': 273.16,
-                  'coeffs': [-52.843, 3703.6, 5.866, -5.879e-29, 10.0],
-                  'form': 'DIPPR101',
+                  'coeffs': [],
+                  'form': 'IAPWS2008_SAT',
                   'range_stated': True,
-                  'source': 'perry_8e'},
+                  'source': 'iapws'},
            'rho': {'Tmax': 647.1,
                    'Tmin': 273.15,
                    'coeffs': [647.1,

@@ -32,6 +32,7 @@ The design equation is integrated from V=0 to V=V_total using diffrax,
 a JAX-native differentiable ODE solver library.
 """
 
+import warnings
 from typing import Callable, Literal, Any
 from dataclasses import dataclass
 import jax.numpy as jnp
@@ -652,6 +653,29 @@ class PFR:
         }
 
 
+class GasPFRBedWarning(UserWarning):
+    """``GasPFRParams.u_s0`` disagrees with the inlet stream's superficial velocity."""
+
+
+def _check_bed_velocity(p, Q0) -> None:
+    """Warn when a given ``u_s0`` differs from ``Q0 / bed_area`` by more than 1 % (concrete values only)."""
+    if p.d_p is None or p.u_s0 is None:
+        return
+    try:
+        u_param = float(p.u_s0)
+        u_stream = float(Q0) / float(p.bed_area)
+    except Exception:  # traced: no numeric check under jit/grad
+        return
+    if abs(u_param - u_stream) > 0.01 * abs(u_stream):
+        warnings.warn(
+            f"GasPFRParams.u_s0 = {u_param:.4g} m/s but the inlet stream gives "
+            f"Q0/bed_area = {u_stream:.4g} m/s; the Ergun pressure drop uses u_s0. "
+            "Leave u_s0=None to take it from the stream.",
+            GasPFRBedWarning,
+            stacklevel=3,
+        )
+
+
 @dataclass(repr=False)
 class GasPFRParams(ParamsMixin):
     """Parameters for a gas-phase PFR with pressure drop.
@@ -680,7 +704,10 @@ class GasPFRParams(ParamsMixin):
         voidage: Bed void fraction (-).
         mu: Gas viscosity (Pa s).
         rho_gas: Inlet gas density (kg/m^3).
-        u_s0: Inlet superficial velocity (m/s).
+        u_s0: Inlet superficial velocity (m/s). Optional: if None it is
+              taken from the inlet stream, ``Q0 / bed_area``. If given, it
+              is checked against the stream and a ``GasPFRBedWarning`` is
+              raised when they differ by more than 1 %.
         bed_area: Bed cross-sectional area (m^2).
         sphericity: Particle sphericity (-).
         rtol: Relative tolerance for ODE solver (default 1e-6)
@@ -707,13 +734,13 @@ class GasPFRParams(ParamsMixin):
 
     def __post_init__(self):
         """Validate parameter consistency."""
-        bed = (self.d_p, self.voidage, self.mu, self.rho_gas, self.u_s0, self.bed_area)
+        bed = (self.d_p, self.voidage, self.mu, self.rho_gas, self.bed_area)
         if self.d_p is not None:
             if self.alpha is not None:
                 raise ValueError("give either alpha or the physical bed parameters, not both")
             if any(b is None for b in bed):
                 raise ValueError(
-                    "physical bed path needs d_p, voidage, mu, rho_gas, u_s0 and bed_area"
+                    "physical bed path needs d_p, voidage, mu, rho_gas and bed_area"
                 )
 
         n_species = len(self.species_order)
@@ -737,12 +764,25 @@ class GasPFRParams(ParamsMixin):
         When ``d_p`` is given, alpha is computed on demand by
         :func:`difflow.particles.ergun_alpha` (so ``update(d_p=...)`` stays
         consistent and differentiable); otherwise it is ``alpha`` (0 if None).
+        With the bed path and ``u_s0=None`` the velocity comes from the inlet
+        stream, so use :meth:`alpha_for` with the inlet volumetric flow.
+        """
+        if self.d_p is not None and self.u_s0 is None:
+            raise ValueError("u_s0 is None: the bed alpha depends on the inlet flow; use alpha_for(Q0)")
+        return self.alpha_for(None)
+
+    def alpha_for(self, Q0):
+        """Pressure-drop coefficient (Pa/m^3) for an inlet volumetric flow ``Q0`` (m^3/s).
+
+        On the physical-bed path the superficial velocity is ``u_s0`` if given,
+        else ``Q0 / bed_area``. ``Q0`` is unused otherwise.
         """
         if self.d_p is not None:
             from difflow.particles import ergun_alpha
 
+            u_s = self.u_s0 if self.u_s0 is not None else Q0 / self.bed_area
             return ergun_alpha(
-                self.u_s0, self.d_p, self.voidage, self.rho_gas, self.mu,
+                u_s, self.d_p, self.voidage, self.rho_gas, self.mu,
                 self.bed_area, self.sphericity,
             )
         return self.alpha if self.alpha is not None else 0.0
@@ -864,6 +904,7 @@ class GasPFR:
             R = 8.314  # J/(mol·K)
             volumetric_flow = F_total_0 * R * T0 / P0
         Q0 = jnp.asarray(volumetric_flow)
+        _check_bed_velocity(p, Q0)
 
         # Initial conditions
         F0 = jnp.array([inlet_flows[s] for s in p.species_order])
@@ -924,7 +965,7 @@ class GasPFR:
         species_order = p.species_order
         stoich = p.stoich
         rate_params = p.rate_params
-        alpha = p.effective_alpha
+        alpha = p.alpha_for(Q0)
         T0 = T  # For isothermal, T = T0
 
         def vector_field(V, state, args):
@@ -1025,7 +1066,7 @@ class GasPFR:
         stoich = p.stoich
         rate_params = p.rate_params
         dH_rxn = p.dH_rxn
-        alpha = p.effective_alpha
+        alpha = p.alpha_for(Q0)
         thermo = self.thermo
         n_species = len(species_order)
 

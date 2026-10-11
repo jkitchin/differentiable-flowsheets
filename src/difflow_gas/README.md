@@ -39,10 +39,13 @@ live in the `gaslib` repository alongside their reports.
 
 Steady-state, isothermal, benchmark-standard physics:
 
-- **Pipes** (and **resistors**): squared-pressure Weymouth law
-  `p_from^2 - p_to^2 = beta q |q|` with `q` in kg/s (signed), `p` in
-  Pa, and `beta` from `physics.weymouth_beta` (Nikuradse friction,
-  constant compressibility) or `physics.resistor_xi`.
+- **Pipes** (and **resistors**): squared-pressure isothermal pipe law
+  (the GasLib "Weymouth" form; it omits the `2 ln(p_from/p_to)`
+  kinetic-energy term) `p_from^2 - p_to^2 = beta q |q|` with `q` in kg/s
+  (signed), `p` in Pa, and `beta` from `physics.isothermal_pipe_beta`
+  (alias `weymouth_beta`; Nikuradse friction by default, or
+  `friction="colebrook"` / `"weymouth"`; constant compressibility) or
+  `physics.resistor_xi`.
 - **Compressor stations**: `p_out = ratio * p_in` with the ratio a
   differentiable decision parameter; adiabatic shaft power evaluated
   from the solved streams.
