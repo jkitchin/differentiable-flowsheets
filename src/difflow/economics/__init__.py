@@ -46,6 +46,7 @@ from .indices import (
 from .capital import (
     # Core types
     CostParams,
+    CostRangeWarning,
     InstallationFactors,
     CapitalInvestment,
     # Cost parameter databases
@@ -189,6 +190,7 @@ from .profitability import (
 )
 
 __all__ = [
+    "CostRangeWarning",
     # Indices
     "CEPCIData",
     "CEPCI_HISTORICAL",

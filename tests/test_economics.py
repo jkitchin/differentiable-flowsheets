@@ -639,3 +639,41 @@ class TestIntegration:
         print(f"  Annual Revenue: ${float(revenue_annual):,.0f}")
         print(f"  Annual Profit: ${float(annual_profit):,.0f}")
         print(f"  NPV: ${float(npv_val):,.0f}")
+
+
+class TestCostRangeWarning:
+    """G05-6: a size outside the correlation's stored range warns."""
+
+    def test_below_range_warns(self):
+        import pytest
+        from difflow.economics import CostRangeWarning, compressor_cost
+
+        with pytest.warns(CostRangeWarning, match="outside the correlation"):
+            cost = compressor_cost(30.0, "centrifugal")
+        assert float(cost) > 0.0  # extrapolated cost still returned
+
+    def test_above_range_warns(self):
+        import pytest
+        from difflow.economics import COMPRESSOR_COSTS, CostRangeWarning, equipment_cost
+
+        p = COMPRESSOR_COSTS["centrifugal"]
+        with pytest.warns(CostRangeWarning):
+            equipment_cost(2.0 * p.S_max, p)
+
+    def test_in_range_is_silent(self):
+        import warnings
+        from difflow.economics import CostRangeWarning, compressor_cost
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", CostRangeWarning)
+            compressor_cost(1000.0, "centrifugal")
+
+    def test_traced_size_is_not_checked_and_differentiable(self):
+        import warnings
+        import jax
+        from difflow.economics import CostRangeWarning, compressor_cost
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", CostRangeWarning)
+            g = jax.grad(lambda s: compressor_cost(s, "centrifugal"))(30.0)
+        assert float(g) > 0.0

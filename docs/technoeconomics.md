@@ -71,7 +71,11 @@ $$C = a + b \cdot S^n$$
 Here $C$ is the purchased cost of carbon-steel, near-ambient-pressure equipment
 in the entry's `base_year` dollars, and $S$ is its size. `equipment_cost`
 evaluates whichever form the entry names and escalates by CEPCI. Both forms are
-differentiable in $S$.
+differentiable in $S$. Every entry stores the size range its source fitted
+(`S_min`..`S_max`, in `S_units`). For a concrete size outside that range,
+`equipment_cost` (and so `compressor_cost`, `vessel_cost`, ...) raises
+`difflow.economics.CostRangeWarning` and still returns the extrapolated cost.
+Sizes traced under `jit`/`grad` are not checked.
 
 ```python
 from typing import NamedTuple
