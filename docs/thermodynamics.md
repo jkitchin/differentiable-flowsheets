@@ -392,6 +392,22 @@ K = pr.K_values(T=250.0, P=2e6, x=x, y=y)
 V_frac, x, y = flash_TP_eos(pr, z=jnp.array([0.5, 0.5]), T=250.0, P=2e6)
 ```
 
+`flash_TP_eos` first runs a Michelsen tangent-plane stability test. A
+single-phase feed comes back with `V` exactly 1 or 0. When the cubic has two
+roots, the lower-Gibbs root decides which. When it has one root, for example a
+compressed liquid above its bubble point or any supercritical fluid, "largest
+root = vapour" says nothing. That root is then labelled by the
+Venkatarathnam-Oellrich phase identification parameter
+`phase_identification_parameter(eos, T, P, z)`:
+
+$$\Pi = v\left[\frac{\partial^2P/\partial T\partial v}{\partial P/\partial T}
+- \frac{\partial^2P/\partial v^2}{\partial P/\partial v}\right]$$
+
+with $\Pi > 1$ liquid-like and $\Pi < 1$ vapour-like (Fluid Phase Equilib. 301
+(2011) 225). Before this, a C1/C3 liquid (z = 0.2/0.8, 277.6 K) above about
+34 bar came back as V = 1. A dense supercritical fluid can now be labelled
+liquid (V = 0). `eos_pressure_TV(eos, T, v, z)` is the cubic's $P(T, v)$.
+
 #### Fugacity Calculation
 
 $$\ln \phi_i = \frac{b_i}{b_{mix}}(Z - 1) - \ln(Z - B) - \frac{A}{2\sqrt{2}B}\left(\frac{2\sum_j y_j a_{ij}}{a_{mix}} - \frac{b_i}{b_{mix}}\right)\ln\left(\frac{Z + (1+\sqrt{2})B}{Z + (1-\sqrt{2})B}\right)$$
@@ -508,8 +524,16 @@ The solve has three stages:
 Near the critical region no single start serves every mixture, so without a
 guess the solve tries four starts (pressure at 0.25, 0.1, 0.5 and 1 times the
 Wilson estimate; temperature at 0.95, 0.9, 1 and 0.85 times it) and keeps the
-first converged, non-trivial root. Derivatives flow through that root only. A
-given `P_guess`/`T_guess` is a single start.
+first converged, non-trivial root. Close to the cricondenbar, for example a
+methane-rich CH4/C3H8 liquid at 200-215 K, none of these converges. The solve
+then falls back to continuation: it finds the point at 0.75 T (or a quarter
+of P, for a bubble or dew T), where the phases are far apart. From there it
+marches the specified variable to its value in 24 steps, starting each Newton
+solve from the previous root. All of these starts are gradient-free. One
+final Newton solve from the selected start carries the implicit derivatives.
+A given `P_guess`/`T_guess` is a single start. The solver is compiled once per
+EOS (the EOS is a static `jit` argument, hashed by value) and reused, so after
+the first call a bubble or dew point costs milliseconds.
 
 All four take `k_ij=None` and an optional `P_guess`/`T_guess`, and return a
 dict:

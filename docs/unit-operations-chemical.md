@@ -2904,6 +2904,11 @@ pure-JAX library, not a palette operation, and is differentiable in T.
 | `gas_transport_properties(name, T, P)` | dict: mu, k, cp, Pr, rho, nu, alpha |
 | `gas_property_range(name, prop)`, `list_gas_species()` | validity range, names |
 | `sutherland_viscosity(T, gas=None, *, mu0, T0, S)`, `sutherland_conductivity` | Sutherland's law (White's constants for air, Ar, N2, O2 in `SUTHERLAND`) |
+| `mixture_viscosity(names, y, T, method="wilke")` | low-pressure mixture μ: Wilke, or `"herning_zipperer"` |
+| `mixture_conductivity(names, y, T)` | low-pressure mixture k: Wassiljewa with Mason-Saxena coefficients |
+| `dense_gas_viscosity(names, T, P, y=None, rho=None)` | μ at pressure: dilute + Jossi-Stiel-Thodos residual |
+| `dense_gas_conductivity(names, T, P, y=None, rho=None)` | k at pressure: dilute + Stiel-Thodos residual |
+| `gas_mixture_transport(names, y, T, P, dense=True)` | dict: mu, k, rho, MW, Z (Peng-Robinson density) |
 
 Each property is a fit $\ln y=\sum a_i[\ln(T/300)]^i$: cubic for μ and k,
 quintic for $c_p$. The fits are made by `scripts/fit_gas_transport.py` to the
@@ -2914,8 +2919,14 @@ and air $c_p$ is the mass-weighted N2/O2/Ar NIST mixture. Outside a fit's
 range the value is extrapolated and a `GasRangeWarning` is raised (on
 concrete values only). Air at 300 K gives μ = 18.46 µPa s, k = 26.4 mW/m/K
 and Pr = 0.704, against Incropera Table A.4 values of 18.46, 26.3 and 0.707.
-These properties are for gases at low pressure only; there is no pressure
-correction for dense gases.
+The single-gas fits are for low pressure. Above about 10 bar use the
+dense-gas functions: they add the Jossi-Stiel-Thodos (μ) and Stiel-Thodos (k)
+residuals in the reduced density $\rho_r=\rho V_c$. The density comes from
+Peng-Robinson with the critical constants in `GAS_CRITICAL` (Poling et al. 5e,
+App. A), and a mixture uses Kay's-rule pseudo-critical constants. Methane at
+15 °C and 50 bar gives 11.8 µPa s against a NIST value of about 12.0 (dilute:
+10.75). The residuals suit nonpolar gases; they are not meant for H2, He or
+steam near saturation.
 
 ```python
 from difflow.gas_properties import gas_transport_properties
@@ -4076,6 +4087,37 @@ comp = Compressor(CompressorParams(P_out=90e5, eta_isentropic=0.75), thermo)
 outlet, info = comp(feed)
 ```
 
+### MultistageCompressor
+
+An intercooled train of EOSCompressor stages. Each stage is the same
+isentropic-efficiency compression on the two-phase EOS enthalpy and entropy.
+After every stage but the last, an intercooler returns the gas to
+`T_intercool` and loses `intercooler_dP` (`aftercool=True` cools the last
+stage too). By default the stage pressures follow
+`difflow.compressible.stage_pressures`: every stage has the same ratio, and a
+slightly higher ratio makes up the intercooler losses. Without losses that is
+the classical minimum-work split. `discharge_pressures=(...)` sets them
+instead. The total work is differentiable in those pressures, so the real-gas
+optimum can be found by gradient descent from the equal split. An intercooler
+outlet with `intercooler_vapor_fraction < 1` condenses liquid. That liquid is
+not knocked out, and a concrete run warns about it.
+
+$$P_{d,k}=r\,P_{s,k},\qquad P_{s,k+1}=P_{d,k}-\Delta P_{ic},\qquad P_{d,N}=P_\text{out}$$
+
+```python
+from difflow import MultistageCompressor, MultistageCompressorParams
+train = MultistageCompressor(MultistageCompressorParams(
+    P_out=90e5, n_stages=3, eta_isentropic=0.78,
+    T_intercool=313.15, intercooler_dP=0.3e5), thermo)
+outlet, info = train(feed)
+# info: W, Q, stage_W, stage_T_out, suction_pressures, discharge_pressures,
+#       pressure_ratio, intercooler_Q, intercooler_vapor_fraction, converged
+```
+
+The carbon-capture plugin's `CompressionTrain` is a separate, CO2-specific
+model. It is not built on the EOS units, and it switches to a dense-phase pump
+above the critical point.
+
 ### JTValve (Joule-Thomson valve)
 
 Adiabatic, **isenthalpic** pressure letdown. Holds the two-phase EOS enthalpy
@@ -4434,6 +4476,7 @@ real gas at a representative state. JAX, SI and differentiable throughout.
 | `isentropic_efficiency_from_polytropic(r, eta_p, gamma, compression)` | $\eta_s=\dfrac{r^{(\gamma-1)/\gamma}-1}{r^{(\gamma-1)/(\gamma\eta_p)}-1}$ for compression |
 | `polytropic_efficiency_from_isentropic(r, eta_s, gamma, compression)` | the inverse |
 | `optimal_stage_ratios(P_in, P_out, n_stages)` | equal per-stage ratios $(P_\mathrm{out}/P_\mathrm{in})^{1/N}$ (minimum work with intercooling to the inlet temperature) |
+| `stage_pressures(P_in, P_out, n_stages, intercooler_dP=0)` | stage suction and discharge pressures, equal ratios with a pressure loss in each intercooler (used by [MultistageCompressor](#multistagecompressor)) |
 
 **Choking.** `nozzle_flow` reports `choked` (true when $P_\mathrm{back}/P_0$
 is at or below the critical ratio). `nozzle_mass_flow` holds $P_\mathrm{back}/P_0$ at no less than the

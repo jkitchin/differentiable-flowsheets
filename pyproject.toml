@@ -40,7 +40,11 @@ dependencies = [
     "jax>=0.4.0",
     "jaxlib>=0.4.0",
     "diffrax>=0.6.0",
-    "lineax>=0.0.7",
+    # 0.0.8's LU solver converts a traced bool to Python under current jax, so
+    # every implicit diffrax solver (kvaerno5 on the Robertson example in
+    # docs/dynamic-modeling.md) dies with TracerBoolConversionError. 0.1.0 is
+    # the first release that does not.
+    "lineax>=0.1.0",
     "optimistix>=0.0.6",
     # Not used directly -- it arrives under diffrax/lineax/optimistix, none of
     # which floor it high enough. jax 0.11.1 removed `jax.core.get_aval` and

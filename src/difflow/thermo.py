@@ -750,8 +750,17 @@ class CubicThermo(ValueKeyed):
             which is also the order ``x`` and ``y`` are read in.
 
         Example:
-            >>> thermo = CubicThermo(ideal, PengRobinson(props))
-            >>> K = thermo.K_values_array(300.0, 10e5, x=x, y=y)
+            >>> import jax.numpy as jnp
+            >>> from difflow import IdealThermo, PengRobinson
+            >>> from difflow.database import get_critical_props, get_species_data
+            >>> sp = ("propane", "n_butane")
+            >>> ideal = IdealThermo({s: get_species_data(s) for s in sp})
+            >>> thermo = CubicThermo(ideal, PengRobinson(
+            ...     {s: get_critical_props(s) for s in sp}))
+            >>> x = jnp.array([0.5, 0.5])
+            >>> K = thermo.K_values_array(300.0, 6e5, x=x)  # bubble-point K at x
+            >>> bool(K[0] > 1.0 > K[1])
+            True
         """
         T = jnp.asarray(T)
         P = jnp.asarray(P)

@@ -69,6 +69,10 @@ from difflow_gas.physics import (
     weymouth_beta,
     isothermal_pipe_beta,
     weymouth_friction,
+    panhandle_a_friction,
+    panhandle_b_friction,
+    aga_friction,
+    standard_flow_scfd,
     PIPE_FRICTION_LAWS,
 )
 
@@ -181,6 +185,10 @@ __all__ = [
     "weymouth_beta",
     "isothermal_pipe_beta",
     "weymouth_friction",
+    "panhandle_a_friction",
+    "panhandle_b_friction",
+    "aga_friction",
+    "standard_flow_scfd",
     "PIPE_FRICTION_LAWS",
     "resistor_xi",
     "nikuradse_friction",

@@ -50,6 +50,8 @@ from difflow.eos import (
     eos_bubble_T,
     eos_dew_P,
     eos_dew_T,
+    eos_pressure_TV,
+    phase_identification_parameter,
 )
 from difflow.database import (
     get_species_data,
@@ -75,6 +77,11 @@ from difflow.gas_properties import (
     gas_thermal_conductivity,
     gas_heat_capacity,
     gas_prandtl,
+    mixture_viscosity,
+    mixture_conductivity,
+    dense_gas_viscosity,
+    dense_gas_conductivity,
+    gas_mixture_transport,
 )
 from difflow.base_database import BaseDatabase
 from difflow.uncertainty import (
@@ -348,6 +355,8 @@ from difflow.units.eos_units import (
     TurboexpanderParams,
     Compressor,
     CompressorParams,
+    MultistageCompressor,
+    MultistageCompressorParams,
     JTValve,
     JTValveParams,
     ComponentSeparator,
@@ -566,6 +575,8 @@ __all__ = [
     "eos_bubble_T",
     "eos_dew_P",
     "eos_dew_T",
+    "eos_pressure_TV",
+    "phase_identification_parameter",
     # Property Database
     "get_species_data",
     "get_critical_props",
@@ -588,6 +599,11 @@ __all__ = [
     "gas_thermal_conductivity",
     "gas_heat_capacity",
     "gas_prandtl",
+    "mixture_viscosity",
+    "mixture_conductivity",
+    "dense_gas_viscosity",
+    "dense_gas_conductivity",
+    "gas_mixture_transport",
     # Uncertainty Propagation
     "linear_propagation",
     "monte_carlo_propagation",
@@ -799,6 +815,8 @@ __all__ = [
     "TurboexpanderParams",
     "Compressor",
     "CompressorParams",
+    "MultistageCompressor",
+    "MultistageCompressorParams",
     "JTValve",
     "Pipe",
     "PipeCavitationWarning",
