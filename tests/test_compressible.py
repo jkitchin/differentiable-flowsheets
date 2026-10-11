@@ -229,3 +229,164 @@ class TestJit:
         f = jax.jit(jax.vmap(lambda L: isothermal_outlet_pressure(50.0, 60e5, 288.0, L, 0.5, 0.012, 0.0175).P2))
         P2 = f(jnp.array([1e4, 5e4, 1e5]))
         assert np.all(np.diff(np.asarray(P2)) < 0)
+
+
+# =============================================================================
+# Additions for the compressor chapter (G05-8): nozzle flag, Z, line flow with
+# friction, pressure profile, polytropic efficiency, staging
+# =============================================================================
+
+from difflow.compressible import (  # noqa: E402
+    isentropic_efficiency_from_polytropic,
+    isothermal_distance,
+    isothermal_limit_mach,
+    isothermal_pipe_flow,
+    isothermal_pressure_profile,
+    nozzle_flow,
+    optimal_stage_ratios,
+    polytropic_efficiency_from_isentropic,
+    polytropic_exponent,
+)
+from difflow import fluids  # noqa: E402
+
+
+class TestNozzleFlow:
+    A10 = np.pi * 0.01**2 / 4
+
+    @pytest.mark.parametrize("Pb, choked", [(1e5, True), (5e5, True), (8e5, False), (9.5e5, False)])
+    def test_matches_nozzle_mass_flow_and_flags_choking(self, Pb, choked):
+        r = nozzle_flow(10e5, 293.15, Pb, self.A10, AIR, 1.4, 0.85)
+        m = nozzle_mass_flow(10e5, 293.15, Pb, self.A10, AIR, 1.4, 0.85)
+        assert float(r.m_dot) == pytest.approx(float(m), rel=1e-14)
+        assert bool(r.choked) is choked
+        if choked:
+            assert float(r.mach_throat) == pytest.approx(1.0)
+            assert float(r.P_throat) == pytest.approx(10e5 * float(critical_pressure_ratio(1.4)))
+        else:
+            assert float(r.P_throat) == pytest.approx(Pb)
+            # Throat Mach reproduces the stagnation pressure ratio.
+            assert float(stagnation_ratios(r.mach_throat, 1.4).P0_P) == pytest.approx(10e5 / Pb)
+
+    def test_book_values(self):
+        """Air, 10 bar, 293.15 K, 10 mm, Cd 0.85 (chapter 5 oracle)."""
+        flows = [float(nozzle_flow(10e5, 293.15, Pb, self.A10, AIR, 1.4, 0.85).m_dot)
+                 for Pb in (1e5, 8e5, 9.5e5)]
+        assert flows == pytest.approx([0.15757, 0.12902, 0.07079], rel=3e-4)
+
+    def test_back_pressure_gradient(self):
+        def m(Pb):
+            return nozzle_flow(10e5, 293.15, Pb, self.A10, AIR, 1.4, 0.85).m_dot
+
+        assert float(jax.grad(m)(5e5)) == 0.0
+        assert float(jax.grad(m)(8e5)) == pytest.approx(-2.35e-7, rel=2e-3)
+
+
+class TestCompressibilityFactor:
+    def test_Z_scales_RT_over_M(self):
+        assert float(speed_of_sound(300.0, CH4, 1.3, Z=0.85)) == pytest.approx(
+            float(speed_of_sound(300.0, CH4 / 0.85, 1.3)), rel=1e-14)
+        G1 = isothermal_pipe_mass_flux(60e5, 40e5, 288.15, 5e4, 0.6, 0.0115, 0.018, Z=0.851)
+        G2 = isothermal_pipe_mass_flux(60e5, 40e5, 288.15, 5e4, 0.6, 0.0115, 0.018 / 0.851)
+        assert float(G1) == pytest.approx(float(G2), rel=1e-14)
+
+    def test_isothermal_limit_mach(self):
+        assert float(isothermal_limit_mach(1.4)) == pytest.approx(0.845154, abs=1e-6)
+
+
+class TestIsothermalPipeFlow:
+    """wex05-1: 60 -> 40 bar, 50 km, 0.6 m, 45 um, 288.15 K, Z 0.851, mu 1.2e-5."""
+
+    ARGS = (60e5, 40e5, 288.15, 50e3, 0.6, 45e-6, 1.2e-5, 0.0180042)
+
+    def test_book_values_and_consistency(self):
+        r = isothermal_pipe_flow(*self.ARGS, Z=0.851)
+        assert float(r.G) == pytest.approx(429.84, abs=0.02)
+        assert float(r.m_dot) == pytest.approx(121.54, abs=0.02)
+        assert float(r.f) == pytest.approx(0.011461, abs=1e-6)
+        # f is the Colebrook factor at the Reynolds number of the flow it gives.
+        assert float(r.f) == pytest.approx(
+            float(fluids.friction_factor(r.Re, 45e-6 / 0.6)), rel=1e-12)
+        assert float(r.G) == pytest.approx(float(isothermal_pipe_mass_flux(
+            60e5, 40e5, 288.15, 50e3, 0.6, r.f, 0.0180042, Z=0.851)), rel=1e-14)
+
+    def test_gradients(self):
+        def m(P1_bar, D):
+            return isothermal_pipe_flow(P1_bar * 1e5, 40e5, 288.15, 50e3, D, 45e-6,
+                                        1.2e-5, 0.0180042, Z=0.851).m_dot
+
+        check_grads(m, (60.0, 0.6), order=1, modes=["rev"], eps=1e-5)
+
+    def test_profile_and_distance_are_inverse(self):
+        r = isothermal_pipe_flow(*self.ARGS, Z=0.851)
+        x = jnp.linspace(0.0, 50e3, 6)
+        prof = isothermal_pressure_profile(x, r.G, 60e5, 288.15, 0.6, r.f, 0.0180042, 1.3, 0.851)
+        assert prof.P2.shape == (6,)
+        assert float(prof.P2[-1]) == pytest.approx(40e5, rel=1e-9)
+        assert float(prof.P2[0]) == pytest.approx(60e5, rel=1e-12)
+        back = isothermal_distance(prof.P2[1:], r.G, 60e5, 288.15, 0.6, r.f, 0.0180042, 0.851)
+        np.testing.assert_allclose(np.asarray(back), np.asarray(x[1:]), rtol=1e-8)
+        assert not bool(jnp.any(prof.choked))
+        assert float(prof.mach2[-1]) == pytest.approx(0.032, abs=5e-4)
+
+
+class TestPolytropic:
+    def test_exponent(self):
+        n = polytropic_exponent(0.8, 1.4)
+        assert float((n - 1) / n) == pytest.approx(0.4 / (1.4 * 0.8), rel=1e-14)
+        assert float(polytropic_exponent(1.0, 1.3)) == pytest.approx(1.3)
+        ne = polytropic_exponent(0.8, 1.4, compression=False)
+        assert float((ne - 1) / ne) == pytest.approx(0.8 * 0.4 / 1.4, rel=1e-14)
+
+    @pytest.mark.parametrize("r, eta_s", [(2.0, 0.780), (4.0, 0.759), (10.0, 0.729)])
+    def test_book_values(self, r, eta_s):
+        """gamma 1.4, eta_p 0.80 (chapter oracle)."""
+        assert float(isentropic_efficiency_from_polytropic(r, 0.8, 1.4)) == pytest.approx(eta_s, abs=6e-4)
+
+    def test_temperature_rise_is_consistent(self):
+        """eta_s from eta_p reproduces the polytropic outlet temperature."""
+        r, g, ep = 5.0, 1.35, 0.82
+        n = polytropic_exponent(ep, g)
+        T2_poly = r ** ((n - 1) / n)
+        T2_s = 1.0 + (r ** ((g - 1) / g) - 1.0) / isentropic_efficiency_from_polytropic(r, ep, g)
+        assert float(T2_s) == pytest.approx(float(T2_poly), rel=1e-12)
+
+    @pytest.mark.parametrize("compression", [True, False])
+    def test_inverse_and_ordering(self, compression):
+        es = isentropic_efficiency_from_polytropic(6.0, 0.85, 1.4, compression)
+        assert float(polytropic_efficiency_from_isentropic(6.0, es, 1.4, compression)) == pytest.approx(0.85, rel=1e-12)
+        assert (float(es) < 0.85) is compression  # compressor: eta_s < eta_p; turbine: >
+
+    @pytest.mark.parametrize("compression", [True, False])
+    def test_small_ratio_limit(self, compression):
+        """As r -> 1 the stage is infinitesimal and eta_s -> eta_p."""
+        es = isentropic_efficiency_from_polytropic(1.0 + 1e-6, 0.8, 1.4, compression)
+        assert float(es) == pytest.approx(0.8, abs=1e-6)
+
+    def test_gradients(self):
+        check_grads(lambda r, e: isentropic_efficiency_from_polytropic(r, e, 1.4),
+                    (4.0, 0.8), order=1, modes=["rev"])
+        check_grads(lambda r, e: polytropic_efficiency_from_isentropic(r, e, 1.4, False),
+                    (4.0, 0.8), order=1, modes=["rev"])
+
+
+class TestStaging:
+    def test_equal_ratios(self):
+        r = optimal_stage_ratios(1e5, 110e5, 4)
+        assert r.shape == (4,)
+        assert float(r[0]) == pytest.approx(3.2385, abs=1e-4)
+        assert float(1e5 * jnp.prod(r)) == pytest.approx(110e5, rel=1e-12)
+
+    def test_equal_ratios_minimize_ideal_gas_work(self):
+        """Intercooled ideal gas: total work sum(r_i^k - 1) is least at equal r_i."""
+        k = 0.4 / 1.4
+
+        def work(log_r1):  # two stages, r1 * r2 = 30
+            r1 = jnp.exp(log_r1)
+            return r1**k + (30.0 / r1) ** k
+
+        r_opt = optimal_stage_ratios(1.0, 30.0, 2)[0]
+        assert abs(float(jax.grad(work)(jnp.log(r_opt)))) < 1e-12
+
+    def test_rejects_zero_stages(self):
+        with pytest.raises(ValueError):
+            optimal_stage_ratios(1e5, 1e6, 0)
