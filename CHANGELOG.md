@@ -27,6 +27,11 @@ All notable changes to difflow are recorded here. The format follows
   `GasPFR` density from the inlet stream (`GasPFRDensityWarning`).
   *Heat transfer.* `jacketed_vessel_h`, `agitated_coil_h`, `economic_insulation_thickness` and the insulation
   cost functions, `TEMA_FOULING`, `tema_crude_oil_fouling`, `tema_water_fouling`.
+  *Thermodynamics.* `difflow.binary_params` (`get_nrtl_params`, `get_uniquac_params`: DECHEMA/ChemSep sets, each
+  checked against a known azeotrope or its absence); `IdealThermo.latent_heat` (the path-consistent `H_V - H_L`,
+  authoritative for duties; Watson `Hvap` is the anchor); Antoine/Cp/Hvap for 16 critical-only species; Wagner
+  vapour pressure for 12 light gases (opt-in: `get_species_data(name, vapor_pressure="wagner")`);
+  `saturation_temperature` / `saturation_pressure` (ideal or EOS, differentiable).
 - **`OperatingPointWarning`.** `operating_point` warns on a concrete negative `Q*` (no forward-flow operating
   point, e.g. a valveless parallel pair with a weak pump running backwards) or an unconverged Newton solve; silent
   under `jit`/`grad`. `PipeCavitationWarning` is exported from `difflow`. Test `tests/test_pump.py`.
