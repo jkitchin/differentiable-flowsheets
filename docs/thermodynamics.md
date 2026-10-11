@@ -411,6 +411,30 @@ K = pr.K_values(T=250.0, P=2e6, x=x, y=y)
 V_frac, x, y = flash_TP_eos(pr, z=jnp.array([0.5, 0.5]), T=250.0, P=2e6)
 ```
 
+#### Phase identification of a single-phase feed
+
+When the stability test finds the feed stable, `flash_TP_eos` must still say
+whether that one phase is liquid ($V = 0$) or vapor ($V = 1$). Picking the
+lower-Gibbs-energy root is not enough: above the bubble point of a compressed
+liquid the cubic has only one real root, and both root selectors return it. The
+label comes from the phase identification parameter of Venkatarathnam and
+Oellrich (*Fluid Phase Equilib.* 301 (2011) 225),
+
+$$\Pi = V\left[\frac{\partial^2 P/\partial T\partial V}{(\partial P/\partial T)_V}
+ - \frac{(\partial^2 P/\partial V^2)_T}{(\partial P/\partial V)_T}\right],$$
+
+public as `phase_identification_parameter(eos, T, P, y, phase)`. The phase is
+liquid when $\Pi > 1$ and $T$ is below the Kay's-rule pseudo-critical
+temperature $\sum_i z_i T_{c,i}$, and vapor otherwise. (A hot gas well above
+its critical temperature also has $\Pi$ slightly above 1, so the temperature
+guard is needed.) Before this fix, CH$_4$/C$_3$H$_8$ ($z = 0.2/0.8$) at 277.6 K
+returned $V = 1$ for every pressure above its 33.4 bar bubble point (issue #442).
+
+```python
+from difflow.eos import phase_identification_parameter
+pip = phase_identification_parameter(pr, T=250.0, P=2e6, y=jnp.array([0.5, 0.5]))
+```
+
 #### Fugacity Calculation
 
 $$\ln \phi_i = \frac{b_i}{b_{mix}}(Z - 1) - \ln(Z - B) - \frac{A}{2\sqrt{2}B}\left(\frac{2\sum_j y_j a_{ij}}{a_{mix}} - \frac{b_i}{b_{mix}}\right)\ln\left(\frac{Z + (1+\sqrt{2})B}{Z + (1-\sqrt{2})B}\right)$$

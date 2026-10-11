@@ -347,3 +347,42 @@ class TestEndToEnd:
         assert float(g) == pytest.approx(float(fd), rel=1e-4)
         # and the vapor rate is (R+1) D to within the MESH energy-balance correction
         assert float(V) == pytest.approx(3.0 * D_mol, rel=0.1)
+
+
+class TestFlashDrumSize:
+    """Souders-Brown vertical drum: hand calculation, limits, gradients."""
+
+    def test_hand_calculation_vapor_governs(self):
+        from difflow.units.column_design import flash_drum_size
+        Q_V, Q_L, rho_L, rho_V = 1.0, 0.001, 550.0, 15.0
+        D, info = flash_drum_size(Q_V, Q_L, rho_L, rho_V)
+        u = 0.107 * np.sqrt((rho_L - rho_V) / rho_V)
+        D_v = np.sqrt(4 * Q_V / (np.pi * u))
+        assert float(info["u_max"]) == pytest.approx(u, rel=1e-12)
+        assert float(D) == pytest.approx(D_v, rel=1e-12)
+        assert float(info["fraction_of_u_max"]) == pytest.approx(1.0, rel=1e-12)
+        assert float(info["height"]) == pytest.approx(3.0 * D_v, rel=1e-12)
+
+    def test_liquid_holdup_governs(self):
+        from difflow.units.column_design import flash_drum_size
+        D, info = flash_drum_size(0.01, 0.01, 800.0, 5.0, holdup_time=600.0)
+        V_vessel = 0.01 * 600.0 / 0.5
+        assert float(D) == pytest.approx((4 * V_vessel / (np.pi * 3.0)) ** (1 / 3), rel=1e-12)
+        assert float(info["volume"]) == pytest.approx(V_vessel, rel=1e-12)
+        assert float(info["fraction_of_u_max"]) < 1.0
+
+    def test_no_mesh_needs_bigger_drum(self):
+        from difflow.units.column_design import flash_drum_size
+        D_mesh, _ = flash_drum_size(1.0, 1e-4, 550.0, 15.0, k=0.107)
+        D_bare, _ = flash_drum_size(1.0, 1e-4, 550.0, 15.0, k=0.0305)
+        assert float(D_bare / D_mesh) == pytest.approx(np.sqrt(0.107 / 0.0305), rel=1e-12)
+
+    def test_gradients(self):
+        from jax.test_util import check_grads
+        from difflow.units.column_design import flash_drum_size
+
+        def f(Q_V, rho_V, k):
+            D, info = flash_drum_size(Q_V, 0.001, 550.0, rho_V, k=k)
+            return D + info["volume"]
+
+        check_grads(f, (1.0, 15.0, 0.107), order=1, modes=["fwd", "rev"])

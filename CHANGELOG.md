@@ -22,6 +22,16 @@ All notable changes to difflow are recorded here. The format follows
   `gilliland_stages(..., method="eduljee"|"molokanov")`. `ShortcutColumn` reports `info['N_rect']` and
   `info['N_strip']`. Checked against Geankoplis 5e Examples 11.7-2 and 11.7-3 in `tests/test_distillation.py`.
 
+- **`phase_identification_parameter` (book Ch. 11 gap).** `difflow.eos.phase_identification_parameter(eos, T, P,
+  y, phase)` is the Venkatarathnam-Oellrich parameter Pi (Pi > 1 liquid-like), from autodiff derivatives of the
+  cubic's P(T, V). `flash_TP_eos` uses it to label a stable feed (see Fixed, #442). Test
+  `tests/test_eos.py::TestPhaseIdentification`.
+
+- **`flash_drum_size` (book Ch. 11 gap).** `difflow.units.column_design.flash_drum_size(Q_V, Q_L, rho_L, rho_V,
+  ...)` sizes a vertical flash drum by Souders-Brown with Walas's rules of thumb (k = 0.107 m/s with a mesh pad,
+  L/D = 3, 5 min holdup half full); the larger of the vapor and liquid diameters; differentiable. Test
+  `tests/test_column_design.py::TestFlashDrumSize`.
+
 - **`OperatingPointWarning`.** `operating_point` warns on a concrete negative `Q*` (no forward-flow operating
   point, e.g. a valveless parallel pair with a weak pump running backwards) or an unconverged Newton solve; silent
   under `jit`/`grad`. `PipeCavitationWarning` is exported from `difflow`. Test `tests/test_pump.py`.
@@ -874,6 +884,22 @@ All notable changes to difflow are recorded here. The format follows
   key-ratio form. The Underwood root was a Newton step from `sqrt(alpha_LK)` clipped to `(1.001, alpha_LK-0.001)`;
   it left the interval and returned 1.001 in about a quarter of random feeds. It is now bracketed bisection.
   `R_min` is floored at 0 rather than 0.1.
+
+- **Ideal-thermo `PHFlash` could not flash a pure liquid into its two-phase region.** The Newton on T cannot land
+  on a boiling point, where the flashed enthalpy jumps by the latent heat; saturated water let down from 180 C,
+  12 bar to 1.5 bar came back at the 150 K clip with `V_frac = 0`. The ideal path now brackets T by bisection
+  on `T_bounds` over the exact (unsmoothed) Rachford-Rice split, applies the lever rule at a jump (111.2 C,
+  12.6 % vapour; steam tables 111.4 C, 13.3 %), and attaches implicit-function gradients (the Clausius-Clapeyron
+  slope at a jump). `info` gains `residual`; an unbracketed solve warns `EOSUnitConvergenceWarning`; `T_guess`
+  is ignored. Test `tests/test_flash.py::TestPHFlashPureComponent`.
+
+- **`flash_TP_eos` labelled a single-root compressed liquid as vapor (#442).** A stable feed was called vapor
+  when its lower-Gibbs root was the "vapor" root; above the bubble point of a liquid the cubic has one real root,
+  so both selectors return it and the label was wrong. CH4/C3H8 (z = 0.2/0.8, PR) at 277.6 K gave V = 1 for every
+  P above its 33.4 bar bubble point, with V jumping from 0.04 at 30 bar to 1. The stable phase is now liquid when
+  the phase identification parameter Pi > 1 and T is below the Kay's-rule pseudo-critical temperature, vapor
+  otherwise; V now falls continuously to 0 at the bubble point. Affects `EOSFlash`, `Flash(eos=...)` and
+  everything that calls `flash_TP_eos`. Test `tests/test_eos.py::TestPhaseIdentification`.
 
 - **`plan_sensitivity` reported half the elastic penalty as a shadow price.**
   The stationarity gradient that the multipliers are solved from included
