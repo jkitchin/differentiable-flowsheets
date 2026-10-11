@@ -20,11 +20,14 @@ committed tables:
   and the mass-weighted NIST heat capacity of N2/O2/Ar (78.12/20.96/0.92
   mol %). At 300 K this gives mu = 18.46 uPa s, k = 26.4 mW/m/K, cp = 1007 J/kg/K and Pr = 0.704,
   against Incropera Table A.4: 18.46 uPa s, 26.3 mW/m/K, 1007 J/kg/K and
-  0.707.
+  0.707. Table A.4's densities (hence nu and alpha) are at 1 bar, not
+  1 atm; pass ``P=1e5`` to compare them (the 1 atm default is 1.3 % denser).
 
-The fits are for the dilute gas. Viscosity and conductivity hardly change
-with pressure up to about 10 bar, except near saturation or the critical
-point; heat capacity is the 1 atm value. Each fit is valid over the data range
+The fits are for the dilute gas, with no dense-gas correction and no mixture
+rule. Viscosity and conductivity hardly change with pressure up to about
+10 bar, except near saturation or the critical point; above that they rise
+(methane at 15 C: 10.75 uPa s dilute, about 12.0 at 50 bar). Heat capacity is
+the 1 atm value. Each fit is valid over the data range
 (``gas_property_range``); a concrete temperature outside it raises
 :class:`GasRangeWarning`, and the value is extrapolated, never clipped.
 
