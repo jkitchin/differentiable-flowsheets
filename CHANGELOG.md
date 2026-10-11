@@ -837,6 +837,11 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Fixed
 
+- **`BatchDistillation` took 10-30 s a call.** The body ran eagerly, dispatching every bisection of its nested root
+  solves op by op. It is now jitted like `ShortcutColumn` (cached on the value key, the stop-criterion names and
+  `n_traj`; the curve is an argument because it is not in the value key): about 1-3 s, same answers. `rayleigh`
+  is checked against Geankoplis 5e Example 11.3-2 (`TestGeankoplis` in `tests/test_batch_distillation.py`).
+
 - **`ShortcutColumn` used the pseudo-binary Fenske equation.** `N_min` took `1 - x_LK` for `x_HK`, so a light
   non-key in the distillate understated it (8.7 instead of 10.4 on a C2-nC5 depropanizer). It is now the
   key-ratio form. The Underwood root was a Newton step from `sqrt(alpha_LK)` clipped to `(1.001, alpha_LK-0.001)`;

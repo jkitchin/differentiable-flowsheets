@@ -19,10 +19,11 @@ Verified against independent oracles:
   azeotrope flags, three-cut conservation, gradients by ``check_grads``.
 * ``rayleigh_multicomponent`` against ``solve_ivp`` with a NumPy bubble point.
 
-NOT verified: no published textbook worked example (Geankoplis Sec. 11.3,
-McCabe-Smith-Harriott Ch. 21, Wankat Ch. 9) is reproduced. The issue gives
-example numbers only "from recollection", and none could be retrieved while
-writing this, so quoting one would not be a validation. The ethanol-water NRTL
+Published example: ``rayleigh`` on a tabulated curve reproduces Geankoplis
+(5e) Example 11.3-2 (n-pentane/n-heptane, 101.3 kPa, 100 mol at x_F = 0.5,
+40 mol distilled): x_W = 0.277 and y_av = 0.835 read graphically in the book,
+0.279 and 0.832 here (``TestGeankoplis``). No published batch *rectifier*
+example (McCabe-Smith-Harriott Ch. 21, Wankat Ch. 9) is reproduced. The ethanol-water NRTL
 and Antoine constants are the ones used in ``tests/test_phase_diagrams.py``
 (their provenance is documented there).
 """
@@ -526,3 +527,36 @@ class TestMulticomponentRayleigh:
         f = lambda w: rayleigh_multicomponent(thermo, ("A", "B", "C"), jnp.array([0.3, 0.4, 0.3]), w, 1e5,
                                               n_steps=20)["x_W"][0]
         check_grads(f, (0.5,), order=1, modes=["rev"], atol=1e-4, rtol=1e-4)
+
+
+class TestGeankoplis:
+    """Geankoplis 5e Example 11.3-2: simple (Rayleigh) distillation.
+
+    100 mol of 50/50 n-pentane/n-heptane at 101.3 kPa; 40 mol distilled.
+    The book integrates 1/(y - x) graphically from its equilibrium table and
+    reports x_W = 0.277 and y_av = 0.835.
+    """
+
+    x = jnp.array([0.0, 0.059, 0.145, 0.254, 0.398, 0.594, 0.867, 1.0])
+    y = jnp.array([0.0, 0.271, 0.521, 0.701, 0.836, 0.925, 0.984, 1.0])
+
+    def test_example_11_3_2(self):
+        r = rayleigh(tabulated(self.x, self.y), 0.5, W_over_F=0.6)
+        assert float(r["x_W"]) == pytest.approx(0.277, abs=0.003)
+        assert float(r["x_D_avg"]) == pytest.approx(0.835, abs=0.005)
+        assert float(r["ln_F_over_W"]) == pytest.approx(np.log(1 / 0.6), rel=1e-12)
+
+    def test_rectifier_with_no_stages_is_the_same(self):
+        unit = BatchDistillation(
+            BatchDistillationParams(["a", "b"], n_stages=0, R=0.0),
+            curve=tabulated(self.x, self.y))
+        _, _, info = unit(charge(50.0, 50.0), stop={"distillate": 40.0})
+        assert float(info["x_W_final"]) == pytest.approx(
+            float(rayleigh(tabulated(self.x, self.y), 0.5, W_over_F=0.6)["x_W"]), abs=1e-3)
+
+    def test_curve_is_not_shared_between_units(self):
+        """The jitted body takes the curve as an argument (it is not in the value key)."""
+        p = BatchDistillationParams(["a", "b"], n_stages=0, R=0.0)
+        out = [BatchDistillation(p, curve=constant_alpha(a))(charge(), stop={"distillate": 40.0})[2]
+               for a in (2.0, 4.0)]
+        assert float(out[0]["x_D_avg"]) < float(out[1]["x_D_avg"]) - 0.05
