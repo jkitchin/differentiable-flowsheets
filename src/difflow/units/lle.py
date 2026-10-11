@@ -3,6 +3,8 @@
 This module provides differentiable LLE operations:
 - MultistageCascade: Counter-current or co-current extraction cascade
 - DifferentialContactor: Packed column or similar continuous contactor
+- ternary_lle_flash: differentiable two-liquid-phase flash with mutual solubility,
+  and ``CascadeParams(model="rigorous")``, the partially miscible cascade built on it
 
 Supports both distribution coefficient (K-value) models and activity
 coefficient models (NRTL, UNIQUAC) for computing equilibrium.
@@ -363,8 +365,316 @@ class LLEEquilibrium:
 
 
 # =============================================================================
+# Partially miscible two-liquid-phase flash
+# =============================================================================
+
+_FLASH_FLOOR = 1e-14
+
+
+def _lle_activity(lle_model):
+    """``(model, species or None)`` of an LLEEquilibrium (NRTL/UNIQUAC) or a bare activity model."""
+    from difflow.phase_diagrams import _lle_model
+    model = _lle_model(lle_model)
+    return model, getattr(model, "species", None)
+
+
+def _stop_model(model):
+    """``stop_gradient`` on the numeric leaves of an activity model (species names pass through)."""
+    return jax.tree_util.tree_map(
+        lambda v: lax.stop_gradient(v) if isinstance(v, (jax.Array, float, jnp.ndarray)) else v, model)
+
+
+def _flash_seeds(zz: Array, pair: tuple[int, int]) -> tuple[Array, Array]:
+    """Starting phase compositions: pair-0-rich phase I, pair-1-rich phase II, three solute loadings."""
+    n = zz.shape[0]
+    e0 = jnp.zeros(n).at[pair[0]].set(1.0)
+    e1 = jnp.zeros(n).at[pair[1]].set(1.0)
+    others = zz * (1.0 - e0 - e1)
+    xs_I, xs_II = [], []
+    for k in (0.3, 1.0, 2.0):
+        xI = 0.9 * e0 + 0.1 * e1 + k * others
+        xII = 0.1 * e0 + 0.9 * e1 + k * others
+        xs_I.append(xI / jnp.sum(xI))
+        xs_II.append(xII / jnp.sum(xII))
+    return jnp.stack(xs_I), jnp.stack(xs_II)
+
+
+def _rachford_rice(zz: Array, K: Array, n_bisect: int = 60) -> tuple[Array, Array, Array]:
+    """Phase-II fraction ``beta`` in [0, 1] solving ``sum z (K-1)/(1 + beta (K-1)) = 0``.
+
+    Returns ``(beta, f(0), f(1))``; the split is two-phase iff ``f(0) > 0 > f(1)``
+    (otherwise ``beta`` is clipped to the single-phase end).
+    """
+    def f(b):
+        return jnp.sum(zz * (K - 1.0) / (1.0 + b * (K - 1.0)))
+
+    f0, f1 = f(0.0), f(1.0)
+
+    def body(_, ab):
+        a, b = ab
+        m = 0.5 * (a + b)
+        pos = f(m) > 0.0
+        return jnp.where(pos, m, a), jnp.where(pos, b, m)
+
+    a, b = lax.fori_loop(0, n_bisect, body, (jnp.asarray(0.0), jnp.asarray(1.0)))
+    beta = jnp.where(f0 <= 0.0, 0.0, jnp.where(f1 >= 0.0, 1.0, 0.5 * (a + b)))
+    return beta, f0, f1
+
+
+def _flash_resid(w: Array, zz: Array, T: Array, model) -> Array:
+    n = zz.shape[0]
+    xI, xII, beta = w[:n], w[n:2 * n], w[2 * n]
+    from difflow.activity import activity_gamma
+    r_iso = xI * activity_gamma(model, xI, T) - xII * activity_gamma(model, xII, T)
+    r_bal = zz - (1.0 - beta) * xI - beta * xII
+    return jnp.concatenate([r_iso, r_bal, jnp.reshape(jnp.sum(xI) - 1.0, (1,))])
+
+
+def ternary_lle_flash(lle_model, z: Array, T: Array | float, guess: tuple | None = None,
+                      pair: tuple[int, int] = (0, 1), n_ss: int = 60, n_newton: int = 12) -> dict:
+    """Two-liquid-phase split of a feed ``z`` with mutual solubility (differentiable).
+
+    Solves the isothermal LLE flash
+
+    .. math:: x^{I}_i\\gamma^{I}_i = x^{II}_i\\gamma^{II}_i,\\qquad
+              z_i = (1-\\beta)\\,x^{I}_i + \\beta\\,x^{II}_i,\\qquad \\sum_i x^{I}_i = 1
+
+    for any number of species. The stage is a Rachford-Rice split in the phase
+    fraction ``beta`` wrapped around isoactivity K updates (``K_i = gamma^I_i/gamma^II_i``),
+    a fixed number of successive-substitution iterations from three seeds
+    (``pair[0]``-rich phase I, ``pair[1]``-rich phase II, three solute loadings;
+    the seed with the largest phase separation is kept), then a fixed number of
+    damped Newton iterations on the full system. There is no data-dependent
+    Python control flow, so it is ``jit``-able and ``vmap``-able.
+
+    **Gradients** are implicit: the converged state is stop-gradient'd and one
+    Newton step with the Jacobian held fixed is applied, whose derivative is the
+    implicit-function derivative ``-J^{-1} dF/dtheta``, so ``jax.grad`` with respect to
+    ``z``, ``T`` and the activity-model parameters (NRTL ``tau``) are exact where the
+    flash converged (``converged=True``). Where the feed is a single liquid
+    (``two_phase=False``) the result is *masked*: both phases are the feed
+    composition, ``beta = 0`` (everything in "phase I") and the gradients are those of
+    that identity.
+
+    Every species must have ``z_i > 0`` (a species with zero flow makes the
+    system singular); use a tiny positive amount.
+
+    Args:
+        lle_model: An :class:`LLEEquilibrium` using NRTL or UNIQUAC, ``NRTLParams``,
+            ``UNIQUACParams`` or any activity model with a ``gamma(x, T)`` method.
+        z: Feed amounts or mole fractions ``(n,)`` (normalized internally).
+        T: Temperature (K).
+        guess: Optional starting ``(x_I, x_II)`` compositions, replacing the seeds.
+        pair: Indices of the partially miscible pair that define the phase labels:
+            phase I is rich in ``pair[0]``, phase II in ``pair[1]``.
+        n_ss: Successive-substitution iterations.
+        n_newton: Newton iterations on the full system.
+
+    Returns:
+        dict with ``x_I``, ``x_II`` (mole fractions), ``beta`` (fraction of the
+        moles in phase II), ``amount_I``, ``amount_II`` (``sum(z)`` times the
+        fractions), ``K`` (``x_II/x_I``), ``two_phase`` (bool), ``converged``
+        (bool: the full-system residual is below 1e-9 and the phases are
+        distinct) and ``residual``.
+
+    Example:
+        >>> import jax.numpy as jnp
+        >>> from difflow.units.lle import NRTLParams, ternary_lle_flash
+        >>> tau = jnp.array([[0., 2.5, .5], [2.5, 0., .3], [.8, .6, 0.]])
+        >>> m = NRTLParams(("a", "b", "s"), tau, jnp.zeros((3, 3)), 0.3 * (1 - jnp.eye(3)))
+        >>> r = ternary_lle_flash(m, jnp.array([0.4, 0.5, 0.1]), 300.0)
+        >>> bool(r["two_phase"]), round(float(r["beta"]), 3)
+        (True, 0.575)
+    """
+    from difflow.activity import activity_gamma
+    model, _ = _lle_activity(lle_model)
+    z = jnp.asarray(z, dtype=float)
+    T = jnp.asarray(T, dtype=float)
+    n = z.shape[0]
+    tot = jnp.sum(z)
+    zz = z / tot
+
+    def gam(x):
+        return activity_gamma(model, x, T)
+
+    # ---- stage A: seeds -> successive substitution (not differentiated) -------
+    zs, Ts = lax.stop_gradient(zz), lax.stop_gradient(T)
+    ms = _stop_model(model)
+
+    def gam_s(x):
+        return activity_gamma(ms, x, Ts)
+
+    if guess is None:
+        xI0, xII0 = _flash_seeds(zs, pair)
+    else:
+        xI0 = jnp.asarray(guess[0], float)[None, :]
+        xII0 = jnp.asarray(guess[1], float)[None, :]
+
+    def ss_one(xI, xII):
+        def step(c, _):
+            xI, xII = c
+            K = gam_s(xI) / gam_s(xII)
+            beta, _, _ = _rachford_rice(zs, K)
+            nI = zs / (1.0 + beta * (K - 1.0))
+            nII = K * nI
+            nI = jnp.maximum(nI, _FLASH_FLOOR)
+            nII = jnp.maximum(nII, _FLASH_FLOOR)
+            return (nI / jnp.sum(nI), nII / jnp.sum(nII)), None
+        (xI, xII), _ = lax.scan(step, (xI, xII), None, length=n_ss)
+        return xI, xII
+
+    xIs, xIIs = jax.vmap(ss_one)(xI0, xII0)
+    sep = jnp.sum(jnp.abs(xIs - xIIs), axis=1)
+    k_best = jnp.argmax(sep)
+    xI, xII = xIs[k_best], xIIs[k_best]
+    K = gam_s(xI) / gam_s(xII)
+    beta, f0, f1 = _rachford_rice(zs, K)
+    beta = jnp.clip(beta, 1e-6, 1.0 - 1e-6)
+
+    # ---- stage B: damped Newton on the full system (not differentiated) ------
+    w = jnp.concatenate([xI, xII, jnp.reshape(beta, (1,))])
+
+    def newton(w, _):
+        f = _flash_resid(w, zs, Ts, ms)
+        J = jax.jacfwd(lambda v: _flash_resid(v, zs, Ts, ms))(w)
+        d = jnp.linalg.solve(J + 1e-14 * jnp.eye(2 * n + 1), -f)
+        # keep the compositions positive and beta inside (0, 1)
+        x, dx = w[:2 * n], d[:2 * n]
+        a_x = jnp.where(dx < 0.0, 0.95 * x / jnp.where(dx < 0.0, -dx, 1.0), jnp.inf)
+        db = d[2 * n]
+        b = w[2 * n]
+        a_b = jnp.where(db > 0.0, 0.95 * (1.0 - b) / jnp.where(db > 0.0, db, 1.0),
+                        jnp.where(db < 0.0, 0.95 * b / jnp.where(db < 0.0, -db, 1.0), jnp.inf))
+        alpha = jnp.minimum(1.0, jnp.minimum(jnp.min(a_x), a_b))
+        wn = w + alpha * d
+        ok = jnp.all(jnp.isfinite(wn))
+        return jnp.where(ok, wn, w), None
+
+    w, _ = lax.scan(newton, w, None, length=n_newton)
+    res = jnp.max(jnp.abs(_flash_resid(w, zs, Ts, ms)))
+    xI_f, xII_f, beta_f = w[:n], w[n:2 * n], w[2 * n]
+    separated = jnp.sum(jnp.abs(xI_f - xII_f)) > 1e-6
+    two_phase = (res < 1e-9) & separated & (beta_f > 0.0) & (beta_f < 1.0) \
+        & (jnp.min(xI_f) > -1e-12) & (jnp.min(xII_f) > -1e-12)
+
+    # ---- stage C: implicit-gradient polish (one Newton step, J held fixed) ---
+    w_safe = jnp.where(two_phase, w, jnp.concatenate([xI0[0], xII0[0], jnp.array([0.5])]))
+    w_safe = lax.stop_gradient(w_safe)
+    f_w = _flash_resid(w_safe, zz, T, model)
+    J = lax.stop_gradient(jax.jacfwd(lambda v: _flash_resid(v, zs, Ts, ms))(w_safe))
+    w_pol = w_safe - jnp.linalg.solve(J + 1e-14 * jnp.eye(2 * n + 1), f_w)
+    xI_o = jnp.where(two_phase, w_pol[:n], zz)
+    xII_o = jnp.where(two_phase, w_pol[n:2 * n], zz)
+    beta_o = jnp.where(two_phase, w_pol[2 * n], 0.0)
+    K_o = jnp.where(two_phase, xII_o / jnp.where(two_phase, xI_o, 1.0), 1.0)
+    return {"x_I": xI_o, "x_II": xII_o, "beta": beta_o,
+            "amount_I": tot * (1.0 - beta_o), "amount_II": tot * beta_o, "K": K_o,
+            "two_phase": two_phase, "converged": two_phase, "residual": res}
+
+
+# =============================================================================
 # Multi-Stage Cascade Extractor
 # =============================================================================
+
+# =============================================================================
+# Rigorous (partially miscible) countercurrent cascade
+# =============================================================================
+
+_N_CASCADE_NEWTON = 60
+
+
+def _cascade_resid(u: Array, F: Array, S: Array, T: Array, model, N: int, nsp: int) -> Array:
+    """Stage balances and isoactivity for ``N`` countercurrent stages (flows ``u = [R; E]``).
+
+    ``R_n`` is the raffinate (phase I) leaving stage ``n``, ``E_n`` the extract (phase II);
+    stage 1 gets the feed ``F``, stage ``N`` the solvent ``S``.
+    """
+    from difflow.activity import activity_gamma
+    R = u[:N * nsp].reshape(N, nsp)
+    E = u[N * nsp:].reshape(N, nsp)
+    R_in = jnp.concatenate([F[None, :], R[:-1]], axis=0)
+    E_in = jnp.concatenate([E[1:], S[None, :]], axis=0)
+    bal = R_in + E_in - R - E
+    xR = R / jnp.sum(R, axis=1, keepdims=True)
+    xE = E / jnp.sum(E, axis=1, keepdims=True)
+    gam = jax.vmap(lambda x: activity_gamma(model, x, T))
+    iso = xR * gam(xR) - xE * gam(xE)
+    return jnp.concatenate([bal.reshape(-1), iso.reshape(-1)])
+
+
+def _cascade_seed(model, F, S, T, N: int, nsp: int, pair: tuple[int, int]) -> Array:
+    """Kremser-profile seed: K and phase ratio from one flash of ``F + S``."""
+    fl = ternary_lle_flash(model, F + S, T, pair=pair)
+    tot = jnp.sum(F + S)
+    R1 = jnp.where(fl["two_phase"], fl["amount_I"] * fl["x_I"], F)
+    E1 = jnp.where(fl["two_phase"], fl["amount_II"] * fl["x_II"], S)
+    floor = 1e-6 * tot
+    R1 = jnp.maximum(R1, floor)
+    E1 = jnp.maximum(E1, floor)
+    A = (E1 / jnp.sum(E1)) / (R1 / jnp.sum(R1)) * jnp.sum(E1) / jnp.sum(R1)   # K_i * E/R
+    A = jnp.maximum(A, 1e-6)
+    n_idx = jnp.arange(1, N + 1, dtype=float)[:, None]
+    near = jnp.abs(A - 1.0) < 1e-8
+    As = jnp.where(near, 2.0, A)
+    krem = jnp.where(near, (N - n_idx + 1.0) / (N + 1.0),
+                     (As ** (N - n_idx + 1.0) - 1.0) / (As ** (N + 1.0) - 1.0))
+    carrier = jnp.zeros(nsp).at[pair[0]].set(1.0).at[pair[1]].set(1.0)
+    feed_like = jnp.where(carrier > 0, R1, F + S)         # solutes: Kremser on feed + solvent solute
+    R = jnp.where(carrier > 0, R1[None, :], feed_like[None, :] * krem)
+    E = jnp.where(carrier > 0, E1[None, :], A[None, :] * R)
+    return jnp.maximum(jnp.concatenate([R.reshape(-1), E.reshape(-1)]), floor)
+
+
+def _rigorous_cascade(model, F: Array, S: Array, T: Array, N: int, pair: tuple[int, int]):
+    """Solve the ``N``-stage countercurrent cascade with the full LLE equations.
+
+    Damped Newton on the flat system of ``2 N n`` flows (fixed iteration count, fraction-to-
+    boundary step limit) from a Kremser-profile seed, not differentiated; then one Newton step
+    with the Jacobian held fixed, which carries the implicit-function gradient with respect to
+    ``F``, ``S``, ``T`` and the activity-model parameters.
+
+    Returns ``(R, E, info)`` with ``R, E`` of shape ``(N, n)`` (flows), plus ``converged``,
+    ``residual`` and ``two_phase`` (every stage has distinct phases).
+    """
+    nsp = F.shape[0]
+    sc = jnp.sum(F + S)
+    Fs, Ss = F / sc, S / sc
+    sg = lax.stop_gradient
+    ms = _stop_model(model)
+    Fsg, Ssg, Tsg = sg(Fs), sg(Ss), sg(T)
+
+    def resid_sg(u):
+        return _cascade_resid(u, Fsg, Ssg, Tsg, ms, N, nsp)
+
+    u0 = _cascade_seed(ms, Fsg, Ssg, Tsg, N, nsp, pair)
+    dim = 2 * N * nsp
+
+    def newton(u, _):
+        f = resid_sg(u)
+        J = jax.jacfwd(resid_sg)(u)
+        d = jnp.linalg.solve(J + 1e-14 * jnp.eye(dim), -f)
+        a = jnp.where(d < 0.0, 0.95 * u / jnp.where(d < 0.0, -d, 1.0), jnp.inf)
+        alpha = jnp.minimum(1.0, jnp.min(a))
+        un = u + alpha * d
+        return jnp.where(jnp.all(jnp.isfinite(un)), un, u), None
+
+    u, _ = lax.scan(newton, u0, None, length=_N_CASCADE_NEWTON)
+    res = jnp.max(jnp.abs(resid_sg(u)))
+    Rr, Er = u[:N * nsp].reshape(N, nsp), u[N * nsp:].reshape(N, nsp)
+    xR = Rr / jnp.sum(Rr, axis=1, keepdims=True)
+    xE = Er / jnp.sum(Er, axis=1, keepdims=True)
+    two_phase = jnp.min(jnp.sum(jnp.abs(xR - xE), axis=1)) > 1e-6
+    converged = (res < 1e-10) & two_phase & jnp.all(jnp.isfinite(u)) & jnp.all(u > 0.0)
+
+    # implicit-gradient polish
+    u_safe = sg(jnp.where(converged, u, u0))
+    J = sg(jax.jacfwd(resid_sg)(u_safe))
+    u_pol = u_safe - jnp.linalg.solve(J + 1e-14 * jnp.eye(dim),
+                                       _cascade_resid(u_safe, Fs, Ss, T, model, N, nsp))
+    u_out = jnp.where(converged, u_pol, u) * sc
+    R_out, E_out = u_out[:N * nsp].reshape(N, nsp), u_out[N * nsp:].reshape(N, nsp)
+    return R_out, E_out, {"converged": converged, "residual": res, "two_phase": two_phase}
+
 
 @dataclass(repr=False)
 class CascadeParams(ParamsMixin):
@@ -376,11 +686,24 @@ class CascadeParams(ParamsMixin):
         flow_config: 'counter_current' or 'co_current'
         stage_efficiency: Murphree stage efficiency for co-current model (0-1).
                          Fraction of equilibrium achieved per stage. Default 0.8.
+        model: ``"immiscible"`` (default; Kremser, immiscible solvents, constant phase
+            flows) or ``"rigorous"``: ``n_stages`` countercurrent ideal stages solved
+            with the full two-liquid-phase equations (isoactivity from the NRTL or
+            UNIQUAC parameters of ``equilibrium``, mutual solubility of all species,
+            variable phase flows), from a Kremser-profile seed. The rigorous model
+            needs an integer ``n_stages``, ``flow_config="counter_current"``, an
+            activity-model ``equilibrium`` without ``mutual_solubility`` (which it
+            supersedes), and ignores ``stage_efficiency``.
     """
     n_stages: int | float | Array
     equilibrium: LLEEquilibrium
     flow_config: Literal["counter_current", "co_current"] = "counter_current"
     stage_efficiency: float = 0.8
+    model: Literal["immiscible", "rigorous"] = "immiscible"
+
+    def __post_init__(self):
+        if self.model not in ("immiscible", "rigorous"):
+            raise ValueError(f"model must be 'immiscible' or 'rigorous', got {self.model!r}")
 
 
 class MultistageCascade:
@@ -396,6 +719,7 @@ class MultistageCascade:
     symbol = "LLE Cascade"
     equations = [
         r"x_{i,n} = \frac{x_{i,0} - y_{i,N+1}/K_i}{1 + E\,S + \ldots} \qquad \text{(Kremser equation, analytical)}",
+        r"\gamma_i^{R}x_i^{R}=\gamma_i^{E}x_i^{E},\ \ R_{n-1}+E_{n+1}=R_n+E_n \qquad \text{(rigorous model, every stage)}",
         r"E_i = \frac{y_i^\ast}{K_i\, x_i}\qquad \text{(extraction factor)}",
         r"\text{MB at stage } n:\ L x_{i,n-1} + S y_{i,n+1} = L x_{i,n} + S y_{i,n}",
     ]
@@ -403,6 +727,9 @@ class MultistageCascade:
         "Each stage reaches equilibrium (optionally scaled by stage_efficiency for co-current).",
         "Immiscible solvents; constant phase flows along the cascade.",
         "Constant distribution coefficients K_i with respect to temperature within a stage.",
+        "model='rigorous' drops the immiscible and constant-flow assumptions: ideal stages with the full "
+        "two-liquid-phase equations (NRTL/UNIQUAC isoactivity, mutual solubility, variable phase flows); "
+        "integer n_stages, counter-current only.",
     ]
     references = [
         "Kremser, A. National Petroleum News, 22(21), 43 (1930).",
@@ -443,6 +770,9 @@ class MultistageCascade:
 
         T = jnp.asarray(T) if T is not None else feed["T"]
 
+        if p.model == "rigorous":
+            return self._call_rigorous(feed, solvent, T)
+
         # Get flows
         feed_flows = get_flows(feed)
         solvent_flows = get_flows(solvent)
@@ -476,6 +806,59 @@ class MultistageCascade:
         }
 
         return raffinate_stream, extract_stream, info
+
+    def _call_rigorous(self, feed: Stream, solvent: Stream, T: Array) -> tuple[Stream, Stream, dict]:
+        """``model="rigorous"``: countercurrent stages with the two-liquid-phase flash equations."""
+        p = self.params
+        eq = p.equilibrium
+        if p.flow_config != "counter_current":
+            raise ValueError("model='rigorous' is implemented for flow_config='counter_current' only")
+        if eq.activity_model not in ("NRTL", "UNIQUAC"):
+            raise ValueError("model='rigorous' needs an LLEEquilibrium with activity_model 'NRTL' or "
+                             "'UNIQUAC' (a K-value model has no mutual solubility)")
+        if eq.mutual_solubility is not None:
+            raise ValueError("model='rigorous' supersedes LLEEquilibrium.mutual_solubility (it solves "
+                             "the mutual solubility); remove mutual_solubility or use model='immiscible'")
+        if isinstance(p.n_stages, jax.core.Tracer):
+            raise ValueError("model='rigorous' needs a concrete integer n_stages (not a traced value)")
+        n_f = float(p.n_stages)
+        if n_f != int(n_f) or n_f < 1:
+            raise ValueError(f"model='rigorous' needs an integer n_stages >= 1, got {p.n_stages}")
+        N = int(n_f)
+        model, species = _lle_activity(eq)
+        for c in (eq.aqueous_carrier, eq.organic_carrier):
+            if c not in species:
+                raise ValueError(f"carrier {c!r} is not in the activity model's species {species}")
+        pair = (species.index(eq.aqueous_carrier), species.index(eq.organic_carrier))
+        ff, sf = get_flows(feed), get_flows(solvent)
+        F = jnp.stack([jnp.asarray(ff.get(s, 0.0), float) for s in species])
+        S = jnp.stack([jnp.asarray(sf.get(s, 0.0), float) for s in species])
+        if not isinstance(F, jax.core.Tracer) and not isinstance(S, jax.core.Tracer):
+            tot = F + S
+            for i, s in enumerate(species):
+                if float(tot[i]) <= 0.0:
+                    raise ValueError(f"species {s!r} has zero flow in the feed and the solvent; the rigorous "
+                                     "model needs every species of the activity model present "
+                                     "(give it a tiny positive flow or drop it from the model)")
+        R, E, rinfo = _rigorous_cascade(model, F, S, jnp.asarray(T, float), N, pair)
+        P = feed["P"]
+        raffinate = make_stream({s: R[-1, i] for i, s in enumerate(species)}, T, P)
+        extract = make_stream({s: E[0, i] for i, s in enumerate(species)}, T, P)
+        xR = R / jnp.sum(R, axis=1, keepdims=True)
+        xE = E / jnp.sum(E, axis=1, keepdims=True)
+        xF = F / jnp.sum(F)
+        yS = S / jnp.sum(S)
+        profiles = {
+            "x": {s: jnp.concatenate([xF[i:i + 1], xR[:, i]]) for i, s in enumerate(species)},
+            "y": {s: jnp.concatenate([yS[i:i + 1], xE[:, i]]) for i, s in enumerate(species)},
+            "R": R, "E": E, "species": tuple(species),
+            "carrier_transfer": {},
+            "mutual_solubility_active": True,
+        }
+        info = {"n_stages": jnp.asarray(float(N)), "profiles": profiles, "T": T, "model": "rigorous",
+                "converged": rinfo["converged"], "residual": rinfo["residual"],
+                "two_phase": rinfo["two_phase"]}
+        return raffinate, extract, info
 
     def _solve_counter_current(
         self,

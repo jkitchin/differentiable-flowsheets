@@ -8,6 +8,29 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **Partially miscible extraction: `ternary_lle_flash` and `CascadeParams(model="rigorous")` (#430, part 3).**
+  `difflow.units.lle.ternary_lle_flash(lle_model, z, T, guess=None, pair=(0, 1))`: a
+  differentiable two-liquid-phase flash for any number of species (Rachford-Rice in the phase
+  fraction around isoactivity K updates, three seeds, then damped Newton on the full system,
+  all fixed iteration counts; implicit-function gradients in `z`, `T` and the NRTL/UNIQUAC
+  parameters; a single-phase feed returns a masked result with `two_phase=False`).
+  `CascadeParams` gains `model: "immiscible" | "rigorous"` (default `"immiscible"`, so existing
+  code is unchanged; an unknown value now raises `ValueError` at construction). `"rigorous"`
+  solves `n_stages` countercurrent ideal stages with the full equations (mutual solubility,
+  variable phase flows) by damped Newton on the flat stage system, seeded from a Kremser
+  profile, with implicit gradients. It supersedes `mutual_solubility` (giving both is an
+  error), needs an integer `n_stages`, `flow_config="counter_current"`, an NRTL/UNIQUAC
+  `equilibrium` and a positive total flow of every species of the activity model, and
+  ignores `stage_efficiency`. Stages that mix into a single liquid (too little solvent) cannot
+  be represented and are reported as `info["converged"] = False`. Checked against `ternary_lle`
+  tie lines, the binodal on random feeds, the Kremser cascade in the immiscible dilute limit, a
+  Gauss-Seidel stage-flash sweep, the Hunter-Nash stage count (agreement ~1e-4 stage) and
+  `check_grads`. **No published acetic acid-water-MIBK data or NRTL set is used** (the
+  recalled values could not be verified): the tests and docs use a synthetic type-I
+  ternary. Docs: `Ternary Diagrams and the Lever Rule`, `Leaching and Washing` and the
+  `MultistageCascade` rigorous section of `docs/unit-operations-chemical.md`; example
+  notebook `examples/54_leaching_ternary.ipynb`.
+
 - **Ternary-diagram helpers: `mix`, `lever_rule`, `tie_line_through`,
   `difference_point`, `hunter_nash`, `plot_hunter_nash` (#430, part 2).** In
   `difflow.phase_diagrams` (`mix` only there; the rest also top-level) and

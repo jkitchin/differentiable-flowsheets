@@ -3126,6 +3126,7 @@ class CascadeParams:
     equilibrium: LLEEquilibrium  # The equilibrium model (see above)
     flow_config: str = 'counter_current'  # or 'co_current'
     stage_efficiency: float = 0.8         # Murphree efficiency, co-current only
+    model: str = 'immiscible'             # or 'rigorous' (partially miscible, see below)
 ```
 
 `n_stages` is deliberately continuous: the Kremser solution below is
@@ -3195,6 +3196,79 @@ recovery = 1.0 - get_flows(raffinate)['acetic_acid'] / 10.0
 print(f"Recovery: {float(recovery):.2%}")        # Recovery: 91.12%
 print(info['profiles'].keys())  # stage profiles: x, y, carrier_transfer, ...
 ```
+
+#### Partially Miscible Systems (`model="rigorous"`)
+
+The Kremser solution above assumes immiscible solvents and constant phase flows.
+For a type-I system such as acetic acid-water-MIBK the carriers dissolve in each
+other and the phase flows change along the cascade, so
+`CascadeParams(n_stages=N, equilibrium=..., model="rigorous")` solves $N$
+countercurrent ideal stages with the full two-liquid-phase equations,
+
+$$R_{n-1} + E_{n+1} = R_n + E_n, \qquad
+\gamma_i^{R} x_i^{R} = \gamma_i^{E} x_i^{E},$$
+
+for every species and stage, from the NRTL or UNIQUAC parameters of the
+`LLEEquilibrium`. The raffinate is the phase rich in `aqueous_carrier`, the
+extract the one rich in `organic_carrier`. It is a damped Newton solve of the
+$2 N n$ stage flows with a fixed iteration count, seeded by a Kremser profile
+built from one flash of feed plus solvent; the gradient is the implicit-function
+derivative, so `jax.grad` with respect to the solvent rate, the feed or the NRTL
+parameters works. `info` carries `converged`, `residual`, `two_phase` and the
+stage flows (`info["profiles"]["R"]`, `["E"]`). `mutual_solubility` is
+*superseded* (giving it with `model="rigorous"` is an error), and the model
+needs an integer `n_stages`, `flow_config="counter_current"`, an NRTL or
+UNIQUAC `equilibrium`, and a positive total flow for every species of the
+activity model. When too little solvent is used the stages mix into a single
+liquid, which a two-phase stage model cannot represent: `info["converged"]` is
+`False` then, and the flows should not be used.
+
+The building block is `ternary_lle_flash(lle_model, z, T)`: the isothermal
+two-liquid-phase flash of a feed `z` (any number of species; phase I is rich in
+`pair[0]`), returning `x_I`, `x_II`, `beta`, the phase amounts, `K`,
+`two_phase` and `converged`; a single-phase feed returns a masked result (both
+phases equal to the feed, `two_phase=False`) with finite gradients. It reproduces
+the tie lines of `ternary_lle` and is differentiable in `z`, `T` and the
+activity parameters.
+
+```python
+import jax.numpy as jnp
+from difflow import make_stream
+from difflow.units.lle import (
+    CascadeParams, LLEEquilibrium, MultistageCascade, NRTLParams, ternary_lle_flash,
+)
+
+# A SYNTHETIC type-I system (carrier_a and carrier_b partially miscible; "solute"
+# prefers carrier_b). The NRTL parameters are illustrative, NOT fitted to any
+# published data (in particular not to acetic acid-water-MIBK).
+tau = jnp.array([[0.0, 2.5, 0.5], [2.5, 0.0, 0.3], [0.8, 0.6, 0.0]])
+nrtl = NRTLParams(("carrier_a", "carrier_b", "solute"), tau,
+                  jnp.zeros((3, 3)), 0.3 * (1.0 - jnp.eye(3)))
+eq = LLEEquilibrium(solutes=["solute"], aqueous_carrier="carrier_a",
+                    organic_carrier="carrier_b", nrtl_params=nrtl, activity_model="NRTL")
+
+# One stage: the flash of an overall composition
+split = ternary_lle_flash(nrtl, jnp.array([0.4, 0.5, 0.1]), 300.0)
+print(bool(split["two_phase"]), f"{float(split['beta']):.3f}")     # True 0.575
+
+# Three countercurrent stages
+feed = make_stream({"carrier_a": 80.0, "carrier_b": 0.0, "solute": 20.0}, 300.0, 1e5)
+solvent = make_stream({"carrier_a": 0.0, "carrier_b": 100.0, "solute": 0.0}, 300.0, 1e5)
+cascade = MultistageCascade(CascadeParams(3, eq, model="rigorous"))
+raffinate, extract, info = cascade(feed, solvent)
+print(bool(info["converged"]))                                      # True
+print(f"solute left in the raffinate: {float(raffinate['F_solute']):.3f}")  # 1.678
+print(f"carrier_b lost to the raffinate: {float(raffinate['F_carrier_b']):.3f}")  # 3.069
+```
+
+With vanishing mutual solubility and a dilute solute the rigorous model
+reduces to the Kremser cascade (checked in `tests/test_lle.py`, where the
+discrepancy falls in proportion to the dilution). The ternary construction of
+the same stages, the Hunter-Nash stepping of the previous section, gives the
+same stage count (to better than 0.01 stage in that test). The system in the tests is
+synthetic as well: no published acetic acid-water-MIBK data or NRTL set was
+available to check, so no agreement with Sherwood-Evans-Longcor or DECHEMA data
+is claimed, and the recalled parameter values are not used.
 
 #### Utility Functions
 
@@ -3323,7 +3397,9 @@ Geankoplis) is reproduced: their inputs and printed answers could not be
 retrieved, so no agreement with them is claimed. The construction is checked
 against the lever rule and component balances (exact), against the analytic
 Kremser stage count for an immiscible ternary (tie lines from edge to edge with
-$Y = KX$) and for its own consistency (see `tests/test_phase_diagrams.py`).
+$Y = KX$), for its own consistency (see `tests/test_phase_diagrams.py`) and
+against the rigorous stage-by-stage solution of the same equilibrium model
+(`tests/test_lle.py`: same stage count to better than 0.01 stage).
 The stepping is limited to the range of the tabulated tie lines (it stops
 before the plait point) and reports `feasible=False` at a pinch (solvent at or
 below the minimum).
@@ -3479,7 +3555,8 @@ print(f"recovery {float(info['recovery']):.4f}")          # recovery 0.7688
 Gradients of the recovery with respect to the solvent rate, the stage count
 and the underflow ratio are ordinary `jax.grad` calls, so the solvent-to-solids
 ratio and the stage count that minimise a solvent-recovery cost can be found
-by gradient descent.
+by gradient descent (worked in `examples/54_leaching_ternary.ipynb`, together
+with the ternary helpers and the rigorous cascade).
 
 #### Limits
 
