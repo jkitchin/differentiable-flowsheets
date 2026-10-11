@@ -753,6 +753,16 @@ PACKINGS: dict[str, PackingData] = {
     "pall_metal_25": PackingData("pall_metal_25", 0.025, 223.5, 0.954, SIGMA_C["steel"], 183.0),
     "pall_metal_50": PackingData("pall_metal_50", 0.050, 112.6, 0.951, SIGMA_C["steel"], 89.0),
     "pall_plastic_25": PackingData("pall_plastic_25", 0.025, 225.0, 0.90, SIGMA_C["polyethylene"], 180.0),
+    # Added in #429 (column hardware). From memory, unverified: Intalox ceramic a_p/eps
+    # and packing factors as in Treybal's table (98, 52, 40 ft^-1 -> 320, 170, 131 1/m);
+    # Pall 38 mm after Billet-Schultes / Perry (about 131 1/m).
+    "intalox_ceramic_25": PackingData("intalox_ceramic_25", 0.025, 255.0, 0.73, SIGMA_C["ceramic"], 320.0),
+    "intalox_ceramic_38": PackingData("intalox_ceramic_38", 0.038, 195.0, 0.75, SIGMA_C["ceramic"], 170.0),
+    "intalox_ceramic_50": PackingData("intalox_ceramic_50", 0.050, 118.0, 0.76, SIGMA_C["ceramic"], 131.0),
+    "pall_metal_38": PackingData("pall_metal_38", 0.038, 139.5, 0.959, SIGMA_C["steel"], 131.0),
+    # Structured sheet-metal packing: d_p = 0 (not defined; the Onda random-packing
+    # functions do not apply). F_p ~ 66 1/m (20 1/ft) from memory, unverified.
+    "mellapak_250y": PackingData("mellapak_250y", 0.0, 250.0, 0.95, SIGMA_C["steel"], 66.0),
 }
 
 

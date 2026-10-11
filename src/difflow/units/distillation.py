@@ -2660,44 +2660,45 @@ def column_diameter(
     V: Array,
     rho_V: Array,
     rho_L: Array,
-    sigma: Array = 0.02,
+    sigma: Array,
     tray_spacing: float = 0.6,
+    *,
+    MW_V: Array,
+    L: Array,
+    MW_L: Array,
 ) -> Array:
-    """Estimate column diameter for trayed column.
+    """Deprecated: use :func:`difflow.units.column_design.tray_column_diameter`.
 
-    Uses Fair correlation for flooding velocity.
+    Thin wrapper kept for compatibility. The old body ignored ``sigma`` and
+    ``tray_spacing`` and hard-coded the vapor molecular weight (30 g/mol), the
+    flow parameter and ``C_SB``. It now calls ``tray_column_diameter`` (Fair
+    flooding at 80 % of flood, 10 % downcomer), so the vapor and liquid
+    molecular weights, the liquid rate and the surface tension are **required**
+    (``MW_V``, ``L``, ``MW_L`` keyword-only; ``sigma`` positional).
 
     Args:
-        V: Vapor molar flow rate (mol/s)
-        rho_V: Vapor density (kg/m³)
-        rho_L: Liquid density (kg/m³)
-        sigma: Surface tension (N/m), default 0.02
-        tray_spacing: Tray spacing (m), default 0.6
+        V: Vapor molar flow rate (mol/s).
+        rho_V: Vapor density (kg/m^3).
+        rho_L: Liquid density (kg/m^3).
+        sigma: Surface tension (N/m).
+        tray_spacing: Tray spacing (m).
+        MW_V: Vapor molecular weight (g/mol).
+        L: Liquid molar flow rate (mol/s).
+        MW_L: Liquid molecular weight (g/mol).
 
     Returns:
-        Column diameter (m)
+        Column diameter (m).
     """
-    # Flow parameter
-    MW_avg = 30.0  # Approximate average MW (g/mol)
-    V_mass = V * MW_avg / 1000  # kg/s
+    import warnings
+    from difflow.units.column_design import tray_column_diameter
 
-    # Capacity factor (simplified Fair correlation)
-    F_LV = 0.1  # Assume low liquid loading
-    C_sb = 0.1  # Souders-Brown coefficient (m/s)
-
-    # Flooding velocity
-    u_flood = C_sb * jnp.sqrt(safe_divide(rho_L - rho_V, rho_V))
-
-    # Operating velocity (80% of flood)
-    u_op = 0.8 * u_flood
-
-    # Volumetric flow
-    Q_V = safe_divide(V_mass, rho_V)  # m³/s
-
-    # Column area
-    A = safe_divide(Q_V, u_op)
-
-    # Diameter
-    D = jnp.sqrt(4 * A / jnp.pi)
-
+    warnings.warn(
+        "column_diameter is deprecated; use "
+        "difflow.units.column_design.tray_column_diameter",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    D, _ = tray_column_diameter(
+        V, MW_V, rho_V, L, MW_L, rho_L, sigma, tray_spacing=tray_spacing
+    )
     return D

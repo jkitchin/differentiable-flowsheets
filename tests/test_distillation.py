@@ -521,16 +521,20 @@ class TestDesignFunctions:
         assert float(N_high_R) < float(N)
 
     def test_column_diameter(self):
-        """Test column diameter estimation."""
-        V = jnp.array(100.0)  # mol/s vapor flow
-        rho_V = jnp.array(3.0)  # kg/m³
-        rho_L = jnp.array(800.0)  # kg/m³
+        """The deprecated wrapper warns and equals tray_column_diameter."""
+        from difflow.units.column_design import tray_column_diameter
 
-        D = column_diameter(V, rho_V, rho_L)
+        V, rho_V, rho_L, sigma = 100.0, 3.0, 800.0, 0.02
+        with pytest.warns(DeprecationWarning):
+            D = column_diameter(V, rho_V, rho_L, sigma, 0.6, MW_V=80.0, L=100.0, MW_L=85.0)
+        D_new, _ = tray_column_diameter(V, 80.0, rho_V, 100.0, 85.0, rho_L, sigma)
+        assert float(D) == pytest.approx(float(D_new), rel=1e-12)
+        assert 0.3 < float(D) < 3.0
 
-        # Should be positive and reasonable (0.5 - 5 m for most columns)
-        assert float(D) > 0
-        assert float(D) < 10
+        # Regression against the stub: the vapor molecular weight matters.
+        with pytest.warns(DeprecationWarning):
+            D_heavy = column_diameter(V, rho_V, rho_L, sigma, 0.6, MW_V=160.0, L=100.0, MW_L=85.0)
+        assert float(D_heavy) > float(D)
 
 
 class TestDistillationColumn:

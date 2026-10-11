@@ -1236,7 +1236,8 @@ The groups are C2-, C3, C4, C3-, C4+ and C5+. Pseudocomponents count as
 C5+. Any output can be specified.
 
 **Tray efficiency.** By default the factories apply O'Connell's (1946)
-correlation, `E_o = 0.492 (alpha mu_L)^-0.245`, as the Murphree vapour
+correlation (now `difflow.units.column_design.oconnell_efficiency`, re-exported
+here; see [Column Hardware](unit-operations-chemical.md)), `E_o = 0.492 (alpha mu_L)^-0.245`, as the Murphree vapour
 efficiency of every tray. Alpha is the key components' relative
 volatility at the feed. `mu_L` is `liquid_viscosity`, 0.1 cP by default,
 which is a typical C3-C6 value and not a prediction. Two caveats apply:

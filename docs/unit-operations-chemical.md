@@ -969,13 +969,17 @@ from difflow.units.distillation import (
     fenske_stages,        # (x_D_LK, x_B_LK, alpha)
     minimum_reflux_ratio, # (z_LK, z_HK, x_D_LK, alpha, q=1.0)
     gilliland_stages,     # (R, R_min, N_min)
-    column_diameter,      # (V, rho_V, rho_L, sigma=0.02, tray_spacing=0.6)
+    column_diameter,      # DEPRECATED, see Column Hardware below
 )
 
 N_min = fenske_stages(x_D_LK=0.98, x_B_LK=0.02, alpha=2.4)
 R_min = minimum_reflux_ratio(z_LK=0.45, z_HK=0.55, x_D_LK=0.98, alpha=2.4, q=1.0)
 N = gilliland_stages(R=1.3 * R_min, R_min=R_min, N_min=N_min)
-diameter = column_diameter(V=50.0, rho_V=3.0, rho_L=800.0)   # mol/s, kg/m^3
+
+from difflow.units.column_design import tray_column_diameter
+# vapor/liquid rates (mol/s), MW (g/mol), densities (kg/m^3), sigma (N/m)
+diameter, _ = tray_column_diameter(V_molar=50.0, MW_V=80.0, rho_V=3.0,
+                                   L_molar=50.0, MW_L=85.0, rho_L=800.0, sigma=0.02)
 ```
 
 Relative volatility is a method on the column, not a free function
@@ -3982,6 +3986,189 @@ def column_height(L_over_G):
 print(float(column_height(1.5)), float(jax.grad(column_height)(1.5)))
 print(float(hetp_from_htu(0.5, 1.0)))     # HETP -> H_OG as lambda -> 1
 ```
+
+## Column Hardware
+
+**Location**: `difflow/units/column_design.py` (pure JAX, SI; a library, not
+palette operations, so nothing here is registered). These functions turn the
+vapor and liquid rates of a column (a `DistillationColumn` result, a
+McCabe-Thiele design, an absorber) into a diameter, a pressure drop, margins to
+the weeping / entrainment / flooding limits, and the height and shell volume
+that `difflow.economics.capital.column_cost` needs. Every limit is a continuous
+margin (never an exception on a traced value), so an optimizer can use it as a
+smooth constraint, and everything is differentiable in the fraction of flood,
+tray spacing, packing factor, rates and surface tension. Properties are inputs:
+the surface tension, densities and viscosity are required arguments (there is no
+silent `sigma = 0.02`).
+
+**What was and was not verified.** The correlation constants were **written from
+memory with no book at hand and are unverified**; each is marked so in its
+docstring with the source it is believed to come from. They are fits of
+*charts*: expect 10-20 % on a diameter or a flooding velocity, and worse on a
+pressure drop. The tests check hand calculations, independent re-implementations,
+scaling laws ($D \propto f_{\rm flood}^{-1/2}$, $D \propto (V\,MW/\rho_V)^{1/2}$),
+sign changes of margins and gradients. **No published textbook worked example is
+reproduced** (the issue's example numbers could not be checked), and two pieces
+are placeholders rather than fits: the entrainment function and the GPDC
+pressure-drop shape (below).
+
+(op-tray-flooding)=
+### Tray Flooding and Column Diameter
+
+`flow_parameter` gives $F_{LV} = (L/V)\sqrt{\rho_V/\rho_L}$.
+`fair_capacity_factor` is the flooding capacity factor on the net area,
+$C_{SB} = [\alpha \log_{10}(1/F_{LV}) + \beta]\,(\sigma/0.02)^{0.2}$ with
+$\alpha = 0.0744\,t + 0.01173$, $\beta = 0.0304\,t + 0.015$ ($t$ the tray
+spacing in m): the closed-form fit of Fair's chart as quoted by Treybal
+(**from memory, unverified**; believed valid for $0.01 \le F_{LV} \le 0.1$),
+with optional `foaming_factor` and `hole_area_factor` multipliers.
+`flooding_velocity` is $u_f = C_{SB}\sqrt{(\rho_L-\rho_V)/\rho_V}$.
+`tray_column_diameter` sizes at a `fraction_flood` of $u_f$ on the net area
+$A_n = A_c(1 - A_d/A_c)$ and returns `(D, info)` (`F_LV`, `C_SB`, `u_flood`,
+`A_net`, `A_active`, `percent_flood`, ...); `tray_percent_flood` is the inverse,
+for rating an existing column at a new throughput (debottlenecking).
+
+```python
+import jax
+from difflow.units.column_design import (
+    tray_column_diameter, tray_percent_flood, size_column, column_hardware_cost,
+    oconnell_efficiency,
+)
+
+# Benzene-toluene-like column: rates in mol/s, MW in g/mol, rho in kg/m^3, sigma in N/m
+col = dict(V_molar=100.0, MW_V=80.0, rho_V=2.9, L_molar=80.0, MW_L=85.0,
+           rho_L=790.0, sigma=0.021)
+D, info = tray_column_diameter(**col, tray_spacing=0.6, fraction_flood=0.8)
+print(f"F_LV = {float(info['F_LV']):.3f}, C_SB = {float(info['C_SB']):.3f} m/s, "
+      f"u_f = {float(info['u_flood']):.2f} m/s, D = {float(D):.2f} m")
+print(f"{float(tray_percent_flood(**col, diameter=D)):.0f} % flood at the design rate")
+
+# d(diameter)/d(fraction of flood) and d(cost)/d(fraction of flood)
+def cost(ff):
+    D, _ = tray_column_diameter(**col, fraction_flood=ff)
+    eff = oconnell_efficiency(2.4, 0.3)          # alpha, viscosity in cP
+    sizing = size_column(15.0, eff, D, tray_spacing=0.6)
+    return column_hardware_cost(sizing)["total"]
+print(float(cost(0.8)), float(jax.grad(cost)(0.8)))
+```
+
+The old `column_diameter(V, rho_V, rho_L, sigma=0.02, tray_spacing=0.6)` in
+`difflow.units.distillation` hard-coded the vapor molecular weight (30 g/mol),
+the flow parameter, $C_{SB}$ and ignored `sigma` and `tray_spacing`; it is now a
+deprecated wrapper (`DeprecationWarning`) that calls `tray_column_diameter`
+and requires `MW_V`, `L` and `MW_L` as keywords and `sigma` positionally.
+
+(op-tray-hydraulics)=
+### Tray Hydraulics
+
+`tray_pressure_drop` is the standard textbook breakdown for a sieve tray,
+$\Delta P = \rho_L g\,(h_d + h_w + h_{ow} + h_r)$: the dry (orifice) head
+$h_d = \rho_V u_h^2 / (2 C_0^2 \rho_L g)$, the weir height plus the Francis
+crest $h_{ow} = (Q_L/(1.84\,l_w))^{2/3}$ (`weir_crest`), and a residual head
+$h_r = 12.5/\rho_L$ m (the constant is **from memory, unverified**; so is the
+orifice coefficient default $C_0 = 0.8$). `info` returns each head and the
+components in Pa, which sum to the total. `weep_point` returns the weeping
+margin $u_h/u_{min} - 1$ (> 0: no weeping) with the Eduljee-type
+$u_{min} = (K_2 - 0.90\,(25.4 - d_h[\text{mm}]))/\sqrt{\rho_V}$; the source reads
+$K_2$ from a chart, and here it is a constant (default 30, **from memory,
+unverified**, about 15 % on the turndown at which the margin changes sign).
+
+`fractional_entrainment` is a **placeholder, not a published fit**: Fair's
+entrainment chart could not be recalled, so it is
+$\psi = \psi_{ref}\,(\%\text{flood}/80)^{4}(F_{LV}/0.1)$ with the order of
+magnitude $\psi_{ref} = 0.01$ read from the chart; the three constants are
+arguments, expect a factor of 2-3, and replace them with a fit from Kister or
+Fair before a design depends on it (the usual limit is $\psi < 0.1$).
+
+```python
+from difflow.units.column_design import tray_column_diameter, tray_pressure_drop, weep_point
+
+col = dict(V_molar=100.0, MW_V=80.0, rho_V=2.9, L_molar=80.0, MW_L=85.0,
+           rho_L=790.0, sigma=0.021)
+D, info = tray_column_diameter(**col)
+Q_V, Q_L = float(info["Q_V"]), 80.0 * 85e-3 / 790.0       # m^3/s
+dP, h = tray_pressure_drop(Q_V, Q_L, 2.9, 790.0, D)
+print(f"dP/tray = {float(dP):.0f} Pa (dry {float(h['dP_dry']):.0f}, "
+      f"liquid {float(h['dP_liquid']):.0f}, residual {float(h['dP_residual']):.0f})")
+for turn in (1.0, 0.6, 0.4):
+    margin, w = weep_point(turn * Q_V, Q_L, 2.9, D)
+    print(f"{turn:.0%} of design vapor: weeping margin {float(margin):+.2f}")
+```
+
+(op-oconnell-efficiency)=
+### O'Connell Efficiency
+
+`oconnell_efficiency(alpha, mu_cP)` is $E_o = 0.492\,(\alpha\mu_L)^{-0.245}$
+clipped to [0.1, 1] (the fit quoted by Seader, Henley & Roper; **from memory,
+unverified**; it gives 0.492 at $\alpha\mu = 1$). It was promoted from the gas
+plant (which re-exports it, so `difflow_refinery.gasplant.oconnell_efficiency`
+is the same function; see [Refinery Unit Operations](unit-operations-refinery.md)).
+The hard clip has a zero gradient outside [0.1, 1]; `smooth=0.02` swaps in a
+softplus clip that stays differentiable. The number of actual trays is
+`size_column`'s `n_theoretical / efficiency`.
+
+(op-packed-column-flooding)=
+### Packed-Column Flooding and Pressure Drop
+
+`gpdc_flood(F_LV, F_p, rho_L, rho_V, mu_L)` is the gas mass flux at flood on
+the Eckert / generalized pressure-drop chart: abscissa
+$X = (L/G)\sqrt{\rho_V/(\rho_L-\rho_V)}$, ordinate
+$Y = G^2 F_p \mu_L^{0.2}/(\rho_V(\rho_L-\rho_V)g)$ ($F_p$ in 1/m, $\mu_L$ in cP
+inside the power), and the flood line
+$\ln Y = -3.5021 - 1.028\ln X - 0.11093(\ln X)^2$ (a literature fit recalled
+without its source: **from memory, unverified**; chart-reading accuracy,
+**about 10-20 %** on $G$). `kister_gill_flood_dp(F_p)` is the pressure drop at
+flood, $0.115\,F_p^{0.7}$ in H$_2$O/ft with $F_p$ in 1/ft (Kister & Gill, 1991;
+**from memory, unverified**), in Pa/m. `gpdc_pressure_drop` is **not a fit of
+the GPDC lines** (they could not be recalled): it anchors the flood value,
+$\Delta P = \Delta P_{flood}(Y/Y_{flood})^{n}$ at fixed $L/G$, with an assumed
+$n = 1.7$ chosen so that 70 % of flood gives about 30 % of the flood drop (the
+common 0.25-0.5 in H$_2$O/ft design rule); expect $\pm 30$-50 % away from flood.
+`packed_column_diameter(..., packing=, fraction_flood=0.7)` returns `(D, info)`
+with the flooding and operating velocities, the pressure drop per metre and the
+wetting rate against a minimum (2.2e-5 m$^2$/s, about 0.08 m$^3$/m/h; **from
+memory, unverified**). `hetp` has the rules of thumb $18\,d_p$ (random packing)
+and $100/a_p + 0.1$ m (structured), both **from memory, unverified**, and
+`method="htu"` for `hetp_from_htu` of the mass-transfer section. `size_column`
+turns stages, efficiency (or HETP), diameter and spacing into height, shell
+volume, tray area and tray count; `column_hardware_cost` feeds them to
+`column_cost`.
+
+```python
+import jax
+from difflow.mass_transfer import PACKINGS
+from difflow.units.column_design import (
+    packed_column_diameter, size_column, column_hardware_cost, hetp,
+)
+
+pk = PACKINGS["pall_metal_25"]       # packing factor from memory: check a data sheet
+air = dict(V_molar=100.0, MW_V=29.0, rho_V=1.2, L_molar=500.0, MW_L=18.0,
+           rho_L=1000.0, mu_L=1.0e-3)
+D, info = packed_column_diameter(**air, packing=pk, fraction_flood=0.7)
+print(f"D = {float(D):.2f} m, dP = {float(info['dP_per_m']):.0f} Pa/m "
+      f"(flood {float(info['dP_flood_per_m']):.0f}), wetting margin {float(info['wetting_margin']):+.2f}")
+
+def cost(ff):
+    D, _ = packed_column_diameter(**air, packing=pk, fraction_flood=ff)
+    sizing = size_column(10.0, 1.0, D, hetp=hetp("random", d_p=pk.d_p))
+    return column_hardware_cost(sizing, "packing_random")["total"]
+print(float(cost(0.7)), float(jax.grad(cost)(0.7)))
+```
+
+(op-packing-data)=
+### Packing Data
+
+The packing record is `difflow.mass_transfer.PackingData` (`d_p`, `a_p`, void
+fraction, critical surface tension, packing factor `F_p`) with the table
+`PACKINGS` shared with the Onda functions: ceramic Raschig and Berl 25 mm, Pall
+rings in metal (25, 38, 50 mm) and plastic (25 mm), ceramic Intalox saddles (25,
+38, 50 mm) and Mellapak 250Y (structured; `d_p = 0`, so the random-packing Onda
+functions do not apply to it). **Every value is from memory and unverified**
+(`PackingData.source` says so): packing factors after Treybal / Perry, areas
+after Billet and Schultes. Build your own `PackingData` from a vendor data sheet
+for a real design.
+
+---
 
 ## Summary Tables
 

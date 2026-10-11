@@ -8,6 +8,33 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **`difflow.units.column_design`: column hardware (#429).** New core library
+  module (no palette entry): `flow_parameter`, `fair_capacity_factor`,
+  `flooding_velocity`, `tray_column_diameter` (Fair flooding, `fraction_flood`,
+  downcomer fraction, optional foaming/hole-area multipliers, `(D, info)`),
+  `tray_percent_flood` (rating), `weir_crest` (Francis), `tray_pressure_drop`
+  (dry + liquid head + residual, components in `info`), `weep_point` (margin),
+  `fractional_entrainment`, `oconnell_efficiency` (promoted from the gas plant,
+  re-exported there; optional `smooth=` clip), `gpdc_flood`, `gpdc_pressure_drop`,
+  `kister_gill_flood_dp`, `packed_column_diameter` (flood, dP/m, wetting
+  margin), `hetp` (random, structured, from HTU), `size_column`,
+  `column_hardware_cost` (into `column_cost`). `PACKINGS` gained Intalox
+  ceramic 25/38/50, Pall metal 38 and Mellapak 250Y. Surface tension, viscosity
+  and densities are required arguments. **Every correlation constant is from
+  memory and unverified** (no book access): Fair's chart fit (Treybal form),
+  Francis crest, the 12.5 kg/m^2 residual head, the Eduljee weep constant
+  (`K2 = 30` fixed, the chart dependence is not reproduced), the Eckert
+  flood-line log-quadratic, Kister-Gill flood dP, the minimum wetting rate, the
+  HETP rules and the packing table; expect chart-reading accuracy (10-20 %).
+  **Two pieces are placeholders, not literature fits:** `fractional_entrainment`
+  (assumed shape, order of magnitude only) and the exponent of
+  `gpdc_pressure_drop` (anchored to the flood dP, exponent assumed). **No
+  published textbook worked example is reproduced**; tests use hand
+  calculations, independent re-implementations, scaling laws, margin sign
+  changes, `check_grads` and the DistillationColumn -> diameter -> size ->
+  cost chain differentiated in R. Docs: `## Column Hardware` in
+  `docs/unit-operations-chemical.md`; notebook `examples/53_column_hardware.ipynb`.
+
 - **`difflow.mass_transfer`: diffusivities, film theory, Sherwood, Onda, HTU/NTU
   (#427).** New core library module (no palette entry): `fuller_diffusivity`,
   `wilke_chang_diffusivity`, `stokes_einstein_diffusivity` (native-unit
@@ -123,6 +150,14 @@ All notable changes to difflow are recorded here. The format follows
   `EnthalpyCounterCurrentHX`.
 
 ### Breaking
+
+- **`column_diameter` is deprecated and its signature changed (#429).** The old
+  body ignored `sigma` and `tray_spacing`, hard-coded a vapor molecular weight
+  of 30 g/mol, `F_LV = 0.1` and `C_SB = 0.1`, and 80 % flood. It now emits a
+  `DeprecationWarning` and calls `tray_column_diameter`; `MW_V`, `L` and `MW_L`
+  are required keyword arguments and `sigma` is required (no `0.02` default).
+  Results change accordingly (they now respond to the molecular weight, the
+  surface tension and the spacing).
 
 - **Onda mass-transfer values corrected; `difflow_cc` functions deprecated
   (#427).** `difflow_cc.kinetics.liquid_film_coefficient` used
