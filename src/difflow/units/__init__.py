@@ -221,6 +221,9 @@ from difflow.units.eos_units import (
     JTValveParams,
     ComponentSeparator,
     ComponentSeparatorParams,
+    flash_PH_eos,
+    flash_PS_eos,
+    EOSUnitConvergenceWarning,
 )
 from difflow.units.gas_turbine import (
     Combustor,
@@ -448,6 +451,9 @@ __all__ = [
     "JTValveParams",
     "ComponentSeparator",
     "ComponentSeparatorParams",
+    "flash_PH_eos",
+    "flash_PS_eos",
+    "EOSUnitConvergenceWarning",
     # Combustion / gas-turbine units
     "Combustor",
     "CombustorParams",

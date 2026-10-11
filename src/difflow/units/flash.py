@@ -1196,6 +1196,17 @@ class PHFlash:
     - Pressure reduction
 
     All calculations are JAX-compatible for automatic differentiation.
+
+    Two thermodynamic paths:
+
+    - :class:`~difflow.thermo.IdealThermo`: ideal-K (Raoult) inner flash, the
+      inlet enthalpy taken as liquid, Newton on T (the original path).
+    - :class:`~difflow.thermo.CubicThermo`: a rigorous cubic-EOS PH flash
+      (:func:`difflow.units.eos_units.flash_PH_eos`). The inlet enthalpy is the
+      two-phase EOS enthalpy at the inlet (T, P); the outlet temperature comes
+      from a bracketed bisection on ``T_bounds`` (no guess, no wrong root); a
+      pure component inside its dome is returned at its saturation temperature
+      with the lever-rule vapour fraction. ``T_guess`` is ignored on this path.
     """
 
     symbol = "PH Flash"
@@ -1233,13 +1244,15 @@ class PHFlash:
         inlet: Stream,
         P: Array | float | None = None,
         T_guess: float = 300.0,
+        T_bounds: tuple[float, float] = (100.0, 1000.0),
     ) -> tuple[Stream, Stream, dict[str, Array]]:
         """Perform PH (isenthalpic) flash calculation.
 
         Args:
             inlet: Feed stream
             P: Flash pressure (Pa). If None, uses inlet P.
-            T_guess: Initial temperature guess (K)
+            T_guess: Initial temperature guess (K); ideal path only.
+            T_bounds: (T_min, T_max) bracket (K) of the cubic-EOS path.
 
         Returns:
             liquid: Liquid outlet stream
@@ -1250,6 +1263,10 @@ class PHFlash:
 
         # Use inlet P if not specified
         P_flash = jnp.asarray(P) if P is not None else inlet["P"]
+
+        from difflow.thermo import CubicThermo
+        if isinstance(self.thermo, CubicThermo):
+            return self._eos_ph_flash(inlet, P_flash, T_bounds)
 
         # Get feed flows and compute inlet enthalpy
         inlet_flows = get_flows(inlet)
@@ -1309,3 +1326,38 @@ class PHFlash:
         flash_info["converged"] = sol.result == optx.RESULTS.successful
 
         return liquid, vapor, flash_info
+
+    def _eos_ph_flash(self, inlet, P_flash, T_bounds):
+        """Cubic-EOS PH flash (``CubicThermo`` path of :meth:`__call__`)."""
+        from difflow.units.eos_units import flash_PH_eos, _warn_unconverged
+
+        order = list(self.thermo.eos.species_order)  # x, y come back in EOS order
+        inlet_flows = get_flows(inlet)
+        flows = {s: inlet_flows[s] for s in order}
+        T_in = inlet["T"]
+        H_inlet = self.thermo.stream_enthalpy_flash(flows, T_in, inlet["P"])
+        res = flash_PH_eos(self.thermo, flows, P_flash, H_inlet, T_bounds)
+
+        F_total = sum(flows[s] for s in order)
+        beta = res["vapor_fraction"]
+        x, y = res["x"], res["y"]
+        # A pure component (or any single-phase TP result at a jump) has x = y
+        # = z, so this split also covers the lever-rule case.
+        liquid = make_stream({s: F_total * (1.0 - beta) * x[i] for i, s in enumerate(order)},
+                             res["T"], P_flash)
+        vapor = make_stream({s: F_total * beta * y[i] for i, s in enumerate(order)},
+                            res["T"], P_flash)
+        info = {
+            "V_frac": beta,
+            "x": {s: x[i] for i, s in enumerate(order)},
+            "y": {s: y[i] for i, s in enumerate(order)},
+            "T_flash": res["T"],
+            "T_out": res["T"],
+            "H_inlet": H_inlet,
+            "T_inlet": T_in,
+            "P_flash": P_flash,
+            "residual": res["residual"],
+            "converged": res["converged"],
+        }
+        _warn_unconverged("PHFlash", info)
+        return liquid, vapor, info
