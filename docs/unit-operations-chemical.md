@@ -1380,6 +1380,120 @@ Pass `use_mesh=False` for the faster constant-molar-overflow solution, which
 skips the energy-balance correction to the internal flows but solves the same
 component material balances — see [Solver Paths](#solver-paths) above.
 
+### BatchDistillation
+
+A batch of `F` mol is charged to a still, boiled at a constant rate `V`, and
+the vapor passes through `N` equilibrium stages to a total condenser that
+returns reflux and draws distillate `D = V/(R+1)`. The model is quasi-steady
+(no stage or condenser holdup), constant molar overflow, binary. With the still
+holdup `W` and its key fraction `x_W`:
+
+$$
+\frac{dW}{dt} = -D, \qquad \frac{d(W x_W)}{dt} = -D\,x_D
+\quad\Longrightarrow\quad
+\ln\frac{F}{W} = \int_{x_W}^{x_F} \frac{dx}{x_D(x) - x}.
+$$
+
+For `N = 0` the still is in equilibrium with its distillate, `x_D = y*(x_W)`,
+and this is the **Rayleigh equation** `ln(F/W) = int dx/(y* - x)`; for constant
+relative volatility it has the closed form
+`ln(F/W) = [ln(x_F/x_W) + alpha ln((1-x_W)/(1-x_F))]/(alpha - 1)`.
+`difflow.units.batch_distillation.rayleigh` uses that form for
+`constant_alpha` and a 64-point Gauss-Legendre quadrature (in `ln x`, where the
+integrand stays smooth as `x_W -> 0`) for any other
+`difflow.staged.EquilibriumCurve`; give `W_over_F` or `x_W` and it solves for
+the other. Past an azeotrope the integral diverges: it returns `ln_F_over_W =
+inf` and `ok = False`, never NaN.
+
+With trays, `x_D(x_W)` is the McCabe-Thiele stage relation inverted: from
+`y_1 = x_D` step `x_n = x*(y_n)`, `y_{n+1} = [R x_n + x_D]/(R+1)` through the `N`
+trays, then the still, `x_W = x*(y_{N+1})`. A Murphree vapor efficiency
+(`stage_efficiency`) applies to the trays, not the still.
+
+* **`mode="constant_reflux"`** (`R`): `D` is constant, so `t = (F - W)(R+1)/V`, and
+  the distillate composition falls with time.
+* **`mode="constant_composition"`** (`x_D_spec`, `light_key`): `x_D` is fixed, so
+  `W/F = (x_D - x_F)/(x_D - x_W)` exactly; the reflux `R(x_W)` is found at each
+  still composition (a scalar root find with implicit gradients) and rises with
+  time; `t = (1/V) int (R+1) dW`, and `info["boilup_total"] = int V dt` is the
+  vapor generated.
+
+**Charge convention.** `charge` is a stream read as *moles* (`F_i` in mol, not
+mol/s), the initial contents of the still, as `FedBatchReactor` reads its initial
+state. The `still` and `distillate` outlets are final holdup and accumulated
+product in moles.
+
+**Stopping** is data, not control flow: `stop` is a dict with any of `"x_W"`
+(final still composition), `"x_D_avg"` (accumulated distillate purity),
+`"distillate"` (mol) and `"time"` (s) (`t_final=` is shorthand); the first one
+reached ends the batch. The stopping composition is a bisection followed by an
+implicit-function Newton step, so `jax.grad` of any result with respect to the
+spec, `R`, `boilup`, the charge or the efficiency follows
+`dt*/d theta = -(dg/d theta)/(dg/dt)`.
+
+```python
+import jax
+import jax.numpy as jnp
+from difflow.staged import constant_alpha
+from difflow.units.batch_distillation import (
+    BatchDistillation, BatchDistillationParams, rayleigh)
+
+curve = constant_alpha(2.5)                    # an illustration, not a published example
+r = rayleigh(curve, 0.5, W_over_F=0.4)         # simple batch distillation
+print(float(r["x_W"]), float(r["x_D_avg"]))
+
+def run(R, mode="constant_reflux"):
+    p = BatchDistillationParams(species_order=["a", "b"], n_stages=3, R=R,
+                                boilup=2.0, mode=mode, x_D_spec=0.9)
+    unit = BatchDistillation(p, curve=curve)
+    charge = {"F_a": 50.0, "F_b": 50.0, "T": 350.0, "P": 1e5}      # mol
+    return unit(charge, stop={"x_W": 0.2}, n_traj=11)
+
+still, distillate, info = run(3.0)
+print(float(info["t_batch"]), float(info["x_D_avg"]), float(info["recovery"]))
+# balances close: charge = still + distillate
+print(float(still["F_a"] + distillate["F_a"]))                      # 50.0
+
+# constant composition: x_D held at 0.9, reflux rises
+_, _, cc = run(1.0, "constant_composition")
+print(float(cc["x_D"][0]), float(cc["R"][0]), float(cc["R"][-1]))
+
+# design with gradients: d(recovery)/dR at fixed final still composition
+print(float(jax.grad(lambda R: run(R)[2]["recovery"])(3.0)))
+```
+
+For ethanol-water give `BatchDistillation(params, thermo, activity_model)` (NRTL).
+The distillate cannot pass the azeotrope: `info["x_azeotrope"]` reports it,
+`info["azeotrope_limited"]` is True when the distillate comes within 0.01 of it
+(or a constant-composition spec lies beyond it) and `info["feasible"]` is False
+when the operation cannot be carried out (a spec beyond the azeotrope or beyond
+what the stages reach, a charge on the far side of the azeotrope, the wrong key).
+The numbers stay finite; read the flags.
+
+`batch_cuts(unit, charge, cut_specs)` runs successive cuts, each charged with
+the previous still (heads, hearts, tails). Each cut is a stop dict, or
+`{"stop": {...}, "R": 6.0}` with per-cut parameter overrides (the reflux
+policy); it returns each cut's moles and key composition, the residue and a
+`balance` that is zero to round-off.
+`rayleigh_multicomponent(thermo, species, x_F, W_over_F, P)` integrates
+`dx_i/d ln W = y_i - x_i` with `y_i = K_i(T_b) x_i` by fixed RK4 steps.
+
+Assumptions: binary, total condenser, constant molar overflow, no stage or
+condenser holdup (`holdup` must be 0), the key must be the more volatile
+component. Not provided: multicomponent tray-to-tray columns, holdup
+dynamics, optimal reflux policies other than the two classic modes, inverted
+or middle-vessel columns.
+
+What was and was not verified: the constant-alpha closed form and
+`scipy.integrate.quad`; the quadrature path against the closed form to 1e-5; a
+separate NumPy/SciPy time integration of the batch balances (`solve_ivp`, tray
+march by `brentq`) for constant reflux with and without Murphree efficiency; the
+exact `W/F` and a NumPy quadrature of the time for constant composition; mass
+balances; `check_grads`. **No published textbook worked example (Geankoplis
+Sec. 11.3, McCabe-Smith-Harriott Ch. 21, Wankat Ch. 9) is reproduced**: the
+numbers could not be retrieved, so none is quoted. See
+`tests/test_batch_distillation.py`.
+
 ---
 
 ## Graphical Staged Design

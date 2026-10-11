@@ -58,6 +58,7 @@ CORE_CATEGORIES = {
     "fed_batch": "reactors",
     "flash": "separations",
     "distillation": "distillation",
+    "batch_distillation": "distillation",
     "heat_exchanger": "heat_transfer",
     "evaporator": "evaporation",
     "lle": "extraction",

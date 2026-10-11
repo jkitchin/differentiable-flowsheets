@@ -160,6 +160,11 @@ from difflow.units.lle import (
     minimum_solvent_ratio,
     stages_for_recovery,
 )
+from difflow.units.batch_distillation import (
+    BatchDistillation,
+    BatchDistillationParams,
+    batch_cuts,
+)
 from difflow.units.distillation import (
     ShortcutColumn,
     ShortcutColumnParams,
@@ -514,6 +519,9 @@ __all__ = [
     # Unit operations - Distillation
     "ShortcutColumn",
     "ShortcutColumnParams",
+    "BatchDistillation",
+    "BatchDistillationParams",
+    "batch_cuts",
     "DistillationColumn",
     "DistillationColumnParams",
     "fenske_stages",

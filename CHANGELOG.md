@@ -8,6 +8,29 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **`BatchDistillation`: Rayleigh, constant-reflux and constant-composition
+  batch distillation (#426).** New `difflow.units.batch_distillation`: a binary
+  batch rectifier (`n_stages` equilibrium stages above the still, total
+  condenser, constant boil-up, quasi-steady, no holdup) in constant-reflux and
+  constant-distillate-composition modes, built on `difflow.staged`'s
+  equilibrium curve and stage relation. The charge is a stream read as moles
+  (as `FedBatchReactor` reads its initial state). Stopping is data
+  (`stop={"x_W" | "x_D_avg" | "distillate" | "time": value}`, first reached
+  wins), solved by bisection plus an implicit-function Newton step so every
+  result is differentiable in `R`, `boilup`, the charge, the efficiency and
+  the spec. `info` carries trajectories (`t`, `W`, `x_W`, `x_D`, `R`,
+  `T_still`), accumulated distillate, batch time, `int V dt`, reboiler energy,
+  recovery and flags `feasible`, `azeotrope_limited`, `stop_reached` (no NaN
+  past an azeotrope). Library functions `rayleigh` (closed form for constant
+  alpha, quadrature otherwise, solves for `x_W` or `W/F`),
+  `rayleigh_multicomponent`, `equilibrium_curve` and `batch_cuts`
+  (heads/hearts/tails with per-cut reflux overrides). Registered in the
+  catalog (`distillation` category) and GUI palette (column symbol).
+  Validated against the Rayleigh closed form, `scipy` and an independent NumPy
+  time integration; **no published textbook example is reproduced** (the
+  issue's numbers are unverified recollections). Not implemented:
+  multicomponent tray-to-tray batch columns, holdup.
+
 - **`DistillationColumn`: partial condenser and Murphree vapour efficiency
   (#425).** `condenser_type="partial"` makes the condenser an equilibrium stage
   outside `n_stages` (vapour distillate `y_D = K(T_c) x_R` at its dew point,
