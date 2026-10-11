@@ -576,6 +576,34 @@ class TestPlanSensitivity:
         npt.assert_allclose(result.decisions, [2.0], atol=1e-4)
         sens = result.plan_sensitivity(wrt="prices")
         assert "c.load" in sens.active_constraints
+        # One more unit of load allows 1/3 more of `a`, worth 1/3.
+        npt.assert_allclose(abs(sens.multipliers["c.load"]), 1.0 / 3.0,
+                            rtol=1e-6)
+
+    @pytest.mark.parametrize("penalty", [10.0, 1e4])
+    def test_elastic_spec_exactly_at_its_bound_reports_its_shadow_price(
+            self, penalty):
+        # Regression (notebook 30, section 8): an elastic spec that the plan
+        # meets EXACTLY sits on the kink of its penalty, relu(v - rhs) at 0,
+        # where JAX's subgradient is 0.5.  Kept in the stationarity
+        # gradient, it leaked penalty/2 into the multiplier: 4999.64 $/h per
+        # K reported against a re-solved 0.35.  The shadow price must not
+        # depend on the elastic penalty at all.
+        blk = Block(name="c", fn=lambda u: jnp.array([u[0] - 0.05 * u[0] ** 2, u[0]]),
+                    u_names=["a"], y_names=["profit", "load"],
+                    lb=[0.0], ub=[10.0], u0=[1.0])
+        planner = DeltaBasePlanner(
+            Network([blk]), prices={"c.profit": 1.0},
+            specs=[Spec("c.load", "<=", 4.0, name="load", penalty=penalty)],
+            radius=0.5)
+        result = planner.solve()
+        load = float(result.state.values["c.load"])
+        assert load == 4.0, "the regression needs the spec met exactly"
+        sens = result.plan_sensitivity(wrt="prices")
+        assert sens.active_constraints == ["load"]
+        # d(a - a^2/20)/da at a = 4 is 0.6.
+        npt.assert_allclose(abs(sens.multipliers["load"]), 0.6, rtol=1e-6)
+        assert sens.stationarity_residual < 1e-9
 
     def test_price_switch_point_brackets_the_corner(self):
         def fn(u):

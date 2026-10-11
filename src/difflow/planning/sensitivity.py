@@ -255,21 +255,30 @@ def plan_sensitivity(result, wrt: str = "prices",
         values, prices = evaluate(u, tvec)
         return sum(prices[v] * values[v] for v in prices)
 
-    def phi(u, tvec):
-        values, prices = evaluate(u, tvec)
-        obj = sum(prices[v] * values[v] for v in prices)
-        pen = 0.0
-        for s in planner.specs:
-            p = planner.penalty if s.penalty is None else s.penalty
-            pen = pen + abs(float(p)) * _spec_violation(s, values)
-        return sign * obj - pen
-
     # -- active set ------------------------------------------------------
     values_star = result.state.values
     active = [s for s in planner.specs
               if abs(float(_spec_value(s, values_star)) - s.effective_rhs)
               <= active_tol * max(1.0, abs(s.effective_rhs))]
     active_names = [s.name for s in active]
+    active_ids = {id(s) for s in active}
+
+    def phi(u, tvec):
+        # The elastic penalty of an ACTIVE spec is left out: that spec is
+        # carried by its multiplier ``nu`` in ``h``.  Its penalty is a kink
+        # at the bound (``relu`` at zero), where AD returns a subgradient
+        # (JAX: 0.5) that would leak ``penalty/2`` into the multiplier
+        # instead of the constraint's shadow price.  Inactive specs keep
+        # theirs: strictly violated it is smooth, strictly satisfied it is 0.
+        values, prices = evaluate(u, tvec)
+        obj = sum(prices[v] * values[v] for v in prices)
+        pen = 0.0
+        for s in planner.specs:
+            if id(s) in active_ids:
+                continue
+            p = planner.penalty if s.penalty is None else s.penalty
+            pen = pen + abs(float(p)) * _spec_violation(s, values)
+        return sign * obj - pen
 
     lo, hi = network.decision_bounds()
     lo = np.asarray(lo, dtype=float)

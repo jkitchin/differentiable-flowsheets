@@ -831,6 +831,17 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Fixed
 
+- **`plan_sensitivity` reported half the elastic penalty as a shadow price.**
+  The stationarity gradient that the multipliers are solved from included
+  the elastic penalty of the active specs as well. When the plan meets a spec
+  exactly, that penalty sits on the kink of `relu(v - rhs)`. JAX's
+  subgradient there is 0.5, so `penalty/2` leaked into the multiplier.
+  Notebook 30, section 8, reported 4999.64 $/h per K on `T_colfeed`,
+  while a re-solve gave 0.35. The fix leaves the penalty of an active spec
+  out of the gradient, because its multiplier already carries it. Now the
+  multiplier is the constraint's shadow price (0.359 against a 0.1 K
+  re-solve of 0.358). Regression tests are in `tests/test_planning.py`
+  (`TestPlanSensitivity`).
 - `eos_bubble_P`/`eos_dew_P`/`_T` no longer flag a pure component (or a mixture with one species present) as
   `trivial` and warn: K = 1 is the answer there. Test `tests/test_bubble_dew.py`.
 - `CubicThermo` treats a species absent from a stream as zero flow, as
