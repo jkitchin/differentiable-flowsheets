@@ -8,6 +8,25 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **Unit-ops book Parts I-II gaps (issue 442).**
+  *Fixes.* `flash_TP_eos` labels a single cubic root by the Venkatarathnam-Oellrich phase identification
+  parameter (`phase_identification_parameter`, `eos_pressure_TV`) instead of calling it vapour: a C1/C3 liquid
+  (0.2/0.8, 277.6 K) above ~34 bar returned `V = 1`, and a dense supercritical fluid can now come back `V = 0`.
+  `eos_bubble_*`/`eos_dew_*` fall back to continuation (from 0.75 T or P/4) when no Wilson start converges
+  (90-95% CH4 in C3H8 at 200-215 K), differentiate only the final Newton solve, and are compiled once per EOS.
+  `CubicThermo.K_values_array`'s doctest runs. `lineax>=0.1.0` (0.0.8 broke implicit diffrax solvers under
+  current jax: the stiff Robertson example). EOS-unit compile time roughly halved.
+  *Fluids.* `PipeNetwork` (looped networks; Newton global-gradient or Hardy Cross), power-law and Bingham
+  friction (`power_law_friction_factor`, `bingham_friction_factor`, ...), `PipeParams.profile` for crest
+  cavitation, `pipe_cost_per_length`/`pipe_cost_nps`, `rotameter_flow`/`rotameter_height`.
+  *Compressible.* `MultistageCompressor` (EOS stages, intercooler dP), `compressible.stage_pressures`;
+  `difflow_gas` friction `"panhandle_a"`, `"panhandle_b"`, `"aga"`; `dense_gas_viscosity` (Jossi-Stiel-Thodos),
+  `dense_gas_conductivity` (Stiel-Thodos), `mixture_viscosity` (Wilke, Herning-Zipperer),
+  `mixture_conductivity` (Mason-Saxena), `gas_mixture_transport`.
+  *Particles.* Mori-Wen and Darton bubble sizes, `bubbling_bed_expansion`, `geldart_group(method="geldart1973")`,
+  `GasPFR` density from the inlet stream (`GasPFRDensityWarning`).
+  *Heat transfer.* `jacketed_vessel_h`, `agitated_coil_h`, `economic_insulation_thickness` and the insulation
+  cost functions, `TEMA_FOULING`, `tema_crude_oil_fouling`, `tema_water_fouling`.
 - **`OperatingPointWarning`.** `operating_point` warns on a concrete negative `Q*` (no forward-flow operating
   point, e.g. a valveless parallel pair with a weak pump running backwards) or an unconverged Newton solve; silent
   under `jit`/`grad`. `PipeCavitationWarning` is exported from `difflow`. Test `tests/test_pump.py`.
