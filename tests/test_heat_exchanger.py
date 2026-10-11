@@ -1209,7 +1209,7 @@ class TestPhaseChangeWarning:
     ])
     def test_condensing_pentane_warns(self, cls, params):
         hot, cold = self._pentane_vs_water()
-        with pytest.warns(PhaseChangeWarning, match=r"n_pentane \(boils at 320\.\d K at 1\.5 bar\)") as rec:
+        with pytest.warns(PhaseChangeWarning, match=r"n_pentane \(boils at 321\.\d K at 1\.5 bar\)") as rec:
             cls(params())(hot, cold)
         assert "EnthalpyCounterCurrentHX" in str(rec[0].message)
         assert "hot side" in str(rec[0].message)

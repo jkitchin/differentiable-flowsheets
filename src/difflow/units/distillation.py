@@ -1283,8 +1283,8 @@ class DistillationColumn(ValueKeyed):
                 :class:`~difflow.thermo.IdealThermo` gives Raoult K-values;
                 a :class:`~difflow.thermo.CubicThermo` gives EOS K-values
                 (``K_i = phi_i^L / phi_i^V``) and EOS enthalpies, which is what
-                a light-hydrocarbon column at pressure needs -- Raoult's law is
-                out by tens of degrees at the condenser there. The column code
+                a light-hydrocarbon column near its critical region needs,
+                where the vapor is far from ideal. The column code
                 is the same either way; the composition dependence of the EOS
                 K-values rides along inside the existing MESH iteration.
         """

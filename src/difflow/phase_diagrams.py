@@ -25,12 +25,15 @@ References
 
 from __future__ import annotations
 
+import warnings
+
 import jax
 import jax.numpy as jnp
 import optimistix as optx
 from jax import Array
 
 from difflow.activity import activity_gamma
+from difflow.thermo import BubbleDewConvergenceWarning, check_antoine_range
 
 
 
@@ -51,6 +54,29 @@ def _psat(thermo, species, T) -> Array:
     return jnp.stack([thermo.Psat(s, T) for s in species])
 
 
+def _warn_antoine(thermo, species, T, stacklevel: int = 4) -> None:
+    """One AntoineRangeWarning per species over the (concrete) range of ``T``."""
+    for s in species:
+        data = thermo.species.get(s) if hasattr(thermo, "species") else None
+        if data is not None and hasattr(data, "T_antoine_min"):
+            check_antoine_range(s, data, T, stacklevel=stacklevel)
+
+
+def _warn_unconverged(what: str, residual, value) -> None:
+    """Warn when a concrete solve left a residual or a non-finite value."""
+    import numpy as np
+    try:
+        r = np.asarray(residual, dtype=float)
+        v = np.asarray(value, dtype=float)
+    except Exception:  # traced: no diagnostic
+        return
+    rmax = float(np.max(np.abs(r))) if r.size else 0.0
+    if not (np.all(np.isfinite(v)) and rmax < 1e-6):  # NaN fails too
+        warnings.warn(f"{what} did not converge (residual {rmax:.3g}); the "
+                      f"returned value is unreliable", BubbleDewConvergenceWarning,
+                      stacklevel=4)
+
+
 def _ideal_bubble_T(thermo, species, x: Array, P: Array) -> Array:
     """Initial guess: mole-fraction weighted Antoine normal-boiling temperatures."""
     Ts = []
@@ -61,7 +87,7 @@ def _ideal_bubble_T(thermo, species, x: Array, P: Array) -> Array:
 
 
 def bubble_T(thermo, species, x: Array, P: Array | float,
-             activity_model=None) -> Array:
+             activity_model=None, T0: Array | float | None = None) -> Array:
     """Bubble-point temperature of liquid ``x`` at pressure ``P``.
 
     Solves ``ln(sum_i x_i gamma_i(x,T) Psat_i(T) / P) = 0`` by Newton's method
@@ -73,9 +99,16 @@ def bubble_T(thermo, species, x: Array, P: Array | float,
         x: Liquid mole fractions.
         P: Pressure (Pa).
         activity_model: Optional activity model (``gamma(x, T)`` protocol).
+        T0: Optional initial guess (K); default the x-weighted Antoine
+            boiling temperatures at ``P``.
 
     Returns:
         Bubble temperature (K).
+
+    Warns:
+        BubbleDewConvergenceWarning: concrete result whose residual did not
+            converge. AntoineRangeWarning: concrete result outside a species'
+            fitted Antoine range.
     """
     species = tuple(species)
     x = jnp.asarray(x, dtype=float)
@@ -85,10 +118,179 @@ def bubble_T(thermo, species, x: Array, P: Array | float,
         x_, P_ = args
         return jnp.log(jnp.sum(x_ * _gamma(activity_model, x_, T) * _psat(thermo, species, T)) / P_)
 
-    T0 = _ideal_bubble_T(thermo, species, x, P)
-    sol = optx.root_find(resid, optx.Newton(rtol=1e-10, atol=1e-10), T0,
-                         args=(x, P), max_steps=60, throw=False)
+    if T0 is None:
+        T0 = _ideal_bubble_T(thermo, species, x, P)
+    with warnings.catch_warnings():  # iterates may wander; warn on the answer
+        warnings.simplefilter("ignore")
+        sol = optx.root_find(resid, optx.Newton(rtol=1e-10, atol=1e-10),
+                             jnp.asarray(T0, dtype=float),
+                             args=(x, P), max_steps=60, throw=False)
+        r = resid(sol.value, (x, P))
+    _warn_unconverged("bubble_T", r, sol.value)
+    _warn_antoine(thermo, species, sol.value)
     return sol.value
+
+
+def bubble_P(thermo, species, x: Array, T: Array | float,
+             activity_model=None) -> Array:
+    """Bubble-point pressure ``sum_i x_i gamma_i(x,T) Psat_i(T)`` (Pa).
+
+    Explicit (no iteration): the modified Raoult's law at fixed liquid ``x``.
+
+    Args:
+        thermo: Thermo object with ``Psat``.
+        species: Species names in the order of ``x``.
+        x: Liquid mole fractions.
+        T: Temperature (K).
+        activity_model: Optional activity model; ``None`` means Raoult's law.
+
+    Returns:
+        Bubble pressure (Pa).
+
+    Example:
+        >>> from difflow import IdealThermo
+        >>> from difflow.database import get_species_data
+        >>> th = IdealThermo({s: get_species_data(s) for s in ("benzene", "toluene")})
+        >>> P = bubble_P(th, ("benzene", "toluene"), [0.5, 0.5], 360.0)
+        >>> 80e3 < float(P) < 100e3
+        True
+    """
+    species = tuple(species)
+    x = jnp.asarray(x, dtype=float)
+    T = jnp.asarray(T, dtype=float)
+    return jnp.sum(x * _gamma(activity_model, x, T) * _psat(thermo, species, T))
+
+
+def _dew_solve(thermo, species, y, T, P, activity_model, unknown: str, T0=None):
+    """Newton solve of the dew condition for ``x`` and the unknown T or ln P.
+
+    Unknowns ``u = [x_1..x_n, s]`` with ``s = T`` (``unknown="T"``) or
+    ``s = ln P`` (``unknown="P"``); residuals
+    ``x_i gamma_i(x,T) Psat_i(T) / P - y_i`` and ``sum(x) - 1``.
+    """
+    n = len(species)
+
+    def unpack(u, args):
+        y_, T_, P_ = args
+        if unknown == "T":
+            return u[:n], u[n], P_
+        return u[:n], T_, jnp.exp(u[n])
+
+    def resid(u, args):
+        y_ = args[0]
+        xx, TT, PP = unpack(u, args)
+        r = xx * _gamma(activity_model, xx, TT) * _psat(thermo, species, TT) / PP - y_
+        return jnp.concatenate([r, jnp.atleast_1d(jnp.sum(xx) - 1.0)])
+
+    # Raoult start (gamma = 1): dew P (or T) and the matching x.
+    if unknown == "T":
+        def r_ideal(Tv, args):
+            y_, P_ = args
+            return jnp.log(P_ * jnp.sum(y_ / _psat(thermo, species, Tv)))
+        Tstart = (_ideal_bubble_T(thermo, species, y, P) if T0 is None
+                  else jnp.asarray(T0, dtype=float))
+        Tg = optx.root_find(r_ideal, optx.Newton(rtol=1e-10, atol=1e-10),
+                            Tstart, args=(y, P),
+                            max_steps=60, throw=False).value
+        Pg = P
+        s0 = Tg
+    else:
+        Tg = T
+        Pg = 1.0 / jnp.sum(y / _psat(thermo, species, T))
+        s0 = jnp.log(Pg)
+    x0 = y * Pg / _psat(thermo, species, Tg)
+    x0 = x0 / jnp.sum(x0)
+    if activity_model is not None:
+        # a few modified-Raoult substitutions bring x near the answer
+        def sub(c, _):
+            xx, s = c
+            TT = s if unknown == "T" else T
+            g = _gamma(activity_model, xx, TT)
+            ps = _psat(thermo, species, TT)
+            if unknown == "T":
+                Pd = P
+                ratio = Pd * jnp.sum(y / (g * ps))
+                s = s * (1.0 + 0.05 * jnp.tanh(jnp.log(ratio)))  # warm T
+            else:
+                Pd = 1.0 / jnp.sum(y / (g * ps))
+                s = jnp.log(Pd)
+            xn = y * Pd / (g * ps)
+            return (xn / jnp.sum(xn), s), None
+        (x0, s0), _ = jax.lax.scan(sub, (x0, s0), None, length=30)
+    u0 = jax.lax.stop_gradient(jnp.concatenate([x0, jnp.atleast_1d(s0)]))
+    args = (y, T, P)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        sol = optx.root_find(resid, optx.Newton(rtol=1e-10, atol=1e-10), u0,
+                             args=args, max_steps=60, throw=False)
+        r = resid(sol.value, args)
+    xx, TT, PP = unpack(sol.value, args)
+    return xx, TT, PP, r
+
+
+def dew_P(thermo, species, y: Array, T: Array | float,
+          activity_model=None) -> Array:
+    """Dew-point pressure of vapor ``y`` at temperature ``T`` (Pa).
+
+    With an activity model the dew liquid ``x`` and ``P`` solve
+    ``x_i gamma_i(x,T) Psat_i(T) = y_i P`` with ``sum x = 1`` (Newton,
+    implicit differentiation); without one it is Raoult's
+    ``1/sum(y_i/Psat_i)``.
+
+    Args:
+        thermo: Thermo object with ``Psat``.
+        species: Species names in the order of ``y``.
+        y: Vapor mole fractions.
+        T: Temperature (K).
+        activity_model: Optional activity model.
+
+    Returns:
+        Dew pressure (Pa).
+    """
+    species = tuple(species)
+    y = jnp.asarray(y, dtype=float)
+    T = jnp.asarray(T, dtype=float)
+    if activity_model is None:
+        return 1.0 / jnp.sum(y / _psat(thermo, species, T))
+    _, _, P, r = _dew_solve(thermo, species, y, T, None, activity_model, "P")
+    _warn_unconverged("dew_P", r, P)
+    return P
+
+
+def dew_T(thermo, species, y: Array, P: Array | float,
+          activity_model=None, T0: Array | float | None = None) -> Array:
+    """Dew-point temperature of vapor ``y`` at pressure ``P`` (K).
+
+    Solves ``x_i gamma_i(x,T) Psat_i(T) = y_i P``, ``sum x = 1`` for ``x``
+    and ``T`` (Newton, implicit differentiation; ``gamma = 1`` without an
+    activity model).
+
+    Args:
+        thermo: Thermo object with ``Psat``.
+        species: Species names in the order of ``y``.
+        y: Vapor mole fractions.
+        P: Pressure (Pa).
+        activity_model: Optional activity model.
+        T0: Optional initial guess (K) for the Raoult start.
+
+    Returns:
+        Dew temperature (K).
+
+    Example:
+        >>> from difflow import IdealThermo
+        >>> from difflow.database import get_species_data
+        >>> sp = ("benzene", "toluene")
+        >>> th = IdealThermo({s: get_species_data(s) for s in sp})
+        >>> float(dew_T(th, sp, [0.5, 0.5], 101325.0)) > float(bubble_T(th, sp, [0.5, 0.5], 101325.0))
+        True
+    """
+    species = tuple(species)
+    y = jnp.asarray(y, dtype=float)
+    P = jnp.asarray(P, dtype=float)
+    _, T, _, r = _dew_solve(thermo, species, y, None, P, activity_model, "T", T0)
+    _warn_unconverged("dew_T", r, T)
+    _warn_antoine(thermo, species, T)
+    return T
 
 
 def txy(thermo, species, P: Array | float, n: int = 51,
@@ -118,6 +320,7 @@ def txy(thermo, species, P: Array | float, n: int = 51,
         return T, y[0]
 
     T, y1 = jax.vmap(point)(X)
+    _warn_antoine(thermo, species, T)  # once per species, concrete T only
     return {"x": x1, "y": y1, "T": T, "P": P, "species": species}
 
 
@@ -140,7 +343,10 @@ def pxy(thermo, species, T: Array | float, n: int = 51,
     T = jnp.asarray(T, dtype=float)
     x1 = jnp.linspace(0.0, 1.0, n)
     X = jnp.stack([x1, 1.0 - x1], axis=1)
-    ps = _psat(thermo, species, T)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ps = _psat(thermo, species, T)
+    _warn_antoine(thermo, species, T)
 
     def point(xv):
         pi = xv * _gamma(activity_model, xv, T) * ps

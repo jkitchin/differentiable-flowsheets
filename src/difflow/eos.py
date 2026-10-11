@@ -1407,3 +1407,240 @@ def flash_TP_eos(
     y = jnp.where(two_phase, y_tp, z)
 
     return V, x, y
+
+
+# =============================================================================
+# Bubble and dew points with a cubic EOS
+# =============================================================================
+
+def _eos_saturation(eos, z, T, P, k_ij, kind: str, unknown: str, guess=None,
+                    n_sub: int = 100) -> dict:
+    """Bubble/dew T or P of a cubic EOS (phi-phi), differentiable.
+
+    ``kind`` is ``"bubble"`` (``z`` is the liquid, the incipient phase is
+    vapor ``y = K z``) or ``"dew"`` (``z`` is the vapor, incipient liquid
+    ``x = z / K``); ``unknown`` is ``"P"`` or ``"T"``. The unknowns
+    ``u = [ln K_1..ln K_n, ln s]`` (``s`` = P or T) solve
+
+    - ``ln K_i + ln phi_i^V(y) - ln phi_i^L(x) = 0``
+    - ``ln sum(K z) = 0`` (bubble) or ``ln sum(z / K) = 0`` (dew)
+
+    by Newton's method (optimistix, implicit differentiation), started from
+    Wilson K-values and ``n_sub`` successive-substitution steps (stopped
+    gradient: only the converged root carries derivatives).
+    """
+    from difflow.thermo import BubbleDewConvergenceWarning
+    import warnings
+    import numpy as np
+
+    z = jnp.asarray(z, dtype=float)
+    z = z / jnp.sum(z)
+    n = z.shape[0]
+    p = eos.params
+    a_w = 5.373 * (1.0 + p.omega) * p.Tc  # -d ln K_wilson / d(1/T)
+    bubble = kind == "bubble"
+    sgn = 1.0 if bubble else -1.0
+
+    def phases(lnK):
+        K = jnp.exp(lnK)
+        if bubble:
+            S = jnp.sum(K * z)
+            return z, K * z / S, S
+        S = jnp.sum(z / K)
+        return (z / K) / S, z, S
+
+    def TP(ls, args):
+        T_, P_ = args
+        return (jnp.exp(ls), P_) if unknown == "T" else (T_, jnp.exp(ls))
+
+    def resid(u, args):
+        lnK, ls = u[:n], u[n]
+        T_, P_ = TP(ls, args)
+        x, y, S = phases(lnK)
+        lnphiL = safe_log(eos.fugacity_coefficient(T_, P_, x, "liquid", k_ij))
+        lnphiV = safe_log(eos.fugacity_coefficient(T_, P_, y, "vapor", k_ij))
+        return jnp.concatenate([lnK + lnphiV - lnphiL, jnp.atleast_1d(jnp.log(S))])
+
+    args = (None if T is None else jnp.asarray(T, dtype=float),
+            None if P is None else jnp.asarray(P, dtype=float))
+
+    def s_step(ls, lnK, lnS, damp=1.0):
+        # Newton-like update of ln P (K ~ 1/P) or of 1/T (Wilson slope).
+        lnS = damp * jnp.clip(lnS, -0.5, 0.5)
+        if unknown == "P":
+            return ls + sgn * lnS
+        x, y, _ = phases(lnK)
+        w = y if bubble else x
+        invT = jnp.exp(-ls) + sgn * lnS / jnp.sum(w * a_w)
+        return -jnp.log(jnp.maximum(invT, 1e-6))
+
+    # 1) Wilson K-values and a consistent unknown.
+    if guess is not None:
+        ls0 = jnp.log(jnp.asarray(guess, dtype=float))
+    elif unknown == "P":
+        Kw1 = _wilson_k_values(args[0], 1.0, p.Tc, p.Pc, p.omega)  # K * P
+        ls0 = jnp.log(jnp.sum(Kw1 * z)) if bubble else -jnp.log(jnp.sum(z / Kw1))
+    else:
+        ls0 = jnp.log(jnp.sum(z * p.Tc) * 0.7)
+
+    def lnK_wilson(ls):
+        T_, P_ = TP(ls, args)
+        return jnp.log(_wilson_k_values(T_, P_, p.Tc, p.Pc, p.omega))
+
+    if unknown == "T" and guess is None:
+        def wstep(ls, _):
+            lnK = lnK_wilson(ls)
+            S = phases(lnK)[2]
+            return s_step(ls, lnK, jnp.log(S)), None
+        ls0, _ = lax.scan(wstep, ls0, None, length=60)
+
+    # 2) Successive substitution on K with phi, safeguarded against the
+    #    trivial root: an iterate whose K-values collapse towards 1 (or go
+    #    non-finite) is rejected; the unknown moves back halfway to the last
+    #    good point, the K-values are restored, and the step is damped.
+    def sstep(c, _):
+        lnK, ls, lnK_g, ls_g, damp = c
+        T_, P_ = TP(ls, args)
+        x, y, _S = phases(lnK)
+        lnK_new = (safe_log(eos.fugacity_coefficient(T_, P_, x, "liquid", k_ij))
+                   - safe_log(eos.fugacity_coefficient(T_, P_, y, "vapor", k_ij)))
+        S = phases(lnK_new)[2]
+        bad = (~jnp.all(jnp.isfinite(lnK_new)) | ~jnp.isfinite(S)
+               | (jnp.max(jnp.abs(lnK_new)) < 0.02))
+        lnK_new = jnp.where(jnp.all(jnp.isfinite(lnK_new)), lnK_new, lnK_g)
+        ls_ok = s_step(ls, lnK_new, jnp.log(jnp.where(jnp.isfinite(S), S, 1.0)), damp)
+        return (jnp.where(bad, lnK_g, lnK_new),
+                jnp.where(bad, 0.5 * (ls + ls_g), ls_ok),
+                jnp.where(bad, lnK_g, lnK_new),
+                jnp.where(bad, ls_g, ls),
+                jnp.where(bad, 0.5 * damp, jnp.minimum(1.0, 1.25 * damp))), None
+
+    def attempt(ls_start):
+        lnKw = lnK_wilson(ls_start)
+        (lnK0, ls1, _, _, _), _ = lax.scan(
+            sstep, (lnKw, ls_start, lnKw, ls_start, jnp.asarray(1.0)), None,
+            length=n_sub)
+        u0 = lax.stop_gradient(jnp.concatenate([lnK0, jnp.atleast_1d(ls1)]))
+        # 3) Newton with implicit differentiation.
+        sol = optx.root_find(resid, optx.Newton(rtol=1e-10, atol=1e-10), u0,
+                             args=args, max_steps=60, throw=False)
+        # A Newton step that left the domain (e.g. no saturation point: above
+        # the mixture critical region) falls back to the substitution iterate,
+        # so the flags below describe where the iteration actually went.
+        u_ = jnp.where(jnp.all(jnp.isfinite(sol.value)), sol.value, u0)
+        r_ = resid(u_, args)
+        ok = (jnp.all(jnp.isfinite(u_)) & (jnp.max(jnp.abs(r_)) < 1e-8)
+              & (jnp.max(jnp.abs(u_[:n])) >= 1e-3))
+        return u_, ok
+
+    if guess is not None:
+        u, _ = attempt(ls0)
+    else:
+        # Start on the far side of the trivial root: a pressure well below
+        # (or a temperature 5% below) the Wilson estimate, where the two phases
+        # are distinct. Approached from above, substitution slides onto
+        # K = 1 near the critical region (e.g. CH4/C3H8 at 300 K). Near the
+        # critical region no one start serves every mixture (a C7/C8 liquid
+        # at 20 bar needs a start closer to Wilson), so a few are tried and
+        # the first converged, non-trivial root is kept; derivatives flow
+        # through the selected root only.
+        offsets = (0.25, 0.1, 0.5, 1.0) if unknown == "P" else (0.95, 0.9, 1.0, 0.85)
+        us, oks = zip(*[attempt(ls0 + jnp.log(f)) for f in offsets])
+        oks = jnp.stack(oks)
+        pick = jnp.where(jnp.any(oks), jnp.argmax(oks), 0)
+        u = jnp.stack(us)[pick]
+    lnK, ls = u[:n], u[n]
+    T_out, P_out = TP(ls, args)
+    x, y, _ = phases(lnK)
+    r = resid(u, args)
+    converged = jnp.all(jnp.isfinite(u)) & (jnp.max(jnp.abs(r)) < 1e-8)
+    trivial = jnp.max(jnp.abs(lnK)) < 1e-3
+    out = {"T": jnp.asarray(T_out), "P": jnp.asarray(P_out), "K": jnp.exp(lnK),
+           "x": x, "y": y, "converged": converged, "trivial": trivial}
+
+    try:  # concrete-only diagnostics
+        conv_c, triv_c = bool(np.asarray(converged)), bool(np.asarray(trivial))
+    except Exception:
+        return out
+    name = f"eos_{kind}_{unknown}"
+    if triv_c:
+        warnings.warn(f"{name} converged to the trivial solution (all K = 1): "
+                      "the state is near or beyond the mixture critical point, "
+                      "or the guess was poor", BubbleDewConvergenceWarning,
+                      stacklevel=3)
+    elif not conv_c:
+        warnings.warn(f"{name} did not converge (residual "
+                      f"{float(np.max(np.abs(np.asarray(r)))):.3g})",
+                      BubbleDewConvergenceWarning, stacklevel=3)
+    return out
+
+
+def eos_bubble_P(eos: "PengRobinson | SRK", x: Array, T: Array | float,
+                 k_ij: Array | None = None,
+                 P_guess: Array | float | None = None) -> dict:
+    """Bubble-point pressure of liquid ``x`` at ``T`` with a cubic EOS.
+
+    Solves the phi-phi equilibrium ``y_i phi_i^V = x_i phi_i^L`` with
+    ``sum y = 1`` (Newton from Wilson K-values and successive substitution;
+    implicit differentiation, so ``jax.grad`` through the result is exact).
+
+    Args:
+        eos: ``PengRobinson`` or ``SRK``.
+        x: Liquid mole fractions (in ``eos.species_order``).
+        T: Temperature (K).
+        k_ij: Binary interaction parameters (default: the EOS's own).
+        P_guess: Optional initial pressure (Pa).
+
+    Returns:
+        dict with ``P`` (Pa), ``T``, ``y`` (incipient vapor), ``x``, ``K``,
+        ``converged`` and ``trivial`` (bool arrays). ``trivial`` is True when
+        the iteration collapsed onto ``K = 1`` (``y = x``), which happens near
+        or above the mixture critical point; the ``P`` is then meaningless.
+
+    Warns:
+        BubbleDewConvergenceWarning: concrete result that is unconverged or
+            trivial.
+
+    Example:
+        >>> from difflow import PengRobinson
+        >>> from difflow.database import get_critical_props
+        >>> eos = PengRobinson({s: get_critical_props(s) for s in ("methane", "propane")})
+        >>> r = eos_bubble_P(eos, [0.2, 0.8], 277.6)
+        >>> 30e5 < float(r["P"]) < 37e5 and bool(r["converged"])
+        True
+    """
+    return _eos_saturation(eos, x, T, None, k_ij, "bubble", "P", P_guess)
+
+
+def eos_dew_P(eos: "PengRobinson | SRK", y: Array, T: Array | float,
+              k_ij: Array | None = None,
+              P_guess: Array | float | None = None) -> dict:
+    """Dew-point pressure of vapor ``y`` at ``T`` with a cubic EOS.
+
+    As :func:`eos_bubble_P` with the roles swapped: solves for ``P`` and the
+    incipient liquid ``x`` (``sum x = 1``). Returns the same dict (``x`` is
+    the dew liquid). Mixtures above their cricondentherm have no dew point
+    and come back ``trivial`` or unconverged.
+    """
+    return _eos_saturation(eos, y, T, None, k_ij, "dew", "P", P_guess)
+
+
+def eos_bubble_T(eos: "PengRobinson | SRK", x: Array, P: Array | float,
+                 k_ij: Array | None = None,
+                 T_guess: Array | float | None = None) -> dict:
+    """Bubble-point temperature of liquid ``x`` at ``P`` with a cubic EOS.
+
+    As :func:`eos_bubble_P` with ``T`` the unknown (the start is the Wilson
+    bubble temperature). Returns the same dict.
+    """
+    return _eos_saturation(eos, x, None, P, k_ij, "bubble", "T", T_guess)
+
+
+def eos_dew_T(eos: "PengRobinson | SRK", y: Array, P: Array | float,
+              k_ij: Array | None = None,
+              T_guess: Array | float | None = None) -> dict:
+    """Dew-point temperature of vapor ``y`` at ``P`` with a cubic EOS.
+
+    As :func:`eos_dew_P` with ``T`` the unknown. Returns the same dict.
+    """
+    return _eos_saturation(eos, y, None, P, k_ij, "dew", "T", T_guess)

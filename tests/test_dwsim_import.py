@@ -165,7 +165,7 @@ def test_dwsim_names_resolve_aliases_and_database_names():
     assert dwsim_name("h2s") == "Hydrogen sulfide"
     assert dwsim_name("isooctane") == "2,2,4-trimethylpentane"
     assert dwsim_name("MCP") == "Methylcyclopentane"
-    known = set(list_species())
+    known = set(list_species("any"))
     assert set(DWSIM_NAMES) <= known, sorted(set(DWSIM_NAMES) - known)
     with pytest.raises(KeyError, match="DWSIM_NAMES"):
         dwsim_name("unobtainium")

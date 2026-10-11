@@ -274,14 +274,19 @@ class TestPhaseBoundary:
         codes = classify_phase(np.array([-0.1, 0.0, 0.4, 1.0, 1.2]), (0.0, 1.0))
         npt.assert_array_equal(codes, [0, 0, 1, 1, 2])
 
+    # The cold-box gas (75 % methane) bubbles at ~196 K at 40 bar on Raoult's
+    # law (198.5 K on Peng-Robinson), below the block's 218-244 K design
+    # envelope: inside the envelope it is two-phase throughout. These points
+    # straddle the real bubble point, which earlier tests put at ~224-240 K
+    # only because the old methane Antoine constants were ~2.3x too low.
     def test_crossing_raises_the_warning(self):
         blk = chain_mod.ngl_block()
-        lin = linearize_block(blk, jnp.array([0.7, 224.0, 0.4, 4.0e6]))
+        lin = linearize_block(blk, jnp.array([0.7, 190.0, 0.4, 4.0e6]))
         assert int(np.asarray(lin.phase_code)[0]) == 0  # subcooled liquid
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
             messages = check_phase_transition(
-                blk, lin, jnp.array([0.7, 240.0, 0.4, 4.0e6]))
+                blk, lin, jnp.array([0.7, 205.0, 0.4, 4.0e6]))
         assert len(messages) == 1
         assert any(w.category is PhaseBoundaryWarning for w in caught)
         assert "phase boundary" in messages[0]
@@ -295,7 +300,9 @@ class TestPhaseBoundary:
     def test_phase_boundary_warning_from_planner(self):
         """Acceptance criterion 4, through the planner's own machinery."""
         blk = chain_mod.ngl_block()
-        blk.u0 = jnp.array([0.7, 222.0, 0.4, 4.0e6])
+        # Open the cold-box envelope down past the bubble point (see above).
+        blk.lb = blk.lb.at[1].set(185.0)
+        blk.u0 = jnp.array([0.7, 190.0, 0.4, 4.0e6])
         net = Network([blk])
         # Refrigeration is a cost, so the LP wants a warmer cold box — which
         # walks the block out of the subcooled branch it was linearised on.
@@ -304,7 +311,7 @@ class TestPhaseBoundary:
             vertex_seeding=False)
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter("always")
-            result = planner.solve(u0=jnp.array([0.7, 222.0, 0.4, 4.0e6]))
+            result = planner.solve(u0=jnp.array([0.7, 190.0, 0.4, 4.0e6]))
         assert any(w.category is PhaseBoundaryWarning for w in caught)
         assert result.phase_warnings
 

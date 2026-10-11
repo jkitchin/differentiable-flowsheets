@@ -745,7 +745,22 @@ print(f"Vapor fraction: {info['V_frac']:.3f}")
 
 #### Bubble and Dew Point Methods
 
-The `Flash` class provides methods for calculating phase boundaries:
+The `Flash` class provides methods for calculating phase boundaries. They use
+the flash's own thermodynamics:
+
+- With an `eos`: [`eos_bubble_P`, `eos_dew_P`, `eos_bubble_T` and
+  `eos_dew_T`](thermodynamics.md#eos-bubble-dew).
+- With an `activity_model`: the modified Raoult's law,
+  $y_i P = x_i\gamma_i P_i^{sat}$, through `difflow.phase_diagrams`
+  (`bubble_P`, `dew_P`, `bubble_T`, `dew_T`).
+- Otherwise: Raoult's law.
+
+The temperature solves are Newton with implicit differentiation, started from
+the composition-weighted Antoine (or Wilson) estimate. `T_guess` is optional.
+The results are not clipped. A concrete solve that fails (or an EOS solve that
+lands on the trivial $K=1$ root near the critical point) raises a
+`BubbleDewConvergenceWarning`. A temperature outside a species' fitted Antoine
+range raises an `AntoineRangeWarning`.
 
 ```python
 flash = Flash(FlashParams(species_order=['n_pentane', 'n_heptane']), thermo_lh)
@@ -1350,10 +1365,13 @@ feed = make_stream(
 distillate, bottoms, info = column(feed, R=2.0, B_spec=40.0)
 ```
 
-Use the EOS for light hydrocarbons at pressure. Raoult's law fails there in a
-one-sided way: a C3-C8 cut at 10 bar puts its heavy end within a degree of the
-EOS answer and its light end tens of degrees off, so an ideal-K column looks
-plausible at the reboiler and is wrong at the condenser.
+Use the EOS for light hydrocarbons at pressure. At moderate pressure Raoult's
+law with accurate vapor pressures is close: for this C3-C8 cut at 10 bar the
+Raoult and Peng-Robinson bubble points agree to about 1.4 K at the light end
+and 0.7 K at the heavy end. The gap grows as the stages approach the critical
+region, where the vapor is far from ideal and the Antoine fits are extrapolated
+past their ranges (which raises `AntoineRangeWarning`); there only the EOS
+K-values are meaningful.
 
 Two things about the EOS path are worth knowing:
 

@@ -1,6 +1,6 @@
 """Liquid density, viscosity and thermal conductivity, differentiable in JAX.
 
-Every built-in species (``difflow.database.list_species()``) has one
+Every built-in species (``difflow.database.list_species("any")``) has one
 correlation for each property. The coefficients come from published tables
 (VDI Heat Atlas PPDS sets and Perry's 8th edition, as tabulated by the
 `chemicals` package), from estimates built on data difflow already stores,

@@ -65,8 +65,8 @@ def _native(name, prop, T):
 
 class TestCoverage:
     def test_every_database_species_has_all_three(self):
-        assert list_liquid_species() == list_species()
-        for name in list_species():
+        assert list_liquid_species() == list_species("any")
+        for name in list_species("any"):
             data = get_liquid_properties(name)
             for prop in PROPS:
                 c = getattr(data, prop)
