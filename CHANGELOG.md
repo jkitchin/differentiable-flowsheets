@@ -8,7 +8,6 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
-<<<<<<< HEAD
 - **`OperatingPointWarning`.** `operating_point` warns on a concrete negative `Q*` (no forward-flow operating
   point, e.g. a valveless parallel pair with a weak pump running backwards) or an unconverged Newton solve; silent
   under `jit`/`grad`. `PipeCavitationWarning` is exported from `difflow`. Test `tests/test_pump.py`.
@@ -35,7 +34,6 @@ All notable changes to difflow are recorded here. The format follows
   default_fraction=0.0)` (ideal per-species split, returns `(first, second, info)`), both palette operations.
   `Flowsheet.degrees_of_freedom()` returns a `DegreesOfFreedom` (variables, specified feeds, unit and recycle
   equations, unit parameters, unknowns, `problems`; zero for a well-posed flowsheet).
-=======
 - **Thermo gaps from the textbook's Ch. 2.** EOS saturation points
   `eos_bubble_P(eos, x, T, k_ij=None, P_guess=None)`, `eos_dew_P(eos, y, T, ...)`,
   `eos_bubble_T(eos, x, P, k_ij=None, T_guess=None)` and `eos_dew_T(eos, y, P, ...)`
@@ -54,7 +52,6 @@ All notable changes to difflow are recorded here. The format follows
   ideal-thermo species), `list_species(kind="ideal"|"critical"|"any")` and
   `IdealThermo.vaporization_T`. Tests: `tests/test_antoine_database.py`,
   `tests/test_bubble_dew.py`.
->>>>>>> gaps-thermo
 
 - **Shell-and-tube gaps (#435).** (1) `ShellAndTubeDesignParams.shell_h` callables now receive the wall state of the
   current `U` iterate (`q_flux`, `T_wall`, `dT_film`, `T_shell`, `T_tube`, `area_total`, besides the geometry keys),
