@@ -670,10 +670,34 @@ tangent to 0.5 s and the dense 31-tangent Jacobian from 28 s to 1.7 s. If a unit
 of yours has an inner solve of its own, give it a `custom_jvp` with the implicit
 rule for the same reason. A matrix-free GMRES in the implicit rule was tried
 and was no faster (it needs about 13 applications to reach 1e-10 on this
-Jacobian). Compile time of the differentiated function stays minutes, not
-seconds; `jax.config.update("jax_compilation_cache_dir", ...)` removes it on
-the second process. Reverse mode through a unit that uses `diffrax.ForwardMode` is unavailable
+Jacobian). Compile time of the differentiated function stays minutes on a cold process
+(see the opt-in cache below). Reverse mode through a unit that uses `diffrax.ForwardMode` is unavailable
 whatever the solver.
+
+#### Cutting the cold compile with a persistent cache (opt-in)
+
+A differentiated reformer compiles for about four minutes on a cold process
+(`jit` about one minute), almost all of it XLA. JAX can keep the compiled
+programs on disk, so a second process pays only tracing. difflow does not turn
+this on; add the lines below before the first solve:
+
+<!-- doc-test: skip: sets process-wide JAX config and a cache directory -->
+```python
+import jax
+
+jax.config.update("jax_compilation_cache_dir", "/path/to/jax-cache")   # you choose where
+jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)     # cache the big programs too
+jax.config.update("jax_persistent_cache_min_entry_size_bytes", 0)
+```
+
+The cache is a plain directory (14 MB for the reformer's `jit` and `jacfwd`
+programs). It is keyed on the compiled program, and a closure-captured feed or
+parameter set is part of that program: the same flowsheet at a different
+`u` hits, a different feed or parameter set compiles once and is then cached
+too. Measured on the reformer, a second process took `jit` compile+first from
+52-64 s to 6-9 s and `jacfwd` compile+first from 223-251 s to 56-74 s; the
+remainder is tracing, which the cache cannot skip. Delete the directory to
+invalidate it; a JAX or jaxlib upgrade makes new keys by itself.
 
 The same rule explains a related gotcha: never record a solve diagnostic with a
 bare `float()` in code that may be traced. `flowsheet._concrete()` returns

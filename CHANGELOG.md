@@ -867,7 +867,17 @@ All notable changes to difflow are recorded here. The format follows
   matrix-free GMRES in the implicit rule (warm 51.9, compile 457.6; the tear Jacobian needs about 13 Krylov steps
   for 1e-10), and a `fori_loop` Newton (no compile gain, slower warm). **Still slow:** compile of the differentiated
   reformer is 4 minutes (primal map 28 s, tangent 60 s, vmapped Jacobian 75 s, plus the loop); a persistent JAX
-  compilation cache is the remedy for repeat processes.
+  compilation cache (opt-in, config lines in `docs/convergence.md`; nothing is enabled by default) removes most of
+  it for a repeat process. Measured, three separate processes with a warm cache against two cold ones, same machine
+  (shared with another job, so noisy): `jit` compile+first 63.5 and 51.6 s cold, 6.0, 7.4 and 8.9 s cached; `jacfwd`
+  compile+first 223.4 and 249.5 s cold (250.9 in an earlier uncached run), 56.0, 61.9 and 73.5 s cached; building the
+  planning block 54.4 and 46.4 s cold, 21.5-24.1 s cached; warm evaluations and the Jacobian values unchanged; cache
+  directory 14 MB. A different feed misses once (54.7 s against 57.1 s with no cache), then hits (14.6 s), and the
+  cached program returns the eager answer to 1e-11. Looked at and not kept, because they do not pay: per-unit XLA compile
+  of the primal map is 3 x 5.5 s for the identical beds and 12.3 s for the (core) compressor's EOS solves, out of 25 s of
+  XLA; lowering to HLO and tracing are 7 s; `XLA_FLAGS=--xla_backend_optimization_level` 0 or 1 does not change compile
+  time (31.5 and 30.5 s against 33.0 s); a `fori_loop` bed Newton cuts the primal compile 32 to 25 s but makes every pass
+  about 20% slower.
 
 - **`plan_sensitivity` reported half the elastic penalty as a shadow price.**
   The stationarity gradient that the multipliers are solved from included
