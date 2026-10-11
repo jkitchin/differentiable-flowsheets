@@ -112,6 +112,20 @@ export const SYMBOLS = {
     ],
   },
 
+  /** A counterflow cooling tower: louvred box, wet fill, fan stack above. */
+  cooling_tower: {
+    label: 'cooling tower',
+    shapes: [
+      ['path', { d: 'M12 36l3-22h18l3 22z' }],
+      ['rect', { x: 15, y: 19, width: 18, height: 10, ...WASH }],
+      ['path', { d: 'M17 22l14 4M31 22l-14 4', fill: 'none' }],
+      ['rect', { x: 18, y: 8, width: 12, height: 6, rx: 1 }],
+      ['line', { x1: 20, y1: 11, x2: 28, y2: 11 }],
+      ['line', { x1: 24, y1: 3, x2: 24, y2: 8 }],
+      ['line', { x1: 8, y1: 36, x2: 40, y2: 36 }],
+    ],
+  },
+
   /** Heat in: the exchanger circle with the arrow pointing at it. */
   heater: {
     label: 'heater',
@@ -454,6 +468,9 @@ export const OPERATION_SYMBOLS = {
   Evaporator: 'evaporator',
   MultiEffectEvaporator: 'evaporator',
   MechanicalVaporRecompression: 'evaporator',
+
+  // humidification
+  CoolingTower: 'cooling_tower',
 
   // pressure
   EOSCompressor: 'compressor',

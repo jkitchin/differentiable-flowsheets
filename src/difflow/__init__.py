@@ -180,6 +180,12 @@ from difflow.units.absorption import (
     minimum_stripping_gas_rate,
     solute_free_operating_line,
 )
+from difflow.units.cooling_tower import (
+    CoolingTower,
+    CoolingTowerParams,
+    maximum_L_over_G,
+    merkel_number,
+)
 from difflow.units.batch_distillation import (
     BatchDistillation,
     BatchDistillationParams,
@@ -553,6 +559,11 @@ __all__ = [
     "minimum_solvent_rate",
     "minimum_stripping_gas_rate",
     "solute_free_operating_line",
+    # Unit operations - Humidification and cooling towers
+    "CoolingTower",
+    "CoolingTowerParams",
+    "maximum_L_over_G",
+    "merkel_number",
     # Unit operations - Distillation
     "ShortcutColumn",
     "ShortcutColumnParams",

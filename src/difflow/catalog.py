@@ -62,6 +62,7 @@ CORE_CATEGORIES = {
     "batch_distillation": "distillation",
     "heat_exchanger": "heat_transfer",
     "evaporator": "evaporation",
+    "cooling_tower": "heat_transfer",
     "lle": "extraction",
     "leaching": "extraction",
     "eos_units": "pressure_change",

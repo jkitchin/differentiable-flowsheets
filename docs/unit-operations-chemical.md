@@ -4499,6 +4499,319 @@ for a real design.
 
 ---
 
+## Humidification and Cooling Towers
+
+Two things live here: `difflow.psychrometrics`, a differentiable humid-air
+property library, and the `CoolingTower` palette unit, a counterflow tower
+designed and rated with the Merkel equation. The water correlations they share
+(saturation pressure over liquid and ice, latent heat, liquid enthalpy) are in
+`difflow.water`; `difflow.units.evaporator` re-exports its old names.
+
+### Psychrometrics
+
+**Location**: `difflow/psychrometrics.py` (pure JAX, SI; a library, so nothing
+is registered in the palette). `T` is in K, `P` in Pa, enthalpy in J per kg of
+**dry air**, the humidity ratio `W` in kg water per kg dry air, the specific
+volume in m$^3$ per kg dry air.
+
+**Model.** An ideal-gas mixture of dry air and water vapor with the ASHRAE
+*Fundamentals* (Ch. 1) constants:
+
+$$W = 0.621945\,\frac{p_w}{P - p_w},\qquad
+h = c_{pa}\,t + W\,(h_{fg0} + c_{pv}\,t),\qquad
+v = \frac{R_{da} T}{P}\Big(1 + \frac{W}{0.621945}\Big),$$
+
+with $c_{pa} = 1006$, $c_{pv} = 1860$ J/kg/K, $h_{fg0} = 2501$ kJ/kg and $t$ in
+degrees C. The saturation pressure is IAPWS-IF97 over liquid water above the
+triple point and the IAPWS-2008 sublimation formula over ice below it, joined
+by a C2 blend over $\pm 0.25$ K (no Python `if` on a traced temperature).
+**No enhancement factor** is applied, so $W_s$ sits 0.3-0.5 % below the
+real-gas ASHRAE table at 1 atm (the pressure `P` is an argument of every
+function that needs it).
+
+**Pick any two properties.** `state` fixes a state point from any two
+independent properties of `T` (dry bulb), `W`, `RH`, `T_wb`, `T_dp` and `h`
+(`W` with `T_dp` is not independent and is refused) and returns all of them,
+plus `v`, `p_w`, `W_sat` and the degree of saturation `mu`:
+
+```python
+import jax
+from difflow.psychrometrics import state
+
+s = state(T=303.15, RH=0.5)                       # 30 C, 50 % RH
+print(f"W = {float(s['W']) * 1e3:.2f} g/kg   h = {float(s['h']) / 1e3:.1f} kJ/kg")
+print(f"dew point = {float(s['T_dp']) - 273.15:.1f} C   wet bulb = {float(s['T_wb']) - 273.15:.1f} C")
+
+back = state(T_wb=s["T_wb"], h=s["h"])            # the same point from a different pair
+print(f"round trip: T = {float(back['T']) - 273.15:.3f} C, RH = {float(back['RH']):.3f}")
+
+# everything is differentiable, through the wet-bulb root find as well
+dTwb_dRH = jax.grad(lambda rh: state(T=303.15, RH=rh)["T_wb"])(0.5)
+print(f"dT_wb/dRH = {float(dTwb_dRH):.2f} K per unit RH")
+```
+
+The individual functions are `humidity_ratio(p_w, P)`,
+`humidity_ratio_from_rh`, `rh_from_humidity_ratio`,
+`saturation_humidity_ratio(T, P)`, `dew_point(W, P)`, `humid_enthalpy(T, W)`,
+`humid_heat(W)`, `humid_volume(T, W, P)`, `saturation_enthalpy(T, P)`,
+`wet_bulb_temperature(T, W, P, lewis=1.0)` and
+`adiabatic_saturation_temperature(T, W, P)`.
+
+**Wet bulb vs. adiabatic saturation (the Lewis relation).** The adiabatic
+saturation temperature $T^*$ is the exact enthalpy balance
+$h(T, W) = h_s(T^*) - (W_s^* - W)\,h_\ell(T^*)$. The psychrometer wet bulb is
+the transfer balance
+$\mathrm{Le}_f\,(c_{pa} + W c_{pv})(T - T^*) = (W_s^* - W)\,h_{fg}(T^*)$, where
+`lewis` is the Lewis *factor* $\mathrm{Le}_f = h_c/(k_y c_s)$. At
+$\mathrm{Le}_f = 1$ the two are the same number for this ideal-gas model, and
+`lewis` above (below) 1 moves the wet bulb toward (away from) the dry bulb:
+
+```python
+from difflow.psychrometrics import (state, wet_bulb_temperature,
+                                    adiabatic_saturation_temperature)
+
+s = state(T=308.15, RH=0.30)
+T, W = s["T"], s["W"]
+print(f"adiabatic saturation {float(adiabatic_saturation_temperature(T, W)) - 273.15:.3f} C")
+for le in (0.8, 1.0, 1.2):
+    print(f"wet bulb, Le_f = {le}: {float(wet_bulb_temperature(T, W, lewis=le)) - 273.15:.3f} C")
+```
+
+Below the triple point the wick carries ice: the saturation pressure is the ice
+curve and the latent heat includes the heat of fusion (333.5 kJ/kg, recalled).
+
+**Processes.** `mix_air(states, dry_air_flows)` conserves dry air, water and
+enthalpy exactly (and reports `mu > 1` when the mixture fogs);
+`sensible_heat(state, Q, m_dry_air)`; `cool_dehumidify(state, T_coil,
+bypass_factor)` for a coil with an apparatus dew point (it returns the leaving
+state and the sensible, latent and total duty and the condensate);
+`adiabatic_humidify(state, effectiveness=, W_out=)`. A cold-room chain
+(cool and dehumidify, then reheat):
+
+```python
+from difflow.psychrometrics import state, cool_dehumidify, sensible_heat
+
+warm = state(T=303.15, RH=0.6)                          # 30 C, 60 % RH, 1 kg/s dry air
+cold, coil = cool_dehumidify(warm, T_coil=283.15, bypass_factor=0.1)
+final = sensible_heat(cold, Q=3.0e3, m_dry_air=1.0)     # 3 kW of reheat
+print(f"coil leaves {float(cold['T']) - 273.15:.1f} C at {float(cold['RH']):.0%} RH; "
+      f"duty {float(coil['Q_total']) / 1e3:.1f} kW, latent share {float(coil['Q_latent'] / coil['Q_total']):.0%}")
+print(f"reheated to {float(final['T']) - 273.15:.1f} C at {float(final['RH']):.0%} RH "
+      f"(condensate {float(coil['condensate']) * 1e3:.2f} g/kg)")
+```
+
+**The air stream convention.** Humid air flows through a flowsheet as an
+ordinary stream with two species, `H2O` (vapor) and `air` (dry air as a single
+pseudo-species, molar mass 28.966 g/mol): `{"F_H2O", "F_air", "T", "P"}` in
+mol/s, K and Pa. `air_stream_from_state(state, m_dry_air)` builds one from a
+state and a dry-air mass flow (kg/s); `state_from_air_stream(stream)` reads the
+state back; `dry_air_flow(stream)` is the dry-air mass flow. Every non-`H2O`
+species counts as dry air, so an `N2`/`O2` stream also works, and a stream with
+no dry air gives `W = 0`, not NaN. Use `species_order=["H2O", "air"]` for a
+flowsheet that carries them.
+
+```python
+from difflow.psychrometrics import (state, air_stream_from_state,
+                                    state_from_air_stream, dry_air_flow)
+
+air = air_stream_from_state(state(T=305.0, RH=0.45), m_dry_air=12.5)
+print({k: round(float(v), 3) for k, v in air.items()})
+print(f"{float(dry_air_flow(air)):.2f} kg/s dry air, "
+      f"T_wb = {float(state_from_air_stream(air)['T_wb']) - 273.15:.2f} C")
+```
+
+**The chart.** `psychrometric_chart_data(T_range, P, rh_lines, wb_lines,
+h_lines, v_lines)` returns each family as NumPy lines (`W` against `T`, NaN
+outside the physical region) and
+`difflow.visualization.plot_psychrometric_chart(data, processes=[...])` draws
+them with matplotlib (optional), overlaying process lines with arrows.
+Relative humidity is solid, wet bulb dashed, enthalpy dash-dot and volume
+dotted, so the families differ by line style as well as colour.
+
+<!-- doc-test: skip: draws a figure; the data call it uses is run just above and in the tests -->
+```python
+import matplotlib.pyplot as plt
+from difflow.psychrometrics import (state, cool_dehumidify, sensible_heat,
+                                    psychrometric_chart_data)
+from difflow.visualization import plot_psychrometric_chart
+
+warm = state(T=303.15, RH=0.6)
+cold, _ = cool_dehumidify(warm, 283.15, 0.1)
+ax = plot_psychrometric_chart(
+    psychrometric_chart_data(T_range=(258.15, 313.15)),
+    processes=[{"states": [warm, cold, sensible_heat(cold, 3e3)], "label": "cold room"}])
+plt.show()
+```
+
+```python
+from difflow.psychrometrics import psychrometric_chart_data
+
+d = psychrometric_chart_data()
+print({k: len(d[k]) for k in ("rh", "wb", "h", "v")})
+```
+
+**What was and was not verified.** There is no humid-air table in the
+repository and the textbook examples named in the issue could not be checked,
+so nothing here is a transcribed table value. The tests compare against an
+independent NumPy implementation of the Hyland-Wexler saturation pressure and
+the ASHRAE formulas (constants recalled, flagged in the test), round trips for
+every pair of inputs, the Lewis identity, mixing and coil energy balances,
+`jax.test_util.check_grads` of $W$, $h$, $T_{wb}$ and $T_{dp}$ with respect to
+$T$, RH and $P$, and a few familiar state points (30 C / 50 % RH has a dew
+point of 18.4 C and a wet bulb of 22.0 C). Saturated-air $W_s$ at 0, 20 and
+30 C is compared with ASHRAE values recalled from memory at **1 %**, not the
+0.5 % the issue asked for: this module has no enhancement factor, and a
+0.5 % comparison needs the transcribed table. The ice-line coefficients and the
+heat of fusion are recalled and flagged as such.
+
+(op-coolingtower)=
+### CoolingTower
+
+**Location**: `difflow/units/cooling_tower.py`
+
+**Class**: `CoolingTower`
+
+**Description**: Counterflow cooling tower sized or rated with the Merkel equation.
+
+#### Process Role
+
+Hot process water is cooled by air in a packed fill, mostly by evaporating a
+percent or two of it. The tower has two inlets, `water_in` and (optionally)
+`air_in`, and two outlets, `water_out` and `air_out`. Merkel combined the
+sensible and latent transfer into one enthalpy driving force:
+
+$$\frac{K a V}{L} = \int_{T_{out}}^{T_{in}} \frac{c_{pw}\,dT}{h_s(T) - h_a(T)},
+\qquad h_a(T) = h_{a,in} + \frac{L}{G}\,c_{pw}\,(T - T_{out}),$$
+
+where $h_s$ is the enthalpy of air saturated at the water temperature. $KaV/L$
+(dimensionless) is the size of the fill. `mode="design"` takes the outlet
+water temperature (`T_out`, or an `approach` above the wet bulb) and computes
+$KaV/L$; `mode="rating"` takes $KaV/L$ (directly, as `Ka` and `V`, or from the
+fill characteristic $C\,(L/G)^{-n}$) and finds `T_out` by a bisection that
+differentiates by the implicit function theorem. Without an air stream the
+unit takes `L_over_G` and the wet bulb `T_wb` (a call argument) and assumes the
+inlet air is saturated at the wet bulb, as the textbook examples do; with one
+it reads `L/G` from the two flows and the inlet enthalpy and wet bulb from the
+state.
+
+`quadrature="cti"` (the default) is the Cooling Technology Institute
+four-point method: the integrand $1/(h_s - h_a)$ is averaged at 10, 40, 60 and
+90 % of the range and multiplied by $c_{pw}(T_{in} - T_{out})$.
+`quadrature="gauss"` is Gauss-Legendre with `n_quad` points, better when the
+approach is close. The air leaves saturated (Merkel's assumption), which gives
+the evaporation $E = G(W_{out} - W_{in})$; the make-up is
+$E + D + B = E\,C/(C-1)$ for the drift $D$ (`drift_fraction`) and blowdown $B$
+at `cycles_of_concentration` $C$.
+
+**Feasibility.** If $L/G$ is too high for the approach the operating line
+touches the saturation curve and $h_s - h_a \to 0$: the integral is infinite.
+The unit checks the driving force on a 65-point grid and returns
+`KaV_L = inf` with `info["feasible"] = False`, never a negative or NaN number;
+all other outputs and the gradients stay finite. `info["L_over_G_max"]` is the
+pinch limit (also `maximum_L_over_G`).
+
+```python
+import numpy as np
+from difflow import CoolingTower, CoolingTowerParams, make_stream
+from difflow.psychrometrics import MW_WATER
+
+K = 273.15
+L = 10e6 / (4186.0 * 8.0)                                  # 10 MW at a range of 8 K: 298.5 kg/s
+hot = make_stream({"H2O": L / MW_WATER}, 35.0 + K, 3e5)
+
+for lg in (0.8, 1.0, 1.2, 1.4):
+    tower = CoolingTower(CoolingTowerParams(mode="design", L_over_G=lg, T_out=27.0 + K))
+    cold, air_out, info = tower(hot, T_wb=22.0 + K)
+    print(f"L/G = {lg}: KaV/L = {float(info['KaV_L']):.3f}  (pinch limit L/G = {float(info['L_over_G_max']):.2f})")
+
+print(f"approach {float(info['approach']):.1f} K, effectiveness {float(info['effectiveness']):.2f}, "
+      f"evaporation {float(info['evaporation']):.2f} kg/s ({float(info['evaporation_fraction']):.2%}), "
+      f"make-up {float(info['makeup']):.2f} kg/s")
+```
+
+The example values at $L/G$ = 0.8, 1.0, 1.2 and 1.4 (1.24, 1.39, 1.59, 1.89) are
+the issue's own illustration (ideal-gas humid air, IAPWS saturation pressure,
+air saturated at 22 C, trapezoid rule), **not** published numbers; the tests
+reproduce them to 1 % and against an independent NumPy trapezoid integration of
+the same $h_s$ to $10^{-4}$.
+
+Rating the same tower on a hot day, and the approach-versus-size trade-off
+(the gradient of the fill volume with respect to the approach):
+
+```python
+import jax
+from difflow import CoolingTower, CoolingTowerParams, make_stream
+from difflow.psychrometrics import MW_WATER
+
+K = 273.15
+L = 10e6 / (4186.0 * 8.0)
+hot = make_stream({"H2O": L / MW_WATER}, 35.0 + K, 3e5)
+
+# a fixed tower (KaV/L = 1.6 at L/G = 1.2) on a 22 C and on a 26 C wet-bulb day
+rate = CoolingTower(CoolingTowerParams(mode="rating", L_over_G=1.2, KaV_L=1.6))
+for twb in (22.0, 26.0):
+    _, _, info = rate(hot, T_wb=twb + K)
+    print(f"wet bulb {twb} C -> cold water {float(info['T_out']) - K:.2f} C")
+
+# fill volume V = (KaV/L) L / Ka for a tighter approach
+def volume(approach):
+    t = CoolingTower(CoolingTowerParams(mode="design", L_over_G=1.2, approach=approach, Ka=1.0))
+    return t(hot, T_wb=22.0 + K)[2]["V"]
+
+print(f"dV/d(approach) at 5 K = {float(jax.grad(volume)(5.0)):.0f} m^3/K")
+```
+
+#### Parameters
+
+<!-- doc-test: skip: field listing (a class sketch), not an executable example -->
+```python
+@dataclass
+class CoolingTowerParams:
+    mode: str = "design"          # | "rating"
+    L_over_G: float = None        # water/dry-air mass ratio (without an air stream)
+    KaV_L: float = None           # Merkel number (rating)
+    Ka: float = None              # kg/(m^3 s), with V: KaV/L = Ka V / L (rating)
+    V: float = None               # fill volume (m^3)
+    fill_characteristic: list = None   # [C, n]: KaV/L = C (L/G)^-n (rating)
+    T_out: float = None           # cold-water temperature (K) (design)
+    approach: float = None        # T_out - T_wb (K) (design)
+    P: float = 101325.0           # Pa
+    quadrature: str = "cti"       # | "gauss"
+    n_quad: int = 8               # Gauss points
+    drift_fraction: float = 0.0002
+    cycles_of_concentration: float = 4.0
+    cp_water: float = 4186.0      # J/kg/K
+    makeup_in_outlet: bool = True # outlet flow = inlet flow (basin after make-up)
+```
+
+#### Equations and Assumptions
+
+- Merkel (1925): Lewis factor of 1, the air leaves saturated, the evaporated
+  water is neglected in the air enthalpy balance (a 1-2 % effect that the
+  Poppe method removes; Poppe and the e-NTU model are not included).
+- Constant water specific heat and constant $L/G$ through the fill;
+  ideal-gas humid air (`difflow.psychrometrics`).
+- No fan, fill or spray pressure drop; the cold-water outlet is at the tower
+  pressure (the basin), which is what closes a pumped loop.
+- The evaporation fraction comes out near the rule of thumb
+  $0.00085 \times 1.8 \times$ range (unverified, from recollection; the test
+  only checks it to 30 %).
+
+#### A cooling-water loop
+
+A closed loop conserves its flow, so a recycle through `CoolingTower`,
+`CentrifugalPump` and `CounterCurrentHX` needs something that sets the
+circulation rate, as a level controller does on a real basin: the tower with
+`makeup_in_outlet=False` returns the cold water short by the evaporation and
+drift and a make-up unit tops it up. The converged loop is in
+`tests/test_cooling_tower.py::TestCoolingWaterLoop` (it converges, closes the
+exchanger/tower energy balance, and differentiates through the recycle with
+respect to the fill size). Use `species_order=["H2O"]` for a water-only loop.
+
+**Gradients.** Everything is differentiable: $KaV/L$ with respect to $L/G$,
+$T_{in}$, $T_{out}$ and the wet bulb, rating `T_out` with respect to $KaV/L$,
+the pinch limit with respect to the wet bulb, and the whole recycle loop.
+
 ## Summary Tables
 
 ### Reactor Comparison

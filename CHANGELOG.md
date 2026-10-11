@@ -8,6 +8,36 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **`difflow.psychrometrics`, `difflow.water` and the `CoolingTower` unit (#431).**
+  `difflow.psychrometrics` (library): ideal-gas humid air with the ASHRAE constants,
+  `state(T=, W=, RH=, T_wb=, T_dp=, h=, P=)` from any two independent properties (closed form
+  where one exists, one implicit Newton solve for `RH`-`T_wb`, `RH`-`h`, `T_wb`-`h`),
+  `humidity_ratio`, `saturation_humidity_ratio`, `dew_point`, `humid_enthalpy`, `humid_heat`,
+  `humid_volume`, `wet_bulb_temperature(lewis=)`, `adiabatic_saturation_temperature`, processes
+  (`mix_air`, `sensible_heat`, `cool_dehumidify`, `adiabatic_humidify`), the flowsheet air stream
+  convention (`H2O` + `air` species; `air_stream_from_state`, `state_from_air_stream`,
+  `dry_air_flow`) and `psychrometric_chart_data` with
+  `difflow.visualization.plot_psychrometric_chart`. Saturation is over liquid above and over ice
+  below the triple point, with a C2 blend; no enhancement factor is applied (`W_s` is 0.3-0.5 %
+  below the real-gas ASHRAE table). `CoolingTower` (category `heat_transfer`, GUI symbol
+  `cooling_tower`): counterflow Merkel tower in rating and design modes, CTI four-point or
+  Gauss-Legendre quadrature, fill characteristic, evaporation / drift / blowdown / make-up,
+  pinch detection (`feasible=False`, `KaV_L = inf`, no NaNs; `maximum_L_over_G`), implicit
+  gradients. The wex18-1 Merkel numbers of the issue (1.24, 1.39, 1.59, 1.89) are reproduced
+  to 1 %; they are the issue's own illustration, not published values. **Unverified:** no
+  ASHRAE table or textbook example could be transcribed; saturated-air values and the ice-line
+  coefficients, the heat of fusion and the 2500.9 kJ/kg triple-point latent heat are recalled
+  (see the test docstrings). Docs: `Humidification and Cooling Towers` in
+  `docs/unit-operations-chemical.md`; example notebook
+  `examples/55_psychrometrics_cooling_tower.ipynb`.
+  **Behaviour change:** the water correlations (`water_saturation_pressure`,
+  `water_saturation_temperature`, `water_latent_heat`, `water_liquid_enthalpy`,
+  `water_vapor_enthalpy`) moved to the new `difflow.water` and are re-exported from
+  `difflow.units.evaporator` (old imports unchanged, values unchanged at 20-200 C). Below 20 C
+  `water_latent_heat` and `water_liquid_enthalpy` now include a smooth correction that restores
+  the triple-point values (2500.9 kJ/kg and 0; the raw fit was 0.3 % low and -0.19 kJ/kg
+  there); below 0 C they remain extrapolations.
+
 - **Partially miscible extraction: `ternary_lle_flash` and `CascadeParams(model="rigorous")` (#430, part 3).**
   `difflow.units.lle.ternary_lle_flash(lle_model, z, T, guess=None, pair=(0, 1))`: a
   differentiable two-liquid-phase flash for any number of species (Rachford-Rice in the phase
