@@ -3991,20 +3991,23 @@ Temperature and molar flows pass through unchanged.
 |-----------|------|---------|
 | `L` | m | straight pipe length |
 | `D` | m | inside diameter |
-| `rho` | kg/m³ | liquid density: a number or a callable of the inlet stream |
-| `mu` | Pa s | liquid viscosity: a number or a callable of the inlet stream |
+| `rho` | kg/m³ | liquid density: a number, a callable of the inlet stream, or `None` (default: `difflow.liquid_properties` at the inlet T and composition) |
+| `mu` | Pa s | liquid viscosity: a number, a callable of the inlet stream, or `None` (default, as for `rho`) |
 | `roughness` | m | absolute roughness, default 4.6e-5 (commercial steel) |
 | `dz` | m | elevation gain, positive uphill |
-| `fittings` | – | `{name: count}` using the K table below, or a total K |
+| `fittings` | – | `{name: count}` using the K table below, plus an optional `"K"` entry for a numeric extra K (a strainer, a meter); or a total K |
+| `flow_area` | m² | flow cross-section for a non-circular duct; then `D` is the hydraulic diameter 4A/P. Default `None`: πD²/4 |
+| `P_vap` | Pa | vapour pressure for the cavitation check. Default `None`: Raoult's law over the inlet species with data (IAPWS for water, the database Antoine otherwise) |
 | `friction_method` | – | `"colebrook"` (default), `"churchill"`, `"haaland"`, `"swamee_jain"` |
 | `MW` | g/mol | molar mass (number or `{species: MW}`) to turn molar into mass flow; omit if a `thermo` is passed |
 
-**Design decision: liquid properties are explicit.** Core `SpeciesData` has no
-liquid density or viscosity, so `rho` and `mu` are *inputs*, as numbers or as
-callables of the stream (for example a correlation in `T`). Putting
-Rackett/DIPPR-105 density and Andrade/DIPPR-101 viscosity into `SpeciesData`
-(with mixing rules) would also serve heat-transfer correlations and pump models
-and is left to a separate issue.
+**Liquid properties.** `rho` and `mu` may be numbers, callables of the stream,
+or `None` (the default). With `None` the pipe reads
+[`difflow.liquid_properties`](thermodynamics.md#liquid-properties) at the inlet
+temperature and composition, which needs a stream and a database species with
+liquid data (`hydraulics_at_flow` without an `inlet` then raises `ValueError`).
+Pass numbers to reproduce a textbook calculation that uses tabulated
+properties.
 
 ```python
 import jax
@@ -4027,8 +4030,39 @@ jax.grad(dP)(0.0525)                   # d(dP)/dD, Pa/m: economic diameter optim
 ```
 
 `info` carries `Q`, `v`, `Re`, `f`, `K_total`, `dP_friction`, `dP_minor`,
-`dP_static`, `dP` (the sum) and `head_loss` (friction plus minor loss, m of
-fluid). `Pipe.eo_residuals` gives `n_species + 2` rows (flows, temperature and
+`dP_static`, `dP` (the sum), `head_loss` (friction plus minor loss, m of
+fluid), `P_vap` (NaN if unknown) and `P_out_below_vapour`.
+
+**Cavitation check.** The pipe is an incompressible model, so an uphill run can
+give an outlet pressure below the vapour pressure, or below zero, without
+complaint from the algebra. `info["P_out_below_vapour"]` flags it (P_out <
+P_vap, or P_out < 0 when no vapour pressure is known), and for concrete values
+the pipe raises `PipeCavitationWarning`. Under `jit`/`grad` only the flag is
+set; the warning never fires on a tracer. Water at 20 °C pumped 40 m uphill
+through 100 m of 2-in pipe at 3 L/s from 4 bar gives P_out = -33 kPa against
+P_vap = 2339 Pa: flagged.
+
+**Flow from the available head.** `Pipe.flow_at_head(H, inlet=None, Q0=None)`
+returns the volumetric flow at which friction plus minor losses equal `H`
+metres of fluid, and `Pipe.flow_at_dp(dP, inlet=None, Q0=None)` the flow for a
+pressure drop `dP` (the static head ρgΔz is subtracted first; the flow is 0 if
+`dP` cannot lift the column). Both are a Newton solve in ln Q (optimistix),
+started from the fully rough estimate, so the gradients come from the implicit
+function theorem:
+
+```python
+pipe = Pipe(PipeParams(L=120.0, D=0.0525, rho=998.96, mu=1.0214e-3,
+                       fittings={"entrance_sharp": 1, "elbow_90_standard": 4,
+                                 "gate_valve": 1, "exit": 1}))
+pipe.flow_at_head(15.0)     # 5.113e-3 m^3/s
+# jax.grad over roughness: dQ/d(eps) = -8.78 (m^3/s) per m
+```
+
+**Non-circular ducts.** Give `D` as the hydraulic diameter and `flow_area` as
+the true cross-section; the velocity is Q/A and Re, f and the friction loss use
+D_h. A 3-in Sch 40 by 1.5-in (48.26 mm OD) annulus carrying 4 L/s over 24 m:
+v = 1.36 m/s, ΔP = 19.6 kPa. For laminar flow the circular-tube friction factor
+on D_h is only approximate (64/Re becomes about 96/Re for a narrow annulus). `Pipe.eo_residuals` gives `n_species + 2` rows (flows, temperature and
 the pressure balance) so the unit works in the [EO solver](eo-solver.md). The
 example notebook `examples/42_liquid_pipe_flow.ipynb` regenerates the Moody
 chart and finds the economic pipe diameter with `jax.grad`.
@@ -4054,7 +4088,11 @@ support: exactly 0 below 2100, exactly 1 above 4000). Below 2100 the result is
 work, and the gradients are finite across the transition (tested at Re = 1e3,
 2300, 4000 and 1e5 against `check_grads`). In 2100 < Re < 4000 real flow is
 intermittent and no correlation is accurate: the blend is a smooth
-interpolation, not a transition model.
+interpolation, not a transition model. One consequence: across the blend ΔP is
+*not* monotonic in viscosity. A 5 km, 6-in Sch 40 crude line at 12 L/s
+(ρ = 870 kg/m³) drops 217 kPa at 50 cP (Re 1726, laminar) but 234 kPa at 25 cP
+(Re 3450, inside the blend), because the turbulent branch is switching on. A
+real line in that range may be laminar or turbulent; size it for both.
 
 **What was verified, and how** (`tests/test_fluids.py`):
 
@@ -4072,6 +4110,30 @@ interpolation, not a transition model.
 Also in the module: `reynolds_number`, `hydraulic_diameter` (4A/P),
 `darcy_pressure_drop`, `minor_loss`, `fully_rough_friction_factor` and the L/D
 helper `equivalent_length(K, D, f)` = K D / f.
+
+(nps-table)=
+### Standard Pipe Sizes (NPS and Schedule)
+
+`difflow.fluids.NPS_SCHEDULES` holds ASME B36.10M (welded and seamless wrought
+steel pipe): the outside diameter and the wall thickness by schedule, in inches.
+B36.19M stainless "S" schedules are not included.
+
+| Function | Returns |
+|----------|---------|
+| `pipe_outside_diameter(nps)` | OD, m |
+| `pipe_wall_thickness(nps, schedule="40")` | wall, m |
+| `pipe_inside_diameter(nps, schedule="40")` (alias `pipe_id`) | ID = OD − 2t, m |
+| `standard_sizes(schedule="40")` | sorted list of `(NPS, ID_m)` |
+| `snap_to_standard_size(D, schedule="40", direction="up")` | `(NPS, ID_m)`: the next standard size up (or `"down"`, `"nearest"`) |
+
+`nps` may be a number or a string (`2`, `1.5`, `"1-1/2"`, `'2"'`); the schedule
+may be `40`, `"40"`, `"Sch 40"` or `"std"`. A size/schedule pair that B36.10M
+does not list (22-in Sch 40) raises `KeyError`. Check values: 1, 1.5, 2, 3, 4
+and 6 in Sch 40 have IDs 26.64, 40.89, 52.50, 77.93, 102.26 and 154.05 mm. The
+snap is a discrete choice and is not differentiable: optimize a continuous D
+with `jax.grad`, then snap. Sources: ASME B36.10M as tabulated in Wikipedia's
+"Nominal Pipe Size" article, cross-checked against Engineering ToolBox and
+projectmaterials.com.
 
 ### Fitting Loss Coefficients
 
@@ -4099,6 +4161,22 @@ for 2-in pipe.
 | `entrance_sharp` | K | 0.5 | Crane TP-410: sharp-edged flush entrance (also Perry's 9e Sec. 6) |
 | `entrance_rounded` | K | 0.04 | Crane TP-410: well-rounded entrance, r/d ≥ 0.15 |
 | `exit` | K | 1.0 | Crane TP-410: exit into a large volume |
+| `butterfly_valve` | LD | 45 | Crane TP-410: butterfly valve 2-8 in, K = 45 f_T (secondary reprint) |
+| `butterfly_valve_10_14` | LD | 35 | Crane TP-410: butterfly valve 10-14 in |
+| `butterfly_valve_16_24` | LD | 25 | Crane TP-410: butterfly valve 16-24 in |
+| `plug_valve` | LD | 18 | Crane TP-410: plug valve, straightway, K = 18 f_T |
+| `foot_valve` | LD | 420 | Crane TP-410: foot valve with strainer, poppet disc |
+| `foot_valve_hinged` | LD | 75 | Crane TP-410: foot valve with strainer, hinged disc |
+| `strainer_y` | K | 2.0 | NOT Crane: typical manufacturer value, clean Y-strainer |
+| `strainer_basket` | K | 1.5 | NOT Crane: typical manufacturer value, clean basket strainer |
+
+`fittings_K(fittings, rel_roughness=None, f_T=None)` sums a `{name: count}`
+dict; the keys `"K"`, `"K_extra"` or `"other"` add a numeric K directly, so a
+strainer quoted as K = 2 sits alongside named fittings:
+`{"entrance_sharp": 1, "elbow_90_standard": 4, "K": 2.0}`. The butterfly, plug
+and foot-valve rows come from secondary reprints of the Crane table (SimuPipe
+and fluidnetworkstudio.com). The strainer values are manufacturer typicals for
+a clean element; a fouled strainer can be several times higher.
 
 Source: Crane Co., *Flow of Fluids Through Valves, Fittings, and Pipe*,
 Technical Paper 410; the same tables are reprinted in Perry's *Chemical
@@ -4116,9 +4194,32 @@ $Q=C_d\frac{\pi}{4}d^2\sqrt{\frac{2\,\Delta P}{\rho\,(1-\beta^4)}}$,
 $\beta=d/D$. The inverse forms `orifice_dp(Q, ...)` and `venturi_dp(Q, ...)`
 give the differential pressure for a known flow. The discharge coefficients
 are the usual textbook constants (0.61 sharp-edged orifice at high Re; about
-0.98 for a Venturi); ISO 5167 gives $C_d$ as a function of β, Re and tap
-geometry, so pass that value when accuracy matters. Incompressible only, no
-expansibility factor.
+0.98 for a Venturi). Incompressible only, no expansibility factor.
+
+**ISO 5167 orifice coefficient.** `orifice_cd(beta, Re_D, D, taps="flange")`
+is the Reader-Harris/Gallagher equation of ISO 5167-2:2003 (Eq. 4), with tap
+geometry `"corner"`, `"flange"` or `"D-D/2"` and the small-pipe term
+0.011(0.75 − β)(2.8 − D/25.4 mm) for D < 71.12 mm. Validity is that of the
+standard: 0.1 ≤ β ≤ 0.75, D 50-1000 mm, Re_D above about 5000. C depends on Re
+and so on the flow, so `orifice_flow(..., Cd="iso5167", mu=..., taps=...)`
+solves C = C_RHG(Re(Q(C))) with a Newton root find (implicit-function
+gradients); `orifice_dp(Q, ..., Cd="iso5167", mu=...)` is the explicit inverse.
+The implementation reproduces the `fluids` library's example value 0.59903
+(C. Bell, *fluids*, MIT licence).
+
+**Permanent (unrecovered) pressure loss.** The meter differential is not the
+loss: downstream the jet re-expands, and most of a Venturi's differential is
+recovered.
+
+- `orifice_permanent_loss(dP, beta, Cd=0.61)` is ISO 5167-2 (5.4.1):
+  $\Delta\varpi=\frac{\sqrt{1-\beta^4(1-C^2)}-C\beta^2}{\sqrt{1-\beta^4(1-C^2)}+C\beta^2}\,\Delta P$.
+  At β = 0.5 and C = 0.61 that is 0.731 ΔP (20 kPa differential, 14.6 kPa lost).
+- `venturi_permanent_loss(dP, beta, D_pipe)` interpolates the ISO 5167-4 loss
+  ratio curves (D = 65 mm and 500 mm, β 0.30-0.75; `VENTURI_LOSS_TABLE`),
+  linear in D between the two curves and clamped outside them. A 0.5-β Venturi
+  loses 0.14 ΔP in a 65 mm line and 0.075 ΔP in a 500 mm line. The table is
+  resampled from the `fluids` library's digitization of the standard's figure
+  and reproduces its `dP_venturi_tube` example (1788.6 Pa) to 0.5 %.
 
 ### Pipe Networks: Parallel Branches
 

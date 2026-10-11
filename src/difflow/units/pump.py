@@ -496,6 +496,8 @@ def system_curve(
         if not pipes:
             raise ValueError("delta_P needs rho (or at least one Pipe to take it from)")
         rho = pipes[0].params.rho
+        if rho is None:  # read from liquid_properties at the inlet
+            rho = pipes[0]._rho_mu(inlet)[0]
     return SystemCurve(static_head, pipes, delta_P, rho, inlet)
 
 
