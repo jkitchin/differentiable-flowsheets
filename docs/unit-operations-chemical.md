@@ -326,6 +326,13 @@ Instead of a lumped `alpha`, pass `d_p`, `voidage`, `mu`, `rho_gas`,
 Ergun equation; see [Particles and Beds](particles-ergun). Leave `u_s0=None` to
 take the superficial velocity from the inlet stream ($Q_0/A_c$); a given `u_s0`
 that differs from the stream's by more than 1 % raises `GasPFRBedWarning`.
+`rho_gas` works the same way: leave it `None` and it is the inlet stream's
+density, mass flow$/Q_0$ (with the default ideal-gas $Q_0$, $P_0\bar M/(RT_0)$),
+which needs the molar masses, from `MW=` (g/mol, a number or `{species: MW}`) or
+from the unit's `thermo`. A given `rho_gas` is checked against the stream when the
+molar masses are known and raises `GasPFRDensityWarning` (a subclass of
+`GasPFRBedWarning`) above 2 % (`RHO_GAS_RTOL`). With neither `rho_gas` nor a molar
+mass the call raises `ValueError`.
 
 #### Additional Equations
 
@@ -2648,7 +2655,9 @@ what the velocity and insulation-thickness optimizations use
 | Group | Functions |
 |---|---|
 | Dimensionless groups | `reynolds`, `prandtl`, `nusselt_to_h`, `grashof`, `rayleigh` |
-| Conduction | `slab_resistance`, `cylinder_resistance`, `sphere_resistance`, `composite_wall`, `critical_insulation_radius`, `fin_efficiency_straight` |
+| Conduction | `slab_resistance`, `cylinder_resistance`, `sphere_resistance`, `composite_wall`, `critical_insulation_radius`, `insulated_pipe_heat_loss`, `fin_efficiency_straight` |
+| Agitated vessels | `agitator_reynolds`, `agitated_vessel_nusselt`, `jacketed_vessel_h`, `agitated_coil_h`, `AGITATED_VESSEL_CONSTANTS` (see [Agitated vessels](#heat-transfer-agitated)) |
+| Insulation economics | `difflow.economics.insulation` (see [Economic insulation thickness](#heat-transfer-insulation)) |
 | Tube side | `sieder_tate_laminar`, `dittus_boelter`, `sieder_tate`, `gnielinski`, `internal_nusselt`, `internal_h` |
 | External flow | `churchill_bernstein` (cylinder), `flat_plate_nusselt` |
 | Natural convection | `churchill_chu_vertical_plate`, `churchill_chu_horizontal_cylinder` |
@@ -2842,9 +2851,9 @@ DeWitt Table 11.1, which cites TEMA; it was checked against the table while
 the unit-operations book was written. The second block is Sinnott, *Coulson &
 Richardson's Chemical Engineering* Vol. 6 (4th ed.), Table 12.2. That table
 gives coefficient ranges, and the float stored here is the conservative
-(larger-resistance) end. Crude oil by temperature and lube oil (TEMA
-RGP-T-2.4) are **not included** because no copy of the TEMA table could be
-checked. `heavy_hydrocarbons` is the nearest entry. Use your own standard for
+(larger-resistance) end. Crude oil by temperature and velocity, lube oils,
+cooling waters and the other TEMA RGP-T-2.4 entries are in `difflow.fouling`
+([TEMA design fouling resistances](#tema-fouling)). Use your own standard for
 design.
 
 | Service (Incropera Table 11.1) | $R_f$ |
@@ -2886,6 +2895,89 @@ sanity band for a computed `U`, not as a design value.
 | Ammonia condenser, water in tubes | 800-1400 |
 | Alcohol condenser, water in tubes | 250-700 |
 | Finned tube, water in tubes, air in cross flow | 25-50 |
+
+(heat-transfer-agitated)=
+### Agitated and jacketed vessels
+
+The process-side coefficient at the wall of a jacketed, agitated vessel is
+correlated as
+
+$$\mathrm{Nu} = \frac{hD_T}{k} = a\,\mathrm{Re}^b\,\mathrm{Pr}^{1/3}\left(\frac{\mu}{\mu_w}\right)^m,
+\qquad \mathrm{Re} = \frac{\rho N D_a^2}{\mu},$$
+
+with $\mathrm{Nu}$ on the **tank** diameter $D_T$, $\mathrm{Re}$ on the **impeller**
+diameter $D_a$ and $N$ in rev/s. `agitated_vessel_nusselt(Re, Pr, mu_ratio,
+impeller)` takes the constants from `AGITATED_VESSEL_CONSTANTS` (or `a=`, `b=`, `m=`);
+`jacketed_vessel_h(rho, N, D_a, D_T, mu, Cp, k, mu_wall, impeller)` returns $h$.
+`agitated_coil_h(Re, Pr, k, D_T, mu_ratio, method, D_a, d_o)` is the coefficient on
+the outside of an immersed helical coil.
+
+| Key | $a$ | $b$ | $m$ | Re range | Source |
+|---|---|---|---|---|---|
+| `paddle` | 0.36 | 2/3 | 0.14 | 300-3×10⁵ | Chilton, Drew & Jebens (1944), as in Kern (1950) Ch. 20 |
+| `flat_blade_turbine` (baffled) | 0.74 | 0.67 | 0.14 | 200-10⁵ | Uhl (1955), via Uhl & Gray / Perry's (recalled) |
+| `anchor` | 0.36 | 2/3 | 0.18 | 300-4×10⁴ | Uhl (1955), via Uhl & Gray / Perry's (recalled) |
+| `anchor_low_re` | 1.0 | 1/2 | 0.18 | 30-300 | Uhl (1955), via Uhl & Gray / Perry's (recalled) |
+
+| Coil method | Correlation |
+|---|---|
+| `chilton_drew_jebens` (paddle) | $hD_T/k = 0.87\,\mathrm{Re}^{0.62}\mathrm{Pr}^{1/3}(\mu/\mu_w)^{0.14}$ |
+| `oldshue_gretton` (flat-blade turbine, baffled) | $hd_o/k = 0.17\,\mathrm{Re}^{0.67}\mathrm{Pr}^{0.37}(D_a/D_T)^{0.1}(d_o/D_T)^{0.5}$ |
+
+The paddle and coil constants are the textbook forms (Kern Ch. 20; Oldshue &
+Gretton, *Chem. Eng. Prog.* 50, 615, 1954). The turbine and anchor rows are
+recalled from secondary tabulations and were **not** checked against a printed
+copy; geometry corrections of fuller correlations (blade width, clearance,
+$D_a/D_T$) are not included. `tests/test_jacketed_vessel.py` checks the
+arithmetic and the gradients; no textbook worked example is reproduced.
+
+```python
+import jax
+from difflow import heat_transfer as ht
+
+# water in a 1.5 m tank, 0.5 m paddle; h on the vessel side, d h / d N
+h = ht.jacketed_vessel_h(1000.0, 2.0, 0.5, 1.5, 1.0e-3, 4180.0, 0.6, mu_wall=0.8e-3)
+dh_dN = jax.grad(lambda N: ht.jacketed_vessel_h(1000.0, N, 0.5, 1.5, 1.0e-3, 4180.0, 0.6))(2.0)
+U = ht.overall_U(h_i=h, h_o=5000.0, D_i=1.5, D_o=1.52, k_wall=16.0)   # steam jacket, thin wall
+print(float(h), float(dh_dN), float(U))
+```
+
+(heat-transfer-insulation)=
+### Economic insulation thickness
+
+`insulated_pipe_heat_loss(D_o, thickness, k_ins, h_out, T_pipe, T_amb)` is the heat
+loss per metre through the insulation and the outer film,
+$q' = \Delta T/[\ln((D_o+2t)/D_o)/(2\pi k) + 1/(h_{out}\pi(D_o+2t))]$.
+`difflow.economics.insulation` prices the insulation and finds the thickness that
+minimises the total annual cost per metre,
+$\mathrm{TAC}(t) = \mathrm{CRF}\,C_{inst}(t) + q'(t)\,\text{hours}\,c_{heat}$:
+
+| Function | Purpose |
+|---|---|
+| `insulation_volume_per_length(D_o, t)` | $\pi t(D_o+t)$, m³/m |
+| `insulation_installed_cost(D_o, t, cost_per_m3, cost_per_m2=0, cost_per_m=0, base_year, target_year)` | $c_V\pi t(D_o+t) + c_A\pi(D_o+2t) + c_L$ ($/m), CEPCI-escalated |
+| `insulation_annual_cost(t, D_o, k_ins, h_out, T_pipe, T_amb, cost_per_m3, heat_cost, ...)` | TAC and its parts ($/m/yr); `heat_cost` in $/GJ |
+| `economic_insulation_thickness(...)` | the optimum $t$ (bisection on $d\mathrm{TAC}/dt$; differentiable by implicit differentiation) |
+
+The cost is **linear in the insulated volume** (material and most labour), plus
+optional cladding-area and per-metre terms. There is **no default unit cost**:
+published installed-cost data (Turner & Malloy, *Thermal Insulation Handbook*;
+Peters, Timmerhaus & West) could not be checked, so `cost_per_m3` is a required
+input from your own estimate, with its `base_year` for CEPCI escalation. The
+prices in the example are **illustrative**.
+
+```python
+import jax
+from difflow.economics import economic_insulation_thickness
+
+# 4-in (0.1143 m OD) steam line at 450 K; ILLUSTRATIVE prices
+opt = lambda c_heat: economic_insulation_thickness(
+    0.1143, 0.05, 10.0, 450.0, 293.15, cost_per_m3=3000.0, heat_cost=c_heat)["thickness"]
+print(f"t_opt = {1000 * float(opt(10.0)):.0f} mm, dt/d(heat price) = {float(jax.grad(opt)(10.0)):.4f} m per $/GJ")
+```
+
+`tests/test_insulation_cost.py` checks the optimum against a dense grid minimum and
+the stationarity condition, and its gradients against finite differences.
 
 (gas-properties)=
 ### Gas Transport Properties
@@ -3208,6 +3300,47 @@ def rate(v, T_film=600.0):
 r = rate(1.0)                                  # m^2 K/W per s
 days = fouling.fouling_time(3.0e-4, r) / 86400.0
 drdv = jax.grad(rate)(1.0)                     # d(rate)/d(velocity): faster flow, less fouling
+```
+
+(tema-fouling)=
+### TEMA design fouling resistances
+
+`difflow.fouling` also holds the TEMA design values (Recommended Good Practice
+Table RGP-T-2.4, 7th ed., 1988), stored in TEMA's unit, h ft² °F/Btu, and returned
+in m² K/W (×`HFT2F_PER_BTU` = 0.17611):
+
+| Name | Content |
+|---|---|
+| `TEMA_FOULING` | `(low, high)` per service: fuel oils No. 2 / No. 6, transformer, engine lube, quench oil; manufactured gas, exhaust gas, steam (with and without oil), refrigerant vapours, compressed air, NH₃, CO₂, Cl₂ vapours, flue gases; refrigerant liquids, molten salts, hydraulic fluid, heat-transfer media, brines, alcohol and glycol solutions; acid gases, solvent vapours, MEA/DEA, DEG/TEG, caustic, vegetable oils; natural gas, lean/rich oil, LPG; gasoline, naphtha, kerosene, light/heavy gas oil, heavy fuel oil, residuum; the lube-oil processing streams and refined lube oil |
+| `tema_fouling_resistance(service, which="high")` | m² K/W; `"high"` (conservative end), `"low"` or `"mean"` |
+| `TEMA_CRUDE_OIL`, `tema_crude_oil_fouling(T, v)` | crude oil by temperature (0-199, 200-299, 300-499, ≥500 °F) and velocity (<2, 2-4, >4 ft/s); arguments in K and m/s |
+| `TEMA_WATER`, `tema_water_fouling(water, T_water, v)` | sea, brackish, cooling-tower (treated / untreated), city, river, muddy, hard, engine-jacket, condensate, boiler feedwater, blowdown; split at 125 °F water temperature and 3 ft/s |
+
+Crude oil (h ft² °F/Btu):
+
+| Temperature | < 2 ft/s | 2-4 ft/s | > 4 ft/s |
+|---|---|---|---|
+| 0-199 °F | 0.003 | 0.002 | 0.002 |
+| 200-299 °F | 0.003 | 0.002 | 0.002 |
+| 300-499 °F | 0.004 | 0.003 | 0.002 |
+| ≥ 500 °F | 0.005 | 0.004 | 0.003 |
+
+**Provenance.** No printed copy of TEMA was available. The values were recalled
+from the table as it is reproduced in the secondary literature (e.g. Serth,
+*Process Heat Transfer*, Ch. 3; Kakac & Liu, *Heat Exchangers*). Where Incropera &
+DeWitt Table 11.1 (which was checked, and itself cites TEMA) overlaps, the
+converted values agree after rounding to its 4 decimal places (sea water, boiler
+feedwater, fuel oil, refrigerant liquids, oil-free steam; `tests/test_tema_fouling.py`);
+the other entries are unchecked. Pre-1988 TEMA editions split crude oil into "dry"
+and "salt" columns with other values. The lookups are piecewise constant (zero
+derivative inside a bin) but jit-able and vectorised.
+
+```python
+from difflow import fouling
+
+R_crude = fouling.tema_crude_oil_fouling(530.0, 1.5)          # K, m/s -> m^2 K/W
+R_cw = fouling.tema_water_fouling("cooling_tower_treated", 310.0, 1.2)
+print(float(R_crude), float(R_cw), fouling.tema_fouling_resistance("kerosene"))
 ```
 
 ---
@@ -4975,7 +5108,10 @@ physical bed (`d_p`, `voidage`, `mu`, `rho_gas`, `bed_area`, optional `u_s0`,
 the Ergun equation at the inlet (`ergun_alpha`, `params.alpha_for(Q0)`, or
 `params.effective_alpha` when `u_s0` is given). With `u_s0=None` the velocity is
 $Q_0/A_c$ from the inlet stream; a given `u_s0` is checked against it
-(`GasPFRBedWarning` above 1 %). Supplying both `alpha` and the bed is an error.
+(`GasPFRBedWarning` above 1 %). Likewise `rho_gas=None` takes the inlet density
+(mass flow$/Q_0$, molar masses from `MW=` or the unit's `thermo`), and a given
+`rho_gas` is checked against it when the molar masses are known
+(`GasPFRDensityWarning` above 2 %). Supplying both `alpha` and the bed is an error.
 
 (particles-fluidization)=
 ### Fluidization
@@ -5006,12 +5142,60 @@ $u_{mb}/u_{mf} > 1$ (the bed expands before it bubbles), with $u_{mf}$ from the
 Baeyens & Geldart (1974) correlation. This is the sloping A/B boundary, so FCC
 catalyst (60 µm, 1500 kg/m³) is group A. It is **not differentiable** and not jit-able.
 
+The Abrahamsen-Geldart $u_{mb}$ behind that A/B line was fitted to 20-72 µm
+powders, so the line extrapolates away from them (about 180 µm at 1500 kg/m³, and
+millimetre sizes for very light solids). `method="geldart1973"` uses instead the
+simplified boundaries Geldart (1973) gives with his chart, in his units
+($\Delta\rho$ in g/cm³, $d_p$ in µm): group A for $\Delta\rho\,d_p \le 225$
+(`GELDART_1973_AB`), group D for $\Delta\rho\,d_p^2 \ge 10^6$ (`GELDART_1973_BD`),
+C below 20 µm as before. These lines do not move with the gas or the fines content.
+The two methods agree inside each group and differ near the boundaries (a 170 µm,
+1500 kg/m³ powder is A by default and B by the 1973 line; 1 mm sand is B by Grace's
+B/D line and D by Geldart's). The default is unchanged. The 225 and $10^6$ are the
+values commonly quoted from the paper; they were not re-checked against it.
+
 ```python
 from difflow.particles import fluidization_window, geldart_group
 
 u_mf, u_t = fluidization_window(300e-6, 2600.0, 1.2, 1.8e-5, 0.45, 0.8)
 print(f"u_mf = {float(u_mf):.3f} m/s, u_t = {float(u_t):.2f} m/s,",
-      geldart_group(300e-6, 2600.0, 1.2))
+      geldart_group(300e-6, 2600.0, 1.2),
+      geldart_group(300e-6, 2600.0, 1.2, method="geldart1973"))
+```
+
+(particles-bubbling)=
+### Bubbling beds: bubble size and bed expansion
+
+Above $u_{mf}$ (above $u_{mb}$ for group A) a gas bed bubbles. The bubble size
+sets the rise velocity, the bubble fraction and the bed height.
+
+| Function | Equation | Source and units |
+|---|---|---|
+| `mori_wen_max_bubble_diameter(u0, u_mf, D_t)` | $d_{bm} = 0.652[A_t(u_0-u_{mf})]^{0.4}$ | Mori & Wen (1975), **cgs** (cm, cm², cm/s); in SI $d_{bm} = 1.638[A_t(u_0-u_{mf})]^{0.4}$ |
+| `mori_wen_initial_bubble_diameter(u0, u_mf, distributor, N_or)` | porous: $d_{b0} = 0.00376(u_0-u_{mf})^2$; perforated: $0.347[A_t(u_0-u_{mf})/n_d]^{0.4}$ | Mori & Wen, cgs; `N_or` is orifices per m², $A_t/n_d = 1/N_{or}$ |
+| `mori_wen_bubble_diameter(h, u0, u_mf, D_t, ...)` | $d_b = d_{bm} - (d_{bm}-d_{b0})e^{-0.3h/D_t}$ | Mori & Wen; dimensionless |
+| `darton_bubble_diameter(h, u0, u_mf, A0)` | $d_b = 0.54(u_0-u_{mf})^{0.4}(h+4\sqrt{A_0})^{0.8}g^{-0.2}$ | Darton et al. (1977); dimensionally consistent, SI as written |
+| `bubble_rise_velocity(d_b)`, `bubble_velocity(u0, u_mf, d_b)` | $u_{br} = 0.711\sqrt{gd_b}$, $u_b = u_0-u_{mf}+u_{br}$ | Davidson & Harrison (1963) |
+| `bubbling_bed_expansion(u0, u_mf, d_b, H_mf)` | $\delta = (u_0-u_{mf})/u_b$, $H = H_{mf}/(1-\delta)$ | two-phase theory, fast bubbles (Kunii & Levenspiel Ch. 6) |
+
+The Mori-Wen functions take SI inputs, convert them to cgs, evaluate the published
+equation with its published constants and convert $d_b$ back to metres. Their range:
+$D_t \le 1.3$ m, $0.5 \le u_{mf} \le 20$ cm/s, $60 \le d_p \le 450$ µm,
+$u_0 - u_{mf} \le 48$ cm/s. Kunii & Levenspiel print a Davidson-Harrison $d_{b0}$
+($2.78(u_0-u_{mf})^2/g$, porous; $1.30[(u_0-u_{mf})/N_{or}]^{0.4}/g^{0.2}$,
+perforated) that is 25 % and 6 % smaller; pass `d_b0=` to use it. Nothing caps
+$d_b$ at the column diameter (a bed whose bubbles approach $D_t$ slugs). Everything
+here is differentiable.
+
+```python
+import jax
+from difflow.particles import mori_wen_bubble_diameter, bubbling_bed_expansion
+
+u0, u_mf, D_t, H_mf = 0.30, 0.05, 0.8, 1.2
+def bed_height(u0):
+    d_b = mori_wen_bubble_diameter(H_mf / 2, u0, u_mf, D_t)   # mid-bed bubble size
+    return bubbling_bed_expansion(u0, u_mf, d_b, H_mf)["H"]
+print(f"H = {float(bed_height(u0)):.3f} m, dH/du0 = {float(jax.grad(bed_height)(u0)):.2f} s")
 ```
 
 **What is verified** (`tests/test_particles.py`): the Stokes limit; the Ergun
@@ -5024,12 +5208,23 @@ is reproduced from memory; compare against Perry's or McCabe/Geankoplis tables
 before relying on a result to better than the correlation scatter (typically
 5-10 %). The Richardson-Zaki exponent is piecewise (jumps of at most about 2 %
 at $Re_t = 0.2, 1, 500$).
+`tests/test_particles_worked_examples.py` (marked `release`) sets up problems the
+way McCabe, Smith & Harriott Ch. 7, Kunii & Levenspiel Ch. 3 and Geankoplis §3.1
+do (Ergun $u_{mf}$ in cgs, Wen-Yu, Stokes and Newton settling, drag on a sphere,
+Ergun in US customary units with $g_c$) and computes each expected value **by
+hand in the test**, in the book's units. None of them is a printed answer: the
+printed numbers could not be recalled with confidence. They check the equations
+and the unit conversions, not the correlations against data.
+`tests/test_bubbling_bed.py` evaluates the Mori-Wen equations in cgs as printed and
+compares with the SI functions.
 
 **References**: Haider & Levenspiel, *Powder Technol.* 58, 63 (1989); Turton &
 Levenspiel, *Powder Technol.* 47, 83 (1986); Ergun, *Chem. Eng. Prog.* 48(2), 89
 (1952); Wen & Yu, *AIChE J.* 12, 610 (1966); Richardson & Zaki, *Trans. Inst.
 Chem. Eng.* 32, 35 (1954); Kunii & Levenspiel, *Fluidization Engineering*, 2nd
-ed. (1991); Geldart, *Powder Technol.* 7, 285 (1973).
+ed. (1991); Geldart, *Powder Technol.* 7, 285 (1973); Mori & Wen, *AIChE J.* 21,
+109 (1975); Darton, LaNauze, Davidson & Harrison, *Trans. Inst. Chem. Eng.* 55, 274
+(1977); Davidson & Harrison, *Fluidised Particles* (1963).
 
 ---
 

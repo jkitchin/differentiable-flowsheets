@@ -26,6 +26,9 @@ Contents
 * Rate and threshold: :func:`ebert_panchal_rate`, :func:`threshold_wall_shear`,
   :func:`threshold_film_temperature`
 * Time: :func:`fouling_time`, :func:`integrate_fouling`
+* TEMA design values: :data:`TEMA_FOULING`, :data:`TEMA_CRUDE_OIL`,
+  :data:`TEMA_WATER`, :func:`tema_fouling_resistance`,
+  :func:`tema_crude_oil_fouling`, :func:`tema_water_fouling`
 
 Units: ``dR_f/dt`` is m^2 K/W per second, ``alpha`` then has units
 m^2 K/W/s (for ``Re`` and ``Pr`` dimensionless), ``gamma`` m^2 K/W/s/Pa,
@@ -254,7 +257,249 @@ def integrate_fouling(
     }
 
 
+# ----------------------------------------------------------------------
+# TEMA design fouling resistances (RGP-T-2.4)
+# ----------------------------------------------------------------------
+#: 1 h ft^2 degF / Btu in m^2 K / W. TEMA tabulates in h ft^2 degF/Btu.
+HFT2F_PER_BTU = 0.17611
+
+#: TEMA design fouling resistances, ``(low, high)`` in the TEMA unit
+#: **h ft^2 degF/Btu** (single values have ``low == high``). Multiply by
+#: :data:`HFT2F_PER_BTU` for m^2 K/W, or use :func:`tema_fouling_resistance`.
+#:
+#: Source: TEMA *Standards of the Tubular Exchanger Manufacturers
+#: Association*, 7th ed. (1988), Recommended Good Practice Table RGP-T-2.4
+#: ("Design fouling resistances"), the industrial-fluid, chemical-processing,
+#: natural-gas/gasoline-processing and oil-refinery lists. **Provenance:**
+#: the values were recalled from that table as it is reproduced in the
+#: secondary literature (e.g. Serth, *Process Heat Transfer*, Ch. 3; Kakac &
+#: Liu, *Heat Exchangers*); no printed copy of TEMA was available to check
+#: them. They agree, after unit conversion and rounding to one significant
+#: figure, with the TEMA-derived Incropera & DeWitt Table 11.1 entries in
+#: :data:`difflow.heat_transfer.FOULING_RESISTANCES` (a test checks this);
+#: entries that table does not cover are unchecked. TEMA itself calls these
+#: guidance values; the design value is the purchaser's choice.
+TEMA_FOULING: dict[str, tuple[float, float]] = {
+    # Industrial fluids: oils
+    "fuel_oil_no2": (0.002, 0.002),
+    "fuel_oil_no6": (0.005, 0.005),
+    "transformer_oil": (0.001, 0.001),
+    "engine_lube_oil": (0.001, 0.001),
+    "quench_oil": (0.004, 0.004),
+    # Industrial fluids: gases and vapours
+    "manufactured_gas": (0.010, 0.010),
+    "engine_exhaust_gas": (0.010, 0.010),
+    "steam_non_oil_bearing": (0.0005, 0.0005),
+    "exhaust_steam_oil_bearing": (0.0015, 0.002),
+    "refrigerant_vapors_oil_bearing": (0.002, 0.002),
+    "compressed_air": (0.001, 0.001),
+    "ammonia_vapor": (0.001, 0.001),
+    "co2_vapor": (0.001, 0.001),
+    "chlorine_vapor": (0.002, 0.002),
+    "coal_flue_gas": (0.010, 0.010),
+    "natural_gas_flue_gas": (0.005, 0.005),
+    # Industrial fluids: liquids
+    "molten_heat_transfer_salts": (0.0005, 0.0005),
+    "refrigerant_liquids": (0.001, 0.001),
+    "hydraulic_fluid": (0.001, 0.001),
+    "industrial_organic_heat_transfer_media": (0.002, 0.002),
+    "ammonia_liquid": (0.001, 0.001),
+    "ammonia_liquid_oil_bearing": (0.003, 0.003),
+    "calcium_chloride_solutions": (0.003, 0.003),
+    "sodium_chloride_solutions": (0.003, 0.003),
+    "co2_liquid": (0.001, 0.001),
+    "chlorine_liquid": (0.002, 0.002),
+    "methanol_solutions": (0.002, 0.002),
+    "ethanol_solutions": (0.002, 0.002),
+    "ethylene_glycol_solutions": (0.002, 0.002),
+    # Chemical processing streams
+    "acid_gases": (0.002, 0.003),
+    "solvent_vapors": (0.001, 0.001),
+    "stable_overhead_products": (0.001, 0.001),
+    "mea_dea_solutions": (0.002, 0.002),
+    "deg_teg_solutions": (0.002, 0.002),
+    "stable_side_draw_and_bottom_products": (0.001, 0.002),
+    "caustic_solutions": (0.002, 0.002),
+    "vegetable_oils": (0.003, 0.003),
+    # Natural gas - gasoline processing streams
+    "natural_gas": (0.001, 0.002),
+    "natural_gas_overhead_products": (0.001, 0.002),
+    "lean_oil": (0.002, 0.002),
+    "rich_oil": (0.001, 0.002),
+    "natural_gasoline_and_lpg": (0.001, 0.002),
+    # Oil refinery streams
+    "gasoline": (0.002, 0.002),
+    "naphtha_and_light_distillates": (0.002, 0.003),
+    "kerosene": (0.002, 0.003),
+    "light_gas_oil": (0.002, 0.003),
+    "heavy_gas_oil": (0.003, 0.005),
+    "heavy_fuel_oils": (0.005, 0.007),
+    "asphalt_and_residuum": (0.010, 0.010),
+    # Lube oil processing streams
+    "lube_oil_feed_stock": (0.002, 0.002),
+    "lube_oil_solvent_feed_mix": (0.002, 0.002),
+    "lube_oil_solvent": (0.001, 0.001),
+    "lube_oil_extract": (0.003, 0.003),
+    "lube_oil_raffinate": (0.001, 0.001),
+    "lube_oil_asphalt": (0.005, 0.005),
+    "lube_oil_wax_slurries": (0.003, 0.003),
+    "refined_lube_oil": (0.001, 0.001),
+}
+
+#: TEMA crude-oil fouling resistance (h ft^2 degF/Btu) by bulk temperature
+#: (rows: 0-199, 200-299, 300-499, 500 degF and over) and tube velocity
+#: (columns: below 2, 2-4, above 4 ft/s). Same source and provenance note as
+#: :data:`TEMA_FOULING` (TEMA 7th ed. RGP-T-2.4, recalled from secondary
+#: reproductions, unchecked against a printed copy). Older (pre-1988) TEMA
+#: editions split crude into "dry" and "salt" columns with different values;
+#: this is the later single table.
+TEMA_CRUDE_OIL: tuple[tuple[float, float, float], ...] = (
+    (0.003, 0.002, 0.002),
+    (0.003, 0.002, 0.002),
+    (0.004, 0.003, 0.002),
+    (0.005, 0.004, 0.003),
+)
+#: Temperature bin edges (degF) and velocity bin edges (ft/s) of :data:`TEMA_CRUDE_OIL`.
+TEMA_CRUDE_T_EDGES_F = (200.0, 300.0, 500.0)
+TEMA_CRUDE_V_EDGES_FTS = (2.0, 4.0)
+
+#: TEMA cooling-water fouling resistances (h ft^2 degF/Btu): for each water,
+#: ``(T_w <= 125 F, v <= 3 ft/s; T_w <= 125 F, v > 3 ft/s; T_w > 125 F, v <= 3;
+#: T_w > 125 F, v > 3)``. The two temperature columns are TEMA's "heating
+#: medium up to 240 F" (water 125 F or less) and "240-400 F" (water over
+#: 125 F). Same source and provenance note as :data:`TEMA_FOULING`.
+TEMA_WATER: dict[str, tuple[float, float, float, float]] = {
+    "sea_water": (0.0005, 0.0005, 0.001, 0.001),
+    "brackish_water": (0.002, 0.001, 0.003, 0.002),
+    "cooling_tower_treated": (0.001, 0.001, 0.002, 0.002),
+    "cooling_tower_untreated": (0.003, 0.003, 0.005, 0.004),
+    "city_or_well_water": (0.001, 0.001, 0.002, 0.002),
+    "river_water_minimum": (0.002, 0.001, 0.003, 0.002),
+    "river_water_average": (0.003, 0.002, 0.004, 0.003),
+    "muddy_or_silty_water": (0.003, 0.002, 0.004, 0.003),
+    "hard_water": (0.003, 0.003, 0.005, 0.005),
+    "engine_jacket_water": (0.001, 0.001, 0.001, 0.001),
+    "distilled_or_closed_cycle_condensate": (0.0005, 0.0005, 0.0005, 0.0005),
+    "treated_boiler_feedwater": (0.001, 0.0005, 0.001, 0.001),
+    "boiler_blowdown": (0.002, 0.002, 0.002, 0.002),
+}
+
+_FT = 0.3048
+
+
+def _F_to_K(T_F: float) -> float:
+    return (T_F - 32.0) * 5.0 / 9.0 + 273.15
+
+
+def tema_fouling_resistance(service: str, which: str = "high") -> float:
+    """TEMA design fouling resistance (m^2 K/W) of a service in :data:`TEMA_FOULING`.
+
+    Args:
+        service: Key of :data:`TEMA_FOULING`.
+        which: ``"high"`` (default; the conservative end of a range),
+            ``"low"`` or ``"mean"``.
+
+    Returns:
+        R_f (m^2 K/W), a Python float.
+
+    Raises:
+        KeyError: Unknown service (the message lists the keys).
+        ValueError: Unknown ``which``.
+
+    Example:
+        >>> from difflow.fouling import tema_fouling_resistance
+        >>> round(tema_fouling_resistance("fuel_oil_no6"), 6)   # 0.005 h ft2 F/Btu
+        0.000881
+    """
+    try:
+        lo, hi = TEMA_FOULING[service]
+    except KeyError:
+        raise KeyError(f"Unknown service {service!r}; use one of {sorted(TEMA_FOULING)}") from None
+    if which == "high":
+        v = hi
+    elif which == "low":
+        v = lo
+    elif which == "mean":
+        v = 0.5 * (lo + hi)
+    else:
+        raise ValueError(f"which must be 'high', 'low' or 'mean', got {which!r}")
+    return v * HFT2F_PER_BTU
+
+
+def tema_crude_oil_fouling(T: Array | float, v: Array | float) -> Array:
+    """TEMA crude-oil fouling resistance (m^2 K/W) at bulk temperature ``T`` and velocity ``v``.
+
+    Looks up :data:`TEMA_CRUDE_OIL`. Bin edges are converted from the TEMA
+    units: 200, 300, 500 degF = 366.48, 422.04, 533.15 K; 2 and 4 ft/s =
+    0.6096 and 1.2192 m/s. A value on an edge takes the upper bin. The result
+    is piecewise constant (its derivative is zero almost everywhere), but it
+    is jit-able and accepts arrays.
+
+    Args:
+        T: Bulk crude temperature (K).
+        v: Tube-side velocity (m/s).
+
+    Returns:
+        R_f (m^2 K/W).
+
+    Example:
+        >>> from difflow.fouling import tema_crude_oil_fouling
+        >>> round(float(tema_crude_oil_fouling(550.0, 1.0)), 6)   # >= 500 F, 2-4 ft/s: 0.004
+        0.000704
+    """
+    T, v = _f64(T), _f64(v)
+    table = jnp.asarray(TEMA_CRUDE_OIL) * HFT2F_PER_BTU
+    edges_T = jnp.asarray([_F_to_K(t) for t in TEMA_CRUDE_T_EDGES_F])
+    edges_v = jnp.asarray([x * _FT for x in TEMA_CRUDE_V_EDGES_FTS])
+    i = jnp.searchsorted(edges_T, T, side="right")
+    j = jnp.searchsorted(edges_v, v, side="right")
+    return table[i, j]
+
+
+def tema_water_fouling(water: str, T_water: Array | float, v: Array | float) -> Array:
+    """TEMA cooling-water fouling resistance (m^2 K/W) of a water in :data:`TEMA_WATER`.
+
+    The temperature split is at 125 degF (324.82 K) water temperature, the
+    velocity split at 3 ft/s (0.9144 m/s); as in TEMA's "125 F or less" and
+    "3 ft/s and less" columns, a value on an edge takes the lower bin.
+    Piecewise constant, jit-able.
+
+    Args:
+        water: Key of :data:`TEMA_WATER`.
+        T_water: Water temperature (K).
+        v: Water velocity (m/s).
+
+    Returns:
+        R_f (m^2 K/W).
+
+    Raises:
+        KeyError: Unknown water (the message lists the keys).
+
+    Example:
+        >>> from difflow.fouling import tema_water_fouling
+        >>> round(float(tema_water_fouling("sea_water", 300.0, 1.5)), 7)   # 0.0005 h ft2 F/Btu
+        8.81e-05
+    """
+    try:
+        row = TEMA_WATER[water]
+    except KeyError:
+        raise KeyError(f"Unknown water {water!r}; use one of {sorted(TEMA_WATER)}") from None
+    table = jnp.asarray(row).reshape(2, 2) * HFT2F_PER_BTU
+    i = (_f64(T_water) > _F_to_K(125.0)).astype(jnp.int32)
+    j = (_f64(v) > 3.0 * _FT).astype(jnp.int32)
+    return table[i, j]
+
+
 __all__ = [
+    "HFT2F_PER_BTU",
+    "TEMA_FOULING",
+    "TEMA_CRUDE_OIL",
+    "TEMA_CRUDE_T_EDGES_F",
+    "TEMA_CRUDE_V_EDGES_FTS",
+    "TEMA_WATER",
+    "tema_fouling_resistance",
+    "tema_crude_oil_fouling",
+    "tema_water_fouling",
     "R_GAS",
     "BETA_RE",
     "EXPONENT_PR",

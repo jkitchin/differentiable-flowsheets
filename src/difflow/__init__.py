@@ -132,7 +132,7 @@ from difflow.units.base import (
     estimate_pfr_conversion,
 )
 from difflow.units.cstr import CSTR, CSTRParams, CSTRDensityWarning
-from difflow.units.pfr import GasPFRBedWarning
+from difflow.units.pfr import GasPFRBedWarning, GasPFRDensityWarning
 from difflow.units.pfr import PFR, PFRParams, GasPFR, GasPFRParams
 from difflow.units.fed_batch import (
     FedBatchReactor,
@@ -627,6 +627,7 @@ __all__ = [
     "CSTRParams",
     "CSTRDensityWarning",
     "GasPFRBedWarning",
+    "GasPFRDensityWarning",
     # Unit operations - PFR
     "PFR",
     "PFRParams",
