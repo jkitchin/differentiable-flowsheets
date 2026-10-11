@@ -1287,6 +1287,10 @@ class DistillationColumn(ValueKeyed):
                 where the vapor is far from ideal. The column code
                 is the same either way; the composition dependence of the EOS
                 K-values rides along inside the existing MESH iteration.
+                An :class:`~difflow.thermo.ActivityThermo` gives
+                modified-Raoult K-values (``K_i = gamma_i P_i^sat / P``) for a
+                nonideal liquid such as ethanol-water, with the ideal
+                enthalpies of the :class:`IdealThermo` it wraps.
         """
         self.params = params
         self.thermo = thermo

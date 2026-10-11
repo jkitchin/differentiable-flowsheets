@@ -266,6 +266,25 @@ its stage compositions unconditionally and run unchanged on a
 `IdealThermo.K_depends_on_composition` is `False` and `CubicThermo`'s is `True`,
 for callers that want to skip a composition iteration they do not need.
 
+(activity-thermo)=
+#### ActivityThermo: modified Raoult for a nonideal liquid
+
+`ActivityThermo(ideal, activity_model)` wraps an `IdealThermo` and an activity
+model (`NRTLParams`, `UNIQUACParams`, `WilsonParams`, `MargulesParams`,
+`VanLaarParams`) and returns modified-Raoult K-values,
+$K_i = \gamma_i(x, T) P_i^{sat}(T)/P$. Everything else (enthalpies, `Psat`,
+`Cp`) is delegated to the wrapped `IdealThermo`, so the liquid's excess
+enthalpy is neglected. `K_depends_on_composition` is `True`; called without
+`x` the K-values are Raoult's. This is how the rigorous `DistillationColumn`
+runs on ethanol-water:
+
+```python
+from difflow import ActivityThermo, NRTLParams
+th = ActivityThermo(ideal, nrtl)            # ideal: IdealThermo for ethanol, water
+K = th.K_values_array(355.0, 101325.0, jnp.array([0.2, 0.8]))
+col = DistillationColumn(params, th)        # CMO or MESH, unchanged
+```
+
 #### Bubble Point and Dew Point
 
 ```python

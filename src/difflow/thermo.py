@@ -625,6 +625,115 @@ class IdealThermo(ValueKeyed):
         return H_total
 
 
+class ActivityThermo(ValueKeyed):
+    """Modified-Raoult K-values on top of an :class:`IdealThermo`.
+
+    ``K_i = gamma_i(x, T) P_i^sat(T) / P``, with ``gamma`` from any activity
+    model (``NRTLParams``, ``UNIQUACParams``, ``WilsonParams``,
+    ``MargulesParams``, ``VanLaarParams``, or a callable ``model(x, T)``).
+    Everything else (enthalpies, ``Psat``, ``Cp`` ...) is delegated to the
+    wrapped :class:`IdealThermo`, so the excess enthalpy of the liquid is
+    neglected: the activity model changes the phase equilibrium, not the
+    energy balance.
+
+    This is what lets units written against ``K_values_array`` -- the rigorous
+    :class:`~difflow.units.distillation.DistillationColumn` and the
+    ``ShortcutColumn`` -- run on a nonideal liquid such as ethanol-water,
+    the same way :class:`CubicThermo` lets them run on an equation of state.
+    Called without a liquid composition (``x=None``) the K-values fall back to
+    Raoult's law; the column's bubble-point solve uses that call for its first,
+    composition-free pass and then refines on the activity-coefficient
+    K-values (``K_depends_on_composition = True``).
+
+    Args:
+        ideal: The :class:`IdealThermo` with the species' vapour pressures and
+            heat capacities.
+        activity_model: The activity-coefficient model, in the species order
+            of ``ideal``.
+
+    Example:
+        >>> from difflow import NRTLParams
+        >>> th = ActivityThermo(IdealThermo({...}), nrtl)        # doctest: +SKIP
+        >>> col = DistillationColumn(params, th)                  # doctest: +SKIP
+    """
+
+    #: Activity coefficients depend on the liquid composition, so callers that
+    #: solve a composition fixed point (a column's bubble-point loop) must
+    #: iterate on it; see :attr:`IdealThermo.K_depends_on_composition`.
+    K_depends_on_composition = True
+
+    def __init__(self, ideal: "IdealThermo", activity_model):
+        self.ideal = ideal
+        self.activity_model = activity_model
+        self._set_value_key(ideal, activity_model)
+
+    @property
+    def species_order(self) -> list[str]:
+        return self.ideal.species_order
+
+    @property
+    def n_species(self) -> int:
+        return self.ideal.n_species
+
+    def __getattr__(self, name):
+        # Only reached for attributes not defined here: Psat, H_pure, Cp, ...
+        if name in ("ideal", "activity_model", "_value_key"):
+            raise AttributeError(name)
+        return getattr(self.ideal, name)
+
+    def gamma(self, x: Array, T: Array | float) -> Array:
+        """Activity coefficients at liquid mole fractions ``x`` (species order)."""
+        from difflow.activity import activity_gamma
+        return activity_gamma(self.activity_model, jnp.asarray(x), jnp.asarray(T))
+
+    def K_values_array(
+        self,
+        T: Array | float,
+        P: Array | float,
+        x: Array | None = None,
+        y: Array | None = None,
+    ) -> Array:
+        """Modified-Raoult K-values ``gamma_i(x, T) Psat_i(T) / P`` in species order.
+
+        Args:
+            T: Temperature (K).
+            P: Pressure (Pa).
+            x: Liquid mole fractions in species order. ``None`` gives the
+                Raoult (``gamma = 1``) K-values.
+            y: Vapour mole fractions. Ignored (ideal vapour).
+
+        Returns:
+            Array of K-values.
+        """
+        K = self.ideal.K_values_array(T, P)
+        if x is None:
+            return K
+        return self.gamma(x, T) * K
+
+    def K_values(
+        self,
+        T: Array | float,
+        P: Array | float,
+        x: Array | dict | None = None,
+        y: Array | dict | None = None,
+    ) -> dict[str, Array]:
+        """K-values as a dict by species (see :meth:`K_values_array`)."""
+        if isinstance(x, dict):
+            x = jnp.array([x[s] for s in self.species_order])
+        K = self.K_values_array(T, P, x)
+        return {s: K[i] for i, s in enumerate(self.species_order)}
+
+    def stream_enthalpy(
+        self,
+        flows: dict[str, Array | float],
+        T: Array | float,
+        phase: str = "liquid",
+        P: Array | float | None = None,
+    ) -> Array:
+        """Stream enthalpy from the wrapped :class:`IdealThermo` (no excess enthalpy)."""
+        return self.ideal.stream_enthalpy(flows, T, phase=phase, P=P)
+
+
 class CubicThermo(ValueKeyed):
     """Peng-Robinson-consistent enthalpy: ideal-gas sensible + EOS departure.
 

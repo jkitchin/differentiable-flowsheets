@@ -471,6 +471,7 @@ def mccabe_thiele(
     feed_width: float = 2e-4,
     fraction: str = "linear",
     partial_condenser: bool = False,
+    reboiler_equilibrium: bool = False,
 ) -> dict:
     """Smooth McCabe-Thiele stepping with a fractional, differentiable ``N``.
 
@@ -500,6 +501,16 @@ def mccabe_thiele(
         fraction: ``"linear"``, ``"log"`` or ``"log_ratio"``.
         partial_condenser: Report the condenser as one of the ``N`` stages
             (the staircase is unchanged; ``N_column = N - 1``).
+        reboiler_equilibrium: With a Murphree efficiency on ``curve``, treat
+            the last stage (the reboiler) as an equilibrium stage, the usual
+            textbook convention and the one :class:`DistillationColumn`
+            uses: the trays step to the pseudo-equilibrium curve and the
+            first step whose *equilibrium* drop reaches ``x_bottom`` is drawn
+            to the true curve and ends the cascade. Ignored without an
+            efficiency. ``N`` can jump by a fraction of a stage where the
+            reboiler stage changes index (the trays and the reboiler take
+            different-sized steps), so prefer the default for gradients
+            across that point.
 
     Returns:
         dict with ``N`` (fractional equilibrium stages stepped, including
@@ -575,6 +586,17 @@ def mccabe_thiele(
     ks = jnp.arange(1.0, n_max + 1.0)
     _, (xk, yk) = lax.scan(step, x_top, ks)
     xs = jnp.concatenate([x_top[None], xk])
+    if reboiler_equilibrium and E is not None:
+        # equilibrium drop from each y_k; the first one reaching x_bottom is
+        # the reboiler, and the cascade holds there afterwards
+        x_eq = curve.ideal().inverse(yk)
+        reach = lax.stop_gradient(sgn * (x_eq - x_bottom) >= 0.0)
+        found = jnp.any(reach)
+        K = jnp.argmax(reach)  # 0-based index into yk / xk
+        idx = jnp.arange(n_max)
+        x_reb = x_eq[K]
+        xk_mod = jnp.where(idx < K, xk, x_reb)
+        xs = jnp.where(found, jnp.concatenate([x_top[None], xk_mod]), xs)
     c = _credits(xs, x_bottom, sgn, fraction)
     N = jnp.sum(c)
     if two:
