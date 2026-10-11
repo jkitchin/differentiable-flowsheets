@@ -572,9 +572,10 @@ Three consequences worth knowing before differentiating through a flowsheet:
   `optimistix` carries an implicit-differentiation rule, so the derivative comes
   from the converged solution through the implicit function theorem, not from
   an unrolled loop. It does not depend on how many iterations ran.
-- **You lose the acceleration.** A loop that needs Anderson to converge in 100
-  iterations eagerly may need many more under `grad`. Raise `max_iter` on the
-  differentiated path.
+- **You keep the acceleration only if you name it.** See the next section.
+  The unnamed default stays plain substitution under tracing, so a loop that
+  needs Anderson to converge in 100 iterations eagerly may need many more under
+  `grad` unless `acceleration="anderson"` is passed.
 - **The convergence verdict arrives at run time.** There is no concrete
   residual at trace time, so `last_solve_converged` is `None`. The check is
   instead compiled into the computation (`jax.debug.callback`): when the traced
@@ -591,6 +592,112 @@ Three consequences worth knowing before differentiating through a flowsheet:
   starts from the flowsheet default stream unless you pass `tear_initial`.
   For a loop the default start is nowhere near, pass the eagerly converged
   tear in explicitly.
+
+### Naming an acceleration under `jit` and `jacfwd`
+
+Passing `acceleration="anderson"` or `"wegstein"` explicitly keeps the
+acceleration when the solve is traced (#440). It runs
+`difflow.initialization.AcceleratedFixedPoint`, the same arithmetic as the eager
+loops written as a solver for `optimistix.fixed_point`:
+
+- the Anderson history is a pair of `(anderson_depth, n)` buffers rolled in
+  place, so the loop carry has one shape and nothing recompiles per call; the
+  weights are the same SVD least squares and an unfilled column drops out of the
+  rank;
+- the stop test is an array predicate, `max|g(x) - x| < tol`, the eager test;
+- on the passing iterate it returns `g(x)`, never an extrapolation;
+- `clip_negative_flows` projects the extrapolated guess only, so the map whose
+  fixed point is differentiated is untouched (the #263 reason, unchanged);
+- the derivative is still the implicit one, so `jax.jacfwd`, `jax.jacrev` and
+  `jax.grad` do not differentiate the iterations and agree with the plain path.
+
+`last_solve_method` stays `"fixed_point (traced)"` (it is the optimistix path)
+and `last_solve_acceleration` says what ran inside it: `"anderson"`,
+`"wegstein"`, or `"none"` for plain substitution, which is what the unnamed
+default gets under tracing.
+
+```python
+import jax
+import jax.numpy as jnp
+from difflow.flowsheet import Flowsheet, Unit
+from difflow.streams import make_stream
+
+jax.config.update("jax_enable_x64", True)
+
+
+class SlowLoop:
+    """g(x) = F + 0.95 x: plain substitution needs hundreds of passes."""
+
+    def __call__(self, feed, tear):
+        return make_stream({"A": feed["F_A"] + 0.95 * tear["F_A"]},
+                           feed["T"], feed["P"])
+
+
+def build(F):
+    fs = Flowsheet(species_order=["A"], default_flow=0.0)
+    fs.add_feed("feed", make_stream({"A": F}, 300.0, 1e5))
+    fs.add_unit(Unit("loop", SlowLoop(), ["feed", "tear"], ["out"]))
+    fs.add_recycle("out", "tear")
+    return fs
+
+
+def objective(F, acceleration):
+    fs = build(F)
+    out = fs.solve(acceleration=acceleration, tol=1e-10, max_iter=2000,
+                   error_probe=0)["out"]["F_A"]
+    objective.fs = fs
+    return out
+
+
+value = jax.jit(lambda F: objective(F, "anderson"))(1.0)
+assert objective.fs.last_solve_method == "fixed_point (traced)"
+assert objective.fs.last_solve_acceleration == "anderson"
+assert abs(value - 20.0) < 1e-6
+assert abs(jax.jacfwd(lambda F: objective(F, "anderson"))(1.0) - 20.0) < 1e-6
+```
+
+Limits, measured on the catalytic reformer (4-core Xeon, see the changelog): the
+primal solve is shorter (23 passes against 63 for plain substitution, a jitted
+evaluation 5 C from the stored tear 6.6 s against 18.6 s). The *Jacobian* was
+not, at first, and the iteration count was not why: `optimistix`'s implicit rule
+materialises the dense tear Jacobian (one forward-mode tangent per tear entry,
+31 here), and a tangent through the three diffrax bed integrators cost 1.5 s
+against 0.27 s for a pass, because every right-hand-side evaluation solved the
+bed temperature from the enthalpy by eight nested Newton steps and the tangent
+went through all eight. `temperature_from_enthalpy` now carries the implicit
+derivative of that solve (same primal, derivative equal to 1e-14), which took a
+tangent to 0.5 s and the dense 31-tangent Jacobian from 28 s to 1.7 s. If a unit
+of yours has an inner solve of its own, give it a `custom_jvp` with the implicit
+rule for the same reason. A matrix-free GMRES in the implicit rule was tried
+and was no faster (it needs about 13 applications to reach 1e-10 on this
+Jacobian). Compile time of the differentiated function stays minutes on a cold process
+(see the opt-in cache below). Reverse mode through a unit that uses `diffrax.ForwardMode` is unavailable
+whatever the solver.
+
+#### Cutting the cold compile with a persistent cache (opt-in)
+
+A differentiated reformer compiles for about four minutes on a cold process
+(`jit` about one minute), almost all of it XLA. JAX can keep the compiled
+programs on disk, so a second process pays only tracing. difflow does not turn
+this on; add the lines below before the first solve:
+
+<!-- doc-test: skip: sets process-wide JAX config and a cache directory -->
+```python
+import jax
+
+jax.config.update("jax_compilation_cache_dir", "/path/to/jax-cache")   # you choose where
+jax.config.update("jax_persistent_cache_min_compile_time_secs", 0)     # cache the big programs too
+jax.config.update("jax_persistent_cache_min_entry_size_bytes", 0)
+```
+
+The cache is a plain directory (14 MB for the reformer's `jit` and `jacfwd`
+programs). It is keyed on the compiled program, and a closure-captured feed or
+parameter set is part of that program: the same flowsheet at a different
+`u` hits, a different feed or parameter set compiles once and is then cached
+too. Measured on the reformer, a second process took `jit` compile+first from
+52-64 s to 6-9 s and `jacfwd` compile+first from 223-251 s to 56-74 s; the
+remainder is tracing, which the cache cannot skip. Delete the directory to
+invalidate it; a JAX or jaxlib upgrade makes new keys by itself.
 
 The same rule explains a related gotcha: never record a solve diagnostic with a
 bare `float()` in code that may be traced. `flowsheet._concrete()` returns
@@ -646,6 +753,7 @@ converged:
 | `last_solve_tol` | the tolerance that was asked for |
 | `last_solve_iterations` | iterations used; equals `max_iter` when it did not converge |
 | `last_solve_method` | `"anderson"`, `"wegstein"`, `"none"`, `"fixed_point (traced)"`, or `"direct"` for a recycle-free sequential solve |
+| `last_solve_acceleration` | what accelerated the solve: `"anderson"`, `"wegstein"` or `"none"`. Under tracing `last_solve_method` is `"fixed_point (traced)"` and this says whether the traced solver was accelerated |
 | `last_solve_tear_streams` | the tear (recycle destination) names |
 | `last_solve_clip_active` | iterations on which `clip_negative_flows` actually moved the proposed iterate; always `0` on the unaccelerated path, which does not clip |
 | `last_solve_gain` | measured signed gain of the tear map at the solution (from the probe passes, or the dominant eigenvalue of the tear Jacobian when the residual is at round-off), or `None` on a traced or recycle-free solve |

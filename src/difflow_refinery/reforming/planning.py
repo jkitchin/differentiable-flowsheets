@@ -76,6 +76,13 @@ class ReformerPlanningModel:
             raise RuntimeError("the reformer did not converge at the base point")
         self.base = base
         self.tear = base.tear
+        #: How the recycle of the LAST ``solve`` was converged: the flowsheet's
+        #: method ("anderson", or "fixed_point (traced)" under jit/jacfwd) and
+        #: what accelerated it ("anderson" / "none").  Set when the solve is
+        #: traced, so a jitted model reports what it was compiled with: a
+        #: traced "none" is the plain-substitution path of #440.
+        self.last_solve_method = base.solve_method
+        self.last_solve_acceleration = base.acceleration
         missing = sorted(set(self.outputs) - set(base.outputs()))
         if missing:
             raise ValueError(f"unknown outputs {missing}")
@@ -110,8 +117,11 @@ class ReformerPlanningModel:
 
     def solve(self, u):
         p, feed = self._params_and_feed(jnp.asarray(u, dtype=float))
-        return self.reformer.solve(feed, p, tear_initial=self.tear, tol=self.tol,
-                                   max_iter=self.max_iter, on_nonconvergence="ignore")
+        res = self.reformer.solve(feed, p, tear_initial=self.tear, tol=self.tol,
+                                  max_iter=self.max_iter, on_nonconvergence="ignore")
+        self.last_solve_method = res.solve_method
+        self.last_solve_acceleration = res.acceleration
+        return res
 
     def __call__(self, u) -> Array:
         o = self.solve(u).outputs()
