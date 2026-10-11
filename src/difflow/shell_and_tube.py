@@ -31,10 +31,14 @@ Contents
   :func:`difflow.units.heat_exchanger.effectiveness_shell_and_tube`, :func:`round_design`
 
 **Verification status** is stated in ``docs`` and ``tests/test_shell_and_tube.py``.
-Short version: the Kern correlations below are *transcribed from memory* and
-the published Kern kerosene-crude worked example is **not** reproduced; every
-constant marked "unverified" must be checked against the book before a real
-design.
+Short version: the Kern correlations were transcribed from memory and then
+checked against secondary sources. Kern's kerosene-crude rating (Kern 1950,
+Example 7.3; inputs and chart readings as transcribed by the FOSSEE Python
+notebook of Kern's Chapter 7) is reproduced to within the chart-reading error
+(``TestKernExample73``): ``D_e``, ``a_s`` and ``G_s`` to 0.3 percent, ``j_H``
+and the shell friction factor to 3 percent, ``U_C`` to 2 percent. The bundle,
+tube-count and pitch constants marked "unverified" must still be checked
+against the book before a real design.
 
 Example:
     >>> from difflow.shell_and_tube import kern_shell_side
@@ -74,13 +78,19 @@ LAYOUTS = ("triangular", "square")
 #: ``C = 0.36``, ``n = 0.55`` for ``2e3 < Re < 1e6`` and 25 percent cut
 #: segmental baffles (Kern, *Process Heat Transfer*, 1950, Eq. 7.4; the same
 #: line as the ``j_h`` chart of Coulson & Richardson Vol 6, Fig. 12.29).
-#: **Transcribed from memory; unverified.**
+#: Transcribed from memory; the same form and constants are given in the
+#: University of Oklahoma design notes (Bagajewicz, "Shell and tube heat
+#: exchanger design: Kern model", ou.edu/class/che-design), and they reproduce
+#: Kern's chart reading ``j_H = 93`` at ``Re_s = 25 300`` to 2 percent.
 KERN_NU_COEFFICIENT = 0.36
 KERN_NU_EXPONENT = 0.55
 #: Kern shell-side friction factor ``f = exp(a - b ln Re)`` with ``a = 0.576``,
 #: ``b = 0.19`` (a widely quoted fit to Kern's Fig. 29 for 25 percent cut
 #: baffles, ``400 < Re < 1e6``), dimensionless so that
-#: ``dP = f (D_s/D_e)(L/l_B) rho u_s^2 / 2``. **From memory; unverified.**
+#: ``dP = f (D_s/D_e)(L/l_B) rho u_s^2 / 2``. From memory. The Oklahoma notes
+#: cited above fit the same chart as ``1.728 Re^-0.188`` (1 percent from this
+#: one at ``Re = 25 000``); Kern's chart reading at ``Re_s = 25 300`` is
+#: ``0.00175 ft^2/in^2`` (``144 x 0.00175 = 0.252``), 3 percent below this fit.
 KERN_FRICTION_A = 0.576
 KERN_FRICTION_B = 0.19
 
@@ -112,14 +122,21 @@ BUNDLE_CONSTANTS: dict[str, dict[int, tuple[float, float]]] = {
     },
 }
 
-#: Tube wall thickness (m) by Birmingham wire gauge. **From memory of the
-#: standard tube tables (Kern Table 10); unverified.**
+#: Tube wall thickness (m) by Birmingham wire gauge, 10 to 20 BWG. Checked against
+#: two published BWG tables (projectmaterials.com "BWG chart for condenser tubes"
+#: and wermac.org "Birmingham Wire Gauge"), which agree; Kern's Example 7.3 uses a
+#: 1 in, 13 BWG tube with a 0.81 in inside diameter, which this table reproduces.
 BWG_WALL_THICKNESS: dict[int, float] = {
     10: 0.134 * 0.0254,
+    11: 0.120 * 0.0254,
     12: 0.109 * 0.0254,
+    13: 0.095 * 0.0254,
     14: 0.083 * 0.0254,
+    15: 0.072 * 0.0254,
     16: 0.065 * 0.0254,
+    17: 0.058 * 0.0254,
     18: 0.049 * 0.0254,
+    19: 0.042 * 0.0254,
     20: 0.035 * 0.0254,
 }
 
@@ -141,7 +158,7 @@ def _check_layout(layout: str) -> None:
 def tube_inside_diameter(tube_OD: float, bwg: int) -> float:
     """Tube inside diameter (m) from the outside diameter and BWG gauge.
 
-    ``D_i = D_o - 2 t(BWG)`` with :data:`BWG_WALL_THICKNESS` (unverified).
+    ``D_i = D_o - 2 t(BWG)`` with :data:`BWG_WALL_THICKNESS`.
 
     Args:
         tube_OD: Outside diameter (m).
@@ -310,7 +327,7 @@ def kern_shell_side(
 
     ``A_s = (Pt - d_o) D_s l_B / Pt``, ``G_s = m/A_s``, ``Re = G_s D_e / mu``,
     ``Nu = h_o D_e / k = 0.36 Re^0.55 Pr^(1/3) (mu/mu_w)^0.14`` (see
-    :data:`KERN_NU_COEFFICIENT`; **unverified**; this is the ``j_h`` line of the
+    :data:`KERN_NU_COEFFICIENT`, checked against Kern's Example 7.3; this is the ``j_h`` line of the
     25 percent baffle-cut chart in power-law form, valid ``2e3 < Re < 1e6``
     and used outside as an extrapolation). Kern ignores leakage and bypass
     streams (Bell-Delaware does not), so ``h_o`` is typically conservative
@@ -347,7 +364,7 @@ def kern_shell_side(
 
 
 def kern_friction_factor(Re: Array | float) -> Array:
-    """Kern shell-side friction factor ``f = exp(0.576 - 0.19 ln Re)`` (dimensionless, **unverified**)."""
+    """Kern shell-side friction factor ``f = exp(0.576 - 0.19 ln Re)`` (dimensionless; see :data:`KERN_FRICTION_A`)."""
     return jnp.exp(KERN_FRICTION_A - KERN_FRICTION_B * jnp.log(_f64(Re)))
 
 
