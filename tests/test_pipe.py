@@ -248,7 +248,7 @@ class TestRegistration:
         names = {p.name for p in spec.parameters}
         assert {"L", "D", "rho", "mu", "roughness", "dz", "fittings", "friction_method"} <= names
         required = {p.name for p in spec.parameters if p.required}
-        assert {"L", "D", "rho", "mu"} <= required
+        assert {"L", "D"} <= required  # rho, mu default to liquid_properties
         assert spec.equations and spec.assumptions and spec.references
 
     def test_params_default_roughness_is_commercial_steel(self):
