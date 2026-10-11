@@ -759,10 +759,21 @@ the generator picks the source that agreed best with CoolProp:
 | Property | First choice | Then | Estimate if neither table has it |
 |---|---|---|---|
 | Density | VDI Heat Atlas PPDS (60 species) | Perry's 8e, DIPPR 105 (9) | Rackett / Yamada-Gunn (4) |
-| Viscosity | Perry's 8e, DIPPR 101 (66) | VDI-PPDS, PPDS9 (3) | Orrick-Erbar (4) |
-| Thermal conductivity | Perry's 8e, DIPPR 100 (66) | VDI-PPDS (3) | Sato-Riedel (4) |
+| Viscosity | Perry's 8e, DIPPR 101 (65) | VDI-PPDS, PPDS9 (3) | Orrick-Erbar (4) |
+| Thermal conductivity | Perry's 8e, DIPPR 100 (65) | VDI-PPDS (3) | Sato-Riedel (4) |
 
 - Both tables come from the `chemicals` package (MIT).
+- Water's viscosity and thermal conductivity do not come from Perry's.
+  Perry's DIPPR forms were off from IAPWS by up to 5 % for viscosity (−5.0 %
+  at 273 K, +2.7 % at 300 K) and 2.5 % for conductivity. Viscosity is now the
+  IAPWS R12-08 (2008) formulation, `iapws_viscosity(T, rho)` with
+  $\mu_2 = 1$, evaluated on the IAPWS SR1-86 saturated-liquid density
+  `water_saturated_liquid_density(T)`. It is within 0.06 % of the NIST
+  WebBook from 273.16 to 640 K. Conductivity is a quartic fitted to the NIST
+  saturated-liquid table (IAPWS 2011), within 0.24 % from 273.16 to 633 K.
+  Water density is still the VDI-PPDS form (within 0.6 % of NIST). The NIST
+  table is committed as `tests/reference/nist_water_saturated_liquid.csv`, and
+  `TestWaterAgainstNIST` checks all three properties against it.
 - Heavy water is in neither table. Its three correlations are fitted to
   CoolProp.
 - The four estimated species are 2,2,5-trimethylhexane,

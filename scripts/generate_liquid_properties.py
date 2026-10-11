@@ -106,6 +106,17 @@ SOURCES = {
     "sato_riedel": (
         "Estimate: Sato-Riedel (Poling, Prausnitz & O'Connell 5e, ch. 10; "
         "constant 1.1053 as in `chemicals`), Tb from difflow's Antoine"),
+    "iapws": (
+        "IAPWS R12-08, viscosity of ordinary water (Huber et al., J. Phys. "
+        "Chem. Ref. Data 38, 101 (2009)), with mu_2 = 1, on the "
+        "saturated-liquid density of IAPWS SR1-86(1992) (Wagner & Pruss, J. "
+        "Phys. Chem. Ref. Data 22, 783 (1993))"),
+    "nist_water_fit": (
+        "Quartic in T fitted by difflow to NIST WebBook (SRD 69) "
+        "saturated-liquid water thermal conductivity, 273.16-630 K, weighted "
+        "by 1/k (IAPWS 2011: Huber et al., J. Phys. Chem. Ref. Data 41, "
+        "033102 (2012)); max deviation 0.24 %; data in "
+        "tests/reference/nist_water_saturated_liquid.csv"),
     "coolprop_fit": (
         "Fitted by difflow to CoolProp 8.0.0 saturated-liquid values for "
         "HeavyWater (Herrig et al., J. Phys. Chem. Ref. Data 47, 043102 "
@@ -255,6 +266,27 @@ def fit_heavy_water(Tm):
             corr("DIPPR100", [*p_k, 0.0], Tm, Tmax, False, "coolprop_fit"))
 
 
+NIST_WATER = ROOT / "tests" / "reference" / "nist_water_saturated_liquid.csv"
+
+
+def water_transport():
+    """Water viscosity and conductivity from IAPWS / NIST, not Perry's.
+
+    Perry's DIPPR 101 water viscosity is off by -5.0 % at 273 K, +2.7 % at
+    300 K and -4.7 % at 630 K against IAPWS 2008, and its conductivity by up
+    to 2.5 %. Viscosity uses the IAPWS form directly (evaluated in
+    difflow.liquid_properties); conductivity is a 1/k-weighted quartic fit to
+    the committed NIST saturated-liquid table.
+    """
+    d = np.loadtxt(NIST_WATER, delimiter=",", comments="#", skiprows=5)
+    m = d[:, 0] <= 633.15
+    c = np.polyfit(d[m, 0], d[m, 4], 4, w=1.0 / d[m, 4])[::-1]
+    mu = corr("IAPWS2008_SAT", [], 273.16, 640.0, True, "iapws")
+    k = corr("DIPPR100", [float(x) for x in c], 273.16, 633.15, True,
+             "nist_water_fit")
+    return mu, k
+
+
 def chemicals_value(c, T):
     """The source library's own evaluation, to pin difflow's JAX equations."""
     f, p = c["form"], c["coeffs"]
@@ -287,6 +319,8 @@ def main():
             rho = density(name, cas, Tm)
             mu = viscosity(name, cas, Tm, crit.Tc)
             k = conductivity(name, cas, Tm, crit.Tc)
+        if name == "water":
+            mu, k = water_transport()
         if mu is None:
             raise RuntimeError(f"no viscosity for {name}; add groups or data")
         data[name] = {"CAS": cas, "MW": crit.MW, "Tm": float(Tm),
@@ -294,6 +328,8 @@ def main():
 
         pts = {}
         for key, c in (("rho", rho), ("mu", mu), ("k", k)):
+            if c["source"] in ("iapws", "nist_water_fit"):
+                continue    # not a `chemicals` correlation; tested vs NIST
             Ts = np.linspace(c["Tmin"], min(c["Tmax"], 0.95 * crit.Tc), 5)[1:-1]
             pts[key] = [[float(t), float(chemicals_value(c, t))] for t in Ts]
         ref["chemicals"][name] = pts

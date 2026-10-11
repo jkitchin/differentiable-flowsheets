@@ -12,6 +12,7 @@ import warnings
 from pathlib import Path
 
 import jax
+import numpy as np
 import jax.numpy as jnp
 import pytest
 from jax.test_util import check_grads
@@ -22,6 +23,8 @@ from difflow.liquid_properties import (
     LiquidRangeWarning,
     check_liquid_range,
     evaluate_correlation,
+    iapws_viscosity,
+    water_saturated_liquid_density,
     get_liquid_properties,
     liquid_density,
     liquid_molar_density,
@@ -95,7 +98,8 @@ class TestEquationsMatchSource:
     @pytest.mark.parametrize("name", sorted(REF["chemicals"]))
     def test_species(self, name):
         for prop in PROPS:
-            for T, expected in REF["chemicals"][name][prop]:
+            # water mu/k are IAPWS / NIST forms, checked in TestWaterAgainstNIST
+            for T, expected in REF["chemicals"][name].get(prop, []):
                 assert _native(name, prop, T) == pytest.approx(
                     expected, rel=1e-9), (name, prop, T)
 
@@ -140,14 +144,58 @@ class TestAgainstCoolProp:
 
 class TestValues:
     def test_water_at_25C(self):
-        # IAPWS-95 / IAPWS 2008 / IAPWS 2011: 997.05 kg/m^3, 0.890 mPa s,
-        # 0.6065 W/m/K.
+        # NIST WebBook (IAPWS-95 / IAPWS 2008 / IAPWS 2011) at 298.15 K:
+        # 997.003 kg/m^3, 0.890036 mPa s, 0.606460 W/m/K.
         assert float(liquid_density("water", 298.15)) == pytest.approx(
             997.05, rel=2e-3)
         assert float(liquid_viscosity("water", 298.15)) == pytest.approx(
-            8.90e-4, rel=0.03)
+            8.90036e-4, rel=1e-3)
         assert float(liquid_thermal_conductivity("water", 298.15)) == (
-            pytest.approx(0.6065, rel=0.02))
+            pytest.approx(0.606460, rel=3e-3))
+
+
+NIST_WATER = np.loadtxt(Path(__file__).parent / "reference" / "nist_water_saturated_liquid.csv",
+                        delimiter=",", comments="#", skiprows=5)
+
+
+class TestWaterAgainstNIST:
+    """Water mu (IAPWS 2008) and k (NIST fit) vs the NIST saturated-liquid table.
+
+    Perry's DIPPR forms used before were off by up to 5 % (mu) and 2.5 % (k).
+    """
+
+    def test_viscosity(self):
+        T, mu = NIST_WATER[:, 0], NIST_WATER[:, 3]
+        m = T <= 640.0
+        ours = np.asarray(liquid_viscosity("water", jnp.asarray(T[m])))
+        np.testing.assert_allclose(ours, mu[m], rtol=6e-4)
+
+    def test_conductivity(self):
+        T, k = NIST_WATER[:, 0], NIST_WATER[:, 4]
+        m = T <= 633.15
+        ours = np.asarray(liquid_thermal_conductivity("water", jnp.asarray(T[m])))
+        np.testing.assert_allclose(ours, k[m], rtol=2.5e-3)
+
+    def test_iapws_table4_check_value(self):
+        # IAPWS R12-08 Table 4: T = 298.15 K, rho = 998 kg/m^3 -> 889.735100 uPa s
+        assert float(iapws_viscosity(298.15, 998.0)) == pytest.approx(889.735100e-6, rel=1e-8)
+        # more Table 4 points: (298.15, 1200) -> 1437.649467; (373.15, 1000) -> 307.883622;
+        # (433.15, 1) -> 14.538324; (873.15, 100) -> 35.802262
+        for T, rho, mu in ((298.15, 1200.0, 1437.649467), (373.15, 1000.0, 307.883622),
+                           (433.15, 1.0, 14.538324), (873.15, 100.0, 35.802262)):
+            assert float(iapws_viscosity(T, rho)) == pytest.approx(mu * 1e-6, rel=1e-8)
+
+    def test_saturated_density(self):
+        T, rho = NIST_WATER[:, 0], NIST_WATER[:, 2]
+        lo, hi = T <= 400.0, T <= 640.0
+        ours = np.asarray(water_saturated_liquid_density(jnp.asarray(T)))
+        np.testing.assert_allclose(ours[lo], rho[lo], rtol=1e-5)
+        np.testing.assert_allclose(ours[hi], rho[hi], rtol=9e-4)
+
+    def test_gradient(self):
+        corr = get_liquid_properties("water").mu
+        check_grads(lambda t: evaluate_correlation(corr, t), (320.0,), order=2,
+                    modes=["fwd", "rev"], rtol=1e-5)
 
     def test_molar_and_mass_density_consistent(self):
         data = get_liquid_properties("benzene")
