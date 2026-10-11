@@ -8,6 +8,20 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Added
 
+- **Ternary-diagram helpers: `mix`, `lever_rule`, `tie_line_through`,
+  `difference_point`, `hunter_nash`, `plot_hunter_nash` (#430, part 2).** In
+  `difflow.phase_diagrams` (`mix` only there; the rest also top-level) and
+  `difflow.visualization`. `mix` and `lever_rule` are pure jnp and
+  differentiable; `tie_line_through`, `hunter_nash` (stage stepping with a real,
+  fractionally interpolated stage count, pinch reported as `feasible=False`) and
+  `difference_point` work on the conjugate curves of the `ternary_lle` tie lines
+  (monotone cubic interpolation, numeric, not differentiated through the
+  equilibrium); the operating lines use the extensive balance so a difference
+  point at infinity is handled. Right-triangle coordinates for leaching
+  diagrams were already provided by `ternary_xy(coords="right")`. No published
+  Hunter-Nash example is reproduced; checked against the lever rule, component
+  balances and the analytic Kremser stage count of an immiscible ternary.
+
 - **`Leacher`: countercurrent leaching and washing (#430, part 1).** New palette
   unit in `difflow.units.leaching` (category `extraction`, mass flows in kg/s):
   ideal-stage solid-liquid cascade with constant-solution, constant-solvent or

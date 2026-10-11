@@ -203,3 +203,67 @@ def plot_mccabe_thiele(result: dict, curve, top_line=None, bottom_line=None,
     ax.set_aspect("equal")
     ax.legend(fontsize=7)
     return ax
+
+
+def plot_hunter_nash(result: dict, ax=None, coords: str = "equilateral",
+                     labels: tuple[str, str, str] = ("1", "2", "3")):
+    """Plot a Hunter-Nash construction from :func:`difflow.phase_diagrams.hunter_nash`.
+
+    Draws the ternary LLE diagram (binodal, tie lines, plait point, as
+    :func:`plot_ternary`), the points ``F`` (square), ``S`` (triangle), ``M``
+    (circle), ``E_1`` (down triangle), ``R_N`` (plus) and, when it falls near
+    the diagram, the difference point ``Delta`` (cross); the lines ``F E_1`` and
+    ``S R_N`` (dashed, extended to ``Delta``), ``R_N M E_1`` (dash-dot), each
+    stage's tie line (thick solid, numbered at its raffinate end) and the
+    operating lines from ``R_n`` to ``E_{n+1}`` (dotted). Colour is not the only
+    cue: every element differs in line style or marker.
+
+    Args:
+        result: Result of ``hunter_nash``.
+        ax: Optional matplotlib axes.
+        coords: ``"equilateral"`` or ``"right"``.
+        labels: Vertex labels for species 0, 1, 2.
+
+    Returns:
+        The matplotlib axes.
+    """
+    ax = plot_ternary(result["lle_data"], ax=ax, coords=coords, labels=labels)
+    xy = lambda c: ternary_xy(np.asarray(c, dtype=float), coords)  # noqa: E731
+    F, S, M = xy(result["F"]), xy(result["S"]), xy(result["M"])
+    E1, RN = xy(result["E1"]), xy(result["R_N"])
+    dc = np.asarray(result["delta"]["composition"], dtype=float)
+    delta = None
+    if np.all(np.isfinite(dc)):
+        d = xy(dc)
+        if np.max(np.abs(d)) < 4.0:
+            delta = d
+
+    def seg(p, q, style, **kw):
+        ax.plot([p[0], q[0]], [p[1], q[1]], style, color="k", lw=1, **kw)
+
+    seg(RN, E1, "-.")
+    seg(F, delta if delta is not None else E1, "--")
+    seg(S, delta if delta is not None else RN, "--")
+    for p, mk, lab in ((F, "s", "F"), (S, "^", "S"), (M, "o", "M"), (E1, "v", "E1"), (RN, "P", "R_N")):
+        ax.plot([p[0]], [p[1]], mk, color="k", mfc="w", ms=7)
+        ax.annotate(lab, p, textcoords="offset points", xytext=(6, 6), fontsize=8)
+    if delta is not None:
+        ax.plot([delta[0]], [delta[1]], "X", color="k", mfc="w", ms=8)
+        ax.annotate("Delta", delta, textcoords="offset points", xytext=(6, 6), fontsize=8)
+    E, R = np.asarray(result["E"], dtype=float), np.asarray(result["R"], dtype=float)
+    for n in range(len(E)):
+        e, r = xy(E[n]), xy(R[n])
+        ax.plot([e[0], r[0]], [e[1], r[1]], "-", color="k", lw=2)
+        ax.annotate(str(n + 1), r, textcoords="offset points", xytext=(-10, -10), fontsize=8)
+        if n + 1 < len(E):
+            e2 = xy(E[n + 1])
+            ax.plot([r[0], e2[0]], [r[1], e2[1]], ":", color="k", lw=1.2)
+    ax.set_title(f"Hunter-Nash: {result['n_stages']:.2f} stages", fontsize=9)
+    all_xy = np.vstack([np.atleast_2d(v) for v in (F, S, M, E1, RN) + ((delta,) if delta is not None else ())])
+    lo, hi = all_xy.min(axis=0), all_xy.max(axis=0)
+    lim_lo = np.minimum(lo, ternary_xy(np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]]), coords).min(axis=0))
+    lim_hi = np.maximum(hi, ternary_xy(np.array([[1, 0, 0], [0, 1, 0], [0, 0, 1]]), coords).max(axis=0))
+    pad = 0.08 * (lim_hi - lim_lo)
+    ax.set_xlim(lim_lo[0] - pad[0], lim_hi[0] + pad[0])
+    ax.set_ylim(lim_lo[1] - pad[1], lim_hi[1] + pad[1])
+    return ax

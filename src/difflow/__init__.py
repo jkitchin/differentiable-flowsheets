@@ -144,6 +144,10 @@ from difflow.phase_diagrams import (
     xy_curve,
     find_azeotrope,
     ternary_lle,
+    lever_rule,
+    tie_line_through,
+    difference_point,
+    hunter_nash,
 )
 from difflow.units.lle import (
     MultistageCascade,
@@ -527,6 +531,10 @@ __all__ = [
     "xy_curve",
     "find_azeotrope",
     "ternary_lle",
+    "lever_rule",
+    "tie_line_through",
+    "difference_point",
+    "hunter_nash",
     "uniquac_activity_coefficients",
     "get_K_values",
     "separation_factor",

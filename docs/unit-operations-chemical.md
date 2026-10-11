@@ -3246,6 +3246,90 @@ $$H = HTU \times NTU$$
 
 ---
 
+### Ternary Diagrams and the Lever Rule
+
+**Location**: `difflow/phase_diagrams.py`, `difflow/visualization/phase_diagrams.py`
+
+**Functions**: `mix`, `lever_rule`, `tie_line_through`, `difference_point`, `hunter_nash`, `plot_hunter_nash` (library helpers, not palette units)
+
+**Description**: The geometry of a type-I ternary LLE diagram: the mixing point, the lever rule, a tie line through a point, and the Hunter-Nash stage stepping for countercurrent extraction.
+
+#### Process Role
+
+Reading a triangular diagram is mass balance in disguise. Mixing two streams
+puts the mixture on the line between them (`mix`); a feed that splits into
+two phases lies on the tie line between them, and the amount of each phase is
+proportional to the length of the *opposite* segment (`lever_rule`). The same
+bookkeeping gives the graphical solution of a countercurrent cascade
+(Hunter-Nash): with feed $F$, solvent $S$, mixing point $M = F + S$ and the
+final raffinate $R_N$, the first extract $E_1$ is where the line $R_N M$ meets
+the binodal, and the difference point
+
+$$\Delta = F - E_1 = R_N - S$$
+
+is the net flow through the cascade, so every operating line
+$E_{n+1} - R_n = -\Delta$ passes through it. Stages alternate a tie line
+($E_n \to R_n$) with an operating line ($R_n \to E_{n+1}$ through $\Delta$).
+
+`mix` and `lever_rule` are pure `jnp` and differentiable. `tie_line_through`,
+`hunter_nash` and `difference_point` take the tie lines tabulated by
+`ternary_lle` (like it, they are numeric and not differentiated through the
+equilibrium), joined into conjugate curves by monotone cubic interpolation, so
+their accuracy is the interpolation's: use enough tie lines (`n_tie`). The
+difference point and the operating lines are built from the extensive balance
+(amounts times compositions), so they stay valid when $\Delta$ is at infinity
+(parallel operating lines). Species 0 and 1 are the partially miscible pair and
+species 2 the solute, as in `ternary_lle`; `carrier` says which of 0 and 1
+is the feed diluent (its phase is the raffinate). `ternary_xy(...,
+coords="right")` gives the right-triangle coordinates (solute on the vertical
+axis) for leaching diagrams. `plot_hunter_nash(result)` draws the construction
+with the binodal, tie lines, $F$, $S$, $M$, $E_1$, $R_N$, $\Delta$ and the
+numbered stages (line style and marker, not colour alone).
+
+#### Example Usage
+
+```python
+import numpy as np
+import jax.numpy as jnp
+from difflow import ternary_lle, lever_rule, tie_line_through, hunter_nash
+from difflow.phase_diagrams import mix
+from difflow.units.lle import NRTLParams
+
+# A SYNTHETIC type-I system (a, b partially miscible; s the solute); the NRTL
+# parameters are illustrative, not fitted to any real mixture.
+tau = jnp.array([[0.0, 2.5, 0.5], [2.5, 0.0, 0.3], [0.8, 0.6, 0.0]])
+model = NRTLParams(("a", "b", "s"), tau, jnp.zeros((3, 3)), 0.3 * (1 - jnp.eye(3)))
+data = ternary_lle(model, 300.0, n_tie=30)
+
+F = np.array([0.8, 0.0, 0.2])          # feed: a with 20 % solute
+S = np.array([0.0, 1.0, 0.0])          # pure solvent b
+M = mix(jnp.stack([jnp.asarray(F), jnp.asarray(S)]), jnp.array([1.0, 1.0]))
+print(np.round(np.asarray(M), 3))      # [0.4 0.5 0.1]
+
+# The mixture splits along a tie line; the lever rule gives the phase amounts.
+tie = tie_line_through(data, M)
+fI, fII = lever_rule(M, tie["x_I"], tie["x_II"])
+print(f"phase I {float(fI):.3f}, phase II {float(fII):.3f}")   # phase I 0.425, phase II 0.575
+
+# Countercurrent cascade: 1 kg solvent per kg feed, raffinate down to 2 % solute.
+r = hunter_nash(data, F, S, 0.02, S_over_F=1.0)
+print(f"{r['n_stages']:.2f} stages, {r['n_ideal']} ideal stages")   # 3.18 stages, 4 ideal stages
+```
+
+#### Limits
+
+No published Hunter-Nash worked example (Seader-Henley-Roper, Treybal,
+Geankoplis) is reproduced: their inputs and printed answers could not be
+retrieved, so no agreement with them is claimed. The construction is checked
+against the lever rule and component balances (exact), against the analytic
+Kremser stage count for an immiscible ternary (tie lines from edge to edge with
+$Y = KX$) and for its own consistency (see `tests/test_phase_diagrams.py`).
+The stepping is limited to the range of the tabulated tie lines (it stops
+before the plait point) and reports `feasible=False` at a pinch (solvent at or
+below the minimum).
+
+---
+
 ## Leaching and Washing
 
 ### Leacher

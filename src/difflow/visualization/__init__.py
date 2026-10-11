@@ -47,6 +47,7 @@ from difflow.visualization.phase_diagrams import (
     plot_pxy,
     plot_xy,
     plot_ternary,
+    plot_hunter_nash,
     plot_mccabe_thiele,
 )
 
@@ -56,6 +57,7 @@ __all__ = [
     "plot_pxy",
     "plot_xy",
     "plot_ternary",
+    "plot_hunter_nash",
     "plot_mccabe_thiele",
     # Main visualizer
     "FlowsheetVisualizer",
