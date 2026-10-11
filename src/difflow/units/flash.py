@@ -292,8 +292,25 @@ class Flash:
         # A better starting point than 0.5 can reduce iterations.
         # Simple estimate: V ≈ (bubble_check - 1) / (bubble_check + dew_check - 2)
         # This interpolates between 0 (at bubble point) and 1 (at dew point).
-        V0_estimate = safe_divide(bubble_check - 1.0, bubble_check + dew_check - 2.0)
-        V0 = jnp.clip(V0_estimate, 0.1, 0.9)  # Keep away from boundaries for initial guess
+        # That interpolation is only a heuristic. g(V) is monotone on [0, 1]
+        # but convex, and with one strongly volatile minor component (5%
+        # ethanol in water, K ~ 8) Newton from the interpolated guess
+        # overshoots past the pole at V = 1/(1 - K_max) and lands on a root
+        # outside [0, 1], so the flash reported V = 0 inside the two-phase
+        # region. Bisection on [0, 1] cannot leave the bracket; it only seeds
+        # Newton (stop_gradient), which polishes the root and keeps the
+        # implicit derivative of optx.root_find.
+        Kc = jax.lax.stop_gradient(K)
+        zc = jax.lax.stop_gradient(z)
+
+        def _bisect(_, ab):
+            a, b = ab
+            m = 0.5 * (a + b)
+            pos = rr_func(m, (zc, Kc)) > 0.0   # g falls with V: root lies above m
+            return jnp.where(pos, m, a), jnp.where(pos, b, m)
+
+        a, b = jax.lax.fori_loop(0, 40, _bisect, (jnp.asarray(0.0), jnp.asarray(1.0)))
+        V0 = 0.5 * (a + b)
         args = (z, K)
 
         solver = optx.Newton(rtol=1e-10, atol=1e-10)
