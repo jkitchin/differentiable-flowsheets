@@ -587,8 +587,23 @@ class TestMVR:
     def test_isentropic_work_matches_ideal_gas_formula(self):
         _, _, info = self.make()(naoh_feed())
         T1, r = float(info["T_soln"]), float(info["compression_ratio"])
-        w_is = 1880.0 * T1 * (r ** (0.3 / 1.3) - 1.0)
+        w_is = 1.3 / 0.3 * 461.5 * T1 * (r ** (0.3 / 1.3) - 1.0)
         assert float(info["specific_work"]) == pytest.approx(w_is / 0.75)
+
+    def test_isentropic_work_against_steam_tables(self):
+        """Saturated steam at 100 C (101.42 kPa, h = 2675.6 kJ/kg,
+        s = 7.3542 kJ/kg/K) compressed isentropically to 200 kPa: the steam
+        table (Cengel & Boles, Tables A-4/A-6: 200 kPa, h = 2769.1 / 2870.7 and
+        s = 7.2810 / 7.5081 at 150 / 200 C) gives h = 2801.8 kJ/kg, a rise of
+        126.2 kJ/kg. Before the fix (Cp_vapor with gamma) it was 119 kJ/kg."""
+        Tc = float(water_saturation_temperature(200e3))
+        m = MechanicalVaporRecompression(MVRParams(
+            solute_species=["NaOH"], solute_MW=[MW_NAOH], x_product=0.2,
+            P_vapor_space=101.42e3, dT_drive=Tc - float(water_saturation_temperature(101.42e3)),
+            eta=1.0, bpr_model="none"))
+        info = m(naoh_feed())[2]
+        assert float(info["P_discharge"]) == pytest.approx(200e3, rel=1e-6)
+        assert float(info["specific_work"]) / 1e3 == pytest.approx(126.2, rel=0.01)
 
     def test_work_grows_with_drive_and_falls_with_efficiency(self):
         feed = naoh_feed()

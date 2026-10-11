@@ -3376,8 +3376,10 @@ efficiency `eta`, ratio `gamma`) until it condenses `dT_drive` above the boiling
 solution and heats the same surface. Design mode (`x_product` given). `info`
 reports the compressor work `W_compressor` against the steam it saves
 (`steam_without_mvr`, `steam_makeup`, `steam_saved` when `steam_P` is given). The
-compression is an ideal-gas calculation, not the EOS `Compressor`; real-gas
-steam deviates by a few percent of the work at these pressures.
+compression is an ideal-gas calculation, not the EOS `Compressor`, with the
+heat capacity that belongs to `gamma` (`cp = gamma R/(gamma - 1)`, 2000 J/kg/K
+at 1.3). Compressing saturated steam from 100 C to 200 kPa it gives
+127 kJ/kg against the steam table's 126.2 kJ/kg.
 
 ```python
 from difflow.units import MechanicalVaporRecompression, MVRParams

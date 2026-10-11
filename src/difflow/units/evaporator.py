@@ -1108,7 +1108,7 @@ class MechanicalVaporRecompression:
     symbol = "MVR evaporator"
     equations = [
         r"T_c = T_\mathrm{soln} + \Delta T,\qquad P_c = P_\mathrm{sat}(T_c)",
-        r"w_s = c_{p,v} T_1\left[(P_c/P_1)^{(\gamma-1)/\gamma} - 1\right],"
+        r"w_s = \frac{\gamma R}{\gamma-1} T_1\left[(P_c/P_1)^{(\gamma-1)/\gamma} - 1\right],"
         r"\qquad W = V w_s / \eta",
         r"Q = V\,(H_{V} + w_s/\eta - h_f(T_c)) + Q_\mathrm{makeup},\qquad Q = U A\,\Delta T",
     ]
@@ -1175,7 +1175,10 @@ class MechanicalVaporRecompression:
         Pc = water_saturation_pressure(Tc)
         ratio = Pc / P1
         g = p.gamma
-        w_s = p.Cp_vapor * T * (ratio ** ((g - 1.0) / g) - 1.0)
+        # ideal-gas isentropic work with the cp that belongs to gamma
+        # (cp = gamma R/(gamma-1) = 2000 J/kg/K at gamma 1.3); Cp_vapor (1880)
+        # with gamma 1.3 is not an ideal gas and put the work 6 % low
+        w_s = g / (g - 1.0) * R_STEAM * T * (ratio ** ((g - 1.0) / g) - 1.0)
         w = w_s / p.eta
         H_out = HV + w
         Q_comp = V * (H_out - water_liquid_enthalpy(Tc))

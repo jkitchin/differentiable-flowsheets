@@ -831,6 +831,13 @@ All notable changes to difflow are recorded here. The format follows
 
 ### Fixed
 
+- **`MechanicalVaporRecompression` compressor work was 6 % low.** The
+  isentropic work used `Cp_vapor` (1880 J/kg/K) with the exponent of
+  `gamma = 1.3`, a pair no ideal gas has. It now uses
+  `cp = gamma R/(gamma - 1)`; compressing saturated steam from 100 C to
+  200 kPa gives 127 kJ/kg against 126.2 kJ/kg from the steam tables
+  (before: 119 kJ/kg).
+
 - **Built-in NaOH boiling-point rise was 12 K low at evaporator vacuum.**
   The `naoh` Dühring lines were drawn from the 1 atm table with the
   colligative slope (`BPR ~ R T^2/lambda`), but concentrated NaOH lines are
