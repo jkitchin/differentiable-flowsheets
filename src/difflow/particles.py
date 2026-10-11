@@ -597,7 +597,13 @@ def geldart_group(
       for sand in ambient air.
 
     Treat results near a boundary as indicative only; the A/B line depends on
-    the gas (through ``rho_f`` and ``mu``) and the fines content.
+    the gas (through ``rho_f`` and ``mu``) and the fines content. The
+    Abrahamsen-Geldart ``u_mb`` was fitted to fine powders (tens of microns),
+    so the A/B line is an extrapolation away from them: it sits near 180
+    micron at 1500 kg/m^3, larger than Geldart's chart suggests, and at low
+    density (``rho_p - rho_f`` of a few hundred kg/m^3) it reaches millimetre
+    sizes, where group A meets group D with no B between. Treat an "A" for a
+    coarse or very light powder as an extrapolation.
 
     Args:
         d_p: Mean particle diameter (m).
